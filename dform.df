@@ -1,0 +1,110 @@
+# dform demo: VPC + subnets + Postgres + k8s-like cluster.
+#
+# Try:
+#   cargo run -- plan
+#   cargo run -- apply
+#   cargo run -- plan --set env=prod
+
+# Defaults (implemented via a "has_*" helper to keep negation safe)
+has_env() :- input("env", _E).
+env("staging") :- not has_env().
+env(E) :- input("env", E).
+
+# Environment parameter tables (preferred pattern: branch as data)
+setting("prod", "network.vpc_cidr", "10.20.0.0/16").
+setting("prod", "db.backup_days", 14).
+setting("prod", "db.multi_az", true).
+setting("prod", "k8s.private_api", true).
+setting("prod", "k8s.nodepool.max", 10).
+setting("prod", "k8s.nodepool.min", 3).
+
+setting("staging", "network.vpc_cidr", "10.50.0.0/16").
+setting("staging", "db.backup_days", 3).
+setting("staging", "db.multi_az", false).
+setting("staging", "k8s.private_api", false).
+setting("staging", "k8s.nodepool.max", 3).
+setting("staging", "k8s.nodepool.min", 1).
+
+setting("dev", "network.vpc_cidr", "10.90.0.0/16").
+
+data("zone", "us-test-1a").
+data("zone", "us-test-1b").
+
+# Component: network
+component network main {
+  want("net.vpc", "vpc").
+  arg("net.vpc", "vpc", "cidr", C) :- env(Env), setting(Env, "network.vpc_cidr", C).
+  arg("net.vpc", "vpc", "tags.env", Env) :- env(Env).
+  arg("net.vpc", "vpc", "tags.component", "network").
+
+  want("net.subnet", Sn) :-
+    data("zone", Z),
+    Sn = format("private-%s", Z).
+
+  arg("net.subnet", Sn, "vpc_id", ref("net.vpc", "vpc", "id")) :-
+    want("net.subnet", Sn).
+  arg("net.subnet", Sn, "zone", Z) :- data("zone", Z), Sn = format("private-%s", Z).
+  arg("net.subnet", Sn, "visibility", "private") :- want("net.subnet", Sn).
+
+  arg("net.subnet", Sn, "cidr", cidrsubnet(VpcCidr, 4, 0)) :-
+    arg("net.vpc", "vpc", "cidr", VpcCidr),
+    Sn = format("private-%s", "us-test-1a").
+  arg("net.subnet", Sn, "cidr", cidrsubnet(VpcCidr, 4, 1)) :-
+    arg("net.vpc", "vpc", "cidr", VpcCidr),
+    Sn = format("private-%s", "us-test-1b").
+
+  # Export subnet ids as an output fact: output(Scope, Key, Value)
+  output("private_subnet_ids", collect(ref("net.subnet", Sn, "id"))) :-
+    want("net.subnet", Sn),
+    arg("net.subnet", Sn, "visibility", "private").
+}.
+
+# Component: database
+component database main {
+  want("db.postgres", "db").
+
+  arg("db.postgres", "db", "subnet_ids", SubnetIds) :-
+    component_scope("network", "main", NetScope),
+    output(NetScope, "private_subnet_ids", SubnetIds).
+
+  arg("db.postgres", "db", "public", false).
+  arg("db.postgres", "db", "backup_days", Days) :- env(Env), setting(Env, "db.backup_days", Days).
+  arg("db.postgres", "db", "multi_az", MA) :- env(Env), setting(Env, "db.multi_az", MA).
+}.
+
+# Component: kubernetes-like
+component kubernetes main {
+  want("k8s.cluster", "cluster").
+  arg("k8s.cluster", "cluster", "version", "1.29").
+  arg("k8s.cluster", "cluster", "private_api", P) :- env(Env), setting(Env, "k8s.private_api", P).
+
+  arg("k8s.cluster", "cluster", "subnet_ids", SubnetIds) :-
+    component_scope("network", "main", NetScope),
+    output(NetScope, "private_subnet_ids", SubnetIds).
+
+  want("k8s.nodepool", "default").
+  arg("k8s.nodepool", "default", "cluster_id", ref("k8s.cluster", "cluster", "id")).
+  arg("k8s.nodepool", "default", "min", Min) :- env(Env), setting(Env, "k8s.nodepool.min", Min).
+  arg("k8s.nodepool", "default", "max", Max) :- env(Env), setting(Env, "k8s.nodepool.max", Max).
+}.
+
+# Constraints (policy)
+constraint("db must not be public") :-
+  component_scope("database", "main", DbScope),
+  want("db.postgres", Db),
+  Db = scoped(DbScope, "db"),
+  not arg("db.postgres", Db, "public", false).
+
+constraint("prod db must be multi_az") :-
+  env("prod"),
+  component_scope("database", "main", DbScope),
+  Db = scoped(DbScope, "db"),
+  want("db.postgres", Db),
+  not arg("db.postgres", Db, "multi_az", true).
+
+constraint("prod k8s must have private api") :-
+  env("prod"),
+  component_scope("kubernetes", "main", KScope),
+  C = scoped(KScope, "cluster"),
+  want("k8s.cluster", C),
+  not arg("k8s.cluster", C, "private_api", true).

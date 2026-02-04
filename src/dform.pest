@@ -1,0 +1,45 @@
+WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
+COMMENT = _{ ("#" | "//") ~ (!"\n" ~ ANY)* ~ ("\n" | EOI) }
+
+UPPER = _{ 'A'..'Z' }
+LOWER = _{ 'a'..'z' }
+
+program = { SOI ~ stmt* ~ EOI }
+
+stmt = { (component_stmt | constraint_stmt | rule_stmt | fact) ~ "." }
+
+component_stmt = { "component" ~ ident ~ ident ~ "{" ~ stmt* ~ "}" }
+
+fact = { atom }
+
+rule_stmt = { atom ~ ":-" ~ body }
+
+constraint_stmt = { "constraint" ~ "(" ~ string ~ ")" ~ ":-" ~ body }
+
+body = { lit ~ ("," ~ lit)* }
+
+lit = { not_atom | cmp | atom }
+
+not_atom = { "not" ~ atom }
+
+cmp = { term ~ op ~ term }
+op = { ">=" | "<=" | "!=" | "=" | ">" | "<" }
+
+atom = { pred ~ "(" ~ args? ~ ")" }
+pred = @{ (ASCII_ALPHANUMERIC | "_" | ".")+ }
+
+args = { term ~ ("," ~ term)* }
+
+term = { func | string | int | bool_lit | var | ident }
+
+func = { pred ~ "(" ~ args? ~ ")" }
+
+string = @{ "\"" ~ ( "\\\"" | "\\n" | "\\t" | "\\\\" | (!"\"" ~ ANY) )* ~ "\"" }
+
+int = @{ "-"? ~ ASCII_DIGIT+ }
+
+bool_lit = { "true" | "false" }
+
+var = @{ (UPPER | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+
+ident = @{ LOWER ~ (ASCII_ALPHANUMERIC | "_")* }
