@@ -35,7 +35,7 @@ Remote state for the fake backend is written to `.dform/remote.json`.
 - Ergonomic sugar (implemented as a lowering pass):
   - `resource Type Name { key = value, ... } :- ... .` lowers to `want/arg`.
   - record atoms: `setting{env: prod, key: db.backup_days, value: 14}.` (optional)
-  - settings blocks: `settings prod { db.backup_days = 14 }.` lowers to `setting(prod, db.backup_days, 14).`
+  - settings blocks: `settings prod { db.backup_days = 14 }.` (commas optional) lowers to `setting(prod, db.backup_days, 14).`
   - literals: lists `[a, b]` and objects `{k: v}`.
   - list comprehensions: `[X | pred(...), pred2(...)]` (lowers to a `collect_list(...)` rule).
   - `let X = expr` in rule bodies (equivalent to `X = expr`).

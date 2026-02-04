@@ -19,7 +19,14 @@ unique_stmt = { "unique" ~ pred ~ "(" ~ pos_int ~ ")" }
 settings_stmt = { "settings" ~ term ~ "{" ~ res_fields? ~ "}" }
 
 resource_stmt = { "resource" ~ term ~ term ~ "{" ~ res_fields? ~ "}" ~ (":-" ~ body)? }
-res_fields = { res_field ~ ("," ~ res_field)* ~ ","? }
+// Fields inside `{ ... }` blocks.
+//
+// Commas are optional so you can write either:
+//   a = 1, b = 2
+// or:
+//   a = 1
+//   b = 2
+res_fields = { res_field ~ (","? ~ res_field)* ~ ","? }
 res_field = { keypath ~ "=" ~ term }
 keypath = @{ (ASCII_ALPHANUMERIC | "_" | "." | "-" )+ }
 

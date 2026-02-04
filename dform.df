@@ -23,14 +23,14 @@ unique setting(2).
 
 # Settings (branch as data) as blocks
 settings prod {
-  network.vpc_cidr = "10.20.0.0/16",
-  db = { backup_days: 14, multi_az: true },
+  network.vpc_cidr = "10.20.0.0/16"
+  db = { backup_days: 14, multi_az: true }
   k8s = { private_api: true, nodepool: { min: 3, max: 10 } }
 }.
 
 settings staging {
-  network.vpc_cidr = "10.50.0.0/16",
-  db = { backup_days: 3, multi_az: false },
+  network.vpc_cidr = "10.50.0.0/16"
+  db = { backup_days: 3, multi_az: false }
   k8s = { private_api: false, nodepool: { min: 1, max: 3 } }
 }.
 
