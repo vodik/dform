@@ -9,20 +9,27 @@ and predictable behavior.
 If you see lots of repeated guards like:
 
 ```prolog
-arg("db.postgres", Db, "backup_days", 14) :- env("prod"), want("db.postgres", Db).
-arg("db.postgres", Db, "backup_days", 3) :- env("staging"), want("db.postgres", Db).
+arg(db.postgres, Db, backup_days, 14) :- env(prod), want(db.postgres, Db).
+arg(db.postgres, Db, backup_days, 3) :- env(staging), want(db.postgres, Db).
 ```
 
 Prefer a lookup table:
 
 ```prolog
-setting("prod", "db.backup_days", 14).
-setting("staging", "db.backup_days", 3).
+unique setting(2).
 
-arg("db.postgres", Db, "backup_days", Days) :-
-  want("db.postgres", Db),
+settings prod {
+  db.backup_days = 14
+}.
+
+settings staging {
+  db.backup_days = 3
+}.
+
+arg(db.postgres, Db, backup_days, Days) :-
+  want(db.postgres, Db),
   env(Env),
-  setting(Env, "db.backup_days", Days).
+  setting(Env, db.backup_days, Days).
 ```
 
 Why it scales:
@@ -38,14 +45,32 @@ apply to many bindings, it must be a rule:
 Bad:
 
 ```prolog
-arg("net.subnet", Sn, "visibility", "private").
+arg(net.subnet, Sn, visibility, private).
 ```
 
 Good:
 
 ```prolog
-arg("net.subnet", Sn, "visibility", "private") :- want("net.subnet", Sn).
+arg(net.subnet, Sn, visibility, private) :- want(net.subnet, Sn).
 ```
+
+## Prefer Sugar That Lowers to Core IR
+
+For authoring, prefer:
+
+- `resource` blocks over repeated `want/arg`
+- record atoms (`setting{...}`) over positional arguments
+- object/list literals (`{k: v}`, `[a, b]`) over lots of `tags.foo` keypaths
+- list comprehensions (`[X | ...]`) over hand-written `collect(...)` rules
+- `when <guard> { ... }` to avoid repeating the same guard on many statements
+
+Note: Datalog has no intrinsic ordering, so dform's aggregates are deterministic:
+
+- `collect_set(X)` returns a sorted list of unique values
+- `collect_list(X)` returns a sorted list that may include duplicates
+
+Because the engine lowers these to the same small core, you keep composition and
+predictability without paying the verbosity tax.
 
 ## Prefer Small, Composable Predicates
 

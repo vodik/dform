@@ -1,11 +1,12 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 use clap::{Parser, Subcommand};
 use dform::ast::Atom;
 use dform::engine;
 use dform::fakecloud::{ActionKind, FakeCloud};
 use dform::ir;
-use dform::parser;
-use dform::value::{Term, Value};
+use dform::loader;
+use dform::ast::Term;
+use dform::value::Value;
 use std::path::{Path, PathBuf};
 
 #[derive(Parser, Debug)]
@@ -43,8 +44,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     let files = default_files(&cli.files)?;
-    let src = read_all(&files)?;
-    let program = parser::parse_program(&src)?;
+    let program = loader::load_program(&files)?;
 
     let extra = build_extra_facts(&cli.set, &cli.data)?;
     let (res, violations) = engine::eval(&program, &extra)?;
@@ -171,16 +171,6 @@ fn default_files(files: &[PathBuf]) -> Result<Vec<PathBuf>> {
         return Ok(vec![PathBuf::from("dform.df")]);
     }
     bail!("no input files: pass --file <path.df> (or create ./dform.df)")
-}
-
-fn read_all(files: &[PathBuf]) -> Result<String> {
-    let mut out = String::new();
-    for p in files {
-        let s = std::fs::read_to_string(p).with_context(|| format!("read {}", p.display()))?;
-        out.push_str(&s);
-        out.push('\n');
-    }
-    Ok(out)
 }
 
 fn build_extra_facts(set: &[String], data: &[String]) -> Result<Vec<Atom>> {

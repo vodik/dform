@@ -6,9 +6,22 @@ LOWER = _{ 'a'..'z' }
 
 program = { SOI ~ stmt* ~ EOI }
 
-stmt = { (component_stmt | constraint_stmt | rule_stmt | fact) ~ "." }
+stmt = { (component_stmt | when_stmt | import_stmt | unique_stmt | settings_stmt | resource_stmt | constraint_stmt | rule_stmt | fact) ~ "." }
 
 component_stmt = { "component" ~ ident ~ ident ~ "{" ~ stmt* ~ "}" }
+
+when_stmt = { "when" ~ guard ~ "{" ~ stmt* ~ "}" }
+
+import_stmt = { "import" ~ string ~ ("as" ~ ident)? }
+
+unique_stmt = { "unique" ~ pred ~ "(" ~ pos_int ~ ")" }
+
+settings_stmt = { "settings" ~ term ~ "{" ~ res_fields? ~ "}" }
+
+resource_stmt = { "resource" ~ term ~ term ~ "{" ~ res_fields? ~ "}" ~ (":-" ~ body)? }
+res_fields = { res_field ~ ("," ~ res_field)* ~ ","? }
+res_field = { keypath ~ "=" ~ term }
+keypath = @{ (ASCII_ALPHANUMERIC | "_" | "." | "-" )+ }
 
 fact = { atom }
 
@@ -18,28 +31,46 @@ constraint_stmt = { "constraint" ~ "(" ~ string ~ ")" ~ ":-" ~ body }
 
 body = { lit ~ ("," ~ lit)* }
 
-lit = { not_atom | cmp | atom }
+lit = { not_atom | let_lit | cmp | atom }
 
 not_atom = { "not" ~ atom }
+
+let_lit = { "let" ~ var ~ "=" ~ term }
+
+guard = { not_atom | cmp | atom }
 
 cmp = { term ~ op ~ term }
 op = { ">=" | "<=" | "!=" | "=" | ">" | "<" }
 
-atom = { pred ~ "(" ~ args? ~ ")" }
+atom = { pred ~ ("(" ~ args? ~ ")" | "{" ~ fields? ~ "}") }
 pred = @{ (ASCII_ALPHANUMERIC | "_" | ".")+ }
+
+fields = { field ~ ("," ~ field)* ~ ","? }
+field = { ident ~ ":" ~ term }
 
 args = { term ~ ("," ~ term)* }
 
-term = { func | string | int | bool_lit | var | ident }
+term = { func | obj_lit | list_comp | list_lit | string | int | bool_lit | var | sym }
 
 func = { pred ~ "(" ~ args? ~ ")" }
+
+list_comp = { "[" ~ term ~ "|" ~ body ~ "]" }
+
+list_lit = { "[" ~ (term ~ ("," ~ term)*)? ~ "]" }
+
+obj_lit = { "{" ~ (obj_field ~ ("," ~ obj_field)*)? ~ "}" }
+obj_field = { (ident | string) ~ ":" ~ term }
 
 string = @{ "\"" ~ ( "\\\"" | "\\n" | "\\t" | "\\\\" | (!"\"" ~ ANY) )* ~ "\"" }
 
 int = @{ "-"? ~ ASCII_DIGIT+ }
 
+pos_int = @{ ASCII_DIGIT+ }
+
 bool_lit = { "true" | "false" }
 
 var = @{ (UPPER | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+
+sym = @{ LOWER ~ (ASCII_ALPHANUMERIC | "_" | "." | "-" | "/")* }
 
 ident = @{ LOWER ~ (ASCII_ALPHANUMERIC | "_")* }

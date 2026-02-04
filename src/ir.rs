@@ -1,5 +1,5 @@
-use crate::ast::Atom;
-use crate::value::{Term, Value};
+use crate::ast::{Atom, Term};
+use crate::value::Value;
 use anyhow::{anyhow, bail, Context, Result};
 use std::collections::{BTreeMap, BTreeSet};
 

@@ -12,19 +12,6 @@ pub enum Value {
     Ref { typ: String, name: String, attr: String },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Term {
-    Val(Value),
-    Var(String),
-    Func { name: String, args: Vec<Term> },
-}
-
-impl Term {
-    pub fn is_var(&self) -> bool {
-        matches!(self, Term::Var(_))
-    }
-}
-
 impl Value {
     pub fn as_str(&self) -> Option<&str> {
         match self {

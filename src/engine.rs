@@ -1,6 +1,6 @@
-use crate::ast::{Atom, Constraint, Lit, Program, RuleStmt, Stmt};
+use crate::ast::{Atom, Constraint, Lit, Program, RuleStmt, Stmt, Term, Unique};
 use crate::transform;
-use crate::value::{Term, Value};
+use crate::value::Value;
 use anyhow::{anyhow, bail, Context, Result};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -9,8 +9,24 @@ pub struct EvalResult {
     pub facts: BTreeSet<Atom>,
 }
 
+#[derive(Debug, Clone)]
+enum DerivedFact {
+    Normal(Atom),
+    Agg(AggFact),
+}
+
+#[derive(Debug, Clone)]
+struct AggFact {
+    pred: String,
+    idx: usize,
+    key: Vec<Value>,
+    atom: Atom,
+}
+
 pub fn eval(program: &Program, extra_facts: &[Atom]) -> Result<(EvalResult, Vec<String>)> {
-    let program = transform::expand_components(program)?;
+    let lowered = transform::lower(program)?;
+    let program = lowered.program;
+    let uniques = lowered.uniques;
     let mut facts: BTreeSet<Atom> = BTreeSet::new();
     for f in extra_facts {
         facts.insert(ensure_ground(f)?);
@@ -26,8 +42,8 @@ pub fn eval(program: &Program, extra_facts: &[Atom]) -> Result<(EvalResult, Vec<
             }
             Stmt::Rule(r) => rules.push(r.clone()),
             Stmt::Constraint(c) => constraints.push(c.clone()),
-            Stmt::Component(_) => {
-                // expanded away
+            _ => {
+                // Lowered program should contain only facts/rules/constraints.
             }
         }
     }
@@ -53,12 +69,26 @@ pub fn eval(program: &Program, extra_facts: &[Atom]) -> Result<(EvalResult, Vec<
                 bail!("evaluation did not converge in stratum {s}");
             }
             changed = false;
-            let snapshot: Vec<Atom> = facts.iter().cloned().collect();
+        let snapshot: Vec<Atom> = facts.iter().cloned().collect();
             for r in &rules_s {
-                let new_facts = eval_rule(r, &snapshot)?;
-                for nf in new_facts {
-                    if facts.insert(nf) {
-                        changed = true;
+                let derived = eval_rule(r, &snapshot)?;
+                for d in derived {
+                    match d {
+                        DerivedFact::Normal(a) => {
+                            let did = match a.pred.as_str() {
+                                "arg" => upsert_by_key(&mut facts, a, 3)?,
+                                "output" => upsert_by_key(&mut facts, a, 2)?,
+                                _ => facts.insert(a),
+                            };
+                            if did {
+                                changed = true;
+                            }
+                        }
+                        DerivedFact::Agg(agg) => {
+                            if upsert_agg(&mut facts, agg)? {
+                                changed = true;
+                            }
+                        }
                     }
                 }
             }
@@ -74,7 +104,43 @@ pub fn eval(program: &Program, extra_facts: &[Atom]) -> Result<(EvalResult, Vec<
         }
     }
 
+    enforce_uniques(&facts, &uniques)?;
+
     Ok((EvalResult { facts }, violations))
+}
+
+fn enforce_uniques(facts: &BTreeSet<Atom>, uniques: &[Unique]) -> Result<()> {
+    for u in uniques {
+        if u.key_arity == 0 {
+            bail!("unique {}(0) is not meaningful", u.pred);
+        }
+        let mut seen: BTreeMap<Vec<Value>, Vec<Value>> = BTreeMap::new();
+        for a in facts.iter().filter(|a| a.pred == u.pred) {
+            if a.args.len() < u.key_arity {
+                bail!("unique {}({}) but fact has arity {}", u.pred, u.key_arity, a.args.len());
+            }
+            let mut key = Vec::new();
+            let mut rest = Vec::new();
+            for (i, t) in a.args.iter().enumerate() {
+                let Term::Val(v) = t else {
+                    bail!("internal: non-ground fact in uniqueness check");
+                };
+                if i < u.key_arity {
+                    key.push(v.clone());
+                } else {
+                    rest.push(v.clone());
+                }
+            }
+            if let Some(prev) = seen.get(&key) {
+                if prev != &rest {
+                    bail!("unique violation for {} on key {:?}", u.pred, key);
+                }
+            } else {
+                seen.insert(key, rest);
+            }
+        }
+    }
+    Ok(())
 }
 
 fn compute_strata(rules: &[RuleStmt]) -> Result<BTreeMap<String, usize>> {
@@ -146,10 +212,10 @@ fn ensure_ground(a: &Atom) -> Result<Atom> {
     })
 }
 
-fn eval_rule(rule: &RuleStmt, facts: &[Atom]) -> Result<Vec<Atom>> {
-    let collect_idx = find_collect_idx(&rule.head);
-    if let Some(idx) = collect_idx {
-        return eval_rule_collect(rule, facts, idx);
+fn eval_rule(rule: &RuleStmt, facts: &[Atom]) -> Result<Vec<DerivedFact>> {
+    let collect = find_collect(&rule.head);
+    if let Some((idx, kind)) = collect {
+        return eval_rule_collect(rule, facts, idx, kind);
     }
 
     let mut out = Vec::new();
@@ -157,22 +223,34 @@ fn eval_rule(rule: &RuleStmt, facts: &[Atom]) -> Result<Vec<Atom>> {
     for b in bindings {
         let head = instantiate_atom(&rule.head, &b)
             .with_context(|| format!("instantiate head {}", rule.head.pred))?;
-        out.push(head);
+        out.push(DerivedFact::Normal(head));
     }
     Ok(out)
 }
 
-fn eval_rule_collect(rule: &RuleStmt, facts: &[Atom], idx: usize) -> Result<Vec<Atom>> {
-    let Term::Func { name, args } = &rule.head.args[idx] else {
+#[derive(Debug, Copy, Clone)]
+enum CollectKind {
+    Set,
+    List,
+}
+
+fn eval_rule_collect(
+    rule: &RuleStmt,
+    facts: &[Atom],
+    idx: usize,
+    kind: CollectKind,
+) -> Result<Vec<DerivedFact>> {
+    let Term::Func { name: _, args } = &rule.head.args[idx] else {
         bail!("internal: collect idx not func");
     };
-    if name != "collect" || args.len() != 1 {
-        bail!("collect(...) must have exactly one argument");
+    if args.len() != 1 {
+        bail!("collect*(...) must have exactly one argument");
     }
     let item_term = args[0].clone();
 
     let bindings = eval_body(&rule.body, facts)?;
-    let mut groups: BTreeMap<Vec<Value>, BTreeSet<Value>> = BTreeMap::new();
+    let mut groups_set: BTreeMap<Vec<Value>, BTreeSet<Value>> = BTreeMap::new();
+    let mut groups_list: BTreeMap<Vec<Value>, Vec<Value>> = BTreeMap::new();
     for b in bindings {
         let mut key = Vec::new();
         for (i, t) in rule.head.args.iter().enumerate() {
@@ -183,33 +261,147 @@ fn eval_rule_collect(rule: &RuleStmt, facts: &[Atom], idx: usize) -> Result<Vec<
             key.push(v);
         }
         let item = eval_term(&item_term, &b).ok_or_else(|| anyhow!("non-ground collect item"))?;
-        groups.entry(key).or_default().insert(item);
+        match kind {
+            CollectKind::Set => {
+                groups_set.entry(key).or_default().insert(item);
+            }
+            CollectKind::List => {
+                groups_list.entry(key).or_default().push(item);
+            }
+        }
     }
 
     let mut out = Vec::new();
-    for (key, items) in groups {
+
+    let mut emit_group = |key: Vec<Value>, mut items: Vec<Value>| {
+        // Deterministic output: Datalog doesn't define an order, so we sort.
+        items.sort();
+
         let mut args_out = Vec::with_capacity(rule.head.args.len());
         let mut k = 0usize;
         for i in 0..rule.head.args.len() {
             if i == idx {
-                args_out.push(Term::Val(Value::List(items.iter().cloned().collect())));
+                args_out.push(Term::Val(Value::List(items.clone())));
             } else {
                 args_out.push(Term::Val(key[k].clone()));
                 k += 1;
             }
         }
-        out.push(Atom {
+        let atom = Atom {
             pred: rule.head.pred.clone(),
             args: args_out,
-        });
+        };
+        out.push(DerivedFact::Agg(AggFact {
+            pred: rule.head.pred.clone(),
+            idx,
+            key,
+            atom,
+        }));
+    };
+
+    for (key, items) in groups_set {
+        emit_group(key, items.into_iter().collect());
+    }
+    for (key, items) in groups_list {
+        emit_group(key, items);
+    }
+
+    Ok(out)
+}
+
+fn upsert_agg(facts: &mut BTreeSet<Atom>, agg: AggFact) -> Result<bool> {
+    // Ensure we only keep one aggregate value per (pred, key).
+    // This avoids accumulating stale aggregate results across fixpoint iterations.
+    let mut to_remove = Vec::new();
+    for a in facts.iter() {
+        if a.pred != agg.pred {
+            continue;
+        }
+        let key = key_from_atom(a, agg.idx)?;
+        if key == agg.key {
+            // Same group.
+            if a.args == agg.atom.args {
+                return Ok(false);
+            }
+            to_remove.push(a.clone());
+        }
+    }
+    for r in to_remove {
+        facts.remove(&r);
+    }
+    Ok(facts.insert(agg.atom))
+}
+
+fn key_from_atom(a: &Atom, idx: usize) -> Result<Vec<Value>> {
+    let mut out = Vec::new();
+    for (i, t) in a.args.iter().enumerate() {
+        if i == idx {
+            continue;
+        }
+        let Term::Val(v) = t else {
+            bail!("internal: expected ground atom in agg key");
+        };
+        out.push(v.clone());
     }
     Ok(out)
 }
 
-fn find_collect_idx(head: &Atom) -> Option<usize> {
-    head.args.iter().position(|t| {
-        matches!(t, Term::Func { name, .. } if name == "collect")
-    })
+fn upsert_by_key(facts: &mut BTreeSet<Atom>, atom: Atom, key_arity: usize) -> Result<bool> {
+    if key_arity == 0 {
+        return Ok(facts.insert(atom));
+    }
+    if atom.args.len() < key_arity {
+        bail!("upsert key arity too large for {}", atom.pred);
+    }
+    let key = first_n_vals(&atom, key_arity)?;
+    let mut to_remove = Vec::new();
+    for a in facts.iter() {
+        if a.pred != atom.pred {
+            continue;
+        }
+        if a.args.len() < key_arity {
+            continue;
+        }
+        if first_n_vals(a, key_arity)? == key {
+            if a.args == atom.args {
+                return Ok(false);
+            }
+            to_remove.push(a.clone());
+        }
+    }
+    for r in to_remove {
+        facts.remove(&r);
+    }
+    Ok(facts.insert(atom))
+}
+
+fn first_n_vals(a: &Atom, n: usize) -> Result<Vec<Value>> {
+    let mut out = Vec::new();
+    for t in a.args.iter().take(n) {
+        let Term::Val(v) = t else {
+            bail!("internal: expected ground atom");
+        };
+        out.push(v.clone());
+    }
+    Ok(out)
+}
+
+fn find_collect(head: &Atom) -> Option<(usize, CollectKind)> {
+    for (i, t) in head.args.iter().enumerate() {
+        let Term::Func { name, args } = t else {
+            continue;
+        };
+        if args.len() != 1 {
+            continue;
+        }
+        match name.as_str() {
+            // Back-compat: `collect(X)` is set-like.
+            "collect" | "collect_set" => return Some((i, CollectKind::Set)),
+            "collect_list" => return Some((i, CollectKind::List)),
+            _ => {}
+        }
+    }
+    None
 }
 
 fn constraint_violated(c: &Constraint, facts: &[Atom]) -> Result<bool> {
@@ -298,6 +490,41 @@ fn unify_term(pat: &Term, fv: &Value, out: &mut HashMap<String, Value>) -> Resul
                 Ok(true)
             }
         }
+        Term::List(items) => {
+            let Value::List(vs) = fv else {
+                return Ok(false);
+            };
+            if items.len() != vs.len() {
+                return Ok(false);
+            }
+            let mut tmp = out.clone();
+            for (t, v) in items.iter().zip(vs) {
+                if !unify_term(t, v, &mut tmp)? {
+                    return Ok(false);
+                }
+            }
+            *out = tmp;
+            Ok(true)
+        }
+        Term::Obj(m) => {
+            let Value::Obj(vm) = fv else {
+                return Ok(false);
+            };
+            if m.len() != vm.len() {
+                return Ok(false);
+            }
+            let mut tmp = out.clone();
+            for (k, t) in m {
+                let Some(v) = vm.get(k) else {
+                    return Ok(false);
+                };
+                if !unify_term(t, v, &mut tmp)? {
+                    return Ok(false);
+                }
+            }
+            *out = tmp;
+            Ok(true)
+        }
         Term::Func { name, args } => {
             // Special pattern unification for scoped(Scope, LocalName).
             // This allows rules to join on component-scoped resources while still
@@ -321,6 +548,10 @@ fn unify_term(pat: &Term, fv: &Value, out: &mut HashMap<String, Value>) -> Resul
                 None => return Ok(false),
             };
             Ok(&pv == fv)
+        }
+        Term::ListComp { .. } => {
+            // Comprehensions must be lowered before evaluation.
+            Ok(false)
         }
     }
 }
@@ -420,6 +651,21 @@ fn eval_term(term: &Term, state: &HashMap<String, Value>) -> Option<Value> {
         Term::Val(v) => Some(v.clone()),
         Term::Var(name) => state.get(name).cloned(),
         Term::Func { name, args } => eval_func(name, args, state),
+        Term::List(xs) => {
+            let mut out = Vec::new();
+            for x in xs {
+                out.push(eval_term(x, state)?);
+            }
+            Some(Value::List(out))
+        }
+        Term::Obj(m) => {
+            let mut out = BTreeMap::new();
+            for (k, v) in m {
+                out.insert(k.clone(), eval_term(v, state)?);
+            }
+            Some(Value::Obj(out))
+        }
+        Term::ListComp { .. } => None,
     }
 }
 

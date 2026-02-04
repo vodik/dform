@@ -2,6 +2,7 @@ pub mod ast;
 pub mod engine;
 pub mod fakecloud;
 pub mod ir;
+pub mod loader;
 pub mod parser;
 pub mod transform;
 pub mod value;
