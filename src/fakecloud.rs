@@ -1,4 +1,6 @@
 use crate::ir::{Address, Resource};
+use crate::provider::{Action, ActionKind, Change, Plan, Provider};
+use crate::state::{self, State};
 use crate::value::Value;
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -21,36 +23,53 @@ pub struct RemoteResource {
     pub computed: serde_json::Value,
 }
 
-#[derive(Debug, Clone)]
-pub enum ActionKind {
-    Create,
-    Adopt,
-    Update,
-    Delete,
-    Noop,
-}
-
-#[derive(Debug, Clone)]
-pub struct Change {
-    pub path: String,
-    pub before: Option<serde_json::Value>,
-    pub after: Option<serde_json::Value>,
-}
-
-#[derive(Debug, Clone)]
-pub struct Action {
-    pub kind: ActionKind,
-    pub addr: Address,
-    pub changes: Vec<Change>,
-}
-
-#[derive(Debug, Clone)]
-pub struct Plan {
-    pub actions: Vec<Action>,
-}
-
 pub struct FakeCloud {
     root: PathBuf,
+}
+
+impl Provider for FakeCloud {
+    fn id(&self) -> &str {
+        "fakecloud"
+    }
+
+    fn catalog(&self) -> Result<Vec<Atom>> {
+        FakeCloud::catalog(self)
+    }
+
+    fn discover(&self) -> Result<Vec<Atom>> {
+        FakeCloud::discover(self)
+    }
+
+    fn bootstrap_state(&self, state: &mut State) -> Result<()> {
+        // Migration: if state is empty but remote.json exists, treat remote.json as the prior
+        // provider-owned "state" and import entries.
+        if !state.resources.is_empty() {
+            return Ok(());
+        }
+        let remote = self.load()?;
+        for rr in remote.resources.values() {
+            let addr = Address {
+                typ: rr.typ.clone(),
+                name: rr.name.clone(),
+            };
+            state.set(addr, self.id().to_string(), rr.name.clone());
+        }
+        Ok(())
+    }
+
+    fn plan(&self, desired: &[Resource], adopts: &[crate::ir::Adopt], state: &State) -> Result<Plan> {
+        self.plan_with_state(desired, adopts, state)
+    }
+
+    fn apply(
+        &self,
+        desired: &[Resource],
+        adopts: &[crate::ir::Adopt],
+        state: &mut State,
+        plan: &Plan,
+    ) -> Result<()> {
+        self.apply_with_state(desired, plan, adopts, state)
+    }
 }
 
 impl FakeCloud {
@@ -115,6 +134,52 @@ impl FakeCloud {
         Ok(out)
     }
 
+    pub fn catalog(&self) -> Result<Vec<Atom>> {
+        // Provide simple type ownership + a few capability conventions.
+        // In a real system, providers would return these from compiled metadata.
+        let provider = "fakecloud";
+        let types = [
+            "net.vpc",
+            "net.subnet",
+            "compute.vm",
+            "db.postgres",
+            "k8s.cluster",
+            "k8s.nodepool",
+            "iam.role",
+            "iam.policy",
+            "iam.role_policy_attachment",
+        ];
+
+        let mut out = Vec::new();
+        for t in types {
+            out.push(Atom {
+                pred: "type_provider".to_string(),
+                args: vec![
+                    Term::Val(Value::Str(t.to_string())),
+                    Term::Val(Value::Str(provider.to_string())),
+                ],
+                record: None,
+            });
+            out.push(Atom {
+                pred: "capability".to_string(),
+                args: vec![
+                    Term::Val(Value::Str(t.to_string())),
+                    Term::Val(Value::Str("taggable".to_string())),
+                ],
+                record: None,
+            });
+            out.push(Atom {
+                pred: "tag_path".to_string(),
+                args: vec![
+                    Term::Val(Value::Str(t.to_string())),
+                    Term::Val(Value::Str("tags".to_string())),
+                ],
+                record: None,
+            });
+        }
+        Ok(out)
+    }
+
     pub fn save(&self, st: &RemoteState) -> Result<()> {
         fs::create_dir_all(&self.root).with_context(|| format!("mkdir {}", self.root.display()))?;
         let bytes = serde_json::to_vec_pretty(st)?;
@@ -122,35 +187,36 @@ impl FakeCloud {
         Ok(())
     }
 
-    pub fn plan(&self, desired: &[Resource], adopts: &[crate::ir::Adopt]) -> Result<Plan> {
+    pub fn plan_with_state(
+        &self,
+        desired: &[Resource],
+        adopts: &[crate::ir::Adopt],
+        state: &State,
+    ) -> Result<Plan> {
         let remote = self.load()?;
         let inv = self.load_inventory()?;
-        let adopt_map: BTreeMap<Address, String> = adopts
-            .iter()
-            .map(|a| (a.addr.clone(), a.remote.clone()))
-            .collect();
+        let adopt_map: BTreeMap<Address, String> = state::adopt_map(adopts);
         let desired_set: BTreeSet<Address> = desired.iter().map(|r| r.addr.clone()).collect();
 
         let mut actions = Vec::new();
 
         // Create/update/noop from desired.
         for r in topo_sort(desired)? {
-            let key = addr_key(&r.addr);
             let mut resolver = |kind: RefKind, typ: &str, name: &str, attr: &str| {
                 match kind {
                     RefKind::Resource => {
                         // Prefer existing remote computed, then inventory if adopt says so, else fallback.
-                        if let Some(cur) = remote
-                            .resources
-                            .get(&addr_key(&Address { typ: typ.to_string(), name: name.to_string() }))
-                        {
+                        let addr = Address {
+                            typ: typ.to_string(),
+                            name: name.to_string(),
+                        };
+                        let rn = remote_name_for(&addr, state, &adopt_map);
+                        if let Some(cur) = remote.resources.get(&format!("{}::{}", typ, rn)) {
                             if let Some(v) = cur.computed.get(attr) {
                                 return Ok(v.clone());
                             }
                         }
-                        if let Some(remote_name) =
-                            adopt_map.get(&Address { typ: typ.to_string(), name: name.to_string() })
-                        {
+                        if let Some(remote_name) = adopt_map.get(&addr) {
                             if let Some(cur) = inv.resources.get(&format!("{}::{}", typ, remote_name)) {
                                 if let Some(v) = cur.computed.get(attr) {
                                     return Ok(v.clone());
@@ -158,7 +224,7 @@ impl FakeCloud {
                             }
                         }
                         Ok(json!(
-                            computed_ref(typ, name, attr)
+                            computed_ref(typ, &rn, attr)
                                 .unwrap_or_else(|| format!("{typ}:{name}"))
                         ))
                     }
@@ -178,7 +244,8 @@ impl FakeCloud {
                 }
             };
             let desired_attrs = resolve_json_with(&r.attrs, &mut resolver)?;
-            match remote.resources.get(&key) {
+
+            match state.get(&r.addr) {
                 None => {
                     if let Some(remote_name) = adopt_map.get(&r.addr) {
                         let inv_key = format!("{}::{}", r.addr.typ, remote_name);
@@ -198,58 +265,68 @@ impl FakeCloud {
                         });
                     }
                 }
-                Some(cur) => {
-                    if cur.attrs == desired_attrs {
-                        actions.push(Action {
-                            kind: ActionKind::Noop,
-                            addr: r.addr.clone(),
-                            changes: Vec::new(),
-                        });
-                    } else {
-                        actions.push(Action {
-                            kind: ActionKind::Update,
-                            addr: r.addr.clone(),
-                            changes: diff_attrs(Some(&cur.attrs), Some(&desired_attrs)),
-                        });
+                Some(entry) => {
+                    let key = format!("{}::{}", r.addr.typ, entry.remote);
+                    let cur = remote.resources.get(&key);
+                    match cur {
+                        None => {
+                            // Drift: state says it existed but the world doesn't.
+                            actions.push(Action {
+                                kind: ActionKind::Create,
+                                addr: r.addr.clone(),
+                                changes: diff_attrs(None, Some(&desired_attrs)),
+                            });
+                        }
+                        Some(cur) => {
+                            if cur.attrs == desired_attrs {
+                                actions.push(Action {
+                                    kind: ActionKind::Noop,
+                                    addr: r.addr.clone(),
+                                    changes: Vec::new(),
+                                });
+                            } else {
+                                actions.push(Action {
+                                    kind: ActionKind::Update,
+                                    addr: r.addr.clone(),
+                                    changes: diff_attrs(Some(&cur.attrs), Some(&desired_attrs)),
+                                });
+                            }
+                        }
                     }
                 }
             }
         }
 
-        // Deletes for anything in remote not in desired.
-        for rr in remote.resources.values() {
-            let addr = Address {
-                typ: rr.typ.clone(),
-                name: rr.name.clone(),
-            };
-            if !desired_set.contains(&addr) {
-                actions.push(Action {
-                    kind: ActionKind::Delete,
-                    addr,
-                    changes: diff_attrs(Some(&rr.attrs), None),
-                });
+        // Deletes for anything in state not in desired.
+        for (addr, entry) in state.entries_for_provider("fakecloud") {
+            if desired_set.contains(&addr) {
+                continue;
             }
+            let key = format!("{}::{}", addr.typ, entry.remote);
+            let before = remote.resources.get(&key).map(|x| &x.attrs);
+            actions.push(Action {
+                kind: ActionKind::Delete,
+                addr,
+                changes: diff_attrs(before, None),
+            });
         }
 
         Ok(Plan { actions })
     }
 
-    pub fn apply(
+    pub fn apply_with_state(
         &self,
         desired: &[Resource],
         plan: &Plan,
         adopts: &[crate::ir::Adopt],
-    ) -> Result<RemoteState> {
+        state: &mut State,
+    ) -> Result<()> {
         let mut remote = self.load()?;
         let inv = self.load_inventory()?;
-        let adopt_map: BTreeMap<Address, String> = adopts
-            .iter()
-            .map(|a| (a.addr.clone(), a.remote.clone()))
-            .collect();
+        let adopt_map: BTreeMap<Address, String> = state::adopt_map(adopts);
         let desired_by_addr: BTreeMap<Address, &Resource> = desired.iter().map(|r| (r.addr.clone(), r)).collect();
 
         for a in &plan.actions {
-            let key = addr_key(&a.addr);
             match a.kind {
                 ActionKind::Noop => {}
                 ActionKind::Create => {
@@ -258,16 +335,19 @@ impl FakeCloud {
                         .ok_or_else(|| anyhow!("missing desired resource for create"))?;
                     // Create doesn't have inventory context; forbid cloud_ref.
                     let attrs = resolve_json(&r.attrs)?;
-                    let computed = computed_for(&a.addr);
+                    let remote_name = a.addr.name.clone();
+                    let key = format!("{}::{}", a.addr.typ, remote_name);
+                    let computed = computed_for(&a.addr.typ, &remote_name);
                     remote.resources.insert(
                         key,
                         RemoteResource {
                             typ: a.addr.typ.clone(),
-                            name: a.addr.name.clone(),
+                            name: remote_name.clone(),
                             attrs,
                             computed,
                         },
                     );
+                    state.set(a.addr.clone(), "fakecloud".to_string(), remote_name);
                 }
                 ActionKind::Adopt => {
                     let r = desired_by_addr
@@ -300,20 +380,23 @@ impl FakeCloud {
                         bail!("adopt action missing adopt mapping");
                     };
 
+                    let key = format!("{}::{}", a.addr.typ, remote_name);
+
                     // Adopt by copying computed fields from inventory.
                     let inv_key = format!("{}::{}", a.addr.typ, remote_name);
                     let Some(inv_rr) = inv.resources.get(&inv_key) else {
                         bail!("adopt requested but inventory missing {inv_key}");
                     };
                     remote.resources.insert(
-                        key,
+                        key.clone(),
                         RemoteResource {
                             typ: a.addr.typ.clone(),
-                            name: a.addr.name.clone(),
+                            name: remote_name.clone(),
                             attrs,
                             computed: inv_rr.computed.clone(),
                         },
                     );
+                    state.set(a.addr.clone(), "fakecloud".to_string(), remote_name.clone());
                 }
                 ActionKind::Update => {
                     let r = desired_by_addr
@@ -341,29 +424,39 @@ impl FakeCloud {
                         }
                     };
                     let attrs = resolve_json_with(&r.attrs, &mut resolver)?;
+
+                    let Some(entry) = state.get(&a.addr) else {
+                        bail!("update missing state entry");
+                    };
+                    let key = format!("{}::{}", a.addr.typ, entry.remote);
                     let computed = remote
                         .resources
                         .get(&key)
                         .map(|x| x.computed.clone())
-                        .unwrap_or_else(|| computed_for(&a.addr));
+                        .unwrap_or_else(|| computed_for(&a.addr.typ, &entry.remote));
                     remote.resources.insert(
-                        key,
+                        key.clone(),
                         RemoteResource {
                             typ: a.addr.typ.clone(),
-                            name: a.addr.name.clone(),
+                            name: entry.remote.clone(),
                             attrs,
                             computed,
                         },
                     );
                 }
                 ActionKind::Delete => {
+                    let Some(entry) = state.get(&a.addr) else {
+                        continue;
+                    };
+                    let key = format!("{}::{}", a.addr.typ, entry.remote);
                     remote.resources.remove(&key);
+                    state.remove(&a.addr);
                 }
             }
         }
 
         self.save(&remote)?;
-        Ok(remote)
+        Ok(())
     }
 
     fn remote_path(&self) -> PathBuf {
@@ -375,20 +468,26 @@ impl FakeCloud {
     }
 }
 
-fn addr_key(a: &Address) -> String {
-    format!("{}::{}", a.typ, a.name)
+fn remote_name_for(addr: &Address, state: &State, adopts: &BTreeMap<Address, String>) -> String {
+    if let Some(e) = state.get(addr) {
+        return e.remote.clone();
+    }
+    if let Some(r) = adopts.get(addr) {
+        return r.clone();
+    }
+    addr.name.clone()
 }
 
-fn computed_for(addr: &Address) -> serde_json::Value {
-    let id = computed_ref(&addr.typ, &addr.name, "id").unwrap();
-    match addr.typ.as_str() {
+fn computed_for(typ: &str, remote_name: &str) -> serde_json::Value {
+    let id = computed_ref(typ, remote_name, "id").unwrap();
+    match typ {
         "db.postgres" => json!({
             "id": id,
-            "endpoint": computed_ref(&addr.typ, &addr.name, "endpoint").unwrap(),
+            "endpoint": computed_ref(typ, remote_name, "endpoint").unwrap(),
         }),
         "k8s.cluster" => json!({
             "id": id,
-            "api_endpoint": computed_ref(&addr.typ, &addr.name, "api_endpoint").unwrap(),
+            "api_endpoint": computed_ref(typ, remote_name, "api_endpoint").unwrap(),
             "ca_cert": "FAKECERT",
         }),
         _ => json!({ "id": id }),
@@ -445,6 +544,13 @@ fn resolve_json_with(
             }
             Ok(serde_json::Value::Object(out))
         }
+        Value::Ip(n) => Ok(json!(crate::value::u32_to_ipv4(*n))),
+        Value::IpNet { addr, prefix } => Ok(json!(crate::value::ipnet_to_string(*addr, *prefix))),
+        Value::IpRange { start, end } => Ok(json!(format!(
+            "{}-{}",
+            crate::value::u32_to_ipv4(*start),
+            crate::value::u32_to_ipv4(*end)
+        ))),
         Value::Ref { typ, name, attr } => {
             resolve_ref(RefKind::Resource, typ, name, attr)
         }

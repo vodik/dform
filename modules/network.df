@@ -1,23 +1,23 @@
 component_def network {
   resource net.vpc vpc {
-    cidr = VpcCidr,
+    cidr = VpcNet,
     tags = { env: Env, component: network }
   } :-
     env(Env),
-    param(vpc_cidr, VpcCidr).
+    param(vpc_net, VpcNet).
 
   zone_index(us-test-1a, 0).
   zone_index(us-test-1b, 1).
 
   resource net.subnet Sn {
     vpc_id = ref(net.vpc, vpc, id),
-    cidr = cidrsubnet(VpcCidr, 4, I),
+    cidr = inet_subnet(VpcNet, 4, I),
     zone = Z,
     visibility = private
   } :-
     data(zone, Z),
     zone_index(Z, I),
-    arg(net.vpc, vpc, cidr, VpcCidr),
+    arg(net.vpc, vpc, cidr, VpcNet),
     let Sn = format("private-%s", Z).
 
   output(private_subnet_ids,

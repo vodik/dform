@@ -2,9 +2,11 @@ use anyhow::{bail, Result};
 use clap::{Parser, Subcommand};
 use dform::ast::Atom;
 use dform::engine;
-use dform::fakecloud::{ActionKind, FakeCloud};
+use dform::fakecloud::FakeCloud;
 use dform::ir;
 use dform::loader;
+use dform::provider::{ActionKind, Provider};
+use dform::state;
 use dform::ast::Term;
 use dform::value::Value;
 use std::path::{Path, PathBuf};
@@ -53,9 +55,14 @@ fn main() -> Result<()> {
     let files = default_files(&cli.files)?;
     let program = loader::load_program(&files)?;
 
+    let root = PathBuf::from(".dform");
+    let backend = FakeCloud::new(root.clone());
+
+    let mut st = state::State::load(&state::state_path(&root))?;
+    backend.bootstrap_state(&mut st)?;
+
     let mut extra = build_extra_facts(&cli.set, &cli.data)?;
-    // Inject discovery facts from fake backend (inventory).
-    let backend = FakeCloud::new(PathBuf::from(".dform"));
+    extra.extend(backend.catalog()?);
     extra.extend(backend.discover()?);
     let (res, violations) = engine::eval(&program, &extra)?;
     for w in &res.warnings {
@@ -99,18 +106,19 @@ fn main() -> Result<()> {
             println!("{}", json);
         }
         Cmd::Plan => {
-            let plan = backend.plan(&resources, &adopts)?;
+            let plan = backend.plan(&resources, &adopts, &st)?;
             print_plan(&plan, cli.show_noop);
         }
         Cmd::Apply => {
-            let plan = backend.plan(&resources, &adopts)?;
+            let plan = backend.plan(&resources, &adopts, &st)?;
             print_plan(&plan, cli.show_noop);
             let changed = plan
                 .actions
                 .iter()
                 .any(|a| !matches!(a.kind, ActionKind::Noop));
             if changed {
-                backend.apply(&resources, &plan, &adopts)?;
+                backend.apply(&resources, &adopts, &mut st, &plan)?;
+                st.save(&state::state_path(&root))?;
                 println!("apply: complete");
             } else {
                 println!("apply: nothing to do");
@@ -121,7 +129,7 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn print_plan(plan: &dform::fakecloud::Plan, show_noop: bool) {
+fn print_plan(plan: &dform::provider::Plan, show_noop: bool) {
     let mut creates = 0usize;
     let mut adopts = 0usize;
     let mut updates = 0usize;

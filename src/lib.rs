@@ -5,5 +5,7 @@ pub mod ir;
 pub mod loader;
 pub mod merge;
 pub mod parser;
+pub mod provider;
+pub mod state;
 pub mod transform;
 pub mod value;

@@ -172,6 +172,15 @@ fn value_to_json(v: &Value) -> serde_json::Value {
                 .map(|(k, v)| (k.clone(), value_to_json(v)))
                 .collect(),
         ),
+        Value::Ip(n) => serde_json::Value::String(crate::value::u32_to_ipv4(*n)),
+        Value::IpNet { addr, prefix } => {
+            serde_json::Value::String(crate::value::ipnet_to_string(*addr, *prefix))
+        }
+        Value::IpRange { start, end } => serde_json::Value::String(format!(
+            "{}-{}",
+            crate::value::u32_to_ipv4(*start),
+            crate::value::u32_to_ipv4(*end)
+        )),
         Value::Ref { typ, name, attr } => {
             serde_json::Value::String(format!("ref({typ},{name},{attr})"))
         }
@@ -888,6 +897,144 @@ fn eval_term(term: &Term, state: &HashMap<String, Value>) -> Option<Value> {
 
 fn eval_func(name: &str, args: &[Term], state: &HashMap<String, Value>) -> Option<Value> {
     match name {
+        "ip" => {
+            if args.len() != 1 {
+                return None;
+            }
+            let s = eval_term(&args[0], state)?.as_str()?.to_string();
+            let n = crate::value::ipv4_to_u32(&s)?;
+            Some(Value::Ip(n))
+        }
+        "ip_str" => {
+            if args.len() != 1 {
+                return None;
+            }
+            match eval_term(&args[0], state)? {
+                Value::Ip(n) => Some(Value::Str(crate::value::u32_to_ipv4(n))),
+                Value::Str(s) => Some(Value::Str(s)),
+                _ => None,
+            }
+        }
+        "inet" => {
+            if args.len() != 1 {
+                return None;
+            }
+            let s = eval_term(&args[0], state)?.as_str()?.to_string();
+            let (addr, prefix) = crate::value::parse_ipnet(&s)?;
+            Some(Value::IpNet { addr, prefix })
+        }
+        "inet_str" => {
+            if args.len() != 1 {
+                return None;
+            }
+            match eval_term(&args[0], state)? {
+                Value::IpNet { addr, prefix } => {
+                    Some(Value::Str(crate::value::ipnet_to_string(addr, prefix)))
+                }
+                Value::Str(s) => Some(Value::Str(s)),
+                _ => None,
+            }
+        }
+        "iprange" => {
+            if args.len() != 2 {
+                return None;
+            }
+            let a = eval_term(&args[0], state)?;
+            let b = eval_term(&args[1], state)?;
+            let sa = as_ip_u32(&a)?;
+            let sb = as_ip_u32(&b)?;
+            let (start, end) = if sa <= sb { (sa, sb) } else { (sb, sa) };
+            Some(Value::IpRange { start, end })
+        }
+        "ip_unspecified" => {
+            if args.len() != 1 {
+                return None;
+            }
+            let v = eval_term(&args[0], state)?;
+            let n = as_ip_u32(&v)?;
+            Some(Value::Bool(n == 0))
+        }
+        "inet_contains" => {
+            if args.len() != 2 {
+                return None;
+            }
+            let net = eval_term(&args[0], state)?;
+            let ip = eval_term(&args[1], state)?;
+            let (addr, prefix) = as_ipnet(&net)?;
+            let n = as_ip_u32(&ip)?;
+            let mask = if prefix == 0 { 0 } else { u32::MAX << (32 - prefix as u32) };
+            Some(Value::Bool((n & mask) == addr))
+        }
+        "inet_overlaps" => {
+            if args.len() != 2 {
+                return None;
+            }
+            let a = eval_term(&args[0], state)?;
+            let b = eval_term(&args[1], state)?;
+            let (a0, a1) = ipnet_range(&a)?;
+            let (b0, b1) = ipnet_range(&b)?;
+            Some(Value::Bool(a0 <= b1 && b0 <= a1))
+        }
+        "inet_addr" => {
+            if args.len() != 2 {
+                return None;
+            }
+            let net = eval_term(&args[0], state)?;
+            let n = eval_term(&args[1], state)?;
+            let (addr, _prefix) = as_ipnet(&net)?;
+            let idx = as_i64(&n)?;
+            if idx < 0 {
+                return None;
+            }
+            Some(Value::Ip(addr.wrapping_add(idx as u32)))
+        }
+        "inet_host" => {
+            if args.len() != 2 {
+                return None;
+            }
+            let net = eval_term(&args[0], state)?;
+            let n = eval_term(&args[1], state)?;
+            let (start, end) = ipnet_range(&net)?;
+            // usable hosts exclude network + broadcast
+            if end <= start + 1 {
+                return None;
+            }
+            let first = start + 1;
+            let last = end - 1;
+            let idx = as_i64(&n)?;
+            if idx < 0 {
+                return None;
+            }
+            let ip = first + (idx as u32);
+            if ip > last {
+                return None;
+            }
+            Some(Value::Ip(ip))
+        }
+        "inet_subnet" => {
+            if args.len() != 3 {
+                return None;
+            }
+            let net = eval_term(&args[0], state)?;
+            let newbits = eval_term(&args[1], state)?;
+            let netnum = eval_term(&args[2], state)?;
+            let (addr, prefix) = as_ipnet(&net)?;
+            let nb = as_i64(&newbits)?;
+            let nn = as_i64(&netnum)?;
+            if nb < 0 || nn < 0 {
+                return None;
+            }
+            let new_prefix = (prefix as i64) + nb;
+            if new_prefix > 32 {
+                return None;
+            }
+            let shift = 32 - (new_prefix as u32);
+            let subnet_addr = addr + ((nn as u32) << shift);
+            Some(Value::IpNet {
+                addr: subnet_addr,
+                prefix: new_prefix as u8,
+            })
+        }
         "scoped" => {
             if args.len() != 2 {
                 return None;
@@ -978,6 +1125,42 @@ fn eval_func(name: &str, args: &[Term], state: &HashMap<String, Value>) -> Optio
     }
 }
 
+fn as_i64(v: &Value) -> Option<i64> {
+    match v {
+        Value::Int(i) => Some(*i),
+        Value::Str(s) => s.parse().ok(),
+        _ => None,
+    }
+}
+
+fn as_ip_u32(v: &Value) -> Option<u32> {
+    match v {
+        Value::Ip(n) => Some(*n),
+        Value::Str(s) => crate::value::ipv4_to_u32(s),
+        _ => None,
+    }
+}
+
+fn as_ipnet(v: &Value) -> Option<(u32, u8)> {
+    match v {
+        Value::IpNet { addr, prefix } => Some((*addr, *prefix)),
+        Value::Str(s) => crate::value::parse_ipnet(s),
+        _ => None,
+    }
+}
+
+fn ipnet_range(v: &Value) -> Option<(u32, u32)> {
+    let (addr, prefix) = as_ipnet(v)?;
+    let host_bits = 32 - (prefix as u32);
+    let size = if host_bits == 32 {
+        u32::MAX
+    } else {
+        (1u64 << host_bits) as u32
+    };
+    let end = addr.wrapping_add(size.wrapping_sub(1));
+    Some((addr, end))
+}
+
 fn value_to_string(v: &Value) -> String {
     match v {
         Value::Str(s) => s.clone(),
@@ -985,6 +1168,13 @@ fn value_to_string(v: &Value) -> String {
         Value::Bool(b) => b.to_string(),
         Value::List(_) => "<list>".to_string(),
         Value::Obj(_) => "<obj>".to_string(),
+        Value::Ip(n) => crate::value::u32_to_ipv4(*n),
+        Value::IpNet { addr, prefix } => crate::value::ipnet_to_string(*addr, *prefix),
+        Value::IpRange { start, end } => format!(
+            "{}-{}",
+            crate::value::u32_to_ipv4(*start),
+            crate::value::u32_to_ipv4(*end)
+        ),
         Value::Ref { typ, name, attr } => format!("ref({typ},{name},{attr})"),
         Value::CloudRef { typ, name, attr } => format!("cloud_ref({typ},{name},{attr})"),
     }
@@ -1009,27 +1199,9 @@ fn cidrsubnet(cidr: &str, newbits: u32, netnum: u32) -> Option<String> {
 }
 
 fn ipv4_to_u32(ip: &str) -> Option<u32> {
-    let mut out = 0u32;
-    let parts: Vec<&str> = ip.split('.').collect();
-    if parts.len() != 4 {
-        return None;
-    }
-    for p in parts {
-        let b: u32 = p.parse().ok()?;
-        if b > 255 {
-            return None;
-        }
-        out = (out << 8) | b;
-    }
-    Some(out)
+    crate::value::ipv4_to_u32(ip)
 }
 
 fn u32_to_ipv4(v: u32) -> String {
-    format!(
-        "{}.{}.{}.{}",
-        (v >> 24) & 255,
-        (v >> 16) & 255,
-        (v >> 8) & 255,
-        v & 255
-    )
+    crate::value::u32_to_ipv4(v)
 }
