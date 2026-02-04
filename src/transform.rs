@@ -1,4 +1,6 @@
-use crate::ast::{Atom, Constraint, Lit, Program, Resource, RuleStmt, Stmt, Term, Unique, When};
+use crate::ast::{
+    Atom, Constraint, FieldOp, Program, Resource, RuleStmt, Stmt, Term, Unique, When, Lit,
+};
 use crate::value::Value;
 use anyhow::{bail, Result};
 use std::collections::BTreeMap;
@@ -10,9 +12,12 @@ pub struct Lowered {
 }
 
 pub fn lower(program: &Program) -> Result<Lowered> {
+    let program = apply_decls(program)?;
     // In the future, imports should be handled in a loader before parsing.
     // For now, keep Import statements in the AST but drop them before eval.
-    let expanded = desugar_settings(program)?;
+    let expanded = desugar_environment(&program)?;
+    let expanded = expand_component_defs_and_uses(&expanded)?;
+    let expanded = expand_policy_packs(&expanded)?;
     let expanded = expand_components(&expanded)?;
     let expanded = expand_when(&expanded)?;
     let (expanded, uniques) = extract_uniques(&expanded);
@@ -24,14 +29,266 @@ pub fn lower(program: &Program) -> Result<Lowered> {
     })
 }
 
-fn desugar_settings(program: &Program) -> Result<Program> {
+fn apply_decls(program: &Program) -> Result<Program> {
+    // Built-in schemas for record atoms.
+    let mut schemas: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    schemas.insert("want".to_string(), vec!["type".into(), "name".into()]);
+    schemas.insert(
+        "arg".to_string(),
+        vec!["type".into(), "name".into(), "path".into(), "value".into()],
+    );
+    schemas.insert(
+        "arg_add".to_string(),
+        vec!["type".into(), "name".into(), "path".into(), "value".into()],
+    );
+    schemas.insert(
+        "setting".to_string(),
+        vec!["env".into(), "key".into(), "value".into()],
+    );
+    schemas.insert(
+        "setting_add".to_string(),
+        vec!["env".into(), "key".into(), "value".into()],
+    );
+    schemas.insert(
+        "output".to_string(),
+        vec!["scope".into(), "key".into(), "value".into()],
+    );
+    schemas.insert(
+        "component_scope".to_string(),
+        vec!["comp".into(), "inst".into(), "scope".into()],
+    );
+    schemas.insert("input".to_string(), vec!["key".into(), "value".into()]);
+    schemas.insert("data".to_string(), vec!["key".into(), "value".into()]);
+    schemas.insert("merge_rule".to_string(), vec!["type".into(), "path".into(), "op".into()]);
+    schemas.insert("param".to_string(), vec!["scope".into(), "key".into(), "value".into()]);
+    schemas.insert("warn".to_string(), vec!["msg".into(), "ctx".into()]);
+    schemas.insert("deny".to_string(), vec!["msg".into(), "ctx".into()]);
+
+    for s in &program.statements {
+        if let Stmt::Decl(d) = s {
+            schemas.insert(d.pred.clone(), d.fields.clone());
+        }
+    }
+
+    let mut out = Vec::new();
+    for s in &program.statements {
+        if matches!(s, Stmt::Decl(_)) {
+            continue;
+        }
+        out.push(rewrite_stmt_records(s.clone(), &schemas, Ctx::Body)?);
+    }
+    Ok(Program { statements: out })
+}
+
+#[derive(Copy, Clone)]
+enum Ctx {
+    Fact,
+    Head,
+    Body,
+}
+
+fn rewrite_stmt_records(stmt: Stmt, schemas: &BTreeMap<String, Vec<String>>, ctx: Ctx) -> Result<Stmt> {
+    Ok(match stmt {
+        Stmt::Fact(a) => Stmt::Fact(rewrite_atom_records(a, schemas, Ctx::Fact)?),
+        Stmt::Rule(r) => {
+            let head = rewrite_atom_records(r.head, schemas, Ctx::Head)?;
+            let body = rewrite_lits_records(r.body, schemas)?;
+            Stmt::Rule(RuleStmt { head, body })
+        }
+        Stmt::Constraint(c) => {
+            let body = rewrite_lits_records(c.body, schemas)?;
+            Stmt::Constraint(Constraint {
+                message: c.message,
+                body,
+            })
+        }
+        Stmt::When(w) => {
+            let guard = rewrite_lit_records(w.guard, schemas)?;
+            let mut body = Vec::new();
+            for s in w.body {
+                body.push(rewrite_stmt_records(s, schemas, ctx)?);
+            }
+            Stmt::When(When { guard, body })
+        }
+        Stmt::Component(mut c) => {
+            c.body = c
+                .body
+                .into_iter()
+                .map(|s| rewrite_stmt_records(s, schemas, ctx))
+                .collect::<Result<Vec<_>>>()?;
+            Stmt::Component(c)
+        }
+        Stmt::ComponentDef(mut c) => {
+            c.body = c
+                .body
+                .into_iter()
+                .map(|s| rewrite_stmt_records(s, schemas, ctx))
+                .collect::<Result<Vec<_>>>()?;
+            Stmt::ComponentDef(c)
+        }
+        Stmt::Use(mut u) => {
+            if let Some(b) = u.body {
+                u.body = Some(rewrite_lits_records(b, schemas)?);
+            }
+            Stmt::Use(u)
+        }
+        Stmt::PolicyPack(mut p) => {
+            p.body = p
+                .body
+                .into_iter()
+                .map(|s| rewrite_stmt_records(s, schemas, ctx))
+                .collect::<Result<Vec<_>>>()?;
+            Stmt::PolicyPack(p)
+        }
+        other => other,
+    })
+}
+
+fn rewrite_lits_records(lits: Vec<Lit>, schemas: &BTreeMap<String, Vec<String>>) -> Result<Vec<Lit>> {
+    lits.into_iter()
+        .map(|l| rewrite_lit_records(l, schemas))
+        .collect()
+}
+
+fn rewrite_lit_records(lit: Lit, schemas: &BTreeMap<String, Vec<String>>) -> Result<Lit> {
+    Ok(match lit {
+        Lit::Pos(a) => Lit::Pos(rewrite_atom_records(a, schemas, Ctx::Body)?),
+        Lit::Not(a) => Lit::Not(rewrite_atom_records(a, schemas, Ctx::Body)?),
+        other => other,
+    })
+}
+
+fn rewrite_atom_records(mut atom: Atom, schemas: &BTreeMap<String, Vec<String>>, ctx: Ctx) -> Result<Atom> {
+    let Some(fields) = atom.record.take() else {
+        return Ok(atom);
+    };
+    let Some(order) = schemas.get(&atom.pred) else {
+        bail!("no schema for predicate '{}' (add decl {} {{ ... }})", atom.pred, atom.pred);
+    };
+
+    // No extra fields.
+    for k in fields.keys() {
+        if !order.iter().any(|x| x == k) {
+            bail!("unknown field '{k}' for predicate '{}'", atom.pred);
+        }
+    }
+
+    let require_complete = matches!(ctx, Ctx::Fact | Ctx::Head);
+    let mut args = Vec::with_capacity(order.len());
+    for f in order {
+        match fields.get(f) {
+            Some(t) => args.push(t.clone()),
+            None => {
+                if require_complete {
+                    bail!("missing field '{f}' for predicate '{}'", atom.pred);
+                }
+                args.push(Term::Wildcard);
+            }
+        }
+    }
+    if require_complete && args.iter().any(|t| matches!(t, Term::Wildcard)) {
+        bail!("wildcards not allowed in fact/head for predicate '{}'", atom.pred);
+    }
+
+    atom.args = args;
+    atom.record = None;
+    Ok(atom)
+}
+
+fn expand_component_defs_and_uses(program: &Program) -> Result<Program> {
+    let mut defs: BTreeMap<String, Vec<Stmt>> = BTreeMap::new();
+    for s in &program.statements {
+        if let Stmt::ComponentDef(d) = s {
+            defs.insert(d.name.clone(), d.body.clone());
+        }
+    }
+
+    let mut out = Vec::new();
+    for s in &program.statements {
+        match s {
+            Stmt::ComponentDef(_) => {}
+            Stmt::Use(u) => {
+                let Some(body) = defs.get(&u.name) else {
+                    bail!("use references unknown component_def '{}'", u.name);
+                };
+
+                let mut comp_body: Vec<Stmt> = Vec::new();
+                // Params become `param(Key, Value)` statements inside the component.
+                for (k, v) in &u.params {
+                    let atom = Atom {
+                        pred: "param".to_string(),
+                        args: vec![Term::Val(Value::Str(k.clone())), v.clone()],
+                        record: None,
+                    };
+                    if let Some(b) = &u.body {
+                        comp_body.push(Stmt::Rule(RuleStmt {
+                            head: atom,
+                            body: b.clone(),
+                        }));
+                    } else {
+                        comp_body.push(Stmt::Fact(atom));
+                    }
+                }
+
+                comp_body.extend(body.clone());
+                out.push(Stmt::Component(crate::ast::Component {
+                    comp: u.name.clone(),
+                    inst: u.inst.clone(),
+                    body: comp_body,
+                }));
+            }
+            Stmt::Component(_) => {
+                // Allow legacy direct component usage.
+                out.push(s.clone());
+            }
+            other => out.push(other.clone()),
+        }
+    }
+
+    Ok(Program { statements: out })
+}
+
+fn expand_policy_packs(program: &Program) -> Result<Program> {
+    let mut packs: BTreeMap<String, Vec<Stmt>> = BTreeMap::new();
+    let mut applied = Vec::new();
+
+    for s in &program.statements {
+        match s {
+            Stmt::PolicyPack(p) => {
+                packs.insert(p.name.clone(), p.body.clone());
+            }
+            Stmt::ApplyPolicy(a) => applied.push(a.name.clone()),
+            _ => {}
+        }
+    }
+
+    let mut out = Vec::new();
+    for s in &program.statements {
+        match s {
+            Stmt::PolicyPack(_) => {}
+            Stmt::ApplyPolicy(_) => {}
+            other => out.push(other.clone()),
+        }
+    }
+
+    for name in applied {
+        let Some(body) = packs.get(&name) else {
+            bail!("apply_policy references unknown policy_pack '{name}'");
+        };
+        out.extend(body.clone());
+    }
+
+    Ok(Program { statements: out })
+}
+
+fn desugar_environment(program: &Program) -> Result<Program> {
     let mut out = Vec::new();
     for stmt in &program.statements {
         match stmt {
-            Stmt::Settings(s) => {
+            Stmt::Environment(s) => {
                 let mut facts = Vec::new();
-                for (k, v) in &s.fields {
-                    flatten_settings(&mut facts, s.env.clone(), k, v.clone())?;
+                for f in &s.fields {
+                    flatten_settings(&mut facts, s.env.clone(), f)?;
                 }
                 out.extend(facts);
             }
@@ -41,7 +298,17 @@ fn desugar_settings(program: &Program) -> Result<Program> {
     Ok(Program { statements: out })
 }
 
-fn flatten_settings(out: &mut Vec<Stmt>, env: Term, key: &str, val: Term) -> Result<()> {
+fn flatten_settings(out: &mut Vec<Stmt>, env: Term, f: &crate::ast::FieldAssign) -> Result<()> {
+    flatten_settings_inner(out, env, &f.key, f.op, f.value.clone())
+}
+
+fn flatten_settings_inner(
+    out: &mut Vec<Stmt>,
+    env: Term,
+    key: &str,
+    op: FieldOp,
+    val: Term,
+) -> Result<()> {
     match val {
         Term::Obj(m) => {
             for (k, v) in m {
@@ -50,13 +317,18 @@ fn flatten_settings(out: &mut Vec<Stmt>, env: Term, key: &str, val: Term) -> Res
                 } else {
                     format!("{key}.{k}")
                 };
-                flatten_settings(out, env.clone(), &next, v)?;
+                flatten_settings_inner(out, env.clone(), &next, op, v)?;
             }
         }
         other => {
+            let pred = match op {
+                FieldOp::Assign => "setting",
+                FieldOp::Add => "setting_add",
+            };
             out.push(Stmt::Fact(Atom {
-                pred: "setting".to_string(),
+                pred: pred.to_string(),
                 args: vec![env, Term::Val(Value::Str(key.to_string())), other],
+                record: None,
             }));
         }
     }
@@ -286,6 +558,7 @@ fn rewrite_term_listcomps(
                 head: Atom {
                     pred: lc_pred.clone(),
                     args: helper_head_args,
+                    record: None,
                 },
                 body,
             }));
@@ -302,6 +575,7 @@ fn rewrite_term_listcomps(
                 vec![Lit::Pos(Atom {
                     pred: lc_pred,
                     args: join_args,
+                    record: None,
                 })],
             )
         }
@@ -412,6 +686,7 @@ fn count_vars_in_term_into(t: &Term, out: &mut BTreeMap<String, usize>) {
         Term::Var(v) => {
             *out.entry(v.clone()).or_insert(0) += 1;
         }
+        Term::Wildcard => {}
         Term::Func { args, .. } => {
             for a in args {
                 count_vars_in_term_into(a, out);
@@ -450,8 +725,14 @@ fn extract_uniques(program: &Program) -> (Program, Vec<Unique>) {
             Stmt::Import(_) => {
                 // Loader-level feature, ignored in evaluator for now.
             }
-            Stmt::Settings(_) => {
-                // lowered away by desugar_settings
+            Stmt::Environment(_) => {
+                // lowered away by desugar_environment
+            }
+            Stmt::Use(_) | Stmt::ComponentDef(_) | Stmt::PolicyPack(_) | Stmt::ApplyPolicy(_) => {
+                // lowered away earlier
+            }
+            Stmt::Decl(_) => {
+                // lowered away by apply_decls
             }
             _ => statements.push(s.clone()),
         }
@@ -478,6 +759,7 @@ fn expand_component_stmt(stmt: &Stmt, out: &mut Vec<Stmt>) -> Result<()> {
                     Term::Val(Value::Str(c.inst.clone())),
                     Term::Val(Value::Str(scope.clone())),
                 ],
+                record: None,
             }));
 
             for inner in &c.body {
@@ -513,7 +795,11 @@ fn rewrite_stmt(stmt: Stmt, scope: &str) -> Stmt {
             fields: r
                 .fields
                 .into_iter()
-                .map(|(k, v)| (k, rewrite_term(v, scope)))
+                .map(|f| crate::ast::FieldAssign {
+                    key: f.key,
+                    op: f.op,
+                    value: rewrite_term(f.value, scope),
+                })
                 .collect(),
             body: r
                 .body
@@ -522,8 +808,13 @@ fn rewrite_stmt(stmt: Stmt, scope: &str) -> Stmt {
         // These are metadata statements; leave them as-is.
         Stmt::Import(i) => Stmt::Import(i),
         Stmt::Unique(u) => Stmt::Unique(u),
-        Stmt::Settings(s) => Stmt::Settings(s),
+        Stmt::Environment(s) => Stmt::Environment(s),
+        Stmt::ComponentDef(d) => Stmt::ComponentDef(d),
+        Stmt::Use(u) => Stmt::Use(u),
+        Stmt::PolicyPack(p) => Stmt::PolicyPack(p),
+        Stmt::ApplyPolicy(a) => Stmt::ApplyPolicy(a),
         Stmt::Component(c) => Stmt::Component(c),
+        Stmt::Decl(d) => Stmt::Decl(d),
     }
 }
 
@@ -549,6 +840,28 @@ fn rewrite_atom(mut atom: Atom, scope: &str) -> Atom {
             atom.args[1] = scoped_term(scope, rewrite_term(atom.args[1].clone(), scope));
             atom.args[3] = rewrite_term(atom.args[3].clone(), scope);
         }
+        "arg_add" if atom.args.len() == 4 => {
+            atom.args[1] = scoped_term(scope, rewrite_term(atom.args[1].clone(), scope));
+            atom.args[3] = rewrite_term(atom.args[3].clone(), scope);
+        }
+        "adopt" if atom.args.len() == 3 => {
+            atom.args[1] = scoped_term(scope, rewrite_term(atom.args[1].clone(), scope));
+            atom.args[2] = rewrite_term(atom.args[2].clone(), scope);
+        }
+        "param" if atom.args.len() == 2 => {
+            // Scope parameters so multiple component instances don't collide.
+            let key = rewrite_term(atom.args[0].clone(), scope);
+            let val = rewrite_term(atom.args[1].clone(), scope);
+            atom.args = vec![Term::Val(Value::Str(scope.to_string())), key, val];
+        }
+        "param" if atom.args.len() == 3 => {
+            // Fully-qualified param/3; rewrite nested terms.
+            atom.args = atom
+                .args
+                .into_iter()
+                .map(|t| rewrite_term(t, scope))
+                .collect();
+        }
         // Sugar: inside a component, allow output(Key, Value)
         // which becomes output(Scope, Key, Value).
         "output" if atom.args.len() == 2 => {
@@ -572,6 +885,7 @@ fn rewrite_term(term: Term, scope: &str) -> Term {
     match term {
         Term::Val(v) => Term::Val(v),
         Term::Var(v) => Term::Var(v),
+        Term::Wildcard => Term::Wildcard,
         Term::List(xs) => Term::List(xs.into_iter().map(|t| rewrite_term(t, scope)).collect()),
         Term::Obj(m) => Term::Obj(
             m.into_iter()
@@ -683,6 +997,7 @@ fn resource_to_stmts(r: Resource) -> Result<Vec<Stmt>> {
     let want_atom = Atom {
         pred: "want".to_string(),
         args: vec![r.typ.clone(), r.name.clone()],
+        record: None,
     };
 
     if body.is_empty() && is_ground_term(&r.typ) && is_ground_term(&r.name) {
@@ -694,15 +1009,21 @@ fn resource_to_stmts(r: Resource) -> Result<Vec<Stmt>> {
         }));
     }
 
-    for (k, v) in r.fields {
+    for f in r.fields {
+        let pred = match f.op {
+            FieldOp::Assign => "arg",
+            FieldOp::Add => "arg_add",
+        };
+
         let arg_atom = Atom {
-            pred: "arg".to_string(),
+            pred: pred.to_string(),
             args: vec![
                 r.typ.clone(),
                 r.name.clone(),
-                Term::Val(Value::Str(k)),
-                v,
+                Term::Val(Value::Str(f.key)),
+                f.value,
             ],
+            record: None,
         };
         if body.is_empty() && is_ground_term(&arg_atom.args[0]) && is_ground_term(&arg_atom.args[1]) && is_ground_term(&arg_atom.args[2]) && is_ground_term(&arg_atom.args[3]) {
             out.push(Stmt::Fact(arg_atom));
@@ -720,6 +1041,7 @@ fn resource_to_stmts(r: Resource) -> Result<Vec<Stmt>> {
 fn is_ground_term(t: &Term) -> bool {
     match t {
         Term::Var(_) => false,
+        Term::Wildcard => false,
         Term::Val(_) => true,
         Term::Func { args, .. } => args.iter().all(is_ground_term),
         Term::List(xs) => xs.iter().all(is_ground_term),

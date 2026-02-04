@@ -1,0 +1,12 @@
+# Demo: schemas + record matching + wildcards
+
+decl project { id, name, region, network_name, proxy_cidr }.
+
+project(1, "alpha", us-east-1, "net-a", "10.0.0.0/24").
+project(2, "beta", us-east-1, "net-b", "10.1.0.0/24").
+
+# Match only the fields you care about (missing fields become wildcards in rule bodies).
+proj_basic(Id, Name, Region) :- project{ id: Id, name: Name, region: Region }.
+
+# You can also use anonymous wildcards in positional form.
+proj_ids(Id) :- project(Id, _, _, _, _).

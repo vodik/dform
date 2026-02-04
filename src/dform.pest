@@ -6,9 +6,20 @@ LOWER = _{ 'a'..'z' }
 
 program = { SOI ~ stmt* ~ EOI }
 
-stmt = { (component_stmt | when_stmt | import_stmt | unique_stmt | settings_stmt | resource_stmt | constraint_stmt | rule_stmt | fact) ~ "." }
+stmt = { (decl_stmt | component_stmt | component_def_stmt | use_stmt | policy_pack_stmt | apply_policy_stmt | when_stmt | import_stmt | unique_stmt | environment_stmt | resource_stmt | constraint_stmt | rule_stmt | fact) ~ "." }
+
+decl_stmt = { "decl" ~ pred ~ "{" ~ decl_fields? ~ "}" }
+decl_fields = { ident ~ ("," ~ ident)* ~ ","? }
 
 component_stmt = { "component" ~ ident ~ ident ~ "{" ~ stmt* ~ "}" }
+
+component_def_stmt = { "component_def" ~ ident ~ "{" ~ stmt* ~ "}" }
+
+use_stmt = { "use" ~ ident ~ ident ~ "{" ~ res_fields? ~ "}" ~ (":-" ~ body)? }
+
+policy_pack_stmt = { "policy_pack" ~ ident ~ "{" ~ stmt* ~ "}" }
+
+apply_policy_stmt = { "apply_policy" ~ ident }
 
 when_stmt = { "when" ~ guard ~ "{" ~ stmt* ~ "}" }
 
@@ -16,7 +27,7 @@ import_stmt = { "import" ~ string ~ ("as" ~ ident)? }
 
 unique_stmt = { "unique" ~ pred ~ "(" ~ pos_int ~ ")" }
 
-settings_stmt = { "settings" ~ term ~ "{" ~ res_fields? ~ "}" }
+environment_stmt = { ("environment" | "settings") ~ term ~ "{" ~ res_fields? ~ "}" }
 
 resource_stmt = { "resource" ~ term ~ term ~ "{" ~ res_fields? ~ "}" ~ (":-" ~ body)? }
 // Fields inside `{ ... }` blocks.
@@ -27,7 +38,8 @@ resource_stmt = { "resource" ~ term ~ term ~ "{" ~ res_fields? ~ "}" ~ (":-" ~ b
 //   a = 1
 //   b = 2
 res_fields = { res_field ~ (","? ~ res_field)* ~ ","? }
-res_field = { keypath ~ "=" ~ term }
+res_field = { keypath ~ field_op ~ term }
+field_op = { "=" | "+=" }
 keypath = @{ (ASCII_ALPHANUMERIC | "_" | "." | "-" )+ }
 
 fact = { atom }

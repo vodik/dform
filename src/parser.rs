@@ -1,6 +1,6 @@
 use crate::ast::{
-    Atom, Component, Constraint, Import, Lit, Program, Resource, RuleStmt, Settings, Stmt, Term,
-    Unique, When,
+    ApplyPolicy, Atom, Component, ComponentDef, Constraint, Import, Lit, PolicyPack, Program,
+    Decl, Environment, FieldAssign, FieldOp, Resource, RuleStmt, Stmt, Term, Unique, Use, When,
 };
 use crate::value::Value;
 use anyhow::{anyhow, bail, Context, Result};
@@ -35,6 +35,19 @@ pub fn parse_program(src: &str) -> Result<Program> {
 
 fn parse_stmt(pair: Pair<Rule>) -> Result<Stmt> {
     match pair.as_rule() {
+        Rule::decl_stmt => {
+            let mut it = pair.into_inner();
+            let pred = it.next().unwrap().as_str().to_string();
+            let mut fields = Vec::new();
+            if let Some(df) = it.next() {
+                for p in df.into_inner() {
+                    if p.as_rule() == Rule::ident {
+                        fields.push(p.as_str().to_string());
+                    }
+                }
+            }
+            Ok(Stmt::Decl(Decl { pred, fields }))
+        }
         Rule::fact => Ok(Stmt::Fact(parse_atom(pair.into_inner().next().unwrap())?)),
         Rule::rule_stmt => {
             let mut it = pair.into_inner();
@@ -62,6 +75,69 @@ fn parse_stmt(pair: Pair<Rule>) -> Result<Stmt> {
             }
             Ok(Stmt::Component(Component { comp, inst, body }))
         }
+        Rule::component_def_stmt => {
+            let mut it = pair.into_inner();
+            let name = it.next().unwrap().as_str().to_string();
+            let mut body = Vec::new();
+            for p in it {
+                if p.as_rule() != Rule::stmt {
+                    continue;
+                }
+                let inner = p.into_inner().next().unwrap();
+                body.push(parse_stmt(inner)?);
+            }
+            Ok(Stmt::ComponentDef(ComponentDef { name, body }))
+        }
+        Rule::use_stmt => {
+            let mut it = pair.into_inner();
+            let name = it.next().unwrap().as_str().to_string();
+            let inst = it.next().unwrap().as_str().to_string();
+            let mut params: Vec<(String, Term)> = Vec::new();
+            let mut body: Option<Vec<Lit>> = None;
+
+            for p in it {
+                match p.as_rule() {
+                    Rule::res_fields => {
+                        let assigns = parse_res_fields(p)?;
+                        for a in assigns {
+                            if !matches!(a.op, FieldOp::Assign) {
+                                bail!("use params do not support +=");
+                            }
+                            params.push((a.key, a.value));
+                        }
+                    }
+                    Rule::body => {
+                        body = Some(parse_body(p.into_inner())?);
+                    }
+                    _ => {}
+                }
+            }
+
+            Ok(Stmt::Use(Use {
+                name,
+                inst,
+                params,
+                body,
+            }))
+        }
+        Rule::policy_pack_stmt => {
+            let mut it = pair.into_inner();
+            let name = it.next().unwrap().as_str().to_string();
+            let mut body = Vec::new();
+            for p in it {
+                if p.as_rule() != Rule::stmt {
+                    continue;
+                }
+                let inner = p.into_inner().next().unwrap();
+                body.push(parse_stmt(inner)?);
+            }
+            Ok(Stmt::PolicyPack(PolicyPack { name, body }))
+        }
+        Rule::apply_policy_stmt => {
+            let mut it = pair.into_inner();
+            let name = it.next().unwrap().as_str().to_string();
+            Ok(Stmt::ApplyPolicy(ApplyPolicy { name }))
+        }
         Rule::when_stmt => {
             let mut it = pair.into_inner();
             let guard = parse_guard(it.next().unwrap())?;
@@ -87,23 +163,23 @@ fn parse_stmt(pair: Pair<Rule>) -> Result<Stmt> {
             let key_arity: usize = it.next().unwrap().as_str().parse()?;
             Ok(Stmt::Unique(Unique { pred, key_arity }))
         }
-        Rule::settings_stmt => {
+        Rule::environment_stmt => {
             let mut it = pair.into_inner();
             let env = parse_term(it.next().unwrap())?;
-            let mut fields: Vec<(String, Term)> = Vec::new();
+            let mut fields: Vec<FieldAssign> = Vec::new();
             for p in it {
                 if p.as_rule() == Rule::res_fields {
                     fields = parse_res_fields(p)?;
                 }
             }
-            Ok(Stmt::Settings(Settings { env, fields }))
+            Ok(Stmt::Environment(Environment { env, fields }))
         }
         Rule::resource_stmt => {
             let mut it = pair.into_inner();
             let typ = parse_term(it.next().unwrap())?;
             let name = parse_term(it.next().unwrap())?;
 
-            let mut fields: Vec<(String, Term)> = Vec::new();
+            let mut fields: Vec<FieldAssign> = Vec::new();
             let mut body: Option<Vec<Lit>> = None;
 
             for p in it {
@@ -197,7 +273,11 @@ fn parse_atom(pair: Pair<Rule>) -> Result<Atom> {
     let pred = it.next().unwrap().as_str().to_string();
 
     let Some(next) = it.next() else {
-        return Ok(Atom { pred, args: vec![] });
+        return Ok(Atom {
+            pred,
+            args: vec![],
+            record: None,
+        });
     };
 
     match next.as_rule() {
@@ -208,7 +288,11 @@ fn parse_atom(pair: Pair<Rule>) -> Result<Atom> {
                     args.push(parse_term(t)?);
                 }
             }
-            Ok(Atom { pred, args })
+            Ok(Atom {
+                pred,
+                args,
+                record: None,
+            })
         }
         Rule::fields => {
             let mut fields: BTreeMap<String, Term> = BTreeMap::new();
@@ -221,36 +305,14 @@ fn parse_atom(pair: Pair<Rule>) -> Result<Atom> {
                 let val = parse_term(fit.next().unwrap())?;
                 fields.insert(key, val);
             }
-            let args = record_to_args(&pred, fields)?;
-            Ok(Atom { pred, args })
+            Ok(Atom {
+                pred,
+                args: Vec::new(),
+                record: Some(fields),
+            })
         }
         _ => bail!("unexpected atom form: {:?}", next.as_rule()),
     }
-}
-
-fn record_to_args(pred: &str, fields: BTreeMap<String, Term>) -> Result<Vec<Term>> {
-    let order: &[&str] = match pred {
-        "want" => &["type", "name"],
-        "arg" => &["type", "name", "path", "value"],
-        "setting" => &["env", "key", "value"],
-        "output" => &["scope", "key", "value"],
-        "component_scope" => &["comp", "inst", "scope"],
-        "input" => &["key", "value"],
-        "data" => &["key", "value"],
-        other => bail!("no record schema for predicate '{other}'"),
-    };
-
-    if fields.len() != order.len() {
-        bail!("record for '{pred}' must have fields: {}", order.join(", "));
-    }
-    let mut args = Vec::with_capacity(order.len());
-    for k in order {
-        let Some(v) = fields.get(*k) else {
-            bail!("record for '{pred}' missing field '{k}'");
-        };
-        args.push(v.clone());
-    }
-    Ok(args)
 }
 
 fn parse_term(pair: Pair<Rule>) -> Result<Term> {
@@ -301,7 +363,14 @@ fn parse_term(pair: Pair<Rule>) -> Result<Term> {
         Rule::string => Ok(Term::Val(Value::Str(parse_string_lit(inner)?))),
         Rule::int => Ok(Term::Val(Value::Int(inner.as_str().parse()?))),
         Rule::bool_lit => Ok(Term::Val(Value::Bool(inner.as_str() == "true"))),
-        Rule::var => Ok(Term::Var(inner.as_str().to_string())),
+        Rule::var => {
+            let v = inner.as_str().to_string();
+            if v == "_" {
+                Ok(Term::Wildcard)
+            } else {
+                Ok(Term::Var(v))
+            }
+        }
         Rule::sym | Rule::ident => Ok(Term::Val(Value::Str(inner.as_str().to_string()))),
         Rule::func => {
             let mut it = inner.into_inner();
@@ -320,7 +389,7 @@ fn parse_term(pair: Pair<Rule>) -> Result<Term> {
     }
 }
 
-fn parse_res_fields(pair: Pair<Rule>) -> Result<Vec<(String, Term)>> {
+fn parse_res_fields(pair: Pair<Rule>) -> Result<Vec<FieldAssign>> {
     let mut out = Vec::new();
     for p in pair.into_inner() {
         if p.as_rule() != Rule::res_field {
@@ -328,8 +397,14 @@ fn parse_res_fields(pair: Pair<Rule>) -> Result<Vec<(String, Term)>> {
         }
         let mut it = p.into_inner();
         let key = it.next().unwrap().as_str().to_string();
+        let op_pair = it.next().unwrap();
+        let op = match op_pair.as_str() {
+            "=" => FieldOp::Assign,
+            "+=" => FieldOp::Add,
+            other => bail!("unknown field op: {other}"),
+        };
         let value = parse_term(it.next().unwrap())?;
-        out.push((key, value));
+        out.push(FieldAssign { key, op, value });
     }
     Ok(out)
 }

@@ -1,0 +1,13 @@
+{
+  "resources": {
+    "net.vpc::existing-prod-vpc": {
+      "typ": "net.vpc",
+      "name": "existing-prod-vpc",
+      "attrs": {
+        "cidr": "10.99.0.0/16",
+        "tags": { "env": "prod", "owner": "team-a" }
+      },
+      "computed": { "id": "net.vpc:existing-prod-vpc" }
+    }
+  }
+}

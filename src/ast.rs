@@ -12,6 +12,7 @@ pub struct Program {
 pub enum Term {
     Val(Value),
     Var(String),
+    Wildcard,
     Func { name: String, args: Vec<Term> },
     List(Vec<Term>),
     Obj(BTreeMap<String, Term>),
@@ -31,6 +32,7 @@ impl PartialEq for Term {
         match (self, other) {
             (Val(a), Val(b)) => a == b,
             (Var(a), Var(b)) => a == b,
+            (Wildcard, Wildcard) => true,
             (Func { name: an, args: aa }, Func { name: bn, args: ba }) => an == bn && aa == ba,
             (List(a), List(b)) => a == b,
             (Obj(a), Obj(b)) => a == b,
@@ -56,10 +58,11 @@ impl Ord for Term {
         let tag = |t: &Term| match t {
             Val(_) => 0,
             Var(_) => 1,
-            Func { .. } => 2,
-            List(_) => 3,
-            Obj(_) => 4,
-            ListComp { .. } => 5,
+            Wildcard => 2,
+            Func { .. } => 3,
+            List(_) => 4,
+            Obj(_) => 5,
+            ListComp { .. } => 6,
         };
         let ta = tag(self);
         let tb = tag(other);
@@ -69,6 +72,7 @@ impl Ord for Term {
         match (self, other) {
             (Val(a), Val(b)) => a.cmp(b),
             (Var(a), Var(b)) => a.cmp(b),
+            (Wildcard, Wildcard) => Ordering::Equal,
             (Func { name: an, args: aa }, Func { name: bn, args: ba }) => {
                 an.cmp(bn).then_with(|| aa.cmp(ba))
             }
@@ -89,6 +93,7 @@ impl Hash for Term {
         match self {
             Val(v) => v.hash(state),
             Var(v) => v.hash(state),
+            Wildcard => {}
             Func { name, args } => {
                 name.hash(state);
                 args.hash(state);
@@ -109,11 +114,22 @@ pub enum Stmt {
     Rule(RuleStmt),
     Constraint(Constraint),
     Component(Component),
+    ComponentDef(ComponentDef),
+    Use(Use),
+    PolicyPack(PolicyPack),
+    ApplyPolicy(ApplyPolicy),
     When(When),
     Resource(Resource),
     Import(Import),
     Unique(Unique),
-    Settings(Settings),
+    Environment(Environment),
+    Decl(Decl),
+}
+
+#[derive(Debug, Clone)]
+pub struct Decl {
+    pub pred: String,
+    pub fields: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -121,6 +137,31 @@ pub struct Component {
     pub comp: String,
     pub inst: String,
     pub body: Vec<Stmt>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ComponentDef {
+    pub name: String,
+    pub body: Vec<Stmt>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Use {
+    pub name: String,
+    pub inst: String,
+    pub params: Vec<(String, Term)>,
+    pub body: Option<Vec<Lit>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PolicyPack {
+    pub name: String,
+    pub body: Vec<Stmt>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ApplyPolicy {
+    pub name: String,
 }
 
 #[derive(Debug, Clone)]
@@ -133,8 +174,21 @@ pub struct When {
 pub struct Resource {
     pub typ: Term,
     pub name: Term,
-    pub fields: Vec<(String, Term)>,
+    pub fields: Vec<FieldAssign>,
     pub body: Option<Vec<Lit>>,
+}
+
+#[derive(Debug, Copy, Clone)]
+pub enum FieldOp {
+    Assign,
+    Add,
+}
+
+#[derive(Debug, Clone)]
+pub struct FieldAssign {
+    pub key: String,
+    pub op: FieldOp,
+    pub value: Term,
 }
 
 #[derive(Debug, Clone)]
@@ -150,9 +204,9 @@ pub struct Unique {
 }
 
 #[derive(Debug, Clone)]
-pub struct Settings {
+pub struct Environment {
     pub env: Term,
-    pub fields: Vec<(String, Term)>,
+    pub fields: Vec<FieldAssign>,
 }
 
 #[derive(Debug, Clone)]
@@ -171,6 +225,7 @@ pub struct Constraint {
 pub struct Atom {
     pub pred: String,
     pub args: Vec<Term>,
+    pub record: Option<BTreeMap<String, Term>>,
 }
 
 #[derive(Debug, Clone)]

@@ -10,6 +10,7 @@ pub enum Value {
     List(Vec<Value>),
     Obj(BTreeMap<String, Value>),
     Ref { typ: String, name: String, attr: String },
+    CloudRef { typ: String, name: String, attr: String },
 }
 
 impl Value {

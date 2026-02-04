@@ -1,0 +1,20 @@
+component_def kubernetes {
+  resource k8s.cluster cluster {
+    version = "1.29",
+    private_api = PrivateApi,
+    subnet_ids = SubnetIds
+  } :-
+    param(private_api, PrivateApi),
+    component_scope(network, main, NetScope),
+    output(NetScope, private_subnet_ids, SubnetIds).
+
+  resource k8s.nodepool default {
+    cluster_id = ref(k8s.cluster, cluster, id),
+    min = Min,
+    max = Max
+  } :-
+    param(nodepool_min, Min),
+    param(nodepool_max, Max).
+
+  iam_need(app, k8s.describe_cluster, ref(k8s.cluster, cluster, id)).
+}.

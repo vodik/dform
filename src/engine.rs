@@ -1,4 +1,5 @@
 use crate::ast::{Atom, Constraint, Lit, Program, RuleStmt, Stmt, Term, Unique};
+use crate::merge;
 use crate::transform;
 use crate::value::Value;
 use anyhow::{anyhow, bail, Context, Result};
@@ -7,6 +8,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 #[derive(Debug, Clone)]
 pub struct EvalResult {
     pub facts: BTreeSet<Atom>,
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -69,28 +71,47 @@ pub fn eval(program: &Program, extra_facts: &[Atom]) -> Result<(EvalResult, Vec<
                 bail!("evaluation did not converge in stratum {s}");
             }
             changed = false;
-        let snapshot: Vec<Atom> = facts.iter().cloned().collect();
+
+            let snapshot: Vec<Atom> = facts.iter().cloned().collect();
+            let mut pending_atoms: Vec<Atom> = Vec::new();
+            let mut pending_aggs: Vec<AggFact> = Vec::new();
+
             for r in &rules_s {
                 let derived = eval_rule(r, &snapshot)?;
                 for d in derived {
                     match d {
-                        DerivedFact::Normal(a) => {
-                            let did = match a.pred.as_str() {
-                                "arg" => upsert_by_key(&mut facts, a, 3)?,
-                                "output" => upsert_by_key(&mut facts, a, 2)?,
-                                _ => facts.insert(a),
-                            };
-                            if did {
-                                changed = true;
-                            }
-                        }
-                        DerivedFact::Agg(agg) => {
-                            if upsert_agg(&mut facts, agg)? {
-                                changed = true;
-                            }
-                        }
+                        DerivedFact::Normal(a) => pending_atoms.push(a),
+                        DerivedFact::Agg(agg) => pending_aggs.push(agg),
                     }
                 }
+            }
+
+            for agg in pending_aggs {
+                if upsert_agg(&mut facts, agg)? {
+                    changed = true;
+                }
+            }
+
+            // Apply functional predicates (arg/output) with conflict detection.
+            if apply_functional_pred(&mut facts, &pending_atoms, "arg", 3)? {
+                changed = true;
+            }
+            if apply_functional_pred(&mut facts, &pending_atoms, "output", 2)? {
+                changed = true;
+            }
+
+            // Apply all remaining derived atoms as set inserts.
+            for a in pending_atoms {
+                if matches!(a.pred.as_str(), "arg" | "output") {
+                    continue;
+                }
+                if facts.insert(a) {
+                    changed = true;
+                }
+            }
+
+            if apply_setting_add(&mut facts)? {
+                changed = true;
             }
         }
     }
@@ -104,9 +125,60 @@ pub fn eval(program: &Program, extra_facts: &[Atom]) -> Result<(EvalResult, Vec<
         }
     }
 
+    // Policy facts: deny/warn.
+    let mut warnings = Vec::new();
+    for a in &snapshot {
+        match a.pred.as_str() {
+            "warn" => warnings.push(format_policy_fact(a)?),
+            "deny" => violations.push(format_policy_fact(a)?),
+            _ => {}
+        }
+    }
+
     enforce_uniques(&facts, &uniques)?;
 
-    Ok((EvalResult { facts }, violations))
+    Ok((EvalResult { facts, warnings }, violations))
+}
+
+fn format_policy_fact(a: &Atom) -> Result<String> {
+    if a.args.is_empty() {
+        bail!("policy fact must have at least a message argument");
+    }
+    let msg = match &a.args[0] {
+        Term::Val(Value::Str(s)) => s.clone(),
+        _ => bail!("policy message must be a string"),
+    };
+    if a.args.len() == 1 {
+        return Ok(msg);
+    }
+    let Term::Val(ctx) = &a.args[1] else {
+        bail!("policy context must be ground");
+    };
+    Ok(format!("{msg} ctx={}", value_to_json_string(ctx)?))
+}
+
+fn value_to_json_string(v: &Value) -> Result<String> {
+    Ok(serde_json::to_string(&value_to_json(v))?)
+}
+
+fn value_to_json(v: &Value) -> serde_json::Value {
+    match v {
+        Value::Str(s) => serde_json::Value::String(s.clone()),
+        Value::Int(i) => serde_json::Value::Number((*i).into()),
+        Value::Bool(b) => serde_json::Value::Bool(*b),
+        Value::List(xs) => serde_json::Value::Array(xs.iter().map(value_to_json).collect()),
+        Value::Obj(m) => serde_json::Value::Object(
+            m.iter()
+                .map(|(k, v)| (k.clone(), value_to_json(v)))
+                .collect(),
+        ),
+        Value::Ref { typ, name, attr } => {
+            serde_json::Value::String(format!("ref({typ},{name},{attr})"))
+        }
+        Value::CloudRef { typ, name, attr } => {
+            serde_json::Value::String(format!("cloud_ref({typ},{name},{attr})"))
+        }
+    }
 }
 
 fn enforce_uniques(facts: &BTreeSet<Atom>, uniques: &[Unique]) -> Result<()> {
@@ -209,6 +281,7 @@ fn ensure_ground(a: &Atom) -> Result<Atom> {
     Ok(Atom {
         pred: a.pred.clone(),
         args,
+        record: None,
     })
 }
 
@@ -290,6 +363,7 @@ fn eval_rule_collect(
         let atom = Atom {
             pred: rule.head.pred.clone(),
             args: args_out,
+            record: None,
         };
         out.push(DerivedFact::Agg(AggFact {
             pred: rule.head.pred.clone(),
@@ -346,33 +420,47 @@ fn key_from_atom(a: &Atom, idx: usize) -> Result<Vec<Value>> {
     Ok(out)
 }
 
-fn upsert_by_key(facts: &mut BTreeSet<Atom>, atom: Atom, key_arity: usize) -> Result<bool> {
-    if key_arity == 0 {
-        return Ok(facts.insert(atom));
-    }
-    if atom.args.len() < key_arity {
-        bail!("upsert key arity too large for {}", atom.pred);
-    }
-    let key = first_n_vals(&atom, key_arity)?;
-    let mut to_remove = Vec::new();
-    for a in facts.iter() {
-        if a.pred != atom.pred {
-            continue;
-        }
-        if a.args.len() < key_arity {
-            continue;
-        }
-        if first_n_vals(a, key_arity)? == key {
-            if a.args == atom.args {
-                return Ok(false);
+fn apply_functional_pred(
+    facts: &mut BTreeSet<Atom>,
+    derived: &[Atom],
+    pred: &str,
+    key_arity: usize,
+) -> Result<bool> {
+    let mut grouped: BTreeMap<Vec<Value>, Atom> = BTreeMap::new();
+    for a in derived.iter().filter(|a| a.pred == pred) {
+        let key = first_n_vals(a, key_arity)?;
+        if let Some(prev) = grouped.get(&key) {
+            if prev.args != a.args {
+                bail!("conflicting derived {pred} for key {key:?}");
             }
-            to_remove.push(a.clone());
+        } else {
+            grouped.insert(key, a.clone());
         }
     }
-    for r in to_remove {
-        facts.remove(&r);
+    if grouped.is_empty() {
+        return Ok(false);
     }
-    Ok(facts.insert(atom))
+
+    let mut changed = false;
+    for (key, atom) in grouped {
+        // Remove stale existing values for that key.
+        let mut existing: Vec<Atom> = facts
+            .iter()
+            .filter(|a| a.pred == pred)
+            .filter_map(|a| (first_n_vals(a, key_arity).ok()? == key).then_some(a.clone()))
+            .collect();
+
+        if existing.len() == 1 && existing[0].args == atom.args {
+            continue;
+        }
+
+        for r in existing.drain(..) {
+            facts.remove(&r);
+        }
+        facts.insert(atom);
+        changed = true;
+    }
+    Ok(changed)
 }
 
 fn first_n_vals(a: &Atom, n: usize) -> Result<Vec<Value>> {
@@ -384,6 +472,108 @@ fn first_n_vals(a: &Atom, n: usize) -> Result<Vec<Value>> {
         out.push(v.clone());
     }
     Ok(out)
+}
+
+fn apply_setting_add(facts: &mut BTreeSet<Atom>) -> Result<bool> {
+    // Merge `setting_add(Env, Key, Value)` into effective `setting(Env, Key, Value)`.
+    let rules = merge::parse_merge_rules(facts.iter())?;
+
+    #[derive(Default)]
+    struct Group {
+        base: Option<Value>,
+        adds: Vec<Value>,
+    }
+
+    let mut groups: BTreeMap<(String, String), Group> = BTreeMap::new();
+
+    for a in facts.iter() {
+        if a.pred != "setting" && a.pred != "setting_add" {
+            continue;
+        }
+        if a.args.len() != 3 {
+            bail!("{}/3 expected", a.pred);
+        }
+        let env = term_str(&a.args[0])?;
+        let key = term_str(&a.args[1])?;
+        let Term::Val(v) = &a.args[2] else {
+            bail!("setting values must be ground");
+        };
+        let g = groups.entry((env.to_string(), key.to_string())).or_default();
+        if a.pred == "setting" {
+            match &g.base {
+                None => g.base = Some(v.clone()),
+                Some(prev) if prev == v => {}
+                Some(prev) => bail!(
+                    "conflicting base setting({}, {}) values: {prev:?} vs {v:?}",
+                    env,
+                    key
+                ),
+            }
+        } else {
+            g.adds.push(v.clone());
+        }
+    }
+
+    let mut changed = false;
+    for ((env, key), g) in groups {
+        if g.adds.is_empty() {
+            continue;
+        }
+
+        let mut merged = g.base;
+        for add in g.adds {
+            merged = Some(match merged {
+                None => add,
+                Some(cur) => merge::merge_value(cur, add, &rules, "setting", &key)?,
+            });
+        }
+        let Some(merged) = merged else {
+            continue;
+        };
+
+        // Replace any existing `setting(env,key,...)` with the merged value.
+        let mut existing: Vec<Atom> = facts
+            .iter()
+            .filter(|a| a.pred == "setting")
+            .filter(|a| {
+                a.args.len() == 3
+                    && term_str(&a.args[0]).ok() == Some(env.as_str())
+                    && term_str(&a.args[1]).ok() == Some(key.as_str())
+            })
+            .cloned()
+            .collect();
+
+        if existing.len() == 1 {
+            if let Term::Val(v) = &existing[0].args[2] {
+                if v == &merged {
+                    continue;
+                }
+            }
+        }
+
+        for e in existing.drain(..) {
+            facts.remove(&e);
+        }
+        facts.insert(Atom {
+            pred: "setting".to_string(),
+            args: vec![
+                Term::Val(Value::Str(env.clone())),
+                Term::Val(Value::Str(key.clone())),
+                Term::Val(merged),
+            ],
+            record: None,
+        });
+        changed = true;
+    }
+
+    Ok(changed)
+}
+
+fn term_str(t: &Term) -> Result<&str> {
+    let Term::Val(Value::Str(s)) = t else {
+        bail!("expected string")
+    };
+    Ok(s)
 }
 
 fn find_collect(head: &Atom) -> Option<(usize, CollectKind)> {
@@ -415,6 +605,29 @@ fn eval_body(body: &[Lit], facts: &[Atom]) -> Result<Vec<HashMap<String, Value>>
         let mut next = Vec::new();
         match lit {
             Lit::Pos(atom) => {
+                if atom.pred == "member" {
+                    if atom.args.len() != 2 {
+                        bail!("member/2 expected");
+                    }
+                    for s in &states {
+                        let list_v = eval_term(&atom.args[0], s)
+                            .ok_or_else(|| anyhow!("unsafe member: list is not ground"))?;
+                        let Value::List(items) = list_v else {
+                            continue;
+                        };
+                        for item in &items {
+                            let mut s2 = s.clone();
+                            if unify_term(&atom.args[1], item, &mut s2)? {
+                                next.push(s2);
+                            }
+                        }
+                    }
+                    states = next;
+                    if states.is_empty() {
+                        break;
+                    }
+                    continue;
+                }
                 for s in &states {
                     for f in facts.iter().filter(|x| x.pred == atom.pred) {
                         if let Some(s2) = unify_atom(atom, f, s)? {
@@ -490,6 +703,7 @@ fn unify_term(pat: &Term, fv: &Value, out: &mut HashMap<String, Value>) -> Resul
                 Ok(true)
             }
         }
+        Term::Wildcard => Ok(true),
         Term::List(items) => {
             let Value::List(vs) = fv else {
                 return Ok(false);
@@ -565,6 +779,7 @@ fn ground_atom(atom: &Atom, state: &HashMap<String, Value>) -> Result<Atom> {
     Ok(Atom {
         pred: atom.pred.clone(),
         args,
+        record: None,
     })
 }
 
@@ -580,6 +795,7 @@ fn instantiate_atom(atom: &Atom, state: &HashMap<String, Value>) -> Result<Atom>
     Ok(Atom {
         pred: atom.pred.clone(),
         args,
+        record: None,
     })
 }
 
@@ -650,6 +866,7 @@ fn eval_term(term: &Term, state: &HashMap<String, Value>) -> Option<Value> {
     match term {
         Term::Val(v) => Some(v.clone()),
         Term::Var(name) => state.get(name).cloned(),
+        Term::Wildcard => None,
         Term::Func { name, args } => eval_func(name, args, state),
         Term::List(xs) => {
             let mut out = Vec::new();
@@ -715,6 +932,19 @@ fn eval_func(name: &str, args: &[Term], state: &HashMap<String, Value>) -> Optio
                 attr: a,
             })
         }
+        "cloud_ref" => {
+            if args.len() != 3 {
+                return None;
+            }
+            let t = eval_term(&args[0], state)?.as_str()?.to_string();
+            let n = eval_term(&args[1], state)?.as_str()?.to_string();
+            let a = eval_term(&args[2], state)?.as_str()?.to_string();
+            Some(Value::CloudRef {
+                typ: t,
+                name: n,
+                attr: a,
+            })
+        }
         "gref" => {
             if args.len() != 3 {
                 return None;
@@ -756,6 +986,7 @@ fn value_to_string(v: &Value) -> String {
         Value::List(_) => "<list>".to_string(),
         Value::Obj(_) => "<obj>".to_string(),
         Value::Ref { typ, name, attr } => format!("ref({typ},{name},{attr})"),
+        Value::CloudRef { typ, name, attr } => format!("cloud_ref({typ},{name},{attr})"),
     }
 }
 

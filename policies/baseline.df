@@ -1,0 +1,30 @@
+policy_pack baseline {
+  # Declarative merge strategies.
+  merge_rule(tags, map_merge).
+  merge_rule(iam.policy, statements, set).
+  merge_rule(setting, audit.sinks, set).
+
+  # Example: add a shared tag to everything.
+  arg_add(Type, Name, "tags", { team: platform }) :-
+    want(Type, Name).
+
+  # Example: policy pack can contribute directly to an IAM policy.
+  arg_add(iam.policy, Policy, "statements", [ { action: org.read, resource: "org" } ]) :-
+    env(prod),
+    component_scope(iam, main, IScope),
+    let Policy = scoped(IScope, app_policy).
+
+  deny("db must not be public", { resource: Db }) :-
+    component_scope(database, main, DbScope),
+    let Db = scoped(DbScope, db),
+    want(db.postgres, Db),
+    not arg(db.postgres, Db, public, false).
+
+  # Example warning: prod should enable an audit setting.
+  warn("prod should enable audit logging", { env: prod }) :-
+    env(prod),
+    not setting(prod, audit.enabled, true).
+
+  # Example: policy pack can add a sink without owning the whole list.
+  setting_add(prod, audit.sinks, ["s3"]).
+}.

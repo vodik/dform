@@ -38,6 +38,13 @@ enum Cmd {
     Eval,
     Plan,
     Apply,
+    Query {
+        pred: String,
+    },
+    Show {
+        typ: String,
+        name: String,
+    },
 }
 
 fn main() -> Result<()> {
@@ -46,8 +53,14 @@ fn main() -> Result<()> {
     let files = default_files(&cli.files)?;
     let program = loader::load_program(&files)?;
 
-    let extra = build_extra_facts(&cli.set, &cli.data)?;
+    let mut extra = build_extra_facts(&cli.set, &cli.data)?;
+    // Inject discovery facts from fake backend (inventory).
+    let backend = FakeCloud::new(PathBuf::from(".dform"));
+    extra.extend(backend.discover()?);
     let (res, violations) = engine::eval(&program, &extra)?;
+    for w in &res.warnings {
+        eprintln!("warning: {w}");
+    }
     if !violations.is_empty() {
         eprintln!("constraint violations:");
         for v in violations {
@@ -57,7 +70,7 @@ fn main() -> Result<()> {
     }
 
     let resources = ir::compile_resources(res.facts.iter().cloned())?;
-    let backend = FakeCloud::new(PathBuf::from(".dform"));
+    let adopts = ir::compile_adopts(res.facts.iter())?;
 
     match cli.cmd {
         Cmd::Eval => {
@@ -67,19 +80,37 @@ fn main() -> Result<()> {
                 println!("- {}.{}", r.addr.typ, r.addr.name);
             }
         }
+        Cmd::Query { pred } => {
+            let mut count = 0usize;
+            for a in &res.facts {
+                if a.pred == pred {
+                    count += 1;
+                    println!("{:?}", a);
+                }
+            }
+            println!("matches: {count}");
+        }
+        Cmd::Show { typ, name } => {
+            let addr = ir::Address { typ, name };
+            let Some(r) = resources.iter().find(|r| r.addr == addr) else {
+                bail!("resource not found");
+            };
+            let json = serde_json::to_string_pretty(&r.attrs)?;
+            println!("{}", json);
+        }
         Cmd::Plan => {
-            let plan = backend.plan(&resources)?;
+            let plan = backend.plan(&resources, &adopts)?;
             print_plan(&plan, cli.show_noop);
         }
         Cmd::Apply => {
-            let plan = backend.plan(&resources)?;
+            let plan = backend.plan(&resources, &adopts)?;
             print_plan(&plan, cli.show_noop);
             let changed = plan
                 .actions
                 .iter()
                 .any(|a| !matches!(a.kind, ActionKind::Noop));
             if changed {
-                backend.apply(&resources, &plan)?;
+                backend.apply(&resources, &plan, &adopts)?;
                 println!("apply: complete");
             } else {
                 println!("apply: nothing to do");
@@ -92,25 +123,35 @@ fn main() -> Result<()> {
 
 fn print_plan(plan: &dform::fakecloud::Plan, show_noop: bool) {
     let mut creates = 0usize;
+    let mut adopts = 0usize;
     let mut updates = 0usize;
     let mut deletes = 0usize;
     let mut noops = 0usize;
     for a in &plan.actions {
         match a.kind {
             ActionKind::Create => creates += 1,
+            ActionKind::Adopt => adopts += 1,
             ActionKind::Update => updates += 1,
             ActionKind::Delete => deletes += 1,
             ActionKind::Noop => noops += 1,
         }
     }
 
-    println!("plan: {creates} to create, {updates} to update, {deletes} to delete{}", if show_noop { format!(", {noops} no-op") } else { String::new() });
+    let mut suffix = String::new();
+    if adopts > 0 {
+        suffix.push_str(&format!(", {adopts} to adopt"));
+    }
+    if show_noop {
+        suffix.push_str(&format!(", {noops} no-op"));
+    }
+    println!("plan: {creates} to create, {updates} to update, {deletes} to delete{suffix}");
     for a in &plan.actions {
         if matches!(a.kind, ActionKind::Noop) && !show_noop {
             continue;
         }
         let prefix = match a.kind {
             ActionKind::Create => "+",
+            ActionKind::Adopt => ">",
             ActionKind::Update => "~",
             ActionKind::Delete => "-",
             ActionKind::Noop => "=",
@@ -130,6 +171,9 @@ fn print_plan(plan: &dform::fakecloud::Plan, show_noop: bool) {
             }
             match a.kind {
                 ActionKind::Create => {
+                    println!("  {} = {}", ch.path, fmt_json_opt(ch.after.as_ref()));
+                }
+                ActionKind::Adopt => {
                     println!("  {} = {}", ch.path, fmt_json_opt(ch.after.as_ref()));
                 }
                 ActionKind::Delete => {
@@ -206,5 +250,6 @@ fn atom_kv(pred: &str, k: &str, v: Value) -> Atom {
     Atom {
         pred: pred.to_string(),
         args: vec![Term::Val(Value::Str(k.to_string())), Term::Val(v)],
+        record: None,
     }
 }
