@@ -21,35 +21,96 @@ when env(prod) {
 # Best practice: uniqueness for keyed relations
 unique setting(2).
 
-# Settings (branch as data) as blocks
-settings prod {
-  network.vpc_cidr = "10.20.0.0/16"
+# Environments (branch as data) as blocks
+environment prod {
+  network.main.vpc_net = inet("10.20.0.0/16")
+  network.peer.vpc_net = inet("10.21.0.0/16")
   db = { backup_days: 14, multi_az: true }
   k8s = { private_api: true, nodepool: { min: 3, max: 10 } }
+  audit.sinks += ["cloudwatch"]
 }.
 
-settings staging {
-  network.vpc_cidr = "10.50.0.0/16"
+environment staging {
+  network.main.vpc_net = inet("10.50.0.0/16")
+  network.peer.vpc_net = inet("10.60.0.0/16")
   db = { backup_days: 3, multi_az: false }
   k8s = { private_api: false, nodepool: { min: 1, max: 3 } }
 }.
 
-settings dev {
-  network.vpc_cidr = "10.90.0.0/16"
+environment dev {
+  network.main.vpc_net = inet("10.90.0.0/16")
 }.
 
-import "modules/network.df" as net.
+import "modules/network.df".
 import "modules/database.df".
 import "modules/kubernetes.df".
 import "modules/iam.df".
+import "policies/baseline.df".
+import "modules/stdlib_net.df".
+
+apply_policy baseline.
+
+# Instantiate component defs (Terraform module-like).
+use network main {
+  vpc_net = VpcNet
+} :-
+  env(Env),
+  setting(Env, "network.main.vpc_net", VpcNet).
+
+use network peer {
+  vpc_net = VpcNet
+} :-
+  env(Env),
+  setting(Env, "network.peer.vpc_net", VpcNet).
+
+use database main {
+  backup_days = Days
+  multi_az = MA
+} :-
+  env(Env),
+  setting(Env, db.backup_days, Days),
+  setting(Env, db.multi_az, MA).
+
+use kubernetes main {
+  private_api = PrivateApi
+  nodepool_min = Min
+  nodepool_max = Max
+} :-
+  env(Env),
+  setting(Env, k8s.private_api, PrivateApi),
+  setting(Env, k8s.nodepool.min, Min),
+  setting(Env, k8s.nodepool.max, Max).
+
+use iam main {}.
+
+# VPC peering intent: define edges between network instances.
+vpc_peer_inst(main, peer).
+
+# Resolve instance names to actual VPC resource names (scoped addresses).
+vpc_peer(A, B) :-
+  vpc_peer_inst(InstA, InstB),
+  component_scope(network, InstA, ScopeA),
+  component_scope(network, InstB, ScopeB),
+  let A = scoped(ScopeA, vpc),
+  let B = scoped(ScopeB, vpc).
+
+# Create a peering resource per declared peering edge.
+resource net.vpc_peering Peer {
+  requester_vpc_id = ref(net.vpc, A, id)
+  accepter_vpc_id = ref(net.vpc, B, id)
+} :-
+  vpc_peer_inst(InstA, InstB),
+  vpc_peer(A, B),
+  let Peer = format("peer-%s-%s", InstA, InstB).
+
+# Demo: allocate an IP from the main VPC.
+resource compute.vm bastion {
+  private_ip = inet_host(VpcNet, 20)
+} :-
+  env(Env),
+  setting(Env, "network.main.vpc_net", VpcNet).
 
 # Constraints (policy)
-constraint("db must not be public") :-
-  component_scope(database, main, DbScope),
-  let Db = scoped(DbScope, db),
-  want(db.postgres, Db),
-  not arg(db.postgres, Db, public, false).
-
 constraint("prod db must be multi_az") :-
   env(prod),
   component_scope(database, main, DbScope),

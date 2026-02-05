@@ -22,6 +22,8 @@ cargo run -- plan --set env=prod
 
 Remote state for the fake backend is written to `.dform/remote.json`.
 
+Core state (Terraform-style address -> remote mapping) is written to `.dform/state.json`.
+
 ## dform model (current)
 
 - Core intent IR:
@@ -34,15 +36,61 @@ Remote state for the fake backend is written to `.dform/remote.json`.
 
 - Ergonomic sugar (implemented as a lowering pass):
   - `resource Type Name { key = value, ... } :- ... .` lowers to `want/arg`.
+  - resource merge fields: `tags += { team: platform }` lowers to `arg_add(..., "tags", {..})`.
   - record atoms: `setting{env: prod, key: db.backup_days, value: 14}.` (optional)
-  - settings blocks: `settings prod { db.backup_days = 14 }.` (commas optional) lowers to `setting(prod, db.backup_days, 14).`
+  - environment blocks: `environment prod { db.backup_days = 14 }.` (commas optional) lowers to `setting(prod, db.backup_days, 14).` (legacy `settings ...` accepted)
   - literals: lists `[a, b]` and objects `{k: v}`.
   - list comprehensions: `[X | pred(...), pred2(...)]` (lowers to a `collect_list(...)` rule).
   - `let X = expr` in rule bodies (equivalent to `X = expr`).
   - `when <guard> { ... }.` applies a guard to each statement inside.
   - `import "path" as ns.` includes another file (simple namespacing).
 
-### Components (MVP)
+- Schemas and wildcards:
+  - `decl pred { field1, field2, ... }.` enables record-style matching: `pred{field1: X}`.
+  - `_` is an anonymous wildcard term (matches anything, never binds).
+
+## Escape hatches
+
+### List membership
+
+`member(List, Item)` is a built-in predicate that lets you "explode" list settings into rows:
+
+```prolog
+host_ip(Env, Ip) :-
+  setting(Env, "vm.ips", Ips),
+  member(Ips, Ip).
+```
+
+### Discovery facts
+
+The fake backend can inject facts from `.dform/inventory.json`:
+
+- `cloud_exists(Type, Name)`
+- `cloud_attr(Type, Name, Path, Value)`
+- `cloud_computed(Type, Name, Path, Value)`
+
+These are intended to model provider data sources / inventory.
+
+To reference discovered values in resource attributes without manually joining
+`cloud_attr/cloud_computed`, you can use `cloud_ref(Type, Name, Attr)` as a value
+term. In the fake backend it resolves against `.dform/inventory.json`.
+
+`Attr` supports dotted and indexed paths like `"tags.owner"` or `"subnets[0].id"`.
+
+### Adopt existing resources
+
+`adopt(Type, LocalName, RemoteName)` marks a desired resource as existing already.
+Planning will produce an `Adopt` action (`>` in plan output) instead of `Create`.
+
+```prolog
+adopt(net.vpc, scoped("network.main", vpc), "existing-prod-vpc") :-
+  env(prod),
+  cloud_exists(net.vpc, "existing-prod-vpc").
+
+arg(net.vpc, scoped("network.main", vpc), "adopted_id", cloud_ref(net.vpc, "existing-prod-vpc", id)).
+```
+
+### Components and Modules
 
 You can group rules into a scoped component instance:
 
@@ -59,10 +107,58 @@ Inside a component:
 - `output(Key, Value)` is sugar for `output(Scope, Key, Value)`.
 - The compiler injects `component_scope(Comp, Inst, Scope)` facts.
 
+You can also define reusable modules and instantiate them (Terraform-module-like):
+
+```prolog
+component_def network {
+  resource net.vpc vpc { cidr = Cidr } :- param(vpc_cidr, Cidr).
+}.
+
+use network main { vpc_cidr = "10.0.0.0/16" }.
+```
+
+### Policies
+
+Policies are packaged as policy packs and applied explicitly:
+
+```prolog
+policy_pack baseline {
+  deny("db must not be public", {resource: Db}) :- ...
+  warn("prod should enable audit logging", {env: prod}) :- ...
+}.
+
+apply_policy baseline.
+
+Merge behavior for `arg_add/4` can be controlled per keypath:
+
+```prolog
+merge_rule(tags, map_merge).
+merge_rule(iam.policy, statements, set).
+```
+
+Environment settings can be layered similarly via `setting_add/3`:
+
+```prolog
+merge_rule(setting, audit.sinks, set).
+setting_add(prod, audit.sinks, ["s3"]).
+
+environment prod {
+  audit.sinks += ["cloudwatch"]
+}.
+```
+```
+
 ## Status
 
 This is an MVP:
 
 - naive forward-chaining evaluator
-- basic built-ins: `format`, `concat`, `ref`, `cidrsubnet`, `collect`
+- basic built-ins: `format`, `concat`, `ref`, `scoped`, `cidrsubnet`, `collect_*`
+- networking built-ins: `ip`, `inet`, `iprange`, `inet_host`, `inet_addr`, `inet_subnet`, `inet_contains`, `inet_overlaps`, `ip_unspecified`
+- math built-ins: `add`, `sub`
+- list helper predicate: `member(List, Item)` and `member(List, Index, Item)` (Index starts at 0)
 - safe(ish) negation: `not` requires the atom be ground at evaluation time
+
+Provider model (in progress): the demo uses an in-process `fakecloud` provider that supplies
+catalog facts (type ownership/capabilities) and discovery facts (inventory), and supports
+plan/apply against a simulated world.

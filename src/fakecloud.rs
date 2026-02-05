@@ -141,6 +141,7 @@ impl FakeCloud {
         let types = [
             "net.vpc",
             "net.subnet",
+            "net.vpc_peering",
             "compute.vm",
             "db.postgres",
             "k8s.cluster",

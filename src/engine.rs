@@ -614,22 +614,9 @@ fn eval_body(body: &[Lit], facts: &[Atom]) -> Result<Vec<HashMap<String, Value>>
         let mut next = Vec::new();
         match lit {
             Lit::Pos(atom) => {
-                if atom.pred == "member" {
-                    if atom.args.len() != 2 {
-                        bail!("member/2 expected");
-                    }
+                if atom.pred == "member" || atom.pred == "enumerate" {
                     for s in &states {
-                        let list_v = eval_term(&atom.args[0], s)
-                            .ok_or_else(|| anyhow!("unsafe member: list is not ground"))?;
-                        let Value::List(items) = list_v else {
-                            continue;
-                        };
-                        for item in &items {
-                            let mut s2 = s.clone();
-                            if unify_term(&atom.args[1], item, &mut s2)? {
-                                next.push(s2);
-                            }
-                        }
+                        eval_member_like(atom, s, &mut next)?;
                     }
                     states = next;
                     if states.is_empty() {
@@ -683,6 +670,73 @@ fn eval_body(body: &[Lit], facts: &[Atom]) -> Result<Vec<HashMap<String, Value>>
         }
     }
     Ok(states)
+}
+
+fn eval_member_like(
+    atom: &Atom,
+    state: &HashMap<String, Value>,
+    out: &mut Vec<HashMap<String, Value>>,
+) -> Result<()> {
+    match atom.pred.as_str() {
+        "member" => {
+            if atom.args.len() == 2 {
+                return eval_member2(atom, state, out);
+            }
+            if atom.args.len() == 3 {
+                return eval_member3(atom, state, out);
+            }
+            bail!("member/2 or member/3 expected");
+        }
+        "enumerate" => {
+            if atom.args.len() != 3 {
+                bail!("enumerate/3 expected");
+            }
+            eval_member3(atom, state, out)
+        }
+        _ => bail!("internal: eval_member_like called for non-member"),
+    }
+}
+
+fn eval_member2(
+    atom: &Atom,
+    state: &HashMap<String, Value>,
+    out: &mut Vec<HashMap<String, Value>>,
+) -> Result<()> {
+    let list_v = eval_term(&atom.args[0], state)
+        .ok_or_else(|| anyhow!("unsafe member: list is not ground"))?;
+    let Value::List(items) = list_v else {
+        bail!("member/2 first argument must be a list");
+    };
+    for item in &items {
+        let mut s2 = state.clone();
+        if unify_term(&atom.args[1], item, &mut s2)? {
+            out.push(s2);
+        }
+    }
+    Ok(())
+}
+
+fn eval_member3(
+    atom: &Atom,
+    state: &HashMap<String, Value>,
+    out: &mut Vec<HashMap<String, Value>>,
+) -> Result<()> {
+    let list_v = eval_term(&atom.args[0], state)
+        .ok_or_else(|| anyhow!("unsafe member: list is not ground"))?;
+    let Value::List(items) = list_v else {
+        bail!("member/3 first argument must be a list");
+    };
+    for (i, item) in items.iter().enumerate() {
+        let mut s2 = state.clone();
+        if !unify_term(&atom.args[1], &Value::Int(i as i64), &mut s2)? {
+            continue;
+        }
+        if !unify_term(&atom.args[2], item, &mut s2)? {
+            continue;
+        }
+        out.push(s2);
+    }
+    Ok(())
 }
 
 fn unify_atom(pattern: &Atom, fact: &Atom, state: &HashMap<String, Value>) -> Result<Option<HashMap<String, Value>>> {
@@ -897,6 +951,22 @@ fn eval_term(term: &Term, state: &HashMap<String, Value>) -> Option<Value> {
 
 fn eval_func(name: &str, args: &[Term], state: &HashMap<String, Value>) -> Option<Value> {
     match name {
+        "add" => {
+            if args.len() != 2 {
+                return None;
+            }
+            let a = as_i64(&eval_term(&args[0], state)?)?;
+            let b = as_i64(&eval_term(&args[1], state)?)?;
+            Some(Value::Int(a + b))
+        }
+        "sub" => {
+            if args.len() != 2 {
+                return None;
+            }
+            let a = as_i64(&eval_term(&args[0], state)?)?;
+            let b = as_i64(&eval_term(&args[1], state)?)?;
+            Some(Value::Int(a - b))
+        }
         "ip" => {
             if args.len() != 1 {
                 return None;

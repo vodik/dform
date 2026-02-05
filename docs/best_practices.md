@@ -18,11 +18,11 @@ Prefer a lookup table:
 ```prolog
 unique setting(2).
 
-settings prod {
+environment prod {
   db.backup_days = 14
 }.
 
-settings staging {
+environment staging {
   db.backup_days = 3
 }.
 
@@ -59,15 +59,68 @@ arg(net.subnet, Sn, visibility, private) :- want(net.subnet, Sn).
 For authoring, prefer:
 
 - `resource` blocks over repeated `want/arg`
+- use `+=` for mergeable attributes (tags, IAM statements, labels)
 - record atoms (`setting{...}`) over positional arguments
 - object/list literals (`{k: v}`, `[a, b]`) over lots of `tags.foo` keypaths
 - list comprehensions (`[X | ...]`) over hand-written `collect(...)` rules
 - `when <guard> { ... }` to avoid repeating the same guard on many statements
+- declare merge behavior for shared attributes (`merge_rule(tags, map_merge)`, `merge_rule(iam.policy, statements, set)`) when multiple sources contribute
+
+## Explode Lists Into Rows With `member/2`
+
+If humans want to write lists, but your infra wants one resource per item, convert the list into a relation:
+
+```prolog
+environment prod {
+  vm.ips = ["10.0.0.10", "10.0.0.11"]
+}.
+
+vm_ip(Env, Ip) :-
+  setting(Env, "vm.ips", Ips),
+  member(Ips, Ip).
+
+# If you need stable indices (order-sensitive), use member/3:
+vm_ip_indexed(Env, I, Ip) :-
+  setting(Env, "vm.ips", Ips),
+  member(Ips, I, Ip).
+
+resource compute.vm Vm {
+  private_ip = Ip
+} :-
+  env(Env),
+  vm_ip(Env, Ip),
+  let Vm = format("vm-%s", Ip).
+```
+
+This is the Pattern A win: derive one resource per row, not index-based `count`.
 
 Note: Datalog has no intrinsic ordering, so dform's aggregates are deterministic:
 
 - `collect_set(X)` returns a sorted list of unique values
 - `collect_list(X)` returns a sorted list that may include duplicates
+
+## Declare Merge Semantics for Shared Attributes
+
+If multiple rule sets contribute to the same attribute, prefer `arg_add/4` (or `+=`)
+and declare how that attribute should merge:
+
+```prolog
+merge_rule(tags, map_merge).
+merge_rule(iam.policy, statements, set).
+```
+
+This makes composition predictable and avoids accidental scalar conflicts.
+
+Environment settings can be layered the same way:
+
+```prolog
+merge_rule(setting, audit.sinks, set).
+setting_add(prod, audit.sinks, ["s3"]).
+
+environment prod {
+  audit.sinks += ["cloudwatch"]
+}.
+```
 
 Because the engine lowers these to the same small core, you keep composition and
 predictability without paying the verbosity tax.

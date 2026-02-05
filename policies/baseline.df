@@ -27,4 +27,6 @@ policy_pack baseline {
 
   # Example: policy pack can add a sink without owning the whole list.
   setting_add(prod, audit.sinks, ["s3"]).
+
+  # Networking invariants live in `modules/stdlib_net.df`.
 }.
