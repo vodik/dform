@@ -15,7 +15,7 @@ pub fn lower(program: &Program) -> Result<Lowered> {
     let program = apply_decls(program)?;
     // In the future, imports should be handled in a loader before parsing.
     // For now, keep Import statements in the AST but drop them before eval.
-    let expanded = desugar_environment(&program)?;
+    let expanded = desugar_settings(&program)?;
     let expanded = expand_component_defs_and_uses(&expanded)?;
     let expanded = expand_policy_packs(&expanded)?;
     let expanded = expand_components(&expanded)?;
@@ -281,11 +281,11 @@ fn expand_policy_packs(program: &Program) -> Result<Program> {
     Ok(Program { statements: out })
 }
 
-fn desugar_environment(program: &Program) -> Result<Program> {
+fn desugar_settings(program: &Program) -> Result<Program> {
     let mut out = Vec::new();
     for stmt in &program.statements {
         match stmt {
-            Stmt::Environment(s) => {
+            Stmt::Settings(s) => {
                 let mut facts = Vec::new();
                 for f in &s.fields {
                     flatten_settings(&mut facts, s.env.clone(), f)?;
@@ -725,8 +725,8 @@ fn extract_uniques(program: &Program) -> (Program, Vec<Unique>) {
             Stmt::Import(_) => {
                 // Loader-level feature, ignored in evaluator for now.
             }
-            Stmt::Environment(_) => {
-                // lowered away by desugar_environment
+            Stmt::Settings(_) => {
+                // lowered away by desugar_settings
             }
             Stmt::Use(_) | Stmt::ComponentDef(_) | Stmt::PolicyPack(_) | Stmt::ApplyPolicy(_) => {
                 // lowered away earlier
@@ -808,7 +808,7 @@ fn rewrite_stmt(stmt: Stmt, scope: &str) -> Stmt {
         // These are metadata statements; leave them as-is.
         Stmt::Import(i) => Stmt::Import(i),
         Stmt::Unique(u) => Stmt::Unique(u),
-        Stmt::Environment(s) => Stmt::Environment(s),
+        Stmt::Settings(s) => Stmt::Settings(s),
         Stmt::ComponentDef(d) => Stmt::ComponentDef(d),
         Stmt::Use(u) => Stmt::Use(u),
         Stmt::PolicyPack(p) => Stmt::PolicyPack(p),

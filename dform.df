@@ -21,8 +21,8 @@ when env(prod) {
 # Best practice: uniqueness for keyed relations
 unique setting(2).
 
-# Environments (branch as data) as blocks
-environment prod {
+# Settings (branch as data) as blocks
+settings prod {
   network.main.vpc_net = inet("10.20.0.0/16")
   network.peer.vpc_net = inet("10.21.0.0/16")
   db = { backup_days: 14, multi_az: true }
@@ -30,14 +30,14 @@ environment prod {
   audit.sinks += ["cloudwatch"]
 }.
 
-environment staging {
+settings staging {
   network.main.vpc_net = inet("10.50.0.0/16")
   network.peer.vpc_net = inet("10.60.0.0/16")
   db = { backup_days: 3, multi_az: false }
   k8s = { private_api: false, nodepool: { min: 1, max: 3 } }
 }.
 
-environment dev {
+settings dev {
   network.main.vpc_net = inet("10.90.0.0/16")
 }.
 
@@ -55,13 +55,13 @@ use network main {
   vpc_net = VpcNet
 } :-
   env(Env),
-  setting(Env, "network.main.vpc_net", VpcNet).
+  setting(Env, network.main.vpc_net, VpcNet).
 
 use network peer {
   vpc_net = VpcNet
 } :-
   env(Env),
-  setting(Env, "network.peer.vpc_net", VpcNet).
+  setting(Env, network.peer.vpc_net, VpcNet).
 
 use database main {
   backup_days = Days
@@ -91,8 +91,8 @@ vpc_peer(A, B) :-
   vpc_peer_inst(InstA, InstB),
   component_scope(network, InstA, ScopeA),
   component_scope(network, InstB, ScopeB),
-  let A = scoped(ScopeA, vpc),
-  let B = scoped(ScopeB, vpc).
+  A = scoped(ScopeA, vpc),
+  B = scoped(ScopeB, vpc).
 
 # Create a peering resource per declared peering edge.
 resource net.vpc_peering Peer {
@@ -101,26 +101,26 @@ resource net.vpc_peering Peer {
 } :-
   vpc_peer_inst(InstA, InstB),
   vpc_peer(A, B),
-  let Peer = format("peer-%s-%s", InstA, InstB).
+  Peer = format("peer-%s-%s", InstA, InstB).
 
 # Demo: allocate an IP from the main VPC.
 resource compute.vm bastion {
   private_ip = inet_host(VpcNet, 20)
 } :-
   env(Env),
-  setting(Env, "network.main.vpc_net", VpcNet).
+  setting(Env, network.main.vpc_net, VpcNet).
 
 # Constraints (policy)
 constraint("prod db must be multi_az") :-
   env(prod),
   component_scope(database, main, DbScope),
-  let Db = scoped(DbScope, db),
+  Db = scoped(DbScope, db),
   want(db.postgres, Db),
   not arg(db.postgres, Db, multi_az, true).
 
 constraint("prod k8s must have private api") :-
   env(prod),
   component_scope(kubernetes, main, KScope),
-  let C = scoped(KScope, cluster),
+  C = scoped(KScope, cluster),
   want(k8s.cluster, C),
   not arg(k8s.cluster, C, private_api, true).

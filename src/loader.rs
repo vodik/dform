@@ -1,4 +1,4 @@
-use crate::ast::{Atom, Constraint, Environment, Lit, Program, Resource, RuleStmt, Stmt, When};
+use crate::ast::{Atom, Constraint, Lit, Program, Resource, RuleStmt, Settings, Stmt, When};
 use crate::parser;
 use crate::ast::Term;
 use anyhow::{Context, Result};
@@ -108,7 +108,7 @@ fn prefix_stmt(stmt: Stmt, alias: &str) -> Stmt {
             Stmt::PolicyPack(p)
         }
         Stmt::ApplyPolicy(a) => Stmt::ApplyPolicy(a),
-        Stmt::Environment(s) => Stmt::Environment(Environment {
+        Stmt::Settings(s) => Stmt::Settings(Settings {
             env: prefix_term(s.env, alias),
             fields: s
                 .fields

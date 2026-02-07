@@ -18,11 +18,11 @@ Prefer a lookup table:
 ```prolog
 unique setting(2).
 
-environment prod {
+settings prod {
   db.backup_days = 14
 }.
 
-environment staging {
+settings staging {
   db.backup_days = 3
 }.
 
@@ -71,17 +71,17 @@ For authoring, prefer:
 If humans want to write lists, but your infra wants one resource per item, convert the list into a relation:
 
 ```prolog
-environment prod {
+settings prod {
   vm.ips = ["10.0.0.10", "10.0.0.11"]
 }.
 
 vm_ip(Env, Ip) :-
-  setting(Env, "vm.ips", Ips),
+  setting(Env, vm.ips, Ips),
   member(Ips, Ip).
 
 # If you need stable indices (order-sensitive), use member/3:
 vm_ip_indexed(Env, I, Ip) :-
-  setting(Env, "vm.ips", Ips),
+  setting(Env, vm.ips, Ips),
   member(Ips, I, Ip).
 
 resource compute.vm Vm {
@@ -89,7 +89,7 @@ resource compute.vm Vm {
 } :-
   env(Env),
   vm_ip(Env, Ip),
-  let Vm = format("vm-%s", Ip).
+  Vm = format("vm-%s", Ip).
 ```
 
 This is the Pattern A win: derive one resource per row, not index-based `count`.
@@ -111,13 +111,13 @@ merge_rule(iam.policy, statements, set).
 
 This makes composition predictable and avoids accidental scalar conflicts.
 
-Environment settings can be layered the same way:
+Settings can be layered the same way:
 
 ```prolog
 merge_rule(setting, audit.sinks, set).
 setting_add(prod, audit.sinks, ["s3"]).
 
-environment prod {
+settings prod {
   audit.sinks += ["cloudwatch"]
 }.
 ```

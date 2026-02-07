@@ -12,11 +12,11 @@ policy_pack baseline {
   arg_add(iam.policy, Policy, "statements", [ { action: org.read, resource: "org" } ]) :-
     env(prod),
     component_scope(iam, main, IScope),
-    let Policy = scoped(IScope, app_policy).
+    Policy = scoped(IScope, app_policy).
 
   deny("db must not be public", { resource: Db }) :-
     component_scope(database, main, DbScope),
-    let Db = scoped(DbScope, db),
+    Db = scoped(DbScope, db),
     want(db.postgres, Db),
     not arg(db.postgres, Db, public, false).
 

@@ -1,35 +1,66 @@
 WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
 COMMENT = _{ ("#" | "//") ~ (!"\n" ~ ANY)* ~ ("\n" | EOI) }
 
+// Keyword boundary helpers.
+//
+// In a PEG grammar, string literals like "in" will happily match as a prefix of
+// longer identifiers (e.g. "inet", "input") unless we explicitly require a
+// non-identifier character after the keyword.
+ID_CHAR = _{ ASCII_ALPHANUMERIC | "_" | "." | "-" | "/" }
+KW_TAIL = _{ !ID_CHAR }
+
+// Atomic so the boundary check sees the immediate next char
+// (pest would otherwise skip WHITESPACE between "not" and KW_TAIL).
+NOT = @{ "not" ~ KW_TAIL }
+IN = @{ "in" ~ KW_TAIL }
+
+// Statement / reserved keywords (also atomic for the same reason).
+DECL = @{ "decl" ~ KW_TAIL }
+COMPONENT = @{ "component" ~ KW_TAIL }
+COMPONENT_DEF = @{ "component_def" ~ KW_TAIL }
+USE = @{ "use" ~ KW_TAIL }
+POLICY_PACK = @{ "policy_pack" ~ KW_TAIL }
+APPLY_POLICY = @{ "apply_policy" ~ KW_TAIL }
+WHEN = @{ "when" ~ KW_TAIL }
+IMPORT = @{ "import" ~ KW_TAIL }
+AS = @{ "as" ~ KW_TAIL }
+UNIQUE = @{ "unique" ~ KW_TAIL }
+SETTINGS = @{ "settings" ~ KW_TAIL }
+RESOURCE = @{ "resource" ~ KW_TAIL }
+CONSTRAINT = @{ "constraint" ~ KW_TAIL }
+
+TRUE = @{ "true" ~ KW_TAIL }
+FALSE = @{ "false" ~ KW_TAIL }
+
 UPPER = _{ 'A'..'Z' }
 LOWER = _{ 'a'..'z' }
 
 program = { SOI ~ stmt* ~ EOI }
 
-stmt = { (decl_stmt | component_stmt | component_def_stmt | use_stmt | policy_pack_stmt | apply_policy_stmt | when_stmt | import_stmt | unique_stmt | environment_stmt | resource_stmt | constraint_stmt | rule_stmt | fact) ~ "." }
+stmt = { (decl_stmt | component_stmt | component_def_stmt | use_stmt | policy_pack_stmt | apply_policy_stmt | when_stmt | import_stmt | unique_stmt | settings_stmt | resource_stmt | constraint_stmt | rule_stmt | fact) ~ "." }
 
-decl_stmt = { "decl" ~ pred ~ "{" ~ decl_fields? ~ "}" }
+decl_stmt = { DECL ~ pred ~ "{" ~ decl_fields? ~ "}" }
 decl_fields = { ident ~ ("," ~ ident)* ~ ","? }
 
-component_stmt = { "component" ~ ident ~ ident ~ "{" ~ stmt* ~ "}" }
+component_stmt = { COMPONENT ~ ident ~ ident ~ "{" ~ stmt* ~ "}" }
 
-component_def_stmt = { "component_def" ~ ident ~ "{" ~ stmt* ~ "}" }
+component_def_stmt = { COMPONENT_DEF ~ ident ~ "{" ~ stmt* ~ "}" }
 
-use_stmt = { "use" ~ ident ~ ident ~ "{" ~ res_fields? ~ "}" ~ (":-" ~ body)? }
+use_stmt = { USE ~ ident ~ ident ~ "{" ~ res_fields? ~ "}" ~ (":-" ~ body)? }
 
-policy_pack_stmt = { "policy_pack" ~ ident ~ "{" ~ stmt* ~ "}" }
+policy_pack_stmt = { POLICY_PACK ~ ident ~ "{" ~ stmt* ~ "}" }
 
-apply_policy_stmt = { "apply_policy" ~ ident }
+apply_policy_stmt = { APPLY_POLICY ~ ident }
 
-when_stmt = { "when" ~ guard ~ "{" ~ stmt* ~ "}" }
+when_stmt = { WHEN ~ guard ~ "{" ~ stmt* ~ "}" }
 
-import_stmt = { "import" ~ string ~ ("as" ~ ident)? }
+import_stmt = { IMPORT ~ string ~ (AS ~ ident)? }
 
-unique_stmt = { "unique" ~ pred ~ "(" ~ pos_int ~ ")" }
+unique_stmt = { UNIQUE ~ pred ~ "(" ~ pos_int ~ ")" }
 
-environment_stmt = { ("environment" | "settings") ~ term ~ "{" ~ res_fields? ~ "}" }
+settings_stmt = { SETTINGS ~ term ~ "{" ~ res_fields? ~ "}" }
 
-resource_stmt = { "resource" ~ term ~ term ~ "{" ~ res_fields? ~ "}" ~ (":-" ~ body)? }
+resource_stmt = { RESOURCE ~ term ~ term ~ "{" ~ res_fields? ~ "}" ~ (":-" ~ body)? }
 // Fields inside `{ ... }` blocks.
 //
 // Commas are optional so you can write either:
@@ -46,15 +77,16 @@ fact = { atom }
 
 rule_stmt = { atom ~ ":-" ~ body }
 
-constraint_stmt = { "constraint" ~ "(" ~ string ~ ")" ~ ":-" ~ body }
+constraint_stmt = { CONSTRAINT ~ "(" ~ string ~ ")" ~ ":-" ~ body }
 
 body = { lit ~ ("," ~ lit)* }
 
-lit = { not_atom | let_lit | cmp | atom }
+lit = { not_in_lit | in_lit | not_atom | cmp | atom }
 
-not_atom = { "not" ~ atom }
+in_lit = { term ~ IN ~ term }
+not_in_lit = { term ~ NOT ~ IN ~ term }
 
-let_lit = { "let" ~ var ~ "=" ~ term }
+not_atom = { NOT ~ atom }
 
 guard = { not_atom | cmp | atom }
 
@@ -69,7 +101,19 @@ field = { ident ~ ":" ~ term }
 
 args = { term ~ ("," ~ term)* }
 
-term = { func | obj_lit | list_comp | list_lit | string | int | bool_lit | var | sym }
+term = { expr }
+
+expr = { add_expr }
+
+add_expr = { mul_expr ~ (add_op ~ mul_expr)* }
+add_op = { "+" | "-" }
+
+mul_expr = { unary_expr ~ (mul_op ~ unary_expr)* }
+mul_op = { "*" | "/" | "%" }
+
+unary_expr = { ("-")* ~ primary }
+
+primary = { func | obj_lit | list_comp | list_lit | string | int | bool_lit | var | sym | "(" ~ expr ~ ")" }
 
 func = { pred ~ "(" ~ args? ~ ")" }
 
@@ -86,7 +130,7 @@ int = @{ "-"? ~ ASCII_DIGIT+ }
 
 pos_int = @{ ASCII_DIGIT+ }
 
-bool_lit = { "true" | "false" }
+bool_lit = { TRUE | FALSE }
 
 var = @{ (UPPER | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
 

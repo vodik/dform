@@ -1,6 +1,6 @@
 use crate::ast::{
     ApplyPolicy, Atom, Component, ComponentDef, Constraint, Import, Lit, PolicyPack, Program,
-    Decl, Environment, FieldAssign, FieldOp, Resource, RuleStmt, Stmt, Term, Unique, Use, When,
+    Decl, Settings, FieldAssign, FieldOp, Resource, RuleStmt, Stmt, Term, Unique, Use, When,
 };
 use crate::value::Value;
 use anyhow::{anyhow, bail, Context, Result};
@@ -12,6 +12,29 @@ use std::collections::BTreeMap;
 #[derive(Parser)]
 #[grammar = "src/dform.pest"]
 struct DformParser;
+
+fn is_kw(rule: Rule) -> bool {
+    matches!(
+        rule,
+        Rule::DECL
+            | Rule::COMPONENT
+            | Rule::COMPONENT_DEF
+            | Rule::USE
+            | Rule::POLICY_PACK
+            | Rule::APPLY_POLICY
+            | Rule::WHEN
+            | Rule::IMPORT
+            | Rule::AS
+            | Rule::UNIQUE
+            | Rule::SETTINGS
+            | Rule::RESOURCE
+            | Rule::CONSTRAINT
+            | Rule::NOT
+            | Rule::IN
+            | Rule::TRUE
+            | Rule::FALSE
+    )
+}
 
 pub fn parse_program(src: &str) -> Result<Program> {
     let mut pairs = DformParser::parse(Rule::program, src).context("parse")?;
@@ -36,7 +59,7 @@ pub fn parse_program(src: &str) -> Result<Program> {
 fn parse_stmt(pair: Pair<Rule>) -> Result<Stmt> {
     match pair.as_rule() {
         Rule::decl_stmt => {
-            let mut it = pair.into_inner();
+            let mut it = pair.into_inner().filter(|p| !is_kw(p.as_rule()));
             let pred = it.next().unwrap().as_str().to_string();
             let mut fields = Vec::new();
             if let Some(df) = it.next() {
@@ -50,19 +73,19 @@ fn parse_stmt(pair: Pair<Rule>) -> Result<Stmt> {
         }
         Rule::fact => Ok(Stmt::Fact(parse_atom(pair.into_inner().next().unwrap())?)),
         Rule::rule_stmt => {
-            let mut it = pair.into_inner();
+            let mut it = pair.into_inner().filter(|p| !is_kw(p.as_rule()));
             let head = parse_atom(it.next().unwrap())?;
             let body = parse_body(it.next().unwrap().into_inner())?;
             Ok(Stmt::Rule(RuleStmt { head, body }))
         }
         Rule::constraint_stmt => {
-            let mut it = pair.into_inner();
+            let mut it = pair.into_inner().filter(|p| !is_kw(p.as_rule()));
             let msg = parse_string_lit(it.next().unwrap())?;
             let body = parse_body(it.next().unwrap().into_inner())?;
             Ok(Stmt::Constraint(Constraint { message: msg, body }))
         }
         Rule::component_stmt => {
-            let mut it = pair.into_inner();
+            let mut it = pair.into_inner().filter(|p| !is_kw(p.as_rule()));
             let comp = it.next().unwrap().as_str().to_string();
             let inst = it.next().unwrap().as_str().to_string();
             let mut body = Vec::new();
@@ -76,7 +99,7 @@ fn parse_stmt(pair: Pair<Rule>) -> Result<Stmt> {
             Ok(Stmt::Component(Component { comp, inst, body }))
         }
         Rule::component_def_stmt => {
-            let mut it = pair.into_inner();
+            let mut it = pair.into_inner().filter(|p| !is_kw(p.as_rule()));
             let name = it.next().unwrap().as_str().to_string();
             let mut body = Vec::new();
             for p in it {
@@ -89,7 +112,7 @@ fn parse_stmt(pair: Pair<Rule>) -> Result<Stmt> {
             Ok(Stmt::ComponentDef(ComponentDef { name, body }))
         }
         Rule::use_stmt => {
-            let mut it = pair.into_inner();
+            let mut it = pair.into_inner().filter(|p| !is_kw(p.as_rule()));
             let name = it.next().unwrap().as_str().to_string();
             let inst = it.next().unwrap().as_str().to_string();
             let mut params: Vec<(String, Term)> = Vec::new();
@@ -121,7 +144,7 @@ fn parse_stmt(pair: Pair<Rule>) -> Result<Stmt> {
             }))
         }
         Rule::policy_pack_stmt => {
-            let mut it = pair.into_inner();
+            let mut it = pair.into_inner().filter(|p| !is_kw(p.as_rule()));
             let name = it.next().unwrap().as_str().to_string();
             let mut body = Vec::new();
             for p in it {
@@ -134,12 +157,12 @@ fn parse_stmt(pair: Pair<Rule>) -> Result<Stmt> {
             Ok(Stmt::PolicyPack(PolicyPack { name, body }))
         }
         Rule::apply_policy_stmt => {
-            let mut it = pair.into_inner();
+            let mut it = pair.into_inner().filter(|p| !is_kw(p.as_rule()));
             let name = it.next().unwrap().as_str().to_string();
             Ok(Stmt::ApplyPolicy(ApplyPolicy { name }))
         }
         Rule::when_stmt => {
-            let mut it = pair.into_inner();
+            let mut it = pair.into_inner().filter(|p| !is_kw(p.as_rule()));
             let guard = parse_guard(it.next().unwrap())?;
             let mut body = Vec::new();
             for p in it {
@@ -152,19 +175,19 @@ fn parse_stmt(pair: Pair<Rule>) -> Result<Stmt> {
             Ok(Stmt::When(When { guard, body }))
         }
         Rule::import_stmt => {
-            let mut it = pair.into_inner();
+            let mut it = pair.into_inner().filter(|p| !is_kw(p.as_rule()));
             let path = parse_string_lit(it.next().unwrap())?;
             let alias = it.next().map(|p| p.as_str().to_string());
             Ok(Stmt::Import(Import { path, alias }))
         }
         Rule::unique_stmt => {
-            let mut it = pair.into_inner();
+            let mut it = pair.into_inner().filter(|p| !is_kw(p.as_rule()));
             let pred = it.next().unwrap().as_str().to_string();
             let key_arity: usize = it.next().unwrap().as_str().parse()?;
             Ok(Stmt::Unique(Unique { pred, key_arity }))
         }
-        Rule::environment_stmt => {
-            let mut it = pair.into_inner();
+        Rule::settings_stmt => {
+            let mut it = pair.into_inner().filter(|p| !is_kw(p.as_rule()));
             let env = parse_term(it.next().unwrap())?;
             let mut fields: Vec<FieldAssign> = Vec::new();
             for p in it {
@@ -172,10 +195,10 @@ fn parse_stmt(pair: Pair<Rule>) -> Result<Stmt> {
                     fields = parse_res_fields(p)?;
                 }
             }
-            Ok(Stmt::Environment(Environment { env, fields }))
+            Ok(Stmt::Settings(Settings { env, fields }))
         }
         Rule::resource_stmt => {
-            let mut it = pair.into_inner();
+            let mut it = pair.into_inner().filter(|p| !is_kw(p.as_rule()));
             let typ = parse_term(it.next().unwrap())?;
             let name = parse_term(it.next().unwrap())?;
 
@@ -211,7 +234,17 @@ fn parse_guard(pair: Pair<Rule>) -> Result<Lit> {
             parse_guard(inner)
         }
         Rule::not_atom => {
-            let atom = parse_atom(pair.into_inner().next().unwrap())?;
+            let mut atom_pair = None;
+            for p in pair.into_inner() {
+                if is_kw(p.as_rule()) {
+                    continue;
+                }
+                if p.as_rule() == Rule::atom {
+                    atom_pair = Some(p);
+                    break;
+                }
+            }
+            let atom = parse_atom(atom_pair.ok_or_else(|| anyhow!("missing atom after not"))?)?;
             Ok(Lit::Not(atom))
         }
         Rule::cmp => parse_cmp(pair),
@@ -236,15 +269,61 @@ fn parse_body(pairs: Pairs<Rule>) -> Result<Vec<Lit>> {
 
 fn parse_lit(pair: Pair<Rule>) -> Result<Lit> {
     match pair.as_rule() {
-        Rule::not_atom => {
-            let atom = parse_atom(pair.into_inner().next().unwrap())?;
-            Ok(Lit::Not(atom))
+        Rule::in_lit => {
+            let mut terms = Vec::new();
+            for p in pair.into_inner() {
+                if is_kw(p.as_rule()) {
+                    continue;
+                }
+                if p.as_rule() == Rule::term {
+                    terms.push(parse_term(p)?);
+                }
+            }
+            if terms.len() != 2 {
+                bail!("in literal expects two terms");
+            }
+            let item = terms.remove(0);
+            let list = terms.remove(0);
+            Ok(Lit::Pos(Atom {
+                pred: "member".to_string(),
+                args: vec![list, item],
+                record: None,
+            }))
         }
-        Rule::let_lit => {
-            let mut it = pair.into_inner();
-            let v = it.next().unwrap().as_str().to_string();
-            let t = parse_term(it.next().unwrap())?;
-            Ok(Lit::Eq(Term::Var(v), t))
+        Rule::not_in_lit => {
+            let mut terms = Vec::new();
+            for p in pair.into_inner() {
+                if is_kw(p.as_rule()) {
+                    continue;
+                }
+                if p.as_rule() == Rule::term {
+                    terms.push(parse_term(p)?);
+                }
+            }
+            if terms.len() != 2 {
+                bail!("not in literal expects two terms");
+            }
+            let item = terms.remove(0);
+            let list = terms.remove(0);
+            Ok(Lit::Not(Atom {
+                pred: "member".to_string(),
+                args: vec![list, item],
+                record: None,
+            }))
+        }
+        Rule::not_atom => {
+            let mut atom_pair = None;
+            for p in pair.into_inner() {
+                if is_kw(p.as_rule()) {
+                    continue;
+                }
+                if p.as_rule() == Rule::atom {
+                    atom_pair = Some(p);
+                    break;
+                }
+            }
+            let atom = parse_atom(atom_pair.ok_or_else(|| anyhow!("missing atom after not"))?)?;
+            Ok(Lit::Not(atom))
         }
         Rule::cmp => parse_cmp(pair),
         Rule::atom => Ok(Lit::Pos(parse_atom(pair)?)),
@@ -323,6 +402,9 @@ fn parse_term(pair: Pair<Rule>) -> Result<Term> {
     };
 
     match inner.as_rule() {
+        Rule::expr | Rule::add_expr | Rule::mul_expr | Rule::unary_expr | Rule::primary => {
+            parse_expr(inner)
+        }
         Rule::list_comp => {
             let mut it = inner.into_inner();
             let item = parse_term(it.next().unwrap())?;
@@ -386,6 +468,100 @@ fn parse_term(pair: Pair<Rule>) -> Result<Term> {
             Ok(Term::Func { name, args })
         }
         _ => bail!("unexpected term: {:?}", inner.as_rule()),
+    }
+}
+
+fn parse_expr(pair: Pair<Rule>) -> Result<Term> {
+    match pair.as_rule() {
+        Rule::expr => parse_expr(pair.into_inner().next().unwrap()),
+        Rule::add_expr => {
+            let mut it = pair.into_inner();
+            let mut lhs = parse_expr(it.next().unwrap())?;
+            while let Some(op) = it.next() {
+                let rhs = parse_expr(it.next().unwrap())?;
+                lhs = match op.as_str() {
+                    "+" => Term::Func {
+                        name: "add".to_string(),
+                        args: vec![lhs, rhs],
+                    },
+                    "-" => Term::Func {
+                        name: "sub".to_string(),
+                        args: vec![lhs, rhs],
+                    },
+                    other => bail!("unknown add op: {other}"),
+                };
+            }
+            Ok(lhs)
+        }
+        Rule::mul_expr => {
+            let mut it = pair.into_inner();
+            let mut lhs = parse_expr(it.next().unwrap())?;
+            while let Some(op) = it.next() {
+                let rhs = parse_expr(it.next().unwrap())?;
+                lhs = match op.as_str() {
+                    "*" => Term::Func {
+                        name: "mul".to_string(),
+                        args: vec![lhs, rhs],
+                    },
+                    "/" => Term::Func {
+                        name: "div".to_string(),
+                        args: vec![lhs, rhs],
+                    },
+                    "%" => Term::Func {
+                        name: "mod".to_string(),
+                        args: vec![lhs, rhs],
+                    },
+                    other => bail!("unknown mul op: {other}"),
+                };
+            }
+            Ok(lhs)
+        }
+        Rule::unary_expr => {
+            let mut it = pair.into_inner().peekable();
+            let mut negs = 0usize;
+            while let Some(p) = it.peek() {
+                if p.as_str() == "-" {
+                    negs += 1;
+                    let _ = it.next();
+                    continue;
+                }
+                break;
+            }
+            let primary = it
+                .next()
+                .ok_or_else(|| anyhow!("missing primary expr"))?;
+            let mut t = parse_expr(primary)?;
+            if negs % 2 == 1 {
+                t = Term::Func {
+                    name: "sub".to_string(),
+                    args: vec![Term::Val(Value::Int(0)), t],
+                };
+            }
+            Ok(t)
+        }
+        Rule::primary => {
+            let mut it = pair.into_inner();
+            let first = it.next().unwrap();
+            match first.as_rule() {
+                Rule::expr | Rule::add_expr | Rule::mul_expr | Rule::unary_expr | Rule::primary => {
+                    // Parenthesized expression: primary = "(" ~ expr ~ ")"
+                    parse_expr(first)
+                }
+                other => parse_term(first).with_context(|| format!("primary inner {other:?}")),
+            }
+        }
+        // These will be handled by parse_term directly.
+        Rule::func
+        | Rule::obj_lit
+        | Rule::list_comp
+        | Rule::list_lit
+        | Rule::string
+        | Rule::int
+        | Rule::bool_lit
+        | Rule::var
+        | Rule::sym
+        | Rule::ident => parse_term(pair),
+        other => bail!("unexpected expr: {other:?}"),
     }
 }
 

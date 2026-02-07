@@ -122,7 +122,7 @@ pub enum Stmt {
     Resource(Resource),
     Import(Import),
     Unique(Unique),
-    Environment(Environment),
+    Settings(Settings),
     Decl(Decl),
 }
 
@@ -204,7 +204,7 @@ pub struct Unique {
 }
 
 #[derive(Debug, Clone)]
-pub struct Environment {
+pub struct Settings {
     pub env: Term,
     pub fields: Vec<FieldAssign>,
 }

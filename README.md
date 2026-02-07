@@ -38,10 +38,10 @@ Core state (Terraform-style address -> remote mapping) is written to `.dform/sta
   - `resource Type Name { key = value, ... } :- ... .` lowers to `want/arg`.
   - resource merge fields: `tags += { team: platform }` lowers to `arg_add(..., "tags", {..})`.
   - record atoms: `setting{env: prod, key: db.backup_days, value: 14}.` (optional)
-  - environment blocks: `environment prod { db.backup_days = 14 }.` (commas optional) lowers to `setting(prod, db.backup_days, 14).` (legacy `settings ...` accepted)
+  - settings blocks: `settings prod { db.backup_days = 14 }.` (commas optional) lowers to `setting(prod, db.backup_days, 14).`
   - literals: lists `[a, b]` and objects `{k: v}`.
   - list comprehensions: `[X | pred(...), pred2(...)]` (lowers to a `collect_list(...)` rule).
-  - `let X = expr` in rule bodies (equivalent to `X = expr`).
+  - expression terms: `IB = IA + 1` lowers to `IB = add(IA, 1)`.
   - `when <guard> { ... }.` applies a guard to each statement inside.
   - `import "path" as ns.` includes another file (simple namespacing).
 
@@ -136,13 +136,13 @@ merge_rule(tags, map_merge).
 merge_rule(iam.policy, statements, set).
 ```
 
-Environment settings can be layered similarly via `setting_add/3`:
+Settings can be layered similarly via `setting_add/3`:
 
 ```prolog
 merge_rule(setting, audit.sinks, set).
 setting_add(prod, audit.sinks, ["s3"]).
 
-environment prod {
+settings prod {
   audit.sinks += ["cloudwatch"]
 }.
 ```

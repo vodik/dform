@@ -18,7 +18,7 @@ component_def network {
     data(zone, Z),
     zone_index(Z, I),
     arg(net.vpc, vpc, cidr, VpcNet),
-    let Sn = format("private-%s", Z).
+    Sn = format("private-%s", Z).
 
   output(private_subnet_ids,
     [ ref(net.subnet, Sn, id) | want(net.subnet, Sn), arg(net.subnet, Sn, visibility, private) ]

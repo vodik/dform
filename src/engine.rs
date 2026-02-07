@@ -624,6 +624,18 @@ fn eval_body(body: &[Lit], facts: &[Atom]) -> Result<Vec<HashMap<String, Value>>
                     }
                     continue;
                 }
+                if is_builtin_pred(&atom.pred) {
+                    for s in &states {
+                        if eval_builtin_pred(atom, s)? {
+                            next.push(s.clone());
+                        }
+                    }
+                    states = next;
+                    if states.is_empty() {
+                        break;
+                    }
+                    continue;
+                }
                 for s in &states {
                     for f in facts.iter().filter(|x| x.pred == atom.pred) {
                         if let Some(s2) = unify_atom(atom, f, s)? {
@@ -634,11 +646,40 @@ fn eval_body(body: &[Lit], facts: &[Atom]) -> Result<Vec<HashMap<String, Value>>
             }
             Lit::Not(atom) => {
                 for s in &states {
-                    let grounded = ground_atom(atom, s)
-                        .with_context(|| format!("unsafe negation: not {}(...)", atom.pred))?;
-                    let any = facts.iter().any(|f| f.pred == grounded.pred && f.args == grounded.args);
-                    if !any {
-                        next.push(s.clone());
+                    if atom.pred == "member" {
+                        if atom.args.len() == 2 {
+                            if eval_not_member2(atom, s)? {
+                                next.push(s.clone());
+                            }
+                            continue;
+                        }
+                        if atom.args.len() == 3 {
+                            if eval_not_member3(atom, s)? {
+                                next.push(s.clone());
+                            }
+                            continue;
+                        }
+                        bail!("member/2 or member/3 expected");
+                    }
+                    if atom.pred == "enumerate" {
+                        // `enumerate/3` is a generator; `not enumerate(...)` is meaningless
+                        // (it would require checking existence over an implicit domain).
+                        bail!("negation not supported for enumerate/3");
+                    }
+                    if is_builtin_pred(&atom.pred) {
+                        // Negation-as-failure for builtin predicates is just boolean negation.
+                        if !eval_builtin_pred(atom, s)? {
+                            next.push(s.clone());
+                        }
+                    } else {
+                        let grounded = ground_atom(atom, s)
+                            .with_context(|| format!("unsafe negation: not {}(...)", atom.pred))?;
+                        let any = facts
+                            .iter()
+                            .any(|f| f.pred == grounded.pred && f.args == grounded.args);
+                        if !any {
+                            next.push(s.clone());
+                        }
                     }
                 }
             }
@@ -670,6 +711,20 @@ fn eval_body(body: &[Lit], facts: &[Atom]) -> Result<Vec<HashMap<String, Value>>
         }
     }
     Ok(states)
+}
+
+fn is_builtin_pred(pred: &str) -> bool {
+    matches!(pred, "inet_overlaps" | "inet_contains" | "ip_unspecified")
+}
+
+fn eval_builtin_pred(atom: &Atom, state: &HashMap<String, Value>) -> Result<bool> {
+    // Builtin predicates are functions that return Bool.
+    let v = eval_func(&atom.pred, &atom.args, state)
+        .ok_or_else(|| anyhow!("unsafe builtin predicate {}(...)", atom.pred))?;
+    match v {
+        Value::Bool(b) => Ok(b),
+        other => bail!("builtin predicate {} returned non-bool: {other:?}", atom.pred),
+    }
 }
 
 fn eval_member_like(
@@ -714,6 +769,40 @@ fn eval_member2(
         }
     }
     Ok(())
+}
+
+fn eval_not_member2(atom: &Atom, state: &HashMap<String, Value>) -> Result<bool> {
+    let list_v = eval_term(&atom.args[0], state)
+        .ok_or_else(|| anyhow!("unsafe not member: list is not ground"))?;
+    let Value::List(items) = list_v else {
+        bail!("member/2 first argument must be a list");
+    };
+    let item_v = eval_term(&atom.args[1], state)
+        .ok_or_else(|| anyhow!("unsafe not member: item is not ground"))?;
+    Ok(!items.iter().any(|x| *x == item_v))
+}
+
+fn eval_not_member3(atom: &Atom, state: &HashMap<String, Value>) -> Result<bool> {
+    let list_v = eval_term(&atom.args[0], state)
+        .ok_or_else(|| anyhow!("unsafe not member: list is not ground"))?;
+    let Value::List(items) = list_v else {
+        bail!("member/3 first argument must be a list");
+    };
+    let idx_v = eval_term(&atom.args[1], state)
+        .ok_or_else(|| anyhow!("unsafe not member: index is not ground"))?;
+    let Value::Int(i) = idx_v else {
+        bail!("member/3 index must be int");
+    };
+    if i < 0 {
+        return Ok(true);
+    }
+    let i = i as usize;
+    if i >= items.len() {
+        return Ok(true);
+    }
+    let item_v = eval_term(&atom.args[2], state)
+        .ok_or_else(|| anyhow!("unsafe not member: item is not ground"))?;
+    Ok(items[i] != item_v)
 }
 
 fn eval_member3(
@@ -966,6 +1055,36 @@ fn eval_func(name: &str, args: &[Term], state: &HashMap<String, Value>) -> Optio
             let a = as_i64(&eval_term(&args[0], state)?)?;
             let b = as_i64(&eval_term(&args[1], state)?)?;
             Some(Value::Int(a - b))
+        }
+        "mul" => {
+            if args.len() != 2 {
+                return None;
+            }
+            let a = as_i64(&eval_term(&args[0], state)?)?;
+            let b = as_i64(&eval_term(&args[1], state)?)?;
+            Some(Value::Int(a * b))
+        }
+        "div" => {
+            if args.len() != 2 {
+                return None;
+            }
+            let a = as_i64(&eval_term(&args[0], state)?)?;
+            let b = as_i64(&eval_term(&args[1], state)?)?;
+            if b == 0 {
+                return None;
+            }
+            Some(Value::Int(a / b))
+        }
+        "mod" => {
+            if args.len() != 2 {
+                return None;
+            }
+            let a = as_i64(&eval_term(&args[0], state)?)?;
+            let b = as_i64(&eval_term(&args[1], state)?)?;
+            if b == 0 {
+                return None;
+            }
+            Some(Value::Int(a % b))
         }
         "ip" => {
             if args.len() != 1 {

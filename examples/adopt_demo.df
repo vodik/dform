@@ -11,8 +11,8 @@ has_env() :- input("env", _).
 env(staging) :- not has_env().
 env(E) :- input("env", E).
 
-environment prod {
-  network.vpc_cidr = "10.20.0.0/16"
+settings prod {
+  network.vpc_cidr = inet("10.20.0.0/16")
 }.
 
 import "../modules/network.df".
@@ -24,18 +24,18 @@ use network main {
   setting(Env, network.vpc_cidr, VpcCidr).
 
 # Adopt the VPC from inventory, but manage it under the local name `network.main::vpc`.
-adopt(net.vpc, scoped("network.main", vpc), "existing-prod-vpc") :-
+adopt(net.vpc, scoped(network.main, vpc), existing-prod-vpc) :-
   env(prod),
-  cloud_exists(net.vpc, "existing-prod-vpc").
+  cloud_exists(net.vpc, existing-prod-vpc).
 
 # Example: use discovered inventory values directly in config.
-arg(net.vpc, scoped("network.main", vpc), "adopted_id", cloud_ref(net.vpc, "existing-prod-vpc", id)) :-
+arg(net.vpc, scoped(network.main, vpc), adopted_id, cloud_ref(net.vpc, existing-prod-vpc, id)) :-
   env(prod).
 
 # Keep the existing owner tag stable (avoids a "remove tag" diff on adopt).
-arg(net.vpc, scoped("network.main", vpc), "tags.owner", cloud_ref(net.vpc, "existing-prod-vpc", "tags.owner")) :-
+arg(net.vpc, scoped(network.main, vpc), tags.owner, cloud_ref(net.vpc, existing-prod-vpc, tags.owner)) :-
   env(prod).
 
 # Also copy it into a separate attribute to demonstrate dotted path lookup.
-arg(net.vpc, scoped("network.main", vpc), "owner_tag", cloud_ref(net.vpc, "existing-prod-vpc", "tags.owner")) :-
+arg(net.vpc, scoped(network.main, vpc), owner_tag, cloud_ref(net.vpc, existing-prod-vpc, tags.owner)) :-
   env(prod).
