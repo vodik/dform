@@ -10,6 +10,44 @@ Priority A = blocks any real-world use, B = needed for team scale, C = polish.
 Origin: critical review of the prototype, 2026-09-27. Findings verified against
 =src/= and by running probe programs. Lines cite the code as of commit 3e2cf48.
 
+* Direction (decided 2026-09-27)
+The language core follows =proposals/E-synthesis.org= as revised by
+=proposals/F-revision.org=. Read F's section 3 (revised decision records) as
+overriding E where they differ. Directions A-D are the record of what was
+considered; section 8 of E tables what each contributed and what was rejected.
+Prototype code: branch =explore/F-revision= (partitioned stratifier, ranked
+lattice with null classes, stuck simulation, Z-set planner, provenance circuit;
+30 tests). Tradeoffs accepted are listed in E section 10 and F section 6.
+
+** TODO [#A] M1: the revised evaluator on the existing parser
+F's recommendation: before editions or the parser rewrite, build the revised
+sections 2.6-2.8 of E as one evaluator, golden-tested. Promote the prototype
+modules from =explore/F-revision= rather than starting over.
+*** Scope
+- partitioned stratifier (=partition.rs=) wired into =engine::eval=, replacing
+  =compute_strata=; every type-keyed core predicate by constant type, =arg=/=attr=
+  also by normalized path
+- =Ranked= lattice (=lattice.rs=) as the =attr= aggregate; =apply_functional_pred=,
+  =apply_setting_add=, =enforce_uniques=, =merge.rs= deleted
+- classed nulls minted from a schema; round-0 resolution; per-key =stuck/3=;
+  phase boundaries in the executor
+- Z-set planner (=zset.rs=) replacing =fakecloud::plan_with_state=
+- fake provider returns computed values only from Apply and marks secret ones
+- golden tests: the five example programs, the nine adversarial programs, and a
+  two-phase apply of =examples/adversarial/gke_two_phase.df=
+*** Open questions to measure in M1, not decide now
+- cost of per-key stuck tracking (F 1.2)
+- whether variable instance segments in module paths should be forbidden (E candid 5)
+- Rule 3 aggregate-reader clause in practice (F F2)
+
+** DONE [#A] Fix: committed pngu.df does not parse
+F F12. Verified: HEAD failed to parse, the working copy parses. Working copy
+committed 2026-09-27.
+
+** TODO [#B] Fix: adopt_demo.df silently yields zero resources
+F F13: wrong param key. Also the motivating case for the undefined-predicate
+and unused-input checks.
+
 * Vocabulary
 The name is Terraform minus terra plus Datalog, and it reads as "deform" aloud.
 Use the pun consistently in CLI output, docs, and diagnostics.
@@ -36,7 +74,8 @@ glossary into =docs/semantics.md=.
 * Design tensions
 Decisions that shape everything else. Resolve these first.
 
-** DECIDE [#A] Attribute assembly: lattice merge vs fixpoint side effects
+** DONE [#A] Attribute assembly: lattice merge vs fixpoint side effects
+DECIDED (E DR-1, F DR-1): one ranked lattice aggregate over arg contributions; Flat/Map/Set/Keyed, no Bag; three ranks on Flat only; conflict is top naming every witness and derives a deny. All four ad hoc mechanisms deleted.
 Infra needs functional dependencies (one value per attribute). Pure Datalog has
 none, so the prototype bolts on four separate non-monotonic mechanisms:
 - functional-predicate rewrite for =arg= and =output= (=engine.rs:96-101=, =apply_functional_pred=)
@@ -75,7 +114,8 @@ recorded field managers and conflicts naming both writers.
 - one merge law documented in =docs/=; =merge_rule= becomes an annotation on it
 - conflict error names both contributing rules with file:line
 
-** DECIDE [#A] Unknown values: what may a rule observe at plan time?
+** DONE [#A] Unknown values: what may a rule observe at plan time?
+DECIDED (E DR-2, F DR-2): ref is a classed null (fresh/open/secret) from the schema; content-needing literals are stuck per key; phases derived from null dependence; round-0 resolution against the world before diffing; strict refusal available as a policy pack.
 Real providers produce ids, arns, endpoints only at apply. The fake backend
 hides this by synthesizing computed values from strings (=fakecloud.rs:498=
 =computed_ref=), so every value is known at plan time. Datalog has no
@@ -91,7 +131,8 @@ provider through the dependency order, never by re-running the fixpoint.
 Document this explicitly; it is the same restriction Terraform has on
 =count= / =for_each=.
 
-** DECIDE [#B] Open world vs encapsulation
+** DONE [#B] Open world vs encapsulation
+DECIDED (E DR-3): modules with input/output/export/contributes, private by default; undefined predicate is a compile error; policy packs are modules with a grant; stratification partitions every type-keyed core predicate by constant type (F DR-12).
 Every predicate is global. A policy pack can =arg_add= to any resource and that
 is the feature (=policies/baseline.df:8=). Costs:
 - two modules defining =zone_index/2= silently union
@@ -266,7 +307,8 @@ vs string, comma rules in blocks, and the example corpus. This is the artifact
 that lets the parser be replaced without changing the language.
 Precedent: Soufflé keeps a Bison grammar as the reference and documents from it.
 
-** DECIDE [#B] Case-based variable syntax
+** DONE [#B] Case-based variable syntax
+DECIDED (E DR-4/DR-5): uppercase variables kept; identifiers [A-Za-z0-9_]; a.b qualified name, X.b field access, .path keypath literal; hyphenated names are strings; - and / always operators; edition 2026 + dform migrate.
 Uppercase initial = variable, lowercase = symbol (Prolog convention). Blocks
 resource types or keys with a leading capital. Alternatives: sigil for
 variables (=$X=), or =let=-style declared variables. Decide with the symbol
@@ -663,7 +705,8 @@ input replicas: int = 3.
 input allowed_cidrs: list(inet).
 #+end_src
 
-** DECIDE [#B] Null, absent, and empty in the value model
+** DONE [#B] Null, absent, and empty in the value model
+DECIDED (E DR-6): absent is bottom; null is a schema-gated Flat value; empty set is bottom.
 Datalog absence is "no fact"; APIs distinguish unset, null, and empty. =Value=
 has no null. Decide: attributes are absent or present, =null= is a value only
 where the schema allows it, and empty collections are ordinary values.
@@ -674,7 +717,8 @@ Precedent: Terraform optional/default/null semantics, settled over years.
 fact provider (=extern file.json(+path, -value)=, =file.text=, =file.template=)
 so templates are facts with provenance and hashing, not a =file()= builtin.
 
-** DECIDE [#B] Impure values
+** DONE [#B] Impure values
+DECIDED (E DR-7, DR-15): only through externs whose results persist in state; greedy allocate aggregate with pins now, clingo behind a flag later.
 Random suffixes, timestamps, generated passwords. Rule: impurity enters only
 through an extern whose results are persisted in state, never through a
 builtin. A =random= reference provider demonstrates it.
@@ -690,7 +734,8 @@ provenance ticket.
 Lockfile pins hashes; nothing covers signing, a registry protocol, or
 verification on download. Precedent: Terraform registry GPG signing.
 
-** DECIDE [#C] License
+** DONE [#C] License
+DECIDED (E DR-8): Apache-2.0, DCO, no CLA.
 Decide once; BSL produced OpenTofu overnight.
 
 ** TODO [#A] Reactive inputs and controller mode

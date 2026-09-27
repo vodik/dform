@@ -13,12 +13,10 @@
 # - The monitoring dashboard JSON is stubbed (see terraform/modules/monitoring/dashboard-pngu.json).
 
 ########################################
-# Schema declarations (uses your patch)
+# Schema declarations
 ########################################
 
-decl project { id, name, region, network_name, proxy_cidr }.
-decl gke { control_plane_cidr, subnet_cidr, pods_cidr, services_cidr }.
-decl static_ip { name, type }.
+# Keep decl for true relational tables.
 decl peering { env, name, peer_network }.
 
 ########################################
@@ -53,10 +51,10 @@ settings dev {
   regional_proxy_cidr = "10.193.0.0/24"
 
   gke = {
-    control_plane_cidr: "172.16.3.96/28"
-    subnet_cidr: "10.141.76.0/22"
-    pods_cidr: "10.141.80.0/21"
-    services_cidr: "10.141.88.0/21"
+    control_plane_cidr: "172.16.3.96/28",
+    subnet_cidr: "10.141.76.0/22",
+    pods_cidr: "10.141.80.0/21",
+    services_cidr: "10.141.88.0/21",
     static_ips: { "pngu-grpc": { type: "INTERNAL" } }
   }
 }.
@@ -70,10 +68,10 @@ settings stg {
   regional_proxy_cidr = "10.193.1.0/24"
 
   gke = {
-    control_plane_cidr: "172.16.3.112/28"
-    subnet_cidr: "10.141.100.0/22"
-    pods_cidr: "10.141.104.0/21"
-    services_cidr: "10.141.112.0/21"
+    control_plane_cidr: "172.16.3.112/28",
+    subnet_cidr: "10.141.100.0/22",
+    pods_cidr: "10.141.104.0/21",
+    services_cidr: "10.141.112.0/21",
     static_ips: { "pngu-grpc": { type: "INTERNAL" } }
   }
 }.
@@ -87,40 +85,13 @@ settings prod {
   regional_proxy_cidr = "10.193.2.0/24"
 
   gke = {
-    control_plane_cidr: "172.16.3.128/28"
-    subnet_cidr: "10.141.124.0/22"
-    pods_cidr: "10.141.128.0/21"
-    services_cidr: "10.141.136.0/21"
+    control_plane_cidr: "172.16.3.128/28",
+    subnet_cidr: "10.141.124.0/22",
+    pods_cidr: "10.141.128.0/21",
+    services_cidr: "10.141.136.0/21",
     static_ips: { "pngu-grpc": { type: "INTERNAL" } }
   }
 }.
-
-########################################
-# Derived “records” for the active env
-########################################
-
-project{ id: ProjectId, name: ProjectName, region: Region, network_name: NetworkName, proxy_cidr: ProxyCidr } :-
-  env(Env),
-  setting(Env, project_id, ProjectId),
-  setting(Env, project_name, ProjectName),
-  setting(Env, region, Region),
-  setting(Env, network_name, NetworkName),
-  setting(Env, regional_proxy_cidr, ProxyCidr).
-
-gke{ control_plane_cidr: CpCidr, subnet_cidr: SubnetCidr, pods_cidr: PodsCidr, services_cidr: ServicesCidr } :-
-  env(Env),
-  setting(Env, gke.control_plane_cidr, CpCidr),
-  setting(Env, gke.subnet_cidr, SubnetCidr),
-  setting(Env, gke.pods_cidr, PodsCidr),
-  setting(Env, gke.services_cidr, ServicesCidr).
-
-static_ip{ name: pngu-grpc, type: IpType } :-
-  env(Env),
-  setting(Env, gke.static_ips.pngu-grpc.type, IpType).
-
-constraint("GKE static IPs must be INTERNAL") :-
-  static_ip{ name: _, type: T },
-  T != "INTERNAL".
 
 ########################################
 # Peerings (explicit env-keyed table)
@@ -137,143 +108,135 @@ peering{ env: stg, name: envoy-stg-legacy, peer_network: "projects/coherentpath-
 peering{ env: prod, name: envoy-prod-legacy, peer_network: "projects/coherentpath-prod/global/networks/envoy-proxy-prod" }.
 
 ########################################
-# Helpers
+# Env-scoped validation/resources/outputs
 ########################################
 
-network_id(NetId) :-
-  project{ id: ProjectId, network_name: NetworkName, name: _, region: _, proxy_cidr: _ },
-  NetId = format("projects/%s/global/networks/%s", ProjectId, NetworkName).
+when env(Env) {
+  constraint("GKE static IPs must be INTERNAL") :-
+    setting(Env, gke.static_ips.pngu-grpc.type, T),
+    T != "INTERNAL".
 
-gke_subnet_name(Name) :-
-  project{ name: ProjectName, id: _, region: _, network_name: _, proxy_cidr: _ },
-  Name = format("%s-gke-subnet", ProjectName).
+  ########################################
+  # Resources (renfry module intent)
+  ########################################
 
-gke_pods_range_name(Name) :-
-  project{ name: ProjectName, id: _, region: _, network_name: _, proxy_cidr: _ },
-  Name = format("%s-gke-pods-range", ProjectName).
+  # GKE subnet (terraform-google-modules/network/google//modules/subnets)
+  resource google_compute_subnetwork gke_subnet {
+    project = ProjectId,
+    region = Region,
+    network = NetId,
+    name = format("%s-gke-subnet", ProjectName),
+    ip_cidr_range = SubnetCidr,
+    subnet_private_access = true,
+    secondary_ranges = [
+      { range_name: format("%s-gke-pods-range", ProjectName), ip_cidr_range: PodsCidr },
+      { range_name: format("%s-gke-svc-range", ProjectName), ip_cidr_range: ServicesCidr }
+    ]
+  } :-
+    setting(Env, project_id, ProjectId),
+    setting(Env, project_name, ProjectName),
+    setting(Env, region, Region),
+    setting(Env, network_name, NetworkName),
+    NetId = format("projects/%s/global/networks/%s", ProjectId, NetworkName),
+    setting(Env, gke.subnet_cidr, SubnetCidr),
+    setting(Env, gke.pods_cidr, PodsCidr),
+    setting(Env, gke.services_cidr, ServicesCidr).
 
-gke_services_range_name(Name) :-
-  project{ name: ProjectName, id: _, region: _, network_name: _, proxy_cidr: _ },
-  Name = format("%s-gke-svc-range", ProjectName).
+  # Regional managed proxy subnet
+  resource google_compute_subnetwork regional_proxy {
+    project = ProjectId,
+    region = Region,
+    network = NetId,
+    name = format("%s-proxy", ProjectName),
+    purpose = "REGIONAL_MANAGED_PROXY",
+    role = "ACTIVE",
+    ip_cidr_range = ProxyCidr
+  } :-
+    setting(Env, project_id, ProjectId),
+    setting(Env, project_name, ProjectName),
+    setting(Env, region, Region),
+    setting(Env, network_name, NetworkName),
+    NetId = format("projects/%s/global/networks/%s", ProjectId, NetworkName),
+    setting(Env, regional_proxy_cidr, ProxyCidr).
 
-gke_cluster_name(Name) :-
-  project{ name: ProjectName, id: _, region: _, network_name: _, proxy_cidr: _ },
-  Name = format("%s-gke", ProjectName).
+  # VPC peerings
+  resource google_compute_network_peering PeeringRes {
+    project = ProjectId,
+    name = PeeringName,
+    network = NetId,
+    peer_network = PeerNet
+  } :-
+    setting(Env, project_id, ProjectId),
+    setting(Env, network_name, NetworkName),
+    NetId = format("projects/%s/global/networks/%s", ProjectId, NetworkName),
+    peering{ env: Env, name: PeeringName, peer_network: PeerNet },
+    PeeringRes = format("peering-%s", PeeringName).
 
-########################################
-# Resources (renfry module intent)
-########################################
+  # Static IPs for services
+  resource google_compute_address StaticIpRes {
+    project = ProjectId,
+    region = Region,
+    name = IpName,
+    address_type = IpType,
+    subnetwork_id = ref(google_compute_subnetwork, gke_subnet, id)
+  } :-
+    setting(Env, project_id, ProjectId),
+    setting(Env, region, Region),
+    IpName = pngu-grpc,
+    setting(Env, gke.static_ips.pngu-grpc.type, IpType),
+    StaticIpRes = format("static-ip-%s", IpName).
 
-# GKE subnet (terraform-google-modules/network/google//modules/subnets)
-resource google_compute_subnetwork gke_subnet {
-  project = ProjectId,
-  region = Region,
-  network = NetId,
-  name = SubnetName,
-  ip_cidr_range = SubnetCidr,
-  subnet_private_access = true,
-  secondary_ranges = [
-    { range_name: PodsRangeName, ip_cidr_range: PodsCidr },
-    { range_name: ServicesRangeName, ip_cidr_range: ServicesCidr }
-  ]
-} :-
-  project{ id: ProjectId, region: Region, name: _, network_name: _, proxy_cidr: _ },
-  network_id(NetId),
-  gke{ subnet_cidr: SubnetCidr, pods_cidr: PodsCidr, services_cidr: ServicesCidr, control_plane_cidr: _ },
-  gke_subnet_name(SubnetName),
-  gke_pods_range_name(PodsRangeName),
-  gke_services_range_name(ServicesRangeName).
+  ########################################
+  # Resources (GKE module intent)
+  ########################################
 
-# Regional managed proxy subnet
-resource google_compute_subnetwork regional_proxy {
-  project = ProjectId,
-  region = Region,
-  network = NetId,
-  name = format("%s-proxy", ProjectName),
-  purpose = "REGIONAL_MANAGED_PROXY",
-  role = "ACTIVE",
-  ip_cidr_range = ProxyCidr
-} :-
-  project{ id: ProjectId, name: ProjectName, region: Region, network_name: _, proxy_cidr: ProxyCidr },
-  network_id(NetId).
+  # Represents the external terraform-mi-gke module invocation.
+  resource gke_cluster pngu {
+    cluster_type = "autopilot-private",
+    env = Env,
+    project_id = ProjectId,
+    project_name = ProjectName,
+    name = format("%s-gke", ProjectName),
+    network_id = NetId,
+    subnetwork_id = ref(google_compute_subnetwork, gke_subnet, id),
+    master_control_plane_cidr = CpCidr,
+    ip_range_pods = format("%s-gke-pods-range", ProjectName),
+    ip_range_services = format("%s-gke-svc-range", ProjectName),
 
-# VPC peerings
-resource google_compute_network_peering PeeringRes {
-  project = ProjectId,
-  name = PeeringName,
-  network = NetId,
-  peer_network = PeerNet
-} :-
-  project{ id: ProjectId, name: _, region: _, network_name: _, proxy_cidr: _ },
-  network_id(NetId),
-  env(Env),
-  peering{ env: Env, name: PeeringName, peer_network: PeerNet },
-  PeeringRes = format("peering-%s", PeeringName).
+    enable_secret_manager_addon = true,
+    deletion_protection = false
+  } :-
+    setting(Env, project_id, ProjectId),
+    setting(Env, project_name, ProjectName),
+    setting(Env, network_name, NetworkName),
+    NetId = format("projects/%s/global/networks/%s", ProjectId, NetworkName),
+    setting(Env, gke.control_plane_cidr, CpCidr).
 
-# Static IPs for services
-resource google_compute_address StaticIpRes {
-  project = ProjectId,
-  region = Region,
-  name = IpName,
-  address_type = IpType,
-  subnetwork_id = ref(google_compute_subnetwork, gke_subnet, id)
-} :-
-  project{ id: ProjectId, region: Region, name: _, network_name: _, proxy_cidr: _ },
-  static_ip{ name: IpName, type: IpType },
-  StaticIpRes = format("static-ip-%s", IpName).
+  ########################################
+  # Resources (monitoring module intent)
+  ########################################
 
-########################################
-# Resources (GKE module intent)
-########################################
+  # Stubbed dashboard JSON: see terraform/modules/monitoring/dashboard-pngu.json
+  resource google_monitoring_dashboard pngu {
+    project = ProjectId,
+    dashboard_json = { "displayName": "pngu", "note": "stubbed; see terraform/modules/monitoring/dashboard-pngu.json" }
+  } :-
+    setting(Env, project_id, ProjectId).
 
-# Represents the external terraform-mi-gke module invocation.
-resource gke_cluster pngu {
-  cluster_type = "autopilot-private",
-  env = Env,
-  project_id = ProjectId,
-  project_name = ProjectName,
-  name = ClusterName,
-  network_id = NetId,
-  subnetwork_id = ref(google_compute_subnetwork, gke_subnet, id),
-  master_control_plane_cidr = CpCidr,
-  ip_range_pods = PodsRangeName,
-  ip_range_services = ServicesRangeName,
+  # Represents terraform-gcp-alert-metrics module invocation.
+  resource alert_metrics_pack pngu {
+    project_id = ProjectId,
+    notification_channel_type = "slack",
+    notification_channel_display_name = "Slack",
+    enable_standard_gke_alerts = true,
+    source = "git@github.com:coherentpath/terraform-gcp-alert-metrics.git?ref=v1.5.0"
+  } :-
+    setting(Env, project_id, ProjectId).
 
-  enable_secret_manager_addon = true,
-  deletion_protection = false
-} :-
-  env(Env),
-  project{ id: ProjectId, name: ProjectName, region: _, network_name: _, proxy_cidr: _ },
-  network_id(NetId),
-  gke{ control_plane_cidr: CpCidr, subnet_cidr: _, pods_cidr: _, services_cidr: _ },
-  gke_cluster_name(ClusterName),
-  gke_pods_range_name(PodsRangeName),
-  gke_services_range_name(ServicesRangeName).
+  ########################################
+  # Optional outputs (handy for wiring)
+  ########################################
 
-########################################
-# Resources (monitoring module intent)
-########################################
-
-# Stubbed dashboard JSON: see terraform/modules/monitoring/dashboard-pngu.json
-resource google_monitoring_dashboard pngu {
-  project = ProjectId,
-  dashboard_json = { "displayName": "pngu", "note": "stubbed; see terraform/modules/monitoring/dashboard-pngu.json" }
-} :-
-  project{ id: ProjectId, name: _, region: _, network_name: _, proxy_cidr: _ }.
-
-# Represents terraform-gcp-alert-metrics module invocation.
-resource alert_metrics_pack pngu {
-  project_id = ProjectId,
-  notification_channel_type = "slack",
-  notification_channel_display_name = "Slack",
-  enable_standard_gke_alerts = true,
-  source = "git@github.com:coherentpath/terraform-gcp-alert-metrics.git?ref=v1.5.0"
-} :-
-  project{ id: ProjectId, name: _, region: _, network_name: _, proxy_cidr: _ }.
-
-########################################
-# Optional outputs (handy for wiring)
-########################################
-
-output(active_env, Env) :- env(Env).
-output(project_id, ProjectId) :- project{ id: ProjectId, name: _, region: _, network_name: _, proxy_cidr: _ }.
+  output(active_env, Env).
+  output(project_id, ProjectId) :- setting(Env, project_id, ProjectId).
+}.
