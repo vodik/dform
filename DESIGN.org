@@ -35,6 +35,12 @@ modules from =explore/F-revision= rather than starting over.
 - fake provider returns computed values only from Apply and marks secret ones
 - golden tests: the five example programs, the nine adversarial programs, and a
   two-phase apply of =examples/adversarial/gke_two_phase.df=
+- hash indexes per predicate position and semi-naive deltas over the operator
+  IR (E 2.6); M1 must not ship on the linear-scan loop
+- a synthetic scale benchmark checked in: 10^4 and 10^5 resources, a schema
+  with 10^3 types, a policy pack with 500 rules; report partition-node count,
+  provenance bytes per fact, stuck instances per null, plan wall time. Numbers
+  gate M1, not a target
 *** Not in M1
 - editions and =dform migrate=: pre-release, no compatibility promised; the
   examples are rewritten by hand in the new syntax
@@ -57,6 +63,66 @@ the same commit collapse identically, which LWW could not promise. Decide:
 a =@default= set is discarded, not unioned, when a higher shelf is non-empty.
 Closes the "no whole-set override" tradeoff. Element-level override for Keyed
 already exists via ranked Flat leaves.
+
+** TODO [#A] M2: Terraform provider bridge spike
+Providers are the existential risk; the language got four proposals and the
+provider contract got none. Bridge Terraform plugin protocol v6 providers
+(as Pulumi did) with a mechanical schema mapping: computed id → fresh,
+other computed → open, sensitive computed → secret, no refinements, lists
+without merge keys are Flat(List). Goal: plan and apply one real AWS or GCP
+stack through a bridged provider with no dform-specific provider code.
+Success is a real cloud plan; failure modes to record are schema gaps that
+become spurious errors (E candid: partial schema worse than none).
+
+** TODO [#A] Executor design pass under real cloud behaviour
+E defines phases semantically; Terraform's executor is a decade of incident
+scar tissue. Adversarial design pass, same rigour as the language passes,
+assuming the cloud misbehaves: provider timeout mid-phase; Read returns
+nothing for 30s after Create (eventual consistency); a null resolves and the
+world mutates the resource before the next phase; crash between ticks;
+partial batch failure with dependents already started; retry policy per
+schema; tainted/deposed objects; =--max-ticks= exhausted with work in flight.
+Output: executor state machine, per-action persistence points, and the rule
+for apply against a saved plan (below).
+
+** TODO [#A] Apply re-diffs against a saved plan
+Plan records extern results so apply sees what plan saw, but apply also
+refreshes and the world may have moved. Rule: apply from a saved plan
+re-computes =desired − world= after refresh; any deformation not present in
+the saved plan, or any saved deformation whose before-state changed, aborts
+before the first action. Terraform's "saved plan is stale" check, stated for
+Z-sets.
+
+** TODO [#B] Strict mode is first-class
+Prod change management will often refuse a plan with pending groups of
+unknown cardinality. Make strict a stack-level mode (=stack x { unknowns =
+strict }=), not only a policy pack: a stuck derivation or a pending group is
+a plan error, exactly Terraform's refusal, while fresh nulls still flow so
+single-phase plans stay definite. Document that strict is the expected prod
+default and permissive is for controller mode and iterative dev.
+
+** TODO [#B] Pattern: org-wide defaults via the @default shelf
+"Add a tag unless the resource already has one" is rejected under DR-12 when
+written as a read of =attr= (F adv9). The correct spelling needs no read:
+#+begin_src prolog
+arg(Type, Name, .tags, { team: platform } @default) :- want(Type, Name).
+#+end_src
+The resource block's normal-rank tag wins per leaf because =tags= is a Map
+over ranked Flat leaves. Document as the canonical policy-pack idiom; add to
+the golden tests; this is the rank mechanism solving a problem it was not
+designed for and it should be advertised.
+
+** TODO [#B] Secrets: test the never-prints claim
+E DR-19 argues a secret null reaching a statically public position ends in a
+conflict or a stuck read, never a printed byte. Argued, not tested. Add a
+test with a deliberately mislabelled provider schema (sensitive value
+declared public) through plan output, plan file, state, log, =why=, and
+=dform query=. State the property as a claim until it passes.
+
+** TODO [#B] First real target: Kubernetes operator niche
+One provider, an OpenAPI schema rich enough to derive classes and merge
+keys, reactive mode fits, and Crossplane composition pain is real. Prove
+fitness there before multi-cloud. D's =Database= CRD example is the seed.
 
 ** TODO [#B] Fix: adopt_demo.df silently yields zero resources
 F F13: wrong param key. Also the motivating case for the undefined-predicate
