@@ -558,6 +558,7 @@ fn resolve_json_with(
         Value::CloudRef { typ, name, attr } => {
             resolve_ref(RefKind::Cloud, typ, name, attr)
         }
+        Value::Null { label, .. } => Err(anyhow::anyhow!("unresolved null ?{label} reached the provider")),
     }
 }
 

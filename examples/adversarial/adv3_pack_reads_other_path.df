@@ -1,0 +1,15 @@
+# adv3: a policy pack that reads attr of the type it contributes to, via a
+# DIFFERENT path. E §4.3 says this compiles under (type, path) partitions.
+# Reads (attr, iam.policy, name); writes (arg, iam.policy, statements).
+resource iam.policy app_policy {
+  name = app,
+  statements = [ { action: db.connect, resource: "db" } ]
+}.
+
+policy_pack p {
+  merge_rule(iam.policy, statements, set).
+  arg_add(iam.policy, P, "statements", [ { action: org.read, resource: "org" } ]) :-
+    want(iam.policy, P),
+    arg(iam.policy, P, name, app).
+}.
+apply_policy p.

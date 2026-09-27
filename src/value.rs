@@ -14,6 +14,25 @@ pub enum Value {
     IpRange { start: u32, end: u32 },
     Ref { typ: String, name: String, attr: String },
     CloudRef { typ: String, name: String, attr: String },
+    /// A labeled null (proposal E). `label` is the Skolem name, conventionally
+    /// "type/addr#attr"; `class` decides equality, materialization and phase;
+    /// `ty` is the schema type the eventual constant will have.
+    Null { label: String, class: NullClass, ty: String },
+}
+
+/// The three null classes of proposal E (grafted from direction C). The class is
+/// assigned by the schema, never written by the user.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum NullClass {
+    /// A computed identity (id, arn, self_link). Unique Name Assumption: never
+    /// equal to any constant or to a null with another label.
+    Fresh,
+    /// A computed non-identity (endpoint, allocated cidr, zones). Equality with
+    /// anything but itself is unknown until resolved.
+    Open,
+    /// A sensitive computed value. As `Open`, and the constant is never given to
+    /// the engine; it is materialized only inside a provider call.
+    Secret,
 }
 
 impl Value {

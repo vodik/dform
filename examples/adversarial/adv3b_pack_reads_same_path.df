@@ -1,0 +1,15 @@
+# adv3b: the same pack reads the path it contributes to. Under E this is a
+# negative self-loop on (attr, iam.policy, statements) and must be rejected.
+resource iam.policy app_policy {
+  name = app,
+  statements = [ { action: db.connect, resource: "db" } ]
+}.
+
+policy_pack p {
+  merge_rule(iam.policy, statements, set).
+  arg_add(iam.policy, P, "statements", [ { action: org.read, resource: "org" } ]) :-
+    want(iam.policy, P),
+    arg(iam.policy, P, statements, S),
+    not member(S, { action: org.read, resource: "org" }).
+}.
+apply_policy p.

@@ -1,0 +1,36 @@
+# adv2: Rule 3 coarseness. One rule with head `want` is stuck (the nodepool,
+# on ?gke_cluster/pngu#zones). An UNRELATED negation over `want` and an
+# UNRELATED aggregate over `want` must not become undetermined.
+# Run with schema::gke() and eval_sim.
+resource gke_cluster pngu {
+  name = "pngu-gke"
+}.
+
+resource gke_nodepool Np {
+  cluster = ref(gke_cluster, pngu, id),
+  zone = Z
+} :-
+  arg(gke_cluster, pngu, zones, Zs),
+  member(Zs, Z),
+  Np = format("np-%s", Z).
+
+resource k8s.namespace pngu {
+  name = "pngu"
+}.
+
+# Unrelated negation over want (different type): decidable now.
+deny("namespace without deployment", { ns: N }) :-
+  want(k8s.namespace, N),
+  not want(k8s.deployment, N).
+
+# Unrelated aggregate over want (different type): decidable now.
+ns_count(collect_set(N)) :- want(k8s.namespace, N).
+
+deny("need the pngu namespace") :-
+  ns_count(L),
+  not member(L, pngu).
+
+# Related negation (same type as the stuck head): correctly undetermined.
+deny("no nodepool in zone b") :-
+  want(gke_cluster, pngu),
+  not want(gke_nodepool, "np-us-east1-b").

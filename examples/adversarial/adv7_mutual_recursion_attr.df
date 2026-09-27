@@ -1,0 +1,9 @@
+# adv7: mutual recursion through attr between two types. A's field is read
+# from B's, B's from A's. A real cycle; must be rejected.
+resource net.a x {
+  peer = P
+} :- arg(net.b, y, name, P).
+
+resource net.b y {
+  name = Q
+} :- arg(net.a, x, peer, Q).

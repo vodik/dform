@@ -50,14 +50,28 @@ pub fn eval(program: &Program, extra_facts: &[Atom]) -> Result<(EvalResult, Vec<
         }
     }
 
+    // Simulation (proposal F): the recorder needs the rule list to print
+    // stuck instances; constraints are appended as deny rules.
+    if crate::sim::active() {
+        let mut all = rules.clone();
+        for c in &constraints {
+            all.push(RuleStmt {
+                head: Atom { pred: "deny".into(), args: vec![Term::Val(Value::Str(c.message.clone()))], record: None },
+                body: c.body.clone(),
+            });
+        }
+        crate::sim::with(|s| s.rules = all);
+    }
+
     // Stratified evaluation (so defaults via `not` behave).
     let strata = compute_strata(&rules)?;
     let max_stratum = strata.values().copied().max().unwrap_or(0);
     for s in 0..=max_stratum {
-        let rules_s: Vec<RuleStmt> = rules
+        let rules_s: Vec<(usize, RuleStmt)> = rules
             .iter()
-            .filter(|r| strata.get(&r.head.pred).copied().unwrap_or(0) == s)
-            .cloned()
+            .enumerate()
+            .filter(|(_, r)| strata.get(&r.head.pred).copied().unwrap_or(0) == s)
+            .map(|(i, r)| (i, r.clone()))
             .collect();
         if rules_s.is_empty() {
             continue;
@@ -76,7 +90,8 @@ pub fn eval(program: &Program, extra_facts: &[Atom]) -> Result<(EvalResult, Vec<
             let mut pending_atoms: Vec<Atom> = Vec::new();
             let mut pending_aggs: Vec<AggFact> = Vec::new();
 
-            for r in &rules_s {
+            for (i, r) in &rules_s {
+                crate::sim::set_current(*i, &r.head);
                 let derived = eval_rule(r, &snapshot)?;
                 for d in derived {
                     match d {
@@ -119,7 +134,11 @@ pub fn eval(program: &Program, extra_facts: &[Atom]) -> Result<(EvalResult, Vec<
     // Constraints are checked against the final fact set.
     let snapshot: Vec<Atom> = facts.iter().cloned().collect();
     let mut violations = Vec::new();
-    for c in &constraints {
+    for (k, c) in constraints.iter().enumerate() {
+        crate::sim::set_current(
+            rules.len() + k,
+            &Atom { pred: "deny".into(), args: vec![Term::Val(Value::Str(c.message.clone()))], record: None },
+        );
         if constraint_violated(c, &snapshot)? {
             violations.push(c.message.clone());
         }
@@ -187,6 +206,7 @@ fn value_to_json(v: &Value) -> serde_json::Value {
         Value::CloudRef { typ, name, attr } => {
             serde_json::Value::String(format!("cloud_ref({typ},{name},{attr})"))
         }
+        Value::Null { label, .. } => serde_json::Value::String(format!("?{label}")),
     }
 }
 
@@ -303,6 +323,17 @@ fn eval_rule(rule: &RuleStmt, facts: &[Atom]) -> Result<Vec<DerivedFact>> {
     let mut out = Vec::new();
     let bindings = eval_body(&rule.body, facts)?;
     for b in bindings {
+        // Rule 2 (E §2.7): an address argument is a content position. A head
+        // whose address carries a null is stuck, not derived.
+        if crate::sim::active() && matches!(rule.head.pred.as_str(), "want" | "arg" | "arg_add" | "adopt") && rule.head.args.len() >= 2 {
+            if let Some(v) = eval_term(&rule.head.args[1], &b) {
+                let nulls = crate::lattice::nulls_in(&v);
+                if !nulls.is_empty() {
+                    crate::sim::record_stuck(&b, nulls, "resource address carries a null");
+                    continue;
+                }
+            }
+        }
         let head = instantiate_atom(&rule.head, &b)
             .with_context(|| format!("instantiate head {}", rule.head.pred))?;
         out.push(DerivedFact::Normal(head));
@@ -314,6 +345,7 @@ fn eval_rule(rule: &RuleStmt, facts: &[Atom]) -> Result<Vec<DerivedFact>> {
 enum CollectKind {
     Set,
     List,
+    Count,
 }
 
 fn eval_rule_collect(
@@ -330,24 +362,44 @@ fn eval_rule_collect(
     }
     let item_term = args[0].clone();
 
+    if crate::sim::active() {
+        crate::sim::record_agg(&rule.body);
+    }
     let bindings = eval_body(&rule.body, facts)?;
     let mut groups_set: BTreeMap<Vec<Value>, BTreeSet<Value>> = BTreeMap::new();
     let mut groups_list: BTreeMap<Vec<Value>, Vec<Value>> = BTreeMap::new();
     for b in bindings {
         let mut key = Vec::new();
+        let mut key_nulls = BTreeSet::new();
         for (i, t) in rule.head.args.iter().enumerate() {
             if i == idx {
                 continue;
             }
             let v = eval_term(t, &b).ok_or_else(|| anyhow!("non-ground head term"))?;
+            key_nulls.extend(crate::lattice::nulls_in(&v));
             key.push(v);
         }
         let item = eval_term(&item_term, &b).ok_or_else(|| anyhow!("non-ground collect item"))?;
+        if crate::sim::active() {
+            // Rule 2: a group key is a content position, always.
+            if !key_nulls.is_empty() {
+                crate::sim::record_stuck(&b, key_nulls, "aggregate group key carries a null");
+                continue;
+            }
+            // Rule 2 read literally: the aggregated value is a content
+            // position. E §7.2 says collect_set forwards nulls; the flag
+            // decides which reading runs.
+            let item_nulls = crate::lattice::nulls_in(&item);
+            if !item_nulls.is_empty() && crate::sim::agg_is_content() {
+                crate::sim::record_stuck(&b, item_nulls, "aggregated value carries a null (Rule 2 literal)");
+                continue;
+            }
+        }
         match kind {
             CollectKind::Set => {
                 groups_set.entry(key).or_default().insert(item);
             }
-            CollectKind::List => {
+            CollectKind::List | CollectKind::Count => {
                 groups_list.entry(key).or_default().push(item);
             }
         }
@@ -363,7 +415,10 @@ fn eval_rule_collect(
         let mut k = 0usize;
         for i in 0..rule.head.args.len() {
             if i == idx {
-                args_out.push(Term::Val(Value::List(items.clone())));
+                match kind {
+                    CollectKind::Count => args_out.push(Term::Val(Value::Int(items.len() as i64))),
+                    _ => args_out.push(Term::Val(Value::List(items.clone()))),
+                }
             } else {
                 args_out.push(Term::Val(key[k].clone()));
                 k += 1;
@@ -597,6 +652,7 @@ fn find_collect(head: &Atom) -> Option<(usize, CollectKind)> {
             // Back-compat: `collect(X)` is set-like.
             "collect" | "collect_set" => return Some((i, CollectKind::Set)),
             "collect_list" => return Some((i, CollectKind::List)),
+            "count" => return Some((i, CollectKind::Count)),
             _ => {}
         }
     }
@@ -674,6 +730,24 @@ fn eval_body(body: &[Lit], facts: &[Atom]) -> Result<Vec<HashMap<String, Value>>
                     } else {
                         let grounded = ground_atom(atom, s)
                             .with_context(|| format!("unsafe negation: not {}(...)", atom.pred))?;
+                        if crate::sim::active() {
+                            // Rule 2: a negation pattern holding an open or
+                            // secret null is a content position; fresh nulls
+                            // are decided under UNA (by label).
+                            let mut open = BTreeSet::new();
+                            for t in &grounded.args {
+                                if let Term::Val(v) = t {
+                                    if crate::sim::has_open_or_secret(v) {
+                                        open.extend(crate::lattice::nulls_in(v));
+                                    }
+                                }
+                            }
+                            if !open.is_empty() {
+                                crate::sim::record_stuck(s, open, format!("negation pattern not {}(..) holds an open/secret null", atom.pred));
+                                continue;
+                            }
+                            crate::sim::record_neg(&grounded);
+                        }
                         let any = facts
                             .iter()
                             .any(|f| f.pred == grounded.pred && f.args == grounded.args);
@@ -719,8 +793,13 @@ fn is_builtin_pred(pred: &str) -> bool {
 
 fn eval_builtin_pred(atom: &Atom, state: &HashMap<String, Value>) -> Result<bool> {
     // Builtin predicates are functions that return Bool.
-    let v = eval_func(&atom.pred, &atom.args, state)
-        .ok_or_else(|| anyhow!("unsafe builtin predicate {}(...)", atom.pred))?;
+    let Some(v) = eval_func(&atom.pred, &atom.args, state) else {
+        if crate::sim::active() && atom.args.iter().any(|t| eval_term(t, state).map(|v| crate::sim::has_null(&v)).unwrap_or(false)) {
+            // Stuck was recorded by eval_func; the literal does not hold.
+            return Ok(false);
+        }
+        bail!("unsafe builtin predicate {}(...)", atom.pred);
+    };
     match v {
         Value::Bool(b) => Ok(b),
         other => bail!("builtin predicate {} returned non-bool: {other:?}", atom.pred),
@@ -759,6 +838,11 @@ fn eval_member2(
 ) -> Result<()> {
     let list_v = eval_term(&atom.args[0], state)
         .ok_or_else(|| anyhow!("unsafe member: list is not ground"))?;
+    if let Value::Null { .. } = &list_v {
+        // Rule 2: member over a null list is a content position.
+        crate::sim::record_stuck(state, crate::lattice::nulls_in(&list_v), "member/2 over a null list");
+        return Ok(());
+    }
     let Value::List(items) = list_v else {
         bail!("member/2 first argument must be a list");
     };
@@ -774,11 +858,33 @@ fn eval_member2(
 fn eval_not_member2(atom: &Atom, state: &HashMap<String, Value>) -> Result<bool> {
     let list_v = eval_term(&atom.args[0], state)
         .ok_or_else(|| anyhow!("unsafe not member: list is not ground"))?;
+    if let Value::Null { .. } = &list_v {
+        crate::sim::record_stuck(state, crate::lattice::nulls_in(&list_v), "not member/2 over a null list");
+        return Ok(false);
+    }
     let Value::List(items) = list_v else {
         bail!("member/2 first argument must be a list");
     };
     let item_v = eval_term(&atom.args[1], state)
         .ok_or_else(|| anyhow!("unsafe not member: item is not ground"))?;
+    if crate::sim::active() {
+        let mut unknown = BTreeSet::new();
+        for x in &items {
+            match crate::lattice::eq3(x, &item_v) {
+                crate::lattice::Truth::True => return Ok(false),
+                crate::lattice::Truth::Unknown => {
+                    unknown.extend(crate::lattice::nulls_in(x));
+                    unknown.extend(crate::lattice::nulls_in(&item_v));
+                }
+                crate::lattice::Truth::False => {}
+            }
+        }
+        if !unknown.is_empty() {
+            crate::sim::record_stuck(state, unknown, "not member/2: membership undecidable");
+            return Ok(false);
+        }
+        return Ok(true);
+    }
     Ok(!items.iter().any(|x| *x == item_v))
 }
 
@@ -812,6 +918,10 @@ fn eval_member3(
 ) -> Result<()> {
     let list_v = eval_term(&atom.args[0], state)
         .ok_or_else(|| anyhow!("unsafe member: list is not ground"))?;
+    if let Value::Null { .. } = &list_v {
+        crate::sim::record_stuck(state, crate::lattice::nulls_in(&list_v), "member/3 over a null list");
+        return Ok(());
+    }
     let Value::List(items) = list_v else {
         bail!("member/3 first argument must be a list");
     };
@@ -844,12 +954,30 @@ fn unify_atom(pattern: &Atom, fact: &Atom, state: &HashMap<String, Value>) -> Re
     Ok(Some(out))
 }
 
+/// Three-valued equality for unification when the simulation is active:
+/// Unknown records a stuck instance and fails the match (Rule 2).
+fn sim_eq(a: &Value, b: &Value, out: &HashMap<String, Value>) -> bool {
+    if !crate::sim::active() {
+        return a == b;
+    }
+    match crate::lattice::eq3(a, b) {
+        crate::lattice::Truth::True => true,
+        crate::lattice::Truth::False => false,
+        crate::lattice::Truth::Unknown => {
+            let mut nulls = crate::lattice::nulls_in(a);
+            nulls.extend(crate::lattice::nulls_in(b));
+            crate::sim::record_stuck(out, nulls, "unification against an open/secret null");
+            false
+        }
+    }
+}
+
 fn unify_term(pat: &Term, fv: &Value, out: &mut HashMap<String, Value>) -> Result<bool> {
     match pat {
-        Term::Val(v) => Ok(v == fv),
+        Term::Val(v) => Ok(sim_eq(v, fv, out)),
         Term::Var(name) => {
             if let Some(bound) = out.get(name) {
-                Ok(bound == fv)
+                Ok(sim_eq(bound, fv, out))
             } else {
                 out.insert(name.clone(), fv.clone());
                 Ok(true)
@@ -913,7 +1041,7 @@ fn unify_term(pat: &Term, fv: &Value, out: &mut HashMap<String, Value>) -> Resul
                 Some(v) => v,
                 None => return Ok(false),
             };
-            Ok(&pv == fv)
+            Ok(sim_eq(&pv, fv, out))
         }
         Term::ListComp { .. } => {
             // Comprehensions must be lowered before evaluation.
@@ -954,7 +1082,7 @@ fn instantiate_atom(atom: &Atom, state: &HashMap<String, Value>) -> Result<Atom>
 fn eval_eq(a: &Term, b: &Term, state: &HashMap<String, Value>) -> Result<Option<HashMap<String, Value>>> {
     let mut out = state.clone();
     match (eval_term(a, &out), eval_term(b, &out)) {
-        (Some(av), Some(bv)) => Ok((av == bv).then_some(out)),
+        (Some(av), Some(bv)) => Ok(sim_eq(&av, &bv, &out).then_some(out)),
         (Some(av), None) => {
             if bind_term(b, av, &mut out)? {
                 Ok(Some(out))
@@ -975,7 +1103,21 @@ fn eval_eq(a: &Term, b: &Term, state: &HashMap<String, Value>) -> Result<Option<
 
 fn eval_neq(a: &Term, b: &Term, state: &HashMap<String, Value>) -> Result<Option<HashMap<String, Value>>> {
     match (eval_term(a, state), eval_term(b, state)) {
-        (Some(av), Some(bv)) => Ok((av != bv).then_some(state.clone())),
+        (Some(av), Some(bv)) => {
+            if crate::sim::active() {
+                return Ok(match crate::lattice::eq3(&av, &bv) {
+                    crate::lattice::Truth::False => Some(state.clone()),
+                    crate::lattice::Truth::True => None,
+                    crate::lattice::Truth::Unknown => {
+                        let mut nulls = crate::lattice::nulls_in(&av);
+                        nulls.extend(crate::lattice::nulls_in(&bv));
+                        crate::sim::record_stuck(state, nulls, "!= against an open/secret null");
+                        None
+                    }
+                });
+            }
+            Ok((av != bv).then_some(state.clone()))
+        }
         _ => bail!("unsafe !=: both sides must be ground"),
     }
 }
@@ -987,6 +1129,12 @@ fn eval_cmp(op_lit: &Lit, a: &Term, b: &Term, state: &HashMap<String, Value>) ->
     let Some(bv) = eval_term(b, state) else {
         bail!("unsafe comparison: right not ground");
     };
+    if crate::sim::active() && (crate::sim::has_null(&av) || crate::sim::has_null(&bv)) {
+        let mut nulls = crate::lattice::nulls_in(&av);
+        nulls.extend(crate::lattice::nulls_in(&bv));
+        crate::sim::record_stuck(state, nulls, "ordering comparison over a null");
+        return Ok(false);
+    }
     let (ai, bi) = match (&av, &bv) {
         (Value::Int(x), Value::Int(y)) => (*x, *y),
         _ => bail!("comparison only supports ints"),
@@ -1039,6 +1187,41 @@ fn eval_term(term: &Term, state: &HashMap<String, Value>) -> Option<Value> {
 }
 
 fn eval_func(name: &str, args: &[Term], state: &HashMap<String, Value>) -> Option<Value> {
+    if crate::sim::active() {
+        match name {
+            // Rule 1: ref to a computed attribute IS the null; forwarded.
+            "ref" if args.len() == 3 => {
+                let t = eval_term(&args[0], state)?.as_str()?.to_string();
+                let n = eval_term(&args[1], state)?;
+                if crate::sim::has_null(&n) {
+                    crate::sim::record_stuck(state, crate::lattice::nulls_in(&n), "ref address carries a null");
+                    return None;
+                }
+                let n = value_to_string(&n);
+                let a = eval_term(&args[2], state)?.as_str()?.to_string();
+                if let Some(v) = crate::sim::null_for(&t, &n, &a) {
+                    return Some(v);
+                }
+                // Not computed: a configured attribute. E rewrites this to an
+                // attr join; the simulation keeps the opaque Ref.
+            }
+            "cloud_ref" | "gref" | "collect" | "collect_set" | "collect_list" | "count" => {}
+            // Rule 2: every other builtin argument is a content position.
+            _ => {
+                let mut nulls = BTreeSet::new();
+                for a in args {
+                    if let Some(v) = eval_term(a, state) {
+                        nulls.extend(crate::lattice::nulls_in(&v));
+                    }
+                }
+                if !nulls.is_empty() {
+                    let what = if name == "scoped" { "resource address carries a null".to_string() } else { format!("builtin {name}() over a null") };
+                    crate::sim::record_stuck(state, nulls, what);
+                    return None;
+                }
+            }
+        }
+    }
     match name {
         "add" => {
             if args.len() != 2 {
@@ -1366,6 +1549,7 @@ fn value_to_string(v: &Value) -> String {
         ),
         Value::Ref { typ, name, attr } => format!("ref({typ},{name},{attr})"),
         Value::CloudRef { typ, name, attr } => format!("cloud_ref({typ},{name},{attr})"),
+        Value::Null { label, .. } => format!("?{label}"),
     }
 }
 

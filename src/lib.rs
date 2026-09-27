@@ -1,11 +1,17 @@
 pub mod ast;
+pub mod circuit;
 pub mod engine;
 pub mod fakecloud;
 pub mod ir;
+pub mod lattice;
 pub mod loader;
 pub mod merge;
 pub mod parser;
+pub mod partition;
 pub mod provider;
+pub mod schema;
+pub mod sim;
 pub mod state;
 pub mod transform;
 pub mod value;
+pub mod zset;
