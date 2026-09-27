@@ -35,6 +35,9 @@ modules from =explore/F-revision= rather than starting over.
 - fake provider returns computed values only from Apply and marks secret ones
 - golden tests: the five example programs, the nine adversarial programs, and a
   two-phase apply of =examples/adversarial/gke_two_phase.df=
+*** Not in M1
+- editions and =dform migrate=: pre-release, no compatibility promised; the
+  examples are rewritten by hand in the new syntax
 *** Open questions to measure in M1, not decide now
 - cost of per-key stuck tracking (F 1.2)
 - whether variable instance segments in module paths should be forbidden (E candid 5)
@@ -43,6 +46,17 @@ modules from =explore/F-revision= rather than starting over.
 ** DONE [#A] Fix: committed pngu.df does not parse
 F F12. Verified: HEAD failed to parse, the working copy parses. Working copy
 committed 2026-09-27.
+
+** TODO [#B] Extend ranks to Set and Keyed (reopens E DR-9)
+E restricted ranks to Flat for simplicity, not for a semantic reason. A ranked
+Set cell is three Sets joined pointwise; collapse takes the highest non-empty
+shelf, so =@override= means "replace the whole set at this rank". Order
+independence survives since it is the same product construction. Rank is a
+declared compile-time priority, so no runtime clock is needed and two runs on
+the same commit collapse identically, which LWW could not promise. Decide:
+a =@default= set is discarded, not unioned, when a higher shelf is non-empty.
+Closes the "no whole-set override" tradeoff. Element-level override for Keyed
+already exists via ranked Flat leaves.
 
 ** TODO [#B] Fix: adopt_demo.df silently yields zero resources
 F F13: wrong param key. Also the motivating case for the undefined-predicate
@@ -669,12 +683,11 @@ remote state, credentials in provider config, values in plan output.
 *** Precedent
 Terraform =sensitive= (0.14) and =ephemeral= (1.10), both a decade late.
 
-** TODO [#A] Language editions
-The 0.11 to 0.12 lesson had no ticket. =edition 2026.= pragma per file; the
-compiler supports the current and previous edition; =dform migrate= rewrites
-files. Required before the symbol-syntax change ships, since it is the first
-breaking change.
-Precedent: Rust editions.
+** TODO [#C] Language editions
+Pre-release: no backward compatibility, no migrate tool, no supported
+previous edition (decided 2026-09-27). Keep only the one-line =edition 2026.=
+pragma so migration is possible after a first release. E DR-17's migration
+clauses do not apply. Precedent: Rust editions, later.
 
 ** TODO [#A] Apply executor
 The protocol ticket says the core owns ordering and parallelism; nothing
