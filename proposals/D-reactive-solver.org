@@ -1,0 +1,2221 @@
+#+TITLE: Proposal D: incremental and reactive first
+#+SUBTITLE: DBSP core, controller mode as the primary shape, a solve stratum, native time
+#+OPTIONS: toc:3 num:t
+#+STARTUP: overview
+
+Status: proposal, 2026-09-27. Answers every DECIDE ticket on =DESIGN.org= and
+every entry in its "Research directions" section from one position. Written
+against commit 3e2cf48 plus the working-tree =pngu.df=.
+
+This document makes choices. Where a choice contradicts a recommendation on
+the board, the contradiction is named and argued, not smoothed over.
+
+* The position in one page
+
+A dform program is a circuit, not a script. The circuit consumes streams of
+changes to input relations and produces a stream of changes to one output
+relation, =deformation/5=. Terraform-style =plan= is the case where the input
+stream has exactly one element (everything at once) and =apply= consumes the
+one output element. A controller is the case where the stream keeps going.
+There is one engine, one semantics, one set of tests, and the batch tool is
+the controller run for one tick.
+
+Six consequences follow and this document is about them.
+
+1. *Engine.* The evaluator is a DBSP circuit (Budiu, McSherry, Ryzhyk,
+   Tannen 2023; Feldera). Semi-naive evaluation, recursion, stratified
+   negation, and lattice aggregates are operators with known incremental
+   forms. The "semi-naive and indexing" ticket, the "incremental evaluation"
+   ticket, the "aggregates are not stratified" ticket, and the "fixpoint cap"
+   ticket are the same ticket and it is closed by the choice of engine.
+
+2. *Plan.* A plan is a Z-set. The desired relation minus the actual relation,
+   in Z-set arithmetic, is the deformation. Weight +1 is "must exist", -1 is
+   "must stop existing", a +1/-1 pair on one address is an update. The
+   controller emits the derivative of that Z-set over time; batch emits its
+   value at one instant. "Undeformed" is the zero Z-set.
+
+3. *Inputs.* Every relation that is not derived by a rule is fed by a source:
+   a file, =--set=, a git ref, a Kubernetes informer, a provider refresh, an
+   extern query, a random generator, another stack's outputs. Sources emit
+   Z-set deltas. An informer =MODIFIED= event is a -1 and a +1. Refresh is a
+   source, so drift is a delta like any other.
+
+4. *Externs are operators.* An extern with a binding pattern is a
+   demand-driven asynchronous operator: the circuit derives a demand
+   relation from the bound argument positions, the provider answers on a
+   later tick, and the answer is logged so replay and apply see exactly what
+   plan saw. The completion marker per demand key makes negation over
+   externs sound instead of a compile error.
+
+5. *Time.* Inputs are an append-only log with a per-stack logical clock,
+   which is DBSP's stream index. Rules are deductive by default and may be
+   inductive (=@next=) to carry state forward, as in Dedalus (Alvaro,
+   Marczak, Conway, Hellerstein, Maier, Sears 2011). "The stack at time t"
+   is the circuit run over the log prefix ending at t, externs replayed not
+   re-queried. Unknown values (ids known after apply) are labeled nulls that
+   resolve on a later tick; multi-phase apply is the outer clock advancing.
+
+6. *Solve.* Allocation and placement are not deduction. A =solve= block is a
+   stratum evaluated by clingo (Gebser, Kaminski, Kaufmann, Schaub) with
+   choice rules and optimization. Its outputs are pinned in the fact log and
+   fed back as soft constraints so a re-solve prefers the previous answer.
+   Explanations use assumption-based counterfactuals and unsat cores.
+
+What batch users pay: a log instead of a state file, a second engine (clingo)
+in the binary, a semantics with a clock in it, and a plan that may say "3
+deformations deferred until X is known" where Terraform would refuse to plan
+at all. The last section is honest about all of that.
+
+* Reading guide
+
+- Section 3: the semantic core. Z-sets, circuit construction, strata,
+  aggregates, externs, monotonicity types, time, controller loop, solve.
+- Section 4: each research direction, integrated or rejected.
+- Section 5: decision records for every DECIDE ticket.
+- Section 6: grammar and relation-kind syntax.
+- Section 7: =dform.df= rewritten, a chunk of =pngu.df=, and a Kubernetes
+  operator.
+- Section 8: engine architecture and how existing tickets map.
+- Section 9: what this direction does badly.
+
+* Semantic core
+
+** Values, tuples, Z-sets
+
+A relation instance is a Z-set: a finite function from tuples to integers
+(Green, Karvounarakis, Tannen 2007 with the semiring fixed to ℤ; DBSP §2). A
+set is a Z-set whose weights are all 1. Rules are evaluated over Z-sets and
+the result is made a set again with =distinct= wherever set semantics is
+observable (recursion, negation, aggregation, output).
+
+Weights are not decoration. Three places read them:
+
+| Weight in     | Meaning                                                    |
+|---------------+------------------------------------------------------------|
+| input delta   | +1 fact asserted, -1 fact retracted                        |
+| =deformation= | +1 must exist after apply, -1 must not exist after apply   |
+| derived, pre-distinct | number of distinct derivations; the =why= counter |
+
+Values are the current =Value= enum (=src/value.rs=) plus: =Null(label)= for
+labeled nulls (section 3.7), =inet= unified per L15, =secret= as a static
+label not a runtime variant (section 4.11), and typed enums. There is no
+=CloudRef= variant: a cloud attribute is a fact in the =world= relation, read
+with an ordinary join, or a labeled null when not yet known.
+
+** From program to circuit
+
+Lowering (=src/transform.rs=) stays a source-to-source pass producing the
+core: facts, rules with positive and negative literals, aggregate literals,
+extern literals, =@next= rules, and =solve= blocks. The change is what
+happens after lowering. Today (=src/engine.rs:52-120=) the core is run by a
+naive loop per stratum with mutation inside. In D the core is compiled to a
+circuit once, and the circuit is stepped.
+
+Circuit construction, in order:
+
+1. *Dependency graph.* Nodes are predicates. Edges from body literal to head,
+   labeled positive, negative, aggregate, extern, next, solve.
+2. *Stratification.* Condensation of the graph into SCCs. A negative,
+   aggregate, or solve edge inside an SCC is a compile error naming both
+   predicates and the rule lines (this is the fix for the "aggregates are not
+   stratified" ticket: aggregate edges are treated as negative edges in the
+   condensation, as =compute_strata= at =engine.rs:242-252= does not). A
+   =@next= edge inside an SCC is fine: it crosses the clock, not the
+   stratum (Dedalus's stratification through time).
+3. *Topological order of SCCs* = strata. Each SCC becomes one sub-circuit.
+4. *Per SCC:*
+   - non-recursive: a DAG of DBSP operators. Join for a shared variable,
+     filter for comparisons and builtin tests, map for term evaluation,
+     antijoin for =not=, aggregate for aggregate literals, =distinct= before
+     any consumer that observes set semantics.
+   - recursive: DBSP's nested circuit. The SCC's rules become a lifted query
+     =↑Q=, the input from lower strata enters via =δ0=, the fixpoint runs on
+     a nested clock with =z^{-1}= feedback and =distinct= on the recursive
+     relations, and =∫= sums the nested stream into the outer result. This is
+     semi-naive evaluation as an algebraic identity (DBSP Theorem 5.2 and
+     §6): the nested delta stream only carries new tuples each nested step.
+     There is no iteration cap; a nested clock stops when the delta is the
+     zero Z-set.
+5. *Incrementalize.* Apply the =D ∘ Q ∘ I= transformation (DBSP Theorem 3.3)
+   to the whole outer circuit. Linear operators (map, filter, project,
+   union, antijoin's subtraction) are their own incremental versions.
+   Bilinear operators (join) become =Δa ⋈ z^{-1}(I b) + I a ⋈ Δb=, which is
+   why the engine keeps integrated traces of join inputs. Non-linear
+   operators (=distinct=, aggregates) use DBSP's =H= construction: they
+   consult the integrated input and emit only the change in the output.
+6. *Attach sources and sinks.* Each input relation gets a source operator;
+   =deformation= and =deny= / =warn= get sinks; externs get demand/response
+   operator pairs (section 3.5); solve blocks get a solve operator (3.9).
+
+Cost of building all of this: the =dbsp= crate (Feldera's engine, MIT
+licensed, Rust) provides Z-sets, traces, join, antijoin, distinct, aggregate,
+nested circuits, and the incrementalization for free. The work is a
+Datalog-to-circuit compiler on top of it, which is the same size as the
+current evaluator but without the mutation. I estimate the compiler at
+2-3k lines, comparable to =engine.rs= plus =merge.rs= today.
+
+** Stratified negation in the circuit
+
+DBSP incrementalizes negation without trouble: Z-set subtraction is linear.
+What it does not do is give a meaning to negation inside a fixpoint, because
+the fixpoint construction requires the lifted query to be monotone on sets.
+Stratification is therefore still a compile-time obligation, but it is no
+longer an evaluation-order hack. Concretely:
+
+- =not p(X)= where =p= is in a lower stratum compiles to an antijoin of the
+  current partial binding against =distinct(p)=. Antijoin is
+  =a - (a ⋉ b)=, both parts linear or bilinear, incremental for free.
+- The "safe negation" rule (ground at evaluation time) is a compile-time
+  range-restriction check: every variable in a negated literal must be bound
+  by a positive literal to its left. Unbound variables under =not= are an
+  error, not a runtime skip as at =engine.rs= today.
+- A negated literal whose predicate is fed by an extern is legal only under
+  the completion rule of section 3.5.
+- A negated literal over a relation containing labeled nulls follows the
+  stuck rule of section 3.7.
+
+The board's example =has_env() :- input("env", _). env(staging) :- not
+has_env().= compiles to two strata and the second is an antijoin against a
+unit relation. When =--set env=prod= arrives as a +1 on =input("env", prod)=
+the circuit emits -1 =env(staging)= and +1 =env(prod)=, and everything
+downstream retracts and re-derives by delta. Nothing is recomputed from
+scratch; this is the whole point.
+
+** Lattice aggregates: attributes
+
+This is the attribute-assembly DECIDE (section 5.1) and the mechanism is a
+DBSP aggregate operator with a lattice join as the aggregation function.
+
+#+begin_src prolog
+% contributions, from resource blocks, += fields, and policy packs
+arg(Type, Name, Path, Value, Owner).
+% one derived value per (Type, Name, Path)
+attr(Type, Name, Path, Merged) :-
+  Merged = lattice_join(Path, Value) : { arg(Type, Name, Path, Value, _) }.
+#+end_src
+
+=lattice_join(Path, V)= is the aggregate. The join law per attribute path
+comes from the provider schema (=type_attr(T, Path, Ty, Merge)=) or a
+=merge_rule= annotation, defaulting to:
+
+| Type          | Join                                     | Top (conflict)                |
+|---------------+------------------------------------------+-------------------------------|
+| scalar        | equal values join to themselves          | two different values          |
+| =map(_)=      | key-wise join of the value lattice       | a key with conflicting values |
+| =set(_)=      | union                                    | never                         |
+| =list(_)= with =merge_key= | union keyed by the key, elementwise join | key with conflict |
+| =list(_)= without merge_key | equal lists join, else top     | two different lists           |
+| =ordered(_)=  | union then sort by the declared key      | duplicate key                 |
+
+The lattice top is a value =⊤(owners)= carrying the set of contributing
+owners. It is not an error at evaluation time; it derives a fact:
+
+#+begin_src prolog
+attr_conflict(Type, Name, Path, Owners) :- attr(Type, Name, Path, top(Owners)).
+deny("conflicting attribute contributions", {type: T, name: N, path: P, owners: O}) :-
+  attr_conflict(T, N, P, O).
+#+end_src
+
+A conflict is a policy violation with provenance built in, and nothing
+downstream of a =⊤= produces a deformation because =desired/3= (section 3.6)
+filters them out. Why this rather than a hard error: in controller mode an
+error must be a fact, because there is nobody at a terminal to see a panic.
+
+Incremental cost: a lattice join has no inverse, so on a delta to any
+=arg= tuple in a group, the operator re-joins that one group from its
+integrated input. Groups are the contributions to one attribute of one
+resource: tens of tuples. Fine.
+
+Stratification: =attr= gets an aggregate edge from =arg=, so every reader of
+=attr= is in a strictly higher stratum than every writer of =arg=. Taken
+literally that forbids the most common pattern in the repo: a rule that
+reads =attr(net.vpc, vpc, cidr, X)= to write =arg= for a subnet
+(=modules/network.df:14=). Both are the same predicate =arg=, and the SCC
+check is on predicates, so it is a cycle. This is the tension the board's
+option 3 glosses over, and it needs an explicit rule.
+
+Decision: =arg= and =attr= are partitioned by resource *type* at compile
+time. The dependency graph node is =(arg, Type)= when =Type= is a constant
+in the rule head, and the whole predicate when it is a variable. The
+=modules/network.df= pattern (subnet arg reads vpc attr) compiles because
+=(arg, net.subnet)= depends on =(attr, net.vpc)= which depends on =(arg,
+net.vpc)=: no cycle. The =policies/baseline.df= pattern =arg_add(Type, Name,
+"tags", ...) :- want(Type, Name)= writes =arg= with variable =Type=, which is
+the whole-predicate node, and creates a cycle with any rule reading =attr=
+of anything into =arg=. That cycle is a compile error with a good message:
+"policy baseline contributes to attributes of every type; rule at
+modules/network.df:14 reads attributes of net.vpc to build net.subnet; add
+=contributes tags to *= so the policy is evaluated on a later tick". The
+=contributes= grant (L4) then compiles the policy into its own stratum
+above all typed =attr= readers, at the price that a policy cannot read the
+attributes it contributes to. That is the right restriction: it is exactly
+Kubernetes' rule that a mutating webhook cannot depend on its own output.
+
+** Externs as demand-driven asynchronous operators
+
+Declaration, as on the board:
+
+#+begin_src prolog
+extern aws.vpc(+id: string, -cidr: inet, -tags: map(string)) from provider aws.
+extern aws.vpcs_by_tag(+key: string, +value: string, -id: string) from provider aws.
+extern aws.all_vpcs(-id: string) from provider aws.
+extern file.json(+path: string, -value: any) from provider file.
+#+end_src
+
+Compilation of a body literal =aws.vpc(Id, Cidr, Tags)= at position k in a
+rule body:
+
+1. Sideways information passing is left to right. Variables bound by
+   literals 1..k-1 are the available bindings. Every =+= argument must be
+   bound; otherwise compile error "aws.vpc requires id bound; move the
+   literal right or bind Id".
+2. The compiler emits a demand rule: =demand.aws.vpc(Id) :- <literals 1..k-1>=
+   (projected to the bound variables). This is the magic-sets
+   transformation (Bancilhon, Maier, Sagiv, Ullman 1986) restricted to
+   externs, where the demand relation is an ordinary derived relation in the
+   circuit and incremental like everything else. When a subnet is retracted,
+   its demand for the VPC lookup is retracted.
+3. Two input relations exist for each extern: =resp.aws.vpc(Id, Cidr, Tags)=
+   and =done.aws.vpc(Id)=. The provider runtime subscribes to the delta
+   stream of =demand.aws.vpc=, calls the provider's Query for +1 keys,
+   and feeds =resp= tuples then one =done= tuple per key at a later tick.
+   For -1 keys it retracts the =resp= and =done= tuples for that key (the
+   default; =cache = ttl(5m)= on the extern declaration keeps them).
+4. The literal itself compiles to a join with =resp.aws.vpc=.
+5. The demand relation gets a stratum: it is below the extern's consumers,
+   trivially. The response is an input relation and so is in stratum 0 in
+   the *space* dimension; what makes it later is *time*: it arrives on a
+   later outer tick. The dependency graph therefore has no cycle from
+   response back to demand; a program whose demand for =aws.vpc= depends
+   on =aws.vpc= results is a cycle through time and is allowed (it will
+   take several ticks), unless a stratum boundary is crossed by the loop,
+   in which case it is a compile error "extern in a recursive cycle" as the
+   board wants. I keep the board's rule for the negation-free case too,
+   because an unbounded chase across ticks against a cloud API is a bill,
+   not a feature: a demand chain through the same extern is an error.
+
+Negation over an extern, revisited. The board bans it. D allows it with a
+completion guard the compiler inserts:
+
+#+begin_src prolog
+% user writes
+orphan(Id) :- want_vpc_id(Id), not aws.vpc(Id, _, _).
+% compiler emits
+orphan(Id) :- want_vpc_id(Id), done.aws.vpc(Id), not resp.aws.vpc(Id, _, _).
+#+end_src
+
+The antijoin runs only once the provider has said "I have answered for
+this key". Before that the derivation is simply absent, and the plan says
+so (it is reported as pending, section 3.7). This is sound because the
+completion marker is monotone in the response for that key: a key is done
+only after all its rows have been delivered in the same tick, which the
+provider runtime guarantees by emitting =resp= and =done= for a key in one
+input batch.
+
+Sources are externs with no =+= arguments and no demand: =aws.all_vpcs=,
+the Kubernetes informer, the file watcher, refresh. They are declared with
+=source= (section 6) and the provider runtime feeds their delta stream
+directly.
+
+Quiescence. A tick is not "done" for planning purposes until every demand
+key with a +1 has its =done= tuple. The batch driver steps the circuit,
+collects new demand, waits, feeds responses, steps again, until no demand
+is outstanding. Each step's extern traffic is logged. In controller mode
+the driver does not wait: a partially answered tick simply produces a
+partial =deformation= delta, which is fine because the executor sees a
+stream anyway and the missing derivations arrive on the next tick.
+
+Cost: an async operator type on top of =dbsp= with an outstanding-demand
+table; the provider runtime is a task per provider with a request coalescer.
+The logging is the same fact log as everything else.
+
+** The plan as a Z-set
+
+Definitions, all as ordinary rules in the prelude:
+
+#+begin_src prolog
+% a resource the program asks for, with its fully assembled document
+desired(T, N, Doc) :-
+  want(T, N),
+  not attr_conflict(T, N, _, _),
+  Doc = assemble(T, N).                 % aggregate over attr(T, N, _, _)
+
+% a resource the provider reports, from refresh or informer
+% (source relation; provider-fed)
+source world(T, N, Doc) from provider refresh.
+
+% adoption: the world resource that intent claims
+claimed(T, N, WorldName) :- adopt(T, N, WorldName).
+
+% the deformation is a Z-set difference, restricted to addresses this stack owns
+deformation(T, N, Kind, Before, After) :- ...
+#+end_src
+
+The last rule is not Datalog; it is the one operator the engine provides
+natively, because its semantics is the Z-set arithmetic itself:
+
+  diff = desired - world   (as Z-sets over (T, N, Doc))
+
+For each address =(T, N)= the group in =diff= is one of:
+
+| group                       | Kind    |
+|-----------------------------+---------|
+| { (T,N,D): +1 }             | create  |
+| { (T,N,D): -1 }             | delete  |
+| { (T,N,D'): +1, (T,N,D): -1 } | update (provider Plan RPC decides replace) |
+| empty                       | none; the address is undeformed |
+
+Then =deformation= is the group-by of =diff= on the address, which is a
+lattice aggregate (the "plan action" lattice: none < create/delete < update
+< replace). Lifecycle facts are filters and policy over it:
+
+#+begin_src prolog
+deny("prevent_destroy", {type: T, name: N}) :-
+  deformation(T, N, delete, _, _), lifecycle(T, N, prevent_destroy).
+
+ignored(T, N, Path) :- ignore_changes(T, N, Path).
+% assemble/2 excludes ignored paths from both sides of the diff
+#+end_src
+
+Why this is the "deformation is literally the delta" claim made precisely:
+in batch mode the circuit is stepped once with all inputs, so the output
+delta of =deformation= at tick 0 equals its integrated value, which is the
+plan. In controller mode, the output delta at tick t is what changed in the
+plan at tick t. The executor consumes deltas: a +1 =deformation(T,N,create,
+_, D)= means start creating, a -1 on the same tuple means stop wanting to
+(the intent went away before we acted; the executor cancels or, if already
+done, the next tick's =world= delta will produce the delete).
+
+After apply, the executor's writes come back as =world= deltas from refresh
+(or synthesized from the Apply response to avoid a round trip). The circuit
+steps, =diff= for that address becomes empty, the =deformation= tuple gets
+a -1: the address is undeformed. "Stack is undeformed" is =I(deformation) = 0=.
+
+Adoption: =claimed/3= rewrites the address of a =world= tuple before the
+subtraction, so an adopted resource diffs against its world document. The
+plan action for the first tick is =adopt= (the lattice has it), which the
+executor turns into a state write only.
+
+Multiple derivations of the same =want= are a weight of 2 before =distinct=
+and are visible to =why=, not to the plan.
+
+** Unknown values as labeled nulls that resolve in time
+
+At tick 0 of a fresh stack, =ref(aws.vpc, main, id)= has no value. The board's
+DECIDE proposes making it opaque and banning it from bodies. D makes it a
+labeled null (Datalog±, Calì, Gottlob, Lukasiewicz; Vadalog; Nemo) with
+three rules.
+
+1. A null =ν(T, N, Attr)= is a value. Two nulls are equal iff their labels
+   are equal. A null is never equal to a non-null. Unification in rule
+   heads and in equality joins is therefore defined.
+2. A literal whose evaluation needs a null's *content* (comparison other
+   than equality, arithmetic, string builtins, aggregate key, negation over
+   a null-containing tuple) is *stuck*. A stuck literal derives nothing, and
+   the compiler emits a companion rule that derives =stuck(Pred, Args,
+   Null)= for the tuple that would have been derived had the null been
+   known (Nemo's approach to conditional derivations, simplified to a
+   boolean).
+3. When the executor creates the resource and the =world= source delivers
+   =world(T, N, Doc)= with =Doc.id=, the prelude rule
+   =resolve(ν(T, N, id), V) :- world(T, N, Doc), V = get(Doc, id)= fires. A
+   map operator early in the circuit substitutes resolved nulls in every
+   input tuple that carries one (a delta of -1 with the null and +1 with
+   the value). Everything downstream re-derives by delta.
+
+The plan output for a fresh stack reads:
+
+#+begin_example
+plan: 7 deformations (7 create), 3 deferred
+  + net.vpc network.main::vpc
+  + net.subnet network.main::private-us-test-1a
+  ...
+  deferred: 3 deformations depend on values known after apply
+    compute.vm bastion: private_ip needs attr(net.vpc, network.main::vpc, id)
+    (rule dform.df:81, stuck on comparison inet_host(VpcNet, 20))
+apply will continue until undeformed; use --max-ticks to bound it.
+#+end_example
+
+=dform apply= in batch mode is the controller loop run until
+=I(deformation) = 0= and =stuck= is empty, or =--max-ticks= is reached.
+Terraform users know this as the "run apply twice" workaround for
+=for_each= on computed values, except the tool does it and says why. The
+board's lesson entry "unknown values never a language concept" is
+honoured: they are a concept, with a name and a diagnostic.
+
+The reject-statically alternative stays available as a policy:
+
+#+begin_src prolog
+deny("stuck derivation in prod", {pred: P, on: Null}) :- env(prod), stuck(P, _, Null).
+#+end_src
+
+which turns the deferred plan into a hard failure for teams that want
+Terraform's discipline. The default is deferred, because a controller
+cannot refuse to run.
+
+** Monotonicity types
+
+Datafun (Arntzenius, Krishnaswami 2016) tracks whether a function is
+monotone in each argument and only permits fixpoints over monotone bodies.
+D uses the same idea as a static analysis over the circuit, with three
+outputs.
+
+*Modes on predicate arguments.* Each derived predicate =p= gets, for each
+input relation =i=, a mode from the lattice =const < mono < anti < arb=:
+
+- =mono=: only positive edges from =i= to =p=; adding to =i= can only add
+  to =p=.
+- =anti=: an odd number of negation or aggregate-comparison edges on every
+  path; adding to =i= can only remove from =p=.
+- =arb=: paths of both parities, or a lattice aggregate with a non-monotone
+  reader (=attr= readers that compare merged values), or a solve edge.
+
+Computed by a fixpoint over the dependency graph, which is a few lines.
+
+*Output 1: stratification is the type check.* The recursion construction
+requires =mono= on the recursive relations with respect to themselves. An
+SCC with an =anti= or =arb= self-mode is the "negation cycle" error. This
+is the same check as today but the error names the parity path.
+
+*Output 2: cost class per relation.* The incremental cost of an operator
+depends on its class: linear (map, filter, join on deltas), monotone
+non-linear (distinct, lattice join: per-group recompute), non-monotone
+(comparison over aggregates: group recompute plus downstream retraction
+cascades), discontinuous (solve: full re-solve of the block). =dform
+explain --cost= prints, for each output relation, the worst class on any
+path from a *watched* input. A controller author who wires an informer to a
+relation that reaches a solve block sees "discontinuous: every Pod event
+re-solves =placement=" and can add a projection to narrow the demand.
+
+*Output 3: what may be auto-applied.* The controller runtime's default
+policy is derived from modes: a =deformation= tuple whose kind is =create=
+and whose derivation is =mono= in all watched inputs is auto-applied;
+=delete= and =replace= require =auto_apply= to be granted by a fact. The
+rationale: a monotone path from an event to a create is exactly the case
+where a spurious or transient event cannot cause destruction. This is the
+CALM theorem (Hellerstein, Alvaro) applied as an authorization policy:
+coordination-free (monotone) effects are safe to take without a human, the
+rest need a gate.
+
+#+begin_src prolog
+auto_apply(T, N) :- deformation(T, N, delete, _, _), owner_kind(T, N, ephemeral).
+gated(T, N) :- deformation(T, N, K, _, _), K != create, not auto_apply(T, N).
+#+end_src
+
+Cost of the analysis: negligible. It runs at circuit construction and its
+result is a table.
+
+** Time, the fact log, and =@next=
+
+*The clock.* Each stack has one logical clock. A tick is one step of the
+outer DBSP circuit: a batch of input deltas in, a batch of output deltas
+out. Ticks are totally ordered per stack and each carries a wall-clock
+stamp for humans. There is no global clock across stacks; cross-stack
+inputs are sources (section 8.4).
+
+*The log.* Every input delta is appended before the circuit sees it:
+
+#+begin_example
+{t: 1412, wall: "2026-09-27T14:03:11Z", rel: "k8s.object", w: -1, tuple: [...], origin: "informer:apps/v1/Deployment"}
+{t: 1412, wall: ..., rel: "k8s.object", w: +1, tuple: [...], origin: "informer:apps/v1/Deployment"}
+{t: 1412, wall: ..., rel: "resp.aws.vpc", w: +1, tuple: ["vpc-0a1", "10.20.0.0/16", {...}], origin: "extern:aws"}
+{t: 1412, wall: ..., rel: "done.aws.vpc", w: +1, tuple: ["vpc-0a1"], origin: "extern:aws"}
+{t: 1412, wall: ..., rel: "program", w: +1, tuple: ["sha256:..."], origin: "cli"}
+#+end_example
+
+Input relations include the program itself (as a hash; a change in rules
+rebuilds the circuit and replays from the last checkpoint), stack inputs
+(=--set=), sources, extern responses, and pinned solve results. Derived
+relations are not logged; they are recomputed. Checkpoints of the
+integrated input relations plus the DBSP operator traces are written every
+N ticks so replay is bounded.
+
+Storage: one =redb= (or =sled=) file per stack under the backend, or the
+S3/GCS backend from the stacks ticket with segment files. Terraform's
+"state as truth" mistake is avoided structurally: the log holds what dform
+*observed and did*, never a copy of the world that pretends to be the
+world. The address-to-remote-id mapping is a source relation
+=identity(T, N, RemoteId)= written by the executor, and that is the whole
+of "state" in the Terraform sense.
+
+*"The stack at time t".* =dform plan --as-of t= (or a wall-clock stamp)
+replays the log prefix up to t through the circuit compiled from the
+program version logged at t. Externs are not re-queried: their responses
+are in the log. So the answer is "what dform saw and wanted at t", exact.
+It is not "what the cloud was at t": for that the refresh source at t is
+the only evidence and it is in the log too, so the answer is as good as the
+refresh interval. This is Datomic's =as-of= with the same caveat Datomic
+has about the outside world.
+
+=--as-of t --program HEAD= is the what-if: today's rules over the inputs of
+t. Scenarios (L12) are the other axis: today's inputs with a hypothetical
+delta, evaluated as one extra tick that is not committed to the log.
+
+*Dedalus rule kinds.* Three, as in Dedalus, with dform surface syntax:
+
+| Kind      | Syntax               | Meaning                                           |
+|-----------+----------------------+---------------------------------------------------|
+| deductive | =h :- b.=            | same tick                                         |
+| inductive | =h @next :- b.=      | derived at t, true as an input at t+1             |
+| async     | (externs only)       | derived at t, response at some t' > t             |
+
+=@next= is how state is carried forward. It is the only non-monotone thing
+that is allowed inside an SCC, because it goes through =z^{-1}= in the
+outer circuit, not through the nested fixpoint. Uses in the prelude:
+
+#+begin_src prolog
+% pinned solve results survive ticks
+pinned(Solve, Fact) @next :- solved(Solve, Fact).
+pinned(Solve, Fact) @next :- pinned(Solve, Fact), not unpinned(Solve, Fact).
+
+% the executor's view: what we are in the middle of doing
+in_flight(T, N) @next :- deformation(T, N, _, _, _), dispatched(T, N).
+in_flight(T, N) @next :- in_flight(T, N), not completed(T, N).
+#+end_src
+
+Users may write =@next= rules; the typical use is "remember that we
+observed X" in an operator (last transition time, observed generation).
+A =@next= rule's head predicate is a *state relation*: it is logged, because
+it is an input at the next tick.
+
+** Controller mode: batching and debounce
+
+A controller is the driver that decides where tick boundaries fall. That
+is all it is; the circuit does not know it is in a controller.
+
+#+begin_src prolog
+stack pngu.operator {
+  backend = k8s_configmap("pngu-system", "dform-log")
+  mode = controller {
+    debounce = 250ms,          % wait this long after the last input delta
+    max_latency = 5s,          % but never longer than this since the first
+    quiesce_externs = false,   % do not wait for all externs before emitting
+    apply = auto,              % or gate: hold deformations for approval
+    rate_limit = exponential(1s, 5m)   % per address, on executor failure
+  }
+}
+#+end_src
+
+Per tick:
+
+1. Collect input deltas from all sources until the debounce window closes
+   or =max_latency= elapses. Deltas for the same tuple within a window
+   cancel (a +1 then -1 of the same Pod is nothing, which is exactly the
+   informer-storm case that makes controller-runtime users write
+   predicate filters by hand).
+2. Append to the log. Step the circuit.
+3. Feed the =deformation= delta to the executor. The executor is
+   =controller-runtime='s workqueue shape: one work item per address, with
+   the address's current =deformation= group as the item's payload, deduped
+   so a hundred deltas for one address are one reconcile.
+4. The executor's completions (success: synthesized =world= delta plus
+   =identity= delta; failure: =apply_failed(T, N, Err)= source delta with
+   backoff) are inputs to a later tick.
+5. Policy is the gate: a =deny= tuple whose scope includes an address holds
+   that address's deformation (=held(T, N)= is a prelude rule). In =apply =
+   gate= mode everything is held until =approved(T, N, TickRange)= arrives
+   from the CLI or a PR bot as an input delta.
+
+Admission mode is the degenerate controller: the input is one hypothetical
+delta (the object being admitted), the tick is not committed to the log,
+and the output is the =deny= relation. Gatekeeper's =constraint templates=
+are policy packs. The cost is that admission latency is one circuit step,
+which is milliseconds for a stack of thousands of tuples since only the
+delta is processed.
+
+Batch mode is =mode = batch=: one tick with all sources read once, externs
+quiesced, the =deformation= integrated value printed, and =apply= running
+ticks until undeformed. =dform plan= writes the tick's input delta and
+extern responses as the plan file; =dform apply plan.df= replays that delta
+rather than reading sources again, which is the "apply consumes the plan"
+crash-safety requirement.
+
+** The solve stratum
+
+*Boundary.* A =solve= block names a set of predicates it defines
+(heads of choice rules and of normal rules inside the block). Every other
+predicate mentioned in the block is an input to the solve. The block is a
+node in the dependency graph with a solve edge from each input and to each
+output. A solve edge is treated like an aggregate edge for stratification:
+no recursion through a block, and readers of its outputs are strictly above.
+Two solve blocks may depend on each other only acyclically.
+
+*Surface syntax.* Clingo's, minus the =#=, restricted to the fragment that
+grounds finitely given finite inputs:
+
+#+begin_src prolog
+solve placement {
+  % exactly one zone per VM
+  { place(Vm, Z) : zone(Z) } = 1 :- vm(Vm).
+
+  % hard constraints
+  :- place(A, Z), place(B, Z), anti_affine(A, B).
+  :- zone(Z), Cap = zone_capacity(Z), N = count : { place(_, Z) }, N > Cap.
+
+  % objective, higher priority number wins first
+  minimize { Cost @ 2, Vm, Z : place(Vm, Z), zone_cost(Z, Cost) }.
+  minimize { 1 @ 1, Vm, Z : place(Vm, Z), not pinned(placement, place(Vm, Z)) }.
+
+  stability = prefer.  % none | prefer | strong
+}
+#+end_src
+
+The =stability= line is sugar: =prefer= appends the priority-1 minimize
+over deviations from =pinned= shown above; =strong= makes deviation a hard
+constraint unless the pinned atom is no longer choosable (its =zone(Z)=
+disappeared) or contradicts a hard constraint; =none= drops it. Users can
+write the objective by hand instead.
+
+*Evaluation.* The solve operator is a DBSP operator with a non-incremental
+core:
+
+1. Input: the integrated Z-sets of all input predicates (as sets), plus
+   =pinned(placement, _)=.
+2. The block is grounded by clingo with inputs declared =#external=, so the
+   grounding is done once per circuit build and re-solves only reassign
+   externals (clingo multi-shot solving, Gebser et al. 2019). New input
+   constants that were not in the grounding (a new VM name) trigger a
+   re-ground of the affected rules; clingo handles this with incremental
+   grounding of a new program part.
+3. Solve for one optimal model. Clingo's search is deterministic for a
+   fixed version, configuration, and seed; all three go in =dform.lock=.
+   Among optimal models, without pins the first found is taken; with pins,
+   the stability objective breaks ties toward the previous answer.
+4. Output delta: the model's output atoms minus the previous output, as a
+   Z-set delta. =solved(placement, place(vm1, z2))= tuples are also emitted
+   and the prelude's =@next= rule pins them.
+5. Unsatisfiable: the operator emits =unsat(placement, Core)= where =Core=
+   is clingo's minimal unsat core over the input assumptions, and all
+   outputs are retracted. =deny("placement unsatisfiable", ...)= is a
+   prelude rule. The stack keeps running; the deformations that depended
+   on the solve are retracted and appear in the plan as "blocked by unsat
+   placement".
+
+*When it re-solves.* Only when the input delta to the block is non-zero.
+The mode analysis marks everything downstream as discontinuous with
+respect to those inputs; the cost report shows it. A change in the
+program's solve block re-grounds. A change in pinned facts (a user
+=unpin=) re-solves.
+
+*How a plan explains a placement.* =dform why 'place(vm1, z2)'= prints:
+
+#+begin_example
+place(vm1, z2)  chosen by solve placement (dform.df:140)
+  choice rule: { place(Vm, Z) : zone(Z) } = 1 :- vm(Vm).   with Vm = vm1
+  candidates: z1, z2, z3
+  z1: violates ':- place(A,Z), place(B,Z), anti_affine(A,B)' with A=vm0 B=vm1
+      (unsat core under assumption place(vm1, z1))
+  z3: feasible, objective 14 vs 12 (zone_cost(z3, 7) vs zone_cost(z2, 5))
+  pinned since tick 1388 (2026-09-21); stability = prefer
+#+end_example
+
+Each candidate line is a counterfactual solve under the assumption that the
+alternative is chosen (clingo assumptions), reporting either the unsat core
+or the objective. This is bounded by the number of candidates for one
+choice atom, which is small, and it is done on demand, not at plan time.
+Plan output shows the aggregate: "solved placement: 12 placements (11
+pinned, 1 new)".
+
+*What the solve stratum is not for.* Anything a rule can derive. The
+compiler warns on a choice rule whose cardinality bound makes it
+deterministic (={p(X)} = 1 :- q(X)= with one candidate). Encoding a
+closure in clingo is possible and slower than the circuit; the docs say
+so.
+
+*Cost.* The =clingo= crate (C++ behind =clingo-sys=) adds a C++ toolchain
+to the build and about 10 MB to the binary. Grounding blowup on careless
+=:= conditions is the classic ASP failure and dform inherits it; the
+compiler enforces that every variable in a choice or constraint is bound by
+an input predicate (range restriction), which bounds grounding by the
+product of the input sizes and is the same safety rule Datalog has.
+Multi-shot solving keeps re-solve latency in the milliseconds for
+hundred-atom problems, which is the CIDR and zone scale. Cost-minimization
+over thousands of instances and SKUs is minutes and should be its own
+stack with a slow tick.
+
+* Research directions, each integrated or rejected
+
+The board lists twelve. Each gets a verdict, then the semantics, the surface
+syntax if any, an example, and the engine cost. "Rejected" means rejected
+for this direction, with the technical reason; several are rejected as
+engine features and kept as providers.
+
+** Provenance semirings: integrated as theory, not as runtime weight
+
+*Verdict.* The engine is already a semiring engine (ℤ). Generalizing the
+weight type at runtime is rejected; provenance queries are answered by a
+backward walk over the circuit's retained traces; ownership of attribute
+contributions is an ordinary column.
+
+*Why not generalize the weight.* Green et al.'s framework says: evaluate
+the same program over ℕ[X] (provenance polynomials) and you get why-
+provenance; over the tropical semiring you get cost; over a label lattice
+you get security. DBSP's Z-set results hold for any commutative ring, so
+the machinery would accept it. But:
+
+- ℕ[X] weights grow with the number of derivations and are not a ring
+  (no negation), so retraction (a -1 input) has no meaning. DBSP needs the
+  ring. The lineage semiring (sets of rule ids) is idempotent, so a
+  retraction cannot subtract from a union: after retracting one of two
+  derivations, the lineage still names both. The Z-set engine and the
+  provenance engine want different algebra on the same tuples.
+- The retained traces already are the provenance. DBSP keeps the integrated
+  input of every join and every distinct (it must, to incrementalize). A
+  derived tuple's supporting tuples are found by walking each operator
+  backward: for a join, split the tuple on the join key and look up both
+  sides in their traces; for a distinct, any input tuple equal to the
+  output; for a lattice aggregate, the group; for an antijoin, the positive
+  side plus "and no tuple in trace of p with key k". This is Soufflé's
+  provenance mode (Zhao, Subotić, Scholz 2020) done on the incremental
+  engine's own indexes, with no extra storage.
+
+*Surface.*
+
+#+begin_example
+$ dform why 'attr(net.vpc, "network.main::vpc", "tags.team", "platform")'
+attr(net.vpc, network.main::vpc, tags.team, platform)
+  lattice_join over 2 contributions (map_merge, no conflict)
+  ├ arg(net.vpc, network.main::vpc, tags, {env: staging, component: network}, network.df:2)
+  │   rule modules/network.df:2  resource net.vpc vpc { tags = {...} } :- env(Env), param(vpc_net, _)
+  │   ├ env(staging)          rule dform.df:10   env(staging) :- not has_env().
+  │   │   └ not has_env()     no input("env", _) as of tick 3
+  │   └ param(network.main, vpc_net, 10.50.0.0/16)   use network main ... dform.df:44
+  └ arg(net.vpc, network.main::vpc, tags, {team: platform}, baseline:8)
+      rule policies/baseline.df:8  arg_add(Type, Name, "tags", {team: platform}) :- want(Type, Name).
+      └ want(net.vpc, network.main::vpc)  ...
+$ dform why --count 'reachable(core_a, core_c)'
+reachable(core_a, core_c): weight 2 before distinct (two derivations)
+#+end_example
+
+*Where semirings do appear.* The three lattices the engine does use are
+each an instance and are named as such in =docs/semantics.md=: attribute
+merge (section 3.4), the plan-action lattice (3.6), and the security label
+lattice (4.11). Cost as facts (the tropical semiring in Green's framing)
+is a rule over =deformation= and a price fact provider, not a weight.
+
+*Cost.* The backward walk is a debugging tool over existing indexes; a few
+hundred lines. Ownership is a fifth column on =arg= that the resource sugar
+fills with =file:line= or the policy pack name.
+
+** Existential rules and labeled nulls: integrated, narrowly
+
+*Verdict.* Integrated as the representation of unknown values (section
+3.7). The chase is rejected.
+
+*What is taken.* Labeled nulls as values with equality-by-label; stuck
+derivations as the analogue of conditional facts; resolution as null
+substitution. This is the smallest piece of Datalog± that has a use here.
+
+*What is rejected and why.* The chase invents a fresh null whenever an
+existential head fires and reasons about the null's *properties* through
+further rules. In dform every null has a known origin (a computed attribute
+of a resource this stack will create), a known resolution event (the
+provider's Apply response), and no property the program can legitimately
+reason about before then. Allowing rules to *conclude* things about an
+unknown id (say, that it does not overlap another) is exactly what produces
+plans that apply does not honour. And the chase's termination conditions
+(weak acyclicity, guardedness) are a burden on users for no gain. Time
+solves the problem the chase was solving: wait a tick.
+
+*Surface.* None beyond =ref(T, N, Attr)= in attribute values, which now
+means "the null ν(T, N, Attr)", and the =stuck/3= relation plus the plan's
+"deferred" section.
+
+*Cost.* A =Null= variant on =Value=, a three-valued result on the builtin
+evaluator, the substitution operator, and the companion =stuck= rule per
+rule that contains a null-sensitive literal. Modest, and the substitution
+operator is one map early in the circuit.
+
+** DBSP: the core
+
+Covered in section 3. Named precedents for each piece:
+
+- Z-sets, incrementalization =D ∘ Q ∘ I=, nested circuits for recursion:
+  DBSP (Budiu et al., VLDB 2023) and the Feldera implementation.
+- Semi-naive as an identity rather than an algorithm: DBSP §6, and the
+  observation in Differential Dataflow (McSherry, Murray, Isaacs, Isard
+  2013) that iterative computation over partially ordered times gives
+  incremental recursion.
+- Antijoin and distinct incremental forms: DBSP §4.
+- Aggregates without inverses: Feldera's =aggregate= with per-group
+  recompute; DDlog (Ryzhyk, Budiu 2019) did the same over Differential
+  Dataflow.
+- Datalog-to-circuit compilation: DDlog is the closest existing compiler
+  (Datalog with stratified negation and aggregates over DD). Its two
+  weaknesses, compile-to-Rust build times and no dynamic program loading,
+  are why D compiles to a runtime circuit graph in the =dbsp= crate
+  instead of generating code.
+
+*The list of operators the compiler emits*, so the engine's surface is
+known: =source=, =map=, =filter=, =flat_map= (for =member/2=), =join=,
+=antijoin=, =distinct=, =aggregate(lattice_join)=, =aggregate(count|sum|
+min|max|collect_set|collect_ordered)=, =delay= (=@next=), =nested= (SCC
+fixpoint), =extern= (demand/response pair), =solve=, =diff= (the Z-set
+subtraction for =deformation=), =sink=.
+
+*Extern operators and demand*, restated as an operator: =extern= is a
+source whose emitted delta is a function of the integrated demand relation
+and the outside world. It is treated as a source for incrementalization
+purposes (nothing upstream of it in the circuit) with the demand relation
+as a separate sink the provider runtime reads. The connection between the
+two is outside the circuit's algebra, which is why the completion marker
+exists: it re-enters the algebra as data.
+
+*Monotonicity types and what may be incrementalized.* Everything in the
+list above has an incremental form, so the honest answer is "all of it".
+What the mode analysis decides is *at what cost* (section 3.8) and *what is
+safe to auto-apply*. It also decides one true incrementalizability
+question: whether a =solve= block may be treated as incremental via
+multi-shot solving (its inputs change only by adding and retracting atoms
+of already-grounded predicates: =mono= or =anti= in each input with no new
+constants) or must re-ground (a new constant appeared).
+
+** Monotonicity types (Datafun): integrated
+
+Section 3.8 is the design. Summary of what Datafun contributes beyond
+"stratify": the *mode lattice* as a first-class analysis result that is
+printed, used for authorization (CALM as policy), and used for the cost
+report. Datafun's type-level distinction between discrete and monotone
+variables maps onto dform's variables in a simpler way: a variable bound
+under =not= or compared with =<= is used discretely; everything else is
+monotone. The compiler does not expose the types in syntax; there is no
+=mono= keyword to write. Users see modes in =dform explain --cost= and in
+error messages.
+
+Rejected part: Datafun's higher-order functions and the requirement that
+users annotate monotonicity. dform has no lambdas and the analysis is
+inferred.
+
+** Answer set programming and choice: integrated as the solve stratum
+
+Section 3.10 is the design. Two more things.
+
+*Worked example: CIDR allocation.* The problem the board names first. Given
+a pool and a set of subnets that need a block, assign non-overlapping
+blocks, prefer low blocks, and keep existing assignments when subnets are
+added or removed.
+
+#+begin_src prolog
+pool(10.20.0.0/16).
+block(I) :- range(0, 255, I).                  % /24 blocks in a /16
+
+subnet_need(Name) :- want(net.subnet, Name).
+
+solve cidr_alloc {
+  { subnet_block(S, I) : block(I) } = 1 :- subnet_need(S).
+  :- subnet_block(S1, I), subnet_block(S2, I), S1 != S2.
+  :- subnet_block(S, I), reserved_block(I).
+  minimize { I @ 1, S : subnet_block(S, I) }.
+  stability = strong.
+}
+
+resource net.subnet Name {
+  cidr = inet_subnet(Pool, 8, I)
+} :- subnet_need(Name), subnet_block(Name, I), pool(Pool).
+#+end_src
+
+First tick: three subnets get blocks 0, 1, 2. Add a fourth: =strong=
+stability keeps 0, 1, 2 pinned as hard constraints; the fourth gets 3.
+Remove the second: its pin is dropped (its =subnet_need= is gone, the
+choice atom is no longer choosable) and nobody moves. Add a
+=reserved_block(1)= later: the pin for block 1 contradicts a hard
+constraint, =strong= yields for that atom only, the subnet moves to 4, and
+the plan shows a replace with the =why= output naming =reserved_block(1)=.
+
+The deterministic alternative (=inet_subnet(Pool, 8, I)= with =I= from a
+list index, as =dform-advanced.df= does today) breaks on removal: every
+subsequent subnet shifts. That is Terraform's =count= problem in Datalog
+clothing, and the solve stratum with pins is the fix.
+
+*Rejected part.* Disjunctive heads, aggregates in choice conditions with
+unbounded ranges, and =#show= / =#project= directives. The fragment is
+normal rules, choice rules with cardinality bounds, integrity constraints,
+and weighted minimize/maximize with priorities. Anything else is a compile
+error with a pointer to the docs; it is not a research project to add
+later.
+
+** NetKAT and BDD reachability: rejected as a language feature, integrated as a provider
+
+*Verdict.* A symbolic network verifier is a fact provider with a demand-
+driven extern, backed by BDDs over the assembled security-group and route
+attributes. The NetKAT algebra is not added to the language.
+
+*Why not in the language.* NetKAT's terms (packet predicates, modification,
+Kleene star over topology) are a different algebra with a different
+decision procedure (bisimulation over automata). dform rules over
+=reachable/2= as in =dform-advanced.df= are closure over an *abstract*
+graph; NetKAT answers over *concrete packets*. Embedding the second into
+the first would put BDD-valued terms in tuples and make joins over them
+undefined. The board's L15 ticket wants the unified =inet= type; that plus
+a provider gives the verifier without a semantic import.
+
+*Surface.*
+
+#+begin_src prolog
+extern net.symbolic.reaches(+from: inet, +to: inet, +proto: protocol, +port: port, -verdict: bool, -path: list(any))
+  from provider net_symbolic.
+
+% the provider reads the assembled attributes of security groups and routes
+% through its own source subscription on attr/4 (it is a resource-aware fact provider)
+
+deny("database reachable from the internet", {db: Db, path: Path}) :-
+  want(db.postgres, Db),
+  attr(db.postgres, Db, private_ip, Ip),
+  net.symbolic.reaches(0.0.0.0/0, Ip, tcp, 5432, true, Path).
+#+end_src
+
+The provider's demand is =(from, to, proto, port)= tuples; it rebuilds its
+BDDs when its subscription to =attr= for security-group and route types
+delivers a delta, then re-answers outstanding demand. Batfish (Fogel et
+al. 2015) is Datalog plus BDDs in exactly this shape.
+
+*Cost.* Nothing in the engine. A provider that subscribes to derived
+relations needs the provider protocol to allow a provider to be a *sink*
+for a relation as well as a source; that is one method (=Subscribe=) on the
+protocol ticket.
+
+** Automated reasoning at AWS (Zelkova, Tiros): rejected as engine, integrated as providers
+
+Same shape as the previous entry. =iam.symbolic.grants(+policy: any,
++principal: string, +action: string, +resource: string, -verdict: bool)=
+backed by an SMT solver (z3) on the provider side. The engine sees an
+extern. The provider is closed at AWS; an open one over the IAM policy
+grammar is a separate project. What D adds: because the provider reads
+=attr= of IAM policies through a subscription and answers demand
+incrementally, a policy pack can write =deny("policy grants s3:* to
+non-admins")= and have it hold continuously in controller mode, which is
+the Zelkova use case (continuous checking) without the batch limitation.
+
+** View update and lenses: integrated for addresses, rejected for rules
+
+*Verdict.* The lens =get= is the circuit (intent to plan). A =put= from
+world to intent is implemented only at the granularity of addresses and
+lifecycle facts: the engine proposes =adopt/3= and =moved/3= facts, and
+the user commits them to source. General view update through rules is
+rejected.
+
+*Why the general case is rejected.* Bancilhon and Spyratos (1981) give the
+complement condition; with negation and aggregates the update translation
+is not unique and often not computable. Foster and Pierce lenses require
+the =get= to be written in a lens combinator language, not in Datalog. A
+"drift back into source" feature that edits rule bodies would be
+unpredictable, and unpredictable edits to infrastructure source are worse
+than none.
+
+*What is built.* Two prelude relations, derived from =world= and =desired=:
+
+#+begin_src prolog
+% world has it, intent does not, and no address claims it
+unclaimed(T, WorldName, Doc) :-
+  world(T, WorldName, Doc), not identity(T, _, WorldName), not claimed(T, _, WorldName).
+
+% intent has it, world does not, and an unclaimed world resource has the same
+% document modulo computed attributes: probably a rename
+moved_candidate(T, OldName, NewName, Score) :-
+  deformation(T, NewName, create, _, DocNew),
+  unclaimed(T, OldName, DocOld),
+  Score = doc_similarity(T, DocOld, DocNew), Score > 0.9.
+#+end_src
+
+=dform plan= prints candidates; =dform plan --suggest= writes a
+=proposals.df= with =moved(T, "old", "new").= and =adopt(...)= lines the
+user can import. Applying a =moved= fact rewrites the address in
+=identity= (a state relation delta) and the =create= plus =delete= pair
+becomes an update or nothing. This is the whole of "lenses" that is
+buildable and safe, and it is also the answer to the board's "rename is
+destroy and create" ticket.
+
+*Cost.* Two rules and a similarity builtin in the prelude; a CLI flag.
+
+** Egglog: rejected
+
+*Verdict.* Rejected for the engine and for rename detection.
+
+*Reasons.*
+1. Egglog's semantics is monotone growth of an e-graph with union-find
+   merging of equivalence classes. Merging is not retractable: once two
+   classes are joined there is no delta that un-joins them. Z-sets require
+   every operator to accept -1. An e-graph is a non-retractable aggregate
+   over the whole database; putting one inside the circuit would make every
+   downstream relation discontinuous in every input.
+2. The proposed use, "two intents are equal if the e-graph says so", is
+   canonicalization of *terms*. dform terms are already canonical: values
+   are normalized on construction (sorted maps, unified inet) and the only
+   non-syntactic equality of interest is document similarity for =moved=
+   detection, which section 4.8 does with a similarity score, not an
+   equality saturation.
+3. If a future need for equational rewriting appears (normalizing IAM
+   policy documents, say), it belongs in a provider: =iam.canonical(+doc,
+   -canon)=, where the provider may use egglog freely.
+
+** Mangle and Rel: studied, three things taken, one rejected
+
+*From Mangle (Google).*
+1. Predicates are namespaced with dots and the namespace is part of the
+   name, so dots cannot appear inside symbols. This settles the symbol
+   syntax ticket (section 6.1); Mangle got there before dform and the
+   choice was forced there too.
+2. Typed declarations with a small nominal type language on arguments;
+   dform's =relation p(a: T, ...)= is Mangle's =Decl= with dform types.
+3. Mangle's "transforms" (=|> do fn:group_by=) are how aggregation is
+   written there. Rejected: dform keeps aggregates as body literals
+   (Soufflé style, =N = count : { ... }=) because a pipe transform reads
+   as an imperative step, and because a body literal is what the
+   stratifier and the mode analysis see directly.
+
+*From Rel (RelationalAI).* Rel is relation-first with lattice-valued
+relations and demand-driven evaluation. Its confirmation that a lattice
+aggregate can be the *only* functional-dependency mechanism in a
+production relational language is the evidence for the attribute-assembly
+decision. Rel's syntax (=def p[x] = ...=) is not taken; dform stays
+Prolog-shaped.
+
+*Rejected from both.* Higher-order relations and relation-valued
+variables. They would break the static circuit construction.
+
+** Information-flow types (Jif, DLM): integrated statically
+
+*Verdict.* Secrets are a static label on predicate arguments, inferred
+by the compiler, checked at circuit construction, and enforced at sinks.
+No runtime taint bit on values.
+
+*Semantics.* The label lattice is ={public < secret}= to start (DLM's
+owner-reader policies are a later refinement if provider schemas ever need
+"secret to team X"). Each argument position of each predicate gets a
+label. Sources: =secret= on a schema attribute
+(=type_attr(T, Path, string, sensitive)=), on an =input= declaration
+(=input db_password: secret(string).=), or on an extern's =-= argument.
+Propagation is inference over the dependency graph: an argument position
+is =secret= if any rule binds it from a =secret= position, from a builtin
+applied to a =secret= argument, or from an aggregate over a =secret=
+position. Negation and comparison over a secret position label the
+*derived tuple's existence* as secret (implicit flow): the whole predicate
+becomes secret. This is the standard IFC rule and it is why =env(prod) :-
+secret_flag(X), X = 1= would make =env= secret, which the compiler
+reports.
+
+*Enforcement.* Sinks: plan output redacts secret positions; the fact log
+stores a reference (a hash and a secret-store handle) at secret positions,
+never bytes, so replay of a secret input reads through the store; the
+provider protocol carries secret positions in a separate field the
+provider must =zeroize=. =declassify(V, Reason)= is a builtin that lowers
+the label and derives =declassified(Pred, Pos, Reason, file:line)= so
+policy can forbid it.
+
+*Why static.* The board's design note says the engine clones values into
+every derived fact, so a runtime taint must travel everywhere. A static
+label per argument position costs nothing at runtime and catches implicit
+flows a runtime bit cannot (a runtime bit does not see that a =not= over a
+secret leaks a bit).
+
+*Cost.* One inference pass, one column-mask per sink, a secret-store
+handle type. The semiring connection the board notes (labels as a lattice)
+is real but the labels never sit on tuples, so there is no runtime
+algebra.
+
+** Salsa: rejected for the engine, adopted for the frontend
+
+DBSP covers everything Salsa would do for the engine, and covers it for
+the data, which Salsa cannot (Salsa memoizes function calls on a
+demand-driven query graph; it does not know what a join is). For the
+compiler front end, the language server, and =dform fmt=: parse and lower
+per file, memoized on file contents, Salsa-style, as rust-analyzer does.
+The one interesting interaction: the *program* is an input relation to the
+circuit (a hash), and a change to it rebuilds the circuit. The rebuild is
+where Salsa helps: only the changed file's lowering is redone, and the
+circuit compiler diff-checks the lowered core against the previous one so
+that an unchanged SCC keeps its operator traces across a rebuild. That
+last part is the "hot reload keeps state" property a controller needs when
+its rules change without restarting.
+
+* Decision records for the DECIDE tickets
+
+Seven DECIDE tickets are on the board. Each gets context, decision,
+consequences. The symbol-syntax ticket is a TODO but the case-based
+variable ticket says "decide with the symbol ticket", so both are decided
+in section 6 and referenced from DR-4.
+
+** DR-1: Attribute assembly is a lattice aggregate in the circuit
+
+*Context.* Four ad hoc mechanisms (=apply_functional_pred=,
+=enforce_uniques=, =merge_rule= post-pass, =apply_setting_add= inside the
+loop) each with its own conflict semantics and timing. Option 3 on the
+board proposes one derived =attr/4= via a lattice aggregate. D has an
+engine in which an aggregate operator with a lattice join is a native,
+incremental operator.
+
+*Decision.* Option 3, with three refinements the board did not make:
+1. =arg/5= carries an owner column (file:line or pack name) filled by the
+   sugar; =attr/4= is the lattice join over the group; conflict is the
+   lattice top =⊤(Owners)= and derives =attr_conflict/4= and a prelude
+   =deny=, never an evaluation error.
+2. The dependency graph is partitioned by resource type for =arg= and
+   =attr= so that "subnet reads vpc attr" is not a cycle. A writer with a
+   variable type (policy packs) must declare =contributes= and lands in a
+   stratum above all typed readers; it may not read =attr= of the paths
+   it contributes to.
+3. =unique p(k)= becomes the general form: any relation may declare a
+   key, and a key declaration lowers to the same lattice aggregate with a
+   scalar join on the value columns. =setting/3= is =relation
+   setting(env, key, value) key (env, key)=; =setting_add= is a =+== on a
+   setting whose schema says =set= or =map=; there is no second mechanism.
+
+*Consequences.*
+- =apply_functional_pred=, =enforce_uniques=, =apply_setting_add=, and the
+  =merge.rs= post-pass are deleted. =merge_rule= survives as an annotation
+  read by the lattice join table.
+- Shuffling statement order yields identical =attr/4= (the join is
+  commutative, associative, idempotent). This is testable and is a test.
+- A conflict is visible in =dform plan= as a deny with both owners and
+  both file:line, and in controller mode it holds the address instead of
+  crashing the loop.
+- Policy packs lose the ability to read the attribute they write. The
+  =policies/baseline.df= tag rule is unaffected (it reads =want=); a pack
+  that wanted "add tag X unless tag Y is already set" must read =arg=
+  contributions of others (a lower stratum) rather than =attr=. Documented
+  as the mutating-webhook rule.
+- Incremental cost per contribution change is one group re-join.
+
+** DR-2: Unknown values are labeled nulls that resolve on a later tick
+
+*Context.* The board proposes an opaque =ref= token banned from rule
+bodies, comparisons, negation, with multi-phase apply handled by provider
+ordering only. D has a clock.
+
+*Decision.* =ref(T, N, Attr)= denotes the labeled null =ν(T, N, Attr)=.
+Nulls are values: legal everywhere, equal only to themselves. A literal
+that needs a null's content is stuck; stuck derivations are reported as
+deferred deformations; resolution happens when the =world= source delivers
+the computed attribute and the null is substituted. =dform apply= runs
+ticks until undeformed or =--max-ticks=. Teams that want the Terraform
+discipline add =deny("stuck", ...) :- stuck(_, _, _).= to a policy pack;
+the =strict_unknowns= prelude pack does exactly that and =dform init=
+offers it.
+
+*Consequences.*
+- A plan can be a lower bound. Output says so with the count and the
+  reason per deferred item.
+- Negation over a tuple containing a null is stuck, not false. This is
+  the conservative choice and is what makes the deferred plan safe: no
+  derivation ever depends on a null being *absent*.
+- The =fakecloud= =computed_ref= synthesis (=fakecloud.rs:498=) is
+  deleted; the fake provider returns ids on Apply like a real one, and the
+  demos exercise the deferral path, which is a feature: every example
+  shows the two-tick shape.
+- Provider ordering still exists (the executor walks the DAG) but the
+  language no longer promises single-phase apply. The board's lesson
+  "unknown values never a language concept" is answered by making them
+  one.
+- Cost: =Value::Null=, three-valued builtin evaluation, a companion
+  =stuck= rule per null-sensitive literal, the substitution map. The
+  companion rules roughly double the rule count for rules with
+  comparisons over attributes; they are cheap because they share the join
+  prefix.
+
+** DR-3: Closed world for definitions, open world for contributions
+
+*Context.* Every predicate is global; misspellings are empty relations;
+two modules defining =zone_index/2= silently union; policy packs write
+anywhere and that is the feature.
+
+*Decision.*
+1. A body predicate with no definition (fact, rule, =relation=, =extern=,
+   =source=, =input=, prelude, or provider schema) is a compile error.
+   Circuit construction needs the definition anyway.
+2. Modules (L4 syntax, section 6.5) have private predicates by default;
+   =export= makes one visible; instantiation with =use= gives each
+   instance its own copy of private predicates (Soufflé =.comp= / =.init=).
+   Two modules defining the same exported name is an error at the importer.
+3. Attribute contribution stays open: any module or pack may write =arg=
+   for any address it can name, subject to =contributes= grants
+   (DR-1) and ownership recorded in the owner column. Unions of *other*
+   predicates across modules are closed: a rule for predicate =p= may only
+   be written in the module that declares =p= or by a module that imports
+   it with =extend p/N=. This is the "field manager" model from Kubernetes
+   server-side apply applied to relations, and it is the only form of
+   aspect-oriented configuration that survives provenance tooling.
+4. Provenance (=dform why=) and the owner column are how the open half
+   stays debuggable; they ship in the same release as the module system.
+
+*Consequences.*
+- =modules/network.df= today defines =zone_index/2= inside the component;
+  it becomes private to each instance, which is what the author meant.
+- =iam_need/3= is contributed to from =database.df=, =kubernetes.df=, and
+  =dform.df=: it must be declared once (=relation iam_need(app, action,
+  resource).= in the iam module) and extended by the others with =extend
+  iam.iam_need/3=. Three lines of ceremony; the error for forgetting one
+  names the file.
+- Typos are compile errors with a "did you mean" over the declared
+  predicate set.
+
+** DR-4: Variables are capitalized; symbols and paths are lowercase-initial
+
+*Context.* Prolog convention blocks resource types or keys with a leading
+capital (Kubernetes kinds). Alternatives: =$X= sigils, declared variables.
+
+*Decision.* Keep the Prolog convention for bare tokens, and let a path
+segment after a dot be any case. =k8s.apps.Deployment= is a path;
+=Deployment= alone is a variable; ="Deployment"= is a string that is
+equal to the symbol =Deployment= nowhere, because there is no bare symbol
+=Deployment=. Full grammar in section 6.1. Sigils rejected: every rule
+body would grow a =$= per variable occurrence and the Prolog-literate
+reader base (the language's actual audience) reads capitals as variables
+without thinking. Declared variables rejected: rules are short and a =let=
+line per rule doubles their length.
+
+*Consequences.*
+- The hyphen and slash leave symbols; =us-test-1a= becomes ="us-test-1a"=
+  and =pngu-grpc= becomes ="pngu-grpc"=. Every existing =.df= changes;
+  =dform migrate= does it mechanically under the editions ticket.
+- Field access =X.y= on a variable and subtraction =A - B= become
+  available. Section 6.1 uses the first for document access.
+
+** DR-5: Absent is no fact; null is a value where the schema allows it; empty is a value
+
+*Context.* Datalog absence is "no fact"; APIs distinguish unset, null,
+empty. =Value= has no null. D adds labeled nulls for unknowns, which must
+not be confused with API null.
+
+*Decision.*
+1. An attribute is absent iff there is no =attr(T, N, Path, _)= tuple. The
+   provider receives no field. Optional attributes are absent by default;
+   defaults in the schema (=replicas: int = 1=) are filled by the provider
+   protocol's Plan, not by the engine, so that "absent" round-trips through
+   refresh as "absent" and not as a spurious update. This is Terraform's
+   =optional(type, default)= lesson, kept out of the engine.
+2. =null= is a literal of type =nullable(T)= and is a value: it joins,
+   compares equal to itself, and is only legal at attribute paths whose
+   schema says =nullable=. Writing =null= elsewhere is a compile error
+   from the schema check.
+3. Empty list, empty map, empty string are ordinary values. A lattice
+   join of =set= with an empty contribution is the identity; a scalar
+   contribution of =""= conflicts with ="x"= as any two scalars do.
+4. Labeled nulls (DR-2) are a separate value kind, never written by users,
+   printed as =?aws.vpc.main.id=, and never equal to =null=.
+
+*Consequences.* One =Null= literal, one =nullable= schema type, no engine
+change. The Z-set model makes "absent" precise: weight 0.
+
+** DR-6: Impurity enters through sources, and the log makes it deterministic
+
+*Context.* Random suffixes, timestamps, generated passwords. Board rule:
+only through an extern whose results are persisted.
+
+*Decision.* Impure values are sources with a demand key and a persisted
+response, which is what every extern already is in D:
+
+#+begin_src prolog
+extern random.password(+key: string, +length: int, -value: secret(string)) from provider random.
+extern random.suffix(+key: string, -value: string) from provider random.
+
+resource db.postgres db {
+  password = Pw
+} :- random.password("db.main.password", 32, Pw).
+#+end_src
+
+The response is logged at the tick it was first produced; every replay and
+every later tick reads it from the log, never from the provider, because
+the extern is declared =once= (the provider's schema says its results are
+stable per key). Rotation is a retraction: =dform rotate
+'random.password("db.main.password", 32)'= appends a -1 for the old
+response and the next tick demands a new one.
+
+Wall-clock time: =time(T)= is a prelude source fed with the tick's
+stamp. Using it in an attribute is legal and warned by a prelude policy
+(=warn("attribute depends on wall clock")=) because it makes every tick a
+deformation. Using it in policy ("cert expires within 30 days") is the
+intended use and is exactly what a controller should do.
+
+*Consequences.* No builtin is impure; =timestamp()= does not exist. The
+=random= provider is 100 lines and the reference fact provider for the
+conformance suite. The secret label on =random.password= flows through
+IFC (section 4.11), so the password never appears in plan output or the
+log in clear.
+
+** DR-7: License is Apache-2.0, no CLA
+
+*Context.* BSL produced OpenTofu overnight.
+
+*Decision.* Apache-2.0 for the engine, CLI, protocol, and reference
+providers. No contributor license agreement; the DCO sign-off instead. The
+provider protocol's protobuf definitions are additionally published under
+CC0 so that an alternative engine can implement them without any
+attribution argument.
+
+*Consequences.* A company cannot later relicense to BSL without every
+contributor's consent, which is the point. The clingo dependency is MIT,
+the =dbsp= crate is MIT, both compatible.
+
+* Grammar and declarations
+
+This is the concrete answer to the symbol-syntax and case-based-variable
+tickets, plus the declarations the semantic core needs. It is written as
+the input to =docs/grammar.md=, not as a replacement for it.
+
+** Lexical decisions
+
+#+begin_example
+ident     = [a-z_][A-Za-z0-9_]*
+segment   = [A-Za-z_][A-Za-z0-9_]*
+path      = ident ("." segment)+                  # net.vpc, k8s.apps.Deployment, aws.vpc
+var       = [A-Z][A-Za-z0-9_]*
+wildcard  = "_"
+int       = "-"? [0-9]+
+string    = "\"" ... "\""                          # escapes: \" \\ \n \t \u{...}
+inet4     = [0-9]+ "." [0-9]+ "." [0-9]+ "." [0-9]+ ("/" [0-9]+)?
+duration  = [0-9]+ ("ms" | "s" | "m" | "h" | "d")
+comment   = "#" ... EOL
+doc       = "#|" ... EOL                           # L14 annotations
+#+end_example
+
+Rules:
+
+- A bare =ident= is a symbol. A bare =path= is a symbol whose value is the
+  path (symbols and paths are one value type, =symbol=, printed without
+  quotes). =net.vpc= and =k8s.apps.Deployment= are symbols.
+- =var= is a variable. Since a variable cannot follow a dot and a path
+  cannot start with a capital, =Deployment= and =k8s.apps.Deployment= are
+  never confused.
+- Hyphen is subtraction, slash is division, everywhere. Cloud names with
+  hyphens are strings. A string and a symbol with the same spelling are
+  the same value (="net.vpc" = net.vpc= holds), which keeps existing data
+  files and =--set env=prod= working; the distinction is lexical, not
+  semantic. This is Soufflé's rule for =symbol=.
+- =inet4= is a literal token: =10.20.0.0/16= is an =inet= value.
+  IPv6 uses =inet("fd00::/8")= because =::= collides with nothing today
+  but a bare IPv6 token would need lookahead the lexer should not have.
+- Durations are literal tokens: =250ms=, =5m=.
+- Field access: =Var.segment= (and =Var."quoted key"=) is document access
+  on a variable bound to a map. It is only legal on variables, so =a.b= is
+  a path and =A.b= is an access. Lowers to =get(A, b)=.
+- Keypaths in resource blocks and settings are =segment ("." segment)*=
+  with quoted segments allowed: =tags."kubernetes.io/name" = "x"=.
+
+Precedence, high to low: field access; unary minus; =* / %=; =+ -=;
+comparison =< <= > >= = !==; =in=, =not in=; =not=; =,= (conjunction).
+
+Statement termination: a simple statement ends with =.=; a block statement
+ends with =}= and takes no dot (a trailing dot is accepted with a lint
+warning in edition 2026 for migration). Every file starts with =edition
+2026.= or is treated as edition 2025 (today's syntax) by =dform migrate=.
+
+** Relation kinds
+
+Every predicate is one of these, and the compiler knows which:
+
+#+begin_src prolog
+% stack input: fed by --set, an inputs file, or a CI variable
+input env: enum(dev, stg, prod) = dev.
+input replicas: int where 1 <= replicas <= 10 = 3.
+
+% declared relation: facts and rules in this module define it; key = functional dependency
+relation setting(env: symbol, key: symbol, value: any) key (env, key).
+relation peering(env: symbol, name: string, peer_network: string).
+
+% source: fed by a provider subscription; no demand
+source k8s.object(group: symbol, version: symbol, kind: symbol,
+                  ns: string, name: string, spec: any, status: any)
+  from provider k8s watch.
+source world(type: symbol, name: string, doc: any) from provider * refresh(5m).
+
+% extern: demand-driven; + must be bound at the call site
+extern aws.vpc(+id: string, -cidr: inet, -tags: map(string)) from provider aws.
+extern file.json(+path: string, -value: any) from provider file once.
+
+% state relation: heads of @next rules are state; declared to fix the schema
+state pinned(solve: symbol, fact: any).
+state observed(kind: symbol, ns: string, name: string, generation: int).
+
+% derived predicates need no declaration when defined by rules in this module;
+% a declaration is allowed to give types and to be exported
+relation reachable(a: symbol, b: symbol).
+export reachable/2.
+extend iam.iam_need/3.      % this module contributes rules to another module's relation
+#+end_src
+
+Types: =symbol=, =string=, =int=, =bool=, =inet=, =port=, =protocol=,
+=duration=, =bytes=, =list(T)=, =set(T)=, =map(T)=, =ordered(T by K)=,
+=enum(a, b, c)=, =nullable(T)=, =secret(T)=, =ref(Type)=, =any=, and =T
+where <refinement>=. Refinements lower to =deny= (L13).
+
+** Rules, aggregates, and time
+
+#+begin_src prolog
+% deductive rule
+reachable(A, C) :- reachable(A, B), link(B, C).
+
+% inductive rule: true at the next tick
+observed(Kind, Ns, Name, Gen) @next :- k8s.object(_, _, Kind, Ns, Name, Spec, _), Gen = Spec.metadata.generation.
+
+% aggregates are body literals; the braces are the group; free variables outside
+% the braces are the group key. This is Soufflé's form.
+subnet_count(V, N) :- want(net.vpc, V), N = count : { subnet_of(_, V) }.
+private_ids(V, Ids) :- want(net.vpc, V), Ids = collect_set(ref(net.subnet, S, id)) : { subnet_of(S, V), attr(net.subnet, S, visibility, private) }.
+listener_rules(L, Rs) :- want(lb.listener, L), Rs = collect_ordered(Prio, R) : { listener_rule(L, Prio, R) }.
+% ties in collect_ordered are a compile error unless a tiebreak is given:
+%   collect_ordered((Prio, Name), R)
+
+% list comprehension stays as sugar for collect_ordered over the item's own order-key, or
+% collect_set when the item has none:
+private_ids(V, [ref(net.subnet, S, id) | subnet_of(S, V), attr(net.subnet, S, visibility, private)]) :- want(net.vpc, V).
+
+% existential and count in constraints (L11) are the same literals:
+deny("subnet has no route table", {subnet: S}) :-
+  want(net.subnet, S), not exists { attr(net.route_table, _, subnet_id, ref(net.subnet, S, id)) }.
+#+end_src
+
+Aggregates and =not exists= put their consumer in a higher stratum than
+every predicate inside the braces; the compiler names the cycle if there
+is one.
+
+** Resource sugar and attributes
+
+Unchanged in spirit; the lowering target changes to =arg/5= with the
+owner column, and =+== lowers to a contribution whose schema type decides
+the join:
+
+#+begin_src prolog
+resource net.subnet Name {
+  vpc_id = ref(net.vpc, vpc, id),
+  cidr = inet_subnet(VpcNet, 4, I),
+  tags += {zone: Z}
+} :- zone(Z, I), attr(net.vpc, vpc, cidr, VpcNet), Name = format("private-%s", Z).
+#+end_src
+
+lowers to
+
+#+begin_src prolog
+want(net.subnet, Name) :- zone(Z, I), attr(net.vpc, vpc, cidr, VpcNet), Name = format("private-%s", Z).
+arg(net.subnet, Name, vpc_id, ref(net.vpc, vpc, id), "modules/network.df:12") :- <same body>.
+arg(net.subnet, Name, cidr, inet_subnet(VpcNet, 4, I), "modules/network.df:12") :- <same body>.
+arg(net.subnet, Name, tags, {zone: Z}, "modules/network.df:12") :- <same body>.
+#+end_src
+
+Reading attributes: =attr(T, N, Path, V)= or the sugar =N.Path= is *not*
+offered, because resource names are not variables bound to documents.
+Instead =doc(T, N, D)= gives the assembled document and =D.path= reads it;
+this is one join and one access, and it is what the operator example uses.
+
+** Modules, stacks, policy
+
+#+begin_src prolog
+module network {
+  input vpc_net: inet.
+  output private_subnet_ids: list(ref(net.subnet)).
+  export subnet_of/2.
+  relation zone_index(zone: string, i: int).   % private
+  ...
+}
+
+use network main { vpc_net = VpcNet } :- env(Env), setting(Env, network.main.vpc_net, VpcNet).
+
+policy baseline {
+  contributes tags to *.
+  arg(Type, Name, tags, {team: platform}) :- want(Type, Name).
+  deny("db must not be public", {resource: Db}) :- want(db.postgres, Db), not attr(db.postgres, Db, public, false).
+}
+apply_policy baseline.
+
+stack renfry.prod {
+  backend = s3("renfry-state", "pngu/prod"),
+  mode = batch,
+  providers = [aws, random, file]
+}
+#+end_src
+
+A module instance's private relations are copied per instance; its
+=input= lines are the parameters; =output= lines are exported facts
+=output(Scope, Key, Value)= as today. =component= and =component_def= and
+=import ... as= are removed; =import "path"= remains for splitting one
+module across files.
+
+* Examples in the proposed syntax
+
+** =dform.df=, rewritten
+
+The current file's shape is kept (settings as data, modules instantiated
+per environment, peering derived from instance pairs, a bastion, two
+constraints) and three things are added because they are what D is for:
+the stack declaration, a solve block for zone placement of the bastion,
+and the deferred-value shape on the VM's subnet.
+
+#+begin_src prolog
+edition 2026.
+
+#| title: demo stack
+#| owner: platform
+stack demo {
+  backend = local(".dform/log"),
+  mode = batch,
+  providers = [fake, random]
+}
+
+# Inputs are typed and defaulted; the has_env/not idiom is gone.
+input env: enum(dev, staging, prod) = staging.
+
+relation zone(name: string, index: int).
+zone("us-test-1a", 0).
+zone("us-test-1b", 1).
+
+# One keyed relation for settings; the settings block is sugar over it.
+relation setting(env: symbol, key: symbol, value: any) key (env, key).
+
+settings prod {
+  network.main.vpc_net = 10.20.0.0/16
+  network.peer.vpc_net = 10.21.0.0/16
+  db = { backup_days: 14, multi_az: true }
+  k8s = { private_api: true, nodepool: { min: 3, max: 10 } }
+  audit.sinks += ["cloudwatch"]
+}
+settings staging {
+  network.main.vpc_net = 10.50.0.0/16
+  network.peer.vpc_net = 10.60.0.0/16
+  db = { backup_days: 3, multi_az: false }
+  k8s = { private_api: false, nodepool: { min: 1, max: 3 } }
+}
+settings dev {
+  network.main.vpc_net = 10.90.0.0/16
+}
+
+import "modules/network.df".
+import "modules/database.df".
+import "modules/kubernetes.df".
+import "modules/iam.df".
+import "policies/baseline.df".
+import "modules/stdlib_net.df".
+apply_policy baseline.
+
+# iam_need is declared in the iam module; this file contributes to it.
+extend iam.iam_need/3.
+iam_need(app, audit.write, "audit-log") :- env(prod).
+
+# Module instances. env/1 is the input relation; no rule needed.
+use network main { vpc_net = Net } :- env(E), setting(E, network.main.vpc_net, Net).
+use network peer { vpc_net = Net } :- env(E), setting(E, network.peer.vpc_net, Net).
+
+use database main { backup_days = D, multi_az = M } :-
+  env(E), setting(E, db.backup_days, D), setting(E, db.multi_az, M).
+
+use kubernetes main { private_api = P, nodepool_min = Min, nodepool_max = Max } :-
+  env(E), setting(E, k8s.private_api, P),
+  setting(E, k8s.nodepool.min, Min), setting(E, k8s.nodepool.max, Max).
+
+use iam main {}.
+
+# Peering intent between network instances.
+relation vpc_peer_inst(a: symbol, b: symbol).
+vpc_peer_inst(main, peer).
+
+vpc_peer(A, B) :-
+  vpc_peer_inst(IA, IB),
+  instance(network, IA, SA), instance(network, IB, SB),
+  A = scoped(SA, vpc), B = scoped(SB, vpc).
+
+resource net.vpc_peering Peer {
+  requester_vpc_id = ref(net.vpc, A, id),
+  accepter_vpc_id  = ref(net.vpc, B, id)
+} :- vpc_peer_inst(IA, IB), vpc_peer(A, B), Peer = format("peer-%s-%s", IA, IB).
+
+# Bastion placement: choose a zone, prefer the cheapest, stay put once chosen.
+relation zone_cost(zone: string, cost: int).
+zone_cost("us-test-1a", 3).
+zone_cost("us-test-1b", 2).
+
+solve bastion_zone {
+  { bastion_in(Z) : zone(Z, _) } = 1.
+  minimize { C @ 2, Z : bastion_in(Z), zone_cost(Z, C) }.
+  stability = prefer.
+}
+
+# The subnet id is a labeled null until the subnet exists. The private_ip
+# arithmetic needs the VPC cidr, which is known (it is a setting), so this
+# resource is planned at tick 0; only subnet_id is deferred inside the doc,
+# which is fine because the provider resolves refs at apply.
+resource compute.vm bastion {
+  private_ip = inet_host(Net, 20),
+  zone       = Z,
+  subnet_id  = ref(net.subnet, scoped(S, Sn), id)
+} :-
+  env(E), setting(E, network.main.vpc_net, Net),
+  bastion_in(Z),
+  instance(network, main, S), Sn = format("private-%s", Z).
+
+# Policy as invariants over the assembled attributes.
+constraint("prod db must be multi_az") :-
+  env(prod), instance(database, main, S), Db = scoped(S, db),
+  want(db.postgres, Db), not attr(db.postgres, Db, multi_az, true).
+
+constraint("prod k8s must have private api") :-
+  env(prod), instance(kubernetes, main, S), C = scoped(S, cluster),
+  want(k8s.cluster, C), not attr(k8s.cluster, C, private_api, true).
+#+end_src
+
+And =modules/network.df= in the module syntax, because the subnet-reads-
+vpc pattern is the one DR-1 had to make work:
+
+#+begin_src prolog
+edition 2026.
+
+module network {
+  input vpc_net: inet.
+  output private_subnet_ids: list(ref(net.subnet)).
+  export subnet_of/2.
+
+  resource net.vpc vpc {
+    cidr = VpcNet,
+    tags = { env: E, component: network }
+  } :- env(E), input(vpc_net, VpcNet).
+
+  # reads attr of net.vpc to write arg of net.subnet: different type partitions, no cycle
+  resource net.subnet Sn {
+    vpc_id = ref(net.vpc, vpc, id),
+    cidr = inet_subnet(Net, 4, I),
+    zone = Z,
+    visibility = private
+  } :- zone(Z, I), attr(net.vpc, vpc, cidr, Net), Sn = format("private-%s", Z).
+
+  subnet_of(Sn, vpc) :- want(net.subnet, Sn).
+
+  output(private_subnet_ids, Ids) :-
+    Ids = collect_ordered(Sn, ref(net.subnet, Sn, id)) : { want(net.subnet, Sn), attr(net.subnet, Sn, visibility, private) }.
+}
+#+end_src
+
+What the reader should feel: the file is the same length as before, the
+=has_env= idiom and =component_scope= are gone, every relation that is not
+a rule head is declared, IP literals are bare, hyphenated names are
+strings, and the one genuinely new construct (=solve=) is eight lines.
+
+** =pngu.df=, the representative chunk
+
+Settings, the peering table, the GKE subnet, the static IP, and the
+dashboard, which is no longer stubbed because =file.json= is an extern.
+
+#+begin_src prolog
+edition 2026.
+
+stack pngu {
+  backend = gcs("renfry-dform", "pngu"),
+  mode = batch,
+  providers = [google, file]
+}
+
+input env: enum(dev, stg, prod) = dev.
+
+relation setting(env: symbol, key: symbol, value: any) key (env, key).
+relation peering(env: symbol, name: string, peer_network: string).
+
+settings dev {
+  project_id   = "renfry-dev-973682"
+  project_name = "renfry-dev"
+  region       = "us-east1"
+  network_name = "renfry-dev-network"
+  regional_proxy_cidr = 10.193.0.0/24
+  gke = {
+    control_plane_cidr: 172.16.3.96/28,
+    subnet_cidr:   10.141.76.0/22,
+    pods_cidr:     10.141.80.0/21,
+    services_cidr: 10.141.88.0/21,
+    static_ips: { "pngu-grpc": { type: "INTERNAL" } }
+  }
+}
+settings stg {
+  project_id   = "renfry-stg"
+  project_name = "renfry-stg"
+  region       = "us-east1"
+  network_name = "renfry-stg-network"
+  regional_proxy_cidr = 10.193.1.0/24
+  gke = {
+    control_plane_cidr: 172.16.3.112/28,
+    subnet_cidr:   10.141.100.0/22,
+    pods_cidr:     10.141.104.0/21,
+    services_cidr: 10.141.112.0/21,
+    static_ips: { "pngu-grpc": { type: "INTERNAL" } }
+  }
+}
+# prod elided; same shape
+
+peering(dev,  "envoy-dev",        "projects/envoy-dev-426188/global/networks/envoy-dev-network").
+peering(stg,  "envoy-stg",        "projects/envoy-stg-597462/global/networks/envoy-stg-network").
+peering(stg,  "envoy-stg-legacy", "projects/coherentpath-stg/global/networks/envoy-proxy-stg").
+peering(prod, "envoy-prod-legacy","projects/coherentpath-prod/global/networks/envoy-proxy-prod").
+
+# One helper relation instead of the same five setting/3 joins in every rule.
+project(Env, Id, Name, Region, NetId) :-
+  env(Env),
+  setting(Env, project_id, Id), setting(Env, project_name, Name),
+  setting(Env, region, Region), setting(Env, network_name, NetName),
+  NetId = format("projects/%s/global/networks/%s", Id, NetName).
+
+constraint("GKE static IPs must be INTERNAL") :-
+  env(Env), setting(Env, gke, G), G.static_ips."pngu-grpc".type != "INTERNAL".
+
+resource google.compute.Subnetwork gke_subnet {
+  project = Id, region = Region, network = NetId,
+  name = format("%s-gke-subnet", Name),
+  ip_cidr_range = G.subnet_cidr,
+  subnet_private_access = true,
+  secondary_ranges = [
+    { range_name: format("%s-gke-pods-range", Name), ip_cidr_range: G.pods_cidr },
+    { range_name: format("%s-gke-svc-range", Name),  ip_cidr_range: G.services_cidr }
+  ]
+} :- project(Env, Id, Name, Region, NetId), setting(Env, gke, G).
+
+resource google.compute.Subnetwork regional_proxy {
+  project = Id, region = Region, network = NetId,
+  name = format("%s-proxy", Name),
+  purpose = "REGIONAL_MANAGED_PROXY", role = "ACTIVE",
+  ip_cidr_range = Cidr
+} :- project(Env, Id, Name, Region, NetId), setting(Env, regional_proxy_cidr, Cidr).
+
+resource google.compute.NetworkPeering Res {
+  project = Id, name = PName, network = NetId, peer_network = Peer
+} :- project(Env, Id, _, _, NetId), peering(Env, PName, Peer), Res = format("peering-%s", PName).
+
+resource google.compute.Address Res {
+  project = Id, region = Region, name = IpName,
+  address_type = Type,
+  subnetwork_id = ref(google.compute.Subnetwork, gke_subnet, id)
+} :- project(Env, Id, _, Region, _), setting(Env, gke, G),
+     IpName = "pngu-grpc", Type = G.static_ips."pngu-grpc".type,
+     Res = format("static-ip-%s", IpName).
+
+# The dashboard JSON is a fact with provenance and a hash, read once.
+extern file.json(+path: string, -value: any) from provider file once.
+
+resource google.monitoring.Dashboard pngu {
+  project = Id,
+  dashboard_json = Json
+} :- project(_, Id, _, _, _), file.json("terraform/modules/monitoring/dashboard-pngu.json", Json).
+
+output(active_env, Env) :- env(Env).
+output(project_id, Id) :- project(_, Id, _, _, _).
+#+end_src
+
+Differences the reader should notice: the =when env(Env) { ... }= wrapper
+is gone because =env/1= is an input relation with exactly one row and
+joining it is one literal; the five-way setting join is a helper; the GKE
+settings are read as a document with field access; provider types are
+paths with capitalized kinds (=google.compute.Subnetwork=) so they match
+the provider's own naming; CIDRs are literals.
+
+** A Kubernetes operator: the =Database= CRD
+
+The program is a controller. Its inputs are informers on a CRD and on the
+objects it manages; its outputs are Kubernetes objects and a status
+subresource; a password comes from the =random= provider; a =solve= block
+places databases on node pools by capacity; admission policy uses the
+same rules.
+
+#+begin_src prolog
+edition 2026.
+
+#| title: Database operator
+#| description: Reconciles example.io/v1 Database objects into a StatefulSet, Service,
+#|   Secret, and PVC, places them across node pools, and writes status.
+stack database.operator {
+  backend = k8s_configmap("db-system", "dform-log"),
+  mode = controller {
+    debounce = 250ms, max_latency = 5s,
+    apply = auto,
+    rate_limit = exponential(1s, 5m)
+  },
+  providers = [k8s, random]
+}
+
+# ---- inputs: informers ---------------------------------------------------
+
+source k8s.object(group: symbol, version: symbol, kind: symbol,
+                  ns: string, name: string, meta: any, spec: any, status: any)
+  from provider k8s watch {
+    kinds = [example.io.v1.Database, apps.v1.StatefulSet, core.v1.Service,
+             core.v1.Secret, core.v1.Node, core.v1.Pod]
+  }.
+
+extern random.password(+key: string, +length: int, -value: secret(string)) from provider random once.
+
+# ---- the CRD as a relation ----------------------------------------------
+
+relation database(ns: string, name: string, engine: symbol, storage: bytes, replicas: int, pool: nullable(string)).
+database(Ns, Name, Engine, Storage, Replicas, Pool) :-
+  k8s.object(example.io, v1, Database, Ns, Name, _, Spec, _),
+  Engine = to_symbol(Spec.engine),
+  Storage = to_bytes(Spec.storage),
+  Replicas = Spec.replicas,
+  Pool = Spec.nodePool.                        # absent -> null (schema says nullable)
+
+# ---- admission-shaped policy (same rules run in admission mode) ----------
+
+deny("storage below 1Gi", {ns: Ns, name: Name}) :-
+  database(Ns, Name, _, Storage, _, _), Storage < 1Gi.
+
+deny("unsupported engine", {ns: Ns, name: Name, engine: E}) :-
+  database(Ns, Name, E, _, _, _), E not in [postgres, mysql].
+
+# ---- placement across node pools (solve stratum) -------------------------
+
+pool(P, Cap) :-
+  k8s.object(core, v1, Node, _, _, Meta, _, Status),
+  P = Meta.labels."cloud.google.com/gke-nodepool",
+  Cap = sum(N) : { node_db_capacity(Meta.name, N) }.     # one row per pool
+
+node_db_capacity(Node, 4) :- k8s.object(core, v1, Node, _, Node, _, _, _).
+
+solve db_placement {
+  { placed(Ns, Name, P) : pool(P, _) } = 1 :- database(Ns, Name, _, _, _, null).
+  placed(Ns, Name, P) :- database(Ns, Name, _, _, _, P), P != null.     # explicit pool wins
+  :- pool(P, Cap), N = count : { placed(_, _, P) }, N > Cap.
+  minimize { N @ 1, P : pool(P, _), N = count : { placed(_, _, P) } }.  # spread
+  stability = strong.
+}
+
+# ---- derived objects ------------------------------------------------------
+
+relation owner(ns: string, name: string, ref: any).
+owner(Ns, Name, {apiVersion: "example.io/v1", kind: "Database", name: Name, uid: Uid, controller: true}) :-
+  k8s.object(example.io, v1, Database, Ns, Name, Meta, _, _), Uid = Meta.uid.
+
+resource k8s.core.v1.Secret Addr {
+  metadata = { namespace: Ns, name: format("%s-credentials", Name), ownerReferences: [Own] },
+  stringData = { password: Pw }
+} :- database(Ns, Name, _, _, _, _), owner(Ns, Name, Own),
+     random.password(format("%s/%s", Ns, Name), 32, Pw),
+     Addr = format("%s/%s-credentials", Ns, Name).
+
+resource k8s.core.v1.Service Addr {
+  metadata = { namespace: Ns, name: Name, ownerReferences: [Own] },
+  spec = { selector: { "example.io/database": Name }, ports: [{ port: Port, name: db }] }
+} :- database(Ns, Name, Engine, _, _, _), owner(Ns, Name, Own),
+     engine_port(Engine, Port), Addr = format("%s/%s", Ns, Name).
+
+engine_port(postgres, 5432).
+engine_port(mysql, 3306).
+
+resource k8s.apps.v1.StatefulSet Addr {
+  metadata = { namespace: Ns, name: Name, ownerReferences: [Own] },
+  spec = {
+    replicas: Replicas,
+    serviceName: Name,
+    selector: { matchLabels: { "example.io/database": Name } },
+    template: {
+      metadata: { labels: { "example.io/database": Name } },
+      spec: {
+        nodeSelector: { "cloud.google.com/gke-nodepool": Pool },
+        containers: [{
+          name: db, image: Image,
+          envFrom: [{ secretRef: { name: format("%s-credentials", Name) } }],
+          volumeMounts: [{ name: data, mountPath: "/var/lib/db" }]
+        }]
+      }
+    },
+    volumeClaimTemplates: [{
+      metadata: { name: data },
+      spec: { accessModes: ["ReadWriteOnce"], resources: { requests: { storage: Storage } } }
+    }]
+  }
+} :- database(Ns, Name, Engine, Storage, Replicas, _), owner(Ns, Name, Own),
+     placed(Ns, Name, Pool), engine_image(Engine, Image),
+     Addr = format("%s/%s", Ns, Name).
+
+engine_image(postgres, "postgres:16").
+engine_image(mysql, "mysql:8").
+
+# ---- status writeback -----------------------------------------------------
+
+ready_replicas(Ns, Name, R) :-
+  k8s.object(apps, v1, StatefulSet, Ns, Name, _, _, St), R = St.readyReplicas.
+ready_replicas(Ns, Name, 0) :-
+  database(Ns, Name, _, _, _, _), not exists { k8s.object(apps, v1, StatefulSet, Ns, Name, _, _, _) }.
+
+phase(Ns, Name, ready)    :- database(Ns, Name, _, _, Reps, _), ready_replicas(Ns, Name, Reps).
+phase(Ns, Name, pending)  :- database(Ns, Name, _, _, Reps, _), ready_replicas(Ns, Name, R), R < Reps.
+phase(Ns, Name, blocked)  :- database(Ns, Name, _, _, _, _), deny(_, {ns: Ns, name: Name}).
+phase(Ns, Name, unplaced) :- database(Ns, Name, _, _, _, _), unsat(db_placement, _), not placed(Ns, Name, _).
+
+# remember when we first saw each generation (inductive rule: state)
+state observed(ns: string, name: string, generation: int, since: int).
+observed(Ns, Name, Gen, T) @next :-
+  k8s.object(example.io, v1, Database, Ns, Name, Meta, _, _), Gen = Meta.generation,
+  not observed(Ns, Name, Gen, _), tick(T).
+observed(Ns, Name, Gen, T) @next :- observed(Ns, Name, Gen, T), database(Ns, Name, _, _, _, _).
+
+resource k8s.status.example.io.v1.Database Addr {
+  phase = Phase,
+  observedGeneration = Gen,
+  readyReplicas = R,
+  nodePool = Pool,
+  conditions += [ { type: "Placed", status: "True", reason: format("pool %s", Pool) } ]
+} :- database(Ns, Name, _, _, _, _), phase(Ns, Name, Phase),
+     ready_replicas(Ns, Name, R), observed(Ns, Name, Gen, _),
+     placed(Ns, Name, Pool), Addr = format("%s/%s", Ns, Name).
+
+resource k8s.status.example.io.v1.Database Addr {
+  conditions += [ { type: "Ready", status: "False", reason: Msg } ]
+} :- deny(Msg, {ns: Ns, name: Name}), Addr = format("%s/%s", Ns, Name).
+#+end_src
+
+Walk-through of one event, to make the incremental claim concrete. A user
+edits =spec.replicas= from 1 to 3 on =prod/orders=.
+
+1. The informer emits -1 and +1 on =k8s.object= for that row. Debounce
+   window closes; tick 2041 begins; the two deltas are logged.
+2. =database/6= gets -1 (replicas 1) and +1 (replicas 3). Nothing else in
+   =database= changes, so the =solve= block's input delta is empty
+   (=placed= joins =database= but the block's ground input is
+   =database(Ns, Name, _, _, _, null)= projected to the key, which is
+   unchanged). No re-solve.
+3. =arg(k8s.apps.v1.StatefulSet, "prod/orders", spec, ...)= gets -1 and +1;
+   =attr= re-joins that one group; =desired= gets -1/+1; =diff= against
+   =world= yields a +1/-1 pair; =deformation("prod/orders", update, ...)=
+   gets a +1.
+4. The Secret and Service rules join =database= too and so re-derive the
+   same tuples with weight -1 and +1, which cancel inside the Z-set before
+   =distinct= emits anything. Their deformations do not change.
+5. =phase= flips from =ready= to =pending= because =ready_replicas= is 1
+   and =Reps= is 3; the status resource gets an update deformation.
+6. The executor receives two work items: the StatefulSet update and the
+   status update. It applies them; the Apply responses synthesize =world=
+   deltas for tick 2042; =diff= goes empty; both deformations get -1.
+7. Ticks 2043 and on: the StatefulSet controller brings pods up; the
+   informer delivers =status.readyReplicas= increments; =phase= flips to
+   =ready= when it reaches 3; one more status update.
+
+Everything that happened was proportional to the change. The rules for
+the other forty databases in the cluster were not touched. That is what
+Crossplane compositions cannot say and what a hand-written
+controller-runtime reconciler achieves only by the author's discipline.
+
+Admission mode for the same program: =dform admit --stack
+database.operator= is a webhook server. Each AdmissionReview is one
+uncommitted tick containing the -1/+1 for the object under review; the
+response is the =deny= delta scoped to that object. The =solve= block is
+evaluated in that tick too, so "this Database cannot be placed" is an
+admission failure rather than a stuck object, if the team wants that.
+
+* Engine architecture
+
+** Crates and processes
+
+| Crate / process     | Role                                                                      |
+|---------------------+---------------------------------------------------------------------------|
+| =dform-syntax=      | logos lexer, recursive-descent parser, rowan tree, spans, editions        |
+| =dform-lower=       | sugar to core; Salsa-memoized per file                                    |
+| =dform-circuit=     | core to DBSP circuit: strata, modes, IFC labels, demand rules, solve nodes |
+| =dbsp= (Feldera)    | Z-sets, traces, operators, nested circuits, incrementalization            |
+| =dform-solve=       | clingo multi-shot wrapper, pins, unsat cores, counterfactual =why=        |
+| =dform-log=         | per-stack append-only log, checkpoints, backends (local, s3, gcs, k8s)   |
+| =dform-driver=      | tick scheduling: batch, controller (debounce, gate), admission           |
+| =dform-exec=        | DAG executor over =deformation= deltas; workqueue; per-address state     |
+| =dform-provider=    | gRPC protocol; provider runtime: demand coalescing, subscriptions        |
+| =dform= (bin)       | CLI: plan, apply, run (controller), admit, why, query, explain, migrate   |
+
+Providers are out-of-process as the board decided. The protocol gains
+=Subscribe(relation)= so a provider can watch a derived relation (needed by
+the symbolic providers) and =Watch(source)= for informer-shaped sources.
+Everything else on the board's method table stands.
+
+** The plan file
+
+A plan is the log entries of one tick (inputs, extern responses, solve
+pins) plus the =deformation= delta and its =why= digest, serialized. Apply
+replays the inputs into a fresh or checkpointed circuit and must reproduce
+the same delta before executing; if it does not (the program changed, the
+provider's schema changed), it refuses. This is stronger than Terraform's
+plan-file check, which compares configuration hashes, because it compares
+the computed result.
+
+** CLI surface
+
+#+begin_example
+dform plan [--as-of T] [--scenario NAME] [--max-ticks N] [--json]
+dform apply [PLAN] [--max-ticks N] [--approve ADDR...]
+dform run                       # controller mode until signal
+dform admit --listen :8443      # admission webhook
+dform why 'atom' [--count] [--counterfactual]
+dform query 'atom' [--as-of T] [--json|--table]
+dform explain --cost            # mode and cost class per relation
+dform log [--since T] [--rel R] # the fact log
+dform migrate --edition 2026
+dform rotate 'extern(...)'      # retract an impure response
+#+end_example
+
+* How the existing tickets land under D
+
+Not every ticket, only the ones whose shape changes. Tickets not listed
+proceed as written.
+
+| Ticket                                    | Under D                                                     |
+|-------------------------------------------+-------------------------------------------------------------|
+| Aggregates are not stratified             | closed by circuit construction (aggregate edge = negative)  |
+| Unknown predicates silently empty         | closed: compile error (DR-3)                                |
+| Negation over mutated facts               | closed: no mutation exists                                  |
+| Functional predicate overwrite            | closed: lattice aggregate (DR-1)                            |
+| Ordered lists cannot be derived           | =collect_ordered= aggregate operator                        |
+| Fixpoint iteration cap                    | closed: nested clock stops at zero delta                    |
+| State not scoped to a program             | one log per stack                                           |
+| Apply is not crash-safe                   | executor writes =identity= and =world= deltas per action    |
+| Deletes are not ordered                   | executor DAG walk over deformation, reverse edges for -1    |
+| No refresh step                           | =world= is a source with =refresh(interval)=                |
+| Rename is destroy and create              | =moved_candidate= plus =moved/3= facts (section 4.8)        |
+| Plan output                               | deltas grouped by address; set diffs from the lattice types |
+| Provenance query                          | backward walk over traces (section 4.1)                     |
+| Demand-driven externs                     | demand/response/done operators (section 3.5)                |
+| Semi-naive and indexing                   | subsumed by DBSP                                            |
+| Incremental evaluation                    | is the engine                                               |
+| Reactive inputs and controller mode       | is the primary shape (section 3.9)                          |
+| Time travel over the fact log             | =--as-of= (section 3.9)                                     |
+| Secrets and ephemeral values              | static IFC labels (section 4.11); =ephemeral= = not logged  |
+| Impure values                             | DR-6                                                        |
+| Multi-stack orchestration                 | =stack_output= is a source: a downstream stack subscribes to an upstream stack's outputs; ordering falls out of subscription, no =run-all= |
+| Provider configuration as facts           | provider config is a relation in stratum 0; its readers are the demand relations; an extern whose demand depends on its own provider's config is the cycle the mode analysis rejects |
+| L7 lifecycle                              | filters and policy over =deformation= (section 3.6)          |
+| L12 scenarios                             | an uncommitted tick with a hypothetical delta                |
+| L13 refinement types                      | lower to deny; unchanged                                     |
+| Cost as facts                             | a price fact provider joined with =deformation=              |
+| Language editions                         | required, first breaking change is the lexer (section 6.1)   |
+
+* What this direction does badly
+
+This section is written to be quoted by the people who prefer the other
+directions.
+
+** What it cannot do well
+
+1. *A plan that is always complete.* DR-2 means a fresh stack's plan can
+   say "deferred". Terraform's promise ("the plan is what apply does") is
+   weakened to "the plan is what apply does first". The =strict_unknowns=
+   pack restores the old promise at the cost of the old =for_each=
+   restriction, but the default is the weaker one, and defaults are what
+   people learn.
+
+2. *Cheap mental model.* Users must understand ticks to read the log, to
+   read =@next= rules, and to interpret "resolved at tick 2042". Batch
+   users can ignore all of it until the first time they need =why= on a
+   deferred derivation, at which point the answer mentions ticks.
+
+3. *Small binary, simple build.* clingo is C++, the =dbsp= crate is large
+   and its API is not stable across releases, and the log needs a storage
+   engine. A Terraform-like single static binary is still possible but
+   the build is not =cargo build= on a clean machine any more.
+
+4. *Bounded latency for solve.* Everything downstream of a =solve= block
+   is discontinuous. A controller with a solve block in the hot path has
+   a re-solve on every relevant event; multi-shot grounding keeps it
+   fast for hundreds of atoms, but there is no incremental ASP and the
+   cost report is the only defence.
+
+5. *Memory.* DBSP keeps integrated traces for every join input and every
+   distinct. For a stack of a hundred thousand tuples that is a few
+   hundred MB resident. The current prototype keeps one =BTreeSet=. A
+   batch user pays this for a plan that runs once.
+
+6. *Provenance as a first-class weight.* Section 4.1 chose ℤ. A user who
+   wants "how many independent reasons does this resource exist" gets the
+   pre-distinct count; one who wants the full why-provenance polynomial
+   gets a backward walk that is exponential in the worst case.
+   Semiring-native engines do better.
+
+** Tickets this direction makes harder
+
+- *No tests.* Tests now need to cover time: a golden test is a log and a
+  sequence of expected deltas, not one output snapshot. The =examples/=
+  golden files become tick scripts. More to write, more to read.
+- *Source locations and diagnostics.* Unchanged for parse errors, harder
+  for circuit-construction errors (a mode cycle spans several rules and
+  the message must show a path through them).
+- *Plan output.* A delta-oriented plan is easy for one tick; a batch
+  =apply= that ran four ticks must present four deltas as one story.
+- *Query tooling.* =dform query= must specify a time; "now" is a default
+  that is wrong in controller mode while an executor is in flight.
+- *Provider protocol.* Two more methods (=Subscribe=, =Watch=) and the
+  requirement that providers emit deltas, not snapshots. A provider
+  author who has only a list-all API must diff snapshots themselves or
+  use the runtime's snapshot-diff helper. Terraform's provider model is
+  simpler than this.
+- *Editions and migration.* The lexer change is unavoidable in every
+  direction; D additionally changes what =ref= means at runtime, which
+  =dform migrate= cannot fix mechanically. Programs that compared refs
+  in bodies (none in this repo) would silently become stuck rather than
+  erroring.
+- *Secrets.* Static IFC catches more than a runtime taint but every
+  provider schema must mark sensitive fields correctly, and a wrong
+  schema is a silent leak. Runtime taint would at least propagate a
+  provider's runtime marking.
+
+** What batch users lose
+
+- =state.json= that a human can edit with =jq= during an incident. The
+  log is append-only and structured; state surgery becomes =dform log
+  append= with an audit trail. Better in principle, unfamiliar under
+  pressure.
+- A plan that is a pure function of source plus one refresh. Extern
+  responses and solve pins live in the log, so the plan is a function of
+  source plus log. Two engineers running =plan= from the same commit and
+  the same cloud can see different placements if their logs differ.
+  The fix (the log is in the backend, shared) makes the backend
+  mandatory even for a laptop demo.
+- Determinism arguments that fit in a sentence. "Same inputs, same
+  output" becomes "same log prefix, same program, same clingo version,
+  same output".
+
+** Where this proposal is most likely wrong
+
+1. *The audience.* Controller authors today write Go and reach for
+   controller-runtime. The bet is that Crossplane's composition pain
+   shows an appetite for a declarative composition language. It might
+   instead show that people want composition functions in Go and
+   Python, which Crossplane shipped. If so, controller mode is a
+   demo and batch is the product, and B or C's simpler engine wins.
+
+2. *ASP is overkill.* A greedy deterministic allocator with pins
+   (assign the lowest free block, remember it) covers CIDR and most
+   zone placement. The solve stratum earns its complexity only when
+   hard constraints interact (anti-affinity plus capacity plus cost).
+   If those cases are rare, clingo is 10 MB of binary and a C++
+   toolchain for a feature few programs use. A safer version of D
+   ships the pinning mechanism first with a greedy =allocate= builtin
+   and adds clingo behind a feature flag.
+
+3. *Stuck derivations are too clever.* The three-valued rule (section
+   3.7) is sound but a reader of a plan may not want to reason about
+   which literal got stuck. Terraform's blunt refusal has the merit of
+   being explainable in one line. If users overwhelmingly install
+   =strict_unknowns=, DR-2 was the wrong default.
+
+4. *DBSP's costs at small scale.* For a stack of two hundred resources
+   the naive evaluator is milliseconds and the DBSP circuit is also
+   milliseconds plus a fixed cost of building traces. The incremental
+   engine pays off only in controller mode or on large stacks; if
+   batch is 95% of use, the complexity was bought for 5%.
+
+5. *The log as the unit of truth.* Datomic's model works because the
+   database owns the world. Here the log holds observations of a world
+   it does not own; a long-running controller's log grows without
+   bound and checkpoints plus retention policy become operational
+   concerns Terraform users never had. If retention is mishandled,
+   =--as-of= is a feature that works for thirty days.
+
+6. *Type partitioning of =attr= (DR-1).* The rule that policies cannot
+   read what they contribute is principled and might be too restrictive
+   in practice: "add a default tag unless the resource already has
+   one" is a common ask and under DR-1 it must be written against
+   =arg= contributions of others rather than the merged =attr=. If
+   that idiom turns out to be common, DR-1 needs a two-round lattice
+   (contributions, then overrides), which is CUE's *default* marker,
+   and that should be designed rather than bolted on.
+
+** Prototype status
+
+No prototype was built for this proposal. The coordinator authorized a
+worktree at
+=/tmp/claude-1000/-home-simon-src-scraps-dform/99c49424-d8f2-45f7-abcc-f74fabb80e25/scratchpad/wt-D=
+on branch =explore/D-reactive-solver=; nothing was created there. The
+first prototype that would validate or kill the direction is small and
+specific: compile the core of =dform-advanced.df= (closure plus one
+aggregate plus one negation) to a =dbsp= circuit by hand, feed the
+=peer_intent(tenant_b)= delta, and confirm the =deformation= delta is the
+two routes and one deny that =plan --set env=prod= adds today. Second: the
+CIDR solve with clingo multi-shot, adding and removing a subnet, checking
+that pins hold. Together they are two or three days and they test every
+claim in section 3 that is not already a theorem in the DBSP paper.

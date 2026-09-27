@@ -1,0 +1,2312 @@
+#+TITLE: Proposal A: Stratified Datalog with a lattice aggregate core
+#+AUTHOR: dform design, direction A
+#+DATE: 2026-09-27
+#+STARTUP: overview
+#+OPTIONS: toc:3
+
+* Summary
+
+This proposal makes dform a textbook stratified Datalog with exactly one
+non-relational mechanism: a lattice aggregate that assembles resource
+attributes. Everything the prototype does with mutation inside the fixpoint
+(=apply_functional_pred=, =apply_setting_add=, =upsert_agg=, post-eval
+=merge_keypath=) is replaced by that one aggregate, placed in its own stratum by
+the ordinary stratified-aggregation rule.
+
+The ten decisions that shape everything else:
+
+1. Engine: stratified Datalog with negation and aggregates, semi-naive, over
+   an operator IR that DBSP can later execute. No mutation inside a stratum.
+2. Attributes: =attr/4= is a lattice aggregate over =arg/4= contributions and
+   =arg_default/4= fallbacks. Join is commutative, associative, idempotent;
+   conflict is the lattice top and carries both witnesses. =merge_rule=
+   becomes a schema annotation choosing which lattice applies at a path.
+   Bag merge is removed because multiset union is not idempotent.
+3. Unknowns: =ref= to a schema-computed attribute is an opaque token, legal
+   only as an attribute value. =ref= to a configured attribute is rewritten
+   by the compiler into an =attr/4= join. The chase and labeled nulls are
+   rejected because they make the lattice top undecidable at plan time.
+4. Provenance: every fact carries a derivation DAG (the circuit form of a
+   provenance polynomial). Why, ownership, and secrecy are semiring
+   homomorphisms of that DAG. Cost of derivation is available but cost of
+   infrastructure is a fact provider over =attr/4=, not a semiring.
+5. Secrets: static information-flow labels on predicate positions, inferred
+   by one dataflow pass; a dynamic =secret= value variant for provider-sourced
+   values. Comparison, negation, and non-declassifying builtins over secret
+   positions are compile errors.
+6. Modules: explicit =input= / =output= / =export= / =contributes=. All other
+   predicates are instance-private. Unknown predicates are compile errors.
+   A policy pack is a module with a =contributes= grant and no resources.
+7. Grammar: uppercase-initial identifiers are variables (Prolog, Mangle).
+   Identifiers contain only =[A-Za-z0-9_]=. Qualified names are
+   =ident.ident=; keypath literals begin with a dot (=.tags.team=); cloud
+   names with hyphens are strings. =-= and =/= are always operators.
+8. Solvers, symbolic network reasoning, IAM reasoning, and randomness live
+   behind the fact-provider protocol with results pinned in the plan or
+   state, never in the engine.
+9. Everything above resources lowers to policy: scenarios, refinement types,
+   lifecycle checks, doc coverage, schema conformance, and secrecy leaks all
+   become =deny= / =warn= facts with stable identifiers.
+10. Compiler front end (parse, resolve, stratify, label) is Salsa-shaped;
+    the engine is not.
+
+The rest of this document is the argument for each of these, a decision
+record for every DECIDE ticket, the rewritten example programs, and a candid
+list of what this direction gets wrong.
+
+* Principles of direction A
+
+- The engine is a textbook. Every semantic question must be answerable by
+  citing Abiteboul, Hull, Vianu chapter 15 (stratified negation), Mumick and
+  Pirahesh (stratified aggregation), or the lattice definition below. If a
+  behaviour cannot be explained that way, it is not in the engine.
+- One non-monotone mechanism, in one place. Aggregation (including the
+  attribute lattice) and negation are the only two non-monotone operators,
+  and both are handled by stratification. Nothing mutates the fact store
+  inside a stratum.
+- Reject statically, using the schema. Unknown values, unknown predicates,
+  secret leaks, and write access are checked at compile time from provider
+  schema facts and module interfaces. The runtime never discovers a
+  language-level error.
+- Interfaces are explicit. A module's surface is what it declares. The open
+  world survives only inside a module and through declared grants.
+- Everything else is policy. Any feature that can be expressed as "these
+  facts must (not) exist" is lowered to =deny= / =warn= rules and shares one
+  reporting, identification, and CI surface.
+
+What this direction deliberately gives up: user-defined lattices (Flix,
+Bloom^L), existential reasoning (Datalog+-), choice and optimization in the
+language (ASP), and equality saturation (egglog). Each of these is a
+different direction, and the "Research directions" section says why A rejects
+them rather than pretending they fit.
+
+* Core semantics
+
+** Values
+
+The value domain =V= is the prototype's =Value= with three additions and one
+removal.
+
+| Variant             | Notes                                                        |
+|---------------------+--------------------------------------------------------------|
+| =Str=               | UTF-8 string                                                 |
+| =Int=               | i64; no silent coercion from =Str= (kills =as_i64= parsing)  |
+| =Bool=              |                                                              |
+| =Null=              | new; legal only where the schema says =nullable= (see DECIDE) |
+| =List=              | ordered; equality is positional                              |
+| =Obj=               | string-keyed map                                             |
+| =Inet=              | new; unified family + 128-bit address + prefix (L15)         |
+| =Path=              | new; a keypath value =.a.b[0]."c-d"=                         |
+| =Ref=               | opaque token =(type, address, attr)= to a computed attribute |
+| =Secret=            | new; a boxed reference to a secret store entry, never bytes  |
+| =Addr=              | new; a resource address =(module instance path, local name)= |
+
+Removed: =CloudRef=. A discovered value is an ordinary fact
+(=world_attr/4=), and a =ref= to an adopted resource's computed attribute is
+an ordinary =Ref=. =Ip=, =IpNet=, =IpRange= collapse into =Inet= (=IpRange=
+becomes a builtin over two =Inet= values).
+
+Total order: =Value= remains =Ord= so relations are =BTreeSet= and aggregates
+are deterministic. =Secret= compares by store id, never by content.
+
+** Relations and the two kinds of predicate
+
+A program defines a set of predicates. Each predicate is one of:
+
+- *extensional* (EDB): ground facts in source, or facts supplied by an extern
+  under a binding pattern, or world facts from refresh;
+- *intensional* (IDB): defined by rules;
+- *aggregate*: defined by rules whose head contains exactly one aggregate
+  term (=collect_set=, =collect_ordered=, =count=, =sum=, =min=, =max=, or the
+  compiler-owned =lub= that builds =attr/4=).
+
+A predicate is exactly one kind. A predicate that is both EDB and IDB is a
+compile error (the prototype allows it, and =modules/network.df= silently
+relies on =arg= being both). The compiler rewrites =p(...) .= plus
+=p(...) :- body.= into =p_base(...) .= and =p(X) :- p_base(X).= when the user
+asks for it with =decl p/N mixed.=; otherwise it is an error. This keeps the
+kind of every predicate knowable from its declaration site.
+
+** The core relations
+
+These are the only relations the plan/apply half of the system reads. All
+sugar lowers to them.
+
+| Relation                                | Kind      | Meaning                                        |
+|-----------------------------------------+-----------+------------------------------------------------|
+| =want(Type, Addr)=                      | IDB       | the resource should exist                      |
+| =arg(Type, Addr, Path, Value)=          | IDB       | a contribution to an attribute                 |
+| =arg_default(Type, Addr, Path, Value)=  | IDB       | a fallback used only when no =arg= exists      |
+| =attr(Type, Addr, Path, Value)=         | aggregate | the assembled attribute; one row per (T,A,P)   |
+| =attr_conflict(Type, Addr, Path, W1, W2)= | aggregate | the top element with two witnesses           |
+| =adopt(Type, Addr, RemoteId)=           | IDB       | manage an existing object under =Addr=         |
+| =lifecycle(Type, Addr, Flag)=           | IDB       | =prevent_destroy=, =create_before_destroy=     |
+| =moved(Type, From, To)=                 | EDB       | address rename                                 |
+| =ignore_changes(Type, Addr, Path)=      | IDB       |                                                |
+| =deny(Id, Msg, Ctx)= / =warn(Id, Msg, Ctx)= | IDB   | policy results; =Id= is a stable identifier    |
+| =world(Type, RemoteId)=                 | EDB       | refresh: object exists                         |
+| =world_attr(Type, RemoteId, Path, V)=   | EDB       | refresh: observed attribute                    |
+| =type_attr(Type, Path, Ty, Flags)=      | EDB       | provider schema                                |
+| =type_lattice(Type, Path, Lattice)=     | EDB       | which lattice assembles this path              |
+| =output(Instance, Key, Value)=          | aggregate | module outputs, assembled by the same lattice  |
+| =stack_output(Stack, Key, Value)=       | EDB       | cross-stack values from a previous apply       |
+
+=attr/4= is derived, not written. Writing =attr(...)= in a head is a compile
+error whose message says to write =arg=.
+
+** The attribute lattice
+
+This is the one piece of machinery that is not plain Datalog, so it gets the
+precise definition.
+
+*** Elements
+
+For each schema-declared attribute path =P= of type =T= there is a lattice
+=L(T, P)= chosen by =type_lattice(T, P, Kind)=. Each lattice is built from the
+same three constructors:
+
+- =Flat(D)= for a domain of scalars =D=:
+  elements =⊥ ∪ D ∪ {⊤}=; order =⊥ < d < ⊤= for every =d ∈ D=, and =d, d'=
+  incomparable for =d ≠ d'=. This is the usual flat lattice. Join:
+  =d ⊔ d = d=, =d ⊔ d' = ⊤= when =d ≠ d'=, =⊥= is the identity, =⊤= absorbs.
+- =Map(K, L)= for a key domain =K= and an element lattice =L=:
+  elements are finite partial functions =K ⇀ L \ {⊥}=. Order is pointwise,
+  with an absent key reading as =⊥=. Join is pointwise join. =⊥= is the empty
+  map. =⊤= is any map with a =⊤= at some key; the witnesses are carried at
+  that key.
+- =Set(D)= for a domain =D=:
+  elements are finite subsets of =D= ordered by inclusion. Join is union.
+  =⊥= is the empty set. There is no =⊤=: sets never conflict.
+
+Derived forms, all reducible to the three above:
+
+- =Keyed(K̄, L)=, a list with declared merge keys =K̄= (L1a): this is
+  =Map(K̄, L)= over the projection of each element onto its key columns. The
+  list order on output is the sorted key order; the schema may also declare
+  =order_by= to emit it differently. Kubernetes =x-kubernetes-list-map-keys=
+  is exactly this construction.
+- =Ordered(D)=, a list whose order is meaningful and which has no merge key:
+  this is =Flat(List(D))=. Two different ordered contributions conflict.
+  You build an ordered list with =collect_ordered= in one rule and contribute
+  it once.
+- =Object= attributes with a declared struct schema: =Map(FieldName, L_field)=
+  with per-field lattices. An undeclared object (schema-less provider) is
+  =Map(Str, Flat(V))=, which is what the prototype calls =map_merge=.
+- =Nullable(L)=: =L= with =Null= added as one more =Flat= element. =Null ⊔ v =
+  ⊤= for =v ≠ Null=. Null is a value, absence is =⊥=; they are different
+  elements and the DECIDE on null says why.
+
+There is no =Bag= lattice. Multiset union is not idempotent (=m ⊎ m ≠ m=),
+so it cannot be a join; a rule that fires twice with the same binding would
+double its contribution, which is precisely the order-dependence this
+proposal exists to kill. =collect_list= still exists as an aggregate *inside
+one rule*, and its result is a single =Flat= contribution.
+
+*** The aggregate
+
+The compiler emits, for every resource type, the rule
+
+#+begin_src prolog
+attr(T, A, P, lub(V)) :- arg(T, A, P, V).
+attr(T, A, P, lub(V)) :- arg_default(T, A, P, V), not has_arg(T, A, P).
+has_arg(T, A, P)       :- arg(T, A, P, _).
+#+end_src
+
+where =lub= is the aggregate that folds contributions with the join of
+=L(T, P)=. Because =has_arg= is negated, stratification places the second
+rule after =has_arg=, which is after every =arg= rule; and because =attr= is
+an aggregate head it lands after everything in its own body. Both rules for
+=attr= share a stratum. No rule can read =attr= before it is complete.
+
+The path granularity is the schema's. A contribution to =.tags= with an
+object value and a contribution to =.tags.team= with a string are both
+contributions to the =Map= at =.tags=; the compiler normalises the second into
+={team: "platform"}= at =.tags= before the aggregate, so all contributions to
+one declared attribute meet in one group.
+
+*** Conflict
+
+If the join reaches =⊤= at any point, the aggregate emits
+=attr_conflict(T, A, P, W1, W2)= instead of =attr(T, A, P, _)=, where =W1=,
+=W2= are the fact ids of two incomparable contributions. The error printer
+resolves them to rule, module, and =file:line= through provenance. There is no
+"last writer wins" and no priority. Whether the conflict is fatal is policy:
+
+#+begin_src prolog
+deny(attr_conflict, "conflicting attribute contributions", { type: T, addr: A, path: P }) :-
+  attr_conflict(T, A, P, _, _).
+#+end_src
+
+is in the prelude and cannot be removed, but it can be *narrowed* by a
+module that owns a type (see ownership) and prefers a warning during
+migration. In practice nobody should.
+
+*** =merge_rule= and list merge keys
+
+=merge_rule(Path, Op)= and =merge_rule(Type, Path, Op)= from the prototype
+survive as sugar that lowers to =type_lattice/3= facts, and are permitted
+only for types whose provider schema is absent (the fake provider, or a
+declarative provider with an incomplete schema). When a schema exists the
+lattice comes from the schema and a =merge_rule= is a compile error naming
+the schema line. Legal ops: =flat=, =map=, =set=, =keyed([k...])=,
+=ordered=. =bag= is gone.
+
+=type_lattice/3= is EDB and must be ground. A derived =type_lattice= is a
+compile error: the aggregate needs its lattice before the stratum that
+computes it, and letting the lattice depend on evaluation would put the
+attribute assembly in a loop with itself.
+
+*** Order independence
+
+Claim: for a fixed set of contributions =C = {v_1 ... v_n}= to =(T, A, P)=,
+the assembled value is =⊔ C=, independent of the order in which the
+contributions were derived, the order of source files, the stratum timing of
+their rules, or how many times each was derived.
+
+Argument:
+
+1. Datalog semantics gives the set =C=. A rule that fires twice with the
+   same binding produces the same tuple in =arg/4= once. So =C= is a set, not
+   a sequence or a multiset.
+2. =⊔= is commutative and associative on every lattice above (=Flat=: by
+   cases; =Map=: pointwise from the element lattice; =Set=: union). So the
+   fold of =⊔= over any enumeration of =C= gives the same element.
+3. =⊔= is idempotent on every lattice above, so an implementation that
+   re-folds a contribution it has already seen (semi-naive delta replay, a
+   restarted apply, a reactive re-evaluation) reaches the same element.
+4. Stratification guarantees the aggregate runs after =arg/4= is complete
+   in its stratum, so no consumer ever observes a partial fold. This is the
+   property the prototype's aggregate repro (=snap(L) :- all(L)= printing
+   three facts) violates.
+5. The =arg_default= layer is a two-element priority, not an order: the
+   aggregate reads either the =arg= group or the =arg_default= group for a
+   key, decided by =has_arg= in a strictly lower stratum. Within each group
+   points 1-3 apply.
+
+Consequence used later: the aggregate is monotone in =C= (adding a
+contribution moves the result up or to =⊤=, never down), which is the
+property DBSP needs for incremental maintenance.
+
+*** What the aggregate is not
+
+It is not CUE. CUE's lattice includes types as values (=int= is above =3=)
+and closed structs. dform's lattice contains only values; types live in
+the schema and are checked statically. This is a deliberate narrowing: CUE
+programs are hard to read precisely because a value and its constraint are
+the same kind of thing. In dform a constraint is a =deny= rule.
+
+** Stratification
+
+The dependency graph has one node per predicate and an edge from each head
+to each body predicate. An edge is *negative* if any of the following holds:
+
+- the body literal is under =not=;
+- the head is an aggregate predicate (the fix from the engine ticket:
+  aggregate heads get negative edges to every body predicate);
+- the body literal is an extern (externs are evaluated once per stratum
+  after their inputs are complete, so they behave like an aggregate over
+  their bound arguments);
+- the body literal is =attr/4=, =output/3=, or =attr_conflict/5= (these are
+  aggregates and inherit the rule above automatically; listed so the reader
+  does not wonder).
+
+A cycle through a negative edge is a compile error naming the cycle. The
+stratum of a predicate is the longest negative-edge path to it; evaluation
+runs strata in order, each to fixpoint. Within a stratum, evaluation is
+semi-naive (deltas only), and there is no iteration cap.
+
+Externs additionally must not be under =not= and must not be in a recursive
+cycle, per the extern ticket. Provider configuration predicates
+(=provider_config/3=) are stratum 0 and may not depend on externs or refs
+(the Terraform "provider fed by a resource" failure, rejected at compile
+time).
+
+** What the engine carries per fact
+
+#+begin_src rust
+struct FactId(u32);
+
+struct Fact {
+    pred:   PredId,
+    args:   SmallVec<[Value; 4]>,
+    prov:   SmallVec<[Derivation; 1]>,   // at least one
+}
+
+enum Derivation {
+    Base   { span: Span },                                  // source fact
+    Extern { provider: ProviderId, call: CallId },          // recorded in plan file
+    World  { refresh: RefreshId },                          // from refresh
+    Rule   { rule: RuleId, body: SmallVec<[FactId; 4]>, negs: SmallVec<[NegWitness; 0]> },
+    Agg    { rule: RuleId, group: SmallVec<[FactId; 8]> },  // all contributions
+}
+
+struct NegWitness { pred: PredId, args: SmallVec<[Value; 4]>, stratum: u16 }
+#+end_src
+
+Rules: a fact's id is assigned when it is first derived. A later derivation
+of the same tuple is appended to =prov= only if every body fact id is smaller
+than the head's id; this keeps every derivation DAG acyclic without a cycle
+check and still records every shorter proof. Negative literals record the
+absent tuple and the stratum in which absence was decided, as Soufflé's
+=explain= does; there is no sub-proof of an absence.
+
+Memory: a =Fact= is ~64 bytes plus values plus 16-32 bytes per derivation.
+A real account at 10^5 facts per stratum is tens of megabytes. That is the
+whole cost of provenance, and it is paid always; there is no
+=--no-provenance= because conflict errors and ownership checks need it.
+
+** The operator IR
+
+Rules are not tree-walked. The compiler lowers each stratum into a dataflow
+of operators, which is what semi-naive evaluation, indexing, and later DBSP
+need:
+
+| Operator     | Semantics                                              |
+|--------------+--------------------------------------------------------|
+| =Scan(p)=    | all tuples of =p=                                      |
+| =Join=       | hash join on shared variables; index built per stratum |
+| =AntiJoin=   | =not p(...)= with all variables bound                  |
+| =Filter=     | comparison or boolean builtin                          |
+| =Map=        | builtin function application, =format=, arithmetic     |
+| =Extern=     | batched provider call on the bound columns             |
+| =Distinct=   | set semantics                                          |
+| =Agg=        | group by key columns, fold with an aggregate           |
+| =Fix=        | stratum fixpoint over a set of recursive operators     |
+
+A =Fix= node contains the strongly-connected rules of one stratum; deltas
+flow around it until empty. Provenance is a side output of =Join= and =Agg=.
+Everything in this table has a direct DBSP counterpart, which is the point.
+
+* Unknown values, the schema, and refs
+
+** Schema as facts
+
+A provider's =Schema= response is loaded as EDB before stratum 0:
+
+#+begin_src prolog
+type_attr(aws.subnet, .cidr,   inet,          [required]).
+type_attr(aws.subnet, .vpc_id, ref(aws.vpc),  [required]).
+type_attr(aws.subnet, .tags,   map(string),   []).
+type_attr(aws.subnet, .id,     string,        [computed]).
+type_attr(aws.subnet, .arn,    string,        [computed]).
+type_lattice(aws.subnet, .tags, map).
+type_lattice(aws.security_group, .ingress, keyed([.protocol, .from_port, .to_port, .cidr])).
+type_attr(aws.db_instance, .password, secret(string), [required, sensitive]).
+#+end_src
+
+The compiler uses these for four static checks: keypath validity, value
+type, lattice selection, and the unknown-value rule below. Policy can use
+them too because they are facts.
+
+Types without a schema (fake provider before it grows one, a REST provider
+whose OpenAPI is partial) are permitted under =decl type T open.=, which
+disables keypath and type checks for =T= and selects lattices by value shape
+with a warning. This is the migration path, not the default.
+
+** The unknown-value rule
+
+Real providers produce ids, ARNs, endpoints at apply. The rule:
+
+1. =ref(T, A, Attr)= where =type_attr(T, Attr, _, Flags)= has =computed= in
+   =Flags= evaluates to an opaque =Ref= token. A =Ref= is legal as an
+   attribute value (inside =arg/4=, at any depth), as a module output, and
+   nowhere else. In a body literal, comparison, negation, aggregate, or
+   builtin argument it is a compile error: "=ref(aws.vpc, main, .id)= is
+   known after apply; a rule cannot observe it".
+2. =ref(T, A, Attr)= where =Attr= is not computed is rewritten by the
+   compiler into a body join: =arg(X, Y, .p, ref(T, A, .cidr))= becomes
+   =arg(X, Y, .p, V) :- ..., attr(T, A, .cidr, V)=. The dependency edge
+   =(X,Y) → (T,A)= is still recorded because the plan orders on =ref=
+   *syntax*, which the lowering keeps as an annotation. This is why
+   =modules/network.df= can keep writing =ref(net.vpc, vpc, id)= for the
+   dependency and =attr(net.vpc, vpc, .cidr, V)= for the value.
+3. World facts (=world_attr/4=) from refresh are ordinary EDB and may be
+   read by any rule. A rule that reads the world value of a resource the
+   same program =want=s is reading the previous apply, and the compiler
+   emits a warning with a stable id (=W0007 reads-own-world=) that a stack can
+   promote to an error via policy. This covers adopt and "keep the existing
+   tag stable".
+4. There is no "known after apply" inside the fixpoint. Multi-phase apply
+   (create VPC, learn id, create subnets) is the executor's job through
+   dependency order. A program whose rule structure needs an apply-time
+   value (a for-each over allocated NAT addresses) is split into two stacks
+   with a =stack_output= edge. This is the Terraform =count= / =for_each=
+   restriction, stated once, checked statically, and named in the diagnostic.
+
+The check is static because the computed set is in the schema. A =ref= whose
+type has no schema is treated as computed (conservative), so open types get
+the strict rule.
+
+** Why not labeled nulls
+
+See the research direction on existential rules below. Short version: a
+labeled null in a body position could unify with another null, and whether
+two nulls denote the same value is undecidable at plan time, so the lattice
+join could not decide between =v= and =⊤=. A conflict detector that says
+"maybe" is not a conflict detector.
+
+* Modules with explicit interfaces
+
+** Declaration
+
+#+begin_src prolog
+module network {
+  input  vpc_net: inet.
+  input  zones:   list(string) = ["us-test-1a", "us-test-1b"].
+  output private_subnet_ids: list(ref(net.subnet)).
+  export subnet_of/2.
+
+  resource net.vpc vpc {
+    cidr = VpcNet
+    tags = { env: Env, component: "network" }
+  } :- env(Env), vpc_net(VpcNet).
+
+  zone_index(Z, I) :- zones(Zs), member(Zs, I, Z).
+
+  resource net.subnet Sn {
+    vpc_id     = ref(net.vpc, vpc, .id)
+    cidr       = inet_subnet(VpcNet, 4, I)
+    zone       = Z
+    visibility = "private"
+  } :- zone_index(Z, I), attr(net.vpc, vpc, .cidr, VpcNet), Sn = format("private-%s", Z).
+
+  subnet_of(Sn, vpc) :- want(net.subnet, Sn).
+
+  output private_subnet_ids = [ ref(net.subnet, Sn, .id) | want(net.subnet, Sn), attr(net.subnet, Sn, .visibility, "private") ].
+}.
+
+instance network main { vpc_net = V } :- env(E), setting(E, .network.main.vpc_net, V).
+instance network peer { vpc_net = V } :- env(E), setting(E, .network.peer.vpc_net, V).
+#+end_src
+
+Semantics, each item checked at compile time:
+
+- =input k: Ty [= default].= declares a unary predicate =k/1= private to
+  the instance, populated by the =instance= statement. Missing input with no
+  default: compile error at the =instance=. Type mismatch: compile error.
+  Defaults lower to the =arg_default= pattern, not to negation written by hand.
+- =output k: Ty.= declares the value visible to the parent as
+  =output(network.main, private_subnet_ids, V)=. Outputs are assembled by
+  the same lattice aggregate as attributes (=Flat= unless annotated), so two
+  rules contributing to one output conflict loudly.
+- =export p/N.= makes =p= visible to the parent as =main.p= (qualified name).
+  Every other predicate defined in the module is renamed to an
+  instance-private name and cannot be referenced from outside. Two modules
+  defining =zone_index/2= no longer union; each has its own.
+- Global predicates (=env/1=, =setting/3=, =want/2=, =attr/4=, the prelude,
+  the schema) are readable from inside a module. Writing to a global
+  predicate from inside a module requires a =contributes= grant.
+- =ref= inside a module refers to instance-local resources by local name.
+  There is no syntax for referencing another instance's resource directly;
+  it goes through an output. The old =component_scope/3= join disappears.
+- Resource addresses are =Addr= values: =(instance path, local name)=,
+  printed as =network.main/vpc=. Address stability across module refactors
+  is handled by =moved=, not by string surgery.
+
+** Policy packs are modules with a grant
+
+#+begin_src prolog
+policy baseline {
+  contributes arg to _ at .tags.
+  contributes arg to iam.policy at .statements.
+
+  arg(T, A, .tags, { team: "platform" }) :- want(T, A).
+
+  arg(iam.policy, A, .statements, [ { action: "org.read", resource: "org" } ]) :-
+    env(prod), want(iam.policy, A), attr(iam.policy, A, .name, "app").
+
+  deny(db_public, "db must not be public", { resource: Db }) :-
+    want(db.postgres, Db), not attr(db.postgres, Db, .public, false).
+
+  warn(audit_logging, "prod should enable audit logging", {}) :-
+    env(prod), not setting(prod, .audit.enabled, true).
+}.
+
+apply baseline.
+#+end_src
+
+=contributes arg to TypePattern at PathPattern.= is the write grant. An
+=arg= head in a module without a matching grant is a compile error. =deny=
+and =warn= need no grant; anyone may object. =setting_add= is gone: a
+policy that wants to add an audit sink contributes to a =Set=-typed setting
+through the same =arg= mechanism on the settings pseudo-type (below).
+
+=apply baseline= is =instance baseline {}= with a different keyword so it
+reads as intent.
+
+** Settings are a resource type
+
+The prototype has a parallel merge path for =setting/3= with its own
+=merge_rule(setting, ...)= and =setting_add=. In this direction a settings
+block is a resource of the built-in type =settings= addressed by
+environment:
+
+#+begin_src prolog
+settings prod {
+  network.main.vpc_net = inet("10.20.0.0/16")
+  db = { backup_days: 14, multi_az: true }
+  audit.sinks += ["cloudwatch"]
+}.
+#+end_src
+
+lowers to =arg(settings, prod, .network.main.vpc_net, ...)= and so on, and
+=setting(Env, Path, V)= is defined in the prelude as
+
+#+begin_src prolog
+setting(Env, P, V) :- attr(settings, Env, P, V).
+#+end_src
+
+So settings get the lattice, conflicts, ownership, and provenance for free,
+and one fewer mechanism exists. =unique setting(2)= is no longer needed: the
+aggregate produces one row per key by construction. The =settings= type has
+=decl type settings open.= in the prelude, and a stack may declare a schema
+for it with =type settings { ... }= to get typed, refined settings.
+
+* Everything else lowers to policy
+
+The lowering table. Every row produces =deny/3= or =warn/3= facts with a
+stable identifier, so =dform check --sarif= is one exporter.
+
+| Feature                            | Lowers to                                                              |
+|------------------------------------+------------------------------------------------------------------------|
+| =constraint("msg") :- body.=       | =deny(anon_N, "msg", {}) :- body.= (kept as sugar, deprecated)          |
+| refinement =input replicas: int where 1 <= replicas <= 10.= | =deny(refine_replicas, ...) :- replicas(R), not (1 <= R, R <= 10).= |
+| schema =required= flag             | =deny(schema_required, ...) :- want(T,A), type_attr(T,P,_,Fl), member(Fl, required), not attr(T,A,P,_).= |
+| schema type check                  | =deny(schema_type, ...) :- attr(T,A,P,V), type_attr(T,P,Ty,_), not has_type(V, Ty).= |
+| attribute conflict                 | =deny(attr_conflict, ...) :- attr_conflict(T,A,P,_,_).=                  |
+| lifecycle check                    | user-written =deny= over =lifecycle/3= (L7)                              |
+| doc coverage                       | user-written =deny= over =doc/4= and =export/1= (L14)                    |
+| scenario expectation               | =deny= rules scoped to the scenario's input facts (L12)                  |
+| secrecy leak that escaped static check | =deny(secret_leak, ...) :- attr(T,A,P,V), is_secret(V), type_attr(T,P,_,Fl), not member(Fl, sensitive).= |
+| cost limit                         | =deny(cost_limit, ...) :- cost(Stack, monthly, C), C > 5000.= over a pricing fact provider |
+| unknown-predicate typo             | not policy: compile error (must be static)                               |
+| extern under negation              | not policy: compile error                                                |
+
+Severity is the head predicate (=deny= blocks, =warn= reports). The
+identifier is the first argument, a symbol, and is what CI suppressions and
+SARIF rule ids key on. Messages are free text.
+
+Scenarios:
+
+#+begin_src prolog
+scenario prod_db_is_multi_az {
+  env(prod).
+  deny(test_multi_az, "db not multi_az", {}) :-
+    not attr(db.postgres, database.main/db, .multi_az, true).
+}.
+#+end_src
+
+A scenario is a module instantiated by =dform test= in a fresh evaluation
+whose EDB is the program's EDB with the scenario's facts *replacing* the
+stack inputs they name (=env/1= here) and with the scenario's rules added.
+It runs the same pipeline as =plan=, so a scenario can also assert on the
+plan (=plan_action(create, T, A)= facts are exposed to policy in the test
+pipeline).
+
+* Research directions, integrated or rejected
+
+Each entry ends with a verdict line: *integrated* (with the mechanism),
+*integrated as a provider* (outside the engine, behind the fact-provider
+protocol), or *rejected* (with the specific reason for this direction).
+
+** Provenance semirings (Green, Karvounarakis, Tannen 2007)
+
+*** What the theory gives
+
+A K-relation annotates each tuple with an element of a commutative semiring
+=(K, ⊕, ⊗, 0, 1)=. Join multiplies annotations, union and projection add
+them. The positive relational algebra and Datalog (with a fixpoint over
+ω-continuous semirings) are then parametric in =K=, and any semiring
+homomorphism commutes with query evaluation. The most informative
+instance is the provenance polynomials =N[X]=; every other semiring is a
+homomorphic image of it. Deutch, Milo, Roy, Tannen (2014) show the
+polynomial for a Datalog fact can be represented as a circuit rather than
+expanded, which is what makes it affordable for recursion.
+
+Two known gaps matter for dform: negation and aggregation. Semirings do
+not model difference; Geerts and Poggi (2010) add a monus (m-semirings)
+and Amsterdamer, Deutch, Tannen (2011) handle aggregates with semimodules.
+Both are heavier than this direction wants.
+
+*** The mechanism dform adopts
+
+The engine records the *circuit* (the derivation DAG from "What the engine
+carries per fact") and nothing else. That DAG is the =N[X]= polynomial in
+unexpanded form: a =Rule= derivation is a monomial (=⊗= over body facts,
+times the rule's own variable), a fact with several derivations is a sum,
+and base facts are the variables =X=. Every semiring below is a fold over
+the DAG with a valuation of the leaves:
+
+#+begin_src rust
+trait Semiring { type K; fn zero() -> K; fn one() -> K; fn add(K, K) -> K; fn mul(K, K) -> K; }
+
+fn eval<S: Semiring>(f: FactId, leaf: impl Fn(&Derivation) -> S::K, memo: &mut Memo<S::K>) -> S::K {
+    // sum over derivations of (product over body facts), memoised per fact id;
+    // acyclic by the id-ordering rule, so plain recursion terminates.
+}
+#+end_src
+
+Negation: a =NegWitness= leaf is =1= in every semiring (its contribution is
+"this absence held", which has no cost, no owner, and no secrecy of its
+own). This is the Soufflé choice and it is sound for every question dform
+asks below because none of them need the *reason for an absence*. A
+question that did (a counterfactual "what would make this exist") is the
+view-update problem, treated separately.
+
+Aggregation: an =Agg= derivation is =⊗= over all contributions in the
+group. For the lattice aggregate this means the annotation of =attr(T,A,P,V)=
+is the product of the annotations of every =arg= that reached the join,
+which is what "who contributed to this attribute" should mean. This is the
+semimodule construction of Amsterdamer et al. specialised to the case where
+the aggregate value itself is not annotated; dform never needs
+annotation-dependent values.
+
+*** The semirings, chosen
+
+| Question           | Semiring                                   | =⊕=      | =⊗=      | Leaf valuation                          |
+|--------------------+--------------------------------------------+----------+----------+-----------------------------------------|
+| why (all proofs)   | =Why(X)=: sets of witness sets             | ∪        | pairwise ∪ | ={{x}}= for base fact x                |
+| why (one proof)    | =N[X]= truncated: first derivation only    | first    | concat   | =x=                                     |
+| ownership          | =Lin(X)=: lineage, =P(Owner)=              | ∪        | ∪        | owner of the leaf's rule or fact's file |
+| secrecy of a fact  | security semiring =S=: total order of labels | min    | max      | label of the leaf's predicate position  |
+| derivation cost    | tropical =(ℕ ∪ {∞}, min, +)=               | min      | +        | 0 for base facts; per-extern call cost  |
+
+- *why-provenance* is what =dform why 'attr(net.vpc, network.main/vpc, .tags.team, "platform")'= prints. It walks =Why(X)= but stops expanding at facts the user did not ask about, giving a tree with one level per rule and =file:line= from spans.
+- *ownership* (L1b) is =Lin(X)= with the leaf valuation "which module instance's rule or which source file produced this". Because =⊗= is union, the owner set of an =attr= row is every module that contributed, and a conflict names both. The =contributes= grant is checked statically, so ownership at runtime is for display and for =managed_by= in state, not for enforcement.
+- *secrecy of a fact* uses the security semiring from Foster, Green, Tannen (2008): labels totally ordered =public < secret=, =⊗ = max= (a fact derived using a secret is secret), =⊕ = min= (a fact with a public derivation is public even if it also has a secret one). This is the *runtime* half of secrecy; the static half is in the information-flow entry. The runtime half exists only because providers return values marked =sensitive= that no rule mentioned.
+- *derivation cost* (tropical) is included because it is free and because it answers "what is the cheapest set of extern calls that produced this plan", which the executor uses to order refresh. It is *not* infrastructure cost. The monthly cost of a database is a function of its assembled attributes, not of the proof that it should exist. Infrastructure cost is a fact provider: =extern pricing.monthly(+Type, +Attrs, -Cost)= reading =attr/4=, and =cost(Stack, monthly, sum(C))= is an ordinary aggregate. The design board's phrase "cost (tropical)" conflates two things, and this proposal separates them.
+
+The four share one mechanism: one DAG, one =eval= function, four =Semiring=
+impls. Nothing in the engine knows which semirings exist; =dform why=,
+=dform explain=, the conflict printer, and the secrecy checker each pick one.
+
+*** Worked example
+
+#+begin_src prolog
+# policies/baseline.df
+policy baseline {
+  contributes arg to _ at .tags.
+  arg(T, A, .tags, { team: "platform" }) :- want(T, A).            # rule r1, baseline.df:3
+}.
+# modules/network.df
+module network {
+  resource net.vpc vpc { cidr = V, tags = { env: E } } :- env(E), vpc_net(V).   # rule r2, network.df:5
+}.
+#+end_src
+
+=dform why 'attr(net.vpc, network.main/vpc, .tags, X)'=:
+
+#+begin_example
+attr(net.vpc, network.main/vpc, .tags, {env: "prod", team: "platform"})
+  lub over 2 contributions                       [owners: network.main, baseline]
+  ├─ arg(net.vpc, network.main/vpc, .tags, {env: "prod"})
+  │    by network.df:5 (network.main)
+  │    ├─ env("prod")            input env=prod          (cli)
+  │    └─ network.main/vpc_net(inet("10.20.0.0/16"))
+  │         by dform.df:41 instance network main
+  │         └─ setting("prod", .network.main.vpc_net, ...)  dform.df:14
+  └─ arg(net.vpc, network.main/vpc, .tags, {team: "platform"})
+       by baseline.df:3 (baseline)
+       └─ want(net.vpc, network.main/vpc)   by network.df:5 (network.main) ...
+#+end_example
+
+If =baseline= had written =team: "core"= while =network= wrote
+=team: "platform"=, the same DAG under =Lin(X)= gives the two owners in the
+conflict message, with no extra bookkeeping.
+
+*** Cost in engine complexity
+
+One extra field per fact, appended by =Join= and =Agg=; one memoised fold;
+no change to evaluation order. The only intrusive part is the id-ordering
+rule for later derivations, which needs the fact store to hand out ids
+monotonically (it does, it is an insertion-ordered arena). Under DBSP the
+DAG must be a Z-set too so retractions retract derivations; Deutch et al.
+cover this and it is a known cost of reactive mode, not of provenance.
+
+Verdict: *integrated*. It is the mechanism behind =why=, ownership, the
+conflict printer, and half of secrets.
+
+** Existential rules and labeled nulls (Datalog±, Vadalog, Nemo)
+
+*** What it would look like
+
+The chase, given a rule =∃Id. vpc_id(V, Id) :- want(net.vpc, V)=, invents a
+fresh null =⊥_1= for =Id= and lets other rules reason over it. "Known after
+apply" would be a null, a subnet's =vpc_id = ⊥_1= would be a fact, and a
+join =attr(net.subnet, S, .vpc_id, X), attr(net.vpc, V, .id, X)= would
+succeed on the shared null. The engine could report every conclusion whose
+provenance contains a null, giving a "depends on apply" set for free.
+
+*** Why this direction rejects it
+
+1. The lattice join must decide =v ⊔ v'= at plan time. If =v = ⊥_1= and
+   =v' = ⊥_2= are labeled nulls, the join is =⊥_1= if the nulls will be
+   equal at apply and =⊤= if not. Which one is true is not knowable until
+   apply (and in the guarded fragments where termination is decidable, null
+   equality is still an apply-time fact for dform). A conflict detector that
+   returns "maybe" defeats the purpose of the lattice.
+2. Negation over nulls has no agreed semantics compatible with
+   stratification. Datalog± with stratified negation is "warded" or
+   "guarded" to stay decidable; the useful IaC rules (=not attr(..., .public, false)=)
+   are exactly the unguarded ones. Vadalog's answer (warded Datalog±) buys
+   decidability by restricting where nulls may propagate to a shape that
+   excludes joining a null to a constant in a negated literal, which is the
+   common policy case.
+3. Everything the null would tell us is already known statically. A =Ref=
+   token *is* a labeled null in representation (a Skolem term naming a
+   value that exists but is unidentified). The difference is that dform
+   forbids it from reaching a position where reasoning over it happens.
+   The "which conclusions depend on apply" set is exactly the set of =attr=
+   rows whose value contains a =Ref=, computed by a value walk, no chase
+   required.
+
+The example the chase would enable, iterating over apply-time values, is
+answered by the two-stack rule in the unknown-value section. That is a
+worse user experience than Vadalog's, and the candid section says so.
+
+Verdict: *rejected*. Representation of refs borrowed (they are named
+nulls); reasoning over them refused because it makes the lattice top
+undecidable at plan time and breaks stratified negation.
+
+** DBSP and differential dataflow (Feldera)
+
+*** What it gives
+
+DBSP (Budiu, Chajed, McSherry, Ryzhyk, Tannen 2023) is an algebra over
+Z-sets (relations with integer weights) with two operators, integrate and
+differentiate, such that any relational query including stratified
+recursion has a mechanically derived incremental version. Non-linear
+operators (distinct, aggregates) are incrementalised by per-group
+recomputation. Feldera ships it as the =dbsp= Rust crate.
+
+*** How it fits this direction
+
+The operator IR above is a DBSP circuit with different names. Two things
+need care:
+
+- The lattice aggregate is non-linear and non-invertible (no =⊔⁻¹=), so
+  incremental maintenance recomputes the fold for each changed group. A
+  group is the set of contributions to one =(T, A, P)=, typically 1-5
+  tuples, so this is cheap. Monotonicity of the fold (order-independence
+  point 5) means that for the common case of *added* contributions the
+  fold can be extended rather than recomputed; retractions recompute.
+- Provenance under retraction: a derivation is a Z-set element with weight
+  =+1= on derive and =-1= on retract; a fact's =prov= is the sum. This is
+  the Deutch et al. incremental circuit; the =Fact.prov= vector becomes a
+  Z-set keyed by derivation.
+
+Plan of record: phase 1 is a hand-written semi-naive evaluator over the
+operator IR, with hash indexes built per stratum, no iteration cap. Phase 2
+swaps the interpreter for the =dbsp= crate, which is what the reactive
+ticket needs (input deltas in, deformation deltas out). Nothing in the
+language changes between the phases because the IR is the contract.
+
+What DBSP does not give: it has no provenance, no lattice aggregate, and
+no extern operator. Each is a custom operator (=Aggregator= impl for =lub=;
+a source operator for externs that re-fires when its bound input changes).
+
+Cost: phase 1 is the engine rewrite this proposal already requires. Phase 2
+is a ~2-3k line adapter plus the =dbsp= dependency (large, Feldera-paced).
+
+Verdict: *integrated* as the engine's second implementation; the IR is
+designed for it now.
+
+** Monotonicity types (Datafun; Arntzenius and Krishnaswami 2016)
+
+*** What it gives
+
+A type system where function types are annotated monotone or not, and a
+fixpoint operator is typed only over monotone functions on semilattices.
+Stratification, aggregate safety, and incremental safety become type
+checks, and users may define their own lattices and monotone functions.
+
+*** Why this direction does not adopt it
+
+Monotonicity types earn their keep when the *user* writes lattice
+functions. In direction A the user cannot: the lattices are the fixed
+constructors =Flat=, =Map=, =Set=, =Keyed=, =Ordered=, and the aggregates
+are a fixed set. For first-order rules over a fixed aggregate vocabulary,
+stratification computes exactly the judgement a monotonicity type checker
+would compute, with no annotations, in one graph pass. Adding the type
+system would add syntax (=mono= arrows) and a checker that agrees with the
+stratifier on every program it accepts.
+
+What is taken: the *classification* of every builtin as monotone,
+antitone, or neither in each argument, held in a table used by two checks:
+
+- =inet_contains(A, B)= is antitone in =A= and monotone in =B= with respect
+  to prefix containment; this lets the compiler confirm the reachability
+  closure in =dform-advanced.df= is a genuine fixpoint over inet values.
+- a comparison against an aggregate (=count(...) >= 2=) is placed by the
+  stratifier; the table is not needed.
+
+Verdict: *rejected* as a surface feature; the builtin monotonicity table is
+kept internally. Would flip if user-defined lattices were ever admitted
+(that is direction B, Flix-style).
+
+** Answer set programming and choice (clingo)
+
+*** What it would enable
+
+Assign non-overlapping CIDRs to N subnets, spread nodepools across zones
+with balance constraints, choose the cheapest instance type satisfying
+memory and CPU floors. Each is "derive one model satisfying constraints and
+minimising a cost", which is what clingo does and Datalog does not.
+
+*** How direction A provides it
+
+Not in the engine. A =solve= stratum would make the plan a function of the
+solver's tie-breaking, its version, and its heuristics; the plan would no
+longer be a function of source plus world. The impure-value DECIDE already
+has the right shape for this: impurity enters through an extern whose
+results are persisted.
+
+#+begin_src prolog
+provider clingo { source = "registry.dform.dev/clingo", version = ">=1" }.
+
+# The problem is facts; the solver is an extern with a binding pattern.
+extern clingo.assign(+Problem, +Pinned, -Assignment).
+
+subnet_req(Sn, 24) :- want(net.subnet, Sn).
+cidr_problem({ space: Space, reqs: Reqs }) :-
+  attr(net.vpc, vpc, .cidr, Space),
+  Reqs = [ { name: Sn, bits: B } | subnet_req(Sn, B) ].
+
+# Pinned assignments come from state so an existing subnet keeps its CIDR.
+pinned({ name: Sn, cidr: C }) :- world_attr(net.subnet, Sn, .cidr, C).
+pinned_all(collect_set(P)) :- pinned(P).
+
+cidr_of(Sn, C) :-
+  cidr_problem(Pr), pinned_all(Pin),
+  clingo.assign(Pr, Pin, Asg), member(Asg, { name: Sn, cidr: C }).
+
+arg(net.subnet, Sn, .cidr, C) :- cidr_of(Sn, C).
+#+end_src
+
+The extern runs once per stratum after =cidr_problem= and =pinned_all= are
+complete (both are aggregates, so the extern is strictly above them). Its
+result is recorded in the plan file, so apply sees the same assignment plan
+saw. The solver's answer is deterministic given =(Problem, Pinned)= because
+the provider is required to pass =--seed= and a fixed configuration and to
+record both in its lockfile entry.
+
+Provenance of =cidr_of= is =Extern{clingo, call}= over the problem facts,
+so =dform why= shows "assigned by clingo from these requirements", which is
+more than a hand-written allocator gives.
+
+What is lost versus a language-level =solve=: the solver cannot see rules,
+only the facts handed to it, so a constraint must be encoded twice if it is
+also a =deny=. Accepted.
+
+Verdict: *integrated as a provider*. Engine cost zero. A conformance test
+for "deterministic given inputs" is added to the provider harness.
+
+** NetKAT and BDD reachability (Foster et al.; Batfish)
+
+*** What it gives
+
+Symbolic reasoning over *all* packets through security groups, NACLs, and
+route tables: "is any TCP/5432 packet from 0.0.0.0/0 able to reach the
+database" answered by BDD operations rather than by enumerating flows.
+Batfish does this over device configs; Tiros does it over AWS.
+
+*** How direction A provides it
+
+The engine gets unified =inet= values and the predicate-level network
+builtins (L15), which is enough for the closures dform-advanced.df already
+writes: overlap, containment, transitive reachability over *declared*
+edges. It does not get a BDD library. Symbolic packet reasoning is a fact
+provider that consumes assembled intent:
+
+#+begin_src prolog
+provider netkat { source = "registry.dform.dev/netkat" }.
+extern netkat.reaches(+Topology, +Src, +Dst, +Proto, +Port, -Verdict).
+
+sg_rule(Sg, R) :- attr(aws.security_group, Sg, .ingress, Rs), member(Rs, R).
+topology({ sgs: Sgs, routes: Rts }) :-
+  Sgs = [ { id: Sg, rules: Rs } | attr(aws.security_group, Sg, .ingress, Rs) ],
+  Rts = [ { table: T, routes: Rs } | attr(aws.route_table, T, .routes, Rs) ].
+
+deny(db_internet_reachable, "database reachable from the internet", { db: Db }) :-
+  want(db.postgres, Db), attr(db.postgres, Db, .security_group, Sg),
+  topology(Tp),
+  netkat.reaches(Tp, inet("0.0.0.0/0"), Sg, "tcp", 5432, true).
+#+end_src
+
+Stratification places the extern above =topology= (an aggregate over
+=attr=), which is above the attribute lattice. The provider receives a
+value, builds the BDD, answers, and the answer is recorded in the plan.
+Because the answer is a fact with provenance =Extern{netkat, call}=, the
+deny message can print which rules the provider blamed if the provider
+returns a witness (the protocol allows an optional =witness= column).
+
+Cost: the =Inet= value type and about a dozen builtins in the engine; the
+BDD work is a provider written once, in whatever language has a good BDD
+library.
+
+Verdict: *integrated as a provider*; =inet= unification (L15) is in the
+engine.
+
+** Automated reasoning at AWS (Zelkova, Tiros)
+
+*** What it gives
+
+Zelkova encodes IAM policy semantics into SMT and answers "does policy P
+grant action A on resource R to principal Q, for any request context".
+Tiros does the same for VPC reachability. Both are closed services with an
+API (IAM Access Analyzer, VPC Reachability Analyzer).
+
+*** How direction A provides it
+
+The same shape as NetKAT: a fact provider with binding patterns, consuming
+assembled intent, returning a verdict with an optional witness. The
+interesting part is what dform must guarantee so the answer is
+meaningful:
+
+- The provider receives the *assembled* policy document (=attr/4= after the
+  lattice), so what is analysed is what will be applied. This is the
+  advantage over running Access Analyzer after apply.
+- The extern's inputs are ground and complete (stratified above the
+  aggregate), so the call happens once per plan with the final document.
+- The call is recorded in the plan file, so a reviewer sees the verdict
+  next to the change that caused it.
+
+#+begin_src prolog
+provider iamcheck { source = "registry.dform.dev/aws-access-analyzer" }.
+extern iamcheck.grants(+PolicyDoc, +Principal, +Action, +Resource, -Verdict).
+
+deny(iam_wildcard_s3_delete, "policy grants s3:DeleteBucket on any bucket", { policy: P }) :-
+  attr(iam.policy, P, .document, Doc),
+  iamcheck.grants(Doc, "*", "s3:DeleteBucket", "arn:aws:s3:::*", true).
+#+end_src
+
+A local, open alternative provider can implement the same extern
+signature with a hand-written IAM evaluator (or Z3), which is what makes
+it a protocol contract rather than a vendor feature.
+
+Verdict: *integrated as a provider*; it is the second instance of the
+"symbolic fact provider" class and needs nothing NetKAT did not.
+
+** View update and lenses (Bancilhon–Spyratos; Foster, Pierce et al.)
+
+*** The question
+
+Given the world (refresh facts) and the program, which *source* facts must
+change so that the derived intent equals the world? Concretely:
+
+- =dform import=: an object exists; produce the =resource= block that
+  would recreate it.
+- =dform adopt=: an object exists and a =want= matches it; produce the
+  =adopt/3= fact and the argument edits needed for a zero diff.
+- drift reconciliation: the world changed; propose the source edit that
+  ratifies the change.
+- =moved= proposals: a resource vanished and an equivalent one appeared at
+  another address.
+
+*** Why the general problem is out
+
+A Datalog program is a view definition; "put" for arbitrary views is
+ill-posed (the view update problem), and lenses give well-behaved =put=
+only for a restricted combinator language with laws (PutGet, GetPut). A
+recursive rule with negation is not a lens.
+
+*** The restricted problem direction A solves
+
+Define the *backward-traceable* subset: an =attr= row is backward-traceable
+if its why-provenance (the =Why(X)= fold) contains exactly one witness set,
+and that set contains exactly one base fact that carries the value verbatim
+(the value at the leaf equals the value at the root, modulo the lattice
+embedding into a =Map= key). For such rows, =put= is defined and unique:
+edit that base fact's span. This covers, in the example programs, every
+=settings= entry, every literal in a =resource= block with a ground head,
+and every =arg= fact. It does not cover =format("private-%s", Z)=,
+=inet_subnet(VpcNet, 4, I)=, or anything derived from an aggregate.
+
+#+begin_example
+$ dform adopt net.vpc network.main/vpc --from vpc-0a1b2c
+  adopt(net.vpc, network.main/vpc, "vpc-0a1b2c").                 # add to dform.df
+  settings prod { network.main.vpc_net = inet("10.20.0.0/16") }    # dform.df:14: matches world, no edit
+  attr .tags.owner = "legacy-team"                                 # world has it, intent does not:
+    not backward-traceable (no source contributes .tags.owner); options:
+      (a) add: arg(net.vpc, network.main/vpc, .tags.owner, "legacy-team").
+      (b) ignore: ignore_changes(net.vpc, network.main/vpc, .tags.owner).
+#+end_example
+
+The tool edits nothing without =--write=, and when a value is not
+backward-traceable it prints the derivation and the two mechanical options
+rather than guessing.
+
+=moved= proposals use the same provenance: two addresses whose =attr=
+rows are equal after erasing the address itself and every =Ref= that
+mentions the address are candidates, and the proposal is printed for the
+user to accept. No equality saturation is needed; it is a fingerprint
+comparison over the assembled attribute set.
+
+Cost: the =Why(X)= fold (already needed), a span-editing library in the
+CLI, and a fingerprint function. Nothing in the engine.
+
+Verdict: *integrated* in the restricted, provenance-defined form. The
+general view-update problem is not attempted; the boundary is precise
+(single-witness, value-preserving lineage) so the tool can say "no"
+honestly.
+
+** Egglog (Zhang, Willsey et al. 2023)
+
+*** What it would give
+
+Datalog with an equality relation maintained by e-graph congruence
+closure. Two intents are "the same" if the e-graph merges them; renamed
+resources become equivalence classes; canonical forms of attributes
+(=inet("10.0.0.0/8")= equals =inet("10.0.0.0/8")= however spelled) come
+from rewrite rules.
+
+*** Why direction A rejects it
+
+1. Egglog's equality is a *union*: if two terms are proven equal they
+   become one class. The lattice's whole job is to refuse to union two
+   different values at the same path and to report them. Egglog's
+   =:merge= functions can express the join, but then an egglog program is
+   a lattice-Datalog with equality saturation on top, which is direction B
+   plus a feature, not direction A.
+2. Egglog has no stratified negation; it is a monotone language (that is
+   what makes saturation sound). Every policy in the examples negates.
+3. The concrete use (renamed-resource detection) is served by the
+   fingerprint comparison in the lenses entry, which is a hash over a
+   canonical =attr= set. Canonicalisation of values (inet normalisation,
+   key sorting) happens in the =Value= constructors, not by rewriting.
+
+Verdict: *rejected*. Union-find equality conflicts with the lattice top,
+and the absence of negation excludes it from a policy language.
+
+** Mangle and Rel
+
+*** What was studied
+
+Google Mangle: Datalog with name constants (=/foo=), typed columns,
+function calls prefixed =fn:=, aggregation via a =do fn:group_by()=
+transform stanza after the body, and =let= bindings. RelationalAI Rel:
+relations as first-class values, =:symbol= literals, integrity constraints
+(=ic=) as the policy mechanism, and =@inline= for reuse.
+
+*** What direction A takes
+
+- From Mangle, the *transform stanza* shape for aggregates. dform keeps
+  aggregate terms in heads (=collect_set(X)=) because they read well, but
+  adopts Mangle's rule that an aggregating rule has exactly one aggregate
+  term and its remaining head arguments are the group key. That is
+  already the prototype's behaviour and is now stated in the grammar.
+- From Mangle, the separation of *function* names from *predicate* names
+  in the grammar. dform does it by position, not sigil: a call in a term
+  position is a function; a call in a literal position is a predicate.
+  The compiler keeps two namespaces and a name cannot be both.
+- From Rel, integrity constraints as the *only* non-derivation statement:
+  dform's =deny= / =warn= are Rel's =ic= with severity and an id.
+- From both, typed columns via =decl=: =decl subnet_of(Sn: addr, Vpc: addr).=
+  is accepted and checked; untyped =decl= is still allowed.
+
+*** What direction A does not take
+
+- Mangle's =/name= sigil for symbols. It reads badly in keypaths
+  (=/tags/team= looks like a filesystem path) and is unnecessary once
+  identifiers cannot contain =.=, =-=, =/=. The grammar decision below
+  explains the alternative.
+- Rel's first-class relations and higher-order rules. Stratification of
+  higher-order rules is not textbook, and this direction is the textbook
+  one.
+- Rel's use of the lattice for *derivation* (Rel is not lattice-first
+  either; its "lattice-aware" pieces are aggregation). Nothing to take.
+
+Verdict: *integrated* as grammar and stdlib lessons: the one-aggregate
+rule, function/predicate namespace separation, typed =decl=, =ic=-shaped
+policy. No engine impact.
+
+** Information-flow types (Jif; Myers and Liskov decentralized label model)
+
+*** What it gives
+
+Every value has a security label from a lattice; the type checker rejects
+flows from higher to lower labels; explicit =declassify= is the only
+downgrade. Labels compose by join, which is the semiring =⊗= above; the
+static checker and the runtime taint are two views of one lattice.
+
+*** How direction A integrates it
+
+Labels: the two-point lattice =public < secret= now; the DLM's owner-reader
+sets are not needed because dform has one reader (the operator).
+
+Static inference, one dataflow pass over predicate signatures:
+
+1. Sources. A schema attribute with =sensitive= yields =secret= on
+   =world_attr= rows at that path and on =attr= rows at that path. An
+   =input k: secret(T)= yields =secret= on =k/1=. An extern declared
+   =-secret(T)= yields =secret= on that column.
+2. Propagation. For each rule, a head position's label is the join of the
+   labels of every body position whose variable reaches it (through
+   =Map=, =format=, arithmetic, list construction, object construction).
+   Iterate to fixpoint over the predicate signature lattice; it is finite
+   and monotone.
+3. Restrictions, each a compile error with a stable id:
+   - =E0301=: a comparison (===, =!==, =<=, =in=) where either side is
+     =secret=. Comparing leaks a bit.
+   - =E0302=: a negated literal with a =secret= position bound. Absence
+     leaks a bit.
+   - =E0303=: an aggregate over a =secret= column other than =collect_*=
+     into a =secret= position (=count= leaks cardinality).
+   - =E0304=: a =secret= value reaching an =attr= path not marked
+     =sensitive= in the schema, an =output= not declared =secret(T)=, a
+     =deny= / =warn= context, or a =format= whose result is not =secret=.
+   - =E0305=: a =secret= value reaching a resource *address* or a
+     =want/2= (names are printed everywhere).
+4. Declassification is a builtin with a policy hook:
+   =declassify(V, Reason)= yields =public= and emits
+   =declassified(RuleId, Reason)= as a fact so a policy can deny it.
+
+Dynamic taint: a =Value::Secret= carries a store handle; every builtin
+that receives one returns one (or errors if it would have to inspect
+bytes, e.g. =len=, =regex_match=). This is defence in depth for values that
+enter through paths the static pass cannot see: a provider returning a
+sensitive value for an attribute the user did not declare.
+
+Worked example:
+
+#+begin_src prolog
+input db_password: secret(string).                 # db_password/1 : [secret]
+
+resource db.postgres db {
+  password = P                                     # OK: schema says .password is sensitive
+} :- db_password(P).
+
+resource compute.vm bastion {
+  user_data = format("PGPASSWORD=%s", P)           # E0304: secret reaches non-sensitive .user_data
+} :- db_password(P).
+
+deny(weak_pw, "password too short", {}) :-
+  db_password(P), len(P) < 12.                     # E0301 and E0303: comparison on secret
+
+# The legal way to write the last rule: refine at the input boundary.
+input db_password: secret(string) where len(db_password) >= 12.
+#+end_src
+
+The refinement on a =secret= input is checked by the CLI *at input time*
+(the value is in the operator's hands, not in a derived fact), never inside
+the fixpoint. That is why refinements on secret inputs are permitted while
+rules over them are not.
+
+Relation to the semiring entry: the security semiring at runtime computes
+the same label on *facts* that the static pass computes on *positions*.
+The static pass is complete for rules; the runtime fold exists for
+provider-sourced values. Both use one lattice, defined once.
+
+Cost: a signature-lattice fixpoint pass in the compiler (~500 lines), the
+=Secret= value variant, and a =secrecy= entry in the builtin table.
+
+Verdict: *integrated*, statically. Direction A rejects statically, and
+secrecy is the clearest case for it.
+
+** Salsa (rust-analyzer's incremental query framework)
+
+*** What it gives
+
+Memoised, demand-driven queries over inputs with fine-grained invalidation
+and cycle detection; the standard way to make a compiler front end
+incremental enough for a language server.
+
+*** How direction A uses it
+
+The compiler front end is a Salsa database:
+
+| Query                          | Keyed by       | Depends on                         |
+|--------------------------------+----------------+------------------------------------|
+| =source_text=                  | file           | (input)                            |
+| =parse=                        | file           | =source_text=                      |
+| =module_interface=             | module name    | =parse= of its file                |
+| =resolved_program=             | stack          | =parse= of all files, interfaces   |
+| =predicate_kinds=              | stack          | =resolved_program=                 |
+| =strata=                       | stack          | =predicate_kinds=                  |
+| =labels=                       | stack          | =strata=, schema facts             |
+| =diagnostics=                  | file           | all of the above, filtered by file |
+
+The language server serves diagnostics, go-to-rule, and hover from these;
+=dform fmt= uses the lossless tree from =parse=. Editing one module file
+re-runs =parse= for it, =module_interface= if the interface changed, and
+downstream queries only if their inputs changed.
+
+The engine is *not* Salsa. Evaluation is a fixpoint over a fact store,
+which is DBSP's problem, not a memoisation problem; a Salsa query per
+derived fact would be the wrong granularity by five orders of magnitude.
+The boundary is =resolved_program= plus =strata=: the engine consumes that
+IR as one value.
+
+Cost: a dependency, and the discipline that every front-end pass is a
+pure function of its inputs (which the "nine order-dependent passes"
+ticket already demands).
+
+Verdict: *integrated* for the compiler and language server; explicitly
+not for the engine.
+
+** Summary table
+
+| Direction                 | Verdict                    | Where it lives              | Engine cost         |
+|---------------------------+----------------------------+-----------------------------+---------------------|
+| Provenance semirings      | integrated                 | fact store, =dform why=     | one field per fact  |
+| Existential rules / nulls | rejected                   | (refs keep the shape)       | none                |
+| DBSP                      | integrated (phase 2)       | engine implementation       | the engine rewrite  |
+| Monotonicity types        | rejected as surface        | builtin table only          | none                |
+| ASP / choice              | integrated as provider     | =clingo= fact provider      | none                |
+| NetKAT / BDD              | integrated as provider     | =netkat= provider; L15 types | inet builtins      |
+| AWS automated reasoning   | integrated as provider     | =iamcheck= provider         | none                |
+| View update / lenses      | integrated, restricted     | CLI over provenance         | none                |
+| Egglog                    | rejected                   | fingerprints instead        | none                |
+| Mangle and Rel            | integrated as lessons      | grammar, =decl=, policy     | none                |
+| Information-flow types    | integrated, static         | compiler pass, =Secret=     | one value variant   |
+| Salsa                     | integrated, front end only | compiler, LSP               | none                |
+
+* Decision records
+
+One per DECIDE ticket on the board, plus the two grammar tickets the
+assignment asked to settle together. Format: context, decision,
+consequences. Each is written to be pasted into =DESIGN.org= under the
+ticket as its resolution.
+
+** DR-1 Attribute assembly: lattice aggregate (option 3)
+
+*Context.* Four non-monotone mechanisms with different timing and conflict
+semantics: =apply_functional_pred= (overwrite, conflict only within one
+iteration), =unique= (checked at the end), =merge_rule= + =arg_add= (applied
+in =ir.rs= after eval, invisible to rules), =apply_setting_add= (mutation
+inside the loop, invisible to stratification). Rules read =arg= in bodies
+(=modules/network.df=, =policies/baseline.df=), so a post-fixpoint merge
+(option 1) would show them unmerged contributions. Option 2 (lattice
+types inside the engine, Flix/Bloom^L) makes the engine non-textbook.
+
+*Decision.* Option 3 as specified in "The attribute lattice": =attr/4= is a
+compiler-generated aggregate over =arg/4= and =arg_default/4= using the
+per-path lattice from =type_lattice/3=; consumers are stratified above it;
+conflict is =⊤= and is emitted as =attr_conflict/5= with two witness fact
+ids; =merge_rule= lowers to =type_lattice= and is legal only for open
+types; =bag= is removed; =unique= is removed (aggregates are functional by
+construction; a user-level functional dependency is a =deny= over =count=);
+=settings= become a resource type so =setting_add= disappears; module
+=output= uses the same aggregate.
+
+*Consequences.*
+- =apply_functional_pred=, =apply_setting_add=, =upsert_agg=,
+  =enforce_uniques=, and =ir.rs:merge_keypath= are deleted. One aggregate
+  operator replaces them.
+- Order-independence holds by the argument given; the acceptance test is
+  "shuffle statements, diff =attr/4=" and it is a golden test.
+- Two =resource= blocks for the same address with =Flat= attributes and
+  different values are an error, as today, but the error names both
+  =file:line= via provenance.
+- There is no override. An environment-specific value that must replace a
+  default uses =arg_default= for the default. A value that must replace
+  another =arg= is a design error the language refuses to paper over.
+  Candid section discusses the cost.
+- Empty contributions matter: =tags = {}= contributes =⊥= at =.tags= and is
+  a no-op, which is correct for a =Map= and surprising for someone who
+  meant "clear the tags". "Clear" is not expressible; =ignore_changes= or
+  a =Flat= schema for the path are the alternatives.
+
+** DR-2 Unknown values: reject statically via the schema
+
+*Context.* Providers produce ids and ARNs only at apply; Datalog cannot
+unify, negate, or aggregate an unknown. The fake backend synthesises
+computed values, hiding the problem. Datalog± offers labeled nulls as an
+alternative.
+
+*Decision.* The rule in "The unknown-value rule": computed attributes
+(from =type_attr= flags) may be referenced only as opaque =Ref= tokens in
+attribute values and module outputs; a =ref= to a configured attribute is
+rewritten to an =attr/4= join; world facts are readable EDB with a
+warning when a program reads its own resource; multi-phase apply is the
+executor's; programs that need apply-time values in rule structure split
+into two stacks connected by =stack_output=. Labeled nulls are rejected
+(reasons in the research section).
+
+*Consequences.*
+- A new class of compile error with the schema line and the offending
+  rule; the diagnostic names the two-stack pattern.
+- The fake provider must stop synthesising computed values and must mark
+  them =computed= in its schema, or the acceptance tests would not
+  exercise the rule.
+- =cloud_ref= is removed; adopt examples use =world_attr= joins.
+- The reachable-closure and peering examples are unaffected (they join on
+  configured =cidr=).
+- Anything for-each-over-computed is worse to write than in Pulumi and
+  equal to Terraform. Named in the candid section.
+
+** DR-3 Open world vs encapsulation: interfaces, grants, private by default
+
+*Context.* Every predicate is global; a policy pack can write to any
+resource, which is the feature; costs are silent unions, silent typos,
+and no attribution.
+
+*Decision.* Modules as specified in "Modules with explicit interfaces":
+every predicate defined inside a module is instance-private unless
+=export=ed; =input= / =output= are the only data boundary; writes to
+=arg/4= from any module require =contributes arg to TypePattern at
+PathPattern=; =deny= / =warn= require no grant; unknown predicates are
+compile errors everywhere, with =extern= declarations for provider-fed
+ones; every =arg= carries its owner through provenance. The open world
+survives in exactly two places: policy packs with a grant, and the global
+read-only relations (=want=, =attr=, =setting=, schema, world).
+
+*Consequences.*
+- =component_def=, =use=, =component=, =component_scope/3=, =param/2,3=,
+  =import ... as= are replaced. =import "file"= remains as a *file*
+  include for module definitions; it introduces no names by itself.
+- A policy that today writes =arg_add(Type, Name, "tags", ...)= for all
+  types needs =contributes arg to _ at .tags.=. The grant is the audit
+  trail the L1b ticket wanted.
+- Cross-instance references (=component_scope(network, main, S),
+  output(S, ...)=) become =output(network.main, private_subnet_ids, Ids)=,
+  which the =database= module receives as an input from the root, not by
+  reaching into =network=. Modules become pure in the sense the "providers
+  inside modules" lesson demands.
+- The "two modules defining =zone_index/2= silently union" bug cannot
+  occur.
+
+** DR-4 Case-based variable syntax: keep it (Prolog, Mangle)
+
+*Context.* Uppercase initial = variable blocks resource types or keys
+with a leading capital. Alternatives: =$X= sigil, or =let=-declared
+variables.
+
+*Decision.* Uppercase-initial identifiers are variables; =_= alone is the
+anonymous wildcard; =_Name= is a named wildcard the compiler warns on if
+used twice. Lowercase-initial identifiers are symbols. There is no sigil
+and no declaration form.
+
+*Reasons.* A rule body is mostly variables; a sigil on each is the
+Rego/Perl reading tax and every Datalog that tried it (LogiQL's =?x=)
+reads worse than Mangle and Prolog. =let= declarations make short rules
+long and are alien to Datalog readers. The cost, that a leading-capital
+name must be quoted, is paid by a small set of Kubernetes kinds
+(="Deployment"=) which are attribute *values* in this design (the type is
+=k8s.deployment=), and by no cloud resource type in AWS, GCP, or Azure
+naming conventions.
+
+*Consequences.*
+- Types are qualified lowercase names: =aws.subnet=, =google.compute_subnetwork=.
+- Values with capitals are strings, as they already are in =pngu.df=.
+- The grammar spec states the rule in one line and the lexer enforces it
+  with two token kinds.
+
+** DR-5 Symbol syntax: plain identifiers, dotted qualified names, dotted keypath literals
+
+*Context.* =sym= and =pred= accept =.=, =-=, =/= so =a-b= is a symbol and
+=x.y= is a symbol, and no operator can be added. Must be decided before
+more =.df= files exist.
+
+*Decision.*
+- =ident := [a-z_][A-Za-z0-9_]*=. No =.=, =-=, =/= in identifiers.
+- =var := [A-Z_][A-Za-z0-9_]*=.
+- =qname := ident ("." ident)*= is a *qualified name*: resource types
+  (=net.vpc=), module instance paths (=network.main=), exported predicates
+  (=main.subnet_of=), provider externs (=aws.vpcs_by_tag=). A qualified
+  name is one token class produced by the lexer when =.= is immediately
+  between two identifier characters with no whitespace; it is never field
+  access because symbols have no fields.
+- =path := "." pathseg ("." pathseg | "[" int "]")*= where =pathseg :=
+  ident | string=. A keypath *literal* starts with a dot: =.tags.team=,
+  =.secondary_ranges[0].range_name=, =."my-key".x=. It is a =Value::Path=.
+  Inside =resource=, =settings=, and =instance= blocks the left of === or
+  =+== is a path without the leading dot, because the block position makes
+  it unambiguous; the lowering adds the dot.
+- Field access on a bound variable is =Var.ident= (=R.protocol=), produced
+  by the lexer as VAR followed by a DOT-IDENT token; it lowers to a
+  =get(R, .protocol)= builtin. Field access on an arbitrary expression is
+  =get(E, .p)=; there is no =(expr).p= form.
+- =-= is always subtraction and =/= is always division. Hyphenated cloud
+  names are strings: ="us-east-1a"=. =inet("10.0.0.0/16")= already takes a
+  string.
+- Addresses print as =instance.path/local_name= (=network.main/vpc=) and
+  are written in source, when needed at all, as =network.main/vpc= where
+  the lexer sees =qname "/" ident= in an address position. This is the
+  only place =/= is not division, and it is decided by the token class on
+  its left, not by lookahead.
+
+*Consequences.*
+- Every existing =.df= file breaks: =us-test-1a= becomes a string,
+  =setting(Env, db.backup_days, V)= becomes =setting(Env, .db.backup_days, V)=,
+  =gke.static_ips.pngu-grpc.type= becomes =gke.static_ips."pngu-grpc".type=.
+  The editions ticket is the prerequisite, and =dform migrate= handles the
+  mechanical cases (a bare symbol containing =-= becomes a string; a
+  symbol argument to =setting= / =arg= / =attr= in path position gains a
+  leading dot).
+- Future operators are free: =.= for field access on variables, =-=, =/=,
+  and =::= is reserved unused.
+- Rejected alternative: Mangle's =/name= sigil. It collides visually with
+  paths and addresses, and once identifiers are clean the sigil carries no
+  information.
+- Rejected alternative: quoting all keypaths (="tags.team"=). It is what
+  the lowered core does today and it is why nobody can tell a string from
+  a path in =arg/4=. A distinct literal gives a distinct value type and
+  static keypath checks against the schema.
+
+** DR-6 Null, absent, and empty
+
+*Context.* Datalog absence is "no fact"; APIs distinguish unset, null,
+and empty; =Value= has no null.
+
+*Decision.*
+- *Absent* is =⊥= in the attribute lattice: no =attr= row for the path.
+  The provider receives no field. A =required= attribute that is absent
+  is a =deny(schema_required, ...)=.
+- *Null* is a value, =Value::Null=, legal only at paths whose schema type
+  is =nullable(T)= (or on open types). It is a =Flat= element:
+  =Null ⊔ v = ⊤= for =v ≠ Null=. The provider receives an explicit null.
+  Writing =null= at a non-nullable path is a compile error when literal,
+  a =deny(schema_type, ...)= when derived.
+- *Empty* collections are ordinary values. =[]= at a =Set= path is =⊥=
+  (no elements) and therefore indistinguishable from absent, which is
+  correct for a set. =[]= at a =Flat(List)= path (an =Ordered= list) is a
+  real value distinct from absent. ={}= at a =Map= path is =⊥=; at a
+  =Flat= object path it is a value.
+- =null= in rule bodies is a plain constant and may be compared and
+  negated over; it has no unknown-value semantics.
+
+*Consequences.*
+- Plan output prints absent as nothing, null as =null=, empty as =[]= /
+  ={}=, and the diff treats them as three different things, as Terraform
+  eventually did.
+- The schema decides: a provider that cannot distinguish null from absent
+  does not mark anything =nullable=, and the question never arises for it.
+- "Clear this set" is not expressible through the lattice (see DR-1);
+  =ignore_changes= or the =Flat= schema choice are the tools.
+
+** DR-7 Impure values: externs only, results persisted
+
+*Context.* Random suffixes, timestamps, generated passwords.
+
+*Decision.* No impure builtin exists. Impurity enters only through an
+extern of a fact provider, whose results are recorded in the plan file
+and, when declared =persist=, in state, so a later plan reads the recorded
+value rather than calling again:
+
+#+begin_src prolog
+provider random { source = "registry.dform.dev/random" }.
+extern random.id(+Key, +Bytes, -Id) persist.
+extern random.password(+Key, +Len, -secret(string)) persist.
+
+bucket_suffix(S) :- random.id("bucket-suffix", 4, S).
+resource s3.bucket logs { name = format("logs-%s", S) } :- bucket_suffix(S).
+#+end_src
+
+=persist= externs are keyed by their bound arguments; a changed key
+produces a new call and a replacement. =dform taint random.id "bucket-suffix"=
+forgets one recorded result. Timestamps are a *non-persisted* extern
+(=time.now(-T)=) and are a =warn(impure_plan, ...)= by default because a
+plan that depends on the current time differs from its apply.
+
+*Consequences.*
+- The state file gains a section for persisted extern results, which is
+  the only thing besides identity it stores (consistent with "state as
+  cache, not truth").
+- Provenance of an impure fact is =Extern{random, call}= and =dform why=
+  says "recorded on <date> by call <id>".
+- A =secret= extern column composes with the secrecy pass with no special
+  case.
+
+** DR-8 License: Apache-2.0, DCO, no CLA
+
+*Context.* BSL produced OpenTofu overnight. Decide once.
+
+*Decision.* Apache-2.0 for the compiler, engine, protocol, and reference
+providers; the protocol definition (=.proto=) additionally under CC0 so
+third-party providers have no licence question at all; contributions
+under the Developer Certificate of Origin, no CLA.
+
+*Consequences.* Relicensing later requires every contributor's consent,
+which is the point: the decision is made irreversible on purpose. Patents
+are covered by Apache's grant. A commercial registry or hosted plan
+service, if ever, is a separate product and does not touch the licence.
+
+** How the non-DECIDE tickets fall out
+
+Brief, because most are direct consequences.
+
+| Ticket                                   | Under direction A                                                                    |
+|------------------------------------------+--------------------------------------------------------------------------------------|
+| Aggregates are not stratified            | negative edge from aggregate heads; =attr= is one such head                          |
+| Unknown predicates silently empty        | compile error; =extern= declares provider-fed predicates                             |
+| Negation over mutated facts              | nothing is mutated; settings are =attr= of type =settings=                            |
+| Functional overwrite hides bugs          | deleted                                                                              |
+| Ordered lists cannot be derived          | =collect_ordered(K, X)= aggregate, ties error; =Ordered= lattice is =Flat=            |
+| Silent string-to-int coercion            | =to_int= / =to_string=; =as_i64= parses nothing                                       |
+| Iteration cap                            | semi-naive, no cap                                                                   |
+| Provenance query =why=                   | =Why(X)= fold over the DAG                                                            |
+| L1 schema                                | =type_attr= / =type_lattice= facts; static checks                                    |
+| L1a list merge keys                      | =Keyed= lattice                                                                      |
+| L1b ownership                            | =Lin(X)= fold; =contributes= is the static grant                                      |
+| L2 ordered aggregation                   | =collect_ordered=                                                                    |
+| L4 module interfaces                     | as specified                                                                         |
+| L7 lifecycle                             | plain IDB relations, policeable; =moved= is EDB                                       |
+| L10 defaults                             | =input k: T = v= and =arg_default=; the =has_env= idiom is no longer written by hand   |
+| L11 exists / count                       | =not exists= lowers to helper + negation; =count= is an aggregate                     |
+| L12 scenarios                            | modules run by =dform test= with replaced inputs                                     |
+| L13 refinement types                     | lower to =deny=; secret inputs refined at input time                                  |
+| L14 docs                                 | =doc/4= facts from =#|= comments                                                      |
+| Secrets                                  | static labels + =Secret= value + security semiring                                   |
+| Provider config as facts                 | stratum 0; may not depend on externs or refs                                         |
+| Typed inputs                             | =input k: T [= v] [where ...]= at stack root                                          |
+| External files                           | =file= fact provider with externs; templates are facts                               |
+| Reactive mode                            | DBSP phase 2 over the same IR                                                        |
+| Time travel                              | append-only fact log per stack is a straightforward addition once facts have ids     |
+
+* Grammar
+
+The reference grammar for the hand-written parser. Tokens first, because
+DR-4 and DR-5 are lexer decisions.
+
+** Tokens
+
+#+begin_example
+IDENT    := [a-z_][A-Za-z0-9_]*                    ; symbol, predicate, function, keyword
+VAR      := [A-Z][A-Za-z0-9_]* | "_" [A-Za-z0-9_]*  ; "_" alone is the wildcard
+QNAME    := IDENT ("." IDENT)+                      ; no whitespace around "."
+PATH     := "." PATHSEG ("." PATHSEG | "[" INT "]")*
+PATHSEG  := IDENT | STRING
+FIELD    := VAR "." IDENT                           ; lexed as one token; lowers to get/2
+STRING   := "\"" ... "\""                           ; escapes \" \\ \n \t \u{...}
+INT      := "-"? [0-9]+
+ADDR     := QNAME "/" IDENT                         ; only in address positions
+keywords := module input output export contributes instance apply policy
+            resource settings scenario provider stack extern type decl
+            edition import when not in exists default collect_set
+            collect_list collect_ordered count sum min max lub true false null
+            secret persist where
+#+end_example
+
+Keywords are token kinds (the =KW_TAIL= hack goes away). =true=, =false=,
+=null= are literals. A keyword may still be a keypath segment (=.type=)
+because =PATH= is one token.
+
+** Statements
+
+#+begin_example
+program    := (stmt ".")*
+stmt       := edition | provider | stack | import
+            | input | extern | typedecl | decl
+            | module | instance | policy | apply
+            | resource | settings | scenario | when
+            | rule | fact
+
+edition    := "edition" INT
+provider   := "provider" IDENT "{" kv* "}"
+stack      := "stack" QNAME "{" kv* "}"
+import     := "import" STRING
+input      := "input" IDENT ":" type ("=" term)? ("where" body)?
+extern     := "extern" QNAME "(" bindarg ("," bindarg)* ")" "persist"?
+bindarg    := ("+" | "-") IDENT (":" type)?
+typedecl   := "type" QNAME "{" attrdecl* "}"           ; user schema for open types
+attrdecl   := PATHSEG ":" type flag*
+decl       := "decl" IDENT "/" INT | "decl" IDENT "(" (VAR ":" type) ("," VAR ":" type)* ")"
+            | "decl" "type" QNAME "open"
+
+module     := "module" IDENT "{" (stmt ".")* "}"
+instance   := "instance" IDENT IDENT "{" assign* "}" (":-" body)?
+policy     := "policy" IDENT "{" (stmt ".")* "}"
+apply      := "apply" IDENT
+grant      := "contributes" "arg" "to" typepat "at" pathpat
+
+resource   := "resource" QNAME (IDENT | VAR) "{" assign* "}" (":-" body)?
+settings   := "settings" (IDENT | VAR) "{" assign* "}" (":-" body)?
+assign     := blockpath ("=" | "+=") term ","?
+blockpath  := PATHSEG ("." PATHSEG | "[" INT "]")*        ; PATH without leading dot
+scenario   := "scenario" IDENT "{" (stmt ".")* "}"
+when       := "when" lit "{" (stmt ".")* "}"
+
+rule       := head ":-" body
+fact       := atom
+head       := atom                                         ; at most one aggregate term
+body       := lit ("," lit)*
+lit        := "not" atom | "not" "exists" "(" body ")" | atom
+            | term cmpop term | term "in" term | term "not" "in" term
+atom       := (IDENT | QNAME) "(" (term ("," term)*)? ")"
+            | IDENT "{" (IDENT ":" term ("," IDENT ":" term)*)? "}"
+#+end_example
+
+** Terms
+
+Pratt-parsed with the usual precedence; =in= and comparisons are only
+legal at literal level, not inside terms.
+
+#+begin_example
+term       := add
+add        := mul (("+" | "-") mul)*
+mul        := unary (("*" | "/" | "%") unary)*
+unary      := "-" unary | primary
+primary    := INT | STRING | "true" | "false" | "null"
+            | VAR | FIELD | IDENT | QNAME | PATH | ADDR
+            | call | list | object | comprehension | aggregate | "(" term ")"
+call       := (IDENT | QNAME) "(" (term ("," term)*)? ")"
+list       := "[" (term ("," term)*)? "]"
+object     := "{" (objkey ":" term ("," objkey ":" term)*)? "}"
+objkey     := IDENT | STRING
+comprehension := "[" term "|" body "]"                     ; lowers to collect_set
+              |  "[" term "ordered" "by" term "|" body "]"  ; lowers to collect_ordered
+aggregate  := ("collect_set" | "collect_list" | "count" | "sum" | "min" | "max") "(" term ")"
+            | "collect_ordered" "(" term "," term ")"
+type       := IDENT | QNAME | IDENT "(" type ("," type)* ")" | "enum" "(" IDENT ("," IDENT)* ")"
+#+end_example
+
+Disambiguation notes for the spec:
+
+- =IDENT "("= in a *literal* position is a predicate; in a *term* position
+  it is a function. They are different namespaces; a name in both is a
+  compile error (=E0101=).
+- =QNAME= in a type position (=resource net.vpc=) and in a term position
+  (=want(net.vpc, A)=) is the same symbol value.
+- =ADDR= is only produced when the parser is in an address position (the
+  second argument of =want=, =arg=, =attr=, =adopt=, =lifecycle=,
+  =ignore_changes=, =moved=, and the second argument of =ref=). Elsewhere
+  =a.b / c= is division.
+- Commas between block assignments are optional, as today, because the
+  path-operator-term shape is self-delimiting.
+
+* The examples, rewritten
+
+** dform.df
+
+#+begin_src prolog
+# dform.df, direction A syntax.
+#
+#   dform plan
+#   dform plan --set env=prod
+#   dform apply
+
+edition 2026.
+
+provider fake { source = "./providers/fake" }.
+stack demo.main { backend = local(".dform/demo") }.
+
+# Typed stack inputs with defaults; no has_env idiom.
+input env: enum(dev, staging, prod) = staging.
+
+zone("us-test-1a").
+zone("us-test-1b").
+
+when env(prod) {
+  iam_need(app, "audit.write", "audit-log").
+}.
+
+# Settings are a resource of type `settings`, addressed by environment.
+# `+=` is checked against the lattice: .audit.sinks must be a Set.
+type settings {
+  audit.sinks: set(string)
+}.
+
+settings prod {
+  network.main.vpc_net = inet("10.20.0.0/16")
+  network.peer.vpc_net = inet("10.21.0.0/16")
+  db  = { backup_days: 14, multi_az: true }
+  k8s = { private_api: true, nodepool: { min: 3, max: 10 } }
+  audit.sinks += ["cloudwatch"]
+}.
+
+settings staging {
+  network.main.vpc_net = inet("10.50.0.0/16")
+  network.peer.vpc_net = inet("10.60.0.0/16")
+  db  = { backup_days: 3, multi_az: false }
+  k8s = { private_api: false, nodepool: { min: 1, max: 3 } }
+}.
+
+settings dev {
+  network.main.vpc_net = inet("10.90.0.0/16")
+}.
+
+import "modules/network.df".
+import "modules/database.df".
+import "modules/kubernetes.df".
+import "modules/iam.df".
+import "modules/stdlib_net.df".
+import "policies/baseline.df".
+
+apply baseline.
+apply stdlib_net.
+
+# Module instances. Inputs are typed at the module; the body binds them.
+instance network main { vpc_net = V } :- env(E), setting(E, .network.main.vpc_net, V).
+instance network peer { vpc_net = V } :- env(E), setting(E, .network.peer.vpc_net, V).
+
+instance database main {
+  backup_days = Days
+  multi_az    = MA
+  subnet_ids  = Ids
+} :-
+  env(E),
+  setting(E, .db.backup_days, Days),
+  setting(E, .db.multi_az, MA),
+  output(network.main, private_subnet_ids, Ids).
+
+instance kubernetes main {
+  private_api  = Api
+  nodepool_min = Min
+  nodepool_max = Max
+  subnet_ids   = Ids
+} :-
+  env(E),
+  setting(E, .k8s.private_api, Api),
+  setting(E, .k8s.nodepool.min, Min),
+  setting(E, .k8s.nodepool.max, Max),
+  output(network.main, private_subnet_ids, Ids).
+
+instance iam main {}.
+
+# Peering between network instances, by instance name.
+vpc_peer_inst(main, peer).
+
+vpc_peer(A, B) :-
+  vpc_peer_inst(IA, IB),
+  output(network.IA, vpc, A),          # each network instance exports its vpc address
+  output(network.IB, vpc, B).
+
+resource net.vpc_peering Peer {
+  requester_vpc_id = ref(net.vpc, A, .id)
+  accepter_vpc_id  = ref(net.vpc, B, .id)
+} :-
+  vpc_peer_inst(IA, IB), vpc_peer(A, B),
+  Peer = format("peer-%s-%s", IA, IB).
+
+# A bastion with an address carved from the main VPC.
+resource compute.vm bastion {
+  private_ip = inet_host(Net, 20)
+} :- env(E), setting(E, .network.main.vpc_net, Net).
+
+# Stack-level policy. Ids are stable; messages are free text.
+deny(prod_db_multi_az, "prod db must be multi_az", { db: Db }) :-
+  env(prod), want(db.postgres, Db),
+  not attr(db.postgres, Db, .multi_az, true).
+
+deny(prod_k8s_private_api, "prod k8s must have private api", { cluster: C }) :-
+  env(prod), want(k8s.cluster, C),
+  not attr(k8s.cluster, C, .private_api, true).
+#+end_src
+
+Two things changed shape, not just spelling. First, =database= and
+=kubernetes= no longer reach into =network= via =component_scope=; the root
+wires =output(network.main, private_subnet_ids, Ids)= into an input, which
+is the only way across an interface. Second, =output(network.IA, vpc, A)=
+uses a *variable inside a qualified name*: =network.IA= is parsed as
+=QNAME= with a =VAR= segment, which the grammar allows exactly for instance
+paths (it lowers to =instance_path(network, IA, P), output(P, vpc, A)=).
+That is the one piece of syntax invented for the rewrite, and it is
+justified by the alternative being the =component_scope/3= join it
+replaces.
+
+** modules/network.df
+
+#+begin_src prolog
+module network {
+  input  vpc_net: inet where prefix_len(vpc_net) <= 20.
+  input  zones:   list(string) = ["us-test-1a", "us-test-1b"].
+  output vpc:                addr.
+  output private_subnet_ids: list(ref(net.subnet)).
+  export subnet_of/2.
+
+  resource net.vpc vpc {
+    cidr = Net
+    tags = { env: E, component: "network" }
+  } :- env(E), vpc_net(Net).
+
+  zone_index(Z, I) :- zones(Zs), member(Zs, I, Z).
+
+  resource net.subnet Sn {
+    vpc_id     = ref(net.vpc, vpc, .id)
+    cidr       = inet_subnet(Net, 4, I)
+    zone       = Z
+    visibility = "private"
+  } :-
+    zone_index(Z, I),
+    attr(net.vpc, vpc, .cidr, Net),
+    Sn = format("private-%s", Z).
+
+  subnet_of(Sn, vpc) :- want(net.subnet, Sn).
+
+  output vpc = vpc.
+  output private_subnet_ids =
+    [ ref(net.subnet, Sn, .id) | want(net.subnet, Sn), attr(net.subnet, Sn, .visibility, "private") ].
+}.
+#+end_src
+
+=output vpc = vpc.= exports the local address as an =addr= value, which is
+how the root refers to it without knowing the scoping scheme. The
+comprehension lowers to =collect_set=, which stratifies above =attr=,
+which is why the old "only works because =arg= gets overwritten" bug
+cannot recur.
+
+** modules/database.df and iam.df
+
+#+begin_src prolog
+module database {
+  input backup_days: int where 1 <= backup_days <= 35.
+  input multi_az:    bool.
+  input subnet_ids:  list(ref(net.subnet)).
+  output db: addr.
+
+  resource db.postgres db {
+    public      = false
+    subnet_ids  = Ids
+    backup_days = Days
+    multi_az    = MA
+  } :- backup_days(Days), multi_az(MA), subnet_ids(Ids).
+
+  # Contributing to a global relation from inside a module needs a grant.
+  contributes iam_need.
+  iam_need(app, "db.connect", ref(db.postgres, db, .id)).
+
+  output db = db.
+}.
+
+module iam {
+  resource iam.role app_role {
+    name   = "app"
+    assume = { principals: ["k8s.serviceaccount.app"] }
+  }.
+
+  resource iam.policy app_policy {
+    name = "app"
+    statements = [ { action: A, resource: R } | iam_need(app, A, R) ]
+  }.
+
+  resource iam.role_policy_attachment attach {
+    role_id   = ref(iam.role, app_role, .id)
+    policy_id = ref(iam.policy, app_policy, .id)
+  }.
+}.
+#+end_src
+
+=contributes iam_need.= is the grant form for a user-defined global
+relation: the root declares =decl iam_need(Who: symbol, Action: string,
+Res: any) global.= and any module that writes to it says so. It is the
+same mechanism as =contributes arg=, applied to a user predicate.
+
+** policies/baseline.df
+
+#+begin_src prolog
+policy baseline {
+  contributes arg to _ at .tags.
+  contributes arg to iam.policy at .statements.
+  contributes arg to settings at .audit.sinks.
+
+  arg(T, A, .tags, { team: "platform" }) :- want(T, A).
+
+  arg(iam.policy, A, .statements, [ { action: "org.read", resource: "org" } ]) :-
+    env(prod), want(iam.policy, A), attr(iam.policy, A, .name, "app").
+
+  arg(settings, prod, .audit.sinks, ["s3"]).
+
+  deny(db_public, "db must not be public", { db: Db }) :-
+    want(db.postgres, Db), not attr(db.postgres, Db, .public, false).
+
+  warn(audit_logging, "prod should enable audit logging", {}) :-
+    env(prod), not setting(prod, .audit.enabled, true).
+}.
+#+end_src
+
+Note what disappeared: three =merge_rule= facts (the schema decides),
+=component_scope= (the policy matches on =attr .name= or on =want=, never
+on the scoping scheme), =setting_add= (a grant plus an =arg= on the
+=settings= type). The =.statements= contribution merges because the fake
+provider's schema declares =statements: keyed([.action, .resource])=.
+
+** pngu.df, the network and GKE chunk
+
+#+begin_src prolog
+# pngu.df, direction A. The renfry stack for one GCP project per environment.
+
+edition 2026.
+
+provider google { source = "registry.dform.dev/google", version = ">=6" }.
+stack renfry.pngu { backend = gcs("renfry-state", "pngu") }.
+
+input env: enum(dev, stg, prod) = dev.
+
+########################################
+# Settings, one block per environment
+########################################
+
+type settings {
+  project_id:          string
+  project_name:        string
+  region:              string
+  network_name:        string
+  regional_proxy_cidr: inet
+  gke: {
+    control_plane_cidr: inet where prefix_len(control_plane_cidr) == 28,
+    subnet_cidr:        inet,
+    pods_cidr:          inet,
+    services_cidr:      inet,
+    static_ips:         map({ type: enum("INTERNAL", "EXTERNAL") })
+  }
+}.
+
+settings dev {
+  project_id   = "renfry-dev-973682"
+  project_name = "renfry-dev"
+  region       = "us-east1"
+  network_name = "renfry-dev-network"
+  regional_proxy_cidr = inet("10.193.0.0/24")
+  gke = {
+    control_plane_cidr: inet("172.16.3.96/28"),
+    subnet_cidr:        inet("10.141.76.0/22"),
+    pods_cidr:          inet("10.141.80.0/21"),
+    services_cidr:      inet("10.141.88.0/21"),
+    static_ips:         { "pngu-grpc": { type: "INTERNAL" } }
+  }
+}.
+
+settings stg {
+  project_id   = "renfry-stg"
+  project_name = "renfry-stg"
+  region       = "us-east1"
+  network_name = "renfry-stg-network"
+  regional_proxy_cidr = inet("10.193.1.0/24")
+  gke = {
+    control_plane_cidr: inet("172.16.3.112/28"),
+    subnet_cidr:        inet("10.141.100.0/22"),
+    pods_cidr:          inet("10.141.104.0/21"),
+    services_cidr:      inet("10.141.112.0/21"),
+    static_ips:         { "pngu-grpc": { type: "INTERNAL" } }
+  }
+}.
+
+# prod elided; same shape.
+
+########################################
+# Peerings, an env-keyed table
+########################################
+
+decl peering(Env: symbol, Name: string, PeerNetwork: string).
+
+peering(dev,  "envoy-dev",        "projects/envoy-dev-426188/global/networks/envoy-dev-network").
+peering(stg,  "envoy-stg",        "projects/envoy-stg-597462/global/networks/envoy-stg-network").
+peering(stg,  "envoy-stg-legacy", "projects/coherentpath-stg/global/networks/envoy-proxy-stg").
+peering(prod, "envoy-prod-legacy","projects/coherentpath-prod/global/networks/envoy-proxy-prod").
+
+########################################
+# Derived project facts for the active env
+########################################
+
+project(Id, Name, Region, NetId) :-
+  env(E),
+  setting(E, .project_id, Id),
+  setting(E, .project_name, Name),
+  setting(E, .region, Region),
+  setting(E, .network_name, NetName),
+  NetId = format("projects/%s/global/networks/%s", Id, NetName).
+
+########################################
+# Network
+########################################
+
+resource google.compute_subnetwork gke_subnet {
+  project               = Id
+  region                = Region
+  network               = NetId
+  name                  = format("%s-gke-subnet", Name)
+  ip_cidr_range         = SubnetCidr
+  subnet_private_access = true
+  secondary_ranges      = [
+    { range_name: format("%s-gke-pods-range", Name), ip_cidr_range: PodsCidr },
+    { range_name: format("%s-gke-svc-range",  Name), ip_cidr_range: SvcCidr }
+  ]
+} :-
+  project(Id, Name, Region, NetId),
+  env(E),
+  setting(E, .gke.subnet_cidr, SubnetCidr),
+  setting(E, .gke.pods_cidr, PodsCidr),
+  setting(E, .gke.services_cidr, SvcCidr).
+
+resource google.compute_subnetwork regional_proxy {
+  project       = Id
+  region        = Region
+  network       = NetId
+  name          = format("%s-proxy", Name)
+  purpose       = "REGIONAL_MANAGED_PROXY"
+  role          = "ACTIVE"
+  ip_cidr_range = ProxyCidr
+} :-
+  project(Id, Name, Region, NetId),
+  env(E), setting(E, .regional_proxy_cidr, ProxyCidr).
+
+resource google.compute_network_peering P {
+  project      = Id
+  name         = PeerName
+  network      = NetId
+  peer_network = PeerNet
+} :-
+  project(Id, _, _, NetId),
+  env(E), peering(E, PeerName, PeerNet),
+  P = format("peering-%s", PeerName).
+
+# One static address per declared static IP. The map explodes into rows;
+# the row's key becomes part of the address.
+static_ip(IpName, Type) :-
+  env(E), setting(E, .gke.static_ips, Ips),
+  member_kv(Ips, IpName, { type: Type }).
+
+resource google.compute_address S {
+  project       = Id
+  region        = Region
+  name          = IpName
+  address_type  = Type
+  subnetwork_id = ref(google.compute_subnetwork, gke_subnet, .id)
+} :-
+  project(Id, _, Region, _),
+  static_ip(IpName, Type),
+  S = format("static-ip-%s", IpName).
+
+deny(static_ip_internal, "GKE static IPs must be INTERNAL", { ip: N }) :-
+  static_ip(N, T), T != "INTERNAL".
+
+########################################
+# GKE
+########################################
+
+resource gke.cluster pngu {
+  cluster_type              = "autopilot-private"
+  env                       = E
+  project_id                = Id
+  project_name              = Name
+  name                      = format("%s-gke", Name)
+  network_id                = NetId
+  subnetwork_id             = ref(google.compute_subnetwork, gke_subnet, .id)
+  master_control_plane_cidr = CpCidr
+  ip_range_pods             = format("%s-gke-pods-range", Name)
+  ip_range_services         = format("%s-gke-svc-range",  Name)
+  enable_secret_manager_addon = true
+  deletion_protection       = false
+} :-
+  env(E), project(Id, Name, _, NetId),
+  setting(E, .gke.control_plane_cidr, CpCidr).
+
+# Prod gets deletion protection, and policy checks it, as facts.
+lifecycle(gke.cluster, pngu, prevent_destroy) :- env(prod).
+arg(gke.cluster, pngu, .deletion_protection, true) :- env(prod).
+#+end_src
+
+The last two lines are the interesting ones. =deletion_protection = false=
+in the resource block and =arg(..., true) :- env(prod)= are two =Flat=
+contributions and *conflict* in prod. That is the lattice refusing an
+override, and it is correct: the intent is ambiguous. The fix is to write
+it as data:
+
+#+begin_src prolog
+resource gke.cluster pngu {
+  deletion_protection = Prot
+  ...
+} :- ..., deletion_protection(Prot).
+
+deletion_protection(true)  :- env(prod).
+deletion_protection(false) :- not env(prod).
+#+end_src
+
+or with a default:
+
+#+begin_src prolog
+arg_default(gke.cluster, pngu, .deletion_protection, false).
+arg(gke.cluster, pngu, .deletion_protection, true) :- env(prod).
+#+end_src
+
+The =dashboard_json= stub becomes an extern:
+=extern file.json(+Path, -Value).= and
+=dashboard_json = J :- file.json("modules/monitoring/dashboard-pngu.json", J)=,
+with the file's hash recorded in the plan.
+
+* Implementation order
+
+Not a schedule; a dependency order, so the reader can see what blocks what.
+
+1. Editions pragma and =dform migrate= skeleton (the grammar change is
+   breaking; nothing else ships before this can).
+2. Lexer and parser per the grammar above, with spans, lossless tree,
+   error recovery; grammar corpus as the test suite. =pest= removed.
+3. Front-end passes as Salsa queries: resolve (modules, interfaces,
+   grants), predicate kinds, stratification with the aggregate rule,
+   secrecy labels. Unknown-predicate and =ref= checks live here.
+4. Engine phase 1: operator IR, semi-naive evaluation with per-stratum
+   indexes, fact arena with provenance, =lub= aggregate over
+   =src/lattice.rs=. Delete the four bolt-ons and =ir.rs= merging.
+5. Schema facts from the provider protocol; fake provider grows a schema
+   with =computed= and =sensitive= flags and a =Keyed= list.
+6. Policy lowering table; =dform check --sarif=; =dform why=.
+7. Stacks, state as identity plus persisted externs, apply executor.
+8. Engine phase 2: DBSP; reactive mode.
+
+Items 1-4 are the language; the rest is the product.
+
+* Candid assessment
+
+** What this direction cannot do well
+
+*No override.* The lattice has no notion of priority. "Prod replaces the
+default" is expressible with =arg_default=, but "policy pack B overrides
+policy pack A" is not, and "this module's value wins over that module's"
+is not. Puppet's Hiera, Kubernetes server-side apply with =--force-conflicts=,
+and every layered-config system have a precedence stack for a reason:
+people want one. Direction A tells them to restructure the intent as data
+(=deletion_protection(true) :- env(prod)=). That is the right answer for
+readability and the wrong answer for a team migrating 400 Terraform
+modules that use variable overrides everywhere. If the two-level
+=arg= / =arg_default= scheme proves insufficient, the honest extension is
+a *finite, declared* priority lattice per path (=Prio(n, L)= where higher
+=n= wins and equal =n= joins in =L=), which keeps order-independence but
+reintroduces the "where did this value come from" question that
+provenance then has to answer. I would resist it for one release and
+then probably add it.
+
+*No apply-time iteration.* DR-2 makes "one subnet per address the NAT
+gateway gets" a two-stack program. Pulumi does this in one file with
+=apply()= callbacks; Terraform cannot; Crossplane can because it
+reconciles continuously. The two-stack rule is honest about what plan can
+promise, and it is the single most likely reason a user picks something
+else. The DBSP phase does not fix it: incremental evaluation recomputes
+when facts arrive, but a =plan= is still a snapshot, and a snapshot with
+a hole in it is what the rule forbids. Controller mode (reactive ticket)
+*does* fix it, because there is no plan, only a stream of deformations,
+and unknowns resolve as world facts arrive. So the restriction is a
+property of =plan=, and this proposal should say so more loudly than the
+board does.
+
+*Solvers as externs are second-class.* The clingo integration cannot see
+rules, so a constraint that is also a =deny= is written twice, in two
+languages. A user who mostly wants placement optimisation would be
+better served by direction C (ASP core) than by this.
+
+*Expressiveness ceiling is fixed.* No user-defined lattices, no
+user-defined aggregates, no user functors in the first edition. Soufflé
+has =.functor=; Flix has user lattices. dform users get the fixed
+vocabulary and a provider boundary. This is a bet that IaC needs fewer
+primitives than program analysis does. It is probably right for
+attributes and probably wrong for network types, where someone will want
+a custom =Inet= aggregate (smallest covering prefix) and be told to write
+a provider.
+
+*Provenance is always on.* Tens of megabytes per real account, and the
+DAG must be retractable under DBSP. Soufflé makes provenance a mode
+because it costs; this proposal makes it mandatory because conflict
+errors and ownership need it. The cost is real and there is no opt-out.
+
+*Secrets are two mechanisms.* Static labels catch what rules do; the
+dynamic =Secret= variant catches what providers return. Two mechanisms for
+one property means two places to be wrong, and the interaction (a static
+=public= position that receives a dynamic =Secret= at runtime) needs a
+runtime error path that the "reject statically" principle promised would
+not exist.
+
+** Which tickets this direction makes harder
+
+- *Rename is destroy and create.* Addresses are still =(instance path,
+  local name)=; moving a resource between modules is a =moved= fact. The
+  lens-based =moved= proposal helps, but this direction does nothing
+  structural about it that a string-prefix scheme did not.
+- *Reactive inputs and controller mode.* Provenance retraction under DBSP
+  is a known technique but not a small one; the always-on provenance
+  decision makes phase 2 harder than it would be without it.
+- *Declarative providers for schema-described APIs.* The static checks
+  (keypaths, types, computed, sensitive, lattices) all read the schema.
+  An OpenAPI-derived schema will have gaps, and every gap becomes either
+  an =open= type (checks off) or a spurious compile error. The design
+  makes a partial schema worse than no schema.
+- *Multi-stack orchestration.* DR-2 pushes more programs into multiple
+  stacks, so the =run-all= ticket goes from "nice for large orgs" to
+  "required for a NAT gateway".
+- *Language editions.* The grammar change breaks every file; DR-5 depends
+  on =dform migrate= handling the common cases, and migration of
+  =component_scope= joins to =output= wiring is not mechanical.
+
+** Where this is most likely to be wrong
+
+1. *The Flat default is too strict for objects.* An undeclared object
+   attribute becomes =Map(Str, Flat)=, so two rules that each set the whole
+   object merge pointwise. Users who write =config = {...}= in two places
+   probably meant "conflict", not "merge", and CUE users have hit exactly
+   this. The alternative (=Flat= by default, =Map= only when the schema
+   says so) makes the policy-pack tag pattern require a schema for every
+   type. I chose the CUE side; it may be the wrong side.
+
+2. *Path granularity in the aggregate.* Normalising =.tags.team= into
+   ={team: ...}= at =.tags= assumes every sub-path contribution is a
+   contribution to the nearest schema-declared attribute. Nested keyed
+   lists inside maps inside keyed lists (Kubernetes container specs) will
+   find the edge of that assumption quickly.
+
+3. *Negation witnesses as =1= in every semiring.* This is sound for why,
+   ownership, and cost. For secrecy it is *not* obviously sound: the fact
+   that =not attr(db, .public, false)= held can leak whether a secret-derived
+   fact existed. The static pass forbids negation over secret positions
+   (=E0302=), which closes the hole for rules, but the runtime fold cannot
+   see what it was not told. The claim "static pass is complete for rules"
+   is the part I would want a second reader to attack.
+
+4. *Instance paths with variables* (=output(network.IA, vpc, A)=) is
+   syntax invented for the rewrite. It is small, but it is the kind of
+   thing that grows: next someone wants =instance network Name {...} :-
+   region(Name)=, and then module instances are data, and then interfaces
+   need to be checked per instance at evaluation time, which the static
+   story does not cover. The honest alternative is to forbid variable
+   instance paths and require the root to enumerate instances by hand.
+
+5. *The no-bag decision* will meet a real ordered, duplicate-carrying
+   list (container args, firewall rule sequences with repeated entries)
+   that two modules legitimately want to append to. =collect_ordered= in
+   one rule covers "one author"; two authors appending to one ordered
+   list is exactly the non-idempotent case, and the answer "declare a
+   merge key" is not always available.
+
+6. *Apache-2.0 with no CLA* means a future maintainer who needs to change
+   the licence cannot. That is the intent, and it is also what stops a
+   company from funding the project the way HashiCorp did. I am
+   confident in the decision and not confident it is costless.
+
+** Prototype in the worktree
+
+Worktree: =/tmp/claude-1000/-home-simon-src-scraps-dform/99c49424-d8f2-45f7-abcc-f74fabb80e25/scratchpad/wt-A=,
+branch =explore/A-lattice-datalog=, uncommitted.
+
+Changed: added =src/lattice.rs= (registered in =src/lib.rs=). It is the
+lattice from "The attribute lattice" as pure functions: =Lattice= (Flat,
+Map, Set, Keyed), =Elem= (Bottom, Val with witness set, Conflict with two
+witnessed sides), =join=, and =lub=. Six tests check, for each
+constructor, that =lub= gives the same element under every permutation of
+the contributions (Heap's algorithm, no dependencies), that duplicating
+every contribution changes nothing, that a =Flat= conflict names both
+witnesses, that a =Map= conflict reports the sub-path, and a one-line test
+documenting why =Bag= is excluded. =cargo test --lib lattice= passes
+(6/6). Nothing in the engine calls it.
+
+Also confirmed in the worktree that the aggregate-stratification repro
+from the board still yields three =snap= facts on the current engine,
+which is the bug the negative-edge rule in "Stratification" fixes.
+
+* References
+
+- Abiteboul, Hull, Vianu. /Foundations of Databases/, ch. 15 (stratified negation).
+- Mumick, Pirahesh. Implementation of magic-sets in a relational database system; and Mumick, Pirahesh, Ramakrishnan, /The magic of duplicates and aggregates/ (stratified aggregation).
+- Green, Karvounarakis, Tannen 2007. /Provenance semirings/.
+- Deutch, Milo, Roy, Tannen 2014. /Circuits for Datalog provenance/.
+- Geerts, Poggi 2010. /On database query languages for K-relations/ (m-semirings).
+- Amsterdamer, Deutch, Tannen 2011. /Provenance for aggregate queries/.
+- Foster, Green, Tannen 2008. /Annotated XML: queries and provenance/ (security semiring).
+- Budiu, Chajed, McSherry, Ryzhyk, Tannen 2023. /DBSP: automatic incremental view maintenance for rich query languages/.
+- Arntzenius, Krishnaswami 2016. /Datafun: a functional Datalog/.
+- Conway, Marczak, Alvaro, Hellerstein, Maier 2012. /Logic and lattices for distributed programming/ (Bloom^L).
+- Madsen, Yi, Lhoták 2016. /From Datalog to Flix/.
+- Kuper, Newton 2013. /LVars/.
+- Gebser, Kaminski, Kaufmann, Schaub. /clingo/.
+- Foster, Harrison, Freedman, Monsanto, Rexford, Story, Walker 2011. /Frenetic/; Anderson et al. 2014. /NetKAT/.
+- Fogel et al. 2015. /Batfish/.
+- Backes et al. 2018. /Semantic-based automated reasoning for AWS access policies using SMT/ (Zelkova); Backes et al. 2019. /Reachability analysis for AWS-based networks/ (Tiros).
+- Bancilhon, Spyratos 1981. /Update semantics of relational views/.
+- Foster, Greenwald, Moore, Pierce, Schmitt 2007. /Combinators for bidirectional tree transformations/ (lenses).
+- Zhang, Wang, Flatt, Cao, Zucker, Rosenthal, Tatlock, Willsey 2023. /Better together: unifying Datalog and equality saturation/ (egglog).
+- Calì, Gottlob, Lukasiewicz 2009. /Datalog±/; Bellomarini, Sallinger, Gottlob 2018. /The Vadalog system/; Ivliev et al. 2024. /Nemo/.
+- Google Mangle (github.com/google/mangle); RelationalAI Rel language reference.
+- Myers, Liskov 1997. /A decentralized model for information flow control/; Jif.
+- Salsa (github.com/salsa-rs/salsa); rust-analyzer architecture docs.
+- Soufflé: provenance (=explain=), =.decl=, =.functor=, stratified aggregates.
+- CUE language specification (value lattice, closed structs).
+- Kubernetes: server-side apply, =managedFields=, =x-kubernetes-list-map-keys=.
+- Terraform: =sensitive=, =ephemeral=, =moved=, =import=, =removed=, plugin protocol v6.

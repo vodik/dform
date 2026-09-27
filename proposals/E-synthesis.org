@@ -1,0 +1,2169 @@
+#+TITLE: Proposal E: the synthesis. Stratified Datalog with ranked lattice cells, classed nulls, and an absorptive provenance circuit
+#+AUTHOR: dform design, direction E
+#+DATE: 2026-09-27
+#+STARTUP: overview
+#+OPTIONS: toc:3
+
+Status: the direction dform will take. Written against DESIGN.org (commit
+58f9fde), proposals A, B, C, D, the six =.df= files, and =src/=. The coordinator
+chose the crossbreed; this document makes it concrete, tries to break it at
+three seams, records the prototype's results, and overrides the brief in the
+places where working the cases showed the brief was wrong. Every override is
+marked *override* and carries its reason.
+
+Prototype: worktree
+=/tmp/claude-1000/-home-simon-src-scraps-dform/99c49424-d8f2-45f7-abcc-f74fabb80e25/scratchpad/wt-E=,
+branch =explore/E-synthesis=, uncommitted. =src/lattice.rs= (915 lines) and
+=src/circuit.rs= (462 lines), =Value::Null= added to =src/value.rs=. 16 tests,
+16 pass; two of them failed on the first run and the fixes changed the design
+(§4.1, §9). Nothing in the evaluator was touched.
+
+* 1. Position
+
+dform is a stratified Datalog. The engine has exactly two non-monotone
+operators, negation and aggregation, and both are placed by one dependency
+graph. That is direction A's spine and it is kept whole: declared relations,
+undefined predicate is a compile error, semi-naive evaluation over an operator
+IR whose operators have DBSP counterparts, A's four lattices (Flat, Map, Set,
+Keyed; no Bag), A's grammar.
+
+Three things are grafted onto that spine, each restricted to the smallest
+form that earns its place.
+
+From B, *ranked cells*: a Flat attribute has three ranks, =@default=, normal,
+=@override=. The highest rank with a witness wins; two witnesses at one rank
+that disagree are the lattice top, never last-wins; schema refinements are
+rank-blind constraints that every rank must satisfy. This replaces A's
+=arg_default= with one mechanism that also covers environment layering and
+the "prod forces deletion protection on" case A's candid section admitted it
+could not express. Sets, maps and keyed lists are not ranked.
+
+From C, *classed nulls*: =ref(T, A, Attr)= to a computed attribute is a
+labeled null whose class comes from the schema. =fresh= (an identity) obeys
+the Unique Name Assumption and decides equality at plan time; =open= (an
+endpoint, an allocated range, a zone list) makes comparisons unknown; =secret=
+is open and never materialized outside a provider call. A rule that needs
+the content of an open null is *stuck*; stuck instances are recorded, not
+derived; the plan has definite, pending and undetermined sections; apply
+resolves nulls phase by phase and re-derives. C's chase, EGDs, user-written
+=some= and =choose= are rejected: the only existential is the schema's
+computed-attribute rule, and §2.7 shows why that fragment needs no
+termination theory. C's absorptive provenance circuit replaces A's derivation
+DAG; its seven homomorphisms are the whole of =why=, ownership, secrecy
+labels, trust, cost attribution and phase ordering.
+
+From D, *the plan as a Z-set*: =deformation = desired − world= in Z-set
+arithmetic, computable on the naive engine today. A conflict derives a =deny=
+and drops the address from =desired= instead of aborting evaluation. Apply is
+a loop of ticks until the stack is undeformed, bounded by =--max-ticks=. D's
+type partitioning of =arg=/=attr= is taken and, after working seam 3,
+refined to (type, normalized path). D's log-as-truth, its =}= without a
+period, and =Subscribe=/=Watch= as v1 protocol requirements are rejected.
+
+Deferred: the DBSP circuit compiler (the IR is shaped for it; build it when
+reactive mode is next) and clingo (a greedy =allocate= aggregate with pins in
+state ships first; clingo goes behind a feature flag later).
+
+The three seams the coordinator asked about, in one line each. Seam 1 (ranks
+versus nulls): the coordinator's rule "collapse is undefined while any rank
+holds an open null" is *replaced* by "rank decides first, then class": a
+null at a losing rank never blocks, a same-rank disagreement involving an
+open null is a new lattice element =Stuck= that resolution turns into a value
+or a conflict, a secret in a same-rank disagreement is a conflict
+immediately, and fresh nulls compete by rank like any value. Seam 2
+(provenance under retraction): resolution is substitution plus one world leaf
+per touched derivation; the invalidation set is exactly the =touches=
+homomorphism, which is *not* C's =phase= instance (C's semiring was wrong for
+the definite question; §3.4); v1 re-derives the strata downstream of a
+retraction from scratch, and the bound is (phases + 1) full evaluations. Seam
+3 (the aggregate): A's path normalization, D's type partitioning and B's
+schema refinements compose into one aggregate definition, provided D's
+partitioning is on (type, normalized path) rather than type alone, and
+provided "schema rank" is read as "rank-blind constraint component"; both are
+small overrides of the brief with a concrete example each.
+
+What this direction costs, stated once: provenance is always on (2 to 4
+times the bare fact store); the plan has phases and a third policy outcome,
+which is a bigger mental model than Terraform's refusal; and two of the
+grafts (=Stuck=, the resolution-time re-derivation) are new machinery that no
+production Datalog has run at scale. §10 says where it is most likely wrong.
+
+* 2. Semantic core
+
+** 2.1 Values
+
+The prototype's =Value= with A's additions and one from C.
+
+| Variant   | Notes                                                                       |
+|-----------+-----------------------------------------------------------------------------|
+| =Str=     | UTF-8 string                                                                |
+| =Int=     | i64; no silent coercion from =Str= (=as_i64= parses nothing)                |
+| =Bool=    |                                                                             |
+| =Null=    | =Null { label, class, ty }=: a labeled null; see §2.2                       |
+| =JsonNull= | the API value =null=; legal only where the schema says =nullable= (DR-6)   |
+| =List=    | ordered; equality positional                                                |
+| =Obj=     | string-keyed map                                                            |
+| =Inet=    | unified family + 128-bit address + prefix (L15)                             |
+| =Path=    | keypath literal =.a.b[0]."c-d"=                                             |
+| =Addr=    | resource address =(instance path, local name)=, printed =network.main/vpc=  |
+
+Removed: =Ref=, =CloudRef=, =Ip=, =IpNet=, =IpRange=, and A's =Secret=. A =ref= to
+a computed attribute *is* a =Null= (C); a =ref= to a configured attribute is
+rewritten to an =attr/4= join (A); a discovered value is a =world_attr/4= fact;
+a secret is a =Null= of class =secret= (the boxed reference A wanted, with the
+class carrying the "never bytes" rule). =Value= stays =Ord= so relations are
+=BTreeSet= and aggregates are deterministic; a =Null= orders by label.
+
+In the worktree =Value::Null= is spelled exactly as the brief asked:
+
+#+begin_src rust
+Value::Null { label: String, class: NullClass, ty: String }
+enum NullClass { Fresh, Open, Secret }
+#+end_src
+
+** 2.2 Null classes
+
+A labeled null is a value known to exist, unique under its label, whose
+constant the engine does not have yet. Labels are Skolem names,
+="type/addr#attr"=, deterministic across runs so a plan file is stable.
+
+The class is assigned by the schema, never by the user:
+
+| Schema flags on =type_attr(T, P, Ty, Flags)= | Class    | Examples                                  |
+|-----------------------------------------------+----------+-------------------------------------------|
+| =computed= and =id= (or =computed fresh=)     | =fresh=  | id, arn, self_link, uid                   |
+| =computed=, not sensitive                     | =open=   | endpoint, allocated cidr, zones, ca cert  |
+| =computed= and =sensitive=; =secret= inputs; =-secret(T)= extern columns | =secret= | password, access token, private key |
+
+The class drives three things.
+
+*Equality* (=eq3=, three-valued, implemented and tested):
+
+| =a=                | =b=                        | =eq3(a, b)= |
+|--------------------+----------------------------+-------------|
+| null, label =l=    | null, label =l=            | True        |
+| fresh null         | any constant               | False       |
+| fresh null         | fresh null, other label    | False       |
+| fresh null         | open or secret null        | Unknown     |
+| open or secret     | anything with another label | Unknown    |
+| list / object      | list / object              | positional / keywise fold: any False is False, else any Unknown is Unknown |
+
+The Unique Name Assumption on =fresh= is a true statement about every cloud
+API dform targets: a resource not yet created has an id equal to nothing that
+exists. It is what makes =not attr(T, X, .id, ν)= and =ν != "vpc-1"= decidable at
+plan time and it is why the peering example in =dform.df= plans in one phase.
+=open= nulls carry the honesty: the engine does not pretend to know whether a
+to-be-allocated endpoint equals a string.
+
+*Materialization*: a =fresh= or =open= null is substituted by its constant at a
+phase boundary (§2.7). A =secret= null is never substituted in the fact
+store; the provider resolves it inside the =Apply= call from the store the
+label names. Printing, plan files and state see the label only. A rule that
+would need a secret's content is a compile error from A's static label pass
+(E0301..E0305), not a runtime stuck, because the schema makes the position
+statically =secret=.
+
+*Phase*: which null a fact carries or is stuck on decides when its
+deformation can be applied. §2.7 and §3.4.
+
+*Override.* The brief says "class drives equality (fresh by label, open/secret
+unknown)". Kept, with one precision the cases forced: =fresh= versus a
+*constant* is =False=, not "by label". Without it, =arg(sub, S, .vpc_id, ν)=
+against a hand-written ="vpc-1"= at the same rank would be stuck, and the
+adopt workflow would wait for an apply that never comes.
+
+** 2.3 The lattices
+
+A's four constructors, with one new element.
+
+- =Flat(D)=: =⊥ < d < ⊤=, distinct =d= incomparable. Join: =d ⊔ d = d=,
+  =d ⊔ d' = ⊤=.
+- =Map(K, L)=: finite partial functions, pointwise join, absent key is =⊥=.
+- =Set(D)=: finite subsets, union, no =⊤=.
+- =Keyed(K̄, L)=: =Map= over the projection of each element onto the merge
+  keys; emitted as a list in key order.
+
+There is no =Bag=. Multiset union is not idempotent; a rule that fires twice
+with the same binding would double its contribution, which is the order
+dependence this design exists to kill. =collect_list= survives as an
+aggregate *inside one rule* whose result is one =Flat= contribution.
+
+The new element is =Stuck=. With nulls in the value domain, =d ⊔ d'= has a
+third outcome: =eq3(d, d') = Unknown=. Then the join is neither =d= nor =⊤=;
+it is =Stuck(S)= where =S= is the set of pairwise-undecided contributions,
+together with the labels of the nulls whose resolution will decide it.
+
+Precise definition, as implemented. Every non-=⊥= element is the *normal form
+of its full contribution list*; join is concatenation followed by
+normalization. For =Flat=:
+
+1. merge contributions that are =eq3=-True (witnesses union), sort by value;
+2. if one remains: =Val(v, W)=;
+3. if any pair is =eq3=-False: =Conflict=, carrying *every* contribution and
+   naming the least unequal pair for the diagnostic;
+4. if any pair involves a =secret= null: =Conflict= ("a secret cannot be
+   compared with another contribution"), because the engine will never be
+   able to decide it and stuck-forever is worse than a conflict now;
+5. otherwise: =Stuck(S, nulls(S))=.
+
+=Map= and =Keyed= normalize per key with the element lattice; a =Stuck= leaf
+makes the container =Stuck= (the engine keeps the other keys' values and
+marks the leaf; the prototype drops them, noted in §9). =Set= never conflicts
+and is never stuck: two elements that *might* be equal are both kept until a
+null resolves, and the provider receives both. Keyed lists whose merge key
+contains an open null keep such elements in separate groups until resolution
+and the compiler warns on the pattern.
+
+Laws, all tested under every permutation (Heap's algorithm) and under
+duplication of every contribution: commutative, associative, idempotent, for
+each constructor, over samples mixing constants, fresh, open and secret
+nulls. Two laws failed on the first run and forced the "normal form of the
+full list" definition: a =Conflict= that kept only the first offending pair was
+not associative in its witness set ((a ⊔ b) ⊔ f named {1,2}, a ⊔ (b ⊔ f) named
+{2,3}), and a =Map= =Stuck= that stored its two inputs in arrival order was
+not commutative. Both are the same mistake, an element that remembers *how*
+it was built, and the fix is that no element does. This is also why the
+engine's conflict diagnostic can name every contributor (D's =⊤(owners)=), not
+just two.
+
+** 2.4 Ranked cells
+
+A ranked cell is a Flat cell with three slots and a constraint set:
+
+#+begin_src rust
+struct Ranked { ranks: [Elem; 3], constraints: BTreeMap<Constraint, Witnesses> }
+enum Rank { Default = 0, Normal = 1, Override = 2 }
+#+end_src
+
+Join is pointwise on the three slots (Flat join) and union on the
+constraints, so it inherits the laws. *Only Flat attributes are ranked.* A
+=Set= path unions across every author; a =Map= or =Keyed= path is ranked at its
+leaves, because its leaves are Flat cells. "Replace the whole set in prod" is
+not expressible and that is deliberate (A's DR-1 reasoning stands; B's =seal=
+is not taken).
+
+Exactly three ranks. B had four and a =rank= declaration; the fourth
+(=force=, for the operator) is the CLI's =--set=, which populates *inputs*, and
+inputs are declared relations no source rule may write, so they never
+conflict with anything. Three named ranks with no numbers is the whole of the
+"who gets 900" social problem B admitted, made smaller.
+
+Syntax: =@default= or =@override= after a value (=deletion_protection = true
+@override=), or after a block header to apply to every leaf in the block
+(=settings E @default { ... }=). No annotation is normal. =input k: T = v=
+lowers to a =@default= contribution. Core form: =arg(T, A, P, V, R)= with
+=R ∈ {default, normal, override}=.
+
+*Collapse*, the one non-monotone read, in the order the prototype does it:
+
+1. if any rank is =Conflict=: =Conflict= (a shadowed disagreement is still a
+   disagreement; hiding it because a third author out-ranked both is what
+   last-wins systems do);
+2. if any rank is =Stuck=: =Stuck= on that rank's nulls (the same reason; it
+   will become one of the two outcomes above);
+3. the highest non-=⊥= rank's value =v= wins;
+4. every constraint is checked against =v=: =False= is =Conflict= naming the
+   constraint's schema witness and =v='s witnesses; =Unknown= (=v= carries a
+   null) is *deferred* and re-checked at resolution; a =secret= =v= defers
+   every constraint to the provider.
+
+Constraints are rank-blind. *Override* of the brief's phrase "joined in at
+schema rank": a constraint that could be out-ranked is not a constraint.
+B's own collapse conjoins constraints across all ranks, so this is B's
+semantics with the misleading name removed, and it is what makes an
+=@override 30= against a =<= 20= a conflict (tested).
+
+Collapse is a stratum boundary: =attr= is an aggregate head, so every reader
+of =attr= is strictly above every writer of =arg= for that partition (§2.6).
+Nothing else in the engine is non-monotone.
+
+** 2.5 The aggregate, one definition
+
+For every schema-declared attribute path =P= of type =T=, the compiler emits
+one aggregate. Three proposals touched this aggregate (A's path
+normalization, D's type partitioning, B's schema refinements). They compose
+into one definition; §4.3 is the argument, this is the result.
+
+#+begin_src prolog
+% Prelude, compiler-generated. Sources of contributions:
+contrib(T, A, P, cell(R, V))      :- arg(T, A, P0, V0, R), normalize(T, P0, V0, P, V).
+contrib(T, A, P, constraint(C))   :- want(T, A), type_refine(T, P, C).
+contrib(T, A, P, cell(normal, N)) :- want(T, A), type_attr(T, P, Ty, Flags),
+                                     member(Flags, computed), N = null(T, A, P, class(Flags), Ty).
+
+% The aggregate. `lub_ranked` folds cells with the ranked join and finalizes with collapse.
+attr(T, A, P, lub_ranked(X))      :- contrib(T, A, P, X).
+
+% What collapse can produce, as facts the rest of the program reads:
+%   attr(T, A, P, V)                  a value (V may carry nulls)
+%   attr_conflict(T, A, P, W1, W2)    top, with two witness fact ids (every witness is in provenance)
+%   attr_stuck(T, A, P, Nulls)        a same-rank disagreement waiting on Nulls
+#+end_src
+
+- =normalize/5= is A's path normalization done *at compile time when the path
+  is a constant*: a head =arg(T, A, .tags.team, V)= is rewritten to
+  =arg(T, A, .tags, {team: V})= before the dependency graph is built, so all
+  contributions to one declared attribute meet in one group. A variable path
+  normalizes at runtime and its rule sits in the =(arg, T, *)= partition.
+- =type_refine/3= is the schema's checkable refinements (type tag, interval,
+  =prefix_len=, enum, regex), as EDB. They enter the cell as constraint
+  contributions. Refinements not in the checkable table lower to =deny= (DR-14).
+- The third rule is the *only existential in the language*: the computed
+  attribute's null, minted once per =(T, A, P)=. It is a contribution at rank
+  normal like any other; users cannot write a value for a computed path (a
+  compile error from the schema), so nothing ever competes with it by rank.
+  Its resolution is substitution (§2.7), not a rank.
+- =output(Instance, Key, V)= and =setting(Env, Path, V)= are the same aggregate
+  over the pseudo-types =output= and =settings= (A's decision, kept).
+
+The aggregate group is =(T, A, P)= with =P= the normalized path. Its stratum
+node is =(attr, T, P)= (§2.6).
+
+** 2.6 Predicate kinds and the stratification graph
+
+Every predicate is exactly one of: *extensional* (ground facts in source,
+extern results, world facts, schema facts, inputs), *intensional* (rules), or
+*aggregate* (rules whose head has exactly one aggregate term; =attr= is one).
+A predicate that is both EDB and IDB is a compile error unless declared
+=decl p/N mixed.= (A). A body predicate with no definition is a compile error;
+=extern= declares provider-fed ones. Module-private predicates, =export=,
+=input=/=output=, =contributes=: A's module system, unchanged (DR-3).
+
+The dependency graph has one node per predicate, except =arg= and =attr=,
+which have one node per *partition* =(pred, T, P)= where =T= and =P= are the
+head's type and normalized path when constant and =*= when not. Two
+partitions are connected iff they unify. An edge runs from each body
+predicate (or partition) to the head. An edge is *negative* if:
+
+- the body literal is under =not=;
+- the head is an aggregate predicate (every reader of an aggregate is above
+  its whole group: the fix for the "aggregates are not stratified" repro);
+- the body literal is an extern (evaluated once per stratum after its bound
+  inputs are complete);
+- the body literal is =attr=, =output=, =setting=, =attr_conflict= or
+  =attr_stuck= (aggregates; listed for the reader).
+
+A cycle through a negative edge is a compile error naming the cycle with
+=file:line= per edge. Stratum = longest negative-edge path. Within a stratum,
+semi-naive evaluation over the operator IR, no iteration cap. Externs may not
+be under =not= and may not be in a cycle. =provider_config/2= may depend on
+nulls (that is what makes a provider phase-2, §2.7) but may not depend on an
+extern of its own provider; that cycle is reported.
+
+Why partitions and not whole predicates: with one =attr= node, the network
+module (=arg(net.subnet, ...)= reads =attr(net.vpc, vpc, .cidr, V)=) is a
+negative self-loop. With D's type-only partitions it compiles, but A's own
+baseline example (=arg(iam.policy, A, .statements, ...) :- attr(iam.policy, A,
+.name, "app")=) is a self-loop on =(iam.policy)=. With =(type, path)=
+partitions both compile and the tag policy =arg(T, A, .tags, ...) :- want(T,
+A)= lands in =(arg, *, .tags)=, above every reader of =.tags= and nothing
+else. The =contributes arg to TypePat at PathPat= grant is that partition
+pattern spelled by the author, and a head outside its grant is a compile
+error. This is the narrowest form of B's partitioned stratification: two
+compiler-owned predicates, two columns, constants only. B's general
+=partition= declaration on user relations stays rejected.
+
+The operator IR is A's: =Scan=, =Join=, =AntiJoin=, =Filter=, =Map=, =Extern=,
+=Distinct=, =Agg=, =Fix=, plus one new operator, =Stuck=, which is =Filter='s
+third output (§2.7). Every operator has a DBSP counterpart; =Stuck= is a
+=Filter= with two output streams.
+
+** 2.7 Phases
+
+The whole apparatus of C, reduced to four rules.
+
+*Rule 1, carrying.* A null may appear inside any tuple. A fact whose tuple
+carries a null is an ordinary fact: it joins, projects, unifies by label, and
+is forwarded into attribute values (=vpc_id = ref(net.vpc, vpc, .id)=). The
+plan shows it with its label.
+
+*Rule 2, stuck.* A literal that needs a null's *content* does not fire. The
+content positions are: an operand of =<=, =<==, =>=, =>==; either side of === or
+=!== when =eq3= is Unknown; any builtin argument (=format=, =inet_subnet=,
+=len=, =member= over a null list); an aggregate's group key or aggregated
+value; and any argument of a resource *address*. When the literal's
+=eq3=/builtin evaluation returns Unknown, the rule instance is recorded as
+=stuck(RuleId, Bindings, Nulls)= (D's companion relation, generated by the
+compiler for every rule with a content position) and nothing else is
+derived. Negation and equality over =fresh= nulls are decided under UNA and
+never stuck.
+
+*Rule 3, undetermined.* =not p(t̄)= is decided against the current =p= *only if*
+no stuck instance exists for any rule whose head is =p=; otherwise the
+negating instance is stuck on the union of those instances' nulls. An
+aggregate over =p= is likewise undetermined, and its readers stuck, while any
+=p=-rule instance is stuck. This is predicate-coarse and deliberately so: it
+is what makes the definite fragment *monotone across phases* (§4.2), and it
+is checkable in one pass over =stuck/3=. A =deny= that is stuck is reported as
+*undetermined*.
+
+*Rule 4, resolution.* A phase boundary is the prelude rule
+
+#+begin_src prolog
+resolve(N, V) :- null_of(T, A, P, N), identity(T, A, Rid), world_attr(T, Rid, P, V).
+resolve(N, V) :- null_of(T, A, P, N), extern_result(T, A, P, V).       % allocate, random.*, file.*
+#+end_src
+
+evaluated after refresh (round 0: every resource that already exists has its
+computed attributes resolved before the plan is printed, so a steady-state
+stack has no nulls at all), after =adopt= (which is =identity/3= written by
+the user), and after each apply phase. A resolution substitutes =N := V= in
+every tuple carrying =N= (a =−1=/=+1= pair, same provenance node plus one
+world leaf; §3.4), re-collapses every cell that carried =N= (which is where a
+=Stuck= becomes a value or a conflict and a deferred refinement becomes a
+conflict), and re-runs every stuck instance blocked on =N=. New facts flow
+forward semi-naively; retractions are handled per §4.2. =secret= nulls are
+never resolved in the store; =resolve/2= for them is a provider-side
+operation and the fact store keeps the label.
+
+*Phase assignment.* A phase is a *re-evaluation boundary*, nothing else. A
+deformation for address =(T, A)= is *definite* when its =desired= row exists
+(no rule on its path is stuck) and its cells are neither =Stuck= nor
+carrying a deferred constraint. A definite deformation's document may carry
+nulls: the executor substitutes them at apply time from resolutions earlier
+in the dependency DAG, which is Terraform's ordinary behaviour and needs no
+re-evaluation (a subnet's =vpc_id= is a fresh null until the VPC's =Apply=
+returns, seconds earlier). Let =blocking= be the union of the nulls named by
+=stuck/3=, by =attr_stuck=, and by deferred constraints. After any action
+that resolves a null in =blocking=, the executor inserts a boundary: it
+feeds the results back as =world_attr= and =identity=, runs the resolution,
+re-derives, re-checks policy, and only then continues. Every deformation
+*downstream in the DAG* of such an action is held until the boundary
+completes and is printed as pending on those nulls. Deformations that are
+not downstream proceed in the same phase. A deformation whose row does not
+exist yet (a stuck instance) is pending on its nulls by construction.
+Provider configuration carrying a null is configured lazily after the null
+resolves; it forces a boundary only if the null is in =blocking=, but in
+C's example it is (the cluster's creation also resolves =zones=), so the
+kubernetes objects land in phase 2 and the executor re-checks policy before
+touching them. A stack is *undeformed* when =deformation= is the zero Z-set,
+=stuck/3= is empty and no cell is =Stuck=. =--max-ticks= bounds the loop.
+
+*Why no chase termination theory is needed.* The only existential is the
+computed-attribute prelude rule in §2.5. Its frontier is =(T, A, P)=, all
+bound in the body; its null is a Skolem function of the frontier; it fires
+at most once per =(want(T, A), computed P)=. It could cascade only if a null
+could reach a *frontier* position of that rule, i.e. an argument of =want/2=
+or the schema facts. The schema is EDB. =want/2='s second argument is a
+resource address, and address arguments are content positions (Rule 2), so
+an instance that would put a null into an address is stuck, not fired; after
+resolution the address is a constant. Hence, in the position graph of Fagin
+et al., the only special edges go from =want= positions into =attr='s value
+position, and no path leads from any null-bearing position back to a =want=
+position: the program is trivially weakly acyclic, the "chase" is one round
+per phase, and the number of nulls is bounded by =|want| × |computed paths|=.
+No user syntax can mint a null, so no user program can change this. C's two
+acyclicity checks and Datalog-first firing order are not needed and not
+implemented.
+
+*C's worked example, re-run under these rules* (final syntax in §7.4):
+
+1. =want(gke.cluster, pngu)= is definite. The prelude mints
+   =ν_ep=, =ν_ca=, =ν_zones= (=open=), =ν_id= (=fresh=), and
+   =ν_tok= (=secret=, from =google.client_config=).
+2. =provider_config(kubernetes, {host: ν_ep, ca: ν_ca, token: ν_tok})= is a
+   definite fact that carries three nulls (Rule 1). Its phase set is
+   ={ν_ep, ν_ca, ν_tok}=.
+3. =resource gke.nodepool Np { ... } :- attr(gke.cluster, pngu, .zones, Zs),
+   member(Zs, Z), Np = format("np-%s", Z)=: =member= over an open null is a
+   content position; the instance is stuck on ={ν_zones}= (Rule 2). The plan
+   prints one pending group "gke.nodepool np-? × unknown, depends on
+   ?gke.cluster/pngu#zones".
+4. =k8s.namespace= and =k8s.deployment= are definite facts, but their provider
+   config is pending on three nulls, so their *deformations* are pending on
+   the same set. Their full diffs are shown now, which Terraform cannot do.
+5. =zone_count(count(Z)) :- attr(gke.cluster, pngu, .zones, Zs), member(Zs, Z)=
+   has a stuck instance, so the aggregate is undetermined (Rule 3) and
+   =deny(two_zones, ...) :- ..., zone_count(N), N < 2= is stuck: the plan
+   prints it as *undetermined*.
+6. Apply phase 1 creates the cluster; refresh delivers =endpoint=, =zones=,
+   =id=; the resolution substitutes them; the nodepool instances fire twice
+   (two zones); =zone_count = 2=; the =deny= instance now evaluates =2 < 2= to
+   false and derives nothing. Phase 2 has three definite deformations; the
+   executor checks policy (no denies) and proceeds. Had =zones= come back with
+   one element the =deny= would derive, the executor would stop between
+   phases with the cluster created and the plan file would say so.
+
+Nothing here is C's chase: it is nulls, stuck instances, substitution and
+semi-naive re-derivation. The user wrote no phase and no =depends_on=.
+
+** 2.8 The plan as a Z-set
+
+D's definition, on the naive engine, today:
+
+#+begin_src prolog
+desired(T, A, Doc) :- want(T, A), not attr_conflict(T, A, _, _, _), not attr_stuck(T, A, _, _),
+                      Doc = assemble(T, A).                    % aggregate over attr(T, A, _, _)
+world(T, A, Doc)   :- identity(T, A, Rid), world_doc(T, Rid, Doc).   % refresh, keyed by state's mapping
+% deformation is the one native operator: diff = desired − world as Z-sets over (T, A, Doc)
+#+end_src
+
+Per address the group in =diff= is ={+1}= create, ={−1}= delete, ={+1, −1}=
+update (the provider's =Plan= RPC decides replace), empty means undeformed.
+=lifecycle/3= facts are filters and policy over =deformation/5=;
+=ignore_changes= paths are dropped from both sides by =assemble=. Adoption
+rewrites the world address before subtraction. A create whose =Doc= carries a
+null is still a create; the executor fills the null in dependency order
+(§2.7). An update whose desired =Doc= carries a null that the world side has
+a constant for is *pending*: the comparison is a content position and it is
+decided at the next boundary. Round-0 resolution means a steady-state stack
+never has the second case.
+
+Conflict is a fact, not an abort: the prelude carries
+=deny(attr_conflict, "conflicting attribute contributions", {type: T, addr:
+A, path: P}) :- attr_conflict(T, A, P, _, _).= and =desired= excludes the
+address, so nothing downstream of a =⊤= deforms anything. Same for =Stuck=:
+=warn(attr_stuck, ...)= at plan time, and the address waits.
+
+=state.json= stays the identity mapping =(T, A) → Rid= plus persisted extern
+results (DR-7); it is the *only* thing dform writes that it later trusts.
+The append-only log of ticks (inputs, extern responses, apply results) is an
+audit artifact beside it: =dform log= reads it, =--as-of= replays it, nothing
+in plan or apply reads it as truth. *Override* of D's log-as-truth, with D's
+own reason: the log holds observations of a world it does not own, and a
+retention policy should never be able to break =plan=.
+
+Apply: write the plan file (the tick's inputs, extern responses, and the
+deformation delta with its =why= digest); apply consumes the plan and refuses
+if re-evaluation does not reproduce the delta; persist =identity= after each
+action; run ticks until undeformed or =--max-ticks=. Deletes in reverse
+dependency order after the creates that replace them unless
+=create_before_destroy=. This is the apply-executor ticket's content and it
+does not change under any direction.
+
+* 3. The provenance circuit and its seven instances
+
+** 3.1 What is stored
+
+C's absorptive circuit replaces A's per-fact derivation vector. The
+difference matters: A's DAG keeps every derivation and prunes only by an
+id-ordering trick; C's keeps an antichain of alternatives per fact under the
+absorption law =a ⊕ (a ⊗ b) = a=, which is what makes the circuit finite for
+recursive programs (Deutch, Milo, Roy, Tannen 2014, Thm. 3) and what makes
+=why= output readable (no proof that is a superset of another proof).
+
+Nodes, as prototyped:
+
+| Node          | Meaning                                                                      |
+|---------------+------------------------------------------------------------------------------|
+| =Leaf=        | an indeterminate: base fact (span), rule (id), schema fact (span), world event (apply result, refresh row, extern call), absence =¬p(t̄)= (Grädel–Tannen dual) |
+| =Fact=        | one tuple; holds its alternatives, an antichain of =Times= nodes             |
+| =Times=       | one rule firing: the rule leaf, the body facts, absence leaves, and for an aggregate the =Σ= marker over the group |
+
+A fact's =Plus= is its alternative list; there is no separate =Plus= node. Per
+fact the store holds one =NodeId=; per firing one =Times=. Hash-consing of
+=Times= nodes is by child set.
+
+Absorption is applied *structurally* at each =⊕=: a new firing is dropped
+when an existing alternative's leaf set is a subset of its own, and it evicts
+alternatives whose leaf sets are supersets of its own. The prototype computes
+leaf sets by walking; the engine keeps a per-=Times= leaf-set digest
+(a 64-bit bloom is enough to say "not a subset" fast) and caps alternatives
+at =k = 8= with a =truncated= flag, C's =--why-depth=. A missed absorption
+costs size, never correctness: every instance below is a semiring
+homomorphism evaluated by fold, and a redundant alternative contributes
+nothing new to an absorptive target.
+
+Negation: a negated literal that held contributes a leaf =¬p(t̄)= to the
+firing. Because negation is stratified the negated predicate is complete
+when evaluated, so the leaf is either fresh (absent) or the firing does not
+happen. The =x ⊗ x̄ = 0= law is enforced structurally: a =Times= whose children
+contain both =p(t̄)= and =¬p(t̄)= is pruned (it cannot arise in stratified
+evaluation and the check is one set lookup).
+
+Aggregation: an aggregate fact's single alternative is a =Times= over the
+=Σ= marker and every contributing fact (Amsterdamer, Deutch, Tannen 2011,
+specialised to un-annotated aggregate values). For the attribute aggregate
+this means =attr(T, A, P, V)= carries every =arg= that reached the group and
+every constraint that was checked, which is exactly what "who contributed
+to this attribute" and "which schema line refused it" need.
+
+** 3.2 The instances
+
+Each is a homomorphism =h: Sorp[X] → K= given by its leaf valuation and its
+treatment of absence leaves and =Σ=. All are lazy folds over the stored
+circuit; none is stored separately except where noted.
+
+| Instance      | =K=                                  | leaf valuation                              | =¬x=          | =Σ=             | consumer                                       |
+|---------------+--------------------------------------+---------------------------------------------+---------------+-----------------+------------------------------------------------|
+| why           | =Why[X]=: sets of leaf sets, ∪, pairwise ∪ | ={{x}}=                                | ={{¬x}}=      | ⊗ all members   | =dform why=, conflict printer                  |
+| lineage       | =Lin[X]=: sets of leaves, ∪, ∪       | ={x}=                                       | ={¬x}=        | ∪               | =dform plan --explain=, =moved= proposals      |
+| owner         | =P(Owner)=, ∪, ∪                     | owner of =x='s file / module instance / pack / provider | =∅= | ∪            | L1b field ownership, conflict messages, =managed_by= in state |
+| trust         | total order of trust levels, min, max | trust of =x='s source (pack annotation, provider lock entry) | trust(x) | max | policy: "attribute in prod from an unreviewed pack" |
+| label         | =public < secret=, min, max          | =secret= for sensitive schema paths, =secret= inputs, =-secret= extern columns; else =public= | label(x) | max | plan/state redaction; the runtime half of DR-20 |
+| cost-attrib   | =(ℚ, min, +)= on price-fact leaves only | price if =x= is a =price/3= fact, else 0   | 0             | +               | =dform cost --by module=: attribution, not totals |
+| phase         | =(P(N), ∩, ∪)=, identity =N=         | nulls in =x='s tuple                        | nulls in =p(t̄)= | ∪             | definite / pending / undetermined sections; executor ordering |
+| touches       | =(P(N), ∪, ∪)=                        | nulls in =x='s tuple                        | nulls in =p(t̄)= | ∪             | invalidation at a phase boundary (§4.2)        |
+
+That is eight rows for the brief's seven. *Override*: C's =phase= instance is
+written as =(P(Nulls), ∪, ∪)=, and that semiring answers the wrong question.
+A fact with two alternatives, one null-free and one through a null, is
+*definite*: it will exist whatever the null resolves to. Under =(∪, ∪)= it
+would be reported pending. The definite question is =⊕ = ∩= ("some
+alternative needs none of these"), =⊗ = ∪= ("this alternative needs all of
+these"); =(P(N), ∩, ∪, N, ∅)= is a commutative semiring (∪ distributes over
+∩) and it is absorptive (=a ∩ (a ∪ b) = a=). The =(∪, ∪)= instance is still
+needed, for the other question, "what may change when ν resolves", and that
+is the seam-2 invalidation set. Both are implemented and the distinction is
+tested: =phase_and_touches_before_resolution= shows a fact with one null-free
+alternative has =phase = ∅= and =touches = {ν}=.
+
+The =phase= instance adds the fact's *own* tuple's nulls on top of the fold
+(a carried null is a dependence even if every alternative is null-free,
+which cannot happen but is cheap to state). Absence leaves =¬p(t̄)= contribute
+=nulls(t̄)=: a negation decided against a pattern that carried a null (only
+possible for =fresh=, by Rule 2) depends on that null's identity being what
+UNA said; no resolution can change it, so this is conservative, not needed
+for correctness, and kept for symmetry.
+
+Cost, honestly. Per fact: 8 bytes (node id, flags). Per firing: one =Times=
+node, 24 bytes plus 4 per child, typical 40-60 bytes. A real account at 10^5
+facts per stratum with an average of 2 firings per fact is 10-15 MB of
+circuit. C's measured expectation of 2 to 4× over a bare store is the right
+order; Soufflé's provenance mode is 1.5 to 3× with less per node. Time: the
+absorption check per =⊕= on a fact that already has alternatives; with the
+bloom digest it is a handful of word operations. Evaluation may take extra
+semi-naive iterations to discover non-absorbed alternatives; bounded by =k=.
+Provenance is always on. There is no =--no-provenance= because the conflict
+printer, the ownership grant check, the secret redaction, the phase
+assignment and =moved= all read it. That is the price and it is paid by
+every plan.
+
+** 3.3 =why=, concretely
+
+#+begin_example
+$ dform why 'attr(net.vpc, network.main/vpc, .tags, X)'
+attr(net.vpc, network.main/vpc, .tags, {env: "prod", team: "platform"})
+  lub_ranked over 2 contributions, no constraints     [owners: network.main, baseline]
+  ├─ arg(net.vpc, network.main/vpc, .tags, {env: "prod"}, normal)
+  │    by modules/network.df:9 (module network, instance main)
+  │    ├─ env("prod")                      input env=prod (cli)
+  │    └─ network.main/vpc_net(inet("10.20.0.0/16"))
+  │         by dform.df:41 instance network main
+  │         └─ setting("prod", .network.main.vpc_net, inet("10.20.0.0/16"))   dform.df:22
+  └─ arg(net.vpc, network.main/vpc, .tags, {team: "platform"}, normal)
+       by policies/baseline.df:5 (policy baseline, contributes arg to _ at .tags)
+       └─ want(net.vpc, network.main/vpc)   by modules/network.df:9 ...
+
+$ dform why 'attr(net.subnet, network.main/private-a, .vpc_id, X)'      # after phase 1
+attr(net.subnet, network.main/private-a, .vpc_id, "vpc-0a1b")
+  by modules/network.df:15 (module network, instance main)
+  ├─ attr(net.vpc, network.main/vpc, .id, "vpc-0a1b")
+  │    by prelude:computed(net.vpc, .id) over want(net.vpc, network.main/vpc)
+  │    └─ resolved ?net.vpc/network.main/vpc#id := "vpc-0a1b"   apply#1 create net.vpc (2026-09-27T14:03Z)
+  └─ resolved ?net.vpc/network.main/vpc#id := "vpc-0a1b"   apply#1 create net.vpc
+#+end_example
+
+The second output is what the prototype's
+=resolution_respells_carrying_facts_and_why_records_the_world_event= test
+asserts: every alternative of a fact that carried the null gains the world
+leaf, exactly once, and every pre-resolution leaf is still there.
+
+** 3.4 =moved=
+
+Hand-written =moved(T, From, To)= is primary: an EDB fact, applied by the
+executor as an =identity= rewrite before the diff, so no destroy and no
+create. Proposals are secondary and read the =lineage= instance: for each
+=(−1, +1)= pair in the plan whose world document is a model of the new
+address's =attr= bundle modulo nulls, and whose lineage under the program's
+rename map equals the previous plan file's lineage for the old address,
+=dform plan --suggest= prints a =moved/3= line. Plan files serialize the
+circuit so the previous lineage is available. Nothing is applied without
+the user pasting the fact in. General view update (drift reconciled into
+source, =put= through rules) is rejected: the restricted single-witness,
+value-preserving case A defined is the only one where an edit is unique, and
+it is a CLI feature over =why=, not an engine feature.
+
+* 4. The three seams
+
+** 4.1 Seam 1: ranked cells against three-valued nulls
+
+The brief's proposal: collapse is undefined while any rank holds an open
+null; a read is stuck and resolves at the phase boundary; schema refinement
+checks on null-carrying cells are deferred. Worked through six cases in the
+prototype (tests =case1_= to =case4_= and =case2b_= in =src/lattice.rs=), every
+case under every permutation of its contributions.
+
+*** Case 1: fresh null and a concrete at different ranks
+
+=vpc_id = ref(net.vpc, vpc, .id)= at normal (a fresh null, forwarded), and
+=vpc_id = "vpc-existing" @override= (an operator pointing a subnet at a
+pre-existing VPC).
+
+Collapse: =@override= wins, value ="vpc-existing"=, no stuck. Under UNA the
+null and the constant are definitely different, so this is an ordinary
+override of one value by another. Reversed (the null at =@override=, ="vpc-old"=
+at normal): the null wins and is forwarded; nothing is stuck; the subnet is
+pending on =ν= exactly as if no override existed. Same rank: =Conflict= now,
+because UNA decides it; likewise two fresh nulls with different labels at
+one rank. Same label at one rank: agree, witnesses union.
+
+Verdict: *fresh nulls are values and compete by rank*. The coordinator's
+question "does a fresh null at =@override= beating a concrete at normal ever
+make sense" has a concrete yes: =settings prod @override { db.subnet_ids =
+[ref(net.subnet, private_a, .id)] }= replacing a =@default= list of hard-coded
+ids from before the subnets were managed. A rank-blind null would make that
+program a conflict. Rank-blind nulls are rejected.
+
+*** Case 2: open null and a concrete at the same rank
+
+=endpoint = ref(gke.cluster, pngu, .endpoint)= and =endpoint = "1.2.3.4"=, both
+at normal. =eq3= is Unknown, so the rank's element is =Stuck({ν, "1.2.3.4"},
+{ν})= and collapse returns =Stuck=. At resolution =ν := "1.2.3.4"= the cell
+re-normalizes to =Val("1.2.3.4", {1, 2})=, both witnesses; =ν := "9.9.9.9"=
+gives =Conflict= naming both. Three-way (open null, ="a"=, ="b"=) is a =Conflict=
+immediately, because the two constants already disagree and no resolution
+can change that; this is a case the "any rank holds an open null" rule
+would have needlessly deferred.
+
+Verdict: *confirmed*, with the sharper statement that stuck is a property
+of the same-rank disagreement, not of the presence of a null.
+
+*** Case 2b: open null at a losing rank
+
+=endpoint = ref(...)= at normal, =endpoint = "1.2.3.4" @override=. The
+coordinator's rule says undefined. Collapse under the rank rule: =@override=
+wins; the lower rank's witness is irrelevant except for its existence;
+result ="1.2.3.4"=, nothing deferred, nothing stuck. Reversed (null at
+=@override=, constant at normal): the null wins, collapse is =Val(ν)=,
+forwardable; content readers are stuck on =ν= by Rule 2, not by the cell.
+
+Verdict: *the brief's rule is replaced*. "Collapse is undefined while any
+rank holds an open null" is too strong by exactly the losing-rank case, and
+that case is the common one: a =@default= from a module (often a computed
+placeholder) overridden by the program. The rule is: *rank decides first,
+then class*. =Conflict= or =Stuck= at any rank propagates (a disagreement is a
+disagreement wherever it sits); a lone null at any rank is just a value.
+
+*** Case 3: secret null anywhere
+
+At the winning rank: collapse is =Val(secret ν)= with every constraint moved
+to =deferred= and marked for the provider; the engine never checks a secret
+against a refinement, A's rule for secret inputs generalized. In a same-rank
+disagreement with anything (a constant, another secret with a different
+label): =Conflict= immediately, reason "a secret value cannot be compared
+with another contribution". Stuck-forever would be the alternative, and a
+plan that never becomes definite is worse than a conflict the user can see;
+the diagnostic prints both owners and neither value. At a losing rank: the
+concrete wins; the collapsed witnesses exclude the secret's contributor (no
+taint from a loser, because the result does not depend on it), but
+=Ranked::all_witnesses= still includes it for =why=. The =label= instance
+therefore reports the winning attribute as public, and the static pass
+(E0304) has already refused to let a secret reach a non-sensitive path in
+the first place, so this case can only arise on a =sensitive= path where
+both answers are acceptable.
+
+Verdict: *confirmed with one addition*: secret-in-disagreement is a
+conflict, not a stuck.
+
+*** Case 4: a refinement on a null-carrying cell that later violates
+
+Schema: =master_control_plane_cidr: inet where prefix_len = 28=. Contribution:
+an open null from an allocator at normal. Plan time: collapse is =Val(ν)=
+with =deferred = [PrefixLen(28)]=; the plan prints the attribute as
+=?alloc/cp#cidr (checked at apply: prefix_len = 28)=. Resolution to
+=10.0.0.0/24=: =Conflict= naming the schema witness (the =type_refine= fact's
+span) and the contributor's witness. Resolution to =172.16.3.96/28=: =Val=
+with nothing deferred. An =@override 30= against =<= 20= is a conflict at
+plan time, confirming constraints are rank-blind.
+
+Then the engine's reaction, driven through the circuit in
+=resolution_that_violates_a_refinement_retracts_the_cone_and_derives_a_conflict=:
+the re-spelled =attr= row is retracted, its forwarding cone (a dashboard
+attribute that copied it) goes with it, the =arg= contribution below the
+aggregate survives, =attr_conflict= is derived with the schema leaf, the
+contributor's rule leaf and the world event in its =why=, and it is definite.
+The executor sees =deny(attr_conflict)= and stops between phases.
+
+Verdict: *confirmed*. Deferred checks are the right behaviour and the
+retraction they cause is the only retraction a phase boundary produces
+(§4.2). Refinements that are not checkable at join (L13's cross-cell
+predicates) lower to =deny= rules that are simply stuck until the null
+resolves; the two homes never report the same violation twice because the
+compiler assigns each refinement to exactly one (DR-14).
+
+*** The rule, final
+
+1. Join per rank is the Flat normal form of §2.3; constraints union.
+2. Collapse: =Conflict= at any rank wins; else =Stuck= at any rank wins; else
+   the highest non-empty rank's value under all constraints, with checks on
+   null-carrying values deferred (secret: to the provider).
+3. =fresh= competes by rank; same-rank fresh disagreements are conflicts now.
+4. =open= competes by rank; same-rank open disagreements are =Stuck= until
+   resolution decides value or conflict.
+5. =secret= competes by rank; same-rank secret disagreements are conflicts now.
+6. Every rank's =Stuck= and every deferred constraint is re-checked at each
+   resolution that mentions one of its nulls.
+
+Order independence of all six cases under every permutation and under
+duplication: tested, passes. The two first-run failures (§2.3) were in the
+Flat and Map normal forms, not in the ranking, and the fix (elements are
+normal forms of their contribution lists) is now part of the definition.
+
+** 4.2 Seam 2: provenance under retraction
+
+The question: when =ν= resolves at a phase boundary, which circuit nodes are
+invalidated, does =why= still answer correctly for facts derived before and
+after, and what must the engine carry to avoid a full re-chase.
+
+*** What can change, precisely
+
+Let =F_ν= be the set of facts whose tuple carries =ν= (Rule 1), =S_ν= the set
+of stuck instances blocked on =ν= (Rules 2 and 3), and =T_ν = { f : ν ∈
+touches(f) }= the =(∪, ∪)= instance's preimage. Claim: after resolving =ν=,
+every fact not in =T_ν= is unchanged, in tuple, in existence and in
+provenance.
+
+Argument. A fact outside =T_ν= has no alternative that passes through a
+=ν=-carrying tuple, so substitution does not touch its =Times= nodes. Its
+existence could change only through a negated literal or an aggregate whose
+predicate gains or loses a tuple. By Rule 3 the negation was evaluated only
+because no stuck instance existed for that predicate, so the resolution
+cannot add a tuple through =S_ν=; and it cannot add one through
+substitution (a re-spelled tuple is the same tuple to a negation that did
+not mention =ν=, since a pattern that mentioned =ν= would be in =T_ν=). It
+could *lose* a tuple only through a retraction, and retractions originate
+only from a cell in =F_ν= becoming =⊤= (case 4 or a resolved =Stuck=), whose
+cone is in =T_ν= by construction. So the definite fragment outside =T_ν= is
+monotone across the boundary, and =T_ν= is the invalidation set.
+
+Inside =T_ν=, three things happen, in order:
+
+1. *Substitution.* Every =f ∈ F_ν= is re-spelled in place: same node id, same
+   alternatives, each =Times= gains the world leaf =w_ν= for the resolution
+   event. Facts that become identical merge (=⊕= of their alternatives; the
+   prototype redirects the dead node). No node is invalidated.
+2. *Re-collapse.* Every ranked cell that carried =ν= re-normalizes. A =Stuck=
+   becomes =Val= (no change downstream except the re-spelling above) or
+   =Conflict=; a deferred constraint becomes satisfied or =Conflict=. A
+   =Conflict= *retracts* the =attr= row and derives =attr_conflict=.
+3. *Unblocking.* Every instance in =S_ν= is re-evaluated; those that now fire
+   insert facts with a =Times= that includes =w_ν=; those stuck on another
+   null stay in =stuck/3=.
+
+Only step 2 retracts, and only the =attr= rows of cells that went =⊤=. The
+retraction propagates through the cone of that row: every =Times= that used
+it dies, every fact left without alternatives is retracted in turn, and
+through negation a fact *outside* the cone can now be derived (=not attr(T,
+A, .p, V)= becomes true). That last effect is the one that requires
+re-evaluating strata, not just walking the circuit: an absence leaf is not
+a node in the DAG.
+
+*** What =why= answers
+
+Before resolution: a fact in =F_ν= shows its label in the tuple and its
+derivation ends in the prelude's computed-attribute leaf over =want=. After
+resolution: the same derivation plus the world leaf =w_ν= in every
+alternative (tested: exactly one new leaf appears, and it appears in every
+alternative, two hops downstream as well). A fact derived *after* resolution
+by an unblocked instance shows =w_ν= as an ordinary leaf: "this exists
+because apply #1 returned zones = [b, c]". A fact retracted by a =⊤= is
+gone from the store and =dform why= on it reports "retracted at phase 1:
+attr_conflict(...)" from the log, which is the one thing the audit log is
+read for. =attr_conflict='s own =why= names the schema line, the contributing
+rule and the world event (tested). Facts outside =T_ν= answer exactly as
+before because their nodes were not touched.
+
+*** What the engine must carry
+
+- Per fact: its node id (already) and a small bitset or list of the nulls in
+  its tuple (C's flag; cheap, since a tuple rarely carries more than a few).
+- =stuck(RuleId, Bindings, Nulls)= as a relation, indexed by null label.
+- Per null label: the set of cells (=(T, A, P)= groups) that received a
+  contribution carrying it, so step 2 does not scan every cell.
+- Per stratum: nothing new; semi-naive deltas for step 3's inserts are the
+  ordinary =Fix= inputs.
+- To do step 2's retraction *incrementally*: a counting or DRed scheme
+  (Gupta, Mumick, Subrahmanian 1993) per stratum, which the absorptive
+  circuit cannot provide (absorption discards counts) and the operator IR
+  does not yet implement. The prototype's =retract= is DRed without the
+  re-derivation pass and is only correct for non-recursive strata.
+
+*** The honest v1
+
+Steps 1 and 3 are deltas and run on the semi-naive engine unchanged. Step
+2's retraction is rare (a null resolving to a value that violates a
+refinement, or a same-rank pending conflict resolving to unequal) and its
+consequences through negation are exactly what DRed exists for. v1 does not
+implement DRed. When step 2 retracts anything, v1 *re-derives from scratch
+every stratum at or above the retracted row's stratum*, carrying the lower
+strata's facts and nodes forward and re-running the phase's substitution on
+the way. Bound: let =E= be one full evaluation. A phase boundary costs at
+most =E= (usually a small delta); the number of boundaries is the depth of
+the null-dependency chain, =d=, typically 2 (create, then configure) and
+rarely 3; so an apply costs at most =(d + 1) · E= of evaluation, and in the
+common case where nothing goes =⊤= it costs =E= plus deltas. The DBSP
+phase replaces this with retraction-by-weight (Deutch et al.'s
+incremental circuits; Green, Ivan, Tannen 2010 for the provenance ring)
+and that is one of the two reasons to build it.
+
+Verdict: invalidation is exactly =touches(f) ∋ ν=; =why= is correct before
+and after by construction (substitution keeps nodes, resolution adds a
+leaf); v1 re-derives downstream strata only on the rare retraction, with the
+bound above. C's expectation "phase resumption re-chases the strata
+downstream of the resolved nulls" is confirmed as the fallback and shown to
+be needed only when a cell goes =⊤=.
+
+** 4.3 Seam 3: three touches on one aggregate
+
+The three proposals each reach into the attribute aggregate.
+
+- A: contributions to a sub-path are normalized into the schema-declared
+  attribute (=.tags.team = "x"= is a contribution ={team: "x"}= at =.tags=) so
+  one group per declared attribute exists.
+- D: the dependency graph partitions =arg= and =attr= by resource type when the
+  head's type is a constant, so the network module's read-vpc-write-subnet
+  pattern is not a cycle; variable-typed writers (policy packs) declare
+  =contributes= and land above all typed readers.
+- B: schema refinements are joined into the cell so a violation is a =⊤=
+  naming both the schema line and the contributor, checked even for values
+  no rule reads.
+
+Do they compose? §2.5 is the single definition; here is what had to give.
+
+*Normalization and partitioning interact.* D partitions on the head's type.
+If normalization happened after graph construction, =arg(T, A, .tags.team, V)=
+and =arg(T, A, .tags, {...})= would be different heads; with path in the
+partition they would be different nodes and a reader of =.tags= might be
+placed below a writer of =.tags.team=. So normalization runs *first*, at
+compile time, on every head with a constant path, and the partition uses the
+normalized path. A head with a variable path is =(arg, T, *)=, which unifies
+with every path partition of =T= and is therefore above nothing that reads
+=T= and below everything; that is the correct, conservative placement and it
+is the placement every such rule had under D anyway.
+
+*Partitioning by type alone is not enough.* A's own baseline example
+(=arg(iam.policy, A, .statements, S) :- ..., attr(iam.policy, A, .name,
+"app")=) is a self-loop under type-only partitions and a compile error. That
+rule is the natural way to say "add a statement to the policy named app". It
+is not a bug, and telling the author to read =arg= contributions instead of
+=attr= (D's mutating-webhook rule) is wrong here because =.name= *is*
+assembled by the same aggregate. With =(type, path)= partitions the rule
+reads =(attr, iam.policy, .name)= and writes =(arg, iam.policy, .statements)=,
+no cycle. The =contributes= grant already names both a type pattern and a
+path pattern, so the author has written the partition. *Override* of the
+brief's "D's type-partitioning": partition by =(type, normalized path)=. D's
+degenerate case (variable type and variable path: above everything) is
+preserved, so nothing D accepted is rejected and A's example is accepted.
+
+*Refinements have no rank and no partition of their own.* They enter the
+cell as constraint contributions from EDB (=type_refine/3=), which is stratum
+0 and therefore below every =(attr, T, P)= node; they attach to the group by
+=(T, P)= and need =want(T, A)= to name the address, which is also below every
+attribute reader. A refinement is never a reader, so it cannot create an
+edge. Its witness is the schema fact's span, which is what the conflict
+printer names. "Schema rank" would have been a fourth rank that nothing
+could out-rank; making it a constraint component instead means the collapse
+rule has one witness order (three ranks) and one constraint set, and B's
+"a refinement at rank default still binds at rank force" is a theorem
+rather than a special case.
+
+*One more interaction the coordinator did not name.* The computed-attribute
+prelude rule (§2.5, third contribution) writes =(arg, T, P)= for every
+computed =P= of every type, from =want(T, A)= and schema facts. It is a
+constant-type, constant-path head per schema row after expansion, so it
+partitions cleanly and is below every reader of that computed path. If it
+had been written with variable =T= and =P= (one generic rule over
+=type_attr=), it would sit at =(arg, *, *)= and be above every reader, which
+would put every =attr= reader in a cycle with it. The compiler therefore
+*expands* the prelude rule per schema row before building the graph. That
+is a one-line consequence of partitioning that a naive prelude would get
+wrong, and it is the place a future implementer is most likely to trip.
+
+Verdict: one aggregate definition, three touches composed, two things gave:
+D's partition column set (type → type and normalized path) and B's "schema
+rank" (a rank → a rank-blind constraint component). Normalization runs
+first, the prelude expands per schema row.
+
+* 5. Decision records
+
+One per DECIDE ticket on the board (DR-1 to DR-7, in board order), then the
+decisions this synthesis introduces (DR-8 onward). Format: context,
+decision, consequences. Each is written to be pasted under its ticket.
+
+** DR-1 Attribute assembly: one ranked lattice aggregate (option 3)
+
+*Context.* Four non-monotone mechanisms with four conflict laws and four
+timings (=apply_functional_pred=, =enforce_uniques=, =merge_rule= post-pass,
+=apply_setting_add= in the loop). Rules read attributes in bodies, so a
+post-fixpoint merge (option 1) shows them raw contributions. Option 2 makes
+the engine non-textbook. A's candid section admitted option 3 without an
+override cannot express "prod forces this on".
+
+*Decision.* =attr/4= is the compiler-generated aggregate of §2.5 over
+=arg/5= contributions (value plus rank), schema refinements, and the
+computed-attribute null; per-path lattice from =type_lattice/3=; Flat paths
+ranked with =@default= < normal < =@override=; same-rank disagreement is
+=⊤= carrying every witness; =Stuck= for undecidable same-rank disagreements;
+consumers stratified above by =(type, normalized path)= partition;
+=arg_default=, =merge_rule=, =unique=, =setting_add=, =arg_add=, =+== on Flat
+paths are gone; =settings= and =output= are the same aggregate on
+pseudo-types.
+
+*Consequences.*
+- =apply_functional_pred=, =apply_setting_add=, =upsert_agg=,
+  =enforce_uniques=, =ir.rs:merge_keypath= deleted; =src/lattice.rs= is the
+  replacement and its laws are tested under every permutation.
+- Shuffling statements yields identical =attr/4=: acceptance test.
+- Conflict names every contributor with =file:line= and rank via the
+  =owner= and =why= instances.
+- Environment layering is rank, not copying: =settings E @default {...}=
+  plus per-environment blocks. B's dev < stg < prod idiom is available with
+  three ranks.
+- The tag policy pattern needs =contributes arg to _ at .tags=; a policy
+  may read any =attr= path it does not write.
+
+** DR-2 Unknown values: classed nulls, stuck rules, phases
+
+*Context.* Providers produce ids and endpoints at apply. The board's
+proposal (opaque token, banned from bodies) is Terraform's =for_each=
+restriction; C showed a two-phase GKE/kubernetes stack it cannot plan; D
+showed the same with a clock.
+
+*Decision.* =ref(T, A, Attr)= to a computed attribute is =Value::Null= with a
+class from the schema (§2.2); to a configured attribute it is rewritten to an
+=attr/4= join (A). Nulls may appear in any position; rules that need content
+are stuck and recorded (§2.7, Rules 1-3); negation and aggregation over a
+predicate with stuck instances are undetermined; resolution is substitution
+after refresh, adopt, and each apply phase (Rule 4); the plan has definite,
+pending, and undetermined sections; apply loops to undeformed under
+=--max-ticks=. =fresh= nulls decide equality under UNA, so single-phase
+programs (every example in this repo) stay single-phase. The chase, EGDs,
+=some=, =choose= and quoted atoms from C are rejected; the only existential is
+the prelude rule and §2.7 shows it needs no termination theory.
+
+*Consequences.*
+- The "for_each depends on unknown" error class does not exist; the
+  replacement is a plan line naming the pending group and its null.
+- Provider configuration may depend on nulls (a phase-2 provider).
+- The fake provider must stop synthesizing computed values from names and
+  return them only from =Apply=, so the demos exercise phases.
+- The =strict_unknowns= prelude policy (=deny(stuck_in_prod, ...) :- env(prod),
+  stuck(_, _, _)=) restores Terraform's discipline for teams that want it;
+  =dform init= offers it.
+- Cost: =Value::Null=, =eq3=, the =Stuck= element, the =stuck/3= companion
+  rule per content-position rule, the resolution step, and (v1) downstream
+  re-derivation on retraction.
+
+** DR-3 Open world vs encapsulation: interfaces, grants, private by default
+
+*Context.* Every predicate global; typos are empty relations; two modules
+defining =zone_index/2= silently union; policy packs write anywhere and that
+is the feature.
+
+*Decision.* A's module system unchanged: every predicate defined inside a
+module is instance-private unless =export=ed; =input= / =output= are the
+data boundary; writes to =arg/5= require =contributes arg to TypePat at
+PathPat=, which is also the stratification partition (§2.6); =deny= / =warn=
+need no grant; unknown predicates are compile errors everywhere; =extern=
+declares provider-fed ones; user-defined global relations take
+=contributes p.= (A's =iam_need= example). Provenance's =owner= instance
+records every write.
+
+*Consequences.* =component_def=, =use=, =component=, =component_scope/3=,
+=param/2,3=, =import ... as= are replaced; =import "file"= remains a file
+include. Cross-instance references go through =output/3=. The open world
+survives in exactly two places: policy packs with a grant, and the global
+read-only relations.
+
+** DR-4 Case-based variable syntax: keep it
+
+*Context.* Uppercase initial = variable blocks capitalized resource types
+or keys. Alternatives: =$X=, =let=.
+
+*Decision.* A's DR-4: uppercase-initial identifiers are variables, =_= is
+the wildcard, =_Name= a named wildcard, lowercase-initial identifiers are
+symbols; no sigil, no declaration form. Kubernetes kinds are attribute
+values (strings); the type is =k8s.deployment=. D's "a path segment after a
+dot may be any case" is rejected: =k8s.apps.Deployment= would make =X.field=
+and =a.Field= look alike, and the provider maps the kind.
+
+*Consequences.* As in A. The lexer has two token kinds and the grammar
+states the rule in one line.
+
+** DR-5 Symbol syntax: plain identifiers, qualified names, dotted keypath literals
+
+*Context.* =sym= accepts =.=, =-=, =/=; no operator can be added; decide before
+more =.df= files exist.
+
+*Decision.* A's DR-5, verbatim: =ident := [a-z_][A-Za-z0-9_]*=; =QNAME= is
+=ident.ident= with no whitespace; a keypath literal starts with a dot
+(=.tags.team=, =."my-key".x=); =Var.field= is field access lowering to
+=get/2=; =-= and =/= are always operators; hyphenated cloud names are
+strings; addresses are =qname/ident= only in address positions. C's quoted
+atoms ('us-east1-b') are rejected: a third literal kind whose only purpose
+is to avoid quotes in zone names, at the cost of a symbol/string distinction
+users will get wrong. D's bare =10.20.0.0/16= inet literal is rejected for
+the same reason A gave: =inet("...")= takes a string and IPv6 needs it
+anyway.
+
+*Consequences.* Every =.df= file changes; =edition 2026= and =dform migrate=
+are the prerequisite (DR-17).
+
+** DR-6 Null, absent, and empty
+
+*Context.* Datalog absence is "no fact"; APIs distinguish unset, null,
+empty; this design adds labeled nulls and must not confuse the two.
+
+*Decision.* Four things, four spellings:
+
+| Concept      | Spelling                | Meaning                                                     |
+|--------------+-------------------------+-------------------------------------------------------------|
+| absent       | no =attr= row (=⊥=)     | provider receives no field; =required= absent is =deny(schema_required)= |
+| API null     | =null= (=Value::JsonNull=) | a Flat value; legal only at =nullable(T)= paths; =null ⊔ v = ⊤= |
+| empty        | =[]=, ={}=, =""=        | ordinary values; =[]= at a Set path and ={}= at a Map path are =⊥= and indistinguishable from absent, which is correct for those lattices |
+| labeled null | =?type/addr#attr= (print only) | =Value::Null=; never written in source; never equal to =null= |
+
+*Consequences.* Plan output prints the four differently and the diff treats
+them as four things. =is_null/1= tests the API null; asking it of a labeled
+null is a type error.
+
+** DR-7 Impure values: externs, results persisted in state
+
+*Context.* Random suffixes, timestamps, generated passwords.
+
+*Decision.* A's DR-7: no impure builtin; impurity enters through an extern
+declared =persist=, keyed by its bound arguments, recorded in the plan file
+and in =state.json='s persisted-externs section; =dform taint= forgets one
+row; =time.now= is a non-persisted extern that =warn=s. The result of a
+=persist= extern that is not yet known is an =open= null (or =secret= for
+=-secret(T)= columns) resolved by Rule 4's second clause, so
+=random.password= has the same phase behaviour as a computed attribute (C's
+observation) without being a resource (C's mechanism). The greedy
+=allocate= aggregate (DR-15) pins through the same section.
+
+*Consequences.* One state file section, one =why= leaf kind (extern call
+with date), no new concept.
+
+** DR-8 License: Apache-2.0, DCO, no CLA
+
+*Context.* BSL produced OpenTofu overnight. A and D chose Apache-2.0; C
+chose MPL-2.0 for the engine.
+
+*Decision.* Apache-2.0 for compiler, engine, protocol, reference providers;
+the =.proto= additionally CC0; DCO, no CLA. MPL's file-level copyleft is
+rejected because the engine's value is the ecosystem of providers and
+policy packs, which are the files people will copy; a licence that makes
+copying a question is a cost with no one to protect against once a CLA is
+refused.
+
+*Consequences.* Relicensing needs every contributor's consent, on purpose.
+
+** DR-9 Ranks: exactly three, Flat only, no numbers
+
+*Context.* B's ranked cells solve overrides commutatively; B had four
+numbered ranks, a =rank= declaration, per-rank constraints, and =seal=.
+
+*Decision.* =@default= < normal < =@override=, on Flat attributes (and the
+Flat leaves of maps and keyed lists) only; constraints are rank-blind; no
+=rank= declaration; no =force= (the CLI populates inputs, which nothing
+else writes); no =seal=. Collapse per §2.4.
+
+*Consequences.* "Policy pack B overrides policy pack A" is two packs at two
+ranks or a conflict; there is no third rank to escalate to, which is the
+point. The =arg_default= idiom is =@default=. Module =input= defaults are
+=@default=.
+
+** DR-10 Provenance: absorptive circuit, always on
+
+*Context.* A stored a derivation vector per fact; B stored owner maps and
+one witness; C stored an absorptive circuit; D walked DBSP traces.
+
+*Decision.* C's circuit (§3.1), always on, with structural absorption,
+=k = 8= alternatives, the eight instances of §3.2 (C's seven with =phase=
+split into =phase= and =touches=). Plan files serialize it.
+
+*Consequences.* 2 to 4× the bare fact store; every consumer in §3.2 reads
+it and none can be built without it. D's "walk the traces" is unavailable
+until the DBSP phase and would not give absorption anyway.
+
+** DR-11 The plan is a Z-set; conflict is a deny
+
+*Context.* The prototype aborts on conflict and diffs by string; D defined
+=desired − world=.
+
+*Decision.* §2.8: =deformation= is the Z-set difference; =attr_conflict= and
+=attr_stuck= derive =deny= / =warn= facts and remove the address from
+=desired=; apply runs ticks to undeformed under =--max-ticks=; the plan file
+is the tick's inputs plus the delta and apply refuses on mismatch.
+
+*Consequences.* Nothing aborts inside evaluation; every error is a fact
+with provenance; controller mode later needs nothing new here.
+
+** DR-12 Stratification partitions =arg= and =attr= by (type, normalized path)
+
+*Context.* §4.3.
+
+*Decision.* Two compiler-owned predicates get partition nodes on their
+head's constant type and constant normalized path; =*= otherwise; the
+=contributes= grant is the partition pattern; the computed-attribute
+prelude rule is expanded per schema row before graph construction; every
+other predicate is one node. B's general =partition= declaration rejected.
+
+*Consequences.* A's baseline example compiles; D's degenerate case is
+preserved; a policy that writes variable type and path reads no attribute.
+
+** DR-13 Refinements have exactly one home each
+
+*Context.* L13 lowers refinements to =deny=; B checks them at join.
+
+*Decision.* A refinement whose predicate is over the attribute's own value
+alone and drawn from the checkable table (type tag, =>= <= < > != n=,
+=prefix_len=, =enum=, regex) is a constraint contribution to the cell
+(§2.5) and a violation is =⊤= naming the schema line; every other
+refinement (cross-cell, counting, referencing other relations) lowers to a
+=deny= rule. The compiler assigns each refinement to one home syntactically;
+no violation is ever reported twice. On a null-carrying value the cell
+check is deferred and the =deny= rule is stuck; both resolve at the same
+boundary.
+
+*Consequences.* Refinements are checked "even for values no rule reads"
+(B's point) without a second reporting path.
+
+** DR-14 =moved=: hand-written first, lineage proposals second, no view update
+
+*Context.* Rename is destroy and create; the research board asked for
+lenses and egglog.
+
+*Decision.* §3.4.
+
+*Consequences.* The rename ticket closes with =moved/3=; automatic
+detection is a CLI suggestion for the easy case; drift-into-source is not
+attempted.
+
+** DR-15 Solving: a greedy =allocate= aggregate with pins now, clingo behind a flag later
+
+*Context.* CIDR assignment and zone placement are not deduction. D put
+clingo in the engine; A and B put it behind an extern; D's own candid
+section says a greedy allocator with pins covers most cases.
+
+*Decision.* A prelude aggregate:
+
+#+begin_src prolog
+% One row per pool. Deterministic given (requests, pins): honour pins, then first-fit in key order.
+alloc(Pool, allocate(Key, Bits)) :- pool_of(Key, Pool), request(Key, Bits).
+assigned(Key, C) :- alloc(Pool, Asg), member(Asg, { key: Key, cidr: C }).
+#+end_src
+
+=allocate= is a stratified aggregate over its group; its result for =Key= is
+=pinned(Pool, Key, C)= from state if present, else the lowest free block of
+the requested size that overlaps no pinned or earlier-assigned block. The
+executor writes =pinned/3= into =state.json='s persisted section after apply.
+A request that cannot be satisfied yields =deny(alloc_exhausted, ...)=.
+Removing a request never moves another. clingo ships later behind
+=--features solve= as a =solve= block compiled to an extern of a bundled
+provider, D's fragment, pins through the same section.
+
+*Consequences.* D's CIDR example works today with no C++ toolchain; the
+"count problem in Datalog clothing" is fixed by pins, not by ASP; users who
+need anti-affinity plus capacity plus cost wait for the flag.
+
+** DR-16 State is identity; the log is audit
+
+*Context.* D made the log the unit of truth.
+
+*Decision.* §2.8. =state.json=: identity mapping, persisted externs, pins.
+The log: every tick's inputs, extern responses, apply results,
+resolutions; read by =dform log=, =--as-of=, and =why= for retracted facts;
+never by =plan= or =apply=.
+
+*Consequences.* State surgery with =jq= still works in an incident; time
+travel is a feature with a retention policy, not a dependency.
+
+** DR-17 Editions, terminator, migration
+
+*Context.* The grammar change breaks every file. D dropped the period after
+=}=.
+
+*Decision.* =edition 2026.= per file; a file without it is edition 2025 and
+=dform migrate= rewrites it; the compiler supports the current and previous
+edition. Block statements keep their period (=}.=): the parser's error
+recovery at =.= is the reason the hand-written parser exists, and a block
+that ends a statement without a terminator makes "one bad statement, one
+diagnostic" ambiguous at every =}=. A lint offers to remove nothing.
+
+*Consequences.* =dform migrate= handles: hyphenated symbols → strings;
+path-position symbols → =.path= literals; =arg_add= → =arg= under a grant;
+=setting_add= → =settings= block with =+==; =unique= → deleted; =arg_default=
+→ =@default=; =component_def= / =use= → =module= / =instance= (with a
+comment where cross-instance =component_scope= joins need hand rewriting).
+
+** DR-18 Protocol v1: no =Subscribe=, no =Watch=
+
+*Context.* D's symbolic providers subscribe to derived relations; D's
+sources are informers.
+
+*Decision.* v1 is the board's method table (Handshake, Configure, Schema,
+Query, Read, Plan, Apply, Import) with two additions the synthesis needs:
+=Schema= carries null classes (=computed=, =id=, =sensitive=) and checkable
+refinements; =Apply= and =Read= return computed values as a map the engine
+turns into =world_attr= facts for resolution. Symbolic providers are
+externs over assembled =attr= values (A's shape). =Subscribe= and =Watch=
+arrive with reactive mode.
+
+*Consequences.* A provider author writes a Terraform-shaped plugin; nothing
+about deltas.
+
+** DR-19 Secrets: static labels plus secret nulls
+
+*Context.* A: static labels plus a dynamic =Secret= value; C: secret nulls
+plus a =label= semiring; D: static only.
+
+*Decision.* A's static pass (E0301-E0305, one dataflow fixpoint over
+predicate signatures) is the enforcement for rules. The dynamic half is
+the =secret= null class: a provider-returned or extern-returned sensitive
+value is a =Null= of class =secret= that is never resolved in the store,
+compares as Unknown (so no rule can branch on it), and is materialized
+inside the provider's =Apply=. The =label= instance redacts plan and state.
+=declassify(V, Reason)= is a builtin that derives =declassified/2= for
+policy. A's separate =Value::Secret= variant is gone; it was the same thing
+as a secret null without the class machinery.
+
+*Consequences.* One value kind for "unknown to the engine" with three
+classes instead of two mechanisms; the static pass's completeness claim
+for rules is unchanged and remains the thing to attack (§10).
+
+** DR-20 Deferred: DBSP and clingo
+
+*Context.* A, C, D all want DBSP eventually; D wants it first.
+
+*Decision.* The operator IR is DBSP-shaped and every addition in this
+document is an operator with a known incremental form (=Stuck= is a
+two-output filter; resolution is a =−1/+1= map; the ranked aggregate
+recomputes per group). Build the circuit compiler when reactive mode is the
+next feature. clingo: DR-15.
+
+*Consequences.* v1 is the semi-naive interpreter; phase-boundary
+retraction is re-derivation (§4.2). Nothing in the language changes
+between the phases because the IR is the contract.
+
+* 6. Grammar, final
+
+A's grammar with the rank annotation and the removal of =arg_default=. The
+reference for the hand-written =logos= + recursive-descent parser; the
+example corpus in §7 is its test suite.
+
+** Tokens
+
+#+begin_example
+IDENT    := [a-z_][A-Za-z0-9_]*                    ; symbol, predicate, function, keyword
+VAR      := [A-Z][A-Za-z0-9_]* | "_" [A-Za-z0-9_]*  ; "_" alone is the wildcard
+QNAME    := IDENT ("." IDENT)+                      ; no whitespace around "."
+PATH     := "." PATHSEG ("." PATHSEG | "[" INT "]")*
+PATHSEG  := IDENT | STRING
+FIELD    := VAR "." IDENT                           ; one token; lowers to get/2
+STRING   := "\"" ... "\""                           ; escapes \" \\ \n \t \u{...}
+INT      := "-"? [0-9]+
+ADDR     := QNAME "/" IDENT                         ; only in address positions
+RANK     := "@default" | "@override"
+keywords := edition provider stack import input output export contributes
+            module instance policy apply resource settings scenario extern
+            type decl when not in exists collect_set collect_list
+            collect_ordered count sum min max lub_ranked allocate
+            true false null secret persist where moved adopt lifecycle
+            ignore_changes
+#+end_example
+
+Keywords are token kinds. =true=, =false=, =null= are literals. A keyword may
+be a keypath segment (=.type=) because =PATH= is one token. There is no
+=?label= token: nulls are never written.
+
+** Statements
+
+#+begin_example
+program    := (stmt ".")*
+stmt       := edition | provider | stack | import
+            | input | extern | typedecl | decl
+            | module | instance | policy | apply
+            | resource | settings | scenario | when
+            | lifecycle | moved | adopt | ignore
+            | rule | fact
+
+edition    := "edition" INT
+provider   := "provider" IDENT "{" kv* "}"
+stack      := "stack" QNAME "{" kv* "}"
+import     := "import" STRING
+input      := "input" IDENT ":" type ("=" term)? ("where" body)?
+extern     := "extern" QNAME "(" bindarg ("," bindarg)* ")" "persist"?
+bindarg    := ("+" | "-") IDENT (":" type)?
+typedecl   := "type" QNAME "{" attrdecl* "}"           ; user schema for open types
+attrdecl   := PATHSEG ":" type flag* ("where" body)?
+flag       := "required" | "computed" | "id" | "sensitive" | "nullable"
+decl       := "decl" IDENT "/" INT | "decl" IDENT "(" (VAR ":" type) ("," VAR ":" type)* ")"
+            | "decl" "type" QNAME "open" | "decl" IDENT "/" INT "mixed"
+
+module     := "module" IDENT "{" (stmt ".")* "}"
+instance   := "instance" IDENT IDENT "{" assign* "}" (":-" body)?
+policy     := "policy" IDENT "{" (stmt ".")* "}"
+apply      := "apply" IDENT
+grant      := "contributes" "arg" "to" typepat "at" pathpat | "contributes" IDENT
+typepat    := QNAME | "_"
+pathpat    := PATH | "_"
+
+resource   := "resource" QNAME (IDENT | VAR) RANK? "{" assign* "}" (":-" body)?
+settings   := "settings" (IDENT | VAR) RANK? "{" assign* "}" (":-" body)?
+assign     := blockpath ("=" | "+=") term RANK? ","?
+blockpath  := PATHSEG ("." PATHSEG | "[" INT "]")*        ; PATH without the leading dot
+scenario   := "scenario" IDENT "{" (stmt ".")* "}"
+when       := "when" lit "{" (stmt ".")* "}"
+lifecycle  := "lifecycle" "(" QNAME "," addr "," IDENT ")" (":-" body)?
+moved      := "moved" "(" QNAME "," addr "," addr ")"
+adopt      := "adopt" "(" QNAME "," addr "," term ")" (":-" body)?
+ignore     := "ignore_changes" "(" QNAME "," addr "," PATH ")" (":-" body)?
+
+rule       := head ":-" body
+fact       := atom
+head       := atom (RANK)?                                 ; at most one aggregate term; RANK only on arg heads
+body       := lit ("," lit)*
+lit        := "not" atom | "not" "exists" "(" body ")" | atom
+            | term cmpop term | term "in" term | term "not" "in" term
+atom       := (IDENT | QNAME) "(" (term ("," term)*)? ")"
+            | IDENT "{" (IDENT ":" term ("," IDENT ":" term)*)? "}"
+#+end_example
+
+=+== is legal only on a path whose lattice is =Set=, =Map= or =Keyed= (it is
+documentation; ==== means the same thing there). =+== on a Flat path is a
+compile error that names the lattice. =RANK= on a =resource= or =settings=
+header distributes to every assignment in the block; on an assignment it
+applies to that leaf; on an =arg= head it applies to the contribution. A
+=RANK= on a =Set= path is a compile error.
+
+** Terms
+
+#+begin_example
+term       := add
+add        := mul (("+" | "-") mul)*
+mul        := unary (("*" | "/" | "%") unary)*
+unary      := "-" unary | primary
+primary    := INT | STRING | "true" | "false" | "null"
+            | VAR | FIELD | IDENT | QNAME | PATH | ADDR
+            | call | list | object | comprehension | aggregate | "(" term ")"
+call       := (IDENT | QNAME) "(" (term ("," term)*)? ")"      ; ref(T, Addr, PATH) is a call
+list       := "[" (term ("," term)*)? "]"
+object     := "{" (objkey ":" term ("," objkey ":" term)*)? "}"
+objkey     := IDENT | STRING
+comprehension := "[" term "|" body "]"                     ; lowers to collect_set
+              |  "[" term "ordered" "by" term "|" body "]"  ; lowers to collect_ordered
+aggregate  := ("collect_set" | "collect_list" | "count" | "sum" | "min" | "max") "(" term ")"
+            | "collect_ordered" "(" term "," term ")"
+            | "allocate" "(" term "," term ")"
+type       := IDENT | QNAME | IDENT "(" type ("," type)* ")" | "enum" "(" IDENT ("," IDENT)* ")"
+            | "secret" "(" type ")" | "nullable" "(" type ")" | "ref" "(" QNAME ")"
+#+end_example
+
+Disambiguation, as in A: =IDENT "("= in literal position is a predicate, in
+term position a function, different namespaces (E0101); =ADDR= only in
+address positions (second argument of =want=, =arg=, =attr=, =adopt=,
+=lifecycle=, =ignore_changes=, =moved=, and of =ref=); elsewhere =a.b / c= is
+division; block assignments may omit commas.
+
+* 7. The programs, rewritten in the final syntax
+
+Every file below parses under §6, and each is annotated where the synthesis
+changes its meaning rather than its spelling.
+
+** 7.1 dform.df
+
+#+begin_src prolog
+# dform.df, direction E.
+#
+#   dform plan
+#   dform plan --set env=prod
+#   dform apply
+
+edition 2026.
+
+provider fake { source = "./providers/fake" }.
+stack demo.main { backend = local(".dform/demo") }.
+
+# Typed stack input with a default. The default is a @default contribution
+# to input env; --set env=prod is a normal contribution and wins.
+input env: enum(dev, staging, prod) = staging.
+
+zone("us-test-1a").
+zone("us-test-1b").
+
+when env(prod) {
+  iam_need(app, "audit.write", "audit-log").
+}.
+
+# Settings are a resource of type `settings`, addressed by environment.
+# A user schema for the open type gives typed, refined settings.
+type settings {
+  audit.sinks: set(string)
+  db.backup_days: int where 1 <= db.backup_days <= 35
+}.
+
+# Base layer at rank @default: every environment. Overrides below are the
+# normal rank and win per leaf. This replaces three copies of the block.
+settings E @default {
+  network.main.vpc_net = inet("10.90.0.0/16")
+  network.peer.vpc_net = inet("10.91.0.0/16")
+  db  = { backup_days: 3, multi_az: false }
+  k8s = { private_api: false, nodepool: { min: 1, max: 3 } }
+} :- env_name(E).
+
+env_name(dev). env_name(staging). env_name(prod).
+
+settings staging {
+  network.main.vpc_net = inet("10.50.0.0/16")
+  network.peer.vpc_net = inet("10.60.0.0/16")
+}.
+
+settings prod {
+  network.main.vpc_net = inet("10.20.0.0/16")
+  network.peer.vpc_net = inet("10.21.0.0/16")
+  db  = { backup_days: 14, multi_az: true }
+  k8s = { private_api: true, nodepool: { min: 3, max: 10 } }
+  audit.sinks += ["cloudwatch"]          # Set path: unions with the policy pack's ["s3"]
+}.
+
+import "modules/network.df".
+import "modules/database.df".
+import "modules/kubernetes.df".
+import "modules/iam.df".
+import "modules/stdlib_net.df".
+import "policies/baseline.df".
+
+apply baseline.
+apply stdlib_net.
+
+# Module instances. Inputs are typed at the module; the body binds them.
+instance network main { vpc_net = V } :- env(E), setting(E, .network.main.vpc_net, V).
+instance network peer { vpc_net = V } :- env(E), setting(E, .network.peer.vpc_net, V).
+
+instance database main {
+  backup_days = Days
+  multi_az    = MA
+  subnet_ids  = Ids
+} :-
+  env(E),
+  setting(E, .db.backup_days, Days),
+  setting(E, .db.multi_az, MA),
+  output(network.main, private_subnet_ids, Ids).
+
+instance kubernetes main {
+  private_api  = Api
+  nodepool_min = Min
+  nodepool_max = Max
+  subnet_ids   = Ids
+} :-
+  env(E),
+  setting(E, .k8s.private_api, Api),
+  setting(E, .k8s.nodepool.min, Min),
+  setting(E, .k8s.nodepool.max, Max),
+  output(network.main, private_subnet_ids, Ids).
+
+instance iam main {}.
+
+# Peering between network instances. Each instance exports its vpc address.
+vpc_peer_inst(main, peer).
+
+vpc_peer(A, B) :-
+  vpc_peer_inst(IA, IB),
+  output(network.IA, vpc, A),
+  output(network.IB, vpc, B).
+
+# requester_vpc_id and accepter_vpc_id are fresh nulls at plan time. They are
+# forwarded, never inspected, so this resource is definite and single-phase.
+resource net.vpc_peering Peer {
+  requester_vpc_id = ref(net.vpc, A, .id)
+  accepter_vpc_id  = ref(net.vpc, B, .id)
+} :-
+  vpc_peer_inst(IA, IB), vpc_peer(A, B),
+  Peer = format("peer-%s-%s", IA, IB).
+
+# A bastion with an address carved from the main VPC. The setting is a
+# constant, so inet_host is not stuck; only subnet_id carries a null.
+resource compute.vm bastion {
+  private_ip = inet_host(Net, 20)
+  subnet_id  = ref(net.subnet, network.main/private_a, .id)
+} :- env(E), setting(E, .network.main.vpc_net, Net).
+
+# Stack-level policy. Ids are stable; messages are free text.
+deny(prod_db_multi_az, "prod db must be multi_az", { db: Db }) :-
+  env(prod), want(db.postgres, Db),
+  not attr(db.postgres, Db, .multi_az, true).
+
+deny(prod_k8s_private_api, "prod k8s must have private api", { cluster: C }) :-
+  env(prod), want(k8s.cluster, C),
+  not attr(k8s.cluster, C, .private_api, true).
+#+end_src
+
+Semantic changes, not spellings: the =@default= settings layer; =audit.sinks
++== unioning with the policy pack under the =Set= lattice; the peering's
+fresh nulls being definite under UNA; =output(network.IA, vpc, A)= with a
+variable instance segment (A's one invented form, kept; §10 names its risk).
+
+** 7.2 modules/network.df
+
+#+begin_src prolog
+module network {
+  input  vpc_net: inet where prefix_len(vpc_net) <= 20.
+  input  zones:   list(string) = ["us-test-1a", "us-test-1b"].     # @default contribution
+  output vpc:                addr.
+  output private_subnet_ids: list(ref(net.subnet)).
+  export subnet_of/2.
+
+  resource net.vpc vpc {
+    cidr = Net
+    tags = { env: E, component: "network" }
+  } :- env(E), vpc_net(Net).
+
+  zone_index(Z, I) :- zones(Zs), member(Zs, I, Z).
+
+  # Reads attr of net.vpc (partition (attr, net.vpc, .cidr)), writes arg of
+  # net.subnet (partitions (arg, net.subnet, .vpc_id) etc.): no cycle.
+  # vpc_id carries a fresh null; cidr is computed from a constant.
+  resource net.subnet Sn {
+    vpc_id     = ref(net.vpc, vpc, .id)
+    cidr       = inet_subnet(Net, 4, I)
+    zone       = Z
+    visibility = "private"
+  } :-
+    zone_index(Z, I),
+    attr(net.vpc, vpc, .cidr, Net),
+    Sn = format("private_%s", Z).
+
+  subnet_of(Sn, vpc) :- want(net.subnet, Sn).
+
+  output vpc = vpc.
+  output private_subnet_ids =
+    [ ref(net.subnet, Sn, .id) | want(net.subnet, Sn), attr(net.subnet, Sn, .visibility, "private") ].
+}.
+#+end_src
+
+The output is a =collect_set= over =attr=, stratified above it; its elements
+are fresh nulls, forwarded into =db.postgres.subnet_ids= and
+=k8s.cluster.subnet_ids= without anything being stuck. =database=,
+=kubernetes= and =iam= are A's versions with =contributes iam_need.= and no
+other change.
+
+** 7.3 policies/baseline.df
+
+#+begin_src prolog
+policy baseline {
+  # Grants are partition patterns: this pack sits above readers of .tags,
+  # of iam.policy's .statements and of settings' .audit.sinks, and may read
+  # every other attribute path.
+  contributes arg to _ at .tags.
+  contributes arg to iam.policy at .statements.
+  contributes arg to settings at .audit.sinks.
+
+  arg(T, A, .tags, { team: "platform" }) :- want(T, A).
+
+  # Reads .name of the same type it writes .statements on: legal under
+  # (type, path) partitions, a self-loop under type-only partitions.
+  arg(iam.policy, A, .statements, [ { action: "org.read", resource: "org" } ]) :-
+    env(prod), want(iam.policy, A), attr(iam.policy, A, .name, "app").
+
+  arg(settings, prod, .audit.sinks, ["s3"]).
+
+  # Prod forces deletion protection on for every database: an @override,
+  # not a conflict with the module's default of false.
+  arg(db.postgres, Db, .deletion_protection, true) @override :- env(prod), want(db.postgres, Db).
+
+  deny(db_public, "db must not be public", { db: Db }) :-
+    want(db.postgres, Db), not attr(db.postgres, Db, .public, false).
+
+  warn(audit_logging, "prod should enable audit logging", {}) :-
+    env(prod), not setting(prod, .audit.enabled, true).
+}.
+#+end_src
+
+Gone: three =merge_rule= facts (the schema decides), =component_scope=,
+=setting_add=. New: the =@override= line, which is the case A could not
+write.
+
+** 7.4 pngu.df: network, GKE, and the two-phase kubernetes chunk
+
+#+begin_src prolog
+# pngu.df, direction E. The renfry stack for one GCP project per environment.
+
+edition 2026.
+
+provider google     { source = "registry.dform.dev/google",     version = ">=6" }.
+provider kubernetes { source = "registry.dform.dev/kubernetes", version = ">=3" }.
+provider file       { source = "registry.dform.dev/file" }.
+stack renfry.pngu   { backend = gcs("renfry-state", "pngu") }.
+
+input env: enum(dev, stg, prod) = dev.
+
+########################################
+# Settings: base layer plus per-environment overrides
+########################################
+
+type settings {
+  project_id:          string
+  project_name:        string
+  region:              string
+  network_name:        string
+  regional_proxy_cidr: inet
+  gke: {
+    control_plane_cidr: inet where prefix_len(control_plane_cidr) == 28,   # checkable: lives in the cell
+    subnet_cidr:        inet where prefix_len(subnet_cidr) == 22,
+    pods_cidr:          inet where prefix_len(pods_cidr) == 21,
+    services_cidr:      inet where prefix_len(services_cidr) == 21,
+    static_ips:         map({ type: enum("INTERNAL") })                     # was a constraint rule
+  }
+}.
+
+settings E @default {
+  region = "us-east1"
+  gke.static_ips = { "pngu-grpc": { type: "INTERNAL" } }
+} :- env_name(E).
+
+env_name(dev). env_name(stg). env_name(prod).
+
+settings dev {
+  project_id   = "renfry-dev-973682"
+  project_name = "renfry-dev"
+  network_name = "renfry-dev-network"
+  regional_proxy_cidr = inet("10.193.0.0/24")
+  gke = {
+    control_plane_cidr: inet("172.16.3.96/28"),
+    subnet_cidr:        inet("10.141.76.0/22"),
+    pods_cidr:          inet("10.141.80.0/21"),
+    services_cidr:      inet("10.141.88.0/21")
+  }
+}.
+
+settings stg {
+  project_id   = "renfry-stg"
+  project_name = "renfry-stg"
+  network_name = "renfry-stg-network"
+  regional_proxy_cidr = inet("10.193.1.0/24")
+  gke = {
+    control_plane_cidr: inet("172.16.3.112/28"),
+    subnet_cidr:        inet("10.141.100.0/22"),
+    pods_cidr:          inet("10.141.104.0/21"),
+    services_cidr:      inet("10.141.112.0/21")
+  }
+}.
+
+# prod elided; same shape.
+
+########################################
+# Peerings, an env-keyed table
+########################################
+
+decl peering(Env: symbol, Name: string, PeerNetwork: string).
+
+peering(dev,  "envoy-dev",         "projects/envoy-dev-426188/global/networks/envoy-dev-network").
+peering(stg,  "envoy-stg",         "projects/envoy-stg-597462/global/networks/envoy-stg-network").
+peering(stg,  "envoy-stg-legacy",  "projects/coherentpath-stg/global/networks/envoy-proxy-stg").
+peering(prod, "envoy-prod-legacy", "projects/coherentpath-prod/global/networks/envoy-proxy-prod").
+
+########################################
+# Derived project facts for the active env
+########################################
+
+project(Id, Name, Region, NetId) :-
+  env(E),
+  setting(E, .project_id, Id),
+  setting(E, .project_name, Name),
+  setting(E, .region, Region),
+  setting(E, .network_name, NetName),
+  NetId = format("projects/%s/global/networks/%s", Id, NetName).
+
+########################################
+# Network
+########################################
+
+resource google.compute_subnetwork gke_subnet {
+  project               = Id
+  region                = Region
+  network               = NetId
+  name                  = format("%s-gke-subnet", Name)
+  ip_cidr_range         = SubnetCidr
+  subnet_private_access = true
+  secondary_ranges      = [
+    { range_name: format("%s-gke-pods-range", Name), ip_cidr_range: PodsCidr },
+    { range_name: format("%s-gke-svc-range",  Name), ip_cidr_range: SvcCidr }
+  ]                                        # Keyed on .range_name per the google schema
+} :-
+  project(Id, Name, Region, NetId),
+  env(E),
+  setting(E, .gke.subnet_cidr, SubnetCidr),
+  setting(E, .gke.pods_cidr, PodsCidr),
+  setting(E, .gke.services_cidr, SvcCidr).
+
+resource google.compute_subnetwork regional_proxy {
+  project       = Id
+  region        = Region
+  network       = NetId
+  name          = format("%s-proxy", Name)
+  purpose       = "REGIONAL_MANAGED_PROXY"
+  role          = "ACTIVE"
+  ip_cidr_range = ProxyCidr
+} :-
+  project(Id, Name, Region, NetId),
+  env(E), setting(E, .regional_proxy_cidr, ProxyCidr).
+
+resource google.compute_network_peering P {
+  project      = Id
+  name         = PeerName
+  network      = NetId
+  peer_network = PeerNet
+} :-
+  project(Id, _, _, NetId),
+  env(E), peering(E, PeerName, PeerNet),
+  P = format("peering-%s", PeerName).
+
+# One static address per declared static IP; the map explodes into rows.
+static_ip(IpName, Type) :-
+  env(E), setting(E, .gke.static_ips, Ips),
+  member_kv(Ips, IpName, { type: Type }).
+
+resource google.compute_address S {
+  project       = Id
+  region        = Region
+  name          = IpName
+  address_type  = Type
+  subnetwork_id = ref(google.compute_subnetwork, gke_subnet, .id)
+} :-
+  project(Id, _, Region, _),
+  static_ip(IpName, Type),
+  S = format("static-ip-%s", IpName).
+
+########################################
+# GKE: phase 1
+########################################
+
+resource gke.cluster pngu {
+  cluster_type              = "autopilot-private"
+  env                       = E
+  project_id                = Id
+  project_name              = Name
+  name                      = format("%s-gke", Name)
+  network_id                = NetId
+  subnetwork_id             = ref(google.compute_subnetwork, gke_subnet, .id)
+  master_control_plane_cidr = CpCidr
+  ip_range_pods             = format("%s-gke-pods-range", Name)
+  ip_range_services         = format("%s-gke-svc-range",  Name)
+  enable_secret_manager_addon = true
+  deletion_protection       = false @default
+} :-
+  env(E), project(Id, Name, _, NetId),
+  setting(E, .gke.control_plane_cidr, CpCidr).
+
+# Prod: deletion protection on, at normal rank, over the block's @default.
+# Two ranks, one value each, no conflict. The lifecycle fact is policeable.
+arg(gke.cluster, pngu, .deletion_protection, true) :- env(prod).
+lifecycle(gke.cluster, pngu, prevent_destroy) :- env(prod).
+
+deny(prod_deletion_protection, "prod cluster must have deletion protection", { cluster: pngu }) :-
+  env(prod), not attr(gke.cluster, pngu, .deletion_protection, true).
+
+########################################
+# Kubernetes: phase 2. The provider is configured from phase-1 nulls.
+########################################
+
+# .endpoint and .ca_certificate are computed (open); .access_token is
+# computed and sensitive (secret). This fact is definite and carries three
+# nulls, so every kubernetes deformation is pending on them: phase 2.
+provider_config(kubernetes, {
+  host:  ref(gke.cluster, pngu, .endpoint),
+  ca:    ref(gke.cluster, pngu, .ca_certificate),
+  token: ref(google.client_config, current, .access_token)
+}).
+
+resource k8s.namespace pngu { name = "pngu" }.
+
+resource k8s.deployment api {
+  namespace = ref(k8s.namespace, pngu, .name)        # configured attribute: rewritten to an attr join
+  image     = "gcr.io/renfry/api:1.42"
+  replicas  = 3
+}.
+
+# The secret never appears in the store as bytes: the kubernetes provider
+# resolves ?google.secret_manager_secret_version/db_pw#secret_data inside Apply.
+resource k8s.secret db_credentials {
+  namespace = ref(k8s.namespace, pngu, .name)
+  data      = { password: ref(google.secret_manager_secret_version, db_pw, .secret_data) }
+}.
+
+# One node pool per zone the autopilot cluster actually used. .zones is an
+# open null at plan time; member/2 over it is a content position, so this
+# rule is stuck on ?gke.cluster/pngu#zones and the plan prints one pending
+# group of unknown cardinality. After phase 1 it fires once per zone.
+resource gke.nodepool Np {
+  cluster = ref(gke.cluster, pngu, .id)
+  zone    = Z
+  min     = 1
+  max     = 3
+} :-
+  attr(gke.cluster, pngu, .zones, Zs), member(Zs, Z),
+  Np = format("np-%s", Z).
+
+# A policy that cannot be decided at plan time and says so: the aggregate
+# has a stuck instance, so it is undetermined, and the deny is reported as
+# undetermined until phase 1 resolves .zones.
+zone_count(count(Z)) :- attr(gke.cluster, pngu, .zones, Zs), member(Zs, Z).
+
+deny(two_zones, "cluster must be in at least two zones", { cluster: pngu }) :-
+  want(gke.cluster, pngu), zone_count(N), N < 2.
+
+########################################
+# Monitoring: the dashboard JSON is a file extern, hashed, with provenance
+########################################
+
+extern file.json(+path: string, -value: any).
+
+resource google.monitoring_dashboard pngu {
+  project        = Id
+  dashboard_json = Dash
+} :- project(Id, _, _, _), file.json("modules/monitoring/dashboard-pngu.json", Dash).
+
+output(active_env, E)  :- env(E).
+output(project_id, Id) :- project(Id, _, _, _).
+#+end_src
+
+What the plan prints for a fresh prod stack (format per the plan-output
+ticket; the sections are the point):
+
+#+begin_example
+plan renfry.pngu (env=prod): 9 deformations definite, 1 group pending, 3 deformations pending, 1 policy undetermined
+
+definite
+  + google.compute_subnetwork gke_subnet           ip_cidr_range=10.141.124.0/22 ...
+  + google.compute_subnetwork regional_proxy
+  + google.compute_network_peering peering-envoy-prod-legacy
+  + google.compute_address static-ip-pngu-grpc     subnetwork_id=?google.compute_subnetwork/gke_subnet#id
+  + gke.cluster pngu                               deletion_protection=true (normal, pngu.df:131 over @default pngu.df:124)
+  + google.monitoring_dashboard pngu               dashboard_json=<sha256:3f9a...> (file.json, recorded)
+  ...
+
+pending on ?gke.cluster/pngu#endpoint ?gke.cluster/pngu#ca_certificate ?google.client_config/current#access_token
+  (provider kubernetes is configured from phase-1 values)
+  + k8s.namespace pngu                             name="pngu"
+  + k8s.deployment api                             namespace="pngu" image="gcr.io/renfry/api:1.42" replicas=3
+  + k8s.secret db_credentials                      data.password=<secret ?google.secret_manager_secret_version/db_pw#secret_data>
+
+pending on ?gke.cluster/pngu#zones
+  ? gke.nodepool np-?  x unknown                   one per element of ?gke.cluster/pngu#zones (pngu.df:158)
+
+undetermined
+  ? deny two_zones "cluster must be in at least two zones"   decided after gke.cluster pngu is applied
+
+apply will run 2 phases; use --max-ticks to bound it.
+#+end_example
+
+Note the =google.compute_address= line: its =subnetwork_id= carries a *fresh*
+null and it is still definite, because the null is forwarded and the
+executor fills it after the subnet's =Apply= by the dependency edge. The
+kubernetes objects are phase 2 not because their provider config carries
+nulls but because the action that resolves those nulls (creating the
+cluster) also resolves =?gke.cluster/pngu#zones=, on which a rule is stuck
+and a policy is undetermined; that action is a re-evaluation boundary and
+everything downstream of it waits. A cluster with no stuck rule over its
+computed attributes would have its kubernetes objects in phase 1.
+
+* 8. What each direction contributed, and what was rejected
+
+| Source | Taken                                                                 | Rejected                                                        | Reason for the rejection                                                                 |
+|--------+-----------------------------------------------------------------------+-----------------------------------------------------------------+------------------------------------------------------------------------------------------|
+| A      | stratified engine, declared relations, undefined predicate is an error, aggregate/extern edges negative, semi-naive over the operator IR, Flat/Map/Set/Keyed, no Bag, grammar (DR-4, DR-5), modules and grants, policy lowering table, static secret labels, editions, =dform migrate=, solvers and symbolic reasoning as providers, restricted view update | =arg_default=; per-fact derivation DAG with id-ordering; =Value::Secret= as a separate variant; "reject nulls in bodies" | =arg_default= is two ranks pretending not to be; the DAG has no absorption and =why= output would show superset proofs; a secret null is the same thing with a class; C's two-phase example is a real program A cannot plan |
+| B      | ranked cells (three ranks, Flat only), collapse = highest witness under all constraints, same-rank disagreement is =⊤=, refinements checkable at join live in the cell, environment layering by rank, the observation that constraints must be rank-blind | user-visible =lat= relation kind; tone inference; partitioned stratification on user relations; =pending ⊑ concrete=; four numbered ranks and =rank= declarations; =seal=; per-rank constraints; quoted-atom-free lowercase-only identifiers with =#= definitions | =lat= makes every relation two-sorted for the benefit of =minint= and =packetset=, which are providers here; tone inference surfaces only as cycle errors and B's own candid section doubts it is teachable; =pending ⊑ concrete= makes a user value silently win over a provider's (B's own regret); partition declarations are the general form of something only =arg=/=attr= need |
+| C      | three null classes as the semantics of =ref/3=, class from the schema, equality by class, secret nulls never materialized, phases derived from null dependence with definite/pending/undetermined sections, the two-phase GKE/kubernetes example, the absorptive provenance circuit, seven homomorphisms (one corrected and split), =moved= by lineage shape | the general chase and Datalog-first firing; EGD attribute assembly; =some= and =choose= in user heads; quoted atoms; conditional facts with condition indeterminates; interval nulls for =count=; e-graph term store; MPL-2.0; drift reconciled into source | the only existential is the prelude rule and it needs no chase; EGDs need un-merging that union-find cannot do; conditional derivation makes every =deny= a "maybe" where the stuck rule makes it "not yet"; intervals are a second unknown kind; the e-graph exists only to serve EGDs; MPL per DR-8; view update per DR-14 |
+| D      | the plan as =desired − world= in Z-sets, conflict derives a =deny= and is filtered from =desired=, apply as ticks to undeformed under =--max-ticks=, type partitioning of =arg=/=attr= (extended to path), the =contributes= grant as the later stratum for variable-typed writers, =stuck/3= as the companion relation, the =strict_unknowns= policy, the observation that a greedy allocator with pins covers most solving | the log as truth; =}= without a period; =Subscribe= / =Watch= in protocol v1; DBSP as the first engine; clingo in the binary; =@next= inductive rules and the logical clock in the language; controller mode as the primary shape; static-only secrets; bare =inet= literals; capitalized path segments | DR-16, DR-17, DR-18, DR-20, DR-15; a clock in the semantics is paid by every batch user for a mode that does not exist yet; static-only secrecy cannot see a provider's runtime marking; the lexer reasons in DR-5 |
+
+* 9. Implementation order and the prototype's state
+
+A dependency order, not a schedule.
+
+1. Editions pragma and =dform migrate= skeleton (DR-17). Nothing else ships
+   before this can, because DR-5 breaks every file.
+2. Lexer and parser per §6 with spans, lossless tree, error recovery;
+   the §7 corpus as the test suite. =pest= removed.
+3. Front-end passes as Salsa queries: resolve (modules, interfaces,
+   grants), predicate kinds, head normalization (§4.3), the partition graph
+   and strata (§2.6), static secret labels (DR-19). Unknown-predicate and
+   =ref= rewriting live here; the computed-attribute prelude is expanded per
+   schema row here.
+4. Engine phase 1: fact store with node ids, the operator IR, semi-naive
+   evaluation with per-stratum indexes, the ranked aggregate over
+   =src/lattice.rs=, the provenance circuit over =src/circuit.rs=, =stuck/3=,
+   Rule 3's undetermined check, the resolution step, downstream
+   re-derivation on retraction. Delete the four bolt-ons and =ir.rs=
+   merging.
+5. Schema facts from the provider protocol with null classes and
+   checkable refinements (DR-18); the fake provider grows a schema with
+   =computed=, =id=, =sensitive= flags, a =Keyed= list, and returns computed
+   values only from =Apply=.
+6. The plan as a Z-set, =state.json= as identity plus persisted section,
+   the apply executor with boundaries (§2.7), plan file, =--max-ticks=.
+7. Policy lowering table; =dform check --sarif=; =dform why=; the conflict
+   printer over =owner= and =why=; =dform plan --suggest= for =moved=.
+8. =allocate= aggregate with pins (DR-15).
+9. Engine phase 2: DBSP circuit compiler; reactive mode; clingo behind a
+   flag.
+
+Items 1 to 4 are the language; 5 to 8 are the product; 9 is the next
+product.
+
+** The prototype
+
+Worktree =wt-E=, branch =explore/E-synthesis=, uncommitted. Files:
+
+- =src/value.rs=: =Value::Null { label, class, ty }= and =NullClass=; three
+  exhaustive matches in =engine.rs= and =fakecloud.rs= gained a =Null= arm
+  (=?label= when printed; an error if it reaches the fake provider). =cargo
+  run -- plan= on =dform.df= is unchanged.
+- =src/lattice.rs= (915 lines): =eq3=, =nulls_in=, =has_secret=, =subst=; the
+  four lattices with =Stuck=, each element the normal form of its
+  contribution list; =Ranked= with three slots and a constraint map;
+  =collapse=; =resolve=. Twelve tests.
+- =src/circuit.rs= (462 lines): leaves, fact nodes with antichain
+  alternatives, =Times= firings, structural absorption on =⊕=; =why=,
+  =phase= (∩, ∪), =touches= (∪, ∪); =resolve= (in-place re-spelling, world
+  leaf on every alternative, merge on collision) and =retract= (DRed without
+  re-derivation). Four tests.
+
+Results: =cargo test --lib=, 16 passed, 0 failed. On the first run two
+lattice tests failed:
+
+- =flat_join_is_commutative_associative_idempotent_over_a_mixed_sample=:
+  associativity failed on =("a", "b", fresh)= because =Conflict= kept only the
+  first unequal pair, so =(a ⊔ b) ⊔ f= and =a ⊔ (b ⊔ f)= had different witness
+  sets. Fix: =Conflict= carries every contribution (§2.3). This is the
+  reason the conflict printer names every contributor rather than two.
+- =map_is_pointwise_and_a_stuck_leaf_makes_the_map_stuck=: commutativity
+  failed because a =Map= =Stuck= stored its two inputs in arrival order. Fix:
+  =Map= and =Keyed= are normalized from the full contribution list like
+  =Flat=.
+
+Both fixes are now part of the definition in §2.3, and every seam-1 case in
+§4.1 passes under every permutation and under duplication after them.
+
+What the prototype does not do: engine integration (nothing calls it);
+=Map=/=Keyed= keep no partial values while a leaf is stuck; the circuit's
+absorption walks leaf sets instead of using a digest; =retract= does not
+re-derive through recursion or negation, which is exactly why §4.2's v1
+re-derives strata instead of calling it; no parsing, no stratification, no
+phases as an executor loop.
+
+* 10. Candid section
+
+** What the synthesis cannot do
+
+*Explain itself in one sitting.* A reader must hold: three ranks, three
+null classes, =Stuck= as distinct from =⊤=, stuck rules as distinct from
+stuck cells, phases as re-evaluation boundaries, and a =deny= with three
+outcomes. Each is small; together they are more than "known after apply".
+The plan printer carries the load, and if the sections in §7.4 do not read
+naturally to a Terraform user the design has failed socially whatever its
+semantics.
+
+*Cheap retraction.* A phase boundary that turns a cell =⊤= re-derives the
+downstream strata (§4.2). Bounded, rare, and still a full evaluation on a
+bad day. DBSP fixes it and DBSP is deferred.
+
+*Whole-set override.* No =seal=, no rank on sets. "In prod the tag set is
+exactly these" is not expressible; =ignore_changes= or a Flat schema for the
+path are the tools. A's DR-1 reasoning stands and it will be the first
+feature request.
+
+*Arithmetic over unknowns.* An open null under =inet_subnet= is stuck. C's
+c-tables with arithmetic conditions, B's abstract-interpretation
+signatures on builtins, D's clock: all three had a story; this design has
+"wait for the boundary". It is honest and it is the least helpful of the
+four.
+
+*Counting provenance and bag semantics.* Absorptive storage throws away
+"how many ways". No infrastructure question needs it today. A closed door.
+
+*Two authors appending to one ordered list.* Still not a lattice (A's
+candid point 5). =Keyed= covers the cases with a key; the rest is one
+author per list.
+
+** Which tickets it makes harder
+
+| Ticket                              | Why harder                                                                                     |
+|-------------------------------------+------------------------------------------------------------------------------------------------|
+| Plan output                         | must render four sections, ranks with owners per leaf, nulls with labels, deferred checks, redacted secrets |
+| Apply executor                      | owns boundaries, downstream holds, re-evaluation and policy re-check between phases; more than a DAG walk |
+| Tests                               | golden tests must snapshot circuits and phase sequences, not one fact set; circuit hash-consing must be deterministic across platforms |
+| Plugin protocol                     | =Schema= carries classes and refinements; =Apply= returns computed values for resolution; a plain "facts out" schema is not enough |
+| Fake provider as conformance harness | must return computed values only from =Apply= and mark secret ones, or no demo exercises a phase |
+| Declarative providers               | every static check reads the schema; an OpenAPI-derived schema with gaps makes a partial schema worse than none (A's point, unchanged) |
+| Language editions                   | =dform migrate= cannot mechanically rewrite cross-instance =component_scope= joins into =output= wiring, nor decide which of two =arg= writers should become =@default= |
+| Reactive inputs / controller mode   | provenance retraction under DBSP with the =Stuck= element and resolution-as-substitution is a design that no one has built; C's incremental-chase worry applies to the boundary step even without EGDs |
+| Multi-stack orchestration           | less pressing than under A (phases replace the two-stack rule for the common case) but cross-stack nulls are not designed: a =stack_output= that is an open null in the upstream stack is a constant or absent downstream, never pending |
+
+** Where it is most likely wrong
+
+1. *Rule 3 is too coarse.* "Any stuck instance for a rule with head =p=
+   makes every negation over =p= undetermined" is what makes the definite
+   fragment monotone across boundaries and it is one line to implement. It
+   will also make a =deny= undetermined because an unrelated rule for the
+   same predicate is stuck on an unrelated resource. If that happens in
+   practice the refinement is per-key (stuck instances record their head's
+   bound key columns; a negation is undetermined only if its pattern
+   unifies with a stuck head), which costs a unification per negation and
+   loses nothing else. I would ship coarse and measure.
+
+2. *=Stuck= at any rank propagates.* Chosen for symmetry with =⊤= at any
+   rank. The losing-rank =Stuck= case (two defaults that might disagree,
+   overridden by a normal value) is a real program that will wait on a
+   null it does not need. If it recurs, the rule becomes "=Stuck= at a
+   losing rank is a warning, not a stuck", and the =⊤= rule should probably
+   follow it, which reopens B's argument.
+
+3. *The (∩, ∪) phase instance and provenance truncation.* With =k = 8=
+   alternatives and a =truncated= flag, a fact whose only null-free
+   alternative was truncated is reported pending when it is definite.
+   Conservative, and it will surprise someone with a heavily redundant
+   rule set.
+
+4. *Secrets have three mechanisms after all.* Static labels for rules, the
+   =secret= class for values, and the =label= instance for redaction. DR-19
+   calls the second and third one mechanism; a reviewer could reasonably
+   call them two. The interaction that matters (a static =public= position
+   receiving a runtime =secret= null from a mislabelled provider schema)
+   ends in a conflict at the same-rank rule or a stuck read, never in a
+   printed byte, which is the property that matters; the argument that it
+   never prints is the part to attack.
+
+5. *Variable instance segments* (=output(network.IA, vpc, A)=) are kept
+   from A with A's own warning. The next request will be =instance network
+   Name {...} :- region(Name)=, and then instances are data and interfaces
+   are checked at evaluation time. The honest alternative is to forbid it
+   now and make the root enumerate instances by hand; this design does not,
+   and that is a bet on the smallness of the feature.
+
+6. *The greedy allocator.* First-fit with pins is deterministic and
+   removal-stable, and it is also a policy ("lowest free block") that
+   someone will want to change (largest-gap, per-zone pools). Every knob
+   added to =allocate= is a step toward the solver stratum that DR-15
+   deferred; if three knobs appear, ship clingo instead of a fourth.
+
+7. *Prototype scope.* The lattice and circuit are pure functions with 16
+   tests; nothing in §2.6 (partitions), §2.7 (stuck rules and boundaries) or
+   §2.8 (the Z-set plan) has run. The claims there are reasoned from the
+   proposals and =engine.rs=, and the first thing to build after the parser
+   is the partition graph over the six example files, because DR-12 is the
+   decision most likely to reject a program the examples consider fine.
+
+* References
+
+- Abiteboul, Hull, Vianu. /Foundations of Databases/, ch. 15.
+- Mumick, Pirahesh, Ramakrishnan. /The magic of duplicates and aggregates/.
+- Green, Karvounarakis, Tannen 2007. /Provenance semirings/.
+- Deutch, Milo, Roy, Tannen 2014. /Circuits for Datalog provenance/.
+- Amsterdamer, Deutch, Tannen 2011. /Provenance for aggregate queries/.
+- Grädel, Tannen 2017. /Semiring provenance for first-order model checking/ (dual indeterminates).
+- Foster, Green, Tannen 2008. /Annotated XML/ (security semiring).
+- Green, Ivan, Tannen 2010. /Reconcilable differences/ (incremental provenance).
+- Gupta, Mumick, Subrahmanian 1993. /Maintaining views incrementally/ (DRed).
+- Imielinski, Lipski 1984. /Incomplete information in relational databases/ (c-tables).
+- Fagin, Kolaitis, Miller, Popa 2005. /Data exchange: semantics and query answering/ (weak acyclicity).
+- Calì, Gottlob, Lukasiewicz 2009. /Datalog±/; Bellomarini, Sallinger, Gottlob 2018. /Vadalog/; Ivliev et al. 2024. /Nemo/.
+- Budiu, Chajed, McSherry, Ryzhyk, Tannen 2023. /DBSP/.
+- Conway, Marczak, Alvaro, Hellerstein, Maier 2012. /Logic and lattices for distributed programming/ (Bloom^L).
+- Madsen, Yi, Lhoták 2016. /From Datalog to Flix/.
+- Arntzenius, Krishnaswami 2016. /Datafun/.
+- NixOS module system: =mkDefault=, =mkOverride=, =mkForce=.
+- CUE language specification; Kubernetes server-side apply and =managedFields=; =x-kubernetes-list-map-keys=.
+- Terraform: =sensitive=, =ephemeral=, =moved=, =import=, plugin protocol v6; the =for_each= unknown-value error.
+- Soufflé provenance mode (Zhao, Subotić, Scholz 2020); Google Mangle; RelationalAI Rel; Salsa.

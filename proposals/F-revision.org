@@ -1,0 +1,984 @@
+#+TITLE: Proposal F: second-pass review and revision of the synthesis (E)
+#+AUTHOR: dform design, direction F
+#+DATE: 2026-09-27
+#+STARTUP: overview
+#+OPTIONS: toc:3
+
+Status: a review of proposals/E-synthesis.org with running code, and the
+revisions the code forced. Written against DESIGN.org (commit 58f9fde),
+proposals A-E, the six =.df= files, =src/engine.rs=, =src/transform.rs=, and
+E's uncommitted prototype (=src/lattice.rs=, =src/circuit.rs=, =Value::Null=).
+
+Prototype: worktree
+=/tmp/claude-1000/-home-simon-src-scraps-dform/99c49424-d8f2-45f7-abcc-f74fabb80e25/scratchpad/wt-F=,
+branch =explore/F-revision=, committed. E's 16 tests were copied in and pass
+unchanged; F adds 14 tests (30 total, 30 pass) in four new modules and one
+instrumented engine:
+
+| File                     | Lines | What                                                                         |
+|--------------------------+-------+------------------------------------------------------------------------------|
+| =src/partition.rs=       |   ~620 | the partition graph of E §2.6 / DR-12 over the lowered program; Tarjan SCC; strata or the negative cycle with rule text |
+| =src/sim.rs=             |   ~520 | the stuck-rule simulation of E §2.7 Rules 1-3, recorder plus post-hoc Rule 3 (coarse and per-key) and phase sections |
+| =src/zset.rs=            |   ~270 | the plan as a Z-set, E §2.8, with round-0 resolution, compared against =FakeCloud::plan= |
+| =src/schema.rs=          |    ~95 | hand-written null-class schemas for the fake provider and for C's GKE stack   |
+| =src/engine.rs=          |  +150 | content-position hooks (Rule 2) behind =sim::active()=; =count= aggregate; nothing changes when no simulation is active |
+| =src/lattice.rs=         |  +200 | =collapse_shadow_aware= (F's rule for a losing-rank Stuck/Conflict) and four adversarial tests |
+| =examples/adversarial/=  |     9 | the adversarial programs, in the current syntax so they lower and run today   |
+| =examples/world/=        |     2 | =remote.json= and =state.json= copied from =.dform= as a fixture              |
+
+The brief said E is weakest at §2.6, §2.7 and §2.8 because nothing there had
+run, and named three rules as most likely wrong. All three needed a change.
+One of them (DR-12) rejects =dform.df= as written. Section 1 gives the
+verdicts, section 2 every other place the code disagreed with the text,
+section 3 the decision records that change, section 4 the results tables,
+section 5 what is still unrun, section 6 the recommendation.
+
+A note on method. E's prototype is pure functions with no engine. F did the
+opposite: it took the existing naive evaluator, which is the only thing in
+the repo that runs real programs, and made it run E's rules on E's own
+examples. That is why everything below is in the current syntax (the parser
+does not know =@override= or =.path= literals) and why the schema is
+hand-written. The partition pass reads the *lowered* program, so it sees
+exactly what the engine sees: component scopes expanded, comprehensions
+lowered to =__lc_N= helpers, =when= guards pushed into bodies.
+
+* 1. Verdicts on the three flagged rules
+
+** 1.1 DR-12, partition =arg= and =attr= by (type, normalized path): WRONG AS WRITTEN
+
+E §2.6: "The dependency graph has one node per predicate, except =arg= and
+=attr=, which have one node per partition". E §10 item 7 said the partition
+graph over the example files was the first thing to build "because DR-12 is
+the decision most likely to reject a program the examples consider fine".
+It does. =dform.df= is rejected:
+
+#+begin_example
+== dform.df: 116 nodes, 219 edges (100 negative)
+   REJECTED: negative cycle through 5 nodes
+   scc: __lc_1  __lc_2  (arg, output, private_subnet_ids)  (attr, output, private_subnet_ids)  want
+   (arg, output, private_subnet_ids) -> (attr, output, private_subnet_ids)  [attribute aggregate (lub_ranked)]
+   (attr, output, private_subnet_ids) -> want  [reads attr (aggregate)]
+       rule #28: want("db.postgres", scoped("database.main", "db")) :- param(...), component_scope("network", ...), output(NetScope, "private_subnet_ids", SubnetIds)
+   (attr, output, private_subnet_ids) -> want  [reads attr (aggregate)]
+       rule #36: want("k8s.cluster", scoped("kubernetes.main", "cluster")) :- param(...), component_scope("network", ...), output(...)
+   want -> __lc_1  [aggregate head]
+       rule #57: __lc_1(collect_list(ref("net.subnet", scoped("network.main", Sn), "id"))) :- want("net.subnet", scoped("network.main", Sn)), arg("net.subnet", ..., "visibility", "private")
+   want -> __lc_2  [aggregate head]
+       rule #58: __lc_2(collect_list(...)) :- want("net.subnet", scoped("network.peer", Sn)), ...
+#+end_example
+
+The cycle is not through =arg= or =attr= at all. It is through =want=. The
+network module's =private_subnet_ids= output is an aggregate over
+=want(net.subnet, _)=; the database and kubernetes modules read that output
+to decide their own =want=. With =want= as one predicate node, "every reader
+of an aggregate is above its whole group" puts =want= above an aggregate
+over =want=. This is the shape of every cross-module wiring in the repo, and
+it is the shape of E's own rewrite in §7.1 (=instance database main { ...
+subnet_ids = Ids } :- ..., output(network.main, private_subnet_ids, Ids)=
+lowers to a =want(db.postgres, ...)= that reads an =output= aggregate over
+=want(net.subnet, ...)=). E's §4.3 argued at length about which columns of
+=arg= to partition on and never asked whether the predicate that names the
+resources needed the same treatment. It does, and for the same reason: the
+type column is a constant in every =resource= header.
+
+The other four programs stratify under DR-12 as written, because none of
+them wires one module's output into another's resource set.
+
+*Fix, implemented and tested* (=Options { partition_want: true }=): every
+core predicate whose first column is a resource type is partitioned by that
+column when it is a constant in the head, and a body read with a variable
+type connects to every partition. In this repo that is =want= and =adopt=;
+in E's prelude it is also =lifecycle=, =ignore_changes=, =identity=, =desired=
+and =world=. With that, all five programs stratify (=dform.df= in 11 strata)
+and every adversarial verdict in §4 is the one E's text predicts. Nothing
+that stratified under E's rule stops stratifying under F's, because
+splitting a node can only remove cycles.
+
+Revised DR-12 in §3.1. The general principle, stated once: *a compiler-owned
+predicate is partitioned on every column that is a resource type or a
+schema path, when constant.* That is still "constants only, two columns",
+still B's narrowest form, and it now covers the address predicates.
+
+** 1.2 Rule 3, predicate-coarse undetermined negation: WRONG, and worse than E feared
+
+E §10 item 1 worried that "a =deny= [becomes] undetermined because an
+unrelated rule for the same predicate is stuck on an unrelated resource"
+and said "I would ship coarse and measure". Measured, on C's GKE example (E
+§7.4, in =examples/adversarial/gke_two_phase.df=):
+
+#+begin_example
+   Rule 3 (negations and aggregates):                                       coarse   per-key
+     rule #37 (deny): not arg("gke_cluster", "pngu", "deletion_protection", true)   UNDET    ok
+     rule #36 (deny): reads stuck aggregate zone_count(_)                          UNDET    UNDET
+     rule #35 aggregate zone_count over arg("gke_cluster", "pngu", "zones", _)     UNDET    ok
+   Rule 3 (attr aggregate groups):                                          coarse   per-key
+     attr group arg("gke_cluster", "pngu", _, _)                                   UNDET    ok
+     attr group arg("google_compute_address", "static_ip", _, _)                   UNDET    ok
+     attr group arg("google_compute_subnetwork", "gke_subnet", _, _)               UNDET    ok
+     attr group arg("k8s.deployment", "api", _, _)                                 UNDET    ok
+     attr group arg("k8s.namespace", "pngu", _, _)                                 UNDET    ok
+     attr group arg("k8s.secret", "db_credentials", _, _)                          UNDET    ok
+#+end_example
+
+The nodepool rule is stuck on =?gke_cluster/pngu#zones=. Its lowered form is
+five rules: one with head =want= and four with head =arg= (one per field).
+Under coarse Rule 3, "an aggregate over =p= is undetermined while any
+=p=-rule instance is stuck", and =attr= is an aggregate over =arg=. So every
+=attr= group of every address in the stack is undetermined, every
+=desired= row (which reads =attr= through =assemble=) is undetermined, and
+the plan E prints in §7.4 with nine definite deformations has *zero*. The
+unrelated =deletion_protection= policy, which E's plan shows as decided, is
+undetermined too. This is not "a deny on an unrelated resource"; it is the
+whole plan, on E's own flagship example, because E's own prelude makes
+=arg= the head of every resource field rule.
+
+The per-key refinement E sketched fixes all of it. A stuck instance records
+its head with the bound columns instantiated and the rest as wildcards
+(=want("gke_nodepool", _)=, =arg("gke_nodepool", _, "zone", _)=); a negation
+is undetermined iff its grounded pattern unifies with some stuck head; an
+aggregate group is undetermined iff its group key unifies with some stuck
+head. Under per-key the GKE plan has exactly E's sections: three definite
+(=gke_subnet=, =static_ip=, the cluster), three pending on the provider's
+nulls (the kubernetes objects), one pending group (=np-? × unknown=), one
+undetermined policy (=two_zones=). The adversarial program =adv2= (§4.2)
+shows the same split on a =not want(...)= and a =collect_set= over =want=.
+
+Two things E's text does not say that the simulation needed:
+
+1. *An aggregate whose own rule has a stuck instance is undetermined, and
+   a positive reader of an undetermined aggregate is undetermined.* E's
+   worked example item 5 uses this (=zone_count= is stuck, so
+   =deny(two_zones) :- ..., zone_count(N), N < 2= is undetermined), but Rule
+   3 only speaks of negation over =p= and aggregation over =p=. Without the
+   reader clause the =deny= silently derives nothing and is reported as
+   satisfied, which is the one outcome a policy engine must never produce.
+   The first version of F's evaluator made exactly this mistake.
+2. *Rule 3 is per-partition for =attr=.* Even per-key, the aggregate over
+   =arg= has to be checked per =(T, A)= group, not per predicate. E's DR-12
+   partitions the stratifier and leaves Rule 3 on predicates; the two must
+   use the same granularity or the coarse behaviour above returns.
+
+Cost: E claimed "checkable in one pass over =stuck/3=". Per-key is one
+unification per (negation event, stuck head) pair; on these programs that is
+tens of unifications. It is not a cost.
+
+Revised Rule 3 in §3.2 (DR-2).
+
+** 1.3 "Stuck at any rank propagates": WRONG
+
+E §2.4 collapse step 2 and §4.1 final rule 2: "=Conflict= at any rank wins;
+else =Stuck= at any rank wins". E §10 item 2 named the losing-rank case
+(two defaults that might disagree, overridden by a normal value) as the
+program that "will wait on a null it does not need". It does, and it is not
+an edge case: it is the =@default= idiom E itself introduces for module
+inputs and environment layering. Adversarial program =adv1=, run through
+E's =collapse= and F's:
+
+#+begin_src rust
+// @default from an allocator (open null), @default from a hard-coded
+// placeholder, normal value from the program.
+let cell = joined(&[
+    Ranked::at(Rank::Default, 1, open("alloc/cp#cidr")),
+    Ranked::at(Rank::Default, 2, s("10.0.0.0/28")),
+    Ranked::at(Rank::Normal,  3, s("172.16.3.96/28")),
+]);
+cell.collapse()               // E: Stuck { rank: Default, nulls: {"alloc/cp#cidr"} }
+cell.collapse_shadow_aware()  // F: Val { value: "172.16.3.96/28", rank: Normal,
+                              //         shadowed: [Stuck { rank: Default, .. }] }
+#+end_src
+
+Under E the resource whose =normal= value is fully known waits for an
+allocator to run so that the engine can decide whether two defaults nobody
+is using agree. Under F the normal value wins and the shadowed disagreement
+is =warn(attr_shadowed, ...)=. E's own headline for case 2b, "an open null
+at a losing rank does not block collapse", is true for a lone null and
+false for a pair, which is the inconsistency the flagged rule introduced.
+
+E asked whether the =Conflict= rule should follow. It should, for the same
+reason and with the same precedent: NixOS merges only the values at the
+highest priority present and never looks at the shadowed ones; Kubernetes
+server-side apply reports a conflict only between managers of the *applied*
+value. E's argument for propagating ("a shadowed disagreement is still a
+disagreement; hiding it because a third author out-ranked both is what
+last-wins systems do") conflates rank-wins with last-wins. Last-wins is
+order-dependent; rank-wins is not, and F's collapse is tested under every
+permutation of its contributions. A shadowed conflict *is* worth surfacing,
+as a warning with both owners, because it usually means two modules ship
+different defaults for one path; making it an error means a program cannot
+set a value until it has reconciled every default underneath it, which is
+the opposite of what defaults are for.
+
+The revised rule is one clause: *the highest non-empty rank decides; only
+that rank's element can make the cell =Stuck= or =Conflict=; anything below
+it is reported, never blocking.* =Ranked::collapse_shadow_aware= implements
+it, keeps E's deferred-constraint behaviour on the winning value, and is
+order-independent (tested). Revised in §3.3 (DR-9).
+
+* 2. Everything else the code disagreed with
+
+Numbered F1..F14 for reference from the tables. F1-F3 are the section 1
+verdicts, restated in one line each; the rest are new.
+
+** F1 DR-12 misses the address predicates
+See §1.1. =dform.df= rejected; fix is to partition =want= (and every
+type-keyed core predicate) by constant type.
+
+** F2 Rule 3 is predicate-coarse and lacks the aggregate-reader clause
+See §1.2. Zero definite deformations on the GKE example; fix is per-key
+plus "an aggregate with a stuck instance of its own rule is undetermined,
+and so are its readers".
+
+** F3 Stuck (and Conflict) at a losing rank block
+See §1.3. Fix is shadow-aware collapse.
+
+** F4 Rule 2 contradicts §7.2 on aggregates, and the literal reading breaks =dform.df=
+
+Rule 2 lists as content positions "an aggregate's group key or aggregated
+value". §7.2 says of =output private_subnet_ids = [ref(net.subnet, Sn, .id)
+| ...]= that "its elements are fresh nulls, forwarded ... without anything
+being stuck". Both cannot hold. The simulation ran both readings on
+=dform.df --set env=prod=:
+
+| Reading                               | stuck | definite | pending |
+|---------------------------------------+-------+----------+---------|
+| §7.2 (collect forwards nulls)         |     0 |       14 |       0 |
+| Rule 2 literal (aggregated value)     |     6 |        7 |       5 |
+
+Under the literal reading the IAM statements comprehension (three
+=iam_need= rows carrying =ref(_, _, id)=) and both network instances'
+=private_subnet_ids= outputs are stuck, and everything downstream (the
+database, the cluster, the nodepool, every subnet) is pending. The peering
+example E advertises as "plans in one phase" would not.
+
+*Fix.* The content positions of an aggregate are: the group key, always;
+the aggregated value for =count=, =sum=, =min=, =max=; both arguments of
+=collect_ordered=; and the *key* of =allocate=. =collect_set= and
+=collect_list= forward nulls; =collect_set= deduplicates by =eq3= and keeps
+an =eq3=-Unknown pair as two elements, which is the Set lattice's rule in
+E §2.3 restated for the aggregate. (Strictly, =count= over a group whose
+members are definite but carry nulls is also decidable; the simulation
+treats =count= over a null-carrying binding as fine and only the =member=
+that produced the binding as stuck, which is what E's item 5 needs.)
+
+** F5 The computed-attribute null lands in the resource's own document
+
+E §2.5's third contribution mints =attr(T, A, P, ν)= for every computed =P=
+of every wanted =(T, A)=. In the simulation this shows up as every document
+carrying its own ids:
+
+#+begin_example
+ + gke_cluster pngu   carries ?gke_cluster/pngu#ca_certificate ?gke_cluster/pngu#endpoint
+                              ?gke_cluster/pngu#id ?gke_cluster/pngu#zones ?google_compute_subnetwork/gke_subnet#id
+#+end_example
+
+Two consequences E does not spell out. First, =assemble(T, A)= in §2.8 must
+exclude schema-computed paths from the document it sends to the provider
+and diffs against the world (it says only that =ignore_changes= paths are
+dropped); otherwise every resource has a null in its desired document
+forever and, after round 0, a value the world stores under =computed= not
+=attrs=. Second, the phase assignment's "downstream in the DAG" must
+exclude self-ownership: a document that carries its own computed null is
+not downstream of itself. F's first cut of the phase closure made the GKE
+cluster pending on its own =zones=; the fix is one filter. Both are wording
+fixes to DR-2/DR-11, listed in §3.
+
+** F6 Round-0 resolution is load-bearing, not an optimization
+
+E §2.8: "Round-0 resolution means a steady-state stack never has the
+second case [an update pending on a null]". Stronger than that: without
+round-0 resolution a steady-state stack has *spurious updates*, because a
+fresh null against the world's constant is =eq3=-False under UNA, not
+Unknown. Measured on the prod fixture with =world.computed= cleared:
+
+#+begin_example
+no round-0: [("Update", 10), ("Undeformed", 4)]
+#+end_example
+
+Ten of fourteen resources would be rewritten to the same values on every
+apply. With round 0 the Z-set plan matches the planner exactly (§4.3). The
+DR-11 wording should say that =resolve/2= after refresh is part of the
+definition of =desired=, and that an =adopt= (user-written =identity/3=)
+must precede it.
+
+** F7 A refinement on a cell whose only contribution is a secret null is pending forever
+
+E §2.4 step 4: "a =secret= =v= defers every constraint to the provider". E's
+phase assignment: a deformation is definite only if its cells carry no
+deferred constraint. E Rule 4: "=secret= nulls are never resolved in the
+store". Put together, a =sensitive= attribute with a schema refinement
+(=password: secret(string) where len(password) >= 16=, a natural thing to
+write) is never definite and the deformation never applies. Test =adv6=:
+
+#+begin_src rust
+let cell = joined(&[
+    Ranked::at(Rank::Normal, 1, secret("sm/db_pw#secret_data")),
+    Ranked::constraint(Constraint::IsStr, 9),
+]);
+cell.collapse()   // Val { deferred: [IsStr], .. }   -- and no boundary ever clears it
+#+end_src
+
+And a second problem the test exposes: =Ranked::resolve= has no guard, so a
+caller who does resolve a secret label materializes the bytes in the store
+(=resolve("sm/db_pw#secret_data", "hunter2")= yields =Val("hunter2")=). E's
+Rule 4 forbids it in prose; the prototype does not.
+
+*Fix.* Constraints on a secret-class cell are a third state,
+=deferred_to_provider=, which does not block definiteness; they ship in
+the =Apply= request as =assertions= the provider checks after
+materializing (DR-18 gains one field), and a provider whose =Schema= does
+not declare =checks_refinements= makes such a refinement a compile error
+(E0306, "refinement on a sensitive path cannot be checked by the engine").
+=resolve= refuses a secret label. Revised DR-13 in §3.5.
+
+** F8 E's Set lattice is not idempotent on a single contribution
+
+Found by =adv5= on the way to something else. =join(Bottom, e)= returns =e=
+without normalizing, so a lone Set contribution keeps its order and its
+duplicates while the same contribution given twice is sorted and
+deduplicated:
+
+#+begin_example
+Set, one contribution:   Val(List([Str("--z"), Str("--a"), Str("--z")]), {1})
+Set, same given twice:   Val(List([Str("--a"), Str("--z")]), {1})
+#+end_example
+
+=lub(C) ≠ lub(C ++ C)=, which is the idempotence law E §2.3 says was tested
+under duplication. E's law test builds its samples from two or more
+contributions, so it never sees this. The same shortcut affects =Keyed= (a
+single contribution with two rows of the same key is not a conflict) and
+=Map= (no per-key normalization on one input). Fix: =Bottom ⊔ e =
+normalize(e)=, one line. A lattice prototype whose one job is the laws
+should not have a fast path around the normal form.
+
+** F9 Two authors appending to one ordered list: the answer is a key, and it already exists
+
+E §10 says this "is still not a lattice". Under =Flat(List)= it is a
+conflict, confirmed. But A's own =Keyed= with the order key as the merge
+key is the lattice E says does not exist:
+
+#+begin_src rust
+let keyed = Lattice::Keyed { keys: vec!["prio".into()], elem: Box::new(Lattice::Flat) };
+lub(&keyed, ".args", [(1, [ {prio: 10, arg: "--verbose"} ]), (2, [ {prio: 20, arg: "--port=8080"} ])])
+// Val([{prio:10, arg:"--verbose"}, {prio:20, arg:"--port=8080"}])   emitted in key order
+lub(&keyed, ".args", [(1, [ {prio: 10, arg: "--verbose"} ]), (2, [ {prio: 10, arg: "--quiet"} ])])
+// Conflict                                                           same key, different value
+#+end_src
+
+Two modules append with distinct priorities and the list assembles in
+order; a colliding priority is the conflict it should be. This is L2's
+=collect_ordered(Prio, X)= made multi-author: the schema declares
+=ordered_by = prio= and the compiler treats each contribution as rows
+keyed by =prio=. The genuinely non-lattice case, positional append with no
+key, stays rejected, and that is right: two authors appending without
+saying where is order-dependent by definition. Consequence added to DR-1
+in §3.6.
+
+** F10 The resource-block sugar shares one body across every field
+
+=resource net.a x { y = P, z = 1 } :- arg(net.b, y, x, P)= lowers to a
+=want= head and one =arg= head per field, each with the *whole* body. So the
+constant field =z= reads =attr(net.b, y, x)= although it does not use it,
+and (adv7b) a program where A's =y= depends on B's =x= and B's =x= depends
+on A's =z= is a cycle if =y= and =z= share a block and stratifies if =y= is
+contributed by a separate rule. Not wrong, and the partition graph reports
+the rule text so the author can see it, but the diagnostic should name the
+field, and the compiler could split a block's body per field by variable
+dependence (a field whose value mentions no variable bound by a given
+literal need not depend on it). Minor; noted so the "cycle" error message
+does not surprise the first user who hits it.
+
+** F11 There are no spans
+
+E §2.6: "A cycle through a negative edge is a compile error naming the
+cycle with =file:line= per edge." The AST has no spans (DESIGN.org, "No
+source locations"), so F's pass names each edge by rule index and
+pretty-printed text. This is a dependency, not a finding against E; it
+puts the parser rewrite (E §9 item 2) squarely before any diagnostic in
+§2.6 can be what E describes.
+
+** F12 HEAD's =pngu.df= does not parse
+
+The committed =pngu.df= (58f9fde) has object fields without commas inside
+=settings ... { gke = { ... } }= and fails at =57:5 expected add_op or
+mul_op=; the uncommitted working copy has the commas and parses. F used
+the working copy. Housekeeping, but a review that claims to have run
+=pngu.df= should say which one.
+
+** F13 =adopt_demo.df= produces zero resources, silently
+
+=use network main { vpc_cidr = VpcCidr }= passes a parameter the module
+does not read (=modules/network.df= reads =param(vpc_net, ...)=), so no
+resource is derived and the adopt rule has nothing to attach to. Under
+E's DR-3 (typed module inputs) this is a compile error; today it is an
+empty plan. Evidence for DR-3, and the reason F's tables show 0 definite
+for that program.
+
+** F14 The prelude's null minting must be per wanted address, and it doubles the =arg= rules
+
+E §4.3 says the prelude is expanded per schema row so that it partitions.
+It is also expanded per *wanted address* at evaluation time (one =arg(T, A,
+P, ν)= per =want(T, A)=), which is what F's simulation does. The partition
+graph for =dform.df= grows from 116 to 126 nodes with =want= partitioned and
+would grow by one node per computed path per type with a real schema
+(the fake schema has 14 types × ~1.2 computed paths). Fine, but the "2 to
+4× the bare fact store" cost in E §3.2 should count these facts: they are
+one per computed path per resource, and a real provider schema has five to
+twenty computed paths per type.
+
+* 3. Revised decision records
+
+Only records that change. Numbering is E's.
+
+** DR-12 (revised) Stratification partitions every type-keyed core predicate
+
+*Context.* §1.1. =dform.df= is rejected under E's DR-12 because =want= is one
+node and cross-module wiring reads an aggregate over =want=.
+
+*Decision.* The dependency graph has one node per predicate, except the
+compiler-owned predicates with a resource-type column, which have one node
+per partition. The partition columns are: the type column for =want=,
+=adopt=, =identity=, =lifecycle=, =ignore_changes=, =moved=, =desired=,
+=world=; the type and normalized-path columns for =arg=, =attr=, =attr_stuck=,
+=attr_conflict=. A column is a partition key only when the head has a
+constant there; otherwise =*=. Two nodes are connected iff they unify. A
+body read with a variable in a partition column connects to every
+partition. The =contributes= grant is the =arg= partition pattern; a
+=resource T ...= header is the =want= partition. The prelude is expanded per
+schema row before graph construction (E §4.3, unchanged).
+
+In Datalog, the rule that decides an edge's polarity and its endpoints:
+
+#+begin_src prolog
+% node(Pred, TypeOrStar, PathOrStar)
+node(P, T, K)   :- head(R, P, Args), partition_cols(P, Ti, Ki), const_or_star(Args, Ti, T), const_or_star(Args, Ki, K).
+edge(From, node(P, T, K), Neg) :-
+  rule(R), head(R, P, Args), body_lit(R, L),
+  read_pattern(L, Pat), node_def(From), unifies(From, Pat),
+  Neg = (negated(L) ; aggregate_head(R) ; reads_aggregate(L) ; extern(L)).
+% attr is fed by arg per partition, negatively (the aggregate edge)
+edge(node(arg, T, K), node(attr, T2, K2), true) :- node(arg, T, K), node(attr, T2, K2), unify(T, T2), unify(K, K2).
+#+end_src
+
+*Consequences.*
+- All five example programs stratify; the adversarial verdicts in §4.2
+  are exactly E's predictions; A's baseline example compiles; D's
+  degenerate case is preserved.
+- The stratum count grows (dform.df: 3 → 11) because the network, database
+  and kubernetes modules now sit in genuinely different strata; this is
+  the real dependency order and it is what the executor's phases follow.
+- Rule 3 (below) uses the same partitions.
+
+** DR-2 (revised) Content positions, Rule 3 per key, aggregate readers, self-ownership
+
+*Context.* §1.2, F4, F5.
+
+*Decision.* Rules 1 and 4 of E §2.7 unchanged. Rule 2's content positions
+are: operands of ordering comparisons; either side of === / =!== when =eq3=
+is Unknown; every builtin argument; =member= over a null list; every
+argument of a resource address; a negation pattern holding an open or
+secret null; an aggregate's group key; the aggregated value of =count=,
+=sum=, =min=, =max=, both arguments of =collect_ordered=, the key of
+=allocate=. =collect_set= and =collect_list= forward nulls, =collect_set=
+deduplicating by =eq3= and keeping Unknown pairs.
+
+Rule 3, per key: a stuck instance records =stuck(RuleId, HeadPattern,
+Bindings, Nulls)= where =HeadPattern= is the head with bound key columns
+instantiated and everything else a wildcard. Then:
+
+#+begin_src prolog
+% a negation is undetermined iff its grounded pattern unifies with a stuck head
+undetermined(not(P, Args))     :- stuck(_, head(P, Pat), _, _), unifies(Pat, Args).
+% an aggregate group is undetermined iff its group key unifies with a stuck head of a body predicate
+undetermined(agg(P, Key))      :- agg_rule(R, P), body_pred(R, Q, QArgs), stuck(_, head(Q, Pat), _, _), unifies(Pat, QArgs[Key]).
+% an aggregate whose OWN rule has a stuck instance is undetermined for that group
+undetermined(agg(P, Key))      :- agg_rule(R, P), stuck(R, head(P, Pat), _, _), unifies(Pat, Key).
+% a positive reader of an undetermined aggregate is undetermined (transitively)
+undetermined(rule(R))          :- body_lit(R, pos(P, Args)), undetermined(agg(P, Key)), unifies(Key, Args).
+undetermined(rule(R))          :- body_lit(R, not(P, Args)), undetermined(not(P, Args)).
+% attr is an aggregate over arg, per (T, A) group: the same clause, with the partition as the key
+#+end_src
+
+A positive read of an ordinary predicate with stuck instances is *not*
+undetermined: the facts are not there yet, which is monotone, and the
+rule may fire after a boundary. The plan says so ("may derive after phase
+N") for =deny= rules whose body positively reads a predicate with a stuck
+instance in its partition.
+
+Phase assignment: a document's own computed nulls are not dependency
+edges; =assemble= excludes schema-computed paths from the document.
+
+*Consequences.*
+- The GKE plan has E §7.4's sections exactly (§4.3); coarse Rule 3 would
+  have had zero definite deformations.
+- One unification per (negation event, stuck head) and per (aggregate
+  group, stuck head); indexed by predicate and partition, negligible.
+- =deny(two_zones)= is reported undetermined instead of silently absent.
+
+** DR-9 (revised) Ranks: the winning rank decides; shadowed disagreements are warnings
+
+*Context.* §1.3.
+
+*Decision.* =@default= < normal < =@override=, Flat only, constraints
+rank-blind, no numbers, no =seal= (unchanged). Collapse: let =r= be the
+highest non-empty rank. If =r='s element is =Conflict= the cell is
+=Conflict=; if =Stuck=, =Stuck=; if =Val(v)=, every constraint is checked
+against =v= as in E (=False= conflict, =Unknown= deferred, secret: see
+DR-13). Every =Stuck= or =Conflict= strictly below =r= is collected as
+=shadowed= and derives =warn(attr_shadowed, "two @default contributions
+disagree and are overridden", {type, addr, path, owners})=. It never
+blocks and never stucks.
+
+#+begin_src rust
+pub fn collapse_shadow_aware(&self) -> Collapsed2 {
+    let Some(top) = self.ranks.iter().rposition(|e| !matches!(e, Elem::Bottom)) else { return Collapsed2::Bottom };
+    let shadowed = self.ranks[..top].iter().enumerate().filter_map(|(i, e)| match e {
+        Elem::Stuck { nulls, .. }    => Some(Shadowed::Stuck { rank: rank_of(i), nulls: nulls.clone() }),
+        Elem::Conflict { reason, .. } => Some(Shadowed::Conflict { rank: rank_of(i), reason: reason.clone() }),
+        _ => None,
+    }).collect();
+    match &self.ranks[top] {
+        Elem::Conflict { .. } => Collapsed2::Conflict { .. shadowed },
+        Elem::Stuck { .. }    => Collapsed2::Stuck { .. shadowed },
+        Elem::Val(v, w)       => /* E's constraint check on v */ Collapsed2::Val { .. deferred, shadowed },
+        Elem::Bottom          => unreachable!(),
+    }
+}
+#+end_src
+
+*Consequences.*
+- A program can set a value without first reconciling every default
+  beneath it. Module authors' defaults may disagree without breaking the
+  programs that override them; the warning tells them.
+- Order independence: tested under every permutation of a four-element
+  cell (three ranks plus a constraint).
+- E's =collapse= stays in the prototype for comparison; the engine uses
+  =collapse_shadow_aware=.
+
+** DR-11 (revised) Round-0 resolution and computed paths in =assemble=
+
+*Context.* F5, F6.
+
+*Decision.* As E, with two clauses made explicit: =desired= is defined after
+=resolve/2= has run against refresh through =identity/3= (round 0), and
+=adopt= writes =identity/3= before round 0; =assemble(T, A)= excludes
+schema-computed paths and =ignore_changes= paths. An update whose desired
+document carries an *open* null against a world constant is pending; a
+*fresh* null against a world constant after round 0 means the identity
+mapping is stale (the world's id changed) and is reported as drift, not
+as an update.
+
+*Consequences.* Z-set plan equals the current planner's output on both
+fixtures (§4.3); the "10 spurious updates" failure mode is named.
+
+** DR-13 (revised) Refinements on sensitive paths
+
+*Context.* F7.
+
+*Decision.* A checkable refinement on a path whose cell holds a
+secret-class value is neither checked by the engine nor deferred in the
+cell. It is =deferred_to_provider=: it does not block definiteness, it is
+serialized into the =Apply= request as an =assertions= list, and the
+provider evaluates it after materializing the secret and fails the action
+if it does not hold. A provider whose =Schema= does not declare
+=checks_refinements= makes such a refinement a compile error (E0306). Every
+other refinement is as E's DR-13. =resolve= refuses a secret label.
+
+*Consequences.* DR-18's =Apply= gains an =assertions= field; the fake
+provider implements it; =Ranked::resolve= gains a guard; a refined secret
+attribute can be applied.
+
+** DR-1 (consequences added) Set normalization; ordered lists as Keyed
+
+*Context.* F8, F9.
+
+*Decision.* Unchanged. Two consequences added: =⊥ ⊔ e = normalize(e)= for
+every lattice (no fast path); a list attribute declared =ordered_by = K=
+is =Keyed([K], L)= emitted in key order, so =collect_ordered(K, X)=
+contributions from several authors assemble and a colliding key with a
+different value is =⊤=. Positional append with no key stays a =Flat(List)=
+and two authors conflict.
+
+** DR-18 (one addition) =Apply= carries =assertions=
+
+See DR-13.
+
+* 4. Results
+
+** 4.1 The five example programs
+
+=P= = partition pass (DR-12 as written / revised, strata under revised);
+=S= = stuck simulation with E's null classes, per-key Rule 3, =collect=
+forwarding nulls; =Z= = Z-set plan vs current planner. Inputs: =--set
+env=prod= where the program has environments.
+
+| Program                     | P as written | P revised | strata | S stuck | S definite | S pending | S groups | S undetermined | Z                        |
+|-----------------------------+--------------+-----------+--------+---------+------------+-----------+----------+----------------+--------------------------|
+| dform.df (+modules,+policy) | REJECTED     | ok        |     11 |       0 |         14 |         0 |        0 |              0 | 14 creates / 11 updates = planner |
+| dform-advanced.df           | ok           | ok        |      6 |       0 |         20 |         0 |        0 |              0 | not run (no fixture)     |
+| pngu.df (working copy)      | ok           | ok        |      4 |       0 |          6 |         0 |        0 |              0 | not run                  |
+| examples/decl_demo.df       | ok           | ok        |      2 |       0 |          0 |         0 |        0 |              0 | n/a (no resources)       |
+| examples/adopt_demo.df      | ok           | ok        |      8 |       0 |          0 |         0 |        0 |              0 | n/a (F13: zero resources)|
+
+The =dform.df= rejection is the cycle quoted in §1.1. The 11 strata under
+the revision, abbreviated to the interesting nodes:
+
+#+begin_example
+stratum 0: (arg, settings, *)  (arg, iam.*, *)  (arg, net.vpc_peering, *)  component_scope  data  has_env  input  vpc_peer_inst  zone_index
+stratum 1: (attr, settings, *)  (attr, iam.*, *)  ...
+stratum 2: (arg, net.vpc, cidr|id|tags)  (arg, compute.vm, *)  (arg, k8s.nodepool, *)  (arg, iam.policy, statements)  __lc_3  param  (want, net.vpc)  (want, compute.vm)  (want, k8s.nodepool)
+stratum 3: (attr, net.vpc, cidr|id)  ...
+stratum 4: (arg, net.subnet, *)  (want, net.subnet)                 <- reads (attr, net.vpc, cidr)
+stratum 5: (attr, net.subnet, *)
+stratum 6: __lc_1  __lc_2  (arg, output, private_subnet_ids)        <- collect over (want, net.subnet), (attr, net.subnet, visibility)
+stratum 7: (attr, output, private_subnet_ids)
+stratum 8: (arg, *, tags)  (arg, db.postgres, *)  (arg, k8s.cluster, *)  (want, db.postgres)  (want, k8s.cluster)   <- read the output
+stratum 9: (attr, *, tags)  (attr, db.postgres, *)  (attr, k8s.cluster, *)
+stratum 10: deny
+#+end_example
+
+That is the dependency order a human would draw: vpc, subnets, the
+subnet-id output, then the database and cluster that consume it, then the
+tag policy over everything, then policy. Under E's single =want= node the
+same program is a cycle.
+
+The simulation of =dform.df= confirms E's §7.1 claim: every =ref= in the
+repo is to =id=, fresh, forwarded; nothing is stuck; fourteen definite
+deformations each carrying its dependencies' fresh nulls, e.g.
+
+#+begin_example
+ + net.vpc_peering peer-main-peer   carries ?net.vpc/network.main::vpc#id ?net.vpc/network.peer::vpc#id ?net.vpc_peering/peer-main-peer#id
+ + db.postgres database.main::db    carries ?db.postgres/database.main::db#endpoint ?db.postgres/database.main::db#id
+                                            ?net.subnet/network.main::private-us-test-1a#id ?net.subnet/network.main::private-us-test-1b#id
+#+end_example
+
+(The trailing self-owned nulls are F5.)
+
+** 4.2 The adversarial programs
+
+All in =examples/adversarial/=. "E predicts" is what E's text says should
+happen; "F observed" is what the code did under the revised rules.
+
+| # | File                                    | Attacks                                              | E predicts                         | F observed                                                                 |
+|---+-----------------------------------------+------------------------------------------------------+------------------------------------+----------------------------------------------------------------------------|
+| 1 | (lattice test =adv1=)                   | same-rank Stuck at a losing rank                     | E: Stuck; E §10: "will wait"       | E =collapse=: Stuck at Default. F =collapse_shadow_aware=: Val at Normal, shadowed Stuck warned. Order-independent. |
+| 2 | =adv2_rule3_coarse.df=                  | Rule 3 coarseness                                    | coarse: undetermined; per-key: not | =not want(k8s.deployment, pngu)=: coarse UNDET / per-key ok. =ns_count= over =want(k8s.namespace)=: coarse UNDET / per-key ok. =not want(gke_nodepool, "np-us-east1-b")=: UNDET / UNDET (correct). |
+| 3 | =adv3_pack_reads_other_path.df=         | pack reads =attr(iam.policy, .name)=, writes =.statements= | compiles (A's baseline example) | STRATIFIED, 4 strata; =(arg, iam.policy, statements)= above =(attr, iam.policy, name)=. |
+| 3b| =adv3b_pack_reads_same_path.df=         | pack reads the path it writes                        | rejected                           | REJECTED: scc ={(arg, iam.policy, statements), (attr, iam.policy, statements)}=, rule text printed. |
+| 4 | =adv4_variable_path_writer.df=          | =(arg, *, *)= writer that reads =attr(_, cidr)=      | rejected ("reads no attribute")    | REJECTED: scc ={arg, attr, (attr, net.vpc, cidr)}=.                        |
+| 4b| =adv4b_variable_path_writer_no_read.df= | =(arg, *, *)= writer that reads nothing              | compiles, above everything         | STRATIFIED, 3 strata; =arg= (=*,*=) at 0, every =attr= at 1, =deny= at 2.  |
+| 5 | (lattice test =adv5=)                   | two modules appending to an ordered list             | "not a lattice"                    | =Flat(List)=: Conflict. =Keyed([prio])=: assembles in order; same prio different value: Conflict. Plus F8 (Set not idempotent on one contribution). |
+| 6 | (lattice test =adv6=)                   | refinement on a secret-only cell                     | deferred to provider               | =Val { deferred: [IsStr] }= forever; =resolve= would materialize the secret. F7. |
+| 7 | =adv7_mutual_recursion_attr.df=         | A.peer ← B.name, B.name ← A.peer                     | rejected                           | REJECTED: 4-node scc, both rules named.                                    |
+| 7b| =adv7b_mutual_via_different_paths.df=   | A.y ← B.x, B.x ← A.z (separate rules)                | compiles under (type, path)        | STRATIFIED, 6 strata. Putting the read in A's block instead closes the cycle (F10). |
+| 9 | =adv9_default_tag_unless_present.df=    | D's "default tag unless present" against =attr=      | rejected; use =@default=           | REJECTED: scc ={(arg, *, tags), (attr, *, tags), (attr, net.vpc, tags)}= through =not=. |
+| G | =gke_two_phase.df=                      | C's two-phase stack, E §7.4                          | 3 definite, 3 pending, 1 group, 1 undetermined | per-key: exactly that. coarse: 0 definite groups, 2 undetermined. |
+
+** 4.3 The Z-set plan
+
+=examples/world/= holds the =.dform= fixtures (14 resources, staging values).
+=zset::deformation= with round-0 resolution versus =FakeCloud::plan= on the
+same desired set:
+
+| World                | Z-set                         | planner                      |
+|----------------------+-------------------------------+------------------------------|
+| empty                | 14 create, 0 pending          | 14 create                    |
+| fixture, env=prod    | 11 update, 3 undeformed       | 11 update (same 11 addresses)|
+| fixture, no round 0  | 10 update, 4 undeformed       | (F6: spurious)               |
+
+The eleven updated addresses match the planner's set exactly (asserted).
+On the empty world ten of the fourteen creates carry fresh nulls; all are
+definite (E §2.8: "a create whose Doc carries a null is still a create").
+
+** 4.4 The GKE plan, both Rule 3 readings, verbatim
+
+#+begin_example
+   stuck instances: 6
+     - rule #30 head want("gke_nodepool", _) stuck on ?gke_cluster/pngu#zones  [member/2 over a null list]
+     - rule #31 head arg("gke_nodepool", _, "cluster", _) ... #32 "zone" ... #33 "min" ... #34 "max"   (same)
+     - rule #35 head zone_count(_) stuck on ?gke_cluster/pngu#zones  [member/2 over a null list]
+   sections under coarse Rule 3: blocking = {?gke_cluster/pngu#zones}
+     definite (3): gke_cluster pngu, google_compute_address static_ip, google_compute_subnetwork gke_subnet
+     pending (3): k8s.deployment api, k8s.namespace pngu, k8s.secret db_credentials   (provider kubernetes carries phase-1 nulls)
+       ? want("gke_nodepool", _)  x unknown, on ?gke_cluster/pngu#zones
+     undetermined (2):
+       ? deny "cluster must be in at least two zones"      (reads stuck aggregate zone_count)
+       ? deny "cluster must not be deletable"              (SPURIOUS: an unrelated arg rule is stuck)
+     [and every attr group UNDET, so under E's desired/3 the definite section is empty]
+   sections under per-key Rule 3: blocking = {?gke_cluster/pngu#zones}
+     definite (3): same three
+     pending (3): same three, plus the nodepool group
+     undetermined (1):
+       ? deny "cluster must be in at least two zones"
+#+end_example
+
+The per-key output is E §7.4's plan. The coarse output is not.
+
+* 5. What remains unrun
+
+Honest list, in the order it matters.
+
+1. *E's syntax.* Nothing here parses =@default=, =.path= literals,
+   =module=/=instance=, =contributes=, =type= blocks. Ranks were exercised
+   only at the lattice level; the partition pass takes the grant from the
+   head's constants, not from a =contributes= line, so grant checking is
+   unrun.
+2. *Path normalization with a real schema.* F normalizes a resource path to
+   its first segment (the fake provider's attributes are top-level) and a
+   settings/output key to itself. A's "nearest declared attribute" with
+   nested keyed lists (E §10 via A's candid point 2) is unrun.
+3. *Resolution as an engine step.* Rule 4 ran as round 0 in the Z-set
+   (substitution into documents) and as =Ranked::resolve= on cells. The
+   engine never re-derived after a boundary; =stuck/3= was recorded, not
+   re-run. The claim in §4.2 of E that the definite fragment outside
+   =touches(f) ∋ ν= is unchanged across a boundary is still a proof on
+   paper.
+4. *Retraction.* No cell went =⊤= at a boundary in any run; E's v1
+   re-derivation of downstream strata is unrun; so is anything in
+   =circuit.rs= against a real program (the circuit is still a pure
+   function with four tests).
+5. *=Map= and =Keyed= partial values while a leaf is stuck.* Unchanged from
+   E.
+6. *Externs.* No program in the repo has one; the extern edge polarity in
+   the partition pass is implemented and never exercised. =provider_config=
+   depending on an extern of its own provider is unrun.
+7. *The static secret pass.* E0301-E0305 are text. F7 is the only secret
+   result and it is at the lattice level.
+8. *Performance.* The partition pass is O(defs × body literals) with a
+   linear scan for unification; fine at 150 nodes, unmeasured at 10^4.
+   The simulation adds a =BTreeMap= clone per stuck record.
+9. *=allocate=, =moved=, DBSP, clingo.* As in E.
+10. *The E-syntax rewrites of the five programs (E §7).* F's argument that
+    E §7.1 has the same =want= cycle is by inspection of the lowering, not
+    by running it.
+
+* 6. Recommendation
+
+E should become the direction, with the three flagged rules replaced by
+the versions in §3 and the DR-11/DR-13/DR-1 wording fixes applied. The
+architecture survived the attack: the lattices, the null classes, the
+stuck/undetermined plan sections, the Z-set plan and the partitioned
+stratifier all did what E said once the rules were corrected, and the
+corrections are small (one more partitioned predicate; one unification
+per negation; one =rposition=). What did not survive is E's own
+prioritization of its risks: item 7 ("nothing in §2.6-2.8 has run") was
+the real one, and the first run found that the flagship example is
+rejected and the flagship plan has no definite section. Both would have
+been found by any implementer in their first week and both would have
+been blamed on the implementer.
+
+The first implementation milestone should therefore *not* be E §9's item
+1 (editions) or item 2 (the parser). Those are prerequisites for the
+diagnostics, not for the semantics, and the semantics are what remain
+unproven. The first milestone is:
+
+*M1: the revised §2.6-§2.8 on the existing parser, as one evaluator.*
+Concretely, in =src/=:
+
+- =partition.rs= promoted from a test pass to *the* stratifier: replace
+  =engine::compute_strata= with the partition graph (revised DR-12), the
+  prelude expanded per schema row, the aggregate edge from every =arg=
+  partition to its =attr= partition, and the cycle diagnostic (rule text
+  now, spans when the parser lands).
+- =lattice.rs='s =Ranked= as the =attr= aggregate inside =eval=: delete
+  =apply_functional_pred=, =apply_setting_add=, =enforce_uniques=,
+  =upsert_agg=, and =ir.rs='s =insert_keypath=/=merge_keypath=; =arg=/=arg_add=/
+  =setting=/=setting_add=/=output= are contributions; =attr=/=attr_conflict=/
+  =attr_stuck= are the aggregate's outputs; readers of =arg= in bodies read
+  =attr=. Fix F8 on the way.
+- The =sim.rs= hooks promoted from a thread-local to the evaluator's
+  ordinary behaviour: =ref= is a null, Rule 2's content positions record
+  =stuck/3=, Rule 3 per key with the aggregate-reader clause, sections
+  computed from =stuck/3= and the =attr= outputs.
+- =zset.rs= replacing =FakeCloud::plan_with_state='s diff: round-0
+  resolution through =state.json=, =assemble= excluding computed paths,
+  the Z-set difference, and the fake provider returning computed values
+  only from =Apply= so that a fresh stack actually has nulls.
+- Golden tests: the five programs' strata, sections and deformations as
+  snapshots (F's printed reports are the first version of them), the ten
+  adversarial programs with their verdicts, and =gke_two_phase.df= applied
+  in two phases with the resolution loop (the one thing on the unrun list
+  that M1 must close).
+
+That is four to six weeks for one person and it turns every claim in E
+§2.6-§2.8 into a test before a single line of the new grammar exists. The
+parser (E §9 item 2) is M2; it changes spellings, not semantics, and it
+should land on an evaluator whose semantics are already pinned. Editions
+(E §9 item 1) go with M2, since the first breaking change is the grammar.
+
+One more recommendation, on process. E's candid section listed seven
+places it was likely wrong and ranked "prototype scope" last. F found the
+two most consequential defects (F1, F2) in under an hour of running the
+partition graph and the null simulation over the programs E itself chose
+as its examples. The next proposal in this series should run its examples
+before it writes its decision records, and the coordinator should treat "it
+has not run" as the highest-ranked risk by default.
+
+* Appendix A. How to reproduce
+
+#+begin_src sh
+cd /tmp/claude-1000/-home-simon-src-scraps-dform/99c49424-d8f2-45f7-abcc-f74fabb80e25/scratchpad/wt-F
+cargo test --lib                                                    # 30 passed
+cargo test --lib partition -- --nocapture --test-threads=1         # §4.1 / §4.2 partition reports
+cargo test --lib sim::     -- --nocapture --test-threads=1         # §4.1 / §4.4 stuck simulations
+cargo test --lib zset      -- --nocapture --test-threads=1         # §4.3
+cargo test --lib lattice::f_tests -- --nocapture                   # adv1, adv5, adv6, order independence
+#+end_src
+
+* Appendix B. The engine hooks, for the reader who wants to see Rule 2 in code
+
+Every hook is behind =crate::sim::active()= and is a no-op otherwise; the
+16 E tests and the CLI are unchanged.
+
+#+begin_src rust
+// engine.rs, eval_func: Rule 1 (ref is the null) and Rule 2 (builtin args are content)
+if crate::sim::active() {
+    match name {
+        "ref" if args.len() == 3 => {
+            let t = eval_term(&args[0], state)?.as_str()?.to_string();
+            let n = eval_term(&args[1], state)?;
+            if crate::sim::has_null(&n) {                       // an address argument is a content position
+                crate::sim::record_stuck(state, crate::lattice::nulls_in(&n), "ref address carries a null");
+                return None;
+            }
+            let a = eval_term(&args[2], state)?.as_str()?.to_string();
+            if let Some(v) = crate::sim::null_for(&t, &value_to_string(&n), &a) { return Some(v); }
+            // not computed: a configured attribute; E rewrites it to an attr join
+        }
+        "cloud_ref" | "gref" | "collect" | "collect_set" | "collect_list" | "count" => {}
+        _ => {
+            let nulls: BTreeSet<String> = args.iter().filter_map(|a| eval_term(a, state)).flat_map(|v| crate::lattice::nulls_in(&v)).collect();
+            if !nulls.is_empty() {
+                crate::sim::record_stuck(state, nulls, if name == "scoped" { "resource address carries a null" } else { "builtin over a null" });
+                return None;
+            }
+        }
+    }
+}
+
+// engine.rs, unification: eq3 decides; Unknown records and fails the match
+fn sim_eq(a: &Value, b: &Value, out: &HashMap<String, Value>) -> bool {
+    if !crate::sim::active() { return a == b; }
+    match crate::lattice::eq3(a, b) {
+        Truth::True => true,
+        Truth::False => false,
+        Truth::Unknown => { crate::sim::record_stuck(out, nulls_in(a) ∪ nulls_in(b), "unification against an open/secret null"); false }
+    }
+}
+
+// engine.rs, negation: open/secret null in the pattern is stuck; fresh is decided by label
+if !open.is_empty() {
+    crate::sim::record_stuck(s, open, "negation pattern holds an open/secret null");
+    continue;
+}
+crate::sim::record_neg(&grounded);   // for Rule 3, post hoc
+#+end_src
+
+And the per-key check, which is the whole of the refinement E sketched:
+
+#+begin_src rust
+pub fn stuck_head_pattern(s: &Stuck) -> Atom {        // bound key columns instantiated, else wildcard
+    Atom { pred: s.head.pred.clone(), args: s.head.args.iter().map(|t| inst(t, &s.bindings)).collect(), record: None }
+}
+pub fn pattern_unifies(pat: &Atom, ground: &Atom) -> bool {
+    pat.pred == ground.pred && pat.args.iter().zip(&ground.args).all(|(p, g)| match (p, g) {
+        (Term::Wildcard, _) => true,
+        (Term::Val(a), Term::Val(b)) => eq3(a, b) != Truth::False,   // Unknown counts as unifying: conservative
+        _ => true,
+    })
+}
+// a negation event is undetermined iff some stuck head pattern unifies with its grounded atom
+let perkey = stuck_pats.iter().any(|p| pattern_unifies(p, &n.grounded));
+#+end_src
+
+* Appendix C. The adversarial programs, verbatim
+
+The current syntax, so they lower today. Each file's header comment says
+what it attacks and what E predicts.
+
+#+begin_src prolog
+# adv2_rule3_coarse.df
+resource gke_cluster pngu { name = "pngu-gke" }.
+resource gke_nodepool Np {
+  cluster = ref(gke_cluster, pngu, id), zone = Z
+} :- arg(gke_cluster, pngu, zones, Zs), member(Zs, Z), Np = format("np-%s", Z).
+resource k8s.namespace pngu { name = "pngu" }.
+# Unrelated negation over want (different type): decidable now.
+deny("namespace without deployment", { ns: N }) :- want(k8s.namespace, N), not want(k8s.deployment, N).
+# Unrelated aggregate over want (different type): decidable now.
+ns_count(collect_set(N)) :- want(k8s.namespace, N).
+deny("need the pngu namespace") :- ns_count(L), not member(L, pngu).
+# Related negation (same type as the stuck head): correctly undetermined.
+deny("no nodepool in zone b") :- want(gke_cluster, pngu), not want(gke_nodepool, "np-us-east1-b").
+#+end_src
+
+#+begin_src prolog
+# adv3_pack_reads_other_path.df  (A's baseline example; E says it compiles)
+resource iam.policy app_policy { name = app, statements = [ { action: db.connect, resource: "db" } ] }.
+policy_pack p {
+  merge_rule(iam.policy, statements, set).
+  arg_add(iam.policy, P, "statements", [ { action: org.read, resource: "org" } ]) :-
+    want(iam.policy, P), arg(iam.policy, P, name, app).
+}.
+apply_policy p.
+
+# adv3b_pack_reads_same_path.df  (must be rejected)
+  arg_add(iam.policy, P, "statements", [ { action: org.read, resource: "org" } ]) :-
+    want(iam.policy, P), arg(iam.policy, P, statements, S), not member(S, { action: org.read, resource: "org" }).
+#+end_src
+
+#+begin_src prolog
+# adv4_variable_path_writer.df  (reads an attr: rejected)
+override(net.vpc, main, tags, { team: x }).
+resource net.vpc main { cidr = inet("10.0.0.0/16"), tags = { env: dev } }.
+arg(T, N, P, V) :- override(T, N, P, V), want(T, N), arg(T, N, cidr, _C).
+
+# adv4b_variable_path_writer_no_read.df  (reads nothing: top stratum)
+arg(T, N, P, V) :- override(T, N, P, V), want(T, N).
+deny("vpc without cidr", { vpc: N }) :- want(net.vpc, N), not arg(net.vpc, N, cidr, inet("10.0.0.0/16")).
+#+end_src
+
+#+begin_src prolog
+# adv7_mutual_recursion_attr.df  (rejected)
+resource net.a x { peer = P } :- arg(net.b, y, name, P).
+resource net.b y { name = Q } :- arg(net.a, x, peer, Q).
+
+# adv7b_mutual_via_different_paths.df  (stratifies, 6 strata)
+resource net.a x { z = 1 }.
+arg(net.a, x, y, P) :- want(net.a, x), arg(net.b, y, x, P).
+resource net.b y { x = Q } :- arg(net.a, x, z, Q).
+
+# adv9_default_tag_unless_present.df  (D's idiom; rejected; E's answer is @default)
+resource net.vpc main { cidr = inet("10.0.0.0/16"), tags = { env: dev } }.
+arg_add(T, N, "tags", { team: platform }) :- want(T, N), not arg(T, N, tags, { team: platform }).
+#+end_src
+
+#+begin_src prolog
+# gke_two_phase.df  (E §7.4 in the current syntax; schema::gke() gives the classes)
+provider_config(kubernetes, {
+  host: ref(gke_cluster, pngu, endpoint), ca: ref(gke_cluster, pngu, ca_certificate),
+  token: ref(google.client_config, current, access_token) }).
+resource k8s.namespace pngu { name = "pngu" }.
+resource k8s.deployment api { namespace = Ns, image = "gcr.io/renfry/api:1.42", replicas = 3 } :- arg(k8s.namespace, pngu, name, Ns).
+resource k8s.secret db_credentials { namespace = Ns, data = { password: ref(google.secret_manager_secret_version, db_pw, secret_data) } } :- arg(k8s.namespace, pngu, name, Ns).
+resource gke_nodepool Np { cluster = ref(gke_cluster, pngu, id), zone = Z, min = 1, max = 3 } :-
+  arg(gke_cluster, pngu, zones, Zs), member(Zs, Z), Np = format("np-%s", Z).
+zone_count(count(Z)) :- arg(gke_cluster, pngu, zones, Zs), member(Zs, Z).
+deny("cluster must be in at least two zones", { cluster: pngu }) :- want(gke_cluster, pngu), zone_count(N), N < 2.
+deny("cluster must not be deletable", { cluster: C }) :- want(gke_cluster, C), not arg(gke_cluster, C, deletion_protection, true).
+#+end_src
+
+The E-syntax versions of adv1 and adv6, which no parser in the repo
+accepts yet and which the lattice tests stand in for:
+
+#+begin_src prolog
+# adv1: same-rank Stuck at a losing rank
+module cp { input cidr: inet = ref(alloc.pool, cp, .next) @default. }.     # allocator's open null, @default
+settings E @default { cp.cidr = inet("10.0.0.0/28") } :- env_name(E).       # a second @default that might disagree
+resource gke.cluster pngu { master_control_plane_cidr = inet("172.16.3.96/28") }.   # normal: wins
+# E: the cluster is Stuck on ?alloc.pool/cp#next. F: definite, warn(attr_shadowed).
+
+# adv6: a refinement on a cell whose only contribution is a secret null
+type k8s.secret { data.password: secret(string) where len(data.password) >= 16 }.
+resource k8s.secret db { data = { password: ref(google.secret_manager_secret_version, db_pw, .secret_data) } }.
+# E: deferred to the provider, never definite, never applied. F: E0306 unless the provider checks refinements; then an Apply assertion.
+#+end_src
