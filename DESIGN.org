@@ -1,0 +1,886 @@
+#+TITLE: dform design board
+#+TODO: TODO NEXT DECIDE WIP | DONE WONTFIX
+#+PRIORITIES: A C B
+#+STARTUP: overview
+
+Ticket board for dform. Each ticket is =** STATE [#P] Title=.
+States: DECIDE = needs a design decision before work starts.
+Priority A = blocks any real-world use, B = needed for team scale, C = polish.
+
+Origin: critical review of the prototype, 2026-09-27. Findings verified against
+=src/= and by running probe programs. Lines cite the code as of commit 3e2cf48.
+
+* Vocabulary
+The name is Terraform minus terra plus Datalog, and it reads as "deform" aloud.
+Use the pun consistently in CLI output, docs, and diagnostics.
+
+| Term        | Meaning                                                          |
+|-------------+------------------------------------------------------------------|
+| deformation | a plan: the set of actions that reshape a stack toward intent     |
+| undeformed  | a stack whose plan is empty; the world already matches intent     |
+| deform      | apply a deformation (=dform apply=; =dform deform= as an alias)   |
+| =.df=       | a dform source file; Datalog facts, or the differential           |
+| intent      | the derived =want= / =attr= relations; what the program asks for  |
+| world       | refreshed provider state; what exists                             |
+| drift       | a deformation caused by the world moving, not the program         |
+
+Example CLI lines:
+- =plan: 3 deformations (2 create, 1 update)=
+- =stack renfry.prod is undeformed=
+- =drift: 2 deformations from world changes since last apply=
+
+** TODO [#C] Use the vocabulary in CLI, docs, and diagnostics
+Rename plan summary and =apply= messages; add =deform= alias; write the
+glossary into =docs/semantics.md=.
+
+* Design tensions
+Decisions that shape everything else. Resolve these first.
+
+** DECIDE [#A] Attribute assembly: lattice merge vs fixpoint side effects
+Infra needs functional dependencies (one value per attribute). Pure Datalog has
+none, so the prototype bolts on four separate non-monotonic mechanisms:
+- functional-predicate rewrite for =arg= and =output= (=engine.rs:96-101=, =apply_functional_pred=)
+- =unique= declarations (=enforce_uniques=, checked only at the end)
+- =merge_rule= + =arg_add= (=merge.rs=, applied in =ir.rs= after eval)
+- =setting_add= mutation inside the fixpoint loop (=engine.rs:113=, =apply_setting_add=)
+Each has its own conflict semantics and timing. CUE solves the same problem
+with one value lattice.
+*** Options
+1. Keep Datalog pure for relations. Attribute assembly becomes a separate
+   compile step after the fixpoint: collect all =arg=/=arg_add= facts, merge by
+   one lattice law, conflicts are errors with provenance.
+2. Make attributes a lattice type inside the engine (Flix / Bloom style
+   monotone aggregation).
+3. Attributes as a lattice aggregate: a derived =attr(Type, Name, Path, Value)=
+   relation computed from =arg= / =arg_add= contributions by one merge law.
+   Consumers are pushed to a higher stratum by the stratified-aggregation rule.
+*** Recommendation
+Option 3. Option 1 as first written fails because rules read attributes in
+bodies today (=modules/network.df= joins on the VPC cidr through =arg=;
+=policies/baseline.df= negates over it). Post-fixpoint assembly would show those
+rules raw contributions, not merged values. Option 3 unifies this ticket with
+the aggregate-stratification ticket into one mechanism, removes all four ad hoc
+paths, and keeps the engine a textbook stratified Datalog with a lattice
+aggregate, which is CUE's footing plus closures and policy.
+*** CRDT framing
+A join-semilattice merge is commutative, associative, idempotent: contributions
+from resources, modules, and policy packs commute regardless of load order or
+stratum timing, and re-evaluation is idempotent. Conflict is the lattice top,
+as in CUE. Precedent: Bloom^L (Datalog over lattices), Flix, LVars, CALM.
+Production precedent: Kubernetes server-side apply, field-wise merge with
+recorded field managers and conflicts naming both writers.
+*** Acceptance
+- =apply_functional_pred= and =apply_setting_add= deleted from the fixpoint loop
+- merge is order-independent: shuffling statement order yields identical =attr/4=
+- one merge law documented in =docs/=; =merge_rule= becomes an annotation on it
+- conflict error names both contributing rules with file:line
+
+** DECIDE [#A] Unknown values: what may a rule observe at plan time?
+Real providers produce ids, arns, endpoints only at apply. The fake backend
+hides this by synthesizing computed values from strings (=fakecloud.rs:498=
+=computed_ref=), so every value is known at plan time. Datalog has no
+"known after apply": an unknown cannot unify, be negated, or be aggregated.
+*** Proposed rule
+Cloud outputs enter the program only as discovery facts from a previous apply
+(=cloud_attr= / =cloud_computed= / =stack_output=). =ref(T, N, Attr)= is an opaque
+token: legal in attribute values, illegal in rule bodies, comparisons, and
+negation. Compiler rejects violations using the provider schema (see schema ticket).
+*** Consequence
+Multi-phase apply (create VPC, learn id, then create subnets) is handled by the
+provider through the dependency order, never by re-running the fixpoint.
+Document this explicitly; it is the same restriction Terraform has on
+=count= / =for_each=.
+
+** DECIDE [#B] Open world vs encapsulation
+Every predicate is global. A policy pack can =arg_add= to any resource and that
+is the feature (=policies/baseline.df:8=). Costs:
+- two modules defining =zone_index/2= silently union
+- a misspelled predicate is an empty relation, no error (verified: =envv(prod)= yields 0 resources)
+- nothing says where an attribute came from
+Aspect-oriented config survives at team scale only with provenance tooling and
+some visibility control. See module interfaces and provenance tickets.
+
+* Engine correctness
+Bugs in =src/engine.rs=. These are not performance items.
+
+** TODO [#A] Aggregates are not stratified
+=compute_strata= treats a rule whose head contains =collect*= as an ordinary
+positive edge. A consumer in the same stratum observes a partial aggregate
+mid-fixpoint and the stale derivation is never retracted.
+*** Repro
+#+begin_src prolog
+n(1).
+n(2) :- n(1).
+n(3) :- n(2).
+all(collect_set(X)) :- n(X).
+snap(L) :- all(L).
+#+end_src
+=dform query snap= prints three facts; correct output is one.
+The =output(private_subnet_ids, [...])= pattern in =modules/network.df= has this
+shape and only works because =arg= gets overwritten by the functional rewrite.
+*** Fix
+Aggregate head predicates get a negative edge to every body predicate, so
+consumers land in a strictly higher stratum. Recursion through an aggregate
+becomes a compile error. Precedent: standard stratified aggregation (Soufflé,
+LogicBlox, Mumick & Pirahesh).
+
+** TODO [#A] Unknown predicates are silently empty
+No check that a body predicate is defined by some fact, rule, builtin, or
+provider. Typos produce empty relations and zero resources with no diagnostic.
+*** Fix
+After lowering, error on any body predicate with no definition. Allow an
+explicit =extern pred/N.= for discovery facts a provider may or may not supply.
+
+** TODO [#A] Negation over mutated facts is unsound
+=setting= is mutated by =apply_setting_add= inside the loop, but stratification
+only sees rule-defined predicates. =not setting(prod, audit.enabled, true)=
+(=policies/baseline.df:24=) can be evaluated before the merged value exists.
+Goes away with the lattice decision; until then, run =setting_add= merging
+before stratum 0.
+
+** TODO [#B] Functional predicate overwrite hides ordering bugs
+=apply_functional_pred= silently replaces an existing =arg= value when a second
+rule fires in a later iteration. Conflicts are only caught when both rules fire
+in the same iteration. Goes away with the lattice decision.
+
+** TODO [#B] Ordered lists cannot be derived
+=collect_set=, =collect_list= (=engine.rs:359=) and =MergeOp::Set= all sort.
+Listener rules, firewall priorities, container args are ordered. Symptom: the
+prod plan for =dform.df= shows every IAM statement shifting position.
+See ordered aggregation language ticket.
+
+** TODO [#B] Silent string-to-int coercion
+=as_i64= (=engine.rs:1317=) parses strings as integers, so ="10" + 1= works and
+="abc" + 1= silently fails the rule. Make coercion explicit (=to_int=).
+
+** TODO [#C] Fixpoint iteration cap is arbitrary
+=iterations > 200= bail (=engine.rs:70=). With semi-naive evaluation this cap is
+unnecessary; without it, a deep chain of 201 derived facts fails spuriously.
+
+* State, plan, apply
+=src/fakecloud.rs=, =src/state.rs=, =src/main.rs=.
+
+** TODO [#A] State is not scoped to a program
+All programs share =.dform/state.json=. Verified: =dform --file pngu.df plan=
+proposes deleting every resource created by =dform.df=. See stacks ticket.
+
+** TODO [#A] Apply is not crash-safe
+State and remote are written only after all actions succeed
+(=fakecloud.rs:459=, =main.rs:121=). A real provider failing mid-apply orphans
+every resource created before the failure.
+*** Fix
+Persist state after each action. Write plan file before apply; apply consumes
+the plan, not a fresh eval.
+
+** TODO [#A] Deletes are not ordered
+Creates are topo-sorted (=topo_sort=); deletes are emitted in map order
+(=fakecloud.rs:302=). Must be reverse dependency order, and must come after
+creates that replace them unless =create_before_destroy=.
+
+** TODO [#B] No refresh step
+Plan diffs against =remote.json= as last written by dform, never against the
+real world. Add a refresh phase that re-reads provider state before diffing.
+
+** TODO [#B] Rename is destroy and create
+Address is =(type, name)= and =name= embeds component scope via string prefix.
+Renaming a component instance replaces everything under it. See lifecycle ticket
+for =moved=.
+
+** DONE [#B] Provider trait is too thin
+Superseded by the plugin protocol ticket in "Providers and fact plugins".
+
+** TODO [#B] Plan output: set-aware diffs, grouping, machine-readable
+=main.rs:174= truncates at 40 changes and diffs lists positionally. Needs:
+set-typed attributes diffed as add/remove of elements (uses the schema), diffs
+grouped by resource with a summary, =--json= output, and secret values redacted.
+
+* Compiler and tooling
+
+** TODO [#A] No source locations
+AST carries no spans (=ast.rs=). Every error is "conflicting value for key
+'cidr'" with no file or line. Attach spans to =Atom=, =Term=, =Stmt= in the
+parser; thread them through all nine lowering passes.
+
+** TODO [#A] No tests
+Zero =#[test]= in =src/=. The lowering pipeline in =transform.rs:14-29= is nine
+order-dependent passes with nothing pinning behavior.
+*** Minimum
+- golden tests: each =.df= in =examples/= and the demos, eval output snapshot
+- unit tests for stratification, aggregates, merge, negation safety
+- the aggregate repro above as a regression test
+
+** TODO [#B] Provenance query (=why=)
+=dform why 'arg(net.vpc, "network.main::vpc", "tags.team", "platform")'=
+prints the derivation tree: rule, file:line, body bindings, recursively.
+Requires recording rule id and bindings with each derived fact.
+This is the feature Datalog can offer that HCL cannot, and the only way the
+open-world design survives at team scale.
+Precedent: Soufflé provenance mode (=explain=), LogicBlox, Datomic.
+
+** TODO [#B] Lowering pipeline is fragile
+Nine passes with implicit ordering (=transform.rs:lower=). Wildcards,
+comprehensions, and components interact in ways no test covers. Consider one
+scoped-resolution pass over a spanned AST instead of repeated whole-program
+rewrites.
+
+** TODO [#B] Core predicate list is hardcoded
+=loader.rs:is_core_pred= and =transform.rs:apply_decls= both enumerate built-in
+predicates. Providers and the stdlib cannot add any. Move to a registry that
+providers populate.
+
+** TODO [#C] Import is textual include
+=import "x" as ns= prefixes predicate names with a string. No versioning, no
+registry, no cycle diagnostics beyond dedup. Replace with the module system.
+
+** TODO [#C] Language server and formatter
+Once spans exist: diagnostics, go-to-rule, =dform fmt=.
+
+* Parser and grammar
+=src/dform.pest= is already a PEG (pest). The problems are the grammar itself
+and the untyped tree walker, not the choice of PEG.
+
+** TODO [#A] Symbol syntax swallows future operators
+=sym= and =pred= accept =.=, =-=, =/= inside bare tokens (=dform.pest:sym=), so
+=a-b= is a symbol not subtraction and =x.y= is a symbol not field access.
+Neither operator can ever be added without breaking every program.
+*** Fix
+Plain identifiers only. Dotted paths become an explicit path form (quoted, or a
+=path= rule that is only legal in keypath positions). Hyphenated cloud names
+become strings. Decide before any more =.df= files are written.
+
+** TODO [#A] Spans are discarded
+pest provides a span on every =Pair=; =parser.rs= drops them. Attach
+=(file, offset)= to =Atom=, =Term=, =Stmt= in the AST builder. Prerequisite for
+the source-location ticket and costs nothing with pest.
+
+** TODO [#B] Tree walker is positional and untested
+=parser.rs= is ~60 =into_inner().next().unwrap()= calls plus an =is_kw= filter to
+skip keyword tokens. Any grammar edit is a silent panic risk.
+*** Fix
+Typed builder per rule; grammar tests with pest's =parses_to!=; a corpus of
+positive and negative example files run by =cargo test=.
+
+** TODO [#B] Write the grammar spec
+=docs/grammar.md=: EBNF, operator precedence, definition of symbol vs variable
+vs string, comma rules in blocks, and the example corpus. This is the artifact
+that lets the parser be replaced without changing the language.
+Precedent: Soufflé keeps a Bison grammar as the reference and documents from it.
+
+** DECIDE [#B] Case-based variable syntax
+Uppercase initial = variable, lowercase = symbol (Prolog convention). Blocks
+resource types or keys with a leading capital. Alternatives: sigil for
+variables (=$X=), or =let=-style declared variables. Decide with the symbol
+ticket.
+
+** TODO [#A] Replace pest with a hand-written lexer and parser
+Decision: best in class from the start rather than a pest cleanup pass.
+pest error messages ("expected one of [...]") and lack of error recovery are
+not good enough for an editor, and the positional tree walker has to be
+rewritten anyway to attach spans.
+*** Design
+- =logos= lexer producing spanned tokens; keywords are token kinds, which
+  removes the =KW_TAIL= boundary hack
+- hand-written recursive descent for statements, Pratt parser for expressions
+- error recovery at statement boundaries (=.=) and block boundaries (=}=) so one
+  bad statement yields one diagnostic and parsing continues
+- diagnostics via =ariadne= or =codespan-reporting=: labeled spans, notes, hints
+- lossless syntax tree (=rowan= or similar) so =dform fmt= and the language
+  server share the parser
+*** Acceptance
+- every parse error names file:line:col and the expected token class
+- a file with three independent syntax errors reports all three
+- grammar spec (=docs/grammar.md=) and the example corpus are the test suite
+
+* Providers and fact plugins
+Decision: the engine links no provider. =dform= is a Datalog compiler plus a
+plan/apply orchestrator; everything cloud-specific lives behind one protocol.
+Today =main.rs:59= constructs =FakeCloud= directly and =provider.rs= is a
+whole-set plan/apply trait.
+
+** TODO [#A] Provider declaration, lockfile, and local cache
+#+begin_src prolog
+provider aws  { source = "registry.dform.dev/aws", version = ">=6.0" }.
+provider ldap { source = "./providers/ldap" }.
+#+end_src
+Engine resolves =source= to an executable, records the exact version and hash
+in =dform.lock=, and caches binaries under =~/.cache/dform/providers=.
+Precedent: Terraform required_providers + lockfile.
+
+** TODO [#A] Plugin protocol: out-of-process gRPC
+Provider is any executable. Engine spawns it, handshakes on a local socket,
+speaks versioned protobuf. Cloud SDKs live in Go and Python, so the boundary
+must be a process, not a library.
+*** Methods
+| Method    | Capability | Purpose                                              |
+|-----------+------------+------------------------------------------------------|
+| Handshake | both       | protocol version, capabilities                       |
+| Configure | both       | credentials, region, endpoint                        |
+| Schema    | both       | types, attributes, computed flags, extern predicates |
+| Query     | fact       | bound args in, facts out, streamed                   |
+| Read      | resource   | refresh one resource by remote id                    |
+| Plan      | resource   | prior + desired in, diff + requires_replace out      |
+| Apply     | resource   | execute one planned action, return new state         |
+| Import    | resource   | remote id in, address + attrs out                    |
+Plan and Apply are per resource. The core owns ordering, parallelism, state
+persistence, and crash safety. Supersedes the "provider trait is too thin" ticket.
+*** Non-goals
+- the protocol never carries rules, only facts and schema. Runtime-injected
+  rules would bypass stratification and provenance. Rules ship as source; see
+  the provider library ticket.
+- no dlopen / dynamic library providers
+*** Precedent
+Terraform plugin protocol v6 (shape only, not the SDK); Pulumi provider gRPC.
+
+** TODO [#A] Two plugin capabilities: fact provider and resource provider
+A fact provider implements Schema + Query only: git, LDAP, CMDB, spreadsheet,
+Kubernetes API, read-only cloud inventory. A resource provider adds Read, Plan,
+Apply, Import. A cloud provider implements both, and fact support lands first
+so discovery and adoption precede write support.
+
+** TODO [#A] Demand-driven extern predicates with binding patterns
+=discover()= (=fakecloud.rs:104=) dumps every fact up front. Fatal for a real
+account. Providers declare externs with binding patterns; the engine calls
+Query only when =+= arguments are ground.
+#+begin_src prolog
+extern aws.vpc(+id, -cidr, -tags).
+extern aws.vpcs_by_tag(+key, +value, -id).
+extern aws.all_vpcs(-id).      # enumeration is a separate, explicit predicate
+#+end_src
+*** Engine rules
+- externs are evaluated per stratum, batched, after their =+= inputs are ground
+- an extern under =not= is a compile error (unsafe for the same reason as
+  unbound negation)
+- an extern in a recursive cycle is a compile error
+- results are recorded in the plan file so apply sees exactly what plan saw
+*** Precedent
+External predicates with binding patterns: DLV, LogicBlox; Rego =http.send=
+in practice. Soufflé lacks this.
+
+** TODO [#B] Provider-shipped rule libraries as explicit modules
+A provider package may carry =.df= files alongside the binary. They are never
+auto-imported; the user opts in with a normal import and they compile through
+the same parser, stratifier, and provenance as user code.
+#+begin_src prolog
+provider aws { source = "registry.dform.dev/aws", version = ">=6.0" }.
+import provider aws "stdlib" as aws.
+import provider aws "policy/cis" as cis.
+apply_policy cis.benchmark.
+#+end_src
+*** Value
+- derived helpers over externs (=aws.subnets_in_vpc/2=) written once by the
+  provider author, hiding binding patterns
+- default policy packs versioned with the provider that knows the types
+- adoption and migration helpers mapping inventory into =adopt/3=
+- lifecycle defaults (=lifecycle(aws.kms_key, _, prevent_destroy)=) the user can
+  choose not to import
+*** Constraints
+- must be a module under the L4 interface ticket: no silent union with user
+  predicates, no attribute writes outside declared =contributes=
+- pinned by the same lockfile entry as the binary; library and provider version
+  cannot drift
+*** Precedent
+Rego bundles ship policy and data together. Pulumi providers ship SDK code.
+Terraform providers cannot ship modules, a long-standing complaint.
+
+** TODO [#B] Schema is facts
+Schema responses become facts (=type_attr(aws.subnet, cidr, inet, required)=,
+=type_computed(aws.subnet, id)=), so policy can reason about the provider:
+#+begin_src prolog
+deny("untaggable type in prod", { type: T }) :-
+  env(prod), want(T, _), not type_attr(T, tags, _, _).
+#+end_src
+Also supplies the computed-attribute set for the unknown-value rule. Replaces
+the hardcoded =catalog()= in =fakecloud.rs:137=.
+
+** TODO [#B] Declarative providers for schema-described APIs
+A generic provider driven by a schema file plus a CRUD mapping, no code per
+type. Targets: AWS Cloud Control, GCP discovery documents, Kubernetes OpenAPI,
+any REST API with an OpenAPI document. The mapping is itself facts, so it can
+be extended and policed in dform.
+Precedent: Terraform AWSCC (generated from Cloud Control), Crossplane.
+
+** TODO [#B] Fake provider becomes a real plugin
+Move =fakecloud.rs= behind the protocol as the reference implementation and the
+conformance test harness for third-party providers.
+
+** TODO [#C] WASM component hosting
+Same interface, sandboxed in-process hosting via the component model. Blocked
+on cloud SDKs compiling to WASI cleanly. Design the protocol so a WASM host
+can be added without changing the provider contract.
+Precedent: Extism, wasmtime component model.
+
+* Language features
+Numbered to match the review. Precedent noted where it exists.
+
+** TODO [#A] L1 Type and schema layer for resources
+Providers publish attribute schemas as facts; compiler checks =arg= keypaths and
+value types; marks computed attributes for the unknown-value rule.
+#+begin_src prolog
+provider aws {
+  type aws.subnet {
+    cidr:   inet          required
+    vpc_id: ref(aws.vpc)  required
+    tags:   map(string)   merge = map_merge
+    id:     string        computed
+    arn:    string        computed
+  }
+}.
+#+end_src
+Precedent: Soufflé =.decl= typed attributes, =.type=. CUE and Bicep have
+provider schemas but not as relations.
+
+** TODO [#B] L1a List merge keys in the schema
+Lists of rules, statements, listeners merge by a declared key, not by position
+or by sorting. Schema declares it; merge and diff both use it.
+#+begin_src prolog
+type aws.security_group {
+  ingress: list(ingress_rule) merge_key = [protocol, from_port, to_port, cidr]
+}.
+#+end_src
+Precedent: Kubernetes =x-kubernetes-list-map-keys=; strategic merge patch.
+Resolves the set-vs-positional diff problem without forcing every list to be a set.
+
+** TODO [#B] L1b Attribute field ownership
+Each contribution to =attr/4= records its owner (module, policy pack, rule).
+Conflicts name both owners with file:line. =dform why= shows owners. The L4
+=contributes= grant is checked against ownership.
+Precedent: Kubernetes =managedFields=.
+
+** TODO [#A] L3 Stratified aggregation and negation over aggregates
+No new syntax. See engine ticket. Precedent: every production Datalog.
+
+** TODO [#B] L2 Ordered aggregation
+#+begin_src prolog
+listener_rules(collect_ordered(Prio, Rule)) :- rule(Prio, Rule).
+#+end_src
+Order defined by the first argument; ties are an error unless a tiebreak key is
+given. Lowers to SQL =ARRAY_AGG(x ORDER BY k)= semantics.
+Precedent: none in Datalog proper (Soufflé has min/max/sum/count only);
+Dedalus and Datomic order by explicit time attributes.
+
+** TODO [#B] L4 Module interfaces
+#+begin_src prolog
+module network {
+  input  vpc_net: inet.
+  output private_subnet_ids: list(ref(net.subnet)).
+  export subnet_of/2.
+  ...
+}.
+#+end_src
+Unexported predicates get a module-private prefix. Policy packs must declare
+=contributes arg_add to net.*= to gain write access to attributes.
+Replaces =component_def= / =use= / =import as=.
+Precedent: Soufflé =.comp= / =.init= for instancing; no Datalog has export
+control (Mercury and Prolog modules are nearest).
+
+** TODO [#B] L5 Provenance
+See tooling ticket. Precedent: Soufflé =explain=.
+
+** TODO [#A] L6 Stacks and state addressing
+#+begin_src prolog
+stack renfry.prod {
+  backend = s3("renfry-state", "pngu/prod")
+}.
+#+end_src
+One program owns one stack. Cross-stack values arrive as discovery facts:
+=stack_output("renfry.shared", vpc_id, V)=. Backend needs locking.
+Precedent: none in Datalog; Terraform workspaces, Pulumi stacks.
+
+** TODO [#B] L7 Lifecycle declarations as facts
+#+begin_src prolog
+lifecycle(net.vpc, _, prevent_destroy) :- env(prod).
+lifecycle(k8s.nodepool, _, create_before_destroy).
+moved(net.vpc, "network.old::vpc", "network.main::vpc").
+ignore_changes(compute.vm, _, "tags.last_scan").
+#+end_src
+Plain facts, so policy can query them:
+#+begin_src prolog
+deny("prod db lacks prevent_destroy") :-
+  want(db.postgres, D), env(prod),
+  not lifecycle(db.postgres, D, prevent_destroy).
+#+end_src
+Precedent: none in Datalog; Terraform =lifecycle= and =moved=.
+
+** TODO [#C] L8 Typed values beyond IPv4
+=inet6=, =duration=, =bytes=, =enum(kind, value)=. Values carry a type tag;
+builtins are typed. =value.rs= only has IPv4 today.
+Precedent: Soufflé =symbol= / =number= / =unsigned= / =float= plus user ADTs.
+
+** TODO [#C] L9 Real builtins with explicit coercion
+=lower=, =upper=, =len=, =split=, =join=, =to_int=, =to_string=, =regex_match=.
+Kill the silent parse in =as_i64=. Allow user functors later.
+Precedent: Soufflé intrinsic and =.functor= user-defined functors.
+
+** TODO [#C] L10 Explicit defaults
+#+begin_src prolog
+default env(staging).
+env(E) :- input("env", E).
+#+end_src
+Lowers to the existing =has_env= negation idiom; compiler generates the helper.
+Precedent: Rego =default x = v=; default logic in ASP.
+
+** TODO [#B] L11 Existential quantification and count in constraints
+#+begin_src prolog
+deny("subnet has no route table", { subnet: S }) :-
+  want(net.subnet, S),
+  not exists rt(R), arg(net.route_table, R, subnet_id, ref(net.subnet, S, id)).
+
+deny("vpc needs two subnets", { vpc: V }) :-
+  want(net.vpc, V),
+  count(S | subnet_of(S, V)) < 2.
+#+end_src
+=not exists= lowers to a generated helper plus stratified negation; =count= is
+a stratified aggregate.
+Precedent: Soufflé =count=, LogiQL, Rego =count()= and =some=.
+
+** TODO [#B] L12 Scenarios: tests are policy over hypothetical inputs
+A test is a named set of input facts plus ordinary =deny= / =warn= rules
+scoped to it. No =expect= syntax; expectations are constraints.
+#+begin_src prolog
+scenario "prod db is multi_az" {
+  input("env", prod).
+  deny("db not multi_az") :- not attr(db.postgres, "database.main::db", multi_az, true).
+}.
+#+end_src
+=dform test= runs every scenario; =dform plan --scenario NAME= reuses the same
+mechanism for what-if. With refinement types on inputs (L13), scenarios can be
+generated: property-based testing over the program.
+Precedent: Rego =test_= rules; QuickCheck.
+
+** TODO [#B] L13 Refinement types
+Types carry predicates. Lower to =deny= rules; checked statically when the
+value is a literal, at evaluation otherwise. Apply to inputs, schema
+attributes, settings.
+#+begin_src prolog
+input replicas: int where 1 <= replicas <= 10.
+type aws.subnet { cidr: inet where prefix_len(cidr) <= 24 }.
+#+end_src
+Refinements double as generators for scenario-based property testing.
+Precedent: CUE (its whole type system is refinement over the lattice; ties to
+the attribute-assembly DECIDE); Liquid Haskell.
+
+** TODO [#B] L14 Documentation as structured annotations and facts
+Doc blocks on predicates, modules, inputs, types, policies, scenarios. Parsed
+into =doc(Kind, Name, Field, Value)= facts so documentation is queryable and
+policeable; =dform doc= renders from the facts.
+#+begin_src prolog
+#| title: Private subnets per zone
+#| owner: platform-network
+#| description: One private subnet per zone in the VPC's address space.
+resource net.subnet Sn { ... } :- ... .
+
+deny("exported predicate undocumented", { pred: P }) :-
+  export(P), not doc(pred, P, description, _).
+#+end_src
+Precedent: Rego =# METADATA= annotations (used by OPA for discovery);
+Terraform variable =description=; rustdoc.
+
+** TODO [#B] L15 Unified inet and network types
+One =inet= value: family, 128-bit address, prefix. Cross-family overlap is
+false; IPv4-mapped IPv6 normalization is an explicit builtin; =family/2= is a
+predicate. Add =port=, =port_range=, =protocol=, =mac=, =asn= types. Makes the
+reachability closure in =dform-advanced.df= a real network verifier.
+Precedent: Postgres =inet= / =cidr= (one type, both families); nftables =inet=
+table family; Rust =ipnet=; Batfish (Datalog over network config).
+Supersedes L8 for the network half.
+
+** TODO [#B] Policy is the unifying primitive
+Tests, refinement types, schema flags, doc coverage, lifecycle checks, cost
+limits all lower to =deny= / =warn=. Make it explicit: severity levels, stable
+policy identifiers, =dform check --sarif= for CI and review tools.
+Precedent: OPA and semgrep SARIF output.
+
+** TODO [#C] Cost as facts
+Providers or a pricing fact provider publish price facts; policy over the
+deformation's cost delta. Precedent: Infracost.
+
+** TODO [#C] Graph output
+=dform graph= emits DOT for the dependency graph and for any binary relation
+(=dform graph reachable=).
+
+* Documentation debt
+
+** TODO [#C] README and best_practices describe sugar, not semantics
+Neither document states the stratification rules, what is safe in negation,
+when =arg= conflicts are detected, or what =ref= means at plan time. Write a
+=docs/semantics.md= once the two A-priority decisions land.
+
+** TODO [#C] Remove =session-ses_3d85.md= from the repo
+300KB agent transcript, untracked. Keep out of git.
+
+* Gaps found by assuming the roadmap is finished
+Second review pass, 2026-09-27: what a completed board still gets wrong.
+
+** TODO [#A] Secrets and ephemeral values
+No ticket covered secrets. Extern results land in the plan file, attributes in
+remote state, credentials in provider config, values in plan output.
+*** Design
+- =secret(V)= value type; taint propagates through every derivation
+- never printed, never written to plan or state; stored as a reference to a
+  secret store or re-derived at apply
+- schema marks sensitive attributes so provider-returned values are tainted
+- =ephemeral= externs: results used during apply, never persisted
+- in the fact store a secret is a reference token, never bytes; bytes exist
+  only inside the provider call, in =zeroize=-backed, =mlock=ed buffers
+  (=secrecy= crate). The engine clones values into every derived fact and
+  binding, so keeping bytes out of the store is what makes zeroing sufficient.
+*** Precedent
+Terraform =sensitive= (0.14) and =ephemeral= (1.10), both a decade late.
+
+** TODO [#A] Language editions
+The 0.11 to 0.12 lesson had no ticket. =edition 2026.= pragma per file; the
+compiler supports the current and previous edition; =dform migrate= rewrites
+files. Required before the symbol-syntax change ships, since it is the first
+breaking change.
+Precedent: Rust editions.
+
+** TODO [#A] Apply executor
+The protocol ticket says the core owns ordering and parallelism; nothing
+specifies it. DAG walk over the plan, parallelism limit, per-action state
+persistence, partial failure semantics, retry policy from schema, and resume
+from a half-applied plan. Replacement ordering (=create_before_destroy=) and
+deposed objects live here.
+
+** TODO [#B] Multi-stack orchestration
+The answer to "provider fed by a resource output" is a downstream stack, so
+something must run stacks in dependency order with outputs flowing between
+them. =dform run-all= over a stack graph declared in facts, or the problem is
+pushed to shell scripts.
+Precedent: Terragrunt run-all; Terraform Stacks.
+
+** TODO [#B] Provider configuration as facts
+Credentials, region, endpoint come from settings, so provider configuration is
+derived data. It needs its own stratum before any extern from that provider can
+run, and a compile error when it depends on an extern or a =ref=. This is
+exactly where Terraform broke.
+
+** TODO [#B] Typed stack inputs
+=--set= accepts scalars only, no validation, no input files, no required
+inputs, no defaults with types. The interface half of the stacks ticket.
+#+begin_src prolog
+input env: enum(dev, stg, prod).
+input replicas: int = 3.
+input allowed_cidrs: list(inet).
+#+end_src
+
+** DECIDE [#B] Null, absent, and empty in the value model
+Datalog absence is "no fact"; APIs distinguish unset, null, and empty. =Value=
+has no null. Decide: attributes are absent or present, =null= is a value only
+where the schema allows it, and empty collections are ordinary values.
+Precedent: Terraform optional/default/null semantics, settled over years.
+
+** TODO [#B] External files and templates as externs
+=pngu.df= stubs the dashboard JSON because nothing can read a file. A =file=
+fact provider (=extern file.json(+path, -value)=, =file.text=, =file.template=)
+so templates are facts with provenance and hashing, not a =file()= builtin.
+
+** DECIDE [#B] Impure values
+Random suffixes, timestamps, generated passwords. Rule: impurity enters only
+through an extern whose results are persisted in state, never through a
+builtin. A =random= reference provider demonstrates it.
+Precedent: Terraform =random_*= provider (correct), =timestamp()= (a mistake).
+
+** TODO [#B] Query and inspection tooling
+=dform query= prints =Debug= output. "Config is a database" needs ad hoc
+queries (=dform query 'arg(net.vpc, N, cidr, C)'=), rule bodies at the CLI,
+JSON and table output, and =dform explain= for a plan action. Pairs with the
+provenance ticket.
+
+** TODO [#C] Provider supply chain
+Lockfile pins hashes; nothing covers signing, a registry protocol, or
+verification on download. Precedent: Terraform registry GPG signing.
+
+** DECIDE [#C] License
+Decide once; BSL produced OpenTofu overnight.
+
+** TODO [#A] Reactive inputs and controller mode
+Datalog is naturally reactive: inputs are relations, and incremental
+evaluation recomputes only what depends on a changed input. "Resources as
+input" is declaring that a relation is fed by a watch rather than a file.
+World facts from refresh are already such a relation.
+*** Design
+- =input relation= declarations with a source: file, git ref, Kubernetes
+  informer, cloud event bus, message queue, file watcher
+- continuous mode: subscription to input changes yields a stream of
+  deformations, gated by the same policy, applied automatically or held for
+  approval; debounce and batching per stack
+- drift surfaced as facts so policy can act on it
+- operator packaging: a dform program with CRDs as input facts is a
+  Kubernetes reconciler; resource provider is the Kubernetes API or a cloud
+- admission mode: the same policy packs evaluate a proposed object or a PR's
+  plan before it lands
+*** Why it matters
+Puts dform against Crossplane compositions, which are painful enough that
+Crossplane added composition functions to escape YAML patching. Datalog as the
+composition language is the better answer. Also Gatekeeper's niche for
+admission, with a better language.
+*** Depends on
+Incremental evaluation, stacks, apply executor, extern binding patterns.
+Precedent: Crossplane, Kubernetes controller-runtime, Gatekeeper, differential
+dataflow.
+
+** TODO [#C] Time travel over the fact log
+With an append-only fact log per stack: =dform plan --as-of DATE=, and
+"what did this stack look like in March" as a query.
+Precedent: Datomic.
+
+* Research directions
+State of the art worth exploring. Each names the ticket it feeds and a
+maturity note. Not tickets until someone reads the paper and writes one.
+
+** Provenance semirings
+Green, Karvounarakis, Tannen 2007. Facts carry semiring elements; derivations
+combine them. Why-provenance, counting, cost (tropical), trust, and
+information-flow labels are the same engine with a different semiring.
+Feeds: =why= query, cost as facts, secrets taint, L1b ownership.
+Maturity: mature theory, several implementations. Read first.
+
+** Existential rules and labeled nulls
+Datalog±, Vadalog (Oxford, production), Nemo (Rust, 2024). The chase invents
+nulls for things known to exist but not yet identified, and reasons over them.
+This is "known after apply" in database theory. Alternative to the
+reject-at-compile-time rule in the unknown-values DECIDE: refs as labeled
+nulls, engine reports which conclusions depend on them.
+Feeds: unknown-values DECIDE. Maturity: production systems exist.
+
+** DBSP and differential dataflow
+Feldera. Proven incremental semantics over relational queries including
+recursion. Foundation for reactive mode; subsumes the semi-naive ticket.
+Feeds: reactive inputs, incremental evaluation. Maturity: production.
+
+** Monotonicity types
+Datafun (Arntzenius, Krishnaswami). Type system tracks monotone functions;
+stratification and incremental safety become type checks.
+Feeds: aggregate stratification, extern rules. Maturity: research, small idea.
+
+** Answer set programming and choice
+clingo. Derive vs solve: assign non-overlapping CIDRs, place across zones,
+minimize cost. A =solve= stratum with choice rules and optimization. Solutions
+pinned in state like impure values to keep plans deterministic.
+Feeds: new L-ticket if pursued. Maturity: clingo very mature.
+
+** NetKAT and BDD reachability
+Foster et al.; Batfish (Datalog + BDDs, production). Symbolic reasoning over
+all packets through security groups and route tables.
+Feeds: L15 network types. Maturity: mature.
+
+** Automated reasoning at AWS
+Zelkova (SMT over IAM), Tiros (network). Precedent for a fact provider that
+answers "does this policy grant X" symbolically.
+Feeds: fact providers. Maturity: production, closed.
+
+** View update problem and lenses
+Classic DB theory; Foster and Pierce lenses. Which base facts must change to
+make a target view appear: import, adopt, drift reconciled into source,
+automatic =moved= proposals.
+Feeds: L7 lifecycle, adopt. Maturity: old theory, no production Datalog does
+it; a research contribution if achieved.
+
+** Egglog
+Zhang, Willsey 2023. Datalog plus equality saturation. Canonicalization: two
+intents equal if the e-graph says so; detect renamed resources as equivalent.
+Feeds: L7 =moved= detection, diff. Maturity: speculative for this domain.
+
+** Mangle and Rel
+Google Mangle (Datalog with aggregation, functions, types, built for knowledge
+about software systems); RelationalAI Rel (lattice-aware relational language).
+Closest current systems. Study before committing syntax and stdlib.
+Feeds: grammar spec, L9 builtins.
+
+** Information-flow types
+Jif, decentralized label model. Secret taint through derivation is IFC; labels
+compose as a lattice, which is a semiring instance.
+Feeds: secrets. Maturity: mature theory.
+
+** Salsa
+rust-analyzer's demand-driven incremental compilation framework. For the
+compiler and language server, not the engine.
+Feeds: language server, parser rewrite. Maturity: production.
+
+* Lessons from prior art
+Terraform mistakes and how alternatives avoided them. Referenced by tickets.
+
+** State as truth instead of cache
+Full attribute copies in state bred drift, corruption, and state surgery.
+Secrets sat in plaintext for a decade. CloudFormation, ARM/Bicep, Crossplane
+have the platform own state; System Initiative has no state file at all.
+Applies to: stacks ticket, refresh ticket. Keep =state.json= as identity
+mapping only; compare attributes from refresh; encrypt at rest (OpenTofu did,
+Terraform never).
+
+** Monolithic state, then Terragrunt
+No native stack splitting or cross-stack wiring for a decade; Terraform Stacks
+arrived 2024. Applies to: L6 stacks. Cross-stack references native and typed.
+
+** Data sources refreshed every plan
+Slow plans; plan could differ from apply. Applies to: extern ticket. Extern
+results recorded in the plan file.
+
+** Unknown values never a language concept
+"for_each value depends on resource attributes that cannot be determined until
+apply." Discovered at runtime by users. Applies to: unknown-values DECIDE.
+Reject statically.
+
+** Types came late and broke everything
+0.11 to 0.12 rewrite. Bicep shipped typed from the start. Applies to: L1, L8.
+
+** Refactoring was destroy and recreate for years
+=moved= 1.1, =import= block 1.5, =removed= 1.7. Applies to: L7 lifecycle.
+First-class from the beginning.
+
+** Sets diffed as positional lists
+Unreadable plans for rules and statements. Already reproduced in the prod
+plan. Applies to: ordered lists ticket, plan output ticket.
+
+** Static-only corners of the language
+Backend and provider blocks could not use variables. OpenTofu fixed it.
+Applies to: stacks, provider declaration. No statement is second class;
+these evaluate in stratum zero.
+
+** depends_on and dynamic blocks
+Escape hatches for what HCL could not express. Datalog does not need them.
+Do not add them.
+
+** Providers inside modules
+Module-owned provider config blocks destroy; provider fed by a resource output
+fails at plan. Rule: providers configured at stack root, modules pure,
+dependent providers live in a downstream stack. Applies to: L4, L6.
+
+** Provider SDK before protocol
+SDKv2 lacked types and nulls; framework rewrite took years. Pulumi bridged
+Terraform providers and inherited every limitation. Applies to: plugin
+protocol ticket. Protocol and schema-as-data are the contract.
+
+** No native tests until 1.6
+Applies to: L12, fake provider as conformance harness.
+
+** License
+BSL produced OpenTofu overnight. Decide once.
+
+** Alternatives, one line each
+- Pulumi: general-purpose languages bought expressiveness with nondeterminism
+  and hard testing. Constrained language is a feature.
+- CDK / CDKTF: transpiling to another IaC layer means debugging two layers.
+- CloudFormation: server-side state is right; rollback rarely worked.
+- Crossplane: reconciliation without preview. A controller mode for dform can
+  coexist with plan since a plan is the diff a reconciler would apply.
+- CUE: the lattice. See attribute-assembly DECIDE.
+- System Initiative: infra as queryable model with change sets. Closest
+  relative to "config is a database".
+- Bicep: typed diagnostics and no state file when the platform cooperates.
+- Winglang and cloud-agnostic layers: abstraction over clouds leaks. Keep
+  provider types provider-shaped.
+
+* Performance
+
+** TODO [#C] Incremental evaluation
+Once the core is monotone over lattices, differential-dataflow style
+incremental Datalog lets the plan update as extern results stream in rather
+than re-running the fixpoint. Precedent: DDlog, differential dataflow.
+
+** TODO [#B] Semi-naive evaluation and indexing
+Snapshot clone per iteration, linear scans per literal, no indexing, no
+semi-naive. Deliberately deferred while the prototype is unoptimized by design.
+Gated on the lattice decision, since it changes what the fixpoint computes.
+Becomes required, not optional, once the roadmap lands: a real account is
+tens of thousands of facts per stratum.
