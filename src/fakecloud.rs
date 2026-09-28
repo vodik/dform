@@ -924,6 +924,7 @@ impl pb::provider_server::Provider for Service {
             facts,
             externs,
             checks_refinements: true,
+            examples: Vec::new(),
         }))
     }
 

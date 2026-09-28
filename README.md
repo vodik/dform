@@ -110,7 +110,10 @@ at Configure.
 
 `dform provider check PATH` is the conformance suite: it runs every method
 against the provider at PATH with a synthetic schema and prints one line per
-check, failing if any deviates. The mock passes it:
+check, failing if any deviates. A provider that serves its own schema (a real
+API's) instead of the one it is given is checked with the `examples` its
+Schema returns: documents of its own types to plan, create, update, replace
+and delete. The mock passes it:
 
 ```bash
 cargo run -- provider check providers/fake        # the mock

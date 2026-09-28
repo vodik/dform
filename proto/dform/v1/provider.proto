@@ -141,6 +141,21 @@ message SchemaResponse {
   // Apply evaluates `assertions` (F DR-13): a refinement on a secret path
   // may be deferred to this provider.
   bool checks_refinements = 3;
+  // Documents of the provider's own types. `dform provider check` runs its
+  // resource checks with them against a provider that serves its own
+  // schema (a real API's) instead of the synthetic one Configure names.
+  repeated Example examples = 4;
+}
+
+message Example {
+  string type = 1;
+  // A document Apply CREATE can make.
+  Value create = 2;
+  // The same object changed in place, for Apply UPDATE.
+  Value update = 3;
+  // A dotted path `create` sets that Plan refuses the document without;
+  // empty if there is none.
+  string required = 4;
 }
 
 message ExternDecl {
