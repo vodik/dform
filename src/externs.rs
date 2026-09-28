@@ -328,12 +328,51 @@ impl<'a> Externs<'a> {
     /// Evaluate `program` with the externs answered: rounds until no call
     /// is new.
     pub fn eval(&self, program: &Program, extra: &[Atom]) -> Result<(EvalResult, Vec<String>)> {
+        let (res, violations, ()) = self.rounds(extra, |given| {
+            engine::eval(program, given).map(|(r, v)| (r, v, ()))
+        })?;
+        Ok((res, violations))
+    }
+
+    /// `eval`, with the last round resumable with more given facts of the
+    /// predicates `later` (`engine::Resumable`: the policy pass).
+    pub fn eval_resumable(
+        &self,
+        program: &Program,
+        extra: &[Atom],
+        later: &[&str],
+    ) -> Result<(EvalResult, Vec<String>, engine::Resumable)> {
+        self.rounds(extra, |given| engine::eval_resumable(program, given, later))
+    }
+
+    /// After a resumed evaluation over `facts`: true, and `facts`' calls are
+    /// the ones demanded, when every call they demand is answered; false
+    /// when a call is new (evaluate again with `eval`).
+    pub fn settle(&self, facts: &BTreeSet<Atom>) -> Result<bool> {
+        if self.is_empty() {
+            return Ok(true);
+        }
+        let demand = self.demand(facts)?;
+        if !demand.iter().all(|c| self.known.borrow().contains_key(c)) {
+            return Ok(false);
+        }
+        *self.demanded.borrow_mut() = demand;
+        Ok(true)
+    }
+
+    /// Rounds of `eval_round` over `extra` and the answers known, asking
+    /// every new call between them, until no call is new.
+    fn rounds<T>(
+        &self,
+        extra: &[Atom],
+        mut eval_round: impl FnMut(&[Atom]) -> Result<(EvalResult, Vec<String>, T)>,
+    ) -> Result<(EvalResult, Vec<String>, T)> {
         for _ in 0..64 {
             let mut given = extra.to_vec();
             given.extend(self.facts());
-            let (res, violations) = engine::eval(program, &given)?;
+            let (res, violations, t) = eval_round(&given)?;
             if self.is_empty() {
-                return Ok((res, violations));
+                return Ok((res, violations, t));
             }
             let demand = self.demand(&res.facts)?;
             let new: Vec<Call> = {
@@ -346,7 +385,7 @@ impl<'a> Externs<'a> {
             };
             if new.is_empty() {
                 *self.demanded.borrow_mut() = demand;
-                return Ok((res, violations));
+                return Ok((res, violations, t));
             }
             for c in new {
                 let f = &self.fns[&c.pred];

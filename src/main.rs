@@ -328,15 +328,37 @@ fn run() -> Result<()> {
     base_extra.extend(backend.discover()?);
     // Refresh as facts: round 0 resolves every null the world can answer,
     // except those of `withheld` addresses (being replaced). `more`: the
-    // deformation facts of a policy pass.
+    // deformation facts of a policy pass, which continues the last
+    // evaluation over the same facts from the first stratum that reads
+    // them (`engine::Resumable`).
+    let last: std::cell::RefCell<Option<(Vec<Atom>, engine::Resumable)>> = Default::default();
     let evaluate_with = |st: &state::State,
                          withheld: &BTreeSet<ir::Address>,
                          more: &[Atom]|
      -> Result<(engine::EvalResult, Vec<String>)> {
         let mut extra = base_extra.clone();
         extra.extend(executor::withhold(backend.world_facts(st)?, withheld));
-        extra.extend(more.iter().cloned());
-        let (res, mut violations) = externs.eval(&program, &extra)?;
+        let (res, mut violations) = if more.is_empty() {
+            let (res, violations, resumable) =
+                externs.eval_resumable(&program, &extra, zset::POLICY_INPUTS)?;
+            *last.borrow_mut() = Some((extra, resumable));
+            (res, violations)
+        } else {
+            let resumed = match &*last.borrow() {
+                Some((seen, resumable)) if *seen == extra => Some(resumable.with(more)?),
+                _ => None,
+            };
+            match resumed {
+                Some((res, violations)) if externs.settle(&res.facts)? => (res, violations),
+                _ => {
+                    // A new extern call: the answers the resumable was
+                    // taken with are not all of them any more.
+                    *last.borrow_mut() = None;
+                    extra.extend(more.iter().cloned());
+                    externs.eval(&program, &extra)?
+                }
+            }
+        };
         violations.extend(inputs::violations(&res.facts, &declared));
         Ok((res, violations))
     };
