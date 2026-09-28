@@ -44,27 +44,50 @@ resource net.subnet a { cidr = "10.0.1.0/24", vpc_id = ref(net.vpc, main, id) }.
     assert!(!r.stderr.contains(MSG), "{}", r.stderr);
 }
 
-/// The case the ticket names: dform.df in stg peers two VPCs no rule wants.
+/// The case the ticket names: dform.df in stg planned a peering between two
+/// VPCs no rule wanted. The demo now guards the peering on both VPCs existing,
+/// so the guarded program is not blocked; the unguarded shape is kept here.
 #[test]
-fn dform_df_in_stg_is_blocked() {
-    let s = Scratch::new("dangling-ref-stg");
-    let file = repo().join("dform.df");
-    let r = s
-        .run(&[
-            "--file",
-            file.to_str().unwrap(),
-            "--set",
-            "env=stg",
-            "--world",
-            "w.json",
-            "plan",
-        ])
-        .failure();
+fn a_peering_between_unwanted_vpcs_is_blocked() {
+    let s = Scratch::new("dangling-ref-peering");
+    s.write(
+        "p.df",
+        r#"
+input_env(stg).
+resource net.vpc main { cidr = "10.0.0.0/16" } :- input_env(prod).
+resource net.vpc peer { cidr = "10.1.0.0/16" } :- input_env(prod).
+resource net.vpc_peering peer_main_peer {
+  requester_vpc_id = ref(net.vpc, main, id)
+  accepter_vpc_id = ref(net.vpc, peer, id)
+}.
+"#,
+    );
+    let r = s.run(&["--file", "p.df", "plan"]).failure();
     assert!(r.stderr.contains(MSG), "{}", r.stderr);
     assert!(
-        r.stderr
-            .contains(r#""from":"net.vpc_peering.peer-main-peer""#),
+        r.stderr.contains(r#""from":"net.vpc_peering.peer_main_peer""#),
         "{}",
         r.stderr
     );
+}
+
+/// The demo itself plans in every environment once the refs are guarded.
+#[test]
+fn dform_df_plans_in_every_env() {
+    for env in ["dev", "staging", "prod"] {
+        let s = Scratch::new(&format!("dangling-ref-{env}"));
+        let file = repo().join("dform.df");
+        let r = s
+            .run(&[
+                "--file",
+                file.to_str().unwrap(),
+                "--set",
+                &format!("env={env}"),
+                "--world",
+                "w.json",
+                "plan",
+            ])
+            .success();
+        assert!(!r.stderr.contains(MSG), "{env}: {}", r.stderr);
+    }
 }
