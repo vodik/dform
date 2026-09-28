@@ -55,6 +55,12 @@ impl Scratch {
             .unwrap();
         Run::from(out)
     }
+
+    /// Run the command line `ARGS` over `backend`.
+    pub fn run_on(&self, backend: Backend, args: &[&str]) -> Run {
+        let mut c = backend.command();
+        Run::from(c.args(args).current_dir(&self.dir).output().unwrap())
+    }
 }
 
 impl Drop for Scratch {
@@ -109,9 +115,41 @@ impl Run {
     }
 }
 
-/// A provider binary cargo built beside `dform` (each is its own package,
-/// `crates/dform-provider-*`).
-#[allow(dead_code)]
+/// How a run reaches the mock: `dform` spawns it and speaks gRPC (the
+/// process backend); `dform-direct` links it in (the direct backend), or
+/// links it in and encodes and decodes every message through prost (the
+/// wire backend).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Backend {
+    Process,
+    Direct,
+    Wire,
+}
+
+pub const BACKENDS: [Backend; 3] = [Backend::Process, Backend::Direct, Backend::Wire];
+
+impl Backend {
+    pub fn command(self) -> Command {
+        match self {
+            Backend::Process => Command::new(env!("CARGO_BIN_EXE_dform")),
+            Backend::Direct | Backend::Wire => {
+                let mut c = Command::new(exe("dform-direct"));
+                c.env(
+                    "DFORM_BACKEND",
+                    if self == Backend::Wire {
+                        "wire"
+                    } else {
+                        "direct"
+                    },
+                );
+                c
+            }
+        }
+    }
+}
+
+/// A binary cargo built beside `dform` (each is its own package:
+/// `crates/dform-provider-*`, `crates/dform-direct`).
 pub fn exe(name: &str) -> String {
     let p = Path::new(env!("CARGO_BIN_EXE_dform")).with_file_name(name);
     p.to_str().unwrap().to_string()

@@ -6,3 +6,4 @@ publish = false
 
 [dependencies]
 dform-mock = { path = "../dform-mock" }
+dform-grpc = { path = "../dform-grpc" }

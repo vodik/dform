@@ -141,12 +141,12 @@ its stdin. Schema returns the schema as facts, Plan and Apply are per resource,
 and a sensitive computed value only ever crosses as its label. dform owns
 ordering, parallelism, state and crash safety: a provider that dies during an
 Apply is a failed action naming the resource, and the next `apply` resumes.
-A provider built on `plugin::transport::serve`, the mock included, listens
+A provider built on `dform-grpc`'s `transport::serve`, the mock included, listens
 on TCP unless `DFORM_PROVIDER_TRANSPORT=unix` is in its environment (which it
 inherits from dform): then on a socket in the temporary directory, removed
 when it exits.
 
-The mock provider, `dform-provider-fake` (built with dform, `src/fakecloud.rs`),
+The mock provider, `dform-provider-fake` (built with dform, `crates/dform-mock`),
 can pretend to be any provider: a provider it plays is a schema file of
 plain facts, `providers/<name>/schema.df`, selected by the program's
 `provider` statements (`provider gke {}`, or `provider aws { source =
@@ -159,6 +159,21 @@ is an executable, or a directory holding one named `dform-provider*`, is a
 plugin instead, started on its own; each type goes to the provider whose
 schema declares it. The world file, the inventory and `--chaos` reach the mock
 at Configure.
+
+The workspace keeps the engine apart from the transport. `dform-core`
+(`crates/dform-core`: parser, engine, planner, executor, printer) speaks to
+providers through a synchronous, completion-based trait
+(`plugin::backend`: `submit` a call, take the `next_completed` answer),
+whose calls and answers are the protocol's own messages (`dform-wire`,
+prost only); it builds with no network stack. Three backends implement it:
+the process backend (`dform-grpc`: a spawned executable over gRPC; the
+`dform` binary's, the only production path), and the direct and wire
+backends (the mock, `dform-mock`, linked in, its calls queued; the wire
+backend encodes and decodes every message through prost). `dform-direct`
+is the command line over the direct backend (`DFORM_BACKEND=wire` for the
+wire one, `DFORM_SEED=N` to answer the calls in flight in an order the seed
+picks), for tests and benches; a plugin executable is out of its reach.
+Crates select the backend, not cargo features.
 
 `dform provider check PATH` is the conformance suite: it runs every method
 against the provider at PATH with a synthetic schema and prints one line per
@@ -222,7 +237,7 @@ or a rule wanting a resource whose type is built at runtime
 
 ## The Kubernetes provider
 
-`dform-provider-k8s` (built with dform, `src/k8s/`) is a real provider: it
+`dform-provider-k8s` (built with dform, `crates/dform-k8s`) is a real provider: it
 speaks the same protocol against the API server of the cluster the
 environment names (`KUBECONFIG`, else `~/.kube/config`, else the pod's service
 account). Select it by path; the program the mock plans applies to a cluster
@@ -514,7 +529,9 @@ plan depend on itself, and is an error.
 `apply --parallel N` (default 1) walks a tick's dependency DAG with at most N
 Apply calls in flight: a create or update waits for what its document
 references, deletes wait for everything else. Output order does not change
-with N. On the mock the difference shows on the simulated clock:
+with N. The calls in flight run at once, and each is put on the executor's
+clock from the time its provider says it took; on the mock (chaos `latency`)
+the difference shows there:
 
 ```bash
 cargo run -- apply --parallel 4 --chaos latency=net.vpc/network.main::vpc:100 \
@@ -669,7 +686,8 @@ file keeps a `tick` counter; every `apply` is one tick.
 |------|--------|
 | `fail=T/N` | Apply of `T/N` fails before it reaches the world |
 | `timeout=T/N` | Apply of `T/N` takes effect, then times out: the world has it, state does not |
-| `crash=T/N` | the provider process dies (exit 137) as it is called to Apply `T/N`: the action fails, nothing after it runs, and the next `apply` resumes |
+| `crash=T/N` | the provider process dies (exit 137) as it is called to Apply `T/N`: the action fails, nothing after it runs, and the next `apply` resumes (the mock linked in, `dform-direct`, is gone from that call on instead) |
+| `stop-after=N` | dform itself stops, as if killed, once `N` Apply calls have returned (counted across the run's ticks), each persisted: nothing still in flight is waited for, the tick never ends, and the next `apply` resumes. The executor's knob, so it works with any provider |
 | `read-lag=T/N:K` | the first `K` Reads of `T/N` after it is created return nothing (eventual consistency) |
 | `mutate=T/N:PATH=JSON` | once per run, after the first tick `T/N` exists at, the world sets its `PATH` to `JSON` (drift) |
 | `latency=T/N:MS` | Apply of `T/N` takes `MS` on a simulated clock, reported, never slept; the world's `timeline` records each call's start and end |
@@ -1140,7 +1158,7 @@ empty and the stack not locked. Backends:
 ## Editors: the tree-sitter grammar
 
 `tree-sitter-dform/` is a tree-sitter grammar for `.df` files, for
-editors only: the compiler keeps its own parser (`src/syntax/`). It has
+editors only: the compiler keeps its own parser (`crates/dform-core/src/syntax/`). It has
 `queries/highlights.scm`, `queries/indents.scm` and `queries/locals.scm`
 (nvim-treesitter capture names), and the generated `src/parser.c` is
 committed, so an editor builds it with a C compiler and no tree-sitter
@@ -1224,8 +1242,12 @@ emacs --batch -Q -L editors/emacs -l ert \
 ## Testing
 
 `cargo test` runs the integration tests under `tests/` (one file per
-concern: adoption, chaos, k8s, aws, ...) plus `cargo test --lib` for the
-engine's own unit tests.
+concern: adoption, chaos, k8s, aws, ...) and every crate's own tests.
+The protocol tests (`tests/protocol_*.rs`, `dform provider check`), the
+executor's parallel and resume tests and every golden `plan` run on more
+than one backend (`tests/common`'s `Backend`): the same cases, the same
+output. `--parallel` schedules are exact on the direct backend, which
+answers in simulated time.
 
 Golden (snapshot) tests pin `plan` and `strata` output for a table of
 example and adversarial programs: `tests/golden.rs`, snapshots under
@@ -1245,10 +1267,10 @@ pinned in its `.txt` (accept with `UPDATE_GOLDEN=1 cargo test --test syntax`).
 
 ## Performance
 
-The evaluator is semi-naive over an operator IR (`src/ir/ops.rs`: Scan,
+The evaluator is semi-naive over an operator IR (`crates/dform-core/src/ir/ops.rs`: Scan,
 Join, Extern, AntiJoin, Filter with Stuck as its third output, Map,
 Distinct, Agg, and a Fix per stratum), with a hash index per relation and
-key the rules read through (`src/ir/store.rs`). Its output is the naive
+key the rules read through (`crates/dform-core/src/ir/store.rs`). Its output is the naive
 loop's, byte for byte, circuit node ids included.
 
 `benches/scale.rs` generates programs from a mock schema of 10^3 types (a
@@ -1282,6 +1304,7 @@ This is an MVP:
 - safe(ish) negation: `not` requires the atom be ground at evaluation time
 
 Provider model (in progress): the demo uses the mock provider, `dform-provider-fake`, a
-separate process behind the plugin protocol that supplies schema facts
+separate process behind the plugin protocol (tests and benches may link it in
+instead, `dform-direct`) that supplies schema facts
 (`providers/<name>/schema.df`) and discovery facts (inventory), and supports plan/apply
 against a world file, with chaos injection.

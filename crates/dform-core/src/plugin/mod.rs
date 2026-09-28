@@ -10,6 +10,7 @@ pub mod backend;
 pub mod check;
 pub mod link;
 pub mod providers;
+pub mod queue;
 pub mod source;
 pub mod wire;
 

@@ -3,7 +3,7 @@
 //! and stops.
 
 mod common;
-use common::Scratch;
+use common::{BACKENDS, Backend, Scratch};
 
 const PROG: &str = r#"edition 2026
 
@@ -16,15 +16,36 @@ fn dform(s: &Scratch, args: &[&str]) -> common::Run {
     s.run(&[&["--file", "p.df", "--world", "w.json"][..], args].concat())
 }
 
+fn dform_on(s: &Scratch, backend: Backend, args: &[&str]) -> common::Run {
+    s.run_on(
+        backend,
+        &[&["--file", "p.df", "--world", "w.json"][..], args].concat(),
+    )
+}
+
 fn state(s: &Scratch) -> serde_json::Value {
     serde_json::from_str(&s.read("w.state.json")).unwrap()
 }
 
+/// The provider dies as it is called to Apply the vm (a process exits; the
+/// mock linked in is gone); the next apply finishes, on every backend.
 #[test]
 fn apply_after_a_crash_finishes_the_remaining_actions() {
+    for backend in BACKENDS {
+        apply_after_a_crash_finishes_on(backend);
+    }
+}
+
+fn apply_after_a_crash_finishes_on(backend: Backend) {
     let s = Scratch::new("resume-crash");
     s.write("p.df", PROG);
-    dform(&s, &["apply", "--chaos", "crash=compute.vm/app"]).failure();
+    let r = dform_on(&s, backend, &["apply", "--chaos", "crash=compute.vm/app"]).failure();
+    assert!(
+        r.stderr
+            .contains("apply compute.vm/app: the provider fakecloud exited during the call"),
+        "{backend:?}: {}",
+        r.stderr
+    );
     let st = state(&s);
     assert_eq!(
         st["in_flight"]["remaining"]
@@ -35,7 +56,7 @@ fn apply_after_a_crash_finishes_the_remaining_actions() {
         ["compute.vm::app"],
         "{st}"
     );
-    let r = dform(&s, &["apply"]).success();
+    let r = dform_on(&s, backend, &["apply"]).success();
     assert_eq!(
         r.stdout,
         "resuming the apply interrupted at tick 1; remaining: compute.vm.app\n\
@@ -47,12 +68,64 @@ fn apply_after_a_crash_finishes_the_remaining_actions() {
     let st = state(&s);
     assert!(st.get("in_flight").is_none(), "{st}");
     assert_eq!(st["resources"].as_object().unwrap().len(), 3);
-    let r = dform(&s, &["plan"]).success();
+    let r = dform_on(&s, backend, &["plan"]).success();
     assert!(
         r.stdout.ends_with("stack p is undeformed\n"),
         "{}",
         r.stdout
     );
+}
+
+/// Chaos `stop-after=N` is the executor's crash: dform stops as if killed
+/// once N Apply calls have returned, each identity persisted and nothing
+/// after it called; the next apply finishes. On every backend.
+#[test]
+fn apply_after_a_stop_finishes_the_remaining_actions() {
+    for backend in BACKENDS {
+        let s = Scratch::new("resume-stop");
+        s.write("p.df", PROG);
+        let r = dform_on(&s, backend, &["apply", "--chaos", "stop-after=2"]).failure();
+        assert!(
+            r.stderr.contains(
+                "apply net.subnet/a: dform stopped after this Apply call returned \
+                 (chaos stop-after)"
+            ),
+            "{backend:?}: {}",
+            r.stderr
+        );
+        let st = state(&s);
+        assert_eq!(
+            st["resources"]
+                .as_object()
+                .unwrap()
+                .keys()
+                .collect::<Vec<_>>(),
+            ["net.subnet::a", "net.vpc::main"],
+            "{backend:?}: {st}"
+        );
+        assert_eq!(
+            st["in_flight"]["remaining"]
+                .as_object()
+                .unwrap()
+                .keys()
+                .collect::<Vec<_>>(),
+            ["compute.vm::app"],
+            "{backend:?}: {st}"
+        );
+        // The tick never ended: the world's clock did not move.
+        let w: serde_json::Value = serde_json::from_str(&s.read("w.json")).unwrap();
+        assert!(w.get("tick").is_none(), "{backend:?}: {w}");
+        let r = dform_on(&s, backend, &["apply"]).success();
+        assert!(
+            r.stdout.starts_with(
+                "resuming the apply interrupted at tick 1; remaining: compute.vm.app\n"
+            ),
+            "{backend:?}: {}",
+            r.stdout
+        );
+        let r = dform_on(&s, backend, &["plan"]).success();
+        assert_eq!(r.summary(), "stack p is undeformed", "{backend:?}");
+    }
 }
 
 /// The first apply updates the vpc and fails on the subnet; after that tick

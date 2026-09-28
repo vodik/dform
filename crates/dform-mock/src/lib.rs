@@ -1,6 +1,8 @@
 //! The fake provider: a mock cloud driven by provider schemas and a world
-//! file, served over the provider protocol by `dform-provider-fake`
-//! (`serve`). dform talks to it as to any provider.
+//! file, answering the provider protocol one call at a time (`Mock`, a
+//! `Handler`). `dform-provider-fake` serves it over gRPC; the direct and
+//! wire backends link it in (`Linked`). dform talks to it as to any
+//! provider.
 //!
 //! The world file (`--world`, default `.dform/<stack>/remote.json`, given
 //! at Configure) is what "exists": each object's configured `attrs` and its
@@ -20,12 +22,15 @@ use anyhow::{Context, Result, anyhow, bail};
 use dform_core::ast::{Atom, Term};
 use dform_core::chaos::Chaos;
 use dform_core::ir::Address;
-use dform_core::plugin::providers::{INVENTORY, MANAGED};
+use dform_core::plugin::backend::{self, CallError, Handler, Reply, VERSION};
+use dform_core::plugin::link::Link;
+use dform_core::plugin::pb;
+use dform_core::plugin::providers::{INVENTORY, Launch, MANAGED};
+use dform_core::plugin::queue::{Order, Queue};
 use dform_core::plugin::wire;
 use dform_core::provider::{self, Change, get_path, norm_path, set_path, short_hash};
 use dform_core::schema::Schema;
 use dform_core::value::{NullClass, Value};
-use dform_grpc::pb;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as Json, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -84,6 +89,8 @@ pub enum Failed {
     Refused(String),
     /// The change took effect; no answer (chaos `timeout`).
     TimedOut(String),
+    /// The provider died during the call (chaos `crash`, linked in).
+    Crashed(String),
 }
 
 /// What an answered Apply call returns.
@@ -132,6 +139,11 @@ pub struct FakeCloud {
     /// Address -> remote id, as Read and Apply saw them: where a chaos
     /// `mutate` of an address lands.
     remotes: BTreeMap<Address, String>,
+    /// Linked in: chaos `crash` cannot kill the process, so the mock is
+    /// gone instead.
+    in_process: bool,
+    /// The address whose Apply crashed the mock linked in.
+    crashed: Option<String>,
 }
 
 fn load_json(path: &Option<PathBuf>, what: &str) -> Result<RemoteState> {
@@ -493,6 +505,13 @@ impl FakeCloud {
         let refuse = |e: anyhow::Error| Failed::Refused(format!("{e:#}"));
         self.check_assertions(&at, &c)?;
         if self.chaos.crash.contains(addr) {
+            if self.in_process {
+                eprintln!("chaos: crash during apply {at}: the provider is gone");
+                self.crashed = Some(at.clone());
+                return Err(Failed::Crashed(format!(
+                    "the provider fakecloud exited during the call (chaos crash={at})"
+                )));
+            }
             eprintln!("chaos: crash during apply {at}: the process is killed");
             std::process::exit(137);
         }
@@ -855,154 +874,178 @@ fn flatten_json_facts(
     }
 }
 
-/// The fake behind the protocol: every call locks the one mock cloud.
-pub struct Service {
+/// The fake behind the protocol: every call locks the one mock cloud. As
+/// a process (`dform-provider-fake`, `in_process` false) chaos `crash`
+/// kills it; linked in, it is gone from that call on.
+pub struct Mock {
     cloud: std::sync::Mutex<FakeCloud>,
+    in_process: bool,
 }
 
-type Reply<T> = std::result::Result<tonic::Response<T>, tonic::Status>;
+impl Mock {
+    /// The mock as `dform-provider-fake` serves it.
+    pub fn process() -> Mock {
+        Mock::new(false)
+    }
 
-fn invalid(e: anyhow::Error) -> tonic::Status {
-    tonic::Status::invalid_argument(format!("{e:#}"))
-}
+    /// The mock linked in (the direct and wire backends).
+    pub fn linked() -> Mock {
+        Mock::new(true)
+    }
 
-#[allow(clippy::result_large_err)] // tonic's own error type
-fn doc_of(v: Option<&pb::Value>) -> std::result::Result<Option<Json>, tonic::Status> {
-    v.map(wire::from_doc).transpose().map_err(invalid)
-}
+    fn new(in_process: bool) -> Mock {
+        Mock {
+            cloud: std::sync::Mutex::new(FakeCloud {
+                in_process,
+                ..FakeCloud::default()
+            }),
+            in_process,
+        }
+    }
 
-impl Service {
     fn cloud(&self) -> std::sync::MutexGuard<'_, FakeCloud> {
         self.cloud.lock().unwrap_or_else(|e| e.into_inner())
     }
 }
 
-#[tonic::async_trait]
-#[allow(clippy::result_large_err)] // tonic's own error type
-impl pb::provider_server::Provider for Service {
-    async fn handshake(
-        &self,
-        req: tonic::Request<pb::HandshakeRequest>,
-    ) -> Reply<pb::HandshakeResponse> {
-        let v = req.into_inner().protocol_version;
-        if v != dform_grpc::spawn::VERSION {
-            return Err(tonic::Status::failed_precondition(format!(
-                "this provider speaks protocol version {}, not {v}",
-                dform_grpc::spawn::VERSION
+fn invalid(e: anyhow::Error) -> CallError {
+    CallError::Refused(format!("{e:#}"))
+}
+
+fn doc_of(v: Option<&pb::Value>) -> std::result::Result<Option<Json>, CallError> {
+    v.map(wire::from_doc).transpose().map_err(invalid)
+}
+
+impl Handler for Mock {
+    fn handle(&self, call: backend::Call) -> std::result::Result<Reply, CallError> {
+        use backend::Call as C;
+        if let Some(at) = &self.cloud().crashed {
+            return Err(CallError::Crashed(format!(
+                "the provider fakecloud has exited (chaos crash={at})"
             )));
         }
-        Ok(tonic::Response::new(pb::HandshakeResponse {
-            protocol_version: dform_grpc::spawn::VERSION,
-            name: "fakecloud".into(),
-            capabilities: ["resource", "fact", "inventory", "managed"]
-                .map(String::from)
-                .to_vec(),
-        }))
-    }
-
-    async fn configure(
-        &self,
-        req: tonic::Request<pb::ConfigureRequest>,
-    ) -> Reply<pb::ConfigureResponse> {
-        let config = doc_of(req.into_inner().config.as_ref())?.unwrap_or(json!({}));
-        self.cloud().configure(&config).map_err(invalid)?;
-        Ok(tonic::Response::new(pb::ConfigureResponse {}))
-    }
-
-    async fn schema(&self, req: tonic::Request<pb::SchemaRequest>) -> Reply<pb::SchemaResponse> {
-        let cloud = self.cloud();
-        let facts = wire::schema_facts(cloud.schema(), req.get_ref()).map_err(invalid)?;
-        let externs = cloud
-            .externs()
-            .into_iter()
-            .map(|(pred, arity)| pb::ExternDecl {
-                pred,
-                arity: arity as u32,
-                input: Vec::new(),
-            })
-            .collect();
-        Ok(tonic::Response::new(pb::SchemaResponse {
-            facts,
-            externs,
-            checks_refinements: true,
-            examples: Vec::new(),
-        }))
-    }
-
-    type QueryStream = tonic::codegen::tokio_stream::Iter<
-        std::vec::IntoIter<std::result::Result<pb::Row, tonic::Status>>,
-    >;
-
-    async fn query(&self, req: tonic::Request<pb::QueryRequest>) -> Reply<Self::QueryStream> {
-        let q = req.into_inner();
-        let inputs = q
-            .inputs
-            .iter()
-            .map(wire::from_value)
-            .collect::<Result<Vec<_>>>()
-            .map_err(invalid)?;
-        let rows = self
-            .cloud()
-            .query(&q.pred, &q.input, &inputs)
-            .map_err(invalid)?;
-        let rows: Vec<_> = rows
-            .iter()
-            .map(|r| {
-                Ok(pb::Row {
-                    values: r.iter().map(wire::value).collect(),
+        Ok(match call {
+            C::Handshake(req) => {
+                let v = req.protocol_version;
+                if v != VERSION {
+                    return Err(CallError::Refused(format!(
+                        "this provider speaks protocol version {VERSION}, not {v}"
+                    )));
+                }
+                Reply::Handshake(pb::HandshakeResponse {
+                    protocol_version: VERSION,
+                    name: "fakecloud".into(),
+                    capabilities: ["resource", "fact", "inventory", "managed"]
+                        .map(String::from)
+                        .to_vec(),
                 })
-            })
-            .collect();
-        Ok(tonic::Response::new(tonic::codegen::tokio_stream::iter(
-            rows,
-        )))
-    }
-
-    async fn read(&self, req: tonic::Request<pb::ReadRequest>) -> Reply<pb::ReadResponse> {
-        let r = req.into_inner();
-        let addr = Address {
-            typ: r.r#type,
-            name: r.name,
-        };
-        let found = self.cloud().read(&addr, &r.remote).map_err(invalid)?;
-        Ok(tonic::Response::new(match found {
-            Some((attrs, computed)) => pb::ReadResponse {
-                found: true,
-                attrs: Some(wire::doc(&attrs)),
-                computed: Some(wire::doc(&computed)),
-            },
-            None => pb::ReadResponse::default(),
-        }))
-    }
-
-    async fn plan(&self, req: tonic::Request<pb::PlanRequest>) -> Reply<pb::PlanResponse> {
-        let r = req.into_inner();
-        let addr = Address {
-            typ: r.r#type,
-            name: r.name,
-        };
-        let prior = doc_of(r.prior.as_ref())?;
-        let desired = doc_of(r.desired.as_ref())?;
-        let (changes, requires_replace) = self
-            .cloud()
-            .plan(&addr, prior.as_ref(), desired.as_ref())
-            .map_err(invalid)?;
-        Ok(tonic::Response::new(pb::PlanResponse {
-            changes: changes
-                .iter()
-                .map(|c| pb::Change {
-                    path: c.path.clone(),
-                    before: c.before.as_ref().map(wire::doc),
-                    after: c.after.as_ref().map(wire::doc),
-                    sensitive: c.sensitive,
+            }
+            C::Configure(req) => {
+                let config = doc_of(req.config.as_ref())?.unwrap_or(json!({}));
+                self.cloud().configure(&config).map_err(invalid)?;
+                Reply::Configure(pb::ConfigureResponse {})
+            }
+            C::Schema(req) => {
+                let cloud = self.cloud();
+                let facts = wire::schema_facts(cloud.schema(), &req).map_err(invalid)?;
+                let externs = cloud
+                    .externs()
+                    .into_iter()
+                    .map(|(pred, arity)| pb::ExternDecl {
+                        pred,
+                        arity: arity as u32,
+                        input: Vec::new(),
+                    })
+                    .collect();
+                Reply::Schema(pb::SchemaResponse {
+                    facts,
+                    externs,
+                    checks_refinements: true,
+                    examples: Vec::new(),
                 })
-                .collect(),
-            requires_replace,
-        }))
+            }
+            C::Query(q) => {
+                let inputs = q
+                    .inputs
+                    .iter()
+                    .map(wire::from_value)
+                    .collect::<Result<Vec<_>>>()
+                    .map_err(invalid)?;
+                let rows = self
+                    .cloud()
+                    .query(&q.pred, &q.input, &inputs)
+                    .map_err(invalid)?;
+                Reply::Query(
+                    rows.iter()
+                        .map(|r| pb::Row {
+                            values: r.iter().map(wire::value).collect(),
+                        })
+                        .collect(),
+                )
+            }
+            C::Read(r) => {
+                let addr = Address {
+                    typ: r.r#type,
+                    name: r.name,
+                };
+                let found = self.cloud().read(&addr, &r.remote).map_err(invalid)?;
+                Reply::Read(match found {
+                    Some((attrs, computed)) => pb::ReadResponse {
+                        found: true,
+                        attrs: Some(wire::doc(&attrs)),
+                        computed: Some(wire::doc(&computed)),
+                    },
+                    None => pb::ReadResponse::default(),
+                })
+            }
+            C::Plan(r) => {
+                let addr = Address {
+                    typ: r.r#type,
+                    name: r.name,
+                };
+                let prior = doc_of(r.prior.as_ref())?;
+                let desired = doc_of(r.desired.as_ref())?;
+                let (changes, requires_replace) = self
+                    .cloud()
+                    .plan(&addr, prior.as_ref(), desired.as_ref())
+                    .map_err(invalid)?;
+                Reply::Plan(pb::PlanResponse {
+                    changes: changes
+                        .iter()
+                        .map(|c| pb::Change {
+                            path: c.path.clone(),
+                            before: c.before.as_ref().map(wire::doc),
+                            after: c.after.as_ref().map(wire::doc),
+                            sensitive: c.sensitive,
+                        })
+                        .collect(),
+                    requires_replace,
+                })
+            }
+            C::Apply(r) => Reply::Apply(self.apply(r)?),
+            C::Import(r) => {
+                let found = self.cloud().import(&r.r#type, &r.remote).map_err(invalid)?;
+                Reply::Import(match found {
+                    Some((name, attrs, computed)) => pb::ImportResponse {
+                        found: true,
+                        r#type: r.r#type,
+                        name,
+                        attrs: Some(wire::doc(&attrs)),
+                        computed: Some(wire::doc(&computed)),
+                    },
+                    None => pb::ImportResponse::default(),
+                })
+            }
+        })
     }
 
-    async fn apply(&self, req: tonic::Request<pb::ApplyRequest>) -> Reply<pb::ApplyResponse> {
-        let r = req.into_inner();
+    fn is_dead(&self) -> bool {
+        self.in_process && self.cloud().crashed.is_some()
+    }
+}
+
+impl Mock {
+    fn apply(&self, r: pb::ApplyRequest) -> std::result::Result<pb::ApplyResponse, CallError> {
         let op = pb::Op::try_from(r.op).unwrap_or(pb::Op::Unspecified);
         if op == pb::Op::EndTick {
             let spans = r
@@ -1015,10 +1058,10 @@ impl pb::provider_server::Provider for Service {
                 })
                 .collect();
             let notes = self.cloud().end_tick(spans).map_err(invalid)?;
-            return Ok(tonic::Response::new(pb::ApplyResponse {
+            return Ok(pb::ApplyResponse {
                 notes,
                 ..Default::default()
-            }));
+            });
         }
         let assertions = r
             .assertions
@@ -1031,7 +1074,7 @@ impl pb::provider_server::Provider for Service {
                     message: a.message.clone(),
                 })
             })
-            .collect::<std::result::Result<_, tonic::Status>>()?;
+            .collect::<std::result::Result<_, CallError>>()?;
         let call = Call {
             op,
             addr: Address {
@@ -1044,48 +1087,62 @@ impl pb::provider_server::Provider for Service {
             assertions,
         };
         match self.cloud().apply(call) {
-            Ok(a) => Ok(tonic::Response::new(pb::ApplyResponse {
+            Ok(a) => Ok(pb::ApplyResponse {
                 remote: a.remote,
                 attrs: Some(wire::doc(&a.attrs)),
                 computed: Some(wire::doc(&a.computed)),
                 elapsed_ms: a.elapsed_ms,
                 notes: a.notes,
-            })),
-            Err(Failed::Refused(m)) => Err(tonic::Status::failed_precondition(m)),
-            Err(Failed::TimedOut(m)) => Err(tonic::Status::deadline_exceeded(m)),
+            }),
+            Err(Failed::Refused(m)) => Err(CallError::Refused(m)),
+            Err(Failed::TimedOut(m)) => Err(CallError::MaybeApplied(m)),
+            Err(Failed::Crashed(m)) => Err(CallError::Crashed(m)),
         }
-    }
-
-    async fn import(&self, req: tonic::Request<pb::ImportRequest>) -> Reply<pb::ImportResponse> {
-        let r = req.into_inner();
-        let found = self.cloud().import(&r.r#type, &r.remote).map_err(invalid)?;
-        Ok(tonic::Response::new(match found {
-            Some((name, attrs, computed)) => pb::ImportResponse {
-                found: true,
-                r#type: r.r#type,
-                name,
-                attrs: Some(wire::doc(&attrs)),
-                computed: Some(wire::doc(&computed)),
-            },
-            None => pb::ImportResponse::default(),
-        }))
     }
 }
 
-/// `dform-provider-fake`: serve the mock on a loopback port (or a unix
-/// socket, `plugin::transport`), print the handshake line, and exit when
-/// stdin closes (dform is done or gone).
-pub fn serve() -> Result<()> {
-    let service = Service {
-        cloud: std::sync::Mutex::new(FakeCloud::default()),
-    };
-    dform_grpc::transport::serve(
-        tonic::transport::Server::builder().add_service(
-            pb::provider_server::ProviderServer::new(service)
-                .max_decoding_message_size(usize::MAX)
-                .max_encoding_message_size(usize::MAX),
-        ),
-    )
+/// The direct and wire backends: the mock linked in, its calls queued
+/// (`plugin::queue`). A plugin executable is out of their reach.
+pub struct Linked {
+    pub order: Order,
+    /// Every message encoded and decoded through prost (the wire backend).
+    pub wire: bool,
+}
+
+impl Linked {
+    /// The direct backend on the simulated clock.
+    pub fn direct() -> Linked {
+        Linked {
+            order: Order::Clock,
+            wire: false,
+        }
+    }
+
+    /// The wire backend on the simulated clock.
+    pub fn wire() -> Linked {
+        Linked {
+            order: Order::Clock,
+            wire: true,
+        }
+    }
+}
+
+impl Launch for Linked {
+    fn mock(&self) -> Result<Link> {
+        let what = if self.wire { "wire" } else { "direct" };
+        Link::start(
+            format!("the mock ({what})"),
+            Box::new(Queue::new(Mock::linked(), self.order, self.wire)),
+        )
+    }
+
+    fn plugin(&self, exe: &std::path::Path) -> Result<Link> {
+        bail!(
+            "provider {}: a plugin executable needs the process backend; this backend \
+             links only the mock",
+            exe.display()
+        )
+    }
 }
 
 /// The id the mock mints when the schema gives no template: `T:NAME`, and

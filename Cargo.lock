@@ -391,6 +391,7 @@ dependencies = [
  "clap",
  "dform-core",
  "dform-grpc",
+ "dform-mock",
  "k8s-openapi",
  "kube",
  "serde_json",
@@ -413,6 +414,15 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+]
+
+[[package]]
+name = "dform-direct"
+version = "0.1.0"
+dependencies = [
+ "dform",
+ "dform-core",
+ "dform-mock",
 ]
 
 [[package]]
@@ -451,16 +461,15 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "dform-core",
- "dform-grpc",
  "serde",
  "serde_json",
- "tonic",
 ]
 
 [[package]]
 name = "dform-provider-fake"
 version = "0.1.0"
 dependencies = [
+ "dform-grpc",
  "dform-mock",
 ]
 

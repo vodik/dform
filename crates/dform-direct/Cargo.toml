@@ -1,0 +1,13 @@
+# The command line over the mock linked in: for tests and benches, which
+# run the same programs as `dform` without a provider process. Not a
+# production path.
+[package]
+name = "dform-direct"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+dform = { path = "../.." }
+dform-core = { path = "../dform-core" }
+dform-mock = { path = "../dform-mock" }

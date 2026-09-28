@@ -8,10 +8,12 @@ members = [
     "crates/dform-k8s",
     "crates/dform-provider-fake",
     "crates/dform-provider-k8s",
+    "crates/dform-direct",
     "tree-sitter-dform",
 ]
-# `cargo build` and `cargo test` build the provider binaries the CLI spawns;
-# `cargo run` runs the CLI (`default-run`).
+# `cargo build` and `cargo test` build the provider binaries the CLI spawns
+# and `dform-direct`, which tests and benches run; `cargo run` runs the CLI
+# (`default-run`).
 default-members = [
     ".",
     "crates/dform-wire",
@@ -21,6 +23,7 @@ default-members = [
     "crates/dform-k8s",
     "crates/dform-provider-fake",
     "crates/dform-provider-k8s",
+    "crates/dform-direct",
 ]
 resolver = "3"
 
@@ -48,6 +51,8 @@ name = "scale"
 harness = false
 
 [dev-dependencies]
+# The direct and wire backends, for tests and benches (not the CLI's).
+dform-mock = { path = "crates/dform-mock" }
 tree-sitter = "0.26"
 tree-sitter-dform = { path = "tree-sitter-dform" }
 # tests/k8s_cluster.rs talks to the cluster it applies to.

@@ -1,9 +1,11 @@
-//! The provider protocol over gRPC: a provider is an executable dform
-//! spawns (`spawn`), which prints a handshake line and serves
-//! `proto/dform/v1/provider.proto` (`client`), on TCP or a unix socket
-//! (`transport`).
+//! The process backend: the provider protocol over gRPC. A provider is an
+//! executable dform spawns (`spawn`), which prints a handshake line and
+//! serves `proto/dform/v1/provider.proto` on TCP or a unix socket
+//! (`transport`); `client` implements dform-core's `Provider` over it, and
+//! `server` serves a `Handler` (the mock) as such an executable.
 
 pub mod client;
+pub mod server;
 pub mod spawn;
 pub mod transport;
 

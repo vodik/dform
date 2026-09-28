@@ -139,4 +139,9 @@ pub trait Provider {
 /// backends link in, and what the gRPC server adapter serves.
 pub trait Handler {
     fn handle(&self, call: Call) -> Result<Reply, CallError>;
+
+    /// Whether the provider is gone (it crashed).
+    fn is_dead(&self) -> bool {
+        false
+    }
 }

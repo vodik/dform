@@ -1,4 +1,6 @@
-//! Failure and latency injection for the fake provider (`apply --chaos SPEC`).
+//! Failure and latency injection for the fake provider (`apply --chaos SPEC`),
+//! and one knob of the executor's own, `stop-after`, which works whatever
+//! the backend.
 //!
 //! Deterministic: nothing sleeps and nothing is random. Time is the world's
 //! tick counter, which every apply advances by one, and for `read-lag` the
@@ -12,7 +14,10 @@
 //! | `mutate=T/N:PATH=JSON`         | once, after the first tick T/N exists at, the world     |
 //! |                                | sets T/N's PATH to JSON                                 |
 //! | `latency=T/N:MS`               | Apply of T/N is recorded as taking MS (never slept)     |
-//! | `crash=T/N`                    | dform is killed as it calls Apply of T/N (exit 137)     |
+//! | `crash=T/N`                    | the provider dies as it is called to Apply T/N: exit    |
+//! |                                | 137 as a process, gone from then on when linked in      |
+//! | `stop-after=N`                 | dform stops as if killed once N Apply calls returned,   |
+//! |                                | each persisted: nothing in flight is waited for         |
 //! | `fresh-ids`                    | every Create mints new ids, as a real cloud does: a     |
 //! |                                | replacement's id is not its predecessor's               |
 
@@ -28,6 +33,8 @@ pub struct Chaos {
     pub mutate: Vec<(Address, String, serde_json::Value)>,
     pub latency: BTreeMap<Address, u64>,
     pub crash: BTreeSet<Address>,
+    /// The executor stops once this many Apply calls have returned.
+    pub stop_after: Option<usize>,
     /// Every Create salts its minted values with a serial the world keeps,
     /// so a destroy-first replacement under the same name gets a new id.
     pub fresh_ids: bool,
@@ -69,7 +76,8 @@ impl Chaos {
         }
         let (knob, arg) = spec.split_once('=').ok_or_else(|| {
             anyhow!(
-                "expected KNOB=ARG (fail, timeout, crash, read-lag, mutate, latency) or fresh-ids"
+                "expected KNOB=ARG (fail, timeout, crash, read-lag, mutate, latency, \
+                 stop-after) or fresh-ids"
             )
         })?;
         match knob {
@@ -81,6 +89,13 @@ impl Chaos {
             }
             "crash" => {
                 self.crash.insert(parse_addr(arg)?);
+            }
+            "stop-after" => {
+                let n: usize = arg.parse().context("a number of Apply calls")?;
+                if n == 0 {
+                    bail!("stop-after=N: N is at least 1");
+                }
+                self.stop_after = Some(n);
             }
             "read-lag" => {
                 let (a, k) = addr_and(arg, "READS")?;
@@ -102,7 +117,7 @@ impl Chaos {
             other => {
                 bail!(
                     "unknown chaos knob '{other}' (fail, timeout, crash, read-lag, mutate, latency, \
-                     fresh-ids)"
+                     stop-after, fresh-ids)"
                 )
             }
         }
@@ -124,6 +139,15 @@ impl Chaos {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stop_after_counts_apply_calls() {
+        let c = Chaos::parse(&["stop-after=3".into()]).unwrap();
+        assert_eq!(c.stop_after, Some(3));
+        assert!(c.addresses().is_empty());
+        assert!(Chaos::parse(&["stop-after=0".into()]).is_err());
+        assert!(Chaos::parse(&["stop-after=x".into()]).is_err());
+    }
 
     #[test]
     fn specs_parse_with_scoped_names() {

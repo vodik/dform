@@ -1,4 +1,6 @@
-//! dform: the language and engine are `dform-core`'s; this crate is the
-//! CLI over them (`src/main.rs`).
+//! dform: the language and engine are `dform-core`'s, re-exported here;
+//! `cli` is the command line over them, whatever the providers' backend.
 
 pub use dform_core::*;
+
+pub mod cli;
