@@ -671,22 +671,18 @@ impl FakeCloud {
     /// type, and every Optional+Computed one the program left unset.
     fn mint(&self, typ: &str, name: &str, doc: &Json) -> Json {
         let mut out = json!({});
-        for (attr, class) in self.schema.computed_of(typ) {
-            if !self.schema.in_list(typ, &attr) {
-                set_path(
-                    &mut out,
-                    &attr,
-                    self.mint_value(typ, name, &attr, class, doc),
-                );
-            }
-        }
+        // Optional+Computed first: a computed template may spell the picked
+        // value (an IAM role's id is its name).
         for (attr, class) in self.schema.optional_computed_of(typ) {
             if get_path(doc, &attr).is_none() && !self.schema.in_list(typ, &attr) {
-                set_path(
-                    &mut out,
-                    &attr,
-                    self.mint_value(typ, name, &attr, class, doc),
-                );
+                let v = self.mint_value(typ, name, &attr, class, doc, &out);
+                set_path(&mut out, &attr, v);
+            }
+        }
+        for (attr, class) in self.schema.computed_of(typ) {
+            if !self.schema.in_list(typ, &attr) {
+                let v = self.mint_value(typ, name, &attr, class, doc, &out);
+                set_path(&mut out, &attr, v);
             }
         }
         if !self.schema.knows_type(typ) {
@@ -695,7 +691,15 @@ impl FakeCloud {
         out
     }
 
-    fn mint_value(&self, typ: &str, name: &str, attr: &str, class: NullClass, doc: &Json) -> Json {
+    fn mint_value(
+        &self,
+        typ: &str,
+        name: &str,
+        attr: &str,
+        class: NullClass,
+        doc: &Json,
+        minted: &Json,
+    ) -> Json {
         let hash = short_hash(&format!("{typ}/{name}#{attr}"));
         let n = u64::from_str_radix(&hash, 36).unwrap_or(0);
         match self.schema.mints.get(&(typ.to_string(), attr.to_string())) {
@@ -706,7 +710,7 @@ impl FakeCloud {
                     .replace("{attr}", attr)
                     .replace("{hash}", &hash)
                     .replace("{n}", &(n % 254 + 1).to_string());
-                return json!(fill_doc_refs(&s, doc));
+                return json!(fill_doc_refs(&s, doc, minted));
             }
             Some(v) => return value_to_json(v),
             None => {}
@@ -825,16 +829,16 @@ impl FakeCloud {
     }
 }
 
-/// Replace each `{doc:PATH}` in a mint template with the program's string
-/// value at PATH, or nothing.
-fn fill_doc_refs(tpl: &str, doc: &Json) -> String {
+/// Replace each `{doc:PATH}` in a mint template with the resource's string
+/// value at PATH: the program's, else one minted before it, else nothing.
+fn fill_doc_refs(tpl: &str, doc: &Json, minted: &Json) -> String {
     let mut out = String::new();
     let mut rest = tpl;
     while let Some(i) = rest.find("{doc:") {
         out.push_str(&rest[..i]);
         let Some(j) = rest[i..].find('}') else { break };
         let path = &rest[i + 5..i + j];
-        if let Some(Json::String(v)) = get_path(doc, path) {
+        if let Some(Json::String(v)) = get_path(doc, path).or_else(|| get_path(minted, path)) {
             out.push_str(v);
         }
         rest = &rest[i + j + 1..];

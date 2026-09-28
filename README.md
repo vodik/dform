@@ -63,7 +63,10 @@ type_mint(db.postgres, endpoint, "{name}.db.fake").   % optional: how the mock m
 ```
 
 Built-in mock schemas: `fake` (the demo's), `gke` (pngu.df), `k8s` (fifteen
-Kubernetes kinds; try `cargo run -- --file examples/k8s_demo.df --provider k8s plan`).
+Kubernetes kinds; try `cargo run -- --file examples/k8s_demo.df --provider k8s plan`)
+and `aws-mock` (twelve AWS types in the Terraform provider's shape, with its
+Optional+Computed attributes and keyless sets; try
+`cargo run -- --file examples/aws_demo.df --provider aws-mock plan`).
 A `required` attribute the program does not set is a plan error. Lists with
 `type_list_key` are diffed by key (`spec.template.spec.containers[name=web].image`),
 lists of type `set` as sets. A `type_mint` string may use `{type}`, `{name}`,
