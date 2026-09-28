@@ -14,6 +14,8 @@ pub struct Lowered {
     pub externs: BTreeSet<Extern>,
     /// The stack's and every module instance's typed inputs.
     pub inputs: Vec<crate::inputs::Declared>,
+    /// `extern p(+a, -b)` declarations: what the provider answers on demand.
+    pub extern_fns: Vec<crate::ast::ExternFn>,
 }
 
 pub fn lower(program: &Program) -> Result<Lowered> {
@@ -24,14 +26,16 @@ pub fn lower(program: &Program) -> Result<Lowered> {
     let (expanded, inputs) = crate::modules::expand(&program)?;
     let expanded = expand_when(&expanded)?;
     let expanded = desugar_settings(&expanded)?;
-    let (expanded, externs) = drop_metadata(&expanded);
+    let (expanded, externs, extern_fns) = drop_metadata(&expanded);
     let expanded = desugar_resources(&expanded)?;
     let expanded = desugar_comprehensions(&expanded)?;
     let expanded = lower_contributions(&expanded)?;
+    crate::externs::check(&expanded, &extern_fns)?;
     Ok(Lowered {
         program: expanded,
         externs,
         inputs,
+        extern_fns,
     })
 }
 
@@ -75,6 +79,10 @@ fn reject_pending(stmts: &[Stmt]) -> Result<()> {
                 Stmt::Export(e) if at != At::Module => {
                     diags.push(misplaced(e.span, "`export` belongs at the top of a module"))
                 }
+                Stmt::ExternFn(e) if at != At::Top => diags.push(misplaced(
+                    e.span,
+                    "`extern` belongs at the top of the program",
+                )),
                 Stmt::Stack(c) | Stmt::Provider(c) if at != At::Top => diags.push(misplaced(
                     c.span,
                     "`stack` and `provider` belong at the top of the program",
@@ -892,13 +900,22 @@ fn merge_counts(dst: &mut BTreeMap<String, usize>, src: &BTreeMap<String, usize>
 /// Drop statements that carry no rules, keeping the `extern` declarations.
 /// `unique` lowers to nothing: one value per key is what the attribute
 /// aggregate already enforces.
-fn drop_metadata(program: &Program) -> (Program, BTreeSet<Extern>) {
+fn drop_metadata(program: &Program) -> (Program, BTreeSet<Extern>, Vec<crate::ast::ExternFn>) {
     let mut statements = Vec::new();
     let mut externs = BTreeSet::new();
+    let mut fns = Vec::new();
     for s in &program.statements {
         match s {
             Stmt::Extern(e) => {
                 externs.insert(e.clone());
+            }
+            Stmt::ExternFn(f) => {
+                externs.insert(Extern {
+                    pred: f.name.clone(),
+                    arity: f.args.len(),
+                    span: f.span,
+                });
+                fns.push(f.clone());
             }
             Stmt::Import(_) => {
                 // Loader-level feature, ignored in evaluator for now.
@@ -918,7 +935,7 @@ fn drop_metadata(program: &Program) -> (Program, BTreeSet<Extern>) {
             _ => statements.push(s.clone()),
         }
     }
-    (Program { statements }, externs)
+    (Program { statements }, externs, fns)
 }
 
 fn expand_when(program: &Program) -> Result<Program> {

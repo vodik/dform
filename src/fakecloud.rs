@@ -83,6 +83,8 @@ pub struct FakeCloud {
     refreshed: RefCell<Option<(BTreeSet<String>, RemoteState)>>,
     /// The chaos `mutate` specs that have landed this run.
     mutated: RefCell<BTreeSet<usize>>,
+    /// What `query` answers externs with: `providers/<name>/externs.df`.
+    answers: Vec<Atom>,
 }
 
 fn key(typ: &str, name: &str) -> String {
@@ -211,6 +213,7 @@ impl FakeCloud {
             notes: RefCell::new(Vec::new()),
             refreshed: RefCell::new(None),
             mutated: RefCell::new(BTreeSet::new()),
+            answers: Vec::new(),
         }
     }
 
@@ -218,6 +221,58 @@ impl FakeCloud {
     pub fn with_chaos(mut self, chaos: Chaos) -> Self {
         self.chaos = chaos;
         self
+    }
+
+    /// The facts `query` answers externs with.
+    pub fn with_answers(mut self, answers: Vec<Atom>) -> Self {
+        self.answers = answers;
+        self
+    }
+
+    /// Query (E DR-18): an extern's answer, the rows of `pred` among the
+    /// mock's answer facts whose `+` columns (`plus`) are `inputs`, in
+    /// order. No row is an answer too: nothing matches.
+    pub fn query(&self, pred: &str, plus: &[bool], inputs: &[Value]) -> Result<Vec<Vec<Value>>> {
+        fn value(t: &crate::ast::Term) -> Option<Value> {
+            use crate::ast::Term;
+            match t {
+                Term::Val(v) => Some(v.clone()),
+                Term::List(xs) => xs.iter().map(value).collect::<Option<_>>().map(Value::List),
+                Term::Obj(m) => m
+                    .iter()
+                    .map(|(k, v)| Some((k.clone(), value(v)?)))
+                    .collect::<Option<_>>()
+                    .map(Value::Obj),
+                _ => None,
+            }
+        }
+        let mut rows = Vec::new();
+        for a in self.answers.iter().filter(|a| a.pred == pred) {
+            if a.args.len() != plus.len() {
+                bail!(
+                    "the mock's answer {} has {} columns, the extern {}",
+                    crate::partition::fmt_atom(a),
+                    a.args.len(),
+                    plus.len()
+                );
+            }
+            let Some(row) = a.args.iter().map(value).collect::<Option<Vec<Value>>>() else {
+                bail!(
+                    "the mock's answer {} is not ground",
+                    crate::partition::fmt_atom(a)
+                );
+            };
+            let ins: Vec<&Value> = row
+                .iter()
+                .zip(plus)
+                .filter(|(_, p)| **p)
+                .map(|(v, _)| v)
+                .collect();
+            if ins.iter().copied().eq(inputs.iter()) {
+                rows.push(row);
+            }
+        }
+        Ok(rows)
     }
 
     /// What chaos did during the last apply.

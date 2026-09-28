@@ -1,0 +1,510 @@
+//! Externs with binding patterns (DESIGN.org "Demand-driven extern
+//! predicates", E §2.6, DR-7): `extern p(+in, -out, ...) [persist].`
+//!
+//! An extern is a predicate its provider answers on demand: a body literal
+//! `p(t1, ..., tn)` asks once its `+` arguments are ground, and the
+//! answers are facts of `p` with those inputs. The literals before it in
+//! the body bind the inputs; an extern under `not`, in a recursive rule, or
+//! defined by a rule is a compile error.
+//!
+//! Evaluation is by rounds: evaluate with the answers known so far; find
+//! every call the rules demand (the body before each extern literal, over
+//! the facts); ask the new ones; evaluate again until no call is new. An
+//! extern is not in a cycle and not negated, so an answer never retracts
+//! another round's demand: the last round is the fixpoint with every answer
+//! it reads. Answers are recorded in the plan file (apply asks nothing the
+//! plan already asked) and, for a `persist` extern, in state, where they
+//! win over asking again (a generated password stays the same).
+//!
+//! The first real provider is `file`: `file.json(+path, -value)` and
+//! `file.text(+path, -value)`, paths relative to the program's directory
+//! (the first `--file`'s).
+//! Other externs are asked of the mock (`FakeCloud::query`).
+
+use crate::ast::{Atom, BindArg, ExternFn, Lit, Program, Span, Stmt, Term, TypeExpr};
+use crate::diag::{Diagnostic, Diagnostics};
+use crate::engine::{self, EvalResult};
+use crate::value::Value;
+use anyhow::{Context, Result, bail};
+use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet};
+
+/// One call: the extern and its `+` arguments, in order.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct Call {
+    pub pred: String,
+    pub inputs: Vec<Value>,
+}
+
+/// A call and its answer: every row a full tuple of the extern.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Answer {
+    pub pred: String,
+    pub inputs: Vec<Value>,
+    pub rows: Vec<Vec<Value>>,
+}
+
+fn vars(t: &Term, out: &mut BTreeSet<String>) {
+    match t {
+        Term::Var(v) => {
+            out.insert(v.clone());
+        }
+        Term::Func { args, .. } | Term::List(args) => args.iter().for_each(|a| vars(a, out)),
+        Term::Obj(m) => m.values().for_each(|a| vars(a, out)),
+        _ => {}
+    }
+}
+
+/// The rules and constraints of a lowered program, as (head, body, span).
+fn bodies(program: &Program) -> Vec<(Option<&Atom>, &[Lit], Span)> {
+    program
+        .statements
+        .iter()
+        .filter_map(|s| match s {
+            Stmt::Rule(r) => Some((Some(&r.head), r.body.as_slice(), r.head.span)),
+            Stmt::Constraint(c) => Some((None, c.body.as_slice(), c.span)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The compile-time rules: an extern is not defined by a rule, not negated,
+/// not in a recursive rule, called with its arity, and its `+` arguments
+/// are bound by the literals before it.
+pub fn check(program: &Program, fns: &[ExternFn]) -> Result<()> {
+    if fns.is_empty() {
+        return Ok(());
+    }
+    let by: BTreeMap<&str, &ExternFn> = fns.iter().map(|f| (f.name.as_str(), f)).collect();
+    let mut diags = Vec::new();
+    // The predicate graph: body predicate -> heads of the rules reading it.
+    let mut edges: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+    for (head, body, _) in bodies(program) {
+        let Some(h) = head else { continue };
+        for l in body {
+            if let Lit::Pos(a) | Lit::Not(a) = l {
+                edges.entry(&a.pred).or_default().insert(&h.pred);
+            }
+        }
+    }
+    let reaches = |from: &str, to: &str| {
+        let mut seen = BTreeSet::new();
+        let mut stack = vec![from];
+        while let Some(p) = stack.pop() {
+            if p == to {
+                return true;
+            }
+            if seen.insert(p) {
+                stack.extend(edges.get(p).into_iter().flatten().copied());
+            }
+        }
+        false
+    };
+    for s in &program.statements {
+        if let Stmt::Fact(a) = s
+            && let Some(f) = by.get(a.pred.as_str())
+        {
+            diags.push(defined_here(a, f));
+        }
+    }
+    for (head, body, span) in bodies(program) {
+        if let Some(h) = head
+            && let Some(f) = by.get(h.pred.as_str())
+        {
+            diags.push(defined_here(h, f));
+        }
+        let mut bound: BTreeSet<String> = BTreeSet::new();
+        for l in body {
+            match l {
+                Lit::Not(a) if by.contains_key(a.pred.as_str()) => diags.push(
+                    Diagnostic::error(a.span, format!("extern {} under `not`", a.pred)).with_note(
+                        "an extern answers what exists; its absence is not known, so it cannot be negated",
+                    ),
+                ),
+                Lit::Pos(a) if by.contains_key(a.pred.as_str()) => {
+                    let f = by[a.pred.as_str()];
+                    if a.args.len() != f.args.len() {
+                        diags.push(Diagnostic::error(
+                            a.span,
+                            format!(
+                                "extern {} takes {} arguments, not {}",
+                                f.name,
+                                f.args.len(),
+                                a.args.len()
+                            ),
+                        ));
+                        continue;
+                    }
+                    for (t, b) in a.args.iter().zip(&f.args) {
+                        let mut vs = BTreeSet::new();
+                        vars(t, &mut vs);
+                        if b.input
+                            && let Some(v) = vs.iter().find(|v| !bound.contains(*v))
+                        {
+                            diags.push(
+                                Diagnostic::error(
+                                    a.span,
+                                    format!(
+                                        "extern {}: +{} is not bound ({v} is unbound before it)",
+                                        f.name, b.name
+                                    ),
+                                )
+                                .with_help("bind it with a literal before the extern"),
+                            );
+                        }
+                    }
+                    if let Some(h) = head
+                        && let Some(p) = body.iter().find_map(|l| match l {
+                            Lit::Pos(b) | Lit::Not(b)
+                                if !by.contains_key(b.pred.as_str())
+                                    && reaches(&h.pred, &b.pred) =>
+                            {
+                                Some(b.pred.as_str())
+                            }
+                            _ => None,
+                        })
+                    {
+                        diags.push(
+                            Diagnostic::error(
+                                a.span,
+                                format!("extern {} in a recursive rule", f.name),
+                            )
+                            .with_note(format!(
+                                "{} depends on itself through {p}; an extern is asked once its inputs are complete",
+                                h.pred
+                            )),
+                        );
+                    }
+                    a.args.iter().for_each(|t| vars(t, &mut bound));
+                }
+                Lit::Pos(a) => a.args.iter().for_each(|t| vars(t, &mut bound)),
+                Lit::Eq(x, y) => {
+                    let (mut vx, mut vy) = (BTreeSet::new(), BTreeSet::new());
+                    vars(x, &mut vx);
+                    vars(y, &mut vy);
+                    if vy.is_subset(&bound) {
+                        bound.extend(vx);
+                    } else if vx.is_subset(&bound) {
+                        bound.extend(vy);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let _ = span;
+    }
+    if diags.is_empty() {
+        Ok(())
+    } else {
+        Err(Diagnostics(diags).into())
+    }
+}
+
+fn defined_here(a: &Atom, f: &ExternFn) -> Diagnostic {
+    Diagnostic::error(
+        a.span,
+        format!(
+            "extern {} is answered by its provider; the program may not state it",
+            f.name
+        ),
+    )
+    .with_label(f.span, "declared extern here")
+}
+
+/// Is column `b` secret-typed (`-value: secret(T)`)?
+pub fn is_secret(b: &BindArg) -> bool {
+    matches!(&b.ty, Some(TypeExpr::Apply(n, _)) if n == "secret")
+}
+
+/// How a call is asked of its provider: the extern and its inputs, to rows.
+type Ask<'a> = dyn Fn(&ExternFn, &[Value]) -> Result<Vec<Vec<Value>>> + 'a;
+
+/// Where the answers of one run come from, in order: the plan file's, the
+/// state's persisted ones, then the provider.
+pub struct Externs<'a> {
+    fns: BTreeMap<String, ExternFn>,
+    /// The extern literal of each rule or constraint: the body before it,
+    /// and the extern.
+    sites: Vec<(Vec<Lit>, Atom)>,
+    known: RefCell<BTreeMap<Call, Vec<Vec<Value>>>>,
+    ask: Box<Ask<'a>>,
+    /// The calls the last evaluation demanded.
+    demanded: RefCell<BTreeSet<Call>>,
+}
+
+impl<'a> Externs<'a> {
+    pub fn new(
+        lowered: &Program,
+        fns: &[ExternFn],
+        ask: impl Fn(&ExternFn, &[Value]) -> Result<Vec<Vec<Value>>> + 'a,
+    ) -> Self {
+        let names: BTreeSet<&str> = fns.iter().map(|f| f.name.as_str()).collect();
+        let mut sites = Vec::new();
+        for (_, body, _) in bodies(lowered) {
+            for (i, l) in body.iter().enumerate() {
+                if let Lit::Pos(a) = l
+                    && names.contains(a.pred.as_str())
+                {
+                    sites.push((body[..i].to_vec(), a.clone()));
+                }
+            }
+        }
+        Externs {
+            fns: fns.iter().map(|f| (f.name.clone(), f.clone())).collect(),
+            sites,
+            known: RefCell::new(BTreeMap::new()),
+            ask: Box::new(ask),
+            demanded: RefCell::new(BTreeSet::new()),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.fns.is_empty()
+    }
+
+    /// Answers already known (from a plan file or state): not asked again.
+    pub fn preload(&self, answers: impl IntoIterator<Item = Answer>) {
+        let mut known = self.known.borrow_mut();
+        for a in answers {
+            if self.fns.contains_key(&a.pred) {
+                known
+                    .entry(Call {
+                        pred: a.pred,
+                        inputs: a.inputs,
+                    })
+                    .or_insert(a.rows);
+            }
+        }
+    }
+
+    fn facts(&self) -> Vec<Atom> {
+        self.known
+            .borrow()
+            .iter()
+            .flat_map(|(c, rows)| {
+                rows.iter().map(|r| Atom {
+                    pred: c.pred.clone(),
+                    args: r.iter().cloned().map(Term::Val).collect(),
+                    record: None,
+                    span: Span::default(),
+                })
+            })
+            .collect()
+    }
+
+    /// The calls the rules demand of `facts`: each extern literal's `+`
+    /// arguments under every answer to the body before it. An input that
+    /// is a null is not ground yet: no call.
+    fn demand(&self, facts: &BTreeSet<Atom>) -> Result<BTreeSet<Call>> {
+        let mut out = BTreeSet::new();
+        for (prefix, a) in &self.sites {
+            let f = &self.fns[&a.pred];
+            let mut body = prefix.clone();
+            let mut inputs = Vec::new();
+            for (k, (t, b)) in a.args.iter().zip(&f.args).enumerate() {
+                if b.input {
+                    let v = format!("DformExternIn{k}");
+                    body.push(Lit::Eq(Term::Var(v.clone()), t.clone()));
+                    inputs.push(v);
+                }
+            }
+            for (binding, _) in engine::query(&body, facts)? {
+                let vals: Option<Vec<Value>> =
+                    inputs.iter().map(|v| binding.get(v).cloned()).collect();
+                let Some(vals) = vals else { continue };
+                if vals.iter().any(|v| matches!(v, Value::Null { .. })) {
+                    continue;
+                }
+                out.insert(Call {
+                    pred: a.pred.clone(),
+                    inputs: vals,
+                });
+            }
+        }
+        Ok(out)
+    }
+
+    /// Evaluate `program` with the externs answered: rounds until no call
+    /// is new.
+    pub fn eval(&self, program: &Program, extra: &[Atom]) -> Result<(EvalResult, Vec<String>)> {
+        for _ in 0..64 {
+            let mut given = extra.to_vec();
+            given.extend(self.facts());
+            let (res, violations) = engine::eval(program, &given)?;
+            if self.is_empty() {
+                return Ok((res, violations));
+            }
+            let demand = self.demand(&res.facts)?;
+            let new: Vec<Call> = {
+                let known = self.known.borrow();
+                demand
+                    .iter()
+                    .filter(|c| !known.contains_key(c))
+                    .cloned()
+                    .collect()
+            };
+            if new.is_empty() {
+                *self.demanded.borrow_mut() = demand;
+                return Ok((res, violations));
+            }
+            for c in new {
+                let f = &self.fns[&c.pred];
+                let rows = (self.ask)(f, &c.inputs)
+                    .with_context(|| format!("extern {}({})", c.pred, show(&c.inputs)))?;
+                for r in &rows {
+                    if r.len() != f.args.len() {
+                        bail!(
+                            "extern {}: an answer has {} columns, the declaration {}",
+                            c.pred,
+                            r.len(),
+                            f.args.len()
+                        );
+                    }
+                }
+                self.known.borrow_mut().insert(c, rows);
+            }
+        }
+        bail!(
+            "externs: calls did not settle after 64 rounds (an extern's output feeding its own input?)"
+        )
+    }
+
+    /// The answers the last evaluation read, for the plan file: every call
+    /// it demanded, except a call with a secret column (a secret is never
+    /// written in the clear).
+    pub fn recorded(&self) -> Vec<Answer> {
+        self.answers(|f| !f.args.iter().any(is_secret))
+    }
+
+    /// The answers of `persist` externs the last evaluation read, for state.
+    pub fn persisted(&self) -> Vec<Answer> {
+        self.answers(|f| f.persist)
+    }
+
+    fn answers(&self, keep: impl Fn(&ExternFn) -> bool) -> Vec<Answer> {
+        let known = self.known.borrow();
+        self.demanded
+            .borrow()
+            .iter()
+            .filter(|c| keep(&self.fns[&c.pred]))
+            .filter_map(|c| {
+                Some(Answer {
+                    pred: c.pred.clone(),
+                    inputs: c.inputs.clone(),
+                    rows: known.get(c)?.clone(),
+                })
+            })
+            .collect()
+    }
+}
+
+fn show(vs: &[Value]) -> String {
+    vs.iter()
+        .map(crate::partition::fmt_value)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// The rows of a call: the `+` columns are the inputs, the `-` columns each
+/// value of `outs`.
+pub fn row(f: &ExternFn, inputs: &[Value], outs: Vec<Value>) -> Vec<Value> {
+    let mut ins = inputs.iter();
+    let mut outs = outs.into_iter();
+    f.args
+        .iter()
+        .map(|b| {
+            if b.input {
+                ins.next().cloned()
+            } else {
+                outs.next()
+            }
+            .unwrap_or(Value::Str(String::new()))
+        })
+        .collect()
+}
+
+/// The `file` fact provider: `file.json(+path, -value)`, `file.text(+path,
+/// -value)`, a relative path from `base` (the program's directory). `None`
+/// for an extern it does not answer.
+pub fn file(
+    f: &ExternFn,
+    inputs: &[Value],
+    base: &std::path::Path,
+) -> Option<Result<Vec<Vec<Value>>>> {
+    let kind = f.name.strip_prefix("file.")?;
+    let one = |r: Result<Value>| r.map(|v| vec![row(f, inputs, vec![v])]);
+    Some(match (kind, inputs) {
+        ("json" | "text", [Value::Str(path)]) if f.args.len() == 2 => {
+            let text =
+                std::fs::read_to_string(base.join(path)).with_context(|| format!("read {path}"));
+            one(text.and_then(|t| {
+                if kind == "text" {
+                    return Ok(Value::Str(t));
+                }
+                let j: serde_json::Value =
+                    serde_json::from_str(&t).with_context(|| format!("parse {path} as JSON"))?;
+                Ok(from_json(&j))
+            }))
+        }
+        ("json" | "text", _) => Err(anyhow::anyhow!(
+            "file.{kind} is declared `extern file.{kind}(+path, -value)`"
+        )),
+        _ => Err(anyhow::anyhow!(
+            "the file provider answers file.json and file.text, not {}",
+            f.name
+        )),
+    })
+}
+
+/// A JSON document as a value: numbers that are not integers and `null`
+/// become strings (the value model has neither).
+pub fn from_json(j: &serde_json::Value) -> Value {
+    match j {
+        serde_json::Value::Null => Value::Str("null".into()),
+        serde_json::Value::Bool(b) => Value::Bool(*b),
+        serde_json::Value::Number(n) => match n.as_i64() {
+            Some(i) => Value::Int(i),
+            None => Value::Str(n.to_string()),
+        },
+        serde_json::Value::String(s) => Value::Str(s.clone()),
+        serde_json::Value::Array(xs) => Value::List(xs.iter().map(from_json).collect()),
+        serde_json::Value::Object(m) => {
+            Value::Obj(m.iter().map(|(k, v)| (k.clone(), from_json(v))).collect())
+        }
+    }
+}
+
+/// The mock's extern answers: `providers/<name>/externs.df` beside each
+/// provider's schema, facts of the extern predicates.
+pub fn load_answers(specs: &[String]) -> Result<Vec<Atom>> {
+    let names: Vec<&str> = if specs.is_empty() {
+        vec!["fake"]
+    } else {
+        specs.iter().map(String::as_str).collect()
+    };
+    let mut out = Vec::new();
+    for n in names {
+        let path = if n.ends_with(".df") || n.contains('/') {
+            std::path::Path::new(n).with_file_name("externs.df")
+        } else {
+            std::path::Path::new("providers").join(n).join("externs.df")
+        };
+        if !path.exists() {
+            continue;
+        }
+        let src =
+            std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+        let program = crate::parser::parse_file(&path.display().to_string(), &src)?;
+        for s in program.statements {
+            match s {
+                Stmt::Fact(a) => out.push(a),
+                _ => bail!(
+                    "{}: an externs file holds the facts the mock answers with, nothing else",
+                    path.display()
+                ),
+            }
+        }
+    }
+    Ok(out)
+}

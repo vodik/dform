@@ -10,13 +10,17 @@
 # Notes:
 # - This file models the intent/config surface area of the Terraform stack.
 # - External Terraform modules are represented as higher-level resources.
-# - The monitoring dashboard JSON is stubbed (see terraform/modules/monitoring/dashboard-pngu.json).
+# - The monitoring dashboard JSON is read with the file provider from a stub,
+#   examples/files/dashboard-pngu.json (see terraform/modules/monitoring/dashboard-pngu.json).
 
 edition 2026.
 
 ########################################
 # Schema declarations
 ########################################
+
+# The file provider answers file.json once its path is known.
+extern file.json(+ path, - value).
 
 # Keep decl for true relational tables.
 decl peering(Env: symbol, Name: string, PeerNetwork: string).
@@ -206,12 +210,13 @@ when env(Env) {
   # Resources (monitoring module intent)
   ########################################
 
-  # Stubbed dashboard JSON: see terraform/modules/monitoring/dashboard-pngu.json
+  # The dashboard JSON is a file, read by the file provider.
   resource google_monitoring_dashboard pngu {
     project = ProjectId
-    dashboard_json = { "displayName": "pngu", "note": "stubbed; see terraform/modules/monitoring/dashboard-pngu.json" }
+    dashboard_json = Dash
   } :-
-    setting(Env, .project_id, ProjectId).
+    setting(Env, .project_id, ProjectId),
+    file.json("examples/files/dashboard-pngu.json", Dash).
 
   # Represents terraform-gcp-alert-metrics module invocation.
   resource alert_metrics_pack pngu {

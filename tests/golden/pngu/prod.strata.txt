@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== pngu.df: 153 nodes, 383 edges (266 negative)
+== pngu.df: 154 nodes, 386 edges (269 negative)
    STRATIFIED, 4 strata
    stratum 0:
      (arg, input, env)
@@ -25,6 +25,7 @@ exit: ok
      (want, net.subnet)
      (want, net.vpc)
      (want, net.vpc_peering)
+     file.json
      identity
      input
      peering

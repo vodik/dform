@@ -7,9 +7,9 @@ use super::SyntaxKind::{self, *};
 use super::{SyntaxNode, SyntaxToken};
 use crate::ast::{
     ApplyPolicy, Atom, AttrDecl, BindArg, Config, Constraint, Contributes, Decl, Export, Extern,
-    FieldAssign, FieldOp, Grant, Import, InputDecl, Instance, Lit, Module, OutputDecl, Pending,
-    PendingKind, PolicyPack, Program, Rank, Resource, RuleStmt, Settings, Span, Stmt, Term,
-    TypeExpr, When,
+    ExternFn, FieldAssign, FieldOp, Grant, Import, InputDecl, Instance, Lit, Module, OutputDecl,
+    Pending, PendingKind, PolicyPack, Program, Rank, Resource, RuleStmt, Settings, Span, Stmt,
+    Term, TypeExpr, When,
 };
 use crate::diag::Diagnostic;
 use crate::value::Value;
@@ -305,11 +305,12 @@ impl Lowerer {
                     })
                     .collect();
                 let persist = tokens(n).any(|t| t.kind() == PERSIST_KW);
-                pending(PendingKind::ExternFn {
+                Ok(Stmt::ExternFn(ExternFn {
                     name,
                     args,
                     persist,
-                })
+                    span,
+                }))
             }
             TYPE_DECL => {
                 let name = self.name_text(n, 1);

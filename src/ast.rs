@@ -137,6 +137,9 @@ pub enum Stmt {
     Settings(Settings),
     Decl(Decl),
     Extern(Extern),
+    /// `extern p(+in, -out, ...) [persist]`: a predicate a provider answers
+    /// on demand, once its `+` arguments are ground (`externs`).
+    ExternFn(ExternFn),
     /// A statement the grammar has and the evaluator does not yet: lowering
     /// rejects it naming the ticket that brings it.
     Pending(Pending),
@@ -207,6 +210,14 @@ impl std::fmt::Debug for Span {
 pub struct Extern {
     pub pred: String,
     pub arity: usize,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExternFn {
+    pub name: String,
+    pub args: Vec<BindArg>,
+    pub persist: bool,
     pub span: Span,
 }
 
@@ -352,36 +363,16 @@ pub struct Pending {
 
 #[derive(Debug, Clone)]
 pub enum PendingKind {
-    ExternFn {
-        name: String,
-        args: Vec<BindArg>,
-        persist: bool,
-    },
-    TypeDecl {
-        name: String,
-        attrs: Vec<AttrDecl>,
-    },
-    DeclOpenType {
-        name: String,
-    },
-    DeclMixed {
-        pred: String,
-        arity: usize,
-    },
-    Scenario {
-        name: String,
-        body: Vec<Stmt>,
-    },
+    TypeDecl { name: String, attrs: Vec<AttrDecl> },
+    DeclOpenType { name: String },
+    DeclMixed { pred: String, arity: usize },
+    Scenario { name: String, body: Vec<Stmt> },
 }
 
 impl PendingKind {
     /// What the statement is, and the WORK.org ticket that gives it meaning.
     pub fn describe(&self) -> (&'static str, &'static str) {
         match self {
-            PendingKind::ExternFn { .. } => (
-                "an extern with binding patterns",
-                "phase 6 \"Externs with binding patterns\"",
-            ),
             PendingKind::TypeDecl { .. } => (
                 "a type block",
                 "phase 6 \"Refinement types, doc annotations, L15 inet\"",

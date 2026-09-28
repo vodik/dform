@@ -4,6 +4,7 @@ pub mod circuit;
 pub mod diag;
 pub mod engine;
 pub mod executor;
+pub mod externs;
 pub mod fakecloud;
 pub mod fmt;
 pub mod graph;

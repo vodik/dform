@@ -363,6 +363,9 @@ pub mod file {
         pub pending_groups: Vec<Group>,
         pub nulls: Nulls,
         pub ticks: Vec<Tick>,
+        /// The extern answers the plan read: apply asks none of these again.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pub externs: Vec<crate::externs::Answer>,
     }
 
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

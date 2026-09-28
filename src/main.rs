@@ -183,8 +183,10 @@ fn run() -> Result<()> {
     };
     // The stack's and the instances' typed inputs, when the program lowers
     // (when it does not, evaluation reports why).
-    let declared = dform::transform::lower(&program)
-        .map(|l| l.inputs)
+    let lowered = dform::transform::lower(&program).ok();
+    let declared = lowered
+        .as_ref()
+        .map(|l| l.inputs.clone())
         .unwrap_or_default();
     let mut given: BTreeSet<String> = BTreeSet::new();
     for f in &cli.input_files {
@@ -265,10 +267,30 @@ fn run() -> Result<()> {
         _ => Chaos::default(),
     };
     let backend = FakeCloud::with_paths(&paths.world, &paths.inventory, load_schema(&providers)?)
-        .with_chaos(chaos.clone());
+        .with_chaos(chaos.clone())
+        .with_answers(dform::externs::load_answers(&providers)?);
+    // Externs are asked on demand: of the file provider, else of the mock.
+    let (no_program, no_fns) = (dform::ast::Program { statements: vec![] }, vec![]);
+    let program_dir = files[0].parent().unwrap_or(Path::new("")).to_path_buf();
+    let externs = dform::externs::Externs::new(
+        lowered.as_ref().map_or(&no_program, |l| &l.program),
+        lowered.as_ref().map_or(&no_fns, |l| &l.extern_fns),
+        |f, inputs| {
+            if let Some(r) = dform::externs::file(f, inputs, &program_dir) {
+                return r;
+            }
+            let plus: Vec<bool> = f.args.iter().map(|b| b.input).collect();
+            backend.query(&f.name, &plus, inputs)
+        },
+    );
 
     let mut st = state::State::load(&paths.state)?;
     backend.bootstrap_state(&mut st)?;
+    // What the plan file read, then what state persisted, before asking.
+    if let Some((_, saved)) = &saved {
+        externs.preload(saved.externs.clone());
+    }
+    externs.preload(st.externs.clone());
 
     let mut set = Vec::new();
     for kv in &cli.set {
@@ -292,7 +314,7 @@ fn run() -> Result<()> {
         let mut extra = base_extra.clone();
         extra.extend(executor::withhold(backend.world_facts(st)?, withheld));
         extra.extend(more.iter().cloned());
-        let (res, mut violations) = engine::eval(&program, &extra)?;
+        let (res, mut violations) = externs.eval(&program, &extra)?;
         violations.extend(inputs::violations(&res.facts, &declared));
         Ok((res, violations))
     };
@@ -602,6 +624,7 @@ fn run() -> Result<()> {
                             addresses: xs.clone(),
                         })
                         .collect(),
+                    externs: externs.recorded(),
                 };
                 file.save(&out)?;
                 eprintln!("plan file: {}", out.display());
@@ -623,6 +646,7 @@ fn run() -> Result<()> {
             }
             // One apply at a time per stack.
             let _lock = dform::stack::Lock::acquire(&paths.state, &stack)?;
+            persist_externs(&mut st, &externs);
             let persist = |st: &state::State| st.save(&paths.state);
             if !moves.is_empty() {
                 print_moves(&moves);
@@ -742,6 +766,7 @@ fn run() -> Result<()> {
                     // stacks to read (evaluated again only when it has any:
                     // the evaluation refreshes). A --world fixture is not
                     // registered: everything stays beside the world file.
+                    persist_externs(&mut st, &externs);
                     st.outputs = if dform::stack::has_outputs(&res.facts) {
                         dform::stack::outputs(&evaluate(&st)?.0.facts)
                     } else {
@@ -801,6 +826,19 @@ fn run() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Keep the answers of `persist` externs in state: never asked again.
+fn persist_externs(st: &mut state::State, externs: &dform::externs::Externs) {
+    for a in externs.persisted() {
+        if !st
+            .externs
+            .iter()
+            .any(|b| b.pred == a.pred && b.inputs == a.inputs)
+        {
+            st.externs.push(a);
+        }
+    }
 }
 
 /// A plan and the evaluation that sees it (`plan_for` in `main`).

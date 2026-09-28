@@ -302,13 +302,14 @@ under one of them it prints the change and stops before any Apply call (run
 `apply` again to plan against the world as it now is).
 
 `plan --out PLAN.json` writes the plan file: the inputs (each `--file` with a
-digest of its content, `--set`, `--data`, `--provider`, `--world`,
-`--inventory`), a digest of the refreshed world, and the deformation delta:
-each deformation's action, before and after values (redacted as the plan
-prints them), the nulls it waits on and the tick it runs in; the pending
-groups; the nulls round 0 resolved and the ones the delta still carries; and
-the tick schedule. `apply PLAN.json` takes its inputs from the file (flags
-given on the command line must match them), refreshes and re-evaluates at
+digest of its content, each `--input-file` with its digest, `--set`,
+`--data`, `--provider`, `--world`, `--inventory`), a digest of the
+refreshed world, and the deformation delta: each deformation's action,
+before and after values (redacted as the plan prints them), the nulls it
+waits on and the tick it runs in; the pending groups; the nulls round 0
+resolved and the ones the delta still carries; the tick schedule; and the
+extern answers the plan read. `apply PLAN.json` takes its inputs from the
+file (flags given on the command line must match them), refreshes and re-evaluates at
 every tick, and refuses unless the delta it computes is the file's:
 Terraform's stale-plan rule, stated for Z-sets. Every deformation must be in
 the file with the same action, the same before-state and the same desired
@@ -464,6 +465,37 @@ and fails listing the files that would change.
   - `decl pred(Field1: type, FieldTwo: type).` enables record-style matching: `pred{field1: X, field_two: Y}`.
   - `decl pred/N.` declares a predicate a provider feeds (it may have no rows).
   - `_` is an anonymous wildcard term (matches anything, never binds).
+
+## Externs
+
+An extern is a predicate a provider answers on demand, declared with a
+binding pattern: `+` arguments are inputs, `-` arguments answers.
+
+```prolog
+extern file.json(+path, -value).
+extern random.password(+name, -value) persist.
+
+resource google_monitoring_dashboard pngu { dashboard_json = D } :-
+  file.json("examples/files/dashboard-pngu.json", D).
+```
+
+A body literal of an extern is asked once the literals before it bind its
+`+` arguments (an input that is a null waits), and the answers are facts of
+the extern with those inputs (`why` shows them as extern calls). An extern
+under `not`, in a recursive rule, stated by the program, or with an input
+nothing before it binds is a compile error. Evaluation is by rounds: every
+call the rules demand is asked once, then the program is evaluated again,
+until no call is new.
+
+`file.json` and `file.text` are the first real provider: they read a path
+relative to the program's directory. Any other extern is asked of the mock,
+which answers from `providers/<name>/externs.df` beside the provider's
+schema: facts of the extern, the rows whose `+` columns are the inputs.
+
+The plan file records the answers the plan read (not a call with a
+`secret(...)` column), and `apply PLAN` asks none of them again. A
+`persist` extern's answers are kept in state and never asked again, so a
+generated password stays the same across runs.
 
 ## Escape hatches
 

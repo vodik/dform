@@ -22,6 +22,10 @@ pub struct State {
     /// `stack_output(Stack, Key, Value)` (`stack`).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub outputs: BTreeMap<String, crate::value::Value>,
+    /// The answers of `persist` externs (E DR-7): kept, and never asked
+    /// again, so a generated value stays the same.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub externs: Vec<crate::externs::Answer>,
 }
 
 /// The deformations of the current tick that have not been applied yet, each
