@@ -2,9 +2,11 @@
 
 - Semantics come from proposals/E-synthesis.org as revised by proposals/F-revision.org
   section 3. When a ticket and E/F disagree, the ticket wins; say so in the report.
-- Naive evaluation is fine. Do not optimize inside a semantics ticket.
-- Keep `cargo run -- plan` (dform.df) and `cargo run -- --file pngu.df plan --set env=prod`
-  working at every commit. They are gates.
+- Do not optimize inside a semantics ticket.
+- Keep `cargo run -q -- -C examples/demo plan` and
+  `cargo run -q -- -C examples/pngu plan --set env=prod` working at every commit.
+  They are gates.
+- Programs follow docs/layout.md: one project per directory with a dform.toml.
 - Every behaviour change ships with a test that fails with the change reverted, and
   the report says you checked.
 - Snapshot tests live under tests/golden/; accept with the documented command only.
