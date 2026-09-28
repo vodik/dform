@@ -1753,11 +1753,26 @@ impl<'u> Lowerer<'u> {
                 let res = self.resolve(rc, &c, out)?;
                 match self.read_atom(rc, &res, Term::Wildcard, span) {
                     Some(a) => out.push(Lit::Pos(a)),
+                    // A nested path, or a field of a value: it has a value
+                    // when the walk to it does.
+                    None if matches!(
+                        res,
+                        Res::Ref { .. }
+                            | Res::Var { .. }
+                            | Res::Value { .. }
+                            | Res::Settings { .. }
+                    ) =>
+                    {
+                        let t = self.realize(rc, res, Pos::Content, out, span)?;
+                        let v = fresh(rc, "Has");
+                        out.push(Lit::Eq(var(&v), t));
+                        rc.outer.insert(v);
+                    }
                     None => {
                         return self.error(
                             span,
                             "`has` takes an attribute of a resource (`has r.p`), a settings \
-                             leaf or a value name",
+                             leaf, a value name or a field of a value",
                         );
                     }
                 }
@@ -3471,6 +3486,28 @@ mod tests {
             [
                 "p(X) :- q(X), not __neg_0(X)",
                 "__neg_0(X) :- q(X), r(X, Y), s(Y)",
+            ]
+        );
+    }
+
+    /// `has` and `not ==` on a nested path or a value's field: the walk
+    /// to it, and a helper for the negation.
+    #[test]
+    fn a_nested_path_is_walked_and_its_negation_is_a_helper() {
+        let got = lower(
+            "resource db.pg d { s = { a: 1 } }\n\
+             c(x) if q(x), has x.limits\n\
+             n(x) if q(x), not has x.limits\n\
+             r(1) if not d.s.a == 2\n",
+        );
+        assert_eq!(
+            &got[1..],
+            [
+                "c(X) :- q(X), Has = __path(X, \"limits\")",
+                "n(X) :- q(X), not __neg_0(X)",
+                "__neg_0(X) :- q(X), Has = __path(X, \"limits\")",
+                "r(1) :- not __neg_1()",
+                "__neg_1() :- attr(\"db.pg\", \"d\", \"s\", S), __path(S, \"a\") = 2",
             ]
         );
     }

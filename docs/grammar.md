@@ -358,6 +358,7 @@ are unchanged.
 | `R.p` alone, `not R.p`                    | `attr(T, A, "p", true)`, `not attr(T, A, "p", true)`  |
 | `not R.p == c`                            | `not attr(T, A, "p", c)`                               |
 | `has R.p`, `not has R.p`                  | `attr(T, A, "p", _)`, `not attr(T, A, "p", _)`        |
+| `has x.f`, `has R.p.q` (a walk)           | `Has = __path(X, "f")` after the read; `not` of it through a helper |
 | `k == c`, `k`, `has k`                    | `k(c)`, `k(true)`, `k(_)`                              |
 | `x in T`, `x in resource`, `exists R`     | `want(T, x)`, `want(Type, x)`, `want(T, A)`            |
 | `"n-{e}" in T`                            | `Name = format(..), want(T, Name)`                     |
