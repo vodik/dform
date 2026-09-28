@@ -61,6 +61,10 @@ pub struct Object {
 /// Objects by `key(type, remote id)`.
 type World = BTreeMap<String, Object>;
 
+/// A provider's Plan of one resource: its changes, and whether they
+/// replace it.
+type Planned = (Vec<Change>, bool);
+
 fn key(typ: &str, remote: &str) -> String {
     format!("{typ}::{remote}")
 }
@@ -424,38 +428,53 @@ impl Providers {
         provider::diff(&self.schema, typ, before, after)
     }
 
-    /// The owning provider's Plan for one resource: its changes, and
-    /// whether they replace it.
-    fn plan_one(
-        &self,
-        addr: &Address,
-        prior: Option<&Json>,
-        desired: Option<&Json>,
-    ) -> Result<(Vec<Change>, bool)> {
-        if prior.is_none() && desired.is_none() {
-            return Ok((Vec::new(), false));
+    /// The owning providers' Plan for each `(address, prior, desired)`:
+    /// its changes, and whether they replace it. The calls to one provider
+    /// are in flight at once; the first failure, in order, is the error.
+    fn plan_many(&self, asks: Vec<(Address, Option<Json>, Option<Json>)>) -> Result<Vec<Planned>> {
+        let mut out: Vec<Option<Result<Planned>>> = Vec::new();
+        let mut by_conn: BTreeMap<usize, Vec<(usize, pb::PlanRequest)>> = BTreeMap::new();
+        for (i, (addr, prior, desired)) in asks.into_iter().enumerate() {
+            if prior.is_none() && desired.is_none() {
+                out.push(Some(Ok((Vec::new(), false))));
+                continue;
+            }
+            out.push(None);
+            let req = pb::PlanRequest {
+                r#type: addr.typ.clone(),
+                name: addr.name.clone(),
+                prior: prior.as_ref().map(wire::doc),
+                desired: desired.as_ref().map(wire::doc),
+            };
+            by_conn
+                .entry(self.route(&addr.typ))
+                .or_default()
+                .push((i, req));
         }
-        let req = pb::PlanRequest {
-            r#type: addr.typ.clone(),
-            name: addr.name.clone(),
-            prior: prior.map(wire::doc),
-            desired: desired.map(wire::doc),
-        };
-        let r = self.conns[self.route(&addr.typ)].call(|mut c| async move { c.plan(req).await })?;
-        let side = |v: &Option<pb::Value>| v.as_ref().map(wire::from_doc).transpose();
-        let changes = r
-            .changes
-            .iter()
-            .map(|c| {
-                Ok(Change {
-                    path: c.path.clone(),
-                    before: side(&c.before)?,
-                    after: side(&c.after)?,
-                    sensitive: c.sensitive,
-                })
-            })
-            .collect::<Result<_>>()?;
-        Ok((changes, r.requires_replace))
+        for (c, reqs) in by_conn {
+            let (idx, reqs): (Vec<usize>, Vec<pb::PlanRequest>) = reqs.into_iter().unzip();
+            for (i, r) in idx.into_iter().zip(self.conns[c].plan_all(reqs)) {
+                out[i] = Some(r.map_err(anyhow::Error::new).and_then(|r| {
+                    let side = |v: &Option<pb::Value>| v.as_ref().map(wire::from_doc).transpose();
+                    let changes = r
+                        .changes
+                        .iter()
+                        .map(|c| {
+                            Ok(Change {
+                                path: c.path.clone(),
+                                before: side(&c.before)?,
+                                after: side(&c.after)?,
+                                sensitive: c.sensitive,
+                            })
+                        })
+                        .collect::<Result<_>>()?;
+                    Ok((changes, r.requires_replace))
+                }));
+            }
+        }
+        out.into_iter()
+            .map(|r| r.expect("every ask is answered"))
+            .collect()
     }
 
     /// `ref(T, N, Attr)` to a configured attribute (a ref to a computed one
@@ -650,50 +669,65 @@ impl Providers {
                 .map(|d| (d.addr.clone(), d))
                 .collect();
 
-        let mut actions = Vec::new();
-        for addr in order.iter().cloned() {
-            let d = &deformations[&addr];
-            let after = resolved.get(&addr);
-            let prior = before.get(&addr);
-            let (kind, changes) = match d.kind {
-                zset::Kind::Create => match adopt_map.get(&addr) {
-                    Some(remote_name) if state.get(&addr).is_none() => {
-                        let Some(found) = self.import(&addr.typ, remote_name)? else {
-                            bail!(
-                                "adopt requested but inventory missing {}",
-                                key(&addr.typ, remote_name)
-                            );
-                        };
-                        let (changes, _) = self.plan_one(&addr, Some(&found.attrs), after)?;
-                        (ActionKind::Adopt, changes)
-                    }
-                    _ => (ActionKind::Create, self.plan_one(&addr, None, after)?.0),
-                },
-                zset::Kind::Delete => unreachable!("a desired address is never deleted"),
-                zset::Kind::Update | zset::Kind::Drift => {
-                    let (changes, replaces) = self.plan_one(&addr, prior, after)?;
-                    let kind = if replaces {
-                        ActionKind::Replace {
-                            create_first: lifecycle.create_first(&self.schema, &addr),
-                        }
-                    } else if d.kind == zset::Kind::Drift {
-                        ActionKind::Drift
-                    } else {
-                        ActionKind::Update
+        // What each action asks its provider to Plan: every desired
+        // document against the world's (an adopt's against the object
+        // Import finds; the provider validates every desired document,
+        // undeformed ones too), then every delete.
+        let mut asks = Vec::new();
+        let mut adopting = BTreeSet::new();
+        for addr in &order {
+            let prior = match (deformations[addr].kind, adopt_map.get(addr)) {
+                (zset::Kind::Create, Some(remote_name)) if state.get(addr).is_none() => {
+                    let Some(found) = self.import(&addr.typ, remote_name)? else {
+                        bail!(
+                            "adopt requested but inventory missing {}",
+                            key(&addr.typ, remote_name)
+                        );
                     };
-                    (kind, changes)
+                    adopting.insert(addr.clone());
+                    Some(found.attrs)
                 }
-                zset::Kind::Pending => (ActionKind::Pending, self.plan_one(&addr, prior, after)?.0),
-                zset::Kind::Undeformed => {
-                    // Asked all the same: the provider validates every
-                    // desired document.
-                    self.plan_one(&addr, prior, after)?;
-                    (ActionKind::Noop, vec![])
-                }
+                (zset::Kind::Create, _) => None,
+                _ => before.get(addr).cloned(),
             };
-            let on = match d.kind {
-                zset::Kind::Pending => d.unresolved.clone(),
-                _ => BTreeSet::new(),
+            asks.push((addr.clone(), prior, resolved.get(addr).cloned()));
+        }
+        // Deletes: what is no longer desired, what state maps to a vanished
+        // object (no world document: nothing to show), and deposed objects.
+        let mut deleting: Vec<(ActionKind, Address, &[String])> = Vec::new();
+        for (addr, entry) in self.entries(&state.resources) {
+            if resolved.contains_key(&addr) {
+                continue;
+            }
+            asks.push((addr.clone(), before.get(&addr).cloned(), None));
+            deleting.push((ActionKind::Delete, addr, &entry.deps));
+        }
+        for (addr, entry) in self.entries(&state.deposed) {
+            let prior = world.get(&key(&addr.typ, &entry.remote));
+            asks.push((addr.clone(), prior.map(|o| o.attrs.clone()), None));
+            deleting.push((ActionKind::DeleteDeposed, addr, &entry.deps));
+        }
+        let mut answers = self.plan_many(asks)?.into_iter();
+
+        let mut actions = Vec::new();
+        for (addr, (changes, replaces)) in order.iter().cloned().zip(answers.by_ref()) {
+            let d = &deformations[&addr];
+            let kind = match d.kind {
+                zset::Kind::Create if adopting.contains(&addr) => ActionKind::Adopt,
+                zset::Kind::Create => ActionKind::Create,
+                zset::Kind::Delete => unreachable!("a desired address is never deleted"),
+                zset::Kind::Update | zset::Kind::Drift if replaces => ActionKind::Replace {
+                    create_first: lifecycle.create_first(&self.schema, &addr),
+                },
+                zset::Kind::Drift => ActionKind::Drift,
+                zset::Kind::Update => ActionKind::Update,
+                zset::Kind::Pending => ActionKind::Pending,
+                zset::Kind::Undeformed => ActionKind::Noop,
+            };
+            let (changes, on) = match d.kind {
+                zset::Kind::Pending => (changes, d.unresolved.clone()),
+                zset::Kind::Undeformed => (Vec::new(), BTreeSet::new()),
+                _ => (changes, BTreeSet::new()),
             };
             actions.push(Action {
                 kind,
@@ -703,39 +737,22 @@ impl Providers {
             });
         }
 
-        // Deletes: what is no longer desired, what state maps to a vanished
-        // object, and deposed objects. One goes before the deletes of what
-        // it depends on.
-        let mut deletes: Vec<(Action, &[String])> = Vec::new();
-        for (addr, entry) in self.entries(&state.resources) {
-            if resolved.contains_key(&addr) {
-                continue;
-            }
-            // A vanished object has no world document: nothing to show.
-            let (changes, _) = self.plan_one(&addr, before.get(&addr), None)?;
-            deletes.push((
-                Action {
-                    kind: ActionKind::Delete,
-                    addr,
-                    changes,
-                    on: BTreeSet::new(),
-                },
-                &entry.deps,
-            ));
-        }
-        for (addr, entry) in self.entries(&state.deposed) {
-            let prior = world.get(&key(&addr.typ, &entry.remote));
-            let (changes, _) = self.plan_one(&addr, prior.map(|o| &o.attrs), None)?;
-            deletes.push((
-                Action {
-                    kind: ActionKind::DeleteDeposed,
-                    changes,
-                    addr,
-                    on: BTreeSet::new(),
-                },
-                &entry.deps,
-            ));
-        }
+        // One delete goes before the deletes of what it depends on.
+        let mut deletes: Vec<(Action, &[String])> = deleting
+            .into_iter()
+            .zip(answers)
+            .map(|((kind, addr, deps), (changes, _))| {
+                (
+                    Action {
+                        kind,
+                        addr,
+                        changes,
+                        on: BTreeSet::new(),
+                    },
+                    deps,
+                )
+            })
+            .collect();
         deletes.sort_by(|a, b| a.0.addr.cmp(&b.0.addr));
         actions.extend(reverse_dependency_order(deletes));
         Ok(Plan { actions })

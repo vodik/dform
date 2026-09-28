@@ -1103,7 +1103,9 @@ pub fn serve() -> Result<()> {
                     .max_decoding_message_size(usize::MAX)
                     .max_encoding_message_size(usize::MAX),
             )
-            .serve_with_incoming(tonic::transport::server::TcpIncoming::from(listener))
+            .serve_with_incoming(
+                tonic::transport::server::TcpIncoming::from(listener).with_nodelay(Some(true)),
+            )
             .await?;
         Ok(())
     })

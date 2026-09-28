@@ -191,6 +191,44 @@ impl Conn {
         self.try_call(f).map_err(anyhow::Error::new)
     }
 
+    /// Plan calls, all in flight at once; the answers in order.
+    pub fn plan_all(
+        &self,
+        reqs: Vec<pb::PlanRequest>,
+    ) -> Vec<std::result::Result<pb::PlanResponse, CallError>> {
+        if let Some(status) = self.exited.get() {
+            let m = format!(
+                "the provider {} has exited ({status})",
+                self.name_or_program()
+            );
+            return reqs
+                .iter()
+                .map(|_| Err(CallError::Crashed(m.clone())))
+                .collect();
+        }
+        let client = self.client.clone();
+        let mut answers = self.rt.block_on(async move {
+            let mut set = tokio::task::JoinSet::new();
+            for (i, req) in reqs.into_iter().enumerate() {
+                let mut c = client.clone();
+                set.spawn(async move { (i, c.plan(req).await) });
+            }
+            let mut out = Vec::new();
+            while let Some(r) = set.join_next().await {
+                out.push(r.expect("a Plan call panicked"));
+            }
+            out
+        });
+        answers.sort_by_key(|(i, _)| *i);
+        answers
+            .into_iter()
+            .map(|(_, r)| {
+                r.map(tonic::Response::into_inner)
+                    .map_err(|s| self.classify(s))
+            })
+            .collect()
+    }
+
     /// A server-streamed Query, collected.
     pub fn query(&self, req: pb::QueryRequest) -> Result<Vec<pb::Row>> {
         let mut stream = self.call(|mut c| async move { c.query(req).await })?;
