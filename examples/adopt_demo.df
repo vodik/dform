@@ -1,11 +1,7 @@
 # Demo: adopting an existing resource from inventory.
 #
-# Setup:
-#   mkdir -p .dform
-#   cp examples/inventory.json .dform/inventory.json
-#
-# Then:
-#   cargo run -- --file examples/adopt_demo.df plan --set env=prod
+# Runs from a clean clone, no setup needed:
+#   cargo run -- --file examples/adopt_demo.df --inventory examples/world/inventory.json plan --set env=prod
 
 has_env() :- input("env", _).
 env(staging) :- not has_env().

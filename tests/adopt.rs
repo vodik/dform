@@ -4,20 +4,19 @@ mod common;
 use common::{Scratch, repo};
 
 /// `cloud_ref(T, N, tags.owner)` walks the inventory's nested attributes.
+/// Runs from a clean clone: `--inventory` points straight at the shipped
+/// fixture, no `.dform/` setup needed.
 #[test]
 fn adopt_demo_plans_with_dotted_cloud_refs() {
     let s = Scratch::new("adopt");
-    std::fs::create_dir_all(s.path(".dform")).unwrap();
-    std::fs::copy(
-        repo().join("examples/inventory.json"),
-        s.path(".dform/inventory.json"),
-    )
-    .unwrap();
     let prog = repo().join("examples/adopt_demo.df");
+    let inventory = repo().join("examples/world/inventory.json");
     let r = s
         .run(&[
             "--file",
             prog.to_str().unwrap(),
+            "--inventory",
+            inventory.to_str().unwrap(),
             "plan",
             "--set",
             "env=prod",
@@ -29,4 +28,34 @@ fn adopt_demo_plans_with_dotted_cloud_refs() {
         r.stdout
     );
     assert!(r.stdout.contains("owner_tag = \"team-a\""), "{}", r.stdout);
+}
+
+/// With `--world` given and no `--inventory`, the inventory beside the world
+/// file is picked up automatically.
+#[test]
+fn world_flag_defaults_inventory_beside_it() {
+    let s = Scratch::new("adopt-world-default");
+    let prog = repo().join("examples/adopt_demo.df");
+    std::fs::create_dir_all(s.path("world")).unwrap();
+    std::fs::copy(
+        repo().join("examples/world/inventory.json"),
+        s.path("world/inventory.json"),
+    )
+    .unwrap();
+    let r = s
+        .run(&[
+            "--file",
+            prog.to_str().unwrap(),
+            "--world",
+            s.path("world/dform.json").to_str().unwrap(),
+            "plan",
+            "--set",
+            "env=prod",
+        ])
+        .success();
+    assert!(
+        r.stdout.contains("> net.vpc.network.main::vpc"),
+        "{}",
+        r.stdout
+    );
 }

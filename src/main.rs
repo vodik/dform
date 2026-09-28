@@ -47,6 +47,12 @@ struct Cli {
     /// Default: .dform/<stack>/remote.json.
     #[arg(long = "world", global = true)]
     world: Option<PathBuf>,
+
+    /// Discovery inventory file (cloud_exists/cloud_attr/cloud_computed).
+    /// Default: <world dir>/inventory.json if --world is given and that file
+    /// exists, else .dform/inventory.json.
+    #[arg(long = "inventory", global = true)]
+    inventory: Option<PathBuf>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -93,10 +99,11 @@ fn main() -> Result<()> {
     for note in state::migrate_unscoped(&root)? {
         eprintln!("note: {note}");
     }
-    let paths = match &cli.world {
+    let mut paths = match &cli.world {
         Some(w) => state::world_paths(&root, w),
         None => state::stack_paths(&root, &state::stack_name(&files[0])),
     };
+    paths.inventory = resolve_inventory(&cli.inventory, &cli.world, &paths.inventory);
     let chaos = match &cli.cmd {
         Cmd::Apply { chaos } => Chaos::parse(chaos)?,
         _ => Chaos::default(),
@@ -293,6 +300,26 @@ fn load_schema(providers: &[String]) -> Result<schema::Schema> {
         out = out.merge(schema::load_provider(n)?)?;
     }
     Ok(out)
+}
+
+/// `--inventory PATH`, else `<world dir>/inventory.json` when `--world` is
+/// given and that file exists, else the stack's default (`.dform/inventory.json`).
+fn resolve_inventory(
+    explicit: &Option<PathBuf>,
+    world: &Option<PathBuf>,
+    default: &Path,
+) -> PathBuf {
+    if let Some(p) = explicit {
+        return p.clone();
+    }
+    if let Some(w) = world {
+        let dir = w.parent().unwrap_or_else(|| Path::new("."));
+        let candidate = dir.join("inventory.json");
+        if candidate.exists() {
+            return candidate;
+        }
+    }
+    default.to_path_buf()
 }
 
 fn default_files(files: &[PathBuf]) -> Result<Vec<PathBuf>> {

@@ -30,6 +30,15 @@ resources.
 - The fake backend's world (what "exists"): `.dform/<stack>/remote.json`.
 - Discovery inventory, shared by every stack: `.dform/inventory.json`.
 
+`--inventory PATH` points at the discovery inventory file directly (see
+"Discovery facts" below). Default: `<world dir>/inventory.json` when `--world`
+is given and that file exists there, else `.dform/inventory.json`. This is how
+`examples/adopt_demo.df` runs from a clean clone with no `.dform/` setup:
+
+```bash
+cargo run -- --file examples/adopt_demo.df --inventory examples/world/inventory.json plan --set env=prod
+```
+
 `--world PATH` (plan and apply) points the fake backend at a world file
 instead: the JSON of what "exists", each resource's configured `attrs` and its
 `computed` values. Plan refreshes from it, apply writes it back, and the stack's
@@ -254,6 +263,7 @@ This is an MVP:
 - basic built-ins: `format`, `concat`, `ref`, `scoped`, `cidrsubnet`, `collect_*`
 - networking built-ins: `ip`, `inet`, `iprange`, `inet_host`, `inet_addr`, `inet_subnet`, `inet_contains`, `inet_overlaps`, `ip_unspecified`
 - math built-ins: `add`, `sub`
+- string/coercion built-ins: `to_int`, `to_string`, `len`, `lower`, `upper`, `split`, `join`
 - list helper predicate: `member(List, Item)` and `member(List, Index, Item)` (Index starts at 0)
 - safe(ish) negation: `not` requires the atom be ground at evaluation time
 
