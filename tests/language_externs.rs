@@ -95,6 +95,38 @@ fn a_persisted_answer_stays() {
     assert!(!r.stdout.contains("pw-second"), "{}", r.stdout);
 }
 
+/// `dform taint` forgets one persisted answer: the next plan asks the
+/// provider again, and only for that call.
+#[test]
+fn taint_forgets_a_persisted_answer() {
+    let s = scratch();
+    s.run(&["--file", "p.df", "apply"]).success();
+    answers(&s, "second");
+    let r = s
+        .run(&["--file", "p.df", "taint", "p", "random.password", "other"])
+        .failure();
+    assert!(
+        r.stderr
+            .contains("taint random.password(other): stack p has no persisted answer for it"),
+        "{}",
+        r.stderr
+    );
+    let r = s
+        .run(&["--file", "p.df", "taint", "p", "random.password", "app"])
+        .success();
+    assert_eq!(
+        r.stdout,
+        "tainted random.password(app) of stack p: the next plan asks again\n"
+    );
+    assert!(!s.read(".dform/p/state.json").contains("pw-first"));
+    let r = s.run(&["--file", "p.df", "plan"]).success();
+    assert!(
+        r.stdout.contains("password: \"pw-first\" -> \"pw-second\""),
+        "{}",
+        r.stdout
+    );
+}
+
 /// The plan file records the answers the plan read; apply asks none of
 /// them again, so it applies what the plan showed.
 #[test]

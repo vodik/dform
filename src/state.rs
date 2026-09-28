@@ -72,6 +72,22 @@ impl State {
         Ok(())
     }
 
+    /// `dform taint`: forget the persisted answer of extern `pred` for the
+    /// inputs `args` (each as `--set` would print it: a string bare), so
+    /// the next plan asks again. Returns the answer removed.
+    pub fn taint(&mut self, pred: &str, args: &[String]) -> Option<crate::externs::Answer> {
+        let raw = |v: &crate::value::Value| match v {
+            crate::value::Value::Str(s) => s.clone(),
+            v => crate::partition::fmt_value(v),
+        };
+        let i = self.externs.iter().position(|a| {
+            a.pred == pred
+                && a.inputs.len() == args.len()
+                && a.inputs.iter().zip(args).all(|(v, x)| raw(v) == *x)
+        })?;
+        Some(self.externs.remove(i))
+    }
+
     pub fn get(&self, addr: &Address) -> Option<&StateEntry> {
         self.resources.get(&key(addr))
     }

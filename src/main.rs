@@ -176,6 +176,15 @@ enum Cmd {
         #[arg(long = "max-ticks", default_value_t = 8)]
         max_ticks: usize,
     },
+    /// Forget one persisted extern answer (`extern ... persist`) of STACK:
+    /// the answer for EXTERN with the input values ARGS, each written as
+    /// `--set` takes a value. The next plan asks the provider again.
+    Taint {
+        stack: String,
+        #[arg(value_name = "EXTERN")]
+        pred: String,
+        args: Vec<String>,
+    },
     /// Stack operations.
     Stack {
         #[command(subcommand)]
@@ -237,6 +246,9 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
         let dir = dform::stack::handover(&state_root(&cli, &cli.files), stack, to)?;
         println!("stack {stack} handed over to {to}: {}", dir.display());
         return Ok(());
+    }
+    if let Cmd::Taint { stack, pred, args } = &cli.cmd {
+        return taint(&cli, stack, pred, args);
     }
     let plan_file = match &cli.cmd {
         Cmd::Apply { plan_file, .. } => plan_file.clone(),
@@ -762,7 +774,11 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
             println!("{}", json);
         }
         Cmd::Strata | Cmd::Test => unreachable!("handled before evaluation"),
-        Cmd::Fmt { .. } | Cmd::Controller { .. } | Cmd::Stack { .. } | Cmd::Provider { .. } => {
+        Cmd::Fmt { .. }
+        | Cmd::Controller { .. }
+        | Cmd::Stack { .. }
+        | Cmd::Provider { .. }
+        | Cmd::Taint { .. } => {
             unreachable!("handled before loading")
         }
         Cmd::Graph { what: None } => print!("{}", graph::resources(&resources)),
@@ -1276,6 +1292,35 @@ fn run_tests(
 }
 
 /// Keep the answers of `persist` externs in state: never asked again.
+/// `dform taint STACK EXTERN ARGS...`: remove the answer from the stack's
+/// state (beside `--world`, else where the registry has it, else under the
+/// state root), under the stack's lock.
+fn taint(cli: &Cli, stack: &str, pred: &str, args: &[String]) -> Result<()> {
+    let root = state_root(cli, &cli.files);
+    let path = match &cli.world {
+        Some(w) => state::world_paths(&root, w).state,
+        None => match dform::stack::registry(&root)?.remove(stack) {
+            Some(e) => e.state,
+            None => state::stack_paths(&root, stack).state,
+        },
+    };
+    let call = format!("{pred}({})", args.join(", "));
+    if !path.exists() {
+        bail!(
+            "taint {call}: stack {stack} has no state at {}",
+            path.display()
+        );
+    }
+    let _lock = dform::stack::Lock::acquire(&path, stack)?;
+    let mut st = state::State::load(&path)?;
+    if st.taint(pred, args).is_none() {
+        bail!("taint {call}: stack {stack} has no persisted answer for it");
+    }
+    st.save(&path)?;
+    println!("tainted {call} of stack {stack}: the next plan asks again");
+    Ok(())
+}
+
 fn persist_externs(st: &mut state::State, externs: &dform::externs::Externs) {
     for a in externs.persisted() {
         if !st

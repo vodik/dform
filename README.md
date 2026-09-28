@@ -691,7 +691,13 @@ schema: facts of the extern, the rows whose `+` columns are the inputs.
 The plan file records the answers the plan read (not a call with a
 `secret(...)` column), and `apply PLAN` asks none of them again. A
 `persist` extern's answers are kept in state and never asked again, so a
-generated password stays the same across runs.
+generated password stays the same across runs. `dform taint STACK EXTERN
+ARGS...` forgets one of them (its input values written as `--set` takes a
+value), so the next plan asks the provider again:
+
+```bash
+dform taint p random.password app    # the next plan generates a new one
+```
 
 ## Escape hatches
 
