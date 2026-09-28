@@ -61,6 +61,7 @@ fn plan_on(
             world: world.to_path_buf(),
             inventory: world.with_extension("inv"),
             chaos: vec![],
+            cache: None,
         },
     )
     .unwrap();

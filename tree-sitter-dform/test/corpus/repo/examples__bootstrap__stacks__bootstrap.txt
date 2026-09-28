@@ -6,9 +6,9 @@ examples/bootstrap/stacks/bootstrap.df
 # creates the cluster and installs dform in it as a controller, in three
 # ticks, and stays batch: the controller refuses a `role = bootstrap` stack.
 #
-#   cargo run -- --root examples/bootstrap --file examples/bootstrap/stacks/bootstrap.df apply
-#   cargo run -- --root examples/bootstrap stack handover renfry.workload --to 'k8s("dform-system/workload")'
-#   cargo run -- --root examples/bootstrap --file examples/bootstrap/stacks/workload.df controller --stack renfry.workload
+#   cargo run -- -C examples/bootstrap apply renfry.bootstrap
+#   cargo run -- -C examples/bootstrap stack handover renfry.workload --to 'k8s("dform-system/workload")'
+#   cargo run -- -C examples/bootstrap controller run renfry.workload
 #
 # Tick 1: the network, the subnetwork and the cluster. The node pools are a
 # pending group: one per zone, and the zones are the cluster's. Tick 2: the
@@ -22,9 +22,8 @@ stack renfry.bootstrap {
   role = "bootstrap"
 }
 
-provider gcp {
-  source = "../providers/gcp"
-}
+# The mock GCP's schema is the project's own (dform.toml: providers/gcp).
+provider gcp {}
 provider k8s {}
 
 resource google_compute_network vpc {
@@ -81,7 +80,7 @@ resource k8s.deployment dform_controller {
   spec.template.spec.containers = [{
     name: "dform",
     image: "ghcr.io/renfry/dform:0.8",
-    args: ["controller", "--stack", "renfry.workload", "--file", "stacks/workload.df"]
+    args: ["controller", "run", "renfry.workload"]
   }]
 }
 
@@ -115,14 +114,10 @@ output endpoint = renfry.endpoint
           (identifier))
         (string
           (string_content)))))
+  (comment)
   (provider
     (identifier)
-    (block
-      (field
-        (block_path
-          (identifier))
-        (string
-          (string_content)))))
+    (block))
   (provider
     (identifier)
     (block))
@@ -369,10 +364,6 @@ output endpoint = renfry.endpoint
             (object_field
               (identifier)
               (list
-                (string
-                  (string_content))
-                (string
-                  (string_content))
                 (string
                   (string_content))
                 (string

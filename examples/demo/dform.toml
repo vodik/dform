@@ -1,1 +1,4 @@
-# The demo project: its root (docs/layout.md).
+# The demo project's root (docs/layout.md).
+
+[project]
+name = "demo"

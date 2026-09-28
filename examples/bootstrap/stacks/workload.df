@@ -3,7 +3,7 @@
 # whose image comes from an input relation. After `dform stack handover`
 # the dform-controller Deployment that bootstrap.df installs runs it:
 #
-#   cargo run -- --root examples/bootstrap --file examples/bootstrap/stacks/workload.df controller --stack renfry.workload
+#   cargo run -- -C examples/bootstrap controller run renfry.workload
 #
 # Edit data/release.facts and the controller deploys it; edit the world and
 # the replicas drift is corrected, the image drift is held for approval.

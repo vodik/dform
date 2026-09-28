@@ -18,7 +18,7 @@ fn a_file_reached_by_two_paths_loads_once() {
         "edition 2026\nimport \"lib/net.df\"\nimport \"lib/more.df\"\ninstance net main {}\n",
     );
     let r = s
-        .run(&["--file", "p.df", "--world", "w.json", "plan"])
+        .run(&["dev", "--world", "w.json", "plan", "p.df"])
         .success();
     assert_eq!(
         r.summary(),

@@ -11,7 +11,7 @@ use std::process::Command;
 
 fn plan(s: &Scratch, src: &str) -> Run {
     s.write("p.df", src);
-    s.run(&["--file", "p.df", "--world", "w.json", "plan"])
+    s.run(&["dev", "--world", "w.json", "plan", "p.df"])
 }
 
 const SETTINGS: &str = "edition 2026
@@ -143,17 +143,11 @@ settings prod {{ pool = {{ min: {min}, max: 3 }} }}
 
 fn gke(s: &Scratch, extra: &[&str]) -> Run {
     let prog = repo().join("examples/refine/stacks/refine_gke.df");
-    let args = [
-        "--file",
+    s.run(&common::on(
         prog.to_str().unwrap(),
-        "--provider",
-        "gke",
-        "--root",
-        s.dir.to_str().unwrap(),
-        "--world",
-        "w.json",
-    ];
-    s.run(&[&args[..], extra].concat())
+        &["--provider", "gke", "--world", "w.json"],
+        extra,
+    ))
 }
 
 /// E §4.1 case 4: the refinement on the cluster's zones is deferred while
@@ -222,15 +216,15 @@ resource app.db main { password = ref(vault.secret, \"pw\", .value) }
 ",
         );
         let _ = std::fs::remove_file(s.path("w.json"));
-        let _ = std::fs::remove_dir_all(s.path(".dform"));
+        let _ = std::fs::remove_dir_all(s.path("dform.state"));
         s.run(&[
-            "--file",
-            "p.df",
+            "dev",
             "--provider",
             "./schema.df",
             "--world",
             "w.json",
             "apply",
+            "p.df",
         ])
     };
     let r = apply("hunter2").failure();
@@ -268,7 +262,7 @@ resource k8s.secret db { metadata.name = \"db\", data = { password: \"x\" } }
 ",
     );
     let out = Command::new(env!("CARGO_BIN_EXE_dform"))
-        .args(["--file", "p.df", "plan"])
+        .args(["plan", "p.df"])
         .current_dir(&s.dir)
         .env("DFORM_K8S_OFFLINE", "1")
         .env_remove("KUBERNETES_SERVICE_HOST")

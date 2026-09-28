@@ -29,10 +29,9 @@ fn scratch() -> Scratch {
 }
 
 fn plan(s: &Scratch, extra: &[&str]) -> common::Run {
-    let mut a = vec!["--file", "p.df", "--world", "w.json"];
+    let mut a = vec!["plan"];
     a.extend(extra);
-    a.push("plan");
-    s.run(&a)
+    s.run(&common::on("p.df", &["--world", "w.json"], &a))
 }
 
 #[test]
@@ -140,7 +139,7 @@ fn a_module_input_of_the_wrong_type_is_a_violation() {
         "edition 2026\nmodule m {\n  input n: int\n  resource net.vpc v {\n    for n(n_)\n    n = n_\n  }\n}\ninstance m a { n = \"three\" }\n",
     );
     let r = s
-        .run(&["--file", "p.df", "--world", "w.json", "plan"])
+        .run(&["dev", "--world", "w.json", "plan", "p.df"])
         .failure();
     assert!(
         r.stderr.contains("input n of m.a: three is not int"),
@@ -156,8 +155,7 @@ fn the_plan_file_records_input_files() {
     let s = scratch();
     s.write("prod.df", "edition 2026\nenv(\"prod\")\nowner(\"ops\")\n");
     s.run(&[
-        "--file",
-        "p.df",
+        "dev",
         "--world",
         "w.json",
         "--input-file",
@@ -165,6 +163,7 @@ fn the_plan_file_records_input_files() {
         "plan",
         "--out",
         "plan.json",
+        "p.df",
     ])
     .success();
     assert!(s.read("plan.json").contains("\"input_files\""));
@@ -198,13 +197,12 @@ fn the_plan_file_digests_input_files_with_the_stack_key() {
         s.write("p.df", P);
         s.write("prod.df", text);
         let args = [
-            "--file",
-            "p.df",
             "--input-file",
             "prod.df",
             "plan",
             "--out",
             "plan.json",
+            "p.df",
         ];
         s.run(&args).success();
         let f: serde_json::Value = serde_json::from_str(&s.read("plan.json")).unwrap();

@@ -1,4 +1,4 @@
-//! `dform graph`: Graphviz DOT for the resource dependency DAG, the
+//! `dform dev graph`: Graphviz DOT for the resource dependency DAG, the
 //! partition graph, or any binary relation in the final fact store. Nodes
 //! and edges are sorted, so the output is deterministic.
 

@@ -1,5 +1,5 @@
 //! Controller mode (DESIGN.org "Reactive inputs and controller mode"): the
-//! second executor over the same evaluator. `dform controller` waits for an
+//! second executor over the same evaluator. `dform controller run` waits for an
 //! input relation's source or the world to change, then runs what `apply`
 //! runs (refresh, evaluate, plan, the policy pass, ticks) with this hook in
 //! it. Nothing in the language changes: the plan is the reconciliation.

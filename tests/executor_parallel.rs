@@ -22,19 +22,19 @@ fn apply(backend: Backend, parallel: &str) -> (common::Run, Vec<(String, u64, u6
         .run_on(
             backend,
             &[
-                "--file",
-                "p.df",
+                "dev",
                 "--world",
                 "w.json",
-                "apply",
-                "--parallel",
-                parallel,
                 "--chaos",
                 "latency=net.vpc/a:100",
                 "--chaos",
                 "latency=net.vpc/b:100",
                 "--chaos",
                 "latency=net.subnet/s:50",
+                "apply",
+                "--parallel",
+                parallel,
+                "p.df",
             ],
         )
         .success();
@@ -133,13 +133,13 @@ fn parallel_must_be_at_least_one() {
     s.write("p.df", PROG);
     let r = s
         .run(&[
-            "--file",
-            "p.df",
+            "dev",
             "--world",
             "w.json",
             "apply",
             "--parallel",
             "0",
+            "p.df",
         ])
         .failure();
     assert!(r.stderr.contains("--parallel"), "{}", r.stderr);
@@ -157,15 +157,15 @@ fn a_failure_stops_new_calls() {
             .run_on(
                 backend,
                 &[
-                    "--file",
-                    "p.df",
+                    "dev",
                     "--world",
                     "w.json",
+                    "--chaos",
+                    "fail=net.vpc/b",
                     "apply",
                     "--parallel",
                     "2",
-                    "--chaos",
-                    "fail=net.vpc/b",
+                    "p.df",
                 ],
             )
             .failure();
@@ -201,7 +201,7 @@ fn any_answer_order_ends_in_the_same_world() {
         if let Some(seed) = seed {
             c.env("DFORM_SEED", seed.to_string());
         }
-        let args = ["--file", "p.df", "--world", "w.json", "apply", "--parallel"];
+        let args = ["dev", "--world", "w.json", "apply", "p.df", "--parallel"];
         let out = c
             .args(args)
             .arg(parallel)
@@ -211,7 +211,7 @@ fn any_answer_order_ends_in_the_same_world() {
         assert!(out.status.success(), "{out:?}");
         let r = s.run_on(
             Backend::Direct,
-            &["--file", "p.df", "--world", "w.json", "apply"],
+            &["dev", "--world", "w.json", "apply", "p.df"],
         );
         assert!(
             r.stdout.ends_with("apply: nothing to do\n"),

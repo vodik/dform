@@ -1,4 +1,4 @@
-//! Failure and latency injection for the fake provider (`apply --chaos SPEC`),
+//! Failure and latency injection for the fake provider (`dform dev --chaos SPEC apply`),
 //! and one knob of the executor's own, `stop-after`, which works whatever
 //! the backend.
 //!

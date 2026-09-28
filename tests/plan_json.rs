@@ -9,14 +9,14 @@ fn gke_json(s: &Scratch) -> Value {
     let prog = repo().join("examples/gke/stacks/gke_two_phase.df");
     let r = s
         .run(&[
-            "--file",
-            prog.to_str().unwrap(),
+            "dev",
             "--provider",
             "gke",
             "--world",
             "w.json",
             "plan",
             "--json",
+            prog.to_str().unwrap(),
         ])
         .success();
     serde_json::from_str(&r.stdout).unwrap_or_else(|e| panic!("{e}: {}", r.stdout))
@@ -100,9 +100,15 @@ fn an_undeformed_stack_is_a_document_too() {
         "p.df",
         "edition 2026\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\n",
     );
-    let args = ["--file", "p.df", "--world", "w.json"];
-    s.run(&[&args[..], &["apply"]].concat()).success();
-    let r = s.run(&[&args[..], &["plan", "--json"]].concat()).success();
+    s.run(&common::on("p.df", &["--world", "w.json"], &["apply"]))
+        .success();
+    let r = s
+        .run(&common::on(
+            "p.df",
+            &["--world", "w.json"],
+            &["plan", "--json"],
+        ))
+        .success();
     let p: Value = serde_json::from_str(&r.stdout).unwrap();
     assert_eq!(p["undeformed"], true);
     assert_eq!(p["summary"]["deformations"], 0);
@@ -117,7 +123,7 @@ fn query_json_lists_the_facts() {
     );
     let r = s
         .run(&[
-            "--file", "p.df", "--world", "w.json", "query", "want", "--json",
+            "dev", "--world", "w.json", "query", "want", "--json", "p.df",
         ])
         .success();
     let q: Value = serde_json::from_str(&r.stdout).unwrap();
@@ -140,8 +146,7 @@ fn query_json_redacts_like_the_plan() {
     let leaky = repo().join("tests/fixtures/providers/leaky/schema.df");
     let r = s
         .run(&[
-            "--file",
-            "p.df",
+            "dev",
             "--provider",
             "fake",
             "--provider",
@@ -151,6 +156,7 @@ fn query_json_redacts_like_the_plan() {
             "query",
             "attr(T, A, P, V), P = \"password\"",
             "--json",
+            "p.df",
         ])
         .success();
     assert!(!r.stdout.contains("VAULT-SECRET"), "{}", r.stdout);
@@ -161,8 +167,7 @@ fn query_json_redacts_like_the_plan() {
     );
     let r = s
         .run(&[
-            "--file",
-            "p.df",
+            "dev",
             "--provider",
             "fake",
             "--provider",
@@ -172,6 +177,7 @@ fn query_json_redacts_like_the_plan() {
             "query",
             "attr(net.subnet, \"a\", .vpc_id, V)",
             "--json",
+            "p.df",
         ])
         .success();
     let q: Value = serde_json::from_str(&r.stdout).unwrap();
@@ -188,8 +194,8 @@ fn replace_denied_and_moved_are_in_the_document() {
     let s = Scratch::new("json-replace");
     let net = "edition 2026\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\n";
     s.write("p.df", net);
-    let args = ["--file", "p.df", "--world", "w.json"];
-    s.run(&[&args[..], &["apply"]].concat()).success();
+    s.run(&common::on("p.df", &["--world", "w.json"], &["apply"]))
+        .success();
     s.write(
         "p.df",
         &format!(
@@ -197,7 +203,13 @@ fn replace_denied_and_moved_are_in_the_document() {
             net.replace("10.0.0.0/16", "10.1.0.0/16")
         ),
     );
-    let r = s.run(&[&args[..], &["plan", "--json"]].concat()).failure();
+    let r = s
+        .run(&common::on(
+            "p.df",
+            &["--world", "w.json"],
+            &["plan", "--json"],
+        ))
+        .failure();
     let p: Value = serde_json::from_str(&r.stdout).unwrap();
     assert_eq!(p["summary"]["replace"], 1);
     assert_eq!(p["definite"][0]["action"], "replace");
@@ -211,7 +223,13 @@ fn replace_denied_and_moved_are_in_the_document() {
         "p.df",
         "edition 2026\nresource net.vpc core { cidr = \"10.0.0.0/16\" }\nmoved(net.vpc, \"main\", \"core\")\n",
     );
-    let r = s.run(&[&args[..], &["plan", "--json"]].concat()).success();
+    let r = s
+        .run(&common::on(
+            "p.df",
+            &["--world", "w.json"],
+            &["plan", "--json"],
+        ))
+        .success();
     let p: Value = serde_json::from_str(&r.stdout).unwrap();
     assert_eq!(
         p["moved"][0],

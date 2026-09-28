@@ -1,4 +1,4 @@
-//! `dform graph`: DOT for the resource DAG, the partition graph and any
+//! `dform dev graph`: DOT for the resource DAG, the partition graph and any
 //! binary relation, with deterministic node and edge order.
 
 mod common;
@@ -8,10 +8,7 @@ use inspection_common::{dform, golden};
 
 #[test]
 fn the_resource_dag_follows_refs() {
-    let out = dform(
-        "examples/demo/stacks/dform.df",
-        &["--set", "env=prod", "graph"],
-    );
+    let out = dform("examples/demo/stacks/dform.df env=prod", &["graph"]);
     assert!(
         out.contains(
             r#""net.subnet/network.main::private-us-test-1a" -> "net.vpc/network.main::vpc";"#
@@ -20,10 +17,7 @@ fn the_resource_dag_follows_refs() {
     );
     assert_eq!(
         out,
-        dform(
-            "examples/demo/stacks/dform.df",
-            &["--set", "env=prod", "graph"]
-        )
+        dform("examples/demo/stacks/dform.df env=prod", &["graph"])
     );
     golden("graph_dform_prod_resources", &out);
 }
@@ -38,7 +32,7 @@ fn the_partition_graph_dashes_negative_edges() {
         "p.df",
         "edition 2026\np(1)\np(2)\nr(2)\nq(x) if p(x), not r(x)\ns(x) if q(x)",
     );
-    let run = |prog: &str| s.run(&["--file", prog, "--provider", "schema.df", "graph", "strata"]);
+    let run = |prog: &str| s.run(&["dev", "--provider", "schema.df", "graph", "--strata", prog]);
     let out = run("p.df").success().stdout;
     assert!(out.contains(r#""r" -> "q" [style=dashed];"#), "{out}");
     assert!(out.contains(r#""p" -> "q";"#), "{out}");
@@ -62,17 +56,31 @@ fn the_partition_graph_dashes_negative_edges() {
 
 #[test]
 fn any_binary_relation_is_a_graph() {
-    let out = dform("examples/demo/stacks/dform.df", &["graph", "vpc_peer/2"]);
+    let out = dform(
+        "examples/demo/stacks/dform.df",
+        &["graph", "--relation", "vpc_peer/2"],
+    );
     assert_eq!(
         out,
-        dform("examples/demo/stacks/dform.df", &["graph", "vpc_peer"])
+        dform(
+            "examples/demo/stacks/dform.df",
+            &["graph", "--relation", "vpc_peer"]
+        )
     );
     golden("graph_dform_vpc_peer", &out);
 
     let s = Scratch::new("graph-arity");
     s.write("p.df", "edition 2026\nt(\"a\", \"b\", \"c\")");
     let r = s
-        .run(&["--file", "p.df", "--world", "w.json", "graph", "t"])
+        .run(&[
+            "dev",
+            "--world",
+            "w.json",
+            "graph",
+            "--relation",
+            "t",
+            "p.df",
+        ])
         .failure();
     assert!(
         r.stderr.contains("t is not a binary relation"),
@@ -80,7 +88,15 @@ fn any_binary_relation_is_a_graph() {
         r.stderr
     );
     let r = s
-        .run(&["--file", "p.df", "--world", "w.json", "graph", "t/3"])
+        .run(&[
+            "dev",
+            "--world",
+            "w.json",
+            "graph",
+            "--relation",
+            "t/3",
+            "p.df",
+        ])
         .failure();
     assert!(r.stderr.contains("arity 3, want 2"), "{}", r.stderr);
 }

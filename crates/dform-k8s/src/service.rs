@@ -2,8 +2,8 @@
 //!
 //! Configure finds the cluster (`KUBECONFIG`, `~/.kube/config`, or the
 //! pod's service account) and derives the schema from its `/openapi/v3`,
-//! cached as `k8s-openapi.json` in the stack's state directory (beside the
-//! world file Configure names). With no cluster to reach, or
+//! cached as `k8s-openapi.json` in the cache directory Configure names
+//! (`dform.state/cache/`; else beside the world file). With no cluster to reach, or
 //! `DFORM_K8S_OFFLINE` set, the provider is offline: the schema is the
 //! checked-in snapshot's, Plan diffs locally, and Read, Apply and Import
 //! fail naming why.
@@ -34,7 +34,7 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tonic::{Request, Response, Status};
 
-/// The cluster's OpenAPI document, cached in the stack's state directory.
+/// The cluster's OpenAPI document, cached in the run's cache directory.
 const OPENAPI_CACHE: &str = "k8s-openapi.json";
 
 /// How long a delete waits for the object to go before it answers.
@@ -601,10 +601,18 @@ impl pb::provider_server::Provider for Service {
 
     async fn configure(&self, req: Request<pb::ConfigureRequest>) -> Reply<pb::ConfigureResponse> {
         let config = doc_of(req.into_inner().config.as_ref())?.unwrap_or(json!({}));
+        // The run's cache directory (`dform.state/cache/`), else beside the
+        // world file.
         let cache = config
-            .get("world")
+            .get("cache")
             .and_then(Json::as_str)
-            .and_then(|w| std::path::Path::new(w).parent().map(PathBuf::from));
+            .map(PathBuf::from)
+            .or_else(|| {
+                config
+                    .get("world")
+                    .and_then(Json::as_str)
+                    .and_then(|w| std::path::Path::new(w).parent().map(PathBuf::from))
+            });
         let k8s = K8s::configure(cache).await.map_err(invalid)?;
         *self.k8s.write().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(k8s));
         Ok(Response::new(pb::ConfigureResponse {}))

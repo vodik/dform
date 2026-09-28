@@ -183,6 +183,19 @@ fn dotted_text(n: &SyntaxNode, skip_words: usize) -> String {
     out
 }
 
+/// A file's `stack` header, read from its tree without resolving it: the
+/// stack's name and the inputs that key it (discovery, `project`).
+pub fn stack_header(root: &SyntaxNode) -> Option<(String, Vec<String>)> {
+    let n = root.children().find(|n| n.kind() == STACK)?;
+    let keys = tokens(&n)
+        .skip_while(|t| t.kind() != L_BRACKET)
+        .take_while(|t| t.kind() != R_BRACKET)
+        .filter(|t| is_word(t.kind()))
+        .map(|t| t.text().to_string())
+        .collect();
+    Some((dotted_text(&n, 1), keys))
+}
+
 fn str_term(s: &str) -> Term {
     Term::Val(Value::Str(s.to_string()))
 }

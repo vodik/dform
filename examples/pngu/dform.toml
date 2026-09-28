@@ -1,1 +1,4 @@
-# The pngu project: its root (docs/layout.md).
+# The pngu project's root (docs/layout.md).
+
+[project]
+name = "pngu"

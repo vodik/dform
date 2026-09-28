@@ -33,3 +33,5 @@ dform-wire = { path = "../dform-wire" }
 csv = "1"
 serde_yaml = "0.9"
 toml = "1"
+# dform.toml's version requirements (src/project.rs), Cargo's syntax.
+semver = "1"

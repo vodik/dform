@@ -26,6 +26,8 @@ struct Case {
     providers: &'static [&'static str],
     /// `--set` args, as `key=value`.
     sets: &'static [&'static str],
+    /// The target's key values, as `key=value`.
+    keys: &'static [&'static str],
     /// Copy tests/fixtures/world/dform.json (+ its .state.json) into the scratch
     /// dir and pass `--world` at it.
     world_fixture: bool,
@@ -40,6 +42,7 @@ const fn case(program: &'static str, case: &'static str, file: &'static str) -> 
         file,
         providers: &[],
         sets: &[],
+        keys: &[],
         world_fixture: false,
         inventory: None,
     }
@@ -48,11 +51,11 @@ const fn case(program: &'static str, case: &'static str, file: &'static str) -> 
 const CASES: &[Case] = &[
     case("dform", "staging", "examples/demo/stacks/dform.df"),
     Case {
-        sets: &["env=prod"],
+        keys: &["env=prod"],
         ..case("dform", "prod", "examples/demo/stacks/dform.df")
     },
     Case {
-        sets: &["env=dev"],
+        keys: &["env=dev"],
         ..case("dform", "dev", "examples/demo/stacks/dform.df")
     },
     Case {
@@ -223,12 +226,10 @@ fn golden_on(backend: Backend, strata: bool) {
         let file = file.to_str().unwrap();
 
         // -- plan --
-        // --root pins state inside the scratch dir: without it a program's
-        // state lives beside the program, and a developer's own .dform/ in
-        // the repo would leak into the snapshot.
-        let root = scratch.path(".").to_str().unwrap().to_string();
-        let mut plan_args: Vec<String> =
-            vec!["--root".into(), root.clone(), "--file".into(), file.into()];
+        // The scratch directory is the working directory, so the project
+        // and its dform.state/ are the scratch's: a developer's own state
+        // never leaks into the snapshot.
+        let mut plan_args: Vec<String> = vec!["dev".into()];
         for p in c.providers {
             plan_args.push("--provider".into());
             plan_args.push((*p).into());
@@ -256,6 +257,8 @@ fn golden_on(backend: Backend, strata: bool) {
             plan_args.push("dform.json".into());
         }
         plan_args.push("plan".into());
+        plan_args.push(file.into());
+        plan_args.extend(c.keys.iter().map(|k| k.to_string()));
         let plan_args: Vec<&str> = plan_args.iter().map(String::as_str).collect();
         let (ok, out, err) = run(&scratch, &plan_args);
         check(c.program, c.case, "plan", &transcript(ok, &out, &err));
@@ -265,8 +268,7 @@ fn golden_on(backend: Backend, strata: bool) {
 
         // -- strata -- (no --world/--inventory: strata reads neither; the
         // provider's schema expands the prelude, as in plan)
-        let mut strata_args: Vec<String> =
-            vec!["--root".into(), root, "--file".into(), file.into()];
+        let mut strata_args: Vec<String> = vec!["dev".into()];
         for p in c.providers {
             strata_args.push("--provider".into());
             strata_args.push((*p).into());
@@ -276,6 +278,8 @@ fn golden_on(backend: Backend, strata: bool) {
             strata_args.push((*s).into());
         }
         strata_args.push("strata".into());
+        strata_args.push(file.into());
+        strata_args.extend(c.keys.iter().map(|k| k.to_string()));
         let strata_args: Vec<&str> = strata_args.iter().map(String::as_str).collect();
         let (ok, out, err) = run(
             &Scratch::new(&format!("golden-strata-{}-{}", c.program, c.case)),
@@ -295,12 +299,12 @@ fn golden_gke_plan_json() {
     let (ok, out, err) = run(
         &scratch,
         &[
-            "--file",
-            file.to_str().unwrap(),
+            "dev",
             "--world",
             "w.json",
             "plan",
             "--json",
+            file.to_str().unwrap(),
         ],
     );
     check(

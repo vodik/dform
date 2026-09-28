@@ -6,14 +6,16 @@
 
 use crate::common::{Scratch, repo};
 
-/// `dform --file REPO/FILE --world w.json ARGS` in a fresh scratch dir:
+/// `dform dev --world w.json ARGS REPO/FILE [K=V...]` in a fresh scratch
+/// dir (TARGET is the file and the key values after it):
 /// stdout on success (the repo's path stripped from the file names it
 /// prints, so snapshots are portable), panics with stderr otherwise.
-pub fn dform(file: &str, args: &[&str]) -> String {
+pub fn dform(target: &str, args: &[&str]) -> String {
     let s = Scratch::new("inspection");
-    let file = repo().join(file);
-    let mut all = vec!["--file", file.to_str().unwrap(), "--world", "w.json"];
-    all.extend(args);
+    let mut target = target.split_whitespace();
+    let file = repo().join(target.next().unwrap());
+    let mut all = crate::common::on(file.to_str().unwrap(), &["--world", "w.json"], args);
+    all.extend(target.map(String::from));
     s.run(&all)
         .success()
         .stdout

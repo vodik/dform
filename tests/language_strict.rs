@@ -13,17 +13,14 @@ fn gke(strict: bool) -> Scratch {
     } else {
         "stack gke {}"
     };
-    s.write(
-        "g.df",
-        &src.replacen("provider gke {}", &format!("provider gke {{}}\n{stack}"), 1),
-    );
+    s.write("g.df", &src.replacen("stack gke_two_phase {}", stack, 1));
     s
 }
 
 #[test]
 fn a_two_phase_plan_is_refused_saying_why() {
     let s = gke(true);
-    let r = s.run(&["--file", "g.df", "plan"]).failure();
+    let r = s.run(&["plan", "g.df"]).failure();
     // The plan prints, then the generated deny refuses it, one violation
     // per stuck instance with its rule, head pattern and nulls.
     assert!(
@@ -48,14 +45,13 @@ fn a_two_phase_plan_is_refused_saying_why() {
     // It is a deny: why explains it.
     let w = s
         .run(&[
-            "--file",
-            "g.df",
             "why",
             "deny(\"strict: unresolved value at plan time\", C)",
+            "g.df",
         ])
         .success();
     assert!(w.stdout.contains("stuck("), "{}", w.stdout);
-    let j = s.run(&["--file", "g.df", "plan", "--json"]).failure();
+    let j = s.run(&["plan", "--json", "g.df"]).failure();
     assert!(
         j.stderr.contains("strict: unresolved value at plan time"),
         "{}",
@@ -63,20 +59,22 @@ fn a_two_phase_plan_is_refused_saying_why() {
     );
 
     // apply refuses before any Apply call.
-    let r = s.run(&["--file", "g.df", "apply"]).failure();
+    let r = s.run(&["apply", "g.df"]).failure();
     assert!(
         r.stderr.contains("strict: unresolved value at plan time"),
         "{}",
         r.stderr
     );
     assert!(
-        !s.path(".dform/gke/remote.json").exists()
-            || !s.read(".dform/gke/remote.json").contains("gke_cluster")
+        !s.path("dform.state/gke/remote.json").exists()
+            || !s
+                .read("dform.state/gke/remote.json")
+                .contains("gke_cluster")
     );
 
     // Permissive, the same program plans its two phases.
     let s = gke(false);
-    s.run(&["--file", "g.df", "plan"]).success();
+    s.run(&["plan", "g.df"]).success();
 }
 
 /// A single-phase plan whose documents carry fresh nulls (ids known after
@@ -88,13 +86,13 @@ fn fresh_nulls_still_flow() {
         "p.df",
         "edition 2026\nstack p { unknowns = \"strict\" }\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nresource net.subnet a { vpc_id = ref(net.vpc, \"main\", .id), cidr = \"10.0.1.0/24\" }\n",
     );
-    let r = s.run(&["--file", "p.df", "plan"]).success();
+    let r = s.run(&["plan", "p.df"]).success();
     assert!(
         r.stdout.contains("vpc_id = ?net.vpc/main#id"),
         "{}",
         r.stdout
     );
-    s.run(&["--file", "p.df", "apply"]).success();
+    s.run(&["apply", "p.df"]).success();
 }
 
 /// A strict stack whose resource rule reads a helper with a stuck
@@ -106,7 +104,7 @@ fn a_pending_group_is_refused_and_allow_stuck_relaxes_per_key() {
     let s = Scratch::new("lang-strict-allow");
     let program = "edition 2026\nstack p { unknowns = \"strict\" }\nresource db.postgres a {}\nup(d) if attr(db.postgres, d, .endpoint, e), e != \"\"\nresource net.subnet s {\n  for up(\"a\")\n  cidr = \"10.0.1.0/24\"\n}\n";
     s.write("p.df", program);
-    let r = s.run(&["--file", "p.df", "plan"]).failure();
+    let r = s.run(&["plan", "p.df"]).failure();
     assert!(
         r.stderr
             .contains("- strict: unresolved value at plan time ctx={\"head\":\"up(\\\"a\\\")\""),
@@ -127,7 +125,7 @@ fn a_pending_group_is_refused_and_allow_stuck_relaxes_per_key() {
         "p.df",
         &format!("{program}allow_stuck(\"up(\\\"a\\\")\")\n"),
     );
-    let r = s.run(&["--file", "p.df", "plan"]).failure();
+    let r = s.run(&["plan", "p.df"]).failure();
     assert!(!r.stderr.contains("unresolved value"), "{}", r.stderr);
     assert!(
         r.stderr.contains("strict: a pending group at plan time"),
@@ -143,7 +141,7 @@ fn a_pending_group_is_refused_and_allow_stuck_relaxes_per_key() {
              allow_stuck(\"want(\\\"net.subnet\\\", \\\"s\\\")\")\n"
         ),
     );
-    let r = s.run(&["--file", "p.df", "plan"]).success();
+    let r = s.run(&["plan", "p.df"]).success();
     assert!(
         r.stdout
             .contains("pending groups:\n? net.subnet.s x unknown"),
@@ -156,7 +154,7 @@ fn a_pending_group_is_refused_and_allow_stuck_relaxes_per_key() {
         "p.df",
         &format!("{program}allow_stuck(h) if stuck(_, h, _, _)\n"),
     );
-    let r = s.run(&["--file", "p.df", "plan"]).failure();
+    let r = s.run(&["plan", "p.df"]).failure();
     assert!(
         r.stderr.contains("allow_stuck must be a fact, not a rule"),
         "{}",

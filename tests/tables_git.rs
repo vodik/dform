@@ -33,11 +33,9 @@ fn short(c: &str) -> &str {
 #[test]
 fn a_plan_file_pins_the_commit_the_branch_named() {
     let (s, first) = setup("pin");
-    s.run(&["--file", "p.df", "apply"]).success();
+    s.run(&["apply", "p.df"]).success();
     let second = push(&s, "nodes.csv", "name\na\nb\n", "main");
-    let r = s
-        .run(&["--file", "p.df", "plan", "--out", "plan.json"])
-        .success();
+    let r = s.run(&["plan", "--out", "plan.json", "p.df"]).success();
     // The ref moved since the last apply: plan says so, first.
     assert_eq!(
         r.stdout.lines().next().unwrap(),
@@ -53,19 +51,19 @@ fn a_plan_file_pins_the_commit_the_branch_named() {
 
     // The branch moves again before apply: apply reads the plan's commit.
     let third = push(&s, "nodes.csv", "name\na\nb\nc\n", "main");
-    let r = s.run(&["--file", "p.df", "apply", "plan.json"]).success();
+    let r = s.run(&["apply", "plan.json"]).success();
     assert!(r.stdout.contains("+ compute.vm.b"), "{}", r.stdout);
     assert!(!r.stdout.contains("compute.vm.c"), "{}", r.stdout);
     assert!(r.stdout.contains("apply: complete"), "{}", r.stdout);
 
     // State has the commit apply read; the next plan reads the ref again.
-    let r = s.run(&["--file", "p.df", "plan"]).success();
+    let r = s.run(&["plan", "p.df"]).success();
     assert_eq!(
         r.stdout.lines().next().unwrap(),
         format!("node: ops.git main {} -> {}", short(&second), short(&third))
     );
     assert!(r.stdout.contains("+ compute.vm.c"), "{}", r.stdout);
-    let r = s.run(&["--file", "p.df", "why", r#"node("c")"#]).success();
+    let r = s.run(&["why", r#"node("c")"#, "p.df"]).success();
     assert!(
         r.stdout
             .contains(&format!("fact, ops.git@{}:nodes.csv:4", short(&third))),
@@ -78,7 +76,7 @@ fn a_plan_file_pins_the_commit_the_branch_named() {
 fn a_ref_that_names_no_commit_is_an_error() {
     let (s, _) = setup("noref");
     s.write("p.df", &PROGRAM.replace("\"main\"", "\"env/prod\""));
-    let r = s.run(&["--file", "p.df", "plan"]).failure();
+    let r = s.run(&["plan", "p.df"]).failure();
     assert!(
         r.stderr
             .contains("git repository ops.git: ref env/prod does not name a commit"),
@@ -90,7 +88,7 @@ fn a_ref_that_names_no_commit_is_an_error() {
 /// The controller's log, without its `HH:MM:SS ` stamps and the line
 /// naming the files.
 fn once(s: &Scratch) -> Vec<String> {
-    let r = s.run(&["--file", "p.df", "controller", "--once"]).success();
+    let r = s.run(&["controller", "run", "--once", "p.df"]).success();
     r.stdout
         .lines()
         .map(|l| l[9..].to_string())

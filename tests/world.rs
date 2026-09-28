@@ -22,9 +22,7 @@ fn fixture(s: &Scratch) -> (String, String) {
 fn editing_the_world_file_shows_drift_and_apply_writes_it_back() {
     let s = Scratch::new("world-drift");
     let (prog, world) = fixture(&s);
-    let r = s
-        .run(&["--file", &prog, "--world", &world, "plan"])
-        .success();
+    let r = s.run(&["dev", "--world", &world, "plan", &prog]).success();
     assert_eq!(r.summary(), "stack dform is undeformed", "{}", r.stdout);
 
     // Someone changed the VM out of band.
@@ -32,9 +30,7 @@ fn editing_the_world_file_shows_drift_and_apply_writes_it_back() {
         .read("dform.json")
         .replace("\"10.50.0.21\"", "\"10.50.0.99\"");
     s.write("dform.json", &edited);
-    let r = s
-        .run(&["--file", &prog, "--world", &world, "plan"])
-        .success();
+    let r = s.run(&["dev", "--world", &world, "plan", &prog]).success();
     assert_eq!(
         r.summary(),
         "plan: 1 deformation (1 update)",
@@ -49,15 +45,13 @@ fn editing_the_world_file_shows_drift_and_apply_writes_it_back() {
         r.stdout
     );
 
-    s.run(&["--file", &prog, "--world", &world, "apply"])
+    s.run(&["dev", "--world", &world, "apply", &prog, "env=staging"])
         .success();
     assert!(s.read("dform.json").contains("\"10.50.0.21\""));
-    let r = s
-        .run(&["--file", &prog, "--world", &world, "plan"])
-        .success();
+    let r = s.run(&["dev", "--world", &world, "plan", &prog]).success();
     assert_eq!(r.summary(), "stack dform is undeformed", "{}", r.stdout);
     assert!(
-        !s.path(".dform").exists(),
+        !s.path("dform.state").exists(),
         "--world keeps everything beside the world file"
     );
 }
@@ -72,14 +66,12 @@ fn a_world_file_without_state_adopts_nothing() {
     std::fs::remove_file(s.path("dform.state.json")).unwrap();
     s.write("empty.df", "edition 2026\n");
     let r = s
-        .run(&["--file", "empty.df", "--world", &world, "plan"])
+        .run(&["dev", "--world", &world, "plan", "empty.df"])
         .success();
     assert_eq!(r.summary(), "stack empty is undeformed", "{}", r.stdout);
     // The program's resources are creates: the world's objects of the
     // same names are someone else's until an `adopt` says otherwise.
-    let r = s
-        .run(&["--file", &prog, "--world", &world, "plan"])
-        .success();
+    let r = s.run(&["dev", "--world", &world, "plan", &prog]).success();
     assert!(
         !r.stdout.contains("\n- ") && !r.stdout.contains("\n> "),
         "{}",
@@ -103,10 +95,13 @@ fn an_emptied_stack_adopts_nothing() {
         r#"{"version": 1, "resources": {"compute.vm::mine": {"provider": "fakecloud", "remote": "mine"}}}"#,
     );
     s.write("p.df", "edition 2026\n");
-    let args = ["--file", "p.df", "--world", "w.json"];
-    let r = s.run(&[&args[..], &["apply"]].concat()).success();
+    let r = s
+        .run(&common::on("p.df", &["--world", "w.json"], &["apply"]))
+        .success();
     assert!(r.stdout.contains("- compute.vm.mine"), "{}", r.stdout);
-    let r = s.run(&[&args[..], &["plan"]].concat()).success();
+    let r = s
+        .run(&common::on("p.df", &["--world", "w.json"], &["plan"]))
+        .success();
     assert_eq!(r.summary(), "stack p is undeformed", "{}", r.stdout);
     assert!(!s.read("w.state.json").contains("theirs"));
     assert!(s.read("w.json").contains("compute.vm::theirs"));

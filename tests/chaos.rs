@@ -1,4 +1,4 @@
-//! `apply --chaos`: failure and latency injection on the fake provider.
+//! `dform dev --chaos ... apply`: failure and latency injection on the fake provider.
 
 mod common;
 use common::Scratch;
@@ -16,7 +16,7 @@ fn stack(name: &str) -> Scratch {
 }
 
 fn dform(s: &Scratch, args: &[&str]) -> common::Run {
-    s.run(&[&["--file", "p.df", "--world", "w.json"][..], args].concat())
+    s.run(&common::on("p.df", &["--world", "w.json"], args))
 }
 
 fn world(s: &Scratch) -> serde_json::Value {

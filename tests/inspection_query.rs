@@ -9,8 +9,8 @@ use inspection_common::{dform, golden};
 #[test]
 fn a_pattern_prints_one_column_per_variable() {
     let out = dform(
-        "examples/demo/stacks/dform.df",
-        &["--set", "env=prod", "query", "attr(net.vpc, N, .cidr, C)"],
+        "examples/demo/stacks/dform.df env=prod",
+        &["query", "attr(net.vpc, N, .cidr, C)"],
     );
     assert!(out.starts_with("N "), "{out}");
     assert!(
@@ -24,13 +24,8 @@ fn a_pattern_prints_one_column_per_variable() {
 #[test]
 fn a_conjunction_is_evaluated_against_the_final_fact_store() {
     let out = dform(
-        "examples/demo/stacks/dform.df",
-        &[
-            "--set",
-            "env=prod",
-            "query",
-            "attr(T, A, .cidr, C), want(T, A), T != net.subnet",
-        ],
+        "examples/demo/stacks/dform.df env=prod",
+        &["query", "attr(T, A, .cidr, C), want(T, A), T != net.subnet"],
     );
     assert!(out.starts_with("T "), "{out}");
     assert!(
@@ -57,12 +52,12 @@ fn a_query_that_does_not_parse_says_so() {
     let file = repo().join("examples/demo/stacks/dform.df");
     let r = s
         .run(&[
-            "--file",
-            file.to_str().unwrap(),
+            "dev",
             "--world",
             "w.json",
             "query",
             "attr(T,",
+            file.to_str().unwrap(),
         ])
         .failure();
     assert!(
@@ -86,14 +81,14 @@ resource leaky.vault v { password = "VAULT-SECRET-DO-NOT-PRINT" }
     let schema = repo().join("tests/fixtures/providers/leaky/schema.df");
     let q = |pattern: &str| {
         s.run(&[
-            "--file",
-            "p.df",
+            "dev",
             "--provider",
             schema.to_str().unwrap(),
             "--world",
             "w.json",
             "query",
             pattern,
+            "p.df",
         ])
         .success()
         .stdout

@@ -1,1 +1,4 @@
-# The k8s project: its root (docs/layout.md).
+# The k8s project's root (docs/layout.md).
+
+[project]
+name = "k8s"

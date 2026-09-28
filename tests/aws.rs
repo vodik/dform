@@ -3,24 +3,17 @@
 mod common;
 use common::{Scratch, repo};
 
-fn demo() -> Vec<String> {
+fn demo() -> String {
     let prog = repo().join("examples/aws/stacks/aws_demo.df");
-    [
-        "--file",
-        prog.to_str().unwrap(),
-        "--provider",
-        "aws-mock",
-        "--world",
-        "w.json",
-    ]
-    .map(String::from)
-    .to_vec()
+    prog.to_str().unwrap().to_string()
 }
 
-fn run(s: &Scratch, args: &[String], cmd: &str) -> common::Run {
-    let mut a: Vec<&str> = args.iter().map(String::as_str).collect();
-    a.push(cmd);
-    s.run(&a)
+fn run(s: &Scratch, prog: &str, cmd: &str) -> common::Run {
+    s.run(&common::on(
+        prog,
+        &["--provider", "aws-mock", "--world", "w.json"],
+        &[cmd],
+    ))
 }
 
 #[test]

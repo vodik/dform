@@ -17,34 +17,99 @@ below). The demo, `examples/demo/`, is the stack `stacks/dform.df`, which
 imports reusable chunks from its `modules/*.df` and `policies/`.
 
 ```bash
-cargo run -- --file examples/demo/stacks/dform.df plan
-cargo run -- --file examples/demo/stacks/dform.df apply
-cargo run -- --file examples/demo/stacks/dform.df plan --set env=prod
-cargo run -- --file examples/demo/stacks/dform.df test      # run the program's scenarios
-cargo run -- --file examples/demo/stacks/dform.df strata    # evaluation order: the partition graph's strata
-cargo run -- fmt examples/demo/modules/*.df          # format in place
-cargo run -- fmt --check $(git ls-files '*.df')   # CI: list unformatted files, fail
+cargo run -- -C examples/demo plan                  # its one stack, dform, in env's default
+cargo run -- -C examples/demo apply dform env=staging
+cargo run -- -C examples/demo plan dform env=prod   # or 'dform[env=prod]'
+cargo run -- -C examples/demo test                  # run the program's scenarios
+cargo run -- -C examples/demo dev strata            # evaluation order: the partition graph's strata
+cargo run -- -C examples/demo fmt                   # format the project's .df files in place
+cargo run -- fmt --check $(git ls-files '*.df')     # CI: list unformatted files, fail
 ```
+
+`-C DIR` runs as if dform started in DIR; from inside a project the same
+commands need no `-C`: `cd examples/demo/stacks && cargo run -- plan`.
 
 ### Project layout
 
 A project is a directory with a `dform.toml` at its root: `stacks/` (one
 stack per file), `modules/`, `policies/`, `config/<stack>/<key>.yaml`,
-`data/`, `scenarios/`, `providers/<name>/` and a gitignored `.dform/`.
-Paths a program states are relative to the file that states them.
-`docs/layout.md` has the convention and the lints; every example under
-`examples/` follows it, and test-only programs are under `tests/fixtures/`.
+`data/`, `scenarios/`, `providers/<name>/` and a gitignored `dform.state/`.
+The root is the nearest directory up from the working directory holding a
+`dform.toml`, else the git root. Imports resolve from the project root
+(`./` and `../` from the importing file); other paths a program states are
+relative to the file that states them. Discovery walks the project: every
+file with a `stack` statement is a stack, and a stack's name is unique in
+its project. A module or policy file with a `stack` statement is an error,
+importing a stack file is an error, and a `.df` outside the layout's
+directories is a warning. `docs/layout.md` has the convention; every
+example under `examples/` follows it, and test-only programs are under
+`tests/fixtures/`.
 `examples/crud-api` (proposal G's blue/green rollout) does not plan yet: it
 assumes provider schemas the mocks do not have and a git repository of
 releases.
+
+`dform.toml` is small and optional; programs stay in `.df` files. It holds
+the project's name and the dform versions it takes, each provider's source
+and version (Cargo's semver syntax: `"2.1"` is `^2.1`), defaults a stack
+statement overrides, and globs discovery skips. Policy reads it as facts,
+`project_provider(Name, Constraint)` and `project_default(Key, Value)`.
+Nothing per deployment lives there.
+
+```toml
+[project]
+name = "shop"
+dform = ">=0.1"
+
+[providers]
+aws = { source = "aws-mock", version = "2.1" }   # `provider aws {}` in a program
+gcp = { source = "providers/gcp" }               # a path under the root
+
+[defaults]
+backend = 'local("state/{stack}")'
+unknowns = "strict"
+
+[discovery]
+exclude = ["scratch/**"]
+```
+
+### Targets and commands
+
+A command runs on a target: a stack's name (`dform plan infra`), its file
+(`dform plan stacks/infra.df`), or one deployment of a keyed stack with its
+key (`dform plan 'shop.app[env=prod]'`, or `dform plan shop.app env=prod`).
+Key values belong to the target; other inputs stay `--set`, and `--set` of a
+key input is an error. With no target it is the one stack under the working
+directory, else the stacks are listed and dform exits non-zero. `apply`
+names every key value (`dform apply shop.app env=prod`), or takes a plan
+file (`dform apply plan.json`).
+
+| Commands | |
+|---|---|
+| `plan`, `apply`, `why`, `query`, `test`, `fmt`, `log` | on a target |
+| `stack list`, `stack rekey`, `stack handover`, `stack unlock` | the project's stacks |
+| `state show`, `state taint`, `state mv` | a deployment's state |
+| `provider check`, `provider schema` | providers |
+| `controller run` | controller mode |
+| `dev strata`, `dev graph`, `dev --world W --inventory I --provider P --chaos C COMMAND` | the mock and the evaluator |
+| `completions zsh\|bash\|fish` | a completion script |
+
+`dform stack list` shows every stack, its key and file, and per deployment
+with state its last apply (time, actor and the project's commit, from the
+audit log) and a saved plan not yet applied. `dform state show TARGET`
+prints the deployment's objects; `dform state mv FROM TO TARGET` gives the
+object at `TYPE/NAME` another address; `dform stack unlock TARGET` removes
+an apply lock whose holder is gone. `dform provider schema NAME` prints a
+provider's schema facts. `dform completions zsh > _dform` completes stack
+names, key values (from the key inputs' enum types) and deployments with
+state.
 
 State is scoped to a stack. One program owns one stack, named by its
 `stack` statement:
 
 ```dform
 stack demo.main {
-  backend = local(".dform/demo")   # where state, world and lock live, relative to the
-                                   # directory holding .dform/; default .dform/<name>
+  backend = local("state/demo")    # where state, world and lock live, relative to the
+                                   # project root; default dform.state/<name>
   unknowns = "strict"              # or "permissive" (the default); see "Strict mode"
   role = "bootstrap"               # optional: it stays batch; see "Bootstrap and handover"
   approvals = jwks("https://...")  # optional: who may approve a plan; see "Approvals"
@@ -52,8 +117,8 @@ stack demo.main {
 }
 ```
 
-Without a `stack` statement the stack is the basename of the first `--file`
-without its extension: `pngu.df` is stack `pngu`. Two programs never see each other's resources. `apply` holds the
+Without a `stack` statement the stack is the basename of the program file
+without its extension (discovery does not find it: name it by its file). Two programs never see each other's resources. `apply` holds the
 stack's lock, `<state dir>/state.lock` (the holder's pid): a second apply
 of the same stack while one runs fails naming the holder; a lock whose
 holder is gone (a killed apply) is taken over with a note.
@@ -62,20 +127,21 @@ holder is gone (a killed apply) is taken over with a note.
 
 `stack app[env]` (or `stack app[env, region]`) names the inputs that are
 deployment identity. Each value of the key is its own deployment,
-`app[env=prod]`, with its own state directory (`.dform/app/env=prod/`;
+`app[env=prod]`, with its own state directory (`dform.state/app/env=prod/`;
 several keys are joined, `env=prod,region=us-east1`, and a value is escaped
 for the file system: every byte but letters, digits, `-`, `_` and a `.`
 that does not lead is `%XX`), lock, registry entry and controller. Inputs
 outside the key are parameters of a deployment: they deform it in place.
-The key's value comes from `--set`, an `--input-file`, a scenario's `with`,
-else the input's default; a key input with none is an error naming it.
+The key's value comes from the target, an `--input-file`, a scenario's
+`with`, else the input's default; a key input with none is an error naming
+it.
 Nothing about environments is built in: `dform.df` is `stack dform[env]`,
-so `plan --set env=prod` plans prod against prod's state, not staging's.
+so `plan dform env=prod` plans prod against prod's state, not staging's.
 
 ```bash
-cargo run -- --file examples/demo/stacks/dform.df apply                        # dform[env=staging]: .dform/dform/env=staging/
-cargo run -- --file examples/demo/stacks/dform.df plan --set env=prod          # dform[env=prod]: creates, beside staging
-cargo run -- --file examples/demo/stacks/dform.df stack rekey dform env=staging env=stg   # move a deployment's state
+cargo run -- -C examples/demo apply dform env=staging   # dform[env=staging]: dform.state/dform/env=staging/
+cargo run -- -C examples/demo plan dform env=prod       # dform[env=prod]: creates, beside staging
+cargo run -- -C examples/demo stack rekey dform env=staging env=stg   # move a deployment's state
 ```
 
 `dform stack rekey STACK K=V... K=V...` moves one deployment's state (and
@@ -84,7 +150,7 @@ new key's. Nothing in the cloud changes. First it lists, from provenance,
 the resources whose name-like attributes depend on the key: the next plan
 renames them, usually a replace. With the new key only (`rekey dform
 env=staging`) it moves the state a stack had before it was keyed, the
-files directly in `.dform/<stack>/`; a plan of a keyed stack whose
+files directly in `dform.state/<stack>/`; a plan of a keyed stack whose
 deployment has no state yet but whose unkeyed state exists says so.
 
 The collision lint: in a keyed stack, a resource whose name-like attribute
@@ -98,40 +164,41 @@ the lint off; `dform.df` says so, since its iam module's names are fixed.
 
 `stack_output("app[env=prod]", k, V)` reads one deployment's outputs,
 `dform stack handover 'app[env=prod]' --to ...` hands one over, and
-`dform controller --stack 'app[env=prod]' --set env=prod` runs one.
+`dform controller run 'app[env=prod]'` runs one.
 
 Cross-stack values: `output k = t` at the top of a program is a stack
 output. `apply` records the stack's outputs whose values are known in its
-state and the stack's absolute state path in `.dform/stacks.json`; every
+state and the stack's absolute state path in `dform.state/stacks.json`; every
 other program reads them as facts, `stack_output("net.shared", vpc_id, V)`.
 
-`.dform/` (every path below, and the registry) is in the directory of the
-first `--file` (`examples/demo/stacks/.dform/` for the demo), not the working directory, so stacks whose programs sit
-together share it wherever dform runs from; `--root DIR` puts it at
-`DIR/.dform/` instead.
+`dform.state/` (every path below, and the registry) is at the project
+root, so the project's stacks share it wherever in the project dform runs
+from. It is gitignored: it holds each deployment's plan key.
 
-- Core state (Terraform-style address -> remote mapping, outputs): `.dform/<stack>/state.json`
-  (a keyed stack's deployment: `.dform/<stack>/<k>=<v>/state.json`).
-- The fake backend's world (what "exists"): `.dform/<stack>/remote.json`, beside the state.
-- Discovery inventory, shared by every stack: `.dform/inventory.json`.
+- Core state (Terraform-style address -> remote mapping, outputs): `dform.state/<stack>/state.json`
+  (a keyed stack's deployment: `dform.state/<stack>/<k>=<v>/state.json`).
+- The fake backend's world (what "exists"): `dform.state/<stack>/remote.json`, beside the state.
+- Discovery inventory, shared by every stack: `dform.state/inventory.json`.
+- What providers and trust roots fetch (the k8s OpenAPI document, JWKS): `dform.state/cache/`.
 
-`--inventory PATH` points at the discovery inventory file directly (see
-"Discovery facts" below). Default: `<world dir>/inventory.json` when `--world`
-is given and that file exists there, else `.dform/inventory.json`. This is how
-`examples/adopt/stacks/adopt_demo.df` runs from a clean clone with no `.dform/` setup:
+The mock's flags go after `dev`, before the command. `dform dev --inventory
+PATH` points at the discovery inventory file directly (see "Discovery facts"
+below). Default: `<world dir>/inventory.json` when `--world` is given and that
+file exists there, else `dform.state/inventory.json`. This is how
+`examples/adopt` runs from a clean clone with no `dform.state/` setup:
 
 ```bash
-cargo run -- --file examples/adopt/stacks/adopt_demo.df --inventory tests/fixtures/world/inventory.json plan --set env=prod
+cargo run -- -C examples/adopt dev --inventory ../../tests/fixtures/world/inventory.json plan --set env=prod
 ```
 
-`--world PATH` (plan and apply) points the fake backend at a world file
+`dform dev --world PATH` (plan and apply) points the fake backend at a world file
 instead: the JSON of what "exists", each resource's configured `attrs` and its
 `computed` values. Plan refreshes from it, apply writes it back, and the stack's
 state sits beside it as `<stem>.state.json`. Edit the world file and re-plan to
 see drift:
 
 ```bash
-cargo run -- --file examples/demo/stacks/dform.df plan --world tests/fixtures/world/dform.json    # steady state: no changes
+cargo run -- -C examples/demo dev --world ../../tests/fixtures/world/dform.json plan   # steady state: no changes
 ```
 
 Only what state maps is the stack's: an object in the world file that state
@@ -140,12 +207,6 @@ resource of the same name is a create until an `adopt` names it (see "Adopt
 existing resources"). A world file with no state beside it is nobody's.
 `tests/fixtures/world/<stack>.json` and its `<stack>.state.json` are the fixture
 format for tests.
-
-A `.dform/` written before state was scoped (`.dform/state.json`,
-`.dform/remote.json`) is moved into the `dform` stack on the next run.
-`dform.df` is keyed by `env` now: a `.dform/dform/state.json` from before
-is not any deployment's until `cargo run -- stack rekey dform env=staging`
-moves it (the plan says so).
 
 ## Providers are processes; the mock plays schema files
 
@@ -169,8 +230,9 @@ can pretend to be any provider: a provider it plays is a schema file of
 plain facts, `providers/<name>/schema.df`, selected by the program's
 `provider` statements (`provider gke {}`, or `provider aws { source =
 "providers/aws-mock" }` for a directory or `.df` file relative to the
-program's file) or, overriding them, with `--provider NAME` (repeatable;
-default `fake`). `--provider path/to/schema.df` loads a file directly. A
+program's file), by the manifest's `[providers]` entry of the name, or,
+overriding them, with `dform dev --provider NAME` (repeatable; default
+`fake`). `--provider path/to/schema.df` loads a file directly. A
 `providers/<name>/schema.df` in the working directory wins over the schemas
 built into the binary (`crates/dform-mock/schemas/`: `fake`, `gke`, `k8s`,
 `aws-mock`). A `source` (or `--provider` path) that
@@ -218,10 +280,10 @@ type_replace(k8s.deployment, "create_first")                # optional: create_f
 ```
 
 Built-in mock schemas: `fake` (the demo's), `gke` (pngu.df), `k8s` (fifteen
-Kubernetes kinds; try `cargo run -- --file examples/k8s/stacks/k8s_demo.df plan`)
+Kubernetes kinds; try `cargo run -- -C examples/k8s plan`)
 and `aws-mock` (twelve AWS types in the Terraform provider's shape, with its
 Optional+Computed attributes and keyless sets; try
-`cargo run -- --file examples/aws/stacks/aws_demo.df plan`). Each example names its
+`cargo run -- -C examples/aws plan`). Each example names its
 provider with a `provider` statement.
 A `required` attribute the program does not set is a plan error. Lists with
 `type_list_key` are diffed by key (`spec.template.spec.containers[name=web].image`),
@@ -245,7 +307,8 @@ path (or one under it) is planned as a replace, `-/+` (see "Deletes and
 replacement" below). The fake schema's vpc and subnet `cidr` are `force_new`.
 
 The facts are injected into the program, so rules can read them and
-`cargo run -- query type_attr` lists the schema. A run injects the rows of
+`dform query type_attr` lists the schema (`dform provider schema NAME`, a
+provider's alone). A run injects the rows of
 the types its program, its inputs and state name (and the types they
 alias), plus every `type_provider`: a derived Kubernetes schema is 16k
 facts. The providers are asked for only those types' rows too (the
@@ -341,7 +404,7 @@ provider k8s { source = "../target/debug/dform-provider-k8s" }
 ```bash
 cargo build
 cargo run -- provider check target/debug/dform-provider-k8s   # creates and deletes a ConfigMap
-DFORM_K8S_OFFLINE=1 cargo run -- --file my.df plan             # no cluster: the snapshot's schema
+DFORM_K8S_OFFLINE=1 cargo run -- plan my.df                    # no cluster: the snapshot's schema
 ```
 
 `tests/k8s_offline.rs` runs without a cluster: offline, and against a fake API
@@ -362,7 +425,7 @@ identity mapping), so a steady-state stack shows no nulls. Apply mints ids,
 endpoints and secrets per the schema and fills the nulls in dependency order.
 
 ```bash
-cargo run -- --file examples/demo/stacks/dform.df plan
+cargo run -- -C examples/demo plan
 # + net.subnet.network.main::private-us-test-1a
 #   vpc_id = ?net.vpc/network.main::vpc#id
 ```
@@ -440,7 +503,7 @@ true`. A change is `{op, path, before, after}` (`op` is `set`, or
 `add`/`remove` for a set element, with its `leaves`); a null is `{"null":
 LABEL, "class": CLASS}` and a secret `{"sensitive": LABEL}`.
 
-`cargo run -- query stuck` lists the stuck rule instances. A rule can read
+`dform query stuck` lists the stuck rule instances. A rule can read
 them too, `stuck(RuleId, HeadPattern, Bindings, Nulls)`: a policy such as
 `deny "strict" { rule: r, on: n } if stuck(r, _, _, n)` refuses any plan
 with a stuck instance. `stuck/4` is derived above every rule that can stick,
@@ -455,8 +518,8 @@ re-evaluated and policy is checked again; a deny there stops the run with the
 reason printed. `--max-ticks N` (default 8) bounds the loop:
 
 ```bash
-cargo run -- --file examples/gke/stacks/gke_two_phase.df apply  # two ticks
-cargo run -- --file examples/gke/stacks/gke_one_zone.df apply   # stops after tick 1
+cargo run -- -C examples/gke apply gke_two_phase   # two ticks
+cargo run -- -C examples/gke apply gke_one_zone    # stops after tick 1
 ```
 
 At a boundary apply also compares the refreshed world with what it last saw
@@ -468,8 +531,8 @@ change anywhere else is reported as `drift after tick N:` and the
 run goes on, the next tick deforming it back:
 
 ```bash
-cargo run -- --file examples/gke/stacks/gke_two_phase.df apply \
-  --chaos 'mutate=gke_cluster/pngu:deletion_protection=false'   # drift, tick 2 undoes it
+cargo run -- -C examples/gke dev \
+  --chaos 'mutate=gke_cluster/pngu:deletion_protection=false' apply gke_two_phase   # drift, tick 2 undoes it
 ```
 
 Deletes and replacement. Deletes run after every create and update, in
@@ -493,12 +556,12 @@ Either way the replacement is a new object, so every null that named the old
 one (its id, its other computed values) is unresolved again: an existing
 object that reads one is `pending on ?T/A#id (resolves after tick N)` and is
 updated to the new value the tick after the replacement; a new object that
-reads one is created after it in the same tick. `--chaos fresh-ids` makes
+reads one is created after it in the same tick. `dev --chaos fresh-ids` makes
 the mock mint a new id on every create, so the difference shows:
 
 ```bash
-cargo run -- --file examples/demo/stacks/dform.df apply --chaos fresh-ids
-cargo run -- --file examples/demo/stacks/dform.df apply --chaos fresh-ids --set env=prod   # tick 1 replaces vpcs and subnets; tick 2 updates their readers
+cargo run -- -C examples/demo dev --chaos fresh-ids apply dform env=staging
+cargo run -- -C examples/demo dev --chaos fresh-ids apply dform env=prod   # tick 1 replaces vpcs and subnets; tick 2 updates their readers
 ```
 
 Lifecycle is plain facts the planner reads (and policy can read too):
@@ -539,7 +602,7 @@ deny(m) if deformation("delete", t, a, _), m = "no deletes here: {t}.{a}"
 ```
 
 ```bash
-cargo run -- --file examples/demo/stacks/dform.df why 'deny(m)'    # the deny, the lifecycle fact and the deformation it read
+cargo run -- -C examples/demo why 'deny(m)'    # the deny, the lifecycle fact and the deformation it read
 ```
 
 Only policy may read the deformation: a resource rule over it would make the
@@ -553,8 +616,8 @@ clock from the time its provider says it took; on the mock (chaos `latency`)
 the difference shows there:
 
 ```bash
-cargo run -- --file examples/demo/stacks/dform.df apply --parallel 4 --chaos latency=net.vpc/network.main::vpc:100 \
-  --chaos latency=net.vpc/network.peer::vpc:100   # the two vpcs overlap: 100ms, not 200ms
+cargo run -- -C examples/demo dev --chaos latency=net.vpc/network.main::vpc:100 \
+  --chaos latency=net.vpc/network.peer::vpc:100 apply dform env=staging --parallel 4   # the two vpcs overlap: 100ms, not 200ms
 ```
 
 An apply that fails or is killed can be resumed: before a tick's first Apply
@@ -566,7 +629,7 @@ under one of them it prints the change and stops before any Apply call, on
 the deny the policy pass derives from `deformation(remaining, ...)` (run
 `apply` again to plan against the world as it now is).
 
-`plan --out PLAN.json` writes the plan file: the inputs (each `--file` with a
+`plan --out PLAN.json` writes the plan file: the inputs (each program file with a
 digest of its content, each `--input-file` with its digest keyed like a
 sensitive value's, since an input file may hold a secret, `--set`,
 `--data`, `--provider`, `--world`, `--inventory`), a digest of the
@@ -595,10 +658,10 @@ between plan and apply is refused and the file never carries the bytes:
 
 ```bash
 G=examples/gke/stacks/gke_two_phase.df
-cargo run -- --file $G --world w.json plan --out plan.json
+cargo run -- dev --world w.json plan $G --out plan.json
 cargo run -- apply plan.json                          # the file's delta, two ticks
 # the world moves after tick 1: tick 2 refuses
-cargo run -- apply plan.json --chaos 'mutate=gke_cluster/pngu:name="other"'
+cargo run -- dev --chaos 'mutate=gke_cluster/pngu:name="other"' apply plan.json
 ```
 
 A `sensitive` computed value never leaves the provider: what dform sees, stores
@@ -721,8 +784,8 @@ The approval service is not dform's. `dform-approve` (built with dform,
 cd examples/approvals
 A="cargo run -q -p dform-direct --bin dform-approve --"
 $A keygen approver.key > approvers.jwks.json      # the trust root: jwks_file("../approvers.jwks.json")
-cargo run -- --file stacks/approvals.df apply --set env=prod
-cargo run -- --file stacks/approvals.df plan --set env=prod --set cidr=10.1.0.0/16 --out plan.json
+cargo run -- apply approvals.demo env=prod
+cargo run -- plan approvals.demo env=prod --set cidr=10.1.0.0/16 --out plan.json
 $A sign approver.key --digest sha256:... --stack approvals.demo --key env=prod \
   --approver alice --ttl 3600 > approval.json      # --format jwt; --format fact for approval/1
 cargo run -- apply plan.json --approval approval.json
@@ -759,9 +822,9 @@ redacted form, where a sensitive leaf is already the stack's HMAC of it.
 Nothing in plan or apply reads the log as truth (E DR-16).
 
 ```bash
-cargo run -- --file examples/demo/stacks/dform.df log                        # SEQ TIME KIND field=value ...
-cargo run -- --file examples/demo/stacks/dform.df log --since 2026-09-28     # or --since SEQ; --json for one JSON array
-cargo run -- --file examples/demo/stacks/dform.df log verify                 # the chain holds, or the first broken link
+cargo run -- -C examples/demo log dform env=staging                     # SEQ TIME KIND field=value ...
+cargo run -- -C examples/demo log dform env=staging --since 2026-09-28  # or --since SEQ; --json for one JSON array
+cargo run -- -C examples/demo log verify dform env=staging              # the chain holds, or the first broken link
 ```
 
 `log verify` checks that every entry's hash is its content's, that its
@@ -780,14 +843,14 @@ authoritative.
 the final fact store and prints a table with one column per variable:
 
 ```bash
-cargo run -- --file examples/demo/stacks/dform.df query 'attr(net.vpc, n, .cidr, c)' --set env=prod
+cargo run -- -C examples/demo query 'attr(net.vpc, n, .cidr, c)' dform env=prod
 # N                    C
 # "network.main::vpc"  10.20.0.0/16
 # "network.peer::vpc"  10.21.0.0/16
 # (2 rows)
-cargo run -- --file examples/demo/stacks/dform.df query 'attr(t, a, .cidr, c), want(t, a), t != net.subnet'
-cargo run -- --file examples/demo/stacks/dform.df query 'want(net.vpc, "network.main::vpc")'    # yes / no
-cargo run -- --file examples/demo/stacks/dform.df query want                                    # every want fact
+cargo run -- -C examples/demo query 'attr(t, a, .cidr, c), want(t, a), t != net.subnet'
+cargo run -- -C examples/demo query 'want(net.vpc, "network.main::vpc")'    # yes / no
+cargo run -- -C examples/demo query want                                    # every want fact
 ```
 
 `query --json` prints one document: `{query, count, facts}` for a predicate
@@ -811,7 +874,7 @@ attribute, by dotted path or by object value, and then shows only the
 contributions that hold it:
 
 ```bash
-cargo run -- --file examples/demo/stacks/dform.df why 'attr(net.vpc, "network.main::vpc", "tags.team", "platform")' --set env=prod
+cargo run -- -C examples/demo why 'attr(net.vpc, "network.main::vpc", "tags.team", "platform")' dform env=prod
 # attr("net.vpc", "network.main::vpc", "tags", {component: "network", env: "prod", team: "platform"})
 #   by Σattr: attribute aggregate (lub_ranked, E §2.5) over 2 contributions
 #   ├─ arg("net.vpc", "network.main::vpc", "tags", {team: "platform"}, "normal")   [rank normal, owner r69]
@@ -821,17 +884,17 @@ cargo run -- --file examples/demo/stacks/dform.df why 'attr(net.vpc, "network.ma
 #   └─ ... 1 other contribution (--all)
 ```
 
-`dform graph` prints Graphviz DOT, nodes and edges sorted:
+`dform dev graph` prints Graphviz DOT, nodes and edges sorted:
 
 ```bash
-cargo run -- --file examples/demo/stacks/dform.df graph | dot -Tsvg > resources.svg   # resource DAG: A -> B when A reads B (a ref, a null)
-cargo run -- --file examples/demo/stacks/dform.df graph strata                        # partition graph, a cluster per stratum, negative edges dashed
-cargo run -- --file examples/demo/stacks/dform.df graph vpc_peer/2                    # any binary relation of the fact store
+cargo run -- -C examples/demo dev graph | dot -Tsvg > resources.svg   # resource DAG: A -> B when A reads B (a ref, a null)
+cargo run -- -C examples/demo dev graph --strata                     # partition graph, a cluster per stratum, negative edges dashed
+cargo run -- -C examples/demo dev graph --relation vpc_peer/2        # any binary relation of the fact store
 ```
 
 ## Chaos: failure and latency injection
 
-`apply --chaos SPEC` (repeatable) makes the fake provider misbehave, the way a
+`dform dev --chaos SPEC apply` (repeatable) makes the fake provider misbehave, the way a
 real cloud does. Deterministic: nothing sleeps and nothing is random. The world
 file keeps a `tick` counter; every `apply` is one tick.
 
@@ -847,8 +910,8 @@ file keeps a `tick` counter; every `apply` is one tick.
 | `fresh-ids` | every Create mints new ids (the world keeps a `serial`), as a real cloud does; without it a destroy-first replacement under the same name gets its predecessor's id |
 
 ```bash
-cargo run -- --file examples/demo/stacks/dform.df apply --chaos fail=net.subnet/network.main::private-us-test-1a
-cargo run -- --file examples/demo/stacks/dform.df apply --chaos 'mutate=net.vpc/network.main::vpc:cidr="10.9.0.0/16"'
+cargo run -- -C examples/demo dev --chaos fail=net.subnet/network.main::private-us-test-1a apply dform env=staging
+cargo run -- -C examples/demo dev --chaos 'mutate=net.vpc/network.main::vpc:cidr="10.9.0.0/16"' apply dform env=staging
 ```
 
 Refresh reads every object state maps; a Read that returns nothing is retried
@@ -894,7 +957,7 @@ operators, so hyphenated names are strings (`"us-east-1"`). A syntax error
 names `file:line:col` and what was expected, and parsing goes on to the
 next statement, so every error in a file is reported at once.
 
-`dform fmt [PATH...]` formats files in place (no PATH: the `--file` files):
+`dform fmt [PATH...]` formats files in place (no PATH: the project's `.df` files):
 two-space indentation per open bracket or continued statement, one space
 around operators and after commas, `{ a: 1 }` inside braces, at most one
 blank line, and no comma where a newline already separates block entries.
@@ -963,12 +1026,12 @@ schema: facts of the extern, the rows whose `+` columns are the inputs.
 The plan file records the answers the plan read (not a call with a
 `secret(...)` column), and `apply PLAN` asks none of them again. A
 `persist` extern's answers are kept in state and never asked again, so a
-generated password stays the same across runs. `dform taint STACK EXTERN
+generated password stays the same across runs. `dform state taint STACK EXTERN
 ARGS...` forgets one of them (its input values written as `--set` takes a
 value), so the next plan asks the provider again:
 
 ```bash
-dform taint p random.password app    # the next plan generates a new one
+dform state taint p random.password app    # the next plan generates a new one
 ```
 
 ## Tables
@@ -1041,7 +1104,7 @@ host_ip(e, ip) if ip in settings[e].vm.ips
 
 ### Discovery facts
 
-The fake backend can inject facts from `.dform/inventory.json`:
+The fake backend can inject facts from `dform.state/inventory.json`:
 
 - `cloud_exists(Type, Name)`
 - `cloud_attr(Type, Name, Path, Value)`
@@ -1051,7 +1114,7 @@ These are intended to model provider data sources / inventory.
 
 To reference discovered values in resource attributes without manually joining
 `cloud_attr/cloud_computed`, you can use `cloud_ref(Type, Name, Attr)` as a value
-term. In the fake backend it resolves against `.dform/inventory.json`.
+term. In the fake backend it resolves against `dform.state/inventory.json`.
 
 `Attr` supports dotted and indexed paths like `.tags.owner` or `.subnets[0].id`.
 
@@ -1252,13 +1315,13 @@ deny, and exits non-zero if any scenario failed.
 stack, against its world.
 
 ```bash
-cargo run -- --file examples/demo/stacks/dform.df test
-cargo run -- --file examples/demo/stacks/dform.df plan --scenario dev
+cargo run -- -C examples/demo test
+cargo run -- -C examples/demo plan --scenario dev
 ```
 
 ## Controller mode
 
-`dform controller` is the second executor over the same evaluator: the
+`dform controller run` is the second executor over the same evaluator: the
 plan is the diff a reconciler applies, so nothing in the language changes.
 It waits for an input relation's source or the world file to change, then
 does what `apply` does (refresh, evaluate, plan, the policy pass, ticks
@@ -1273,21 +1336,20 @@ one line per event and per tick:
 04:22:07 event input release
 04:22:07 tick 1: plan: 1 deformation (1 update)
 04:22:07 stack renfry.workload is undeformed
-04:22:12 event world .dform/renfry.workload/remote.json changed
+04:22:12 event world dform.state/renfry.workload/remote.json changed
 04:22:12 drift k8s.deployment.web spec.replicas: 3 -> 5 (auto_reconcile)
 04:22:12 tick 1: plan: 1 deformation (1 update)
 04:22:12 stack renfry.workload is undeformed
 ```
 
 ```bash
-W=examples/bootstrap/stacks/workload.df
-cargo run -- --root examples/bootstrap --file $W controller --stack renfry.workload   # poll every 500ms
-cargo run -- --root examples/bootstrap --file $W controller --poll 100 --max-events 3 # stop after 3 events
-cargo run -- --root examples/bootstrap --file $W controller --once                    # what changed since the last run
+cargo run -- -C examples/bootstrap controller run renfry.workload                   # poll every 500ms
+cargo run -- -C examples/bootstrap controller run renfry.workload --poll 100 --max-events 3   # stop after 3 events
+cargo run -- -C examples/bootstrap controller run renfry.workload --once            # what changed since the last run
 ```
 
-`--stack NAME` must be the program's own stack; of a keyed stack, the
-deployment `--set` selects (`--stack 'app[env=prod]' --set env=prod`). `--poll MS` (default 500)
+The target names the stack, and of a keyed stack one deployment
+(`controller run 'app[env=prod]'`). `--poll MS` (default 500)
 is how often the sources and the world file are looked at: polling, no file
 notification. `--once` handles what changed since the last run (`event
 resync` when nothing did) and exits; `--max-events N` exits after N events
@@ -1348,9 +1410,9 @@ state then moves into the cluster and the controller runs it from there.
 `examples/bootstrap/` is the demo, on the mocks:
 
 ```bash
-cargo run -- --root examples/bootstrap --file examples/bootstrap/stacks/bootstrap.df apply   # 3 ticks
-cargo run -- --root examples/bootstrap stack handover renfry.workload --to 'k8s("dform-system/workload")'
-cargo run -- --root examples/bootstrap --file examples/bootstrap/stacks/workload.df controller --stack renfry.workload
+cargo run -- -C examples/bootstrap apply renfry.bootstrap   # 3 ticks
+cargo run -- -C examples/bootstrap stack handover renfry.workload --to 'k8s("dform-system/workload")'
+cargo run -- -C examples/bootstrap controller run renfry.workload
 ```
 
 `stacks/bootstrap.df` (stack `renfry.bootstrap`, mock GCP from `providers/gcp/schema.df` and
@@ -1363,21 +1425,21 @@ pool is up. `stacks/workload.df` (stack `renfry.workload`) is a namespace, a
 Deployment whose image is the `release` input relation, and a Service.
 
 `stack NAME { role = bootstrap }` marks the stack that creates what the
-controller runs in: it stays batch. `dform controller` refuses it (by its
+controller runs in: it stays batch. `dform controller run` refuses it (by its
 program or by the registry), and it is never handed over.
 
 `dform stack handover NAME --to BACKEND` (NAME a deployment, `app[env=prod]`, of a keyed stack) moves the stack's state
 directory (state, world, controller memo) to the backend and records it in
-the registry, `.dform/stacks.json` (`{"state": ..., "backend": ...}`
+the registry, `dform.state/stacks.json` (`{"state": ..., "backend": ...}`
 beside the plain state paths, absolute; the controller's `event world` line
 names it relative to the root). Every later run of the stack uses it,
 whatever the program's `backend` says; a batch `apply` of a handed-over
 stack is refused (the controller runs it), `plan` is not. The stack's
-state is found in the registry, else at `.dform/NAME`; the target must be
+state is found in the registry, else at `dform.state/NAME`; the target must be
 empty and the stack not locked. Backends:
 
-- `local("DIR")`: a directory, relative to the one holding `.dform/`
-  (`--root`, else the program's directory), as a stack's `backend` is.
+- `local("DIR")`: a directory, relative to the project root, as a stack's
+  `backend` is.
 - `k8s("namespace/name")`: the in-cluster backend. For now it stands in as
   the directory `k8s/namespace/name` inside the state directory of the
   registered `role = bootstrap` stack (there must be exactly one; an apply

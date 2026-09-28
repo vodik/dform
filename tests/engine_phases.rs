@@ -53,13 +53,13 @@ fn gke_two_phase_plans_in_sections() {
     let prog = repo().join("examples/gke/stacks/gke_two_phase.df");
     let r = s
         .run(&[
-            "--file",
-            prog.to_str().unwrap(),
+            "dev",
             "--provider",
             "gke",
             "--world",
             "w.json",
             "plan",
+            prog.to_str().unwrap(),
         ])
         .success();
     assert_eq!(r.stdout, GKE_PLAN);
@@ -72,27 +72,27 @@ fn gke_two_phase_plans_in_sections() {
 fn apply_then_replan_is_undeformed() {
     let s = Scratch::new("undeformed");
     let prog = repo().join("examples/demo/stacks/dform.df");
-    let args = ["--file", prog.to_str().unwrap(), "--world", "w.json"];
-    let run = |cmd: &str| s.run(&[&args[..], &[cmd]].concat()).success();
+    let prog = prog.to_str().unwrap();
+    let run = |cmd: &str| {
+        s.run(&common::on(prog, &["--world", "w.json"], &[cmd]))
+            .success()
+    };
     let first = run("plan");
     assert!(first.stdout.contains('?'), "{}", first.stdout);
     assert!(!first.stdout.contains("undeformed"), "{}", first.stdout);
-    run("apply");
+    s.run(&["dev", "--world", "w.json", "apply", prog, "env=staging"])
+        .success();
     let again = run("plan");
     assert_eq!(again.stdout, "stack dform is undeformed\n");
 }
 
 fn gke(s: &Scratch, file: &str, extra: &[&str]) -> common::Run {
     let prog = repo().join("examples/gke/stacks").join(file);
-    let args = [
-        "--file",
+    s.run(&common::on(
         prog.to_str().unwrap(),
-        "--provider",
-        "gke",
-        "--world",
-        "w.json",
-    ];
-    s.run(&[&args[..], extra].concat())
+        &["--provider", "gke", "--world", "w.json"],
+        extra,
+    ))
 }
 
 fn world_resources(s: &Scratch) -> Vec<String> {
@@ -201,8 +201,9 @@ fn a_pending_update_applies_after_the_boundary() {
         "p.df",
         "edition 2026\nresource db.postgres main { size = 1 }\nresource compute.vm app { db_host = ref(db.postgres, \"main\", \"endpoint\") }\n",
     );
-    let args = ["--file", "p.df", "--world", "w.json"];
-    let r = s.run(&[&args[..], &["apply"]].concat()).success();
+    let r = s
+        .run(&common::on("p.df", &["--world", "w.json"], &["apply"]))
+        .success();
     assert!(
         r.stdout
             .contains("tick 1:\nplan: 1 deformation (1 create), 1 pending\n"),
@@ -214,7 +215,9 @@ fn a_pending_update_applies_after_the_boundary() {
         "{}",
         r.stdout
     );
-    let r = s.run(&[&args[..], &["plan"]].concat()).success();
+    let r = s
+        .run(&common::on("p.df", &["--world", "w.json"], &["plan"]))
+        .success();
     assert!(
         r.stdout.ends_with("stack p is undeformed\n"),
         "{}",

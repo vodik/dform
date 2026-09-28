@@ -22,20 +22,14 @@ fn expected_plan() -> String {
 fn k8s_demo_plans_against_the_mock() {
     let s = Scratch::new("k8s-demo");
     let prog = repo().join("examples/k8s/stacks/k8s_demo.df");
-    let args = [
-        "--file",
-        prog.to_str().unwrap(),
-        "--provider",
-        "k8s",
-        "--world",
-        "w.json",
-    ];
-    let r = s.run(&[&args[..], &["plan"]].concat()).success();
+    let prog = prog.to_str().unwrap();
+    let args = |cmd| common::on(prog, &["--provider", "k8s", "--world", "w.json"], cmd);
+    let r = s.run(&args(&["plan"])).success();
     assert_eq!(r.stdout, expected_plan());
 
     // Apply: the server picks the ConfigMap's name from generateName and fills
     // the Deployment's reference to it; defaults land in computed.
-    s.run(&[&args[..], &["apply"]].concat()).success();
+    s.run(&args(&["apply"])).success();
     let w: serde_json::Value = serde_json::from_str(&s.read("w.json")).unwrap();
     let cm = w["resources"]["k8s.config_map::web_config"]["computed"]["metadata"]["name"]
         .as_str()
@@ -53,7 +47,7 @@ fn k8s_demo_plans_against_the_mock() {
         w["resources"]["k8s.service::web"]["computed"]["spec"]["type"],
         "ClusterIP"
     );
-    let r = s.run(&[&args[..], &["plan"]].concat()).success();
+    let r = s.run(&args(&["plan"])).success();
     assert_eq!(r.summary(), "stack k8s_demo is undeformed", "{}", r.stdout);
 }
 
@@ -73,8 +67,8 @@ resource k8s.deployment api {
 fn containers_diff_by_merge_key_not_index() {
     let s = Scratch::new("k8s-keys");
     s.write("p.df", TWO);
-    let args = ["--file", "p.df", "--provider", "k8s", "--world", "w.json"];
-    s.run(&[&args[..], &["apply"]].concat()).success();
+    let args = |cmd| common::on("p.df", &["--provider", "k8s", "--world", "w.json"], cmd);
+    s.run(&args(&["apply"])).success();
 
     // The cluster reports the containers in the other order: not a change.
     let mut w: serde_json::Value = serde_json::from_str(&s.read("w.json")).unwrap();
@@ -84,11 +78,11 @@ fn containers_diff_by_merge_key_not_index() {
             .unwrap();
     cs.reverse();
     s.write("w.json", &serde_json::to_string_pretty(&w).unwrap());
-    let r = s.run(&[&args[..], &["plan"]].concat()).success();
+    let r = s.run(&args(&["plan"])).success();
     assert_eq!(r.summary(), "stack p is undeformed", "{}", r.stdout);
 
     s.write("p.df", &TWO.replace("envoy:1", "envoy:2"));
-    let r = s.run(&[&args[..], &["plan"]].concat()).success();
+    let r = s.run(&args(&["plan"])).success();
     assert!(
         r.stdout.contains(
             r#"spec.template.spec.containers[name=sidecar].image: "envoy:1" -> "envoy:2""#
@@ -107,7 +101,7 @@ fn a_missing_required_attribute_names_resource_and_path() {
 resource k8s.deployment api { spec.template.spec.containers = [{name: "a", image: "b"}] }"#,
     );
     let r = s
-        .run(&["--file", "p.df", "--provider", "k8s", "plan"])
+        .run(&["dev", "--provider", "k8s", "plan", "p.df"])
         .failure();
     assert!(
         r.stderr.contains(

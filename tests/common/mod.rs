@@ -1,5 +1,5 @@
 //! Helpers for the CLI tests: a scratch directory per test and a way to run
-//! the `dform` binary inside it. Tests never touch the repository's `.dform/`.
+//! the `dform` binary inside it. Tests never touch the repository's `dform.state/`.
 
 #![allow(dead_code)]
 
@@ -63,12 +63,12 @@ impl Scratch {
     }
 
     /// Run `dform ARGS` with the scratch directory as the working directory.
-    pub fn run(&self, args: &[&str]) -> Run {
+    pub fn run<S: AsRef<std::ffi::OsStr>>(&self, args: &[S]) -> Run {
         self.run_in("", args)
     }
 
     /// Run `dform ARGS` in the scratch directory's subdirectory `rel`.
-    pub fn run_in(&self, rel: &str, args: &[&str]) -> Run {
+    pub fn run_in<S: AsRef<std::ffi::OsStr>>(&self, rel: &str, args: &[S]) -> Run {
         let dir = self.path(rel);
         std::fs::create_dir_all(&dir).unwrap();
         let out = Command::new(env!("CARGO_BIN_EXE_dform"))
@@ -80,7 +80,7 @@ impl Scratch {
     }
 
     /// Run the command line `ARGS` over `backend`.
-    pub fn run_on(&self, backend: Backend, args: &[&str]) -> Run {
+    pub fn run_on<S: AsRef<std::ffi::OsStr>>(&self, backend: Backend, args: &[S]) -> Run {
         let mut c = backend.command();
         Run::from(c.args(args).current_dir(&self.dir).output().unwrap())
     }
@@ -176,6 +176,49 @@ impl Backend {
 pub fn exe(name: &str) -> String {
     let p = Path::new(env!("CARGO_BIN_EXE_dform")).with_file_name(name);
     p.to_str().unwrap().to_string()
+}
+
+/// Copy the directory `from` (a project) to `to`, recursively, but for its
+/// `dform.state/`.
+pub fn copy_dir(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for e in std::fs::read_dir(from).unwrap().flatten() {
+        let name = e.file_name();
+        if name == "dform.state" {
+            continue;
+        }
+        let path = e.path();
+        if path.is_dir() {
+            copy_dir(&path, &to.join(&name));
+        } else {
+            std::fs::copy(&path, to.join(&name)).unwrap();
+        }
+    }
+}
+
+/// Commands that live under `dform dev`.
+const DEV: &[&str] = &["strata", "graph", "eval", "show"];
+
+/// A command on the program `file`: `dev` and the mock's flags `mock`
+/// first (when there are any, or the command is a `dev` one), then `args`
+/// (the command and its arguments), then `file`, the command's target.
+/// `apply PLAN.json` and the commands that take no target get none.
+pub fn on(file: &str, mock: &[&str], args: &[&str]) -> Vec<String> {
+    let mut out: Vec<&str> = Vec::new();
+    if !mock.is_empty() || args.first().is_some_and(|c| DEV.contains(c)) {
+        out.push("dev");
+        out.extend_from_slice(mock);
+    }
+    out.extend_from_slice(args);
+    let planned = matches!(args, ["apply", f, ..] if f.ends_with(".json"));
+    let untargeted = matches!(
+        args,
+        ["state", "taint", ..] | ["stack", "handover" | "rekey" | "list", ..]
+    );
+    if !planned && !untargeted {
+        out.push(file);
+    }
+    out.into_iter().map(String::from).collect()
 }
 
 /// The repository root, for programs and fixtures the tests read.

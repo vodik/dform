@@ -28,17 +28,13 @@ fn two_hundred_events_keep_the_source_registry_bounded() {
     let counts = s.path("sources.txt");
     let mut child = Command::new(env!("CARGO_BIN_EXE_dform"))
         .args([
-            "--root",
-            ".",
-            "--file",
-            "stacks/workload.df",
             "controller",
-            "--stack",
-            "renfry.workload",
+            "run",
             "--poll",
             "5",
             "--max-events",
             &EVENTS.to_string(),
+            "stacks/workload.df",
         ])
         .env("DFORM_TEST_SOURCES", &counts)
         .current_dir(&s.dir)

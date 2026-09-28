@@ -5,13 +5,13 @@ examples/demo/stacks/dform.df
 # dform demo: component-scoped resources + settings tables + IAM policy assembly.
 #
 # Try:
-#   cargo run -- --file examples/demo/stacks/dform.df plan
-#   cargo run -- --file examples/demo/stacks/dform.df plan --set env=prod
-#   cargo run -- --file examples/demo/stacks/dform.df apply
+#   cargo run -- -C examples/demo plan
+#   cargo run -- -C examples/demo plan dform env=prod
+#   cargo run -- -C examples/demo apply dform env=staging
 
 edition 2026
 
-# The provider (the mock's built-in fake schema), and the stack, keyed by env: dform[env=prod]'s state is .dform/dform/env=prod/.
+# The provider (the mock's built-in fake schema), and the stack, keyed by env: dform[env=prod]'s state is dform.state/dform/env=prod/.
 # Strict: a plan needing a phase boundary is refused (fresh nulls still flow).
 # Isolated: each env deploys into its own account, so iam's fixed names do not collide.
 # Config: each env's settings are config/dform/{env}.yaml's, a leaf per contribution.
@@ -49,12 +49,12 @@ settings e @default {
 # and one leaf.
 let cfg = settings[env]
 
-import "../modules/network.df"
-import "../modules/database.df"
-import "../modules/kubernetes.df"
-import "../modules/iam.df"
-import "../policies/baseline.df"
-import "../modules/stdlib_net.df"
+import "modules/network.df"
+import "modules/database.df"
+import "modules/kubernetes.df"
+import "modules/iam.df"
+import "policies/baseline.df"
+import "modules/stdlib_net.df"
 
 apply baseline
 apply stdlib_net

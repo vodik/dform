@@ -39,7 +39,7 @@ outputs, and nothing flows the other way.
 
 #+begin_example
 repo/                              a project (docs/layout.md)
-  dform.toml                       its root
+  dform.toml                       its root; [providers] ovh = { source = "providers/ovh" }
   stacks/infra.df                  the ovh.infra[env] stack
   stacks/app.df                    the shop.app[env] stack
   modules/app.df                   the app, as a module
@@ -100,8 +100,8 @@ type_retry(ovh.cloud_project_kube_nodepool, 30)
 #+begin_src dform
 # stacks/infra.df: the network, the cluster, the database, and the controller.
 #
-#   dform --file stacks/infra.df plan --set env=prod
-#   dform --file stacks/infra.df apply --set env=prod     (from CI, never from the cluster)
+#   dform plan ovh.infra env=prod
+#   dform apply ovh.infra env=prod     (from CI, never from the cluster)
 
 edition 2026
 
@@ -111,7 +111,7 @@ stack ovh.infra[env] {
   backend = s3("dform-state", "infra/{env}", endpoint: "https://s3.gra.io.cloud.ovh.net")   # not implemented
 }
 
-provider ovh { source = "../providers/ovh" }          # the bridge; not implemented
+provider ovh {}                                       # the bridge (dform.toml); not implemented
 provider k8s {}
 
 input env: enum("dev", "prod") = "dev"
@@ -261,7 +261,7 @@ resource k8s.deployment dform_controller {
   spec.template.spec.containers = [{
     name: "dform",
     image: "ghcr.io/shop/dform@sha256:3f1c...",
-    args: ["controller", "--stack", "shop.app", "--set", "env={env}"],
+    args: ["controller", "run", "shop.app", "env={env}"],
     envFrom: [{ secretRef: { name: dform_state.metadata.name } }],
     resources: { requests: { cpu: "100m", memory: "256Mi" }, limits: { memory: "512Mi" } }
   }]
@@ -621,7 +621,7 @@ resource ovh.cloud_project_kube_nodepool "{name}-g{generation}" {
 What the plan and the apply look like:
 
 #+begin_example
-$ dform --file stacks/infra.df apply --set env=prod
+$ dform apply ovh.infra env=prod
 tick 1: plan: 1 deformation (1 create), 1 pending
   + ovh.cloud_project_kube_nodepool.general-g2   flavor_name = "b3-32"
   pending group: delete of general-g1, may derive after tick 1 (reads pool_up(general, 2))
@@ -709,8 +709,8 @@ missing approval, or =--max-ticks=.
 #+begin_src sh
 # Review, then apply. Three ticks: network, cluster and database; pools,
 # namespace and state secret; the controller once a pool has nodes.
-dform --file stacks/infra.df plan  --set env=dev --set project=$OVH_PROJECT
-dform --file stacks/infra.df apply --set env=dev --set project=$OVH_PROJECT
+dform plan  ovh.infra env=dev --set project=$OVH_PROJECT
+dform apply ovh.infra env=dev --set project=$OVH_PROJECT
 
 # If the first apply used a local backend: move the state into the bucket.
 dform stack handover 'ovh.infra[env=dev]' --to 's3("dform-state", "infra/dev")'
@@ -720,7 +720,7 @@ For prod, CI plans on a pull request and applies the saved plan after
 approval, so what was reviewed is what runs:
 
 #+begin_src sh
-dform --file stacks/infra.df plan --set env=prod --set project=$OVH_PROJECT --out plan.json
+dform plan ovh.infra env=prod --set project=$OVH_PROJECT --out plan.json
 # ... the approval service shows the plan, collects the checkmark, returns a token ...
 dform apply plan.json --approval token.jws
 #+end_src
@@ -732,7 +732,7 @@ Tick 3 of the infra apply started the controller in the cluster. It runs
 =env/dev:release.yaml= from the deploys repository, and deploys it. There
 is no first app apply to run by hand; watching it is
 =kubectl -n dform-system logs deploy/dform-controller -f=, or =dform log=
-against the app stack's audit log.
+against the app stack's audit log (~dform log shop.app env=dev~).
 
 ** Day two
 

@@ -17,13 +17,13 @@ fn two_ticks(name: &str) -> Scratch {
     s.write_owned_world("w.json", WORLD);
     s.write("p.df", TWO_TICKS);
     s.run(&[
-        "--file",
-        "p.df",
+        "dev",
         "--world",
         "w.json",
         "plan",
         "--out",
         "plan.json",
+        "p.df",
     ])
     .success();
     s
@@ -57,7 +57,7 @@ fn apply_plan_applies_the_files_delta() {
     let r = s.run(&["apply", "plan.json"]).success();
     assert!(r.stdout.ends_with("apply: complete\n"), "{}", r.stdout);
     let r = s
-        .run(&["--file", "p.df", "--world", "w.json", "plan"])
+        .run(&["dev", "--world", "w.json", "plan", "p.df"])
         .success();
     assert_eq!(r.summary(), "stack p is undeformed", "{}", r.stdout);
 }
@@ -87,10 +87,11 @@ fn a_world_mutated_between_ticks_is_refused_at_the_boundary() {
     let s = two_ticks("planfile-mutate");
     let r = s
         .run(&[
-            "apply",
-            "plan.json",
+            "dev",
             "--chaos",
             "mutate=db.postgres/main:size=2",
+            "apply",
+            "plan.json",
         ])
         .failure();
     assert!(
@@ -115,35 +116,35 @@ fn a_changed_program_is_refused() {
     s.write("p.df", &TWO_TICKS.replace("size = 1", "size = 3"));
     let r = s.run(&["apply", "plan.json"]).failure();
     assert!(
-        r.stderr.contains("--file p.df: changed since the plan"),
+        r.stderr.contains("program p.df: changed since the plan"),
         "{}",
         r.stderr
     );
 }
 
-/// A new deformation not in the file is refused too: here a resource the
-/// plan did not have, because --set chose another environment.
+/// An input given now that the plan did not have is refused: here
+/// `--data`.
 #[test]
 fn other_inputs_are_refused() {
     let s = Scratch::new("planfile-inputs");
     let prog = repo().join("examples/demo/stacks/dform.df");
     let prog = prog.to_str().unwrap();
     s.run(&[
-        "--file",
-        prog,
+        "dev",
         "--world",
         "w.json",
         "plan",
         "--out",
         "plan.json",
+        prog,
     ])
     .success();
     let r = s
-        .run(&["--set", "env=prod", "apply", "plan.json"])
+        .run(&["--data", "zone=us-test-9z", "apply", "plan.json"])
         .failure();
     assert!(
         r.stderr
-            .contains("--set: the plan file has [], now [env=prod]"),
+            .contains("--data: the plan file has [], now [zone=us-test-9z]"),
         "{}",
         r.stderr
     );
@@ -160,8 +161,7 @@ fn the_file_never_carries_a_labeled_secret() {
     );
     let schema = repo().join("tests/fixtures/providers/leaky/schema.df");
     s.run(&[
-        "--file",
-        "p.df",
+        "dev",
         "--provider",
         schema.to_str().unwrap(),
         "--world",
@@ -169,6 +169,7 @@ fn the_file_never_carries_a_labeled_secret() {
         "plan",
         "--out",
         "plan.json",
+        "p.df",
     ])
     .success();
     let f = s.read("plan.json");
@@ -184,8 +185,7 @@ fn a_two_phase_plan_file_applies_across_the_boundary() {
     let s = Scratch::new("planfile-gke");
     let prog = repo().join("examples/gke/stacks/gke_two_phase.df");
     s.run(&[
-        "--file",
-        prog.to_str().unwrap(),
+        "dev",
         "--provider",
         "gke",
         "--world",
@@ -193,6 +193,7 @@ fn a_two_phase_plan_file_applies_across_the_boundary() {
         "plan",
         "--out",
         "plan.json",
+        prog.to_str().unwrap(),
     ])
     .success();
     let r = s.run(&["apply", "plan.json"]).success();
@@ -208,8 +209,8 @@ fn a_create_before_destroy_plan_file_applies_in_two_ticks() {
     let s = Scratch::new("planfile-cbd");
     let net = "edition 2026\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nresource net.subnet a { vpc_id = ref(net.vpc, \"main\", \"id\"), tier = \"web\" }\n";
     s.write("p.df", net);
-    let args = ["--file", "p.df", "--world", "w.json"];
-    s.run(&[&args[..], &["apply"]].concat()).success();
+    s.run(&common::on("p.df", &["--world", "w.json"], &["apply"]))
+        .success();
     s.write(
         "p.df",
         &format!(
@@ -217,8 +218,12 @@ fn a_create_before_destroy_plan_file_applies_in_two_ticks() {
             net.replace("10.0.0.0/16", "10.1.0.0/16")
         ),
     );
-    s.run(&[&args[..], &["plan", "--out", "plan.json"]].concat())
-        .success();
+    s.run(&common::on(
+        "p.df",
+        &["--world", "w.json"],
+        &["plan", "--out", "plan.json"],
+    ))
+    .success();
     let f: serde_json::Value = serde_json::from_str(&s.read("plan.json")).unwrap();
     assert_eq!(f["deformations"][0]["action"], "replace_create_first");
     assert_eq!(f["deformations"][0]["dependents"][0], "net.subnet.a");

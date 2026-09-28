@@ -44,7 +44,7 @@ jobs:
         run: cargo test --workspace --verbose
 
       - name: plan examples/demo
-        run: cargo run -q -- --file examples/demo/stacks/dform.df plan
+        run: cargo run -q -- -C examples/demo plan
 
       - name: plan examples/pngu in prod
-        run: cargo run -q -- --file examples/pngu/stacks/pngu.df plan --set env=prod
+        run: cargo run -q -- -C examples/pngu plan --set env=prod

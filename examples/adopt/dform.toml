@@ -1,1 +1,4 @@
-# The adopt project: its root (docs/layout.md).
+# The adopt project's root (docs/layout.md).
+
+[project]
+name = "adopt"

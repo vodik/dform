@@ -71,7 +71,7 @@ fn every_format_reads_typed_rows() {
         let s = scratch(&format!("read-{format}"));
         s.write("p.df", &program(format));
         s.write(&format!("data/p.{format}"), &rows(format, "22").0);
-        let r = s.run(&["--file", "p.df", "plan"]).success();
+        let r = s.run(&["plan", "p.df"]).success();
         assert_eq!(r.summary(), "plan: 2 deformations (2 create)", "{format}");
         assert!(
             r.stdout.contains("+ net.vpc.v-a\n"),
@@ -106,7 +106,7 @@ fn a_row_of_the_wrong_type_is_an_error_naming_its_line() {
         };
         let (text, line) = rows(format, bad);
         s.write(&format!("data/p.{format}"), &text);
-        let r = s.run(&["--file", "p.df", "plan"]).failure();
+        let r = s.run(&["plan", "p.df"]).failure();
         let want = format!("data/p.{format}:{line}: column port: \"https\" is not int");
         assert!(
             r.stderr.contains(&want),
@@ -147,7 +147,7 @@ fn an_enum_a_missing_and_an_extra_column_are_errors() {
     ];
     for (text, want) in cases {
         s.write("data/p.csv", &text);
-        let r = s.run(&["--file", "p.df", "plan"]).failure();
+        let r = s.run(&["plan", "p.df"]).failure();
         assert!(r.stderr.contains(want), "want {want}\n{}", r.stderr);
     }
     // A JSON number is not a string: nothing is coerced.
@@ -157,7 +157,7 @@ fn an_enum_a_missing_and_an_extra_column_are_errors() {
         "edition 2026\ninput relation t(name: string) from json(\"t.json\")\nwarn \"{n}\" if t(n)\n",
     );
     s.write("t.json", "[{\"name\": 3}]");
-    let r = s.run(&["--file", "p.df", "plan"]).failure();
+    let r = s.run(&["plan", "p.df"]).failure();
     assert!(
         r.stderr.contains("t.json:1: column name: 3 is not string"),
         "{}",
@@ -184,21 +184,12 @@ resource compute.vm "{n}" {
     );
     s.write("data/dev.csv", "name\nd1\n");
     s.write("data/prod.csv", "name\np1\np2\n");
-    let r = s.run(&["--file", "p.df", "plan"]).success();
+    let r = s.run(&["plan", "p.df"]).success();
     assert!(r.stdout.contains("+ compute.vm.d1"), "{}", r.stdout);
-    let r = s
-        .run(&["--file", "p.df", "plan", "--set", "env=prod"])
-        .success();
+    let r = s.run(&["plan", "--set", "env=prod", "p.df"]).success();
     assert_eq!(r.summary(), "plan: 2 deformations (2 create)");
     let r = s
-        .run(&[
-            "--file",
-            "p.df",
-            "--set",
-            "env=prod",
-            "why",
-            r#"node("p2")"#,
-        ])
+        .run(&["--set", "env=prod", "why", r#"node("p2")"#, "p.df"])
         .success();
     assert!(r.stdout.contains("fact, data/prod.csv:3"), "{}", r.stdout);
 }
@@ -212,7 +203,7 @@ fn a_table_whose_source_reads_its_rows_is_a_compile_error() {
         "p.df",
         "edition 2026\ninput relation t(p: string) from csv(\"{src}\")\nsrc = p if t(p)\n",
     );
-    let r = s.run(&["--file", "p.df", "plan"]).failure();
+    let r = s.run(&["plan", "p.df"]).failure();
     assert!(
         r.stderr
             .contains("p.df:2:34: input relation t: its source reads its own rows"),
@@ -235,6 +226,6 @@ fn a_table_is_not_also_stated() {
         "edition 2026\ninput relation t(p: string) from csv(\"t.csv\")\nt(\"x\")\n",
     );
     s.write("t.csv", "p\ny\n");
-    let r = s.run(&["--file", "p.df", "plan"]).failure();
+    let r = s.run(&["plan", "p.df"]).failure();
     assert!(r.stderr.contains("t/1"), "{}", r.stderr);
 }

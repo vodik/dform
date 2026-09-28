@@ -18,22 +18,18 @@ fn replan(name: &str, order: &str, extra: &str) -> (Scratch, common::Run) {
     let s = Scratch::new(name);
     s.write("order.df", order);
     let run = |s: &Scratch, args: &[&str]| {
-        s.run(
+        s.run(&common::on(
+            "p.df",
             &[
-                &[
-                    "--file",
-                    "p.df",
-                    "--world",
-                    "w.json",
-                    "--provider",
-                    "fake",
-                    "--provider",
-                    "order.df",
-                ][..],
-                args,
-            ]
-            .concat(),
-        )
+                "--world",
+                "w.json",
+                "--provider",
+                "fake",
+                "--provider",
+                "order.df",
+            ],
+            args,
+        ))
     };
     s.write("p.df", NET);
     run(&s, &["apply"]).success();

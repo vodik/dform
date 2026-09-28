@@ -5,14 +5,24 @@
 mod common;
 use common::{Scratch, repo};
 
+/// The two-phase GKE stack, with the rules of the `extra` files after it
+/// (the stack's copy, `p.df`, in the scratch directory).
 fn gke(s: &Scratch, extra: &[&str], cmd: &str) -> common::Run {
     let prog = repo().join("examples/gke/stacks/gke_two_phase.df");
-    let mut args = vec!["--file", prog.to_str().unwrap()];
-    for e in extra {
-        args.extend(["--file", e]);
+    let mut prog = prog.to_str().unwrap().to_string();
+    if !extra.is_empty() {
+        let mut text = std::fs::read_to_string(&prog).unwrap();
+        for e in extra {
+            text.push_str(&s.read(e).replace("edition 2026\n", ""));
+        }
+        s.write("p.df", &text);
+        prog = "p.df".into();
     }
-    args.extend(["--provider", "gke", "--world", "w.json", cmd]);
-    s.run(&args)
+    s.run(&common::on(
+        &prog,
+        &["--provider", "gke", "--world", "w.json"],
+        &[cmd],
+    ))
 }
 
 #[test]
@@ -65,15 +75,11 @@ const AWS: &str = "examples/aws/stacks/aws_demo.df";
 
 fn aws(s: &Scratch, cmd: &str) -> common::Run {
     let prog = repo().join(AWS);
-    s.run(&[
-        "--file",
+    s.run(&common::on(
         prog.to_str().unwrap(),
-        "--provider",
-        "aws-mock",
-        "--world",
-        "w.json",
-        cmd,
-    ])
+        &["--provider", "aws-mock", "--world", "w.json"],
+        &[cmd],
+    ))
 }
 
 /// A keyless set diffs by element: one rule opened by hand is one element
@@ -115,8 +121,12 @@ resource k8s.deployment api {
 }
 "#;
     s.write("p.df", one);
-    let args = ["--file", "p.df", "--provider", "k8s", "--world", "w.json"];
-    s.run(&[&args[..], &["apply"]].concat()).success();
+    s.run(&common::on(
+        "p.df",
+        &["--provider", "k8s", "--world", "w.json"],
+        &["apply"],
+    ))
+    .success();
     s.write(
         "p.df",
         &one.replace(
@@ -124,7 +134,13 @@ resource k8s.deployment api {
             r#"{name: "app", image: "api:1"}, {name: "sidecar", image: "envoy:1"} ]"#,
         ),
     );
-    let r = s.run(&[&args[..], &["plan"]].concat()).success();
+    let r = s
+        .run(&common::on(
+            "p.df",
+            &["--provider", "k8s", "--world", "w.json"],
+            &["plan"],
+        ))
+        .success();
     assert!(
         r.stdout.contains(
             "~ k8s.deployment.api\n  + spec.template.spec.containers[name=sidecar]\n      image = \"envoy:1\"\n      name = \"sidecar\"\n"
@@ -153,7 +169,7 @@ arg(net.vpc, "two", "cidr", "10.3.0.0/16")
 "#,
     );
     let r = s
-        .run(&["--file", "p.df", "--world", "w.json", "plan"])
+        .run(&["dev", "--world", "w.json", "plan", "p.df"])
         .failure();
     assert_eq!(
         r.summary(),
@@ -188,13 +204,13 @@ arg(leaky.vault, "v", "password", "VAULT-SECRET-B")
     let schema = repo().join("tests/fixtures/providers/leaky/schema.df");
     let r = s
         .run(&[
-            "--file",
-            "p.df",
+            "dev",
             "--provider",
             schema.to_str().unwrap(),
             "--world",
             "w.json",
             "plan",
+            "p.df",
         ])
         .failure();
     assert!(
@@ -212,8 +228,8 @@ fn a_denied_replace_is_a_section() {
     let s = Scratch::new("sections-denied");
     let net = "edition 2026\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\n";
     s.write("p.df", net);
-    let args = ["--file", "p.df", "--world", "w.json"];
-    s.run(&[&args[..], &["apply"]].concat()).success();
+    s.run(&common::on("p.df", &["--world", "w.json"], &["apply"]))
+        .success();
     s.write(
         "p.df",
         &format!(
@@ -221,7 +237,9 @@ fn a_denied_replace_is_a_section() {
             net.replace("10.0.0.0/16", "10.1.0.0/16")
         ),
     );
-    let r = s.run(&[&args[..], &["plan"]].concat()).failure();
+    let r = s
+        .run(&common::on("p.df", &["--world", "w.json"], &["plan"]))
+        .failure();
     assert_eq!(
         r.stdout,
         "plan: 1 deformation (1 replace)\ndefinite:\n\

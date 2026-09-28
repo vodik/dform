@@ -13,14 +13,11 @@ resource compute.vm app { subnet_id = ref(net.subnet, "a", "id") }
 "#;
 
 fn dform(s: &Scratch, args: &[&str]) -> common::Run {
-    s.run(&[&["--file", "p.df", "--world", "w.json"][..], args].concat())
+    s.run(&common::on("p.df", &["--world", "w.json"], args))
 }
 
 fn dform_on(s: &Scratch, backend: Backend, args: &[&str]) -> common::Run {
-    s.run_on(
-        backend,
-        &[&["--file", "p.df", "--world", "w.json"][..], args].concat(),
-    )
+    s.run_on(backend, &common::on("p.df", &["--world", "w.json"], args))
 }
 
 fn state(s: &Scratch) -> serde_json::Value {

@@ -7,13 +7,13 @@
 # - demonstrate another closure: nested group membership
 #
 # Try:
-#   cargo run -- --file examples/advanced/stacks/dform-advanced.df plan
-#   cargo run -- --file examples/advanced/stacks/dform-advanced.df query reachable
-#   cargo run -- --file examples/advanced/stacks/dform-advanced.df plan --set env=prod
-#   cargo run -- --file examples/advanced/stacks/dform-advanced.df query in_group
+#   cargo run -- -C examples/advanced plan
+#   cargo run -- -C examples/advanced query reachable
+#   cargo run -- -C examples/advanced plan --set env=prod
+#   cargo run -- -C examples/advanced query in_group
 
 edition 2026
-
+stack advanced {}
 input env: enum("staging", "prod") = "staging"
 
 # List-valued settings (human-friendly)

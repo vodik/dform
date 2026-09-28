@@ -1,1 +1,4 @@
-# The approvals project: its root (docs/layout.md).
+# The approvals project's root (docs/layout.md).
+
+[project]
+name = "approvals"

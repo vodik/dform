@@ -8,9 +8,7 @@ fn a_fresh_stack_carries_nulls_until_apply() {
     let s = Scratch::new("computed-fresh");
     let prog = repo().join("examples/demo/stacks/dform.df");
     let prog = prog.to_str().unwrap();
-    let r = s
-        .run(&["--file", prog, "--world", "w.json", "plan"])
-        .success();
+    let r = s.run(&["dev", "--world", "w.json", "plan", prog]).success();
     assert!(
         r.stdout.contains("vpc_id = ?net.vpc/network.main::vpc#id"),
         "{}",
@@ -24,7 +22,7 @@ fn a_fresh_stack_carries_nulls_until_apply() {
     );
 
     // Apply mints them per the schema, and a fresh apply is the fixture world.
-    s.run(&["--file", prog, "--world", "w.json", "apply"])
+    s.run(&["dev", "--world", "w.json", "apply", prog, "env=staging"])
         .success();
     let mut got: serde_json::Value = serde_json::from_str(&s.read("w.json")).unwrap();
     // The fixture predates the world's tick counter.
@@ -44,7 +42,7 @@ fn a_fresh_stack_carries_nulls_until_apply() {
 
     // Round 0 resolves every ref against the world: no nulls, no changes.
     let r = s
-        .run(&["--file", prog, "--world", "w.json", "plan", "--show-noop"])
+        .run(&["dev", "--world", "w.json", "plan", "--show-noop", prog])
         .success();
     assert_eq!(
         r.summary(),
@@ -77,15 +75,14 @@ fn secrets_are_labels_and_print_redacted() {
     let s = Scratch::new("computed-secret");
     s.write("schema.df", SECRET_SCHEMA);
     s.write("p.df", SECRET_PROG);
-    let args = [
-        "--file",
-        "p.df",
-        "--provider",
-        "schema.df",
-        "--world",
-        "w.json",
-    ];
-    let run = |cmd: &str| s.run(&[&args[..], &[cmd]].concat()).success();
+    let run = |cmd: &str| {
+        s.run(&common::on(
+            "p.df",
+            &["--provider", "schema.df", "--world", "w.json"],
+            &[cmd],
+        ))
+        .success()
+    };
 
     let plan = run("plan");
     assert!(
@@ -158,15 +155,14 @@ resource vm b { zone = "z1" }
 resource vm c { peer_zone = ref("vm", "a", "zone"), other_zone = ref("vm", "b", "zone") }
 "#,
     );
-    let args = [
-        "--file",
-        "p.df",
-        "--provider",
-        "schema.df",
-        "--world",
-        "w.json",
-    ];
-    let run = |cmd: &str| s.run(&[&args[..], &[cmd]].concat()).success();
+    let run = |cmd: &str| {
+        s.run(&common::on(
+            "p.df",
+            &["--provider", "schema.df", "--world", "w.json"],
+            &[cmd],
+        ))
+        .success()
+    };
     let plan = run("plan");
     assert!(
         plan.stdout.contains("peer_zone = ?vm/a#zone"),
@@ -215,15 +211,14 @@ fn an_update_leaves_a_picked_optional_computed_value_to_the_provider() {
         )
     };
     s.write("p.df", &program(1));
-    let args = [
-        "--file",
-        "p.df",
-        "--provider",
-        "schema.df",
-        "--world",
-        "w.json",
-    ];
-    let run = |cmd: &str| s.run(&[&args[..], &[cmd]].concat()).success();
+    let run = |cmd: &str| {
+        s.run(&common::on(
+            "p.df",
+            &["--provider", "schema.df", "--world", "w.json"],
+            &[cmd],
+        ))
+        .success()
+    };
     run("apply");
     s.write("p.df", &program(2));
     let plan = run("plan");

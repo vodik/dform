@@ -108,7 +108,7 @@ impl State {
         Ok(())
     }
 
-    /// `dform taint`: forget the persisted answer of extern `pred` for the
+    /// `dform state taint`: forget the persisted answer of extern `pred` for the
     /// inputs `args` (each as `--set` would print it: a string bare), so
     /// the next plan asks again. Returns the answer removed.
     pub fn taint(&mut self, pred: &str, args: &[String]) -> Option<crate::externs::Answer> {
@@ -265,7 +265,7 @@ pub fn stack_name(entry: &Path) -> String {
         .unwrap_or_else(|| "default".to_string())
 }
 
-/// Where one stack's files live under the state root (`.dform/`).
+/// Where one stack's files live under the state root (`dform.state/`).
 #[derive(Debug, Clone)]
 pub struct StackPaths {
     /// dform's identity mapping for the stack: `<root>/<stack>/state.json`.
@@ -281,9 +281,8 @@ pub fn stack_paths(root: &Path, stack: &str) -> StackPaths {
 }
 
 /// The directory of a `local(DIR)` backend (a stack's, or a handover's):
-/// DIR relative to the directory holding the state root `root`
-/// (`<dir>/.dform`: `--root`, else the program's directory), not to the
-/// working directory.
+/// DIR relative to the project root, which holds the state root `root`
+/// (`<dir>/dform.state`), not to the working directory.
 pub fn local_dir(root: &Path, dir: &Path) -> PathBuf {
     root.parent().unwrap_or(Path::new("")).join(dir)
 }
@@ -306,37 +305,6 @@ pub fn world_paths(root: &Path, world: &Path) -> StackPaths {
         world: world.to_path_buf(),
         inventory: root.join("inventory.json"),
     }
-}
-
-/// The stack that inherits state written before state was scoped.
-pub const LEGACY_STACK: &str = "dform";
-
-/// Move `<root>/state.json` and `<root>/remote.json`, written before state was
-/// scoped to a stack, into the `dform` stack (the default program's). Returns
-/// a note for each file moved. A file is left in place if the `dform` stack
-/// already has one.
-pub fn migrate_unscoped(root: &Path) -> Result<Vec<String>> {
-    let target = stack_paths(root, LEGACY_STACK);
-    let mut notes = Vec::new();
-    for (old, new) in [
-        (root.join("state.json"), target.state),
-        (root.join("remote.json"), target.world),
-    ] {
-        if !old.exists() || new.exists() {
-            continue;
-        }
-        if let Some(dir) = new.parent() {
-            fs::create_dir_all(dir).with_context(|| format!("mkdir {}", dir.display()))?;
-        }
-        fs::rename(&old, &new)
-            .with_context(|| format!("move {} to {}", old.display(), new.display()))?;
-        notes.push(format!(
-            "moved unscoped {} to {} (stack '{LEGACY_STACK}')",
-            old.display(),
-            new.display()
-        ));
-    }
-    Ok(notes)
 }
 
 pub fn adopt_map(adopts: &[Adopt]) -> BTreeMap<Address, String> {

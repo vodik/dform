@@ -19,7 +19,7 @@ fn k8s() -> String {
 
 /// `dform ARGS` in the scratch directory with no cluster in reach but the
 /// one `kubeconfig` names (none: offline).
-fn dform(s: &Scratch, kubeconfig: Option<&str>, args: &[&str]) -> Run {
+fn dform<S: AsRef<std::ffi::OsStr>>(s: &Scratch, kubeconfig: Option<&str>, args: &[S]) -> Run {
     let mut c = Command::new(env!("CARGO_BIN_EXE_dform"));
     c.args(args)
         .current_dir(&s.dir)
@@ -72,20 +72,10 @@ fn planned(s: &Scratch) -> Json {
 fn the_demo_plans_the_same_against_the_real_provider_offline() {
     let mock = Scratch::new("k8s-demo-mock");
     mock_demo(&mock);
-    let m = dform(
-        &mock,
-        None,
-        &["--file", "k8s_demo.df", "plan", "--out", "plan.json"],
-    )
-    .success();
+    let m = dform(&mock, None, &["plan", "--out", "plan.json", "k8s_demo.df"]).success();
     let real = Scratch::new("k8s-demo-real");
     real_demo(&real);
-    let r = dform(
-        &real,
-        None,
-        &["--file", "k8s_demo.df", "plan", "--out", "plan.json"],
-    )
-    .success();
+    let r = dform(&real, None, &["plan", "--out", "plan.json", "k8s_demo.df"]).success();
     assert_eq!(r.stdout, m.stdout);
     assert_eq!(planned(&real), planned(&mock));
     assert!(
@@ -99,7 +89,7 @@ fn the_demo_plans_the_same_against_the_real_provider_offline() {
         "long.df",
         "edition 2026\nprovider k8s { source = \"./providers/k8s\" }\nresource k8s.apps.v1.deployment api {\n  metadata.name = \"api\"\n  spec.selector.matchLabels = {app: \"api\"}\n  spec.template.spec.containers = [{name: \"api\", image: \"api:1\"}]\n}\n",
     );
-    let r = dform(&real, None, &["--file", "long.df", "plan"]).success();
+    let r = dform(&real, None, &["plan", "long.df"]).success();
     assert!(
         r.stdout.contains("+ k8s.apps.v1.deployment.api")
             && r.stdout
@@ -120,7 +110,7 @@ fn a_run_injects_the_schema_of_the_types_it_names() {
         let last = r.stdout.lines().last().unwrap_or_default();
         last.rsplit(' ').next().unwrap().parse().expect(&r.stdout)
     };
-    let r = dform(&s, None, &["--file", "k8s_demo.df", "eval"]).success();
+    let r = dform(&s, None, &["dev", "eval", "k8s_demo.df"]).success();
     let facts: usize = r.stdout.lines().next().unwrap()["facts: ".len()..]
         .parse()
         .unwrap();
@@ -128,16 +118,15 @@ fn a_run_injects_the_schema_of_the_types_it_names() {
         facts < 5_000,
         "{facts} facts: the whole schema was injected"
     );
-    let all = count(&dform(&s, None, &["--file", "k8s_demo.df", "query", "type_attr"]).success());
+    let all = count(&dform(&s, None, &["query", "type_attr", "k8s_demo.df"]).success());
     assert!(all > 15_000, "query type_attr lists {all}");
     let r = dform(
         &s,
         None,
         &[
-            "--file",
-            "k8s_demo.df",
             "query",
             "type_attr(k8s.batch.v1.job, P, T, F)",
+            "k8s_demo.df",
         ],
     )
     .success();
@@ -147,7 +136,7 @@ fn a_run_injects_the_schema_of_the_types_it_names() {
         "reads.df",
         &format!("{src}\ncompletes(t) if type_attr(t, \"spec.completions\", _, _)\n"),
     );
-    let r = dform(&s, None, &["--file", "reads.df", "query", "completes"]).success();
+    let r = dform(&s, None, &["query", "completes", "reads.df"]).success();
     assert!(r.stdout.contains("k8s.batch.v1.job"), "{}", r.stdout);
 }
 
@@ -161,7 +150,7 @@ fn offline_plan_validates_and_hides_secrets() {
         "p.df",
         "edition 2026\nprovider k8s { source = \"./providers/k8s\" }\nresource k8s.secret token {\n  metadata.name = \"token\"\n  stringData = {password: \"hunter2\"}\n}\n",
     );
-    let r = dform(&s, None, &["--file", "p.df", "plan"]).success();
+    let r = dform(&s, None, &["plan", "p.df"]).success();
     assert!(!r.stdout.contains("hunter2"), "{}", r.stdout);
     assert!(
         r.stdout.contains("stringData.password = (sensitive)"),
@@ -173,7 +162,7 @@ fn offline_plan_validates_and_hides_secrets() {
         "p.df",
         "edition 2026\nprovider k8s { source = \"./providers/k8s\" }\nresource k8s.deployment api {\n  metadata.name = \"api\"\n  spec.template.spec.containers = [{name: \"api\", image: \"api:1\"}]\n}\n",
     );
-    let r = dform(&s, None, &["--file", "p.df", "plan"]).failure();
+    let r = dform(&s, None, &["plan", "p.df"]).failure();
     assert!(
         r.stderr
             .contains("plan k8s.deployment/api: required attribute spec.selector is not set"),
@@ -187,7 +176,7 @@ fn offline_plan_validates_and_hides_secrets() {
 fn offline_apply_fails_naming_why() {
     let s = Scratch::new("k8s-offline-apply");
     real_demo(&s);
-    let r = dform(&s, None, &["--file", "k8s_demo.df", "apply"]).failure();
+    let r = dform(&s, None, &["apply", "k8s_demo.df"]).failure();
     assert!(
         r.stderr.contains("no cluster (DFORM_K8S_OFFLINE is set)"),
         "{}\n{}",
@@ -582,13 +571,7 @@ fn the_demo_applies_through_the_api_server() {
     real_demo(&s);
     let (api, url) = Api::start();
     let kc = kubeconfig(&s, &url);
-    let run = |args: &[&str]| {
-        dform(
-            &s,
-            Some(&kc),
-            &[&["--file", "k8s_demo.df"][..], args].concat(),
-        )
-    };
+    let run = |args: &[&str]| dform(&s, Some(&kc), &common::on("k8s_demo.df", &[], args));
     run(&["apply"]).success();
 
     let dep = api
@@ -616,7 +599,7 @@ fn the_demo_applies_through_the_api_server() {
     dform(
         &mock,
         None,
-        &["--file", "k8s_demo.df", "--world", "w.json", "apply"],
+        &["dev", "--world", "w.json", "apply", "k8s_demo.df"],
     )
     .success();
     let w: Json = serde_json::from_str(&mock.read("w.json")).unwrap();
@@ -653,10 +636,10 @@ fn the_demo_applies_through_the_api_server() {
 
     let r = run(&["plan"]).success();
     assert_eq!(r.summary(), "stack k8s_demo is undeformed", "{}", r.stdout);
-    let cache = s.path(".dform/k8s_demo/k8s-openapi.json");
-    assert!(cache.exists(), "the schema is cached in the state dir");
+    let cache = s.path("dform.state/cache/k8s-openapi.json");
+    assert!(cache.exists(), "the schema is cached in dform.state/cache/");
     assert!(
-        s.path(".dform/k8s_demo/k8s-schema.json").exists(),
+        s.path("dform.state/cache/k8s-schema.json").exists(),
         "and the schema derived from it"
     );
     let fetched = api.count("GET /openapi/v3/", &[]);
@@ -719,13 +702,7 @@ fn a_ref_to_a_server_defaulted_field_resolves_from_the_cluster() {
     );
     let (api, url) = Api::start();
     let kc = kubeconfig(&s, &url);
-    let run = |args: &[&str]| {
-        dform(
-            &s,
-            Some(&kc),
-            &[&["--file", "k8s_demo.df"][..], args].concat(),
-        )
-    };
+    let run = |args: &[&str]| dform(&s, Some(&kc), &common::on("k8s_demo.df", &[], args));
     let r = run(&["plan"]).success();
     assert!(
         r.stdout
@@ -765,13 +742,7 @@ fn an_update_leaves_server_defaulted_fields_to_the_server() {
     real_demo(&s);
     let (api, url) = Api::start();
     let kc = kubeconfig(&s, &url);
-    let run = |args: &[&str]| {
-        dform(
-            &s,
-            Some(&kc),
-            &[&["--file", "k8s_demo.df"][..], args].concat(),
-        )
-    };
+    let run = |args: &[&str]| dform(&s, Some(&kc), &common::on("k8s_demo.df", &[], args));
     let svc = || api.get("/api/v1/namespaces/shop/services/web").unwrap();
     run(&["apply"]).success();
     let ip = svc()["spec"]["clusterIP"].clone();
@@ -840,13 +811,7 @@ fn a_field_another_manager_owns_fails_the_apply_naming_both() {
     real_demo(&s);
     let (api, url) = Api::start();
     let kc = kubeconfig(&s, &url);
-    let run = |args: &[&str]| {
-        dform(
-            &s,
-            Some(&kc),
-            &[&["--file", "k8s_demo.df"][..], args].concat(),
-        )
-    };
+    let run = |args: &[&str]| dform(&s, Some(&kc), &common::on("k8s_demo.df", &[], args));
     run(&["apply"]).success();
     {
         let mut objects = api.objects.lock().unwrap();
@@ -898,7 +863,7 @@ fn a_type_built_at_runtime_gets_the_whole_schema() {
             s.read("k8s_demo.df")
         ),
     );
-    let r = dform(&s, None, &["--file", "k8s_demo.df", "eval"]).success();
+    let r = dform(&s, None, &["dev", "eval", "k8s_demo.df"]).success();
     let facts: usize = r.stdout.lines().next().unwrap()["facts: ".len()..]
         .parse()
         .unwrap();
@@ -907,10 +872,9 @@ fn a_type_built_at_runtime_gets_the_whole_schema() {
         &s,
         None,
         &[
-            "--file",
-            "k8s_demo.df",
             "query",
             "attr(k8s.batch.v1.job, \"batch\", .metadata, V)",
+            "k8s_demo.df",
         ],
     )
     .success();

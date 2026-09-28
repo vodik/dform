@@ -16,8 +16,7 @@ fn run(body: &str) -> common::Run {
         ),
     );
     s.run(&[
-        "--file",
-        "p.df",
+        "dev",
         "--provider",
         schema.to_str().unwrap(),
         "--world",
@@ -25,6 +24,7 @@ fn run(body: &str) -> common::Run {
         "--set",
         "pw=hunter2",
         "plan",
+        "p.df",
     ])
 }
 
@@ -109,13 +109,13 @@ fn a_secret_input_refinement_does_not_print_it() {
     );
     let r = s
         .run(&[
-            "--file",
-            "p.df",
+            "dev",
             "--world",
             "w.json",
             "--set",
             "pw=hunter2",
             "plan",
+            "p.df",
         ])
         .failure();
     assert!(

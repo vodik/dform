@@ -18,7 +18,7 @@
 //!
 //! The first real provider is `file`: `file.json(+path, -value)` and
 //! `file.text(+path, -value)`, paths relative to the program's directory
-//! (the first `--file`'s).
+//! (the program file's).
 //! Other externs are asked of the providers over the plugin protocol
 //! (Query; the mock answers from `providers/<name>/externs.df`).
 

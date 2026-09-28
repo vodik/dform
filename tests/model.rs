@@ -695,8 +695,12 @@ impl Runner<'_> {
     fn run(&mut self, args: &[&str], order: Option<u64>) -> Result<Ran, Failure> {
         let p = self.path("p.df").display().to_string();
         let w = self.path("w.json").display().to_string();
-        let mut argv = vec!["dform", "--file", &p, "--world", &w];
+        let mut argv = vec!["dform", "dev", "--world", &w];
         argv.extend_from_slice(args);
+        // `apply PLAN.json` names its program; every other run names p.df.
+        if !matches!(args, ["apply", f, ..] if f.ends_with(".json")) {
+            argv.push(&p);
+        }
         {
             let mut sh = shared();
             sh.order = order.map_or(Order::Clock, Order::Seed);

@@ -22,7 +22,7 @@ fn fake() -> String {
 }
 
 fn dform(s: &Scratch, args: &[&str]) -> common::Run {
-    s.run(&[&["--file", "p.df", "--world", "w.json"][..], args].concat())
+    s.run(&common::on("p.df", &["--world", "w.json"], args))
 }
 
 fn identities(s: &Scratch) -> Vec<String> {
@@ -217,6 +217,7 @@ fn a_scoped_run_loads_the_schema_of_its_types_on(launch: &dyn Launch) {
             world: s.path("w.json"),
             inventory: s.path("inv.json"),
             chaos: vec![],
+            cache: None,
         },
     )
     .unwrap();

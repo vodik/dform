@@ -1,4 +1,4 @@
-//! State is scoped to the program: two programs against one `.dform/` do not
+//! State is scoped to the program: two programs against one `dform.state/` do not
 //! see each other's resources.
 
 mod common;
@@ -21,10 +21,10 @@ fn a_second_program_does_not_plan_deletes_of_the_first() {
     s.write("net.df", NET);
     s.write("db.df", DB);
 
-    s.run(&["--file", "net.df", "apply"]).success();
-    assert!(s.path(".dform/net/state.json").exists());
+    s.run(&["apply", "net.df"]).success();
+    assert!(s.path("dform.state/net/state.json").exists());
 
-    let db = s.run(&["--file", "db.df", "plan"]).success();
+    let db = s.run(&["plan", "db.df"]).success();
     assert_eq!(
         db.summary(),
         "plan: 1 deformation (1 create)",
@@ -32,31 +32,7 @@ fn a_second_program_does_not_plan_deletes_of_the_first() {
         db.stdout
     );
 
-    s.run(&["--file", "db.df", "apply"]).success();
-    let net = s.run(&["--file", "net.df", "plan"]).success();
+    s.run(&["apply", "db.df"]).success();
+    let net = s.run(&["plan", "net.df"]).success();
     assert_eq!(net.summary(), "stack net is undeformed", "{}", net.stdout);
-}
-
-#[test]
-fn unscoped_state_migrates_to_the_dform_stack() {
-    let s = Scratch::new("migrate");
-    s.write("dform.df", NET);
-    s.run(&["--file", "dform.df", "apply"]).success();
-    // Put the stack's files back where an old dform wrote them.
-    std::fs::rename(
-        s.path(".dform/dform/state.json"),
-        s.path(".dform/state.json"),
-    )
-    .unwrap();
-    std::fs::rename(
-        s.path(".dform/dform/remote.json"),
-        s.path(".dform/remote.json"),
-    )
-    .unwrap();
-
-    let r = s.run(&["--file", "dform.df", "plan"]).success();
-    assert!(r.stderr.contains("moved unscoped"), "{}", r.stderr);
-    assert_eq!(r.summary(), "stack dform is undeformed", "{}", r.stdout);
-    assert!(!s.path(".dform/state.json").exists());
-    assert!(s.path(".dform/dform/state.json").exists());
 }

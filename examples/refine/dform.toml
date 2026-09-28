@@ -1,1 +1,4 @@
-# The refine project: its root (docs/layout.md).
+# The refine project's root (docs/layout.md).
+
+[project]
+name = "refine"

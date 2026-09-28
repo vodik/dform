@@ -8,7 +8,7 @@ fn schema_facts_are_queryable_edb() {
     let s = Scratch::new("schema-query");
     let prog = repo().join("examples/demo/stacks/dform.df");
     let r = s
-        .run(&["--file", prog.to_str().unwrap(), "query", "type_attr"])
+        .run(&["query", "type_attr", prog.to_str().unwrap()])
         .success();
     assert!(r.stdout.contains("matches: 16"), "{}", r.stdout);
     assert!(
@@ -31,12 +31,12 @@ fn a_schema_file_in_the_working_directory_is_a_provider() {
     );
     let r = s
         .run(&[
-            "--file",
-            "p.df",
+            "dev",
             "--provider",
             "ldap",
             "query",
             "type_provider",
+            "p.df",
         ])
         .success();
     assert!(
@@ -45,7 +45,7 @@ fn a_schema_file_in_the_working_directory_is_a_provider() {
         r.stdout
     );
     let bad = s
-        .run(&["--file", "p.df", "--provider", "nope", "plan"])
+        .run(&["dev", "--provider", "nope", "plan", "p.df"])
         .failure();
     assert!(
         bad.stderr.contains("unknown provider 'nope'"),

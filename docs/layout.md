@@ -14,11 +14,23 @@ data/<table>.csv            tables (`input relation p(...) from csv(...)`)
 scenarios/<name>.df         what-if programs
 providers/<name>/           a local provider: a plugin executable, or a
                             schema (and externs) the mock plays
-.dform/                     state, gitignored
+dform.state/                state: per deployment, audit logs, plan keys,
+                            cache/; gitignored (a plan key is a secret)
 ```
 
-- `dform.toml` marks the root. It is small and optional; programs stay in
-  `.df` files.
+- `dform.toml` marks the root: the nearest directory up from the working
+  directory holding one (else the git root). It is small and optional;
+  programs stay in `.df` files. It holds `[project]` (a name, and the dform
+  versions the project takes), `[providers]` (each provider's source and
+  version requirement, Cargo's semver syntax; a program's `provider NAME {}`
+  takes its source from here), `[defaults]` (a `backend` template and
+  `unknowns`, which a stack statement overrides) and `[discovery]`
+  (`exclude` globs). Never inputs, keys, settings or anything per
+  deployment. Policy reads it as `project_provider(Name, Constraint)` and
+  `project_default(Key, Value)`.
+- Discovery walks the project for `.df` files: every file with a `stack`
+  statement is a stack, and a stack's name is unique in its project. A
+  directory holding its own `dform.toml` is another project, not walked.
 - A stack file is named for its stack (a program without a `stack`
   statement is named for its file, so its name is the stack's).
 - A module file is imported, never planned on its own; a stack file is
@@ -26,13 +38,18 @@ providers/<name>/           a local provider: a plugin executable, or a
 - A keyed stack's config is one file per deployment under
   `config/<stack>/`, named by the key's value: `config/dform/prod.yaml` is
   `dform[env=prod]`'s.
-- Paths a program states (imports, `config`, tables, `file(...)`, a
-  provider's `source`, a trust root) are relative to the file that states
-  them, so a stack under `stacks/` reaches the rest with `../`.
+- Imports resolve from the project root (`import "modules/network.df"`);
+  one starting `./` or `../` from the importing file, as every import
+  outside a project does. Other paths a program states (`config`, tables,
+  `file(...)`, a provider's `source`, a trust root) are relative to the
+  file that states them, so a stack under `stacks/` reaches data with
+  `../`.
+- `dform.state/` is gitignored: each deployment's plan key (`state.key`,
+  the HMAC key of its plan files and audit log) is a secret.
 
-The lints, once the CLI discovers projects: a module file with a `stack`
-statement is an error; importing a stack file is an error; a `.df` outside
-the convention's directories is a warning.
+The lints, in a project with a manifest: a module or policy file with a
+`stack` statement is an error; importing a stack file is an error
+(anywhere); a `.df` outside the layout's directories is a warning.
 
 ## This repository
 

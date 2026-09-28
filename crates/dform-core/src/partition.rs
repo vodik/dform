@@ -3,7 +3,7 @@
 //! rewritten to `attr` reads, the computed prelude expanded, constraints as
 //! `deny` rules). This is the evaluator's stratifier: `engine::eval`
 //! evaluates strata in the order computed here and assigns every rule to
-//! the stratum of its head node, and `dform strata` prints the same graph.
+//! the stratum of its head node, and `dform dev strata` prints the same graph.
 //!
 //! Nodes:
 //!   * `arg(T, A, P, V, Rank)` heads (lowering turns `arg`, `arg_add`,
@@ -260,8 +260,8 @@ pub struct Compiled {
 /// the run) and the program's own schema facts; reject a write to a
 /// computed path; rewrite each `ref` to a computed path into an `attr` read
 /// (with its dangling-ref deny); expand the computed prelude per schema row
-/// (E §2.5, §4.3). The one place the graph is built: `dform strata` and
-/// `dform graph strata` print exactly what evaluation stratifies with.
+/// (E §2.5, §4.3). The one place the graph is built: `dform dev strata`
+/// and `dform dev graph --strata` print exactly what evaluation stratifies with.
 pub fn compile(program: &Program, given: &[Atom]) -> Result<Compiled> {
     let lowered = transform::lower(program)?;
     let mut rules: Vec<RuleStmt> = Vec::new();
@@ -940,10 +940,10 @@ mod tests {
         assert_eq!(strata.values().max().copied().unwrap() + 1, 19);
     }
 
-    /// The graph `dform strata` prints is the one evaluation runs with: a
+    /// The graph `dform dev strata` prints is the one evaluation runs with: a
     /// contribution that holds `ref(net.vpc, A, id)` reads `(attr, net.vpc,
     /// id)` after the ref rewrite, so it sits in a higher stratum. The
-    /// graph `dform strata` built from the program before the rewrite put
+    /// graph `dform dev strata` built from the program before the rewrite put
     /// the contribution in stratum 0 and the attribute in stratum 3.
     #[test]
     fn a_ref_holding_contribution_sits_above_the_attribute_it_reads() {

@@ -1,1 +1,8 @@
-# The aws project: its root (docs/layout.md).
+# The aws project's root (docs/layout.md).
+
+[project]
+name = "aws"
+
+# The Terraform-shaped mock AWS provider: a built-in schema the mock plays.
+[providers]
+aws = { source = "aws-mock" }

@@ -16,7 +16,7 @@ fn plans_with_the_mock_linked_in() {
     .unwrap();
     for backend in ["direct", "wire"] {
         let out = Command::new(env!("CARGO_BIN_EXE_dform-direct"))
-            .args(["--root", ".", "--file", "p.df", "plan"])
+            .args(["plan", "p.df"])
             .env("DFORM_BACKEND", backend)
             .current_dir(&dir)
             .output()

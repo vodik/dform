@@ -52,9 +52,7 @@ fn every_leaf_is_a_setting_of_the_deployment() {
                 "{}"
             },
         );
-        let r = s
-            .run(&["--file", "p.df", "plan", "--set", "env=prod"])
-            .success();
+        let r = s.run(&["plan", "p.df", "env=prod"]).success();
         let size = if format == "csv" { "\"3\"" } else { "3" };
         assert!(
             r.stdout
@@ -62,7 +60,7 @@ fn every_leaf_is_a_setting_of_the_deployment() {
             "{format}: {}",
             r.stdout
         );
-        let r = s.run(&["--file", "p.df", "plan"]).success();
+        let r = s.run(&["plan", "p.df"]).success();
         assert!(r.stdout.contains("  size = 1\n"), "{format}: {}", r.stdout);
     }
 }
@@ -74,9 +72,7 @@ fn a_leaf_the_program_does_not_know_is_a_deny() {
     let s = scratch("typo");
     s.write("p.df", &program("yaml"));
     s.write("config/prod.yaml", "db:\n  size: 3\n  zome: b\n");
-    let r = s
-        .run(&["--file", "p.df", "apply", "--set", "env=prod"])
-        .failure();
+    let r = s.run(&["apply", "p.df", "env=prod"]).failure();
     assert!(
         r.stderr
             .contains("- config/prod.yaml:3: db.zome is not a setting the program writes or reads"),
@@ -86,12 +82,10 @@ fn a_leaf_the_program_does_not_know_is_a_deny() {
     s.write("config/prod.yaml", "db:\n  size: 3\n");
     let r = s
         .run(&[
-            "--file",
-            "p.df",
-            "--set",
-            "env=prod",
             "why",
             r#"attr(settings, "prod", "db.size", 3)"#,
+            "p.df",
+            "env=prod",
         ])
         .success();
     assert!(
@@ -123,6 +117,6 @@ resource db.postgres main {
 "#,
     );
     s.write("config/dev-eu.yaml", "size: 5\n");
-    let r = s.run(&["--file", "p.df", "plan"]).success();
+    let r = s.run(&["plan", "p.df"]).success();
     assert!(r.stdout.contains("  size = 5\n"), "{}", r.stdout);
 }

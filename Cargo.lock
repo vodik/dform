@@ -504,6 +504,7 @@ dependencies = [
  "prost",
  "regex",
  "rowan",
+ "semver",
  "serde",
  "serde_json",
  "serde_yaml",

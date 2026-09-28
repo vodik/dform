@@ -8,7 +8,7 @@ use common::Scratch;
 fn plan(src: &str) -> common::Run {
     let s = Scratch::new("lang-modules");
     s.write("p.df", src);
-    s.run(&["--file", "p.df", "--world", "w.json", "plan"])
+    s.run(&["dev", "--world", "w.json", "plan", "p.df"])
 }
 
 /// Two instances of one module each define `size/1`; privately, so neither
@@ -209,13 +209,13 @@ instance app green { replicas = 7 }
     );
     let r = s
         .run(&[
-            "--file",
-            "p.df",
+            "dev",
             "--world",
             "w.json",
             "plan",
             "--set",
             "replicas=3",
+            "p.df",
         ])
         .success();
     assert!(
@@ -239,28 +239,18 @@ instance app green { replicas = 7 }
 #[test]
 fn dform_df_peers_each_edge_with_its_own_pair() {
     let s = Scratch::new("lang-modules-peering");
-    s.write(
-        "third.df",
-        r#"edition 2026
+    common::copy_dir(&common::repo().join("examples/demo"), &s.dir);
+    let third = r#"
 instance network third {
   vpc_net = inet("10.70.0.0/16")
 }
 vpc_peer_inst("main", "third")
-"#,
+"#;
+    s.write(
+        "stacks/dform.df",
+        &format!("{}{third}", s.read("stacks/dform.df")),
     );
-    let dform = common::repo().join("examples/demo/stacks/dform.df");
-    let root = s.path(".");
-    let r = s
-        .run(&[
-            "--root",
-            root.to_str().unwrap(),
-            "--file",
-            dform.to_str().unwrap(),
-            "--file",
-            "third.df",
-            "plan",
-        ])
-        .success();
+    let r = s.run(&["plan", "dform"]).success();
     assert_eq!(
         r.stdout.matches("\n+ net.vpc_peering.").count(),
         2,

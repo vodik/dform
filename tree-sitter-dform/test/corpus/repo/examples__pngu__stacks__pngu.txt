@@ -7,9 +7,9 @@ examples/pngu/stacks/pngu.df
 # dform representation of ~/src/movableink/pngu/terraform.
 #
 # Usage:
-#   cargo run -- --file examples/pngu/stacks/pngu.df plan
-#   cargo run -- --file examples/pngu/stacks/pngu.df plan --set env=stg
-#   cargo run -- --file examples/pngu/stacks/pngu.df plan --set env=prod
+#   cargo run -- -C examples/pngu plan
+#   cargo run -- -C examples/pngu plan --set env=stg
+#   cargo run -- -C examples/pngu plan --set env=prod
 #
 # Notes:
 # - This file models the intent/config surface area of the Terraform stack.
@@ -18,7 +18,7 @@ examples/pngu/stacks/pngu.df
 #   files/dashboard-pngu.json (see terraform/modules/monitoring/dashboard-pngu.json).
 
 edition 2026
-
+stack pngu {}
 ########################################
 # Schema declarations
 ########################################
@@ -219,6 +219,10 @@ output project_id = cfg.project_id
   (comment)
   (edition
     (integer))
+  (stack
+    (dotted_name
+      (identifier))
+    (block))
   (comment)
   (comment)
   (comment)

@@ -8,7 +8,7 @@ use common::Scratch;
 fn plan(src: &str) -> common::Run {
     let s = Scratch::new("diag");
     s.write("p.df", src);
-    s.run(&["--file", "p.df", "--world", "w.json", "plan"])
+    s.run(&["dev", "--world", "w.json", "plan", "p.df"])
 }
 
 /// A syntax error prints through ariadne: the location, the source line
@@ -78,13 +78,13 @@ fn why_names_the_pack_and_the_module_instance() {
     );
     let out = s
         .run(&[
-            "--file",
-            "p.df",
+            "dev",
             "--world",
             "w.json",
             "why",
             "attr(net.vpc, A, P, V)",
             "--all",
+            "p.df",
         ])
         .success()
         .stdout;

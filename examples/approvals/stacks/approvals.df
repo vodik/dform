@@ -1,10 +1,10 @@
 # README "Approvals": policy says which deformations need an approval, and
 # apply verifies a signed approval of the plan's digest before its first
-# Apply call. A replace in prod needs one:
+# Apply call. A replace in prod needs one (from examples/approvals):
 #
 #   cargo run -q -p dform-direct --bin dform-approve -- keygen approver.key > approvers.jwks.json
-#   cargo run -- --root . --file stacks/approvals.df apply --set env=prod
-#   cargo run -- --root . --file stacks/approvals.df plan --set env=prod --set cidr=10.1.0.0/16 --out plan.json
+#   cargo run -- apply approvals.demo env=prod
+#   cargo run -- plan approvals.demo env=prod --set cidr=10.1.0.0/16 --out plan.json
 #   cargo run -q -p dform-direct --bin dform-approve -- sign approver.key \
 #     --digest sha256:... --stack approvals.demo --key env=prod --approver alice > approval.json
 #   cargo run -- apply plan.json --approval approval.json

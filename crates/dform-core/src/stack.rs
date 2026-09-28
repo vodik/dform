@@ -7,7 +7,7 @@
 //! Keyed stacks: `stack app[env, region] { .. }` names the inputs that are
 //! deployment identity. Each value of the key is its own deployment
 //! ([`Instance`]), `app[env=prod,region=us-east1]`, with its own state
-//! directory under the stack's (`.dform/app/env=prod,region=us-east1/`),
+//! directory under the stack's (`dform.state/app/env=prod,region=us-east1/`),
 //! lock, registry entry and controller; the other inputs are parameters of
 //! a deployment and change it in place. `rekey` moves one deployment's
 //! state to another key value. `provider name {
@@ -16,7 +16,7 @@
 //!
 //! Cross-stack values: an apply records the stack's outputs in its state
 //! and the stack's absolute state path in the registry `stacks.json` under
-//! the state root (`.dform/` beside the program, or under `--root`); every
+//! the state root (`dform.state/` at the project root); every
 //! other program reads them as `stack_output(Stack, Key, Value)` facts, a
 //! fact provider over local state.
 //!
@@ -51,11 +51,11 @@ pub enum Unknowns {
 pub struct Stack {
     pub name: Option<String>,
     /// `backend = local("dir")`: where the state, the world and the lock
-    /// live. `None`: `.dform/<name>/`.
+    /// live. `None`: `dform.state/<name>/`.
     pub backend: Option<PathBuf>,
     pub unknowns: Unknowns,
     /// `role = bootstrap`: the stack creates what a controller runs in. It
-    /// stays batch: `dform controller` refuses it.
+    /// stays batch: `dform controller run` refuses it.
     pub bootstrap: bool,
     /// Provider schemas, as `--provider` takes them: a name or a path.
     pub providers: Vec<String>,
@@ -491,7 +491,7 @@ impl Lock {
                     }
                     bail!(
                         "stack {stack} is locked by another apply (pid {}): {}; \
-                         wait for it, or remove the file if no apply is running",
+                         wait for it, or `dform stack unlock {stack}` if no apply is running",
                         pid.map(|p| p.to_string())
                             .unwrap_or_else(|| "unknown".into()),
                         path.display()
@@ -502,6 +502,32 @@ impl Lock {
         }
         bail!("stack {stack}: could not take the lock {}", path.display())
     }
+}
+
+/// `dform stack unlock`: remove the apply lock beside `state`, unless its
+/// holder is running.
+pub fn unlock(state: &Path, stack: &str) -> Result<String> {
+    let path = state.with_extension("lock");
+    if !path.exists() {
+        return Ok(format!("stack {stack} is not locked"));
+    }
+    let holder = fs::read_to_string(&path).unwrap_or_default();
+    let pid: Option<u32> = holder.trim().parse().ok();
+    if let Some(pid) = pid
+        && alive(pid)
+    {
+        bail!(
+            "stack {stack} is locked by a running apply (pid {pid}): {}; stop it first",
+            path.display()
+        );
+    }
+    fs::remove_file(&path).with_context(|| format!("remove {}", path.display()))?;
+    Ok(format!(
+        "stack {stack} unlocked (the lock of pid {} is gone): {}",
+        pid.map(|p| p.to_string())
+            .unwrap_or_else(|| "unknown".into()),
+        path.display()
+    ))
 }
 
 impl Drop for Lock {

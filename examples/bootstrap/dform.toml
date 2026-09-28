@@ -1,1 +1,8 @@
-# The bootstrap project: its root (docs/layout.md).
+# The bootstrap project's root (docs/layout.md).
+
+[project]
+name = "bootstrap"
+
+# The mock GCP: the project's own schema.
+[providers]
+gcp = { source = "providers/gcp" }

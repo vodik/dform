@@ -7,10 +7,10 @@
 # every replica of it is ready) the Service's selector; the old color is
 # retired on the next tick, because the world now says the new one serves.
 #
-#   dform --file stacks/crud_api.df controller --stack shop.crud_api
+#   dform controller run shop.crud_api
 #
 # From proposals/G-corpus/crud_api.org (edition 2027 there; the compiler
-# reads 2026). It does not plan yet: the schemas below are not the mocks',
+# reads 2026; its provider sources moved to dform.toml). It does not plan yet: the schemas below are not the mocks',
 # and ops.git is not in the repository.
 #
 # Schema assumptions (not in providers/ today): google_sql_* types with
@@ -23,9 +23,10 @@ edition 2026
 
 stack shop.crud_api {}
 
-provider google { source = "registry.dform.dev/google", version = ">=6" }
-provider kubernetes { source = "registry.dform.dev/kubernetes", version = ">=3" }
-provider random { source = "registry.dform.dev/random" }
+# Sources and versions are dform.toml's.
+provider google {}
+provider kubernetes {}
+provider random {}
 
 input env: enum("dev", "prod") = "dev"
 input region: string = "us-east1"

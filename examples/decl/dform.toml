@@ -1,1 +1,4 @@
-# The decl project: its root (docs/layout.md).
+# The decl project's root (docs/layout.md).
+
+[project]
+name = "decl"

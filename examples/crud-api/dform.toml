@@ -1,1 +1,11 @@
-# The crud-api project: its root (docs/layout.md).
+# The crud-api project's root (docs/layout.md).
+
+[project]
+name = "crud-api"
+dform = ">=0.1"
+
+# Not in reach yet: the registry these name does not exist.
+[providers]
+google = { source = "registry.dform.dev/google", version = ">=6" }
+kubernetes = { source = "registry.dform.dev/kubernetes", version = ">=3" }
+random = { source = "registry.dform.dev/random" }

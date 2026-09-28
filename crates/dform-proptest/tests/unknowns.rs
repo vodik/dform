@@ -629,6 +629,7 @@ fn providers(world: &Path) -> Result<Providers> {
             world: world.to_path_buf(),
             inventory: scratch().join("no-inventory.json"),
             chaos: vec![],
+            cache: None,
         },
     )
 }

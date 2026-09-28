@@ -11,10 +11,8 @@ use inspection_common::{dform, golden};
 #[test]
 fn why_a_tag_exists() {
     let out = dform(
-        "examples/demo/stacks/dform.df",
+        "examples/demo/stacks/dform.df env=prod",
         &[
-            "--set",
-            "env=prod",
             "why",
             r#"attr(net.vpc, "network.main::vpc", "tags.team", "platform")"#,
         ],
@@ -32,13 +30,8 @@ fn why_a_tag_exists() {
 #[test]
 fn why_an_attribute_shows_every_contribution() {
     let out = dform(
-        "examples/demo/stacks/dform.df",
-        &[
-            "--set",
-            "env=prod",
-            "why",
-            r#"attr(net.vpc, "network.main::vpc", .tags, X)"#,
-        ],
+        "examples/demo/stacks/dform.df env=prod",
+        &["why", r#"attr(net.vpc, "network.main::vpc", .tags, X)"#],
     );
     assert!(out.contains("by Σattr: attribute aggregate"), "{out}");
     assert!(out.contains("over 2 contributions"), "{out}");
@@ -58,8 +51,9 @@ fn why_prints_one_alternative_unless_all() {
         "edition 2026\np(1)\nq(1)\nr(x) if p(x)\nr(x) if q(x)\ns(x) if r(x), not t(x)\nt(2) if p(2)",
     );
     let why = |extra: &[&str]| {
-        let mut a = vec!["--file", "p.df", "--world", "w.json", "why"];
+        let mut a = vec!["dev", "--world", "w.json", "why"];
         a.extend(extra);
+        a.push("p.df");
         s.run(&a).success().stdout
     };
     let one = why(&["s(1)"]);
@@ -76,7 +70,7 @@ fn why_prints_one_alternative_unless_all() {
     );
 
     let none = s
-        .run(&["--file", "p.df", "--world", "w.json", "why", "s(7)"])
+        .run(&["dev", "--world", "w.json", "why", "s(7)", "p.df"])
         .failure();
     assert!(
         none.stderr.contains("no fact matches s(7)"),
@@ -91,7 +85,7 @@ fn why_with_a_variable_prints_each_match() {
     let s = Scratch::new("why-vars");
     s.write("p.df", "edition 2026\np(1)\np(2)\nq(x) if p(x)");
     let out = s
-        .run(&["--file", "p.df", "--world", "w.json", "why", "q(N)"])
+        .run(&["dev", "--world", "w.json", "why", "q(N)", "p.df"])
         .success()
         .stdout;
     assert!(
@@ -114,14 +108,14 @@ resource leaky.vault v { password = "VAULT-SECRET-DO-NOT-PRINT" }
     let schema = repo().join("tests/fixtures/providers/leaky/schema.df");
     let out = s
         .run(&[
-            "--file",
-            "p.df",
+            "dev",
             "--provider",
             schema.to_str().unwrap(),
             "--world",
             "w.json",
             "why",
             "copy(X)",
+            "p.df",
         ])
         .success()
         .stdout;
@@ -139,14 +133,14 @@ fn why_labels_planner_facts_as_the_plan() {
         "p.df",
         "edition 2026\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\n",
     );
-    s.run(&["--file", "p.df", "--world", "w.json", "apply"])
+    s.run(&["dev", "--world", "w.json", "apply", "p.df"])
         .success();
     s.write(
         "p.df",
         "edition 2026\nlifecycle(net.vpc, \"main\", \"prevent_destroy\")\nseen(a) if identity(net.vpc, a, _)\n",
     );
     let why = |q: &str| {
-        s.run(&["--file", "p.df", "--world", "w.json", "why", q])
+        s.run(&["dev", "--world", "w.json", "why", q, "p.df"])
             .success()
             .stdout
     };

@@ -9,7 +9,7 @@ use common::Scratch;
 use std::process::Command;
 
 const PROGRAM: &str = include_str!("../examples/approvals/stacks/approvals.df");
-const PROD: [&str; 2] = ["--set", "env=prod"];
+const PROD: [&str; 1] = ["env=prod"];
 const NEW_CIDR: [&str; 2] = ["--set", "cidr=10.1.0.0/16"];
 
 /// `dform-approve ARGS` in the scratch directory: its stdout.
@@ -34,18 +34,12 @@ fn setup(name: &str) -> (Scratch, String) {
     s.write("stacks/approvals.df", PROGRAM);
     let jwks = signer(&s, &["keygen", "approver.key"]);
     s.write("approvers.jwks.json", &jwks);
-    s.run(&[&["--file", "stacks/approvals.df", "apply"][..], &PROD].concat())
+    s.run(&[&["apply", "stacks/approvals.df"][..], &PROD].concat())
         .success();
     let r = s
         .run(
             &[
-                &[
-                    "--file",
-                    "stacks/approvals.df",
-                    "plan",
-                    "--out",
-                    "plan.json",
-                ][..],
+                &["plan", "--out", "plan.json", "stacks/approvals.df"][..],
                 &PROD,
                 &NEW_CIDR,
             ]
@@ -83,18 +77,13 @@ fn token(s: &Scratch, name: &str, digest: &str, extra: &[&str]) {
 }
 
 fn world(s: &Scratch) -> String {
-    s.read("stacks/.dform/approvals.demo/env=prod/remote.json")
+    s.read("dform.state/approvals.demo/env=prod/remote.json")
 }
 
 #[test]
 fn a_prod_replace_plans_with_needs_approval() {
     let (s, digest) = setup("approvals-plan");
-    let args = [
-        &["--file", "stacks/approvals.df", "plan"][..],
-        &PROD,
-        &NEW_CIDR,
-    ]
-    .concat();
+    let args = [&["plan", "stacks/approvals.df"][..], &PROD, &NEW_CIDR].concat();
     let r = s.run(&args).success();
     assert!(
         r.stdout
@@ -116,7 +105,7 @@ fn a_prod_replace_plans_with_needs_approval() {
         serde_json::json!([{ "deformation": "net.vpc.main", "reason": "a replace in prod" }])
     );
     // Staging: the policy asks for nothing, and the plan says nothing.
-    let staging = [&["--file", "stacks/approvals.df", "plan"][..], &NEW_CIDR].concat();
+    let staging = [&["plan", "stacks/approvals.df"][..], &NEW_CIDR].concat();
     let r = s.run(&staging).success();
     assert!(!r.stdout.contains("needs approval"), "{}", r.stdout);
     assert!(!r.stdout.contains("plan digest"), "{}", r.stdout);
@@ -138,14 +127,7 @@ fn apply_refuses_until_a_valid_token_for_the_plans_digest() {
     assert!(r.stderr.contains(&digest), "{}", r.stderr);
     // A plain apply has no digest to approve.
     let r = s
-        .run(
-            &[
-                &["--file", "stacks/approvals.df", "apply"][..],
-                &PROD,
-                &NEW_CIDR,
-            ]
-            .concat(),
-        )
+        .run(&[&["apply", "stacks/approvals.df"][..], &PROD, &NEW_CIDR].concat())
         .failure();
     assert!(r.stderr.contains("plan --out PLAN"), "{}", r.stderr);
     // A token for another plan.
@@ -330,8 +312,7 @@ fn a_moved_git_commit_is_a_stale_plan() {
         "edition 2026\n\ninput relation owner/1 from git(\"ops.git\", \"main\", \"tags.facts\")\n\n\
          resource net.vpc main {\n  cidr = \"10.0.0.0/16\"\n}\n",
     );
-    s.run(&["--file", "p.df", "plan", "--out", "plan.json"])
-        .success();
+    s.run(&["plan", "--out", "plan.json", "p.df"]).success();
     let file: serde_json::Value = serde_json::from_str(&s.read("plan.json")).unwrap();
     assert_eq!(
         file["git_commits"][0]["source"], "git ops.git main:tags.facts",

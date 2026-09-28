@@ -146,7 +146,7 @@ fn generate(s: &Scale, dir: &Path) -> std::io::Result<()> {
     std::fs::write(dir.join("schema.df"), schema(s))?;
     std::fs::write(dir.join("main.df"), program(s))?;
     std::fs::write(dir.join("policy.df"), policy(s))?;
-    let _ = std::fs::remove_dir_all(dir.join(".dform"));
+    let _ = std::fs::remove_dir_all(dir.join("dform.state"));
     Ok(())
 }
 
@@ -156,7 +156,7 @@ fn loadavg() -> String {
         .unwrap_or_else(|_| "n/a".into())
 }
 
-const PLAN: [&str; 5] = ["--provider", "schema.df", "--file", "main.df", "plan"];
+const PLAN: [&str; 5] = ["dev", "--provider", "schema.df", "plan", "main.df"];
 
 /// The mock, its calls timed.
 struct Timed<H>(H);

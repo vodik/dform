@@ -277,7 +277,7 @@ fn start(
     tick: Option<usize>,
 ) -> Result<(Compiled, State)> {
     // The program as it runs and the partition graph it is stratified by,
-    // built in one place (`dform strata` prints the same graph).
+    // built in one place (`dform dev strata` prints the same graph).
     let compiled = partition::compile(program, extra_facts)?;
     let externs = compiled.externs;
     let mut origins = Origins::default();
@@ -3714,7 +3714,7 @@ mod tests {
             .replace(", config = yaml(\"../config/dform/{env}.yaml\")", "")
             .replace(
                 "import \"",
-                &format!("import \"{}/", root.join("examples/demo/stacks").display()),
+                &format!("import \"{}/", root.join("examples/demo").display()),
             );
         std::fs::write(&old, old_src).unwrap();
         let resources = |path: &std::path::Path, env: Option<&str>| {

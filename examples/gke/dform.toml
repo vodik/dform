@@ -1,1 +1,4 @@
-# The gke project: its root (docs/layout.md).
+# The gke project's root (docs/layout.md).
+
+[project]
+name = "gke"

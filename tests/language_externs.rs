@@ -51,7 +51,7 @@ fn answers(s: &Scratch, v: &str) {
 #[test]
 fn externs_answer_on_demand() {
     let s = scratch();
-    let r = s.run(&["--file", "p.df", "plan"]).success();
+    let r = s.run(&["plan", "p.df"]).success();
     for line in [
         "json.panels[0] = 1",
         "json.title = \"pngu\"",
@@ -61,9 +61,7 @@ fn externs_answer_on_demand() {
     ] {
         assert!(r.stdout.contains(line), "{line}\n{}", r.stdout);
     }
-    let q = s
-        .run(&["--file", "p.df", "query", "random.password"])
-        .success();
+    let q = s.run(&["query", "random.password", "p.df"]).success();
     assert!(
         q.stdout.contains("matches: 1"),
         "only the demanded call: {}",
@@ -75,7 +73,7 @@ fn externs_answer_on_demand() {
 fn a_missing_file_is_an_error_naming_the_call() {
     let s = scratch();
     std::fs::remove_file(s.path("note.txt")).unwrap();
-    let r = s.run(&["--file", "p.df", "plan"]).failure();
+    let r = s.run(&["plan", "p.df"]).failure();
     assert!(
         r.stderr.contains("extern file.text(\"note.txt\")") && r.stderr.contains("read note.txt"),
         "{}",
@@ -88,11 +86,11 @@ fn a_missing_file_is_an_error_naming_the_call() {
 #[test]
 fn a_persisted_answer_stays() {
     let s = scratch();
-    s.run(&["--file", "p.df", "apply"]).success();
-    assert!(s.read(".dform/p/state.json").contains("pw-first"));
-    assert!(!s.read(".dform/p/state.json").contains("tk-first"));
+    s.run(&["apply", "p.df"]).success();
+    assert!(s.read("dform.state/p/state.json").contains("pw-first"));
+    assert!(!s.read("dform.state/p/state.json").contains("tk-first"));
     answers(&s, "second");
-    let r = s.run(&["--file", "p.df", "plan"]).success();
+    let r = s.run(&["plan", "p.df"]).success();
     assert!(
         r.stdout.contains("token: \"tk-first\" -> \"tk-second\""),
         "{}",
@@ -101,15 +99,15 @@ fn a_persisted_answer_stays() {
     assert!(!r.stdout.contains("pw-second"), "{}", r.stdout);
 }
 
-/// `dform taint` forgets one persisted answer: the next plan asks the
+/// `dform state taint` forgets one persisted answer: the next plan asks the
 /// provider again, and only for that call.
 #[test]
 fn taint_forgets_a_persisted_answer() {
     let s = scratch();
-    s.run(&["--file", "p.df", "apply"]).success();
+    s.run(&["apply", "p.df"]).success();
     answers(&s, "second");
     let r = s
-        .run(&["--file", "p.df", "taint", "p", "random.password", "other"])
+        .run(&["state", "taint", "p", "random.password", "other"])
         .failure();
     assert!(
         r.stderr
@@ -118,14 +116,14 @@ fn taint_forgets_a_persisted_answer() {
         r.stderr
     );
     let r = s
-        .run(&["--file", "p.df", "taint", "p", "random.password", "app"])
+        .run(&["state", "taint", "p", "random.password", "app"])
         .success();
     assert_eq!(
         r.stdout,
         "tainted random.password(app) of stack p: the next plan asks again\n"
     );
-    assert!(!s.read(".dform/p/state.json").contains("pw-first"));
-    let r = s.run(&["--file", "p.df", "plan"]).success();
+    assert!(!s.read("dform.state/p/state.json").contains("pw-first"));
+    let r = s.run(&["plan", "p.df"]).success();
     assert!(
         r.stdout.contains("password: \"pw-first\" -> \"pw-second\""),
         "{}",
@@ -138,12 +136,11 @@ fn taint_forgets_a_persisted_answer() {
 #[test]
 fn the_plan_file_records_the_answers() {
     let s = scratch();
-    s.run(&["--file", "p.df", "plan", "--out", "plan.json"])
-        .success();
+    s.run(&["plan", "--out", "plan.json", "p.df"]).success();
     assert!(s.read("plan.json").contains("tk-first"));
     answers(&s, "second");
     s.run(&["apply", "plan.json"]).success();
-    let world = s.read(".dform/p/remote.json");
+    let world = s.read("dform.state/p/remote.json");
     assert!(
         world.contains("tk-first") && !world.contains("tk-second"),
         "{world}"

@@ -7,7 +7,7 @@ mod common;
 use common::Scratch;
 
 fn dform(s: &Scratch, args: &[&str]) -> common::Run {
-    s.run(&[&["--file", "p.df", "--world", "w.json"][..], args].concat())
+    s.run(&common::on("p.df", &["--world", "w.json"], args))
 }
 
 fn json(s: &Scratch, f: &str) -> serde_json::Value {

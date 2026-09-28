@@ -28,10 +28,8 @@ resource net.vpc main {
 fn planning_prod_after_applying_staging_proposes_creates() {
     let s = Scratch::new("keyed-headline");
     s.write("app.df", APP);
-    s.run(&["--file", "app.df", "apply"]).success();
-    let prod = s
-        .run(&["--file", "app.df", "plan", "--set", "env=prod"])
-        .success();
+    s.run(&["apply", "app.df", "env=staging"]).success();
+    let prod = s.run(&["plan", "app.df", "env=prod"]).success();
     assert_eq!(
         prod.summary(),
         "plan: 1 deformation (1 create)",
@@ -39,16 +37,14 @@ fn planning_prod_after_applying_staging_proposes_creates() {
         prod.stdout
     );
     // Staging is still what was applied; a parameter deforms it in place.
-    let staging = s.run(&["--file", "app.df", "plan"]).success();
+    let staging = s.run(&["plan", "app.df"]).success();
     assert_eq!(
         staging.summary(),
         "stack app is undeformed",
         "{}",
         staging.stdout
     );
-    let size = s
-        .run(&["--file", "app.df", "plan", "--set", "size=2"])
-        .success();
+    let size = s.run(&["plan", "--set", "size=2", "app.df"]).success();
     assert!(
         size.stdout.contains("~ net.vpc.main\n  size: 1 -> 2\n"),
         "{}",
@@ -61,24 +57,10 @@ fn planning_prod_after_applying_staging_proposes_creates() {
 fn dform_df_plans_prod_after_staging_as_creates() {
     let s = Scratch::new("keyed-dform");
     let file = repo().join("examples/demo/stacks/dform.df");
-    let root = s.path(".");
-    let args = |more: &[&'static str]| {
-        let mut v = vec![
-            "--root".to_string(),
-            root.to_str().unwrap().to_string(),
-            "--file".to_string(),
-            file.to_str().unwrap().to_string(),
-        ];
-        v.extend(more.iter().map(|m| m.to_string()));
-        v
-    };
-    let run = |more: &[&'static str]| {
-        let a = args(more);
-        s.run(&a.iter().map(String::as_str).collect::<Vec<_>>())
-    };
-    run(&["apply"]).success();
-    assert!(s.path(".dform/dform/env=staging/state.json").exists());
-    let prod = run(&["plan", "--set", "env=prod"]).success();
+    let file = file.to_str().unwrap();
+    s.run(&["apply", file, "env=staging"]).success();
+    assert!(s.path("dform.state/dform/env=staging/state.json").exists());
+    let prod = s.run(&["plan", file, "env=prod"]).success();
     let summary = prod.summary();
     assert!(
         summary.starts_with("plan: ") && summary.ends_with(" create)"),
@@ -93,13 +75,13 @@ fn dform_df_plans_prod_after_staging_as_creates() {
 fn the_key_names_the_state_and_the_registry_entry() {
     let s = Scratch::new("keyed-dirs");
     s.write("app.df", APP);
-    s.run(&["--file", "app.df", "apply"]).success();
-    s.run(&["--file", "app.df", "apply", "--set", "env=prod"])
-        .success();
-    assert!(s.path(".dform/app/env=staging/state.json").exists());
-    assert!(s.path(".dform/app/env=prod/state.json").exists());
-    assert!(!s.path(".dform/app/state.json").exists());
-    let registry: serde_json::Value = serde_json::from_str(&s.read(".dform/stacks.json")).unwrap();
+    s.run(&["apply", "app.df", "env=staging"]).success();
+    s.run(&["apply", "app.df", "env=prod"]).success();
+    assert!(s.path("dform.state/app/env=staging/state.json").exists());
+    assert!(s.path("dform.state/app/env=prod/state.json").exists());
+    assert!(!s.path("dform.state/app/state.json").exists());
+    let registry: serde_json::Value =
+        serde_json::from_str(&s.read("dform.state/stacks.json")).unwrap();
     for (name, dir) in [
         ("app[env=staging]", "env=staging"),
         ("app[env=prod]", "env=prod"),
@@ -128,21 +110,21 @@ resource net.vpc main {
 }
 "#,
     );
-    s.run(&["--file", "app.df", "apply", "--set", "team=a/b c,=.x"])
+    s.run(&["apply", "app.df", "team=a/b c,=.x", "region=us-east1"])
         .success();
     assert!(
-        s.path(".dform/app/team=a%2Fb%20c%2C%3D.x,region=us-east1/state.json")
+        s.path("dform.state/app/team=a%2Fb%20c%2C%3D.x,region=us-east1/state.json")
             .exists()
     );
-    let registry = s.read(".dform/stacks.json");
+    let registry = s.read("dform.state/stacks.json");
     assert!(
         registry.contains("\"app[team=a%2Fb%20c%2C%3D.x,region=us-east1]\""),
         "{registry}"
     );
-    s.run(&["--file", "app.df", "apply", "--set", "team=.."])
+    s.run(&["apply", "app.df", "team=..", "region=us-east1"])
         .success();
     assert!(
-        s.path(".dform/app/team=%2E.,region=us-east1/state.json")
+        s.path("dform.state/app/team=%2E.,region=us-east1/state.json")
             .exists()
     );
 }
@@ -159,7 +141,7 @@ input env: string
 stack app[env] {}
 "#,
     );
-    let r = s.run(&["--file", "app.df", "plan"]).failure();
+    let r = s.run(&["plan", "app.df"]).failure();
     assert!(
         r.stderr
             .contains("stack app is keyed by input env, which has no value"),
@@ -175,7 +157,7 @@ input env: string = "dev"
 stack app[region] {}
 "#,
     );
-    let r = s.run(&["--file", "bad.df", "plan"]).failure();
+    let r = s.run(&["plan", "bad.df"]).failure();
     assert!(
         r.stderr
             .contains("stack app is keyed by region, which is not an input of the stack"),
@@ -207,10 +189,9 @@ resource net.vpc edge {
 }
 "#,
     );
-    s.run(&["--file", "app.df", "apply"]).success();
-    s.run(&["--file", "app.df", "apply", "--set", "env=prod"])
-        .success();
-    let r = s.run(&["--file", "web.df", "plan"]).success();
+    s.run(&["apply", "app.df", "env=staging"]).success();
+    s.run(&["apply", "app.df", "env=prod"]).success();
+    let r = s.run(&["plan", "web.df"]).success();
     assert!(
         r.stdout
             .contains("+ net.vpc.edge\n  name = \"https://prod.example\"\n"),
@@ -225,17 +206,9 @@ resource net.vpc edge {
 fn rekey_lists_what_the_key_renames_and_moves_the_state() {
     let s = Scratch::new("keyed-rekey");
     s.write("app.df", APP);
-    s.run(&["--file", "app.df", "apply"]).success();
+    s.run(&["apply", "app.df", "env=staging"]).success();
     let r = s
-        .run(&[
-            "--file",
-            "app.df",
-            "stack",
-            "rekey",
-            "app",
-            "env=staging",
-            "env=stg",
-        ])
+        .run(&["stack", "rekey", "app", "env=staging", "env=stg"])
         .success();
     assert!(
         r.stdout.contains(
@@ -245,14 +218,12 @@ fn rekey_lists_what_the_key_renames_and_moves_the_state() {
         "{}",
         r.stdout
     );
-    assert!(!s.path(".dform/app/env=staging").exists());
-    assert!(s.path(".dform/app/env=stg/state.json").exists());
-    let registry = s.read(".dform/stacks.json");
+    assert!(!s.path("dform.state/app/env=staging").exists());
+    assert!(s.path("dform.state/app/env=stg/state.json").exists());
+    let registry = s.read("dform.state/stacks.json");
     assert!(registry.contains("\"app[env=stg]\""), "{registry}");
     assert!(!registry.contains("env=staging"), "{registry}");
-    let r = s
-        .run(&["--file", "app.df", "plan", "--set", "env=stg"])
-        .success();
+    let r = s.run(&["plan", "app.df", "env=stg"]).success();
     assert!(
         r.stdout
             .contains("~ net.vpc.main\n  name: \"main-staging\" -> \"main-stg\"\n"),
@@ -276,17 +247,9 @@ resource net.vpc main {
 }
 "#,
     );
-    s.run(&["--file", "app.df", "apply"]).success();
+    s.run(&["apply", "app.df", "env=staging"]).success();
     let r = s
-        .run(&[
-            "--file",
-            "app.df",
-            "stack",
-            "rekey",
-            "app",
-            "env=staging",
-            "env=stg",
-        ])
+        .run(&["stack", "rekey", "app", "env=staging", "env=stg"])
         .success();
     assert!(
         r.stdout
@@ -294,9 +257,7 @@ resource net.vpc main {
         "{}",
         r.stdout
     );
-    let r = s
-        .run(&["--file", "app.df", "plan", "--set", "env=stg"])
-        .success();
+    let r = s.run(&["plan", "app.df", "env=stg"]).success();
     assert_eq!(
         r.summary(),
         "stack app is undeformed",
@@ -306,26 +267,18 @@ resource net.vpc main {
     );
 }
 
-/// A stack keyed after it was applied: its state is not any deployment's.
-/// The plan says so, and `rekey` with the new key only moves it.
+/// A stack keyed after it was applied: its state is not any deployment's,
+/// and `rekey` with the new key only moves it.
 #[test]
 fn rekey_moves_the_state_from_before_the_stack_was_keyed() {
     let s = Scratch::new("keyed-legacy");
     let unkeyed = APP.replace("stack app[env] {}", "stack app {}");
     s.write("app.df", &unkeyed);
-    s.run(&["--file", "app.df", "apply"]).success();
+    s.run(&["apply", "app.df"]).success();
     s.write("app.df", APP);
-    let r = s.run(&["--file", "app.df", "plan"]).success();
-    assert!(
-        r.stderr
-            .contains("move it to this one with `dform stack rekey app env=staging`"),
-        "{}",
-        r.stderr
-    );
-    s.run(&["--file", "app.df", "stack", "rekey", "app", "env=staging"])
-        .success();
-    assert!(!s.path(".dform/app/state.json").exists());
-    let r = s.run(&["--file", "app.df", "plan"]).success();
+    s.run(&["stack", "rekey", "app", "env=staging"]).success();
+    assert!(!s.path("dform.state/app/state.json").exists());
+    let r = s.run(&["plan", "app.df"]).success();
     assert_eq!(r.summary(), "stack app is undeformed", "{}", r.stdout);
 }
 
@@ -346,7 +299,7 @@ resource net.vpc main {
 fn a_fixed_bucket_name_in_a_keyed_stack_is_a_warning() {
     let s = Scratch::new("keyed-lint");
     s.write("app.df", FIXED);
-    let r = s.run(&["--file", "app.df", "plan"]).success();
+    let r = s.run(&["plan", "app.df"]).success();
     assert!(
         r.stderr.contains(
             "warning: app.df:5:3: net.vpc.logs bucket = \"company-logs\" does not depend on \
@@ -361,7 +314,7 @@ fn a_fixed_bucket_name_in_a_keyed_stack_is_a_warning() {
         "app.df",
         &FIXED.replace("stack app[env] {}", "stack app[env] { isolated = true }"),
     );
-    let r = s.run(&["--file", "app.df", "plan"]).success();
+    let r = s.run(&["plan", "app.df"]).success();
     assert!(!r.stderr.contains("does not depend"), "{}", r.stderr);
 }
 
@@ -376,7 +329,7 @@ fn a_fixed_bucket_name_is_denied_under_strict() {
             "stack app[env] { unknowns = \"strict\" }",
         ),
     );
-    let r = s.run(&["--file", "app.df", "plan"]).failure();
+    let r = s.run(&["plan", "app.df"]).failure();
     assert!(
         r.stderr
             .contains("constraint violations:\n- app.df:5:3: net.vpc.logs bucket"),
@@ -386,45 +339,21 @@ fn a_fixed_bucket_name_is_denied_under_strict() {
     assert!(r.stderr.contains("blocked by constraints"), "{}", r.stderr);
 }
 
-/// One controller per deployment: `--stack` names the key value.
+/// One controller per deployment: the target names the key value.
 #[test]
 fn the_controller_runs_one_deployment() {
     let s = Scratch::new("keyed-controller");
     s.write("app.df", APP);
     let r = s
-        .run(&[
-            "--file",
-            "app.df",
-            "controller",
-            "--once",
-            "--stack",
-            "app[env=prod]",
-            "--set",
-            "env=prod",
-        ])
+        .run(&["controller", "run", "--once", "app.df", "env=prod"])
         .success();
     assert!(
         r.stdout.contains("controller app[env=prod]"),
         "{}",
         r.stdout
     );
-    assert!(s.path(".dform/app/env=prod/state.json").exists());
-    assert!(!s.path(".dform/app/env=staging").exists());
-    let r = s
-        .run(&[
-            "--file",
-            "app.df",
-            "controller",
-            "--once",
-            "--stack",
-            "app[env=prod]",
-        ])
-        .failure();
-    assert!(
-        r.stderr.contains("owns stack app[env=staging]"),
-        "{}",
-        r.stderr
-    );
+    assert!(s.path("dform.state/app/env=prod/state.json").exists());
+    assert!(!s.path("dform.state/app/env=staging").exists());
 }
 
 /// `handover` takes a deployment: its directory moves, the others stay.
@@ -432,13 +361,10 @@ fn the_controller_runs_one_deployment() {
 fn handover_takes_a_key() {
     let s = Scratch::new("keyed-handover");
     s.write("app.df", APP);
-    s.run(&["--file", "app.df", "apply"]).success();
-    s.run(&["--file", "app.df", "apply", "--set", "env=prod"])
-        .success();
+    s.run(&["apply", "app.df", "env=staging"]).success();
+    s.run(&["apply", "app.df", "env=prod"]).success();
     let r = s
         .run(&[
-            "--file",
-            "app.df",
             "stack",
             "handover",
             "app[env=prod]",
@@ -452,14 +378,12 @@ fn handover_takes_a_key() {
         r.stdout
     );
     assert!(s.path("moved/state.json").exists());
-    assert!(s.path(".dform/app/env=staging/state.json").exists());
-    let r = s
-        .run(&["--file", "app.df", "apply", "--set", "env=prod"])
-        .failure();
+    assert!(s.path("dform.state/app/env=staging/state.json").exists());
+    let r = s.run(&["apply", "app.df", "env=prod"]).failure();
     assert!(
         r.stderr.contains("stack app[env=prod] was handed over"),
         "{}",
         r.stderr
     );
-    s.run(&["--file", "app.df", "apply"]).success();
+    s.run(&["apply", "app.df", "env=staging"]).success();
 }

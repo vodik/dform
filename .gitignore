@@ -1,5 +1,6 @@
 /target
 .dform/
+dform.state/
 /session-ses_*.md
 /DESIGN.pdf
 /DESIGN.typ

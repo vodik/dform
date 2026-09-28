@@ -6,20 +6,12 @@
 mod common;
 use common::Scratch;
 
-const BOOTSTRAP: &str = include_str!("../examples/bootstrap/stacks/bootstrap.df");
-const GCP: &str = include_str!("../examples/bootstrap/providers/gcp/schema.df");
-const WORKLOAD: &str = include_str!("../examples/bootstrap/stacks/workload.df");
-const RELEASE: &str = include_str!("../examples/bootstrap/data/release.facts");
-const APPROVALS: &str = include_str!("../examples/bootstrap/data/approvals.facts");
-const HANDED: &str = ".dform/renfry.bootstrap/k8s/dform-system/workload";
+const HANDED: &str = "dform.state/renfry.bootstrap/k8s/dform-system/workload";
 
+/// A copy of the project in a scratch directory.
 fn demo(name: &str) -> Scratch {
     let s = Scratch::new(name);
-    s.write("stacks/bootstrap.df", BOOTSTRAP);
-    s.write("providers/gcp/schema.df", GCP);
-    s.write("stacks/workload.df", WORKLOAD);
-    s.write("data/release.facts", RELEASE);
-    s.write("data/approvals.facts", APPROVALS);
+    common::copy_dir(&common::repo().join("examples/bootstrap"), &s.dir);
     s
 }
 
@@ -34,16 +26,7 @@ fn log(stdout: &str) -> Vec<String> {
 
 fn controller(s: &Scratch) -> Vec<String> {
     let r = s
-        .run(&[
-            "--root",
-            ".",
-            "--file",
-            "stacks/workload.df",
-            "controller",
-            "--stack",
-            "renfry.workload",
-            "--once",
-        ])
+        .run(&["controller", "run", "--once", "renfry.workload"])
         .success();
     log(&r.stdout)
 }
@@ -65,9 +48,7 @@ fn ticks(stdout: &str) -> Vec<&str> {
 #[test]
 fn a_resource_rule_reading_a_stuck_helper_is_a_pending_group() {
     let s = demo("bootstrap-helper");
-    let r = s
-        .run(&["--root", ".", "--file", "stacks/bootstrap.df", "apply"])
-        .success();
+    let r = s.run(&["apply", "renfry.bootstrap"]).success();
     let tick2 = r
         .stdout
         .split("tick 2:\n")
@@ -88,7 +69,7 @@ fn a_resource_rule_reading_a_stuck_helper_is_a_pending_group() {
         "{tick2}"
     );
     assert!(r.stdout.ends_with("apply: complete\n"), "{}", r.stdout);
-    let world = s.read(".dform/renfry.bootstrap/remote.json");
+    let world = s.read("dform.state/renfry.bootstrap/remote.json");
     assert!(world.contains("\"dform-controller\""), "{world}");
 }
 
@@ -97,36 +78,25 @@ fn bootstrap_handover_and_the_controller_runs_the_workload() {
     let s = demo("bootstrap");
     // Tick 1 the network and the cluster, tick 2 the node pools and the
     // namespace, tick 3 dform itself.
-    let r = s
-        .run(&["--root", ".", "--file", "stacks/bootstrap.df", "apply"])
-        .success();
+    let r = s.run(&["apply", "renfry.bootstrap"]).success();
     assert_eq!(
         ticks(&r.stdout),
         ["tick 1:", "tick 2:", "tick 3:"],
         "{}",
         r.stdout
     );
-    let world = s.read(".dform/renfry.bootstrap/remote.json");
+    let world = s.read("dform.state/renfry.bootstrap/remote.json");
     assert!(world.contains("\"dform-controller\""), "{world}");
     assert!(
-        world.contains("\"--stack\",\n") && world.contains("\"renfry.workload\""),
+        world.contains("\"run\",\n") && world.contains("\"renfry.workload\""),
         "{world}"
     );
-    let r = s
-        .run(&["--root", ".", "--file", "stacks/bootstrap.df", "plan"])
-        .success();
+    let r = s.run(&["plan", "renfry.bootstrap"]).success();
     assert_eq!(r.summary(), "stack renfry.bootstrap is undeformed");
 
     // The bootstrap stack stays batch.
     let r = s
-        .run(&[
-            "--root",
-            ".",
-            "--file",
-            "stacks/bootstrap.df",
-            "controller",
-            "--once",
-        ])
+        .run(&["controller", "run", "--once", "renfry.bootstrap"])
         .failure();
     assert!(
         r.stderr.contains(
@@ -152,7 +122,7 @@ fn bootstrap_handover_and_the_controller_runs_the_workload() {
         "{}",
         r.stdout
     );
-    let registry = s.read(".dform/stacks.json");
+    let registry = s.read("dform.state/stacks.json");
     assert!(
         registry.contains("\"backend\": \"k8s(\\\"dform-system/workload\\\")\""),
         "{registry}"
@@ -169,11 +139,9 @@ fn bootstrap_handover_and_the_controller_runs_the_workload() {
     );
     let world = format!("{HANDED}/remote.json");
     assert!(s.read(&world).contains("gcr.io/renfry/web:1.0"));
-    assert!(!s.path(".dform/renfry.workload").exists());
+    assert!(!s.path("dform.state/renfry.workload").exists());
     // A batch apply of a handed-over stack is refused; plan still reads it.
-    let r = s
-        .run(&["--root", ".", "--file", "stacks/workload.df", "apply"])
-        .failure();
+    let r = s.run(&["apply", "renfry.workload"]).failure();
     assert!(
         r.stderr.contains(
             "stack renfry.workload was handed over to k8s(\"dform-system/workload\"): the controller runs it"
@@ -181,9 +149,7 @@ fn bootstrap_handover_and_the_controller_runs_the_workload() {
         "{}",
         r.stderr
     );
-    let r = s
-        .run(&["--root", ".", "--file", "stacks/workload.df", "plan"])
-        .success();
+    let r = s.run(&["plan", "renfry.workload"]).success();
     assert_eq!(r.summary(), "stack renfry.workload is undeformed");
 
     // A release: deployed.
@@ -251,8 +217,7 @@ fn handover_needs_one_bootstrap_stack_and_an_empty_target() {
         "{}",
         r.stderr
     );
-    s.run(&["--root", ".", "--file", "stacks/bootstrap.df", "apply"])
-        .success();
+    s.run(&["apply", "renfry.bootstrap"]).success();
     let r = s
         .run(&["stack", "handover", "renfry.bootstrap", "--to", to])
         .failure();
@@ -285,7 +250,7 @@ fn handover_moves_applied_state_to_a_local_backend() {
         controller(&s).last().unwrap(),
         "stack renfry.workload is undeformed"
     );
-    assert!(s.path(".dform/renfry.workload/state.json").exists());
+    assert!(s.path("dform.state/renfry.workload/state.json").exists());
     s.run(&[
         "stack",
         "handover",
@@ -294,7 +259,7 @@ fn handover_moves_applied_state_to_a_local_backend() {
         "local(\"moved\")",
     ])
     .success();
-    assert!(!s.path(".dform/renfry.workload").exists());
+    assert!(!s.path("dform.state/renfry.workload").exists());
     assert!(s.path("moved/state.json").exists());
     // Nothing to do from the new place: the state and the memo moved too.
     assert_eq!(

@@ -5,7 +5,7 @@
 # node_locations name; the boundary resolves the zones, the refinement is
 # checked against them, fails (len_ge(3)), and apply stops before the
 # nodepools and the kubernetes objects:
-#   cargo run -- --file examples/refine/stacks/refine_gke.df apply
+#   cargo run -- -C examples/refine apply
 #
 # The settings refinements are checked at compile time against the literal
 # CIDRs (they hold), and again in the cell.
@@ -13,10 +13,10 @@
 # C's two-phase GKE / kubernetes stack (E §7.4), in the current syntax.
 # Run with the gke mock schema, which makes the cluster's zones, endpoint and
 # ca open nulls until the cluster exists:
-#   cargo run -- --file examples/refine/stacks/refine_gke.df plan
+#   cargo run -- -C examples/refine plan
 
 edition 2026
-
+stack refine_gke {}
 provider gke {}
 
 input env: enum("dev", "stg", "prod") = "dev"

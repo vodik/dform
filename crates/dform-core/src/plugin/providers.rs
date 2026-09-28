@@ -47,8 +47,11 @@ pub struct Config {
     pub world: PathBuf,
     /// The discovery inventory file.
     pub inventory: PathBuf,
-    /// `apply --chaos` specs, for the mock.
+    /// `dform dev --chaos` specs, for the mock.
     pub chaos: Vec<String>,
+    /// Where a provider may cache what it fetched (the k8s provider's
+    /// OpenAPI document): `dform.state/cache/`. None: beside the world.
+    pub cache: Option<PathBuf>,
 }
 
 /// How a run reaches its providers: a backend (`plugin::backend`). The
@@ -168,6 +171,10 @@ impl Providers {
             "inventory": path(&cfg.inventory),
             "chaos": cfg.chaos,
         });
+        let mut base = base;
+        if let Some(c) = &cfg.cache {
+            base["cache"] = path(c);
+        }
         let mut links = Vec::new();
         if !mocks.is_empty() {
             let mut link = launch.mock()?;

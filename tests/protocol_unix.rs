@@ -59,8 +59,7 @@ fn the_mock_serves_a_unix_socket_and_dform_dials_it() {
     s.write("p.df", PROG);
     let run = |args: &[&str]| -> common::Run {
         Command::new(env!("CARGO_BIN_EXE_dform"))
-            .args(["--file", "p.df", "--world", "w.json"])
-            .args(args)
+            .args(common::on("p.df", &["--world", "w.json"], args))
             .current_dir(&s.dir)
             .env("DFORM_PROVIDER_TRANSPORT", "unix")
             .env("TMPDIR", &tmp)

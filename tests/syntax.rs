@@ -75,7 +75,13 @@ fn libraries(files: &[PathBuf]) -> Vec<PathBuf> {
             if let Some(rest) = line.trim().strip_prefix("import \"")
                 && let Some(path) = rest.strip_suffix('"')
             {
-                let lib = f.parent().unwrap().join(path);
+                // A project's imports resolve from its root (`loader`).
+                let lib = match dform::project::manifest_root(f) {
+                    Some(root) if !path.starts_with("./") && !path.starts_with("../") => {
+                        root.join(path)
+                    }
+                    _ => f.parent().unwrap().join(path),
+                };
                 out.push(std::fs::canonicalize(&lib).unwrap_or(lib));
             }
         }

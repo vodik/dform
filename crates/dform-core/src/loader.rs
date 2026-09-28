@@ -93,6 +93,9 @@ fn load_unit(
         imports: None,
     });
     let base_dir = abs.parent().unwrap_or(Path::new(".")).to_path_buf();
+    // A project's imports resolve from its root (docs/layout.md); `./` and
+    // `../` from the importing file, as every import does outside a project.
+    let project = crate::project::manifest_root(&abs);
     let mut imports = Vec::new();
     for n in root
         .children()
@@ -106,7 +109,37 @@ fn load_unit(
             continue;
         };
         let rel = crate::syntax::resolve::unescape(t.text()).unwrap_or_default();
-        imports.push(load_unit(&base_dir.join(rel), units, index)?);
+        let target = match &project {
+            Some(root) if !rel.starts_with("./") && !rel.starts_with("../") => root.join(&rel),
+            _ => base_dir.join(&rel),
+        };
+        let unit = load_unit(&target, units, index)?;
+        // One program owns one stack: what it imports is a module.
+        let imported = index.get(&fs::canonicalize(&target).unwrap_or(target.clone()));
+        if let Some(&u) = imported
+            && crate::syntax::resolve::stack_header(&units[u].root).is_some()
+        {
+            let r = n.text_range();
+            let span = crate::ast::Span {
+                file,
+                start: r.start().into(),
+                end: r.end().into(),
+                origin: 0,
+            };
+            return Err(diag::Diagnostics(vec![
+                diag::Diagnostic::error(
+                    span,
+                    format!(
+                        "import \"{rel}\": {} is a stack (it has a `stack` statement); \
+                         a program imports modules, never another stack",
+                        display_name(&target)
+                    ),
+                )
+                .with_help("read another stack's values with stack_output(Stack, Key, Value)"),
+            ])
+            .into());
+        }
+        imports.push(unit);
     }
     units[i].imports = Some(imports);
     Ok(Some(i))
@@ -134,6 +167,8 @@ pub const PROVIDER_PREDS: &[&str] = &[
     "type_replace",
     "capability",
     "tag_path",
+    "project_provider",
+    "project_default",
 ];
 
 pub fn is_provider_pred(pred: &str) -> bool {

@@ -18,7 +18,7 @@ resource net.vpc main { cidr = "10.0.0.0/16" }
 resource net.subnet a { cidr = "10.0.1.0/24", vpc_id = ref(net.vpc, "other", "id") }
 "#,
     );
-    let r = s.run(&["--file", "p.df", "plan"]).failure();
+    let r = s.run(&["plan", "p.df"]).failure();
     assert!(r.stderr.contains(MSG), "{}", r.stderr);
     for want in [
         r#""type":"net.vpc""#,
@@ -43,7 +43,7 @@ resource net.vpc main { cidr = "10.0.0.0/16" }
 resource net.subnet a { cidr = "10.0.1.0/24", vpc_id = ref(net.vpc, "main", "id") }
 "#,
     );
-    let r = s.run(&["--file", "p.df", "plan"]).success();
+    let r = s.run(&["plan", "p.df"]).success();
     assert!(!r.stderr.contains(MSG), "{}", r.stderr);
 }
 
@@ -72,7 +72,7 @@ resource net.vpc_peering peer_main_peer {
 }
 "#,
     );
-    let r = s.run(&["--file", "p.df", "plan"]).failure();
+    let r = s.run(&["plan", "p.df"]).failure();
     assert!(r.stderr.contains(MSG), "{}", r.stderr);
     assert!(
         r.stderr
@@ -90,13 +90,12 @@ fn dform_df_plans_in_every_env() {
         let file = repo().join("examples/demo/stacks/dform.df");
         let r = s
             .run(&[
-                "--file",
-                file.to_str().unwrap(),
-                "--set",
-                &format!("env={env}"),
+                "dev",
                 "--world",
                 "w.json",
                 "plan",
+                file.to_str().unwrap(),
+                &format!("env={env}"),
             ])
             .success();
         assert!(!r.stderr.contains(MSG), "{env}: {}", r.stderr);

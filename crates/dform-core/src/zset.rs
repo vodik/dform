@@ -761,25 +761,25 @@ pub mod file {
                     .map(|f| (f.path.clone(), f.digest.clone()))
                     .collect()
             };
-            for (flag, a, b) in [
-                ("file", digests(&was.files), digests(&now.files)),
+            for (what, a, b) in [
+                ("program", digests(&was.files), digests(&now.files)),
                 (
-                    "input-file",
+                    "--input-file",
                     keyed(&was.input_files),
                     keyed(&now.input_files),
                 ),
             ] {
                 for (p, h) in &a {
                     match b.get(p) {
-                        None => out.push(format!("--{flag} {p}: in the plan file, not given now")),
+                        None => out.push(format!("{what} {p}: in the plan file, not given now")),
                         Some(h2) if h2 != h => {
-                            out.push(format!("--{flag} {p}: changed since the plan"))
+                            out.push(format!("{what} {p}: changed since the plan"))
                         }
                         _ => {}
                     }
                 }
                 for p in b.keys().filter(|p| !a.contains_key(*p)) {
-                    out.push(format!("--{flag} {p}: given now, not in the plan file"));
+                    out.push(format!("{what} {p}: given now, not in the plan file"));
                 }
             }
             let mut flag = |name: &str, x: String, y: String| {

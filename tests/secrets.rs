@@ -54,9 +54,9 @@ fn plan_and_apply_redact_the_labeled_secret_but_not_the_mislabeled_one() {
     let s = Scratch::new("secrets-plan");
     s.write("p.df", PROGRAM);
     let schema = schema();
-    let args = ["--file", "p.df", "--provider", &schema, "--world", "w.json"];
+    let mock = ["--provider", schema.as_str(), "--world", "w.json"];
 
-    let r = s.run(&[&args[..], &["plan"]].concat()).success();
+    let r = s.run(&common::on("p.df", &mock, &["plan"])).success();
     assert!(
         !r.stdout.contains(VAULT_SECRET),
         "vault's labeled secret leaked in plan output:\n{}",
@@ -72,7 +72,7 @@ fn plan_and_apply_redact_the_labeled_secret_but_not_the_mislabeled_one() {
         r.stdout
     );
 
-    let r = s.run(&[&args[..], &["apply"]].concat()).success();
+    let r = s.run(&common::on("p.df", &mock, &["apply"])).success();
     assert!(!r.stdout.contains(VAULT_SECRET), "{}", r.stdout);
 
     // Drift and re-plan: the update-side diff must redact both sides too.
@@ -82,7 +82,7 @@ fn plan_and_apply_redact_the_labeled_secret_but_not_the_mislabeled_one() {
             .replace(VAULT_SECRET, "VAULT-SECRET-CHANGED")
             .replace(OOPS_SECRET, "OOPS-SECRET-CHANGED"),
     );
-    let r = s.run(&[&args[..], &["plan"]].concat()).success();
+    let r = s.run(&common::on("p.df", &mock, &["plan"])).success();
     assert!(
         !r.stdout.contains(VAULT_SECRET) && !r.stdout.contains("VAULT-SECRET-CHANGED"),
         "vault's labeled secret leaked in an update diff:\n{}",
@@ -104,13 +104,13 @@ fn state_file_never_carries_either_secret() {
     s.write("p.df", PROGRAM);
     let schema = schema();
     s.run(&[
-        "--file",
-        "p.df",
+        "dev",
         "--provider",
         &schema,
         "--world",
         "w.json",
         "apply",
+        "p.df",
     ])
     .success();
     let state = s.read("w.state.json");
@@ -129,13 +129,13 @@ fn world_file_is_the_providers_own_storage_and_holds_both() {
     s.write("p.df", PROGRAM);
     let schema = schema();
     s.run(&[
-        "--file",
-        "p.df",
+        "dev",
         "--provider",
         &schema,
         "--world",
         "w.json",
         "apply",
+        "p.df",
     ])
     .success();
     let world = s.read("w.json");
@@ -151,8 +151,7 @@ fn show_never_prints_the_labeled_secret() {
     let schema = schema();
     let r = s
         .run(&[
-            "--file",
-            "p.df",
+            "dev",
             "--provider",
             &schema,
             "--world",
@@ -160,6 +159,7 @@ fn show_never_prints_the_labeled_secret() {
             "show",
             "leaky.vault",
             "v",
+            "p.df",
         ])
         .success();
     assert!(!r.stdout.contains(VAULT_SECRET), "{}", r.stdout);
@@ -181,14 +181,14 @@ fn query_never_prints_the_labeled_secret() {
     let schema = schema();
     let r = s
         .run(&[
-            "--file",
-            "p.df",
+            "dev",
             "--provider",
             &schema,
             "--world",
             "w.json",
             "query",
             "arg",
+            "p.df",
         ])
         .success();
     assert!(!r.stdout.contains(VAULT_SECRET), "{}", r.stdout);
@@ -214,13 +214,13 @@ resource leaky.oops copy {{
     let schema = schema();
     let r = s
         .run(&[
-            "--file",
-            "p.df",
+            "dev",
             "--provider",
             &schema,
             "--world",
             "w.json",
             "plan",
+            "p.df",
         ])
         .failure();
     assert!(
@@ -252,24 +252,24 @@ resource leaky.vault copy {{
         ),
     );
     let schema = schema();
-    let args = ["--file", "p.df", "--provider", &schema, "--world", "w.json"];
+    let mock = ["--provider", schema.as_str(), "--world", "w.json"];
     for cmd in [
         &["plan"][..],
         &["plan", "--json"],
         &["query", "arg", "--json"],
     ] {
-        let r = s.run(&[&args[..], cmd].concat()).success();
+        let r = s.run(&common::on("p.df", &mock, cmd)).success();
         assert!(!r.stdout.contains(VAULT_SECRET), "{cmd:?}: {}", r.stdout);
         assert!(!r.stderr.contains(VAULT_SECRET), "{cmd:?}: {}", r.stderr);
     }
-    let r = s.run(&[&args[..], &["plan"]].concat()).success();
+    let r = s.run(&common::on("p.df", &mock, &["plan"])).success();
     assert!(r.stdout.contains("backup = (sensitive)\n"), "{}", r.stdout);
 
     s.write(
         "p.df",
         &format!("{PROGRAM}\nv.password = \"VAULT-SECRET-TWO\"\n"),
     );
-    let r = s.run(&[&args[..], &["plan"]].concat()).failure();
+    let r = s.run(&common::on("p.df", &mock, &["plan"])).failure();
     assert!(
         r.stderr.contains("conflicting attribute contributions"),
         "{}",
@@ -291,7 +291,7 @@ fn a_secret_input_never_prints_in_query_why_or_the_plan_file() {
         "edition 2026\ninput pw: secret(string)\noutput token: secret(string)\noutput(\"token\", p) if pw(p)\nresource leaky.vault v {\n  for pw(p)\n  password = p\n}\n",
     );
     let schema = schema();
-    let args = ["--file", "p.df", "--provider", &schema, "--world", "w.json"];
+    let mock = ["--provider", schema.as_str(), "--world", "w.json"];
     let set = ["--set", "pw=HUNTER-TWO-SECRET"];
     for cmd in [
         &["query", "input"][..],
@@ -300,7 +300,9 @@ fn a_secret_input_never_prints_in_query_why_or_the_plan_file() {
         &["why", "pw(P)"],
         &["plan", "--out", "plan.json"],
     ] {
-        let r = s.run(&[&args[..], &set, cmd].concat()).success();
+        let r = s
+            .run(&common::on("p.df", &mock, &[&set, cmd].concat()))
+            .success();
         for out in [&r.stdout, &r.stderr] {
             assert!(!out.contains("HUNTER-TWO"), "{cmd:?}: {out}");
         }
@@ -345,8 +347,8 @@ fn a_sensitive_leaf_changed_between_plan_and_apply_is_refused() {
     );
     s.write("p.df", PROGRAM);
     let schema = schema();
-    let args = ["--file", "p.df", "--provider", &schema, "--world", "w.json"];
-    s.run(&[&args[..], &["plan", "--out", "plan.json"]].concat())
+    let mock = ["--provider", schema.as_str(), "--world", "w.json"];
+    s.run(&common::on("p.df", &mock, &["plan", "--out", "plan.json"]))
         .success();
     let file = s.read("plan.json");
     assert!(!file.contains("VAULT-SECRET"), "{file}");
@@ -385,16 +387,9 @@ fn a_secret_reaches_a_public_output_only_through_declassify() {
              output(\"pw_len\", n) if pw(p), {body}\n{policy}"
         )
     };
-    let args = [
-        "--file",
-        "p.df",
-        "--world",
-        "w.json",
-        "--set",
-        "pw=HUNTER-TWO",
-    ];
+    let mock = ["--world", "w.json", "--set", "pw=HUNTER-TWO"];
     s.write("p.df", &prog("n = len(p)", ""));
-    let r = s.run(&[&args[..], &["plan"]].concat()).failure();
+    let r = s.run(&common::on("p.df", &mock, &["plan"])).failure();
     assert!(
         r.stderr
             .contains("p.df:4:1: E0304: a secret reaches output pw_len, not declared secret(T)"),
@@ -407,11 +402,19 @@ fn a_secret_reaches_a_public_output_only_through_declassify() {
         &prog("n = declassify(len(p), \"its length is public\")", ""),
     );
     let r = s
-        .run(&[&args[..], &["query", "attr(\"output\", S, K, V)"]].concat())
+        .run(&common::on(
+            "p.df",
+            &mock,
+            &["query", "attr(\"output\", S, K, V)"],
+        ))
         .success();
     assert!(r.stdout.contains("\"pw_len\"  10"), "{}", r.stdout);
     let r = s
-        .run(&[&args[..], &["query", "declassified(At, R)"]].concat())
+        .run(&common::on(
+            "p.df",
+            &mock,
+            &["query", "declassified(At, R)"],
+        ))
         .success();
     assert!(
         r.stdout.contains("\"p.df:4:1\"  \"its length is public\""),
@@ -426,7 +429,7 @@ fn a_secret_reaches_a_public_output_only_through_declassify() {
             "deny(m) if declassified(at, r), m = \"declassified at {at}: {r}\"\n",
         ),
     );
-    let r = s.run(&[&args[..], &["plan"]].concat()).failure();
+    let r = s.run(&common::on("p.df", &mock, &["plan"])).failure();
     assert!(
         r.stderr
             .contains("- declassified at p.df:4:1: its length is public\n"),

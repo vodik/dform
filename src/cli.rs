@@ -38,19 +38,30 @@ fn launch() -> &'static dyn plugin::Launch {
         .expect("internal: cli::main sets the providers' backend")
 }
 
+/// The command line as typed (README "Commands"). `resolve` turns it into
+/// one run, [`Cli`]: the target's files, its key, the project's state.
 #[derive(Parser, Debug, Clone)]
 #[command(name = "dform")]
 #[command(about = "Facts + rules + constraints for infra", long_about = None)]
-struct Cli {
+struct Args {
+    /// Run as if dform started in DIR: the project, its dform.state/ and
+    /// discovery are DIR's.
+    #[arg(short = 'C', value_name = "DIR", global = true)]
+    dir: Option<PathBuf>,
+
+    #[command(flatten)]
+    inputs: Inputs,
+
     #[command(subcommand)]
-    cmd: Cmd,
+    cmd: Command,
+}
 
-    /// One or more .df files
-    #[arg(long = "file", global = true)]
-    files: Vec<PathBuf>,
-
-    /// Provide input facts: --set env=prod
-    #[arg(long = "set", global = true)]
+/// What a run is given besides its target.
+#[derive(clap::Args, Debug, Clone, Default)]
+struct Inputs {
+    /// A stack input: --set region=us-east1. A key input's value is the
+    /// target's (`dform plan app env=prod`), never --set's.
+    #[arg(long = "set", global = true, value_name = "K=V")]
     set: Vec<String>,
 
     /// Stack inputs from a .df file of facts, one `name(value).` per input
@@ -66,32 +77,6 @@ struct Cli {
     #[arg(long, global = true)]
     show_noop: bool,
 
-    /// A provider: a schema the mock provider plays (a name,
-    /// providers/NAME/schema.df else a built-in, or a path to a schema .df
-    /// file), or a plugin executable (a path to one, or to a directory
-    /// holding a `dform-provider*`). Repeatable; default `fake`.
-    #[arg(long = "provider", global = true)]
-    providers: Vec<String>,
-
-    /// The fake provider's world file: what exists. Plan refreshes from it,
-    /// apply writes it back. State sits beside it as <stem>.state.json.
-    /// Default: .dform/<stack>/remote.json.
-    #[arg(long = "world", global = true)]
-    world: Option<PathBuf>,
-
-    /// The directory whose `.dform/` holds the stacks' state and the stack
-    /// registry (`.dform/stacks.json`). Default: the program file's
-    /// directory, so stacks that read each other's outputs share it from
-    /// any working directory.
-    #[arg(long = "root", global = true)]
-    root: Option<PathBuf>,
-
-    /// Discovery inventory file (cloud_exists/cloud_attr/cloud_computed).
-    /// Default: <world dir>/inventory.json if --world is given and that file
-    /// exists, else .dform/inventory.json.
-    #[arg(long = "inventory", global = true)]
-    inventory: Option<PathBuf>,
-
     /// Also pipe every audit log entry, a JSON line, to this command
     /// (`sh -c CMD`, once per entry). Overrides the stack's `audit_sink`.
     /// A sink that fails is a warning; the local log is authoritative.
@@ -99,10 +84,102 @@ struct Cli {
     audit_sink: Option<String>,
 }
 
+/// The mock's flags: `dform dev [FLAGS] COMMAND`.
+#[derive(clap::Args, Debug, Clone, Default)]
+struct Mock {
+    /// A provider: a schema the mock provider plays (a name,
+    /// providers/NAME/schema.df else a built-in, or a path to a schema .df
+    /// file), or a plugin executable (a path to one, or to a directory
+    /// holding a `dform-provider*`). Repeatable; overrides the program's
+    /// `provider` statements.
+    #[arg(long = "provider", global = true)]
+    providers: Vec<String>,
+
+    /// The fake provider's world file: what exists. Plan refreshes from it,
+    /// apply writes it back. State sits beside it as <stem>.state.json.
+    /// Default: dform.state/<stack>/remote.json.
+    #[arg(long = "world", global = true)]
+    world: Option<PathBuf>,
+
+    /// Discovery inventory file (cloud_exists/cloud_attr/cloud_computed).
+    /// Default: <world dir>/inventory.json if --world is given and that file
+    /// exists, else dform.state/inventory.json.
+    #[arg(long = "inventory", global = true)]
+    inventory: Option<PathBuf>,
+
+    /// Inject a failure into the fake provider at apply (repeatable):
+    /// fail=T/N, timeout=T/N, crash=T/N, read-lag=T/N:READS,
+    /// mutate=T/N:PATH=JSON, latency=T/N:MS, fresh-ids, stop-after=N.
+    /// Deterministic; nothing sleeps.
+    #[arg(long = "chaos", global = true)]
+    chaos: Vec<String>,
+}
+
+/// What a command runs on: a stack by name (`infra`), a program file
+/// (`stacks/infra.df`), or a deployment (`shop.app[env=prod]`, or
+/// `shop.app env=prod`). None: the one stack under the current directory.
+#[derive(clap::Args, Debug, Clone, Default)]
+struct Target {
+    /// A stack name, a .df file, or a deployment `NAME[K=V,...]`.
+    #[arg(value_name = "TARGET")]
+    target: Option<String>,
+    /// The deployment's key values.
+    #[arg(value_name = "K=V")]
+    keys: Vec<String>,
+}
+
 #[derive(Subcommand, Debug, Clone)]
-enum Cmd {
-    Eval,
+enum Command {
+    #[command(flatten)]
+    Run(Run),
+    /// Format .df files in place: spacing, indentation and the commas a
+    /// newline makes redundant (line breaks are kept). No PATH formats the
+    /// project's .df files. `--check` changes nothing and fails if any
+    /// file would.
+    Fmt {
+        paths: Vec<PathBuf>,
+        #[arg(long)]
+        check: bool,
+    },
+    /// The project's stacks and their deployments.
+    Stack {
+        #[command(subcommand)]
+        cmd: StackCommand,
+    },
+    /// A deployment's state.
+    State {
+        #[command(subcommand)]
+        cmd: StateCommand,
+    },
+    /// Provider tools.
+    Provider {
+        #[command(subcommand)]
+        cmd: ProviderCommand,
+    },
+    /// Print a shell completion script: `dform completions zsh > _dform`.
+    /// It completes stack names, key values and deployments by asking
+    /// dform.
+    Completions { shell: Shell },
+    /// Development: the mock's flags (--world, --inventory, --provider,
+    /// --chaos) before any command, and the evaluator's own views.
+    Dev {
+        #[command(flatten)]
+        mock: Mock,
+        #[command(subcommand)]
+        cmd: DevCommand,
+    },
+    /// The completion scripts' helper: candidates for the next word.
+    #[command(name = "__complete", hide = true)]
+    Complete { words: Vec<String> },
+}
+
+/// The commands that run on a target, at the top level and under `dev`.
+#[derive(Subcommand, Debug, Clone)]
+enum Run {
+    /// Plan a deployment: what apply would do, and what it waits on.
     Plan {
+        #[command(flatten)]
+        target: Target,
         /// Write the plan file: inputs, a digest of the world, and the
         /// deformation delta with its nulls and tick schedule.
         /// `apply PLAN.json` applies exactly this delta or refuses.
@@ -116,19 +193,12 @@ enum Cmd {
         #[arg(long = "scenario")]
         scenario: Option<String>,
     },
-    /// Run every scenario against an empty mock world: each passes when
-    /// nothing is denied. Fails if any scenario is denied.
-    Test,
+    /// Apply a deployment, every key value named (`apply app env=prod`),
+    /// or a plan file from `plan --out` (`apply PLAN.json`): refresh,
+    /// re-evaluate, and refuse unless the delta is the file's.
     Apply {
-        /// A plan file from `plan --out`: refresh, re-evaluate, and refuse
-        /// unless the delta is the file's. Its inputs are the defaults for
-        /// --file, --set, --data, --provider, --world and --inventory.
-        plan_file: Option<PathBuf>,
-        /// Inject a failure into the fake provider (repeatable):
-        /// fail=T/N, timeout=T/N, crash=T/N, read-lag=T/N:READS, mutate=T/N:PATH=JSON,
-        /// latency=T/N:MS. Deterministic; nothing sleeps.
-        #[arg(long = "chaos")]
-        chaos: Vec<String>,
+        #[command(flatten)]
+        target: Target,
         /// Stop after this many ticks (phase boundaries) if the stack is
         /// still deformed.
         #[arg(long = "max-ticks", default_value_t = 8)]
@@ -141,52 +211,67 @@ enum Cmd {
         /// envelope): verified against the stack's `approvals` trust root
         /// before any Apply call. Required when the policy says
         /// `requires_approval` of a deformation.
-        #[arg(long = "approval", requires = "plan_file")]
+        #[arg(long = "approval")]
         approval: Option<PathBuf>,
+    },
+    /// Print how a fact was derived: rule, bindings, the facts it read,
+    /// recursively. Variables are allowed; every match is printed.
+    Why {
+        pattern: String,
+        #[command(flatten)]
+        target: Target,
+        /// Show every alternative derivation, not only the first.
+        #[arg(long)]
+        all: bool,
     },
     /// Query the final fact store: a predicate name (every fact of it) or
     /// body literals with variables, printed as a table with one column per
     /// variable: `dform query 'attr(net.vpc, n, .cidr, c)'`.
     Query {
         pattern: String,
+        #[command(flatten)]
+        target: Target,
         /// Print the answer as one JSON document.
         #[arg(long)]
         json: bool,
     },
-    /// Print how a fact was derived: rule, bindings, the facts it read,
-    /// recursively. Variables are allowed; every match is printed.
-    Why {
-        pattern: String,
-        /// Show every alternative derivation, not only the first.
+    /// Run every scenario against an empty mock world: each passes when
+    /// nothing is denied. Fails if any scenario is denied.
+    Test {
+        #[command(flatten)]
+        target: Target,
+    },
+    /// The deployment's audit log (`state.audit.jsonl` beside its state),
+    /// one line per entry; `log verify` checks its hash chain and names the
+    /// first broken link.
+    Log {
+        #[command(subcommand)]
+        cmd: Option<LogCommand>,
+        #[command(flatten)]
+        target: Target,
+        /// Entries from this one on: a sequence number, or a time (RFC
+        /// 3339, or a prefix of one: `2026-09-28`).
         #[arg(long)]
-        all: bool,
-    },
-    Show {
-        typ: String,
-        name: String,
-    },
-    /// Print the stratification of the program (partition graph strata)
-    Strata,
-    /// Format .df files in place: spacing, indentation and the commas a
-    /// newline makes redundant (line breaks are kept). No PATH formats the
-    /// --file files. `--check` changes nothing and fails if any file would.
-    Fmt {
-        paths: Vec<PathBuf>,
+        since: Option<String>,
+        /// Print the entries as one JSON array.
         #[arg(long)]
-        check: bool,
+        json: bool,
     },
-    /// Graphviz DOT: the resource dependency DAG (no argument), the
-    /// partition graph (`strata`), or a binary relation (`PRED` or `PRED/2`).
-    Graph {
-        what: Option<String>,
-    },
-    /// Controller mode: wait for an input relation's source or the world to
-    /// change, then refresh, evaluate, plan, gate on policy and apply, one
-    /// log line per event and per tick. Refuses a `role = bootstrap` stack.
+    /// Controller mode.
     Controller {
-        /// The stack to run: must be the program's own.
-        #[arg(long = "stack")]
-        stack: Option<String>,
+        #[command(subcommand)]
+        cmd: ControllerCommand,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone)]
+enum ControllerCommand {
+    /// Wait for an input relation's source or the world to change, then
+    /// refresh, evaluate, plan, gate on policy and apply, one log line per
+    /// event and per tick. Refuses a `role = bootstrap` stack.
+    Run {
+        #[command(flatten)]
+        target: Target,
         /// How often to look at the sources and the world file, in
         /// milliseconds (polling: no file notification).
         #[arg(long = "poll", default_value_t = 500)]
@@ -201,52 +286,24 @@ enum Cmd {
         #[arg(long = "max-ticks", default_value_t = 8)]
         max_ticks: usize,
     },
-    /// Forget one persisted extern answer (`extern ... persist`) of STACK:
-    /// the answer for EXTERN with the input values ARGS, each written as
-    /// `--set` takes a value. The next plan asks the provider again.
-    Taint {
-        stack: String,
-        #[arg(value_name = "EXTERN")]
-        pred: String,
-        args: Vec<String>,
-    },
-    /// The deployment's audit log (`state.audit.jsonl` beside its state),
-    /// one line per entry; `log verify` checks its hash chain and names the
-    /// first broken link.
-    Log {
-        #[command(subcommand)]
-        cmd: Option<LogCmd>,
-        /// Entries from this one on: a sequence number, or a time (RFC
-        /// 3339, or a prefix of one: `2026-09-28`).
-        #[arg(long)]
-        since: Option<String>,
-        /// Print the entries as one JSON array.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Stack operations.
-    Stack {
-        #[command(subcommand)]
-        cmd: StackCmd,
-    },
-    /// Provider tools.
-    Provider {
-        #[command(subcommand)]
-        cmd: ProviderCmd,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+enum LogCommand {
+    /// Check the chain: every entry's hash is its content's and names the
+    /// entry before. Fails naming the first broken link.
+    Verify {
+        #[command(flatten)]
+        target: Target,
     },
 }
 
 #[derive(Subcommand, Debug, Clone)]
-enum StackCmd {
-    /// Move a stack's state to another backend and record it in the
-    /// registry: `local("DIR")`, or `k8s("ns/name")`, the in-cluster backend
-    /// (for now a directory in the bootstrap stack's state). The controller
-    /// runs the stack from there; a batch `apply` refuses it.
-    Handover {
-        stack: String,
-        #[arg(long = "to")]
-        to: String,
-    },
+enum StackCommand {
+    /// Every stack of the project: its key, the deployments with state,
+    /// and per deployment the last apply (commit, time, actor, from the
+    /// audit log) and whether a saved plan is pending.
+    List,
     /// Move one deployment of a keyed stack to another key value: `rekey
     /// app env=staging env=stg` moves the state of `app[env=staging]` to
     /// `app[env=stg]`, and its registry entry. Nothing in the cloud
@@ -260,22 +317,206 @@ enum StackCmd {
         #[arg(value_name = "K=V", required = true)]
         pairs: Vec<String>,
     },
+    /// Move a stack's state to another backend and record it in the
+    /// registry: `local("DIR")`, or `k8s("ns/name")`, the in-cluster backend
+    /// (for now a directory in the bootstrap stack's state). The controller
+    /// runs the stack from there; a batch `apply` refuses it.
+    Handover {
+        stack: String,
+        #[arg(long = "to")]
+        to: String,
+    },
+    /// Remove a deployment's apply lock left by an apply that is gone.
+    /// Refuses while the holder runs.
+    Unlock {
+        #[command(flatten)]
+        target: Target,
+    },
 }
 
 #[derive(Subcommand, Debug, Clone)]
-enum LogCmd {
-    /// Check the chain: every entry's hash is its content's and names the
-    /// entry before. Fails naming the first broken link.
-    Verify,
+enum StateCommand {
+    /// The deployment's state: each address, its provider and remote id.
+    Show {
+        #[command(flatten)]
+        target: Target,
+    },
+    /// Forget one persisted extern answer (`extern ... persist`) of STACK:
+    /// the answer for EXTERN with the input values ARGS, each written as
+    /// `--set` takes a value. The next plan asks the provider again.
+    Taint {
+        stack: String,
+        #[arg(value_name = "EXTERN")]
+        pred: String,
+        args: Vec<String>,
+    },
+    /// Give the object at FROM the address TO (each TYPE/NAME): nothing in
+    /// the cloud changes, and the next plan sees the object under TO.
+    Mv {
+        from: String,
+        to: String,
+        #[command(flatten)]
+        target: Target,
+    },
 }
 
 #[derive(Subcommand, Debug, Clone)]
-enum ProviderCmd {
+enum ProviderCommand {
     /// The conformance suite: run every protocol method against the
     /// provider at PATH (an executable, a directory holding one, or a mock
     /// schema, which the mock provider plays) with a synthetic schema, and
     /// report what deviates. Fails if anything does.
     Check { path: String },
+    /// Print a provider's schema facts: a built-in mock schema's name, a
+    /// schema .df, or a plugin executable.
+    Schema { provider: String },
+}
+
+#[derive(Subcommand, Debug, Clone)]
+enum DevCommand {
+    #[command(flatten)]
+    Run(Run),
+    /// Print the stratification of the program (partition graph strata)
+    Strata {
+        #[command(flatten)]
+        target: Target,
+    },
+    /// Graphviz DOT: the resource dependency DAG, the partition graph
+    /// (`--strata`), or a binary relation (`--relation PRED` or `PRED/2`).
+    Graph {
+        #[command(flatten)]
+        target: Target,
+        #[arg(long, conflicts_with = "relation")]
+        strata: bool,
+        #[arg(long)]
+        relation: Option<String>,
+    },
+    /// The evaluation's size and resources.
+    Eval {
+        #[command(flatten)]
+        target: Target,
+    },
+    /// A resource's desired document.
+    Show {
+        #[arg(value_name = "TYPE")]
+        typ: String,
+        name: String,
+        #[command(flatten)]
+        target: Target,
+    },
+}
+
+#[derive(clap::ValueEnum, Debug, Clone, Copy)]
+enum Shell {
+    Zsh,
+    Bash,
+    Fish,
+}
+
+/// One run: the target's files and key, the project's state root, what
+/// the run is given, and the command.
+#[derive(Debug, Clone)]
+struct Cli {
+    cmd: Cmd,
+    files: Vec<PathBuf>,
+    /// The target's key values, as `k=v`; also in `set`.
+    keys: Vec<(String, String)>,
+    /// `--set` as typed (without the target's keys).
+    user_set: Vec<String>,
+    set: Vec<String>,
+    input_files: Vec<PathBuf>,
+    data: Vec<String>,
+    show_noop: bool,
+    providers: Vec<String>,
+    world: Option<PathBuf>,
+    /// The state root, `dform.state/` at the project root.
+    root: PathBuf,
+    /// The program's project manifest.
+    manifest: Option<crate::project::Manifest>,
+    inventory: Option<PathBuf>,
+    audit_sink: Option<String>,
+}
+
+/// What a run does.
+#[derive(Debug, Clone)]
+enum Cmd {
+    Eval,
+    Plan {
+        out: Option<PathBuf>,
+        json: bool,
+        scenario: Option<String>,
+    },
+    Test,
+    Apply {
+        plan_file: Option<PathBuf>,
+        chaos: Vec<String>,
+        max_ticks: usize,
+        parallel: u64,
+        approval: Option<PathBuf>,
+    },
+    Query {
+        pattern: String,
+        json: bool,
+    },
+    Why {
+        pattern: String,
+        all: bool,
+    },
+    Show {
+        typ: String,
+        name: String,
+    },
+    Strata,
+    Fmt {
+        paths: Vec<PathBuf>,
+        check: bool,
+    },
+    Graph {
+        what: Option<String>,
+    },
+    Controller {
+        poll: u64,
+        once: bool,
+        max_events: Option<usize>,
+        max_ticks: usize,
+    },
+    Taint {
+        stack: String,
+        pred: String,
+        args: Vec<String>,
+    },
+    Log {
+        verify: bool,
+        since: Option<String>,
+        json: bool,
+    },
+    StackList,
+    Rekey {
+        stack: String,
+        pairs: Vec<String>,
+    },
+    Handover {
+        stack: String,
+        to: String,
+    },
+    Unlock,
+    StateShow,
+    StateMv {
+        from: String,
+        to: String,
+    },
+    ProviderCheck {
+        path: String,
+    },
+    ProviderSchema {
+        provider: String,
+    },
+    Completions {
+        shell: Shell,
+    },
+    Complete {
+        words: Vec<String>,
+    },
 }
 
 /// The command line `args` (the program's name first), its providers
@@ -288,7 +529,7 @@ pub fn main(
     if LAUNCH.set(launch).is_err() {
         panic!("internal: cli::main runs once per process");
     }
-    match run(Cli::parse_from(args), None) {
+    match resolve(Args::parse_from(args)).and_then(|cli| run(cli, None)) {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(e) => {
             use std::io::IsTerminal;
@@ -313,7 +554,296 @@ pub fn run_in_process(
     if !std::ptr::addr_eq(set, launch) {
         bail!("internal: this process reaches its providers through another backend");
     }
-    run(Cli::try_parse_from(args)?, None)
+    run(resolve(Args::try_parse_from(args)?)?, None)
+}
+
+/// The run the command line asks for: `-C` taken, the working project
+/// found, the target resolved to its program file and key.
+fn resolve(args: Args) -> Result<Cli> {
+    if let Some(dir) = &args.dir {
+        std::env::set_current_dir(dir).map_err(|e| anyhow::anyhow!("-C {}: {e}", dir.display()))?;
+    }
+    let version = env!("CARGO_PKG_VERSION");
+    let project = crate::project::Project::find(Path::new("."), version)?;
+    let mut mock = Mock::default();
+    let (cmd, target): (Cmd, Option<Target>) = match args.cmd {
+        Command::Run(r) => run_cmd(r),
+        Command::Dev { mock: m, cmd } => {
+            mock = m;
+            match cmd {
+                DevCommand::Run(r) => run_cmd(r),
+                DevCommand::Strata { target } => (Cmd::Strata, Some(target)),
+                DevCommand::Graph {
+                    target,
+                    strata,
+                    relation,
+                } => (
+                    Cmd::Graph {
+                        what: if strata {
+                            Some("strata".into())
+                        } else {
+                            relation
+                        },
+                    },
+                    Some(target),
+                ),
+                DevCommand::Eval { target } => (Cmd::Eval, Some(target)),
+                DevCommand::Show { typ, name, target } => (Cmd::Show { typ, name }, Some(target)),
+            }
+        }
+        Command::Fmt { paths, check } => (Cmd::Fmt { paths, check }, None),
+        Command::Stack { cmd } => match cmd {
+            StackCommand::List => (Cmd::StackList, None),
+            StackCommand::Rekey { stack, pairs } => {
+                let target = Target {
+                    target: Some(stack.clone()),
+                    keys: vec![],
+                };
+                (Cmd::Rekey { stack, pairs }, Some(target))
+            }
+            StackCommand::Handover { stack, to } => (Cmd::Handover { stack, to }, None),
+            StackCommand::Unlock { target } => (Cmd::Unlock, Some(target)),
+        },
+        Command::State { cmd } => match cmd {
+            StateCommand::Show { target } => (Cmd::StateShow, Some(target)),
+            StateCommand::Taint { stack, pred, args } => (Cmd::Taint { stack, pred, args }, None),
+            StateCommand::Mv { from, to, target } => (Cmd::StateMv { from, to }, Some(target)),
+        },
+        Command::Provider { cmd } => match cmd {
+            ProviderCommand::Check { path } => (Cmd::ProviderCheck { path }, None),
+            ProviderCommand::Schema { provider } => (Cmd::ProviderSchema { provider }, None),
+        },
+        Command::Completions { shell } => (Cmd::Completions { shell }, None),
+        Command::Complete { words } => (Cmd::Complete { words }, None),
+    };
+    let inputs = args.inputs;
+    let mut cli = Cli {
+        cmd,
+        files: Vec::new(),
+        keys: Vec::new(),
+        user_set: inputs.set.clone(),
+        set: inputs.set,
+        input_files: inputs.input_files,
+        data: inputs.data,
+        show_noop: inputs.show_noop,
+        providers: mock.providers,
+        world: mock.world,
+        root: project.state_root(),
+        manifest: None,
+        inventory: mock.inventory,
+        audit_sink: inputs.audit_sink,
+    };
+    if let Cmd::Apply { chaos, .. } = &mut cli.cmd {
+        *chaos = mock.chaos;
+    } else if !mock.chaos.is_empty() {
+        bail!("--chaos is for apply");
+    }
+    // A plan file is `apply`'s target: its inputs name the program.
+    if let (Cmd::Apply { plan_file, .. }, Some(t)) = (&mut cli.cmd, &target)
+        && let Some(f) = t.target.as_deref().filter(|f| f.ends_with(".json"))
+    {
+        if !t.keys.is_empty() {
+            bail!("apply {f}: a plan file names its deployment; give no key values");
+        }
+        *plan_file = Some(PathBuf::from(f));
+        return Ok(cli);
+    }
+    let Some(target) = target else {
+        return Ok(cli);
+    };
+    let (file, keys) = target_of(&project, &target)?;
+    cli.set.extend(keys.iter().map(|(k, v)| format!("{k}={v}")));
+    cli.keys = keys;
+    cli.files = vec![file];
+    Ok(cli)
+}
+
+/// A command that runs on a target, and the target.
+fn run_cmd(r: Run) -> (Cmd, Option<Target>) {
+    match r {
+        Run::Plan {
+            target,
+            out,
+            json,
+            scenario,
+        } => (
+            Cmd::Plan {
+                out,
+                json,
+                scenario,
+            },
+            Some(target),
+        ),
+        Run::Apply {
+            target,
+            max_ticks,
+            parallel,
+            approval,
+        } => (
+            Cmd::Apply {
+                plan_file: None,
+                chaos: Vec::new(),
+                max_ticks,
+                parallel,
+                approval,
+            },
+            Some(target),
+        ),
+        Run::Why {
+            pattern,
+            target,
+            all,
+        } => (Cmd::Why { pattern, all }, Some(target)),
+        Run::Query {
+            pattern,
+            target,
+            json,
+        } => (Cmd::Query { pattern, json }, Some(target)),
+        Run::Test { target } => (Cmd::Test, Some(target)),
+        Run::Log {
+            cmd,
+            target,
+            since,
+            json,
+        } => {
+            let (verify, target) = match cmd {
+                Some(LogCommand::Verify { target }) => (true, target),
+                None => (false, target),
+            };
+            (
+                Cmd::Log {
+                    verify,
+                    since,
+                    json,
+                },
+                Some(target),
+            )
+        }
+        Run::Controller {
+            cmd:
+                ControllerCommand::Run {
+                    target,
+                    poll,
+                    once,
+                    max_events,
+                    max_ticks,
+                },
+        } => (
+            Cmd::Controller {
+                poll,
+                once,
+                max_events,
+                max_ticks,
+            },
+            Some(target),
+        ),
+    }
+}
+
+/// The program file and key values a target names. A path (`.df`) is the
+/// program; a name is the project's stack of that name; `NAME[K=V,...]`
+/// and trailing `K=V`s are the key. No target: the one stack under the
+/// working directory, else the stacks there are listed.
+fn target_of(
+    project: &crate::project::Project,
+    t: &Target,
+) -> Result<(PathBuf, Vec<(String, String)>)> {
+    let mut keys = Vec::new();
+    let pair = |kv: &str| -> Result<(String, String)> {
+        let (k, v) = kv
+            .split_once('=')
+            .ok_or_else(|| anyhow::anyhow!("expected a key value K=V, got '{kv}'"))?;
+        Ok((k.trim().to_string(), v.trim().to_string()))
+    };
+    let mut name = t.target.clone();
+    if let Some(n) = &name
+        && n.contains('=')
+        && !n.contains('[')
+    {
+        keys.push(pair(n)?);
+        name = None;
+    }
+    if let Some(n) = name.clone()
+        && let Some((stack, rest)) = n.strip_suffix(']').and_then(|n| n.split_once('['))
+    {
+        for kv in rest.split(',').filter(|kv| !kv.trim().is_empty()) {
+            keys.push(pair(kv)?);
+        }
+        name = Some(stack.to_string());
+    }
+    for kv in &t.keys {
+        keys.push(pair(kv)?);
+    }
+    let found = || {
+        let d = crate::project::discover(project);
+        for w in &d.warnings {
+            eprintln!("warning: {w}");
+        }
+        d
+    };
+    let file = match name {
+        Some(n) if n.ends_with(".df") || Path::new(&n).is_file() => {
+            if project.manifest.is_some() {
+                found().check()?;
+            }
+            PathBuf::from(n)
+        }
+        Some(n) => {
+            let d = found();
+            d.check()?;
+            match d.named(&n).as_slice() {
+                [one] => one.file.clone(),
+                _ => bail!(
+                    "no stack {n} in the project at {}{}",
+                    project.root.display(),
+                    listing(&d.stacks)
+                ),
+            }
+        }
+        None => {
+            let d = found();
+            d.check()?;
+            let here: Vec<&crate::project::Found> = d
+                .stacks
+                .iter()
+                .filter(|s| s.file.is_relative() && !s.file.starts_with(".."))
+                .collect();
+            match here.as_slice() {
+                [one] => one.file.clone(),
+                [] => bail!(
+                    "no stack under {}: a stack is a .df file with a `stack` statement; name \
+                     a program file (`dform plan path/to/file.df`){}",
+                    std::env::current_dir()
+                        .map(|d| d.display().to_string())
+                        .unwrap_or_default(),
+                    listing(&d.stacks)
+                ),
+                many => bail!(
+                    "{} stacks under the current directory; name one:{}",
+                    many.len(),
+                    listing(&many.iter().map(|f| (*f).clone()).collect::<Vec<_>>())
+                ),
+            }
+        }
+    };
+    Ok((file, keys))
+}
+
+/// `\n  NAME[KEY]  FILE` per stack, for an error that lists them.
+fn listing(stacks: &[crate::project::Found]) -> String {
+    if stacks.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("\nthe project's stacks:");
+    for s in stacks {
+        let key = if s.keys.is_empty() {
+            String::new()
+        } else {
+            format!("[{}]", s.keys.join(", "))
+        };
+        out.push_str(&format!("\n  {}{key}  {}", s.name, s.file.display()));
+    }
+    out
 }
 
 /// An apply's audit session: its log, and the stack's lock, held until the
@@ -350,20 +880,59 @@ fn run_with(
     if let Cmd::Controller { .. } = cli.cmd {
         return run_controller(cli);
     }
-    if let Cmd::Stack {
-        cmd: StackCmd::Handover { stack, to },
-    } = &cli.cmd
-    {
-        let dir = crate::stack::handover(&state_root(&cli, &cli.files), stack, to)?;
-        crate::audit::Log::beside(&state::state_path(&dir), cli.audit_sink.clone()).append(
-            "handover",
-            serde_json::json!({ "stack": stack, "to": to, "who": crate::audit::who() }),
-        )?;
-        println!("stack {stack} handed over to {to}: {}", dir.display());
-        return Ok(());
-    }
-    if let Cmd::Taint { stack, pred, args } = &cli.cmd {
-        return taint(&cli, stack, pred, args);
+    match &cli.cmd {
+        Cmd::Handover { stack, to } => {
+            let dir = crate::stack::handover(&cli.root, stack, to)?;
+            crate::audit::Log::beside(&state::state_path(&dir), cli.audit_sink.clone()).append(
+                "handover",
+                serde_json::json!({ "stack": stack, "to": to, "who": crate::audit::who() }),
+            )?;
+            println!("stack {stack} handed over to {to}: {}", dir.display());
+            return Ok(());
+        }
+        Cmd::Taint { stack, pred, args } => return taint(&cli, stack, pred, args),
+        Cmd::StackList => return stack_list(&cli),
+        Cmd::Completions { shell } => {
+            print!("{}", completion_script(*shell));
+            return Ok(());
+        }
+        Cmd::Complete { words } => return complete(words),
+        Cmd::ProviderCheck { path } => {
+            let (lines, failed) = plugin::check::run(launch(), path)?;
+            for l in &lines {
+                println!("{l}");
+            }
+            if failed > 0 {
+                bail!(
+                    "provider {path}: {failed} of {} checks deviate",
+                    lines.len()
+                );
+            }
+            println!("provider {path}: conforms");
+            return Ok(());
+        }
+        Cmd::ProviderSchema { provider } => {
+            let backend = Providers::start(
+                launch(),
+                std::slice::from_ref(provider),
+                &plugin::Config::default(),
+            )?;
+            for a in &backend.schema().facts {
+                println!("{}", partition::fmt_atom(a));
+            }
+            return Ok(());
+        }
+        Cmd::Fmt { paths, check } => {
+            let paths = if paths.is_empty() {
+                let project =
+                    crate::project::Project::find(Path::new("."), env!("CARGO_PKG_VERSION"))?;
+                crate::project::df_files(&project)
+            } else {
+                paths.clone()
+            };
+            return fmt_files(&paths, *check);
+        }
+        _ => {}
     }
     let plan_file = match &cli.cmd {
         Cmd::Apply { plan_file, .. } => plan_file.clone(),
@@ -374,32 +943,17 @@ fn run_with(
         None => None,
     };
 
-    if let Cmd::Provider {
-        cmd: ProviderCmd::Check { path },
-    } = &cli.cmd
-    {
-        let (lines, failed) = plugin::check::run(launch(), path)?;
-        for l in &lines {
-            println!("{l}");
-        }
-        if failed > 0 {
-            bail!(
-                "provider {path}: {failed} of {} checks deviate",
-                lines.len()
-            );
-        }
-        println!("provider {path}: conforms");
-        return Ok(());
+    let files = cli.files.clone();
+    if files.is_empty() {
+        bail!("internal: a run with no program");
     }
-    if let Cmd::Fmt { paths, check } = &cli.cmd {
-        let paths = if paths.is_empty() {
-            default_files(&cli.files)?
-        } else {
-            paths.clone()
-        };
-        return fmt_files(&paths, *check);
+    // The program's project's manifest (a plan file's program's, too).
+    if let Some(root) = crate::project::manifest_root(&files[0]) {
+        cli.manifest = Some(crate::project::Manifest::load(
+            &root.join(crate::project::MANIFEST),
+            env!("CARGO_PKG_VERSION"),
+        )?);
     }
-    let files = default_files(&cli.files)?;
     let mut program = loader::load_program(&files)?;
     // Input relations: declared, and stated as their sources hold them now.
     let relations = watch::take(&mut program)?;
@@ -416,14 +970,27 @@ fn run_with(
     {
         program = crate::scenario::select(&program, name)?;
     }
-    // `stack` and `provider` statements; `--provider` overrides the latter.
-    let stack_cfg = crate::stack::config(&program)?;
+    // `stack` and `provider` statements, over the manifest's defaults;
+    // `--provider` overrides the latter.
+    if let Some(m) = &cli.manifest {
+        with_default_unknowns(&mut program, m);
+    }
+    let mut stack_cfg = crate::stack::config(&program)?;
+    if let Some(m) = &cli.manifest {
+        with_manifest(&mut stack_cfg, m, &files[0]);
+    }
+    // A key's value is the target's; `apply` names every one.
+    let own = stack_cfg
+        .name
+        .clone()
+        .unwrap_or_else(|| state::stack_name(&files[0]));
+    check_keys(&cli, &stack_cfg, &own, saved.is_some() || hook.is_some())?;
     // `stack rekey`: the run is of the old deployment (its state, its
     // world), the provenance of its names is listed, and its state moves.
     let rekey = match cli.cmd.clone() {
-        Cmd::Stack {
-            cmd: StackCmd::Rekey { stack, pairs },
-        } => Some(rekey_args(&mut cli, &stack_cfg, &files, &stack, &pairs)?),
+        Cmd::Rekey { stack, pairs } => {
+            Some(rekey_args(&mut cli, &stack_cfg, &files, &stack, &pairs)?)
+        }
         _ => None,
     };
     let providers = if cli.providers.is_empty() {
@@ -452,7 +1019,7 @@ fn run_with(
         program.statements.extend(stmts);
     }
     if let Cmd::Test = cli.cmd {
-        return run_tests(&program, &providers, &cli.set, &cli.data, &files);
+        return run_tests(&program, &providers, &cli, &files);
     }
     if let Cmd::Strata = cli.cmd {
         return print_strata(&files, &program, &load_schema(&providers)?);
@@ -488,10 +1055,7 @@ fn run_with(
     // from the deformation the planner hands back (`zset::POLICY_RULES`).
     let program = zset::with_policy_rules(program)?;
 
-    let root = state_root(&cli, &files);
-    for note in state::migrate_unscoped(&root)? {
-        eprintln!("note: {note}");
-    }
+    let root = cli.root.clone();
     let stack = stack_cfg
         .name
         .clone()
@@ -519,25 +1083,6 @@ fn run_with(
         Some(w) => state::world_paths(&root, w),
         None => state::backend_paths(&root, &instance.dir(&base)),
     };
-    // A keyed stack whose state is still the unkeyed one.
-    if cli.world.is_none()
-        && rekey.is_none()
-        && instance.segment().is_some()
-        && !paths.state.exists()
-        && base.join("state.json").exists()
-    {
-        eprintln!(
-            "note: stack {stack} is keyed now, and its state from before is not any \
-             deployment's: {}; move it to this one with `dform stack rekey {stack} {}`",
-            base.join("state.json").display(),
-            instance
-                .key
-                .iter()
-                .map(|(k, v)| format!("{k}={v}"))
-                .collect::<Vec<_>>()
-                .join(" ")
-        );
-    }
     // A stack handed over to another backend lives there now.
     let handed = match &cli.world {
         None => crate::stack::handed_over(&root, &deployment)?,
@@ -552,8 +1097,23 @@ fn run_with(
         &paths.state,
         cli.audit_sink.clone().or(stack_cfg.audit_sink.clone()),
     );
-    if let Cmd::Log { cmd, since, json } = &cli.cmd {
-        return print_log(&audit, &deployment, cmd.as_ref(), since.as_deref(), *json);
+    match &cli.cmd {
+        Cmd::Log {
+            verify,
+            since,
+            json,
+        } => {
+            return print_log(&audit, &deployment, *verify, since.as_deref(), *json);
+        }
+        Cmd::Unlock => {
+            println!("{}", crate::stack::unlock(&paths.state, &deployment)?);
+            return Ok(());
+        }
+        Cmd::StateShow => return state_show(&paths.state, &deployment),
+        Cmd::StateMv { from, to } => {
+            return state_mv(&paths.state, &deployment, from, to, &audit);
+        }
+        _ => {}
     }
     // The stack's plan-file key: a plan that writes a file, and an apply,
     // digest secrets with it (the plan file's, the audit log's).
@@ -603,7 +1163,7 @@ fn run_with(
     } else if let (Cmd::Apply { .. }, Some((to, _))) = (&cli.cmd, &handed) {
         bail!(
             "stack {deployment} was handed over to {to}: the controller runs it \
-             (`dform controller --stack {deployment}`), not a batch apply"
+             (`dform controller run {deployment}`), not a batch apply"
         );
     }
     let chaos = match &cli.cmd {
@@ -616,6 +1176,12 @@ fn run_with(
         Cmd::Apply { chaos, .. } => chaos.clone(),
         _ => Vec::new(),
     };
+    // What providers and trust roots fetch is cached in the state root's
+    // cache/, a world fixture's beside it.
+    let cache = match &cli.world {
+        Some(w) => w.parent().unwrap_or(Path::new("")).to_path_buf(),
+        None => root.join("cache"),
+    };
     // The schema is asked for once the run knows the types it names.
     let backend = Providers::start_deferred(
         launch(),
@@ -624,6 +1190,7 @@ fn run_with(
             world: paths.world.clone(),
             inventory: paths.inventory.clone(),
             chaos: chaos_specs,
+            cache: cli.world.is_none().then(|| cache.clone()),
         },
     )?;
     // Externs are asked on demand: a table's of its file, else of the file
@@ -656,6 +1223,10 @@ fn run_with(
     let mut base_extra = set_facts;
     base_extra.extend(build_extra_facts(&cli.data)?);
     base_extra.extend(crate::stack::stack_outputs(&root, &deployment)?);
+    // The manifest, as facts policy may read.
+    if let Some(m) = &cli.manifest {
+        base_extra.extend(m.facts());
+    }
     let discovered = backend.discover()?;
     let scope = catalog_scope(&cli.cmd, &program, &base_extra, &discovered, &st);
     backend.load_schema(scope.as_ref())?;
@@ -774,7 +1345,7 @@ fn run_with(
     // explain what blocks it.
     if !matches!(
         cli.cmd,
-        Cmd::Plan { .. } | Cmd::Query { .. } | Cmd::Why { .. } | Cmd::Stack { .. }
+        Cmd::Plan { .. } | Cmd::Query { .. } | Cmd::Why { .. } | Cmd::Rekey { .. }
     ) {
         blocked(&violations)?;
     }
@@ -1065,9 +1636,7 @@ fn run_with(
             println!("{}", json);
         }
         Cmd::Strata | Cmd::Test => unreachable!("handled before evaluation"),
-        Cmd::Stack {
-            cmd: StackCmd::Rekey { .. },
-        } => {
+        Cmd::Rekey { .. } => {
             let Some(r) = rekey else {
                 unreachable!("rekey_args ran for rekey");
             };
@@ -1112,10 +1681,17 @@ fn run_with(
         Cmd::Fmt { .. }
         | Cmd::Controller { .. }
         | Cmd::Log { .. }
-        | Cmd::Stack { .. }
-        | Cmd::Provider { .. }
+        | Cmd::StackList
+        | Cmd::Handover { .. }
+        | Cmd::Unlock
+        | Cmd::StateShow
+        | Cmd::StateMv { .. }
+        | Cmd::ProviderCheck { .. }
+        | Cmd::ProviderSchema { .. }
+        | Cmd::Completions { .. }
+        | Cmd::Complete { .. }
         | Cmd::Taint { .. } => {
-            unreachable!("handled before loading")
+            unreachable!("handled before evaluation")
         }
         Cmd::Graph { what: None } => print!("{}", graph::resources(&resources)),
         Cmd::Graph { what: Some(spec) } => {
@@ -1237,8 +1813,7 @@ fn run_with(
                 let roots = match roots.get() {
                     Some(r) => r,
                     None => {
-                        let dir = paths.state.parent().unwrap_or(Path::new(""));
-                        let r = crate::approval::load_roots(&stack_cfg.approvals, dir)?;
+                        let r = crate::approval::load_roots(&stack_cfg.approvals, &cache)?;
                         roots.get_or_init(|| r)
                     }
                 };
@@ -1464,6 +2039,9 @@ fn run_with(
                         serde_json::json!({
                             "who": crate::audit::who(),
                             "dform": env!("CARGO_PKG_VERSION"),
+                            "commit": crate::project::git_head(
+                                files[0].parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new(".")),
+                            ),
                             "providers": if providers.is_empty() {
                                 vec!["fake".to_string()]
                             } else {
@@ -1658,12 +2236,11 @@ fn run_with(
     Ok(())
 }
 
-/// `dform controller`: a run per event (`controller::Hook`), until
+/// `dform controller run`: a run per event (`controller::Hook`), until
 /// `--once` or `--max-events` says stop. A run that fails is logged and the
 /// controller goes on watching; the first one failing ends it.
 fn run_controller(cli: Cli) -> Result<()> {
     let Cmd::Controller {
-        stack,
         poll,
         once,
         max_events,
@@ -1672,30 +2249,22 @@ fn run_controller(cli: Cli) -> Result<()> {
     else {
         unreachable!("run_controller is for `controller`");
     };
-    let files = default_files(&cli.files)?;
+    let files = cli.files.clone();
     let program = loader::load_program(&files)?;
     let cfg = crate::stack::config(&program)?;
     let name = cfg
         .name
         .clone()
         .unwrap_or_else(|| state::stack_name(&files[0]));
-    // One controller per deployment: of a keyed stack, the one `--set`
-    // selects.
+    // One controller per deployment: of a keyed stack, the one the target
+    // names.
     let set = cli
         .set
         .iter()
         .map(|kv| split_kv(kv).map(|(k, v)| (k.to_string(), v)))
         .collect::<Result<Vec<_>>>()?;
     let own = crate::stack::instance(&cfg, &name, &program, &inputs::set_facts(&[], &set)?)?.name();
-    if let Some(s) = &stack
-        && *s != own
-    {
-        bail!(
-            "controller --stack {s}: the program ({}) owns stack {own}",
-            files[0].display()
-        );
-    }
-    let registered = crate::stack::registry(&state_root(&cli, &files))?
+    let registered = crate::stack::registry(&cli.root)?
         .get(&own)
         .is_some_and(|e| e.bootstrap);
     if cfg.bootstrap || registered {
@@ -1879,10 +2448,10 @@ fn input_fact_keys(program: &crate::ast::Program) -> BTreeSet<String> {
 fn run_tests(
     program: &crate::ast::Program,
     providers: &[String],
-    set: &[String],
-    data: &[String],
+    cli: &Cli,
     files: &[PathBuf],
 ) -> Result<()> {
+    let (set, data) = (&cli.set, &cli.data);
     use std::io::IsTerminal;
     let names = crate::scenario::names(program)?;
     if names.is_empty() {
@@ -1906,6 +2475,7 @@ fn run_tests(
             }
             inputs::check_required(&lowered.inputs, &given)?;
             let mut extra = inputs::set_facts(&lowered.inputs, &pairs)?;
+            extra.extend(cli.manifest.iter().flat_map(|m| m.facts()));
             extra.extend(build_extra_facts(data)?);
             extra.extend(backend.catalog(schema::named_types(&lowered.program, &extra).as_ref())?);
             let tables = crate::tables::Tables::default();
@@ -1953,11 +2523,11 @@ fn run_tests(
 }
 
 /// Keep the answers of `persist` externs in state: never asked again.
-/// `dform taint STACK EXTERN ARGS...`: remove the answer from the stack's
+/// `dform state taint STACK EXTERN ARGS...`: remove the answer from the stack's
 /// state (beside `--world`, else where the registry has it, else under the
 /// state root), under the stack's lock.
 fn taint(cli: &Cli, stack: &str, pred: &str, args: &[String]) -> Result<()> {
-    let root = state_root(cli, &cli.files);
+    let root = cli.root.clone();
     let path = match &cli.world {
         Some(w) => state::world_paths(&root, w).state,
         None => match crate::stack::registry(&root)?.remove(stack) {
@@ -2133,12 +2703,12 @@ fn pinned_commits(relations: &[watch::Relation]) -> Vec<zset::file::Pinned> {
 fn print_log(
     log: &crate::audit::Log,
     deployment: &str,
-    cmd: Option<&LogCmd>,
+    verify: bool,
     since: Option<&str>,
     json: bool,
 ) -> Result<()> {
     let path = log.path();
-    if let Some(LogCmd::Verify) = cmd {
+    if verify {
         if !path.exists() {
             bail!("stack {deployment} has no audit log at {}", path.display());
         }
@@ -2169,7 +2739,7 @@ fn print_moves(moves: &[(ir::Address, ir::Address)]) {
     print!("{}", plan_print::moved_text(moves));
 }
 
-/// `dform strata`: the partition graph's strata, or the negative cycle.
+/// `dform dev strata`: the partition graph's strata, or the negative cycle.
 fn print_strata(
     files: &[PathBuf],
     program: &crate::ast::Program,
@@ -2194,7 +2764,7 @@ fn print_strata(
 }
 
 /// A stable, multi-line rendering of the stratified case (one node per
-/// line, sorted) so `dform strata` can be pinned as a golden snapshot.
+/// line, sorted) so `dform dev strata` can be pinned as a golden snapshot.
 /// Rejected (negative cycle) keeps `partition::report`'s own format.
 fn format_strata(name: &str, g: &partition::Graph, v: &partition::Verdict) -> String {
     match v {
@@ -2431,7 +3001,7 @@ fn load_schema(providers: &[String]) -> Result<schema::Schema> {
 }
 
 /// `--inventory PATH`, else `<world dir>/inventory.json` when `--world` is
-/// given and that file exists, else the stack's default (`.dform/inventory.json`).
+/// given and that file exists, else the stack's default (`dform.state/inventory.json`).
 fn resolve_inventory(
     explicit: &Option<PathBuf>,
     world: &Option<PathBuf>,
@@ -2474,25 +3044,426 @@ fn fmt_files(paths: &[PathBuf], check: bool) -> Result<()> {
     Ok(())
 }
 
-/// The stacks' state root, `.dform/`: in `--root`, else in the directory of
-/// the first program file (the working directory when there is none).
-fn state_root(cli: &Cli, files: &[PathBuf]) -> PathBuf {
-    let base = match (&cli.root, files.first()) {
-        (Some(root), _) => root.clone(),
-        (None, Some(f)) => f.parent().map(Path::to_path_buf).unwrap_or_default(),
-        (None, None) => PathBuf::new(),
+/// The manifest's `unknowns` default, said in the program's stack
+/// statement when it does not say its own: strict mode is the program's
+/// (`transform::STRICT_RULES`).
+fn with_default_unknowns(program: &mut crate::ast::Program, m: &crate::project::Manifest) {
+    let Some(u) = &m.defaults.unknowns else {
+        return;
     };
-    base.join(".dform")
+    for s in &mut program.statements {
+        if let crate::ast::Stmt::Stack(c) = s
+            && !c.config.iter().any(|(k, _, _)| k == "unknowns")
+        {
+            c.config
+                .push(("unknowns".into(), Term::Val(Value::Str(u.clone())), c.span));
+        }
+    }
 }
 
-fn default_files(files: &[PathBuf]) -> Result<Vec<PathBuf>> {
-    if !files.is_empty() {
-        return Ok(files.to_vec());
+/// The manifest under the program's own statements: a provider named
+/// without a `source` takes the manifest's entry of that name, and a stack
+/// statement that does not say its backend takes the manifest's default.
+fn with_manifest(cfg: &mut crate::stack::Stack, m: &crate::project::Manifest, file: &Path) {
+    for p in &mut cfg.providers {
+        if !p.contains('/')
+            && let Some(src) = m.provider_source(p)
+        {
+            *p = src;
+        }
     }
-    if Path::new("dform.df").exists() {
-        return Ok(vec![PathBuf::from("dform.df")]);
+    let name = cfg.name.clone().unwrap_or_else(|| state::stack_name(file));
+    if cfg.backend.is_none() {
+        cfg.backend = m.backend(&name);
     }
-    bail!("no input files: pass --file <path.df> (or create ./dform.df)")
+}
+
+/// A key input's value is the target's: `--set` of one is an error, as is
+/// a target key the stack does not have; an `apply` that is not of a plan
+/// file (`planned`) names every one.
+fn check_keys(cli: &Cli, cfg: &crate::stack::Stack, stack: &str, planned: bool) -> Result<()> {
+    let keys: Vec<&str> = cfg.keys.iter().map(|(k, _)| k.as_str()).collect();
+    for kv in &cli.user_set {
+        if let Some((k, _)) = kv.split_once('=')
+            && keys.contains(&k)
+        {
+            bail!(
+                "--set {kv}: {k} is stack {stack}'s key; name the deployment in the target: \
+                 `dform plan {stack} {kv}`"
+            );
+        }
+    }
+    for (k, _) in &cli.keys {
+        if !keys.contains(&k.as_str()) {
+            if keys.is_empty() {
+                bail!("{k}=...: stack {stack} has no key; give an input with `--set {k}=...`");
+            }
+            bail!(
+                "{k} is not a key of stack {stack} (its key: {}); give an input with `--set {k}=...`",
+                keys.join(", ")
+            );
+        }
+    }
+    if matches!(cli.cmd, Cmd::Apply { .. }) && !planned {
+        let missing: Vec<&str> = keys
+            .iter()
+            .filter(|k| !cli.keys.iter().any(|(x, _)| x == *k))
+            .copied()
+            .collect();
+        if !missing.is_empty() {
+            bail!(
+                "apply names its deployment: stack {stack} is keyed by {}, and the target gives \
+                 no {}: `dform apply {stack} {}`",
+                keys.join(", "),
+                missing.join(", "),
+                keys.iter()
+                    .map(|k| format!("{k}=..."))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            );
+        }
+    }
+    Ok(())
+}
+
+/// `dform stack list`: every stack discovery finds, its key and file, and
+/// per deployment with state its last apply and a pending saved plan.
+fn stack_list(cli: &Cli) -> Result<()> {
+    let project = crate::project::Project::find(Path::new("."), env!("CARGO_PKG_VERSION"))?;
+    let d = crate::project::discover(&project);
+    for w in &d.warnings {
+        eprintln!("warning: {w}");
+    }
+    d.check()?;
+    if d.stacks.is_empty() {
+        println!("no stacks in {}", project.root.display());
+        return Ok(());
+    }
+    let registry = crate::stack::registry(&cli.root)?;
+    for s in &d.stacks {
+        let key = if s.keys.is_empty() {
+            String::new()
+        } else {
+            format!("[{}]", s.keys.join(", "))
+        };
+        println!("{}{key}  {}", s.name, s.file.display());
+        // The stack's directory: its backend's, else the state root's.
+        let backend = loader::load_program(std::slice::from_ref(&s.file))
+            .ok()
+            .and_then(|p| crate::stack::config(&p).ok())
+            .and_then(|mut c| {
+                if let Some(m) = &project.manifest {
+                    with_manifest(&mut c, m, &s.file);
+                }
+                c.backend
+            });
+        let base = match backend {
+            Some(dir) => state::local_dir(&cli.root, &dir),
+            None => cli.root.join(&s.name),
+        };
+        let mut deployments: Vec<(String, PathBuf)> = Vec::new();
+        if s.keys.is_empty() {
+            deployments.push((s.name.clone(), state::state_path(&base)));
+        } else if let Ok(entries) = std::fs::read_dir(&base) {
+            let mut segs: Vec<String> = entries
+                .flatten()
+                .filter(|e| e.path().is_dir())
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .filter(|n| n.contains('='))
+                .collect();
+            segs.sort();
+            for seg in segs {
+                deployments.push((
+                    format!("{}[{seg}]", s.name),
+                    state::state_path(base.join(&seg)),
+                ));
+            }
+        }
+        for (name, e) in &registry {
+            let ours = name == &s.name || name.starts_with(&format!("{}[", s.name));
+            if ours && !deployments.iter().any(|(n, _)| n == name) {
+                deployments.push((name.clone(), e.state.clone()));
+            }
+        }
+        let mut any = false;
+        for (name, path) in deployments {
+            if !path.exists() && !crate::audit::path_beside(&path).exists() {
+                continue;
+            }
+            any = true;
+            let handed = registry
+                .get(&name)
+                .and_then(|e| e.backend.clone())
+                .map(|b| format!(" (handed over to {b})"))
+                .unwrap_or_default();
+            println!("  {name}{handed}: {}", last_apply(&path));
+        }
+        if !any {
+            println!("  no deployment has state");
+        }
+    }
+    Ok(())
+}
+
+/// A deployment's last apply and pending saved plan, from its audit log.
+fn last_apply(state: &Path) -> String {
+    let entries = crate::audit::read(&crate::audit::path_beside(state)).unwrap_or_default();
+    let field = |e: &serde_json::Value, k: &str| e[k].as_str().unwrap_or("").to_string();
+    let start = entries.iter().rposition(|e| e["kind"] == "apply_start");
+    let mut out = match start {
+        None => "never applied".to_string(),
+        Some(i) => {
+            let e = &entries[i];
+            let end = entries[i..]
+                .iter()
+                .find(|e| e["kind"] == "apply_end")
+                .map(|e| field(e, "result"))
+                .filter(|r| !r.is_empty())
+                .unwrap_or_else(|| "running or interrupted".into());
+            let commit = e["commit"]
+                .as_str()
+                .map(|c| format!(" at {}", &c[..c.len().min(12)]))
+                .unwrap_or_default();
+            format!(
+                "last apply {} by {}{commit}: {end}",
+                field(e, "time"),
+                field(e, "who")
+            )
+        }
+    };
+    let plan = entries
+        .iter()
+        .rposition(|e| e["kind"] == "plan" && e["file"].is_string() && e["digest"].is_string());
+    if let Some(p) = plan
+        && start.is_none_or(|s| p > s)
+    {
+        out.push_str(&format!(
+            "; plan pending: {} ({})",
+            field(&entries[p], "file"),
+            field(&entries[p], "digest")
+        ));
+    }
+    out
+}
+
+/// `dform state show`: the deployment's objects, by address.
+fn state_show(path: &Path, deployment: &str) -> Result<()> {
+    if !path.exists() {
+        bail!(
+            "stack {deployment} has no state at {}: it was never applied",
+            path.display()
+        );
+    }
+    let st = state::State::load(path)?;
+    println!("{deployment}: {}", path.display());
+    for (k, e) in &st.resources {
+        let addr = state::parse_key(k).map_or(k.clone(), |a| format!("{}/{}", a.typ, a.name));
+        println!("  {addr}  {} {}", e.provider, e.remote);
+    }
+    for (k, e) in &st.deposed {
+        let addr = state::parse_key(k).map_or(k.clone(), |a| format!("{}/{}", a.typ, a.name));
+        println!("  {addr} (deposed)  {} {}", e.provider, e.remote);
+    }
+    for (k, v) in &st.outputs {
+        println!("  output {k} = {}", partition::fmt_value(v));
+    }
+    if st.in_flight.is_some() {
+        println!("  an apply was interrupted: the next apply resumes it");
+    }
+    Ok(())
+}
+
+/// `TYPE/NAME`.
+fn parse_address(s: &str) -> Result<ir::Address> {
+    let (typ, name) = s
+        .split_once('/')
+        .filter(|(t, n)| !t.is_empty() && !n.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("expected an address TYPE/NAME, got '{s}'"))?;
+    Ok(ir::Address {
+        typ: typ.to_string(),
+        name: name.to_string(),
+    })
+}
+
+/// `dform state mv FROM TO`: the object state maps at FROM, at TO; under
+/// the deployment's lock, logged.
+fn state_mv(
+    path: &Path,
+    deployment: &str,
+    from: &str,
+    to: &str,
+    audit: &crate::audit::Log,
+) -> Result<()> {
+    let (old, new) = (parse_address(from)?, parse_address(to)?);
+    let _lock = crate::stack::Lock::acquire(path, deployment)?;
+    let mut st = state::State::load(path)?;
+    if st.get(&old).is_none() {
+        bail!("state mv: stack {deployment} has no object at {from}");
+    }
+    if st.get(&new).is_some() {
+        bail!("state mv: stack {deployment} already has an object at {to}");
+    }
+    st.apply_moves(&[(old, new)]);
+    st.save(path)?;
+    audit.append(
+        "state_mv",
+        serde_json::json!({ "from": from, "to": to, "who": crate::audit::who() }),
+    )?;
+    println!("moved {from} to {to} in stack {deployment}");
+    Ok(())
+}
+
+/// The top-level commands, and each noun's subcommands.
+const COMMANDS: &[&str] = &[
+    "plan",
+    "apply",
+    "why",
+    "query",
+    "test",
+    "fmt",
+    "log",
+    "stack",
+    "state",
+    "provider",
+    "controller",
+    "completions",
+    "dev",
+];
+
+fn subcommands(noun: &str) -> &'static [&'static str] {
+    match noun {
+        "stack" => &["list", "rekey", "handover", "unlock"],
+        "state" => &["show", "taint", "mv"],
+        "provider" => &["check", "schema"],
+        "controller" => &["run"],
+        "log" => &["verify"],
+        "completions" => &["zsh", "bash", "fish"],
+        "dev" => &[
+            "plan",
+            "apply",
+            "why",
+            "query",
+            "test",
+            "log",
+            "controller",
+            "strata",
+            "graph",
+            "eval",
+            "show",
+        ],
+        _ => &[],
+    }
+}
+
+/// `dform completions SHELL`: a script that completes commands, and asks
+/// `dform __complete` for targets.
+fn completion_script(shell: Shell) -> String {
+    let commands = COMMANDS.join(" ");
+    match shell {
+        Shell::Zsh => format!(
+            "#compdef dform\n\
+             # dform completions zsh > \"${{fpath[1]}}/_dform\"\n\
+             _dform() {{\n\
+             \x20 if (( CURRENT == 2 )); then\n\
+             \x20   compadd -- {commands}\n\
+             \x20 else\n\
+             \x20   compadd -- ${{(f)\"$(dform __complete ${{words[2,CURRENT-1]}} 2>/dev/null)\"}}\n\
+             \x20 fi\n\
+             }}\n\
+             compdef _dform dform\n"
+        ),
+        Shell::Bash => format!(
+            "# dform completions bash > /etc/bash_completion.d/dform\n\
+             _dform() {{\n\
+             \x20 local cur=${{COMP_WORDS[COMP_CWORD]}}\n\
+             \x20 if [ \"$COMP_CWORD\" -eq 1 ]; then\n\
+             \x20   COMPREPLY=($(compgen -W \"{commands}\" -- \"$cur\"))\n\
+             \x20 else\n\
+             \x20   COMPREPLY=($(compgen -W \"$(dform __complete \"${{COMP_WORDS[@]:1:COMP_CWORD-1}}\" 2>/dev/null)\" -- \"$cur\"))\n\
+             \x20 fi\n\
+             }}\n\
+             complete -F _dform dform\n"
+        ),
+        Shell::Fish => format!(
+            "# dform completions fish > ~/.config/fish/completions/dform.fish\n\
+             complete -c dform -f -n '__fish_use_subcommand' -a '{commands}'\n\
+             complete -c dform -f -n 'not __fish_use_subcommand' -a '(dform __complete (commandline -opc)[2..-1])'\n"
+        ),
+    }
+}
+
+/// `dform __complete WORDS...`: the candidates for the word after WORDS
+/// (the command line without `dform`): a noun's subcommands, else stack
+/// names from discovery, the deployments with state, and after a stack's
+/// name the values of its key inputs' enum types.
+fn complete(words: &[String]) -> Result<()> {
+    let words: Vec<&str> = words
+        .iter()
+        .map(String::as_str)
+        .filter(|w| !w.starts_with('-'))
+        .collect();
+    let out: Vec<String> = match words.as_slice() {
+        [noun] if !subcommands(noun).is_empty() => {
+            subcommands(noun).iter().map(|s| s.to_string()).collect()
+        }
+        _ => {
+            let project = crate::project::Project::find(Path::new("."), env!("CARGO_PKG_VERSION"))?;
+            let d = crate::project::discover(&project);
+            let mut out: Vec<String> = Vec::new();
+            match words.last().and_then(|w| d.named(w).first().copied()) {
+                Some(s) => out.extend(key_values(s)),
+                None => {
+                    out.extend(d.stacks.iter().map(|s| s.name.clone()));
+                    let root = project.state_root();
+                    for s in d.stacks.iter().filter(|s| !s.keys.is_empty()) {
+                        let Ok(entries) = std::fs::read_dir(root.join(&s.name)) else {
+                            continue;
+                        };
+                        for e in entries.flatten() {
+                            let seg = e.file_name().to_string_lossy().into_owned();
+                            if seg.contains('=') && e.path().join("state.json").exists() {
+                                out.push(format!("{}[{seg}]", s.name));
+                            }
+                        }
+                    }
+                }
+            }
+            out
+        }
+    };
+    let mut out = out;
+    out.sort();
+    out.dedup();
+    for c in out {
+        println!("{c}");
+    }
+    Ok(())
+}
+
+/// `K=V` for each value of each key input with an enum type.
+fn key_values(s: &crate::project::Found) -> Vec<String> {
+    let Ok(program) = loader::load_program(std::slice::from_ref(&s.file)) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for st in &program.statements {
+        let crate::ast::Stmt::Input(i) = st else {
+            continue;
+        };
+        if !s.keys.contains(&i.name) {
+            continue;
+        }
+        if let crate::ast::TypeExpr::Apply(n, args) = &i.ty
+            && n == "enum"
+        {
+            for a in args {
+                if let crate::ast::TypeExpr::Str(v) | crate::ast::TypeExpr::Name(v) = a {
+                    out.push(format!("{}={v}", i.name));
+                }
+            }
+        }
+    }
+    out
 }
 
 fn build_extra_facts(data: &[String]) -> Result<Vec<Atom>> {

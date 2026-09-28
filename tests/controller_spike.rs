@@ -7,7 +7,7 @@ use common::Scratch;
 use std::process::Command;
 
 const WORKLOAD: &str = include_str!("../examples/bootstrap/stacks/workload.df");
-const WORLD: &str = ".dform/renfry.workload/remote.json";
+const WORLD: &str = "dform.state/renfry.workload/remote.json";
 
 fn release(s: &Scratch, image: &str) {
     s.write(
@@ -41,9 +41,8 @@ fn log(stdout: &str) -> Vec<String> {
 }
 
 fn once(s: &Scratch, extra: &[&str]) -> Vec<String> {
-    let mut args = vec!["--root", ".", "--file", "stacks/workload.df"];
-    args.extend_from_slice(extra);
-    args.extend(["controller", "--stack", "renfry.workload", "--once"]);
+    let mut args = extra.to_vec();
+    args.extend(["controller", "run", "stacks/workload.df", "--once"]);
     log(&s.run(&args).success().stdout)
 }
 
@@ -174,7 +173,7 @@ fn an_input_change_reconciles_held_drift() {
 /// The published digest of a held approval.
 fn pending_digest(s: &Scratch) -> String {
     let doc: serde_json::Value =
-        serde_json::from_str(&s.read(".dform/renfry.workload/approval-pending.json")).unwrap();
+        serde_json::from_str(&s.read("dform.state/renfry.workload/approval-pending.json")).unwrap();
     doc["digest"].as_str().unwrap().to_string()
 }
 
@@ -247,7 +246,7 @@ fn a_prod_rollout_is_held_until_its_plan_is_approved() {
     );
     assert!(s.read(WORLD).contains("k8s.deployment"));
     assert!(
-        !s.path(".dform/renfry.workload/approval-pending.json")
+        !s.path("dform.state/renfry.workload/approval-pending.json")
             .exists()
     );
     // The next release is another plan: held again, the old token is for
@@ -265,12 +264,12 @@ fn a_prod_rollout_is_held_until_its_plan_is_approved() {
         .trim()
         .trim_start_matches("approval(\"")
         .trim_end_matches("\")");
-    s.write(".dform/renfry.workload/approvals/alice.token", token);
+    s.write("dform.state/renfry.workload/approvals/alice.token", token);
     let got = once(&s, &prod);
     assert_eq!(
         got[..2],
         [
-            "event approval (.dform/renfry.workload/approvals changed)".to_string(),
+            "event approval (dform.state/renfry.workload/approvals changed)".to_string(),
             "tick 1: plan: 1 deformation (1 update)".to_string(),
         ]
     );
@@ -281,9 +280,7 @@ fn a_prod_rollout_is_held_until_its_plan_is_approved() {
 #[test]
 fn plan_reads_an_input_relation_and_rejects_a_stray_fact() {
     let s = setup("ctl-plan");
-    let r = s
-        .run(&["--root", ".", "--file", "stacks/workload.df", "plan"])
-        .success();
+    let r = s.run(&["plan", "stacks/workload.df"]).success();
     assert!(
         r.stdout
             .contains("spec.template.spec.containers[name=web].image = \"gcr.io/renfry/web:1.0\""),
@@ -294,9 +291,7 @@ fn plan_reads_an_input_relation_and_rejects_a_stray_fact() {
         "data/release.facts",
         "edition 2026\n\nrelease(\"a\")\nrelaese(\"b\")\n",
     );
-    let r = s
-        .run(&["--root", ".", "--file", "stacks/workload.df", "plan"])
-        .failure();
+    let r = s.run(&["plan", "stacks/workload.df"]).failure();
     assert!(
         r.stderr.contains(
             "relaese/1 is not an input relation declared from file stacks/../data/release.facts",
@@ -308,7 +303,7 @@ fn plan_reads_an_input_relation_and_rejects_a_stray_fact() {
         "bad.df",
         "edition 2026\n\ninput relation r/1 from url(\"http://x\")\nq(x) if r(x)\n",
     );
-    let r = s.run(&["--file", "bad.df", "plan"]).failure();
+    let r = s.run(&["plan", "bad.df"]).failure();
     assert!(
         r.stderr.contains("input relation r/1: unknown source"),
         "{}",
@@ -374,15 +369,13 @@ fn the_polling_loop_runs_an_event_per_change() {
     let s = setup("ctl-loop");
     let mut child = Command::new(env!("CARGO_BIN_EXE_dform"))
         .args([
-            "--root",
-            ".",
-            "--file",
-            "stacks/workload.df",
             "controller",
+            "run",
             "--poll",
             "20",
             "--max-events",
             "2",
+            "stacks/workload.df",
         ])
         .current_dir(&s.dir)
         .stdout(std::process::Stdio::piped())
@@ -435,23 +428,12 @@ fn the_polling_loop_runs_an_event_per_change() {
 }
 
 #[test]
-fn the_controller_refuses_a_stack_that_is_not_the_programs() {
+fn the_controller_runs_a_stack_of_the_project() {
     let s = setup("ctl-stack");
-    let r = s
-        .run(&[
-            "--root",
-            ".",
-            "--file",
-            "stacks/workload.df",
-            "controller",
-            "--stack",
-            "other",
-            "--once",
-        ])
-        .failure();
+    let r = s.run(&["controller", "run", "other", "--once"]).failure();
     assert!(
-        r.stderr
-            .contains("the program (stacks/workload.df) owns stack renfry.workload"),
+        r.stderr.contains("no stack other in the project")
+            && r.stderr.contains("renfry.workload  stacks/workload.df"),
         "{}",
         r.stderr
     );

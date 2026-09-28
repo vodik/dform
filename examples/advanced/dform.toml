@@ -1,1 +1,4 @@
-# The advanced project: its root (docs/layout.md).
+# The advanced project's root (docs/layout.md).
+
+[project]
+name = "advanced"

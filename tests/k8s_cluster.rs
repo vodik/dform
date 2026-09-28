@@ -119,7 +119,7 @@ fn scratch(name: &str) -> Scratch {
 }
 
 /// Apply, then nothing to do; a change is a dry-run-planned update; the
-/// schema came from the cluster and is cached in the state directory.
+/// schema came from the cluster and is cached in dform.state/cache/.
 #[test]
 fn applies_and_converges_on_a_cluster() {
     let Some(kc) = kubeconfig("applies_and_converges_on_a_cluster") else {
@@ -128,14 +128,14 @@ fn applies_and_converges_on_a_cluster() {
     let ns = Namespace::new(&kc);
     let s = scratch("k8s-cluster-apply");
     s.write("p.df", &program(&ns.name, "nginx:1.27"));
-    let r = dform(&s, &kc, &["--file", "p.df", "apply"]).success();
+    let r = dform(&s, &kc, &["apply", "p.df"]).success();
     assert!(!r.stderr.contains("offline"), "{}", r.stderr);
-    let r = dform(&s, &kc, &["--file", "p.df", "plan"]).success();
+    let r = dform(&s, &kc, &["plan", "p.df"]).success();
     assert_eq!(r.summary(), "stack p is undeformed", "{}", r.stdout);
-    assert!(s.path(".dform/p/k8s-openapi.json").exists());
+    assert!(s.path("dform.state/cache/k8s-openapi.json").exists());
 
     s.write("p.df", &program(&ns.name, "nginx:1.28"));
-    let r = dform(&s, &kc, &["--file", "p.df", "plan"]).success();
+    let r = dform(&s, &kc, &["plan", "p.df"]).success();
     assert!(
         r.stdout.contains(
             "spec.template.spec.containers[name=web].image: \"nginx:1.27\" -> \"nginx:1.28\""
@@ -143,8 +143,8 @@ fn applies_and_converges_on_a_cluster() {
         "{}",
         r.stdout
     );
-    dform(&s, &kc, &["--file", "p.df", "apply"]).success();
-    let r = dform(&s, &kc, &["--file", "p.df", "plan"]).success();
+    dform(&s, &kc, &["apply", "p.df"]).success();
+    let r = dform(&s, &kc, &["plan", "p.df"]).success();
     assert_eq!(r.summary(), "stack p is undeformed", "{}", r.stdout);
 }
 
@@ -158,7 +158,7 @@ fn a_field_another_manager_owns_fails_the_apply() {
     let ns = Namespace::new(&kc);
     let s = scratch("k8s-cluster-conflict");
     s.write("p.df", &program(&ns.name, "nginx:1.27"));
-    dform(&s, &kc, &["--file", "p.df", "apply"]).success();
+    dform(&s, &kc, &["apply", "p.df"]).success();
 
     let (rt, client) = client(&kc);
     let api: kube::Api<k8s_openapi::api::apps::v1::Deployment> =
@@ -172,7 +172,7 @@ fn a_field_another_manager_owns_fails_the_apply() {
     ))
     .unwrap();
 
-    let r = dform(&s, &kc, &["--file", "p.df", "apply"]).failure();
+    let r = dform(&s, &kc, &["apply", "p.df"]).failure();
     assert!(
         r.stderr.contains("apply k8s.deployment/web")
             && r.stderr
@@ -193,11 +193,11 @@ fn a_removed_resource_is_deleted() {
     let ns = Namespace::new(&kc);
     let s = scratch("k8s-cluster-delete");
     s.write("p.df", &program(&ns.name, "nginx:1.27"));
-    dform(&s, &kc, &["--file", "p.df", "apply"]).success();
+    dform(&s, &kc, &["apply", "p.df"]).success();
     let without = program(&ns.name, "nginx:1.27");
     let without = &without[..without.find("resource k8s.deployment").unwrap()];
     s.write("p.df", without);
-    let r = dform(&s, &kc, &["--file", "p.df", "apply"]).success();
+    let r = dform(&s, &kc, &["apply", "p.df"]).success();
     assert!(r.stdout.contains("- k8s.deployment.web"), "{}", r.stdout);
 
     let (rt, client) = client(&kc);

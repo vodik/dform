@@ -4,7 +4,7 @@
 //! wire backends link it in (`Linked`). dform talks to it as to any
 //! provider.
 //!
-//! The world file (`--world`, default `.dform/<stack>/remote.json`, given
+//! The world file (`--world`, default `dform.state/<stack>/remote.json`, given
 //! at Configure) is what "exists": each object's configured `attrs` and its
 //! `computed` values. Read answers from it; Apply writes it back after every
 //! call. The inventory file is what Query answers `cloud_exists/2`,
@@ -15,7 +15,7 @@
 //! class and type). A sensitive computed value stays in the world; what
 //! Read and Apply hand back is its label, `{"$secret": "T/N#Attr"}`.
 //!
-//! Chaos knobs (`apply --chaos`, `chaos`) arrive at Configure. The world's
+//! Chaos knobs (`dform dev --chaos`, `chaos`) arrive at Configure. The world's
 //! clock advances at every END_TICK, when chaos `mutate` lands.
 
 use anyhow::{Context, Result, anyhow, bail};

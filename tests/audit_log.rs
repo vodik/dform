@@ -15,7 +15,7 @@ resource compute.vm app { subnet_id = ref(net.subnet, "a", "id") }
 "#;
 
 fn dform(s: &Scratch, args: &[&str]) -> common::Run {
-    s.run(&[&["--file", "p.df", "--world", "w.json"][..], args].concat())
+    s.run(&common::on("p.df", &["--world", "w.json"], args))
 }
 
 fn entries(s: &Scratch) -> Vec<serde_json::Value> {
@@ -165,9 +165,9 @@ fn an_edited_entry_is_named() {
 fn a_controller_event_is_in_the_chain() {
     let s = Scratch::new("audit-controller");
     s.write("p.df", PROG);
-    s.run(&["--file", "p.df", "controller", "--once"]).success();
-    s.run(&["--file", "p.df", "controller", "--once"]).success();
-    let r = s.run(&["--file", "p.df", "log", "--json"]).success();
+    s.run(&["controller", "run", "--once", "p.df"]).success();
+    s.run(&["controller", "run", "--once", "p.df"]).success();
+    let r = s.run(&["log", "--json", "p.df"]).success();
     let es: Vec<serde_json::Value> = serde_json::from_str(&r.stdout).unwrap();
     let events: Vec<&str> = es
         .iter()
@@ -178,7 +178,7 @@ fn a_controller_event_is_in_the_chain() {
     let k = kinds(&es);
     assert_eq!(k[0], "controller");
     assert!(k.contains(&"action".to_string()), "{k:?}");
-    let r = s.run(&["--file", "p.df", "log", "verify"]).success();
+    let r = s.run(&["log", "verify", "p.df"]).success();
     assert!(r.stdout.contains("the chain holds"), "{}", r.stdout);
 }
 
@@ -231,22 +231,14 @@ fn a_sink_gets_every_entry_and_its_failure_is_a_warning() {
 fn a_handover_is_logged_where_the_state_goes() {
     let s = Scratch::new("audit-handover");
     s.write("p.df", PROG);
-    s.run(&["--file", "p.df", "apply"]).success();
-    s.run(&[
-        "--file",
-        "p.df",
-        "stack",
-        "handover",
-        "p",
-        "--to",
-        "local(\"moved\")",
-    ])
-    .success();
+    s.run(&["apply", "p.df"]).success();
+    s.run(&["stack", "handover", "p", "--to", "local(\"moved\")"])
+        .success();
     let log = s.read("moved/state.audit.jsonl");
     let last: serde_json::Value = serde_json::from_str(log.lines().last().unwrap()).unwrap();
     assert_eq!(last["kind"], "handover");
     assert_eq!(last["to"], "local(\"moved\")");
-    let r = s.run(&["--file", "p.df", "log", "verify"]).success();
+    let r = s.run(&["log", "verify", "p.df"]).success();
     assert!(r.stdout.contains("moved/state.audit.jsonl"), "{}", r.stdout);
 }
 
@@ -258,12 +250,9 @@ fn a_rekey_is_logged_where_the_state_goes() {
         "edition 2026\n\nstack k[env] {\n  isolated = true\n}\n\ninput env: string = \"a\"\n\n\
          resource net.vpc main {\n  cidr = \"10.0.0.0/16\"\n}\n",
     );
-    s.run(&["--file", "k.df", "apply"]).success();
-    s.run(&["--file", "k.df", "stack", "rekey", "k", "env=a", "env=b"])
-        .success();
-    let r = s
-        .run(&["--file", "k.df", "--set", "env=b", "log", "--json"])
-        .success();
+    s.run(&["apply", "k.df", "env=a"]).success();
+    s.run(&["stack", "rekey", "k", "env=a", "env=b"]).success();
+    let r = s.run(&["log", "--json", "k.df", "env=b"]).success();
     let es: Vec<serde_json::Value> = serde_json::from_str(&r.stdout).unwrap();
     let last = es.last().unwrap();
     assert_eq!(last["kind"], "rekey");
@@ -271,6 +260,5 @@ fn a_rekey_is_logged_where_the_state_goes() {
         (&last["from"], &last["to"]),
         (&"k[env=a]".into(), &"k[env=b]".into())
     );
-    s.run(&["--file", "k.df", "--set", "env=b", "log", "verify"])
-        .success();
+    s.run(&["log", "verify", "k.df", "env=b"]).success();
 }
