@@ -2810,6 +2810,42 @@ fn eval_term(term: &Term, state: &HashMap<String, Value>) -> Option<Value> {
     }
 }
 
+/// The functions `eval_func` knows (a call to any other has no value).
+pub const FUNCTIONS: &[&str] = &[
+    "add",
+    "sub",
+    "mul",
+    "div",
+    "mod",
+    "ip",
+    "ip_str",
+    "inet",
+    "inet_str",
+    "iprange",
+    "ip_unspecified",
+    "inet_contains",
+    "inet_overlaps",
+    "inet_addr",
+    "inet_host",
+    "inet_subnet",
+    "scoped",
+    "format",
+    "concat",
+    "ref",
+    "declassify",
+    "cloud_ref",
+    "gref",
+    "cidrsubnet",
+    "to_int",
+    "to_string",
+    "prefix_len",
+    "len",
+    "lower",
+    "upper",
+    "split",
+    "join",
+];
+
 fn eval_func(name: &str, args: &[Term], state: &HashMap<String, Value>) -> Option<Value> {
     // Rule 2: every builtin argument is a content position. A builtin
     // over a null has no value; the literal that needs it is stuck.
@@ -3148,6 +3184,10 @@ fn eval_func(name: &str, args: &[Term], state: &HashMap<String, Value>) -> Optio
         },
         "to_string" => match args {
             [a] => scalar_text(&eval_term(a, state)?).map(Value::Str),
+            _ => None,
+        },
+        "prefix_len" => match args {
+            [a] => as_ipnet(&eval_term(a, state)?).map(|(_, p)| Value::Int(p as i64)),
             _ => None,
         },
         "len" => match args {
