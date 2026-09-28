@@ -249,3 +249,77 @@ fn ignore_changes_update_leaves_an_absent_path_absent() {
         s.read("w.json")
     );
 }
+
+/// prevent_destroy is a deny the evaluator derives from lifecycle/3 and the
+/// plan's deformation/4, so `why` explains it.
+#[test]
+fn why_explains_prevent_destroy() {
+    let s = Scratch::new("prevent-destroy-why");
+    s.write("p.df", NET);
+    dform(&s, &["apply"]).success();
+    s.write("p.df", "lifecycle(net.vpc, main, prevent_destroy).\n");
+    let r = dform(&s, &["why", "deny(M)"]).success();
+    assert!(
+        r.stdout.starts_with(
+            "deny(\"lifecycle prevent_destroy: the plan would delete net.vpc.main\")\n"
+        ),
+        "{}",
+        r.stdout
+    );
+    assert!(
+        r.stdout
+            .contains("lifecycle(\"net.vpc\", \"main\", \"prevent_destroy\")"),
+        "{}",
+        r.stdout
+    );
+    assert!(
+        r.stdout
+            .contains("deformation(\"delete\", \"net.vpc\", \"main\", "),
+        "{}",
+        r.stdout
+    );
+}
+
+/// A policy reads the deformation like any fact.
+#[test]
+fn policy_reads_the_deformation() {
+    let s = Scratch::new("policy-deformation");
+    s.write("p.df", NET);
+    dform(&s, &["apply"]).success();
+    s.write(
+        "p.df",
+        "resource compute.vm keep { size = 1 }.\n\
+         deny(M) :- deformation(delete, T, A, _), M = format(\"no deletes here: %s.%s\", T, A).\n",
+    );
+    let r = dform(&s, &["plan"]).failure();
+    assert!(
+        r.stdout.contains("denied:\n") && r.stdout.contains("no deletes here: net.vpc.main"),
+        "{}",
+        r.stdout
+    );
+    let r = dform(&s, &["query", "deformation(K, T, A, _)"]).success();
+    assert!(
+        r.stdout.contains("\"create\"") && r.stdout.contains("\"delete\""),
+        "{}",
+        r.stdout
+    );
+}
+
+/// Only policy may read the deformation: a resource rule over it would make
+/// the plan depend on itself.
+#[test]
+fn a_resource_rule_over_the_deformation_is_an_error() {
+    let s = Scratch::new("deformation-circular");
+    s.write(
+        "p.df",
+        "resource net.vpc main { cidr = \"10.0.0.0/16\" }.\n\
+         resource net.vpc shadow { cidr = \"10.1.0.0/16\" } :- deformation(create, \"net.vpc\", \"main\", _).\n",
+    );
+    let r = dform(&s, &["plan"]).failure();
+    assert!(
+        r.stderr
+            .contains("a resource rule reads deformation/4 or world_digest/3"),
+        "{}",
+        r.stderr
+    );
+}

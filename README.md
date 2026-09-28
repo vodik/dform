@@ -180,7 +180,8 @@ At a boundary apply also compares the refreshed world with what it last saw
 (the tick's refresh and its Apply responses). A change under an address whose
 deformation is pending for this boundary stops the run before the next tick,
 with the change printed (`the world changed under a pending deformation after
-tick N:`); a change anywhere else is reported as `drift after tick N:` and the
+tick N:`) and the deny that stops it (see "Policy over the plan" below); a
+change anywhere else is reported as `drift after tick N:` and the
 run goes on, the next tick deforming it back:
 
 ```bash
@@ -214,7 +215,7 @@ the mock mint a new id on every create, so the difference shows:
 
 ```bash
 cargo run -- apply --chaos fresh-ids
-cargo run -- apply --chaos fresh-ids --set env=prod   # vpcs replaced in tick 1, subnets moved in tick 2
+cargo run -- apply --chaos fresh-ids --set env=prod   # tick 1 replaces vpcs and subnets; tick 2 updates their readers
 ```
 
 Lifecycle is plain facts the planner reads (and policy can read too):
@@ -235,6 +236,29 @@ drops the path from the desired document and from the world's, and an
 update keeps the world's value there (or its absence). `prevent_destroy`
 blocks `plan` and `apply` with `lifecycle prevent_destroy: the plan would
 delete T.A`.
+
+Policy over the plan. Once the plan is computed its deformations go back to
+the evaluator as facts and the program is evaluated once more (the policy
+pass): `deformation(Kind, T, A, Before)` per deformation (`Kind` is
+`create`, `adopt`, `update`, `drift`, `pending`, `replace`, `delete` or
+`delete_deposed`; `Before` a digest of the world document it was planned
+against, `absent` for none) and `world_digest(T, A, Now)`. The lifecycle
+denies are rules over them (`zset::POLICY_RULES`): `prevent_destroy` reads
+`lifecycle/3` and a `delete` or `replace`, and at a phase boundary the held
+deformations come back as `pending` with the digest they were planned
+against, so the world moving under one is a deny too. `why` explains them,
+and a policy can read the same facts:
+
+```prolog
+deny(M) :- deformation(delete, T, A, _), M = format("no deletes here: %s.%s", T, A).
+```
+
+```bash
+cargo run -- why 'deny(M)'    # the deny, the lifecycle fact and the deformation it read
+```
+
+Only policy may read the deformation: a resource rule over it would make the
+plan depend on itself, and is an error.
 
 `apply --parallel N` (default 1) walks a tick's dependency DAG with at most N
 Apply calls in flight: a create or update waits for what its document

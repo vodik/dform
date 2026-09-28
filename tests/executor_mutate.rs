@@ -1,7 +1,8 @@
 //! The world mutates between phases: chaos `mutate=` lands after tick 1 and
 //! tick 2's refresh sees it. A change under an address with a pending
-//! deformation stops the run before tick 2 with the change printed; a
-//! change anywhere else is drift, reported, and the run goes on.
+//! deformation stops the run before tick 2 with the change printed (a deny
+//! over `deformation/4`); a change anywhere else is drift, reported, and
+//! the run goes on.
 
 mod common;
 use common::Scratch;
@@ -44,9 +45,18 @@ fn a_mutation_under_a_pending_deformation_stops_before_tick_two() {
         "{}",
         r.stderr
     );
+    // The stop is a deny the evaluator derives from the held deformation.
+    assert!(
+        r.stderr.contains(
+            "constraint violations after tick 1:\n\
+             - the world changed under a pending deformation: compute.vm.app\n"
+        ),
+        "{}",
+        r.stderr
+    );
     assert!(
         r.stderr
-            .contains("apply stopped after tick 1: the world changed under a pending deformation"),
+            .contains("apply stopped after tick 1: blocked by constraints"),
         "{}",
         r.stderr
     );

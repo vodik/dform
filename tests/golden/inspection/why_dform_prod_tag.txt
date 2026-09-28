@@ -1,7 +1,7 @@
 attr("net.vpc", "network.main::vpc", "tags", {component: "network", env: "prod", team: "platform"})
   by Σattr: attribute aggregate (lub_ranked, E §2.5) over 2 contributions
-  ├─ arg("net.vpc", "network.main::vpc", "tags", {team: "platform"}, "normal")   [rank normal, owner r69]
-  │    by r69: arg(Type, Name, "tags", {team: "platform"}, "normal") :- want(Type, Name)
+  ├─ arg("net.vpc", "network.main::vpc", "tags", {team: "platform"}, "normal")   [rank normal, owner r72]
+  │    by r72: arg(Type, Name, "tags", {team: "platform"}, "normal") :- want(Type, Name)
   │    with Name = "network.main::vpc", Type = "net.vpc"
   │    └─ want("net.vpc", "network.main::vpc")
   │         by r18: want("net.vpc", scoped("network.main", "vpc")) :- env(Env), param("network.main", "vpc_net", VpcNet)

@@ -38,6 +38,7 @@ use std::collections::{BTreeMap, BTreeSet};
 /// policy over the deformation; §3.4 for `moved`):
 ///
 ///   lifecycle(T, A, prevent_destroy).        a delete or replace of T/A is a deny
+///                                            (derived by `POLICY_RULES`)
 ///   lifecycle(T, A, create_before_destroy).  a replacement is created first
 ///                                            (where the schema's type_replace
 ///                                            allows either order)
@@ -46,7 +47,6 @@ use std::collections::{BTreeMap, BTreeSet};
 ///                                            once T/A exists; a create sets it
 #[derive(Debug, Clone, Default)]
 pub struct Lifecycle {
-    pub prevent_destroy: BTreeSet<Address>,
     pub create_before_destroy: BTreeSet<Address>,
     /// (old, new), applied to state before the diff.
     pub moved: Vec<(Address, Address)>,
@@ -82,9 +82,8 @@ impl Lifecycle {
                 name: name.to_string(),
             };
             match (f.pred.as_str(), *b) {
-                ("lifecycle", "prevent_destroy") => {
-                    out.prevent_destroy.insert(addr(a));
-                }
+                // A deny the evaluator derives (`POLICY_RULES`).
+                ("lifecycle", "prevent_destroy") => {}
                 ("lifecycle", "create_before_destroy") => {
                     if schema.replace_order(typ) == ReplaceOrder::DestroyFirst {
                         bail!(
@@ -120,27 +119,96 @@ impl Lifecycle {
             ReplaceOrder::Either => self.create_before_destroy.contains(addr),
         }
     }
+}
 
-    /// `prevent_destroy` as a deny over the plan: every delete or replace
-    /// of a protected address.
-    pub fn denies(&self, actions: &[crate::provider::Action]) -> Vec<String> {
-        use crate::provider::ActionKind;
-        actions
-            .iter()
-            .filter(|a| self.prevent_destroy.contains(&a.addr))
-            .filter_map(|a| {
-                let what = match a.kind {
-                    ActionKind::Delete => "delete",
-                    ActionKind::Replace { .. } => "replace",
-                    _ => return None,
-                };
-                Some(format!(
-                    "lifecycle prevent_destroy: the plan would {what} {}.{}",
-                    a.addr.typ, a.addr.name
-                ))
-            })
-            .collect()
+/// Policy over the plan (E §2.8: policy reads the deformation). The planner
+/// hands the deformation back to the evaluator as facts for a second pass
+/// (`deformation_facts`):
+///
+///   deformation(Kind, T, A, Before)  one per deformation: Kind is create,
+///                                    adopt, update, drift, pending, replace,
+///                                    delete or delete_deposed; Before the
+///                                    digest of the world document it was
+///                                    planned against (`absent` for none)
+///   world_digest(T, A, Now)          the world document's digest now
+///
+/// and these rules, appended to the program, derive the lifecycle denies
+/// from them, so `why` explains them and a policy can read the same facts.
+/// At a phase boundary the held deformations come back as `pending` with
+/// the digest they were planned against, against the refreshed world.
+pub const POLICY_RULES: &str = r#"
+deny(M) :- lifecycle(T, A, prevent_destroy), deformation(delete, T, A, _),
+  M = format("lifecycle prevent_destroy: the plan would delete %s.%s", T, A).
+deny(M) :- lifecycle(T, A, prevent_destroy), deformation(replace, T, A, _),
+  M = format("lifecycle prevent_destroy: the plan would replace %s.%s", T, A).
+deny(M) :- deformation(pending, T, A, Before), world_digest(T, A, Now), Before != Now,
+  M = format("the world changed under a pending deformation: %s.%s", T, A).
+"#;
+
+/// The program with `POLICY_RULES` appended: what every evaluation runs.
+pub fn with_policy_rules(mut program: crate::ast::Program) -> Result<crate::ast::Program> {
+    let rules = crate::parser::parse_program(POLICY_RULES)?;
+    program.statements.extend(rules.statements);
+    Ok(program)
+}
+
+/// A world document's digest for `deformation/4` and `world_digest/3`.
+pub fn doc_digest(doc: Option<&serde_json::Value>) -> String {
+    match doc {
+        Some(d) => file::fnv64(&serde_json::to_vec(d).unwrap_or_default()),
+        None => "absent".to_string(),
     }
+}
+
+/// `deformation/4`'s kind for an action; `held` when it waits on a
+/// boundary.
+pub fn deformation_kind(k: &crate::provider::ActionKind, held: bool) -> Option<&'static str> {
+    use crate::provider::ActionKind;
+    Some(match k {
+        ActionKind::Noop => return None,
+        _ if held => "pending",
+        ActionKind::Create => "create",
+        ActionKind::Adopt => "adopt",
+        ActionKind::Update => "update",
+        ActionKind::Drift => "drift",
+        ActionKind::Pending => "pending",
+        ActionKind::Replace { .. } => "replace",
+        ActionKind::Delete => "delete",
+        ActionKind::DeleteDeposed => "delete_deposed",
+    })
+}
+
+/// `deformation(Kind, T, A, Before)` for each deformation, with its
+/// `world_digest(T, A, Now)`. `before` is the document each was planned
+/// against, `now` the world as it is (at plan time the same).
+pub fn deformation_facts<'a>(
+    deformations: impl IntoIterator<Item = (&'static str, &'a Address)>,
+    before: &BTreeMap<Address, Option<serde_json::Value>>,
+    now: &BTreeMap<Address, serde_json::Value>,
+) -> Vec<Atom> {
+    let s = |x: &str| Term::Val(Value::Str(x.to_string()));
+    let mut out = Vec::new();
+    let mut seen = BTreeSet::new();
+    for (kind, addr) in deformations {
+        out.push(Atom {
+            pred: "deformation".into(),
+            args: vec![
+                s(kind),
+                s(&addr.typ),
+                s(&addr.name),
+                s(&doc_digest(before.get(addr).and_then(Option::as_ref))),
+            ],
+            record: None,
+        });
+        if seen.insert(addr) {
+            out.push(Atom {
+                pred: "world_digest".into(),
+                args: vec![s(&addr.typ), s(&addr.name), s(&doc_digest(now.get(addr)))],
+                record: None,
+            });
+        }
+    }
+    out
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

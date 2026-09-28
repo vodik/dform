@@ -182,6 +182,9 @@ fn main() -> Result<()> {
     for w in dform::lint::lint(&program, &set_keys) {
         eprintln!("warning: {w}");
     }
+    // Every evaluation carries the rules that derive the lifecycle denies
+    // from the deformation the planner hands back (`zset::POLICY_RULES`).
+    let program = zset::with_policy_rules(program)?;
 
     let root = PathBuf::from(".dform");
     for note in state::migrate_unscoped(&root)? {
@@ -207,15 +210,18 @@ fn main() -> Result<()> {
     base_extra.extend(backend.catalog()?);
     base_extra.extend(backend.discover()?);
     // Refresh as facts: round 0 resolves every null the world can answer,
-    // except those of `withheld` addresses (being replaced).
-    let evaluate_without = |st: &state::State,
-                            withheld: &BTreeSet<ir::Address>|
+    // except those of `withheld` addresses (being replaced). `more`: the
+    // deformation facts of a policy pass.
+    let evaluate_with = |st: &state::State,
+                         withheld: &BTreeSet<ir::Address>,
+                         more: &[Atom]|
      -> Result<(engine::EvalResult, Vec<String>)> {
         let mut extra = base_extra.clone();
         extra.extend(executor::withhold(backend.world_facts(st)?, withheld));
+        extra.extend(more.iter().cloned());
         engine::eval(&program, &extra)
     };
-    let evaluate = |st: &state::State| evaluate_without(st, &BTreeSet::new());
+    let evaluate = |st: &state::State| evaluate_with(st, &BTreeSet::new(), &[]);
     let (mut res, mut violations) = evaluate(&st)?;
     // moved/3 rewrites state's identity before the diff (E §3.4); round 0
     // must see the new addresses, so the program is evaluated again.
@@ -239,8 +245,12 @@ fn main() -> Result<()> {
         bail!("blocked by constraints");
     };
     // A plan prints what it would do, conflicts included (E §2.8: a
-    // conflict is a fact, not an abort), and then refuses.
-    if !matches!(cli.cmd, Cmd::Plan { .. }) {
+    // conflict is a fact, not an abort), and then refuses; query and why
+    // explain what blocks it.
+    if !matches!(
+        cli.cmd,
+        Cmd::Plan { .. } | Cmd::Query { .. } | Cmd::Why { .. }
+    ) {
         blocked(&violations)?;
     }
 
@@ -249,36 +259,90 @@ fn main() -> Result<()> {
     let adopts = ir::compile_adopts(res.facts.iter())?;
     let lifecycle = zset::Lifecycle::from_facts(&res.facts, backend.schema())?;
     let schema = backend.schema();
-    // The provider's plan for this evaluation. A replace makes a new object,
+    // The provider's plan for this evaluation (whose violations are
+    // `violations`), and the policy over it. A replace makes a new object,
     // so the nulls that named the old one are retracted (`executor`): the
     // program is evaluated again without the replaced identities, and what
-    // reads them is held until the replacement exists. Returns the
-    // evaluation and documents the plan was taken from, and its sections.
+    // reads them is held until the replacement exists. Then the policy pass
+    // (E §2.8): the plan's deformations go back to the evaluator as facts
+    // and the program is evaluated once more; the denies it derives beyond
+    // the plan's own evaluation are the denies over the plan. Returns that
+    // evaluation, the documents the plan was taken from, the plan, its
+    // sections and the denies.
     let plan_for = |res: engine::EvalResult,
+                    violations: &[String],
                     resources: Vec<ir::Resource>,
                     adopts: &[ir::Adopt],
                     lifecycle: &zset::Lifecycle,
                     st: &state::State|
-     -> Result<(
-        engine::EvalResult,
-        Vec<ir::Resource>,
-        dform::provider::Plan,
-        stuck::Sections,
-    )> {
+     -> Result<Planned> {
         let mut plan = backend.plan(&resources, adopts, lifecycle, st)?;
         let replaced = executor::replaced(&plan);
-        let (res, resources) = if replaced.is_empty() {
-            (res, resources)
+        let (res, violations, resources) = if replaced.is_empty() {
+            (res, violations.to_vec(), resources)
         } else {
-            let (again, _) = evaluate_without(st, &replaced)?;
+            let (again, violations) = evaluate_with(st, &replaced, &[])?;
             let docs = ir::compile_resources(again.facts.iter().cloned(), schema)?;
             plan = backend.plan_retracting(&docs, adopts, lifecycle, st, &replaced)?;
             executor::hold_dependents(&mut plan, &docs, &replaced);
-            (again, docs)
+            (again, violations, docs)
         };
         let sections = plan_sections(&res, &resources, schema);
         executor::hold_deposed(&mut plan, &resources, &sections);
-        Ok((res, resources, plan, sections))
+        drop(res);
+        let observed = backend.observe(st)?;
+        let before = observed
+            .iter()
+            .map(|(a, d)| (a.clone(), Some(d.clone())))
+            .collect();
+        let facts = zset::deformation_facts(
+            plan.actions.iter().filter_map(|a| {
+                let held = waits_on(a, &sections).is_some();
+                Some((zset::deformation_kind(&a.kind, held)?, &a.addr))
+            }),
+            &before,
+            &observed,
+        );
+        let (res, all) = evaluate_with(st, &replaced, &facts)?;
+        let again = ir::compile_resources(res.facts.iter().cloned(), schema)?;
+        if again.len() != resources.len()
+            || again
+                .iter()
+                .zip(&resources)
+                .any(|(a, b)| a.addr != b.addr || a.attrs != b.attrs)
+        {
+            bail!(
+                "a resource rule reads deformation/4 or world_digest/3: the plan would \
+                 depend on itself (only policy may read the deformation)"
+            );
+        }
+        let denies = all
+            .into_iter()
+            .filter(|v| !violations.contains(v))
+            .collect();
+        Ok(Planned {
+            res,
+            resources,
+            plan,
+            sections,
+            denies,
+        })
+    };
+    // query and why read the policy pass, so a deny over the plan can be
+    // asked for and explained; when there is no plan (planning fails), the
+    // program's own evaluation.
+    let explained = |res: engine::EvalResult| -> engine::EvalResult {
+        match plan_for(
+            res.clone(),
+            &violations,
+            resources.clone(),
+            &adopts,
+            &lifecycle,
+            &st,
+        ) {
+            Ok(p) => p.res,
+            Err(_) => res,
+        }
     };
     let report_of = |plan: &dform::provider::Plan,
                      res: &engine::EvalResult,
@@ -345,10 +409,12 @@ fn main() -> Result<()> {
             }
         }
         Cmd::Query { pattern, json } => {
+            let res = explained(res);
             let redact = query::Redactor::new(&res.facts, backend.schema());
             print_query(&pattern, &res.facts, &redact, json)?;
         }
         Cmd::Why { pattern, all } => {
+            let res = explained(res);
             let redact = query::Redactor::new(&res.facts, backend.schema());
             let query::Query::Body { body, .. } = query::parse(&pattern)? else {
                 bail!("why: expected a fact pattern such as 'want(net.vpc, N)', got '{pattern}'");
@@ -390,9 +456,13 @@ fn main() -> Result<()> {
             print!("{}", graph::relation(&spec, &res.facts, &redact)?);
         }
         Cmd::Plan { out, json } => {
-            let (res, resources, plan, sections) =
-                plan_for(res, resources, &adopts, &lifecycle, &st)?;
-            let denies = lifecycle.denies(&plan.actions);
+            let Planned {
+                res,
+                resources,
+                plan,
+                sections,
+                denies,
+            } = plan_for(res, &violations, resources, &adopts, &lifecycle, &st)?;
             let report = report_of(&plan, &res, &sections, 1, &moves, &denies);
             if json {
                 println!("{}", serde_json::to_string_pretty(&report.json())?);
@@ -516,12 +586,17 @@ fn main() -> Result<()> {
             // boundary the results come back as world facts, round 0
             // resolves them, everything is re-derived and policy is checked
             // again before the next tick.
-            let (mut res, mut resources, mut adopts, mut lifecycle) =
-                (res, resources, adopts, lifecycle);
+            let (mut res, mut violations, mut resources, mut adopts, mut lifecycle) =
+                (res, violations, resources, adopts, lifecycle);
             let mut tick = 1;
             loop {
-                let (r, docs, mut plan, sections) =
-                    plan_for(res, resources, &adopts, &lifecycle, &st)?;
+                let Planned {
+                    res: r,
+                    resources: docs,
+                    mut plan,
+                    sections,
+                    denies,
+                } = plan_for(res, &violations, resources, &adopts, &lifecycle, &st)?;
                 (res, resources) = (r, docs);
                 check_saved(&plan, &res, &sections, tick)?;
                 let held: Vec<String> = plan
@@ -543,12 +618,12 @@ fn main() -> Result<()> {
                 if tick > 1 || boundary {
                     println!("tick {tick}:");
                 }
-                let denies = lifecycle.denies(&plan.actions);
                 show(&plan, &res, &sections, tick, &[], &denies);
                 if !denies.is_empty() {
+                    let redact = query::Redactor::new(&res.facts, backend.schema());
                     eprintln!("constraint violations:");
                     for d in denies {
-                        eprintln!("- {d}");
+                        eprintln!("- {}", redact.text(&d));
                     }
                     bail!("apply stopped at tick {tick}: blocked by constraints");
                 }
@@ -610,9 +685,12 @@ fn main() -> Result<()> {
                         "apply stopped after {max_ticks} ticks (--max-ticks): the stack is still deformed"
                     );
                 }
-                // The boundary.
-                executor::check_boundary(&backend, &seen, &pending, &st, tick)?;
-                let (next, violations) = evaluate(&st)?;
+                // The boundary. The held deformations come back as facts
+                // with the documents they were planned against: the
+                // evaluator derives the deny when the world moved under one.
+                let held = executor::check_boundary(&backend, &seen, &pending, &st, tick)?;
+                let (next, next_violations) = evaluate_with(&st, &BTreeSet::new(), &held)?;
+                violations = next_violations;
                 let redact = query::Redactor::new(&next.facts, backend.schema());
                 for w in &next.warnings {
                     eprintln!("warning: {}", redact.text(w));
@@ -634,6 +712,20 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// A plan and the evaluation that sees it (`plan_for` in `main`).
+struct Planned {
+    /// The policy pass: the program with the plan's deformations as facts.
+    res: engine::EvalResult,
+    /// The documents the plan was taken from.
+    resources: Vec<ir::Resource>,
+    plan: dform::provider::Plan,
+    sections: stuck::Sections,
+    /// Denies over the plan: what the policy pass derives beyond the plan's
+    /// own evaluation (`lifecycle prevent_destroy`, a policy on
+    /// `deformation/4`).
+    denies: Vec<String>,
 }
 
 /// `moved/3` rewrites applied to state before the plan.

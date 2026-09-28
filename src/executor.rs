@@ -45,7 +45,7 @@ use crate::state::{self, InFlight, State};
 use crate::stuck::Sections;
 use crate::value::{Value, null_owner};
 use crate::zset::Lifecycle;
-use anyhow::{Result, bail};
+use anyhow::Result;
 use serde_json::Value as Json;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -313,19 +313,23 @@ pub fn remaining(f: &InFlight) -> Seen {
 }
 
 /// At a phase boundary: refresh and compare with what the executor last
-/// saw. The world changing under an address whose deformation is pending
-/// (held for this boundary) stops the run before the next tick, with the
-/// change printed: the pending diff was computed against a document that
-/// no longer exists. A change anywhere else is drift: it is reported and
-/// the run goes on; the next tick's plan deforms it back.
+/// saw. A change anywhere but under a held deformation is drift: it is
+/// reported and the run goes on; the next tick's plan deforms it back. The
+/// held deformations come back as facts for the boundary's evaluation,
+/// `deformation(pending, T, A, Before)` with the document each was planned
+/// against and `world_digest(T, A, Now)`, and the evaluator derives the deny
+/// when the world moved under one (`zset::POLICY_RULES`): the pending diff
+/// was computed against a document that no longer exists. That change is
+/// printed here, the deny stops the run.
 pub fn check_boundary(
     cloud: &FakeCloud,
     seen: &Seen,
     pending: &BTreeSet<Address>,
     state: &State,
     tick: usize,
-) -> Result<()> {
-    let changed = changed_under(cloud, seen, &cloud.observe(state)?);
+) -> Result<Vec<Atom>> {
+    let observed = cloud.observe(state)?;
+    let changed = changed_under(cloud, seen, &observed);
     let (under, drift): (Vec<_>, Vec<_>) =
         changed.into_iter().partition(|(a, _)| pending.contains(a));
     if !drift.is_empty() {
@@ -336,9 +340,16 @@ pub fn check_boundary(
             "the world changed under a pending deformation after tick {tick}:\n{}",
             format_changes(&under)
         );
-        bail!("apply stopped after tick {tick}: the world changed under a pending deformation");
     }
-    Ok(())
+    let before: BTreeMap<Address, Option<Json>> = pending
+        .iter()
+        .map(|a| (a.clone(), seen.get(a).cloned().flatten()))
+        .collect();
+    Ok(crate::zset::deformation_facts(
+        pending.iter().map(|a| ("pending", a)),
+        &before,
+        &observed,
+    ))
 }
 
 /// `~ T.N` and a `path: before -> after` line per change, as plan prints an

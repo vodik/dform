@@ -205,6 +205,8 @@ pub const PROVIDER_PREDS: &[&str] = &[
     "cloud_computed",
     "world_attr",
     "identity",
+    "deformation",
+    "world_digest",
     "type_attr",
     "type_list_key",
     "type_provider",
