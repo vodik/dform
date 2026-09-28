@@ -123,11 +123,10 @@ fn launches() -> [(Backend, Box<dyn Launch>); 3] {
 #[test]
 fn a_provider_without_a_handshake_deviates() {
     let s = Scratch::new("protocol-check-bad");
-    let script = s.write("dform-provider-bad", "#!/bin/sh\necho hello\n");
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    // An executable already on disk (echo prints an empty line), linked
+    // rather than written: a script written just before its exec races
+    // other tests' forks (ETXTBSY).
+    std::os::unix::fs::symlink("/bin/echo", s.path("dform-provider-bad")).unwrap();
     let r = s
         .run(&["provider", "check", "./dform-provider-bad"])
         .failure();

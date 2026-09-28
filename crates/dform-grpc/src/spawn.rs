@@ -40,6 +40,40 @@ pub fn fake_executable() -> Result<PathBuf> {
     )
 }
 
+/// Environment the provider starts with beyond dform's own: variables to
+/// set and ones to remove. Tests start a provider configured this way
+/// rather than writing a wrapper script to exec (a script written just
+/// before its exec races every other thread's fork: a child holding the
+/// write handle until its own exec makes the exec fail with ETXTBSY).
+#[derive(Debug, Clone, Default)]
+pub struct Env {
+    set: Vec<(String, String)>,
+    unset: Vec<String>,
+}
+
+impl Env {
+    /// Set `key` to `value` in the provider's environment.
+    pub fn set(mut self, key: &str, value: &str) -> Env {
+        self.set.push((key.to_string(), value.to_string()));
+        self
+    }
+
+    /// Remove `key` from the provider's environment.
+    pub fn unset(mut self, key: &str) -> Env {
+        self.unset.push(key.to_string());
+        self
+    }
+
+    fn apply(&self, cmd: &mut Command) {
+        for k in &self.unset {
+            cmd.env_remove(k);
+        }
+        for (k, v) in &self.set {
+            cmd.env(k, v);
+        }
+    }
+}
+
 /// A started provider: the process, its stdin (closing it asks it to
 /// exit), and the address its handshake named.
 pub struct Started {
@@ -48,10 +82,13 @@ pub struct Started {
     pub address: String,
 }
 
-/// Start `exe` and read its handshake line. Its stderr is dform's; what it
-/// prints on stdout after the handshake goes to dform's stderr.
-pub fn start(exe: &Path) -> Result<Started> {
-    let mut child = Command::new(exe)
+/// Start `exe` with `env` and read its handshake line. Its stderr is
+/// dform's; what it prints on stdout after the handshake goes to dform's
+/// stderr.
+pub fn start(exe: &Path, env: &Env) -> Result<Started> {
+    let mut cmd = Command::new(exe);
+    env.apply(&mut cmd);
+    let mut child = cmd
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())

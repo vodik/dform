@@ -9,7 +9,7 @@
 
 use crate::pb;
 use crate::pb::provider_client::ProviderClient;
-use crate::spawn::{self, Started};
+use crate::spawn::{self, Env, Started};
 use anyhow::{Context, Result};
 use dform_core::plugin::Launch;
 use dform_core::plugin::backend::{Call, CallError, Provider, Reply, Ticket};
@@ -43,13 +43,13 @@ pub struct Conn {
 }
 
 impl Conn {
-    /// Start the provider at `exe` and dial it.
-    pub fn start(exe: &Path) -> Result<Conn> {
+    /// Start the provider at `exe`, with `env`, and dial it.
+    pub fn start(exe: &Path, env: &Env) -> Result<Conn> {
         let Started {
             child,
             stdin,
             address,
-        } = spawn::start(exe)?;
+        } = spawn::start(exe, env)?;
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -77,9 +77,9 @@ impl Conn {
         })
     }
 
-    /// Start the provider at `exe`, dial it and shake hands.
-    pub fn link(exe: &Path) -> Result<Link> {
-        let conn = Conn::start(exe)?;
+    /// Start the provider at `exe`, with `env`, dial it and shake hands.
+    pub fn link(exe: &Path, env: &Env) -> Result<Link> {
+        let conn = Conn::start(exe, env)?;
         Link::start(exe.display().to_string(), Box::new(conn))
     }
 
@@ -216,10 +216,10 @@ pub struct Process;
 
 impl Launch for Process {
     fn mock(&self) -> Result<Link> {
-        Conn::link(&spawn::fake_executable()?)
+        Conn::link(&spawn::fake_executable()?, &Env::default())
     }
 
     fn plugin(&self, exe: &Path) -> Result<Link> {
-        Conn::link(exe)
+        Conn::link(exe, &Env::default())
     }
 }
