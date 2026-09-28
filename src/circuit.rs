@@ -11,20 +11,48 @@
 //! `touches` ((P(N), ∪, ∪): nulls whose resolution may change the fact).
 //! Two phase-boundary operations: `resolve` (substitute a null, re-attach the
 //! world leaf) and `retract` (deletion propagation, DRed-lite, no SCCs).
+//!
+//! The evaluator records every fact it inserts here (E DR-10: provenance is
+//! always on). A firing also keeps the rule's variable bindings, for `why`.
 
 use crate::lattice::{nulls_in, subst};
 use crate::value::Value;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 pub type NodeId = usize;
 
+/// E §3.1: a fact keeps at most this many alternatives; more are dropped
+/// and the fact is marked truncated.
+pub const MAX_ALTS: usize = 8;
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Leaf {
-    Base { span: String },
-    Rule { id: String },
-    Schema { span: String },
-    World { event: String },
-    Absent { pattern: String },
+    /// A fact the program states.
+    Base {
+        span: String,
+    },
+    /// A rule, by id; `Circuit::rule_text` has its text. `Σ` ids mark an
+    /// aggregate over its group.
+    Rule {
+        id: String,
+    },
+    Schema {
+        span: String,
+    },
+    World {
+        event: String,
+    },
+    /// A fact given on the command line (`--set`, `--data`).
+    Input {
+        source: String,
+    },
+    /// A row of an `extern` predicate, as the provider returned it.
+    Extern {
+        call: String,
+    },
+    Absent {
+        pattern: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -49,20 +77,57 @@ impl Fact {
 enum Node {
     Leaf(Leaf),
     /// A derived (or base) tuple with its alternatives (each a Times node).
+    /// `truncated`: a further firing was dropped at `MAX_ALTS`.
     Fact {
         fact: Fact,
         alts: Vec<NodeId>,
+        truncated: bool,
     },
     /// One firing: children are leaves and fact nodes.
     Times(Vec<NodeId>),
     Dead,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Circuit {
     nodes: Vec<Node>,
     by_fact: BTreeMap<Fact, NodeId>,
     leaves: BTreeMap<Leaf, NodeId>,
+    /// Per Times node: the rule's variable bindings for that firing.
+    bindings: BTreeMap<NodeId, Vec<(String, Value)>>,
+    /// Rule id -> rule text.
+    rule_text: BTreeMap<String, String>,
+    /// Firings already absorbed or truncated, so naive re-evaluation does
+    /// not re-test (or re-store) them.
+    rejected: HashSet<(NodeId, Vec<NodeId>)>,
+}
+
+/// A read-only view of one node, for printers.
+pub enum View<'a> {
+    Leaf(&'a Leaf),
+    Fact {
+        fact: &'a Fact,
+        alts: &'a [NodeId],
+        truncated: bool,
+    },
+    Times {
+        children: &'a [NodeId],
+        bindings: &'a [(String, Value)],
+    },
+    Dead,
+}
+
+/// Size of the circuit, for DR-10's cost claim.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Stats {
+    pub leaves: usize,
+    pub facts: usize,
+    pub times: usize,
+    pub dead: usize,
+    /// Edges from Times nodes to their children.
+    pub children: usize,
+    /// Estimated heap and inline bytes of everything the circuit holds.
+    pub bytes: usize,
 }
 
 impl Circuit {
@@ -87,47 +152,160 @@ impl Circuit {
     /// Derive `head` by one firing over `children`. If the tuple exists the
     /// firing is ⊕-ed in, with absorption on the leaf sets.
     pub fn derive(&mut self, head: Fact, children: Vec<NodeId>) -> NodeId {
-        let mut ch = children;
-        ch.sort();
-        ch.dedup();
-        self.nodes.push(Node::Times(ch));
-        let times = self.nodes.len() - 1;
+        self.derive_with(head, children, vec![])
+    }
+
+    /// `derive`, recording the firing's variable bindings.
+    pub fn derive_with(
+        &mut self,
+        head: Fact,
+        children: Vec<NodeId>,
+        bindings: Vec<(String, Value)>,
+    ) -> NodeId {
         if let Some(&id) = self.by_fact.get(&head) {
-            let new_set = self.leaf_set(times);
-            let Node::Fact { alts, .. } = &self.nodes[id] else {
-                unreachable!()
-            };
-            let existing: Vec<(NodeId, BTreeSet<BTreeSet<Leaf>>)> =
-                alts.iter().map(|a| (*a, self.why_node(*a))).collect();
-            // Absorption: a ⊕ (a ⊗ b) = a. Drop the new firing if some existing
-            // alternative's witness set is a subset of one of its own; drop
-            // existing alternatives the new one absorbs.
-            let absorbed = existing
-                .iter()
-                .any(|(_, w)| w.iter().any(|e| new_set.iter().all(|n| e.is_subset(n))));
-            if absorbed {
-                self.nodes[times] = Node::Dead;
-                return id;
-            }
-            let keep: Vec<NodeId> = existing
-                .iter()
-                .filter(|(_, w)| !w.iter().all(|e| new_set.iter().any(|n| n.is_subset(e))))
-                .map(|(a, _)| *a)
-                .collect();
-            let Node::Fact { alts, .. } = &mut self.nodes[id] else {
-                unreachable!()
-            };
-            *alts = keep;
-            alts.push(times);
+            self.fire(id, children, bindings);
             return id;
         }
+        let ch = normalize(children);
+        let times = self.push_times(ch, bindings);
         self.nodes.push(Node::Fact {
             fact: head.clone(),
             alts: vec![times],
+            truncated: false,
         });
         let id = self.nodes.len() - 1;
         self.by_fact.insert(head, id);
         id
+    }
+
+    /// ⊕ one more firing into the existing fact node `id`. The same firing
+    /// again is a no-op (hash-consing by child set); a firing some existing
+    /// alternative absorbs is dropped; alternatives it absorbs are evicted.
+    pub fn fire(&mut self, id: NodeId, children: Vec<NodeId>, bindings: Vec<(String, Value)>) {
+        let ch = normalize(children);
+        let Node::Fact { alts, .. } = &self.nodes[id] else {
+            panic!("fire: node {id} is not a fact")
+        };
+        if alts
+            .iter()
+            .any(|a| matches!(&self.nodes[*a], Node::Times(c) if *c == ch))
+        {
+            return;
+        }
+        let key = (id, ch);
+        if self.rejected.contains(&key) {
+            return;
+        }
+        let ch = key.1;
+        let new_set = self.why_children(&ch);
+        let existing: Vec<(NodeId, BTreeSet<BTreeSet<Leaf>>)> =
+            alts.iter().map(|a| (*a, self.why_node(*a))).collect();
+        // Absorption: a ⊕ (a ⊗ b) = a. Drop the new firing if some existing
+        // alternative's witness set is a subset of one of its own; drop
+        // existing alternatives the new one absorbs.
+        let absorbed = existing
+            .iter()
+            .any(|(_, w)| w.iter().any(|e| new_set.iter().all(|n| e.is_subset(n))));
+        let keep: Vec<NodeId> = existing
+            .iter()
+            .filter(|(_, w)| !w.iter().all(|e| new_set.iter().any(|n| n.is_subset(e))))
+            .map(|(a, _)| *a)
+            .collect();
+        if absorbed || keep.len() >= MAX_ALTS {
+            if !absorbed && let Node::Fact { truncated, .. } = &mut self.nodes[id] {
+                *truncated = true;
+            }
+            self.rejected.insert((id, ch));
+            return;
+        }
+        let times = self.push_times(ch, bindings);
+        let Node::Fact { alts, .. } = &mut self.nodes[id] else {
+            unreachable!()
+        };
+        *alts = keep;
+        alts.push(times);
+    }
+
+    fn push_times(&mut self, ch: Vec<NodeId>, bindings: Vec<(String, Value)>) -> NodeId {
+        self.nodes.push(Node::Times(ch));
+        let times = self.nodes.len() - 1;
+        if !bindings.is_empty() {
+            self.bindings.insert(times, bindings);
+        }
+        times
+    }
+
+    /// Name rule `id` with its text, for printers.
+    pub fn name_rule(&mut self, id: &str, text: &str) {
+        self.rule_text
+            .entry(id.to_string())
+            .or_insert_with(|| text.to_string());
+    }
+
+    pub fn rule_text(&self, id: &str) -> Option<&str> {
+        self.rule_text.get(id).map(String::as_str)
+    }
+
+    pub fn view(&self, id: NodeId) -> View<'_> {
+        match &self.nodes[id] {
+            Node::Leaf(l) => View::Leaf(l),
+            Node::Fact {
+                fact,
+                alts,
+                truncated,
+            } => View::Fact {
+                fact,
+                alts,
+                truncated: *truncated,
+            },
+            Node::Times(ch) => View::Times {
+                children: ch,
+                bindings: self.bindings.get(&id).map(Vec::as_slice).unwrap_or(&[]),
+            },
+            Node::Dead => View::Dead,
+        }
+    }
+
+    pub fn stats(&self) -> Stats {
+        let mut st = Stats::default();
+        let word = std::mem::size_of::<usize>();
+        st.bytes += self.nodes.capacity() * std::mem::size_of::<Node>();
+        for n in &self.nodes {
+            match n {
+                Node::Leaf(l) => {
+                    st.leaves += 1;
+                    // The node and the interning map each hold the text.
+                    st.bytes += 2 * leaf_bytes(l) + std::mem::size_of::<Leaf>() + word;
+                }
+                Node::Fact { fact, alts, .. } => {
+                    st.facts += 1;
+                    // The node and `by_fact` each hold the tuple.
+                    st.bytes += 2 * fact_bytes(fact)
+                        + std::mem::size_of::<Fact>()
+                        + word
+                        + alts.capacity() * word;
+                }
+                Node::Times(ch) => {
+                    st.times += 1;
+                    st.children += ch.len();
+                    st.bytes += ch.capacity() * word;
+                }
+                Node::Dead => st.dead += 1,
+            }
+        }
+        for b in self.bindings.values() {
+            st.bytes += word
+                + b.iter()
+                    .map(|(k, v)| k.len() + value_bytes(v) + std::mem::size_of::<(String, Value)>())
+                    .sum::<usize>();
+        }
+        for (k, v) in &self.rule_text {
+            st.bytes += k.len() + v.len() + 2 * std::mem::size_of::<String>();
+        }
+        for (_, ch) in &self.rejected {
+            st.bytes += word + ch.capacity() * word + std::mem::size_of::<Vec<NodeId>>();
+        }
+        st
     }
 
     /// Why-provenance: sets of leaf sets. ⊕ is union, ⊗ is pairwise union.
@@ -142,22 +320,23 @@ impl Circuit {
         match &self.nodes[id] {
             Node::Leaf(l) => BTreeSet::from([BTreeSet::from([l.clone()])]),
             Node::Fact { alts, .. } => alts.iter().flat_map(|a| self.why_node(*a)).collect(),
-            Node::Times(ch) => ch.iter().fold(BTreeSet::from([BTreeSet::new()]), |acc, c| {
-                let w = self.why_node(*c);
-                let mut out = BTreeSet::new();
-                for a in &acc {
-                    for b in &w {
-                        out.insert(a.union(b).cloned().collect());
-                    }
-                }
-                out
-            }),
+            Node::Times(ch) => self.why_children(ch),
             Node::Dead => BTreeSet::new(),
         }
     }
 
-    fn leaf_set(&self, times: NodeId) -> BTreeSet<BTreeSet<Leaf>> {
-        self.why_node(times)
+    /// ⊗ over a firing's children.
+    fn why_children(&self, ch: &[NodeId]) -> BTreeSet<BTreeSet<Leaf>> {
+        ch.iter().fold(BTreeSet::from([BTreeSet::new()]), |acc, c| {
+            let w = self.why_node(*c);
+            let mut out = BTreeSet::new();
+            for a in &acc {
+                for b in &w {
+                    out.insert(a.union(b).cloned().collect());
+                }
+            }
+            out
+        })
     }
 
     /// (P(N), ∩, ∪): nulls that must resolve before this fact is definite.
@@ -171,7 +350,7 @@ impl Circuit {
     fn phase_node(&self, id: NodeId) -> BTreeSet<String> {
         match &self.nodes[id] {
             Node::Leaf(_) | Node::Dead => BTreeSet::new(),
-            Node::Fact { fact, alts } => {
+            Node::Fact { fact, alts, .. } => {
                 let mut acc: Option<BTreeSet<String>> = None;
                 for a in alts {
                     let Node::Times(ch) = &self.nodes[*a] else {
@@ -202,7 +381,7 @@ impl Circuit {
     fn touches_node(&self, id: NodeId) -> BTreeSet<String> {
         match &self.nodes[id] {
             Node::Leaf(_) | Node::Dead => BTreeSet::new(),
-            Node::Fact { fact, alts } => {
+            Node::Fact { fact, alts, .. } => {
                 let mut out = fact.nulls();
                 for a in alts {
                     out.extend(self.touches_node(*a));
@@ -231,17 +410,17 @@ impl Circuit {
                 pred: old.pred.clone(),
                 args: old.args.iter().map(|a| subst(a, label, value)).collect(),
             };
-            let Node::Fact { fact, alts } = &mut self.nodes[id] else {
+            let Node::Fact { fact, alts, .. } = &mut self.nodes[id] else {
                 unreachable!()
             };
             *fact = new.clone();
             let alts_snapshot = alts.clone();
             for a in alts_snapshot {
-                if let Node::Times(ch) = &mut self.nodes[a] {
-                    if !ch.contains(&w) {
-                        ch.push(w);
-                        ch.sort();
-                    }
+                if let Node::Times(ch) = &mut self.nodes[a]
+                    && !ch.contains(&w)
+                {
+                    ch.push(w);
+                    ch.sort();
                 }
             }
             self.by_fact.remove(&old);
@@ -308,7 +487,7 @@ impl Circuit {
                 .nodes
                 .iter_mut()
                 .filter_map(|n| match n {
-                    Node::Fact { fact, alts } => {
+                    Node::Fact { fact, alts, .. } => {
                         alts.retain(|a| !dead_times.contains(a));
                         if alts.is_empty() {
                             Some(fact.clone())
@@ -326,6 +505,59 @@ impl Circuit {
 
     pub fn facts(&self) -> Vec<Fact> {
         self.by_fact.keys().cloned().collect()
+    }
+}
+
+fn normalize(mut ch: Vec<NodeId>) -> Vec<NodeId> {
+    ch.sort();
+    ch.dedup();
+    ch
+}
+
+fn leaf_bytes(l: &Leaf) -> usize {
+    match l {
+        Leaf::Base { span: s }
+        | Leaf::Rule { id: s }
+        | Leaf::Schema { span: s }
+        | Leaf::World { event: s }
+        | Leaf::Input { source: s }
+        | Leaf::Extern { call: s }
+        | Leaf::Absent { pattern: s } => s.len(),
+    }
+}
+
+/// Heap bytes of a tuple, for `Stats` and for sizing the bare fact store.
+pub fn fact_bytes(f: &Fact) -> usize {
+    f.pred.len()
+        + f.args.capacity() * std::mem::size_of::<Value>()
+        + f.args.iter().map(value_bytes).sum::<usize>()
+}
+
+fn value_bytes(v: &Value) -> usize {
+    match v {
+        Value::Str(s) => s.len(),
+        Value::List(xs) => {
+            xs.capacity() * std::mem::size_of::<Value>() + xs.iter().map(value_bytes).sum::<usize>()
+        }
+        // A BTreeMap node per entry, roughly key + value + two words.
+        Value::Obj(m) => m
+            .iter()
+            .map(|(k, v)| {
+                k.len()
+                    + std::mem::size_of::<(String, Value)>()
+                    + 2 * std::mem::size_of::<usize>()
+                    + value_bytes(v)
+            })
+            .sum(),
+        Value::Ref { typ, name, attr } | Value::CloudRef { typ, name, attr } => {
+            typ.len() + name.len() + attr.len()
+        }
+        Value::Null { label, ty, .. } => label.len() + ty.len(),
+        Value::Int(_)
+        | Value::Bool(_)
+        | Value::Ip(_)
+        | Value::IpNet { .. }
+        | Value::IpRange { .. } => 0,
     }
 }
 
@@ -440,7 +672,7 @@ mod tests {
         });
         c.derive(attr_sub.clone(), vec![other]);
         assert!(
-            c.phase(&attr_sub).is_empty() == false,
+            !c.phase(&attr_sub).is_empty(),
             "the tuple itself still carries the null, so it is not definite"
         );
         // But a null-free *tuple* with one null-free alternative and one null-carrying alternative:
@@ -693,5 +925,31 @@ mod tests {
         );
         c.derive(f.clone(), vec![r, a, b]); // absorbed by the second
         assert_eq!(c.why(&f).len(), 1);
+    }
+
+    #[test]
+    fn a_repeated_firing_is_stored_once_and_alternatives_are_capped() {
+        let mut c = Circuit::default();
+        let r = c.leaf(Leaf::Rule { id: "r".into() });
+        let f = Fact::new("p", vec![s("x")]);
+        let a = c.leaf(Leaf::Base { span: "a".into() });
+        c.derive(f.clone(), vec![r, a]);
+        let n = c.stats().times;
+        c.derive(f.clone(), vec![a, r]);
+        assert_eq!(c.stats().times, n, "naive re-evaluation adds no node");
+        for i in 0..MAX_ALTS + 2 {
+            let b = c.leaf(Leaf::Base {
+                span: format!("b{i}"),
+            });
+            c.derive(f.clone(), vec![r, b]);
+        }
+        let View::Fact {
+            alts, truncated, ..
+        } = c.view(c.fact_id(&f).unwrap())
+        else {
+            panic!()
+        };
+        assert_eq!(alts.len(), MAX_ALTS);
+        assert!(truncated);
     }
 }
