@@ -6,6 +6,7 @@ use dform::fakecloud::FakeCloud;
 use dform::ir;
 use dform::loader;
 use dform::provider::{ActionKind, Provider};
+use dform::schema;
 use dform::state;
 use dform::ast::Term;
 use dform::value::Value;
@@ -33,6 +34,11 @@ struct Cli {
     /// Show no-op actions in plan
     #[arg(long, global = true)]
     show_noop: bool,
+
+    /// Provider schema to mock: a name (providers/NAME/schema.df, else a
+    /// built-in) or a path to a schema .df file. Repeatable; default `fake`.
+    #[arg(long = "provider", global = true)]
+    providers: Vec<String>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -69,7 +75,7 @@ fn main() -> Result<()> {
         eprintln!("note: {note}");
     }
     let paths = state::stack_paths(&root, &state::stack_name(&files[0]));
-    let backend = FakeCloud::with_paths(&paths.world, &paths.inventory);
+    let backend = FakeCloud::with_paths(&paths.world, &paths.inventory, load_schema(&cli.providers)?);
 
     let mut st = state::State::load(&paths.state)?;
     backend.bootstrap_state(&mut st)?;
@@ -226,6 +232,19 @@ fn fmt_json_opt(v: Option<&serde_json::Value>) -> String {
             serde_json::to_string(other).unwrap_or_else(|_| "<unprintable>".to_string())
         }
     }
+}
+
+fn load_schema(providers: &[String]) -> Result<schema::Schema> {
+    let names: Vec<&str> = if providers.is_empty() {
+        vec!["fake"]
+    } else {
+        providers.iter().map(String::as_str).collect()
+    };
+    let mut out = schema::Schema::default();
+    for n in names {
+        out = out.merge(schema::load_provider(n)?)?;
+    }
+    Ok(out)
 }
 
 fn default_files(files: &[PathBuf]) -> Result<Vec<PathBuf>> {

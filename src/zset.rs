@@ -13,7 +13,6 @@
 //! The test compares the result with the current planner
 //! (`FakeCloud::plan_with_state`) on the same inputs.
 
-use crate::ast::Atom;
 use crate::fakecloud::FakeCloud;
 use crate::ir::{self, Address};
 use crate::lattice::{eq3, nulls_in, Truth};
@@ -193,7 +192,7 @@ pub fn summary(ds: &[Deformation]) -> BTreeMap<Kind, Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::Term;
+    use crate::ast::{Atom, Term};
     use crate::provider::{ActionKind, Provider};
     use std::path::PathBuf;
 

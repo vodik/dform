@@ -1,4 +1,5 @@
 use crate::ir::{Address, Resource};
+use crate::schema::Schema;
 use crate::provider::{Action, ActionKind, Change, Plan, Provider};
 use crate::state::{self, State};
 use crate::value::Value;
@@ -26,6 +27,7 @@ pub struct RemoteResource {
 pub struct FakeCloud {
     world: PathBuf,
     inventory: PathBuf,
+    schema: Schema,
 }
 
 impl Provider for FakeCloud {
@@ -74,17 +76,18 @@ impl Provider for FakeCloud {
 }
 
 impl FakeCloud {
-    /// A fake cloud whose world is `<root>/remote.json` and whose inventory is
-    /// `<root>/inventory.json`.
+    /// A fake cloud with the `fake` schema whose world is `<root>/remote.json`
+    /// and whose inventory is `<root>/inventory.json`.
     pub fn new(root: impl Into<PathBuf>) -> Self {
         let root = root.into();
-        Self::with_paths(root.join("remote.json"), root.join("inventory.json"))
+        Self::with_paths(root.join("remote.json"), root.join("inventory.json"), crate::schema::fake())
     }
 
-    pub fn with_paths(world: impl Into<PathBuf>, inventory: impl Into<PathBuf>) -> Self {
+    pub fn with_paths(world: impl Into<PathBuf>, inventory: impl Into<PathBuf>, schema: Schema) -> Self {
         Self {
             world: world.into(),
             inventory: inventory.into(),
+            schema,
         }
     }
 
@@ -145,51 +148,14 @@ impl FakeCloud {
         Ok(out)
     }
 
+    /// The provider's schema facts (`type_attr`, `type_list_key`,
+    /// `type_provider`, `type_mint`), injected into the program as EDB.
     pub fn catalog(&self) -> Result<Vec<Atom>> {
-        // Provide simple type ownership + a few capability conventions.
-        // In a real system, providers would return these from compiled metadata.
-        let provider = "fakecloud";
-        let types = [
-            "net.vpc",
-            "net.subnet",
-            "net.vpc_peering",
-            "compute.vm",
-            "db.postgres",
-            "k8s.cluster",
-            "k8s.nodepool",
-            "iam.role",
-            "iam.policy",
-            "iam.role_policy_attachment",
-        ];
+        Ok(self.schema.facts.clone())
+    }
 
-        let mut out = Vec::new();
-        for t in types {
-            out.push(Atom {
-                pred: "type_provider".to_string(),
-                args: vec![
-                    Term::Val(Value::Str(t.to_string())),
-                    Term::Val(Value::Str(provider.to_string())),
-                ],
-                record: None,
-            });
-            out.push(Atom {
-                pred: "capability".to_string(),
-                args: vec![
-                    Term::Val(Value::Str(t.to_string())),
-                    Term::Val(Value::Str("taggable".to_string())),
-                ],
-                record: None,
-            });
-            out.push(Atom {
-                pred: "tag_path".to_string(),
-                args: vec![
-                    Term::Val(Value::Str(t.to_string())),
-                    Term::Val(Value::Str("tags".to_string())),
-                ],
-                record: None,
-            });
-        }
-        Ok(out)
+    pub fn schema(&self) -> &Schema {
+        &self.schema
     }
 
     pub fn save(&self, st: &RemoteState) -> Result<()> {

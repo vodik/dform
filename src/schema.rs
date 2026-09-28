@@ -1,21 +1,44 @@
-//! Hand-written provider schemas for the F-revision prototype.
+//! Provider schemas as facts.
 //!
-//! Proposal E says the null class of `ref(T, A, Attr)` comes from the schema
-//! (§2.2). Nothing in the repo carries such a schema (the fake provider's
-//! `catalog()` only emits type_provider/capability/tag_path), so this module
-//! writes the two schemas the experiments need by hand:
+//! A provider's schema is a file of plain Datalog facts,
+//! `providers/<name>/schema.df`:
 //!
-//!   * `fake()`: the fake provider behind dform.df / dform-advanced.df /
-//!     the examples, with the computed attributes `computed_for` in
-//!     fakecloud.rs actually returns.
-//!   * `gke()`: C's two-phase GKE / kubernetes stack as re-run in E §7.4.
+//!   type_attr(T, Path, Ty, Flags).    % Flags drawn from required, computed,
+//!                                     % id, sensitive, nullable, optional_computed
+//!   type_list_key(T, Path, Keys).     % merge keys of a list attribute
+//!   type_provider(T, P).              % which provider owns T
+//!   type_mint(T, Path, Template).     % optional: how the mock mints a
+//!                                     % computed value ({type} {name} {attr} {hash})
 //!
-//! Both are used by the partition pass (to expand the computed-attribute
-//! prelude rule per schema row, E §4.3) and by the stuck simulation (to
-//! classify refs).
+//! The facts are injected into the program as EDB (so `dform query type_attr`
+//! lists them) and folded into [`Schema`], the in-memory view the partition
+//! pass, the stuck simulation and the fake provider read.
+//!
+//! Proposal E §2.2: the null class of `ref(T, A, Attr)` comes from the schema.
+//! `computed` + `id` is fresh, `computed` + `sensitive` is secret, `computed`
+//! alone is open. `optional_computed` (Terraform's Optional+Computed) is kept
+//! apart in [`Schema::optional_computed`]: the user may set it, and when they
+//! do not the provider picks a value at Apply.
 
-use crate::value::NullClass;
-use std::collections::BTreeMap;
+use crate::ast::{Atom, Stmt, Term};
+use crate::value::{NullClass, Value};
+use anyhow::{Context, Result, anyhow, bail};
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
+
+pub const FLAGS: [&str; 6] = ["required", "computed", "id", "sensitive", "nullable", "optional_computed"];
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AttrSpec {
+    pub ty: String,
+    pub flags: BTreeSet<String>,
+}
+
+impl AttrSpec {
+    pub fn has(&self, flag: &str) -> bool {
+        self.flags.contains(flag)
+    }
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct Schema {
@@ -24,6 +47,16 @@ pub struct Schema {
     /// type -> provider name. Used for "provider config carries a null"
     /// phase assignment.
     pub provider_of: BTreeMap<String, String>,
+    /// (type, attr) -> null class, for every Optional+Computed attribute.
+    pub optional_computed: BTreeMap<(String, String), NullClass>,
+    /// (type, attr) -> type and flags, for every declared attribute.
+    pub attrs: BTreeMap<(String, String), AttrSpec>,
+    /// (type, list attr) -> merge keys.
+    pub list_keys: BTreeMap<(String, String), Vec<String>>,
+    /// (type, attr) -> mint template for the fake provider.
+    pub mints: BTreeMap<(String, String), String>,
+    /// The facts the schema was built from, to inject as EDB.
+    pub facts: Vec<Atom>,
 }
 
 impl Schema {
@@ -37,70 +70,286 @@ impl Schema {
             .map(|((_, a), c)| (a.clone(), *c))
             .collect()
     }
+    /// Types with a computed attribute.
     pub fn types(&self) -> Vec<String> {
         let mut v: Vec<String> = self.computed.keys().map(|(t, _)| t.clone()).collect();
         v.sort();
         v.dedup();
         v
     }
-    fn add(&mut self, typ: &str, attr: &str, class: NullClass) {
-        self.computed.insert((typ.into(), attr.into()), class);
+    /// The class an Optional+Computed attribute's provider-picked value has.
+    pub fn optional_computed_class(&self, typ: &str, attr: &str) -> Option<NullClass> {
+        self.optional_computed.get(&(typ.to_string(), attr.to_string())).copied()
+    }
+    pub fn optional_computed_of(&self, typ: &str) -> Vec<(String, NullClass)> {
+        self.optional_computed
+            .iter()
+            .filter(|((t, _), _)| t == typ)
+            .map(|((_, a), c)| (a.clone(), *c))
+            .collect()
+    }
+    pub fn attr(&self, typ: &str, attr: &str) -> Option<&AttrSpec> {
+        self.attrs.get(&(typ.to_string(), attr.to_string()))
+    }
+    pub fn list_key(&self, typ: &str, attr: &str) -> Option<&[String]> {
+        self.list_keys.get(&(typ.to_string(), attr.to_string())).map(|v| v.as_slice())
+    }
+    pub fn knows_type(&self, typ: &str) -> bool {
+        self.provider_of.contains_key(typ) || self.attrs.keys().any(|(t, _)| t == typ)
+    }
+    /// Whether a value at `path` (normalized: dotted, no indices) is
+    /// sensitive: the path or an ancestor is declared `sensitive`.
+    pub fn is_sensitive(&self, typ: &str, path: &str) -> bool {
+        let mut p = path;
+        loop {
+            if self.attr(typ, p).is_some_and(|a| a.has("sensitive")) {
+                return true;
+            }
+            match p.rsplit_once('.') {
+                Some((parent, _)) => p = parent,
+                None => return false,
+            }
+        }
+    }
+
+    /// Build a schema from `type_attr`, `type_list_key`, `type_provider` and
+    /// `type_mint` facts. Other predicates are carried into `facts` untouched.
+    pub fn from_facts(facts: &[Atom]) -> Result<Schema> {
+        let mut s = Schema::default();
+        for f in facts {
+            let args: Vec<Value> = f.args.iter().map(ground).collect::<Result<_>>()?;
+            let bad = || anyhow!("schema fact {}/{}: wrong arity or argument kinds", f.pred, args.len());
+            match f.pred.as_str() {
+                "type_attr" => {
+                    let [Value::Str(t), Value::Str(p), ty, Value::List(flags)] = args.as_slice() else {
+                        return Err(bad());
+                    };
+                    let ty = match ty {
+                        Value::Str(s) => s.clone(),
+                        _ => return Err(bad()),
+                    };
+                    let mut fs = BTreeSet::new();
+                    for fl in flags {
+                        let Value::Str(fl) = fl else {
+                            bail!("type_attr({t}, {p}): flags must be symbols");
+                        };
+                        if !FLAGS.contains(&fl.as_str()) {
+                            bail!("type_attr({t}, {p}): unknown flag '{fl}' (expected one of {})", FLAGS.join(", "));
+                        }
+                        fs.insert(fl.clone());
+                    }
+                    if fs.contains("computed") && fs.contains("optional_computed") {
+                        bail!("type_attr({t}, {p}): computed and optional_computed are exclusive");
+                    }
+                    let class = if fs.contains("sensitive") {
+                        NullClass::Secret
+                    } else if fs.contains("id") {
+                        NullClass::Fresh
+                    } else {
+                        NullClass::Open
+                    };
+                    let key = (t.clone(), p.clone());
+                    if fs.contains("computed") {
+                        s.computed.insert(key.clone(), class);
+                    }
+                    if fs.contains("optional_computed") {
+                        s.optional_computed.insert(key.clone(), class);
+                    }
+                    if s.attrs.insert(key, AttrSpec { ty, flags: fs }).is_some() {
+                        bail!("type_attr({t}, {p}) declared twice");
+                    }
+                }
+                "type_list_key" => {
+                    let [Value::Str(t), Value::Str(p), Value::List(keys)] = args.as_slice() else {
+                        return Err(bad());
+                    };
+                    let keys = keys
+                        .iter()
+                        .map(|k| k.as_str().map(str::to_string).ok_or_else(bad))
+                        .collect::<Result<Vec<_>>>()?;
+                    s.list_keys.insert((t.clone(), p.clone()), keys);
+                }
+                "type_provider" => {
+                    let [Value::Str(t), Value::Str(p)] = args.as_slice() else {
+                        return Err(bad());
+                    };
+                    if let Some(prev) = s.provider_of.insert(t.clone(), p.clone()) {
+                        if &prev != p {
+                            bail!("type_provider({t}): claimed by both {prev} and {p}");
+                        }
+                    }
+                }
+                "type_mint" => {
+                    let [Value::Str(t), Value::Str(p), Value::Str(tpl)] = args.as_slice() else {
+                        return Err(bad());
+                    };
+                    s.mints.insert((t.clone(), p.clone()), tpl.clone());
+                }
+                _ => {}
+            }
+            s.facts.push(Atom {
+                pred: f.pred.clone(),
+                args: args.into_iter().map(Term::Val).collect(),
+                record: None,
+            });
+        }
+        for (t, p) in s.list_keys.keys() {
+            if let Some(a) = s.attr(t, p) {
+                if a.ty != "list" {
+                    bail!("type_list_key({t}, {p}): attribute has type {}, not list", a.ty);
+                }
+            }
+        }
+        Ok(s)
+    }
+
+    /// Parse a schema file's source: plain facts only.
+    pub fn parse(src: &str, origin: &str) -> Result<Schema> {
+        let prog = crate::parser::parse_program(src).with_context(|| format!("parse {origin}"))?;
+        let mut facts = Vec::new();
+        for st in prog.statements {
+            match st {
+                Stmt::Fact(a) => facts.push(a),
+                other => bail!("{origin}: a schema file holds facts only, found {other:?}"),
+            }
+        }
+        Schema::from_facts(&facts).with_context(|| format!("schema {origin}"))
+    }
+
+    pub fn load(path: &Path) -> Result<Schema> {
+        let src = std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+        Schema::parse(&src, &path.display().to_string())
+    }
+
+    /// Union of two schemas. A type may be claimed by one provider only.
+    pub fn merge(mut self, other: Schema) -> Result<Schema> {
+        for (t, p) in other.provider_of {
+            if let Some(prev) = self.provider_of.get(&t) {
+                if prev != &p {
+                    bail!("type {t} is claimed by both providers {prev} and {p}");
+                }
+            }
+            self.provider_of.insert(t, p);
+        }
+        for (k, v) in other.attrs {
+            if self.attrs.contains_key(&k) {
+                bail!("type_attr({}, {}) declared by two schemas", k.0, k.1);
+            }
+            self.attrs.insert(k, v);
+        }
+        self.computed.extend(other.computed);
+        self.optional_computed.extend(other.optional_computed);
+        self.list_keys.extend(other.list_keys);
+        self.mints.extend(other.mints);
+        self.facts.extend(other.facts);
+        Ok(self)
     }
 }
 
-/// The fake provider. `computed_for` in fakecloud.rs returns `id` for every
-/// type, plus `endpoint` for db.postgres and `api_endpoint` / `ca_cert` for
-/// k8s.cluster. `id` is fresh (an identity); the others are open.
+fn ground(t: &Term) -> Result<Value> {
+    match t {
+        Term::Val(v) => Ok(v.clone()),
+        Term::List(xs) => Ok(Value::List(xs.iter().map(ground).collect::<Result<_>>()?)),
+        other => bail!("schema facts must be ground, found {other:?}"),
+    }
+}
+
+/// Schemas shipped with the binary, by provider name. `providers/<name>/schema.df`
+/// in the working directory takes precedence (see [`load_provider`]).
+pub fn builtin(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "fake" => include_str!("../providers/fake/schema.df"),
+        "gke" => include_str!("../providers/gke/schema.df"),
+        _ => return None,
+    })
+}
+
+/// Resolve `--provider NAME`: a path to a `.df` file; else
+/// `providers/NAME/schema.df` under the working directory; else a built-in.
+pub fn load_provider(name: &str) -> Result<Schema> {
+    if name.ends_with(".df") || name.contains('/') {
+        return Schema::load(Path::new(name));
+    }
+    let local = Path::new("providers").join(name).join("schema.df");
+    if local.exists() {
+        return Schema::load(&local);
+    }
+    let src = builtin(name).ok_or_else(|| {
+        anyhow!("unknown provider '{name}': no {} and no built-in schema by that name", local.display())
+    })?;
+    Schema::parse(src, &format!("providers/{name}/schema.df"))
+}
+
+fn builtin_schema(name: &str) -> Schema {
+    Schema::parse(builtin(name).unwrap(), name).expect("built-in schema parses")
+}
+
+/// The fake provider behind dform.df / dform-advanced.df / the examples:
+/// `providers/fake/schema.df`.
 pub fn fake() -> Schema {
-    let mut s = Schema::default();
-    for t in [
-        "net.vpc",
-        "net.subnet",
-        "net.vpc_peering",
-        "net.route",
-        "compute.vm",
-        "db.postgres",
-        "k8s.cluster",
-        "k8s.nodepool",
-        "iam.role",
-        "iam.policy",
-        "iam.role_policy_attachment",
-    ] {
-        s.add(t, "id", NullClass::Fresh);
-        s.provider_of.insert(t.into(), "fakecloud".into());
-    }
-    s.add("db.postgres", "endpoint", NullClass::Open);
-    s.add("k8s.cluster", "api_endpoint", NullClass::Open);
-    s.add("k8s.cluster", "ca_cert", NullClass::Open);
-    s
+    builtin_schema("fake")
 }
 
-/// C's GKE example as E §7.4 spells it: the cluster's endpoint, ca and zones
-/// are open; ids are fresh; the client token and the secret version's data are
-/// secret. k8s.* types belong to the `kubernetes` provider, whose
-/// configuration carries three of those nulls.
+/// C's GKE example as E §7.4 spells it: `providers/gke/schema.df`.
 pub fn gke() -> Schema {
-    let mut s = Schema::default();
-    for t in [
-        "google_compute_subnetwork",
-        "google_compute_network_peering",
-        "google_compute_address",
-        "google_monitoring_dashboard",
-        "gke_cluster",
-        "gke_nodepool",
-    ] {
-        s.add(t, "id", NullClass::Fresh);
-        s.provider_of.insert(t.into(), "google".into());
+    builtin_schema("gke")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fake_schema_classes_match_the_hand_written_one() {
+        let s = fake();
+        assert_eq!(s.class_of("net.vpc", "id"), Some(NullClass::Fresh));
+        assert_eq!(s.class_of("db.postgres", "endpoint"), Some(NullClass::Open));
+        assert_eq!(s.class_of("k8s.cluster", "ca_cert"), Some(NullClass::Open));
+        assert_eq!(s.types().len(), 11);
+        assert_eq!(s.provider_of.get("net.route").map(String::as_str), Some("fakecloud"));
+        assert_eq!(s.computed.len(), 14);
     }
-    for t in ["k8s.namespace", "k8s.deployment", "k8s.secret"] {
-        s.add(t, "id", NullClass::Fresh);
-        s.add(t, "uid", NullClass::Fresh);
-        s.provider_of.insert(t.into(), "kubernetes".into());
+
+    #[test]
+    fn gke_schema_classes_match_the_hand_written_one() {
+        let s = gke();
+        assert_eq!(s.class_of("google.client_config", "access_token"), Some(NullClass::Secret));
+        assert_eq!(s.class_of("k8s.namespace", "uid"), Some(NullClass::Fresh));
+        assert_eq!(s.class_of("gke_cluster", "zones"), Some(NullClass::Open));
+        assert_eq!(s.provider_of.get("k8s.secret").map(String::as_str), Some("kubernetes"));
+        assert_eq!(s.provider_of.get("google.client_config"), None);
+        assert_eq!(s.computed.len(), 17);
     }
-    s.add("gke_cluster", "endpoint", NullClass::Open);
-    s.add("gke_cluster", "ca_certificate", NullClass::Open);
-    s.add("gke_cluster", "zones", NullClass::Open);
-    s.add("google.client_config", "access_token", NullClass::Secret);
-    s.add("google.secret_manager_secret_version", "secret_data", NullClass::Secret);
-    s
+
+    #[test]
+    fn flags_decide_the_class_and_optional_computed_is_separate() {
+        let s = Schema::parse(
+            r#"
+            type_attr(t, id, string, [computed, id]).
+            type_attr(t, endpoint, string, [computed]).
+            type_attr(t, password, string, [computed, sensitive]).
+            type_attr(t, zone, string, [optional_computed]).
+            type_attr(t, data, map, [sensitive]).
+            type_list_key(t, ports, [name, protocol]).
+            type_attr(t, ports, list, []).
+            "#,
+            "test",
+        )
+        .unwrap();
+        assert_eq!(s.class_of("t", "id"), Some(NullClass::Fresh));
+        assert_eq!(s.class_of("t", "endpoint"), Some(NullClass::Open));
+        assert_eq!(s.class_of("t", "password"), Some(NullClass::Secret));
+        assert_eq!(s.class_of("t", "zone"), None);
+        assert_eq!(s.optional_computed_class("t", "zone"), Some(NullClass::Open));
+        assert!(s.is_sensitive("t", "data.key"));
+        assert!(!s.is_sensitive("t", "endpoint"));
+        assert_eq!(s.list_key("t", "ports"), Some(&["name".to_string(), "protocol".to_string()][..]));
+    }
+
+    #[test]
+    fn unknown_flags_and_rules_are_rejected() {
+        let e = Schema::parse("type_attr(t, id, string, [computd]).", "test").unwrap_err();
+        assert!(format!("{e:#}").contains("unknown flag 'computd'"), "{e:#}");
+        assert!(Schema::parse("type_attr(t, X, string, []) :- foo(X).", "test").is_err());
+    }
 }

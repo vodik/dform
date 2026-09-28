@@ -32,6 +32,29 @@ resources.
 A `.dform/` written before state was scoped (`.dform/state.json`,
 `.dform/remote.json`) is moved into the `dform` stack on the next run.
 
+## Providers are schema files
+
+The fake backend can pretend to be any provider: a provider is a schema file of
+plain facts, `providers/<name>/schema.df`, selected with `--provider NAME`
+(repeatable; default `fake`). `--provider path/to/schema.df` loads a file
+directly. A `providers/<name>/schema.df` in the working directory wins over the
+schemas built into the binary (`fake`, `gke`).
+
+```prolog
+type_provider(net.vpc, fakecloud).                    % who owns the type
+type_attr(net.vpc, id, string, [computed, id]).       % Flags: required computed id
+type_attr(db.postgres, endpoint, string, [computed]). %   sensitive nullable optional_computed
+type_list_key(k8s.deployment, spec.template.spec.containers, [name]).  % list merge keys
+type_mint(db.postgres, endpoint, "{name}.db.fake").   % optional: how the mock mints it
+```
+
+`computed` + `id` is a fresh value (an identity), `computed` + `sensitive` is a
+secret, `computed` alone is open (proposal E §2.2). `optional_computed` is
+Terraform's Optional+Computed: the program may set it, else Apply picks it.
+
+The facts are injected into the program, so rules can read them and
+`cargo run -- query type_attr` lists the schema.
+
 ## dform model (current)
 
 - Core intent IR:
