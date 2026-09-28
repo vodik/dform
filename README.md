@@ -233,7 +233,8 @@ provider k8s { source = "../target/debug/dform-provider-k8s" }.
   action naming the manager and the field. What Read returns as
   configuration is only the fields `dform` owns (`metadata.managedFields`),
   so a server default or another manager's field is never a diff. Plan is a
-  dry-run apply (`dryRun=All`) diffed against the world; a change to a field
+  dry-run apply (`dryRun=All`) diffed against the world, the object named
+  by its remote id when the document leaves the name to the server; a change to a field
   the server will not change in place plans a replacement. A generated name
   is picked by the provider (`generateName` plus five characters), since
   server-side apply needs a name. Delete propagates in the background and

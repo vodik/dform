@@ -204,6 +204,10 @@ message PlanRequest {
   optional Value prior = 3;
   // The desired document; absent for a delete. It may carry nulls.
   optional Value desired = 4;
+  // The object's remote id; empty for a create. The desired document
+  // leaves out what the provider picked (an Optional+Computed path the
+  // program does not set), a generated name among them.
+  string remote = 5;
 }
 
 message PlanResponse {

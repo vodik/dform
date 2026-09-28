@@ -113,11 +113,15 @@ impl K8s {
             .map(|o| (attrs(&o), self.computed(typ, &o))))
     }
 
-    /// Plan one resource: validate, diff, and whether it replaces.
+    /// Plan one resource: validate, diff, and whether it replaces. The dry
+    /// run names the object by the document, else by `remote` (a generated
+    /// name, or a namespace the program leaves to the kubeconfig, is not in
+    /// the document once the object exists).
     pub async fn plan(
         &self,
         typ: &str,
         name: &str,
+        remote_id: &str,
         prior: Option<&Json>,
         desired: Option<&Json>,
     ) -> Result<(Vec<provider::Change>, bool)> {
@@ -142,15 +146,30 @@ impl K8s {
         };
         let local = diff(schema, typ, prior, Some(d));
         // A dry run needs a known document with a name.
-        let (Ok(c), Some(Json::String(n))) = (&self.cluster, get_path(d, "metadata.name")) else {
+        let Ok(c) = &self.cluster else {
             let r = replaces(&local);
             return Ok((local, r));
         };
-        if has_marker(d) {
+        let (remote_ns, remote_name) = match remote_id {
+            "" => (None, None),
+            r => {
+                let (ns, n) = parse_remote(kind, r, &c.namespace);
+                (Some(ns), Some(n))
+            }
+        };
+        let n = match get_path(d, "metadata.name") {
+            Some(Json::String(n)) => Some(n.as_str()),
+            None => remote_name,
+            Some(_) => None,
+        };
+        let Some(n) = n.filter(|_| !has_marker(d)) else {
             let r = replaces(&local);
             return Ok((local, r));
-        }
-        let ns = namespace(d, &c.namespace);
+        };
+        let ns = match (get_path(d, "metadata.namespace"), remote_ns) {
+            (None, Some(ns)) => ns.to_string(),
+            _ => namespace(d, &c.namespace),
+        };
         let obj = manifest(kind, d, &ns, n)?;
         match c.apply(kind, &ns, n, &obj, true).await {
             Ok(live) => {
@@ -596,7 +615,13 @@ impl pb::provider_server::Provider for Service {
         let prior = doc_of(r.prior.as_ref())?;
         let desired = doc_of(r.desired.as_ref())?;
         let (changes, requires_replace) = k8s
-            .plan(&r.r#type, &r.name, prior.as_ref(), desired.as_ref())
+            .plan(
+                &r.r#type,
+                &r.name,
+                &r.remote,
+                prior.as_ref(),
+                desired.as_ref(),
+            )
             .await
             .map_err(invalid)?;
         Ok(Response::new(pb::PlanResponse {

@@ -388,6 +388,7 @@ fn plan(
         name: "a".into(),
         prior: prior.map(wire::doc),
         desired: desired.map(wire::doc),
+        remote: String::new(),
     };
     conn.call(|mut c| async move { c.plan(req).await })
 }

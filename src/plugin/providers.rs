@@ -64,6 +64,9 @@ type World = BTreeMap<String, Object>;
 /// A provider's Plan of one resource: its changes, and whether they
 /// replace it.
 type Planned = (Vec<Change>, bool);
+/// One Plan call: the address, its remote id (empty for a create), the
+/// world's document and the desired one.
+type Ask = (Address, String, Option<Json>, Option<Json>);
 
 fn key(typ: &str, remote: &str) -> String {
     format!("{typ}::{remote}")
@@ -432,13 +435,13 @@ impl Providers {
         provider::diff(&self.schema, typ, before, after)
     }
 
-    /// The owning providers' Plan for each `(address, prior, desired)`:
+    /// The owning providers' Plan for each `(address, remote, prior, desired)`:
     /// its changes, and whether they replace it. The calls to one provider
     /// are in flight at once; the first failure, in order, is the error.
-    fn plan_many(&self, asks: Vec<(Address, Option<Json>, Option<Json>)>) -> Result<Vec<Planned>> {
+    fn plan_many(&self, asks: Vec<Ask>) -> Result<Vec<Planned>> {
         let mut out: Vec<Option<Result<Planned>>> = Vec::new();
         let mut by_conn: BTreeMap<usize, Vec<(usize, pb::PlanRequest)>> = BTreeMap::new();
-        for (i, (addr, prior, desired)) in asks.into_iter().enumerate() {
+        for (i, (addr, remote, prior, desired)) in asks.into_iter().enumerate() {
             if prior.is_none() && desired.is_none() {
                 out.push(Some(Ok((Vec::new(), false))));
                 continue;
@@ -449,6 +452,7 @@ impl Providers {
                 name: addr.name.clone(),
                 prior: prior.as_ref().map(wire::doc),
                 desired: desired.as_ref().map(wire::doc),
+                remote,
             };
             by_conn
                 .entry(self.route(&addr.typ))
@@ -680,7 +684,7 @@ impl Providers {
         let mut asks = Vec::new();
         let mut adopting = BTreeSet::new();
         for addr in &order {
-            let prior = match (deformations[addr].kind, adopt_map.get(addr)) {
+            let (remote, prior) = match (deformations[addr].kind, adopt_map.get(addr)) {
                 (zset::Kind::Create, Some(remote_name)) if state.get(addr).is_none() => {
                     let Some(found) = self.import(&addr.typ, remote_name)? else {
                         bail!(
@@ -689,12 +693,18 @@ impl Providers {
                         );
                     };
                     adopting.insert(addr.clone());
-                    Some(found.attrs)
+                    (remote_name.clone(), Some(found.attrs))
                 }
-                (zset::Kind::Create, _) => None,
-                _ => before.get(addr).cloned(),
+                (zset::Kind::Create, _) => (String::new(), None),
+                _ => (
+                    state
+                        .get(addr)
+                        .map(|e| e.remote.clone())
+                        .unwrap_or_default(),
+                    before.get(addr).cloned(),
+                ),
             };
-            asks.push((addr.clone(), prior, resolved.get(addr).cloned()));
+            asks.push((addr.clone(), remote, prior, resolved.get(addr).cloned()));
         }
         // Deletes: what is no longer desired, what state maps to a vanished
         // object (no world document: nothing to show), and deposed objects.
@@ -703,12 +713,22 @@ impl Providers {
             if resolved.contains_key(&addr) {
                 continue;
             }
-            asks.push((addr.clone(), before.get(&addr).cloned(), None));
+            asks.push((
+                addr.clone(),
+                entry.remote.clone(),
+                before.get(&addr).cloned(),
+                None,
+            ));
             deleting.push((ActionKind::Delete, addr, &entry.deps));
         }
         for (addr, entry) in self.entries(&state.deposed) {
             let prior = world.get(&key(&addr.typ, &entry.remote));
-            asks.push((addr.clone(), prior.map(|o| o.attrs.clone()), None));
+            asks.push((
+                addr.clone(),
+                entry.remote.clone(),
+                prior.map(|o| o.attrs.clone()),
+                None,
+            ));
             deleting.push((ActionKind::DeleteDeposed, addr, &entry.deps));
         }
         let mut answers = self.plan_many(asks)?.into_iter();

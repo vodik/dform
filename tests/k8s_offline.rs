@@ -794,6 +794,34 @@ fn an_update_leaves_server_defaulted_fields_to_the_server() {
     assert_eq!(managers_of(&now, ".spec.ports"), vec!["dform".to_string()]);
     let r = run(&["plan"]).success();
     assert_eq!(r.summary(), "stack k8s_demo is undeformed", "{}", r.stdout);
+
+    // The generated ConfigMap name is the server's too, so the document
+    // has none; Plan's dry run names the object by its remote id.
+    s.write(
+        "k8s_demo.df",
+        &s.read("k8s_demo.df")
+            .replace("\"LOG_LEVEL\": \"info\"", "\"LOG_LEVEL\": \"debug\""),
+    );
+    let dry = api.count(
+        "PATCH /api/v1/namespaces/shop/configmaps/web-config-",
+        &["dryRun=All"],
+    );
+    let r = run(&["plan"]).success();
+    assert!(
+        r.stdout.contains("data.LOG_LEVEL: \"info\" -> \"debug\""),
+        "{}",
+        r.stdout
+    );
+    assert!(
+        api.count(
+            "PATCH /api/v1/namespaces/shop/configmaps/web-config-",
+            &["dryRun=All"]
+        ) > dry,
+        "the update of a generated name is a dry run"
+    );
+    run(&["apply"]).success();
+    let r = run(&["plan"]).success();
+    assert_eq!(r.summary(), "stack k8s_demo is undeformed", "{}", r.stdout);
 }
 
 /// Another field manager takes `spec.replicas`: dform's plan puts it back,
