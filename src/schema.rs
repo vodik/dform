@@ -7,8 +7,10 @@
 //!                                     % id, sensitive, nullable, optional_computed
 //!   type_list_key(T, Path, Keys).     % merge keys of a list attribute
 //!   type_provider(T, P).              % which provider owns T
-//!   type_mint(T, Path, Template).     % optional: how the mock mints a
-//!                                     % computed value ({type} {name} {attr} {hash})
+//!   type_mint(T, Path, Value).        % optional: what the mock mints for a
+//!                                     % computed value; in a string,
+//!                                     % {type} {name} {attr} {hash} {n},
+//!                                     % {doc:PATH} (the program's value)
 //!
 //! The facts are injected into the program as EDB (so `dform query type_attr`
 //! lists them) and folded into [`Schema`], the in-memory view the partition
@@ -60,8 +62,8 @@ pub struct Schema {
     pub attrs: BTreeMap<(String, String), AttrSpec>,
     /// (type, list attr) -> merge keys.
     pub list_keys: BTreeMap<(String, String), Vec<String>>,
-    /// (type, attr) -> mint template for the fake provider.
-    pub mints: BTreeMap<(String, String), String>,
+    /// (type, attr) -> what the fake provider mints (a string is a template).
+    pub mints: BTreeMap<(String, String), Value>,
     /// The facts the schema was built from, to inject as EDB.
     pub facts: Vec<Atom>,
 }
@@ -107,6 +109,19 @@ impl Schema {
             .get(&(typ.to_string(), attr.to_string()))
             .map(|v| v.as_slice())
     }
+    /// Whether `path` lies inside a list or set element (an ancestor path is
+    /// declared `list` or `set`). Such paths describe every element; the mock
+    /// neither mints nor requires them at the resource's top level.
+    pub fn in_list(&self, typ: &str, path: &str) -> bool {
+        std::iter::successors(path.rsplit_once('.').map(|x| x.0), |p| {
+            p.rsplit_once('.').map(|x| x.0)
+        })
+        .any(|p| {
+            self.attr(typ, p)
+                .is_some_and(|a| a.ty == "list" || a.ty == "set")
+        })
+    }
+
     pub fn knows_type(&self, typ: &str) -> bool {
         self.provider_of.contains_key(typ) || self.attrs.keys().any(|(t, _)| t == typ)
     }
@@ -203,10 +218,10 @@ impl Schema {
                     }
                 }
                 "type_mint" => {
-                    let [Value::Str(t), Value::Str(p), Value::Str(tpl)] = args.as_slice() else {
+                    let [Value::Str(t), Value::Str(p), v] = args.as_slice() else {
                         return Err(bad());
                     };
-                    s.mints.insert((t.clone(), p.clone()), tpl.clone());
+                    s.mints.insert((t.clone(), p.clone()), v.clone());
                 }
                 _ => {}
             }
@@ -277,6 +292,11 @@ fn ground(t: &Term) -> Result<Value> {
     match t {
         Term::Val(v) => Ok(v.clone()),
         Term::List(xs) => Ok(Value::List(xs.iter().map(ground).collect::<Result<_>>()?)),
+        Term::Obj(m) => Ok(Value::Obj(
+            m.iter()
+                .map(|(k, x)| Ok((k.clone(), ground(x)?)))
+                .collect::<Result<_>>()?,
+        )),
         other => bail!("schema facts must be ground, found {other:?}"),
     }
 }
@@ -287,6 +307,7 @@ pub fn builtin(name: &str) -> Option<&'static str> {
     Some(match name {
         "fake" => include_str!("../providers/fake/schema.df"),
         "gke" => include_str!("../providers/gke/schema.df"),
+        "k8s" => include_str!("../providers/k8s/schema.df"),
         _ => return None,
     })
 }

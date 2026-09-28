@@ -1,0 +1,43 @@
+# A Namespace, a Deployment and a Service planned against the mock Kubernetes
+# provider (providers/k8s/schema.df). No cluster: the world is a JSON file.
+#
+#   cargo run -- --file examples/k8s_demo.df --provider k8s plan
+#   cargo run -- --file examples/k8s_demo.df --provider k8s apply
+#
+# The ConfigMap uses generateName, so its name is picked by the API server at
+# Apply: until then the Deployment's configMapRef carries the null
+# ?k8s.config_map/web_config#metadata.name.
+
+app(web, "nginx:1.27", 3).
+
+resource k8s.namespace shop {
+  metadata.name = "shop",
+  metadata.labels = {team: "storefront"}
+}.
+
+resource k8s.config_map web_config {
+  metadata.generateName = "web-config-",
+  metadata.namespace = ref(k8s.namespace, shop, metadata.name),
+  data = {"MODE": "production", "LOG_LEVEL": "info"}
+}.
+
+resource k8s.deployment App {
+  metadata.name = App,
+  metadata.namespace = ref(k8s.namespace, shop, metadata.name),
+  spec.replicas = Replicas,
+  spec.selector.matchLabels = {app: App},
+  spec.template.metadata.labels = {app: App},
+  spec.template.spec.containers = [{
+    name: App,
+    image: Image,
+    ports: [{containerPort: 8080, protocol: "TCP"}],
+    envFrom: [{configMapRef: {name: ref(k8s.config_map, web_config, metadata.name)}}]
+  }]
+} :- app(App, Image, Replicas).
+
+resource k8s.service App {
+  metadata.name = App,
+  metadata.namespace = ref(k8s.namespace, shop, metadata.name),
+  spec.selector = {app: App},
+  spec.ports = [{port: 80, targetPort: "8080", protocol: "TCP"}]
+} :- app(App, _, _).

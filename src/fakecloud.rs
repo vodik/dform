@@ -353,6 +353,24 @@ impl FakeCloud {
         Ok(doc)
     }
 
+    /// Every `required` attribute is set. Paths inside a list element are not
+    /// checked.
+    fn check_required(&self, addr: &Address, doc: &Json) -> Result<()> {
+        let typ = addr.typ.as_str();
+        for ((t, path), spec) in &self.schema.attrs {
+            if t != typ || !spec.has("required") {
+                continue;
+            }
+            if !self.schema.in_list(typ, path) && get_path(doc, path).is_none() {
+                bail!(
+                    "plan {typ}/{}: required attribute {path} is not set",
+                    addr.name
+                );
+            }
+        }
+        Ok(())
+    }
+
     /// The world's side of the comparison: configured attributes, plus the
     /// value the provider picked for an Optional+Computed path the program now
     /// sets.
@@ -403,6 +421,7 @@ impl FakeCloud {
                 strict: None,
             };
             let doc = self.resolve_doc(&ctx, &r)?;
+            self.check_required(&r.addr, &doc)?;
             let typ = r.addr.typ.as_str();
             let (kind, changes) = match state.get(&r.addr) {
                 None => match adopt_map.get(&r.addr) {
@@ -653,11 +672,21 @@ impl FakeCloud {
     fn mint(&self, typ: &str, name: &str, doc: &Json) -> Json {
         let mut out = json!({});
         for (attr, class) in self.schema.computed_of(typ) {
-            set_path(&mut out, &attr, self.mint_value(typ, name, &attr, class));
+            if !self.schema.in_list(typ, &attr) {
+                set_path(
+                    &mut out,
+                    &attr,
+                    self.mint_value(typ, name, &attr, class, doc),
+                );
+            }
         }
         for (attr, class) in self.schema.optional_computed_of(typ) {
-            if get_path(doc, &attr).is_none() {
-                set_path(&mut out, &attr, self.mint_value(typ, name, &attr, class));
+            if get_path(doc, &attr).is_none() && !self.schema.in_list(typ, &attr) {
+                set_path(
+                    &mut out,
+                    &attr,
+                    self.mint_value(typ, name, &attr, class, doc),
+                );
             }
         }
         if !self.schema.knows_type(typ) {
@@ -666,15 +695,21 @@ impl FakeCloud {
         out
     }
 
-    fn mint_value(&self, typ: &str, name: &str, attr: &str, class: NullClass) -> Json {
+    fn mint_value(&self, typ: &str, name: &str, attr: &str, class: NullClass, doc: &Json) -> Json {
         let hash = short_hash(&format!("{typ}/{name}#{attr}"));
-        if let Some(tpl) = self.schema.mints.get(&(typ.to_string(), attr.to_string())) {
-            let s = tpl
-                .replace("{type}", typ)
-                .replace("{name}", name)
-                .replace("{attr}", attr)
-                .replace("{hash}", &hash);
-            return json!(s);
+        let n = u64::from_str_radix(&hash, 36).unwrap_or(0);
+        match self.schema.mints.get(&(typ.to_string(), attr.to_string())) {
+            Some(Value::Str(tpl)) => {
+                let s = tpl
+                    .replace("{type}", typ)
+                    .replace("{name}", name)
+                    .replace("{attr}", attr)
+                    .replace("{hash}", &hash)
+                    .replace("{n}", &(n % 254 + 1).to_string());
+                return json!(fill_doc_refs(&s, doc));
+            }
+            Some(v) => return value_to_json(v),
+            None => {}
         }
         let ty = self
             .schema
@@ -685,7 +720,7 @@ impl FakeCloud {
             (NullClass::Secret, _) => json!(format!("fake-secret-{hash}")),
             (NullClass::Fresh, _) if attr == "id" => json!(format!("{typ}:{name}")),
             (NullClass::Fresh, _) => json!(format!("{name}-{hash}")),
-            (_, "int") => json!(u64::from_str_radix(&hash, 36).unwrap_or(0) % 100),
+            (_, "int") => json!(n % 100),
             (_, "bool") => json!(true),
             (_, "list" | "set") => json!([]),
             (_, "map" | "object") => json!({}),
@@ -787,6 +822,40 @@ impl FakeCloud {
                 out.insert(prefix.to_string(), (v.clone(), norm.to_string()));
             }
         }
+    }
+}
+
+/// Replace each `{doc:PATH}` in a mint template with the program's string
+/// value at PATH, or nothing.
+fn fill_doc_refs(tpl: &str, doc: &Json) -> String {
+    let mut out = String::new();
+    let mut rest = tpl;
+    while let Some(i) = rest.find("{doc:") {
+        out.push_str(&rest[..i]);
+        let Some(j) = rest[i..].find('}') else { break };
+        let path = &rest[i + 5..i + j];
+        if let Some(Json::String(v)) = get_path(doc, path) {
+            out.push_str(v);
+        }
+        rest = &rest[i + j + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// A schema fact's ground value as JSON.
+fn value_to_json(v: &Value) -> Json {
+    match v {
+        Value::Str(s) => json!(s),
+        Value::Int(i) => json!(i),
+        Value::Bool(b) => json!(b),
+        Value::List(xs) => Json::Array(xs.iter().map(value_to_json).collect()),
+        Value::Obj(m) => Json::Object(
+            m.iter()
+                .map(|(k, x)| (k.clone(), value_to_json(x)))
+                .collect(),
+        ),
+        other => json!(format!("{other:?}")),
     }
 }
 
