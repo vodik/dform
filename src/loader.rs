@@ -84,6 +84,99 @@ fn load_file(path: &Path, seen: &mut BTreeSet<PathBuf>) -> Result<Program> {
     Ok(Program { statements: out })
 }
 
+/// A file as last parsed by the proposal G parser: its name and text, the
+/// tree, and its source id.
+struct ParsedG {
+    name: String,
+    text: String,
+    green: rowan::GreenNode,
+    file: u32,
+}
+
+static PARSED_G: Mutex<BTreeMap<PathBuf, ParsedG>> = Mutex::new(BTreeMap::new());
+
+/// The proposal G loader: every file of the program is parsed, then the
+/// whole program is resolved at once (a name declared in one file is
+/// used in another), each import inlined where it stands.
+pub fn load_program_g(entry_files: &[PathBuf]) -> Result<Program> {
+    let mut units = Vec::new();
+    let mut index: BTreeMap<PathBuf, usize> = BTreeMap::new();
+    let mut entries = Vec::new();
+    for f in entry_files {
+        let abs = absolutize(f)?;
+        if let Some(i) = load_unit(&abs, &mut units, &mut index)? {
+            entries.push(i);
+        }
+    }
+    crate::syntax::resolve::lower(&units, &entries, true, false)
+        .map_err(|d| diag::Diagnostics(d).into())
+}
+
+fn load_unit(
+    path: &Path,
+    units: &mut Vec<crate::syntax::resolve::Unit>,
+    index: &mut BTreeMap<PathBuf, usize>,
+) -> Result<Option<usize>> {
+    let abs = absolutize(path)?;
+    let abs = fs::canonicalize(&abs).unwrap_or(abs);
+    if index.contains_key(&abs) {
+        return Ok(None);
+    }
+    let text = fs::read_to_string(&abs).with_context(|| format!("read {}", abs.display()))?;
+    let name = display_name(&abs);
+    let (green, file) = {
+        let mut cache = PARSED_G.lock().unwrap_or_else(|e| e.into_inner());
+        match cache.get(&abs) {
+            Some(p) if p.name == name && p.text == text => (p.green.clone(), p.file),
+            _ => {
+                let parse = crate::syntax::parse::parse(&text);
+                let mark = diag::mark();
+                if !parse.errors.is_empty() {
+                    return Err(crate::parser::syntax_diagnostics_g(&name, &text, &parse).into());
+                }
+                let file = diag::add_source(&name, &text);
+                diag::pin_since(mark);
+                cache.insert(
+                    abs.clone(),
+                    ParsedG {
+                        name: name.clone(),
+                        text: text.clone(),
+                        green: parse.green.clone(),
+                        file,
+                    },
+                );
+                (parse.green, file)
+            }
+        }
+    };
+    let root = crate::syntax::SyntaxNode::new_root(green);
+    let i = units.len();
+    index.insert(abs.clone(), i);
+    units.push(crate::syntax::resolve::Unit {
+        file,
+        root: root.clone(),
+        imports: None,
+    });
+    let base_dir = abs.parent().unwrap_or(Path::new(".")).to_path_buf();
+    let mut imports = Vec::new();
+    for n in root
+        .children()
+        .filter(|n| n.kind() == crate::syntax::SyntaxKind::IMPORT)
+    {
+        let Some(t) = n
+            .children_with_tokens()
+            .filter_map(|e| e.into_token())
+            .find(|t| t.kind() == crate::syntax::SyntaxKind::STRING)
+        else {
+            continue;
+        };
+        let rel = crate::syntax::resolve::unescape(t.text()).unwrap_or_default();
+        imports.push(load_unit(&base_dir.join(rel), units, index)?);
+    }
+    units[i].imports = Some(imports);
+    Ok(Some(i))
+}
+
 /// Predicates the provider or the CLI injects as facts (discovery, world,
 /// schema, inputs). They are defined even when a run has no rows for them.
 pub const PROVIDER_PREDS: &[&str] = &[

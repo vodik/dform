@@ -6,3 +6,6 @@ pub mod lower;
 pub mod parser;
 
 pub use kind::{Lang, SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken};
+pub mod lex;
+pub mod parse;
+pub mod resolve;

@@ -1,0 +1,353 @@
+//! `dform fmt`: print a file from its lossless tree with whitespace and
+//! commas normalised. Line breaks are the author's (gofmt's rule): a break
+//! between two tokens stays a break, at most one blank line in a row; the
+//! spaces within a line, the indentation, and the commas that a newline
+//! makes redundant are the formatter's. A file already in this form prints
+//! back byte for byte.
+//!
+//! Indentation: a line is one step deeper than the line that holds the
+//! innermost construct still open at its first token: a bracket, or a
+//! statement, block entry or clause that began on an earlier line (a
+//! continuation). A line that starts with a closer sits at the depth of
+//! the line that opened it.
+
+use crate::syntax::SyntaxKind::{self, *};
+use crate::syntax::{SyntaxNode, SyntaxToken};
+
+const INDENT: &str = "  ";
+
+/// A significant token or a comment, with what the source had before it.
+struct Item {
+    tok: SyntaxToken,
+    /// Newlines in the whitespace before this item (since the last item
+    /// printed: a dropped comma's surroundings count).
+    newlines: usize,
+}
+
+fn parent_kind(t: &SyntaxToken) -> Option<SyntaxKind> {
+    t.parent().map(|p| p.kind())
+}
+
+fn is_open(k: SyntaxKind) -> bool {
+    matches!(k, L_PAREN | L_BRACKET | L_BRACE)
+}
+
+fn is_close(k: SyntaxKind) -> bool {
+    matches!(k, R_PAREN | R_BRACKET | R_BRACE)
+}
+
+/// Nodes a line break inside continues: the next line is one step deeper.
+fn continues(k: SyntaxKind) -> bool {
+    matches!(
+        k,
+        RULE | FACT
+            | CHECK
+            | VALUE_RULE
+            | CONTRIBUTION
+            | CLAUSE
+            | ASSIGN
+            | LET
+            | WITH
+            | INPUT
+            | INPUT_RELATION
+            | OUTPUT_DECL
+            | ATTR_DECL
+            | WHEN
+            | FOR_STMT
+    )
+}
+
+/// A `{ }` body: its entries are separated by newlines or commas.
+fn is_block_body(n: &SyntaxNode) -> bool {
+    n.kind() == BODY
+        && n.children_with_tokens()
+            .find(|e| !e.kind().is_trivia())
+            .is_some_and(|e| e.kind() == L_BRACE)
+}
+
+/// A comma the formatter drops: before a closer, or where a newline already
+/// separates the entries of a block, a type block or a `{ }` body.
+fn drop_comma(t: &SyntaxToken, next: Option<&SyntaxToken>, newline_after: bool) -> bool {
+    if t.kind() != COMMA {
+        return false;
+    }
+    let Some(next) = next else { return false };
+    let parent = t.parent();
+    if matches!(next.kind(), R_BRACKET | R_BRACE)
+        && !matches!(parent_kind(t), Some(ARG_LIST | BODY | CLAUSE))
+    {
+        return true;
+    }
+    newline_after
+        && (matches!(parent_kind(t), Some(BLOCK | TYPE_DECL | ATTR_DECL))
+            || parent.as_ref().is_some_and(is_block_body))
+}
+
+/// The space between two tokens on one line: "" or " ".
+fn space(prev: &SyntaxToken, cur: &SyntaxToken) -> &'static str {
+    let (p, c) = (prev.kind(), cur.kind());
+    let (pp, cp) = (parent_kind(prev), parent_kind(cur));
+    if p == COMMENT || c == COMMENT {
+        return " ";
+    }
+    // Chains, dotted names and paths: `a.b[e]/c`.
+    if p == DOT || c == DOT {
+        return "";
+    }
+    if (c == SLASH && cp != Some(BIN_EXPR)) || (p == SLASH && pp != Some(BIN_EXPR)) {
+        return "";
+    }
+    if c == L_BRACKET && matches!(cp, Some(INDEX | BLOCK_PATH)) {
+        return "";
+    }
+    if (p == L_BRACKET && matches!(pp, Some(INDEX | BLOCK_PATH)))
+        || (c == R_BRACKET && matches!(cp, Some(INDEX | BLOCK_PATH)))
+    {
+        return "";
+    }
+    if matches!(p, PLUS | MINUS) && matches!(pp, Some(UNARY_EXPR | BIND_ARG)) {
+        return "";
+    }
+    if matches!(c, COMMA | R_PAREN | COLON) {
+        return "";
+    }
+    // Calls, atoms, type applications, declarations and records hug their
+    // name.
+    if c == L_PAREN && matches!(cp, Some(ARG_LIST | TYPE_EXPR | DECL | EXTERN)) {
+        return "";
+    }
+    if c == L_BRACE && cp == Some(RECORD_ATOM) {
+        return "";
+    }
+    // Empty brackets.
+    if is_open(p) && is_close(c) {
+        return "";
+    }
+    // Lists and argument lists are tight; comprehensions, objects, records,
+    // bodies and blocks breathe.
+    if p == L_PAREN || c == R_PAREN {
+        return "";
+    }
+    if p == L_BRACKET && pp == Some(LIST) || c == R_BRACKET && cp == Some(LIST) {
+        return "";
+    }
+    " "
+}
+
+/// Every significant token and comment, in order, with the newlines before
+/// each; commas the formatter drops are left out.
+fn items(root: &SyntaxNode) -> Vec<Item> {
+    let toks: Vec<SyntaxToken> = root
+        .descendants_with_tokens()
+        .filter_map(|e| e.into_token())
+        .collect();
+    let mut out = Vec::new();
+    let mut newlines = 0;
+    for (i, t) in toks.iter().enumerate() {
+        if t.kind() == WHITESPACE {
+            newlines += t.text().matches('\n').count();
+            continue;
+        }
+        if t.kind() == COMMA {
+            // The next significant token, and whether a newline comes first.
+            let mut nl = false;
+            let mut next = None;
+            for u in &toks[i + 1..] {
+                match u.kind() {
+                    WHITESPACE => nl |= u.text().contains('\n'),
+                    COMMENT => {}
+                    _ => {
+                        next = Some(u);
+                        break;
+                    }
+                }
+            }
+            if drop_comma(t, next, nl) {
+                continue;
+            }
+        }
+        out.push(Item {
+            tok: t.clone(),
+            newlines,
+        });
+        newlines = 0;
+    }
+    out
+}
+
+/// An open construct: a bracket (closed by its closer) or a continuing
+/// node (open until its text ends), and the output line it began on.
+struct Open {
+    bracket: bool,
+    end: u32,
+    line: usize,
+}
+
+/// Format a file's source; a file with syntax errors is not formatted.
+pub fn format_source(name: &str, src: &str) -> anyhow::Result<String> {
+    let parse = crate::syntax::parse::parse(src);
+    if !parse.errors.is_empty() {
+        return Err(crate::parser::syntax_diagnostics_g(name, src, &parse).into());
+    }
+    Ok(format(&parse.syntax()))
+}
+
+/// Format a parsed file. The tree must be free of syntax errors.
+pub fn format(root: &SyntaxNode) -> String {
+    let items = items(root);
+    let mut out = String::new();
+    let mut stack: Vec<Open> = Vec::new();
+    // The indentation of every output line.
+    let mut indents: Vec<usize> = vec![0];
+    let mut line = 0usize;
+    for (i, it) in items.iter().enumerate() {
+        let t = &it.tok;
+        let k = t.kind();
+        let start: u32 = t.text_range().start().into();
+        // Continuations that ended before this token.
+        while stack.last().is_some_and(|o| !o.bracket && o.end <= start) {
+            stack.pop();
+        }
+        let mut opener_line = None;
+        if is_close(k) {
+            while let Some(o) = stack.pop() {
+                if o.bracket {
+                    opener_line = Some(o.line);
+                    break;
+                }
+            }
+        }
+        if i > 0 {
+            if it.newlines > 0 {
+                let blank = it.newlines > 1 && !is_close(k);
+                out.push('\n');
+                if blank {
+                    out.push('\n');
+                    indents.push(0);
+                }
+                line += 1 + usize::from(blank);
+                let depth = match opener_line {
+                    Some(l) => indents[l],
+                    None => stack.last().map_or(0, |o| indents[o.line] + 1),
+                };
+                indents.push(depth);
+                for _ in 0..depth {
+                    out.push_str(INDENT);
+                }
+            } else {
+                out.push_str(space(&items[i - 1].tok, t));
+            }
+        }
+        // Continuing nodes that begin at this token.
+        let mut starts: Vec<(u32, SyntaxKind)> = t
+            .parent_ancestors()
+            .filter(|n| continues(n.kind()))
+            .filter(|n| first_token(n).is_some_and(|f| f == *t))
+            .map(|n| (n.text_range().end().into(), n.kind()))
+            .collect();
+        starts.reverse();
+        for (end, _) in starts {
+            stack.push(Open {
+                bracket: false,
+                end,
+                line,
+            });
+        }
+        let text = t.text();
+        out.push_str(if k == COMMENT { text.trim_end() } else { text });
+        if is_open(k) {
+            stack.push(Open {
+                bracket: true,
+                end: u32::MAX,
+                line,
+            });
+        }
+    }
+    if !out.is_empty() {
+        out.push('\n');
+    }
+    out
+}
+
+fn first_token(n: &SyntaxNode) -> Option<SyntaxToken> {
+    n.descendants_with_tokens()
+        .filter_map(|e| e.into_token())
+        .find(|t| !t.kind().is_trivia())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::syntax::parse::parse;
+
+    fn fmt(src: &str) -> String {
+        let p = parse(src);
+        assert!(p.errors.is_empty(), "{:?}", p.errors);
+        format(&p.syntax())
+    }
+
+    #[test]
+    fn a_formatted_file_prints_back_unchanged() {
+        let src = "edition 2026\n\n# c\np(a, \"b\") if\n  q(x), # why\n  x != 1\n";
+        assert_eq!(fmt(src), src);
+    }
+
+    #[test]
+    fn spaces_and_indentation_are_normalised() {
+        assert_eq!(
+            fmt("p( a ,b )if q(x),x>1\nresource  net.vpc  main{cidr=\"x\",tags={a:1}}\n"),
+            "p(a, b) if q(x), x > 1\nresource net.vpc main { cidr = \"x\", tags = { a: 1 } }\n"
+        );
+        assert_eq!(
+            fmt("module m {\np(x) if\nq(x)\n}\n"),
+            "module m {\n  p(x) if\n    q(x)\n}\n"
+        );
+        assert_eq!(
+            fmt("p(m.i/n.x,a /b,t[e].p)\n"),
+            "p(m.i/n.x, a / b, t[e].p)\n"
+        );
+    }
+
+    #[test]
+    fn clauses_and_bodies_indent() {
+        let src = "resource t n {\n  for a(x),\n    b(x)\n  f = x\n}\n\
+                   deny \"m\" { x } if {\n  a(x)\n  not b(x)\n}\n";
+        assert_eq!(fmt(src), src);
+        assert_eq!(
+            fmt("resource t n {\nfor a(x),\nb(x)\nf = x\n}\n"),
+            "resource t n {\n  for a(x),\n    b(x)\n  f = x\n}\n"
+        );
+    }
+
+    #[test]
+    fn commas_a_newline_makes_redundant_are_dropped() {
+        assert_eq!(
+            fmt("resource t n {\n  a = 1,\n  b = [1, 2,],\n}\np(x) if {\n  q(x),\n  r(x)\n}\n"),
+            "resource t n {\n  a = 1\n  b = [1, 2]\n}\np(x) if {\n  q(x)\n  r(x)\n}\n"
+        );
+        // A line that ends with a comma continues the body: it stays.
+        let src = "p(x) if q(x),\n  r(x)\n";
+        assert_eq!(fmt(src), src);
+    }
+
+    #[test]
+    fn blank_lines_collapse_to_one() {
+        assert_eq!(
+            fmt("p(\"a\")\n\n\n\nq(\"b\")\n\n"),
+            "p(\"a\")\n\nq(\"b\")\n"
+        );
+    }
+
+    #[test]
+    fn brackets_opened_on_one_line_indent_once() {
+        let src = "resource t n {\n  c = [{\n    a: 1\n  }]\n}\nf(\"k\", {\n  a: 1\n})\n";
+        assert_eq!(fmt(src), src);
+    }
+
+    #[test]
+    fn idempotent() {
+        let src = "p(x)if\n q(x) ,\n\n r(x)\nresource t n { a=1, b=2\n c=3 }\n";
+        let once = fmt(src);
+        assert_eq!(fmt(&once), once);
+    }
+}

@@ -61,3 +61,70 @@ pub fn parse_file(name: &str, src: &str) -> Result<Program> {
 pub fn parse_program(src: &str) -> Result<Program> {
     program("<input>", src, false)
 }
+
+/// The syntax errors of a proposal G parse, as diagnostics naming `name`.
+pub fn syntax_diagnostics_g(
+    name: &str,
+    src: &str,
+    parse: &crate::syntax::parse::Parse,
+) -> Diagnostics {
+    let file = diag::add_source(name, src);
+    Diagnostics(
+        parse
+            .errors
+            .iter()
+            .map(|e| {
+                let d = Diagnostic::error(
+                    Span {
+                        file,
+                        start: e.start as u32,
+                        end: e.end as u32,
+                        origin: 0,
+                    },
+                    e.message.clone(),
+                );
+                match &e.hint {
+                    Some(h) => d.with_help(h),
+                    None => d,
+                }
+            })
+            .collect(),
+    )
+}
+
+/// The proposal G surface (docs/grammar.md, being rewritten): a file of the
+/// new grammar, lowered on its own. Replaces `parse_file` when every
+/// program is rewritten.
+pub fn parse_file_g(name: &str, src: &str, require_edition: bool) -> Result<Program> {
+    let file = diag::add_source(name, src);
+    let parse = crate::syntax::parse::parse(src);
+    let errors: Vec<Diagnostic> = parse
+        .errors
+        .iter()
+        .map(|e| {
+            let d = Diagnostic::error(
+                Span {
+                    file,
+                    start: e.start as u32,
+                    end: e.end as u32,
+                    origin: 0,
+                },
+                e.message.clone(),
+            );
+            match &e.hint {
+                Some(h) => d.with_help(h),
+                None => d,
+            }
+        })
+        .collect();
+    if !errors.is_empty() {
+        return Err(Diagnostics(errors).into());
+    }
+    let units = [crate::syntax::resolve::Unit {
+        file,
+        root: parse.syntax(),
+        imports: None,
+    }];
+    crate::syntax::resolve::lower(&units, &[0], require_edition, false)
+        .map_err(|d| Diagnostics(d).into())
+}

@@ -85,6 +85,16 @@ pub enum SyntaxKind {
     ADOPT_KW,
     LIFECYCLE_KW,
     IGNORE_CHANGES_KW,
+    // Keywords of the proposal G surface.
+    IF_KW,
+    FOR_KW,
+    LET_KW,
+    HAS_KW,
+    SOME_KW,
+    WITH_KW,
+    DENY_KW,
+    WARN_KW,
+    CONSTRAINT_KW,
     /// A character no token starts with.
     ERROR_TOKEN,
 
@@ -155,6 +165,33 @@ pub enum SyntaxKind {
     PAREN,
     BIN_EXPR,
     UNARY_EXPR,
+    // Nodes of the proposal G surface.
+    /// `name (.seg | [terms] | /name)*`, parsed unresolved.
+    CHAIN,
+    /// `[t, ...]` after a chain.
+    INDEX,
+    /// `for body` or `if body` at the top of a block.
+    CLAUSE,
+    /// `let a = chain`.
+    LET,
+    /// `with k = t` in a scenario.
+    WITH,
+    /// `for body { stmts }`.
+    FOR_STMT,
+    /// `deny|warn|constraint "msg" [object] [if body]`.
+    CHECK,
+    /// `chain.path (=|+=) term [rank] [if body]`.
+    CONTRIBUTION,
+    /// `name = term [if body]`.
+    VALUE_RULE,
+    /// A chain alone as a literal: a truth test.
+    LIT_TRUTH,
+    LIT_EXISTS,
+    LIT_HAS,
+    /// `some b [, b] in term`.
+    LIT_SOME,
+    /// `not { body }`.
+    LIT_NOT_BLOCK,
     __LAST,
 }
 
@@ -166,7 +203,7 @@ impl SyntaxKind {
     }
 
     pub fn is_keyword(self) -> bool {
-        (EDITION_KW as u16..=IGNORE_CHANGES_KW as u16).contains(&(self as u16))
+        (EDITION_KW as u16..=CONSTRAINT_KW as u16).contains(&(self as u16))
     }
 
     /// A token that can stand where a plain name is expected: a key in a
