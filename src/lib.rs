@@ -19,6 +19,7 @@ pub mod modules;
 pub mod parser;
 pub mod partition;
 pub mod plan_print;
+pub mod plugin;
 pub mod provider;
 pub mod query;
 pub mod scenario;

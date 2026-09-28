@@ -36,10 +36,10 @@
 //! (`hold_deposed`).
 
 use crate::ast::{Atom, Term};
-use crate::fakecloud::FakeCloud;
 use crate::ir::{Address, Adopt, Resource};
 use crate::lattice::nulls_in;
 use crate::plan_print::waits_on;
+use crate::plugin::Providers;
 use crate::provider::{Action, ActionKind, Change, Plan, fmt_value};
 use crate::state::{self, InFlight, State};
 use crate::stuck::Sections;
@@ -77,7 +77,7 @@ pub struct Options<'a> {
 /// it finishes `latency` later. The world records each call's span. With
 /// `parallel` 1 the calls run in plan order, one after the other.
 pub fn run_tick(
-    cloud: &FakeCloud,
+    cloud: &Providers,
     desired: &[Resource],
     adopts: &[Adopt],
     lifecycle: &Lifecycle,
@@ -289,7 +289,7 @@ pub fn begin(state: &mut State, tick: usize, plan: &Plan, observed: &BTreeMap<Ad
 /// documents are the in-flight record's; at a phase boundary, what the
 /// executor last saw (`Seen`).
 pub fn changed_under(
-    cloud: &FakeCloud,
+    cloud: &Providers,
     expected: &Seen,
     observed: &BTreeMap<Address, Json>,
 ) -> Vec<(Address, Vec<Change>)> {
@@ -322,7 +322,7 @@ pub fn remaining(f: &InFlight) -> Seen {
 /// was computed against a document that no longer exists. That change is
 /// printed here, the deny stops the run.
 pub fn check_boundary(
-    cloud: &FakeCloud,
+    cloud: &Providers,
     seen: &Seen,
     pending: &BTreeSet<Address>,
     state: &State,

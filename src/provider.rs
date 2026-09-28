@@ -1,8 +1,12 @@
-use crate::ast::Atom;
-use crate::ir::{Adopt, Resource};
-use crate::state::State;
-use crate::zset::Lifecycle;
-use anyhow::Result;
+//! What a plan is (actions and their changes), and the documents both
+//! sides of the provider protocol read: the engine and a provider compare
+//! documents in one canonical form (`flatten`, `diff`), driven by the
+//! provider's schema.
+
+use crate::schema::Schema;
+use crate::value::Value;
+use serde_json::{Value as Json, json};
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone)]
 pub enum ActionKind {
@@ -96,33 +100,242 @@ pub struct Plan {
     pub actions: Vec<Action>,
 }
 
-pub trait Provider {
-    fn id(&self) -> &str;
-
-    /// Static facts about types/capabilities.
-    fn catalog(&self) -> Result<Vec<Atom>>;
-
-    /// Dynamic facts from the environment (inventory/discovery).
-    fn discover(&self) -> Result<Vec<Atom>>;
-
-    /// Optional migration hook (e.g. move old provider-owned state into core state).
-    fn bootstrap_state(&self, _state: &mut State) -> Result<()> {
-        Ok(())
+/// A world value as the evaluator's value.
+pub fn json_to_value(j: &Json) -> Value {
+    match j {
+        Json::Null => Value::Str("null".into()),
+        Json::Bool(b) => Value::Bool(*b),
+        Json::Number(n) => n
+            .as_i64()
+            .map(Value::Int)
+            .unwrap_or(Value::Str(n.to_string())),
+        Json::String(s) => Value::Str(s.clone()),
+        Json::Array(xs) => Value::List(xs.iter().map(json_to_value).collect()),
+        Json::Object(m) => Value::Obj(
+            m.iter()
+                .map(|(k, v)| (k.clone(), json_to_value(v)))
+                .collect(),
+        ),
     }
+}
 
-    fn plan(
-        &self,
-        desired: &[Resource],
-        adopts: &[Adopt],
-        lifecycle: &Lifecycle,
-        state: &State,
-    ) -> Result<Plan>;
+pub fn short_hash(s: &str) -> String {
+    // FNV-1a, printed base 36: deterministic across runs and platforms.
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in s.bytes() {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    let digits = b"0123456789abcdefghijklmnopqrstuvwxyz";
+    let mut out = String::new();
+    for _ in 0..5 {
+        out.push(digits[(h % 36) as usize] as char);
+        h /= 36;
+    }
+    out
+}
 
-    fn apply(
-        &self,
-        desired: &[Resource],
-        adopts: &[Adopt],
-        state: &mut State,
-        plan: &Plan,
-    ) -> Result<()>;
+/// Remove a dotted path; an object left empty by it goes too.
+pub fn remove_path(v: &mut Json, path: &str) {
+    let Some(m) = v.as_object_mut() else {
+        return;
+    };
+    match path.split_once('.') {
+        None => {
+            m.remove(path);
+        }
+        Some((head, rest)) => {
+            if let Some(child) = m.get_mut(head) {
+                remove_path(child, rest);
+                if child.as_object().is_some_and(|c| c.is_empty()) {
+                    m.remove(head);
+                }
+            }
+        }
+    }
+}
+
+pub fn set_path(v: &mut Json, path: &str, x: Json) {
+    let mut cur = v;
+    let mut parts = path.split('.').peekable();
+    while let Some(p) = parts.next() {
+        if !cur.is_object() {
+            *cur = json!({});
+        }
+        let m = cur.as_object_mut().unwrap();
+        if parts.peek().is_none() {
+            m.insert(p.to_string(), x);
+            return;
+        }
+        cur = m.entry(p.to_string()).or_insert_with(|| json!({}));
+    }
+}
+
+/// The value at a keypath (`tags.owner`, `subnets[0].id`) in nested JSON, the
+/// shape `ir::insert_keypath` builds and `flatten` spells.
+pub fn get_path<'a>(v: &'a serde_json::Value, path: &str) -> Option<&'a serde_json::Value> {
+    let mut cur = v;
+    for seg in path.split('.') {
+        let (key, mut rest) = match seg.find('[') {
+            Some(i) => (&seg[..i], &seg[i..]),
+            None => (seg, ""),
+        };
+        if !key.is_empty() {
+            cur = cur.get(key)?;
+        }
+        while let Some(r) = rest.strip_prefix('[') {
+            let (idx, tail) = r.split_once(']')?;
+            cur = cur.get(idx.parse::<usize>().ok()?)?;
+            rest = tail;
+        }
+        if !rest.is_empty() {
+            return None;
+        }
+    }
+    Some(cur)
+}
+
+/// A change's path without list indices or keys: the schema's spelling.
+pub fn norm_path(path: &str) -> String {
+    let mut out = String::new();
+    let mut depth = 0;
+    for c in path.chars() {
+        match c {
+            '[' => depth += 1,
+            ']' => depth -= 1,
+            _ if depth == 0 => out.push(c),
+            _ => {}
+        }
+    }
+    out
+}
+
+/// The leaf-by-leaf changes from `before` to `after`, in the plan's
+/// canonical form (keyed lists by key, sets as sets).
+pub fn diff(
+    schema: &Schema,
+    typ: &str,
+    before: Option<&Json>,
+    after: Option<&Json>,
+) -> Vec<Change> {
+    let mut a = BTreeMap::new();
+    let mut b = BTreeMap::new();
+    if let Some(v) = before {
+        flatten(schema, typ, v, "", "", true, &mut a);
+    }
+    if let Some(v) = after {
+        flatten(schema, typ, v, "", "", true, &mut b);
+    }
+    let paths: BTreeSet<&String> = a.keys().chain(b.keys()).collect();
+    let mut out = Vec::new();
+    for p in paths {
+        let (av, bv) = (a.get(p), b.get(p));
+        if av.map(|x| &x.0) == bv.map(|x| &x.0) {
+            continue;
+        }
+        let norm = av.or(bv).map(|x| x.1.as_str()).unwrap_or("");
+        out.push(Change {
+            path: p.clone(),
+            before: av.map(|x| x.0.clone()),
+            after: bv.map(|x| x.0.clone()),
+            sensitive: schema.is_sensitive(typ, norm),
+        });
+    }
+    out
+}
+
+/// Flatten a document to leaf paths. `norm` is the schema path (dotted, no
+/// indices). A list with `type_list_key` merge keys is spelled by key,
+/// `containers[name=web]`, so reordering is not a change; a `set` is
+/// compared as a set. Null and secret markers are leaves. `by_content`
+/// labels an element of a keyless set by a hash of its content,
+/// `ingress[#k3j2d]`, so a diff shows an element added or removed rather
+/// than every later index shifting; otherwise by its sorted position.
+pub fn flatten(
+    schema: &Schema,
+    typ: &str,
+    v: &Json,
+    prefix: &str,
+    norm: &str,
+    by_content: bool,
+    out: &mut BTreeMap<String, (Json, String)>,
+) {
+    if marker(v).is_some() {
+        out.insert(prefix.to_string(), (v.clone(), norm.to_string()));
+        return;
+    }
+    match v {
+        Json::Object(m) => {
+            for (k, vv) in m {
+                let join = |p: &str| {
+                    if p.is_empty() {
+                        k.clone()
+                    } else {
+                        format!("{p}.{k}")
+                    }
+                };
+                flatten(schema, typ, vv, &join(prefix), &join(norm), by_content, out);
+            }
+        }
+        Json::Array(xs) => {
+            let keys = schema.list_key(typ, norm);
+            let is_set = schema.attr(typ, norm).is_some_and(|a| a.ty == "set");
+            let mut items: Vec<(String, &Json)> = Vec::new();
+            for (i, vv) in xs.iter().enumerate() {
+                let by_key = keys.and_then(|ks| {
+                    ks.iter()
+                        .map(|k| {
+                            vv.get(k)
+                                .map(|x| format!("{k}={}", fmt_value(Some(x)).trim_matches('"')))
+                        })
+                        .collect::<Option<Vec<_>>>()
+                });
+                let label = match by_key {
+                    Some(parts) => parts.join(","),
+                    None if is_set => serde_json::to_string(vv).unwrap_or_default(),
+                    None => i.to_string(),
+                };
+                items.push((label, vv));
+            }
+            if is_set && keys.is_none() {
+                items.sort_by(|x, y| x.0.cmp(&y.0));
+                for (i, it) in items.iter_mut().enumerate() {
+                    it.0 = if by_content {
+                        format!("#{}", short_hash(&it.0))
+                    } else {
+                        i.to_string()
+                    };
+                }
+            }
+            for (label, vv) in items {
+                flatten(
+                    schema,
+                    typ,
+                    vv,
+                    &format!("{prefix}[{label}]"),
+                    norm,
+                    by_content,
+                    out,
+                );
+            }
+        }
+        _ => {
+            out.insert(prefix.to_string(), (v.clone(), norm.to_string()));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn get_path_walks_dots_and_indices() {
+        let v = json!({"tags": {"owner": "team-a"}, "subnets": [{"id": "s-0"}, {"id": "s-1"}], "id": "x"});
+        assert_eq!(get_path(&v, "id"), Some(&json!("x")));
+        assert_eq!(get_path(&v, "tags.owner"), Some(&json!("team-a")));
+        assert_eq!(get_path(&v, "subnets[1].id"), Some(&json!("s-1")));
+        assert_eq!(get_path(&v, "subnets[2].id"), None);
+        assert_eq!(get_path(&v, "tags.missing"), None);
+    }
 }

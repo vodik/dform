@@ -1,0 +1,282 @@
+// The dform provider protocol, version 1 (DESIGN.org "Providers and fact
+// plugins", proposal E DR-18 with F's DR-18 addition).
+//
+// A provider is any executable. dform spawns it and reads one line from its
+// stdout:
+//
+//   dform-provider|1|tcp://127.0.0.1:PORT
+//
+// (the protocol version, then where it serves this service), and speaks
+// gRPC to it for the rest of the run. The provider exits when its stdin
+// closes.
+//
+// The protocol carries facts, schema and documents, never rules. Plan and
+// Apply are per resource: the engine owns ordering, parallelism, state and
+// crash safety. A document is a Value (an Obj of the configured
+// attributes); a value the engine does not know yet travels as a Null, and
+// a sensitive computed value only ever as a Null of class SECRET, its label.
+
+syntax = "proto3";
+
+package dform.v1;
+
+service Provider {
+  // Protocol version and capabilities. The first call.
+  rpc Handshake(HandshakeRequest) returns (HandshakeResponse);
+  // Credentials, region, endpoint: a provider-defined config object.
+  rpc Configure(ConfigureRequest) returns (ConfigureResponse);
+  // The schema as facts: the engine injects them as EDB.
+  rpc Schema(SchemaRequest) returns (SchemaResponse);
+  // An extern's answer: bound arguments in, rows out.
+  rpc Query(QueryRequest) returns (stream Row);
+  // Refresh one object by its remote id.
+  rpc Read(ReadRequest) returns (ReadResponse);
+  // Prior and desired document in, the diff and whether it replaces out.
+  rpc Plan(PlanRequest) returns (PlanResponse);
+  // Execute one planned action; return the object as it now is. A call
+  // that fails with DEADLINE_EXCEEDED may have taken effect; any other
+  // failure changed nothing.
+  rpc Apply(ApplyRequest) returns (ApplyResponse);
+  // An object the engine does not manage yet, by remote id.
+  rpc Import(ImportRequest) returns (ImportResponse);
+}
+
+// A value, as src/value.rs has it.
+message Value {
+  oneof kind {
+    string str = 1;
+    int64 int = 2;
+    bool bool = 3;
+    List list = 4;
+    Obj obj = 5;
+    // An IPv4 address as a number.
+    uint32 ip = 6;
+    IpNet ip_net = 7;
+    IpRange ip_range = 8;
+    Ref ref = 9;
+    Ref cloud_ref = 10;
+    Null null = 11;
+  }
+}
+
+message List {
+  repeated Value items = 1;
+}
+
+message Obj {
+  map<string, Value> fields = 1;
+}
+
+message IpNet {
+  uint32 addr = 1;
+  uint32 prefix = 2;
+}
+
+message IpRange {
+  uint32 start = 1;
+  uint32 end = 2;
+}
+
+message Ref {
+  string type = 1;
+  string name = 2;
+  string attr = 3;
+}
+
+// A labeled null (proposal E §2.2): a value nobody knows yet. `label` is
+// `type/addr#path`; `ty` is the schema type the constant will have.
+message Null {
+  string label = 1;
+  NullClass class = 2;
+  string ty = 3;
+}
+
+enum NullClass {
+  NULL_CLASS_UNSPECIFIED = 0;
+  // A computed identity: never equal to a constant.
+  FRESH = 1;
+  // A computed non-identity: equality unknown until resolved.
+  OPEN = 2;
+  // A sensitive computed value: its constant never leaves the provider.
+  SECRET = 3;
+}
+
+// A fact: a predicate and ground arguments.
+message Fact {
+  string pred = 1;
+  repeated Value args = 2;
+}
+
+message HandshakeRequest {
+  uint32 protocol_version = 1;
+}
+
+message HandshakeResponse {
+  uint32 protocol_version = 1;
+  // The provider's name: what state records as each object's provider.
+  string name = 2;
+  // "resource" (Read, Plan, Apply, Import), "fact" (Query), "inventory"
+  // (Query answers cloud_exists/2, cloud_attr/4 and cloud_computed/4 with
+  // every argument free).
+  repeated string capabilities = 3;
+}
+
+message ConfigureRequest {
+  // An Obj. The fake provider reads: `schemas` (a list of schema names or
+  // paths), `world` and `inventory` (file paths), `chaos` (a list of
+  // `apply --chaos` specs).
+  Value config = 1;
+}
+
+message ConfigureResponse {}
+
+message SchemaRequest {}
+
+message SchemaResponse {
+  // type_attr/4, type_list_key/3, type_provider/2, type_mint/3,
+  // type_retry/2, type_replace/2.
+  repeated Fact facts = 1;
+  // The externs Query answers.
+  repeated ExternDecl externs = 2;
+  // Apply evaluates `assertions` (F DR-13): a refinement on a secret path
+  // may be deferred to this provider.
+  bool checks_refinements = 3;
+}
+
+message ExternDecl {
+  string pred = 1;
+  uint32 arity = 2;
+  // Per column, whether it is an input (`+`). Empty: any binding pattern.
+  repeated bool input = 3;
+}
+
+message QueryRequest {
+  string pred = 1;
+  // Per column, whether it is an input (`+`).
+  repeated bool input = 2;
+  // The `+` columns' values, in order.
+  repeated Value inputs = 3;
+}
+
+// One answer: a full tuple of the predicate.
+message Row {
+  repeated Value values = 1;
+}
+
+message ReadRequest {
+  string type = 1;
+  string remote = 2;
+  // The address state maps to this object, for messages.
+  string name = 3;
+}
+
+message ReadResponse {
+  // False: Read returns nothing for this id (gone, or not visible yet).
+  bool found = 1;
+  // The configured attributes.
+  Value attrs = 2;
+  // The computed values; a sensitive one as its SECRET null.
+  Value computed = 3;
+}
+
+message PlanRequest {
+  string type = 1;
+  // The address name, for messages.
+  string name = 2;
+  // The world's document; absent for a create.
+  optional Value prior = 3;
+  // The desired document; absent for a delete. It may carry nulls.
+  optional Value desired = 4;
+}
+
+message PlanResponse {
+  // Leaf by leaf, in the provider's canonical spelling of paths.
+  repeated Change changes = 1;
+  // A change the provider cannot make in place.
+  bool requires_replace = 2;
+}
+
+message Change {
+  string path = 1;
+  optional Value before = 2;
+  optional Value after = 3;
+  // Print neither side.
+  bool sensitive = 4;
+}
+
+enum Op {
+  OP_UNSPECIFIED = 0;
+  // A new object named after `name`.
+  CREATE = 1;
+  // Change `remote` in place.
+  UPDATE = 2;
+  // Delete `remote`.
+  DELETE = 3;
+  // Take over `remote`, an object that exists but is not managed yet, and
+  // configure it.
+  ADOPT = 4;
+  // A new object in place of `remote`: `create_first` keeps the old one
+  // until a later DELETE, else it goes first.
+  REPLACE = 5;
+  // The tick's calls are done (a phase boundary). No object; `spans` is
+  // the tick's schedule. A provider with a clock advances it.
+  END_TICK = 6;
+}
+
+message ApplyRequest {
+  Op op = 1;
+  string type = 2;
+  string name = 3;
+  string remote = 4;
+  // The desired document, nulls resolved except SECRET ones, which the
+  // provider materializes.
+  Value config = 5;
+  bool create_first = 6;
+  // Refinements on secret paths the engine cannot check (F DR-13): the
+  // provider checks each after materializing and fails the action if one
+  // does not hold.
+  repeated Assertion assertions = 7;
+  repeated Span spans = 8;
+}
+
+// `path` OP `value`: OP is one of eq, ne, len_ge, len_le, prefix.
+message Assertion {
+  string path = 1;
+  string op = 2;
+  Value value = 3;
+  // What the failure says.
+  string message = 4;
+}
+
+// One Apply call on the engine's clock.
+message Span {
+  string addr = 1;
+  uint64 start_ms = 2;
+  uint64 end_ms = 3;
+}
+
+message ApplyResponse {
+  // The object's remote id; empty after a delete.
+  string remote = 1;
+  // The object's configured attributes as stored, and its computed values
+  // (a sensitive one as its SECRET null).
+  Value attrs = 2;
+  Value computed = 3;
+  // How long the call took on the provider's clock.
+  uint64 elapsed_ms = 4;
+  // What the provider wants the user to see.
+  repeated string notes = 5;
+}
+
+message ImportRequest {
+  string type = 1;
+  string remote = 2;
+}
+
+message ImportResponse {
+  bool found = 1;
+  string type = 2;
+  string name = 3;
+  Value attrs = 4;
+  Value computed = 5;
+}

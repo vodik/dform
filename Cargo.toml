@@ -2,6 +2,7 @@
 name = "dform"
 version = "0.1.0"
 edition = "2024"
+default-run = "dform"
 
 [dependencies]
 anyhow = "1.0"
@@ -11,6 +12,22 @@ logos = "0.16"
 rowan = "0.16"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+prost = "0.13"
+tokio = { version = "1", features = ["rt", "net", "macros", "io-util", "time"] }
+tonic = "0.13"
+
+[build-dependencies]
+tonic-build = "0.13"
+
+[[bin]]
+name = "dform"
+path = "src/main.rs"
+
+# The mock provider behind the plugin protocol: `src/fakecloud.rs` served
+# over gRPC. The engine spawns it for every mock schema.
+[[bin]]
+name = "dform-provider-fake"
+path = "src/bin/dform-provider-fake.rs"
 
 [[bench]]
 name = "scale"

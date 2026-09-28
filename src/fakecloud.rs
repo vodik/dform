@@ -1,30 +1,33 @@
-//! The fake provider: a mock cloud driven by a provider schema and a world file.
+//! The fake provider: a mock cloud driven by provider schemas and a world
+//! file, served over the provider protocol by `dform-provider-fake`
+//! (`serve`). dform talks to it as to any provider.
 //!
-//! The world file (`--world`, default `.dform/<stack>/remote.json`) is what
-//! "exists": each resource's configured `attrs` and its `computed` values. Plan
-//! refreshes from it; Apply writes it back after every action.
+//! The world file (`--world`, default `.dform/<stack>/remote.json`, given
+//! at Configure) is what "exists": each object's configured `attrs` and its
+//! `computed` values. Read answers from it; Apply writes it back after every
+//! call. The inventory file is what Query answers `cloud_exists/2`,
+//! `cloud_attr/4` and `cloud_computed/4` with, and what Import and ADOPT
+//! find an object dform does not manage in.
 //!
-//! Computed values come only from Apply (proposal E §2.2, DR-11 revised). At
-//! plan time a `ref(T, N, Attr)` to a schema-computed attribute is the labeled
-//! null `?T/N#Attr` unless N already exists in the world, in which case its
-//! computed value is resolved at refresh (round 0), so a steady-state stack
-//! carries no nulls. Apply mints computed values per the schema (`type_mint`
-//! or a default by class and type) and fills the nulls in dependency order.
-//! A sensitive computed value stays in the world; what the provider hands back
-//! is its label, `{"$secret": "T/N#Attr"}`, and output prints it redacted.
+//! Apply mints computed values per the schema (`type_mint` or a default by
+//! class and type). A sensitive computed value stays in the world; what
+//! Read and Apply hand back is its label, `{"$secret": "T/N#Attr"}`.
+//!
+//! Chaos knobs (`apply --chaos`, `chaos`) arrive at Configure. The world's
+//! clock advances at every END_TICK, when chaos `mutate` lands.
 
 use crate::ast::{Atom, Term};
 use crate::chaos::Chaos;
-use crate::ir::{Address, Adopt, Resource};
-use crate::provider::{self, Action, ActionKind, Change, Plan, Provider};
+use crate::ir::Address;
+use crate::plugin::pb;
+use crate::plugin::providers::{INVENTORY, MANAGED};
+use crate::plugin::wire;
+use crate::provider::{self, Change, get_path, norm_path, set_path, short_hash};
 use crate::schema::Schema;
-use crate::state::{self, State};
 use crate::value::{NullClass, Value};
-use crate::zset::{self, Lifecycle};
 use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as Json, json};
-use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::PathBuf;
@@ -70,425 +73,303 @@ pub struct RemoteResource {
     pub read_lag: Option<u64>,
 }
 
-pub struct FakeCloud {
-    world: PathBuf,
-    inventory: PathBuf,
-    schema: Schema,
-    chaos: Chaos,
-    /// What chaos did during the last apply, for the CLI to print.
-    notes: RefCell<Vec<String>>,
-    /// The last refresh and the objects state mapped for it: one run reads
-    /// the world once between two writes, so every consumer of a refresh
-    /// (round 0, the plan, the executor's comparison) sees the same Reads.
-    refreshed: RefCell<Option<(BTreeSet<String>, RemoteState)>>,
-    /// The chaos `mutate` specs that have landed this run.
-    mutated: RefCell<BTreeSet<usize>>,
-    /// What `query` answers externs with: `providers/<name>/externs.df`.
-    answers: Vec<Atom>,
-}
-
 fn key(typ: &str, name: &str) -> String {
     format!("{typ}::{name}")
 }
 
-impl Provider for FakeCloud {
-    fn id(&self) -> &str {
-        "fakecloud"
-    }
+/// How an Apply call failed.
+#[derive(Debug)]
+pub enum Failed {
+    /// Nothing changed.
+    Refused(String),
+    /// The change took effect; no answer (chaos `timeout`).
+    TimedOut(String),
+}
 
-    fn catalog(&self) -> Result<Vec<Atom>> {
-        FakeCloud::catalog(self)
-    }
+/// What an answered Apply call returns.
+#[derive(Debug, Default)]
+pub struct Applied {
+    pub remote: String,
+    pub attrs: Json,
+    pub computed: Json,
+    pub elapsed_ms: u64,
+    pub notes: Vec<String>,
+}
 
-    fn discover(&self) -> Result<Vec<Atom>> {
-        FakeCloud::discover(self)
-    }
+/// One Apply call, as the fake reads it.
+#[derive(Debug, Clone)]
+pub struct Call {
+    pub op: pb::Op,
+    pub addr: Address,
+    pub remote: String,
+    pub config: Json,
+    pub create_first: bool,
+    pub assertions: Vec<Assertion>,
+}
 
-    fn bootstrap_state(&self, state: &mut State) -> Result<()> {
-        // Migration: if state is empty but remote.json exists, treat remote.json as the prior
-        // provider-owned "state" and import entries.
-        if !state.resources.is_empty() {
-            return Ok(());
-        }
-        let remote = self.load()?;
-        for rr in remote.resources.values() {
-            let addr = Address {
-                typ: rr.typ.clone(),
-                name: rr.name.clone(),
-            };
-            state.set(addr, self.id().to_string(), rr.name.clone());
-        }
-        Ok(())
-    }
+/// `path` `op` `value` (F DR-13), checked after secrets are materialized.
+#[derive(Debug, Clone)]
+pub struct Assertion {
+    pub path: String,
+    pub op: String,
+    pub value: Json,
+    pub message: String,
+}
 
-    fn plan(
-        &self,
-        desired: &[Resource],
-        adopts: &[Adopt],
-        lifecycle: &Lifecycle,
-        state: &State,
-    ) -> Result<Plan> {
-        self.plan_with_state(desired, adopts, lifecycle, state)
-    }
+#[derive(Default)]
+pub struct FakeCloud {
+    world_path: Option<PathBuf>,
+    inventory_path: Option<PathBuf>,
+    schema: Schema,
+    chaos: Chaos,
+    /// What `query` answers externs with: `providers/<name>/externs.df`.
+    answers: Vec<Atom>,
+    /// The world, read once: the fake is its only writer during a run.
+    world: Option<RemoteState>,
+    inventory: Option<RemoteState>,
+    /// The chaos `mutate` specs that have landed this run.
+    mutated: BTreeSet<usize>,
+    /// Address -> remote id, as Read and Apply saw them: where a chaos
+    /// `mutate` of an address lands.
+    remotes: BTreeMap<Address, String>,
+}
 
-    fn apply(
-        &self,
-        desired: &[Resource],
-        adopts: &[Adopt],
-        state: &mut State,
-        plan: &Plan,
-    ) -> Result<()> {
-        let opts = crate::executor::Options {
-            parallel: 1,
-            persist: &|_| Ok(()),
-        };
-        crate::executor::run_tick(
-            self,
-            desired,
-            adopts,
-            &Lifecycle::default(),
-            state,
-            plan,
-            &opts,
-        )
-        .map(|_| ())
+fn load_json(path: &Option<PathBuf>, what: &str) -> Result<RemoteState> {
+    let Some(path) = path.as_ref().filter(|p| p.exists()) else {
+        return Ok(RemoteState::default());
+    };
+    let bytes = fs::read(path).with_context(|| format!("read {}", path.display()))?;
+    serde_json::from_slice(&bytes).with_context(|| format!("parse {what} {}", path.display()))
+}
+
+fn strings(config: &Json, k: &str) -> Result<Vec<String>> {
+    match config.get(k) {
+        None | Some(Json::Null) => Ok(Vec::new()),
+        Some(Json::Array(xs)) => xs
+            .iter()
+            .map(|x| {
+                x.as_str()
+                    .map(str::to_string)
+                    .ok_or_else(|| anyhow!("config {k}: a list of strings"))
+            })
+            .collect(),
+        Some(_) => bail!("config {k}: a list of strings"),
     }
 }
 
-/// What a ref resolves against: the world (refreshed at plan, live at apply),
-/// the inventory, the identity mapping, and the desired documents resolved so
-/// far in dependency order.
-struct Ctx<'a> {
-    world: &'a RemoteState,
-    inv: &'a RemoteState,
-    state: &'a State,
-    adopts: &'a BTreeMap<Address, String>,
-    resolved: &'a BTreeMap<Address, Json>,
-    /// Apply: a null that cannot be filled is an error naming the resource.
-    strict: Option<&'a Address>,
-    /// Plan: addresses being replaced, whose nulls stay unresolved (the
-    /// replacement is a new object).
-    retracted: &'a BTreeSet<Address>,
-}
-
-impl Ctx<'_> {
-    /// The world resource behind an address, through the identity mapping or
-    /// an adopt (whose resource is in the world once adopted, else in the
-    /// inventory).
-    fn existing(&self, addr: &Address) -> Option<&RemoteResource> {
-        if let Some(e) = self.state.get(addr) {
-            return self.world.resources.get(&key(&addr.typ, &e.remote));
-        }
-        let rn = self.adopts.get(addr)?;
-        let k = key(&addr.typ, rn);
-        self.world
-            .resources
-            .get(&k)
-            .or_else(|| self.inv.resources.get(&k))
+fn path_of(config: &Json, k: &str) -> Result<Option<PathBuf>> {
+    match config.get(k) {
+        None | Some(Json::Null) => Ok(None),
+        Some(Json::String(s)) if s.is_empty() => Ok(None),
+        Some(Json::String(s)) => Ok(Some(PathBuf::from(s))),
+        Some(_) => bail!("config {k}: a path string"),
     }
 }
 
 impl FakeCloud {
-    /// A fake cloud with the `fake` schema whose world is `<root>/remote.json`
-    /// and whose inventory is `<root>/inventory.json`.
-    pub fn new(root: impl Into<PathBuf>) -> Self {
-        let root = root.into();
-        Self::with_paths(
-            root.join("remote.json"),
-            root.join("inventory.json"),
-            crate::schema::fake(),
-        )
-    }
-
-    pub fn with_paths(
-        world: impl Into<PathBuf>,
-        inventory: impl Into<PathBuf>,
-        schema: Schema,
-    ) -> Self {
-        Self {
-            world: world.into(),
-            inventory: inventory.into(),
-            schema,
-            chaos: Chaos::default(),
-            notes: RefCell::new(Vec::new()),
-            refreshed: RefCell::new(None),
-            mutated: RefCell::new(BTreeSet::new()),
-            answers: Vec::new(),
+    /// `schemas` (names or paths; none is `fake`), `world`, `inventory`,
+    /// `chaos`.
+    pub fn configure(&mut self, config: &Json) -> Result<()> {
+        let specs = strings(config, "schemas")?;
+        let specs = if specs.is_empty() {
+            vec!["fake".to_string()]
+        } else {
+            specs
+        };
+        let mut schema = Schema::default();
+        for n in &specs {
+            schema = schema.merge(crate::schema::load_provider(n)?)?;
         }
-    }
-
-    /// Inject failures and latency into Apply and Read (`apply --chaos`).
-    pub fn with_chaos(mut self, chaos: Chaos) -> Self {
-        self.chaos = chaos;
-        self
-    }
-
-    /// The facts `query` answers externs with.
-    pub fn with_answers(mut self, answers: Vec<Atom>) -> Self {
-        self.answers = answers;
-        self
-    }
-
-    /// Query (E DR-18): an extern's answer, the rows of `pred` among the
-    /// mock's answer facts whose `+` columns (`plus`) are `inputs`, in
-    /// order. No row is an answer too: nothing matches.
-    pub fn query(&self, pred: &str, plus: &[bool], inputs: &[Value]) -> Result<Vec<Vec<Value>>> {
-        fn value(t: &crate::ast::Term) -> Option<Value> {
-            use crate::ast::Term;
-            match t {
-                Term::Val(v) => Some(v.clone()),
-                Term::List(xs) => xs.iter().map(value).collect::<Option<_>>().map(Value::List),
-                Term::Obj(m) => m
-                    .iter()
-                    .map(|(k, v)| Some((k.clone(), value(v)?)))
-                    .collect::<Option<_>>()
-                    .map(Value::Obj),
-                _ => None,
-            }
-        }
-        let mut rows = Vec::new();
-        for a in self.answers.iter().filter(|a| a.pred == pred) {
-            if a.args.len() != plus.len() {
-                bail!(
-                    "the mock's answer {} has {} columns, the extern {}",
-                    crate::partition::fmt_atom(a),
-                    a.args.len(),
-                    plus.len()
-                );
-            }
-            let Some(row) = a.args.iter().map(value).collect::<Option<Vec<Value>>>() else {
-                bail!(
-                    "the mock's answer {} is not ground",
-                    crate::partition::fmt_atom(a)
-                );
-            };
-            let ins: Vec<&Value> = row
-                .iter()
-                .zip(plus)
-                .filter(|(_, p)| **p)
-                .map(|(v, _)| v)
-                .collect();
-            if ins.iter().copied().eq(inputs.iter()) {
-                rows.push(row);
-            }
-        }
-        Ok(rows)
-    }
-
-    /// What chaos did during the last apply.
-    pub fn take_notes(&self) -> Vec<String> {
-        self.notes.take()
-    }
-
-    fn note(&self, s: String) {
-        self.notes.borrow_mut().push(s);
-    }
-
-    /// The provider's schema facts (`type_attr`, `type_list_key`,
-    /// `type_provider`, `type_mint`), injected into the program as EDB.
-    pub fn catalog(&self) -> Result<Vec<Atom>> {
-        Ok(self.schema.facts.clone())
+        self.schema = schema;
+        self.answers = crate::externs::load_answers(&specs)?;
+        self.world_path = path_of(config, "world")?;
+        self.inventory_path = path_of(config, "inventory")?;
+        self.chaos = Chaos::parse(&strings(config, "chaos")?)?;
+        self.world = None;
+        self.inventory = None;
+        Ok(())
     }
 
     pub fn schema(&self) -> &Schema {
         &self.schema
     }
 
-    fn read_json(path: &PathBuf, what: &str) -> Result<RemoteState> {
-        if !path.exists() {
-            return Ok(RemoteState::default());
+    /// The externs the answers file has facts of: any binding pattern.
+    pub fn externs(&self) -> Vec<(String, usize)> {
+        let mut out: Vec<(String, usize)> = self
+            .answers
+            .iter()
+            .map(|a| (a.pred.clone(), a.args.len()))
+            .collect();
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    fn world(&mut self) -> Result<&mut RemoteState> {
+        if self.world.is_none() {
+            self.world = Some(load_json(&self.world_path, "world")?);
         }
-        let bytes = fs::read(path).with_context(|| format!("read {}", path.display()))?;
-        serde_json::from_slice(&bytes).with_context(|| format!("parse {what} {}", path.display()))
+        Ok(self.world.as_mut().expect("loaded"))
     }
 
-    /// The world as stored, secrets included. Only the provider sees this.
-    pub fn load(&self) -> Result<RemoteState> {
-        Self::read_json(&self.world, "world")
+    fn inventory(&mut self) -> Result<&RemoteState> {
+        if self.inventory.is_none() {
+            self.inventory = Some(load_json(&self.inventory_path, "inventory")?);
+        }
+        Ok(self.inventory.as_ref().expect("loaded"))
     }
 
-    pub fn load_inventory(&self) -> Result<RemoteState> {
-        Self::read_json(&self.inventory, "inventory")
-    }
-
-    pub fn save(&self, st: &RemoteState) -> Result<()> {
-        self.refreshed.take();
-        if let Some(dir) = self.world.parent().filter(|d| !d.as_os_str().is_empty()) {
+    fn save(&mut self) -> Result<()> {
+        let (Some(path), Some(st)) = (&self.world_path, &self.world) else {
+            return Ok(());
+        };
+        if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
             fs::create_dir_all(dir).with_context(|| format!("mkdir {}", dir.display()))?;
         }
         let bytes = serde_json::to_vec_pretty(st)?;
-        fs::write(&self.world, bytes).with_context(|| format!("write {}", self.world.display()))?;
+        fs::write(path, bytes).with_context(|| format!("write {}", path.display()))?;
         Ok(())
     }
 
-    /// Refresh as facts, for round-0 resolution (E Rule 4, F DR-11 revised):
-    /// `identity(T, A, Rid)` for every address state maps to a resource Read
-    /// returns, and `world_attr(T, Rid, P, V)` for every schema-computed or
-    /// Optional+Computed path the world holds a value for. Secrets are never
-    /// handed to the evaluator.
-    pub fn world_facts(&self, state: &State) -> Result<Vec<Atom>> {
-        let world = self.refresh(state)?;
-        let s = |x: &str| Term::Val(Value::Str(x.to_string()));
-        let mut out = Vec::new();
-        for (addr, e) in state.entries_for_provider(self.id()) {
-            let Some(rr) = world.resources.get(&key(&addr.typ, &e.remote)) else {
-                continue;
-            };
-            out.push(Atom {
-                pred: "identity".into(),
-                args: vec![s(&addr.typ), s(&addr.name), s(&e.remote)],
-                record: None,
-                span: Default::default(),
-            });
-            let paths = self
-                .schema
-                .computed_of(&addr.typ)
-                .into_iter()
-                .chain(self.schema.optional_computed_of(&addr.typ));
-            for (path, class) in paths {
-                if class == NullClass::Secret {
-                    continue;
-                }
-                if let Some(v) = get_path(&rr.computed, &path) {
-                    out.push(Atom {
-                        pred: "world_attr".into(),
-                        args: vec![
-                            s(&addr.typ),
-                            s(&e.remote),
-                            s(&path),
-                            Term::Val(json_to_value(v)),
-                        ],
+    /// Query (E DR-18): the rows of `pred` whose `+` columns (`plus`) are
+    /// `inputs`, in order. The mock's answer facts for an extern; the
+    /// inventory flattened for `cloud_exists/2`, `cloud_attr/4`,
+    /// `cloud_computed/4`; the world's objects for `MANAGED`. No row is an
+    /// answer too: nothing matches.
+    pub fn query(
+        &mut self,
+        pred: &str,
+        plus: &[bool],
+        inputs: &[Value],
+    ) -> Result<Vec<Vec<Value>>> {
+        let all = match pred {
+            MANAGED => self
+                .world()?
+                .resources
+                .values()
+                .map(|rr| vec![Value::Str(rr.typ.clone()), Value::Str(rr.name.clone())])
+                .collect(),
+            _ if INVENTORY.iter().any(|(p, _)| *p == pred) => {
+                let mut atoms = Vec::new();
+                for rr in self.inventory()?.resources.values() {
+                    let s = |x: &str| Term::Val(Value::Str(x.to_string()));
+                    atoms.push(Atom {
+                        pred: "cloud_exists".into(),
+                        args: vec![s(&rr.typ), s(&rr.name)],
                         record: None,
                         span: Default::default(),
                     });
+                    flatten_json_facts(&mut atoms, "cloud_attr", &rr.typ, &rr.name, "", &rr.attrs);
+                    flatten_json_facts(
+                        &mut atoms,
+                        "cloud_computed",
+                        &rr.typ,
+                        &rr.name,
+                        "",
+                        &rr.computed,
+                    );
                 }
+                atoms
+                    .iter()
+                    .filter(|a| a.pred == pred)
+                    .map(ground_row)
+                    .collect::<Result<_>>()?
+            }
+            _ => {
+                let mut rows = Vec::new();
+                for a in self.answers.iter().filter(|a| a.pred == pred) {
+                    if a.args.len() != plus.len() {
+                        bail!(
+                            "the mock's answer {} has {} columns, the extern {}",
+                            crate::partition::fmt_atom(a),
+                            a.args.len(),
+                            plus.len()
+                        );
+                    }
+                    rows.push(ground_row(a)?);
+                }
+                rows
+            }
+        };
+        Ok(all
+            .into_iter()
+            .filter(|row: &Vec<Value>| {
+                row.len() == plus.len()
+                    && row
+                        .iter()
+                        .zip(plus)
+                        .filter(|(_, p)| **p)
+                        .map(|(v, _)| v)
+                        .eq(inputs.iter())
+            })
+            .collect())
+    }
+
+    /// A computed document as it leaves the provider: every sensitive
+    /// value replaced by its label.
+    fn outward(&self, typ: &str, remote: &str, computed: &Json) -> Json {
+        let mut out = computed.clone();
+        let paths = self
+            .schema
+            .computed_of(typ)
+            .into_iter()
+            .chain(self.schema.optional_computed_of(typ));
+        for (path, class) in paths {
+            if class == NullClass::Secret && get_path(&out, &path).is_some() {
+                let label = crate::value::null_label(typ, remote, &path);
+                set_path(&mut out, &path, provider::secret_json(&label));
             }
         }
-        Ok(out)
+        out
     }
 
-    pub fn discover(&self) -> Result<Vec<Atom>> {
-        let inv = self.load_inventory()?;
-        let mut out = Vec::new();
-        for rr in inv.resources.values() {
-            out.push(Atom {
-                pred: "cloud_exists".to_string(),
-                args: vec![
-                    Term::Val(Value::Str(rr.typ.clone())),
-                    Term::Val(Value::Str(rr.name.clone())),
-                ],
-                record: None,
-                span: Default::default(),
-            });
-            // Flatten attrs + computed.
-            flatten_json_facts(&mut out, "cloud_attr", &rr.typ, &rr.name, "", &rr.attrs);
-            flatten_json_facts(
-                &mut out,
-                "cloud_computed",
-                &rr.typ,
-                &rr.name,
-                "",
-                &rr.computed,
-            );
-        }
-        Ok(out)
-    }
-
-    /// `ref(T, N, Attr)` to a configured attribute (a ref to a computed one
-    /// is the evaluator's null): the program's value for N, else the world's.
-    fn resolve_ref(&self, ctx: &Ctx, typ: &str, name: &str, attr: &str) -> Result<Json> {
-        let addr = Address {
-            typ: typ.to_string(),
-            name: name.to_string(),
+    /// Read one object. One that Read does not see yet (chaos `read-lag`)
+    /// is tried again, up to the type's `type_retry` attempts (default 3),
+    /// each retry logged on stderr: right after a Create a real cloud's Read
+    /// may not see the object yet, and that is not drift. Still missing
+    /// after the last attempt, it is gone.
+    pub fn read(&mut self, addr: &Address, remote: &str) -> Result<Option<(Json, Json)>> {
+        self.remotes.insert(addr.clone(), remote.to_string());
+        let attempts = u64::from(self.schema.read_attempts(&addr.typ));
+        let k = key(&addr.typ, remote);
+        let world = self.world()?;
+        let Some(rr) = world.resources.get_mut(&k) else {
+            return Ok(None);
         };
-        let label = crate::value::null_label(typ, name, attr);
-        let configured = ctx.resolved.get(&addr).and_then(|d| get_path(d, attr));
-        let existing = ctx.existing(&addr);
-        match configured.or_else(|| existing.and_then(|rr| get_path(&rr.attrs, attr))) {
-            Some(v) => Ok(v.clone()),
-            None => match ctx.strict {
-                Some(at) => bail!(
-                    "apply {}/{}: ?{label} is still unknown ({typ}/{name} does not set {attr})",
-                    at.typ,
-                    at.name
-                ),
-                None => Ok(provider::null_json(&label)),
-            },
-        }
-    }
-
-    /// A labeled null in a desired document. The executor fills a fresh or
-    /// open one at Apply from its owner's Apply earlier in the dependency
-    /// order (E §2.7); a secret travels as its label and the provider
-    /// materializes it. Plan shows what is still unknown as `?label`.
-    fn resolve_null(&self, ctx: &Ctx, label: &str, class: NullClass) -> Result<Json> {
-        if class == NullClass::Secret {
-            return Ok(provider::secret_json(label));
-        }
-        let found = label.split_once('#').and_then(|(_, path)| {
-            let (typ, name) = crate::value::null_owner(label)?;
-            let owner = Address { typ, name };
-            if ctx.retracted.contains(&owner) {
-                return None;
+        if let Some(lag) = rr.read_lag {
+            let at = format!("{}/{}", rr.typ, rr.name);
+            for attempt in 2..=attempts.min(lag + 1) {
+                eprintln!("retry {at} read ({attempt}/{attempts})");
             }
-            let rr = ctx.existing(&owner)?;
-            get_path(&rr.computed, path).cloned()
-        });
-        match (found, ctx.strict) {
-            (Some(v), _) => Ok(v),
-            (None, Some(at)) => bail!(
-                "apply {}/{}: ?{label} is still unknown (its resource has not been created)",
-                at.typ,
-                at.name
-            ),
-            (None, None) => Ok(provider::null_json(label)),
+            let missed = lag.min(attempts);
+            rr.read_lag = Some(lag - missed).filter(|l| *l > 0);
+            let gone = missed == attempts;
+            // Reads the lag swallowed are the mock cloud's own clock.
+            self.save()?;
+            if gone {
+                eprintln!("read {at}: nothing after {attempts} attempts; taken as gone");
+                return Ok(None);
+            }
         }
+        let rr = &self.world.as_ref().expect("loaded").resources[&k];
+        Ok(Some((
+            rr.attrs.clone(),
+            self.outward(&rr.typ, remote, &rr.computed),
+        )))
     }
 
-    fn resolve_cloud_ref(&self, ctx: &Ctx, typ: &str, name: &str, attr: &str) -> Result<Json> {
-        let k = key(typ, name);
-        let Some(cur) = ctx.inv.resources.get(&k) else {
-            bail!("cloud_ref missing inventory resource {k}");
+    /// Import: an object by remote id, from the world, else the inventory.
+    pub fn import(&mut self, typ: &str, remote: &str) -> Result<Option<(String, Json, Json)>> {
+        let k = key(typ, remote);
+        let found = match self.world()?.resources.get(&k) {
+            Some(rr) => Some(rr.clone()),
+            None => self.inventory()?.resources.get(&k).cloned(),
         };
-        if let Some(v) = get_path(&cur.computed, attr).or_else(|| get_path(&cur.attrs, attr)) {
-            return Ok(v.clone());
-        }
-        bail!("cloud_ref missing attribute {typ}.{name}.{attr}");
-    }
-
-    fn resolve_value(&self, ctx: &Ctx, v: &Value) -> Result<Json> {
-        Ok(match v {
-            Value::Str(s) => json!(s),
-            Value::Int(i) => json!(i),
-            Value::Bool(b) => json!(b),
-            Value::List(xs) => Json::Array(
-                xs.iter()
-                    .map(|x| self.resolve_value(ctx, x))
-                    .collect::<Result<_>>()?,
-            ),
-            Value::Obj(m) => Json::Object(
-                m.iter()
-                    .map(|(k, x)| Ok((k.clone(), self.resolve_value(ctx, x)?)))
-                    .collect::<Result<_>>()?,
-            ),
-            Value::Ip(n) => json!(crate::value::u32_to_ipv4(*n)),
-            Value::IpNet { addr, prefix } => json!(crate::value::ipnet_to_string(*addr, *prefix)),
-            Value::IpRange { start, end } => json!(format!(
-                "{}-{}",
-                crate::value::u32_to_ipv4(*start),
-                crate::value::u32_to_ipv4(*end)
-            )),
-            Value::Ref { typ, name, attr } => self.resolve_ref(ctx, typ, name, attr)?,
-            Value::CloudRef { typ, name, attr } => self.resolve_cloud_ref(ctx, typ, name, attr)?,
-            Value::Null { label, class, .. } => self.resolve_null(ctx, label, *class)?,
-        })
-    }
-
-    /// The document dform wants for `r` (assembled without computed paths,
-    /// `ir::compile_resources`), refs and nulls resolved as far as the world
-    /// allows.
-    fn resolve_doc(&self, ctx: &Ctx, r: &Resource) -> Result<Json> {
-        self.resolve_value(ctx, &r.attrs)
+        Ok(found.map(|rr| {
+            let computed = self.outward(typ, remote, &rr.computed);
+            (rr.name, rr.attrs, computed)
+        }))
     }
 
     /// Every `required` attribute is set. Paths inside a list element are not
@@ -509,349 +390,303 @@ impl FakeCloud {
         Ok(())
     }
 
-    /// The world's side of the comparison: configured attributes, plus the
-    /// value the provider picked for an Optional+Computed path the program now
-    /// sets.
-    fn world_doc(&self, typ: &str, cur: &RemoteResource, desired: &Json) -> Json {
-        let mut doc = cur.attrs.clone();
-        for (attr, _) in self.schema.optional_computed_of(typ) {
-            if get_path(desired, &attr).is_some()
-                && get_path(&doc, &attr).is_none()
-                && let Some(v) = get_path(&cur.computed, &attr)
-            {
-                set_path(&mut doc, &attr, v.clone());
-            }
-        }
-        doc
-    }
-
-    /// The world's configured attributes for every address state maps to a
-    /// resource Read returns: what the executor compares to see whether the
-    /// world moved under a deformation.
-    pub fn observe(&self, state: &State) -> Result<BTreeMap<Address, Json>> {
-        let world = self.refresh(state)?;
-        Ok(state
-            .entries_for_provider(self.id())
-            .filter_map(|(addr, e)| {
-                let rr = world.resources.get(&key(&addr.typ, &e.remote))?;
-                Some((addr, rr.attrs.clone()))
-            })
-            .collect())
-    }
-
-    /// Refresh: the world as Read returns it. Read of an object state maps
-    /// that returns nothing is retried, up to the type's `type_retry`
-    /// attempts (default 3), each retry logged on stderr: right after a
-    /// Create a real cloud's Read may not see the object yet (chaos
-    /// `read-lag`), and that is not drift. An object still missing after the
-    /// last attempt is gone; one state does not map is not read.
-    fn refresh(&self, state: &State) -> Result<RemoteState> {
-        let mut world = self.load()?;
-        let mapped: BTreeSet<String> = state
-            .entries_for_provider(self.id())
-            .chain(state.deposed_for_provider(self.id()))
-            .map(|(a, e)| key(&a.typ, &e.remote))
-            .collect();
-        if let Some((m, w)) = &*self.refreshed.borrow()
-            && *m == mapped
-        {
-            return Ok(w.clone());
-        }
-        let mut gone = Vec::new();
-        let mut lag_changed = false;
-        for (k, rr) in world.resources.iter_mut() {
-            let Some(lag) = rr.read_lag else {
-                continue;
-            };
-            if !mapped.contains(k) {
-                gone.push(k.clone());
-                continue;
-            }
-            let attempts = u64::from(self.schema.read_attempts(&rr.typ));
-            let at = format!("{}/{}", rr.typ, rr.name);
-            for attempt in 2..=attempts.min(lag + 1) {
-                eprintln!("retry {at} read ({attempt}/{attempts})");
-            }
-            let missed = lag.min(attempts);
-            rr.read_lag = Some(lag - missed).filter(|l| *l > 0);
-            lag_changed = true;
-            if missed == attempts {
-                eprintln!("read {at}: nothing after {attempts} attempts; taken as gone");
-                gone.push(k.clone());
-            }
-        }
-        if lag_changed {
-            // Reads the lag swallowed are the mock cloud's own clock.
-            self.save(&world)?;
-        }
-        for k in gone {
-            world.resources.remove(&k);
-        }
-        self.refreshed.replace(Some((mapped, world.clone())));
-        Ok(world)
-    }
-
-    /// Plan: refresh, then the Z-set `desired − world` (`zset::deformation`),
-    /// then this provider's per-resource plan (the diff, adopt, and replace
-    /// when a `force_new` path changes) for each deformation. Actions come
-    /// in dependency order; deletes last, in reverse dependency order (from
-    /// the dependencies state recorded), with the objects deposed by a
-    /// `create_before_destroy` replacement among them.
-    pub fn plan_with_state(
+    /// Plan one resource: the desired document is valid, its diff against
+    /// the world's, and whether a change is to a `force_new` path.
+    pub fn plan(
         &self,
-        desired: &[Resource],
-        adopts: &[Adopt],
-        lifecycle: &Lifecycle,
-        state: &State,
-    ) -> Result<Plan> {
-        self.plan_retracting(desired, adopts, lifecycle, state, &BTreeSet::new())
+        addr: &Address,
+        prior: Option<&Json>,
+        desired: Option<&Json>,
+    ) -> Result<(Vec<Change>, bool)> {
+        if let Some(d) = desired {
+            self.check_required(addr, d)?;
+        }
+        let changes = provider::diff(&self.schema, &addr.typ, prior, desired);
+        let replaces = prior.is_some()
+            && desired.is_some()
+            && changes
+                .iter()
+                .any(|c| self.schema.forces_new(&addr.typ, &norm_path(&c.path)));
+        Ok((changes, replaces))
     }
 
-    /// `plan_with_state`, leaving every null owned by a `retracted` address
-    /// unresolved: those addresses are being replaced (`executor`).
-    pub fn plan_retracting(
-        &self,
-        desired: &[Resource],
-        adopts: &[Adopt],
-        lifecycle: &Lifecycle,
-        state: &State,
-        retracted: &BTreeSet<Address>,
-    ) -> Result<Plan> {
-        let world = self.refresh(state)?;
-        let inv = self.load_inventory()?;
-        let adopt_map = state::adopt_map(adopts);
-
-        // desired: the assembled documents, refs and nulls resolved as far
-        // as the world allows.
-        let mut resolved: BTreeMap<Address, Json> = BTreeMap::new();
-        let mut order = Vec::new();
-        for r in topo_sort(desired)? {
-            let ctx = Ctx {
-                world: &world,
-                inv: &inv,
-                state,
-                adopts: &adopt_map,
-                resolved: &resolved,
-                strict: None,
-                retracted,
-            };
-            let doc = self.resolve_doc(&ctx, &r)?;
-            self.check_required(&r.addr, &doc)?;
-            order.push(r.addr.clone());
-            resolved.insert(r.addr.clone(), doc);
-        }
-
-        // world: through the identity mapping. A state entry whose resource
-        // is gone is no row (a desired one is created again); one no longer
-        // desired is deleted from state with nothing to delete.
-        let mut before: BTreeMap<Address, Json> = BTreeMap::new();
-        for (addr, entry) in state.entries_for_provider(self.id()) {
-            if let Some(cur) = world.resources.get(&key(&addr.typ, &entry.remote)) {
-                let mut doc = match resolved.get(&addr) {
-                    Some(d) => self.world_doc(&addr.typ, cur, d),
-                    None => cur.attrs.clone(),
-                };
-                // ignore_changes: an object that exists ignores changes at
-                // the path, so it is dropped from both sides. A create (no
-                // world side) sets it.
-                if let Some(want) = resolved.get_mut(&addr) {
-                    for p in lifecycle.ignore_changes.get(&addr).into_iter().flatten() {
-                        remove_path(&mut doc, p);
-                        remove_path(want, p);
-                    }
-                }
-                before.insert(addr, doc);
-            }
-        }
-
-        let flat = |docs: &BTreeMap<Address, Json>| {
-            docs.iter()
-                .map(|(a, d)| (a.clone(), self.flat_value(&a.typ, d)))
-                .collect::<BTreeMap<Address, Value>>()
+    /// A secret's value, from the computed values of the object its label
+    /// `T/N#P` names.
+    fn materialize(&mut self, label: &str) -> Result<Option<Json>> {
+        let Some((typ, name)) = crate::value::null_owner(label) else {
+            return Ok(None);
         };
-        let deformations: BTreeMap<Address, zset::Deformation> =
-            zset::deformation(&flat(&resolved), &flat(&before))
-                .into_iter()
-                .map(|d| (d.addr.clone(), d))
-                .collect();
+        let Some((_, path)) = label.split_once('#') else {
+            return Ok(None);
+        };
+        let addr = Address { typ, name };
+        let remote = self
+            .remotes
+            .get(&addr)
+            .cloned()
+            .unwrap_or_else(|| addr.name.clone());
+        let world = self.world()?;
+        Ok(world
+            .resources
+            .get(&key(&addr.typ, &remote))
+            .and_then(|rr| get_path(&rr.computed, path))
+            .cloned())
+    }
 
-        let mut actions = Vec::new();
-        for addr in order.iter().cloned() {
-            let d = &deformations[&addr];
-            let typ = addr.typ.as_str();
-            let after = resolved.get(&addr);
-            let prior = before.get(&addr);
-            let (kind, changes) = match d.kind {
-                zset::Kind::Create => match adopt_map.get(&addr) {
-                    Some(remote_name) if state.get(&addr).is_none() => {
-                        let inv_key = key(typ, remote_name);
-                        let Some(inv_rr) = inv.resources.get(&inv_key) else {
-                            bail!("adopt requested but inventory missing {inv_key}");
-                        };
-                        (
-                            ActionKind::Adopt,
-                            self.diff(typ, Some(&inv_rr.attrs), after),
-                        )
-                    }
-                    _ => (ActionKind::Create, self.diff(typ, None, after)),
-                },
-                zset::Kind::Delete => unreachable!("a desired address is never deleted"),
-                zset::Kind::Update | zset::Kind::Drift => {
-                    let changes = self.diff(typ, prior, after);
-                    let kind = if changes
-                        .iter()
-                        .any(|c| self.schema.forces_new(typ, &norm_path(&c.path)))
-                    {
-                        ActionKind::Replace {
-                            create_first: lifecycle.create_first(&self.schema, &addr),
-                        }
-                    } else if d.kind == zset::Kind::Drift {
-                        ActionKind::Drift
+    fn check_assertions(&mut self, at: &str, c: &Call) -> Result<(), Failed> {
+        for a in &c.assertions {
+            let mut v = get_path(&c.config, &a.path).cloned();
+            if let Some((provider::SECRET_KEY, label)) = v.as_ref().and_then(provider::marker) {
+                let label = label.to_string();
+                v = self
+                    .materialize(&label)
+                    .map_err(|e| Failed::Refused(format!("apply {at}: {e:#}")))?;
+            }
+            let holds = match (a.op.as_str(), v.as_ref()) {
+                ("eq", v) => v == Some(&a.value),
+                ("ne", v) => v != Some(&a.value),
+                ("len_ge" | "len_le", Some(Json::String(s))) => {
+                    let n = s.chars().count() as i64;
+                    let want = a.value.as_i64().unwrap_or(0);
+                    if a.op == "len_ge" {
+                        n >= want
                     } else {
-                        ActionKind::Update
-                    };
-                    (kind, changes)
+                        n <= want
+                    }
                 }
-                zset::Kind::Pending => (ActionKind::Pending, self.diff(typ, prior, after)),
-                zset::Kind::Undeformed => (ActionKind::Noop, vec![]),
+                ("prefix", Some(Json::String(s))) => {
+                    a.value.as_str().is_some_and(|p| s.starts_with(p))
+                }
+                ("len_ge" | "len_le" | "prefix", _) => false,
+                (op, _) => {
+                    return Err(Failed::Refused(format!(
+                        "apply {at}: unknown assertion {op} (eq, ne, len_ge, len_le, prefix)"
+                    )));
+                }
             };
-            let on = match d.kind {
-                zset::Kind::Pending => d.unresolved.clone(),
-                _ => BTreeSet::new(),
-            };
-            actions.push(Action {
-                kind,
-                addr,
-                changes,
-                on,
-            });
-        }
-
-        // Deletes: what is no longer desired, what state maps to a vanished
-        // resource, and deposed objects. One goes before the deletes of what
-        // it depends on.
-        let mut deletes: Vec<(Action, &[String])> = Vec::new();
-        for (addr, entry) in state.entries_for_provider(self.id()) {
-            if resolved.contains_key(&addr) {
-                continue;
+            if !holds {
+                let what = if a.message.is_empty() {
+                    format!("{} {} {}", a.path, a.op, a.value)
+                } else {
+                    a.message.clone()
+                };
+                return Err(Failed::Refused(format!(
+                    "apply {at}: assertion failed: {what}"
+                )));
             }
-            // A vanished resource has no world document: nothing to show.
-            let changes = self.diff(&addr.typ, before.get(&addr), None);
-            deletes.push((
-                Action {
-                    kind: ActionKind::Delete,
-                    addr,
-                    changes,
-                    on: BTreeSet::new(),
-                },
-                &entry.deps,
-            ));
         }
-        for (addr, entry) in state.deposed_for_provider(self.id()) {
-            let prior = world.resources.get(&key(&addr.typ, &entry.remote));
-            deletes.push((
-                Action {
-                    kind: ActionKind::DeleteDeposed,
-                    changes: self.diff(&addr.typ, prior.map(|rr| &rr.attrs), None),
-                    addr,
-                    on: BTreeSet::new(),
-                },
-                &entry.deps,
-            ));
-        }
-        deletes.sort_by(|a, b| a.0.addr.cmp(&b.0.addr));
-        actions.extend(reverse_dependency_order(deletes));
-        Ok(Plan { actions })
+        Ok(())
     }
 
-    /// A document in the canonical form the Z-set compares: leaf path to
-    /// leaf value, keyed lists by key, sets sorted (`flatten`), null and
-    /// secret markers as labeled nulls of the schema's class.
-    fn flat_value(&self, typ: &str, doc: &Json) -> Value {
-        let mut leaves = BTreeMap::new();
-        self.flatten(typ, doc, "", "", false, &mut leaves);
-        Value::Obj(
-            leaves
-                .into_iter()
-                .map(|(p, (v, _))| {
-                    let v = match provider::marker(&v) {
-                        Some((provider::NULL_KEY, label)) => Value::Null {
-                            label: label.to_string(),
-                            class: self.null_class(label),
-                            ty: String::new(),
-                        },
-                        Some((_, label)) => Value::Null {
-                            label: label.to_string(),
-                            class: NullClass::Secret,
-                            ty: String::new(),
-                        },
-                        None => json_to_value(&v),
-                    };
-                    (p, v)
-                })
-                .collect(),
-        )
-    }
-
-    /// The class of the null labeled `T/A#P`: the schema's, else open (a
-    /// ref to a configured attribute nobody set).
-    fn null_class(&self, label: &str) -> NullClass {
-        let Some((ta, path)) = label.split_once('#') else {
-            return NullClass::Open;
+    /// One Apply call. The world is saved after it (the cloud keeps what it
+    /// did, whatever happens next).
+    pub fn apply(&mut self, c: Call) -> Result<Applied, Failed> {
+        let addr = &c.addr;
+        let at = format!("{}/{}", addr.typ, addr.name);
+        let refuse = |e: anyhow::Error| Failed::Refused(format!("{e:#}"));
+        self.check_assertions(&at, &c)?;
+        if self.chaos.crash.contains(addr) {
+            eprintln!("chaos: crash during apply {at}: the process is killed");
+            std::process::exit(137);
+        }
+        if self.chaos.fail.contains(addr) {
+            return Err(Failed::Refused(format!(
+                "apply {at}: injected failure (chaos fail={at})"
+            )));
+        }
+        let mut out = Applied::default();
+        if let Some(ms) = self.chaos.latency.get(addr) {
+            out.notes
+                .push(format!("latency {at}: {ms}ms (simulated, not slept)"));
+            out.elapsed_ms = *ms;
+        }
+        // A timed-out call takes effect in the world, but dform never
+        // hears back.
+        let answered = !self.chaos.timeout.contains(addr);
+        let doc = c.config;
+        self.world().map_err(refuse)?;
+        let remote = match c.op {
+            pb::Op::Delete => {
+                self.delete_object(&addr.typ, &c.remote);
+                self.remotes.remove(addr);
+                None
+            }
+            pb::Op::Create => {
+                let remote = addr.name.clone();
+                let k = key(&addr.typ, &remote);
+                if self.world_ref().resources.contains_key(&k) {
+                    return Err(Failed::Refused(format!(
+                        "apply {at}: create failed: {k} already exists in the world"
+                    )));
+                }
+                self.create_object(addr, &remote, doc);
+                Some(remote)
+            }
+            pb::Op::Replace => {
+                if !c.create_first {
+                    self.delete_object(&addr.typ, &c.remote);
+                }
+                let remote = self.free_name(&addr.typ, &addr.name);
+                self.create_object(addr, &remote, doc);
+                Some(remote)
+            }
+            pb::Op::Adopt => {
+                let k = key(&addr.typ, &c.remote);
+                let Some(inv_rr) = self.inventory().map_err(refuse)?.resources.get(&k) else {
+                    return Err(Failed::Refused(format!(
+                        "apply {at}: adopt requested but inventory missing {k}"
+                    )));
+                };
+                let computed = inv_rr.computed.clone();
+                self.world_mut().resources.insert(
+                    k,
+                    RemoteResource {
+                        typ: addr.typ.clone(),
+                        name: c.remote.clone(),
+                        attrs: doc,
+                        computed,
+                        read_lag: None,
+                    },
+                );
+                Some(c.remote.clone())
+            }
+            pb::Op::Update => {
+                let k = key(&addr.typ, &c.remote);
+                let computed = match self.world_ref().resources.get(&k) {
+                    Some(cur) => cur.computed.clone(),
+                    None => {
+                        let salt = self.salt();
+                        self.mint(&addr.typ, &c.remote, &doc, salt)
+                    }
+                };
+                self.world_mut().resources.insert(
+                    k,
+                    RemoteResource {
+                        typ: addr.typ.clone(),
+                        name: c.remote.clone(),
+                        attrs: doc,
+                        computed,
+                        read_lag: None,
+                    },
+                );
+                Some(c.remote.clone())
+            }
+            pb::Op::EndTick | pb::Op::Unspecified => {
+                return Err(Failed::Refused(format!(
+                    "apply {at}: {:?} is not an action",
+                    c.op
+                )));
+            }
         };
-        let typ = ta.split_once('/').map(|x| x.0).unwrap_or(ta);
-        self.schema
-            .class_of(typ, path)
-            .or_else(|| self.schema.optional_computed_class(typ, path))
-            .unwrap_or(NullClass::Open)
+        if let Some(r) = &remote {
+            self.remotes.insert(addr.clone(), r.clone());
+            let rr = &self.world_ref().resources[&key(&addr.typ, r)];
+            out.attrs = rr.attrs.clone();
+            out.computed = self.outward(&addr.typ, r, &rr.computed);
+            out.remote = r.clone();
+        }
+        self.save().map_err(refuse)?;
+        if !answered {
+            return Err(Failed::TimedOut(format!(
+                "apply {at}: timed out waiting for the provider (chaos timeout={at}); \
+                 the change may have taken effect"
+            )));
+        }
+        Ok(out)
     }
 
-    /// Open one tick of the world for the executor's per-action Apply calls
-    /// (`executor::run_tick`). The world is saved after every call.
-    pub fn begin_tick<'a>(
-        &'a self,
-        desired: &'a [Resource],
-        adopts: &[Adopt],
-        lifecycle: &'a Lifecycle,
-    ) -> Result<Tick<'a>> {
-        Ok(Tick {
-            lifecycle,
-            cloud: self,
-            world: self.load()?,
-            inv: self.load_inventory()?,
-            adopt_map: state::adopt_map(adopts),
-            desired: desired.iter().map(|r| (r.addr.clone(), r)).collect(),
-            resolved: BTreeMap::new(),
-            timeline: Vec::new(),
-            returned: BTreeMap::new(),
-        })
+    fn world_ref(&self) -> &RemoteState {
+        self.world.as_ref().expect("loaded")
     }
 
-    /// The tick ends: chaos mutations land and the clock advances.
-    fn end_tick(&self, world: &mut RemoteState, state: &State) {
-        for (i, (addr, path, v)) in self.chaos.mutate.iter().enumerate() {
+    fn world_mut(&mut self) -> &mut RemoteState {
+        self.world.as_mut().expect("loaded")
+    }
+
+    /// The tick ends (a phase boundary): the calls' spans are the world's
+    /// timeline, chaos mutations land, the clock advances.
+    pub fn end_tick(&mut self, spans: Vec<Span>) -> Result<Vec<String>> {
+        let mut notes = Vec::new();
+        let makespan = spans.iter().map(|s| s.end_ms).max().unwrap_or(0);
+        if makespan > 0 {
+            notes.push(format!("simulated apply time: {makespan}ms"));
+        }
+        let mutate = self.chaos.mutate.clone();
+        let remotes = self.remotes.clone();
+        let world = self.world()?;
+        // Kept only when chaos `latency` put a call on the clock.
+        world.timeline = match makespan {
+            0 => Vec::new(),
+            _ => spans,
+        };
+        for (i, (addr, path, v)) in mutate.iter().enumerate() {
             // Once per run: after the first tick the resource exists at.
-            if self.mutated.borrow().contains(&i) {
+            if self.mutated.contains(&i) {
                 continue;
             }
             let at = format!("{}/{}", addr.typ, addr.name);
-            let remote = state
+            let remote = remotes
                 .get(addr)
-                .map(|e| e.remote.clone())
+                .cloned()
                 .unwrap_or_else(|| addr.name.clone());
+            let world = self.world.as_mut().expect("loaded");
             match world.resources.get_mut(&key(&addr.typ, &remote)) {
                 Some(rr) => {
                     set_path(&mut rr.attrs, path, v.clone());
-                    self.mutated.borrow_mut().insert(i);
-                    self.note(format!(
+                    self.mutated.insert(i);
+                    notes.push(format!(
                         "mutate {at}: {path} = {v} after tick {}",
                         world.tick
                     ));
                 }
-                None => self.note(format!("mutate {at}: skipped, not in the world")),
+                None => notes.push(format!("mutate {at}: skipped, not in the world")),
             }
         }
-        world.tick += 1;
+        self.world_mut().tick += 1;
+        self.save()?;
+        Ok(notes)
+    }
+
+    /// Chaos `fresh-ids`: the next serial to salt a Create's minted values
+    /// with, else none (the mock's default: the same name mints the same
+    /// id).
+    fn salt(&mut self) -> Option<u64> {
+        if !self.chaos.fresh_ids {
+            return None;
+        }
+        let w = self.world_mut();
+        w.serial += 1;
+        Some(w.serial)
+    }
+
+    /// A new object at `remote`, its computed values minted.
+    fn create_object(&mut self, addr: &Address, remote: &str, doc: Json) {
+        let salt = self.salt();
+        let computed = self.mint(&addr.typ, remote, &doc, salt);
+        let read_lag = self.chaos.read_lag.get(addr).copied();
+        self.world_mut().resources.insert(
+            key(&addr.typ, remote),
+            RemoteResource {
+                typ: addr.typ.clone(),
+                name: remote.to_string(),
+                attrs: doc,
+                computed,
+                read_lag,
+            },
+        );
+    }
+
+    fn delete_object(&mut self, typ: &str, remote: &str) {
+        self.world_mut().resources.remove(&key(typ, remote));
+    }
+
+    /// `name`, or the first `name-N` no object of `typ` has: a replacement
+    /// created before its old object is deleted cannot take its name.
+    fn free_name(&self, typ: &str, name: &str) -> String {
+        std::iter::once(name.to_string())
+            .chain((2..).map(|n| format!("{name}-{n}")))
+            .find(|r| !self.world_ref().resources.contains_key(&key(typ, r)))
+            .unwrap()
     }
 
     /// What Apply returns for a new resource: every computed attribute of the
@@ -934,394 +769,344 @@ impl FakeCloud {
             _ => json!(format!("{name}.{}.fake", attr.replace('.', "-"))),
         }
     }
+}
 
-    /// The leaf-by-leaf changes from `before` to `after`, in the plan's
-    /// canonical form (keyed lists by key, sets as sets).
-    pub fn diff(&self, typ: &str, before: Option<&Json>, after: Option<&Json>) -> Vec<Change> {
-        let mut a = BTreeMap::new();
-        let mut b = BTreeMap::new();
-        if let Some(v) = before {
-            self.flatten(typ, v, "", "", true, &mut a);
+/// An answer fact as a row.
+fn ground_row(a: &Atom) -> Result<Vec<Value>> {
+    fn value(t: &Term) -> Option<Value> {
+        match t {
+            Term::Val(v) => Some(v.clone()),
+            Term::List(xs) => xs.iter().map(value).collect::<Option<_>>().map(Value::List),
+            Term::Obj(m) => m
+                .iter()
+                .map(|(k, v)| Some((k.clone(), value(v)?)))
+                .collect::<Option<_>>()
+                .map(Value::Obj),
+            _ => None,
         }
-        if let Some(v) = after {
-            self.flatten(typ, v, "", "", true, &mut b);
-        }
-        let paths: BTreeSet<&String> = a.keys().chain(b.keys()).collect();
-        let mut out = Vec::new();
-        for p in paths {
-            let (av, bv) = (a.get(p), b.get(p));
-            if av.map(|x| &x.0) == bv.map(|x| &x.0) {
-                continue;
+    }
+    a.args
+        .iter()
+        .map(value)
+        .collect::<Option<Vec<Value>>>()
+        .ok_or_else(|| {
+            anyhow!(
+                "the mock's answer {} is not ground",
+                crate::partition::fmt_atom(a)
+            )
+        })
+}
+
+fn flatten_json_facts(
+    out: &mut Vec<Atom>,
+    pred: &str,
+    typ: &str,
+    name: &str,
+    prefix: &str,
+    v: &Json,
+) {
+    match v {
+        Json::Object(m) => {
+            for (k, vv) in m {
+                let p = if prefix.is_empty() {
+                    k.to_string()
+                } else {
+                    format!("{prefix}.{k}")
+                };
+                flatten_json_facts(out, pred, typ, name, &p, vv);
             }
-            let norm = av.or(bv).map(|x| x.1.as_str()).unwrap_or("");
-            out.push(Change {
-                path: p.clone(),
-                before: av.map(|x| x.0.clone()),
-                after: bv.map(|x| x.0.clone()),
-                sensitive: self.schema.is_sensitive(typ, norm),
+        }
+        Json::Array(xs) => {
+            for (i, vv) in xs.iter().enumerate() {
+                let p = format!("{prefix}[{i}]");
+                flatten_json_facts(out, pred, typ, name, &p, vv);
+            }
+        }
+        other => {
+            let val = match other {
+                Json::String(s) => Value::Str(s.clone()),
+                Json::Bool(b) => Value::Bool(*b),
+                Json::Number(n) => n
+                    .as_i64()
+                    .map(Value::Int)
+                    .unwrap_or(Value::Str(n.to_string())),
+                Json::Null => Value::Str("null".to_string()),
+                _ => Value::Str(other.to_string()),
+            };
+            out.push(Atom {
+                pred: pred.to_string(),
+                args: vec![
+                    Term::Val(Value::Str(typ.to_string())),
+                    Term::Val(Value::Str(name.to_string())),
+                    Term::Val(Value::Str(prefix.to_string())),
+                    Term::Val(val),
+                ],
+                record: None,
+                span: Default::default(),
             });
         }
-        out
     }
+}
 
-    /// Flatten a document to leaf paths. `norm` is the schema path (dotted, no
-    /// indices). A list with `type_list_key` merge keys is spelled by key,
-    /// `containers[name=web]`, so reordering is not a change; a `set` is
-    /// compared as a set. Null and secret markers are leaves. `by_content`
-    /// labels an element of a keyless set by a hash of its content,
-    /// `ingress[#k3j2d]`, so a diff shows an element added or removed rather
-    /// than every later index shifting; otherwise by its sorted position.
-    fn flatten(
+/// The fake behind the protocol: every call locks the one mock cloud.
+pub struct Service {
+    cloud: std::sync::Mutex<FakeCloud>,
+}
+
+type Reply<T> = std::result::Result<tonic::Response<T>, tonic::Status>;
+
+fn invalid(e: anyhow::Error) -> tonic::Status {
+    tonic::Status::invalid_argument(format!("{e:#}"))
+}
+
+#[allow(clippy::result_large_err)] // tonic's own error type
+fn doc_of(v: Option<&pb::Value>) -> std::result::Result<Option<Json>, tonic::Status> {
+    v.map(wire::from_doc).transpose().map_err(invalid)
+}
+
+impl Service {
+    fn cloud(&self) -> std::sync::MutexGuard<'_, FakeCloud> {
+        self.cloud.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
+
+#[tonic::async_trait]
+#[allow(clippy::result_large_err)] // tonic's own error type
+impl pb::provider_server::Provider for Service {
+    async fn handshake(
         &self,
-        typ: &str,
-        v: &Json,
-        prefix: &str,
-        norm: &str,
-        by_content: bool,
-        out: &mut BTreeMap<String, (Json, String)>,
-    ) {
-        if provider::marker(v).is_some() {
-            out.insert(prefix.to_string(), (v.clone(), norm.to_string()));
-            return;
+        req: tonic::Request<pb::HandshakeRequest>,
+    ) -> Reply<pb::HandshakeResponse> {
+        let v = req.into_inner().protocol_version;
+        if v != crate::plugin::spawn::VERSION {
+            return Err(tonic::Status::failed_precondition(format!(
+                "this provider speaks protocol version {}, not {v}",
+                crate::plugin::spawn::VERSION
+            )));
         }
-        match v {
-            Json::Object(m) => {
-                for (k, vv) in m {
-                    let join = |p: &str| {
-                        if p.is_empty() {
-                            k.clone()
-                        } else {
-                            format!("{p}.{k}")
-                        }
-                    };
-                    self.flatten(typ, vv, &join(prefix), &join(norm), by_content, out);
-                }
-            }
-            Json::Array(xs) => {
-                let keys = self.schema.list_key(typ, norm);
-                let is_set = self.schema.attr(typ, norm).is_some_and(|a| a.ty == "set");
-                let mut items: Vec<(String, &Json)> = Vec::new();
-                for (i, vv) in xs.iter().enumerate() {
-                    let by_key = keys.and_then(|ks| {
-                        ks.iter()
-                            .map(|k| {
-                                vv.get(k).map(|x| {
-                                    format!(
-                                        "{k}={}",
-                                        provider::fmt_value(Some(x)).trim_matches('"')
-                                    )
-                                })
-                            })
-                            .collect::<Option<Vec<_>>>()
-                    });
-                    let label = match by_key {
-                        Some(parts) => parts.join(","),
-                        None if is_set => serde_json::to_string(vv).unwrap_or_default(),
-                        None => i.to_string(),
-                    };
-                    items.push((label, vv));
-                }
-                if is_set && keys.is_none() {
-                    items.sort_by(|x, y| x.0.cmp(&y.0));
-                    for (i, it) in items.iter_mut().enumerate() {
-                        it.0 = if by_content {
-                            format!("#{}", short_hash(&it.0))
-                        } else {
-                            i.to_string()
-                        };
-                    }
-                }
-                for (label, vv) in items {
-                    self.flatten(
-                        typ,
-                        vv,
-                        &format!("{prefix}[{label}]"),
-                        norm,
-                        by_content,
-                        out,
-                    );
-                }
-            }
-            _ => {
-                out.insert(prefix.to_string(), (v.clone(), norm.to_string()));
-            }
-        }
+        Ok(tonic::Response::new(pb::HandshakeResponse {
+            protocol_version: crate::plugin::spawn::VERSION,
+            name: "fakecloud".into(),
+            capabilities: ["resource", "fact", "inventory", "managed"]
+                .map(String::from)
+                .to_vec(),
+        }))
     }
-}
 
-/// One tick of the fake world, open for Apply calls. The executor decides
-/// the order; each call is one provider Apply and the world is saved after
-/// it (the cloud keeps what it did, whatever happens next).
-pub struct Tick<'a> {
-    cloud: &'a FakeCloud,
-    lifecycle: &'a Lifecycle,
-    world: RemoteState,
-    inv: RemoteState,
-    adopt_map: BTreeMap<Address, String>,
-    desired: BTreeMap<Address, &'a Resource>,
-    /// Documents applied so far this tick, for configured-attribute refs.
-    resolved: BTreeMap<Address, Json>,
-    /// The tick's Apply calls on the simulated clock.
-    timeline: Vec<Span>,
-    /// What each answered Apply call returned: the object's configured
-    /// attributes, `None` for a delete.
-    returned: BTreeMap<Address, Option<Json>>,
-}
+    async fn configure(
+        &self,
+        req: tonic::Request<pb::ConfigureRequest>,
+    ) -> Reply<pb::ConfigureResponse> {
+        let config = doc_of(req.into_inner().config.as_ref())?.unwrap_or(json!({}));
+        self.cloud().configure(&config).map_err(invalid)?;
+        Ok(tonic::Response::new(pb::ConfigureResponse {}))
+    }
 
-impl Tick<'_> {
-    /// One Apply call for `a`. Identity is recorded in `state` when the call
-    /// answers; a timed-out call takes effect in the world and records none.
-    pub fn apply(&mut self, a: &Action, state: &mut State) -> Result<()> {
-        let cloud = self.cloud;
-        let addr = &a.addr;
-        let at = format!("{}/{}", addr.typ, addr.name);
-        let doc = match a.kind {
-            ActionKind::Delete | ActionKind::DeleteDeposed => Json::Null,
-            ActionKind::Noop | ActionKind::Pending => return Ok(()),
-            _ => {
-                let r = self
-                    .desired
-                    .get(addr)
-                    .ok_or_else(|| anyhow!("apply {at}: no desired resource"))?;
-                let ctx = Ctx {
-                    world: &self.world,
-                    inv: &self.inv,
-                    state,
-                    adopts: &self.adopt_map,
-                    resolved: &self.resolved,
-                    strict: Some(addr),
-                    retracted: &BTreeSet::new(),
-                };
-                let doc = cloud.resolve_doc(&ctx, r)?;
-                self.resolved.insert(addr.clone(), doc.clone());
-                doc
-            }
+    async fn schema(&self, _: tonic::Request<pb::SchemaRequest>) -> Reply<pb::SchemaResponse> {
+        let cloud = self.cloud();
+        let facts = cloud
+            .schema()
+            .facts
+            .iter()
+            .map(wire::fact)
+            .collect::<Result<_>>()
+            .map_err(invalid)?;
+        let externs = cloud
+            .externs()
+            .into_iter()
+            .map(|(pred, arity)| pb::ExternDecl {
+                pred,
+                arity: arity as u32,
+                input: Vec::new(),
+            })
+            .collect();
+        Ok(tonic::Response::new(pb::SchemaResponse {
+            facts,
+            externs,
+            checks_refinements: true,
+        }))
+    }
+
+    type QueryStream = tonic::codegen::tokio_stream::Iter<
+        std::vec::IntoIter<std::result::Result<pb::Row, tonic::Status>>,
+    >;
+
+    async fn query(&self, req: tonic::Request<pb::QueryRequest>) -> Reply<Self::QueryStream> {
+        let q = req.into_inner();
+        let inputs = q
+            .inputs
+            .iter()
+            .map(wire::from_value)
+            .collect::<Result<Vec<_>>>()
+            .map_err(invalid)?;
+        let rows = self
+            .cloud()
+            .query(&q.pred, &q.input, &inputs)
+            .map_err(invalid)?;
+        let rows: Vec<_> = rows
+            .iter()
+            .map(|r| {
+                Ok(pb::Row {
+                    values: r.iter().map(wire::value).collect(),
+                })
+            })
+            .collect();
+        Ok(tonic::Response::new(tonic::codegen::tokio_stream::iter(
+            rows,
+        )))
+    }
+
+    async fn read(&self, req: tonic::Request<pb::ReadRequest>) -> Reply<pb::ReadResponse> {
+        let r = req.into_inner();
+        let addr = Address {
+            typ: r.r#type,
+            name: r.name,
         };
-        if cloud.chaos.crash.contains(addr) {
-            eprintln!("chaos: crash during apply {at}: the process is killed");
-            std::process::exit(137);
-        }
-        if cloud.chaos.fail.contains(addr) {
-            bail!("apply {at}: injected failure (chaos fail={at})");
-        }
-        if let Some(ms) = cloud.chaos.latency.get(addr) {
-            cloud.note(format!("latency {at}: {ms}ms (simulated, not slept)"));
-        }
-        // A timed-out call takes effect in the world, but dform never
-        // hears back: no identity is recorded.
-        let answered = !cloud.chaos.timeout.contains(addr);
-        let deps = self.desired.get(addr).map(|r| r.deps.clone());
-        match a.kind {
-            ActionKind::Noop | ActionKind::Pending => {}
-            ActionKind::Delete => {
-                if let Some(entry) = state.get(addr) {
-                    self.delete_object(&addr.typ, &entry.remote.clone());
-                    if answered {
-                        state.remove(addr);
-                    }
-                }
-            }
-            ActionKind::DeleteDeposed => {
-                if let Some(entry) = state.deposed.get(&state::key(addr)) {
-                    self.delete_object(&addr.typ, &entry.remote.clone());
-                    if answered {
-                        state.deposed.remove(&state::key(addr));
-                    }
-                }
-            }
-            ActionKind::Create => {
-                let remote = addr.name.clone();
-                if self.world.resources.contains_key(&key(&addr.typ, &remote)) {
-                    bail!(
-                        "apply {at}: create failed: {} already exists in the world",
-                        key(&addr.typ, &remote)
-                    );
-                }
-                self.create_object(addr, &remote, doc);
-                if answered {
-                    state.set(addr.clone(), cloud.id().to_string(), remote);
-                }
-            }
-            ActionKind::Replace { create_first } => {
-                let Some(old) = state.get(addr).map(|e| e.remote.clone()) else {
-                    bail!("apply {at}: replace without a state entry");
-                };
-                if create_first {
-                    // The old object stays, deposed, until it is deleted
-                    // after what depends on it has moved to the new one.
-                    state.depose(addr);
-                } else {
-                    self.delete_object(&addr.typ, &old);
-                    state.remove(addr);
-                }
-                let remote = self.free_name(&addr.typ, &addr.name);
-                self.create_object(addr, &remote, doc);
-                if answered {
-                    state.set(addr.clone(), cloud.id().to_string(), remote);
-                }
-            }
-            ActionKind::Adopt => {
-                let Some(remote_name) = self.adopt_map.get(addr) else {
-                    bail!("apply {at}: adopt action missing adopt mapping");
-                };
-                let k = key(&addr.typ, remote_name);
-                let Some(inv_rr) = self.inv.resources.get(&k) else {
-                    bail!("apply {at}: adopt requested but inventory missing {k}");
-                };
-                let computed = inv_rr.computed.clone();
-                self.world.resources.insert(
-                    k,
-                    RemoteResource {
-                        typ: addr.typ.clone(),
-                        name: remote_name.clone(),
-                        attrs: doc,
-                        computed,
-                        read_lag: None,
-                    },
-                );
-                if answered {
-                    state.set(addr.clone(), cloud.id().to_string(), remote_name.clone());
-                }
-            }
-            ActionKind::Update | ActionKind::Drift => {
-                let Some(entry) = state.get(addr) else {
-                    bail!("apply {at}: update without a state entry");
-                };
-                let k = key(&addr.typ, &entry.remote);
-                let mut doc = doc;
-                let computed = match self.world.resources.get(&k) {
-                    Some(cur) => {
-                        // ignore_changes: the world keeps its value, or its
-                        // absence.
-                        for p in self
-                            .lifecycle
-                            .ignore_changes
-                            .get(addr)
-                            .into_iter()
-                            .flatten()
-                        {
-                            match get_path(&cur.attrs, p) {
-                                Some(v) => set_path(&mut doc, p, v.clone()),
-                                None => remove_path(&mut doc, p),
-                            }
-                        }
-                        cur.computed.clone()
-                    }
-                    None => {
-                        let salt = self.salt();
-                        cloud.mint(&addr.typ, &entry.remote, &doc, salt)
-                    }
-                };
-                self.world.resources.insert(
-                    k,
-                    RemoteResource {
-                        typ: addr.typ.clone(),
-                        name: entry.remote.clone(),
-                        attrs: doc,
-                        computed,
-                        read_lag: None,
-                    },
-                );
-            }
-        }
-        if let Some(deps) = deps {
-            state.set_deps(addr, deps);
-        }
-        if answered && !matches!(a.kind, ActionKind::DeleteDeposed) {
-            let now = state
-                .get(addr)
-                .and_then(|e| self.world.resources.get(&key(&addr.typ, &e.remote)))
-                .map(|rr| rr.attrs.clone());
-            self.returned.insert(addr.clone(), now);
-        }
-        cloud.save(&self.world)?;
-        if !answered {
-            bail!(
-                "apply {at}: timed out waiting for the provider (chaos timeout={at}); \
-                 the change may have taken effect"
-            );
-        }
-        Ok(())
-    }
-
-    /// How long an Apply call for `addr` takes on the simulated clock
-    /// (chaos `latency`, else no time).
-    pub fn latency(&self, addr: &Address) -> u64 {
-        self.cloud.chaos.latency.get(addr).copied().unwrap_or(0)
-    }
-
-    /// Record an Apply call's span on the simulated clock.
-    pub fn record(&mut self, addr: &Address, start_ms: u64, end_ms: u64) {
-        self.timeline.push(Span {
-            addr: format!("{}/{}", addr.typ, addr.name),
-            start_ms,
-            end_ms,
-        });
-    }
-
-    /// Chaos `fresh-ids`: the next serial to salt a Create's minted values
-    /// with, else none (the mock's default: the same name mints the same
-    /// id).
-    fn salt(&mut self) -> Option<u64> {
-        if !self.cloud.chaos.fresh_ids {
-            return None;
-        }
-        self.world.serial += 1;
-        Some(self.world.serial)
-    }
-
-    /// A new object at `remote`, its computed values minted.
-    fn create_object(&mut self, addr: &Address, remote: &str, doc: Json) {
-        let salt = self.salt();
-        let computed = self.cloud.mint(&addr.typ, remote, &doc, salt);
-        let read_lag = self.cloud.chaos.read_lag.get(addr).copied();
-        self.world.resources.insert(
-            key(&addr.typ, remote),
-            RemoteResource {
-                typ: addr.typ.clone(),
-                name: remote.to_string(),
-                attrs: doc,
-                computed,
-                read_lag,
+        let found = self.cloud().read(&addr, &r.remote).map_err(invalid)?;
+        Ok(tonic::Response::new(match found {
+            Some((attrs, computed)) => pb::ReadResponse {
+                found: true,
+                attrs: Some(wire::doc(&attrs)),
+                computed: Some(wire::doc(&computed)),
             },
-        );
+            None => pb::ReadResponse::default(),
+        }))
     }
 
-    fn delete_object(&mut self, typ: &str, remote: &str) {
-        self.world.resources.remove(&key(typ, remote));
-    }
-
-    /// `name`, or the first `name-N` no object of `typ` has: a replacement
-    /// created before its old object is deleted cannot take its name.
-    fn free_name(&self, typ: &str, name: &str) -> String {
-        std::iter::once(name.to_string())
-            .chain((2..).map(|n| format!("{name}-{n}")))
-            .find(|r| !self.world.resources.contains_key(&key(typ, r)))
-            .unwrap()
-    }
-
-    /// The tick ends: state records every desired object's dependencies,
-    /// chaos mutations land, the clock advances, the world is saved.
-    /// Returns what the tick's answered Apply calls returned.
-    pub fn end(mut self, state: &mut State) -> Result<BTreeMap<Address, Option<Json>>> {
-        // What each object depends on, for ordering its delete later.
-        for (addr, r) in &self.desired {
-            state.set_deps(addr, r.deps.iter().cloned());
-        }
-        let makespan = self.timeline.iter().map(|s| s.end_ms).max().unwrap_or(0);
-        if makespan > 0 {
-            self.cloud
-                .note(format!("simulated apply time: {makespan}ms"));
-        }
-        // Kept only when chaos `latency` put a call on the clock.
-        self.world.timeline = match makespan {
-            0 => Vec::new(),
-            _ => std::mem::take(&mut self.timeline),
+    async fn plan(&self, req: tonic::Request<pb::PlanRequest>) -> Reply<pb::PlanResponse> {
+        let r = req.into_inner();
+        let addr = Address {
+            typ: r.r#type,
+            name: r.name,
         };
-        self.cloud.end_tick(&mut self.world, state);
-        self.cloud.save(&self.world)?;
-        Ok(self.returned)
+        let prior = doc_of(r.prior.as_ref())?;
+        let desired = doc_of(r.desired.as_ref())?;
+        let (changes, requires_replace) = self
+            .cloud()
+            .plan(&addr, prior.as_ref(), desired.as_ref())
+            .map_err(invalid)?;
+        Ok(tonic::Response::new(pb::PlanResponse {
+            changes: changes
+                .iter()
+                .map(|c| pb::Change {
+                    path: c.path.clone(),
+                    before: c.before.as_ref().map(wire::doc),
+                    after: c.after.as_ref().map(wire::doc),
+                    sensitive: c.sensitive,
+                })
+                .collect(),
+            requires_replace,
+        }))
     }
+
+    async fn apply(&self, req: tonic::Request<pb::ApplyRequest>) -> Reply<pb::ApplyResponse> {
+        let r = req.into_inner();
+        let op = pb::Op::try_from(r.op).unwrap_or(pb::Op::Unspecified);
+        if op == pb::Op::EndTick {
+            let spans = r
+                .spans
+                .into_iter()
+                .map(|s| Span {
+                    addr: s.addr,
+                    start_ms: s.start_ms,
+                    end_ms: s.end_ms,
+                })
+                .collect();
+            let notes = self.cloud().end_tick(spans).map_err(invalid)?;
+            return Ok(tonic::Response::new(pb::ApplyResponse {
+                notes,
+                ..Default::default()
+            }));
+        }
+        let assertions = r
+            .assertions
+            .iter()
+            .map(|a| {
+                Ok(Assertion {
+                    path: a.path.clone(),
+                    op: a.op.clone(),
+                    value: doc_of(a.value.as_ref())?.unwrap_or(Json::Null),
+                    message: a.message.clone(),
+                })
+            })
+            .collect::<std::result::Result<_, tonic::Status>>()?;
+        let call = Call {
+            op,
+            addr: Address {
+                typ: r.r#type,
+                name: r.name,
+            },
+            remote: r.remote,
+            config: doc_of(r.config.as_ref())?.unwrap_or(Json::Null),
+            create_first: r.create_first,
+            assertions,
+        };
+        match self.cloud().apply(call) {
+            Ok(a) => Ok(tonic::Response::new(pb::ApplyResponse {
+                remote: a.remote,
+                attrs: Some(wire::doc(&a.attrs)),
+                computed: Some(wire::doc(&a.computed)),
+                elapsed_ms: a.elapsed_ms,
+                notes: a.notes,
+            })),
+            Err(Failed::Refused(m)) => Err(tonic::Status::failed_precondition(m)),
+            Err(Failed::TimedOut(m)) => Err(tonic::Status::deadline_exceeded(m)),
+        }
+    }
+
+    async fn import(&self, req: tonic::Request<pb::ImportRequest>) -> Reply<pb::ImportResponse> {
+        let r = req.into_inner();
+        let found = self.cloud().import(&r.r#type, &r.remote).map_err(invalid)?;
+        Ok(tonic::Response::new(match found {
+            Some((name, attrs, computed)) => pb::ImportResponse {
+                found: true,
+                r#type: r.r#type,
+                name,
+                attrs: Some(wire::doc(&attrs)),
+                computed: Some(wire::doc(&computed)),
+            },
+            None => pb::ImportResponse::default(),
+        }))
+    }
+}
+
+/// `dform-provider-fake`: serve the mock on a loopback port, print the
+/// handshake line, and exit when stdin closes (dform is done or gone).
+pub fn serve() -> Result<()> {
+    std::thread::spawn(|| {
+        let _ = std::io::copy(&mut std::io::stdin(), &mut std::io::sink());
+        std::process::exit(0);
+    });
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    rt.block_on(async {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let port = listener.local_addr()?.port();
+        {
+            use std::io::Write;
+            let mut out = std::io::stdout();
+            writeln!(
+                out,
+                "{}|{}|tcp://127.0.0.1:{port}",
+                crate::plugin::spawn::MAGIC,
+                crate::plugin::spawn::VERSION
+            )?;
+            out.flush()?;
+        }
+        let service = Service {
+            cloud: std::sync::Mutex::new(FakeCloud::default()),
+        };
+        tonic::transport::Server::builder()
+            .add_service(
+                pb::provider_server::ProviderServer::new(service)
+                    .max_decoding_message_size(usize::MAX)
+                    .max_encoding_message_size(usize::MAX),
+            )
+            .serve_with_incoming(tonic::transport::server::TcpIncoming::from(listener))
+            .await?;
+        Ok(())
+    })
 }
 
 /// The id the mock mints when the schema gives no template: `T:NAME`, and
@@ -1351,25 +1136,6 @@ fn fill_doc_refs(tpl: &str, doc: &Json, minted: &Json) -> String {
     out
 }
 
-/// A world value as the evaluator's value.
-pub fn json_to_value(j: &Json) -> Value {
-    match j {
-        Json::Null => Value::Str("null".into()),
-        Json::Bool(b) => Value::Bool(*b),
-        Json::Number(n) => n
-            .as_i64()
-            .map(Value::Int)
-            .unwrap_or(Value::Str(n.to_string())),
-        Json::String(s) => Value::Str(s.clone()),
-        Json::Array(xs) => Value::List(xs.iter().map(json_to_value).collect()),
-        Json::Object(m) => Value::Obj(
-            m.iter()
-                .map(|(k, v)| (k.clone(), json_to_value(v)))
-                .collect(),
-        ),
-    }
-}
-
 /// A schema fact's ground value as JSON.
 fn value_to_json(v: &Value) -> Json {
     match v {
@@ -1383,220 +1149,5 @@ fn value_to_json(v: &Value) -> Json {
                 .collect(),
         ),
         other => json!(format!("{other:?}")),
-    }
-}
-
-fn short_hash(s: &str) -> String {
-    // FNV-1a, printed base 36: deterministic across runs and platforms.
-    let mut h: u64 = 0xcbf29ce484222325;
-    for b in s.bytes() {
-        h ^= b as u64;
-        h = h.wrapping_mul(0x100000001b3);
-    }
-    let digits = b"0123456789abcdefghijklmnopqrstuvwxyz";
-    let mut out = String::new();
-    for _ in 0..5 {
-        out.push(digits[(h % 36) as usize] as char);
-        h /= 36;
-    }
-    out
-}
-
-/// Remove a dotted path; an object left empty by it goes too.
-fn remove_path(v: &mut Json, path: &str) {
-    let Some(m) = v.as_object_mut() else {
-        return;
-    };
-    match path.split_once('.') {
-        None => {
-            m.remove(path);
-        }
-        Some((head, rest)) => {
-            if let Some(child) = m.get_mut(head) {
-                remove_path(child, rest);
-                if child.as_object().is_some_and(|c| c.is_empty()) {
-                    m.remove(head);
-                }
-            }
-        }
-    }
-}
-
-pub fn set_path(v: &mut Json, path: &str, x: Json) {
-    let mut cur = v;
-    let mut parts = path.split('.').peekable();
-    while let Some(p) = parts.next() {
-        if !cur.is_object() {
-            *cur = json!({});
-        }
-        let m = cur.as_object_mut().unwrap();
-        if parts.peek().is_none() {
-            m.insert(p.to_string(), x);
-            return;
-        }
-        cur = m.entry(p.to_string()).or_insert_with(|| json!({}));
-    }
-}
-
-/// The value at a keypath (`tags.owner`, `subnets[0].id`) in nested JSON, the
-/// shape `ir::insert_keypath` builds and `flatten` spells.
-pub fn get_path<'a>(v: &'a serde_json::Value, path: &str) -> Option<&'a serde_json::Value> {
-    let mut cur = v;
-    for seg in path.split('.') {
-        let (key, mut rest) = match seg.find('[') {
-            Some(i) => (&seg[..i], &seg[i..]),
-            None => (seg, ""),
-        };
-        if !key.is_empty() {
-            cur = cur.get(key)?;
-        }
-        while let Some(r) = rest.strip_prefix('[') {
-            let (idx, tail) = r.split_once(']')?;
-            cur = cur.get(idx.parse::<usize>().ok()?)?;
-            rest = tail;
-        }
-        if !rest.is_empty() {
-            return None;
-        }
-    }
-    Some(cur)
-}
-
-fn flatten_json_facts(
-    out: &mut Vec<Atom>,
-    pred: &str,
-    typ: &str,
-    name: &str,
-    prefix: &str,
-    v: &serde_json::Value,
-) {
-    match v {
-        serde_json::Value::Object(m) => {
-            for (k, vv) in m {
-                let p = if prefix.is_empty() {
-                    k.to_string()
-                } else {
-                    format!("{prefix}.{k}")
-                };
-                flatten_json_facts(out, pred, typ, name, &p, vv);
-            }
-        }
-        serde_json::Value::Array(xs) => {
-            for (i, vv) in xs.iter().enumerate() {
-                let p = format!("{prefix}[{i}]");
-                flatten_json_facts(out, pred, typ, name, &p, vv);
-            }
-        }
-        other => {
-            let val = match other {
-                serde_json::Value::String(s) => Value::Str(s.clone()),
-                serde_json::Value::Bool(b) => Value::Bool(*b),
-                serde_json::Value::Number(n) => n
-                    .as_i64()
-                    .map(Value::Int)
-                    .unwrap_or(Value::Str(n.to_string())),
-                serde_json::Value::Null => Value::Str("null".to_string()),
-                _ => Value::Str(other.to_string()),
-            };
-            out.push(Atom {
-                pred: pred.to_string(),
-                args: vec![
-                    Term::Val(Value::Str(typ.to_string())),
-                    Term::Val(Value::Str(name.to_string())),
-                    Term::Val(Value::Str(prefix.to_string())),
-                    Term::Val(val),
-                ],
-                record: None,
-                span: Default::default(),
-            });
-        }
-    }
-}
-
-/// A change's path without list indices or keys: the schema's spelling.
-fn norm_path(path: &str) -> String {
-    let mut out = String::new();
-    let mut depth = 0;
-    for c in path.chars() {
-        match c {
-            '[' => depth += 1,
-            ']' => depth -= 1,
-            _ if depth == 0 => out.push(c),
-            _ => {}
-        }
-    }
-    out
-}
-
-/// Deletes in reverse dependency order: an object goes before every object
-/// at an address it depended on. Ties keep address order.
-fn reverse_dependency_order(mut deletes: Vec<(Action, &[String])>) -> Vec<Action> {
-    let mut out = Vec::new();
-    while !deletes.is_empty() {
-        // Ready: nothing still to be deleted depends on it.
-        let ready = (0..deletes.len())
-            .find(|&i| {
-                let k = state::key(&deletes[i].0.addr);
-                !deletes
-                    .iter()
-                    .enumerate()
-                    .any(|(j, (_, deps))| j != i && deps.contains(&k))
-            })
-            // A cycle cannot come from a DAG; break it in address order.
-            .unwrap_or(0);
-        out.push(deletes.remove(ready).0);
-    }
-    out
-}
-
-fn topo_sort(desired: &[Resource]) -> Result<Vec<Resource>> {
-    let mut by_addr: BTreeMap<Address, &Resource> = BTreeMap::new();
-    for r in desired {
-        by_addr.insert(r.addr.clone(), r);
-    }
-
-    let mut pending: BTreeSet<Address> = by_addr.keys().cloned().collect();
-    let mut done: BTreeSet<Address> = BTreeSet::new();
-    let mut out = Vec::new();
-
-    let mut guard = 0usize;
-    while !pending.is_empty() {
-        guard += 1;
-        if guard > 10_000 {
-            bail!("dependency resolution did not converge");
-        }
-        let mut progressed = false;
-        let snapshot: Vec<Address> = pending.iter().cloned().collect();
-        for a in snapshot {
-            let r = by_addr.get(&a).unwrap();
-            if r.deps
-                .iter()
-                .all(|d| done.contains(d) || !by_addr.contains_key(d))
-            {
-                pending.remove(&a);
-                done.insert(a.clone());
-                out.push((*r).clone());
-                progressed = true;
-            }
-        }
-        if !progressed {
-            bail!("dependency cycle detected");
-        }
-    }
-    Ok(out)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn get_path_walks_dots_and_indices() {
-        let v = json!({"tags": {"owner": "team-a"}, "subnets": [{"id": "s-0"}, {"id": "s-1"}], "id": "x"});
-        assert_eq!(get_path(&v, "id"), Some(&json!("x")));
-        assert_eq!(get_path(&v, "tags.owner"), Some(&json!("team-a")));
-        assert_eq!(get_path(&v, "subnets[1].id"), Some(&json!("s-1")));
-        assert_eq!(get_path(&v, "subnets[2].id"), None);
-        assert_eq!(get_path(&v, "tags.missing"), None);
     }
 }

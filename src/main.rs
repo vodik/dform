@@ -6,14 +6,14 @@ use dform::chaos::Chaos;
 use dform::controller;
 use dform::engine;
 use dform::executor;
-use dform::fakecloud::FakeCloud;
 use dform::graph;
 use dform::inputs;
 use dform::ir;
 use dform::loader;
 use dform::partition;
 use dform::plan_print::{self, waits_on};
-use dform::provider::{ActionKind, Provider};
+use dform::plugin::{self, Providers};
+use dform::provider::ActionKind;
 use dform::query;
 use dform::schema;
 use dform::state;
@@ -364,9 +364,18 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
         Cmd::Apply { chaos, .. } => Chaos::parse(chaos)?,
         _ => Chaos::default(),
     };
-    let backend = FakeCloud::with_paths(&paths.world, &paths.inventory, load_schema(&providers)?)
-        .with_chaos(chaos.clone())
-        .with_answers(dform::externs::load_answers(&providers)?);
+    let chaos_specs = match &cli.cmd {
+        Cmd::Apply { chaos, .. } => chaos.clone(),
+        _ => Vec::new(),
+    };
+    let backend = Providers::start(
+        &providers,
+        &plugin::Config {
+            world: paths.world.clone(),
+            inventory: paths.inventory.clone(),
+            chaos: chaos_specs,
+        },
+    )?;
     // The static secret pass, against the provider's schema.
     if let Some(l) = &lowered {
         dform::secrets::check(l, backend.schema())?;
@@ -1124,8 +1133,7 @@ fn run_tests(
     if names.is_empty() {
         bail!("no scenarios: write `scenario NAME {{ facts; deny rules }}.`");
     }
-    let backend = FakeCloud::with_paths(PathBuf::new(), PathBuf::new(), load_schema(providers)?)
-        .with_answers(dform::externs::load_answers(providers)?);
+    let backend = Providers::start(providers, &plugin::Config::default())?;
     let program_dir = files[0].parent().unwrap_or(Path::new("")).to_path_buf();
     let mut failed = 0;
     for name in &names {
@@ -1395,17 +1403,12 @@ fn with_plan_inputs(cli: &mut Cli, path: &Path) -> Result<zset::file::PlanFile> 
     Ok(saved)
 }
 
+/// The providers' schema: what `strata` and `graph strata` read, with no
+/// world.
 fn load_schema(providers: &[String]) -> Result<schema::Schema> {
-    let names: Vec<&str> = if providers.is_empty() {
-        vec!["fake"]
-    } else {
-        providers.iter().map(String::as_str).collect()
-    };
-    let mut out = schema::Schema::default();
-    for n in names {
-        out = out.merge(schema::load_provider(n)?)?;
-    }
-    Ok(out)
+    Ok(Providers::start(providers, &plugin::Config::default())?
+        .schema()
+        .clone())
 }
 
 /// `--inventory PATH`, else `<world dir>/inventory.json` when `--world` is
