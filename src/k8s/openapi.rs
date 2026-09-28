@@ -1,0 +1,527 @@
+//! The Kubernetes provider's schema, derived from the API server's OpenAPI
+//! v3 document (`/openapi/v3`: an index of group-versions, one document
+//! each), in the shape `{"paths": {"apis/apps/v1": DOC, ...}}` the provider
+//! caches it in and `providers/k8s/openapi-snapshot.json` holds.
+//!
+//! A kind is a component schema with `x-kubernetes-group-version-kind` whose
+//! object path (`.../{name}`) can be patched; the path gives its plural and
+//! whether it lives in a namespace. It becomes the type
+//! `k8s.<group>.<version>.<kind>` (the core group as `core`, the kind in
+//! snake_case: a type name is a lowercase qualified name), and every
+//! property path of its schema a `type_attr`, dotted through objects and
+//! list elements:
+//!
+//! - `x-kubernetes-list-map-keys` are the list's `type_list_key`; a list
+//!   whose `x-kubernetes-list-type` is `set` is a `set`;
+//! - the leaves of `status` and `metadata.uid`, `resourceVersion`,
+//!   `generation`, `creationTimestamp`, `deletionTimestamp`,
+//!   `deletionGracePeriodSeconds` are `computed`, `uid` an identity (`id`);
+//!   `managedFields` and `selfLink` are left out;
+//! - `metadata.name` is `optional_computed` (with `id`): a program may set
+//!   `metadata.generateName` instead and let Apply pick the name;
+//!   `metadata.namespace` is `optional_computed` (the kubeconfig's
+//!   namespace); both are `force_new`, since another name is another
+//!   object;
+//! - a property in its object's `required` list is `required`: Plan refuses
+//!   a document that sets the object but not the property;
+//! - a Secret's `data` and `stringData` are `sensitive`.
+//!
+//! Every type gets `type_retry(T, 5)` and a `type_replace` order: a
+//! Deployment, Service or ConfigMap `create_first`, a Namespace
+//! `destroy_first`, the rest `either`. The short names of the mock
+//! (`providers/k8s/schema.df`'s `type_alias` facts, `k8s.deployment`) are
+//! the same types under a second name.
+
+use crate::ast::{Atom, Term};
+use crate::schema::Schema;
+use crate::value::Value;
+use anyhow::{Context, Result, anyhow};
+use serde_json::{Map, Value as Json};
+use std::collections::BTreeMap;
+
+/// The OpenAPI document of a recent Kubernetes release, trimmed to the
+/// mock's kinds and the common workload and RBAC kinds: the schema when no
+/// cluster is reachable.
+pub const SNAPSHOT: &str = include_str!("../../providers/k8s/openapi-snapshot.json");
+
+/// The mock Kubernetes schema, for its `type_alias` facts.
+const MOCK: &str = include_str!("../../providers/k8s/schema.df");
+
+/// The provider's name: `type_provider` and state record it.
+pub const PROVIDER: &str = "kubernetes";
+
+/// Read attempts before an object state maps is taken as gone.
+pub const RETRY: i64 = 5;
+
+/// A kind the API serves: where its objects live and what they are called.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Kind {
+    /// Empty for the core group.
+    pub group: String,
+    pub version: String,
+    pub kind: String,
+    pub plural: String,
+    pub namespaced: bool,
+}
+
+impl Kind {
+    /// `apps/v1`, or `v1` for the core group.
+    pub fn api_version(&self) -> String {
+        if self.group.is_empty() {
+            self.version.clone()
+        } else {
+            format!("{}/{}", self.group, self.version)
+        }
+    }
+
+    /// The URL path of the kind's objects in `ns` (ignored for a
+    /// cluster-scoped kind).
+    pub fn collection(&self, ns: &str) -> String {
+        let base = if self.group.is_empty() {
+            format!("/api/{}", self.version)
+        } else {
+            format!("/apis/{}/{}", self.group, self.version)
+        };
+        if self.namespaced {
+            format!("{base}/namespaces/{ns}/{}", self.plural)
+        } else {
+            format!("{base}/{}", self.plural)
+        }
+    }
+}
+
+/// `k8s.apps.v1.deployment`, `k8s.core.v1.config_map`.
+pub fn type_name(group: &str, version: &str, kind: &str) -> String {
+    let group = if group.is_empty() { "core" } else { group };
+    format!(
+        "k8s.{}.{}.{}",
+        group.replace('-', "_"),
+        version,
+        snake(kind)
+    )
+}
+
+/// `HorizontalPodAutoscaler` -> `horizontal_pod_autoscaler`,
+/// `CSIDriver` -> `csi_driver`.
+fn snake(kind: &str) -> String {
+    let cs: Vec<char> = kind.chars().collect();
+    let mut out = String::new();
+    for (i, c) in cs.iter().enumerate() {
+        if c.is_uppercase() && i > 0 {
+            let prev = cs[i - 1];
+            let next_lower = cs.get(i + 1).is_some_and(|n| n.is_lowercase());
+            if prev.is_lowercase() || prev.is_ascii_digit() || (prev.is_uppercase() && next_lower) {
+                out.push('_');
+            }
+        }
+        out.extend(c.to_lowercase());
+    }
+    out
+}
+
+/// The mock's short names and the types they stand for.
+pub fn aliases() -> Result<Vec<(String, String)>> {
+    let schema = Schema::parse(MOCK, "providers/k8s/schema.df")?;
+    Ok(schema
+        .facts
+        .iter()
+        .filter(|f| f.pred == "type_alias")
+        .filter_map(|f| match f.args.as_slice() {
+            [Term::Val(Value::Str(a)), Term::Val(Value::Str(t))] => Some((a.clone(), t.clone())),
+            _ => None,
+        })
+        .collect())
+}
+
+/// The derived schema: the kinds by type name (aliases included), and the
+/// schema facts.
+#[derive(Debug, Clone)]
+pub struct Derived {
+    pub kinds: BTreeMap<String, Kind>,
+    pub schema: Schema,
+}
+
+impl Derived {
+    pub fn kind(&self, typ: &str) -> Result<&Kind> {
+        self.kinds
+            .get(typ)
+            .ok_or_else(|| anyhow!("{typ} is not a kind this cluster serves"))
+    }
+}
+
+/// Derive the schema from a document `{"paths": {GV: DOC}}`, and serve the
+/// `aliases` whose type it has under their short name too.
+pub fn derive(doc: &Json, aliases: &[(String, String)]) -> Result<Derived> {
+    let mut kinds = BTreeMap::new();
+    let mut facts = Vec::new();
+    let empty = Map::new();
+    let gvs = doc
+        .get("paths")
+        .and_then(Json::as_object)
+        .ok_or_else(|| anyhow!("an OpenAPI index has `paths`"))?;
+    for d in gvs.values() {
+        let schemas = d
+            .pointer("/components/schemas")
+            .and_then(Json::as_object)
+            .unwrap_or(&empty);
+        let paths = d.get("paths").and_then(Json::as_object).unwrap_or(&empty);
+        for (path, item) in paths {
+            let Some(prefix) = path.strip_suffix("/{name}") else {
+                continue;
+            };
+            let Some(gvk) = item.pointer("/patch/x-kubernetes-group-version-kind") else {
+                continue;
+            };
+            let s = |k: &str| gvk.get(k).and_then(Json::as_str).unwrap_or("").to_string();
+            let kind = Kind {
+                group: s("group"),
+                version: s("version"),
+                kind: s("kind"),
+                plural: prefix.rsplit('/').next().unwrap_or("").to_string(),
+                namespaced: prefix.contains("/namespaces/{namespace}/"),
+            };
+            let Some(root) = schemas.values().find(|v| {
+                v.get("x-kubernetes-group-version-kind")
+                    .and_then(Json::as_array)
+                    .is_some_and(|gs| gs.iter().any(|g| g == gvk))
+            }) else {
+                continue;
+            };
+            let typ = type_name(&kind.group, &kind.version, &kind.kind);
+            let mut w = Walk {
+                schemas,
+                kind: &kind,
+                attrs: Vec::new(),
+                keys: Vec::new(),
+            };
+            w.object(root, "", Ctx::default(), &mut Vec::new());
+            facts.extend(type_facts(&typ, &kind, &w));
+            kinds.insert(typ, kind);
+        }
+    }
+    let mut alias_facts = Vec::new();
+    for (alias, target) in aliases {
+        let Some(kind) = kinds.get(target).cloned() else {
+            continue;
+        };
+        alias_facts.push(atom("type_alias", vec![sym(alias), sym(target)]));
+        for f in facts
+            .iter()
+            .filter(|f: &&Atom| f.args.first() == Some(&sym(target)))
+        {
+            let mut f = f.clone();
+            f.args[0] = sym(alias);
+            alias_facts.push(f);
+        }
+        kinds.insert(alias.clone(), kind);
+    }
+    facts.extend(alias_facts);
+    let schema = Schema::from_facts(&facts).context("the schema derived from OpenAPI")?;
+    Ok(Derived { kinds, schema })
+}
+
+/// The derived schema of the checked-in snapshot.
+pub fn snapshot() -> Result<Derived> {
+    let doc: Json = serde_json::from_str(SNAPSHOT).context("parse the OpenAPI snapshot")?;
+    derive(&doc, &aliases()?)
+}
+
+fn sym(s: &str) -> Term {
+    Term::Val(Value::Str(s.to_string()))
+}
+
+fn atom(pred: &str, args: Vec<Term>) -> Atom {
+    Atom {
+        pred: pred.to_string(),
+        args,
+        record: None,
+        span: Default::default(),
+    }
+}
+
+fn type_facts(typ: &str, kind: &Kind, w: &Walk) -> Vec<Atom> {
+    let order = match (kind.group.as_str(), kind.kind.as_str()) {
+        ("apps", "Deployment") | ("", "Service") | ("", "ConfigMap") => "create_first",
+        ("", "Namespace") => "destroy_first",
+        _ => "either",
+    };
+    let mut out = vec![
+        atom("type_provider", vec![sym(typ), sym(PROVIDER)]),
+        atom("type_retry", vec![sym(typ), Term::Val(Value::Int(RETRY))]),
+        atom("type_replace", vec![sym(typ), sym(order)]),
+    ];
+    for (path, ty, flags) in &w.attrs {
+        let flags = flags.iter().map(|f| Term::Val(Value::Str(f.to_string())));
+        out.push(atom(
+            "type_attr",
+            vec![sym(typ), sym(path), sym(ty), Term::List(flags.collect())],
+        ));
+    }
+    for (path, keys) in &w.keys {
+        let keys = keys.iter().map(|k| sym(k)).collect();
+        out.push(atom(
+            "type_list_key",
+            vec![sym(typ), sym(path), Term::List(keys)],
+        ));
+    }
+    out
+}
+
+/// What a path inherits from its ancestors.
+#[derive(Debug, Clone, Copy, Default)]
+struct Ctx {
+    /// Under `status`: the server writes it.
+    computed: bool,
+}
+
+/// One kind's schema, walked to `type_attr` rows.
+struct Walk<'a> {
+    schemas: &'a Map<String, Json>,
+    kind: &'a Kind,
+    attrs: Vec<(String, &'static str, Vec<&'static str>)>,
+    keys: Vec<(String, Vec<String>)>,
+}
+
+impl<'a> Walk<'a> {
+    /// The component a node refers to (`$ref`, or `allOf: [{$ref}]`).
+    fn target(&self, node: &'a Json) -> Option<(&'a str, &'a Json)> {
+        let r = node
+            .get("$ref")
+            .or_else(|| node.pointer("/allOf/0/$ref"))
+            .and_then(Json::as_str)?;
+        let name = r.rsplit('/').next()?;
+        self.schemas.get(name).map(|s| (name, s))
+    }
+
+    /// A key of the node, else of the component it refers to.
+    fn get(&self, node: &'a Json, key: &str) -> Option<&'a Json> {
+        node.get(key)
+            .or_else(|| self.target(node).and_then(|(_, t)| t.get(key)))
+    }
+
+    fn ty(&self, node: &'a Json) -> &'static str {
+        let format = self.get(node, "format").and_then(Json::as_str);
+        if self.get(node, "x-kubernetes-int-or-string") == Some(&Json::Bool(true))
+            || format == Some("int-or-string")
+            || self.get(node, "oneOf").is_some()
+        {
+            return "int_or_string";
+        }
+        match self.get(node, "type").and_then(Json::as_str) {
+            Some("object") if self.get(node, "properties").is_some() => "object",
+            Some("object") if self.get(node, "additionalProperties").is_some() => "map",
+            Some("array") => {
+                match self
+                    .get(node, "x-kubernetes-list-type")
+                    .and_then(Json::as_str)
+                {
+                    Some("set") => "set",
+                    _ => "list",
+                }
+            }
+            Some("string") => "string",
+            Some("integer") => "int",
+            Some("boolean") => "bool",
+            Some("number") => "number",
+            _ => "any",
+        }
+    }
+
+    /// The properties of an object node, under `path` (empty at the top).
+    fn object(&mut self, node: &'a Json, path: &str, ctx: Ctx, stack: &mut Vec<&'a str>) {
+        let Some(props) = self.get(node, "properties").and_then(Json::as_object) else {
+            return;
+        };
+        let required: Vec<&str> = self
+            .get(node, "required")
+            .and_then(Json::as_array)
+            .map(|r| r.iter().filter_map(Json::as_str).collect())
+            .unwrap_or_default();
+        for (k, child) in props {
+            let p = if path.is_empty() {
+                k.clone()
+            } else {
+                format!("{path}.{k}")
+            };
+            if self.skip(&p) {
+                continue;
+            }
+            let ctx = Ctx {
+                computed: ctx.computed || p == "status",
+            };
+            self.attr(child, &p, ctx, required.contains(&k.as_str()), stack);
+        }
+    }
+
+    /// Paths no document carries: the type says them, or only the server
+    /// writes them and dform never reads them.
+    fn skip(&self, p: &str) -> bool {
+        matches!(
+            p,
+            "apiVersion" | "kind" | "metadata.managedFields" | "metadata.selfLink"
+        ) || (p == "metadata.namespace" && !self.kind.namespaced)
+    }
+
+    fn flags(&self, p: &str, ctx: Ctx, required: bool) -> Vec<&'static str> {
+        match p {
+            "metadata.name" => return vec!["optional_computed", "id", "force_new"],
+            "metadata.namespace" => return vec!["optional_computed", "force_new"],
+            "metadata.uid" => return vec!["computed", "id"],
+            "metadata.resourceVersion"
+            | "metadata.generation"
+            | "metadata.creationTimestamp"
+            | "metadata.deletionTimestamp"
+            | "metadata.deletionGracePeriodSeconds" => return vec!["computed"],
+            _ => {}
+        }
+        let mut out = Vec::new();
+        if ctx.computed {
+            out.push("computed");
+        } else if required {
+            out.push("required");
+        }
+        if self.kind.group.is_empty()
+            && self.kind.kind == "Secret"
+            && (p == "data" || p == "stringData")
+        {
+            out.push("sensitive");
+        }
+        out
+    }
+
+    fn attr(
+        &mut self,
+        node: &'a Json,
+        p: &str,
+        ctx: Ctx,
+        required: bool,
+        stack: &mut Vec<&'a str>,
+    ) {
+        let target = self.target(node).map(|(n, _)| n);
+        if let Some(n) = target {
+            if stack.contains(&n) {
+                // A recursive schema (a CRD's JSONSchemaProps): the rest is
+                // any value.
+                self.attrs
+                    .push((p.to_string(), "any", self.flags(p, ctx, required)));
+                return;
+            }
+            stack.push(n);
+        }
+        let ty = self.ty(node);
+        // A computed value is minted per path, so computed paths do not
+        // nest: an object the server writes is its leaves.
+        if !(ctx.computed && ty == "object") {
+            self.attrs
+                .push((p.to_string(), ty, self.flags(p, ctx, required)));
+        }
+        match ty {
+            "object" => self.object(node, p, ctx, stack),
+            "list" | "set" => {
+                if let Some(keys) = self
+                    .get(node, "x-kubernetes-list-map-keys")
+                    .and_then(Json::as_array)
+                    && ty == "list"
+                {
+                    let keys = keys.iter().filter_map(Json::as_str).map(String::from);
+                    self.keys.push((p.to_string(), keys.collect()));
+                }
+                if let Some(items) = self.get(node, "items") {
+                    let inner = self.target(items).map(|(n, _)| n);
+                    if let Some(n) = inner.filter(|n| !stack.contains(n)) {
+                        stack.push(n);
+                        self.object(items, p, ctx, stack);
+                        stack.pop();
+                    } else if inner.is_none() {
+                        self.object(items, p, ctx, stack);
+                    }
+                }
+            }
+            _ => {}
+        }
+        if target.is_some() {
+            stack.pop();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn kind_names_are_snake_case() {
+        assert_eq!(
+            type_name("apps", "v1", "Deployment"),
+            "k8s.apps.v1.deployment"
+        );
+        assert_eq!(type_name("", "v1", "ConfigMap"), "k8s.core.v1.config_map");
+        assert_eq!(
+            type_name("autoscaling", "v2", "HorizontalPodAutoscaler"),
+            "k8s.autoscaling.v2.horizontal_pod_autoscaler"
+        );
+        assert_eq!(
+            type_name("storage.k8s.io", "v1", "CSIDriver"),
+            "k8s.storage.k8s.io.v1.csi_driver"
+        );
+        assert_eq!(
+            type_name("cert-manager.io", "v1", "ClusterIssuer"),
+            "k8s.cert_manager.io.v1.cluster_issuer"
+        );
+    }
+
+    #[test]
+    fn the_snapshot_derives_classes_keys_and_aliases() {
+        use crate::value::NullClass;
+        let d = snapshot().unwrap();
+        let s = &d.schema;
+        let dep = "k8s.apps.v1.deployment";
+        assert_eq!(s.class_of(dep, "metadata.uid"), Some(NullClass::Fresh));
+        assert_eq!(
+            s.class_of(dep, "status.readyReplicas"),
+            Some(NullClass::Open)
+        );
+        assert_eq!(
+            s.class_of(dep, "status"),
+            None,
+            "computed paths do not nest"
+        );
+        assert_eq!(
+            s.optional_computed_class(dep, "metadata.name"),
+            Some(NullClass::Fresh)
+        );
+        assert_eq!(
+            s.list_key(dep, "spec.template.spec.containers.ports"),
+            Some(&["containerPort".to_string(), "protocol".to_string()][..])
+        );
+        assert!(s.attr(dep, "spec.selector").unwrap().has("required"));
+        assert_eq!(s.attr(dep, "metadata.finalizers").unwrap().ty, "set");
+        assert!(s.is_sensitive("k8s.core.v1.secret", "data.token"));
+        assert!(!s.is_sensitive("k8s.core.v1.config_map", "data.token"));
+        assert!(
+            s.attr("k8s.core.v1.namespace", "metadata.namespace")
+                .is_none()
+        );
+        assert_eq!(
+            d.kind("k8s.networking.k8s.io.v1.ingress")
+                .unwrap()
+                .collection("shop"),
+            "/apis/networking.k8s.io/v1/namespaces/shop/ingresses"
+        );
+        // The mock's short names are the same types.
+        assert_eq!(d.kind("k8s.deployment").unwrap(), d.kind(dep).unwrap());
+        assert_eq!(
+            s.attr("k8s.deployment", "spec.selector"),
+            s.attr(dep, "spec.selector")
+        );
+        assert_eq!(s.read_attempts("k8s.deployment"), 5);
+        assert_eq!(
+            s.replace_order("k8s.namespace"),
+            crate::schema::ReplaceOrder::DestroyFirst
+        );
+        assert_eq!(
+            s.replace_order(dep),
+            crate::schema::ReplaceOrder::CreateFirst
+        );
+    }
+}

@@ -11,6 +11,7 @@ pub mod fmt;
 pub mod graph;
 pub mod inputs;
 pub mod ir;
+pub mod k8s;
 pub mod lattice;
 pub mod lexer;
 pub mod lint;
