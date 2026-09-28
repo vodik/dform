@@ -554,10 +554,11 @@ pub mod file {
         pub providers: Vec<String>,
         pub world: Option<String>,
         pub inventory: Option<String>,
-        /// The environment variables the program read (`env_var`), by
-        /// label (`env_var/NAME`): never their values.
+        /// The environment variables the program read (`env_var`), each
+        /// `{"sensitive": "env_var/NAME", "digest"}` with its value's
+        /// digest keyed with the plan key: never the value.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        pub env: Vec<String>,
+        pub env: Vec<Json>,
     }
 
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -806,6 +807,25 @@ pub mod file {
             let opt = |o: &Option<String>| o.clone().unwrap_or_default();
             flag("world", opt(&was.world), opt(&now.world));
             flag("inventory", opt(&was.inventory), opt(&now.inventory));
+            // An `env_var` the plan read, by its label and keyed digest.
+            let env = |xs: &[Json]| -> BTreeMap<String, Json> {
+                xs.iter()
+                    .filter_map(|x| {
+                        Some((
+                            x.get("sensitive")?.as_str()?.to_string(),
+                            x["digest"].clone(),
+                        ))
+                    })
+                    .collect()
+            };
+            let now_env = env(&now.env);
+            for (label, digest) in env(&was.env) {
+                match now_env.get(&label) {
+                    None => out.push(format!("{label}: in the plan file, not set now")),
+                    Some(d) if *d != digest => out.push(format!("{label}: changed since the plan")),
+                    _ => {}
+                }
+            }
             out
         }
 

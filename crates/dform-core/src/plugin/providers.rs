@@ -523,8 +523,14 @@ impl Providers {
     /// `facts`): each configured provider it names reports that account at
     /// Configure, or the run is refused before anything is planned. A
     /// provider still waiting on the program's settings is checked once
-    /// they arrive.
-    pub fn check_accounts<'a>(&self, facts: impl IntoIterator<Item = &'a Atom>) -> Result<()> {
+    /// they arrive. `secret`: the providers whose expected account a
+    /// secret reaches (`secrets::secret_expected_accounts`), named by its
+    /// label, `provider/NAME#expect_account`, never its value.
+    pub fn check_accounts<'a>(
+        &self,
+        facts: impl IntoIterator<Item = &'a Atom>,
+        secret: &BTreeSet<String>,
+    ) -> Result<()> {
         let mut wrong = Vec::new();
         for a in facts.into_iter().filter(|a| a.pred == EXPECT_ACCOUNT) {
             let [Term::Val(Value::Str(name)), Term::Val(want)] = a.args.as_slice() else {
@@ -540,14 +546,22 @@ impl Providers {
                 Value::Str(s) => s.clone(),
                 v => crate::partition::fmt_value(v),
             };
+            let shown = if secret.contains(name) {
+                format!(
+                    "{} (a secret)",
+                    crate::value::null_label("provider", name, "expect_account")
+                )
+            } else {
+                want.clone()
+            };
             match self.accounts.borrow().get(&i) {
                 Some(got) if *got == want => {}
                 Some(got) => wrong.push(format!(
-                    "provider {name} reports account {got}, but the program expects {want} \
+                    "provider {name} reports account {got}, but the program expects {shown} \
                      (expect_account)"
                 )),
                 None => wrong.push(format!(
-                    "provider {name} reports no account, but the program expects {want} \
+                    "provider {name} reports no account, but the program expects {shown} \
                      (expect_account): {} cannot tell which account its credentials reach",
                     self.names[i]
                 )),

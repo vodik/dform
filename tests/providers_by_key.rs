@@ -141,10 +141,9 @@ fn an_env_var_is_in_the_plan_file_only_as_its_label() {
     run_with_env(&s, &env, &["plan", "--out", "plan.json", "stacks/app.df"]).success();
     let f = s.read("plan.json");
     let j: serde_json::Value = serde_json::from_str(&f).unwrap();
-    assert_eq!(
-        j["inputs"]["env"],
-        serde_json::json!(["env_var/FAKE_TOKEN"])
-    );
+    let env_in = &j["inputs"]["env"];
+    assert_eq!(env_in[0]["sensitive"], "env_var/FAKE_TOKEN", "{f}");
+    assert!(env_in[0]["digest"].is_string(), "{f}");
     assert!(!f.contains("tok-5ecret"), "{f}");
     run_with_env(&s, &env, &["apply", "plan.json"]).success();
     let state = s.read("dform.state/app/state.json");
@@ -157,6 +156,66 @@ fn an_env_var_is_in_the_plan_file_only_as_its_label() {
     assert!(
         r.stderr
             .contains("env_var: FAKE_TOKEN is not set in the environment"),
+        "{}",
+        r.stderr
+    );
+}
+
+/// A variable changed between plan and apply makes the saved plan stale:
+/// the plan file holds its digest keyed with the stack's plan key.
+#[test]
+fn a_changed_env_var_makes_a_saved_plan_stale() {
+    let s = project(
+        "bykey-stale",
+        "edition 2026\nprovider fake { token = env_var(\"FAKE_TOKEN\") }\n\
+         resource net.vpc main {\n  cidr = \"10.0.0.0/16\"\n}\n",
+    );
+    run_with_env(
+        &s,
+        &[("FAKE_TOKEN", "tok-one")],
+        &["plan", "--out", "plan.json", "stacks/app.df"],
+    )
+    .success();
+    let r = run_with_env(&s, &[("FAKE_TOKEN", "tok-two")], &["apply", "plan.json"]).failure();
+    assert!(
+        r.stderr
+            .contains("env_var/FAKE_TOKEN: changed since the plan"),
+        "{}",
+        r.stderr
+    );
+    assert!(!r.stderr.contains("tok-"), "{}", r.stderr);
+    let r = s.run(&["apply", "plan.json"]).failure();
+    assert!(
+        r.stderr
+            .contains("env_var/FAKE_TOKEN: in the plan file, not set now"),
+        "{}",
+        r.stderr
+    );
+    run_with_env(&s, &[("FAKE_TOKEN", "tok-one")], &["apply", "plan.json"]).success();
+}
+
+/// An expected account read from the environment is a secret: the
+/// refusal names it by its label, never its value.
+#[test]
+fn a_secret_expected_account_is_refused_by_its_label() {
+    let s = project(
+        "bykey-secret-account",
+        "edition 2026\nprovider fake {\n  account = \"acct-real\"\n  \
+         expect_account = env_var(\"WANT_ACCOUNT\")\n}\n\
+         resource net.vpc main {\n  cidr = \"10.0.0.0/16\"\n}\n",
+    );
+    let r = run_with_env(
+        &s,
+        &[("WANT_ACCOUNT", "hunter2")],
+        &["plan", "stacks/app.df"],
+    )
+    .failure();
+    assert!(!r.stderr.contains("hunter2"), "{}", r.stderr);
+    assert!(
+        r.stderr.contains(
+            "provider fake reports account acct-real, but the program expects \
+             provider/fake#expect_account (a secret)"
+        ),
         "{}",
         r.stderr
     );

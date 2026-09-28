@@ -251,8 +251,9 @@ fn is_secret_ty(t: &TypeExpr) -> bool {
     matches!(t, TypeExpr::Apply(n, _) if n == "secret")
 }
 
-/// The pass over a lowered program against the provider schema.
-pub fn check(lowered: &Lowered, schema: &Schema) -> Result<()> {
+/// The secret positions of a lowered program: the fixpoint over predicate
+/// signatures, from the sources to every head a secret reaches.
+fn fixpoint<'a>(lowered: &Lowered, schema: &'a Schema) -> Pass<'a> {
     let mut pass = Pass {
         schema,
         secret: BTreeSet::new(),
@@ -295,6 +296,31 @@ pub fn check(lowered: &Lowered, schema: &Schema) -> Result<()> {
             break;
         }
     }
+    pass
+}
+
+/// The providers whose `expect_account` a secret reaches (an `env_var`, a
+/// secret input): a refusal names that account by its label, never its
+/// value (`Providers::check_accounts`).
+pub fn secret_expected_accounts(lowered: &Lowered, schema: &Schema) -> BTreeSet<String> {
+    let pass = fixpoint(lowered, schema);
+    rules(&lowered.program)
+        .into_iter()
+        .filter_map(|(head, body, _)| {
+            let h = head.filter(|h| h.pred == crate::plugin::providers::EXPECT_ACCOUNT)?;
+            let vars = pass.body_vars(body);
+            match h.args.as_slice() {
+                [name, account] if pass.term_secret(account, &vars) => s(name).map(str::to_string),
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+/// The pass over a lowered program against the provider schema.
+pub fn check(lowered: &Lowered, schema: &Schema) -> Result<()> {
+    let pass = fixpoint(lowered, schema);
+    let rs = rules(&lowered.program);
 
     let mut diags = Vec::new();
     for (head, body, span) in &rs {

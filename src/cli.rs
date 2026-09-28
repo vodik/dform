@@ -1197,8 +1197,18 @@ fn run_with(
         Some(k) => Some(plan_inputs(&cli, &files, &secret_inputs, k)?),
         None => None,
     };
-    if let (Some((path, saved)), Some(inputs)) = (&saved, &inputs) {
-        let mut diff = saved.input_differences(inputs);
+    if let (Some((path, saved)), Some(inputs), Some(k)) = (&saved, &inputs, &key) {
+        // The environment variables the plan read, as they are now.
+        let labels = saved
+            .inputs
+            .env
+            .iter()
+            .filter_map(|e| e.get("sensitive")?.as_str().map(str::to_string));
+        let now = zset::file::Inputs {
+            env: env_inputs(labels, k),
+            ..inputs.clone()
+        };
+        let mut diff = saved.input_differences(&now);
         diff.extend(saved.commit_differences(&pinned));
         if !diff.is_empty() {
             eprintln!(
@@ -1324,6 +1334,11 @@ fn run_with(
         crate::secrets::check(l, backend.schema())?;
         crate::refine::check(&l.program, backend.schema())?;
     }
+    // An `expect_account` a secret reaches is named by its label.
+    let secret_accounts = lowered
+        .as_ref()
+        .map(|l| crate::secrets::secret_expected_accounts(l, backend.schema()))
+        .unwrap_or_default();
     base_extra.extend(backend.catalog(scope.as_ref())?);
     base_extra.extend(discovered);
     if let Some(h) = hook.as_deref_mut() {
@@ -1357,7 +1372,7 @@ fn run_with(
             // Each provider reaches the account the program expects of it
             // (`expect_account`), or nothing is planned.
             backend
-                .check_accounts(&res.facts)
+                .check_accounts(&res.facts, &secret_accounts)
                 .with_context(|| format!("deployment {deployment}"))?;
             *last.borrow_mut() = Some((extra, resumable));
             (res, violations)
@@ -1650,7 +1665,7 @@ fn run_with(
             version: zset::file::VERSION,
             stack: stack.clone(),
             inputs: zset::file::Inputs {
-                env: externs.env_labels(),
+                env: env_inputs(externs.env_labels().into_iter(), key),
                 ..inputs
             },
             world_digest: zset::file::world_digest(&backend.world_facts(st)?),
@@ -3086,6 +3101,23 @@ fn provider_configs(program: &crate::ast::Program) -> BTreeSet<String> {
         .filter_map(|a| match a.args.first() {
             Some(Term::Val(crate::value::Value::Str(n))) => Some(n.clone()),
             _ => None,
+        })
+        .collect()
+}
+
+/// The environment variables `env_var` reads, by label (`env_var/NAME`),
+/// as a plan file records them: the label and the value's digest keyed
+/// with the stack's plan key, as a secret input's. One not set now is
+/// left out.
+fn env_inputs(
+    labels: impl Iterator<Item = String>,
+    key: &zset::file::Key,
+) -> Vec<serde_json::Value> {
+    labels
+        .filter_map(|label| {
+            let name = label.strip_prefix("env_var/")?;
+            let v = std::env::var(name).ok()?;
+            Some(serde_json::json!({ "sensitive": label, "digest": key.digest(v.as_bytes()) }))
         })
         .collect()
 }

@@ -536,7 +536,8 @@ pub fn file(
 /// The builtin `env_var(+name, -value: secret(string))`: the process
 /// environment's variable. Its column is a secret, so the plan file never
 /// records the answer ([`Externs::recorded`]), only its label
-/// ([`Externs::env_labels`]), and it is not `persist`: every run reads the
+/// ([`Externs::env_labels`]) and a keyed digest, and it is not `persist`:
+/// every run reads the
 /// environment again. An unset variable is an error naming it. `None` for
 /// another extern.
 pub fn env_var(f: &ExternFn, inputs: &[Value]) -> Option<Result<Vec<Vec<Value>>>> {

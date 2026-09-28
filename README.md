@@ -319,8 +319,11 @@ The block lowers to `provider_config("google", { project: .., credentials:
 the evaluation knows it (the provider serves nothing until then; see "The
 Kubernetes provider"). `env_var("NAME")` is a builtin extern answering the
 process environment's variable as a `secret(string)`: never persisted, and
-recorded in the plan file only by its label (`inputs.env`:
-`env_var/NAME`); an unset one is an error naming it. A provider's
+recorded in the plan file only by its label and its value's digest keyed
+with the stack's plan key (`inputs.env`: `{"sensitive": "env_var/NAME",
+"digest": ..}`, as a secret `--set`), so `apply PLAN` with the variable
+changed or unset is a stale plan naming it; an unset one is an error
+naming it. A provider's
 configuration may not read what that provider serves itself (its externs,
 its resources' attributes): that is a compile error naming the chain of
 rules. Reading another provider's values is the lazy configuration: the
@@ -328,6 +331,8 @@ settings wait on its nulls. `expect_account = t` is checked, not sent:
 Configure answers with the account the provider's credentials reach, when
 it can tell (the mock reports its `account` setting), and a run whose
 provider reports another account, or none, refuses to plan, naming both
+(an expected account a secret reaches, an `env_var`'s, by its label,
+`provider/NAME#expect_account`, never its value)
 (`deployment pngu[env=prod]: refusing to plan: provider google reports
 account renfry-dev, but the program expects renfry-prod`).
 
