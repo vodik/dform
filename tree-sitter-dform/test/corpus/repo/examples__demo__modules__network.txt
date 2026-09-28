@@ -5,9 +5,14 @@ examples/demo/modules/network.df
 edition 2026
 
 module network {
+  # A type alias, exported: every file that imports this one may write
+  # `subnets` for the type (modules/database.df, modules/kubernetes.df).
+  type subnets = list(ref(net.subnet))
+  export type subnets
+
   input vpc_net: inet
   output vpc: net.vpc
-  output private_subnet_ids: list(ref(net.subnet))
+  output private_subnet_ids: subnets
 
   resource net.vpc vpc {
     cidr = vpc_net
@@ -37,6 +42,22 @@ module network {
   (module
     (identifier)
     (statement_block
+      (comment)
+      (comment)
+      (type_alias
+        (identifier)
+        (type
+          (dotted_name
+            (identifier))
+          (type
+            (dotted_name
+              (identifier))
+            (type
+              (dotted_name
+                (identifier)
+                (identifier))))))
+      (export
+        (identifier))
       (input
         (identifier)
         (type
@@ -52,14 +73,7 @@ module network {
         (identifier)
         (type
           (dotted_name
-            (identifier))
-          (type
-            (dotted_name
-              (identifier))
-            (type
-              (dotted_name
-                (identifier)
-                (identifier))))))
+            (identifier))))
       (resource
         (dotted_name
           (identifier)

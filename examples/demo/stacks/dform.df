@@ -15,8 +15,10 @@ provider fake {}
 stack dform[env] { unknowns = "strict", isolated = true, config = yaml("config/dform/{env}.yaml") }
 
 # Typed stack input with a default. The default is a @default contribution
-# to input env; --set env=prod is a normal contribution and wins.
-input env: enum("dev", "staging", "prod") = "staging"
+# to input env; --set env=prod is a normal contribution and wins. Its type
+# is an alias: `environment` is the enum wherever it is written.
+type environment = enum("dev", "staging", "prod")
+input env: environment = "staging"
 
 data("zone", "us-test-1a")
 data("zone", "us-test-1b")

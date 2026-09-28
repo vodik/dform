@@ -91,12 +91,14 @@ fn load_unit(
         file,
         root: root.clone(),
         imports: None,
+        links: Vec::new(),
     });
     let base_dir = abs.parent().unwrap_or(Path::new(".")).to_path_buf();
     // A project's imports resolve from its root (docs/layout.md); outside
     // every project, from the importing file.
     let project = crate::project::manifest_root(&abs);
     let mut imports = Vec::new();
+    let mut links = Vec::new();
     for n in root
         .children()
         .filter(|n| n.kind() == crate::syntax::SyntaxKind::IMPORT)
@@ -140,8 +142,10 @@ fn load_unit(
             .into());
         }
         imports.push(unit);
+        links.extend(imported.copied());
     }
     units[i].imports = Some(imports);
+    units[i].links = links;
     Ok(Some(i))
 }
 

@@ -4,10 +4,13 @@ examples/demo/modules/database.df
 
 edition 2026
 
+# The network module's `subnets` type.
+import "modules/network.df"
+
 module database {
   input backup_days: int
   input multi_az: bool
-  input subnet_ids: list(ref(net.subnet))
+  input subnet_ids: subnets
   contributes iam_need
 
   resource db.postgres db {
@@ -26,6 +29,10 @@ module database {
 (source_file
   (edition
     (integer))
+  (comment)
+  (import
+    (string
+      (string_content)))
   (module
     (identifier)
     (statement_block
@@ -43,14 +50,7 @@ module database {
         (identifier)
         (type
           (dotted_name
-            (identifier))
-          (type
-            (dotted_name
-              (identifier))
-            (type
-              (dotted_name
-                (identifier)
-                (identifier))))))
+            (identifier))))
       (contributes
         (identifier))
       (resource

@@ -1,9 +1,12 @@
 edition 2026
 
+# The network module's `subnets` type.
+import "modules/network.df"
+
 module database {
   input backup_days: int
   input multi_az: bool
-  input subnet_ids: list(ref(net.subnet))
+  input subnet_ids: subnets
   contributes iam_need
 
   resource db.postgres db {

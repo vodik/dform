@@ -35,6 +35,8 @@
 
 (dotted_name (identifier) @type)
 (type name: (dotted_name (identifier) @type.builtin))
+(type_alias name: (identifier) @type.definition)
+(export type: (identifier) @type)
 
 (call function: (identifier) @function.call)
 (call function: (member_expression field: (identifier) @function.call))

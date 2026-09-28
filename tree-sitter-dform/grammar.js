@@ -134,6 +134,7 @@ export default grammar({
       $.contributes,
       $.extern,
       $.type_declaration,
+      $.type_alias,
       $.decl,
       $.let,
       $.module,
@@ -194,7 +195,13 @@ export default grammar({
       choice(seq(':', field('type', $._type)), seq('=', field('value', $._term))),
     ),
 
-    export: $ => seq('export', field('name', $._word), '/', field('arity', $.integer)),
+    export: $ => seq(
+      'export',
+      choice(
+        seq(field('name', $._word), '/', field('arity', $.integer)),
+        seq('type', field('type', $.identifier)),
+      ),
+    ),
 
     contributes: $ => seq('contributes', field('grant', $._chain)),
 
@@ -214,6 +221,9 @@ export default grammar({
     ),
 
     type_declaration: $ => seq('type', field('name', $.dotted_name), field('body', $.attribute_block)),
+
+    // `type NAME = TYPE`: a transparent alias.
+    type_alias: $ => seq('type', field('name', $.identifier), '=', field('type', $._type)),
 
     attribute_block: $ => seq('{', entries($, $.attribute_declaration), '}'),
 

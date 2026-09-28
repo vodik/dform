@@ -146,6 +146,10 @@
         "named": true
       },
       {
+        "type": "type_alias",
+        "named": true
+      },
+      {
         "type": "type_declaration",
         "named": true
       },
@@ -928,7 +932,7 @@
     "fields": {
       "arity": {
         "multiple": false,
-        "required": true,
+        "required": false,
         "types": [
           {
             "type": "integer",
@@ -938,7 +942,17 @@
       },
       "name": {
         "multiple": false,
-        "required": true,
+        "required": false,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "type": {
+        "multiple": false,
+        "required": false,
         "types": [
           {
             "type": "identifier",
@@ -2147,6 +2161,40 @@
         "types": [
           {
             "type": "dotted_name",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "type_alias",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "type": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "record_type",
+            "named": true
+          },
+          {
+            "type": "string",
+            "named": true
+          },
+          {
+            "type": "type",
             "named": true
           }
         ]

@@ -168,6 +168,8 @@ pub enum SyntaxKind {
     LIT_SOME,
     /// `not { body }`.
     LIT_NOT_BLOCK,
+    /// `type NAME = TYPE`: a type alias.
+    TYPE_ALIAS,
     __LAST,
 }
 

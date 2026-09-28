@@ -101,6 +101,7 @@ const SAME: &[(SyntaxKind, &[&str])] = &[
     (CONTRIBUTES, &["contributes"]),
     (EXTERN, &["extern"]),
     (TYPE_DECL, &["type_declaration"]),
+    (TYPE_ALIAS, &["type_alias"]),
     (ATTR_DECL, &["attribute_declaration"]),
     (DECL, &["decl"]),
     (MODULE, &["module"]),

@@ -4,11 +4,14 @@ examples/demo/modules/kubernetes.df
 
 edition 2026
 
+# The network module's `subnets` type.
+import "modules/network.df"
+
 module kubernetes {
   input private_api: bool
   input nodepool_min: int
   input nodepool_max: int
-  input subnet_ids: list(ref(net.subnet))
+  input subnet_ids: subnets
   contributes iam_need
 
   resource k8s.cluster cluster {
@@ -32,6 +35,10 @@ module kubernetes {
 (source_file
   (edition
     (integer))
+  (comment)
+  (import
+    (string
+      (string_content)))
   (module
     (identifier)
     (statement_block
@@ -54,14 +61,7 @@ module kubernetes {
         (identifier)
         (type
           (dotted_name
-            (identifier))
-          (type
-            (dotted_name
-              (identifier))
-            (type
-              (dotted_name
-                (identifier)
-                (identifier))))))
+            (identifier))))
       (contributes
         (identifier))
       (resource

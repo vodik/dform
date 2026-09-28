@@ -29,6 +29,8 @@ use crate::diag::Diagnostic;
 use crate::value::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
+mod alias;
+
 /// The one edition this compiler reads.
 pub const EDITION_YEAR: i64 = 2026;
 
@@ -41,6 +43,9 @@ pub struct Unit {
     /// for a file already loaded. `None` for the whole list: the imports
     /// stay `Stmt::Import` statements (a file parsed on its own).
     pub imports: Option<Vec<Option<usize>>>,
+    /// Every unit an `import` of the file names, loaded by it or before:
+    /// whose type aliases are in scope in the file.
+    pub links: Vec<usize>,
 }
 
 /// How text is read.
@@ -408,6 +413,8 @@ pub struct Lowerer<'u> {
     any_type: bool,
     /// What a call in the term being lowered is.
     calls: Calls,
+    /// Type aliases and where each is in scope.
+    aliases: alias::Aliases,
 }
 
 /// What a call is where it is written.
@@ -441,6 +448,7 @@ impl<'u> Lowerer<'u> {
             text: false,
             any_type: false,
             calls: Calls::Function,
+            aliases: alias::Aliases::default(),
         };
         for u in units {
             let scope = l.new_scope(PROGRAM);
@@ -454,6 +462,7 @@ impl<'u> Lowerer<'u> {
             .map(|t| t.split('.').next().unwrap_or(t).to_string())
             .chain(schema_namespaces().iter().cloned())
             .collect();
+        l.collect_aliases();
         l
     }
 
@@ -969,6 +978,9 @@ impl<'u> Lowerer<'u> {
                 }))
             }
             OUTPUT_DECL => self.output(n, scope, outer),
+            // An alias lowers to nothing: each use is its type.
+            TYPE_ALIAS => Ok(Vec::new()),
+            EXPORT if tokens(n).nth(1).is_some_and(|t| t.kind() == TYPE_KW) => Ok(Vec::new()),
             EXPORT => {
                 let pred = word_text(n, 1);
                 let arity = self.arity(n)?;
@@ -1179,6 +1191,12 @@ impl<'u> Lowerer<'u> {
     }
 
     fn type_expr(&mut self, n: &SyntaxNode) -> TypeExpr {
+        self.type_expr_in(n, true)
+    }
+
+    /// `type_expr`; `aliases`: a bare name may be a type alias (not in an
+    /// `enum(..)`, whose members are values).
+    fn type_expr_in(&mut self, n: &SyntaxNode, aliases: bool) -> TypeExpr {
         let first = tokens(n).next();
         match first.as_ref().map(|t| t.kind()) {
             Some(STRING) => {
@@ -1203,10 +1221,13 @@ impl<'u> Lowerer<'u> {
                 let args: Vec<TypeExpr> = n
                     .children()
                     .filter(|c| c.kind() == TYPE_EXPR)
-                    .map(|c| self.type_expr(&c))
+                    .map(|c| self.type_expr_in(&c, name != "enum"))
                     .collect();
                 if args.is_empty() {
-                    TypeExpr::Name(name)
+                    match aliases.then(|| self.alias(n, &name)).flatten() {
+                        Some(t) => t,
+                        None => TypeExpr::Name(name),
+                    }
                 } else if name == "enum" {
                     // `enum("a", "b")`: its members are names.
                     TypeExpr::Apply(
@@ -3677,6 +3698,7 @@ mod tests {
             file,
             root: parse.syntax(),
             imports: None,
+            links: Vec::new(),
         }];
         super::lower(&units, &[0], false, super::Mode::Program)
             .map_err(|d| crate::diag::Diagnostics(d).into())

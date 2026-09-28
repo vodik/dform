@@ -180,7 +180,7 @@ static type is field access on a value: `__path(X, "f")`.
 
 ```
 stmt       := provider | stack | import | input | inputrel | output | export
-            | contributes | extern | typedecl | decl | let
+            | contributes | extern | typedecl | typealias | decl | let
             | module | instance | policy | apply | scenario | when | for | with
             | resource | settings
             | check | contribution | valuerule | rule | fact
@@ -194,10 +194,12 @@ inputrel   := "input" "relation" NAME "/" INT "from" term   ; file(STRING) | git
 columns    := "(" NAME ":" type ("," NAME ":" type)* ","? ")"
 output     := "output" NAME (":" type | "=" term)           ; type may be a resource type
 export     := "export" NAME "/" INT
+            | "export" "type" NAME                          ; a module's alias, for its importers
 contributes:= "contributes" chain       ; `p`, `_.path`, `settings.path`, `TYPE.path`
 extern     := "extern" DOTTED "(" bindarg ("," bindarg)* ")" "persist"?
 bindarg    := ("+" | "-") NAME (":" type)?
 typedecl   := "type" DOTTED attrs
+typealias  := "type" NAME "=" type                          ; see "Type aliases"
 attrs      := "{" (attrdecl SEP)* "}"
 attrdecl   := blockpath ":" (attrs | type flag* ("where" body1)?)
 flag       := "required" | "computed" | "id" | "sensitive" | "nullable"
@@ -260,6 +262,34 @@ after its name, `"[" NAME ("," NAME)* "]"`, before the block.
 
 A stack's `config = FORMAT(SOURCE)` is not a constant: it is a table of
 the deployment's settings (see "Tables"), and needs a key.
+
+### Type aliases
+
+`type NAME = TYPE` names a type: `type environment = enum("dev", "stg",
+"prod")`, then `input env: environment` and `input relation peering(env:
+environment, ...)`. An alias is usable anywhere a type is (an input, a
+module input, a table's column, an output, an extern's column, a `decl`
+record's field, a `type` block's attribute) and is transparent: the
+resolver writes its type in its place, so nothing after it sees an alias.
+An alias may name other aliases (`type envs = list(environment)`); one
+that reaches itself is an error naming the cycle, each alias in it
+labelled. A member of `enum(..)` is a value, never an alias. An alias may
+not take a built-in type's name (`int`, `string`, `bool`, `inet`,
+`symbol`, `addr`, `any`, `enum`, `list`, `set`, `secret`, `ref`).
+
+Where an alias is in scope: in its file, and in every file that imports
+that file, however indirectly (an import inlines the file: `import
+"types.df"` brings its aliases as it brings its rules); an alias in a
+module, policy or scenario is that block's, until the module says `export
+type NAME`, which puts it in its file's scope too (and so in every file
+importing that file). `export type` outside a module is an error, and so
+is exporting a name the module does not declare. Two aliases of one name
+in one scope (two imported files that each declare `environment`, or a
+module's alias and its file's) are an error listing both. A file reached
+by two imports is one file: its alias is one alias.
+
+For tree-sitter: `type_alias` is `"type" NAME "=" type`; `export` takes
+`"type" NAME` in place of `NAME "/" INT`.
 
 ### Tables
 
@@ -384,6 +414,7 @@ are unchanged.
 | `p(t)` with reads in `t`                  | `p(t') :- reads` (a rule)                              |
 | `k = t [if B]`                            | `k(t') :- B, reads`; with neither, the fact `k(t')`   |
 | `let a = CHAIN`                           | nothing: each `a` is `CHAIN`                           |
+| `type a = T`, `export type a`             | nothing: each use of `a` is `T`                        |
 | `resource T n { for B1 if B2 f = t }`     | `resource T n { f = t' } :- B1, B2, reads`             |
 | `resource T "a-{e}" { .. }`               | name `Addr`, `Addr = format("a-%s", e')` last          |
 | `settings n @r { for B .. }`              | `settings n @r { .. } :- B, reads`                     |

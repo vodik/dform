@@ -30,8 +30,11 @@ extern file.json(+path, -value)
 # Environment selection
 ########################################
 
+# The environments, one type for the key and the peering table's column.
+type environment = enum("dev", "stg", "prod")
+
 # A typed stack input: --set env=qa is an error naming the input.
-input env: enum("dev", "stg", "prod") = "dev"
+input env: environment = "dev"
 
 ########################################
 # Settings (branch-as-data)
@@ -97,7 +100,7 @@ let cfg = settings[env]
 
 # The rows are data/peerings.csv's, typed column by column: a row whose env
 # is not one of these is an error naming its line.
-input relation peering(env: enum("dev", "stg", "prod"), name: string, peer_network: string) from csv("data/peerings.csv")
+input relation peering(env: environment, name: string, peer_network: string) from csv("data/peerings.csv")
 
 ########################################
 # Validation

@@ -576,6 +576,10 @@ impl<'a> Parser<'a> {
                 }
             }),
             EXPORT_KW => self.simple(EXPORT, |p| {
+                // `export type NAME`: a module's type alias, for its importers.
+                if p.eat(TYPE_KW) {
+                    return p.expect_word();
+                }
                 p.expect_word()?;
                 p.expect(SLASH)?;
                 p.expect(INT)
@@ -607,6 +611,12 @@ impl<'a> Parser<'a> {
                 })?;
                 p.eat(PERSIST_KW);
                 Ok(())
+            }),
+            // `type NAME = TYPE`: an alias.
+            TYPE_KW if !paren && self.nth(2) == EQ => self.simple(TYPE_ALIAS, |p| {
+                p.expect_word()?;
+                p.expect(EQ)?;
+                p.type_expr()
             }),
             TYPE_KW if !paren => self.simple(TYPE_DECL, |p| {
                 p.dotted("a type name")?;
@@ -1411,6 +1421,16 @@ mod tests {
             kinds(src, &[VALUE_RULE, CONTRIBUTION, CHECK, RULE, LET]),
             vec![VALUE_RULE, CONTRIBUTION, CHECK, RULE, LET]
         );
+    }
+
+    #[test]
+    fn an_alias_is_not_a_type_block() {
+        let src = "type env = enum(\"a\")\ntype net.vpc { cidr: string }\nmodule m {\n  export type env\n}\n";
+        assert_eq!(
+            kinds(src, &[TYPE_ALIAS, TYPE_DECL, EXPORT]),
+            vec![TYPE_ALIAS, TYPE_DECL, EXPORT]
+        );
+        assert!(errors(src).is_empty(), "{:?}", errors(src));
     }
 
     #[test]

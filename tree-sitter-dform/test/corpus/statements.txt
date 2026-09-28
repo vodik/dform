@@ -704,3 +704,48 @@ zone(us-test-1a)
 --------------------------------------------------------------------------------
 
 
+
+================================================================================
+Type aliases
+================================================================================
+
+type environment = enum("dev", "prod")
+type envs = list(environment)
+module platform {
+  type tier = { name: string }
+  export type tier
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (type_alias
+    (identifier)
+    (type
+      (dotted_name
+        (identifier))
+      (string
+        (string_content))
+      (string
+        (string_content))))
+  (type_alias
+    (identifier)
+    (type
+      (dotted_name
+        (identifier))
+      (type
+        (dotted_name
+          (identifier)))))
+  (module
+    (identifier)
+    (statement_block
+      (type_alias
+        (identifier)
+        (record_type
+          (field_declaration
+            (identifier)
+            (type
+              (dotted_name
+                (identifier))))))
+      (export
+        (identifier)))))
