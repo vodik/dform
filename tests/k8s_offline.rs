@@ -915,7 +915,7 @@ fn a_type_built_at_runtime_gets_the_whole_schema() {
 
 /// The provider, offline, as a plugin connection: configured with its
 /// state directory `dir`.
-fn offline_provider(s: &Scratch, dir: &str) -> dform::plugin::client::Conn {
+fn offline_provider(s: &Scratch, dir: &str) -> dform::plugin::link::Link {
     let wrapper = s.write(
         "k8s-offline",
         &format!(
@@ -927,28 +927,24 @@ fn offline_provider(s: &Scratch, dir: &str) -> dform::plugin::client::Conn {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
-    let conn = dform::plugin::client::Conn::start(&wrapper).unwrap();
+    let mut conn = dform_grpc::client::Conn::link(&wrapper).unwrap();
     let config = json!({"world": s.path(&format!("{dir}/world.json")).display().to_string()});
     let config = Some(dform::plugin::wire::doc(&config));
-    conn.call(|mut c| async move {
-        c.configure(dform::plugin::pb::ConfigureRequest { config })
-            .await
-    })
-    .unwrap();
+    let _: dform::plugin::pb::ConfigureResponse = conn
+        .call(dform::plugin::pb::ConfigureRequest { config })
+        .unwrap();
     conn
 }
 
 /// A Schema answer's facts, spelled.
-fn schema_of(conn: &dform::plugin::client::Conn, types: Option<&[&str]>) -> Vec<String> {
+fn schema_of(conn: &mut dform::plugin::link::Link, types: Option<&[&str]>) -> Vec<String> {
     use dform::plugin::{pb, wire};
     let req = pb::SchemaRequest {
         types: types.map(|t| pb::TypeFilter {
             names: t.iter().map(|s| s.to_string()).collect(),
         }),
     };
-    let resp = conn
-        .call(|mut c| async move { c.schema(req).await })
-        .unwrap();
+    let resp: pb::SchemaResponse = conn.call(req).unwrap();
     resp.facts
         .iter()
         .map(|f| dform::partition::fmt_atom(&wire::from_fact(f).unwrap()))
@@ -964,12 +960,12 @@ fn the_schema_is_derived_once_and_answered_for_the_types_asked_for() {
     let s = Scratch::new("k8s-schema-cache");
     let count =
         |facts: &[String], prefix: &str| facts.iter().filter(|f| f.starts_with(prefix)).count();
-    let all = schema_of(&offline_provider(&s, "st"), None);
+    let all = schema_of(&mut offline_provider(&s, "st"), None);
     assert!(count(&all, "type_attr(") > 15_000);
     let cache = s.path("st/k8s-schema.json");
     assert!(cache.exists(), "the derived schema is cached");
 
-    let some = schema_of(&offline_provider(&s, "st"), Some(&["k8s.deployment"]));
+    let some = schema_of(&mut offline_provider(&s, "st"), Some(&["k8s.deployment"]));
     let types: std::collections::BTreeSet<&str> = some
         .iter()
         .filter(|f| f.starts_with("type_attr("))
@@ -996,7 +992,7 @@ fn the_schema_is_derived_once_and_answered_for_the_types_asked_for() {
     std::fs::write(&cache, c.to_string()).unwrap();
     let probe = "type_attr(\"k8s.core.v1.namespace\", \"cached.probe\"";
     let ns = schema_of(
-        &offline_provider(&s, "st"),
+        &mut offline_provider(&s, "st"),
         Some(&["k8s.core.v1.namespace"]),
     );
     assert_eq!(count(&ns, probe), 1, "answered from the cache");
@@ -1005,7 +1001,7 @@ fn the_schema_is_derived_once_and_answered_for_the_types_asked_for() {
     c["key"] = json!("another");
     std::fs::write(&cache, c.to_string()).unwrap();
     let ns = schema_of(
-        &offline_provider(&s, "st"),
+        &mut offline_provider(&s, "st"),
         Some(&["k8s.core.v1.namespace"]),
     );
     assert_eq!(count(&ns, probe), 0);

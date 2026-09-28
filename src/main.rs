@@ -25,6 +25,9 @@ use dform::zset;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+/// How the CLI reaches its providers: each is a process, over gRPC.
+const LAUNCH: &dform_grpc::client::Process = &dform_grpc::client::Process;
+
 #[derive(Parser, Debug, Clone)]
 #[command(name = "dform")]
 #[command(about = "Facts + rules + constraints for infra", long_about = None)]
@@ -276,7 +279,7 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
         cmd: ProviderCmd::Check { path },
     } = &cli.cmd
     {
-        let (lines, failed) = plugin::check::run(path)?;
+        let (lines, failed) = plugin::check::run(LAUNCH, path)?;
         for l in &lines {
             println!("{l}");
         }
@@ -502,6 +505,7 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
     };
     // The schema is asked for once the run knows the types it names.
     let backend = Providers::start_deferred(
+        LAUNCH,
         &providers,
         &plugin::Config {
             world: paths.world.clone(),
@@ -1126,6 +1130,7 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
                     let opts = executor::Options {
                         parallel: parallel as usize,
                         persist: &persist,
+                        stop_after: None,
                     };
                     let applied = executor::run_tick(
                         &backend, &resources, &adopts, &lifecycle, &mut st, &plan, &opts,
@@ -1451,7 +1456,7 @@ fn run_tests(
     if names.is_empty() {
         bail!("no scenarios: write `scenario NAME {{ with k = v; deny rules }}`");
     }
-    let backend = Providers::start(providers, &plugin::Config::default())?;
+    let backend = Providers::start(LAUNCH, providers, &plugin::Config::default())?;
     let program_dir = files[0].parent().unwrap_or(Path::new("")).to_path_buf();
     let mut failed = 0;
     for name in &names {
@@ -1825,9 +1830,11 @@ fn with_plan_inputs(cli: &mut Cli, path: &Path) -> Result<zset::file::PlanFile> 
 /// The providers' schema: what `strata` and `graph strata` read, with no
 /// world.
 fn load_schema(providers: &[String]) -> Result<schema::Schema> {
-    Ok(Providers::start(providers, &plugin::Config::default())?
-        .schema()
-        .clone())
+    Ok(
+        Providers::start(LAUNCH, providers, &plugin::Config::default())?
+            .schema()
+            .clone(),
+    )
 }
 
 /// `--inventory PATH`, else `<world dir>/inventory.json` when `--world` is

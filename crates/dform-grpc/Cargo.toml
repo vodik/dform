@@ -6,6 +6,7 @@ publish = false
 
 [dependencies]
 anyhow = "1.0"
+dform-core = { path = "../dform-core" }
 dform-wire = { path = "../dform-wire" }
 prost = "0.13"
 tokio = { version = "1", features = ["rt", "net", "macros", "io-util", "time"] }

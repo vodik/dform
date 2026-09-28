@@ -22,9 +22,10 @@ use crate::cluster::{Cluster, WriteError};
 use crate::object::{attrs, computed, manifest, parse_remote, remote};
 use crate::openapi::{self, Derived, Kind};
 use anyhow::{Result, anyhow, bail};
-use dform_core::plugin::{pb, wire};
+use dform_core::plugin::wire;
 use dform_core::provider::{self, diff, get_path, marker, set_path};
 use dform_core::schema::Schema;
+use dform_grpc::pb;
 use serde_json::{Value as Json, json};
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
@@ -547,14 +548,14 @@ impl Service {
 impl pb::provider_server::Provider for Service {
     async fn handshake(&self, req: Request<pb::HandshakeRequest>) -> Reply<pb::HandshakeResponse> {
         let v = req.into_inner().protocol_version;
-        if v != dform_core::plugin::spawn::VERSION {
+        if v != dform_grpc::spawn::VERSION {
             return Err(Status::failed_precondition(format!(
                 "this provider speaks protocol version {}, not {v}",
-                dform_core::plugin::spawn::VERSION
+                dform_grpc::spawn::VERSION
             )));
         }
         Ok(Response::new(pb::HandshakeResponse {
-            protocol_version: dform_core::plugin::spawn::VERSION,
+            protocol_version: dform_grpc::spawn::VERSION,
             name: openapi::PROVIDER.into(),
             capabilities: vec!["resource".into()],
         }))
@@ -669,7 +670,7 @@ impl pb::provider_server::Provider for Service {
 /// Serve as a provider (`plugin::transport`: TCP on the loopback, or a unix
 /// socket), and exit when stdin closes.
 pub fn serve() -> Result<()> {
-    dform_core::plugin::transport::serve(
+    dform_grpc::transport::serve(
         tonic::transport::Server::builder().add_service(
             pb::provider_server::ProviderServer::new(Service::default())
                 .max_decoding_message_size(usize::MAX)

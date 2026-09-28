@@ -115,7 +115,7 @@ fn a_provider_without_a_handshake_deviates() {
 /// The type of each `type_attr` row of a Schema answer, and how many
 /// `type_provider` rows it holds.
 fn schema_rows(
-    conn: &dform::plugin::client::Conn,
+    conn: &mut dform::plugin::link::Link,
     types: Option<&[&str]>,
 ) -> (std::collections::BTreeSet<String>, usize) {
     use dform::plugin::{pb, wire};
@@ -124,9 +124,7 @@ fn schema_rows(
             names: t.iter().map(|s| s.to_string()).collect(),
         }),
     };
-    let resp = conn
-        .call(|mut c| async move { c.schema(req).await })
-        .unwrap();
+    let resp: pb::SchemaResponse = conn.call(req).unwrap();
     let facts: Vec<_> = resp
         .facts
         .iter()
@@ -148,20 +146,18 @@ fn schema_rows(
 #[test]
 fn the_mock_answers_the_schema_of_the_types_asked_for() {
     let s = Scratch::new("protocol-schema-scope");
-    let conn = dform::plugin::client::Conn::start(std::path::Path::new(&fake())).unwrap();
+    let mut conn = dform_grpc::client::Conn::link(std::path::Path::new(&fake())).unwrap();
     let config = serde_json::json!({
         "schemas": ["fake", "k8s"],
         "world": s.path("w.json").display().to_string(),
     });
     let config = Some(dform::plugin::wire::doc(&config));
-    conn.call(|mut c| async move {
-        c.configure(dform::plugin::pb::ConfigureRequest { config })
-            .await
-    })
-    .unwrap();
-    let (all, providers) = schema_rows(&conn, None);
+    let _: dform::plugin::pb::ConfigureResponse = conn
+        .call(dform::plugin::pb::ConfigureRequest { config })
+        .unwrap();
+    let (all, providers) = schema_rows(&mut conn, None);
     assert!(all.len() > 10, "{all:?}");
-    let (some, scoped_providers) = schema_rows(&conn, Some(&["net.vpc", "k8s.deployment"]));
+    let (some, scoped_providers) = schema_rows(&mut conn, Some(&["net.vpc", "k8s.deployment"]));
     assert_eq!(
         some.into_iter().collect::<Vec<_>>(),
         ["\"k8s.deployment\"", "\"net.vpc\""],
@@ -176,6 +172,7 @@ fn the_mock_answers_the_schema_of_the_types_asked_for() {
 fn a_scoped_run_loads_the_schema_of_its_types() {
     let s = Scratch::new("protocol-schema-load");
     let backend = dform::plugin::Providers::start_deferred(
+        &dform_grpc::client::Process,
         &[],
         &dform::plugin::Config {
             world: s.path("w.json"),

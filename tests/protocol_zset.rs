@@ -35,6 +35,7 @@ fn plan(
     state: &Path,
 ) -> Vec<(String, ActionKind, BTreeSet<String>)> {
     let backend = Providers::start(
+        &dform_grpc::client::Process,
         &[],
         &Config {
             world: world.to_path_buf(),

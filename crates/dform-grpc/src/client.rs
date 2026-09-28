@@ -1,60 +1,49 @@
-//! One running provider and blocking calls to it.
+//! The process backend: one running provider, reached over gRPC.
 //!
 //! The engine is synchronous; each connection owns a single-threaded tokio
-//! runtime and blocks on its calls. A call that fails because the process
-//! died says so, with its exit status (`CallError::Crashed`).
+//! runtime. `submit` spawns the call on it and returns; `next_completed`
+//! drives the runtime until some call has answered, so every call in
+//! flight runs at once (a plan's Plan calls, `--parallel`'s Apply calls).
+//! A call that fails because the process died says so, with its exit
+//! status (`CallError::Crashed`).
 
 use crate::pb;
 use crate::pb::provider_client::ProviderClient;
 use crate::spawn::{self, Started};
-use anyhow::{Context, Result, bail};
-use std::cell::{Cell, RefCell};
+use anyhow::{Context, Result};
+use dform_core::plugin::Launch;
+use dform_core::plugin::backend::{Call, CallError, Provider, Reply, Ticket};
+use dform_core::plugin::link::Link;
 use std::path::Path;
 use std::process::{Child, ChildStdin, ExitStatus};
 use std::time::Duration;
+use tokio::sync::mpsc;
 use tonic::transport::Channel;
 
-/// How an Apply call failed.
-#[derive(Debug)]
-pub enum CallError {
-    /// The provider refused the call: nothing changed.
-    Refused(String),
-    /// The call may have taken effect, but no answer came
-    /// (`DEADLINE_EXCEEDED`).
-    MaybeApplied(String),
-    /// The provider process died during the call.
-    Crashed(String),
-}
-
-impl std::fmt::Display for CallError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            CallError::Refused(m) | CallError::MaybeApplied(m) | CallError::Crashed(m) => {
-                f.write_str(m)
-            }
-        }
-    }
-}
-
-impl std::error::Error for CallError {}
+type Answer = std::result::Result<Reply, tonic::Status>;
 
 pub struct Conn {
-    /// The name the provider's handshake gave: what state records.
-    pub name: String,
-    pub capabilities: Vec<String>,
     /// What was started, for messages.
-    pub program: String,
+    program: String,
+    /// The name the provider's handshake gave, once it has.
+    name: String,
     rt: tokio::runtime::Runtime,
     client: ProviderClient<Channel>,
-    child: RefCell<Child>,
-    stdin: RefCell<Option<ChildStdin>>,
-    exited: Cell<Option<ExitStatus>>,
+    child: Child,
+    stdin: Option<ChildStdin>,
+    exited: Option<ExitStatus>,
     /// Where it was dialed: a unix socket is removed once it is gone.
     address: String,
+    next: u64,
+    /// Answers arrive here from the calls spawned on `rt`.
+    tx: mpsc::UnboundedSender<(Ticket, Answer)>,
+    rx: mpsc::UnboundedReceiver<(Ticket, Answer)>,
+    /// Calls refused before they were sent (the process had exited).
+    refused: Vec<(Ticket, CallError)>,
 }
 
 impl Conn {
-    /// Start the provider at `exe`, dial it and shake hands.
+    /// Start the provider at `exe` and dial it.
     pub fn start(exe: &Path) -> Result<Conn> {
         let Started {
             child,
@@ -69,51 +58,40 @@ impl Conn {
         let channel = rt
             .block_on(crate::transport::dial(&address))
             .with_context(|| format!("dial provider {program} at {address}"))?;
-        let mut conn = Conn {
-            name: String::new(),
-            capabilities: Vec::new(),
+        let (tx, rx) = mpsc::unbounded_channel();
+        Ok(Conn {
             program,
+            name: String::new(),
             rt,
             client: ProviderClient::new(channel)
                 .max_decoding_message_size(usize::MAX)
                 .max_encoding_message_size(usize::MAX),
-            child: RefCell::new(child),
-            stdin: RefCell::new(stdin),
-            exited: Cell::new(None),
+            child,
+            stdin,
+            exited: None,
             address,
-        };
-        let hs = conn.call(|mut c| async move {
-            c.handshake(pb::HandshakeRequest {
-                protocol_version: spawn::VERSION,
-            })
-            .await
-        })?;
-        if hs.protocol_version != spawn::VERSION {
-            bail!(
-                "provider {} speaks protocol version {}; this dform speaks {}",
-                conn.program,
-                hs.protocol_version,
-                spawn::VERSION
-            );
-        }
-        conn.name = hs.name;
-        conn.capabilities = hs.capabilities;
-        Ok(conn)
+            next: 0,
+            tx,
+            rx,
+            refused: Vec::new(),
+        })
     }
 
-    pub fn has(&self, capability: &str) -> bool {
-        self.capabilities.iter().any(|c| c == capability)
+    /// Start the provider at `exe`, dial it and shake hands.
+    pub fn link(exe: &Path) -> Result<Link> {
+        let conn = Conn::start(exe)?;
+        Link::start(exe.display().to_string(), Box::new(conn))
     }
 
     /// Whether the process has exited, waiting up to `grace` for it.
-    fn exit_status(&self, grace: Duration) -> Option<ExitStatus> {
-        if let Some(s) = self.exited.get() {
+    fn exit_status(&mut self, grace: Duration) -> Option<ExitStatus> {
+        if let Some(s) = self.exited {
             return Some(s);
         }
         let deadline = std::time::Instant::now() + grace;
         loop {
-            if let Ok(Some(s)) = self.child.borrow_mut().try_wait() {
-                self.exited.set(Some(s));
+            if let Ok(Some(s)) = self.child.try_wait() {
+                self.exited = Some(s);
                 return Some(s);
             }
             if std::time::Instant::now() >= deadline {
@@ -123,12 +101,15 @@ impl Conn {
         }
     }
 
-    /// Whether the process is gone.
-    pub fn is_dead(&self) -> bool {
-        self.exit_status(Duration::ZERO).is_some()
+    fn name_or_program(&self) -> &str {
+        if self.name.is_empty() {
+            &self.program
+        } else {
+            &self.name
+        }
     }
 
-    fn classify(&self, s: tonic::Status) -> CallError {
+    fn classify(&mut self, s: tonic::Status) -> CallError {
         use tonic::Code;
         let transport = matches!(
             s.code(),
@@ -154,91 +135,65 @@ impl Conn {
             _ => CallError::Refused(s.message().to_string()),
         }
     }
+}
 
-    fn name_or_program(&self) -> &str {
-        if self.name.is_empty() {
-            &self.program
-        } else {
-            &self.name
+/// One call over gRPC; a server-streamed Query collected.
+async fn send(mut c: ProviderClient<Channel>, call: Call) -> Answer {
+    use tonic::Response;
+    Ok(match call {
+        Call::Handshake(r) => Reply::Handshake(c.handshake(r).await?.into_inner()),
+        Call::Configure(r) => Reply::Configure(c.configure(r).await?.into_inner()),
+        Call::Schema(r) => Reply::Schema(c.schema(r).await?.into_inner()),
+        Call::Query(r) => {
+            let mut stream = c.query(r).await.map(Response::into_inner)?;
+            let mut rows: Vec<pb::Row> = Vec::new();
+            while let Some(row) = stream.message().await? {
+                rows.push(row);
+            }
+            Reply::Query(rows)
         }
-    }
+        Call::Read(r) => Reply::Read(c.read(r).await?.into_inner()),
+        Call::Plan(r) => Reply::Plan(c.plan(r).await?.into_inner()),
+        Call::Apply(r) => Reply::Apply(c.apply(r).await?.into_inner()),
+        Call::Import(r) => Reply::Import(c.import(r).await?.into_inner()),
+    })
+}
 
-    /// One call, its failure classified.
-    pub fn try_call<T, F, Fut>(&self, f: F) -> std::result::Result<T, CallError>
-    where
-        F: FnOnce(ProviderClient<Channel>) -> Fut,
-        Fut: std::future::Future<Output = std::result::Result<tonic::Response<T>, tonic::Status>>,
-    {
-        if let Some(status) = self.exited.get() {
-            return Err(CallError::Crashed(format!(
-                "the provider {} has exited ({status})",
-                self.name_or_program()
-            )));
-        }
-        self.rt
-            .block_on(f(self.client.clone()))
-            .map(tonic::Response::into_inner)
-            .map_err(|s| self.classify(s))
-    }
-
-    /// One call; any failure is an error carrying the provider's message.
-    pub fn call<T, F, Fut>(&self, f: F) -> Result<T>
-    where
-        F: FnOnce(ProviderClient<Channel>) -> Fut,
-        Fut: std::future::Future<Output = std::result::Result<tonic::Response<T>, tonic::Status>>,
-    {
-        self.try_call(f).map_err(anyhow::Error::new)
-    }
-
-    /// Plan calls, all in flight at once; the answers in order.
-    pub fn plan_all(
-        &self,
-        reqs: Vec<pb::PlanRequest>,
-    ) -> Vec<std::result::Result<pb::PlanResponse, CallError>> {
-        if let Some(status) = self.exited.get() {
+impl Provider for Conn {
+    fn submit(&mut self, call: Call) -> Ticket {
+        let t = Ticket(self.next);
+        self.next += 1;
+        if let Some(status) = self.exited {
             let m = format!(
                 "the provider {} has exited ({status})",
                 self.name_or_program()
             );
-            return reqs
-                .iter()
-                .map(|_| Err(CallError::Crashed(m.clone())))
-                .collect();
+            self.refused.push((t, CallError::Crashed(m)));
+            return t;
         }
-        let client = self.client.clone();
-        let mut answers = self.rt.block_on(async move {
-            let mut set = tokio::task::JoinSet::new();
-            for (i, req) in reqs.into_iter().enumerate() {
-                let mut c = client.clone();
-                set.spawn(async move { (i, c.plan(req).await) });
-            }
-            let mut out = Vec::new();
-            while let Some(r) = set.join_next().await {
-                out.push(r.expect("a Plan call panicked"));
-            }
-            out
+        let (client, tx) = (self.client.clone(), self.tx.clone());
+        self.rt.spawn(async move {
+            let _ = tx.send((t, send(client, call).await));
         });
-        answers.sort_by_key(|(i, _)| *i);
-        answers
-            .into_iter()
-            .map(|(_, r)| {
-                r.map(tonic::Response::into_inner)
-                    .map_err(|s| self.classify(s))
-            })
-            .collect()
+        t
     }
 
-    /// A server-streamed Query, collected.
-    pub fn query(&self, req: pb::QueryRequest) -> Result<Vec<pb::Row>> {
-        let mut stream = self.call(|mut c| async move { c.query(req).await })?;
-        let mut rows = Vec::new();
-        loop {
-            match self.rt.block_on(stream.message()) {
-                Ok(Some(r)) => rows.push(r),
-                Ok(None) => return Ok(rows),
-                Err(s) => return Err(anyhow::Error::new(self.classify(s))),
-            }
+    fn next_completed(&mut self) -> (Ticket, std::result::Result<Reply, CallError>) {
+        if let Some((t, e)) = self.refused.pop() {
+            return (t, Err(e));
         }
+        let (t, answer) = self
+            .rt
+            .block_on(self.rx.recv())
+            .expect("internal: the provider client's channel closed");
+        if let Ok(Reply::Handshake(h)) = &answer {
+            self.name = h.name.clone();
+        }
+        (t, answer.map_err(|s| self.classify(s)))
+    }
+
+    fn is_dead(&mut self) -> bool {
+        self.exit_status(Duration::ZERO).is_some()
     }
 }
 
@@ -246,12 +201,25 @@ impl Drop for Conn {
     fn drop(&mut self) {
         // Closing stdin asks the provider to exit; it keeps nothing in
         // memory that is not already written.
-        self.stdin.borrow_mut().take();
-        let mut child = self.child.borrow_mut();
-        if self.exited.get().is_none() {
-            let _ = child.kill();
+        self.stdin.take();
+        if self.exited.is_none() {
+            let _ = self.child.kill();
         }
-        let _ = child.wait();
+        let _ = self.child.wait();
         crate::transport::remove(&self.address);
+    }
+}
+
+/// The CLI's backend: every provider a process, the mock
+/// `dform-provider-fake` (`spawn::fake_executable`).
+pub struct Process;
+
+impl Launch for Process {
+    fn mock(&self) -> Result<Link> {
+        Conn::link(&spawn::fake_executable()?)
+    }
+
+    fn plugin(&self, exe: &Path) -> Result<Link> {
+        Conn::link(exe)
     }
 }

@@ -22,9 +22,10 @@
 //! Which provider serves a type: the one whose schema declares it, else the
 //! mock (which plays unknown types), else the first.
 
-use super::client::{CallError, Conn};
+use super::backend::{CallError, Ticket};
+use super::link::Link;
 use super::pb;
-use super::spawn::{self, Source};
+use super::source::{self, Source};
 use super::wire;
 use crate::ast::{Atom, Term};
 use crate::ir::{Address, Adopt, Resource};
@@ -37,7 +38,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value as Json, json};
 use std::cell::{OnceCell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// What the engine hands every provider at Configure.
 #[derive(Debug, Clone, Default)]
@@ -48,6 +49,16 @@ pub struct Config {
     pub inventory: PathBuf,
     /// `apply --chaos` specs, for the mock.
     pub chaos: Vec<String>,
+}
+
+/// How a run reaches its providers: a backend (`plugin::backend`). The
+/// CLI's starts each as a process and speaks gRPC to it (`dform-grpc`);
+/// tests and benches link the mock in (`dform-mock`).
+pub trait Launch {
+    /// The mock provider, which plays every mock schema.
+    fn mock(&self) -> Result<Link>;
+    /// The provider executable at `exe`.
+    fn plugin(&self, exe: &Path) -> Result<Link>;
 }
 
 /// An object as Read, Apply or Import returns it: its configured
@@ -85,7 +96,9 @@ pub const INVENTORY: [(&str, usize); 3] = [
 ];
 
 pub struct Providers {
-    conns: Vec<Conn>,
+    links: Vec<RefCell<Link>>,
+    /// Each provider's name, as its handshake gave it.
+    names: Vec<String>,
     /// The providers' Schema answers: loaded at start, or, for a run that
     /// scopes them to the types it names, by [`Providers::load_schema`].
     loaded: OnceCell<Loaded>,
@@ -112,9 +125,9 @@ struct Loaded {
     scope: Option<BTreeSet<String>>,
 }
 
-fn configure(conn: &Conn, config: Json) -> Result<()> {
+fn configure(link: &mut Link, config: Json) -> Result<()> {
     let config = Some(wire::doc(&config));
-    conn.call(|mut c| async move { c.configure(pb::ConfigureRequest { config }).await })?;
+    let _: pb::ConfigureResponse = link.call(pb::ConfigureRequest { config })?;
     Ok(())
 }
 
@@ -122,8 +135,8 @@ impl Providers {
     /// Start the providers `specs` name (`--provider` or the `provider`
     /// statements; none is the mock's `fake` schema): every mock schema in
     /// one mock provider, every plugin in its own process.
-    pub fn start(specs: &[String], cfg: &Config) -> Result<Providers> {
-        let p = Self::start_deferred(specs, cfg)?;
+    pub fn start(launch: &dyn Launch, specs: &[String], cfg: &Config) -> Result<Providers> {
+        let p = Self::start_deferred(launch, specs, cfg)?;
         p.load_schema(None)?;
         Ok(p)
     }
@@ -131,7 +144,11 @@ impl Providers {
     /// `start`, without asking for the schema yet: the caller asks with
     /// [`Providers::load_schema`] once it knows the types it names, before
     /// anything reads the schema.
-    pub fn start_deferred(specs: &[String], cfg: &Config) -> Result<Providers> {
+    pub fn start_deferred(
+        launch: &dyn Launch,
+        specs: &[String],
+        cfg: &Config,
+    ) -> Result<Providers> {
         let specs: Vec<String> = if specs.is_empty() {
             vec!["fake".to_string()]
         } else {
@@ -139,7 +156,7 @@ impl Providers {
         };
         let (mut mocks, mut plugins) = (Vec::new(), Vec::new());
         for s in &specs {
-            match spawn::resolve(s) {
+            match source::resolve(s) {
                 Source::Mock(m) => mocks.push(m),
                 Source::Plugin(p) => plugins.push(p),
             }
@@ -150,40 +167,41 @@ impl Providers {
             "inventory": path(&cfg.inventory),
             "chaos": cfg.chaos,
         });
-        let mut conns = Vec::new();
+        let mut links = Vec::new();
         if !mocks.is_empty() {
-            let conn = Conn::start(&spawn::fake_executable()?)?;
+            let mut link = launch.mock()?;
             let mut config = base.clone();
             config["schemas"] = json!(mocks);
-            configure(&conn, config)?;
-            conns.push(conn);
+            configure(&mut link, config)?;
+            links.push(link);
         }
         for p in plugins {
-            let conn = Conn::start(&p)?;
-            configure(&conn, base.clone())
+            let mut link = launch.plugin(&p)?;
+            configure(&mut link, base.clone())
                 .with_context(|| format!("configure provider {}", p.display()))?;
-            conns.push(conn);
+            links.push(link);
         }
-        if conns.is_empty() {
+        if links.is_empty() {
             bail!("no providers");
         }
-        Ok(Self::deferred(conns))
+        Ok(Self::deferred(links))
     }
 
-    /// The providers of started, configured connections, their schema
-    /// loaded. The first serves the types no schema declares.
-    pub fn from_conns(conns: Vec<Conn>) -> Result<Providers> {
-        if conns.is_empty() {
+    /// The providers of started, configured links, their schema loaded.
+    /// The first serves the types no schema declares.
+    pub fn from_links(links: Vec<Link>) -> Result<Providers> {
+        if links.is_empty() {
             bail!("no providers");
         }
-        let p = Self::deferred(conns);
+        let p = Self::deferred(links);
         p.load_schema(None)?;
         Ok(p)
     }
 
-    fn deferred(conns: Vec<Conn>) -> Providers {
+    fn deferred(links: Vec<Link>) -> Providers {
         Providers {
-            conns,
+            names: links.iter().map(|l| l.name.clone()).collect(),
+            links: links.into_iter().map(RefCell::new).collect(),
             loaded: OnceCell::new(),
             fallback: 0,
             refreshed: RefCell::new(None),
@@ -203,18 +221,18 @@ impl Providers {
         let types = scope.map(|s| pb::TypeFilter {
             names: s.iter().cloned().collect(),
         });
-        for (i, conn) in self.conns.iter().enumerate() {
+        for (i, link) in self.links.iter().enumerate() {
             let req = pb::SchemaRequest {
                 types: types.clone(),
             };
-            let resp = conn.call(|mut c| async move { c.schema(req).await })?;
+            let resp: pb::SchemaResponse = link.borrow_mut().call(req)?;
             let facts = resp
                 .facts
                 .iter()
                 .map(wire::from_fact)
                 .collect::<Result<Vec<Atom>>>()?;
             let mut s = Schema::from_facts(&facts)
-                .with_context(|| format!("the schema of provider {}", conn.name))?;
+                .with_context(|| format!("the schema of provider {}", self.names[i]))?;
             if resp.checks_refinements {
                 s.checks_refinements = s
                     .provider_of
@@ -283,8 +301,8 @@ impl Providers {
             .unwrap_or(self.fallback)
     }
 
-    fn conn_named(&self, name: &str) -> Option<usize> {
-        self.conns.iter().position(|c| c.name == name)
+    fn link_named(&self, name: &str) -> Option<usize> {
+        self.names.iter().position(|n| n == name)
     }
 
     /// A write happened: the next refresh Reads again.
@@ -299,7 +317,7 @@ impl Providers {
         map: &'a BTreeMap<String, StateEntry>,
     ) -> impl Iterator<Item = (Address, &'a StateEntry)> + 'a {
         map.iter()
-            .filter(|(_, e)| self.conn_named(&e.provider).is_some())
+            .filter(|(_, e)| self.link_named(&e.provider).is_some())
             .filter_map(|(k, e)| state::parse_key(k).map(|a| (a, e)))
     }
 
@@ -322,7 +340,7 @@ impl Providers {
         plus: &[bool],
         inputs: &[Value],
     ) -> Result<Vec<Vec<Value>>> {
-        let rows = self.conns[i].query(pb::QueryRequest {
+        let rows: Vec<pb::Row> = self.links[i].borrow_mut().call(pb::QueryRequest {
             pred: pred.to_string(),
             input: plus.to_vec(),
             inputs: inputs.iter().map(wire::value).collect(),
@@ -335,8 +353,8 @@ impl Providers {
     /// Discovery: the inventory relations of every provider that has one.
     pub fn discover(&self) -> Result<Vec<Atom>> {
         let mut out = Vec::new();
-        for (i, conn) in self.conns.iter().enumerate() {
-            if !conn.has("inventory") {
+        for (i, link) in self.links.iter().enumerate() {
+            if !link.borrow().has("inventory") {
                 continue;
             }
             for (pred, arity) in INVENTORY {
@@ -359,19 +377,22 @@ impl Providers {
         if !state.resources.is_empty() {
             return Ok(());
         }
-        for (i, conn) in self.conns.iter().enumerate() {
-            if !conn.has("managed") {
+        for (i, link) in self.links.iter().enumerate() {
+            if !link.borrow().has("managed") {
                 continue;
             }
             for row in self.query_at(i, MANAGED, &[false, false], &[])? {
                 let [Value::Str(typ), Value::Str(remote)] = row.as_slice() else {
-                    bail!("provider {}: {MANAGED} answers (Type, RemoteId)", conn.name);
+                    bail!(
+                        "provider {}: {MANAGED} answers (Type, RemoteId)",
+                        self.names[i]
+                    );
                 };
                 let addr = Address {
                     typ: typ.clone(),
                     name: remote.clone(),
                 };
-                state.set(addr, conn.name.clone(), remote.clone());
+                state.set(addr, self.names[i].clone(), remote.clone());
             }
         }
         Ok(())
@@ -392,7 +413,7 @@ impl Providers {
             remote: remote.to_string(),
             name: addr.name.clone(),
         };
-        let r = self.conns[i].call(|mut c| async move { c.read(req).await })?;
+        let r: pb::ReadResponse = self.links[i].borrow_mut().call(req)?;
         if !r.found {
             return Ok(None);
         }
@@ -409,7 +430,7 @@ impl Providers {
             r#type: typ.to_string(),
             remote: remote.to_string(),
         };
-        let r = self.conns[self.route(typ)].call(|mut c| async move { c.import(req).await })?;
+        let r: pb::ImportResponse = self.links[self.route(typ)].borrow_mut().call(req)?;
         let o = match r.found {
             true => Some(Self::object(r.attrs.as_ref(), r.computed.as_ref())?),
             false => None,
@@ -427,7 +448,7 @@ impl Providers {
             .entries(&state.resources)
             .chain(self.entries(&state.deposed))
         {
-            let i = self.conn_named(&e.provider).expect("entries are served");
+            let i = self.link_named(&e.provider).expect("entries are served");
             mapped.insert(key(&a.typ, &e.remote), (a, e.remote.clone(), i));
         }
         let keys: BTreeSet<String> = mapped.keys().cloned().collect();
@@ -514,11 +535,12 @@ impl Providers {
     }
 
     /// The owning providers' Plan for each `(address, remote, prior, desired)`:
-    /// its changes, and whether they replace it. The calls to one provider
-    /// are in flight at once; the first failure, in order, is the error.
+    /// its changes, and whether they replace it. Every call is submitted
+    /// before any answer is taken, so a backend that can runs them at once;
+    /// the first failure, in order, is the error.
     fn plan_many(&self, asks: Vec<Ask>) -> Result<Vec<Planned>> {
         let mut out: Vec<Option<Result<Planned>>> = Vec::new();
-        let mut by_conn: BTreeMap<usize, Vec<(usize, pb::PlanRequest)>> = BTreeMap::new();
+        let mut submitted: Vec<(usize, usize, Ticket)> = Vec::new();
         for (i, (addr, remote, prior, desired)) in asks.into_iter().enumerate() {
             if prior.is_none() && desired.is_none() {
                 out.push(Some(Ok((Vec::new(), false))));
@@ -532,31 +554,30 @@ impl Providers {
                 desired: desired.as_ref().map(wire::doc),
                 remote,
             };
-            by_conn
-                .entry(self.route(&addr.typ))
-                .or_default()
-                .push((i, req));
+            let l = self.route(&addr.typ);
+            submitted.push((i, l, self.links[l].borrow_mut().submit(req)));
         }
-        for (c, reqs) in by_conn {
-            let (idx, reqs): (Vec<usize>, Vec<pb::PlanRequest>) = reqs.into_iter().unzip();
-            for (i, r) in idx.into_iter().zip(self.conns[c].plan_all(reqs)) {
-                out[i] = Some(r.map_err(anyhow::Error::new).and_then(|r| {
-                    let side = |v: &Option<pb::Value>| v.as_ref().map(wire::from_doc).transpose();
-                    let changes = r
-                        .changes
-                        .iter()
-                        .map(|c| {
-                            Ok(Change {
-                                path: c.path.clone(),
-                                before: side(&c.before)?,
-                                after: side(&c.after)?,
-                                sensitive: c.sensitive,
-                            })
+        for (i, l, t) in submitted {
+            let mut link = self.links[l].borrow_mut();
+            let r = link
+                .wait(t)
+                .and_then(|r| link.expect::<pb::PlanResponse>("Plan", r));
+            out[i] = Some(r.map_err(anyhow::Error::new).and_then(|r| {
+                let side = |v: &Option<pb::Value>| v.as_ref().map(wire::from_doc).transpose();
+                let changes = r
+                    .changes
+                    .iter()
+                    .map(|c| {
+                        Ok(Change {
+                            path: c.path.clone(),
+                            before: side(&c.before)?,
+                            after: side(&c.after)?,
+                            sensitive: c.sensitive,
                         })
-                        .collect::<Result<_>>()?;
-                    Ok((changes, r.requires_replace))
-                }));
-            }
+                    })
+                    .collect::<Result<_>>()?;
+                Ok((changes, r.requires_replace))
+            }));
         }
         out.into_iter()
             .map(|r| r.expect("every ask is answered"))
@@ -920,6 +941,7 @@ impl Providers {
             timeline: Vec::new(),
             returned: BTreeMap::new(),
             elapsed: BTreeMap::new(),
+            in_flight: Vec::new(),
         })
     }
 }
@@ -958,8 +980,9 @@ impl Ctx<'_> {
 }
 
 /// One tick, open for Apply calls. The executor decides the order; each
-/// call is one provider Apply, and what it returns is the tick's view of
-/// the world for the calls after it.
+/// call is one provider Apply, submitted (`submit`) and answered later
+/// (`next_completed`), and what it returns is the tick's view of the world
+/// for the calls submitted after it.
 pub struct Tick<'a> {
     cloud: &'a Providers,
     lifecycle: &'a Lifecycle,
@@ -977,18 +1000,32 @@ pub struct Tick<'a> {
     returned: BTreeMap<Address, Option<Json>>,
     /// How long each call took on its provider's clock.
     elapsed: BTreeMap<Address, u64>,
+    /// The Apply calls in flight, in the order they were submitted.
+    in_flight: Vec<InFlight>,
+}
+
+/// One submitted Apply call, and what its answer is recorded against.
+struct InFlight {
+    /// The executor's name for the call.
+    id: usize,
+    link: usize,
+    ticket: Ticket,
+    kind: ActionKind,
+    addr: Address,
+    /// The object's remote id before the call; empty for a create.
+    remote: String,
 }
 
 impl Tick<'_> {
-    /// One Apply call for `a`. Identity is recorded in `state` when the call
-    /// answers; a call that may have taken effect without answering (a
-    /// timeout) records none.
-    pub fn apply(&mut self, a: &Action, state: &mut State) -> Result<()> {
+    /// Submit the Apply call for `a`, as the executor's call `id`. Returns
+    /// whether a call is in flight; an action that needs none (the delete
+    /// of an object state no longer maps) is answered at once.
+    pub fn submit(&mut self, id: usize, a: &Action, state: &mut State) -> Result<bool> {
         let cloud = self.cloud;
         let addr = &a.addr;
         let at = format!("{}/{}", addr.typ, addr.name);
         if matches!(a.kind, ActionKind::Noop | ActionKind::Pending) {
-            return Ok(());
+            return Ok(false);
         }
         if self.world.is_none() {
             self.world = Some(cloud.refresh(state)?);
@@ -1014,132 +1051,43 @@ impl Tick<'_> {
                 doc
             }
         };
-        let i = cloud.route(&addr.typ);
-        let provider = cloud.conns[i].name.clone();
-        let world = self.world.as_mut().expect("read above");
-        // Refinements on sensitive paths: the provider checks each after
-        // materializing the secret (F DR-13 revised).
-        let assertions: Vec<pb::Assertion> = self
-            .lifecycle
-            .assertions
-            .get(addr)
-            .into_iter()
-            .flatten()
-            .map(|(path, c)| {
-                let (op, value) = crate::refine::to_assertion(c);
-                pb::Assertion {
-                    path: path.clone(),
-                    op,
-                    value: Some(wire::doc(&value)),
-                    message: format!("{at} .{path} fails its refinement {c}"),
-                }
-            })
-            .collect();
-        let call = |op: pb::Op, remote: &str, config: Option<&Json>, create_first: bool| {
-            let req = pb::ApplyRequest {
-                op: op as i32,
-                r#type: addr.typ.clone(),
-                name: addr.name.clone(),
-                remote: remote.to_string(),
-                config: config.map(wire::doc),
-                create_first,
-                assertions: if config.is_some() {
-                    assertions.clone()
-                } else {
-                    Vec::new()
-                },
-                spans: Vec::new(),
-            };
-            let r = cloud.conns[i].try_call(|mut c| async move { c.apply(req).await });
-            cloud.invalidate();
-            r
-        };
-        let object =
-            |r: &pb::ApplyResponse| Providers::object(r.attrs.as_ref(), r.computed.as_ref());
-        let deps = self.desired.get(addr).map(|r| r.deps.clone());
-        let result: std::result::Result<Option<pb::ApplyResponse>, CallError> = match a.kind {
+        let world = self.world.as_ref().expect("read above");
+        let (op, remote, config, create_first) = match a.kind {
             ActionKind::Noop | ActionKind::Pending => unreachable!("returned above"),
-            ActionKind::Delete => match state.get(addr).map(|e| e.remote.clone()) {
-                None => Ok(None),
-                Some(remote) => {
-                    let r = call(pb::Op::Delete, &remote, None, false);
-                    if matches!(r, Ok(_) | Err(CallError::MaybeApplied(_))) {
-                        world.remove(&key(&addr.typ, &remote));
-                    }
-                    if r.is_ok() {
-                        state.remove(addr);
-                    }
-                    r.map(Some)
+            ActionKind::Delete => match state.get(addr) {
+                None => {
+                    self.answered(a.kind.clone(), addr, &Ok(None), state)?;
+                    return Ok(false);
                 }
+                Some(e) => (pb::Op::Delete, e.remote.clone(), None, false),
             },
-            ActionKind::DeleteDeposed => {
-                match state
-                    .deposed
-                    .get(&state::key(addr))
-                    .map(|e| e.remote.clone())
-                {
-                    None => Ok(None),
-                    Some(remote) => {
-                        let r = call(pb::Op::Delete, &remote, None, false);
-                        if matches!(r, Ok(_) | Err(CallError::MaybeApplied(_))) {
-                            world.remove(&key(&addr.typ, &remote));
-                        }
-                        if r.is_ok() {
-                            state.deposed.remove(&state::key(addr));
-                        }
-                        r.map(Some)
-                    }
+            ActionKind::DeleteDeposed => match state.deposed.get(&state::key(addr)) {
+                None => {
+                    self.answered(a.kind.clone(), addr, &Ok(None), state)?;
+                    return Ok(false);
                 }
-            }
-            ActionKind::Create => {
-                let r = call(pb::Op::Create, "", Some(&doc), false);
-                if let Ok(resp) = &r {
-                    world.insert(key(&addr.typ, &resp.remote), object(resp)?);
-                    state.set(addr.clone(), provider, resp.remote.clone());
-                }
-                r.map(Some)
-            }
+                Some(e) => (pb::Op::Delete, e.remote.clone(), None, false),
+            },
+            ActionKind::Create => (pb::Op::Create, String::new(), Some(doc), false),
             ActionKind::Replace { create_first } => {
                 let Some(old) = state.get(addr).map(|e| e.remote.clone()) else {
                     bail!("apply {at}: replace without a state entry");
                 };
-                let r = call(pb::Op::Replace, &old, Some(&doc), create_first);
-                if matches!(r, Ok(_) | Err(CallError::MaybeApplied(_))) {
-                    // The old object stays, deposed, until it is deleted
-                    // after what depends on it has moved to the new one; or
-                    // it went first.
-                    if create_first {
-                        state.depose(addr);
-                    } else {
-                        world.remove(&key(&addr.typ, &old));
-                        state.remove(addr);
-                    }
-                }
-                if let Ok(resp) = &r {
-                    world.insert(key(&addr.typ, &resp.remote), object(resp)?);
-                    state.set(addr.clone(), provider, resp.remote.clone());
-                }
-                r.map(Some)
+                (pb::Op::Replace, old, Some(doc), create_first)
             }
             ActionKind::Adopt => {
                 let Some(remote_name) = self.adopt_map.get(addr).cloned() else {
                     bail!("apply {at}: adopt action missing adopt mapping");
                 };
-                let r = call(pb::Op::Adopt, &remote_name, Some(&doc), false);
-                if let Ok(resp) = &r {
-                    world.insert(key(&addr.typ, &resp.remote), object(resp)?);
-                    state.set(addr.clone(), provider, resp.remote.clone());
-                }
-                r.map(Some)
+                (pb::Op::Adopt, remote_name, Some(doc), false)
             }
             ActionKind::Update | ActionKind::Drift => {
                 let Some(remote) = state.get(addr).map(|e| e.remote.clone()) else {
                     bail!("apply {at}: update without a state entry");
                 };
-                let k = key(&addr.typ, &remote);
                 let mut doc = doc;
                 // ignore_changes: the world keeps its value, or its absence.
-                if let Some(cur) = world.get(&k) {
+                if let Some(cur) = world.get(&key(&addr.typ, &remote)) {
                     for p in self
                         .lifecycle
                         .ignore_changes
@@ -1153,21 +1101,207 @@ impl Tick<'_> {
                         }
                     }
                 }
-                let r = call(pb::Op::Update, &remote, Some(&doc), false);
-                if let Ok(resp) = &r {
-                    world.insert(k, object(resp)?);
-                }
-                r.map(Some)
+                (pb::Op::Update, remote, Some(doc), false)
             }
         };
-        if let Ok(Some(resp)) = &result {
-            self.elapsed.insert(addr.clone(), resp.elapsed_ms);
-            cloud.notes.borrow_mut().extend(resp.notes.iter().cloned());
+        // Refinements on sensitive paths: the provider checks each after
+        // materializing the secret (F DR-13 revised).
+        let assertions: Vec<pb::Assertion> = match config {
+            None => Vec::new(),
+            Some(_) => self
+                .lifecycle
+                .assertions
+                .get(addr)
+                .into_iter()
+                .flatten()
+                .map(|(path, c)| {
+                    let (op, value) = crate::refine::to_assertion(c);
+                    pb::Assertion {
+                        path: path.clone(),
+                        op,
+                        value: Some(wire::doc(&value)),
+                        message: format!("{at} .{path} fails its refinement {c}"),
+                    }
+                })
+                .collect(),
+        };
+        let req = pb::ApplyRequest {
+            op: op as i32,
+            r#type: addr.typ.clone(),
+            name: addr.name.clone(),
+            remote: remote.clone(),
+            config: config.as_ref().map(wire::doc),
+            create_first,
+            assertions,
+            spans: Vec::new(),
+        };
+        let link = cloud.route(&addr.typ);
+        let ticket = cloud.links[link].borrow_mut().submit(req);
+        cloud.invalidate();
+        self.in_flight.push(InFlight {
+            id,
+            link,
+            ticket,
+            kind: a.kind.clone(),
+            addr: addr.clone(),
+            remote,
+        });
+        Ok(true)
+    }
+
+    /// Whether an Apply call is in flight.
+    pub fn busy(&self) -> bool {
+        !self.in_flight.is_empty()
+    }
+
+    /// Take the next answered Apply call and record it: identity in `state`
+    /// when the call answered; a call that may have taken effect without
+    /// answering (a timeout) records none. Returns the call's id and its
+    /// outcome. An answer a link already holds comes first; else the link
+    /// of the oldest call in flight is waited on.
+    pub fn next_completed(&mut self, state: &mut State) -> (usize, Result<()>) {
+        let cloud = self.cloud;
+        assert!(self.busy(), "internal: no Apply call in flight");
+        let held = self
+            .in_flight
+            .iter()
+            .position(|f| cloud.links[f.link].borrow().has_answer(f.ticket));
+        let (k, answer) = match held {
+            Some(k) => {
+                let f = &self.in_flight[k];
+                let r = cloud.links[f.link].borrow_mut().take_answer(f.ticket);
+                (k, r.expect("held"))
+            }
+            None => {
+                let l = self.in_flight[0].link;
+                let (t, r) = cloud.links[l].borrow_mut().next_completed();
+                let k = self
+                    .in_flight
+                    .iter()
+                    .position(|f| f.link == l && f.ticket == t)
+                    .expect("internal: an answer to a call nobody made");
+                (k, r)
+            }
+        };
+        let f = self.in_flight.remove(k);
+        cloud.invalidate();
+        let result = answer.and_then(|r| {
+            cloud.links[f.link]
+                .borrow()
+                .expect::<pb::ApplyResponse>("Apply", r)
+        });
+        let result = match result.map(|resp| self.record_object(&f, resp, state)) {
+            Ok(Ok(resp)) => Ok(Some(resp)),
+            Ok(Err(e)) => return (f.id, Err(e)),
+            Err(e) => Err(e),
+        };
+        self.forget_object(&f, &result, state);
+        (f.id, self.answered(f.kind, &f.addr, &result, state))
+    }
+
+    /// An answered call's object, in the tick's world and in state.
+    fn record_object(
+        &mut self,
+        f: &InFlight,
+        resp: pb::ApplyResponse,
+        state: &mut State,
+    ) -> Result<pb::ApplyResponse> {
+        let addr = &f.addr;
+        let cloud = self.cloud;
+        let provider = &cloud.names[f.link];
+        let world = self.world.as_mut().expect("read at submit");
+        match f.kind {
+            ActionKind::Create | ActionKind::Adopt | ActionKind::Replace { .. } => {
+                if let ActionKind::Replace { .. } = f.kind {
+                    self.forget_old(f, state);
+                }
+                let world = self.world.as_mut().expect("read at submit");
+                world.insert(
+                    key(&addr.typ, &resp.remote),
+                    Providers::object(resp.attrs.as_ref(), resp.computed.as_ref())?,
+                );
+                state.set(addr.clone(), provider.clone(), resp.remote.clone());
+            }
+            ActionKind::Update | ActionKind::Drift => {
+                world.insert(
+                    key(&addr.typ, &f.remote),
+                    Providers::object(resp.attrs.as_ref(), resp.computed.as_ref())?,
+                );
+            }
+            ActionKind::Delete => {
+                world.remove(&key(&addr.typ, &f.remote));
+                state.remove(addr);
+            }
+            ActionKind::DeleteDeposed => {
+                world.remove(&key(&addr.typ, &f.remote));
+                state.deposed.remove(&state::key(addr));
+            }
+            ActionKind::Noop | ActionKind::Pending => {}
         }
-        if let (Some(deps), Ok(_) | Err(CallError::MaybeApplied(_))) = (deps, &result) {
+        Ok(resp)
+    }
+
+    /// A call that may have taken effect without answering: what it
+    /// removes from the world is gone, and a replacement's old object is
+    /// deposed or gone.
+    fn forget_object(
+        &mut self,
+        f: &InFlight,
+        result: &std::result::Result<Option<pb::ApplyResponse>, CallError>,
+        state: &mut State,
+    ) {
+        if !matches!(result, Err(CallError::MaybeApplied(_))) {
+            return;
+        }
+        match f.kind {
+            ActionKind::Delete | ActionKind::DeleteDeposed => {
+                let world = self.world.as_mut().expect("read at submit");
+                world.remove(&key(&f.addr.typ, &f.remote));
+            }
+            ActionKind::Replace { .. } => self.forget_old(f, state),
+            _ => {}
+        }
+    }
+
+    /// The old object of a replacement: it stays, deposed, until it is
+    /// deleted after what depends on it has moved to the new one; or it
+    /// went first.
+    fn forget_old(&mut self, f: &InFlight, state: &mut State) {
+        let ActionKind::Replace { create_first } = f.kind else {
+            return;
+        };
+        if create_first {
+            state.depose(&f.addr);
+        } else {
+            let world = self.world.as_mut().expect("read at submit");
+            world.remove(&key(&f.addr.typ, &f.remote));
+            state.remove(&f.addr);
+        }
+    }
+
+    /// What every answered call records: its time, its notes, the
+    /// dependencies of what it applied, and what it returned.
+    fn answered(
+        &mut self,
+        kind: ActionKind,
+        addr: &Address,
+        result: &std::result::Result<Option<pb::ApplyResponse>, CallError>,
+        state: &mut State,
+    ) -> Result<()> {
+        let at = format!("{}/{}", addr.typ, addr.name);
+        if let Ok(Some(resp)) = result {
+            self.elapsed.insert(addr.clone(), resp.elapsed_ms);
+            self.cloud
+                .notes
+                .borrow_mut()
+                .extend(resp.notes.iter().cloned());
+        }
+        let deps = self.desired.get(addr).map(|r| r.deps.clone());
+        if let (Some(deps), Ok(_) | Err(CallError::MaybeApplied(_))) = (deps, result) {
             state.set_deps(addr, deps);
         }
-        if result.is_ok() && !matches!(a.kind, ActionKind::DeleteDeposed) {
+        if result.is_ok() && !matches!(kind, ActionKind::DeleteDeposed) {
+            let world = self.world.as_ref().expect("read at submit");
             let now = state
                 .get(addr)
                 .and_then(|e| world.get(&key(&addr.typ, &e.remote)))
@@ -1179,7 +1313,7 @@ impl Tick<'_> {
             Err(CallError::Crashed(m)) => {
                 bail!("apply {at}: {m}; the change may have taken effect")
             }
-            Err(e) => Err(anyhow!(e)),
+            Err(e) => Err(anyhow!(e.clone())),
         }
     }
 
@@ -1201,14 +1335,16 @@ impl Tick<'_> {
     /// The tick ends: state records every desired object's dependencies,
     /// and every provider still running hears the boundary (the mock's
     /// clock advances and its chaos mutations land). Returns what the
-    /// tick's answered Apply calls returned.
+    /// tick's answered Apply calls returned. Every call is answered by now.
     pub fn end(self, state: &mut State) -> Result<BTreeMap<Address, Option<Json>>> {
+        assert!(!self.busy(), "internal: the tick ends with calls in flight");
         // What each object depends on, for ordering its delete later.
         for (addr, r) in &self.desired {
             state.set_deps(addr, r.deps.iter().cloned());
         }
-        for conn in &self.cloud.conns {
-            if conn.is_dead() {
+        for link in &self.cloud.links {
+            let mut link = link.borrow_mut();
+            if link.is_dead() {
                 continue;
             }
             let req = pb::ApplyRequest {
@@ -1216,7 +1352,7 @@ impl Tick<'_> {
                 spans: self.timeline.clone(),
                 ..Default::default()
             };
-            let r = conn.call(|mut c| async move { c.apply(req).await })?;
+            let r: pb::ApplyResponse = link.call(req)?;
             self.cloud.notes.borrow_mut().extend(r.notes);
         }
         self.cloud.invalidate();

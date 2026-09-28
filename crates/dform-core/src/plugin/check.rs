@@ -7,16 +7,19 @@
 //! is checked with the documents its Schema offers as `examples`; one that
 //! does neither stops after Schema, with that as the deviation.
 
-use super::client::{CallError, Conn};
+use super::backend::CallError;
+use super::link::Link;
 use super::pb;
-use super::spawn::{self, Source};
+use super::providers::Launch;
+use super::source::{self, Source};
 use super::wire;
 use crate::provider::{diff, flatten, get_path, remove_path, set_path};
 use crate::schema::Schema;
 use crate::value::{NullClass, Value};
 use anyhow::{Context, Result};
 use serde_json::{Value as Json, json};
-use std::path::{Path, PathBuf};
+use std::cell::RefCell;
+use std::path::Path;
 
 const TYPE: &str = "check.thing";
 
@@ -72,27 +75,33 @@ fn ensure(cond: bool, msg: impl FnOnce() -> String) -> Result<()> {
     }
 }
 
-/// The executable PATH names: a plugin, else (a mock schema) the mock.
-pub fn executable(path: &str) -> Result<PathBuf> {
-    match spawn::resolve(path) {
-        Source::Plugin(p) => Ok(p),
-        Source::Mock(_) => spawn::fake_executable(),
-    }
+/// A started provider, called through `&`.
+type Conn = RefCell<Link>;
+
+fn call<R>(conn: &Conn, c: impl Into<super::backend::Call>) -> Result<R>
+where
+    R: TryFrom<super::backend::Reply, Error = super::backend::Reply>,
+{
+    conn.borrow_mut().call(c)
 }
 
-/// Run the suite against the provider at `path`. Returns the report's
-/// lines and how many checks failed.
-pub fn run(path: &str) -> Result<(Vec<String>, usize)> {
-    let exe = executable(path)?;
+/// Run the suite against the provider at `path` (a plugin, else, a mock
+/// schema, the mock), reached through `launch`. Returns the report's lines
+/// and how many checks failed.
+pub fn run(launch: &dyn Launch, path: &str) -> Result<(Vec<String>, usize)> {
     let dir = std::env::temp_dir().join(format!("dform-provider-check-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).with_context(|| format!("mkdir {}", dir.display()))?;
-    let out = suite(&exe, &dir);
+    let start = || match source::resolve(path) {
+        Source::Plugin(p) => launch.plugin(&p),
+        Source::Mock(_) => launch.mock(),
+    };
+    let out = suite(start, &dir);
     let _ = std::fs::remove_dir_all(&dir);
     out
 }
 
-fn suite(exe: &Path, dir: &Path) -> Result<(Vec<String>, usize)> {
+fn suite(start: impl FnOnce() -> Result<Link>, dir: &Path) -> Result<(Vec<String>, usize)> {
     let mut r = Report {
         lines: Vec::new(),
         failed: 0,
@@ -107,8 +116,8 @@ fn suite(exe: &Path, dir: &Path) -> Result<(Vec<String>, usize)> {
             "computed": {"id": "found-id", "endpoint": "found.example", "token": "t0ken"}}}}))?,
     )?;
 
-    let conn = match Conn::start(exe) {
-        Ok(c) => c,
+    let conn = match start() {
+        Ok(c) => RefCell::new(c),
         Err(e) => {
             r.check("Handshake", Err(e));
             return Ok((r.lines, r.failed));
@@ -116,7 +125,7 @@ fn suite(exe: &Path, dir: &Path) -> Result<(Vec<String>, usize)> {
     };
     r.check(
         "Handshake",
-        ensure(!conn.name.is_empty(), || {
+        ensure(!conn.borrow().name.is_empty(), || {
             "the handshake names no provider".into()
         }),
     );
@@ -126,14 +135,13 @@ fn suite(exe: &Path, dir: &Path) -> Result<(Vec<String>, usize)> {
         "inventory": dir.join("inventory.json").display().to_string(),
         "chaos": [],
     });
-    let configured = conn
-        .call(|mut c| async move {
-            c.configure(pb::ConfigureRequest {
-                config: Some(wire::doc(&config)),
-            })
-            .await
-        })
-        .map(|_| ());
+    let configured = call::<pb::ConfigureResponse>(
+        &conn,
+        pb::ConfigureRequest {
+            config: Some(wire::doc(&config)),
+        },
+    )
+    .map(|_| ());
     let ok = configured.is_ok();
     r.check("Configure", configured);
     if !ok {
@@ -141,16 +149,14 @@ fn suite(exe: &Path, dir: &Path) -> Result<(Vec<String>, usize)> {
     }
 
     // Schema: the synthetic type, as facts the engine can read.
-    let schema = conn
-        .call(|mut c| async move { c.schema(pb::SchemaRequest::default()).await })
-        .and_then(|resp| {
-            let facts = resp
-                .facts
-                .iter()
-                .map(wire::from_fact)
-                .collect::<Result<Vec<_>>>()?;
-            Ok((Schema::from_facts(&facts)?, resp))
-        });
+    let schema = call::<pb::SchemaResponse>(&conn, pb::SchemaRequest::default()).and_then(|resp| {
+        let facts = resp
+            .facts
+            .iter()
+            .map(wire::from_fact)
+            .collect::<Result<Vec<_>>>()?;
+        Ok((Schema::from_facts(&facts)?, resp))
+    });
     let (schema, resp) = match schema {
         Ok(x) => x,
         Err(e) => {
@@ -189,7 +195,7 @@ fn suite(exe: &Path, dir: &Path) -> Result<(Vec<String>, usize)> {
     };
 
     // Query: bound inputs in, every matching row out, streamed.
-    if conn.has("fact") {
+    if conn.borrow().has("fact") {
         r.check(
             "Schema declares the externs Query answers",
             ensure(
@@ -198,11 +204,14 @@ fn suite(exe: &Path, dir: &Path) -> Result<(Vec<String>, usize)> {
             ),
         );
         let q = |input: &str| {
-            conn.query(pb::QueryRequest {
-                pred: "check.lookup".into(),
-                input: vec![true, false],
-                inputs: vec![wire::value(&Value::Str(input.into()))],
-            })
+            call::<Vec<pb::Row>>(
+                &conn,
+                pb::QueryRequest {
+                    pred: "check.lookup".into(),
+                    input: vec![true, false],
+                    inputs: vec![wire::value(&Value::Str(input.into()))],
+                },
+            )
             .and_then(|rows| {
                 rows.iter()
                     .map(|row| row.values.iter().map(wire::from_value).collect())
@@ -226,7 +235,7 @@ fn suite(exe: &Path, dir: &Path) -> Result<(Vec<String>, usize)> {
     } else {
         r.skip("Query", "no `fact` capability");
     }
-    if !conn.has("resource") {
+    if !conn.borrow().has("resource") {
         r.skip("Read, Plan, Apply, Import", "no `resource` capability");
         return Ok((r.lines, r.failed));
     }
@@ -367,7 +376,7 @@ fn read(conn: &Conn, typ: &str, remote: &str) -> Result<Option<(Json, Json)>> {
         remote: remote.into(),
         name: "a".into(),
     };
-    let resp = conn.call(|mut c| async move { c.read(req).await })?;
+    let resp: pb::ReadResponse = call(conn, req)?;
     if !resp.found {
         return Ok(None);
     }
@@ -390,7 +399,7 @@ fn plan(
         desired: desired.map(wire::doc),
         remote: String::new(),
     };
-    conn.call(|mut c| async move { c.plan(req).await })
+    call(conn, req)
 }
 
 fn apply(
@@ -410,7 +419,7 @@ fn apply(
         assertions,
         ..Default::default()
     };
-    conn.try_call(|mut c| async move { c.apply(req).await })
+    conn.borrow_mut().try_call(req)
 }
 
 /// A sensitive computed value leaves the provider as a secret null only.
@@ -574,7 +583,7 @@ fn resources(conn: &Conn, r: &mut Report, schema: &Schema, f: &Fixture) {
         "Import answers a managed object by remote id",
         import(conn, typ, &remote).and_then(|o| ensure(o.is_some(), || "not found".into())),
     );
-    if f.synthetic && conn.has("inventory") {
+    if f.synthetic && conn.borrow().has("inventory") {
         r.check(
             "Import answers an inventory object",
             import(conn, typ, "found").and_then(|o| {
@@ -601,8 +610,7 @@ fn resources(conn: &Conn, r: &mut Report, schema: &Schema, f: &Fixture) {
     );
 
     // Assertions (F DR-13): a failing one refuses the action.
-    let schema_resp =
-        conn.call(|mut c| async move { c.schema(pb::SchemaRequest::default()).await });
+    let schema_resp = call::<pb::SchemaResponse>(conn, pb::SchemaRequest::default());
     if f.synthetic && schema_resp.is_ok_and(|s| s.checks_refinements) {
         let assertion = |op: &str, v: Json| pb::Assertion {
             path: "password".into(),
@@ -672,13 +680,13 @@ fn resources(conn: &Conn, r: &mut Report, schema: &Schema, f: &Fixture) {
     );
     r.check(
         "Apply END_TICK ends the tick",
-        conn.call(|mut c| async move {
-            c.apply(pb::ApplyRequest {
+        call::<pb::ApplyResponse>(
+            conn,
+            pb::ApplyRequest {
                 op: pb::Op::EndTick as i32,
                 ..Default::default()
-            })
-            .await
-        })
+            },
+        )
         .map(|_| ()),
     );
 }
@@ -688,7 +696,7 @@ fn import(conn: &Conn, typ: &str, remote: &str) -> Result<Option<(Json, Json)>> 
         r#type: typ.into(),
         remote: remote.into(),
     };
-    let resp = conn.call(|mut c| async move { c.import(req).await })?;
+    let resp: pb::ImportResponse = call(conn, req)?;
     if !resp.found {
         return Ok(None);
     }

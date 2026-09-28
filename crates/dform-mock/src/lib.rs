@@ -20,12 +20,12 @@ use anyhow::{Context, Result, anyhow, bail};
 use dform_core::ast::{Atom, Term};
 use dform_core::chaos::Chaos;
 use dform_core::ir::Address;
-use dform_core::plugin::pb;
 use dform_core::plugin::providers::{INVENTORY, MANAGED};
 use dform_core::plugin::wire;
 use dform_core::provider::{self, Change, get_path, norm_path, set_path, short_hash};
 use dform_core::schema::Schema;
 use dform_core::value::{NullClass, Value};
+use dform_grpc::pb;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as Json, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -885,14 +885,14 @@ impl pb::provider_server::Provider for Service {
         req: tonic::Request<pb::HandshakeRequest>,
     ) -> Reply<pb::HandshakeResponse> {
         let v = req.into_inner().protocol_version;
-        if v != dform_core::plugin::spawn::VERSION {
+        if v != dform_grpc::spawn::VERSION {
             return Err(tonic::Status::failed_precondition(format!(
                 "this provider speaks protocol version {}, not {v}",
-                dform_core::plugin::spawn::VERSION
+                dform_grpc::spawn::VERSION
             )));
         }
         Ok(tonic::Response::new(pb::HandshakeResponse {
-            protocol_version: dform_core::plugin::spawn::VERSION,
+            protocol_version: dform_grpc::spawn::VERSION,
             name: "fakecloud".into(),
             capabilities: ["resource", "fact", "inventory", "managed"]
                 .map(String::from)
@@ -1079,7 +1079,7 @@ pub fn serve() -> Result<()> {
     let service = Service {
         cloud: std::sync::Mutex::new(FakeCloud::default()),
     };
-    dform_core::plugin::transport::serve(
+    dform_grpc::transport::serve(
         tonic::transport::Server::builder().add_service(
             pb::provider_server::ProviderServer::new(service)
                 .max_decoding_message_size(usize::MAX)

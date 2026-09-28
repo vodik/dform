@@ -45,9 +45,10 @@ use crate::state::{self, InFlight, State};
 use crate::stuck::Sections;
 use crate::value::{Value, null_owner};
 use crate::zset::Lifecycle;
-use anyhow::Result;
+use anyhow::{Result, bail};
 use serde_json::Value as Json;
-use std::collections::{BTreeMap, BTreeSet};
+use std::cell::Cell;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 /// Where state goes after every Apply call.
 pub type Persist<'a> = &'a dyn Fn(&State) -> Result<()>;
@@ -63,6 +64,10 @@ pub struct Options<'a> {
     pub parallel: usize,
     /// Where state goes after every Apply call.
     pub persist: Persist<'a>,
+    /// Chaos `stop-after=N`: how many more Apply calls may return before
+    /// dform stops as if killed (`None`: no limit). Counted across the
+    /// run's ticks.
+    pub stop_after: Option<&'a Cell<usize>>,
 }
 
 /// Apply every definite action of `plan` as one tick of the world, walking
@@ -71,11 +76,16 @@ pub struct Options<'a> {
 /// that answered keeps its identity. Returns what the answered Apply calls
 /// returned.
 ///
-/// Time is the mock's simulated clock (chaos `latency`), so the walk is a
-/// deterministic simulation: a call starts, in plan order among the ready
-/// ones, as soon as a slot is free and everything it waits on has finished;
-/// it finishes `latency` later. The world records each call's span. With
-/// `parallel` 1 the calls run in plan order, one after the other.
+/// The walk is single-threaded: submit every ready action while fewer than
+/// `parallel` calls are in flight (in plan order), then take the next
+/// answer, persist, and release what waited on it. Which call answers next
+/// is the backend's: the process backend's calls run at once; the direct
+/// and wire backends answer in simulated time (`plugin::queue`). Each call
+/// is put on the executor's clock from its answer's `elapsed_ms` (the
+/// mock's chaos `latency`): it starts when it is submitted and ends that
+/// much later, and the clock moves to the end of each call as it is
+/// taken. The world records the spans. With `parallel` 1 the calls run in
+/// plan order, one after the other.
 pub fn run_tick(
     cloud: &Providers,
     desired: &[Resource],
@@ -94,40 +104,76 @@ pub fn run_tick(
     let mut tick = cloud.begin_tick(desired, adopts, lifecycle)?;
     let mut started = vec![false; actions.len()];
     let mut done = vec![false; actions.len()];
-    // (finishes at, action), in start order.
-    let mut running: Vec<(u64, usize)> = Vec::new();
+    let mut start_ms = vec![0; actions.len()];
+    // The order the calls were submitted in.
+    let mut seq = vec![0; actions.len()];
+    // Answered at submit: no call was needed.
+    let mut at_once: VecDeque<usize> = VecDeque::new();
+    // (action, start, end) of every call taken, for the world's timeline.
+    let mut spans: Vec<(usize, u64, u64)> = Vec::new();
+    let mut in_flight = 0;
     let mut now = 0;
     let mut failed = None;
     loop {
-        while failed.is_none() && running.len() < opts.parallel.max(1) {
+        while failed.is_none() && in_flight + at_once.len() < opts.parallel.max(1) {
             let Some(i) =
                 (0..actions.len()).find(|&i| !started[i] && waits[i].iter().all(|&j| done[j]))
             else {
                 break;
             };
             started[i] = true;
-            let a = actions[i];
-            let r = tick.apply(a, state);
-            if r.is_ok()
-                && let Some(f) = &mut state.in_flight
-            {
-                f.remaining.remove(&state::key(&a.addr));
-            }
-            (opts.persist)(state)?;
-            let end = now + tick.latency(&a.addr);
-            tick.record(&a.addr, now, end);
-            match r {
-                Ok(()) => running.push((end, i)),
-                Err(e) => failed = Some(e),
+            start_ms[i] = now;
+            seq[i] = started.iter().filter(|s| **s).count();
+            match tick.submit(i, actions[i], state) {
+                Ok(true) => in_flight += 1,
+                Ok(false) => at_once.push_back(i),
+                Err(e) => {
+                    (opts.persist)(state)?;
+                    spans.push((i, now, now));
+                    failed = Some(e);
+                }
             }
         }
-        // The next call to finish; ties in start order.
-        let Some(k) = (0..running.len()).min_by_key(|&k| running[k].0) else {
-            break;
+        let (i, r, called) = match at_once.pop_front() {
+            Some(i) => (i, Ok(()), false),
+            None if tick.busy() => {
+                in_flight -= 1;
+                let (i, r) = tick.next_completed(state);
+                (i, r, true)
+            }
+            None => break,
         };
-        let (end, i) = running.remove(k);
-        now = end;
-        done[i] = true;
+        let a = actions[i];
+        if r.is_ok()
+            && let Some(f) = &mut state.in_flight
+        {
+            f.remaining.remove(&state::key(&a.addr));
+        }
+        (opts.persist)(state)?;
+        let end = start_ms[i] + tick.latency(&a.addr);
+        spans.push((i, start_ms[i], end));
+        match r {
+            Ok(()) => {
+                done[i] = true;
+                now = now.max(end);
+            }
+            Err(e) => {
+                failed.get_or_insert(e);
+            }
+        }
+        if let Some(left) = opts.stop_after.filter(|_| called) {
+            left.set(left.get().saturating_sub(1));
+            if left.get() == 0 {
+                // As if dform were killed here: nothing in flight is
+                // waited for, and the tick never ends.
+                bail!(
+                    "apply {}/{}: dform stopped after this Apply call returned \
+                     (chaos stop-after); the next apply resumes",
+                    a.addr.typ,
+                    a.addr.name
+                );
+            }
+        }
     }
     if failed.is_none()
         && let Some(i) = started.iter().position(|s| !s)
@@ -138,6 +184,11 @@ pub fn run_tick(
             a.typ,
             a.name
         ));
+    }
+    // The timeline in the order the calls started.
+    spans.sort_by_key(|&(i, _, _)| seq[i]);
+    for (i, start, end) in spans {
+        tick.record(&actions[i].addr, start, end);
     }
     let returned = tick.end(state)?;
     (opts.persist)(state)?;

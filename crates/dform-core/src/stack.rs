@@ -351,7 +351,7 @@ fn stack_config(c: &Config, out: &mut Stack, diags: &mut Vec<Diagnostic>) {
 /// in: an executable speaking the plugin protocol, a directory holding one
 /// (`dform-provider*`), else a schema the mock plays (a directory holding
 /// `schema.df`, or a `.df` file); without `source`, its name
-/// (`plugin::spawn::resolve`).
+/// (`plugin::source::resolve`).
 fn provider(c: &Config, diags: &mut Vec<Diagnostic>) -> String {
     let mut spec = c.name.clone();
     for (k, v, span) in &c.config {
@@ -367,7 +367,7 @@ fn provider(c: &Config, diags: &mut Vec<Diagnostic>) -> String {
                     .unwrap_or_default();
                 let mut path = base.join(src);
                 if path.is_dir() {
-                    path = crate::plugin::spawn::plugin_in(&path)
+                    path = crate::plugin::source::plugin_in(&path)
                         .unwrap_or_else(|| path.join("schema.df"));
                 }
                 spec = path.display().to_string();
