@@ -643,7 +643,7 @@ impl FakeCloud {
                         .any(|c| self.schema.forces_new(typ, &norm_path(&c.path)))
                     {
                         ActionKind::Replace {
-                            create_first: lifecycle.create_before_destroy.contains(&addr),
+                            create_first: lifecycle.create_first(&self.schema, &addr),
                         }
                     } else if d.kind == zset::Kind::Drift {
                         ActionKind::Drift

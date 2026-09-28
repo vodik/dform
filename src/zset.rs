@@ -28,6 +28,7 @@
 use crate::ast::{Atom, Term};
 use crate::ir::Address;
 use crate::lattice::{Truth, eq3, nulls_in};
+use crate::schema::{ReplaceOrder, Schema};
 use crate::value::{NullClass, Value};
 use anyhow::{Result, bail};
 use std::collections::{BTreeMap, BTreeSet};
@@ -37,6 +38,8 @@ use std::collections::{BTreeMap, BTreeSet};
 ///
 ///   lifecycle(T, A, prevent_destroy).        a delete or replace of T/A is a deny
 ///   lifecycle(T, A, create_before_destroy).  a replacement is created first
+///                                            (where the schema's type_replace
+///                                            allows either order)
 ///   moved(T, Old, New).                      state's identity for Old is New's
 ///   ignore_changes(T, A, Path).              Path is dropped from both sides
 #[derive(Debug, Clone, Default)]
@@ -49,7 +52,13 @@ pub struct Lifecycle {
 }
 
 impl Lifecycle {
-    pub fn from_facts<'a>(facts: impl IntoIterator<Item = &'a Atom>) -> Result<Lifecycle> {
+    /// The lifecycle facts, checked against the schema: a
+    /// `create_before_destroy` on a `type_replace(T, destroy_first)` type is
+    /// an error naming the type.
+    pub fn from_facts<'a>(
+        facts: impl IntoIterator<Item = &'a Atom>,
+        schema: &Schema,
+    ) -> Result<Lifecycle> {
         let mut out = Lifecycle::default();
         for f in facts {
             if !matches!(f.pred.as_str(), "lifecycle" | "moved" | "ignore_changes") {
@@ -75,6 +84,13 @@ impl Lifecycle {
                     out.prevent_destroy.insert(addr(a));
                 }
                 ("lifecycle", "create_before_destroy") => {
+                    if schema.replace_order(typ) == ReplaceOrder::DestroyFirst {
+                        bail!(
+                            "lifecycle({typ}, {a}, create_before_destroy): type {typ} is \
+                             type_replace destroy_first; its old object must be deleted \
+                             before the replacement is created"
+                        );
+                    }
                     out.create_before_destroy.insert(addr(a));
                 }
                 ("lifecycle", other) => bail!(
@@ -90,6 +106,17 @@ impl Lifecycle {
             }
         }
         Ok(out)
+    }
+
+    /// Whether a replacement of `addr` is created before the old object is
+    /// deleted: the schema's `type_replace` decides, and for a type that
+    /// allows either order, `create_before_destroy` (else destroy first).
+    pub fn create_first(&self, schema: &Schema, addr: &Address) -> bool {
+        match schema.replace_order(&addr.typ) {
+            ReplaceOrder::CreateFirst => true,
+            ReplaceOrder::DestroyFirst => false,
+            ReplaceOrder::Either => self.create_before_destroy.contains(addr),
+        }
     }
 
     /// `prevent_destroy` as a deny over the plan: every delete or replace

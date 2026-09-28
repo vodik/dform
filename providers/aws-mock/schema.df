@@ -10,6 +10,8 @@
 #     not a change; an element has no identity but its whole content.
 #   - force_new: changing a vpc's or subnet's cidr_block, a subnet's zone or a
 #     bucket's name replaces the object, as the provider's RequiresReplace does.
+#   - type_replace: an instance's replacement is created first; a bucket's
+#     name is global, so the old bucket is destroyed first.
 #
 # Every type has tags (optional) and tags_all (computed: tags merged with the
 # provider's default_tags). ids and arns are computed; ids are fresh.
@@ -97,6 +99,7 @@ type_mint(aws_security_group, owner_id, "123456789012").
 
 # aws_instance
 type_provider(aws_instance, aws).
+type_replace(aws_instance, create_first).
 type_attr(aws_instance, id, string, [computed, id]).
 type_mint(aws_instance, id, "i-{hash}").
 type_attr(aws_instance, arn, string, [computed]).
@@ -176,6 +179,8 @@ type_mint(aws_iam_policy, attachment_count, 0).
 
 # aws_s3_bucket
 type_provider(aws_s3_bucket, aws).
+# A bucket name is global: the old bucket must be gone before it is reused.
+type_replace(aws_s3_bucket, destroy_first).
 type_attr(aws_s3_bucket, id, string, [computed, id]).
 type_mint(aws_s3_bucket, id, "{doc:bucket}").
 type_attr(aws_s3_bucket, arn, string, [computed]).

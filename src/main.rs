@@ -219,7 +219,7 @@ fn main() -> Result<()> {
     let (mut res, mut violations) = evaluate(&st)?;
     // moved/3 rewrites state's identity before the diff (E §3.4); round 0
     // must see the new addresses, so the program is evaluated again.
-    let moves = st.apply_moves(&zset::Lifecycle::from_facts(&res.facts)?.moved);
+    let moves = st.apply_moves(&zset::Lifecycle::from_facts(&res.facts, backend.schema())?.moved);
     if !moves.is_empty() {
         (res, violations) = evaluate(&st)?;
     }
@@ -247,7 +247,7 @@ fn main() -> Result<()> {
     let resources = ir::compile_resources(res.facts.iter().cloned(), backend.schema())?;
     let stack = state::stack_name(&files[0]);
     let adopts = ir::compile_adopts(res.facts.iter())?;
-    let lifecycle = zset::Lifecycle::from_facts(&res.facts)?;
+    let lifecycle = zset::Lifecycle::from_facts(&res.facts, backend.schema())?;
     let schema = backend.schema();
     // The provider's plan for this evaluation. A replace makes a new object,
     // so the nulls that named the old one are retracted (`executor`): the
@@ -626,7 +626,7 @@ fn main() -> Result<()> {
                 }
                 resources = ir::compile_resources(next.facts.iter().cloned(), backend.schema())?;
                 adopts = ir::compile_adopts(next.facts.iter())?;
-                lifecycle = zset::Lifecycle::from_facts(&next.facts)?;
+                lifecycle = zset::Lifecycle::from_facts(&next.facts, backend.schema())?;
                 res = next;
                 tick += 1;
             }

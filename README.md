@@ -72,6 +72,7 @@ type_attr(net.vpc, cidr, string, [force_new]).         %   force_new
 type_list_key(k8s.deployment, spec.template.spec.containers, [name]).  % list merge keys
 type_mint(db.postgres, endpoint, "{name}.db.fake").   % optional: how the mock mints it
 type_retry(db.postgres, 5).                           % optional: Read attempts (default 3)
+type_replace(k8s.deployment, create_first).           % optional: create_first, destroy_first, either (default)
 ```
 
 Built-in mock schemas: `fake` (the demo's), `gke` (pngu.df), `k8s` (fifteen
@@ -189,9 +190,15 @@ cargo run -- --file examples/adversarial/gke_two_phase.df --provider gke apply \
 
 Deletes and replacement. Deletes run after every create and update, in
 reverse dependency order (a delete has no desired document left, so state
-records each object's dependencies when it is applied). A replace (`-/+`)
-deletes the old object, then creates the new one under the same name. With
-`lifecycle(T, A, create_before_destroy).` it is `+/-`: the new object is
+records each object's dependencies when it is applied). Which way a
+replacement goes is the schema's `type_replace(T, Order)`: `destroy_first`
+(`-/+`), `create_first` (`+/-`), or `either` (the default), where it is
+`-/+` unless `lifecycle(T, A, create_before_destroy).` says `+/-`. That fact
+on a `destroy_first` type is an error naming the type; on a `create_first`
+type it is redundant. In the mocks a Kubernetes Deployment or Service and an
+`aws_instance` are `create_first`, a Namespace and an `aws_s3_bucket`
+`destroy_first`, the fake `net.vpc` `either`. A `-/+` replace deletes the old
+object, then creates the new one under the same name. A `+/-` one: the new object is
 created first under a free name (`main-2`), the old one is *deposed* (kept in
 state's `deposed` section), and a boundary follows; the next tick moves what
 depends on it to the replacement and then deletes the deposed object
@@ -214,7 +221,7 @@ Lifecycle is plain facts the planner reads (and policy can read too):
 
 ```prolog
 lifecycle(net.vpc, main, prevent_destroy).        % a delete or replace of it is a deny
-lifecycle(net.vpc, main, create_before_destroy).  % replace creates first (above)
+lifecycle(net.vpc, main, create_before_destroy).  % replace creates first (type_replace either)
 moved(net.vpc, "network.main::vpc", "network.core::vpc").  % rename without destroy
 ignore_changes(net.vpc, main, "tags.owner").      % dropped from both sides
 ```

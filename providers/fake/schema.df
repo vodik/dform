@@ -5,6 +5,7 @@
 #   type_provider(Type, Provider).
 #   type_mint(Type, Path, Template).    how the mock mints a computed value at
 #                                       Apply: {type} {name} {attr} {hash}
+#   type_replace(Type, Order).          create_first, destroy_first or either
 #
 # Every type has a fresh `id`; db.postgres and k8s.cluster have open
 # endpoints. Attributes a program sets are not listed (the fake provider
@@ -37,6 +38,10 @@ type_attr(iam.role_policy_attachment, id, string, [computed, id]).
 
 type_attr(net.vpc, cidr, string, [force_new]).
 type_attr(net.subnet, cidr, string, [force_new]).
+
+# How a replacement is ordered: a vpc may be replaced either way (destroy
+# first unless lifecycle create_before_destroy says otherwise).
+type_replace(net.vpc, either).
 
 type_attr(db.postgres, endpoint, string, [computed]).
 type_attr(k8s.cluster, api_endpoint, string, [computed]).

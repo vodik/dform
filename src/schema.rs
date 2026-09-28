@@ -15,6 +15,10 @@
 //!                                     % computed value; in a string,
 //!                                     % {type} {name} {attr} {hash} {n},
 //!                                     % {doc:PATH} (the program's value)
+//!   type_replace(T, Order).           % optional: how a replacement of T is
+//!                                     % ordered: create_first, destroy_first,
+//!                                     % or either (default; destroy first
+//!                                     % unless lifecycle create_before_destroy)
 //!
 //! The facts are injected into the program as EDB (so `dform query type_attr`
 //! lists them) and folded into [`Schema`], the in-memory view the partition
@@ -71,12 +75,39 @@ pub struct Schema {
     pub mints: BTreeMap<(String, String), Value>,
     /// type -> Read attempts before an object is taken as gone.
     pub retries: BTreeMap<String, u32>,
+    /// type -> how a replacement is ordered (`type_replace`).
+    pub replace: BTreeMap<String, ReplaceOrder>,
     /// The facts the schema was built from, to inject as EDB.
     pub facts: Vec<Atom>,
 }
 
 /// Read attempts for a type without `type_retry`.
 pub const DEFAULT_READ_ATTEMPTS: u32 = 3;
+
+/// `type_replace(T, Order)`: whether the provider can hold the old and the
+/// new object of a type at once. `CreateFirst`: the replacement is created
+/// before the old object is deleted (a Deployment rolls). `DestroyFirst`:
+/// the old object must go first (a name that must be unique, a Namespace).
+/// `Either`: destroy first, unless `lifecycle(T, A, create_before_destroy)`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReplaceOrder {
+    CreateFirst,
+    DestroyFirst,
+    Either,
+}
+
+impl ReplaceOrder {
+    pub const NAMES: [&str; 3] = ["create_first", "destroy_first", "either"];
+
+    pub fn parse(s: &str) -> Option<ReplaceOrder> {
+        match s {
+            "create_first" => Some(ReplaceOrder::CreateFirst),
+            "destroy_first" => Some(ReplaceOrder::DestroyFirst),
+            "either" => Some(ReplaceOrder::Either),
+            _ => None,
+        }
+    }
+}
 
 impl Schema {
     pub fn class_of(&self, typ: &str, attr: &str) -> Option<NullClass> {
@@ -138,6 +169,15 @@ impl Schema {
     pub fn forces_new(&self, typ: &str, path: &str) -> bool {
         std::iter::successors(Some(path), |p| p.rsplit_once('.').map(|x| x.0))
             .any(|p| self.attr(typ, p).is_some_and(|a| a.has("force_new")))
+    }
+
+    /// How a replacement of `typ` is ordered (`type_replace`, default
+    /// `Either`).
+    pub fn replace_order(&self, typ: &str) -> ReplaceOrder {
+        self.replace
+            .get(typ)
+            .copied()
+            .unwrap_or(ReplaceOrder::Either)
     }
 
     /// How many times Read is tried for an object of `typ` that state maps
@@ -253,6 +293,22 @@ impl Schema {
                     }
                     s.retries.insert(t.clone(), *n as u32);
                 }
+                "type_replace" => {
+                    let [Value::Str(t), Value::Str(o)] = args.as_slice() else {
+                        return Err(bad());
+                    };
+                    let Some(order) = ReplaceOrder::parse(o) else {
+                        bail!(
+                            "type_replace({t}, {o}): unknown order (expected one of {})",
+                            ReplaceOrder::NAMES.join(", ")
+                        );
+                    };
+                    if let Some(prev) = s.replace.insert(t.clone(), order)
+                        && prev != order
+                    {
+                        bail!("type_replace({t}): declared both {prev:?} and {o}");
+                    }
+                }
                 "type_mint" => {
                     let [Value::Str(t), Value::Str(p), v] = args.as_slice() else {
                         return Err(bad());
@@ -320,6 +376,13 @@ impl Schema {
         self.list_keys.extend(other.list_keys);
         self.mints.extend(other.mints);
         self.retries.extend(other.retries);
+        for (t, o) in other.replace {
+            if let Some(prev) = self.replace.insert(t.clone(), o)
+                && prev != o
+            {
+                bail!("type_replace({t}) declared {prev:?} and {o:?} by two schemas");
+            }
+        }
         self.facts.extend(other.facts);
         Ok(self)
     }
