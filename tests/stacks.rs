@@ -23,11 +23,21 @@ fn a_second_program_does_not_plan_deletes_of_the_first() {
     assert!(s.path(".dform/net/state.json").exists());
 
     let db = s.run(&["--file", "db.df", "plan"]).success();
-    assert_eq!(db.summary(), "plan: 1 to create, 0 to update, 0 to delete", "{}", db.stdout);
+    assert_eq!(
+        db.summary(),
+        "plan: 1 to create, 0 to update, 0 to delete",
+        "{}",
+        db.stdout
+    );
 
     s.run(&["--file", "db.df", "apply"]).success();
     let net = s.run(&["--file", "net.df", "plan"]).success();
-    assert_eq!(net.summary(), "plan: 0 to create, 0 to update, 0 to delete", "{}", net.stdout);
+    assert_eq!(
+        net.summary(),
+        "plan: 0 to create, 0 to update, 0 to delete",
+        "{}",
+        net.stdout
+    );
 }
 
 #[test]
@@ -36,12 +46,25 @@ fn unscoped_state_migrates_to_the_dform_stack() {
     s.write("dform.df", NET);
     s.run(&["--file", "dform.df", "apply"]).success();
     // Put the stack's files back where an old dform wrote them.
-    std::fs::rename(s.path(".dform/dform/state.json"), s.path(".dform/state.json")).unwrap();
-    std::fs::rename(s.path(".dform/dform/remote.json"), s.path(".dform/remote.json")).unwrap();
+    std::fs::rename(
+        s.path(".dform/dform/state.json"),
+        s.path(".dform/state.json"),
+    )
+    .unwrap();
+    std::fs::rename(
+        s.path(".dform/dform/remote.json"),
+        s.path(".dform/remote.json"),
+    )
+    .unwrap();
 
     let r = s.run(&["--file", "dform.df", "plan"]).success();
     assert!(r.stderr.contains("moved unscoped"), "{}", r.stderr);
-    assert_eq!(r.summary(), "plan: 0 to create, 0 to update, 0 to delete", "{}", r.stdout);
+    assert_eq!(
+        r.summary(),
+        "plan: 0 to create, 0 to update, 0 to delete",
+        "{}",
+        r.stdout
+    );
     assert!(!s.path(".dform/state.json").exists());
     assert!(s.path(".dform/dform/state.json").exists());
 }

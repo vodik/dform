@@ -248,7 +248,7 @@ mod tests {
             println!("  create {}.{} carries {:?}", x.addr.typ, x.addr.name, x.unresolved);
         }
         assert_eq!(s.get(&Kind::Create).map(|v| v.len()).unwrap_or(0), 14);
-        assert!(s.get(&Kind::Pending).is_none());
+        assert!(!s.contains_key(&Kind::Pending));
         let (pc, pu, pd, _) = planner_counts(&empty, &d);
         assert_eq!((pc, pu, pd), (14, 0, 0));
     }
@@ -271,7 +271,7 @@ mod tests {
         let zset_updated: BTreeSet<String> = s.get(&Kind::Update).cloned().unwrap_or_default().into_iter().collect();
         assert_eq!(zset_updated, planner_updated);
         assert_eq!(s.get(&Kind::Undeformed).map(|v| v.len()).unwrap_or(0), 3);
-        assert!(s.get(&Kind::Pending).is_none(), "round-0 resolution leaves no null on a steady-state stack");
+        assert!(!s.contains_key(&Kind::Pending), "round-0 resolution leaves no null on a steady-state stack");
     }
 
     /// Without round-0 resolution every update whose desired doc carries a

@@ -69,6 +69,24 @@ Terraform's Optional+Computed: the program may set it, else Apply picks it.
 The facts are injected into the program, so rules can read them and
 `cargo run -- query type_attr` lists the schema.
 
+## Computed values come from Apply
+
+Plan never invents a computed value. A `ref(T, N, Attr)` to an attribute the
+schema marks `computed` prints as the labeled null `?T/N#Attr` until `N` exists;
+once it does, plan resolves it from the world at refresh, so a steady-state stack
+shows no nulls. Apply mints ids, endpoints and secrets per the schema and fills
+the nulls in dependency order.
+
+```bash
+cargo run -- plan
+# + net.subnet.network.main::private-us-test-1a
+#   vpc_id = ?net.vpc/network.main::vpc#id
+```
+
+A `sensitive` computed value never leaves the provider: what dform sees, stores
+in consumers and prints is its label, `(sensitive T/N#Attr)`. A value at a
+`sensitive` path the program sets prints as `(sensitive)`.
+
 ## dform model (current)
 
 - Core intent IR:

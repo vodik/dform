@@ -1,14 +1,14 @@
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use clap::{Parser, Subcommand};
 use dform::ast::Atom;
+use dform::ast::Term;
 use dform::engine;
 use dform::fakecloud::FakeCloud;
 use dform::ir;
 use dform::loader;
-use dform::provider::{ActionKind, Provider};
+use dform::provider::{ActionKind, Provider, fmt_value};
 use dform::schema;
 use dform::state;
-use dform::ast::Term;
 use dform::value::Value;
 use std::path::{Path, PathBuf};
 
@@ -52,13 +52,8 @@ enum Cmd {
     Eval,
     Plan,
     Apply,
-    Query {
-        pred: String,
-    },
-    Show {
-        typ: String,
-        name: String,
-    },
+    Query { pred: String },
+    Show { typ: String, name: String },
 }
 
 fn main() -> Result<()> {
@@ -84,7 +79,8 @@ fn main() -> Result<()> {
         Some(w) => state::world_paths(&root, w),
         None => state::stack_paths(&root, &state::stack_name(&files[0])),
     };
-    let backend = FakeCloud::with_paths(&paths.world, &paths.inventory, load_schema(&cli.providers)?);
+    let backend =
+        FakeCloud::with_paths(&paths.world, &paths.inventory, load_schema(&cli.providers)?);
 
     let mut st = state::State::load(&paths.state)?;
     backend.bootstrap_state(&mut st)?;
@@ -205,40 +201,30 @@ fn print_plan(plan: &dform::provider::Plan, show_noop: bool) {
                 println!("  ... ({} more changes)", a.changes.len() - max);
                 break;
             }
-            match a.kind {
-                ActionKind::Create => {
-                    println!("  {} = {}", ch.path, fmt_json_opt(ch.after.as_ref()));
+            let side = |v: Option<&serde_json::Value>| {
+                if ch.sensitive && v.is_some() {
+                    "(sensitive)".to_string()
+                } else {
+                    fmt_value(v)
                 }
-                ActionKind::Adopt => {
-                    println!("  {} = {}", ch.path, fmt_json_opt(ch.after.as_ref()));
+            };
+            match a.kind {
+                ActionKind::Create | ActionKind::Adopt => {
+                    println!("  {} = {}", ch.path, side(ch.after.as_ref()));
                 }
                 ActionKind::Delete => {
-                    println!("  {} was {}", ch.path, fmt_json_opt(ch.before.as_ref()));
+                    println!("  {} was {}", ch.path, side(ch.before.as_ref()));
                 }
                 ActionKind::Update => {
                     println!(
                         "  {}: {} -> {}",
                         ch.path,
-                        fmt_json_opt(ch.before.as_ref()),
-                        fmt_json_opt(ch.after.as_ref())
+                        side(ch.before.as_ref()),
+                        side(ch.after.as_ref())
                     );
                 }
                 ActionKind::Noop => {}
             }
-        }
-    }
-}
-
-fn fmt_json_opt(v: Option<&serde_json::Value>) -> String {
-    match v {
-        None => "<none>".to_string(),
-        Some(serde_json::Value::String(s)) => format!("\"{}\"", s),
-        Some(serde_json::Value::Number(n)) => n.to_string(),
-        Some(serde_json::Value::Bool(b)) => b.to_string(),
-        Some(serde_json::Value::Null) => "null".to_string(),
-        Some(other) => {
-            // For non-leaf values (should be rare with our flattening).
-            serde_json::to_string(other).unwrap_or_else(|_| "<unprintable>".to_string())
         }
     }
 }

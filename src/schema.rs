@@ -26,7 +26,14 @@ use anyhow::{Context, Result, anyhow, bail};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-pub const FLAGS: [&str; 6] = ["required", "computed", "id", "sensitive", "nullable", "optional_computed"];
+pub const FLAGS: [&str; 6] = [
+    "required",
+    "computed",
+    "id",
+    "sensitive",
+    "nullable",
+    "optional_computed",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AttrSpec {
@@ -61,7 +68,9 @@ pub struct Schema {
 
 impl Schema {
     pub fn class_of(&self, typ: &str, attr: &str) -> Option<NullClass> {
-        self.computed.get(&(typ.to_string(), attr.to_string())).copied()
+        self.computed
+            .get(&(typ.to_string(), attr.to_string()))
+            .copied()
     }
     pub fn computed_of(&self, typ: &str) -> Vec<(String, NullClass)> {
         self.computed
@@ -79,7 +88,9 @@ impl Schema {
     }
     /// The class an Optional+Computed attribute's provider-picked value has.
     pub fn optional_computed_class(&self, typ: &str, attr: &str) -> Option<NullClass> {
-        self.optional_computed.get(&(typ.to_string(), attr.to_string())).copied()
+        self.optional_computed
+            .get(&(typ.to_string(), attr.to_string()))
+            .copied()
     }
     pub fn optional_computed_of(&self, typ: &str) -> Vec<(String, NullClass)> {
         self.optional_computed
@@ -92,7 +103,9 @@ impl Schema {
         self.attrs.get(&(typ.to_string(), attr.to_string()))
     }
     pub fn list_key(&self, typ: &str, attr: &str) -> Option<&[String]> {
-        self.list_keys.get(&(typ.to_string(), attr.to_string())).map(|v| v.as_slice())
+        self.list_keys
+            .get(&(typ.to_string(), attr.to_string()))
+            .map(|v| v.as_slice())
     }
     pub fn knows_type(&self, typ: &str) -> bool {
         self.provider_of.contains_key(typ) || self.attrs.keys().any(|(t, _)| t == typ)
@@ -118,10 +131,17 @@ impl Schema {
         let mut s = Schema::default();
         for f in facts {
             let args: Vec<Value> = f.args.iter().map(ground).collect::<Result<_>>()?;
-            let bad = || anyhow!("schema fact {}/{}: wrong arity or argument kinds", f.pred, args.len());
+            let bad = || {
+                anyhow!(
+                    "schema fact {}/{}: wrong arity or argument kinds",
+                    f.pred,
+                    args.len()
+                )
+            };
             match f.pred.as_str() {
                 "type_attr" => {
-                    let [Value::Str(t), Value::Str(p), ty, Value::List(flags)] = args.as_slice() else {
+                    let [Value::Str(t), Value::Str(p), ty, Value::List(flags)] = args.as_slice()
+                    else {
                         return Err(bad());
                     };
                     let ty = match ty {
@@ -134,7 +154,10 @@ impl Schema {
                             bail!("type_attr({t}, {p}): flags must be symbols");
                         };
                         if !FLAGS.contains(&fl.as_str()) {
-                            bail!("type_attr({t}, {p}): unknown flag '{fl}' (expected one of {})", FLAGS.join(", "));
+                            bail!(
+                                "type_attr({t}, {p}): unknown flag '{fl}' (expected one of {})",
+                                FLAGS.join(", ")
+                            );
                         }
                         fs.insert(fl.clone());
                     }
@@ -173,10 +196,10 @@ impl Schema {
                     let [Value::Str(t), Value::Str(p)] = args.as_slice() else {
                         return Err(bad());
                     };
-                    if let Some(prev) = s.provider_of.insert(t.clone(), p.clone()) {
-                        if &prev != p {
-                            bail!("type_provider({t}): claimed by both {prev} and {p}");
-                        }
+                    if let Some(prev) = s.provider_of.insert(t.clone(), p.clone())
+                        && &prev != p
+                    {
+                        bail!("type_provider({t}): claimed by both {prev} and {p}");
                     }
                 }
                 "type_mint" => {
@@ -194,10 +217,13 @@ impl Schema {
             });
         }
         for (t, p) in s.list_keys.keys() {
-            if let Some(a) = s.attr(t, p) {
-                if a.ty != "list" {
-                    bail!("type_list_key({t}, {p}): attribute has type {}, not list", a.ty);
-                }
+            if let Some(a) = s.attr(t, p)
+                && a.ty != "list"
+            {
+                bail!(
+                    "type_list_key({t}, {p}): attribute has type {}, not list",
+                    a.ty
+                );
             }
         }
         Ok(s)
@@ -217,17 +243,18 @@ impl Schema {
     }
 
     pub fn load(path: &Path) -> Result<Schema> {
-        let src = std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+        let src =
+            std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
         Schema::parse(&src, &path.display().to_string())
     }
 
     /// Union of two schemas. A type may be claimed by one provider only.
     pub fn merge(mut self, other: Schema) -> Result<Schema> {
         for (t, p) in other.provider_of {
-            if let Some(prev) = self.provider_of.get(&t) {
-                if prev != &p {
-                    bail!("type {t} is claimed by both providers {prev} and {p}");
-                }
+            if let Some(prev) = self.provider_of.get(&t)
+                && prev != &p
+            {
+                bail!("type {t} is claimed by both providers {prev} and {p}");
             }
             self.provider_of.insert(t, p);
         }
@@ -275,7 +302,10 @@ pub fn load_provider(name: &str) -> Result<Schema> {
         return Schema::load(&local);
     }
     let src = builtin(name).ok_or_else(|| {
-        anyhow!("unknown provider '{name}': no {} and no built-in schema by that name", local.display())
+        anyhow!(
+            "unknown provider '{name}': no {} and no built-in schema by that name",
+            local.display()
+        )
     })?;
     Schema::parse(src, &format!("providers/{name}/schema.df"))
 }
@@ -306,17 +336,26 @@ mod tests {
         assert_eq!(s.class_of("db.postgres", "endpoint"), Some(NullClass::Open));
         assert_eq!(s.class_of("k8s.cluster", "ca_cert"), Some(NullClass::Open));
         assert_eq!(s.types().len(), 11);
-        assert_eq!(s.provider_of.get("net.route").map(String::as_str), Some("fakecloud"));
+        assert_eq!(
+            s.provider_of.get("net.route").map(String::as_str),
+            Some("fakecloud")
+        );
         assert_eq!(s.computed.len(), 14);
     }
 
     #[test]
     fn gke_schema_classes_match_the_hand_written_one() {
         let s = gke();
-        assert_eq!(s.class_of("google.client_config", "access_token"), Some(NullClass::Secret));
+        assert_eq!(
+            s.class_of("google.client_config", "access_token"),
+            Some(NullClass::Secret)
+        );
         assert_eq!(s.class_of("k8s.namespace", "uid"), Some(NullClass::Fresh));
         assert_eq!(s.class_of("gke_cluster", "zones"), Some(NullClass::Open));
-        assert_eq!(s.provider_of.get("k8s.secret").map(String::as_str), Some("kubernetes"));
+        assert_eq!(
+            s.provider_of.get("k8s.secret").map(String::as_str),
+            Some("kubernetes")
+        );
         assert_eq!(s.provider_of.get("google.client_config"), None);
         assert_eq!(s.computed.len(), 17);
     }
@@ -340,10 +379,16 @@ mod tests {
         assert_eq!(s.class_of("t", "endpoint"), Some(NullClass::Open));
         assert_eq!(s.class_of("t", "password"), Some(NullClass::Secret));
         assert_eq!(s.class_of("t", "zone"), None);
-        assert_eq!(s.optional_computed_class("t", "zone"), Some(NullClass::Open));
+        assert_eq!(
+            s.optional_computed_class("t", "zone"),
+            Some(NullClass::Open)
+        );
         assert!(s.is_sensitive("t", "data.key"));
         assert!(!s.is_sensitive("t", "endpoint"));
-        assert_eq!(s.list_key("t", "ports"), Some(&["name".to_string(), "protocol".to_string()][..]));
+        assert_eq!(
+            s.list_key("t", "ports"),
+            Some(&["name".to_string(), "protocol".to_string()][..])
+        );
     }
 
     #[test]

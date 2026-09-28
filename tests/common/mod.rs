@@ -15,7 +15,8 @@ impl Scratch {
     pub fn new(name: &str) -> Self {
         static N: AtomicUsize = AtomicUsize::new(0);
         let n = N.fetch_add(1, Ordering::SeqCst);
-        let dir = std::env::temp_dir().join(format!("dform-test-{}-{name}-{n}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("dform-test-{}-{name}-{n}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         Scratch { dir }
@@ -74,19 +75,30 @@ impl From<Output> for Run {
 impl Run {
     #[track_caller]
     pub fn success(self) -> Self {
-        assert!(self.ok, "dform failed\nstdout:\n{}\nstderr:\n{}", self.stdout, self.stderr);
+        assert!(
+            self.ok,
+            "dform failed\nstdout:\n{}\nstderr:\n{}",
+            self.stdout, self.stderr
+        );
         self
     }
 
     #[track_caller]
     pub fn failure(self) -> Self {
-        assert!(!self.ok, "dform unexpectedly succeeded\nstdout:\n{}\nstderr:\n{}", self.stdout, self.stderr);
+        assert!(
+            !self.ok,
+            "dform unexpectedly succeeded\nstdout:\n{}\nstderr:\n{}",
+            self.stdout, self.stderr
+        );
         self
     }
 
     /// The `plan: ...` summary line.
     pub fn summary(&self) -> &str {
-        self.stdout.lines().find(|l| l.starts_with("plan:")).unwrap_or("")
+        self.stdout
+            .lines()
+            .find(|l| l.starts_with("plan:"))
+            .unwrap_or("")
     }
 }
 
