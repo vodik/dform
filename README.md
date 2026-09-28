@@ -154,6 +154,9 @@ value there whatever its type (the gke mock's cluster `zones` are its
 `computed` + `id` is a fresh value (an identity), `computed` + `sensitive` is a
 secret, `computed` alone is open (proposal E §2.2). `optional_computed` is
 Terraform's Optional+Computed: the program may set it, else Apply picks it.
+A value Apply picked is read back but never sent again: the document an
+update sends holds only the Optional+Computed paths the program contributes
+to, so the provider keeps what it chose.
 Setting a plain `computed` attribute is a compile error naming the resource
 and the path.
 
@@ -208,7 +211,10 @@ provider k8s { source = "../target/debug/dform-provider-k8s" }.
   `imagePullPolicy`, `terminationMessagePath`, `terminationMessagePolicy`.
   Read returns their live values as computed, so a ref to one
   (`ref(k8s.service, web, .spec.clusterIP)`) is a null until the object
-  exists, then the cluster's value, as against the mock. Objects are never
+  exists, then the cluster's value, as against the mock. An update never
+  sends such a value unless the program sets it, so the server's value
+  stays unowned rather than becoming `dform`'s (and neither `status` nor
+  `metadata.managedFields` is ever sent). Objects are never
   flagged (a default object would carry the server's `rollingUpdate` beside
   a program's `strategy.type = "Recreate"`), nor paths inside a list
   element (a ref cannot name one).

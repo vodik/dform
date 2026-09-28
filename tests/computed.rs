@@ -193,3 +193,51 @@ resource vm c { peer_zone = ref(vm, a, zone), other_zone = ref(vm, b, zone) }.
         steady.stdout
     );
 }
+
+/// An update never sends an Optional+Computed value the provider picked:
+/// the program did not write it, so the provider keeps it (a server-side
+/// apply would otherwise make dform its owner). One the program sets is
+/// sent.
+#[test]
+fn an_update_leaves_a_picked_optional_computed_value_to_the_provider() {
+    let s = Scratch::new("computed-optional-update");
+    s.write(
+        "schema.df",
+        "edition 2026.\ntype_provider(vm, mock).\ntype_attr(vm, id, string, [computed, id]).\ntype_attr(vm, zone, string, [optional_computed]).\n",
+    );
+    let program = |size: u32| {
+        format!(
+            "edition 2026.\n\nresource vm a {{ size = {size} }}.\nresource vm b {{ size = {size}, zone = \"z1\" }}.\n"
+        )
+    };
+    s.write("p.df", &program(1));
+    let args = [
+        "--file",
+        "p.df",
+        "--provider",
+        "schema.df",
+        "--world",
+        "w.json",
+    ];
+    let run = |cmd: &str| s.run(&[&args[..], &[cmd]].concat()).success();
+    run("apply");
+    s.write("p.df", &program(2));
+    let plan = run("plan");
+    assert!(!plan.stdout.contains("zone"), "{}", plan.stdout);
+    run("apply");
+    let w: serde_json::Value = serde_json::from_str(&s.read("w.json")).unwrap();
+    let a = &w["resources"]["vm::a"];
+    assert_eq!(a["attrs"], serde_json::json!({"size": 2}), "{a}");
+    assert!(a["computed"]["zone"].is_string(), "{a}");
+    assert_eq!(
+        w["resources"]["vm::b"]["attrs"],
+        serde_json::json!({"size": 2, "zone": "z1"})
+    );
+    let steady = run("plan");
+    assert_eq!(
+        steady.summary(),
+        "stack p is undeformed",
+        "{}",
+        steady.stdout
+    );
+}

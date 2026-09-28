@@ -36,12 +36,18 @@ const COMPUTED_META: [&str; 6] = [
 ];
 
 /// The object `doc` describes: `apiVersion` and `kind` from its kind,
-/// `metadata.name` and `metadata.namespace` set to `name` and `ns`.
+/// `metadata.name` and `metadata.namespace` set to `name` and `ns`. Never a
+/// `status` or `metadata.managedFields`: server-side apply would make dform
+/// their manager.
 pub fn manifest(kind: &Kind, doc: &Json, ns: &str, name: &str) -> Result<Json> {
     let Json::Object(m) = doc else {
         bail!("a {} document is an object, not {doc}", kind.kind);
     };
     let mut out = m.clone();
+    out.remove("status");
+    if let Some(Json::Object(meta)) = out.get_mut("metadata") {
+        meta.remove("managedFields");
+    }
     for (k, want) in [
         ("apiVersion", kind.api_version()),
         ("kind", kind.kind.clone()),
@@ -289,6 +295,24 @@ mod tests {
         );
         let e = manifest(&deployment(), &json!({"kind": "Service"}), "a", "b").unwrap_err();
         assert!(e.to_string().contains("kind is \"Service\""), "{e}");
+    }
+
+    #[test]
+    fn manifest_never_carries_status_or_managed_fields() {
+        let m = manifest(
+            &deployment(),
+            &json!({"metadata": {"managedFields": [{"manager": "x"}]},
+                    "spec": {"replicas": 2}, "status": {"readyReplicas": 2}}),
+            "shop",
+            "web",
+        )
+        .unwrap();
+        assert_eq!(
+            m,
+            json!({"apiVersion": "apps/v1", "kind": "Deployment",
+                   "metadata": {"name": "web", "namespace": "shop"},
+                   "spec": {"replicas": 2}})
+        );
     }
 
     #[test]

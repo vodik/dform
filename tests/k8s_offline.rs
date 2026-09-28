@@ -737,6 +737,65 @@ fn a_ref_to_a_server_defaulted_field_resolves_from_the_cluster() {
     assert_eq!(r.summary(), "stack k8s_demo is undeformed", "{}", r.stdout);
 }
 
+/// The field managers of `obj` that own `path` (`.a.b`) per its managedFields.
+fn managers_of(obj: &Json, path: &str) -> Vec<String> {
+    obj.pointer("/metadata/managedFields")
+        .and_then(Json::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|e| owns(&e["fieldsV1"], path))
+        .map(|e| e["manager"].as_str().unwrap_or("").to_string())
+        .collect()
+}
+
+/// A value the server defaulted (`spec.clusterIP`) is read back, but an
+/// update never sends it: after a second apply of the Service the field is
+/// still not dform's, and nothing is left to do.
+#[test]
+fn an_update_leaves_server_defaulted_fields_to_the_server() {
+    let s = Scratch::new("k8s-defaulted-owner");
+    real_demo(&s);
+    let (api, url) = Api::start();
+    let kc = kubeconfig(&s, &url);
+    let run = |args: &[&str]| {
+        dform(
+            &s,
+            Some(&kc),
+            &[&["--file", "k8s_demo.df"][..], args].concat(),
+        )
+    };
+    let svc = || api.get("/api/v1/namespaces/shop/services/web").unwrap();
+    run(&["apply"]).success();
+    let ip = svc()["spec"]["clusterIP"].clone();
+    assert!(ip.is_string(), "{}", svc());
+    assert_eq!(managers_of(&svc(), ".spec.clusterIP"), Vec::<String>::new());
+
+    s.write(
+        "k8s_demo.df",
+        &s.read("k8s_demo.df").replace("port: 80,", "port: 8080,"),
+    );
+    let r = run(&["plan"]).success();
+    assert!(r.stdout.contains("~ k8s.service.web"), "{}", r.stdout);
+    assert!(!r.stdout.contains("clusterIP"), "{}", r.stdout);
+    let updates = api.count("PATCH /api/v1/namespaces/shop/services/web?", &[]);
+    run(&["apply"]).success();
+    assert!(
+        api.count("PATCH /api/v1/namespaces/shop/services/web?", &[]) > updates,
+        "the Service is applied again"
+    );
+    let now = svc();
+    assert_eq!(now["spec"]["ports"][0]["port"], 8080);
+    assert_eq!(now["spec"]["clusterIP"], ip, "the server keeps its value");
+    assert_eq!(
+        managers_of(&now, ".spec.clusterIP"),
+        Vec::<String>::new(),
+        "dform does not own a field the server defaulted: {now}"
+    );
+    assert_eq!(managers_of(&now, ".spec.ports"), vec!["dform".to_string()]);
+    let r = run(&["plan"]).success();
+    assert_eq!(r.summary(), "stack k8s_demo is undeformed", "{}", r.stdout);
+}
+
 /// Another field manager takes `spec.replicas`: dform's plan puts it back,
 /// and the apply (never forced) fails naming the manager and the field.
 #[test]

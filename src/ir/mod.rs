@@ -36,10 +36,14 @@ pub struct Adopt {
 ///
 /// `assemble` of E §2.8 as F DR-11 revises it: the document excludes every
 /// schema-computed path (the provider owns it; its value lives in the world's
-/// `computed`) and an Optional+Computed path the program left to the provider
-/// (its value is still the resource's own null). An `ignore_changes(T, A, P)`
-/// path stays: a create sets it; the planner drops it from both sides of an
-/// object that exists.
+/// `computed`) and every Optional+Computed path the program did not itself
+/// contribute to. Only the compiler prelude's contribution reached such a
+/// path: the resource's own null, or, once the object exists, the value the
+/// provider picked (round 0). Either way the provider owns it, so it is never
+/// sent back: an update would otherwise make dform the owner of a value the
+/// server defaulted (server-side apply's field managers). An
+/// `ignore_changes(T, A, P)` path stays: a create sets it; the planner drops
+/// it from both sides of an object that exists.
 pub fn compile_resources(
     facts: impl IntoIterator<Item = Atom>,
     schema: &Schema,
@@ -47,6 +51,8 @@ pub fn compile_resources(
     let mut by_addr: BTreeMap<Address, BTreeMap<String, Value>> = BTreeMap::new();
     let mut attrs: Vec<(Address, String, Value)> = Vec::new();
     let mut ref_deps: Vec<(Address, Address)> = Vec::new();
+    let mut contributions: BTreeMap<Address, Vec<Contribution>> = BTreeMap::new();
+    let mut resolved: BTreeMap<String, Value> = BTreeMap::new();
     for f in facts {
         match (f.pred.as_str(), f.args.len()) {
             (transform::REF_DEP, 4) => {
@@ -64,6 +70,35 @@ pub fn compile_resources(
                 by_addr.entry(Address { typ, name }).or_default();
             }
             ("want", _) => bail!("want/2 expected"),
+            ("arg", 5) => {
+                let (
+                    Term::Val(Value::Str(typ)),
+                    Term::Val(Value::Str(name)),
+                    Term::Val(Value::Str(path)),
+                    Term::Val(value),
+                    Term::Val(Value::Str(rank)),
+                ) = (&f.args[0], &f.args[1], &f.args[2], &f.args[3], &f.args[4])
+                else {
+                    continue;
+                };
+                let mut leaves = Vec::new();
+                leaves_of(path, value, &mut leaves);
+                contributions
+                    .entry(Address {
+                        typ: typ.clone(),
+                        name: name.clone(),
+                    })
+                    .or_default()
+                    .push(Contribution {
+                        rank: rank.clone(),
+                        leaves,
+                    });
+            }
+            ("resolve", 2) => {
+                if let (Term::Val(Value::Str(label)), Term::Val(v)) = (&f.args[0], &f.args[1]) {
+                    resolved.insert(label.clone(), v.clone());
+                }
+            }
             ("attr", 4) => {
                 let typ = as_str_val(&f.args[0])?;
                 if transform::is_pseudo_type(typ) {
@@ -104,10 +139,10 @@ pub fn compile_resources(
             for (p, _) in schema.computed_of(&addr.typ) {
                 remove_path(&mut root, &p);
             }
+            let theirs = contributions.get(&addr).map(Vec::as_slice).unwrap_or(&[]);
             for (p, _) in schema.optional_computed_of(&addr.typ) {
-                let own = crate::value::null_label(&addr.typ, &addr.name, &p);
-                if get_path(&root, &p)
-                    .is_some_and(|v| matches!(v, Value::Null { label, .. } if *label == own))
+                if !schema.in_list(&addr.typ, &p)
+                    && !contributes(theirs, &addr, &p, resolved.get(&own_label(&addr, &p)))
                 {
                     remove_path(&mut root, &p);
                 }
@@ -122,14 +157,52 @@ pub fn compile_resources(
         .collect())
 }
 
-fn get_path<'a>(root: &'a BTreeMap<String, Value>, path: &str) -> Option<&'a Value> {
-    let mut segs = path.split('.');
-    let mut cur = root.get(segs.next()?)?;
-    for s in segs {
-        let Value::Obj(m) = cur else { return None };
-        cur = m.get(s)?;
+/// One `arg(T, A, P, V, Rank)` contribution: its rank and its leaves as
+/// full dotted paths (a stored path need not be normalized yet).
+struct Contribution {
+    rank: String,
+    leaves: Vec<(String, Value)>,
+}
+
+fn leaves_of(at: &str, v: &Value, out: &mut Vec<(String, Value)>) {
+    match v {
+        Value::Obj(m) if !m.is_empty() => {
+            for (k, x) in m {
+                leaves_of(&format!("{at}.{k}"), x, out);
+            }
+        }
+        _ => out.push((at.to_string(), v.clone())),
     }
-    Some(cur)
+}
+
+fn own_label(addr: &Address, path: &str) -> String {
+    crate::value::null_label(&addr.typ, &addr.name, path)
+}
+
+/// Whether a contribution other than the prelude's (`transform::computed_prelude`:
+/// at `@default`, the one leaf `path`, the resource's own null or the value
+/// round 0 resolved from the world) reaches `path` of `addr`. A program that
+/// states the prelude's very contribution cannot be told apart from it.
+fn contributes(
+    contributions: &[Contribution],
+    addr: &Address,
+    path: &str,
+    resolved: Option<&Value>,
+) -> bool {
+    let own = own_label(addr, path);
+    let prelude = |c: &Contribution| {
+        c.rank == "default"
+            && matches!(c.leaves.as_slice(), [(p, v)] if p == path
+                && (matches!(v, Value::Null { label, .. } if *label == own)
+                    || Some(v) == resolved))
+    };
+    let under = format!("{path}.");
+    contributions.iter().any(|c| {
+        !prelude(c)
+            && c.leaves
+                .iter()
+                .any(|(p, _)| p == path || p.starts_with(&under))
+    })
 }
 
 /// Remove a dotted path; an object left empty by it goes too.
