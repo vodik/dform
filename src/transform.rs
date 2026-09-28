@@ -62,7 +62,7 @@ pub fn lower(program: &Program) -> Result<Lowered> {
     let (expanded, externs, extern_fns) = drop_metadata(&expanded);
     let expanded = desugar_resources(&expanded)?;
     let expanded = desugar_comprehensions(&expanded)?;
-    let mut expanded = lower_contributions(&expanded)?;
+    let mut expanded = declassified(lower_contributions(&expanded)?);
     crate::externs::check(&expanded, &extern_fns)?;
     // The cells of secret inputs and outputs, for the Redactor.
     let secret_inputs = inputs
@@ -307,6 +307,53 @@ fn lower_contributions(program: &Program) -> Result<Program> {
         });
     }
     Ok(Program { statements: out })
+}
+
+/// E DR-19: a rule that uses `declassify(V, Reason)` also derives
+/// `declassified(Site, Reason)` from its body, `Site` where the rule is
+/// written (`file:line:col`), so a policy can read and deny it.
+fn declassified(mut program: Program) -> Program {
+    fn reasons(t: &Term, out: &mut Vec<Term>) {
+        match t {
+            Term::Func { name, args } => {
+                if name == "declassify" && args.len() == 2 {
+                    out.push(args[1].clone());
+                }
+                args.iter().for_each(|a| reasons(a, out));
+            }
+            Term::List(xs) => xs.iter().for_each(|a| reasons(a, out)),
+            Term::Obj(m) => m.values().for_each(|a| reasons(a, out)),
+            _ => {}
+        }
+    }
+    let mut more = Vec::new();
+    for st in &program.statements {
+        let Stmt::Rule(r) = st else { continue };
+        let mut found = Vec::new();
+        r.head.args.iter().for_each(|t| reasons(t, &mut found));
+        for l in &r.body {
+            match l {
+                Lit::Pos(a) | Lit::Not(a) => a.args.iter().for_each(|t| reasons(t, &mut found)),
+                Lit::Eq(x, y)
+                | Lit::Neq(x, y)
+                | Lit::Gt(x, y)
+                | Lit::Ge(x, y)
+                | Lit::Lt(x, y)
+                | Lit::Le(x, y) => [x, y].into_iter().for_each(|t| reasons(t, &mut found)),
+            }
+        }
+        let site = diag::at(r.head.span).unwrap_or_else(|| "compiler".into());
+        for reason in found {
+            let mut head = atom("declassified", vec![str_term(&site), reason]);
+            head.span = r.head.span;
+            more.push(Stmt::Rule(RuleStmt {
+                head,
+                body: r.body.clone(),
+            }));
+        }
+    }
+    program.statements.extend(more);
+    program
 }
 
 fn apply_decls(program: &Program) -> Result<Program> {

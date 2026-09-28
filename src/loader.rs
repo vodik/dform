@@ -137,6 +137,7 @@ pub fn is_core_pred(pred: &str) -> bool {
             | "merge_rule"
             | "warn"
             | "deny"
+            | "declassified"
             | "cloud_exists"
             | "cloud_attr"
             | "cloud_computed"

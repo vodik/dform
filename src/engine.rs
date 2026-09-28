@@ -1651,7 +1651,14 @@ impl Rec<'_> {
 fn forwards_nulls(name: &str) -> bool {
     matches!(
         name,
-        "collect" | "collect_set" | "collect_list" | "count" | "__null" | "__label" | "__path"
+        "collect"
+            | "collect_set"
+            | "collect_list"
+            | "count"
+            | "__null"
+            | "__label"
+            | "__path"
+            | "declassify"
     )
 }
 
@@ -2909,6 +2916,12 @@ fn eval_func(name: &str, args: &[Term], state: &HashMap<String, Value>) -> Optio
                 class,
                 ty,
             })
+        }
+        // E DR-19: `declassify(V, Reason)` is `V`; the static pass reads it
+        // as public, and `declassified/2` records it (`transform`).
+        "declassify" if args.len() == 2 => {
+            eval_term(&args[1], state)?;
+            eval_term(&args[0], state)
         }
         "__label" if args.len() == 3 => {
             let t = eval_term(&args[0], state)?;

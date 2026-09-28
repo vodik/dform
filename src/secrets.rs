@@ -20,6 +20,10 @@
 //! - E0305 a secret reaching a resource address (`want`, `arg`, `ref`,
 //!   `scoped`): names are printed everywhere.
 //!
+//! `declassify(V, Reason)` is the one way out: its value is public, and
+//! what is inside it may be inspected (`declassify(len(Pw), "...")`). The
+//! lowering derives `declassified(Site, Reason)` for policy to read.
+//!
 //! An input's own refinement (`input pw: secret(string) where ...`) is the
 //! boundary where a secret may be checked, so its generated rules are
 //! exempt from E0301/E0302.
@@ -47,6 +51,10 @@ const CARRY: &[&str] = &[
     "collect_set",
     "collect_list",
 ];
+
+/// `declassify(V, Reason)`: `V`, public (`transform` derives
+/// `declassified/2` beside the rule for policy).
+const DECLASSIFY: &str = "declassify";
 
 /// Aggregates that only collect: their result is secret, nothing leaks.
 const COLLECT: &[&str] = &["collect", "collect_set", "collect_list"];
@@ -108,6 +116,8 @@ impl Pass<'_> {
     fn term_secret(&self, t: &Term, vars: &BTreeSet<String>) -> bool {
         match t {
             Term::Var(v) => vars.contains(v),
+            // Its label lowered to public.
+            Term::Func { name, .. } if name == DECLASSIFY => false,
             Term::Func { name, args } if name == "ref" && args.len() == 3 => {
                 self.attr_secret(&args[0], &args[1], &args[2])
                     || args.iter().any(|a| self.term_secret(a, vars))
@@ -426,6 +436,8 @@ fn is_builtin_pred(p: &str) -> bool {
 /// The first function in `t` that inspects a secret argument.
 fn inspecting(t: &Term, secret: &dyn Fn(&Term) -> bool) -> Option<String> {
     match t {
+        // What is declassified may be inspected: the rule says so.
+        Term::Func { name, .. } if name == DECLASSIFY => None,
         Term::Func { name, args } => {
             if !CARRY.contains(&name.as_str())
                 && !matches!(name.as_str(), "ref" | "scoped")
@@ -445,6 +457,7 @@ fn inspecting(t: &Term, secret: &dyn Fn(&Term) -> bool) -> Option<String> {
 /// `scoped(S, Secret)`)?
 fn names_secret(t: &Term, secret: &dyn Fn(&Term) -> bool) -> bool {
     match t {
+        Term::Func { name, .. } if name == DECLASSIFY => false,
         Term::Func { name, args } => {
             (name == "ref" && args.len() == 3 && secret(&args[1]))
                 || (name == "scoped" && args.iter().any(secret))

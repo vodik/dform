@@ -219,6 +219,7 @@ into today's AST:
 | `stack n { ... }`, `provider p { ... }` | no rules: the stack's name, backend, unknowns and role, the mock's schemas (`src/stack.rs`) |
 | `input relation p/N from S`      | `decl p/N`, and the facts source `S` holds now, re-read when it changes (`src/watch.rs`) |
 | `decl p/N`                       | `p/N` is declared (a provider feeds it)          |
+| `declassify(V, R)` in a rule     | `V`, public to the secret pass, and `declassified("file:line:col", R)` derived from the rule's body (E DR-19) |
 | `decl p(A: t, BC: t)`            | record fields `a`, `b_c` for `p{a: .., b_c: ..}` |
 | `arg(T, A, P, V) @override`      | `arg(T, A, P, V, override)`                      |
 | `constraint("msg") :- B`         | a constraint (a deny checked after evaluation)   |

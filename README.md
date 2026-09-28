@@ -517,6 +517,16 @@ is a compile error with a span, before anything is evaluated:
 
 An input's own refinement (`input pw: secret(string) where len(pw) >=
 12`) is where a secret may be checked; its deny does not print the value.
+`declassify(V, Reason)` is the one way a secret leaves on purpose: its
+value is `V`, public to the pass (what is inside it may be inspected), and
+the rule also derives `declassified(Site, Reason)`, `Site` where the rule
+is written, for a policy to read or deny:
+
+```prolog
+output(pw_len, N) :- pw(P), N = declassify(len(P), "its length is public").
+deny(M) :- declassified(At, R), M = format("declassified at %s: %s", At, R).
+```
+
 The value of an input or output declared `secret(T)` prints as its label,
 `(sensitive input/#pw)`, in `query`, `why` (the `--set` leaf included) and
 `show`. The plan file records a secret input's `--set` as its label and

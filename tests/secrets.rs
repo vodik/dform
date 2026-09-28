@@ -367,3 +367,68 @@ fn a_sensitive_leaf_changed_between_plan_and_apply_is_refused() {
     }
     assert!(s.read("w.json").contains("MUTATED-VAULT-SECRET"));
 }
+
+/// E DR-19: a secret reaches a public output only through
+/// `declassify(V, Reason)`, which lowers its label and derives
+/// `declassified(Site, Reason)` for policy to deny.
+#[test]
+fn a_secret_reaches_a_public_output_only_through_declassify() {
+    let s = Scratch::new("secrets-declassify");
+    let prog = |body: &str, policy: &str| {
+        format!(
+            "edition 2026.\ninput pw: secret(string).\noutput pw_len: int.\n\
+             output(pw_len, N) :- pw(P), {body}.\n{policy}"
+        )
+    };
+    let args = [
+        "--file",
+        "p.df",
+        "--world",
+        "w.json",
+        "--set",
+        "pw=HUNTER-TWO",
+    ];
+    s.write("p.df", &prog("N = len(P)", ""));
+    let r = s.run(&[&args[..], &["plan"]].concat()).failure();
+    assert!(
+        r.stderr
+            .contains("p.df:4:1: E0304: a secret reaches output pw_len, not declared secret(T)"),
+        "{}",
+        r.stderr
+    );
+
+    s.write(
+        "p.df",
+        &prog("N = declassify(len(P), \"its length is public\")", ""),
+    );
+    let r = s
+        .run(&[&args[..], &["query", "attr(output, S, K, V)"]].concat())
+        .success();
+    assert!(r.stdout.contains("\"pw_len\"  10"), "{}", r.stdout);
+    let r = s
+        .run(&[&args[..], &["query", "declassified(At, R)"]].concat())
+        .success();
+    assert!(
+        r.stdout.contains("\"p.df:4:1\"  \"its length is public\""),
+        "{}",
+        r.stdout
+    );
+
+    s.write(
+        "p.df",
+        &prog(
+            "N = declassify(len(P), \"its length is public\")",
+            "deny(M) :- declassified(At, R), M = format(\"declassified at %s: %s\", At, R).\n",
+        ),
+    );
+    let r = s.run(&[&args[..], &["plan"]].concat()).failure();
+    assert!(
+        r.stderr
+            .contains("- declassified at p.df:4:1: its length is public\n"),
+        "{}",
+        r.stderr
+    );
+    for out in [&r.stdout, &r.stderr] {
+        assert!(!out.contains("HUNTER"), "{out}");
+    }
+}
