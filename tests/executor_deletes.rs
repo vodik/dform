@@ -58,7 +58,8 @@ resource net.subnet a { vpc_id = ref(net.vpc, main, id), tier = "web" }.
 "#;
 
 /// A force_new change is a replace; by default the old object goes first
-/// and the new one takes its name.
+/// and the new one takes its name. The subnet waits for the new id; the
+/// mock without `fresh-ids` mints the same one, so tick 2 has nothing to do.
 #[test]
 fn a_force_new_change_replaces_destroying_first() {
     let s = Scratch::new("replace");
@@ -68,9 +69,12 @@ fn a_force_new_change_replaces_destroying_first() {
     let r = dform(&s, &["apply"]).success();
     assert_eq!(
         r.stdout,
-        "plan: 1 deformation (1 replace)\ndefinite:\n\
+        "tick 1:\nplan: 1 deformation (1 replace), 1 pending\ndefinite:\n\
          -/+ net.vpc.main  (replace)\n  cidr: \"10.0.0.0/16\" -> \"10.1.0.0/16\"\n\
-         apply order: tick 1 [net.vpc.main]\n\
+         pending on ?net.vpc/main#id (resolves after tick 1):\n\
+         ~ net.subnet.a\n  vpc_id: \"net.vpc:main\" -> ?net.vpc/main#id\n\
+         apply order: tick 1 [net.vpc.main] tick 2 [net.subnet.a]\n\
+         tick 2:\nstack p is undeformed\n\
          apply: complete\n"
     );
     let w = json(&s, "w.json");
@@ -155,7 +159,7 @@ fn create_before_destroy_in_one_apply_takes_two_ticks() {
     let r = dform(&s, &["apply"]).success();
     assert!(
         r.stdout
-            .starts_with("tick 1:\nplan: 1 deformation (1 replace)\n"),
+            .starts_with("tick 1:\nplan: 1 deformation (1 replace), 1 pending\n"),
         "{}",
         r.stdout
     );

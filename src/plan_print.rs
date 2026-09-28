@@ -154,6 +154,8 @@ pub fn waits_on(a: &Action, sections: &Sections) -> Option<Vec<String>> {
     let on: Vec<String> = match (sections.pending.get(&key), &a.kind) {
         (Some(ns), _) => ns.iter().cloned().collect(),
         (None, ActionKind::Pending) => a.on.iter().cloned().collect(),
+        // A deposed object's delete held for its dependents (`executor`).
+        (None, _) if !a.on.is_empty() => a.on.iter().cloned().collect(),
         (None, _) => return None,
     };
     Some(on)

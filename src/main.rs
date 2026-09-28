@@ -206,12 +206,16 @@ fn main() -> Result<()> {
     let mut base_extra = build_extra_facts(&cli.set, &cli.data)?;
     base_extra.extend(backend.catalog()?);
     base_extra.extend(backend.discover()?);
-    // Refresh as facts: round 0 resolves every null the world can answer.
-    let evaluate = |st: &state::State| -> Result<(engine::EvalResult, Vec<String>)> {
+    // Refresh as facts: round 0 resolves every null the world can answer,
+    // except those of `withheld` addresses (being replaced).
+    let evaluate_without = |st: &state::State,
+                            withheld: &BTreeSet<ir::Address>|
+     -> Result<(engine::EvalResult, Vec<String>)> {
         let mut extra = base_extra.clone();
-        extra.extend(backend.world_facts(st)?);
+        extra.extend(executor::withhold(backend.world_facts(st)?, withheld));
         engine::eval(&program, &extra)
     };
+    let evaluate = |st: &state::State| evaluate_without(st, &BTreeSet::new());
     let (mut res, mut violations) = evaluate(&st)?;
     // moved/3 rewrites state's identity before the diff (E §3.4); round 0
     // must see the new addresses, so the program is evaluated again.
@@ -245,6 +249,37 @@ fn main() -> Result<()> {
     let adopts = ir::compile_adopts(res.facts.iter())?;
     let lifecycle = zset::Lifecycle::from_facts(&res.facts)?;
     let schema = backend.schema();
+    // The provider's plan for this evaluation. A replace makes a new object,
+    // so the nulls that named the old one are retracted (`executor`): the
+    // program is evaluated again without the replaced identities, and what
+    // reads them is held until the replacement exists. Returns the
+    // evaluation and documents the plan was taken from, and its sections.
+    let plan_for = |res: engine::EvalResult,
+                    resources: Vec<ir::Resource>,
+                    adopts: &[ir::Adopt],
+                    lifecycle: &zset::Lifecycle,
+                    st: &state::State|
+     -> Result<(
+        engine::EvalResult,
+        Vec<ir::Resource>,
+        dform::provider::Plan,
+        stuck::Sections,
+    )> {
+        let mut plan = backend.plan(&resources, adopts, lifecycle, st)?;
+        let replaced = executor::replaced(&plan);
+        let (res, resources) = if replaced.is_empty() {
+            (res, resources)
+        } else {
+            let (again, _) = evaluate_without(st, &replaced)?;
+            let docs = ir::compile_resources(again.facts.iter().cloned(), schema)?;
+            plan = backend.plan_retracting(&docs, adopts, lifecycle, st, &replaced)?;
+            executor::hold_dependents(&mut plan, &docs, &replaced);
+            (again, docs)
+        };
+        let sections = plan_sections(&res, &resources, schema);
+        executor::hold_deposed(&mut plan, &resources, &sections);
+        Ok((res, resources, plan, sections))
+    };
     let report_of = |plan: &dform::provider::Plan,
                      res: &engine::EvalResult,
                      sections: &stuck::Sections,
@@ -355,8 +390,8 @@ fn main() -> Result<()> {
             print!("{}", graph::relation(&spec, &res.facts, &redact)?);
         }
         Cmd::Plan { out, json } => {
-            let sections = plan_sections(&res, &resources, backend.schema());
-            let plan = backend.plan(&resources, &adopts, &lifecycle, &st)?;
+            let (res, resources, plan, sections) =
+                plan_for(res, resources, &adopts, &lifecycle, &st)?;
             let denies = lifecycle.denies(&plan.actions);
             let report = report_of(&plan, &res, &sections, 1, &moves, &denies);
             if json {
@@ -485,8 +520,9 @@ fn main() -> Result<()> {
                 (res, resources, adopts, lifecycle);
             let mut tick = 1;
             loop {
-                let sections = plan_sections(&res, &resources, backend.schema());
-                let mut plan = backend.plan(&resources, &adopts, &lifecycle, &st)?;
+                let (r, docs, mut plan, sections) =
+                    plan_for(res, resources, &adopts, &lifecycle, &st)?;
+                (res, resources) = (r, docs);
                 check_saved(&plan, &res, &sections, tick)?;
                 let held: Vec<String> = plan
                     .actions
@@ -551,7 +587,7 @@ fn main() -> Result<()> {
                 if !boundary {
                     st.in_flight = None;
                     persist(&st)?;
-                    if changed {
+                    if changed || tick > 1 {
                         println!("apply: complete");
                     } else {
                         println!("apply: nothing to do");

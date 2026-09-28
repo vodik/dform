@@ -196,7 +196,19 @@ created first under a free name (`main-2`), the old one is *deposed* (kept in
 state's `deposed` section), and a boundary follows; the next tick moves what
 depends on it to the replacement and then deletes the deposed object
 (`- T.A  (deposed)`). A deposed object left by a failed apply is deleted by
-the next one.
+the next one, once nothing that depends on it is still pending.
+
+Either way the replacement is a new object, so every null that named the old
+one (its id, its other computed values) is unresolved again: an existing
+object that reads one is `pending on ?T/A#id (resolves after tick N)` and is
+updated to the new value the tick after the replacement; a new object that
+reads one is created after it in the same tick. `--chaos fresh-ids` makes
+the mock mint a new id on every create, so the difference shows:
+
+```bash
+cargo run -- apply --chaos fresh-ids
+cargo run -- apply --chaos fresh-ids --set env=prod   # vpcs replaced in tick 1, subnets moved in tick 2
+```
 
 Lifecycle is plain facts the planner reads (and policy can read too):
 
@@ -338,6 +350,7 @@ file keeps a `tick` counter; every `apply` is one tick.
 | `read-lag=T/N:K` | the first `K` Reads of `T/N` after it is created return nothing (eventual consistency) |
 | `mutate=T/N:PATH=JSON` | once per run, after the first tick `T/N` exists at, the world sets its `PATH` to `JSON` (drift) |
 | `latency=T/N:MS` | Apply of `T/N` takes `MS` on a simulated clock, reported, never slept; the world's `timeline` records each call's start and end |
+| `fresh-ids` | every Create mints new ids (the world keeps a `serial`), as a real cloud does; without it a destroy-first replacement under the same name gets its predecessor's id |
 
 ```bash
 cargo run -- apply --chaos fail=net.subnet/network.main::private-us-test-1a

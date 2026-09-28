@@ -13,6 +13,8 @@
 //! |                                | sets T/N's PATH to JSON                                 |
 //! | `latency=T/N:MS`               | Apply of T/N is recorded as taking MS (never slept)     |
 //! | `crash=T/N`                    | dform is killed as it calls Apply of T/N (exit 137)     |
+//! | `fresh-ids`                    | every Create mints new ids, as a real cloud does: a     |
+//! |                                | replacement's id is not its predecessor's               |
 
 use crate::ir::Address;
 use anyhow::{Context, Result, anyhow, bail};
@@ -26,6 +28,9 @@ pub struct Chaos {
     pub mutate: Vec<(Address, String, serde_json::Value)>,
     pub latency: BTreeMap<Address, u64>,
     pub crash: BTreeSet<Address>,
+    /// Every Create salts its minted values with a serial the world keeps,
+    /// so a destroy-first replacement under the same name gets a new id.
+    pub fresh_ids: bool,
 }
 
 /// `T/N`: the type has no slash, the name may (component scopes use `::`).
@@ -58,8 +63,14 @@ impl Chaos {
     }
 
     fn add(&mut self, spec: &str) -> Result<()> {
+        if spec == "fresh-ids" {
+            self.fresh_ids = true;
+            return Ok(());
+        }
         let (knob, arg) = spec.split_once('=').ok_or_else(|| {
-            anyhow!("expected KNOB=ARG (fail, timeout, crash, read-lag, mutate, latency)")
+            anyhow!(
+                "expected KNOB=ARG (fail, timeout, crash, read-lag, mutate, latency) or fresh-ids"
+            )
         })?;
         match knob {
             "fail" => {
@@ -90,7 +101,8 @@ impl Chaos {
             }
             other => {
                 bail!(
-                    "unknown chaos knob '{other}' (fail, timeout, crash, read-lag, mutate, latency)"
+                    "unknown chaos knob '{other}' (fail, timeout, crash, read-lag, mutate, latency, \
+                     fresh-ids)"
                 )
             }
         }
@@ -120,8 +132,10 @@ mod tests {
             "read-lag=net.vpc/network.main::vpc:3".into(),
             r#"mutate=net.vpc/network.main::vpc:tags.env="prod""#.into(),
             "latency=net.vpc/v:250".into(),
+            "fresh-ids".into(),
         ])
         .unwrap();
+        assert!(c.fresh_ids);
         assert!(
             c.fail
                 .contains(&parse_addr("net.subnet/private-a").unwrap())

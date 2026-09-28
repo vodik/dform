@@ -24,11 +24,26 @@
 //! actions from a fresh evaluation, where the finished ones cancel. The check
 //! takes only the remaining documents, so a saved plan file can feed it the
 //! same way.
+//!
+//! Replacement. A replace makes a new object: every null that named the old
+//! one (its id, every computed path) is retracted, so the program is
+//! evaluated again without the replaced identities (`withhold`), and what
+//! reads them is held on the replacement's nulls (`hold_dependents`) until
+//! the boundary after the tick that creates it; the next tick updates it to
+//! the new values. A create that reads them fills them in the same tick,
+//! after the replacement. An object a `create_before_destroy` replacement
+//! deposed is deleted only once nothing that depends on it is still held
+//! (`hold_deposed`).
 
+use crate::ast::{Atom, Term};
 use crate::fakecloud::FakeCloud;
 use crate::ir::{Address, Adopt, Resource};
+use crate::lattice::nulls_in;
+use crate::plan_print::waits_on;
 use crate::provider::{Action, ActionKind, Change, Plan, fmt_value};
 use crate::state::{self, InFlight, State};
+use crate::stuck::Sections;
+use crate::value::{Value, null_owner};
 use crate::zset::Lifecycle;
 use anyhow::{Result, bail};
 use serde_json::Value as Json;
@@ -168,6 +183,92 @@ fn dag(actions: &[&Action], desired: &[Resource], state: &State) -> Vec<Vec<usiz
                 .collect()
         })
         .collect()
+}
+
+/// The addresses `plan` replaces.
+pub fn replaced(plan: &Plan) -> BTreeSet<Address> {
+    plan.actions
+        .iter()
+        .filter(|a| matches!(a.kind, ActionKind::Replace { .. }))
+        .map(|a| a.addr.clone())
+        .collect()
+}
+
+/// Refresh facts without the identities of `withheld`: round 0 resolves
+/// none of their nulls, so what reads them sees the nulls again.
+pub fn withhold(facts: Vec<Atom>, withheld: &BTreeSet<Address>) -> Vec<Atom> {
+    facts
+        .into_iter()
+        .filter(|f| {
+            let [Term::Val(Value::Str(typ)), Term::Val(Value::Str(name)), _] = f.args.as_slice()
+            else {
+                return true;
+            };
+            f.pred != "identity"
+                || !withheld.contains(&Address {
+                    typ: typ.clone(),
+                    name: name.clone(),
+                })
+        })
+        .collect()
+}
+
+/// Hold every update of an existing object whose document carries a null a
+/// replaced address owns: it runs the tick after the replacement, with the
+/// new value. A create is not held; the executor fills the null after the
+/// replacement in the same tick.
+pub fn hold_dependents(plan: &mut Plan, desired: &[Resource], replaced: &BTreeSet<Address>) {
+    for a in plan.actions.iter_mut() {
+        if replaced.contains(&a.addr)
+            || !matches!(
+                a.kind,
+                ActionKind::Update
+                    | ActionKind::Drift
+                    | ActionKind::Pending
+                    | ActionKind::Replace { .. }
+            )
+        {
+            continue;
+        }
+        let Some(r) = desired.iter().find(|r| r.addr == a.addr) else {
+            continue;
+        };
+        let on: BTreeSet<String> = nulls_in(&r.attrs)
+            .into_iter()
+            .filter(|l| {
+                null_owner(l).is_some_and(|(typ, name)| replaced.contains(&Address { typ, name }))
+            })
+            .collect();
+        if !on.is_empty() {
+            a.kind = ActionKind::Pending;
+            a.on.extend(on);
+        }
+    }
+}
+
+/// A deposed object is deleted only after what depended on it has moved to
+/// the replacement: while a desired object that references its address is
+/// held, the delete is held on the same nulls.
+pub fn hold_deposed(plan: &mut Plan, desired: &[Resource], sections: &Sections) {
+    let held: Vec<(Address, Vec<String>)> = plan
+        .actions
+        .iter()
+        .filter_map(|a| Some((a.addr.clone(), waits_on(a, sections)?)))
+        .collect();
+    for a in plan
+        .actions
+        .iter_mut()
+        .filter(|a| matches!(a.kind, ActionKind::DeleteDeposed))
+    {
+        for (addr, on) in &held {
+            if desired
+                .iter()
+                .any(|r| &r.addr == addr && r.deps.contains(&a.addr))
+            {
+                a.on.extend(on.iter().cloned());
+            }
+        }
+    }
 }
 
 /// Mark the tick's deformations in flight: every action of `plan` that is

@@ -40,6 +40,10 @@ pub struct RemoteState {
     /// `--parallel` overlapped.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub timeline: Vec<Span>,
+    /// Chaos `fresh-ids`: how many Creates have minted under it. Each salts
+    /// its minted values with the next serial.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub serial: u64,
 }
 
 /// One Apply call on the simulated clock.
@@ -160,6 +164,9 @@ struct Ctx<'a> {
     resolved: &'a BTreeMap<Address, Json>,
     /// Apply: a null that cannot be filled is an error naming the resource.
     strict: Option<&'a Address>,
+    /// Plan: addresses being replaced, whose nulls stay unresolved (the
+    /// replacement is a new object).
+    retracted: &'a BTreeSet<Address>,
 }
 
 impl Ctx<'_> {
@@ -362,7 +369,11 @@ impl FakeCloud {
         }
         let found = label.split_once('#').and_then(|(_, path)| {
             let (typ, name) = crate::value::null_owner(label)?;
-            let rr = ctx.existing(&Address { typ, name })?;
+            let owner = Address { typ, name };
+            if ctx.retracted.contains(&owner) {
+                return None;
+            }
+            let rr = ctx.existing(&owner)?;
             get_path(&rr.computed, path).cloned()
         });
         match (found, ctx.strict) {
@@ -535,6 +546,19 @@ impl FakeCloud {
         lifecycle: &Lifecycle,
         state: &State,
     ) -> Result<Plan> {
+        self.plan_retracting(desired, adopts, lifecycle, state, &BTreeSet::new())
+    }
+
+    /// `plan_with_state`, leaving every null owned by a `retracted` address
+    /// unresolved: those addresses are being replaced (`executor`).
+    pub fn plan_retracting(
+        &self,
+        desired: &[Resource],
+        adopts: &[Adopt],
+        lifecycle: &Lifecycle,
+        state: &State,
+        retracted: &BTreeSet<Address>,
+    ) -> Result<Plan> {
         let world = self.refresh(state)?;
         let inv = self.load_inventory()?;
         let adopt_map = state::adopt_map(adopts);
@@ -551,6 +575,7 @@ impl FakeCloud {
                 adopts: &adopt_map,
                 resolved: &resolved,
                 strict: None,
+                retracted,
             };
             let doc = self.resolve_doc(&ctx, &r)?;
             self.check_required(&r.addr, &doc)?;
@@ -770,29 +795,31 @@ impl FakeCloud {
     }
 
     /// What Apply returns for a new resource: every computed attribute of the
-    /// type, and every Optional+Computed one the program left unset.
-    fn mint(&self, typ: &str, name: &str, doc: &Json) -> Json {
+    /// type, and every Optional+Computed one the program left unset. A
+    /// `salt` (chaos `fresh-ids`) makes every `{hash}` and default id new.
+    fn mint(&self, typ: &str, name: &str, doc: &Json, salt: Option<u64>) -> Json {
         let mut out = json!({});
         // Optional+Computed first: a computed template may spell the picked
         // value (an IAM role's id is its name).
         for (attr, class) in self.schema.optional_computed_of(typ) {
             if get_path(doc, &attr).is_none() && !self.schema.in_list(typ, &attr) {
-                let v = self.mint_value(typ, name, &attr, class, doc, &out);
+                let v = self.mint_value(typ, name, &attr, class, doc, &out, salt);
                 set_path(&mut out, &attr, v);
             }
         }
         for (attr, class) in self.schema.computed_of(typ) {
             if !self.schema.in_list(typ, &attr) {
-                let v = self.mint_value(typ, name, &attr, class, doc, &out);
+                let v = self.mint_value(typ, name, &attr, class, doc, &out, salt);
                 set_path(&mut out, &attr, v);
             }
         }
         if !self.schema.knows_type(typ) {
-            set_path(&mut out, "id", json!(format!("{typ}:{name}")));
+            set_path(&mut out, "id", json!(default_id(typ, name, salt)));
         }
         out
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn mint_value(
         &self,
         typ: &str,
@@ -801,8 +828,10 @@ impl FakeCloud {
         class: NullClass,
         doc: &Json,
         minted: &Json,
+        salt: Option<u64>,
     ) -> Json {
-        let hash = short_hash(&format!("{typ}/{name}#{attr}"));
+        let salted = salt.map(|n| format!("@{n}")).unwrap_or_default();
+        let hash = short_hash(&format!("{typ}/{name}#{attr}{salted}"));
         let n = u64::from_str_radix(&hash, 36).unwrap_or(0);
         match self.schema.mints.get(&(typ.to_string(), attr.to_string())) {
             // A template that is one `{doc:PATH}` takes the value there,
@@ -836,7 +865,7 @@ impl FakeCloud {
             .unwrap_or("string");
         match (class, ty) {
             (NullClass::Secret, _) => json!(format!("fake-secret-{hash}")),
-            (NullClass::Fresh, _) if attr == "id" => json!(format!("{typ}:{name}")),
+            (NullClass::Fresh, _) if attr == "id" => json!(default_id(typ, name, salt)),
             (NullClass::Fresh, _) => json!(format!("{name}-{hash}")),
             (_, "int") => json!(n % 100),
             (_, "bool") => json!(true),
@@ -1001,6 +1030,7 @@ impl Tick<'_> {
                     adopts: &self.adopt_map,
                     resolved: &self.resolved,
                     strict: Some(addr),
+                    retracted: &BTreeSet::new(),
                 };
                 let doc = cloud.resolve_doc(&ctx, r)?;
                 self.resolved.insert(addr.clone(), doc.clone());
@@ -1115,7 +1145,10 @@ impl Tick<'_> {
                         }
                         cur.computed.clone()
                     }
-                    None => cloud.mint(&addr.typ, &entry.remote, &doc),
+                    None => {
+                        let salt = self.salt();
+                        cloud.mint(&addr.typ, &entry.remote, &doc, salt)
+                    }
                 };
                 self.world.resources.insert(
                     k,
@@ -1164,9 +1197,21 @@ impl Tick<'_> {
         });
     }
 
+    /// Chaos `fresh-ids`: the next serial to salt a Create's minted values
+    /// with, else none (the mock's default: the same name mints the same
+    /// id).
+    fn salt(&mut self) -> Option<u64> {
+        if !self.cloud.chaos.fresh_ids {
+            return None;
+        }
+        self.world.serial += 1;
+        Some(self.world.serial)
+    }
+
     /// A new object at `remote`, its computed values minted.
     fn create_object(&mut self, addr: &Address, remote: &str, doc: Json) {
-        let computed = self.cloud.mint(&addr.typ, remote, &doc);
+        let salt = self.salt();
+        let computed = self.cloud.mint(&addr.typ, remote, &doc, salt);
         let read_lag = self.cloud.chaos.read_lag.get(addr).copied();
         self.world.resources.insert(
             key(&addr.typ, remote),
@@ -1214,6 +1259,15 @@ impl Tick<'_> {
         self.cloud.end_tick(&mut self.world, state);
         self.cloud.save(&self.world)?;
         Ok(self.returned)
+    }
+}
+
+/// The id the mock mints when the schema gives no template: `T:NAME`, and
+/// under chaos `fresh-ids` `T:NAME@SERIAL`.
+fn default_id(typ: &str, name: &str, salt: Option<u64>) -> String {
+    match salt {
+        Some(n) => format!("{typ}:{name}@{n}"),
+        None => format!("{typ}:{name}"),
     }
 }
 

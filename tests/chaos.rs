@@ -126,11 +126,12 @@ fn mutate_changes_the_world_after_the_tick() {
         "{}",
         r.stdout
     );
-    // The fake schema's cidr is force_new: undoing the drift replaces.
+    // The fake schema's cidr is force_new: undoing the drift replaces, and
+    // the subnet waits for the replacement's id.
     let r = dform(&s, &["plan"]).success();
     assert_eq!(
         r.summary(),
-        "plan: 1 deformation (1 replace)",
+        "plan: 1 deformation (1 replace), 1 pending",
         "{}",
         r.stdout
     );
