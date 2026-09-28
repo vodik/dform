@@ -213,6 +213,8 @@ pub struct Policy {
     /// Undetermined (Rule 3), or may derive after a boundary (a positive
     /// read of a predicate with a stuck instance).
     pub may_derive: bool,
+    /// A deferred refinement check, not a deny (`message` names it).
+    pub refinement: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -267,7 +269,8 @@ pub struct Input<'a> {
 
 pub fn report(i: &Input) -> Report {
     let r = Redactor::new(&i.res.facts, i.schema);
-    let conflicts = diags(i.res, &r, "deny", "conflicting attribute contributions");
+    let mut conflicts = diags(i.res, &r, "deny", "conflicting attribute contributions");
+    conflicts.extend(diags(i.res, &r, "deny", crate::refine::VIOLATED));
     let conflicted: BTreeSet<&Address> = conflicts.iter().map(|d| &d.addr).collect();
     let (held, definite): (Vec<&Action>, Vec<&Action>) = i
         .plan
@@ -330,7 +333,8 @@ pub fn report(i: &Input) -> Report {
         .collect();
 
     let groups = groups(i.res, &tick_of, &resolves);
-    let policies = policies(i, &tick_of, &resolves);
+    let mut policies = policies(i, &tick_of, &resolves);
+    policies.extend(deferred(i.res, &tick_of, &resolves));
 
     let mut ticks: BTreeMap<usize, Vec<String>> = BTreeMap::new();
     let mut unscheduled = Vec::new();
@@ -478,6 +482,7 @@ fn policies(
             on,
             reason: s.reason.clone(),
             may_derive: false,
+            refinement: false,
         };
         if !out
             .iter()
@@ -512,11 +517,56 @@ fn policies(
             on,
             reason: format!("reads {} with a stuck instance", reads.join(", ")),
             may_derive: true,
+            refinement: false,
         });
     }
     may.sort_by(|a, b| a.message.cmp(&b.message));
     may.dedup_by(|a, b| a.message == b.message);
     out.extend(may);
+    out
+}
+
+/// Refinements the winning value could not decide yet (E §2.4 step 4):
+/// `refinement_deferred(T, A, Path, C, Nulls)`, re-checked at the boundary
+/// that resolves `Nulls`.
+fn deferred(
+    res: &EvalResult,
+    tick_of: &BTreeMap<(String, String), usize>,
+    resolves: &Resolves,
+) -> Vec<Policy> {
+    let mut out = Vec::new();
+    for a in res
+        .facts
+        .iter()
+        .filter(|a| a.pred == crate::refine::DEFERRED)
+    {
+        let [
+            Term::Val(Value::Str(t)),
+            Term::Val(addr),
+            Term::Val(Value::Str(path)),
+            Term::Val(Value::Str(c)),
+            Term::Val(Value::List(nulls)),
+        ] = a.args.as_slice()
+        else {
+            continue;
+        };
+        let on: Vec<String> = nulls
+            .iter()
+            .filter_map(|n| n.as_str().map(str::to_string))
+            .collect();
+        let addr = match addr {
+            Value::Str(s) => s.clone(),
+            v => fmt_value(v),
+        };
+        out.push(Policy {
+            message: format!("{c} of {t}.{addr} .{path}"),
+            after: resolves(&on, tick_of),
+            on,
+            reason: "the value carries a null".into(),
+            may_derive: false,
+            refinement: true,
+        });
+    }
     out
 }
 
@@ -854,6 +904,14 @@ impl Report {
                     (true, None) => ", may derive after a boundary".into(),
                     (false, None) => String::new(),
                 };
+                if p.refinement {
+                    out.push_str(&format!(
+                        "? refinement on {} deferred: {}{when}\n",
+                        nulls_text(&p.on),
+                        p.message
+                    ));
+                    continue;
+                }
                 out.push_str(&format!(
                     "? deny \"{}\" on {}{when}  ({})\n",
                     p.message,
@@ -969,9 +1027,15 @@ impl Report {
                 "resolves_after": g.resolves_after,
             })).collect::<Vec<_>>(),
             "undetermined": self.policies.iter().map(|p| json!({
-                "policy": "deny",
+                "policy": if p.refinement { "refinement" } else { "deny" },
                 "message": p.message,
-                "kind": if p.may_derive { "may_derive" } else { "undetermined" },
+                "kind": if p.refinement {
+                    "deferred"
+                } else if p.may_derive {
+                    "may_derive"
+                } else {
+                    "undetermined"
+                },
                 "on": nulls(&p.on),
                 "reason": p.reason,
                 "after": p.after,
