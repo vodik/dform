@@ -1,7 +1,7 @@
 pub use crate::lattice::Rank;
 use crate::value::Value;
-use std::collections::BTreeMap;
 use std::cmp::Ordering;
+use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
 
 #[derive(Debug, Clone)]
@@ -79,9 +79,9 @@ impl Ord for Term {
             }
             (List(a), List(b)) => a.cmp(b),
             (Obj(a), Obj(b)) => a.cmp(b),
-            (ListComp { item: ai, body: ab }, ListComp { item: bi, body: bb }) => {
-                ai.cmp(bi).then_with(|| format!("{:?}", ab).cmp(&format!("{:?}", bb)))
-            }
+            (ListComp { item: ai, body: ab }, ListComp { item: bi, body: bb }) => ai
+                .cmp(bi)
+                .then_with(|| format!("{:?}", ab).cmp(&format!("{:?}", bb))),
             _ => Ordering::Equal,
         }
     }

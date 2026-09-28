@@ -68,13 +68,16 @@ pub fn eq3(a: &Value, b: &Value) -> Truth {
             if xs.len() != ys.len() {
                 return Truth::False;
             }
-            xs.iter().zip(ys).fold(Truth::True, |t, (x, y)| t.and(eq3(x, y)))
+            xs.iter()
+                .zip(ys)
+                .fold(Truth::True, |t, (x, y)| t.and(eq3(x, y)))
         }
         (Obj(xm), Obj(ym)) => {
             if xm.keys().ne(ym.keys()) {
                 return Truth::False;
             }
-            xm.iter().fold(Truth::True, |t, (k, x)| t.and(eq3(x, &ym[k])))
+            xm.iter()
+                .fold(Truth::True, |t, (k, x)| t.and(eq3(x, &ym[k])))
         }
         _ => {
             if a == b {
@@ -117,7 +120,11 @@ pub fn subst(v: &Value, label: &str, repl: &Value) -> Value {
     match v {
         Value::Null { label: l, .. } if l == label => repl.clone(),
         Value::List(xs) => Value::List(xs.iter().map(|x| subst(x, label, repl)).collect()),
-        Value::Obj(m) => Value::Obj(m.iter().map(|(k, x)| (k.clone(), subst(x, label, repl))).collect()),
+        Value::Obj(m) => Value::Obj(
+            m.iter()
+                .map(|(k, x)| (k.clone(), subst(x, label, repl)))
+                .collect(),
+        ),
         other => other.clone(),
     }
 }
@@ -132,7 +139,10 @@ pub enum Lattice {
     Flat,
     Map(Box<Lattice>),
     Set,
-    Keyed { keys: Vec<String>, elem: Box<Lattice> },
+    Keyed {
+        keys: Vec<String>,
+        elem: Box<Lattice>,
+    },
 }
 
 /// A witness identifies a contribution; in the engine it is a fact id.
@@ -158,8 +168,17 @@ fn union(a: &Witnesses, b: &Witnesses) -> Witnesses {
 pub enum Elem {
     Bottom,
     Val(Value, Witnesses),
-    Stuck { vals: Vec<(Value, Witnesses)>, nulls: BTreeSet<String> },
-    Conflict { path: String, vals: Vec<(Value, Witnesses)>, a: (Value, Witnesses), b: (Value, Witnesses), reason: String },
+    Stuck {
+        vals: Vec<(Value, Witnesses)>,
+        nulls: BTreeSet<String>,
+    },
+    Conflict {
+        path: String,
+        vals: Vec<(Value, Witnesses)>,
+        a: (Value, Witnesses),
+        b: (Value, Witnesses),
+        reason: String,
+    },
 }
 
 impl Elem {
@@ -167,7 +186,9 @@ impl Elem {
         match self {
             Elem::Bottom => Witnesses::new(),
             Elem::Val(_, w) => w.clone(),
-            Elem::Stuck { vals, .. } | Elem::Conflict { vals, .. } => vals.iter().fold(Witnesses::new(), |acc, (_, w)| union(&acc, w)),
+            Elem::Stuck { vals, .. } | Elem::Conflict { vals, .. } => vals
+                .iter()
+                .fold(Witnesses::new(), |acc, (_, w)| union(&acc, w)),
         }
     }
     fn contributions(self) -> Vec<(Value, Witnesses)> {
@@ -220,7 +241,13 @@ fn flat_normalize(path: &str, items: Vec<(Value, Witnesses)>) -> Elem {
             let secret = has_secret(&a.0) || has_secret(&b.0);
             match eq3(&a.0, &b.0) {
                 Truth::False => {
-                    return Elem::Conflict { path: path.to_string(), a: a.clone(), b: b.clone(), vals: merged.clone(), reason: "two contributions disagree".into() }
+                    return Elem::Conflict {
+                        path: path.to_string(),
+                        a: a.clone(),
+                        b: b.clone(),
+                        vals: merged.clone(),
+                        reason: "two contributions disagree".into(),
+                    };
                 }
                 Truth::Unknown if secret => {
                     return Elem::Conflict {
@@ -228,8 +255,9 @@ fn flat_normalize(path: &str, items: Vec<(Value, Witnesses)>) -> Elem {
                         a: a.clone(),
                         b: b.clone(),
                         vals: merged.clone(),
-                        reason: "a secret value cannot be compared with another contribution".into(),
-                    }
+                        reason: "a secret value cannot be compared with another contribution"
+                            .into(),
+                    };
                 }
                 Truth::Unknown => unknown = true,
                 Truth::True => unreachable!("merged above"),
@@ -238,7 +266,10 @@ fn flat_normalize(path: &str, items: Vec<(Value, Witnesses)>) -> Elem {
     }
     debug_assert!(unknown);
     let nulls = merged.iter().flat_map(|(v, _)| nulls_in(v)).collect();
-    Elem::Stuck { vals: merged, nulls }
+    Elem::Stuck {
+        vals: merged,
+        nulls,
+    }
 }
 
 /// Map normal form: pointwise `elem` normal form per key over every object.
@@ -249,10 +280,19 @@ fn map_normalize(elem: &Lattice, path: &str, items: Vec<(Value, Witnesses)>) -> 
     for (v, w) in &items {
         ws = union(&ws, w);
         let Value::Obj(m) = v else {
-            return Elem::Conflict { path: path.into(), a: (v.clone(), w.clone()), b: (Value::Str("<not an object>".into()), Witnesses::new()), vals: items.clone(), reason: "map contribution is not an object".into() };
+            return Elem::Conflict {
+                path: path.into(),
+                a: (v.clone(), w.clone()),
+                b: (Value::Str("<not an object>".into()), Witnesses::new()),
+                vals: items.clone(),
+                reason: "map contribution is not an object".into(),
+            };
         };
         for (k, x) in m {
-            per_key.entry(k.clone()).or_default().push((x.clone(), w.clone()));
+            per_key
+                .entry(k.clone())
+                .or_default()
+                .push((x.clone(), w.clone()));
         }
     }
     let mut out = BTreeMap::new();
@@ -265,11 +305,24 @@ fn map_normalize(elem: &Lattice, path: &str, items: Vec<(Value, Witnesses)>) -> 
                 out.insert(k, v);
             }
             Elem::Stuck { nulls, .. } => stuck.extend(nulls),
-            Elem::Conflict { a, b, reason, path, .. } => return Elem::Conflict { path, a, b, reason, vals: items },
+            Elem::Conflict {
+                a, b, reason, path, ..
+            } => {
+                return Elem::Conflict {
+                    path,
+                    a,
+                    b,
+                    reason,
+                    vals: items,
+                };
+            }
         }
     }
     if !stuck.is_empty() {
-        return Elem::Stuck { vals: items, nulls: stuck };
+        return Elem::Stuck {
+            vals: items,
+            nulls: stuck,
+        };
     }
     Elem::Val(Value::Obj(out), ws)
 }
@@ -287,13 +340,21 @@ fn null_collection(items: &[(Value, Witnesses)]) -> Option<Elem> {
         return Some(Elem::Val(v, w));
     }
     let nulls = merged.iter().flat_map(|(v, _)| nulls_in(v)).collect();
-    Some(Elem::Stuck { vals: merged, nulls })
+    Some(Elem::Stuck {
+        vals: merged,
+        nulls,
+    })
 }
 
 /// Keyed-list normal form: group elements by their merge-key projection
 /// (equality of keys is `eq3`; an unknown key comparison keeps the groups
 /// apart until resolution), then `elem` normal form per group.
-fn keyed_normalize(keys: &[String], elem: &Lattice, path: &str, items: Vec<(Value, Witnesses)>) -> Elem {
+fn keyed_normalize(
+    keys: &[String],
+    elem: &Lattice,
+    path: &str,
+    items: Vec<(Value, Witnesses)>,
+) -> Elem {
     if let Some(e) = null_collection(&items) {
         return e;
     }
@@ -303,16 +364,41 @@ fn keyed_normalize(keys: &[String], elem: &Lattice, path: &str, items: Vec<(Valu
     for (v, w) in &items {
         ws = union(&ws, w);
         let Value::List(xs) = v else {
-            return Elem::Conflict { path: path.into(), a: (v.clone(), w.clone()), b: (Value::Str("<not a list>".into()), Witnesses::new()), vals: items.clone(), reason: "keyed contribution is not a list".into() };
+            return Elem::Conflict {
+                path: path.into(),
+                a: (v.clone(), w.clone()),
+                b: (Value::Str("<not a list>".into()), Witnesses::new()),
+                vals: items.clone(),
+                reason: "keyed contribution is not a list".into(),
+            };
         };
         for x in xs {
             let Value::Obj(m) = x else {
-                return Elem::Conflict { path: path.into(), a: (x.clone(), w.clone()), b: (Value::Str("<not an object>".into()), Witnesses::new()), vals: items.clone(), reason: "keyed list element is not an object".into() };
+                return Elem::Conflict {
+                    path: path.into(),
+                    a: (x.clone(), w.clone()),
+                    b: (Value::Str("<not an object>".into()), Witnesses::new()),
+                    vals: items.clone(),
+                    reason: "keyed list element is not an object".into(),
+                };
             };
-            let Some(k): Option<Vec<Value>> = keys.iter().map(|k| m.get(k).cloned()).collect() else {
-                return Elem::Conflict { path: path.into(), a: (x.clone(), w.clone()), b: (Value::Str("<element lacks merge key>".into()), Witnesses::new()), vals: items.clone(), reason: "keyed list element lacks its merge key".into() };
+            let Some(k): Option<Vec<Value>> = keys.iter().map(|k| m.get(k).cloned()).collect()
+            else {
+                return Elem::Conflict {
+                    path: path.into(),
+                    a: (x.clone(), w.clone()),
+                    b: (
+                        Value::Str("<element lacks merge key>".into()),
+                        Witnesses::new(),
+                    ),
+                    vals: items.clone(),
+                    reason: "keyed list element lacks its merge key".into(),
+                };
             };
-            match groups.iter().position(|(gk, _)| gk.iter().zip(&k).all(|(p, q)| eq3(p, q) == Truth::True)) {
+            match groups
+                .iter()
+                .position(|(gk, _)| gk.iter().zip(&k).all(|(p, q)| eq3(p, q) == Truth::True))
+            {
                 Some(i) => groups[i].1.push((x.clone(), w.clone())),
                 None => groups.push((k, vec![(x.clone(), w.clone())])),
             }
@@ -327,11 +413,24 @@ fn keyed_normalize(keys: &[String], elem: &Lattice, path: &str, items: Vec<(Valu
             Elem::Bottom => {}
             Elem::Val(v, _) => out.push(v),
             Elem::Stuck { nulls, .. } => stuck.extend(nulls),
-            Elem::Conflict { a, b, reason, path, .. } => return Elem::Conflict { path, a, b, reason, vals: items },
+            Elem::Conflict {
+                a, b, reason, path, ..
+            } => {
+                return Elem::Conflict {
+                    path,
+                    a,
+                    b,
+                    reason,
+                    vals: items,
+                };
+            }
         }
     }
     if !stuck.is_empty() {
-        return Elem::Stuck { vals: items, nulls: stuck };
+        return Elem::Stuck {
+            vals: items,
+            nulls: stuck,
+        };
     }
     Elem::Val(Value::List(out), ws)
 }
@@ -348,7 +447,13 @@ fn set_normalize(path: &str, items: Vec<(Value, Witnesses)>) -> Elem {
     for (v, w) in &items {
         ws = union(&ws, w);
         let Value::List(xs) = v else {
-            return Elem::Conflict { path: path.into(), a: (v.clone(), w.clone()), b: (Value::Str("<not a list>".into()), Witnesses::new()), vals: items.clone(), reason: "set contribution is not a list".into() };
+            return Elem::Conflict {
+                path: path.into(),
+                a: (v.clone(), w.clone()),
+                b: (Value::Str("<not a list>".into()), Witnesses::new()),
+                vals: items.clone(),
+                reason: "set contribution is not a list".into(),
+            };
         };
         for e in xs {
             if !elems.iter().any(|m| eq3(m, e) == Truth::True) {
@@ -388,8 +493,14 @@ pub fn join(lat: &Lattice, path: &str, x: Elem, y: Elem) -> Elem {
 }
 
 /// Least upper bound of a set of contributions.
-pub fn lub(lat: &Lattice, path: &str, contribs: impl IntoIterator<Item = (Witness, Value)>) -> Elem {
-    contribs.into_iter().fold(Elem::Bottom, |acc, (w, v)| join(lat, path, acc, Elem::Val(v, Witnesses::from([w]))))
+pub fn lub(
+    lat: &Lattice,
+    path: &str,
+    contribs: impl IntoIterator<Item = (Witness, Value)>,
+) -> Elem {
+    contribs.into_iter().fold(Elem::Bottom, |acc, (w, v)| {
+        join(lat, path, acc, Elem::Val(v, Witnesses::from([w])))
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -450,7 +561,10 @@ pub struct Ranked {
 
 impl Default for Ranked {
     fn default() -> Self {
-        Ranked { ranks: [Elem::Bottom, Elem::Bottom, Elem::Bottom], constraints: BTreeMap::new() }
+        Ranked {
+            ranks: [Elem::Bottom, Elem::Bottom, Elem::Bottom],
+            constraints: BTreeMap::new(),
+        }
     }
 }
 
@@ -461,11 +575,24 @@ pub enum Collapsed {
     /// A value. `deferred` is non-empty only when the value carries a null: the
     /// listed constraints are re-checked at resolution (or, for a secret,
     /// inside the provider).
-    Val { value: Value, rank: Rank, witnesses: Witnesses, deferred: Vec<Constraint> },
+    Val {
+        value: Value,
+        rank: Rank,
+        witnesses: Witnesses,
+        deferred: Vec<Constraint>,
+    },
     /// Some rank holds a same-rank disagreement that a null resolution will
     /// decide. Readers are stuck on `nulls`.
-    Stuck { rank: Rank, nulls: BTreeSet<String> },
-    Conflict { rank: Option<Rank>, a: (Value, Witnesses), b: (Value, Witnesses), reason: String },
+    Stuck {
+        rank: Rank,
+        nulls: BTreeSet<String>,
+    },
+    Conflict {
+        rank: Option<Rank>,
+        a: (Value, Witnesses),
+        b: (Value, Witnesses),
+        reason: String,
+    },
 }
 
 impl Ranked {
@@ -495,7 +622,10 @@ impl Ranked {
     }
     /// Every witness in the cell, for `why`.
     pub fn all_witnesses(&self) -> Witnesses {
-        let mut w = self.ranks.iter().fold(Witnesses::new(), |acc, e| union(&acc, &e.witnesses()));
+        let mut w = self
+            .ranks
+            .iter()
+            .fold(Witnesses::new(), |acc, e| union(&acc, &e.witnesses()));
         for cw in self.constraints.values() {
             w = union(&w, cw);
         }
@@ -509,15 +639,29 @@ impl Ranked {
     pub fn collapse(&self) -> Collapsed {
         for (i, e) in self.ranks.iter().enumerate() {
             if let Elem::Conflict { a, b, reason, .. } = e {
-                return Collapsed::Conflict { rank: Some(rank_of(i)), a: a.clone(), b: b.clone(), reason: reason.clone() };
+                return Collapsed::Conflict {
+                    rank: Some(rank_of(i)),
+                    a: a.clone(),
+                    b: b.clone(),
+                    reason: reason.clone(),
+                };
             }
         }
         for (i, e) in self.ranks.iter().enumerate().rev() {
             if let Elem::Stuck { nulls, .. } = e {
-                return Collapsed::Stuck { rank: rank_of(i), nulls: nulls.clone() };
+                return Collapsed::Stuck {
+                    rank: rank_of(i),
+                    nulls: nulls.clone(),
+                };
             }
         }
-        let Some((i, Elem::Val(v, w))) = self.ranks.iter().enumerate().rev().find(|(_, e)| !matches!(e, Elem::Bottom)) else {
+        let Some((i, Elem::Val(v, w))) = self
+            .ranks
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(_, e)| !matches!(e, Elem::Bottom))
+        else {
             return Collapsed::Bottom;
         };
         let rank = rank_of(i);
@@ -532,11 +676,16 @@ impl Ranked {
                         a: (v.clone(), w.clone()),
                         b: (Value::Str(format!("{c:?}")), cw.clone()),
                         reason: format!("{v:?} violates schema refinement {c:?}"),
-                    }
+                    };
                 }
             }
         }
-        Collapsed::Val { value: v.clone(), rank, witnesses: w.clone(), deferred }
+        Collapsed::Val {
+            value: v.clone(),
+            rank,
+            witnesses: w.clone(),
+            deferred,
+        }
     }
 
     /// A phase boundary: substitute a resolved null and re-normalize every
@@ -548,9 +697,12 @@ impl Ranked {
             out.ranks[i] = match &self.ranks[i] {
                 Elem::Bottom => Elem::Bottom,
                 Elem::Val(v, w) => Elem::Val(subst(v, label, c), w.clone()),
-                Elem::Stuck { vals, .. } => {
-                    flat_normalize(".", vals.iter().map(|(v, w)| (subst(v, label, c), w.clone())).collect())
-                }
+                Elem::Stuck { vals, .. } => flat_normalize(
+                    ".",
+                    vals.iter()
+                        .map(|(v, w)| (subst(v, label, c), w.clone()))
+                        .collect(),
+                ),
                 e @ Elem::Conflict { .. } => e.clone(),
             };
         }
@@ -568,7 +720,9 @@ impl Rank {
         }
     }
     pub fn parse(s: &str) -> Option<Rank> {
-        [Rank::Default, Rank::Normal, Rank::Override].into_iter().find(|r| r.name() == s)
+        [Rank::Default, Rank::Normal, Rank::Override]
+            .into_iter()
+            .find(|r| r.name() == s)
     }
 }
 
@@ -595,19 +749,34 @@ mod tests {
         Value::Int(n)
     }
     fn net(a: &str, p: u8) -> Value {
-        Value::IpNet { addr: crate::value::ipv4_to_u32(a).unwrap(), prefix: p }
+        Value::IpNet {
+            addr: crate::value::ipv4_to_u32(a).unwrap(),
+            prefix: p,
+        }
     }
     fn obj(kv: &[(&str, Value)]) -> Value {
         Value::Obj(kv.iter().map(|(k, v)| (k.to_string(), v.clone())).collect())
     }
     fn fresh(l: &str) -> Value {
-        Value::Null { label: l.into(), class: NullClass::Fresh, ty: "string".into() }
+        Value::Null {
+            label: l.into(),
+            class: NullClass::Fresh,
+            ty: "string".into(),
+        }
     }
     fn open(l: &str) -> Value {
-        Value::Null { label: l.into(), class: NullClass::Open, ty: "string".into() }
+        Value::Null {
+            label: l.into(),
+            class: NullClass::Open,
+            ty: "string".into(),
+        }
     }
     fn secret(l: &str) -> Value {
-        Value::Null { label: l.into(), class: NullClass::Secret, ty: "string".into() }
+        Value::Null {
+            label: l.into(),
+            class: NullClass::Secret,
+            ty: "string".into(),
+        }
     }
 
     fn permutations<T: Clone>(items: &[T]) -> Vec<Vec<T>> {
@@ -618,7 +787,11 @@ mod tests {
             }
             go(k - 1, a, out);
             for i in 0..k - 1 {
-                if k.is_multiple_of(2) { a.swap(i, k - 1) } else { a.swap(0, k - 1) }
+                if k.is_multiple_of(2) {
+                    a.swap(i, k - 1)
+                } else {
+                    a.swap(0, k - 1)
+                }
                 go(k - 1, a, out);
             }
         }
@@ -630,13 +803,20 @@ mod tests {
 
     /// `ranked_all_orders` for any lattice, with F's shadow-aware collapse.
     fn ranked_all_orders_in(lat: &Lattice, parts: &[Ranked]) -> (Ranked, Collapsed2) {
-        let fold = |ps: &[Ranked]| ps.iter().fold(Ranked::default(), |acc, p| acc.join_in(lat, p, ".x"));
+        let fold = |ps: &[Ranked]| {
+            ps.iter()
+                .fold(Ranked::default(), |acc, p| acc.join_in(lat, p, ".x"))
+        };
         let base = fold(parts);
         let basec = base.collapse_shadow_aware();
         for p in permutations(parts) {
             let r = fold(&p);
             assert_eq!(r, base, "ranked join is order dependent");
-            assert_eq!(r.collapse_shadow_aware(), basec, "collapse is order dependent");
+            assert_eq!(
+                r.collapse_shadow_aware(),
+                basec,
+                "collapse is order dependent"
+            );
         }
         let doubled: Vec<Ranked> = parts.iter().chain(parts.iter()).cloned().collect();
         assert_eq!(fold(&doubled), base, "ranked join is not idempotent");
@@ -661,7 +841,16 @@ mod tests {
                 Ranked::at(Rank::Normal, 3, list(&[s("c"), s("d")])),
             ],
         );
-        let Collapsed2::Val { value, rank: Rank::Normal, witnesses, shadowed, .. } = c else { panic!("{c:?}") };
+        let Collapsed2::Val {
+            value,
+            rank: Rank::Normal,
+            witnesses,
+            shadowed,
+            ..
+        } = c
+        else {
+            panic!("{c:?}")
+        };
         assert_eq!(value, list(&[s("c"), s("d")]));
         assert_eq!(witnesses, Witnesses::from([2, 3]));
         assert!(shadowed.is_empty(), "a set shelf never disagrees");
@@ -675,27 +864,42 @@ mod tests {
                 Ranked::at(Rank::Override, 3, list(&[s("z")])),
             ],
         );
-        assert!(matches!(&c, Collapsed2::Val { value, rank: Rank::Override, .. } if *value == list(&[s("z")])));
+        assert!(
+            matches!(&c, Collapsed2::Val { value, rank: Rank::Override, .. } if *value == list(&[s("z")]))
+        );
 
         // Only defaults: they are the value, unioned and normalized.
         let (_, c) = ranked_all_orders_in(
             &Lattice::Set,
-            &[Ranked::at(Rank::Default, 1, list(&[s("b"), s("a"), s("b")])), Ranked::at(Rank::Default, 2, list(&[s("c")]))],
+            &[
+                Ranked::at(Rank::Default, 1, list(&[s("b"), s("a"), s("b")])),
+                Ranked::at(Rank::Default, 2, list(&[s("c")])),
+            ],
         );
-        assert!(matches!(&c, Collapsed2::Val { value, rank: Rank::Default, .. } if *value == list(&[s("a"), s("b"), s("c")])));
+        assert!(
+            matches!(&c, Collapsed2::Val { value, rank: Rank::Default, .. } if *value == list(&[s("a"), s("b"), s("c")]))
+        );
 
         // An empty set at a higher shelf is non-empty as a contribution: it
         // replaces the defaults with nothing.
         let (_, c) = ranked_all_orders_in(
             &Lattice::Set,
-            &[Ranked::at(Rank::Default, 1, list(&[s("a")])), Ranked::at(Rank::Normal, 2, list(&[]))],
+            &[
+                Ranked::at(Rank::Default, 1, list(&[s("a")])),
+                Ranked::at(Rank::Normal, 2, list(&[])),
+            ],
         );
-        assert!(matches!(&c, Collapsed2::Val { value, rank: Rank::Normal, .. } if *value == list(&[])));
+        assert!(
+            matches!(&c, Collapsed2::Val { value, rank: Rank::Normal, .. } if *value == list(&[]))
+        );
     }
 
     #[test]
     fn ranked_keyed_collapses_to_the_highest_nonempty_shelf() {
-        let lat = Lattice::Keyed { keys: vec!["port".into()], elem: Box::new(Lattice::Map(Box::new(Lattice::Flat))) };
+        let lat = Lattice::Keyed {
+            keys: vec!["port".into()],
+            elem: Box::new(Lattice::Map(Box::new(Lattice::Flat))),
+        };
         let row = |p: i64, proto: &str| obj(&[("port", i(p)), ("proto", s(proto))]);
         let (_, c) = ranked_all_orders_in(
             &lat,
@@ -705,16 +909,35 @@ mod tests {
                 Ranked::at(Rank::Normal, 3, list(&[row(80, "tcp"), row(443, "tcp")])),
             ],
         );
-        let Collapsed2::Val { value, rank: Rank::Normal, .. } = c else { panic!("{c:?}") };
+        let Collapsed2::Val {
+            value,
+            rank: Rank::Normal,
+            ..
+        } = c
+        else {
+            panic!("{c:?}")
+        };
         assert_eq!(value, list(&[row(80, "tcp"), row(443, "tcp")]));
 
         // A same-key disagreement on the winning shelf is a conflict; on a
         // losing shelf it is shadowed.
         let (_, c) = ranked_all_orders_in(
             &lat,
-            &[Ranked::at(Rank::Normal, 1, list(&[row(22, "tcp")])), Ranked::at(Rank::Normal, 2, list(&[row(22, "udp")]))],
+            &[
+                Ranked::at(Rank::Normal, 1, list(&[row(22, "tcp")])),
+                Ranked::at(Rank::Normal, 2, list(&[row(22, "udp")])),
+            ],
         );
-        assert!(matches!(c, Collapsed2::Conflict { rank: Some(Rank::Normal), .. }), "{c:?}");
+        assert!(
+            matches!(
+                c,
+                Collapsed2::Conflict {
+                    rank: Some(Rank::Normal),
+                    ..
+                }
+            ),
+            "{c:?}"
+        );
         let (_, c) = ranked_all_orders_in(
             &lat,
             &[
@@ -723,9 +946,20 @@ mod tests {
                 Ranked::at(Rank::Override, 3, list(&[row(80, "tcp")])),
             ],
         );
-        let Collapsed2::Val { value, shadowed, .. } = c else { panic!("{c:?}") };
+        let Collapsed2::Val {
+            value, shadowed, ..
+        } = c
+        else {
+            panic!("{c:?}")
+        };
         assert_eq!(value, list(&[row(80, "tcp")]));
-        assert!(matches!(&shadowed[..], [Shadowed::Conflict { rank: Rank::Default, .. }]));
+        assert!(matches!(
+            &shadowed[..],
+            [Shadowed::Conflict {
+                rank: Rank::Default,
+                ..
+            }]
+        ));
     }
 
     /// A whole-value null at a Set path (a computed list): carried alone,
@@ -733,16 +967,28 @@ mod tests {
     /// a higher one.
     #[test]
     fn ranked_set_carries_a_null_contribution() {
-        let (_, c) = ranked_all_orders_in(&Lattice::Set, &[Ranked::at(Rank::Normal, 1, fresh("sg/a#ids"))]);
+        let (_, c) = ranked_all_orders_in(
+            &Lattice::Set,
+            &[Ranked::at(Rank::Normal, 1, fresh("sg/a#ids"))],
+        );
         assert!(matches!(&c, Collapsed2::Val { value, .. } if *value == fresh("sg/a#ids")));
         let (_, c) = ranked_all_orders_in(
             &Lattice::Set,
-            &[Ranked::at(Rank::Normal, 1, fresh("sg/a#ids")), Ranked::at(Rank::Normal, 2, list(&[s("x")]))],
+            &[
+                Ranked::at(Rank::Normal, 1, fresh("sg/a#ids")),
+                Ranked::at(Rank::Normal, 2, list(&[s("x")])),
+            ],
         );
-        assert!(matches!(&c, Collapsed2::Stuck { nulls, .. } if nulls.contains("sg/a#ids")), "{c:?}");
+        assert!(
+            matches!(&c, Collapsed2::Stuck { nulls, .. } if nulls.contains("sg/a#ids")),
+            "{c:?}"
+        );
         let (_, c) = ranked_all_orders_in(
             &Lattice::Set,
-            &[Ranked::at(Rank::Default, 1, fresh("sg/a#ids")), Ranked::at(Rank::Normal, 2, list(&[s("x")]))],
+            &[
+                Ranked::at(Rank::Default, 1, fresh("sg/a#ids")),
+                Ranked::at(Rank::Normal, 2, list(&[s("x")])),
+            ],
         );
         assert!(matches!(&c, Collapsed2::Val { value, .. } if *value == list(&[s("x")])));
     }
@@ -761,11 +1007,19 @@ mod tests {
         let j = |x: &Elem, y: &Elem| join(&Lattice::Set, ".x", x.clone(), y.clone());
         for a in &sample {
             assert_eq!(j(&j(a, a), a), j(a, a), "idempotent {a:?}");
-            assert_eq!(j(a, &Elem::Bottom), j(&j(a, &Elem::Bottom), &Elem::Bottom), "lone contribution normalized {a:?}");
+            assert_eq!(
+                j(a, &Elem::Bottom),
+                j(&j(a, &Elem::Bottom), &Elem::Bottom),
+                "lone contribution normalized {a:?}"
+            );
             for b in &sample {
                 assert_eq!(j(a, b), j(b, a), "commutative {a:?} {b:?}");
                 for c in &sample {
-                    assert_eq!(j(&j(a, b), c), j(a, &j(b, c)), "associative {a:?} {b:?} {c:?}");
+                    assert_eq!(
+                        j(&j(a, b), c),
+                        j(a, &j(b, c)),
+                        "associative {a:?} {b:?} {c:?}"
+                    );
                 }
             }
         }
@@ -774,7 +1028,10 @@ mod tests {
     /// Fold a list of ranked contributions in every order; assert every order
     /// gives the same cell and the same collapse; assert duplication is a no-op.
     fn ranked_all_orders(parts: &[Ranked]) -> (Ranked, Collapsed) {
-        let fold = |ps: &[Ranked]| ps.iter().fold(Ranked::default(), |acc, p| acc.join(p, ".x"));
+        let fold = |ps: &[Ranked]| {
+            ps.iter()
+                .fold(Ranked::default(), |acc, p| acc.join(p, ".x"))
+        };
         let base = fold(parts);
         let basec = base.collapse();
         for p in permutations(parts) {
@@ -790,10 +1047,18 @@ mod tests {
     fn flat_all_orders(contribs: &[(Witness, Value)]) -> Elem {
         let base = lub(&Lattice::Flat, ".x", contribs.iter().cloned());
         for p in permutations(contribs) {
-            assert_eq!(lub(&Lattice::Flat, ".x", p.iter().cloned()), base, "flat lub order dependent: {p:?}");
+            assert_eq!(
+                lub(&Lattice::Flat, ".x", p.iter().cloned()),
+                base,
+                "flat lub order dependent: {p:?}"
+            );
         }
         let doubled: Vec<_> = contribs.iter().chain(contribs.iter()).cloned().collect();
-        assert_eq!(lub(&Lattice::Flat, ".x", doubled), base, "flat lub not idempotent");
+        assert_eq!(
+            lub(&Lattice::Flat, ".x", doubled),
+            base,
+            "flat lub not idempotent"
+        );
         base
     }
 
@@ -808,9 +1073,24 @@ mod tests {
         assert_eq!(eq3(&open("a"), &open("b")), Truth::Unknown);
         assert_eq!(eq3(&open("a"), &fresh("b")), Truth::Unknown);
         assert_eq!(eq3(&secret("a"), &s("x")), Truth::Unknown);
-        assert_eq!(eq3(&Value::List(vec![fresh("a"), s("x")]), &Value::List(vec![fresh("a"), s("x")])), Truth::True);
-        assert_eq!(eq3(&Value::List(vec![open("a")]), &Value::List(vec![s("x")])), Truth::Unknown);
-        assert_eq!(eq3(&Value::List(vec![open("a"), s("y")]), &Value::List(vec![s("x"), s("z")])), Truth::False);
+        assert_eq!(
+            eq3(
+                &Value::List(vec![fresh("a"), s("x")]),
+                &Value::List(vec![fresh("a"), s("x")])
+            ),
+            Truth::True
+        );
+        assert_eq!(
+            eq3(&Value::List(vec![open("a")]), &Value::List(vec![s("x")])),
+            Truth::Unknown
+        );
+        assert_eq!(
+            eq3(
+                &Value::List(vec![open("a"), s("y")]),
+                &Value::List(vec![s("x"), s("z")])
+            ),
+            Truth::False
+        );
     }
 
     // ---- seam 1, case 1: fresh null vs concrete at different ranks --------
@@ -822,7 +1102,9 @@ mod tests {
             Ranked::at(Rank::Normal, 1, fresh("net.vpc/vpc#id")),
             Ranked::at(Rank::Override, 2, s("vpc-existing")),
         ]);
-        assert!(matches!(&c, Collapsed::Val { value, rank: Rank::Override, .. } if *value == s("vpc-existing")));
+        assert!(
+            matches!(&c, Collapsed::Val { value, rank: Rank::Override, .. } if *value == s("vpc-existing"))
+        );
 
         // @override: the fresh null ; normal: "vpc-old" -> the null wins. A fresh
         // null is a definite identity, so it competes by rank like any value.
@@ -830,7 +1112,9 @@ mod tests {
             Ranked::at(Rank::Override, 1, fresh("net.vpc/vpc#id")),
             Ranked::at(Rank::Normal, 2, s("vpc-old")),
         ]);
-        assert!(matches!(&c, Collapsed::Val { value, rank: Rank::Override, .. } if *value == fresh("net.vpc/vpc#id")));
+        assert!(
+            matches!(&c, Collapsed::Val { value, rank: Rank::Override, .. } if *value == fresh("net.vpc/vpc#id"))
+        );
 
         // Same rank, fresh vs concrete: UNA says they differ -> conflict now,
         // not stuck. Same for two fresh nulls with different labels.
@@ -852,19 +1136,30 @@ mod tests {
             Ranked::at(Rank::Normal, 2, s("1.2.3.4")),
         ];
         let (cell, c) = ranked_all_orders(&parts);
-        assert!(matches!(&c, Collapsed::Stuck { rank: Rank::Normal, nulls } if nulls.contains("gke/pngu#endpoint")));
+        assert!(
+            matches!(&c, Collapsed::Stuck { rank: Rank::Normal, nulls } if nulls.contains("gke/pngu#endpoint"))
+        );
 
         // Resolution decides: equal -> the value with both witnesses; unequal -> conflict naming both.
         let same = cell.resolve("gke/pngu#endpoint", &s("1.2.3.4")).collapse();
-        assert!(matches!(&same, Collapsed::Val { value, witnesses, .. } if *value == s("1.2.3.4") && *witnesses == Witnesses::from([1, 2])));
+        assert!(
+            matches!(&same, Collapsed::Val { value, witnesses, .. } if *value == s("1.2.3.4") && *witnesses == Witnesses::from([1, 2]))
+        );
         let diff = cell.resolve("gke/pngu#endpoint", &s("9.9.9.9")).collapse();
-        let Collapsed::Conflict { a, b, .. } = diff else { panic!("expected conflict, got {diff:?}") };
+        let Collapsed::Conflict { a, b, .. } = diff else {
+            panic!("expected conflict, got {diff:?}")
+        };
         assert_eq!(union(&a.1, &b.1), Witnesses::from([1, 2]));
 
         // Two open nulls with different labels at one rank: stuck on both.
         let e = flat_all_orders(&[(1, open("x#ep")), (2, open("y#ep"))]);
-        let Elem::Stuck { nulls, .. } = e else { panic!() };
-        assert_eq!(nulls, BTreeSet::from(["x#ep".to_string(), "y#ep".to_string()]));
+        let Elem::Stuck { nulls, .. } = e else {
+            panic!()
+        };
+        assert_eq!(
+            nulls,
+            BTreeSet::from(["x#ep".to_string(), "y#ep".to_string()])
+        );
 
         // Three-way: open vs concrete vs a *different* concrete is a conflict
         // regardless of the null (the two concretes already disagree).
@@ -880,7 +1175,9 @@ mod tests {
             Ranked::at(Rank::Normal, 1, open("gke/pngu#endpoint")),
             Ranked::at(Rank::Override, 2, s("1.2.3.4")),
         ]);
-        assert!(matches!(&c, Collapsed::Val { value, rank: Rank::Override, deferred, .. } if *value == s("1.2.3.4") && deferred.is_empty()));
+        assert!(
+            matches!(&c, Collapsed::Val { value, rank: Rank::Override, deferred, .. } if *value == s("1.2.3.4") && deferred.is_empty())
+        );
 
         // And the reverse: the open null wins by rank; the collapsed value *is*
         // the null (forwardable); only content readers are stuck on it.
@@ -888,7 +1185,9 @@ mod tests {
             Ranked::at(Rank::Override, 1, open("gke/pngu#endpoint")),
             Ranked::at(Rank::Normal, 2, s("1.2.3.4")),
         ]);
-        assert!(matches!(&c, Collapsed::Val { value, rank: Rank::Override, .. } if *value == open("gke/pngu#endpoint")));
+        assert!(
+            matches!(&c, Collapsed::Val { value, rank: Rank::Override, .. } if *value == open("gke/pngu#endpoint"))
+        );
     }
 
     // ---- seam 1, case 3: secret null anywhere ------------------------------
@@ -901,12 +1200,16 @@ mod tests {
             Ranked::at(Rank::Normal, 1, secret("sm/db_pw#secret_data")),
             Ranked::constraint(Constraint::IsStr, 9),
         ]);
-        assert!(matches!(&c, Collapsed::Val { value, deferred, .. } if has_secret(value) && deferred == &vec![Constraint::IsStr]));
+        assert!(
+            matches!(&c, Collapsed::Val { value, deferred, .. } if has_secret(value) && deferred == &vec![Constraint::IsStr])
+        );
 
         // Secret vs concrete at the same rank: the engine can never decide
         // equality, so this is a conflict now, not a stuck-forever.
         let e = flat_all_orders(&[(1, secret("sm/db_pw#secret_data")), (2, s("hunter2"))]);
-        let Elem::Conflict { reason, .. } = e else { panic!() };
+        let Elem::Conflict { reason, .. } = e else {
+            panic!()
+        };
         assert!(reason.contains("secret"));
 
         // Secret at a losing rank: the concrete wins and the collapsed witnesses
@@ -915,7 +1218,9 @@ mod tests {
             Ranked::at(Rank::Default, 1, secret("sm/db_pw#secret_data")),
             Ranked::at(Rank::Normal, 2, s("literal")),
         ]);
-        let Collapsed::Val { witnesses, .. } = &c else { panic!() };
+        let Collapsed::Val { witnesses, .. } = &c else {
+            panic!()
+        };
         assert_eq!(*witnesses, Witnesses::from([2]));
         assert_eq!(cell.all_witnesses(), Witnesses::from([1, 2])); // but `why` still sees it
     }
@@ -930,17 +1235,25 @@ mod tests {
         ];
         let (cell, c) = ranked_all_orders(&parts);
         // Plan time: the value is the null; the check is deferred, not violated.
-        assert!(matches!(&c, Collapsed::Val { value, deferred, .. } if *value == open("alloc/cp#cidr") && deferred == &vec![Constraint::PrefixLen(28)]));
+        assert!(
+            matches!(&c, Collapsed::Val { value, deferred, .. } if *value == open("alloc/cp#cidr") && deferred == &vec![Constraint::PrefixLen(28)])
+        );
 
         // Phase boundary, violating value: conflict naming the schema (100) and the contributor (1).
-        let bad = cell.resolve("alloc/cp#cidr", &net("10.0.0.0", 24)).collapse();
-        let Collapsed::Conflict { a, b, reason, .. } = bad else { panic!("expected conflict") };
+        let bad = cell
+            .resolve("alloc/cp#cidr", &net("10.0.0.0", 24))
+            .collapse();
+        let Collapsed::Conflict { a, b, reason, .. } = bad else {
+            panic!("expected conflict")
+        };
         assert_eq!(a.1, Witnesses::from([1]));
         assert_eq!(b.1, Witnesses::from([100]));
         assert!(reason.contains("PrefixLen(28)"));
 
         // Phase boundary, satisfying value: a plain value with nothing deferred.
-        let ok = cell.resolve("alloc/cp#cidr", &net("172.16.3.96", 28)).collapse();
+        let ok = cell
+            .resolve("alloc/cp#cidr", &net("172.16.3.96", 28))
+            .collapse();
         assert!(matches!(&ok, Collapsed::Val { deferred, .. } if deferred.is_empty()));
 
         // A constraint is never out-ranked: an @override that violates it is a conflict.
@@ -961,7 +1274,9 @@ mod tests {
             Ranked::at(Rank::Normal, 2, i(14)),
             Ranked::at(Rank::Override, 3, i(30)),
         ]);
-        assert!(matches!(&c, Collapsed::Val { value, rank: Rank::Override, witnesses, .. } if *value == i(30) && *witnesses == Witnesses::from([3])));
+        assert!(
+            matches!(&c, Collapsed::Val { value, rank: Rank::Override, witnesses, .. } if *value == i(30) && *witnesses == Witnesses::from([3]))
+        );
 
         // Same rank, different values: top naming both, even when a higher rank
         // would have shadowed the disagreement.
@@ -970,11 +1285,22 @@ mod tests {
             Ranked::at(Rank::Normal, 2, i(20)),
             Ranked::at(Rank::Override, 3, i(30)),
         ]);
-        let Collapsed::Conflict { rank: Some(Rank::Normal), a, b, .. } = c else { panic!("{c:?}") };
+        let Collapsed::Conflict {
+            rank: Some(Rank::Normal),
+            a,
+            b,
+            ..
+        } = c
+        else {
+            panic!("{c:?}")
+        };
         assert_eq!(union(&a.1, &b.1), Witnesses::from([1, 2]));
 
         // @default replaces arg_default: a default plus one normal value.
-        let (_, c) = ranked_all_orders(&[Ranked::at(Rank::Default, 1, Value::Bool(false)), Ranked::at(Rank::Normal, 2, Value::Bool(true))]);
+        let (_, c) = ranked_all_orders(&[
+            Ranked::at(Rank::Default, 1, Value::Bool(false)),
+            Ranked::at(Rank::Normal, 2, Value::Bool(true)),
+        ]);
         assert!(matches!(&c, Collapsed::Val { value, .. } if *value == Value::Bool(true)));
     }
 
@@ -983,7 +1309,11 @@ mod tests {
     fn assert_order_independent(lat: &Lattice, contribs: &[(Witness, Value)]) -> Elem {
         let base = lub(lat, ".x", contribs.iter().cloned());
         for p in permutations(contribs) {
-            assert_eq!(lub(lat, ".x", p.iter().cloned()), base, "order dependence for {p:?}");
+            assert_eq!(
+                lub(lat, ".x", p.iter().cloned()),
+                base,
+                "order dependence for {p:?}"
+            );
         }
         let doubled: Vec<_> = contribs.iter().chain(contribs.iter()).cloned().collect();
         assert_eq!(lub(lat, ".x", doubled), base, "not idempotent");
@@ -1004,11 +1334,27 @@ mod tests {
         );
         assert_eq!(
             e,
-            Elem::Val(obj(&[("env", s("prod")), ("id", fresh("vpc#id")), ("team", s("platform"))]), Witnesses::from([1, 2, 3, 4]))
+            Elem::Val(
+                obj(&[
+                    ("env", s("prod")),
+                    ("id", fresh("vpc#id")),
+                    ("team", s("platform"))
+                ]),
+                Witnesses::from([1, 2, 3, 4])
+            )
         );
-        let st = assert_order_independent(&lat, &[(1, obj(&[("ep", open("x#ep"))])), (2, obj(&[("ep", s("1.2.3.4"))]))]);
+        let st = assert_order_independent(
+            &lat,
+            &[
+                (1, obj(&[("ep", open("x#ep"))])),
+                (2, obj(&[("ep", s("1.2.3.4"))])),
+            ],
+        );
         assert!(matches!(st, Elem::Stuck { .. }));
-        let c = assert_order_independent(&lat, &[(1, obj(&[("team", s("a"))])), (2, obj(&[("team", s("b"))]))]);
+        let c = assert_order_independent(
+            &lat,
+            &[(1, obj(&[("team", s("a"))])), (2, obj(&[("team", s("b"))]))],
+        );
         assert!(matches!(c, Elem::Conflict { .. }));
     }
 
@@ -1023,18 +1369,31 @@ mod tests {
                 (4, Value::List(vec![])),
             ],
         );
-        let Elem::Val(Value::List(xs), ws) = e else { panic!() };
+        let Elem::Val(Value::List(xs), ws) = e else {
+            panic!()
+        };
         assert_eq!(xs.len(), 3);
         assert_eq!(ws, Witnesses::from([1, 2, 3, 4]));
         // An open null and a constant that might be equal are both kept.
-        let e = assert_order_independent(&Lattice::Set, &[(1, Value::List(vec![open("x#ep")])), (2, Value::List(vec![s("1.2.3.4")]))]);
-        let Elem::Val(Value::List(xs), _) = e else { panic!() };
+        let e = assert_order_independent(
+            &Lattice::Set,
+            &[
+                (1, Value::List(vec![open("x#ep")])),
+                (2, Value::List(vec![s("1.2.3.4")])),
+            ],
+        );
+        let Elem::Val(Value::List(xs), _) = e else {
+            panic!()
+        };
         assert_eq!(xs.len(), 2);
     }
 
     #[test]
     fn keyed_list_merges_by_key_and_conflicts_within_a_key() {
-        let lat = Lattice::Keyed { keys: vec!["action".into(), "resource".into()], elem: Box::new(Lattice::Map(Box::new(Lattice::Flat))) };
+        let lat = Lattice::Keyed {
+            keys: vec!["action".into(), "resource".into()],
+            elem: Box::new(Lattice::Map(Box::new(Lattice::Flat))),
+        };
         let st = |a: &str, r: Value, extra: Option<(&str, Value)>| {
             let mut m = vec![("action", s(a)), ("resource", r)];
             if let Some(x) = extra {
@@ -1046,18 +1405,51 @@ mod tests {
             &lat,
             &[
                 (1, Value::List(vec![st("db.connect", fresh("db#id"), None)])),
-                (2, Value::List(vec![st("org.read", s("org"), None), st("db.connect", fresh("db#id"), None)])),
-                (3, Value::List(vec![st("db.connect", fresh("db#id"), Some(("effect", s("allow"))))])),
+                (
+                    2,
+                    Value::List(vec![
+                        st("org.read", s("org"), None),
+                        st("db.connect", fresh("db#id"), None),
+                    ]),
+                ),
+                (
+                    3,
+                    Value::List(vec![st(
+                        "db.connect",
+                        fresh("db#id"),
+                        Some(("effect", s("allow"))),
+                    )]),
+                ),
             ],
         );
-        let Elem::Val(Value::List(items), _) = e else { panic!() };
-        assert_eq!(items.len(), 2, "same key (with a fresh null in it) merged into one element");
+        let Elem::Val(Value::List(items), _) = e else {
+            panic!()
+        };
+        assert_eq!(
+            items.len(),
+            2,
+            "same key (with a fresh null in it) merged into one element"
+        );
         let c = lub(
             &lat,
             ".statements",
             [
-                (1, Value::List(vec![st("db.connect", s("db-1"), Some(("effect", s("allow"))))])),
-                (2, Value::List(vec![st("db.connect", s("db-1"), Some(("effect", s("deny"))))])),
+                (
+                    1,
+                    Value::List(vec![st(
+                        "db.connect",
+                        s("db-1"),
+                        Some(("effect", s("allow"))),
+                    )]),
+                ),
+                (
+                    2,
+                    Value::List(vec![st(
+                        "db.connect",
+                        s("db-1"),
+                        Some(("effect", s("deny"))),
+                    )]),
+                ),
             ],
         );
         assert!(matches!(c, Elem::Conflict { .. }));
@@ -1099,7 +1491,10 @@ mod tests {
             for b in &sample {
                 assert!(same(&j(a, b), &j(b, a)), "commutative {a:?} {b:?}");
                 for c in &sample {
-                    assert!(same(&j(&j(a, b), c), &j(a, &j(b, c))), "associative {a:?} {b:?} {c:?}");
+                    assert!(
+                        same(&j(&j(a, b), c), &j(a, &j(b, c))),
+                        "associative {a:?} {b:?} {c:?}"
+                    );
                 }
             }
         }
@@ -1115,18 +1510,44 @@ mod tests {
 /// only the highest priority's values are merged).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Shadowed {
-    Stuck { rank: Rank, nulls: BTreeSet<String>, witnesses: Witnesses },
-    Conflict { rank: Rank, path: String, reason: String, witnesses: Witnesses },
+    Stuck {
+        rank: Rank,
+        nulls: BTreeSet<String>,
+        witnesses: Witnesses,
+    },
+    Conflict {
+        rank: Rank,
+        path: String,
+        reason: String,
+        witnesses: Witnesses,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Collapsed2 {
     Bottom,
-    Val { value: Value, rank: Rank, witnesses: Witnesses, deferred: Vec<Constraint>, shadowed: Vec<Shadowed> },
-    Stuck { rank: Rank, nulls: BTreeSet<String>, shadowed: Vec<Shadowed> },
+    Val {
+        value: Value,
+        rank: Rank,
+        witnesses: Witnesses,
+        deferred: Vec<Constraint>,
+        shadowed: Vec<Shadowed>,
+    },
+    Stuck {
+        rank: Rank,
+        nulls: BTreeSet<String>,
+        shadowed: Vec<Shadowed>,
+    },
     /// `witnesses` is every contribution the conflict involves (every
     /// contribution at the winning rank, or the value's and the refinement's).
-    Conflict { rank: Option<Rank>, a: (Value, Witnesses), b: (Value, Witnesses), reason: String, witnesses: Witnesses, shadowed: Vec<Shadowed> },
+    Conflict {
+        rank: Option<Rank>,
+        a: (Value, Witnesses),
+        b: (Value, Witnesses),
+        reason: String,
+        witnesses: Witnesses,
+        shadowed: Vec<Shadowed>,
+    },
 }
 
 impl Ranked {
@@ -1141,9 +1562,11 @@ impl Ranked {
         let mut shadowed = Vec::new();
         for (i, e) in self.ranks.iter().enumerate().take(top) {
             match e {
-                Elem::Stuck { nulls, .. } => {
-                    shadowed.push(Shadowed::Stuck { rank: rank_of(i), nulls: nulls.clone(), witnesses: e.witnesses() })
-                }
+                Elem::Stuck { nulls, .. } => shadowed.push(Shadowed::Stuck {
+                    rank: rank_of(i),
+                    nulls: nulls.clone(),
+                    witnesses: e.witnesses(),
+                }),
                 Elem::Conflict { path, reason, .. } => shadowed.push(Shadowed::Conflict {
                     rank: rank_of(i),
                     path: path.clone(),
@@ -1164,7 +1587,11 @@ impl Ranked {
                 witnesses: e.witnesses(),
                 shadowed,
             },
-            Elem::Stuck { nulls, .. } => Collapsed2::Stuck { rank, nulls: nulls.clone(), shadowed },
+            Elem::Stuck { nulls, .. } => Collapsed2::Stuck {
+                rank,
+                nulls: nulls.clone(),
+                shadowed,
+            },
             Elem::Val(v, w) => {
                 let mut deferred = Vec::new();
                 for (c, cw) in &self.constraints {
@@ -1179,11 +1606,17 @@ impl Ranked {
                                 reason: format!("{v:?} violates schema refinement {c:?}"),
                                 witnesses: union(w, cw),
                                 shadowed,
-                            }
+                            };
                         }
                     }
                 }
-                Collapsed2::Val { value: v.clone(), rank, witnesses: w.clone(), deferred, shadowed }
+                Collapsed2::Val {
+                    value: v.clone(),
+                    rank,
+                    witnesses: w.clone(),
+                    deferred,
+                    shadowed,
+                }
             }
         }
     }
@@ -1193,7 +1626,11 @@ impl Ranked {
 pub type RankedContribution = (Witness, Rank, Value);
 
 fn max_rank(contribs: &[RankedContribution]) -> Rank {
-    contribs.iter().map(|(_, r, _)| *r).max().unwrap_or(Rank::Normal)
+    contribs
+        .iter()
+        .map(|(_, r, _)| *r)
+        .max()
+        .unwrap_or(Rank::Normal)
 }
 
 /// The attribute aggregate of E §2.5 for one `(T, A, P)` group: the least
@@ -1214,7 +1651,9 @@ pub fn lub_ranked(lat: &Lattice, path: &str, contribs: &[RankedContribution]) ->
         }
         Lattice::Flat | Lattice::Set | Lattice::Keyed { .. } => contribs
             .iter()
-            .fold(Ranked::default(), |acc, (w, r, v)| acc.join_in(lat, &Ranked::at(*r, *w, v.clone()), path))
+            .fold(Ranked::default(), |acc, (w, r, v)| {
+                acc.join_in(lat, &Ranked::at(*r, *w, v.clone()), path)
+            })
             .collapse_shadow_aware(),
     }
 }
@@ -1222,9 +1661,14 @@ pub fn lub_ranked(lat: &Lattice, path: &str, contribs: &[RankedContribution]) ->
 fn lub_ranked_map(elem: &Lattice, path: &str, contribs: &[RankedContribution]) -> Collapsed2 {
     let mut per_key: BTreeMap<String, Vec<RankedContribution>> = BTreeMap::new();
     for (w, r, v) in contribs {
-        let Value::Obj(m) = v else { unreachable!("checked by the caller") };
+        let Value::Obj(m) = v else {
+            unreachable!("checked by the caller")
+        };
         for (k, x) in m {
-            per_key.entry(k.clone()).or_default().push((*w, *r, x.clone()));
+            per_key
+                .entry(k.clone())
+                .or_default()
+                .push((*w, *r, x.clone()));
         }
     }
     let mut out = BTreeMap::new();
@@ -1235,32 +1679,66 @@ fn lub_ranked_map(elem: &Lattice, path: &str, contribs: &[RankedContribution]) -
     for (k, cs) in per_key {
         match lub_ranked(elem, &format!("{path}.{k}"), &cs) {
             Collapsed2::Bottom => {}
-            Collapsed2::Val { value, witnesses: w, deferred: d, shadowed: sh, .. } => {
+            Collapsed2::Val {
+                value,
+                witnesses: w,
+                deferred: d,
+                shadowed: sh,
+                ..
+            } => {
                 out.insert(k, value);
                 witnesses = union(&witnesses, &w);
                 deferred.extend(d);
                 shadowed.extend(sh);
             }
-            Collapsed2::Stuck { rank, nulls, shadowed: sh } => {
+            Collapsed2::Stuck {
+                rank,
+                nulls,
+                shadowed: sh,
+            } => {
                 shadowed.extend(sh);
                 let st = stuck.get_or_insert((rank, BTreeSet::new()));
                 st.0 = st.0.max(rank);
                 st.1.extend(nulls);
             }
-            Collapsed2::Conflict { rank, a, b, reason, witnesses, shadowed: sh } => {
+            Collapsed2::Conflict {
+                rank,
+                a,
+                b,
+                reason,
+                witnesses,
+                shadowed: sh,
+            } => {
                 shadowed.extend(sh);
-                return Collapsed2::Conflict { rank, a, b, reason, witnesses, shadowed };
+                return Collapsed2::Conflict {
+                    rank,
+                    a,
+                    b,
+                    reason,
+                    witnesses,
+                    shadowed,
+                };
             }
         }
     }
     if let Some((rank, nulls)) = stuck {
-        return Collapsed2::Stuck { rank, nulls, shadowed };
+        return Collapsed2::Stuck {
+            rank,
+            nulls,
+            shadowed,
+        };
     }
     if out.is_empty() {
         // Only empty objects: the value is `{}`, from every contributor.
         witnesses = contribs.iter().map(|(w, _, _)| *w).collect();
     }
-    Collapsed2::Val { value: Value::Obj(out), rank: max_rank(contribs), witnesses, deferred, shadowed }
+    Collapsed2::Val {
+        value: Value::Obj(out),
+        rank: max_rank(contribs),
+        witnesses,
+        deferred,
+        shadowed,
+    }
 }
 
 #[cfg(test)]
@@ -1272,13 +1750,23 @@ mod f_tests {
         Value::Str(x.into())
     }
     fn open(l: &str) -> Value {
-        Value::Null { label: l.into(), class: NullClass::Open, ty: "string".into() }
+        Value::Null {
+            label: l.into(),
+            class: NullClass::Open,
+            ty: "string".into(),
+        }
     }
     fn secret(l: &str) -> Value {
-        Value::Null { label: l.into(), class: NullClass::Secret, ty: "string".into() }
+        Value::Null {
+            label: l.into(),
+            class: NullClass::Secret,
+            ty: "string".into(),
+        }
     }
     fn joined(cells: &[Ranked]) -> Ranked {
-        cells.iter().fold(Ranked::default(), |acc, c| acc.join(c, ".p"))
+        cells
+            .iter()
+            .fold(Ranked::default(), |acc, c| acc.join(c, ".p"))
     }
 
     /// adv1: same-rank Stuck at a LOSING rank. Two @default contributions
@@ -1294,12 +1782,23 @@ mod f_tests {
         // E §2.4 step 2: "if any rank is Stuck: Stuck on that rank's nulls".
         let e = cell.collapse();
         println!("E collapse: {e:?}");
-        assert!(matches!(e, Collapsed::Stuck { rank: Rank::Default, .. }), "E waits on a null the winning value does not need");
+        assert!(
+            matches!(
+                e,
+                Collapsed::Stuck {
+                    rank: Rank::Default,
+                    ..
+                }
+            ),
+            "E waits on a null the winning value does not need"
+        );
         // F: the normal value wins; the shadowed disagreement is a warning.
         let f = cell.collapse_shadow_aware();
         println!("F collapse: {f:?}");
-        assert!(matches!(&f, Collapsed2::Val { value, rank: Rank::Normal, shadowed, .. }
-            if *value == s("172.16.3.96/28") && matches!(shadowed[0], Shadowed::Stuck { rank: Rank::Default, .. })));
+        assert!(
+            matches!(&f, Collapsed2::Val { value, rank: Rank::Normal, shadowed, .. }
+            if *value == s("172.16.3.96/28") && matches!(shadowed[0], Shadowed::Stuck { rank: Rank::Default, .. }))
+        );
         // Same for a shadowed CONFLICT at the losing rank.
         let cell = joined(&[
             Ranked::at(Rank::Default, 1, s("a")),
@@ -1307,13 +1806,21 @@ mod f_tests {
             Ranked::at(Rank::Override, 3, s("c")),
         ]);
         assert!(matches!(cell.collapse(), Collapsed::Conflict { .. }));
-        assert!(matches!(cell.collapse_shadow_aware(), Collapsed2::Val { value, shadowed, .. } if value == s("c") && shadowed.len() == 1));
+        assert!(
+            matches!(cell.collapse_shadow_aware(), Collapsed2::Val { value, shadowed, .. } if value == s("c") && shadowed.len() == 1)
+        );
         // And the winning rank still blocks when IT is stuck: nothing lost.
         let cell = joined(&[
             Ranked::at(Rank::Normal, 1, open("alloc/cp#cidr")),
             Ranked::at(Rank::Normal, 2, s("10.0.0.0/28")),
         ]);
-        assert!(matches!(cell.collapse_shadow_aware(), Collapsed2::Stuck { rank: Rank::Normal, .. }));
+        assert!(matches!(
+            cell.collapse_shadow_aware(),
+            Collapsed2::Stuck {
+                rank: Rank::Normal,
+                ..
+            }
+        ));
     }
 
     /// adv6: a refinement on a cell whose ONLY contribution is a secret null.
@@ -1330,16 +1837,26 @@ mod f_tests {
         ]);
         let c = cell.collapse();
         println!("secret-only refined cell: {c:?}");
-        let Collapsed::Val { deferred, .. } = &c else { panic!() };
+        let Collapsed::Val { deferred, .. } = &c else {
+            panic!()
+        };
         assert_eq!(deferred, &vec![Constraint::IsStr]);
         // No resolution is ever applied to a secret (E Rule 4), so a second
         // collapse after any number of boundaries is identical.
         let again = cell.resolve("sm/db_pw#secret_data", &s("hunter2"));
         // even if one WERE applied, the engine would now hold the bytes:
-        let Collapsed::Val { value, .. } = again.collapse() else { panic!() };
-        assert_eq!(value, s("hunter2"), "resolving a secret in the store materializes it, which E forbids");
+        let Collapsed::Val { value, .. } = again.collapse() else {
+            panic!()
+        };
+        assert_eq!(
+            value,
+            s("hunter2"),
+            "resolving a secret in the store materializes it, which E forbids"
+        );
         // Therefore: deferred stays non-empty forever without materialization.
-        let Collapsed::Val { deferred, .. } = cell.collapse() else { panic!() };
+        let Collapsed::Val { deferred, .. } = cell.collapse() else {
+            panic!()
+        };
         assert!(!deferred.is_empty());
     }
 
@@ -1362,27 +1879,65 @@ mod f_tests {
             m.insert("arg".to_string(), s(v));
             Value::Obj(m)
         };
-        let keyed = Lattice::Keyed { keys: vec!["prio".into()], elem: Box::new(Lattice::Flat) };
-        let e = lub(&keyed, ".args", [(1, Value::List(vec![row(10, "--verbose")])), (2, Value::List(vec![row(20, "--port=8080")]))]);
+        let keyed = Lattice::Keyed {
+            keys: vec!["prio".into()],
+            elem: Box::new(Lattice::Flat),
+        };
+        let e = lub(
+            &keyed,
+            ".args",
+            [
+                (1, Value::List(vec![row(10, "--verbose")])),
+                (2, Value::List(vec![row(20, "--port=8080")])),
+            ],
+        );
         println!("Keyed(prio): {e:?}");
-        let Elem::Val(Value::List(xs), _) = e else { panic!("{e:?}") };
+        let Elem::Val(Value::List(xs), _) = e else {
+            panic!("{e:?}")
+        };
         assert_eq!(xs.len(), 2);
         assert_eq!(xs[0], row(10, "--verbose"));
         // Same priority, different value: conflict, naming both.
-        let e = lub(&keyed, ".args", [(1, Value::List(vec![row(10, "--verbose")])), (2, Value::List(vec![row(10, "--quiet")]))]);
+        let e = lub(
+            &keyed,
+            ".args",
+            [
+                (1, Value::List(vec![row(10, "--verbose")])),
+                (2, Value::List(vec![row(10, "--quiet")])),
+            ],
+        );
         assert!(matches!(e, Elem::Conflict { .. }));
         // Set is NOT an answer for an ordered list: it sorts. F8, found on
         // the way: E's prototype never normalized a LONE contribution
         // (`join(Bottom, e)` returned `e` as is), so one Set contribution
         // kept its order and duplicates while the same contribution given
         // twice was sorted and deduplicated. Fixed: `⊥ ⊔ e = normalize(e)`.
-        let one = lub(&Lattice::Set, ".args", [(1, Value::List(vec![s("--z"), s("--a"), s("--z")]))]);
-        let twice = lub(&Lattice::Set, ".args", [(1, Value::List(vec![s("--z"), s("--a"), s("--z")])), (1, Value::List(vec![s("--z"), s("--a"), s("--z")]))]);
+        let one = lub(
+            &Lattice::Set,
+            ".args",
+            [(1, Value::List(vec![s("--z"), s("--a"), s("--z")]))],
+        );
+        let twice = lub(
+            &Lattice::Set,
+            ".args",
+            [
+                (1, Value::List(vec![s("--z"), s("--a"), s("--z")])),
+                (1, Value::List(vec![s("--z"), s("--a"), s("--z")])),
+            ],
+        );
         println!("Set, one contribution:   {one:?}");
         println!("Set, same given twice:   {twice:?}");
-        let Elem::Val(Value::List(xs1), _) = &one else { panic!() };
-        let Elem::Val(Value::List(xs2), _) = &twice else { panic!() };
-        assert_eq!(xs1, &vec![s("--a"), s("--z")], "a lone contribution is normalized");
+        let Elem::Val(Value::List(xs1), _) = &one else {
+            panic!()
+        };
+        let Elem::Val(Value::List(xs2), _) = &twice else {
+            panic!()
+        };
+        assert_eq!(
+            xs1,
+            &vec![s("--a"), s("--z")],
+            "a lone contribution is normalized"
+        );
         assert_eq!(xs2, &vec![s("--a"), s("--z")]);
         assert_eq!(one, twice, "Set lub is idempotent on one contribution");
     }
@@ -1404,7 +1959,11 @@ mod f_tests {
         let mut i = 0;
         while i < n {
             if c[i] < i {
-                if i % 2 == 0 { perm.swap(0, i) } else { perm.swap(c[i], i) }
+                if i % 2 == 0 {
+                    perm.swap(0, i)
+                } else {
+                    perm.swap(c[i], i)
+                }
                 assert_eq!(joined(&perm).collapse_shadow_aware(), base);
                 c[i] += 1;
                 i = 0;

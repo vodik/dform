@@ -62,7 +62,11 @@ impl fmt::Display for Node {
 
 impl Node {
     fn plain(pred: &str) -> Node {
-        Node { pred: pred.into(), typ: None, path: None }
+        Node {
+            pred: pred.into(),
+            typ: None,
+            path: None,
+        }
     }
     pub fn unifies(&self, other: &Node) -> bool {
         if self.pred != other.pred {
@@ -101,8 +105,13 @@ pub struct Options {
 
 #[derive(Debug, Clone)]
 pub enum Verdict {
-    Stratified { strata: BTreeMap<Node, usize> },
-    Rejected { scc: BTreeSet<Node>, negative_edges: Vec<Edge> },
+    Stratified {
+        strata: BTreeMap<Node, usize>,
+    },
+    Rejected {
+        scc: BTreeSet<Node>,
+        negative_edges: Vec<Edge>,
+    },
 }
 
 fn const_str(t: &Term) -> Option<String> {
@@ -130,7 +139,11 @@ pub fn normalize_path(typ: &Option<String>, path: &str) -> String {
 fn type_path_node(pred: &str, atom: &Atom) -> Node {
     let typ = const_str(&atom.args[0]);
     let path = const_str(&atom.args[2]).map(|p| normalize_path(&typ, &p));
-    Node { pred: pred.into(), typ, path }
+    Node {
+        pred: pred.into(),
+        typ,
+        path,
+    }
 }
 
 /// A contribution head `arg(T, A, P, V, Rank)` (the lowered core form):
@@ -146,7 +159,9 @@ fn contrib_node(atom: &Atom) -> Option<(Node, Node)> {
 /// `attr_conflict/5` all read the `(attr, T, P)` node.
 fn aggregate_read(atom: &Atom) -> Option<Node> {
     match (atom.pred.as_str(), atom.args.len()) {
-        ("attr", 4) | ("attr_stuck", 4) | ("attr_conflict", 5) => Some(type_path_node("attr", atom)),
+        ("attr", 4) | ("attr_stuck", 4) | ("attr_conflict", 5) => {
+            Some(type_path_node("attr", atom))
+        }
         _ => None,
     }
 }
@@ -156,7 +171,14 @@ fn aggregate_read(atom: &Atom) -> Option<Node> {
 fn type_keyed(pred: &str) -> bool {
     matches!(
         pred,
-        "want" | "adopt" | "identity" | "lifecycle" | "ignore_changes" | "moved" | "desired" | "world"
+        "want"
+            | "adopt"
+            | "identity"
+            | "lifecycle"
+            | "ignore_changes"
+            | "moved"
+            | "desired"
+            | "world"
     )
 }
 
@@ -166,7 +188,11 @@ pub fn head_node(atom: &Atom) -> Node {
         return arg;
     }
     if type_keyed(&atom.pred) && !atom.args.is_empty() {
-        return Node { pred: atom.pred.clone(), typ: const_str(&atom.args[0]), path: None };
+        return Node {
+            pred: atom.pred.clone(),
+            typ: const_str(&atom.args[0]),
+            path: None,
+        };
     }
     Node::plain(&atom.pred)
 }
@@ -185,7 +211,10 @@ fn is_builtin_or_edb(pred: &str) -> bool {
 
 pub fn is_aggregate_head(head: &Atom) -> bool {
     head.args.iter().any(|t| match t {
-        Term::Func { name, .. } => matches!(name.as_str(), "collect" | "collect_set" | "collect_list" | "count" | "sum" | "min" | "max"),
+        Term::Func { name, .. } => matches!(
+            name.as_str(),
+            "collect" | "collect_set" | "collect_list" | "count" | "sum" | "min" | "max"
+        ),
         _ => false,
     })
 }
@@ -209,7 +238,11 @@ pub fn build(program: &Program, schema: &Schema, opts: &Options) -> Result<Graph
 /// A constraint is a `deny` rule with a message head.
 pub fn constraint_rule(c: &Constraint) -> RuleStmt {
     RuleStmt {
-        head: Atom { pred: "deny".into(), args: vec![Term::Val(Value::Str(c.message.clone()))], record: None },
+        head: Atom {
+            pred: "deny".into(),
+            args: vec![Term::Val(Value::Str(c.message.clone()))],
+            record: None,
+        },
         body: c.body.clone(),
     }
 }
@@ -217,8 +250,12 @@ pub fn constraint_rule(c: &Constraint) -> RuleStmt {
 /// Build the graph over lowered rules and facts plus the schema's prelude.
 /// `Graph::rules` is `rules` in the given order, so a rule's index in the
 /// graph is its index in the caller's list.
-pub fn build_lowered(rules: Vec<RuleStmt>, fact_atoms: &[Atom], schema: &Schema, opts: &Options) -> Graph {
-
+pub fn build_lowered(
+    rules: Vec<RuleStmt>,
+    fact_atoms: &[Atom],
+    schema: &Schema,
+    opts: &Options,
+) -> Graph {
     let mut nodes: BTreeSet<Node> = BTreeSet::new();
     let mut edges: Vec<Edge> = Vec::new();
 
@@ -244,9 +281,21 @@ pub fn build_lowered(rules: Vec<RuleStmt>, fact_atoms: &[Atom], schema: &Schema,
     let mut prelude: Vec<(Node, Node)> = Vec::new();
     for t in schema.types() {
         for (attr_name, _) in schema.computed_of(&t) {
-            let arg = Node { pred: "arg".into(), typ: Some(t.clone()), path: Some(attr_name.clone()) };
-            let attr = Node { pred: "attr".into(), typ: Some(t.clone()), path: Some(attr_name) };
-            let want = Node { pred: "want".into(), typ: Some(t.clone()), path: None };
+            let arg = Node {
+                pred: "arg".into(),
+                typ: Some(t.clone()),
+                path: Some(attr_name.clone()),
+            };
+            let attr = Node {
+                pred: "attr".into(),
+                typ: Some(t.clone()),
+                path: Some(attr_name),
+            };
+            let want = Node {
+                pred: "want".into(),
+                typ: Some(t.clone()),
+                path: None,
+            };
             defs.insert(arg.clone());
             defs.insert(attr.clone());
             defs.insert(want.clone());
@@ -261,7 +310,11 @@ pub fn build_lowered(rules: Vec<RuleStmt>, fact_atoms: &[Atom], schema: &Schema,
     let attrs: Vec<Node> = defs.iter().filter(|n| n.pred == "attr").cloned().collect();
     for a in &args {
         for t in &attrs {
-            let a_as_attr = Node { pred: "attr".into(), typ: a.typ.clone(), path: a.path.clone() };
+            let a_as_attr = Node {
+                pred: "attr".into(),
+                typ: a.typ.clone(),
+                path: a.path.clone(),
+            };
             if a_as_attr.unifies(t) {
                 edges.push(Edge {
                     from: a.clone(),
@@ -274,7 +327,13 @@ pub fn build_lowered(rules: Vec<RuleStmt>, fact_atoms: &[Atom], schema: &Schema,
         }
     }
     for (want, arg) in prelude {
-        edges.push(Edge { from: want, to: arg, negative: false, rule: None, why: "prelude: computed attribute null".into() });
+        edges.push(Edge {
+            from: want,
+            to: arg,
+            negative: false,
+            rule: None,
+            why: "prelude: computed attribute null".into(),
+        });
     }
 
     // Rule edges.
@@ -310,7 +369,13 @@ pub fn build_lowered(rules: Vec<RuleStmt>, fact_atoms: &[Atom], schema: &Schema,
             for d in defs.iter() {
                 if d.unifies(&pat) {
                     matched = true;
-                    edges.push(Edge { from: d.clone(), to: head.clone(), negative, rule: Some(i), why: why.into() });
+                    edges.push(Edge {
+                        from: d.clone(),
+                        to: head.clone(),
+                        negative,
+                        rule: Some(i),
+                        why: why.into(),
+                    });
                 }
             }
             if !matched {
@@ -318,12 +383,22 @@ pub fn build_lowered(rules: Vec<RuleStmt>, fact_atoms: &[Atom], schema: &Schema,
                 // definition. E makes this a compile error; we record it as a
                 // plain node so the graph still stratifies.
                 nodes.insert(pat.clone());
-                edges.push(Edge { from: pat.clone(), to: head.clone(), negative, rule: Some(i), why: format!("{why} (undefined)") });
+                edges.push(Edge {
+                    from: pat.clone(),
+                    to: head.clone(),
+                    negative,
+                    rule: Some(i),
+                    why: format!("{why} (undefined)"),
+                });
             }
         }
     }
 
-    Graph { nodes, edges, rules }
+    Graph {
+        nodes,
+        edges,
+        rules,
+    }
 }
 
 /// Tarjan's strongly connected components: `comp[v]` is v's component.
@@ -396,7 +471,9 @@ pub fn stratify(g: &Graph) -> Verdict {
     let n = g.nodes.len();
     let mut adj: Vec<Vec<usize>> = vec![vec![]; n];
     for e in &g.edges {
-        let (Some(&a), Some(&b)) = (idx.get(&e.from), idx.get(&e.to)) else { continue };
+        let (Some(&a), Some(&b)) = (idx.get(&e.from), idx.get(&e.to)) else {
+            continue;
+        };
         adj[a].push(b);
     }
     let comp = Tarjan::sccs(&adj);
@@ -405,17 +482,25 @@ pub fn stratify(g: &Graph) -> Verdict {
         if !e.negative {
             continue;
         }
-        let (Some(&a), Some(&b)) = (idx.get(&e.from), idx.get(&e.to)) else { continue };
+        let (Some(&a), Some(&b)) = (idx.get(&e.from), idx.get(&e.to)) else {
+            continue;
+        };
         if comp[a] == comp[b] {
             let c = comp[a];
-            let scc: BTreeSet<Node> = (0..n).filter(|&i| comp[i] == c).map(|i| node_vec[i].clone()).collect();
+            let scc: BTreeSet<Node> = (0..n)
+                .filter(|&i| comp[i] == c)
+                .map(|i| node_vec[i].clone())
+                .collect();
             let negative_edges: Vec<Edge> = g
                 .edges
                 .iter()
                 .filter(|e| e.negative && scc.contains(&e.from) && scc.contains(&e.to))
                 .cloned()
                 .collect();
-            return Verdict::Rejected { scc, negative_edges };
+            return Verdict::Rejected {
+                scc,
+                negative_edges,
+            };
         }
     }
     // Strata by relaxation (no negative cycle, so it converges).
@@ -446,9 +531,21 @@ pub fn fmt_term(t: &Term) -> String {
         Term::Val(v) => fmt_value(v),
         Term::Var(v) => v.clone(),
         Term::Wildcard => "_".into(),
-        Term::Func { name, args } => format!("{name}({})", args.iter().map(fmt_term).collect::<Vec<_>>().join(", ")),
-        Term::List(xs) => format!("[{}]", xs.iter().map(fmt_term).collect::<Vec<_>>().join(", ")),
-        Term::Obj(m) => format!("{{{}}}", m.iter().map(|(k, v)| format!("{k}: {}", fmt_term(v))).collect::<Vec<_>>().join(", ")),
+        Term::Func { name, args } => format!(
+            "{name}({})",
+            args.iter().map(fmt_term).collect::<Vec<_>>().join(", ")
+        ),
+        Term::List(xs) => format!(
+            "[{}]",
+            xs.iter().map(fmt_term).collect::<Vec<_>>().join(", ")
+        ),
+        Term::Obj(m) => format!(
+            "{{{}}}",
+            m.iter()
+                .map(|(k, v)| format!("{k}: {}", fmt_term(v)))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
         Term::ListComp { item, .. } => format!("[{} | ...]", fmt_term(item)),
     }
 }
@@ -458,11 +555,24 @@ pub fn fmt_value(v: &Value) -> String {
         Value::Str(s) => format!("{s:?}"),
         Value::Int(i) => i.to_string(),
         Value::Bool(b) => b.to_string(),
-        Value::List(xs) => format!("[{}]", xs.iter().map(fmt_value).collect::<Vec<_>>().join(", ")),
-        Value::Obj(m) => format!("{{{}}}", m.iter().map(|(k, v)| format!("{k}: {}", fmt_value(v))).collect::<Vec<_>>().join(", ")),
+        Value::List(xs) => format!(
+            "[{}]",
+            xs.iter().map(fmt_value).collect::<Vec<_>>().join(", ")
+        ),
+        Value::Obj(m) => format!(
+            "{{{}}}",
+            m.iter()
+                .map(|(k, v)| format!("{k}: {}", fmt_value(v)))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
         Value::Ip(n) => crate::value::u32_to_ipv4(*n),
         Value::IpNet { addr, prefix } => crate::value::ipnet_to_string(*addr, *prefix),
-        Value::IpRange { start, end } => format!("{}-{}", crate::value::u32_to_ipv4(*start), crate::value::u32_to_ipv4(*end)),
+        Value::IpRange { start, end } => format!(
+            "{}-{}",
+            crate::value::u32_to_ipv4(*start),
+            crate::value::u32_to_ipv4(*end)
+        ),
         Value::Ref { typ, name, attr } => format!("ref({typ}, {name}, {attr})"),
         Value::CloudRef { typ, name, attr } => format!("cloud_ref({typ}, {name}, {attr})"),
         Value::Null { label, class, .. } => format!("?{label}:{class:?}"),
@@ -470,7 +580,11 @@ pub fn fmt_value(v: &Value) -> String {
 }
 
 pub fn fmt_atom(a: &Atom) -> String {
-    format!("{}({})", a.pred, a.args.iter().map(fmt_term).collect::<Vec<_>>().join(", "))
+    format!(
+        "{}({})",
+        a.pred,
+        a.args.iter().map(fmt_term).collect::<Vec<_>>().join(", ")
+    )
 }
 
 pub fn fmt_lit(l: &Lit) -> String {
@@ -507,7 +621,12 @@ pub fn rule_short(r: &RuleStmt) -> String {
 
 pub fn report(name: &str, g: &Graph, v: &Verdict) -> String {
     let mut out = String::new();
-    out.push_str(&format!("== {name}: {} nodes, {} edges ({} negative)\n", g.nodes.len(), g.edges.len(), g.edges.iter().filter(|e| e.negative).count()));
+    out.push_str(&format!(
+        "== {name}: {} nodes, {} edges ({} negative)\n",
+        g.nodes.len(),
+        g.edges.len(),
+        g.edges.iter().filter(|e| e.negative).count()
+    ));
     match v {
         Verdict::Stratified { strata } => {
             let max = strata.values().copied().max().unwrap_or(0);
@@ -520,15 +639,30 @@ pub fn report(name: &str, g: &Graph, v: &Verdict) -> String {
                 out.push_str(&format!("   stratum {s}: {}\n", ns.join("  ")));
             }
         }
-        Verdict::Rejected { scc, negative_edges } => {
-            out.push_str(&format!("   REJECTED: negative cycle through {} nodes\n", scc.len()));
-            out.push_str(&format!("   scc: {}\n", scc.iter().map(|n| n.to_string()).collect::<Vec<_>>().join("  ")));
+        Verdict::Rejected {
+            scc,
+            negative_edges,
+        } => {
+            out.push_str(&format!(
+                "   REJECTED: negative cycle through {} nodes\n",
+                scc.len()
+            ));
+            out.push_str(&format!(
+                "   scc: {}\n",
+                scc.iter()
+                    .map(|n| n.to_string())
+                    .collect::<Vec<_>>()
+                    .join("  ")
+            ));
             for e in negative_edges {
                 let rule = match e.rule {
                     Some(i) => format!("rule #{i}: {}", rule_short(&g.rules[i])),
                     None => "prelude".into(),
                 };
-                out.push_str(&format!("   {} -> {}  [{}]  {}\n", e.from, e.to, e.why, rule));
+                out.push_str(&format!(
+                    "   {} -> {}  [{}]  {}\n",
+                    e.from, e.to, e.why, rule
+                ));
             }
         }
     }
@@ -540,7 +674,10 @@ pub fn report(name: &str, g: &Graph, v: &Verdict) -> String {
 pub fn cycle_error(g: &Graph, scc: &BTreeSet<Node>, negative_edges: &[Edge]) -> String {
     let mut out = format!(
         "program is not stratifiable: negative cycle through {}",
-        scc.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(", ")
+        scc.iter()
+            .map(|n| n.to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
     );
     for e in negative_edges {
         let rule = match e.rule {
@@ -553,7 +690,12 @@ pub fn cycle_error(g: &Graph, scc: &BTreeSet<Node>, negative_edges: &[Edge]) -> 
 }
 
 /// Convenience: load, build, stratify, report.
-pub fn run_file(name: &str, files: &[std::path::PathBuf], schema: &Schema, opts: &Options) -> Result<(Verdict, String)> {
+pub fn run_file(
+    name: &str,
+    files: &[std::path::PathBuf],
+    schema: &Schema,
+    opts: &Options,
+) -> Result<(Verdict, String)> {
     let program = crate::loader::load_program(files)?;
     let g = build(&program, schema, opts)?;
     let v = stratify(&g);
@@ -573,10 +715,22 @@ mod tests {
     fn examples() -> Vec<(&'static str, PathBuf, Schema)> {
         vec![
             ("dform.df", root().join("dform.df"), crate::schema::fake()),
-            ("dform-advanced.df", root().join("dform-advanced.df"), crate::schema::fake()),
+            (
+                "dform-advanced.df",
+                root().join("dform-advanced.df"),
+                crate::schema::fake(),
+            ),
             ("pngu.df", root().join("pngu.df"), crate::schema::gke()),
-            ("examples/decl_demo.df", root().join("examples/decl_demo.df"), crate::schema::fake()),
-            ("examples/adopt_demo.df", root().join("examples/adopt_demo.df"), crate::schema::fake()),
+            (
+                "examples/decl_demo.df",
+                root().join("examples/decl_demo.df"),
+                crate::schema::fake(),
+            ),
+            (
+                "examples/adopt_demo.df",
+                root().join("examples/adopt_demo.df"),
+                crate::schema::fake(),
+            ),
         ]
     }
 
@@ -597,8 +751,16 @@ mod tests {
         }
         // F section 4.1: dform.df in 11 strata (vpc, subnets, the subnet-id
         // output, then the database and cluster that consume it, then policy).
-        let (v, _) = run_file("dform.df", &[root().join("dform.df")], &crate::schema::fake(), &opts).unwrap();
-        let Verdict::Stratified { strata } = v else { panic!() };
+        let (v, _) = run_file(
+            "dform.df",
+            &[root().join("dform.df")],
+            &crate::schema::fake(),
+            &opts,
+        )
+        .unwrap();
+        let Verdict::Stratified { strata } = v else {
+            panic!()
+        };
         assert_eq!(strata.values().max().copied().unwrap() + 1, 11);
     }
 

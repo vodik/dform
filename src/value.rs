@@ -10,14 +10,32 @@ pub enum Value {
     List(Vec<Value>),
     Obj(BTreeMap<String, Value>),
     Ip(u32),
-    IpNet { addr: u32, prefix: u8 },
-    IpRange { start: u32, end: u32 },
-    Ref { typ: String, name: String, attr: String },
-    CloudRef { typ: String, name: String, attr: String },
+    IpNet {
+        addr: u32,
+        prefix: u8,
+    },
+    IpRange {
+        start: u32,
+        end: u32,
+    },
+    Ref {
+        typ: String,
+        name: String,
+        attr: String,
+    },
+    CloudRef {
+        typ: String,
+        name: String,
+        attr: String,
+    },
     /// A labeled null (proposal E). `label` is the Skolem name, conventionally
     /// "type/addr#attr"; `class` decides equality, materialization and phase;
     /// `ty` is the schema type the eventual constant will have.
-    Null { label: String, class: NullClass, ty: String },
+    Null {
+        label: String,
+        class: NullClass,
+        ty: String,
+    },
 }
 
 /// The three null classes of proposal E (grafted from direction C). The class is
@@ -60,7 +78,11 @@ pub fn parse_ipnet(s: &str) -> Option<(u32, u8)> {
     if prefix > 32 {
         return None;
     }
-    let mask = if prefix == 0 { 0 } else { u32::MAX << (32 - prefix as u32) };
+    let mask = if prefix == 0 {
+        0
+    } else {
+        u32::MAX << (32 - prefix as u32)
+    };
     Some((addr & mask, prefix))
 }
 

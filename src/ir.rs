@@ -43,14 +43,25 @@ pub fn compile_resources(facts: impl IntoIterator<Item = Atom>) -> Result<Vec<Re
                 }
                 let name = as_str_val(&f.args[1])?.to_string();
                 let path = as_str_val(&f.args[2])?.to_string();
-                attrs.push((Address { typ: typ.to_string(), name }, path, as_value(&f.args[3])?));
+                attrs.push((
+                    Address {
+                        typ: typ.to_string(),
+                        name,
+                    },
+                    path,
+                    as_value(&f.args[3])?,
+                ));
             }
             _ => {}
         }
     }
     for (addr, path, value) in attrs {
         let Some(root) = by_addr.get_mut(&addr) else {
-            bail!("attribute {path} for resource not declared by want: {}.{}", addr.typ, addr.name);
+            bail!(
+                "attribute {path} for resource not declared by want: {}.{}",
+                addr.typ,
+                addr.name
+            );
         };
         root.insert(path, value);
     }

@@ -1,4 +1,6 @@
-use crate::ast::{Atom, Constraint, Extern, Lit, Program, Rank, Resource, RuleStmt, Settings, Stmt, Term, When};
+use crate::ast::{
+    Atom, Constraint, Extern, Lit, Program, Rank, Resource, RuleStmt, Settings, Stmt, Term, When,
+};
 use crate::value::Value;
 use anyhow::{Result, bail};
 use std::collections::{BTreeMap, BTreeSet};
@@ -23,7 +25,10 @@ pub fn lower(program: &Program) -> Result<Lowered> {
     let expanded = desugar_resources(&expanded)?;
     let expanded = desugar_comprehensions(&expanded)?;
     let expanded = lower_contributions(&expanded)?;
-    Ok(Lowered { program: expanded, externs })
+    Ok(Lowered {
+        program: expanded,
+        externs,
+    })
 }
 
 /// Rank of a contribution in the core form `arg(T, A, P, V, Rank)`.
@@ -61,7 +66,9 @@ pub fn normalize_contribution(typ: &str, path: &str, value: Term) -> (String, Te
     let mut segs = path.split('.');
     let first = segs.next().unwrap_or(path).to_string();
     let rest: Vec<&str> = segs.collect();
-    let value = rest.iter().rev().fold(value, |v, k| Term::Obj(BTreeMap::from([(k.to_string(), v)])));
+    let value = rest.iter().rev().fold(value, |v, k| {
+        Term::Obj(BTreeMap::from([(k.to_string(), v)]))
+    });
     (first, value)
 }
 
@@ -69,7 +76,9 @@ pub fn normalize_contribution(typ: &str, path: &str, value: Term) -> (String, Te
 /// constant path normalized.
 fn contribution_head(a: Atom) -> Result<Atom> {
     if a.pred == "merge_rule" {
-        bail!("merge_rule is gone: a path's lattice is declared with type_lattice(Type, Path, flat|map|set)");
+        bail!(
+            "merge_rule is gone: a path's lattice is declared with type_lattice(Type, Path, flat|map|set)"
+        );
     }
     let (typ, addr, path, value, rank) = match contribution_parts(&a) {
         Some((t, n, p, v)) => (t, n, p, v, str_term(NORMAL)),
@@ -86,14 +95,20 @@ fn contribution_head(a: Atom) -> Result<Atom> {
         }
         _ => (path, value),
     };
-    Ok(Atom { pred: "arg".into(), args: vec![typ, addr, path, value, rank], record: None })
+    Ok(Atom {
+        pred: "arg".into(),
+        args: vec![typ, addr, path, value, rank],
+        record: None,
+    })
 }
 
 /// A body read of a contribution predicate is a read of the aggregate:
 /// `attr(T, A, P, V)`, the collapsed value (E §2.5).
 fn attr_read(a: Atom) -> Result<Atom> {
     if a.pred == "arg" && a.args.len() == 5 {
-        bail!("arg/5 in a rule body reads raw contributions; read the collapsed attr(T, A, P, V) instead");
+        bail!(
+            "arg/5 in a rule body reads raw contributions; read the collapsed attr(T, A, P, V) instead"
+        );
     }
     let Some((typ, addr, path, value)) = contribution_parts(&a) else {
         return Ok(a);
@@ -103,9 +118,16 @@ fn attr_read(a: Atom) -> Result<Atom> {
         && t != OUTPUT
         && p.contains('.')
     {
-        bail!("{}(..., {p:?}, ...) in a rule body: read the top-level attribute and destructure it", a.pred);
+        bail!(
+            "{}(..., {p:?}, ...) in a rule body: read the top-level attribute and destructure it",
+            a.pred
+        );
     }
-    Ok(Atom { pred: "attr".into(), args: vec![typ, addr, path, value], record: None })
+    Ok(Atom {
+        pred: "attr".into(),
+        args: vec![typ, addr, path, value],
+        record: None,
+    })
 }
 
 fn attr_lits(body: Vec<Lit>) -> Result<Vec<Lit>> {
@@ -128,8 +150,14 @@ fn lower_contributions(program: &Program) -> Result<Program> {
     for stmt in &program.statements {
         out.push(match stmt.clone() {
             Stmt::Fact(a) => Stmt::Fact(contribution_head(a)?),
-            Stmt::Rule(r) => Stmt::Rule(RuleStmt { head: contribution_head(r.head)?, body: attr_lits(r.body)? }),
-            Stmt::Constraint(c) => Stmt::Constraint(Constraint { message: c.message, body: attr_lits(c.body)? }),
+            Stmt::Rule(r) => Stmt::Rule(RuleStmt {
+                head: contribution_head(r.head)?,
+                body: attr_lits(r.body)?,
+            }),
+            Stmt::Constraint(c) => Stmt::Constraint(Constraint {
+                message: c.message,
+                body: attr_lits(c.body)?,
+            }),
             other => other,
         });
     }
@@ -166,8 +194,14 @@ fn apply_decls(program: &Program) -> Result<Program> {
     );
     schemas.insert("input".to_string(), vec!["key".into(), "value".into()]);
     schemas.insert("data".to_string(), vec!["key".into(), "value".into()]);
-    schemas.insert("merge_rule".to_string(), vec!["type".into(), "path".into(), "op".into()]);
-    schemas.insert("param".to_string(), vec!["scope".into(), "key".into(), "value".into()]);
+    schemas.insert(
+        "merge_rule".to_string(),
+        vec!["type".into(), "path".into(), "op".into()],
+    );
+    schemas.insert(
+        "param".to_string(),
+        vec!["scope".into(), "key".into(), "value".into()],
+    );
     schemas.insert("warn".to_string(), vec!["msg".into(), "ctx".into()]);
     schemas.insert("deny".to_string(), vec!["msg".into(), "ctx".into()]);
 
@@ -257,7 +291,10 @@ fn rewrite_stmt_records(stmt: Stmt, schemas: &BTreeMap<String, Vec<String>>) -> 
     })
 }
 
-fn rewrite_lits_records(lits: Vec<Lit>, schemas: &BTreeMap<String, Vec<String>>) -> Result<Vec<Lit>> {
+fn rewrite_lits_records(
+    lits: Vec<Lit>,
+    schemas: &BTreeMap<String, Vec<String>>,
+) -> Result<Vec<Lit>> {
     lits.into_iter()
         .map(|l| rewrite_lit_records(l, schemas))
         .collect()
@@ -271,12 +308,20 @@ fn rewrite_lit_records(lit: Lit, schemas: &BTreeMap<String, Vec<String>>) -> Res
     })
 }
 
-fn rewrite_atom_records(mut atom: Atom, schemas: &BTreeMap<String, Vec<String>>, ctx: Ctx) -> Result<Atom> {
+fn rewrite_atom_records(
+    mut atom: Atom,
+    schemas: &BTreeMap<String, Vec<String>>,
+    ctx: Ctx,
+) -> Result<Atom> {
     let Some(fields) = atom.record.take() else {
         return Ok(atom);
     };
     let Some(order) = schemas.get(&atom.pred) else {
-        bail!("no schema for predicate '{}' (add decl {} {{ ... }})", atom.pred, atom.pred);
+        bail!(
+            "no schema for predicate '{}' (add decl {} {{ ... }})",
+            atom.pred,
+            atom.pred
+        );
     };
 
     // No extra fields.
@@ -300,7 +345,10 @@ fn rewrite_atom_records(mut atom: Atom, schemas: &BTreeMap<String, Vec<String>>,
         }
     }
     if require_complete && args.iter().any(|t| matches!(t, Term::Wildcard)) {
-        bail!("wildcards not allowed in fact/head for predicate '{}'", atom.pred);
+        bail!(
+            "wildcards not allowed in fact/head for predicate '{}'",
+            atom.pred
+        );
     }
 
     atom.args = args;
@@ -410,7 +458,13 @@ fn desugar_settings(program: &Program) -> Result<Program> {
                     for (key, value) in leaves {
                         let head = Atom {
                             pred: "arg".to_string(),
-                            args: vec![str_term(SETTINGS), s.env.clone(), str_term(&key), value, str_term(rank.name())],
+                            args: vec![
+                                str_term(SETTINGS),
+                                s.env.clone(),
+                                str_term(&key),
+                                value,
+                                str_term(rank.name()),
+                            ],
                             record: None,
                         };
                         out.push(fact_or_rule(head, &body));
@@ -427,7 +481,11 @@ fn flatten_settings(out: &mut Vec<(String, Term)>, key: &str, val: Term) {
     match val {
         Term::Obj(m) => {
             for (k, v) in m {
-                let next = if key.is_empty() { k } else { format!("{key}.{k}") };
+                let next = if key.is_empty() {
+                    k
+                } else {
+                    format!("{key}.{k}")
+                };
                 flatten_settings(out, &next, v);
             }
         }
@@ -440,7 +498,10 @@ fn fact_or_rule(head: Atom, body: &[Lit]) -> Stmt {
     if body.is_empty() && head.args.iter().all(is_ground_term) {
         Stmt::Fact(head)
     } else {
-        Stmt::Rule(RuleStmt { head, body: body.to_vec() })
+        Stmt::Rule(RuleStmt {
+            head,
+            body: body.to_vec(),
+        })
     }
 }
 
@@ -502,10 +563,7 @@ fn rewrite_constraint_listcomps(
     Ok((helpers, c))
 }
 
-fn rewrite_rule_listcomps(
-    mut r: RuleStmt,
-    counter: &mut usize,
-) -> Result<(Vec<Stmt>, RuleStmt)> {
+fn rewrite_rule_listcomps(mut r: RuleStmt, counter: &mut usize) -> Result<(Vec<Stmt>, RuleStmt)> {
     let counts_all = {
         let mut m = count_vars_in_term(&Term::Func {
             name: "__head".to_string(),
@@ -645,7 +703,9 @@ fn rewrite_term_listcomps(
                 if total > *c {
                     // Var appears outside this comprehension.
                     if !body_vars.contains_key(v) {
-                        bail!("comprehension free var '{v}' must be bound in the comprehension body");
+                        bail!(
+                            "comprehension free var '{v}' must be bound in the comprehension body"
+                        );
                     }
                     key_vars.push(v.clone());
                 }
@@ -672,11 +732,7 @@ fn rewrite_term_listcomps(
                 body,
             }));
 
-            let mut join_args: Vec<Term> = key_vars
-                .iter()
-                .cloned()
-                .map(Term::Var)
-                .collect();
+            let mut join_args: Vec<Term> = key_vars.iter().cloned().map(Term::Var).collect();
             join_args.push(list_var.clone());
 
             (
@@ -911,7 +967,10 @@ fn rewrite_stmt(stmt: Stmt, scope: &str) -> Stmt {
             fields: r
                 .fields
                 .into_iter()
-                .map(|f| crate::ast::FieldAssign { value: rewrite_term(f.value, scope), ..f })
+                .map(|f| crate::ast::FieldAssign {
+                    value: rewrite_term(f.value, scope),
+                    ..f
+                })
                 .collect(),
             body: r
                 .body
@@ -923,9 +982,14 @@ fn rewrite_stmt(stmt: Stmt, scope: &str) -> Stmt {
             fields: s
                 .fields
                 .into_iter()
-                .map(|f| crate::ast::FieldAssign { value: rewrite_term(f.value, scope), ..f })
+                .map(|f| crate::ast::FieldAssign {
+                    value: rewrite_term(f.value, scope),
+                    ..f
+                })
                 .collect(),
-            body: s.body.map(|xs| xs.into_iter().map(|l| rewrite_lit(l, scope)).collect()),
+            body: s
+                .body
+                .map(|xs| xs.into_iter().map(|l| rewrite_lit(l, scope)).collect()),
             ..s
         }),
         // These are metadata statements; leave them as-is.
@@ -1100,7 +1164,10 @@ fn apply_guard(stmt: Stmt, guard: &Lit) -> Result<Vec<Stmt>> {
             for s in w.body {
                 body.extend(apply_guard(s, guard)?);
             }
-            vec![Stmt::When(When { guard: w.guard, body })]
+            vec![Stmt::When(When {
+                guard: w.guard,
+                body,
+            })]
         }
         other => vec![other],
     })
@@ -1125,14 +1192,24 @@ fn desugar_resources(program: &Program) -> Result<Program> {
 fn resource_to_stmts(r: Resource) -> Result<Vec<Stmt>> {
     let body = r.body.unwrap_or_default();
     let mut out = vec![fact_or_rule(
-        Atom { pred: "want".to_string(), args: vec![r.typ.clone(), r.name.clone()], record: None },
+        Atom {
+            pred: "want".to_string(),
+            args: vec![r.typ.clone(), r.name.clone()],
+            record: None,
+        },
         &body,
     )];
     for f in r.fields {
         let rank = f.rank.or(r.rank).unwrap_or(Rank::Normal);
         let head = Atom {
             pred: "arg".to_string(),
-            args: vec![r.typ.clone(), r.name.clone(), str_term(&f.key), f.value, str_term(rank.name())],
+            args: vec![
+                r.typ.clone(),
+                r.name.clone(),
+                str_term(&f.key),
+                f.value,
+                str_term(rank.name()),
+            ],
             record: None,
         };
         out.push(fact_or_rule(head, &body));

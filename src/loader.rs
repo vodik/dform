@@ -1,6 +1,6 @@
+use crate::ast::Term;
 use crate::ast::{Atom, Constraint, Lit, Program, Resource, RuleStmt, Settings, Stmt, When};
 use crate::parser;
-use crate::ast::Term;
 use anyhow::{Context, Result};
 use std::collections::BTreeSet;
 use std::fs;
@@ -24,8 +24,8 @@ fn load_file(path: &Path, seen: &mut BTreeSet<PathBuf>) -> Result<Program> {
         return Ok(Program { statements: vec![] });
     }
     let src = fs::read_to_string(&abs).with_context(|| format!("read {}", abs.display()))?;
-    let mut prog = parser::parse_program(&src)
-        .with_context(|| format!("parse {}", abs.display()))?;
+    let mut prog =
+        parser::parse_program(&src).with_context(|| format!("parse {}", abs.display()))?;
 
     let base_dir = abs.parent().unwrap_or(Path::new("."));
     let mut out = Vec::new();
@@ -75,7 +75,10 @@ fn prefix_stmt(stmt: Stmt, alias: &str) -> Stmt {
             fields: r
                 .fields
                 .into_iter()
-                .map(|f| crate::ast::FieldAssign { value: prefix_term(f.value, alias), ..f })
+                .map(|f| crate::ast::FieldAssign {
+                    value: prefix_term(f.value, alias),
+                    ..f
+                })
                 .collect(),
             body: r
                 .body
@@ -111,9 +114,14 @@ fn prefix_stmt(stmt: Stmt, alias: &str) -> Stmt {
             fields: s
                 .fields
                 .into_iter()
-                .map(|f| crate::ast::FieldAssign { value: prefix_term(f.value, alias), ..f })
+                .map(|f| crate::ast::FieldAssign {
+                    value: prefix_term(f.value, alias),
+                    ..f
+                })
                 .collect(),
-            body: s.body.map(|xs| xs.into_iter().map(|l| prefix_lit(l, alias)).collect()),
+            body: s
+                .body
+                .map(|xs| xs.into_iter().map(|l| prefix_lit(l, alias)).collect()),
         }),
         Stmt::Decl(mut d) => {
             if !is_core_pred(&d.pred) {

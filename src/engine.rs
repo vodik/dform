@@ -50,10 +50,18 @@ pub fn eval(program: &Program, extra_facts: &[Atom]) -> Result<(EvalResult, Vec<
     }
     for r in &rules {
         if AGGREGATE_OUTPUTS.contains(&r.head.pred.as_str()) {
-            bail!("{} is derived by the attribute aggregate; contribute with arg instead: {}", r.head.pred, partition::fmt_rule(r));
+            bail!(
+                "{} is derived by the attribute aggregate; contribute with arg instead: {}",
+                r.head.pred,
+                partition::fmt_rule(r)
+            );
         }
         if LATTICE_DECLS.contains(&r.head.pred.as_str()) {
-            bail!("{} must be a fact, not a rule: {}", r.head.pred, partition::fmt_rule(r));
+            bail!(
+                "{} must be a fact, not a rule: {}",
+                r.head.pred,
+                partition::fmt_rule(r)
+            );
         }
     }
 
@@ -65,7 +73,11 @@ pub fn eval(program: &Program, extra_facts: &[Atom]) -> Result<(EvalResult, Vec<
         let mut all = rules.clone();
         for c in &constraints {
             all.push(RuleStmt {
-                head: Atom { pred: "deny".into(), args: vec![Term::Val(Value::Str(c.message.clone()))], record: None },
+                head: Atom {
+                    pred: "deny".into(),
+                    args: vec![Term::Val(Value::Str(c.message.clone()))],
+                    record: None,
+                },
                 body: c.body.clone(),
             });
         }
@@ -76,17 +88,27 @@ pub fn eval(program: &Program, extra_facts: &[Atom]) -> Result<(EvalResult, Vec<
     // revised). Every rule runs in the stratum of its head node.
     let mut graph_rules = rules.clone();
     graph_rules.extend(constraints.iter().map(partition::constraint_rule));
-    let opts = partition::Options { externs: externs.iter().map(|e| e.pred.clone()).collect() };
+    let opts = partition::Options {
+        externs: externs.iter().map(|e| e.pred.clone()).collect(),
+    };
     let graph = partition::build_lowered(graph_rules, &fact_atoms, &crate::schema::fake(), &opts);
     let strata = match partition::stratify(&graph) {
         partition::Verdict::Stratified { strata } => strata,
-        partition::Verdict::Rejected { scc, negative_edges } => {
+        partition::Verdict::Rejected {
+            scc,
+            negative_edges,
+        } => {
             bail!("{}", partition::cycle_error(&graph, &scc, &negative_edges))
         }
     };
     let rule_stratum: Vec<usize> = rules
         .iter()
-        .map(|r| strata.get(&partition::head_node(&r.head)).copied().unwrap_or(0))
+        .map(|r| {
+            strata
+                .get(&partition::head_node(&r.head))
+                .copied()
+                .unwrap_or(0)
+        })
         .collect();
     let rule_text: Vec<String> = rules.iter().map(partition::fmt_rule).collect();
     let mut attrs = AttrAggregate::new(&strata);
@@ -95,8 +117,11 @@ pub fn eval(program: &Program, extra_facts: &[Atom]) -> Result<(EvalResult, Vec<
         // Attribute groups whose contributors all sit below this stratum
         // are complete: collapse them before any rule here reads them.
         attrs.emit_ready(s, &mut facts, &origins)?;
-        let rules_s: Vec<(usize, &RuleStmt)> =
-            rules.iter().enumerate().filter(|(i, _)| rule_stratum[*i] == s).collect();
+        let rules_s: Vec<(usize, &RuleStmt)> = rules
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| rule_stratum[*i] == s)
+            .collect();
         if rules_s.is_empty() {
             continue;
         }
@@ -131,7 +156,11 @@ pub fn eval(program: &Program, extra_facts: &[Atom]) -> Result<(EvalResult, Vec<
     for (k, c) in constraints.iter().enumerate() {
         crate::sim::set_current(
             rules.len() + k,
-            &Atom { pred: "deny".into(), args: vec![Term::Val(Value::Str(c.message.clone()))], record: None },
+            &Atom {
+                pred: "deny".into(),
+                args: vec![Term::Val(Value::Str(c.message.clone()))],
+                record: None,
+            },
         );
         if constraint_violated(c, &snapshot)? {
             violations.push(c.message.clone());
@@ -164,23 +193,39 @@ fn check_defined(
     defined.extend(rules.iter().map(|r| r.head.pred.as_str()));
     defined.extend(externs.iter().map(|e| e.pred.as_str()));
     let is_defined = |p: &str| {
-        defined.contains(p) || is_builtin_pred(p) || matches!(p, "member" | "enumerate") || crate::loader::is_core_pred(p)
+        defined.contains(p)
+            || is_builtin_pred(p)
+            || matches!(p, "member" | "enumerate")
+            || crate::loader::is_core_pred(p)
     };
     let bodies = rules
         .iter()
         .map(|r| (&r.body, partition::fmt_rule(r)))
-        .chain(constraints.iter().map(|c| (&c.body, partition::fmt_rule(&partition::constraint_rule(c)))));
+        .chain(
+            constraints
+                .iter()
+                .map(|c| (&c.body, partition::fmt_rule(&partition::constraint_rule(c)))),
+        );
     let mut errors = Vec::new();
     for (body, text) in bodies {
         for lit in body {
-            let (Lit::Pos(a) | Lit::Not(a)) = lit else { continue };
+            let (Lit::Pos(a) | Lit::Not(a)) = lit else {
+                continue;
+            };
             if !is_defined(&a.pred) {
-                errors.push(format!("undefined predicate {}/{} in rule: {text}", a.pred, a.args.len()));
+                errors.push(format!(
+                    "undefined predicate {}/{} in rule: {text}",
+                    a.pred,
+                    a.args.len()
+                ));
             }
         }
     }
     if !errors.is_empty() {
-        bail!("{}\n(declare a predicate a provider feeds with `extern p/N.`)", errors.join("\n"));
+        bail!(
+            "{}\n(declare a predicate a provider feeds with `extern p/N.`)",
+            errors.join("\n")
+        );
     }
     Ok(())
 }
@@ -197,7 +242,10 @@ impl Origins {
         }
     }
     fn of(&self, a: &Atom) -> Vec<String> {
-        self.0.get(a).map(|s| s.iter().cloned().collect()).unwrap_or_default()
+        self.0
+            .get(a)
+            .map(|s| s.iter().cloned().collect())
+            .unwrap_or_default()
     }
 }
 
@@ -221,26 +269,51 @@ struct AttrAggregate {
 
 impl AttrAggregate {
     fn new(strata: &BTreeMap<Node, usize>) -> Self {
-        let arg_nodes = strata.iter().filter(|(n, _)| n.pred == "arg").map(|(n, s)| (n.clone(), *s)).collect();
-        AttrAggregate { arg_nodes, emitted: BTreeMap::new() }
+        let arg_nodes = strata
+            .iter()
+            .filter(|(n, _)| n.pred == "arg")
+            .map(|(n, s)| (n.clone(), *s))
+            .collect();
+        AttrAggregate {
+            arg_nodes,
+            emitted: BTreeMap::new(),
+        }
     }
 
     /// The first stratum at which group `(typ, path)` is complete.
     fn ready_at(&self, typ: &str, path: &str) -> usize {
-        let node = Node { pred: "arg".into(), typ: Some(typ.into()), path: Some(path.into()) };
-        self.arg_nodes.iter().filter(|(n, _)| n.unifies(&node)).map(|(_, s)| s + 1).max().unwrap_or(0)
+        let node = Node {
+            pred: "arg".into(),
+            typ: Some(typ.into()),
+            path: Some(path.into()),
+        };
+        self.arg_nodes
+            .iter()
+            .filter(|(n, _)| n.unifies(&node))
+            .map(|(_, s)| s + 1)
+            .max()
+            .unwrap_or(0)
     }
 
-    fn emit_ready(&mut self, stratum: usize, facts: &mut BTreeSet<Atom>, origins: &Origins) -> Result<()> {
+    fn emit_ready(
+        &mut self,
+        stratum: usize,
+        facts: &mut BTreeSet<Atom>,
+        origins: &Origins,
+    ) -> Result<()> {
         let lattices = declared_lattices(facts)?;
         let mut out = Vec::new();
         for (key, contribs) in groups(facts)? {
             if self.emitted.contains_key(&key) || self.ready_at(&key.0, &key.2) > stratum {
                 continue;
             }
-            let lat = lattices.get(&(key.0.clone(), key.2.clone())).cloned().unwrap_or_else(|| infer_lattice(&contribs));
+            let lat = lattices
+                .get(&(key.0.clone(), key.2.clone()))
+                .cloned()
+                .unwrap_or_else(|| infer_lattice(&contribs));
             out.extend(collapse_group(&key, &contribs, &lat, origins));
-            self.emitted.insert(key, contribs.into_iter().map(|(a, _, _)| a).collect());
+            self.emitted
+                .insert(key, contribs.into_iter().map(|(a, _, _)| a).collect());
         }
         facts.extend(out);
         Ok(())
@@ -252,7 +325,12 @@ impl AttrAggregate {
         for (key, contribs) in groups(facts)? {
             let now: Vec<Atom> = contribs.into_iter().map(|(a, _, _)| a).collect();
             if self.emitted.get(&key) != Some(&now) {
-                bail!("internal: attribute {} {} {} gained a contribution after it was collapsed", key.0, partition::fmt_value(&key.1), key.2);
+                bail!(
+                    "internal: attribute {} {} {} gained a contribution after it was collapsed",
+                    key.0,
+                    partition::fmt_value(&key.1),
+                    key.2
+                );
             }
         }
         Ok(())
@@ -279,7 +357,10 @@ fn rank_name(r: Rank) -> &'static str {
 /// Every `arg/5` contribution, grouped by `(T, A, normalized P)`.
 fn groups(facts: &BTreeSet<Atom>) -> Result<BTreeMap<GroupKey, Vec<Contribution>>> {
     let mut out: BTreeMap<GroupKey, Vec<Contribution>> = BTreeMap::new();
-    for a in facts.iter().filter(|a| a.pred == "arg" && a.args.len() == 5) {
+    for a in facts
+        .iter()
+        .filter(|a| a.pred == "arg" && a.args.len() == 5)
+    {
         let vals: Vec<&Value> = a
             .args
             .iter()
@@ -289,14 +370,24 @@ fn groups(facts: &BTreeSet<Atom>) -> Result<BTreeMap<GroupKey, Vec<Contribution>
             })
             .collect::<Result<_>>()?;
         let (Some(typ), Some(path)) = (vals[0].as_str(), vals[2].as_str()) else {
-            bail!("contribution {} needs a string type and path", partition::fmt_atom(a));
+            bail!(
+                "contribution {} needs a string type and path",
+                partition::fmt_atom(a)
+            );
         };
         let Some(rank) = parse_rank(vals[4]) else {
-            bail!("contribution {}: rank must be default, normal or override", partition::fmt_atom(a));
+            bail!(
+                "contribution {}: rank must be default, normal or override",
+                partition::fmt_atom(a)
+            );
         };
-        let (path, value) = transform::normalize_contribution(typ, path, Term::Val(vals[3].clone()));
-        let value = eval_term(&value, &HashMap::new()).ok_or_else(|| anyhow!("internal: normalize"))?;
-        out.entry((typ.to_string(), vals[1].clone(), path)).or_default().push((a.clone(), rank, value));
+        let (path, value) =
+            transform::normalize_contribution(typ, path, Term::Val(vals[3].clone()));
+        let value =
+            eval_term(&value, &HashMap::new()).ok_or_else(|| anyhow!("internal: normalize"))?;
+        out.entry((typ.to_string(), vals[1].clone(), path))
+            .or_default()
+            .push((a.clone(), rank, value));
     }
     Ok(out)
 }
@@ -304,9 +395,21 @@ fn groups(facts: &BTreeSet<Atom>) -> Result<BTreeMap<GroupKey, Vec<Contribution>
 /// `type_lattice(T, P, flat|map|set)` and `type_list_key(T, P, Keys)` facts.
 fn declared_lattices(facts: &BTreeSet<Atom>) -> Result<BTreeMap<(String, String), Lattice>> {
     let mut out = BTreeMap::new();
-    for a in facts.iter().filter(|a| LATTICE_DECLS.contains(&a.pred.as_str())) {
-        let [Term::Val(Value::Str(t)), Term::Val(Value::Str(p)), Term::Val(k)] = a.args.as_slice() else {
-            bail!("{}/3 expects (Type, Path, ...): {}", a.pred, partition::fmt_atom(a));
+    for a in facts
+        .iter()
+        .filter(|a| LATTICE_DECLS.contains(&a.pred.as_str()))
+    {
+        let [
+            Term::Val(Value::Str(t)),
+            Term::Val(Value::Str(p)),
+            Term::Val(k),
+        ] = a.args.as_slice()
+        else {
+            bail!(
+                "{}/3 expects (Type, Path, ...): {}",
+                a.pred,
+                partition::fmt_atom(a)
+            );
         };
         let lat = match (a.pred.as_str(), k) {
             ("type_lattice", Value::Str(k)) if k == "flat" => Lattice::Flat,
@@ -316,10 +419,15 @@ fn declared_lattices(facts: &BTreeSet<Atom>) -> Result<BTreeMap<(String, String)
                 keys: ks.iter().map(value_to_string).collect(),
                 elem: Box::new(Lattice::Map(Box::new(Lattice::Flat))),
             },
-            ("type_list_key", Value::Str(k)) => {
-                Lattice::Keyed { keys: vec![k.clone()], elem: Box::new(Lattice::Map(Box::new(Lattice::Flat))) }
-            }
-            _ => bail!("{}: unknown lattice {}", partition::fmt_atom(a), partition::fmt_value(k)),
+            ("type_list_key", Value::Str(k)) => Lattice::Keyed {
+                keys: vec![k.clone()],
+                elem: Box::new(Lattice::Map(Box::new(Lattice::Flat))),
+            },
+            _ => bail!(
+                "{}: unknown lattice {}",
+                partition::fmt_atom(a),
+                partition::fmt_value(k)
+            ),
         };
         let key = (t.clone(), p.clone());
         if out.get(&key).is_some_and(|l| *l != lat) {
@@ -352,13 +460,24 @@ fn obj(kv: Vec<(&str, Value)>) -> Value {
 /// The collapsed cell as facts: the value, or the conflict with a `deny`
 /// naming every witness, or the stuck disagreement; plus a warning per
 /// shadowed disagreement at a losing rank.
-fn collapse_group(key: &GroupKey, contribs: &[Contribution], lat: &Lattice, origins: &Origins) -> Vec<Atom> {
+fn collapse_group(
+    key: &GroupKey,
+    contribs: &[Contribution],
+    lat: &Lattice,
+    origins: &Origins,
+) -> Vec<Atom> {
     let (typ, addr, path) = key;
-    let cells: Vec<RankedContribution> =
-        contribs.iter().enumerate().map(|(i, (_, r, v))| (i as u32, *r, v.clone())).collect();
+    let cells: Vec<RankedContribution> = contribs
+        .iter()
+        .enumerate()
+        .map(|(i, (_, r, v))| (i as u32, *r, v.clone()))
+        .collect();
     let head = |pred: &str, rest: Vec<Value>| Atom {
         pred: pred.into(),
-        args: [str_val(typ), Term::Val(addr.clone()), str_val(path)].into_iter().chain(rest.into_iter().map(Term::Val)).collect(),
+        args: [str_val(typ), Term::Val(addr.clone()), str_val(path)]
+            .into_iter()
+            .chain(rest.into_iter().map(Term::Val))
+            .collect(),
         record: None,
     };
     let witness = |w: u32| {
@@ -366,12 +485,19 @@ fn collapse_group(key: &GroupKey, contribs: &[Contribution], lat: &Lattice, orig
         obj(vec![
             ("rank", Value::Str(rank_name(*r).into())),
             ("value", v.clone()),
-            ("from", Value::List(origins.of(a).into_iter().map(Value::Str).collect())),
+            (
+                "from",
+                Value::List(origins.of(a).into_iter().map(Value::Str).collect()),
+            ),
         ])
     };
     let witnesses = |ws: &Witnesses| Value::List(ws.iter().map(|w| witness(*w)).collect());
     let ctx = |extra: Vec<(&str, Value)>| {
-        let mut kv = vec![("type", Value::Str(typ.clone())), ("addr", addr.clone()), ("path", Value::Str(path.clone()))];
+        let mut kv = vec![
+            ("type", Value::Str(typ.clone())),
+            ("addr", addr.clone()),
+            ("path", Value::Str(path.clone())),
+        ];
         kv.extend(extra);
         obj(kv)
     };
@@ -383,36 +509,80 @@ fn collapse_group(key: &GroupKey, contribs: &[Contribution], lat: &Lattice, orig
     let mut out = Vec::new();
     let shadowed = match lattice::lub_ranked(lat, path, &cells) {
         Collapsed2::Bottom => vec![],
-        Collapsed2::Val { value, shadowed, .. } => {
+        Collapsed2::Val {
+            value, shadowed, ..
+        } => {
             out.push(head("attr", vec![value]));
             shadowed
         }
-        Collapsed2::Stuck { nulls, shadowed, .. } => {
-            out.push(head("attr_stuck", vec![Value::List(nulls.into_iter().map(Value::Str).collect())]));
+        Collapsed2::Stuck {
+            nulls, shadowed, ..
+        } => {
+            out.push(head(
+                "attr_stuck",
+                vec![Value::List(nulls.into_iter().map(Value::Str).collect())],
+            ));
             shadowed
         }
-        Collapsed2::Conflict { a, b, reason, witnesses: ws, shadowed, .. } => {
-            let first = |w: &Witnesses| w.iter().next().map(|w| witness(*w)).unwrap_or(Value::Obj(BTreeMap::new()));
+        Collapsed2::Conflict {
+            a,
+            b,
+            reason,
+            witnesses: ws,
+            shadowed,
+            ..
+        } => {
+            let first = |w: &Witnesses| {
+                w.iter()
+                    .next()
+                    .map(|w| witness(*w))
+                    .unwrap_or(Value::Obj(BTreeMap::new()))
+            };
             out.push(head("attr_conflict", vec![first(&a.1), first(&b.1)]));
             out.push(policy(
                 "deny",
                 "conflicting attribute contributions",
-                ctx(vec![("reason", Value::Str(reason)), ("witnesses", witnesses(&ws))]),
+                ctx(vec![
+                    ("reason", Value::Str(reason)),
+                    ("witnesses", witnesses(&ws)),
+                ]),
             ));
             shadowed
         }
     };
     for sh in shadowed {
         let (rank, what, ws) = match sh {
-            Shadowed::Stuck { rank, nulls, witnesses } => {
-                (rank, format!("undecided until {}", nulls.iter().map(|n| format!("?{n}")).collect::<Vec<_>>().join(" ")), witnesses)
-            }
-            Shadowed::Conflict { rank, path, reason, witnesses } => (rank, format!("{reason} at {path}"), witnesses),
+            Shadowed::Stuck {
+                rank,
+                nulls,
+                witnesses,
+            } => (
+                rank,
+                format!(
+                    "undecided until {}",
+                    nulls
+                        .iter()
+                        .map(|n| format!("?{n}"))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                ),
+                witnesses,
+            ),
+            Shadowed::Conflict {
+                rank,
+                path,
+                reason,
+                witnesses,
+            } => (rank, format!("{reason} at {path}"), witnesses),
         };
         out.push(policy(
             "warn",
             "attr_shadowed: contributions at a losing rank disagree and are overridden",
-            ctx(vec![("rank", Value::Str(rank_name(rank).into())), ("reason", Value::Str(what)), ("witnesses", witnesses(&ws))]),
+            ctx(vec![
+                ("rank", Value::Str(rank_name(rank).into())),
+                ("reason", Value::Str(what)),
+                ("witnesses", witnesses(&ws)),
+            ]),
         ));
     }
     out
@@ -562,7 +732,11 @@ fn eval_rule_collect(
             // decides which reading runs.
             let item_nulls = crate::lattice::nulls_in(&item);
             if !item_nulls.is_empty() && crate::sim::agg_is_content() {
-                crate::sim::record_stuck(&b, item_nulls, "aggregated value carries a null (Rule 2 literal)");
+                crate::sim::record_stuck(
+                    &b,
+                    item_nulls,
+                    "aggregated value carries a null (Rule 2 literal)",
+                );
                 continue;
             }
         }
@@ -715,7 +889,14 @@ fn eval_body(body: &[Lit], facts: &[Atom]) -> Result<Vec<HashMap<String, Value>>
                                 }
                             }
                             if !open.is_empty() {
-                                crate::sim::record_stuck(s, open, format!("negation pattern not {}(..) holds an open/secret null", atom.pred));
+                                crate::sim::record_stuck(
+                                    s,
+                                    open,
+                                    format!(
+                                        "negation pattern not {}(..) holds an open/secret null",
+                                        atom.pred
+                                    ),
+                                );
                                 continue;
                             }
                             crate::sim::record_neg(&grounded);
@@ -766,7 +947,13 @@ fn is_builtin_pred(pred: &str) -> bool {
 fn eval_builtin_pred(atom: &Atom, state: &HashMap<String, Value>) -> Result<bool> {
     // Builtin predicates are functions that return Bool.
     let Some(v) = eval_func(&atom.pred, &atom.args, state) else {
-        if crate::sim::active() && atom.args.iter().any(|t| eval_term(t, state).map(|v| crate::sim::has_null(&v)).unwrap_or(false)) {
+        if crate::sim::active()
+            && atom.args.iter().any(|t| {
+                eval_term(t, state)
+                    .map(|v| crate::sim::has_null(&v))
+                    .unwrap_or(false)
+            })
+        {
             // Stuck was recorded by eval_func; the literal does not hold.
             return Ok(false);
         }
@@ -774,7 +961,10 @@ fn eval_builtin_pred(atom: &Atom, state: &HashMap<String, Value>) -> Result<bool
     };
     match v {
         Value::Bool(b) => Ok(b),
-        other => bail!("builtin predicate {} returned non-bool: {other:?}", atom.pred),
+        other => bail!(
+            "builtin predicate {} returned non-bool: {other:?}",
+            atom.pred
+        ),
     }
 }
 
@@ -812,7 +1002,11 @@ fn eval_member2(
         .ok_or_else(|| anyhow!("unsafe member: list is not ground"))?;
     if let Value::Null { .. } = &list_v {
         // Rule 2: member over a null list is a content position.
-        crate::sim::record_stuck(state, crate::lattice::nulls_in(&list_v), "member/2 over a null list");
+        crate::sim::record_stuck(
+            state,
+            crate::lattice::nulls_in(&list_v),
+            "member/2 over a null list",
+        );
         return Ok(());
     }
     let Value::List(items) = list_v else {
@@ -831,7 +1025,11 @@ fn eval_not_member2(atom: &Atom, state: &HashMap<String, Value>) -> Result<bool>
     let list_v = eval_term(&atom.args[0], state)
         .ok_or_else(|| anyhow!("unsafe not member: list is not ground"))?;
     if let Value::Null { .. } = &list_v {
-        crate::sim::record_stuck(state, crate::lattice::nulls_in(&list_v), "not member/2 over a null list");
+        crate::sim::record_stuck(
+            state,
+            crate::lattice::nulls_in(&list_v),
+            "not member/2 over a null list",
+        );
         return Ok(false);
     }
     let Value::List(items) = list_v else {
@@ -891,7 +1089,11 @@ fn eval_member3(
     let list_v = eval_term(&atom.args[0], state)
         .ok_or_else(|| anyhow!("unsafe member: list is not ground"))?;
     if let Value::Null { .. } = &list_v {
-        crate::sim::record_stuck(state, crate::lattice::nulls_in(&list_v), "member/3 over a null list");
+        crate::sim::record_stuck(
+            state,
+            crate::lattice::nulls_in(&list_v),
+            "member/3 over a null list",
+        );
         return Ok(());
     }
     let Value::List(items) = list_v else {
@@ -910,7 +1112,11 @@ fn eval_member3(
     Ok(())
 }
 
-fn unify_atom(pattern: &Atom, fact: &Atom, state: &HashMap<String, Value>) -> Result<Option<HashMap<String, Value>>> {
+fn unify_atom(
+    pattern: &Atom,
+    fact: &Atom,
+    state: &HashMap<String, Value>,
+) -> Result<Option<HashMap<String, Value>>> {
     if pattern.args.len() != fact.args.len() {
         return Ok(None);
     }
@@ -1051,7 +1257,11 @@ fn instantiate_atom(atom: &Atom, state: &HashMap<String, Value>) -> Result<Atom>
     })
 }
 
-fn eval_eq(a: &Term, b: &Term, state: &HashMap<String, Value>) -> Result<Option<HashMap<String, Value>>> {
+fn eval_eq(
+    a: &Term,
+    b: &Term,
+    state: &HashMap<String, Value>,
+) -> Result<Option<HashMap<String, Value>>> {
     let mut out = state.clone();
     match (eval_term(a, &out), eval_term(b, &out)) {
         (Some(av), Some(bv)) => Ok(sim_eq(&av, &bv, &out).then_some(out)),
@@ -1077,7 +1287,10 @@ fn eval_eq(a: &Term, b: &Term, state: &HashMap<String, Value>) -> Result<Option<
                         return Ok(None);
                     }
                     let args: Vec<String> = args.iter().map(partition::fmt_value).collect();
-                    bail!("{name}({}) is not defined for these arguments", args.join(", "));
+                    bail!(
+                        "{name}({}) is not defined for these arguments",
+                        args.join(", ")
+                    );
                 }
             }
             bail!("unsafe equality: both sides unbound")
@@ -1089,16 +1302,24 @@ fn eval_eq(a: &Term, b: &Term, state: &HashMap<String, Value>) -> Result<Option<
 /// but which has no value: a builtin applied to the wrong kind of value
 /// (`"10" + 1`, `to_int("abc")`). `None` when the term is merely unbound.
 fn failed_builtin(t: &Term, state: &HashMap<String, Value>) -> Option<(String, Vec<Value>)> {
-    let Term::Func { name, args } = t else { return None };
+    let Term::Func { name, args } = t else {
+        return None;
+    };
     if let Some(inner) = args.iter().find_map(|a| failed_builtin(a, state)) {
         return Some(inner);
     }
     let vals: Option<Vec<Value>> = args.iter().map(|a| eval_term(a, state)).collect();
     let vals = vals?;
-    eval_func(name, args, state).is_none().then(|| (name.clone(), vals))
+    eval_func(name, args, state)
+        .is_none()
+        .then(|| (name.clone(), vals))
 }
 
-fn eval_neq(a: &Term, b: &Term, state: &HashMap<String, Value>) -> Result<Option<HashMap<String, Value>>> {
+fn eval_neq(
+    a: &Term,
+    b: &Term,
+    state: &HashMap<String, Value>,
+) -> Result<Option<HashMap<String, Value>>> {
     match (eval_term(a, state), eval_term(b, state)) {
         (Some(av), Some(bv)) => {
             if crate::sim::active() {
@@ -1191,7 +1412,11 @@ fn eval_func(name: &str, args: &[Term], state: &HashMap<String, Value>) -> Optio
                 let t = eval_term(&args[0], state)?.as_str()?.to_string();
                 let n = eval_term(&args[1], state)?;
                 if crate::sim::has_null(&n) {
-                    crate::sim::record_stuck(state, crate::lattice::nulls_in(&n), "ref address carries a null");
+                    crate::sim::record_stuck(
+                        state,
+                        crate::lattice::nulls_in(&n),
+                        "ref address carries a null",
+                    );
                     return None;
                 }
                 let n = value_to_string(&n);
@@ -1212,7 +1437,11 @@ fn eval_func(name: &str, args: &[Term], state: &HashMap<String, Value>) -> Optio
                     }
                 }
                 if !nulls.is_empty() {
-                    let what = if name == "scoped" { "resource address carries a null".to_string() } else { format!("builtin {name}() over a null") };
+                    let what = if name == "scoped" {
+                        "resource address carries a null".to_string()
+                    } else {
+                        format!("builtin {name}() over a null")
+                    };
                     crate::sim::record_stuck(state, nulls, what);
                     return None;
                 }
@@ -1331,7 +1560,11 @@ fn eval_func(name: &str, args: &[Term], state: &HashMap<String, Value>) -> Optio
             let ip = eval_term(&args[1], state)?;
             let (addr, prefix) = as_ipnet(&net)?;
             let n = as_ip_u32(&ip)?;
-            let mask = if prefix == 0 { 0 } else { u32::MAX << (32 - prefix as u32) };
+            let mask = if prefix == 0 {
+                0
+            } else {
+                u32::MAX << (32 - prefix as u32)
+            };
             Some(Value::Bool((n & mask) == addr))
         }
         "inet_overlaps" => {
@@ -1487,7 +1720,11 @@ fn eval_func(name: &str, args: &[Term], state: &HashMap<String, Value>) -> Optio
                 Value::Int(i) => i,
                 _ => return None,
             };
-            Some(Value::Str(cidrsubnet(&cidr, newbits as u32, netnum as u32)?))
+            Some(Value::Str(cidrsubnet(
+                &cidr,
+                newbits as u32,
+                netnum as u32,
+            )?))
         }
         // Explicit conversions (DESIGN.org "Silent string-to-int coercion").
         "to_int" => match (args, eval_term(args.first()?, state)?) {
@@ -1511,7 +1748,11 @@ fn eval_func(name: &str, args: &[Term], state: &HashMap<String, Value>) -> Optio
         "lower" | "upper" => match args {
             [a] => {
                 let s = eval_term(a, state)?.as_str()?.to_string();
-                Some(Value::Str(if name == "lower" { s.to_lowercase() } else { s.to_uppercase() }))
+                Some(Value::Str(if name == "lower" {
+                    s.to_lowercase()
+                } else {
+                    s.to_uppercase()
+                }))
             }
             _ => None,
         },
@@ -1522,13 +1763,19 @@ fn eval_func(name: &str, args: &[Term], state: &HashMap<String, Value>) -> Optio
                 if sep.is_empty() {
                     return None;
                 }
-                Some(Value::List(s.split(sep.as_str()).map(|x| Value::Str(x.to_string())).collect()))
+                Some(Value::List(
+                    s.split(sep.as_str())
+                        .map(|x| Value::Str(x.to_string()))
+                        .collect(),
+                ))
             }
             _ => None,
         },
         "join" => match args {
             [l, sep] => {
-                let Value::List(xs) = eval_term(l, state)? else { return None };
+                let Value::List(xs) = eval_term(l, state)? else {
+                    return None;
+                };
                 let sep = eval_term(sep, state)?.as_str()?.to_string();
                 let parts: Option<Vec<String>> = xs.iter().map(scalar_text).collect();
                 Some(Value::Str(parts?.join(&sep)))
@@ -1552,9 +1799,12 @@ fn as_i64(v: &Value) -> Option<i64> {
 /// references and nulls have no text.
 fn scalar_text(v: &Value) -> Option<String> {
     match v {
-        Value::Str(_) | Value::Int(_) | Value::Bool(_) | Value::Ip(_) | Value::IpNet { .. } | Value::IpRange { .. } => {
-            Some(value_to_string(v))
-        }
+        Value::Str(_)
+        | Value::Int(_)
+        | Value::Bool(_)
+        | Value::Ip(_)
+        | Value::IpNet { .. }
+        | Value::IpRange { .. } => Some(value_to_string(v)),
         _ => None,
     }
 }
@@ -1643,20 +1893,22 @@ mod tests {
     }
 
     fn facts_of(r: &EvalResult, pred: &str) -> Vec<String> {
-        r.facts.iter().filter(|a| a.pred == pred).map(partition::fmt_atom).collect()
+        r.facts
+            .iter()
+            .filter(|a| a.pred == pred)
+            .map(partition::fmt_atom)
+            .collect()
     }
 
     /// DESIGN.org "Aggregates are not stratified": a consumer of an
     /// aggregate used to see every partial result mid-fixpoint.
     #[test]
     fn aggregate_consumer_sees_one_complete_result() {
-        let (r, _) = run(
-            "n(1).
+        let (r, _) = run("n(1).
              n(2) :- n(1).
              n(3) :- n(2).
              all(collect_set(X)) :- n(X).
-             snap(L) :- all(L).",
-        )
+             snap(L) :- all(L).")
         .unwrap();
         assert_eq!(facts_of(&r, "snap"), vec!["snap([1, 2, 3])".to_string()]);
     }
@@ -1665,11 +1917,9 @@ mod tests {
     /// the text of every rule on it.
     #[test]
     fn negative_cycle_is_an_error_with_rule_text() {
-        let err = run(
-            "q(1).
+        let err = run("q(1).
              p(X) :- q(X), not r(X).
-             r(X) :- p(X).",
-        )
+             r(X) :- p(X).")
         .unwrap_err()
         .to_string();
         assert!(err.contains("negative cycle"), "{err}");
@@ -1680,18 +1930,20 @@ mod tests {
     /// of one type may negate, or aggregate over, `want` of another type.
     #[test]
     fn want_is_partitioned_by_type() {
-        let (r, _) = run(
-            "want(net.subnet, a).
+        let (r, _) = run("want(net.subnet, a).
              want(net.subnet, b).
              subnets(collect_set(S)) :- want(net.subnet, S).
-             want(db.postgres, db) :- subnets(L), member(L, a), not want(net.subnet, c).",
-        )
+             want(db.postgres, db) :- subnets(L), member(L, a), not want(net.subnet, c).")
         .unwrap();
         assert!(facts_of(&r, "want").contains(&"want(\"db.postgres\", \"db\")".to_string()));
     }
 
     fn input(k: &str, v: Value) -> Atom {
-        Atom { pred: "input".into(), args: vec![str_val(k), Term::Val(v)], record: None }
+        Atom {
+            pred: "input".into(),
+            args: vec![str_val(k), Term::Val(v)],
+            record: None,
+        }
     }
 
     /// Two rules set one attribute to different values: no attr fact, an
@@ -1699,12 +1951,14 @@ mod tests {
     /// contributing rules.
     #[test]
     fn conflicting_contributions_derive_a_deny_naming_every_witness() {
-        let (r, violations) = run(
-            "resource net.vpc main { cidr = \"10.0.0.0/16\" }.
-             arg(net.vpc, main, cidr, \"10.1.0.0/16\") :- want(net.vpc, main).",
-        )
+        let (r, violations) = run("resource net.vpc main { cidr = \"10.0.0.0/16\" }.
+             arg(net.vpc, main, cidr, \"10.1.0.0/16\") :- want(net.vpc, main).")
         .unwrap();
-        assert!(facts_of(&r, "attr").iter().all(|a| !a.contains("cidr")), "{:?}", facts_of(&r, "attr"));
+        assert!(
+            facts_of(&r, "attr").iter().all(|a| !a.contains("cidr")),
+            "{:?}",
+            facts_of(&r, "attr")
+        );
         assert_eq!(facts_of(&r, "attr_conflict").len(), 1);
         assert_eq!(violations.len(), 1, "{violations:?}");
         let v = &violations[0];
@@ -1718,7 +1972,13 @@ mod tests {
             .as_array()
             .unwrap()
             .iter()
-            .flat_map(|w| w["from"].as_array().unwrap().iter().map(|f| f.as_str().unwrap().to_string()))
+            .flat_map(|w| {
+                w["from"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|f| f.as_str().unwrap().to_string())
+            })
             .collect();
         assert_eq!(
             from,
@@ -1734,17 +1994,18 @@ mod tests {
     /// contribution, and a Set path unions every author.
     #[test]
     fn setting_and_output_readers_read_the_collapsed_value() {
-        let (r, violations) = run(
-            "type_lattice(settings, sinks, set).
+        let (r, violations) = run("type_lattice(settings, sinks, set).
              settings prod { sinks += [\"cloudwatch\"], days = 14 }.
              setting_add(prod, sinks, [\"s3\"]).
              component network main { output(ids, [a, b]). }.
              got(S, D) :- setting(prod, sinks, S), setting(prod, days, D).
              ids(L) :- output(network.main, ids, L).
-             deny(\"no audit\") :- not setting(prod, audit, true).",
-        )
+             deny(\"no audit\") :- not setting(prod, audit, true).")
         .unwrap();
-        assert_eq!(facts_of(&r, "got"), vec!["got([\"cloudwatch\", \"s3\"], 14)".to_string()]);
+        assert_eq!(
+            facts_of(&r, "got"),
+            vec!["got([\"cloudwatch\", \"s3\"], 14)".to_string()]
+        );
         assert_eq!(facts_of(&r, "ids"), vec!["ids([\"a\", \"b\"])".to_string()]);
         assert_eq!(violations, vec!["no audit".to_string()]);
     }
@@ -1753,14 +2014,15 @@ mod tests {
     /// `tags`, which is a Map, so it meets the block's other tags per leaf.
     #[test]
     fn dotted_path_contributes_to_its_top_level_attribute() {
-        let (r, _) = run(
-            "resource net.vpc main { tags = { env: dev } }.
-             arg(net.vpc, main, \"tags.team\", platform) :- want(net.vpc, main).",
-        )
+        let (r, _) = run("resource net.vpc main { tags = { env: dev } }.
+             arg(net.vpc, main, \"tags.team\", platform) :- want(net.vpc, main).")
         .unwrap();
         assert_eq!(
             facts_of(&r, "attr"),
-            vec!["attr(\"net.vpc\", \"main\", \"tags\", {env: \"dev\", team: \"platform\"})".to_string()]
+            vec![
+                "attr(\"net.vpc\", \"main\", \"tags\", {env: \"dev\", team: \"platform\"})"
+                    .to_string()
+            ]
         );
     }
 
@@ -1768,24 +2030,33 @@ mod tests {
     /// defaults under a normal value are a warning, not an error (F DR-9).
     #[test]
     fn highest_rank_wins_and_a_shadowed_disagreement_warns() {
-        let (r, violations) = run(
-            "want(net.vpc, main).
+        let (r, violations) = run("want(net.vpc, main).
              arg(net.vpc, main, cidr, \"10.0.0.0/16\", default).
              arg(net.vpc, main, cidr, \"10.9.0.0/16\", default).
-             arg(net.vpc, main, cidr, \"10.1.0.0/16\").",
-        )
+             arg(net.vpc, main, cidr, \"10.1.0.0/16\").")
         .unwrap();
         assert!(violations.is_empty(), "{violations:?}");
-        assert_eq!(facts_of(&r, "attr"), vec!["attr(\"net.vpc\", \"main\", \"cidr\", \"10.1.0.0/16\")".to_string()]);
+        assert_eq!(
+            facts_of(&r, "attr"),
+            vec!["attr(\"net.vpc\", \"main\", \"cidr\", \"10.1.0.0/16\")".to_string()]
+        );
         assert_eq!(r.warnings.len(), 1);
-        assert!(r.warnings[0].starts_with("attr_shadowed"), "{:?}", r.warnings);
+        assert!(
+            r.warnings[0].starts_with("attr_shadowed"),
+            "{:?}",
+            r.warnings
+        );
     }
 
     /// A null contribution (a computed attribute at plan time) is carried
     /// through the aggregate as a value.
     #[test]
     fn a_null_contribution_is_carried_through_attr() {
-        let null = Value::Null { label: "net.vpc/main#id".into(), class: crate::value::NullClass::Fresh, ty: "string".into() };
+        let null = Value::Null {
+            label: "net.vpc/main#id".into(),
+            class: crate::value::NullClass::Fresh,
+            ty: "string".into(),
+        };
         let program = crate::parser::parse_program(
             "want(net.subnet, a).
              arg(net.subnet, a, vpc_id, V) :- input(vpc, V).
@@ -1794,7 +2065,10 @@ mod tests {
         .unwrap();
         let (r, violations) = eval(&program, &[input("vpc", null.clone())]).unwrap();
         assert!(violations.is_empty());
-        assert_eq!(facts_of(&r, "seen"), vec![format!("seen({})", partition::fmt_value(&null))]);
+        assert_eq!(
+            facts_of(&r, "seen"),
+            vec![format!("seen({})", partition::fmt_value(&null))]
+        );
     }
 
     /// `unique` lowers to nothing: one value per key is the aggregate's job.
@@ -1809,7 +2083,9 @@ mod tests {
     fn statement_order_does_not_change_attr() {
         fn shuffle(stmts: &mut [Stmt], seed: &mut u64) {
             for i in (1..stmts.len()).rev() {
-                *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                *seed = seed
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
                 stmts.swap(i, (*seed >> 33) as usize % (i + 1));
             }
             for s in stmts.iter_mut() {
@@ -1844,8 +2120,7 @@ mod tests {
     /// `resource` or `settings` header for every leaf without its own.
     #[test]
     fn ranks_in_blocks() {
-        let (r, violations) = run(
-            "resource net.vpc main @default {
+        let (r, violations) = run("resource net.vpc main @default {
                cidr = \"10.0.0.0/16\"
                tags = { env: dev, team: net }
                public = true @override
@@ -1858,21 +2133,27 @@ mod tests {
              env_name(dev). env_name(prod).
              settings E @default { days = 3, zones = [a] } :- env_name(E).
              settings prod { days = 14 }.
-             got(E, D, Z) :- setting(E, days, D), setting(E, zones, Z).",
-        )
+             got(E, D, Z) :- setting(E, days, D), setting(E, zones, Z).")
         .unwrap();
         assert!(violations.is_empty(), "{violations:?}");
         assert_eq!(
-            facts_of(&r, "attr").into_iter().filter(|a| a.contains("net.vpc")).collect::<Vec<_>>(),
+            facts_of(&r, "attr")
+                .into_iter()
+                .filter(|a| a.contains("net.vpc"))
+                .collect::<Vec<_>>(),
             vec![
                 "attr(\"net.vpc\", \"main\", \"cidr\", \"10.1.0.0/16\")".to_string(),
                 "attr(\"net.vpc\", \"main\", \"public\", true)".to_string(),
-                "attr(\"net.vpc\", \"main\", \"tags\", {env: \"dev\", team: \"platform\"})".to_string(),
+                "attr(\"net.vpc\", \"main\", \"tags\", {env: \"dev\", team: \"platform\"})"
+                    .to_string(),
             ]
         );
         assert_eq!(
             facts_of(&r, "got"),
-            vec!["got(\"dev\", 3, [\"a\"])".to_string(), "got(\"prod\", 14, [\"a\"])".to_string()]
+            vec![
+                "got(\"dev\", 3, [\"a\"])".to_string(),
+                "got(\"prod\", 14, [\"a\"])".to_string()
+            ]
         );
     }
 
@@ -1906,16 +2187,27 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("dform-settings-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let old = dir.join("dform.df");
-        let old_src = format!("{}{}{}", &src[..start], copied, &src[end..]).replace("import \"", &format!("import \"{}/", root.display()));
+        let old_src = format!("{}{}{}", &src[..start], copied, &src[end..])
+            .replace("import \"", &format!("import \"{}/", root.display()));
         std::fs::write(&old, old_src).unwrap();
         let resources = |path: &std::path::Path, env: Option<&str>| {
             let program = crate::loader::load_program(&[path.to_path_buf()]).unwrap();
-            let extra: Vec<Atom> = env.map(|e| input("env", Value::Str(e.into()))).into_iter().collect();
+            let extra: Vec<Atom> = env
+                .map(|e| input("env", Value::Str(e.into())))
+                .into_iter()
+                .collect();
             let (r, violations) = eval(&program, &extra).unwrap();
             let docs: Vec<String> = crate::ir::compile_resources(r.facts.iter().cloned())
                 .unwrap()
                 .iter()
-                .map(|r| format!("{} {} {}", r.addr.typ, r.addr.name, partition::fmt_value(&r.attrs)))
+                .map(|r| {
+                    format!(
+                        "{} {} {}",
+                        r.addr.typ,
+                        r.addr.name,
+                        partition::fmt_value(&r.attrs)
+                    )
+                })
                 .collect();
             (docs, violations, r.warnings)
         };
@@ -1931,16 +2223,14 @@ mod tests {
     /// replaced wholesale by a normal one, and same-shelf sets union.
     #[test]
     fn a_default_set_is_replaced_not_unioned() {
-        let (r, violations) = run(
-            "type_lattice(net.vpc, sgs, set).
+        let (r, violations) = run("type_lattice(net.vpc, sgs, set).
              resource net.vpc a { sgs = [base] }.
              resource net.vpc b { }.
              policy_pack p {
                arg(T, N, sgs, [default_sg, ssh], default) :- want(T, N).
                arg(T, N, sgs, [audit]) :- want(T, N), N = \"a\".
              }.
-             apply_policy p.",
-        )
+             apply_policy p.")
         .unwrap();
         assert!(violations.is_empty(), "{violations:?}");
         assert_eq!(
@@ -1956,25 +2246,24 @@ mod tests {
     /// predicate is a compile error naming it and the rule.
     #[test]
     fn undefined_predicate_is_an_error() {
-        let err = run(
-            "env(prod).
-             resource net.vpc main { cidr = \"10.0.0.0/16\" } :- envv(prod).",
-        )
+        let err = run("env(prod).
+             resource net.vpc main { cidr = \"10.0.0.0/16\" } :- envv(prod).")
         .unwrap_err()
         .to_string();
         assert!(err.contains("undefined predicate envv/1"), "{err}");
-        assert!(err.contains("want(\"net.vpc\", \"main\") :- envv(\"prod\")"), "{err}");
+        assert!(
+            err.contains("want(\"net.vpc\", \"main\") :- envv(\"prod\")"),
+            "{err}"
+        );
     }
 
     /// `extern p/N.` declares a provider-fed predicate; provider-injected
     /// predicates are defined with no rows.
     #[test]
     fn extern_and_provider_predicates_are_defined() {
-        let (r, _) = run(
-            "extern allowed/1.
+        let (r, _) = run("extern allowed/1.
              want(net.vpc, a).
-             lonely(N) :- want(net.vpc, N), not allowed(N), not cloud_exists(net.vpc, N).",
-        )
+             lonely(N) :- want(net.vpc, N), not allowed(N), not cloud_exists(net.vpc, N).")
         .unwrap();
         assert_eq!(facts_of(&r, "lonely"), vec!["lonely(\"a\")".to_string()]);
     }
@@ -1983,26 +2272,37 @@ mod tests {
     /// integers; conversions are explicit builtins.
     #[test]
     fn coercion_is_explicit() {
-        let err = run("s(\"10\"). n(X) :- s(S), X = S + 1.").unwrap_err().to_string();
+        let err = run("s(\"10\"). n(X) :- s(S), X = S + 1.")
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("add(\"10\", 1) is not defined"), "{err}");
-        let err = run("n(X) :- X = to_int(\"abc\") + 1.").unwrap_err().to_string();
+        let err = run("n(X) :- X = to_int(\"abc\") + 1.")
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("to_int(\"abc\") is not defined"), "{err}");
-        let (r, _) = run(
-            "s(\"10\").
+        let (r, _) = run("s(\"10\").
              explicit(X) :- s(S), X = to_int(S) + 1.
              text(T) :- T = to_string(14).
              sizes(A, B, C) :- A = len([x, y]), B = len(\"héllo\"), C = len({k: 1}).
              cases(L, U) :- L = lower(\"AbC\"), U = upper(\"AbC\").
              parts(P) :- P = split(\"a,b,c\", \",\").
-             joined(J) :- J = join([a, 1, true], \"-\").",
-        )
+             joined(J) :- J = join([a, 1, true], \"-\").")
         .unwrap();
         assert_eq!(facts_of(&r, "explicit"), vec!["explicit(11)".to_string()]);
         assert_eq!(facts_of(&r, "text"), vec!["text(\"14\")".to_string()]);
         assert_eq!(facts_of(&r, "sizes"), vec!["sizes(2, 5, 1)".to_string()]);
-        assert_eq!(facts_of(&r, "cases"), vec!["cases(\"abc\", \"ABC\")".to_string()]);
-        assert_eq!(facts_of(&r, "parts"), vec!["parts([\"a\", \"b\", \"c\"])".to_string()]);
-        assert_eq!(facts_of(&r, "joined"), vec!["joined(\"a-1-true\")".to_string()]);
+        assert_eq!(
+            facts_of(&r, "cases"),
+            vec!["cases(\"abc\", \"ABC\")".to_string()]
+        );
+        assert_eq!(
+            facts_of(&r, "parts"),
+            vec!["parts([\"a\", \"b\", \"c\"])".to_string()]
+        );
+        assert_eq!(
+            facts_of(&r, "joined"),
+            vec!["joined(\"a-1-true\")".to_string()]
+        );
     }
 
     /// A builtin over a null is a content position: under the stuck
@@ -2014,20 +2314,26 @@ mod tests {
              id_len(N) :- want(net.vpc, A), N = len(ref(net.vpc, A, id)).",
         )
         .unwrap();
-        let r = crate::sim::eval_sim(&program, &[], crate::schema::fake(), Default::default()).unwrap();
+        let r =
+            crate::sim::eval_sim(&program, &[], crate::schema::fake(), Default::default()).unwrap();
         assert!(r.facts.iter().all(|a| a.pred != "id_len"));
-        assert!(r.sim.stuck.iter().any(|s| s.reason == "builtin len() over a null"), "{:?}", r.sim.stuck);
+        assert!(
+            r.sim
+                .stuck
+                .iter()
+                .any(|s| s.reason == "builtin len() over a null"),
+            "{:?}",
+            r.sim.stuck
+        );
     }
 
     /// DESIGN.org "Fixpoint iteration cap is arbitrary": a derivation chain
     /// deeper than the old 200-iteration cap converges.
     #[test]
     fn a_300_deep_chain_converges() {
-        let (r, _) = run(
-            "n(0).
+        let (r, _) = run("n(0).
              n(Y) :- n(X), X < 300, Y = X + 1.
-             deepest(X) :- n(X), X >= 300.",
-        )
+             deepest(X) :- n(X), X >= 300.")
         .unwrap();
         assert_eq!(facts_of(&r, "n").len(), 301);
         assert_eq!(facts_of(&r, "deepest"), vec!["deepest(300)".to_string()]);

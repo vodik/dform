@@ -1,11 +1,12 @@
 use crate::ast::{
-    ApplyPolicy, Atom, Component, ComponentDef, Constraint, Import, Lit, PolicyPack, Program,
-    Decl, Extern, Settings, FieldAssign, FieldOp, Rank, Resource, RuleStmt, Stmt, Term, Unique, Use, When,
+    ApplyPolicy, Atom, Component, ComponentDef, Constraint, Decl, Extern, FieldAssign, FieldOp,
+    Import, Lit, PolicyPack, Program, Rank, Resource, RuleStmt, Settings, Stmt, Term, Unique, Use,
+    When,
 };
 use crate::value::Value;
-use anyhow::{anyhow, bail, Context, Result};
-use pest::iterators::{Pair, Pairs};
+use anyhow::{Context, Result, anyhow, bail};
 use pest::Parser;
+use pest::iterators::{Pair, Pairs};
 use pest_derive::Parser;
 use std::collections::BTreeMap;
 
@@ -39,9 +40,7 @@ fn is_kw(rule: Rule) -> bool {
 
 pub fn parse_program(src: &str) -> Result<Program> {
     let mut pairs = DformParser::parse(Rule::program, src).context("parse")?;
-    let program = pairs
-        .next()
-        .ok_or_else(|| anyhow!("missing program"))?;
+    let program = pairs.next().ok_or_else(|| anyhow!("missing program"))?;
 
     let mut statements = Vec::new();
     for pair in program.into_inner() {
@@ -210,7 +209,12 @@ fn parse_stmt(pair: Pair<Rule>) -> Result<Stmt> {
                     _ => {}
                 }
             }
-            Ok(Stmt::Settings(Settings { env, rank, fields, body }))
+            Ok(Stmt::Settings(Settings {
+                env,
+                rank,
+                fields,
+                body,
+            }))
         }
         Rule::resource_stmt => {
             let mut it = pair.into_inner().filter(|p| !is_kw(p.as_rule()));
@@ -542,9 +546,7 @@ fn parse_expr(pair: Pair<Rule>) -> Result<Term> {
                 }
                 break;
             }
-            let primary = it
-                .next()
-                .ok_or_else(|| anyhow!("missing primary expr"))?;
+            let primary = it.next().ok_or_else(|| anyhow!("missing primary expr"))?;
             let mut t = parse_expr(primary)?;
             if negs % 2 == 1 {
                 t = Term::Func {
@@ -596,7 +598,12 @@ fn parse_res_fields(pair: Pair<Rule>) -> Result<Vec<FieldAssign>> {
         };
         let value = parse_term(it.next().unwrap())?;
         let rank = it.next().map(parse_rank).transpose()?;
-        out.push(FieldAssign { key, op, value, rank });
+        out.push(FieldAssign {
+            key,
+            op,
+            value,
+            rank,
+        });
     }
     Ok(out)
 }
