@@ -684,7 +684,7 @@ impl FakeCloud {
     /// secret markers as labeled nulls of the schema's class.
     fn flat_value(&self, typ: &str, doc: &Json) -> Value {
         let mut leaves = BTreeMap::new();
-        self.flatten(typ, doc, "", "", &mut leaves);
+        self.flatten(typ, doc, "", "", false, &mut leaves);
         Value::Obj(
             leaves
                 .into_iter()
@@ -852,10 +852,10 @@ impl FakeCloud {
         let mut a = BTreeMap::new();
         let mut b = BTreeMap::new();
         if let Some(v) = before {
-            self.flatten(typ, v, "", "", &mut a);
+            self.flatten(typ, v, "", "", true, &mut a);
         }
         if let Some(v) = after {
-            self.flatten(typ, v, "", "", &mut b);
+            self.flatten(typ, v, "", "", true, &mut b);
         }
         let paths: BTreeSet<&String> = a.keys().chain(b.keys()).collect();
         let mut out = Vec::new();
@@ -878,13 +878,17 @@ impl FakeCloud {
     /// Flatten a document to leaf paths. `norm` is the schema path (dotted, no
     /// indices). A list with `type_list_key` merge keys is spelled by key,
     /// `containers[name=web]`, so reordering is not a change; a `set` is
-    /// compared as a set. Null and secret markers are leaves.
+    /// compared as a set. Null and secret markers are leaves. `by_content`
+    /// labels an element of a keyless set by a hash of its content,
+    /// `ingress[#k3j2d]`, so a diff shows an element added or removed rather
+    /// than every later index shifting; otherwise by its sorted position.
     fn flatten(
         &self,
         typ: &str,
         v: &Json,
         prefix: &str,
         norm: &str,
+        by_content: bool,
         out: &mut BTreeMap<String, (Json, String)>,
     ) {
         if provider::marker(v).is_some() {
@@ -901,7 +905,7 @@ impl FakeCloud {
                             format!("{p}.{k}")
                         }
                     };
-                    self.flatten(typ, vv, &join(prefix), &join(norm), out);
+                    self.flatten(typ, vv, &join(prefix), &join(norm), by_content, out);
                 }
             }
             Json::Array(xs) => {
@@ -931,11 +935,22 @@ impl FakeCloud {
                 if is_set && keys.is_none() {
                     items.sort_by(|x, y| x.0.cmp(&y.0));
                     for (i, it) in items.iter_mut().enumerate() {
-                        it.0 = i.to_string();
+                        it.0 = if by_content {
+                            format!("#{}", short_hash(&it.0))
+                        } else {
+                            i.to_string()
+                        };
                     }
                 }
                 for (label, vv) in items {
-                    self.flatten(typ, vv, &format!("{prefix}[{label}]"), norm, out);
+                    self.flatten(
+                        typ,
+                        vv,
+                        &format!("{prefix}[{label}]"),
+                        norm,
+                        by_content,
+                        out,
+                    );
                 }
             }
             _ => {

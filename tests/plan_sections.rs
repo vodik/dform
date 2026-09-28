@@ -60,6 +60,46 @@ fn a_deny_reading_a_stuck_predicate_may_derive_after_the_tick() {
     assert!(r.summary().ends_with(", 2 undetermined"), "{}", r.stdout);
 }
 
+const AWS: &str = "examples/aws_demo.df";
+
+fn aws(s: &Scratch, cmd: &str) -> common::Run {
+    let prog = repo().join(AWS);
+    s.run(&[
+        "--file",
+        prog.to_str().unwrap(),
+        "--provider",
+        "aws-mock",
+        "--world",
+        "w.json",
+        cmd,
+    ])
+}
+
+/// A keyless set diffs by element: one rule opened by hand is one element
+/// removed, not every later index shifting.
+#[test]
+fn a_keyless_set_diffs_by_element() {
+    let s = Scratch::new("sections-set");
+    aws(&s, "apply").success();
+    let mut w: serde_json::Value = serde_json::from_str(&s.read("w.json")).unwrap();
+    w["resources"]["aws_security_group::web"]["attrs"]["ingress"]
+        .as_array_mut()
+        .unwrap()
+        .insert(
+            0,
+            serde_json::json!({"from_port": 22, "to_port": 22, "protocol": "tcp", "cidr_blocks": ["0.0.0.0/0"]}),
+        );
+    s.write("w.json", &serde_json::to_string_pretty(&w).unwrap());
+    let r = aws(&s, "plan").success();
+    assert!(
+        r.stdout.contains(
+            "~ aws_security_group.web\n  - ingress[]\n      cidr_blocks[0] was \"0.0.0.0/0\"\n      from_port was 22\n      protocol was \"tcp\"\n      to_port was 22\napply order"
+        ),
+        "{}",
+        r.stdout
+    );
+}
+
 /// A list with merge keys diffs by element too: a new container is one
 /// added element with its leaves.
 #[test]

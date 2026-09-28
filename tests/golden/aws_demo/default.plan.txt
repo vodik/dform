@@ -11,13 +11,13 @@ definite:
   egress[0].protocol = "-1"
   egress[0].to_port = 0
   ingress[0].cidr_blocks[0] = "0.0.0.0/0"
-  ingress[0].from_port = 443
+  ingress[0].from_port = 80
   ingress[0].protocol = "tcp"
-  ingress[0].to_port = 443
+  ingress[0].to_port = 80
   ingress[1].cidr_blocks[0] = "0.0.0.0/0"
-  ingress[1].from_port = 80
+  ingress[1].from_port = 443
   ingress[1].protocol = "tcp"
-  ingress[1].to_port = 80
+  ingress[1].to_port = 443
   name = "web"
   vpc_id = ?aws_vpc/main#id
 + aws_subnet.a
