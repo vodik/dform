@@ -1173,6 +1173,54 @@ tree-sitter test
 (`npm install` there brings the CLI as a dev dependency if `tree-sitter`
 is not on the PATH.)
 
+### Emacs: `dform-ts-mode`
+
+`editors/emacs/dform-ts-mode.el` is a `treesit` major mode for `.df`
+files (Emacs 29.1+; developed against Emacs 30/32): font-lock from
+`highlights.scm` (the reference capture gets `dform-reference-face`,
+underlined by default), indentation from `indents.scm`, and imenu and
+defun navigation for rules (by head predicate), modules, instances,
+resources (by type and name), stacks and policies.
+
+With straight.el, from a local checkout of this repository:
+
+```elisp
+(use-package dform-ts-mode
+  :straight (:local-repo "/path/to/dform" :files ("editors/emacs/*.el")))
+```
+
+With `package-vc`, from a Git remote:
+
+```elisp
+(use-package dform-ts-mode
+  :vc (:url "https://example.com/simon/dform.git" :lisp-dir "editors/emacs"))
+```
+
+Either way, `M-x treesit-install-language-grammar` (language `dform`)
+builds the grammar; a local checkout of this repository is found
+automatically (`dform-ts-mode.el` looks for `tree-sitter-dform/` next
+to `editors/`), a standalone install needs the repository's URL and
+`:source-dir "tree-sitter-dform/src"` in `treesit-language-source-alist`.
+
+The eglot half is configuration only, since the `dform lsp` language
+server does not exist yet: an `eglot-server-programs` entry for `dform
+lsp`, and two commands, `dform-select-environment` and
+`dform-why-at-point`, wired to `eglot-execute-command` (command names
+`dform.selectEnvironment` and `dform.why`). Both will work once a
+`dform lsp` server ships and implements those two commands; until
+then they error with "no active eglot server". No `lsp-mode`
+dependency.
+
+`editors/emacs/test/dform-ts-mode-test.el` holds the `ert` tests
+(font-lock faces and an indentation round trip on the fixtures under
+`editors/emacs/test/fixtures/`), run with:
+
+```bash
+emacs --batch -Q -L editors/emacs -l ert \
+  -l editors/emacs/test/dform-ts-mode-test.el \
+  -f ert-run-tests-batch-and-exit
+```
+
 ## Testing
 
 `cargo test` runs the integration tests under `tests/` (one file per

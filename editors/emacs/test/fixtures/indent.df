@@ -1,0 +1,20 @@
+edition 2026
+
+provider fake {
+  source = "providers/fake"
+}
+
+stack demo {
+  unknowns = "strict"
+}
+
+resource net.vpc "main" {
+  for zone in zones
+  if zone != "excluded"
+  cidr = "10.0.0.0/16"
+}
+
+rule_name(x) if {
+  a = 1,
+  b = 2
+}
