@@ -88,6 +88,21 @@ fn a_create_that_timed_out_is_found_not_created_again() {
     );
 }
 
+/// Found although the program no longer wants it: it is dform's, so it is
+/// deleted, not left behind.
+#[test]
+fn a_timed_out_create_the_program_dropped_is_deleted() {
+    let s = stack("chaos-timeout-dropped");
+    dform(&s, &["apply", "--chaos", "timeout=net.subnet/a"]).failure();
+    s.write(
+        "p.df",
+        "edition 2026\n\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\n",
+    );
+    let r = dform(&s, &["apply"]).success();
+    assert!(r.stdout.contains("- net.subnet.a"), "{}", r.stdout);
+    assert!(world(&s)["resources"].get("net.subnet::a").is_none());
+}
+
 /// Not found (the timed-out call never reached the world), the Create is
 /// sent again with the same idempotency key.
 #[test]
