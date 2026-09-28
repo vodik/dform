@@ -118,6 +118,7 @@ fn main() -> Result<()> {
     let mut extra = build_extra_facts(&cli.set, &cli.data)?;
     extra.extend(backend.catalog()?);
     extra.extend(backend.discover()?);
+    extra.extend(backend.world_facts(&st)?);
     let (res, violations) = engine::eval(&program, &extra)?;
     for w in &res.warnings {
         eprintln!("warning: {w}");
@@ -130,7 +131,7 @@ fn main() -> Result<()> {
         bail!("blocked by constraints");
     }
 
-    let resources = ir::compile_resources(res.facts.iter().cloned())?;
+    let resources = ir::compile_resources(res.facts.iter().cloned(), backend.schema())?;
     let adopts = ir::compile_adopts(res.facts.iter())?;
 
     match cli.cmd {

@@ -6,10 +6,6 @@ plan: 8 to create, 0 to update, 0 to delete
   tags.team = "platform"
 + iam.policy.iam.main::app_policy
   name = "app"
-  statements[0].action = "db.connect"
-  statements[0].resource = ?db.postgres/database.main::db#id
-  statements[1].action = "k8s.describe_cluster"
-  statements[1].resource = ?k8s.cluster/kubernetes.main::cluster#id
   tags.team = "platform"
 + iam.role.iam.main::app_role
   assume.principals[0] = "k8s.serviceaccount.app"
@@ -25,7 +21,6 @@ plan: 8 to create, 0 to update, 0 to delete
   tags.env = "dev"
   tags.team = "platform"
 + net.vpc_peering.peer-main-peer
-  accepter_vpc_id = ?net.vpc/network.peer::vpc#id
   requester_vpc_id = ?net.vpc/network.main::vpc#id
   tags.team = "platform"
 + net.subnet.network.main::private-us-test-1a

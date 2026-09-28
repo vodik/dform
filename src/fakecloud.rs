@@ -217,6 +217,50 @@ impl FakeCloud {
         Ok(())
     }
 
+    /// Refresh as facts, for round-0 resolution (E Rule 4, F DR-11 revised):
+    /// `identity(T, A, Rid)` for every address state maps to a resource Read
+    /// returns, and `world_attr(T, Rid, P, V)` for every schema-computed or
+    /// Optional+Computed path the world holds a value for. Secrets are never
+    /// handed to the evaluator.
+    pub fn world_facts(&self, state: &State) -> Result<Vec<Atom>> {
+        let world = self.refresh()?;
+        let s = |x: &str| Term::Val(Value::Str(x.to_string()));
+        let mut out = Vec::new();
+        for (addr, e) in state.entries_for_provider(self.id()) {
+            let Some(rr) = world.resources.get(&key(&addr.typ, &e.remote)) else {
+                continue;
+            };
+            out.push(Atom {
+                pred: "identity".into(),
+                args: vec![s(&addr.typ), s(&addr.name), s(&e.remote)],
+                record: None,
+            });
+            let paths = self
+                .schema
+                .computed_of(&addr.typ)
+                .into_iter()
+                .chain(self.schema.optional_computed_of(&addr.typ));
+            for (path, class) in paths {
+                if class == NullClass::Secret {
+                    continue;
+                }
+                if let Some(v) = get_path(&rr.computed, &path) {
+                    out.push(Atom {
+                        pred: "world_attr".into(),
+                        args: vec![
+                            s(&addr.typ),
+                            s(&e.remote),
+                            s(&path),
+                            Term::Val(json_to_value(v)),
+                        ],
+                        record: None,
+                    });
+                }
+            }
+        }
+        Ok(out)
+    }
+
     pub fn discover(&self) -> Result<Vec<Atom>> {
         let inv = self.load_inventory()?;
         let mut out = Vec::new();
@@ -243,60 +287,50 @@ impl FakeCloud {
         Ok(out)
     }
 
-    /// The null class of `attr` on `typ`, or `None` for a configured attribute.
-    /// An Optional+Computed attribute is computed only where the program does
-    /// not set it. A type no loaded schema knows keeps the old convention of a
-    /// fresh `id`.
-    fn class_for(&self, typ: &str, attr: &str, configured: bool) -> Option<NullClass> {
-        if let Some(c) = self.schema.class_of(typ, attr) {
-            return Some(c);
-        }
-        if !configured && let Some(c) = self.schema.optional_computed_class(typ, attr) {
-            return Some(c);
-        }
-        (attr == "id" && !self.schema.knows_type(typ)).then_some(NullClass::Fresh)
-    }
-
+    /// `ref(T, N, Attr)` to a configured attribute (a ref to a computed one
+    /// is the evaluator's null): the program's value for N, else the world's.
     fn resolve_ref(&self, ctx: &Ctx, typ: &str, name: &str, attr: &str) -> Result<Json> {
         let addr = Address {
             typ: typ.to_string(),
             name: name.to_string(),
         };
-        let label = format!("{typ}/{name}#{attr}");
+        let label = crate::value::null_label(typ, name, attr);
         let configured = ctx.resolved.get(&addr).and_then(|d| get_path(d, attr));
         let existing = ctx.existing(&addr);
-        let unknown = |why: &str| -> Result<Json> {
-            match ctx.strict {
+        match configured.or_else(|| existing.and_then(|rr| get_path(&rr.attrs, attr))) {
+            Some(v) => Ok(v.clone()),
+            None => match ctx.strict {
                 Some(at) => bail!(
-                    "apply {}/{}: ?{label} is still unknown ({why})",
+                    "apply {}/{}: ?{label} is still unknown ({typ}/{name} does not set {attr})",
                     at.typ,
                     at.name
                 ),
                 None => Ok(provider::null_json(&label)),
-            }
-        };
-        match self.class_for(typ, attr, configured.is_some()) {
-            Some(NullClass::Secret) => {
-                // Never the bytes: the label, which Apply materializes.
-                if ctx.strict.is_some()
-                    && existing
-                        .and_then(|rr| get_path(&rr.computed, attr))
-                        .is_none()
-                {
-                    return unknown(&format!("{typ}/{name} has not been created"));
-                }
-                Ok(provider::secret_json(&label))
-            }
-            Some(_) => match existing.and_then(|rr| get_path(&rr.computed, attr)) {
-                Some(v) => Ok(v.clone()),
-                None => unknown(&format!("{typ}/{name} has not been created")),
             },
-            None => {
-                match configured.or_else(|| existing.and_then(|rr| get_path(&rr.attrs, attr))) {
-                    Some(v) => Ok(v.clone()),
-                    None => unknown(&format!("{typ}/{name} does not set {attr}")),
-                }
-            }
+        }
+    }
+
+    /// A labeled null in a desired document. The executor fills a fresh or
+    /// open one at Apply from its owner's Apply earlier in the dependency
+    /// order (E §2.7); a secret travels as its label and the provider
+    /// materializes it. Plan shows what is still unknown as `?label`.
+    fn resolve_null(&self, ctx: &Ctx, label: &str, class: NullClass) -> Result<Json> {
+        if class == NullClass::Secret {
+            return Ok(provider::secret_json(label));
+        }
+        let found = label.split_once('#').and_then(|(_, path)| {
+            let (typ, name) = crate::value::null_owner(label)?;
+            let rr = ctx.existing(&Address { typ, name })?;
+            get_path(&rr.computed, path).cloned()
+        });
+        match (found, ctx.strict) {
+            (Some(v), _) => Ok(v),
+            (None, Some(at)) => bail!(
+                "apply {}/{}: ?{label} is still unknown (its resource has not been created)",
+                at.typ,
+                at.name
+            ),
+            (None, None) => Ok(provider::null_json(label)),
         }
     }
 
@@ -335,22 +369,15 @@ impl FakeCloud {
             )),
             Value::Ref { typ, name, attr } => self.resolve_ref(ctx, typ, name, attr)?,
             Value::CloudRef { typ, name, attr } => self.resolve_cloud_ref(ctx, typ, name, attr)?,
-            Value::Null { label, class, .. } => match class {
-                NullClass::Secret => provider::secret_json(label),
-                _ if ctx.strict.is_some() => bail!("unresolved null ?{label} reached the provider"),
-                _ => provider::null_json(label),
-            },
+            Value::Null { label, class, .. } => self.resolve_null(ctx, label, *class)?,
         })
     }
 
-    /// The document dform wants for `r`, refs resolved, schema-computed paths
-    /// dropped (the provider owns them; DR-11 revised).
+    /// The document dform wants for `r` (assembled without computed paths,
+    /// `ir::compile_resources`), refs and nulls resolved as far as the world
+    /// allows.
     fn resolve_doc(&self, ctx: &Ctx, r: &Resource) -> Result<Json> {
-        let mut doc = self.resolve_value(ctx, &r.attrs)?;
-        for (attr, _) in self.schema.computed_of(&r.addr.typ) {
-            remove_path(&mut doc, &attr);
-        }
-        Ok(doc)
+        self.resolve_value(ctx, &r.attrs)
     }
 
     /// Every `required` attribute is set. Paths inside a list element are not
@@ -847,6 +874,25 @@ fn fill_doc_refs(tpl: &str, doc: &Json, minted: &Json) -> String {
     out
 }
 
+/// A world value as the evaluator's value.
+pub fn json_to_value(j: &Json) -> Value {
+    match j {
+        Json::Null => Value::Str("null".into()),
+        Json::Bool(b) => Value::Bool(*b),
+        Json::Number(n) => n
+            .as_i64()
+            .map(Value::Int)
+            .unwrap_or(Value::Str(n.to_string())),
+        Json::String(s) => Value::Str(s.clone()),
+        Json::Array(xs) => Value::List(xs.iter().map(json_to_value).collect()),
+        Json::Object(m) => Value::Obj(
+            m.iter()
+                .map(|(k, v)| (k.clone(), json_to_value(v)))
+                .collect(),
+        ),
+    }
+}
+
 /// A schema fact's ground value as JSON.
 fn value_to_json(v: &Value) -> Json {
     match v {
@@ -892,21 +938,6 @@ pub fn set_path(v: &mut Json, path: &str, x: Json) {
             return;
         }
         cur = m.entry(p.to_string()).or_insert_with(|| json!({}));
-    }
-}
-
-fn remove_path(v: &mut Json, path: &str) {
-    match path.split_once('.') {
-        None => {
-            if let Some(m) = v.as_object_mut() {
-                m.remove(path);
-            }
-        }
-        Some((head, rest)) => {
-            if let Some(child) = v.get_mut(head) {
-                remove_path(child, rest);
-            }
-        }
     }
 }
 

@@ -206,8 +206,11 @@ mod tests {
 
     fn desired(extra: &[Atom]) -> Vec<ir::Resource> {
         let program = crate::loader::load_program(&[root().join("dform.df")]).unwrap();
-        let (res, _viol) = crate::engine::eval(&program, extra).unwrap();
-        ir::compile_resources(res.facts.iter().cloned()).unwrap()
+        let schema = crate::schema::fake();
+        let mut extra = extra.to_vec();
+        extra.extend(schema.facts.clone());
+        let (res, _viol) = crate::engine::eval(&program, &extra).unwrap();
+        ir::compile_resources(res.facts.iter().cloned(), &schema).unwrap()
     }
 
     fn fixture() -> (PathBuf, PathBuf) {

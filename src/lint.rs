@@ -186,7 +186,8 @@ mod tests {
         // The specific bug (F13): the VPC itself must be among the derived
         // resources, not just some unrelated want/adopt fact.
         let resources =
-            ir::compile_resources(res.facts.iter().cloned()).expect("compile resources");
+            ir::compile_resources(res.facts.iter().cloned(), &Default::default())
+                .expect("compile resources");
         assert!(
             resources.iter().any(|r| r.addr.typ == "net.vpc"),
             "expected a net.vpc resource to be derived, got: {:?}",

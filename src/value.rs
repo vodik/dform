@@ -53,6 +53,36 @@ pub enum NullClass {
     Secret,
 }
 
+impl NullClass {
+    pub fn name(self) -> &'static str {
+        match self {
+            NullClass::Fresh => "fresh",
+            NullClass::Open => "open",
+            NullClass::Secret => "secret",
+        }
+    }
+    pub fn parse(s: &str) -> Option<NullClass> {
+        Some(match s {
+            "fresh" => NullClass::Fresh,
+            "open" => NullClass::Open,
+            "secret" => NullClass::Secret,
+            _ => return None,
+        })
+    }
+}
+
+/// The Skolem label of the null the prelude mints for `(T, A, P)`.
+pub fn null_label(typ: &str, addr: &str, path: &str) -> String {
+    format!("{typ}/{addr}#{path}")
+}
+
+/// The owner `(T, A)` of a null label `T/A#P`.
+pub fn null_owner(label: &str) -> Option<(String, String)> {
+    let (ta, _) = label.split_once('#')?;
+    let (t, a) = ta.split_once('/')?;
+    Some((t.to_string(), a.to_string()))
+}
+
 impl Value {
     pub fn as_str(&self) -> Option<&str> {
         match self {

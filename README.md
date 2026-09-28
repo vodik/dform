@@ -86,17 +86,22 @@ Kubernetes' `generateName`).
 `computed` + `id` is a fresh value (an identity), `computed` + `sensitive` is a
 secret, `computed` alone is open (proposal E §2.2). `optional_computed` is
 Terraform's Optional+Computed: the program may set it, else Apply picks it.
+Setting a plain `computed` attribute is a compile error naming the resource
+and the path.
 
 The facts are injected into the program, so rules can read them and
 `cargo run -- query type_attr` lists the schema.
 
 ## Computed values come from Apply
 
-Plan never invents a computed value. A `ref(T, N, Attr)` to an attribute the
-schema marks `computed` prints as the labeled null `?T/N#Attr` until `N` exists;
-once it does, plan resolves it from the world at refresh, so a steady-state stack
-shows no nulls. Apply mints ids, endpoints and secrets per the schema and fills
-the nulls in dependency order.
+Plan never invents a computed value. The evaluator mints one labeled null
+`?T/N#Attr` per wanted resource and computed attribute (proposal E §2.5), at
+normal rank for `computed` and at `@default` for `optional_computed`, so a
+program's own value wins. A `ref(T, N, Attr)` to such an attribute reads that
+cell: the null, or the program's value. Once `N` exists, the world's value
+replaces the null before anything is derived (round 0, through the state's
+identity mapping), so a steady-state stack shows no nulls. Apply mints ids,
+endpoints and secrets per the schema and fills the nulls in dependency order.
 
 ```bash
 cargo run -- plan

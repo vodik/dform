@@ -1,6 +1,7 @@
 use crate::ast::{Atom, Constraint, Lit, Program, RuleStmt, Stmt, Term};
 use crate::lattice::{self, Collapsed2, Lattice, Rank, RankedContribution, Shadowed, Witnesses};
 use crate::partition::{self, Node};
+use crate::schema::Schema;
 use crate::transform;
 use crate::value::Value;
 use anyhow::{Context, Result, anyhow, bail};
@@ -35,12 +36,7 @@ pub fn eval(program: &Program, extra_facts: &[Atom]) -> Result<(EvalResult, Vec<
 
     for stmt in &program.statements {
         match stmt {
-            Stmt::Fact(a) => {
-                let g = ensure_ground(a)?;
-                origins.note(&g, partition::fmt_atom(&g));
-                facts.insert(g);
-                fact_atoms.push(a.clone());
-            }
+            Stmt::Fact(a) => fact_atoms.push(a.clone()),
             Stmt::Rule(r) => rules.push(r.clone()),
             Stmt::Constraint(c) => constraints.push(c.clone()),
             _ => {
@@ -63,6 +59,19 @@ pub fn eval(program: &Program, extra_facts: &[Atom]) -> Result<(EvalResult, Vec<
                 partition::fmt_rule(r)
             );
         }
+    }
+
+    // The provider schema arrives as facts (the catalog); the prelude and
+    // the ref rewrite are expanded per schema row (E §2.5, §4.3).
+    let schema = schema_of(&facts, &fact_atoms)?;
+    transform::check_computed_writes(&rules, &fact_atoms, &schema)?;
+    let (mut rules, fact_atoms, constraints) =
+        transform::rewrite_computed_refs(rules, fact_atoms, constraints, &schema);
+    rules.extend(transform::computed_prelude(&schema));
+    for a in &fact_atoms {
+        let g = ensure_ground(a)?;
+        origins.note(&g, partition::fmt_atom(&g));
+        facts.insert(g);
     }
 
     check_defined(&rules, &constraints, &facts, &externs)?;
@@ -178,6 +187,22 @@ pub fn eval(program: &Program, extra_facts: &[Atom]) -> Result<(EvalResult, Vec<
     }
 
     Ok((EvalResult { facts, warnings }, violations))
+}
+
+/// The provider schema among this run's facts: the catalog the provider
+/// injects, plus any schema facts the program itself states.
+fn schema_of(facts: &BTreeSet<Atom>, program_facts: &[Atom]) -> Result<Schema> {
+    let is_schema =
+        |a: &&Atom| matches!(a.pred.as_str(), "type_attr" | "type_provider" | "type_mint");
+    let rows: Vec<Atom> = facts
+        .iter()
+        .filter(is_schema)
+        .cloned()
+        .chain(program_facts.iter().filter(is_schema).cloned())
+        .collect::<BTreeSet<Atom>>()
+        .into_iter()
+        .collect();
+    Schema::from_facts(&rows)
 }
 
 /// E §2.6: a body predicate with no definition is a compile error. Defined
@@ -1681,6 +1706,42 @@ fn eval_func(name: &str, args: &[Term], state: &HashMap<String, Value>) -> Optio
                 attr: a,
             })
         }
+        // The prelude's null for (T, A, P) (E §2.5): class and type come
+        // from the schema row the rule was expanded from.
+        "__null" if args.len() == 5 => {
+            let t = eval_term(&args[0], state)?;
+            let a = eval_term(&args[1], state)?;
+            let p = eval_term(&args[2], state)?;
+            let class = crate::value::NullClass::parse(eval_term(&args[3], state)?.as_str()?)?;
+            let ty = eval_term(&args[4], state)?.as_str()?.to_string();
+            Some(Value::Null {
+                label: crate::value::null_label(t.as_str()?, &value_to_string(&a), p.as_str()?),
+                class,
+                ty,
+            })
+        }
+        "__label" if args.len() == 3 => {
+            let t = eval_term(&args[0], state)?;
+            let a = eval_term(&args[1], state)?;
+            let p = eval_term(&args[2], state)?;
+            Some(Value::Str(crate::value::null_label(
+                t.as_str()?,
+                &value_to_string(&a),
+                p.as_str()?,
+            )))
+        }
+        // `ref(T, A, "a.b")` after the rewrite: walk the rest of the path
+        // inside the top-level attribute's value.
+        "__path" if args.len() == 2 => {
+            let mut v = eval_term(&args[0], state)?;
+            for seg in eval_term(&args[1], state)?.as_str()?.split('.') {
+                let Value::Obj(mut m) = v else {
+                    return None;
+                };
+                v = m.remove(seg)?;
+            }
+            Some(v)
+        }
         "cloud_ref" => {
             if args.len() != 3 {
                 return None;
@@ -2197,18 +2258,19 @@ mod tests {
                 .into_iter()
                 .collect();
             let (r, violations) = eval(&program, &extra).unwrap();
-            let docs: Vec<String> = crate::ir::compile_resources(r.facts.iter().cloned())
-                .unwrap()
-                .iter()
-                .map(|r| {
-                    format!(
-                        "{} {} {}",
-                        r.addr.typ,
-                        r.addr.name,
-                        partition::fmt_value(&r.attrs)
-                    )
-                })
-                .collect();
+            let docs: Vec<String> =
+                crate::ir::compile_resources(r.facts.iter().cloned(), &Schema::default())
+                    .unwrap()
+                    .iter()
+                    .map(|r| {
+                        format!(
+                            "{} {} {}",
+                            r.addr.typ,
+                            r.addr.name,
+                            partition::fmt_value(&r.attrs)
+                        )
+                    })
+                    .collect();
             (docs, violations, r.warnings)
         };
         for env in [None, Some("staging"), Some("prod"), Some("dev")] {
@@ -2370,6 +2432,196 @@ mod tests {
         assert_eq!(
             facts_of(&r, "attr"),
             vec!["attr(\"net.peering\", \"legacy\", \"env\", \"prod\")".to_string()]
+        );
+    }
+
+    fn run_with(src: &str, extra: &[Atom]) -> Result<(EvalResult, Vec<String>)> {
+        let program = crate::parser::parse_program(src)?;
+        eval(&program, extra)
+    }
+
+    fn schema_facts(src: &str) -> Vec<Atom> {
+        crate::schema::Schema::parse(src, "test").unwrap().facts
+    }
+
+    /// E §2.5 / F14: one null per (want, computed path), at rank normal for
+    /// `computed` and `@default` for `optional_computed`; a program's value
+    /// for an Optional+Computed path wins, and a ref reads the collapsed cell.
+    #[test]
+    fn optional_computed_mints_a_default_null() {
+        let schema = schema_facts(
+            "type_provider(vm, mock).
+             type_attr(vm, id, string, [computed, id]).
+             type_attr(vm, zone, string, [optional_computed]).",
+        );
+        let (r, violations) = run_with(
+            "resource vm a { size = 1 }.
+             resource vm b { zone = \"z1\" }.
+             resource vm c { peer_zone = ref(vm, a, zone), other_zone = ref(vm, b, zone), a_id = ref(vm, a, id) }.",
+            &schema,
+        )
+        .unwrap();
+        assert!(violations.is_empty(), "{violations:?}");
+        let attrs = facts_of(&r, "attr");
+        for want in [
+            "attr(\"vm\", \"a\", \"zone\", ?vm/a#zone:Open)",
+            "attr(\"vm\", \"a\", \"id\", ?vm/a#id:Fresh)",
+            "attr(\"vm\", \"b\", \"zone\", \"z1\")",
+            "attr(\"vm\", \"c\", \"peer_zone\", ?vm/a#zone:Open)",
+            "attr(\"vm\", \"c\", \"other_zone\", \"z1\")",
+            "attr(\"vm\", \"c\", \"a_id\", ?vm/a#id:Fresh)",
+        ] {
+            assert!(
+                attrs.contains(&want.to_string()),
+                "{want} not in {attrs:#?}"
+            );
+        }
+        // The user's value beat the @default null without a conflict or a
+        // shadowed warning (the null is alone on its shelf).
+        assert!(r.warnings.is_empty(), "{:?}", r.warnings);
+        let docs = crate::ir::compile_resources(
+            r.facts.iter().cloned(),
+            &crate::schema::Schema::from_facts(&schema).unwrap(),
+        )
+        .unwrap();
+        // assemble drops computed paths and a zone the provider will pick.
+        let doc = |n: &str| {
+            let d = docs.iter().find(|d| d.addr.name == n).unwrap();
+            partition::fmt_value(&d.attrs)
+        };
+        assert_eq!(doc("a"), "{size: 1}");
+        assert_eq!(doc("b"), "{zone: \"z1\"}");
+    }
+
+    /// The mock Kubernetes schema: `metadata.name` is Optional+Computed, so
+    /// a Deployment without a name carries `?k8s.deployment/api#metadata.name`
+    /// and a Service that names one reads it.
+    #[test]
+    fn k8s_metadata_name_is_a_default_null_until_set() {
+        let schema = crate::schema::load_provider("k8s").unwrap().facts;
+        let (r, _) = run_with(
+            "resource k8s.deployment api { metadata.namespace = \"shop\" }.
+             resource k8s.deployment web { metadata.name = \"web\" }.
+             resource k8s.service api { spec.selector.app = ref(k8s.deployment, api, \"metadata.name\"),
+                                        spec.selector.web = ref(k8s.deployment, web, \"metadata.name\") }.",
+            &schema,
+        )
+        .unwrap();
+        let attrs = facts_of(&r, "attr");
+        let get = |addr: &str, path: &str| {
+            attrs
+                .iter()
+                .find(|a| {
+                    a.starts_with(&format!(
+                        "attr(\"{}\", \"{}\", \"{path}\"",
+                        addr.split(' ').next().unwrap(),
+                        addr.split(' ').nth(1).unwrap()
+                    ))
+                })
+                .cloned()
+                .unwrap_or_default()
+        };
+        assert!(
+            get("k8s.deployment api", "metadata")
+                .contains("name: ?k8s.deployment/api#metadata.name:Fresh")
+        );
+        assert!(get("k8s.deployment web", "metadata").contains("name: \"web\""));
+        let svc = get("k8s.service api", "spec");
+        assert!(
+            svc.contains("app: ?k8s.deployment/api#metadata.name:Fresh"),
+            "{svc}"
+        );
+        assert!(svc.contains("web: \"web\""), "{svc}");
+    }
+
+    /// aws-mock's Optional+Computed attributes, the Terraform shape.
+    #[test]
+    fn aws_optional_computed_is_the_programs_when_set() {
+        let schema = crate::schema::load_provider("aws-mock").unwrap().facts;
+        let (r, violations) = run_with(
+            "resource aws_vpc main { cidr_block = \"10.0.0.0/16\" }.
+             resource aws_security_group web { vpc_id = ref(aws_vpc, main, id) }.",
+            &schema,
+        )
+        .unwrap();
+        assert!(violations.is_empty(), "{violations:?}");
+        let attrs = facts_of(&r, "attr");
+        assert!(
+            attrs.contains(
+                &"attr(\"aws_vpc\", \"main\", \"cidr_block\", \"10.0.0.0/16\")".to_string()
+            ),
+            "{attrs:#?}"
+        );
+        assert!(attrs.contains(&"attr(\"aws_security_group\", \"web\", \"name\", ?aws_security_group/web#name:Open)".to_string()), "{attrs:#?}");
+        assert!(
+            attrs.contains(
+                &"attr(\"aws_security_group\", \"web\", \"vpc_id\", ?aws_vpc/main#id:Fresh)"
+                    .to_string()
+            ),
+            "{attrs:#?}"
+        );
+    }
+
+    /// A plain `computed` path is the provider's: writing it is a compile
+    /// error naming the resource and the path.
+    #[test]
+    fn writing_a_computed_path_is_an_error() {
+        let schema = schema_facts(
+            "type_provider(vm, mock).
+             type_attr(vm, id, string, [computed, id]).
+             type_attr(vm, meta.uid, string, [computed, id]).",
+        );
+        let err = run_with("resource vm a { id = \"x\" }.", &schema)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("resource vm \"a\": attribute id is computed"),
+            "{err}"
+        );
+        let err = run_with("resource vm a { meta.uid = \"x\" }.", &schema)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("attribute meta.uid is computed"), "{err}");
+    }
+
+    /// Round 0 (E Rule 4): a resource the world has resolves its computed
+    /// attributes through the identity mapping; a secret never does.
+    #[test]
+    fn round_zero_resolves_through_identity() {
+        let mut extra = schema_facts(
+            "type_provider(vm, mock).
+             type_attr(vm, id, string, [computed, id]).
+             type_attr(vm, pw, string, [computed, sensitive]).",
+        );
+        let s = |x: &str| Term::Val(Value::Str(x.into()));
+        extra.push(Atom {
+            pred: "identity".into(),
+            args: vec![s("vm"), s("a"), s("remote-a")],
+            record: None,
+        });
+        extra.push(Atom {
+            pred: "world_attr".into(),
+            args: vec![s("vm"), s("remote-a"), s("id"), s("vm-123")],
+            record: None,
+        });
+        let (r, _) = run_with(
+            "resource vm a { size = 1 }.
+             resource vm b { peer = ref(vm, a, id), secret = ref(vm, a, pw) }.",
+            &extra,
+        )
+        .unwrap();
+        let attrs = facts_of(&r, "attr");
+        assert!(
+            attrs.contains(&"attr(\"vm\", \"b\", \"peer\", \"vm-123\")".to_string()),
+            "{attrs:#?}"
+        );
+        assert!(
+            attrs.contains(&"attr(\"vm\", \"b\", \"secret\", ?vm/a#pw:Secret)".to_string()),
+            "{attrs:#?}"
+        );
+        assert!(
+            attrs.contains(&"attr(\"vm\", \"b\", \"id\", ?vm/b#id:Fresh)".to_string()),
+            "{attrs:#?}"
         );
     }
 }

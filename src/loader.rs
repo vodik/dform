@@ -204,6 +204,7 @@ pub const PROVIDER_PREDS: &[&str] = &[
     "cloud_attr",
     "cloud_computed",
     "world_attr",
+    "identity",
     "type_attr",
     "type_list_key",
     "type_provider",
@@ -213,6 +214,14 @@ pub const PROVIDER_PREDS: &[&str] = &[
 
 pub fn is_provider_pred(pred: &str) -> bool {
     PROVIDER_PREDS.contains(&pred)
+}
+
+/// Predicates the evaluator itself derives (the prelude and Rule 2): the
+/// round-0 resolution and the stuck instances.
+pub const ENGINE_PREDS: &[&str] = &["resolve", "resolved", "stuck", "__ref_dep"];
+
+pub fn is_engine_pred(pred: &str) -> bool {
+    ENGINE_PREDS.contains(&pred)
 }
 
 /// Compiler-owned predicates: never namespaced by `import ... as`, and
@@ -244,7 +253,10 @@ pub fn is_core_pred(pred: &str) -> bool {
             | "attr_conflict"
             | "attr_stuck"
             | "type_lattice"
-    ) || is_provider_pred(pred)
+            | "type_mint"
+            | "ignore_changes"
+    ) || is_engine_pred(pred)
+        || is_provider_pred(pred)
 }
 
 fn absolutize(path: impl AsRef<Path>) -> Result<PathBuf> {

@@ -1,7 +1,8 @@
 use crate::ast::{
     Atom, Constraint, Extern, Lit, Program, Rank, Resource, RuleStmt, Settings, Stmt, Term, When,
 };
-use crate::value::Value;
+use crate::schema::Schema;
+use crate::value::{NullClass, Value};
 use anyhow::{Result, bail};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -1232,5 +1233,373 @@ fn is_ground_term(t: &Term) -> bool {
         Term::List(xs) => xs.iter().all(is_ground_term),
         Term::Obj(m) => m.values().all(is_ground_term),
         Term::ListComp { .. } => false,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Computed attributes (E §2.5, F14): the prelude that mints one null per
+// (want(T, A), computed P), and `ref` to a computed path as an attr read.
+// These run after lowering, against the provider schema.
+// ---------------------------------------------------------------------------
+
+fn var(s: &str) -> Term {
+    Term::Var(s.to_string())
+}
+
+fn atom(pred: &str, args: Vec<Term>) -> Atom {
+    Atom {
+        pred: pred.into(),
+        args,
+        record: None,
+    }
+}
+
+/// The schema paths the prelude mints a null for: every `computed` and every
+/// `optional_computed` path outside a list element, with its class and the
+/// rank the null contributes at (`@default` for Optional+Computed, so a
+/// program's value wins).
+pub fn minted_paths(schema: &Schema) -> Vec<(String, String, NullClass, &'static str)> {
+    let mut out = Vec::new();
+    for ((t, p), c) in &schema.computed {
+        if !schema.in_list(t, p) {
+            out.push((t.clone(), p.clone(), *c, NORMAL));
+        }
+    }
+    for ((t, p), c) in &schema.optional_computed {
+        if !schema.in_list(t, p) {
+            out.push((t.clone(), p.clone(), *c, "default"));
+        }
+    }
+    out
+}
+
+/// The compiler-generated prelude, expanded per schema row (E §2.5, §4.3):
+///
+/// ```text
+/// resolve(__label(T, A, P), V) :- identity(T, A, Rid), world_attr(T, Rid, P, V).
+/// resolved(L) :- resolve(L, _).
+/// % per computed (T, P), at rank normal (computed) or default (optional_computed):
+/// arg(T, A, P, V, Rank)    :- want(T, A), resolve(__label(T, A, P), V).       % round 0 (not secret)
+/// arg(T, A, P, ?T/A#P, Rank) :- want(T, A), not resolved(__label(T, A, P)).
+/// ```
+///
+/// A secret is never resolved in the store (E Rule 4): its null stays.
+pub fn computed_prelude(schema: &Schema) -> Vec<RuleStmt> {
+    let rows = minted_paths(schema);
+    if rows.is_empty() {
+        return vec![];
+    }
+    let label = |t: &Term, p: &Term| Term::Func {
+        name: "__label".into(),
+        args: vec![t.clone(), var("__A"), p.clone()],
+    };
+    let mut out = vec![
+        RuleStmt {
+            head: atom(
+                "resolve",
+                vec![
+                    Term::Func {
+                        name: "__label".into(),
+                        args: vec![var("__T"), var("__A"), var("__P")],
+                    },
+                    var("__V"),
+                ],
+            ),
+            body: vec![
+                Lit::Pos(atom("identity", vec![var("__T"), var("__A"), var("__Rid")])),
+                Lit::Pos(atom(
+                    "world_attr",
+                    vec![var("__T"), var("__Rid"), var("__P"), var("__V")],
+                )),
+            ],
+        },
+        RuleStmt {
+            head: atom("resolved", vec![var("__L")]),
+            body: vec![Lit::Pos(atom("resolve", vec![var("__L"), Term::Wildcard]))],
+        },
+    ];
+    for (t, p, class, rank) in rows {
+        let (tt, pt) = (str_term(&t), str_term(&p));
+        let want = Lit::Pos(atom("want", vec![tt.clone(), var("__A")]));
+        let contribution = |value: Term| {
+            let (path, value) = normalize_contribution(&t, &p, value);
+            atom(
+                "arg",
+                vec![
+                    tt.clone(),
+                    var("__A"),
+                    str_term(&path),
+                    value,
+                    str_term(rank),
+                ],
+            )
+        };
+        if class != NullClass::Secret {
+            out.push(RuleStmt {
+                head: contribution(var("__V")),
+                body: vec![
+                    want.clone(),
+                    Lit::Pos(atom("resolve", vec![label(&tt, &pt), var("__V")])),
+                ],
+            });
+        }
+        let ty = schema
+            .attr(&t, &p)
+            .map(|a| a.ty.clone())
+            .unwrap_or_default();
+        let null = Term::Func {
+            name: "__null".into(),
+            args: vec![
+                tt.clone(),
+                var("__A"),
+                pt.clone(),
+                str_term(class.name()),
+                str_term(&ty),
+            ],
+        };
+        let mut body = vec![want];
+        if class != NullClass::Secret {
+            body.push(Lit::Not(atom("resolved", vec![label(&tt, &pt)])));
+        }
+        out.push(RuleStmt {
+            head: contribution(null),
+            body,
+        });
+    }
+    out
+}
+
+/// A contribution to a plain `computed` path is a compile error: the provider
+/// owns it (E §2.5). Optional+Computed paths may be set.
+pub fn check_computed_writes(rules: &[RuleStmt], facts: &[Atom], schema: &Schema) -> Result<()> {
+    let heads = rules
+        .iter()
+        .map(|r| (&r.head, crate::partition::fmt_rule(r)))
+        .chain(facts.iter().map(|a| (a, crate::partition::fmt_atom(a))));
+    let mut errors = Vec::new();
+    for (h, text) in heads {
+        if h.pred != "arg" || h.args.len() != 5 {
+            continue;
+        }
+        let (Term::Val(Value::Str(t)), Term::Val(Value::Str(p))) = (&h.args[0], &h.args[2]) else {
+            continue;
+        };
+        let mut paths = vec![p.clone()];
+        leaf_paths(&h.args[3], p, &mut paths);
+        for path in paths {
+            if schema.class_of(t, &path).is_some() {
+                let addr = match &h.args[1] {
+                    Term::Val(v) => crate::partition::fmt_value(v),
+                    other => crate::partition::fmt_term(other),
+                };
+                errors.push(format!(
+                    "resource {t} {addr}: attribute {path} is computed by the provider and cannot be set: {text}"
+                ));
+            }
+        }
+    }
+    if !errors.is_empty() {
+        bail!("{}", errors.join("\n"));
+    }
+    Ok(())
+}
+
+/// Every path under `prefix` a literal object term sets, inner nodes included.
+fn leaf_paths(t: &Term, prefix: &str, out: &mut Vec<String>) {
+    let entries: Vec<(&String, Option<&Term>)> = match t {
+        Term::Obj(m) => m.iter().map(|(k, v)| (k, Some(v))).collect(),
+        Term::Val(Value::Obj(m)) => m.keys().map(|k| (k, None)).collect(),
+        _ => return,
+    };
+    for (k, v) in entries {
+        let p = format!("{prefix}.{k}");
+        if let Some(v) = v {
+            leaf_paths(v, &p, out);
+        } else if let Term::Val(Value::Obj(m)) = t {
+            leaf_paths(&Term::Val(m[k].clone()), &p, out);
+        }
+        out.push(p);
+    }
+}
+
+/// `__ref_dep(T, A, T2, A2)`: a contribution to `(T, A)` holds a ref to
+/// `(T2, A2)`, so `(T2, A2)` is applied first.
+pub const REF_DEP: &str = "__ref_dep";
+
+/// `ref(T, A, P)` with a constant `T` and a computed or Optional+Computed
+/// `P` reads the attribute aggregate (E DR-2): the term becomes a variable
+/// bound by `attr(T, A, P0, V)` (`P0` the path's top-level attribute, the
+/// rest walked with `__path`), so it is the minted null, the round-0 value,
+/// or the program's value. A type with no provider is a data source with no
+/// `want`: its ref is the null itself. Facts that hold such a ref become
+/// rules.
+pub fn rewrite_computed_refs(
+    rules: Vec<RuleStmt>,
+    facts: Vec<Atom>,
+    constraints: Vec<Constraint>,
+    schema: &Schema,
+) -> (Vec<RuleStmt>, Vec<Atom>, Vec<Constraint>) {
+    let mut n = 0usize;
+    let mut out_rules = Vec::new();
+    let mut out_facts = Vec::new();
+    let rules = facts
+        .into_iter()
+        .map(|f| RuleStmt {
+            head: f,
+            body: vec![],
+        })
+        .chain(rules);
+    for r in rules {
+        let mut head_reads = Vec::new();
+        let head = rewrite_atom_refs(&r.head, schema, &mut n, &mut head_reads);
+        if r.body.is_empty() && head_reads.is_empty() {
+            out_facts.push(head);
+            continue;
+        }
+        let mut body = rewrite_body_refs(r.body, schema, &mut n);
+        body.extend(head_reads.iter().cloned().map(Lit::Pos));
+        // The value is read now, but the order of Apply still follows the
+        // ref: a contribution that reads another resource's attribute
+        // depends on it (`ir::compile_resources` reads `__ref_dep`).
+        if head.pred == "arg" && head.args.len() == 5 {
+            for read in &head_reads {
+                out_rules.push(RuleStmt {
+                    head: atom(
+                        REF_DEP,
+                        vec![
+                            head.args[0].clone(),
+                            head.args[1].clone(),
+                            read.args[0].clone(),
+                            read.args[1].clone(),
+                        ],
+                    ),
+                    body: body.clone(),
+                });
+            }
+        }
+        out_rules.push(RuleStmt { head, body });
+    }
+    let constraints = constraints
+        .into_iter()
+        .map(|c| Constraint {
+            message: c.message,
+            body: rewrite_body_refs(c.body, schema, &mut n),
+        })
+        .collect();
+    (out_rules, out_facts, constraints)
+}
+
+fn rewrite_body_refs(body: Vec<Lit>, schema: &Schema, n: &mut usize) -> Vec<Lit> {
+    let mut out = Vec::new();
+    for l in body {
+        let mut reads = Vec::new();
+        let mut t = |x: &Term| rewrite_term_refs(x, schema, n, &mut reads);
+        let l = match &l {
+            Lit::Pos(a) => Lit::Pos(Atom {
+                pred: a.pred.clone(),
+                args: a.args.iter().map(&mut t).collect(),
+                record: None,
+            }),
+            Lit::Not(a) => Lit::Not(Atom {
+                pred: a.pred.clone(),
+                args: a.args.iter().map(&mut t).collect(),
+                record: None,
+            }),
+            Lit::Eq(a, b) => Lit::Eq(t(a), t(b)),
+            Lit::Neq(a, b) => Lit::Neq(t(a), t(b)),
+            Lit::Gt(a, b) => Lit::Gt(t(a), t(b)),
+            Lit::Ge(a, b) => Lit::Ge(t(a), t(b)),
+            Lit::Lt(a, b) => Lit::Lt(t(a), t(b)),
+            Lit::Le(a, b) => Lit::Le(t(a), t(b)),
+        };
+        out.extend(reads.into_iter().map(Lit::Pos));
+        out.push(l);
+    }
+    out
+}
+
+fn rewrite_atom_refs(a: &Atom, schema: &Schema, n: &mut usize, reads: &mut Vec<Atom>) -> Atom {
+    Atom {
+        pred: a.pred.clone(),
+        args: a
+            .args
+            .iter()
+            .map(|t| rewrite_term_refs(t, schema, n, reads))
+            .collect(),
+        record: a.record.clone(),
+    }
+}
+
+fn rewrite_term_refs(t: &Term, schema: &Schema, n: &mut usize, reads: &mut Vec<Atom>) -> Term {
+    match t {
+        Term::Func { name, args } if name == "ref" && args.len() == 3 => {
+            if let (Term::Val(Value::Str(typ)), Term::Val(Value::Str(path))) = (&args[0], &args[2])
+            {
+                let class = schema
+                    .class_of(typ, path)
+                    .or_else(|| schema.optional_computed_class(typ, path));
+                if let Some(class) = class {
+                    let addr = rewrite_term_refs(&args[1], schema, n, reads);
+                    if !schema.provider_of.contains_key(typ) {
+                        let ty = schema
+                            .attr(typ, path)
+                            .map(|a| a.ty.clone())
+                            .unwrap_or_default();
+                        return Term::Func {
+                            name: "__null".into(),
+                            args: vec![
+                                args[0].clone(),
+                                addr,
+                                args[2].clone(),
+                                str_term(class.name()),
+                                str_term(&ty),
+                            ],
+                        };
+                    }
+                    *n += 1;
+                    let v = var(&format!("__ref{n}"));
+                    let (top, rest) = match path.split_once('.') {
+                        Some((top, rest)) => (top, Some(rest)),
+                        None => (path.as_str(), None),
+                    };
+                    reads.push(atom(
+                        "attr",
+                        vec![args[0].clone(), addr, str_term(top), v.clone()],
+                    ));
+                    return match rest {
+                        None => v,
+                        Some(rest) => Term::Func {
+                            name: "__path".into(),
+                            args: vec![v, str_term(rest)],
+                        },
+                    };
+                }
+            }
+            Term::Func {
+                name: name.clone(),
+                args: args
+                    .iter()
+                    .map(|x| rewrite_term_refs(x, schema, n, reads))
+                    .collect(),
+            }
+        }
+        Term::Func { name, args } => Term::Func {
+            name: name.clone(),
+            args: args
+                .iter()
+                .map(|x| rewrite_term_refs(x, schema, n, reads))
+                .collect(),
+        },
+        Term::List(xs) => Term::List(
+            xs.iter()
+                .map(|x| rewrite_term_refs(x, schema, n, reads))
+                .collect(),
+        ),
+        Term::Obj(m) => Term::Obj(
+            m.iter()
+                .map(|(k, x)| (k.clone(), rewrite_term_refs(x, schema, n, reads)))
+                .collect(),
+        ),
+        other => other.clone(),
     }
 }
