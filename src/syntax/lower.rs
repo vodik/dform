@@ -495,6 +495,7 @@ impl Lowerer {
                 flags,
                 refinement,
                 children,
+                span: self.span(&a),
             });
         }
         Ok(out)

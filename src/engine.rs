@@ -138,11 +138,20 @@ fn given_leaf(a: &Atom, externs: &BTreeSet<crate::ast::Extern>, tick: Option<usi
 }
 
 /// Predicates the attribute aggregate derives; no rule may.
-const AGGREGATE_OUTPUTS: [&str; 3] = ["attr", "attr_conflict", "attr_stuck"];
+const AGGREGATE_OUTPUTS: [&str; 4] = [
+    "attr",
+    "attr_conflict",
+    "attr_stuck",
+    crate::refine::DEFERRED,
+];
 
 /// Schema facts that choose a path's lattice. They are read by the
 /// aggregate, not by rules, so they must be facts.
 const LATTICE_DECLS: [&str; 2] = ["type_lattice", "type_list_key"];
+
+/// Refinements the aggregate joins into its cells (`crate::refine`): read
+/// by the aggregate, not by rules, so they must be facts too.
+const REFINE_DECLS: [&str; 2] = [crate::refine::TYPE_REFINE, crate::refine::ATTR_REFINE];
 
 pub fn eval(program: &Program, extra_facts: &[Atom]) -> Result<(EvalResult, Vec<String>)> {
     eval_at(program, extra_facts, None)
@@ -297,7 +306,10 @@ fn start(
                 at_suffix(r.head.span)
             );
         }
-        if LATTICE_DECLS.contains(&r.head.pred.as_str()) || r.head.pred == stuck::ALLOW_STUCK {
+        if LATTICE_DECLS.contains(&r.head.pred.as_str())
+            || REFINE_DECLS.contains(&r.head.pred.as_str())
+            || r.head.pred == stuck::ALLOW_STUCK
+        {
             bail!(
                 "{} must be a fact, not a rule: {}{}",
                 r.head.pred,
@@ -1056,6 +1068,9 @@ struct AttrAggregate {
     /// `arg/5` tuples below this id are grouped.
     grouped: TupleId,
     lattices: Option<BTreeMap<(String, String), Lattice>>,
+    /// The checkable refinements the engine checks: every `type_refine` and
+    /// `attr_refine` fact but those on a `sensitive` path (the provider's).
+    refinements: Option<Vec<(TupleId, crate::refine::Stated)>>,
     pending: HashMap<GroupKey, Vec<Contribution>>,
     /// The pending groups by the stratum they are complete at.
     waiting: BTreeMap<usize, BTreeSet<GroupKey>>,
@@ -1076,6 +1091,7 @@ impl AttrAggregate {
             ready: HashMap::new(),
             grouped: 0,
             lattices: None,
+            refinements: None,
             pending: HashMap::new(),
             waiting: BTreeMap::new(),
             emitted: BTreeSet::new(),
@@ -1150,6 +1166,9 @@ impl AttrAggregate {
         if self.lattices.is_none() {
             self.lattices = Some(declared_lattices(prov.store.atoms())?);
         }
+        if self.refinements.is_none() {
+            self.refinements = Some(declared_refinements(&prov.store)?);
+        }
         self.group_new(&prov.store)?;
         // The groups complete at this stratum, in group order.
         let later = match stratum.checked_add(1) {
@@ -1197,7 +1216,13 @@ impl AttrAggregate {
                     .and_then(|l| l.get(&(typ.clone(), path.clone())))
                     .cloned()
                     .unwrap_or_else(|| infer_lattice(&contribs));
-                let cell = collapse_group(&key, &contribs, &lat, origins, &prov.store);
+                let refs: Vec<&(TupleId, crate::refine::Stated)> = self
+                    .refinements
+                    .iter()
+                    .flatten()
+                    .filter(|(_, r)| r.applies(typ, addr, path))
+                    .collect();
+                let cell = collapse_group(&key, &contribs, &refs, &lat, origins, &prov.store);
                 for a in &cell {
                     if a.pred == "attr_stuck"
                         && let Some(Term::Val(Value::List(ls))) = a.args.get(3)
@@ -1209,9 +1234,11 @@ impl AttrAggregate {
                         ));
                     }
                 }
-                // Σ over the group: every contribution that reached it.
+                // Σ over the group: every contribution that reached it,
+                // and every refinement joined into it.
                 let children: Vec<NodeId> = std::iter::once(sigma)
                     .chain(contribs.iter().map(|(t, _, _)| prov.id(*t)))
+                    .chain(refs.iter().map(|(t, _)| prov.id(*t)))
                     .collect();
                 for a in cell {
                     out.push((a, children.clone()));
@@ -1332,6 +1359,41 @@ fn declared_lattices(facts: &[Atom]) -> Result<BTreeMap<(String, String), Lattic
     Ok(out)
 }
 
+/// `type_refine/3` and `attr_refine/4` facts, but those on a path a
+/// `type_attr` fact marks `sensitive` (or below one): the engine never
+/// checks a secret; the provider does, from an Apply assertion (F DR-13
+/// revised).
+fn declared_refinements(store: &Store) -> Result<Vec<(TupleId, crate::refine::Stated)>> {
+    let mut sensitive: BTreeSet<(&str, &str)> = BTreeSet::new();
+    for a in store.atoms().iter().filter(|a| a.pred == "type_attr") {
+        if let [
+            Term::Val(Value::Str(t)),
+            Term::Val(Value::Str(p)),
+            _,
+            Term::Val(Value::List(flags)),
+        ] = a.args.as_slice()
+            && flags.iter().any(|f| f.as_str() == Some("sensitive"))
+        {
+            sensitive.insert((t, p));
+        }
+    }
+    let is_sensitive = |t: &str, p: &str| {
+        std::iter::successors(Some(p), |p| p.rsplit_once('.').map(|x| x.0))
+            .any(|p| sensitive.contains(&(t, p)))
+    };
+    let mut out = Vec::new();
+    for (t, a) in store.atoms().iter().enumerate() {
+        let Some(r) = crate::refine::Stated::of(a) else {
+            continue;
+        };
+        let r = r.map_err(|e| anyhow!("{}: {e}", partition::fmt_atom(a)))?;
+        if !is_sensitive(&r.typ, &r.path) {
+            out.push((t as TupleId, r));
+        }
+    }
+    Ok(out)
+}
+
 /// With no declaration, a path whose contributions are all objects is a
 /// Map with Flat leaves; anything else is Flat (a list is one value, and
 /// two authors of different lists conflict, E DR-1).
@@ -1357,6 +1419,7 @@ fn obj(kv: Vec<(&str, Value)>) -> Value {
 fn collapse_group(
     key: &GroupKey,
     contribs: &[Contribution],
+    refs: &[&(TupleId, crate::refine::Stated)],
     lat: &Lattice,
     origins: &Origins,
     store: &Store,
@@ -1367,6 +1430,17 @@ fn collapse_group(
         .enumerate()
         .map(|(i, (_, r, v))| (i as u32, *r, v.clone()))
         .collect();
+    // A refinement's witness follows the contributions'.
+    let refinements: Vec<lattice::Refinement> = refs
+        .iter()
+        .enumerate()
+        .map(|(i, (_, r))| lattice::Refinement {
+            path: r.path.clone(),
+            constraint: r.constraint.clone(),
+            witness: (contribs.len() + i) as u32,
+        })
+        .collect();
+    let refinement_of = |w: u32| refs.get((w as usize).checked_sub(contribs.len())?);
     let head = |pred: &str, rest: Vec<Value>| Atom {
         pred: pred.into(),
         args: [str_val(typ), Term::Val(addr.clone()), str_val(path)]
@@ -1377,6 +1451,17 @@ fn collapse_group(
         span: Default::default(),
     };
     let witness = |w: u32| {
+        if let Some((t, r)) = refinement_of(w) {
+            let a = store.get(*t);
+            return obj(vec![
+                ("rank", Value::Str("refinement".into())),
+                ("value", Value::Str(r.constraint.to_string())),
+                (
+                    "from",
+                    Value::List(vec![Value::Str(with_place(partition::fmt_atom(a), a.span))]),
+                ),
+            ]);
+        }
         let (t, r, v) = &contribs[w as usize];
         obj(vec![
             ("rank", Value::Str(rank_name(*r).into())),
@@ -1410,12 +1495,77 @@ fn collapse_group(
         span: Default::default(),
     };
     let mut out = Vec::new();
-    let shadowed = match lattice::lub_ranked(lat, path, &cells) {
+    let shadowed = match lattice::lub_ranked_refined(lat, path, &cells, &refinements) {
         Collapsed2::Bottom => vec![],
         Collapsed2::Val {
-            value, shadowed, ..
+            value,
+            shadowed,
+            deferred,
+            ..
         } => {
             out.push(head("attr", vec![value]));
+            for d in deferred {
+                let nulls = lattice::nulls_in(&d.value);
+                out.push(Atom {
+                    pred: crate::refine::DEFERRED.into(),
+                    args: [
+                        Value::Str(typ.clone()),
+                        addr.clone(),
+                        Value::Str(d.path),
+                        Value::Str(d.constraint.to_string()),
+                        Value::List(nulls.into_iter().map(Value::Str).collect()),
+                    ]
+                    .into_iter()
+                    .map(Term::Val)
+                    .collect(),
+                    record: None,
+                    span: Default::default(),
+                });
+            }
+            shadowed
+        }
+        Collapsed2::Violated {
+            path: at,
+            constraint,
+            value,
+            witnesses: ws,
+            refinement,
+            shadowed,
+        } => {
+            let first = |w: &Witnesses| {
+                w.iter()
+                    .next()
+                    .map(|w| witness(*w))
+                    .unwrap_or(Value::Obj(BTreeMap::new()))
+            };
+            out.push(head("attr_conflict", vec![first(&ws), first(&refinement)]));
+            let place = refinement
+                .iter()
+                .find_map(|w| refinement_of(*w))
+                .and_then(|(t, _)| diag::place(store.get(*t).span))
+                .unwrap_or_default();
+            let mut kv = vec![
+                ("type", Value::Str(typ.clone())),
+                ("addr", addr.clone()),
+                ("path", Value::Str(at.clone())),
+                ("constraint", Value::Str(constraint.to_string())),
+                (
+                    "reason",
+                    Value::Str(format!(
+                        "{} violates {constraint}",
+                        partition::fmt_value(&value)
+                    )),
+                ),
+                ("value", value),
+                (
+                    "witnesses",
+                    witnesses(&ws.union(&refinement).copied().collect()),
+                ),
+            ];
+            if !place.is_empty() {
+                kv.push(("at", Value::Str(place)));
+            }
+            out.push(policy("deny", crate::refine::VIOLATED, obj(kv)));
             shadowed
         }
         Collapsed2::Stuck {

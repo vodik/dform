@@ -850,7 +850,7 @@ mod tests {
 
         // The cell, as the aggregate sees it.
         let cell = Ranked::at(Rank::Normal, arg_id as u32, open(nu)).join(
-            &Ranked::constraint(Constraint::PrefixLen(28), schema as u32),
+            &Ranked::constraint(Constraint::PrefixLenGe(28), schema as u32),
             ".x",
         );
         assert!(

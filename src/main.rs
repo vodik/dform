@@ -487,9 +487,11 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
     let discovered = backend.discover()?;
     let scope = catalog_scope(&cli.cmd, &program, &base_extra, &discovered, &st);
     backend.load_schema(scope.as_ref())?;
-    // The static secret pass, against the provider's schema.
+    // The static secret pass and the refinement checks (a literal that
+    // violates one, E0306), against the provider's schema.
     if let Some(l) = &lowered {
         dform::secrets::check(l, backend.schema())?;
+        dform::refine::check(&l.program, backend.schema())?;
     }
     base_extra.extend(backend.catalog(scope.as_ref())?);
     base_extra.extend(discovered);
@@ -1240,6 +1242,7 @@ fn run_tests(
             let p = dform::scenario::select(program, name)?;
             let lowered = dform::transform::lower(&p)?;
             dform::secrets::check(&lowered, backend.schema())?;
+            dform::refine::check(&lowered.program, backend.schema())?;
             let mut given = input_fact_keys(&p);
             let mut pairs = Vec::new();
             for kv in set {

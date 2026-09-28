@@ -19,6 +19,11 @@
 //!                                     % ordered: create_first, destroy_first,
 //!                                     % or either (default; destroy first
 //!                                     % unless lifecycle create_before_destroy)
+//!   type_refine(T, Path, C).          % optional: a checkable refinement of
+//!                                     % Path (`crate::refine`): range(Lo, Hi),
+//!                                     % prefix_len_le(N), prefix_len_ge(N),
+//!                                     % enum([..]), regex(S), len_le(N),
+//!                                     % len_ge(N); carried as its text
 //!
 //! The facts are injected into the program as EDB (so `dform query type_attr`
 //! lists them) and folded into [`Schema`], the in-memory view the partition
@@ -79,6 +84,10 @@ pub struct Schema {
     pub replace: BTreeMap<String, ReplaceOrder>,
     /// The facts the schema was built from, to inject as EDB.
     pub facts: Vec<Atom>,
+    /// Types whose provider's Schema declares `checks_refinements`: a
+    /// refinement on a sensitive path of one is an Apply assertion (F
+    /// DR-13 revised); of any other type, E0306.
+    pub checks_refinements: BTreeSet<String>,
 }
 
 /// Read attempts for a type without `type_retry`.
@@ -212,7 +221,11 @@ impl Schema {
     pub fn from_facts(facts: &[Atom]) -> Result<Schema> {
         let mut s = Schema::default();
         for f in facts {
-            let args: Vec<Value> = f.args.iter().map(ground).collect::<Result<_>>()?;
+            let args: Vec<Value> = if f.pred == crate::refine::TYPE_REFINE {
+                refine_args(f)?
+            } else {
+                f.args.iter().map(ground).collect::<Result<_>>()?
+            };
             let bad = || {
                 anyhow!(
                     "schema fact {}/{}: wrong arity or argument kinds",
@@ -385,6 +398,7 @@ impl Schema {
             }
         }
         self.facts.extend(other.facts);
+        self.checks_refinements.extend(other.checks_refinements);
         Ok(self)
     }
 
@@ -421,12 +435,13 @@ impl Schema {
 }
 
 /// Schema predicates with a row per type (the type in the first column).
-const PER_TYPE: [&str; 5] = [
+const PER_TYPE: [&str; 6] = [
     "type_attr",
     "type_list_key",
     "type_retry",
     "type_replace",
     "type_mint",
+    crate::refine::TYPE_REFINE,
 ];
 
 /// Whether `pred` is a schema predicate: a read of it sees the whole schema.
@@ -517,6 +532,26 @@ pub fn named_types(program: &crate::ast::Program, facts: &[Atom]) -> Option<BTre
         atom(f, &mut out)?;
     }
     Some(out)
+}
+
+/// `type_refine(T, Path, C)` with its constraint checked and carried as
+/// its text (a schema file writes the term, the wire carries the text).
+fn refine_args(f: &Atom) -> Result<Vec<Value>> {
+    let [t, p, c] = f.args.as_slice() else {
+        bail!(
+            "schema fact type_refine/{}: expected (Type, Path, Constraint)",
+            f.args.len()
+        );
+    };
+    let (Value::Str(t), Value::Str(p)) = (ground(t)?, ground(p)?) else {
+        bail!("type_refine: type and path must be symbols");
+    };
+    let c = crate::refine::from_term(c).map_err(|e| anyhow!("type_refine({t}, {p}, ...): {e}"))?;
+    Ok(vec![
+        Value::Str(t),
+        Value::Str(p),
+        Value::Str(c.to_string()),
+    ])
 }
 
 fn ground(t: &Term) -> Result<Value> {

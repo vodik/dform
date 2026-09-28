@@ -627,21 +627,23 @@ fn refine_pred(input: &str) -> String {
     format!("__refine_{input}")
 }
 
-/// `input k: T where R` is a deny unless `R` holds of the input's value:
-/// `__refine_k(V) :- k(V), R[k := V]` and `deny(...) :- k(V), not
-/// __refine_k(V)`. The input is written by its name in `R`.
+/// `input k: T where R`: what of `R` fits the checkable table is a
+/// refinement of the input's cell (`input_reader`, `crate::refine`); the
+/// rest is a deny unless it holds of the input's value: `__refine_k(V) :-
+/// k(V), R[k := V]` and `deny(...) :- k(V), not __refine_k(V)`. The input
+/// is written by its name in `R`.
 pub fn refinement(i: &InputDecl, scope: &str) -> Vec<Stmt> {
-    if i.refinement.is_empty() {
+    let (_, rest) = crate::refine::split_input(i);
+    if rest.is_empty() {
         return Vec::new();
     }
     let v = Term::Var("__Input".into());
     let read = Lit::Pos(atom(&i.name, vec![v.clone()], i.span));
     let mut body = vec![read.clone()];
-    body.extend(i.refinement.iter().map(|l| subst_lit(l, &i.name, &v)));
+    body.extend(rest.iter().map(|l| subst_lit(l, &i.name, &v)));
     let ok = atom(&refine_pred(&i.name), vec![v.clone()], i.span);
     let named = Term::Var(i.name.clone());
-    let text = i
-        .refinement
+    let text = rest
         .iter()
         .map(|l| crate::partition::fmt_lit(&subst_lit(l, &i.name, &named)))
         .collect::<Vec<_>>()
@@ -737,6 +739,16 @@ pub fn input_reader(scope: &str, i: &InputDecl, pred: &str) -> Vec<Stmt> {
             i.span,
         ))],
     })];
+    let (checkable, _) = crate::refine::split_input(i);
+    for c in checkable {
+        out.push(crate::refine::refine_fact(
+            INPUT,
+            Some(scope),
+            &i.name,
+            &c,
+            i.span,
+        ));
+    }
     if let Some(d) = &i.default {
         out.push(fact_or_rule(
             atom(

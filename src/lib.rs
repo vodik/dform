@@ -23,6 +23,7 @@ pub mod plan_print;
 pub mod plugin;
 pub mod provider;
 pub mod query;
+pub mod refine;
 pub mod scenario;
 pub mod schema;
 pub mod secrets;

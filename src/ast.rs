@@ -444,6 +444,7 @@ pub struct AttrDecl {
     pub flags: Vec<String>,
     pub refinement: Vec<Lit>,
     pub children: Vec<AttrDecl>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]

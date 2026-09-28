@@ -71,13 +71,15 @@ fn set_is_checked_against_the_declaration() {
     assert!(r.stdout.contains("owner = \"42\""), "{}", r.stdout);
 }
 
+/// `1 <= replicas <= 5` fits the checkable table: a refinement of the
+/// input's cell, violated by the winning value (E DR-13).
 #[test]
 fn a_refinement_on_an_input_is_a_deny() {
     let s = scratch();
     let r = plan(&s, &["--set", "owner=ops", "--set", "replicas=9"]).failure();
     assert!(
         r.stderr.contains(
-            "input replicas fails its refinement: 1 <= replicas, replicas <= 5 ctx={\"value\":9}"
+            "- refinement violated ctx={\"addr\":\"\",\"at\":\"p.df:3:1\",\"constraint\":\"range(1, 5)\",\"path\":\"replicas\",\"reason\":\"9 violates range(1, 5)\",\"type\":\"input\",\"value\":9,"
         ),
         "{}",
         r.stderr

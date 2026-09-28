@@ -514,35 +514,75 @@ pub enum Rank {
     Override = 2,
 }
 
-/// The refinements the lattice can check at join time. Anything not in this
-/// enum lowers to a `deny` rule instead (L13). One home per refinement.
+/// The refinements the lattice can check at join time: the checkable
+/// table of E DR-13, spelled as the `type_refine(T, Path, C)` term language
+/// (`crate::refine`). Anything not in this enum lowers to a `deny` rule
+/// instead. One home per refinement.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Constraint {
+    /// Type tags, from a `type` block's declared attribute type.
     IsInt,
     IsStr,
     IsBool,
-    Ge(i64),
-    Le(i64),
-    PrefixLen(u8),
+    IsInet,
+    /// `range(Lo, Hi)`: an int in `[Lo, Hi]`.
+    Range(i64, i64),
+    /// `prefix_len_le(N)` / `prefix_len_ge(N)`: a CIDR's prefix length.
+    PrefixLenLe(u8),
+    PrefixLenGe(u8),
+    /// `len_le(N)` / `len_ge(N)`: a string's characters, a list's or an
+    /// object's entries.
+    LenLe(i64),
+    LenGe(i64),
+    /// `regex(S)`: a string the pattern matches whole.
+    Regex(String),
+    /// `enum([..])`: one of the values.
     OneOf(BTreeSet<Value>),
 }
 
 impl Constraint {
+    /// Three-valued: `Unknown` when the value carries a null (or a ref,
+    /// which only the provider layer resolves), else whether it holds.
     pub fn check(&self, v: &Value) -> Truth {
-        if !nulls_in(v).is_empty() {
+        if !nulls_in(v).is_empty() || has_ref(v) {
             return Truth::Unknown;
         }
+        let prefix = |v: &Value| match v {
+            Value::IpNet { prefix, .. } => Some(*prefix),
+            Value::Str(s) => crate::value::parse_ipnet(s).map(|(_, p)| p),
+            _ => None,
+        };
+        let len = |v: &Value| match v {
+            Value::Str(s) => Some(s.chars().count() as i64),
+            Value::List(xs) => Some(xs.len() as i64),
+            Value::Obj(m) => Some(m.len() as i64),
+            _ => None,
+        };
         let ok = match (self, v) {
             (Constraint::IsInt, Value::Int(_)) => true,
             (Constraint::IsStr, Value::Str(_)) => true,
             (Constraint::IsBool, Value::Bool(_)) => true,
-            (Constraint::Ge(n), Value::Int(i)) => i >= n,
-            (Constraint::Le(n), Value::Int(i)) => i <= n,
-            (Constraint::PrefixLen(p), Value::IpNet { prefix, .. }) => prefix == p,
+            (Constraint::IsInet, v) => prefix(v).is_some(),
+            (Constraint::Range(lo, hi), Value::Int(i)) => lo <= i && i <= hi,
+            (Constraint::PrefixLenLe(n), v) => prefix(v).is_some_and(|p| p <= *n),
+            (Constraint::PrefixLenGe(n), v) => prefix(v).is_some_and(|p| p >= *n),
+            (Constraint::LenLe(n), v) => len(v).is_some_and(|l| l <= *n),
+            (Constraint::LenGe(n), v) => len(v).is_some_and(|l| l >= *n),
+            (Constraint::Regex(re), Value::Str(s)) => crate::refine::regex_matches(re, s),
             (Constraint::OneOf(s), v) => s.contains(v),
             _ => false,
         };
         if ok { Truth::True } else { Truth::False }
+    }
+}
+
+/// Whether a value holds a ref the engine cannot see through.
+fn has_ref(v: &Value) -> bool {
+    match v {
+        Value::Ref { .. } | Value::CloudRef { .. } => true,
+        Value::List(xs) => xs.iter().any(has_ref),
+        Value::Obj(m) => m.values().any(has_ref),
+        _ => false,
     }
 }
 
@@ -675,7 +715,7 @@ impl Ranked {
                         rank: None,
                         a: (v.clone(), w.clone()),
                         b: (Value::Str(format!("{c:?}")), cw.clone()),
-                        reason: format!("{v:?} violates schema refinement {c:?}"),
+                        reason: format!("{v:?} violates schema refinement {c}"),
                     };
                 }
             }
@@ -1230,13 +1270,13 @@ mod tests {
     #[test]
     fn case4_refinement_deferred_then_violated_or_satisfied() {
         let parts = [
-            Ranked::constraint(Constraint::PrefixLen(28), 100), // schema, rank-blind
+            Ranked::constraint(Constraint::PrefixLenGe(28), 100), // schema, rank-blind
             Ranked::at(Rank::Normal, 1, open("alloc/cp#cidr")),
         ];
         let (cell, c) = ranked_all_orders(&parts);
         // Plan time: the value is the null; the check is deferred, not violated.
         assert!(
-            matches!(&c, Collapsed::Val { value, deferred, .. } if *value == open("alloc/cp#cidr") && deferred == &vec![Constraint::PrefixLen(28)])
+            matches!(&c, Collapsed::Val { value, deferred, .. } if *value == open("alloc/cp#cidr") && deferred == &vec![Constraint::PrefixLenGe(28)])
         );
 
         // Phase boundary, violating value: conflict naming the schema (100) and the contributor (1).
@@ -1248,7 +1288,7 @@ mod tests {
         };
         assert_eq!(a.1, Witnesses::from([1]));
         assert_eq!(b.1, Witnesses::from([100]));
-        assert!(reason.contains("PrefixLen(28)"));
+        assert!(reason.contains("prefix_len_ge(28)"));
 
         // Phase boundary, satisfying value: a plain value with nothing deferred.
         let ok = cell
@@ -1258,7 +1298,7 @@ mod tests {
 
         // A constraint is never out-ranked: an @override that violates it is a conflict.
         let (_, c) = ranked_all_orders(&[
-            Ranked::constraint(Constraint::Le(20), 100),
+            Ranked::constraint(Constraint::Range(0, 20), 100),
             Ranked::at(Rank::Default, 1, i(3)),
             Ranked::at(Rank::Override, 2, i(30)),
         ]);
@@ -1523,6 +1563,25 @@ pub enum Shadowed {
     },
 }
 
+/// A checkable refinement on one path of a cell (a dotted path at or below
+/// the group's): rank-blind, checked against the winning value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Refinement {
+    pub path: String,
+    pub constraint: Constraint,
+    pub witness: Witness,
+}
+
+/// A refinement the winning value could not decide yet: the value at
+/// `path` carries a null. Re-checked when the null resolves.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Deferred {
+    pub path: String,
+    pub constraint: Constraint,
+    pub value: Value,
+    pub witnesses: Witnesses,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Collapsed2 {
     Bottom,
@@ -1530,7 +1589,7 @@ pub enum Collapsed2 {
         value: Value,
         rank: Rank,
         witnesses: Witnesses,
-        deferred: Vec<Constraint>,
+        deferred: Vec<Deferred>,
         shadowed: Vec<Shadowed>,
     },
     Stuck {
@@ -1548,6 +1607,17 @@ pub enum Collapsed2 {
         witnesses: Witnesses,
         shadowed: Vec<Shadowed>,
     },
+    /// The winning value violates a refinement (E §2.4 step 4): the value
+    /// at `path` and the contributions that won, and the refinement's own
+    /// witnesses.
+    Violated {
+        path: String,
+        constraint: Constraint,
+        value: Value,
+        witnesses: Witnesses,
+        refinement: Witnesses,
+        shadowed: Vec<Shadowed>,
+    },
 }
 
 impl Ranked {
@@ -1556,6 +1626,12 @@ impl Ranked {
     /// a warning, and never blocks. Only the winning rank's element can make
     /// the cell Stuck or Conflict.
     pub fn collapse_shadow_aware(&self) -> Collapsed2 {
+        self.collapse_at("")
+    }
+
+    /// `collapse_shadow_aware` of the cell at `path`, which names the path
+    /// of a deferred or violated refinement.
+    pub fn collapse_at(&self, path: &str) -> Collapsed2 {
         let Some(top) = self.ranks.iter().rposition(|e| !matches!(e, Elem::Bottom)) else {
             return Collapsed2::Bottom;
         };
@@ -1597,14 +1673,19 @@ impl Ranked {
                 for (c, cw) in &self.constraints {
                     match c.check(v) {
                         Truth::True => {}
-                        Truth::Unknown => deferred.push(c.clone()),
+                        Truth::Unknown => deferred.push(Deferred {
+                            path: path.to_string(),
+                            constraint: c.clone(),
+                            value: v.clone(),
+                            witnesses: cw.clone(),
+                        }),
                         Truth::False => {
-                            return Collapsed2::Conflict {
-                                rank: None,
-                                a: (v.clone(), w.clone()),
-                                b: (Value::Str(format!("{c:?}")), cw.clone()),
-                                reason: format!("{v:?} violates schema refinement {c:?}"),
-                                witnesses: union(w, cw),
+                            return Collapsed2::Violated {
+                                path: path.to_string(),
+                                constraint: c.clone(),
+                                value: v.clone(),
+                                witnesses: w.clone(),
+                                refinement: cw.clone(),
                                 shadowed,
                             };
                         }
@@ -1643,23 +1724,124 @@ fn max_rank(contribs: &[RankedContribution]) -> Rank {
 /// assembled as one Flat value (which conflicts, or is stuck, on the
 /// non-object).
 pub fn lub_ranked(lat: &Lattice, path: &str, contribs: &[RankedContribution]) -> Collapsed2 {
-    match lat {
-        Lattice::Map(elem) => {
-            if !contribs.iter().all(|(_, _, v)| matches!(v, Value::Obj(_))) {
-                return lub_ranked(&Lattice::Flat, path, contribs);
-            }
-            lub_ranked_map(elem, path, contribs)
+    lub_ranked_refined(lat, path, contribs, &[])
+}
+
+/// `lub_ranked` with the cell's checkable refinements (E §2.5, the
+/// `constraint(C)` contributions): each is joined into the Flat cell at its
+/// path, rank-blind, and checked against the winning value there. A
+/// refinement below a path assembled as one value (a Flat object, a set) is
+/// checked against the value found at its path in the winning one; a path
+/// the winning value does not reach holds vacuously.
+pub fn lub_ranked_refined(
+    lat: &Lattice,
+    path: &str,
+    contribs: &[RankedContribution],
+    refinements: &[Refinement],
+) -> Collapsed2 {
+    let (here, below): (Vec<&Refinement>, Vec<&Refinement>) =
+        refinements.iter().partition(|r| r.path == path);
+    let collapsed = match lat {
+        Lattice::Map(elem) if contribs.iter().all(|(_, _, v)| matches!(v, Value::Obj(_))) => {
+            let below: Vec<Refinement> = below.into_iter().cloned().collect();
+            let c = lub_ranked_map(elem, path, contribs, &below);
+            return check_below(c, path, &here);
         }
-        Lattice::Flat | Lattice::Set | Lattice::Keyed { .. } => contribs
-            .iter()
-            .fold(Ranked::default(), |acc, (w, r, v)| {
+        Lattice::Map(_) | Lattice::Flat | Lattice::Set | Lattice::Keyed { .. } => {
+            let lat = match lat {
+                Lattice::Map(_) => &Lattice::Flat,
+                l => l,
+            };
+            let cell = contribs.iter().fold(Ranked::default(), |acc, (w, r, v)| {
                 acc.join_in(lat, &Ranked::at(*r, *w, v.clone()), path)
-            })
-            .collapse_shadow_aware(),
+            });
+            here.iter()
+                .fold(cell, |acc, r| {
+                    acc.join_in(
+                        lat,
+                        &Ranked::constraint(r.constraint.clone(), r.witness),
+                        path,
+                    )
+                })
+                .collapse_at(path)
+        }
+    };
+    check_below(collapsed, path, &below)
+}
+
+/// Check refinements at or below `path` against a collapsed value's
+/// content there.
+fn check_below(c: Collapsed2, path: &str, refinements: &[&Refinement]) -> Collapsed2 {
+    let Collapsed2::Val {
+        value,
+        rank,
+        witnesses,
+        mut deferred,
+        shadowed,
+    } = c
+    else {
+        return c;
+    };
+    let mut refinements = refinements.to_vec();
+    refinements.sort_by(|a, b| (&a.path, &a.constraint).cmp(&(&b.path, &b.constraint)));
+    for r in refinements {
+        let rest = if r.path == path {
+            ""
+        } else {
+            r.path
+                .strip_prefix(path)
+                .and_then(|p| p.strip_prefix('.'))
+                .unwrap_or(&r.path)
+        };
+        let Some(v) = value_at(&value, rest) else {
+            continue;
+        };
+        match r.constraint.check(v) {
+            Truth::True => {}
+            Truth::Unknown => deferred.push(Deferred {
+                path: r.path.clone(),
+                constraint: r.constraint.clone(),
+                value: v.clone(),
+                witnesses: Witnesses::from([r.witness]),
+            }),
+            Truth::False => {
+                return Collapsed2::Violated {
+                    path: r.path.clone(),
+                    constraint: r.constraint.clone(),
+                    value: v.clone(),
+                    witnesses,
+                    refinement: Witnesses::from([r.witness]),
+                    shadowed,
+                };
+            }
+        }
+    }
+    Collapsed2::Val {
+        value,
+        rank,
+        witnesses,
+        deferred,
+        shadowed,
     }
 }
 
-fn lub_ranked_map(elem: &Lattice, path: &str, contribs: &[RankedContribution]) -> Collapsed2 {
+/// The value at a dotted path inside `v` (`""` is `v`).
+fn value_at<'v>(v: &'v Value, path: &str) -> Option<&'v Value> {
+    if path.is_empty() {
+        return Some(v);
+    }
+    path.split('.').try_fold(v, |v, k| match v {
+        Value::Obj(m) => m.get(k),
+        _ => None,
+    })
+}
+
+fn lub_ranked_map(
+    elem: &Lattice,
+    path: &str,
+    contribs: &[RankedContribution],
+    refinements: &[Refinement],
+) -> Collapsed2 {
     let mut per_key: BTreeMap<String, Vec<RankedContribution>> = BTreeMap::new();
     for (w, r, v) in contribs {
         let Value::Obj(m) = v else {
@@ -1687,7 +1869,18 @@ fn lub_ranked_map(elem: &Lattice, path: &str, contribs: &[RankedContribution]) -
         } else {
             elem
         };
-        match lub_ranked(lat, &format!("{path}.{k}"), &cs) {
+        let key_path = format!("{path}.{k}");
+        let refs: Vec<Refinement> = refinements
+            .iter()
+            .filter(|r| {
+                r.path == key_path
+                    || r.path
+                        .strip_prefix(&key_path)
+                        .is_some_and(|p| p.starts_with('.'))
+            })
+            .cloned()
+            .collect();
+        match lub_ranked_refined(lat, &key_path, &cs, &refs) {
             Collapsed2::Bottom => {}
             Collapsed2::Val {
                 value,
@@ -1726,6 +1919,24 @@ fn lub_ranked_map(elem: &Lattice, path: &str, contribs: &[RankedContribution]) -
                     b,
                     reason,
                     witnesses,
+                    shadowed,
+                };
+            }
+            Collapsed2::Violated {
+                path,
+                constraint,
+                value,
+                witnesses,
+                refinement,
+                shadowed: sh,
+            } => {
+                shadowed.extend(sh);
+                return Collapsed2::Violated {
+                    path,
+                    constraint,
+                    value,
+                    witnesses,
+                    refinement,
                     shadowed,
                 };
             }

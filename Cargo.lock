@@ -395,6 +395,7 @@ dependencies = [
  "kube",
  "logos",
  "prost",
+ "regex",
  "rowan",
  "serde",
  "serde_json",

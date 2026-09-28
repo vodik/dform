@@ -41,6 +41,8 @@ deny("strict: a pending group at plan time", { rule: R, head: H, nulls: Ns }) :-
 pub const SECRET_CELL: &str = "secret_cell";
 
 pub fn lower(program: &Program) -> Result<Lowered> {
+    // `type` blocks: their refinements (`crate::refine`).
+    let program = &crate::refine::lower_types(program)?;
     reject_pending(&program.statements)?;
     let strict =
         crate::stack::config(program).is_ok_and(|s| s.unknowns == crate::stack::Unknowns::Strict);
