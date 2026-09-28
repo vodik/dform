@@ -101,13 +101,11 @@ pub fn eval(program: &Program, extra_facts: &[Atom]) -> Result<(EvalResult, Vec<
             continue;
         }
 
+        // Naive iteration to the stratum's fixpoint. It terminates: facts
+        // only grow, and a stratum derives finitely many unless a builtin
+        // invents values without bound (`n(Y) :- n(X), Y = X + 1`).
         let mut changed = true;
-        let mut iterations = 0usize;
         while changed {
-            iterations += 1;
-            if iterations > 200 {
-                bail!("evaluation did not converge in stratum {s}");
-            }
             changed = false;
 
             let snapshot: Vec<Atom> = facts.iter().cloned().collect();
@@ -2017,5 +2015,19 @@ mod tests {
         let r = crate::sim::eval_sim(&program, &[], crate::schema::fake(), Default::default()).unwrap();
         assert!(r.facts.iter().all(|a| a.pred != "id_len"));
         assert!(r.sim.stuck.iter().any(|s| s.reason == "builtin len() over a null"), "{:?}", r.sim.stuck);
+    }
+
+    /// DESIGN.org "Fixpoint iteration cap is arbitrary": a derivation chain
+    /// deeper than the old 200-iteration cap converges.
+    #[test]
+    fn a_300_deep_chain_converges() {
+        let (r, _) = run(
+            "n(0).
+             n(Y) :- n(X), X < 300, Y = X + 1.
+             deepest(X) :- n(X), X >= 300.",
+        )
+        .unwrap();
+        assert_eq!(facts_of(&r, "n").len(), 301);
+        assert_eq!(facts_of(&r, "deepest"), vec!["deepest(300)".to_string()]);
     }
 }
