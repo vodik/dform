@@ -1,23 +1,9 @@
 exit: ok
 -- stdout --
-== examples/adversarial/adv3_pack_reads_other_path.df: 44 nodes, 32 edges (17 negative)
+== examples/adversarial/adv3_pack_reads_other_path.df: 48 nodes, 91 edges (31 negative)
    STRATIFIED, 4 strata
    stratum 0:
-     (arg, compute.vm, id)
-     (arg, db.postgres, endpoint)
-     (arg, db.postgres, id)
-     (arg, iam.policy, id)
      (arg, iam.policy, name)
-     (arg, iam.role, id)
-     (arg, iam.role_policy_attachment, id)
-     (arg, k8s.cluster, api_endpoint)
-     (arg, k8s.cluster, ca_cert)
-     (arg, k8s.cluster, id)
-     (arg, k8s.nodepool, id)
-     (arg, net.route, id)
-     (arg, net.subnet, id)
-     (arg, net.vpc, id)
-     (arg, net.vpc_peering, id)
      (want, compute.vm)
      (want, db.postgres)
      (want, iam.policy)
@@ -29,13 +15,33 @@ exit: ok
      (want, net.subnet)
      (want, net.vpc)
      (want, net.vpc_peering)
+     identity
+     resolve
+     resolved
      type_lattice
+     world_attr
    stratum 1:
+     (arg, compute.vm, id)
+     (arg, db.postgres, endpoint)
+     (arg, db.postgres, id)
+     (arg, iam.policy, id)
+     (arg, iam.role, id)
+     (arg, iam.role_policy_attachment, id)
+     (arg, k8s.cluster, api_endpoint)
+     (arg, k8s.cluster, ca_cert)
+     (arg, k8s.cluster, id)
+     (arg, k8s.nodepool, id)
+     (arg, net.route, id)
+     (arg, net.subnet, id)
+     (arg, net.vpc, id)
+     (arg, net.vpc_peering, id)
+     (attr, iam.policy, name)
+   stratum 2:
+     (arg, iam.policy, statements)
      (attr, compute.vm, id)
      (attr, db.postgres, endpoint)
      (attr, db.postgres, id)
      (attr, iam.policy, id)
-     (attr, iam.policy, name)
      (attr, iam.role, id)
      (attr, iam.role_policy_attachment, id)
      (attr, k8s.cluster, api_endpoint)
@@ -46,8 +52,6 @@ exit: ok
      (attr, net.subnet, id)
      (attr, net.vpc, id)
      (attr, net.vpc_peering, id)
-   stratum 2:
-     (arg, iam.policy, statements)
    stratum 3:
      (attr, iam.policy, statements)
 -- stderr --

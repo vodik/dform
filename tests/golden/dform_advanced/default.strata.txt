@@ -1,19 +1,8 @@
 exit: ok
 -- stdout --
-== dform-advanced.df: 77 nodes, 96 edges (34 negative)
+== dform-advanced.df: 82 nodes, 165 edges (54 negative)
    STRATIFIED, 6 strata
    stratum 0:
-     (arg, compute.vm, id)
-     (arg, db.postgres, endpoint)
-     (arg, db.postgres, id)
-     (arg, iam.policy, id)
-     (arg, iam.role, id)
-     (arg, iam.role_policy_attachment, id)
-     (arg, k8s.cluster, api_endpoint)
-     (arg, k8s.cluster, ca_cert)
-     (arg, k8s.cluster, id)
-     (arg, k8s.nodepool, id)
-     (arg, net.subnet, id)
      (arg, settings, mesh.vpcs)
      (arg, settings, tenants)
      (want, compute.vm)
@@ -28,10 +17,34 @@ exit: ok
      group_edge
      group_member
      has_env
+     identity
      in_group
      input
      mesh_allow_direct_route
+     resolve
+     resolved
+     world_attr
    stratum 1:
+     (arg, compute.vm, id)
+     (arg, db.postgres, endpoint)
+     (arg, db.postgres, id)
+     (arg, iam.policy, id)
+     (arg, iam.role, id)
+     (arg, iam.role_policy_attachment, id)
+     (arg, k8s.cluster, api_endpoint)
+     (arg, k8s.cluster, ca_cert)
+     (arg, k8s.cluster, id)
+     (arg, k8s.nodepool, id)
+     (arg, net.subnet, id)
+     (attr, settings, mesh.vpcs)
+     (attr, settings, tenants)
+     env
+     peer_intent
+   stratum 2:
+     (arg, net.vpc, cidr)
+     (arg, net.vpc, id)
+     (arg, net.vpc, tags)
+     (arg, net.vpc_peering, id)
      (attr, compute.vm, id)
      (attr, db.postgres, endpoint)
      (attr, db.postgres, id)
@@ -43,17 +56,6 @@ exit: ok
      (attr, k8s.cluster, id)
      (attr, k8s.nodepool, id)
      (attr, net.subnet, id)
-     (attr, settings, mesh.vpcs)
-     (attr, settings, tenants)
-     env
-     peer_intent
-   stratum 2:
-     (arg, net.vpc, cidr)
-     (arg, net.vpc, id)
-     (arg, net.vpc, tags)
-     (arg, net.vpc_peering, accepter_vpc_id)
-     (arg, net.vpc_peering, id)
-     (arg, net.vpc_peering, requester_vpc_id)
      (want, net.vpc)
      (want, net.vpc_peering)
      link
@@ -68,16 +70,17 @@ exit: ok
      (attr, net.vpc, cidr)
      (attr, net.vpc, id)
      (attr, net.vpc, tags)
-     (attr, net.vpc_peering, accepter_vpc_id)
      (attr, net.vpc_peering, id)
-     (attr, net.vpc_peering, requester_vpc_id)
      mesh_non_adjacent_pair
    stratum 4:
      (arg, net.route, destination)
      (arg, net.route, from)
      (arg, net.route, id)
      (arg, net.route, to)
+     (arg, net.vpc_peering, accepter_vpc_id)
+     (arg, net.vpc_peering, requester_vpc_id)
      (want, net.route)
+     __ref_dep
      deny
      warn
    stratum 5:
@@ -85,4 +88,6 @@ exit: ok
      (attr, net.route, from)
      (attr, net.route, id)
      (attr, net.route, to)
+     (attr, net.vpc_peering, accepter_vpc_id)
+     (attr, net.vpc_peering, requester_vpc_id)
 -- stderr --

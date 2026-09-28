@@ -1,24 +1,10 @@
 exit: ok
 -- stdout --
-== examples/adversarial/adv2_rule3_coarse.df: 54 nodes, 41 edges (24 negative)
+== examples/adversarial/adv2_rule3_coarse.df: 58 nodes, 100 edges (38 negative)
    STRATIFIED, 3 strata
    stratum 0:
-     (arg, compute.vm, id)
-     (arg, db.postgres, endpoint)
-     (arg, db.postgres, id)
      (arg, gke_cluster, name)
-     (arg, iam.policy, id)
-     (arg, iam.role, id)
-     (arg, iam.role_policy_attachment, id)
-     (arg, k8s.cluster, api_endpoint)
-     (arg, k8s.cluster, ca_cert)
-     (arg, k8s.cluster, id)
      (arg, k8s.namespace, name)
-     (arg, k8s.nodepool, id)
-     (arg, net.route, id)
-     (arg, net.subnet, id)
-     (arg, net.vpc, id)
-     (arg, net.vpc_peering, id)
      (attr, gke_cluster, zones)
      (want, compute.vm)
      (want, db.postgres)
@@ -34,29 +20,47 @@ exit: ok
      (want, net.subnet)
      (want, net.vpc)
      (want, net.vpc_peering)
+     identity
+     resolve
+     resolved
+     world_attr
    stratum 1:
+     (arg, compute.vm, id)
+     (arg, db.postgres, endpoint)
+     (arg, db.postgres, id)
      (arg, gke_nodepool, cluster)
      (arg, gke_nodepool, zone)
+     (arg, iam.policy, id)
+     (arg, iam.role, id)
+     (arg, iam.role_policy_attachment, id)
+     (arg, k8s.cluster, api_endpoint)
+     (arg, k8s.cluster, ca_cert)
+     (arg, k8s.cluster, id)
+     (arg, k8s.nodepool, id)
+     (arg, net.route, id)
+     (arg, net.subnet, id)
+     (arg, net.vpc, id)
+     (arg, net.vpc_peering, id)
+     (attr, gke_cluster, name)
+     (attr, k8s.namespace, name)
+     (want, gke_nodepool)
+     ns_count
+   stratum 2:
      (attr, compute.vm, id)
      (attr, db.postgres, endpoint)
      (attr, db.postgres, id)
-     (attr, gke_cluster, name)
+     (attr, gke_nodepool, cluster)
+     (attr, gke_nodepool, zone)
      (attr, iam.policy, id)
      (attr, iam.role, id)
      (attr, iam.role_policy_attachment, id)
      (attr, k8s.cluster, api_endpoint)
      (attr, k8s.cluster, ca_cert)
      (attr, k8s.cluster, id)
-     (attr, k8s.namespace, name)
      (attr, k8s.nodepool, id)
      (attr, net.route, id)
      (attr, net.subnet, id)
      (attr, net.vpc, id)
      (attr, net.vpc_peering, id)
-     (want, gke_nodepool)
-     ns_count
-   stratum 2:
-     (attr, gke_nodepool, cluster)
-     (attr, gke_nodepool, zone)
      deny
 -- stderr --

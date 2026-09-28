@@ -1,24 +1,10 @@
 exit: ok
 -- stdout --
-== examples/adversarial/adv4b_variable_path_writer_no_read.df: 47 nodes, 78 edges (51 negative)
-   STRATIFIED, 3 strata
+== examples/adversarial/adv4b_variable_path_writer_no_read.df: 51 nodes, 137 edges (65 negative)
+   STRATIFIED, 4 strata
    stratum 0:
-     (arg, compute.vm, id)
-     (arg, db.postgres, endpoint)
-     (arg, db.postgres, id)
-     (arg, iam.policy, id)
-     (arg, iam.role, id)
-     (arg, iam.role_policy_attachment, id)
-     (arg, k8s.cluster, api_endpoint)
-     (arg, k8s.cluster, ca_cert)
-     (arg, k8s.cluster, id)
-     (arg, k8s.nodepool, id)
-     (arg, net.route, id)
-     (arg, net.subnet, id)
      (arg, net.vpc, cidr)
-     (arg, net.vpc, id)
      (arg, net.vpc, tags)
-     (arg, net.vpc_peering, id)
      (want, compute.vm)
      (want, db.postgres)
      (want, iam.policy)
@@ -31,8 +17,29 @@ exit: ok
      (want, net.vpc)
      (want, net.vpc_peering)
      arg
+     identity
      override
+     resolve
+     resolved
+     world_attr
    stratum 1:
+     (arg, compute.vm, id)
+     (arg, db.postgres, endpoint)
+     (arg, db.postgres, id)
+     (arg, iam.policy, id)
+     (arg, iam.role, id)
+     (arg, iam.role_policy_attachment, id)
+     (arg, k8s.cluster, api_endpoint)
+     (arg, k8s.cluster, ca_cert)
+     (arg, k8s.cluster, id)
+     (arg, k8s.nodepool, id)
+     (arg, net.route, id)
+     (arg, net.subnet, id)
+     (arg, net.vpc, id)
+     (arg, net.vpc_peering, id)
+     (attr, net.vpc, cidr)
+     (attr, net.vpc, tags)
+   stratum 2:
      (attr, compute.vm, id)
      (attr, db.postgres, endpoint)
      (attr, db.postgres, id)
@@ -45,11 +52,9 @@ exit: ok
      (attr, k8s.nodepool, id)
      (attr, net.route, id)
      (attr, net.subnet, id)
-     (attr, net.vpc, cidr)
      (attr, net.vpc, id)
-     (attr, net.vpc, tags)
      (attr, net.vpc_peering, id)
      attr
-   stratum 2:
+   stratum 3:
      deny
 -- stderr --

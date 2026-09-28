@@ -1,7 +1,9 @@
 //! The partition graph of proposal E §2.6 / DR-12 as revised by F, run over
-//! the LOWERED program (`transform::lower`). This is the evaluator's
-//! stratifier: `engine::eval` evaluates strata in the order computed here and
-//! assigns every rule to the stratum of its head node.
+//! the program as evaluation runs it ([`compile`]: lowered, computed refs
+//! rewritten to `attr` reads, the computed prelude expanded, constraints as
+//! `deny` rules). This is the evaluator's stratifier: `engine::eval`
+//! evaluates strata in the order computed here and assigns every rule to
+//! the stratum of its head node, and `dform strata` prints the same graph.
 //!
 //! Nodes:
 //!   * `arg(T, A, P, V, Rank)` heads (lowering turns `arg`, `arg_add`,
@@ -29,7 +31,7 @@
 //! no spans (DESIGN.org "No source locations"), so a rule is identified by its
 //! index in the lowered program and its pretty-printed text.
 
-use crate::ast::{Atom, Constraint, Lit, Program, RuleStmt, Stmt, Term};
+use crate::ast::{Atom, Constraint, Extern, Lit, Program, RuleStmt, Stmt, Term};
 use crate::schema::Schema;
 use crate::transform;
 use crate::value::Value;
@@ -221,22 +223,82 @@ pub fn is_aggregate_head(head: &Atom) -> bool {
 
 /// Build the graph over a program: lower it, then `build_lowered` with the
 /// program's `extern` declarations added to `opts`.
-pub fn build(program: &Program, schema: &Schema, opts: &Options) -> Result<Graph> {
+pub fn build(program: &Program, schema: &Schema) -> Result<Graph> {
+    Ok(compile(program, &schema.facts)?.graph)
+}
+
+/// A program compiled for evaluation, with the partition graph it is
+/// stratified by.
+#[derive(Debug, Clone)]
+pub struct Compiled {
+    /// The lowered program's statements, before the ref rewrite (a source
+    /// fact's statement index is its provenance until the AST has spans).
+    pub statements: Vec<Stmt>,
+    pub rules: Vec<RuleStmt>,
+    pub constraints: Vec<Constraint>,
+    pub facts: Vec<Atom>,
+    pub externs: BTreeSet<Extern>,
+    pub schema: Schema,
+    /// `rules` then `constraints` as `deny` rules, in that order.
+    pub graph: Graph,
+}
+
+/// Compile `program` as `engine::eval` runs it and build its partition
+/// graph: lower; read the provider schema from `given` (the facts given to
+/// the run) and the program's own schema facts; reject a write to a
+/// computed path; rewrite each `ref` to a computed path into an `attr` read
+/// (with its dangling-ref deny); expand the computed prelude per schema row
+/// (E §2.5, §4.3). The one place the graph is built: `dform strata` and
+/// `dform graph strata` print exactly what evaluation stratifies with.
+pub fn compile(program: &Program, given: &[Atom]) -> Result<Compiled> {
     let lowered = transform::lower(program)?;
     let mut rules: Vec<RuleStmt> = Vec::new();
-    let mut fact_atoms: Vec<Atom> = Vec::new();
+    let mut constraints: Vec<Constraint> = Vec::new();
+    let mut facts: Vec<Atom> = Vec::new();
     for s in &lowered.program.statements {
         match s {
             Stmt::Rule(r) => rules.push(r.clone()),
-            Stmt::Fact(a) => fact_atoms.push(a.clone()),
-            Stmt::Constraint(c) => rules.push(constraint_rule(c)),
+            Stmt::Fact(a) => facts.push(a.clone()),
+            Stmt::Constraint(c) => constraints.push(c.clone()),
             _ => {}
         }
     }
-    let mut opts = opts.clone();
-    opts.externs
-        .extend(lowered.externs.into_iter().map(|e| e.pred));
-    Ok(build_lowered(rules, &fact_atoms, schema, &opts))
+    let schema = schema_of(given, &facts)?;
+    transform::check_computed_writes(&rules, &facts, &schema)?;
+    let (mut rules, facts, constraints) =
+        transform::rewrite_computed_refs(rules, facts, constraints, &schema);
+    rules.extend(transform::computed_prelude(&schema));
+    let opts = Options {
+        externs: lowered.externs.iter().map(|e| e.pred.clone()).collect(),
+    };
+    let mut graph_rules = rules.clone();
+    graph_rules.extend(constraints.iter().map(constraint_rule));
+    let graph = build_lowered(graph_rules, &facts, &schema, &opts);
+    Ok(Compiled {
+        statements: lowered.program.statements,
+        rules,
+        constraints,
+        facts,
+        externs: lowered.externs,
+        schema,
+        graph,
+    })
+}
+
+/// The provider schema among the facts given to a run (the catalog the
+/// provider injects), plus any schema facts the program itself states.
+fn schema_of(given: &[Atom], program_facts: &[Atom]) -> Result<Schema> {
+    let is_schema =
+        |a: &&Atom| matches!(a.pred.as_str(), "type_attr" | "type_provider" | "type_mint");
+    let rows: Vec<Atom> = given
+        .iter()
+        .filter(is_schema)
+        .chain(program_facts.iter().filter(is_schema))
+        .cloned()
+        .collect::<BTreeSet<Atom>>()
+        .into_iter()
+        .collect();
+    Schema::from_facts(&rows)
 }
 
 /// A constraint is a `deny` rule with a message head.
@@ -700,10 +762,9 @@ pub fn run_file(
     name: &str,
     files: &[std::path::PathBuf],
     schema: &Schema,
-    opts: &Options,
 ) -> Result<(Verdict, String)> {
     let program = crate::loader::load_program(files)?;
-    let g = build(&program, schema, opts)?;
+    let g = build(&program, schema)?;
     let v = stratify(&g);
     let r = report(name, &g, &v);
     Ok((v, r))
@@ -744,10 +805,9 @@ mod tests {
     /// cross-module wiring through `output(private_subnet_ids)` stratifies.
     #[test]
     fn dr12_revised_partitions_want_by_type() {
-        let opts = Options::default();
         let mut results = Vec::new();
         for (name, path, schema) in examples() {
-            let (v, r) = run_file(name, &[path], &schema, &opts).unwrap();
+            let (v, r) = run_file(name, &[path], &schema).unwrap();
             println!("{r}");
             results.push((name, matches!(v, Verdict::Stratified { .. })));
         }
@@ -755,25 +815,47 @@ mod tests {
         for (name, ok) in &results {
             assert!(ok, "{name} rejected under revised DR-12");
         }
-        // F section 4.1: dform.df in 11 strata (vpc, subnets, the subnet-id
-        // output, then the database and cluster that consume it, then policy).
+        // F section 4.1 counted 11 strata for dform.df over the program
+        // before the ref rewrite; the graph evaluation runs with also orders
+        // every ref-holding contribution above the attribute it reads (see
+        // below): 13.
         let (v, _) = run_file(
             "dform.df",
             &[root().join("dform.df")],
             &crate::schema::fake(),
-            &opts,
         )
         .unwrap();
         let Verdict::Stratified { strata } = v else {
             panic!()
         };
-        assert_eq!(strata.values().max().copied().unwrap() + 1, 11);
+        assert_eq!(strata.values().max().copied().unwrap() + 1, 13);
+    }
+
+    /// The graph `dform strata` prints is the one evaluation runs with: a
+    /// contribution that holds `ref(net.vpc, A, id)` reads `(attr, net.vpc,
+    /// id)` after the ref rewrite, so it sits in a higher stratum. The
+    /// graph `dform strata` built from the program before the rewrite put
+    /// the contribution in stratum 0 and the attribute in stratum 3.
+    #[test]
+    fn a_ref_holding_contribution_sits_above_the_attribute_it_reads() {
+        let program = crate::loader::load_program(&[root().join("dform.df")]).unwrap();
+        let g = build(&program, &crate::schema::fake()).unwrap();
+        let Verdict::Stratified { strata } = stratify(&g) else {
+            panic!()
+        };
+        let node = |pred: &str, t: &str, p: &str| Node {
+            pred: pred.into(),
+            typ: Some(t.into()),
+            path: Some(p.into()),
+        };
+        let peering = strata[&node("arg", "net.vpc_peering", "requester_vpc_id")];
+        let vpc_id = strata[&node("attr", "net.vpc", "id")];
+        assert!(peering > vpc_id, "{peering} <= {vpc_id}");
     }
 
     /// Adversarial programs, in the current syntax so they lower today.
     #[test]
     fn adversarial_programs_under_revised_dr12() {
-        let opts = Options::default();
         let dir = root().join("examples/adversarial");
         let cases: Vec<(&str, bool)> = vec![
             ("adv3_pack_reads_other_path.df", true),
@@ -785,7 +867,7 @@ mod tests {
             ("adv9_default_tag_unless_present.df", false),
         ];
         for (file, expect_ok) in cases {
-            let (v, r) = run_file(file, &[dir.join(file)], &crate::schema::fake(), &opts).unwrap();
+            let (v, r) = run_file(file, &[dir.join(file)], &crate::schema::fake()).unwrap();
             println!("{r}");
             assert_eq!(matches!(v, Verdict::Stratified { .. }), expect_ok, "{file}");
         }

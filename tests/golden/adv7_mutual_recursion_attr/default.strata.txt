@@ -1,6 +1,6 @@
 exit: error
 -- stdout --
-== examples/adversarial/adv7_mutual_recursion_attr.df: 45 nodes, 34 edges (20 negative)
+== examples/adversarial/adv7_mutual_recursion_attr.df: 49 nodes, 93 edges (34 negative)
    REJECTED: negative cycle through 4 nodes
    scc: (arg, net.a, peer)  (arg, net.b, name)  (attr, net.a, peer)  (attr, net.b, name)
    (arg, net.a, peer) -> (attr, net.a, peer)  [attribute aggregate (lub_ranked)]  prelude

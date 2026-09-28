@@ -1,20 +1,8 @@
 exit: ok
 -- stdout --
-== examples/adopt_demo.df: 69 nodes, 73 edges (33 negative)
+== examples/adopt_demo.df: 75 nodes, 145 edges (55 negative)
    STRATIFIED, 8 strata
    stratum 0:
-     (arg, compute.vm, id)
-     (arg, db.postgres, endpoint)
-     (arg, db.postgres, id)
-     (arg, iam.policy, id)
-     (arg, iam.role, id)
-     (arg, iam.role_policy_attachment, id)
-     (arg, k8s.cluster, api_endpoint)
-     (arg, k8s.cluster, ca_cert)
-     (arg, k8s.cluster, id)
-     (arg, k8s.nodepool, id)
-     (arg, net.route, id)
-     (arg, net.vpc_peering, id)
      (arg, settings, network.vpc_cidr)
      (want, compute.vm)
      (want, db.postgres)
@@ -29,12 +17,34 @@ exit: ok
      component_scope
      data
      has_env
+     identity
      input
+     resolve
+     resolved
+     world_attr
      zone_index
    stratum 1:
      (adopt, net.vpc)
+     (arg, compute.vm, id)
+     (arg, db.postgres, endpoint)
+     (arg, db.postgres, id)
+     (arg, iam.policy, id)
+     (arg, iam.role, id)
+     (arg, iam.role_policy_attachment, id)
+     (arg, k8s.cluster, api_endpoint)
+     (arg, k8s.cluster, ca_cert)
+     (arg, k8s.cluster, id)
+     (arg, k8s.nodepool, id)
+     (arg, net.route, id)
      (arg, net.vpc, adopted_id)
      (arg, net.vpc, owner_tag)
+     (arg, net.vpc_peering, id)
+     (attr, settings, network.vpc_cidr)
+     env
+   stratum 2:
+     (arg, net.vpc, cidr)
+     (arg, net.vpc, id)
+     (arg, net.vpc, tags)
      (attr, compute.vm, id)
      (attr, db.postgres, endpoint)
      (attr, db.postgres, id)
@@ -46,15 +56,9 @@ exit: ok
      (attr, k8s.cluster, id)
      (attr, k8s.nodepool, id)
      (attr, net.route, id)
-     (attr, net.vpc_peering, id)
-     (attr, settings, network.vpc_cidr)
-     env
-   stratum 2:
-     (arg, net.vpc, cidr)
-     (arg, net.vpc, id)
-     (arg, net.vpc, tags)
      (attr, net.vpc, adopted_id)
      (attr, net.vpc, owner_tag)
+     (attr, net.vpc_peering, id)
      (want, net.vpc)
      param
    stratum 3:
@@ -68,6 +72,7 @@ exit: ok
      (arg, net.subnet, vpc_id)
      (arg, net.subnet, zone)
      (want, net.subnet)
+     __ref_dep
    stratum 5:
      (attr, net.subnet, cidr)
      (attr, net.subnet, id)
@@ -77,6 +82,7 @@ exit: ok
    stratum 6:
      (arg, output, private_subnet_ids)
      __lc_1
+     deny
    stratum 7:
      (attr, output, private_subnet_ids)
 -- stderr --

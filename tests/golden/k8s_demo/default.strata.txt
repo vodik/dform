@@ -1,18 +1,36 @@
 exit: ok
 -- stdout --
-== examples/k8s_demo.df: 94 nodes, 221 edges (39 negative)
-   STRATIFIED, 2 strata
+== examples/k8s_demo.df: 100 nodes, 922 edges (221 negative)
+   STRATIFIED, 7 strata
    stratum 0:
      (arg, k8s.config_map, data)
-     (arg, k8s.config_map, metadata)
+     (want, k8s.config_map)
+     (want, k8s.cron_job)
+     (want, k8s.daemon_set)
+     (want, k8s.deployment)
+     (want, k8s.horizontal_pod_autoscaler)
+     (want, k8s.ingress)
+     (want, k8s.job)
+     (want, k8s.namespace)
+     (want, k8s.network_policy)
+     (want, k8s.persistent_volume_claim)
+     (want, k8s.pod_disruption_budget)
+     (want, k8s.secret)
+     (want, k8s.service)
+     (want, k8s.service_account)
+     (want, k8s.stateful_set)
+     app
+     identity
+     resolve
+     resolved
+     world_attr
+   stratum 1:
      (arg, k8s.cron_job, metadata)
      (arg, k8s.cron_job, spec)
      (arg, k8s.cron_job, status)
      (arg, k8s.daemon_set, metadata)
      (arg, k8s.daemon_set, spec)
      (arg, k8s.daemon_set, status)
-     (arg, k8s.deployment, metadata)
-     (arg, k8s.deployment, spec)
      (arg, k8s.deployment, status)
      (arg, k8s.horizontal_pod_autoscaler, metadata)
      (arg, k8s.horizontal_pod_autoscaler, spec)
@@ -35,40 +53,21 @@ exit: ok
      (arg, k8s.pod_disruption_budget, status)
      (arg, k8s.secret, metadata)
      (arg, k8s.secret, type)
-     (arg, k8s.service, metadata)
      (arg, k8s.service, spec)
      (arg, k8s.service, status)
      (arg, k8s.service_account, metadata)
      (arg, k8s.stateful_set, metadata)
      (arg, k8s.stateful_set, spec)
      (arg, k8s.stateful_set, status)
-     (want, k8s.config_map)
-     (want, k8s.cron_job)
-     (want, k8s.daemon_set)
-     (want, k8s.deployment)
-     (want, k8s.horizontal_pod_autoscaler)
-     (want, k8s.ingress)
-     (want, k8s.job)
-     (want, k8s.namespace)
-     (want, k8s.network_policy)
-     (want, k8s.persistent_volume_claim)
-     (want, k8s.pod_disruption_budget)
-     (want, k8s.secret)
-     (want, k8s.service)
-     (want, k8s.service_account)
-     (want, k8s.stateful_set)
-     app
-   stratum 1:
      (attr, k8s.config_map, data)
-     (attr, k8s.config_map, metadata)
+     deny
+   stratum 2:
      (attr, k8s.cron_job, metadata)
      (attr, k8s.cron_job, spec)
      (attr, k8s.cron_job, status)
      (attr, k8s.daemon_set, metadata)
      (attr, k8s.daemon_set, spec)
      (attr, k8s.daemon_set, status)
-     (attr, k8s.deployment, metadata)
-     (attr, k8s.deployment, spec)
      (attr, k8s.deployment, status)
      (attr, k8s.horizontal_pod_autoscaler, metadata)
      (attr, k8s.horizontal_pod_autoscaler, spec)
@@ -91,11 +90,23 @@ exit: ok
      (attr, k8s.pod_disruption_budget, status)
      (attr, k8s.secret, metadata)
      (attr, k8s.secret, type)
-     (attr, k8s.service, metadata)
      (attr, k8s.service, spec)
      (attr, k8s.service, status)
      (attr, k8s.service_account, metadata)
      (attr, k8s.stateful_set, metadata)
      (attr, k8s.stateful_set, spec)
      (attr, k8s.stateful_set, status)
+   stratum 3:
+     (arg, k8s.config_map, metadata)
+     (arg, k8s.deployment, metadata)
+     (arg, k8s.service, metadata)
+   stratum 4:
+     (attr, k8s.config_map, metadata)
+     (attr, k8s.deployment, metadata)
+     (attr, k8s.service, metadata)
+   stratum 5:
+     (arg, k8s.deployment, spec)
+     __ref_dep
+   stratum 6:
+     (attr, k8s.deployment, spec)
 -- stderr --

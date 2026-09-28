@@ -1,23 +1,9 @@
 exit: ok
 -- stdout --
-== examples/adversarial/adv7b_mutual_via_different_paths.df: 47 nodes, 35 edges (20 negative)
+== examples/adversarial/adv7b_mutual_via_different_paths.df: 51 nodes, 94 edges (34 negative)
    STRATIFIED, 6 strata
    stratum 0:
-     (arg, compute.vm, id)
-     (arg, db.postgres, endpoint)
-     (arg, db.postgres, id)
-     (arg, iam.policy, id)
-     (arg, iam.role, id)
-     (arg, iam.role_policy_attachment, id)
-     (arg, k8s.cluster, api_endpoint)
-     (arg, k8s.cluster, ca_cert)
-     (arg, k8s.cluster, id)
-     (arg, k8s.nodepool, id)
      (arg, net.a, z)
-     (arg, net.route, id)
-     (arg, net.subnet, id)
-     (arg, net.vpc, id)
-     (arg, net.vpc_peering, id)
      (want, compute.vm)
      (want, db.postgres)
      (want, iam.policy)
@@ -30,7 +16,28 @@ exit: ok
      (want, net.subnet)
      (want, net.vpc)
      (want, net.vpc_peering)
+     identity
+     resolve
+     resolved
+     world_attr
    stratum 1:
+     (arg, compute.vm, id)
+     (arg, db.postgres, endpoint)
+     (arg, db.postgres, id)
+     (arg, iam.policy, id)
+     (arg, iam.role, id)
+     (arg, iam.role_policy_attachment, id)
+     (arg, k8s.cluster, api_endpoint)
+     (arg, k8s.cluster, ca_cert)
+     (arg, k8s.cluster, id)
+     (arg, k8s.nodepool, id)
+     (arg, net.route, id)
+     (arg, net.subnet, id)
+     (arg, net.vpc, id)
+     (arg, net.vpc_peering, id)
+     (attr, net.a, z)
+   stratum 2:
+     (arg, net.b, x)
      (attr, compute.vm, id)
      (attr, db.postgres, endpoint)
      (attr, db.postgres, id)
@@ -41,13 +48,10 @@ exit: ok
      (attr, k8s.cluster, ca_cert)
      (attr, k8s.cluster, id)
      (attr, k8s.nodepool, id)
-     (attr, net.a, z)
      (attr, net.route, id)
      (attr, net.subnet, id)
      (attr, net.vpc, id)
      (attr, net.vpc_peering, id)
-   stratum 2:
-     (arg, net.b, x)
      (want, net.b)
    stratum 3:
      (attr, net.b, x)

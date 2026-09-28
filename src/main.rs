@@ -144,11 +144,7 @@ fn main() -> Result<()> {
     if let Cmd::Graph { what: Some(w) } = &cli.cmd
         && w == "strata"
     {
-        let graph = partition::build(
-            &program,
-            &load_schema(&cli.providers)?,
-            &partition::Options::default(),
-        )?;
+        let graph = partition::build(&program, &load_schema(&cli.providers)?)?;
         return match partition::stratify(&graph) {
             partition::Verdict::Stratified { strata } => {
                 print!("{}", graph::strata(&graph, Some(&strata)));
@@ -615,7 +611,7 @@ fn print_strata(
     program: &dform::ast::Program,
     schema: &schema::Schema,
 ) -> Result<()> {
-    let graph = partition::build(program, schema, &partition::Options::default())?;
+    let graph = partition::build(program, schema)?;
     let verdict = partition::stratify(&graph);
     let name = files
         .iter()

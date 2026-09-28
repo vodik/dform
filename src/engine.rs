@@ -3,7 +3,6 @@ use crate::circuit::{self, Circuit, Leaf, NodeId};
 use crate::lattice::{self, Collapsed2, Lattice, Rank, RankedContribution, Shadowed, Witnesses};
 use crate::lattice::{Truth, nulls_in};
 use crate::partition::{self, Node};
-use crate::schema::Schema;
 use crate::stuck::{self, Stuck};
 use crate::transform;
 use crate::value::Value;
@@ -115,9 +114,10 @@ const AGGREGATE_OUTPUTS: [&str; 3] = ["attr", "attr_conflict", "attr_stuck"];
 const LATTICE_DECLS: [&str; 2] = ["type_lattice", "type_list_key"];
 
 pub fn eval(program: &Program, extra_facts: &[Atom]) -> Result<(EvalResult, Vec<String>)> {
-    let lowered = transform::lower(program)?;
-    let program = lowered.program;
-    let externs = lowered.externs;
+    // The program as it runs and the partition graph it is stratified by,
+    // built in one place (`dform strata` prints the same graph).
+    let compiled = partition::compile(program, extra_facts)?;
+    let externs = compiled.externs;
     let mut facts: BTreeSet<Atom> = BTreeSet::new();
     let mut origins = Origins::default();
     let mut prov = Prov::default();
@@ -127,27 +127,16 @@ pub fn eval(program: &Program, extra_facts: &[Atom]) -> Result<(EvalResult, Vec<
         facts.insert(g);
     }
 
-    let mut rules = Vec::new();
-    let mut constraints = Vec::new();
-    let mut fact_atoms = Vec::new();
-
     // Source facts are known by statement index until the AST has spans.
     let mut stmt_of: BTreeMap<Atom, usize> = BTreeMap::new();
-    for (i, stmt) in program.statements.iter().enumerate() {
+    for (i, stmt) in compiled.statements.iter().enumerate() {
         if let Stmt::Fact(a) = stmt
             && let Ok(g) = ensure_ground(a)
         {
             stmt_of.entry(g).or_insert(i);
         }
-        match stmt {
-            Stmt::Fact(a) => fact_atoms.push(a.clone()),
-            Stmt::Rule(r) => rules.push(r.clone()),
-            Stmt::Constraint(c) => constraints.push(c.clone()),
-            _ => {
-                // Lowered program should contain only facts/rules/constraints.
-            }
-        }
     }
+    let (rules, constraints, fact_atoms) = (compiled.rules, compiled.constraints, compiled.facts);
     for r in &rules {
         if AGGREGATE_OUTPUTS.contains(&r.head.pred.as_str()) {
             bail!(
@@ -165,13 +154,6 @@ pub fn eval(program: &Program, extra_facts: &[Atom]) -> Result<(EvalResult, Vec<
         }
     }
 
-    // The provider schema arrives as facts (the catalog); the prelude and
-    // the ref rewrite are expanded per schema row (E §2.5, §4.3).
-    let schema = schema_of(&facts, &fact_atoms)?;
-    transform::check_computed_writes(&rules, &fact_atoms, &schema)?;
-    let (mut rules, fact_atoms, constraints) =
-        transform::rewrite_computed_refs(rules, fact_atoms, constraints, &schema);
-    rules.extend(transform::computed_prelude(&schema));
     for a in &fact_atoms {
         let g = ensure_ground(a)?;
         origins.note(&g, partition::fmt_atom(&g));
@@ -187,12 +169,7 @@ pub fn eval(program: &Program, extra_facts: &[Atom]) -> Result<(EvalResult, Vec<
 
     // Stratified evaluation over the partition graph (E §2.6, F DR-12
     // revised). Every rule runs in the stratum of its head node.
-    let mut graph_rules = rules.clone();
-    graph_rules.extend(constraints.iter().map(partition::constraint_rule));
-    let opts = partition::Options {
-        externs: externs.iter().map(|e| e.pred.clone()).collect(),
-    };
-    let graph = partition::build_lowered(graph_rules, &fact_atoms, &schema, &opts);
+    let graph = compiled.graph;
     let strata = match partition::stratify(&graph) {
         partition::Verdict::Stratified { strata } => strata,
         partition::Verdict::Rejected {
@@ -399,22 +376,6 @@ pub fn query(body: &[Lit], facts: &BTreeSet<Atom>) -> Result<Vec<Answer>> {
             (b.collect(), used)
         })
         .collect())
-}
-
-/// The provider schema among this run's facts: the catalog the provider
-/// injects, plus any schema facts the program itself states.
-fn schema_of(facts: &BTreeSet<Atom>, program_facts: &[Atom]) -> Result<Schema> {
-    let is_schema =
-        |a: &&Atom| matches!(a.pred.as_str(), "type_attr" | "type_provider" | "type_mint");
-    let rows: Vec<Atom> = facts
-        .iter()
-        .filter(is_schema)
-        .cloned()
-        .chain(program_facts.iter().filter(is_schema).cloned())
-        .collect::<BTreeSet<Atom>>()
-        .into_iter()
-        .collect();
-    Schema::from_facts(&rows)
 }
 
 /// E §2.6: a body predicate with no definition is a compile error. Defined
@@ -2752,19 +2713,21 @@ mod tests {
                 .into_iter()
                 .collect();
             let (r, violations) = eval(&program, &extra).unwrap();
-            let docs: Vec<String> =
-                crate::ir::compile_resources(r.facts.iter().cloned(), &Schema::default())
-                    .unwrap()
-                    .iter()
-                    .map(|r| {
-                        format!(
-                            "{} {} {}",
-                            r.addr.typ,
-                            r.addr.name,
-                            partition::fmt_value(&r.attrs)
-                        )
-                    })
-                    .collect();
+            let docs: Vec<String> = crate::ir::compile_resources(
+                r.facts.iter().cloned(),
+                &crate::schema::Schema::default(),
+            )
+            .unwrap()
+            .iter()
+            .map(|r| {
+                format!(
+                    "{} {} {}",
+                    r.addr.typ,
+                    r.addr.name,
+                    partition::fmt_value(&r.attrs)
+                )
+            })
+            .collect();
             (docs, violations, r.warnings)
         };
         for env in [None, Some("staging"), Some("prod"), Some("dev")] {
