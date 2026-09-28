@@ -33,6 +33,8 @@ pub enum WriteError {
     Conflict(Vec<(String, String)>),
     /// The change sets a field the server will not change in place.
     Immutable(String),
+    /// Something the object needs is not there: its namespace.
+    NotFound(String),
     /// The server refused it for another reason.
     Other(anyhow::Error),
     /// No answer: the write may have happened.
@@ -54,7 +56,7 @@ impl std::fmt::Display for WriteError {
                     cs.join("; ")
                 )
             }
-            WriteError::Immutable(m) => write!(f, "{m}"),
+            WriteError::Immutable(m) | WriteError::NotFound(m) => write!(f, "{m}"),
             WriteError::Other(e) | WriteError::Transport(e) => write!(f, "{e:#}"),
         }
     }
@@ -94,6 +96,9 @@ fn api_write_error(s: &Status) -> WriteError {
                 .any(|c| c.message.contains("field is immutable")))
     {
         return WriteError::Immutable(s.message.clone());
+    }
+    if s.code == 404 {
+        return WriteError::NotFound(s.message.clone());
     }
     WriteError::Other(anyhow!("{} ({})", s.message, s.code))
 }
@@ -411,6 +416,17 @@ mod tests {
                 .contains(".spec.replicas is owned by field manager \"kubectl\""),
             "{e}"
         );
+    }
+
+    #[test]
+    fn a_missing_namespace_is_not_found() {
+        let s = Status {
+            code: 404,
+            reason: "NotFound".into(),
+            message: "namespaces \"shop\" not found".into(),
+            ..Default::default()
+        };
+        assert!(matches!(api_write_error(&s), WriteError::NotFound(_)));
     }
 
     #[test]

@@ -296,6 +296,12 @@ fn merge(into: &mut Json, from: &Json) {
 impl Api {
     fn start() -> (Arc<Api>, String) {
         let api = Arc::new(Api::default());
+        // A cluster starts with its `default` namespace.
+        api.objects.lock().unwrap().insert(
+            "/api/v1/namespaces/default".into(),
+            json!({"apiVersion": "v1", "kind": "Namespace",
+                   "metadata": {"name": "default", "uid": "uid-default"}}),
+        );
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
         let a = api.clone();
@@ -441,6 +447,18 @@ impl Api {
             },
             "PATCH" => {
                 let applied: Json = serde_json::from_slice(body).unwrap();
+                // A namespaced object needs its namespace, as a server's
+                // admission does (a dry run too).
+                if let ["namespaces", ns, _, _] = rest
+                    && !objects.contains_key(&format!("/api/v1/namespaces/{ns}"))
+                {
+                    return status(
+                        404,
+                        "NotFound",
+                        &format!("namespaces \"{ns}\" not found"),
+                        json!([]),
+                    );
+                }
                 if q("fieldManager").as_deref() != Some("dform") {
                     return status(400, "BadRequest", "fieldManager is required", json!([]));
                 }
@@ -600,8 +618,9 @@ fn the_k8s_provider_conforms() {
             &["dryRun=All", "fieldManager=dform"]
         ) > 0
     );
-    assert!(
-        api.objects.lock().unwrap().is_empty(),
+    assert_eq!(
+        api.objects.lock().unwrap().keys().collect::<Vec<_>>(),
+        ["/api/v1/namespaces/default"],
         "the check cleans up"
     );
 }

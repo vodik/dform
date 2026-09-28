@@ -134,7 +134,11 @@ const CASES: &[Case] = &[
     case("k8s_demo", "default", "examples/k8s/stacks/k8s_demo.df"),
     case("aws_demo", "default", "examples/aws/stacks/aws_demo.df"),
     // The providers are its project's (examples/crud-api/dform.toml).
-    case("crud_api", "default", "examples/crud-api/stacks/crud_api.df"),
+    case(
+        "crud_api",
+        "default",
+        "examples/crud-api/stacks/crud_api.df",
+    ),
 ];
 
 /// Strip the repo's absolute path so snapshots are portable across checkouts

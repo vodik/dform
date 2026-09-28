@@ -287,6 +287,12 @@ impl K8s {
                 Ok((changes, r))
             }
             Err(WriteError::Immutable(_)) if prior.is_some() => Ok((local, true)),
+            // Its namespace does not exist yet (the same apply makes it
+            // first): the diff is local.
+            Err(WriteError::NotFound(_)) if prior.is_none() => {
+                let r = replaces(&local);
+                Ok((local, r))
+            }
             // Apply fails on it, naming the manager and the field.
             Err(WriteError::Conflict(_)) => {
                 let r = replaces(&local);
