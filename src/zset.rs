@@ -223,6 +223,387 @@ fn compare(desired: &Value, world: &Value) -> (Kind, BTreeSet<String>) {
     }
 }
 
+/// The plan file (`plan --out PLAN.json`, `apply PLAN.json`; E §2.8):
+/// the inputs, a digest of the world the plan was taken against, and the
+/// deformation delta with the nulls it resolved and the ones it still
+/// carries, each deformation with the tick it runs in.
+///
+/// Terraform's stale-plan rule, stated for Z-sets: `apply PLAN` refreshes
+/// and re-evaluates, and refuses unless the delta it computes is the
+/// file's. Every deformation now must be in the file with the same action,
+/// the same before-state and the same desired values (a null the file
+/// carries matches the value it has resolved to since); every deformation
+/// in the file that has not run yet must still be one. A new address is
+/// allowed only where the file has a pending group of its type. Values are
+/// stored redacted, as the plan prints them, so a sensitive value is
+/// compared by presence only.
+pub mod file {
+    use crate::ast::{Atom, Term};
+    use crate::plan_print::{self, Report};
+    use crate::provider::{Action, ActionKind, Plan};
+    use crate::schema::Schema;
+    use crate::stuck::Sections;
+    use crate::value::Value;
+    use anyhow::{Context, Result};
+    use serde::{Deserialize, Serialize};
+    use serde_json::Value as Json;
+    use std::collections::BTreeMap;
+    use std::path::Path;
+
+    pub const VERSION: u32 = 1;
+
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    pub struct PlanFile {
+        pub version: u32,
+        pub stack: String,
+        pub inputs: Inputs,
+        /// FNV-1a over the refreshed world facts: what the plan saw.
+        pub world_digest: String,
+        pub deformations: Vec<Entry>,
+        pub pending_groups: Vec<Group>,
+        pub nulls: Nulls,
+        pub ticks: Vec<Tick>,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    pub struct Inputs {
+        pub files: Vec<FileDigest>,
+        pub set: Vec<String>,
+        pub data: Vec<String>,
+        pub providers: Vec<String>,
+        pub world: Option<String>,
+        pub inventory: Option<String>,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    pub struct FileDigest {
+        pub path: String,
+        pub fnv64: String,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    pub struct Entry {
+        #[serde(rename = "type")]
+        pub typ: String,
+        pub name: String,
+        pub action: String,
+        /// The tick it runs in; `None` when the plan cannot schedule it.
+        pub tick: Option<usize>,
+        /// The nulls it is held on, empty when definite.
+        pub on: Vec<String>,
+        pub changes: Vec<Leaf>,
+        /// A replace: the resources whose documents reference this one.
+        /// The replacement's new identity updates them a tick later.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pub dependents: Vec<String>,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    pub struct Leaf {
+        pub path: String,
+        pub before: Json,
+        pub after: Json,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    pub struct Group {
+        pub pattern: String,
+        pub on: Vec<String>,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    pub struct Nulls {
+        /// Resolved in round 0 from the world: label and value.
+        pub resolved: Vec<Resolved>,
+        /// Carried by the delta, filled at apply.
+        pub unresolved: Vec<String>,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    pub struct Resolved {
+        pub null: String,
+        pub value: Json,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    pub struct Tick {
+        pub tick: usize,
+        pub addresses: Vec<String>,
+    }
+
+    pub fn fnv64(bytes: &[u8]) -> String {
+        let mut h: u64 = 0xcbf29ce484222325;
+        for b in bytes {
+            h ^= *b as u64;
+            h = h.wrapping_mul(0x100000001b3);
+        }
+        format!("{h:016x}")
+    }
+
+    pub fn world_digest(world_facts: &[Atom]) -> String {
+        let mut lines: Vec<String> = world_facts.iter().map(crate::partition::fmt_atom).collect();
+        lines.sort();
+        fnv64(lines.join("\n").as_bytes())
+    }
+
+    fn action_name(k: &ActionKind) -> &'static str {
+        match k {
+            ActionKind::Create => "create",
+            ActionKind::Adopt => "adopt",
+            // A pending update is an update whose comparison waits.
+            ActionKind::Update | ActionKind::Pending => "update",
+            ActionKind::Drift => "drift",
+            ActionKind::Delete => "delete",
+            ActionKind::Replace {
+                create_first: false,
+            } => "replace",
+            ActionKind::Replace { create_first: true } => "replace_create_first",
+            ActionKind::DeleteDeposed => "delete_deposed",
+            ActionKind::Noop => "no-op",
+        }
+    }
+
+    /// The delta of one plan: every deformation, definite or held, with
+    /// its tick from the report's schedule. Paths are the provider's own
+    /// (a keyless set element by content), values redacted.
+    pub fn delta(plan: &Plan, sections: &Sections, report: &Report, schema: &Schema) -> Vec<Entry> {
+        let mut tick_of: BTreeMap<&str, usize> = BTreeMap::new();
+        for (t, xs) in &report.ticks {
+            for x in xs {
+                tick_of.insert(x, *t);
+            }
+        }
+        plan.actions
+            .iter()
+            .filter(|a| !matches!(a.kind, ActionKind::Noop))
+            .map(|a| entry(a, sections, &tick_of, schema))
+            .collect()
+    }
+
+    fn entry(
+        a: &Action,
+        sections: &Sections,
+        tick_of: &BTreeMap<&str, usize>,
+        schema: &Schema,
+    ) -> Entry {
+        let name = format!("{}.{}", a.addr.typ, a.addr.name);
+        Entry {
+            typ: a.addr.typ.clone(),
+            name: a.addr.name.clone(),
+            action: action_name(&a.kind).into(),
+            tick: tick_of.get(name.as_str()).copied(),
+            on: plan_print::waits_on(a, sections).unwrap_or_default(),
+            changes: a
+                .changes
+                .iter()
+                .map(|c| Leaf {
+                    path: c.path.clone(),
+                    before: plan_print::shown(c.before.as_ref(), c.sensitive, schema).json(),
+                    after: plan_print::shown(c.after.as_ref(), c.sensitive, schema).json(),
+                })
+                .collect(),
+            dependents: vec![],
+        }
+    }
+
+    /// Round 0's resolutions, from the `resolve/2` facts.
+    pub fn resolved(facts: &std::collections::BTreeSet<Atom>, schema: &Schema) -> Vec<Resolved> {
+        facts
+            .iter()
+            .filter(|a| a.pred == "resolve")
+            .filter_map(|a| match a.args.as_slice() {
+                [Term::Val(Value::Str(l)), Term::Val(v)] => {
+                    let (t, p) = match (crate::value::null_owner(l), l.split_once('#')) {
+                        (Some((t, _)), Some((_, p))) => (t, p.to_string()),
+                        _ => (String::new(), String::new()),
+                    };
+                    let value = if schema.is_sensitive(&t, &p) {
+                        serde_json::json!({ "sensitive": Json::Null })
+                    } else {
+                        plan_print::redact_value(&t, v, schema)
+                    };
+                    Some(Resolved {
+                        null: l.clone(),
+                        value,
+                    })
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    impl PlanFile {
+        pub fn load(path: &Path) -> Result<PlanFile> {
+            let text = std::fs::read_to_string(path)
+                .with_context(|| format!("read plan file {}", path.display()))?;
+            let f: PlanFile = serde_json::from_str(&text)
+                .with_context(|| format!("parse plan file {}", path.display()))?;
+            if f.version != VERSION {
+                anyhow::bail!(
+                    "plan file {}: version {} (this dform writes {VERSION})",
+                    path.display(),
+                    f.version
+                );
+            }
+            Ok(f)
+        }
+
+        /// What differs between the inputs the file records and `now`.
+        pub fn input_differences(&self, now: &Inputs) -> Vec<String> {
+            let was = &self.inputs;
+            let mut out = Vec::new();
+            let files = |i: &Inputs| -> BTreeMap<String, String> {
+                i.files
+                    .iter()
+                    .map(|f| (f.path.clone(), f.fnv64.clone()))
+                    .collect()
+            };
+            let (a, b) = (files(was), files(now));
+            for (p, h) in &a {
+                match b.get(p) {
+                    None => out.push(format!("--file {p}: in the plan file, not given now")),
+                    Some(h2) if h2 != h => out.push(format!("--file {p}: changed since the plan")),
+                    _ => {}
+                }
+            }
+            for p in b.keys().filter(|p| !a.contains_key(*p)) {
+                out.push(format!("--file {p}: given now, not in the plan file"));
+            }
+            let mut flag = |name: &str, x: String, y: String| {
+                if x != y {
+                    out.push(format!("--{name}: the plan file has [{x}], now [{y}]"));
+                }
+            };
+            flag("set", was.set.join(" "), now.set.join(" "));
+            flag("data", was.data.join(" "), now.data.join(" "));
+            flag("provider", was.providers.join(" "), now.providers.join(" "));
+            let opt = |o: &Option<String>| o.clone().unwrap_or_default();
+            flag("world", opt(&was.world), opt(&now.world));
+            flag("inventory", opt(&was.inventory), opt(&now.inventory));
+            out
+        }
+
+        pub fn save(&self, path: &Path) -> Result<()> {
+            std::fs::write(path, serde_json::to_string_pretty(self)? + "\n")
+                .with_context(|| format!("write plan file {}", path.display()))
+        }
+
+        /// The differences between this file's delta and `current`, the
+        /// delta re-evaluated at the start of `tick`; empty when the file's
+        /// delta is reproduced.
+        pub fn stale(&self, current: &[Entry], tick: usize) -> Vec<String> {
+            let key = |e: &Entry| (e.typ.clone(), e.name.clone());
+            let saved: BTreeMap<(String, String), &Entry> =
+                self.deformations.iter().map(|e| (key(e), e)).collect();
+            let now: BTreeMap<(String, String), &Entry> =
+                current.iter().map(|e| (key(e), e)).collect();
+            let mut out = Vec::new();
+            for (k, c) in &now {
+                let at = format!("{}.{}", k.0, k.1);
+                // The object a create_before_destroy replacement deposed
+                // is deleted the tick after.
+                let deposed = c.action == "delete_deposed"
+                    && saved
+                        .get(k)
+                        .is_some_and(|s| s.action == "replace_create_first");
+                if deposed {
+                    continue;
+                }
+                let Some(s) = saved.get(k) else {
+                    let grouped = self
+                        .pending_groups
+                        .iter()
+                        .any(|g| g.pattern == format!("{}.?", k.0));
+                    // A dependent of an earlier replace follows its new
+                    // identity.
+                    let follows = c.action == "update"
+                        && self.deformations.iter().any(|e| {
+                            e.tick.is_some_and(|t| t < tick) && e.dependents.contains(&at)
+                        });
+                    if !grouped && !follows {
+                        out.push(format!("{} {at}: not in the plan file", c.action));
+                    }
+                    continue;
+                };
+                if s.tick.is_some_and(|t| t < tick) {
+                    out.push(format!(
+                        "{} {at}: deformed again at tick {tick}; the plan file ran it in tick {}",
+                        c.action,
+                        s.tick.unwrap_or_default()
+                    ));
+                    continue;
+                }
+                if s.action != c.action {
+                    out.push(format!(
+                        "{at}: the plan file has {}, re-evaluation has {}",
+                        s.action, c.action
+                    ));
+                    continue;
+                }
+                out.extend(leaf_differences(&at, s, c));
+            }
+            for (k, s) in &saved {
+                // Deformations of earlier ticks have run.
+                if s.tick.is_some_and(|t| t < tick) || now.contains_key(k) {
+                    continue;
+                }
+                out.push(format!(
+                    "{} {}.{}: in the plan file, no longer a deformation",
+                    s.action, k.0, k.1
+                ));
+            }
+            out
+        }
+    }
+
+    fn is_null(v: &Json) -> bool {
+        matches!(v, Json::Object(m) if m.len() == 2 && m.contains_key("null") && m.contains_key("class"))
+    }
+
+    fn leaf_differences(at: &str, saved: &Entry, now: &Entry) -> Vec<String> {
+        let s: BTreeMap<&str, &Leaf> = saved.changes.iter().map(|l| (l.path.as_str(), l)).collect();
+        let n: BTreeMap<&str, &Leaf> = now.changes.iter().map(|l| (l.path.as_str(), l)).collect();
+        let text = |v: &Json| serde_json::to_string(v).unwrap_or_default();
+        let mut out = Vec::new();
+        for (p, l) in &n {
+            match s.get(p) {
+                None => out.push(format!(
+                    "{at} {p}: not in the plan file ({} -> {})",
+                    text(&l.before),
+                    text(&l.after)
+                )),
+                Some(sl) => {
+                    if sl.before != l.before {
+                        out.push(format!(
+                            "{at} {p}: the plan saw {}, the world now has {}",
+                            text(&sl.before),
+                            text(&l.before)
+                        ));
+                    }
+                    // A null the file carries matches what it resolved to.
+                    if sl.after != l.after && !is_null(&sl.after) {
+                        out.push(format!(
+                            "{at} {p}: the plan file sets {}, re-evaluation sets {}",
+                            text(&sl.after),
+                            text(&l.after)
+                        ));
+                    }
+                }
+            }
+        }
+        for (p, sl) in &s {
+            if !n.contains_key(p) {
+                out.push(format!(
+                    "{at} {p}: in the plan file ({} -> {}), no longer a change",
+                    text(&sl.before),
+                    text(&sl.after)
+                ));
+            }
+        }
+        out
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

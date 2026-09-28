@@ -66,8 +66,18 @@ struct Cli {
 #[derive(Subcommand, Debug)]
 enum Cmd {
     Eval,
-    Plan,
+    Plan {
+        /// Write the plan file: inputs, a digest of the world, and the
+        /// deformation delta with its nulls and tick schedule.
+        /// `apply PLAN.json` applies exactly this delta or refuses.
+        #[arg(long = "out")]
+        out: Option<PathBuf>,
+    },
     Apply {
+        /// A plan file from `plan --out`: refresh, re-evaluate, and refuse
+        /// unless the delta is the file's. Its inputs are the defaults for
+        /// --file, --set, --data, --provider, --world and --inventory.
+        plan_file: Option<PathBuf>,
         /// Inject a failure into the fake provider (repeatable):
         /// fail=T/N, timeout=T/N, crash=T/N, read-lag=T/N:READS, mutate=T/N:PATH=JSON,
         /// latency=T/N:MS. Deterministic; nothing sleeps.
@@ -110,7 +120,15 @@ enum Cmd {
 }
 
 fn main() -> Result<()> {
-    let cli = Cli::parse();
+    let mut cli = Cli::parse();
+    let plan_file = match &cli.cmd {
+        Cmd::Apply { plan_file, .. } => plan_file.clone(),
+        _ => None,
+    };
+    let saved = match plan_file {
+        Some(p) => Some((p.clone(), with_plan_inputs(&mut cli, &p)?)),
+        None => None,
+    };
 
     let files = default_files(&cli.files)?;
     let program = loader::load_program(&files)?;
@@ -138,6 +156,20 @@ fn main() -> Result<()> {
                 bail!("{}", partition::cycle_error(&graph, &scc, &negative_edges))
             }
         };
+    }
+    let inputs = plan_inputs(&cli, &files)?;
+    if let Some((path, saved)) = &saved {
+        let diff = saved.input_differences(&inputs);
+        if !diff.is_empty() {
+            eprintln!(
+                "plan file {} is stale: its inputs are not this run's:",
+                path.display()
+            );
+            for d in &diff {
+                eprintln!("- {d}");
+            }
+            bail!("stale plan: run plan again");
+        }
     }
 
     let set_keys: Vec<String> = cli
@@ -200,7 +232,7 @@ fn main() -> Result<()> {
     };
     // A plan prints what it would do, conflicts included (E §2.8: a
     // conflict is a fact, not an abort), and then refuses.
-    if !matches!(cli.cmd, Cmd::Plan) {
+    if !matches!(cli.cmd, Cmd::Plan { .. }) {
         blocked(&violations)?;
     }
 
@@ -209,13 +241,13 @@ fn main() -> Result<()> {
     let adopts = ir::compile_adopts(res.facts.iter())?;
     let lifecycle = zset::Lifecycle::from_facts(&res.facts)?;
     let schema = backend.schema();
-    let show = |plan: &dform::provider::Plan,
-                res: &engine::EvalResult,
-                sections: &stuck::Sections,
-                tick: usize,
-                moved: &[(ir::Address, ir::Address)],
-                denies: &[String]| {
-        let report = plan_print::report(&plan_print::Input {
+    let report_of = |plan: &dform::provider::Plan,
+                     res: &engine::EvalResult,
+                     sections: &stuck::Sections,
+                     tick: usize,
+                     moved: &[(ir::Address, ir::Address)],
+                     denies: &[String]| {
+        plan_print::report(&plan_print::Input {
             plan,
             res,
             sections,
@@ -226,8 +258,42 @@ fn main() -> Result<()> {
             tick,
             moved,
             denies,
-        });
-        print!("{}", report.text());
+        })
+    };
+    let show = |plan: &dform::provider::Plan,
+                res: &engine::EvalResult,
+                sections: &stuck::Sections,
+                tick: usize,
+                moved: &[(ir::Address, ir::Address)],
+                denies: &[String]| {
+        print!(
+            "{}",
+            report_of(plan, res, sections, tick, moved, denies).text()
+        )
+    };
+    // `apply PLAN`: the delta re-evaluated at each tick must be the file's.
+    let check_saved = |plan: &dform::provider::Plan,
+                       res: &engine::EvalResult,
+                       sections: &stuck::Sections,
+                       tick: usize|
+     -> Result<()> {
+        let Some((path, saved)) = &saved else {
+            return Ok(());
+        };
+        let report = report_of(plan, res, sections, tick, &[], &[]);
+        let now = zset::file::delta(plan, sections, &report, schema);
+        let diff = saved.stale(&now, tick);
+        if diff.is_empty() {
+            return Ok(());
+        }
+        eprintln!(
+            "plan file {} is stale: re-evaluation after refresh at tick {tick} does not reproduce its delta:",
+            path.display()
+        );
+        for d in &diff {
+            eprintln!("- {d}");
+        }
+        bail!("stale plan: run plan again");
     };
 
     match cli.cmd {
@@ -298,12 +364,72 @@ fn main() -> Result<()> {
             let redact = query::Redactor::new(&res.facts, backend.schema());
             print!("{}", graph::relation(&spec, &res.facts, &redact)?);
         }
-        Cmd::Plan => {
+        Cmd::Plan { out } => {
             let sections = plan_sections(&res, &resources, backend.schema());
             let plan = backend.plan(&resources, &adopts, &lifecycle, &st)?;
             let denies = lifecycle.denies(&plan.actions);
-            show(&plan, &res, &sections, 1, &moves, &denies);
+            let report = report_of(&plan, &res, &sections, 1, &moves, &denies);
+            print!("{}", report.text());
             blocked(&[violations, denies].concat())?;
+            if let Some(out) = out {
+                let mut deformations = zset::file::delta(&plan, &sections, &report, schema);
+                for e in deformations
+                    .iter_mut()
+                    .filter(|e| e.action.starts_with("replace"))
+                {
+                    let addr = ir::Address {
+                        typ: e.typ.clone(),
+                        name: e.name.clone(),
+                    };
+                    e.dependents = resources
+                        .iter()
+                        .filter(|r| r.deps.contains(&addr))
+                        .map(|r| format!("{}.{}", r.addr.typ, r.addr.name))
+                        .collect();
+                }
+                let mut unresolved: std::collections::BTreeSet<String> = deformations
+                    .iter()
+                    .flat_map(|e| e.on.iter().cloned())
+                    .collect();
+                for a in &plan.actions {
+                    for c in &a.changes {
+                        if let Some((dform::provider::NULL_KEY, l)) =
+                            c.after.as_ref().and_then(dform::provider::marker)
+                        {
+                            unresolved.insert(l.to_string());
+                        }
+                    }
+                }
+                let file = zset::file::PlanFile {
+                    version: zset::file::VERSION,
+                    stack: stack.clone(),
+                    inputs,
+                    world_digest: zset::file::world_digest(&backend.world_facts(&st)?),
+                    deformations,
+                    pending_groups: report
+                        .groups
+                        .iter()
+                        .map(|g| zset::file::Group {
+                            pattern: g.pattern.clone(),
+                            on: g.on.clone(),
+                        })
+                        .collect(),
+                    nulls: zset::file::Nulls {
+                        resolved: zset::file::resolved(&res.facts, schema),
+                        unresolved: unresolved.into_iter().collect(),
+                    },
+                    ticks: report
+                        .ticks
+                        .iter()
+                        .map(|(t, xs)| zset::file::Tick {
+                            tick: *t,
+                            addresses: xs.clone(),
+                        })
+                        .collect(),
+                };
+                file.save(&out)?;
+                println!("plan file: {}", out.display());
+            }
         }
         Cmd::Apply {
             max_ticks,
@@ -365,6 +491,7 @@ fn main() -> Result<()> {
             loop {
                 let sections = plan_sections(&res, &resources, backend.schema());
                 let mut plan = backend.plan(&resources, &adopts, &lifecycle, &st)?;
+                check_saved(&plan, &res, &sections, tick)?;
                 let held: Vec<String> = plan
                     .actions
                     .iter()
@@ -549,6 +676,56 @@ fn plan_sections(
         .map(|r| ((r.addr.typ.clone(), r.addr.name.clone()), r.attrs.clone()))
         .collect();
     stuck::sections(&res.stuck, &res.facts, &docs, schema)
+}
+
+/// This run's inputs as a plan file records them.
+fn plan_inputs(cli: &Cli, files: &[PathBuf]) -> Result<zset::file::Inputs> {
+    let digests = files
+        .iter()
+        .map(|f| {
+            let bytes =
+                std::fs::read(f).map_err(|e| anyhow::anyhow!("read {}: {e}", f.display()))?;
+            Ok(zset::file::FileDigest {
+                path: f.display().to_string(),
+                fnv64: zset::file::fnv64(&bytes),
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let show = |p: &Option<PathBuf>| p.as_ref().map(|p| p.display().to_string());
+    Ok(zset::file::Inputs {
+        files: digests,
+        set: cli.set.clone(),
+        data: cli.data.clone(),
+        providers: cli.providers.clone(),
+        world: show(&cli.world),
+        inventory: show(&cli.inventory),
+    })
+}
+
+/// Load a plan file for `apply PLAN`; its inputs fill every input flag the
+/// command line leaves out.
+fn with_plan_inputs(cli: &mut Cli, path: &Path) -> Result<zset::file::PlanFile> {
+    let saved = zset::file::PlanFile::load(path)?;
+    let i = &saved.inputs;
+    if cli.files.is_empty() {
+        cli.files = i.files.iter().map(|f| PathBuf::from(&f.path)).collect();
+    }
+    if cli.set.is_empty() {
+        cli.set = i.set.clone();
+    }
+    if cli.data.is_empty() {
+        cli.data = i.data.clone();
+    }
+    if cli.providers.is_empty() {
+        cli.providers = i.providers.clone();
+    }
+    if cli.world.is_none() {
+        cli.world = i.world.as_ref().map(PathBuf::from);
+    }
+    if cli.inventory.is_none() {
+        cli.inventory = i.inventory.as_ref().map(PathBuf::from);
+    }
+    Ok(saved)
 }
 
 fn load_schema(providers: &[String]) -> Result<schema::Schema> {

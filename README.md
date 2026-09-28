@@ -219,6 +219,33 @@ The next `apply` prints `resuming the apply interrupted at tick N; remaining:
 under one of them it prints the change and stops before any Apply call (run
 `apply` again to plan against the world as it now is).
 
+`plan --out PLAN.json` writes the plan file: the inputs (each `--file` with a
+digest of its content, `--set`, `--data`, `--provider`, `--world`,
+`--inventory`), a digest of the refreshed world, and the deformation delta:
+each deformation's action, before and after values (redacted as the plan
+prints them), the nulls it waits on and the tick it runs in; the pending
+groups; the nulls round 0 resolved and the ones the delta still carries; and
+the tick schedule. `apply PLAN.json` takes its inputs from the file (flags
+given on the command line must match them), refreshes and re-evaluates at
+every tick, and refuses unless the delta it computes is the file's:
+Terraform's stale-plan rule, stated for Z-sets. Every deformation must be in
+the file with the same action, the same before-state and the same desired
+values (a null the file carries matches what it has resolved to); every
+deformation the file has not run yet must still be one; a new address is
+allowed only where the file has a pending group of its type, and a deposed
+object's delete the tick after its `+/-` replacement. It prints the difference
+and stops before applying anything of that tick. So with a plan file, drift
+anywhere stops the run at the boundary, where a plain `apply` reports it and
+goes on:
+
+```bash
+G=examples/adversarial/gke_two_phase.df
+cargo run -- --file $G --provider gke --world w.json plan --out plan.json
+cargo run -- apply plan.json                          # the file's delta, two ticks
+# the world moves after tick 1: tick 2 refuses
+cargo run -- apply plan.json --chaos 'mutate=gke_cluster/pngu:name="other"'
+```
+
 A `sensitive` computed value never leaves the provider: what dform sees, stores
 in consumers and prints is its label, `(sensitive T/N#Attr)`. A value at a
 `sensitive` path the program sets prints as `(sensitive)`.
