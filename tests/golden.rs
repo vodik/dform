@@ -4,7 +4,7 @@
 //! Cases: the example projects' stacks (examples/demo across envs,
 //! examples/advanced, examples/pngu across envs, examples/decl,
 //! examples/adopt with the discovery inventory, examples/k8s and
-//! examples/aws and examples/gke's two-phase stack), and the eight
+//! examples/aws and examples/gke's two-phase stack, examples/crud-api), and the eight
 //! tests/fixtures/adversarial/*.df programs.
 //! Each runs against a fresh (empty) world, and the demo additionally
 //! against the tests/fixtures/world/ fixture. A case that errors (a rejected stratification, a blocked
@@ -133,6 +133,8 @@ const CASES: &[Case] = &[
     // The provider is the program's `provider` statement.
     case("k8s_demo", "default", "examples/k8s/stacks/k8s_demo.df"),
     case("aws_demo", "default", "examples/aws/stacks/aws_demo.df"),
+    // The providers are its project's (examples/crud-api/dform.toml).
+    case("crud_api", "default", "examples/crud-api/stacks/crud_api.df"),
 ];
 
 /// Strip the repo's absolute path so snapshots are portable across checkouts

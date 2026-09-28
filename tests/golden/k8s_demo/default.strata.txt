@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== examples/k8s/stacks/k8s_demo.df: 100 nodes, 922 edges (221 negative)
+== examples/k8s/stacks/k8s_demo.df: 100 nodes, 927 edges (222 negative)
    STRATIFIED, 7 strata
    stratum 0:
      (arg, k8s.config_map, data)

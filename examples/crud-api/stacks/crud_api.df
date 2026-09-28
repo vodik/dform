@@ -1,23 +1,23 @@
 # crud_api.df: a GitOps blue/green rollout with a gated database migration.
 #
-# The release is a fact file in git. The serving color is whatever the live
+# The release is a fact file (data/). The serving color is whatever the live
 # Service selects. When the serving Deployment does not run the released
 # digest, the other color is rolled out: first the schema migration Job,
 # then (once the Job has succeeded) the app for the next color, then (once
 # every replica of it is ready) the Service's selector; the old color is
 # retired on the next tick, because the world now says the new one serves.
 #
+#   dform -C examples/crud-api plan crud_api
 #   dform controller run shop.crud_api
 #
 # From proposals/G-corpus/crud_api.org (edition 2027 there; the compiler
-# reads 2026; its provider sources moved to dform.toml). It does not plan yet: the schemas below are not the mocks',
-# and ops.git is not in the repository.
-#
-# Schema assumptions (not in providers/ today): google_sql_* types with
-# private_ip_address computed; k8s.job status.succeeded and
-# status.conditions computed; the kubernetes provider answering cloud_attr
-# (the inventory capability) so `world.` reads work; a random provider
-# answering random.password.
+# reads 2026). It plans against the mock (dform.toml: the built-in k8s
+# schema and this project's providers/google and providers/random), and
+# applies to a cluster with kubernetes = "providers/k8s" there. In
+# production the release and the approvals come from git:
+#   input relation release/3 from file("data/releases.facts")
+# The live objects are read through the kubernetes provider's inventory
+# (`world.T[e].p`), named by remote id (`shop/crud-api`).
 
 edition 2026
 
@@ -34,9 +34,9 @@ input replicas: int = 2 where replicas >= 1
 
 # release("crud_api", "digest", "sha256:9f2c...")
 # release("crud_api", "schema", 42)
-input relation release/3 from git("ops.git", "main", "releases/crud_api.df")
+input relation release/3 from file("data/releases.facts")
 # approve(t, a): accept the drift of t.a
-input relation approve/2 from git("ops.git", "main", "approvals.df")
+input relation approve/2 from file("data/approvals.facts")
 
 # A generated password: a secret null until the first apply, the same
 # value on every later run (persisted in state, E DR-7).
@@ -56,8 +56,8 @@ released_image = "gcr.io/shop/crud-api@{digest}"
 
 # The live Service's selector names the serving color; nothing serves yet
 # on the first deploy.
-active = world.k8s.service["crud-api"].spec.selector.color
-let live = world.k8s.deployment["crud-api-{active}"]
+active = world.k8s.service["shop/crud-api"].spec.selector.color
+let live = world.k8s.deployment["shop/crud-api-{active}"]
 live_image = live.spec.template.spec.containers[0].image
 live_schema = to_int(live.metadata.labels.schema)
 
@@ -116,10 +116,10 @@ resource k8s.namespace shop {
 resource k8s.network_policy default_deny {
   metadata.name = "default-deny"
   metadata.namespace = shop.metadata.name
+  # Every pod in the namespace: {} at an object path with no required
+  # field is a value, not absent (E DR-6 as amended).
+  spec.podSelector = {}
   spec.policyTypes = ["Ingress", "Egress"]
-  # No podSelector.matchLabels: selects every pod in the namespace.
-  # `spec.podSelector = {}` would be bottom at a Map path (E DR-6): the
-  # provider receives no podSelector either way and must default it.
 }
 
 # host is a reference to an open null (the private IP exists once the
