@@ -74,17 +74,27 @@ fn timeout_takes_effect_but_leaves_an_orphan() {
     );
 }
 
+/// Read misses a new resource for K Reads. Past the retry budget (three
+/// attempts) the resource is taken as gone: plan creates it again and the
+/// cloud refuses.
 #[test]
-fn read_lag_hides_a_new_resource_for_k_ticks() {
+fn read_lag_past_the_retry_budget_is_gone() {
     let s = stack("chaos-lag");
     // Within the apply the subnet gets the vpc's id from the Create response.
-    dform(&s, &["apply", "--chaos", "read-lag=net.vpc/main:1"]).success();
+    dform(&s, &["apply", "--chaos", "read-lag=net.vpc/main:3"]).success();
     assert_eq!(
         world(&s)["resources"]["net.subnet::a"]["attrs"]["vpc_id"],
         "net.vpc:main"
     );
-    // Tick 1: Read does not return the vpc yet.
     let r = dform(&s, &["plan"]).success();
+    assert!(
+        r.stderr.contains(
+            "retry net.vpc/main read (2/3)\nretry net.vpc/main read (3/3)\n\
+             read net.vpc/main: nothing after 3 attempts; taken as gone\n"
+        ),
+        "{}",
+        r.stderr
+    );
     assert!(r.stdout.contains("+ net.vpc.main"), "{}", r.stdout);
     assert!(
         r.stdout
@@ -92,22 +102,15 @@ fn read_lag_hides_a_new_resource_for_k_ticks() {
         "{}",
         r.stdout
     );
-    // Retrying the create at tick 1 collides with the resource Read missed.
-    let r = dform(&s, &["apply"]).failure();
-    assert!(
-        r.stderr.contains("net.vpc::main already exists"),
-        "{}",
-        r.stderr
-    );
-    // Tick 2: the lag of one tick is over; visible and undeformed.
+    // Those three Reads used up the lag: visible and undeformed.
     let r = dform(&s, &["plan"]).success();
+    assert_eq!(r.stderr, "");
     assert_eq!(
         r.summary(),
         "plan: 0 to create, 0 to update, 0 to delete",
         "{}",
         r.stdout
     );
-    assert_eq!(world(&s)["tick"], 2);
 }
 
 #[test]

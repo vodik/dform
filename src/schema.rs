@@ -8,6 +8,9 @@
 //!                                     % force_new (a change replaces the object)
 //!   type_list_key(T, Path, Keys).     % merge keys of a list attribute
 //!   type_provider(T, P).              % which provider owns T
+//!   type_retry(T, Attempts).          % optional: how many times Read is tried
+//!                                     % before an object is taken as gone
+//!                                     % (default 3; eventual consistency)
 //!   type_mint(T, Path, Value).        % optional: what the mock mints for a
 //!                                     % computed value; in a string,
 //!                                     % {type} {name} {attr} {hash} {n},
@@ -66,9 +69,14 @@ pub struct Schema {
     pub list_keys: BTreeMap<(String, String), Vec<String>>,
     /// (type, attr) -> what the fake provider mints (a string is a template).
     pub mints: BTreeMap<(String, String), Value>,
+    /// type -> Read attempts before an object is taken as gone.
+    pub retries: BTreeMap<String, u32>,
     /// The facts the schema was built from, to inject as EDB.
     pub facts: Vec<Atom>,
 }
+
+/// Read attempts for a type without `type_retry`.
+pub const DEFAULT_READ_ATTEMPTS: u32 = 3;
 
 impl Schema {
     pub fn class_of(&self, typ: &str, attr: &str) -> Option<NullClass> {
@@ -130,6 +138,15 @@ impl Schema {
     pub fn forces_new(&self, typ: &str, path: &str) -> bool {
         std::iter::successors(Some(path), |p| p.rsplit_once('.').map(|x| x.0))
             .any(|p| self.attr(typ, p).is_some_and(|a| a.has("force_new")))
+    }
+
+    /// How many times Read is tried for an object of `typ` that state maps
+    /// but the world does not return, before it is taken as gone.
+    pub fn read_attempts(&self, typ: &str) -> u32 {
+        self.retries
+            .get(typ)
+            .copied()
+            .unwrap_or(DEFAULT_READ_ATTEMPTS)
     }
 
     pub fn knows_type(&self, typ: &str) -> bool {
@@ -227,6 +244,15 @@ impl Schema {
                         bail!("type_provider({t}): claimed by both {prev} and {p}");
                     }
                 }
+                "type_retry" => {
+                    let [Value::Str(t), Value::Int(n)] = args.as_slice() else {
+                        return Err(bad());
+                    };
+                    if *n < 1 {
+                        bail!("type_retry({t}, {n}): at least one attempt");
+                    }
+                    s.retries.insert(t.clone(), *n as u32);
+                }
                 "type_mint" => {
                     let [Value::Str(t), Value::Str(p), v] = args.as_slice() else {
                         return Err(bad());
@@ -293,6 +319,7 @@ impl Schema {
         self.optional_computed.extend(other.optional_computed);
         self.list_keys.extend(other.list_keys);
         self.mints.extend(other.mints);
+        self.retries.extend(other.retries);
         self.facts.extend(other.facts);
         Ok(self)
     }

@@ -67,7 +67,7 @@ enum Cmd {
     Plan,
     Apply {
         /// Inject a failure into the fake provider (repeatable):
-        /// fail=T/N, timeout=T/N, crash=T/N, read-lag=T/N:TICKS, mutate=T/N:PATH=JSON,
+        /// fail=T/N, timeout=T/N, crash=T/N, read-lag=T/N:READS, mutate=T/N:PATH=JSON,
         /// latency=T/N:MS. Deterministic; nothing sleeps.
         #[arg(long = "chaos")]
         chaos: Vec<String>,

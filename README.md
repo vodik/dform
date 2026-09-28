@@ -71,6 +71,7 @@ type_attr(db.postgres, endpoint, string, [computed]). %   sensitive nullable opt
 type_attr(net.vpc, cidr, string, [force_new]).         %   force_new
 type_list_key(k8s.deployment, spec.template.spec.containers, [name]).  % list merge keys
 type_mint(db.postgres, endpoint, "{name}.db.fake").   % optional: how the mock mints it
+type_retry(db.postgres, 5).                           % optional: Read attempts (default 3)
 ```
 
 Built-in mock schemas: `fake` (the demo's), `gke` (pngu.df), `k8s` (fifteen
@@ -229,7 +230,7 @@ file keeps a `tick` counter; every `apply` is one tick.
 | `fail=T/N` | Apply of `T/N` fails before it reaches the world |
 | `timeout=T/N` | Apply of `T/N` takes effect, then times out: the world has it, state does not |
 | `crash=T/N` | dform is killed (exit 137) as it calls Apply of `T/N`; nothing after that runs |
-| `read-lag=T/N:K` | Read (plan's refresh) returns nothing for `T/N` for `K` ticks after it is created |
+| `read-lag=T/N:K` | the first `K` Reads of `T/N` after it is created return nothing (eventual consistency) |
 | `mutate=T/N:PATH=JSON` | after the tick, the world sets `T/N`'s `PATH` to `JSON` (drift) |
 | `latency=T/N:MS` | Apply of `T/N` is recorded as taking `MS`, reported, never slept |
 
@@ -237,6 +238,12 @@ file keeps a `tick` counter; every `apply` is one tick.
 cargo run -- apply --chaos fail=net.subnet/network.main::private-us-test-1a
 cargo run -- apply --chaos 'mutate=net.vpc/network.main::vpc:cidr="10.9.0.0/16"'
 ```
+
+Refresh reads every object state maps; a Read that returns nothing is retried
+up to the type's `type_retry(T, Attempts)` (a schema fact, default 3), each
+retry logged on stderr as `retry T/N read (2/3)`. A lag within that budget is
+not drift; an object still missing after the last attempt is taken as gone
+(`read T/N: nothing after 3 attempts; taken as gone`).
 
 Addresses are `TYPE/NAME` and must name a resource of the stack. The world is
 saved after every action, and state (the identity mapping) is written after

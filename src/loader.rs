@@ -208,6 +208,7 @@ pub const PROVIDER_PREDS: &[&str] = &[
     "type_attr",
     "type_list_key",
     "type_provider",
+    "type_retry",
     "capability",
     "tag_path",
 ];

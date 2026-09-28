@@ -43,5 +43,8 @@ type_attr(k8s.cluster, api_endpoint, string, [computed]).
 type_attr(k8s.cluster, ca_cert, string, [computed]).
 
 type_mint(db.postgres, endpoint, "{name}.db.fake").
+
+# A new database is slow to show up in Read: five attempts before it is gone.
+type_retry(db.postgres, 5).
 type_mint(k8s.cluster, api_endpoint, "https://{name}.k8s.fake").
 type_mint(k8s.cluster, ca_cert, "FAKECERT").

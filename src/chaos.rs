@@ -1,13 +1,14 @@
 //! Failure and latency injection for the fake provider (`apply --chaos SPEC`).
 //!
 //! Deterministic: nothing sleeps and nothing is random. Time is the world's
-//! tick counter, which every apply advances by one.
+//! tick counter, which every apply advances by one, and for `read-lag` the
+//! count of Reads, so that a retried Read can see the object.
 //!
 //! | SPEC                           | effect                                                  |
 //! |--------------------------------+---------------------------------------------------------|
 //! | `fail=T/N`                     | Apply of T/N fails before it reaches the world          |
 //! | `timeout=T/N`                  | Apply of T/N takes effect, then the call times out      |
-//! | `read-lag=T/N:K`               | Read returns nothing for K ticks after T/N is created   |
+//! | `read-lag=T/N:K`               | the first K Reads of T/N after its Create miss it       |
 //! | `mutate=T/N:PATH=JSON`         | after the tick, the world sets T/N's PATH to JSON       |
 //! | `latency=T/N:MS`               | Apply of T/N is recorded as taking MS (never slept)     |
 //! | `crash=T/N`                    | dform is killed as it calls Apply of T/N (exit 137)     |
@@ -70,8 +71,8 @@ impl Chaos {
                 self.crash.insert(parse_addr(arg)?);
             }
             "read-lag" => {
-                let (a, k) = addr_and(arg, "TICKS")?;
-                self.read_lag.insert(a, k.parse().context("ticks")?);
+                let (a, k) = addr_and(arg, "READS")?;
+                self.read_lag.insert(a, k.parse().context("reads")?);
             }
             "latency" => {
                 let (a, ms) = addr_and(arg, "MS")?;

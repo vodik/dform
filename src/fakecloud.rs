@@ -47,10 +47,10 @@ pub struct RemoteResource {
     pub name: String,
     pub attrs: Json,
     pub computed: Json,
-    /// Chaos `read-lag`: Read does not return this resource while the
-    /// world's tick is at most this.
+    /// Chaos `read-lag`: how many more Reads return nothing for this
+    /// resource (eventual consistency after Create).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub hidden_until: Option<u64>,
+    pub read_lag: Option<u64>,
 }
 
 pub struct FakeCloud {
@@ -60,6 +60,10 @@ pub struct FakeCloud {
     chaos: Chaos,
     /// What chaos did during the last apply, for the CLI to print.
     notes: RefCell<Vec<String>>,
+    /// The last refresh and the objects state mapped for it: one run reads
+    /// the world once between two writes, so every consumer of a refresh
+    /// (round 0, the plan, the executor's comparison) sees the same Reads.
+    refreshed: RefCell<Option<(BTreeSet<String>, RemoteState)>>,
 }
 
 fn key(typ: &str, name: &str) -> String {
@@ -170,6 +174,7 @@ impl FakeCloud {
             schema,
             chaos: Chaos::default(),
             notes: RefCell::new(Vec::new()),
+            refreshed: RefCell::new(None),
         }
     }
 
@@ -216,6 +221,7 @@ impl FakeCloud {
     }
 
     pub fn save(&self, st: &RemoteState) -> Result<()> {
+        self.refreshed.take();
         if let Some(dir) = self.world.parent().filter(|d| !d.as_os_str().is_empty()) {
             fs::create_dir_all(dir).with_context(|| format!("mkdir {}", dir.display()))?;
         }
@@ -230,7 +236,7 @@ impl FakeCloud {
     /// Optional+Computed path the world holds a value for. Secrets are never
     /// handed to the evaluator.
     pub fn world_facts(&self, state: &State) -> Result<Vec<Atom>> {
-        let world = self.refresh()?;
+        let world = self.refresh(state)?;
         let s = |x: &str| Term::Val(Value::Str(x.to_string()));
         let mut out = Vec::new();
         for (addr, e) in state.entries_for_provider(self.id()) {
@@ -425,7 +431,7 @@ impl FakeCloud {
     /// resource Read returns: what the executor compares to see whether the
     /// world moved under a deformation.
     pub fn observe(&self, state: &State) -> Result<BTreeMap<Address, Json>> {
-        let world = self.refresh()?;
+        let world = self.refresh(state)?;
         Ok(state
             .entries_for_provider(self.id())
             .filter_map(|(addr, e)| {
@@ -435,14 +441,55 @@ impl FakeCloud {
             .collect())
     }
 
-    /// Refresh: the world as Read returns it. A resource inside its chaos
-    /// read-lag is not returned.
-    fn refresh(&self) -> Result<RemoteState> {
+    /// Refresh: the world as Read returns it. Read of an object state maps
+    /// that returns nothing is retried, up to the type's `type_retry`
+    /// attempts (default 3), each retry logged on stderr: right after a
+    /// Create a real cloud's Read may not see the object yet (chaos
+    /// `read-lag`), and that is not drift. An object still missing after the
+    /// last attempt is gone; one state does not map is not read.
+    fn refresh(&self, state: &State) -> Result<RemoteState> {
         let mut world = self.load()?;
-        let tick = world.tick;
-        world
-            .resources
-            .retain(|_, rr| rr.hidden_until.is_none_or(|h| tick > h));
+        let mapped: BTreeSet<String> = state
+            .entries_for_provider(self.id())
+            .chain(state.deposed_for_provider(self.id()))
+            .map(|(a, e)| key(&a.typ, &e.remote))
+            .collect();
+        if let Some((m, w)) = &*self.refreshed.borrow()
+            && *m == mapped
+        {
+            return Ok(w.clone());
+        }
+        let mut gone = Vec::new();
+        let mut lag_changed = false;
+        for (k, rr) in world.resources.iter_mut() {
+            let Some(lag) = rr.read_lag else {
+                continue;
+            };
+            if !mapped.contains(k) {
+                gone.push(k.clone());
+                continue;
+            }
+            let attempts = u64::from(self.schema.read_attempts(&rr.typ));
+            let at = format!("{}/{}", rr.typ, rr.name);
+            for attempt in 2..=attempts.min(lag + 1) {
+                eprintln!("retry {at} read ({attempt}/{attempts})");
+            }
+            let missed = lag.min(attempts);
+            rr.read_lag = Some(lag - missed).filter(|l| *l > 0);
+            lag_changed = true;
+            if missed == attempts {
+                eprintln!("read {at}: nothing after {attempts} attempts; taken as gone");
+                gone.push(k.clone());
+            }
+        }
+        if lag_changed {
+            // Reads the lag swallowed are the mock cloud's own clock.
+            self.save(&world)?;
+        }
+        for k in gone {
+            world.resources.remove(&k);
+        }
+        self.refreshed.replace(Some((mapped, world.clone())));
         Ok(world)
     }
 
@@ -459,7 +506,7 @@ impl FakeCloud {
         lifecycle: &Lifecycle,
         state: &State,
     ) -> Result<Plan> {
-        let world = self.refresh()?;
+        let world = self.refresh(state)?;
         let inv = self.load_inventory()?;
         let adopt_map = state::adopt_map(adopts);
 
@@ -652,8 +699,7 @@ impl FakeCloud {
         })
     }
 
-    /// The tick ends: chaos mutations land, the clock advances, and a
-    /// read-lag that has run out is forgotten.
+    /// The tick ends: chaos mutations land and the clock advances.
     fn end_tick(&self, world: &mut RemoteState, state: &State) {
         for (addr, path, v) in &self.chaos.mutate {
             let at = format!("{}/{}", addr.typ, addr.name);
@@ -673,12 +719,6 @@ impl FakeCloud {
             }
         }
         world.tick += 1;
-        let tick = world.tick;
-        for rr in world.resources.values_mut() {
-            if rr.hidden_until.is_some_and(|h| tick > h) {
-                rr.hidden_until = None;
-            }
-        }
     }
 
     /// What Apply returns for a new resource: every computed attribute of the
@@ -980,7 +1020,7 @@ impl Tick<'_> {
                         name: remote_name.clone(),
                         attrs: doc,
                         computed,
-                        hidden_until: None,
+                        read_lag: None,
                     },
                 );
                 if answered {
@@ -1003,7 +1043,7 @@ impl Tick<'_> {
                         name: entry.remote.clone(),
                         attrs: doc,
                         computed,
-                        hidden_until: None,
+                        read_lag: None,
                     },
                 );
             }
@@ -1024,12 +1064,7 @@ impl Tick<'_> {
     /// A new object at `remote`, its computed values minted.
     fn create_object(&mut self, addr: &Address, remote: &str, doc: Json) {
         let computed = self.cloud.mint(&addr.typ, remote, &doc);
-        let hidden_until = self
-            .cloud
-            .chaos
-            .read_lag
-            .get(addr)
-            .map(|k| self.world.tick + k);
+        let read_lag = self.cloud.chaos.read_lag.get(addr).copied();
         self.world.resources.insert(
             key(&addr.typ, remote),
             RemoteResource {
@@ -1037,7 +1072,7 @@ impl Tick<'_> {
                 name: remote.to_string(),
                 attrs: doc,
                 computed,
-                hidden_until,
+                read_lag,
             },
         );
     }
