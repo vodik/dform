@@ -827,6 +827,19 @@ only from a cell in =F_ν= becoming =⊤= (case 4 or a resolved =Stuck=), whose
 cone is in =T_ν= by construction. So the definite fragment outside =T_ν= is
 monotone across the boundary, and =T_ν= is the invalidation set.
 
+/Addendum, 2026-09-28./ The argument assumes "no stuck instance existed for
+that predicate" covers every way the predicate can gain a tuple, and a
+stuck instance of the predicate itself does not: =q(x) :- p(x)= over a
+stuck =p= has no stuck instance, yet gains =q(t)= through =S_ν= after the
+boundary, so =not q(t)= and a count over =q= would flip (found by the
+property test, =crates/dform-proptest=). The missing case: Rule 3 checks
+negation patterns and aggregate group keys against the *may-derive* heads
+(F DR-2 revised, last clause), transitively through positive reads, as
+well as the stuck ones, per key; =attr= included, so a document whose
+field comes from a reference to a resource that may be wanted is pending,
+not definite. With that, "the negation was evaluated only because nothing
+could still derive the pattern" holds, and the argument goes through.
+
 Inside =T_ν=, three things happen, in order:
 
 1. *Substitution.* Every =f ∈ F_ν= is re-spelled in place: same node id, same

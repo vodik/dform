@@ -1507,8 +1507,8 @@ PROPTEST_CASES=10000 cargo test -p dform-proptest --test unknowns
 
 Two of its tests plant a bug in Rule 3 (dform-core's `test-hooks`
 feature, which only this crate's dev-dependency turns on) and pass only
-if the property catches it within the default count. The `#[ignore]`d
-tests there are failures on main, kept as regressions until fixed.
+if the property catches it within the default count. The regressions
+at the end of `tests/unknowns.rs` are shrunk failures it found.
 
 The parser's suite is `tests/syntax.rs`: every `.df` file in the repository
 and `tests/syntax/ok/` (E §7's programs among them) parses and prints back

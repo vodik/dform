@@ -5,18 +5,20 @@
 //! Rule 2) does not fire: the evaluator records it as a [`Stuck`] and derives
 //! `stuck(RuleId, HeadPattern, Bindings, Nulls)`. The head pattern is the
 //! rule's head with the bound key columns instantiated and everything else a
-//! wildcard; Rule 3 is decided per key against these patterns:
-//!
-//! * `not p(t)` is undetermined iff `p(t)` unifies with a stuck head of `p`;
-//! * an aggregate group is undetermined iff its key unifies with a stuck head
-//!   of a body predicate, or with a stuck instance of the aggregate's own
-//!   rule; `attr` is the aggregate over `arg`, per `(T, A, P)` group;
-//! * a positive reader of an undetermined aggregate is undetermined.
+//! wildcard.
 //!
 //! A positive read of an ordinary predicate with stuck instances is not
 //! undetermined: the facts are not there yet, which is monotone. The rule
 //! may derive after the boundary that resolves the nulls ([`MayDerive`]):
 //! a resource rule is a pending group, a deny may derive after tick N.
+//! May-derive is transitive through positive reads. Rule 3 is decided per
+//! key against the stuck heads and the may-derive heads alike:
+//!
+//! * `not p(t)` is undetermined iff `p(t)` unifies with such a head of `p`;
+//! * an aggregate group is undetermined iff its key unifies with such a head
+//!   of a body predicate, or with a stuck instance of the aggregate's own
+//!   rule; `attr` is the aggregate over `arg`, per `(T, A, P)` group;
+//! * a positive reader of an undetermined aggregate is undetermined.
 
 use crate::ast::{Atom, Lit, Term};
 use crate::lattice::{Truth, eq3, nulls_in};
@@ -286,7 +288,8 @@ pub fn patterns_unify(a: &Atom, b: &Atom) -> bool {
     })
 }
 
-/// Stuck head patterns in the form bodies read them, by predicate.
+/// Stuck and may-derive head patterns in the form bodies read them, by
+/// predicate.
 #[derive(Debug, Default, Clone)]
 pub struct Known {
     by_pred: BTreeMap<String, Heads>,
@@ -344,6 +347,11 @@ impl Known {
             None => heads.open_first.push(i),
         }
         heads.all.push((read, nulls.clone()));
+    }
+
+    /// No head at all?
+    pub fn is_empty(&self) -> bool {
+        self.by_pred.is_empty()
     }
 
     /// Has `pred` any head at all?

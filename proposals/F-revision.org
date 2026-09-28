@@ -513,6 +513,10 @@ edges; =assemble= excludes schema-computed paths from the document.
 - One unification per (negation event, stuck head) and per (aggregate
   group, stuck head); indexed by predicate and partition, negligible.
 - =deny(two_zones)= is reported undetermined instead of silently absent.
+- (2026-09-28) May-derive is transitive through positive reads, and Rule 3
+  treats a may-derive head as it treats a stuck head: a negation or an
+  aggregate group (=attr='s included) that unifies with one is
+  undetermined, per key (E §4.2 addendum).
 
 ** DR-9 (revised) Ranks: the winning rank decides; shadowed disagreements are warnings
 

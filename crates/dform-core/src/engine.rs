@@ -589,6 +589,12 @@ fn run_strata(c: &Compiled, st: &mut State, range: std::ops::Range<usize>) -> Re
             };
         }
         stucks.extend(recs.into_iter().flat_map(|r| r.found.into_inner()));
+        // Rule 3 per key sees a head this stratum may derive after a
+        // boundary as it sees a stuck head (F DR-2 revised): a negation or
+        // an aggregate group above that unifies with it is undetermined.
+        if !known.borrow().is_empty() {
+            may_derive_over(c, &prov.store, known, known, &fix.rules, &BTreeSet::new())?;
+        }
     }
     Ok(())
 }
@@ -700,35 +706,58 @@ fn may_derive(
     if stucks.is_empty() {
         return Ok(Vec::new());
     }
-    let hi = prov.store.len();
-    let all = Window::below(hi);
     let mut heads = stuck::Known::default();
     for s in stucks {
         heads.add(s);
     }
-    let stuck_rules: BTreeSet<usize> = stucks.iter().filter_map(|s| s.rule).collect();
-    let constraint_rules: Vec<RuleStmt> = c
-        .constraints
+    let heads = RefCell::new(heads);
+    let skip: BTreeSet<usize> = stucks.iter().filter_map(|s| s.rule).collect();
+    let over: Vec<usize> = (0..c.rules.len() + c.constraints.len()).collect();
+    let mut out = may_derive_over(c, &prov.store, known, &heads, &over, &skip)?;
+    out.sort();
+    Ok(out)
+}
+
+/// The may-derive instances of the rules `over` (indices into the rules,
+/// then the constraints; those in `skip` left out), reading the heads in
+/// `heads`, to a fixpoint: each head found is added to `heads` and read in
+/// turn. `known` is what the literals before a read are evaluated with
+/// (Rule 3); it may be `heads` itself, as it is while the strata run.
+fn may_derive_over(
+    c: &Compiled,
+    store: &Store,
+    known: &RefCell<stuck::Known>,
+    heads: &RefCell<stuck::Known>,
+    over: &[usize],
+    skip: &BTreeSet<usize>,
+) -> Result<Vec<stuck::MayDerive>> {
+    let all = Window::below(store.len());
+    let n = c.rules.len();
+    let constraint_rules: Vec<(usize, RuleStmt)> = over
         .iter()
-        .map(partition::constraint_rule)
+        .filter(|&&i| i >= n)
+        .map(|&i| (i, partition::constraint_rule(&c.constraints[i - n])))
         .collect();
-    let bodies: Vec<(&RuleStmt, &ops::Body)> = c
-        .rules
-        .iter()
-        .zip(c.plans.iter().map(|p| &p.body))
-        .chain(constraint_rules.iter().zip(&c.constraint_bodies))
-        .collect();
+    let rule_of = |i: usize| -> (&RuleStmt, &ops::Body) {
+        if i < n {
+            (&c.rules[i], &c.plans[i].body)
+        } else {
+            let r = &constraint_rules.iter().find(|(k, _)| *k == i).unwrap().1;
+            (r, &c.constraint_bodies[i - n])
+        }
+    };
     let mut out: Vec<stuck::MayDerive> = Vec::new();
     let mut transitive: BTreeSet<Atom> = BTreeSet::new();
     loop {
         let before = out.len();
-        for (i, (r, body)) in bodies.iter().enumerate() {
-            if stuck_rules.contains(&i) || r.head.pred.starts_with("__") {
+        for &i in over {
+            let (r, body) = rule_of(i);
+            if skip.contains(&i) || r.head.pred.starts_with("__") {
                 continue;
             }
             for (j, lit) in r.body.iter().enumerate() {
                 let Lit::Pos(a) = lit else { continue };
-                if !heads.has_pred(&a.pred) {
+                if !heads.borrow().has_pred(&a.pred) {
                     continue;
                 }
                 // The prefix as it ran; what it finds stuck is already known.
@@ -741,14 +770,14 @@ fn may_derive(
                     found: RefCell::new(Vec::new()),
                 };
                 let src = Src {
-                    store: &prov.store,
+                    store,
                     body,
                     win: vec![all; r.body.len()],
                     all,
                 };
                 for row in eval_body(&r.body[..j], &src, &rec)? {
                     let pat = stuck::as_read(&read_pattern(a, &row.s));
-                    for (read, nulls) in heads.matching(&pat) {
+                    for (read, nulls) in heads.borrow().matching(&pat) {
                         let mut s = row.s.clone();
                         for (t, v) in a.args.iter().zip(&read.args) {
                             if let (Term::Var(x), Term::Val(v)) = (t, v) {
@@ -757,7 +786,7 @@ fn may_derive(
                         }
                         let head = stuck::head_pattern(&r.head, &s, eval_term);
                         let ground = head.args.iter().all(|t| matches!(t, Term::Val(_)));
-                        if ground && prov.store.id(&head).is_some() {
+                        if ground && store.id(&head).is_some() {
                             continue;
                         }
                         let m = stuck::MayDerive {
@@ -777,12 +806,12 @@ fn may_derive(
         if out.len() == before {
             break;
         }
+        let mut heads = heads.borrow_mut();
         for m in &out[before..] {
             heads.add_head(&m.head, &m.nulls);
             transitive.insert(stuck::as_read(&m.head));
         }
     }
-    out.sort();
     Ok(out)
 }
 
@@ -1730,7 +1759,8 @@ fn planted(_: Rule3Clause) -> bool {
 
 /// Rule 2's recorder for the rule being evaluated (E §2.7, F DR-2 revised):
 /// every instance that needs a null's content is recorded here instead of
-/// firing. `known` holds the stuck heads of lower strata, for Rule 3.
+/// firing. `known` holds the stuck and may-derive heads of lower strata,
+/// for Rule 3.
 struct Rec<'a> {
     rule: usize,
     head: &'a Atom,

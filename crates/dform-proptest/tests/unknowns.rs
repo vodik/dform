@@ -28,13 +28,10 @@
 //! executor's boundary is (`cli` evaluates again after every tick); the
 //! engine has no incremental resolution to drive instead.
 //!
-//! On main the properties fail for one hole in Rule 3 per key: a negation
-//! or an aggregate group is checked against the stuck heads of the
-//! predicate it reads, not against a predicate that reads one positively
-//! (which only may derive, F DR-2 revised's last clause). The default
-//! grammar leaves out the shapes that reach it (`Program::full`); the whole
-//! grammar runs as an ignored test, and its shrunk failures are ignored
-//! regressions at the end of this file.
+//! The grammar includes chains of positive reads over stuck heads, whose
+//! heads may derive (F DR-2 revised's last clause): a negation or an
+//! aggregate group over one is undetermined. The shrunk failures that
+//! found Rule 3 missing that case are regressions at the end of this file.
 //!
 //! `PROPTEST_CASES` sets the case count (CI: the default below; nightly:
 //! 10^4). The planted-bug tests (`hooks`) check that a broken Rule 3 is
@@ -203,11 +200,6 @@ struct Program {
     mids: Vec<ResDef>,
     dsts: Vec<ResDef>,
     denies: Vec<DenyDef>,
-    /// The whole grammar, or without the shapes that reach the hole the
-    /// ignored tests below pin: a predicate that reads another predicate
-    /// or `pt.mid` positively, and a reference to a `pt.mid` that is not
-    /// wanted unconditionally.
-    full: bool,
 }
 
 /// A program and the choices that resolve its nulls.
@@ -231,9 +223,6 @@ struct Scope {
     mid: bool,
     dst: bool,
     x: bool,
-    /// May it read a predicate or `pt.mid` positively? (Not a predicate's
-    /// own body, outside the full grammar.)
-    reads: bool,
 }
 
 struct Printer<'a> {
@@ -280,8 +269,8 @@ impl Printer<'_> {
         match g {
             Gen::Zones(s) => format!("x in {}.zones", self.src(s)),
             Gen::Dst if sc.dst => "x in pt.dst".into(),
-            Gen::Mid | Gen::Dst if sc.mid && sc.reads => "x in pt.mid".into(),
-            Gen::Pred(j) if sc.reads => match self.pred(j, sc) {
+            Gen::Mid | Gen::Dst if sc.mid => "x in pt.mid".into(),
+            Gen::Pred(j) => match self.pred(j, sc) {
                 Some(p) => format!("{p}(x)"),
                 None => "b(x)".into(),
             },
@@ -299,7 +288,7 @@ impl Printer<'_> {
     /// The guard as a literal, or `None` where it cannot stand.
     fn guard(&self, g: Guard, sc: Scope, i: usize) -> Option<String> {
         Some(match g {
-            Guard::Pred(j, a) if sc.reads => format!("{}({})", self.pred(j, sc)?, self.arg(a, sc)),
+            Guard::Pred(j, a) => format!("{}({})", self.pred(j, sc)?, self.arg(a, sc)),
             Guard::NotPred(j, a) => format!("not {}({})", self.pred(j, sc)?, self.arg(a, sc)),
             Guard::NotMid(k, c) if sc.mid => format!(
                 "not \"m{}-{}\" in pt.mid",
@@ -386,7 +375,7 @@ impl Printer<'_> {
             let statics: Vec<usize> = (0..self.p.mids.len())
                 .filter(|&k| {
                     let m = &self.p.mids[k];
-                    m.bind.is_none() && (self.p.full || m.guards.is_empty())
+                    m.bind.is_none()
                 })
                 .collect();
             if r.fields & 4 != 0 && !statics.is_empty() {
@@ -424,7 +413,6 @@ impl fmt::Display for Program {
                 mid: false,
                 dst: false,
                 x: false,
-                reads: true,
             };
             pr.resource(f, "pt.mid", &format!("m{k}"), r, sc)?;
         }
@@ -437,14 +425,9 @@ impl fmt::Display for Program {
                 mid,
                 dst: false,
                 x: true,
-                reads: true,
             };
             match d {
                 Def::Pred(PredDef::Rule(g, guards)) => {
-                    let sc = Scope {
-                        reads: self.full,
-                        ..sc
-                    };
                     writeln!(f, "p{i}(x) if {}", pr.body(Some(*g), guards, sc).join(", "))?;
                 }
                 Def::Pred(PredDef::Carry(s, id)) => {
@@ -469,7 +452,6 @@ impl fmt::Display for Program {
             mid,
             dst: false,
             x: false,
-            reads: true,
         };
         for (k, r) in self.dsts.iter().enumerate() {
             writeln!(f)?;
@@ -586,7 +568,7 @@ fn deny_def() -> impl Strategy<Value = DenyDef> {
         .prop_map(|(bind, guards)| DenyDef { bind, guards })
 }
 
-fn program(full: bool) -> impl Strategy<Value = Program> {
+fn program() -> impl Strategy<Value = Program> {
     (
         prop::collection::vec(any::<u8>(), 1..=3),
         1u8..=2,
@@ -595,19 +577,18 @@ fn program(full: bool) -> impl Strategy<Value = Program> {
         prop::collection::vec(res_def(), 0..=3),
         prop::collection::vec(deny_def(), 1..=3),
     )
-        .prop_map(move |(base, srcs, defs, mids, dsts, denies)| Program {
+        .prop_map(|(base, srcs, defs, mids, dsts, denies)| Program {
             base,
             srcs,
             defs,
             mids,
             dsts,
             denies,
-            full,
         })
 }
 
-fn case(full: bool) -> impl Strategy<Value = Case> {
-    (program(full), prop::collection::vec(any::<u8>(), 48))
+fn case() -> impl Strategy<Value = Case> {
+    (program(), prop::collection::vec(any::<u8>(), 48))
         .prop_map(|(program, choices)| Case { program, choices })
 }
 
@@ -1070,33 +1051,23 @@ fn config(cases: u32, max_shrink_iters: u32) -> RunConfig {
     }
 }
 
-/// Run the property over `cases` cases of the grammar (`full`: with the
-/// shapes that reach the known hole); a failure panics with its shrunk
+/// Run the property over `cases` cases; a failure panics with its shrunk
 /// program.
-fn run(full: bool, cases: u32) {
+fn run(cases: u32) {
     let mut runner = TestRunner::new(config(cases, 4096));
-    match runner.run(&case(full), |c| check(&c)) {
+    match runner.run(&case(), |c| check(&c)) {
         Ok(()) => SEEN.with_borrow(|seen| eprintln!("{seen:?}")),
         Err(TestError::Fail(why, minimal)) => panic!("{why}\nminimal failing input: {minimal:?}"),
         Err(e) => panic!("{e}"),
     }
 }
 
+/// The whole grammar: chains of positive reads over stuck heads included,
+/// whose heads may derive (F DR-2 revised's last clause) and so leave a
+/// negation or an aggregate group over them undetermined.
 #[test]
 fn definite_facts_survive_every_resolution_of_the_unknowns() {
-    run(false, cases());
-}
-
-/// The whole grammar. Fails on main: Rule 3 per key checks a negation or
-/// an aggregate group against the stuck heads of the predicate it reads,
-/// and not against a predicate that reads one positively (a may-derive
-/// head, F DR-2 revised's last clause), so the negation or group is
-/// decided and flips after resolution. The regressions below are its
-/// shrunk cases.
-#[test]
-#[ignore = "fails on main: Rule 3 does not see may-derive heads (see the regressions below)"]
-fn definite_facts_survive_every_resolution_of_the_unknowns_whole_grammar() {
-    run(true, cases());
+    run(cases());
 }
 
 /// Run the property with `r` planted, at the CI case count, from a fixed
@@ -1105,7 +1076,7 @@ fn caught(r: Rule3) -> String {
     let _planted = hooks::plant(r);
     let rng = TestRng::deterministic_rng(RngAlgorithm::ChaCha);
     let mut runner = TestRunner::new_with_rng(config(CASES, 256), rng);
-    match runner.run(&case(false), |c| check(&c)) {
+    match runner.run(&case(), |c| check(&c)) {
         Err(TestError::Fail(why, minimal)) => format!("{why}\nminimal failing input: {minimal:?}"),
         Err(e) => panic!("Rule 3 with {r:?} planted: {e}"),
         Ok(()) => {
@@ -1129,9 +1100,9 @@ fn a_reader_of_an_undetermined_aggregate_is_caught() {
 }
 
 // ---------------------------------------------------------------------------
-// Regressions: shrunk failures of the whole grammar on main, one per way the
-// hole shows. Ticket "Property test: definite facts survive every resolution
-// of the unknowns". Each fails until Rule 3 counts may-derive heads.
+// Regressions: shrunk failures of the whole grammar before Rule 3 counted
+// may-derive heads, one per way the hole showed. Ticket "Rule 3 decides
+// negations and aggregates over may-derive predicates too early".
 
 /// Zeros: every open string resolves to "a", every list to [], every int
 /// to 0.
@@ -1147,7 +1118,6 @@ fn holds(src: &str, choices: &[u8]) {
 /// `not p1("a")` is decided while `p1` only reads the stuck `p0`: the deny
 /// fires, and after `s0.size` resolves `p1("a")` holds and it does not.
 #[test]
-#[ignore = "fails on main: a negation over a predicate that may derive is decided"]
 fn regression_a_negation_over_a_predicate_that_may_derive() {
     holds(
         r#"edition 2026
@@ -1169,7 +1139,6 @@ deny "d0" if b(x), not p1(x)
 /// `c1` counts `p0`, which reads `want(pt.mid, _)` while `m1` is stuck: the
 /// count is decided at 1 and is 2 after resolution.
 #[test]
-#[ignore = "fails on main: an aggregate over a predicate that may derive is decided"]
 fn regression_an_aggregate_over_a_predicate_that_may_derive() {
     holds(
         r#"edition 2026
@@ -1195,14 +1164,13 @@ c1(count(x)) if p0(x)
 }
 
 /// `d0.mid` refers to `m0`, whose want is stuck: the reference joins no
-/// `attr` row yet, the field is left out, and `d0` (which waits on nothing
-/// else: its source is `s1`) is reported definite with a document that
-/// gains `mid` after resolution.
+/// `attr` row yet, so the field would be left out, and `d0` (which waits
+/// on nothing else: its source is `s1`) was reported definite with a
+/// document that gains `mid` after resolution. The `mid` group may derive,
+/// so `d0` is pending until `m0`'s want is decided.
 #[test]
-#[ignore = "fails on main: a reference to a resource whose want is stuck drops the field"]
 fn regression_a_reference_to_a_stuck_resource_is_definite() {
-    holds(
-        r#"edition 2026
+    let src = r#"edition 2026
 
 resource pt.src s0 {
   label = "s0"
@@ -1221,7 +1189,26 @@ resource pt.dst d0 {
   src = s1.id
   mid = m0.id
 }
-"#,
-        &ZEROS,
+"#;
+    holds(src, &ZEROS);
+    let program = dform_core::parser::parse_file("prop.df", src).unwrap();
+    let world = world_path();
+    let _ = std::fs::remove_file(&world);
+    let planned = plan(&program, &world, &State::default()).unwrap();
+    let d0 = Address {
+        typ: "pt.dst".into(),
+        name: "d0".into(),
+    };
+    let pending: Vec<&Address> = planned
+        .report
+        .pending
+        .iter()
+        .flat_map(|b| &b.deformations)
+        .map(|d| &d.addr)
+        .collect();
+    assert!(
+        pending.contains(&&d0),
+        "pt.dst.d0 is not pending: {:#}",
+        planned.report.json()
     );
 }
