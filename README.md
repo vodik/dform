@@ -69,8 +69,10 @@ aws = { source = "aws-mock", version = "2.1" }   # `provider aws {}` in a progra
 gcp = { source = "providers/gcp" }               # a path under the root
 
 [defaults]
-backend = 'local("state/{stack}")'
+backend = 'local("state/{stack}")'   # or 's3("bucket", "dform/{stack}", {...})'
 unknowns = "strict"
+lease_duration = "60s"               # an s3 backend's lease (the default)
+lease_renewal = "20s"                # how often its holder renews it (the default)
 
 [discovery]
 exclude = ["scratch/**"]
@@ -103,7 +105,7 @@ with state its last apply (time, actor and the project's commit, from the
 audit log) and a saved plan not yet applied. `dform state show TARGET`
 prints the deployment's objects; `dform state mv FROM TO TARGET` gives the
 object at `TYPE/NAME` another address; `dform stack unlock TARGET` removes
-an apply lock whose holder is gone. `dform provider schema NAME` prints a
+an apply lock whose holder is gone (breaks an s3 backend's lease). `dform provider schema NAME` prints a
 provider's schema facts. `dform completions zsh > _dform` completes stack
 names, key values (from the key inputs' enum types) and deployments with
 state.
@@ -114,7 +116,8 @@ State is scoped to a stack. One program owns one stack, named by its
 ```dform
 stack demo.main {
   backend = local("state/demo")    # where state, world and lock live, relative to the
-                                   # project root; default dform.state/<name>
+                                   # project root; default dform.state/<name>; or
+                                   # s3(...), see "State backends"
   unknowns = "strict"              # or "permissive" (the default); see "Strict mode"
   role = "bootstrap"               # optional: it stays batch; see "Bootstrap and handover"
   approvals = jwks("https://...")  # optional: who may approve a plan; see "Approvals"
@@ -127,6 +130,56 @@ without its extension (discovery does not find it: name it by its file). Two pro
 stack's lock, `<state dir>/state.lock` (the holder's pid): a second apply
 of the same stack while one runs fails naming the holder; a lock whose
 holder is gone (a killed apply) is taken over with a note.
+
+### State backends
+
+`backend = local("DIR")` (the default, `dform.state/<stack>`) keeps a
+deployment's files in a directory. `backend = s3("BUCKET", "PREFIX",
+{endpoint: "URL", region: "R"})` keeps them in an S3 bucket under PREFIX
+(a keyed stack's deployment under `PREFIX/<k>=<v>`): the state (identity,
+in-flight and uncertain records, outputs), the plan key `state.key`, the
+audit log `state.audit.jsonl` and the lease `state.lock`. The record is
+optional: without an endpoint it is AWS S3's regional endpoint
+(virtual-host style), with one the URL path-style (MinIO, OVH Object
+Storage, anything S3-compatible); the region defaults to `us-east-1`. The
+manifest's `[defaults] backend` takes the same term as a string, with
+`{stack}` the stack's name. The mock's world, the inventory and the cache
+stay under `dform.state/`: they are the provider's and the machine's, not
+state.
+
+```dform
+stack net { backend = s3("acme-dform", "prod/net", {endpoint: "https://s3.gra.io.cloud.ovh.net", region: "gra"}) }
+```
+
+Credentials come from `DFORM_S3_ACCESS_KEY_ID` and
+`DFORM_S3_SECRET_ACCESS_KEY` (and `DFORM_S3_SESSION_TOKEN`), else AWS's
+`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN`; only
+the environment (no profile file, no instance metadata).
+
+Every write is conditional (`If-Match` on the ETag this run read, or
+`If-None-Match: *` for a new object), so two writers never silently
+overwrite each other; the server must support conditional PUTs (AWS S3
+since November 2024, MinIO). The lock is a lease: an object holding the
+holder, an expiry and a fencing counter. An apply takes it (refused, naming
+the holder and when its lease expires, while another's is live), renews
+it every `lease_renewal` from a thread (one Apply call, a cluster's
+create, can outlast a lease), and releases it at the end. A lease that
+expired (its holder was killed) is taken over, with a note, and the
+counter goes up; the new holder writes its counter into the state at
+once, and every state write first checks that the lease is still its own.
+A holder that stalled past its lease and wakes after a takeover is
+refused ("state write refused by fencing") and writes nothing; the new
+holder resumes the interrupted apply as after any crash. `dform stack
+unlock` breaks a lease whoever holds it. The machines sharing a backend
+must agree on the time to well within a lease: expiry is wall-clock.
+`[defaults] lease_duration` and `lease_renewal` (`500ms`, `30s`, `2m`; 60s
+and 20s by default) set the lease; the renewal must be shorter.
+
+Not yet for an s3 stack: `controller run` (its memo is local), `stack
+rekey` and `handover` (they move directories), `state taint` (it finds
+state through the local registry), and `stack_output` reads of it from
+other stacks (the registry holds local paths). The audit log is rewritten
+whole on each entry.
 
 ### Keyed stacks: one deployment per key value
 
@@ -1543,6 +1596,14 @@ executor's parallel and resume tests and every golden `plan` run on more
 than one backend (`tests/common`'s `Backend`): the same cases, the same
 output. `--parallel` schedules are exact on the direct backend, which
 answers in simulated time.
+
+`tests/s3.rs` plans and applies examples/demo with an s3 backend: two
+concurrent applies, a killed holder taken over and resumed, a stale
+holder fenced off. It runs against a fake S3 server in the test process
+(`dform-s3`'s `fake`), and again against a real one when
+`DFORM_S3_TEST_ENDPOINT` names it: `eval "$(crates/dform-s3/minio.sh
+start)"` starts MinIO in rootless podman and prints the variables, and
+`crates/dform-s3/minio.sh stop` removes it and its volume.
 
 `tests/model.rs` is a model test of the executor: a seed picks a random
 program over the fake schema and a few versions of it (refs, force_new

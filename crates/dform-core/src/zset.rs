@@ -435,15 +435,17 @@ pub mod file {
     pub struct Key([u8; 32]);
 
     impl Key {
-        /// The key of the stack whose state file is `state`.
-        pub fn load_or_create(state: &Path) -> Result<Key> {
-            let path = state.with_extension("key");
-            if let Ok(bytes) = std::fs::read(&path) {
+        /// The key of the deployment whose objects are `store`'s.
+        pub fn load_or_create(store: &dyn crate::store::Store) -> Result<Key> {
+            use crate::store::{Cond, KEY};
+            let parse = |bytes: &[u8]| -> Result<Key> {
                 let key: [u8; 32] = bytes
-                    .as_slice()
                     .try_into()
-                    .map_err(|_| anyhow::anyhow!("plan key {}: not 32 bytes", path.display()))?;
-                return Ok(Key(key));
+                    .map_err(|_| anyhow::anyhow!("plan key {}: not 32 bytes", store.locate(KEY)))?;
+                Ok(Key(key))
+            };
+            if let Some(o) = store.get(KEY)? {
+                return parse(&o.bytes);
             }
             let mut key = [0u8; 32];
             {
@@ -452,18 +454,16 @@ pub mod file {
                     .and_then(|mut f| f.read_exact(&mut key))
                     .context("read /dev/urandom for the plan key")?;
             }
-            if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
-                std::fs::create_dir_all(dir).with_context(|| format!("mkdir {}", dir.display()))?;
-            }
-            let mut opts = std::fs::OpenOptions::new();
-            opts.write(true).create_new(true);
-            #[cfg(unix)]
-            std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
+            if store
+                .put(KEY, &key, &Cond::IfAbsent)
+                .with_context(|| format!("write plan key {}", store.locate(KEY)))?
+                .is_none()
             {
-                use std::io::Write;
-                opts.open(&path)
-                    .and_then(|mut f| f.write_all(&key))
-                    .with_context(|| format!("write plan key {}", path.display()))?;
+                // Made by another run meanwhile: that one is the key.
+                let o = store
+                    .get(KEY)?
+                    .ok_or_else(|| anyhow::anyhow!("plan key {}: gone", store.locate(KEY)))?;
+                return parse(&o.bytes);
             }
             Ok(Key(key))
         }

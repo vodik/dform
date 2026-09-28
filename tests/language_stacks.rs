@@ -98,9 +98,26 @@ fn one_program_owns_one_stack() {
         "{}",
         r.stderr
     );
-    s.write("p.df", "edition 2026\nstack a { backend = s3(\"b\") }\n");
+    s.write("p.df", "edition 2026\nstack a { backend = gcs(\"b\") }\n");
     let r = s.run(&["plan", "p.df"]).failure();
     assert!(r.stderr.contains("unknown backend"), "{}", r.stderr);
+    s.write("p.df", "edition 2026\nstack a { backend = s3(\"b\") }\n");
+    let r = s.run(&["plan", "p.df"]).failure();
+    assert!(
+        r.stderr.contains("takes a bucket, a prefix"),
+        "{}",
+        r.stderr
+    );
+    s.write(
+        "p.df",
+        "edition 2026\nstack a { backend = s3(\"b\", \"p\", {endpont: \"http://x\"}) }\n",
+    );
+    let r = s.run(&["plan", "p.df"]).failure();
+    assert!(
+        r.stderr.contains("backend s3 has no option endpont"),
+        "{}",
+        r.stderr
+    );
 }
 
 /// Two processes: the first apply holds the stack's lock (a test hook

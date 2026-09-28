@@ -33,6 +33,7 @@ pub mod schema;
 pub mod secrets;
 pub mod stack;
 pub mod state;
+pub mod store;
 pub mod stuck;
 pub mod syntax;
 pub mod tables;

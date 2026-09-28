@@ -232,11 +232,16 @@ impl ProviderEntry {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Defaults {
-    /// `local("DIR")`, DIR relative to the project root, `{stack}` the
-    /// stack's name.
+    /// `local("DIR")`, DIR relative to the project root, or
+    /// `s3("BUCKET", "PREFIX", {endpoint: "URL", region: "R"})`; `{stack}`
+    /// the stack's name.
     pub backend: Option<String>,
     /// `strict` or `permissive`.
     pub unknowns: Option<String>,
+    /// How long an `s3` backend's lease lasts (`60s`; `500ms`, `2m`).
+    pub lease_duration: Option<String>,
+    /// How often its holder renews it (`20s`), less than the duration.
+    pub lease_renewal: Option<String>,
 }
 
 /// `[discovery]`.
@@ -292,12 +297,36 @@ impl Manifest {
             );
         }
         if let Some(b) = &m.defaults.backend
-            && local_dir(b).is_none()
+            && crate::stack::parse_backend(&b.replace("{stack}", "stack")).is_err()
         {
             bail!(
-                "{} = {b:?}: the one backend is `local(\"DIR\")`, DIR relative to the \
-                 project root, `{{stack}}` the stack's name",
+                "{} = {b:?}: the backends are `local(\"DIR\")`, DIR relative to the \
+                 project root, and `s3(\"BUCKET\", \"PREFIX\", {{endpoint: \"URL\", \
+                 region: \"R\"}})`; `{{stack}}` is the stack's name",
                 at("[defaults] backend")
+            );
+        }
+        for (key, v) in [
+            ("lease_duration", &m.defaults.lease_duration),
+            ("lease_renewal", &m.defaults.lease_renewal),
+        ] {
+            if let Some(v) = v
+                && crate::store::parse_duration(v).is_none_or(|d| d.is_zero())
+            {
+                bail!(
+                    "{} = {v:?}: a duration, `500ms`, `30s` or `2m`",
+                    at(&format!("[defaults] {key}"))
+                );
+            }
+        }
+        let t = m.lease_times();
+        if t.renewal >= t.duration {
+            bail!(
+                "{}: the lease is renewed every {:?} but lasts {:?}; renew it more often \
+                 than it lasts",
+                at("[defaults] lease_renewal"),
+                t.renewal,
+                t.duration
             );
         }
         for g in &m.discovery.exclude {
@@ -327,6 +356,8 @@ impl Manifest {
         for (k, v) in [
             ("backend", &self.defaults.backend),
             ("unknowns", &self.defaults.unknowns),
+            ("lease_duration", &self.defaults.lease_duration),
+            ("lease_renewal", &self.defaults.lease_renewal),
         ] {
             if let Some(v) = v {
                 out.push(atom("project_default", vec![s(k), s(v)]));
@@ -353,11 +384,21 @@ impl Manifest {
         Some(path.display().to_string())
     }
 
-    /// The default backend's directory for `stack`, relative to the
-    /// project root.
-    pub fn backend(&self, stack: &str) -> Option<PathBuf> {
-        let dir = local_dir(self.defaults.backend.as_deref()?)?;
-        Some(PathBuf::from(dir.replace("{stack}", stack)))
+    /// The default backend of `stack` (a `local` directory relative to
+    /// the project root).
+    pub fn backend(&self, stack: &str) -> Option<crate::stack::Backend> {
+        let text = self.defaults.backend.as_deref()?.replace("{stack}", stack);
+        crate::stack::parse_backend(&text).ok()
+    }
+
+    /// The lease's duration and renewal interval (an `s3` backend's).
+    pub fn lease_times(&self) -> crate::store::LeaseTimes {
+        let d = crate::store::LeaseTimes::default();
+        let get = |v: &Option<String>| v.as_deref().and_then(crate::store::parse_duration);
+        crate::store::LeaseTimes {
+            duration: get(&self.defaults.lease_duration).unwrap_or(d.duration),
+            renewal: get(&self.defaults.lease_renewal).unwrap_or(d.renewal),
+        }
     }
 }
 
@@ -368,15 +409,6 @@ fn atom(pred: &str, args: Vec<Term>) -> Atom {
         record: None,
         span: Default::default(),
     }
-}
-
-/// `local("DIR")`'s DIR.
-fn local_dir(backend: &str) -> Option<&str> {
-    let dir = backend
-        .trim()
-        .strip_prefix("local(\"")?
-        .strip_suffix("\")")?;
-    (!dir.is_empty() && !dir.contains('"')).then_some(dir)
 }
 
 /// A stack discovery found: its name, its key's inputs, and its file.
@@ -609,6 +641,39 @@ mod tests {
     }
 
     #[test]
+    fn a_manifest_takes_an_s3_backend_and_its_lease_times() {
+        let m = manifest(
+            "[defaults]\nbackend = 's3(\"bucket\", \"dform/{stack}\", \
+             {endpoint: \"http://127.0.0.1:9000\", region: \"gra\"})'\n\
+             lease_duration = \"2s\"\nlease_renewal = \"500ms\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            m.backend("app"),
+            Some(crate::stack::Backend::S3(crate::store::S3Spec {
+                bucket: "bucket".into(),
+                prefix: "dform/app".into(),
+                endpoint: Some("http://127.0.0.1:9000".into()),
+                region: Some("gra".into()),
+            }))
+        );
+        assert_eq!(
+            m.lease_times(),
+            crate::store::LeaseTimes {
+                duration: std::time::Duration::from_secs(2),
+                renewal: std::time::Duration::from_millis(500),
+            }
+        );
+        let e = manifest("[defaults]\nlease_duration = \"10s\"\nlease_renewal = \"10s\"\n")
+            .unwrap_err();
+        assert!(e.to_string().contains("renew it more often"), "{e}");
+        let e = manifest("[defaults]\nlease_duration = \"soon\"\n").unwrap_err();
+        assert!(e.to_string().contains("[defaults] lease_duration"), "{e}");
+        let e = manifest("[defaults]\nbackend = 's3(\"\", \"p\")'\n").unwrap_err();
+        assert!(e.to_string().contains("[defaults] backend"), "{e}");
+    }
+
+    #[test]
     fn a_manifest_checks_versions_and_defaults() {
         let m = manifest(
             "[project]\nname = \"p\"\ndform = \">=0.1\"\n\
@@ -617,7 +682,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(m.provider_source("aws").as_deref(), Some("aws-mock"));
-        assert_eq!(m.backend("app"), Some(PathBuf::from("state/app")));
+        assert_eq!(
+            m.backend("app"),
+            Some(crate::stack::Backend::Local(PathBuf::from("state/app")))
+        );
         let facts: Vec<String> = m.facts().iter().map(crate::partition::fmt_atom).collect();
         assert_eq!(
             facts,

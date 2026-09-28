@@ -1,0 +1,17 @@
+[package]
+name = "dform-s3"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[features]
+# `fake`: an S3 server in the test process (`src/fake.rs`), for tests.
+fake = []
+
+[dependencies]
+anyhow = "1.0"
+dform-core = { path = "../dform-core" }
+# SigV4 request signing, no I/O of its own; `xml` parses ListObjectsV2.
+rusty-s3 = { version = "0.10", default-features = false, features = ["rustcrypto", "xml"] }
+# Blocking HTTP over rustls: no async runtime.
+ureq = { version = "3", default-features = false, features = ["rustls"] }

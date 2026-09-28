@@ -25,7 +25,8 @@ dform.state/                state: per deployment, audit logs, plan keys,
   versions the project takes), `[providers]` (each provider's source and
   version requirement, Cargo's semver syntax; a program's `provider NAME {}`
   takes its source from here), `[defaults]` (a `backend` template and
-  `unknowns`, which a stack statement overrides) and `[discovery]`
+  `unknowns`, which a stack statement overrides, and an s3 backend's
+  `lease_duration` and `lease_renewal`) and `[discovery]`
   (`exclude` globs). Never inputs, keys, settings or anything per
   deployment. Policy reads it as `project_provider(Name, Constraint)` and
   `project_default(Key, Value)`.

@@ -10,6 +10,7 @@ members = [
     "crates/dform-provider-k8s",
     "crates/dform-direct",
     "crates/dform-proptest",
+    "crates/dform-s3",
     "tree-sitter-dform",
 ]
 # `cargo build` and `cargo test` build the provider binaries the CLI spawns
@@ -26,6 +27,7 @@ default-members = [
     "crates/dform-provider-k8s",
     "crates/dform-direct",
     "crates/dform-proptest",
+    "crates/dform-s3",
 ]
 resolver = "3"
 
@@ -43,6 +45,8 @@ clap = { version = "4.5", features = ["derive"] }
 serde_json = "1.0"
 dform-core = { path = "crates/dform-core" }
 dform-grpc = { path = "crates/dform-grpc" }
+# The s3 state backend (`store`): the S3 client, kept out of dform-core.
+dform-s3 = { path = "crates/dform-s3" }
 
 [[bin]]
 name = "dform"
@@ -55,6 +59,9 @@ harness = false
 [dev-dependencies]
 # tests/model.rs turns the executor's mutant on (`executor::hooks`).
 dform-core = { path = "crates/dform-core", features = ["test-hooks"] }
+# tests/s3.rs: the S3 store, and a fake S3 server to run it against.
+dform-s3 = { path = "crates/dform-s3", features = ["fake"] }
+rusty-s3 = { version = "0.10", default-features = false, features = ["rustcrypto", "xml"] }
 # The direct and wire backends, for tests and benches (not the CLI's).
 dform-mock = { path = "crates/dform-mock" }
 tree-sitter = "0.26"

@@ -1,7 +1,8 @@
 //! The audit log (E DR-16, "the log is audit", made real): one JSON-lines
-//! file per stack deployment beside its state, `state.audit.jsonl`
-//! (`<stem>.state.audit.jsonl` beside a `--world` file), moving with the
-//! state on a rekey or a handover.
+//! object per stack deployment in its backend beside its state,
+//! `state.audit.jsonl` (`<stem>.state.audit.jsonl` beside a `--world`
+//! file; under the prefix of an `s3` backend), moving with the state on a
+//! rekey or a handover.
 //!
 //! Every entry is one line of canonical JSON: `seq` (from 1), `time` (RFC
 //! 3339, UTC), `kind`, `prev` (the previous entry's `hash`, "" for the
@@ -25,15 +26,17 @@
 //! a sink that fails is a warning, and the local log stays authoritative.
 
 use crate::approval::{canonical_json, digest_of, now, rfc3339};
+use crate::store::{AUDIT, LocalStore, Store};
 use anyhow::{Context, Result};
 use serde_json::{Map, Value as Json};
-use std::io::{Read, Seek, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-/// A deployment's audit log.
-#[derive(Debug, Clone)]
+/// A deployment's audit log: the object `state.audit.jsonl` of its store.
+#[derive(Clone)]
 pub struct Log {
-    path: PathBuf,
+    store: Arc<dyn Store>,
     sink: Option<String>,
 }
 
@@ -43,71 +46,74 @@ pub fn path_beside(state: &Path) -> PathBuf {
 }
 
 impl Log {
-    /// The log of the deployment whose state file is `state`; each entry
-    /// also goes to `sink` when there is one.
+    /// The log in `store`; each entry also goes to `sink` when there is
+    /// one.
+    pub fn new(store: Arc<dyn Store>, sink: Option<String>) -> Log {
+        Log { store, sink }
+    }
+
+    /// The log of the local deployment whose state file is `state`.
     pub fn beside(state: &Path, sink: Option<String>) -> Log {
-        Log {
-            path: path_beside(state),
-            sink,
+        Log::new(Arc::new(LocalStore::beside(state)), sink)
+    }
+
+    /// Where the log is, as messages name it.
+    pub fn locate(&self) -> String {
+        self.store.locate(AUDIT)
+    }
+
+    /// The log's text; `None` when there is no log.
+    pub fn text(&self) -> Result<Option<String>> {
+        match self.store.get(AUDIT)? {
+            None => Ok(None),
+            Some(o) => String::from_utf8(o.bytes)
+                .map(Some)
+                .with_context(|| format!("{}: not UTF-8", self.locate())),
         }
     }
 
-    pub fn path(&self) -> &Path {
-        &self.path
+    /// The entries, in order (none when there is no log).
+    pub fn entries(&self) -> Result<Vec<Json>> {
+        entries(&self.text()?.unwrap_or_default(), &self.locate())
     }
 
     /// Append an entry of `kind` with `fields` (an object), chained to the
-    /// last one. The file is locked while it is read and written, so two
-    /// processes appending (a `plan --out` beside an apply) do not fork
-    /// the chain.
+    /// last one. The store appends without losing a concurrent entry (a
+    /// `plan --out` beside an apply), so the chain does not fork.
     pub fn append(&self, kind: &str, fields: Json) -> Result<()> {
-        if let Some(dir) = self.path.parent().filter(|d| !d.as_os_str().is_empty()) {
-            std::fs::create_dir_all(dir).with_context(|| format!("mkdir {}", dir.display()))?;
-        }
-        let mut f = std::fs::OpenOptions::new()
-            .read(true)
-            .append(true)
-            .create(true)
-            .open(&self.path)
-            .with_context(|| format!("open {}", self.path.display()))?;
-        f.lock()
-            .with_context(|| format!("lock {}", self.path.display()))?;
-        let mut text = String::new();
-        f.seek(std::io::SeekFrom::Start(0))?;
-        f.read_to_string(&mut text)
-            .with_context(|| format!("read {}", self.path.display()))?;
-        let (seq, prev) = match text.lines().rev().find(|l| !l.trim().is_empty()) {
-            None => (1, String::new()),
-            Some(last) => match serde_json::from_str::<Json>(last) {
-                Ok(e) => (
-                    e["seq"].as_u64().unwrap_or(0) + 1,
-                    e["hash"].as_str().unwrap_or_default().to_string(),
-                ),
-                Err(_) => (
-                    text.lines().filter(|l| !l.trim().is_empty()).count() as u64 + 1,
-                    format!("sha256:{}", crate::approval::sha256_hex(last.as_bytes())),
-                ),
-            },
-        };
-        let mut entry = Map::new();
-        entry.insert("seq".into(), seq.into());
-        entry.insert("time".into(), rfc3339(now()).into());
-        entry.insert("kind".into(), kind.into());
-        entry.insert("prev".into(), prev.into());
-        if let Json::Object(m) = fields {
-            for (k, v) in m {
-                entry.entry(k).or_insert(v);
+        let mut written = String::new();
+        self.store.append(AUDIT, &mut |text: &[u8]| {
+            let text = String::from_utf8_lossy(text);
+            let (seq, prev) = match text.lines().rev().find(|l| !l.trim().is_empty()) {
+                None => (1, String::new()),
+                Some(last) => match serde_json::from_str::<Json>(last) {
+                    Ok(e) => (
+                        e["seq"].as_u64().unwrap_or(0) + 1,
+                        e["hash"].as_str().unwrap_or_default().to_string(),
+                    ),
+                    Err(_) => (
+                        text.lines().filter(|l| !l.trim().is_empty()).count() as u64 + 1,
+                        format!("sha256:{}", crate::approval::sha256_hex(last.as_bytes())),
+                    ),
+                },
+            };
+            let mut entry = Map::new();
+            entry.insert("seq".into(), seq.into());
+            entry.insert("time".into(), rfc3339(now()).into());
+            entry.insert("kind".into(), kind.into());
+            entry.insert("prev".into(), prev.into());
+            if let Json::Object(m) = &fields {
+                for (k, v) in m {
+                    entry.entry(k.clone()).or_insert(v.clone());
+                }
             }
-        }
-        let hash = digest_of(&Json::Object(entry.clone()));
-        entry.insert("hash".into(), hash.into());
-        let line = canonical_json(&Json::Object(entry));
-        f.write_all(format!("{line}\n").as_bytes())
-            .with_context(|| format!("write {}", self.path.display()))?;
-        f.unlock()?;
-        drop(f);
+            let hash = digest_of(&Json::Object(entry.clone()));
+            entry.insert("hash".into(), hash.into());
+            written = canonical_json(&Json::Object(entry));
+            format!("{written}\n").into_bytes()
+        })?;
         if let Some(cmd) = &self.sink
-            && let Err(e) = send(cmd, &line)
+            && let Err(e) = send(cmd, &written)
         {
             eprintln!("warning: audit sink `{cmd}`: {e:#}; the local log has the entry");
         }
@@ -160,12 +166,16 @@ pub fn read(path: &Path) -> Result<Vec<Json>> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(e) => return Err(e).with_context(|| format!("read {}", path.display())),
     };
+    entries(&text, &path.display().to_string())
+}
+
+/// The entries of a log's `text`; `at` names it.
+fn entries(text: &str, at: &str) -> Result<Vec<Json>> {
     text.lines()
         .filter(|l| !l.trim().is_empty())
         .enumerate()
         .map(|(i, l)| {
-            serde_json::from_str(l)
-                .with_context(|| format!("{}: entry {} is not JSON", path.display(), i + 1))
+            serde_json::from_str(l).with_context(|| format!("{at}: entry {} is not JSON", i + 1))
         })
         .collect()
 }
@@ -178,16 +188,15 @@ pub struct Broken {
     pub why: String,
 }
 
-/// Check the chain of the log at `path`: every entry's hash is its
+/// Check the chain of a log's `text`: every entry's hash is its
 /// content's, its `prev` is the entry before's hash, and `seq` counts from
 /// 1. Returns how many entries there are, and the first broken link.
-pub fn verify(path: &Path) -> Result<(usize, Option<Broken>)> {
-    let text = std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+pub fn verify(text: &str) -> (usize, Option<Broken>) {
     let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
     let mut prev = String::new();
     for (i, l) in lines.iter().enumerate() {
         let n = i + 1;
-        let broken = |why: String| Ok((lines.len(), Some(Broken { entry: n, why })));
+        let broken = |why: String| (lines.len(), Some(Broken { entry: n, why }));
         let Ok(Json::Object(mut e)) = serde_json::from_str::<Json>(l) else {
             return broken(format!("entry {n} is not a JSON object"));
         };
@@ -216,7 +225,7 @@ pub fn verify(path: &Path) -> Result<(usize, Option<Broken>)> {
         }
         prev = hash;
     }
-    Ok((lines.len(), None))
+    (lines.len(), None)
 }
 
 /// One entry as `dform log` prints it: `SEQ TIME KIND k=v ...`, a long
@@ -273,14 +282,12 @@ mod tests {
         for i in 0..3 {
             log.append("tick", json!({ "tick": i })).unwrap();
         }
-        assert_eq!(verify(log.path()).unwrap(), (3, None));
-        let text = std::fs::read_to_string(log.path()).unwrap();
-        std::fs::write(log.path(), text.replacen("\"tick\":1", "\"tick\":7", 1)).unwrap();
-        let (_, broken) = verify(log.path()).unwrap();
+        let text = log.text().unwrap().unwrap();
+        assert_eq!(verify(&text), (3, None));
+        let (_, broken) = verify(&text.replacen("\"tick\":1", "\"tick\":7", 1));
         assert_eq!(broken.unwrap().entry, 2);
         let lines: Vec<&str> = text.lines().collect();
-        std::fs::write(log.path(), format!("{}\n{}\n", lines[0], lines[2])).unwrap();
-        let (_, broken) = verify(log.path()).unwrap();
+        let (_, broken) = verify(&format!("{}\n{}\n", lines[0], lines[2]));
         assert!(broken.unwrap().why.starts_with("entry 2 (tick): its prev"));
         let _ = std::fs::remove_dir_all(&dir);
     }

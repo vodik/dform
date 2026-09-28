@@ -875,7 +875,7 @@ fn listing(stacks: &[crate::project::Found]) -> String {
 /// apply's end is logged.
 struct Session {
     log: crate::audit::Log,
-    _lock: crate::stack::Lock,
+    _lock: crate::store::Guard,
 }
 
 /// One run of the command line. `hook`: controller mode's part of an apply
@@ -1121,8 +1121,9 @@ fn run_with(
     inputs::check_required(&declared, &given)?;
     // The stack's directory, and the deployment's in it.
     let base = match &stack_cfg.backend {
-        Some(dir) => state::local_dir(&root, dir),
-        None => root.join(&stack),
+        Some(crate::stack::Backend::Local(dir)) => state::local_dir(&root, dir),
+        // An s3 stack's world (the mock's) stays where a local stack's is.
+        Some(crate::stack::Backend::S3(_)) | None => root.join(&stack),
     };
     let mut paths = match &cli.world {
         Some(w) => state::world_paths(&root, w),
@@ -1137,11 +1138,28 @@ fn run_with(
         paths = state::backend_paths(&root, dir);
     }
     paths.inventory = resolve_inventory(&cli.inventory, &cli.world, &paths.inventory);
+    // Where the deployment's state, plan key, audit log and lock are: its
+    // backend's store (a `--world` fixture's beside it).
+    let s3 = match (&stack_cfg.backend, &cli.world, &handed) {
+        (Some(crate::stack::Backend::S3(spec)), None, None) => Some(spec),
+        _ => None,
+    };
+    let dep = match s3 {
+        Some(spec) => crate::store::Deployment::new(
+            std::sync::Arc::new(dform_s3::S3Store::open(
+                spec,
+                instance.segment().as_deref().unwrap_or_default(),
+            )?),
+            &deployment,
+            cli.manifest
+                .as_ref()
+                .map(|m| m.lease_times())
+                .unwrap_or_default(),
+        ),
+        None => crate::store::Deployment::local(&paths.state, &deployment),
+    };
     // The deployment's audit log, beside its state.
-    let audit = crate::audit::Log::beside(
-        &paths.state,
-        cli.audit_sink.clone().or(stack_cfg.audit_sink.clone()),
-    );
+    let audit = dep.audit(cli.audit_sink.clone().or(stack_cfg.audit_sink.clone()));
     match &cli.cmd {
         Cmd::Log {
             verify,
@@ -1151,12 +1169,12 @@ fn run_with(
             return print_log(&audit, &deployment, *verify, since.as_deref(), *json);
         }
         Cmd::Unlock => {
-            println!("{}", crate::stack::unlock(&paths.state, &deployment)?);
+            println!("{}", dep.unlock()?);
             return Ok(());
         }
-        Cmd::StateShow => return state_show(&paths.state, &deployment),
+        Cmd::StateShow => return state_show(&dep),
         Cmd::StateMv { from, to } => {
-            return state_mv(&paths.state, &deployment, from, to, &audit);
+            return state_mv(&dep, from, to, &audit);
         }
         _ => {}
     }
@@ -1164,7 +1182,7 @@ fn run_with(
     // digest secrets with it (the plan file's, the audit log's).
     let key = match (&saved, &cli.cmd) {
         (Some(_), _) | (None, Cmd::Plan { out: Some(_), .. }) | (None, Cmd::Apply { .. }) => {
-            Some(zset::file::Key::load_or_create(&paths.state)?)
+            Some(dep.plan_key()?)
         }
         _ => None,
     };
@@ -1197,6 +1215,12 @@ fn run_with(
         if stack_cfg.bootstrap {
             bail!(
                 "stack {deployment} is role = bootstrap: it stays batch, and the controller never runs it"
+            );
+        }
+        if let Some(spec) = s3 {
+            bail!(
+                "stack {deployment}: its backend is {spec}; the controller keeps its memo \
+                 beside local state, and does not run an s3 stack yet"
             );
         }
         h.audit = Some(audit.clone());
@@ -1258,7 +1282,7 @@ fn run_with(
         },
     );
 
-    let mut st = state::State::load(&paths.state)?;
+    let mut st = dep.load_state()?;
     // What the plan file read, then what state persisted, before asking.
     if let Some((_, saved)) = &saved {
         externs.preload(saved.externs.clone());
@@ -1761,7 +1785,7 @@ fn run_with(
                 let key = match &key {
                     Some(k) => k,
                     None => {
-                        loaded = zset::file::Key::load_or_create(&paths.state)?;
+                        loaded = dep.plan_key()?;
                         &loaded
                     }
                 };
@@ -1831,7 +1855,7 @@ fn run_with(
             // apply's end is in the audit log.
             *session = Some(Session {
                 log: audit.clone(),
-                _lock: crate::stack::Lock::acquire(&paths.state, &deployment)?,
+                _lock: dep.lock()?,
             });
             let key = key
                 .as_ref()
@@ -1876,7 +1900,7 @@ fn run_with(
             };
             let mut approved: Option<crate::approval::Verified> = None;
             persist_externs(&mut st, &externs);
-            let persist = |st: &state::State| st.save(&paths.state);
+            let persist = |st: &state::State| dep.save_state(st);
             if !moves.is_empty() {
                 print_moves(&moves);
                 persist(&st)?;
@@ -2208,10 +2232,12 @@ fn run_with(
                         Default::default()
                     };
                     persist(&st)?;
-                    // Every deployment of a keyed stack is registered.
+                    // Every deployment of a keyed stack is registered
+                    // (a local one: the registry holds state paths).
                     let keyed = instance.segment().is_some();
                     if (!st.outputs.is_empty() || stack_cfg.bootstrap || keyed)
                         && cli.world.is_none()
+                        && s3.is_none()
                     {
                         crate::stack::register(
                             &root,
@@ -2433,6 +2459,9 @@ fn rekey_args(
              there is nothing to move"
         );
     }
+    if let Some(crate::stack::Backend::S3(spec)) = &cfg.backend {
+        bail!("stack rekey {stack}: its backend is {spec}; rekey moves local state only, for now");
+    }
     let keys: Vec<&str> = cfg.keys.iter().map(|(k, _)| k.as_str()).collect();
     if keys.is_empty() {
         bail!(
@@ -2611,12 +2640,13 @@ fn taint(cli: &Cli, stack: &str, pred: &str, args: &[String]) -> Result<()> {
             path.display()
         );
     }
-    let _lock = crate::stack::Lock::acquire(&path, stack)?;
-    let mut st = state::State::load(&path)?;
+    let dep = crate::store::Deployment::local(&path, stack);
+    let _lock = dep.lock()?;
+    let mut st = dep.load_state()?;
     if st.taint(pred, args).is_none() {
         bail!("taint {call}: stack {stack} has no persisted answer for it");
     }
-    st.save(&path)?;
+    dep.save_state(&st)?;
     println!("tainted {call} of stack {stack}: the next plan asks again");
     Ok(())
 }
@@ -2776,20 +2806,20 @@ fn print_log(
     since: Option<&str>,
     json: bool,
 ) -> Result<()> {
-    let path = log.path();
+    let at = log.locate();
     if verify {
-        if !path.exists() {
-            bail!("stack {deployment} has no audit log at {}", path.display());
-        }
-        return match crate::audit::verify(path)? {
+        let Some(text) = log.text()? else {
+            bail!("stack {deployment} has no audit log at {at}");
+        };
+        return match crate::audit::verify(&text) {
             (n, None) => {
-                println!("audit log {}: {n} entries, the chain holds", path.display());
+                println!("audit log {at}: {n} entries, the chain holds");
                 Ok(())
             }
-            (_, Some(b)) => bail!("audit log {}: {}", path.display(), b.why),
+            (_, Some(b)) => bail!("audit log {at}: {}", b.why),
         };
     }
-    let mut entries = crate::audit::read(path)?;
+    let mut entries = log.entries()?;
     if let Some(s) = since {
         entries = crate::audit::since(entries, s);
     }
@@ -3245,7 +3275,11 @@ fn stack_list(cli: &Cli) -> Result<()> {
                 c.backend
             });
         let base = match backend {
-            Some(dir) => state::local_dir(&cli.root, &dir),
+            Some(crate::stack::Backend::Local(dir)) => state::local_dir(&cli.root, &dir),
+            Some(crate::stack::Backend::S3(spec)) => {
+                println!("  state in {spec}");
+                continue;
+            }
             None => cli.root.join(&s.name),
         };
         let mut deployments: Vec<(String, PathBuf)> = Vec::new();
@@ -3334,15 +3368,13 @@ fn last_apply(state: &Path) -> String {
 }
 
 /// `dform state show`: the deployment's objects, by address.
-fn state_show(path: &Path, deployment: &str) -> Result<()> {
-    if !path.exists() {
-        bail!(
-            "stack {deployment} has no state at {}: it was never applied",
-            path.display()
-        );
+fn state_show(dep: &crate::store::Deployment) -> Result<()> {
+    let (deployment, at) = (dep.name(), dep.locate(crate::store::STATE));
+    if !dep.has_state()? {
+        bail!("stack {deployment} has no state at {at}: it was never applied");
     }
-    let st = state::State::load(path)?;
-    println!("{deployment}: {}", path.display());
+    let st = dep.load_state()?;
+    println!("{deployment}: {at}");
     for (k, e) in &st.resources {
         let addr = state::parse_key(k).map_or(k.clone(), |a| format!("{}/{}", a.typ, a.name));
         println!("  {addr}  {} {}", e.provider, e.remote);
@@ -3375,15 +3407,15 @@ fn parse_address(s: &str) -> Result<ir::Address> {
 /// `dform state mv FROM TO`: the object state maps at FROM, at TO; under
 /// the deployment's lock, logged.
 fn state_mv(
-    path: &Path,
-    deployment: &str,
+    dep: &crate::store::Deployment,
     from: &str,
     to: &str,
     audit: &crate::audit::Log,
 ) -> Result<()> {
+    let deployment = dep.name();
     let (old, new) = (parse_address(from)?, parse_address(to)?);
-    let _lock = crate::stack::Lock::acquire(path, deployment)?;
-    let mut st = state::State::load(path)?;
+    let _lock = dep.lock()?;
+    let mut st = dep.load_state()?;
     if st.get(&old).is_none() {
         bail!("state mv: stack {deployment} has no object at {from}");
     }
@@ -3391,7 +3423,7 @@ fn state_mv(
         bail!("state mv: stack {deployment} already has an object at {to}");
     }
     st.apply_moves(&[(old, new)]);
-    st.save(path)?;
+    dep.save_state(&st)?;
     audit.append(
         "state_mv",
         serde_json::json!({ "from": from, "to": to, "who": crate::audit::who() }),

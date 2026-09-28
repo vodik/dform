@@ -1,8 +1,9 @@
 //! Stacks (DESIGN.org L6, E §7.1): `stack name { backend = local("dir"),
 //! unknowns = strict | permissive, role = bootstrap }.` One program owns
 //! one stack. The name scopes the state (the entry file's basename when
-//! there is no `stack` statement), the backend is the directory it lives in, and a lock file
-//! there makes a second concurrent apply fail cleanly.
+//! there is no `stack` statement), the backend is the directory it lives in
+//! (or a bucket, `store`), and a lock there makes a second concurrent apply
+//! fail cleanly.
 //!
 //! Keyed stacks: `stack app[env, region] { .. }` names the inputs that are
 //! deployment identity. Each value of the key is its own deployment
@@ -51,8 +52,9 @@ pub enum Unknowns {
 pub struct Stack {
     pub name: Option<String>,
     /// `backend = local("dir")`: where the state, the world and the lock
-    /// live. `None`: `dform.state/<name>/`.
-    pub backend: Option<PathBuf>,
+    /// live; `s3(...)`: the state, plan key, audit log and lease in a
+    /// bucket. `None`: `dform.state/<name>/`.
+    pub backend: Option<Backend>,
     pub unknowns: Unknowns,
     /// `role = bootstrap`: the stack creates what a controller runs in. It
     /// stays batch: `dform controller run` refuses it.
@@ -72,6 +74,85 @@ pub struct Stack {
     /// `audit_sink = "CMD"`: each audit log entry is also piped to CMD
     /// (`audit`); `--audit-sink` overrides it.
     pub audit_sink: Option<String>,
+}
+
+/// A stack's backend.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Backend {
+    /// `local("DIR")`: DIR relative to the project root.
+    Local(PathBuf),
+    /// `s3("BUCKET", "PREFIX", {endpoint: URL, region: R})`.
+    S3(crate::store::S3Spec),
+}
+
+/// A `backend = ...` term.
+fn backend(v: &Term) -> Result<Backend, String> {
+    let Term::Func { name, args } = v else {
+        return Err("unknown backend".into());
+    };
+    match (name.as_str(), args.as_slice()) {
+        ("local", [dir]) => match string(dir) {
+            Some(dir) => Ok(Backend::Local(PathBuf::from(dir))),
+            None => Err("backend local(DIR) takes a directory string".into()),
+        },
+        ("s3", [bucket, prefix, rest @ ..]) if rest.len() <= 1 => {
+            let usage = "backend s3(\"BUCKET\", \"PREFIX\", {endpoint: \"URL\", region: \"R\"}) \
+                         takes a bucket and a prefix string, and optionally a record of \
+                         endpoint and region strings";
+            let (Some(bucket), Some(prefix)) = (string(bucket), string(prefix)) else {
+                return Err(usage.into());
+            };
+            if bucket.is_empty() {
+                return Err("backend s3: the bucket is empty".into());
+            }
+            let mut spec = crate::store::S3Spec {
+                bucket: bucket.to_string(),
+                prefix: prefix.trim_matches('/').to_string(),
+                endpoint: None,
+                region: None,
+            };
+            if let Some(opts) = rest.first() {
+                let Term::Obj(m) = opts else {
+                    return Err(usage.into());
+                };
+                for (k, v) in m {
+                    let v = string(v).ok_or_else(|| format!("backend s3: {k} is a string"))?;
+                    match k.as_str() {
+                        "endpoint" => spec.endpoint = Some(v.trim_end_matches('/').to_string()),
+                        "region" => spec.region = Some(v.to_string()),
+                        other => {
+                            return Err(format!(
+                                "backend s3 has no option {other}; its options: endpoint, region"
+                            ));
+                        }
+                    }
+                }
+            }
+            Ok(Backend::S3(spec))
+        }
+        ("s3", _) => Err(
+            "backend s3(\"BUCKET\", \"PREFIX\", {endpoint: \"URL\", region: \"R\"}) takes a \
+             bucket, a prefix and optionally a record of options"
+                .into(),
+        ),
+        _ => Err("unknown backend".into()),
+    }
+}
+
+/// A backend as the manifest's `[defaults] backend` writes it, a term of
+/// the language in a string.
+pub fn parse_backend(text: &str) -> Result<Backend> {
+    let program = crate::parser::parse_program(&format!("stack _ {{ backend = {text} }}"))
+        .map_err(|_| anyhow::anyhow!("not a backend term"))?;
+    program
+        .statements
+        .iter()
+        .find_map(|s| match s {
+            Stmt::Stack(c) => c.config.iter().find(|(k, _, _)| k == "backend"),
+            _ => None,
+        })
+        .ok_or_else(|| anyhow::anyhow!("not a backend term"))
+        .and_then(|(_, v, _)| backend(v).map_err(|e| anyhow::anyhow!(e)))
 }
 
 fn string(t: &Term) -> Option<&str> {
@@ -307,20 +388,15 @@ pub fn instance(cfg: &Stack, stack: &str, program: &Program, set: &[Atom]) -> Re
 fn stack_config(c: &Config, out: &mut Stack, diags: &mut Vec<Diagnostic>) {
     for (k, v, span) in &c.config {
         match k.as_str() {
-            "backend" => match v {
-                Term::Func { name, args } if name == "local" && args.len() == 1 => {
-                    match string(&args[0]) {
-                        Some(dir) => out.backend = Some(PathBuf::from(dir)),
-                        None => diags.push(Diagnostic::error(
-                            *span,
-                            "backend local(DIR) takes a directory string",
-                        )),
-                    }
+            "backend" => match backend(v) {
+                Ok(b) => out.backend = Some(b),
+                Err(e) if e == "unknown backend" => {
+                    diags.push(Diagnostic::error(*span, e).with_help(
+                        "the backends are `local(\"DIR\")` and \
+                     `s3(\"BUCKET\", \"PREFIX\", {endpoint: \"URL\", region: \"R\"})`",
+                    ))
                 }
-                _ => diags.push(
-                    Diagnostic::error(*span, "unknown backend")
-                        .with_help("the one backend is `local(\"DIR\")`"),
-                ),
+                Err(e) => diags.push(Diagnostic::error(*span, e)),
             },
             "unknowns" => match string(v) {
                 Some("strict") => out.unknowns = Unknowns::Strict,
@@ -437,107 +513,6 @@ fn provider(c: &Config, diags: &mut Vec<Diagnostic>) -> String {
         }
     }
     spec
-}
-
-/// An apply's hold on a stack: the file `<state>.lock`, created exclusively
-/// and removed when dropped. A lock whose holder is gone (a killed apply)
-/// is taken over, with a note.
-pub struct Lock {
-    path: PathBuf,
-}
-
-impl Lock {
-    pub fn acquire(state: &Path, stack: &str) -> Result<Lock> {
-        let path = state.with_extension("lock");
-        if let Some(dir) = path.parent() {
-            fs::create_dir_all(dir).with_context(|| format!("mkdir {}", dir.display()))?;
-        }
-        for _ in 0..2 {
-            match fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&path)
-            {
-                Ok(mut f) => {
-                    use std::io::Write;
-                    writeln!(f, "{}", std::process::id())
-                        .with_context(|| format!("write {}", path.display()))?;
-                    // Tests hold the lock until a file appears, to run a
-                    // second apply against a held stack.
-                    if let Some(release) = std::env::var_os("DFORM_TEST_HOLD_LOCK") {
-                        while !Path::new(&release).exists() {
-                            std::thread::sleep(std::time::Duration::from_millis(10));
-                        }
-                    }
-                    return Ok(Lock { path });
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                    let holder = fs::read_to_string(&path).unwrap_or_default();
-                    let pid: Option<u32> = holder.trim().parse().ok();
-                    if let Some(pid) = pid
-                        && !alive(pid)
-                    {
-                        eprintln!(
-                            "note: stack {stack}: taking over the lock of pid {pid}, which is gone ({})",
-                            path.display()
-                        );
-                        let _ = fs::remove_file(&path);
-                        continue;
-                    }
-                    bail!(
-                        "stack {stack} is locked by another apply (pid {}): {}; \
-                         wait for it, or `dform stack unlock {stack}` if no apply is running",
-                        pid.map(|p| p.to_string())
-                            .unwrap_or_else(|| "unknown".into()),
-                        path.display()
-                    );
-                }
-                Err(e) => return Err(e).with_context(|| format!("lock {}", path.display())),
-            }
-        }
-        bail!("stack {stack}: could not take the lock {}", path.display())
-    }
-}
-
-/// `dform stack unlock`: remove the apply lock beside `state`, unless its
-/// holder is running.
-pub fn unlock(state: &Path, stack: &str) -> Result<String> {
-    let path = state.with_extension("lock");
-    if !path.exists() {
-        return Ok(format!("stack {stack} is not locked"));
-    }
-    let holder = fs::read_to_string(&path).unwrap_or_default();
-    let pid: Option<u32> = holder.trim().parse().ok();
-    if let Some(pid) = pid
-        && alive(pid)
-    {
-        bail!(
-            "stack {stack} is locked by a running apply (pid {pid}): {}; stop it first",
-            path.display()
-        );
-    }
-    fs::remove_file(&path).with_context(|| format!("remove {}", path.display()))?;
-    Ok(format!(
-        "stack {stack} unlocked (the lock of pid {} is gone): {}",
-        pid.map(|p| p.to_string())
-            .unwrap_or_else(|| "unknown".into()),
-        path.display()
-    ))
-}
-
-impl Drop for Lock {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.path);
-    }
-}
-
-/// Is process `pid` running? (Linux: `/proc/<pid>` exists.) Elsewhere
-/// every holder is taken as alive.
-fn alive(pid: u32) -> bool {
-    if !Path::new("/proc").exists() {
-        return true;
-    }
-    Path::new(&format!("/proc/{pid}")).exists()
 }
 
 /// The registry of applied stacks: name -> state file, under the state root.
@@ -665,9 +640,9 @@ pub fn handed_over(root: &Path, stack: &str) -> Result<Option<(String, PathBuf)>
 /// directory.
 pub fn handover(root: &Path, stack: &str, to: &str) -> Result<PathBuf> {
     let reg = registry(root)?;
-    let target = match parse_backend(to)? {
-        Backend::Local(dir) => crate::state::local_dir(root, &dir),
-        Backend::K8s(key) => {
+    let target = match parse_target(to)? {
+        Target::Local(dir) => crate::state::local_dir(root, &dir),
+        Target::K8s(key) => {
             let boots: Vec<(&String, &Entry)> = reg.iter().filter(|(_, e)| e.bootstrap).collect();
             let (boot, e) = match boots.as_slice() {
                 [one] => *one,
@@ -799,13 +774,13 @@ pub fn rekey(root: &Path, base: &Path, from: &Instance, to: &Instance) -> Result
     Ok(dst)
 }
 
-enum Backend {
+enum Target {
     Local(PathBuf),
     K8s(String),
 }
 
 /// `local("DIR")` or `k8s("ns/name")`, as the command line gives it.
-fn parse_backend(to: &str) -> Result<Backend> {
+fn parse_target(to: &str) -> Result<Target> {
     let bad = || {
         anyhow::anyhow!(
             "unknown backend {to}: the backends are local(\"DIR\") and k8s(\"ns/name\")"
@@ -818,7 +793,7 @@ fn parse_backend(to: &str) -> Result<Backend> {
         .filter(|a| !a.is_empty())
         .ok_or_else(bad)?;
     match kind.trim() {
-        "local" => Ok(Backend::Local(PathBuf::from(arg))),
+        "local" => Ok(Target::Local(PathBuf::from(arg))),
         "k8s" => {
             let parts: Vec<&str> = arg.split('/').collect();
             let ok = |p: &str| {
@@ -827,7 +802,7 @@ fn parse_backend(to: &str) -> Result<Backend> {
                         .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
             };
             match parts.as_slice() {
-                [ns, name] if ok(ns) && ok(name) => Ok(Backend::K8s(format!("{ns}/{name}"))),
+                [ns, name] if ok(ns) && ok(name) => Ok(Target::K8s(format!("{ns}/{name}"))),
                 _ => bail!("k8s(\"{arg}\"): the key is \"namespace/name\""),
             }
         }
