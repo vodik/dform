@@ -1,0 +1,4 @@
+exit: ok
+-- stdout --
+plan: 0 to create, 0 to update, 0 to delete
+-- stderr --

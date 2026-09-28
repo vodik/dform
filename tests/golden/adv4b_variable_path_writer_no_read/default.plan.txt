@@ -1,0 +1,8 @@
+exit: ok
+-- stdout --
+plan: 1 to create, 0 to update, 0 to delete
++ net.vpc.main
+  cidr = "10.0.0.0/16"
+  tags.env = "dev"
+  tags.team = "x"
+-- stderr --

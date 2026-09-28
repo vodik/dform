@@ -1,0 +1,52 @@
+exit: ok
+-- stdout --
+plan: 6 to create, 0 to update, 0 to delete
++ alert_metrics_pack.pngu
+  enable_standard_gke_alerts = true
+  notification_channel_display_name = "Slack"
+  notification_channel_type = "slack"
+  project_id = "renfry-stg"
+  source = "git@github.com:coherentpath/terraform-gcp-alert-metrics.git?ref=v1.5.0"
++ google_compute_subnetwork.gke_subnet
+  ip_cidr_range = "10.141.100.0/22"
+  name = "renfry-stg-gke-subnet"
+  network = "projects/renfry-stg/global/networks/renfry-stg-network"
+  project = "renfry-stg"
+  region = "us-east1"
+  secondary_ranges[0].ip_cidr_range = "10.141.104.0/21"
+  secondary_ranges[0].range_name = "renfry-stg-gke-pods-range"
+  secondary_ranges[1].ip_cidr_range = "10.141.112.0/21"
+  secondary_ranges[1].range_name = "renfry-stg-gke-svc-range"
+  subnet_private_access = true
++ google_compute_subnetwork.regional_proxy
+  ip_cidr_range = "10.193.1.0/24"
+  name = "renfry-stg-proxy"
+  network = "projects/renfry-stg/global/networks/renfry-stg-network"
+  project = "renfry-stg"
+  purpose = "REGIONAL_MANAGED_PROXY"
+  region = "us-east1"
+  role = "ACTIVE"
++ google_monitoring_dashboard.pngu
+  dashboard_json.displayName = "pngu"
+  dashboard_json.note = "stubbed; see terraform/modules/monitoring/dashboard-pngu.json"
+  project = "renfry-stg"
++ gke_cluster.pngu
+  cluster_type = "autopilot-private"
+  deletion_protection = false
+  enable_secret_manager_addon = true
+  env = "stg"
+  ip_range_pods = "renfry-stg-gke-pods-range"
+  ip_range_services = "renfry-stg-gke-svc-range"
+  master_control_plane_cidr = "172.16.3.112/28"
+  name = "renfry-stg-gke"
+  network_id = "projects/renfry-stg/global/networks/renfry-stg-network"
+  project_id = "renfry-stg"
+  project_name = "renfry-stg"
+  subnetwork_id = ?google_compute_subnetwork/gke_subnet#id
++ google_compute_address.static-ip-pngu-grpc
+  address_type = "INTERNAL"
+  name = "pngu-grpc"
+  project = "renfry-stg"
+  region = "us-east1"
+  subnetwork_id = ?google_compute_subnetwork/gke_subnet#id
+-- stderr --

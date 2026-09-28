@@ -235,6 +235,7 @@ policy_pack baseline {
 }.
 
 apply_policy baseline.
+```
 
 Every contribution to one attribute meets in one lattice cell; objects merge
 per key, and a list path several sources contribute to is declared a set:
@@ -253,7 +254,23 @@ settings prod {
   audit.sinks += ["cloudwatch"]
 }.
 ```
+
+## Testing
+
+`cargo test` runs the integration tests under `tests/` (one file per
+concern: adoption, chaos, k8s, aws, ...) plus `cargo test --lib` for the
+engine's own unit tests.
+
+Golden (snapshot) tests pin `plan` and `strata` output for a table of
+example and adversarial programs: `tests/golden.rs`, snapshots under
+`tests/golden/<program>/<case>.<plan|strata>.txt`. Accept a change (after
+reviewing the diff) with:
+
+```bash
+UPDATE_GOLDEN=1 cargo test --test golden -- --test-threads=1
 ```
+
+See `tests/golden/README.md` for details.
 
 ## Status
 

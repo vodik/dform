@@ -205,9 +205,17 @@ fn print_strata(files: &[PathBuf], program: &dform::ast::Program) -> Result<()> 
     let schema = dform::schema::fake();
     let graph = partition::build(program, &schema, &partition::Options::default())?;
     let verdict = partition::stratify(&graph);
-    let name = files.iter().map(|f| f.display().to_string()).collect::<Vec<_>>().join(" ");
+    let name = files
+        .iter()
+        .map(|f| f.display().to_string())
+        .collect::<Vec<_>>()
+        .join(" ");
     print!("{}", format_strata(&name, &graph, &verdict));
-    if let partition::Verdict::Rejected { scc, negative_edges } = &verdict {
+    if let partition::Verdict::Rejected {
+        scc,
+        negative_edges,
+    } = &verdict
+    {
         bail!("{}", partition::cycle_error(&graph, scc, negative_edges));
     }
     Ok(())

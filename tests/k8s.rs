@@ -3,34 +3,20 @@
 mod common;
 use common::{Scratch, repo};
 
-const PLAN: &str = r#"plan: 4 to create, 0 to update, 0 to delete
-+ k8s.namespace.shop
-  metadata.labels.team = "storefront"
-  metadata.name = "shop"
-+ k8s.service.web
-  metadata.name = "web"
-  metadata.namespace = "shop"
-  spec.ports[port=80,protocol=TCP].port = 80
-  spec.ports[port=80,protocol=TCP].protocol = "TCP"
-  spec.ports[port=80,protocol=TCP].targetPort = "8080"
-  spec.selector.app = "web"
-+ k8s.config_map.web_config
-  data.LOG_LEVEL = "info"
-  data.MODE = "production"
-  metadata.generateName = "web-config-"
-  metadata.namespace = "shop"
-+ k8s.deployment.web
-  metadata.name = "web"
-  metadata.namespace = "shop"
-  spec.replicas = 3
-  spec.selector.matchLabels.app = "web"
-  spec.template.metadata.labels.app = "web"
-  spec.template.spec.containers[name=web].envFrom[0].configMapRef.name = ?k8s.config_map/web_config#metadata.name
-  spec.template.spec.containers[name=web].image = "nginx:1.27"
-  spec.template.spec.containers[name=web].name = "web"
-  spec.template.spec.containers[name=web].ports[containerPort=8080,protocol=TCP].containerPort = 8080
-  spec.template.spec.containers[name=web].ports[containerPort=8080,protocol=TCP].protocol = "TCP"
-"#;
+/// This plan is pinned as tests/golden/k8s_demo/default.plan.txt (the
+/// golden test in tests/golden.rs runs the same case against an empty
+/// world; here it's re-run against a named world file so the rest of this
+/// test can inspect `w.json` after apply).
+fn expected_plan() -> String {
+    let golden = std::fs::read_to_string(repo().join("tests/golden/k8s_demo/default.plan.txt"))
+        .expect("tests/golden/k8s_demo/default.plan.txt");
+    let stdout = golden
+        .split_once("-- stdout --\n")
+        .and_then(|(_, rest)| rest.split_once("-- stderr --\n"))
+        .map(|(stdout, _)| stdout)
+        .expect("golden transcript format");
+    stdout.to_string()
+}
 
 #[test]
 fn k8s_demo_plans_against_the_mock() {
@@ -45,7 +31,7 @@ fn k8s_demo_plans_against_the_mock() {
         "w.json",
     ];
     let r = s.run(&[&args[..], &["plan"]].concat()).success();
-    assert_eq!(r.stdout, PLAN);
+    assert_eq!(r.stdout, expected_plan());
 
     // Apply: the server picks the ConfigMap's name from generateName and fills
     // the Deployment's reference to it; defaults land in computed.

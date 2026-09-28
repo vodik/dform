@@ -1,0 +1,44 @@
+exit: ok
+-- stdout --
+plan: 7 to create, 0 to update, 0 to delete
++ aws_vpc.main
+  cidr_block = "10.0.0.0/16"
+  tags.Name = "main"
++ aws_security_group.web
+  egress[0].cidr_blocks[0] = "0.0.0.0/0"
+  egress[0].from_port = 0
+  egress[0].protocol = "-1"
+  egress[0].to_port = 0
+  ingress[0].cidr_blocks[0] = "0.0.0.0/0"
+  ingress[0].from_port = 443
+  ingress[0].protocol = "tcp"
+  ingress[0].to_port = 443
+  ingress[1].cidr_blocks[0] = "0.0.0.0/0"
+  ingress[1].from_port = 80
+  ingress[1].protocol = "tcp"
+  ingress[1].to_port = 80
+  name = "web"
+  vpc_id = ?aws_vpc/main#id
++ aws_subnet.a
+  availability_zone = "us-east-1a"
+  cidr_block = "10.0.1.0/24"
+  vpc_id = ?aws_vpc/main#id
++ aws_db_instance.app
+  identifier = "app"
+  instance_class = "db.t3.micro"
+  password = (sensitive)
+  skip_final_snapshot = true
+  vpc_security_group_ids[0] = ?aws_security_group/web#id
++ aws_instance.web
+  ami = "ami-0abcdef1234567890"
+  instance_type = "t3.small"
+  subnet_id = ?aws_subnet/a#id
+  vpc_security_group_ids[0] = ?aws_security_group/web#id
++ aws_eip.web
+  domain = "vpc"
+  instance = ?aws_instance/web#id
++ aws_instance.bastion
+  instance_type = "t3.micro"
+  tags.subnet_az = "us-east-1a"
+  tags.web_az = ?aws_instance/web#availability_zone
+-- stderr --

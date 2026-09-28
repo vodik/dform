@@ -1,0 +1,15 @@
+exit: error
+-- stdout --
+== examples/adversarial/adv9_default_tag_unless_present.df: 45 nodes, 46 edges (21 negative)
+   REJECTED: negative cycle through 3 nodes
+   scc: (arg, *, tags)  (attr, *, tags)  (attr, net.vpc, tags)
+   (arg, *, tags) -> (attr, *, tags)  [attribute aggregate (lub_ranked)]  prelude
+   (arg, *, tags) -> (attr, net.vpc, tags)  [attribute aggregate (lub_ranked)]  prelude
+   (attr, *, tags) -> (arg, *, tags)  [not]  rule #0: arg(T, N, "tags", {team: "platform"}, "normal") :- want(T, N), not attr(T, N, "tags", {team: "platform"})
+   (attr, net.vpc, tags) -> (arg, *, tags)  [not]  rule #0: arg(T, N, "tags", {team: "platform"}, "normal") :- want(T, N), not attr(T, N, "tags", {team: "platform"})
+-- stderr --
+Error: program is not stratifiable: negative cycle through (arg, *, tags), (attr, *, tags), (attr, net.vpc, tags)
+  (arg, *, tags) -> (attr, *, tags) [attribute aggregate (lub_ranked)]: (compiler-generated)
+  (arg, *, tags) -> (attr, net.vpc, tags) [attribute aggregate (lub_ranked)]: (compiler-generated)
+  (attr, *, tags) -> (arg, *, tags) [not]: arg(T, N, "tags", {team: "platform"}, "normal") :- want(T, N), not attr(T, N, "tags", {team: "platform"})
+  (attr, net.vpc, tags) -> (arg, *, tags) [not]: arg(T, N, "tags", {team: "platform"}, "normal") :- want(T, N), not attr(T, N, "tags", {team: "platform"})

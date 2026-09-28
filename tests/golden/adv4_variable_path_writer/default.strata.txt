@@ -1,0 +1,15 @@
+exit: error
+-- stdout --
+== examples/adversarial/adv4_variable_path_writer.df: 46 nodes, 77 edges (51 negative)
+   REJECTED: negative cycle through 3 nodes
+   scc: arg  attr  (attr, net.vpc, cidr)
+   arg -> attr  [attribute aggregate (lub_ranked)]  prelude
+   arg -> (attr, net.vpc, cidr)  [attribute aggregate (lub_ranked)]  prelude
+   attr -> arg  [reads attr (aggregate)]  rule #0: arg(T, N, P, V, "normal") :- override(T, N, P, V), want(T, N), attr(T, N, "cidr", _C)
+   (attr, net.vpc, cidr) -> arg  [reads attr (aggregate)]  rule #0: arg(T, N, P, V, "normal") :- override(T, N, P, V), want(T, N), attr(T, N, "cidr", _C)
+-- stderr --
+Error: program is not stratifiable: negative cycle through arg, attr, (attr, net.vpc, cidr)
+  arg -> attr [attribute aggregate (lub_ranked)]: (compiler-generated)
+  arg -> (attr, net.vpc, cidr) [attribute aggregate (lub_ranked)]: (compiler-generated)
+  attr -> arg [reads attr (aggregate)]: arg(T, N, P, V, "normal") :- override(T, N, P, V), want(T, N), attr(T, N, "cidr", _C)
+  (attr, net.vpc, cidr) -> arg [reads attr (aggregate)]: arg(T, N, P, V, "normal") :- override(T, N, P, V), want(T, N), attr(T, N, "cidr", _C)

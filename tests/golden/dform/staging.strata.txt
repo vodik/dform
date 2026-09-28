@@ -1,0 +1,143 @@
+exit: ok
+-- stdout --
+== dform.df: 127 nodes, 236 edges (100 negative)
+   STRATIFIED, 11 strata
+   stratum 0:
+     (arg, iam.policy, id)
+     (arg, iam.policy, name)
+     (arg, iam.role, assume)
+     (arg, iam.role, id)
+     (arg, iam.role, name)
+     (arg, iam.role_policy_attachment, id)
+     (arg, iam.role_policy_attachment, policy_id)
+     (arg, iam.role_policy_attachment, role_id)
+     (arg, net.route, id)
+     (arg, net.vpc_peering, accepter_vpc_id)
+     (arg, net.vpc_peering, id)
+     (arg, net.vpc_peering, requester_vpc_id)
+     (arg, settings, audit.sinks)
+     (arg, settings, db.backup_days)
+     (arg, settings, db.multi_az)
+     (arg, settings, k8s.nodepool.max)
+     (arg, settings, k8s.nodepool.min)
+     (arg, settings, k8s.private_api)
+     (arg, settings, network.main.vpc_net)
+     (arg, settings, network.peer.vpc_net)
+     (attr, settings, audit.enabled)
+     (want, iam.policy)
+     (want, iam.role)
+     (want, iam.role_policy_attachment)
+     (want, net.route)
+     (want, net.vpc_peering)
+     component_scope
+     data
+     env_name
+     has_env
+     input
+     type_lattice
+     vpc_peer
+     vpc_peer_inst
+     zone_index
+   stratum 1:
+     (attr, iam.policy, id)
+     (attr, iam.policy, name)
+     (attr, iam.role, assume)
+     (attr, iam.role, id)
+     (attr, iam.role, name)
+     (attr, iam.role_policy_attachment, id)
+     (attr, iam.role_policy_attachment, policy_id)
+     (attr, iam.role_policy_attachment, role_id)
+     (attr, net.route, id)
+     (attr, net.vpc_peering, accepter_vpc_id)
+     (attr, net.vpc_peering, id)
+     (attr, net.vpc_peering, requester_vpc_id)
+     (attr, settings, audit.sinks)
+     (attr, settings, db.backup_days)
+     (attr, settings, db.multi_az)
+     (attr, settings, k8s.nodepool.max)
+     (attr, settings, k8s.nodepool.min)
+     (attr, settings, k8s.private_api)
+     (attr, settings, network.main.vpc_net)
+     (attr, settings, network.peer.vpc_net)
+     env
+     iam_need
+     warn
+   stratum 2:
+     (arg, compute.vm, id)
+     (arg, compute.vm, private_ip)
+     (arg, iam.policy, statements)
+     (arg, k8s.nodepool, cluster_id)
+     (arg, k8s.nodepool, id)
+     (arg, k8s.nodepool, max)
+     (arg, k8s.nodepool, min)
+     (arg, net.vpc, cidr)
+     (arg, net.vpc, id)
+     (arg, net.vpc, tags)
+     (want, compute.vm)
+     (want, k8s.nodepool)
+     (want, net.vpc)
+     __lc_3
+     param
+   stratum 3:
+     (attr, compute.vm, id)
+     (attr, compute.vm, private_ip)
+     (attr, iam.policy, statements)
+     (attr, k8s.nodepool, cluster_id)
+     (attr, k8s.nodepool, id)
+     (attr, k8s.nodepool, max)
+     (attr, k8s.nodepool, min)
+     (attr, net.vpc, cidr)
+     (attr, net.vpc, id)
+   stratum 4:
+     (arg, net.subnet, cidr)
+     (arg, net.subnet, id)
+     (arg, net.subnet, visibility)
+     (arg, net.subnet, vpc_id)
+     (arg, net.subnet, zone)
+     (want, net.subnet)
+   stratum 5:
+     (attr, net.subnet, cidr)
+     (attr, net.subnet, id)
+     (attr, net.subnet, visibility)
+     (attr, net.subnet, vpc_id)
+     (attr, net.subnet, zone)
+   stratum 6:
+     (arg, output, private_subnet_ids)
+     __lc_1
+     __lc_2
+   stratum 7:
+     (attr, output, private_subnet_ids)
+   stratum 8:
+     (arg, *, tags)
+     (arg, db.postgres, backup_days)
+     (arg, db.postgres, endpoint)
+     (arg, db.postgres, id)
+     (arg, db.postgres, multi_az)
+     (arg, db.postgres, public)
+     (arg, db.postgres, subnet_ids)
+     (arg, k8s.cluster, api_endpoint)
+     (arg, k8s.cluster, ca_cert)
+     (arg, k8s.cluster, id)
+     (arg, k8s.cluster, private_api)
+     (arg, k8s.cluster, subnet_ids)
+     (arg, k8s.cluster, version)
+     (want, db.postgres)
+     (want, k8s.cluster)
+   stratum 9:
+     (attr, *, tags)
+     (attr, db.postgres, backup_days)
+     (attr, db.postgres, endpoint)
+     (attr, db.postgres, id)
+     (attr, db.postgres, multi_az)
+     (attr, db.postgres, public)
+     (attr, db.postgres, subnet_ids)
+     (attr, k8s.cluster, api_endpoint)
+     (attr, k8s.cluster, ca_cert)
+     (attr, k8s.cluster, id)
+     (attr, k8s.cluster, private_api)
+     (attr, k8s.cluster, subnet_ids)
+     (attr, k8s.cluster, version)
+     (attr, net.vpc, tags)
+   stratum 10:
+     deny
+-- stderr --

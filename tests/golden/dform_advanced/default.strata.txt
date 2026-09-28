@@ -1,0 +1,88 @@
+exit: ok
+-- stdout --
+== dform-advanced.df: 77 nodes, 96 edges (34 negative)
+   STRATIFIED, 6 strata
+   stratum 0:
+     (arg, compute.vm, id)
+     (arg, db.postgres, endpoint)
+     (arg, db.postgres, id)
+     (arg, iam.policy, id)
+     (arg, iam.role, id)
+     (arg, iam.role_policy_attachment, id)
+     (arg, k8s.cluster, api_endpoint)
+     (arg, k8s.cluster, ca_cert)
+     (arg, k8s.cluster, id)
+     (arg, k8s.nodepool, id)
+     (arg, net.subnet, id)
+     (arg, settings, mesh.vpcs)
+     (arg, settings, tenants)
+     (want, compute.vm)
+     (want, db.postgres)
+     (want, iam.policy)
+     (want, iam.role)
+     (want, iam.role_policy_attachment)
+     (want, k8s.cluster)
+     (want, k8s.nodepool)
+     (want, net.subnet)
+     corp_net
+     group_edge
+     group_member
+     has_env
+     in_group
+     input
+     mesh_allow_direct_route
+   stratum 1:
+     (attr, compute.vm, id)
+     (attr, db.postgres, endpoint)
+     (attr, db.postgres, id)
+     (attr, iam.policy, id)
+     (attr, iam.role, id)
+     (attr, iam.role_policy_attachment, id)
+     (attr, k8s.cluster, api_endpoint)
+     (attr, k8s.cluster, ca_cert)
+     (attr, k8s.cluster, id)
+     (attr, k8s.nodepool, id)
+     (attr, net.subnet, id)
+     (attr, settings, mesh.vpcs)
+     (attr, settings, tenants)
+     env
+     peer_intent
+   stratum 2:
+     (arg, net.vpc, cidr)
+     (arg, net.vpc, id)
+     (arg, net.vpc, tags)
+     (arg, net.vpc_peering, accepter_vpc_id)
+     (arg, net.vpc_peering, id)
+     (arg, net.vpc_peering, requester_vpc_id)
+     (want, net.vpc)
+     (want, net.vpc_peering)
+     link
+     mesh_adjacent
+     mesh_node
+     mesh_peer
+     mesh_vpc
+     peer
+     reachable
+     tenant
+   stratum 3:
+     (attr, net.vpc, cidr)
+     (attr, net.vpc, id)
+     (attr, net.vpc, tags)
+     (attr, net.vpc_peering, accepter_vpc_id)
+     (attr, net.vpc_peering, id)
+     (attr, net.vpc_peering, requester_vpc_id)
+     mesh_non_adjacent_pair
+   stratum 4:
+     (arg, net.route, destination)
+     (arg, net.route, from)
+     (arg, net.route, id)
+     (arg, net.route, to)
+     (want, net.route)
+     deny
+     warn
+   stratum 5:
+     (attr, net.route, destination)
+     (attr, net.route, from)
+     (attr, net.route, id)
+     (attr, net.route, to)
+-- stderr --

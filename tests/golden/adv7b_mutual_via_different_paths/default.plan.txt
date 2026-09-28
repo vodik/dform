@@ -1,0 +1,9 @@
+exit: ok
+-- stdout --
+plan: 2 to create, 0 to update, 0 to delete
++ net.a.x
+  y = 1
+  z = 1
++ net.b.y
+  x = 1
+-- stderr --

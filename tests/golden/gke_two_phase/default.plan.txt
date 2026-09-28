@@ -1,0 +1,6 @@
+exit: error
+-- stdout --
+-- stderr --
+constraint violations:
+- cluster must not be deletable ctx={"cluster":"pngu"}
+Error: blocked by constraints

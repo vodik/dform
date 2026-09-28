@@ -1,0 +1,52 @@
+exit: ok
+-- stdout --
+plan: 6 to create, 0 to update, 0 to delete
++ alert_metrics_pack.pngu
+  enable_standard_gke_alerts = true
+  notification_channel_display_name = "Slack"
+  notification_channel_type = "slack"
+  project_id = "renfry-prod"
+  source = "git@github.com:coherentpath/terraform-gcp-alert-metrics.git?ref=v1.5.0"
++ google_compute_subnetwork.gke_subnet
+  ip_cidr_range = "10.141.124.0/22"
+  name = "renfry-prod-gke-subnet"
+  network = "projects/renfry-prod/global/networks/renfry-prod-network"
+  project = "renfry-prod"
+  region = "us-east1"
+  secondary_ranges[0].ip_cidr_range = "10.141.128.0/21"
+  secondary_ranges[0].range_name = "renfry-prod-gke-pods-range"
+  secondary_ranges[1].ip_cidr_range = "10.141.136.0/21"
+  secondary_ranges[1].range_name = "renfry-prod-gke-svc-range"
+  subnet_private_access = true
++ google_compute_subnetwork.regional_proxy
+  ip_cidr_range = "10.193.2.0/24"
+  name = "renfry-prod-proxy"
+  network = "projects/renfry-prod/global/networks/renfry-prod-network"
+  project = "renfry-prod"
+  purpose = "REGIONAL_MANAGED_PROXY"
+  region = "us-east1"
+  role = "ACTIVE"
++ google_monitoring_dashboard.pngu
+  dashboard_json.displayName = "pngu"
+  dashboard_json.note = "stubbed; see terraform/modules/monitoring/dashboard-pngu.json"
+  project = "renfry-prod"
++ gke_cluster.pngu
+  cluster_type = "autopilot-private"
+  deletion_protection = false
+  enable_secret_manager_addon = true
+  env = "prod"
+  ip_range_pods = "renfry-prod-gke-pods-range"
+  ip_range_services = "renfry-prod-gke-svc-range"
+  master_control_plane_cidr = "172.16.3.128/28"
+  name = "renfry-prod-gke"
+  network_id = "projects/renfry-prod/global/networks/renfry-prod-network"
+  project_id = "renfry-prod"
+  project_name = "renfry-prod"
+  subnetwork_id = ?google_compute_subnetwork/gke_subnet#id
++ google_compute_address.static-ip-pngu-grpc
+  address_type = "INTERNAL"
+  name = "pngu-grpc"
+  project = "renfry-prod"
+  region = "us-east1"
+  subnetwork_id = ?google_compute_subnetwork/gke_subnet#id
+-- stderr --

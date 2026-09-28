@@ -1,0 +1,7 @@
+exit: error
+-- stdout --
+-- stderr --
+constraint violations:
+- namespace without deployment ctx={"ns":"pngu"}
+- no nodepool in zone b
+Error: blocked by constraints

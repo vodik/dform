@@ -1,0 +1,66 @@
+exit: ok
+-- stdout --
+plan: 16 to create, 0 to update, 0 to delete
++ net.route.rt-core_a-core_b
+  destination = "10.220.0.0/16"
+  from = "core_a"
+  to = "core_b"
++ net.route.rt-core_a-core_c
+  destination = "10.230.0.0/16"
+  from = "core_a"
+  to = "core_c"
++ net.route.rt-core_b-core_a
+  destination = "10.210.0.0/16"
+  from = "core_b"
+  to = "core_a"
++ net.route.rt-core_b-core_c
+  destination = "10.230.0.0/16"
+  from = "core_b"
+  to = "core_c"
++ net.route.rt-core_c-core_a
+  destination = "10.210.0.0/16"
+  from = "core_c"
+  to = "core_a"
++ net.route.rt-core_c-core_b
+  destination = "10.220.0.0/16"
+  from = "core_c"
+  to = "core_b"
++ net.route.rt-shared-tenant_a
+  destination = "10.96.0.0/16"
+  from = "shared"
+  to = "tenant_a"
++ net.route.rt-tenant_a-shared
+  destination = "10.200.0.0/16"
+  from = "tenant_a"
+  to = "shared"
++ net.vpc.core_a
+  cidr = "10.210.0.0/16"
+  tags.segment = "mesh"
++ net.vpc.core_b
+  cidr = "10.220.0.0/16"
+  tags.segment = "mesh"
++ net.vpc.core_c
+  cidr = "10.230.0.0/16"
+  tags.segment = "mesh"
++ net.vpc.shared
+  cidr = "10.200.0.0/16"
+  tags.segment = "shared"
++ net.vpc.tenant_a
+  cidr = "10.96.0.0/16"
+  tags.segment = "tenant"
+  tags.tenant = "tenant_a"
++ net.vpc.tenant_b
+  cidr = "10.97.0.0/16"
+  tags.segment = "tenant"
+  tags.tenant = "tenant_b"
++ net.vpc_peering.mesh-peer-core_a-core_b
+  accepter_vpc_id = ?net.vpc/core_b#id
+  requester_vpc_id = ?net.vpc/core_a#id
++ net.vpc_peering.mesh-peer-core_b-core_c
+  accepter_vpc_id = ?net.vpc/core_c#id
+  requester_vpc_id = ?net.vpc/core_b#id
+-- stderr --
+warning: mesh has direct route between non-adjacent nodes ctx={"from":"core_a","to":"core_c"}
+warning: mesh has direct route between non-adjacent nodes ctx={"from":"core_c","to":"core_a"}
+warning: user is effectively admin (via group nesting) ctx={"user":"alice"}
+warning: user is effectively admin (via group nesting) ctx={"user":"bob"}

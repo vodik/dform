@@ -1,0 +1,82 @@
+exit: ok
+-- stdout --
+== examples/adopt_demo.df: 69 nodes, 73 edges (33 negative)
+   STRATIFIED, 8 strata
+   stratum 0:
+     (arg, compute.vm, id)
+     (arg, db.postgres, endpoint)
+     (arg, db.postgres, id)
+     (arg, iam.policy, id)
+     (arg, iam.role, id)
+     (arg, iam.role_policy_attachment, id)
+     (arg, k8s.cluster, api_endpoint)
+     (arg, k8s.cluster, ca_cert)
+     (arg, k8s.cluster, id)
+     (arg, k8s.nodepool, id)
+     (arg, net.route, id)
+     (arg, net.vpc_peering, id)
+     (arg, settings, network.vpc_cidr)
+     (want, compute.vm)
+     (want, db.postgres)
+     (want, iam.policy)
+     (want, iam.role)
+     (want, iam.role_policy_attachment)
+     (want, k8s.cluster)
+     (want, k8s.nodepool)
+     (want, net.route)
+     (want, net.vpc_peering)
+     cloud_exists
+     component_scope
+     data
+     has_env
+     input
+     zone_index
+   stratum 1:
+     (adopt, net.vpc)
+     (arg, net.vpc, adopted_id)
+     (arg, net.vpc, owner_tag)
+     (attr, compute.vm, id)
+     (attr, db.postgres, endpoint)
+     (attr, db.postgres, id)
+     (attr, iam.policy, id)
+     (attr, iam.role, id)
+     (attr, iam.role_policy_attachment, id)
+     (attr, k8s.cluster, api_endpoint)
+     (attr, k8s.cluster, ca_cert)
+     (attr, k8s.cluster, id)
+     (attr, k8s.nodepool, id)
+     (attr, net.route, id)
+     (attr, net.vpc_peering, id)
+     (attr, settings, network.vpc_cidr)
+     env
+   stratum 2:
+     (arg, net.vpc, cidr)
+     (arg, net.vpc, id)
+     (arg, net.vpc, tags)
+     (attr, net.vpc, adopted_id)
+     (attr, net.vpc, owner_tag)
+     (want, net.vpc)
+     param
+   stratum 3:
+     (attr, net.vpc, cidr)
+     (attr, net.vpc, id)
+     (attr, net.vpc, tags)
+   stratum 4:
+     (arg, net.subnet, cidr)
+     (arg, net.subnet, id)
+     (arg, net.subnet, visibility)
+     (arg, net.subnet, vpc_id)
+     (arg, net.subnet, zone)
+     (want, net.subnet)
+   stratum 5:
+     (attr, net.subnet, cidr)
+     (attr, net.subnet, id)
+     (attr, net.subnet, visibility)
+     (attr, net.subnet, vpc_id)
+     (attr, net.subnet, zone)
+   stratum 6:
+     (arg, output, private_subnet_ids)
+     __lc_1
+   stratum 7:
+     (attr, output, private_subnet_ids)
+-- stderr --
