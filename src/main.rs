@@ -270,6 +270,34 @@ fn main() -> Result<()> {
                     );
                 }
             }
+            let persist = |st: &state::State| st.save(&paths.state);
+            if let Some(f) = st.in_flight.take() {
+                let names: Vec<String> = f
+                    .remaining
+                    .keys()
+                    .filter_map(|k| state::parse_key(k))
+                    .map(|a| format!("{}.{}", a.typ, a.name))
+                    .collect();
+                println!(
+                    "resuming the apply interrupted at tick {}; remaining: {}",
+                    f.tick,
+                    names.join(", ")
+                );
+                let changed =
+                    executor::changed_under(&backend, &f.remaining, &backend.observe(&st)?);
+                if !changed.is_empty() {
+                    eprint!(
+                        "the world changed under a remaining action:\n{}",
+                        executor::format_changes(&changed)
+                    );
+                    persist(&st)?;
+                    bail!(
+                        "apply stopped: the world changed under {} remaining actions of the \
+                         interrupted apply; review `dform plan`, then apply again",
+                        changed.len()
+                    );
+                }
+            }
             // Ticks (E §2.7): each applies every definite deformation in
             // dependency order; what waits on a null is held. At the
             // boundary the results come back as world facts, round 0
@@ -293,6 +321,9 @@ fn main() -> Result<()> {
                     println!("tick {tick}:");
                 }
                 print_plan(&plan, cli.show_noop, &sections, &stack);
+                let observed = backend.observe(&st)?;
+                executor::begin(&mut st, tick, &plan, &observed);
+                persist(&st)?;
                 plan.actions.retain(|a| waits_on(a, &sections).is_none());
                 let changed = plan
                     .actions
@@ -302,7 +333,6 @@ fn main() -> Result<()> {
                 // when there is nothing to do. State is written after every
                 // Apply call (`executor`).
                 if tick == 1 || changed {
-                    let persist = |st: &state::State| st.save(&paths.state);
                     let applied =
                         executor::run_tick(&backend, &resources, &adopts, &mut st, &plan, &persist);
                     for note in backend.take_notes() {
@@ -311,6 +341,8 @@ fn main() -> Result<()> {
                     applied?;
                 }
                 if !boundary {
+                    st.in_flight = None;
+                    persist(&st)?;
                     if changed {
                         println!("apply: complete");
                     } else {

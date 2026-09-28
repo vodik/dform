@@ -415,6 +415,20 @@ impl FakeCloud {
         doc
     }
 
+    /// The world's configured attributes for every address state maps to a
+    /// resource Read returns: what the executor compares to see whether the
+    /// world moved under a deformation.
+    pub fn observe(&self, state: &State) -> Result<BTreeMap<Address, Json>> {
+        let world = self.refresh()?;
+        Ok(state
+            .entries_for_provider(self.id())
+            .filter_map(|(addr, e)| {
+                let rr = world.resources.get(&key(&addr.typ, &e.remote))?;
+                Some((addr, rr.attrs.clone()))
+            })
+            .collect())
+    }
+
     /// Refresh: the world as Read returns it. A resource inside its chaos
     /// read-lag is not returned.
     fn refresh(&self) -> Result<RemoteState> {
@@ -702,7 +716,9 @@ impl FakeCloud {
         }
     }
 
-    fn diff(&self, typ: &str, before: Option<&Json>, after: Option<&Json>) -> Vec<Change> {
+    /// The leaf-by-leaf changes from `before` to `after`, in the plan's
+    /// canonical form (keyed lists by key, sets as sets).
+    pub fn diff(&self, typ: &str, before: Option<&Json>, after: Option<&Json>) -> Vec<Change> {
         let mut a = BTreeMap::new();
         let mut b = BTreeMap::new();
         if let Some(v) = before {

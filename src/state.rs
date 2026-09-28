@@ -9,6 +9,21 @@ use std::path::{Path, PathBuf};
 pub struct State {
     pub version: u32,
     pub resources: BTreeMap<String, StateEntry>,
+    /// The apply in progress, while it runs and after it fails or is killed:
+    /// what `apply` needs to resume it (`executor`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub in_flight: Option<InFlight>,
+}
+
+/// The deformations of the current tick that have not been applied yet, each
+/// with the world document (the configured attributes Read returned) it was
+/// planned against; `None` when the address had no resource in the world.
+/// An action leaves it when its Apply call answers. Only these documents are
+/// kept, never the stack's, and only until the apply completes.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct InFlight {
+    pub tick: usize,
+    pub remaining: BTreeMap<String, Option<serde_json::Value>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -22,7 +37,7 @@ impl State {
         if !path.exists() {
             return Ok(State {
                 version: 1,
-                resources: BTreeMap::new(),
+                ..State::default()
             });
         }
         let bytes = fs::read(path).with_context(|| format!("read {}", path.display()))?;
@@ -67,7 +82,7 @@ pub fn key(addr: &Address) -> String {
     format!("{}::{}", addr.typ, addr.name)
 }
 
-fn parse_key(k: &str) -> Option<Address> {
+pub fn parse_key(k: &str) -> Option<Address> {
     let (typ, name) = k.split_once("::")?;
     Some(Address {
         typ: typ.to_string(),

@@ -139,6 +139,14 @@ cargo run -- --file examples/adversarial/gke_two_phase.df --provider gke apply  
 cargo run -- --file examples/adversarial/gke_one_zone.df --provider gke apply   # stops after tick 1
 ```
 
+An apply that fails or is killed can be resumed: before a tick's first Apply
+call its deformations are written to state as in flight, each with the world
+document it was planned against, and each answered call takes its action out.
+The next `apply` prints `resuming the apply interrupted at tick N; remaining:
+...`, refreshes, and finishes the remaining actions; if the world changed
+under one of them it prints the change and stops before any Apply call (run
+`apply` again to plan against the world as it now is).
+
 A `sensitive` computed value never leaves the provider: what dform sees, stores
 in consumers and prints is its label, `(sensitive T/N#Attr)`. A value at a
 `sensitive` path the program sets prints as `(sensitive)`.
