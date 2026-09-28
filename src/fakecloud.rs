@@ -192,13 +192,13 @@ impl FakeCloud {
                         };
                         let rn = remote_name_for(&addr, state, &adopt_map);
                         if let Some(cur) = remote.resources.get(&format!("{}::{}", typ, rn)) {
-                            if let Some(v) = cur.computed.get(attr) {
+                            if let Some(v) = get_path(&cur.computed, attr) {
                                 return Ok(v.clone());
                             }
                         }
                         if let Some(remote_name) = adopt_map.get(&addr) {
                             if let Some(cur) = inv.resources.get(&format!("{}::{}", typ, remote_name)) {
-                                if let Some(v) = cur.computed.get(attr) {
+                                if let Some(v) = get_path(&cur.computed, attr) {
                                     return Ok(v.clone());
                                 }
                             }
@@ -213,10 +213,10 @@ impl FakeCloud {
                         let Some(cur) = inv.resources.get(&key) else {
                             bail!("cloud_ref missing inventory resource {key}");
                         };
-                        if let Some(v) = cur.computed.get(attr) {
+                        if let Some(v) = get_path(&cur.computed, attr) {
                             return Ok(v.clone());
                         }
-                        if let Some(v) = cur.attrs.get(attr) {
+                        if let Some(v) = get_path(&cur.attrs, attr) {
                             return Ok(v.clone());
                         }
                         bail!("cloud_ref missing attribute {typ}.{name}.{attr}");
@@ -344,10 +344,10 @@ impl FakeCloud {
                                 let Some(cur) = inv.resources.get(&key) else {
                                     bail!("cloud_ref missing inventory resource {key}");
                                 };
-                                if let Some(v) = cur.computed.get(attr) {
+                                if let Some(v) = get_path(&cur.computed, attr) {
                                     return Ok(v.clone());
                                 }
-                                if let Some(v) = cur.attrs.get(attr) {
+                                if let Some(v) = get_path(&cur.attrs, attr) {
                                     return Ok(v.clone());
                                 }
                                 bail!("cloud_ref missing attribute {typ}.{name}.{attr}");
@@ -393,10 +393,10 @@ impl FakeCloud {
                                 let Some(cur) = inv.resources.get(&key) else {
                                     bail!("cloud_ref missing inventory resource {key}");
                                 };
-                                if let Some(v) = cur.computed.get(attr) {
+                                if let Some(v) = get_path(&cur.computed, attr) {
                                     return Ok(v.clone());
                                 }
-                                if let Some(v) = cur.attrs.get(attr) {
+                                if let Some(v) = get_path(&cur.attrs, attr) {
                                     return Ok(v.clone());
                                 }
                                 bail!("cloud_ref missing attribute {typ}.{name}.{attr}");
@@ -541,6 +541,30 @@ fn resolve_json_with(
     }
 }
 
+/// The value at a keypath (`tags.owner`, `subnets[0].id`) in nested JSON, the
+/// shape `ir::insert_keypath` builds and `flatten` spells.
+pub fn get_path<'a>(v: &'a serde_json::Value, path: &str) -> Option<&'a serde_json::Value> {
+    let mut cur = v;
+    for seg in path.split('.') {
+        let (key, mut rest) = match seg.find('[') {
+            Some(i) => (&seg[..i], &seg[i..]),
+            None => (seg, ""),
+        };
+        if !key.is_empty() {
+            cur = cur.get(key)?;
+        }
+        while let Some(r) = rest.strip_prefix('[') {
+            let (idx, tail) = r.split_once(']')?;
+            cur = cur.get(idx.parse::<usize>().ok()?)?;
+            rest = tail;
+        }
+        if !rest.is_empty() {
+            return None;
+        }
+    }
+    Some(cur)
+}
+
 fn flatten_json_facts(
     out: &mut Vec<Atom>,
     pred: &str,
@@ -678,6 +702,21 @@ fn topo_sort(desired: &[Resource]) -> Result<Vec<Resource>> {
         }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn get_path_walks_dots_and_indices() {
+        let v = json!({"tags": {"owner": "team-a"}, "subnets": [{"id": "s-0"}, {"id": "s-1"}], "id": "x"});
+        assert_eq!(get_path(&v, "id"), Some(&json!("x")));
+        assert_eq!(get_path(&v, "tags.owner"), Some(&json!("team-a")));
+        assert_eq!(get_path(&v, "subnets[1].id"), Some(&json!("s-1")));
+        assert_eq!(get_path(&v, "subnets[2].id"), None);
+        assert_eq!(get_path(&v, "tags.missing"), None);
+    }
 }
 
 // Silence dead_code warnings if used as a library later.
