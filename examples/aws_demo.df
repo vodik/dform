@@ -1,5 +1,5 @@
 # A small web stack planned against the Terraform-shaped mock AWS provider
-# (providers/aws-mock/schema.df). No account: the world is a JSON file.
+# (crates/dform-mock/schemas/aws-mock.df). No account: the world is a JSON file.
 #
 #   cargo run -- --file examples/aws_demo.df plan
 #   cargo run -- --file examples/aws_demo.df apply
@@ -14,7 +14,7 @@
 
 edition 2026
 
-provider aws { source = "../providers/aws-mock" }
+provider aws { source = "../crates/dform-mock/schemas/aws-mock.df" }
 
 resource aws_vpc main {
   cidr_block = "10.0.0.0/16"

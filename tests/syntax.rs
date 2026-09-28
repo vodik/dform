@@ -37,6 +37,7 @@ fn corpus() -> Vec<PathBuf> {
         "policies",
         "examples",
         "providers",
+        "crates/dform-mock/schemas",
         "tests/syntax/ok",
     ] {
         df_files(&root.join(d), true, &mut out);
@@ -98,7 +99,7 @@ fn every_program_lowers() {
         }
         let program = dform::loader::load_program(std::slice::from_ref(&f))
             .unwrap_or_else(|e| panic!("{name}: {e:#}"));
-        if !name.starts_with("providers/") {
+        if !name.starts_with("providers/") && !name.starts_with("crates/dform-mock/schemas/") {
             dform::transform::lower(&program).unwrap_or_else(|e| panic!("{name}: {e:#}"));
         }
     }

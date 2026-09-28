@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build providers/k8s/openapi-snapshot.json: the schema the Kubernetes
+"""Build crates/dform-k8s/openapi-snapshot.json: the schema the Kubernetes
 provider derives from when no cluster is reachable.
 
 Input: a directory of the API server's OpenAPI v3 documents as the
@@ -11,7 +11,7 @@ operation's group-version-kind only) and the component schemas those kinds
 reach, without descriptions. A property's `default` stays: the provider
 derives a defaulted leaf as optional_computed from it.
 
-    python3 providers/k8s/trim_openapi.py DIR v1.36.0 > providers/k8s/openapi-snapshot.json
+    python3 crates/dform-k8s/trim_openapi.py DIR v1.36.0 > crates/dform-k8s/openapi-snapshot.json
 """
 
 import json
@@ -87,7 +87,7 @@ def trim(doc, kinds):
 def main():
     src, version = sys.argv[1], sys.argv[2]
     out = {"x-dform-source": f"Kubernetes {version} api/openapi-spec/v3, trimmed by "
-                             "providers/k8s/trim_openapi.py",
+                             "crates/dform-k8s/trim_openapi.py",
            "paths": {}}
     for gv, kinds in KINDS.items():
         with open(os.path.join(src, gv.replace("/", "__") + "_openapi.json")) as f:

@@ -92,7 +92,7 @@ settings prod { db = { backup_days: 40 } }
         "{}",
         r.stderr
     );
-    // providers/fake/schema.df: type_refine(net.subnet, cidr, prefix_len_le(24)).
+    // crates/dform-mock/schemas/fake.df: type_refine(net.subnet, cidr, prefix_len_le(24)).
     let r = plan(
         &s,
         "edition 2026\nresource net.subnet a { cidr = \"10.0.0.0/26\" }\n",

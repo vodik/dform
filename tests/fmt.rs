@@ -32,6 +32,7 @@ fn corpus() -> Vec<PathBuf> {
         "policies",
         "examples",
         "providers",
+        "crates/dform-mock/schemas",
         "tests/syntax/ok",
     ] {
         df_files(&repo().join(d), &mut out);

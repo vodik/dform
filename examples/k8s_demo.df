@@ -1,5 +1,5 @@
 # A Namespace, a Deployment and a Service planned against the mock Kubernetes
-# provider (providers/k8s/schema.df). No cluster: the world is a JSON file.
+# provider (crates/dform-mock/schemas/k8s.df). No cluster: the world is a JSON file.
 #
 #   cargo run -- --file examples/k8s_demo.df plan
 #   cargo run -- --file examples/k8s_demo.df apply

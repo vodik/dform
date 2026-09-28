@@ -1,4 +1,4 @@
-//! The mock Kubernetes provider: providers/k8s/schema.df, no cluster.
+//! The mock Kubernetes provider: crates/dform-mock/schemas/k8s.df, no cluster.
 
 mod common;
 use common::{Scratch, repo};

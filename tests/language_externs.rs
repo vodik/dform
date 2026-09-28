@@ -31,7 +31,7 @@ fn scratch() -> Scratch {
     s.write("note.txt", "hello");
     s.write(
         "providers/fake/schema.df",
-        &std::fs::read_to_string(repo().join("providers/fake/schema.df")).unwrap(),
+        &std::fs::read_to_string(repo().join("crates/dform-mock/schemas/fake.df")).unwrap(),
     );
     answers(&s, "first");
     s

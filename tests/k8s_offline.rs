@@ -208,7 +208,7 @@ struct Api {
 
 fn snapshot() -> Json {
     serde_json::from_str(
-        &std::fs::read_to_string(repo().join("providers/k8s/openapi-snapshot.json")).unwrap(),
+        &std::fs::read_to_string(repo().join("crates/dform-k8s/openapi-snapshot.json")).unwrap(),
     )
     .unwrap()
 }

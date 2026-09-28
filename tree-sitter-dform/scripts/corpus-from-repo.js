@@ -21,7 +21,7 @@ function dfFiles(dir, recurse) {
 
 const files = [
   ...dfFiles(repo, false),
-  ...['modules', 'policies', 'examples', 'providers', 'tests/syntax/ok']
+  ...['modules', 'policies', 'examples', 'providers', 'crates/dform-mock/schemas', 'tests/syntax/ok']
     .flatMap(d => dfFiles(join(repo, d), true)),
 ];
 

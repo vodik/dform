@@ -1,6 +1,7 @@
 //! Provider schemas as facts.
 //!
-//! A provider's schema is a file of plain Datalog facts,
+//! A provider's schema is a file of plain Datalog facts: the mock's
+//! built-in ones are `crates/dform-mock/schemas/<name>.df`, a project's own
 //! `providers/<name>/schema.df`:
 //!
 //!   type_attr(T, Path, Ty, Flags).    % Flags drawn from required, computed,
@@ -591,14 +592,15 @@ fn ground(t: &Term) -> Result<Value> {
     }
 }
 
-/// Schemas shipped with the binary, by provider name. `providers/<name>/schema.df`
-/// in the working directory takes precedence (see [`load_provider`]).
+/// Schemas shipped with the binary, by provider name
+/// (`crates/dform-mock/schemas/<name>.df`). `providers/<name>/schema.df` in
+/// the working directory takes precedence (see [`load_provider`]).
 pub fn builtin(name: &str) -> Option<&'static str> {
     Some(match name {
-        "fake" => include_str!("../../../providers/fake/schema.df"),
-        "gke" => include_str!("../../../providers/gke/schema.df"),
-        "k8s" => include_str!("../../../providers/k8s/schema.df"),
-        "aws-mock" => include_str!("../../../providers/aws-mock/schema.df"),
+        "fake" => include_str!("../../dform-mock/schemas/fake.df"),
+        "gke" => include_str!("../../dform-mock/schemas/gke.df"),
+        "k8s" => include_str!("../../dform-mock/schemas/k8s.df"),
+        "aws-mock" => include_str!("../../dform-mock/schemas/aws-mock.df"),
         _ => return None,
     })
 }
@@ -619,20 +621,20 @@ pub fn load_provider(name: &str) -> Result<Schema> {
             local.display()
         )
     })?;
-    Schema::parse(src, &format!("providers/{name}/schema.df"))
+    Schema::parse(src, &format!("crates/dform-mock/schemas/{name}.df"))
 }
 
 fn builtin_schema(name: &str) -> Schema {
     Schema::parse(builtin(name).unwrap(), name).expect("built-in schema parses")
 }
 
-/// The fake provider behind dform.df / dform-advanced.df / the examples:
-/// `providers/fake/schema.df`.
+/// The fake provider behind the examples:
+/// `crates/dform-mock/schemas/fake.df`.
 pub fn fake() -> Schema {
     builtin_schema("fake")
 }
 
-/// C's GKE example as E §7.4 spells it: `providers/gke/schema.df`.
+/// C's GKE example as E §7.4 spells it: `crates/dform-mock/schemas/gke.df`.
 pub fn gke() -> Schema {
     builtin_schema("gke")
 }

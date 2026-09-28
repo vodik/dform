@@ -79,7 +79,7 @@ impl K8s {
         if std::env::var_os("DFORM_K8S_OFFLINE").is_none() {
             eprintln!(
                 "dform-provider-k8s: offline ({why}): the schema is the snapshot's \
-                 (providers/k8s/openapi-snapshot.json); Read, Apply and Import need a cluster"
+                 (crates/dform-k8s/openapi-snapshot.json); Read, Apply and Import need a cluster"
             );
         }
         Ok(K8s {

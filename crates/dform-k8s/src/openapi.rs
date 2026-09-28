@@ -1,7 +1,7 @@
 //! The Kubernetes provider's schema, derived from the API server's OpenAPI
 //! v3 document (`/openapi/v3`: an index of group-versions, one document
 //! each), in the shape `{"paths": {"apis/apps/v1": DOC, ...}}` the provider
-//! caches it in and `providers/k8s/openapi-snapshot.json` holds.
+//! caches it in and `crates/dform-k8s/openapi-snapshot.json` holds.
 //!
 //! A kind is a component schema with `x-kubernetes-group-version-kind` whose
 //! object path (`.../{name}`) can be patched; the path gives its plural and
@@ -33,7 +33,7 @@
 //! Every type gets `type_retry(T, 5)` and a `type_replace` order: a
 //! Deployment, Service or ConfigMap `create_first`, a Namespace
 //! `destroy_first`, the rest `either`. The short names of the mock
-//! (`providers/k8s/schema.df`'s `type_alias` facts, `k8s.deployment`) are
+//! (`crates/dform-mock/schemas/k8s.df`'s `type_alias` facts, `k8s.deployment`) are
 //! the same types under a second name.
 
 use anyhow::{Context, Result, anyhow};
@@ -47,10 +47,10 @@ use std::path::Path;
 /// The OpenAPI document of a recent Kubernetes release, trimmed to the
 /// mock's kinds and the common workload and RBAC kinds: the schema when no
 /// cluster is reachable.
-pub const SNAPSHOT: &str = include_str!("../../../providers/k8s/openapi-snapshot.json");
+pub const SNAPSHOT: &str = include_str!("../openapi-snapshot.json");
 
 /// The mock Kubernetes schema, for its `type_alias` facts.
-const MOCK: &str = include_str!("../../../providers/k8s/schema.df");
+const MOCK: &str = include_str!("../../dform-mock/schemas/k8s.df");
 
 /// The provider's name: `type_provider` and state record it.
 pub const PROVIDER: &str = "kubernetes";
@@ -187,7 +187,7 @@ fn snake(kind: &str) -> String {
 
 /// The mock's short names and the types they stand for.
 pub fn aliases() -> Result<Vec<(String, String)>> {
-    let schema = Schema::parse(MOCK, "providers/k8s/schema.df")?;
+    let schema = Schema::parse(MOCK, "crates/dform-mock/schemas/k8s.df")?;
     Ok(schema
         .facts
         .iter()
