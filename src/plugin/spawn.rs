@@ -157,7 +157,8 @@ pub fn start(exe: &Path) -> Result<Started> {
 }
 
 /// `dform-provider|1|tcp://127.0.0.1:PORT` (or a bare `PORT`, or
-/// `HOST:PORT`): the address to dial, as a URI.
+/// `HOST:PORT`), or `dform-provider|1|unix:///PATH`: the address to dial,
+/// as a URI (`transport::dial`).
 pub fn parse_handshake(line: &str) -> Result<String> {
     let line = line.trim_end();
     let mut parts = line.splitn(3, '|');
@@ -169,7 +170,10 @@ pub fn parse_handshake(line: &str) -> Result<String> {
         bail!("it speaks protocol version {version}; this dform speaks {VERSION}");
     }
     if let Some(path) = addr.strip_prefix("unix://") {
-        bail!("it serves on a unix socket ({path}); this dform dials tcp only");
+        if !path.starts_with('/') {
+            bail!("its unix socket must be an absolute path: {addr:?}");
+        }
+        return Ok(addr.to_string());
     }
     let hostport = addr.strip_prefix("tcp://").unwrap_or(addr);
     if hostport.parse::<u16>().is_ok() {
@@ -200,7 +204,11 @@ mod tests {
         let e = parse_handshake("dform-provider|2|4001").unwrap_err();
         assert!(e.to_string().contains("version 2"), "{e}");
         assert!(parse_handshake("hello").is_err());
-        assert!(parse_handshake("dform-provider|1|unix:///tmp/s").is_err());
+        assert_eq!(
+            parse_handshake("dform-provider|1|unix:///tmp/s").unwrap(),
+            "unix:///tmp/s"
+        );
+        assert!(parse_handshake("dform-provider|1|unix://s").is_err());
     }
 
     #[test]

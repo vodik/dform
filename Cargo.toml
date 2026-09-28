@@ -15,6 +15,10 @@ serde_json = "1.0"
 prost = "0.13"
 tokio = { version = "1", features = ["rt", "net", "macros", "io-util", "time"] }
 tonic = "0.13"
+# A provider on a unix socket (src/plugin/transport.rs): tonic's connector
+# takes a tower service returning hyper's IO.
+hyper-util = { version = "0.1", features = ["tokio"] }
+tower = { version = "0.5", features = ["util"] }
 sha2 = "0.10"
 # The Kubernetes provider (src/k8s/): a client, and the API types it needs.
 kube = "4.2"

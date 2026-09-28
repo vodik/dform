@@ -88,12 +88,17 @@ A `.dform/` written before state was scoped (`.dform/state.json`,
 A provider is any executable that speaks the plugin protocol
 (`proto/dform/v1/provider.proto`, gRPC; DESIGN.org "Providers and fact
 plugins"). dform starts it, reads one handshake line from its stdout,
-`dform-provider|1|tcp://127.0.0.1:PORT`, and calls Handshake, Configure,
+`dform-provider|1|tcp://127.0.0.1:PORT` (or `dform-provider|1|unix:///PATH`
+for a unix socket), and calls Handshake, Configure,
 Schema, Query, Read, Plan, Apply and Import on it; it exits when dform closes
 its stdin. Schema returns the schema as facts, Plan and Apply are per resource,
 and a sensitive computed value only ever crosses as its label. dform owns
 ordering, parallelism, state and crash safety: a provider that dies during an
 Apply is a failed action naming the resource, and the next `apply` resumes.
+A provider built on `plugin::transport::serve`, the mock included, listens
+on TCP unless `DFORM_PROVIDER_TRANSPORT=unix` is in its environment (which it
+inherits from dform): then on a socket in the temporary directory, removed
+when it exits.
 
 The mock provider, `dform-provider-fake` (built with dform, `src/fakecloud.rs`),
 can pretend to be any provider: a provider it plays is a schema file of

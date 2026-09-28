@@ -49,6 +49,8 @@ pub struct Conn {
     child: RefCell<Child>,
     stdin: RefCell<Option<ChildStdin>>,
     exited: Cell<Option<ExitStatus>>,
+    /// Where it was dialed: a unix socket is removed once it is gone.
+    address: String,
 }
 
 impl Conn {
@@ -65,11 +67,7 @@ impl Conn {
             .context("start the provider client runtime")?;
         let program = exe.display().to_string();
         let channel = rt
-            .block_on(async {
-                tonic::transport::Endpoint::from_shared(address.clone())?
-                    .connect()
-                    .await
-            })
+            .block_on(super::transport::dial(&address))
             .with_context(|| format!("dial provider {program} at {address}"))?;
         let mut conn = Conn {
             name: String::new(),
@@ -82,6 +80,7 @@ impl Conn {
             child: RefCell::new(child),
             stdin: RefCell::new(stdin),
             exited: Cell::new(None),
+            address,
         };
         let hs = conn.call(|mut c| async move {
             c.handshake(pb::HandshakeRequest {
@@ -253,5 +252,6 @@ impl Drop for Conn {
             let _ = child.kill();
         }
         let _ = child.wait();
+        super::transport::remove(&self.address);
     }
 }

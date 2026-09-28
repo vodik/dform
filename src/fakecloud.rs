@@ -1071,45 +1071,20 @@ impl pb::provider_server::Provider for Service {
     }
 }
 
-/// `dform-provider-fake`: serve the mock on a loopback port, print the
-/// handshake line, and exit when stdin closes (dform is done or gone).
+/// `dform-provider-fake`: serve the mock on a loopback port (or a unix
+/// socket, `plugin::transport`), print the handshake line, and exit when
+/// stdin closes (dform is done or gone).
 pub fn serve() -> Result<()> {
-    std::thread::spawn(|| {
-        let _ = std::io::copy(&mut std::io::stdin(), &mut std::io::sink());
-        std::process::exit(0);
-    });
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
-    rt.block_on(async {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-        let port = listener.local_addr()?.port();
-        {
-            use std::io::Write;
-            let mut out = std::io::stdout();
-            writeln!(
-                out,
-                "{}|{}|tcp://127.0.0.1:{port}",
-                crate::plugin::spawn::MAGIC,
-                crate::plugin::spawn::VERSION
-            )?;
-            out.flush()?;
-        }
-        let service = Service {
-            cloud: std::sync::Mutex::new(FakeCloud::default()),
-        };
-        tonic::transport::Server::builder()
-            .add_service(
-                pb::provider_server::ProviderServer::new(service)
-                    .max_decoding_message_size(usize::MAX)
-                    .max_encoding_message_size(usize::MAX),
-            )
-            .serve_with_incoming(
-                tonic::transport::server::TcpIncoming::from(listener).with_nodelay(Some(true)),
-            )
-            .await?;
-        Ok(())
-    })
+    let service = Service {
+        cloud: std::sync::Mutex::new(FakeCloud::default()),
+    };
+    crate::plugin::transport::serve(
+        tonic::transport::Server::builder().add_service(
+            pb::provider_server::ProviderServer::new(service)
+                .max_decoding_message_size(usize::MAX)
+                .max_encoding_message_size(usize::MAX),
+        ),
+    )
 }
 
 /// The id the mock mints when the schema gives no template: `T:NAME`, and

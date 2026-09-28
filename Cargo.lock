@@ -390,6 +390,7 @@ dependencies = [
  "anyhow",
  "ariadne",
  "clap",
+ "hyper-util",
  "k8s-openapi",
  "kube",
  "logos",
@@ -401,6 +402,7 @@ dependencies = [
  "tokio",
  "tonic",
  "tonic-build",
+ "tower",
 ]
 
 [[package]]
