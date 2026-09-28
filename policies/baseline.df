@@ -1,8 +1,8 @@
 policy_pack baseline {
-  # Declarative merge strategies.
-  merge_rule(tags, map_merge).
-  merge_rule(iam.policy, statements, set).
-  merge_rule(setting, audit.sinks, set).
+  # Lattices for paths several authors contribute to. Object paths such as
+  # `tags` are maps by default; a list is one value unless declared a set.
+  type_lattice(iam.policy, statements, set).
+  type_lattice(settings, audit.sinks, set).
 
   # Example: add a shared tag to everything.
   arg_add(Type, Name, "tags", { team: platform }) :-

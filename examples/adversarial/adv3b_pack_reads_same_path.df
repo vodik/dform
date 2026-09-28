@@ -6,7 +6,7 @@ resource iam.policy app_policy {
 }.
 
 policy_pack p {
-  merge_rule(iam.policy, statements, set).
+  type_lattice(iam.policy, statements, set).
   arg_add(iam.policy, P, "statements", [ { action: org.read, resource: "org" } ]) :-
     want(iam.policy, P),
     arg(iam.policy, P, statements, S),

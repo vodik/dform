@@ -18,9 +18,6 @@ when env(prod) {
   iam_need(app, audit.write, "audit-log").
 }.
 
-# Best practice: uniqueness for keyed relations
-unique setting(2).
-
 # Settings (branch as data) as blocks
 settings prod {
   network.main.vpc_net = inet("10.20.0.0/16")

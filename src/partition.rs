@@ -4,13 +4,13 @@
 //! assigns every rule to the stratum of its head node.
 //!
 //! Nodes:
-//!   * `arg`/`arg_add`/`setting`/`setting_add`/`output` heads are
-//!     *contributions* to the attribute aggregate and get a node
-//!     `(arg, T, P)`; the aggregate they feed gets a node `(attr, T, P)`.
-//!     `setting` uses the pseudo-type `settings`, `output` the pseudo-type
-//!     `output` (E §2.5). `T` and `P` are the head's constant type and
-//!     normalized path, or `*` when not constant.
-//!   * Body reads of `arg`/`arg_add`/`setting`/`output` are reads of the
+//!   * `arg(T, A, P, V, Rank)` heads (lowering turns `arg`, `arg_add`,
+//!     `setting`, `setting_add` and `output` into this core form, with the
+//!     pseudo-types `settings` and `output`, E §2.5) are *contributions* to
+//!     the attribute aggregate and get a node `(arg, T, P)`; the aggregate
+//!     they feed gets a node `(attr, T, P)`. `T` and `P` are the head's
+//!     constant type and normalized path, or `*` when not constant.
+//!   * Body reads of `attr`/`attr_stuck`/`attr_conflict` are reads of the
 //!     aggregate: they connect to every `(attr, T, P)` node they unify with,
 //!     with a NEGATIVE edge (every reader of an aggregate is above its group).
 //!   * Every other type-keyed core predicate (`want`, `adopt`, ...; F's
@@ -19,8 +19,8 @@
 //!   * Every other predicate is one node.
 //!
 //! Edges run body -> head. Negative when: the literal is under `not`; the
-//! head is an aggregate (`collect*`); the literal reads an aggregate
-//! (`attr`/`output`/`setting`); the literal is an extern.
+//! head is an aggregate (`collect*`); the literal reads the attribute
+//! aggregate; the literal is an extern.
 //!
 //! The computed-attribute prelude rule of E §2.5 is expanded per schema row:
 //! `(arg, T, P) :- (want, T)` for every computed `P` of `T` (E §4.3).
@@ -105,24 +105,6 @@ pub enum Verdict {
     Rejected { scc: BTreeSet<Node>, negative_edges: Vec<Edge> },
 }
 
-/// Which predicates are contributions to the attribute aggregate, and the
-/// pseudo-type / argument layout for each.
-fn contribution_layout(pred: &str, arity: usize) -> Option<(&'static str, ContribLayout)> {
-    match (pred, arity) {
-        ("arg", 4) | ("arg_add", 4) => Some(("arg", ContribLayout::TypeAtPathAt(0, 2))),
-        ("setting", 3) | ("setting_add", 3) => Some(("arg", ContribLayout::FixedType("settings", 1))),
-        ("output", 3) => Some(("arg", ContribLayout::FixedType("output", 1))),
-        ("output", 2) => Some(("arg", ContribLayout::FixedType("output", 0))),
-        _ => None,
-    }
-}
-
-#[derive(Clone, Copy)]
-enum ContribLayout {
-    TypeAtPathAt(usize, usize),
-    FixedType(&'static str, usize),
-}
-
 fn const_str(t: &Term) -> Option<String> {
     match t {
         Term::Val(Value::Str(s)) => Some(s.clone()),
@@ -134,24 +116,39 @@ fn const_str(t: &Term) -> Option<String> {
 /// attribute path is normalized to its first segment (the fake provider's
 /// attributes are all top-level keys); a settings/output key is one declared
 /// leaf per full key (E §7.1 declares `db.backup_days`, `audit.sinks` as
-/// separate leaves of `type settings`).
+/// separate leaves of `type settings`). `transform::normalize_contribution`
+/// is the same rule applied to a contribution's value.
 pub fn normalize_path(typ: &Option<String>, path: &str) -> String {
     match typ.as_deref() {
-        Some("settings") | Some("output") => path.to_string(),
+        Some(transform::SETTINGS) | Some(transform::OUTPUT) => path.to_string(),
         _ => path.split('.').next().unwrap_or(path).to_string(),
     }
 }
 
+/// The `(pred, T, P)` node of an atom whose type is column 0 and path is
+/// column 2.
+fn type_path_node(pred: &str, atom: &Atom) -> Node {
+    let typ = const_str(&atom.args[0]);
+    let path = const_str(&atom.args[2]).map(|p| normalize_path(&typ, &p));
+    Node { pred: pred.into(), typ, path }
+}
+
+/// A contribution head `arg(T, A, P, V, Rank)` (the lowered core form):
+/// its `(arg, T, P)` node and the `(attr, T, P)` aggregate it feeds.
 fn contrib_node(atom: &Atom) -> Option<(Node, Node)> {
-    let (_, layout) = contribution_layout(&atom.pred, atom.args.len())?;
-    let (typ, path_term) = match layout {
-        ContribLayout::TypeAtPathAt(ti, pi) => (const_str(&atom.args[ti]), &atom.args[pi]),
-        ContribLayout::FixedType(t, pi) => (Some(t.to_string()), &atom.args[pi]),
-    };
-    let path = const_str(path_term).map(|p| normalize_path(&typ, &p));
-    let arg = Node { pred: "arg".into(), typ: typ.clone(), path: path.clone() };
-    let attr = Node { pred: "attr".into(), typ, path };
-    Some((arg, attr))
+    if atom.pred != "arg" || atom.args.len() != 5 {
+        return None;
+    }
+    Some((type_path_node("arg", atom), type_path_node("attr", atom)))
+}
+
+/// A read of the aggregate's outputs: `attr/4`, `attr_stuck/4`,
+/// `attr_conflict/5` all read the `(attr, T, P)` node.
+fn aggregate_read(atom: &Atom) -> Option<Node> {
+    match (atom.pred.as_str(), atom.args.len()) {
+        ("attr", 4) | ("attr_stuck", 4) | ("attr_conflict", 5) => Some(type_path_node("attr", atom)),
+        _ => None,
+    }
 }
 
 /// Compiler-owned predicates whose first column is a resource type (F's
@@ -174,13 +171,9 @@ pub fn head_node(atom: &Atom) -> Node {
     Node::plain(&atom.pred)
 }
 
-/// The pattern a body literal reads. For a contribution predicate the read
-/// is of the aggregate `attr`.
+/// The pattern a body literal reads.
 fn body_pattern(atom: &Atom) -> Node {
-    if let Some((_, attr)) = contrib_node(atom) {
-        return attr;
-    }
-    head_node(atom)
+    aggregate_read(atom).unwrap_or_else(|| head_node(atom))
 }
 
 fn is_builtin_or_edb(pred: &str) -> bool {

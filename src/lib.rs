@@ -7,7 +7,6 @@ pub mod ir;
 pub mod lattice;
 pub mod lint;
 pub mod loader;
-pub mod merge;
 pub mod parser;
 pub mod partition;
 pub mod provider;

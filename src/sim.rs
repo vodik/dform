@@ -257,9 +257,18 @@ pub struct Rule3Verdict {
     pub perkey_undetermined: bool,
 }
 
+/// A stuck contribution `arg(T, A, P, V, Rank)` is read as `attr(T, A, P, V)`:
+/// bodies read the aggregate, never the contributions.
+fn as_read(p: Atom) -> Atom {
+    if p.pred == "arg" && p.args.len() == 5 {
+        return Atom { pred: "attr".into(), args: p.args[..4].to_vec(), record: None };
+    }
+    p
+}
+
 pub fn rule3(sim: &Sim) -> Vec<Rule3Verdict> {
-    let stuck_preds: BTreeSet<String> = sim.stuck.iter().map(|s| s.head.pred.clone()).collect();
-    let stuck_pats: Vec<Atom> = sim.stuck.iter().map(stuck_head_pattern).collect();
+    let stuck_pats: Vec<Atom> = sim.stuck.iter().map(|s| as_read(stuck_head_pattern(s))).collect();
+    let stuck_preds: BTreeSet<String> = stuck_pats.iter().map(|p| p.pred.clone()).collect();
     let mut out = Vec::new();
     // Negations.
     let mut seen: BTreeSet<String> = BTreeSet::new();

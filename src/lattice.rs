@@ -923,8 +923,8 @@ mod tests {
 /// only the highest priority's values are merged).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Shadowed {
-    Stuck { rank: Rank, nulls: BTreeSet<String> },
-    Conflict { rank: Rank, reason: String },
+    Stuck { rank: Rank, nulls: BTreeSet<String>, witnesses: Witnesses },
+    Conflict { rank: Rank, path: String, reason: String, witnesses: Witnesses },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -932,7 +932,9 @@ pub enum Collapsed2 {
     Bottom,
     Val { value: Value, rank: Rank, witnesses: Witnesses, deferred: Vec<Constraint>, shadowed: Vec<Shadowed> },
     Stuck { rank: Rank, nulls: BTreeSet<String>, shadowed: Vec<Shadowed> },
-    Conflict { rank: Option<Rank>, a: (Value, Witnesses), b: (Value, Witnesses), reason: String, shadowed: Vec<Shadowed> },
+    /// `witnesses` is every contribution the conflict involves (every
+    /// contribution at the winning rank, or the value's and the refinement's).
+    Conflict { rank: Option<Rank>, a: (Value, Witnesses), b: (Value, Witnesses), reason: String, witnesses: Witnesses, shadowed: Vec<Shadowed> },
 }
 
 impl Ranked {
@@ -947,15 +949,29 @@ impl Ranked {
         let mut shadowed = Vec::new();
         for (i, e) in self.ranks.iter().enumerate().take(top) {
             match e {
-                Elem::Stuck { nulls, .. } => shadowed.push(Shadowed::Stuck { rank: rank_of(i), nulls: nulls.clone() }),
-                Elem::Conflict { reason, .. } => shadowed.push(Shadowed::Conflict { rank: rank_of(i), reason: reason.clone() }),
+                Elem::Stuck { nulls, .. } => {
+                    shadowed.push(Shadowed::Stuck { rank: rank_of(i), nulls: nulls.clone(), witnesses: e.witnesses() })
+                }
+                Elem::Conflict { path, reason, .. } => shadowed.push(Shadowed::Conflict {
+                    rank: rank_of(i),
+                    path: path.clone(),
+                    reason: reason.clone(),
+                    witnesses: e.witnesses(),
+                }),
                 _ => {}
             }
         }
         let rank = rank_of(top);
         match &self.ranks[top] {
             Elem::Bottom => unreachable!(),
-            Elem::Conflict { a, b, reason, .. } => Collapsed2::Conflict { rank: Some(rank), a: a.clone(), b: b.clone(), reason: reason.clone(), shadowed },
+            e @ Elem::Conflict { a, b, reason, .. } => Collapsed2::Conflict {
+                rank: Some(rank),
+                a: a.clone(),
+                b: b.clone(),
+                reason: reason.clone(),
+                witnesses: e.witnesses(),
+                shadowed,
+            },
             Elem::Stuck { nulls, .. } => Collapsed2::Stuck { rank, nulls: nulls.clone(), shadowed },
             Elem::Val(v, w) => {
                 let mut deferred = Vec::new();
@@ -969,6 +985,7 @@ impl Ranked {
                                 a: (v.clone(), w.clone()),
                                 b: (Value::Str(format!("{c:?}")), cw.clone()),
                                 reason: format!("{v:?} violates schema refinement {c:?}"),
+                                witnesses: union(w, cw),
                                 shadowed,
                             }
                         }
@@ -978,6 +995,95 @@ impl Ranked {
             }
         }
     }
+}
+
+/// A ranked contribution to one attribute cell: who, at which rank, what.
+pub type RankedContribution = (Witness, Rank, Value);
+
+fn max_rank(contribs: &[RankedContribution]) -> Rank {
+    contribs.iter().map(|(_, r, _)| *r).max().unwrap_or(Rank::Normal)
+}
+
+/// The attribute aggregate of E §2.5 for one `(T, A, P)` group: the least
+/// upper bound of every contribution under `lat`, collapsed with F's
+/// shadow-aware rule. Flat cells are ranked. A Map is ranked at its leaves:
+/// each key is its own cell under the element lattice, so a `@default` tag and
+/// a normal tag on another key both survive. A Map path with a contribution
+/// that is not an object is assembled as one Flat value (which conflicts,
+/// or is stuck, on the non-object). Set and Keyed are unranked here: every
+/// contribution joins in one element, reported at the highest rank present.
+pub fn lub_ranked(lat: &Lattice, path: &str, contribs: &[RankedContribution]) -> Collapsed2 {
+    match lat {
+        Lattice::Flat => contribs
+            .iter()
+            .fold(Ranked::default(), |acc, (w, r, v)| acc.join(&Ranked::at(*r, *w, v.clone()), path))
+            .collapse_shadow_aware(),
+        Lattice::Map(elem) => {
+            if !contribs.iter().all(|(_, _, v)| matches!(v, Value::Obj(_))) {
+                return lub_ranked(&Lattice::Flat, path, contribs);
+            }
+            lub_ranked_map(elem, path, contribs)
+        }
+        Lattice::Set | Lattice::Keyed { .. } => {
+            let rank = max_rank(contribs);
+            match lub(lat, path, contribs.iter().map(|(w, _, v)| (*w, v.clone()))) {
+                Elem::Bottom => Collapsed2::Bottom,
+                Elem::Val(value, witnesses) => {
+                    Collapsed2::Val { value, rank, witnesses, deferred: vec![], shadowed: vec![] }
+                }
+                Elem::Stuck { nulls, .. } => Collapsed2::Stuck { rank, nulls, shadowed: vec![] },
+                e @ Elem::Conflict { .. } => {
+                    let witnesses = e.witnesses();
+                    let Elem::Conflict { a, b, reason, .. } = e else { unreachable!() };
+                    Collapsed2::Conflict { rank: Some(rank), a, b, reason, witnesses, shadowed: vec![] }
+                }
+            }
+        }
+    }
+}
+
+fn lub_ranked_map(elem: &Lattice, path: &str, contribs: &[RankedContribution]) -> Collapsed2 {
+    let mut per_key: BTreeMap<String, Vec<RankedContribution>> = BTreeMap::new();
+    for (w, r, v) in contribs {
+        let Value::Obj(m) = v else { unreachable!("checked by the caller") };
+        for (k, x) in m {
+            per_key.entry(k.clone()).or_default().push((*w, *r, x.clone()));
+        }
+    }
+    let mut out = BTreeMap::new();
+    let mut witnesses = Witnesses::new();
+    let mut deferred = Vec::new();
+    let mut shadowed = Vec::new();
+    let mut stuck: Option<(Rank, BTreeSet<String>)> = None;
+    for (k, cs) in per_key {
+        match lub_ranked(elem, &format!("{path}.{k}"), &cs) {
+            Collapsed2::Bottom => {}
+            Collapsed2::Val { value, witnesses: w, deferred: d, shadowed: sh, .. } => {
+                out.insert(k, value);
+                witnesses = union(&witnesses, &w);
+                deferred.extend(d);
+                shadowed.extend(sh);
+            }
+            Collapsed2::Stuck { rank, nulls, shadowed: sh } => {
+                shadowed.extend(sh);
+                let st = stuck.get_or_insert((rank, BTreeSet::new()));
+                st.0 = st.0.max(rank);
+                st.1.extend(nulls);
+            }
+            Collapsed2::Conflict { rank, a, b, reason, witnesses, shadowed: sh } => {
+                shadowed.extend(sh);
+                return Collapsed2::Conflict { rank, a, b, reason, witnesses, shadowed };
+            }
+        }
+    }
+    if let Some((rank, nulls)) = stuck {
+        return Collapsed2::Stuck { rank, nulls, shadowed };
+    }
+    if out.is_empty() {
+        // Only empty objects: the value is `{}`, from every contributor.
+        witnesses = contribs.iter().map(|(w, _, _)| *w).collect();
+    }
+    Collapsed2::Val { value: Value::Obj(out), rank: max_rank(contribs), witnesses, deferred, shadowed }
 }
 
 #[cfg(test)]

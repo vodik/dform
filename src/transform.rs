@@ -1,14 +1,11 @@
-use crate::ast::{
-    Atom, Constraint, FieldOp, Program, Resource, RuleStmt, Stmt, Term, Unique, When, Lit,
-};
+use crate::ast::{Atom, Constraint, FieldOp, Lit, Program, Resource, RuleStmt, Stmt, Term, When};
 use crate::value::Value;
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone)]
 pub struct Lowered {
     pub program: Program,
-    pub uniques: Vec<Unique>,
 }
 
 pub fn lower(program: &Program) -> Result<Lowered> {
@@ -20,13 +17,119 @@ pub fn lower(program: &Program) -> Result<Lowered> {
     let expanded = expand_policy_packs(&expanded)?;
     let expanded = expand_components(&expanded)?;
     let expanded = expand_when(&expanded)?;
-    let (expanded, uniques) = extract_uniques(&expanded);
+    let expanded = drop_metadata(&expanded);
     let expanded = desugar_resources(&expanded)?;
     let expanded = desugar_comprehensions(&expanded)?;
-    Ok(Lowered {
-        program: expanded,
-        uniques,
-    })
+    let expanded = lower_contributions(&expanded)?;
+    Ok(Lowered { program: expanded })
+}
+
+/// Rank of a contribution in the core form `arg(T, A, P, V, Rank)`.
+pub const NORMAL: &str = "normal";
+
+/// Pseudo-types of the attribute aggregate (E §2.5): settings are addressed
+/// by environment, outputs by component scope ("" for the root program).
+pub const SETTINGS: &str = "settings";
+pub const OUTPUT: &str = "output";
+
+fn str_term(s: &str) -> Term {
+    Term::Val(Value::Str(s.to_string()))
+}
+
+/// Contribution heads in the source forms, as `(type, addr, path, value)`.
+fn contribution_parts(a: &Atom) -> Option<(Term, Term, Term, Term)> {
+    let g = |i: usize| a.args[i].clone();
+    match (a.pred.as_str(), a.args.len()) {
+        ("arg", 4) | ("arg_add", 4) => Some((g(0), g(1), g(2), g(3))),
+        ("setting", 3) | ("setting_add", 3) => Some((str_term(SETTINGS), g(0), g(1), g(2))),
+        ("output", 3) => Some((str_term(OUTPUT), g(0), g(1), g(2))),
+        ("output", 2) => Some((str_term(OUTPUT), str_term(""), g(0), g(1))),
+        _ => None,
+    }
+}
+
+/// E §2.5 path normalization at compile time, when the path is a constant: a
+/// resource attribute path `a.b.c` contributes `{b: {c: V}}` to `a` (the fake
+/// provider's attributes are all top-level keys). Settings and outputs keep
+/// their full key: each is its own declared leaf.
+pub fn normalize_contribution(typ: &str, path: &str, value: Term) -> (String, Term) {
+    if typ == SETTINGS || typ == OUTPUT {
+        return (path.to_string(), value);
+    }
+    let mut segs = path.split('.');
+    let first = segs.next().unwrap_or(path).to_string();
+    let rest: Vec<&str> = segs.collect();
+    let value = rest.iter().rev().fold(value, |v, k| Term::Obj(BTreeMap::from([(k.to_string(), v)])));
+    (first, value)
+}
+
+/// The core form of a contribution head: `arg(T, A, P, V, Rank)` with a
+/// constant path normalized.
+fn contribution_head(a: Atom) -> Result<Atom> {
+    if a.pred == "merge_rule" {
+        bail!("merge_rule is gone: a path's lattice is declared with type_lattice(Type, Path, flat|map|set)");
+    }
+    let (typ, addr, path, value, rank) = match contribution_parts(&a) {
+        Some((t, n, p, v)) => (t, n, p, v, str_term(NORMAL)),
+        None if a.pred == "arg" && a.args.len() == 5 => {
+            let g = |i: usize| a.args[i].clone();
+            (g(0), g(1), g(2), g(3), g(4))
+        }
+        None => return Ok(a),
+    };
+    let (path, value) = match (&typ, &path) {
+        (Term::Val(Value::Str(t)), Term::Val(Value::Str(p))) => {
+            let (p, v) = normalize_contribution(t, p, value);
+            (str_term(&p), v)
+        }
+        _ => (path, value),
+    };
+    Ok(Atom { pred: "arg".into(), args: vec![typ, addr, path, value, rank], record: None })
+}
+
+/// A body read of a contribution predicate is a read of the aggregate:
+/// `attr(T, A, P, V)`, the collapsed value (E §2.5).
+fn attr_read(a: Atom) -> Result<Atom> {
+    if a.pred == "arg" && a.args.len() == 5 {
+        bail!("arg/5 in a rule body reads raw contributions; read the collapsed attr(T, A, P, V) instead");
+    }
+    let Some((typ, addr, path, value)) = contribution_parts(&a) else {
+        return Ok(a);
+    };
+    if let (Term::Val(Value::Str(t)), Term::Val(Value::Str(p))) = (&typ, &path) {
+        if t != SETTINGS && t != OUTPUT && p.contains('.') {
+            bail!("{}(..., {p:?}, ...) in a rule body: read the top-level attribute and destructure it", a.pred);
+        }
+    }
+    Ok(Atom { pred: "attr".into(), args: vec![typ, addr, path, value], record: None })
+}
+
+fn attr_lits(body: Vec<Lit>) -> Result<Vec<Lit>> {
+    body.into_iter()
+        .map(|l| {
+            Ok(match l {
+                Lit::Pos(a) => Lit::Pos(attr_read(a)?),
+                Lit::Not(a) => Lit::Not(attr_read(a)?),
+                other => other,
+            })
+        })
+        .collect()
+}
+
+/// Last lowering pass: every contribution head (`arg`, `arg_add`, `setting`,
+/// `setting_add`, `output`) becomes the core form `arg/5`, and every body
+/// read of one becomes a read of `attr/4`.
+fn lower_contributions(program: &Program) -> Result<Program> {
+    let mut out = Vec::new();
+    for stmt in &program.statements {
+        out.push(match stmt.clone() {
+            Stmt::Fact(a) => Stmt::Fact(contribution_head(a)?),
+            Stmt::Rule(r) => Stmt::Rule(RuleStmt { head: contribution_head(r.head)?, body: attr_lits(r.body)? }),
+            Stmt::Constraint(c) => Stmt::Constraint(Constraint { message: c.message, body: attr_lits(c.body)? }),
+            other => other,
+        });
+    }
+    Ok(Program { statements: out })
 }
 
 fn apply_decls(program: &Program) -> Result<Program> {
@@ -716,12 +819,13 @@ fn merge_counts(dst: &mut BTreeMap<String, usize>, src: &BTreeMap<String, usize>
     }
 }
 
-fn extract_uniques(program: &Program) -> (Program, Vec<Unique>) {
-    let mut uniques = Vec::new();
+/// Drop statements that carry no rules. `unique` lowers to nothing: one
+/// value per key is what the attribute aggregate already enforces.
+fn drop_metadata(program: &Program) -> Program {
     let mut statements = Vec::new();
     for s in &program.statements {
         match s {
-            Stmt::Unique(u) => uniques.push(u.clone()),
+            Stmt::Unique(_) => {}
             Stmt::Import(_) => {
                 // Loader-level feature, ignored in evaluator for now.
             }
@@ -737,7 +841,7 @@ fn extract_uniques(program: &Program) -> (Program, Vec<Unique>) {
             _ => statements.push(s.clone()),
         }
     }
-    (Program { statements }, uniques)
+    Program { statements }
 }
 
 fn expand_components(program: &Program) -> Result<Program> {
@@ -836,7 +940,7 @@ fn rewrite_atom(mut atom: Atom, scope: &str) -> Atom {
         "want" if atom.args.len() == 2 => {
             atom.args[1] = scoped_term(scope, rewrite_term(atom.args[1].clone(), scope));
         }
-        "arg" if atom.args.len() == 4 => {
+        "arg" if atom.args.len() == 4 || atom.args.len() == 5 => {
             atom.args[1] = scoped_term(scope, rewrite_term(atom.args[1].clone(), scope));
             atom.args[3] = rewrite_term(atom.args[3].clone(), scope);
         }

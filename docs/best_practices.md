@@ -16,8 +16,6 @@ arg(db.postgres, Db, backup_days, 3) :- env(staging), want(db.postgres, Db).
 Prefer a lookup table:
 
 ```prolog
-unique setting(2).
-
 settings prod {
   db.backup_days = 14
 }.
@@ -59,12 +57,11 @@ arg(net.subnet, Sn, visibility, private) :- want(net.subnet, Sn).
 For authoring, prefer:
 
 - `resource` blocks over repeated `want/arg`
-- use `+=` for mergeable attributes (tags, IAM statements, labels)
 - record atoms (`setting{...}`) over positional arguments
 - object/list literals (`{k: v}`, `[a, b]`) over lots of `tags.foo` keypaths
 - list comprehensions (`[X | ...]`) over hand-written `collect(...)` rules
 - `when <guard> { ... }` to avoid repeating the same guard on many statements
-- declare merge behavior for shared attributes (`merge_rule(tags, map_merge)`, `merge_rule(iam.policy, statements, set)`) when multiple sources contribute
+- declare a set lattice for list attributes several sources contribute to (`type_lattice(iam.policy, statements, set)`)
 
 ## Explode Lists Into Rows With `member/2`
 
@@ -99,28 +96,43 @@ Note: Datalog has no intrinsic ordering, so dform's aggregates are deterministic
 - `collect_set(X)` returns a sorted list of unique values
 - `collect_list(X)` returns a sorted list that may include duplicates
 
-## Declare Merge Semantics for Shared Attributes
+## One Merge Law for Shared Attributes
 
-If multiple rule sets contribute to the same attribute, prefer `arg_add/4` (or `+=`)
-and declare how that attribute should merge:
+Every contribution to one attribute, whichever resource block, module or
+policy pack it comes from, meets in one cell: the attribute aggregate
+`attr(Type, Name, Path, Value)`. Rules that read `arg(...)`, `setting(...)` or
+`output(...)` in a body read that collapsed value, never a single
+contribution, and the stratifier runs them after every contribution is in.
+Statement order never matters.
+
+How a path merges is its lattice:
+
+- a scalar or a list is one value (Flat): two sources with different values
+  are a conflict;
+- an object is a map, merged per key: `tags = { env: dev }` in a resource and
+  `arg(T, N, tags, { team: platform })` in a policy pack give both tags;
+  two sources disagreeing on one key are a conflict;
+- a list declared a set is the union of every source:
 
 ```prolog
-merge_rule(tags, map_merge).
-merge_rule(iam.policy, statements, set).
-```
-
-This makes composition predictable and avoids accidental scalar conflicts.
-
-Settings can be layered the same way:
-
-```prolog
-merge_rule(setting, audit.sinks, set).
+type_lattice(iam.policy, statements, set).
+type_lattice(settings, audit.sinks, set).
 setting_add(prod, audit.sinks, ["s3"]).
 
 settings prod {
   audit.sinks += ["cloudwatch"]
 }.
 ```
+
+`+=`, `arg_add` and `setting_add` are plain contributions, the same as `=`;
+the lattice, not the operator, decides how they merge. A dotted path
+`tags.team` contributes `{ team: V }` to `tags`.
+
+A conflict is a `deny("conflicting attribute contributions", ...)` naming the
+resource, the path, and every contributing rule with its value. It is resolved
+by rank, not by order: `arg(T, N, P, V, default)` loses to a plain
+contribution, `arg(T, N, P, V, override)` beats it, and a disagreement at a
+losing rank is only a warning.
 
 Because the engine lowers these to the same small core, you keep composition and
 predictability without paying the verbosity tax.
