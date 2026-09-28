@@ -2,9 +2,9 @@ edition 2026.
 
 module database {
   resource db.postgres db {
-    public = false,
-    subnet_ids = SubnetIds,
-    backup_days = Days,
+    public = false
+    subnet_ids = SubnetIds
+    backup_days = Days
     multi_az = MA
   } :-
     param(backup_days, Days),

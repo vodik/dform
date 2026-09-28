@@ -10,7 +10,7 @@ resource gke_cluster pngu {
 }.
 
 resource gke_nodepool Np {
-  cluster = ref(gke_cluster, pngu, .id),
+  cluster = ref(gke_cluster, pngu, .id)
   zone = Z
 } :-
   arg(gke_cluster, pngu, .zones, Zs),

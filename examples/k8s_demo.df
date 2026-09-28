@@ -13,33 +13,33 @@ edition 2026.
 app(web, "nginx:1.27", 3).
 
 resource k8s.namespace shop {
-  metadata.name = "shop",
-  metadata.labels = {team: "storefront"}
+  metadata.name = "shop"
+  metadata.labels = { team: "storefront" }
 }.
 
 resource k8s.config_map web_config {
-  metadata.generateName = "web-config-",
-  metadata.namespace = ref(k8s.namespace, shop, .metadata.name),
-  data = {"MODE": "production", "LOG_LEVEL": "info"}
+  metadata.generateName = "web-config-"
+  metadata.namespace = ref(k8s.namespace, shop, .metadata.name)
+  data = { "MODE": "production", "LOG_LEVEL": "info" }
 }.
 
 resource k8s.deployment App {
-  metadata.name = App,
-  metadata.namespace = ref(k8s.namespace, shop, .metadata.name),
-  spec.replicas = Replicas,
-  spec.selector.matchLabels = {app: App},
-  spec.template.metadata.labels = {app: App},
+  metadata.name = App
+  metadata.namespace = ref(k8s.namespace, shop, .metadata.name)
+  spec.replicas = Replicas
+  spec.selector.matchLabels = { app: App }
+  spec.template.metadata.labels = { app: App }
   spec.template.spec.containers = [{
     name: App,
     image: Image,
-    ports: [{containerPort: 8080, protocol: "TCP"}],
-    envFrom: [{configMapRef: {name: ref(k8s.config_map, web_config, .metadata.name)}}]
+    ports: [{ containerPort: 8080, protocol: "TCP" }],
+    envFrom: [{ configMapRef: { name: ref(k8s.config_map, web_config, .metadata.name) } }]
   }]
 } :- app(App, Image, Replicas).
 
 resource k8s.service App {
-  metadata.name = App,
-  metadata.namespace = ref(k8s.namespace, shop, .metadata.name),
-  spec.selector = {app: App},
-  spec.ports = [{port: 80, targetPort: "8080", protocol: "TCP"}]
+  metadata.name = App
+  metadata.namespace = ref(k8s.namespace, shop, .metadata.name)
+  spec.selector = { app: App }
+  spec.ports = [{ port: 80, targetPort: "8080", protocol: "TCP" }]
 } :- app(App, _, _).

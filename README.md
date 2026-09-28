@@ -19,6 +19,8 @@ cargo run -- plan
 cargo run -- apply
 cargo run -- plan --set env=prod
 cargo run -- strata    # evaluation order: the partition graph's strata
+cargo run -- fmt modules/*.df          # format in place
+cargo run -- fmt --check $(git ls-files '*.df')   # CI: list unformatted files, fail
 ```
 
 State is scoped to a stack. Until a `stack` statement exists, the stack is the
@@ -409,6 +411,14 @@ a qualified symbol, `.a.b` a keypath, `X.a` a field of `X`; `-` and `/` are
 always operators, so hyphenated or slashed names are strings (`"us-east-1"`).
 A syntax error names `file:line:col` and what was expected, and parsing goes
 on to the next statement, so every error in a file is reported at once.
+
+`dform fmt [PATH...]` formats files in place (no PATH: the `--file` files):
+two-space indentation per open bracket or rule body, one space around
+operators and after commas, `{ a: 1 }` inside braces, at most one blank line,
+and no comma where a newline already separates block entries. Line breaks
+are the author's. A formatted file prints back byte for byte, and a file
+with a syntax error is reported, not rewritten. `--check` rewrites nothing
+and fails listing the files that would change.
 
 - Core intent IR:
   - `want(Type, Name).` declares a resource instance.

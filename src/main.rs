@@ -118,6 +118,14 @@ enum Cmd {
     },
     /// Print the stratification of the program (partition graph strata)
     Strata,
+    /// Format .df files in place: spacing, indentation and the commas a
+    /// newline makes redundant (line breaks are kept). No PATH formats the
+    /// --file files. `--check` changes nothing and fails if any file would.
+    Fmt {
+        paths: Vec<PathBuf>,
+        #[arg(long)]
+        check: bool,
+    },
     /// Graphviz DOT: the resource dependency DAG (no argument), the
     /// partition graph (`strata`), or a binary relation (`PRED` or `PRED/2`).
     Graph {
@@ -150,6 +158,14 @@ fn run() -> Result<()> {
         None => None,
     };
 
+    if let Cmd::Fmt { paths, check } = &cli.cmd {
+        let paths = if paths.is_empty() {
+            default_files(&cli.files)?
+        } else {
+            paths.clone()
+        };
+        return fmt_files(&paths, *check);
+    }
     let files = default_files(&cli.files)?;
     let program = loader::load_program(&files)?;
     if let Cmd::Strata = cli.cmd {
@@ -464,6 +480,7 @@ fn run() -> Result<()> {
             println!("{}", json);
         }
         Cmd::Strata => unreachable!("handled before evaluation"),
+        Cmd::Fmt { .. } => unreachable!("handled before loading"),
         Cmd::Graph { what: None } => print!("{}", graph::resources(&resources)),
         Cmd::Graph { what: Some(spec) } => {
             let redact = query::Redactor::new(&res.facts, backend.schema());
@@ -947,6 +964,30 @@ fn resolve_inventory(
         }
     }
     default.to_path_buf()
+}
+
+/// `dform fmt`: rewrite each file in its formatted form, or with `check`
+/// list the files that are not and fail.
+fn fmt_files(paths: &[PathBuf], check: bool) -> Result<()> {
+    let mut unformatted = Vec::new();
+    for p in paths {
+        let src =
+            std::fs::read_to_string(p).map_err(|e| anyhow::anyhow!("read {}: {e}", p.display()))?;
+        let out = dform::fmt::format_source(&p.display().to_string(), &src)?;
+        if out == src {
+            continue;
+        }
+        if check {
+            println!("{}", p.display());
+            unformatted.push(p);
+        } else {
+            std::fs::write(p, out).map_err(|e| anyhow::anyhow!("write {}: {e}", p.display()))?;
+        }
+    }
+    if !unformatted.is_empty() {
+        bail!("{} file(s) not formatted", unformatted.len());
+    }
+    Ok(())
 }
 
 fn default_files(files: &[PathBuf]) -> Result<Vec<PathBuf>> {

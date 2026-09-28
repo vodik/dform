@@ -11,7 +11,7 @@ policy baseline {
     want(Type, Name).
 
   # Example: policy pack can contribute directly to an IAM policy.
-  arg_add(iam.policy, Policy, .statements, [ { action: org.read, resource: "org" } ]) :-
+  arg_add(iam.policy, Policy, .statements, [{ action: org.read, resource: "org" }]) :-
     env(prod),
     component_scope(iam, main, IScope),
     Policy = scoped(IScope, app_policy).

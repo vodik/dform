@@ -122,12 +122,12 @@ when env(Env) {
 
   # GKE subnet (terraform-google-modules/network/google//modules/subnets)
   resource google_compute_subnetwork gke_subnet {
-    project = ProjectId,
-    region = Region,
-    network = NetId,
-    name = format("%s-gke-subnet", ProjectName),
-    ip_cidr_range = SubnetCidr,
-    subnet_private_access = true,
+    project = ProjectId
+    region = Region
+    network = NetId
+    name = format("%s-gke-subnet", ProjectName)
+    ip_cidr_range = SubnetCidr
+    subnet_private_access = true
     secondary_ranges = [
       { range_name: format("%s-gke-pods-range", ProjectName), ip_cidr_range: PodsCidr },
       { range_name: format("%s-gke-svc-range", ProjectName), ip_cidr_range: ServicesCidr }
@@ -144,12 +144,12 @@ when env(Env) {
 
   # Regional managed proxy subnet
   resource google_compute_subnetwork regional_proxy {
-    project = ProjectId,
-    region = Region,
-    network = NetId,
-    name = format("%s-proxy", ProjectName),
-    purpose = "REGIONAL_MANAGED_PROXY",
-    role = "ACTIVE",
+    project = ProjectId
+    region = Region
+    network = NetId
+    name = format("%s-proxy", ProjectName)
+    purpose = "REGIONAL_MANAGED_PROXY"
+    role = "ACTIVE"
     ip_cidr_range = ProxyCidr
   } :-
     setting(Env, .project_id, ProjectId),
@@ -161,9 +161,9 @@ when env(Env) {
 
   # VPC peerings
   resource google_compute_network_peering PeeringRes {
-    project = ProjectId,
-    name = PeeringName,
-    network = NetId,
+    project = ProjectId
+    name = PeeringName
+    network = NetId
     peer_network = PeerNet
   } :-
     setting(Env, .project_id, ProjectId),
@@ -174,10 +174,10 @@ when env(Env) {
 
   # Static IPs for services
   resource google_compute_address StaticIpRes {
-    project = ProjectId,
-    region = Region,
-    name = IpName,
-    address_type = IpType,
+    project = ProjectId
+    region = Region
+    name = IpName
+    address_type = IpType
     subnetwork_id = ref(google_compute_subnetwork, gke_subnet, .id)
   } :-
     setting(Env, .project_id, ProjectId),
@@ -192,18 +192,18 @@ when env(Env) {
 
   # Represents the external terraform-mi-gke module invocation.
   resource gke_cluster pngu {
-    cluster_type = "autopilot-private",
-    env = Env,
-    project_id = ProjectId,
-    project_name = ProjectName,
-    name = format("%s-gke", ProjectName),
-    network_id = NetId,
-    subnetwork_id = ref(google_compute_subnetwork, gke_subnet, .id),
-    master_control_plane_cidr = CpCidr,
-    ip_range_pods = format("%s-gke-pods-range", ProjectName),
-    ip_range_services = format("%s-gke-svc-range", ProjectName),
+    cluster_type = "autopilot-private"
+    env = Env
+    project_id = ProjectId
+    project_name = ProjectName
+    name = format("%s-gke", ProjectName)
+    network_id = NetId
+    subnetwork_id = ref(google_compute_subnetwork, gke_subnet, .id)
+    master_control_plane_cidr = CpCidr
+    ip_range_pods = format("%s-gke-pods-range", ProjectName)
+    ip_range_services = format("%s-gke-svc-range", ProjectName)
 
-    enable_secret_manager_addon = true,
+    enable_secret_manager_addon = true
     deletion_protection = false
   } :-
     setting(Env, .project_id, ProjectId),
@@ -218,17 +218,17 @@ when env(Env) {
 
   # Stubbed dashboard JSON: see terraform/modules/monitoring/dashboard-pngu.json
   resource google_monitoring_dashboard pngu {
-    project = ProjectId,
+    project = ProjectId
     dashboard_json = { "displayName": "pngu", "note": "stubbed; see terraform/modules/monitoring/dashboard-pngu.json" }
   } :-
     setting(Env, .project_id, ProjectId).
 
   # Represents terraform-gcp-alert-metrics module invocation.
   resource alert_metrics_pack pngu {
-    project_id = ProjectId,
-    notification_channel_type = "slack",
-    notification_channel_display_name = "Slack",
-    enable_standard_gke_alerts = true,
+    project_id = ProjectId
+    notification_channel_type = "slack"
+    notification_channel_display_name = "Slack"
+    enable_standard_gke_alerts = true
     source = "git@github.com:coherentpath/terraform-gcp-alert-metrics.git?ref=v1.5.0"
   } :-
     setting(Env, .project_id, ProjectId).

@@ -5,13 +5,13 @@
 edition 2026.
 
 resource iam.policy app_policy {
-  name = app,
-  statements = [ { action: db.connect, resource: "db" } ]
+  name = app
+  statements = [{ action: db.connect, resource: "db" }]
 }.
 
 policy p {
   type_lattice(iam.policy, .statements, set).
-  arg_add(iam.policy, P, .statements, [ { action: org.read, resource: "org" } ]) :-
+  arg_add(iam.policy, P, .statements, [{ action: org.read, resource: "org" }]) :-
     want(iam.policy, P),
     arg(iam.policy, P, .name, app).
 }.

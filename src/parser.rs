@@ -29,6 +29,11 @@ fn syntax_errors(file: u32, parse: &Parse) -> Vec<Diagnostic> {
         .collect()
 }
 
+/// The syntax errors of a parse of `src`, as diagnostics naming `name`.
+pub fn syntax_diagnostics(name: &str, src: &str, parse: &Parse) -> Diagnostics {
+    Diagnostics(syntax_errors(diag::add_source(name, src), parse))
+}
+
 fn program(name: &str, src: &str, require_edition: bool) -> Result<Program> {
     let file = diag::add_source(name, src);
     let parse = p::parse(src);

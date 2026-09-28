@@ -5,6 +5,7 @@ pub mod diag;
 pub mod engine;
 pub mod executor;
 pub mod fakecloud;
+pub mod fmt;
 pub mod graph;
 pub mod ir;
 pub mod lattice;

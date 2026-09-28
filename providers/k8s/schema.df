@@ -575,4 +575,4 @@ type_attr(k8s.ingress, spec.defaultBackend, map, []).
 type_attr(k8s.ingress, spec.rules, list, []).
 type_attr(k8s.ingress, spec.tls, list, []).
 type_attr(k8s.ingress, status.loadBalancer.ingress, list, [computed]).
-type_mint(k8s.ingress, status.loadBalancer.ingress, [{ip: "203.0.113.10"}]).
+type_mint(k8s.ingress, status.loadBalancer.ingress, [{ ip: "203.0.113.10" }]).

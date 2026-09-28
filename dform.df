@@ -37,7 +37,7 @@ settings prod {
   network.peer.vpc_net = inet("10.21.0.0/16")
   db = { backup_days: 14, multi_az: true }
   k8s = { private_api: true, nodepool: { min: 3, max: 10 } }
-  audit.sinks += ["cloudwatch"]    # a set: unions with the baseline pack's ["s3"]
+  audit.sinks += ["cloudwatch"] # a set: unions with the baseline pack's ["s3"]
 }.
 
 settings dev {
@@ -104,7 +104,7 @@ resource net.vpc_peering Peer {
 } :-
   vpc_peer_inst(InstA, InstB),
   vpc_peer(A, B),
-  want(net.vpc, A),      # both ends must exist in this environment
+  want(net.vpc, A), # both ends must exist in this environment
   want(net.vpc, B),
   Peer = format("peer-%s-%s", InstA, InstB).
 
