@@ -1069,8 +1069,33 @@ fn eval_eq(a: &Term, b: &Term, state: &HashMap<String, Value>) -> Result<Option<
                 Ok(None)
             }
         }
-        (None, None) => bail!("unsafe equality: both sides unbound"),
+        (None, None) => {
+            for t in [a, b] {
+                if let Some((name, args)) = failed_builtin(t, &out) {
+                    if crate::sim::active() && args.iter().any(crate::sim::has_null) {
+                        // Rule 2: a builtin over a null is stuck (recorded).
+                        return Ok(None);
+                    }
+                    let args: Vec<String> = args.iter().map(partition::fmt_value).collect();
+                    bail!("{name}({}) is not defined for these arguments", args.join(", "));
+                }
+            }
+            bail!("unsafe equality: both sides unbound")
+        }
     }
+}
+
+/// The innermost function application in `t` whose arguments are all ground
+/// but which has no value: a builtin applied to the wrong kind of value
+/// (`"10" + 1`, `to_int("abc")`). `None` when the term is merely unbound.
+fn failed_builtin(t: &Term, state: &HashMap<String, Value>) -> Option<(String, Vec<Value>)> {
+    let Term::Func { name, args } = t else { return None };
+    if let Some(inner) = args.iter().find_map(|a| failed_builtin(a, state)) {
+        return Some(inner);
+    }
+    let vals: Option<Vec<Value>> = args.iter().map(|a| eval_term(a, state)).collect();
+    let vals = vals?;
+    eval_func(name, args, state).is_none().then(|| (name.clone(), vals))
 }
 
 fn eval_neq(a: &Term, b: &Term, state: &HashMap<String, Value>) -> Result<Option<HashMap<String, Value>>> {
@@ -1464,15 +1489,72 @@ fn eval_func(name: &str, args: &[Term], state: &HashMap<String, Value>) -> Optio
             };
             Some(Value::Str(cidrsubnet(&cidr, newbits as u32, netnum as u32)?))
         }
+        // Explicit conversions (DESIGN.org "Silent string-to-int coercion").
+        "to_int" => match (args, eval_term(args.first()?, state)?) {
+            ([_], Value::Int(i)) => Some(Value::Int(i)),
+            ([_], Value::Str(s)) => s.trim().parse().ok().map(Value::Int),
+            _ => None,
+        },
+        "to_string" => match args {
+            [a] => scalar_text(&eval_term(a, state)?).map(Value::Str),
+            _ => None,
+        },
+        "len" => match args {
+            [a] => match eval_term(a, state)? {
+                Value::List(xs) => Some(Value::Int(xs.len() as i64)),
+                Value::Obj(m) => Some(Value::Int(m.len() as i64)),
+                Value::Str(s) => Some(Value::Int(s.chars().count() as i64)),
+                _ => None,
+            },
+            _ => None,
+        },
+        "lower" | "upper" => match args {
+            [a] => {
+                let s = eval_term(a, state)?.as_str()?.to_string();
+                Some(Value::Str(if name == "lower" { s.to_lowercase() } else { s.to_uppercase() }))
+            }
+            _ => None,
+        },
+        "split" => match args {
+            [a, sep] => {
+                let s = eval_term(a, state)?.as_str()?.to_string();
+                let sep = eval_term(sep, state)?.as_str()?.to_string();
+                if sep.is_empty() {
+                    return None;
+                }
+                Some(Value::List(s.split(sep.as_str()).map(|x| Value::Str(x.to_string())).collect()))
+            }
+            _ => None,
+        },
+        "join" => match args {
+            [l, sep] => {
+                let Value::List(xs) = eval_term(l, state)? else { return None };
+                let sep = eval_term(sep, state)?.as_str()?.to_string();
+                let parts: Option<Vec<String>> = xs.iter().map(scalar_text).collect();
+                Some(Value::Str(parts?.join(&sep)))
+            }
+            _ => None,
+        },
         "collect" => None,
         _ => None,
     }
 }
 
+/// Arithmetic takes integers only; a string is converted with `to_int`.
 fn as_i64(v: &Value) -> Option<i64> {
     match v {
         Value::Int(i) => Some(*i),
-        Value::Str(s) => s.parse().ok(),
+        _ => None,
+    }
+}
+
+/// The text of a scalar, for `to_string` and `join`. Lists, objects,
+/// references and nulls have no text.
+fn scalar_text(v: &Value) -> Option<String> {
+    match v {
+        Value::Str(_) | Value::Int(_) | Value::Bool(_) | Value::Ip(_) | Value::IpNet { .. } | Value::IpRange { .. } => {
+            Some(value_to_string(v))
+        }
         _ => None,
     }
 }
@@ -1895,5 +1977,45 @@ mod tests {
         )
         .unwrap();
         assert_eq!(facts_of(&r, "lonely"), vec!["lonely(\"a\")".to_string()]);
+    }
+
+    /// DESIGN.org "Silent string-to-int coercion": arithmetic takes
+    /// integers; conversions are explicit builtins.
+    #[test]
+    fn coercion_is_explicit() {
+        let err = run("s(\"10\"). n(X) :- s(S), X = S + 1.").unwrap_err().to_string();
+        assert!(err.contains("add(\"10\", 1) is not defined"), "{err}");
+        let err = run("n(X) :- X = to_int(\"abc\") + 1.").unwrap_err().to_string();
+        assert!(err.contains("to_int(\"abc\") is not defined"), "{err}");
+        let (r, _) = run(
+            "s(\"10\").
+             explicit(X) :- s(S), X = to_int(S) + 1.
+             text(T) :- T = to_string(14).
+             sizes(A, B, C) :- A = len([x, y]), B = len(\"héllo\"), C = len({k: 1}).
+             cases(L, U) :- L = lower(\"AbC\"), U = upper(\"AbC\").
+             parts(P) :- P = split(\"a,b,c\", \",\").
+             joined(J) :- J = join([a, 1, true], \"-\").",
+        )
+        .unwrap();
+        assert_eq!(facts_of(&r, "explicit"), vec!["explicit(11)".to_string()]);
+        assert_eq!(facts_of(&r, "text"), vec!["text(\"14\")".to_string()]);
+        assert_eq!(facts_of(&r, "sizes"), vec!["sizes(2, 5, 1)".to_string()]);
+        assert_eq!(facts_of(&r, "cases"), vec!["cases(\"abc\", \"ABC\")".to_string()]);
+        assert_eq!(facts_of(&r, "parts"), vec!["parts([\"a\", \"b\", \"c\"])".to_string()]);
+        assert_eq!(facts_of(&r, "joined"), vec!["joined(\"a-1-true\")".to_string()]);
+    }
+
+    /// A builtin over a null is a content position: under the stuck
+    /// simulation it records a stuck instance instead of deriving.
+    #[test]
+    fn a_builtin_over_a_null_is_stuck() {
+        let program = crate::parser::parse_program(
+            "want(net.vpc, a).
+             id_len(N) :- want(net.vpc, A), N = len(ref(net.vpc, A, id)).",
+        )
+        .unwrap();
+        let r = crate::sim::eval_sim(&program, &[], crate::schema::fake(), Default::default()).unwrap();
+        assert!(r.facts.iter().all(|a| a.pred != "id_len"));
+        assert!(r.sim.stuck.iter().any(|s| s.reason == "builtin len() over a null"), "{:?}", r.sim.stuck);
     }
 }

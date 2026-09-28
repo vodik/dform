@@ -177,6 +177,12 @@ relation. A table that may legitimately have no rows is declared:
 extern mesh_allow_direct_route/2.
 ```
 
+## Convert Explicitly
+
+Arithmetic takes integers; `"10" + 1` is an error, not `11`. Convert with
+`to_int`, `to_string`, and shape strings and lists with `len`, `lower`,
+`upper`, `split(S, Sep)` and `join(List, Sep)`.
+
 ## Use Stratified Negation for Defaults
 
 Negation is most useful for defaults and "absence" checks.
