@@ -18,6 +18,7 @@ use dform::stuck;
 use dform::value::Value;
 use dform::why;
 use dform::zset;
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 #[derive(Parser, Debug)]
@@ -285,8 +286,11 @@ fn main() -> Result<()> {
                     f.tick,
                     names.join(", ")
                 );
-                let changed =
-                    executor::changed_under(&backend, &f.remaining, &backend.observe(&st)?);
+                let changed = executor::changed_under(
+                    &backend,
+                    &executor::remaining(&f),
+                    &backend.observe(&st)?,
+                );
                 if !changed.is_empty() {
                     eprint!(
                         "the world changed under a remaining action:\n{}",
@@ -334,6 +338,14 @@ fn main() -> Result<()> {
                 let observed = backend.observe(&st)?;
                 executor::begin(&mut st, tick, &plan, &observed);
                 persist(&st)?;
+                let pending: BTreeSet<ir::Address> = plan
+                    .actions
+                    .iter()
+                    .filter(|a| waits_on(a, &sections).is_some())
+                    .map(|a| a.addr.clone())
+                    .collect();
+                let mut seen: executor::Seen =
+                    observed.into_iter().map(|(a, d)| (a, Some(d))).collect();
                 plan.actions.retain(|a| waits_on(a, &sections).is_none());
                 let changed = plan
                     .actions
@@ -348,7 +360,7 @@ fn main() -> Result<()> {
                     for note in backend.take_notes() {
                         println!("chaos: {note}");
                     }
-                    applied?;
+                    seen.extend(applied?);
                 }
                 if !boundary {
                     st.in_flight = None;
@@ -377,6 +389,7 @@ fn main() -> Result<()> {
                     );
                 }
                 // The boundary.
+                executor::check_boundary(&backend, &seen, &pending, &st, tick)?;
                 let (next, violations) = evaluate(&st)?;
                 for w in &next.warnings {
                     eprintln!("warning: {w}");

@@ -64,6 +64,8 @@ pub struct FakeCloud {
     /// the world once between two writes, so every consumer of a refresh
     /// (round 0, the plan, the executor's comparison) sees the same Reads.
     refreshed: RefCell<Option<(BTreeSet<String>, RemoteState)>>,
+    /// The chaos `mutate` specs that have landed this run.
+    mutated: RefCell<BTreeSet<usize>>,
 }
 
 fn key(typ: &str, name: &str) -> String {
@@ -117,7 +119,7 @@ impl Provider for FakeCloud {
         state: &mut State,
         plan: &Plan,
     ) -> Result<()> {
-        crate::executor::run_tick(self, desired, adopts, state, plan, &|_| Ok(()))
+        crate::executor::run_tick(self, desired, adopts, state, plan, &|_| Ok(())).map(|_| ())
     }
 }
 
@@ -175,6 +177,7 @@ impl FakeCloud {
             chaos: Chaos::default(),
             notes: RefCell::new(Vec::new()),
             refreshed: RefCell::new(None),
+            mutated: RefCell::new(BTreeSet::new()),
         }
     }
 
@@ -696,12 +699,17 @@ impl FakeCloud {
             desired: desired.iter().map(|r| (r.addr.clone(), r)).collect(),
             resolved: BTreeMap::new(),
             clock: 0,
+            returned: BTreeMap::new(),
         })
     }
 
     /// The tick ends: chaos mutations land and the clock advances.
     fn end_tick(&self, world: &mut RemoteState, state: &State) {
-        for (addr, path, v) in &self.chaos.mutate {
+        for (i, (addr, path, v)) in self.chaos.mutate.iter().enumerate() {
+            // Once per run: after the first tick the resource exists at.
+            if self.mutated.borrow().contains(&i) {
+                continue;
+            }
             let at = format!("{}/{}", addr.typ, addr.name);
             let remote = state
                 .get(addr)
@@ -710,6 +718,7 @@ impl FakeCloud {
             match world.resources.get_mut(&key(&addr.typ, &remote)) {
                 Some(rr) => {
                     set_path(&mut rr.attrs, path, v.clone());
+                    self.mutated.borrow_mut().insert(i);
                     self.note(format!(
                         "mutate {at}: {path} = {v} after tick {}",
                         world.tick
@@ -910,6 +919,9 @@ pub struct Tick<'a> {
     resolved: BTreeMap<Address, Json>,
     /// Simulated time spent in Apply (chaos `latency`).
     clock: u64,
+    /// What each answered Apply call returned: the object's configured
+    /// attributes, `None` for a delete.
+    returned: BTreeMap<Address, Option<Json>>,
 }
 
 impl Tick<'_> {
@@ -1051,6 +1063,13 @@ impl Tick<'_> {
         if let Some(deps) = deps {
             state.set_deps(addr, deps);
         }
+        if answered && !matches!(a.kind, ActionKind::DeleteDeposed) {
+            let now = state
+                .get(addr)
+                .and_then(|e| self.world.resources.get(&key(&addr.typ, &e.remote)))
+                .map(|rr| rr.attrs.clone());
+            self.returned.insert(addr.clone(), now);
+        }
         cloud.save(&self.world)?;
         if !answered {
             bail!(
@@ -1092,7 +1111,8 @@ impl Tick<'_> {
 
     /// The tick ends: state records every desired object's dependencies,
     /// chaos mutations land, the clock advances, the world is saved.
-    pub fn end(mut self, state: &mut State) -> Result<()> {
+    /// Returns what the tick's answered Apply calls returned.
+    pub fn end(mut self, state: &mut State) -> Result<BTreeMap<Address, Option<Json>>> {
         // What each object depends on, for ordering its delete later.
         for (addr, r) in &self.desired {
             state.set_deps(addr, r.deps.iter().cloned());
@@ -1102,7 +1122,8 @@ impl Tick<'_> {
                 .note(format!("simulated apply time: {}ms", self.clock));
         }
         self.cloud.end_tick(&mut self.world, state);
-        self.cloud.save(&self.world)
+        self.cloud.save(&self.world)?;
+        Ok(self.returned)
     }
 }
 

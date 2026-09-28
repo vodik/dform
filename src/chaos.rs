@@ -9,7 +9,8 @@
 //! | `fail=T/N`                     | Apply of T/N fails before it reaches the world          |
 //! | `timeout=T/N`                  | Apply of T/N takes effect, then the call times out      |
 //! | `read-lag=T/N:K`               | the first K Reads of T/N after its Create miss it       |
-//! | `mutate=T/N:PATH=JSON`         | after the tick, the world sets T/N's PATH to JSON       |
+//! | `mutate=T/N:PATH=JSON`         | once, after the first tick T/N exists at, the world     |
+//! |                                | sets T/N's PATH to JSON                                 |
 //! | `latency=T/N:MS`               | Apply of T/N is recorded as taking MS (never slept)     |
 //! | `crash=T/N`                    | dform is killed as it calls Apply of T/N (exit 137)     |
 

@@ -145,6 +145,18 @@ cargo run -- --file examples/adversarial/gke_two_phase.df --provider gke apply  
 cargo run -- --file examples/adversarial/gke_one_zone.df --provider gke apply   # stops after tick 1
 ```
 
+At a boundary apply also compares the refreshed world with what it last saw
+(the tick's refresh and its Apply responses). A change under an address whose
+deformation is pending for this boundary stops the run before the next tick,
+with the change printed (`the world changed under a pending deformation after
+tick N:`); a change anywhere else is reported as `drift after tick N:` and the
+run goes on, the next tick deforming it back:
+
+```bash
+cargo run -- --file examples/adversarial/gke_two_phase.df --provider gke apply \
+  --chaos 'mutate=gke_cluster/pngu:deletion_protection=false'   # drift, tick 2 undoes it
+```
+
 Deletes and replacement. Deletes run after every create and update, in
 reverse dependency order (a delete has no desired document left, so state
 records each object's dependencies when it is applied). A replace (`-/+`)
@@ -231,7 +243,7 @@ file keeps a `tick` counter; every `apply` is one tick.
 | `timeout=T/N` | Apply of `T/N` takes effect, then times out: the world has it, state does not |
 | `crash=T/N` | dform is killed (exit 137) as it calls Apply of `T/N`; nothing after that runs |
 | `read-lag=T/N:K` | the first `K` Reads of `T/N` after it is created return nothing (eventual consistency) |
-| `mutate=T/N:PATH=JSON` | after the tick, the world sets `T/N`'s `PATH` to `JSON` (drift) |
+| `mutate=T/N:PATH=JSON` | once per run, after the first tick `T/N` exists at, the world sets its `PATH` to `JSON` (drift) |
 | `latency=T/N:MS` | Apply of `T/N` is recorded as taking `MS`, reported, never slept |
 
 ```bash

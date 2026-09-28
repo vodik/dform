@@ -24,15 +24,21 @@ use crate::fakecloud::FakeCloud;
 use crate::ir::{Address, Adopt, Resource};
 use crate::provider::{ActionKind, Change, Plan, fmt_value};
 use crate::state::{self, InFlight, State};
-use anyhow::Result;
+use anyhow::{Result, bail};
 use serde_json::Value as Json;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Where state goes after every Apply call.
 pub type Persist<'a> = &'a dyn Fn(&State) -> Result<()>;
 
+/// What the world holds per address as the executor last saw it: the
+/// refresh a tick was planned from, overlaid with what its Apply calls
+/// returned (`None`: deleted).
+pub type Seen = BTreeMap<Address, Option<Json>>;
+
 /// Apply every definite action of `plan` as one tick of the world. The
 /// first failure stops the tick; the actions before it keep their identity.
+/// Returns what the answered Apply calls returned.
 pub fn run_tick(
     cloud: &FakeCloud,
     desired: &[Resource],
@@ -40,7 +46,7 @@ pub fn run_tick(
     state: &mut State,
     plan: &Plan,
     persist: Persist,
-) -> Result<()> {
+) -> Result<Seen> {
     let mut tick = cloud.begin_tick(desired, adopts)?;
     let mut failed = None;
     for a in &plan.actions {
@@ -59,11 +65,11 @@ pub fn run_tick(
             break;
         }
     }
-    tick.end(state)?;
+    let returned = tick.end(state)?;
     persist(state)?;
     match failed {
         Some(e) => Err(e),
-        None => Ok(()),
+        None => Ok(returned),
     }
 }
 
@@ -80,25 +86,61 @@ pub fn begin(state: &mut State, tick: usize, plan: &Plan, observed: &BTreeMap<Ad
     state.in_flight = Some(InFlight { tick, remaining });
 }
 
-/// The remaining deformations whose world document is no longer the one
-/// they were planned against, with what changed (planned -> now).
+/// The addresses whose world document is no longer the one they were
+/// planned against, with what changed (planned -> now). For resume the
+/// documents are the in-flight record's; at a phase boundary, what the
+/// executor last saw (`Seen`).
 pub fn changed_under(
     cloud: &FakeCloud,
-    remaining: &BTreeMap<String, Option<Json>>,
+    expected: &Seen,
     observed: &BTreeMap<Address, Json>,
 ) -> Vec<(Address, Vec<Change>)> {
     let mut out = Vec::new();
-    for (k, planned) in remaining {
-        let Some(addr) = state::parse_key(k) else {
-            continue;
-        };
-        let now = observed.get(&addr);
+    for (addr, planned) in expected {
+        let now = observed.get(addr);
         let changes = cloud.diff(&addr.typ, planned.as_ref(), now);
         if !changes.is_empty() || planned.is_some() != now.is_some() {
-            out.push((addr, changes));
+            out.push((addr.clone(), changes));
         }
     }
     out
+}
+
+/// The in-flight record's remaining deformations as `Seen`.
+pub fn remaining(f: &InFlight) -> Seen {
+    f.remaining
+        .iter()
+        .filter_map(|(k, d)| Some((state::parse_key(k)?, d.clone())))
+        .collect()
+}
+
+/// At a phase boundary: refresh and compare with what the executor last
+/// saw. The world changing under an address whose deformation is pending
+/// (held for this boundary) stops the run before the next tick, with the
+/// change printed: the pending diff was computed against a document that
+/// no longer exists. A change anywhere else is drift: it is reported and
+/// the run goes on; the next tick's plan deforms it back.
+pub fn check_boundary(
+    cloud: &FakeCloud,
+    seen: &Seen,
+    pending: &BTreeSet<Address>,
+    state: &State,
+    tick: usize,
+) -> Result<()> {
+    let changed = changed_under(cloud, seen, &cloud.observe(state)?);
+    let (under, drift): (Vec<_>, Vec<_>) =
+        changed.into_iter().partition(|(a, _)| pending.contains(a));
+    if !drift.is_empty() {
+        print!("drift after tick {tick}:\n{}", format_changes(&drift));
+    }
+    if !under.is_empty() {
+        eprint!(
+            "the world changed under a pending deformation after tick {tick}:\n{}",
+            format_changes(&under)
+        );
+        bail!("apply stopped after tick {tick}: the world changed under a pending deformation");
+    }
+    Ok(())
 }
 
 /// `~ T.N` and a `path: before -> after` line per change, as plan prints an
