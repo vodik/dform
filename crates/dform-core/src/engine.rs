@@ -2475,6 +2475,12 @@ fn eval_member2(
     out: &mut Vec<HashMap<String, Value>>,
     rec: &Rec,
 ) -> Result<()> {
+    if missing_walk(&atom.args[0], state) {
+        return Ok(());
+    }
+    if missing_walk(&atom.args[0], state) {
+        return Ok(());
+    }
     let list_v = eval_term(&atom.args[0], state)
         .ok_or_else(|| anyhow!("unsafe member: list is not ground"))?;
     if let Value::Null { .. } = &list_v {
@@ -2739,6 +2745,9 @@ fn eval_eq(
         }
         (None, None) => {
             for t in [a, b] {
+                if missing_walk(t, &out) {
+                    return Ok(None);
+                }
                 if let Some((name, args)) = failed_builtin(t, &out) {
                     let args: Vec<String> = args.iter().map(partition::fmt_value).collect();
                     bail!(
@@ -2750,6 +2759,12 @@ fn eval_eq(
             bail!("unsafe equality: both sides unbound")
         }
     }
+}
+
+/// A walk to a path the value does not have (`has x.f`, `x.f.g`, `some c
+/// in x.f`): no value, so the literal holding it does not hold.
+fn missing_walk(t: &Term, state: &HashMap<String, Value>) -> bool {
+    failed_builtin(t, state).is_some_and(|(name, _)| name == "__path")
 }
 
 /// The innermost function application in `t` whose arguments are all ground
@@ -3441,6 +3456,26 @@ mod tests {
         assert_eq!(facts_of(&r, "none"), vec!["none(1)".to_string()]);
         assert_eq!(facts_of(&r, "lonely"), vec!["lonely(3)".to_string()]);
         assert_eq!(facts_of(&r, "next"), vec!["next(\"blue\")".to_string()]);
+    }
+
+    /// `has x.f` of a value without `f` does not hold (and `not has` does):
+    /// a walk to a missing path is no value, not an error.
+    #[test]
+    fn a_walk_to_a_missing_path_is_no_value() {
+        let (r, _) = run("p({a: {b: 1}})
+             deep(x) if p(x), has x.a.b
+             open(x) if p(x), not has x.a.c
+             shallow(x) if p(x), has x.c")
+        .unwrap();
+        assert_eq!(facts_of(&r, "deep").len(), 1);
+        assert_eq!(facts_of(&r, "open").len(), 1);
+        assert!(facts_of(&r, "shallow").is_empty());
+        let (r, _) = run("p({a: {b: [1]}})
+             elem(e) if p(x), some e in x.a.b
+             none(e) if p(x), some e in x.a.c")
+        .unwrap();
+        assert_eq!(facts_of(&r, "elem"), vec!["elem(1)".to_string()]);
+        assert!(facts_of(&r, "none").is_empty());
     }
 
     /// A cycle through negation is a compile error naming the cycle with
