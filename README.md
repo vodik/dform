@@ -77,16 +77,40 @@ tests.
 A `.dform/` written before state was scoped (`.dform/state.json`,
 `.dform/remote.json`) is moved into the `dform` stack on the next run.
 
-## Providers are schema files
+## Providers are processes; the mock plays schema files
 
-The fake backend can pretend to be any provider: a provider is a schema file of
+A provider is any executable that speaks the plugin protocol
+(`proto/dform/v1/provider.proto`, gRPC; DESIGN.org "Providers and fact
+plugins"). dform starts it, reads one handshake line from its stdout,
+`dform-provider|1|tcp://127.0.0.1:PORT`, and calls Handshake, Configure,
+Schema, Query, Read, Plan, Apply and Import on it; it exits when dform closes
+its stdin. Schema returns the schema as facts, Plan and Apply are per resource,
+and a sensitive computed value only ever crosses as its label. dform owns
+ordering, parallelism, state and crash safety: a provider that dies during an
+Apply is a failed action naming the resource, and the next `apply` resumes.
+
+The mock provider, `dform-provider-fake` (built with dform, `src/fakecloud.rs`),
+can pretend to be any provider: a provider it plays is a schema file of
 plain facts, `providers/<name>/schema.df`, selected by the program's
 `provider` statements (`provider gke {}.`, or `provider aws { source =
 "providers/aws-mock" }.` for a directory or `.df` file relative to the
 program's file) or, overriding them, with `--provider NAME` (repeatable;
 default `fake`). `--provider path/to/schema.df` loads a file directly. A
 `providers/<name>/schema.df` in the working directory wins over the schemas
-built into the binary (`fake`, `gke`).
+built into the binary (`fake`, `gke`). A `source` (or `--provider` path) that
+is an executable, or a directory holding one named `dform-provider*`, is a
+plugin instead, started on its own; each type goes to the provider whose
+schema declares it. The world file, the inventory and `--chaos` reach the mock
+at Configure.
+
+`dform provider check PATH` is the conformance suite: it runs every method
+against the provider at PATH with a synthetic schema and prints one line per
+check, failing if any deviates. The mock passes it:
+
+```bash
+cargo run -- provider check providers/fake        # the mock
+cargo run -- provider check ./my-provider         # any plugin executable
+```
 
 ```prolog
 type_provider(net.vpc, fakecloud).                    % who owns the type
@@ -440,7 +464,7 @@ file keeps a `tick` counter; every `apply` is one tick.
 |------|--------|
 | `fail=T/N` | Apply of `T/N` fails before it reaches the world |
 | `timeout=T/N` | Apply of `T/N` takes effect, then times out: the world has it, state does not |
-| `crash=T/N` | dform is killed (exit 137) as it calls Apply of `T/N`; nothing after that runs |
+| `crash=T/N` | the provider process dies (exit 137) as it is called to Apply `T/N`: the action fails, nothing after it runs, and the next `apply` resumes |
 | `read-lag=T/N:K` | the first `K` Reads of `T/N` after it is created return nothing (eventual consistency) |
 | `mutate=T/N:PATH=JSON` | once per run, after the first tick `T/N` exists at, the world sets its `PATH` to `JSON` (drift) |
 | `latency=T/N:MS` | Apply of `T/N` takes `MS` on a simulated clock, reported, never slept; the world's `timeline` records each call's start and end |
@@ -898,6 +922,7 @@ This is an MVP:
 - list helper predicate: `member(List, Item)` and `member(List, Index, Item)` (Index starts at 0)
 - safe(ish) negation: `not` requires the atom be ground at evaluation time
 
-Provider model (in progress): the demo uses an in-process `fakecloud` provider that supplies
-schema facts (`providers/<name>/schema.df`) and discovery facts (inventory), and supports
-plan/apply against a world file, with chaos injection.
+Provider model (in progress): the demo uses the mock provider, `dform-provider-fake`, a
+separate process behind the plugin protocol that supplies schema facts
+(`providers/<name>/schema.df`) and discovery facts (inventory), and supports plan/apply
+against a world file, with chaos injection.

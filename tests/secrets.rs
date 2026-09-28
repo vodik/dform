@@ -12,8 +12,8 @@
 //! Expected shape of the result: `leaky.vault`'s secret never appears in
 //! anything dform prints (plan, state.json) — that's the claim. It DOES
 //! appear in world.json: that file is the fake provider's own storage
-//! (`FakeCloud::load`'s doc comment: "The world as stored, secrets
-//! included. Only the provider sees this."), the mock equivalent of the
+//! (src/fakecloud.rs: "A sensitive computed value stays in the world"),
+//! kept by the mock provider's own process, the mock equivalent of the
 //! real cloud's own database, not a `dform`-facing surface, so this is by
 //! design, not a leak. `leaky.oops`'s secret, mislabeled public, leaks
 //! through plan/apply output too — expected, it's what mislabeling means.
@@ -120,8 +120,8 @@ fn state_file_never_carries_either_secret() {
 
 #[test]
 fn world_file_is_the_providers_own_storage_and_holds_both() {
-    // Documented, not a leak: FakeCloud::load's own doc comment says the
-    // world file holds secrets, because it stands in for the real cloud's
+    // Documented, not a leak: src/fakecloud.rs says the world file holds
+    // secrets, because it stands in for the real cloud's
     // storage. This test pins that on purpose, as the boundary of the
     // never-prints claim: it is about what dform itself prints and
     // persists as the *consumer*, not the mock backend's storage.

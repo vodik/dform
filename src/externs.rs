@@ -19,7 +19,8 @@
 //! The first real provider is `file`: `file.json(+path, -value)` and
 //! `file.text(+path, -value)`, paths relative to the program's directory
 //! (the first `--file`'s).
-//! Other externs are asked of the mock (`FakeCloud::query`).
+//! Other externs are asked of the providers over the plugin protocol
+//! (Query; the mock answers from `providers/<name>/externs.df`).
 
 use crate::ast::{Atom, BindArg, ExternFn, Lit, Program, Span, Stmt, Term, TypeExpr};
 use crate::diag::{Diagnostic, Diagnostics};
