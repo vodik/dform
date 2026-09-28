@@ -202,13 +202,21 @@ provider k8s { source = "../target/debug/dform-provider-k8s" }.
   `type_retry` is 5; a Deployment, Service or ConfigMap is replaced
   `create_first`, a Namespace `destroy_first`.
 - A field the API server defaults is `optional_computed`: one whose schema
-  has a `default` (a cluster's document; the snapshot drops them), and
-  `spec.clusterIP`, `spec.clusterIPs`, `spec.type`, `spec.sessionAffinity`,
-  `spec.ipFamilies`, `spec.ipFamilyPolicy`, `spec.internalTrafficPolicy`,
+  has a `default` other than the zero value (the snapshot keeps them:
+  ports' `protocol`, a few volume sources), and, as a fallback for what the
+  document does not mark, a Service's `spec.clusterIP`, `spec.clusterIPs`,
+  `spec.type`, `spec.sessionAffinity`, `spec.ipFamilies`,
+  `spec.ipFamilyPolicy`, `spec.internalTrafficPolicy`; a workload's
   `spec.progressDeadlineSeconds`, `spec.revisionHistoryLimit`,
-  `spec.strategy.type` and the pod template's `dnsPolicy`, `restartPolicy`,
-  `schedulerName`, `terminationGracePeriodSeconds` and containers'
-  `imagePullPolicy`, `terminationMessagePath`, `terminationMessagePolicy`.
+  `spec.strategy.type`, `spec.updateStrategy.type`,
+  `spec.podManagementPolicy` and the StatefulSet PVC retention policy; a
+  Job's or CronJob's `spec.backoffLimit`, `spec.completions`,
+  `spec.parallelism`, `spec.completionMode`, `spec.podReplacementPolicy`,
+  `spec.suspend`, `spec.concurrencyPolicy` and history limits; and a pod
+  spec's (a Pod's, a template's, a CronJob's job template's) `dnsPolicy`,
+  `restartPolicy`, `schedulerName`, `terminationGracePeriodSeconds` and
+  containers' `imagePullPolicy`, `terminationMessagePath`,
+  `terminationMessagePolicy`.
   Read returns their live values as computed, so a ref to one
   (`ref(k8s.service, web, .spec.clusterIP)`) is a null until the object
   exists, then the cluster's value, as against the mock. An update never
@@ -216,8 +224,8 @@ provider k8s { source = "../target/debug/dform-provider-k8s" }.
   stays unowned rather than becoming `dform`'s (and neither `status` nor
   `metadata.managedFields` is ever sent). Objects are never
   flagged (a default object would carry the server's `rollingUpdate` beside
-  a program's `strategy.type = "Recreate"`), nor paths inside a list
-  element (a ref cannot name one).
+  a program's `strategy.type = "Recreate"`); a path inside a list element
+  is flagged but never resolved (a ref cannot name one).
 - The value model has no float. A float crosses the protocol as `Float`
   and the engine reads it as a string, the shortest decimal that parses
   back to the same number (`0.5`, `1e+300`). In the snapshot's kinds a

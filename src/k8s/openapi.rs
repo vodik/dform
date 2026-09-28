@@ -58,13 +58,15 @@ pub const PROVIDER: &str = "kubernetes";
 pub const RETRY: i64 = 5;
 
 /// Properties the API server defaults that the OpenAPI document does not
-/// mark with a `default` (the snapshot drops them all), by path: a list
-/// element's properties are dotted through the list. Leaves only: the value
-/// of an unset Optional+Computed path is the cluster's, so an object would
-/// carry the server's whole object into the document (`spec.strategy`'s
-/// `rollingUpdate` beside a program's `type: Recreate`, which the server
-/// refuses). `metadata.uid` is `computed` already.
-pub const SERVER_DEFAULTED: [&str; 17] = [
+/// mark with a `default` (it marks only a few, list elements' mostly), by
+/// path, whatever the kind: a list element's properties are dotted through
+/// the list. A fallback beside the document's own defaults. Leaves only:
+/// the value of an unset Optional+Computed path is the cluster's, so an
+/// object would carry the server's whole object into the document
+/// (`spec.strategy`'s `rollingUpdate` beside a program's `type: Recreate`,
+/// which the server refuses). `metadata.uid` is `computed` already.
+pub const SERVER_DEFAULTED: [&str; 44] = [
+    // Service
     "spec.clusterIP",
     "spec.clusterIPs",
     "spec.type",
@@ -72,9 +74,25 @@ pub const SERVER_DEFAULTED: [&str; 17] = [
     "spec.ipFamilies",
     "spec.ipFamilyPolicy",
     "spec.internalTrafficPolicy",
+    // Deployment, StatefulSet, DaemonSet, ReplicaSet
     "spec.progressDeadlineSeconds",
     "spec.revisionHistoryLimit",
     "spec.strategy.type",
+    "spec.updateStrategy.type",
+    "spec.podManagementPolicy",
+    "spec.persistentVolumeClaimRetentionPolicy.whenDeleted",
+    "spec.persistentVolumeClaimRetentionPolicy.whenScaled",
+    // Job, CronJob
+    "spec.backoffLimit",
+    "spec.completions",
+    "spec.parallelism",
+    "spec.completionMode",
+    "spec.podReplacementPolicy",
+    "spec.suspend",
+    "spec.concurrencyPolicy",
+    "spec.successfulJobsHistoryLimit",
+    "spec.failedJobsHistoryLimit",
+    // A pod template
     "spec.template.spec.dnsPolicy",
     "spec.template.spec.restartPolicy",
     "spec.template.spec.schedulerName",
@@ -82,6 +100,22 @@ pub const SERVER_DEFAULTED: [&str; 17] = [
     "spec.template.spec.containers.imagePullPolicy",
     "spec.template.spec.containers.terminationMessagePath",
     "spec.template.spec.containers.terminationMessagePolicy",
+    // A CronJob's pod template
+    "spec.jobTemplate.spec.template.spec.dnsPolicy",
+    "spec.jobTemplate.spec.template.spec.restartPolicy",
+    "spec.jobTemplate.spec.template.spec.schedulerName",
+    "spec.jobTemplate.spec.template.spec.terminationGracePeriodSeconds",
+    "spec.jobTemplate.spec.template.spec.containers.imagePullPolicy",
+    "spec.jobTemplate.spec.template.spec.containers.terminationMessagePath",
+    "spec.jobTemplate.spec.template.spec.containers.terminationMessagePolicy",
+    // A Pod
+    "spec.dnsPolicy",
+    "spec.restartPolicy",
+    "spec.schedulerName",
+    "spec.terminationGracePeriodSeconds",
+    "spec.containers.imagePullPolicy",
+    "spec.containers.terminationMessagePath",
+    "spec.containers.terminationMessagePolicy",
 ];
 
 /// A kind the API serves: where its objects live and what they are called.
@@ -255,6 +289,20 @@ pub fn derive(doc: &Json, aliases: &[(String, String)]) -> Result<Derived> {
 pub fn snapshot() -> Result<Derived> {
     let doc: Json = serde_json::from_str(SNAPSHOT).context("parse the OpenAPI snapshot")?;
     derive(&doc, &aliases()?)
+}
+
+/// Whether a property's `default` is one the server applies: not the zero
+/// value (`""`, `0`, `false`, `{}`, `[]`), which the generator writes for
+/// every field Go serializes even when empty (a container's `name`).
+fn server_default(v: &Json) -> bool {
+    match v {
+        Json::Null => false,
+        Json::Bool(b) => *b,
+        Json::Number(n) => n.as_f64() != Some(0.0),
+        Json::String(s) => !s.is_empty(),
+        Json::Array(xs) => !xs.is_empty(),
+        Json::Object(m) => !m.is_empty(),
+    }
 }
 
 fn sym(s: &str) -> Term {
@@ -438,14 +486,19 @@ impl<'a> Walk<'a> {
                 self.attrs.push((
                     p.to_string(),
                     "any",
-                    self.flags(p, ctx, required, self.get(node, "default").is_some()),
+                    self.flags(
+                        p,
+                        ctx,
+                        required,
+                        self.get(node, "default").is_some_and(server_default),
+                    ),
                 ));
                 return;
             }
             stack.push(n);
         }
         let ty = self.ty(node);
-        let defaulted = self.get(node, "default").is_some() && ty != "object";
+        let defaulted = self.get(node, "default").is_some_and(server_default) && ty != "object";
         // A computed value is minted per path, so computed paths do not
         // nest: an object the server writes is its leaves.
         if !(ctx.computed && ty == "object") {
@@ -573,9 +626,29 @@ mod tests {
             (svc, "spec.type"),
             (dep, "spec.strategy.type"),
             (dep, "spec.template.spec.containers.imagePullPolicy"),
+            // The snapshot's own `default`s.
+            (svc, "spec.ports.protocol"),
+            (dep, "spec.template.spec.containers.ports.protocol"),
+            ("k8s.batch.v1.cron_job", "spec.concurrencyPolicy"),
+            (
+                "k8s.batch.v1.cron_job",
+                "spec.jobTemplate.spec.template.spec.restartPolicy",
+            ),
+            (
+                "k8s.batch.v1.cron_job",
+                "spec.jobTemplate.spec.template.spec.containers.imagePullPolicy",
+            ),
+            ("k8s.apps.v1.stateful_set", "spec.updateStrategy.type"),
+            ("k8s.apps.v1.stateful_set", "spec.podManagementPolicy"),
+            ("k8s.apps.v1.daemon_set", "spec.updateStrategy.type"),
+            ("k8s.batch.v1.job", "spec.backoffLimit"),
         ] {
             assert!(s.attr(t, p).unwrap().has("optional_computed"), "{t} {p}");
         }
+        // A zero-value default is the generator's, not the server's: a
+        // container's name stays required.
+        let name = s.attr(dep, "spec.template.spec.containers.name").unwrap();
+        assert!(name.has("required") && !name.has("optional_computed"));
         assert!(
             !s.attr(dep, "spec.strategy")
                 .unwrap()
@@ -593,12 +666,14 @@ mod tests {
                 "properties": {"spec": {"type": "object", "properties": {
                     "mode": {"type": "string", "default": "fast"},
                     "size": {"type": "integer"},
+                    "count": {"type": "integer", "default": 0},
                     "opts": {"type": "object", "default": {},
                              "properties": {"a": {"type": "string"}}}}}}}}}}}});
         let s = derive(&doc, &[]).unwrap().schema;
         let t = "k8s.x.io.v1.thing";
         assert!(s.attr(t, "spec.mode").unwrap().has("optional_computed"));
         assert!(!s.attr(t, "spec.size").unwrap().has("optional_computed"));
+        assert!(!s.attr(t, "spec.count").unwrap().has("optional_computed"));
         assert!(!s.attr(t, "spec.opts").unwrap().has("optional_computed"));
     }
 }

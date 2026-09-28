@@ -8,7 +8,8 @@ one per group-version). Output: the shape the provider caches a cluster's
 `/openapi/v3` in, `{"paths": {"apis/apps/v1": DOC, ...}}`, trimmed to the
 kinds below: each document keeps the `{name}` path of each kind (its patch
 operation's group-version-kind only) and the component schemas those kinds
-reach, without descriptions or defaults.
+reach, without descriptions. A property's `default` stays: the provider
+derives a defaulted leaf as optional_computed from it.
 
     python3 providers/k8s/trim_openapi.py DIR v1.36.0 > providers/k8s/openapi-snapshot.json
 """
@@ -29,7 +30,7 @@ KINDS = {
                                           "ClusterRoleBinding"],
 }
 
-DROP = {"description", "default", "uniqueItems", "x-kubernetes-patch-strategy",
+DROP = {"description", "uniqueItems", "x-kubernetes-patch-strategy",
         "x-kubernetes-patch-merge-key"}
 
 
