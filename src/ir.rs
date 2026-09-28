@@ -29,16 +29,16 @@ pub struct Adopt {
 ///
 /// `assemble` of E §2.8 as F DR-11 revises it: the document excludes every
 /// schema-computed path (the provider owns it; its value lives in the world's
-/// `computed`), an Optional+Computed path the program left to the provider
-/// (its value is still the resource's own null), and every
-/// `ignore_changes(T, A, P)` path.
+/// `computed`) and an Optional+Computed path the program left to the provider
+/// (its value is still the resource's own null). An `ignore_changes(T, A, P)`
+/// path stays: a create sets it; the planner drops it from both sides of an
+/// object that exists.
 pub fn compile_resources(
     facts: impl IntoIterator<Item = Atom>,
     schema: &Schema,
 ) -> Result<Vec<Resource>> {
     let mut by_addr: BTreeMap<Address, BTreeMap<String, Value>> = BTreeMap::new();
     let mut attrs: Vec<(Address, String, Value)> = Vec::new();
-    let mut ignored: Vec<(Address, String)> = Vec::new();
     let mut ref_deps: Vec<(Address, Address)> = Vec::new();
     for f in facts {
         match (f.pred.as_str(), f.args.len()) {
@@ -50,12 +50,6 @@ pub fn compile_resources(
                     })
                 };
                 ref_deps.push((addr(0)?, addr(2)?));
-            }
-            ("ignore_changes", 3) => {
-                let typ = as_str_val(&f.args[0])?.to_string();
-                let name = as_str_val(&f.args[1])?.to_string();
-                let path = as_str_val(&f.args[2])?.to_string();
-                ignored.push((Address { typ, name }, path));
             }
             ("want", 2) => {
                 let typ = as_str_val(&f.args[0])?.to_string();
@@ -91,11 +85,6 @@ pub fn compile_resources(
             );
         };
         root.insert(path, value);
-    }
-    for (addr, path) in ignored {
-        if let Some(root) = by_addr.get_mut(&addr) {
-            remove_path(root, &path);
-        }
     }
 
     let mut extra_deps: BTreeMap<Address, BTreeSet<Address>> = BTreeMap::new();

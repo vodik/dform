@@ -191,3 +191,61 @@ deny("databases must be protected", {addr: A}) :-
     );
     dform(&s, &["plan"]).success();
 }
+
+/// ignore_changes ignores changes to an object that exists: a create sets
+/// the path, and a later change to it in the program is not a change.
+#[test]
+fn ignore_changes_still_sets_the_path_on_create() {
+    let s = Scratch::new("ignore-changes-create");
+    let prog = |owner: &str| {
+        format!(
+            "resource net.vpc main {{ cidr = \"10.0.0.0/16\", tags = {{ owner: \"{owner}\" }} }}.\n\
+             ignore_changes(net.vpc, main, \"tags.owner\").\n"
+        )
+    };
+    s.write("p.df", &prog("ops"));
+    let r = dform(&s, &["plan"]).success();
+    assert!(
+        r.stdout
+            .contains("+ net.vpc.main\n  cidr = \"10.0.0.0/16\"\n  tags.owner = \"ops\"\n"),
+        "{}",
+        r.stdout
+    );
+    dform(&s, &["apply"]).success();
+    assert_eq!(
+        world(&s)["resources"]["net.vpc::main"]["attrs"]["tags"]["owner"],
+        "ops"
+    );
+    s.write("p.df", &prog("dev"));
+    let r = dform(&s, &["plan"]).success();
+    assert_eq!(r.stdout, "stack p is undeformed\n");
+}
+
+/// An update does not set an ignored path the world does not have.
+#[test]
+fn ignore_changes_update_leaves_an_absent_path_absent() {
+    let s = Scratch::new("ignore-changes-absent");
+    s.write(
+        "p.df",
+        "resource net.vpc main { cidr = \"10.0.0.0/16\", size = 1 }.\n",
+    );
+    dform(&s, &["apply"]).success();
+    s.write(
+        "p.df",
+        "resource net.vpc main { cidr = \"10.0.0.0/16\", size = 2, tags = { owner: \"ops\" } }.\n\
+         ignore_changes(net.vpc, main, \"tags.owner\").\n",
+    );
+    let r = dform(&s, &["apply"]).success();
+    assert!(
+        r.stdout.contains("~ net.vpc.main\n  size: 1 -> 2\n"),
+        "{}",
+        r.stdout
+    );
+    assert!(
+        world(&s)["resources"]["net.vpc::main"]["attrs"]
+            .get("tags")
+            .is_none(),
+        "{}",
+        s.read("w.json")
+    );
+}

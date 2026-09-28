@@ -223,15 +223,16 @@ Lifecycle is plain facts the planner reads (and policy can read too):
 lifecycle(net.vpc, main, prevent_destroy).        % a delete or replace of it is a deny
 lifecycle(net.vpc, main, create_before_destroy).  % replace creates first (type_replace either)
 moved(net.vpc, "network.main::vpc", "network.core::vpc").  % rename without destroy
-ignore_changes(net.vpc, main, "tags.owner").      % dropped from both sides
+ignore_changes(net.vpc, main, "tags.owner").      % set on create, then ignored
 ```
 
 `moved(T, Old, New)` rewrites state's identity from `Old` to `New` before the
 diff, so renaming a component instance with a `moved` fact per resource plans
 undeformed (`moved T.Old -> T.New` is printed; `apply` persists it). It applies
 only while state maps `Old` and not `New`, so the facts can stay.
-`ignore_changes` drops the path from the desired document and from the
-world's, and an update keeps the world's value there. `prevent_destroy`
+`ignore_changes` leaves the path in a create; once the object exists it
+drops the path from the desired document and from the world's, and an
+update keeps the world's value there (or its absence). `prevent_destroy`
 blocks `plan` and `apply` with `lifecycle prevent_destroy: the plan would
 delete T.A`.
 

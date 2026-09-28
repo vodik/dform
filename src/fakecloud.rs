@@ -593,11 +593,13 @@ impl FakeCloud {
                     Some(d) => self.world_doc(&addr.typ, cur, d),
                     None => cur.attrs.clone(),
                 };
-                // ignore_changes: dropped from both sides (the desired
-                // side by `ir::compile_resources`).
-                if resolved.contains_key(&addr) {
+                // ignore_changes: an object that exists ignores changes at
+                // the path, so it is dropped from both sides. A create (no
+                // world side) sets it.
+                if let Some(want) = resolved.get_mut(&addr) {
                     for p in lifecycle.ignore_changes.get(&addr).into_iter().flatten() {
                         remove_path(&mut doc, p);
+                        remove_path(want, p);
                     }
                 }
                 before.insert(addr, doc);
@@ -1131,7 +1133,8 @@ impl Tick<'_> {
                 let mut doc = doc;
                 let computed = match self.world.resources.get(&k) {
                     Some(cur) => {
-                        // ignore_changes: the world keeps its value.
+                        // ignore_changes: the world keeps its value, or its
+                        // absence.
                         for p in self
                             .lifecycle
                             .ignore_changes
@@ -1139,8 +1142,9 @@ impl Tick<'_> {
                             .into_iter()
                             .flatten()
                         {
-                            if let Some(v) = get_path(&cur.attrs, p) {
-                                set_path(&mut doc, p, v.clone());
+                            match get_path(&cur.attrs, p) {
+                                Some(v) => set_path(&mut doc, p, v.clone()),
+                                None => remove_path(&mut doc, p),
                             }
                         }
                         cur.computed.clone()
