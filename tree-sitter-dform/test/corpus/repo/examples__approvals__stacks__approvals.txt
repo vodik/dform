@@ -1,0 +1,153 @@
+======================================
+examples/approvals/stacks/approvals.df
+======================================
+
+# README "Approvals": policy says which deformations need an approval, and
+# apply verifies a signed approval of the plan's digest before its first
+# Apply call. A replace in prod needs one:
+#
+#   cargo run -q -p dform-direct --bin dform-approve -- keygen approver.key > approvers.jwks.json
+#   cargo run -- --root . --file stacks/approvals.df apply --set env=prod
+#   cargo run -- --root . --file stacks/approvals.df plan --set env=prod --set cidr=10.1.0.0/16 --out plan.json
+#   cargo run -q -p dform-direct --bin dform-approve -- sign approver.key \
+#     --digest sha256:... --stack approvals.demo --key env=prod --approver alice > approval.json
+#   cargo run -- apply plan.json --approval approval.json
+
+edition 2026
+
+stack approvals.demo[env] {
+  # Whose signatures approve a plan: a JWKS document (`jwks("https://...")`
+  # is fetched at apply time and cached beside the state).
+  approvals = jwks_file("../approvers.jwks.json")
+}
+
+input env: enum("staging", "prod") = "staging"
+input cidr: string = "10.0.0.0/16"
+
+resource net.vpc main {
+  cidr = cidr
+}
+
+# In prod, replacing anything needs an approval.
+requires_approval(d, "a replace in prod") if {
+  env == "prod"
+  deformation("replace", t, a, _)
+  d = "{t}.{a}"
+}
+
+# Optional: who may approve what. Without it, any key in the trust root may.
+approver_allowed(who, d) if {
+  requires_approval(d, _)
+  who in ["alice", "bob"]
+}
+
+---
+
+(source_file
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (edition
+    (integer))
+  (stack
+    (dotted_name
+      (identifier)
+      (identifier))
+    (identifier)
+    (block
+      (comment)
+      (comment)
+      (field
+        (block_path
+          (identifier))
+        (call
+          (identifier)
+          (arguments
+            (string
+              (string_content)))))))
+  (input
+    (identifier)
+    (type
+      (dotted_name
+        (identifier))
+      (string
+        (string_content))
+      (string
+        (string_content)))
+    (string
+      (string_content)))
+  (input
+    (identifier)
+    (type
+      (dotted_name
+        (identifier)))
+    (string
+      (string_content)))
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (identifier))))
+  (comment)
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)
+        (string
+          (string_content))))
+    (body_block
+      (comparison
+        (identifier)
+        (string
+          (string_content)))
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (string
+              (string_content))
+            (identifier)
+            (identifier)
+            (identifier))))
+      (comparison
+        (identifier)
+        (string
+          (interpolation
+            (identifier))
+          (string_content)
+          (interpolation
+            (identifier))))))
+  (comment)
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)
+        (identifier)))
+    (body_block
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier)
+            (identifier))))
+      (in_literal
+        (identifier)
+        (list
+          (string
+            (string_content))
+          (string
+            (string_content)))))))

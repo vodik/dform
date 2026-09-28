@@ -5,8 +5,8 @@ tests/syntax/ok/constructs.df
 edition 2026
 
 # One of everything the grammar lowers today.
-import "../../../modules/stdlib_net.df"
-import "../../../modules/iam.df"
+import "../../../examples/demo/modules/stdlib_net.df"
+import "../../../examples/demo/modules/iam.df"
 
 decl provided/2
 input relation seen/2 from file("seen.facts")

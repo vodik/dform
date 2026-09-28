@@ -1,0 +1,386 @@
+======================================
+examples/bootstrap/stacks/bootstrap.df
+======================================
+
+# The bootstrap stack of the demo (README "Bootstrap and handover"): it
+# creates the cluster and installs dform in it as a controller, in three
+# ticks, and stays batch: the controller refuses a `role = bootstrap` stack.
+#
+#   cargo run -- --root examples/bootstrap --file examples/bootstrap/stacks/bootstrap.df apply
+#   cargo run -- --root examples/bootstrap stack handover renfry.workload --to 'k8s("dform-system/workload")'
+#   cargo run -- --root examples/bootstrap --file examples/bootstrap/stacks/workload.df controller --stack renfry.workload
+#
+# Tick 1: the network, the subnetwork and the cluster. The node pools are a
+# pending group: one per zone, and the zones are the cluster's. Tick 2: the
+# node pools and the namespace (the kubernetes provider is configured from
+# the cluster's endpoint and CA). Tick 3: the dform-controller Deployment,
+# which waits for its node pool to be up.
+
+edition 2026
+
+stack renfry.bootstrap {
+  role = "bootstrap"
+}
+
+provider gcp {
+  source = "../providers/gcp"
+}
+provider k8s {}
+
+resource google_compute_network vpc {
+  name = "renfry-vpc"
+  auto_create_subnetworks = false
+}
+
+resource google_compute_subnetwork gke {
+  name = "renfry-gke"
+  region = "us-east1"
+  network = vpc.id
+  ip_cidr_range = "10.141.76.0/22"
+}
+
+resource gke_cluster renfry {
+  name = "renfry-gke"
+  network = vpc.id
+  subnetwork = gke.id
+  node_locations = ["us-east1-b", "us-east1-c"]
+}
+
+# One node pool per zone the cluster lands in.
+resource gke_nodepool "np-{z}" {
+  for z in renfry.zones
+  cluster = renfry.id
+  zone = z
+  node_count = 1
+}
+
+provider_config("kubernetes", {
+  host: renfry.endpoint,
+  ca: renfry.ca_certificate
+})
+
+resource k8s.namespace dform_system {
+  metadata.name = "dform-system"
+}
+
+# A node pool is up once it has an instance group. Apply gives it, so the
+# comparison is decided the tick after the pool is created.
+node_pool_up(np) if gke_nodepool[np].instance_group != ""
+
+# dform in the cluster, running the workload stack: it lands on the first
+# zone's node pool once that pool is up. Until then the rule may derive
+# after the boundary, and the plan holds it as a pending group.
+resource k8s.deployment dform_controller {
+  if pool = "np-{renfry.zones[0]}", node_pool_up(pool)
+  metadata.name = "dform-controller"
+  metadata.namespace = dform_system.metadata.name
+  metadata.annotations = { "dform.io/node-pool": gke_nodepool[pool].instance_group }
+  spec.replicas = 1
+  spec.selector.matchLabels = { app: "dform-controller" }
+  spec.template.metadata.labels = { app: "dform-controller" }
+  spec.template.spec.containers = [{
+    name: "dform",
+    image: "ghcr.io/renfry/dform:0.8",
+    args: ["controller", "--stack", "renfry.workload", "--file", "stacks/workload.df"]
+  }]
+}
+
+output endpoint = renfry.endpoint
+
+---
+
+(source_file
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (edition
+    (integer))
+  (stack
+    (dotted_name
+      (identifier)
+      (identifier))
+    (block
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))))
+  (provider
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))))
+  (provider
+    (identifier)
+    (block))
+  (resource
+    (dotted_name
+      (identifier))
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))
+      (field
+        (block_path
+          (identifier))
+        (false))))
+  (resource
+    (dotted_name
+      (identifier))
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))
+      (field
+        (block_path
+          (identifier))
+        (member_expression
+          (identifier)
+          (identifier)))
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))))
+  (resource
+    (dotted_name
+      (identifier))
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))
+      (field
+        (block_path
+          (identifier))
+        (member_expression
+          (identifier)
+          (identifier)))
+      (field
+        (block_path
+          (identifier))
+        (member_expression
+          (identifier)
+          (identifier)))
+      (field
+        (block_path
+          (identifier))
+        (list
+          (string
+            (string_content))
+          (string
+            (string_content))))))
+  (comment)
+  (resource
+    (dotted_name
+      (identifier))
+    (string
+      (string_content)
+      (interpolation
+        (identifier)))
+    (block
+      (clause
+        (body
+          (in_literal
+            (identifier)
+            (member_expression
+              (identifier)
+              (identifier)))))
+      (field
+        (block_path
+          (identifier))
+        (member_expression
+          (identifier)
+          (identifier)))
+      (field
+        (block_path
+          (identifier))
+        (identifier))
+      (field
+        (block_path
+          (identifier))
+        (integer))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (object
+          (object_field
+            (identifier)
+            (member_expression
+              (identifier)
+              (identifier)))
+          (object_field
+            (identifier)
+            (member_expression
+              (identifier)
+              (identifier)))))))
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier)
+          (identifier))
+        (string
+          (string_content)))))
+  (comment)
+  (comment)
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)))
+    (body
+      (comparison
+        (member_expression
+          (index_expression
+            (identifier)
+            (identifier))
+          (identifier))
+        (string))))
+  (comment)
+  (comment)
+  (comment)
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (identifier)
+    (block
+      (clause
+        (body
+          (comparison
+            (identifier)
+            (string
+              (string_content)
+              (interpolation
+                (index_expression
+                  (member_expression
+                    (identifier)
+                    (identifier))
+                  (integer)))))
+          (atom_literal
+            (call
+              (identifier)
+              (arguments
+                (identifier))))))
+      (field
+        (block_path
+          (identifier)
+          (identifier))
+        (string
+          (string_content)))
+      (field
+        (block_path
+          (identifier)
+          (identifier))
+        (member_expression
+          (member_expression
+            (identifier)
+            (identifier))
+          (identifier)))
+      (field
+        (block_path
+          (identifier)
+          (identifier))
+        (object
+          (object_field
+            (string
+              (string_content))
+            (member_expression
+              (index_expression
+                (identifier)
+                (identifier))
+              (identifier)))))
+      (field
+        (block_path
+          (identifier)
+          (identifier))
+        (integer))
+      (field
+        (block_path
+          (identifier)
+          (identifier)
+          (identifier))
+        (object
+          (object_field
+            (identifier)
+            (string
+              (string_content)))))
+      (field
+        (block_path
+          (identifier)
+          (identifier)
+          (identifier)
+          (identifier))
+        (object
+          (object_field
+            (identifier)
+            (string
+              (string_content)))))
+      (field
+        (block_path
+          (identifier)
+          (identifier)
+          (identifier)
+          (identifier))
+        (list
+          (object
+            (object_field
+              (identifier)
+              (string
+                (string_content)))
+            (object_field
+              (identifier)
+              (string
+                (string_content)))
+            (object_field
+              (identifier)
+              (list
+                (string
+                  (string_content))
+                (string
+                  (string_content))
+                (string
+                  (string_content))
+                (string
+                  (string_content))
+                (string
+                  (string_content)))))))))
+  (output
+    (identifier)
+    (member_expression
+      (identifier)
+      (identifier))))

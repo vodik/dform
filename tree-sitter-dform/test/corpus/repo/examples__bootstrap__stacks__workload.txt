@@ -1,0 +1,359 @@
+=====================================
+examples/bootstrap/stacks/workload.df
+=====================================
+
+# The workload stack of the bootstrap demo (README "Controller mode"): a
+# namespace, a deployment and a service on the mock Kubernetes provider,
+# whose image comes from an input relation. After `dform stack handover`
+# the dform-controller Deployment that bootstrap.df installs runs it:
+#
+#   cargo run -- --root examples/bootstrap --file examples/bootstrap/stacks/workload.df controller --stack renfry.workload
+#
+# Edit data/release.facts and the controller deploys it; edit the world and
+# the replicas drift is corrected, the image drift is held for approval.
+# In prod a rollout waits for a signed approval of the plan's digest
+# (README "Approvals"): the controller publishes the digest in
+# approval-pending.json beside the state, and a token for it, from the
+# example signer, releases it:
+#
+#   cargo run -q -p dform-direct --bin dform-approve -- sign approver.key \
+#     --digest sha256:... --stack renfry.workload --approver alice --format fact >> data/approvals.facts
+
+edition 2026
+
+stack renfry.workload {
+  # Whose signatures approve a plan: `dform-approve keygen approver.key`
+  # prints this JWKS.
+  approvals = jwks_file("../approvers.jwks.json")
+}
+
+provider k8s {}
+
+# The release to run, `release(image)`; re-read whenever the file changes.
+input relation release/1 from file("../data/release.facts")
+# `approve(t, a)`: accept the drift of t.a, correcting it.
+input relation approve/2 from file("../data/approvals.facts")
+# `approval(token)`: a signed approval of a plan's digest.
+input relation approval/1 from file("../data/approvals.facts")
+
+input env: enum("dev", "prod") = "dev"
+
+resource k8s.namespace web {
+  metadata.name = "web"
+}
+
+resource k8s.deployment web {
+  for release(image)
+  metadata.name = "web"
+  metadata.namespace = k8s.namespace.web.metadata.name
+  spec.replicas = 3
+  spec.selector.matchLabels = { app: "web" }
+  spec.template.metadata.labels = { app: "web" }
+  spec.template.spec.containers = [{
+    name: "web",
+    image: image,
+    ports: [{ containerPort: 8080, protocol: "TCP" }]
+  }]
+}
+
+resource k8s.service web {
+  metadata.name = "web"
+  metadata.namespace = k8s.namespace.web.metadata.name
+  spec.selector = { app: "web" }
+  spec.ports = [{ port: 80, targetPort: "8080", protocol: "TCP" }]
+}
+
+# Replicas are the autoscaler's business on the way back: a drift there is
+# corrected without asking. Any other drift waits for `approve`.
+auto_reconcile(t, a, p) if drift(t, a, p, _, _), p == "spec.replicas"
+
+# In prod a rollout needs an approval: the controller holds it until a
+# token for the plan's digest arrives.
+requires_approval(d, "a prod rollout") if {
+  env == "prod"
+  deformation(k, k8s.deployment, a, _)
+  k != "delete"
+  d = "k8s.deployment.{a}"
+}
+
+---
+
+(source_file
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (edition
+    (integer))
+  (stack
+    (dotted_name
+      (identifier)
+      (identifier))
+    (block
+      (comment)
+      (comment)
+      (field
+        (block_path
+          (identifier))
+        (call
+          (identifier)
+          (arguments
+            (string
+              (string_content)))))))
+  (provider
+    (identifier)
+    (block))
+  (comment)
+  (input_relation
+    (identifier)
+    (integer)
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content)))))
+  (comment)
+  (input_relation
+    (identifier)
+    (integer)
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content)))))
+  (comment)
+  (input_relation
+    (identifier)
+    (integer)
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content)))))
+  (input
+    (identifier)
+    (type
+      (dotted_name
+        (identifier))
+      (string
+        (string_content))
+      (string
+        (string_content)))
+    (string
+      (string_content)))
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier)
+          (identifier))
+        (string
+          (string_content)))))
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (identifier)
+    (block
+      (clause
+        (body
+          (atom_literal
+            (call
+              (identifier)
+              (arguments
+                (identifier))))))
+      (field
+        (block_path
+          (identifier)
+          (identifier))
+        (string
+          (string_content)))
+      (field
+        (block_path
+          (identifier)
+          (identifier))
+        (member_expression
+          (member_expression
+            (member_expression
+              (member_expression
+                (identifier)
+                (identifier))
+              (identifier))
+            (identifier))
+          (identifier)))
+      (field
+        (block_path
+          (identifier)
+          (identifier))
+        (integer))
+      (field
+        (block_path
+          (identifier)
+          (identifier)
+          (identifier))
+        (object
+          (object_field
+            (identifier)
+            (string
+              (string_content)))))
+      (field
+        (block_path
+          (identifier)
+          (identifier)
+          (identifier)
+          (identifier))
+        (object
+          (object_field
+            (identifier)
+            (string
+              (string_content)))))
+      (field
+        (block_path
+          (identifier)
+          (identifier)
+          (identifier)
+          (identifier))
+        (list
+          (object
+            (object_field
+              (identifier)
+              (string
+                (string_content)))
+            (object_field
+              (identifier)
+              (identifier))
+            (object_field
+              (identifier)
+              (list
+                (object
+                  (object_field
+                    (identifier)
+                    (integer))
+                  (object_field
+                    (identifier)
+                    (string
+                      (string_content)))))))))))
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier)
+          (identifier))
+        (string
+          (string_content)))
+      (field
+        (block_path
+          (identifier)
+          (identifier))
+        (member_expression
+          (member_expression
+            (member_expression
+              (member_expression
+                (identifier)
+                (identifier))
+              (identifier))
+            (identifier))
+          (identifier)))
+      (field
+        (block_path
+          (identifier)
+          (identifier))
+        (object
+          (object_field
+            (identifier)
+            (string
+              (string_content)))))
+      (field
+        (block_path
+          (identifier)
+          (identifier))
+        (list
+          (object
+            (object_field
+              (identifier)
+              (integer))
+            (object_field
+              (identifier)
+              (string
+                (string_content)))
+            (object_field
+              (identifier)
+              (string
+                (string_content))))))))
+  (comment)
+  (comment)
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)
+        (identifier)
+        (identifier)))
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier)
+            (identifier)
+            (identifier)
+            (identifier)
+            (identifier))))
+      (comparison
+        (identifier)
+        (string
+          (string_content)))))
+  (comment)
+  (comment)
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)
+        (string
+          (string_content))))
+    (body_block
+      (comparison
+        (identifier)
+        (string
+          (string_content)))
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier)
+            (member_expression
+              (identifier)
+              (identifier))
+            (identifier)
+            (identifier))))
+      (comparison
+        (identifier)
+        (string
+          (string_content)))
+      (comparison
+        (identifier)
+        (string
+          (string_content)
+          (interpolation
+            (identifier)))))))

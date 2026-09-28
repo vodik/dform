@@ -1,0 +1,98 @@
+=======================================================
+tests/fixtures/adversarial/adv4_variable_path_writer.df
+=======================================================
+
+# adv4: a variable-path writer (arg, *, *) that also reads an attribute.
+# E: "a policy that writes variable type and path reads no attribute".
+# This one does, so it must be rejected.
+
+edition 2026
+
+override(net.vpc, "main", .tags, { team: "x" })
+
+resource net.vpc main {
+  cidr = inet("10.0.0.0/16")
+  tags = { env: "dev" }
+}
+
+arg(t, n, p, v) if
+  override(t, n, p, v),
+  want(t, n),
+  arg(t, n, .cidr, _c)
+
+---
+
+(source_file
+  (comment)
+  (comment)
+  (comment)
+  (edition
+    (integer))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (keypath)
+        (object
+          (object_field
+            (identifier)
+            (string
+              (string_content)))))))
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (call
+          (identifier)
+          (arguments
+            (string
+              (string_content)))))
+      (field
+        (block_path
+          (identifier))
+        (object
+          (object_field
+            (identifier)
+            (string
+              (string_content)))))))
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)
+        (identifier)
+        (identifier)
+        (identifier)))
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier)
+            (identifier)
+            (identifier)
+            (identifier))))
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier)
+            (identifier))))
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier)
+            (identifier)
+            (keypath)
+            (identifier)))))))

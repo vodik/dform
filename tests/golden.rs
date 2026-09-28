@@ -1,12 +1,12 @@
 //! Golden (snapshot) tests: pin `plan` and `strata` output per example
 //! program. See tests/golden/README.md for the accept workflow.
 //!
-//! Cases: the five example programs (dform.df across envs, dform-advanced.df,
-//! pngu.df across envs, examples/decl/stacks/decl_demo.df, examples/adopt/stacks/adopt_demo.df with
-//! the discovery inventory), the nine tests/fixtures/adversarial/*.df programs, and
-//! examples/k8s/stacks/k8s_demo.df / examples/aws/stacks/aws_demo.df. Each runs against a fresh
-//! (empty) world, and dform.df additionally against the tests/fixtures/world/
-//! fixture. A case that errors (a rejected stratification, a blocked
+//! Cases: the example projects' stacks (examples/demo across envs,
+//! examples/advanced, examples/pngu across envs, examples/decl,
+//! examples/adopt with the discovery inventory, examples/k8s and
+//! examples/aws), and the nine tests/fixtures/adversarial/*.df programs.
+//! Each runs against a fresh (empty) world, and the demo additionally
+//! against the tests/fixtures/world/ fixture. A case that errors (a rejected stratification, a blocked
 //! constraint) still gets a snapshot: its stdout+stderr+exit status, pinned
 //! like any other output.
 

@@ -1,0 +1,139 @@
+========================================
+tests/fixtures/providers/leaky/schema.df
+========================================
+
+# Mock schema for tests/secrets.rs, the never-prints-a-secret test.
+#
+# Two resource types differ only in whether `password` -- a value the
+# PROGRAM sets directly, not a provider-minted computed one -- carries the
+# schema's `sensitive` flag:
+#
+#   leaky.vault: password is [sensitive]           (labeled correctly)
+#   leaky.oops:  password has no flags              (mislabeled: public)
+#
+# The never-prints test drives a program through both and checks every
+# place dform prints or stores a resource's attributes. The static secret
+# pass refuses a rule that copies vault's password into oops's (E0304);
+# vault's `backup` is where a rule may forward it.
+
+edition 2026
+
+type_provider(leaky.vault, "fakecloud")
+type_provider(leaky.oops, "fakecloud")
+
+type_attr(leaky.vault, "id", "string", ["computed", "id"])
+type_attr(leaky.vault, "password", "string", ["sensitive"])
+type_attr(leaky.vault, "backup", "string", ["sensitive"]) # a second place a secret may go
+
+type_attr(leaky.oops, "id", "string", ["computed", "id"])
+type_attr(leaky.oops, "password", "string", [])
+
+---
+
+(source_file
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (edition
+    (integer))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list
+          (string
+            (string_content))
+          (string
+            (string_content))))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list
+          (string
+            (string_content))))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list
+          (string
+            (string_content))))))
+  (comment)
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list
+          (string
+            (string_content))
+          (string
+            (string_content))))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list)))))

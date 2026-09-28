@@ -1,0 +1,72 @@
+========================================================
+tests/fixtures/adversarial/adv7_mutual_recursion_attr.df
+========================================================
+
+# adv7: mutual recursion through attr between two types. A's field is read
+# from B's, B's from A's. A real cycle; must be rejected.
+
+edition 2026
+
+resource net.a x {
+  for arg(net.b, "y", .name, p)
+  peer = p
+}
+
+resource net.b y {
+  for arg(net.a, "x", .peer, q)
+  name = q
+}
+
+---
+
+(source_file
+  (comment)
+  (comment)
+  (edition
+    (integer))
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (identifier)
+    (block
+      (clause
+        (body
+          (atom_literal
+            (call
+              (identifier)
+              (arguments
+                (member_expression
+                  (identifier)
+                  (identifier))
+                (string
+                  (string_content))
+                (keypath)
+                (identifier))))))
+      (field
+        (block_path
+          (identifier))
+        (identifier))))
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (identifier)
+    (block
+      (clause
+        (body
+          (atom_literal
+            (call
+              (identifier)
+              (arguments
+                (member_expression
+                  (identifier)
+                  (identifier))
+                (string
+                  (string_content))
+                (keypath)
+                (identifier))))))
+      (field
+        (block_path
+          (identifier))
+        (identifier)))))

@@ -1,7 +1,7 @@
 // Regenerates test/corpus/repo/: one test per file the compiler reads (every
-// .df at the repository's top level and under modules/, policies/,
-// examples/ and providers/, and tests/syntax/ok/*.df, as
-// tests/treesit_agreement.rs walks them). The expected trees are left
+// .df at the repository's top level and under examples/,
+// crates/dform-mock/schemas/ and tests/fixtures/, and tests/syntax/ok/*.df,
+// as tests/treesit_agreement.rs walks them). The expected trees are left
 // empty; `tree-sitter test --update` fills them in. Run from
 // tree-sitter-dform/: `npm run corpus` (or `node scripts/corpus-from-repo.js`).
 

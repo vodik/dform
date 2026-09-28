@@ -38,13 +38,14 @@ nodes it runs on. The app stack reads what it needs from the infra stack's
 outputs, and nothing flows the other way.
 
 #+begin_example
-repo/
-  infra.df            the ovh.infra[env] stack
-  app.df              the shop.app[env] stack
-  modules/app.df      the app, as a module
-  policies/ovh.df     change-management policy for both stacks
-  config/prod.yaml    per-env configuration rows (data tables ticket)
-  providers/ovh/      the bridged schema, as facts
+repo/                              a project (docs/layout.md)
+  dform.toml                       its root
+  stacks/infra.df                  the ovh.infra[env] stack
+  stacks/app.df                    the shop.app[env] stack
+  modules/app.df                   the app, as a module
+  policies/ovh.df                  change-management policy for both stacks
+  config/ovh.infra/prod.yaml       per-env configuration rows (data tables ticket)
+  providers/ovh/                   the bridged schema, as facts
 #+end_example
 
 * Part 1: what the OVH schema has to say
@@ -97,10 +98,10 @@ type_retry(ovh.cloud_project_kube_nodepool, 30)
 * Part 2: the infrastructure
 
 #+begin_src dform
-# infra.df: the network, the cluster, the database, and the controller.
+# stacks/infra.df: the network, the cluster, the database, and the controller.
 #
-#   dform --file infra.df plan --set env=prod
-#   dform --file infra.df apply --set env=prod     (from CI, never from the cluster)
+#   dform --file stacks/infra.df plan --set env=prod
+#   dform --file stacks/infra.df apply --set env=prod     (from CI, never from the cluster)
 
 edition 2026
 
@@ -110,15 +111,15 @@ stack ovh.infra[env] {
   backend = s3("dform-state", "infra/{env}", endpoint: "https://s3.gra.io.cloud.ovh.net")   # not implemented
 }
 
-provider ovh { source = "providers/ovh" }             # the bridge; not implemented
+provider ovh { source = "../providers/ovh" }          # the bridge; not implemented
 provider k8s {}
 
 input env: enum("dev", "prod") = "dev"
 input project: string                                 # the OVH Public Cloud project id
 
-# Per-env rows: config/dev.yaml and config/prod.yaml (data tables ticket).
+# Per-env rows: config/ovh.infra/dev.yaml and prod.yaml (data tables ticket).
 input relation pool(name: string, flavor: string, min: int, max: int, generation: int)
-  from yaml("config/{env}.yaml")
+  from yaml("../config/ovh.infra/{env}.yaml")
 
 settings dev  @default { region = "GRA9", vlan = 100, cidr = "10.10.0.0/16", kube = "1.31", db_plan = "essential" }
 settings prod @default { region = "GRA9", vlan = 200, cidr = "10.20.0.0/16", kube = "1.31", db_plan = "business" }
@@ -388,7 +389,7 @@ module app {
 #+end_src
 
 #+begin_src dform
-# app.df: run by the controller inside the cluster, one deployment per env.
+# stacks/app.df: run by the controller inside the cluster, one deployment per env.
 
 edition 2026
 
@@ -401,8 +402,8 @@ provider k8s {}          # in the cluster: the pod's service account, no kubecon
 
 input env: enum("dev", "prod") = "dev"
 
-import "modules/app.df"
-import "policies/ovh.df"
+import "../modules/app.df"
+import "../policies/ovh.df"
 apply change_management
 
 # What the infra stack exported for this env.
@@ -586,13 +587,13 @@ as config rows and a generation per row, that is two rules, not an
 executor feature:
 
 #+begin_src yaml
-# config/prod.yaml: the new flavor, one generation up.
+# config/ovh.infra/prod.yaml: the new flavor, one generation up.
 - { name: general, flavor: b3-32, min: 3, max: 12, generation: 2 }
 - { name: batch,   flavor: c3-8,  min: 0, max: 6,  generation: 1 }
 #+end_src
 
 #+begin_src dform
-# infra.df, replacing the nodepool block of Part 2.
+# stacks/infra.df, replacing the nodepool block of Part 2.
 
 # A generation is up when it has at least its minimum of nodes.
 pool_up(n, g) if {
@@ -620,7 +621,7 @@ resource ovh.cloud_project_kube_nodepool "{name}-g{generation}" {
 What the plan and the apply look like:
 
 #+begin_example
-$ dform --file infra.df apply --set env=prod
+$ dform --file stacks/infra.df apply --set env=prod
 tick 1: plan: 1 deformation (1 create), 1 pending
   + ovh.cloud_project_kube_nodepool.general-g2   flavor_name = "b3-32"
   pending group: delete of general-g1, may derive after tick 1 (reads pool_up(general, 2))
@@ -708,8 +709,8 @@ missing approval, or =--max-ticks=.
 #+begin_src sh
 # Review, then apply. Three ticks: network, cluster and database; pools,
 # namespace and state secret; the controller once a pool has nodes.
-dform --file infra.df plan  --set env=dev --set project=$OVH_PROJECT
-dform --file infra.df apply --set env=dev --set project=$OVH_PROJECT
+dform --file stacks/infra.df plan  --set env=dev --set project=$OVH_PROJECT
+dform --file stacks/infra.df apply --set env=dev --set project=$OVH_PROJECT
 
 # If the first apply used a local backend: move the state into the bucket.
 dform stack handover 'ovh.infra[env=dev]' --to 's3("dform-state", "infra/dev")'
@@ -719,9 +720,9 @@ For prod, CI plans on a pull request and applies the saved plan after
 approval, so what was reviewed is what runs:
 
 #+begin_src sh
-dform --file infra.df plan --set env=prod --set project=$OVH_PROJECT --out plan.json
+dform --file stacks/infra.df plan --set env=prod --set project=$OVH_PROJECT --out plan.json
 # ... the approval service shows the plan, collects the checkmark, returns a token ...
-dform --file infra.df apply plan.json --approval token.jws
+dform apply plan.json --approval token.jws
 #+end_src
 
 ** The app: nothing to run
@@ -740,7 +741,7 @@ against the app stack's audit log.
 | deploy a release                    | commit =release.yaml= on =env/<env>= in the deploys repo |
 | approve a prod release              | the approval service drops the token the controller asked for |
 | roll back                           | =git revert= that commit                                |
-| resize pools, upgrade Kubernetes    | edit =config/<env>.yaml=, then the CI plan and apply of =ovh.infra= |
+| resize pools, upgrade Kubernetes    | edit =config/ovh.infra/<env>.yaml=, then the CI plan and apply of =ovh.infra= |
 | replace a pool's flavor             | bump its =generation= in the config (Part 5.3)          |
 | see why something is the way it is  | =dform why ...= against either stack                    |
 | check nothing was tampered with     | =dform log verify=                                      |
