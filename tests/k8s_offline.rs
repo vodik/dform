@@ -462,6 +462,25 @@ impl Api {
                 if q("fieldManager").as_deref() != Some("dform") {
                     return status(400, "BadRequest", "fieldManager is required", json!([]));
                 }
+                // A named target port has a letter, as the server checks:
+                // "8080" is not a port number.
+                if applied["kind"] == "Service"
+                    && let Some(Json::Array(ports)) = applied.pointer("/spec/ports")
+                    && let Some(bad) = ports.iter().find_map(|p| {
+                        p["targetPort"]
+                            .as_str()
+                            .filter(|t| !t.chars().any(|c| c.is_ascii_alphabetic()))
+                    })
+                {
+                    return status(
+                        422,
+                        "Invalid",
+                        &format!(
+                            "spec.ports[0].targetPort: Invalid value: \"{bad}\": must contain at least one letter"
+                        ),
+                        json!([]),
+                    );
+                }
                 let force = q("force").as_deref() == Some("true");
                 let dry = q("dryRun").as_deref() == Some("All");
                 let old = objects.get(path).cloned();

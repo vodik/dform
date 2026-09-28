@@ -204,7 +204,7 @@ resource k8s.service api {
   metadata.name = "crud-api"
   metadata.namespace = shop.metadata.name
   spec.selector = { app: "crud-api", color: serving }
-  spec.ports = [{ port: 80, targetPort: "8080", protocol: "TCP" }]
+  spec.ports = [{ port: 80, targetPort: 8080, protocol: "TCP" }]
 }
 
 module app {

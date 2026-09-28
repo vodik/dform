@@ -56,7 +56,7 @@ resource k8s.service web {
   metadata.name = "web"
   metadata.namespace = k8s.namespace.web.metadata.name
   spec.selector = { app: "web" }
-  spec.ports = [{ port: 80, targetPort: "8080", protocol: "TCP" }]
+  spec.ports = [{ port: 80, targetPort: 8080, protocol: "TCP" }]
 }
 
 # Replicas are the autoscaler's business on the way back: a drift there is

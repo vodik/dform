@@ -10,7 +10,7 @@ definite:
   metadata.namespace = "shop"
   spec.ports[port=80,protocol=TCP].port = 80
   spec.ports[port=80,protocol=TCP].protocol = "TCP"
-  spec.ports[port=80,protocol=TCP].targetPort = "8080"
+  spec.ports[port=80,protocol=TCP].targetPort = 8080
   spec.selector.app = "web"
 + k8s.config_map.web_config
   data.LOG_LEVEL = "info"

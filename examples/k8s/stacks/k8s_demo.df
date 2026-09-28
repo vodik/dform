@@ -45,5 +45,5 @@ resource k8s.service name {
   metadata.name = name
   metadata.namespace = shop.metadata.name
   spec.selector = { app: name }
-  spec.ports = [{ port: 80, targetPort: "8080", protocol: "TCP" }]
+  spec.ports = [{ port: 80, targetPort: 8080, protocol: "TCP" }]
 }
