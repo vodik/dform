@@ -1,0 +1,213 @@
+===============================
+tests/syntax/ok/e73_baseline.df
+===============================
+
+policy baseline {
+  # Grants are partition patterns: this pack sits above readers of .tags,
+  # of iam.policy's .statements and of settings' .audit.sinks, and may read
+  # every other attribute path.
+  contributes _.tags
+  contributes iam.policy.statements
+  contributes settings.audit.sinks
+
+  arg(t, a_, .tags, { team: "platform" }) if want(t, a_)
+
+  # Reads .name of the same type it writes .statements on: legal under
+  # (type, path) partitions, a self-loop under type-only partitions.
+  arg("iam.policy", a_, .statements, [{ action: "org.read", resource: "org" }]) if
+    env("prod"), want("iam.policy", a_), attr("iam.policy", a_, .name, "app")
+
+  arg("settings", "prod", .audit.sinks, ["s3"])
+
+  # Prod forces deletion protection on for every database: an @override,
+  # not a conflict with the module's default of false.
+  arg("db.postgres", db_, .deletion_protection, true) @override if env("prod"), want("db.postgres", db_)
+
+  deny("db_public", "db must not be public", { db: db_ }) if
+    want("db.postgres", db_), not attr("db.postgres", db_, .public, false)
+
+  warn("audit_logging", "prod should enable audit logging", {}) if
+    env("prod"), not setting("prod", .audit.enabled, true)
+}
+
+---
+
+(source_file
+  (policy
+    (identifier)
+    (statement_block
+      (comment)
+      (comment)
+      (comment)
+      (contributes
+        (member_expression
+          (identifier)
+          (identifier)))
+      (contributes
+        (member_expression
+          (member_expression
+            (identifier)
+            (identifier))
+          (identifier)))
+      (contributes
+        (member_expression
+          (member_expression
+            (identifier)
+            (identifier))
+          (identifier)))
+      (rule
+        (call
+          (identifier)
+          (arguments
+            (identifier)
+            (identifier)
+            (keypath)
+            (object
+              (object_field
+                (identifier)
+                (string
+                  (string_content))))))
+        (body
+          (atom_literal
+            (call
+              (identifier)
+              (arguments
+                (identifier)
+                (identifier))))))
+      (comment)
+      (comment)
+      (rule
+        (call
+          (identifier)
+          (arguments
+            (string
+              (string_content))
+            (identifier)
+            (keypath)
+            (list
+              (object
+                (object_field
+                  (identifier)
+                  (string
+                    (string_content)))
+                (object_field
+                  (identifier)
+                  (string
+                    (string_content)))))))
+        (body
+          (atom_literal
+            (call
+              (identifier)
+              (arguments
+                (string
+                  (string_content)))))
+          (atom_literal
+            (call
+              (identifier)
+              (arguments
+                (string
+                  (string_content))
+                (identifier))))
+          (atom_literal
+            (call
+              (identifier)
+              (arguments
+                (string
+                  (string_content))
+                (identifier)
+                (keypath)
+                (string
+                  (string_content)))))))
+      (fact
+        (call
+          (identifier)
+          (arguments
+            (string
+              (string_content))
+            (string
+              (string_content))
+            (keypath)
+            (list
+              (string
+                (string_content))))))
+      (comment)
+      (comment)
+      (rule
+        (call
+          (identifier)
+          (arguments
+            (string
+              (string_content))
+            (identifier)
+            (keypath)
+            (true)))
+        (rank)
+        (body
+          (atom_literal
+            (call
+              (identifier)
+              (arguments
+                (string
+                  (string_content)))))
+          (atom_literal
+            (call
+              (identifier)
+              (arguments
+                (string
+                  (string_content))
+                (identifier))))))
+      (rule
+        (call
+          (identifier)
+          (arguments
+            (string
+              (string_content))
+            (string
+              (string_content))
+            (object
+              (object_field
+                (identifier)
+                (identifier)))))
+        (body
+          (atom_literal
+            (call
+              (identifier)
+              (arguments
+                (string
+                  (string_content))
+                (identifier))))
+          (not_literal
+            (atom_literal
+              (call
+                (identifier)
+                (arguments
+                  (string
+                    (string_content))
+                  (identifier)
+                  (keypath)
+                  (false)))))))
+      (rule
+        (call
+          (identifier)
+          (arguments
+            (string
+              (string_content))
+            (string
+              (string_content))
+            (object)))
+        (body
+          (atom_literal
+            (call
+              (identifier)
+              (arguments
+                (string
+                  (string_content)))))
+          (not_literal
+            (atom_literal
+              (call
+                (identifier)
+                (arguments
+                  (string
+                    (string_content))
+                  (keypath)
+                  (true))))))))))

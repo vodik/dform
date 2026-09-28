@@ -1,0 +1,959 @@
+=======
+pngu.df
+=======
+
+# pngu.df
+#
+# dform representation of ~/src/movableink/pngu/terraform.
+#
+# Usage:
+#   cargo run -- --file pngu.df plan
+#   cargo run -- --file pngu.df plan --set env=stg
+#   cargo run -- --file pngu.df plan --set env=prod
+#
+# Notes:
+# - This file models the intent/config surface area of the Terraform stack.
+# - External Terraform modules are represented as higher-level resources.
+# - The monitoring dashboard JSON is read with the file provider from a stub,
+#   examples/files/dashboard-pngu.json (see terraform/modules/monitoring/dashboard-pngu.json).
+
+edition 2026
+
+########################################
+# Schema declarations
+########################################
+
+# The file provider answers file.json once its path is known.
+extern file.json(+path, -value)
+
+# Keep decl for true relational tables.
+decl peering(env: string, name: string, peer_network: string)
+
+########################################
+# Environment selection
+########################################
+
+# A typed stack input: --set env=qa is an error naming the input.
+input env: enum("dev", "stg", "prod") = "dev"
+
+########################################
+# Settings (branch-as-data)
+########################################
+
+settings dev {
+  project_id = "renfry-dev-973682"
+  project_name = "renfry-dev"
+  region = "us-east1"
+  network_name = "renfry-dev-network"
+
+  regional_proxy_cidr = "10.193.0.0/24"
+
+  gke = {
+    control_plane_cidr: "172.16.3.96/28",
+    subnet_cidr: "10.141.76.0/22",
+    pods_cidr: "10.141.80.0/21",
+    services_cidr: "10.141.88.0/21",
+    static_ips: { "pngu-grpc": { type: "INTERNAL" } }
+  }
+}
+
+settings stg {
+  project_id = "renfry-stg"
+  project_name = "renfry-stg"
+  region = "us-east1"
+  network_name = "renfry-stg-network"
+
+  regional_proxy_cidr = "10.193.1.0/24"
+
+  gke = {
+    control_plane_cidr: "172.16.3.112/28",
+    subnet_cidr: "10.141.100.0/22",
+    pods_cidr: "10.141.104.0/21",
+    services_cidr: "10.141.112.0/21",
+    static_ips: { "pngu-grpc": { type: "INTERNAL" } }
+  }
+}
+
+settings prod {
+  project_id = "renfry-prod"
+  project_name = "renfry-prod"
+  region = "us-east1"
+  network_name = "renfry-prod-network"
+
+  regional_proxy_cidr = "10.193.2.0/24"
+
+  gke = {
+    control_plane_cidr: "172.16.3.128/28",
+    subnet_cidr: "10.141.124.0/22",
+    pods_cidr: "10.141.128.0/21",
+    services_cidr: "10.141.136.0/21",
+    static_ips: { "pngu-grpc": { type: "INTERNAL" } }
+  }
+}
+
+# The selected environment's settings. Every use reads env and one leaf.
+let cfg = settings[env]
+
+########################################
+# Peerings (explicit env-keyed table)
+########################################
+
+# dev
+peering{ env: "dev", name: "envoy-dev", peer_network: "projects/envoy-dev-426188/global/networks/envoy-dev-network" }
+
+# stg
+peering{ env: "stg", name: "envoy-stg", peer_network: "projects/envoy-stg-597462/global/networks/envoy-stg-network" }
+peering{ env: "stg", name: "envoy-stg-legacy", peer_network: "projects/coherentpath-stg/global/networks/envoy-proxy-stg" }
+
+# prod
+peering{ env: "prod", name: "envoy-prod-legacy", peer_network: "projects/coherentpath-prod/global/networks/envoy-proxy-prod" }
+
+########################################
+# Validation
+########################################
+
+constraint "GKE static IPs must be INTERNAL" if cfg.gke.static_ips."pngu-grpc".type != "INTERNAL"
+
+########################################
+# Resources (renfry module intent)
+########################################
+
+# GKE subnet (terraform-google-modules/network/google//modules/subnets)
+resource google_compute_subnetwork gke_subnet {
+  project = cfg.project_id
+  region = cfg.region
+  network = "projects/{cfg.project_id}/global/networks/{cfg.network_name}"
+  name = "{cfg.project_name}-gke-subnet"
+  ip_cidr_range = cfg.gke.subnet_cidr
+  subnet_private_access = true
+  secondary_ranges = [
+    { range_name: "{cfg.project_name}-gke-pods-range", ip_cidr_range: cfg.gke.pods_cidr },
+    { range_name: "{cfg.project_name}-gke-svc-range", ip_cidr_range: cfg.gke.services_cidr }
+  ]
+}
+
+# Regional managed proxy subnet
+resource google_compute_subnetwork regional_proxy {
+  project = cfg.project_id
+  region = cfg.region
+  network = "projects/{cfg.project_id}/global/networks/{cfg.network_name}"
+  name = "{cfg.project_name}-proxy"
+  purpose = "REGIONAL_MANAGED_PROXY"
+  role = "ACTIVE"
+  ip_cidr_range = cfg.regional_proxy_cidr
+}
+
+# VPC peerings
+resource google_compute_network_peering "peering-{name}" {
+  for peering{ env: env, name: name, peer_network: peer }
+  project = cfg.project_id
+  name = name
+  network = "projects/{cfg.project_id}/global/networks/{cfg.network_name}"
+  peer_network = peer
+}
+
+# Static IPs for services
+resource google_compute_address "static-ip-{ip}" {
+  for ip = "pngu-grpc"
+  project = cfg.project_id
+  region = cfg.region
+  name = ip
+  address_type = cfg.gke.static_ips."pngu-grpc".type
+  subnetwork_id = gke_subnet.id
+}
+
+########################################
+# Resources (GKE module intent)
+########################################
+
+# Represents the external terraform-mi-gke module invocation.
+resource gke_cluster pngu {
+  cluster_type = "autopilot-private"
+  env = env
+  project_id = cfg.project_id
+  project_name = cfg.project_name
+  name = "{cfg.project_name}-gke"
+  network_id = "projects/{cfg.project_id}/global/networks/{cfg.network_name}"
+  subnetwork_id = gke_subnet.id
+  master_control_plane_cidr = cfg.gke.control_plane_cidr
+  ip_range_pods = "{cfg.project_name}-gke-pods-range"
+  ip_range_services = "{cfg.project_name}-gke-svc-range"
+
+  enable_secret_manager_addon = true
+  deletion_protection = false
+}
+
+########################################
+# Resources (monitoring module intent)
+########################################
+
+# The dashboard JSON is a file, read by the file provider.
+resource google_monitoring_dashboard pngu {
+  project = cfg.project_id
+  dashboard_json = file.json["examples/files/dashboard-pngu.json"]
+}
+
+# Represents terraform-gcp-alert-metrics module invocation.
+resource alert_metrics_pack pngu {
+  project_id = cfg.project_id
+  notification_channel_type = "slack"
+  notification_channel_display_name = "Slack"
+  enable_standard_gke_alerts = true
+  source = "git@github.com:coherentpath/terraform-gcp-alert-metrics.git?ref=v1.5.0"
+}
+
+########################################
+# Optional outputs (handy for wiring)
+########################################
+
+output active_env = env
+output project_id = cfg.project_id
+
+---
+
+(source_file
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (edition
+    (integer))
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (extern
+    (dotted_name
+      (identifier)
+      (identifier))
+    (bind_arg
+      (identifier))
+    (bind_arg
+      (identifier)))
+  (comment)
+  (decl
+    (dotted_name
+      (identifier))
+    (field_declaration
+      (identifier)
+      (type
+        (dotted_name
+          (identifier))))
+    (field_declaration
+      (identifier)
+      (type
+        (dotted_name
+          (identifier))))
+    (field_declaration
+      (identifier)
+      (type
+        (dotted_name
+          (identifier)))))
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (input
+    (identifier)
+    (type
+      (dotted_name
+        (identifier))
+      (string
+        (string_content))
+      (string
+        (string_content))
+      (string
+        (string_content)))
+    (string
+      (string_content)))
+  (comment)
+  (comment)
+  (comment)
+  (settings
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))
+      (field
+        (block_path
+          (identifier))
+        (object
+          (object_field
+            (identifier)
+            (string
+              (string_content)))
+          (object_field
+            (identifier)
+            (string
+              (string_content)))
+          (object_field
+            (identifier)
+            (string
+              (string_content)))
+          (object_field
+            (identifier)
+            (string
+              (string_content)))
+          (object_field
+            (identifier)
+            (object
+              (object_field
+                (string
+                  (string_content))
+                (object
+                  (object_field
+                    (identifier)
+                    (string
+                      (string_content)))))))))))
+  (settings
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))
+      (field
+        (block_path
+          (identifier))
+        (object
+          (object_field
+            (identifier)
+            (string
+              (string_content)))
+          (object_field
+            (identifier)
+            (string
+              (string_content)))
+          (object_field
+            (identifier)
+            (string
+              (string_content)))
+          (object_field
+            (identifier)
+            (string
+              (string_content)))
+          (object_field
+            (identifier)
+            (object
+              (object_field
+                (string
+                  (string_content))
+                (object
+                  (object_field
+                    (identifier)
+                    (string
+                      (string_content)))))))))))
+  (settings
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))
+      (field
+        (block_path
+          (identifier))
+        (object
+          (object_field
+            (identifier)
+            (string
+              (string_content)))
+          (object_field
+            (identifier)
+            (string
+              (string_content)))
+          (object_field
+            (identifier)
+            (string
+              (string_content)))
+          (object_field
+            (identifier)
+            (string
+              (string_content)))
+          (object_field
+            (identifier)
+            (object
+              (object_field
+                (string
+                  (string_content))
+                (object
+                  (object_field
+                    (identifier)
+                    (string
+                      (string_content)))))))))))
+  (comment)
+  (let
+    (identifier)
+    (index_expression
+      (identifier)
+      (identifier)))
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (fact
+    (record
+      (identifier)
+      (record_field
+        (identifier)
+        (string
+          (string_content)))
+      (record_field
+        (identifier)
+        (string
+          (string_content)))
+      (record_field
+        (identifier)
+        (string
+          (string_content)))))
+  (comment)
+  (fact
+    (record
+      (identifier)
+      (record_field
+        (identifier)
+        (string
+          (string_content)))
+      (record_field
+        (identifier)
+        (string
+          (string_content)))
+      (record_field
+        (identifier)
+        (string
+          (string_content)))))
+  (fact
+    (record
+      (identifier)
+      (record_field
+        (identifier)
+        (string
+          (string_content)))
+      (record_field
+        (identifier)
+        (string
+          (string_content)))
+      (record_field
+        (identifier)
+        (string
+          (string_content)))))
+  (comment)
+  (fact
+    (record
+      (identifier)
+      (record_field
+        (identifier)
+        (string
+          (string_content)))
+      (record_field
+        (identifier)
+        (string
+          (string_content)))
+      (record_field
+        (identifier)
+        (string
+          (string_content)))))
+  (comment)
+  (comment)
+  (comment)
+  (check
+    (string
+      (string_content))
+    (body
+      (comparison
+        (member_expression
+          (member_expression
+            (member_expression
+              (member_expression
+                (identifier)
+                (identifier))
+              (identifier))
+            (string
+              (string_content)))
+          (identifier))
+        (string
+          (string_content)))))
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (resource
+    (dotted_name
+      (identifier))
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (member_expression
+          (identifier)
+          (identifier)))
+      (field
+        (block_path
+          (identifier))
+        (member_expression
+          (identifier)
+          (identifier)))
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)
+          (interpolation
+            (member_expression
+              (identifier)
+              (identifier)))
+          (string_content)
+          (interpolation
+            (member_expression
+              (identifier)
+              (identifier)))))
+      (field
+        (block_path
+          (identifier))
+        (string
+          (interpolation
+            (member_expression
+              (identifier)
+              (identifier)))
+          (string_content)))
+      (field
+        (block_path
+          (identifier))
+        (member_expression
+          (member_expression
+            (identifier)
+            (identifier))
+          (identifier)))
+      (field
+        (block_path
+          (identifier))
+        (true))
+      (field
+        (block_path
+          (identifier))
+        (list
+          (object
+            (object_field
+              (identifier)
+              (string
+                (interpolation
+                  (member_expression
+                    (identifier)
+                    (identifier)))
+                (string_content)))
+            (object_field
+              (identifier)
+              (member_expression
+                (member_expression
+                  (identifier)
+                  (identifier))
+                (identifier))))
+          (object
+            (object_field
+              (identifier)
+              (string
+                (interpolation
+                  (member_expression
+                    (identifier)
+                    (identifier)))
+                (string_content)))
+            (object_field
+              (identifier)
+              (member_expression
+                (member_expression
+                  (identifier)
+                  (identifier))
+                (identifier))))))))
+  (comment)
+  (resource
+    (dotted_name
+      (identifier))
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (member_expression
+          (identifier)
+          (identifier)))
+      (field
+        (block_path
+          (identifier))
+        (member_expression
+          (identifier)
+          (identifier)))
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)
+          (interpolation
+            (member_expression
+              (identifier)
+              (identifier)))
+          (string_content)
+          (interpolation
+            (member_expression
+              (identifier)
+              (identifier)))))
+      (field
+        (block_path
+          (identifier))
+        (string
+          (interpolation
+            (member_expression
+              (identifier)
+              (identifier)))
+          (string_content)))
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))
+      (field
+        (block_path
+          (identifier))
+        (member_expression
+          (identifier)
+          (identifier)))))
+  (comment)
+  (resource
+    (dotted_name
+      (identifier))
+    (string
+      (string_content)
+      (interpolation
+        (identifier)))
+    (block
+      (clause
+        (body
+          (atom_literal
+            (record
+              (identifier)
+              (record_field
+                (identifier)
+                (identifier))
+              (record_field
+                (identifier)
+                (identifier))
+              (record_field
+                (identifier)
+                (identifier))))))
+      (field
+        (block_path
+          (identifier))
+        (member_expression
+          (identifier)
+          (identifier)))
+      (field
+        (block_path
+          (identifier))
+        (identifier))
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)
+          (interpolation
+            (member_expression
+              (identifier)
+              (identifier)))
+          (string_content)
+          (interpolation
+            (member_expression
+              (identifier)
+              (identifier)))))
+      (field
+        (block_path
+          (identifier))
+        (identifier))))
+  (comment)
+  (resource
+    (dotted_name
+      (identifier))
+    (string
+      (string_content)
+      (interpolation
+        (identifier)))
+    (block
+      (clause
+        (body
+          (comparison
+            (identifier)
+            (string
+              (string_content)))))
+      (field
+        (block_path
+          (identifier))
+        (member_expression
+          (identifier)
+          (identifier)))
+      (field
+        (block_path
+          (identifier))
+        (member_expression
+          (identifier)
+          (identifier)))
+      (field
+        (block_path
+          (identifier))
+        (identifier))
+      (field
+        (block_path
+          (identifier))
+        (member_expression
+          (member_expression
+            (member_expression
+              (member_expression
+                (identifier)
+                (identifier))
+              (identifier))
+            (string
+              (string_content)))
+          (identifier)))
+      (field
+        (block_path
+          (identifier))
+        (member_expression
+          (identifier)
+          (identifier)))))
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (resource
+    (dotted_name
+      (identifier))
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))
+      (field
+        (block_path
+          (identifier))
+        (identifier))
+      (field
+        (block_path
+          (identifier))
+        (member_expression
+          (identifier)
+          (identifier)))
+      (field
+        (block_path
+          (identifier))
+        (member_expression
+          (identifier)
+          (identifier)))
+      (field
+        (block_path
+          (identifier))
+        (string
+          (interpolation
+            (member_expression
+              (identifier)
+              (identifier)))
+          (string_content)))
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)
+          (interpolation
+            (member_expression
+              (identifier)
+              (identifier)))
+          (string_content)
+          (interpolation
+            (member_expression
+              (identifier)
+              (identifier)))))
+      (field
+        (block_path
+          (identifier))
+        (member_expression
+          (identifier)
+          (identifier)))
+      (field
+        (block_path
+          (identifier))
+        (member_expression
+          (member_expression
+            (identifier)
+            (identifier))
+          (identifier)))
+      (field
+        (block_path
+          (identifier))
+        (string
+          (interpolation
+            (member_expression
+              (identifier)
+              (identifier)))
+          (string_content)))
+      (field
+        (block_path
+          (identifier))
+        (string
+          (interpolation
+            (member_expression
+              (identifier)
+              (identifier)))
+          (string_content)))
+      (field
+        (block_path
+          (identifier))
+        (true))
+      (field
+        (block_path
+          (identifier))
+        (false))))
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (resource
+    (dotted_name
+      (identifier))
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (member_expression
+          (identifier)
+          (identifier)))
+      (field
+        (block_path
+          (identifier))
+        (index_expression
+          (member_expression
+            (identifier)
+            (identifier))
+          (string
+            (string_content))))))
+  (comment)
+  (resource
+    (dotted_name
+      (identifier))
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (member_expression
+          (identifier)
+          (identifier)))
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))
+      (field
+        (block_path
+          (identifier))
+        (true))
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))))
+  (comment)
+  (comment)
+  (comment)
+  (output
+    (identifier)
+    (identifier))
+  (output
+    (identifier)
+    (member_expression
+      (identifier)
+      (identifier))))

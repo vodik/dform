@@ -1,0 +1,164 @@
+==================
+modules/network.df
+==================
+
+edition 2026
+
+module network {
+  input vpc_net: inet
+  output vpc: net.vpc
+  output private_subnet_ids: list(ref(net.subnet))
+
+  resource net.vpc vpc {
+    cidr = vpc_net
+    tags = { env: env, component: "network" }
+  }
+
+  zone_index("us-test-1a", 0)
+  zone_index("us-test-1b", 1)
+
+  resource net.subnet "private-{z}" {
+    for data("zone", z)
+    vpc_id = vpc.id
+    cidr = inet_subnet(vpc.cidr, 4, zone_index[z])
+    zone = z
+    visibility = "private"
+  }
+
+  output vpc = vpc
+  output private_subnet_ids = [ s.id | s in net.subnet, s.visibility == "private" ]
+}
+
+---
+
+(source_file
+  (edition
+    (integer))
+  (module
+    (identifier)
+    (statement_block
+      (input
+        (identifier)
+        (type
+          (dotted_name
+            (identifier))))
+      (output
+        (identifier)
+        (type
+          (dotted_name
+            (identifier)
+            (identifier))))
+      (output
+        (identifier)
+        (type
+          (dotted_name
+            (identifier))
+          (type
+            (dotted_name
+              (identifier))
+            (type
+              (dotted_name
+                (identifier)
+                (identifier))))))
+      (resource
+        (dotted_name
+          (identifier)
+          (identifier))
+        (identifier)
+        (block
+          (field
+            (block_path
+              (identifier))
+            (identifier))
+          (field
+            (block_path
+              (identifier))
+            (object
+              (object_field
+                (identifier)
+                (identifier))
+              (object_field
+                (identifier)
+                (string
+                  (string_content)))))))
+      (fact
+        (call
+          (identifier)
+          (arguments
+            (string
+              (string_content))
+            (integer))))
+      (fact
+        (call
+          (identifier)
+          (arguments
+            (string
+              (string_content))
+            (integer))))
+      (resource
+        (dotted_name
+          (identifier)
+          (identifier))
+        (string
+          (string_content)
+          (interpolation
+            (identifier)))
+        (block
+          (clause
+            (body
+              (atom_literal
+                (call
+                  (identifier)
+                  (arguments
+                    (string
+                      (string_content))
+                    (identifier))))))
+          (field
+            (block_path
+              (identifier))
+            (member_expression
+              (identifier)
+              (identifier)))
+          (field
+            (block_path
+              (identifier))
+            (call
+              (identifier)
+              (arguments
+                (member_expression
+                  (identifier)
+                  (identifier))
+                (integer)
+                (index_expression
+                  (identifier)
+                  (identifier)))))
+          (field
+            (block_path
+              (identifier))
+            (identifier))
+          (field
+            (block_path
+              (identifier))
+            (string
+              (string_content)))))
+      (output
+        (identifier)
+        (identifier))
+      (output
+        (identifier)
+        (comprehension
+          (member_expression
+            (identifier)
+            (identifier))
+          (body
+            (in_literal
+              (identifier)
+              (member_expression
+                (identifier)
+                (identifier)))
+            (comparison
+              (member_expression
+                (identifier)
+                (identifier))
+              (string
+                (string_content)))))))))

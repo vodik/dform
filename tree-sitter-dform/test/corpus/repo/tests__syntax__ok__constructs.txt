@@ -1,0 +1,611 @@
+=============================
+tests/syntax/ok/constructs.df
+=============================
+
+edition 2026
+
+# One of everything the grammar lowers today.
+import "../../../modules/stdlib_net.df"
+import "../../../modules/iam.df"
+
+decl provided/2
+input relation seen/2 from file("seen.facts")
+input relation: string = "an input named relation"
+decl project(id: int, network_name: string)
+
+project(1, "net-a")
+names(n) if project{ network_name: n }
+
+module m {
+  input on: bool
+  output vpc: addr
+  export on_vpc/1
+  contributes iam_need
+
+  resource net.vpc vpc @default {
+    for on(true)
+    cidr = "10.0.0.0/16"
+    tags = { team: "x", "k-v": 1 }
+    size = 2 @override
+    list[0].name = "a"
+    audit.sinks += ["s3"]
+  }
+
+  on_vpc("vpc") if on(true)
+  iam_need("app", "net.read", ref(net.vpc, "vpc", .id))
+  output vpc = vpc
+}
+
+instance m main { on = true }
+
+policy p {
+  contributes _.tags
+  arg(t, a_, .tags, { owner: "ops" }) @override if want(t, a_)
+}
+
+apply p
+
+when env("prod") {
+  q(1)
+}
+
+settings e @default {
+  for env(e)
+  db = { backup_days: 3 }
+}
+
+env("prod")
+p(x_) if q(x_), x_ = 1 + 2 * 3 - -4 / (5 % 2), x_ != 0, x_ >= 1, x_ <= 9, x_ > 0, x_ < 10
+r(v) if setting("prod", .gke.static_ips."pngu-grpc".type, v)
+s(v) if q(x_), o = { a: { b: x_ } }, v = o.a.b
+t(l) if l = [ x_ | q(x_) ], 1 in l, 2 not in l
+u(a_) if ref(net.vpc, m.main/vpc, .id) = a_
+adopt(net.vpc, m.main/vpc, "vpc-123")
+moved(net.vpc, m.old/vpc, m.main/vpc)
+lifecycle(net.vpc, m.main/vpc, "prevent_destroy")
+ignore_changes(net.vpc, m.main/vpc, .tags.owner)
+counts(count(x_)) if q(x_)
+constraint "q must not be empty" if not q(1)
+v("input", "output", "settings", "type") if input("env", _), output("k", _)
+decl p/1 mixed
+decl q/1 mixed
+p("a")
+q("b")
+w(v) if m.main.on_vpc(v)
+vpc_inst("main")
+x(i, a_) if vpc_inst(i), output(m[i], "vpc", a_)
+
+---
+
+(source_file
+  (edition
+    (integer))
+  (comment)
+  (import
+    (string
+      (string_content)))
+  (import
+    (string
+      (string_content)))
+  (decl
+    (dotted_name
+      (identifier))
+    (integer))
+  (input_relation
+    (identifier)
+    (integer)
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content)))))
+  (input
+    (identifier)
+    (type
+      (dotted_name
+        (identifier)))
+    (string
+      (string_content)))
+  (decl
+    (dotted_name
+      (identifier))
+    (field_declaration
+      (identifier)
+      (type
+        (dotted_name
+          (identifier))))
+    (field_declaration
+      (identifier)
+      (type
+        (dotted_name
+          (identifier)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (integer)
+        (string
+          (string_content)))))
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)))
+    (body
+      (atom_literal
+        (record
+          (identifier)
+          (record_field
+            (identifier)
+            (identifier))))))
+  (module
+    (identifier)
+    (statement_block
+      (input
+        (identifier)
+        (type
+          (dotted_name
+            (identifier))))
+      (output
+        (identifier)
+        (type
+          (dotted_name
+            (identifier))))
+      (export
+        (identifier)
+        (integer))
+      (contributes
+        (identifier))
+      (resource
+        (dotted_name
+          (identifier)
+          (identifier))
+        (identifier)
+        (rank)
+        (block
+          (clause
+            (body
+              (atom_literal
+                (call
+                  (identifier)
+                  (arguments
+                    (true))))))
+          (field
+            (block_path
+              (identifier))
+            (string
+              (string_content)))
+          (field
+            (block_path
+              (identifier))
+            (object
+              (object_field
+                (identifier)
+                (string
+                  (string_content)))
+              (object_field
+                (string
+                  (string_content))
+                (integer))))
+          (field
+            (block_path
+              (identifier))
+            (integer)
+            (rank))
+          (field
+            (block_path
+              (identifier)
+              (integer)
+              (identifier))
+            (string
+              (string_content)))
+          (field
+            (block_path
+              (identifier)
+              (identifier))
+            (list
+              (string
+                (string_content))))))
+      (rule
+        (call
+          (identifier)
+          (arguments
+            (string
+              (string_content))))
+        (body
+          (atom_literal
+            (call
+              (identifier)
+              (arguments
+                (true))))))
+      (fact
+        (call
+          (identifier)
+          (arguments
+            (string
+              (string_content))
+            (string
+              (string_content))
+            (call
+              (identifier)
+              (arguments
+                (member_expression
+                  (identifier)
+                  (identifier))
+                (string
+                  (string_content))
+                (keypath))))))
+      (output
+        (identifier)
+        (identifier))))
+  (instance
+    (identifier)
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (true))))
+  (policy
+    (identifier)
+    (statement_block
+      (contributes
+        (member_expression
+          (identifier)
+          (identifier)))
+      (rule
+        (call
+          (identifier)
+          (arguments
+            (identifier)
+            (identifier)
+            (keypath)
+            (object
+              (object_field
+                (identifier)
+                (string
+                  (string_content))))))
+        (rank)
+        (body
+          (atom_literal
+            (call
+              (identifier)
+              (arguments
+                (identifier)
+                (identifier))))))))
+  (apply
+    (identifier))
+  (when
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (string
+              (string_content))))))
+    (statement_block
+      (fact
+        (call
+          (identifier)
+          (arguments
+            (integer))))))
+  (settings
+    (identifier)
+    (rank)
+    (block
+      (clause
+        (body
+          (atom_literal
+            (call
+              (identifier)
+              (arguments
+                (identifier))))))
+      (field
+        (block_path
+          (identifier))
+        (object
+          (object_field
+            (identifier)
+            (integer))))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content)))))
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)))
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier))))
+      (comparison
+        (identifier)
+        (binary_expression
+          (binary_expression
+            (integer)
+            (binary_expression
+              (integer)
+              (integer)))
+          (binary_expression
+            (unary_expression
+              (integer))
+            (parenthesized
+              (binary_expression
+                (integer)
+                (integer))))))
+      (comparison
+        (identifier)
+        (integer))
+      (comparison
+        (identifier)
+        (integer))
+      (comparison
+        (identifier)
+        (integer))
+      (comparison
+        (identifier)
+        (integer))
+      (comparison
+        (identifier)
+        (integer))))
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)))
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (string
+              (string_content))
+            (keypath)
+            (identifier))))))
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)))
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier))))
+      (comparison
+        (identifier)
+        (object
+          (object_field
+            (identifier)
+            (object
+              (object_field
+                (identifier)
+                (identifier))))))
+      (comparison
+        (identifier)
+        (member_expression
+          (member_expression
+            (identifier)
+            (identifier))
+          (identifier)))))
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)))
+    (body
+      (comparison
+        (identifier)
+        (comprehension
+          (identifier)
+          (body
+            (atom_literal
+              (call
+                (identifier)
+                (arguments
+                  (identifier)))))))
+      (in_literal
+        (integer)
+        (identifier))
+      (not_in_literal
+        (integer)
+        (identifier))))
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)))
+    (body
+      (comparison
+        (call
+          (identifier)
+          (arguments
+            (member_expression
+              (identifier)
+              (identifier))
+            (instance_expression
+              (member_expression
+                (identifier)
+                (identifier))
+              (instance_name))
+            (keypath)))
+        (identifier))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (instance_expression
+          (member_expression
+            (identifier)
+            (identifier))
+          (instance_name))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (instance_expression
+          (member_expression
+            (identifier)
+            (identifier))
+          (instance_name))
+        (instance_expression
+          (member_expression
+            (identifier)
+            (identifier))
+          (instance_name)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (instance_expression
+          (member_expression
+            (identifier)
+            (identifier))
+          (instance_name))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (instance_expression
+          (member_expression
+            (identifier)
+            (identifier))
+          (instance_name))
+        (keypath))))
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (call
+          (identifier)
+          (arguments
+            (identifier)))))
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier))))))
+  (check
+    (string
+      (string_content))
+    (body
+      (not_literal
+        (atom_literal
+          (call
+            (identifier)
+            (arguments
+              (integer)))))))
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content))))
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (string
+              (string_content))
+            (identifier))))
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (string
+              (string_content))
+            (identifier))))))
+  (decl
+    (dotted_name
+      (identifier))
+    (integer))
+  (decl
+    (dotted_name
+      (identifier))
+    (integer))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content)))))
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)))
+    (body
+      (atom_literal
+        (call
+          (member_expression
+            (member_expression
+              (identifier)
+              (identifier))
+            (identifier))
+          (arguments
+            (identifier))))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content)))))
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)
+        (identifier)))
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier))))
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (index_expression
+              (identifier)
+              (identifier))
+            (string
+              (string_content))
+            (identifier)))))))

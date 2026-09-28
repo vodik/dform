@@ -1,0 +1,203 @@
+=========================================
+examples/adversarial/adv2_rule3_coarse.df
+=========================================
+
+# adv2: Rule 3 coarseness. One rule with head `want` is stuck (the nodepool,
+# on ?gke_cluster/pngu#zones). An UNRELATED negation over `want` and an
+# UNRELATED aggregate over `want` must not become undetermined.
+# Run with --provider gke.
+
+edition 2026
+
+resource gke_cluster pngu {
+  name = "pngu-gke"
+}
+
+resource gke_nodepool np {
+  for arg("gke_cluster", "pngu", .zones, zs),
+    member(zs, z),
+    np = format("np-%s", z)
+  cluster = ref("gke_cluster", "pngu", .id)
+  zone = z
+}
+
+resource k8s.namespace pngu {
+  name = "pngu"
+}
+
+# Unrelated negation over want (different type): decidable now.
+deny "namespace without deployment" { ns: n } if
+  want(k8s.namespace, n),
+  not want(k8s.deployment, n)
+
+# Unrelated aggregate over want (different type): decidable now.
+ns_count(collect_set(n)) if want(k8s.namespace, n)
+
+deny "need the pngu namespace" if
+  ns_count(l),
+  not member(l, "pngu")
+
+# Related negation (same type as the stuck head): correctly undetermined.
+deny "no nodepool in zone b" if
+  want("gke_cluster", "pngu"),
+  not want("gke_nodepool", "np-us-east1-b")
+
+---
+
+(source_file
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (edition
+    (integer))
+  (resource
+    (dotted_name
+      (identifier))
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))))
+  (resource
+    (dotted_name
+      (identifier))
+    (identifier)
+    (block
+      (clause
+        (body
+          (atom_literal
+            (call
+              (identifier)
+              (arguments
+                (string
+                  (string_content))
+                (string
+                  (string_content))
+                (keypath)
+                (identifier))))
+          (atom_literal
+            (call
+              (identifier)
+              (arguments
+                (identifier)
+                (identifier))))
+          (comparison
+            (identifier)
+            (call
+              (identifier)
+              (arguments
+                (string
+                  (string_content))
+                (identifier))))))
+      (field
+        (block_path
+          (identifier))
+        (call
+          (identifier)
+          (arguments
+            (string
+              (string_content))
+            (string
+              (string_content))
+            (keypath))))
+      (field
+        (block_path
+          (identifier))
+        (identifier))))
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))))
+  (comment)
+  (check
+    (string
+      (string_content))
+    (object
+      (object_field
+        (identifier)
+        (identifier)))
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (member_expression
+              (identifier)
+              (identifier))
+            (identifier))))
+      (not_literal
+        (atom_literal
+          (call
+            (identifier)
+            (arguments
+              (member_expression
+                (identifier)
+                (identifier))
+              (identifier)))))))
+  (comment)
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (call
+          (identifier)
+          (arguments
+            (identifier)))))
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (member_expression
+              (identifier)
+              (identifier))
+            (identifier))))))
+  (check
+    (string
+      (string_content))
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier))))
+      (not_literal
+        (atom_literal
+          (call
+            (identifier)
+            (arguments
+              (identifier)
+              (string
+                (string_content))))))))
+  (comment)
+  (check
+    (string
+      (string_content))
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (string
+              (string_content))
+            (string
+              (string_content)))))
+      (not_literal
+        (atom_literal
+          (call
+            (identifier)
+            (arguments
+              (string
+                (string_content))
+              (string
+                (string_content)))))))))

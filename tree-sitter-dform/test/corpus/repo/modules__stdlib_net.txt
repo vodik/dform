@@ -1,0 +1,90 @@
+=====================
+modules/stdlib_net.df
+=====================
+
+# Minimal networking stdlib demo rules/policies.
+
+edition 2026
+
+policy stdlib_net {
+  # Deny if peered VPC CIDRs overlap.
+  #
+  # This is intentionally scoped to only VPCs connected by `vpc_peer/2`.
+  deny "peered vpc cidr overlaps" { a, b } if {
+    vpc_peer(a, b)
+    a in net.vpc
+    b in net.vpc
+    inet_overlaps(a.cidr, b.cidr)
+  }
+
+  # Deny if any VM gets the unspecified IP.
+  deny "vm has unspecified ip" { vm } if vm in compute.vm, ip_unspecified(vm.private_ip)
+}
+
+---
+
+(source_file
+  (comment)
+  (edition
+    (integer))
+  (policy
+    (identifier)
+    (statement_block
+      (comment)
+      (comment)
+      (comment)
+      (check
+        (string
+          (string_content))
+        (object
+          (object_field
+            (identifier))
+          (object_field
+            (identifier)))
+        (body_block
+          (atom_literal
+            (call
+              (identifier)
+              (arguments
+                (identifier)
+                (identifier))))
+          (in_literal
+            (identifier)
+            (member_expression
+              (identifier)
+              (identifier)))
+          (in_literal
+            (identifier)
+            (member_expression
+              (identifier)
+              (identifier)))
+          (atom_literal
+            (call
+              (identifier)
+              (arguments
+                (member_expression
+                  (identifier)
+                  (identifier))
+                (member_expression
+                  (identifier)
+                  (identifier)))))))
+      (comment)
+      (check
+        (string
+          (string_content))
+        (object
+          (object_field
+            (identifier)))
+        (body
+          (in_literal
+            (identifier)
+            (member_expression
+              (identifier)
+              (identifier)))
+          (atom_literal
+            (call
+              (identifier)
+              (arguments
+                (member_expression
+                  (identifier)
+                  (identifier))))))))))

@@ -1,0 +1,122 @@
+==========================================================
+examples/adversarial/adv4b_variable_path_writer_no_read.df
+==========================================================
+
+# adv4b: the variable-path writer that reads no attribute. Lands at
+# (arg, *, *), above every attr reader, and stratifies.
+
+edition 2026
+
+override(net.vpc, "main", .tags, { team: "x" })
+
+resource net.vpc main {
+  cidr = inet("10.0.0.0/16")
+  tags = { env: "dev" }
+}
+
+arg(t, n, p, v) if
+  override(t, n, p, v),
+  want(t, n)
+
+deny "vpc without cidr" { vpc: n } if
+  want(net.vpc, n),
+  not arg(net.vpc, n, .cidr, inet("10.0.0.0/16"))
+
+---
+
+(source_file
+  (comment)
+  (comment)
+  (edition
+    (integer))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (keypath)
+        (object
+          (object_field
+            (identifier)
+            (string
+              (string_content)))))))
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (call
+          (identifier)
+          (arguments
+            (string
+              (string_content)))))
+      (field
+        (block_path
+          (identifier))
+        (object
+          (object_field
+            (identifier)
+            (string
+              (string_content)))))))
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)
+        (identifier)
+        (identifier)
+        (identifier)))
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier)
+            (identifier)
+            (identifier)
+            (identifier))))
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier)
+            (identifier))))))
+  (check
+    (string
+      (string_content))
+    (object
+      (object_field
+        (identifier)
+        (identifier)))
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (member_expression
+              (identifier)
+              (identifier))
+            (identifier))))
+      (not_literal
+        (atom_literal
+          (call
+            (identifier)
+            (arguments
+              (member_expression
+                (identifier)
+                (identifier))
+              (identifier)
+              (keypath)
+              (call
+                (identifier)
+                (arguments
+                  (string
+                    (string_content)))))))))))

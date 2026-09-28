@@ -1,0 +1,118 @@
+================================================================================
+Interpolation and escapes
+================================================================================
+
+p("a {x} {{b}} \"c\" \\ \n \t \u{41} # not a comment") if q(x)
+resource net.vpc "peer-{a.name}-{i + 1}" {}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content)
+          (interpolation
+            (identifier))
+          (string_content)
+          (escape_sequence)
+          (string_content)
+          (escape_sequence)
+          (string_content)
+          (escape_sequence)
+          (string_content)
+          (escape_sequence)
+          (string_content)
+          (escape_sequence)
+          (string_content)
+          (escape_sequence)
+          (string_content)
+          (escape_sequence)
+          (string_content)
+          (escape_sequence)
+          (string_content))))
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier))))))
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (string
+      (string_content)
+      (interpolation
+        (member_expression
+          (identifier)
+          (identifier)))
+      (string_content)
+      (interpolation
+        (binary_expression
+          (identifier)
+          (integer))))
+    (block)))
+
+================================================================================
+A string spans lines
+================================================================================
+
+p("a
+b")
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))))))
+
+================================================================================
+An unclosed hole
+:error
+================================================================================
+
+a("{x")
+
+--------------------------------------------------------------------------------
+
+
+
+================================================================================
+A lone closing brace
+:error
+================================================================================
+
+b("x}")
+
+--------------------------------------------------------------------------------
+
+
+
+================================================================================
+An unknown escape
+:error
+================================================================================
+
+p("a\qb")
+
+--------------------------------------------------------------------------------
+
+
+
+================================================================================
+A hole holds a term
+:error
+================================================================================
+
+d("n-{x.}") if q(x)
+
+--------------------------------------------------------------------------------
+
+

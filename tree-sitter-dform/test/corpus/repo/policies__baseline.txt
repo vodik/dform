@@ -1,0 +1,192 @@
+====================
+policies/baseline.df
+====================
+
+edition 2026
+
+policy baseline {
+  # Grants are partition patterns: this pack writes .tags of every type,
+  # iam.policy's .statements and settings' .audit.sinks, and nothing else.
+  contributes _.tags
+  contributes iam.policy.statements
+  contributes settings.audit.sinks
+
+  # Lattices for paths several authors contribute to. Object paths such as
+  # `tags` are maps by default; a list is one value unless declared a set.
+  type_lattice(iam.policy, .statements, "set")
+  type_lattice(settings, .audit.sinks, "set")
+
+  # Example: add a shared tag to everything.
+  r.tags = { team: "platform" } if r in resource
+
+  # Example: policy pack can contribute directly to an IAM policy. Reads
+  # .name of the type it writes .statements on: legal under (type, path)
+  # partitions.
+  p.statements = [{ action: "org.read", resource: "org" }] if {
+    env == "prod"
+    p in iam.policy
+    p.name == "app"
+  }
+
+  deny "db must not be public" { resource: pg } if pg in db.postgres, not pg.public == false
+
+  # Example warning: prod should enable an audit setting.
+  warn "prod should enable audit logging" { env: "prod" } if {
+    env == "prod"
+    not settings.prod.audit.enabled
+  }
+
+  # Example: policy pack can add a sink without owning the whole list.
+  settings.prod.audit.sinks = ["s3"]
+
+  # Networking invariants live in `modules/stdlib_net.df`.
+}
+
+---
+
+(source_file
+  (edition
+    (integer))
+  (policy
+    (identifier)
+    (statement_block
+      (comment)
+      (comment)
+      (contributes
+        (member_expression
+          (identifier)
+          (identifier)))
+      (contributes
+        (member_expression
+          (member_expression
+            (identifier)
+            (identifier))
+          (identifier)))
+      (contributes
+        (member_expression
+          (member_expression
+            (identifier)
+            (identifier))
+          (identifier)))
+      (comment)
+      (comment)
+      (fact
+        (call
+          (identifier)
+          (arguments
+            (member_expression
+              (identifier)
+              (identifier))
+            (keypath)
+            (string
+              (string_content)))))
+      (fact
+        (call
+          (identifier)
+          (arguments
+            (identifier)
+            (keypath)
+            (string
+              (string_content)))))
+      (comment)
+      (contribution
+        (member_expression
+          (identifier)
+          (identifier))
+        (object
+          (object_field
+            (identifier)
+            (string
+              (string_content))))
+        (body
+          (in_literal
+            (identifier)
+            (any_resource))))
+      (comment)
+      (comment)
+      (comment)
+      (contribution
+        (member_expression
+          (identifier)
+          (identifier))
+        (list
+          (object
+            (object_field
+              (identifier)
+              (string
+                (string_content)))
+            (object_field
+              (identifier)
+              (string
+                (string_content)))))
+        (body_block
+          (comparison
+            (identifier)
+            (string
+              (string_content)))
+          (in_literal
+            (identifier)
+            (member_expression
+              (identifier)
+              (identifier)))
+          (comparison
+            (member_expression
+              (identifier)
+              (identifier))
+            (string
+              (string_content)))))
+      (check
+        (string
+          (string_content))
+        (object
+          (object_field
+            (identifier)
+            (identifier)))
+        (body
+          (in_literal
+            (identifier)
+            (member_expression
+              (identifier)
+              (identifier)))
+          (not_literal
+            (comparison
+              (member_expression
+                (identifier)
+                (identifier))
+              (false)))))
+      (comment)
+      (check
+        (string
+          (string_content))
+        (object
+          (object_field
+            (identifier)
+            (string
+              (string_content))))
+        (body_block
+          (comparison
+            (identifier)
+            (string
+              (string_content)))
+          (not_literal
+            (truth_literal
+              (member_expression
+                (member_expression
+                  (member_expression
+                    (identifier)
+                    (identifier))
+                  (identifier))
+                (identifier))))))
+      (comment)
+      (contribution
+        (member_expression
+          (member_expression
+            (member_expression
+              (identifier)
+              (identifier))
+            (identifier))
+          (identifier))
+        (list
+          (string
+            (string_content))))
+      (comment))))

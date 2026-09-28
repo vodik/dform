@@ -1,0 +1,325 @@
+================================================================================
+A newline ends a statement
+================================================================================
+
+p(a)
+q(b) if p(b)
+k = 1
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (identifier))))
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)))
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier))))))
+  (value_rule
+    (identifier)
+    (integer)))
+
+================================================================================
+A trailing comma, operator or if continues the line
+================================================================================
+
+p(a) if q(a),
+  r(a)
+x = 1 +
+  2
+s(a) if
+  q(a)
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)))
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier))))
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier))))))
+  (value_rule
+    (identifier)
+    (binary_expression
+      (integer)
+      (integer)))
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)))
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier)))))))
+
+================================================================================
+A leading comma continues the line, past comments
+================================================================================
+
+p(a) if q(a)
+  # why
+  , r(a)
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)))
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier))))
+      (comment)
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier)))))))
+
+================================================================================
+Inside brackets a newline is whitespace
+================================================================================
+
+p(
+  a,
+  b,
+)
+k = [x | q(x),
+  r(x)]
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (identifier)
+        (identifier))))
+  (value_rule
+    (identifier)
+    (comprehension
+      (identifier)
+      (body
+        (atom_literal
+          (call
+            (identifier)
+            (arguments
+              (identifier))))
+        (atom_literal
+          (call
+            (identifier)
+            (arguments
+              (identifier))))))))
+
+================================================================================
+A body block separates literals by newlines or commas
+================================================================================
+
+constraint "m" if {
+  env == "prod", exists network.main/vpc
+
+  not network.main/vpc.private
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (check
+    (string
+      (string_content))
+    (body_block
+      (comparison
+        (identifier)
+        (string
+          (string_content)))
+      (exists_literal
+        (instance_expression
+          (member_expression
+            (identifier)
+            (identifier))
+          (instance_name)))
+      (not_literal
+        (truth_literal
+          (member_expression
+            (instance_expression
+              (member_expression
+                (identifier)
+                (identifier))
+              (instance_name))
+            (identifier)))))))
+
+================================================================================
+Blocks: clauses first, then fields, by newline or comma
+================================================================================
+
+resource net.subnet "private-{z}" @default {
+  for data("zone", z), z != "x"
+  if exists vpc
+  vpc_id = vpc.id, zone = z
+  tags.team += ["a"] @override
+  list[0]."k-v" = 1
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (string
+      (string_content)
+      (interpolation
+        (identifier)))
+    (rank)
+    (block
+      (clause
+        (body
+          (atom_literal
+            (call
+              (identifier)
+              (arguments
+                (string
+                  (string_content))
+                (identifier))))
+          (comparison
+            (identifier)
+            (string
+              (string_content)))))
+      (clause
+        (body
+          (exists_literal
+            (identifier))))
+      (field
+        (block_path
+          (identifier))
+        (member_expression
+          (identifier)
+          (identifier)))
+      (field
+        (block_path
+          (identifier))
+        (identifier))
+      (field
+        (block_path
+          (identifier)
+          (identifier))
+        (list
+          (string
+            (string_content)))
+        (rank))
+      (field
+        (block_path
+          (identifier)
+          (integer)
+          (string
+            (string_content)))
+        (integer)))))
+
+================================================================================
+Two statements on one line
+:error
+================================================================================
+
+p(a) q(b)
+
+--------------------------------------------------------------------------------
+
+
+
+================================================================================
+No terminator
+:error
+================================================================================
+
+p(a).
+
+--------------------------------------------------------------------------------
+
+
+
+================================================================================
+The old neck
+:error
+================================================================================
+
+q(x) :- p(x)
+
+--------------------------------------------------------------------------------
+
+
+
+================================================================================
+An if on the next line does not attach
+:error
+================================================================================
+
+p(a)
+  if q(a)
+
+--------------------------------------------------------------------------------
+
+
+
+================================================================================
+Two fields on one line
+:error
+================================================================================
+
+resource net.vpc a { cidr = "x" name = "a" }
+
+--------------------------------------------------------------------------------
+
+
+
+================================================================================
+A block does not start with a comma
+:error
+================================================================================
+
+stack a {, b = 1 }
+
+--------------------------------------------------------------------------------
+
+
+
+================================================================================
+A type name has no spaces
+:error
+================================================================================
+
+resource net. vpc a {}
+
+--------------------------------------------------------------------------------
+
+

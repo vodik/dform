@@ -1,0 +1,282 @@
+====================
+examples/k8s_demo.df
+====================
+
+# A Namespace, a Deployment and a Service planned against the mock Kubernetes
+# provider (providers/k8s/schema.df). No cluster: the world is a JSON file.
+#
+#   cargo run -- --file examples/k8s_demo.df plan
+#   cargo run -- --file examples/k8s_demo.df apply
+#
+# The ConfigMap uses generateName, so its name is picked by the API server at
+# Apply: until then the Deployment's configMapRef carries the null
+# ?k8s.config_map/web_config#metadata.name.
+
+edition 2026
+
+provider k8s {}
+
+app("web", "nginx:1.27", 3)
+
+resource k8s.namespace shop {
+  metadata.name = "shop"
+  metadata.labels = { team: "storefront" }
+}
+
+resource k8s.config_map web_config {
+  metadata.generateName = "web-config-"
+  metadata.namespace = shop.metadata.name
+  data = { "MODE": "production", "LOG_LEVEL": "info" }
+}
+
+resource k8s.deployment name {
+  for app(name, image, replicas)
+  metadata.name = name
+  metadata.namespace = shop.metadata.name
+  spec.replicas = replicas
+  spec.selector.matchLabels = { app: name }
+  spec.template.metadata.labels = { app: name }
+  spec.template.spec.containers = [{
+    name: name,
+    image: image,
+    ports: [{ containerPort: 8080, protocol: "TCP" }],
+    envFrom: [{ configMapRef: { name: web_config.metadata.name } }]
+  }]
+}
+
+resource k8s.service name {
+  for app(name, _, _)
+  metadata.name = name
+  metadata.namespace = shop.metadata.name
+  spec.selector = { app: name }
+  spec.ports = [{ port: 80, targetPort: "8080", protocol: "TCP" }]
+}
+
+---
+
+(source_file
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (edition
+    (integer))
+  (provider
+    (identifier)
+    (block))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (integer))))
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier)
+          (identifier))
+        (string
+          (string_content)))
+      (field
+        (block_path
+          (identifier)
+          (identifier))
+        (object
+          (object_field
+            (identifier)
+            (string
+              (string_content)))))))
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier)
+          (identifier))
+        (string
+          (string_content)))
+      (field
+        (block_path
+          (identifier)
+          (identifier))
+        (member_expression
+          (member_expression
+            (identifier)
+            (identifier))
+          (identifier)))
+      (field
+        (block_path
+          (identifier))
+        (object
+          (object_field
+            (string
+              (string_content))
+            (string
+              (string_content)))
+          (object_field
+            (string
+              (string_content))
+            (string
+              (string_content)))))))
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (identifier)
+    (block
+      (clause
+        (body
+          (atom_literal
+            (call
+              (identifier)
+              (arguments
+                (identifier)
+                (identifier)
+                (identifier))))))
+      (field
+        (block_path
+          (identifier)
+          (identifier))
+        (identifier))
+      (field
+        (block_path
+          (identifier)
+          (identifier))
+        (member_expression
+          (member_expression
+            (identifier)
+            (identifier))
+          (identifier)))
+      (field
+        (block_path
+          (identifier)
+          (identifier))
+        (identifier))
+      (field
+        (block_path
+          (identifier)
+          (identifier)
+          (identifier))
+        (object
+          (object_field
+            (identifier)
+            (identifier))))
+      (field
+        (block_path
+          (identifier)
+          (identifier)
+          (identifier)
+          (identifier))
+        (object
+          (object_field
+            (identifier)
+            (identifier))))
+      (field
+        (block_path
+          (identifier)
+          (identifier)
+          (identifier)
+          (identifier))
+        (list
+          (object
+            (object_field
+              (identifier)
+              (identifier))
+            (object_field
+              (identifier)
+              (identifier))
+            (object_field
+              (identifier)
+              (list
+                (object
+                  (object_field
+                    (identifier)
+                    (integer))
+                  (object_field
+                    (identifier)
+                    (string
+                      (string_content))))))
+            (object_field
+              (identifier)
+              (list
+                (object
+                  (object_field
+                    (identifier)
+                    (object
+                      (object_field
+                        (identifier)
+                        (member_expression
+                          (member_expression
+                            (identifier)
+                            (identifier))
+                          (identifier)))))))))))))
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (identifier)
+    (block
+      (clause
+        (body
+          (atom_literal
+            (call
+              (identifier)
+              (arguments
+                (identifier)
+                (identifier)
+                (identifier))))))
+      (field
+        (block_path
+          (identifier)
+          (identifier))
+        (identifier))
+      (field
+        (block_path
+          (identifier)
+          (identifier))
+        (member_expression
+          (member_expression
+            (identifier)
+            (identifier))
+          (identifier)))
+      (field
+        (block_path
+          (identifier)
+          (identifier))
+        (object
+          (object_field
+            (identifier)
+            (identifier))))
+      (field
+        (block_path
+          (identifier)
+          (identifier))
+        (list
+          (object
+            (object_field
+              (identifier)
+              (integer))
+            (object_field
+              (identifier)
+              (string
+                (string_content)))
+            (object_field
+              (identifier)
+              (string
+                (string_content)))))))))

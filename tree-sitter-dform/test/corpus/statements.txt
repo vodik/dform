@@ -1,0 +1,653 @@
+================================================================================
+Headers
+================================================================================
+
+edition 2026
+import "modules/network.df" as net
+provider fake { source = "providers/fake" }
+stack dform { unknowns = "strict" }
+stack app[env] {}
+stack renfry.app[env, region] { backend = "x" }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (edition
+    (integer))
+  (import
+    (string
+      (string_content))
+    (identifier))
+  (provider
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))))
+  (stack
+    (dotted_name
+      (identifier))
+    (block
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))))
+  (stack
+    (dotted_name
+      (identifier))
+    (identifier)
+    (block))
+  (stack
+    (dotted_name
+      (identifier)
+      (identifier))
+    (identifier)
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content))))))
+
+================================================================================
+Declarations
+================================================================================
+
+input env: enum("dev", "prod") = "dev"
+input replicas: int = 2 where replicas >= 1
+input relation seen/2 from file("seen.facts")
+input relation: string = "an input named relation"
+extern file.json(+path, -value: string) persist
+decl p/2 mixed
+decl project(id: int, name: string)
+decl type k8s.custom open
+type db.pg {
+  backup_days: int required where 1 <= backup_days <= 35
+  net: { cidr: inet, id: string computed id }
+}
+let cfg = settings[env]
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (input
+    (identifier)
+    (type
+      (dotted_name
+        (identifier))
+      (string
+        (string_content))
+      (string
+        (string_content)))
+    (string
+      (string_content)))
+  (input
+    (identifier)
+    (type
+      (dotted_name
+        (identifier)))
+    (integer)
+    (where_clause
+      (body
+        (comparison
+          (identifier)
+          (integer)))))
+  (input_relation
+    (identifier)
+    (integer)
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content)))))
+  (input
+    (identifier)
+    (type
+      (dotted_name
+        (identifier)))
+    (string
+      (string_content)))
+  (extern
+    (dotted_name
+      (identifier)
+      (identifier))
+    (bind_arg
+      (identifier))
+    (bind_arg
+      (identifier)
+      (type
+        (dotted_name
+          (identifier)))))
+  (decl
+    (dotted_name
+      (identifier))
+    (integer))
+  (decl
+    (dotted_name
+      (identifier))
+    (field_declaration
+      (identifier)
+      (type
+        (dotted_name
+          (identifier))))
+    (field_declaration
+      (identifier)
+      (type
+        (dotted_name
+          (identifier)))))
+  (decl
+    (dotted_name
+      (identifier)
+      (identifier)))
+  (type_declaration
+    (dotted_name
+      (identifier)
+      (identifier))
+    (attribute_block
+      (attribute_declaration
+        (block_path
+          (identifier))
+        (type
+          (dotted_name
+            (identifier)))
+        (flag)
+        (where_clause
+          (body
+            (comparison
+              (integer)
+              (identifier)
+              (integer)))))
+      (attribute_declaration
+        (block_path
+          (identifier))
+        (attribute_block
+          (attribute_declaration
+            (block_path
+              (identifier))
+            (type
+              (dotted_name
+                (identifier))))
+          (attribute_declaration
+            (block_path
+              (identifier))
+            (type
+              (dotted_name
+                (identifier)))
+            (flag)
+            (flag))))))
+  (let
+    (identifier)
+    (index_expression
+      (identifier)
+      (identifier))))
+
+================================================================================
+Modules, policies, scenarios
+================================================================================
+
+module network {
+  input vpc_net: inet
+  output vpc: net.vpc
+  export subnet_of/2
+  contributes _.tags
+  output vpc = vpc
+}
+instance network main { vpc_net = cfg.network.main.vpc_net }
+policy tags {
+  r.tags = { team: "x" } if r in resource
+}
+apply tags
+scenario prod {
+  with env = "prod"
+  deny "no db" if _ in db.postgres
+}
+when env == "prod" {
+  q(1)
+}
+for z in zones {
+  q(z)
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module
+    (identifier)
+    (statement_block
+      (input
+        (identifier)
+        (type
+          (dotted_name
+            (identifier))))
+      (output
+        (identifier)
+        (type
+          (dotted_name
+            (identifier)
+            (identifier))))
+      (export
+        (identifier)
+        (integer))
+      (contributes
+        (member_expression
+          (identifier)
+          (identifier)))
+      (output
+        (identifier)
+        (identifier))))
+  (instance
+    (identifier)
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (member_expression
+          (member_expression
+            (member_expression
+              (identifier)
+              (identifier))
+            (identifier))
+          (identifier)))))
+  (policy
+    (identifier)
+    (statement_block
+      (contribution
+        (member_expression
+          (identifier)
+          (identifier))
+        (object
+          (object_field
+            (identifier)
+            (string
+              (string_content))))
+        (body
+          (in_literal
+            (identifier)
+            (any_resource))))))
+  (apply
+    (identifier))
+  (scenario
+    (identifier)
+    (statement_block
+      (with
+        (identifier)
+        (string
+          (string_content)))
+      (check
+        (string
+          (string_content))
+        (body
+          (in_literal
+            (identifier)
+            (member_expression
+              (identifier)
+              (identifier)))))))
+  (when
+    (body
+      (comparison
+        (identifier)
+        (string
+          (string_content))))
+    (statement_block
+      (fact
+        (call
+          (identifier)
+          (arguments
+            (integer))))))
+  (for
+    (body
+      (in_literal
+        (identifier)
+        (identifier)))
+    (statement_block
+      (fact
+        (call
+          (identifier)
+          (arguments
+            (identifier)))))))
+
+================================================================================
+Rules, facts, checks and contributions
+================================================================================
+
+zone("a")
+names(n) if project{ name: n }
+arg(t, a, .tags, { owner: "ops" }) @override if want(t, a)
+k = 1 if p(1)
+settings.prod.audit.sinks += ["s3"]
+input("env", v) if q(v)
+deny("m", "t", { a: b }) if q(b)
+deny "m" { a } if q(a)
+warn "w"
+constraint "c" if not q(1)
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content)))))
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)))
+    (body
+      (atom_literal
+        (record
+          (identifier)
+          (record_field
+            (identifier)
+            (identifier))))))
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)
+        (identifier)
+        (keypath)
+        (object
+          (object_field
+            (identifier)
+            (string
+              (string_content))))))
+    (rank)
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier)
+            (identifier))))))
+  (value_rule
+    (identifier)
+    (integer)
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (integer))))))
+  (contribution
+    (member_expression
+      (member_expression
+        (member_expression
+          (identifier)
+          (identifier))
+        (identifier))
+      (identifier))
+    (list
+      (string
+        (string_content))))
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (identifier)))
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier))))))
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (object
+          (object_field
+            (identifier)
+            (identifier)))))
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier))))))
+  (check
+    (string
+      (string_content))
+    (object
+      (object_field
+        (identifier)))
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier))))))
+  (check
+    (string
+      (string_content)))
+  (check
+    (string
+      (string_content))
+    (body
+      (not_literal
+        (atom_literal
+          (call
+            (identifier)
+            (arguments
+              (integer))))))))
+
+================================================================================
+Literals
+================================================================================
+
+p(x) if q(x), x.a, x.b == 1, x in net.vpc, has x.c, exists y, not x.d, some i, v in xs, x not in ys, not { r(x) }, e{a: x}, y in resource, not "n" in net.vpc
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)))
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier))))
+      (truth_literal
+        (member_expression
+          (identifier)
+          (identifier)))
+      (comparison
+        (member_expression
+          (identifier)
+          (identifier))
+        (integer))
+      (in_literal
+        (identifier)
+        (member_expression
+          (identifier)
+          (identifier)))
+      (has_literal
+        (member_expression
+          (identifier)
+          (identifier)))
+      (exists_literal
+        (identifier))
+      (not_literal
+        (truth_literal
+          (member_expression
+            (identifier)
+            (identifier))))
+      (some_literal
+        (identifier)
+        (identifier)
+        (identifier))
+      (not_in_literal
+        (identifier)
+        (identifier))
+      (not_block
+        (body_block
+          (atom_literal
+            (call
+              (identifier)
+              (arguments
+                (identifier))))))
+      (atom_literal
+        (record
+          (identifier)
+          (record_field
+            (identifier)
+            (identifier))))
+      (in_literal
+        (identifier)
+        (any_resource))
+      (not_literal
+        (in_literal
+          (string
+            (string_content))
+          (member_expression
+            (identifier)
+            (identifier)))))))
+
+================================================================================
+Terms
+================================================================================
+
+p(x) if y = 1 + 2 * 3 - -4 / (5 % 2), z = a/b, w = x / 2, v = m.i/n.p, u = t[x].p, s = f[0].x, q(.tags."a.b"[0], .id), r = [x ordered by x | q(x)], o = { a, "b-c": 1, type: 2 }, n = null, b = true
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)))
+    (body
+      (comparison
+        (identifier)
+        (binary_expression
+          (binary_expression
+            (integer)
+            (binary_expression
+              (integer)
+              (integer)))
+          (binary_expression
+            (unary_expression
+              (integer))
+            (parenthesized
+              (binary_expression
+                (integer)
+                (integer))))))
+      (comparison
+        (identifier)
+        (instance_expression
+          (identifier)
+          (instance_name)))
+      (comparison
+        (identifier)
+        (binary_expression
+          (identifier)
+          (integer)))
+      (comparison
+        (identifier)
+        (member_expression
+          (instance_expression
+            (member_expression
+              (identifier)
+              (identifier))
+            (instance_name))
+          (identifier)))
+      (comparison
+        (identifier)
+        (member_expression
+          (index_expression
+            (identifier)
+            (identifier))
+          (identifier)))
+      (comparison
+        (identifier)
+        (member_expression
+          (index_expression
+            (identifier)
+            (integer))
+          (identifier)))
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (keypath)
+            (keypath))))
+      (comparison
+        (identifier)
+        (comprehension
+          (identifier)
+          (identifier)
+          (body
+            (atom_literal
+              (call
+                (identifier)
+                (arguments
+                  (identifier)))))))
+      (comparison
+        (identifier)
+        (object
+          (object_field
+            (identifier))
+          (object_field
+            (string
+              (string_content))
+            (integer))
+          (object_field
+            (identifier)
+            (integer))))
+      (comparison
+        (identifier)
+        (null))
+      (comparison
+        (identifier)
+        (true)))))
+
+================================================================================
+A keyword term is not a name
+:error
+================================================================================
+
+x = exists{ a: 1 }
+
+--------------------------------------------------------------------------------
+
+
+
+================================================================================
+A call is glued
+:error
+================================================================================
+
+p (a)
+
+--------------------------------------------------------------------------------
+
+
+
+================================================================================
+A hyphenated name is a string
+:error
+================================================================================
+
+zone(us-test-1a)
+
+--------------------------------------------------------------------------------
+
+

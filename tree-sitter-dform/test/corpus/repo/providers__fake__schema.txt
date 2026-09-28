@@ -1,0 +1,507 @@
+========================
+providers/fake/schema.df
+========================
+
+# The fake provider behind dform.df, dform-advanced.df and the examples.
+#
+#   type_attr(Type, Path, Ty, Flags).   Flags: required computed id sensitive
+#                                       nullable optional_computed force_new
+#   type_provider(Type, Provider).
+#   type_mint(Type, Path, Template).    how the mock mints a computed value at
+#                                       Apply: {type} {name} {attr} {hash}
+#   type_replace(Type, Order).          create_first, destroy_first or either
+#
+# Every type has a fresh `id`; db.postgres and k8s.cluster have open
+# endpoints. Attributes a program sets are not listed (the fake provider
+# accepts any configured attribute) unless a change to one replaces the
+# object: a vpc's or a subnet's cidr is force_new.
+
+edition 2026
+
+type_provider(net.vpc, "fakecloud")
+type_provider(net.subnet, "fakecloud")
+type_provider(net.vpc_peering, "fakecloud")
+type_provider(net.route, "fakecloud")
+type_provider(compute.vm, "fakecloud")
+type_provider("db.postgres", "fakecloud")
+type_provider(k8s.cluster, "fakecloud")
+type_provider(k8s.nodepool, "fakecloud")
+type_provider("iam.role", "fakecloud")
+type_provider("iam.policy", "fakecloud")
+type_provider("iam.role_policy_attachment", "fakecloud")
+
+type_attr(net.vpc, "id", "string", ["computed", "id"])
+type_attr(net.subnet, "id", "string", ["computed", "id"])
+type_attr(net.vpc_peering, "id", "string", ["computed", "id"])
+type_attr(net.route, "id", "string", ["computed", "id"])
+type_attr(compute.vm, "id", "string", ["computed", "id"])
+type_attr("db.postgres", "id", "string", ["computed", "id"])
+type_attr(k8s.cluster, "id", "string", ["computed", "id"])
+type_attr(k8s.nodepool, "id", "string", ["computed", "id"])
+type_attr("iam.role", "id", "string", ["computed", "id"])
+type_attr("iam.policy", "id", "string", ["computed", "id"])
+type_attr("iam.role_policy_attachment", "id", "string", ["computed", "id"])
+
+type_attr(net.vpc, "cidr", "string", ["force_new"])
+type_attr(net.subnet, "cidr", "string", ["force_new"])
+
+# How a replacement is ordered: a vpc may be replaced either way (destroy
+# first unless lifecycle create_before_destroy says otherwise).
+type_replace(net.vpc, "either")
+
+type_attr("db.postgres", "endpoint", "string", ["computed"])
+type_attr(k8s.cluster, "api_endpoint", "string", ["computed"])
+type_attr(k8s.cluster, "ca_cert", "string", ["computed"])
+
+type_mint("db.postgres", "endpoint", "{{name}}.db.fake")
+
+# A new database is slow to show up in Read: five attempts before it is gone.
+type_retry("db.postgres", 5)
+type_mint(k8s.cluster, "api_endpoint", "https://{{name}}.k8s.fake")
+type_mint(k8s.cluster, "ca_cert", "FAKECERT")
+
+# Checkable refinements (E DR-13; `src/refine.rs`): a subnet is a /24 or
+# larger, a database keeps backups for one to 35 days.
+type_refine(net.subnet, "cidr", prefix_len_le(24))
+type_refine("db.postgres", "backup_days", range(1, 35))
+
+---
+
+(source_file
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (edition
+    (integer))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list
+          (string
+            (string_content))
+          (string
+            (string_content))))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list
+          (string
+            (string_content))
+          (string
+            (string_content))))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list
+          (string
+            (string_content))
+          (string
+            (string_content))))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list
+          (string
+            (string_content))
+          (string
+            (string_content))))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list
+          (string
+            (string_content))
+          (string
+            (string_content))))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list
+          (string
+            (string_content))
+          (string
+            (string_content))))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list
+          (string
+            (string_content))
+          (string
+            (string_content))))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list
+          (string
+            (string_content))
+          (string
+            (string_content))))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list
+          (string
+            (string_content))
+          (string
+            (string_content))))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list
+          (string
+            (string_content))
+          (string
+            (string_content))))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list
+          (string
+            (string_content))
+          (string
+            (string_content))))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list
+          (string
+            (string_content))))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list
+          (string
+            (string_content))))))
+  (comment)
+  (comment)
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list
+          (string
+            (string_content))))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list
+          (string
+            (string_content))))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list
+          (string
+            (string_content))))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (escape_sequence)
+          (string_content)
+          (escape_sequence)
+          (string_content)))))
+  (comment)
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (integer))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (string
+          (string_content)
+          (escape_sequence)
+          (string_content)
+          (escape_sequence)
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (comment)
+  (comment)
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (call
+          (identifier)
+          (arguments
+            (integer))))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (call
+          (identifier)
+          (arguments
+            (integer)
+            (integer)))))))

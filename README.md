@@ -1137,6 +1137,42 @@ empty and the stack not locked. Backends:
   registered `role = bootstrap` stack (there must be exactly one; an apply
   of a bootstrap stack registers it).
 
+## Editors: the tree-sitter grammar
+
+`tree-sitter-dform/` is a tree-sitter grammar for `.df` files, for
+editors only: the compiler keeps its own parser (`src/syntax/`). It has
+`queries/highlights.scm`, `queries/indents.scm` and `queries/locals.scm`
+(nvim-treesitter capture names), and the generated `src/parser.c` is
+committed, so an editor builds it with a C compiler and no tree-sitter
+CLI. A small external scanner (`src/scanner.c`) makes a newline outside
+brackets end a statement and reads a string's text around its `{e}`
+holes.
+
+The highlight query captures a dot in a field-value position as
+`@variable.reference` (a field's value, a head or `output` argument, an
+element of a list or object there, a comprehension's item) and leaves a
+dot anywhere else a plain read, as proposal G (G-6) lowers them. This is
+the syntax's answer: a chain whose head is a `let` alias of `settings`
+or an instance output is a read in any position, which only the resolver
+(and a language server) knows.
+
+`tests/treesit_agreement.rs` holds the two parsers together: every file
+the compiler reads parses without an ERROR or MISSING node, both trees
+have the same statements, blocks and literals at the same byte ranges, a
+`tests/syntax/err` file has a tree-sitter error exactly when it has a
+syntax error, and the reference capture fires on field values in
+`dform.df` and not on reads. After changing `grammar.js`, from
+`tree-sitter-dform/`:
+
+```bash
+tree-sitter generate      # rewrites src/parser.c; commit it
+npm run corpus            # rebuild test/corpus/repo/ from the repository's .df files
+tree-sitter test
+```
+
+(`npm install` there brings the CLI as a dev dependency if `tree-sitter`
+is not on the PATH.)
+
 ## Testing
 
 `cargo test` runs the integration tests under `tests/` (one file per

@@ -1,0 +1,435 @@
+=======================
+providers/gke/schema.df
+=======================
+
+# C's two-phase GKE / kubernetes stack as E section 7.4 spells it (pngu.df).
+#
+# The cluster's endpoint, ca and zones are open; ids are fresh; the client
+# token and the secret version's data are secret. k8s.* types belong to the
+# `kubernetes` provider, whose configuration carries three of those nulls.
+# google.client_config and google.secret_manager_secret_version are data
+# sources: no type_provider.
+
+edition 2026
+
+type_provider("google_compute_subnetwork", "google")
+type_provider("google_compute_network_peering", "google")
+type_provider("google_compute_address", "google")
+type_provider("google_monitoring_dashboard", "google")
+type_provider("gke_cluster", "google")
+type_provider("gke_nodepool", "google")
+type_provider(k8s.namespace, "kubernetes")
+type_provider(k8s.deployment, "kubernetes")
+type_provider(k8s.secret, "kubernetes")
+
+type_attr("google_compute_subnetwork", "id", "string", ["computed", "id"])
+type_attr("google_compute_network_peering", "id", "string", ["computed", "id"])
+type_attr("google_compute_address", "id", "string", ["computed", "id"])
+type_attr("google_monitoring_dashboard", "id", "string", ["computed", "id"])
+type_attr("gke_cluster", "id", "string", ["computed", "id"])
+type_attr("gke_nodepool", "id", "string", ["computed", "id"])
+
+type_attr(k8s.namespace, "id", "string", ["computed", "id"])
+type_attr(k8s.namespace, "uid", "string", ["computed", "id"])
+type_attr(k8s.deployment, "id", "string", ["computed", "id"])
+type_attr(k8s.deployment, "uid", "string", ["computed", "id"])
+type_attr(k8s.secret, "id", "string", ["computed", "id"])
+type_attr(k8s.secret, "uid", "string", ["computed", "id"])
+type_attr(k8s.secret, "data", "map", ["sensitive"])
+
+type_attr("gke_cluster", "endpoint", "string", ["computed"])
+type_attr("gke_cluster", "ca_certificate", "string", ["computed"])
+type_attr("gke_cluster", "zones", "list", ["computed"])
+
+type_attr(google.client_config, "access_token", "string", ["computed", "sensitive"])
+type_attr(google.secret_manager_secret_version, "secret_data", "string", ["computed", "sensitive"])
+
+type_mint("gke_cluster", "endpoint", "https://{{name}}.gke.fake")
+# The zones a cluster lands in are the node locations it was configured with.
+type_mint("gke_cluster", "zones", "{{doc:node_locations}}")
+
+---
+
+(source_file
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (edition
+    (integer))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list
+          (string
+            (string_content))
+          (string
+            (string_content))))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list
+          (string
+            (string_content))
+          (string
+            (string_content))))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list
+          (string
+            (string_content))
+          (string
+            (string_content))))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list
+          (string
+            (string_content))
+          (string
+            (string_content))))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list
+          (string
+            (string_content))
+          (string
+            (string_content))))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list
+          (string
+            (string_content))
+          (string
+            (string_content))))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list
+          (string
+            (string_content))
+          (string
+            (string_content))))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list
+          (string
+            (string_content))
+          (string
+            (string_content))))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list
+          (string
+            (string_content))
+          (string
+            (string_content))))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list
+          (string
+            (string_content))
+          (string
+            (string_content))))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list
+          (string
+            (string_content))
+          (string
+            (string_content))))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list
+          (string
+            (string_content))
+          (string
+            (string_content))))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list
+          (string
+            (string_content))))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list
+          (string
+            (string_content))))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list
+          (string
+            (string_content))))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list
+          (string
+            (string_content))))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list
+          (string
+            (string_content))
+          (string
+            (string_content))))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list
+          (string
+            (string_content))
+          (string
+            (string_content))))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)
+          (escape_sequence)
+          (string_content)
+          (escape_sequence)
+          (string_content)))))
+  (comment)
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (escape_sequence)
+          (string_content)
+          (escape_sequence))))))

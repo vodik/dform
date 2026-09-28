@@ -1,0 +1,81 @@
+=======================================================
+examples/adversarial/adv9_default_tag_unless_present.df
+=======================================================
+
+# adv9: D's "add a default tag unless the resource already has one" idiom,
+# written against the merged attr. Reads (attr, *, tags), writes
+# (arg, *, tags): a self-loop. E's answer is @default rank, not this.
+
+edition 2026
+
+resource net.vpc main {
+  cidr = inet("10.0.0.0/16")
+  tags = { env: "dev" }
+}
+
+arg_add(t, n, .tags, { team: "platform" }) if
+  want(t, n),
+  not arg(t, n, .tags, { team: "platform" })
+
+---
+
+(source_file
+  (comment)
+  (comment)
+  (comment)
+  (edition
+    (integer))
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (call
+          (identifier)
+          (arguments
+            (string
+              (string_content)))))
+      (field
+        (block_path
+          (identifier))
+        (object
+          (object_field
+            (identifier)
+            (string
+              (string_content)))))))
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)
+        (identifier)
+        (keypath)
+        (object
+          (object_field
+            (identifier)
+            (string
+              (string_content))))))
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier)
+            (identifier))))
+      (not_literal
+        (atom_literal
+          (call
+            (identifier)
+            (arguments
+              (identifier)
+              (identifier)
+              (keypath)
+              (object
+                (object_field
+                  (identifier)
+                  (string
+                    (string_content)))))))))))

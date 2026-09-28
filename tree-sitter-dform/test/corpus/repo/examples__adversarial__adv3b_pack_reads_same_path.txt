@@ -1,0 +1,125 @@
+==================================================
+examples/adversarial/adv3b_pack_reads_same_path.df
+==================================================
+
+# adv3b: the same pack reads the path it contributes to. Under E this is a
+# negative self-loop on (attr, iam.policy, statements) and must be rejected.
+
+edition 2026
+
+resource iam.policy app_policy {
+  name = "app"
+  statements = [{ action: "db.connect", resource: "db" }]
+}
+
+policy p {
+  contributes iam.policy.statements
+  type_lattice("iam.policy", .statements, "set")
+  arg("iam.policy", p, .statements, [{ action: "org.read", resource: "org" }]) if
+    want("iam.policy", p),
+    arg("iam.policy", p, .statements, s),
+    not member(s, { action: "org.read", resource: "org" })
+}
+apply p
+
+---
+
+(source_file
+  (comment)
+  (comment)
+  (edition
+    (integer))
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))
+      (field
+        (block_path
+          (identifier))
+        (list
+          (object
+            (object_field
+              (identifier)
+              (string
+                (string_content)))
+            (object_field
+              (identifier)
+              (string
+                (string_content))))))))
+  (policy
+    (identifier)
+    (statement_block
+      (contributes
+        (member_expression
+          (member_expression
+            (identifier)
+            (identifier))
+          (identifier)))
+      (fact
+        (call
+          (identifier)
+          (arguments
+            (string
+              (string_content))
+            (keypath)
+            (string
+              (string_content)))))
+      (rule
+        (call
+          (identifier)
+          (arguments
+            (string
+              (string_content))
+            (identifier)
+            (keypath)
+            (list
+              (object
+                (object_field
+                  (identifier)
+                  (string
+                    (string_content)))
+                (object_field
+                  (identifier)
+                  (string
+                    (string_content)))))))
+        (body
+          (atom_literal
+            (call
+              (identifier)
+              (arguments
+                (string
+                  (string_content))
+                (identifier))))
+          (atom_literal
+            (call
+              (identifier)
+              (arguments
+                (string
+                  (string_content))
+                (identifier)
+                (keypath)
+                (identifier))))
+          (not_literal
+            (atom_literal
+              (call
+                (identifier)
+                (arguments
+                  (identifier)
+                  (object
+                    (object_field
+                      (identifier)
+                      (string
+                        (string_content)))
+                    (object_field
+                      (identifier)
+                      (string
+                        (string_content))))))))))))
+  (apply
+    (identifier)))

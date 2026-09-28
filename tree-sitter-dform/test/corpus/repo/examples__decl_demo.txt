@@ -1,0 +1,118 @@
+=====================
+examples/decl_demo.df
+=====================
+
+# Demo: schemas + record matching + wildcards
+
+edition 2026
+
+# The names are the record's fields: `project{ network_name: n }`.
+decl project(id: int, name: string, region: string, network_name: string, proxy_cidr: string)
+
+project(1, "alpha", "us-east-1", "net-a", "10.0.0.0/24")
+project(2, "beta", "us-east-1", "net-b", "10.1.0.0/24")
+
+# Match only the fields you care about (missing fields become wildcards in rule bodies).
+proj_basic(id, name, region) if project{ id: id, name: name, region: region }
+
+# You can also use anonymous wildcards in positional form.
+proj_ids(id) if project(id, _, _, _, _)
+
+---
+
+(source_file
+  (comment)
+  (edition
+    (integer))
+  (comment)
+  (decl
+    (dotted_name
+      (identifier))
+    (field_declaration
+      (identifier)
+      (type
+        (dotted_name
+          (identifier))))
+    (field_declaration
+      (identifier)
+      (type
+        (dotted_name
+          (identifier))))
+    (field_declaration
+      (identifier)
+      (type
+        (dotted_name
+          (identifier))))
+    (field_declaration
+      (identifier)
+      (type
+        (dotted_name
+          (identifier))))
+    (field_declaration
+      (identifier)
+      (type
+        (dotted_name
+          (identifier)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (integer)
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (integer)
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (comment)
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)
+        (identifier)
+        (identifier)))
+    (body
+      (atom_literal
+        (record
+          (identifier)
+          (record_field
+            (identifier)
+            (identifier))
+          (record_field
+            (identifier)
+            (identifier))
+          (record_field
+            (identifier)
+            (identifier))))))
+  (comment)
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)))
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier)
+            (identifier)
+            (identifier)
+            (identifier)
+            (identifier)))))))

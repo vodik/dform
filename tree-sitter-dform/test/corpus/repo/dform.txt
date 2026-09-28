@@ -1,0 +1,730 @@
+========
+dform.df
+========
+
+# dform demo: component-scoped resources + settings tables + IAM policy assembly.
+#
+# Try:
+#   cargo run -- plan
+#   cargo run -- plan --set env=prod
+#   cargo run -- apply
+
+edition 2026
+
+# The provider the mock plays, and the stack this program owns: its state is
+# .dform/dform/ (the default backend, local(".dform/dform")). Strict: a plan
+# that needs a phase boundary is refused; fresh nulls (ids) still flow.
+provider fake { source = "providers/fake" }
+stack dform { unknowns = "strict" }
+
+# Typed stack input with a default. The default is a @default contribution
+# to input env; --set env=prod is a normal contribution and wins.
+input env: enum("dev", "staging", "prod") = "staging"
+
+data("zone", "us-test-1a")
+data("zone", "us-test-1b")
+
+# Guard blocks (when) apply a condition to everything inside.
+when env == "prod" {
+  iam_need("app", "audit.write", "audit-log")
+}
+
+# Settings (branch as data). One @default layer for every environment that
+# has one; a per-environment block wins per leaf at the normal rank.
+env_name("staging")
+env_name("prod")
+
+settings e @default {
+  for env_name(e)
+  network.main.vpc_net = inet("10.50.0.0/16")
+  network.peer.vpc_net = inet("10.60.0.0/16")
+  db = { backup_days: 3, multi_az: false }
+  k8s = { private_api: false, nodepool: { min: 1, max: 3 } }
+}
+
+settings prod {
+  network.main.vpc_net = inet("10.20.0.0/16")
+  network.peer.vpc_net = inet("10.21.0.0/16")
+  db = { backup_days: 14, multi_az: true }
+  k8s = { private_api: true, nodepool: { min: 3, max: 10 } }
+  audit.sinks += ["cloudwatch"] # a set: unions with the baseline pack's ["s3"]
+}
+
+settings dev {
+  network.main.vpc_net = inet("10.90.0.0/16")
+}
+
+# The settings of the selected environment, by name: every use reads env
+# and one leaf.
+let cfg = settings[env]
+
+import "modules/network.df"
+import "modules/database.df"
+import "modules/kubernetes.df"
+import "modules/iam.df"
+import "policies/baseline.df"
+import "modules/stdlib_net.df"
+
+apply baseline
+apply stdlib_net
+
+# Instantiate modules (Terraform module-like). Inputs are declared by the
+# module; each `k = v` here is a contribution to one.
+instance network main {
+  vpc_net = cfg.network.main.vpc_net
+}
+
+instance network peer {
+  vpc_net = cfg.network.peer.vpc_net
+}
+
+# Cross-instance values are wired through outputs.
+instance database main {
+  backup_days = cfg.db.backup_days
+  multi_az = cfg.db.multi_az
+  subnet_ids = network.main.private_subnet_ids
+}
+
+instance kubernetes main {
+  private_api = cfg.k8s.private_api
+  nodepool_min = cfg.k8s.nodepool.min
+  nodepool_max = cfg.k8s.nodepool.max
+  subnet_ids = network.main.private_subnet_ids
+}
+
+instance iam main {}
+
+# VPC peering intent: define edges between network instances.
+vpc_peer_inst("main", "peer")
+
+# Each network instance outputs its vpc's address; an edge's pair is the
+# two instances' vpcs, joined on the instance names.
+vpc_peer_pair(ia, ib, a, b) if vpc_peer_inst(ia, ib), a = network[ia].vpc, b = network[ib].vpc
+vpc_peer(a, b) if vpc_peer_pair(_, _, a, b)
+
+# Create a peering resource per declared peering edge.
+resource net.vpc_peering "peer-{ia}-{ib}" {
+  for vpc_peer_pair(ia, ib, a, b)
+  if a in net.vpc, b in net.vpc # both ends must exist in this environment
+  requester_vpc_id = a.id
+  accepter_vpc_id = b.id
+}
+
+# Demo: allocate an IP from the main VPC.
+resource compute.vm bastion {
+  private_ip = inet_host(cfg.network.main.vpc_net, 20)
+}
+
+# Constraints (policy)
+constraint "prod db must be multi_az" if {
+  env == "prod"
+  exists database.main/db
+  not database.main/db.multi_az
+}
+
+constraint "prod k8s must have private api" if {
+  env == "prod"
+  exists kubernetes.main/cluster
+  not kubernetes.main/cluster.private_api
+}
+
+# Scenarios: policy over hypothetical inputs. `dform test` runs every one
+# against an empty mock world; `dform plan --scenario prod` plans the stack
+# as if env were prod.
+scenario prod {
+  with env = "prod"
+  deny "prod peers the two vpcs" if not "peer-main-peer" in net.vpc_peering
+  deny "prod keeps 14 days of db backups" if not database.main/db.backup_days == 14
+}
+
+scenario dev {
+  with env = "dev"
+  deny "dev has no database" if _ in db.postgres
+  deny "dev has no peer network" if exists network.peer/vpc
+}
+
+---
+
+(source_file
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (edition
+    (integer))
+  (comment)
+  (comment)
+  (comment)
+  (provider
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))))
+  (stack
+    (dotted_name
+      (identifier))
+    (block
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))))
+  (comment)
+  (comment)
+  (input
+    (identifier)
+    (type
+      (dotted_name
+        (identifier))
+      (string
+        (string_content))
+      (string
+        (string_content))
+      (string
+        (string_content)))
+    (string
+      (string_content)))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (comment)
+  (when
+    (body
+      (comparison
+        (identifier)
+        (string
+          (string_content))))
+    (statement_block
+      (fact
+        (call
+          (identifier)
+          (arguments
+            (string
+              (string_content))
+            (string
+              (string_content))
+            (string
+              (string_content)))))))
+  (comment)
+  (comment)
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content)))))
+  (settings
+    (identifier)
+    (rank)
+    (block
+      (clause
+        (body
+          (atom_literal
+            (call
+              (identifier)
+              (arguments
+                (identifier))))))
+      (field
+        (block_path
+          (identifier)
+          (identifier)
+          (identifier))
+        (call
+          (identifier)
+          (arguments
+            (string
+              (string_content)))))
+      (field
+        (block_path
+          (identifier)
+          (identifier)
+          (identifier))
+        (call
+          (identifier)
+          (arguments
+            (string
+              (string_content)))))
+      (field
+        (block_path
+          (identifier))
+        (object
+          (object_field
+            (identifier)
+            (integer))
+          (object_field
+            (identifier)
+            (false))))
+      (field
+        (block_path
+          (identifier))
+        (object
+          (object_field
+            (identifier)
+            (false))
+          (object_field
+            (identifier)
+            (object
+              (object_field
+                (identifier)
+                (integer))
+              (object_field
+                (identifier)
+                (integer))))))))
+  (settings
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier)
+          (identifier)
+          (identifier))
+        (call
+          (identifier)
+          (arguments
+            (string
+              (string_content)))))
+      (field
+        (block_path
+          (identifier)
+          (identifier)
+          (identifier))
+        (call
+          (identifier)
+          (arguments
+            (string
+              (string_content)))))
+      (field
+        (block_path
+          (identifier))
+        (object
+          (object_field
+            (identifier)
+            (integer))
+          (object_field
+            (identifier)
+            (true))))
+      (field
+        (block_path
+          (identifier))
+        (object
+          (object_field
+            (identifier)
+            (true))
+          (object_field
+            (identifier)
+            (object
+              (object_field
+                (identifier)
+                (integer))
+              (object_field
+                (identifier)
+                (integer))))))
+      (field
+        (block_path
+          (identifier)
+          (identifier))
+        (list
+          (string
+            (string_content))))
+      (comment)))
+  (settings
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier)
+          (identifier)
+          (identifier))
+        (call
+          (identifier)
+          (arguments
+            (string
+              (string_content)))))))
+  (comment)
+  (comment)
+  (let
+    (identifier)
+    (index_expression
+      (identifier)
+      (identifier)))
+  (import
+    (string
+      (string_content)))
+  (import
+    (string
+      (string_content)))
+  (import
+    (string
+      (string_content)))
+  (import
+    (string
+      (string_content)))
+  (import
+    (string
+      (string_content)))
+  (import
+    (string
+      (string_content)))
+  (apply
+    (identifier))
+  (apply
+    (identifier))
+  (comment)
+  (comment)
+  (instance
+    (identifier)
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (member_expression
+          (member_expression
+            (member_expression
+              (identifier)
+              (identifier))
+            (identifier))
+          (identifier)))))
+  (instance
+    (identifier)
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (member_expression
+          (member_expression
+            (member_expression
+              (identifier)
+              (identifier))
+            (identifier))
+          (identifier)))))
+  (comment)
+  (instance
+    (identifier)
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (member_expression
+          (member_expression
+            (identifier)
+            (identifier))
+          (identifier)))
+      (field
+        (block_path
+          (identifier))
+        (member_expression
+          (member_expression
+            (identifier)
+            (identifier))
+          (identifier)))
+      (field
+        (block_path
+          (identifier))
+        (member_expression
+          (member_expression
+            (identifier)
+            (identifier))
+          (identifier)))))
+  (instance
+    (identifier)
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (member_expression
+          (member_expression
+            (identifier)
+            (identifier))
+          (identifier)))
+      (field
+        (block_path
+          (identifier))
+        (member_expression
+          (member_expression
+            (member_expression
+              (identifier)
+              (identifier))
+            (identifier))
+          (identifier)))
+      (field
+        (block_path
+          (identifier))
+        (member_expression
+          (member_expression
+            (member_expression
+              (identifier)
+              (identifier))
+            (identifier))
+          (identifier)))
+      (field
+        (block_path
+          (identifier))
+        (member_expression
+          (member_expression
+            (identifier)
+            (identifier))
+          (identifier)))))
+  (instance
+    (identifier)
+    (identifier)
+    (block))
+  (comment)
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (comment)
+  (comment)
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)
+        (identifier)
+        (identifier)
+        (identifier)))
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier)
+            (identifier))))
+      (comparison
+        (identifier)
+        (member_expression
+          (index_expression
+            (identifier)
+            (identifier))
+          (identifier)))
+      (comparison
+        (identifier)
+        (member_expression
+          (index_expression
+            (identifier)
+            (identifier))
+          (identifier)))))
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)
+        (identifier)))
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier)
+            (identifier)
+            (identifier)
+            (identifier))))))
+  (comment)
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (string
+      (string_content)
+      (interpolation
+        (identifier))
+      (string_content)
+      (interpolation
+        (identifier)))
+    (block
+      (clause
+        (body
+          (atom_literal
+            (call
+              (identifier)
+              (arguments
+                (identifier)
+                (identifier)
+                (identifier)
+                (identifier))))))
+      (clause
+        (body
+          (in_literal
+            (identifier)
+            (member_expression
+              (identifier)
+              (identifier)))
+          (in_literal
+            (identifier)
+            (member_expression
+              (identifier)
+              (identifier)))))
+      (comment)
+      (field
+        (block_path
+          (identifier))
+        (member_expression
+          (identifier)
+          (identifier)))
+      (field
+        (block_path
+          (identifier))
+        (member_expression
+          (identifier)
+          (identifier)))))
+  (comment)
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (call
+          (identifier)
+          (arguments
+            (member_expression
+              (member_expression
+                (member_expression
+                  (identifier)
+                  (identifier))
+                (identifier))
+              (identifier))
+            (integer))))))
+  (comment)
+  (check
+    (string
+      (string_content))
+    (body_block
+      (comparison
+        (identifier)
+        (string
+          (string_content)))
+      (exists_literal
+        (instance_expression
+          (member_expression
+            (identifier)
+            (identifier))
+          (instance_name)))
+      (not_literal
+        (truth_literal
+          (member_expression
+            (instance_expression
+              (member_expression
+                (identifier)
+                (identifier))
+              (instance_name))
+            (identifier))))))
+  (check
+    (string
+      (string_content))
+    (body_block
+      (comparison
+        (identifier)
+        (string
+          (string_content)))
+      (exists_literal
+        (instance_expression
+          (member_expression
+            (identifier)
+            (identifier))
+          (instance_name)))
+      (not_literal
+        (truth_literal
+          (member_expression
+            (instance_expression
+              (member_expression
+                (identifier)
+                (identifier))
+              (instance_name))
+            (identifier))))))
+  (comment)
+  (comment)
+  (comment)
+  (scenario
+    (identifier)
+    (statement_block
+      (with
+        (identifier)
+        (string
+          (string_content)))
+      (check
+        (string
+          (string_content))
+        (body
+          (not_literal
+            (in_literal
+              (string
+                (string_content))
+              (member_expression
+                (identifier)
+                (identifier))))))
+      (check
+        (string
+          (string_content))
+        (body
+          (not_literal
+            (comparison
+              (member_expression
+                (instance_expression
+                  (member_expression
+                    (identifier)
+                    (identifier))
+                  (instance_name))
+                (identifier))
+              (integer)))))))
+  (scenario
+    (identifier)
+    (statement_block
+      (with
+        (identifier)
+        (string
+          (string_content)))
+      (check
+        (string
+          (string_content))
+        (body
+          (in_literal
+            (identifier)
+            (member_expression
+              (identifier)
+              (identifier)))))
+      (check
+        (string
+          (string_content))
+        (body
+          (exists_literal
+            (instance_expression
+              (member_expression
+                (identifier)
+                (identifier))
+              (instance_name))))))))

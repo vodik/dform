@@ -1,0 +1,31 @@
+[package]
+name = "tree-sitter-dform"
+description = "dform grammar for tree-sitter"
+version = "0.1.0"
+authors = ["Simon Gomizelj"]
+keywords = ["incremental", "parsing", "tree-sitter", "dform"]
+categories = ["parser-implementations", "parsing", "text-editors"]
+edition = "2024"
+publish = false
+autoexamples = false
+
+build = "bindings/rust/build.rs"
+include = [
+  "bindings/rust/*",
+  "grammar.js",
+  "queries/*",
+  "src/*",
+  "tree-sitter.json",
+]
+
+[lib]
+path = "bindings/rust/lib.rs"
+
+[dependencies]
+tree-sitter-language = "0.1"
+
+[build-dependencies]
+cc = "1.2"
+
+[dev-dependencies]
+tree-sitter = "0.26"

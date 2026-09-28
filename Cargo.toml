@@ -48,3 +48,7 @@ path = "src/bin/dform-provider-k8s.rs"
 [[bench]]
 name = "scale"
 harness = false
+
+[dev-dependencies]
+tree-sitter = "0.26"
+tree-sitter-dform = { path = "tree-sitter-dform" }

@@ -1,0 +1,30 @@
+{
+  "name": "tree-sitter-dform",
+  "version": "0.1.0",
+  "description": "dform grammar for tree-sitter",
+  "private": true,
+  "type": "module",
+  "author": {
+    "name": "Simon Gomizelj"
+  },
+  "keywords": [
+    "incremental",
+    "parsing",
+    "tree-sitter",
+    "dform"
+  ],
+  "files": [
+    "grammar.js",
+    "tree-sitter.json",
+    "queries/*",
+    "src/**"
+  ],
+  "devDependencies": {
+    "tree-sitter-cli": "^0.26.9"
+  },
+  "scripts": {
+    "generate": "tree-sitter generate",
+    "test": "tree-sitter test",
+    "corpus": "node scripts/corpus-from-repo.js && tree-sitter test --update"
+  }
+}
