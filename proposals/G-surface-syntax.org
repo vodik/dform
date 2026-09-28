@@ -1,0 +1,1021 @@
+#+title: G: a readable surface syntax over the same core
+#+startup: showall
+
+Stage 1 of the ticket "Proposal G: a readable surface syntax over the same
+core". This document and =proposals/G-corpus/= change no source file; stage
+2 (parser, resolver, every =.df= rewritten, =docs/grammar.md=) waits for the
+decisions listed in section 11.
+
+* 1. Position
+
+The core does not move. Relations, strata, the ranked lattice aggregate,
+the three null classes, ranks, modules, grants, externs, stacks, inputs,
+scenarios and refinements stay exactly as E revised by F section 3 left
+them. What changes is how a program is written, and one rule decides every
+choice below: *each new form lowers to a fixed, short sequence of today's
+AST nodes, chosen so that the rewritten corpus lowers literal for literal
+to the AST the current corpus lowers to* (up to variable names and the
+order of body literals, neither of which reaches a plan or a strata
+listing). That is what "golden plans byte-identical in stage 2" means, and
+it rules out every tempting simplification that changes the literal set:
+an implicit =want= under a dot, per-field bodies for resource blocks,
+inline aggregates in the rewritten corpus.
+
+The current surface is honest and dense. A body is a list of joins, and the
+reader sees every one: =attr(net.vpc, vpc, .cidr, VpcNet)= says there is a
+read, of which type, at which address, of which path, into which variable.
+The cost is that most of those variables exist only to carry a value from
+the line that reads it to the line that uses it: 120 of them in the 13
+programs of the corpus (section 8), 26 in =pngu.df= alone. The proposed
+surface removes those, and nothing else: *a read is written where its value
+is used*, and the compiler moves it into the body. Recursion, negation over
+relations, aggregates and every relational rule read as before, less the
+capitals and the =:-=.
+
+Five ideas carry the proposal:
+
+1. *Resources are values with dot access.* =vpc.cidr= is a read of the
+   aggregate, =vpc.id= in a field is a reference (=ref=). Which one is
+   decided by position, not by the schema (G-6).
+2. *=if= replaces =:-=, and a resource block states its generator first.*
+   =resource net.subnet "private-{z}" { for data("zone", z) ... }=, Terraform's
+   =for_each= in the place a Terraform reader looks for it.
+3. *String interpolation* replaces =format= (="private-{z}"=).
+4. *Lowercase variables; constants are quoted.* Case no longer decides
+   anything; names are resolved (section 3).
+5. *Value names.* Inputs and one-value rules (=serving = cutover=) are read
+   by name, Rego's complete rules.
+
+The rest is small: brackets for relational lookup (=zone_index[z]=), Rego's
+=some x in xs=, =deny "msg" {...} if=, =exists r= and =has r.p=, =with k = v= in
+scenarios, =world.T[name]= for inventory reads, =let= for reference aliases,
+and no statement terminator.
+
+What it costs, said up front and argued in section 9: the joins are still
+there and the reader can no longer count them; two meanings of the dot
+(reference and read) differ only by position; a variable can be captured
+by a value name; and the language now needs name resolution, so an editor
+that does not run the resolver cannot tell a variable from a resource.
+Section 9 lists what the language server must show to pay that back.
+
+* 2. The surface in one page
+
+#+begin_src dform
+edition 2027
+
+provider fake { source = "providers/fake" }
+stack dform { unknowns = "strict" }
+
+input env: enum("dev", "staging", "prod") = "staging"
+let cfg = settings[env]                       # a reference alias, not a value
+
+module network {
+  input vpc_net: inet
+  output vpc: net.vpc                         # a typed address output
+
+  resource net.vpc vpc {
+    cidr = vpc_net                            # an input, read by name
+    tags = { env: env, component: "network" }
+  }
+
+  resource net.subnet "private-{z}" {         # interpolated name
+    for data("zone", z)                       # generator: one subnet per zone
+    vpc_id = vpc.id                           # whole value: a reference, ref(net.vpc, vpc, .id)
+    cidr   = inet_subnet(vpc.cidr, 4, zone_index[z])  # in a call: a read; [z] is a join
+    zone   = z
+  }
+
+  output vpc = vpc
+}
+
+instance network main { vpc_net = cfg.network.main.vpc_net }
+
+reachable(a, b) if link(a, b)                 # relations stay relations
+reachable(a, c) if reachable(a, b), link(b, c)
+
+rollout = next if live_image != released_image   # a value rule
+
+deny "db must not be public" { resource: pg } if {
+  pg in db.postgres                           # generator over want
+  not pg.public == false                      # absent, true, anything but false
+}
+
+scenario prod {
+  with env = "prod"
+  deny "prod peers the two vpcs" if not "peer-main-peer" in net.vpc_peering
+}
+#+end_src
+
+* 3. Names, and how a name is resolved
+
+Case used to decide what a name is. Now a resolver does, and this section
+is its specification: every other section depends on it.
+
+** 3.1 What a name can denote
+
+| Denotation            | Declared by                                         | Written                                   |
+|-----------------------+-----------------------------------------------------+-------------------------------------------|
+| variable              | its first occurrence in a binding position of a rule | =x=, =_=, =_x=                           |
+| value name            | =input k: T=, a module input, a value rule =k = t if B= | =k=                                   |
+| reference alias       | =let a = REF=                                       | =a=                                       |
+| resource              | a =resource T n {..}= header with a static name =n= | =n=, =T.n=, =T[e]=, =m.i/n=               |
+| resource variable     | =x in T=, =x in resource=, =x = REF=               | =x=                                       |
+| module instance       | =instance m i=                                      | =m.i=, =m[e]= (then =.k=: an output)      |
+| settings row          | =settings n {..}=                                   | =settings.n=, =settings[e]=               |
+| inventory object      | the provider's inventory                            | =world.T[e]=                              |
+| type                  | a =resource= header, a provider schema, a =type= block | =T= (qualified or not)                 |
+| relation, function    | its rules or facts; a builtin; an =extern=          | =p(..)=, =p[..]=                          |
+| string constant       | nothing                                             | ="prod"=                                  |
+
+** 3.2 Resolution order
+
+A name followed by =(= is a relation, builtin or extern; nothing else. For
+any other name, the first segment is looked up in this order, innermost
+scope first (rule, then module or pack, then file, then program):
+
+1. a variable already bound in this rule, or by an enclosing =for= / =when=
+   block or block clause;
+2. a =let= alias;
+3. a value name;
+4. if the name is followed by =.=, =[= or =/=: a resource name, a module
+   name, =settings=, =world=, or a type (the longest dotted prefix that is a
+   type wins: =k8s.namespace.web.metadata.name= is type =k8s.namespace=,
+   resource =web=, path =metadata.name=);
+5. otherwise, in a binding position, a new variable; anywhere else, an
+   error: "unknown name =x=; quote it if it is a string".
+
+Binding positions are syntactic: an argument of a positive atom, the left
+side of =x = e= or =x in e=, a =some= binder, a record field pattern. A bound
+variable may not take the name of anything in rows 2 to 4 visible in its
+scope ("variable =net= shadows the type namespace =net="). Resources, types
+and modules are reached only through =.=, =[= or =/=, so adding a resource
+named =t= does not capture the variable =t= in =tenant(t, i)=. Value names
+are reached bare, so adding an input =t= would; section 9.1 says what
+catches it.
+
+A bare resource name with no =.= is resolved as a resource in exactly two
+places, both typed: the value of an =output k: T= whose type is a resource
+type (=output vpc = vpc=), and the left side of =in= / an =exists=. Anywhere
+else a bare resource name must be written as a reference (=vpc.id=) or its
+address will be taken for a new variable and reported as a shadowing error.
+
+** 3.3 References and their static type
+
+A reference is a pair (type, address). Dot access on a reference is only
+legal when the type is static, because the lowering must know it:
+
+| Reference form      | Type from                                   | Address                          |
+|---------------------+---------------------------------------------+----------------------------------|
+| =n= (bare, unique in scope) | the declaration of =n=              | ="n"= (module-scoped as today)   |
+| =T.n=               | =T=; =n= must be declared with type =T=     | ="n"=                            |
+| =T[e]=              | =T=; no declaration needed (data sources, computed names) | =e=                |
+| =m.i/n=             | module =m='s declaration of =n=             | =m.i/n= (=scoped("m.i", "n")=)   |
+| =x= after =x in T=  | =T=                                         | =x=                              |
+| =x= after =x in resource= | a fresh type variable (writes only; reads are untyped) | =x=              |
+| =x= after =x = REF= | =REF='s                                     | =REF='s                          |
+| =settings.n=, =settings[e]= | the pseudo-type =settings=          | ="n"=, =e=                       |
+| =world.T[e]=        | =T=, in the inventory                       | the provider's name =e=          |
+
+A bare name that is declared twice in scope (three resources named =web= in
+=workload.df=) is an error listing the candidates; =T.n= disambiguates. A
+variable bound by an untyped relation (=vpc_peer(a, b)=) has no static type:
+=a.cidr= on it is object field access (today's =X.field=), and the compiler
+warns when such a variable is also used as an address. =a in net.vpc= or
+=net.vpc[a]= types it.
+
+* 4. The grammar delta
+
+Against =docs/grammar.md= (edition 2026). Productions not mentioned are
+unchanged except that their terminating =.= is gone.
+
+** 4.1 Files and statement ends
+
+#+begin_src ebnf
+file     := "edition" INT NL (stmt NL)*
+#+end_src
+
+A statement ends at a newline that is outside every =( )=, =[ ]= and ={ }=,
+unless the line ends with =,=, =if=, =for=, =in=, a comparison or an
+arithmetic operator. =}.= is gone. Error recovery resynchronises on a line
+that starts in column 0 with a statement keyword (=resource=, =module=,
+=deny=, ...) or with a name followed by =(=, === or =.=; an error abandons
+the statement up to there (G-2).
+
+** 4.2 Tokens
+
+#+begin_src ebnf
+IDENT    := [A-Za-z_][A-Za-z0-9_]*          ; case decides nothing (VAR is removed)
+                                            ; "_" alone is the wildcard, "_x" a named one
+STRING   := "\"" (CHAR | ESC | "{{" | "}}" | "{" term "}")* "\""   ; interpolation
+PATH     := "." SEG ("." SEG | "[" INT "]")*  ; only after "(", ",", "[" or whitespace
+DOT      := "."                              ; directly after IDENT, ")", "]" or STRING
+SLASH    := "/"                              ; in a chain: m.i/n
+#+end_src
+
+=QNAME= and =FIELD= are no longer tokens: =a.b.c= lexes as IDENT DOT IDENT
+DOT IDENT with no whitespace allowed around DOT, and the resolver decides
+what it is. =PATH= keeps its meaning (a keypath literal) where the lexer
+sees a dot that does not follow a name. Inside an interpolation hole a
+string may not contain another string (="{f["a"]}"= is an error: bind it
+first), which keeps the lexer regular.
+
+New keywords (contextual, as today's are): =if= =let= =has= =some= =with=
+=world= =resource= (after =in=) =exists= =deny= =warn= =constraint= (at
+statement start, followed by a string). Removed: nothing; =when= stays.
+
+** 4.3 Statements
+
+#+begin_src ebnf
+stmt     := provider | stack | import | input | inputrel | output | export
+          | contributes | extern | typedecl | decl | let
+          | module | instance | policy | apply | scenario | when | for | with
+          | resource | settings
+          | check | contribution | valuerule | rule | fact
+
+let      := "let" IDENT "=" chain                       ; chain must resolve to a reference
+contributes := "contributes" ("_" | TYPE | "settings") "." blockpath
+             | "contributes" IDENT
+output   := "output" IDENT (":" type | "=" term)         ; type may be a resource type
+decl     := "decl" IDENT "/" INT "mixed"?
+          | "decl" IDENT "(" IDENT ":" type ("," IDENT ":" type)* ")"
+instance := "instance" IDENT IDENT rblock
+resource := "resource" TYPE name RANK? rblock
+settings := "settings" name RANK? rblock
+name     := IDENT | STRING                               ; IDENT: a variable iff the block's clauses bind it
+rblock   := "{" (clause NL)* (assign SEP)* "}"
+clause   := ("for" | "if") body1                         ; both append to the block's body
+assign   := blockpath ("=" | "+=") term RANK?
+when     := "when" body1 stmts
+for      := "for" body1 stmts
+with     := "with" IDENT "=" term                        ; in a scenario
+stmts    := "{" (stmt NL)* "}"
+
+check    := ("deny" | "warn" | "constraint") STRING object? ("if" body)?
+contribution := chain "." blockpath ("=" | "+=") term RANK? ("if" body)?
+valuerule:= IDENT "=" term ("if" body)?
+rule     := head "if" body
+fact     := head
+head     := atom RANK?
+body     := body1 | "{" lit (SEP lit)* "}"
+body1    := lit ("," lit)*
+SEP      := "," | NL
+#+end_src
+
+** 4.4 Literals and terms
+
+#+begin_src ebnf
+lit      := "not" lit1 | lit1
+lit1     := atom
+          | "exists" chain                                ; the reference exists (want)
+          | "has" chain                                   ; the path has a value
+          | chain                                         ; truth test: == true
+          | term cmpop term (cmpop term)*
+          | "some" binder ("," binder)? "in" term
+          | term "in" ("resource" | term)                 ; term may resolve to a TYPE or world.TYPE
+          | term "not" "in" term
+          | "{" body "}"                                  ; only directly under "not"
+binder   := IDENT | object                                ; a pattern
+atom     := IDENT ("." IDENT)* "(" (term ("," term)*)? ")"
+          | IDENT "{" (IDENT (":" term)? ("," IDENT (":" term)?)*)? "}"   ; record, shorthand {a, b}
+
+primary  := INT | STRING | "true" | "false" | "null" | PATH
+          | chain | call | list | object | comprehension | "(" term ")"
+chain    := IDENT ( DOT SEG | "[" term ("," term)* "]" | SLASH IDENT )*
+call     := IDENT ("." IDENT)* "(" (term ("," term)*)? ")"   ; a builtin or a relation in a term
+object   := "{" (objkey ":" term | IDENT) ("," ...)* ","? "}" ; IDENT alone is {k: k}
+#+end_src
+
+A =chain= is parsed without knowing what it names; the resolver
+(section 3) classifies each chain into one of: variable, field access on a
+value, value name, reference, reference plus path, instance output,
+settings read, inventory read, relational lookup =p[..]=, type name. That
+split is deliberate: the tree-sitter grammar and the formatter need only
+the parser, and every ambiguity in this proposal lives in the resolver,
+where the language server can explain it.
+
+* 5. Lowering
+
+The resolver produces today's AST (=src/ast.rs=); after it, =transform.rs=
+runs unchanged. The rules below are the whole of it. "Hoisted" means
+appended to the enclosing body: for a rule, its body; for a resource,
+settings or instance block, the block's shared body (F10: one body for the
+=want= and every field, as today), after the block's =for= and =if=
+clauses, in source order of first use, each distinct read once per rule.
+=v=, =v0=, =n= are fresh variables.
+
+** 5.1 Statements
+
+| Written                                         | Lowers to                                                            |
+|-------------------------------------------------+----------------------------------------------------------------------|
+| =edition 2027=                                  | nothing; selects this grammar                                        |
+| =head if body=, =head if { l NL l }=           | =head :- body=                                                       |
+| =p(t̄)= with reads in =t̄=                       | =p(t̄') :- reads= (a rule, not a fact)                               |
+| =k = t if B= (value rule)                       | =k(t') :- B, reads=; =k = t= alone is the fact or rule =k(t')=       |
+| =let a = REF=                                   | nothing; every =a= is replaced by =REF= before lowering              |
+| =resource T n { for B1 if B2 f = t ... }=       | =resource T n { f = t' ... } :- B1, B2, reads.=                      |
+| =resource T x {..}= with =x= bound by a clause  | the header's name is the variable =X=                                |
+| =resource T "a-{e}" {..}=                       | =resource T N {..} :- ..., N = format("a-%s", e')= (Eq last)         |
+| =settings n @r { for B ... }=                   | =settings n @r { ... } :- B, reads.=                                 |
+| =instance m i { if B k = t }=                   | =instance m i { k = t' } :- B, reads.=                               |
+| =when B { S }=, =for B { S }=                   | nested =when l1 { when l2 { S } }=, one per literal of =B=           |
+| =with k = v= (in a scenario)                    | =input("k", v).=                                                     |
+| =deny "m" {o} if B=                             | =deny("m", {o}) :- B.= (no object: =deny("m") :- B=)                 |
+| =warn "m" {o} if B=                             | =warn("m", {o}) :- B.=                                               |
+| =constraint "m" if B=                           | =constraint("m") :- B.=                                              |
+| =REF.p = t @r if B= (contribution)              | =arg(T, A, .p, t', r) :- B, reads.= (=+== the same)                 |
+| =settings.n.p = t=, =settings n { p += t }= in a pack | =arg(settings, n, .p, t')=                                      |
+| =contributes _.p=, =contributes T.p=            | =contributes arg to _ at .p=, =contributes arg to T at .p=           |
+| =output k: T= (T a resource type)               | =output k: addr=; =T= is kept for resolution                         |
+| =output k = t= (no reads)                       | =output k = t'= (=Stmt::Output=)                                     |
+| =output k = t= (with reads), top level          | =output(k, t') :- reads.=                                            |
+| =decl p(a: t, b_c: t)=                          | =decl p(A: t, BC: t)= (record fields =a=, =b_c=)                     |
+| =enum("a", "b")= in a type                      | =enum(a, b)=                                                         |
+| =extern=, =input relation=, =stack=, =provider=, =type=, =import=, =apply=, =policy=, =module=, =scenario=, =export= | unchanged |
+
+** 5.2 Names and references in terms
+
+| Written (in a term)                   | Lowers to                                                      |
+|---------------------------------------+----------------------------------------------------------------|
+| =x= (variable)                        | =Var(x)=                                                       |
+| ="..."=, =_=, =_x=, =true=, =null=, =.p=  | unchanged                                                  |
+| ="a{e}b"=                             | =format("a%sb", e')=; a literal =%= becomes =%%=; ={{= is ={=  |
+| =k= (value name, input or value rule) | =v=, hoisting =k(v)= (one per rule per name)                   |
+| =T= (type name, value position)       | ="T"= (today's symbol)                                         |
+| =m.i= / =m[e]= as an instance scope   | ="m.i"= / =format("m.%s", e')= (today's =m.I=)               |
+| bare resource, typed output value     | its address (="n"=, scoped by the module rewrite as today)     |
+| =x.f.g= (=x= a value, not a reference) | =__path(x, "f.g")= (today's =X.f.g=)                          |
+| =e[i]= (=e= a list value, =i= an int or var) | =v=, hoisting =member(e', i, v)=                        |
+| =p[a, b]= (relation)                  | =v=, hoisting =p(a', b', v)= (Rel's partial application: 0..n rows) |
+| =p[a]= (=extern= with one =-= column) | =v=, hoisting =p(a', v)= in the extern's column order          |
+
+** 5.3 Dot on a reference: read or reference
+
+For a reference =R= = (=T=, =A=) and a path =p1.p2...=:
+
+| Position of =R.p1.p2=                                         | Lowers to                                                      |
+|---------------------------------------------------------------+----------------------------------------------------------------|
+| whole value: a field, a head or output argument, an element of a list or object literal there, a comprehension item | =ref(T, A, .p1.p2)= (transform: computed path → attr join + =__ref_dep= + dangling-ref deny; configured → =Value::Ref=) |
+| anything else: a body literal, a clause, an argument of a builtin or operator, an interpolation hole | =v=, hoisting =attr(T, A, "p1", v0)= and, if there is a rest, =v = __path(v0, "p2...")= |
+| =T= is =settings= (any position)                             | =v=, hoisting =setting(A, .p1.p2, v)= (full key, today's form) |
+| =m.i.k.p= (instance output, any position)                     | =v=, hoisting =output(m.i, k, v0)=, then =__path= for =.p=     |
+| =world.T[e].p1.p2[0].x= (any position)                        | =v=, hoisting =cloud_attr(T, e', "p1.p2[0].x", v)= (the flattened leaf path) |
+
+Direct forms, so the rewritten corpus keeps today's literals:
+
+| Written                         | Lowers to                                                  |
+|---------------------------------+------------------------------------------------------------|
+| =x = R.p= (=x= fresh)           | =attr(T, A, "p", X)=; no extra equality                    |
+| =R.p == c= (top-level =p=, =c= constant or bound) | =attr(T, A, "p", c)=                     |
+| =R.p= alone as a literal         | =attr(T, A, "p", true)=                                   |
+| =not R.p=                       | =not attr(T, A, "p", true)=                                |
+| =not R.p == c=                  | =not attr(T, A, "p", c)=                                   |
+| =R.p != c=                      | =attr(T, A, "p", v), v != c=                               |
+| =has R.p= / =not has R.p=       | =attr(T, A, "p", _)= / =not attr(T, A, "p", _)=           |
+| any of the negated forms on a nested path, or =not has v.f= on a value, or =not { B }= | =not __neg_N(ȳ)=, with a generated rule =__neg_N(ȳ) :- P, B'= where =ȳ= are the free variables and =P= the positive literals of the enclosing body that bind them |
+| =k == c=, =c == k= (=k= a value name) | =k(c)= (so =env == "prod"= is today's =env(prod)=)   |
+| =k= alone / =not k=             | =k(true)= / =not k(true)=                                  |
+| =has k= / =not has k=           | =k(_)= / =not k(_)=                                        |
+| =not p(t̄)= with reads in =t̄=   | reads hoisted before, positive; only =p= is negated       |
+
+** 5.4 Membership and existence
+
+| Written                           | Lowers to                                            |
+|-----------------------------------+------------------------------------------------------|
+| =x in T= (=T= a type)             | =want(T, x)=; binds or checks =x=, types it =T=      |
+| =x in resource=                   | =want(t, x)= with a fresh type variable =t=          |
+| =not e in T=                      | =not want(T, e')=                                    |
+| =exists R=                        | =want(T, A)=                                         |
+| =x in world.T=                    | =cloud_exists(T, x)=                                 |
+| =x in e=, =some x in e= (=e= a list term) | =member(e', x)= (today's =x in L=)          |
+| =some i, x in e=                  | =member(e', i, x)=                                   |
+| =x not in e=, =not x in e= (list) | =not member(e', x)=                                  |
+
+Whether =e= in =x in e= is a type or a list is decided by resolution (a
+chain that is a type is a type), never by the parser.
+
+** 5.5 What does not lower to anything new
+
+Ranks (=@default=, =@override=) are written where they are today. Keypath
+literals stay in facts that take paths (=type_lattice=, =ignore_changes=,
+=lifecycle=). Comprehensions keep =[t | B]= with the new forms allowed in
+=B=; they lower to today's =collect_list= helper. Aggregates stay in heads
+(=zone_count(count(z)) if ...=). Nulls have no syntax (G-17).
+
+** 5.6 A worked example
+
+The network module's subnet block, written and lowered:
+
+#+begin_src dform
+resource net.subnet "private-{z}" {
+  for data("zone", z)
+  vpc_id     = vpc.id
+  cidr       = inet_subnet(vpc.cidr, 4, zone_index[z])
+  zone       = z
+  visibility = "private"
+}
+#+end_src
+
+#+begin_src prolog
+resource net.subnet Sn {
+  vpc_id = ref(net.vpc, vpc, .id)          % whole value: reference
+  cidr = inet_subnet(V0, 4, V1)            % reads, hoisted
+  zone = Z
+  visibility = private
+} :-
+  data(zone, Z),                           % for clause
+  attr(net.vpc, vpc, "cidr", V0),          % vpc.cidr, first read in source order
+  zone_index(Z, V1),                       % zone_index[z]
+  Sn = format("private-%s", Z).            % the name, last
+#+end_src
+
+Today's rule has the same four body literals (=VpcNet=, =I= for =V0=, =V1=),
+so =strata= prints the same graph and =plan= the same subnets.
+
+* 6. Decision records
+
+** G-1 Surface only; edition 2027
+
+*Context.* The ticket: a new surface before editor tooling encodes the old
+one, golden plans unchanged. *Decision.* A new grammar selected by
+=edition 2027=; the resolver emits today's AST; nothing after the resolver
+changes. In stage 2 every =.df= in the repository is rewritten and the
+edition 2026 parser is deleted in the same landing (house rules: no old
+path behind a flag). A file saying =edition 2026.= then fails with a
+message naming the edition and pointing at =proposals/G-corpus/=.
+*Consequences.* The tree-sitter and LSP tickets start from this grammar.
+=tests/syntax/ok= and =err= are rewritten; their diagnostics change.
+
+** G-2 No statement terminator
+
+*Context.* E DR-17 kept =}.= because recovery resynchronises on =.=. Dot
+access makes =.= carry three meanings (terminator, member access, keypath);
+today's grammar already needs a rule that =p(a).q(b).= is two facts. Rego,
+Polar (which uses =;=), Terraform and CUE have no dot terminator.
+*Decision.* A newline outside brackets ends a statement unless the line
+ends with =,=, =if=, =for=, =in= or an operator. Recovery resynchronises
+on column-0 statement starts. *Consequences.* One bad statement is still
+one diagnostic when the next statement starts in column 0, which every
+file in the corpus does; an unindented continuation line is now a new
+statement (=dform fmt= indents continuations). Newline sensitivity costs
+the tree-sitter grammar an external scanner or explicit newline tokens.
+
+** G-3 Lowercase variables; constants are quoted
+
+*Context.* E DR-4 kept uppercase variables and bare lowercase symbols.
+Rego, Polar, CodeQL, DDlog, Logica and Rel use lowercase variables and
+quoted strings; Soufflé allows either case; Mangle keeps uppercase
+variables and gives name constants a sigil (=/bob=). Symbols and strings
+are already one value kind to the evaluator (grammar.md), so quoting
+changes no value. Typed inputs and schema enums now exist, which makes the
+third option, bare enum members resolved by the expected type, possible.
+*Decision.* Every identifier in a term is a name to resolve (section 3);
+every constant is a string literal (="prod"=, ="app"=, ="set"=), including
+inside =enum(...)= types and =stack=/=provider= blocks. No type-directed
+enum resolution. *Why not bare enum members:* =env == prod= would need the
+expected type of =env= at parse-and-highlight time, which tree-sitter and
+an unconfigured editor do not have; it would make a typo (=prd=) a variable
+in some positions and an enum error in others; and the gain is two
+characters per constant. *Why not a sigil (=:prod=, Mangle's =/prod=):* a
+second spelling of the same value. *Consequences.* 110 more string
+literals across the corpus (262 to 372; interpolation replaces each
+=format= string one for one, so the difference is quoted constants). A typo in a constant that is not quoted
+is an unbound variable, and a variable that occurs once is a lint
+(Soufflé's singleton-variable warning). The DR-4 objection (types like
+=k8s.Deployment= collide with variables) is gone: types are resolved, not
+cased.
+
+** G-4 Names are resolved; variables may not shadow
+
+*Context.* With case gone, =db.id= can be a resource, a variable's field,
+a type or a qualified symbol. *Decision.* Section 3.2's order; a bound
+variable may not take the name of a =let= alias, value name, resource,
+module or type namespace visible in its scope; resources, modules, types,
+=settings= and =world= are reached only through =.=, =[= or =/=. *Why:* a
+declaration elsewhere must not silently change what a variable means; with
+this rule, only value names can capture a variable (9.1). *Consequences.*
+Type namespaces become reserved words in a program that uses them: =net=,
+=db=, =k8s=, =iam= cannot be variable names (=dform-advanced.df= renames
+=Net= to =cidr=).
+
+** G-5 How a name denotes a resource
+
+*Context.* The ticket's three cases (a module-local name, =db in
+db.postgres=, =network.main.vpc=) plus the ones the corpus needs.
+*Decision.* Section 3.3's table: a bare unique name; =T.n= for a declared
+name (it reads as the plan prints the address, =gke_cluster.pngu=); =T[e]=
+for a computed or undeclared address (data sources, =net.vpc[b]=);
+=m.i/n= to reach into an instance (the =/= marks that it pierces the
+module's interface); =x in T= as a generator over =want=; typed address
+outputs (=output vpc: net.vpc=). =network.main.vpc= is the *output* =vpc=
+of the instance, not the resource: after an instance, =.= reads the
+interface (DR-3). *Consequences.* Module =network= has both a resource and
+an output named =vpc=; =network.main.vpc= and =network.main/vpc= are both
+legal and mean the output and the resource. The typed output makes
+=network.main.vpc.id= legal.
+
+** G-6 Dot access: reference by position, read everywhere else
+
+*Context.* Today a program chooses between =ref(T, A, .p)= (a reference:
+=Value::Ref= for a configured path, the minted null plus an apply-order edge
+and a dangling-ref deny for a computed one) and =attr(T, A, .p, V)= (the
+value now, no ordering). Both are in the corpus, sometimes for the same
+attribute (=gke_two_phase.df= reads =k8s.namespace.pngu.name= in a body;
+=k8s_demo.df= references =shop.metadata.name=). The ticket's direction was
+"=vpc.cidr= to the attr join, =vpc.id= to the ref". Three ways to decide:
+by schema (computed: reference; configured: read; E DR-2's intent), by
+position, or by an explicit marker. *Decision.* By position (5.3): a dot
+that is a whole value (a field, a head or output argument, a list or object
+element there, a comprehension item) is a reference; anywhere its content
+is needed (a body, a clause, a call, an operator, an interpolation) it is
+a read. *Why not by schema:* the lowering would need the provider schema
+to parse a file (it does not today: =rewrite_computed_refs= runs after
+lowering); =gke_two_phase.df='s read of a configured =name= would become a
+read everywhere, and =google_sql_user.instance = db.name= in the new
+program would lose the apply-order edge a reference gives (a configured
+path read now is a string with no dependency). Position gives Terraform's
+default (a reference in a field is a dependency) and keeps both of today's
+choices writable: a read in a field is spelled by binding it in the
+block's clause (=if ns = k8s.namespace.pngu.name= then =namespace = ns=).
+*Why not a marker (=&vpc.id=, =ref vpc.id=):* the current corpus has 34
+=ref(...)= terms and 3 reads that end up in a field; a marker would sit on
+the common case.
+*Consequences.* The same text =k8s.namespace.pngu.name= means two things in
+two positions, and the plan shows the difference (a =ref(...)= value
+versus a string). Section 9.3 and the LSP section treat it as the main
+cost of the proposal.
+
+** G-7 =if= for rules, =if { }= for long bodies
+
+*Context.* Rego v1 made =if= mandatory; Polar writes =if=; =:-= is the
+single most Prolog-looking token. *Decision.* =head if lit, lit= on one
+line; =head if { lit NL lit }= for a body of several lines, literals
+separated by newline or comma. No =and= keyword (a comma is a conjunction
+already), no =or= (a second rule, as in Rego and Datalog). =if= is also
+the block clause of G-8. *Consequences.* =if= at the start of a line inside
+a resource block is a clause, after a head a body; the grammar
+distinguishes them by position.
+
+** G-8 Resource blocks state =for= and =if= first
+
+*Context.* Today a resource's body follows its fields (=} :- ...=), so the
+cardinality of a block ("one per zone") is the last thing a reader sees.
+Terraform puts =for_each= and =count= at the top of the block.
+*Decision.* A block (=resource=, =settings=, =instance=) opens with at most
+one =for= and one =if= clause, each a comma-separated body, before any
+field; both append to the block's body; =for= is the generator (it
+introduces the variables), =if= the guard. Top-level =for B { stmts }=
+joins =when B { stmts }= for several statements that share bindings.
+*Why not a header form* (=resource T n for B {=): the header already holds
+type, name and rank, and long generators wrap badly there.
+*Consequences.* The =for=/=if= split is for the reader: a lint warns when
+an =if= clause binds a variable a field uses (it belongs in =for=).
+
+** G-9 A block's name is a variable if its clause binds it
+
+*Context.* =resource net.vpc T { ... } :- tenant(T, I)= names each resource
+by a variable; =resource net.vpc shared= by a constant; case used to tell
+them apart. *Decision.* The header name is an IDENT or a STRING. An IDENT
+that the block's own clauses bind is that variable; any other IDENT is the
+static name. A STRING with holes lowers to =format= bound last in the body
+(today's =Sn = format(...)=). *Consequences.* A typo in the clause
+(=for tenant(tt, i)=) makes =t= a static name ="t"= and =tt= a singleton;
+the singleton lint catches it. Settings headers follow the same rule
+(=settings e @default { for env_name(e) ... }=).
+
+** G-10 String interpolation
+
+*Context.* =format("peer-%s-%s", A, B)= is 1 of 5 lines of noise in most
+naming rules. DDlog interpolates (="${x}"=); Rego has =sprintf=.
+*Decision.* ="a{e}b"= with any term =e= in the hole, ={{= and =}}= for
+literal braces, no string literal inside a hole. Lowers to =format=; a read
+inside a hole is a content position (Rule 2), so an interpolated open null
+is stuck. *Consequences.* Interpolation is where a reader most easily
+misses a content position: ="postgres://{db.private_ip_address}"= holds
+its whole resource until the instance exists (the new program's comment
+shows the trap).
+
+** G-11 Rego's =some=, membership, generators
+
+*Decision.* =x in e= for a list =e= is today's =member=; =some x in e= is the
+same with the binding made explicit, and =some i, x in e= (Rego) is
+=member/3=: the comma would otherwise split it into two literals. =x in T=
+for a type is a generator over =want= (the ticket's "type membership as a
+generator"). =x in resource= is every wanted resource of every type
+(the tag policy). Rego's =every x in xs { }= is not taken: it is =not { x in
+xs, not ... }=, which lowers through a helper, and no corpus program needs
+it. *Consequences.* =in= has three meanings resolved by what its right
+side is (a list, a type, =world.T=); the LSP shows which.
+
+** G-12 Value names: inputs and value rules, read by name
+
+*Context.* =env(Env)= appears in most rules of every program, to read one
+value. Rego reads rules and =input= by name; Terraform prefixes
+(=var.env=, =local.x=). *Decision.* A stack or module input and a value
+rule (=k = t if B=, Rego's complete rule) are value names: =k= in a term is
+the value, a join on the unary relation =k(v)=; =k == c= is =k(c)=; =has
+k= is =k(_)=. A value rule may have several rows (it is a relation; nothing
+checks functionality, unlike Rego, which errors on conflicting complete
+rules); =dform lint= warns when two rows exist at once. *Why not
+=input.env= / =var.env=:* it is Terraform's and Rego's answer to capture,
+and it is the honest alternative (section 11, decision 4); bare names win
+because inputs and one-value rules are what programs read most, and the
+corpus reads =env= in almost every rule. *Consequences.* Value names can
+capture a variable (9.1). A head with a value name in it
+(=run(active, live_image, live_schema)=) is a rule, not a fact.
+
+** G-13 Negation of a dot: "not true", no implied existence
+
+*Context.* The ticket: =not db.multi_az= must mean exactly one of "the
+attribute is absent" and "the attribute is not =true=". E DR-6 separates
+absent (no =attr= row), the API =null=, empty, and a labeled null. Rego's
+=not input.x= holds when =x= is undefined or =false=. *Decision.* =not R.p=
+is =not attr(T, A, p, true)=: it holds when the cell is absent, =false=,
+the API =null=, or any value other than =true=; it is undetermined when
+the cell is stuck or carries an open null (Rule 3), and decided under UNA
+for a fresh null. It does *not* check that =R= exists. =not R.p == c= is
+the same with =c=. =R.p != c= needs the attribute present. =has R.p= and
+=not has R.p= test presence alone. =exists R= is =want=. *Why:* it is the
+reading every current program writes (=not attr(..., .multi_az, true)=,
+=not attr(..., .public, false)=, =not setting(prod, .audit.enabled,
+true)=); and implied existence would have to add a =want= literal the
+current scenario =prod keeps 14 days of backups= does not have (a changed
+literal set, a changed meaning when the database is absent).
+*Consequences.* A check that should hold only for an existing resource
+says so: =exists database.main/db, not database.main/db.multi_az=, or a
+generator =pg in db.postgres=. In the new program, =not
+d.settings.ip_configuration.ipv4_enabled == false= denies an absent value,
+which is right: the provider's default is a public IP.
+
+** G-14 Ranks unchanged
+
+*Decision.* =@default= and =@override= after a value or a block header, as
+today; in a contribution statement after the value
+(=r.tags = {...} @override if r in resource=). They read as annotations and
+they are rare; nothing would be gained by words. *Consequences.* None.
+
+** G-15 =deny=, =warn=, =constraint= as keyword heads; object shorthand
+
+*Decision.* =deny "message" { context } if body=; the context object may
+use shorthand (={ a, b }= is ={ a: a, b: b }=, JavaScript's and Rust's field
+init). =constraint "message" if body= stays distinct from =deny= because it
+lowers to a different head today. *Consequences.* The message is the first
+thing on the line; ={ a, b }= is not a set literal (there are none).
+
+** G-16 Comprehensions and aggregates stay as they are
+
+*Decision.* =[t | B]= unchanged. Aggregates stay in heads
+(=zone_count(count(z)) if z in cluster.zones=). CodeQL's inline
+=count(x | B)= is not taken now: it would lower to a compiler-named helper
+predicate that appears in =strata= and =why=, changing the golden strata
+of the two corpus programs that aggregate. *Consequences.* Deferred, not
+refused: an inline aggregate is the same mechanism as a comprehension and
+can be added later, one line in 5.3.
+
+** G-17 Nulls and unknowns have no syntax
+
+*Decision.* As E DR-6: a labeled null is never written in source, and the
+new surface adds no way to write one, test for one, or tell a reference to
+a computed attribute from one to a configured attribute. Which references
+carry nulls, and which literals are content positions (Rule 2), is schema
+knowledge the reader does not see in either surface. *Consequences.* The
+language server shows it (section 9.4).
+
+** G-18 Keypath literals stay, only where a path is data
+
+*Decision.* =.a.b= stays a literal for facts whose argument is a path
+(=type_lattice(iam.policy, .statements, "set")=, =ignore_changes=). A path
+after a reference is not a keypath literal but a chain
+(=vpc.tags.team=). Grant patterns use the chain form:
+=contributes iam.policy.statements=, =contributes _.tags=.
+
+** G-19 Settings are references; =let= names one
+
+*Context.* =setting(Env, .p, V)= plus =env(Env)= is the most repeated
+pattern in the corpus. *Decision.* A settings row is a reference of the
+pseudo-type =settings= (=settings.prod=, =settings[env]=), and a dot on it
+is always a read (=setting/3=, full key, as today). =let a = REF= names a
+reference; it is textual substitution, never a value. *Why =let= at all:*
+=pngu.df= reads =settings[env]= 34 times. *Why only references:* a value
+=let= would be a value rule under another name. *Consequences.* =cfg.x= in
+a rule is two literals (=env(E)=, =setting(E, .x, V)=); a reader who wants
+the join has to know that =let= is textual.
+
+** G-20 Policy packs: contributions are assignments
+
+*Decision.* A pack's =arg(T, A, .p, V) :- B= is written =R.p = V if B=
+(=r.tags = { team: "platform" } if r in resource=,
+=p.statements = [...] if p in iam.policy, ...=). Grants use the chain
+form (G-18). =contributes p= for a relation is unchanged. *Consequences.*
+The same assignment syntax as a block field, with a reference on the left
+and no =want=: a contribution never creates a resource.
+
+** G-21 Externs: declarations unchanged, calls by bracket
+
+*Decision.* =extern p(+a: T, -b: T) persist= is unchanged. A call is an
+atom (=file.json(path, v)=) or a lookup with the bound columns in brackets
+(=file.json[path]=, =random.password["crud-api-db"]=); the lookup is legal
+only for an extern with exactly one =-= column. *Consequences.* Brackets
+mean "a join that may return 0..n rows" for relations and externs alike
+(Rel's partial application); parentheses in a term mean a builtin function
+(one result). That is the only place the new surface makes a join's cost
+visible, and it does so on purpose.
+
+** G-22 Input relations, stacks, providers, inputs: unchanged
+
+*Decision.* =input relation p/N from git(...)=, =stack n { ... }=,
+=provider p { ... }=, =input k: T = d where R= keep their form, minus the
+period and with quoted constants. A refinement's =where= names the input
+by its own name, which is now a value name as everywhere else
+(=input replicas: int = 2 where replicas >= 1=). Fact files read by input
+relations are edition 2027 files of facts.
+
+** G-23 Scenarios: =with=
+
+*Decision.* =with k = v= inside a scenario is =input("k", v)=, Rego's
+=with input.k as v=. The rest of a scenario's body is ordinary statements.
+
+** G-24 Refinements (=where=) and =type= blocks: unchanged
+
+*Decision.* =type= blocks and their =where= clauses keep today's grammar
+(still "not yet supported" by the evaluator). Inside a =where=, the
+attribute is named bare, as today; it is a value name in that scope.
+
+** G-25 World reads: =world.T[name]=
+
+*Context.* The new program reads the live Service's selector. Today that is
+=cloud_attr(k8s.service, "crud-api", .spec.selector.color, C)=, keyed by the
+provider's name for the object, not by the program's address.
+*Decision.* =world.T[e].path= is a read of =cloud_attr= with the flattened
+leaf path; =x in world.T= is =cloud_exists=. The prefix is mandatory: a
+world read and a desired-state read of the same object must never look
+alike. *Consequences.* =world.k8s.job["migrate-v42"]= (the live Job by its
+Kubernetes name) and =k8s.job["migrate-v42"]= (this program's resource by
+its address) differ by one word; the LSP marks =world.= reads.
+
+** G-26 Instances: static names, indexed reads
+
+*Decision.* =instance m i { if B ... }= (the body moves into an =if= clause);
+=m.i.k= and =m[e].k= read outputs (=m[e]= is today's =m.I=). Instance
+names stay static identifiers because the core's instance is a static
+scope. *Consequences.* The new program writes two nearly identical
+instances (blue, green). A =for= over instances is a core change and a
+separate ticket.
+
+** G-27 Recursion needs nothing
+
+*Decision.* None. Recursive rules are relational and read as before; the
+dot forms may appear in them (an =attr= read in a recursive rule is a
+negative edge today and a stratification error today, whatever the
+spelling). *Consequences.* =dform-advanced.df='s closures change only in
+case and =if=.
+
+** G-28 ==== for tests, === for binding
+
+*Decision.* Both still lower to one equality literal; =dform fmt= prints
+==== when both sides are bound and === when it binds, so the source says
+which one the reader is looking at. *Consequences.* None in the core.
+
+* 7. Precedent
+
+| Language | What it contributes here | What is not taken, and why |
+|----------+--------------------------+----------------------------|
+| Rego (OPA), v1 | =if= before every body (mandatory since OPA 1.0); =contains= for multi-value rules, here =deny "m" if=; complete rules as value names (=serving = cutover=); =some x in xs=, =some k, v in xs=; =not= meaning "not true or undefined"; =with= for test inputs; lowercase variables, quoted strings | =every= (a helper-negation does it); =:== versus === (one equality suffices in Datalog); =default= (dform's =@default= rank already is one); =input.= and =data.= roots (G-12, the honest alternative) |
+| Polar (Oso) | =if= and lowercase variables in a logic language for application developers; resource blocks as the unit people read; attribute access with =.= on host objects, and the lesson Oso learned when it built data filtering: each such dot had to become a database join, which the rule's text did not show | =and= / =or= keywords; =matches= type checks (=x in T= does it); host-language method calls |
+| CodeQL (QL) | classes as types over which a variable ranges (=x in T= gives =x= a static type; the characteristic predicate is =want=); member access =x.getFoo()= as a join that may yield 0..n results, here =x.p= and =p[k]=; "declared variables are typed", here "a reference's type is static" | declaring every variable with its type (=from Vpc v=): too heavy for configuration; member predicates defined by the user (a module is dform's unit of reuse); inline aggregates (deferred, G-16) |
+| Soufflé | =.input= / =.output= directives as the model for =input relation=; singleton-variable warnings (the typo net under G-3); components as parameterised modules (dform's modules already are); no case rule for variables | =!= for negation; =count : { }= syntax; ADTs and records syntax |
+| DDlog | typed relations, =input relation=, lowercase variables; string interpolation (="${x}"=) | =FlatMap=, =var x = e= binding syntax, =group_by= with method chains |
+| Google Mangle | Datalog with structured values and a deliberate constant sigil (=/name=), weighed and rejected in G-3; =|> do fn:group_by()= pipelines weighed against head aggregates | uppercase variables; transform pipelines (G-16) |
+| Logica | functional predicates =F(x) = y=, read as =F(x)= in terms: the idea behind =p[k]= and value rules; named columns (=P(name:, age:)=), cf. dform's records | aggregating operators in heads (=x? += 1=, =Max==), compilation to SQL |
+| RelationalAI Rel | =R[x]= partial application (0..n results), taken for =p[k]= and extern lookups; =.= as relational composition, stated openly as a join, the model for being candid about =vpc.cidr=; =x in R=; integrity constraints (=ic=) as the model for =constraint= | point-free relational algebra (=parent.parent=) as a general operator: the dot here is only attribute access on a typed reference |
+
+* 8. Measurements
+
+Taken by =python3 proposals/G-corpus/measure.py=, which reads the named
+=before/= and =after/= source blocks of the corpus files: comments and blank
+lines excluded; a token is a string literal, a name, an integer, a
+two-character operator (=:-= ==== =!== =<== =>== =+==), a rank, or one
+punctuation character, the same tokenizer on both sides. A *read-carrier
+variable* is, before, a variable bound in the value position of a body
+read (=attr/4=, =arg/4= in a body, =setting/3=, =output/3=, =cloud_attr/4=)
+or of a declared input's unary relation (including =env/1=), counted once
+per statement; after, a variable bound by =x = R.p= in a body or clause.
+It counts the variables whose only job is to move a value from the literal
+that reads it to the place that uses it.
+
+| program | lines before | lines after | tokens before | tokens after | read-carrier vars before | after |
+|-
+| dform.df | 104 | 86 (-18%) | 763 | 517 (-32%) | 17 | 2 |
+| network.df | 26 | 21 (-20%) | 196 | 125 (-36%) | 3 | 0 |
+| database.df | 17 | 14 (-18%) | 95 | 60 (-37%) | 3 | 0 |
+| kubernetes.df | 23 | 19 (-18%) | 129 | 79 (-39%) | 4 | 0 |
+| iam.df | 18 | 15 (-17%) | 99 | 74 (-25%) | 0 | 0 |
+| baseline.df | 21 | 20 (-5%) | 217 | 140 (-35%) | 0 | 0 |
+| stdlib_net.df | 14 | 10 (-29%) | 122 | 60 (-51%) | 3 | 0 |
+| pngu.df | 148 | 115 (-23%) | 888 | 535 (-40%) | 26 | 0 |
+| dform-advanced.df | 106 | 97 (-9%) | 872 | 726 (-17%) | 7 | 1 |
+| gke_two_phase.df | 86 | 75 (-13%) | 557 | 374 (-33%) | 13 | 2 |
+| bootstrap.df | 58 | 53 (-9%) | 375 | 254 (-32%) | 3 | 0 |
+| workload.df | 35 | 37 (+5%) | 298 | 275 (-8%) | 0 | 0 |
+| crud_api.df (new) | 264 | 226 (-15%) | 2404 | 1550 (-36%) | 41 | 2 |
+| total | 920 | 788 (-15%) | 7015 | 4769 (-32%) | 120 | 7 |
+
+Non-space characters fall 18% overall (24727 to 20312); string literals rise
+from 262 to 372, the price of G-3. The seven carriers left are all
+deliberate: two relation columns in =dform.df='s =vpc_peer=, three
+"read, not reference" bindings (=dest=, =ns= twice), and two joins in the
+new program's denies.
+
+Where the saving is small it is because the program was already
+relational: =dform-advanced.df= is closures over facts, and =workload.df=
+had no reads to lose and gains lines from a body block and the qualified
+names its three =web= resources force. The saving is largest where
+settings and inputs are read (=pngu.df= -40% tokens, 26 carriers to none),
+which is most real configuration.
+
+* 9. Candid section
+
+** 9.1 Where the new surface is ambiguous
+
+- *Reference or read.* =k8s.namespace.pngu.name= is a reference as a field
+  value and a read in a clause (G-6). Both are legal in the same block, and
+  the plan prints them differently (=ref(k8s.namespace,pngu,name)= versus
+  ="pngu"=) when the path is configured. No other ambiguity in this
+  proposal changes a plan.
+- *Variable capture by a value name.* Adding =input t: string= to a file
+  makes the =t= in =tenant(t, i)= a read of the input: the rule silently
+  becomes a filter. Rego has the same hazard between rule names and
+  variables; Terraform avoids it with =var.=. Mitigations: G-4 forbids a
+  variable from *being declared* with such a name, but the variable here
+  was declared first; so =dform lint= (and the LSP) reports a value name
+  that appears only in binding positions of a rule (the signature of a
+  capture), and the formatter refuses to reformat such a rule without
+  =--force=. This is the strongest argument for =input.env= (decision 4).
+- *=in= has three meanings* (list membership, type generator, inventory
+  existence), resolved by what the right side names.
+- *A header name is a variable or a constant* depending on whether the
+  block's clause binds it (G-9).
+- *=network.main.vpc= versus =network.main/vpc=*: an output and a resource,
+  one character apart.
+- *A local resource named like a type namespace* (=db= in module
+  =database=): =db.id= is the resource in a term; =x in db.postgres= is the
+  type after =in=. Legal, deterministic, and a trap; linted.
+- *Newlines end statements*: an unindented continuation is a new statement.
+
+** 9.2 What the Prolog form made visible that this hides
+
+- *Joins.* Every read was a literal on its own line. Now =inet_subnet(vpc.cidr,
+  4, zone_index[z])= is two joins in one field; =cfg.gke.pods_cidr= is two
+  (=env= and =setting=); =app[c].ready_replicas == app[c].total_replicas= is
+  two output reads and a format. Only brackets still mark a join on sight.
+- *Gating.* A read anywhere in a resource block is hoisted into the one
+  body the block shares (F10), so it gates the resource's existence, not
+  just its field: if =zone_index[z]= has no row, there is no subnet at
+  all. The Prolog form showed this: the literal was in the body, after
+  =:-=, visibly a condition. In the new form it looks like part of a value.
+  The new program's Service disappears when =serving= has no row, and
+  nothing on the =color: serving= line says so.
+- *Cardinality.* =p[k]=, =r.p= on a multi-valued relation, =x in T=, and a
+  value rule with two rows each multiply derivations. =attr= is functional
+  per path, so =r.p= is at most one row; value rules and =p[k]= are not.
+- *Cost.* Stratification: every dot read of an attribute is a negative
+  edge into the =(attr, T, p)= partition. =strata= still shows it; the
+  source no longer does.
+- *Phases.* Which references are open nulls, and which reads are content
+  positions that will be stuck, was invisible before too, but =ref(...)=
+  was at least a word a reader could look up.
+- *Existence.* =not r.p= does not check that =r= exists (G-13); the current
+  constraints wrote the =want= next to the negation, and the new form
+  needs =exists r= written just as explicitly. A reader coming from Rego
+  gets this right; a reader coming from SQL (=NOT r.p= on a joined row)
+  expects the existence check.
+
+** 9.3 What gets harder to explain
+
+- Why =destination = net.vpc[b].cidr= is a reference but =if dest =
+  net.vpc[b].cidr= followed by =destination = dest= is a read, and why
+  that changes the plan (G-6).
+- Why =not d.settings.availability_type == "REGIONAL"= makes a helper
+  predicate appear in =dform strata= and =why= (=__neg_N=), while
+  =not d.public == false= does not (a nested versus a top-level path).
+- Why a head =run(active, live_image, live_schema)= is a rule.
+- Why ="{db.private_ip_address}"= makes a whole Secret pending, but
+  =PGHOST: db.private_ip_address= does not (interpolation needs content; a
+  reference carries the null).
+- What =let= is (text substitution), and why =let x = 3= is refused.
+
+** 9.4 What the language server must show to pay this back
+
+These go into the LSP ticket, which is gated on this one:
+
+1. *Semantic tokens from the resolver*: variables, value names, resources,
+   instance outputs, settings, =world.= reads and types each in their own
+   face. The tree-sitter grammar can only colour chains; the colour that
+   separates a variable from a value name must come from the server.
+2. *An inlay after every dot*: =ref= or =read= (and =world=, =setting=,
+   =output=), so G-6 is visible where it applies. Hover shows the literal
+   it lowers to.
+3. *Null class on references*: an inlay =?fresh=, =?open=, =?secret= from
+   the schema on every reference to a computed path, and a mark on reads
+   that are content positions over one ("stuck until
+   =gke_cluster.pngu#zones= resolves").
+4. *Hoisting*: on a resource block, a code lens listing the reads its
+   fields hoisted into the shared body ("exists only if: =zone_index[z]=,
+   =vpc.cidr=").
+5. *Negation hover*: on =not r.p=, the table of G-13 with the current
+   value of the cell (absent, a value, stuck).
+6. *Lowered view*: a command that shows the rule as today's core form, with
+   generated helpers. For a user who knew the Prolog form, this is the
+   escape hatch; for a reviewer, it is the diff that matters.
+7. *Cardinality mark* on value rules with more than one row in the current
+   environment, and on =p[k]= that returned several rows.
+8. The existing plan for the LSP (contributors hover, environment-aware
+   diagnostics, schema completion) applies unchanged; completion after a
+   dot on a reference offers the schema's attribute paths, which is the
+   first place the new surface is easier to write than the old.
+
+* 10. Stage 2, mechanically
+
+1. Lexer: the token set of 4.2 (IDENT without case, interpolated STRING,
+   DOT versus PATH by the preceding character, newline tokens). The
+   rowan tree stays lossless.
+2. Parser: 4.3 and 4.4, with recovery on column-0 statement starts.
+   Chains are parsed unresolved.
+3. Resolver (=src/syntax/resolve.rs=, new): scopes (program, file, module,
+   pack, scenario, rule, block clause), section 3's order, reference
+   typing (3.3), then 5.1 to 5.4 producing =ast::Program=. It needs the
+   list of type names: every =resource= header's type, every =type= block,
+   and the provider schemas' =type_provider= rows. It needs no attribute
+   schema (G-6 is positional).
+4. =transform.rs= and everything after: unchanged.
+5. Rewrite every =.df= in the repository by hand from the corpus as the
+   template, including =tests/syntax/ok=, =err= (new diagnostics), the E §7
+   files, provider schema files (=type_attr(...)= facts: quote the
+   symbols), and fact files read by input relations.
+6. Gates: =cargo test= with =tests/golden= untouched: plans *and* strata
+   byte-identical. The inspection snapshots (=why=, =query=) print source
+   text and variable names and are expected to change; they are reviewed
+   and accepted with the documented command.
+7. =docs/grammar.md= rewritten; =README.md= examples rewritten; the edition
+   2026 parser deleted.
+
+Known risks, each to be checked when it lands:
+- A =format= in a head argument where today's rule binds by =X = format(..)=
+  (=pngu.df=, =gke_two_phase.df=): same value; confirm =stuck= placement
+  and dangling-ref deny placement (=dangling_ref_deny= inserts =not want=
+  "as early as the address is bound") do not reach a plan.
+- A top-level =output k = t= with reads becomes a rule (5.1); inside a
+  module the same must be accepted by the module rewrite of =output/2=.
+- Generated =__neg_N= helpers must not appear in any rewritten corpus
+  program (none does: the corpus's negations are all top-level paths or
+  atoms); the new program uses them and is not in the golden set.
+- Variable names in the lowered AST reach =why= output; choose them
+  readably (the source name, capitalised, =_ref1= for hoisted reads).
+
+* 11. Decisions the user must make
+
+1. *Lowercase variables with every constant quoted* (G-3), versus bare enum
+   members resolved by type, versus a constant sigil, versus keeping
+   uppercase variables. Recommended: as proposed.
+2. *Reference versus read by position* (G-6), versus by schema (E DR-2's
+   intent, loses apply ordering on configured paths and needs the schema
+   to lower), versus an explicit marker. Recommended: position.
+3. *No statement terminator* (G-2), newline-sensitive, versus keeping =}.=
+   and =.= with dot access (legal but noisy: =vpc.id.= at a line end).
+   Recommended: drop it.
+4. *Bare value names* for inputs and value rules (G-12), versus
+   =input.env= / =var.env= prefixes that make capture impossible.
+   Recommended: bare, with the capture lint; this is the closest call in
+   the proposal.
+5. *=let= for reference aliases* (G-19), versus writing =settings[env].x=
+   every time (34 times in =pngu.df=).
+6. *=not r.p= means "not true", no implied existence* (G-13), versus
+   "the resource exists and ...".
+7. *=for= / =if= clauses inside the block* (G-8), versus in the header,
+   versus after the block as today.
+8. *=world.T[name]= reads* (G-25): in this proposal, or left to
+   =cloud_attr(...)= atoms until the inventory capability is common.
+9. *Keep F10 hoisting* (a read in one field gates the whole block) for
+   stage 2, since splitting bodies per field changes the lowered AST and
+   the golden plans; a separate semantics ticket if wanted.
+10. *Edition 2027 and deleting 2026 in the same landing* (G-1), versus
+    reusing =edition 2026= for the new grammar (it is pre-release).
+11. *Aggregates stay in heads* for now (G-16).
+12. Whether a =for= over module instances (the new program's two instance
+    blocks) is worth a core ticket.
+
+* 12. New issues found while writing this (out of scope)
+
+- =dform.df=: the =net.vpc_peering= rule joins =vpc_peer_inst(IA, IB)= and
+  =vpc_peer(A, B)= without connecting them; a second peering edge would
+  create four peerings, two misnamed.
+- E DR-2 says a =ref= to a configured attribute is rewritten to an =attr=
+  join; the code keeps =Value::Ref= (resolved at apply, an ordering edge,
+  printed =ref(...)=). G-6 relies on the code's behaviour; E should be
+  corrected or the code changed, deliberately.
+- E DR-6: ={}= at a Map path is bottom, so Kubernetes' =podSelector: {}=
+  ("every pod", required by the API) cannot be written; the k8s provider
+  must default it or the schema must type it Flat.
+- =providers/k8s/schema.df= has no =status.succeeded= or =status.conditions=
+  for =k8s.job=, no =spec= for HPAs, PDBs or network policies, and the k8s
+  provider has no inventory capability (=cloud_attr=); the new program
+  assumes all of them.

@@ -1,0 +1,807 @@
+#+title: G corpus: crud_api.df, a blue/green rollout with a gated migration (new)
+#+startup: showall
+
+A program that does not exist in the repo, written for this proposal to
+show how a complex program reads: a GitOps blue/green rollout with a gated
+database migration, in controller mode. The proposed form is the program;
+the Prolog form below it is the same program in today's syntax, written for
+comparison (and to check that every proposed construct has a lowering).
+Neither has been run: the schema assumptions are listed at the top of the
+proposed file. The proposed form is shown first.
+
+Counts (comments and blank lines excluded; section 8 of the proposal says how they are taken):
+
+| file | lines | tokens | read-carrier vars |
+|-
+| crud_api.df | 264 → 226 | 2404 → 1550 | 41 → 2 |
+
+* crud_api.df
+
+** proposed
+
+#+name: after/crud_api.df
+#+begin_src dform
+# crud_api.df: a GitOps blue/green rollout with a gated database migration.
+#
+# The release is a fact file in git. The serving color is whatever the live
+# Service selects. When the serving Deployment does not run the released
+# digest, the other color is rolled out: first the schema migration Job,
+# then (once the Job has succeeded) the app for the next color, then (once
+# every replica of it is ready) the Service's selector; the old color is
+# retired on the next tick, because the world now says the new one serves.
+#
+#   dform --file crud_api.df controller --stack shop.crud_api
+#
+# Schema assumptions (not in providers/ today): google_sql_* types with
+# private_ip_address computed; k8s.job status.succeeded and
+# status.conditions computed; the kubernetes provider answering cloud_attr
+# (the inventory capability) so `world.` reads work; a random provider
+# answering random.password.
+
+edition 2027
+
+stack shop.crud_api {}
+
+provider google     { source = "registry.dform.dev/google", version = ">=6" }
+provider kubernetes { source = "registry.dform.dev/kubernetes", version = ">=3" }
+provider random     { source = "registry.dform.dev/random" }
+
+input env: enum("dev", "prod") = "dev"
+input region: string = "us-east1"
+input replicas: int = 2 where replicas >= 1
+
+# release("crud_api", "digest", "sha256:9f2c...")
+# release("crud_api", "schema", 42)
+input relation release/3 from git("ops.git", "main", "releases/crud_api.df")
+# approve(t, a): accept the drift of t.a
+input relation approve/2 from git("ops.git", "main", "approvals.df")
+
+# A generated password: a secret null until the first apply, the same
+# value on every later run (persisted in state, E DR-7).
+extern random.password(+key: string, -value: secret(string)) persist
+
+settings dev  { db = { tier: "db-f1-micro",      availability: "ZONAL" } }
+settings prod { db = { tier: "db-custom-2-7680", availability: "REGIONAL" } }
+let cfg = settings[env]
+
+########################################
+# The release, and what the world runs now
+########################################
+
+digest = d if release("crud_api", "digest", d)
+schema = v if release("crud_api", "schema", v)
+released_image = "gcr.io/shop/crud-api@{digest}"
+
+# The live Service's selector names the serving color; nothing serves yet
+# on the first deploy.
+active      = world.k8s.service["crud-api"].spec.selector.color
+let live    = world.k8s.deployment["crud-api-{active}"]
+live_image  = live.spec.template.spec.containers[0].image
+live_schema = to_int(live.metadata.labels.schema)
+
+other("blue", "green")
+other("green", "blue")
+
+next = other[active]
+next = "blue" if not has active
+
+# A rollout is needed when the serving Deployment does not run the release.
+rollout = next if live_image != released_image
+rollout = next if not has active
+
+########################################
+# The database: private, regional in prod, password from an extern
+########################################
+
+resource google_compute_network vpc {
+  name = "shop-{env}"
+  auto_create_subnetworks = false
+}
+
+resource google_sql_database_instance db {
+  name = "crud-api-{env}"
+  region = region
+  database_version = "POSTGRES_16"
+  deletion_protection = true
+  settings = {
+    tier: cfg.db.tier,
+    availability_type: cfg.db.availability,
+    backup_configuration: { enabled: true, point_in_time_recovery_enabled: true },
+    ip_configuration: { ipv4_enabled: false, private_network: vpc.id }
+  }
+}
+
+resource google_sql_database crud_db {
+  instance = db.name
+  name = "crud_api"
+}
+
+resource google_sql_user crud_user {
+  instance = db.name
+  name = "crud_api"
+  password = random.password["crud-api-db"]
+}
+
+########################################
+# The namespace, its default-deny policy, the connection Secret
+########################################
+
+resource k8s.namespace shop {
+  metadata.name = "shop"
+  metadata.labels = { "pod-security.kubernetes.io/enforce": "restricted" }
+}
+
+resource k8s.network_policy default_deny {
+  metadata.name = "default-deny"
+  metadata.namespace = shop.metadata.name
+  spec.policyTypes = ["Ingress", "Egress"]
+  # No podSelector.matchLabels: selects every pod in the namespace.
+  # `spec.podSelector = {}` would be bottom at a Map path (E DR-6): the
+  # provider receives no podSelector either way and must default it.
+}
+
+# host is a reference to an open null (the private IP exists once the
+# instance does); the password is a secret null. Neither is interpolated:
+# "postgres://...@{db.private_ip_address}" would need the content, and a
+# read in any field holds the whole Secret until the instance exists.
+resource k8s.secret db_conn {
+  metadata.name = "crud-api-db"
+  metadata.namespace = shop.metadata.name
+  stringData = {
+    PGHOST: db.private_ip_address,
+    PGUSER: crud_user.name,
+    PGDATABASE: crud_db.name,
+    PGPASSWORD: random.password["crud-api-db"]
+  }
+}
+
+########################################
+# The migration: one Job per schema version
+########################################
+
+resource k8s.job "migrate-v{schema}" {
+  metadata.name = "crud-api-migrate-v{schema}"
+  metadata.namespace = shop.metadata.name
+  metadata.labels = { app: "crud-api", schema: "{schema}" }
+  spec.backoffLimit = 2
+  spec.template.spec.restartPolicy = "Never"
+  spec.template.spec.containers = [{
+    name: "migrate",
+    image: released_image,
+    args: ["migrate", "--to", "{schema}"],
+    envFrom: [{ secretRef: { name: db_conn.metadata.name } }],
+    resources: {
+      requests: { cpu: "100m", memory: "128Mi" },
+      limits:   { cpu: "500m", memory: "256Mi" }
+    }
+  }]
+}
+
+# status.succeeded is an open null until the Job finishes: until then
+# migrated/1 is undetermined and so is everything gated on it.
+migrated(schema) if k8s.job["migrate-v{schema}"].status.succeeded == 1
+
+########################################
+# The app, one instance per running color
+########################################
+
+# The serving color keeps what it runs; the rollout color runs the release,
+# once the migration has reached the release's schema.
+run(active, live_image, live_schema)
+run(rollout, released_image, schema) if migrated(schema)
+
+instance app blue {
+  if run("blue", image, version)
+  color = "blue"
+  image = image
+  schema = version
+  namespace = shop.metadata.name
+  db_secret = db_conn.metadata.name
+  replicas = replicas
+}
+
+instance app green {
+  if run("green", image, version)
+  color = "green"
+  image = image
+  schema = version
+  namespace = shop.metadata.name
+  db_secret = db_conn.metadata.name
+  replicas = replicas
+}
+
+# A color is ready when every replica it wants is ready (open nulls until
+# the Deployment reports).
+ready(c) if run(c, _, _), app[c].ready_replicas == app[c].total_replicas
+
+cutover = rollout if ready(rollout)
+serving = cutover
+serving = active if not has cutover
+
+resource k8s.service api {
+  metadata.name = "crud-api"
+  metadata.namespace = shop.metadata.name
+  spec.selector = { app: "crud-api", color: serving }
+  spec.ports = [{ port: 80, targetPort: "8080", protocol: "TCP" }]
+}
+
+module app {
+  input color: enum("blue", "green")
+  input image: string
+  input schema: int
+  input namespace: string
+  input db_secret: string
+  input replicas: int
+  output ready_replicas: int
+  output total_replicas: int
+
+  labels = { app: "crud-api", color: color }
+
+  resource k8s.deployment deploy {
+    metadata.name = "crud-api-{color}"
+    metadata.namespace = namespace
+    metadata.labels = { app: "crud-api", color: color, schema: "{schema}" }
+    spec.selector.matchLabels = labels
+    spec.template.metadata.labels = labels
+    spec.template.spec.containers = [{
+      name: "api",
+      image: image,
+      ports: [{ containerPort: 8080, protocol: "TCP" }],
+      envFrom: [{ secretRef: { name: db_secret } }],
+      readinessProbe: { httpGet: { path: "/healthz", port: 8080 } },
+      resources: {
+        requests: { cpu: "250m", memory: "256Mi" },
+        limits:   { cpu: "1",    memory: "512Mi" }
+      }
+    }]
+  }
+
+  # The autoscaler owns spec.replicas; the Deployment does not set it.
+  resource k8s.horizontal_pod_autoscaler hpa {
+    metadata.name = "crud-api-{color}"
+    metadata.namespace = namespace
+    spec.scaleTargetRef = { apiVersion: "apps/v1", kind: "Deployment", name: deploy.metadata.name }
+    spec.minReplicas = replicas
+    spec.maxReplicas = 10
+  }
+
+  resource k8s.pod_disruption_budget pdb {
+    metadata.name = "crud-api-{color}"
+    metadata.namespace = namespace
+    spec.minAvailable = 1
+    spec.selector.matchLabels = labels
+  }
+
+  resource k8s.network_policy allow_http {
+    metadata.name = "crud-api-{color}-http"
+    metadata.namespace = namespace
+    spec.podSelector.matchLabels = labels
+    spec.policyTypes = ["Ingress"]
+    spec.ingress = [{
+      from: [{ namespaceSelector: { matchLabels: { "kubernetes.io/metadata.name": "ingress-nginx" } } }],
+      ports: [{ port: 8080, protocol: "TCP" }]
+    }]
+  }
+
+  output ready_replicas = deploy.status.readyReplicas
+  output total_replicas = deploy.status.replicas
+}
+
+########################################
+# Rollout invariants
+########################################
+
+deny "migration failed; the rollout is held" { job: "migrate-v{schema}" } if {
+  some c in k8s.job["migrate-v{schema}"].status.conditions
+  c.type == "Failed"
+  c.status == "True"
+}
+
+deny "a rollout runs a schema the migration has not reached" { color: c, schema: v } if {
+  run(c, _, v)
+  c == rollout
+  not migrated(v)
+}
+
+deny "cutover to a color with unready pods" { color: c } if {
+  c = api.spec.selector.color
+  c != active
+  not ready(c)
+}
+
+########################################
+# Best practice
+########################################
+
+container(w, c) if w in k8s.deployment, some c in w.spec.template.spec.containers
+container(w, c) if w in k8s.job, some c in w.spec.template.spec.containers
+
+deny "container without resource limits" { workload: w, container: c.name } if {
+  container(w, c)
+  not has c.resources.limits
+}
+
+deny "image not pinned by digest" { workload: w, image: c.image } if {
+  container(w, c)
+  len(split(c.image, "@sha256:")) != 2
+}
+
+deny "prod database must be regional" { db: d } if {
+  env == "prod"
+  d in google_sql_database_instance
+  not d.settings.availability_type == "REGIONAL"
+}
+
+# Absent is public: Cloud SQL's default for ipv4_enabled is true.
+deny "database has a public IP" { db: d } if {
+  d in google_sql_database_instance
+  not d.settings.ip_configuration.ipv4_enabled == false
+}
+
+default_deny(ns) if {
+  p in k8s.network_policy
+  ns = p.metadata.namespace
+  not has p.spec.podSelector.matchLabels
+  "Ingress" in p.spec.policyTypes
+}
+
+deny "namespace without a default-deny network policy" { namespace: n } if {
+  n in k8s.namespace
+  not default_deny(n.metadata.name)
+}
+
+deny "prod workload runs a single replica" { hpa: h } if {
+  env == "prod"
+  h in k8s.horizontal_pod_autoscaler
+  h.spec.minReplicas < 2
+}
+
+########################################
+# Controller mode
+########################################
+
+# Our labels drift back without asking; anything else waits for approve.
+owned_label("app")
+owned_label("color")
+owned_label("schema")
+
+auto_reconcile(t, a, p) if drift(t, a, p, _, _), owned_label(l), p == "metadata.labels.{l}"
+#+end_src
+
+** today's syntax (for comparison; no file in the repo)
+
+#+name: before/crud_api.df
+#+begin_src prolog
+# crud_api.df in today's syntax (edition 2026), for comparison with the
+# proposed form. Same program, same schema assumptions.
+
+edition 2026.
+
+stack shop.crud_api {}.
+
+provider google     { source = "registry.dform.dev/google", version = ">=6" }.
+provider kubernetes { source = "registry.dform.dev/kubernetes", version = ">=3" }.
+provider random     { source = "registry.dform.dev/random" }.
+
+input env: enum(dev, prod) = dev.
+input region: string = "us-east1".
+input replicas: int = 2 where replicas >= 1.
+
+input relation release/3 from git("ops.git", "main", "releases/crud_api.df").
+input relation approve/2 from git("ops.git", "main", "approvals.df").
+
+extern random.password(+key: string, -value: secret(string)) persist.
+
+settings dev  { db = { tier: "db-f1-micro",      availability: "ZONAL" } }.
+settings prod { db = { tier: "db-custom-2-7680", availability: "REGIONAL" } }.
+
+########################################
+# The release, and what the world runs now
+########################################
+
+digest(D) :- release(crud_api, digest, D).
+schema(V) :- release(crud_api, schema, V).
+released_image(I) :- digest(D), I = format("gcr.io/shop/crud-api@%s", D).
+
+active(C) :- cloud_attr(k8s.service, "crud-api", .spec.selector.color, C).
+live_image(I) :-
+  active(C),
+  Name = format("crud-api-%s", C),
+  cloud_attr(k8s.deployment, Name, .spec.template.spec.containers[0].image, I).
+live_schema(V) :-
+  active(C),
+  Name = format("crud-api-%s", C),
+  cloud_attr(k8s.deployment, Name, .metadata.labels.schema, S),
+  V = to_int(S).
+
+other(blue, green).
+other(green, blue).
+
+next(N) :- active(A), other(A, N).
+next(blue) :- not active(_).
+
+rollout(N) :- next(N), live_image(L), released_image(R), L != R.
+rollout(N) :- next(N), not active(_).
+
+########################################
+# The database
+########################################
+
+resource google_compute_network vpc {
+  name = format("shop-%s", E)
+  auto_create_subnetworks = false
+} :- env(E).
+
+resource google_sql_database_instance db {
+  name = format("crud-api-%s", E)
+  region = Region
+  database_version = "POSTGRES_16"
+  deletion_protection = true
+  settings = {
+    tier: Tier,
+    availability_type: Avail,
+    backup_configuration: { enabled: true, point_in_time_recovery_enabled: true },
+    ip_configuration: { ipv4_enabled: false, private_network: ref(google_compute_network, vpc, .id) }
+  }
+} :-
+  env(E),
+  region(Region),
+  setting(E, .db.tier, Tier),
+  setting(E, .db.availability, Avail).
+
+resource google_sql_database crud_db {
+  instance = ref(google_sql_database_instance, db, .name)
+  name = "crud_api"
+}.
+
+resource google_sql_user crud_user {
+  instance = ref(google_sql_database_instance, db, .name)
+  name = "crud_api"
+  password = Pw
+} :- random.password("crud-api-db", Pw).
+
+########################################
+# The namespace, its default-deny policy, the connection Secret
+########################################
+
+resource k8s.namespace shop {
+  metadata.name = "shop"
+  metadata.labels = { "pod-security.kubernetes.io/enforce": "restricted" }
+}.
+
+resource k8s.network_policy default_deny {
+  metadata.name = "default-deny"
+  metadata.namespace = ref(k8s.namespace, shop, .metadata.name)
+  spec.policyTypes = ["Ingress", "Egress"]
+}.
+
+resource k8s.secret db_conn {
+  metadata.name = "crud-api-db"
+  metadata.namespace = ref(k8s.namespace, shop, .metadata.name)
+  stringData = {
+    PGHOST: ref(google_sql_database_instance, db, .private_ip_address),
+    PGUSER: ref(google_sql_user, crud_user, .name),
+    PGDATABASE: ref(google_sql_database, crud_db, .name),
+    PGPASSWORD: Pw
+  }
+} :- random.password("crud-api-db", Pw).
+
+########################################
+# The migration
+########################################
+
+resource k8s.job Job {
+  metadata.name = format("crud-api-migrate-v%s", V)
+  metadata.namespace = ref(k8s.namespace, shop, .metadata.name)
+  metadata.labels = { app: "crud-api", schema: format("%s", V) }
+  spec.backoffLimit = 2
+  spec.template.spec.restartPolicy = "Never"
+  spec.template.spec.containers = [{
+    name: "migrate",
+    image: Image,
+    args: ["migrate", "--to", format("%s", V)],
+    envFrom: [{ secretRef: { name: ref(k8s.secret, db_conn, .metadata.name) } }],
+    resources: {
+      requests: { cpu: "100m", memory: "128Mi" },
+      limits:   { cpu: "500m", memory: "256Mi" }
+    }
+  }]
+} :-
+  schema(V),
+  released_image(Image),
+  Job = format("migrate-v%s", V).
+
+migrated(V) :-
+  schema(V),
+  Job = format("migrate-v%s", V),
+  attr(k8s.job, Job, .status, S),
+  S.succeeded = 1.
+
+########################################
+# The app, one instance per running color
+########################################
+
+run(C, I, V) :- active(C), live_image(I), live_schema(V).
+run(C, I, V) :- rollout(C), released_image(I), schema(V), migrated(V).
+
+instance app blue {
+  color = "blue"
+  image = Image
+  schema = V
+  namespace = ref(k8s.namespace, shop, .metadata.name)
+  db_secret = ref(k8s.secret, db_conn, .metadata.name)
+  replicas = R
+} :- run(blue, Image, V), replicas(R).
+
+instance app green {
+  color = "green"
+  image = Image
+  schema = V
+  namespace = ref(k8s.namespace, shop, .metadata.name)
+  db_secret = ref(k8s.secret, db_conn, .metadata.name)
+  replicas = R
+} :- run(green, Image, V), replicas(R).
+
+ready(C) :-
+  run(C, _, _),
+  output(app.C, ready_replicas, Ready),
+  output(app.C, total_replicas, Total),
+  Ready = Total.
+
+cutover(C) :- rollout(C), ready(C).
+serving(C) :- cutover(C).
+serving(C) :- active(C), not cutover(_).
+
+resource k8s.service api {
+  metadata.name = "crud-api"
+  metadata.namespace = ref(k8s.namespace, shop, .metadata.name)
+  spec.selector = { app: "crud-api", color: C }
+  spec.ports = [{ port: 80, targetPort: "8080", protocol: "TCP" }]
+} :- serving(C).
+
+module app {
+  input color: enum(blue, green).
+  input image: string.
+  input schema: int.
+  input namespace: string.
+  input db_secret: string.
+  input replicas: int.
+  output ready_replicas: int.
+  output total_replicas: int.
+
+  labels(L) :- color(C), L = { app: "crud-api", color: C }.
+
+  resource k8s.deployment deploy {
+    metadata.name = format("crud-api-%s", C)
+    metadata.namespace = Ns
+    metadata.labels = { app: "crud-api", color: C, schema: format("%s", V) }
+    spec.selector.matchLabels = L
+    spec.template.metadata.labels = L
+    spec.template.spec.containers = [{
+      name: "api",
+      image: Image,
+      ports: [{ containerPort: 8080, protocol: "TCP" }],
+      envFrom: [{ secretRef: { name: Secret } }],
+      readinessProbe: { httpGet: { path: "/healthz", port: 8080 } },
+      resources: {
+        requests: { cpu: "250m", memory: "256Mi" },
+        limits:   { cpu: "1",    memory: "512Mi" }
+      }
+    }]
+  } :- color(C), namespace(Ns), schema(V), labels(L), image(Image), db_secret(Secret).
+
+  resource k8s.horizontal_pod_autoscaler hpa {
+    metadata.name = format("crud-api-%s", C)
+    metadata.namespace = Ns
+    spec.scaleTargetRef = { apiVersion: "apps/v1", kind: "Deployment", name: ref(k8s.deployment, deploy, .metadata.name) }
+    spec.minReplicas = R
+    spec.maxReplicas = 10
+  } :- color(C), namespace(Ns), replicas(R).
+
+  resource k8s.pod_disruption_budget pdb {
+    metadata.name = format("crud-api-%s", C)
+    metadata.namespace = Ns
+    spec.minAvailable = 1
+    spec.selector.matchLabels = L
+  } :- color(C), namespace(Ns), labels(L).
+
+  resource k8s.network_policy allow_http {
+    metadata.name = format("crud-api-%s-http", C)
+    metadata.namespace = Ns
+    spec.podSelector.matchLabels = L
+    spec.policyTypes = ["Ingress"]
+    spec.ingress = [{
+      from: [{ namespaceSelector: { matchLabels: { "kubernetes.io/metadata.name": "ingress-nginx" } } }],
+      ports: [{ port: 8080, protocol: "TCP" }]
+    }]
+  } :- color(C), namespace(Ns), labels(L).
+
+  output ready_replicas = ref(k8s.deployment, deploy, .status.readyReplicas).
+  output total_replicas = ref(k8s.deployment, deploy, .status.replicas).
+}.
+
+########################################
+# Rollout invariants
+########################################
+
+deny("migration failed; the rollout is held", { job: Job }) :-
+  schema(V),
+  Job = format("migrate-v%s", V),
+  attr(k8s.job, Job, .status, S),
+  member(S.conditions, Cond),
+  Cond.type = "Failed",
+  Cond.status = "True".
+
+deny("a rollout runs a schema the migration has not reached", { color: C, schema: V }) :-
+  run(C, _, V),
+  rollout(C),
+  not migrated(V).
+
+deny("cutover to a color with unready pods", { color: C }) :-
+  attr(k8s.service, api, .spec, Spec),
+  C = Spec.selector.color,
+  active(A),
+  C != A,
+  not ready(C).
+
+########################################
+# Best practice
+########################################
+
+container(W, C) :-
+  want(k8s.deployment, W),
+  attr(k8s.deployment, W, .spec, Spec),
+  member(Spec.template.spec.containers, C).
+container(W, C) :-
+  want(k8s.job, W),
+  attr(k8s.job, W, .spec, Spec),
+  member(Spec.template.spec.containers, C).
+
+has_limits(C) :- container(_, C), _L = C.resources.limits.
+
+deny("container without resource limits", { workload: W, container: N }) :-
+  container(W, C),
+  N = C.name,
+  not has_limits(C).
+
+deny("image not pinned by digest", { workload: W, image: I }) :-
+  container(W, C),
+  I = C.image,
+  len(split(I, "@sha256:")) != 2.
+
+regional(D) :-
+  attr(google_sql_database_instance, D, .settings, S),
+  S.availability_type = "REGIONAL".
+
+deny("prod database must be regional", { db: D }) :-
+  env(prod),
+  want(google_sql_database_instance, D),
+  not regional(D).
+
+private_only(D) :-
+  attr(google_sql_database_instance, D, .settings, S),
+  S.ip_configuration.ipv4_enabled = false.
+
+deny("database has a public IP", { db: D }) :-
+  want(google_sql_database_instance, D),
+  not private_only(D).
+
+has_match_labels(P) :-
+  attr(k8s.network_policy, P, .spec, Spec),
+  _L = Spec.podSelector.matchLabels.
+
+default_deny(Ns) :-
+  want(k8s.network_policy, P),
+  attr(k8s.network_policy, P, .metadata, M),
+  Ns = M.namespace,
+  not has_match_labels(P),
+  attr(k8s.network_policy, P, .spec, Spec),
+  "Ingress" in Spec.policyTypes.
+
+deny("namespace without a default-deny network policy", { namespace: N }) :-
+  want(k8s.namespace, N),
+  attr(k8s.namespace, N, .metadata, M),
+  not default_deny(M.name).
+
+deny("prod workload runs a single replica", { hpa: H }) :-
+  env(prod),
+  want(k8s.horizontal_pod_autoscaler, H),
+  attr(k8s.horizontal_pod_autoscaler, H, .spec, Spec),
+  Spec.minReplicas < 2.
+
+########################################
+# Controller mode
+########################################
+
+owned_label(app).
+owned_label(color).
+owned_label(schema).
+
+auto_reconcile(T, A, P) :-
+  drift(T, A, P, _, _),
+  owned_label(L),
+  P = format("metadata.labels.%s", L).
+#+end_src
+
+* Notes
+
+** What the program does, tick by tick
+
+1. First run, nothing live. =active= has no row; =next= is ="blue"=,
+   =rollout= is ="blue"=. The Job =migrate-v42= is created; its
+   =status.succeeded= is an open null, so =migrated(42)= is undetermined and
+   so is the blue instance (its inputs come from =run=). The Service reads
+   =serving=, which reads =cutover=, which is undetermined: pending.
+2. The Job has succeeded (round 0 resolves =status.succeeded= to 1):
+   =migrated(42)=, the blue instance exists, its Deployment's
+   =status.readyReplicas= is an open null until the next refresh.
+3. Blue is ready: =cutover= is blue, the Service selects blue.
+4. A new release (digest, schema 43) lands in git. =active= is blue (the
+   world says so), =live_image= differs from =released_image=, so =rollout=
+   is green; =migrate-v43= runs; blue keeps running what the world says it
+   runs (=run(active, live_image, live_schema)=).
+5. Green is migrated and ready: the Service selects green.
+6. Next tick the world says green; =live_image= is the release; no rollout;
+   only green runs, and blue's resources are no longer wanted: retired.
+
+** Deviations from the brief, with reasons
+
+- The namespace, the Service and the default-deny policy are at the top,
+  not in the app module: both colors share them, and a module instance per
+  color cannot own them.
+- Two =instance= blocks, not one =for= over colors: instance names are static
+  in the core (=instance m i=). A =for= over instances needs a core change.
+- The Deployment does not set =spec.replicas=; the HPA owns it, and
+  readiness compares =status.readyReplicas= with =status.replicas=. The
+  "single replica in prod" deny is on the HPA's =minReplicas=.
+- =auto_reconcile= covers our own labels, not replicas (which nothing here
+  sets); every other drift waits for =approve= in git.
+
+** Lowering, where it is not obvious
+
+- =active = world.k8s.service["crud-api"].spec.selector.color= is the value
+  rule =active(C) :- cloud_attr(k8s.service, "crud-api", .spec.selector.color, C)=.
+  =world.= reads the inventory (=cloud_attr=, keyed by the provider's name for
+  the object), never the program's own desired document.
+- =let live = world.k8s.deployment["crud-api-{active}"]= is a reference alias:
+  each use is =active(C), Name = format(...), cloud_attr(k8s.deployment, Name, ...)=.
+- =next = other[active]= is =next(N) :- active(A), other(A, N)=.
+- =run(active, live_image, live_schema)= is a rule, not a fact: its head
+  names three value names, each a body literal.
+- =migrated(schema) if k8s.job["migrate-v{schema}"].status.succeeded == 1=
+  is =schema(V), Job = format(...), attr(k8s.job, Job, status, S), S.succeeded = 1=.
+- =ready(c) if ..., app[c].ready_replicas == app[c].total_replicas= reads
+  two outputs of the instance =app.C=.
+- =not d.settings.availability_type == "REGIONAL"= negates a nested path, so
+  it lowers through a generated helper, the same one the Prolog version
+  names =regional/1= by hand. So do =not has c.resources.limits= and
+  =not has p.spec.podSelector.matchLabels=.
+- =not default_deny(n.metadata.name)=: the read in the argument is positive
+  and hoisted out of the negation; only the atom is negated.
+
+** Reads better
+
+- The rollout logic is ten value rules that read as definitions:
+  =rollout = next if live_image != released_image=. The Prolog form spells
+  each as a unary relation with a variable per value.
+- The best-practice denies read as checks:
+  =not d.settings.ip_configuration.ipv4_enabled == false=. The Prolog form
+  needs a hand-written helper predicate per nested negation (four of them).
+- Module =app= has no body clauses at all: every input is used by name.
+- 41 read-carrier variables to 2.
+
+** Reads worse
+
+- Value names are everywhere, and a reader must know that =serving= in
+  =spec.selector = { ..., color: serving }= is a join that gates the whole
+  Service: no =serving=, no Service. The Prolog form's =:- serving(C).=
+  said so at the end of the block.
+- Where the nulls are is invisible. =migrated(schema)= is undetermined for
+  a whole tick and nothing on the page says it; neither did the Prolog
+  form, but its =attr(k8s.job, Job, .status, S)= at least named the
+  attribute read.
+- Two near-identical instance blocks.
+- =world.k8s.deployment["crud-api-{active}"]= and
+  =k8s.job["migrate-v{schema}"]= differ in one word and mean different
+  things: the live object by its provider name versus the program's own
+  resource by its address.

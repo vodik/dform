@@ -1,0 +1,814 @@
+#+title: G corpus: dform.df, its modules and packs
+#+startup: showall
+
+Stage 1 of Proposal G (=proposals/G-surface-syntax.org=): the current
+program verbatim, then the proposed rewrite, file by file. Every rewrite is
+meant to lower to the AST the current program lowers to, literal for literal
+up to variable names and body order (section 5 of the proposal), so the
+golden plans and strata stay byte-identical in stage 2. Where a rewrite
+could not be that faithful, the notes at the end say so.
+
+=dform.df= imports =modules/network.df=, =database.df=, =kubernetes.df=,
+=iam.df=, =policies/baseline.df= and =modules/stdlib_net.df=; all seven are
+here. Module and pack notes are in the second notes file below.
+
+Counts (comments and blank lines excluded; section 8 of the proposal says how they are taken):
+
+| file | lines | tokens | read-carrier vars |
+|-
+| dform.df | 104 → 86 | 763 → 517 | 17 → 2 |
+
+* dform.df
+
+** current (dform.df)
+
+#+name: before/dform.df
+#+begin_src prolog
+# dform demo: component-scoped resources + settings tables + IAM policy assembly.
+#
+# Try:
+#   cargo run -- plan
+#   cargo run -- plan --set env=prod
+#   cargo run -- apply
+
+edition 2026.
+
+# The provider the mock plays, and the stack this program owns: its state is
+# .dform/dform/ (the default backend, local(".dform/dform")). Strict: a plan
+# that needs a phase boundary is refused; fresh nulls (ids) still flow.
+provider fake { source = "providers/fake" }.
+stack dform { unknowns = strict }.
+
+# Typed stack input with a default. The default is a @default contribution
+# to input env; --set env=prod is a normal contribution and wins.
+input env: enum(dev, staging, prod) = staging.
+
+data(zone, "us-test-1a").
+data(zone, "us-test-1b").
+
+# Guard blocks (when) apply a condition to everything inside.
+when env(prod) {
+  iam_need(app, audit.write, "audit-log").
+}.
+
+# Settings (branch as data). One @default layer for every environment that
+# has one; a per-environment block wins per leaf at the normal rank.
+env_name(staging).
+env_name(prod).
+
+settings E @default {
+  network.main.vpc_net = inet("10.50.0.0/16")
+  network.peer.vpc_net = inet("10.60.0.0/16")
+  db = { backup_days: 3, multi_az: false }
+  k8s = { private_api: false, nodepool: { min: 1, max: 3 } }
+} :- env_name(E).
+
+settings prod {
+  network.main.vpc_net = inet("10.20.0.0/16")
+  network.peer.vpc_net = inet("10.21.0.0/16")
+  db = { backup_days: 14, multi_az: true }
+  k8s = { private_api: true, nodepool: { min: 3, max: 10 } }
+  audit.sinks += ["cloudwatch"] # a set: unions with the baseline pack's ["s3"]
+}.
+
+settings dev {
+  network.main.vpc_net = inet("10.90.0.0/16")
+}.
+
+import "modules/network.df".
+import "modules/database.df".
+import "modules/kubernetes.df".
+import "modules/iam.df".
+import "policies/baseline.df".
+import "modules/stdlib_net.df".
+
+apply baseline.
+apply stdlib_net.
+
+# Instantiate modules (Terraform module-like). Inputs are declared by the
+# module; each `k = V` here is a contribution to one, under the body.
+instance network main {
+  vpc_net = VpcNet
+} :-
+  env(Env),
+  setting(Env, .network.main.vpc_net, VpcNet).
+
+instance network peer {
+  vpc_net = VpcNet
+} :-
+  env(Env),
+  setting(Env, .network.peer.vpc_net, VpcNet).
+
+# Cross-instance values are wired through outputs.
+instance database main {
+  backup_days = Days
+  multi_az = MA
+  subnet_ids = Ids
+} :-
+  env(Env),
+  setting(Env, .db.backup_days, Days),
+  setting(Env, .db.multi_az, MA),
+  output(network.main, private_subnet_ids, Ids).
+
+instance kubernetes main {
+  private_api = PrivateApi
+  nodepool_min = Min
+  nodepool_max = Max
+  subnet_ids = Ids
+} :-
+  env(Env),
+  setting(Env, .k8s.private_api, PrivateApi),
+  setting(Env, .k8s.nodepool.min, Min),
+  setting(Env, .k8s.nodepool.max, Max),
+  output(network.main, private_subnet_ids, Ids).
+
+instance iam main {}.
+
+# VPC peering intent: define edges between network instances.
+vpc_peer_inst(main, peer).
+
+# Each network instance outputs its vpc's address.
+vpc_peer(A, B) :-
+  vpc_peer_inst(InstA, InstB),
+  output(network.InstA, vpc, A),
+  output(network.InstB, vpc, B).
+
+# Create a peering resource per declared peering edge.
+resource net.vpc_peering Peer {
+  requester_vpc_id = ref(net.vpc, A, .id)
+  accepter_vpc_id = ref(net.vpc, B, .id)
+} :-
+  vpc_peer_inst(InstA, InstB),
+  vpc_peer(A, B),
+  want(net.vpc, A), # both ends must exist in this environment
+  want(net.vpc, B),
+  Peer = format("peer-%s-%s", InstA, InstB).
+
+# Demo: allocate an IP from the main VPC.
+resource compute.vm bastion {
+  private_ip = inet_host(VpcNet, 20)
+} :-
+  env(Env),
+  setting(Env, .network.main.vpc_net, VpcNet).
+
+# Constraints (policy)
+constraint("prod db must be multi_az") :-
+  env(prod),
+  want(db.postgres, database.main/db),
+  not attr(db.postgres, database.main/db, .multi_az, true).
+
+constraint("prod k8s must have private api") :-
+  env(prod),
+  want(k8s.cluster, kubernetes.main/cluster),
+  not attr(k8s.cluster, kubernetes.main/cluster, .private_api, true).
+
+# Scenarios: policy over hypothetical inputs. `dform test` runs every one
+# against an empty mock world; `dform plan --scenario prod` plans the stack
+# as if env were prod.
+scenario prod {
+  input("env", prod).
+  deny("prod peers the two vpcs") :- not want(net.vpc_peering, "peer-main-peer").
+  deny("prod keeps 14 days of db backups") :-
+    not attr(db.postgres, database.main/db, .backup_days, 14).
+}.
+
+scenario dev {
+  input("env", dev).
+  deny("dev has no database") :- want(db.postgres, _).
+  deny("dev has no peer network") :- want(net.vpc, network.peer/vpc).
+}.
+#+end_src
+
+** proposed
+
+#+name: after/dform.df
+#+begin_src dform
+# dform demo: component-scoped resources + settings tables + IAM policy assembly.
+#
+# Try:
+#   cargo run -- plan
+#   cargo run -- plan --set env=prod
+#   cargo run -- apply
+
+edition 2027
+
+# The provider the mock plays, and the stack this program owns.
+provider fake { source = "providers/fake" }
+stack dform { unknowns = "strict" }
+
+# Typed stack input with a default (a @default contribution); --set wins.
+input env: enum("dev", "staging", "prod") = "staging"
+
+data("zone", "us-test-1a")
+data("zone", "us-test-1b")
+
+# Guard blocks apply a condition to everything inside.
+when env == "prod" {
+  iam_need("app", "audit.write", "audit-log")
+}
+
+# Settings (branch as data). One @default layer for every environment that
+# has one; a per-environment block wins per leaf at the normal rank.
+env_name("staging")
+env_name("prod")
+
+settings e @default {
+  for env_name(e)
+  network.main.vpc_net = inet("10.50.0.0/16")
+  network.peer.vpc_net = inet("10.60.0.0/16")
+  db = { backup_days: 3, multi_az: false }
+  k8s = { private_api: false, nodepool: { min: 1, max: 3 } }
+}
+
+settings prod {
+  network.main.vpc_net = inet("10.20.0.0/16")
+  network.peer.vpc_net = inet("10.21.0.0/16")
+  db = { backup_days: 14, multi_az: true }
+  k8s = { private_api: true, nodepool: { min: 3, max: 10 } }
+  audit.sinks += ["cloudwatch"] # a set: unions with the baseline pack's ["s3"]
+}
+
+settings dev {
+  network.main.vpc_net = inet("10.90.0.0/16")
+}
+
+# The settings of the selected environment, by name.
+let cfg = settings[env]
+
+import "modules/network.df"
+import "modules/database.df"
+import "modules/kubernetes.df"
+import "modules/iam.df"
+import "policies/baseline.df"
+import "modules/stdlib_net.df"
+
+apply baseline
+apply stdlib_net
+
+# Instantiate modules. Each `k = v` is a contribution to the module's input k.
+instance network main {
+  vpc_net = cfg.network.main.vpc_net
+}
+
+instance network peer {
+  vpc_net = cfg.network.peer.vpc_net
+}
+
+# Cross-instance values are wired through outputs.
+instance database main {
+  backup_days = cfg.db.backup_days
+  multi_az    = cfg.db.multi_az
+  subnet_ids  = network.main.private_subnet_ids
+}
+
+instance kubernetes main {
+  private_api  = cfg.k8s.private_api
+  nodepool_min = cfg.k8s.nodepool.min
+  nodepool_max = cfg.k8s.nodepool.max
+  subnet_ids   = network.main.private_subnet_ids
+}
+
+instance iam main {}
+
+# VPC peering intent: define edges between network instances.
+vpc_peer_inst("main", "peer")
+
+# Each network instance outputs its vpc's address.
+vpc_peer(a, b) if vpc_peer_inst(ia, ib), a = network[ia].vpc, b = network[ib].vpc
+
+# Create a peering resource per declared peering edge.
+resource net.vpc_peering "peer-{ia}-{ib}" {
+  for vpc_peer_inst(ia, ib), vpc_peer(a, b)
+  if  a in net.vpc, b in net.vpc   # both ends must exist in this environment
+  requester_vpc_id = a.id
+  accepter_vpc_id  = b.id
+}
+
+# Demo: allocate an IP from the main VPC.
+resource compute.vm bastion {
+  private_ip = inet_host(cfg.network.main.vpc_net, 20)
+}
+
+# Constraints (policy)
+constraint "prod db must be multi_az" if {
+  env == "prod"
+  exists database.main/db
+  not database.main/db.multi_az
+}
+
+constraint "prod k8s must have private api" if {
+  env == "prod"
+  exists kubernetes.main/cluster
+  not kubernetes.main/cluster.private_api
+}
+
+# Scenarios: policy over hypothetical inputs.
+scenario prod {
+  with env = "prod"
+  deny "prod peers the two vpcs" if not "peer-main-peer" in net.vpc_peering
+  deny "prod keeps 14 days of db backups" if not database.main/db.backup_days == 14
+}
+
+scenario dev {
+  with env = "dev"
+  deny "dev has no database" if _ in db.postgres
+  deny "dev has no peer network" if exists network.peer/vpc
+}
+#+end_src
+
+* Notes on dform.df
+
+** Lowering, where it is not obvious
+
+- =let cfg = settings[env]= is a reference alias, not a value. Each rule that
+  says =cfg.a.b= gets one =env(E)= literal and one =setting(E, .a.b, V)=
+  literal per distinct path, exactly the literals the current instance
+  bodies write.
+- =vpc_peer(a, b) if ..., a = network[ia].vpc= is =output(network.IA, vpc, A)=:
+  =network[ia]= is today's =network.I= instance scope (=format("network.%s", I)=).
+- The peering block's =for= and =if= clauses are the body; its name
+  ="peer-{ia}-{ib}"= becomes =Peer = format("peer-%s-%s", IA, IB)= appended
+  last, as the current rule writes it. =a in net.vpc= is =want(net.vpc, A)=
+  with =A= already bound: a check that also gives =a= the static type
+  =net.vpc=, which is what lets =a.id= mean =ref(net.vpc, A, .id)=.
+- =constraint ... if env == "prod", exists database.main/db, not database.main/db.multi_az=
+  is =env(prod), want(db.postgres, database.main/db), not attr(db.postgres, database.main/db, multi_az, true)=.
+  The type =db.postgres= comes from module =database='s declaration of =db=.
+- The scenario's second deny has no =exists=: the current one has no =want=
+  either, so a prod plan with no database denies. Kept.
+- =_ in db.postgres= is =want(db.postgres, _)=.
+
+** Reads better
+
+- The instance blocks: =multi_az = cfg.db.multi_az= instead of a variable
+  named in the block and bound four lines below it. 17 of the 19
+  read-carrier variables in this file are gone (the two left, =a= and =b=
+  in =vpc_peer=, are the relation's columns).
+- Constraints say what they check: =not database.main/db.multi_az=.
+- Scenarios: =with env = "prod"= and =not "peer-main-peer" in net.vpc_peering=.
+
+** Reads worse
+
+- Twelve symbol constants became strings (="prod"=, ="app"=, ="audit.write"=,
+  ="strict"=). Two more characters each; nothing else changes.
+- =exists database.main/db= must be written by hand; the Prolog form made
+  the same =want= literal just as explicit, but a reader of the new form may
+  expect =not database.main/db.multi_az= to mean "the database exists and is
+  not multi-AZ". It does not (G-13).
+- =settings e @default { for env_name(e) ... }=: whether the header name is a
+  variable depends on the =for= clause binding it (G-9).
+- =network[ia].vpc= is an instance output (the interface), =database.main/db=
+  is a resource inside an instance (piercing it). One character apart.
+
+** Found while rewriting
+
+The peering rule joins =vpc_peer_inst(IA, IB)= and =vpc_peer(A, B)= without
+connecting them: with a second peering edge it would create four peerings,
+two of them misnamed. The rewrite keeps the cross product (it must lower to
+the same AST); the fix is =vpc_peer(ia, ib, a, b)=, a separate ticket.
+
+* The modules and packs
+
+| file | lines | tokens | read-carrier vars |
+|-
+| network.df | 26 → 21 | 196 → 125 | 3 → 0 |
+| database.df | 17 → 14 | 95 → 60 | 3 → 0 |
+| kubernetes.df | 23 → 19 | 129 → 79 | 4 → 0 |
+| iam.df | 18 → 15 | 99 → 74 | 0 → 0 |
+| baseline.df | 21 → 20 | 217 → 140 | 0 → 0 |
+| stdlib_net.df | 14 → 10 | 122 → 60 | 3 → 0 |
+
+** network.df
+
+*** current (modules/network.df)
+
+#+name: before/network.df
+#+begin_src prolog
+edition 2026.
+
+module network {
+  input vpc_net: inet.
+  output vpc: addr.
+  output private_subnet_ids: list(ref(net.subnet)).
+
+  resource net.vpc vpc {
+    cidr = VpcNet
+    tags = { env: Env, component: network }
+  } :-
+    env(Env),
+    vpc_net(VpcNet).
+
+  zone_index("us-test-1a", 0).
+  zone_index("us-test-1b", 1).
+
+  resource net.subnet Sn {
+    vpc_id = ref(net.vpc, vpc, .id)
+    cidr = inet_subnet(VpcNet, 4, I)
+    zone = Z
+    visibility = private
+  } :-
+    data(zone, Z),
+    zone_index(Z, I),
+    attr(net.vpc, vpc, .cidr, VpcNet),
+    Sn = format("private-%s", Z).
+
+  output vpc = vpc.
+  output private_subnet_ids = [ ref(net.subnet, Sn, .id) | want(net.subnet, Sn), attr(net.subnet, Sn, .visibility, private) ].
+}.
+#+end_src
+
+*** proposed
+
+#+name: after/network.df
+#+begin_src dform
+edition 2027
+
+module network {
+  input vpc_net: inet
+  output vpc: net.vpc
+  output private_subnet_ids: list(ref(net.subnet))
+
+  resource net.vpc vpc {
+    cidr = vpc_net
+    tags = { env: env, component: "network" }
+  }
+
+  zone_index("us-test-1a", 0)
+  zone_index("us-test-1b", 1)
+
+  resource net.subnet "private-{z}" {
+    for data("zone", z)
+    vpc_id     = vpc.id
+    cidr       = inet_subnet(vpc.cidr, 4, zone_index[z])
+    zone       = z
+    visibility = "private"
+  }
+
+  output vpc = vpc
+  output private_subnet_ids = [ s.id | s in net.subnet, s.visibility == "private" ]
+}
+#+end_src
+
+** database.df
+
+*** current (modules/database.df)
+
+#+name: before/database.df
+#+begin_src prolog
+edition 2026.
+
+module database {
+  input backup_days: int.
+  input multi_az: bool.
+  input subnet_ids: list(ref(net.subnet)).
+  contributes iam_need.
+
+  resource db.postgres db {
+    public = false
+    subnet_ids = SubnetIds
+    backup_days = Days
+    multi_az = MA
+  } :-
+    backup_days(Days),
+    multi_az(MA),
+    subnet_ids(SubnetIds).
+
+  # Only when the database exists in this environment.
+  iam_need(app, db.connect, ref(db.postgres, db, .id)) :- backup_days(_).
+}.
+#+end_src
+
+*** proposed
+
+#+name: after/database.df
+#+begin_src dform
+edition 2027
+
+module database {
+  input backup_days: int
+  input multi_az: bool
+  input subnet_ids: list(ref(net.subnet))
+  contributes iam_need
+
+  resource db.postgres db {
+    public      = false
+    subnet_ids  = subnet_ids
+    backup_days = backup_days
+    multi_az    = multi_az
+  }
+
+  # Only when the database exists in this environment.
+  iam_need("app", "db.connect", db.id) if has backup_days
+}
+#+end_src
+
+** kubernetes.df
+
+*** current (modules/kubernetes.df)
+
+#+name: before/kubernetes.df
+#+begin_src prolog
+edition 2026.
+
+module kubernetes {
+  input private_api: bool.
+  input nodepool_min: int.
+  input nodepool_max: int.
+  input subnet_ids: list(ref(net.subnet)).
+  contributes iam_need.
+
+  resource k8s.cluster cluster {
+    version = "1.29"
+    private_api = PrivateApi
+    subnet_ids = SubnetIds
+  } :-
+    private_api(PrivateApi),
+    subnet_ids(SubnetIds).
+
+  resource k8s.nodepool default {
+    cluster_id = ref(k8s.cluster, cluster, .id)
+    min = Min
+    max = Max
+  } :-
+    nodepool_min(Min),
+    nodepool_max(Max).
+
+  # Only when the cluster exists in this environment.
+  iam_need(app, k8s.describe_cluster, ref(k8s.cluster, cluster, .id)) :- private_api(_).
+}.
+#+end_src
+
+*** proposed
+
+#+name: after/kubernetes.df
+#+begin_src dform
+edition 2027
+
+module kubernetes {
+  input private_api: bool
+  input nodepool_min: int
+  input nodepool_max: int
+  input subnet_ids: list(ref(net.subnet))
+  contributes iam_need
+
+  resource k8s.cluster cluster {
+    version     = "1.29"
+    private_api = private_api
+    subnet_ids  = subnet_ids
+  }
+
+  resource k8s.nodepool default {
+    cluster_id = cluster.id
+    min        = nodepool_min
+    max        = nodepool_max
+  }
+
+  # Only when the cluster exists in this environment.
+  iam_need("app", "k8s.describe_cluster", cluster.id) if has private_api
+}
+#+end_src
+
+** iam.df
+
+*** current (modules/iam.df)
+
+#+name: before/iam.df
+#+begin_src prolog
+edition 2026.
+
+module iam {
+  resource iam.role app_role {
+    name = app
+    assume = { principals: [k8s.serviceaccount.app] }
+  }.
+
+  resource iam.policy app_policy {
+    name = app
+    # List comprehension sugar for collect(...)
+    statements = [
+      { action: Action, resource: Res }
+      | iam_need(app, Action, Res)
+    ]
+  }.
+
+  resource iam.role_policy_attachment attach {
+    role_id = ref(iam.role, app_role, .id)
+    policy_id = ref(iam.policy, app_policy, .id)
+  }.
+}.
+#+end_src
+
+*** proposed
+
+#+name: after/iam.df
+#+begin_src dform
+edition 2027
+
+module iam {
+  resource iam.role app_role {
+    name   = "app"
+    assume = { principals: ["k8s.serviceaccount.app"] }
+  }
+
+  resource iam.policy app_policy {
+    name = "app"
+    statements = [ { action: a, resource: r } | iam_need("app", a, r) ]
+  }
+
+  resource iam.role_policy_attachment attach {
+    role_id   = app_role.id
+    policy_id = app_policy.id
+  }
+}
+#+end_src
+
+** baseline.df
+
+*** current (policies/baseline.df)
+
+#+name: before/baseline.df
+#+begin_src prolog
+edition 2026.
+
+policy baseline {
+  # Grants are partition patterns: this pack writes .tags of every type,
+  # iam.policy's .statements and settings' .audit.sinks, and nothing else.
+  contributes arg to _ at .tags.
+  contributes arg to iam.policy at .statements.
+  contributes arg to settings at .audit.sinks.
+
+  # Lattices for paths several authors contribute to. Object paths such as
+  # `tags` are maps by default; a list is one value unless declared a set.
+  type_lattice(iam.policy, .statements, set).
+  type_lattice(settings, .audit.sinks, set).
+
+  # Example: add a shared tag to everything.
+  arg(Type, Name, .tags, { team: platform }) :-
+    want(Type, Name).
+
+  # Example: policy pack can contribute directly to an IAM policy. Reads
+  # .name of the type it writes .statements on: legal under (type, path)
+  # partitions.
+  arg(iam.policy, Policy, .statements, [{ action: org.read, resource: "org" }]) :-
+    env(prod),
+    want(iam.policy, Policy),
+    attr(iam.policy, Policy, .name, app).
+
+  deny("db must not be public", { resource: Db }) :-
+    want(db.postgres, Db),
+    not attr(db.postgres, Db, .public, false).
+
+  # Example warning: prod should enable an audit setting.
+  warn("prod should enable audit logging", { env: prod }) :-
+    env(prod),
+    not setting(prod, .audit.enabled, true).
+
+  # Example: policy pack can add a sink without owning the whole list.
+  arg(settings, prod, .audit.sinks, ["s3"]).
+
+  # Networking invariants live in `modules/stdlib_net.df`.
+}.
+#+end_src
+
+*** proposed
+
+#+name: after/baseline.df
+#+begin_src dform
+edition 2027
+
+policy baseline {
+  # Grants are partition patterns: this pack writes .tags of every type,
+  # iam.policy's .statements and settings' .audit.sinks, and nothing else.
+  contributes _.tags
+  contributes iam.policy.statements
+  contributes settings.audit.sinks
+
+  # Lattices for paths several authors contribute to.
+  type_lattice(iam.policy, .statements, "set")
+  type_lattice(settings, .audit.sinks, "set")
+
+  # A shared tag on everything.
+  r.tags = { team: "platform" } if r in resource
+
+  # A pack can contribute directly to an IAM policy. Reads .name of the
+  # type it writes .statements on: legal under (type, path) partitions.
+  p.statements = [{ action: "org.read", resource: "org" }] if {
+    env == "prod"
+    p in iam.policy
+    p.name == "app"
+  }
+
+  deny "db must not be public" { resource: pg } if pg in db.postgres, not pg.public == false
+
+  # Prod should enable an audit setting.
+  warn "prod should enable audit logging" { env: "prod" } if {
+    env == "prod"
+    not settings.prod.audit.enabled
+  }
+
+  # A pack can add a sink without owning the whole list.
+  settings prod { audit.sinks += ["s3"] }
+
+  # Networking invariants live in `modules/stdlib_net.df`.
+}
+#+end_src
+
+** stdlib_net.df
+
+*** current (modules/stdlib_net.df)
+
+#+name: before/stdlib_net.df
+#+begin_src prolog
+# Minimal networking stdlib demo rules/policies.
+
+edition 2026.
+
+policy stdlib_net {
+  # Deny if peered VPC CIDRs overlap.
+  #
+  # This is intentionally scoped to only VPCs connected by `vpc_peer/2`.
+  deny("peered vpc cidr overlaps", { a: A, b: B }) :-
+    vpc_peer(A, B),
+    want(net.vpc, A),
+    want(net.vpc, B),
+    attr(net.vpc, A, .cidr, NetA),
+    attr(net.vpc, B, .cidr, NetB),
+    inet_overlaps(NetA, NetB).
+
+  # Deny if any VM gets the unspecified IP.
+  deny("vm has unspecified ip", { vm: Vm }) :-
+    want(compute.vm, Vm),
+    attr(compute.vm, Vm, .private_ip, Ip),
+    ip_unspecified(Ip).
+}.
+#+end_src
+
+*** proposed
+
+#+name: after/stdlib_net.df
+#+begin_src dform
+# Minimal networking stdlib demo rules/policies.
+
+edition 2027
+
+policy stdlib_net {
+  # Deny if peered VPC CIDRs overlap (only VPCs connected by vpc_peer/2).
+  deny "peered vpc cidr overlaps" { a, b } if {
+    vpc_peer(a, b)
+    a in net.vpc
+    b in net.vpc
+    inet_overlaps(a.cidr, b.cidr)
+  }
+
+  # Deny if any VM gets the unspecified IP.
+  deny "vm has unspecified ip" { vm } if vm in compute.vm, ip_unspecified(vm.private_ip)
+}
+#+end_src
+
+
+** Notes on the modules and packs
+
+*** Lowering, where it is not obvious
+
+- Module input names are value names (G-12): =cidr = vpc_net= in module
+  =network= is =vpc_net(V)= in the block's body, as today. =has backup_days=
+  is =backup_days(_)=.
+- =inet_subnet(vpc.cidr, 4, zone_index[z])=: =vpc.cidr= is an argument of a
+  builtin, so it is read now, =attr(net.vpc, vpc, cidr, V)=; =zone_index[z]=
+  is =zone_index(Z, I)=. Both are hoisted into the block's shared body, so
+  they gate the whole subnet (the want and every field), exactly as today's
+  body does (F10).
+- =vpc_id = vpc.id= is a whole field value, so it is a reference:
+  =ref(net.vpc, vpc, .id)=, the fresh null plus the apply-order edge.
+- =[ s.id | s in net.subnet, s.visibility == "private" ]= is today's
+  comprehension literal for literal.
+- In =baseline=, =r.tags = { team: "platform" } if r in resource= is
+  =arg(T, R, .tags, {team: platform}) :- want(T, R)=: a contribution whose
+  type is a variable. =contributes _.tags= is =contributes arg to _ at .tags=.
+- =not pg.public == false= is =not attr(db.postgres, Pg, public, false)=:
+  absent, true, or anything else but =false= denies.
+- =not settings.prod.audit.enabled= is =not setting(prod, .audit.enabled, true)=.
+- =settings prod { audit.sinks += ["s3"] }= inside the pack lowers to the
+  same =arg(settings, prod, "audit.sinks", ["s3"])= the fact writes.
+
+*** Reads better
+
+- =iam=: =role_id = app_role.id= says what the Prolog form said with a type,
+  a name and a keypath.
+- =network=: the subnet reads as Terraform reads, name first, then fields;
+  the only join the reader must see is =zone_index[z]=, and the brackets
+  mark it.
+- =stdlib_net=: =inet_overlaps(a.cidr, b.cidr)=; half the tokens.
+
+*** Reads worse
+
+- =subnet_ids = subnet_ids= in module =database=: field key and input share
+  a name. Legal and unambiguous (the left side is a key), but it reads like
+  a no-op.
+- =contributes _.tags= is new notation for a grant pattern; the Prolog form
+  spelled the partition out (=arg to _ at .tags=).
+- =type_lattice(iam.policy, .statements, "set")= keeps a keypath literal:
+  facts about paths still take paths.
+- A local resource named =db= next to the type namespace =db= (=db.postgres=):
+  in a term, =db.id= is the resource (locals first); after =in=, =db.postgres=
+  is the type (types first). Legal, and a trap; =dform lint= should warn.

@@ -1,0 +1,442 @@
+#+title: G corpus: dform-advanced.df (recursion)
+#+startup: showall
+
+Stage 1 of Proposal G (=proposals/G-surface-syntax.org=): the current
+program verbatim, then the proposed rewrite, file by file. Every rewrite is
+meant to lower to the AST the current program lowers to, literal for literal
+up to variable names and body order (section 5 of the proposal), so the
+golden plans and strata stay byte-identical in stage 2. Where a rewrite
+could not be that faithful, the notes at the end say so.
+
+Counts (comments and blank lines excluded; section 8 of the proposal says how they are taken):
+
+| file | lines | tokens | read-carrier vars |
+|-
+| dform-advanced.df | 106 → 97 | 872 → 726 | 7 → 1 |
+
+* dform-advanced.df
+
+** current (dform-advanced.df)
+
+#+name: before/dform-advanced.df
+#+begin_src prolog
+# dform-advanced.df
+#
+# Goal: show fixpoint-style inference (transitive closure) applied to real infra problems:
+# - derive reachability between VPCs from peering edges
+# - auto-generate route resources for every reachable pair
+# - enforce policies based on derived reachability (tenant isolation)
+# - demonstrate another closure: nested group membership
+#
+# Try:
+#   cargo run -- --file dform-advanced.df plan
+#   cargo run -- --file dform-advanced.df query reachable
+#   cargo run -- --file dform-advanced.df plan --set env=prod
+#   cargo run -- --file dform-advanced.df query in_group
+
+edition 2026.
+
+input env: enum(staging, prod) = staging.
+
+# List-valued settings (human-friendly)
+settings staging {
+  tenants = [tenant_a, tenant_b]
+  mesh.vpcs = [
+    { name: core_a, net: inet("10.210.0.0/16") },
+    { name: core_b, net: inet("10.220.0.0/16") },
+    { name: core_c, net: inet("10.230.0.0/16") }
+  ]
+}.
+
+settings prod {
+  tenants = [tenant_a, tenant_b]
+  mesh.vpcs = [
+    { name: core_a, net: inet("10.210.0.0/16") },
+    { name: core_b, net: inet("10.220.0.0/16") },
+    { name: core_c, net: inet("10.230.0.0/16") }
+  ]
+}.
+
+# Base IP space for tenants
+corp_net(inet("10.100.0.0/12")).
+
+# Explode tenant list into a relation (Pattern A), with index.
+tenant(T, I) :-
+  env(Env),
+  setting(Env, .tenants, Ts),
+  member(Ts, I, T).
+
+# Shared services VPC (always exists)
+resource net.vpc shared {
+  cidr = inet("10.200.0.0/16")
+  tags = { segment: shared }
+}.
+
+# One VPC per tenant, with deterministic CIDRs derived from corp_net.
+resource net.vpc T {
+  cidr = inet_subnet(Corp, 4, I)
+  tags = { segment: tenant, tenant: T }
+} :-
+  tenant(T, I),
+  corp_net(Corp).
+
+# Peering intent.
+# In staging, only tenant_a peers with shared.
+# In prod, tenant_b also peers with shared, which creates tenant->tenant reachability via shared.
+peer_intent(tenant_a).
+when env(prod) {
+  peer_intent(tenant_b).
+}.
+
+peer(shared, T) :- peer_intent(T), tenant(T, _).
+
+# Convert peer intent into directed graph edges.
+# (Peering is bidirectional in this demo.)
+link(A, B) :- peer(A, B).
+link(B, A) :- peer(A, B).
+
+# Fixpoint 1: transitive closure for reachability.
+reachable(A, B) :- link(A, B).
+reachable(A, C) :- reachable(A, B), link(B, C).
+
+# Derived infra: create a route for every reachable pair (excluding self).
+resource net.route R {
+  from = A
+  to = B
+  destination = NetB
+} :-
+  reachable(A, B),
+  A != B,
+  arg(net.vpc, B, .cidr, NetB),
+  R = format("rt-%s-%s", A, B).
+
+# Policy: warn if we materialize *direct* routes between non-adjacent nodes in the mesh.
+#
+# This highlights an important distinction:
+# - `reachable/2` is the *closure* (it includes transitive reachability)
+# - a `net.route` is a *direct* configuration object
+#
+# In some orgs you may want transitive reachability without generating a direct
+# route for every transitive pair (or you may want to require explicit allows).
+mesh_node(N) :- mesh_vpc(N, _Net, _I).
+
+mesh_adjacent(A, B) :- mesh_peer(A, B).
+mesh_adjacent(B, A) :- mesh_peer(A, B).
+
+mesh_non_adjacent_pair(A, B) :-
+  mesh_node(A),
+  mesh_node(B),
+  A != B,
+  reachable(A, B),
+  not mesh_adjacent(A, B).
+
+warn("mesh has direct route between non-adjacent nodes", { from: A, to: B }) :-
+  mesh_non_adjacent_pair(A, B),
+  R = format("rt-%s-%s", A, B),
+  want(net.route, R),
+  not mesh_allow_direct_route(A, B).
+
+# Declared so the check can negate it with no rows; uncomment the fact to
+# explicitly allow certain non-adjacent direct routes:
+decl mesh_allow_direct_route/2.
+# mesh_allow_direct_route(core_a, core_c).
+
+# --- Auto-mesh demo (derived links from a list) ---
+#
+# The mesh itself is described as a *list setting* for human ergonomics.
+# We immediately explode it into row facts, then derive edges, then rely on
+# reachability closure to fill in the implied connectivity.
+
+mesh_vpc(Name, Net, I) :-
+  env(Env),
+  setting(Env, .mesh.vpcs, Vpcs),
+  member(Vpcs, I, { name: Name, net: Net }).
+
+resource net.vpc Name {
+  cidr = Net
+  tags = { segment: mesh }
+} :-
+  mesh_vpc(Name, Net, _I).
+
+# Derive a sparse base graph: connect consecutive VPCs in the list.
+# The reachability closure will infer core_a -> core_c via core_b.
+mesh_peer(A, B) :-
+  mesh_vpc(A, NetA, IA),
+  mesh_vpc(B, NetB, IB),
+  IB = IA + 1,
+  not inet_overlaps(NetA, NetB).
+
+# Feed the derived edges into the global peering/link graph.
+peer(A, B) :- mesh_peer(A, B).
+
+# Optional: materialize the derived peerings as explicit peering resources.
+resource net.vpc_peering P {
+  requester_vpc_id = ref(net.vpc, A, .id)
+  accepter_vpc_id = ref(net.vpc, B, .id)
+} :-
+  mesh_peer(A, B),
+  P = format("mesh-peer-%s-%s", A, B).
+
+# Policy 1: peered VPCs must not overlap.
+deny("peered vpcs must not overlap", { a: A, b: B }) :-
+  peer(A, B),
+  arg(net.vpc, A, .cidr, NetA),
+  arg(net.vpc, B, .cidr, NetB),
+  inet_overlaps(NetA, NetB).
+
+# Policy 2: tenant isolation.
+# Only enforced in prod, and depends on the reachability closure.
+deny("tenant isolation violated", { a: A, b: B }) :-
+  env(prod),
+  tenant(A, _),
+  tenant(B, _),
+  A != B,
+  reachable(A, B).
+
+# Fixpoint 2: nested group membership.
+# This is another common closure problem in real org infra.
+group_edge(sre, admins).
+group_edge(oncall, sre).
+
+group_member(alice, oncall).
+group_member(bob, sre).
+
+in_group(U, G) :- group_member(U, G).
+in_group(U, G2) :- in_group(U, G1), group_edge(G1, G2).
+
+warn("user is effectively admin (via group nesting)", { user: U }) :-
+  in_group(U, admins).
+#+end_src
+
+** proposed
+
+#+name: after/dform-advanced.df
+#+begin_src dform
+# dform-advanced.df
+#
+# Goal: show fixpoint-style inference (transitive closure) applied to real infra problems:
+# - derive reachability between VPCs from peering edges
+# - auto-generate route resources for every reachable pair
+# - enforce policies based on derived reachability (tenant isolation)
+# - demonstrate another closure: nested group membership
+#
+# Try:
+#   cargo run -- --file dform-advanced.df plan
+#   cargo run -- --file dform-advanced.df query reachable
+#   cargo run -- --file dform-advanced.df plan --set env=prod
+#   cargo run -- --file dform-advanced.df query in_group
+
+edition 2027
+
+input env: enum("staging", "prod") = "staging"
+
+# List-valued settings (human-friendly)
+settings staging {
+  tenants = ["tenant_a", "tenant_b"]
+  mesh.vpcs = [
+    { name: "core_a", net: inet("10.210.0.0/16") },
+    { name: "core_b", net: inet("10.220.0.0/16") },
+    { name: "core_c", net: inet("10.230.0.0/16") }
+  ]
+}
+
+settings prod {
+  tenants = ["tenant_a", "tenant_b"]
+  mesh.vpcs = [
+    { name: "core_a", net: inet("10.210.0.0/16") },
+    { name: "core_b", net: inet("10.220.0.0/16") },
+    { name: "core_c", net: inet("10.230.0.0/16") }
+  ]
+}
+
+# Base IP space for tenants
+corp_net(inet("10.100.0.0/12"))
+
+# Explode tenant list into a relation, with index.
+tenant(t, i) if some i, t in settings[env].tenants
+
+# Shared services VPC (always exists)
+resource net.vpc shared {
+  cidr = inet("10.200.0.0/16")
+  tags = { segment: "shared" }
+}
+
+# One VPC per tenant, with deterministic CIDRs derived from corp_net.
+resource net.vpc t {
+  for tenant(t, i), corp_net(corp)
+  cidr = inet_subnet(corp, 4, i)
+  tags = { segment: "tenant", tenant: t }
+}
+
+# Peering intent.
+# In staging, only tenant_a peers with shared.
+# In prod, tenant_b also peers with shared, which creates tenant->tenant reachability via shared.
+peer_intent("tenant_a")
+when env == "prod" {
+  peer_intent("tenant_b")
+}
+
+peer("shared", t) if peer_intent(t), tenant(t, _)
+
+# Convert peer intent into directed graph edges (peering is bidirectional).
+link(a, b) if peer(a, b)
+link(b, a) if peer(a, b)
+
+# Fixpoint 1: transitive closure for reachability.
+reachable(a, b) if link(a, b)
+reachable(a, c) if reachable(a, b), link(b, c)
+
+# Derived infra: create a route for every reachable pair (excluding self).
+# `dest` is bound in the clause, so it is read now (an attr join), as the
+# current program does; `destination = net.vpc[b].cidr` would be a reference.
+resource net.route "rt-{a}-{b}" {
+  for reachable(a, b), a != b
+  if  dest = net.vpc[b].cidr
+  from = a
+  to = b
+  destination = dest
+}
+
+# Policy: warn if we materialize *direct* routes between non-adjacent nodes in the mesh.
+#
+# - `reachable/2` is the *closure* (it includes transitive reachability)
+# - a `net.route` is a *direct* configuration object
+mesh_node(n) if mesh_vpc(n, _, _)
+
+mesh_adjacent(a, b) if mesh_peer(a, b)
+mesh_adjacent(b, a) if mesh_peer(a, b)
+
+mesh_non_adjacent_pair(a, b) if {
+  mesh_node(a)
+  mesh_node(b)
+  a != b
+  reachable(a, b)
+  not mesh_adjacent(a, b)
+}
+
+warn "mesh has direct route between non-adjacent nodes" { from: a, to: b } if {
+  mesh_non_adjacent_pair(a, b)
+  "rt-{a}-{b}" in net.route
+  not mesh_allow_direct_route(a, b)
+}
+
+# Declared so the check can negate it with no rows; uncomment the fact to
+# explicitly allow certain non-adjacent direct routes:
+decl mesh_allow_direct_route/2
+# mesh_allow_direct_route("core_a", "core_c")
+
+# --- Auto-mesh demo (derived links from a list) ---
+#
+# The mesh is a *list setting* for human ergonomics. We explode it into
+# rows, derive edges, then rely on the closure to fill in connectivity.
+
+mesh_vpc(name, cidr, i) if some i, { name: name, net: cidr } in settings[env].mesh.vpcs
+
+resource net.vpc name {
+  for mesh_vpc(name, cidr, _i)
+  cidr = cidr
+  tags = { segment: "mesh" }
+}
+
+# Derive a sparse base graph: connect consecutive VPCs in the list.
+# The reachability closure will infer core_a -> core_c via core_b.
+mesh_peer(a, b) if {
+  mesh_vpc(a, cidr_a, ia)
+  mesh_vpc(b, cidr_b, ib)
+  ib = ia + 1
+  not inet_overlaps(cidr_a, cidr_b)
+}
+
+# Feed the derived edges into the global peering/link graph.
+peer(a, b) if mesh_peer(a, b)
+
+# Optional: materialize the derived peerings as explicit peering resources.
+resource net.vpc_peering "mesh-peer-{a}-{b}" {
+  for mesh_peer(a, b)
+  requester_vpc_id = net.vpc[a].id
+  accepter_vpc_id  = net.vpc[b].id
+}
+
+# Policy 1: peered VPCs must not overlap.
+deny "peered vpcs must not overlap" { a, b } if {
+  peer(a, b)
+  inet_overlaps(net.vpc[a].cidr, net.vpc[b].cidr)
+}
+
+# Policy 2: tenant isolation. Only enforced in prod; depends on the closure.
+deny "tenant isolation violated" { a, b } if {
+  env == "prod"
+  tenant(a, _)
+  tenant(b, _)
+  a != b
+  reachable(a, b)
+}
+
+# Fixpoint 2: nested group membership.
+group_edge("sre", "admins")
+group_edge("oncall", "sre")
+
+group_member("alice", "oncall")
+group_member("bob", "sre")
+
+in_group(u, g) if group_member(u, g)
+in_group(u, g2) if in_group(u, g1), group_edge(g1, g2)
+
+warn "user is effectively admin (via group nesting)" { user: u } if in_group(u, "admins")
+#+end_src
+
+* Notes
+
+** Lowering, where it is not obvious
+
+- =tenant(t, i) if some i, t in settings[env].tenants= is
+  =env(E), setting(E, .tenants, Ts), member(Ts, I, T)=: Rego's =some k, v in=.
+- =resource net.vpc t { for tenant(t, i), corp_net(corp) ... }=: =t= in the
+  header is a variable because the =for= clause binds it (G-9);
+  =resource net.vpc shared= is a static name because nothing binds =shared=.
+- =if dest = net.vpc[b].cidr= binds in the clause, so it is a read now:
+  =attr(net.vpc, B, cidr, Dest)=. =destination = net.vpc[b].cidr= written as
+  a field would have been =ref(net.vpc, B, .cidr)=, a reference, and printed
+  as one (G-6). The current program reads, so the rewrite reads.
+- ="rt-{a}-{b}" in net.route= is =R = format("rt-%s-%s", A, B), want(net.route, R)=.
+- =some i, { name: name, net: cidr } in settings[env].mesh.vpcs= is today's
+  =member(Vpcs, I, {name: Name, net: Net})= with the pattern kept. The
+  variable is =cidr=, not =net=: =net= is a type namespace (=net.vpc=) and a
+  variable may not take its name (G-4).
+- =inet_overlaps(net.vpc[a].cidr, net.vpc[b].cidr)= is two =attr= reads:
+  today's =arg(net.vpc, A, .cidr, NetA)= in a body is already =attr=.
+
+** Recursion
+
+The two closures read exactly as before, less capitals and the =:-=:
+
+#+begin_src dform
+reachable(a, b) if link(a, b)
+reachable(a, c) if reachable(a, b), link(b, c)
+
+in_group(u, g) if group_member(u, g)
+in_group(u, g2) if in_group(u, g1), group_edge(g1, g2)
+#+end_src
+
+Recursion is over relations, and relations stay relations: the dot surface
+never enters a recursive rule here, and should not. A recursive rule that
+reads an attribute (=adv7_mutual_recursion_attr.df=) is rejected by
+stratification whatever it is spelled as; the dot form makes such a cycle
+harder to see (=r.next.cidr= is two joins), which is an LSP job (section 9
+of the proposal).
+
+** Reads better
+
+- The rules that were already relational lose only capitals and =:-=.
+- =resource net.vpc_peering "mesh-peer-{a}-{b}"= puts the name where
+  Terraform readers look for it.
+- Denies with =inet_overlaps(net.vpc[a].cidr, net.vpc[b].cidr)=.
+
+** Reads worse
+
+- Thirty symbols became strings (tenant, mesh and group names). The file is
+  mostly data, so the token count barely moves (-17%).
+- =dest= in the route block is a variable that exists only to force a read
+  instead of a reference. The Prolog form made the same choice with a
+  predicate name (=arg= versus =ref=); the new form makes it with a
+  position, which a reader has to know.

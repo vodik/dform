@@ -1,0 +1,371 @@
+#+title: G corpus: examples/bootstrap (bootstrap.df, workload.df)
+#+startup: showall
+
+Stage 1 of Proposal G (=proposals/G-surface-syntax.org=): the current
+program verbatim, then the proposed rewrite, file by file. Every rewrite is
+meant to lower to the AST the current program lowers to, literal for literal
+up to variable names and body order (section 5 of the proposal), so the
+golden plans and strata stay byte-identical in stage 2. Where a rewrite
+could not be that faithful, the notes at the end say so.
+
+Counts (comments and blank lines excluded; section 8 of the proposal says how they are taken):
+
+| file | lines | tokens | read-carrier vars |
+|-
+| bootstrap.df | 58 → 53 | 375 → 254 | 3 → 0 |
+| workload.df | 35 → 37 | 298 → 275 | 0 → 0 |
+
+* bootstrap.df
+
+** current (examples/bootstrap/bootstrap.df)
+
+#+name: before/bootstrap.df
+#+begin_src prolog
+# The bootstrap stack of the demo (README "Bootstrap and handover"): it
+# creates the cluster and installs dform in it as a controller, in three
+# ticks, and stays batch: the controller refuses a `role = bootstrap` stack.
+#
+#   cargo run -- --file examples/bootstrap/bootstrap.df apply
+#   cargo run -- --root examples/bootstrap stack handover renfry.workload --to 'k8s("dform-system/workload")'
+#   cargo run -- --file examples/bootstrap/workload.df controller --stack renfry.workload
+#
+# Tick 1: the network, the subnetwork and the cluster. The node pools are a
+# pending group: one per zone, and the zones are the cluster's. Tick 2: the
+# node pools and the namespace (the kubernetes provider is configured from
+# the cluster's endpoint and CA). Tick 3: the dform-controller Deployment,
+# which waits for its node pool to be up.
+
+edition 2026.
+
+stack renfry.bootstrap {
+  role = bootstrap
+}.
+
+provider gcp {
+  source = "gcp.df"
+}.
+provider k8s {}.
+
+resource google_compute_network vpc {
+  name = "renfry-vpc"
+  auto_create_subnetworks = false
+}.
+
+resource google_compute_subnetwork gke {
+  name = "renfry-gke"
+  region = "us-east1"
+  network = ref(google_compute_network, vpc, .id)
+  ip_cidr_range = "10.141.76.0/22"
+}.
+
+resource gke_cluster renfry {
+  name = "renfry-gke"
+  network = ref(google_compute_network, vpc, .id)
+  subnetwork = ref(google_compute_subnetwork, gke, .id)
+  node_locations = ["us-east1-b", "us-east1-c"]
+}.
+
+# One node pool per zone the cluster lands in.
+resource gke_nodepool Np {
+  cluster = ref(gke_cluster, renfry, .id)
+  zone = Z
+  node_count = 1
+} :-
+  arg(gke_cluster, renfry, .zones, Zs),
+  member(Zs, Z),
+  Np = format("np-%s", Z).
+
+provider_config(kubernetes, {
+  host: ref(gke_cluster, renfry, .endpoint),
+  ca: ref(gke_cluster, renfry, .ca_certificate)
+}).
+
+resource k8s.namespace dform_system {
+  metadata.name = "dform-system"
+}.
+
+# A node pool is up once it has an instance group. Apply gives it, so the
+# comparison is decided the tick after the pool is created.
+node_pool_up(Np) :- attr(gke_nodepool, Np, .instance_group, G), G != "".
+
+# dform in the cluster, running the workload stack: it lands on the first
+# zone's node pool once that pool is up. Until then the rule may derive
+# after the boundary, and the plan holds it as a pending group.
+resource k8s.deployment dform_controller {
+  metadata.name = "dform-controller"
+  metadata.namespace = ref(k8s.namespace, dform_system, .metadata.name)
+  metadata.annotations = { "dform.io/node-pool": ref(gke_nodepool, Pool, .instance_group) }
+  spec.replicas = 1
+  spec.selector.matchLabels = { app: "dform-controller" }
+  spec.template.metadata.labels = { app: "dform-controller" }
+  spec.template.spec.containers = [{
+    name: "dform",
+    image: "ghcr.io/renfry/dform:0.8",
+    args: ["controller", "--stack", "renfry.workload", "--file", "workload.df"]
+  }]
+} :-
+  arg(gke_cluster, renfry, .zones, Zs),
+  member(Zs, 0, Z),
+  Pool = format("np-%s", Z),
+  node_pool_up(Pool).
+
+output endpoint = ref(gke_cluster, renfry, .endpoint).
+#+end_src
+
+** proposed
+
+#+name: after/bootstrap.df
+#+begin_src dform
+edition 2027
+# The bootstrap stack of the demo (README "Bootstrap and handover"): it
+# creates the cluster and installs dform in it as a controller, in three
+# ticks, and stays batch: the controller refuses a `role = bootstrap` stack.
+#
+#   cargo run -- --file examples/bootstrap/bootstrap.df apply
+#   cargo run -- --root examples/bootstrap stack handover renfry.workload --to 'k8s("dform-system/workload")'
+#   cargo run -- --file examples/bootstrap/workload.df controller --stack renfry.workload
+#
+# Tick 1: the network, the subnetwork and the cluster. The node pools are a
+# pending group: one per zone, and the zones are the cluster's. Tick 2: the
+# node pools and the namespace (the kubernetes provider is configured from
+# the cluster's endpoint and CA). Tick 3: the dform-controller Deployment,
+# which waits for its node pool to be up.
+
+stack renfry.bootstrap {
+  role = "bootstrap"
+}
+
+provider gcp {
+  source = "gcp.df"
+}
+provider k8s {}
+
+resource google_compute_network vpc {
+  name = "renfry-vpc"
+  auto_create_subnetworks = false
+}
+
+resource google_compute_subnetwork gke {
+  name = "renfry-gke"
+  region = "us-east1"
+  network = vpc.id
+  ip_cidr_range = "10.141.76.0/22"
+}
+
+resource gke_cluster renfry {
+  name = "renfry-gke"
+  network = vpc.id
+  subnetwork = gke.id
+  node_locations = ["us-east1-b", "us-east1-c"]
+}
+
+# One node pool per zone the cluster lands in.
+resource gke_nodepool "np-{z}" {
+  for z in renfry.zones
+  cluster = renfry.id
+  zone = z
+  node_count = 1
+}
+
+provider_config("kubernetes", {
+  host: renfry.endpoint,
+  ca: renfry.ca_certificate
+})
+
+resource k8s.namespace dform_system {
+  metadata.name = "dform-system"
+}
+
+# A node pool is up once it has an instance group. Apply gives it, so the
+# comparison is decided the tick after the pool is created.
+node_pool_up(np) if gke_nodepool[np].instance_group != ""
+
+# dform in the cluster, running the workload stack: it lands on the first
+# zone's node pool once that pool is up. Until then the rule may derive
+# after the boundary, and the plan holds it as a pending group.
+resource k8s.deployment dform_controller {
+  if pool = "np-{renfry.zones[0]}", node_pool_up(pool)
+  metadata.name = "dform-controller"
+  metadata.namespace = dform_system.metadata.name
+  metadata.annotations = { "dform.io/node-pool": gke_nodepool[pool].instance_group }
+  spec.replicas = 1
+  spec.selector.matchLabels = { app: "dform-controller" }
+  spec.template.metadata.labels = { app: "dform-controller" }
+  spec.template.spec.containers = [{
+    name: "dform",
+    image: "ghcr.io/renfry/dform:0.8",
+    args: ["controller", "--stack", "renfry.workload", "--file", "workload.df"]
+  }]
+}
+
+output endpoint = renfry.endpoint
+#+end_src
+
+* workload.df
+
+** current (examples/bootstrap/workload.df)
+
+#+name: before/workload.df
+#+begin_src prolog
+# The workload stack of the bootstrap demo (README "Controller mode"): a
+# namespace, a deployment and a service on the mock Kubernetes provider,
+# whose image comes from an input relation. After `dform stack handover`
+# the dform-controller Deployment that bootstrap.df installs runs it:
+#
+#   cargo run -- --file examples/bootstrap/workload.df controller --stack renfry.workload
+#
+# Edit release.facts and the controller deploys it; edit the world and
+# the replicas drift is corrected, the image drift is held for approval.
+
+edition 2026.
+
+stack renfry.workload {}.
+
+provider k8s {}.
+
+# The release to run, `release(Image).`; re-read whenever the file changes.
+input relation release/1 from file("release.facts").
+# `approve(T, A).`: accept the drift of T.A, correcting it.
+input relation approve/2 from file("approvals.facts").
+# `release_approved(Image).`: a prod release may roll out.
+input relation release_approved/1 from file("approvals.facts").
+
+input env: enum(dev, prod) = dev.
+
+resource k8s.namespace web {
+  metadata.name = "web"
+}.
+
+resource k8s.deployment web {
+  metadata.name = "web"
+  metadata.namespace = ref(k8s.namespace, web, .metadata.name)
+  spec.replicas = 3
+  spec.selector.matchLabels = { app: "web" }
+  spec.template.metadata.labels = { app: "web" }
+  spec.template.spec.containers = [{
+    name: "web",
+    image: Image,
+    ports: [{ containerPort: 8080, protocol: "TCP" }]
+  }]
+} :- release(Image).
+
+resource k8s.service web {
+  metadata.name = "web"
+  metadata.namespace = ref(k8s.namespace, web, .metadata.name)
+  spec.selector = { app: "web" }
+  spec.ports = [{ port: 80, targetPort: "8080", protocol: "TCP" }]
+}.
+
+# Replicas are the autoscaler's business on the way back: a drift there is
+# corrected without asking. Any other drift waits for `approve`.
+auto_reconcile(T, A, P) :- drift(T, A, P, _, _), P = "spec.replicas".
+
+# In prod a rollout waits for its release to be approved.
+hold(k8s.deployment, A, "needs approval") :-
+  env(prod),
+  deformation(K, k8s.deployment, A, _),
+  K != delete,
+  release(Image),
+  not release_approved(Image).
+#+end_src
+
+** proposed
+
+#+name: after/workload.df
+#+begin_src dform
+# The workload stack of the bootstrap demo (README "Controller mode"): a
+# namespace, a deployment and a service on the mock Kubernetes provider,
+# whose image comes from an input relation. After `dform stack handover`
+# the dform-controller Deployment that bootstrap.df installs runs it:
+#
+#   cargo run -- --file examples/bootstrap/workload.df controller --stack renfry.workload
+#
+# Edit release.facts and the controller deploys it; edit the world and
+# the replicas drift is corrected, the image drift is held for approval.
+
+edition 2027
+
+stack renfry.workload {}
+
+provider k8s {}
+
+# The release to run, `release(image)`; re-read whenever the file changes.
+input relation release/1 from file("release.facts")
+# `approve(t, a)`: accept the drift of t.a, correcting it.
+input relation approve/2 from file("approvals.facts")
+# `release_approved(image)`: a prod release may roll out.
+input relation release_approved/1 from file("approvals.facts")
+
+input env: enum("dev", "prod") = "dev"
+
+resource k8s.namespace web {
+  metadata.name = "web"
+}
+
+resource k8s.deployment web {
+  for release(image)
+  metadata.name = "web"
+  metadata.namespace = k8s.namespace.web.metadata.name
+  spec.replicas = 3
+  spec.selector.matchLabels = { app: "web" }
+  spec.template.metadata.labels = { app: "web" }
+  spec.template.spec.containers = [{
+    name: "web",
+    image: image,
+    ports: [{ containerPort: 8080, protocol: "TCP" }]
+  }]
+}
+
+resource k8s.service web {
+  metadata.name = "web"
+  metadata.namespace = k8s.namespace.web.metadata.name
+  spec.selector = { app: "web" }
+  spec.ports = [{ port: 80, targetPort: "8080", protocol: "TCP" }]
+}
+
+# Replicas are the autoscaler's business on the way back: a drift there is
+# corrected without asking. Any other drift waits for `approve`.
+auto_reconcile(t, a, p) if drift(t, a, p, _, _), p == "spec.replicas"
+
+# In prod a rollout waits for its release to be approved.
+hold(k8s.deployment, a, "needs approval") if {
+  env == "prod"
+  deformation(k, k8s.deployment, a, _)
+  k != "delete"
+  release(image)
+  not release_approved(image)
+}
+#+end_src
+
+* Notes
+
+** Lowering, where it is not obvious
+
+- =if pool = "np-{renfry.zones[0]}", node_pool_up(pool)= is
+  =attr(gke_cluster, renfry, zones, Zs), member(Zs, 0, Z),
+  Pool = format("np-%s", Z), node_pool_up(Pool)=: an integer index on a
+  list read is =member/3=.
+- =node_pool_up(np) if gke_nodepool[np].instance_group != ""=: =T[np]= with
+  =np= unbound scans =attr(gke_nodepool, Np, instance_group, G)=; no =want=,
+  as today.
+- =metadata.annotations = { "dform.io/node-pool": gke_nodepool[pool].instance_group }=
+  is a reference inside an object literal: =ref(gke_nodepool, Pool, .instance_group)=.
+- In =workload.df= three resources are named =web=, so the Deployment says
+  =k8s.namespace.web.metadata.name=: type, name, path, the way the plan
+  prints it.
+- =hold(k8s.deployment, a, "needs approval") if { ... }=: =k8s.deployment=
+  in a value position is the type's name, a string, as today.
+
+** Reads better
+
+- =network = vpc.id=, =cluster = renfry.id=, =for z in renfry.zones=:
+  bootstrap.df now reads like the Terraform it replaces.
+- =output endpoint = renfry.endpoint=.
+
+** Reads worse
+
+- =workload.df= gets longer: the =hold= body wants a block, and the three
+  =web= resources force the qualified form. Its token count barely moves
+  (-8%): the file had no read-carrier variables to lose.
+- ="np-{renfry.zones[0]}"= hides two joins and a content position (a
+  pending group until the cluster has zones) inside a string.

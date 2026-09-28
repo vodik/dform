@@ -1,0 +1,288 @@
+#+title: G corpus: examples/adversarial/gke_two_phase.df
+#+startup: showall
+
+Stage 1 of Proposal G (=proposals/G-surface-syntax.org=): the current
+program verbatim, then the proposed rewrite, file by file. Every rewrite is
+meant to lower to the AST the current program lowers to, literal for literal
+up to variable names and body order (section 5 of the proposal), so the
+golden plans and strata stay byte-identical in stage 2. Where a rewrite
+could not be that faithful, the notes at the end say so.
+
+Counts (comments and blank lines excluded; section 8 of the proposal says how they are taken):
+
+| file | lines | tokens | read-carrier vars |
+|-
+| gke_two_phase.df | 86 → 75 | 557 → 374 | 13 → 2 |
+
+* gke_two_phase.df
+
+** current (examples/adversarial/gke_two_phase.df)
+
+#+name: before/gke_two_phase.df
+#+begin_src prolog
+# C's two-phase GKE / kubernetes stack (E §7.4), in the current syntax.
+# Run with the gke mock schema, which makes the cluster's zones, endpoint and
+# ca open nulls until the cluster exists:
+#   cargo run -- --file examples/adversarial/gke_two_phase.df plan
+
+edition 2026.
+
+provider gke {}.
+
+input env: enum(dev, stg, prod) = dev.
+
+settings dev {
+  project_id = "renfry-dev-973682"
+  project_name = "renfry-dev"
+  region = "us-east1"
+  network_name = "renfry-dev-network"
+  gke = {
+    control_plane_cidr: inet("172.16.3.96/28"),
+    subnet_cidr: inet("10.141.76.0/22")
+  }
+}.
+
+project(Id, Name, Region, NetId) :-
+  env(E),
+  setting(E, .project_id, Id),
+  setting(E, .project_name, Name),
+  setting(E, .region, Region),
+  setting(E, .network_name, NetName),
+  NetId = format("projects/%s/global/networks/%s", Id, NetName).
+
+resource google_compute_subnetwork gke_subnet {
+  project = Id
+  region = Region
+  network = NetId
+  name = format("%s-gke-subnet", Name)
+  ip_cidr_range = SubnetCidr
+} :-
+  project(Id, Name, Region, NetId),
+  env(E),
+  setting(E, .gke.subnet_cidr, SubnetCidr).
+
+# Carries a fresh null (subnetwork_id) and is still definite.
+resource google_compute_address static_ip {
+  project = Id
+  region = Region
+  name = "pngu-grpc"
+  subnetwork_id = ref(google_compute_subnetwork, gke_subnet, .id)
+} :-
+  project(Id, _, Region, _).
+
+resource gke_cluster pngu {
+  env = E
+  project_id = Id
+  name = format("%s-gke", Name)
+  network_id = NetId
+  subnetwork_id = ref(google_compute_subnetwork, gke_subnet, .id)
+  master_control_plane_cidr = CpCidr
+  node_locations = ["us-east1-b", "us-east1-c"]
+  deletion_protection = true
+} :-
+  env(E),
+  project(Id, Name, _, NetId),
+  setting(E, .gke.control_plane_cidr, CpCidr).
+
+# Provider configured from phase-1 nulls (two open, one secret).
+provider_config(kubernetes, {
+  host: ref(gke_cluster, pngu, .endpoint),
+  ca: ref(gke_cluster, pngu, .ca_certificate),
+  token: ref(google.client_config, current, .access_token)
+}).
+
+resource k8s.namespace pngu {
+  name = "pngu"
+}.
+
+# ref to a configured attribute is an attr join (E: rewritten by the compiler).
+resource k8s.deployment api {
+  namespace = Ns
+  image = "gcr.io/renfry/api:1.42"
+  replicas = 3
+} :- arg(k8s.namespace, pngu, .name, Ns).
+
+resource k8s.secret db_credentials {
+  namespace = Ns
+  data = { password: ref(google.secret_manager_secret_version, db_pw, .secret_data) }
+} :- arg(k8s.namespace, pngu, .name, Ns).
+
+# One nodepool per zone: member over an open null is a content position.
+resource gke_nodepool Np {
+  cluster = ref(gke_cluster, pngu, .id)
+  zone = Z
+  min = 1
+  max = 3
+} :-
+  arg(gke_cluster, pngu, .zones, Zs),
+  member(Zs, Z),
+  Np = format("np-%s", Z).
+
+zone_count(count(Z)) :-
+  arg(gke_cluster, pngu, .zones, Zs),
+  member(Zs, Z).
+
+deny("cluster must be in at least two zones", { cluster: pngu }) :-
+  want(gke_cluster, pngu),
+  zone_count(N),
+  N < 2.
+
+# A policy that has nothing to do with zones. Under coarse Rule 3 it would be
+# undetermined anyway (a `want` rule is stuck), which is the spurious case;
+# per key it is decided now, and holds.
+deny("cluster must not be deletable", { cluster: C }) :-
+  want(gke_cluster, C),
+  not arg(gke_cluster, C, .deletion_protection, true).
+#+end_src
+
+** proposed
+
+#+name: after/gke_two_phase.df
+#+begin_src dform
+# C's two-phase GKE / kubernetes stack (E §7.4), in the proposed syntax.
+# Run with the gke mock schema, which makes the cluster's zones, endpoint and
+# ca open nulls until the cluster exists:
+#   cargo run -- --file examples/adversarial/gke_two_phase.df plan
+
+edition 2027
+
+provider gke {}
+
+input env: enum("dev", "stg", "prod") = "dev"
+
+settings dev {
+  project_id = "renfry-dev-973682"
+  project_name = "renfry-dev"
+  region = "us-east1"
+  network_name = "renfry-dev-network"
+  gke = {
+    control_plane_cidr: inet("172.16.3.96/28"),
+    subnet_cidr: inet("10.141.76.0/22")
+  }
+}
+
+let cfg = settings[env]
+
+project(cfg.project_id, cfg.project_name, cfg.region,
+        "projects/{cfg.project_id}/global/networks/{cfg.network_name}")
+
+resource google_compute_subnetwork gke_subnet {
+  for project(id, name, region, net_id)
+  project = id
+  region = region
+  network = net_id
+  name = "{name}-gke-subnet"
+  ip_cidr_range = cfg.gke.subnet_cidr
+}
+
+# Carries a fresh null (subnetwork_id) and is still definite.
+resource google_compute_address static_ip {
+  for project(id, _, region, _)
+  project = id
+  region = region
+  name = "pngu-grpc"
+  subnetwork_id = gke_subnet.id
+}
+
+resource gke_cluster pngu {
+  for project(id, name, _, net_id)
+  env = env
+  project_id = id
+  name = "{name}-gke"
+  network_id = net_id
+  subnetwork_id = gke_subnet.id
+  master_control_plane_cidr = cfg.gke.control_plane_cidr
+  node_locations = ["us-east1-b", "us-east1-c"]
+  deletion_protection = true
+}
+
+# Provider configured from phase-1 nulls (two open, one secret).
+provider_config("kubernetes", {
+  host: gke_cluster.pngu.endpoint,
+  ca: gke_cluster.pngu.ca_certificate,
+  token: google.client_config["current"].access_token
+})
+
+resource k8s.namespace pngu {
+  name = "pngu"
+}
+
+# A read in the clause is an attr join (the value now), not a reference.
+resource k8s.deployment api {
+  if ns = k8s.namespace.pngu.name
+  namespace = ns
+  image = "gcr.io/renfry/api:1.42"
+  replicas = 3
+}
+
+resource k8s.secret db_credentials {
+  if ns = k8s.namespace.pngu.name
+  namespace = ns
+  data = { password: google.secret_manager_secret_version["db_pw"].secret_data }
+}
+
+# One nodepool per zone: member over an open null is a content position.
+resource gke_nodepool "np-{z}" {
+  for z in gke_cluster.pngu.zones
+  cluster = gke_cluster.pngu.id
+  zone = z
+  min = 1
+  max = 3
+}
+
+zone_count(count(z)) if z in gke_cluster.pngu.zones
+
+deny "cluster must be in at least two zones" { cluster: "pngu" } if {
+  exists gke_cluster.pngu
+  zone_count(n)
+  n < 2
+}
+
+# A policy that has nothing to do with zones. Under coarse Rule 3 it would be
+# undetermined anyway (a `want` rule is stuck), which is the spurious case;
+# per key it is decided now, and holds.
+deny "cluster must not be deletable" { cluster: c } if c in gke_cluster, not c.deletion_protection
+#+end_src
+
+* Notes
+
+** Lowering, where it is not obvious
+
+- =project(cfg.project_id, cfg.project_name, cfg.region, "projects/...")= is
+  a head whose arguments read settings: it lowers to today's rule, with the
+  =format= in the head instead of bound by =NetId = ...= in the body.
+- =token: google.client_config["current"].access_token=: the type has no
+  provider (a data source), so the reference is the null itself, as today.
+  =T["current"]= because nothing declares =current=; =T.name= requires a
+  declared resource (G-5).
+- =if ns = k8s.namespace.pngu.name= then =namespace = ns=: the current
+  program reads the namespace's name in the body (=arg(...)= in a body is
+  =attr=), not by =ref=. =namespace = k8s.namespace.pngu.name= would be a
+  reference and would print =ref(k8s.namespace,pngu,name)= in the plan,
+  because =name= is not computed under the gke schema (a
+  =Value::Ref= to a configured attribute). The rewrite keeps the read so
+  the plan stays byte-identical, and the difference is the one this
+  proposal is most worried about (section 9).
+- A bare =pngu= would be ambiguous (a cluster and a namespace share the
+  name), so every reference says its type: =gke_cluster.pngu.zones=.
+- =for z in gke_cluster.pngu.zones= is =attr(gke_cluster, pngu, zones, Zs),
+  member(Zs, Z)=: the content position over an open null that makes the
+  node pools a pending group. Nothing in the syntax says so.
+- =zone_count(count(z)) if z in gke_cluster.pngu.zones=: aggregates stay in
+  heads (G-16).
+
+** Reads better
+
+- =cluster = gke_cluster.pngu.id=, =host: gke_cluster.pngu.endpoint=: the
+  reference reads as the plan prints the address (=gke_cluster.pngu=).
+- The denies: =exists gke_cluster.pngu, zone_count(n), n < 2=;
+  =c in gke_cluster, not c.deletion_protection=.
+
+** Reads worse
+
+- The phase structure is invisible. In the Prolog form a reader could at
+  least see =ref(gke_cluster, pngu, .endpoint)= and ask what =ref= does; in
+  the new form =gke_cluster.pngu.endpoint= looks like any value. Which
+  references are open nulls is schema knowledge either way; the LSP must
+  show it (an inlay =?open= on the reference).
+- The two =if ns = ...= clauses exist only to choose a read over a reference.
