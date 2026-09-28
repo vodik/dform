@@ -738,11 +738,37 @@ and `tests/syntax/ok/` (E §7's programs among them) parses and prints back
 byte for byte, and each `tests/syntax/err/*.df` fails with the diagnostics
 pinned in its `.txt` (accept with `UPDATE_GOLDEN=1 cargo test --test syntax`).
 
+## Performance
+
+The evaluator is semi-naive over an operator IR (`src/ir/ops.rs`: Scan,
+Join, Extern, AntiJoin, Filter with Stuck as its third output, Map,
+Distinct, Agg, and a Fix per stratum), with a hash index per relation and
+key the rules read through (`src/ir/store.rs`). Its output is the naive
+loop's, byte for byte, circuit node ids included.
+
+`benches/scale.rs` generates programs from a mock schema of 10^3 types (a
+fresh `id` everywhere, an open `endpoint` on every tenth), N resources
+(each with a `parent` ref to an earlier one, one in a hundred stuck on a
+`format` over an endpoint), a recursive closure over the first thousand,
+and a 500-rule policy pack, then plans them with the `dform` binary:
+
+```bash
+cargo bench --bench scale                  # 10^3 resources (CI-sized)
+cargo bench --bench scale -- --full        # 10^4 and 10^5 resources
+cargo bench --bench scale -- --resources 5000 --out /tmp/gen   # keep the programs
+cargo bench --bench scale -- --bin path/to/other/dform         # A/B a build
+```
+
+It reports partition-graph nodes, provenance bytes per fact, stuck
+instances per null, the evaluator's read count (index lookups plus tuples
+read, deterministic), and `dform plan` wall time with /proc/loadavg and
+instructions (when `perf` is installed).
+
 ## Status
 
 This is an MVP:
 
-- naive forward-chaining evaluator
+- semi-naive evaluator with hash indexes (see Performance)
 - basic built-ins: `format`, `concat`, `ref`, `scoped`, `cidrsubnet`, `collect_*`
 - networking built-ins: `ip`, `inet`, `iprange`, `inet_host`, `inet_addr`, `inet_subnet`, `inet_contains`, `inet_overlaps`, `ip_unspecified`
 - math built-ins: `add`, `sub`

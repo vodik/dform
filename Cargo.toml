@@ -11,3 +11,7 @@ logos = "0.16"
 rowan = "0.16"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+
+[[bench]]
+name = "scale"
+harness = false

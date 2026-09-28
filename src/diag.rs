@@ -9,6 +9,8 @@ use std::sync::{Arc, Mutex};
 struct Source {
     name: String,
     text: Arc<str>,
+    /// Byte offset of every line's start, for `location`.
+    lines: Arc<[usize]>,
 }
 
 static SOURCES: Mutex<Vec<Source>> = Mutex::new(Vec::new());
@@ -16,9 +18,13 @@ static SOURCES: Mutex<Vec<Source>> = Mutex::new(Vec::new());
 /// Register a source; the id goes in every `Span` into it.
 pub fn add_source(name: &str, text: &str) -> u32 {
     let mut s = SOURCES.lock().unwrap();
+    let lines = std::iter::once(0)
+        .chain(text.match_indices('\n').map(|(i, _)| i + 1))
+        .collect();
     s.push(Source {
         name: name.to_string(),
         text: text.into(),
+        lines,
     });
     s.len() as u32
 }
@@ -29,16 +35,19 @@ fn source(id: u32) -> Option<(String, Arc<str>)> {
     Some((src.name.clone(), src.text.clone()))
 }
 
+fn source_lines(id: u32) -> Option<(String, Arc<str>, Arc<[usize]>)> {
+    let s = SOURCES.lock().unwrap();
+    let src = s.get((id as usize).checked_sub(1)?)?;
+    Some((src.name.clone(), src.text.clone(), src.lines.clone()))
+}
+
 /// `(file, line, col)` of a span's start, 1-based, columns in characters.
 pub fn location(span: Span) -> Option<(String, usize, usize)> {
-    let (name, text) = source(span.file)?;
+    let (name, text, lines) = source_lines(span.file)?;
     let start = (span.start as usize).min(text.len());
-    let before = &text[..start];
-    let line = before.matches('\n').count() + 1;
-    let col = before[before.rfind('\n').map_or(0, |i| i + 1)..]
-        .chars()
-        .count()
-        + 1;
+    // The last line starting at or before `start`.
+    let line = lines.partition_point(|&l| l <= start);
+    let col = text[lines[line - 1]..start].chars().count() + 1;
     Some((name, line, col))
 }
 

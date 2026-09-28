@@ -375,24 +375,21 @@ pub fn build_lowered(
 
     // Aggregate edges: every (arg, T, P) definition feeds every (attr, T', P')
     // definition it unifies with, negatively.
-    let args: Vec<Node> = defs.iter().filter(|n| n.pred == "arg").cloned().collect();
-    let attrs: Vec<Node> = defs.iter().filter(|n| n.pred == "attr").cloned().collect();
+    let args: Vec<Node> = unifying(&defs, &Node::plain("arg")).cloned().collect();
     for a in &args {
-        for t in &attrs {
-            let a_as_attr = Node {
-                pred: "attr".into(),
-                typ: a.typ.clone(),
-                path: a.path.clone(),
-            };
-            if a_as_attr.unifies(t) {
-                edges.push(Edge {
-                    from: a.clone(),
-                    to: t.clone(),
-                    negative: true,
-                    rule: None,
-                    why: "attribute aggregate (lub_ranked)".into(),
-                });
-            }
+        let a_as_attr = Node {
+            pred: "attr".into(),
+            typ: a.typ.clone(),
+            path: a.path.clone(),
+        };
+        for t in unifying(&defs, &a_as_attr) {
+            edges.push(Edge {
+                from: a.clone(),
+                to: t.clone(),
+                negative: true,
+                rule: None,
+                why: "attribute aggregate (lub_ranked)".into(),
+            });
         }
     }
     for (want, arg) in prelude {
@@ -435,17 +432,15 @@ pub fn build_lowered(
             };
             // Connect from every definition node the pattern unifies with.
             let mut matched = false;
-            for d in defs.iter() {
-                if d.unifies(&pat) {
-                    matched = true;
-                    edges.push(Edge {
-                        from: d.clone(),
-                        to: head.clone(),
-                        negative,
-                        rule: Some(i),
-                        why: why.into(),
-                    });
-                }
+            for d in unifying(&defs, &pat) {
+                matched = true;
+                edges.push(Edge {
+                    from: d.clone(),
+                    to: head.clone(),
+                    negative,
+                    rule: Some(i),
+                    why: why.into(),
+                });
             }
             if !matched {
                 // Undefined predicate (or EDB with no facts): a node with no
@@ -468,6 +463,31 @@ pub fn build_lowered(
         edges,
         rules,
     }
+}
+
+/// The nodes of `defs` that unify with `pat`, in order. Nodes sort by
+/// predicate, then type (`*` first), then path, so the candidates are the
+/// `*`-typed run and the run of `pat`'s type.
+fn unifying<'a>(defs: &'a BTreeSet<Node>, pat: &'a Node) -> impl Iterator<Item = &'a Node> {
+    let run = move |typ: Option<String>| {
+        let from = Node {
+            pred: pat.pred.clone(),
+            typ: typ.clone(),
+            path: None,
+        };
+        defs.range(from..)
+            .take_while(move |n| n.pred == pat.pred && (typ.is_none() || n.typ == typ))
+    };
+    let typed: Box<dyn Iterator<Item = &'a Node>> = match &pat.typ {
+        // `*`: every node of the predicate.
+        None => Box::new(run(None)),
+        Some(t) => Box::new(
+            run(None)
+                .take_while(|n| n.typ.is_none())
+                .chain(run(Some(t.clone()))),
+        ),
+    };
+    typed.filter(move |n| n.unifies(pat))
 }
 
 /// Tarjan's strongly connected components: `comp[v]` is v's component.
