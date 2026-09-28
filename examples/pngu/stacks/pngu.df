@@ -4,8 +4,12 @@
 #
 # Usage:
 #   cargo run -- -C examples/pngu plan
-#   cargo run -- -C examples/pngu plan --set env=stg
-#   cargo run -- -C examples/pngu plan --set env=prod
+#   cargo run -- -C examples/pngu plan pngu env=stg
+#   cargo run -- -C examples/pngu plan pngu env=prod
+#
+# Each env value is its own deployment with its own state:
+# dform.state/pngu/env=prod/ never sees dev's resources. Each env is its own
+# GCP project (settings below), so names may repeat across envs: isolated.
 #
 # Notes:
 # - This file models the intent/config surface area of the Terraform stack.
@@ -14,7 +18,7 @@
 #   files/dashboard-pngu.json (see terraform/modules/monitoring/dashboard-pngu.json).
 
 edition 2026
-stack pngu {}
+stack pngu[env] { isolated = true }
 ########################################
 # Schema declarations
 ########################################

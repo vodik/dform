@@ -4,7 +4,7 @@
   section 3. When a ticket and E/F disagree, the ticket wins; say so in the report.
 - Do not optimize inside a semantics ticket.
 - Keep `cargo run -q -- -C examples/demo plan` and
-  `cargo run -q -- -C examples/pngu plan --set env=prod` working at every commit.
+  `cargo run -q -- -C examples/pngu plan pngu env=prod` working at every commit.
   They are gates.
 - Programs follow docs/layout.md: one project per directory with a dform.toml.
 - Every behaviour change ships with a test that fails with the change reverted, and

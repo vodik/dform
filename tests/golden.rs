@@ -68,15 +68,15 @@ const CASES: &[Case] = &[
         "examples/advanced/stacks/dform-advanced.df",
     ),
     Case {
-        sets: &["env=dev"],
+        keys: &["env=dev"],
         ..case("pngu", "dev", "examples/pngu/stacks/pngu.df")
     },
     Case {
-        sets: &["env=stg"],
+        keys: &["env=stg"],
         ..case("pngu", "stg", "examples/pngu/stacks/pngu.df")
     },
     Case {
-        sets: &["env=prod"],
+        keys: &["env=prod"],
         ..case("pngu", "prod", "examples/pngu/stacks/pngu.df")
     },
     case("decl_demo", "default", "examples/decl/stacks/decl_demo.df"),
