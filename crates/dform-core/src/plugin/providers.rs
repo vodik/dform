@@ -428,15 +428,28 @@ impl Providers {
             .collect()
     }
 
-    /// Discovery: the inventory relations of every provider that has one.
-    pub fn discover(&self) -> Result<Vec<Atom>> {
+    /// Discovery: the inventory relations of every provider that has one,
+    /// of the types `types` names (every type: `None`), each asked with its
+    /// type bound.
+    pub fn discover(&self, types: Option<&BTreeSet<String>>) -> Result<Vec<Atom>> {
         let mut out = Vec::new();
         for (i, link) in self.links.iter().enumerate() {
             if !link.borrow().has("inventory") {
                 continue;
             }
             for (pred, arity) in INVENTORY {
-                for row in self.query_at(i, pred, &vec![false; arity], &[])? {
+                let mut rows = Vec::new();
+                match types {
+                    None => rows = self.query_at(i, pred, &vec![false; arity], &[])?,
+                    Some(ts) => {
+                        let mut plus = vec![false; arity];
+                        plus[0] = true;
+                        for t in ts {
+                            rows.extend(self.query_at(i, pred, &plus, &[Value::Str(t.clone())])?);
+                        }
+                    }
+                }
+                for row in rows {
                     out.push(Atom {
                         pred: pred.to_string(),
                         args: row.into_iter().map(Term::Val).collect(),

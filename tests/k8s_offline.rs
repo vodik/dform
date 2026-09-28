@@ -1249,3 +1249,42 @@ fn an_empty_pod_selector_is_present() {
     let r = run(&["plan"]).success();
     assert_eq!(r.summary(), "stack p is undeformed", "{}", r.stdout);
 }
+
+/// The provider answers the inventory (`world.T[e].p`) from the cluster:
+/// the objects of the kinds the program reads the world of, named by
+/// remote id, whoever manages them. Only those kinds are listed.
+#[test]
+fn a_world_read_is_answered_from_the_live_object() {
+    let s = Scratch::project("k8s-world-read");
+    std::fs::create_dir_all(s.path("providers/k8s")).unwrap();
+    std::os::unix::fs::symlink(k8s(), s.path("providers/k8s/dform-provider-k8s")).unwrap();
+    s.write(
+        "p.df",
+        "edition 2026\nprovider k8s { source = \"./providers/k8s\" }\n\
+         active = world.k8s.service[\"shop/web\"].spec.selector.color\n\
+         resource k8s.config_map serving {\n  metadata.name = \"serving\"\n  \
+         data = { \"COLOR\": active }\n}\n",
+    );
+    let (api, url) = Api::start();
+    api.objects.lock().unwrap().insert(
+        "/api/v1/namespaces/shop/services/web".into(),
+        json!({"apiVersion": "v1", "kind": "Service",
+               "metadata": {"name": "web", "namespace": "shop", "managedFields": [
+                   {"manager": "kubectl", "operation": "Update", "fieldsV1": {}}]},
+               "spec": {"selector": {"app": "web", "color": "blue"}}}),
+    );
+    let kc = kubeconfig(&s, &url);
+    let r = dform(&s, Some(&kc), &common::on("p.df", &[], &["plan"])).success();
+    assert!(
+        r.stdout.contains("data.COLOR = \"blue\""),
+        "{}\n{}",
+        r.stdout,
+        r.stderr
+    );
+    assert!(api.count("GET /api/v1/services?", &[]) > 0);
+    assert_eq!(
+        api.count("GET /apis/apps/v1/deployments?", &[]),
+        0,
+        "a kind the program does not read is not listed"
+    );
+}

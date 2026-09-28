@@ -23,12 +23,12 @@
 
 use crate::cluster::{Cluster, WriteError};
 use crate::object::{
-    KEY_ANNOTATION, STACK_LABEL, attrs, computed, idempotency_key, manifest, parse_remote, remote,
-    stack_label, stamp,
+    KEY_ANNOTATION, STACK_LABEL, attrs, computed, idempotency_key, inventory, manifest,
+    parse_remote, remote, stack_label, stamp,
 };
 use crate::openapi::{self, Derived, Kind};
 use anyhow::{Result, anyhow, bail};
-use dform_core::plugin::providers::CREATED;
+use dform_core::plugin::providers::{CREATED, INVENTORY};
 use dform_core::plugin::wire;
 use dform_core::provider::{self, diff, get_path, marker, set_path};
 use dform_core::schema::Schema;
@@ -162,6 +162,43 @@ impl K8s {
                 let s = |p: &str| get_path(o, p).and_then(Json::as_str).unwrap_or("");
                 remote(kind, s("metadata.namespace"), s("metadata.name"))
             }))
+    }
+
+    /// The inventory rows of `pred` (`cloud_exists`, `cloud_attr`,
+    /// `cloud_computed`) for the objects of type `typ` in every namespace,
+    /// each named by its remote id; with no type, of every kind that has a
+    /// short name (`k8s.service`), under that name.
+    pub async fn inventory(&self, pred: &str, typ: Option<&str>) -> Result<Vec<Vec<Value>>> {
+        let c = self.cluster(&format!("answer {pred}"))?;
+        let types: Vec<String> = match typ {
+            Some(t) => vec![t.to_string()],
+            None => openapi::aliases()?.into_iter().map(|(a, _)| a).collect(),
+        };
+        let s = |x: &str| Value::Str(x.to_string());
+        let mut rows = Vec::new();
+        for t in types {
+            let Ok(kind) = self.derived.kind(&t) else {
+                continue;
+            };
+            for o in c.list(kind, None).await? {
+                let at = |p: &str| get_path(&o, p).and_then(Json::as_str).unwrap_or("");
+                let e = remote(kind, at("metadata.namespace"), at("metadata.name"));
+                let (attrs, status) = inventory(&o);
+                match pred {
+                    "cloud_exists" => rows.push(vec![s(&t), s(&e)]),
+                    "cloud_attr" | "cloud_computed" => {
+                        let leaves = if pred == "cloud_attr" { attrs } else { status };
+                        rows.extend(
+                            leaves
+                                .into_iter()
+                                .map(|(p, v)| vec![s(&t), s(&e), s(&p), v]),
+                        );
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Ok(rows)
     }
 
     fn cluster(&self, what: &str) -> Result<&Cluster> {
@@ -659,7 +696,7 @@ impl pb::provider_server::Provider for Service {
         Ok(Response::new(pb::HandshakeResponse {
             protocol_version: dform_grpc::spawn::VERSION,
             name: openapi::PROVIDER.into(),
-            capabilities: vec!["resource".into(), "managed".into()],
+            capabilities: vec!["resource".into(), "managed".into(), "inventory".into()],
         }))
     }
 
@@ -721,6 +758,31 @@ impl pb::provider_server::Provider for Service {
 
     async fn query(&self, req: Request<pb::QueryRequest>) -> Reply<Self::QueryStream> {
         let r = req.into_inner();
+        if INVENTORY.iter().any(|(p, _)| *p == r.pred) {
+            let k8s = self.k8s()?;
+            // Offline, the inventory is empty: a plan reads no world.
+            if k8s.cluster.is_err() {
+                return Ok(Response::new(
+                    tonic::codegen::tokio_stream::iter(Vec::new()),
+                ));
+            }
+            let typ = match (r.input.first(), r.inputs.first().map(wire::from_value)) {
+                (Some(true), Some(Ok(Value::Str(t)))) => Some(t),
+                _ => None,
+            };
+            let rows = k8s
+                .inventory(&r.pred, typ.as_deref())
+                .await
+                .map_err(|e| Status::unavailable(format!("{e:#}")))?
+                .into_iter()
+                .map(|row| {
+                    Ok(pb::Row {
+                        values: row.iter().map(wire::value).collect(),
+                    })
+                })
+                .collect::<Vec<_>>();
+            return Ok(Response::new(tonic::codegen::tokio_stream::iter(rows)));
+        }
         if r.pred != CREATED {
             return Err(Status::unimplemented(format!(
                 "the Kubernetes provider answers no extern ({})",

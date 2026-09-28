@@ -300,9 +300,17 @@ impl FakeCloud {
                         &rr.computed,
                     );
                 }
+                // The bound columns select.
+                let bound = |a: &Atom| {
+                    plus.iter()
+                        .enumerate()
+                        .filter(|(_, b)| **b)
+                        .zip(inputs)
+                        .all(|((i, _), v)| a.args.get(i) == Some(&Term::Val(v.clone())))
+                };
                 atoms
                     .iter()
-                    .filter(|a| a.pred == pred)
+                    .filter(|a| a.pred == pred && bound(a))
                     .map(ground_row)
                     .collect::<Result<_>>()?
             }

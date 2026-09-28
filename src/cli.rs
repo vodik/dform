@@ -1298,7 +1298,7 @@ fn run_with(
     if let Some(m) = &cli.manifest {
         base_extra.extend(m.facts());
     }
-    let discovered = backend.discover()?;
+    let discovered = backend.discover(world_types(&cli.cmd, lowered.as_ref()).as_ref())?;
     let scope = catalog_scope(&cli.cmd, &program, &base_extra, &discovered, &st);
     backend.load_schema(scope.as_ref())?;
     // Apply calls whose answer was lost, resolved before anything is
@@ -3001,6 +3001,44 @@ fn print_query(
         }
     }
     Ok(())
+}
+
+/// The types the program reads the inventory of (`world.T[e].p`,
+/// `x in world.T`: `cloud_exists`, `cloud_attr`, `cloud_computed` with a
+/// constant type), for discovery to ask about only those. `None` (every
+/// type) for a query or why, which may ask about any, and for a program
+/// whose type there is not a constant or that does not lower.
+fn world_types(cmd: &Cmd, lowered: Option<&crate::transform::Lowered>) -> Option<BTreeSet<String>> {
+    use crate::ast::{Lit, Stmt, Term};
+    if matches!(cmd, Cmd::Query { .. } | Cmd::Why { .. }) {
+        return None;
+    }
+    let mut out = BTreeSet::new();
+    for st in &lowered?.program.statements {
+        let body = match st {
+            Stmt::Rule(r) => &r.body,
+            Stmt::Constraint(c) => &c.body,
+            _ => continue,
+        };
+        for l in body {
+            let (Lit::Pos(a) | Lit::Not(a)) = l else {
+                continue;
+            };
+            if !plugin::providers::INVENTORY
+                .iter()
+                .any(|(p, _)| *p == a.pred)
+            {
+                continue;
+            }
+            match a.args.first() {
+                Some(Term::Val(crate::value::Value::Str(t))) => {
+                    out.insert(t.clone());
+                }
+                _ => return None,
+            }
+        }
+    }
+    Some(out)
 }
 
 /// The providers the program configures itself: the constant names of

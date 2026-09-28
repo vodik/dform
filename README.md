@@ -473,6 +473,13 @@ provider k8s { source = "bin/dform-provider-k8s" }        # an executable
   (a generated name nobody knows yet) is found by listing the type with that
   label as the selector and matching the annotation, so the next run maps
   it, and deletes it if the program has dropped it.
+- The provider has the `inventory` capability: `world.k8s.service["shop/web"].spec.selector.color`
+  reads the live object, whoever manages it. The objects of the kinds the
+  program reads are listed in every namespace, each named by its remote id;
+  `cloud_attr` holds its leaves but `status` (`spec.ports[0].port`), and
+  `cloud_computed` its `status`. Offline the inventory is empty, and so it
+  is for a provider configured by `provider_config` (discovery runs before
+  the program is evaluated, and is not run again).
 - With no cluster in reach, or `DFORM_K8S_OFFLINE` set, the provider is
   offline: the schema is the checked-in snapshot of Kubernetes v1.36.0's
   document (`crates/dform-k8s/openapi-snapshot.json`, trimmed to the mock's
@@ -1188,7 +1195,11 @@ The fake backend can inject facts from `dform.state/inventory.json`:
 - `cloud_attr(Type, Name, Path, Value)`
 - `cloud_computed(Type, Name, Path, Value)`
 
-These are intended to model provider data sources / inventory.
+These are intended to model provider data sources / inventory. A provider
+with the `inventory` capability answers them; a run asks it only about the
+types the program reads the world of (`world.T[e].p`, `x in world.T` with
+`T` a constant; every type for `query` and `why`, or when a type is
+computed).
 
 To reference discovered values in resource attributes without manually joining
 `cloud_attr/cloud_computed`, you can use `cloud_ref(Type, Name, Attr)` as a value

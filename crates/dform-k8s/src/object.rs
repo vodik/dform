@@ -20,6 +20,7 @@
 use crate::openapi::Kind;
 use anyhow::{Result, bail};
 use dform_core::provider::{get_path, set_path};
+use dform_core::value::Value;
 use serde_json::{Map, Value as Json, json};
 
 /// The field manager dform applies as.
@@ -317,6 +318,56 @@ pub fn computed(live: &Json, defaulted: &[String]) -> Json {
     out
 }
 
+/// Leaf paths and their values.
+pub type Leaves = Vec<(String, Value)>;
+
+/// A live object as inventory rows (`world.T[e].p`): its configuration
+/// (everything but `status`, `apiVersion`, `kind` and
+/// `metadata.managedFields`) and its `status`, each as leaf paths
+/// (`spec.template.spec.containers[0].image`) and values; a float as its
+/// text. The configuration's leaves are `cloud_attr`'s, the status's
+/// `cloud_computed`'s.
+pub fn inventory(live: &Json) -> (Leaves, Leaves) {
+    let mut o = strip_nulls(live);
+    let status = o.as_object_mut().and_then(|m| {
+        m.remove("apiVersion");
+        m.remove("kind");
+        m.remove("status")
+    });
+    if let Some(Json::Object(meta)) = o.get_mut("metadata") {
+        meta.remove("managedFields");
+    }
+    let (mut attrs, mut computed) = (Vec::new(), Vec::new());
+    leaves(&o, "", &mut attrs);
+    if let Some(s) = status {
+        leaves(&s, "status", &mut computed);
+    }
+    (attrs, computed)
+}
+
+fn leaves(v: &Json, at: &str, out: &mut Vec<(String, Value)>) {
+    let join = |k: &str| match at {
+        "" => k.to_string(),
+        _ => format!("{at}.{k}"),
+    };
+    match v {
+        Json::Object(m) => m.iter().for_each(|(k, x)| leaves(x, &join(k), out)),
+        Json::Array(xs) => xs
+            .iter()
+            .enumerate()
+            .for_each(|(i, x)| leaves(x, &format!("{at}[{i}]"), out)),
+        Json::String(s) => out.push((at.to_string(), Value::Str(s.clone()))),
+        Json::Bool(b) => out.push((at.to_string(), Value::Bool(*b))),
+        Json::Number(n) => out.push((
+            at.to_string(),
+            n.as_i64()
+                .map(Value::Int)
+                .unwrap_or_else(|| Value::Str(n.to_string())),
+        )),
+        Json::Null => {}
+    }
+}
+
 /// A remote id: `NAMESPACE/NAME`, or `NAME` for a cluster-scoped kind (or
 /// an object in the default namespace `default_ns`).
 pub fn remote(kind: &Kind, ns: &str, name: &str) -> String {
@@ -505,6 +556,32 @@ mod tests {
         assert_eq!(
             computed(&live, &[]),
             json!({"metadata": {"name": "shop", "uid": "u"}, "status": {"phase": "Active"}})
+        );
+    }
+
+    #[test]
+    fn inventory_rows_are_the_live_objects_leaves() {
+        let live = json!({"apiVersion": "v1", "kind": "Service",
+            "metadata": {"name": "web", "namespace": "shop", "managedFields": [{"manager": "x"}]},
+            "spec": {"selector": {"color": "blue"}, "ports": [{"port": 80}]},
+            "status": {"loadBalancer": {"ingress": [{"ip": "10.0.0.1"}]}}});
+        let (attrs, computed) = inventory(&live);
+        let s = |x: &str| Value::Str(x.into());
+        assert_eq!(
+            attrs,
+            [
+                ("metadata.name".to_string(), s("web")),
+                ("metadata.namespace".to_string(), s("shop")),
+                ("spec.ports[0].port".to_string(), Value::Int(80)),
+                ("spec.selector.color".to_string(), s("blue")),
+            ]
+        );
+        assert_eq!(
+            computed,
+            [(
+                "status.loadBalancer.ingress[0].ip".to_string(),
+                s("10.0.0.1")
+            )]
         );
     }
 
