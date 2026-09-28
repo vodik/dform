@@ -3,9 +3,9 @@
 # whose image comes from an input relation. After `dform stack handover`
 # the dform-controller Deployment that bootstrap.df installs runs it:
 #
-#   cargo run -- --file examples/bootstrap/workload.df controller --stack renfry.workload
+#   cargo run -- --root examples/bootstrap --file examples/bootstrap/stacks/workload.df controller --stack renfry.workload
 #
-# Edit release.facts and the controller deploys it; edit the world and
+# Edit data/release.facts and the controller deploys it; edit the world and
 # the replicas drift is corrected, the image drift is held for approval.
 # In prod a rollout waits for a signed approval of the plan's digest
 # (README "Approvals"): the controller publishes the digest in
@@ -13,24 +13,24 @@
 # example signer, releases it:
 #
 #   cargo run -q -p dform-direct --bin dform-approve -- sign approver.key \
-#     --digest sha256:... --stack renfry.workload --approver alice --format fact >> approvals.facts
+#     --digest sha256:... --stack renfry.workload --approver alice --format fact >> data/approvals.facts
 
 edition 2026
 
 stack renfry.workload {
   # Whose signatures approve a plan: `dform-approve keygen approver.key`
   # prints this JWKS.
-  approvals = jwks_file("approvers.jwks.json")
+  approvals = jwks_file("../approvers.jwks.json")
 }
 
 provider k8s {}
 
 # The release to run, `release(image)`; re-read whenever the file changes.
-input relation release/1 from file("release.facts")
+input relation release/1 from file("../data/release.facts")
 # `approve(t, a)`: accept the drift of t.a, correcting it.
-input relation approve/2 from file("approvals.facts")
+input relation approve/2 from file("../data/approvals.facts")
 # `approval(token)`: a signed approval of a plan's digest.
-input relation approval/1 from file("approvals.facts")
+input relation approval/1 from file("../data/approvals.facts")
 
 input env: enum("dev", "prod") = "dev"
 

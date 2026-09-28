@@ -1,7 +1,7 @@
 # Demo: adopting an existing resource from inventory.
 #
 # Runs from a clean clone, no setup needed:
-#   cargo run -- --file examples/adopt_demo.df --inventory tests/fixtures/world/inventory.json plan --set env=prod
+#   cargo run -- --file examples/adopt/stacks/adopt_demo.df --inventory tests/fixtures/world/inventory.json plan --set env=prod
 
 edition 2026
 
@@ -11,7 +11,7 @@ settings prod {
   network.vpc_cidr = inet("10.20.0.0/16")
 }
 
-import "demo/modules/network.df"
+import "../modules/network.df"
 
 instance network main {
   vpc_net = settings[env].network.vpc_cidr

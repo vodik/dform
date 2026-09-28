@@ -3,8 +3,8 @@
 # Apply call. A replace in prod needs one:
 #
 #   cargo run -q -p dform-direct --bin dform-approve -- keygen approver.key > approvers.jwks.json
-#   cargo run -- --file approvals.df apply --set env=prod
-#   cargo run -- --file approvals.df plan --set env=prod --set cidr=10.1.0.0/16 --out plan.json
+#   cargo run -- --root . --file stacks/approvals.df apply --set env=prod
+#   cargo run -- --root . --file stacks/approvals.df plan --set env=prod --set cidr=10.1.0.0/16 --out plan.json
 #   cargo run -q -p dform-direct --bin dform-approve -- sign approver.key \
 #     --digest sha256:... --stack approvals.demo --key env=prod --approver alice > approval.json
 #   cargo run -- apply plan.json --approval approval.json
@@ -14,7 +14,7 @@ edition 2026
 stack approvals.demo[env] {
   # Whose signatures approve a plan: a JWKS document (`jwks("https://...")`
   # is fetched at apply time and cached beside the state).
-  approvals = jwks_file("approvers.jwks.json")
+  approvals = jwks_file("../approvers.jwks.json")
 }
 
 input env: enum("staging", "prod") = "staging"

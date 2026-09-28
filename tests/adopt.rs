@@ -9,7 +9,7 @@ use common::{Scratch, repo};
 #[test]
 fn adopt_demo_plans_with_dotted_cloud_refs() {
     let s = Scratch::new("adopt");
-    let prog = repo().join("examples/adopt_demo.df");
+    let prog = repo().join("examples/adopt/stacks/adopt_demo.df");
     let inventory = repo().join("tests/fixtures/world/inventory.json");
     let r = s
         .run(&[
@@ -35,7 +35,7 @@ fn adopt_demo_plans_with_dotted_cloud_refs() {
 #[test]
 fn world_flag_defaults_inventory_beside_it() {
     let s = Scratch::new("adopt-world-default");
-    let prog = repo().join("examples/adopt_demo.df");
+    let prog = repo().join("examples/adopt/stacks/adopt_demo.df");
     std::fs::create_dir_all(s.path("world")).unwrap();
     std::fs::copy(
         repo().join("tests/fixtures/world/inventory.json"),

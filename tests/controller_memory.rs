@@ -9,12 +9,12 @@ use common::Scratch;
 use std::io::BufRead;
 use std::process::Command;
 
-const WORKLOAD: &str = include_str!("../examples/bootstrap/workload.df");
+const WORKLOAD: &str = include_str!("../examples/bootstrap/stacks/workload.df");
 const EVENTS: usize = 200;
 
 fn release(s: &Scratch, image: &str) {
     s.write(
-        "release.facts",
+        "data/release.facts",
         &format!("edition 2026\n\nrelease(\"{image}\")\n"),
     );
 }
@@ -22,14 +22,16 @@ fn release(s: &Scratch, image: &str) {
 #[test]
 fn two_hundred_events_keep_the_source_registry_bounded() {
     let s = Scratch::new("ctl-memory");
-    s.write("workload.df", WORKLOAD);
+    s.write("stacks/workload.df", WORKLOAD);
     release(&s, "gcr.io/renfry/web:0");
-    s.write("approvals.facts", "edition 2026\n");
+    s.write("data/approvals.facts", "edition 2026\n");
     let counts = s.path("sources.txt");
     let mut child = Command::new(env!("CARGO_BIN_EXE_dform"))
         .args([
+            "--root",
+            ".",
             "--file",
-            "workload.df",
+            "stacks/workload.df",
             "controller",
             "--stack",
             "renfry.workload",

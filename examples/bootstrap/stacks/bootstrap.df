@@ -2,9 +2,9 @@
 # creates the cluster and installs dform in it as a controller, in three
 # ticks, and stays batch: the controller refuses a `role = bootstrap` stack.
 #
-#   cargo run -- --file examples/bootstrap/bootstrap.df apply
+#   cargo run -- --root examples/bootstrap --file examples/bootstrap/stacks/bootstrap.df apply
 #   cargo run -- --root examples/bootstrap stack handover renfry.workload --to 'k8s("dform-system/workload")'
-#   cargo run -- --file examples/bootstrap/workload.df controller --stack renfry.workload
+#   cargo run -- --root examples/bootstrap --file examples/bootstrap/stacks/workload.df controller --stack renfry.workload
 #
 # Tick 1: the network, the subnetwork and the cluster. The node pools are a
 # pending group: one per zone, and the zones are the cluster's. Tick 2: the
@@ -19,7 +19,7 @@ stack renfry.bootstrap {
 }
 
 provider gcp {
-  source = "gcp.df"
+  source = "../providers/gcp"
 }
 provider k8s {}
 
@@ -77,7 +77,7 @@ resource k8s.deployment dform_controller {
   spec.template.spec.containers = [{
     name: "dform",
     image: "ghcr.io/renfry/dform:0.8",
-    args: ["controller", "--stack", "renfry.workload", "--file", "workload.df"]
+    args: ["controller", "--stack", "renfry.workload", "--file", "stacks/workload.df"]
   }]
 }
 

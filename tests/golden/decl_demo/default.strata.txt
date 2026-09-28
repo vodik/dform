@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== examples/decl_demo.df: 46 nodes, 89 edges (28 negative)
+== examples/decl/stacks/decl_demo.df: 46 nodes, 89 edges (28 negative)
    STRATIFIED, 3 strata
    stratum 0:
      (want, compute.vm)

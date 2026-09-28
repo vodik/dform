@@ -1,8 +1,8 @@
 # A small web stack planned against the Terraform-shaped mock AWS provider
 # (crates/dform-mock/schemas/aws-mock.df). No account: the world is a JSON file.
 #
-#   cargo run -- --file examples/aws_demo.df plan
-#   cargo run -- --file examples/aws_demo.df apply
+#   cargo run -- --file examples/aws/stacks/aws_demo.df plan
+#   cargo run -- --file examples/aws/stacks/aws_demo.df apply
 #
 # Two shapes to look at:
 #   - Optional+Computed: subnet `a` sets availability_zone, so a ref to it is
@@ -14,7 +14,7 @@
 
 edition 2026
 
-provider aws { source = "../crates/dform-mock/schemas/aws-mock.df" }
+provider aws { source = "../../../crates/dform-mock/schemas/aws-mock.df" }
 
 resource aws_vpc main {
   cidr_block = "10.0.0.0/16"

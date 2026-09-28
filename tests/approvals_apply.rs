@@ -2,13 +2,13 @@
 //! policy pass makes the plan print a "needs approval" section and its
 //! digest, and `apply PLAN --approval FILE` verifies a signed statement
 //! over that digest offline before any Apply call. The tokens come from
-//! the example signer, `dform-approve`, on examples/approvals/approvals.df.
+//! the example signer, `dform-approve`, on examples/approvals/stacks/approvals.df.
 
 mod common;
 use common::Scratch;
 use std::process::Command;
 
-const PROGRAM: &str = include_str!("../examples/approvals/approvals.df");
+const PROGRAM: &str = include_str!("../examples/approvals/stacks/approvals.df");
 const PROD: [&str; 2] = ["--set", "env=prod"];
 const NEW_CIDR: [&str; 2] = ["--set", "cidr=10.1.0.0/16"];
 
@@ -31,15 +31,21 @@ fn signer(s: &Scratch, args: &[&str]) -> String {
 /// root, and a plan file of a replace (`plan.json`); returns its digest.
 fn setup(name: &str) -> (Scratch, String) {
     let s = Scratch::new(name);
-    s.write("approvals.df", PROGRAM);
+    s.write("stacks/approvals.df", PROGRAM);
     let jwks = signer(&s, &["keygen", "approver.key"]);
     s.write("approvers.jwks.json", &jwks);
-    s.run(&[&["--file", "approvals.df", "apply"][..], &PROD].concat())
+    s.run(&[&["--file", "stacks/approvals.df", "apply"][..], &PROD].concat())
         .success();
     let r = s
         .run(
             &[
-                &["--file", "approvals.df", "plan", "--out", "plan.json"][..],
+                &[
+                    "--file",
+                    "stacks/approvals.df",
+                    "plan",
+                    "--out",
+                    "plan.json",
+                ][..],
                 &PROD,
                 &NEW_CIDR,
             ]
@@ -77,13 +83,18 @@ fn token(s: &Scratch, name: &str, digest: &str, extra: &[&str]) {
 }
 
 fn world(s: &Scratch) -> String {
-    s.read(".dform/approvals.demo/env=prod/remote.json")
+    s.read("stacks/.dform/approvals.demo/env=prod/remote.json")
 }
 
 #[test]
 fn a_prod_replace_plans_with_needs_approval() {
     let (s, digest) = setup("approvals-plan");
-    let args = [&["--file", "approvals.df", "plan"][..], &PROD, &NEW_CIDR].concat();
+    let args = [
+        &["--file", "stacks/approvals.df", "plan"][..],
+        &PROD,
+        &NEW_CIDR,
+    ]
+    .concat();
     let r = s.run(&args).success();
     assert!(
         r.stdout
@@ -105,7 +116,7 @@ fn a_prod_replace_plans_with_needs_approval() {
         serde_json::json!([{ "deformation": "net.vpc.main", "reason": "a replace in prod" }])
     );
     // Staging: the policy asks for nothing, and the plan says nothing.
-    let staging = [&["--file", "approvals.df", "plan"][..], &NEW_CIDR].concat();
+    let staging = [&["--file", "stacks/approvals.df", "plan"][..], &NEW_CIDR].concat();
     let r = s.run(&staging).success();
     assert!(!r.stdout.contains("needs approval"), "{}", r.stdout);
     assert!(!r.stdout.contains("plan digest"), "{}", r.stdout);
@@ -127,7 +138,14 @@ fn apply_refuses_until_a_valid_token_for_the_plans_digest() {
     assert!(r.stderr.contains(&digest), "{}", r.stderr);
     // A plain apply has no digest to approve.
     let r = s
-        .run(&[&["--file", "approvals.df", "apply"][..], &PROD, &NEW_CIDR].concat())
+        .run(
+            &[
+                &["--file", "stacks/approvals.df", "apply"][..],
+                &PROD,
+                &NEW_CIDR,
+            ]
+            .concat(),
+        )
         .failure();
     assert!(r.stderr.contains("plan --out PLAN"), "{}", r.stderr);
     // A token for another plan.

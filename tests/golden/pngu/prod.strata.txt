@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== pngu.df: 155 nodes, 387 edges (270 negative)
+== examples/pngu/stacks/pngu.df: 155 nodes, 387 edges (270 negative)
    STRATIFIED, 4 strata
    stratum 0:
      (arg, input, env)

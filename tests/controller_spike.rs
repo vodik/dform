@@ -6,21 +6,21 @@ mod common;
 use common::Scratch;
 use std::process::Command;
 
-const WORKLOAD: &str = include_str!("../examples/bootstrap/workload.df");
+const WORKLOAD: &str = include_str!("../examples/bootstrap/stacks/workload.df");
 const WORLD: &str = ".dform/renfry.workload/remote.json";
 
 fn release(s: &Scratch, image: &str) {
     s.write(
-        "release.facts",
+        "data/release.facts",
         &format!("edition 2026\n\nrelease(\"{image}\")\n"),
     );
 }
 
 fn setup(name: &str) -> Scratch {
     let s = Scratch::new(name);
-    s.write("workload.df", WORKLOAD);
+    s.write("stacks/workload.df", WORKLOAD);
     release(&s, "gcr.io/renfry/web:1.0");
-    s.write("approvals.facts", "edition 2026\n");
+    s.write("data/approvals.facts", "edition 2026\n");
     s
 }
 
@@ -41,7 +41,7 @@ fn log(stdout: &str) -> Vec<String> {
 }
 
 fn once(s: &Scratch, extra: &[&str]) -> Vec<String> {
-    let mut args = vec!["--file", "workload.df"];
+    let mut args = vec!["--root", ".", "--file", "stacks/workload.df"];
     args.extend_from_slice(extra);
     args.extend(["controller", "--stack", "renfry.workload", "--once"]);
     log(&s.run(&args).success().stdout)
@@ -75,7 +75,7 @@ fn input_changes_deploy_and_world_drift_is_gated_by_policy() {
     assert_eq!(
         once(&s, &[]),
         [
-            "input release changed (file release.facts)",
+            "input release changed (file stacks/../data/release.facts)",
             "event input release",
             "tick 1: plan: 1 deformation (1 update)",
             "stack renfry.workload is undeformed",
@@ -123,13 +123,13 @@ fn approve_lets_a_world_event_correct_drift() {
     // approve(T, A) from its input relation: stated before the drift, so
     // the drift arrives with a world event, not an input change.
     s.write(
-        "approvals.facts",
+        "data/approvals.facts",
         "edition 2026\n\napprove(\"k8s.deployment\", \"web\")\n",
     );
     assert_eq!(
         once(&s, &[]),
         [
-            "input approve approval changed (file approvals.facts)",
+            "input approve approval changed (file stacks/../data/approvals.facts)",
             "event input approve approval",
             "stack renfry.workload is undeformed",
         ]
@@ -232,13 +232,13 @@ fn a_prod_rollout_is_held_until_its_plan_is_approved() {
     assert!(!s.read(WORLD).contains("k8s.deployment"));
     // A token for the digest, through the input relation, releases it.
     s.write(
-        "approvals.facts",
+        "data/approvals.facts",
         &format!("edition 2026\n\n{}", approval_fact(&s, &digest)),
     );
     assert_eq!(
         once(&s, &prod),
         [
-            "input approve approval changed (file approvals.facts)".to_string(),
+            "input approve approval changed (file stacks/../data/approvals.facts)".to_string(),
             "event input approve approval".to_string(),
             "tick 1: plan: 1 deformation (1 create)".to_string(),
             format!("tick 1: approved by alice: plan digest {digest}"),
@@ -281,7 +281,9 @@ fn a_prod_rollout_is_held_until_its_plan_is_approved() {
 #[test]
 fn plan_reads_an_input_relation_and_rejects_a_stray_fact() {
     let s = setup("ctl-plan");
-    let r = s.run(&["--file", "workload.df", "plan"]).success();
+    let r = s
+        .run(&["--root", ".", "--file", "stacks/workload.df", "plan"])
+        .success();
     assert!(
         r.stdout
             .contains("spec.template.spec.containers[name=web].image = \"gcr.io/renfry/web:1.0\""),
@@ -289,13 +291,16 @@ fn plan_reads_an_input_relation_and_rejects_a_stray_fact() {
         r.stdout
     );
     s.write(
-        "release.facts",
+        "data/release.facts",
         "edition 2026\n\nrelease(\"a\")\nrelaese(\"b\")\n",
     );
-    let r = s.run(&["--file", "workload.df", "plan"]).failure();
+    let r = s
+        .run(&["--root", ".", "--file", "stacks/workload.df", "plan"])
+        .failure();
     assert!(
-        r.stderr
-            .contains("relaese/1 is not an input relation declared from file release.facts"),
+        r.stderr.contains(
+            "relaese/1 is not an input relation declared from file stacks/../data/release.facts",
+        ),
         "{}",
         r.stderr
     );
@@ -345,10 +350,10 @@ fn a_git_source_is_read_at_its_ref() {
     };
     commit("gcr.io/renfry/web:2.0");
     s.write(
-        "workload.df",
+        "stacks/workload.df",
         &WORKLOAD.replace(
-            "input relation release/1 from file(\"release.facts\")",
-            "input relation release/1 from git(\"releases.git\", \"main\", \"web.facts\")",
+            "input relation release/1 from file(\"../data/release.facts\")",
+            "input relation release/1 from git(\"../releases.git\", \"main\", \"web.facts\")",
         ),
     );
     let got = once(&s, &[]);
@@ -358,7 +363,7 @@ fn a_git_source_is_read_at_its_ref() {
     let got = once(&s, &[]);
     assert_eq!(
         got[0],
-        "input release changed (git releases.git main:web.facts)"
+        "input release changed (git stacks/../releases.git main:web.facts)"
     );
     assert!(s.read(WORLD).contains("web:2.1"));
 }
@@ -369,8 +374,10 @@ fn the_polling_loop_runs_an_event_per_change() {
     let s = setup("ctl-loop");
     let mut child = Command::new(env!("CARGO_BIN_EXE_dform"))
         .args([
+            "--root",
+            ".",
             "--file",
-            "workload.df",
+            "stacks/workload.df",
             "controller",
             "--poll",
             "20",
@@ -418,7 +425,7 @@ fn the_polling_loop_runs_an_event_per_change() {
             "event start",
             "tick 1: plan: 3 deformations (3 create)",
             "stack renfry.workload is undeformed",
-            "input release changed (file release.facts)",
+            "input release changed (file stacks/../data/release.facts)",
             "event input release",
             "tick 1: plan: 1 deformation (1 update)",
             "stack renfry.workload is undeformed",
@@ -432,8 +439,10 @@ fn the_controller_refuses_a_stack_that_is_not_the_programs() {
     let s = setup("ctl-stack");
     let r = s
         .run(&[
+            "--root",
+            ".",
             "--file",
-            "workload.df",
+            "stacks/workload.df",
             "controller",
             "--stack",
             "other",
@@ -442,7 +451,7 @@ fn the_controller_refuses_a_stack_that_is_not_the_programs() {
         .failure();
     assert!(
         r.stderr
-            .contains("the program (workload.df) owns stack renfry.workload"),
+            .contains("the program (stacks/workload.df) owns stack renfry.workload"),
         "{}",
         r.stderr
     );

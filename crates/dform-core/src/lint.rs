@@ -270,13 +270,13 @@ mod tests {
     }
 
     /// Reverted-fix check: with the F13 bug back (`vpc_cidr` instead of
-    /// `vpc_net`), `examples/adopt_demo.df` derives zero resources and the
+    /// `vpc_net`), `examples/adopt/stacks/adopt_demo.df` derives zero resources and the
     /// evaluated fact set has no `want`/`adopt` for `net.vpc`. This test
     /// fails if that bug is reintroduced.
     #[test]
     fn adopt_demo_derives_a_vpc() {
         let root = workspace_root();
-        let file = root.join("examples/adopt_demo.df");
+        let file = root.join("examples/adopt/stacks/adopt_demo.df");
         let program = loader::load_program(&[file]).expect("load adopt_demo.df");
 
         let set_env_prod = Atom {

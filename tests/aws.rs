@@ -4,7 +4,7 @@ mod common;
 use common::{Scratch, repo};
 
 fn demo() -> Vec<String> {
-    let prog = repo().join("examples/aws_demo.df");
+    let prog = repo().join("examples/aws/stacks/aws_demo.df");
     [
         "--file",
         prog.to_str().unwrap(),

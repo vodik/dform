@@ -1,0 +1,26 @@
+edition 2026
+
+module network {
+  input vpc_net: inet
+  output vpc: net.vpc
+  output private_subnet_ids: list(ref(net.subnet))
+
+  resource net.vpc vpc {
+    cidr = vpc_net
+    tags = { env: env, component: "network" }
+  }
+
+  zone_index("us-test-1a", 0)
+  zone_index("us-test-1b", 1)
+
+  resource net.subnet "private-{z}" {
+    for data("zone", z)
+    vpc_id = vpc.id
+    cidr = inet_subnet(vpc.cidr, 4, zone_index[z])
+    zone = z
+    visibility = "private"
+  }
+
+  output vpc = vpc
+  output private_subnet_ids = [ s.id | s in net.subnet, s.visibility == "private" ]
+}

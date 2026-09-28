@@ -2,9 +2,9 @@
 //! program. See tests/golden/README.md for the accept workflow.
 //!
 //! Cases: the five example programs (dform.df across envs, dform-advanced.df,
-//! pngu.df across envs, examples/decl_demo.df, examples/adopt_demo.df with
+//! pngu.df across envs, examples/decl/stacks/decl_demo.df, examples/adopt/stacks/adopt_demo.df with
 //! the discovery inventory), the nine tests/fixtures/adversarial/*.df programs, and
-//! examples/k8s_demo.df / examples/aws_demo.df. Each runs against a fresh
+//! examples/k8s/stacks/k8s_demo.df / examples/aws/stacks/aws_demo.df. Each runs against a fresh
 //! (empty) world, and dform.df additionally against the tests/fixtures/world/
 //! fixture. A case that errors (a rejected stratification, a blocked
 //! constraint) still gets a snapshot: its stdout+stderr+exit status, pinned
@@ -58,24 +58,28 @@ const CASES: &[Case] = &[
         world_fixture: true,
         ..case("dform", "world", "examples/demo/stacks/dform.df")
     },
-    case("dform_advanced", "default", "dform-advanced.df"),
+    case(
+        "dform_advanced",
+        "default",
+        "examples/advanced/stacks/dform-advanced.df",
+    ),
     Case {
         sets: &["env=dev"],
-        ..case("pngu", "dev", "pngu.df")
+        ..case("pngu", "dev", "examples/pngu/stacks/pngu.df")
     },
     Case {
         sets: &["env=stg"],
-        ..case("pngu", "stg", "pngu.df")
+        ..case("pngu", "stg", "examples/pngu/stacks/pngu.df")
     },
     Case {
         sets: &["env=prod"],
-        ..case("pngu", "prod", "pngu.df")
+        ..case("pngu", "prod", "examples/pngu/stacks/pngu.df")
     },
-    case("decl_demo", "default", "examples/decl_demo.df"),
+    case("decl_demo", "default", "examples/decl/stacks/decl_demo.df"),
     Case {
         sets: &["env=prod"],
         inventory: Some("tests/fixtures/world/inventory.json"),
-        ..case("adopt_demo", "prod", "examples/adopt_demo.df")
+        ..case("adopt_demo", "prod", "examples/adopt/stacks/adopt_demo.df")
     },
     case(
         "adv2_rule3_coarse",
@@ -123,8 +127,8 @@ const CASES: &[Case] = &[
         "tests/fixtures/adversarial/gke_two_phase.df",
     ),
     // The provider is the program's `provider` statement.
-    case("k8s_demo", "default", "examples/k8s_demo.df"),
-    case("aws_demo", "default", "examples/aws_demo.df"),
+    case("k8s_demo", "default", "examples/k8s/stacks/k8s_demo.df"),
+    case("aws_demo", "default", "examples/aws/stacks/aws_demo.df"),
 ];
 
 /// Strip the repo's absolute path so snapshots are portable across checkouts

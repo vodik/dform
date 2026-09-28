@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== examples/aws_demo.df: 290 nodes, 810 edges (291 negative)
+== examples/aws/stacks/aws_demo.df: 290 nodes, 810 edges (291 negative)
    STRATIFIED, 5 strata
    stratum 0:
      (arg, aws_db_instance, instance_class)

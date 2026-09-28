@@ -61,7 +61,7 @@ deny "no nodepool in zone z" {pool: n} if
     assert!(r.summary().ends_with(", 2 undetermined"), "{}", r.stdout);
 }
 
-const AWS: &str = "examples/aws_demo.df";
+const AWS: &str = "examples/aws/stacks/aws_demo.df";
 
 fn aws(s: &Scratch, cmd: &str) -> common::Run {
     let prog = repo().join(AWS);

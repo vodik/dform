@@ -886,19 +886,23 @@ mod tests {
                 crate::schema::fake(),
             ),
             (
-                "dform-advanced.df",
-                root().join("dform-advanced.df"),
-                crate::schema::fake(),
-            ),
-            ("pngu.df", root().join("pngu.df"), crate::schema::gke()),
-            (
-                "examples/decl_demo.df",
-                root().join("examples/decl_demo.df"),
+                "examples/advanced/stacks/dform-advanced.df",
+                root().join("examples/advanced/stacks/dform-advanced.df"),
                 crate::schema::fake(),
             ),
             (
-                "examples/adopt_demo.df",
-                root().join("examples/adopt_demo.df"),
+                "examples/pngu/stacks/pngu.df",
+                root().join("examples/pngu/stacks/pngu.df"),
+                crate::schema::gke(),
+            ),
+            (
+                "examples/decl/stacks/decl_demo.df",
+                root().join("examples/decl/stacks/decl_demo.df"),
+                crate::schema::fake(),
+            ),
+            (
+                "examples/adopt/stacks/adopt_demo.df",
+                root().join("examples/adopt/stacks/adopt_demo.df"),
                 crate::schema::fake(),
             ),
         ]

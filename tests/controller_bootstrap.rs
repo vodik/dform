@@ -6,20 +6,20 @@
 mod common;
 use common::Scratch;
 
-const BOOTSTRAP: &str = include_str!("../examples/bootstrap/bootstrap.df");
-const GCP: &str = include_str!("../examples/bootstrap/gcp.df");
-const WORKLOAD: &str = include_str!("../examples/bootstrap/workload.df");
-const RELEASE: &str = include_str!("../examples/bootstrap/release.facts");
-const APPROVALS: &str = include_str!("../examples/bootstrap/approvals.facts");
+const BOOTSTRAP: &str = include_str!("../examples/bootstrap/stacks/bootstrap.df");
+const GCP: &str = include_str!("../examples/bootstrap/providers/gcp/schema.df");
+const WORKLOAD: &str = include_str!("../examples/bootstrap/stacks/workload.df");
+const RELEASE: &str = include_str!("../examples/bootstrap/data/release.facts");
+const APPROVALS: &str = include_str!("../examples/bootstrap/data/approvals.facts");
 const HANDED: &str = ".dform/renfry.bootstrap/k8s/dform-system/workload";
 
 fn demo(name: &str) -> Scratch {
     let s = Scratch::new(name);
-    s.write("bootstrap.df", BOOTSTRAP);
-    s.write("gcp.df", GCP);
-    s.write("workload.df", WORKLOAD);
-    s.write("release.facts", RELEASE);
-    s.write("approvals.facts", APPROVALS);
+    s.write("stacks/bootstrap.df", BOOTSTRAP);
+    s.write("providers/gcp/schema.df", GCP);
+    s.write("stacks/workload.df", WORKLOAD);
+    s.write("data/release.facts", RELEASE);
+    s.write("data/approvals.facts", APPROVALS);
     s
 }
 
@@ -35,8 +35,10 @@ fn log(stdout: &str) -> Vec<String> {
 fn controller(s: &Scratch) -> Vec<String> {
     let r = s
         .run(&[
+            "--root",
+            ".",
             "--file",
-            "workload.df",
+            "stacks/workload.df",
             "controller",
             "--stack",
             "renfry.workload",
@@ -63,7 +65,9 @@ fn ticks(stdout: &str) -> Vec<&str> {
 #[test]
 fn a_resource_rule_reading_a_stuck_helper_is_a_pending_group() {
     let s = demo("bootstrap-helper");
-    let r = s.run(&["--file", "bootstrap.df", "apply"]).success();
+    let r = s
+        .run(&["--root", ".", "--file", "stacks/bootstrap.df", "apply"])
+        .success();
     let tick2 = r
         .stdout
         .split("tick 2:\n")
@@ -93,7 +97,9 @@ fn bootstrap_handover_and_the_controller_runs_the_workload() {
     let s = demo("bootstrap");
     // Tick 1 the network and the cluster, tick 2 the node pools and the
     // namespace, tick 3 dform itself.
-    let r = s.run(&["--file", "bootstrap.df", "apply"]).success();
+    let r = s
+        .run(&["--root", ".", "--file", "stacks/bootstrap.df", "apply"])
+        .success();
     assert_eq!(
         ticks(&r.stdout),
         ["tick 1:", "tick 2:", "tick 3:"],
@@ -106,12 +112,21 @@ fn bootstrap_handover_and_the_controller_runs_the_workload() {
         world.contains("\"--stack\",\n") && world.contains("\"renfry.workload\""),
         "{world}"
     );
-    let r = s.run(&["--file", "bootstrap.df", "plan"]).success();
+    let r = s
+        .run(&["--root", ".", "--file", "stacks/bootstrap.df", "plan"])
+        .success();
     assert_eq!(r.summary(), "stack renfry.bootstrap is undeformed");
 
     // The bootstrap stack stays batch.
     let r = s
-        .run(&["--file", "bootstrap.df", "controller", "--once"])
+        .run(&[
+            "--root",
+            ".",
+            "--file",
+            "stacks/bootstrap.df",
+            "controller",
+            "--once",
+        ])
         .failure();
     assert!(
         r.stderr.contains(
@@ -156,7 +171,9 @@ fn bootstrap_handover_and_the_controller_runs_the_workload() {
     assert!(s.read(&world).contains("gcr.io/renfry/web:1.0"));
     assert!(!s.path(".dform/renfry.workload").exists());
     // A batch apply of a handed-over stack is refused; plan still reads it.
-    let r = s.run(&["--file", "workload.df", "apply"]).failure();
+    let r = s
+        .run(&["--root", ".", "--file", "stacks/workload.df", "apply"])
+        .failure();
     assert!(
         r.stderr.contains(
             "stack renfry.workload was handed over to k8s(\"dform-system/workload\"): the controller runs it"
@@ -164,15 +181,17 @@ fn bootstrap_handover_and_the_controller_runs_the_workload() {
         "{}",
         r.stderr
     );
-    let r = s.run(&["--file", "workload.df", "plan"]).success();
+    let r = s
+        .run(&["--root", ".", "--file", "stacks/workload.df", "plan"])
+        .success();
     assert_eq!(r.summary(), "stack renfry.workload is undeformed");
 
     // A release: deployed.
-    edit(&s, "release.facts", "web:1.0", "web:1.1");
+    edit(&s, "data/release.facts", "web:1.0", "web:1.1");
     assert_eq!(
         controller(&s),
         [
-            "input release changed (file release.facts)",
+            "input release changed (file stacks/../data/release.facts)",
             "event input release",
             "tick 1: plan: 1 deformation (1 update)",
             "stack renfry.workload is undeformed",
@@ -232,7 +251,8 @@ fn handover_needs_one_bootstrap_stack_and_an_empty_target() {
         "{}",
         r.stderr
     );
-    s.run(&["--file", "bootstrap.df", "apply"]).success();
+    s.run(&["--root", ".", "--file", "stacks/bootstrap.df", "apply"])
+        .success();
     let r = s
         .run(&["stack", "handover", "renfry.bootstrap", "--to", to])
         .failure();

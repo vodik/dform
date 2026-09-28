@@ -7,10 +7,10 @@
 # - demonstrate another closure: nested group membership
 #
 # Try:
-#   cargo run -- --file dform-advanced.df plan
-#   cargo run -- --file dform-advanced.df query reachable
-#   cargo run -- --file dform-advanced.df plan --set env=prod
-#   cargo run -- --file dform-advanced.df query in_group
+#   cargo run -- --file examples/advanced/stacks/dform-advanced.df plan
+#   cargo run -- --file examples/advanced/stacks/dform-advanced.df query reachable
+#   cargo run -- --file examples/advanced/stacks/dform-advanced.df plan --set env=prod
+#   cargo run -- --file examples/advanced/stacks/dform-advanced.df query in_group
 
 edition 2026
 

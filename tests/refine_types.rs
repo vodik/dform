@@ -142,7 +142,7 @@ settings prod {{ pool = {{ min: {min}, max: 3 }} }}
 }
 
 fn gke(s: &Scratch, extra: &[&str]) -> Run {
-    let prog = repo().join("examples/refine_gke.df");
+    let prog = repo().join("examples/refine/stacks/refine_gke.df");
     let args = [
         "--file",
         prog.to_str().unwrap(),
@@ -177,7 +177,7 @@ fn a_refinement_on_a_null_is_deferred_and_fires_after_the_boundary() {
     assert!(
         r.stderr
             .contains("constraint violations after tick 1:\n- refinement violated ctx={\"addr\":\"pngu\",\"at\":\"")
-            && r.stderr.contains("examples/refine_gke.df:126:3\",\"constraint\":\"len_ge(3)\",\"path\":\"zones\"")
+            && r.stderr.contains("examples/refine/stacks/refine_gke.df:126:3\",\"constraint\":\"len_ge(3)\",\"path\":\"zones\"")
             && r.stderr
                 .contains("apply stopped after tick 1: blocked by constraints"),
         "{}",

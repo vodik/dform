@@ -4175,10 +4175,22 @@ mod tests {
     fn other_examples_have_no_stuck_instances() {
         let prod = [input("env", Value::Str("prod".into()))];
         let cases: [(&str, crate::schema::Schema, &[Atom]); 4] = [
-            ("dform-advanced.df", crate::schema::fake(), &prod),
-            ("pngu.df", crate::schema::gke(), &prod),
-            ("examples/decl_demo.df", crate::schema::fake(), &[]),
-            ("examples/adopt_demo.df", crate::schema::fake(), &prod),
+            (
+                "examples/advanced/stacks/dform-advanced.df",
+                crate::schema::fake(),
+                &prod,
+            ),
+            ("examples/pngu/stacks/pngu.df", crate::schema::gke(), &prod),
+            (
+                "examples/decl/stacks/decl_demo.df",
+                crate::schema::fake(),
+                &[],
+            ),
+            (
+                "examples/adopt/stacks/adopt_demo.df",
+                crate::schema::fake(),
+                &prod,
+            ),
         ];
         for (file, schema, extra) in cases {
             let (r, _, s) = run_file(file, &schema, extra);

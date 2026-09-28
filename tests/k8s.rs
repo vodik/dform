@@ -21,7 +21,7 @@ fn expected_plan() -> String {
 #[test]
 fn k8s_demo_plans_against_the_mock() {
     let s = Scratch::new("k8s-demo");
-    let prog = repo().join("examples/k8s_demo.df");
+    let prog = repo().join("examples/k8s/stacks/k8s_demo.df");
     let args = [
         "--file",
         prog.to_str().unwrap(),

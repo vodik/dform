@@ -74,7 +74,7 @@ fn check(file: &str, provider: &str, env: Option<&str>, append: &str) {
 #[test]
 fn the_policy_pass_resumed_is_the_policy_pass() {
     check("examples/demo/stacks/dform.df", "fake", Some("prod"), "");
-    check("pngu.df", "fake", Some("prod"), "");
+    check("examples/pngu/stacks/pngu.df", "fake", Some("prod"), "");
     check(
         "tests/fixtures/adversarial/gke_two_phase.df",
         "gke",
