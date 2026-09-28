@@ -231,3 +231,47 @@ instance app green { replicas = 7 }
         r.stdout
     );
 }
+
+/// dform.df's peering rule joins each `vpc_peer_inst` edge to its own
+/// instances' vpcs: with a second edge (to a third network) there are two
+/// peerings, each named for its edge and holding its own pair. Unjoined, each
+/// peering got both accepters and conflicted.
+#[test]
+fn dform_df_peers_each_edge_with_its_own_pair() {
+    let s = Scratch::new("lang-modules-peering");
+    s.write(
+        "third.df",
+        r#"edition 2026
+instance network third {
+  vpc_net = inet("10.70.0.0/16")
+}
+vpc_peer_inst("main", "third")
+"#,
+    );
+    let dform = common::repo().join("dform.df");
+    let root = s.path(".");
+    let r = s
+        .run(&[
+            "--root",
+            root.to_str().unwrap(),
+            "--file",
+            dform.to_str().unwrap(),
+            "--file",
+            "third.df",
+            "plan",
+        ])
+        .success();
+    assert_eq!(
+        r.stdout.matches("\n+ net.vpc_peering.").count(),
+        2,
+        "{}",
+        r.stdout
+    );
+    for (name, accepter) in [("peer-main-peer", "peer"), ("peer-main-third", "third")] {
+        let want = format!(
+            "+ net.vpc_peering.{name}\n  accepter_vpc_id = ?net.vpc/network.{accepter}::vpc#id\n  requester_vpc_id = ?net.vpc/network.main::vpc#id\n"
+        );
+        assert!(r.stdout.contains(&want), "{want}\n---\n{}", r.stdout);
+    }
+    assert!(!r.stdout.contains("conflict"), "{}", r.stdout);
+}

@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== dform.df: 164 nodes, 753 edges (536 negative)
+== dform.df: 165 nodes, 740 edges (529 negative)
    STRATIFIED, 17 strata
    stratum 0:
      (arg, iam.policy, name)
@@ -64,6 +64,7 @@ exit: ok
      (want, compute.vm)
      env
      vpc_peer
+     vpc_peer_pair
      warn
    stratum 3:
      (arg, iam.role_policy_attachment, policy_id)

@@ -93,12 +93,14 @@ instance iam main {}
 # VPC peering intent: define edges between network instances.
 vpc_peer_inst("main", "peer")
 
-# Each network instance outputs its vpc's address.
-vpc_peer(a, b) if vpc_peer_inst(ia, ib), a = network[ia].vpc, b = network[ib].vpc
+# Each network instance outputs its vpc's address; an edge's pair is the
+# two instances' vpcs, joined on the instance names.
+vpc_peer_pair(ia, ib, a, b) if vpc_peer_inst(ia, ib), a = network[ia].vpc, b = network[ib].vpc
+vpc_peer(a, b) if vpc_peer_pair(_, _, a, b)
 
 # Create a peering resource per declared peering edge.
 resource net.vpc_peering "peer-{ia}-{ib}" {
-  for vpc_peer_inst(ia, ib), vpc_peer(a, b)
+  for vpc_peer_pair(ia, ib, a, b)
   if a in net.vpc, b in net.vpc # both ends must exist in this environment
   requester_vpc_id = a.id
   accepter_vpc_id = b.id
