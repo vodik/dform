@@ -70,7 +70,13 @@ fn plan_on(
     let mut extra = extra.to_vec();
     extra.extend(schema.facts.clone());
     extra.extend(backend.world_facts(&st).unwrap());
-    let (res, violations) = dform::engine::eval(program, &extra).unwrap();
+    // dform.df's settings are its stack config's table.
+    let lowered = dform::transform::lower(program).unwrap();
+    let tables = dform::tables::Tables::default();
+    let externs = dform::externs::Externs::new(&lowered.program, &lowered.extern_fns, |f, ins| {
+        tables.answer(f, ins).expect("only tables")
+    });
+    let (res, violations) = externs.eval(program, &extra).unwrap();
     assert!(violations.is_empty(), "{violations:?}");
     let desired = dform::ir::compile_resources(res.facts.iter().cloned(), &schema).unwrap();
     backend

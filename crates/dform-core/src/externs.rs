@@ -166,16 +166,14 @@ pub fn check(program: &Program, fns: &[ExternFn]) -> Result<()> {
                             _ => None,
                         })
                     {
-                        diags.push(
-                            Diagnostic::error(
-                                a.span,
-                                format!("extern {} in a recursive rule", f.name),
-                            )
-                            .with_note(format!(
-                                "{} depends on itself through {p}; an extern is asked once its inputs are complete",
-                                h.pred
-                            )),
-                        );
+                        let msg = match crate::tables::describe(&f.name) {
+                            Some(t) => format!("{t}: its source reads its own rows"),
+                            None => format!("extern {} in a recursive rule", f.name),
+                        };
+                        diags.push(Diagnostic::error(a.span, msg).with_note(format!(
+                            "{} depends on itself through {p}; an extern is asked once its inputs are complete",
+                            h.pred
+                        )));
                     }
                     a.args.iter().for_each(|t| vars(t, &mut bound));
                 }
@@ -277,6 +275,13 @@ impl<'a> Externs<'a> {
                     .or_insert(a.rows);
             }
         }
+    }
+
+    /// The answers state persisted: those of the `persist` externs (state
+    /// may hold others, a table's commit, that are never replayed).
+    pub fn preload_persisted(&self, answers: impl IntoIterator<Item = Answer>) {
+        let persist = |a: &Answer| self.fns.get(&a.pred).is_some_and(|f| f.persist);
+        self.preload(answers.into_iter().filter(persist));
     }
 
     fn facts(&self) -> Vec<Atom> {
@@ -401,8 +406,13 @@ impl<'a> Externs<'a> {
             }
             for c in new {
                 let f = &self.fns[&c.pred];
-                let rows = (self.ask)(f, &c.inputs)
-                    .with_context(|| format!("extern {}({})", c.pred, show(&c.inputs)))?;
+                let rows =
+                    (self.ask)(f, &c.inputs).with_context(|| {
+                        match crate::tables::describe(&c.pred) {
+                            Some(t) => format!("{t} from {}", show(&c.inputs)),
+                            None => format!("extern {}({})", c.pred, show(&c.inputs)),
+                        }
+                    })?;
                 for r in &rows {
                     if r.len() != f.args.len() {
                         bail!(

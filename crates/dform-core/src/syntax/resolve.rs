@@ -868,25 +868,45 @@ impl<'u> Lowerer<'u> {
                 };
                 let block = node(n, BLOCK);
                 let mut rc = self.rc(n, scope, outer);
-                let config = self.constant_assigns(&mut rc, block.as_ref())?;
+                // A stack's `config = FORMAT(SOURCE)` is a table, not a
+                // constant.
+                let table = match (n.kind(), &block) {
+                    (STACK, Some(b)) => b
+                        .children()
+                        .filter(|a| a.kind() == ASSIGN)
+                        .find(|a| node(a, BLOCK_PATH).is_some_and(|p| p.text() == "config")),
+                    _ => None,
+                };
+                let config = self.constant_assigns(&mut rc, block.as_ref(), table.as_ref())?;
                 // The words between the header's `[` and `]`.
-                let keys = tokens(n)
+                let key_tokens: Vec<SyntaxToken> = tokens(n)
                     .skip_while(|t| t.kind() != L_BRACKET)
                     .take_while(|t| t.kind() != R_BRACKET)
                     .filter(|t| is_word(t.kind()))
+                    .collect();
+                let keys = key_tokens
+                    .iter()
                     .map(|t| (t.text().to_string(), self.span_of(t.text_range())))
                     .collect();
+                let mut out = match &table {
+                    Some(a) => self.stack_config(a, &name, &key_tokens, scope, outer)?,
+                    None => Vec::new(),
+                };
                 let c = Config {
                     name,
                     keys,
                     config,
                     span,
                 };
-                one(if n.kind() == PROVIDER {
-                    Stmt::Provider(c)
-                } else {
-                    Stmt::Stack(c)
-                })
+                out.insert(
+                    0,
+                    if n.kind() == PROVIDER {
+                        Stmt::Provider(c)
+                    } else {
+                        Stmt::Stack(c)
+                    },
+                );
+                Ok(out)
             }
             INPUT => {
                 let name = word_text(n, 1);
@@ -905,6 +925,7 @@ impl<'u> Lowerer<'u> {
                     span,
                 }))
             }
+            INPUT_RELATION if node(n, BIND_ARG).is_some() => self.table(n, scope, outer),
             INPUT_RELATION => {
                 let pred = word_text(n, 2);
                 let arity = self.arity(n)?;
@@ -1263,10 +1284,12 @@ impl<'u> Lowerer<'u> {
         Ok(t)
     }
 
+    /// A provider's or stack's `k = constant` settings, but `skip`.
     fn constant_assigns(
         &mut self,
         rc: &mut Rc,
         block: Option<&SyntaxNode>,
+        skip: Option<&SyntaxNode>,
     ) -> L<Vec<(String, Term, Span)>> {
         let Some(block) = block else {
             return Ok(Vec::new());
@@ -1275,11 +1298,267 @@ impl<'u> Lowerer<'u> {
             return self.error(self.span(&c), "a provider or stack block takes no clause");
         }
         let mut out = Vec::new();
-        for a in block.children().filter(|c| c.kind() == ASSIGN) {
+        for a in block
+            .children()
+            .filter(|c| c.kind() == ASSIGN && Some(c) != skip)
+        {
             let key = self.block_path(&node(&a, BLOCK_PATH).ok_or(Skip)?)?;
             let value = self.constant(rc, &terms(&a).next().ok_or(Skip)?)?;
             out.push((key, value, self.span(&a)));
         }
+        Ok(out)
+    }
+
+    /// `input relation p(col: type, ...) from FORMAT(SOURCE)`: a table
+    /// (`crate::tables`). Its rows are the answers of the extern
+    /// `table.FORMAT.p`, asked once the source is known:
+    /// `p(Cols) :- reads, Path = SOURCE, table.FORMAT.p(Path, At, Cols)`.
+    /// `decl p(col, ...)` names the columns for the record form.
+    fn table(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Vec<Stmt>> {
+        let span = self.span(n);
+        let pred = word_text(n, 2);
+        if n.parent().is_some_and(|p| p.kind() != SOURCE_FILE) {
+            return self.error(span, "an input relation belongs at the top of the program");
+        }
+        let mut cols: Vec<BindArg> = Vec::new();
+        for b in n.children().filter(|c| c.kind() == BIND_ARG) {
+            let name = word_text(&b, 0);
+            let ty = node(&b, TYPE_EXPR).map(|t| self.type_expr(&t));
+            let at = self.span(&b);
+            if cols.iter().any(|c| c.name == name) {
+                return self.error(
+                    at,
+                    format!("input relation {pred}: two columns are named {name}"),
+                );
+            }
+            if let Some(Err(e)) = ty.as_ref().map(crate::inputs::check_type) {
+                return self.error(at, format!("input relation {pred}: column {name}: {e}"));
+            }
+            if matches!(&ty, Some(TypeExpr::Apply(t, _)) if t == "secret") {
+                let d = Diagnostic::error(
+                    at,
+                    format!("input relation {pred}: column {name} is a secret"),
+                )
+                .with_note(
+                    "a table's rows are read in the clear and recorded in the plan file; \
+                     a secret comes from a secret input or a `persist` extern",
+                );
+                self.diags.push(d);
+                return Err(Skip);
+            }
+            cols.push(BindArg {
+                input: false,
+                name,
+                ty,
+            });
+        }
+        let mut rc = self.rc(n, scope, outer);
+        let mut body = Vec::new();
+        let src = terms(n).next().ok_or(Skip)?;
+        let vars: Vec<Term> = cols
+            .iter()
+            .map(|c| var(&fresh(&mut rc, &capitalise(&c.name))))
+            .collect();
+        let mut out =
+            self.table_body(&mut rc, &src, &pred, cols.clone(), vars.clone(), &mut body)?;
+        self.check_bound(&rc, &body, &[])?;
+        out.push(Stmt::Decl(Decl {
+            pred: pred.clone(),
+            fields: cols.iter().map(|c| c.name.clone()).collect(),
+            span,
+        }));
+        out.push(Stmt::Rule(RuleStmt {
+            head: atom_at(&pred, vars, span),
+            body,
+        }));
+        Ok(out)
+    }
+
+    /// `stack app[k, ...] { config = FORMAT(SOURCE) }`: every leaf of the
+    /// document is a contribution to the settings row of the deployment
+    /// (named by the key's value, several keys' joined by `/`):
+    /// `arg("settings", Row, P, V, normal) :- reads, table.FORMAT.stack.config(Path, At, P, V)`.
+    fn stack_config(
+        &mut self,
+        a: &SyntaxNode,
+        stack: &str,
+        keys: &[SyntaxToken],
+        scope: usize,
+        outer: &Rc,
+    ) -> L<Vec<Stmt>> {
+        let span = self.span(a);
+        if keys.is_empty() {
+            let d = Diagnostic::error(
+                span,
+                format!("stack {stack} has no key: its config would be every deployment's"),
+            )
+            .with_help(format!(
+                "key it by the inputs that name a deployment, `stack {stack}[env]`, \
+                 or state the settings in the program"
+            ));
+            self.diags.push(d);
+            return Err(Skip);
+        }
+        let mut rc = self.rc(a, scope, outer);
+        let mut body = Vec::new();
+        let mut row = Vec::new();
+        for k in keys {
+            let at: u32 = k.text_range().start().into();
+            row.push(self.hole(&mut rc, k.text(), at, &mut body)?);
+        }
+        let row = match row.len() {
+            1 => row.remove(0),
+            n => {
+                let mut args = vec![str_term(&vec!["%s"; n].join("/"))];
+                args.extend(row);
+                func("format", args)
+            }
+        };
+        let (path, value) = (var(&fresh(&mut rc, "Path")), var(&fresh(&mut rc, "Value")));
+        let cols = [("path", "string"), ("value", "any")]
+            .map(|(name, ty)| BindArg {
+                input: false,
+                name: name.into(),
+                ty: Some(TypeExpr::Name(ty.into())),
+            })
+            .to_vec();
+        let src = terms(a).next().ok_or(Skip)?;
+        let mut out = self.table_body(
+            &mut rc,
+            &src,
+            crate::tables::STACK_CONFIG,
+            cols,
+            vec![path.clone(), value.clone()],
+            &mut body,
+        )?;
+        self.check_bound(&rc, &body, &[])?;
+        out.push(Stmt::Rule(RuleStmt {
+            head: atom_at(
+                "arg",
+                vec![
+                    str_term("settings"),
+                    row,
+                    path,
+                    value,
+                    str_term(crate::transform::NORMAL),
+                ],
+                span,
+            ),
+            body,
+        }));
+        Ok(out)
+    }
+
+    /// A table's source, `FORMAT(PATH)` or `FORMAT(git(REPO, REF, PATH))`,
+    /// read into `body` and asked of its externs there, their outputs
+    /// `outs`; the extern declarations.
+    fn table_body(
+        &mut self,
+        rc: &mut Rc,
+        src: &SyntaxNode,
+        table: &str,
+        cols: Vec<BindArg>,
+        outs: Vec<Term>,
+        body: &mut Vec<Lit>,
+    ) -> L<Vec<Stmt>> {
+        let span = self.span(src);
+        let formats = crate::tables::FORMATS;
+        let bad = |l: &mut Self, what: &str| -> L<Vec<Stmt>> {
+            let d = Diagnostic::error(span, format!("{what}: a table's source is FORMAT(SOURCE)"))
+                .with_help(format!(
+                    "FORMAT is one of {}; SOURCE is a path, `\"data/p.csv\"`, or \
+                     `git(\"repo\", \"ref\", \"path\")`",
+                    formats.join(", ")
+                ));
+            l.diags.push(d);
+            Err(Skip)
+        };
+        let format = match (src.kind(), self.callee(src)) {
+            (CALL, Some(f)) if formats.contains(&f.as_str()) => f,
+            (CALL, Some(f)) => return bad(self, &format!("unknown format {f}")),
+            _ => return bad(self, "not a format"),
+        };
+        let args: Vec<SyntaxNode> = node(src, ARG_LIST)
+            .map(|l| terms(&l).collect())
+            .unwrap_or_default();
+        let [arg] = args.as_slice() else {
+            return bad(self, &format!("{format} takes one source"));
+        };
+        let git = arg.kind() == CALL && self.callee(arg).as_deref() == Some("git");
+        let parts: Vec<SyntaxNode> = if git {
+            node(arg, ARG_LIST)
+                .map(|l| terms(&l).collect())
+                .unwrap_or_default()
+        } else {
+            vec![arg.clone()]
+        };
+        if parts.len() != if git { 3 } else { 1 } {
+            return bad(self, "git takes a repository, a ref and a path");
+        }
+        let names: &[&str] = if git {
+            &["repo", "ref", "path"]
+        } else {
+            &["path"]
+        };
+        let mut given = Vec::new();
+        for (t, name) in parts.iter().zip(names) {
+            let t = self.term(rc, t, Pos::Content, body)?;
+            let v = var(&fresh(rc, &capitalise(name)));
+            body.push(Lit::Eq(v.clone(), t));
+            given.push(v);
+        }
+        let plus = |name: &str| BindArg {
+            input: true,
+            name: name.into(),
+            ty: None,
+        };
+        let mut out = Vec::new();
+        let (mut ins, mut args) = (Vec::new(), Vec::new());
+        if git {
+            let commit = var(&fresh(rc, "Commit"));
+            let name = crate::tables::extern_name("git", table);
+            body.push(Lit::Pos(atom_at(
+                &name,
+                vec![given[0].clone(), given[1].clone(), commit.clone()],
+                span,
+            )));
+            out.push(Stmt::ExternFn(ExternFn {
+                name,
+                args: vec![
+                    plus("repo"),
+                    plus("ref"),
+                    BindArg {
+                        input: false,
+                        name: "commit".into(),
+                        ty: None,
+                    },
+                ],
+                persist: false,
+                span,
+            }));
+            ins.extend([plus("repo"), plus("commit"), plus("path")]);
+            args.extend([given[0].clone(), commit, given[2].clone()]);
+        } else {
+            ins.push(plus("path"));
+            args.push(given[0].clone());
+        }
+        let at = var(&fresh(rc, "At"));
+        args.push(at);
+        args.extend(outs);
+        ins.push(BindArg {
+            input: false,
+            name: "at".into(),
+            ty: None,
+        });
+        ins.extend(cols);
+        let name = crate::tables::extern_name(&format, table);
+        body.push(Lit::Pos(atom_at(&name, args, span)));
+        out.push(Stmt::ExternFn(ExternFn {
+            name,
+            args: ins,
+            persist: false,
+            span,
+        }));
         Ok(out)
     }
 

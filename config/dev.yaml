@@ -1,0 +1,4 @@
+# dform[env=dev]'s settings (dev has no @default layer).
+network:
+  main:
+    vpc_net: 10.90.0.0/16

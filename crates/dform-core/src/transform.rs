@@ -66,6 +66,8 @@ pub fn lower(program: &Program) -> Result<Lowered> {
     let expanded = desugar_resources(&expanded)?;
     let expanded = desugar_comprehensions(&expanded)?;
     let mut expanded = declassified(lower_contributions(&expanded)?);
+    // A stack's config contributes per settings path the program knows.
+    expanded = crate::tables::expand_config(expanded);
     crate::externs::check(&expanded, &extern_fns)?;
     // The cells of secret inputs and outputs, for the Redactor.
     let secret_inputs = inputs

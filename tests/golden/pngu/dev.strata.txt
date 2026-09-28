@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== pngu.df: 154 nodes, 386 edges (269 negative)
+== pngu.df: 155 nodes, 387 edges (270 negative)
    STRATIFIED, 4 strata
    stratum 0:
      (arg, input, env)
@@ -28,9 +28,9 @@ exit: ok
      file.json
      identity
      input
-     peering
      resolve
      resolved
+     table.csv.peering
      world_attr
    stratum 1:
      (arg, compute.vm, id)
@@ -58,6 +58,7 @@ exit: ok
      (attr, settings, project_name)
      (attr, settings, region)
      (attr, settings, regional_proxy_cidr)
+     peering
    stratum 2:
      (arg, alert_metrics_pack, enable_standard_gke_alerts)
      (arg, alert_metrics_pack, notification_channel_display_name)

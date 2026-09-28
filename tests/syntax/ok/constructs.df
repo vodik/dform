@@ -6,6 +6,8 @@ import "../../../modules/iam.df"
 
 decl provided/2
 input relation seen/2 from file("seen.facts")
+input relation peers(env: enum("dev", "prod"), name: string) from csv("peers.csv")
+input relation pinned(name: string) from yaml(git("ops.git", "main", "pinned.yaml"))
 input relation: string = "an input named relation"
 decl project(id: int, network_name: string)
 

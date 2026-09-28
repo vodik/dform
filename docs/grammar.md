@@ -190,6 +190,8 @@ stack      := "stack" DOTTED ("[" NAME ("," NAME)* "]")? block  ; `[` glued to t
 import     := "import" STRING
 input      := "input" NAME ":" type ("=" term)? ("where" body1)?
 inputrel   := "input" "relation" NAME "/" INT "from" term   ; file(STRING) | git(STRING, STRING, STRING)
+            | "input" "relation" NAME columns "from" term  ; FORMAT(PATH) | FORMAT(git(REPO, REF, PATH))
+columns    := "(" NAME ":" type ("," NAME ":" type)* ","? ")"
 output     := "output" NAME (":" type | "=" term)           ; type may be a resource type
 export     := "export" NAME "/" INT
 contributes:= "contributes" chain       ; `p`, `_.path`, `settings.path`, `TYPE.path`
@@ -200,7 +202,7 @@ attrs      := "{" (attrdecl SEP)* "}"
 attrdecl   := blockpath ":" (attrs | type flag* ("where" body1)?)
 flag       := "required" | "computed" | "id" | "sensitive" | "nullable"
 decl       := "decl" DOTTED "/" INT "mixed"?
-            | "decl" DOTTED "(" NAME ":" type ("," NAME ":" type)* ")"
+            | "decl" DOTTED columns
             | "decl" "type" DOTTED "open"
 let        := "let" NAME "=" chain
 
@@ -255,6 +257,45 @@ the comma are free, and `fmt` prints `stack app[env, region]`. The key
 lowers to nothing: it is read by `stack::config` and decides where a run's
 state lives. For tree-sitter: the stack statement takes an optional key
 after its name, `"[" NAME ("," NAME)* "]"`, before the block.
+
+A stack's `config = FORMAT(SOURCE)` is not a constant: it is a table of
+the deployment's settings (see "Tables"), and needs a key.
+
+### Tables
+
+`input relation p(col: type, ...) from FORMAT(SOURCE)` is a table: its
+rows are a data file's. FORMAT is `csv`, `json`, `yaml` or `toml`; SOURCE
+is a term for the path (a string, holes allowed: a hole is a content
+position, so it reads now) or `git(REPO, REF, PATH)`, each a term. A column
+type is an input's type (`inputs::check_type`), never `secret`. Like `p/N`,
+a table is at the top of the program. `fmt` glues the `(` to the name.
+`p/N` and `p(` share the statement: after the name, `/` is a fact file's
+relation and `(` a table's columns; anything else is "expected `/` or
+`(`". For tree-sitter: the name is followed by `"/" INT` or by `"("
+field_declaration ("," field_declaration)* ","? ")"`.
+
+It lowers to externs (`src/tables.rs`), the source its bound inputs:
+
+```
+decl p(col, ...)
+extern table.FORMAT.p(+path, -at, -col: type, ...)
+p(Col, ...) :- reads, Path = PATH', table.FORMAT.p(Path, At, Col, ...)
+```
+
+and from git, the ref resolved to a commit first:
+
+```
+extern table.git.p(+repo, +ref, -commit)
+p(Col, ...) :- reads, Repo = .., Ref = .., Path = .., table.git.p(Repo, Ref, Commit),
+               table.FORMAT.p(Repo, Commit, Path, At, Col, ...)
+```
+
+A stack's `config = FORMAT(SOURCE)` is the table `stack.config(path: string,
+value: any)`, read into `arg("settings", Row, Path, Value, normal)`, `Row`
+the key's value (several keys': `format("%s/%s", ..)`). `transform` expands
+that rule into one per settings path the program writes or reads (a
+variable path would make every settings cell one partition), and a deny for
+a leaf at any other path.
 
 ### Block names
 
@@ -358,6 +399,8 @@ are unchanged.
 | `output k = t` (no reads)                 | `output k = t'`                                        |
 | `output k = t` (with reads)               | `output(k, t') :- reads`                               |
 | `decl p(a: t, b_c: t)`                    | record fields `a`, `b_c`                               |
+| `input relation p(c: t) from F(S)`        | `p(C) :- reads, Path = S', table.F.p(Path, At, C)` ("Tables") |
+| `stack s[k] { config = F(S) }`            | `arg("settings", K, P, V, normal) :- .., table.F.stack.config(.., P, V)` |
 | `enum("a", "b")` in a type                | `enum(a, b)`                                           |
 | `"a{e}b"`                                 | `format("a%sb", e')`                                   |
 | `k` (value name)                          | `V`, reading `k(V)`                                    |
@@ -395,7 +438,8 @@ default at `@default`, a top-level input also takes `--set`, a pack's body
 is lowered once and its predicates are private unless granted,
 `import "f.df"` inlines the file once, `extern p(+a, -b) persist` is asked
 on demand, `input relation p/N from S` is read from outside and re-read
-when it changes, `decl p/N mixed` lets `p/N` have both facts and rules, and
+when it changes, `input relation p(c: t) from F(S)` is a table (see
+"Tables"), `decl p/N mixed` lets `p/N` have both facts and rules, and
 `declassify(v, "reason")` lowers a secret's label (E DR-19).
 
 A refinement (`where`) names the attribute or input by its own name, as

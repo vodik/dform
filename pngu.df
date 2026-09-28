@@ -22,9 +22,6 @@ edition 2026
 # The file provider answers file.json once its path is known.
 extern file.json(+path, -value)
 
-# Keep decl for true relational tables.
-decl peering(env: string, name: string, peer_network: string)
-
 ########################################
 # Environment selection
 ########################################
@@ -91,18 +88,12 @@ settings prod {
 let cfg = settings[env]
 
 ########################################
-# Peerings (explicit env-keyed table)
+# Peerings (a table: one row per peering, every env's)
 ########################################
 
-# dev
-peering{ env: "dev", name: "envoy-dev", peer_network: "projects/envoy-dev-426188/global/networks/envoy-dev-network" }
-
-# stg
-peering{ env: "stg", name: "envoy-stg", peer_network: "projects/envoy-stg-597462/global/networks/envoy-stg-network" }
-peering{ env: "stg", name: "envoy-stg-legacy", peer_network: "projects/coherentpath-stg/global/networks/envoy-proxy-stg" }
-
-# prod
-peering{ env: "prod", name: "envoy-prod-legacy", peer_network: "projects/coherentpath-prod/global/networks/envoy-proxy-prod" }
+# The rows are data/peerings.csv's, typed column by column: a row whose env
+# is not one of these is an error naming its line.
+input relation peering(env: enum("dev", "stg", "prod"), name: string, peer_network: string) from csv("data/peerings.csv")
 
 ########################################
 # Validation

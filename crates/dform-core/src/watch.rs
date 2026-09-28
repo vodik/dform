@@ -168,14 +168,9 @@ fn git(repo: &Path, args: &[&str]) -> Result<String> {
 /// What changes when a source's facts may have: a digest of a file's
 /// contents (a missing file stamps as missing), the commit a git ref names.
 pub fn stamp(s: &Source) -> String {
-    use std::hash::{Hash, Hasher};
     match s {
         Source::File(p) => match std::fs::read(p) {
-            Ok(bytes) => {
-                let mut h = std::hash::DefaultHasher::new();
-                bytes.hash(&mut h);
-                format!("{:016x}", h.finish())
-            }
+            Ok(bytes) => digest(&bytes),
             Err(_) => "missing".into(),
         },
         Source::Git { repo, rev, .. } => {
@@ -188,6 +183,14 @@ pub fn stamp(s: &Source) -> String {
             }
         }
     }
+}
+
+/// A file's stamp: a digest of its contents.
+pub fn digest(bytes: &[u8]) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::hash::DefaultHasher::new();
+    bytes.hash(&mut h);
+    format!("{:016x}", h.finish())
 }
 
 /// The facts every relation's source holds now, stated where the source

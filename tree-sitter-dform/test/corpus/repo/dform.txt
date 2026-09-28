@@ -11,11 +11,12 @@ dform.df
 
 edition 2026
 
-# The provider the mock plays, and the stack this program owns: its state is
-# .dform/dform/ (the default backend, local(".dform/dform")). Strict: a plan
-# that needs a phase boundary is refused; fresh nulls (ids) still flow.
+# The provider, and the stack, keyed by env: dform[env=prod]'s state is .dform/dform/env=prod/.
+# Strict: a plan needing a phase boundary is refused (fresh nulls still flow).
+# Isolated: each env deploys into its own account, so iam's fixed names do not collide.
+# Config: each env's settings are config/{env}.yaml's, a leaf per contribution.
 provider fake { source = "providers/fake" }
-stack dform { unknowns = "strict" }
+stack dform[env] { unknowns = "strict", isolated = true, config = yaml("config/{env}.yaml") }
 
 # Typed stack input with a default. The default is a @default contribution
 # to input env; --set env=prod is a normal contribution and wins.
@@ -30,28 +31,18 @@ when env == "prod" {
 }
 
 # Settings (branch as data). One @default layer for every environment that
-# has one; a per-environment block wins per leaf at the normal rank.
+# has one; each environment's config/{env}.yaml (the stack's config) wins
+# per leaf at the normal rank. A CIDR is a string there, made an inet where
+# it is used.
 env_name("staging")
 env_name("prod")
 
 settings e @default {
   for env_name(e)
-  network.main.vpc_net = inet("10.50.0.0/16")
-  network.peer.vpc_net = inet("10.60.0.0/16")
+  network.main.vpc_net = "10.50.0.0/16"
+  network.peer.vpc_net = "10.60.0.0/16"
   db = { backup_days: 3, multi_az: false }
   k8s = { private_api: false, nodepool: { min: 1, max: 3 } }
-}
-
-settings prod {
-  network.main.vpc_net = inet("10.20.0.0/16")
-  network.peer.vpc_net = inet("10.21.0.0/16")
-  db = { backup_days: 14, multi_az: true }
-  k8s = { private_api: true, nodepool: { min: 3, max: 10 } }
-  audit.sinks += ["cloudwatch"] # a set: unions with the baseline pack's ["s3"]
-}
-
-settings dev {
-  network.main.vpc_net = inet("10.90.0.0/16")
 }
 
 # The settings of the selected environment, by name: every use reads env
@@ -71,11 +62,11 @@ apply stdlib_net
 # Instantiate modules (Terraform module-like). Inputs are declared by the
 # module; each `k = v` here is a contribution to one.
 instance network main {
-  vpc_net = cfg.network.main.vpc_net
+  vpc_net = inet(cfg.network.main.vpc_net)
 }
 
 instance network peer {
-  vpc_net = cfg.network.peer.vpc_net
+  vpc_net = inet(cfg.network.peer.vpc_net)
 }
 
 # Cross-instance values are wired through outputs.
@@ -112,7 +103,7 @@ resource net.vpc_peering "peer-{ia}-{ib}" {
 
 # Demo: allocate an IP from the main VPC.
 resource compute.vm bastion {
-  private_ip = inet_host(cfg.network.main.vpc_net, 20)
+  private_ip = inet_host(inet(cfg.network.main.vpc_net), 20)
 }
 
 # Constraints (policy)
@@ -157,6 +148,7 @@ scenario dev {
   (comment)
   (comment)
   (comment)
+  (comment)
   (provider
     (identifier)
     (block
@@ -168,12 +160,28 @@ scenario dev {
   (stack
     (dotted_name
       (identifier))
+    (identifier)
     (block
       (field
         (block_path
           (identifier))
         (string
-          (string_content)))))
+          (string_content)))
+      (field
+        (block_path
+          (identifier))
+        (true))
+      (field
+        (block_path
+          (identifier))
+        (call
+          (identifier)
+          (arguments
+            (string
+              (string_content)
+              (interpolation
+                (identifier))
+              (string_content)))))))
   (comment)
   (comment)
   (input
@@ -225,6 +233,8 @@ scenario dev {
               (string_content)))))))
   (comment)
   (comment)
+  (comment)
+  (comment)
   (fact
     (call
       (identifier)
@@ -253,21 +263,15 @@ scenario dev {
           (identifier)
           (identifier)
           (identifier))
-        (call
-          (identifier)
-          (arguments
-            (string
-              (string_content)))))
+        (string
+          (string_content)))
       (field
         (block_path
           (identifier)
           (identifier)
           (identifier))
-        (call
-          (identifier)
-          (arguments
-            (string
-              (string_content)))))
+        (string
+          (string_content)))
       (field
         (block_path
           (identifier))
@@ -294,76 +298,6 @@ scenario dev {
               (object_field
                 (identifier)
                 (integer))))))))
-  (settings
-    (identifier)
-    (block
-      (field
-        (block_path
-          (identifier)
-          (identifier)
-          (identifier))
-        (call
-          (identifier)
-          (arguments
-            (string
-              (string_content)))))
-      (field
-        (block_path
-          (identifier)
-          (identifier)
-          (identifier))
-        (call
-          (identifier)
-          (arguments
-            (string
-              (string_content)))))
-      (field
-        (block_path
-          (identifier))
-        (object
-          (object_field
-            (identifier)
-            (integer))
-          (object_field
-            (identifier)
-            (true))))
-      (field
-        (block_path
-          (identifier))
-        (object
-          (object_field
-            (identifier)
-            (true))
-          (object_field
-            (identifier)
-            (object
-              (object_field
-                (identifier)
-                (integer))
-              (object_field
-                (identifier)
-                (integer))))))
-      (field
-        (block_path
-          (identifier)
-          (identifier))
-        (list
-          (string
-            (string_content))))
-      (comment)))
-  (settings
-    (identifier)
-    (block
-      (field
-        (block_path
-          (identifier)
-          (identifier)
-          (identifier))
-        (call
-          (identifier)
-          (arguments
-            (string
-              (string_content)))))))
   (comment)
   (comment)
   (let
@@ -402,13 +336,16 @@ scenario dev {
       (field
         (block_path
           (identifier))
-        (member_expression
-          (member_expression
+        (call
+          (identifier)
+          (arguments
             (member_expression
-              (identifier)
-              (identifier))
-            (identifier))
-          (identifier)))))
+              (member_expression
+                (member_expression
+                  (identifier)
+                  (identifier))
+                (identifier))
+              (identifier)))))))
   (instance
     (identifier)
     (identifier)
@@ -416,13 +353,16 @@ scenario dev {
       (field
         (block_path
           (identifier))
-        (member_expression
-          (member_expression
+        (call
+          (identifier)
+          (arguments
             (member_expression
-              (identifier)
-              (identifier))
-            (identifier))
-          (identifier)))))
+              (member_expression
+                (member_expression
+                  (identifier)
+                  (identifier))
+                (identifier))
+              (identifier)))))))
   (comment)
   (instance
     (identifier)
@@ -612,13 +552,16 @@ scenario dev {
         (call
           (identifier)
           (arguments
-            (member_expression
-              (member_expression
+            (call
+              (identifier)
+              (arguments
                 (member_expression
-                  (identifier)
-                  (identifier))
-                (identifier))
-              (identifier))
+                  (member_expression
+                    (member_expression
+                      (identifier)
+                      (identifier))
+                    (identifier))
+                  (identifier))))
             (integer))))))
   (comment)
   (check

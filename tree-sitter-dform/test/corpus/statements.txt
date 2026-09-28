@@ -6,7 +6,7 @@ edition 2026
 import "modules/network.df" as net
 provider fake { source = "providers/fake" }
 stack dform { unknowns = "strict" }
-stack app[env] {}
+stack app[env] { config = yaml("config/{env}.yaml") }
 stack renfry.app[env, region] { backend = "x" }
 
 --------------------------------------------------------------------------------
@@ -39,7 +39,18 @@ stack renfry.app[env, region] { backend = "x" }
     (dotted_name
       (identifier))
     (identifier)
-    (block))
+    (block
+      (field
+        (block_path
+          (identifier))
+        (call
+          (identifier)
+          (arguments
+            (string
+              (string_content)
+              (interpolation
+                (identifier))
+              (string_content)))))))
   (stack
     (dotted_name
       (identifier)
@@ -60,6 +71,8 @@ Declarations
 input env: enum("dev", "prod") = "dev"
 input replicas: int = 2 where replicas >= 1
 input relation seen/2 from file("seen.facts")
+input relation peers(env: enum("dev", "prod"), name: string) from csv("peers.csv")
+input relation pinned(name: string) from yaml(git("ops.git", "main", "pinned.yaml"))
 input relation: string = "an input named relation"
 extern file.json(+path, -value: string) persist
 decl p/2 mixed
@@ -104,6 +117,46 @@ let cfg = settings[env]
       (arguments
         (string
           (string_content)))))
+  (input_relation
+    (identifier)
+    (field_declaration
+      (identifier)
+      (type
+        (dotted_name
+          (identifier))
+        (string
+          (string_content))
+        (string
+          (string_content))))
+    (field_declaration
+      (identifier)
+      (type
+        (dotted_name
+          (identifier))))
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content)))))
+  (input_relation
+    (identifier)
+    (field_declaration
+      (identifier)
+      (type
+        (dotted_name
+          (identifier))))
+    (call
+      (identifier)
+      (arguments
+        (call
+          (identifier)
+          (arguments
+            (string
+              (string_content))
+            (string
+              (string_content))
+            (string
+              (string_content)))))))
   (input
     (identifier)
     (type

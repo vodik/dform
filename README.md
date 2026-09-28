@@ -936,6 +936,64 @@ value), so the next plan asks the provider again:
 dform taint p random.password app    # the next plan generates a new one
 ```
 
+## Tables
+
+A table is an input relation whose rows are a data file's, typed column by
+column:
+
+```dform
+input relation peering(env: enum("dev", "stg", "prod"), name: string, peer_network: string) from csv("data/peerings.csv")
+input relation pins(app: string, image: string) from yaml(git("ops.git", "env/{env}", "pins.yaml"))
+```
+
+The formats are `csv` (a header naming the columns), `json` and `yaml` (a
+list of objects), and `toml` (the rows as `[[peering]]` entries). A row has
+every column and nothing else; a cell is its column's type (a CSV cell is
+read as an `int`, a `bool` or an `inet` when the column is one, a string as
+an `inet` in any format), and a row that is not is an error naming the file
+and line: `data/peerings.csv:3: column env: "qa" is not enum(dev, stg,
+prod)`. A `secret` column is a compile error: rows are read in the clear.
+The loader never reshapes: transforms belong in rules. Paths are relative
+to the declaring file; `peering{env: e, name: n}` reads a row by its
+columns' names.
+
+A table is an extern (see "Externs"): the source, `path` or `git(repo, ref,
+path)` with holes (`{env}`), is its bound input, so rules may compute it; a
+source that reads the table's own rows is the extern-in-a-recursive-rule
+compile error. The rows are its answers: the plan file records them, and
+`apply PLAN` reads none again. `why` names each row's line, `fact,
+data/peerings.csv:3` (`ops.git@a9d0f11:pins.yaml:12` from git).
+
+A git source's ref is resolved to a commit first (a ref that names none is
+an error naming the repository and the ref, never an empty table), and the
+rows are read at that commit (a bare repository works). The plan file holds
+the commit, so `apply PLAN` applies what plan saw even when the branch has
+moved since. State keeps the commit each deployment was last applied from,
+and a plan whose ref names another commit says so before the plan:
+
+```
+pins: ops.git env/prod 3b1c7e0 -> a9d0f11
+```
+
+The controller watches what the last run's tables read: a changed file,
+or a ref that names another commit, is an input event (`input pins changed
+(git ops.git env/prod:pins.yaml)`).
+
+A keyed stack's `config` is a table of its settings, per deployment:
+
+```dform
+stack dform[env] { config = yaml("config/{env}.yaml") }
+```
+
+Every leaf of the document (a mapping; a CSV with the columns `path` and
+`value`) is a contribution at the normal rank to the settings row named by
+the key's value (several keys' joined by `/`), at the leaf's dotted path:
+`db: { backup_days: 14 }` in `config/prod.yaml` is `settings.prod.db.backup_days =
+14`, and wins over an `@default` layer per leaf. A leaf at a path the program
+neither writes nor reads is a deny naming the file and line (a typo).
+`dform.df`'s per-environment settings are `config/{env}.yaml`; its CIDRs
+are strings there, made inets by `inet(...)` where they are used.
+
 ## Escape hatches
 
 ### List membership
@@ -1203,7 +1261,8 @@ controller goes on watching; a failure of the first run ends it. Times are
 UTC. Every run re-reads and re-evaluates the whole program.
 
 Input relations feed facts from outside the program, re-read whenever
-their source changes; `plan` and `apply` read them too:
+their source changes (a table's too, see "Tables"); `plan` and `apply`
+read them too:
 
 ```dform
 input relation release/1 from file("release.facts")        # release(image)

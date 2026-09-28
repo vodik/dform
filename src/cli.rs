@@ -626,13 +626,18 @@ fn run_with(
             chaos: chaos_specs,
         },
     )?;
-    // Externs are asked on demand: of the file provider, else of the mock.
+    // Externs are asked on demand: a table's of its file, else of the file
+    // provider, else of the mock.
     let (no_program, no_fns) = (crate::ast::Program { statements: vec![] }, vec![]);
     let program_dir = files[0].parent().unwrap_or(Path::new("")).to_path_buf();
+    let tables = crate::tables::Tables::default();
     let externs = crate::externs::Externs::new(
         lowered.as_ref().map_or(&no_program, |l| &l.program),
         lowered.as_ref().map_or(&no_fns, |l| &l.extern_fns),
         |f, inputs| {
+            if let Some(r) = tables.answer(f, inputs) {
+                return r;
+            }
             if let Some(r) = crate::externs::file(f, inputs, &program_dir) {
                 return r;
             }
@@ -647,7 +652,7 @@ fn run_with(
     if let Some((_, saved)) = &saved {
         externs.preload(saved.externs.clone());
     }
-    externs.preload(st.externs.clone());
+    externs.preload_persisted(st.externs.clone());
 
     let mut base_extra = set_facts;
     base_extra.extend(build_extra_facts(&cli.data)?);
@@ -711,6 +716,16 @@ fn run_with(
     let moves = st.apply_moves(&zset::Lifecycle::from_facts(&res.facts, backend.schema())?.moved);
     if !moves.is_empty() {
         (res, violations) = evaluate(&st)?;
+    }
+    // The tables' sources, for the controller; a git table whose ref has
+    // moved since the deployment was last applied says so.
+    if let Some(h) = hook.as_deref_mut() {
+        h.tables(&tables.sources());
+    }
+    if matches!(cli.cmd, Cmd::Plan { .. } | Cmd::Apply { .. }) {
+        for m in crate::tables::moved(&st.externs, &externs.recorded()) {
+            println!("{m}");
+        }
     }
     // Policy messages quote values and rule text: printed redacted.
     // The collision lint of a keyed stack: a name every deployment writes
@@ -1548,6 +1563,7 @@ fn run_with(
                     // the evaluation refreshes). A --world fixture is not
                     // registered: everything stays beside the world file.
                     persist_externs(&mut st, &externs);
+                    crate::tables::record(&mut st.externs, &externs.recorded());
                     st.outputs = if crate::stack::has_outputs(&res.facts) {
                         crate::stack::outputs(&evaluate(&st)?.0.facts)
                     } else {
@@ -1878,8 +1894,12 @@ fn run_tests(
             let mut extra = inputs::set_facts(&lowered.inputs, &pairs)?;
             extra.extend(build_extra_facts(data)?);
             extra.extend(backend.catalog(schema::named_types(&lowered.program, &extra).as_ref())?);
+            let tables = crate::tables::Tables::default();
             let externs =
                 crate::externs::Externs::new(&lowered.program, &lowered.extern_fns, |f, ins| {
+                    if let Some(r) = tables.answer(f, ins) {
+                        return r;
+                    }
                     if let Some(r) = crate::externs::file(f, ins, &program_dir) {
                         return r;
                     }

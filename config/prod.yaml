@@ -1,0 +1,17 @@
+# dform[env=prod]'s settings: each leaf is a contribution to settings row
+# "prod" at the normal rank, over dform.df's @default layer.
+network:
+  main:
+    vpc_net: 10.20.0.0/16
+  peer:
+    vpc_net: 10.21.0.0/16
+db:
+  backup_days: 14
+  multi_az: true
+k8s:
+  private_api: true
+  nodepool:
+    min: 3
+    max: 10
+audit:
+  sinks: [cloudwatch] # a set: unions with the baseline pack's ["s3"]

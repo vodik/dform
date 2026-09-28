@@ -1,1 +1,1 @@
-tests/syntax/err/input_relation_arity.df:4:24: expected `/`, found `from`
+tests/syntax/err/input_relation_arity.df:4:24: expected `/` or `(`, found `from`

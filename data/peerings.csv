@@ -1,0 +1,5 @@
+env,name,peer_network
+dev,envoy-dev,projects/envoy-dev-426188/global/networks/envoy-dev-network
+stg,envoy-stg,projects/envoy-stg-597462/global/networks/envoy-stg-network
+stg,envoy-stg-legacy,projects/coherentpath-stg/global/networks/envoy-proxy-stg
+prod,envoy-prod-legacy,projects/coherentpath-prod/global/networks/envoy-proxy-prod

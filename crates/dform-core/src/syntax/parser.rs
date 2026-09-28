@@ -542,8 +542,15 @@ impl<'a> Parser<'a> {
                 .simple(INPUT_RELATION, |p| {
                     p.bump();
                     p.expect_word()?;
-                    p.expect(SLASH)?;
-                    p.expect(INT)?;
+                    // `p/N` (facts from a `.df` file) or `p(col: type, ...)`
+                    // (a table: rows from a data file).
+                    if p.at(L_PAREN) {
+                        p.columns()?;
+                    } else if p.eat(SLASH) {
+                        p.expect(INT)?;
+                    } else {
+                        return p.err_expected("`/` or `(`");
+                    }
                     if !p.at_contextual("from") {
                         return p.err_expected("`from`");
                     }
@@ -771,7 +778,12 @@ impl<'a> Parser<'a> {
         if !self.at(L_PAREN) {
             return self.err_expected("`/` or `(`");
         }
-        self.bump();
+        self.columns()
+    }
+
+    /// `(name: type, ...)`: a record's fields, a table's columns.
+    fn columns(&mut self) -> P {
+        self.expect(L_PAREN)?;
         self.with_nl(false, |p| {
             loop {
                 p.start(BIND_ARG);

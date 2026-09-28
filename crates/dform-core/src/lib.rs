@@ -31,6 +31,7 @@ pub mod stack;
 pub mod state;
 pub mod stuck;
 pub mod syntax;
+pub mod tables;
 pub mod transform;
 pub mod value;
 pub mod watch;

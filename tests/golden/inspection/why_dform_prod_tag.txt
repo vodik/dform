@@ -11,8 +11,8 @@ attr("net.vpc", "network.main::vpc", "tags", {component: "network", env: "prod",
   │         │    with V = "prod"
   │         │    └─ attr("input", "", "env", "prod")
   │         │         by Σattr: attribute aggregate (lub_ranked, E §2.5) over 2 contributions
-  │         │         ├─ arg("input", "", "env", "staging", "default")   fact, dform.df:18:1 (arg)   [rank default, owner dform.df:18:1 (arg)]
-  │         │         └─ arg("input", "", "env", "prod", "normal")   [rank normal, owner r5 (dform.df:18:1)]
+  │         │         ├─ arg("input", "", "env", "staging", "default")   fact, dform.df:19:1 (arg)   [rank default, owner dform.df:19:1 (arg)]
+  │         │         └─ arg("input", "", "env", "prod", "normal")   [rank normal, owner r5 (dform.df:19:1)]
   │         │              by r5: arg("input", "", "env", V, "normal") :- input("env", V)
   │         │              with V = "prod"
   │         │              └─ input("env", "prod")   input --set env=prod
@@ -21,15 +21,19 @@ attr("net.vpc", "network.main::vpc", "tags", {component: "network", env: "prod",
   │              with V = 10.20.0.0/16
   │              └─ attr("input", "network.main", "vpc_net", 10.20.0.0/16)
   │                   by Σattr: attribute aggregate (lub_ranked, E §2.5) over 1 contribution
-  │                   └─ arg("input", "network.main", "vpc_net", 10.20.0.0/16, "normal")   [rank normal, owner r20 (dform.df:70:3)]
-  │                        by r20: arg("input", "network.main", "vpc_net", VpcNet, "normal") :- env(Env), attr("settings", Env, "network.main.vpc_net", VpcNet)
-  │                        with Env = "prod", VpcNet = 10.20.0.0/16
-  │                        ├─ attr("settings", "prod", "network.main.vpc_net", 10.20.0.0/16)
-  │                        │    by Σattr: attribute aggregate (lub_ranked, E §2.5) over 2 contributions
-  │                        │    ├─ arg("settings", "prod", "network.main.vpc_net", 10.20.0.0/16, "normal")   fact, dform.df:42:3 (arg)   [rank normal, owner dform.df:42:3 (arg)]
-  │                        │    └─ arg("settings", "prod", "network.main.vpc_net", 10.50.0.0/16, "default")   [rank default, owner r7 (dform.df:35:3)]
-  │                        │         by r7: arg("settings", E, "network.main.vpc_net", inet("10.50.0.0/16"), "default") :- env_name(E)
-  │                        │         with E = "prod"
-  │                        │         └─ env_name("prod")   fact, dform.df:31:1 (env_name)
-  │                        └─ env("prod")   (see above)
+  │                   └─ arg("input", "network.main", "vpc_net", 10.20.0.0/16, "normal")   [rank normal, owner r20 (dform.df:61:3)]
+  │                        by r20: arg("input", "network.main", "vpc_net", inet(VpcNet), "normal") :- env(Env), attr("settings", Env, "network.main.vpc_net", VpcNet)
+  │                        with Env = "prod", VpcNet = "10.20.0.0/16"
+  │                        ├─ env("prod")   (see above)
+  │                        └─ attr("settings", "prod", "network.main.vpc_net", "10.20.0.0/16")
+  │                             by Σattr: attribute aggregate (lub_ranked, E §2.5) over 2 contributions
+  │                             ├─ arg("settings", "prod", "network.main.vpc_net", "10.50.0.0/16", "default")   [rank default, owner r7 (dform.df:38:3)]
+  │                             │    by r7: arg("settings", E, "network.main.vpc_net", "10.50.0.0/16", "default") :- env_name(E)
+  │                             │    with E = "prod"
+  │                             │    └─ env_name("prod")   fact, dform.df:34:1 (env_name)
+  │                             └─ arg("settings", "prod", "network.main.vpc_net", "10.20.0.0/16", "normal")   [rank normal, owner r100 (dform.df:15:58)]
+  │                                  by r100: arg("settings", Env, "network.main.vpc_net", Value, "normal") :- env(Env), Path1 = format("config/%s.yaml", Env), table.yaml.stack.config(Path1, At, "network.main.vpc_net", Value)
+  │                                  with At = "config/prod.yaml:5", Env = "prod", Path1 = "config/prod.yaml", Value = "10.20.0.0/16"
+  │                                  ├─ table.yaml.stack.config("config/prod.yaml", "config/prod.yaml:5", "network.main.vpc_net", "10.20.0.0/16")   fact, config/prod.yaml:5
+  │                                  └─ env("prod")   (see above)
   └─ ... 1 other contribution (--all)

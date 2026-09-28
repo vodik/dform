@@ -10,6 +10,8 @@ import "../../../modules/iam.df"
 
 decl provided/2
 input relation seen/2 from file("seen.facts")
+input relation peers(env: enum("dev", "prod"), name: string) from csv("peers.csv")
+input relation pinned(name: string) from yaml(git("ops.git", "main", "pinned.yaml"))
 input relation: string = "an input named relation"
 decl project(id: int, network_name: string)
 
@@ -75,6 +77,11 @@ w(v) if m.main.on_vpc(v)
 vpc_inst("main")
 x(i, a_) if vpc_inst(i), output(m[i], "vpc", a_)
 
+# A keyed stack: each value of its key is its own deployment.
+input tier: string = "dev"
+input region: string = "us-east1"
+stack app[tier, region] { unknowns = "permissive" }
+
 ---
 
 (source_file
@@ -99,6 +106,46 @@ x(i, a_) if vpc_inst(i), output(m[i], "vpc", a_)
       (arguments
         (string
           (string_content)))))
+  (input_relation
+    (identifier)
+    (field_declaration
+      (identifier)
+      (type
+        (dotted_name
+          (identifier))
+        (string
+          (string_content))
+        (string
+          (string_content))))
+    (field_declaration
+      (identifier)
+      (type
+        (dotted_name
+          (identifier))))
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content)))))
+  (input_relation
+    (identifier)
+    (field_declaration
+      (identifier)
+      (type
+        (dotted_name
+          (identifier))))
+    (call
+      (identifier)
+      (arguments
+        (call
+          (identifier)
+          (arguments
+            (string
+              (string_content))
+            (string
+              (string_content))
+            (string
+              (string_content)))))))
   (input
     (identifier)
     (type
@@ -608,4 +655,30 @@ x(i, a_) if vpc_inst(i), output(m[i], "vpc", a_)
               (identifier))
             (string
               (string_content))
-            (identifier)))))))
+            (identifier))))))
+  (comment)
+  (input
+    (identifier)
+    (type
+      (dotted_name
+        (identifier)))
+    (string
+      (string_content)))
+  (input
+    (identifier)
+    (type
+      (dotted_name
+        (identifier)))
+    (string
+      (string_content)))
+  (stack
+    (dotted_name
+      (identifier))
+    (identifier)
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content))))))

@@ -1,0 +1,11 @@
+tests/syntax/err/table_source.df:4:36: input relation token: column value is a secret
+  note: a table's rows are read in the clear and recorded in the plan file; a secret comes from a secret input or a `persist` extern
+tests/syntax/err/table_source.df:5:41: unknown format xml: a table's source is FORMAT(SOURCE)
+  help: FORMAT is one of csv, json, yaml, toml; SOURCE is a path, `"data/p.csv"`, or `git("repo", "ref", "path")`
+tests/syntax/err/table_source.df:6:40: git takes a repository, a ref and a path: a table's source is FORMAT(SOURCE)
+  help: FORMAT is one of csv, json, yaml, toml; SOURCE is a path, `"data/p.csv"`, or `git("repo", "ref", "path")`
+tests/syntax/err/table_source.df:7:34: input relation dup: two columns are named name
+tests/syntax/err/table_source.df:8:21: input relation typo: column name: unknown type strng
+tests/syntax/err/table_source.df:11:3: an input relation belongs at the top of the program
+tests/syntax/err/table_source.df:15:13: stack app has no key: its config would be every deployment's
+  help: key it by the inputs that name a deployment, `stack app[env]`, or state the settings in the program

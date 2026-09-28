@@ -117,7 +117,12 @@ fn space(prev: &SyntaxToken, cur: &SyntaxToken) -> &'static str {
     }
     // Calls, atoms, type applications, declarations and records hug their
     // name.
-    if c == L_PAREN && matches!(cp, Some(ARG_LIST | TYPE_EXPR | DECL | EXTERN)) {
+    if c == L_PAREN
+        && matches!(
+            cp,
+            Some(ARG_LIST | TYPE_EXPR | DECL | EXTERN | INPUT_RELATION)
+        )
+    {
         return "";
     }
     if c == L_BRACE && cp == Some(RECORD_ATOM) {

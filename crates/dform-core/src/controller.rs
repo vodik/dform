@@ -88,8 +88,13 @@ struct Memo {
 /// The controller's part of a run (see the module doc).
 #[derive(Default)]
 pub struct Hook {
-    /// The stack's input relations, from the last run.
+    /// The stack's input relations, from the last run, and the sources its
+    /// tables read.
     pub relations: Vec<Relation>,
+    /// The `input relation p/N` declarations of this run.
+    declared: Vec<Relation>,
+    /// The sources the last run's tables read (`tables::Tables::sources`).
+    tables: Vec<Relation>,
     world: Option<PathBuf>,
     memo_path: Option<PathBuf>,
     memo: Option<Memo>,
@@ -169,12 +174,30 @@ fn drops_stamp(dir: &Path) -> String {
 impl Hook {
     /// The run has read its input relations: stamp them (before reading, so
     /// a change during the run is seen by the next one).
+    /// The last run's tables are stamped as their sources are now: a
+    /// table whose file changed, or whose ref names another commit, is an
+    /// input event.
     pub fn inputs(&mut self, relations: &[Relation]) {
-        self.relations = relations.to_vec();
-        self.input_stamps = relations
-            .iter()
-            .map(|r| (r.pred.clone(), watch::stamp(&r.source)))
-            .collect();
+        self.declared = relations.to_vec();
+        self.relations = [relations, &self.tables].concat();
+        self.input_stamps = stamps(&self.relations, |r| watch::stamp(&r.source));
+    }
+
+    /// The run has read its tables: the sources, each with its stamp as
+    /// read (the digest of the file, the commit the ref named).
+    pub fn tables(&mut self, read: &[(Relation, String)]) {
+        self.tables = read.iter().map(|(r, _)| r.clone()).collect();
+        self.relations = [&self.declared[..], &self.tables].concat();
+        let now = stamps(&self.relations, |r| {
+            match read
+                .iter()
+                .find(|(t, _)| t.pred == r.pred && t.source == r.source)
+            {
+                Some((_, s)) => s.clone(),
+                None => watch::stamp(&r.source),
+            }
+        });
+        self.input_stamps.extend(now);
     }
 
     /// The run knows where the stack lives: load the memo, say what
@@ -198,12 +221,15 @@ impl Hook {
         let event = match &memo {
             None => Event::Start,
             Some(m) => {
-                let changed: Vec<String> = self
+                let mut changed: Vec<String> = self
                     .relations
                     .iter()
                     .filter(|r| m.inputs.get(&r.pred) != self.input_stamps.get(&r.pred))
                     .map(|r| r.pred.clone())
                     .collect();
+                // A table that read several sources is one relation.
+                let mut seen = BTreeSet::new();
+                changed.retain(|p| seen.insert(p.clone()));
                 if !changed.is_empty() {
                     // One line per source: its relations changed together.
                     let mut by_source: BTreeMap<&watch::Source, Vec<&str>> = BTreeMap::new();
@@ -551,11 +577,28 @@ impl Hook {
                 .drop_dir
                 .as_deref()
                 .is_some_and(|d| memo.drops != drops_stamp(d))
-            || self
-                .relations
+            || stamps(&self.relations, |r| watch::stamp(&r.source))
                 .iter()
-                .any(|r| memo.inputs.get(&r.pred) != Some(&watch::stamp(&r.source)))
+                .any(|(p, s)| memo.inputs.get(p) != Some(s))
     }
+}
+
+/// Per relation, the stamps of its sources (a table may read several).
+fn stamps(relations: &[Relation], stamp: impl Fn(&Relation) -> String) -> BTreeMap<String, String> {
+    let mut out: BTreeMap<String, Vec<(&watch::Source, String)>> = BTreeMap::new();
+    for r in relations {
+        out.entry(r.pred.clone())
+            .or_default()
+            .push((&r.source, stamp(r)));
+    }
+    out.into_iter()
+        .map(|(p, mut xs)| {
+            xs.sort();
+            xs.dedup();
+            let s: Vec<String> = xs.into_iter().map(|(_, s)| s).collect();
+            (p, s.join(","))
+        })
+        .collect()
 }
 
 fn str_of(t: &Term) -> Option<&str> {

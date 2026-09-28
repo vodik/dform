@@ -132,7 +132,11 @@ fn given_leaf(a: &Atom, externs: &BTreeSet<crate::ast::Extern>, tick: Option<usi
             }
         }
         p if p.starts_with("type_") => Leaf::Schema { span: text },
-        p if externs.iter().any(|e| e.pred == p) => Leaf::Extern { call: text },
+        // A table's row: stated where its file states it.
+        p if externs.iter().any(|e| e.pred == p) => match crate::tables::at(a) {
+            Some(span) => Leaf::Base { span },
+            None => Leaf::Extern { call: text },
+        },
         _ => Leaf::World { event: text },
     }
 }

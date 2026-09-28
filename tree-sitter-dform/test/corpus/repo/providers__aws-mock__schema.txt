@@ -16,6 +16,8 @@ providers/aws-mock/schema.df
 #     bucket's name replaces the object, as the provider's RequiresReplace does.
 #   - type_replace: an instance's replacement is created first; a bucket's
 #     name is global, so the old bucket is destroyed first.
+#   - name_like: a name_prefix names the object in the account, as `name`
+#     and `bucket` do; a keyed stack's deployments must not share one.
 #
 # Every type has tags (optional) and tags_all (computed: tags merged with the
 # provider's default_tags). ids and arns are computed; ids are fresh.
@@ -79,7 +81,7 @@ type_attr("aws_security_group", "tags", "map", [])
 type_attr("aws_security_group", "tags_all", "map", ["computed"])
 type_attr("aws_security_group", "name", "string", ["optional_computed"])
 type_mint("aws_security_group", "name", "terraform-{{hash}}")
-type_attr("aws_security_group", "name_prefix", "string", ["optional_computed"])
+type_attr("aws_security_group", "name_prefix", "string", ["optional_computed", "name_like"])
 type_attr("aws_security_group", "description", "string", [])
 type_attr("aws_security_group", "vpc_id", "string", ["optional_computed"])
 type_mint("aws_security_group", "vpc_id", "vpc-default")
@@ -152,7 +154,7 @@ type_attr("aws_iam_role", "tags", "map", [])
 type_attr("aws_iam_role", "tags_all", "map", ["computed"])
 type_attr("aws_iam_role", "name", "string", ["optional_computed"])
 type_mint("aws_iam_role", "name", "terraform-{{hash}}")
-type_attr("aws_iam_role", "name_prefix", "string", ["optional_computed"])
+type_attr("aws_iam_role", "name_prefix", "string", ["optional_computed", "name_like"])
 type_attr("aws_iam_role", "assume_role_policy", "string", ["required"])
 type_attr("aws_iam_role", "path", "string", [])
 type_attr("aws_iam_role", "description", "string", [])
@@ -174,7 +176,7 @@ type_attr("aws_iam_policy", "tags", "map", [])
 type_attr("aws_iam_policy", "tags_all", "map", ["computed"])
 type_attr("aws_iam_policy", "name", "string", ["optional_computed"])
 type_mint("aws_iam_policy", "name", "terraform-{{hash}}")
-type_attr("aws_iam_policy", "name_prefix", "string", ["optional_computed"])
+type_attr("aws_iam_policy", "name_prefix", "string", ["optional_computed", "name_like"])
 type_attr("aws_iam_policy", "policy", "string", ["required"])
 type_attr("aws_iam_policy", "path", "string", [])
 type_attr("aws_iam_policy", "description", "string", [])
@@ -267,7 +269,7 @@ type_attr("aws_lb", "arn", "string", ["computed"])
 type_mint("aws_lb", "arn", "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/{{name}}/{{hash}}")
 type_attr("aws_lb", "name", "string", ["optional_computed"])
 type_mint("aws_lb", "name", "tf-lb-{{hash}}")
-type_attr("aws_lb", "name_prefix", "string", ["optional_computed"])
+type_attr("aws_lb", "name_prefix", "string", ["optional_computed", "name_like"])
 type_attr("aws_lb", "internal", "bool", ["optional_computed"])
 type_mint("aws_lb", "internal", false)
 type_attr("aws_lb", "load_balancer_type", "string", [])
@@ -351,6 +353,8 @@ type_mint("aws_eip", "private_ip", "10.0.1.{{n}}")
 ---
 
 (source_file
+  (comment)
+  (comment)
   (comment)
   (comment)
   (comment)
@@ -1021,6 +1025,8 @@ type_mint("aws_eip", "private_ip", "10.0.1.{{n}}")
           (string_content))
         (list
           (string
+            (string_content))
+          (string
             (string_content))))))
   (fact
     (call
@@ -1854,6 +1860,8 @@ type_mint("aws_eip", "private_ip", "10.0.1.{{n}}")
           (string_content))
         (list
           (string
+            (string_content))
+          (string
             (string_content))))))
   (fact
     (call
@@ -2100,6 +2108,8 @@ type_mint("aws_eip", "private_ip", "10.0.1.{{n}}")
         (string
           (string_content))
         (list
+          (string
+            (string_content))
           (string
             (string_content))))))
   (fact
@@ -3145,6 +3155,8 @@ type_mint("aws_eip", "private_ip", "10.0.1.{{n}}")
         (string
           (string_content))
         (list
+          (string
+            (string_content))
           (string
             (string_content))))))
   (fact

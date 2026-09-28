@@ -175,12 +175,15 @@ export default grammar({
       optional($.where_clause),
     ),
 
+    // `p/N` (facts from a .df file) or `p(col: type, ...)` (a table).
     input_relation: $ => seq(
       'input',
       'relation',
       field('name', $._word),
-      '/',
-      field('arity', $.integer),
+      choice(
+        seq('/', field('arity', $.integer)),
+        seq('(', commaSep1($.field_declaration), optional(','), ')'),
+      ),
       'from',
       field('source', $._term),
     ),
