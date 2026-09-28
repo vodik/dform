@@ -8,9 +8,10 @@
 edition 2026.
 
 # The provider the mock plays, and the stack this program owns: its state is
-# .dform/dform/ (the default backend, local(".dform/dform")).
+# .dform/dform/ (the default backend, local(".dform/dform")). Strict: a plan
+# that needs a phase boundary is refused; fresh nulls (ids) still flow.
 provider fake { source = "providers/fake" }.
-stack dform {}.
+stack dform { unknowns = strict }.
 
 # Typed stack input with a default. The default is a @default contribution
 # to input env; --set env=prod is a normal contribution and wins.

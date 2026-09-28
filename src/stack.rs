@@ -317,3 +317,47 @@ pub fn outputs(facts: &std::collections::BTreeSet<crate::ast::Atom>) -> BTreeMap
         })
         .collect()
 }
+
+/// Why a strict stack refuses a plan: every pending group, undetermined
+/// policy and deformation held on a null, and, when none of those explains
+/// it, every stuck derivation. Empty: the plan is one tick, fresh nulls and
+/// all.
+pub fn strict_refusals(
+    stuck: &[crate::stuck::Stuck],
+    sections: &crate::stuck::Sections,
+) -> Vec<String> {
+    let mut out: Vec<String> = sections
+        .pending_groups
+        .iter()
+        .map(|g| format!("pending group {g}"))
+        .collect();
+    out.extend(
+        sections
+            .undetermined
+            .iter()
+            .map(|u| format!("undetermined {u}")),
+    );
+    out.extend(sections.pending.iter().map(|((t, a), on)| {
+        let on: Vec<String> = on.iter().map(|n| format!("?{n}")).collect();
+        format!("{t}.{a} waits on {}", on.join(" "))
+    }));
+    if out.is_empty() {
+        out.extend(
+            stuck
+                .iter()
+                .map(|s| format!("stuck on {}: {}", s.nulls_text(), s.text)),
+        );
+    }
+    out
+}
+
+/// The refusal as the plan prints it.
+pub fn refusal_text(stack: &str, reasons: &[String]) -> String {
+    let mut out = format!(
+        "refused: stack {stack} is strict (unknowns = strict) and this plan needs a phase boundary:\n"
+    );
+    for r in reasons {
+        out.push_str(&format!("- {r}\n"));
+    }
+    out
+}

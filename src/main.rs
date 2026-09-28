@@ -440,6 +440,18 @@ fn run() -> Result<()> {
             Err(_) => res,
         }
     };
+    // A strict stack refuses a plan that needs a phase boundary (redacted:
+    // the reasons quote rule text).
+    let refusals = |res: &engine::EvalResult, sections: &stuck::Sections| -> Vec<String> {
+        if stack_cfg.unknowns != dform::stack::Unknowns::Strict {
+            return Vec::new();
+        }
+        let redact = query::Redactor::new(&res.facts, backend.schema());
+        dform::stack::strict_refusals(&res.stuck, sections)
+            .iter()
+            .map(|r| redact.text(r))
+            .collect()
+    };
     let report_of = |plan: &dform::provider::Plan,
                      res: &engine::EvalResult,
                      sections: &stuck::Sections,
@@ -561,12 +573,23 @@ fn run() -> Result<()> {
                 denies,
             } = plan_for(res, &violations, resources, &adopts, &lifecycle, &st)?;
             let report = report_of(&plan, &res, &sections, 1, &moves, &denies);
+            let refused = refusals(&res, &sections);
             if json {
-                println!("{}", serde_json::to_string_pretty(&report.json())?);
+                let mut doc = report.json();
+                if !refused.is_empty() {
+                    doc["refused"] = serde_json::json!(refused);
+                }
+                println!("{}", serde_json::to_string_pretty(&doc)?);
             } else {
                 print!("{}", report.text());
+                if !refused.is_empty() {
+                    print!("{}", dform::stack::refusal_text(&stack, &refused));
+                }
             }
             blocked(&[violations, denies].concat())?;
+            if !refused.is_empty() {
+                bail!("plan refused: stack {stack} is strict (unknowns = strict)");
+            }
             if let Some(out) = out {
                 let redact = query::Redactor::new(&res.facts, schema);
                 let mut deformations =
@@ -720,6 +743,13 @@ fn run() -> Result<()> {
                     println!("tick {tick}:");
                 }
                 show(&plan, &res, &sections, tick, &[], &denies);
+                let refused = refusals(&res, &sections);
+                if !refused.is_empty() {
+                    print!("{}", dform::stack::refusal_text(&stack, &refused));
+                    bail!(
+                        "apply refused at tick {tick}: stack {stack} is strict (unknowns = strict)"
+                    );
+                }
                 if !denies.is_empty() {
                     let redact = query::Redactor::new(&res.facts, backend.schema());
                     eprintln!("constraint violations:");

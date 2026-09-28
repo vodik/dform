@@ -176,6 +176,18 @@ and the sections follow in this order; what cannot be decided yet is said so:
   already has: the identity mapping is stale.
 - `stack NAME is undeformed`: nothing to do, nothing stuck (the only line).
 
+Strict mode. `stack NAME { unknowns = strict }` refuses a plan that needs a
+phase boundary, exactly Terraform's refusal: a pending group, an
+undetermined policy, a deformation held on a null, or any other stuck
+derivation. The plan still prints, then says why it refused (`refused:
+stack NAME is strict ...`, one line per reason, and a `refused` array in
+`plan --json`) and exits non-zero; `apply` refuses before its first Apply
+call. Fresh nulls still flow: a create whose document carries `?T/A#id`
+of a resource created in the same tick is definite, so single-phase plans
+pass. Strict is the expected default for production stacks (`dform.df`
+is strict); `permissive`, the default, is for controller mode and
+iterative development, where a two-phase plan applies tick by tick.
+
 `plan --json` prints the same report as one JSON document, the thing CI and
 editors consume: `stack`, `undeformed`, a `summary` of counts, then the
 sections as arrays in the order above (`definite`, `pending`,
