@@ -87,6 +87,29 @@ A `sensitive` computed value never leaves the provider: what dform sees, stores
 in consumers and prints is its label, `(sensitive T/N#Attr)`. A value at a
 `sensitive` path the program sets prints as `(sensitive)`.
 
+## Chaos: failure and latency injection
+
+`apply --chaos SPEC` (repeatable) makes the fake provider misbehave, the way a
+real cloud does. Deterministic: nothing sleeps and nothing is random. The world
+file keeps a `tick` counter; every `apply` is one tick.
+
+| SPEC | Effect |
+|------|--------|
+| `fail=T/N` | Apply of `T/N` fails before it reaches the world |
+| `timeout=T/N` | Apply of `T/N` takes effect, then times out: the world has it, state does not |
+| `read-lag=T/N:K` | Read (plan's refresh) returns nothing for `T/N` for `K` ticks after it is created |
+| `mutate=T/N:PATH=JSON` | after the tick, the world sets `T/N`'s `PATH` to `JSON` (drift) |
+| `latency=T/N:MS` | Apply of `T/N` is recorded as taking `MS`, reported, never slept |
+
+```bash
+cargo run -- apply --chaos fail=net.subnet/network.main::private-us-test-1a
+cargo run -- apply --chaos 'mutate=net.vpc/network.main::vpc:cidr="10.9.0.0/16"'
+```
+
+Addresses are `TYPE/NAME` and must name a resource of the stack. The world is
+saved after every action and state keeps every action that returned, so a
+failed apply leaves exactly what a real cloud would.
+
 ## dform model (current)
 
 - Core intent IR:

@@ -2,6 +2,7 @@ use anyhow::{Result, bail};
 use clap::{Parser, Subcommand};
 use dform::ast::Atom;
 use dform::ast::Term;
+use dform::chaos::Chaos;
 use dform::engine;
 use dform::fakecloud::FakeCloud;
 use dform::ir;
@@ -51,9 +52,20 @@ struct Cli {
 enum Cmd {
     Eval,
     Plan,
-    Apply,
-    Query { pred: String },
-    Show { typ: String, name: String },
+    Apply {
+        /// Inject a failure into the fake provider (repeatable):
+        /// fail=T/N, timeout=T/N, read-lag=T/N:TICKS, mutate=T/N:PATH=JSON,
+        /// latency=T/N:MS. Deterministic; nothing sleeps.
+        #[arg(long = "chaos")]
+        chaos: Vec<String>,
+    },
+    Query {
+        pred: String,
+    },
+    Show {
+        typ: String,
+        name: String,
+    },
 }
 
 fn main() -> Result<()> {
@@ -79,8 +91,13 @@ fn main() -> Result<()> {
         Some(w) => state::world_paths(&root, w),
         None => state::stack_paths(&root, &state::stack_name(&files[0])),
     };
+    let chaos = match &cli.cmd {
+        Cmd::Apply { chaos } => Chaos::parse(chaos)?,
+        _ => Chaos::default(),
+    };
     let backend =
-        FakeCloud::with_paths(&paths.world, &paths.inventory, load_schema(&cli.providers)?);
+        FakeCloud::with_paths(&paths.world, &paths.inventory, load_schema(&cli.providers)?)
+            .with_chaos(chaos.clone());
 
     let mut st = state::State::load(&paths.state)?;
     backend.bootstrap_state(&mut st)?;
@@ -133,16 +150,32 @@ fn main() -> Result<()> {
             let plan = backend.plan(&resources, &adopts, &st)?;
             print_plan(&plan, cli.show_noop);
         }
-        Cmd::Apply => {
+        Cmd::Apply { .. } => {
+            for addr in chaos.addresses() {
+                if !resources.iter().any(|r| &r.addr == addr) && st.get(addr).is_none() {
+                    bail!(
+                        "--chaos: {}/{} is not a resource of this stack",
+                        addr.typ,
+                        addr.name
+                    );
+                }
+            }
             let plan = backend.plan(&resources, &adopts, &st)?;
             print_plan(&plan, cli.show_noop);
             let changed = plan
                 .actions
                 .iter()
                 .any(|a| !matches!(a.kind, ActionKind::Noop));
+            // Every apply is one tick of the fake world, also when there is
+            // nothing to do. State keeps every action that returned, also
+            // when a later one fails.
+            let res = backend.apply(&resources, &adopts, &mut st, &plan);
+            st.save(&paths.state)?;
+            for note in backend.take_notes() {
+                println!("chaos: {note}");
+            }
+            res?;
             if changed {
-                backend.apply(&resources, &adopts, &mut st, &plan)?;
-                st.save(&paths.state)?;
                 println!("apply: complete");
             } else {
                 println!("apply: nothing to do");

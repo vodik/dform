@@ -14,6 +14,7 @@
 //! is its label, `{"$secret": "T/N#Attr"}`, and output prints it redacted.
 
 use crate::ast::{Atom, Term};
+use crate::chaos::Chaos;
 use crate::ir::{Address, Adopt, Resource};
 use crate::provider::{self, Action, ActionKind, Change, Plan, Provider};
 use crate::schema::Schema;
@@ -22,13 +23,21 @@ use crate::value::{NullClass, Value};
 use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as Json, json};
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RemoteState {
+    /// The world's clock: every apply is one tick. Chaos knobs count in ticks.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub tick: u64,
     pub resources: BTreeMap<String, RemoteResource>,
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -37,12 +46,19 @@ pub struct RemoteResource {
     pub name: String,
     pub attrs: Json,
     pub computed: Json,
+    /// Chaos `read-lag`: Read does not return this resource while the
+    /// world's tick is at most this.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hidden_until: Option<u64>,
 }
 
 pub struct FakeCloud {
     world: PathBuf,
     inventory: PathBuf,
     schema: Schema,
+    chaos: Chaos,
+    /// What chaos did during the last apply, for the CLI to print.
+    notes: RefCell<Vec<String>>,
 }
 
 fn key(typ: &str, name: &str) -> String {
@@ -145,7 +161,24 @@ impl FakeCloud {
             world: world.into(),
             inventory: inventory.into(),
             schema,
+            chaos: Chaos::default(),
+            notes: RefCell::new(Vec::new()),
         }
+    }
+
+    /// Inject failures and latency into Apply and Read (`apply --chaos`).
+    pub fn with_chaos(mut self, chaos: Chaos) -> Self {
+        self.chaos = chaos;
+        self
+    }
+
+    /// What chaos did during the last apply.
+    pub fn take_notes(&self) -> Vec<String> {
+        self.notes.take()
+    }
+
+    fn note(&self, s: String) {
+        self.notes.borrow_mut().push(s);
     }
 
     /// The provider's schema facts (`type_attr`, `type_list_key`,
@@ -336,9 +369,15 @@ impl FakeCloud {
         doc
     }
 
-    /// Refresh: the world as Read returns it.
+    /// Refresh: the world as Read returns it. A resource inside its chaos
+    /// read-lag is not returned.
     fn refresh(&self) -> Result<RemoteState> {
-        self.load()
+        let mut world = self.load()?;
+        let tick = world.tick;
+        world
+            .resources
+            .retain(|_, rr| rr.hidden_until.is_none_or(|h| tick > h));
+        Ok(world)
     }
 
     pub fn plan_with_state(
@@ -422,6 +461,10 @@ impl FakeCloud {
         Ok(Plan { actions })
     }
 
+    /// Apply the plan as one tick of the world. The world is saved after every
+    /// action (the cloud keeps what it did, whatever happens next); `state`
+    /// holds identity for every action that returned, also when a later one
+    /// fails.
     pub fn apply_with_state(
         &self,
         desired: &[Resource],
@@ -430,60 +473,101 @@ impl FakeCloud {
         state: &mut State,
     ) -> Result<()> {
         let mut world = self.load()?;
+        let res = self.apply_actions(&mut world, desired, plan, adopts, state);
+        self.end_tick(&mut world, state);
+        self.save(&world)?;
+        res
+    }
+
+    fn apply_actions(
+        &self,
+        world: &mut RemoteState,
+        desired: &[Resource],
+        plan: &Plan,
+        adopts: &[Adopt],
+        state: &mut State,
+    ) -> Result<()> {
         let inv = self.load_inventory()?;
         let adopt_map = state::adopt_map(adopts);
         let desired_by_addr: BTreeMap<Address, &Resource> =
             desired.iter().map(|r| (r.addr.clone(), r)).collect();
         let mut resolved: BTreeMap<Address, Json> = BTreeMap::new();
+        let mut clock = 0u64;
 
         for a in &plan.actions {
             let addr = &a.addr;
-            if let ActionKind::Delete = a.kind {
-                if let Some(entry) = state.get(addr) {
-                    world.resources.remove(&key(&addr.typ, &entry.remote));
-                    state.remove(addr);
-                    self.save(&world)?;
+            let at = format!("{}/{}", addr.typ, addr.name);
+            let doc = match a.kind {
+                ActionKind::Delete => Json::Null,
+                _ => {
+                    let r = desired_by_addr
+                        .get(addr)
+                        .ok_or_else(|| anyhow!("apply {at}: no desired resource"))?;
+                    let ctx = Ctx {
+                        world,
+                        inv: &inv,
+                        state,
+                        adopts: &adopt_map,
+                        resolved: &resolved,
+                        strict: (!matches!(a.kind, ActionKind::Noop)).then_some(addr),
+                    };
+                    let doc = self.resolve_doc(&ctx, r)?;
+                    resolved.insert(addr.clone(), doc.clone());
+                    doc
                 }
+            };
+            if matches!(a.kind, ActionKind::Noop) {
                 continue;
             }
-            let r = desired_by_addr
-                .get(addr)
-                .ok_or_else(|| anyhow!("apply {}/{}: no desired resource", addr.typ, addr.name))?;
-            let doc = {
-                let ctx = Ctx {
-                    world: &world,
-                    inv: &inv,
-                    state,
-                    adopts: &adopt_map,
-                    resolved: &resolved,
-                    strict: (!matches!(a.kind, ActionKind::Noop)).then_some(addr),
-                };
-                self.resolve_doc(&ctx, r)?
-            };
-            resolved.insert(addr.clone(), doc.clone());
+            if self.chaos.fail.contains(addr) {
+                bail!("apply {at}: injected failure (chaos fail={at})");
+            }
+            if let Some(ms) = self.chaos.latency.get(addr) {
+                clock += ms;
+                self.note(format!("latency {at}: {ms}ms (simulated, not slept)"));
+            }
+            // A timed-out call takes effect in the world, but dform never
+            // hears back: no identity is recorded.
+            let answered = !self.chaos.timeout.contains(addr);
             match a.kind {
-                ActionKind::Noop | ActionKind::Delete => continue,
+                ActionKind::Noop => {}
+                ActionKind::Delete => {
+                    if let Some(entry) = state.get(addr) {
+                        world.resources.remove(&key(&addr.typ, &entry.remote));
+                        if answered {
+                            state.remove(addr);
+                        }
+                    }
+                }
                 ActionKind::Create => {
                     let remote_name = addr.name.clone();
+                    let k = key(&addr.typ, &remote_name);
+                    if world.resources.contains_key(&k) {
+                        bail!("apply {at}: create failed: {k} already exists in the world");
+                    }
                     let computed = self.mint(&addr.typ, &remote_name, &doc);
+                    let hidden_until = self.chaos.read_lag.get(addr).map(|k| world.tick + k);
                     world.resources.insert(
-                        key(&addr.typ, &remote_name),
+                        k,
                         RemoteResource {
                             typ: addr.typ.clone(),
                             name: remote_name.clone(),
                             attrs: doc,
                             computed,
+                            hidden_until,
                         },
                     );
-                    state.set(addr.clone(), self.id().to_string(), remote_name);
+                    if answered {
+                        state.set(addr.clone(), self.id().to_string(), remote_name);
+                    }
                 }
                 ActionKind::Adopt => {
                     let Some(remote_name) = adopt_map.get(addr) else {
-                        bail!("adopt action missing adopt mapping");
+                        bail!("apply {at}: adopt action missing adopt mapping");
                     };
                     let k = key(&addr.typ, remote_name);
                     let Some(inv_rr) = inv.resources.get(&k) else {
-                        bail!("adopt requested but inventory missing {k}");
+                        bail!("apply {at}: adopt requested but inventory missing {k}");
                     };
                     let computed = inv_rr.computed.clone();
                     world.resources.insert(
@@ -493,17 +577,16 @@ impl FakeCloud {
                             name: remote_name.clone(),
                             attrs: doc,
                             computed,
+                            hidden_until: None,
                         },
                     );
-                    state.set(addr.clone(), self.id().to_string(), remote_name.clone());
+                    if answered {
+                        state.set(addr.clone(), self.id().to_string(), remote_name.clone());
+                    }
                 }
                 ActionKind::Update => {
                     let Some(entry) = state.get(addr) else {
-                        bail!(
-                            "apply {}/{}: update without a state entry",
-                            addr.typ,
-                            addr.name
-                        );
+                        bail!("apply {at}: update without a state entry");
                     };
                     let k = key(&addr.typ, &entry.remote);
                     let computed = match world.resources.get(&k) {
@@ -517,15 +600,52 @@ impl FakeCloud {
                             name: entry.remote.clone(),
                             attrs: doc,
                             computed,
+                            hidden_until: None,
                         },
                     );
                 }
             }
-            // The cloud keeps what it did, whatever happens next.
-            self.save(&world)?;
+            self.save(world)?;
+            if !answered {
+                bail!(
+                    "apply {at}: timed out waiting for the provider (chaos timeout={at}); \
+                     the change may have taken effect"
+                );
+            }
         }
-        self.save(&world)?;
+        if clock > 0 {
+            self.note(format!("simulated apply time: {clock}ms"));
+        }
         Ok(())
+    }
+
+    /// The tick ends: chaos mutations land, the clock advances, and a
+    /// read-lag that has run out is forgotten.
+    fn end_tick(&self, world: &mut RemoteState, state: &State) {
+        for (addr, path, v) in &self.chaos.mutate {
+            let at = format!("{}/{}", addr.typ, addr.name);
+            let remote = state
+                .get(addr)
+                .map(|e| e.remote.clone())
+                .unwrap_or_else(|| addr.name.clone());
+            match world.resources.get_mut(&key(&addr.typ, &remote)) {
+                Some(rr) => {
+                    set_path(&mut rr.attrs, path, v.clone());
+                    self.note(format!(
+                        "mutate {at}: {path} = {v} after tick {}",
+                        world.tick
+                    ));
+                }
+                None => self.note(format!("mutate {at}: skipped, not in the world")),
+            }
+        }
+        world.tick += 1;
+        let tick = world.tick;
+        for rr in world.resources.values_mut() {
+            if rr.hidden_until.is_some_and(|h| tick > h) {
+                rr.hidden_until = None;
+            }
+        }
     }
 
     /// What Apply returns for a new resource: every computed attribute of the

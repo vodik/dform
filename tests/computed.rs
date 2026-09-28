@@ -26,7 +26,12 @@ fn a_fresh_stack_carries_nulls_until_apply() {
     // Apply mints them per the schema, and a fresh apply is the fixture world.
     s.run(&["--file", prog, "--world", "w.json", "apply"])
         .success();
-    let got: serde_json::Value = serde_json::from_str(&s.read("w.json")).unwrap();
+    let mut got: serde_json::Value = serde_json::from_str(&s.read("w.json")).unwrap();
+    // The fixture predates the world's tick counter.
+    assert_eq!(
+        got.as_object_mut().unwrap().remove("tick"),
+        Some(serde_json::json!(1))
+    );
     let want: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(repo().join("examples/world/dform.json")).unwrap(),
     )
