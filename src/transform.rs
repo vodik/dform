@@ -1442,6 +1442,8 @@ pub fn rewrite_computed_refs(
     let mut n = 0usize;
     let mut out_rules = Vec::new();
     let mut out_facts = Vec::new();
+    // After every rule, so a rule's index (its id in `why`) does not move.
+    let mut dangling = Vec::new();
     let rules = facts
         .into_iter()
         .map(|f| RuleStmt {
@@ -1456,13 +1458,19 @@ pub fn rewrite_computed_refs(
             out_facts.push(head);
             continue;
         }
-        let mut body = rewrite_body_refs(r.body, schema, &mut n);
-        body.extend(head_reads.iter().cloned().map(Lit::Pos));
+        let body_only = rewrite_body_refs(r.body, schema, &mut n);
+        // A ref to an address no rule wants would make the attr join empty
+        // and the field vanish: it is a deny instead.
+        for (read, path) in &head_reads {
+            dangling.push(dangling_ref_deny(&head, read, path, body_only.clone()));
+        }
+        let mut body = body_only;
+        body.extend(head_reads.iter().map(|(read, _)| Lit::Pos(read.clone())));
         // The value is read now, but the order of Apply still follows the
         // ref: a contribution that reads another resource's attribute
         // depends on it (`ir::compile_resources` reads `__ref_dep`).
         if head.pred == "arg" && head.args.len() == 5 {
-            for read in &head_reads {
+            for (read, _) in &head_reads {
                 out_rules.push(RuleStmt {
                     head: atom(
                         REF_DEP,
@@ -1479,6 +1487,7 @@ pub fn rewrite_computed_refs(
         }
         out_rules.push(RuleStmt { head, body });
     }
+    out_rules.extend(dangling);
     let constraints = constraints
         .into_iter()
         .map(|c| Constraint {
@@ -1488,6 +1497,66 @@ pub fn rewrite_computed_refs(
         .collect();
     (out_rules, out_facts, constraints)
 }
+
+/// `deny("ref to an address no rule wants", {type, addr, path, from}) :-
+/// Body, not want(T, A).` for one ref `read` (`attr(T, A, P0, V)`) in the
+/// head of a rule with `body`. `from` names what holds the ref: the
+/// resource `T.A` for a contribution, else the head's predicate.
+fn dangling_ref_deny(head: &Atom, read: &Atom, path: &str, mut body: Vec<Lit>) -> RuleStmt {
+    let (typ, addr) = (read.args[0].clone(), read.args[1].clone());
+    let from = if head.pred == "arg" && head.args.len() == 5 {
+        Term::Func {
+            name: "format".into(),
+            args: vec![
+                str_term("%s.%s"),
+                head.args[0].clone(),
+                head.args[1].clone(),
+            ],
+        }
+    } else {
+        str_term(&head.pred)
+    };
+    // As early as the address is bound: the rest of the body may be stuck
+    // on a null (member over a computed list) for an address that is
+    // wanted, and that must not make this deny undetermined.
+    let need: BTreeSet<String> = count_vars_in_term(&typ)
+        .into_keys()
+        .chain(count_vars_in_term(&addr).into_keys())
+        .collect();
+    let mut bound = BTreeSet::new();
+    let mut at = body.len();
+    for (i, l) in body.iter().enumerate() {
+        if need.is_subset(&bound) {
+            at = i;
+            break;
+        }
+        match l {
+            Lit::Pos(_) => bound.extend(count_vars_in_lit(l).into_keys()),
+            Lit::Eq(a, b) => {
+                for t in [a, b] {
+                    if let Term::Var(v) = t {
+                        bound.insert(v.clone());
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    body.insert(at, Lit::Not(atom("want", vec![typ.clone(), addr.clone()])));
+    let ctx = Term::Obj(BTreeMap::from([
+        ("type".to_string(), typ),
+        ("addr".to_string(), addr),
+        ("path".to_string(), str_term(path)),
+        ("from".to_string(), from),
+    ]));
+    RuleStmt {
+        head: atom("deny", vec![str_term(DANGLING_REF), ctx]),
+        body,
+    }
+}
+
+/// The deny message for a ref to an address no rule wants.
+pub const DANGLING_REF: &str = "ref to an address no rule wants";
 
 fn rewrite_body_refs(body: Vec<Lit>, schema: &Schema, n: &mut usize) -> Vec<Lit> {
     let mut out = Vec::new();
@@ -1512,13 +1581,18 @@ fn rewrite_body_refs(body: Vec<Lit>, schema: &Schema, n: &mut usize) -> Vec<Lit>
             Lit::Lt(a, b) => Lit::Lt(t(a), t(b)),
             Lit::Le(a, b) => Lit::Le(t(a), t(b)),
         };
-        out.extend(reads.into_iter().map(Lit::Pos));
+        out.extend(reads.into_iter().map(|(read, _)| Lit::Pos(read)));
         out.push(l);
     }
     out
 }
 
-fn rewrite_atom_refs(a: &Atom, schema: &Schema, n: &mut usize, reads: &mut Vec<Atom>) -> Atom {
+fn rewrite_atom_refs(
+    a: &Atom,
+    schema: &Schema,
+    n: &mut usize,
+    reads: &mut Vec<(Atom, String)>,
+) -> Atom {
     Atom {
         pred: a.pred.clone(),
         args: a
@@ -1530,7 +1604,12 @@ fn rewrite_atom_refs(a: &Atom, schema: &Schema, n: &mut usize, reads: &mut Vec<A
     }
 }
 
-fn rewrite_term_refs(t: &Term, schema: &Schema, n: &mut usize, reads: &mut Vec<Atom>) -> Term {
+fn rewrite_term_refs(
+    t: &Term,
+    schema: &Schema,
+    n: &mut usize,
+    reads: &mut Vec<(Atom, String)>,
+) -> Term {
     match t {
         Term::Func { name, args } if name == "ref" && args.len() == 3 => {
             if let (Term::Val(Value::Str(typ)), Term::Val(Value::Str(path))) = (&args[0], &args[2])
@@ -1562,9 +1641,12 @@ fn rewrite_term_refs(t: &Term, schema: &Schema, n: &mut usize, reads: &mut Vec<A
                         Some((top, rest)) => (top, Some(rest)),
                         None => (path.as_str(), None),
                     };
-                    reads.push(atom(
-                        "attr",
-                        vec![args[0].clone(), addr, str_term(top), v.clone()],
+                    reads.push((
+                        atom(
+                            "attr",
+                            vec![args[0].clone(), addr, str_term(top), v.clone()],
+                        ),
+                        path.clone(),
                     ));
                     return match rest {
                         None => v,

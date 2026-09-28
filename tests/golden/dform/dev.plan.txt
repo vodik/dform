@@ -1,38 +1,8 @@
-exit: ok
+exit: error
 -- stdout --
-plan: 8 to create, 0 to update, 0 to delete
-+ compute.vm.bastion
-  private_ip = "10.90.0.21"
-  tags.team = "platform"
-+ iam.policy.iam.main::app_policy
-  name = "app"
-  tags.team = "platform"
-+ iam.role.iam.main::app_role
-  assume.principals[0] = "k8s.serviceaccount.app"
-  name = "app"
-  tags.team = "platform"
-+ iam.role_policy_attachment.iam.main::attach
-  policy_id = ?iam.policy/iam.main::app_policy#id
-  role_id = ?iam.role/iam.main::app_role#id
-  tags.team = "platform"
-+ net.vpc.network.main::vpc
-  cidr = "10.90.0.0/16"
-  tags.component = "network"
-  tags.env = "dev"
-  tags.team = "platform"
-+ net.vpc_peering.peer-main-peer
-  requester_vpc_id = ?net.vpc/network.main::vpc#id
-  tags.team = "platform"
-+ net.subnet.network.main::private-us-test-1a
-  cidr = "10.90.0.0/20"
-  tags.team = "platform"
-  visibility = "private"
-  vpc_id = ?net.vpc/network.main::vpc#id
-  zone = "us-test-1a"
-+ net.subnet.network.main::private-us-test-1b
-  cidr = "10.90.16.0/20"
-  tags.team = "platform"
-  visibility = "private"
-  vpc_id = ?net.vpc/network.main::vpc#id
-  zone = "us-test-1b"
 -- stderr --
+constraint violations:
+- ref to an address no rule wants ctx={"addr":"database.main::db","from":"iam_need","path":"id","type":"db.postgres"}
+- ref to an address no rule wants ctx={"addr":"kubernetes.main::cluster","from":"iam_need","path":"id","type":"k8s.cluster"}
+- ref to an address no rule wants ctx={"addr":"network.peer::vpc","from":"net.vpc_peering.peer-main-peer","path":"id","type":"net.vpc"}
+Error: blocked by constraints
