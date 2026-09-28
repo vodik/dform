@@ -14,6 +14,7 @@ use dform::schema;
 use dform::state;
 use dform::stuck;
 use dform::value::Value;
+use dform::why;
 use std::path::{Path, PathBuf};
 
 #[derive(Parser, Debug)]
@@ -77,6 +78,14 @@ enum Cmd {
     /// variable: `dform query 'attr(net.vpc, N, cidr, C)'`.
     Query {
         pattern: String,
+    },
+    /// Print how a fact was derived: rule, bindings, the facts it read,
+    /// recursively. Variables are allowed; every match is printed.
+    Why {
+        pattern: String,
+        /// Show every alternative derivation, not only the first.
+        #[arg(long)]
+        all: bool,
     },
     Show {
         typ: String,
@@ -174,6 +183,33 @@ fn main() -> Result<()> {
                         query::table(&body, &vars, &res.facts)?.render(&redact)
                     );
                 }
+            }
+        }
+        Cmd::Why { pattern, all } => {
+            let redact = query::Redactor::new(&res.facts, backend.schema());
+            let query::Query::Body { body, .. } = query::parse(&pattern)? else {
+                bail!("why: expected a fact pattern such as 'want(net.vpc, N)', got '{pattern}'");
+            };
+            let [dform::ast::Lit::Pos(pat)] = body.as_slice() else {
+                bail!("why: expected one fact pattern, got '{pattern}'");
+            };
+            let matched = why::find(pat, &res.facts)?;
+            if matched.is_empty() {
+                bail!("why: no fact matches {pattern}");
+            }
+            let printer = why::Printer {
+                circuit: &res.circuit,
+                redact: &redact,
+                all,
+            };
+            for (i, (a, focus)) in matched.iter().enumerate() {
+                let Some(id) = res.circuit.fact_id(&engine::circuit_fact(a)) else {
+                    bail!("internal: no provenance for {}", partition::fmt_atom(a));
+                };
+                if i > 0 {
+                    println!();
+                }
+                print!("{}", printer.tree(id, focus.as_ref()));
             }
         }
         Cmd::Show { typ, name } => {

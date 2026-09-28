@@ -163,6 +163,29 @@ Secrets print as their label, `(sensitive T/A#P)`: a value at a
 `sensitive` path, and any value equal to it or string containing it, so a
 rule that forwards a secret does not leak it either.
 
+`dform why PATTERN` prints how a fact was derived, from the provenance
+circuit every evaluation records (proposal E §3, DR-10): the rule (its id
+and text), the rule's bindings, and the facts the firing read, recursively;
+a fact given to the run says where it came from (`fact, statement N` until
+the parser keeps spans, `input --set env=prod`, the provider schema, the
+world). An attribute shows every contribution with its rank and owner.
+Variables are allowed and every match is printed. A fact derived more than
+one way shows its first derivation and `... N more alternatives`; `--all`
+shows them all. An `attr`/`arg` pattern may name part of an object
+attribute, by dotted path or by object value, and then shows only the
+contributions that hold it:
+
+```bash
+cargo run -- why 'attr(net.vpc, "network.main::vpc", "tags.team", "platform")' --set env=prod
+# attr("net.vpc", "network.main::vpc", "tags", {component: "network", env: "prod", team: "platform"})
+#   by Σattr: attribute aggregate (lub_ranked, E §2.5) over 2 contributions
+#   ├─ arg("net.vpc", "network.main::vpc", "tags", {team: "platform"}, "normal")   [rank normal, owner r69]
+#   │    by r69: arg(Type, Name, "tags", {team: "platform"}, "normal") :- want(Type, Name)
+#   │    with Name = "network.main::vpc", Type = "net.vpc"
+#   ...
+#   └─ ... 1 other contribution (--all)
+```
+
 ## Chaos: failure and latency injection
 
 `apply --chaos SPEC` (repeatable) makes the fake provider misbehave, the way a
