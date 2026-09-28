@@ -137,10 +137,22 @@ pub fn normalize_path(typ: &Option<String>, path: &str) -> String {
 }
 
 /// The `(pred, T, P)` node of an atom whose type is column 0 and path is
-/// column 2.
+/// column 2. An input cell is partitioned by its scope too (column 1): a
+/// module instance's input `k` is the path `m.i::k`, distinct from the
+/// stack's own input `k` (scope `""`), so `instance m i { k = k }` passes
+/// one cell to another instead of reading its own aggregate. A scope that
+/// is not constant is any scope (`*`).
 fn type_path_node(pred: &str, atom: &Atom) -> Node {
     let typ = const_str(&atom.args[0]);
     let path = const_str(&atom.args[2]).map(|p| normalize_path(&typ, &p));
+    let path = match typ.as_deref() {
+        Some(crate::modules::INPUT) => match const_str(&atom.args[1]) {
+            Some(scope) if scope.is_empty() => path,
+            Some(scope) => path.map(|p| format!("{scope}::{p}")),
+            None => None,
+        },
+        _ => path,
+    };
     Node {
         pred: pred.into(),
         typ,

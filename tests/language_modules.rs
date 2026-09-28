@@ -185,3 +185,49 @@ apply tags
     .success();
     assert!(r.stdout.contains("cidr = \"10.9.0.0/16\""), "{}", r.stdout);
 }
+
+/// A stack input passed to a module input of the same name: the
+/// instance's input cell is its own node (partitioned by the instance's
+/// scope), not the stack's, so `replicas = replicas` is not a read of the
+/// aggregate it feeds. It was a negative cycle.
+#[test]
+fn a_stack_input_passed_to_a_module_input_of_the_same_name_stratifies() {
+    let s = Scratch::new("lang-modules");
+    s.write(
+        "p.df",
+        r#"edition 2026
+input replicas: int = 2
+module app {
+  input replicas: int
+  resource compute.vm vm {
+    count = replicas
+  }
+}
+instance app blue { replicas = replicas }
+instance app green { replicas = 7 }
+"#,
+    );
+    let r = s
+        .run(&[
+            "--file",
+            "p.df",
+            "--world",
+            "w.json",
+            "plan",
+            "--set",
+            "replicas=3",
+        ])
+        .success();
+    assert!(
+        r.stdout
+            .contains("+ compute.vm.app.blue::vm\n  count = 3\n"),
+        "{}",
+        r.stdout
+    );
+    assert!(
+        r.stdout
+            .contains("+ compute.vm.app.green::vm\n  count = 7\n"),
+        "{}",
+        r.stdout
+    );
+}

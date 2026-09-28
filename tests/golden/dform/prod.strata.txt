@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== dform.df: 160 nodes, 749 edges (532 negative)
+== dform.df: 164 nodes, 753 edges (536 negative)
    STRATIFIED, 17 strata
    stratum 0:
      (arg, iam.policy, name)
@@ -55,7 +55,8 @@ exit: ok
    stratum 2:
      (arg, compute.vm, id)
      (arg, compute.vm, private_ip)
-     (arg, input, vpc_net)
+     (arg, input, network.main::vpc_net)
+     (arg, input, network.peer::vpc_net)
      (attr, iam.policy, id)
      (attr, iam.role, id)
      (attr, iam.role_policy_attachment, id)
@@ -69,7 +70,8 @@ exit: ok
      (arg, iam.role_policy_attachment, role_id)
      (attr, compute.vm, id)
      (attr, compute.vm, private_ip)
-     (attr, input, vpc_net)
+     (attr, input, network.main::vpc_net)
+     (attr, input, network.peer::vpc_net)
    stratum 4:
      (arg, net.vpc, cidr)
      (arg, net.vpc, id)
@@ -109,19 +111,21 @@ exit: ok
    stratum 9:
      (attr, output, private_subnet_ids)
    stratum 10:
-     (arg, input, backup_days)
-     (arg, input, multi_az)
-     (arg, input, nodepool_max)
-     (arg, input, nodepool_min)
-     (arg, input, private_api)
-     (arg, input, subnet_ids)
+     (arg, input, database.main::backup_days)
+     (arg, input, database.main::multi_az)
+     (arg, input, database.main::subnet_ids)
+     (arg, input, kubernetes.main::nodepool_max)
+     (arg, input, kubernetes.main::nodepool_min)
+     (arg, input, kubernetes.main::private_api)
+     (arg, input, kubernetes.main::subnet_ids)
    stratum 11:
-     (attr, input, backup_days)
-     (attr, input, multi_az)
-     (attr, input, nodepool_max)
-     (attr, input, nodepool_min)
-     (attr, input, private_api)
-     (attr, input, subnet_ids)
+     (attr, input, database.main::backup_days)
+     (attr, input, database.main::multi_az)
+     (attr, input, database.main::subnet_ids)
+     (attr, input, kubernetes.main::nodepool_max)
+     (attr, input, kubernetes.main::nodepool_min)
+     (attr, input, kubernetes.main::private_api)
+     (attr, input, kubernetes.main::subnet_ids)
    stratum 12:
      (arg, *, tags)
      (arg, db.postgres, backup_days)

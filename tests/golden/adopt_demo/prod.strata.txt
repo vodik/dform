@@ -41,7 +41,7 @@ exit: ok
      (attr, settings, network.vpc_cidr)
    stratum 2:
      (adopt, net.vpc)
-     (arg, input, vpc_net)
+     (arg, input, network.main::vpc_net)
      (arg, net.vpc, adopted_id)
      (arg, net.vpc, owner_tag)
      (attr, compute.vm, id)
@@ -58,7 +58,7 @@ exit: ok
      (attr, net.vpc_peering, id)
      env
    stratum 3:
-     (attr, input, vpc_net)
+     (attr, input, network.main::vpc_net)
      (attr, net.vpc, adopted_id)
      (attr, net.vpc, owner_tag)
    stratum 4:
