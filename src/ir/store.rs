@@ -8,10 +8,13 @@
 //!
 //! An index answers a lookup exactly as a scan followed by unification
 //! would, Rule 2 included: a tuple is left out only when a key column is
-//! definitely unequal to the probe. A tuple whose key columns hold an open
-//! or secret null (equality with it is undecided) is always a candidate, and
-//! so, for a loose read, is a tuple with such a null anywhere. A probe that
-//! holds a null reads every tuple.
+//! definitely unequal to the probe before any comparison with it is
+//! undecided. Unification compares columns in order and records the
+//! instance stuck at the first undecided one (an open or secret null), so a
+//! tuple with such a null in a key column is a candidate when the key
+//! columns before that one equal the probe's. For a loose read, a tuple
+//! with such a null anywhere is a candidate. A probe that holds a null
+//! reads every tuple.
 
 use super::fx::{FxHashMap, FxHasher};
 use super::ops::{Key, Rel};
@@ -41,8 +44,12 @@ struct Index {
     /// Tuples by the hash of their key columns (a collision only adds a
     /// candidate; unification decides).
     buckets: FxHashMap<u64, Vec<TupleId>>,
-    /// Tuples with an open or secret null in a key column.
-    undecided: Vec<TupleId>,
+    /// Tuples with an open or secret null in a key column, by the
+    /// position in the key of the first such column and the hash of the
+    /// key columns before it.
+    undecided: FxHashMap<(usize, u64), Vec<TupleId>>,
+    /// The positions `undecided` has tuples at.
+    undecided_at: Vec<usize>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -86,11 +93,19 @@ fn window(ids: &[TupleId], w: Window) -> &[TupleId] {
 
 impl Index {
     fn add(&mut self, key: &Key, id: TupleId, a: &Atom) {
-        if key.iter().any(|&c| has_open_or_secret(val(&a.args[c]))) {
-            self.undecided.push(id);
-        } else {
-            let h = key_hash(key.iter().map(|&c| val(&a.args[c])));
-            self.buckets.entry(h).or_default().push(id);
+        let vals = key.iter().map(|&c| val(&a.args[c]));
+        match key
+            .iter()
+            .position(|&c| has_open_or_secret(val(&a.args[c])))
+        {
+            Some(j) => {
+                if !self.undecided_at.contains(&j) {
+                    self.undecided_at.push(j);
+                }
+                let h = key_hash(vals.take(j));
+                self.undecided.entry((j, h)).or_default().push(id);
+            }
+            None => self.buckets.entry(key_hash(vals)).or_default().push(id),
         }
     }
 }
@@ -194,7 +209,11 @@ impl Store {
                     .map(Vec::as_slice)
                     .unwrap_or(&[]);
                 let mut out: Vec<TupleId> = window(bucket, w).to_vec();
-                out.extend_from_slice(window(&ix.undecided, w));
+                for &j in &ix.undecided_at {
+                    if let Some(u) = ix.undecided.get(&(j, key_hash(p[..j].iter()))) {
+                        out.extend_from_slice(window(u, w));
+                    }
+                }
                 if loose {
                     out.extend_from_slice(window(&r.open, w));
                 }
@@ -228,7 +247,7 @@ mod tests {
     }
 
     #[test]
-    fn a_lookup_reads_its_bucket_and_every_undecided_tuple() {
+    fn a_lookup_reads_its_bucket_and_the_undecided_tuples() {
         let rel = Rel {
             pred: "p".into(),
             arity: 2,
@@ -260,5 +279,37 @@ mod tests {
             vec![c]
         );
         assert_eq!(st.candidates(&rel, &key, None, false, all).len(), 4);
+    }
+
+    /// Unification stops at the first unequal column: an undecided tuple
+    /// whose decided key columns before its null differ is not a candidate.
+    #[test]
+    fn an_undecided_tuple_is_read_only_under_its_decided_prefix() {
+        let rel = Rel {
+            pred: "q".into(),
+            arity: 2,
+        };
+        let open = |l: &str| Value::Null {
+            label: l.into(),
+            class: NullClass::Open,
+            ty: "string".into(),
+        };
+        let mut st = Store::default();
+        st.index(&rel, &vec![0, 1]);
+        let (a, _) = st.insert(atom("q", vec![s("a"), open("t/a#x")]));
+        st.insert(atom("q", vec![s("b"), open("t/b#x")]));
+        let (c, _) = st.insert(atom("q", vec![open("t/c#x"), s("z")]));
+        let (d, _) = st.insert(atom("q", vec![s("a"), s("y")]));
+        let all = Window::below(st.len());
+        let key = vec![0, 1];
+        assert_eq!(
+            st.candidates(&rel, &key, Some(&[s("a"), s("y")]), false, all),
+            vec![a, c, d]
+        );
+        assert_eq!(
+            st.candidates(&rel, &key, Some(&[s("b"), s("n")]), false, all)
+                .len(),
+            2
+        );
     }
 }

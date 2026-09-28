@@ -198,27 +198,69 @@ pub fn patterns_unify(a: &Atom, b: &Atom) -> bool {
 /// Stuck head patterns in the form bodies read them, by predicate.
 #[derive(Debug, Default, Clone)]
 pub struct Known {
-    by_pred: BTreeMap<String, Vec<(Atom, BTreeSet<String>)>>,
+    by_pred: BTreeMap<String, Heads>,
+}
+
+/// One predicate's stuck heads, in the order found, with those whose first
+/// column is a null-free constant indexed by it.
+#[derive(Debug, Default, Clone)]
+struct Heads {
+    all: Vec<(Atom, BTreeSet<String>)>,
+    by_first: HashMap<Value, Vec<usize>>,
+    /// Heads whose first column is not a null-free constant.
+    open_first: Vec<usize>,
+}
+
+/// A pattern's first column, when it is a constant without a null.
+fn first_const(a: &Atom) -> Option<&Value> {
+    match a.args.first() {
+        Some(Term::Val(v)) if !has_null(v) => Some(v),
+        _ => None,
+    }
+}
+
+impl Heads {
+    /// The heads that can unify with `pat`, in the order found: a head
+    /// with another constant first column cannot.
+    fn candidates<'a>(
+        &'a self,
+        pat: &Atom,
+    ) -> Box<dyn Iterator<Item = &'a (Atom, BTreeSet<String>)> + 'a> {
+        match first_const(pat) {
+            Some(v) => {
+                let mut ids: Vec<usize> = self.by_first.get(v).cloned().unwrap_or_default();
+                ids.extend(&self.open_first);
+                ids.sort_unstable();
+                Box::new(ids.into_iter().map(|i| &self.all[i]))
+            }
+            None => Box::new(self.all.iter()),
+        }
+    }
 }
 
 impl Known {
     pub fn add(&mut self, s: &Stuck) {
         let read = as_read(&s.head);
-        self.by_pred
-            .entry(read.pred.clone())
-            .or_default()
-            .push((read, s.nulls.clone()));
+        let heads = self.by_pred.entry(read.pred.clone()).or_default();
+        let i = heads.all.len();
+        match first_const(&read) {
+            Some(v) => heads.by_first.entry(v.clone()).or_default().push(i),
+            None => heads.open_first.push(i),
+        }
+        heads.all.push((read, s.nulls.clone()));
     }
 
     /// The nulls of every stuck head of `pat.pred` that unifies with `pat`;
     /// empty when none does.
     pub fn blocking(&self, pat: &Atom) -> BTreeSet<String> {
         let mut out = BTreeSet::new();
-        for (p, nulls) in self.by_pred.get(&pat.pred).into_iter().flatten() {
-            if patterns_unify(p, pat) {
-                out.extend(nulls.iter().cloned());
-                if nulls.is_empty() {
-                    out.insert(String::new());
+        if let Some(heads) = self.by_pred.get(&pat.pred) {
+            for (p, nulls) in heads.candidates(pat) {
+                if patterns_unify(p, pat) {
+                    out.extend(nulls.iter().cloned());
+                    if nulls.is_empty() {
+                        out.insert(String::new());
+                    }
                 }
             }
         }
@@ -231,7 +273,7 @@ impl Known {
         self.by_pred
             .get(&pat.pred)
             .into_iter()
-            .flatten()
+            .flat_map(|h| h.candidates(pat))
             .filter(|(p, _)| patterns_unify(p, pat))
             .cloned()
             .collect()
@@ -240,7 +282,7 @@ impl Known {
     pub fn any(&self, pat: &Atom) -> bool {
         self.by_pred
             .get(&pat.pred)
-            .is_some_and(|ps| ps.iter().any(|(p, _)| patterns_unify(p, pat)))
+            .is_some_and(|h| h.candidates(pat).any(|(p, _)| patterns_unify(p, pat)))
     }
 }
 
@@ -294,7 +336,23 @@ pub fn sections(
         if read.pred != "attr" || read.args.len() != 4 {
             continue;
         }
-        for (t, a) in docs.keys() {
+        // The documents the pattern can name: one when its type and
+        // address are constants, the type's when only the type is.
+        let named: Box<dyn Iterator<Item = &(String, String)>> =
+            match (&read.args[0], &read.args[1]) {
+                (Term::Val(Value::Str(t)), Term::Val(Value::Str(a))) => Box::new(
+                    docs.get_key_value(&(t.clone(), a.clone()))
+                        .map(|(k, _)| k)
+                        .into_iter(),
+                ),
+                (Term::Val(Value::Str(t)), _) => Box::new(
+                    docs.range((t.clone(), String::new())..)
+                        .map(|(k, _)| k)
+                        .take_while(move |(tt, _)| tt == t),
+                ),
+                _ => Box::new(docs.keys()),
+            };
+        for (t, a) in named {
             let group = Atom {
                 pred: "attr".into(),
                 args: vec![
