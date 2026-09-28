@@ -403,6 +403,64 @@ pub fn from_assertion(op: &str, v: &serde_json::Value) -> Option<Constraint> {
     .ok()
 }
 
+/// The part of a `where` that lowers to a deny, checked at compile time:
+/// a call to a function the evaluator does not have would have no value
+/// and deny every value, and `matches(x, "re")` refines the value itself
+/// with a pattern that compiles.
+pub fn check_rest(rest: &[Lit], span: Span) -> Vec<Diagnostic> {
+    fn calls(t: &Term, out: &mut Vec<String>) {
+        match t {
+            Term::Func { name, args } => {
+                out.push(name.clone());
+                args.iter().for_each(|a| calls(a, out));
+            }
+            Term::List(xs) => xs.iter().for_each(|a| calls(a, out)),
+            Term::Obj(m) => m.values().for_each(|a| calls(a, out)),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for l in rest {
+        let mut names = Vec::new();
+        match l {
+            Lit::Pos(a) | Lit::Not(a) => {
+                if a.pred == "matches" {
+                    let msg = match a.args.get(1) {
+                        Some(Term::Val(Value::Str(re))) => match check_regex(re) {
+                            Err(e) => e,
+                            Ok(()) => "matches(x, \"re\") refines the attribute's own value".into(),
+                        },
+                        _ => "matches(x, \"re\") takes the pattern as a string".into(),
+                    };
+                    out.push(Diagnostic::error(span, format!("in a refinement: {msg}")));
+                }
+                a.args.iter().for_each(|t| calls(t, &mut names));
+            }
+            Lit::Eq(x, y)
+            | Lit::Neq(x, y)
+            | Lit::Gt(x, y)
+            | Lit::Ge(x, y)
+            | Lit::Lt(x, y)
+            | Lit::Le(x, y) => {
+                calls(x, &mut names);
+                calls(y, &mut names);
+            }
+        }
+        for f in names {
+            if !crate::engine::FUNCTIONS.contains(&f.as_str()) {
+                out.push(
+                    Diagnostic::error(span, format!("in a refinement: unknown function {f}"))
+                        .with_help(format!(
+                            "the functions are {}",
+                            crate::engine::FUNCTIONS.join(", ")
+                        )),
+                );
+            }
+        }
+    }
+    out
+}
+
 /// An input's `where`, split. A secret input's refinement is checked by its
 /// deny rule, whose message never prints the value (the static secret pass
 /// exempts it); it has no provider to defer to.
@@ -478,6 +536,11 @@ pub fn lower_types(program: &Program) -> Result<Program> {
             let (cs, rest) = split(&a.refinement, &names);
             for c in cs {
                 out.push(refine_fact(name, None, &path, &c, a.span));
+            }
+            let bad = check_rest(&rest, a.span);
+            if !bad.is_empty() {
+                diags.extend(bad);
+                continue;
             }
             if !rest.is_empty() {
                 n += 1;
@@ -576,9 +639,15 @@ fn deny_rules(
         subst.insert(other.clone(), w);
     }
     let body: Vec<Lit> = rest.iter().map(|l| subst_lit(l, &subst)).collect();
+    // The attribute (and each other one named) printed as written, not as
+    // a string.
+    let named: BTreeMap<String, Term> = subst
+        .keys()
+        .map(|k| (k.clone(), Term::Var(k.clone())))
+        .collect();
     let text = rest
         .iter()
-        .map(crate::partition::fmt_lit)
+        .map(|l| crate::partition::fmt_lit(&subst_lit(l, &named)))
         .collect::<Vec<_>>()
         .join(", ");
     let ok = atom(

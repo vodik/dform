@@ -835,7 +835,10 @@ goes to the provider as an Apply assertion, checked once the secret is
 materialized, and a provider whose Schema does not declare
 `checks_refinements` makes it a compile error (E0306). Anything else (one
 bound alone, another attribute, a user predicate) lowers to a deny with the
-refinement's place; a secret input's refinement is always one, and it does
+refinement's place, the attribute and the others it names read as their
+values (`prefix_len(net) >= prefix_len(wide)`); a call to a function the
+evaluator does not have, or a `matches` pattern that does not compile, is
+a compile error there; a secret input's refinement is always one, and it does
 not print the value. A `type` block's flags are not supported yet (they
 come from the provider's schema).
 

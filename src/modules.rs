@@ -185,6 +185,8 @@ pub fn expand(program: &Program) -> Result<Expanded> {
                     format!("{who} input {}: {e}", i.name),
                 ));
             }
+            let (_, rest) = crate::refine::split_input(i);
+            diags.extend(crate::refine::check_rest(&rest, i.span));
         }
     };
     let mut modules: BTreeMap<String, (&crate::ast::Module, Interface, Vec<Stmt>)> =

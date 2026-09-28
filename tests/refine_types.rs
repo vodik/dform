@@ -134,7 +134,7 @@ settings prod {{ pool = {{ min: {min}, max: 3 }} }}.
     let r = plan(&s, &src(5)).failure();
     assert!(
         r.stderr.contains(
-            "- refinement violated ctx={\"addr\":\"prod\",\"at\":\"p.df:4:3\",\"constraint\":\"\\\"pool.min\\\" <= \\\"pool.max\\\"\",\"path\":\"pool.max\",\"reason\":\"3 does not satisfy \\\"pool.min\\\" <= \\\"pool.max\\\"\""
+            "- refinement violated ctx={\"addr\":\"prod\",\"at\":\"p.df:4:3\",\"constraint\":\"pool.min <= pool.max\",\"path\":\"pool.max\",\"reason\":\"3 does not satisfy pool.min <= pool.max\""
         ),
         "{}",
         r.stderr
@@ -279,6 +279,98 @@ resource k8s.secret db { metadata.name = \"db\", data = { password: \"x\" } }.
         r.stderr.contains(
             "p.df:4:3: E0306: a refinement on sensitive path k8s.secret .data.password cannot be checked by the engine, and provider kubernetes does not check refinements"
         ) && r.stderr.contains("1 error"),
+        "{}",
+        r.stderr
+    );
+}
+
+/// In a `where`, the attribute's name is its value, in the checkable form
+/// (`len(name) <= 3`, a cell refinement) and in a deny (`len(name) != 2`),
+/// whose message prints the name as written; another attribute of the
+/// block is its value too, through the `prefix_len` builtin.
+#[test]
+fn a_refinement_names_its_attribute_by_name() {
+    let s = Scratch::new("refine-names");
+    let src = |name: &str, wide: &str| {
+        format!(
+            "edition 2026.
+type app.thing {{
+  name: string where len(name) <= 3
+  code: string where len(code) != 2
+  net: string where prefix_len(net) >= prefix_len(wide)
+  wide: string
+}}.
+resource app.thing a {{ name = N, code = N, net = \"10.0.0.0/24\", wide = \"{wide}\" }} :- n(N).
+n(\"{name}\").
+"
+        )
+    };
+    plan(&s, &src("abc", "10.0.0.0/16")).success();
+    let r = plan(&s, &src("abcd", "10.0.0.0/16")).failure();
+    assert!(
+        r.stdout
+            .contains("! app.thing.a name: \"abcd\" violates len_le(3)\n"),
+        "{}",
+        r.stdout
+    );
+    let r = plan(&s, &src("ab", "10.0.0.0/16")).failure();
+    assert!(
+        r.stdout
+            .contains("! app.thing.a code: ab does not satisfy len(code) != 2\n"),
+        "{}",
+        r.stdout
+    );
+    let r = plan(&s, &src("abc", "10.0.0.0/28")).failure();
+    assert!(
+        r.stdout.contains(
+            "! app.thing.a net: 10.0.0.0/24 does not satisfy prefix_len(net) >= prefix_len(wide)\n"
+        ),
+        "{}",
+        r.stdout
+    );
+}
+
+/// A refinement that calls a function the evaluator does not have, or a
+/// `matches` whose pattern does not compile, is a compile error at the
+/// refinement: it would otherwise deny every value.
+#[test]
+fn an_unknown_function_or_a_bad_pattern_is_a_compile_error() {
+    let s = Scratch::new("refine-unknown");
+    let r = plan(
+        &s,
+        "edition 2026.
+type app.thing {
+  name: string where frobnicate(name) == 3
+}.
+resource app.thing a { name = \"x\" }.
+",
+    )
+    .failure();
+    assert!(
+        r.stderr
+            .contains("p.df:3:3: in a refinement: unknown function frobnicate"),
+        "{}",
+        r.stderr
+    );
+    let r = plan(
+        &s,
+        "edition 2026.
+type app.thing {
+  name: string where matches(name, \"a(\")
+}.
+",
+    )
+    .failure();
+    assert!(
+        r.stderr
+            .contains("p.df:3:3: in a refinement: regex(\"a(\"): regex parse error"),
+        "{}",
+        r.stderr
+    );
+    let r = plan(&s, "edition 2026.\ninput n: int = 1 where frob(n) == 1.\n").failure();
+    assert!(
+        r.stderr
+            .contains("p.df:2:1: in a refinement: unknown function frob"),
         "{}",
         r.stderr
     );
