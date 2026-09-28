@@ -44,8 +44,13 @@ holder is gone (a killed apply) is taken over with a note.
 
 Cross-stack values: `output k = t` at the top of a program is a stack
 output. `apply` records the stack's outputs whose values are known in its
-state and the stack in `.dform/stacks.json`; every other program reads
-them as facts, `stack_output("net.shared", vpc_id, V)`.
+state and the stack's absolute state path in `.dform/stacks.json`; every
+other program reads them as facts, `stack_output("net.shared", vpc_id, V)`.
+
+`.dform/` (every path below, and the registry) is in the directory of the
+first `--file`, not the working directory, so stacks whose programs sit
+together share it wherever dform runs from; `--root DIR` puts it at
+`DIR/.dform/` instead.
 
 - Core state (Terraform-style address -> remote mapping, outputs): `.dform/<stack>/state.json`.
 - The fake backend's world (what "exists"): `.dform/<stack>/remote.json`.
@@ -855,7 +860,7 @@ state then moves into the cluster and the controller runs it from there.
 
 ```bash
 cargo run -- --file examples/bootstrap/bootstrap.df apply      # 3 ticks
-cargo run -- stack handover renfry.workload --to 'k8s("dform-system/workload")'
+cargo run -- --root examples/bootstrap stack handover renfry.workload --to 'k8s("dform-system/workload")'
 cargo run -- --file examples/bootstrap/workload.df controller --stack renfry.workload
 ```
 
@@ -875,7 +880,8 @@ program or by the registry), and it is never handed over.
 `dform stack handover NAME --to BACKEND` moves the stack's state
 directory (state, world, controller memo) to the backend and records it in
 the registry, `.dform/stacks.json` (`{"state": ..., "backend": ...}`
-beside the plain state paths). Every later run of the stack uses it,
+beside the plain state paths, absolute; the controller's `event world` line
+names it relative to the root). Every later run of the stack uses it,
 whatever the program's `backend` says; a batch `apply` of a handed-over
 stack is refused (the controller runs it), `plan` is not. The stack's
 state is found in the registry, else at `.dform/NAME`; the target must be

@@ -41,9 +41,16 @@ impl Scratch {
 
     /// Run `dform ARGS` with the scratch directory as the working directory.
     pub fn run(&self, args: &[&str]) -> Run {
+        self.run_in("", args)
+    }
+
+    /// Run `dform ARGS` in the scratch directory's subdirectory `rel`.
+    pub fn run_in(&self, rel: &str, args: &[&str]) -> Run {
+        let dir = self.path(rel);
+        std::fs::create_dir_all(&dir).unwrap();
         let out = Command::new(env!("CARGO_BIN_EXE_dform"))
             .args(args)
-            .current_dir(&self.dir)
+            .current_dir(&dir)
             .output()
             .unwrap();
         Run::from(out)

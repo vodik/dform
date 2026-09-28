@@ -7,7 +7,8 @@
 //! the mock provider plays.
 //!
 //! Cross-stack values: an apply records the stack's outputs in its state
-//! and the stack's state path in the registry `.dform/stacks.json`; every
+//! and the stack's absolute state path in the registry `stacks.json` under
+//! the state root (`.dform/` beside the program, or under `--root`); every
 //! other program reads them as `stack_output(Stack, Key, Value)` facts, a
 //! fact provider over local state.
 //!
@@ -332,7 +333,9 @@ fn save_registry(root: &Path, r: BTreeMap<String, Entry>) -> Result<()> {
 /// backend is kept.
 pub fn register(root: &Path, stack: &str, state: &Path, bootstrap: bool) -> Result<()> {
     let mut r = registry(root)?;
-    let abs = fs::canonicalize(state).unwrap_or_else(|_| state.to_path_buf());
+    let abs = fs::canonicalize(state)
+        .or_else(|_| std::path::absolute(state))
+        .with_context(|| format!("absolute path of {}", state.display()))?;
     let backend = r.get(stack).and_then(|e| e.backend.clone());
     let entry = Entry {
         state: abs,

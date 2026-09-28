@@ -181,13 +181,13 @@ fn bootstrap_handover_and_the_controller_runs_the_workload() {
     assert!(s.read(&world).contains("gcr.io/renfry/web:1.1"));
 
     // Someone edits the cluster: replicas and the image. (The registry
-    // holds the handed-over place as an absolute path.)
-    let abs = s.dir.canonicalize().unwrap().join(&world);
+    // holds the handed-over place as an absolute path; the log names it
+    // from the root.)
     edit(&s, &world, "\"replicas\": 3", "\"replicas\": 5");
     assert_eq!(
         controller(&s),
         [
-            &format!("event world {} changed", abs.display()),
+            &format!("event world {world} changed"),
             "drift k8s.deployment.web spec.replicas: 3 -> 5 (auto_reconcile)",
             "tick 1: plan: 1 deformation (1 update)",
             "stack renfry.workload is undeformed",
@@ -202,7 +202,7 @@ fn bootstrap_handover_and_the_controller_runs_the_workload() {
     assert_eq!(
         controller(&s),
         [
-            &format!("event world {} changed", abs.display()),
+            &format!("event world {world} changed"),
             "drift k8s.deployment.web spec.template.spec.containers[0].image: \
              \"gcr.io/renfry/web:1.1\" -> \"gcr.io/renfry/web:debug\" \
              (held until approve or an input change)",

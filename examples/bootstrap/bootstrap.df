@@ -3,7 +3,7 @@
 # ticks, and stays batch: the controller refuses a `role = bootstrap` stack.
 #
 #   cargo run -- --file examples/bootstrap/bootstrap.df apply
-#   cargo run -- stack handover renfry.workload --to 'k8s("dform-system/workload")'
+#   cargo run -- --root examples/bootstrap stack handover renfry.workload --to 'k8s("dform-system/workload")'
 #   cargo run -- --file examples/bootstrap/workload.df controller --stack renfry.workload
 #
 # Tick 1: the network, the subnetwork and the cluster. The node pools are a

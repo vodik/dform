@@ -98,6 +98,22 @@ pub struct Drift {
     pub after: Value,
 }
 
+/// `path` relative to `root` when it is under it (an absolute path from the
+/// registry included), else as it is.
+fn relative_to<'a>(path: &'a Path, root: &Path) -> std::borrow::Cow<'a, Path> {
+    let abs = |p: &Path| match p.as_os_str().is_empty() {
+        true => std::fs::canonicalize(".").ok(),
+        false => std::fs::canonicalize(p).ok(),
+    };
+    match (abs(path), abs(root)) {
+        (Some(p), Some(r)) => match p.strip_prefix(&r) {
+            Ok(rel) => std::borrow::Cow::Owned(rel.to_path_buf()),
+            Err(_) => std::borrow::Cow::Borrowed(path),
+        },
+        _ => std::borrow::Cow::Borrowed(path),
+    }
+}
+
 fn file_stamp(p: &Path) -> String {
     watch::stamp(&watch::Source::File(p.to_path_buf()))
 }
@@ -114,8 +130,9 @@ impl Hook {
     }
 
     /// The run knows where the stack lives: load the memo, say what
-    /// changed, and log the event.
-    pub fn open(&mut self, state: &Path, world: &Path) -> Result<()> {
+    /// changed, and log the event (the world's path relative to `root`,
+    /// the directory holding the state root, when it is under it).
+    pub fn open(&mut self, state: &Path, world: &Path, root: &Path) -> Result<()> {
         let memo_path = state.with_file_name("controller.json");
         let memo: Option<Memo> = match std::fs::read(&memo_path) {
             Ok(b) => Some(
@@ -156,7 +173,10 @@ impl Hook {
         match &event {
             Event::Start => log("event start"),
             Event::Input(names) => log(format_args!("event input {}", names.join(" "))),
-            Event::World => log(format_args!("event world {} changed", world.display())),
+            Event::World => log(format_args!(
+                "event world {} changed",
+                relative_to(world, root).display()
+            )),
             Event::Resync => log("event resync"),
         }
         self.memo = memo;

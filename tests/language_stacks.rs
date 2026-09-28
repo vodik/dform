@@ -150,6 +150,48 @@ resource net.subnet a { cidr = C, vpc_id = V } :-
     );
 }
 
+/// The registry and the stacks' state live beside the program files
+/// (`<program dir>/.dform/`), not in the working directory: stacks that
+/// read each other's outputs share them from anywhere. `--root DIR` names
+/// the directory instead; the registry records absolute state paths.
+#[test]
+fn the_registry_is_found_from_the_program_not_the_working_directory() {
+    let s = Scratch::new("lang-stack-root");
+    s.write("infra/net.df", NET);
+    let app = r#"edition 2026.
+stack app {}.
+resource net.subnet a { cidr = C, vpc_id = V } :-
+  stack_output("net.shared", vpc_cidr, C),
+  stack_output("net.shared", vpc_id, V).
+"#;
+    s.write("infra/app.df", app);
+    s.run(&["--file", "infra/net.df", "apply"]).success();
+    assert!(s.path("infra/.dform/stacks.json").exists());
+    assert!(!s.path(".dform").exists());
+    let registry: serde_json::Value =
+        serde_json::from_str(&s.read("infra/.dform/stacks.json")).unwrap();
+    let state = registry["net.shared"].as_str().unwrap();
+    assert!(std::path::Path::new(state).is_absolute(), "{registry}");
+
+    let want = "+ net.subnet.a\n  cidr = \"10.0.0.0/16\"\n";
+    let r = s.run_in("infra", &["--file", "app.df", "plan"]).success();
+    assert!(r.stdout.contains(want), "{}", r.stdout);
+
+    // Elsewhere, --root names the directory holding .dform/.
+    s.write("elsewhere/app.df", app);
+    let r = s
+        .run_in("elsewhere", &["--file", "app.df", "plan"])
+        .success();
+    assert_eq!(r.summary(), "stack app is undeformed", "{}", r.stdout);
+    let r = s
+        .run_in(
+            "elsewhere",
+            &["--root", "../infra", "--file", "app.df", "plan"],
+        )
+        .success();
+    assert!(r.stdout.contains(want), "{}", r.stdout);
+}
+
 /// `provider` picks the mock's schema; `--provider` overrides it.
 #[test]
 fn the_provider_statement_selects_the_schema() {

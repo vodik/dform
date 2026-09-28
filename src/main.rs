@@ -66,6 +66,13 @@ struct Cli {
     #[arg(long = "world", global = true)]
     world: Option<PathBuf>,
 
+    /// The directory whose `.dform/` holds the stacks' state and the stack
+    /// registry (`.dform/stacks.json`). Default: the program file's
+    /// directory, so stacks that read each other's outputs share it from
+    /// any working directory.
+    #[arg(long = "root", global = true)]
+    root: Option<PathBuf>,
+
     /// Discovery inventory file (cloud_exists/cloud_attr/cloud_computed).
     /// Default: <world dir>/inventory.json if --world is given and that file
     /// exists, else .dform/inventory.json.
@@ -227,7 +234,7 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
         cmd: StackCmd::Handover { stack, to },
     } = &cli.cmd
     {
-        let dir = dform::stack::handover(Path::new(".dform"), stack, to)?;
+        let dir = dform::stack::handover(&state_root(&cli, &cli.files), stack, to)?;
         println!("stack {stack} handed over to {to}: {}", dir.display());
         return Ok(());
     }
@@ -344,7 +351,7 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
     // from the deformation the planner hands back (`zset::POLICY_RULES`).
     let program = zset::with_policy_rules(program)?;
 
-    let root = PathBuf::from(".dform");
+    let root = state_root(&cli, &files);
     for note in state::migrate_unscoped(&root)? {
         eprintln!("note: {note}");
     }
@@ -400,7 +407,11 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
                 "stack {stack} is role = bootstrap: it stays batch, and the controller never runs it"
             );
         }
-        h.open(&paths.state, &paths.world)?;
+        h.open(
+            &paths.state,
+            &paths.world,
+            root.parent().unwrap_or(Path::new("")),
+        )?;
     } else if let (Cmd::Apply { .. }, Some((to, _))) = (&cli.cmd, &handed) {
         bail!(
             "stack {stack} was handed over to {to}: the controller runs it \
@@ -1085,7 +1096,7 @@ fn run_controller(cli: Cli) -> Result<()> {
             files[0].display()
         );
     }
-    let registered = dform::stack::registry(Path::new(".dform"))?
+    let registered = dform::stack::registry(&state_root(&cli, &files))?
         .get(&own)
         .is_some_and(|e| e.bootstrap);
     if cfg.bootstrap || registered {
@@ -1519,6 +1530,17 @@ fn fmt_files(paths: &[PathBuf], check: bool) -> Result<()> {
         bail!("{} file(s) not formatted", unformatted.len());
     }
     Ok(())
+}
+
+/// The stacks' state root, `.dform/`: in `--root`, else in the directory of
+/// the first program file (the working directory when there is none).
+fn state_root(cli: &Cli, files: &[PathBuf]) -> PathBuf {
+    let base = match (&cli.root, files.first()) {
+        (Some(root), _) => root.clone(),
+        (None, Some(f)) => f.parent().map(Path::to_path_buf).unwrap_or_default(),
+        (None, None) => PathBuf::new(),
+    };
+    base.join(".dform")
 }
 
 fn default_files(files: &[PathBuf]) -> Result<Vec<PathBuf>> {
