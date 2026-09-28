@@ -234,7 +234,8 @@ pub fn build(program: &Program, schema: &Schema, opts: &Options) -> Result<Graph
         }
     }
     let mut opts = opts.clone();
-    opts.externs.extend(lowered.externs.into_iter().map(|e| e.pred));
+    opts.externs
+        .extend(lowered.externs.into_iter().map(|e| e.pred));
     Ok(build_lowered(rules, &fact_atoms, schema, &opts))
 }
 
