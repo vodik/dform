@@ -287,6 +287,12 @@ fn rewrite_stmt_records(stmt: Stmt, schemas: &BTreeMap<String, Vec<String>>) -> 
             }
             Stmt::Settings(s)
         }
+        Stmt::Resource(mut r) => {
+            if let Some(b) = r.body {
+                r.body = Some(rewrite_lits_records(b, schemas)?);
+            }
+            Stmt::Resource(r)
+        }
         other => other,
     })
 }

@@ -1,12 +1,22 @@
 exit: ok
 -- stdout --
-plan: 6 to create, 0 to update, 0 to delete
+plan: 8 to create, 0 to update, 0 to delete
 + alert_metrics_pack.pngu
   enable_standard_gke_alerts = true
   notification_channel_display_name = "Slack"
   notification_channel_type = "slack"
   project_id = "renfry-stg"
   source = "git@github.com:coherentpath/terraform-gcp-alert-metrics.git?ref=v1.5.0"
++ google_compute_network_peering.peering-envoy-stg
+  name = "envoy-stg"
+  network = "projects/renfry-stg/global/networks/renfry-stg-network"
+  peer_network = "projects/envoy-stg-597462/global/networks/envoy-stg-network"
+  project = "renfry-stg"
++ google_compute_network_peering.peering-envoy-stg-legacy
+  name = "envoy-stg-legacy"
+  network = "projects/renfry-stg/global/networks/renfry-stg-network"
+  peer_network = "projects/coherentpath-stg/global/networks/envoy-proxy-stg"
+  project = "renfry-stg"
 + google_compute_subnetwork.gke_subnet
   ip_cidr_range = "10.141.100.0/22"
   name = "renfry-stg-gke-subnet"

@@ -2358,4 +2358,18 @@ mod tests {
             ]
         );
     }
+
+    /// A record atom in a resource body is rewritten to positional form like
+    /// any other body, so the resource is derived (pngu.df's peerings).
+    #[test]
+    fn a_record_atom_in_a_resource_body_matches() {
+        let (r, _) = run("decl peering { env, name }.
+             peering{ env: prod, name: legacy }.
+             resource net.peering Name { env = Env } :- peering{ env: Env, name: Name }.")
+        .unwrap();
+        assert_eq!(
+            facts_of(&r, "attr"),
+            vec!["attr(\"net.peering\", \"legacy\", \"env\", \"prod\")".to_string()]
+        );
+    }
 }
