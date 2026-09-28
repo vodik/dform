@@ -35,7 +35,10 @@ pub struct Fact {
 
 impl Fact {
     pub fn new(pred: &str, args: Vec<Value>) -> Fact {
-        Fact { pred: pred.into(), args }
+        Fact {
+            pred: pred.into(),
+            args,
+        }
     }
     fn nulls(&self) -> BTreeSet<String> {
         self.args.iter().flat_map(nulls_in).collect()
@@ -46,7 +49,10 @@ impl Fact {
 enum Node {
     Leaf(Leaf),
     /// A derived (or base) tuple with its alternatives (each a Times node).
-    Fact { fact: Fact, alts: Vec<NodeId> },
+    Fact {
+        fact: Fact,
+        alts: Vec<NodeId>,
+    },
     /// One firing: children are leaves and fact nodes.
     Times(Vec<NodeId>),
     Dead,
@@ -88,12 +94,17 @@ impl Circuit {
         let times = self.nodes.len() - 1;
         if let Some(&id) = self.by_fact.get(&head) {
             let new_set = self.leaf_set(times);
-            let Node::Fact { alts, .. } = &self.nodes[id] else { unreachable!() };
-            let existing: Vec<(NodeId, BTreeSet<BTreeSet<Leaf>>)> = alts.iter().map(|a| (*a, self.why_node(*a))).collect();
+            let Node::Fact { alts, .. } = &self.nodes[id] else {
+                unreachable!()
+            };
+            let existing: Vec<(NodeId, BTreeSet<BTreeSet<Leaf>>)> =
+                alts.iter().map(|a| (*a, self.why_node(*a))).collect();
             // Absorption: a ⊕ (a ⊗ b) = a. Drop the new firing if some existing
             // alternative's witness set is a subset of one of its own; drop
             // existing alternatives the new one absorbs.
-            let absorbed = existing.iter().any(|(_, w)| w.iter().any(|e| new_set.iter().all(|n| e.is_subset(n))));
+            let absorbed = existing
+                .iter()
+                .any(|(_, w)| w.iter().any(|e| new_set.iter().all(|n| e.is_subset(n))));
             if absorbed {
                 self.nodes[times] = Node::Dead;
                 return id;
@@ -103,12 +114,17 @@ impl Circuit {
                 .filter(|(_, w)| !w.iter().all(|e| new_set.iter().any(|n| n.is_subset(e))))
                 .map(|(a, _)| *a)
                 .collect();
-            let Node::Fact { alts, .. } = &mut self.nodes[id] else { unreachable!() };
+            let Node::Fact { alts, .. } = &mut self.nodes[id] else {
+                unreachable!()
+            };
             *alts = keep;
             alts.push(times);
             return id;
         }
-        self.nodes.push(Node::Fact { fact: head.clone(), alts: vec![times] });
+        self.nodes.push(Node::Fact {
+            fact: head.clone(),
+            alts: vec![times],
+        });
         let id = self.nodes.len() - 1;
         self.by_fact.insert(head, id);
         id
@@ -147,7 +163,10 @@ impl Circuit {
     /// (P(N), ∩, ∪): nulls that must resolve before this fact is definite.
     /// A fact with one null-free derivation is definite even if it has others.
     pub fn phase(&self, f: &Fact) -> BTreeSet<String> {
-        self.by_fact.get(f).map(|id| self.phase_node(*id)).unwrap_or_default()
+        self.by_fact
+            .get(f)
+            .map(|id| self.phase_node(*id))
+            .unwrap_or_default()
     }
     fn phase_node(&self, id: NodeId) -> BTreeSet<String> {
         match &self.nodes[id] {
@@ -155,7 +174,9 @@ impl Circuit {
             Node::Fact { fact, alts } => {
                 let mut acc: Option<BTreeSet<String>> = None;
                 for a in alts {
-                    let Node::Times(ch) = &self.nodes[*a] else { continue };
+                    let Node::Times(ch) = &self.nodes[*a] else {
+                        continue;
+                    };
                     let s: BTreeSet<String> = ch.iter().flat_map(|c| self.phase_node(*c)).collect();
                     acc = Some(match acc {
                         None => s,
@@ -173,7 +194,10 @@ impl Circuit {
     /// (P(N), ∪, ∪): nulls whose resolution may change this fact's spelling or
     /// existence. This is the invalidation set for a phase boundary.
     pub fn touches(&self, f: &Fact) -> BTreeSet<String> {
-        self.by_fact.get(f).map(|id| self.touches_node(*id)).unwrap_or_default()
+        self.by_fact
+            .get(f)
+            .map(|id| self.touches_node(*id))
+            .unwrap_or_default()
     }
     fn touches_node(&self, id: NodeId) -> BTreeSet<String> {
         match &self.nodes[id] {
@@ -195,11 +219,21 @@ impl Circuit {
     /// gains the world leaf. Returns the re-spelled facts.
     pub fn resolve(&mut self, label: &str, value: &Value, world: Leaf) -> Vec<(Fact, Fact)> {
         let w = self.leaf(world);
-        let carrying: Vec<(Fact, NodeId)> = self.by_fact.iter().filter(|(f, _)| f.nulls().contains(label)).map(|(f, id)| (f.clone(), *id)).collect();
+        let carrying: Vec<(Fact, NodeId)> = self
+            .by_fact
+            .iter()
+            .filter(|(f, _)| f.nulls().contains(label))
+            .map(|(f, id)| (f.clone(), *id))
+            .collect();
         let mut renamed = Vec::new();
         for (old, id) in carrying {
-            let new = Fact { pred: old.pred.clone(), args: old.args.iter().map(|a| subst(a, label, value)).collect() };
-            let Node::Fact { fact, alts } = &mut self.nodes[id] else { unreachable!() };
+            let new = Fact {
+                pred: old.pred.clone(),
+                args: old.args.iter().map(|a| subst(a, label, value)).collect(),
+            };
+            let Node::Fact { fact, alts } = &mut self.nodes[id] else {
+                unreachable!()
+            };
             *fact = new.clone();
             let alts_snapshot = alts.clone();
             for a in alts_snapshot {
@@ -213,8 +247,14 @@ impl Circuit {
             self.by_fact.remove(&old);
             if let Some(&other) = self.by_fact.get(&new) {
                 // Two tuples became one: ⊕ their alternatives.
-                let Node::Fact { alts: mine, .. } = std::mem::replace(&mut self.nodes[id], Node::Dead) else { unreachable!() };
-                let Node::Fact { alts, .. } = &mut self.nodes[other] else { unreachable!() };
+                let Node::Fact { alts: mine, .. } =
+                    std::mem::replace(&mut self.nodes[id], Node::Dead)
+                else {
+                    unreachable!()
+                };
+                let Node::Fact { alts, .. } = &mut self.nodes[other] else {
+                    unreachable!()
+                };
                 alts.extend(mine);
                 self.redirect(id, other);
             } else {
@@ -247,7 +287,9 @@ impl Circuit {
         let mut out = Vec::new();
         let mut work = vec![f.clone()];
         while let Some(f) = work.pop() {
-            let Some(id) = self.by_fact.remove(&f) else { continue };
+            let Some(id) = self.by_fact.remove(&f) else {
+                continue;
+            };
             self.nodes[id] = Node::Dead;
             out.push(f);
             let dead_times: Vec<NodeId> = self
@@ -268,7 +310,11 @@ impl Circuit {
                 .filter_map(|n| match n {
                     Node::Fact { fact, alts } => {
                         alts.retain(|a| !dead_times.contains(a));
-                        if alts.is_empty() { Some(fact.clone()) } else { None }
+                        if alts.is_empty() {
+                            Some(fact.clone())
+                        } else {
+                            None
+                        }
                     }
                     _ => None,
                 })
@@ -293,13 +339,24 @@ mod tests {
         Value::Str(x.into())
     }
     fn fresh(l: &str) -> Value {
-        Value::Null { label: l.into(), class: NullClass::Fresh, ty: "string".into() }
+        Value::Null {
+            label: l.into(),
+            class: NullClass::Fresh,
+            ty: "string".into(),
+        }
     }
     fn open(l: &str) -> Value {
-        Value::Null { label: l.into(), class: NullClass::Open, ty: "inet".into() }
+        Value::Null {
+            label: l.into(),
+            class: NullClass::Open,
+            ty: "inet".into(),
+        }
     }
     fn net(a: &str, p: u8) -> Value {
-        Value::IpNet { addr: crate::value::ipv4_to_u32(a).unwrap(), prefix: p }
+        Value::IpNet {
+            addr: crate::value::ipv4_to_u32(a).unwrap(),
+            prefix: p,
+        }
     }
     fn leaves(w: &BTreeSet<BTreeSet<Leaf>>) -> BTreeSet<Leaf> {
         w.iter().flatten().cloned().collect()
@@ -310,24 +367,58 @@ mod tests {
     /// want(vpc), never carries a null.
     fn build() -> (Circuit, Fact, Fact, Fact, Fact) {
         let mut c = Circuit::default();
-        let base = c.leaf(Leaf::Base { span: "dform.df:40".into() });
+        let base = c.leaf(Leaf::Base {
+            span: "dform.df:40".into(),
+        });
         let want_vpc = Fact::new("want", vec![s("net.vpc"), s("network.main/vpc")]);
         c.derive(want_vpc.clone(), vec![base]);
         let wv = c.fact_id(&want_vpc).unwrap();
 
-        let prelude = c.leaf(Leaf::Rule { id: "prelude:computed(net.vpc,.id)".into() });
-        let schema = c.leaf(Leaf::Schema { span: "fake:type_attr(net.vpc,.id,computed)".into() });
-        let attr_vpc_id = Fact::new("attr", vec![s("net.vpc"), s("network.main/vpc"), s(".id"), fresh("net.vpc/network.main/vpc#id")]);
+        let prelude = c.leaf(Leaf::Rule {
+            id: "prelude:computed(net.vpc,.id)".into(),
+        });
+        let schema = c.leaf(Leaf::Schema {
+            span: "fake:type_attr(net.vpc,.id,computed)".into(),
+        });
+        let attr_vpc_id = Fact::new(
+            "attr",
+            vec![
+                s("net.vpc"),
+                s("network.main/vpc"),
+                s(".id"),
+                fresh("net.vpc/network.main/vpc#id"),
+            ],
+        );
         c.derive(attr_vpc_id.clone(), vec![prelude, schema, wv]);
         let av = c.fact_id(&attr_vpc_id).unwrap();
 
-        let r_subnet = c.leaf(Leaf::Rule { id: "network.df:15".into() });
-        let attr_sub = Fact::new("attr", vec![s("net.subnet"), s("network.main/private-a"), s(".vpc_id"), fresh("net.vpc/network.main/vpc#id")]);
+        let r_subnet = c.leaf(Leaf::Rule {
+            id: "network.df:15".into(),
+        });
+        let attr_sub = Fact::new(
+            "attr",
+            vec![
+                s("net.subnet"),
+                s("network.main/private-a"),
+                s(".vpc_id"),
+                fresh("net.vpc/network.main/vpc#id"),
+            ],
+        );
         c.derive(attr_sub.clone(), vec![r_subnet, av]);
         let asub = c.fact_id(&attr_sub).unwrap();
 
-        let r_cluster = c.leaf(Leaf::Rule { id: "kubernetes.df:8".into() });
-        let attr_cluster = Fact::new("attr", vec![s("k8s.cluster"), s("kubernetes.main/cluster"), s(".vpc_ids"), Value::List(vec![fresh("net.vpc/network.main/vpc#id")])]);
+        let r_cluster = c.leaf(Leaf::Rule {
+            id: "kubernetes.df:8".into(),
+        });
+        let attr_cluster = Fact::new(
+            "attr",
+            vec![
+                s("k8s.cluster"),
+                s("kubernetes.main/cluster"),
+                s(".vpc_ids"),
+                Value::List(vec![fresh("net.vpc/network.main/vpc#id")]),
+            ],
+        );
         c.derive(attr_cluster.clone(), vec![r_cluster, asub]);
         (c, want_vpc, attr_vpc_id, attr_sub, attr_cluster)
     }
@@ -344,18 +435,34 @@ mod tests {
         }
         // A fact with two alternatives, one null-free, is definite (∩) but touched (∪).
         let mut c = c;
-        let other = c.leaf(Leaf::Base { span: "adopt.df:1".into() });
+        let other = c.leaf(Leaf::Base {
+            span: "adopt.df:1".into(),
+        });
         c.derive(attr_sub.clone(), vec![other]);
-        assert!(c.phase(&attr_sub).is_empty() == false, "the tuple itself still carries the null, so it is not definite");
+        assert!(
+            c.phase(&attr_sub).is_empty() == false,
+            "the tuple itself still carries the null, so it is not definite"
+        );
         // But a null-free *tuple* with one null-free alternative and one null-carrying alternative:
-        let p = Fact::new("subnet_of", vec![s("network.main/private-a"), s("network.main/vpc")]);
-        let r = c.leaf(Leaf::Rule { id: "network.df:20".into() });
+        let p = Fact::new(
+            "subnet_of",
+            vec![s("network.main/private-a"), s("network.main/vpc")],
+        );
+        let r = c.leaf(Leaf::Rule {
+            id: "network.df:20".into(),
+        });
         let asub = c.fact_id(&attr_sub).unwrap();
         c.derive(p.clone(), vec![r, asub]);
         assert!(!c.phase(&p).is_empty() || c.touches(&p).contains(&nu));
         c.derive(p.clone(), vec![other]);
-        assert!(c.phase(&p).is_empty(), "a null-free alternative makes it definite");
-        assert!(c.touches(&p).contains(&nu), "but a resolution still touches it");
+        assert!(
+            c.phase(&p).is_empty(),
+            "a null-free alternative makes it definite"
+        );
+        assert!(
+            c.touches(&p).contains(&nu),
+            "but a resolution still touches it"
+        );
     }
 
     #[test]
@@ -365,7 +472,13 @@ mod tests {
         let want_id = c.fact_id(&want_vpc).unwrap();
         let before_sub = c.why(&attr_sub);
 
-        let renamed = c.resolve(nu, &s("vpc-0a1b"), Leaf::World { event: "apply#1 create net.vpc".into() });
+        let renamed = c.resolve(
+            nu,
+            &s("vpc-0a1b"),
+            Leaf::World {
+                event: "apply#1 create net.vpc".into(),
+            },
+        );
         assert_eq!(renamed.len(), 3, "exactly the touched facts are re-spelled");
 
         // The untouched fact keeps its node and its provenance.
@@ -376,18 +489,46 @@ mod tests {
         for f in [&attr_vpc_id, &attr_sub, &attr_cluster] {
             assert!(!c.has(f));
         }
-        let new_sub = Fact::new("attr", vec![s("net.subnet"), s("network.main/private-a"), s(".vpc_id"), s("vpc-0a1b")]);
-        let new_cluster = Fact::new("attr", vec![s("k8s.cluster"), s("kubernetes.main/cluster"), s(".vpc_ids"), Value::List(vec![s("vpc-0a1b")])]);
+        let new_sub = Fact::new(
+            "attr",
+            vec![
+                s("net.subnet"),
+                s("network.main/private-a"),
+                s(".vpc_id"),
+                s("vpc-0a1b"),
+            ],
+        );
+        let new_cluster = Fact::new(
+            "attr",
+            vec![
+                s("k8s.cluster"),
+                s("kubernetes.main/cluster"),
+                s(".vpc_ids"),
+                Value::List(vec![s("vpc-0a1b")]),
+            ],
+        );
         assert!(c.has(&new_sub) && c.has(&new_cluster));
         assert!(c.phase(&new_sub).is_empty() && c.touches(&new_sub).is_empty());
 
         // why(new) = why(old) ⊗ world: every old leaf is still there, plus the event.
         let after = c.why(&new_sub);
-        let world = Leaf::World { event: "apply#1 create net.vpc".into() };
+        let world = Leaf::World {
+            event: "apply#1 create net.vpc".into(),
+        };
         assert!(after.iter().all(|ws| ws.contains(&world)));
-        assert_eq!(leaves(&after).difference(&leaves(&before_sub)).cloned().collect::<BTreeSet<_>>(), BTreeSet::from([world.clone()]));
-        assert!(leaves(&after).contains(&Leaf::Rule { id: "network.df:15".into() }));
-        assert!(leaves(&after).contains(&Leaf::Base { span: "dform.df:40".into() }));
+        assert_eq!(
+            leaves(&after)
+                .difference(&leaves(&before_sub))
+                .cloned()
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([world.clone()])
+        );
+        assert!(leaves(&after).contains(&Leaf::Rule {
+            id: "network.df:15".into()
+        }));
+        assert!(leaves(&after).contains(&Leaf::Base {
+            span: "dform.df:40".into()
+        }));
         // The cluster fact, two hops downstream, also sees the event exactly once.
         let cl = c.why(&new_cluster);
         assert!(cl.iter().all(|ws| ws.contains(&world)));
@@ -400,48 +541,136 @@ mod tests {
         // ⊤, the attr row is retracted, its forwarding cone goes with it, and
         // attr_conflict is derived naming the schema and the contributor.
         let mut c = Circuit::default();
-        let base = c.leaf(Leaf::Base { span: "pngu.df:70".into() });
-        let alloc_rule = c.leaf(Leaf::Rule { id: "pngu.df:88".into() });
-        let schema = c.leaf(Leaf::Schema { span: "pngu.df:31 control_plane_cidr: inet where prefix_len = 28".into() });
-        let agg = c.leaf(Leaf::Rule { id: "prelude:attr-aggregate".into() });
+        let base = c.leaf(Leaf::Base {
+            span: "pngu.df:70".into(),
+        });
+        let alloc_rule = c.leaf(Leaf::Rule {
+            id: "pngu.df:88".into(),
+        });
+        let schema = c.leaf(Leaf::Schema {
+            span: "pngu.df:31 control_plane_cidr: inet where prefix_len = 28".into(),
+        });
+        let agg = c.leaf(Leaf::Rule {
+            id: "prelude:attr-aggregate".into(),
+        });
         let nu = "alloc/cp#cidr";
 
-        let arg = Fact::new("arg", vec![s("gke.cluster"), s("pngu"), s(".master_control_plane_cidr"), open(nu), s("normal")]);
+        let arg = Fact::new(
+            "arg",
+            vec![
+                s("gke.cluster"),
+                s("pngu"),
+                s(".master_control_plane_cidr"),
+                open(nu),
+                s("normal"),
+            ],
+        );
         c.derive(arg.clone(), vec![alloc_rule, base]);
         let arg_id = c.fact_id(&arg).unwrap();
-        let attr = Fact::new("attr", vec![s("gke.cluster"), s("pngu"), s(".master_control_plane_cidr"), open(nu)]);
+        let attr = Fact::new(
+            "attr",
+            vec![
+                s("gke.cluster"),
+                s("pngu"),
+                s(".master_control_plane_cidr"),
+                open(nu),
+            ],
+        );
         c.derive(attr.clone(), vec![agg, schema, arg_id]);
         let attr_id = c.fact_id(&attr).unwrap();
-        let fwd_rule = c.leaf(Leaf::Rule { id: "monitoring.df:3".into() });
-        let fwd = Fact::new("attr", vec![s("google.monitoring_dashboard"), s("pngu"), s(".note"), open(nu)]);
+        let fwd_rule = c.leaf(Leaf::Rule {
+            id: "monitoring.df:3".into(),
+        });
+        let fwd = Fact::new(
+            "attr",
+            vec![
+                s("google.monitoring_dashboard"),
+                s("pngu"),
+                s(".note"),
+                open(nu),
+            ],
+        );
         c.derive(fwd.clone(), vec![fwd_rule, attr_id]);
 
         // The cell, as the aggregate sees it.
-        let cell = Ranked::at(Rank::Normal, arg_id as u32, open(nu)).join(&Ranked::constraint(Constraint::PrefixLen(28), schema as u32), ".x");
-        assert!(matches!(cell.collapse(), Collapsed::Val { ref deferred, .. } if !deferred.is_empty()));
+        let cell = Ranked::at(Rank::Normal, arg_id as u32, open(nu)).join(
+            &Ranked::constraint(Constraint::PrefixLen(28), schema as u32),
+            ".x",
+        );
+        assert!(
+            matches!(cell.collapse(), Collapsed::Val { ref deferred, .. } if !deferred.is_empty())
+        );
 
         // Phase boundary.
-        let world = Leaf::World { event: "apply#1 allocate cidr".into() };
+        let world = Leaf::World {
+            event: "apply#1 allocate cidr".into(),
+        };
         let bad = net("10.0.0.0", 24);
         c.resolve(nu, &bad, world.clone());
-        let resolved_attr = Fact::new("attr", vec![s("gke.cluster"), s("pngu"), s(".master_control_plane_cidr"), bad.clone()]);
+        let resolved_attr = Fact::new(
+            "attr",
+            vec![
+                s("gke.cluster"),
+                s("pngu"),
+                s(".master_control_plane_cidr"),
+                bad.clone(),
+            ],
+        );
         assert!(c.has(&resolved_attr));
-        let Collapsed::Conflict { a, b, .. } = cell.resolve(nu, &bad).collapse() else { panic!("expected conflict") };
+        let Collapsed::Conflict { a, b, .. } = cell.resolve(nu, &bad).collapse() else {
+            panic!("expected conflict")
+        };
 
         // The engine's reaction: retract the attr row and its cone, derive attr_conflict.
         let gone = c.retract(&resolved_attr);
-        let resolved_fwd = Fact::new("attr", vec![s("google.monitoring_dashboard"), s("pngu"), s(".note"), bad.clone()]);
-        assert!(gone.contains(&resolved_attr) && gone.contains(&resolved_fwd), "cone retracted: {gone:?}");
-        let resolved_arg = Fact::new("arg", vec![s("gke.cluster"), s("pngu"), s(".master_control_plane_cidr"), bad.clone(), s("normal")]);
-        assert!(c.has(&resolved_arg), "the contribution below the aggregate survives");
+        let resolved_fwd = Fact::new(
+            "attr",
+            vec![
+                s("google.monitoring_dashboard"),
+                s("pngu"),
+                s(".note"),
+                bad.clone(),
+            ],
+        );
+        assert!(
+            gone.contains(&resolved_attr) && gone.contains(&resolved_fwd),
+            "cone retracted: {gone:?}"
+        );
+        let resolved_arg = Fact::new(
+            "arg",
+            vec![
+                s("gke.cluster"),
+                s("pngu"),
+                s(".master_control_plane_cidr"),
+                bad.clone(),
+                s("normal"),
+            ],
+        );
+        assert!(
+            c.has(&resolved_arg),
+            "the contribution below the aggregate survives"
+        );
 
         let wl = c.leaf(world.clone());
-        let conflict = Fact::new("attr_conflict", vec![s("gke.cluster"), s("pngu"), s(".master_control_plane_cidr"), Value::Int(a.1.iter().next().copied().unwrap() as i64), Value::Int(b.1.iter().next().copied().unwrap() as i64)]);
+        let conflict = Fact::new(
+            "attr_conflict",
+            vec![
+                s("gke.cluster"),
+                s("pngu"),
+                s(".master_control_plane_cidr"),
+                Value::Int(a.1.iter().next().copied().unwrap() as i64),
+                Value::Int(b.1.iter().next().copied().unwrap() as i64),
+            ],
+        );
         let resolved_arg_id = c.fact_id(&resolved_arg).unwrap();
         c.derive(conflict.clone(), vec![agg, schema, resolved_arg_id, wl]);
         let why = leaves(&c.why(&conflict));
-        assert!(why.contains(&Leaf::Schema { span: "pngu.df:31 control_plane_cidr: inet where prefix_len = 28".into() }));
-        assert!(why.contains(&Leaf::Rule { id: "pngu.df:88".into() }));
+        assert!(why.contains(&Leaf::Schema {
+            span: "pngu.df:31 control_plane_cidr: inet where prefix_len = 28".into()
+        }));
+        assert!(why.contains(&Leaf::Rule {
+            id: "pngu.df:88".into()
+        }));
         assert!(why.contains(&world));
         assert!(c.phase(&conflict).is_empty(), "the conflict is definite");
     }
@@ -455,7 +684,13 @@ mod tests {
         let f = Fact::new("p", vec![s("x")]);
         c.derive(f.clone(), vec![r, a, b]);
         c.derive(f.clone(), vec![r, a]); // absorbs the first
-        assert_eq!(c.why(&f), BTreeSet::from([BTreeSet::from([Leaf::Rule { id: "r".into() }, Leaf::Base { span: "a".into() }])]));
+        assert_eq!(
+            c.why(&f),
+            BTreeSet::from([BTreeSet::from([
+                Leaf::Rule { id: "r".into() },
+                Leaf::Base { span: "a".into() }
+            ])])
+        );
         c.derive(f.clone(), vec![r, a, b]); // absorbed by the second
         assert_eq!(c.why(&f).len(), 1);
     }
