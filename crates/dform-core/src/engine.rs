@@ -1711,6 +1711,23 @@ fn ensure_ground(a: &Atom) -> Result<Atom> {
     })
 }
 
+#[cfg(feature = "test-hooks")]
+use crate::hooks::{Rule3 as Rule3Clause, planted};
+
+/// A clause of Rule 3 the property test can plant a bug in (`hooks`).
+#[cfg(not(feature = "test-hooks"))]
+enum Rule3Clause {
+    Negation,
+    Reader,
+}
+
+/// Without `test-hooks`, no clause is ever skipped.
+#[cfg(not(feature = "test-hooks"))]
+#[inline(always)]
+fn planted(_: Rule3Clause) -> bool {
+    false
+}
+
 /// Rule 2's recorder for the rule being evaluated (E §2.7, F DR-2 revised):
 /// every instance that needs a null's content is recorded here instead of
 /// firing. `known` holds the stuck heads of lower strata, for Rule 3.
@@ -2193,7 +2210,7 @@ fn eval_body(body: &[Lit], src: &Src, rec: &Rec) -> Result<Vec<Row>> {
                         // Rule 3: a positive reader of an undetermined
                         // aggregate group is undetermined. It still reads
                         // the groups that were decided.
-                        if rec.aggregates.contains(&atom.pred) {
+                        if rec.aggregates.contains(&atom.pred) && !planted(Rule3Clause::Reader) {
                             let nulls = rec.known.borrow().blocking(&read_pattern(atom, s));
                             if !nulls.is_empty() {
                                 rec.stuck(
@@ -2367,7 +2384,7 @@ fn eval_not(grounded: &Atom, src: &Src, s: &HashMap<String, Value>, rec: &Rec) -
     }
     let known = rec.known.borrow();
     let nulls = known.blocking(grounded);
-    if !nulls.is_empty() || known.any(grounded) {
+    if (!nulls.is_empty() || known.any(grounded)) && !planted(Rule3Clause::Negation) {
         rec.stuck(
             s,
             nulls,
