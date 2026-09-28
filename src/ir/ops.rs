@@ -4,12 +4,15 @@
 //! joins the tuples the last round derived (the delta) against the full
 //! relations, once per body position, until a round derives nothing.
 //!
-//! A relation read records the columns bound before it (a constant, or a
-//! variable an earlier literal binds): the key of the join.
+//! Index selection is here too: a relation read whose columns are bound by
+//! the literals before it (a constant, or a variable an earlier literal
+//! binds) reads a hash index on those columns, chosen at compile time from
+//! the body's binding pattern. The engine keeps every index up to date as
+//! tuples are inserted.
 
 use crate::ast::{Atom, Lit, RuleStmt, Term};
 use crate::lattice::nulls_in;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// A relation: a predicate at one arity.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -36,9 +39,17 @@ pub struct Read {
     /// Index of the literal in the rule body.
     pub lit: usize,
     pub rel: Rel,
-    /// Columns bound before the literal; empty for a scan of the whole
-    /// relation.
+    /// Columns bound before the literal, looked up in an index; empty for a
+    /// scan of the whole relation.
     pub key: Key,
+    /// The literal compares a column outside `key` (a function, a list or
+    /// object pattern, a repeated variable): a tuple outside the index
+    /// bucket can still make that comparison undecided (Rule 2), so tuples
+    /// holding an open or secret null are read as well.
+    pub loose: bool,
+    /// A constant in the literal holds a null: no index can decide which
+    /// tuples it compares undecided, so every tuple is read.
+    pub scan_all: bool,
 }
 
 /// One operator of a rule body, in body order.
@@ -48,12 +59,13 @@ pub enum Op {
     /// bound.
     Scan(Read),
     /// Extend each row with the tuples of a relation that agree with it on
-    /// the bound columns.
+    /// the bound columns (a hash-index lookup).
     Join(Read),
     /// A read of an `extern` relation: joined like any other, complete
     /// before the stratum that reads it (its edge is negative).
     Extern(Read),
-    /// `not p(...)`: keep the rows no tuple matches.
+    /// `not p(...)`: keep the rows no tuple matches. The whole tuple is
+    /// bound, so it is an index lookup on every column.
     AntiJoin { lit: usize, rel: Rel },
     /// A builtin predicate, `!=` or an ordering comparison. Three outputs:
     /// the rows that pass, the rows that fail, and `Stuck`, the rows that
@@ -181,12 +193,31 @@ pub fn compile_body(body: &[Lit], externs: &BTreeSet<String>) -> Body {
 /// A positive relation read: the columns bound before it are its key.
 fn compile_read(lit: usize, a: &Atom, bound: &mut BTreeSet<String>) -> Read {
     let mut key = Vec::new();
+    let mut loose = false;
+    let mut scan_all = false;
+    // Variables this literal binds: a later occurrence in the same literal
+    // compares against the tuple's own column.
     let mut here: BTreeSet<String> = BTreeSet::new();
     for (c, t) in a.args.iter().enumerate() {
         match t {
-            Term::Val(v) if nulls_in(v).is_empty() => key.push(c),
+            Term::Val(v) => {
+                if nulls_in(v).is_empty() {
+                    key.push(c);
+                } else {
+                    scan_all = true;
+                }
+            }
             Term::Var(x) if bound.contains(x) => key.push(c),
-            other => bind_vars(other, &mut here),
+            Term::Var(x) => {
+                if !here.insert(x.clone()) {
+                    loose = true;
+                }
+            }
+            Term::Wildcard => {}
+            other => {
+                loose = true;
+                bind_vars(other, &mut here);
+            }
         }
     }
     bound.extend(here);
@@ -194,6 +225,8 @@ fn compile_read(lit: usize, a: &Atom, bound: &mut BTreeSet<String>) -> Read {
         lit,
         rel: Rel::of(a),
         key,
+        loose,
+        scan_all,
     }
 }
 
@@ -266,6 +299,27 @@ pub fn fixes(rules: &[RuleStmt], stratum_of: &[usize], compiled: &[Rule]) -> Vec
     out
 }
 
+/// Every index a set of bodies reads through, by relation.
+pub fn indexes<'a>(bodies: impl IntoIterator<Item = &'a Body>) -> BTreeMap<Rel, BTreeSet<Key>> {
+    let mut out: BTreeMap<Rel, BTreeSet<Key>> = BTreeMap::new();
+    for b in bodies {
+        for op in &b.ops {
+            match op {
+                Op::Scan(r) | Op::Join(r) | Op::Extern(r) if !r.key.is_empty() && !r.scan_all => {
+                    out.entry(r.rel.clone()).or_default().insert(r.key.clone());
+                }
+                Op::AntiJoin { rel, .. } => {
+                    out.entry(rel.clone())
+                        .or_default()
+                        .insert((0..rel.arity).collect());
+                }
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -292,12 +346,22 @@ mod tests {
         assert_eq!(reads[1].key, vec![0, 1]);
         assert!(matches!(b.ops[1], Op::Join(_)));
         assert!(matches!(b.ops[2], Op::AntiJoin { .. }));
+        let idx = indexes([&b]);
+        assert_eq!(
+            idx[&Rel {
+                pred: "r".into(),
+                arity: 1
+            }],
+            BTreeSet::from([vec![0]])
+        );
     }
 
     #[test]
-    fn an_equality_binds() {
-        let b = body("h(X) :- Y = 1, p(Y, X).");
+    fn an_equality_binds_and_a_repeated_variable_is_loose() {
+        let b = body("h(X) :- Y = 1, p(Y, X, X).");
         assert!(matches!(b.ops[0], Op::Map { .. }));
-        assert_eq!(b.reads().next().unwrap().key, vec![0]);
+        let r = b.reads().next().unwrap();
+        assert_eq!(r.key, vec![0]);
+        assert!(r.loose);
     }
 }

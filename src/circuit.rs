@@ -15,9 +15,10 @@
 //! The evaluator records every fact it inserts here (E DR-10: provenance is
 //! always on). A firing also keeps the rule's variable bindings, for `why`.
 
+use crate::ir::fx::{FxHashMap, FxHashSet};
 use crate::lattice::{nulls_in, subst};
 use crate::value::Value;
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 
 pub type NodeId = usize;
 
@@ -55,7 +56,7 @@ pub enum Leaf {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Fact {
     pub pred: String,
     pub args: Vec<Value>,
@@ -91,7 +92,7 @@ enum Node {
 #[derive(Debug, Default, Clone)]
 pub struct Circuit {
     nodes: Vec<Node>,
-    by_fact: BTreeMap<Fact, NodeId>,
+    by_fact: FxHashMap<Fact, NodeId>,
     leaves: BTreeMap<Leaf, NodeId>,
     /// Per Times node: the rule's variable bindings for that firing.
     bindings: BTreeMap<NodeId, Vec<(String, Value)>>,
@@ -101,7 +102,7 @@ pub struct Circuit {
     rule_at: BTreeMap<String, String>,
     /// Firings already absorbed or truncated, so naive re-evaluation does
     /// not re-test (or re-store) them.
-    rejected: HashSet<(NodeId, Vec<NodeId>)>,
+    rejected: FxHashSet<(NodeId, Vec<NodeId>)>,
 }
 
 /// A read-only view of one node, for printers.
@@ -409,12 +410,13 @@ impl Circuit {
     /// gains the world leaf. Returns the re-spelled facts.
     pub fn resolve(&mut self, label: &str, value: &Value, world: Leaf) -> Vec<(Fact, Fact)> {
         let w = self.leaf(world);
-        let carrying: Vec<(Fact, NodeId)> = self
+        let mut carrying: Vec<(Fact, NodeId)> = self
             .by_fact
             .iter()
             .filter(|(f, _)| f.nulls().contains(label))
             .map(|(f, id)| (f.clone(), *id))
             .collect();
+        carrying.sort();
         let mut renamed = Vec::new();
         for (old, id) in carrying {
             let new = Fact {
@@ -514,8 +516,11 @@ impl Circuit {
         out
     }
 
+    /// Every fact, in fact order.
     pub fn facts(&self) -> Vec<Fact> {
-        self.by_fact.keys().cloned().collect()
+        let mut out: Vec<Fact> = self.by_fact.keys().cloned().collect();
+        out.sort();
+        out
     }
 }
 

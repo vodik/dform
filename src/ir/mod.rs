@@ -1,6 +1,7 @@
 //! The resource IR (`compile_resources`) and, in [`ops`], the operator IR
 //! rules compile to.
 
+pub mod fx;
 pub mod ops;
 pub mod store;
 

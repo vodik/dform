@@ -299,7 +299,7 @@ fn start(program: &Program, extra_facts: &[Atom]) -> Result<(Compiled, State)> {
         })
         .collect();
     // The operator IR: one body per rule and constraint, a Fix per
-    // stratum.
+    // stratum, and the indexes the bodies read through.
     let extern_preds: BTreeSet<String> = externs.iter().map(|e| e.pred.clone()).collect();
     let plans: Vec<ops::Rule> = rules
         .iter()
@@ -310,6 +310,12 @@ fn start(program: &Program, extra_facts: &[Atom]) -> Result<(Compiled, State)> {
         .map(|c| ops::compile_body(&c.body, &extern_preds))
         .collect();
     let fixes = ops::fixes(&rules, &rule_stratum, &plans);
+    let bodies = plans.iter().map(|p| &p.body).chain(&constraint_bodies);
+    for (rel, keys) in ops::indexes(bodies) {
+        for key in keys {
+            prov.store.index(&rel, &key);
+        }
+    }
 
     let rule_text: Vec<String> = rules.iter().map(partition::fmt_rule).collect();
     origins.rules = rule_text
@@ -613,6 +619,11 @@ pub fn query(body: &[Lit], facts: &BTreeSet<Atom>) -> Result<Vec<Answer>> {
     let plan = ops::compile_body(body, &BTreeSet::new());
     // Tuple ids in fact order: answers come out in fact order.
     let mut store = Store::default();
+    for (rel, keys) in ops::indexes([&plan]) {
+        for key in keys {
+            store.index(&rel, &key);
+        }
+    }
     for a in facts {
         store.insert(a.clone());
     }
@@ -1683,6 +1694,44 @@ impl Row {
     }
 }
 
+/// The key columns of a relation read under `s`, when every one is bound
+/// to a value without a null (otherwise the read scans).
+fn probe(atom: &Atom, read: &ops::Read, s: &HashMap<String, Value>) -> Option<Vec<Value>> {
+    if read.key.is_empty() || read.scan_all {
+        return None;
+    }
+    let mut out = Vec::with_capacity(read.key.len());
+    for &c in &read.key {
+        let v = match &atom.args[c] {
+            Term::Val(v) => v.clone(),
+            Term::Var(x) => s.get(x)?.clone(),
+            _ => return None,
+        };
+        if stuck::has_null(&v) {
+            return None;
+        }
+        out.push(v);
+    }
+    // A loose read compares other columns too: a null bound there can
+    // make a tuple outside the bucket undecided.
+    if read.loose && atom.args.iter().any(|t| term_has_bound_null(t, s)) {
+        return None;
+    }
+    Some(out)
+}
+
+/// Does a variable of `t` hold a value with a null under `s`?
+fn term_has_bound_null(t: &Term, s: &HashMap<String, Value>) -> bool {
+    match t {
+        Term::Var(x) => s.get(x).is_some_and(stuck::has_null),
+        Term::Func { args, .. } | Term::List(args) => {
+            args.iter().any(|a| term_has_bound_null(a, s))
+        }
+        Term::Obj(m) => m.values().any(|a| term_has_bound_null(a, s)),
+        Term::Val(_) | Term::Wildcard | Term::ListComp { .. } => false,
+    }
+}
+
 fn eval_body(body: &[Lit], src: &Src, rec: &Rec) -> Result<Vec<Row>> {
     let mut states: Vec<Row> = vec![Row {
         s: HashMap::new(),
@@ -1736,7 +1785,14 @@ fn eval_body(body: &[Lit], src: &Src, rec: &Rec) -> Result<Vec<Row>> {
                                 );
                             }
                         }
-                        for t in src.store.candidates(&read.rel, src.win[i]) {
+                        let key = probe(atom, read, s);
+                        for t in src.store.candidates(
+                            &read.rel,
+                            &read.key,
+                            key.as_deref(),
+                            read.loose,
+                            src.win[i],
+                        ) {
                             if let Some(s2) = unify_atom(atom, src.store.get(t), s, rec)? {
                                 let mut r = row.with(s2);
                                 r.used.push(t);
@@ -1839,9 +1895,23 @@ fn eval_not(grounded: &Atom, src: &Src, s: &HashMap<String, Value>, rec: &Rec) -
         );
         return false;
     }
-    let mut unknown = BTreeSet::new();
+    // Every column is bound: an index lookup on all of them.
     let rel = ops::Rel::of(grounded);
-    for t in src.store.candidates(&rel, src.all) {
+    let key: ops::Key = (0..rel.arity).collect();
+    let probe: Option<Vec<Value>> = grounded
+        .args
+        .iter()
+        .map(|t| match t {
+            Term::Val(v) if !stuck::has_null(v) => Some(v.clone()),
+            _ => None,
+        })
+        .collect();
+    let probe = probe.filter(|p| !p.is_empty());
+    let mut unknown = BTreeSet::new();
+    for t in src
+        .store
+        .candidates(&rel, &key, probe.as_deref(), false, src.all)
+    {
         let f = src.store.get(t);
         let mut t = Truth::True;
         for (a, b) in f.args.iter().zip(&grounded.args) {
