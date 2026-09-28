@@ -58,13 +58,52 @@ fn editing_the_world_file_shows_drift_and_apply_writes_it_back() {
     );
 }
 
+/// The world's objects state does not map are not dform's: with no state
+/// file, as after a stack deleted everything it owned, none is adopted
+/// and none is planned for delete.
 #[test]
-fn a_world_file_without_state_is_taken_as_what_exists() {
+fn a_world_file_without_state_adopts_nothing() {
     let s = Scratch::new("world-bare");
     let (prog, world) = fixture(&s);
     std::fs::remove_file(s.path("dform.state.json")).unwrap();
+    s.write("empty.df", "edition 2026\n");
+    let r = s
+        .run(&["--file", "empty.df", "--world", &world, "plan"])
+        .success();
+    assert_eq!(r.summary(), "stack empty is undeformed", "{}", r.stdout);
+    // The program's resources are creates: the world's objects of the
+    // same names are someone else's until an `adopt` says otherwise.
     let r = s
         .run(&["--file", &prog, "--world", &world, "plan"])
         .success();
-    assert_eq!(r.summary(), "stack dform is undeformed", "{}", r.stdout);
+    assert!(
+        !r.stdout.contains("\n- ") && !r.stdout.contains("\n> "),
+        "{}",
+        r.stdout
+    );
+}
+
+/// A stack that deleted everything it owned plans nothing next: the
+/// objects left in the world were never its own.
+#[test]
+fn an_emptied_stack_adopts_nothing() {
+    let s = Scratch::new("world-emptied");
+    s.write(
+        "w.json",
+        r#"{"resources": {
+            "compute.vm::mine": {"typ": "compute.vm", "name": "mine", "attrs": {}, "computed": {"id": "vm-1"}},
+            "compute.vm::theirs": {"typ": "compute.vm", "name": "theirs", "attrs": {}, "computed": {"id": "vm-2"}}}}"#,
+    );
+    s.write(
+        "w.state.json",
+        r#"{"version": 1, "resources": {"compute.vm::mine": {"provider": "fakecloud", "remote": "mine"}}}"#,
+    );
+    s.write("p.df", "edition 2026\n");
+    let args = ["--file", "p.df", "--world", "w.json"];
+    let r = s.run(&[&args[..], &["apply"]].concat()).success();
+    assert!(r.stdout.contains("- compute.vm.mine"), "{}", r.stdout);
+    let r = s.run(&[&args[..], &["plan"]].concat()).success();
+    assert_eq!(r.summary(), "stack p is undeformed", "{}", r.stdout);
+    assert!(!s.read("w.state.json").contains("theirs"));
+    assert!(s.read("w.json").contains("compute.vm::theirs"));
 }

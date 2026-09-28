@@ -83,10 +83,6 @@ fn key(typ: &str, remote: &str) -> String {
     format!("{typ}::{remote}")
 }
 
-/// The Query predicate a provider with the `managed` capability answers
-/// with every object it holds for dform, `(Type, RemoteId)`: how state is
-/// first taken from a world that predates it (`bootstrap_state`).
-pub const MANAGED: &str = "provider.managed";
 /// The inventory relations a provider with the `inventory` capability
 /// answers with every argument free, and their arities.
 pub const INVENTORY: [(&str, usize); 3] = [
@@ -369,33 +365,6 @@ impl Providers {
             }
         }
         Ok(out)
-    }
-
-    /// Migration: when state is empty, every object a provider holds for
-    /// dform (`MANAGED`) is taken into state under its own name.
-    pub fn bootstrap_state(&self, state: &mut State) -> Result<()> {
-        if !state.resources.is_empty() {
-            return Ok(());
-        }
-        for (i, link) in self.links.iter().enumerate() {
-            if !link.borrow().has("managed") {
-                continue;
-            }
-            for row in self.query_at(i, MANAGED, &[false, false], &[])? {
-                let [Value::Str(typ), Value::Str(remote)] = row.as_slice() else {
-                    bail!(
-                        "provider {}: {MANAGED} answers (Type, RemoteId)",
-                        self.names[i]
-                    );
-                };
-                let addr = Address {
-                    typ: typ.clone(),
-                    name: remote.clone(),
-                };
-                state.set(addr, self.names[i].clone(), remote.clone());
-            }
-        }
-        Ok(())
     }
 
     fn object(attrs: Option<&pb::Value>, computed: Option<&pb::Value>) -> Result<Object> {

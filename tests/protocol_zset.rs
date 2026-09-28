@@ -65,8 +65,7 @@ fn plan_on(
     )
     .unwrap();
     let schema = backend.schema().clone();
-    let mut st = dform::state::State::load(state).unwrap();
-    backend.bootstrap_state(&mut st).unwrap();
+    let st = dform::state::State::load(state).unwrap();
     let mut extra = extra.to_vec();
     extra.extend(schema.facts.clone());
     extra.extend(backend.world_facts(&st).unwrap());
@@ -172,6 +171,14 @@ fn an_open_null_against_a_world_constant_is_pending() {
         serde_json::json!({"resources": {"compute.vm::app": {
             "typ": "compute.vm", "name": "app",
             "attrs": {"db_host": "old.db.fake"}, "computed": {"id": "vm-1"}}}})
+        .to_string(),
+    )
+    .unwrap();
+    // The vm is dform's: state maps it.
+    std::fs::write(
+        dir.join("w.state.json"),
+        serde_json::json!({"version": 1, "resources": {
+            "compute.vm::app": {"provider": "fakecloud", "remote": "app"}}})
         .to_string(),
     )
     .unwrap();

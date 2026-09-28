@@ -647,7 +647,6 @@ fn run_with(
     );
 
     let mut st = state::State::load(&paths.state)?;
-    backend.bootstrap_state(&mut st)?;
     // What the plan file read, then what state persisted, before asking.
     if let Some((_, saved)) = &saved {
         externs.preload(saved.externs.clone());

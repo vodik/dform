@@ -14,7 +14,7 @@ const TWO_TICKS: &str = "edition 2026\nresource db.postgres main { size = 1 }\nr
 
 fn two_ticks(name: &str) -> Scratch {
     let s = Scratch::new(name);
-    s.write("w.json", WORLD);
+    s.write_owned_world("w.json", WORLD);
     s.write("p.df", TWO_TICKS);
     s.run(&[
         "--file",

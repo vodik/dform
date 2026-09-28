@@ -192,7 +192,7 @@ fn max_ticks_bounds_the_loop() {
 #[test]
 fn a_pending_update_applies_after_the_boundary() {
     let s = Scratch::new("pending-update");
-    s.write(
+    s.write_owned_world(
         "w.json",
         r#"{"resources": {"compute.vm::app": {"typ": "compute.vm", "name": "app",
             "attrs": {"db_host": "old.db.fake"}, "computed": {"id": "vm-1"}}}}"#,

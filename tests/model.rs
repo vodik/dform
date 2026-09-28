@@ -275,9 +275,7 @@ fn next_version(rng: &mut Rng, names: &mut Names, v: &Version) -> Version {
     Version { res, moved }
 }
 
-/// Objects in the cloud that dform does not manage: the inventory's (the
-/// mock's world file is what it holds for dform: an empty state takes it
-/// all, `Providers::bootstrap_state`).
+/// Objects in the cloud that dform does not manage: the inventory's.
 fn foreign(rng: &mut Rng) -> Vec<(&'static str, String)> {
     match rng.chance(40) {
         false => Vec::new(),

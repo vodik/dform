@@ -338,7 +338,7 @@ fn a_secret_input_never_prints_in_query_why_or_the_plan_file() {
 #[test]
 fn a_sensitive_leaf_changed_between_plan_and_apply_is_refused() {
     let s = Scratch::new("secrets-plan-file");
-    s.write(
+    s.write_owned_world(
         "w.json",
         r#"{"resources": {"leaky.vault::v": {"typ": "leaky.vault", "name": "v",
   "attrs": {"password": "OLD-VAULT-SECRET"}, "computed": {"id": "v-1"}}}}"#,

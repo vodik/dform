@@ -121,9 +121,12 @@ see drift:
 cargo run -- plan --world examples/world/dform.json    # steady state: no changes
 ```
 
-A world file with no state beside it is adopted whole: everything in it is
-taken as this stack's. `examples/world/<stack>.json` is the fixture format for
-tests.
+Only what state maps is the stack's: an object in the world file that state
+does not name is someone else's, never refreshed, updated or deleted, and a
+resource of the same name is a create until an `adopt` names it (see "Adopt
+existing resources"). A world file with no state beside it is nobody's.
+`examples/world/<stack>.json` and its `<stack>.state.json` are the fixture
+format for tests.
 
 A `.dform/` written before state was scoped (`.dform/state.json`,
 `.dform/remote.json`) is moved into the `dform` stack on the next run.

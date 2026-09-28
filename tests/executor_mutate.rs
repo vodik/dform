@@ -10,7 +10,7 @@ use common::Scratch;
 /// Tick 1 creates the database; the vm's update waits on its endpoint.
 fn stack(name: &str) -> Scratch {
     let s = Scratch::new(name);
-    s.write(
+    s.write_owned_world(
         "w.json",
         r#"{"resources": {"compute.vm::app": {"typ": "compute.vm", "name": "app",
             "attrs": {"db_host": "old.db.fake"}, "computed": {"id": "vm-1"}}}}"#,

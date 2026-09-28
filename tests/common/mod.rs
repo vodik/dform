@@ -35,6 +35,29 @@ impl Scratch {
         p
     }
 
+    /// Write the mock's world `rel` and, beside it (`<stem>.state.json`,
+    /// where `--world` looks), the state that maps every object in it: a
+    /// world dform made. A world without state is not dform's.
+    pub fn write_owned_world(&self, rel: &str, world: &str) -> PathBuf {
+        let w: serde_json::Value = serde_json::from_str(world).unwrap();
+        let resources: serde_json::Map<String, serde_json::Value> = w["resources"]
+            .as_object()
+            .unwrap()
+            .iter()
+            .map(|(k, o)| {
+                let remote = o["name"].clone();
+                (
+                    k.clone(),
+                    serde_json::json!({"provider": "fakecloud", "remote": remote}),
+                )
+            })
+            .collect();
+        let state = serde_json::json!({"version": 1, "resources": resources});
+        let p = self.write(rel, world);
+        std::fs::write(p.with_extension("state.json"), state.to_string()).unwrap();
+        p
+    }
+
     pub fn read(&self, rel: &str) -> String {
         std::fs::read_to_string(self.path(rel)).unwrap()
     }

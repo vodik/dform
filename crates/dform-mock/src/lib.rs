@@ -25,7 +25,7 @@ use dform_core::ir::Address;
 use dform_core::plugin::backend::{self, CallError, Handler, Reply, VERSION};
 use dform_core::plugin::link::Link;
 use dform_core::plugin::pb;
-use dform_core::plugin::providers::{INVENTORY, Launch, MANAGED};
+use dform_core::plugin::providers::{INVENTORY, Launch};
 use dform_core::plugin::queue::{Order, Queue};
 use dform_core::plugin::wire;
 use dform_core::provider::{self, Change, get_path, norm_path, set_path, short_hash};
@@ -247,8 +247,7 @@ impl FakeCloud {
     /// Query (E DR-18): the rows of `pred` whose `+` columns (`plus`) are
     /// `inputs`, in order. The mock's answer facts for an extern; the
     /// inventory flattened for `cloud_exists/2`, `cloud_attr/4`,
-    /// `cloud_computed/4`; the world's objects for `MANAGED`. No row is an
-    /// answer too: nothing matches.
+    /// `cloud_computed/4`. No row is an answer too: nothing matches.
     pub fn query(
         &mut self,
         pred: &str,
@@ -256,12 +255,6 @@ impl FakeCloud {
         inputs: &[Value],
     ) -> Result<Vec<Vec<Value>>> {
         let all = match pred {
-            MANAGED => self
-                .world()?
-                .resources
-                .values()
-                .map(|rr| vec![Value::Str(rr.typ.clone()), Value::Str(rr.name.clone())])
-                .collect(),
             _ if INVENTORY.iter().any(|(p, _)| *p == pred) => {
                 let mut atoms = Vec::new();
                 for rr in self.inventory()?.resources.values() {
@@ -935,9 +928,7 @@ impl Handler for Mock {
                 Reply::Handshake(pb::HandshakeResponse {
                     protocol_version: VERSION,
                     name: "fakecloud".into(),
-                    capabilities: ["resource", "fact", "inventory", "managed"]
-                        .map(String::from)
-                        .to_vec(),
+                    capabilities: ["resource", "fact", "inventory"].map(String::from).to_vec(),
                 })
             }
             C::Configure(req) => {
