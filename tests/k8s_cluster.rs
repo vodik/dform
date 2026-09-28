@@ -10,7 +10,9 @@ use common::{Run, Scratch};
 use serde_json::json;
 use std::process::Command;
 
-const K8S: &str = env!("CARGO_BIN_EXE_dform-provider-k8s");
+fn k8s() -> String {
+    common::exe("dform-provider-k8s")
+}
 
 /// The test cluster's kubeconfig, or `None` (and a line saying the test is
 /// skipped).
@@ -112,7 +114,7 @@ resource k8s.deployment web {{
 fn scratch(name: &str) -> Scratch {
     let s = Scratch::new(name);
     std::fs::create_dir_all(s.path("providers/k8s")).unwrap();
-    std::os::unix::fs::symlink(K8S, s.path("providers/k8s/dform-provider-k8s")).unwrap();
+    std::os::unix::fs::symlink(k8s(), s.path("providers/k8s/dform-provider-k8s")).unwrap();
     s
 }
 

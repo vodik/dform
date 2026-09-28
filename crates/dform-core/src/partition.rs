@@ -875,7 +875,7 @@ mod tests {
     use std::path::PathBuf;
 
     fn root() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."))
     }
 
     fn examples() -> Vec<(&'static str, PathBuf, Schema)> {

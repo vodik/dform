@@ -3548,7 +3548,7 @@ mod tests {
                 }
             }
         }
-        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let root = std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
         let program = crate::loader::load_program(&[root.join("dform.df")]).unwrap();
         for env in ["staging", "prod"] {
             let extra = [input("env", Value::Str(env.into()))];
@@ -3618,7 +3618,7 @@ mod tests {
     /// the three copied blocks it replaced did.
     #[test]
     fn dform_df_default_layer_matches_the_copied_blocks() {
-        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let root = std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
         let src = std::fs::read_to_string(root.join("dform.df")).unwrap();
         let start = src.find("env_name(\"staging\")").unwrap();
         let end = src
@@ -4033,7 +4033,7 @@ mod tests {
     }
 
     fn repo_file(rel: &str) -> std::path::PathBuf {
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(rel)
+        std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../..")).join(rel)
     }
 
     /// Evaluate a repository program against a provider schema, and its

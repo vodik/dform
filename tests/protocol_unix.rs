@@ -7,7 +7,9 @@ use common::Scratch;
 use std::io::BufRead;
 use std::process::{Command, Stdio};
 
-const FAKE: &str = env!("CARGO_BIN_EXE_dform-provider-fake");
+fn fake() -> String {
+    common::exe("dform-provider-fake")
+}
 
 const PROG: &str = r#"edition 2026
 
@@ -31,7 +33,7 @@ fn the_mock_serves_a_unix_socket_and_dform_dials_it() {
     std::fs::create_dir_all(&tmp).unwrap();
 
     // The handshake names the socket.
-    let mut child = Command::new(FAKE)
+    let mut child = Command::new(fake())
         .env("DFORM_PROVIDER_TRANSPORT", "unix")
         .env("TMPDIR", &tmp)
         .stdin(Stdio::piped())
@@ -73,7 +75,7 @@ fn the_mock_serves_a_unix_socket_and_dform_dials_it() {
     assert_eq!(sockets(&tmp), Vec::<String>::new());
 
     // Anything else is refused by the provider, naming the variable.
-    let out = Command::new(FAKE)
+    let out = Command::new(fake())
         .env("DFORM_PROVIDER_TRANSPORT", "carrier-pigeon")
         .stdin(Stdio::null())
         .output()

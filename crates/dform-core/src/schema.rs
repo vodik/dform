@@ -595,10 +595,10 @@ fn ground(t: &Term) -> Result<Value> {
 /// in the working directory takes precedence (see [`load_provider`]).
 pub fn builtin(name: &str) -> Option<&'static str> {
     Some(match name {
-        "fake" => include_str!("../providers/fake/schema.df"),
-        "gke" => include_str!("../providers/gke/schema.df"),
-        "k8s" => include_str!("../providers/k8s/schema.df"),
-        "aws-mock" => include_str!("../providers/aws-mock/schema.df"),
+        "fake" => include_str!("../../../providers/fake/schema.df"),
+        "gke" => include_str!("../../../providers/gke/schema.df"),
+        "k8s" => include_str!("../../../providers/k8s/schema.df"),
+        "aws-mock" => include_str!("../../../providers/aws-mock/schema.df"),
         _ => return None,
     })
 }

@@ -1,0 +1,8 @@
+[package]
+name = "dform-provider-k8s"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+dform-k8s = { path = "../dform-k8s" }

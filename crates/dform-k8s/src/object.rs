@@ -17,9 +17,9 @@
 //! null as absent. A Secret's write-only `stringData` reads back from the
 //! `data` the server folded it into.
 
-use super::openapi::Kind;
-use crate::provider::{get_path, set_path};
+use crate::openapi::Kind;
 use anyhow::{Result, bail};
+use dform_core::provider::{get_path, set_path};
 use serde_json::{Map, Value as Json, json};
 
 /// The field manager dform applies as.

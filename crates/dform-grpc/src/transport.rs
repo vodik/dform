@@ -100,8 +100,8 @@ fn handshake(address: &str) -> Result<()> {
     writeln!(
         out,
         "{}|{}|{address}",
-        super::spawn::MAGIC,
-        super::spawn::VERSION
+        crate::spawn::MAGIC,
+        crate::spawn::VERSION
     )?;
     out.flush()?;
     Ok(())

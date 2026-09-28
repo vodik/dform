@@ -2,7 +2,7 @@
 //! starts it for every mock schema; `dform provider check` checks it.
 
 fn main() -> std::process::ExitCode {
-    match dform::fakecloud::serve() {
+    match dform_mock::serve() {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("dform-provider-fake: {e:#}");

@@ -1,38 +1,4 @@
-pub mod ast;
-pub mod chaos;
-pub mod circuit;
-pub mod controller;
-pub mod diag;
-pub mod engine;
-pub mod executor;
-pub mod externs;
-pub mod fakecloud;
-pub mod fmt;
-pub mod graph;
-pub mod inputs;
-pub mod ir;
-pub mod k8s;
-pub mod lattice;
-pub mod lexer;
-pub mod lint;
-pub mod loader;
-pub mod modules;
-pub mod parser;
-pub mod partition;
-pub mod plan_print;
-pub mod plugin;
-pub mod provider;
-pub mod query;
-pub mod refine;
-pub mod scenario;
-pub mod schema;
-pub mod secrets;
-pub mod stack;
-pub mod state;
-pub mod stuck;
-pub mod syntax;
-pub mod transform;
-pub mod value;
-pub mod watch;
-pub mod why;
-pub mod zset;
+//! dform: the language and engine are `dform-core`'s; this crate is the
+//! CLI over them (`src/main.rs`).
+
+pub use dform_core::*;

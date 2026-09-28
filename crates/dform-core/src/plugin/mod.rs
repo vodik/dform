@@ -5,14 +5,8 @@
 //! and documents to the protocol's messages.
 
 pub mod check;
-pub mod client;
 pub mod providers;
-pub mod spawn;
-pub mod transport;
 pub mod wire;
 
+pub use dform_grpc::{client, pb, spawn, transport};
 pub use providers::{Config, Providers};
-
-pub mod pb {
-    tonic::include_proto!("dform.v1");
-}

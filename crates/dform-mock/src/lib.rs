@@ -16,16 +16,16 @@
 //! Chaos knobs (`apply --chaos`, `chaos`) arrive at Configure. The world's
 //! clock advances at every END_TICK, when chaos `mutate` lands.
 
-use crate::ast::{Atom, Term};
-use crate::chaos::Chaos;
-use crate::ir::Address;
-use crate::plugin::pb;
-use crate::plugin::providers::{INVENTORY, MANAGED};
-use crate::plugin::wire;
-use crate::provider::{self, Change, get_path, norm_path, set_path, short_hash};
-use crate::schema::Schema;
-use crate::value::{NullClass, Value};
 use anyhow::{Context, Result, anyhow, bail};
+use dform_core::ast::{Atom, Term};
+use dform_core::chaos::Chaos;
+use dform_core::ir::Address;
+use dform_core::plugin::pb;
+use dform_core::plugin::providers::{INVENTORY, MANAGED};
+use dform_core::plugin::wire;
+use dform_core::provider::{self, Change, get_path, norm_path, set_path, short_hash};
+use dform_core::schema::Schema;
+use dform_core::value::{NullClass, Value};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as Json, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -178,10 +178,10 @@ impl FakeCloud {
         };
         let mut schema = Schema::default();
         for n in &specs {
-            schema = schema.merge(crate::schema::load_provider(n)?)?;
+            schema = schema.merge(dform_core::schema::load_provider(n)?)?;
         }
         self.schema = schema;
-        self.answers = crate::externs::load_answers(&specs)?;
+        self.answers = dform_core::externs::load_answers(&specs)?;
         self.world_path = path_of(config, "world")?;
         self.inventory_path = path_of(config, "inventory")?;
         self.chaos = Chaos::parse(&strings(config, "chaos")?)?;
@@ -282,7 +282,7 @@ impl FakeCloud {
                     if a.args.len() != plus.len() {
                         bail!(
                             "the mock's answer {} has {} columns, the extern {}",
-                            crate::partition::fmt_atom(a),
+                            dform_core::partition::fmt_atom(a),
                             a.args.len(),
                             plus.len()
                         );
@@ -317,7 +317,7 @@ impl FakeCloud {
             .chain(self.schema.optional_computed_of(typ));
         for (path, class) in paths {
             if class == NullClass::Secret && get_path(&out, &path).is_some() {
-                let label = crate::value::null_label(typ, remote, &path);
+                let label = dform_core::value::null_label(typ, remote, &path);
                 set_path(&mut out, &path, provider::secret_json(&label));
             }
         }
@@ -413,7 +413,7 @@ impl FakeCloud {
     /// A secret's value, from the computed values of the object its label
     /// `T/N#P` names.
     fn materialize(&mut self, label: &str) -> Result<Option<Json>> {
-        let Some((typ, name)) = crate::value::null_owner(label) else {
+        let Some((typ, name)) = dform_core::value::null_owner(label) else {
             return Ok(None);
         };
         let Some((_, path)) = label.split_once('#') else {
@@ -458,11 +458,12 @@ impl FakeCloud {
                     a.value.as_str().is_some_and(|p| s.starts_with(p))
                 }
                 ("len_ge" | "len_le" | "prefix", _) => false,
-                // A refinement's own op (`crate::refine::to_assertion`); a
+                // A refinement's own op (`dform_core::refine::to_assertion`); a
                 // path the document does not set holds vacuously.
-                (op, v) if let Some(c) = crate::refine::from_assertion(op, &a.value) => v
+                (op, v) if let Some(c) = dform_core::refine::from_assertion(op, &a.value) => v
                     .is_none_or(|v| {
-                        c.check(&crate::provider::json_to_value(v)) == crate::lattice::Truth::True
+                        c.check(&dform_core::provider::json_to_value(v))
+                            == dform_core::lattice::Truth::True
                     }),
                 (op, _) => {
                     return Err(Failed::Refused(format!(
@@ -798,7 +799,7 @@ fn ground_row(a: &Atom) -> Result<Vec<Value>> {
         .ok_or_else(|| {
             anyhow!(
                 "the mock's answer {} is not ground",
-                crate::partition::fmt_atom(a)
+                dform_core::partition::fmt_atom(a)
             )
         })
 }
@@ -884,14 +885,14 @@ impl pb::provider_server::Provider for Service {
         req: tonic::Request<pb::HandshakeRequest>,
     ) -> Reply<pb::HandshakeResponse> {
         let v = req.into_inner().protocol_version;
-        if v != crate::plugin::spawn::VERSION {
+        if v != dform_core::plugin::spawn::VERSION {
             return Err(tonic::Status::failed_precondition(format!(
                 "this provider speaks protocol version {}, not {v}",
-                crate::plugin::spawn::VERSION
+                dform_core::plugin::spawn::VERSION
             )));
         }
         Ok(tonic::Response::new(pb::HandshakeResponse {
-            protocol_version: crate::plugin::spawn::VERSION,
+            protocol_version: dform_core::plugin::spawn::VERSION,
             name: "fakecloud".into(),
             capabilities: ["resource", "fact", "inventory", "managed"]
                 .map(String::from)
@@ -1078,7 +1079,7 @@ pub fn serve() -> Result<()> {
     let service = Service {
         cloud: std::sync::Mutex::new(FakeCloud::default()),
     };
-    crate::plugin::transport::serve(
+    dform_core::plugin::transport::serve(
         tonic::transport::Server::builder().add_service(
             pb::provider_server::ProviderServer::new(service)
                 .max_decoding_message_size(usize::MAX)

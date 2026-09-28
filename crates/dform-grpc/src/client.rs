@@ -4,9 +4,9 @@
 //! runtime and blocks on its calls. A call that fails because the process
 //! died says so, with its exit status (`CallError::Crashed`).
 
-use super::pb;
-use super::pb::provider_client::ProviderClient;
-use super::spawn::{self, Started};
+use crate::pb;
+use crate::pb::provider_client::ProviderClient;
+use crate::spawn::{self, Started};
 use anyhow::{Context, Result, bail};
 use std::cell::{Cell, RefCell};
 use std::path::Path;
@@ -67,7 +67,7 @@ impl Conn {
             .context("start the provider client runtime")?;
         let program = exe.display().to_string();
         let channel = rt
-            .block_on(super::transport::dial(&address))
+            .block_on(crate::transport::dial(&address))
             .with_context(|| format!("dial provider {program} at {address}"))?;
         let mut conn = Conn {
             name: String::new(),
@@ -252,6 +252,6 @@ impl Drop for Conn {
             let _ = child.kill();
         }
         let _ = child.wait();
-        super::transport::remove(&self.address);
+        crate::transport::remove(&self.address);
     }
 }

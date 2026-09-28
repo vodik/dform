@@ -2,8 +2,8 @@
 //! reached with kube's client. Objects by kind, namespace and name; writes
 //! are server-side apply as the field manager `dform`, never forced.
 
-use super::object::MANAGER;
-use super::openapi::Kind;
+use crate::object::MANAGER;
+use crate::openapi::Kind;
 use anyhow::{Context, Result, anyhow};
 use kube::core::Status;
 use kube::core::params::{DeleteParams, GetParams, Patch, PatchParams};
@@ -109,7 +109,7 @@ pub struct Document {
 impl Document {
     fn cached(text: String) -> Document {
         Document {
-            hash: crate::zset::file::fnv64(text.as_bytes()),
+            hash: dform_core::zset::file::fnv64(text.as_bytes()),
             text: Some(text),
             parsed: None,
         }
@@ -206,7 +206,7 @@ impl Cluster {
             std::fs::write(cache, &text).with_context(|| format!("write {}", cache.display()))?;
         }
         Ok(Document {
-            hash: crate::zset::file::fnv64(text.as_bytes()),
+            hash: dform_core::zset::file::fnv64(text.as_bytes()),
             text: None,
             parsed: Some(document),
         })
@@ -223,7 +223,7 @@ impl Cluster {
             Err(e) => Err(anyhow::Error::new(e).context(format!(
                 "GET {} {}",
                 kind.kind,
-                super::object::remote(kind, ns, name)
+                crate::object::remote(kind, ns, name)
             ))),
         }
     }
@@ -260,7 +260,7 @@ impl Cluster {
             Err(e) => Err(anyhow::Error::new(e).context(format!(
                 "DELETE {} {}",
                 kind.kind,
-                super::object::remote(kind, ns, name)
+                crate::object::remote(kind, ns, name)
             ))),
         }
     }

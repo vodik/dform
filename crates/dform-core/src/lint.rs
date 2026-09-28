@@ -266,7 +266,7 @@ mod tests {
     use std::path::PathBuf;
 
     fn workspace_root() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."))
     }
 
     /// Reverted-fix check: with the F13 bug back (`vpc_cidr` instead of

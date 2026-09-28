@@ -253,7 +253,7 @@ fn e0306_a_refinement_on_a_sensitive_path_the_provider_cannot_check() {
     let s = Scratch::new("refine-e0306");
     std::fs::create_dir_all(s.path("providers/k8s")).unwrap();
     std::os::unix::fs::symlink(
-        env!("CARGO_BIN_EXE_dform-provider-k8s"),
+        common::exe("dform-provider-k8s"),
         s.path("providers/k8s/dform-provider-k8s"),
     )
     .unwrap();

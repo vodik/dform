@@ -36,10 +36,10 @@
 //! (`providers/k8s/schema.df`'s `type_alias` facts, `k8s.deployment`) are
 //! the same types under a second name.
 
-use crate::ast::{Atom, Term};
-use crate::schema::Schema;
-use crate::value::Value;
 use anyhow::{Context, Result, anyhow};
+use dform_core::ast::{Atom, Term};
+use dform_core::schema::Schema;
+use dform_core::value::Value;
 use serde_json::{Map, Value as Json};
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -47,10 +47,10 @@ use std::path::Path;
 /// The OpenAPI document of a recent Kubernetes release, trimmed to the
 /// mock's kinds and the common workload and RBAC kinds: the schema when no
 /// cluster is reachable.
-pub const SNAPSHOT: &str = include_str!("../../providers/k8s/openapi-snapshot.json");
+pub const SNAPSHOT: &str = include_str!("../../../providers/k8s/openapi-snapshot.json");
 
 /// The mock Kubernetes schema, for its `type_alias` facts.
-const MOCK: &str = include_str!("../../providers/k8s/schema.df");
+const MOCK: &str = include_str!("../../../providers/k8s/schema.df");
 
 /// The provider's name: `type_provider` and state record it.
 pub const PROVIDER: &str = "kubernetes";
@@ -296,7 +296,7 @@ pub fn snapshot() -> Result<Derived> {
 /// when it holds the snapshot's ([`cached`]).
 pub fn snapshot_cached(dir: Option<&Path>) -> Result<Derived> {
     cached(
-        &crate::zset::file::fnv64(SNAPSHOT.as_bytes()),
+        &dform_core::zset::file::fnv64(SNAPSHOT.as_bytes()),
         dir,
         snapshot,
     )
@@ -318,7 +318,7 @@ pub fn cached(
     dir: Option<&Path>,
     derive: impl FnOnce() -> Result<Derived>,
 ) -> Result<Derived> {
-    use crate::zset::file::fnv64;
+    use dform_core::zset::file::fnv64;
     let key = fnv64(
         format!(
             "{doc_hash} {} {}",
@@ -689,7 +689,7 @@ mod tests {
 
     #[test]
     fn the_snapshot_derives_classes_keys_and_aliases() {
-        use crate::value::NullClass;
+        use dform_core::value::NullClass;
         let d = snapshot().unwrap();
         let s = &d.schema;
         let dep = "k8s.apps.v1.deployment";
@@ -734,11 +734,11 @@ mod tests {
         assert_eq!(s.read_attempts("k8s.deployment"), 5);
         assert_eq!(
             s.replace_order("k8s.namespace"),
-            crate::schema::ReplaceOrder::DestroyFirst
+            dform_core::schema::ReplaceOrder::DestroyFirst
         );
         assert_eq!(
             s.replace_order(dep),
-            crate::schema::ReplaceOrder::CreateFirst
+            dform_core::schema::ReplaceOrder::CreateFirst
         );
     }
 

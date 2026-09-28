@@ -109,6 +109,14 @@ impl Run {
     }
 }
 
+/// A provider binary cargo built beside `dform` (each is its own package,
+/// `crates/dform-provider-*`).
+#[allow(dead_code)]
+pub fn exe(name: &str) -> String {
+    let p = Path::new(env!("CARGO_BIN_EXE_dform")).with_file_name(name);
+    p.to_str().unwrap().to_string()
+}
+
 /// The repository root, for programs and fixtures the tests read.
 pub fn repo() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))

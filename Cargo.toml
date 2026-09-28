@@ -1,3 +1,31 @@
+[workspace]
+members = [
+    ".",
+    "crates/dform-wire",
+    "crates/dform-core",
+    "crates/dform-grpc",
+    "crates/dform-mock",
+    "crates/dform-k8s",
+    "crates/dform-provider-fake",
+    "crates/dform-provider-k8s",
+    "tree-sitter-dform",
+]
+# `cargo build` and `cargo test` build the provider binaries the CLI spawns;
+# `cargo run` runs the CLI (`default-run`).
+default-members = [
+    ".",
+    "crates/dform-wire",
+    "crates/dform-core",
+    "crates/dform-grpc",
+    "crates/dform-mock",
+    "crates/dform-k8s",
+    "crates/dform-provider-fake",
+    "crates/dform-provider-k8s",
+]
+resolver = "3"
+
+# The CLI: the language and engine (`dform-core`) over providers reached by
+# gRPC (`dform-grpc`).
 [package]
 name = "dform"
 version = "0.1.0"
@@ -6,44 +34,14 @@ default-run = "dform"
 
 [dependencies]
 anyhow = "1.0"
-ariadne = "0.6"
 clap = { version = "4.5", features = ["derive"] }
-logos = "0.16"
-rowan = "0.16"
-serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-prost = "0.13"
-# `regex(S)` refinements (src/refine.rs); already in the tree through kube.
-regex = "1"
-tokio = { version = "1", features = ["rt", "net", "macros", "io-util", "time"] }
-tonic = "0.13"
-# A provider on a unix socket (src/plugin/transport.rs): tonic's connector
-# takes a tower service returning hyper's IO.
-hyper-util = { version = "0.1", features = ["tokio"] }
-tower = { version = "0.5", features = ["util"] }
-sha2 = "0.10"
-# The Kubernetes provider (src/k8s/): a client, and the API types it needs.
-kube = "4.2"
-k8s-openapi = { version = "0.28", features = ["latest"] }
-
-[build-dependencies]
-tonic-build = "0.13"
+dform-core = { path = "crates/dform-core" }
+dform-grpc = { path = "crates/dform-grpc" }
 
 [[bin]]
 name = "dform"
 path = "src/main.rs"
-
-# The mock provider behind the plugin protocol: `src/fakecloud.rs` served
-# over gRPC. The engine spawns it for every mock schema.
-[[bin]]
-name = "dform-provider-fake"
-path = "src/bin/dform-provider-fake.rs"
-
-# The Kubernetes provider (`src/k8s/`): server-side apply against the
-# cluster the kubeconfig names, its schema derived from `/openapi/v3`.
-[[bin]]
-name = "dform-provider-k8s"
-path = "src/bin/dform-provider-k8s.rs"
 
 [[bench]]
 name = "scale"
@@ -52,3 +50,7 @@ harness = false
 [dev-dependencies]
 tree-sitter = "0.26"
 tree-sitter-dform = { path = "tree-sitter-dform" }
+# tests/k8s_cluster.rs talks to the cluster it applies to.
+kube = "4.2"
+k8s-openapi = { version = "0.28", features = ["latest"] }
+tokio = { version = "1", features = ["rt", "net", "macros", "io-util", "time"] }

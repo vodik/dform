@@ -1,0 +1,17 @@
+[package]
+name = "dform-k8s"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1", features = ["rt", "net", "macros", "io-util", "time"] }
+tonic = "0.13"
+# A client, and the API types it needs.
+kube = "4.2"
+k8s-openapi = { version = "0.28", features = ["latest"] }
+dform-core = { path = "../dform-core" }
+dform-grpc = { path = "../dform-grpc" }

@@ -14,7 +14,9 @@ resource net.subnet a { vpc_id = ref(net.vpc, "main", "id"), cidr = "10.0.1.0/24
 resource compute.vm app { subnet_id = ref(net.subnet, "a", "id") }
 "#;
 
-const FAKE: &str = env!("CARGO_BIN_EXE_dform-provider-fake");
+fn fake() -> String {
+    common::exe("dform-provider-fake")
+}
 
 fn dform(s: &Scratch, args: &[&str]) -> common::Run {
     s.run(&[&["--file", "p.df", "--world", "w.json"][..], args].concat())
@@ -66,7 +68,7 @@ fn a_provider_crash_mid_apply_fails_the_action_and_resume_finishes() {
 fn a_source_directory_holding_an_executable_is_that_plugin() {
     let s = Scratch::new("protocol-plugin-dir");
     std::fs::create_dir_all(s.path("prov")).unwrap();
-    std::os::unix::fs::symlink(FAKE, s.path("prov/dform-provider-fake")).unwrap();
+    std::os::unix::fs::symlink(fake(), s.path("prov/dform-provider-fake")).unwrap();
     s.write(
         "p.df",
         "edition 2026\n\nprovider fake { source = \"prov\" }\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\n",
@@ -78,7 +80,7 @@ fn a_source_directory_holding_an_executable_is_that_plugin() {
 #[test]
 fn the_mock_conforms() {
     let s = Scratch::new("protocol-check");
-    let r = s.run(&["provider", "check", FAKE]).success();
+    let r = s.run(&["provider", "check", &fake()]).success();
     assert!(!r.stdout.contains("FAIL"), "{}", r.stdout);
     assert!(
         r.stdout
@@ -146,7 +148,7 @@ fn schema_rows(
 #[test]
 fn the_mock_answers_the_schema_of_the_types_asked_for() {
     let s = Scratch::new("protocol-schema-scope");
-    let conn = dform::plugin::client::Conn::start(std::path::Path::new(FAKE)).unwrap();
+    let conn = dform::plugin::client::Conn::start(std::path::Path::new(&fake())).unwrap();
     let config = serde_json::json!({
         "schemas": ["fake", "k8s"],
         "world": s.path("w.json").display().to_string(),

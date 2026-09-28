@@ -13,7 +13,9 @@ use std::net::{TcpListener, TcpStream};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 
-const K8S: &str = env!("CARGO_BIN_EXE_dform-provider-k8s");
+fn k8s() -> String {
+    common::exe("dform-provider-k8s")
+}
 
 /// `dform ARGS` in the scratch directory with no cluster in reach but the
 /// one `kubeconfig` names (none: offline).
@@ -44,7 +46,7 @@ fn real_demo(s: &Scratch) {
     );
     s.write("k8s_demo.df", &real);
     std::fs::create_dir_all(s.path("providers/k8s")).unwrap();
-    std::os::unix::fs::symlink(K8S, s.path("providers/k8s/dform-provider-k8s")).unwrap();
+    std::os::unix::fs::symlink(k8s(), s.path("providers/k8s/dform-provider-k8s")).unwrap();
 }
 
 fn mock_demo(s: &Scratch) {
@@ -539,7 +541,7 @@ fn the_k8s_provider_conforms() {
     let s = Scratch::new("k8s-check");
     let (api, url) = Api::start();
     let kc = kubeconfig(&s, &url);
-    let r = dform(&s, Some(&kc), &["provider", "check", K8S]).success();
+    let r = dform(&s, Some(&kc), &["provider", "check", &k8s()]).success();
     assert!(!r.stdout.contains("FAIL"), "{}", r.stdout);
     for line in [
         "ok    Schema serves its own types, with examples",
@@ -916,7 +918,10 @@ fn a_type_built_at_runtime_gets_the_whole_schema() {
 fn offline_provider(s: &Scratch, dir: &str) -> dform::plugin::client::Conn {
     let wrapper = s.write(
         "k8s-offline",
-        &format!("#!/bin/sh\nunset KUBECONFIG\nDFORM_K8S_OFFLINE=1 exec {K8S} \"$@\"\n"),
+        &format!(
+            "#!/bin/sh\nunset KUBECONFIG\nDFORM_K8S_OFFLINE=1 exec {} \"$@\"\n",
+            k8s()
+        ),
     );
     {
         use std::os::unix::fs::PermissionsExt;

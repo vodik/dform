@@ -388,11 +388,25 @@ name = "dform"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "ariadne",
  "clap",
- "hyper-util",
+ "dform-core",
+ "dform-grpc",
  "k8s-openapi",
  "kube",
+ "serde_json",
+ "tokio",
+ "tree-sitter",
+ "tree-sitter-dform",
+]
+
+[[package]]
+name = "dform-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "ariadne",
+ "dform-grpc",
+ "dform-wire",
  "logos",
  "prost",
  "regex",
@@ -400,12 +414,69 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+]
+
+[[package]]
+name = "dform-grpc"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dform-wire",
+ "hyper-util",
+ "prost",
  "tokio",
  "tonic",
  "tonic-build",
  "tower",
- "tree-sitter",
- "tree-sitter-dform",
+]
+
+[[package]]
+name = "dform-k8s"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dform-core",
+ "dform-grpc",
+ "k8s-openapi",
+ "kube",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tonic",
+]
+
+[[package]]
+name = "dform-mock"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dform-core",
+ "dform-grpc",
+ "serde",
+ "serde_json",
+ "tonic",
+]
+
+[[package]]
+name = "dform-provider-fake"
+version = "0.1.0"
+dependencies = [
+ "dform-mock",
+]
+
+[[package]]
+name = "dform-provider-k8s"
+version = "0.1.0"
+dependencies = [
+ "dform-k8s",
+]
+
+[[package]]
+name = "dform-wire"
+version = "0.1.0"
+dependencies = [
+ "prost",
+ "prost-build",
 ]
 
 [[package]]
@@ -1985,6 +2056,7 @@ name = "tree-sitter-dform"
 version = "0.1.0"
 dependencies = [
  "cc",
+ "tree-sitter",
  "tree-sitter-language",
 ]
 

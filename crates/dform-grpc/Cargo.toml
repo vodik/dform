@@ -1,0 +1,19 @@
+[package]
+name = "dform-grpc"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+anyhow = "1.0"
+dform-wire = { path = "../dform-wire" }
+prost = "0.13"
+tokio = { version = "1", features = ["rt", "net", "macros", "io-util", "time"] }
+tonic = "0.13"
+# A provider on a unix socket (transport.rs): tonic's connector takes a
+# tower service returning hyper's IO.
+hyper-util = { version = "0.1", features = ["tokio"] }
+tower = { version = "0.5", features = ["util"] }
+
+[build-dependencies]
+tonic-build = "0.13"

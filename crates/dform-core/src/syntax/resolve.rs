@@ -2404,7 +2404,9 @@ impl<'u> Lowerer<'u> {
                     end: self.offset + e.end as u32,
                     origin: 0,
                 };
-                let msg = e.message.replace("the end of the file", "the end of the hole");
+                let msg = e
+                    .message
+                    .replace("the end of the file", "the end of the hole");
                 return self.error(span, format!("in an interpolation: {msg}"));
             }
             let root = parse.syntax();
