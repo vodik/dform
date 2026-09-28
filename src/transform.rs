@@ -35,6 +35,11 @@ deny("strict: a pending group at plan time", { rule: R, head: H, nulls: Ns }) :-
   may_derive(R, H, Ns), not allow_stuck(H).
 "#;
 
+/// `secret_cell(Type, Scope, Key)`: an input or output declared
+/// `secret(T)`. Every value of the cell prints as its label
+/// (`query::Redactor`).
+pub const SECRET_CELL: &str = "secret_cell";
+
 pub fn lower(program: &Program) -> Result<Lowered> {
     reject_pending(&program.statements)?;
     let strict =
@@ -57,8 +62,28 @@ pub fn lower(program: &Program) -> Result<Lowered> {
     let (expanded, externs, extern_fns) = drop_metadata(&expanded);
     let expanded = desugar_resources(&expanded)?;
     let expanded = desugar_comprehensions(&expanded)?;
-    let expanded = lower_contributions(&expanded)?;
+    let mut expanded = lower_contributions(&expanded)?;
     crate::externs::check(&expanded, &extern_fns)?;
+    // The cells of secret inputs and outputs, for the Redactor.
+    let secret_inputs = inputs
+        .iter()
+        .filter(|d| matches!(&d.decl.ty, crate::ast::TypeExpr::Apply(n, _) if n == "secret"))
+        .map(|d| {
+            (
+                crate::modules::INPUT,
+                d.scope.as_str(),
+                d.decl.name.as_str(),
+            )
+        });
+    let secret_outs = secret_outputs
+        .iter()
+        .map(|(scope, k)| (OUTPUT, scope.as_str(), k.as_str()));
+    for (typ, scope, key) in secret_inputs.chain(secret_outs) {
+        expanded.statements.push(Stmt::Fact(atom(
+            SECRET_CELL,
+            vec![str_term(typ), str_term(scope), str_term(key)],
+        )));
+    }
     Ok(Lowered {
         program: expanded,
         externs,

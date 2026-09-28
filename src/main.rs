@@ -331,20 +331,6 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
             }
         };
     }
-    let inputs = plan_inputs(&cli, &files)?;
-    if let Some((path, saved)) = &saved {
-        let diff = saved.input_differences(&inputs);
-        if !diff.is_empty() {
-            eprintln!(
-                "plan file {} is stale: its inputs are not this run's:",
-                path.display()
-            );
-            for d in &diff {
-                eprintln!("- {d}");
-            }
-            bail!("stale plan: run plan again");
-        }
-    }
 
     let set_keys: Vec<String> = cli
         .set
@@ -388,6 +374,26 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
         }
         _ => None,
     };
+    let secret_inputs: BTreeSet<String> = declared
+        .iter()
+        .filter(|d| d.scope.is_empty())
+        .filter(|d| matches!(&d.decl.ty, dform::ast::TypeExpr::Apply(n, _) if n == "secret"))
+        .map(|d| d.decl.name.clone())
+        .collect();
+    let inputs = plan_inputs(&cli, &files, &secret_inputs, key.as_ref())?;
+    if let Some((path, saved)) = &saved {
+        let diff = saved.input_differences(&inputs);
+        if !diff.is_empty() {
+            eprintln!(
+                "plan file {} is stale: its inputs are not this run's:",
+                path.display()
+            );
+            for d in &diff {
+                eprintln!("- {d}");
+            }
+            bail!("stale plan: run plan again");
+        }
+    }
     if let Some(h) = hook.as_deref_mut() {
         if stack_cfg.bootstrap {
             bail!(
@@ -1369,8 +1375,14 @@ fn print_query(
     Ok(())
 }
 
-/// This run's inputs as a plan file records them.
-fn plan_inputs(cli: &Cli, files: &[PathBuf]) -> Result<zset::file::Inputs> {
+/// This run's inputs as a plan file records them: a `--set` of a secret
+/// input as its label and, with the stack's key, the digest of its value.
+fn plan_inputs(
+    cli: &Cli,
+    files: &[PathBuf],
+    secret: &BTreeSet<String>,
+    key: Option<&zset::file::Key>,
+) -> Result<zset::file::Inputs> {
     let digest = |fs: &[PathBuf]| {
         fs.iter()
             .map(|f| {
@@ -1388,7 +1400,22 @@ fn plan_inputs(cli: &Cli, files: &[PathBuf]) -> Result<zset::file::Inputs> {
     Ok(zset::file::Inputs {
         files: digests,
         input_files: digest(&cli.input_files)?,
-        set: cli.set.clone(),
+        set: cli
+            .set
+            .iter()
+            .map(|kv| match kv.split_once('=') {
+                Some((k, v)) if secret.contains(k) => {
+                    let label = dform::value::null_label(dform::modules::INPUT, "", k);
+                    match key {
+                        Some(key) => {
+                            serde_json::json!({ "sensitive": label, "digest": key.digest(v.as_bytes()) })
+                        }
+                        None => serde_json::json!({ "sensitive": label }),
+                    }
+                }
+                _ => serde_json::Value::String(kv.clone()),
+            })
+            .collect(),
         data: cli.data.clone(),
         providers: cli.providers.clone(),
         world: show(&cli.world),
@@ -1405,7 +1432,20 @@ fn with_plan_inputs(cli: &mut Cli, path: &Path) -> Result<zset::file::PlanFile> 
         cli.files = i.files.iter().map(|f| PathBuf::from(&f.path)).collect();
     }
     if cli.set.is_empty() {
-        cli.set = i.set.clone();
+        for s in &i.set {
+            match s {
+                serde_json::Value::String(kv) => cli.set.push(kv.clone()),
+                secret => {
+                    let label = secret["sensitive"].as_str().unwrap_or_default();
+                    let k = label.rsplit_once('#').map_or(label, |(_, k)| k);
+                    bail!(
+                        "plan file {}: input {k} is secret and the file holds only its digest; \
+                         give every --set again (--set {k}=...)",
+                        path.display()
+                    );
+                }
+            }
+        }
     }
     if cli.input_files.is_empty() {
         cli.input_files = i

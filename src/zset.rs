@@ -337,8 +337,8 @@ fn compare(desired: &Value, world: &Value) -> (Kind, BTreeSet<String>) {
 /// carries matches the value it has resolved to since); every deformation
 /// in the file that has not run yet must still be one. A new address is
 /// allowed only where the file has a pending group of its type. Values are
-/// stored redacted, as the plan prints them; a sensitive value as
-/// `{"sensitive": label, "digest": HMAC}`,
+/// stored redacted, as the plan prints them; a sensitive value, and a
+/// secret input's `--set` value, as `{"sensitive": label, "digest": HMAC}`,
 /// keyed by the stack's own key ([`file::Key`]): a secret that changed
 /// between plan and apply is a difference, and the file never carries its
 /// bytes.
@@ -452,7 +452,8 @@ pub mod file {
         /// `--input-file`s: stack inputs as facts.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         pub input_files: Vec<FileDigest>,
-        pub set: Vec<String>,
+        /// `--set k=v`, a secret input's as `{"sensitive": label, "digest"}`.
+        pub set: Vec<Json>,
         pub data: Vec<String>,
         pub providers: Vec<String>,
         pub world: Option<String>,
@@ -676,7 +677,16 @@ pub mod file {
                     out.push(format!("--{name}: the plan file has [{x}], now [{y}]"));
                 }
             };
-            flag("set", was.set.join(" "), now.set.join(" "));
+            let set = |xs: &[Json]| -> String {
+                xs.iter()
+                    .map(|x| match x {
+                        Json::String(s) => s.clone(),
+                        x => x.to_string(),
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            };
+            flag("set", set(&was.set), set(&now.set));
             flag("data", was.data.join(" "), now.data.join(" "));
             flag("provider", was.providers.join(" "), now.providers.join(" "));
             let opt = |o: &Option<String>| o.clone().unwrap_or_default();

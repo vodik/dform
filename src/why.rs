@@ -220,7 +220,7 @@ impl Printer<'_> {
             Leaf::Schema { .. } => "provider schema".into(),
             Leaf::World { .. } => "world (refresh)".into(),
             Leaf::Extern { .. } => "extern".into(),
-            l => leaf_text(l),
+            l => self.redact.text(&leaf_text(l)),
         })
     }
 

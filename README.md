@@ -418,6 +418,11 @@ is a compile error with a span, before anything is evaluated:
 
 An input's own refinement (`input pw: secret(string) where len(pw) >=
 12`) is where a secret may be checked; its deny does not print the value.
+The value of an input or output declared `secret(T)` prints as its label,
+`(sensitive input/#pw)`, in `query`, `why` (the `--set` leaf included) and
+`show`. The plan file records a secret input's `--set` as its label and
+digest, so `apply PLAN` asks for `--set pw=...` again and refuses another
+value.
 
 ## Asking the fact store
 

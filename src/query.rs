@@ -3,8 +3,9 @@
 //! redacted.
 //!
 //! Redaction is by value. A value at a `sensitive` schema path of `arg`,
-//! `attr`, `world_attr`, `cloud_attr` or `cloud_computed` is a secret, and so
-//! is every scalar inside it; any printed value equal to a secret, or a
+//! `attr`, `world_attr`, `cloud_attr` or `cloud_computed`, or of an input or
+//! output declared `secret(T)` (`secret_cell/3`), is a secret, and so is
+//! every scalar inside it; any printed value equal to a secret, or a
 //! string containing a secret string, prints as `(sensitive T/A#P)`. A
 //! `secret` null prints as its label the same way. So a rule that forwards a
 //! secret into another predicate does not leak it either.
@@ -181,24 +182,33 @@ pub struct Redactor {
 impl Redactor {
     pub fn new(facts: &BTreeSet<Atom>, schema: &Schema) -> Redactor {
         let mut r = Redactor::default();
+        // Inputs and outputs declared `secret(T)`: (type, scope, key).
+        let cells: BTreeSet<(&Value, &Value, &Value)> = facts
+            .iter()
+            .filter(|a| a.pred == crate::transform::SECRET_CELL)
+            .filter_map(|a| match a.args.as_slice() {
+                [Term::Val(t), Term::Val(s), Term::Val(k)] => Some((t, s, k)),
+                _ => None,
+            })
+            .collect();
         for a in facts {
             if !VALUE_PREDS.contains(&a.pred.as_str()) || a.args.len() < 4 {
                 continue;
             }
             let [
-                Term::Val(t),
+                Term::Val(tv),
                 Term::Val(addr),
-                Term::Val(p),
+                Term::Val(pv),
                 Term::Val(v),
                 ..,
             ] = a.args.as_slice()
             else {
                 continue;
             };
-            let (Some(t), Some(p)) = (t.as_str(), p.as_str()) else {
+            let (Some(t), Some(p)) = (tv.as_str(), pv.as_str()) else {
                 continue;
             };
-            if schema.is_sensitive(t, p) {
+            if schema.is_sensitive(t, p) || cells.contains(&(tv, addr, pv)) {
                 let addr = match addr {
                     Value::Str(s) => s.clone(),
                     v => partition::fmt_value(v),

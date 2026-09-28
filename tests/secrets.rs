@@ -274,6 +274,59 @@ resource leaky.vault copy {{ backup = P }} :- arg(leaky.vault, v, password, P).
     }
 }
 
+/// An input declared `secret(T)` and set with `--set`: `query`, `why` and
+/// the plan file print its label, never the value. The plan file keeps a
+/// keyed digest, so `apply PLAN` needs the value again and refuses another.
+#[test]
+fn a_secret_input_never_prints_in_query_why_or_the_plan_file() {
+    let s = Scratch::new("secrets-input");
+    s.write(
+        "p.df",
+        "edition 2026.\ninput pw: secret(string).\noutput token: secret(string).\n\
+         output(token, P) :- pw(P).\nresource leaky.vault v { password = P } :- pw(P).\n",
+    );
+    let schema = schema();
+    let args = ["--file", "p.df", "--provider", &schema, "--world", "w.json"];
+    let set = ["--set", "pw=HUNTER-TWO-SECRET"];
+    for cmd in [
+        &["query", "input"][..],
+        &["query", "pw(P)"],
+        &["query", "attr", "--json"],
+        &["why", "pw(P)"],
+        &["plan", "--out", "plan.json"],
+    ] {
+        let r = s.run(&[&args[..], &set, cmd].concat()).success();
+        for out in [&r.stdout, &r.stderr] {
+            assert!(!out.contains("HUNTER-TWO"), "{cmd:?}: {out}");
+        }
+        if cmd[0] != "plan" {
+            assert!(r.stdout.contains("input/#pw"), "{cmd:?}: {}", r.stdout);
+        }
+    }
+    let file = s.read("plan.json");
+    assert!(!file.contains("HUNTER-TWO"), "{file}");
+    let f: serde_json::Value = serde_json::from_str(&file).unwrap();
+    let entry = &f["inputs"]["set"][0];
+    assert_eq!(entry["sensitive"], "input/#pw", "{file}");
+    assert_eq!(entry["digest"].as_str().map(str::len), Some(64), "{file}");
+
+    // apply PLAN cannot restore the value from the file.
+    let r = s.run(&["apply", "plan.json"]).failure();
+    assert!(
+        r.stderr.contains("plan file plan.json: input pw is secret"),
+        "{}",
+        r.stderr
+    );
+    // Another value is a stale plan; the one planned applies.
+    let r = s
+        .run(&["apply", "plan.json", "--set", "pw=SOMETHING-ELSE"])
+        .failure();
+    assert!(r.stderr.contains("stale plan"), "{}", r.stderr);
+    assert!(!r.stderr.contains("SOMETHING-ELSE"), "{}", r.stderr);
+    s.run(&[&["apply", "plan.json"][..], &set].concat())
+        .success();
+}
+
 /// `apply PLAN` compares a sensitive leaf by a keyed digest of its bytes:
 /// the world's secret changed between plan and apply is refused, and
 /// neither the file nor the refusal carries the bytes.
