@@ -35,7 +35,7 @@ fn two_ticks(name: &str) -> Scratch {
 fn the_file_records_inputs_delta_nulls_and_ticks() {
     let s = two_ticks("planfile-record");
     let f: serde_json::Value = serde_json::from_str(&s.read("plan.json")).unwrap();
-    assert_eq!(f["version"], 1);
+    assert_eq!(f["version"], 2);
     assert_eq!(f["inputs"]["files"][0]["path"], "p.df");
     assert_eq!(f["inputs"]["world"], "w.json");
     assert!(f["world_digest"].is_string());

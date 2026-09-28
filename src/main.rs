@@ -380,6 +380,14 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
         paths = state::backend_paths(&root, dir);
     }
     paths.inventory = resolve_inventory(&cli.inventory, &cli.world, &paths.inventory);
+    // The stack's plan-file key: a plan that writes a file, or an apply of
+    // one, digests secrets with it.
+    let key = match (&saved, &cli.cmd) {
+        (Some(_), _) | (None, Cmd::Plan { out: Some(_), .. }) => {
+            Some(zset::file::Key::load_or_create(&paths.state)?)
+        }
+        _ => None,
+    };
     if let Some(h) = hook.as_deref_mut() {
         if stack_cfg.bootstrap {
             bail!(
@@ -659,7 +667,10 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
         };
         let report = report_of(plan, res, sections, tick, &[], &[]);
         let redact = query::Redactor::new(&res.facts, schema);
-        let now = zset::file::delta(plan, sections, &report, schema, &redact);
+        let key = key
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("internal: no plan key"))?;
+        let now = zset::file::delta(plan, sections, &report, schema, &redact, key);
         let diff = saved.stale(&now, tick);
         if diff.is_empty() {
             return Ok(());
@@ -749,8 +760,11 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
             blocked(&[violations, denies].concat())?;
             if let Some(out) = out {
                 let redact = query::Redactor::new(&res.facts, schema);
+                let key = key
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("internal: no plan key"))?;
                 let mut deformations =
-                    zset::file::delta(&plan, &sections, &report, schema, &redact);
+                    zset::file::delta(&plan, &sections, &report, schema, &redact, key);
                 for e in deformations
                     .iter_mut()
                     .filter(|e| e.action.starts_with("replace"))
@@ -793,7 +807,7 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
                         })
                         .collect(),
                     nulls: zset::file::Nulls {
-                        resolved: zset::file::resolved(&res.facts, &redact),
+                        resolved: zset::file::resolved(&res.facts, &redact, key),
                         unresolved: unresolved.into_iter().collect(),
                     },
                     ticks: report

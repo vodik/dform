@@ -273,3 +273,44 @@ resource leaky.vault copy {{ backup = P }} :- arg(leaky.vault, v, password, P).
         assert!(!out.contains("VAULT-SECRET"), "{out}");
     }
 }
+
+/// `apply PLAN` compares a sensitive leaf by a keyed digest of its bytes:
+/// the world's secret changed between plan and apply is refused, and
+/// neither the file nor the refusal carries the bytes.
+#[test]
+fn a_sensitive_leaf_changed_between_plan_and_apply_is_refused() {
+    let s = Scratch::new("secrets-plan-file");
+    s.write(
+        "w.json",
+        r#"{"resources": {"leaky.vault::v": {"typ": "leaky.vault", "name": "v",
+  "attrs": {"password": "OLD-VAULT-SECRET"}, "computed": {"id": "v-1"}}}}"#,
+    );
+    s.write("p.df", PROGRAM);
+    let schema = schema();
+    let args = ["--file", "p.df", "--provider", &schema, "--world", "w.json"];
+    s.run(&[&args[..], &["plan", "--out", "plan.json"]].concat())
+        .success();
+    let file = s.read("plan.json");
+    assert!(!file.contains("VAULT-SECRET"), "{file}");
+    assert!(file.contains("\"digest\""), "{file}");
+    // The key lives beside the stack's state, not in the file.
+    assert_eq!(std::fs::read(s.path("w.state.key")).unwrap().len(), 32);
+
+    s.write(
+        "w.json",
+        &s.read("w.json")
+            .replace("OLD-VAULT-SECRET", "MUTATED-VAULT-SECRET"),
+    );
+    let r = s.run(&["apply", "plan.json"]).failure();
+    assert!(
+        r.stderr
+            .contains("leaky.vault.v password: the plan saw (sensitive, digest "),
+        "{}",
+        r.stderr
+    );
+    assert!(r.stderr.contains("stale plan"), "{}", r.stderr);
+    for out in [&r.stdout, &r.stderr] {
+        assert!(!out.contains("VAULT-SECRET"), "{out}");
+    }
+    assert!(s.read("w.json").contains("MUTATED-VAULT-SECRET"));
+}

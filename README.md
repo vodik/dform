@@ -365,7 +365,8 @@ under one of them it prints the change and stops before any Apply call (run
 digest of its content, each `--input-file` with its digest, `--set`,
 `--data`, `--provider`, `--world`, `--inventory`), a digest of the
 refreshed world, and the deformation delta: each deformation's action,
-before and after values (redacted as the plan prints them), the nulls it
+before and after values (redacted as the plan prints them; a sensitive one
+as `{"sensitive": label, "digest": HMAC}`), the nulls it
 waits on and the tick it runs in; the pending groups; the nulls round 0
 resolved and the ones the delta still carries; the tick schedule; and the
 extern answers the plan read. `apply PLAN.json` takes its inputs from the
@@ -379,7 +380,10 @@ allowed only where the file has a pending group of its type, and a deposed
 object's delete the tick after its `+/-` replacement. It prints the difference
 and stops before applying anything of that tick. So with a plan file, drift
 anywhere stops the run at the boundary, where a plain `apply` reports it and
-goes on:
+goes on. A sensitive value is compared by its digest: HMAC-SHA256 over its
+bytes, keyed by 32 random bytes the stack keeps beside its state
+(`state.key`, made on the first `plan --out`), so a secret that changed
+between plan and apply is refused and the file never carries the bytes:
 
 ```bash
 G=examples/adversarial/gke_two_phase.df

@@ -337,8 +337,11 @@ fn compare(desired: &Value, world: &Value) -> (Kind, BTreeSet<String>) {
 /// carries matches the value it has resolved to since); every deformation
 /// in the file that has not run yet must still be one. A new address is
 /// allowed only where the file has a pending group of its type. Values are
-/// stored redacted, as the plan prints them, so a sensitive value is
-/// compared by presence only.
+/// stored redacted, as the plan prints them; a sensitive value as
+/// `{"sensitive": label, "digest": HMAC}`,
+/// keyed by the stack's own key ([`file::Key`]): a secret that changed
+/// between plan and apply is a difference, and the file never carries its
+/// bytes.
 pub mod file {
     use crate::ast::{Atom, Term};
     use crate::plan_print::{self, Report};
@@ -353,7 +356,79 @@ pub mod file {
     use std::collections::BTreeMap;
     use std::path::Path;
 
-    pub const VERSION: u32 = 1;
+    pub const VERSION: u32 = 2;
+
+    /// The stack's plan-file key: 32 random bytes in `state.key` beside
+    /// the stack's state (it moves with the state on a handover), made on
+    /// first use, readable by its owner only. It never leaves the state dir.
+    pub struct Key([u8; 32]);
+
+    impl Key {
+        /// The key of the stack whose state file is `state`.
+        pub fn load_or_create(state: &Path) -> Result<Key> {
+            let path = state.with_extension("key");
+            if let Ok(bytes) = std::fs::read(&path) {
+                let key: [u8; 32] = bytes
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| anyhow::anyhow!("plan key {}: not 32 bytes", path.display()))?;
+                return Ok(Key(key));
+            }
+            let mut key = [0u8; 32];
+            {
+                use std::io::Read;
+                std::fs::File::open("/dev/urandom")
+                    .and_then(|mut f| f.read_exact(&mut key))
+                    .context("read /dev/urandom for the plan key")?;
+            }
+            if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
+                std::fs::create_dir_all(dir).with_context(|| format!("mkdir {}", dir.display()))?;
+            }
+            let mut opts = std::fs::OpenOptions::new();
+            opts.write(true).create_new(true);
+            #[cfg(unix)]
+            std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
+            {
+                use std::io::Write;
+                opts.open(&path)
+                    .and_then(|mut f| f.write_all(&key))
+                    .with_context(|| format!("write plan key {}", path.display()))?;
+            }
+            Ok(Key(key))
+        }
+
+        /// HMAC-SHA256 (RFC 2104) of `bytes`, hex.
+        pub fn digest(&self, bytes: &[u8]) -> String {
+            use sha2::{Digest, Sha256};
+            let pad = |b: u8| -> Vec<u8> {
+                let mut k = [0u8; 64];
+                k[..32].copy_from_slice(&self.0);
+                k.iter().map(|x| x ^ b).collect()
+            };
+            let inner = Sha256::new()
+                .chain_update(pad(0x36))
+                .chain_update(bytes)
+                .finalize();
+            Sha256::new()
+                .chain_update(pad(0x5c))
+                .chain_update(inner)
+                .finalize()
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect()
+        }
+
+        /// A redacted value as the file stores it: a sensitive one with the
+        /// digest of `bytes`, anything else as shown.
+        fn stored(&self, shown: plan_print::Shown, bytes: impl FnOnce() -> Vec<u8>) -> Json {
+            match shown {
+                plan_print::Shown::Sensitive(l) => {
+                    serde_json::json!({ "sensitive": l, "digest": self.digest(&bytes()) })
+                }
+                s => s.json(),
+            }
+        }
+    }
 
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
     pub struct PlanFile {
@@ -481,6 +556,7 @@ pub mod file {
         report: &Report,
         schema: &Schema,
         r: &Redactor,
+        key: &Key,
     ) -> Vec<Entry> {
         let mut tick_of: BTreeMap<&str, usize> = BTreeMap::new();
         for (t, xs) in &report.ticks {
@@ -491,7 +567,7 @@ pub mod file {
         plan.actions
             .iter()
             .filter(|a| !matches!(a.kind, ActionKind::Noop))
-            .map(|a| entry(a, sections, &tick_of, schema, r))
+            .map(|a| entry(a, sections, &tick_of, schema, r, key))
             .collect()
     }
 
@@ -501,7 +577,13 @@ pub mod file {
         tick_of: &BTreeMap<&str, usize>,
         schema: &Schema,
         r: &Redactor,
+        key: &Key,
     ) -> Entry {
+        let side = |v: Option<&Json>, sensitive: bool| {
+            key.stored(plan_print::shown(v, sensitive, schema, r), || {
+                serde_json::to_vec(&v).unwrap_or_default()
+            })
+        };
         let name = format!("{}.{}", a.addr.typ, a.addr.name);
         Entry {
             typ: a.addr.typ.clone(),
@@ -514,8 +596,8 @@ pub mod file {
                 .iter()
                 .map(|c| Leaf {
                     path: c.path.clone(),
-                    before: plan_print::shown(c.before.as_ref(), c.sensitive, schema, r).json(),
-                    after: plan_print::shown(c.after.as_ref(), c.sensitive, schema, r).json(),
+                    before: side(c.before.as_ref(), c.sensitive),
+                    after: side(c.after.as_ref(), c.sensitive),
                 })
                 .collect(),
             dependents: vec![],
@@ -523,14 +605,20 @@ pub mod file {
     }
 
     /// Round 0's resolutions, from the `resolve/2` facts, redacted.
-    pub fn resolved(facts: &std::collections::BTreeSet<Atom>, r: &Redactor) -> Vec<Resolved> {
+    pub fn resolved(
+        facts: &std::collections::BTreeSet<Atom>,
+        r: &Redactor,
+        key: &Key,
+    ) -> Vec<Resolved> {
         facts
             .iter()
             .filter(|a| a.pred == "resolve")
             .filter_map(|a| match a.args.as_slice() {
                 [Term::Val(Value::Str(l)), Term::Val(v)] => Some(Resolved {
                     null: l.clone(),
-                    value: plan_print::shown_value(v, r).json(),
+                    value: key.stored(plan_print::shown_value(v, r), || {
+                        serde_json::to_vec(&crate::engine::value_to_json(v)).unwrap_or_default()
+                    }),
                 }),
                 _ => None,
             })
@@ -677,7 +765,17 @@ pub mod file {
     fn leaf_differences(at: &str, saved: &Entry, now: &Entry) -> Vec<String> {
         let s: BTreeMap<&str, &Leaf> = saved.changes.iter().map(|l| (l.path.as_str(), l)).collect();
         let n: BTreeMap<&str, &Leaf> = now.changes.iter().map(|l| (l.path.as_str(), l)).collect();
-        let text = |v: &Json| serde_json::to_string(v).unwrap_or_default();
+        // A sensitive value by its label and the head of its digest.
+        let text = |v: &Json| match (v.get("sensitive"), v.get("digest").and_then(Json::as_str)) {
+            (Some(l), Some(d)) => {
+                let d = &d[..d.len().min(8)];
+                match l.as_str() {
+                    Some(l) => format!("(sensitive {l}, digest {d})"),
+                    None => format!("(sensitive, digest {d})"),
+                }
+            }
+            _ => serde_json::to_string(v).unwrap_or_default(),
+        };
         let mut out = Vec::new();
         for (p, l) in &n {
             match s.get(p) {
