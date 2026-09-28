@@ -847,6 +847,14 @@ controller gates every tick on the policy pass:
   input change. Otherwise the deformation is held (`drift at PATH needs
   approval`) and its baseline kept, so it is held again at every event
   until an approval or an input change.
+- Held drift is per resource, not per path: a deformation is one action,
+  so an object with `auto_reconcile` drift (replicas) and other drift (the
+  image) holds the whole update, replicas included. Per-path holding waits
+  for `ignore_changes` to address list paths.
+
+The controller parses the program once and again only for a file whose
+text changed, and drops what an event registered for diagnostics with the
+event, so a long-running controller does not grow per event.
 
 The rest of the plan still applies. `examples/bootstrap/workload.df` is the
 demo: replicas are `auto_reconcile`, any other drift waits for `approve`,

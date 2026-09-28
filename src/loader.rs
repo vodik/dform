@@ -1,9 +1,11 @@
 use crate::ast::{Program, Stmt};
+use crate::diag;
 use crate::parser;
 use anyhow::{Context, Result};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 pub fn load_program(entry_files: &[PathBuf]) -> Result<Program> {
     let mut seen: BTreeSet<PathBuf> = BTreeSet::new();
@@ -16,6 +18,46 @@ pub fn load_program(entry_files: &[PathBuf]) -> Result<Program> {
     Ok(Program { statements })
 }
 
+/// A file as last parsed: its name and text, the parse, and the sources
+/// the parse registered (pinned while the entry lives).
+struct Parsed {
+    name: String,
+    text: String,
+    program: Program,
+    sources: Vec<u32>,
+}
+
+/// Every file loaded, by canonical path: a long-running controller loads
+/// the program once per event and parses a file again only when its text
+/// changed. (Compared by text, not mtime: a rewrite within the clock's
+/// granularity is still seen.)
+static PARSED: Mutex<BTreeMap<PathBuf, Parsed>> = Mutex::new(BTreeMap::new());
+
+fn parse_cached(abs: &Path, name: &str, text: String) -> Result<Program> {
+    let mut cache = PARSED.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(p) = cache.get(abs)
+        && p.name == name
+        && p.text == text
+    {
+        return Ok(p.program.clone());
+    }
+    let mark = diag::mark();
+    let program = parser::parse_file(name, &text)?;
+    let sources = diag::pin_since(mark);
+    if let Some(old) = cache.insert(
+        abs.to_path_buf(),
+        Parsed {
+            name: name.to_string(),
+            text,
+            program: program.clone(),
+            sources,
+        },
+    ) {
+        diag::remove(&old.sources);
+    }
+    Ok(program)
+}
+
 fn load_file(path: &Path, seen: &mut BTreeSet<PathBuf>) -> Result<Program> {
     // One file reached two ways (`lib/x.df`, `lib/../lib/x.df`, a symlink)
     // is one file: dedup by its canonical path.
@@ -26,7 +68,7 @@ fn load_file(path: &Path, seen: &mut BTreeSet<PathBuf>) -> Result<Program> {
         return Ok(Program { statements: vec![] });
     }
     let src = fs::read_to_string(&abs).with_context(|| format!("read {}", abs.display()))?;
-    let mut prog = parser::parse_file(&display_name(&abs), &src)?;
+    let mut prog = parse_cached(&abs, &display_name(&abs), src)?;
 
     let base_dir = abs.parent().unwrap_or(Path::new("."));
     let mut out = Vec::new();
@@ -140,4 +182,54 @@ fn absolutize(path: impl AsRef<Path>) -> Result<PathBuf> {
     }
     let cwd = std::env::current_dir().context("current_dir")?;
     Ok(cwd.join(p))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ast::Span;
+
+    fn file_ids(p: &Program) -> BTreeSet<u32> {
+        p.statements
+            .iter()
+            .filter_map(|s| match s {
+                Stmt::Fact(a) => Some(a.span.file),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A file is parsed once while its text stays the same; a changed
+    /// file is parsed again and its old source leaves the registry.
+    #[test]
+    fn a_file_is_parsed_again_only_when_it_changed() {
+        let dir = std::env::temp_dir().join(format!("dform-loader-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("p.df");
+        fs::write(&f, "edition 2026.\np(1).\n").unwrap();
+        let a = load_program(std::slice::from_ref(&f)).unwrap();
+        let b = load_program(std::slice::from_ref(&f)).unwrap();
+        assert_eq!(file_ids(&a), file_ids(&b));
+        let old = *file_ids(&a).first().unwrap();
+
+        fs::write(&f, "edition 2026.\np(2).\n").unwrap();
+        let c = load_program(std::slice::from_ref(&f)).unwrap();
+        assert_ne!(file_ids(&c), file_ids(&a));
+        let span = |p: &Program| match &p.statements[0] {
+            Stmt::Fact(a) => a.span,
+            _ => unreachable!(),
+        };
+        assert_eq!(
+            diag::at(span(&c)).map(|s| s.ends_with("p.df:2:1")),
+            Some(true)
+        );
+        assert!(
+            diag::at(Span {
+                file: old,
+                ..span(&c)
+            })
+            .is_none()
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
 }

@@ -1,8 +1,14 @@
 //! Diagnostics: a message at a span, with labels, notes and a hint, printed
 //! through ariadne. Sources are registered once per load so a `Span` (a
 //! source id and a byte range) can name `file:line:col` anywhere later.
+//!
+//! The registry lives as long as what refers to it: a [`Scope`] (one
+//! evaluation of a long-running controller) drops the sources registered
+//! in it, except those [`pin_since`] keeps for a parse that outlives it
+//! (the loader's cache), which [`remove`] drops when the file changes.
 
 use crate::ast::Span;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
@@ -13,7 +19,18 @@ struct Source {
     lines: Arc<[usize]>,
 }
 
-static SOURCES: Mutex<Vec<Source>> = Mutex::new(Vec::new());
+struct Registry {
+    sources: BTreeMap<u32, Source>,
+    /// The id the next source gets; ids are never reused.
+    next: u32,
+    pinned: BTreeSet<u32>,
+}
+
+static SOURCES: Mutex<Registry> = Mutex::new(Registry {
+    sources: BTreeMap::new(),
+    next: 1,
+    pinned: BTreeSet::new(),
+});
 
 /// Register a source; the id goes in every `Span` into it.
 pub fn add_source(name: &str, text: &str) -> u32 {
@@ -21,23 +38,83 @@ pub fn add_source(name: &str, text: &str) -> u32 {
     let lines = std::iter::once(0)
         .chain(text.match_indices('\n').map(|(i, _)| i + 1))
         .collect();
-    s.push(Source {
-        name: name.to_string(),
-        text: text.into(),
-        lines,
-    });
-    s.len() as u32
+    let id = s.next;
+    s.next += 1;
+    s.sources.insert(
+        id,
+        Source {
+            name: name.to_string(),
+            text: text.into(),
+            lines,
+        },
+    );
+    id
+}
+
+/// The id the next source will get: what [`pin_since`] and a [`Scope`]
+/// count from.
+pub fn mark() -> u32 {
+    SOURCES.lock().unwrap().next
+}
+
+/// Keep the sources registered since `mark` beyond any scope; their ids.
+pub fn pin_since(mark: u32) -> Vec<u32> {
+    let mut s = SOURCES.lock().unwrap();
+    let ids: Vec<u32> = s.sources.range(mark..).map(|(id, _)| *id).collect();
+    s.pinned.extend(ids.iter().copied());
+    ids
+}
+
+/// Drop sources nothing refers to any more.
+pub fn remove(ids: &[u32]) {
+    let mut s = SOURCES.lock().unwrap();
+    for id in ids {
+        s.sources.remove(id);
+        s.pinned.remove(id);
+    }
+}
+
+/// How many sources are registered.
+pub fn source_count() -> usize {
+    SOURCES.lock().unwrap().sources.len()
+}
+
+/// The sources of one evaluation: dropped with it, except the pinned.
+pub struct Scope {
+    mark: u32,
+}
+
+impl Scope {
+    pub fn new() -> Scope {
+        Scope { mark: mark() }
+    }
+}
+
+impl Default for Scope {
+    fn default() -> Scope {
+        Scope::new()
+    }
+}
+
+impl Drop for Scope {
+    fn drop(&mut self) {
+        let mut s = SOURCES.lock().unwrap();
+        let s = &mut *s;
+        let pinned = &s.pinned;
+        s.sources
+            .retain(|id, _| *id < self.mark || pinned.contains(id));
+    }
 }
 
 fn source(id: u32) -> Option<(String, Arc<str>)> {
     let s = SOURCES.lock().unwrap();
-    let src = s.get((id as usize).checked_sub(1)?)?;
+    let src = s.sources.get(&id)?;
     Some((src.name.clone(), src.text.clone()))
 }
 
 fn source_lines(id: u32) -> Option<(String, Arc<str>, Arc<[usize]>)> {
     let s = SOURCES.lock().unwrap();
-    let src = s.get((id as usize).checked_sub(1)?)?;
+    let src = s.sources.get(&id)?;
     Some((src.name.clone(), src.text.clone(), src.lines.clone()))
 }
 

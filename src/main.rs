@@ -1122,6 +1122,9 @@ fn run_controller(cli: Cli) -> Result<()> {
     let mut hook = controller::Hook::default();
     let mut events = 0;
     loop {
+        // What the run registers for diagnostics is dropped with it; the
+        // program's files stay parsed (`loader`) until they change.
+        let sources = dform::diag::Scope::new();
         if let Err(e) = run(apply.clone(), Some(&mut hook)) {
             let text = dform::diag::report(&e, false);
             controller::log(format_args!(
@@ -1132,11 +1135,23 @@ fn run_controller(cli: Cli) -> Result<()> {
                     .trim_start_matches("error: ")
             ));
             if events == 0 {
+                // The error is rendered after this returns.
+                std::mem::forget(sources);
                 return Err(e);
             }
             hook.failed()?;
         }
+        drop(sources);
         events += 1;
+        // Tests measure the source registry after every event.
+        if let Some(path) = std::env::var_os("DFORM_TEST_SOURCES") {
+            use std::io::Write;
+            let mut f = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)?;
+            writeln!(f, "{}", dform::diag::source_count())?;
+        }
         if once || max_events.is_some_and(|n| events >= n) {
             return Ok(());
         }
