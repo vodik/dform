@@ -39,6 +39,12 @@ struct Cli {
     /// built-in) or a path to a schema .df file. Repeatable; default `fake`.
     #[arg(long = "provider", global = true)]
     providers: Vec<String>,
+
+    /// The fake provider's world file: what exists. Plan refreshes from it,
+    /// apply writes it back. State sits beside it as <stem>.state.json.
+    /// Default: .dform/<stack>/remote.json.
+    #[arg(long = "world", global = true)]
+    world: Option<PathBuf>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -74,7 +80,10 @@ fn main() -> Result<()> {
     for note in state::migrate_unscoped(&root)? {
         eprintln!("note: {note}");
     }
-    let paths = state::stack_paths(&root, &state::stack_name(&files[0]));
+    let paths = match &cli.world {
+        Some(w) => state::world_paths(&root, w),
+        None => state::stack_paths(&root, &state::stack_name(&files[0])),
+    };
     let backend = FakeCloud::with_paths(&paths.world, &paths.inventory, load_schema(&cli.providers)?);
 
     let mut st = state::State::load(&paths.state)?;

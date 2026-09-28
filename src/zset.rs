@@ -76,9 +76,10 @@ pub struct World {
     pub computed: BTreeMap<(String, String), Value>,
 }
 
-pub fn load_world(root: &Path) -> Result<World> {
-    let st = State::load(&crate::state::state_path(root))?;
-    let remote = FakeCloud::new(root.to_path_buf()).load()?;
+/// Load a world file and the state (identity mapping) beside it.
+pub fn load_world(state: &Path, world: &Path) -> Result<World> {
+    let st = State::load(state)?;
+    let remote = FakeCloud::with_paths(world, "", Schema::default()).load()?;
     let mut identity = BTreeMap::new();
     for (k, e) in &st.resources {
         let Some((t, n)) = k.split_once("::") else { continue };
@@ -209,9 +210,13 @@ mod tests {
         ir::compile_resources(res.facts.iter().cloned()).unwrap()
     }
 
-    fn planner_counts(world_root: &Path, desired: &[ir::Resource]) -> (usize, usize, usize, BTreeSet<String>) {
-        let backend = FakeCloud::new(world_root.to_path_buf());
-        let mut st = State::load(&crate::state::state_path(world_root)).unwrap();
+    fn fixture() -> (PathBuf, PathBuf) {
+        (root().join("examples/world/dform.state.json"), root().join("examples/world/dform.json"))
+    }
+
+    fn planner_counts((state, world): &(PathBuf, PathBuf), desired: &[ir::Resource]) -> (usize, usize, usize, BTreeSet<String>) {
+        let backend = FakeCloud::with_paths(world, "", crate::schema::fake());
+        let mut st = State::load(state).unwrap();
         backend.bootstrap_state(&mut st).unwrap();
         let plan = backend.plan(desired, &[], &st).unwrap();
         let mut c = (0, 0, 0);
@@ -233,9 +238,9 @@ mod tests {
     #[test]
     fn zset_matches_planner_on_empty_world_14_creates() {
         let d = desired(&[]);
-        let empty = root().join("examples/world-empty");
-        std::fs::create_dir_all(&empty).unwrap();
-        let world = load_world(&empty).unwrap();
+        let missing = std::env::temp_dir().join("dform-zset-no-such-world");
+        let empty = (missing.join("state.json"), missing.join("world.json"));
+        let world = load_world(&empty.0, &empty.1).unwrap();
         let ds = deformation(&d, &world, &crate::schema::fake());
         let s = summary(&ds);
         println!("empty world: {:?}", s.iter().map(|(k, v)| (format!("{k:?}"), v.len())).collect::<Vec<_>>());
@@ -251,8 +256,8 @@ mod tests {
     #[test]
     fn zset_matches_planner_on_prod_plan_11_updates() {
         let d = desired(&[input("env", "prod")]);
-        let w = root().join("examples/world");
-        let world = load_world(&w).unwrap();
+        let w = fixture();
+        let world = load_world(&w.0, &w.1).unwrap();
         let ds = deformation(&d, &world, &crate::schema::fake());
         let s = summary(&ds);
         println!("prod plan vs world: {:?}", s.iter().map(|(k, v)| (format!("{k:?}"), v.clone())).collect::<Vec<_>>());
@@ -275,8 +280,8 @@ mod tests {
     #[test]
     fn without_round0_resolution_fresh_nulls_make_spurious_updates() {
         let d = desired(&[]);
-        let w = root().join("examples/world");
-        let mut world = load_world(&w).unwrap();
+        let w = fixture();
+        let mut world = load_world(&w.0, &w.1).unwrap();
         world.computed.clear();
         let ds = deformation(&d, &world, &crate::schema::fake());
         let s = summary(&ds);

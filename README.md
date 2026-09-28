@@ -29,6 +29,20 @@ resources.
 - The fake backend's world (what "exists"): `.dform/<stack>/remote.json`.
 - Discovery inventory, shared by every stack: `.dform/inventory.json`.
 
+`--world PATH` (plan and apply) points the fake backend at a world file
+instead: the JSON of what "exists", each resource's configured `attrs` and its
+`computed` values. Plan refreshes from it, apply writes it back, and the stack's
+state sits beside it as `<stem>.state.json`. Edit the world file and re-plan to
+see drift:
+
+```bash
+cargo run -- plan --world examples/world/dform.json    # steady state: no changes
+```
+
+A world file with no state beside it is adopted whole: everything in it is
+taken as this stack's. `examples/world/<stack>.json` is the fixture format for
+tests.
+
 A `.dform/` written before state was scoped (`.dform/state.json`,
 `.dform/remote.json`) is moved into the `dform` stack on the next run.
 

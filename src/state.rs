@@ -109,6 +109,17 @@ pub fn stack_paths(root: &Path, stack: &str) -> StackPaths {
     }
 }
 
+/// A stack whose world is the file `world` (`--world PATH`): its state sits
+/// beside it, `<dir>/<stem>.state.json`, so a world file and its identity
+/// mapping travel together as one fixture.
+pub fn world_paths(root: &Path, world: &Path) -> StackPaths {
+    StackPaths {
+        state: world.with_extension("state.json"),
+        world: world.to_path_buf(),
+        inventory: root.join("inventory.json"),
+    }
+}
+
 /// The stack that inherits state written before state was scoped.
 pub const LEGACY_STACK: &str = "dform";
 
