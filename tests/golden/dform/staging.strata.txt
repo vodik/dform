@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== examples/demo/stacks/dform.df: 168 nodes, 784 edges (563 negative)
+== examples/demo/stacks/dform.df: 170 nodes, 804 edges (577 negative)
    STRATIFIED, 19 strata
    stratum 0:
      (arg, iam.policy, name)
@@ -102,6 +102,8 @@ exit: ok
      (arg, net.vpc_peering, accepter_vpc_id)
      (arg, net.vpc_peering, requester_vpc_id)
      (want, net.subnet)
+     __field_read_0
+     __field_read_1
    stratum 9:
      (attr, net.subnet, cidr)
      (attr, net.subnet, id)

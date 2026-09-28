@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== examples/adopt/stacks/adopt_demo.df: 79 nodes, 147 edges (59 negative)
+== examples/adopt/stacks/adopt_demo.df: 81 nodes, 152 edges (61 negative)
    STRATIFIED, 10 strata
    stratum 0:
      (arg, input, env)
@@ -78,6 +78,7 @@ exit: ok
      (arg, net.subnet, vpc_id)
      (arg, net.subnet, zone)
      (want, net.subnet)
+     __field_read_0
      __ref_dep
    stratum 7:
      (attr, net.subnet, cidr)
@@ -85,6 +86,7 @@ exit: ok
      (attr, net.subnet, visibility)
      (attr, net.subnet, vpc_id)
      (attr, net.subnet, zone)
+     warn
    stratum 8:
      (arg, output, private_subnet_ids)
      __lc_1

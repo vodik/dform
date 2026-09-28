@@ -63,7 +63,7 @@ pub fn lower(program: &Program) -> Result<Lowered> {
     check_mixed(&expanded)?;
     let expanded = desugar_settings(&expanded)?;
     let (expanded, externs, extern_fns) = drop_metadata(&expanded);
-    let expanded = desugar_resources(&expanded)?;
+    let expanded = desugar_resources(&expanded, strict)?;
     let expanded = desugar_comprehensions(&expanded)?;
     let mut expanded = declassified(lower_contributions(&expanded)?);
     // A stack's config contributes per settings path the program knows.
@@ -1169,16 +1169,22 @@ fn apply_guard(stmt: Stmt, guard: &Lit) -> Result<Vec<Stmt>> {
     })
 }
 
-fn desugar_resources(program: &Program) -> Result<Program> {
+fn desugar_resources(program: &Program, strict: bool) -> Result<Program> {
     let mut out = Vec::new();
+    let mut n = 0;
+    // After the program's own statements, so its rules keep their indices
+    // (their ids in `why`).
+    let mut reports = Vec::new();
     for stmt in &program.statements {
         match stmt {
             Stmt::Resource(r) => {
+                reports.extend(unread_field_reports(r, strict, &mut n));
                 out.extend(resource_to_stmts(r.clone())?);
             }
             _ => out.push(stmt.clone()),
         }
     }
+    out.extend(reports);
     Ok(Program { statements: out })
 }
 
@@ -1213,6 +1219,167 @@ fn resource_to_stmts(r: Resource) -> Result<Vec<Stmt>> {
         out.push(fact_or_rule(head, &body));
     }
     Ok(out)
+}
+
+/// The message of [`unread_field_reports`].
+pub const UNREAD_FIELD: &str = "a field read found no value: the resource is not derived";
+
+/// A field's reads are literals of the block's one body, so a read with no
+/// row (a misspelled path, an attribute the provider never returns) holds
+/// the whole resource back. Per read of an object's attribute, the report
+/// that it did, when the object is there but the attribute is not:
+///
+/// ```text
+/// __field_read_N(Xs) :- Rest, attr(T, A, P, V).
+/// warn(UNREAD_FIELD, {resource, read, at}) :-
+///     Rest, want(T, A), not __field_read_N(Xs).
+/// ```
+///
+/// (`cloud_attr(T, A, _, _)` for a live object's.) `Rest` is the body
+/// without this read, the field reads after it, and what only they bind:
+/// the block's clauses and guards, the reads before it (so the first read
+/// that fails is the one named). `Xs` are the read's variables `Rest`
+/// binds. Under strict mode the head is a `deny`.
+///
+/// A missing object, an instance input or output with no value, a settings
+/// key an environment does not set: those hold a block back on purpose
+/// (a module's resource exists where its inputs are given), and are quiet.
+fn unread_field_reports(r: &Resource, strict: bool, n: &mut usize) -> Vec<Stmt> {
+    let Some(body) = &r.body else {
+        return Vec::new();
+    };
+    let reads: Vec<usize> = r
+        .reads
+        .clone()
+        .filter(|&i| matches!(body.get(i), Some(Lit::Pos(_))))
+        .collect();
+    let mut out = Vec::new();
+    for (k, &i) in reads.iter().enumerate() {
+        let Lit::Pos(read) = &body[i] else {
+            continue;
+        };
+        let exists = match (read.pred.as_str(), read.args.as_slice()) {
+            ("attr", [t, a, _, _]) => atom("want", vec![t.clone(), a.clone()]),
+            ("cloud_attr", [t, a, _, _]) => atom(
+                "cloud_attr",
+                vec![t.clone(), a.clone(), Term::Wildcard, Term::Wildcard],
+            ),
+            _ => continue,
+        };
+        let mut dropped: BTreeSet<usize> = reads[k..].iter().copied().collect();
+        let bound = loop {
+            let rest: Vec<&Lit> = (0..body.len())
+                .filter(|j| !dropped.contains(j))
+                .map(|j| &body[j])
+                .collect();
+            let bound = bound_by(&rest);
+            let unbound: Vec<usize> = (0..body.len())
+                .filter(|j| !dropped.contains(j))
+                .filter(|&j| {
+                    count_vars_in_lit(&body[j])
+                        .keys()
+                        .any(|v| !bound.contains(v))
+                })
+                .collect();
+            if unbound.is_empty() {
+                break bound;
+            }
+            dropped.extend(unbound);
+        };
+        let rest: Vec<Lit> = (0..body.len())
+            .filter(|j| !dropped.contains(j))
+            .map(|j| body[j].clone())
+            .collect();
+        let xs: Vec<Term> = count_vars_in_term(&Term::List(read.args.clone()))
+            .into_keys()
+            .filter(|v| bound.contains(v))
+            .map(|v| var(&v))
+            .collect();
+        let helper = atom(&format!("__field_read_{n}"), xs);
+        *n += 1;
+        let names_bound = count_vars_in_term(&Term::List(vec![r.typ.clone(), r.name.clone()]))
+            .keys()
+            .all(|v| bound.contains(v));
+        let resource = if names_bound {
+            Term::Func {
+                name: "format".into(),
+                args: vec![str_term("%s.%s"), r.typ.clone(), r.name.clone()],
+            }
+        } else {
+            str_term(&format!(
+                "{}.{}",
+                crate::partition::fmt_term(&r.typ).trim_matches('"'),
+                crate::partition::fmt_term(&r.name).trim_matches('"')
+            ))
+        };
+        let mut ctx = BTreeMap::from([
+            ("resource".to_string(), resource),
+            (
+                "read".to_string(),
+                str_term(&crate::partition::fmt_atom(read)),
+            ),
+        ]);
+        if let Some(at) = diag::place(read.span) {
+            ctx.insert("at".to_string(), str_term(&at));
+        }
+        let mut with_read = rest.clone();
+        with_read.push(Lit::Pos(read.clone()));
+        out.push(Stmt::Rule(RuleStmt {
+            head: helper.clone(),
+            body: with_read,
+        }));
+        let mut body = rest;
+        body.push(Lit::Pos(exists));
+        body.push(Lit::Not(helper));
+        out.push(Stmt::Rule(RuleStmt {
+            head: Atom {
+                span: read.span,
+                ..atom(
+                    if strict { "deny" } else { "warn" },
+                    vec![str_term(UNREAD_FIELD), Term::Obj(ctx)],
+                )
+            },
+            body,
+        }));
+    }
+    out
+}
+
+/// The variables `lits` bind: every variable of a positive literal outside
+/// a function's arguments, and through `=`, a side whose variables are
+/// all bound binds the other's.
+fn bound_by(lits: &[&Lit]) -> BTreeSet<String> {
+    fn pattern(t: &Term, out: &mut BTreeSet<String>) {
+        match t {
+            Term::Var(v) => {
+                out.insert(v.clone());
+            }
+            Term::List(xs) => xs.iter().for_each(|x| pattern(x, out)),
+            Term::Obj(m) => m.values().for_each(|x| pattern(x, out)),
+            _ => {}
+        }
+    }
+    let mut out = BTreeSet::new();
+    for l in lits {
+        if let Lit::Pos(a) = l {
+            a.args.iter().for_each(|t| pattern(t, &mut out));
+        }
+    }
+    loop {
+        let before = out.len();
+        for l in lits {
+            if let Lit::Eq(a, b) = l {
+                for (x, y) in [(a, b), (b, a)] {
+                    if count_vars_in_term(y).keys().all(|v| out.contains(v)) {
+                        pattern(x, &mut out);
+                    }
+                }
+            }
+        }
+        if out.len() == before {
+            return out;
+        }
+    }
 }
 
 fn is_ground_term(t: &Term) -> bool {

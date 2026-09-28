@@ -347,6 +347,9 @@ pub struct Resource {
     pub rank: Option<Rank>,
     pub fields: Vec<FieldAssign>,
     pub body: Option<Vec<Lit>>,
+    /// `body[reads]`: the literals the fields' values read, after the
+    /// block's own clauses (a `when` appends its guard after them).
+    pub reads: std::ops::Range<usize>,
     pub span: Span,
 }
 

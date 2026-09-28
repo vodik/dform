@@ -1758,6 +1758,7 @@ impl<'u> Lowerer<'u> {
         let mut body = self.clauses(&mut rc, &block)?;
         let mut reads = Vec::new();
         let fields = self.fields(&mut rc, &block, &mut reads)?;
+        let reads_at = body.len()..body.len() + reads.len();
         body.extend(reads);
         // The header: a string with holes is bound last, by `format`; a
         // name the clauses bind is that variable; anything else static.
@@ -1794,6 +1795,7 @@ impl<'u> Lowerer<'u> {
                 rank,
                 fields,
                 body,
+                reads: reads_at,
                 span,
             })
         } else {
