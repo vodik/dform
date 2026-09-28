@@ -113,6 +113,8 @@ fn the_mock_conforms() {
 
 /// The backends a test links: the process one, the direct and wire ones.
 fn launches() -> [(Backend, Box<dyn Launch>); 3] {
+    // The process backend spawns the mock provider.
+    fake();
     [
         (Backend::Process, Box::new(dform_grpc::client::Process)),
         (Backend::Direct, Box::new(dform_mock::Linked::direct())),

@@ -127,7 +127,7 @@ fn one_program_owns_one_stack() {
 fn a_second_concurrent_apply_fails_cleanly() {
     let s = Scratch::project("lang-stack-lock");
     s.write("net.df", NET);
-    let first = Command::new(env!("CARGO_BIN_EXE_dform"))
+    let first = common::dform()
         .args(["apply", "net.df"])
         .current_dir(&s.dir)
         .env("DFORM_TEST_HOLD_LOCK", s.path("release"))

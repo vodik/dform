@@ -7,7 +7,6 @@
 
 mod common;
 use common::{Run, Scratch, repo};
-use std::process::Command;
 
 fn plan(s: &Scratch, src: &str) -> Run {
     s.write("p.df", src);
@@ -261,7 +260,7 @@ type k8s.secret {
 resource k8s.secret db { metadata.name = \"db\", data = { password: \"x\" } }
 ",
     );
-    let out = Command::new(env!("CARGO_BIN_EXE_dform"))
+    let out = common::dform()
         .args(["plan", "p.df"])
         .current_dir(&s.dir)
         .env("DFORM_K8S_OFFLINE", "1")

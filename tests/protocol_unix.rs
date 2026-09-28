@@ -58,7 +58,7 @@ fn the_mock_serves_a_unix_socket_and_dform_dials_it() {
     // dform dials it: apply, then an undeformed plan.
     s.write("p.df", PROG);
     let run = |args: &[&str]| -> common::Run {
-        Command::new(env!("CARGO_BIN_EXE_dform"))
+        common::dform()
             .args(common::on("p.df", &["--world", "w.json"], args))
             .current_dir(&s.dir)
             .env("DFORM_PROVIDER_TRANSPORT", "unix")

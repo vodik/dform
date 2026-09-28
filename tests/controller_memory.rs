@@ -7,7 +7,6 @@
 mod common;
 use common::Scratch;
 use std::io::BufRead;
-use std::process::Command;
 
 const WORKLOAD: &str = include_str!("../examples/bootstrap/stacks/workload.df");
 const EVENTS: usize = 200;
@@ -26,7 +25,7 @@ fn two_hundred_events_keep_the_source_registry_bounded() {
     release(&s, "gcr.io/renfry/web:0");
     s.write("data/approvals.facts", "edition 2026\n");
     let counts = s.path("sources.txt");
-    let mut child = Command::new(env!("CARGO_BIN_EXE_dform"))
+    let mut child = common::dform()
         .args([
             "controller",
             "run",

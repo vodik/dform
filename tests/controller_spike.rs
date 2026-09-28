@@ -366,7 +366,7 @@ fn a_git_source_is_read_at_its_ref() {
 fn the_polling_loop_runs_an_event_per_change() {
     use std::io::BufRead;
     let s = setup("ctl-loop");
-    let mut child = Command::new(env!("CARGO_BIN_EXE_dform"))
+    let mut child = common::dform()
         .args([
             "controller",
             "run",

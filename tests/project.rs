@@ -478,7 +478,7 @@ fn outside_a_project_only_what_writes_no_state_runs() {
 /// The repository's root has no dform.toml: no project.
 #[test]
 fn the_repository_root_is_not_a_project() {
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_dform"))
+    let out = common::dform()
         .arg("plan")
         .current_dir(common::repo())
         .output()

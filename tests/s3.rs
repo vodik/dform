@@ -107,7 +107,7 @@ impl<'a> Project<'a> {
     }
 
     fn command(&self, args: &[&str], env: &[(&str, &str)]) -> Command {
-        let mut c = Command::new(env!("CARGO_BIN_EXE_dform"));
+        let mut c = common::dform();
         c.args(args)
             .current_dir(&self.s.dir)
             .env("DFORM_S3_ACCESS_KEY_ID", &self.t.id)
