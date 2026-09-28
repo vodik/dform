@@ -241,6 +241,7 @@ pub mod file {
     use crate::ast::{Atom, Term};
     use crate::plan_print::{self, Report};
     use crate::provider::{Action, ActionKind, Plan};
+    use crate::query::Redactor;
     use crate::schema::Schema;
     use crate::stuck::Sections;
     use crate::value::Value;
@@ -366,7 +367,13 @@ pub mod file {
     /// The delta of one plan: every deformation, definite or held, with
     /// its tick from the report's schedule. Paths are the provider's own
     /// (a keyless set element by content), values redacted.
-    pub fn delta(plan: &Plan, sections: &Sections, report: &Report, schema: &Schema) -> Vec<Entry> {
+    pub fn delta(
+        plan: &Plan,
+        sections: &Sections,
+        report: &Report,
+        schema: &Schema,
+        r: &Redactor,
+    ) -> Vec<Entry> {
         let mut tick_of: BTreeMap<&str, usize> = BTreeMap::new();
         for (t, xs) in &report.ticks {
             for x in xs {
@@ -376,7 +383,7 @@ pub mod file {
         plan.actions
             .iter()
             .filter(|a| !matches!(a.kind, ActionKind::Noop))
-            .map(|a| entry(a, sections, &tick_of, schema))
+            .map(|a| entry(a, sections, &tick_of, schema, r))
             .collect()
     }
 
@@ -385,6 +392,7 @@ pub mod file {
         sections: &Sections,
         tick_of: &BTreeMap<&str, usize>,
         schema: &Schema,
+        r: &Redactor,
     ) -> Entry {
         let name = format!("{}.{}", a.addr.typ, a.addr.name);
         Entry {
@@ -398,35 +406,24 @@ pub mod file {
                 .iter()
                 .map(|c| Leaf {
                     path: c.path.clone(),
-                    before: plan_print::shown(c.before.as_ref(), c.sensitive, schema).json(),
-                    after: plan_print::shown(c.after.as_ref(), c.sensitive, schema).json(),
+                    before: plan_print::shown(c.before.as_ref(), c.sensitive, schema, r).json(),
+                    after: plan_print::shown(c.after.as_ref(), c.sensitive, schema, r).json(),
                 })
                 .collect(),
             dependents: vec![],
         }
     }
 
-    /// Round 0's resolutions, from the `resolve/2` facts.
-    pub fn resolved(facts: &std::collections::BTreeSet<Atom>, schema: &Schema) -> Vec<Resolved> {
+    /// Round 0's resolutions, from the `resolve/2` facts, redacted.
+    pub fn resolved(facts: &std::collections::BTreeSet<Atom>, r: &Redactor) -> Vec<Resolved> {
         facts
             .iter()
             .filter(|a| a.pred == "resolve")
             .filter_map(|a| match a.args.as_slice() {
-                [Term::Val(Value::Str(l)), Term::Val(v)] => {
-                    let (t, p) = match (crate::value::null_owner(l), l.split_once('#')) {
-                        (Some((t, _)), Some((_, p))) => (t, p.to_string()),
-                        _ => (String::new(), String::new()),
-                    };
-                    let value = if schema.is_sensitive(&t, &p) {
-                        serde_json::json!({ "sensitive": Json::Null })
-                    } else {
-                        plan_print::redact_value(&t, v, schema)
-                    };
-                    Some(Resolved {
-                        null: l.clone(),
-                        value,
-                    })
-                }
+                [Term::Val(Value::Str(l)), Term::Val(v)] => Some(Resolved {
+                    null: l.clone(),
+                    value: plan_print::shown_value(v, r).json(),
+                }),
                 _ => None,
             })
             .collect()

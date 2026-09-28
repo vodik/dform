@@ -1,0 +1,223 @@
+//! `plan --json` and `query --json`: one stable JSON document each, the
+//! thing CI and editors consume.
+
+mod common;
+use common::{Scratch, repo};
+use serde_json::{Value, json};
+
+fn gke_json(s: &Scratch) -> Value {
+    let prog = repo().join("examples/adversarial/gke_two_phase.df");
+    let r = s
+        .run(&[
+            "--file",
+            prog.to_str().unwrap(),
+            "--provider",
+            "gke",
+            "--world",
+            "w.json",
+            "plan",
+            "--json",
+        ])
+        .success();
+    serde_json::from_str(&r.stdout).unwrap_or_else(|e| panic!("{e}: {}", r.stdout))
+}
+
+#[test]
+fn plan_json_has_every_section() {
+    let s = Scratch::new("json-gke");
+    let p = gke_json(&s);
+    assert_eq!(p["stack"], "gke_two_phase");
+    assert_eq!(p["undeformed"], false);
+    assert_eq!(p["summary"]["deformations"], 3);
+    assert_eq!(p["summary"]["create"], 3);
+    assert_eq!(p["summary"]["pending"], 4);
+    assert_eq!(p["summary"]["undetermined"], 1);
+    assert_eq!(p["definite"].as_array().unwrap().len(), 3);
+    let subnet = &p["definite"][0];
+    assert_eq!(subnet["action"], "create");
+    assert_eq!(subnet["type"], "google_compute_subnetwork");
+    assert_eq!(
+        subnet["changes"][0],
+        json!({"op": "set", "path": "ip_cidr_range", "before": null, "after": "10.141.76.0/22"})
+    );
+    let block = &p["pending"][0];
+    assert_eq!(
+        block["on"][0],
+        json!({"null": "gke_cluster/pngu#ca_certificate", "class": "open"})
+    );
+    assert_eq!(block["resolves_after"], 1);
+    let secret = block["deformations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["name"] == "db_credentials")
+        .unwrap();
+    let password = secret["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["path"] == "data.password")
+        .unwrap();
+    assert_eq!(
+        password["after"],
+        json!({"sensitive": "google.secret_manager_secret_version/db_pw#secret_data"})
+    );
+    assert_eq!(p["pending_groups"][0]["pattern"], "gke_nodepool.?");
+    assert_eq!(p["undetermined"][0]["kind"], "undetermined");
+    assert_eq!(p["undetermined"][0]["after"], 1);
+    assert_eq!(p["apply_order"][1]["tick"], 2);
+    assert_eq!(p["shadowed"], json!([]));
+    assert_eq!(p["conflicts"], json!([]));
+}
+
+/// Nulls carry their class: a fresh id.
+#[test]
+fn plan_json_nulls_carry_their_class() {
+    let s = Scratch::new("json-null");
+    let p = gke_json(&s);
+    let addr = p["definite"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["name"] == "static_ip")
+        .unwrap();
+    let sub = addr["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["path"] == "subnetwork_id")
+        .unwrap();
+    assert_eq!(
+        sub["after"],
+        json!({"null": "google_compute_subnetwork/gke_subnet#id", "class": "fresh"})
+    );
+}
+
+#[test]
+fn an_undeformed_stack_is_a_document_too() {
+    let s = Scratch::new("json-undeformed");
+    s.write(
+        "p.df",
+        "resource net.vpc main { cidr = \"10.0.0.0/16\" }.\n",
+    );
+    let args = ["--file", "p.df", "--world", "w.json"];
+    s.run(&[&args[..], &["apply"]].concat()).success();
+    let r = s.run(&[&args[..], &["plan", "--json"]].concat()).success();
+    let p: Value = serde_json::from_str(&r.stdout).unwrap();
+    assert_eq!(p["undeformed"], true);
+    assert_eq!(p["summary"]["deformations"], 0);
+}
+
+#[test]
+fn query_json_lists_the_facts() {
+    let s = Scratch::new("json-query");
+    s.write(
+        "p.df",
+        "resource net.vpc main { cidr = \"10.0.0.0/16\" }.\n",
+    );
+    let r = s
+        .run(&[
+            "--file", "p.df", "--world", "w.json", "query", "want", "--json",
+        ])
+        .success();
+    let q: Value = serde_json::from_str(&r.stdout).unwrap();
+    assert_eq!(q["query"], "want");
+    assert_eq!(q["count"], 1);
+    assert_eq!(
+        q["facts"][0],
+        json!({"pred": "want", "args": ["net.vpc", "main"]})
+    );
+}
+
+/// `query --json` spells a secret and a null the way `plan --json` does.
+#[test]
+fn query_json_redacts_like_the_plan() {
+    let s = Scratch::new("json-query-secret");
+    s.write(
+        "p.df",
+        "resource leaky.vault v { password = \"VAULT-SECRET-DO-NOT-PRINT\" }.\n\
+         resource net.subnet a { vpc_id = ref(net.vpc, main, id) }.\n\
+         resource net.vpc main { cidr = \"10.0.0.0/16\" }.\n",
+    );
+    let leaky = repo().join("providers/leaky/schema.df");
+    let r = s
+        .run(&[
+            "--file",
+            "p.df",
+            "--provider",
+            "fake",
+            "--provider",
+            leaky.to_str().unwrap(),
+            "--world",
+            "w.json",
+            "query",
+            "attr(T, A, P, V), P = password",
+            "--json",
+        ])
+        .success();
+    assert!(!r.stdout.contains("VAULT-SECRET"), "{}", r.stdout);
+    let q: Value = serde_json::from_str(&r.stdout).unwrap();
+    assert_eq!(
+        q["rows"][0]["V"],
+        json!({"sensitive": "leaky.vault/v#password"})
+    );
+    let r = s
+        .run(&[
+            "--file",
+            "p.df",
+            "--provider",
+            "fake",
+            "--provider",
+            leaky.to_str().unwrap(),
+            "--world",
+            "w.json",
+            "query",
+            "attr(net.subnet, a, vpc_id, V)",
+            "--json",
+        ])
+        .success();
+    let q: Value = serde_json::from_str(&r.stdout).unwrap();
+    assert_eq!(
+        q["rows"][0]["V"],
+        json!({"null": "net.vpc/main#id", "class": "fresh"})
+    );
+}
+
+/// The executor's plan entries in JSON: a replace with its order, the
+/// prevent_destroy deny, and a moved rename.
+#[test]
+fn replace_denied_and_moved_are_in_the_document() {
+    let s = Scratch::new("json-replace");
+    let net = "resource net.vpc main { cidr = \"10.0.0.0/16\" }.\n";
+    s.write("p.df", net);
+    let args = ["--file", "p.df", "--world", "w.json"];
+    s.run(&[&args[..], &["apply"]].concat()).success();
+    s.write(
+        "p.df",
+        &format!(
+            "{}lifecycle(net.vpc, main, prevent_destroy).\n",
+            net.replace("10.0.0.0/16", "10.1.0.0/16")
+        ),
+    );
+    let r = s.run(&[&args[..], &["plan", "--json"]].concat()).failure();
+    let p: Value = serde_json::from_str(&r.stdout).unwrap();
+    assert_eq!(p["summary"]["replace"], 1);
+    assert_eq!(p["definite"][0]["action"], "replace");
+    assert_eq!(p["definite"][0]["create_first"], false);
+    assert_eq!(
+        p["denied"][0],
+        "lifecycle prevent_destroy: the plan would replace net.vpc.main"
+    );
+
+    s.write(
+        "p.df",
+        "resource net.vpc core { cidr = \"10.0.0.0/16\" }.\nmoved(net.vpc, main, core).\n",
+    );
+    let r = s.run(&[&args[..], &["plan", "--json"]].concat()).success();
+    let p: Value = serde_json::from_str(&r.stdout).unwrap();
+    assert_eq!(
+        p["moved"][0],
+        json!({"from": {"type": "net.vpc", "name": "main"}, "to": {"type": "net.vpc", "name": "core"}})
+    );
+    assert_eq!(p["undeformed"], true);
+}

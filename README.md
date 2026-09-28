@@ -147,6 +147,14 @@ and the sections follow in this order; what cannot be decided yet is said so:
   already has: the identity mapping is stale.
 - `stack NAME is undeformed`: nothing to do, nothing stuck (the only line).
 
+`plan --json` prints the same report as one JSON document, the thing CI and
+editors consume: `stack`, `undeformed`, a `summary` of counts, then the
+sections as arrays in the order above (`definite`, `pending`,
+`pending_groups`, `undetermined`, `shadowed`, `conflicts`, `apply_order`,
+`unscheduled`). A change is `{op, path, before, after}` (`op` is `set`, or
+`add`/`remove` for a set element, with its `leaves`); a null is `{"null":
+LABEL, "class": CLASS}` and a secret `{"sensitive": LABEL}`.
+
 `cargo run -- query stuck` lists the stuck rule instances.
 
 `apply` runs in ticks. A tick applies every definite deformation in dependency
@@ -265,6 +273,10 @@ cargo run -- query 'attr(T, A, cidr, C), want(T, A), T != net.subnet'
 cargo run -- query 'want(net.vpc, "network.main::vpc")'    # yes / no
 cargo run -- query want                                    # every want fact
 ```
+
+`query --json` prints one document: `{query, count, facts}` for a predicate
+name, `{query, columns, count, rows}` for a pattern, values spelled as in
+`plan --json`.
 
 Secrets print as their label, `(sensitive T/A#P)`: a value at a
 `sensitive` path, and any value equal to it or string containing it, so a

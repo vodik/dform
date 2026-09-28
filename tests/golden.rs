@@ -260,6 +260,34 @@ fn golden() {
     }
 }
 
+/// `plan --json` for C's two-phase GKE stack against the gke mock: every
+/// section at once (definite, pending, a pending group, an undetermined
+/// policy, the apply order), nulls with their class, a secret redacted.
+#[test]
+fn golden_gke_plan_json() {
+    let scratch = Scratch::new("golden-gke-json");
+    let file = repo().join("examples/adversarial/gke_two_phase.df");
+    let (ok, out, err) = run(
+        &scratch,
+        &[
+            "--file",
+            file.to_str().unwrap(),
+            "--provider",
+            "gke",
+            "--world",
+            "w.json",
+            "plan",
+            "--json",
+        ],
+    );
+    check(
+        "gke_two_phase",
+        "gke",
+        "plan-json",
+        &transcript(ok, &out, &err),
+    );
+}
+
 /// The k8s plan pinned inline in tests/k8s.rs before this ticket now lives
 /// here; keep this thin sanity check that the file exists and looks like a
 /// plan, so a future rename of the golden layout is caught immediately.

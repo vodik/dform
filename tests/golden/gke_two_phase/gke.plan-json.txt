@@ -1,0 +1,285 @@
+exit: ok
+-- stdout --
+{
+  "apply_order": [
+    {
+      "addresses": [
+        "google_compute_subnetwork.gke_subnet",
+        "gke_cluster.pngu",
+        "google_compute_address.static_ip"
+      ],
+      "tick": 1
+    },
+    {
+      "addresses": [
+        "k8s.deployment.api",
+        "k8s.namespace.pngu",
+        "k8s.secret.db_credentials",
+        "gke_nodepool.?"
+      ],
+      "tick": 2
+    }
+  ],
+  "conflicts": [],
+  "definite": [
+    {
+      "action": "create",
+      "changes": [
+        {
+          "after": "10.141.76.0/22",
+          "before": null,
+          "op": "set",
+          "path": "ip_cidr_range"
+        },
+        {
+          "after": "renfry-dev-gke-subnet",
+          "before": null,
+          "op": "set",
+          "path": "name"
+        },
+        {
+          "after": "projects/renfry-dev-973682/global/networks/renfry-dev-network",
+          "before": null,
+          "op": "set",
+          "path": "network"
+        },
+        {
+          "after": "renfry-dev-973682",
+          "before": null,
+          "op": "set",
+          "path": "project"
+        },
+        {
+          "after": "us-east1",
+          "before": null,
+          "op": "set",
+          "path": "region"
+        }
+      ],
+      "name": "gke_subnet",
+      "type": "google_compute_subnetwork"
+    },
+    {
+      "action": "create",
+      "changes": [
+        {
+          "after": true,
+          "before": null,
+          "op": "set",
+          "path": "deletion_protection"
+        },
+        {
+          "after": "dev",
+          "before": null,
+          "op": "set",
+          "path": "env"
+        },
+        {
+          "after": "172.16.3.96/28",
+          "before": null,
+          "op": "set",
+          "path": "master_control_plane_cidr"
+        },
+        {
+          "after": "renfry-dev-gke",
+          "before": null,
+          "op": "set",
+          "path": "name"
+        },
+        {
+          "after": "projects/renfry-dev-973682/global/networks/renfry-dev-network",
+          "before": null,
+          "op": "set",
+          "path": "network_id"
+        },
+        {
+          "after": "us-east1-b",
+          "before": null,
+          "op": "set",
+          "path": "node_locations[0]"
+        },
+        {
+          "after": "us-east1-c",
+          "before": null,
+          "op": "set",
+          "path": "node_locations[1]"
+        },
+        {
+          "after": "renfry-dev-973682",
+          "before": null,
+          "op": "set",
+          "path": "project_id"
+        },
+        {
+          "after": {
+            "class": "fresh",
+            "null": "google_compute_subnetwork/gke_subnet#id"
+          },
+          "before": null,
+          "op": "set",
+          "path": "subnetwork_id"
+        }
+      ],
+      "name": "pngu",
+      "type": "gke_cluster"
+    },
+    {
+      "action": "create",
+      "changes": [
+        {
+          "after": "pngu-grpc",
+          "before": null,
+          "op": "set",
+          "path": "name"
+        },
+        {
+          "after": "renfry-dev-973682",
+          "before": null,
+          "op": "set",
+          "path": "project"
+        },
+        {
+          "after": "us-east1",
+          "before": null,
+          "op": "set",
+          "path": "region"
+        },
+        {
+          "after": {
+            "class": "fresh",
+            "null": "google_compute_subnetwork/gke_subnet#id"
+          },
+          "before": null,
+          "op": "set",
+          "path": "subnetwork_id"
+        }
+      ],
+      "name": "static_ip",
+      "type": "google_compute_address"
+    }
+  ],
+  "denied": [],
+  "moved": [],
+  "pending": [
+    {
+      "deformations": [
+        {
+          "action": "create",
+          "changes": [
+            {
+              "after": "gcr.io/renfry/api:1.42",
+              "before": null,
+              "op": "set",
+              "path": "image"
+            },
+            {
+              "after": "pngu",
+              "before": null,
+              "op": "set",
+              "path": "namespace"
+            },
+            {
+              "after": 3,
+              "before": null,
+              "op": "set",
+              "path": "replicas"
+            }
+          ],
+          "name": "api",
+          "type": "k8s.deployment"
+        },
+        {
+          "action": "create",
+          "changes": [
+            {
+              "after": "pngu",
+              "before": null,
+              "op": "set",
+              "path": "name"
+            }
+          ],
+          "name": "pngu",
+          "type": "k8s.namespace"
+        },
+        {
+          "action": "create",
+          "changes": [
+            {
+              "after": {
+                "sensitive": "google.secret_manager_secret_version/db_pw#secret_data"
+              },
+              "before": null,
+              "op": "set",
+              "path": "data.password"
+            },
+            {
+              "after": "pngu",
+              "before": null,
+              "op": "set",
+              "path": "namespace"
+            }
+          ],
+          "name": "db_credentials",
+          "type": "k8s.secret"
+        }
+      ],
+      "on": [
+        {
+          "class": "open",
+          "null": "gke_cluster/pngu#ca_certificate"
+        },
+        {
+          "class": "open",
+          "null": "gke_cluster/pngu#endpoint"
+        }
+      ],
+      "resolves_after": 1
+    }
+  ],
+  "pending_groups": [
+    {
+      "on": [
+        {
+          "class": "open",
+          "null": "gke_cluster/pngu#zones"
+        }
+      ],
+      "pattern": "gke_nodepool.?",
+      "reason": "member/2 over a null list",
+      "resolves_after": 1
+    }
+  ],
+  "shadowed": [],
+  "stack": "gke_two_phase",
+  "summary": {
+    "adopt": 0,
+    "conflicts": 0,
+    "create": 3,
+    "deformations": 3,
+    "delete": 0,
+    "drift": 0,
+    "no_op": 0,
+    "pending": 4,
+    "replace": 0,
+    "undetermined": 1,
+    "update": 0
+  },
+  "undeformed": false,
+  "undetermined": [
+    {
+      "after": 1,
+      "kind": "undetermined",
+      "message": "cluster must be in at least two zones",
+      "on": [
+        {
+          "class": "open",
+          "null": "gke_cluster/pngu#zones"
+        }
+      ],
+      "policy": "deny",
+      "reason": "reads undetermined aggregate zone_count"
+    }
+  ],
+  "unscheduled": []
+}
+-- stderr --

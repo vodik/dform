@@ -8,16 +8,18 @@
 //! that may derive after a boundary; shadowed disagreements; conflicts.
 //! Then the apply order, tick by tick.
 //!
-//! Every value passes through [`shown`]: a null prints as its label, a
-//! secret or a value at a sensitive path as `(sensitive LABEL)`. Nothing
-//! here formats a sensitive value's bytes. `show` and `query` redact
-//! through [`redact_value`] and [`redact_fact`], which use the same rule.
+//! Every value passes through [`shown`] or [`shown_value`], which ask the
+//! one [`Redactor`] that `query`, `why`, `graph` and `show` print through: a
+//! null prints as its label, a secret, a value equal to one, or a value at
+//! a sensitive path as `(sensitive LABEL)`. Nothing here formats a
+//! sensitive value's bytes.
 
 use crate::ast::{Atom, Lit, Program, Stmt, Term};
 use crate::engine::EvalResult;
 use crate::ir::Address;
 use crate::partition::{fmt_atom, fmt_value};
 use crate::provider::{Action, ActionKind, Change, NULL_KEY, Plan, marker};
+use crate::query::Redactor;
 use crate::schema::Schema;
 use crate::stuck::{self, Known, Sections, Stuck};
 use crate::value::{Value, null_owner};
@@ -37,9 +39,10 @@ pub enum Shown {
     Sensitive(Option<String>),
 }
 
-/// Redact one side of a change: a null or secret marker is its label; any
-/// other value at a sensitive path is `(sensitive)`.
-pub fn shown(v: Option<&Json>, sensitive: bool, schema: &Schema) -> Shown {
+/// Redact one side of a provider change: a null or secret marker is its
+/// label; a value at a sensitive path is `(sensitive)`; a value that is, or
+/// holds, a secret the program set elsewhere is that secret's label.
+pub fn shown(v: Option<&Json>, sensitive: bool, schema: &Schema, r: &Redactor) -> Shown {
     let Some(v) = v else {
         return Shown::Absent;
     };
@@ -50,7 +53,51 @@ pub fn shown(v: Option<&Json>, sensitive: bool, schema: &Schema) -> Shown {
         },
         Some((_, l)) => Shown::Sensitive(Some(l.to_string())),
         None if sensitive || has_secret(v) => Shown::Sensitive(None),
-        None => Shown::Value(v.clone()),
+        None => match secret_in(&r.json(&json_value(v))) {
+            Some(l) => Shown::Sensitive(Some(l)),
+            None => Shown::Value(v.clone()),
+        },
+    }
+}
+
+/// Redact a fact store value: [`Redactor::json`], one side of a line.
+pub fn shown_value(v: &Value, r: &Redactor) -> Shown {
+    match r.json(v) {
+        Json::Object(m) if m.len() == 2 && m.contains_key("null") => Shown::Null {
+            label: m["null"].as_str().unwrap_or_default().to_string(),
+            class: m["class"].as_str().unwrap_or_default().to_string(),
+        },
+        j => match secret_in(&j) {
+            Some(l) => Shown::Sensitive(Some(l)),
+            None => Shown::Value(j),
+        },
+    }
+}
+
+/// The label of the first `{"sensitive": label}` inside a redacted value.
+fn secret_in(v: &Json) -> Option<String> {
+    match v {
+        Json::Object(m) if m.len() == 1 && m.contains_key("sensitive") => {
+            Some(m["sensitive"].as_str().unwrap_or_default().to_string())
+        }
+        Json::Object(m) => m.values().find_map(secret_in),
+        Json::Array(xs) => xs.iter().find_map(secret_in),
+        _ => None,
+    }
+}
+
+/// A provider document's JSON as a fact store value, to ask the redactor.
+fn json_value(v: &Json) -> Value {
+    match v {
+        Json::String(s) => Value::Str(s.clone()),
+        Json::Bool(b) => Value::Bool(*b),
+        Json::Number(n) => n
+            .as_i64()
+            .map(Value::Int)
+            .unwrap_or(Value::Str(n.to_string())),
+        Json::Array(xs) => Value::List(xs.iter().map(json_value).collect()),
+        Json::Object(m) => Value::Obj(m.iter().map(|(k, x)| (k.clone(), json_value(x))).collect()),
+        Json::Null => Value::Str(String::new()),
     }
 }
 
@@ -96,111 +143,6 @@ impl Shown {
             Shown::Null { label, class } => json!({"null": label, "class": class}),
             Shown::Sensitive(l) => json!({ "sensitive": l }),
         }
-    }
-}
-
-/// Redact a document (a resource's attributes, as `show` prints them):
-/// every value at a sensitive path, and every secret null, becomes
-/// `{"sensitive": LABEL}`; every other null `{"null": LABEL, "class": C}`.
-pub fn redact_value(typ: &str, v: &Value, schema: &Schema) -> Json {
-    redact_at(typ, "", v, schema)
-}
-
-fn redact_at(typ: &str, path: &str, v: &Value, schema: &Schema) -> Json {
-    if let Value::Null { label, class, .. } = v {
-        return if *class == crate::value::NullClass::Secret {
-            json!({ "sensitive": label })
-        } else {
-            json!({"null": label, "class": class.name()})
-        };
-    }
-    if !path.is_empty() && schema.is_sensitive(typ, path) {
-        return json!({ "sensitive": Json::Null });
-    }
-    let join = |k: &str| {
-        if path.is_empty() {
-            k.to_string()
-        } else {
-            format!("{path}.{k}")
-        }
-    };
-    match v {
-        Value::Obj(m) => Json::Object(
-            m.iter()
-                .map(|(k, x)| (k.clone(), redact_at(typ, &join(k), x, schema)))
-                .collect(),
-        ),
-        // A list element's schema path is the list's path.
-        Value::List(xs) => {
-            Json::Array(xs.iter().map(|x| redact_at(typ, path, x, schema)).collect())
-        }
-        Value::Str(s) => Json::String(s.clone()),
-        Value::Int(i) => json!(i),
-        Value::Bool(b) => json!(b),
-        other => Json::String(fmt_value(other)),
-    }
-}
-
-/// A fact as `query` prints it: an attribute fact (`arg/5`, `attr/4`)
-/// whose path is sensitive has its value replaced, as does every secret
-/// null anywhere in the tuple.
-pub fn redact_fact(a: &Atom, schema: &Schema) -> Vec<Json> {
-    let sensitive_at = match (a.pred.as_str(), a.args.as_slice()) {
-        ("arg" | "attr" | "attr_conflict" | "attr_stuck", [t, _, p, ..]) => match (t, p) {
-            (Term::Val(Value::Str(t)), Term::Val(Value::Str(p))) if schema.is_sensitive(t, p) => {
-                Some(3)
-            }
-            _ => None,
-        },
-        _ => None,
-    };
-    a.args
-        .iter()
-        .enumerate()
-        .map(|(i, t)| match t {
-            _ if Some(i) == sensitive_at => json!({ "sensitive": Json::Null }),
-            Term::Val(v) => redact_at("", "", v, schema),
-            other => Json::String(crate::partition::fmt_term(other)),
-        })
-        .collect()
-}
-
-/// A fact in `pred(a, b, ...)` form, redacted.
-pub fn fact_text(a: &Atom, schema: &Schema) -> String {
-    let args: Vec<String> = redact_fact(a, schema).iter().map(json_text).collect();
-    format!("{}({})", a.pred, args.join(", "))
-}
-
-/// A redacted JSON value in the plan's spelling: nulls as `?label`,
-/// sensitive values as `(sensitive LABEL)`.
-fn json_text(v: &Json) -> String {
-    if let Json::Object(m) = v {
-        if m.len() == 1
-            && let Some(l) = m.get("sensitive")
-        {
-            return match l.as_str() {
-                Some(l) => format!("(sensitive {l})"),
-                None => "(sensitive)".into(),
-            };
-        }
-        if m.len() == 2
-            && let (Some(Json::String(l)), Some(_)) = (m.get("null"), m.get("class"))
-        {
-            return format!("?{l}");
-        }
-        let kv: Vec<String> = m
-            .iter()
-            .map(|(k, x)| format!("{k}: {}", json_text(x)))
-            .collect();
-        return format!("{{{}}}", kv.join(", "));
-    }
-    match v {
-        Json::String(s) => format!("\"{s}\""),
-        Json::Array(xs) => format!(
-            "[{}]",
-            xs.iter().map(json_text).collect::<Vec<_>>().join(", ")
-        ),
-        other => other.to_string(),
     }
 }
 
@@ -300,6 +242,8 @@ pub struct Report {
     pub undeformed: bool,
     pub moved: Vec<(Address, Address)>,
     pub denies: Vec<String>,
+    /// Every null the sections name, with its class, for `--json`.
+    pub classes: BTreeMap<String, String>,
 }
 
 /// What the report is built from.
@@ -320,12 +264,8 @@ pub struct Input<'a> {
 }
 
 pub fn report(i: &Input) -> Report {
-    let conflicts = diags(
-        i.res,
-        i.schema,
-        "deny",
-        "conflicting attribute contributions",
-    );
+    let r = Redactor::new(&i.res.facts, i.schema);
+    let conflicts = diags(i.res, &r, "deny", "conflicting attribute contributions");
     let conflicted: BTreeSet<&Address> = conflicts.iter().map(|d| &d.addr).collect();
     let (held, definite): (Vec<&Action>, Vec<&Action>) = i
         .plan
@@ -376,7 +316,7 @@ pub fn report(i: &Input) -> Report {
         by_nulls
             .entry(on)
             .or_default()
-            .push(deformation(a, i.schema));
+            .push(deformation(a, i.schema, &r));
     }
     let pending: Vec<PendingBlock> = by_nulls
         .into_iter()
@@ -425,13 +365,20 @@ pub fn report(i: &Input) -> Report {
         && conflicts.is_empty()
         && i.sections.blocking.is_empty()
         && i.sections.undetermined.is_empty();
+    let classes = pending
+        .iter()
+        .flat_map(|b| b.on.iter())
+        .chain(groups.iter().flat_map(|g| g.on.iter()))
+        .chain(policies.iter().flat_map(|p| p.on.iter()))
+        .map(|l| (l.clone(), null_class(l, i.schema)))
+        .collect();
     Report {
         stack: i.stack.to_string(),
         show_noop: i.show_noop,
         definite: definite
             .iter()
             .filter(|a| i.show_noop || !matches!(a.kind, ActionKind::Noop))
-            .map(|a| deformation(a, i.schema))
+            .map(|a| deformation(a, i.schema, &r))
             .collect(),
         noops,
         pending,
@@ -439,7 +386,7 @@ pub fn report(i: &Input) -> Report {
         policies,
         shadowed: diags(
             i.res,
-            i.schema,
+            &r,
             "warn",
             "attr_shadowed: contributions at a losing rank disagree and are overridden",
         ),
@@ -449,6 +396,7 @@ pub fn report(i: &Input) -> Report {
         undeformed,
         moved: i.moved.to_vec(),
         denies: i.denies.to_vec(),
+        classes,
     }
 }
 
@@ -576,7 +524,7 @@ fn policies(
 
 /// Conflicts (the aggregate's deny) or shadowed disagreements (its warn),
 /// from the policy facts it derives, with every witness.
-fn diags(res: &EvalResult, schema: &Schema, pred: &str, msg: &str) -> Vec<Diag> {
+fn diags(res: &EvalResult, r: &Redactor, pred: &str, msg: &str) -> Vec<Diag> {
     let mut out = Vec::new();
     for a in res.facts.iter().filter(|a| a.pred == pred) {
         let [Term::Val(Value::Str(m)), Term::Val(Value::Obj(ctx))] = a.args.as_slice() else {
@@ -591,7 +539,6 @@ fn diags(res: &EvalResult, schema: &Schema, pred: &str, msg: &str) -> Vec<Diag> 
             None => String::new(),
         };
         let (typ, path) = (s("type"), s("path"));
-        let sensitive = schema.is_sensitive(&typ, &path);
         let witnesses = match ctx.get("witnesses") {
             Some(Value::List(ws)) => ws
                 .iter()
@@ -605,16 +552,14 @@ fn diags(res: &EvalResult, schema: &Schema, pred: &str, msg: &str) -> Vec<Diag> 
                         _ => String::new(),
                     };
                     let value = match w.get("value") {
-                        _ if sensitive => Shown::Sensitive(None),
-                        Some(v) => value_shown(v, schema),
+                        Some(v) => shown_value(v, r),
                         None => Shown::Absent,
                     };
-                    // The contributing rule's text spells a literal
-                    // value: withheld at a sensitive path.
+                    // The contributing rule's text may spell the value.
                     let from = match w.get("from") {
-                        Some(Value::List(fs)) if !sensitive => fs
+                        Some(Value::List(fs)) => fs
                             .iter()
-                            .filter_map(|f| f.as_str().map(str::to_string))
+                            .filter_map(|f| f.as_str().map(|f| r.text(f)))
                             .collect(),
                         _ => vec![],
                     };
@@ -637,43 +582,18 @@ fn diags(res: &EvalResult, schema: &Schema, pred: &str, msg: &str) -> Vec<Diag> 
     out
 }
 
-fn value_shown(v: &Value, schema: &Schema) -> Shown {
-    match v {
-        Value::Null { label, class, .. } if *class == crate::value::NullClass::Secret => {
-            Shown::Sensitive(Some(label.clone()))
-        }
-        Value::Null { label, class, .. } => Shown::Null {
-            label: label.clone(),
-            class: class.name().into(),
-        },
-        other => match redact_at("", "", other, schema) {
-            j if has_sensitive(&j) => Shown::Sensitive(None),
-            j => Shown::Value(j),
-        },
-    }
-}
-
-fn has_sensitive(v: &Json) -> bool {
-    match v {
-        Json::Object(m) if m.len() == 1 && m.contains_key("sensitive") => true,
-        Json::Object(m) => m.values().any(has_sensitive),
-        Json::Array(xs) => xs.iter().any(has_sensitive),
-        _ => false,
-    }
-}
-
 /// An action's change lines. An update diffs a keyless set, or a list
 /// with merge keys, by element: an element that is new or gone is one
 /// `+`/`-` line with its leaves. A keyless set's element is labeled by a
 /// hash of its content (`[#k3j2d]`); it prints as `[]` in an update and
 /// by position everywhere else.
-fn deformation(a: &Action, schema: &Schema) -> Deformation {
+fn deformation(a: &Action, schema: &Schema, r: &Redactor) -> Deformation {
     let paths = relabel(a.changes.iter().map(|c| c.path.as_str()));
     let leaf = |c: &Change, path: String| Line {
         op: Op::Leaf,
         path,
-        before: shown(c.before.as_ref(), c.sensitive, schema),
-        after: shown(c.after.as_ref(), c.sensitive, schema),
+        before: shown(c.before.as_ref(), c.sensitive, schema, r),
+        after: shown(c.after.as_ref(), c.sensitive, schema, r),
         leaves: vec![],
     };
     let by_element = matches!(
@@ -842,24 +762,29 @@ impl Report {
             + self.groups.len()
     }
 
+    /// Definite deformations by kind, in summary order.
+    fn kinds(&self) -> Vec<(&'static str, usize)> {
+        ["create", "update", "replace", "drift", "delete", "adopt"]
+            .into_iter()
+            .map(|k| {
+                let n = self
+                    .definite
+                    .iter()
+                    .filter(|d| kind_name(&d.kind) == k)
+                    .count();
+                (k, n)
+            })
+            .collect()
+    }
+
+    fn deformations(&self) -> usize {
+        self.kinds().iter().map(|(_, n)| n).sum()
+    }
+
     /// `plan: 3 deformations (2 create, 1 update), 5 pending, 2 undetermined`
     pub fn summary(&self) -> String {
-        let deformations: Vec<&Deformation> = self
-            .definite
-            .iter()
-            .filter(|d| !matches!(d.kind, ActionKind::Noop))
-            .collect();
-        let mut kinds: Vec<(&str, usize)> = Vec::new();
-        for k in ["create", "update", "replace", "drift", "delete", "adopt"] {
-            let n = deformations
-                .iter()
-                .filter(|d| kind_name(&d.kind) == k)
-                .count();
-            if n > 0 {
-                kinds.push((k, n));
-            }
-        }
-        let n = deformations.len();
+        let kinds: Vec<(&str, usize)> = self.kinds().into_iter().filter(|(_, n)| *n > 0).collect();
+        let n = self.deformations();
         let mut out = format!("plan: {n} deformation{}", if n == 1 { "" } else { "s" });
         if !kinds.is_empty() {
             let ks: Vec<String> = kinds.iter().map(|(k, n)| format!("{n} {k}")).collect();
@@ -999,6 +924,130 @@ pub fn moved_text(moves: &[(Address, Address)]) -> String {
             )
         })
         .collect()
+}
+
+impl Report {
+    /// The plan as one JSON document (`plan --json`): the sections as
+    /// arrays, in the text's order; a null as `{"null": LABEL, "class":
+    /// C}`, a secret or a sensitive value as `{"sensitive": LABEL}`.
+    pub fn json(&self) -> Json {
+        let nulls = |on: &[String]| -> Json {
+            on.iter()
+                .map(|l| {
+                    let class = self
+                        .classes
+                        .get(l)
+                        .cloned()
+                        .unwrap_or_else(|| "unknown".into());
+                    json!({"null": l, "class": class})
+                })
+                .collect()
+        };
+        let deformations =
+            |ds: &[Deformation]| -> Json { ds.iter().map(deformation_json).collect() };
+        let mut summary = serde_json::Map::new();
+        summary.insert("deformations".into(), json!(self.deformations()));
+        for (k, n) in self.kinds() {
+            summary.insert(k.into(), json!(n));
+        }
+        summary.insert("no_op".into(), json!(self.noops));
+        summary.insert("pending".into(), json!(self.pending_count()));
+        summary.insert("undetermined".into(), json!(self.policies.len()));
+        summary.insert("conflicts".into(), json!(self.conflicts.len()));
+        json!({
+            "stack": self.stack,
+            "undeformed": self.undeformed,
+            "summary": summary,
+            "definite": deformations(&self.definite),
+            "pending": self.pending.iter().map(|b| json!({
+                "on": nulls(&b.on),
+                "resolves_after": b.resolves_after,
+                "deformations": deformations(&b.deformations),
+            })).collect::<Vec<_>>(),
+            "pending_groups": self.groups.iter().map(|g| json!({
+                "pattern": g.pattern,
+                "on": nulls(&g.on),
+                "reason": g.reason,
+                "resolves_after": g.resolves_after,
+            })).collect::<Vec<_>>(),
+            "undetermined": self.policies.iter().map(|p| json!({
+                "policy": "deny",
+                "message": p.message,
+                "kind": if p.may_derive { "may_derive" } else { "undetermined" },
+                "on": nulls(&p.on),
+                "reason": p.reason,
+                "after": p.after,
+            })).collect::<Vec<_>>(),
+            "shadowed": self.shadowed.iter().map(diag_json).collect::<Vec<_>>(),
+            "conflicts": self.conflicts.iter().map(diag_json).collect::<Vec<_>>(),
+            "apply_order": self.ticks.iter().map(|(t, xs)| json!({
+                "tick": t,
+                "addresses": xs,
+            })).collect::<Vec<_>>(),
+            "unscheduled": self.unscheduled,
+            "moved": self.moved.iter().map(|(old, new)| json!({
+                "from": {"type": old.typ, "name": old.name},
+                "to": {"type": new.typ, "name": new.name},
+            })).collect::<Vec<_>>(),
+            "denied": self.denies,
+        })
+    }
+}
+
+fn deformation_json(d: &Deformation) -> Json {
+    let mut m = serde_json::Map::new();
+    m.insert("action".into(), json!(kind_name(&d.kind)));
+    m.insert("type".into(), json!(d.addr.typ));
+    m.insert("name".into(), json!(d.addr.name));
+    match d.kind {
+        ActionKind::Replace { create_first } => {
+            m.insert("create_first".into(), json!(create_first));
+        }
+        ActionKind::DeleteDeposed => {
+            m.insert("deposed".into(), json!(true));
+        }
+        _ => {}
+    }
+    m.insert(
+        "changes".into(),
+        d.lines.iter().map(line_json).collect::<Vec<_>>().into(),
+    );
+    Json::Object(m)
+}
+
+fn line_json(l: &Line) -> Json {
+    let op = match l.op {
+        Op::Leaf => "set",
+        Op::Add => "add",
+        Op::Remove => "remove",
+    };
+    let mut m = serde_json::Map::new();
+    m.insert("op".into(), json!(op));
+    m.insert("path".into(), json!(l.path));
+    m.insert("before".into(), l.before.json());
+    m.insert("after".into(), l.after.json());
+    if !l.leaves.is_empty() {
+        m.insert(
+            "leaves".into(),
+            l.leaves.iter().map(line_json).collect::<Vec<_>>().into(),
+        );
+    }
+    Json::Object(m)
+}
+
+fn diag_json(d: &Diag) -> Json {
+    json!({
+        "type": d.addr.typ,
+        "name": d.addr.name,
+        "path": d.path,
+        "reason": d.reason,
+        "rank": d.rank,
+        "witnesses": d.witnesses.iter().map(|(r, v, from)| json!({
+            "rank": r,
+            "value": v.json(),
+            "from": from,
+        })).collect::<Vec<_>>(),
+    })
 }
 
 fn write_deformation(out: &mut String, d: &Deformation) {

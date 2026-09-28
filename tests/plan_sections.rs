@@ -198,3 +198,30 @@ arg(leaky.vault, v, password, "VAULT-SECRET-B").
     );
     assert!(!r.stdout.contains("VAULT-SECRET"), "{}", r.stdout);
 }
+
+/// The executor's entries in text: a replace with its marker and a
+/// prevent_destroy deny as a section, the plan still printed.
+#[test]
+fn a_denied_replace_is_a_section() {
+    let s = Scratch::new("sections-denied");
+    let net = "resource net.vpc main { cidr = \"10.0.0.0/16\" }.\n";
+    s.write("p.df", net);
+    let args = ["--file", "p.df", "--world", "w.json"];
+    s.run(&[&args[..], &["apply"]].concat()).success();
+    s.write(
+        "p.df",
+        &format!(
+            "{}lifecycle(net.vpc, main, prevent_destroy).\n",
+            net.replace("10.0.0.0/16", "10.1.0.0/16")
+        ),
+    );
+    let r = s.run(&[&args[..], &["plan"]].concat()).failure();
+    assert_eq!(
+        r.stdout,
+        "plan: 1 deformation (1 replace)\ndefinite:\n\
+         -/+ net.vpc.main  (replace)\n  cidr: \"10.0.0.0/16\" -> \"10.1.0.0/16\"\n\
+         denied:\n! lifecycle prevent_destroy: the plan would replace net.vpc.main\n\
+         apply order: tick 1 [net.vpc.main]\n"
+    );
+    assert!(r.stderr.contains("blocked by constraints"), "{}", r.stderr);
+}

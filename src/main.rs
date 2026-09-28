@@ -72,6 +72,9 @@ enum Cmd {
         /// `apply PLAN.json` applies exactly this delta or refuses.
         #[arg(long = "out")]
         out: Option<PathBuf>,
+        /// Print the plan as one JSON document instead of text.
+        #[arg(long)]
+        json: bool,
     },
     Apply {
         /// A plan file from `plan --out`: refresh, re-evaluate, and refuse
@@ -97,6 +100,9 @@ enum Cmd {
     /// variable: `dform query 'attr(net.vpc, N, cidr, C)'`.
     Query {
         pattern: String,
+        /// Print the answer as one JSON document.
+        #[arg(long)]
+        json: bool,
     },
     /// Print how a fact was derived: rule, bindings, the facts it read,
     /// recursively. Variables are allowed; every match is printed.
@@ -281,7 +287,8 @@ fn main() -> Result<()> {
             return Ok(());
         };
         let report = report_of(plan, res, sections, tick, &[], &[]);
-        let now = zset::file::delta(plan, sections, &report, schema);
+        let redact = query::Redactor::new(&res.facts, schema);
+        let now = zset::file::delta(plan, sections, &report, schema, &redact);
         let diff = saved.stale(&now, tick);
         if diff.is_empty() {
             return Ok(());
@@ -304,24 +311,9 @@ fn main() -> Result<()> {
                 println!("- {}.{}", r.addr.typ, r.addr.name);
             }
         }
-        Cmd::Query { pattern } => {
+        Cmd::Query { pattern, json } => {
             let redact = query::Redactor::new(&res.facts, backend.schema());
-            match query::parse(&pattern)? {
-                query::Query::Pred(pred) => {
-                    let mut count = 0usize;
-                    for a in res.facts.iter().filter(|a| a.pred == pred) {
-                        count += 1;
-                        println!("{}", redact.fmt_atom(a));
-                    }
-                    println!("matches: {count}");
-                }
-                query::Query::Body { body, vars } => {
-                    print!(
-                        "{}",
-                        query::table(&body, &vars, &res.facts)?.render(&redact)
-                    );
-                }
-            }
+            print_query(&pattern, &res.facts, &redact, json)?;
         }
         Cmd::Why { pattern, all } => {
             let redact = query::Redactor::new(&res.facts, backend.schema());
@@ -364,15 +356,21 @@ fn main() -> Result<()> {
             let redact = query::Redactor::new(&res.facts, backend.schema());
             print!("{}", graph::relation(&spec, &res.facts, &redact)?);
         }
-        Cmd::Plan { out } => {
+        Cmd::Plan { out, json } => {
             let sections = plan_sections(&res, &resources, backend.schema());
             let plan = backend.plan(&resources, &adopts, &lifecycle, &st)?;
             let denies = lifecycle.denies(&plan.actions);
             let report = report_of(&plan, &res, &sections, 1, &moves, &denies);
-            print!("{}", report.text());
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report.json())?);
+            } else {
+                print!("{}", report.text());
+            }
             blocked(&[violations, denies].concat())?;
             if let Some(out) = out {
-                let mut deformations = zset::file::delta(&plan, &sections, &report, schema);
+                let redact = query::Redactor::new(&res.facts, schema);
+                let mut deformations =
+                    zset::file::delta(&plan, &sections, &report, schema, &redact);
                 for e in deformations
                     .iter_mut()
                     .filter(|e| e.action.starts_with("replace"))
@@ -415,7 +413,7 @@ fn main() -> Result<()> {
                         })
                         .collect(),
                     nulls: zset::file::Nulls {
-                        resolved: zset::file::resolved(&res.facts, schema),
+                        resolved: zset::file::resolved(&res.facts, &redact),
                         unresolved: unresolved.into_iter().collect(),
                     },
                     ticks: report
@@ -428,7 +426,7 @@ fn main() -> Result<()> {
                         .collect(),
                 };
                 file.save(&out)?;
-                println!("plan file: {}", out.display());
+                eprintln!("plan file: {}", out.display());
             }
         }
         Cmd::Apply {
@@ -676,6 +674,55 @@ fn plan_sections(
         .map(|r| ((r.addr.typ.clone(), r.addr.name.clone()), r.attrs.clone()))
         .collect();
     stuck::sections(&res.stuck, &res.facts, &docs, schema)
+}
+
+/// `query`'s output, redacted: every fact of a predicate, or a table with
+/// one column per variable; `--json` prints one document either way.
+fn print_query(
+    pattern: &str,
+    facts: &std::collections::BTreeSet<Atom>,
+    redact: &query::Redactor,
+    json: bool,
+) -> Result<()> {
+    match query::parse(pattern)? {
+        query::Query::Pred(pred) => {
+            let matches: Vec<&Atom> = facts.iter().filter(|a| a.pred == pred).collect();
+            if json {
+                let doc = serde_json::json!({
+                    "query": pattern,
+                    "count": matches.len(),
+                    "facts": matches.iter().map(|a| serde_json::json!({
+                        "pred": a.pred,
+                        "args": a.args.iter().map(|t| match t {
+                            Term::Val(v) => redact.json(v),
+                            t => serde_json::Value::String(partition::fmt_term(t)),
+                        }).collect::<Vec<_>>(),
+                    })).collect::<Vec<_>>(),
+                });
+                println!("{}", serde_json::to_string_pretty(&doc)?);
+                return Ok(());
+            }
+            for a in &matches {
+                println!("{}", redact.fmt_atom(a));
+            }
+            println!("matches: {}", matches.len());
+        }
+        query::Query::Body { body, vars } => {
+            let table = query::table(&body, &vars, facts)?;
+            if json {
+                let doc = serde_json::json!({
+                    "query": pattern,
+                    "columns": table.vars,
+                    "count": table.rows.len(),
+                    "rows": table.json(redact),
+                });
+                println!("{}", serde_json::to_string_pretty(&doc)?);
+                return Ok(());
+            }
+            print!("{}", table.render(redact));
+        }
+    }
+    Ok(())
 }
 
 /// This run's inputs as a plan file records them.
