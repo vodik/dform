@@ -49,8 +49,10 @@ Every example is a project under `examples/<name>/`, with its own
 | `examples/k8s`         | the mock Kubernetes provider                              |
 | `examples/aws`         | the Terraform-shaped mock AWS provider                    |
 | `examples/refine`      | refinement types                                          |
+| `examples/gke`         | two-phase GKE: `gke_two_phase` and `gke_one_zone`         |
 | `examples/bootstrap`   | two stacks: bootstrap and the controller's workload       |
 | `examples/approvals`   | approvals over a signed plan digest                       |
+| `examples/crud-api`    | a blue/green rollout (proposal G); does not plan yet      |
 
 Test-only programs and fixtures are under `tests/fixtures/` (the
 adversarial stratification cases, world files, the `leaky` schema). The

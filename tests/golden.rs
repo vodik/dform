@@ -4,7 +4,8 @@
 //! Cases: the example projects' stacks (examples/demo across envs,
 //! examples/advanced, examples/pngu across envs, examples/decl,
 //! examples/adopt with the discovery inventory, examples/k8s and
-//! examples/aws), and the nine tests/fixtures/adversarial/*.df programs.
+//! examples/aws and examples/gke's two-phase stack), and the eight
+//! tests/fixtures/adversarial/*.df programs.
 //! Each runs against a fresh (empty) world, and the demo additionally
 //! against the tests/fixtures/world/ fixture. A case that errors (a rejected stratification, a blocked
 //! constraint) still gets a snapshot: its stdout+stderr+exit status, pinned
@@ -124,7 +125,7 @@ const CASES: &[Case] = &[
     case(
         "gke_two_phase",
         "default",
-        "tests/fixtures/adversarial/gke_two_phase.df",
+        "examples/gke/stacks/gke_two_phase.df",
     ),
     // The provider is the program's `provider` statement.
     case("k8s_demo", "default", "examples/k8s/stacks/k8s_demo.df"),
@@ -290,7 +291,7 @@ fn golden_on(backend: Backend, strata: bool) {
 #[test]
 fn golden_gke_plan_json() {
     let scratch = Scratch::new("golden-gke-json");
-    let file = repo().join("tests/fixtures/adversarial/gke_two_phase.df");
+    let file = repo().join("examples/gke/stacks/gke_two_phase.df");
     let (ok, out, err) = run(
         &scratch,
         &[

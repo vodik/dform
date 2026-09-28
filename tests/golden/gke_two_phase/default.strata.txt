@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== tests/fixtures/adversarial/gke_two_phase.df: 124 nodes, 230 edges (117 negative)
+== examples/gke/stacks/gke_two_phase.df: 124 nodes, 230 edges (117 negative)
    STRATIFIED, 6 strata
    stratum 0:
      (arg, google.client_config, access_token)

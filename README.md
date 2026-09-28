@@ -34,6 +34,9 @@ stack per file), `modules/`, `policies/`, `config/<stack>/<key>.yaml`,
 Paths a program states are relative to the file that states them.
 `docs/layout.md` has the convention and the lints; every example under
 `examples/` follows it, and test-only programs are under `tests/fixtures/`.
+`examples/crud-api` (proposal G's blue/green rollout) does not plan yet: it
+assumes provider schemas the mocks do not have and a git repository of
+releases.
 
 State is scoped to a stack. One program owns one stack, named by its
 `stack` statement:
@@ -452,8 +455,8 @@ re-evaluated and policy is checked again; a deny there stops the run with the
 reason printed. `--max-ticks N` (default 8) bounds the loop:
 
 ```bash
-cargo run -- --file tests/fixtures/adversarial/gke_two_phase.df apply  # two ticks
-cargo run -- --file tests/fixtures/adversarial/gke_one_zone.df apply   # stops after tick 1
+cargo run -- --file examples/gke/stacks/gke_two_phase.df apply  # two ticks
+cargo run -- --file examples/gke/stacks/gke_one_zone.df apply   # stops after tick 1
 ```
 
 At a boundary apply also compares the refreshed world with what it last saw
@@ -465,7 +468,7 @@ change anywhere else is reported as `drift after tick N:` and the
 run goes on, the next tick deforming it back:
 
 ```bash
-cargo run -- --file tests/fixtures/adversarial/gke_two_phase.df apply \
+cargo run -- --file examples/gke/stacks/gke_two_phase.df apply \
   --chaos 'mutate=gke_cluster/pngu:deletion_protection=false'   # drift, tick 2 undoes it
 ```
 
@@ -591,7 +594,7 @@ bytes, keyed by 32 random bytes the stack keeps beside its state
 between plan and apply is refused and the file never carries the bytes:
 
 ```bash
-G=tests/fixtures/adversarial/gke_two_phase.df
+G=examples/gke/stacks/gke_two_phase.df
 cargo run -- --file $G --world w.json plan --out plan.json
 cargo run -- apply plan.json                          # the file's delta, two ticks
 # the world moves after tick 1: tick 2 refuses

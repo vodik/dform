@@ -6,7 +6,7 @@ use common::{Scratch, repo};
 use serde_json::{Value, json};
 
 fn gke_json(s: &Scratch) -> Value {
-    let prog = repo().join("tests/fixtures/adversarial/gke_two_phase.df");
+    let prog = repo().join("examples/gke/stacks/gke_two_phase.df");
     let r = s
         .run(&[
             "--file",

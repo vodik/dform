@@ -4208,7 +4208,7 @@ mod tests {
     #[test]
     fn gke_two_phase_sections_per_key() {
         let (r, violations, s) = run_file(
-            "tests/fixtures/adversarial/gke_two_phase.df",
+            "examples/gke/stacks/gke_two_phase.df",
             &crate::schema::gke(),
             &[],
         );
@@ -4445,10 +4445,9 @@ mod tests {
 
     /// gke_two_phase with a program appended, on the gke schema.
     fn gke_with(extra: &str) -> Result<(EvalResult, Vec<String>)> {
-        let mut program = crate::loader::load_program(&[repo_file(
-            "tests/fixtures/adversarial/gke_two_phase.df",
-        )])
-        .unwrap();
+        let mut program =
+            crate::loader::load_program(&[repo_file("examples/gke/stacks/gke_two_phase.df")])
+                .unwrap();
         program
             .statements
             .extend(crate::parser::parse_program(extra).unwrap().statements);
