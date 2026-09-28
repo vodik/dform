@@ -1,14 +1,10 @@
-tests/syntax/err/pending_stmts.df:5:1: a provider statement is not yet supported
-  note: it parses; its semantics land with phase 6 "Stacks"
-tests/syntax/err/pending_stmts.df:6:1: a stack statement is not yet supported
-  note: it parses; its semantics land with phase 6 "Stacks"
-tests/syntax/err/pending_stmts.df:7:1: an extern with binding patterns is not yet supported
+tests/syntax/err/pending_stmts.df:5:1: an extern with binding patterns is not yet supported
   note: it parses; its semantics land with phase 6 "Externs with binding patterns"
-tests/syntax/err/pending_stmts.df:8:1: a type block is not yet supported
+tests/syntax/err/pending_stmts.df:6:1: a type block is not yet supported
   note: it parses; its semantics land with phase 6 "Refinement types, doc annotations, L15 inet"
-tests/syntax/err/pending_stmts.df:9:1: `decl type ... open` is not yet supported
+tests/syntax/err/pending_stmts.df:7:1: `decl type ... open` is not yet supported
   note: it parses; its semantics land with phase 6 "Refinement types, doc annotations, L15 inet"
-tests/syntax/err/pending_stmts.df:10:1: `decl p/N mixed` is not yet supported
+tests/syntax/err/pending_stmts.df:8:1: `decl p/N mixed` is not yet supported
   note: it parses; its semantics land with phase 6 "Static secret labels"
-tests/syntax/err/pending_stmts.df:11:1: a scenario is not yet supported
+tests/syntax/err/pending_stmts.df:9:1: a scenario is not yet supported
   note: it parses; its semantics land with phase 6 "Scenarios"

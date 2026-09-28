@@ -23,12 +23,29 @@ cargo run -- fmt modules/*.df          # format in place
 cargo run -- fmt --check $(git ls-files '*.df')   # CI: list unformatted files, fail
 ```
 
-State is scoped to a stack. Until a `stack` statement exists, the stack is the
-basename of the first `--file` without its extension: `dform.df` is stack
-`dform`, `pngu.df` is stack `pngu`. Two programs never see each other's
-resources.
+State is scoped to a stack. One program owns one stack, named by its
+`stack` statement:
 
-- Core state (Terraform-style address -> remote mapping): `.dform/<stack>/state.json`.
+```prolog
+stack demo.main {
+  backend = local(".dform/demo")   # where state, world and lock live; default .dform/<name>
+  unknowns = strict                # or permissive (the default); see "Strict mode"
+}.
+```
+
+Without a `stack` statement the stack is the basename of the first `--file`
+without its extension: `dform.df` is stack `dform`, `pngu.df` is stack
+`pngu`. Two programs never see each other's resources. `apply` holds the
+stack's lock, `<state dir>/state.lock` (the holder's pid): a second apply
+of the same stack while one runs fails naming the holder; a lock whose
+holder is gone (a killed apply) is taken over with a note.
+
+Cross-stack values: `output k = t` at the top of a program is a stack
+output. `apply` records the stack's outputs whose values are known in its
+state and the stack in `.dform/stacks.json`; every other program reads
+them as facts, `stack_output("net.shared", vpc_id, V)`.
+
+- Core state (Terraform-style address -> remote mapping, outputs): `.dform/<stack>/state.json`.
 - The fake backend's world (what "exists"): `.dform/<stack>/remote.json`.
 - Discovery inventory, shared by every stack: `.dform/inventory.json`.
 
@@ -61,10 +78,13 @@ A `.dform/` written before state was scoped (`.dform/state.json`,
 ## Providers are schema files
 
 The fake backend can pretend to be any provider: a provider is a schema file of
-plain facts, `providers/<name>/schema.df`, selected with `--provider NAME`
-(repeatable; default `fake`). `--provider path/to/schema.df` loads a file
-directly. A `providers/<name>/schema.df` in the working directory wins over the
-schemas built into the binary (`fake`, `gke`).
+plain facts, `providers/<name>/schema.df`, selected by the program's
+`provider` statements (`provider gke {}.`, or `provider aws { source =
+"providers/aws-mock" }.` for a directory or `.df` file relative to the
+program's file) or, overriding them, with `--provider NAME` (repeatable;
+default `fake`). `--provider path/to/schema.df` loads a file directly. A
+`providers/<name>/schema.df` in the working directory wins over the schemas
+built into the binary (`fake`, `gke`).
 
 ```prolog
 type_provider(net.vpc, fakecloud).                    % who owns the type
@@ -78,10 +98,11 @@ type_replace(k8s.deployment, create_first).           % optional: create_first, 
 ```
 
 Built-in mock schemas: `fake` (the demo's), `gke` (pngu.df), `k8s` (fifteen
-Kubernetes kinds; try `cargo run -- --file examples/k8s_demo.df --provider k8s plan`)
+Kubernetes kinds; try `cargo run -- --file examples/k8s_demo.df plan`)
 and `aws-mock` (twelve AWS types in the Terraform provider's shape, with its
 Optional+Computed attributes and keyless sets; try
-`cargo run -- --file examples/aws_demo.df --provider aws-mock plan`).
+`cargo run -- --file examples/aws_demo.df plan`). Each example names its
+provider with a `provider` statement.
 A `required` attribute the program does not set is a plan error. Lists with
 `type_list_key` are diffed by key (`spec.template.spec.containers[name=web].image`),
 lists of type `set` as sets. A `type_mint` string may use `{type}`, `{name}`,
@@ -174,8 +195,8 @@ re-evaluated and policy is checked again; a deny there stops the run with the
 reason printed. `--max-ticks N` (default 8) bounds the loop:
 
 ```bash
-cargo run -- --file examples/adversarial/gke_two_phase.df --provider gke apply  # two ticks
-cargo run -- --file examples/adversarial/gke_one_zone.df --provider gke apply   # stops after tick 1
+cargo run -- --file examples/adversarial/gke_two_phase.df apply  # two ticks
+cargo run -- --file examples/adversarial/gke_one_zone.df apply   # stops after tick 1
 ```
 
 At a boundary apply also compares the refreshed world with what it last saw
@@ -187,7 +208,7 @@ change anywhere else is reported as `drift after tick N:` and the
 run goes on, the next tick deforming it back:
 
 ```bash
-cargo run -- --file examples/adversarial/gke_two_phase.df --provider gke apply \
+cargo run -- --file examples/adversarial/gke_two_phase.df apply \
   --chaos 'mutate=gke_cluster/pngu:deletion_protection=false'   # drift, tick 2 undoes it
 ```
 
@@ -301,7 +322,7 @@ goes on:
 
 ```bash
 G=examples/adversarial/gke_two_phase.df
-cargo run -- --file $G --provider gke --world w.json plan --out plan.json
+cargo run -- --file $G --world w.json plan --out plan.json
 cargo run -- apply plan.json                          # the file's delta, two ticks
 # the world moves after tick 1: tick 2 refuses
 cargo run -- apply plan.json --chaos 'mutate=gke_cluster/pngu:name="other"'

@@ -213,6 +213,7 @@ into today's AST:
 | a predicate `p` of module `m`    | `m.i::p` (private), `m.i.p` with `export p/N`, `p` with `contributes p` |
 | `policy p { ... }` / `apply p`   | the pack's body once, its predicates `p::q` unless granted |
 | `import "f.df"`                  | the file's statements, loaded once               |
+| `stack n { ... }`, `provider p { ... }` | no rules: the stack's name, backend and unknowns, the mock's schemas (`src/stack.rs`) |
 | `decl p/N`                       | `p/N` is declared (a provider feeds it)          |
 | `decl p(A: t, BC: t)`            | record fields `a`, `b_c` for `p{a: .., b_c: ..}` |
 | `arg(T, A, P, V) @override`      | `arg(T, A, P, V, override)`                      |
@@ -227,8 +228,7 @@ into today's AST:
 | `[T \| B]`                       | a `collect_list` helper rule over `B`            |
 
 These parse and are rejected with "not yet supported", naming the WORK.org
-ticket that gives them meaning: `provider`, `stack` (phase 6 "Stacks"),
-`extern` with binding patterns (phase 6 "Externs with binding
+ticket that gives them meaning: `extern` with binding patterns (phase 6 "Externs with binding
 patterns"), `type` blocks and
 `decl type ... open` (phase 6 "Refinement types, doc annotations, L15
 inet"), `decl p/N mixed` (phase 6 "Static secret labels"), `scenario`

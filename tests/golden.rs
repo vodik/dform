@@ -122,14 +122,9 @@ const CASES: &[Case] = &[
         "default",
         "examples/adversarial/gke_two_phase.df",
     ),
-    Case {
-        providers: &["k8s"],
-        ..case("k8s_demo", "default", "examples/k8s_demo.df")
-    },
-    Case {
-        providers: &["aws-mock"],
-        ..case("aws_demo", "default", "examples/aws_demo.df")
-    },
+    // The provider is the program's `provider` statement.
+    case("k8s_demo", "default", "examples/k8s_demo.df"),
+    case("aws_demo", "default", "examples/aws_demo.df"),
 ];
 
 /// Strip the repo's absolute path so snapshots are portable across checkouts
@@ -272,8 +267,6 @@ fn golden_gke_plan_json() {
         &[
             "--file",
             file.to_str().unwrap(),
-            "--provider",
-            "gke",
             "--world",
             "w.json",
             "plan",

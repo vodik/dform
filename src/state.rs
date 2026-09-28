@@ -18,6 +18,10 @@ pub struct State {
     /// what `apply` needs to resume it (`executor`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub in_flight: Option<InFlight>,
+    /// The stack's outputs as of its last apply: what other stacks read as
+    /// `stack_output(Stack, Key, Value)` (`stack`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub outputs: BTreeMap<String, crate::value::Value>,
 }
 
 /// The deformations of the current tick that have not been applied yet, each
@@ -153,8 +157,8 @@ pub fn state_path(root: impl AsRef<Path>) -> PathBuf {
     root.as_ref().join("state.json")
 }
 
-/// The stack a program's state belongs to. Until a `stack` statement exists
-/// this is the basename of the program's entry file without its extension:
+/// The stack a program's state belongs to when it has no `stack` statement:
+/// the basename of the program's entry file without its extension,
 /// `dform.df` is `dform`, `pngu.df` is `pngu`.
 pub fn stack_name(entry: &Path) -> String {
     entry
@@ -175,7 +179,11 @@ pub struct StackPaths {
 }
 
 pub fn stack_paths(root: &Path, stack: &str) -> StackPaths {
-    let dir = root.join(stack);
+    backend_paths(root, &root.join(stack))
+}
+
+/// A stack whose backend is `local(dir)`: its state and world in `dir`.
+pub fn backend_paths(root: &Path, dir: &Path) -> StackPaths {
     StackPaths {
         state: dir.join("state.json"),
         world: dir.join("remote.json"),

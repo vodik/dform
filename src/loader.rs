@@ -47,6 +47,7 @@ fn load_file(path: &Path, seen: &mut BTreeSet<PathBuf>) -> Result<Program> {
 pub const PROVIDER_PREDS: &[&str] = &[
     "input",
     "data",
+    "stack_output",
     "cloud_exists",
     "cloud_attr",
     "cloud_computed",

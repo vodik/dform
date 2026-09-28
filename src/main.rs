@@ -174,6 +174,13 @@ fn run() -> Result<()> {
     }
     let files = default_files(&cli.files)?;
     let mut program = loader::load_program(&files)?;
+    // `stack` and `provider` statements; `--provider` overrides the latter.
+    let stack_cfg = dform::stack::config(&program)?;
+    let providers = if cli.providers.is_empty() {
+        stack_cfg.providers.clone()
+    } else {
+        cli.providers.clone()
+    };
     // The stack's and the instances' typed inputs, when the program lowers
     // (when it does not, evaluation reports why).
     let declared = dform::transform::lower(&program)
@@ -192,12 +199,12 @@ fn run() -> Result<()> {
         program.statements.extend(stmts);
     }
     if let Cmd::Strata = cli.cmd {
-        return print_strata(&files, &program, &load_schema(&cli.providers)?);
+        return print_strata(&files, &program, &load_schema(&providers)?);
     }
     if let Cmd::Graph { what: Some(w) } = &cli.cmd
         && w == "strata"
     {
-        let graph = partition::build(&program, &load_schema(&cli.providers)?)?;
+        let graph = partition::build(&program, &load_schema(&providers)?)?;
         return match partition::stratify(&graph) {
             partition::Verdict::Stratified { strata } => {
                 print!("{}", graph::strata(&graph, Some(&strata)));
@@ -243,18 +250,22 @@ fn run() -> Result<()> {
     for note in state::migrate_unscoped(&root)? {
         eprintln!("note: {note}");
     }
-    let mut paths = match &cli.world {
-        Some(w) => state::world_paths(&root, w),
-        None => state::stack_paths(&root, &state::stack_name(&files[0])),
+    let stack = stack_cfg
+        .name
+        .clone()
+        .unwrap_or_else(|| state::stack_name(&files[0]));
+    let mut paths = match (&cli.world, &stack_cfg.backend) {
+        (Some(w), _) => state::world_paths(&root, w),
+        (None, Some(dir)) => state::backend_paths(&root, dir),
+        (None, None) => state::stack_paths(&root, &stack),
     };
     paths.inventory = resolve_inventory(&cli.inventory, &cli.world, &paths.inventory);
     let chaos = match &cli.cmd {
         Cmd::Apply { chaos, .. } => Chaos::parse(chaos)?,
         _ => Chaos::default(),
     };
-    let backend =
-        FakeCloud::with_paths(&paths.world, &paths.inventory, load_schema(&cli.providers)?)
-            .with_chaos(chaos.clone());
+    let backend = FakeCloud::with_paths(&paths.world, &paths.inventory, load_schema(&providers)?)
+        .with_chaos(chaos.clone());
 
     let mut st = state::State::load(&paths.state)?;
     backend.bootstrap_state(&mut st)?;
@@ -268,6 +279,7 @@ fn run() -> Result<()> {
     inputs::check_required(&declared, &given)?;
     let mut base_extra = inputs::set_facts(&declared, &set)?;
     base_extra.extend(build_extra_facts(&cli.data)?);
+    base_extra.extend(dform::stack::stack_outputs(&root, &stack)?);
     base_extra.extend(backend.catalog()?);
     base_extra.extend(backend.discover()?);
     // Refresh as facts: round 0 resolves every null the world can answer,
@@ -318,7 +330,6 @@ fn run() -> Result<()> {
     }
 
     let resources = ir::compile_resources(res.facts.iter().cloned(), backend.schema())?;
-    let stack = state::stack_name(&files[0]);
     let adopts = ir::compile_adopts(res.facts.iter())?;
     let lifecycle = zset::Lifecycle::from_facts(&res.facts, backend.schema())?;
     let schema = backend.schema();
@@ -610,6 +621,8 @@ fn run() -> Result<()> {
                     );
                 }
             }
+            // One apply at a time per stack.
+            let _lock = dform::stack::Lock::acquire(&paths.state, &stack)?;
             let persist = |st: &state::State| st.save(&paths.state);
             if !moves.is_empty() {
                 print_moves(&moves);
@@ -725,7 +738,19 @@ fn run() -> Result<()> {
                 }
                 if !boundary {
                     st.in_flight = None;
+                    // The stack's outputs, as the world now is, for other
+                    // stacks to read (evaluated again only when it has any:
+                    // the evaluation refreshes). A --world fixture is not
+                    // registered: everything stays beside the world file.
+                    st.outputs = if dform::stack::has_outputs(&res.facts) {
+                        dform::stack::outputs(&evaluate(&st)?.0.facts)
+                    } else {
+                        Default::default()
+                    };
                     persist(&st)?;
+                    if !st.outputs.is_empty() && cli.world.is_none() {
+                        dform::stack::register(&root, &stack, &paths.state)?;
+                    }
                     if changed || tick > 1 {
                         println!("apply: complete");
                     } else {

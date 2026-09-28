@@ -2,14 +2,16 @@
 # the other branch. Tick 1 creates the cluster; its zones come back with one
 # element, so at the boundary deny(two_zones) derives and apply stops before
 # touching the nodepools and the kubernetes objects:
-#   cargo run -- --file examples/adversarial/gke_one_zone.df --provider gke apply
+#   cargo run -- --file examples/adversarial/gke_one_zone.df apply
 #
 # The rest is C's two-phase GKE / kubernetes stack (E §7.4), in the current syntax.
 # Run with the gke mock schema, which makes the cluster's zones, endpoint and
 # ca open nulls until the cluster exists:
-#   cargo run -- --file examples/adversarial/gke_two_phase.df --provider gke plan
+#   cargo run -- --file examples/adversarial/gke_two_phase.df plan
 
 edition 2026.
+
+provider gke {}.
 
 input env: enum(dev, stg, prod) = dev.
 

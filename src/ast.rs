@@ -125,6 +125,10 @@ pub enum Stmt {
     Export(Export),
     /// `contributes arg to T at P` or `contributes p`.
     Contributes(Contributes),
+    /// `stack name { ... }`: the stack this program owns (`stack`).
+    Stack(Config),
+    /// `provider name { ... }`: a provider the program uses (`stack`).
+    Provider(Config),
     PolicyPack(PolicyPack),
     ApplyPolicy(ApplyPolicy),
     When(When),
@@ -259,6 +263,14 @@ pub struct Export {
     pub span: Span,
 }
 
+/// A `stack` or `provider` statement: a name and its `key = value` block.
+#[derive(Debug, Clone)]
+pub struct Config {
+    pub name: String,
+    pub config: Vec<(String, Term, Span)>,
+    pub span: Span,
+}
+
 #[derive(Debug, Clone)]
 pub struct Contributes {
     pub grant: Grant,
@@ -340,14 +352,6 @@ pub struct Pending {
 
 #[derive(Debug, Clone)]
 pub enum PendingKind {
-    Provider {
-        name: String,
-        config: Vec<(String, Term)>,
-    },
-    Stack {
-        name: String,
-        config: Vec<(String, Term)>,
-    },
     ExternFn {
         name: String,
         args: Vec<BindArg>,
@@ -374,8 +378,6 @@ impl PendingKind {
     /// What the statement is, and the WORK.org ticket that gives it meaning.
     pub fn describe(&self) -> (&'static str, &'static str) {
         match self {
-            PendingKind::Provider { .. } => ("a provider statement", "phase 6 \"Stacks\""),
-            PendingKind::Stack { .. } => ("a stack statement", "phase 6 \"Stacks\""),
             PendingKind::ExternFn { .. } => (
                 "an extern with binding patterns",
                 "phase 6 \"Externs with binding patterns\"",

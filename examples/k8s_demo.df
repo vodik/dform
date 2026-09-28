@@ -1,14 +1,16 @@
 # A Namespace, a Deployment and a Service planned against the mock Kubernetes
 # provider (providers/k8s/schema.df). No cluster: the world is a JSON file.
 #
-#   cargo run -- --file examples/k8s_demo.df --provider k8s plan
-#   cargo run -- --file examples/k8s_demo.df --provider k8s apply
+#   cargo run -- --file examples/k8s_demo.df plan
+#   cargo run -- --file examples/k8s_demo.df apply
 #
 # The ConfigMap uses generateName, so its name is picked by the API server at
 # Apply: until then the Deployment's configMapRef carries the null
 # ?k8s.config_map/web_config#metadata.name.
 
 edition 2026.
+
+provider k8s {}.
 
 app(web, "nginx:1.27", 3).
 

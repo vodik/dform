@@ -7,6 +7,11 @@
 
 edition 2026.
 
+# The provider the mock plays, and the stack this program owns: its state is
+# .dform/dform/ (the default backend, local(".dform/dform")).
+provider fake { source = "providers/fake" }.
+stack dform {}.
+
 # Typed stack input with a default. The default is a @default contribution
 # to input env; --set env=prod is a normal contribution and wins.
 input env: enum(dev, staging, prod) = staging.

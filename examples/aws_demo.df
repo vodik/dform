@@ -1,8 +1,8 @@
 # A small web stack planned against the Terraform-shaped mock AWS provider
 # (providers/aws-mock/schema.df). No account: the world is a JSON file.
 #
-#   cargo run -- --file examples/aws_demo.df --provider aws-mock plan
-#   cargo run -- --file examples/aws_demo.df --provider aws-mock apply
+#   cargo run -- --file examples/aws_demo.df plan
+#   cargo run -- --file examples/aws_demo.df apply
 #
 # Two shapes to look at:
 #   - Optional+Computed: subnet `a` sets availability_zone, so a ref to it is
@@ -13,6 +13,8 @@
 #     compares them as a set, so their order never matters.
 
 edition 2026.
+
+provider aws { source = "../providers/aws-mock" }.
 
 resource aws_vpc main {
   cidr_block = "10.0.0.0/16"

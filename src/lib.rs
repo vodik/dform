@@ -20,6 +20,7 @@ pub mod plan_print;
 pub mod provider;
 pub mod query;
 pub mod schema;
+pub mod stack;
 pub mod state;
 pub mod stuck;
 pub mod syntax;

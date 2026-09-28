@@ -2,8 +2,6 @@ edition 2026.
 
 # Statements the grammar has and the evaluator does not yet: each parses
 # and lowering names the ticket that gives it meaning.
-provider fake { source = "./providers/fake" }.
-stack demo.main { backend = local(".dform/demo") }.
 extern file.json(+path: string, -value: any).
 type settings { db.backup_days: int where 1 <= db.backup_days <= 35 }.
 decl type k8s.custom open.

@@ -6,7 +6,7 @@
 use super::SyntaxKind::{self, *};
 use super::{SyntaxNode, SyntaxToken};
 use crate::ast::{
-    ApplyPolicy, Atom, AttrDecl, BindArg, Constraint, Contributes, Decl, Export, Extern,
+    ApplyPolicy, Atom, AttrDecl, BindArg, Config, Constraint, Contributes, Decl, Export, Extern,
     FieldAssign, FieldOp, Grant, Import, InputDecl, Instance, Lit, Module, OutputDecl, Pending,
     PendingKind, PolicyPack, Program, Rank, Resource, RuleStmt, Settings, Span, Stmt, Term,
     TypeExpr, When,
@@ -240,11 +240,15 @@ impl Lowerer {
                     .map(|t| t.text().to_string())
                     .unwrap_or_default();
                 let config = self.assigns(node(n, BLOCK).as_ref())?;
-                let config = config.into_iter().map(|f| (f.key, f.value)).collect();
-                pending(if n.kind() == PROVIDER {
-                    PendingKind::Provider { name, config }
+                let config = config
+                    .into_iter()
+                    .map(|f| (f.key, f.value, f.span))
+                    .collect();
+                let c = Config { name, config, span };
+                Ok(if n.kind() == PROVIDER {
+                    Stmt::Provider(c)
                 } else {
-                    PendingKind::Stack { name, config }
+                    Stmt::Stack(c)
                 })
             }
             INPUT => {

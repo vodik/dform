@@ -75,6 +75,10 @@ fn reject_pending(stmts: &[Stmt]) -> Result<()> {
                 Stmt::Export(e) if at != At::Module => {
                     diags.push(misplaced(e.span, "`export` belongs at the top of a module"))
                 }
+                Stmt::Stack(c) | Stmt::Provider(c) if at != At::Top => diags.push(misplaced(
+                    c.span,
+                    "`stack` and `provider` belong at the top of the program",
+                )),
                 Stmt::Contributes(c) if at != At::Module => diags.push(misplaced(
                     c.span,
                     "`contributes` belongs at the top of a module or policy pack",
@@ -908,8 +912,8 @@ fn drop_metadata(program: &Program) -> (Program, BTreeSet<Extern>) {
             Stmt::Decl(_) => {
                 // lowered away by apply_decls
             }
-            Stmt::Output(_) => {
-                // a declaration: the interface, not a rule
+            Stmt::Output(_) | Stmt::Stack(_) | Stmt::Provider(_) => {
+                // declarations: the interface and the stack, not rules
             }
             _ => statements.push(s.clone()),
         }
