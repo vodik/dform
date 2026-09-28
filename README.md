@@ -1481,6 +1481,32 @@ UPDATE_GOLDEN=1 cargo test --test golden -- --test-threads=1
 
 See `tests/golden/README.md` for details.
 
+`crates/dform-proptest` holds the property tests, with the mock linked
+in (the direct backend). `tests/unknowns.rs` generates stratified
+programs from a small grammar of rule shapes over a fixed schema whose
+computed paths are fresh, open and secret (references, reads of computed
+attributes in comparisons, builtins and `in`, negation over predicates
+and wants with stuck instances, aggregates, denies over all of them),
+plans each on an empty world, resolves every null to a value of its
+class (distinct fresh ids; a random constant for an open one; a secret
+stays in the world), plans again through refresh and round 0, and checks
+E §4.2: a definite deformation keeps its document up to substitution, a
+deny that fires afterwards was reported undetermined, a new resource is an
+instance of a reported pending group, and a decided negation does not
+flip. A failure prints the shrunk program as source. `PROPTEST_CASES`
+sets the case count (1024 by default; the nightly workflow,
+`.github/workflows/nightly.yml`, runs 10^4):
+
+```bash
+cargo test -p dform-proptest
+PROPTEST_CASES=10000 cargo test -p dform-proptest --test unknowns
+```
+
+Two of its tests plant a bug in Rule 3 (dform-core's `test-hooks`
+feature, which only this crate's dev-dependency turns on) and pass only
+if the property catches it within the default count. The `#[ignore]`d
+tests there are failures on main, kept as regressions until fixed.
+
 The parser's suite is `tests/syntax.rs`: every `.df` file in the repository
 and `tests/syntax/ok/` (E §7's programs among them) parses and prints back
 byte for byte, and each `tests/syntax/err/*.df` fails with the diagnostics

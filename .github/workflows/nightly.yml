@@ -31,3 +31,25 @@ jobs:
         run: cargo test --test model -- the_executor_under_random_chaos
         env:
           DFORM_MODEL_SEEDS: "10000"
+
+  # crates/dform-proptest: definite facts survive every resolution of the
+  # unknowns, 10^4 cases (CI runs the default count).
+  proptest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install protoc (build.rs generates the provider protocol)
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Definite facts survive every resolution of the unknowns, 10^4 cases
+        run: cargo test -p dform-proptest --test unknowns
+        env:
+          PROPTEST_CASES: "10000"

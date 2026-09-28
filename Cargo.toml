@@ -9,6 +9,7 @@ members = [
     "crates/dform-provider-fake",
     "crates/dform-provider-k8s",
     "crates/dform-direct",
+    "crates/dform-proptest",
     "tree-sitter-dform",
 ]
 # `cargo build` and `cargo test` build the provider binaries the CLI spawns
@@ -24,6 +25,7 @@ default-members = [
     "crates/dform-provider-fake",
     "crates/dform-provider-k8s",
     "crates/dform-direct",
+    "crates/dform-proptest",
 ]
 resolver = "3"
 

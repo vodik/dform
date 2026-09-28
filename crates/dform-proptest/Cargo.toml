@@ -1,0 +1,18 @@
+# Property tests of the engine against the mock, linked in: generated
+# programs planned, their unknowns resolved at random, planned again. Tests
+# only. Its dev-dependency is the one place dform-core's `test-hooks`
+# feature is turned on, so no `cargo build` of the CLI or a provider
+# carries it (a `cargo test` of the workspace compiles it in; nothing
+# outside this crate's tests plants a bug).
+[package]
+name = "dform-proptest"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dev-dependencies]
+anyhow = "1.0"
+proptest = { version = "1.11", default-features = false, features = ["std"] }
+serde_json = "1.0"
+dform-core = { path = "../dform-core", features = ["test-hooks"] }
+dform-mock = { path = "../dform-mock" }
