@@ -406,6 +406,21 @@ pub struct Lowerer<'u> {
     text: bool,
     /// Any dotted name may be a type (`Mode::Pattern`).
     any_type: bool,
+    /// What a call in the term being lowered is.
+    calls: Calls,
+}
+
+/// What a call is where it is written.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Calls {
+    /// A function the evaluator applies.
+    Function,
+    /// In a rule's head: a function, or an aggregate.
+    Head,
+    /// A constructor the compiler reads as data: a provider's or stack's
+    /// setting (`local("DIR")`, `jwks(...)`), an input relation's source,
+    /// a `type_refine` constraint. Each reader checks its own names.
+    Data,
 }
 
 impl<'u> Lowerer<'u> {
@@ -425,6 +440,7 @@ impl<'u> Lowerer<'u> {
             binding: false,
             text: false,
             any_type: false,
+            calls: Calls::Function,
         };
         for u in units {
             let scope = l.new_scope(PROGRAM);
@@ -944,7 +960,7 @@ impl<'u> Lowerer<'u> {
                 let arity = self.arity(n)?;
                 let source = terms(n).next().ok_or(Skip)?;
                 let mut rc = self.rc(n, scope, outer);
-                let source = self.constant(&mut rc, &source)?;
+                let source = self.calls(Calls::Data, |l| l.constant(&mut rc, &source))?;
                 one(Stmt::InputRelation(InputRelation {
                     pred,
                     arity,
@@ -1316,7 +1332,8 @@ impl<'u> Lowerer<'u> {
             .filter(|c| c.kind() == ASSIGN && Some(c) != skip)
         {
             let key = self.block_path(&node(&a, BLOCK_PATH).ok_or(Skip)?)?;
-            let value = self.constant(rc, &terms(&a).next().ok_or(Skip)?)?;
+            let value = terms(&a).next().ok_or(Skip)?;
+            let value = self.calls(Calls::Data, |l| l.constant(rc, &value))?;
             out.push((key, value, self.span(&a)));
         }
         Ok(out)
@@ -1806,7 +1823,13 @@ impl<'u> Lowerer<'u> {
         let mut rc = self.rc(n, scope, outer);
         let mut body = self.opt_body(&mut rc, n)?;
         let has_body = node(n, BODY).is_some();
-        let mut head = self.atom(&mut rc, &head_node, Pos::Whole, &mut body)?;
+        let calls = match self.callee(&head_node).as_deref() {
+            Some("type_refine") => Calls::Data,
+            _ => Calls::Head,
+        };
+        let mut head = self.calls(calls, |l| {
+            l.atom(&mut rc, &head_node, Pos::Whole, &mut body)
+        })?;
         if let Some(rank) = self.rank_tok(n)? {
             if head.pred != "arg" || head.args.len() != 4 || head.record.is_some() {
                 return self.error(
@@ -2282,6 +2305,13 @@ impl<'u> Lowerer<'u> {
         r
     }
 
+    fn calls<T>(&mut self, calls: Calls, f: impl FnOnce(&mut Self) -> T) -> T {
+        let saved = std::mem::replace(&mut self.calls, calls);
+        let r = f(self);
+        self.calls = saved;
+        r
+    }
+
     /// Run `f`, discarding the diagnostics it records when it fails.
     fn probe<T>(&mut self, f: impl FnOnce(&mut Self) -> L<T>) -> L<T> {
         let n = self.diags.len();
@@ -2425,6 +2455,30 @@ impl<'u> Lowerer<'u> {
         })
     }
 
+    /// A call to a function the evaluator does not have would have no value
+    /// and fail its literal quietly: an error at the call. A refinement's
+    /// calls are `refine::check_rest`'s, with the refinement's own message.
+    fn check_function(&mut self, name: &str, span: Span) {
+        if self.lenient || self.calls == Calls::Data || crate::engine::FUNCTIONS.contains(&name) {
+            return;
+        }
+        if crate::partition::AGGREGATES.contains(&name) {
+            if self.calls != Calls::Head {
+                self.diags.push(Diagnostic::error(
+                    span,
+                    format!("`{name}` is an aggregate: it is written in a rule head"),
+                ));
+            }
+            return;
+        }
+        self.diags.push(
+            Diagnostic::error(span, format!("unknown function {name}")).with_help(format!(
+                "the functions are {}",
+                crate::engine::FUNCTIONS.join(", ")
+            )),
+        );
+    }
+
     /// The name a call or record is applied by: its chain's dotted text.
     fn callee(&self, n: &SyntaxNode) -> Option<String> {
         let c = n.children().find_map(|c| Chain::of(&c))?;
@@ -2478,6 +2532,7 @@ impl<'u> Lowerer<'u> {
                 let Some(name) = name else {
                     return self.error(span, "a function is named by a plain name");
                 };
+                self.check_function(&name, span);
                 let args = self.bind(false, |l| l.args(rc, n, Pos::Content, pre))?;
                 Ok(Term::Func { name, args })
             }

@@ -45,6 +45,36 @@ fn an_undefined_predicate_names_its_literal() {
     );
 }
 
+/// A call to a function the evaluator does not have would have no value
+/// and fail its literal quietly; it is a compile error at the call, in a
+/// rule body and in a resource field alike. An aggregate is known in a
+/// rule head only.
+#[test]
+fn an_unknown_function_names_its_call() {
+    let r = plan("edition 2026\nenv(\"prod\")\nq(y) if env(x), y = lowr(x)\n").failure();
+    assert!(
+        r.stderr.contains("p.df:3:21: unknown function lowr"),
+        "{}",
+        r.stderr
+    );
+    assert!(r.stderr.contains("the functions are add,"), "{}", r.stderr);
+    let r = plan("edition 2026\nresource net.a x {\n  name = uper(\"x\")\n}\n").failure();
+    assert!(
+        r.stderr.contains("p.df:3:10: unknown function uper"),
+        "{}",
+        r.stderr
+    );
+    let r = plan("edition 2026\nenv(\"prod\")\nq(n) if env(x), n = count(x)\n").failure();
+    assert!(
+        r.stderr
+            .contains("p.df:3:21: `count` is an aggregate: it is written in a rule head"),
+        "{}",
+        r.stderr
+    );
+    plan("edition 2026\nenv(\"prod\")\nq(count(x)) if env(x)\nr(y) if env(x), y = upper(x)\n")
+        .success();
+}
+
 #[test]
 fn a_negative_cycle_names_each_rule() {
     let r = plan(

@@ -223,12 +223,20 @@ fn is_builtin_or_edb(pred: &str) -> bool {
     )
 }
 
+/// The aggregates a rule head may apply.
+pub const AGGREGATES: &[&str] = &[
+    "collect",
+    "collect_set",
+    "collect_list",
+    "count",
+    "sum",
+    "min",
+    "max",
+];
+
 pub fn is_aggregate_head(head: &Atom) -> bool {
     head.args.iter().any(|t| match t {
-        Term::Func { name, .. } => matches!(
-            name.as_str(),
-            "collect" | "collect_set" | "collect_list" | "count" | "sum" | "min" | "max"
-        ),
+        Term::Func { name, .. } => AGGREGATES.contains(&name.as_str()),
         _ => false,
     })
 }
