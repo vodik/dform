@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== dform.df: 157 nodes, 388 edges (173 negative)
+== dform.df: 160 nodes, 749 edges (532 negative)
    STRATIFIED, 17 strata
    stratum 0:
      (arg, iam.policy, name)
@@ -21,10 +21,12 @@ exit: ok
      (want, iam.role)
      (want, iam.role_policy_attachment)
      (want, net.route)
+     allow_stuck
      data
      env_name
      identity
      input
+     may_derive
      network.main::zone_index
      network.peer::zone_index
      resolve
@@ -168,7 +170,6 @@ exit: ok
    stratum 14:
      (arg, k8s.nodepool, cluster_id)
      __ref_dep
-     deny
      iam_need
    stratum 15:
      (arg, iam.policy, statements)
@@ -176,4 +177,6 @@ exit: ok
      __lc_3
    stratum 16:
      (attr, iam.policy, statements)
+     deny
+     stuck
 -- stderr --

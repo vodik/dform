@@ -146,7 +146,7 @@ deny(M) :- deformation(pending, T, A, Before), world_digest(T, A, Now), Before !
 "#;
 
 /// The predicates a policy pass gives the program (`deformation_facts`).
-pub const POLICY_INPUTS: &[&str] = &["deformation", "world_digest"];
+pub const POLICY_INPUTS: &[&str] = &["deformation", "world_digest", crate::stuck::MAY_DERIVE];
 
 /// The program with `POLICY_RULES` appended: what every evaluation runs.
 pub fn with_policy_rules(mut program: crate::ast::Program) -> Result<crate::ast::Program> {

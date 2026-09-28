@@ -263,14 +263,19 @@ fn start(program: &Program, extra_facts: &[Atom]) -> Result<(Compiled, State)> {
                 at_suffix(r.head.span)
             );
         }
-        if r.head.pred == partition::STUCK {
+        if r.head.pred == partition::STUCK || r.head.pred == stuck::MAY_DERIVE {
             bail!(
-                "stuck/4 is derived by the evaluator; no rule may: {}{}",
+                "{} is derived by the evaluator; no rule may: {}{}",
+                if r.head.pred == partition::STUCK {
+                    "stuck/4"
+                } else {
+                    "may_derive/3"
+                },
                 partition::fmt_rule(r),
                 at_suffix(r.head.span)
             );
         }
-        if LATTICE_DECLS.contains(&r.head.pred.as_str()) {
+        if LATTICE_DECLS.contains(&r.head.pred.as_str()) || r.head.pred == stuck::ALLOW_STUCK {
             bail!(
                 "{} must be a fact, not a rule: {}{}",
                 r.head.pred,

@@ -21,9 +21,30 @@ pub struct Lowered {
     pub secret_outputs: Vec<(String, String)>,
 }
 
+/// `unknowns = strict` (DESIGN.org "Strict mode is first-class"): a plan
+/// that needs a phase boundary is denied. A stuck instance (E §2.7 Rules 2
+/// and 3; a stuck resource rule is a pending group) and a resource rule
+/// that may derive after a boundary (F DR-2 revised; a pending group too,
+/// given to the plan's policy pass) each derive the deny, with the rule,
+/// its head pattern and the nulls as provenance. `allow_stuck(HeadPattern).`
+/// facts relax it per key.
+pub const STRICT_RULES: &str = r#"
+deny("strict: unresolved value at plan time", { rule: R, head: H, nulls: Ns }) :-
+  stuck(R, H, _, Ns), not allow_stuck(H).
+deny("strict: a pending group at plan time", { rule: R, head: H, nulls: Ns }) :-
+  may_derive(R, H, Ns), not allow_stuck(H).
+"#;
+
 pub fn lower(program: &Program) -> Result<Lowered> {
     reject_pending(&program.statements)?;
-    let program = apply_decls(program)?;
+    let strict =
+        crate::stack::config(program).is_ok_and(|s| s.unknowns == crate::stack::Unknowns::Strict);
+    let mut program = apply_decls(program)?;
+    if strict {
+        program
+            .statements
+            .extend(crate::parser::parse_program(STRICT_RULES)?.statements);
+    }
     // In the future, imports should be handled in a loader before parsing.
     // For now, keep Import statements in the AST but drop them before eval.
     let crate::modules::Expanded {

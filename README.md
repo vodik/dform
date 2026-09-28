@@ -206,16 +206,29 @@ and the sections follow in this order; what cannot be decided yet is said so:
 - `stack NAME is undeformed`: nothing to do, nothing stuck (the only line).
 
 Strict mode. `stack NAME { unknowns = strict }` refuses a plan that needs a
-phase boundary, exactly Terraform's refusal: a pending group, an
-undetermined policy, a deformation held on a null, or any other stuck
-derivation. The plan still prints, then says why it refused (`refused:
-stack NAME is strict ...`, one line per reason, and a `refused` array in
-`plan --json`) and exits non-zero; `apply` refuses before its first Apply
-call. Fresh nulls still flow: a create whose document carries `?T/A#id`
-of a resource created in the same tick is definite, so single-phase plans
-pass. Strict is the expected default for production stacks (`dform.df`
-is strict); `permissive`, the default, is for controller mode and
-iterative development, where a two-phase plan applies tick by tick.
+phase boundary, exactly Terraform's refusal. It is two generated denies,
+so the refusal has provenance (`why`) and policy can relax it:
+
+```
+deny("strict: unresolved value at plan time", { rule: R, head: H, nulls: Ns }) :-
+  stuck(R, H, _, Ns), not allow_stuck(H).
+deny("strict: a pending group at plan time", { rule: R, head: H, nulls: Ns }) :-
+  may_derive(R, H, Ns), not allow_stuck(H).
+```
+
+The first covers every stuck derivation: a stuck resource rule (a pending
+group), an undetermined policy, and so every deformation held on a null;
+the second a resource rule that may derive after the boundary
+(`may_derive/3`, given to the plan's policy pass). The plan still prints,
+then the violations name each instance's head pattern and nulls, and it
+exits non-zero; `apply` refuses before its first Apply call.
+`allow_stuck("want(\"gke_nodepool\", _)").` (a fact; no rule may derive
+`allow_stuck`) allows one key's boundary. Fresh nulls still flow: a create
+whose document carries `?T/A#id` of a resource created in the same tick is
+definite, so single-phase plans pass. Strict is the expected default for
+production stacks (`dform.df` is strict); `permissive`, the default, is for
+controller mode and iterative development, where a two-phase plan applies
+tick by tick.
 
 `plan --json` prints the same report as one JSON document, the thing CI and
 editors consume: `stack`, `undeformed`, a `summary` of counts, then the

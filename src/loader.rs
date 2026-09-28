@@ -55,6 +55,7 @@ pub const PROVIDER_PREDS: &[&str] = &[
     "identity",
     "deformation",
     "world_digest",
+    "may_derive",
     "drift",
     "type_attr",
     "type_list_key",
@@ -108,6 +109,7 @@ pub fn is_core_pred(pred: &str) -> bool {
             | "ignore_changes"
             | "lifecycle"
             | "moved"
+            | "allow_stuck"
     ) || is_engine_pred(pred)
         || is_provider_pred(pred)
 }

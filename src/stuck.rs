@@ -71,6 +71,14 @@ impl Stuck {
     }
 }
 
+/// Facts that relax strict mode per key: `allow_stuck(HeadPattern)`.
+pub const ALLOW_STUCK: &str = "allow_stuck";
+
+/// `may_derive(RuleId, HeadPattern, Nulls)`: the [`MayDerive`] instances of
+/// resource rules (pending groups) in the plan's evaluation, given to its
+/// policy pass.
+pub const MAY_DERIVE: &str = "may_derive";
+
 /// A rule instance that may derive after a boundary (F DR-2 revised, last
 /// clause, for every rule): its body positively reads a predicate with a
 /// stuck instance, or with one that may derive, that unifies with the read
@@ -98,6 +106,23 @@ impl MayDerive {
         format!("reads {}, {what}", fmt_atom(&self.reads))
     }
 
+    /// `may_derive(RuleId, HeadPattern, Nulls)`, as the policy pass reads it.
+    pub fn fact(&self) -> Atom {
+        let v = |v: Value| Term::Val(v);
+        Atom {
+            pred: MAY_DERIVE.into(),
+            args: vec![
+                v(Value::Int(self.rule as i64)),
+                v(Value::Str(fmt_atom(&self.head))),
+                v(Value::List(
+                    self.nulls.iter().cloned().map(Value::Str).collect(),
+                )),
+            ],
+            record: None,
+            span: Default::default(),
+        }
+    }
+
     pub fn nulls_text(&self) -> String {
         self.nulls
             .iter()
@@ -116,6 +141,12 @@ impl MayDerive {
 /// resource address in the head, or a builtin in the head. A rule that
 /// only reads relations into fresh variables and copies them into its
 /// head cannot: `stuck/4`'s readers must be such rules.
+///
+/// One negation cannot stick either: `not allow_stuck(H)` over a variable
+/// read from a column of `stuck/4` or `may_derive/3` that never holds a
+/// null (the rule, the head pattern, the nulls). `allow_stuck` is facts
+/// only, so it has no stuck head (Rule 3), and the pattern has no null
+/// (Rule 2). That is how strict mode is relaxed per key.
 pub fn can_stick(head: &Atom, body: &[Lit], aggregates: &BTreeSet<String>) -> bool {
     fn has_func(t: &Term) -> bool {
         match t {
@@ -132,10 +163,32 @@ pub fn can_stick(head: &Atom, body: &[Lit], aggregates: &BTreeSet<String>) -> bo
         return true;
     }
     let mut bound: BTreeSet<&str> = BTreeSet::new();
+    let mut null_free: BTreeSet<&str> = BTreeSet::new();
     for lit in body {
-        let Lit::Pos(a) = lit else {
-            return true;
+        let a = match lit {
+            Lit::Pos(a) => a,
+            Lit::Not(a)
+                if a.pred == ALLOW_STUCK
+                    && a.args.iter().all(|t| match t {
+                        Term::Var(x) => null_free.contains(x.as_str()),
+                        Term::Val(v) => !has_null(v),
+                        _ => false,
+                    }) =>
+            {
+                continue;
+            }
+            _ => return true,
         };
+        let columns: &[usize] = match a.pred.as_str() {
+            crate::partition::STUCK => &[0, 1, 3],
+            MAY_DERIVE => &[0, 1, 2],
+            _ => &[],
+        };
+        for &i in columns {
+            if let Some(Term::Var(x)) = a.args.get(i) {
+                null_free.insert(x);
+            }
+        }
         if aggregates.contains(&a.pred)
             || matches!(a.pred.as_str(), "member" | "enumerate")
             || crate::ir::ops::is_builtin_pred(&a.pred)

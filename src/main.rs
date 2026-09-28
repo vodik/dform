@@ -554,13 +554,21 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
         };
         let sections = plan_sections(&res, &resources, schema);
         executor::hold_deposed(&mut plan, &resources, &sections);
+        // The resource rules that may derive after a boundary (pending
+        // groups), for strict mode.
+        let may_derive: Vec<Atom> = res
+            .may_derive
+            .iter()
+            .filter(|m| m.head.pred == "want")
+            .map(|m| m.fact())
+            .collect();
         drop(res);
         let observed = backend.observe(st)?;
         let before = observed
             .iter()
             .map(|(a, d)| (a.clone(), Some(d.clone())))
             .collect();
-        let facts = zset::deformation_facts(
+        let mut facts = zset::deformation_facts(
             plan.actions.iter().filter_map(|a| {
                 let held = waits_on(a, &sections).is_some();
                 Some((zset::deformation_kind(&a.kind, held)?, &a.addr))
@@ -568,6 +576,7 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
             &before,
             &observed,
         );
+        facts.extend(may_derive);
         let (res, all) = evaluate_with(st, &replaced, &facts)?;
         let again = ir::compile_resources(res.facts.iter().cloned(), schema)?;
         if again.len() != resources.len()
@@ -608,18 +617,6 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
             Ok(p) => p.res,
             Err(_) => res,
         }
-    };
-    // A strict stack refuses a plan that needs a phase boundary (redacted:
-    // the reasons quote rule text).
-    let refusals = |res: &engine::EvalResult, sections: &stuck::Sections| -> Vec<String> {
-        if stack_cfg.unknowns != dform::stack::Unknowns::Strict {
-            return Vec::new();
-        }
-        let redact = query::Redactor::new(&res.facts, backend.schema());
-        dform::stack::strict_refusals(&res.stuck, sections)
-            .iter()
-            .map(|r| redact.text(r))
-            .collect()
     };
     let report_of = |plan: &dform::provider::Plan,
                      res: &engine::EvalResult,
@@ -744,23 +741,12 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
                 denies,
             } = plan_for(res, &violations, resources, &adopts, &lifecycle, &st)?;
             let report = report_of(&plan, &res, &sections, 1, &moves, &denies);
-            let refused = refusals(&res, &sections);
             if json {
-                let mut doc = report.json();
-                if !refused.is_empty() {
-                    doc["refused"] = serde_json::json!(refused);
-                }
-                println!("{}", serde_json::to_string_pretty(&doc)?);
+                println!("{}", serde_json::to_string_pretty(&report.json())?);
             } else {
                 print!("{}", report.text());
-                if !refused.is_empty() {
-                    print!("{}", dform::stack::refusal_text(&stack, &refused));
-                }
             }
             blocked(&[violations, denies].concat())?;
-            if !refused.is_empty() {
-                bail!("plan refused: stack {stack} is strict (unknowns = strict)");
-            }
             if let Some(out) = out {
                 let redact = query::Redactor::new(&res.facts, schema);
                 let mut deformations =
@@ -932,13 +918,6 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
                         println!("tick {tick}:");
                     }
                     show(&plan, &res, &sections, tick, &[], &denies);
-                }
-                let refused = refusals(&res, &sections);
-                if !refused.is_empty() {
-                    print!("{}", dform::stack::refusal_text(&stack, &refused));
-                    bail!(
-                        "apply refused at tick {tick}: stack {stack} is strict (unknowns = strict)"
-                    );
                 }
                 if !denies.is_empty() {
                     let redact = query::Redactor::new(&res.facts, backend.schema());
