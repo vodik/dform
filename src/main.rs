@@ -76,6 +76,10 @@ enum Cmd {
         /// still deformed.
         #[arg(long = "max-ticks", default_value_t = 8)]
         max_ticks: usize,
+        /// At most this many provider Apply calls in flight: a tick's
+        /// independent actions overlap.
+        #[arg(long = "parallel", default_value_t = 1, value_parser = clap::value_parser!(u64).range(1..))]
+        parallel: u64,
     },
     /// Query the final fact store: a predicate name (every fact of it) or
     /// body literals with variables, printed as a table with one column per
@@ -278,7 +282,11 @@ fn main() -> Result<()> {
                 bail!("blocked by constraints");
             }
         }
-        Cmd::Apply { max_ticks, .. } => {
+        Cmd::Apply {
+            max_ticks,
+            parallel,
+            ..
+        } => {
             for addr in chaos.addresses() {
                 if !resources.iter().any(|r| &r.addr == addr) && st.get(addr).is_none() {
                     bail!(
@@ -382,8 +390,12 @@ fn main() -> Result<()> {
                 // when there is nothing to do. State is written after every
                 // Apply call (`executor`).
                 if tick == 1 || changed {
+                    let opts = executor::Options {
+                        parallel: parallel as usize,
+                        persist: &persist,
+                    };
                     let applied = executor::run_tick(
-                        &backend, &resources, &adopts, &lifecycle, &mut st, &plan, &persist,
+                        &backend, &resources, &adopts, &lifecycle, &mut st, &plan, &opts,
                     );
                     for note in backend.take_notes() {
                         println!("chaos: {note}");

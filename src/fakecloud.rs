@@ -35,6 +35,19 @@ pub struct RemoteState {
     #[serde(default, skip_serializing_if = "is_zero")]
     pub tick: u64,
     pub resources: BTreeMap<String, RemoteResource>,
+    /// The last tick's Apply calls in simulated time, in the order they
+    /// started, when chaos `latency` put one on the clock: what
+    /// `--parallel` overlapped.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub timeline: Vec<Span>,
+}
+
+/// One Apply call on the simulated clock.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Span {
+    pub addr: String,
+    pub start_ms: u64,
+    pub end_ms: u64,
 }
 
 fn is_zero(n: &u64) -> bool {
@@ -119,6 +132,10 @@ impl Provider for FakeCloud {
         state: &mut State,
         plan: &Plan,
     ) -> Result<()> {
+        let opts = crate::executor::Options {
+            parallel: 1,
+            persist: &|_| Ok(()),
+        };
         crate::executor::run_tick(
             self,
             desired,
@@ -126,7 +143,7 @@ impl Provider for FakeCloud {
             &Lifecycle::default(),
             state,
             plan,
-            &|_| Ok(()),
+            &opts,
         )
         .map(|_| ())
     }
@@ -720,7 +737,7 @@ impl FakeCloud {
             adopt_map: state::adopt_map(adopts),
             desired: desired.iter().map(|r| (r.addr.clone(), r)).collect(),
             resolved: BTreeMap::new(),
-            clock: 0,
+            timeline: Vec::new(),
             returned: BTreeMap::new(),
         })
     }
@@ -940,8 +957,8 @@ pub struct Tick<'a> {
     desired: BTreeMap<Address, &'a Resource>,
     /// Documents applied so far this tick, for configured-attribute refs.
     resolved: BTreeMap<Address, Json>,
-    /// Simulated time spent in Apply (chaos `latency`).
-    clock: u64,
+    /// The tick's Apply calls on the simulated clock.
+    timeline: Vec<Span>,
     /// What each answered Apply call returned: the object's configured
     /// attributes, `None` for a delete.
     returned: BTreeMap<Address, Option<Json>>,
@@ -983,7 +1000,6 @@ impl Tick<'_> {
             bail!("apply {at}: injected failure (chaos fail={at})");
         }
         if let Some(ms) = cloud.chaos.latency.get(addr) {
-            self.clock += ms;
             cloud.note(format!("latency {at}: {ms}ms (simulated, not slept)"));
         }
         // A timed-out call takes effect in the world, but dform never
@@ -1118,6 +1134,21 @@ impl Tick<'_> {
         Ok(())
     }
 
+    /// How long an Apply call for `addr` takes on the simulated clock
+    /// (chaos `latency`, else no time).
+    pub fn latency(&self, addr: &Address) -> u64 {
+        self.cloud.chaos.latency.get(addr).copied().unwrap_or(0)
+    }
+
+    /// Record an Apply call's span on the simulated clock.
+    pub fn record(&mut self, addr: &Address, start_ms: u64, end_ms: u64) {
+        self.timeline.push(Span {
+            addr: format!("{}/{}", addr.typ, addr.name),
+            start_ms,
+            end_ms,
+        });
+    }
+
     /// A new object at `remote`, its computed values minted.
     fn create_object(&mut self, addr: &Address, remote: &str, doc: Json) {
         let computed = self.cloud.mint(&addr.typ, remote, &doc);
@@ -1155,10 +1186,16 @@ impl Tick<'_> {
         for (addr, r) in &self.desired {
             state.set_deps(addr, r.deps.iter().cloned());
         }
-        if self.clock > 0 {
+        let makespan = self.timeline.iter().map(|s| s.end_ms).max().unwrap_or(0);
+        if makespan > 0 {
             self.cloud
-                .note(format!("simulated apply time: {}ms", self.clock));
+                .note(format!("simulated apply time: {makespan}ms"));
         }
+        // Kept only when chaos `latency` put a call on the clock.
+        self.world.timeline = match makespan {
+            0 => Vec::new(),
+            _ => std::mem::take(&mut self.timeline),
+        };
         self.cloud.end_tick(&mut self.world, state);
         self.cloud.save(&self.world)?;
         Ok(self.returned)

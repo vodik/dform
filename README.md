@@ -186,6 +186,16 @@ world's, and an update keeps the world's value there. `prevent_destroy`
 blocks `plan` and `apply` with `lifecycle prevent_destroy: the plan would
 delete T.A`.
 
+`apply --parallel N` (default 1) walks a tick's dependency DAG with at most N
+Apply calls in flight: a create or update waits for what its document
+references, deletes wait for everything else. Output order does not change
+with N. On the mock the difference shows on the simulated clock:
+
+```bash
+cargo run -- apply --parallel 4 --chaos latency=net.vpc/network.main::vpc:100 \
+  --chaos latency=net.vpc/network.peer::vpc:100   # the two vpcs overlap: 100ms, not 200ms
+```
+
 An apply that fails or is killed can be resumed: before a tick's first Apply
 call its deformations are written to state as in flight, each with the world
 document it was planned against, and each answered call takes its action out.
@@ -262,7 +272,7 @@ file keeps a `tick` counter; every `apply` is one tick.
 | `crash=T/N` | dform is killed (exit 137) as it calls Apply of `T/N`; nothing after that runs |
 | `read-lag=T/N:K` | the first `K` Reads of `T/N` after it is created return nothing (eventual consistency) |
 | `mutate=T/N:PATH=JSON` | once per run, after the first tick `T/N` exists at, the world sets its `PATH` to `JSON` (drift) |
-| `latency=T/N:MS` | Apply of `T/N` is recorded as taking `MS`, reported, never slept |
+| `latency=T/N:MS` | Apply of `T/N` takes `MS` on a simulated clock, reported, never slept; the world's `timeline` records each call's start and end |
 
 ```bash
 cargo run -- apply --chaos fail=net.subnet/network.main::private-us-test-1a

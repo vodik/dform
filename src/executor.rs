@@ -10,6 +10,11 @@
 //!   flight.
 //! * at the end of the tick, once the world's clock has advanced.
 //!
+//! Order. The tick's actions form a DAG (`dag`): a create or update after
+//! what its document references, deletes after everything else and each
+//! before the deletes of what it depended on. `--parallel N` walks it with
+//! at most N Apply calls in flight.
+//!
 //! Resume. Before a tick's first call, its deformations are written to
 //! state as in flight (`State::in_flight`), each with the world document it
 //! was planned against; an answered call takes its action out. An apply that
@@ -22,7 +27,7 @@
 
 use crate::fakecloud::FakeCloud;
 use crate::ir::{Address, Adopt, Resource};
-use crate::provider::{ActionKind, Change, Plan, fmt_value};
+use crate::provider::{Action, ActionKind, Change, Plan, fmt_value};
 use crate::state::{self, InFlight, State};
 use crate::zset::Lifecycle;
 use anyhow::{Result, bail};
@@ -37,9 +42,25 @@ pub type Persist<'a> = &'a dyn Fn(&State) -> Result<()>;
 /// returned (`None`: deleted).
 pub type Seen = BTreeMap<Address, Option<Json>>;
 
-/// Apply every definite action of `plan` as one tick of the world. The
-/// first failure stops the tick; the actions before it keep their identity.
-/// Returns what the answered Apply calls returned.
+/// How a tick runs.
+pub struct Options<'a> {
+    /// At most this many Apply calls in flight (`--parallel`, at least 1).
+    pub parallel: usize,
+    /// Where state goes after every Apply call.
+    pub persist: Persist<'a>,
+}
+
+/// Apply every definite action of `plan` as one tick of the world, walking
+/// the tick's dependency DAG with at most `parallel` calls in flight. The
+/// first failure stops new calls; those in flight finish, and every action
+/// that answered keeps its identity. Returns what the answered Apply calls
+/// returned.
+///
+/// Time is the mock's simulated clock (chaos `latency`), so the walk is a
+/// deterministic simulation: a call starts, in plan order among the ready
+/// ones, as soon as a slot is free and everything it waits on has finished;
+/// it finishes `latency` later. The world records each call's span. With
+/// `parallel` 1 the calls run in plan order, one after the other.
 pub fn run_tick(
     cloud: &FakeCloud,
     desired: &[Resource],
@@ -47,32 +68,106 @@ pub fn run_tick(
     lifecycle: &Lifecycle,
     state: &mut State,
     plan: &Plan,
-    persist: Persist,
+    opts: &Options,
 ) -> Result<Seen> {
+    let actions: Vec<&Action> = plan
+        .actions
+        .iter()
+        .filter(|a| !matches!(a.kind, ActionKind::Noop | ActionKind::Pending))
+        .collect();
+    let waits = dag(&actions, desired, state);
     let mut tick = cloud.begin_tick(desired, adopts, lifecycle)?;
+    let mut started = vec![false; actions.len()];
+    let mut done = vec![false; actions.len()];
+    // (finishes at, action), in start order.
+    let mut running: Vec<(u64, usize)> = Vec::new();
+    let mut now = 0;
     let mut failed = None;
-    for a in &plan.actions {
-        if matches!(a.kind, ActionKind::Noop | ActionKind::Pending) {
-            continue;
+    loop {
+        while failed.is_none() && running.len() < opts.parallel.max(1) {
+            let Some(i) =
+                (0..actions.len()).find(|&i| !started[i] && waits[i].iter().all(|&j| done[j]))
+            else {
+                break;
+            };
+            started[i] = true;
+            let a = actions[i];
+            let r = tick.apply(a, state);
+            if r.is_ok()
+                && let Some(f) = &mut state.in_flight
+            {
+                f.remaining.remove(&state::key(&a.addr));
+            }
+            (opts.persist)(state)?;
+            let end = now + tick.latency(&a.addr);
+            tick.record(&a.addr, now, end);
+            match r {
+                Ok(()) => running.push((end, i)),
+                Err(e) => failed = Some(e),
+            }
         }
-        let r = tick.apply(a, state);
-        if r.is_ok()
-            && let Some(f) = &mut state.in_flight
-        {
-            f.remaining.remove(&state::key(&a.addr));
-        }
-        persist(state)?;
-        if let Err(e) = r {
-            failed = Some(e);
+        // The next call to finish; ties in start order.
+        let Some(k) = (0..running.len()).min_by_key(|&k| running[k].0) else {
             break;
-        }
+        };
+        let (end, i) = running.remove(k);
+        now = end;
+        done[i] = true;
+    }
+    if failed.is_none()
+        && let Some(i) = started.iter().position(|s| !s)
+    {
+        let a = &actions[i].addr;
+        failed = Some(anyhow::anyhow!(
+            "apply {}/{}: its dependencies never finished (a cycle)",
+            a.typ,
+            a.name
+        ));
     }
     let returned = tick.end(state)?;
-    persist(state)?;
+    (opts.persist)(state)?;
     match failed {
         Some(e) => Err(e),
         None => Ok(returned),
     }
+}
+
+/// For each action, the actions it waits for. A create, update or replace
+/// waits for the actions at the addresses its document references. Deletes
+/// wait for every other kind of action, and a delete waits for the deletes
+/// of the objects that depended on it (state's recorded dependencies).
+fn dag(actions: &[&Action], desired: &[Resource], state: &State) -> Vec<Vec<usize>> {
+    let is_delete = |a: &Action| matches!(a.kind, ActionKind::Delete | ActionKind::DeleteDeposed);
+    let deps: Vec<Vec<String>> = actions
+        .iter()
+        .map(|a| match a.kind {
+            ActionKind::Delete => state.get(&a.addr).map(|e| e.deps.clone()),
+            ActionKind::DeleteDeposed => state
+                .deposed
+                .get(&state::key(&a.addr))
+                .map(|e| e.deps.clone()),
+            _ => desired
+                .iter()
+                .find(|r| r.addr == a.addr)
+                .map(|r| r.deps.iter().map(state::key).collect()),
+        })
+        .map(Option::unwrap_or_default)
+        .collect();
+    (0..actions.len())
+        .map(|i| {
+            let me = state::key(&actions[i].addr);
+            (0..actions.len())
+                .filter(|&j| j != i)
+                .filter(|&j| {
+                    if !is_delete(actions[i]) {
+                        !is_delete(actions[j]) && deps[i].contains(&state::key(&actions[j].addr))
+                    } else {
+                        !is_delete(actions[j]) || deps[j].contains(&me)
+                    }
+                })
+                .collect()
+        })
+        .collect()
 }
 
 /// Mark the tick's deformations in flight: every action of `plan` that is
