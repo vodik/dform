@@ -263,6 +263,25 @@ after its name, `"[" NAME ("," NAME)* "]"`, before the block.
 A stack's `config = FORMAT(SOURCE)` is not a constant: it is a table of
 the deployment's settings (see "Tables"), and needs a key.
 
+### Provider blocks
+
+`provider NAME { .. }`'s `source` is a constant (the stack reads it to
+start the provider). Every other setting is a term, read like a rule's
+(inputs, settings rows, value names, tables, `env_var`), and the block
+lowers to one rule for them all, plus one for `expect_account`:
+
+```
+provider p { k1 = t1, k2 = t2 }    provider_config("p", { k1: t1', k2: t2' }) :- reads
+expect_account = t                 provider_expect_account("p", t') :- reads
+```
+
+A setting is a content position: a dot in it reads now (a resource's
+attribute is its value, not a reference). A block takes no clause, no
+`+=` and no rank; a setting given twice is an error. `env_var(NAME)` is a
+builtin extern, `extern env_var(+name, -value: secret(string))`, declared
+for a program that reads it and does not declare `env_var` itself;
+`env_var(t)` as a term is the lookup `env_var[t]`.
+
 ### Type aliases
 
 `type NAME = TYPE` names a type: `type environment = enum("dev", "stg",
@@ -415,6 +434,8 @@ are unchanged.
 | `k = t [if B]`                            | `k(t') :- B, reads`; with neither, the fact `k(t')`   |
 | `let a = CHAIN`                           | nothing: each `a` is `CHAIN`                           |
 | `type a = T`, `export type a`             | nothing: each use of `a` is `T`                        |
+| `provider p { k = t, expect_account = a }` | `provider_config("p", {k: t'}) :- reads`, `provider_expect_account("p", a') :- reads` ("Provider blocks") |
+| `env_var(t)`                              | `V`, reading `env_var(t', V)`                          |
 | `resource T n { for B1 if B2 f = t }`     | `resource T n { f = t' } :- B1, B2, reads`             |
 | `resource T "a-{e}" { .. }`               | name `Addr`, `Addr = format("a-%s", e')` last          |
 | `settings n @r { for B .. }`              | `settings n @r { .. } :- B, reads`                     |

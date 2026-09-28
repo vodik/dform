@@ -15,6 +15,10 @@
 //! class and type). A sensitive computed value stays in the world; what
 //! Read and Apply hand back is its label, `{"$secret": "T/N#Attr"}`.
 //!
+//! The program's settings (a `provider` block's, `provider_config`) arrive
+//! at a second Configure as `settings`; the mock reports `settings.account`
+//! as the account its credentials reach, for `expect_account`.
+//!
 //! Chaos knobs (`dform dev --chaos`, `chaos`) arrive at Configure. The world's
 //! clock advances at every END_TICK, when chaos `mutate` lands.
 
@@ -990,7 +994,13 @@ impl Handler for Mock {
             C::Configure(req) => {
                 let config = doc_of(req.config.as_ref())?.unwrap_or(json!({}));
                 self.cloud().configure(&config).map_err(invalid)?;
-                Reply::Configure(pb::ConfigureResponse {})
+                // The account its settings name (`provider fake { account
+                // = .. }`): what `expect_account` is checked against.
+                let account = config
+                    .pointer("/settings/account")
+                    .and_then(Json::as_str)
+                    .map(str::to_string);
+                Reply::Configure(pb::ConfigureResponse { account })
             }
             C::Schema(req) => {
                 let cloud = self.cloud();

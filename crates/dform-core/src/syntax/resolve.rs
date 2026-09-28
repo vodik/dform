@@ -30,6 +30,8 @@ use crate::value::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
 mod alias;
+mod provider;
+pub use provider::ENV_VAR;
 
 /// The one edition this compiler reads.
 pub const EDITION_YEAR: i64 = 2026;
@@ -73,6 +75,9 @@ pub fn lower(
     l.text = mode == Mode::Text;
     l.any_type = mode == Mode::Pattern;
     let mut statements = Vec::new();
+    if l.declare_env_var() {
+        statements.push(provider::env_var_extern());
+    }
     for &e in entries {
         statements.extend(l.unit(e, require_edition));
     }
@@ -898,23 +903,18 @@ impl<'u> Lowerer<'u> {
                 }
                 one(Stmt::Import(Import { path, span }))
             }
-            PROVIDER | STACK => {
-                let name = if n.kind() == PROVIDER {
-                    word_text(n, 1)
-                } else {
-                    dotted_text(n, 1)
-                };
+            PROVIDER => self.provider(n, scope, outer),
+            STACK => {
+                let name = dotted_text(n, 1);
                 let block = node(n, BLOCK);
                 let mut rc = self.rc(n, scope, outer);
                 // A stack's `config = FORMAT(SOURCE)` is a table, not a
                 // constant.
-                let table = match (n.kind(), &block) {
-                    (STACK, Some(b)) => b
-                        .children()
+                let table = block.as_ref().and_then(|b| {
+                    b.children()
                         .filter(|a| a.kind() == ASSIGN)
-                        .find(|a| node(a, BLOCK_PATH).is_some_and(|p| p.text() == "config")),
-                    _ => None,
-                };
+                        .find(|a| node(a, BLOCK_PATH).is_some_and(|p| p.text() == "config"))
+                });
                 let config = self.constant_assigns(&mut rc, block.as_ref(), table.as_ref())?;
                 // The words between the header's `[` and `]`.
                 let key_tokens: Vec<SyntaxToken> = tokens(n)
@@ -936,14 +936,7 @@ impl<'u> Lowerer<'u> {
                     config,
                     span,
                 };
-                out.insert(
-                    0,
-                    if n.kind() == PROVIDER {
-                        Stmt::Provider(c)
-                    } else {
-                        Stmt::Stack(c)
-                    },
-                );
+                out.insert(0, Stmt::Stack(c));
                 Ok(out)
             }
             INPUT => {
@@ -2551,6 +2544,9 @@ impl<'u> Lowerer<'u> {
                 self.realize(rc, res, pos, pre, span)
             }
             CALL => {
+                if let Some(t) = self.env_var_call(rc, n, pos, pre) {
+                    return t;
+                }
                 let name = self.callee(n);
                 let Some(name) = name else {
                     return self.error(span, "a function is named by a plain name");

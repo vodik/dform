@@ -23,7 +23,7 @@ use crate::value::Value;
 use crate::watch;
 use crate::why;
 use crate::zset;
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -1262,6 +1262,7 @@ fn run_with(
             cache: cli.world.is_none().then(|| cache.clone()),
             configured: provider_configs(&program),
             stack: deployment.clone(),
+            blocks: stack_cfg.provider_blocks.clone(),
         },
     )?;
     // Externs are asked on demand: a table's of its file, else of the file
@@ -1277,6 +1278,9 @@ fn run_with(
                 return r;
             }
             if let Some(r) = crate::externs::file(f, inputs, &program_dir) {
+                return r;
+            }
+            if let Some(r) = crate::externs::env_var(f, inputs) {
                 return r;
             }
             let plus: Vec<bool> = f.args.iter().map(|b| b.input).collect();
@@ -1301,6 +1305,14 @@ fn run_with(
     let discovered = backend.discover(world_types(&cli.cmd, lowered.as_ref()).as_ref())?;
     let scope = catalog_scope(&cli.cmd, &program, &base_extra, &discovered, &st);
     backend.load_schema(scope.as_ref())?;
+    // A provider configured from what it serves itself is a cycle.
+    if let Some(l) = &lowered {
+        backend.check_configuration(&l.program, &l.extern_fns, |p| {
+            p == crate::syntax::resolve::ENV_VAR
+                || p.starts_with("file.")
+                || crate::tables::describe(p).is_some()
+        })?;
+    }
     // Apply calls whose answer was lost, resolved before anything is
     // planned: a plan sees what they did (`apply` writes it down).
     for line in executor::resolve_uncertain(&backend, &mut st)? {
@@ -1342,6 +1354,11 @@ fn run_with(
                 (res, violations, resumable) =
                     externs.eval_resumable(&program, &extra, zset::POLICY_INPUTS)?;
             }
+            // Each provider reaches the account the program expects of it
+            // (`expect_account`), or nothing is planned.
+            backend
+                .check_accounts(&res.facts)
+                .with_context(|| format!("deployment {deployment}"))?;
             *last.borrow_mut() = Some((extra, resumable));
             (res, violations)
         } else {
@@ -1632,7 +1649,10 @@ fn run_with(
         Ok(zset::file::PlanFile {
             version: zset::file::VERSION,
             stack: stack.clone(),
-            inputs,
+            inputs: zset::file::Inputs {
+                env: externs.env_labels(),
+                ..inputs
+            },
             world_digest: zset::file::world_digest(&backend.world_facts(st)?),
             deformations,
             pending_groups: report
@@ -3117,6 +3137,7 @@ fn plan_inputs(
         providers: cli.providers.clone(),
         world: show(&cli.world),
         inventory: show(&cli.inventory),
+        env: Vec::new(),
     })
 }
 

@@ -129,11 +129,17 @@ message HandshakeResponse {
 message ConfigureRequest {
   // An Obj. The fake provider reads: `schemas` (a list of schema names or
   // paths), `world` and `inventory` (file paths), `chaos` (a list of
-  // `apply --chaos` specs).
+  // `apply --chaos` specs), `settings` (a program's `provider` block or
+  // `provider_config`, at a second Configure; its `account` is reported).
   Value config = 1;
 }
 
-message ConfigureResponse {}
+message ConfigureResponse {
+  // The account (or project) the provider's credentials reach, when it can
+  // tell: a program's `expect_account` is checked against it, and a
+  // mismatch refuses to plan. The mock reports its `settings.account`.
+  optional string account = 1;
+}
 
 message SchemaRequest {
   // When set, the per-type rows (type_attr, type_list_key, type_retry,

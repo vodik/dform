@@ -40,6 +40,10 @@ use std::cell::{OnceCell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
+/// `provider_expect_account(Name, Account)`: a `provider` block's
+/// `expect_account`, what [`Providers::check_accounts`] reads.
+pub const EXPECT_ACCOUNT: &str = "provider_expect_account";
+
 /// What the engine hands every provider at Configure.
 #[derive(Debug, Clone, Default)]
 pub struct Config {
@@ -61,6 +65,11 @@ pub struct Config {
     /// may mark what it creates with it, to find an object whose Create
     /// answer was lost (`provider.created`).
     pub stack: String,
+    /// The program's `provider NAME { .. }` blocks: each one's spec (as
+    /// `specs` names it) -> NAME, so `provider_config(NAME, ..)` (what a
+    /// block's settings lower to) finds its link by the block's name as
+    /// well as by the provider's own.
+    pub blocks: BTreeMap<String, String>,
 }
 
 /// How a run reaches its providers: a backend (`plugin::backend`). The
@@ -132,6 +141,13 @@ pub struct Providers {
     awaiting: RefCell<BTreeSet<usize>>,
     /// The settings each link was last configured with from the program.
     settings: RefCell<BTreeMap<usize, Json>>,
+    /// A program's provider block name -> its link ([`Config::blocks`]).
+    blocks: BTreeMap<String, usize>,
+    /// The mock schemas' blocks: name -> the schema (the mock's one link
+    /// plays every one).
+    mock_blocks: BTreeMap<String, String>,
+    /// The account each link's last Configure reported, if it tells.
+    accounts: RefCell<BTreeMap<usize, String>>,
 }
 
 /// What the providers' Schema calls answered.
@@ -145,10 +161,11 @@ struct Loaded {
     scope: Option<BTreeSet<String>>,
 }
 
-fn configure(link: &mut Link, config: Json) -> Result<()> {
+/// Configure a link: the account its credentials reach, if it tells.
+fn configure(link: &mut Link, config: Json) -> Result<Option<String>> {
     let config = Some(wire::doc(&config));
-    let _: pb::ConfigureResponse = link.call(pb::ConfigureRequest { config })?;
-    Ok(())
+    let r: pb::ConfigureResponse = link.call(pb::ConfigureRequest { config })?;
+    Ok(r.account)
 }
 
 impl Providers {
@@ -193,23 +210,57 @@ impl Providers {
             base["cache"] = path(c);
         }
         let (mut links, mut bases, mut awaiting) = (Vec::new(), Vec::new(), BTreeSet::new());
+        let mut accounts = BTreeMap::new();
+        // Each block's link: the mock is the first when there is one, the
+        // plugins follow in order.
+        let (mut blocks, mut mock_blocks) = (BTreeMap::new(), BTreeMap::new());
+        let block = |s: &String| cfg.blocks.get(s).cloned();
+        let mut next = usize::from(!mocks.is_empty());
+        for s in &specs {
+            match source::resolve(s) {
+                Source::Mock(m) => {
+                    blocks.extend(block(s).map(|b| (b, 0)));
+                    mock_blocks.extend(block(s).map(|b| (b, m)));
+                }
+                Source::Plugin(_) => {
+                    blocks.extend(block(s).map(|b| (b, next)));
+                    next += 1;
+                }
+            }
+        }
+        let by_block = |i: usize, name: &str| {
+            cfg.configured.contains(name)
+                || blocks
+                    .iter()
+                    .any(|(b, &j)| j == i && cfg.configured.contains(b))
+        };
         if !mocks.is_empty() {
             let mut link = launch.mock()?;
             let mut config = base.clone();
             config["schemas"] = json!(mocks);
-            configure(&mut link, config.clone())?;
+            // A mock schema the program configures by its block serves
+            // nothing until the settings arrive, as a plugin would.
+            if blocks
+                .iter()
+                .any(|(b, &j)| j == 0 && cfg.configured.contains(b))
+            {
+                awaiting.insert(0);
+            }
+            accounts.extend(configure(&mut link, config.clone())?.map(|a| (0, a)));
             links.push(link);
             bases.push(config);
         }
         for p in plugins {
             let mut link = launch.plugin(&p)?;
             let mut config = base.clone();
-            if cfg.configured.contains(&link.name) {
+            let i = links.len();
+            if by_block(i, &link.name) {
                 config["deferred"] = json!(true);
-                awaiting.insert(links.len());
+                awaiting.insert(i);
             }
-            configure(&mut link, config)
+            let account = configure(&mut link, config)
                 .with_context(|| format!("configure provider {}", p.display()))?;
+            accounts.extend(account.map(|a| (i, a)));
             links.push(link);
             bases.push(base.clone());
         }
@@ -220,6 +271,9 @@ impl Providers {
         Ok(Providers {
             bases,
             awaiting: RefCell::new(awaiting),
+            blocks,
+            mock_blocks,
+            accounts: RefCell::new(accounts),
             ..p
         })
     }
@@ -235,7 +289,7 @@ impl Providers {
             let [Term::Val(Value::Str(name)), Term::Val(v)] = a.args.as_slice() else {
                 continue;
             };
-            let Some(i) = self.link_named(name) else {
+            let Some(i) = self.link_for(name) else {
                 continue;
             };
             let Some(settings) = known_json(v) else {
@@ -246,8 +300,14 @@ impl Providers {
             }
             let mut config = self.bases.get(i).cloned().unwrap_or_else(|| json!({}));
             config["settings"] = settings.clone();
-            configure(&mut self.links[i].borrow_mut(), config)
+            let account = configure(&mut self.links[i].borrow_mut(), config)
                 .with_context(|| format!("configure provider {name} from provider_config"))?;
+            let mut accounts = self.accounts.borrow_mut();
+            match account {
+                Some(a) => accounts.insert(i, a),
+                None => accounts.remove(&i),
+            };
+            drop(accounts);
             self.settings.borrow_mut().insert(i, settings);
             self.awaiting.borrow_mut().remove(&i);
             changed = true;
@@ -281,7 +341,222 @@ impl Providers {
             bases: Vec::new(),
             awaiting: RefCell::new(BTreeSet::new()),
             settings: RefCell::new(BTreeMap::new()),
+            blocks: BTreeMap::new(),
+            mock_blocks: BTreeMap::new(),
+            accounts: RefCell::new(BTreeMap::new()),
         }
+    }
+
+    /// The types and the externs the provider `name` serves: a mock
+    /// schema's own (the mock plays several on one link), else its link's.
+    fn served(&self, name: &str, i: usize) -> Result<(BTreeSet<String>, BTreeSet<String>)> {
+        if let Some(spec) = self.mock_blocks.get(name) {
+            let s = crate::schema::load_provider(spec)?;
+            let types = s
+                .provider_of
+                .keys()
+                .chain(s.attrs.keys().map(|(t, _)| t))
+                .cloned()
+                .collect();
+            let externs = crate::externs::load_answers(std::slice::from_ref(spec))?
+                .into_iter()
+                .map(|a| a.pred)
+                .collect();
+            return Ok((types, externs));
+        }
+        let l = self.loaded();
+        let of = |m: &BTreeMap<String, usize>| {
+            m.iter()
+                .filter(|&(_, &j)| j == i)
+                .map(|(k, _)| k.clone())
+                .collect()
+        };
+        Ok((of(&l.owner), of(&l.externs)))
+    }
+
+    /// The link a program names: by the provider's own name, else by the
+    /// name of the `provider` block that selects it.
+    fn link_for(&self, name: &str) -> Option<usize> {
+        self.link_named(name)
+            .or_else(|| self.blocks.get(name).copied())
+    }
+
+    /// A provider's configuration is known before it answers anything: a
+    /// `provider_config(N, ..)` rule that reads, through any chain of
+    /// rules, an extern N answers or an attribute of a type N serves (its
+    /// computed values among them) is a compile error naming the cycle.
+    /// Reading another provider's is the lazy configuration: its settings
+    /// wait on that provider's nulls. `local`: the externs the engine
+    /// answers itself (tables, `file.*`, `env_var`).
+    pub fn check_configuration(
+        &self,
+        program: &crate::ast::Program,
+        externs: &[crate::ast::ExternFn],
+        local: impl Fn(&str) -> bool,
+    ) -> Result<()> {
+        use crate::ast::{Lit, Stmt};
+        let rules: Vec<(&Atom, &[Lit])> = program
+            .statements
+            .iter()
+            .filter_map(|s| match s {
+                Stmt::Rule(r) => Some((&r.head, r.body.as_slice())),
+                Stmt::Fact(a) => Some((a, &[][..])),
+                _ => None,
+            })
+            .collect();
+        let declared: BTreeSet<&str> = externs.iter().map(|f| f.name.as_str()).collect();
+        let text = |t: &Term| match t {
+            Term::Val(Value::Str(s)) => Some(s.clone()),
+            _ => None,
+        };
+        let mut diags = Vec::new();
+        for (head, body) in rules.iter().filter(|(h, _)| h.pred == "provider_config") {
+            let Some(name) = head.args.first().and_then(text) else {
+                continue;
+            };
+            let Some(i) = self.link_for(&name) else {
+                continue;
+            };
+            let (types, answers) = self.served(&name, i)?;
+            // What a body atom reads that the provider serves, if it does.
+            let served = |a: &Atom| -> Option<String> {
+                if declared.contains(a.pred.as_str()) && !local(&a.pred) {
+                    return answers
+                        .contains(&a.pred)
+                        .then(|| format!("extern {}", a.pred));
+                }
+                let typed = matches!(
+                    a.pred.as_str(),
+                    "attr" | "cloud_attr" | "cloud_computed" | "cloud_exists"
+                );
+                let t = a.args.first().and_then(text).filter(|_| typed)?;
+                let what = match (a.args.get(1).and_then(text), a.args.get(2).and_then(text)) {
+                    (Some(n), Some(p)) if a.pred != "cloud_exists" => {
+                        format!("{t}.{n}.{}", p.trim_start_matches('.'))
+                    }
+                    (Some(n), _) => format!("{t}.{n}"),
+                    _ => t.clone(),
+                };
+                types.contains(&t).then_some(what)
+            };
+            // A reference in a head: `ref(T, N, P)` of a type it serves.
+            fn reference(t: &Term, types: &BTreeSet<String>) -> Option<String> {
+                match t {
+                    Term::Val(Value::Ref { typ, name, attr }) if types.contains(typ) => {
+                        Some(format!("{typ}.{name}.{attr}"))
+                    }
+                    Term::Func { name, args } if name == "ref" => match args.as_slice() {
+                        [Term::Val(Value::Str(t)), Term::Val(Value::Str(n)), p]
+                            if types.contains(t) =>
+                        {
+                            let p = match p {
+                                Term::Val(Value::Str(p)) => p.trim_start_matches('.').to_string(),
+                                _ => "..".to_string(),
+                            };
+                            Some(format!("{t}.{n}.{p}"))
+                        }
+                        _ => None,
+                    },
+                    Term::Func { args, .. } | Term::List(args) => {
+                        args.iter().find_map(|a| reference(a, types))
+                    }
+                    Term::Obj(m) => m.values().find_map(|a| reference(a, types)),
+                    _ => None,
+                }
+            }
+            // Depth first from the rule: the chain of predicates to the
+            // first thing it reads that the provider serves.
+            let mut seen = BTreeSet::new();
+            let mut stack: Vec<(&Atom, &[Lit], Vec<String>)> = vec![(head, body, Vec::new())];
+            let mut found = None;
+            'search: while let Some((h, b, path)) = stack.pop() {
+                if let Some(what) = h.args.iter().find_map(|t| reference(t, &types)) {
+                    found = Some((path.clone(), what));
+                    break 'search;
+                }
+                for l in b {
+                    let (Lit::Pos(a) | Lit::Not(a)) = l else {
+                        continue;
+                    };
+                    if let Some(what) = served(a) {
+                        found = Some((path.clone(), what));
+                        break 'search;
+                    }
+                    if seen.insert(a.pred.as_str()) {
+                        let mut p = path.clone();
+                        p.push(a.pred.clone());
+                        for (h2, b2) in &rules {
+                            if h2.pred == a.pred {
+                                stack.push((h2, b2, p.clone()));
+                            }
+                        }
+                    }
+                }
+            }
+            let Some((path, what)) = found else { continue };
+            let mut cycle = vec![format!("provider {name}'s configuration")];
+            cycle.extend(path.iter().map(|p| format!("reads {p}")));
+            cycle.push(format!("reads {what}"));
+            cycle.push(format!("which provider {name} serves"));
+            diags.push(
+                crate::diag::Diagnostic::error(
+                    head.span,
+                    format!(
+                        "provider {name} is configured from {what}, which it serves itself: a cycle"
+                    ),
+                )
+                .with_note(format!("the cycle: {}", cycle.join(" -> ")))
+                .with_help(
+                    "a provider's configuration is evaluated before anything it serves: read \
+                     inputs, settings, tables, env_var, or another provider's values",
+                ),
+            );
+        }
+        if diags.is_empty() {
+            Ok(())
+        } else {
+            Err(crate::diag::Diagnostics(diags).into())
+        }
+    }
+
+    /// `expect_account` (`provider_expect_account(Name, Account)` in
+    /// `facts`): each configured provider it names reports that account at
+    /// Configure, or the run is refused before anything is planned. A
+    /// provider still waiting on the program's settings is checked once
+    /// they arrive.
+    pub fn check_accounts<'a>(&self, facts: impl IntoIterator<Item = &'a Atom>) -> Result<()> {
+        let mut wrong = Vec::new();
+        for a in facts.into_iter().filter(|a| a.pred == EXPECT_ACCOUNT) {
+            let [Term::Val(Value::Str(name)), Term::Val(want)] = a.args.as_slice() else {
+                continue;
+            };
+            let Some(i) = self.link_for(name) else {
+                continue;
+            };
+            if self.awaiting.borrow().contains(&i) {
+                continue;
+            }
+            let want = match want {
+                Value::Str(s) => s.clone(),
+                v => crate::partition::fmt_value(v),
+            };
+            match self.accounts.borrow().get(&i) {
+                Some(got) if *got == want => {}
+                Some(got) => wrong.push(format!(
+                    "provider {name} reports account {got}, but the program expects {want} \
+                     (expect_account)"
+                )),
+                None => wrong.push(format!(
+                    "provider {name} reports no account, but the program expects {want} \
+                     (expect_account): {} cannot tell which account its credentials reach",
+                    self.names[i]
+                )),
+            }
+        }
+        if wrong.is_empty() {
+            return Ok(());
+        }
+        bail!("refusing to plan: {}", wrong.join("; "))
     }
 
     /// Ask every provider for its schema: the rows of the `scope` types

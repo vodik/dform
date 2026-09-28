@@ -438,6 +438,21 @@ impl<'a> Externs<'a> {
         self.answers(|f| !f.args.iter().any(is_secret))
     }
 
+    /// The environment variables the last evaluation read with `env_var`,
+    /// as their labels (`env_var/NAME`): what the plan file records of
+    /// them, never the value.
+    pub fn env_labels(&self) -> Vec<String> {
+        self.demanded
+            .borrow()
+            .iter()
+            .filter(|c| c.pred == crate::syntax::resolve::ENV_VAR)
+            .filter_map(|c| match c.inputs.as_slice() {
+                [Value::Str(n)] => Some(format!("{}/{n}", c.pred)),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// The answers of `persist` externs the last evaluation read, for state.
     pub fn persisted(&self) -> Vec<Answer> {
         self.answers(|f| f.persist)
@@ -514,6 +529,32 @@ pub fn file(
         _ => Err(anyhow::anyhow!(
             "the file provider answers file.json and file.text, not {}",
             f.name
+        )),
+    })
+}
+
+/// The builtin `env_var(+name, -value: secret(string))`: the process
+/// environment's variable. Its column is a secret, so the plan file never
+/// records the answer ([`Externs::recorded`]), only its label
+/// ([`Externs::env_labels`]), and it is not `persist`: every run reads the
+/// environment again. An unset variable is an error naming it. `None` for
+/// another extern.
+pub fn env_var(f: &ExternFn, inputs: &[Value]) -> Option<Result<Vec<Vec<Value>>>> {
+    if f.name != crate::syntax::resolve::ENV_VAR {
+        return None;
+    }
+    Some(match inputs {
+        [Value::Str(name)] => match std::env::var(name) {
+            Ok(v) => Ok(vec![row(f, inputs, vec![Value::Str(v)])]),
+            Err(std::env::VarError::NotPresent) => Err(anyhow::anyhow!(
+                "env_var: {name} is not set in the environment"
+            )),
+            Err(std::env::VarError::NotUnicode(_)) => {
+                Err(anyhow::anyhow!("env_var: {name} is not UTF-8"))
+            }
+        },
+        _ => Err(anyhow::anyhow!(
+            "env_var takes the variable's name, a string"
         )),
     })
 }

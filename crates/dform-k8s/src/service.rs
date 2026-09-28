@@ -744,7 +744,7 @@ impl pb::provider_server::Provider for Service {
             ..k8s
         };
         *self.k8s.write().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(k8s));
-        Ok(Response::new(pb::ConfigureResponse {}))
+        Ok(Response::new(pb::ConfigureResponse::default()))
     }
 
     async fn schema(&self, req: Request<pb::SchemaRequest>) -> Reply<pb::SchemaResponse> {

@@ -13,7 +13,8 @@
 //! a deployment and change it in place. `rekey` moves one deployment's
 //! state to another key value. `provider name {
 //! source = "path" }.` selects a provider: a plugin executable, or a schema
-//! the mock provider plays.
+//! the mock provider plays; the block's other settings configure it
+//! (`provider_config`, lowered by the resolver).
 //!
 //! Cross-stack values: an apply records the stack's outputs in its state
 //! and the stack's absolute state path in the registry `stacks.json` under
@@ -61,6 +62,9 @@ pub struct Stack {
     pub bootstrap: bool,
     /// Provider schemas, as `--provider` takes them: a name or a path.
     pub providers: Vec<String>,
+    /// Each `provider NAME { .. }` block's spec (as in `providers`) ->
+    /// NAME: the block's settings configure the provider it selects.
+    pub provider_blocks: BTreeMap<String, String>,
     /// `stack app[env, region]`: the inputs that key the stack, in order,
     /// each a stack input (checked here).
     pub keys: Vec<(String, Span)>,
@@ -187,7 +191,11 @@ pub fn config(program: &Program) -> Result<Stack> {
                 out.keys = c.keys.clone();
                 stack_config(c, &mut out, &mut diags);
             }
-            Stmt::Provider(c) => out.providers.push(provider(c, &mut diags)),
+            Stmt::Provider(c) => {
+                let spec = provider(c, &mut diags);
+                out.provider_blocks.insert(spec.clone(), c.name.clone());
+                out.providers.push(spec);
+            }
             _ => {}
         }
     }

@@ -99,6 +99,24 @@ settings prod {
 let cfg = settings[env]
 
 ########################################
+# Provider (configured by the key)
+########################################
+
+# The mock plays the google types. Each deployment configures it from its
+# own settings row, and refuses to plan when the account the provider
+# reports is not the one this env names: the same shell cannot point
+# prod's plan at dev's project. Against the real provider the credentials
+# would come from the environment, by key, as a secret:
+#   credentials = env_var("GOOGLE_CREDENTIALS_{env}")
+# and the account from the credentials; the mock reports its `account`.
+provider fake {
+  project = cfg.project_id
+  region = cfg.region
+  account = cfg.project_id
+  expect_account = cfg.project_id
+}
+
+########################################
 # Peerings (a table: one row per peering, every env's)
 ########################################
 
@@ -460,6 +478,43 @@ output project_id = cfg.project_id
     (index_expression
       (identifier)
       (identifier)))
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (provider
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (member_expression
+          (identifier)
+          (identifier)))
+      (field
+        (block_path
+          (identifier))
+        (member_expression
+          (identifier)
+          (identifier)))
+      (field
+        (block_path
+          (identifier))
+        (member_expression
+          (identifier)
+          (identifier)))
+      (field
+        (block_path
+          (identifier))
+        (member_expression
+          (identifier)
+          (identifier)))))
   (comment)
   (comment)
   (comment)

@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== examples/pngu/stacks/pngu.df: 155 nodes, 387 edges (270 negative)
+== examples/pngu/stacks/pngu.df: 157 nodes, 392 edges (273 negative)
    STRATIFIED, 4 strata
    stratum 0:
      (arg, input, env)
@@ -121,6 +121,8 @@ exit: ok
      (want, google_monitoring_dashboard)
      deny
      env
+     provider_config
+     provider_expect_account
    stratum 3:
      (attr, alert_metrics_pack, enable_standard_gke_alerts)
      (attr, alert_metrics_pack, notification_channel_display_name)

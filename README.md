@@ -302,6 +302,35 @@ plugin instead, started on its own; each type goes to the provider whose
 schema declares it. The world file, the inventory and `--chaos` reach the mock
 at Configure.
 
+A `provider` block's settings other than `source` configure the provider,
+and read like any rule reads: inputs, settings rows, value names, tables and
+`env_var`. A keyed deployment configures its providers by its key:
+
+```dform
+provider google {
+  project = cfg.project_id                                # the env's settings row
+  credentials = env_var("GOOGLE_CREDENTIALS_{env}")       # a secret, per key
+  expect_account = cfg.project_id
+}
+```
+
+The block lowers to `provider_config("google", { project: .., credentials:
+.. })`, which reaches the provider at a second Configure as `settings` once
+the evaluation knows it (the provider serves nothing until then; see "The
+Kubernetes provider"). `env_var("NAME")` is a builtin extern answering the
+process environment's variable as a `secret(string)`: never persisted, and
+recorded in the plan file only by its label (`inputs.env`:
+`env_var/NAME`); an unset one is an error naming it. A provider's
+configuration may not read what that provider serves itself (its externs,
+its resources' attributes): that is a compile error naming the chain of
+rules. Reading another provider's values is the lazy configuration: the
+settings wait on its nulls. `expect_account = t` is checked, not sent:
+Configure answers with the account the provider's credentials reach, when
+it can tell (the mock reports its `account` setting), and a run whose
+provider reports another account, or none, refuses to plan, naming both
+(`deployment pngu[env=prod]: refusing to plan: provider google reports
+account renfry-dev, but the program expects renfry-prod`).
+
 The workspace keeps the engine apart from the transport. `dform-core`
 (`crates/dform-core`: parser, engine, planner, executor, printer) speaks to
 providers through a synchronous, completion-based trait
@@ -1237,7 +1266,8 @@ A program declares its inputs, typed, with an optional default and an
 optional refinement:
 
 ```dform
-input env: enum("dev", "staging", "prod") = "staging"
+type environment = enum("dev", "staging", "prod")   # an alias: the enum wherever it is written
+input env: environment = "staging"
 input replicas: int = 2 where 1 <= replicas, replicas <= 10
 input allowed_cidrs: list(inet) = []
 input owner: string                       # required: no default
@@ -1252,7 +1282,9 @@ where the file states it; the plan file records each input file's digest.
 
 Types are `int`, `string`, `bool`, `inet`, `enum(a, b, ...)`, `list(T)`,
 `set(T)` and objects `{ k: T }` (`addr`, `ref(...)` and `any` are
-unchecked). A `--set` value is read as its input's type (an `inet` parses,
+unchecked). `type NAME = TYPE` names a type anywhere a type is written; an
+imported file's aliases are in scope, and a module's once it says `export
+type NAME` (docs/grammar.md "Type aliases"). A `--set` value is read as its input's type (an `inet` parses,
 a `string` takes the text) and checked before evaluation: `--set env=qa`
 is an error naming the input and its type, and so is `--set` of an input
 the program does not declare. A value the program computes (a module

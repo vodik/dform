@@ -554,6 +554,10 @@ pub mod file {
         pub providers: Vec<String>,
         pub world: Option<String>,
         pub inventory: Option<String>,
+        /// The environment variables the program read (`env_var`), by
+        /// label (`env_var/NAME`): never their values.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pub env: Vec<String>,
     }
 
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
