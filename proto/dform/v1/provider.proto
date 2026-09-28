@@ -132,7 +132,18 @@ message ConfigureRequest {
 
 message ConfigureResponse {}
 
-message SchemaRequest {}
+message SchemaRequest {
+  // When set, the per-type rows (type_attr, type_list_key, type_retry,
+  // type_replace, type_mint) of these types and of the types they alias
+  // (type_alias, closed), plus every type_provider and type_alias row: the
+  // types a run names. Absent: the whole schema. A provider may answer
+  // with more than asked; dform keeps what it needs.
+  optional TypeFilter types = 1;
+}
+
+message TypeFilter {
+  repeated string names = 1;
+}
 
 message SchemaResponse {
   // type_attr/4, type_list_key/3, type_provider/2, type_mint/3,

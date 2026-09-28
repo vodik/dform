@@ -31,6 +31,9 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tonic::{Request, Response, Status};
 
+/// The cluster's OpenAPI document, cached in the stack's state directory.
+const OPENAPI_CACHE: &str = "k8s-openapi.json";
+
 /// How long a delete waits for the object to go before it answers.
 const DELETE_WAIT: Duration = Duration::from_secs(60);
 /// How long a destroy-first replacement waits for the old object to go.
@@ -45,17 +48,22 @@ pub struct K8s {
 
 impl K8s {
     /// Configure: the cluster the environment names and its schema, else
-    /// offline on the snapshot. `cache` is where the schema is cached.
+    /// offline on the snapshot. `cache` is the directory the OpenAPI
+    /// document and the schema derived from it are cached in.
     pub async fn configure(cache: Option<PathBuf>) -> Result<K8s> {
-        let aliases = openapi::aliases()?;
         let why = if std::env::var_os("DFORM_K8S_OFFLINE").is_some_and(|v| !v.is_empty()) {
             "DFORM_K8S_OFFLINE is set".to_string()
         } else {
             match Cluster::infer().await {
                 Err(e) => format!("{e:#}"),
-                Ok(c) => match c.openapi(cache.as_deref()).await {
+                Ok(c) => match c
+                    .openapi(cache.as_deref().map(|d| d.join(OPENAPI_CACHE)).as_deref())
+                    .await
+                {
                     Ok(doc) => {
-                        let derived = openapi::derive(&doc, &aliases)?;
+                        let derived = openapi::cached(&doc.hash.clone(), cache.as_deref(), || {
+                            openapi::derive(&doc.parse()?, &openapi::aliases()?)
+                        })?;
                         return Ok(K8s {
                             derived,
                             cluster: Ok(c),
@@ -72,7 +80,7 @@ impl K8s {
             );
         }
         Ok(K8s {
-            derived: openapi::snapshot()?,
+            derived: openapi::snapshot_cached(cache.as_deref())?,
             cluster: Err(why),
         })
     }
@@ -554,25 +562,18 @@ impl pb::provider_server::Provider for Service {
 
     async fn configure(&self, req: Request<pb::ConfigureRequest>) -> Reply<pb::ConfigureResponse> {
         let config = doc_of(req.into_inner().config.as_ref())?.unwrap_or(json!({}));
-        let cache = config.get("world").and_then(Json::as_str).and_then(|w| {
-            std::path::Path::new(w)
-                .parent()
-                .map(|d| d.join("k8s-openapi.json"))
-        });
+        let cache = config
+            .get("world")
+            .and_then(Json::as_str)
+            .and_then(|w| std::path::Path::new(w).parent().map(PathBuf::from));
         let k8s = K8s::configure(cache).await.map_err(invalid)?;
         *self.k8s.write().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(k8s));
         Ok(Response::new(pb::ConfigureResponse {}))
     }
 
-    async fn schema(&self, _: Request<pb::SchemaRequest>) -> Reply<pb::SchemaResponse> {
+    async fn schema(&self, req: Request<pb::SchemaRequest>) -> Reply<pb::SchemaResponse> {
         let k8s = self.k8s()?;
-        let facts = k8s
-            .schema()
-            .facts
-            .iter()
-            .map(wire::fact)
-            .collect::<Result<_>>()
-            .map_err(invalid)?;
+        let facts = wire::schema_facts(k8s.schema(), req.get_ref()).map_err(invalid)?;
         Ok(Response::new(pb::SchemaResponse {
             facts,
             externs: Vec::new(),

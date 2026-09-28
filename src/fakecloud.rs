@@ -902,15 +902,9 @@ impl pb::provider_server::Provider for Service {
         Ok(tonic::Response::new(pb::ConfigureResponse {}))
     }
 
-    async fn schema(&self, _: tonic::Request<pb::SchemaRequest>) -> Reply<pb::SchemaResponse> {
+    async fn schema(&self, req: tonic::Request<pb::SchemaRequest>) -> Reply<pb::SchemaResponse> {
         let cloud = self.cloud();
-        let facts = cloud
-            .schema()
-            .facts
-            .iter()
-            .map(wire::fact)
-            .collect::<Result<_>>()
-            .map_err(invalid)?;
+        let facts = wire::schema_facts(cloud.schema(), req.get_ref()).map_err(invalid)?;
         let externs = cloud
             .externs()
             .into_iter()

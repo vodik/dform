@@ -97,6 +97,38 @@ fn api_write_error(s: &Status) -> WriteError {
     WriteError::Other(anyhow!("{} ({})", s.message, s.code))
 }
 
+/// A cluster's OpenAPI document and its hash (of the cache file's text,
+/// which holds the server's index and the document).
+pub struct Document {
+    pub hash: String,
+    /// The cache file's text, not parsed yet.
+    text: Option<String>,
+    parsed: Option<Json>,
+}
+
+impl Document {
+    fn cached(text: String) -> Document {
+        Document {
+            hash: crate::zset::file::fnv64(text.as_bytes()),
+            text: Some(text),
+            parsed: None,
+        }
+    }
+
+    /// The document, `{"paths": {GV: DOC}}`.
+    pub fn parse(self) -> Result<Json> {
+        match (self.parsed, self.text) {
+            (Some(doc), _) => Ok(doc),
+            (None, Some(text)) => {
+                let mut cached: Json =
+                    serde_json::from_str(&text).context("parse the cached OpenAPI document")?;
+                Ok(cached["document"].take())
+            }
+            (None, None) => Err(anyhow!("no OpenAPI document")),
+        }
+    }
+}
+
 impl Cluster {
     /// The cluster the environment names: `KUBECONFIG` or `~/.kube/config`,
     /// else the pod's service account. Nothing is contacted yet.
@@ -130,8 +162,16 @@ impl Cluster {
     /// group-version's document. The copy cached in the file `cache` is used
     /// as is when its index is the server's (the index names each
     /// document's hash); otherwise the documents are fetched and the cache
-    /// rewritten.
-    pub async fn openapi(&self, cache: Option<&Path>) -> Result<Json> {
+    /// rewritten. A cached document is parsed only if it is needed
+    /// ([`Document::parse`]): its derived schema may be cached too.
+    pub async fn openapi(&self, cache: Option<&Path>) -> Result<Document> {
+        /// A cache file's index, its document skipped.
+        #[derive(serde::Deserialize)]
+        struct Head {
+            index: Json,
+            #[allow(dead_code)]
+            document: serde::de::IgnoredAny,
+        }
         let index = self.get_json("/openapi/v3").await?;
         let urls = index
             .get("paths")
@@ -139,10 +179,10 @@ impl Cluster {
             .ok_or_else(|| anyhow!("the /openapi/v3 index has no paths"))?;
         if let Some(cache) = cache
             && let Ok(text) = std::fs::read_to_string(cache)
-            && let Ok(cached) = serde_json::from_str::<Json>(&text)
-            && cached.get("index") == Some(&index)
+            && let Ok(head) = serde_json::from_str::<Head>(&text)
+            && head.index == index
         {
-            return Ok(cached["document"].clone());
+            return Ok(Document::cached(text));
         }
         let mut paths = serde_json::Map::new();
         for (gv, entry) in urls {
@@ -157,15 +197,19 @@ impl Cluster {
             paths.insert(gv.clone(), self.get_json(url).await?);
         }
         let document = json!({ "paths": paths });
+        let cached = json!({"server": self.url, "index": index, "document": document});
+        let text = serde_json::to_string(&cached)?;
         if let Some(cache) = cache {
             if let Some(dir) = cache.parent() {
                 let _ = std::fs::create_dir_all(dir);
             }
-            let cached = json!({"server": self.url, "index": index, "document": document});
-            std::fs::write(cache, serde_json::to_vec(&cached)?)
-                .with_context(|| format!("write {}", cache.display()))?;
+            std::fs::write(cache, &text).with_context(|| format!("write {}", cache.display()))?;
         }
-        Ok(document)
+        Ok(Document {
+            hash: crate::zset::file::fnv64(text.as_bytes()),
+            text: None,
+            parsed: Some(document),
+        })
     }
 
     /// The object, or `None` if there is none.

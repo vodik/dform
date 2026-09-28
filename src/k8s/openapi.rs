@@ -42,6 +42,7 @@ use crate::value::Value;
 use anyhow::{Context, Result, anyhow};
 use serde_json::{Map, Value as Json};
 use std::collections::BTreeMap;
+use std::path::Path;
 
 /// The OpenAPI document of a recent Kubernetes release, trimmed to the
 /// mock's kinds and the common workload and RBAC kinds: the schema when no
@@ -119,7 +120,7 @@ pub const SERVER_DEFAULTED: [&str; 44] = [
 ];
 
 /// A kind the API serves: where its objects live and what they are called.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Kind {
     /// Empty for the core group.
     pub group: String,
@@ -289,6 +290,132 @@ pub fn derive(doc: &Json, aliases: &[(String, String)]) -> Result<Derived> {
 pub fn snapshot() -> Result<Derived> {
     let doc: Json = serde_json::from_str(SNAPSHOT).context("parse the OpenAPI snapshot")?;
     derive(&doc, &aliases()?)
+}
+
+/// The derived schema of the checked-in snapshot, from the cache in `dir`
+/// when it holds the snapshot's ([`cached`]).
+pub fn snapshot_cached(dir: Option<&Path>) -> Result<Derived> {
+    cached(
+        &crate::zset::file::fnv64(SNAPSHOT.as_bytes()),
+        dir,
+        snapshot,
+    )
+}
+
+/// This module's source: a cached derivation is of this code.
+const SOURCE: &str = include_str!("openapi.rs");
+
+/// Where the derived schema is cached, beside the OpenAPI document's cache.
+pub const DERIVED_CACHE: &str = "k8s-schema.json";
+
+/// The schema derived from the OpenAPI document whose hash is `doc_hash`:
+/// read from `DIR/k8s-schema.json` when that is keyed by the document's
+/// hash (and this derivation's source and aliases), else `derive`d and
+/// written there. Deriving is most of what the provider does at Configure;
+/// the cache skips parsing the document too.
+pub fn cached(
+    doc_hash: &str,
+    dir: Option<&Path>,
+    derive: impl FnOnce() -> Result<Derived>,
+) -> Result<Derived> {
+    use crate::zset::file::fnv64;
+    let key = fnv64(
+        format!(
+            "{doc_hash} {} {}",
+            fnv64(SOURCE.as_bytes()),
+            fnv64(MOCK.as_bytes())
+        )
+        .as_bytes(),
+    );
+    let path = dir.map(|d| d.join(DERIVED_CACHE));
+    if let Some(p) = &path
+        && let Ok(text) = std::fs::read_to_string(p)
+        && let Some(d) = decode(&text, &key)
+    {
+        return Ok(d);
+    }
+    let d = derive()?;
+    if let Some(p) = &path
+        && let Some(text) = encode(&d, &key)
+    {
+        if let Some(dir) = p.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        std::fs::write(p, text).with_context(|| format!("write {}", p.display()))?;
+    }
+    Ok(d)
+}
+
+/// A cached derivation: `{"key", "kinds", "facts": [[PRED, ARG...]]}`,
+/// each argument a string, an integer or a list of them. `None` for a
+/// schema with anything else.
+fn encode(d: &Derived, key: &str) -> Option<String> {
+    fn value(v: &Value) -> Option<Json> {
+        Some(match v {
+            Value::Str(s) => Json::String(s.clone()),
+            Value::Int(n) => Json::from(*n),
+            Value::List(xs) => Json::Array(xs.iter().map(value).collect::<Option<_>>()?),
+            _ => return None,
+        })
+    }
+    fn term(t: &Term) -> Option<Json> {
+        match t {
+            Term::Val(v) => value(v),
+            _ => None,
+        }
+    }
+    let facts = d
+        .schema
+        .facts
+        .iter()
+        .map(|f| {
+            let mut row = vec![Json::String(f.pred.clone())];
+            for a in &f.args {
+                row.push(term(a)?);
+            }
+            Some(Json::Array(row))
+        })
+        .collect::<Option<Vec<_>>>()?;
+    serde_json::to_string(&serde_json::json!({"key": key, "kinds": d.kinds, "facts": facts})).ok()
+}
+
+/// The cached derivation in `text`, if it is keyed `key` and whole.
+fn decode(text: &str, key: &str) -> Option<Derived> {
+    fn value(v: &Json) -> Option<Value> {
+        Some(match v {
+            Json::String(s) => Value::Str(s.clone()),
+            Json::Number(n) => Value::Int(n.as_i64()?),
+            Json::Array(xs) => Value::List(xs.iter().map(value).collect::<Option<_>>()?),
+            _ => return None,
+        })
+    }
+    let term = |v: &Json| value(v).map(Term::Val);
+    #[derive(serde::Deserialize)]
+    struct Cached {
+        key: String,
+        kinds: BTreeMap<String, Kind>,
+        facts: Vec<Vec<Json>>,
+    }
+    let c: Cached = serde_json::from_str(text).ok()?;
+    if c.key != key {
+        return None;
+    }
+    let facts = c
+        .facts
+        .iter()
+        .map(|row| {
+            let (pred, args) = row.split_first()?;
+            Some(atom(
+                pred.as_str()?,
+                args.iter().map(term).collect::<Option<_>>()?,
+            ))
+        })
+        .collect::<Option<Vec<_>>>()?;
+    let schema = Schema::from_facts(&facts).ok()?;
+    Some(Derived {
+        kinds: c.kinds,
+        schema,
+    })
 }
 
 /// Whether a property's `default` is one the server applies: not the zero

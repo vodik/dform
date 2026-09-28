@@ -437,7 +437,9 @@ pub fn is_schema_pred(pred: &str) -> bool {
 /// The types a lowered program and the facts given to it name: every
 /// symbol they hold, and the type of every ref. `None` when a rule reads a
 /// per-type schema predicate for a type it does not spell out
-/// (`type_attr(T, ...)`): such a program sees the whole schema.
+/// (`type_attr(T, ...)`), or wants a resource whose type is not a constant
+/// in the rule's head (built at runtime, `T = format("k8s.%s", K)`): such
+/// a program sees the whole schema.
 pub fn named_types(program: &crate::ast::Program, facts: &[Atom]) -> Option<BTreeSet<String>> {
     use crate::ast::Lit;
     fn value(v: &Value, out: &mut BTreeSet<String>) {
@@ -501,6 +503,9 @@ pub fn named_types(program: &crate::ast::Program, facts: &[Atom]) -> Option<BTre
         match s {
             Stmt::Fact(a) => atom(a, &mut out)?,
             Stmt::Rule(r) => {
+                if r.head.pred == "want" && !matches!(r.head.args.first(), Some(Term::Val(_))) {
+                    return None;
+                }
                 atom(&r.head, &mut out)?;
                 r.body.iter().try_for_each(|l| lit(l, &mut out))?
             }

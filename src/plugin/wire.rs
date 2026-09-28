@@ -198,6 +198,22 @@ pub fn from_doc_or_empty(v: Option<&pb::Value>) -> Result<Json> {
     }
 }
 
+/// A Schema answer's facts: those of the types the request names
+/// ([`crate::schema::Schema::facts_for`]), or all of them.
+pub fn schema_facts(
+    schema: &crate::schema::Schema,
+    req: &pb::SchemaRequest,
+) -> Result<Vec<pb::Fact>> {
+    match &req.types {
+        Some(t) => schema
+            .facts_for(&t.names.iter().cloned().collect())
+            .iter()
+            .map(fact)
+            .collect(),
+        None => schema.facts.iter().map(fact).collect(),
+    }
+}
+
 pub fn fact(a: &Atom) -> Result<pb::Fact> {
     fn ground(t: &Term) -> Result<Value> {
         match t {

@@ -442,7 +442,8 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
         Cmd::Apply { chaos, .. } => chaos.clone(),
         _ => Vec::new(),
     };
-    let backend = Providers::start(
+    // The schema is asked for once the run knows the types it names.
+    let backend = Providers::start_deferred(
         &providers,
         &plugin::Config {
             world: paths.world.clone(),
@@ -450,10 +451,6 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
             chaos: chaos_specs,
         },
     )?;
-    // The static secret pass, against the provider's schema.
-    if let Some(l) = &lowered {
-        dform::secrets::check(l, backend.schema())?;
-    }
     // Externs are asked on demand: of the file provider, else of the mock.
     let (no_program, no_fns) = (dform::ast::Program { statements: vec![] }, vec![]);
     let program_dir = files[0].parent().unwrap_or(Path::new("")).to_path_buf();
@@ -488,10 +485,13 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
     base_extra.extend(build_extra_facts(&cli.data)?);
     base_extra.extend(dform::stack::stack_outputs(&root, &stack)?);
     let discovered = backend.discover()?;
-    base_extra.extend(
-        backend
-            .catalog(catalog_scope(&cli.cmd, &program, &base_extra, &discovered, &st).as_ref())?,
-    );
+    let scope = catalog_scope(&cli.cmd, &program, &base_extra, &discovered, &st);
+    backend.load_schema(scope.as_ref())?;
+    // The static secret pass, against the provider's schema.
+    if let Some(l) = &lowered {
+        dform::secrets::check(l, backend.schema())?;
+    }
+    base_extra.extend(backend.catalog(scope.as_ref())?);
     base_extra.extend(discovered);
     if let Some(h) = hook.as_deref_mut() {
         base_extra.extend(h.drift_facts(&backend.observe(&st)?));

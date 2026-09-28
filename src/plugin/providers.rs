@@ -35,7 +35,7 @@ use crate::value::{NullClass, Value};
 use crate::zset::{self, Lifecycle};
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value as Json, json};
-use std::cell::RefCell;
+use std::cell::{OnceCell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
@@ -86,11 +86,9 @@ pub const INVENTORY: [(&str, usize); 3] = [
 
 pub struct Providers {
     conns: Vec<Conn>,
-    schema: Schema,
-    /// Type -> the provider serving it.
-    owner: BTreeMap<String, usize>,
-    /// Extern predicate -> the provider answering it.
-    externs: BTreeMap<String, usize>,
+    /// The providers' Schema answers: loaded at start, or, for a run that
+    /// scopes them to the types it names, by [`Providers::load_schema`].
+    loaded: OnceCell<Loaded>,
     /// The provider for a type nobody declares: the mock, else the first.
     fallback: usize,
     /// The last refresh and the objects state mapped for it: one run reads
@@ -101,6 +99,17 @@ pub struct Providers {
     imported: RefCell<BTreeMap<String, Option<Object>>>,
     /// What the providers said during the last apply, for the CLI to print.
     notes: RefCell<Vec<String>>,
+}
+
+/// What the providers' Schema calls answered.
+struct Loaded {
+    schema: Schema,
+    /// Type -> the provider serving it.
+    owner: BTreeMap<String, usize>,
+    /// Extern predicate -> the provider answering it.
+    externs: BTreeMap<String, usize>,
+    /// The types asked for; `None`: every one.
+    scope: Option<BTreeSet<String>>,
 }
 
 fn configure(conn: &Conn, config: Json) -> Result<()> {
@@ -114,6 +123,15 @@ impl Providers {
     /// statements; none is the mock's `fake` schema): every mock schema in
     /// one mock provider, every plugin in its own process.
     pub fn start(specs: &[String], cfg: &Config) -> Result<Providers> {
+        let p = Self::start_deferred(specs, cfg)?;
+        p.load_schema(None)?;
+        Ok(p)
+    }
+
+    /// `start`, without asking for the schema yet: the caller asks with
+    /// [`Providers::load_schema`] once it knows the types it names, before
+    /// anything reads the schema.
+    pub fn start_deferred(specs: &[String], cfg: &Config) -> Result<Providers> {
         let specs: Vec<String> = if specs.is_empty() {
             vec!["fake".to_string()]
         } else {
@@ -146,17 +164,50 @@ impl Providers {
                 .with_context(|| format!("configure provider {}", p.display()))?;
             conns.push(conn);
         }
-        Self::from_conns(conns)
+        if conns.is_empty() {
+            bail!("no providers");
+        }
+        Ok(Self::deferred(conns))
     }
 
-    /// The providers of started, configured connections. The first serves
-    /// the types no schema declares.
+    /// The providers of started, configured connections, their schema
+    /// loaded. The first serves the types no schema declares.
     pub fn from_conns(conns: Vec<Conn>) -> Result<Providers> {
+        if conns.is_empty() {
+            bail!("no providers");
+        }
+        let p = Self::deferred(conns);
+        p.load_schema(None)?;
+        Ok(p)
+    }
+
+    fn deferred(conns: Vec<Conn>) -> Providers {
+        Providers {
+            conns,
+            loaded: OnceCell::new(),
+            fallback: 0,
+            refreshed: RefCell::new(None),
+            imported: RefCell::new(BTreeMap::new()),
+            notes: RefCell::new(Vec::new()),
+        }
+    }
+
+    /// Ask every provider for its schema: the rows of the `scope` types
+    /// (and the types they alias) and every `type_provider` and
+    /// `type_alias` row, or, with no scope, all of it. Once per run; a
+    /// second call is an error.
+    pub fn load_schema(&self, scope: Option<&BTreeSet<String>>) -> Result<()> {
         let mut schema = Schema::default();
         let mut owner = BTreeMap::new();
         let mut externs = BTreeMap::new();
-        for (i, conn) in conns.iter().enumerate() {
-            let resp = conn.call(|mut c| async move { c.schema(pb::SchemaRequest {}).await })?;
+        let types = scope.map(|s| pb::TypeFilter {
+            names: s.iter().cloned().collect(),
+        });
+        for (i, conn) in self.conns.iter().enumerate() {
+            let req = pb::SchemaRequest {
+                types: types.clone(),
+            };
+            let resp = conn.call(|mut c| async move { c.schema(req).await })?;
             let facts = resp
                 .facts
                 .iter()
@@ -172,32 +223,42 @@ impl Providers {
             }
             schema = schema.merge(s)?;
         }
-        if conns.is_empty() {
-            bail!("no providers");
-        }
-        Ok(Providers {
-            conns,
+        let loaded = Loaded {
             schema,
             owner,
             externs,
-            fallback: 0,
-            refreshed: RefCell::new(None),
-            imported: RefCell::new(BTreeMap::new()),
-            notes: RefCell::new(Vec::new()),
-        })
+            scope: scope.cloned(),
+        };
+        if self.loaded.set(loaded).is_err() {
+            bail!("internal: the providers' schema is loaded once");
+        }
+        Ok(())
+    }
+
+    fn loaded(&self) -> &Loaded {
+        self.loaded
+            .get()
+            .expect("internal: Providers::load_schema before the schema is read")
     }
 
     pub fn schema(&self) -> &Schema {
-        &self.schema
+        &self.loaded().schema
     }
 
     /// The providers' schema facts (`type_attr`, `type_list_key`,
     /// `type_provider`, `type_mint`, ...), injected into the program as EDB:
     /// those of the `named` types ([`Schema::facts_for`]), or all of them.
+    /// A schema loaded for fewer types than asked for is an error.
     pub fn catalog(&self, named: Option<&BTreeSet<String>>) -> Result<Vec<Atom>> {
+        let l = self.loaded();
+        if let Some(scope) = &l.scope
+            && named.is_none_or(|n| !n.is_subset(scope))
+        {
+            bail!("internal: the schema was loaded for fewer types than the run names");
+        }
         Ok(match named {
-            Some(named) => self.schema.facts_for(named),
-            None => self.schema.facts.clone(),
+            Some(named) => l.schema.facts_for(named),
+            None => l.schema.facts.clone(),
         })
     }
 
@@ -207,7 +268,11 @@ impl Providers {
     }
 
     fn route(&self, typ: &str) -> usize {
-        self.owner.get(typ).copied().unwrap_or(self.fallback)
+        self.loaded()
+            .owner
+            .get(typ)
+            .copied()
+            .unwrap_or(self.fallback)
     }
 
     fn conn_named(&self, name: &str) -> Option<usize> {
@@ -233,7 +298,12 @@ impl Providers {
     /// Query (E DR-18): an extern's answer, the rows of `pred` whose `+`
     /// columns (`plus`) are `inputs`. No row is an answer too.
     pub fn query(&self, pred: &str, plus: &[bool], inputs: &[Value]) -> Result<Vec<Vec<Value>>> {
-        let i = self.externs.get(pred).copied().unwrap_or(self.fallback);
+        let i = self
+            .loaded()
+            .externs
+            .get(pred)
+            .copied()
+            .unwrap_or(self.fallback);
         self.query_at(i, pred, plus, inputs)
     }
 
@@ -388,10 +458,10 @@ impl Providers {
                 span: Default::default(),
             });
             let paths = self
-                .schema
+                .schema()
                 .computed_of(&addr.typ)
                 .into_iter()
-                .chain(self.schema.optional_computed_of(&addr.typ));
+                .chain(self.schema().optional_computed_of(&addr.typ));
             for (path, class) in paths {
                 if class == NullClass::Secret {
                     continue;
@@ -432,7 +502,7 @@ impl Providers {
 
     /// The leaf-by-leaf changes from `before` to `after` (`provider::diff`).
     pub fn diff(&self, typ: &str, before: Option<&Json>, after: Option<&Json>) -> Vec<Change> {
-        provider::diff(&self.schema, typ, before, after)
+        provider::diff(self.schema(), typ, before, after)
     }
 
     /// The owning providers' Plan for each `(address, remote, prior, desired)`:
@@ -584,7 +654,7 @@ impl Providers {
     /// sets.
     fn world_doc(&self, typ: &str, cur: &Object, desired: &Json) -> Json {
         let mut doc = cur.attrs.clone();
-        for (attr, _) in self.schema.optional_computed_of(typ) {
+        for (attr, _) in self.schema().optional_computed_of(typ) {
             if get_path(desired, &attr).is_some()
                 && get_path(&doc, &attr).is_none()
                 && let Some(v) = get_path(&cur.computed, &attr)
@@ -741,7 +811,7 @@ impl Providers {
                 zset::Kind::Create => ActionKind::Create,
                 zset::Kind::Delete => unreachable!("a desired address is never deleted"),
                 zset::Kind::Update | zset::Kind::Drift if replaces => ActionKind::Replace {
-                    create_first: lifecycle.create_first(&self.schema, &addr),
+                    create_first: lifecycle.create_first(self.schema(), &addr),
                 },
                 zset::Kind::Drift => ActionKind::Drift,
                 zset::Kind::Update => ActionKind::Update,
@@ -787,7 +857,7 @@ impl Providers {
     /// null and secret markers as labeled nulls of the schema's class.
     fn flat_value(&self, typ: &str, doc: &Json) -> Value {
         let mut leaves = BTreeMap::new();
-        provider::flatten(&self.schema, typ, doc, "", "", false, &mut leaves);
+        provider::flatten(self.schema(), typ, doc, "", "", false, &mut leaves);
         Value::Obj(
             leaves
                 .into_iter()
@@ -818,9 +888,9 @@ impl Providers {
             return NullClass::Open;
         };
         let typ = ta.split_once('/').map(|x| x.0).unwrap_or(ta);
-        self.schema
+        self.schema()
             .class_of(typ, path)
-            .or_else(|| self.schema.optional_computed_class(typ, path))
+            .or_else(|| self.schema().optional_computed_class(typ, path))
             .unwrap_or(NullClass::Open)
     }
 

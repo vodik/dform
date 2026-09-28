@@ -651,6 +651,10 @@ fn the_demo_applies_through_the_api_server() {
     assert_eq!(r.summary(), "stack k8s_demo is undeformed", "{}", r.stdout);
     let cache = s.path(".dform/k8s_demo/k8s-openapi.json");
     assert!(cache.exists(), "the schema is cached in the state dir");
+    assert!(
+        s.path(".dform/k8s_demo/k8s-schema.json").exists(),
+        "and the schema derived from it"
+    );
     let fetched = api.count("GET /openapi/v3/", &[]);
     run(&["plan"]).success();
     assert_eq!(
@@ -875,4 +879,137 @@ fn a_field_another_manager_owns_fails_the_apply_naming_both() {
         5,
         "not forced"
     );
+}
+
+/// A type built at runtime (`format`) is named nowhere: the run asks for
+/// the whole schema, so the Job still gets its computed nulls.
+#[test]
+fn a_type_built_at_runtime_gets_the_whole_schema() {
+    let s = Scratch::new("k8s-runtime-type");
+    real_demo(&s);
+    s.write(
+        "k8s_demo.df",
+        &format!(
+            "{}\nwant(T, batch) :- K = \"job\", T = format(\"k8s.batch.v1.%s\", K).\n",
+            s.read("k8s_demo.df")
+        ),
+    );
+    let r = dform(&s, None, &["--file", "k8s_demo.df", "eval"]).success();
+    let facts: usize = r.stdout.lines().next().unwrap()["facts: ".len()..]
+        .parse()
+        .unwrap();
+    assert!(facts > 15_000, "{facts} facts: the schema was scoped");
+    let r = dform(
+        &s,
+        None,
+        &[
+            "--file",
+            "k8s_demo.df",
+            "query",
+            "attr(k8s.batch.v1.job, batch, metadata, V)",
+        ],
+    )
+    .success();
+    assert!(
+        r.stdout
+            .contains("uid: ?k8s.batch.v1.job/batch#metadata.uid"),
+        "{}",
+        r.stdout
+    );
+}
+
+/// The provider, offline, as a plugin connection: configured with its
+/// state directory `dir`.
+fn offline_provider(s: &Scratch, dir: &str) -> dform::plugin::client::Conn {
+    let wrapper = s.write(
+        "k8s-offline",
+        &format!("#!/bin/sh\nunset KUBECONFIG\nDFORM_K8S_OFFLINE=1 exec {K8S} \"$@\"\n"),
+    );
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let conn = dform::plugin::client::Conn::start(&wrapper).unwrap();
+    let config = json!({"world": s.path(&format!("{dir}/world.json")).display().to_string()});
+    let config = Some(dform::plugin::wire::doc(&config));
+    conn.call(|mut c| async move {
+        c.configure(dform::plugin::pb::ConfigureRequest { config })
+            .await
+    })
+    .unwrap();
+    conn
+}
+
+/// A Schema answer's facts, spelled.
+fn schema_of(conn: &dform::plugin::client::Conn, types: Option<&[&str]>) -> Vec<String> {
+    use dform::plugin::{pb, wire};
+    let req = pb::SchemaRequest {
+        types: types.map(|t| pb::TypeFilter {
+            names: t.iter().map(|s| s.to_string()).collect(),
+        }),
+    };
+    let resp = conn
+        .call(|mut c| async move { c.schema(req).await })
+        .unwrap();
+    resp.facts
+        .iter()
+        .map(|f| dform::partition::fmt_atom(&wire::from_fact(f).unwrap()))
+        .collect()
+}
+
+/// The provider derives the schema once per OpenAPI document and caches
+/// it beside the document's cache (`k8s-schema.json`, keyed by its hash):
+/// a Schema request naming types is answered from it with their rows (and
+/// their alias targets') and every type_provider row.
+#[test]
+fn the_schema_is_derived_once_and_answered_for_the_types_asked_for() {
+    let s = Scratch::new("k8s-schema-cache");
+    let count =
+        |facts: &[String], prefix: &str| facts.iter().filter(|f| f.starts_with(prefix)).count();
+    let all = schema_of(&offline_provider(&s, "st"), None);
+    assert!(count(&all, "type_attr(") > 15_000);
+    let cache = s.path("st/k8s-schema.json");
+    assert!(cache.exists(), "the derived schema is cached");
+
+    let some = schema_of(&offline_provider(&s, "st"), Some(&["k8s.deployment"]));
+    let types: std::collections::BTreeSet<&str> = some
+        .iter()
+        .filter(|f| f.starts_with("type_attr("))
+        .map(|f| f.split('"').nth(1).unwrap())
+        .collect();
+    assert_eq!(
+        types.into_iter().collect::<Vec<_>>(),
+        ["k8s.apps.v1.deployment", "k8s.deployment"]
+    );
+    assert_eq!(
+        count(&some, "type_provider("),
+        count(&all, "type_provider(")
+    );
+
+    // Served from the cache: a row added there shows.
+    let mut c: Json = serde_json::from_str(&std::fs::read_to_string(&cache).unwrap()).unwrap();
+    c["facts"].as_array_mut().unwrap().push(json!([
+        "type_attr",
+        "k8s.core.v1.namespace",
+        "cached.probe",
+        "string",
+        []
+    ]));
+    std::fs::write(&cache, c.to_string()).unwrap();
+    let probe = "type_attr(\"k8s.core.v1.namespace\", \"cached.probe\"";
+    let ns = schema_of(
+        &offline_provider(&s, "st"),
+        Some(&["k8s.core.v1.namespace"]),
+    );
+    assert_eq!(count(&ns, probe), 1, "answered from the cache");
+
+    // A cache keyed by another document is derived again, and rewritten.
+    c["key"] = json!("another");
+    std::fs::write(&cache, c.to_string()).unwrap();
+    let ns = schema_of(
+        &offline_provider(&s, "st"),
+        Some(&["k8s.core.v1.namespace"]),
+    );
+    assert_eq!(count(&ns, probe), 0);
+    assert!(!std::fs::read_to_string(&cache).unwrap().contains("another"));
 }

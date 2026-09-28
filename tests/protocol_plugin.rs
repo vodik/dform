@@ -110,3 +110,85 @@ fn a_provider_without_a_handshake_deviates() {
     );
     assert!(r.stderr.contains("1 of 1 checks deviate"), "{}", r.stderr);
 }
+
+/// The type of each `type_attr` row of a Schema answer, and how many
+/// `type_provider` rows it holds.
+fn schema_rows(
+    conn: &dform::plugin::client::Conn,
+    types: Option<&[&str]>,
+) -> (std::collections::BTreeSet<String>, usize) {
+    use dform::plugin::{pb, wire};
+    let req = pb::SchemaRequest {
+        types: types.map(|t| pb::TypeFilter {
+            names: t.iter().map(|s| s.to_string()).collect(),
+        }),
+    };
+    let resp = conn
+        .call(|mut c| async move { c.schema(req).await })
+        .unwrap();
+    let facts: Vec<_> = resp
+        .facts
+        .iter()
+        .map(|f| wire::from_fact(f).unwrap())
+        .collect();
+    let typ = |a: &dform::ast::Atom| dform::partition::fmt_term(&a.args[0]);
+    (
+        facts
+            .iter()
+            .filter(|a| a.pred == "type_attr")
+            .map(typ)
+            .collect(),
+        facts.iter().filter(|a| a.pred == "type_provider").count(),
+    )
+}
+
+/// A Schema request naming types gets their rows (and those of the types
+/// they alias), and every type_provider row; none names all of them.
+#[test]
+fn the_mock_answers_the_schema_of_the_types_asked_for() {
+    let s = Scratch::new("protocol-schema-scope");
+    let conn = dform::plugin::client::Conn::start(std::path::Path::new(FAKE)).unwrap();
+    let config = serde_json::json!({
+        "schemas": ["fake", "k8s"],
+        "world": s.path("w.json").display().to_string(),
+    });
+    let config = Some(dform::plugin::wire::doc(&config));
+    conn.call(|mut c| async move {
+        c.configure(dform::plugin::pb::ConfigureRequest { config })
+            .await
+    })
+    .unwrap();
+    let (all, providers) = schema_rows(&conn, None);
+    assert!(all.len() > 10, "{all:?}");
+    let (some, scoped_providers) = schema_rows(&conn, Some(&["net.vpc", "k8s.deployment"]));
+    assert_eq!(
+        some.into_iter().collect::<Vec<_>>(),
+        ["\"k8s.deployment\"", "\"net.vpc\""],
+    );
+    assert_eq!(scoped_providers, providers);
+}
+
+/// A run that knows the types it names asks the providers for their
+/// schema only: the rest is not loaded, and its catalog cannot be asked
+/// for more.
+#[test]
+fn a_scoped_run_loads_the_schema_of_its_types() {
+    let s = Scratch::new("protocol-schema-load");
+    let backend = dform::plugin::Providers::start_deferred(
+        &[],
+        &dform::plugin::Config {
+            world: s.path("w.json"),
+            inventory: s.path("inv.json"),
+            chaos: vec![],
+        },
+    )
+    .unwrap();
+    let named: std::collections::BTreeSet<String> = ["net.vpc".to_string()].into();
+    backend.load_schema(Some(&named)).unwrap();
+    let schema = backend.schema();
+    assert!(schema.attr("net.vpc", "cidr").is_some());
+    assert!(schema.attr("net.subnet", "cidr").is_none());
+    assert!(schema.provider_of.contains_key("net.subnet"));
+    assert!(backend.catalog(Some(&named)).is_ok());
+    assert!(backend.catalog(None).is_err());
+}

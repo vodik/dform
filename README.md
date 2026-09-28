@@ -168,8 +168,11 @@ The facts are injected into the program, so rules can read them and
 `cargo run -- query type_attr` lists the schema. A run injects the rows of
 the types its program, its inputs and state name (and the types they
 alias), plus every `type_provider`: a derived Kubernetes schema is 16k
-facts. A `query` or `why` of a schema predicate, or a rule reading one for
-a type it does not spell out (`type_attr(T, ...)`), sees all of it.
+facts. The providers are asked for only those types' rows too (the
+Schema request's `types`). A `query` or `why` of a schema predicate, a
+rule reading one for a type it does not spell out (`type_attr(T, ...)`),
+or a rule wanting a resource whose type is built at runtime
+(`want(T, A) :- T = format("k8s.%s", K)`), sees all of it.
 
 ## The Kubernetes provider
 
@@ -192,7 +195,9 @@ provider k8s { source = "../target/debug/dform-provider-k8s" }.
   plans the same against either.
 - The schema is derived at Configure from the cluster's `/openapi/v3`, and
   cached as `k8s-openapi.json` in the stack's state directory (fetched again
-  when the server's index changes). `x-kubernetes-list-map-keys` are
+  when the server's index changes); the schema derived from it is cached
+  beside it as `k8s-schema.json`, keyed by the document's hash, and so is
+  the snapshot's when offline. `x-kubernetes-list-map-keys` are
   `type_list_key`, list-type `set` a `set`; the leaves of `status.*` and the
   server-written metadata are computed (`metadata.uid` the identity);
   `metadata.name` (a program may set `metadata.generateName` instead) and

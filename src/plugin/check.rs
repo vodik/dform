@@ -142,7 +142,7 @@ fn suite(exe: &Path, dir: &Path) -> Result<(Vec<String>, usize)> {
 
     // Schema: the synthetic type, as facts the engine can read.
     let schema = conn
-        .call(|mut c| async move { c.schema(pb::SchemaRequest {}).await })
+        .call(|mut c| async move { c.schema(pb::SchemaRequest::default()).await })
         .and_then(|resp| {
             let facts = resp
                 .facts
@@ -601,7 +601,8 @@ fn resources(conn: &Conn, r: &mut Report, schema: &Schema, f: &Fixture) {
     );
 
     // Assertions (F DR-13): a failing one refuses the action.
-    let schema_resp = conn.call(|mut c| async move { c.schema(pb::SchemaRequest {}).await });
+    let schema_resp =
+        conn.call(|mut c| async move { c.schema(pb::SchemaRequest::default()).await });
     if f.synthetic && schema_resp.is_ok_and(|s| s.checks_refinements) {
         let assertion = |op: &str, v: Json| pb::Assertion {
             path: "password".into(),
