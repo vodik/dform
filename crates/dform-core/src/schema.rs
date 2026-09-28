@@ -610,6 +610,28 @@ fn ground(t: &Term) -> Result<Value> {
     }
 }
 
+/// The names of the schemas shipped with the binary ([`builtin`]).
+pub const BUILTINS: [&str; 4] = ["fake", "gke", "k8s", "aws-mock"];
+
+/// The known provider schemas that declare `typ`: the built-in ones and
+/// each `providers/<name>/schema.df` under the working directory, by name.
+/// What an error about an undeclared type suggests.
+pub fn declaring(typ: &str) -> Vec<String> {
+    let mut names: BTreeSet<String> = BUILTINS.iter().map(|n| n.to_string()).collect();
+    if let Ok(entries) = std::fs::read_dir("providers") {
+        names.extend(
+            entries
+                .flatten()
+                .filter(|e| e.path().join("schema.df").is_file())
+                .filter_map(|e| e.file_name().into_string().ok()),
+        );
+    }
+    names
+        .into_iter()
+        .filter(|n| load_provider(n).is_ok_and(|s| s.knows_type(typ)))
+        .collect()
+}
+
 /// Schemas shipped with the binary, by provider name
 /// (`crates/dform-mock/schemas/<name>.df`). `providers/<name>/schema.df` in
 /// the working directory takes precedence (see [`load_provider`]).

@@ -31,7 +31,8 @@ fn scratch() -> Scratch {
     s.write("note.txt", "hello");
     s.write(
         "providers/fake/schema.df",
-        &std::fs::read_to_string(repo().join("crates/dform-mock/schemas/fake.df")).unwrap(),
+        &(std::fs::read_to_string(repo().join("crates/dform-mock/schemas/fake.df")).unwrap()
+            + "type_provider(mon.dashboard, \"fakecloud\")\ntype_provider(db.user, \"fakecloud\")\n"),
     );
     answers(&s, "first");
     s

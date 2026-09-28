@@ -1,14 +1,17 @@
 exit: error
 -- stdout --
-plan: 2 deformations (2 create)
+plan: 2 deformations (2 create), 1 pending, 1 undetermined
 definite:
 + gke_cluster.pngu
   name = "pngu-gke"
 + k8s.namespace.pngu
   name = "pngu"
-apply order: tick 1 [gke_cluster.pngu k8s.namespace.pngu]
+pending groups:
+? gke_nodepool.? x unknown, on ?gke_cluster/pngu#zones, resolves after tick 1  (member/2 over a null list)
+undetermined:
+? deny "no nodepool in zone b" on ?gke_cluster/pngu#zones, decided after tick 1  (not want("gke_nodepool", "np-us-east1-b"): want has a stuck instance that may derive it)
+apply order: tick 1 [gke_cluster.pngu k8s.namespace.pngu] tick 2 [gke_nodepool.?]
 -- stderr --
 constraint violations:
 - namespace without deployment ctx={"ns":"pngu"}
-- no nodepool in zone b
 Error: blocked by constraints

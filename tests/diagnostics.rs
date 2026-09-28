@@ -78,7 +78,7 @@ fn an_unknown_function_names_its_call() {
 #[test]
 fn a_negative_cycle_names_each_rule() {
     let r = plan(
-        "edition 2026\nresource net.a x {\n  if p = net.b.y.name\n  peer = p\n}\nresource net.b y {\n  if q = net.a.x.peer\n  name = q\n}\n",
+        "edition 2026\nresource net.vpc x {\n  if p = net.subnet.y.name\n  peer = p\n}\nresource net.subnet y {\n  if q = net.vpc.x.peer\n  name = q\n}\n",
     )
     .failure();
     assert!(r.stderr.contains("not stratifiable"), "{}", r.stderr);

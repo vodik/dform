@@ -313,6 +313,14 @@ plugin instead, started on its own; each type goes to the provider whose
 schema declares it. The world file, the inventory and `--chaos` reach the mock
 at Configure.
 
+Every resource's type is declared by the schema of the provider that applies
+it. One that none of the stack's providers declares is a plan (and apply)
+error before anything is planned, naming the resource, the `provider` blocks
+and the known schemas (the built-in ones and `providers/*/schema.df`) that do
+declare it: `provider fake does not declare google_compute_subnetwork;
+declared by: gke`. A type the program declares itself with a `type` block is
+the mock's to play.
+
 A `provider` block's settings other than `source` configure the provider,
 and read like any rule reads: inputs, settings rows, value names, tables and
 `env_var`. A keyed deployment configures its providers by its key:

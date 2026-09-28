@@ -3,7 +3,7 @@
 //! and `provider` picks the mock's schema.
 
 mod common;
-use common::Scratch;
+use common::{Scratch, copy_dir, repo};
 use std::process::{Command, Stdio};
 
 const NET: &str = r#"edition 2026
@@ -267,8 +267,65 @@ fn the_provider_statement_selects_the_schema() {
     );
     let r = s.run(&["plan", "p.df"]).failure();
     assert!(r.stderr.contains("size"), "{}", r.stderr);
+    s.write("other.df", "type_provider(x.thing, \"fakecloud\")\n");
     let r = s
-        .run(&["dev", "--provider", "fake", "plan", "p.df"])
+        .run(&["dev", "--provider", "./other.df", "plan", "p.df"])
         .success();
     assert!(r.stdout.contains("+ x.thing.a"), "{}", r.stdout);
+}
+
+/// A resource's type is declared by the schema of the provider that
+/// applies it: pngu on `provider fake` (which declares only the demo
+/// types) is refused at plan, naming the resource, the provider block and
+/// the schema that declares the type, not handed to the fake at apply. On
+/// `provider gke` it plans and applies.
+#[test]
+fn a_type_the_provider_does_not_declare_is_a_plan_error() {
+    let s = Scratch::new("lang-stack-undeclared");
+    copy_dir(&repo().join("examples/pngu"), &s.dir);
+    let src = s.read("stacks/pngu.df");
+    assert!(src.contains("provider gke {"), "{src}");
+    s.write(
+        "stacks/pngu.df",
+        &src.replace("provider gke {", "provider fake {"),
+    );
+    let r = s.run(&["plan", "pngu"]).failure();
+    assert!(
+        r.stderr
+            .contains("provider fake does not declare google_compute_subnetwork; declared by: gke"),
+        "{}",
+        r.stderr
+    );
+    // At the resource, and at the provider block.
+    assert!(
+        r.stderr
+            .contains("resource google_compute_subnetwork gke_subnet {"),
+        "{}",
+        r.stderr
+    );
+    // The provider block is labeled; nothing was planned.
+    assert!(r.stderr.contains("provider fake {"), "{}", r.stderr);
+    assert!(r.stderr.contains("─ provider fake\n"), "{}", r.stderr);
+    assert!(r.stdout.is_empty(), "{}", r.stdout);
+    // A type no known schema declares says so.
+    s.write(
+        "stacks/pngu.df",
+        &src.replace(
+            "resource alert_metrics_pack pngu",
+            "resource mystery_pack pngu",
+        ),
+    );
+    let r = s.run(&["plan", "pngu"]).failure();
+    assert!(
+        r.stderr.contains(
+            "provider gke does not declare mystery_pack; no known provider schema declares it"
+        ),
+        "{}",
+        r.stderr
+    );
+
+    s.write("stacks/pngu.df", &src);
+    s.run(&["apply", "pngu", "env=dev"]).success();
+    let r = s.run(&["plan", "pngu"]).success();
+    assert!(r.stdout.contains("is undeformed"), "{}", r.stdout);
 }

@@ -85,11 +85,14 @@ const CASES: &[Case] = &[
         inventory: Some("tests/fixtures/world/inventory.json"),
         ..case("adopt_demo", "prod", "examples/adopt/stacks/adopt_demo.df")
     },
-    case(
-        "adv2_rule3_coarse",
-        "default",
-        "tests/fixtures/adversarial/adv2_rule3_coarse.df",
-    ),
+    Case {
+        providers: &["gke"],
+        ..case(
+            "adv2_rule3_coarse",
+            "default",
+            "tests/fixtures/adversarial/adv2_rule3_coarse.df",
+        )
+    },
     case(
         "adv3_pack_reads_other_path",
         "default",

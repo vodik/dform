@@ -1335,6 +1335,11 @@ fn run_with(
     let discovered = backend.discover(world_types(&cli.cmd, lowered.as_ref()).as_ref())?;
     let scope = catalog_scope(&cli.cmd, &program, &base_extra, &discovered, &st);
     backend.load_schema(scope.as_ref())?;
+    // What a run plans, its providers declare: a type none does would be
+    // handed to one that knows nothing of it.
+    if matches!(cli.cmd, Cmd::Plan { .. } | Cmd::Apply { .. }) || hook.is_some() {
+        backend.check_types(&program, &providers)?;
+    }
     // A provider configured from what it serves itself is a cycle.
     if let Some(l) = &lowered {
         backend.check_configuration(&l.program, &l.extern_fns, |p| {

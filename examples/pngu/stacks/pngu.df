@@ -203,7 +203,17 @@ resource google_monitoring_dashboard pngu {
   dashboard_json = file.json["files/dashboard-pngu.json"]
 }
 
-# Represents terraform-gcp-alert-metrics module invocation.
+# Represents terraform-gcp-alert-metrics module invocation. No provider
+# schema has the module, so the program declares its type (the mock plays
+# it).
+type alert_metrics_pack {
+  project_id: string
+  notification_channel_type: string
+  notification_channel_display_name: string
+  enable_standard_gke_alerts: bool
+  source: string
+}
+
 resource alert_metrics_pack pngu {
   project_id = cfg.project_id
   notification_channel_type = "slack"

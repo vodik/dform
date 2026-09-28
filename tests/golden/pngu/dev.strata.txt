@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== examples/pngu/stacks/pngu.df: 159 nodes, 428 edges (297 negative)
+== examples/pngu/stacks/pngu.df: 160 nodes, 428 edges (297 negative)
    STRATIFIED, 6 strata
    stratum 0:
      (arg, google.client_config, access_token)
@@ -28,6 +28,7 @@ exit: ok
      resolve
      resolved
      table.csv.peering
+     type_refine
      world_attr
    stratum 1:
      (arg, gke_nodepool, id)

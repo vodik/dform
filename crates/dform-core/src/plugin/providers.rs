@@ -20,7 +20,9 @@
 //! redacted.
 //!
 //! Which provider serves a type: the one whose schema declares it, else the
-//! mock (which plays unknown types), else the first.
+//! mock (which plays the types a program declares itself), else the first.
+//! A plan whose resource has a type none of them declares is refused before
+//! anything is planned ([`Providers::check_types`]).
 
 use super::backend::{CallError, Ticket};
 use super::link::Link;
@@ -511,6 +513,85 @@ impl Providers {
                      inputs, settings, tables, env_var, or another provider's values",
                 ),
             );
+        }
+        if diags.is_empty() {
+            Ok(())
+        } else {
+            Err(crate::diag::Diagnostics(diags).into())
+        }
+    }
+
+    /// Every resource's type is declared by the schema of the provider that
+    /// will apply it: a type no provider of the stack declares would go to
+    /// the fallback, which knows nothing of it (no computed attribute, no
+    /// id it mints), so it is a plan error before anything is planned; a
+    /// type the program declares itself (a `type` block) is the mock's. The
+    /// error names the resource, the stack's `provider` blocks, and the
+    /// known schemas that do declare the type. `specs`: the providers this
+    /// run started, as `--provider` or the `provider` statements give them.
+    pub fn check_types(&self, program: &crate::ast::Program, specs: &[String]) -> Result<()> {
+        use crate::ast::Stmt;
+        let owner = &self.loaded().owner;
+        let blocks: Vec<&crate::ast::Config> = program
+            .statements
+            .iter()
+            .filter_map(|s| match s {
+                Stmt::Provider(c) if self.blocks.contains_key(&c.name) => Some(c),
+                _ => None,
+            })
+            .collect();
+        let names: Vec<String> = if !blocks.is_empty() {
+            blocks.iter().map(|c| c.name.clone()).collect()
+        } else if specs.is_empty() {
+            vec!["fake".to_string()]
+        } else {
+            specs.to_vec()
+        };
+        let who = match names.as_slice() {
+            [one] => format!("provider {one} does not declare"),
+            many => format!("none of the providers {} declares", many.join(", ")),
+        };
+        // The types the program declares itself (a `type` block, a
+        // `type_*` row): the mock plays them with the program's shape.
+        let own: BTreeSet<&str> = program
+            .statements
+            .iter()
+            .filter_map(|s| match s {
+                Stmt::Pending(p) => match &p.kind {
+                    crate::ast::PendingKind::TypeDecl { name, .. } => Some(name.as_str()),
+                    _ => None,
+                },
+                Stmt::Fact(a) if a.pred.starts_with("type_") => match a.args.first() {
+                    Some(Term::Val(Value::Str(t))) => Some(t.as_str()),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+        let mut diags = Vec::new();
+        for s in &program.statements {
+            let Stmt::Resource(r) = s else { continue };
+            let Term::Val(Value::Str(typ)) = &r.typ else {
+                continue;
+            };
+            if owner.contains_key(typ) || own.contains(typ.as_str()) {
+                continue;
+            }
+            let by = crate::schema::declaring(typ);
+            let known = match by.as_slice() {
+                [] => "no known provider schema declares it".to_string(),
+                by => format!("declared by: {}", by.join(", ")),
+            };
+            let mut d = crate::diag::Diagnostic::error(r.span, format!("{who} {typ}; {known}"));
+            for c in &blocks {
+                d = d.with_label(c.span, format!("provider {}", c.name));
+            }
+            if let Some(first) = by.first() {
+                d = d.with_help(format!(
+                    "configure the provider that does: `provider {first} {{ }}`"
+                ));
+            }
+            diags.push(d);
         }
         if diags.is_empty() {
             Ok(())
