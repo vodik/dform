@@ -422,6 +422,46 @@ fn a_secrets_string_data_reads_back() {
     );
 }
 
+/// `spec.podSelector = {}` (every pod) is present and empty: a policy
+/// with it and one without both converge, though the API server defaults
+/// the missing selector to `{}`; adding it to the one without is a change.
+#[test]
+fn an_empty_pod_selector_converges() {
+    let Some(kc) = kubeconfig("an_empty_pod_selector_converges") else {
+        return;
+    };
+    let ns = Namespace::new(&kc);
+    let s = scratch("k8s-cluster-pod-selector");
+    let program = |selector: &str| {
+        format!(
+            "edition 2026\nprovider k8s {{ source = \"./providers/k8s\" }}\n\
+             resource k8s.namespace test {{\n  metadata.name = \"{}\"\n}}\n\
+             resource k8s.network_policy all {{\n  metadata.name = \"all\"\n  \
+             metadata.namespace = test.metadata.name\n  spec.podSelector = {{}}\n  \
+             spec.policyTypes = [\"Ingress\"]\n}}\n\
+             resource k8s.network_policy other {{\n  metadata.name = \"other\"\n  \
+             metadata.namespace = test.metadata.name\n{selector}  \
+             spec.policyTypes = [\"Ingress\"]\n}}\n",
+            ns.name
+        )
+    };
+    s.write("p.df", &program(""));
+    dform(&s, &kc, &["apply", "p.df"]).success();
+    let r = dform(&s, &kc, &["plan", "p.df"]).success();
+    assert_eq!(r.summary(), "stack p is undeformed", "{}", r.stdout);
+    s.write("p.df", &program("  spec.podSelector = {}\n"));
+    let r = dform(&s, &kc, &["plan", "p.df"]).success();
+    assert!(
+        r.stdout.contains("~ k8s.network_policy.other")
+            && !r.stdout.contains("k8s.network_policy.all"),
+        "{}",
+        r.stdout
+    );
+    dform(&s, &kc, &["apply", "p.df"]).success();
+    let r = dform(&s, &kc, &["plan", "p.df"]).success();
+    assert_eq!(r.summary(), "stack p is undeformed", "{}", r.stdout);
+}
+
 /// The provider configured from the program: the kubeconfig's text as a
 /// secret input, the environment's kubeconfig not a cluster. It applies
 /// and converges, and no byte of the client key is in state, the plan
