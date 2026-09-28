@@ -1,0 +1,87 @@
+# The bootstrap stack of the demo (README "Bootstrap and handover"): it
+# creates the cluster and installs dform in it as a controller, in three
+# ticks, and stays batch: the controller refuses a `role = bootstrap` stack.
+#
+#   cargo run -- --file examples/bootstrap/bootstrap.df apply
+#   cargo run -- stack handover renfry.workload --to 'k8s("dform-system/workload")'
+#   cargo run -- --file examples/bootstrap/workload.df controller --stack renfry.workload
+#
+# Tick 1: the network, the subnetwork and the cluster. The node pools are a
+# pending group: one per zone, and the zones are the cluster's. Tick 2: the
+# node pools and the namespace (the kubernetes provider is configured from
+# the cluster's endpoint and CA). Tick 3: the dform-controller Deployment,
+# which waits for its node pool to be up.
+
+edition 2026.
+
+stack renfry.bootstrap {
+  role = bootstrap
+}.
+
+provider gcp {
+  source = "gcp.df"
+}.
+provider k8s {}.
+
+resource google_compute_network vpc {
+  name = "renfry-vpc"
+  auto_create_subnetworks = false
+}.
+
+resource google_compute_subnetwork gke {
+  name = "renfry-gke"
+  region = "us-east1"
+  network = ref(google_compute_network, vpc, .id)
+  ip_cidr_range = "10.141.76.0/22"
+}.
+
+resource gke_cluster renfry {
+  name = "renfry-gke"
+  network = ref(google_compute_network, vpc, .id)
+  subnetwork = ref(google_compute_subnetwork, gke, .id)
+  node_locations = ["us-east1-b", "us-east1-c"]
+}.
+
+# One node pool per zone the cluster lands in.
+resource gke_nodepool Np {
+  cluster = ref(gke_cluster, renfry, .id)
+  zone = Z
+  node_count = 1
+} :-
+  arg(gke_cluster, renfry, .zones, Zs),
+  member(Zs, Z),
+  Np = format("np-%s", Z).
+
+provider_config(kubernetes, {
+  host: ref(gke_cluster, renfry, .endpoint),
+  ca: ref(gke_cluster, renfry, .ca_certificate)
+}).
+
+resource k8s.namespace dform_system {
+  metadata.name = "dform-system"
+}.
+
+# dform in the cluster, running the workload stack: it lands on the first
+# zone's node pool once that pool is up, which is once it has an instance
+# group. Apply gives it, so the comparison is decided the tick after the
+# pool is created.
+resource k8s.deployment dform_controller {
+  metadata.name = "dform-controller"
+  metadata.namespace = ref(k8s.namespace, dform_system, .metadata.name)
+  metadata.annotations = { "dform.io/node-pool": ref(gke_nodepool, Pool, .instance_group) }
+  spec.replicas = 1
+  spec.selector.matchLabels = { app: "dform-controller" }
+  spec.template.metadata.labels = { app: "dform-controller" }
+  spec.template.spec.containers = [{
+    name: "dform",
+    image: "ghcr.io/renfry/dform:0.8",
+    args: ["controller", "--stack", "renfry.workload", "--file", "workload.df"]
+  }]
+} :-
+  arg(gke_cluster, renfry, .zones, Zs),
+  member(Zs, 0, Z),
+  Pool = format("np-%s", Z),
+  attr(gke_nodepool, Pool, .instance_group, G),
+  G != "".
+
+output endpoint = ref(gke_cluster, renfry, .endpoint).

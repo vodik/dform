@@ -148,7 +148,7 @@ enum Cmd {
     },
     /// Controller mode: wait for an input relation's source or the world to
     /// change, then refresh, evaluate, plan, gate on policy and apply, one
-    /// log line per event and per tick.
+    /// log line per event and per tick. Refuses a `role = bootstrap` stack.
     Controller {
         /// The stack to run: must be the program's own.
         #[arg(long = "stack")]
@@ -166,6 +166,24 @@ enum Cmd {
         /// Per event, stop after this many ticks if still deformed.
         #[arg(long = "max-ticks", default_value_t = 8)]
         max_ticks: usize,
+    },
+    /// Stack operations.
+    Stack {
+        #[command(subcommand)]
+        cmd: StackCmd,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone)]
+enum StackCmd {
+    /// Move a stack's state to another backend and record it in the
+    /// registry: `local("DIR")`, or `k8s("ns/name")`, the in-cluster backend
+    /// (for now a directory in the bootstrap stack's state). The controller
+    /// runs the stack from there; a batch `apply` refuses it.
+    Handover {
+        stack: String,
+        #[arg(long = "to")]
+        to: String,
     },
 }
 
@@ -188,6 +206,14 @@ fn main() -> std::process::ExitCode {
 fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
     if let Cmd::Controller { .. } = cli.cmd {
         return run_controller(cli);
+    }
+    if let Cmd::Stack {
+        cmd: StackCmd::Handover { stack, to },
+    } = &cli.cmd
+    {
+        let dir = dform::stack::handover(Path::new(".dform"), stack, to)?;
+        println!("stack {stack} handed over to {to}: {}", dir.display());
+        return Ok(());
     }
     let plan_file = match &cli.cmd {
         Cmd::Apply { plan_file, .. } => plan_file.clone(),
@@ -312,9 +338,27 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
         (None, Some(dir)) => state::backend_paths(&root, dir),
         (None, None) => state::stack_paths(&root, &stack),
     };
+    // A stack handed over to another backend lives there now.
+    let handed = match &cli.world {
+        None => dform::stack::handed_over(&root, &stack)?,
+        Some(_) => None,
+    };
+    if let Some((_, dir)) = &handed {
+        paths = state::backend_paths(&root, dir);
+    }
     paths.inventory = resolve_inventory(&cli.inventory, &cli.world, &paths.inventory);
     if let Some(h) = hook.as_deref_mut() {
+        if stack_cfg.bootstrap {
+            bail!(
+                "stack {stack} is role = bootstrap: it stays batch, and the controller never runs it"
+            );
+        }
         h.open(&paths.state, &paths.world)?;
+    } else if let (Cmd::Apply { .. }, Some((to, _))) = (&cli.cmd, &handed) {
+        bail!(
+            "stack {stack} was handed over to {to}: the controller runs it \
+             (`dform controller --stack {stack}`), not a batch apply"
+        );
     }
     let chaos = match &cli.cmd {
         Cmd::Apply { chaos, .. } => Chaos::parse(chaos)?,
@@ -641,7 +685,7 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
             println!("{}", json);
         }
         Cmd::Strata | Cmd::Test => unreachable!("handled before evaluation"),
-        Cmd::Fmt { .. } | Cmd::Controller { .. } => {
+        Cmd::Fmt { .. } | Cmd::Controller { .. } | Cmd::Stack { .. } => {
             unreachable!("handled before loading")
         }
         Cmd::Graph { what: None } => print!("{}", graph::resources(&resources)),
@@ -907,8 +951,8 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
                         Default::default()
                     };
                     persist(&st)?;
-                    if !st.outputs.is_empty() && cli.world.is_none() {
-                        dform::stack::register(&root, &stack, &paths.state)?;
+                    if (!st.outputs.is_empty() || stack_cfg.bootstrap) && cli.world.is_none() {
+                        dform::stack::register(&root, &stack, &paths.state, stack_cfg.bootstrap)?;
                     }
                     if let Some(h) = hook.as_deref_mut() {
                         h.finish(&stack, undeformed, &backend.observe(&st)?)?;
@@ -999,6 +1043,12 @@ fn run_controller(cli: Cli) -> Result<()> {
             "controller --stack {s}: the program ({}) owns stack {own}",
             files[0].display()
         );
+    }
+    let registered = dform::stack::registry(Path::new(".dform"))?
+        .get(&own)
+        .is_some_and(|e| e.bootstrap);
+    if cfg.bootstrap || registered {
+        bail!("stack {own} is role = bootstrap: it stays batch, and the controller never runs it");
     }
     controller::log(format_args!(
         "controller {own}: {}, poll {poll}ms",

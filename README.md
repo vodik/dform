@@ -31,6 +31,7 @@ State is scoped to a stack. One program owns one stack, named by its
 stack demo.main {
   backend = local(".dform/demo")   # where state, world and lock live; default .dform/<name>
   unknowns = strict                # or permissive (the default); see "Strict mode"
+  role = bootstrap                 # optional: it stays batch; see "Bootstrap and handover"
 }.
 ```
 
@@ -796,6 +797,46 @@ controller gates every tick on the policy pass:
 The rest of the plan still applies. `examples/bootstrap/workload.df` is the
 demo: replicas are `auto_reconcile`, any other drift waits for `approve`,
 and in prod a release waits for `release_approved`.
+
+## Bootstrap and handover
+
+One program creates the cluster and installs dform in it; the workload's
+state then moves into the cluster and the controller runs it from there.
+`examples/bootstrap/` is the demo, on the mocks:
+
+```bash
+cargo run -- --file examples/bootstrap/bootstrap.df apply      # 3 ticks
+cargo run -- stack handover renfry.workload --to 'k8s("dform-system/workload")'
+cargo run -- --file examples/bootstrap/workload.df controller --stack renfry.workload
+```
+
+`bootstrap.df` (stack `renfry.bootstrap`, mock GCP from `gcp.df` and
+mock Kubernetes) creates the network, the subnetwork and the cluster in
+tick 1; the node pools (one per zone, and the zones are the cluster's)
+and the `dform-system` namespace (its provider is configured from the
+cluster's endpoint and CA) in tick 2; and the `dform-controller`
+Deployment, whose args name the workload stack, in tick 3, once its node
+pool is up. `workload.df` (stack `renfry.workload`) is a namespace, a
+Deployment whose image is the `release` input relation, and a Service.
+
+`stack NAME { role = bootstrap }` marks the stack that creates what the
+controller runs in: it stays batch. `dform controller` refuses it (by its
+program or by the registry), and it is never handed over.
+
+`dform stack handover NAME --to BACKEND` moves the stack's state
+directory (state, world, controller memo) to the backend and records it in
+the registry, `.dform/stacks.json` (`{"state": ..., "backend": ...}`
+beside the plain state paths). Every later run of the stack uses it,
+whatever the program's `backend` says; a batch `apply` of a handed-over
+stack is refused (the controller runs it), `plan` is not. The stack's
+state is found in the registry, else at `.dform/NAME`; the target must be
+empty and the stack not locked. Backends:
+
+- `local("DIR")`: a directory.
+- `k8s("namespace/name")`: the in-cluster backend. For now it stands in as
+  the directory `k8s/namespace/name` inside the state directory of the
+  registered `role = bootstrap` stack (there must be exactly one; an apply
+  of a bootstrap stack registers it).
 
 ## Testing
 
