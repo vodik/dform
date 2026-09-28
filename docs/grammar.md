@@ -219,6 +219,7 @@ into today's AST:
 | `stack n { ... }`, `provider p { ... }` | no rules: the stack's name, backend, unknowns and role, the mock's schemas (`src/stack.rs`) |
 | `input relation p/N from S`      | `decl p/N`, and the facts source `S` holds now, re-read when it changes (`src/watch.rs`) |
 | `decl p/N`                       | `p/N` is declared (a provider feeds it)          |
+| `decl p/N mixed`                 | nothing: `p/N` may have both ground facts and rules; without it, a predicate that has both (a fact in a `when` block is a rule) is a compile error naming both (E §2.6) |
 | `declassify(V, R)` in a rule     | `V`, public to the secret pass, and `declassified("file:line:col", R)` derived from the rule's body (E DR-19) |
 | `decl p(A: t, BC: t)`            | record fields `a`, `b_c` for `p{a: .., b_c: ..}` |
 | `arg(T, A, P, V) @override`      | `arg(T, A, P, V, override)`                      |
@@ -234,8 +235,7 @@ into today's AST:
 
 These parse and are rejected with "not yet supported", naming the WORK.org
 ticket that gives them meaning: `type` blocks and `decl type ... open`
-(phase 6 "Refinement types, doc annotations, L15 inet"), `decl p/N mixed`
-(phase 6 "Static secret labels"). With no ticket yet: the `null` literal,
+(phase 6 "Refinement types, doc annotations, L15 inet"). With no ticket yet: the `null` literal,
 `not exists(...)`, and the ordered comprehension.
 
 ## Deviations from E §6

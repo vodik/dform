@@ -60,6 +60,8 @@ ignore_changes(net.vpc, m.main/vpc, .tags.owner).
 counts(count(X)) :- q(X).
 constraint("q must not be empty") :- not q(1).
 v(input, output, settings, type) :- input("env", _), output(k, _).
+decl p/1 mixed.
+decl q/1 mixed.
 p(a). q(b).
 w(V) :- m.main.on_vpc(V).
 vpc_inst(main).

@@ -408,8 +408,9 @@ impl Lowerer {
         }
     }
 
-    /// `decl p/N` is today's extern; `decl p(V: type, ...)` a record
-    /// declaration; the other two forms are pending.
+    /// `decl p/N` is today's extern, `decl p/N mixed` lets `p/N` have both
+    /// facts and rules; `decl p(V: type, ...)` a record declaration;
+    /// `decl type ... open` is pending.
     fn decl(&mut self, n: &SyntaxNode, span: Span) -> L<Stmt> {
         let toks: Vec<SyntaxToken> = tokens(n).collect();
         if toks.get(1).is_some_and(|t| t.kind() == TYPE_KW) {
@@ -424,10 +425,7 @@ impl Lowerer {
         if toks.get(2).is_some_and(|t| t.kind() == SLASH) {
             let arity = self.arity(n)?;
             if toks.last().is_some_and(|t| t.text() == "mixed") {
-                return Ok(Stmt::Pending(Pending {
-                    kind: PendingKind::DeclMixed { pred, arity },
-                    span,
-                }));
+                return Ok(Stmt::Mixed(Extern { pred, arity, span }));
             }
             return Ok(Stmt::Extern(Extern { pred, arity, span }));
         }

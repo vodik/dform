@@ -3169,7 +3169,8 @@ mod tests {
     /// aggregate used to see every partial result mid-fixpoint.
     #[test]
     fn aggregate_consumer_sees_one_complete_result() {
-        let (r, _) = run("n(1).
+        let (r, _) = run("decl n/1 mixed.
+             n(1).
              n(2) :- n(1).
              n(3) :- n(2).
              all(collect_set(X)) :- n(X).
@@ -3592,7 +3593,8 @@ mod tests {
     /// deeper than the old 200-iteration cap converges.
     #[test]
     fn a_300_deep_chain_converges() {
-        let (r, _) = run("n(0).
+        let (r, _) = run("decl n/1 mixed.
+             n(0).
              n(Y) :- n(X), X < 300, Y = X + 1.
              deepest(X) :- n(X), X >= 300.")
         .unwrap();

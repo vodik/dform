@@ -956,6 +956,12 @@ fn rename_stmt(stmt: Stmt, names: &Names) -> Stmt {
             body: s.body.map(lits),
             ..s
         }),
+        Stmt::Mixed(mut e) => {
+            if let Some(n) = names.get(&e.pred) {
+                e.pred = n.clone();
+            }
+            Stmt::Mixed(e)
+        }
         other => other,
     }
 }

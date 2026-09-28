@@ -58,6 +58,7 @@ pub fn lower(program: &Program) -> Result<Lowered> {
         secret_outputs,
     } = crate::modules::expand(&program)?;
     let expanded = expand_when(&expanded)?;
+    check_mixed(&expanded)?;
     let expanded = desugar_settings(&expanded)?;
     let (expanded, externs, extern_fns) = drop_metadata(&expanded);
     let expanded = desugar_resources(&expanded)?;
@@ -307,6 +308,58 @@ fn lower_contributions(program: &Program) -> Result<Program> {
         });
     }
     Ok(Program { statements: out })
+}
+
+/// E §2.6: a predicate is extensional (ground facts) or intensional
+/// (rules), not both, unless declared `decl p/N mixed.`. Checked after
+/// modules and `when` are expanded (a guarded fact is a rule), over the
+/// program's own predicates: the compiler's (`want`, `arg`, ...) are
+/// written both ways by design.
+fn check_mixed(program: &Program) -> Result<()> {
+    let mut mixed = BTreeSet::new();
+    let mut facts: BTreeMap<(&str, usize), Span> = BTreeMap::new();
+    let mut rules: BTreeMap<(&str, usize), Span> = BTreeMap::new();
+    for st in &program.statements {
+        match st {
+            Stmt::Mixed(e) => {
+                mixed.insert((e.pred.as_str(), e.arity));
+            }
+            Stmt::Fact(a) => {
+                facts.entry((&a.pred, a.args.len())).or_insert(a.span);
+            }
+            Stmt::Rule(r) => {
+                rules
+                    .entry((&r.head.pred, r.head.args.len()))
+                    .or_insert(r.head.span);
+            }
+            _ => {}
+        }
+    }
+    let diags: Vec<Diagnostic> = rules
+        .iter()
+        .filter(|(k, _)| !mixed.contains(*k))
+        .filter(|((p, _), _)| !crate::loader::is_core_pred(p) && !p.contains("__"))
+        .filter_map(|(k @ (p, n), rule)| {
+            let fact = facts.get(k)?;
+            Some(
+                Diagnostic::error(
+                    *rule,
+                    format!(
+                        "{p}/{n} has both ground facts and rules: it is extensional and intensional"
+                    ),
+                )
+                .with_label(*fact, format!("a ground fact of {p}/{n}"))
+                .with_help(format!(
+                    "derive the facts with rules too, or declare it: `decl {p}/{n} mixed.`"
+                )),
+            )
+        })
+        .collect();
+    if diags.is_empty() {
+        Ok(())
+    } else {
+        Err(Diagnostics(diags).into())
+    }
 }
 
 /// E DR-19: a rule that uses `declassify(V, Reason)` also derives
@@ -1025,6 +1078,9 @@ fn drop_metadata(program: &Program) -> (Program, BTreeSet<Extern>, Vec<crate::as
             }
             Stmt::Import(_) => {
                 // Loader-level feature, ignored in evaluator for now.
+            }
+            Stmt::Mixed(_) => {
+                // checked by check_mixed
             }
             Stmt::Settings(_) => {
                 // lowered away by desugar_settings

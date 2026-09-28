@@ -660,6 +660,7 @@ and fails listing the files that would change.
 - Schemas and wildcards:
   - `decl pred(Field1: type, FieldTwo: type).` enables record-style matching: `pred{field1: X, field_two: Y}`.
   - `decl pred/N.` declares a predicate a provider feeds (it may have no rows).
+  - `decl pred/N mixed.` lets a predicate have both ground facts and rules (E §2.6); without it, one that has both is a compile error naming the rule and the fact. A fact inside a `when` block is a rule.
   - `_` is an anonymous wildcard term (matches anything, never binds).
 
 ## Externs

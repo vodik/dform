@@ -143,6 +143,9 @@ pub enum Stmt {
     Settings(Settings),
     Decl(Decl),
     Extern(Extern),
+    /// `decl p/N mixed.`: `p/N` may have both ground facts and rules (E
+    /// §2.6); without it, a predicate that has both is a compile error.
+    Mixed(Extern),
     /// `extern p(+in, -out, ...) [persist]`: a predicate a provider answers
     /// on demand, once its `+` arguments are ground (`externs`).
     ExternFn(ExternFn),
@@ -388,7 +391,6 @@ pub struct Pending {
 pub enum PendingKind {
     TypeDecl { name: String, attrs: Vec<AttrDecl> },
     DeclOpenType { name: String },
-    DeclMixed { pred: String, arity: usize },
 }
 
 impl PendingKind {
@@ -403,9 +405,6 @@ impl PendingKind {
                 "`decl type ... open`",
                 "phase 6 \"Refinement types, doc annotations, L15 inet\"",
             ),
-            PendingKind::DeclMixed { .. } => {
-                ("`decl p/N mixed`", "phase 6 \"Static secret labels\"")
-            }
         }
     }
 }

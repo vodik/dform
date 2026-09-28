@@ -4,4 +4,3 @@ edition 2026.
 # and lowering names the ticket that gives it meaning.
 type settings { db.backup_days: int where 1 <= db.backup_days <= 35 }.
 decl type k8s.custom open.
-decl secret_ish/2 mixed.

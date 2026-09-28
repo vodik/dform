@@ -61,6 +61,8 @@ resource net.vpc T {
 # Peering intent.
 # In staging, only tenant_a peers with shared.
 # In prod, tenant_b also peers with shared, which creates tenant->tenant reachability via shared.
+# A fact and a guarded fact (a rule): declared mixed (E 2.6).
+decl peer_intent/1 mixed.
 peer_intent(tenant_a).
 when env(prod) {
   peer_intent(tenant_b).
