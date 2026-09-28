@@ -1,6 +1,7 @@
-# C's two-phase GKE / kubernetes stack (E §7.4), in the current syntax so it
-# lowers and evaluates today. Run with schema::gke() and eval_sim, which
-# turns ref() into classed nulls and mints the computed-attribute nulls.
+# C's two-phase GKE / kubernetes stack (E §7.4), in the current syntax.
+# Run with the gke mock schema, which makes the cluster's zones, endpoint and
+# ca open nulls until the cluster exists:
+#   cargo run -- --file examples/adversarial/gke_two_phase.df --provider gke plan
 has_env() :- input("env", _).
 env(dev) :- not has_env().
 env(E) :- input("env", E).
@@ -51,7 +52,8 @@ resource gke_cluster pngu {
   network_id = NetId,
   subnetwork_id = ref(google_compute_subnetwork, gke_subnet, id),
   master_control_plane_cidr = CpCidr,
-  deletion_protection = false
+  node_locations = ["us-east1-b", "us-east1-c"],
+  deletion_protection = true
 } :-
   env(E),
   project(Id, Name, _, NetId),
@@ -100,8 +102,9 @@ deny("cluster must be in at least two zones", { cluster: pngu }) :-
   zone_count(N),
   N < 2.
 
-# A policy that has nothing to do with zones. Under coarse Rule 3 it is
-# undetermined anyway (a `want` rule is stuck), which is the spurious case.
+# A policy that has nothing to do with zones. Under coarse Rule 3 it would be
+# undetermined anyway (a `want` rule is stuck), which is the spurious case;
+# per key it is decided now, and holds.
 deny("cluster must not be deletable", { cluster: C }) :-
   want(gke_cluster, C),
   not arg(gke_cluster, C, deletion_protection, true).

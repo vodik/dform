@@ -81,7 +81,9 @@ A `required` attribute the program does not set is a plan error. Lists with
 `type_list_key` are diffed by key (`spec.template.spec.containers[name=web].image`),
 lists of type `set` as sets. A `type_mint` string may use `{type}`, `{name}`,
 `{attr}`, `{hash}`, `{n}` and `{doc:PATH}` (the program's value at PATH, e.g.
-Kubernetes' `generateName`).
+Kubernetes' `generateName`); a template that is only `{doc:PATH}` takes the
+value there whatever its type (the gke mock's cluster `zones` are its
+`node_locations`).
 
 `computed` + `id` is a fresh value (an identity), `computed` + `sensitive` is a
 secret, `computed` alone is open (proposal E §2.2). `optional_computed` is

@@ -1,6 +1,34 @@
-exit: error
+exit: ok
 -- stdout --
+plan: 6 to create, 0 to update, 0 to delete
++ google_compute_subnetwork.gke_subnet
+  ip_cidr_range = "10.141.76.0/22"
+  name = "renfry-dev-gke-subnet"
+  network = "projects/renfry-dev-973682/global/networks/renfry-dev-network"
+  project = "renfry-dev-973682"
+  region = "us-east1"
++ k8s.deployment.api
+  image = "gcr.io/renfry/api:1.42"
+  namespace = "pngu"
+  replicas = 3
++ k8s.namespace.pngu
+  name = "pngu"
++ k8s.secret.db_credentials
+  data.password = ?google.secret_manager_secret_version/db_pw#secret_data
+  namespace = "pngu"
++ gke_cluster.pngu
+  deletion_protection = true
+  env = "dev"
+  master_control_plane_cidr = "172.16.3.96/28"
+  name = "renfry-dev-gke"
+  network_id = "projects/renfry-dev-973682/global/networks/renfry-dev-network"
+  node_locations[0] = "us-east1-b"
+  node_locations[1] = "us-east1-c"
+  project_id = "renfry-dev-973682"
+  subnetwork_id = ?google_compute_subnetwork/gke_subnet#id
++ google_compute_address.static_ip
+  name = "pngu-grpc"
+  project = "renfry-dev-973682"
+  region = "us-east1"
+  subnetwork_id = ?google_compute_subnetwork/gke_subnet#id
 -- stderr --
-constraint violations:
-- cluster must not be deletable ctx={"cluster":"pngu"}
-Error: blocked by constraints

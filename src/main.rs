@@ -11,6 +11,7 @@ use dform::partition;
 use dform::provider::{ActionKind, Provider, fmt_value};
 use dform::schema;
 use dform::state;
+use dform::stuck;
 use dform::value::Value;
 use std::path::{Path, PathBuf};
 
@@ -162,8 +163,9 @@ fn main() -> Result<()> {
         }
         Cmd::Strata => unreachable!("handled before evaluation"),
         Cmd::Plan => {
+            let sections = plan_sections(&res, &resources, backend.schema());
             let plan = backend.plan(&resources, &adopts, &st)?;
-            print_plan(&plan, cli.show_noop);
+            print_plan(&plan, cli.show_noop, &sections);
         }
         Cmd::Apply { .. } => {
             for addr in chaos.addresses() {
@@ -175,8 +177,15 @@ fn main() -> Result<()> {
                     );
                 }
             }
-            let plan = backend.plan(&resources, &adopts, &st)?;
-            print_plan(&plan, cli.show_noop);
+            let sections = plan_sections(&res, &resources, backend.schema());
+            let mut plan = backend.plan(&resources, &adopts, &st)?;
+            print_plan(&plan, cli.show_noop, &sections);
+            // A pending deformation waits for a boundary: not this apply.
+            plan.actions.retain(|a| {
+                !sections
+                    .pending
+                    .contains_key(&(a.addr.typ.clone(), a.addr.name.clone()))
+            });
             let changed = plan
                 .actions
                 .iter()
@@ -255,13 +264,33 @@ fn format_strata(name: &str, g: &partition::Graph, v: &partition::Verdict) -> St
     }
 }
 
-fn print_plan(plan: &dform::provider::Plan, show_noop: bool) {
+/// E §2.7's sections for this evaluation: what waits on a boundary.
+fn plan_sections(
+    res: &engine::EvalResult,
+    resources: &[ir::Resource],
+    schema: &schema::Schema,
+) -> stuck::Sections {
+    let docs = resources
+        .iter()
+        .map(|r| ((r.addr.typ.clone(), r.addr.name.clone()), r.attrs.clone()))
+        .collect();
+    stuck::sections(&res.stuck, &res.facts, &docs, schema)
+}
+
+fn print_plan(plan: &dform::provider::Plan, show_noop: bool, sections: &stuck::Sections) {
+    let is_pending = |a: &dform::provider::Action| {
+        sections
+            .pending
+            .contains_key(&(a.addr.typ.clone(), a.addr.name.clone()))
+    };
+    let (held, plan_actions): (Vec<_>, Vec<_>) =
+        plan.actions.iter().cloned().partition(|a| is_pending(a));
     let mut creates = 0usize;
     let mut adopts = 0usize;
     let mut updates = 0usize;
     let mut deletes = 0usize;
     let mut noops = 0usize;
-    for a in &plan.actions {
+    for a in &plan_actions {
         match a.kind {
             ActionKind::Create => creates += 1,
             ActionKind::Adopt => adopts += 1,
@@ -278,8 +307,45 @@ fn print_plan(plan: &dform::provider::Plan, show_noop: bool) {
     if show_noop {
         suffix.push_str(&format!(", {noops} no-op"));
     }
+    if !sections.pending.is_empty() {
+        suffix.push_str(&format!(", {} pending", sections.pending.len()));
+    }
     println!("plan: {creates} to create, {updates} to update, {deletes} to delete{suffix}");
-    for a in &plan.actions {
+    print_actions(&plan_actions, show_noop);
+
+    // Held for a boundary, grouped by what they wait on; their diffs are
+    // shown now.
+    let mut by_nulls: std::collections::BTreeMap<String, Vec<dform::provider::Action>> =
+        Default::default();
+    for a in held {
+        let key = (a.addr.typ.clone(), a.addr.name.clone());
+        let on = sections.pending[&key]
+            .iter()
+            .map(|n| format!("?{n}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        by_nulls.entry(on).or_default().push(a);
+    }
+    for (on, actions) in by_nulls {
+        println!("pending on {on}:");
+        print_actions(&actions, true);
+    }
+    if !sections.pending_groups.is_empty() {
+        println!("pending groups:");
+        for g in &sections.pending_groups {
+            println!("? {g}");
+        }
+    }
+    if !sections.undetermined.is_empty() {
+        println!("undetermined:");
+        for u in &sections.undetermined {
+            println!("? {u}");
+        }
+    }
+}
+
+fn print_actions(actions: &[dform::provider::Action], show_noop: bool) {
+    for a in actions {
         if matches!(a.kind, ActionKind::Noop) && !show_noop {
             continue;
         }

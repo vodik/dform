@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== examples/adversarial/gke_two_phase.df: 118 nodes, 132 edges (79 negative)
+== examples/adversarial/gke_two_phase.df: 120 nodes, 136 edges (81 negative)
    STRATIFIED, 5 strata
    stratum 0:
      (arg, compute.vm, id)
@@ -75,6 +75,7 @@ exit: ok
      (arg, gke_cluster, master_control_plane_cidr)
      (arg, gke_cluster, name)
      (arg, gke_cluster, network_id)
+     (arg, gke_cluster, node_locations)
      (arg, gke_cluster, project_id)
      (arg, gke_cluster, subnetwork_id)
      (arg, google_compute_address, name)
@@ -107,6 +108,7 @@ exit: ok
      (attr, gke_cluster, master_control_plane_cidr)
      (attr, gke_cluster, name)
      (attr, gke_cluster, network_id)
+     (attr, gke_cluster, node_locations)
      (attr, gke_cluster, project_id)
      (attr, gke_cluster, subnetwork_id)
      (attr, google_compute_address, name)

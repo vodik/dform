@@ -1,7 +1,7 @@
 # adv2: Rule 3 coarseness. One rule with head `want` is stuck (the nodepool,
 # on ?gke_cluster/pngu#zones). An UNRELATED negation over `want` and an
 # UNRELATED aggregate over `want` must not become undetermined.
-# Run with schema::gke() and eval_sim.
+# Run with --provider gke.
 resource gke_cluster pngu {
   name = "pngu-gke"
 }.

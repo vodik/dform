@@ -14,7 +14,7 @@
 //!
 //! The facts are injected into the program as EDB (so `dform query type_attr`
 //! lists them) and folded into [`Schema`], the in-memory view the partition
-//! pass, the stuck simulation and the fake provider read.
+//! pass, the evaluator's prelude and the fake provider read.
 //!
 //! Proposal E §2.2: the null class of `ref(T, A, Attr)` comes from the schema.
 //! `computed` + `id` is fresh, `computed` + `sensitive` is secret, `computed`

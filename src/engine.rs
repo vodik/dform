@@ -1,16 +1,22 @@
 use crate::ast::{Atom, Constraint, Lit, Program, RuleStmt, Stmt, Term};
 use crate::lattice::{self, Collapsed2, Lattice, Rank, RankedContribution, Shadowed, Witnesses};
+use crate::lattice::{Truth, nulls_in};
 use crate::partition::{self, Node};
 use crate::schema::Schema;
+use crate::stuck::{self, Stuck};
 use crate::transform;
 use crate::value::Value;
 use anyhow::{Context, Result, anyhow, bail};
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 #[derive(Debug, Clone)]
 pub struct EvalResult {
     pub facts: BTreeSet<Atom>,
     pub warnings: Vec<String>,
+    /// Rule instances that need a null's content (E §2.7 Rule 2) or read
+    /// something undetermined (Rule 3); also derived as `stuck/4`.
+    pub stuck: Vec<Stuck>,
 }
 
 /// Predicates the attribute aggregate derives; no rule may.
@@ -76,23 +82,6 @@ pub fn eval(program: &Program, extra_facts: &[Atom]) -> Result<(EvalResult, Vec<
 
     check_defined(&rules, &constraints, &facts, &externs)?;
 
-    // Simulation (proposal F): the recorder needs the rule list to print
-    // stuck instances; constraints are appended as deny rules.
-    if crate::sim::active() {
-        let mut all = rules.clone();
-        for c in &constraints {
-            all.push(RuleStmt {
-                head: Atom {
-                    pred: "deny".into(),
-                    args: vec![Term::Val(Value::Str(c.message.clone()))],
-                    record: None,
-                },
-                body: c.body.clone(),
-            });
-        }
-        crate::sim::with(|s| s.rules = all);
-    }
-
     // Stratified evaluation over the partition graph (E §2.6, F DR-12
     // revised). Every rule runs in the stratum of its head node.
     let mut graph_rules = rules.clone();
@@ -100,7 +89,7 @@ pub fn eval(program: &Program, extra_facts: &[Atom]) -> Result<(EvalResult, Vec<
     let opts = partition::Options {
         externs: externs.iter().map(|e| e.pred.clone()).collect(),
     };
-    let graph = partition::build_lowered(graph_rules, &fact_atoms, &crate::schema::fake(), &opts);
+    let graph = partition::build_lowered(graph_rules, &fact_atoms, &schema, &opts);
     let strata = match partition::stratify(&graph) {
         partition::Verdict::Stratified { strata } => strata,
         partition::Verdict::Rejected {
@@ -120,12 +109,24 @@ pub fn eval(program: &Program, extra_facts: &[Atom]) -> Result<(EvalResult, Vec<
         })
         .collect();
     let rule_text: Vec<String> = rules.iter().map(partition::fmt_rule).collect();
+    let aggregates: BTreeSet<String> = rules
+        .iter()
+        .filter(|r| partition::is_aggregate_head(&r.head))
+        .map(|r| r.head.pred.clone())
+        .chain(["attr".to_string()])
+        .collect();
+    let mut stucks: Vec<Stuck> = Vec::new();
+    let known = RefCell::new(stuck::Known::default());
     let mut attrs = AttrAggregate::new(&strata);
     let max_stratum = rule_stratum.iter().copied().max().unwrap_or(0);
     for s in 0..=max_stratum {
         // Attribute groups whose contributors all sit below this stratum
         // are complete: collapse them before any rule here reads them.
-        attrs.emit_ready(s, &mut facts, &origins)?;
+        let ready = attrs.emit_ready(s, &mut facts, &origins, &known.borrow())?;
+        for st in ready {
+            known.borrow_mut().add(&st);
+            stucks.push(st);
+        }
         let rules_s: Vec<(usize, &RuleStmt)> = rules
             .iter()
             .enumerate()
@@ -134,19 +135,32 @@ pub fn eval(program: &Program, extra_facts: &[Atom]) -> Result<(EvalResult, Vec<
         if rules_s.is_empty() {
             continue;
         }
+        let recs: Vec<Rec> = rules_s
+            .iter()
+            .map(|(i, r)| Rec {
+                rule: *i,
+                head: &r.head,
+                text: &rule_text[*i],
+                known: &known,
+                aggregates: &aggregates,
+                found: RefCell::new(Vec::new()),
+            })
+            .collect();
 
         // Naive iteration to the stratum's fixpoint. It terminates: facts
         // only grow, and a stratum derives finitely many unless a builtin
-        // invents values without bound (`n(Y) :- n(X), Y = X + 1`).
+        // invents values without bound (`n(Y) :- n(X), Y = X + 1`). An
+        // aggregate may share a stratum with its readers, so a stuck
+        // instance found here is known to the next round (Rule 3).
+        let mut seen = vec![0usize; recs.len()];
         let mut changed = true;
         while changed {
             changed = false;
 
             let snapshot: Vec<Atom> = facts.iter().cloned().collect();
             let mut derived: Vec<(usize, Atom)> = Vec::new();
-            for (i, r) in &rules_s {
-                crate::sim::set_current(*i, &r.head);
-                derived.extend(eval_rule(r, &snapshot)?.into_iter().map(|a| (*i, a)));
+            for ((i, r), rec) in rules_s.iter().zip(&recs) {
+                derived.extend(eval_rule(r, &snapshot, rec)?.into_iter().map(|a| (*i, a)));
             }
             for (i, a) in derived {
                 origins.note(&a, rule_text[i].clone());
@@ -154,27 +168,50 @@ pub fn eval(program: &Program, extra_facts: &[Atom]) -> Result<(EvalResult, Vec<
                     changed = true;
                 }
             }
+            for (rec, n) in recs.iter().zip(seen.iter_mut()) {
+                let found = rec.found.borrow();
+                for st in &found[*n..] {
+                    known.borrow_mut().add(st);
+                    changed = true;
+                }
+                *n = found.len();
+            }
         }
+        stucks.extend(recs.into_iter().flat_map(|r| r.found.into_inner()));
     }
-    attrs.emit_ready(usize::MAX, &mut facts, &origins)?;
+    let ready = attrs.emit_ready(usize::MAX, &mut facts, &origins, &known.borrow())?;
+    stucks.extend(ready);
     attrs.check_complete(&facts)?;
 
     // Constraints are checked against the final fact set.
     let snapshot: Vec<Atom> = facts.iter().cloned().collect();
     let mut violations = Vec::new();
     for (k, c) in constraints.iter().enumerate() {
-        crate::sim::set_current(
-            rules.len() + k,
-            &Atom {
-                pred: "deny".into(),
-                args: vec![Term::Val(Value::Str(c.message.clone()))],
-                record: None,
-            },
-        );
-        if constraint_violated(c, &snapshot)? {
+        let head = Atom {
+            pred: "deny".into(),
+            args: vec![Term::Val(Value::Str(c.message.clone()))],
+            record: None,
+        };
+        let text = partition::fmt_rule(&partition::constraint_rule(c));
+        let rec = Rec {
+            rule: rules.len() + k,
+            head: &head,
+            text: &text,
+            known: &known,
+            aggregates: &aggregates,
+            found: RefCell::new(Vec::new()),
+        };
+        if constraint_violated(c, &snapshot, &rec)? {
             violations.push(c.message.clone());
         }
+        stucks.extend(rec.found.into_inner());
     }
+    // A compiler-generated companion (`__ref_dep`) is stuck exactly when
+    // the contribution it shadows is.
+    stucks.retain(|s| !s.head.pred.starts_with("__"));
+    stucks.sort();
+    stucks.dedup();
+    facts.extend(stucks.iter().map(Stuck::fact));
 
     // Policy facts: deny/warn.
     let mut warnings = Vec::new();
@@ -186,7 +223,14 @@ pub fn eval(program: &Program, extra_facts: &[Atom]) -> Result<(EvalResult, Vec<
         }
     }
 
-    Ok((EvalResult { facts, warnings }, violations))
+    Ok((
+        EvalResult {
+            facts,
+            warnings,
+            stuck: stucks,
+        },
+        violations,
+    ))
 }
 
 /// The provider schema among this run's facts: the catalog the provider
@@ -320,28 +364,72 @@ impl AttrAggregate {
             .unwrap_or(0)
     }
 
+    /// Collapse every complete group. Rule 3 per key: a group that a stuck
+    /// contribution could still join is undetermined and is not collapsed;
+    /// it and a Stuck cell are returned as stuck heads `attr(T, A, P, _)`,
+    /// so their readers are undetermined too.
     fn emit_ready(
         &mut self,
         stratum: usize,
         facts: &mut BTreeSet<Atom>,
         origins: &Origins,
-    ) -> Result<()> {
+        known: &stuck::Known,
+    ) -> Result<Vec<Stuck>> {
         let lattices = declared_lattices(facts)?;
         let mut out = Vec::new();
+        let mut stuck_groups = Vec::new();
         for (key, contribs) in groups(facts)? {
             if self.emitted.contains_key(&key) || self.ready_at(&key.0, &key.2) > stratum {
                 continue;
             }
-            let lat = lattices
-                .get(&(key.0.clone(), key.2.clone()))
-                .cloned()
-                .unwrap_or_else(|| infer_lattice(&contribs));
-            out.extend(collapse_group(&key, &contribs, &lat, origins));
+            let (typ, addr, path) = &key;
+            let read = Atom {
+                pred: "attr".into(),
+                args: vec![
+                    str_val(typ),
+                    Term::Val(addr.clone()),
+                    str_val(path),
+                    Term::Wildcard,
+                ],
+                record: None,
+            };
+            let group_stuck = |nulls: BTreeSet<String>, reason: String| Stuck {
+                rule: None,
+                head: read.clone(),
+                bindings: BTreeMap::new(),
+                nulls,
+                reason,
+                text: format!("attr({typ}, {}, {path}, _)", partition::fmt_value(addr)),
+            };
+            if known.any(&read) {
+                stuck_groups.push(group_stuck(
+                    known.blocking(&read),
+                    "a stuck rule instance may still contribute to this attribute".into(),
+                ));
+            } else {
+                let lat = lattices
+                    .get(&(typ.clone(), path.clone()))
+                    .cloned()
+                    .unwrap_or_else(|| infer_lattice(&contribs));
+                let cell = collapse_group(&key, &contribs, &lat, origins);
+                for a in &cell {
+                    if a.pred == "attr_stuck"
+                        && let Some(Term::Val(Value::List(ls))) = a.args.get(3)
+                    {
+                        let nulls = ls.iter().filter_map(|l| l.as_str().map(str::to_string));
+                        stuck_groups.push(group_stuck(
+                            nulls.collect(),
+                            "contributions disagree until a null resolves".into(),
+                        ));
+                    }
+                }
+                out.extend(cell);
+            }
             self.emitted
                 .insert(key, contribs.into_iter().map(|(a, _, _)| a).collect());
         }
         facts.extend(out);
-        Ok(())
+        Ok(stuck_groups)
     }
 
     /// Guard on the stratifier: no contribution arrived after its group was
@@ -678,27 +766,168 @@ fn ensure_ground(a: &Atom) -> Result<Atom> {
     })
 }
 
-fn eval_rule(rule: &RuleStmt, facts: &[Atom]) -> Result<Vec<Atom>> {
+/// Rule 2's recorder for the rule being evaluated (E §2.7, F DR-2 revised):
+/// every instance that needs a null's content is recorded here instead of
+/// firing. `known` holds the stuck heads of lower strata, for Rule 3.
+struct Rec<'a> {
+    rule: usize,
+    head: &'a Atom,
+    text: &'a str,
+    known: &'a RefCell<stuck::Known>,
+    /// Predicates defined by an aggregate rule (and `attr`): a positive read
+    /// of one of their stuck groups is undetermined.
+    aggregates: &'a BTreeSet<String>,
+    found: RefCell<Vec<Stuck>>,
+}
+
+impl Rec<'_> {
+    fn stuck(
+        &self,
+        state: &HashMap<String, Value>,
+        nulls: BTreeSet<String>,
+        reason: impl Into<String>,
+    ) {
+        self.stuck_as(self.head, state, nulls, reason);
+    }
+
+    fn stuck_as(
+        &self,
+        head: &Atom,
+        state: &HashMap<String, Value>,
+        nulls: BTreeSet<String>,
+        reason: impl Into<String>,
+    ) {
+        let s = Stuck {
+            rule: Some(self.rule),
+            head: stuck::head_pattern(head, state, eval_term),
+            bindings: state
+                .iter()
+                .filter(|(k, _)| !k.starts_with("__"))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+            nulls,
+            reason: reason.into(),
+            text: self.text.to_string(),
+        };
+        let mut found = self.found.borrow_mut();
+        if !found.contains(&s) {
+            found.push(s);
+        }
+    }
+
+    /// Rule 2 for a term: if a builtin inside it cannot evaluate because an
+    /// argument carries a null, record the instance and say so.
+    fn blocked(&self, t: &Term, state: &HashMap<String, Value>) -> bool {
+        match blocked_by_null(t, state) {
+            Some((name, nulls)) => {
+                let why = if name == "scoped" || name == "ref" {
+                    "resource address carries a null".to_string()
+                } else {
+                    format!("builtin {name}() over a null")
+                };
+                self.stuck(state, nulls, why);
+                true
+            }
+            None => false,
+        }
+    }
+
+    fn any_blocked<'t>(
+        &self,
+        ts: impl IntoIterator<Item = &'t Term>,
+        state: &HashMap<String, Value>,
+    ) -> bool {
+        ts.into_iter().any(|t| self.blocked(t, state))
+    }
+
+    /// Three-valued equality: Unknown records the instance (Rule 2).
+    fn eq(&self, a: &Value, b: &Value, state: &HashMap<String, Value>, what: &str) -> bool {
+        match crate::lattice::eq3(a, b) {
+            Truth::True => true,
+            Truth::False => false,
+            Truth::Unknown => {
+                let mut nulls = nulls_in(a);
+                nulls.extend(nulls_in(b));
+                self.stuck(state, nulls, format!("{what} against an open/secret null"));
+                false
+            }
+        }
+    }
+}
+
+/// Builtins that carry nulls instead of reading them: the aggregates (whose
+/// content positions `eval_rule_collect` decides) and the compiler's own.
+fn forwards_nulls(name: &str) -> bool {
+    matches!(
+        name,
+        "collect" | "collect_set" | "collect_list" | "count" | "__null" | "__label" | "__path"
+    )
+}
+
+/// The innermost builtin application in `t` whose arguments are ground but
+/// carry a null, with those nulls: every builtin argument is a content
+/// position (Rule 2).
+fn blocked_by_null(t: &Term, state: &HashMap<String, Value>) -> Option<(String, BTreeSet<String>)> {
+    match t {
+        Term::Func { name, args } => {
+            if let Some(inner) = args.iter().find_map(|a| blocked_by_null(a, state)) {
+                return Some(inner);
+            }
+            if forwards_nulls(name) {
+                return None;
+            }
+            let mut nulls = BTreeSet::new();
+            for a in args {
+                nulls.extend(nulls_in(&eval_term(a, state)?));
+            }
+            (!nulls.is_empty()).then(|| (name.clone(), nulls))
+        }
+        Term::List(xs) => xs.iter().find_map(|x| blocked_by_null(x, state)),
+        Term::Obj(m) => m.values().find_map(|x| blocked_by_null(x, state)),
+        _ => None,
+    }
+}
+
+/// A body atom as a pattern under `state`: bound terms are values, the
+/// rest wildcards.
+fn read_pattern(atom: &Atom, state: &HashMap<String, Value>) -> Atom {
+    Atom {
+        pred: atom.pred.clone(),
+        args: atom
+            .args
+            .iter()
+            .map(|t| match eval_term(t, state) {
+                Some(v) => Term::Val(v),
+                None => Term::Wildcard,
+            })
+            .collect(),
+        record: None,
+    }
+}
+
+fn eval_rule(rule: &RuleStmt, facts: &[Atom], rec: &Rec) -> Result<Vec<Atom>> {
     let collect = find_collect(&rule.head);
     if let Some((idx, kind)) = collect {
-        return eval_rule_collect(rule, facts, idx, kind);
+        return eval_rule_collect(rule, facts, idx, kind, rec);
     }
 
     let mut out = Vec::new();
-    let bindings = eval_body(&rule.body, facts)?;
+    let bindings = eval_body(&rule.body, facts, rec)?;
     for b in bindings {
-        // Rule 2 (E §2.7): an address argument is a content position. A head
-        // whose address carries a null is stuck, not derived.
-        if crate::sim::active()
-            && matches!(rule.head.pred.as_str(), "want" | "arg" | "adopt")
+        // Rule 2: an address argument is a content position. A head whose
+        // address carries a null is stuck, not derived.
+        if matches!(rule.head.pred.as_str(), "want" | "arg" | "adopt")
             && rule.head.args.len() >= 2
             && let Some(v) = eval_term(&rule.head.args[1], &b)
         {
-            let nulls = crate::lattice::nulls_in(&v);
+            let nulls = nulls_in(&v);
             if !nulls.is_empty() {
-                crate::sim::record_stuck(&b, nulls, "resource address carries a null");
+                rec.stuck(&b, nulls, "resource address carries a null");
                 continue;
             }
+        }
+        if rec.any_blocked(&rule.head.args, &b) {
+            continue;
         }
         let head = instantiate_atom(&rule.head, &b)
             .with_context(|| format!("instantiate head {}", rule.head.pred))?;
@@ -714,11 +943,17 @@ enum CollectKind {
     Count,
 }
 
+/// An aggregate rule. Rule 2: the group key is a content position, and so
+/// is the aggregated value of `count`; `collect_set`/`collect_list` forward
+/// nulls. Rule 3: a group is undetermined, and not derived, when its key
+/// unifies with a stuck instance of this rule or with a stuck head of a
+/// predicate the body reads.
 fn eval_rule_collect(
     rule: &RuleStmt,
     facts: &[Atom],
     idx: usize,
     kind: CollectKind,
+    rec: &Rec,
 ) -> Result<Vec<Atom>> {
     let Term::Func { name: _, args } = &rule.head.args[idx] else {
         bail!("internal: collect idx not func");
@@ -728,13 +963,13 @@ fn eval_rule_collect(
     }
     let item_term = args[0].clone();
 
-    if crate::sim::active() {
-        crate::sim::record_agg(&rule.body);
-    }
-    let bindings = eval_body(&rule.body, facts)?;
+    let bindings = eval_body(&rule.body, facts, rec)?;
     let mut groups_set: BTreeMap<Vec<Value>, BTreeSet<Value>> = BTreeMap::new();
     let mut groups_list: BTreeMap<Vec<Value>, Vec<Value>> = BTreeMap::new();
     for b in bindings {
+        if rec.any_blocked(&rule.head.args, &b) {
+            continue;
+        }
         let mut key = Vec::new();
         let mut key_nulls = BTreeSet::new();
         for (i, t) in rule.head.args.iter().enumerate() {
@@ -742,28 +977,17 @@ fn eval_rule_collect(
                 continue;
             }
             let v = eval_term(t, &b).ok_or_else(|| anyhow!("non-ground head term"))?;
-            key_nulls.extend(crate::lattice::nulls_in(&v));
+            key_nulls.extend(nulls_in(&v));
             key.push(v);
         }
         let item = eval_term(&item_term, &b).ok_or_else(|| anyhow!("non-ground collect item"))?;
-        if crate::sim::active() {
-            // Rule 2: a group key is a content position, always.
-            if !key_nulls.is_empty() {
-                crate::sim::record_stuck(&b, key_nulls, "aggregate group key carries a null");
-                continue;
-            }
-            // Rule 2 read literally: the aggregated value is a content
-            // position. E §7.2 says collect_set forwards nulls; the flag
-            // decides which reading runs.
-            let item_nulls = crate::lattice::nulls_in(&item);
-            if !item_nulls.is_empty() && crate::sim::agg_is_content() {
-                crate::sim::record_stuck(
-                    &b,
-                    item_nulls,
-                    "aggregated value carries a null (Rule 2 literal)",
-                );
-                continue;
-            }
+        if !key_nulls.is_empty() {
+            rec.stuck(&b, key_nulls, "aggregate group key carries a null");
+            continue;
+        }
+        if matches!(kind, CollectKind::Count) && stuck::has_null(&item) {
+            rec.stuck(&b, nulls_in(&item), "count over a null");
+            continue;
         }
         match kind {
             CollectKind::Set => {
@@ -775,8 +999,31 @@ fn eval_rule_collect(
         }
     }
 
-    let mut out = Vec::new();
+    // Rule 3: a stuck head of a body predicate makes the groups it could
+    // feed undetermined.
+    for lit in &rule.body {
+        let Lit::Pos(a) = lit else { continue };
+        if a.pred == "member" || a.pred == "enumerate" || is_builtin_pred(&a.pred) {
+            continue;
+        }
+        let pat = read_pattern(a, &HashMap::new());
+        for (p, nulls) in rec.known.borrow().matching(&pat) {
+            let mut b = HashMap::new();
+            for (t, v) in a.args.iter().zip(&p.args) {
+                if let (Term::Var(x), Term::Val(v)) = (t, v) {
+                    b.insert(x.clone(), v.clone());
+                }
+            }
+            rec.stuck(
+                &b,
+                nulls,
+                format!("aggregate over {}, which has a stuck instance", a.pred),
+            );
+        }
+    }
+    let undetermined: Vec<Atom> = rec.found.borrow().iter().map(|s| s.head.clone()).collect();
 
+    let mut out = Vec::new();
     let mut emit_group = |key: Vec<Value>, mut items: Vec<Value>| {
         // Deterministic output: Datalog doesn't define an order, so we sort.
         items.sort();
@@ -794,11 +1041,20 @@ fn eval_rule_collect(
                 k += 1;
             }
         }
-        out.push(Atom {
+        let group = Atom {
             pred: rule.head.pred.clone(),
             args: args_out,
             record: None,
-        });
+        };
+        let mut key_pat = group.clone();
+        key_pat.args[idx] = Term::Wildcard;
+        if undetermined
+            .iter()
+            .any(|u| stuck::patterns_unify(u, &key_pat))
+        {
+            return;
+        }
+        out.push(group);
     };
 
     for (key, items) in groups_set {
@@ -830,12 +1086,12 @@ fn find_collect(head: &Atom) -> Option<(usize, CollectKind)> {
     None
 }
 
-fn constraint_violated(c: &Constraint, facts: &[Atom]) -> Result<bool> {
-    let bindings = eval_body(&c.body, facts)?;
+fn constraint_violated(c: &Constraint, facts: &[Atom], rec: &Rec) -> Result<bool> {
+    let bindings = eval_body(&c.body, facts, rec)?;
     Ok(!bindings.is_empty())
 }
 
-fn eval_body(body: &[Lit], facts: &[Atom]) -> Result<Vec<HashMap<String, Value>>> {
+fn eval_body(body: &[Lit], facts: &[Atom], rec: &Rec) -> Result<Vec<HashMap<String, Value>>> {
     let mut states: Vec<HashMap<String, Value>> = vec![HashMap::new()];
     for lit in body {
         let mut next = Vec::new();
@@ -843,50 +1099,57 @@ fn eval_body(body: &[Lit], facts: &[Atom]) -> Result<Vec<HashMap<String, Value>>
             Lit::Pos(atom) => {
                 if atom.pred == "member" || atom.pred == "enumerate" {
                     for s in &states {
-                        eval_member_like(atom, s, &mut next)?;
+                        if !rec.any_blocked(&atom.args, s) {
+                            eval_member_like(atom, s, &mut next, rec)?;
+                        }
                     }
-                    states = next;
-                    if states.is_empty() {
-                        break;
-                    }
-                    continue;
-                }
-                if is_builtin_pred(&atom.pred) {
+                } else if is_builtin_pred(&atom.pred) {
                     for s in &states {
-                        if eval_builtin_pred(atom, s)? {
+                        if !rec.any_blocked(&atom.args, s) && eval_builtin_pred(atom, s)? {
                             next.push(s.clone());
                         }
                     }
-                    states = next;
-                    if states.is_empty() {
-                        break;
-                    }
-                    continue;
-                }
-                for s in &states {
-                    for f in facts.iter().filter(|x| x.pred == atom.pred) {
-                        if let Some(s2) = unify_atom(atom, f, s)? {
-                            next.push(s2);
+                } else {
+                    for s in &states {
+                        if rec.any_blocked(&atom.args, s) {
+                            continue;
+                        }
+                        // Rule 3: a positive reader of an undetermined
+                        // aggregate group is undetermined. It still reads
+                        // the groups that were decided.
+                        if rec.aggregates.contains(&atom.pred) {
+                            let nulls = rec.known.borrow().blocking(&read_pattern(atom, s));
+                            if !nulls.is_empty() {
+                                rec.stuck(
+                                    s,
+                                    nulls,
+                                    format!("reads undetermined aggregate {}", atom.pred),
+                                );
+                            }
+                        }
+                        for f in facts.iter().filter(|x| x.pred == atom.pred) {
+                            if let Some(s2) = unify_atom(atom, f, s, rec)? {
+                                next.push(s2);
+                            }
                         }
                     }
                 }
             }
             Lit::Not(atom) => {
                 for s in &states {
+                    if rec.any_blocked(&atom.args, s) {
+                        continue;
+                    }
                     if atom.pred == "member" {
-                        if atom.args.len() == 2 {
-                            if eval_not_member2(atom, s)? {
-                                next.push(s.clone());
-                            }
-                            continue;
+                        let holds = match atom.args.len() {
+                            2 => eval_not_member2(atom, s, rec)?,
+                            3 => eval_not_member3(atom, s)?,
+                            _ => bail!("member/2 or member/3 expected"),
+                        };
+                        if holds {
+                            next.push(s.clone());
                         }
-                        if atom.args.len() == 3 {
-                            if eval_not_member3(atom, s)? {
-                                next.push(s.clone());
-                            }
-                            continue;
-                        }
-                        bail!("member/2 or member/3 expected");
+                        continue;
                     }
                     if atom.pred == "enumerate" {
                         // `enumerate/3` is a generator; `not enumerate(...)` is meaningless
@@ -898,60 +1161,32 @@ fn eval_body(body: &[Lit], facts: &[Atom]) -> Result<Vec<HashMap<String, Value>>
                         if !eval_builtin_pred(atom, s)? {
                             next.push(s.clone());
                         }
-                    } else {
-                        let grounded = ground_atom(atom, s)
-                            .with_context(|| format!("unsafe negation: not {}(...)", atom.pred))?;
-                        if crate::sim::active() {
-                            // Rule 2: a negation pattern holding an open or
-                            // secret null is a content position; fresh nulls
-                            // are decided under UNA (by label).
-                            let mut open = BTreeSet::new();
-                            for t in &grounded.args {
-                                if let Term::Val(v) = t
-                                    && crate::sim::has_open_or_secret(v)
-                                {
-                                    open.extend(crate::lattice::nulls_in(v));
-                                }
-                            }
-                            if !open.is_empty() {
-                                crate::sim::record_stuck(
-                                    s,
-                                    open,
-                                    format!(
-                                        "negation pattern not {}(..) holds an open/secret null",
-                                        atom.pred
-                                    ),
-                                );
-                                continue;
-                            }
-                            crate::sim::record_neg(&grounded);
-                        }
-                        let any = facts
-                            .iter()
-                            .any(|f| f.pred == grounded.pred && f.args == grounded.args);
-                        if !any {
-                            next.push(s.clone());
-                        }
+                        continue;
+                    }
+                    let grounded = ground_atom(atom, s)
+                        .with_context(|| format!("unsafe negation: not {}(...)", atom.pred))?;
+                    if eval_not(&grounded, facts, s, rec) {
+                        next.push(s.clone());
                     }
                 }
             }
             Lit::Eq(a, b) => {
                 for s in &states {
-                    if let Some(s2) = eval_eq(a, b, s)? {
+                    if let Some(s2) = eval_eq(a, b, s, rec)? {
                         next.push(s2);
                     }
                 }
             }
             Lit::Neq(a, b) => {
                 for s in &states {
-                    if let Some(s2) = eval_neq(a, b, s)? {
+                    if let Some(s2) = eval_neq(a, b, s, rec)? {
                         next.push(s2);
                     }
                 }
             }
             Lit::Gt(a, b) | Lit::Ge(a, b) | Lit::Lt(a, b) | Lit::Le(a, b) => {
                 for s in &states {
-                    if eval_cmp(lit, a, b, s)? {
+                    if eval_cmp(lit, a, b, s, rec)? {
                         next.push(s.clone());
                     }
                 }
@@ -965,6 +1200,86 @@ fn eval_body(body: &[Lit], facts: &[Atom]) -> Result<Vec<HashMap<String, Value>>
     Ok(states)
 }
 
+/// `not p(t)` over ground `t`. Rule 2: a pattern holding an open or secret
+/// null, or a fact that equals it only Unknown-ly, needs content. Rule 3:
+/// the negation is undetermined while a stuck head of `p` unifies with
+/// `p(t)`. Fresh nulls are decided under the Unique Name Assumption.
+fn eval_not(grounded: &Atom, facts: &[Atom], s: &HashMap<String, Value>, rec: &Rec) -> bool {
+    let mut open = BTreeSet::new();
+    for t in &grounded.args {
+        if let Term::Val(v) = t
+            && stuck::has_open_or_secret(v)
+        {
+            open.extend(nulls_in(v));
+        }
+    }
+    if !open.is_empty() {
+        rec.stuck(
+            s,
+            open,
+            format!(
+                "negation pattern not {}(..) holds an open/secret null",
+                grounded.pred
+            ),
+        );
+        return false;
+    }
+    let mut unknown = BTreeSet::new();
+    for f in facts
+        .iter()
+        .filter(|f| f.pred == grounded.pred && f.args.len() == grounded.args.len())
+    {
+        let mut t = Truth::True;
+        for (a, b) in f.args.iter().zip(&grounded.args) {
+            let (Term::Val(a), Term::Val(b)) = (a, b) else {
+                continue;
+            };
+            match crate::lattice::eq3(a, b) {
+                Truth::False => {
+                    t = Truth::False;
+                    break;
+                }
+                Truth::Unknown => t = Truth::Unknown,
+                Truth::True => {}
+            }
+        }
+        match t {
+            Truth::True => return false,
+            Truth::Unknown => {
+                for x in f.args.iter().chain(&grounded.args) {
+                    if let Term::Val(v) = x {
+                        unknown.extend(nulls_in(v));
+                    }
+                }
+            }
+            Truth::False => {}
+        }
+    }
+    if !unknown.is_empty() {
+        rec.stuck(
+            s,
+            unknown,
+            format!("not {}(..) against an open/secret null", grounded.pred),
+        );
+        return false;
+    }
+    let known = rec.known.borrow();
+    let nulls = known.blocking(grounded);
+    if !nulls.is_empty() || known.any(grounded) {
+        rec.stuck(
+            s,
+            nulls,
+            format!(
+                "not {}: {} has a stuck instance that may derive it",
+                partition::fmt_atom(grounded),
+                grounded.pred
+            ),
+        );
+        return false;
+    }
+    true
+}
+
 fn is_builtin_pred(pred: &str) -> bool {
     matches!(pred, "inet_overlaps" | "inet_contains" | "ip_unspecified")
 }
@@ -972,16 +1287,6 @@ fn is_builtin_pred(pred: &str) -> bool {
 fn eval_builtin_pred(atom: &Atom, state: &HashMap<String, Value>) -> Result<bool> {
     // Builtin predicates are functions that return Bool.
     let Some(v) = eval_func(&atom.pred, &atom.args, state) else {
-        if crate::sim::active()
-            && atom.args.iter().any(|t| {
-                eval_term(t, state)
-                    .map(|v| crate::sim::has_null(&v))
-                    .unwrap_or(false)
-            })
-        {
-            // Stuck was recorded by eval_func; the literal does not hold.
-            return Ok(false);
-        }
         bail!("unsafe builtin predicate {}(...)", atom.pred);
     };
     match v {
@@ -997,14 +1302,15 @@ fn eval_member_like(
     atom: &Atom,
     state: &HashMap<String, Value>,
     out: &mut Vec<HashMap<String, Value>>,
+    rec: &Rec,
 ) -> Result<()> {
     match atom.pred.as_str() {
         "member" => {
             if atom.args.len() == 2 {
-                return eval_member2(atom, state, out);
+                return eval_member2(atom, state, out, rec);
             }
             if atom.args.len() == 3 {
-                return eval_member3(atom, state, out);
+                return eval_member3(atom, state, out, rec);
             }
             bail!("member/2 or member/3 expected");
         }
@@ -1012,7 +1318,7 @@ fn eval_member_like(
             if atom.args.len() != 3 {
                 bail!("enumerate/3 expected");
             }
-            eval_member3(atom, state, out)
+            eval_member3(atom, state, out, rec)
         }
         _ => bail!("internal: eval_member_like called for non-member"),
     }
@@ -1022,16 +1328,13 @@ fn eval_member2(
     atom: &Atom,
     state: &HashMap<String, Value>,
     out: &mut Vec<HashMap<String, Value>>,
+    rec: &Rec,
 ) -> Result<()> {
     let list_v = eval_term(&atom.args[0], state)
         .ok_or_else(|| anyhow!("unsafe member: list is not ground"))?;
     if let Value::Null { .. } = &list_v {
         // Rule 2: member over a null list is a content position.
-        crate::sim::record_stuck(
-            state,
-            crate::lattice::nulls_in(&list_v),
-            "member/2 over a null list",
-        );
+        rec.stuck(state, nulls_in(&list_v), "member/2 over a null list");
         return Ok(());
     }
     let Value::List(items) = list_v else {
@@ -1039,22 +1342,18 @@ fn eval_member2(
     };
     for item in &items {
         let mut s2 = state.clone();
-        if unify_term(&atom.args[1], item, &mut s2)? {
+        if unify_term(&atom.args[1], item, &mut s2, rec)? {
             out.push(s2);
         }
     }
     Ok(())
 }
 
-fn eval_not_member2(atom: &Atom, state: &HashMap<String, Value>) -> Result<bool> {
+fn eval_not_member2(atom: &Atom, state: &HashMap<String, Value>, rec: &Rec) -> Result<bool> {
     let list_v = eval_term(&atom.args[0], state)
         .ok_or_else(|| anyhow!("unsafe not member: list is not ground"))?;
     if let Value::Null { .. } = &list_v {
-        crate::sim::record_stuck(
-            state,
-            crate::lattice::nulls_in(&list_v),
-            "not member/2 over a null list",
-        );
+        rec.stuck(state, nulls_in(&list_v), "not member/2 over a null list");
         return Ok(false);
     }
     let Value::List(items) = list_v else {
@@ -1062,25 +1361,22 @@ fn eval_not_member2(atom: &Atom, state: &HashMap<String, Value>) -> Result<bool>
     };
     let item_v = eval_term(&atom.args[1], state)
         .ok_or_else(|| anyhow!("unsafe not member: item is not ground"))?;
-    if crate::sim::active() {
-        let mut unknown = BTreeSet::new();
-        for x in &items {
-            match crate::lattice::eq3(x, &item_v) {
-                crate::lattice::Truth::True => return Ok(false),
-                crate::lattice::Truth::Unknown => {
-                    unknown.extend(crate::lattice::nulls_in(x));
-                    unknown.extend(crate::lattice::nulls_in(&item_v));
-                }
-                crate::lattice::Truth::False => {}
+    let mut unknown = BTreeSet::new();
+    for x in &items {
+        match crate::lattice::eq3(x, &item_v) {
+            Truth::True => return Ok(false),
+            Truth::Unknown => {
+                unknown.extend(nulls_in(x));
+                unknown.extend(nulls_in(&item_v));
             }
+            Truth::False => {}
         }
-        if !unknown.is_empty() {
-            crate::sim::record_stuck(state, unknown, "not member/2: membership undecidable");
-            return Ok(false);
-        }
-        return Ok(true);
     }
-    Ok(!items.contains(&item_v))
+    if !unknown.is_empty() {
+        rec.stuck(state, unknown, "not member/2: membership undecidable");
+        return Ok(false);
+    }
+    Ok(true)
 }
 
 fn eval_not_member3(atom: &Atom, state: &HashMap<String, Value>) -> Result<bool> {
@@ -1110,15 +1406,12 @@ fn eval_member3(
     atom: &Atom,
     state: &HashMap<String, Value>,
     out: &mut Vec<HashMap<String, Value>>,
+    rec: &Rec,
 ) -> Result<()> {
     let list_v = eval_term(&atom.args[0], state)
         .ok_or_else(|| anyhow!("unsafe member: list is not ground"))?;
     if let Value::Null { .. } = &list_v {
-        crate::sim::record_stuck(
-            state,
-            crate::lattice::nulls_in(&list_v),
-            "member/3 over a null list",
-        );
+        rec.stuck(state, nulls_in(&list_v), "member/3 over a null list");
         return Ok(());
     }
     let Value::List(items) = list_v else {
@@ -1126,10 +1419,10 @@ fn eval_member3(
     };
     for (i, item) in items.iter().enumerate() {
         let mut s2 = state.clone();
-        if !unify_term(&atom.args[1], &Value::Int(i as i64), &mut s2)? {
+        if !unify_term(&atom.args[1], &Value::Int(i as i64), &mut s2, rec)? {
             continue;
         }
-        if !unify_term(&atom.args[2], item, &mut s2)? {
+        if !unify_term(&atom.args[2], item, &mut s2, rec)? {
             continue;
         }
         out.push(s2);
@@ -1141,6 +1434,7 @@ fn unify_atom(
     pattern: &Atom,
     fact: &Atom,
     state: &HashMap<String, Value>,
+    rec: &Rec,
 ) -> Result<Option<HashMap<String, Value>>> {
     if pattern.args.len() != fact.args.len() {
         return Ok(None);
@@ -1150,37 +1444,19 @@ fn unify_atom(
         let Term::Val(fv) = f else {
             bail!("internal: non-ground fact");
         };
-        if !unify_term(p, fv, &mut out)? {
+        if !unify_term(p, fv, &mut out, rec)? {
             return Ok(None);
         }
     }
     Ok(Some(out))
 }
 
-/// Three-valued equality for unification when the simulation is active:
-/// Unknown records a stuck instance and fails the match (Rule 2).
-fn sim_eq(a: &Value, b: &Value, out: &HashMap<String, Value>) -> bool {
-    if !crate::sim::active() {
-        return a == b;
-    }
-    match crate::lattice::eq3(a, b) {
-        crate::lattice::Truth::True => true,
-        crate::lattice::Truth::False => false,
-        crate::lattice::Truth::Unknown => {
-            let mut nulls = crate::lattice::nulls_in(a);
-            nulls.extend(crate::lattice::nulls_in(b));
-            crate::sim::record_stuck(out, nulls, "unification against an open/secret null");
-            false
-        }
-    }
-}
-
-fn unify_term(pat: &Term, fv: &Value, out: &mut HashMap<String, Value>) -> Result<bool> {
+fn unify_term(pat: &Term, fv: &Value, out: &mut HashMap<String, Value>, rec: &Rec) -> Result<bool> {
     match pat {
-        Term::Val(v) => Ok(sim_eq(v, fv, out)),
+        Term::Val(v) => Ok(rec.eq(v, fv, out, "unification")),
         Term::Var(name) => {
             if let Some(bound) = out.get(name) {
-                Ok(sim_eq(bound, fv, out))
+                Ok(rec.eq(bound, fv, out, "unification"))
             } else {
                 out.insert(name.clone(), fv.clone());
                 Ok(true)
@@ -1196,7 +1472,7 @@ fn unify_term(pat: &Term, fv: &Value, out: &mut HashMap<String, Value>) -> Resul
             }
             let mut tmp = out.clone();
             for (t, v) in items.iter().zip(vs) {
-                if !unify_term(t, v, &mut tmp)? {
+                if !unify_term(t, v, &mut tmp, rec)? {
                     return Ok(false);
                 }
             }
@@ -1215,7 +1491,7 @@ fn unify_term(pat: &Term, fv: &Value, out: &mut HashMap<String, Value>) -> Resul
                 let Some(v) = vm.get(k) else {
                     return Ok(false);
                 };
-                if !unify_term(t, v, &mut tmp)? {
+                if !unify_term(t, v, &mut tmp, rec)? {
                     return Ok(false);
                 }
             }
@@ -1237,14 +1513,14 @@ fn unify_term(pat: &Term, fv: &Value, out: &mut HashMap<String, Value>) -> Resul
                 let Some(suffix) = full.strip_prefix(&prefix) else {
                     return Ok(false);
                 };
-                return unify_term(&args[1], &Value::Str(suffix.to_string()), out);
+                return unify_term(&args[1], &Value::Str(suffix.to_string()), out, rec);
             }
 
             let pv = match eval_term(pat, out) {
                 Some(v) => v,
                 None => return Ok(false),
             };
-            Ok(sim_eq(&pv, fv, out))
+            Ok(rec.eq(&pv, fv, out, "unification"))
         }
         Term::ListComp { .. } => {
             // Comprehensions must be lowered before evaluation.
@@ -1286,10 +1562,14 @@ fn eval_eq(
     a: &Term,
     b: &Term,
     state: &HashMap<String, Value>,
+    rec: &Rec,
 ) -> Result<Option<HashMap<String, Value>>> {
+    if rec.any_blocked([a, b], state) {
+        return Ok(None);
+    }
     let mut out = state.clone();
     match (eval_term(a, &out), eval_term(b, &out)) {
-        (Some(av), Some(bv)) => Ok(sim_eq(&av, &bv, &out).then_some(out)),
+        (Some(av), Some(bv)) => Ok(rec.eq(&av, &bv, &out, "=").then_some(out)),
         (Some(av), None) => {
             if bind_term(b, av, &mut out)? {
                 Ok(Some(out))
@@ -1307,10 +1587,6 @@ fn eval_eq(
         (None, None) => {
             for t in [a, b] {
                 if let Some((name, args)) = failed_builtin(t, &out) {
-                    if crate::sim::active() && args.iter().any(crate::sim::has_null) {
-                        // Rule 2: a builtin over a null is stuck (recorded).
-                        return Ok(None);
-                    }
                     let args: Vec<String> = args.iter().map(partition::fmt_value).collect();
                     bail!(
                         "{name}({}) is not defined for these arguments",
@@ -1344,38 +1620,47 @@ fn eval_neq(
     a: &Term,
     b: &Term,
     state: &HashMap<String, Value>,
+    rec: &Rec,
 ) -> Result<Option<HashMap<String, Value>>> {
+    if rec.any_blocked([a, b], state) {
+        return Ok(None);
+    }
     match (eval_term(a, state), eval_term(b, state)) {
-        (Some(av), Some(bv)) => {
-            if crate::sim::active() {
-                return Ok(match crate::lattice::eq3(&av, &bv) {
-                    crate::lattice::Truth::False => Some(state.clone()),
-                    crate::lattice::Truth::True => None,
-                    crate::lattice::Truth::Unknown => {
-                        let mut nulls = crate::lattice::nulls_in(&av);
-                        nulls.extend(crate::lattice::nulls_in(&bv));
-                        crate::sim::record_stuck(state, nulls, "!= against an open/secret null");
-                        None
-                    }
-                });
+        (Some(av), Some(bv)) => Ok(match crate::lattice::eq3(&av, &bv) {
+            Truth::False => Some(state.clone()),
+            Truth::True => None,
+            Truth::Unknown => {
+                let mut nulls = nulls_in(&av);
+                nulls.extend(nulls_in(&bv));
+                rec.stuck(state, nulls, "!= against an open/secret null");
+                None
             }
-            Ok((av != bv).then_some(state.clone()))
-        }
+        }),
         _ => bail!("unsafe !=: both sides must be ground"),
     }
 }
 
-fn eval_cmp(op_lit: &Lit, a: &Term, b: &Term, state: &HashMap<String, Value>) -> Result<bool> {
+fn eval_cmp(
+    op_lit: &Lit,
+    a: &Term,
+    b: &Term,
+    state: &HashMap<String, Value>,
+    rec: &Rec,
+) -> Result<bool> {
+    if rec.any_blocked([a, b], state) {
+        return Ok(false);
+    }
     let Some(av) = eval_term(a, state) else {
         bail!("unsafe comparison: left not ground");
     };
     let Some(bv) = eval_term(b, state) else {
         bail!("unsafe comparison: right not ground");
     };
-    if crate::sim::active() && (crate::sim::has_null(&av) || crate::sim::has_null(&bv)) {
-        let mut nulls = crate::lattice::nulls_in(&av);
-        nulls.extend(crate::lattice::nulls_in(&bv));
-        crate::sim::record_stuck(state, nulls, "ordering comparison over a null");
+    // Rule 2: an ordering comparison is a content position.
+    if stuck::has_null(&av) || stuck::has_null(&bv) {
+        let mut nulls = nulls_in(&av);
+        nulls.extend(nulls_in(&bv));
+        rec.stuck(state, nulls, "ordering comparison over a null");
         return Ok(false);
     }
     let (ai, bi) = match (&av, &bv) {
@@ -1430,46 +1715,12 @@ fn eval_term(term: &Term, state: &HashMap<String, Value>) -> Option<Value> {
 }
 
 fn eval_func(name: &str, args: &[Term], state: &HashMap<String, Value>) -> Option<Value> {
-    if crate::sim::active() {
-        match name {
-            // Rule 1: ref to a computed attribute IS the null; forwarded.
-            "ref" if args.len() == 3 => {
-                let t = eval_term(&args[0], state)?.as_str()?.to_string();
-                let n = eval_term(&args[1], state)?;
-                if crate::sim::has_null(&n) {
-                    crate::sim::record_stuck(
-                        state,
-                        crate::lattice::nulls_in(&n),
-                        "ref address carries a null",
-                    );
-                    return None;
-                }
-                let n = value_to_string(&n);
-                let a = eval_term(&args[2], state)?.as_str()?.to_string();
-                if let Some(v) = crate::sim::null_for(&t, &n, &a) {
-                    return Some(v);
-                }
-                // Not computed: a configured attribute. E rewrites this to an
-                // attr join; the simulation keeps the opaque Ref.
-            }
-            "cloud_ref" | "gref" | "collect" | "collect_set" | "collect_list" | "count" => {}
-            // Rule 2: every other builtin argument is a content position.
-            _ => {
-                let mut nulls = BTreeSet::new();
-                for a in args {
-                    if let Some(v) = eval_term(a, state) {
-                        nulls.extend(crate::lattice::nulls_in(&v));
-                    }
-                }
-                if !nulls.is_empty() {
-                    let what = if name == "scoped" {
-                        "resource address carries a null".to_string()
-                    } else {
-                        format!("builtin {name}() over a null")
-                    };
-                    crate::sim::record_stuck(state, nulls, what);
-                    return None;
-                }
+    // Rule 2: every builtin argument is a content position. A builtin
+    // over a null has no value; the literal that needs it is stuck.
+    if !forwards_nulls(name) {
+        for a in args {
+            if stuck::has_null(&eval_term(a, state)?) {
+                return None;
             }
         }
     }
@@ -2367,25 +2618,23 @@ mod tests {
         );
     }
 
-    /// A builtin over a null is a content position: under the stuck
-    /// simulation it records a stuck instance instead of deriving.
+    /// A builtin over a null is a content position (Rule 2): the instance
+    /// is recorded as stuck instead of deriving.
     #[test]
     fn a_builtin_over_a_null_is_stuck() {
-        let program = crate::parser::parse_program(
+        let (r, _) = run_with(
             "want(net.vpc, a).
              id_len(N) :- want(net.vpc, A), N = len(ref(net.vpc, A, id)).",
+            &crate::schema::fake().facts,
         )
         .unwrap();
-        let r =
-            crate::sim::eval_sim(&program, &[], crate::schema::fake(), Default::default()).unwrap();
         assert!(r.facts.iter().all(|a| a.pred != "id_len"));
         assert!(
-            r.sim
-                .stuck
+            r.stuck
                 .iter()
                 .any(|s| s.reason == "builtin len() over a null"),
             "{:?}",
-            r.sim.stuck
+            r.stuck
         );
     }
 
@@ -2622,6 +2871,172 @@ mod tests {
         assert!(
             attrs.contains(&"attr(\"vm\", \"b\", \"id\", ?vm/b#id:Fresh)".to_string()),
             "{attrs:#?}"
+        );
+    }
+
+    fn repo_file(rel: &str) -> std::path::PathBuf {
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(rel)
+    }
+
+    /// Evaluate a repository program against a provider schema, and its
+    /// sections (E §2.7) on an empty world.
+    fn run_file(
+        rel: &str,
+        schema: &crate::schema::Schema,
+        extra: &[Atom],
+    ) -> (EvalResult, Vec<String>, stuck::Sections) {
+        let program = crate::loader::load_program(&[repo_file(rel)]).unwrap();
+        let mut extra = extra.to_vec();
+        extra.extend(schema.facts.clone());
+        let (r, violations) = eval(&program, &extra).unwrap();
+        let docs = crate::ir::compile_resources(r.facts.iter().cloned(), schema)
+            .unwrap()
+            .into_iter()
+            .map(|d| ((d.addr.typ, d.addr.name), d.attrs))
+            .collect();
+        let sections = stuck::sections(&r.stuck, &r.facts, &docs, schema);
+        (r, violations, sections)
+    }
+
+    /// Orchestrator regression (the mock-provider hand-back): `format` over a
+    /// ref to a computed attribute used to plan the constant
+    /// "ref(net.vpc,v,id)-x". It is a content position: the rule is stuck,
+    /// recorded as `stuck/4`, and derives nothing.
+    #[test]
+    fn format_over_a_computed_ref_is_stuck() {
+        let (r, violations) = run_with(
+            "resource net.vpc v { cidr = \"10.0.0.0/16\" }.
+             resource net.subnet s { name = format(\"%s-x\", ref(net.vpc, v, id)) }.",
+            &crate::schema::fake().facts,
+        )
+        .unwrap();
+        assert!(violations.is_empty(), "{violations:?}");
+        assert!(
+            !facts_of(&r, "attr").iter().any(|a| a.contains("\"name\"")),
+            "{:?}",
+            facts_of(&r, "attr")
+        );
+        let stuck = facts_of(&r, "stuck");
+        assert_eq!(stuck.len(), 1, "{stuck:?}");
+        assert!(
+            stuck[0]
+                .contains("arg(\\\"net.subnet\\\", \\\"s\\\", \\\"name\\\", _, \\\"normal\\\")")
+                && stuck[0].contains("[\"net.vpc/v#id\"]"),
+            "{stuck:?}"
+        );
+        assert_eq!(r.stuck[0].reason, "builtin format() over a null");
+    }
+
+    /// E §7.1 / F 4.1: every ref in dform.df is to a fresh `id` and is
+    /// forwarded, so nothing is stuck and all 14 resources are definite.
+    /// (Was sim.rs's dform_df_under_nulls_is_single_phase_...)
+    #[test]
+    fn dform_df_under_nulls_is_single_phase() {
+        let (r, violations, s) = run_file(
+            "dform.df",
+            &crate::schema::fake(),
+            &[input("env", Value::Str("prod".into()))],
+        );
+        assert!(violations.is_empty(), "{violations:?}");
+        assert!(r.stuck.is_empty(), "{:?}", r.stuck);
+        assert_eq!(facts_of(&r, "want").len(), 14);
+        assert!(s.pending.is_empty() && s.pending_groups.is_empty() && s.undetermined.is_empty());
+    }
+
+    /// The other example programs under nulls: single-phase, nothing stuck.
+    #[test]
+    fn other_examples_have_no_stuck_instances() {
+        let prod = [input("env", Value::Str("prod".into()))];
+        let cases: [(&str, crate::schema::Schema, &[Atom]); 4] = [
+            ("dform-advanced.df", crate::schema::fake(), &prod),
+            ("pngu.df", crate::schema::gke(), &prod),
+            ("examples/decl_demo.df", crate::schema::fake(), &[]),
+            ("examples/adopt_demo.df", crate::schema::fake(), &prod),
+        ];
+        for (file, schema, extra) in cases {
+            let (r, _, s) = run_file(file, &schema, extra);
+            assert!(r.stuck.is_empty(), "{file}: {:?}", r.stuck);
+            assert!(s.pending.is_empty(), "{file}: {:?}", s.pending);
+        }
+    }
+
+    /// E §7.4 / F 4.4 per key: three definite, three pending on the
+    /// cluster's endpoint and ca (the kubernetes provider's configuration),
+    /// one pending group (a nodepool per zone), one undetermined policy. The
+    /// deletion_protection policy is decided (under coarse Rule 3 it was
+    /// spuriously undetermined). (Was sim.rs's
+    /// gke_two_phase_rule3_coarse_fires_spuriously.)
+    #[test]
+    fn gke_two_phase_sections_per_key() {
+        let (r, violations, s) = run_file(
+            "examples/adversarial/gke_two_phase.df",
+            &crate::schema::gke(),
+            &[],
+        );
+        assert!(violations.is_empty(), "{violations:?}");
+        let pending: Vec<String> = s.pending.keys().map(|(t, a)| format!("{t} {a}")).collect();
+        assert_eq!(
+            pending,
+            [
+                "k8s.deployment api",
+                "k8s.namespace pngu",
+                "k8s.secret db_credentials"
+            ]
+        );
+        for on in s.pending.values() {
+            assert_eq!(
+                on.iter().cloned().collect::<Vec<_>>(),
+                [
+                    "gke_cluster/pngu#ca_certificate",
+                    "gke_cluster/pngu#endpoint"
+                ]
+            );
+        }
+        assert_eq!(facts_of(&r, "want").len(), 6);
+        assert_eq!(s.pending_groups.len(), 1, "{:?}", s.pending_groups);
+        assert!(
+            s.pending_groups[0]
+                .starts_with("want(\"gke_nodepool\", _) x unknown, on ?gke_cluster/pngu#zones")
+        );
+        assert_eq!(s.undetermined.len(), 1, "{:?}", s.undetermined);
+        assert!(s.undetermined[0].starts_with("deny \"cluster must be in at least two zones\""));
+        assert!(
+            !r.stuck.iter().any(|x| x.text.contains("deletion")),
+            "{:?}",
+            r.stuck
+        );
+    }
+
+    /// adv2: per-key Rule 3. An unrelated negation and an unrelated
+    /// aggregate over `want` are decided; a negation whose pattern unifies
+    /// with the stuck nodepool head is undetermined. (Was sim.rs's
+    /// adv2_rule3_coarse_vs_perkey.)
+    #[test]
+    fn adv2_rule3_per_key() {
+        let (r, violations, s) = run_file(
+            "examples/adversarial/adv2_rule3_coarse.df",
+            &crate::schema::gke(),
+            &[],
+        );
+        // Decided, and it holds: there is no deployment.
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.starts_with("namespace without deployment")),
+            "{violations:?}"
+        );
+        // Decided, and it does not hold: ns_count is [pngu].
+        assert_eq!(facts_of(&r, "ns_count"), ["ns_count([\"pngu\"])"]);
+        assert!(
+            !violations
+                .iter()
+                .any(|v| v.contains("need the pngu namespace"))
+        );
+        assert_eq!(s.undetermined.len(), 1, "{:?}", s.undetermined);
+        assert!(
+            s.undetermined[0].starts_with("deny \"no nodepool in zone b\""),
+            "{:?}",
+            s.undetermined
         );
     }
 }

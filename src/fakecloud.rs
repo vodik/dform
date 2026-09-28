@@ -730,6 +730,18 @@ impl FakeCloud {
         let hash = short_hash(&format!("{typ}/{name}#{attr}"));
         let n = u64::from_str_radix(&hash, 36).unwrap_or(0);
         match self.schema.mints.get(&(typ.to_string(), attr.to_string())) {
+            // A template that is one `{doc:PATH}` takes the value there,
+            // whatever its type (a list of zones), or the default when unset.
+            Some(Value::Str(tpl))
+                if tpl.starts_with("{doc:")
+                    && tpl.ends_with('}')
+                    && tpl.matches('{').count() == 1 =>
+            {
+                let path = &tpl[5..tpl.len() - 1];
+                if let Some(v) = get_path(doc, path).or_else(|| get_path(minted, path)) {
+                    return v.clone();
+                }
+            }
             Some(Value::Str(tpl)) => {
                 let s = tpl
                     .replace("{type}", typ)

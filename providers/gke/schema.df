@@ -38,3 +38,5 @@ type_attr(google.client_config, access_token, string, [computed, sensitive]).
 type_attr(google.secret_manager_secret_version, secret_data, string, [computed, sensitive]).
 
 type_mint(gke_cluster, endpoint, "https://{name}.gke.fake").
+# The zones a cluster lands in are the node locations it was configured with.
+type_mint(gke_cluster, zones, "{doc:node_locations}").
