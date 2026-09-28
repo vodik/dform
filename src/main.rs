@@ -81,7 +81,14 @@ enum Cmd {
         /// Print the plan as one JSON document instead of text.
         #[arg(long)]
         json: bool,
+        /// A what-if plan: the program with this scenario's facts and
+        /// policy, against the stack's world.
+        #[arg(long = "scenario")]
+        scenario: Option<String>,
     },
+    /// Run every scenario against an empty mock world: each passes when
+    /// nothing is denied. Fails if any scenario is denied.
+    Test,
     Apply {
         /// A plan file from `plan --out`: refresh, re-evaluate, and refuse
         /// unless the delta is the file's. Its inputs are the defaults for
@@ -174,6 +181,13 @@ fn run() -> Result<()> {
     }
     let files = default_files(&cli.files)?;
     let mut program = loader::load_program(&files)?;
+    if let Cmd::Plan {
+        scenario: Some(name),
+        ..
+    } = &cli.cmd
+    {
+        program = dform::scenario::select(&program, name)?;
+    }
     // `stack` and `provider` statements; `--provider` overrides the latter.
     let stack_cfg = dform::stack::config(&program)?;
     let providers = if cli.providers.is_empty() {
@@ -188,7 +202,8 @@ fn run() -> Result<()> {
         .as_ref()
         .map(|l| l.inputs.clone())
         .unwrap_or_default();
-    let mut given: BTreeSet<String> = BTreeSet::new();
+    // An input a fact of the program gives (a scenario's `input(k, v).`).
+    let mut given: BTreeSet<String> = input_fact_keys(&program);
     for f in &cli.input_files {
         let src = std::fs::read_to_string(f)
             .map_err(|e| anyhow::anyhow!("read --input-file {}: {e}", f.display()))?;
@@ -199,6 +214,9 @@ fn run() -> Result<()> {
             _ => None,
         }));
         program.statements.extend(stmts);
+    }
+    if let Cmd::Test = cli.cmd {
+        return run_tests(&program, &providers, &cli.set, &cli.data, &files);
     }
     if let Cmd::Strata = cli.cmd {
         return print_strata(&files, &program, &load_schema(&providers)?);
@@ -557,14 +575,14 @@ fn run() -> Result<()> {
             let json = serde_json::to_string_pretty(&redact.json(&r.attrs))?;
             println!("{}", json);
         }
-        Cmd::Strata => unreachable!("handled before evaluation"),
+        Cmd::Strata | Cmd::Test => unreachable!("handled before evaluation"),
         Cmd::Fmt { .. } => unreachable!("handled before loading"),
         Cmd::Graph { what: None } => print!("{}", graph::resources(&resources)),
         Cmd::Graph { what: Some(spec) } => {
             let redact = query::Redactor::new(&res.facts, backend.schema());
             print!("{}", graph::relation(&spec, &res.facts, &redact)?);
         }
-        Cmd::Plan { out, json } => {
+        Cmd::Plan { out, json, .. } => {
             let Planned {
                 res,
                 resources,
@@ -855,6 +873,95 @@ fn run() -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+/// The keys of the program's own `input("k", v)` facts.
+fn input_fact_keys(program: &dform::ast::Program) -> BTreeSet<String> {
+    program
+        .statements
+        .iter()
+        .filter_map(|s| match s {
+            dform::ast::Stmt::Fact(a) if a.pred == "input" => match a.args.first() {
+                Some(Term::Val(Value::Str(k))) => Some(k.clone()),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect()
+}
+
+/// `dform test`: every scenario evaluated against an empty mock world (the
+/// provider's schema, no world, no state); a scenario fails when anything
+/// is denied or it does not compile.
+fn run_tests(
+    program: &dform::ast::Program,
+    providers: &[String],
+    set: &[String],
+    data: &[String],
+    files: &[PathBuf],
+) -> Result<()> {
+    use std::io::IsTerminal;
+    let names = dform::scenario::names(program)?;
+    if names.is_empty() {
+        bail!("no scenarios: write `scenario NAME {{ facts; deny rules }}.`");
+    }
+    let backend = FakeCloud::with_paths(PathBuf::new(), PathBuf::new(), load_schema(providers)?)
+        .with_answers(dform::externs::load_answers(providers)?);
+    let program_dir = files[0].parent().unwrap_or(Path::new("")).to_path_buf();
+    let mut failed = 0;
+    for name in &names {
+        let run = || -> Result<Vec<String>> {
+            let p = dform::scenario::select(program, name)?;
+            let lowered = dform::transform::lower(&p)?;
+            let mut given = input_fact_keys(&p);
+            let mut pairs = Vec::new();
+            for kv in set {
+                let (k, v) = split_kv(kv)?;
+                given.insert(k.to_string());
+                pairs.push((k.to_string(), v));
+            }
+            inputs::check_required(&lowered.inputs, &given)?;
+            let mut extra = inputs::set_facts(&lowered.inputs, &pairs)?;
+            extra.extend(build_extra_facts(data)?);
+            extra.extend(backend.catalog()?);
+            let externs =
+                dform::externs::Externs::new(&lowered.program, &lowered.extern_fns, |f, ins| {
+                    if let Some(r) = dform::externs::file(f, ins, &program_dir) {
+                        return r;
+                    }
+                    let plus: Vec<bool> = f.args.iter().map(|b| b.input).collect();
+                    backend.query(&f.name, &plus, ins)
+                });
+            let p = zset::with_policy_rules(p)?;
+            let (res, mut violations) = externs.eval(&p, &extra)?;
+            violations.extend(inputs::violations(&res.facts, &lowered.inputs));
+            let redact = query::Redactor::new(&res.facts, backend.schema());
+            Ok(violations.iter().map(|v| redact.text(v)).collect())
+        };
+        match run() {
+            Ok(denied) if denied.is_empty() => println!("scenario {name}: ok"),
+            Ok(denied) => {
+                failed += 1;
+                println!("scenario {name}: denied");
+                for d in denied {
+                    println!("  - {d}");
+                }
+            }
+            Err(e) => {
+                failed += 1;
+                println!("scenario {name}: error");
+                let text = dform::diag::report(&e, std::io::stdout().is_terminal());
+                for line in text.lines() {
+                    println!("  {line}");
+                }
+            }
+        }
+    }
+    println!("test: {} scenarios, {failed} failed", names.len());
+    if failed > 0 {
+        bail!("{failed} of {} scenarios failed", names.len());
+    }
     Ok(())
 }
 

@@ -8,8 +8,8 @@ use super::{SyntaxNode, SyntaxToken};
 use crate::ast::{
     ApplyPolicy, Atom, AttrDecl, BindArg, Config, Constraint, Contributes, Decl, Export, Extern,
     ExternFn, FieldAssign, FieldOp, Grant, Import, InputDecl, Instance, Lit, Module, OutputDecl,
-    Pending, PendingKind, PolicyPack, Program, Rank, Resource, RuleStmt, Settings, Span, Stmt,
-    Term, TypeExpr, When,
+    Pending, PendingKind, PolicyPack, Program, Rank, Resource, RuleStmt, Scenario, Settings, Span,
+    Stmt, Term, TypeExpr, When,
 };
 use crate::diag::Diagnostic;
 use crate::value::Value;
@@ -324,10 +324,7 @@ impl Lowerer {
                 Ok(match n.kind() {
                     MODULE => Stmt::Module(Module { name, body, span }),
                     POLICY => Stmt::PolicyPack(PolicyPack { name, body, span }),
-                    _ => Stmt::Pending(Pending {
-                        kind: PendingKind::Scenario { name, body },
-                        span,
-                    }),
+                    _ => Stmt::Scenario(Scenario { name, body, span }),
                 })
             }
             APPLY => Ok(Stmt::ApplyPolicy(ApplyPolicy {

@@ -129,6 +129,9 @@ pub enum Stmt {
     Stack(Config),
     /// `provider name { ... }`: a provider the program uses (`stack`).
     Provider(Config),
+    /// `scenario name { ... }`: hypothetical facts and policy, run by
+    /// `dform test` and `plan --scenario` (`scenario`).
+    Scenario(Scenario),
     PolicyPack(PolicyPack),
     ApplyPolicy(ApplyPolicy),
     When(When),
@@ -274,6 +277,13 @@ pub struct Export {
     pub span: Span,
 }
 
+#[derive(Debug, Clone)]
+pub struct Scenario {
+    pub name: String,
+    pub body: Vec<Stmt>,
+    pub span: Span,
+}
+
 /// A `stack` or `provider` statement: a name and its `key = value` block.
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -366,7 +376,6 @@ pub enum PendingKind {
     TypeDecl { name: String, attrs: Vec<AttrDecl> },
     DeclOpenType { name: String },
     DeclMixed { pred: String, arity: usize },
-    Scenario { name: String, body: Vec<Stmt> },
 }
 
 impl PendingKind {
@@ -384,7 +393,6 @@ impl PendingKind {
             PendingKind::DeclMixed { .. } => {
                 ("`decl p/N mixed`", "phase 6 \"Static secret labels\"")
             }
-            PendingKind::Scenario { .. } => ("a scenario", "phase 6 \"Scenarios\""),
         }
     }
 }

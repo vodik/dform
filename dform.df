@@ -135,3 +135,19 @@ constraint("prod k8s must have private api") :-
   env(prod),
   want(k8s.cluster, kubernetes.main/cluster),
   not attr(k8s.cluster, kubernetes.main/cluster, .private_api, true).
+
+# Scenarios: policy over hypothetical inputs. `dform test` runs every one
+# against an empty mock world; `dform plan --scenario prod` plans the stack
+# as if env were prod.
+scenario prod {
+  input("env", prod).
+  deny("prod peers the two vpcs") :- not want(net.vpc_peering, "peer-main-peer").
+  deny("prod keeps 14 days of db backups") :-
+    not attr(db.postgres, database.main/db, .backup_days, 14).
+}.
+
+scenario dev {
+  input("env", dev).
+  deny("dev has no database") :- want(db.postgres, _).
+  deny("dev has no peer network") :- want(net.vpc, network.peer/vpc).
+}.

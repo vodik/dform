@@ -20,6 +20,7 @@ pub mod partition;
 pub mod plan_print;
 pub mod provider;
 pub mod query;
+pub mod scenario;
 pub mod schema;
 pub mod stack;
 pub mod state;

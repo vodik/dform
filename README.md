@@ -670,6 +670,33 @@ settings prod {
 }.
 ```
 
+## Scenarios
+
+A scenario is a test: hypothetical facts plus ordinary deny rules, no
+`expect` syntax (DESIGN L12).
+
+```prolog
+scenario prod {
+  input("env", prod).
+  deny("prod keeps 14 days of db backups") :-
+    not attr(db.postgres, database.main/db, .backup_days, 14).
+}.
+```
+
+A scenario is part of the program only when it is run. `dform test` runs
+every scenario against an empty mock world (the provider's schema, no
+world, no state, nothing written): the scenario's statements join the
+program, and a scenario passes when nothing is denied, the program's own
+denies included. It prints `scenario NAME: ok` or `denied` with each
+deny, and exits non-zero if any scenario failed.
+`dform plan --scenario NAME` is the same program as a what-if plan of the
+stack, against its world.
+
+```bash
+cargo run -- test
+cargo run -- plan --scenario dev
+```
+
 ## Testing
 
 `cargo test` runs the integration tests under `tests/` (one file per

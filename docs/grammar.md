@@ -214,6 +214,7 @@ into today's AST:
 | `policy p { ... }` / `apply p`   | the pack's body once, its predicates `p::q` unless granted |
 | `import "f.df"`                  | the file's statements, loaded once               |
 | `extern p(+a, -b) persist`       | `p/2` is declared; a body literal of it is asked on demand (`src/externs.rs`) |
+| `scenario n { ... }`             | nothing, unless run: `dform test`, `plan --scenario n` add its statements (`src/scenario.rs`) |
 | `stack n { ... }`, `provider p { ... }` | no rules: the stack's name, backend and unknowns, the mock's schemas (`src/stack.rs`) |
 | `decl p/N`                       | `p/N` is declared (a provider feeds it)          |
 | `decl p(A: t, BC: t)`            | record fields `a`, `b_c` for `p{a: .., b_c: ..}` |
@@ -229,11 +230,10 @@ into today's AST:
 | `[T \| B]`                       | a `collect_list` helper rule over `B`            |
 
 These parse and are rejected with "not yet supported", naming the WORK.org
-ticket that gives them meaning: `type` blocks and
-`decl type ... open` (phase 6 "Refinement types, doc annotations, L15
-inet"), `decl p/N mixed` (phase 6 "Static secret labels"), `scenario`
-(phase 6 "Scenarios"). With no ticket yet: the `null` literal, `not
-exists(...)`, and the ordered comprehension.
+ticket that gives them meaning: `type` blocks and `decl type ... open`
+(phase 6 "Refinement types, doc annotations, L15 inet"), `decl p/N mixed`
+(phase 6 "Static secret labels"). With no ticket yet: the `null` literal,
+`not exists(...)`, and the ordered comprehension.
 
 ## Deviations from E §6
 
