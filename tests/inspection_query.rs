@@ -79,7 +79,8 @@ fn query_never_prints_a_labeled_secret() {
     let s = Scratch::new("query-secret");
     s.write(
         "p.df",
-        r#"resource leaky.vault v { password = "VAULT-SECRET-DO-NOT-PRINT" }.
+        r#"edition 2026.
+resource leaky.vault v { password = "VAULT-SECRET-DO-NOT-PRINT" }.
            note(N) :- attr(leaky.vault, v, password, P), N = concat("pw is ", P)."#,
     );
     let schema = repo().join("providers/leaky/schema.df");

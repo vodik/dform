@@ -1,0 +1,2 @@
+tests/syntax/err/missing_edition.df:2:1: missing the edition pragma `edition 2026.`
+  help: every .df file starts with `edition 2026.` (docs/grammar.md)

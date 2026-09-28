@@ -2,14 +2,17 @@
 # under (type, path) partitions, PROVIDED the reads are on separate rules.
 # (The resource-block sugar shares one body across every field, so putting
 # the read in the block would drag A.z above B.x and close the cycle.)
+
+edition 2026.
+
 resource net.a x {
   z = 1
 }.
 
-arg(net.a, x, y, P) :-
+arg(net.a, x, .y, P) :-
   want(net.a, x),
-  arg(net.b, y, x, P).
+  arg(net.b, y, .x, P).
 
 resource net.b y {
   x = Q
-} :- arg(net.a, x, z, Q).
+} :- arg(net.a, x, .z, Q).

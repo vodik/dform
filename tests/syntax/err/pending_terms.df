@@ -1,0 +1,7 @@
+edition 2026.
+
+# Terms and literals the grammar has and the evaluator does not yet.
+p(null).
+q(X) :- r(X), not exists(s(X)).
+t(L) :- L = [X ordered by X | r(X)].
+u(V) :- output(network.I, vpc, V), r(I).

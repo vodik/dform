@@ -30,7 +30,8 @@ use common::{Scratch, repo};
 const VAULT_SECRET: &str = "VAULT-SECRET-DO-NOT-PRINT";
 const OOPS_SECRET: &str = "OOPS-SECRET-DO-NOT-PRINT";
 
-const PROGRAM: &str = r#"
+const PROGRAM: &str = r#"edition 2026.
+
 resource leaky.vault v {
   password = "VAULT-SECRET-DO-NOT-PRINT"
 }.
@@ -209,7 +210,11 @@ resource leaky.oops copy {{ password = P }} :- arg(leaky.vault, v, password, P).
     );
     let schema = schema();
     let args = ["--file", "p.df", "--provider", &schema, "--world", "w.json"];
-    for cmd in [&["plan"][..], &["plan", "--json"], &["query", "arg", "--json"]] {
+    for cmd in [
+        &["plan"][..],
+        &["plan", "--json"],
+        &["query", "arg", "--json"],
+    ] {
         let r = s.run(&[&args[..], cmd].concat()).success();
         assert!(!r.stdout.contains(VAULT_SECRET), "{cmd:?}: {}", r.stdout);
         assert!(!r.stderr.contains(VAULT_SECRET), "{cmd:?}: {}", r.stderr);
@@ -227,7 +232,11 @@ resource leaky.oops copy {{ password = P }} :- arg(leaky.vault, v, password, P).
         &format!("{PROGRAM}\narg(leaky.vault, v, password, \"VAULT-SECRET-TWO\").\n"),
     );
     let r = s.run(&[&args[..], &["plan"]].concat()).failure();
-    assert!(r.stderr.contains("conflicting attribute contributions"), "{}", r.stderr);
+    assert!(
+        r.stderr.contains("conflicting attribute contributions"),
+        "{}",
+        r.stderr
+    );
     for out in [&r.stdout, &r.stderr] {
         assert!(!out.contains("VAULT-SECRET"), "{out}");
     }

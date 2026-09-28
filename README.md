@@ -403,10 +403,17 @@ before it in state.
 
 ## dform model (current)
 
+The grammar is `docs/grammar.md` (edition 2026). Every `.df` file starts with
+`edition 2026.`; uppercase names are variables, lowercase names symbols, `a.b`
+a qualified symbol, `.a.b` a keypath, `X.a` a field of `X`; `-` and `/` are
+always operators, so hyphenated or slashed names are strings (`"us-east-1"`).
+A syntax error names `file:line:col` and what was expected, and parsing goes
+on to the next statement, so every error in a file is reported at once.
+
 - Core intent IR:
   - `want(Type, Name).` declares a resource instance.
   - `arg(Type, Name, KeyPath, Value).` contributes attributes (KeyPath supports dots).
-  - `ref(Type, Name, Attr)` expresses dependencies.
+  - `ref(Type, Name, .attr)` expresses dependencies.
   - `collect_set(X)` / `collect(X)` aggregates unique items (set-like).
   - `collect_list(X)` aggregates items with duplicates (multiset-like).
   - `constraint("message") :- ... .` enforces invariants.
@@ -414,16 +421,17 @@ before it in state.
 - Ergonomic sugar (implemented as a lowering pass):
   - `resource Type Name { key = value, ... } :- ... .` lowers to `want/arg`.
   - resource merge fields: `tags += { team: platform }` is a plain contribution; how contributions merge is the path's lattice (see `docs/best_practices.md`, "One Merge Law").
-  - record atoms: `setting{env: prod, key: db.backup_days, value: 14}.` (optional)
-  - settings blocks: `settings prod { db.backup_days = 14 }.` (commas optional) lowers to `setting(prod, db.backup_days, 14).`
+  - record atoms: `setting{env: prod, key: .db.backup_days, value: 14}.` (optional)
+  - settings blocks: `settings prod { db.backup_days = 14 }.` (newline or comma between entries) lowers to `setting(prod, .db.backup_days, 14).`
   - literals: lists `[a, b]` and objects `{k: v}`.
   - list comprehensions: `[X | pred(...), pred2(...)]` (lowers to a `collect_list(...)` rule).
   - expression terms: `IB = IA + 1` lowers to `IB = add(IA, 1)`.
   - `when <guard> { ... }.` applies a guard to each statement inside.
-  - `import "path" as ns.` includes another file (simple namespacing).
+  - `import "path".` includes another file; `import "path" as ns.` namespaces it.
 
 - Schemas and wildcards:
-  - `decl pred { field1, field2, ... }.` enables record-style matching: `pred{field1: X}`.
+  - `decl pred(Field1: type, FieldTwo: type).` enables record-style matching: `pred{field1: X, field_two: Y}`.
+  - `decl pred/N.` declares a predicate a provider feeds (it may have no rows).
   - `_` is an anonymous wildcard term (matches anything, never binds).
 
 ## Escape hatches
@@ -434,7 +442,7 @@ before it in state.
 
 ```prolog
 host_ip(Env, Ip) :-
-  setting(Env, "vm.ips", Ips),
+  setting(Env, .vm.ips, Ips),
   member(Ips, Ip).
 ```
 
@@ -452,7 +460,7 @@ To reference discovered values in resource attributes without manually joining
 `cloud_attr/cloud_computed`, you can use `cloud_ref(Type, Name, Attr)` as a value
 term. In the fake backend it resolves against `.dform/inventory.json`.
 
-`Attr` supports dotted and indexed paths like `"tags.owner"` or `"subnets[0].id"`.
+`Attr` supports dotted and indexed paths like `.tags.owner` or `.subnets[0].id`.
 
 ### Adopt existing resources
 
@@ -460,65 +468,66 @@ term. In the fake backend it resolves against `.dform/inventory.json`.
 Planning will produce an `Adopt` action (`>` in plan output) instead of `Create`.
 
 ```prolog
-adopt(net.vpc, scoped("network.main", vpc), "existing-prod-vpc") :-
+adopt(net.vpc, network.main/vpc, "existing-prod-vpc") :-
   env(prod),
   cloud_exists(net.vpc, "existing-prod-vpc").
 
-arg(net.vpc, scoped("network.main", vpc), "adopted_id", cloud_ref(net.vpc, "existing-prod-vpc", id)).
+arg(net.vpc, network.main/vpc, .adopted_id, cloud_ref(net.vpc, "existing-prod-vpc", .id)).
 ```
 
-### Components and Modules
-
-You can group rules into a scoped component instance:
-
-```prolog
-component network main {
-  resource net.vpc vpc { cidr = "10.0.0.0/16" }.
-}.
+`network.main/vpc` is an address: resource `vpc` of module instance
+`network.main` (it lowers to `scoped("network.main", vpc)`).
 ```
 
-Inside a component:
+### Modules
 
-- resource names are automatically scoped with `scoped("comp.inst", Name)`.
-- `ref/3` defaults to referring to component-local resources.
-- `output(Key, Value)` is sugar for `output(Scope, Key, Value)`.
-- The compiler injects `component_scope(Comp, Inst, Scope)` facts.
-
-You can also define reusable modules and instantiate them (Terraform-module-like):
+A module groups rules; an instance of it scopes them (Terraform-module-like):
 
 ```prolog
-component_def network {
+module network {
   resource net.vpc vpc { cidr = Cidr } :- param(vpc_cidr, Cidr).
 }.
 
-use network main { vpc_cidr = "10.0.0.0/16" }.
+instance network main { vpc_cidr = "10.0.0.0/16" }.
 ```
+
+Inside an instance:
+
+- resource names are automatically scoped with `scoped("module.inst", Name)`
+  (written `network.main/vpc` from outside).
+- `ref/3` defaults to referring to instance-local resources.
+- `output(Key, Value)` is sugar for `output(Scope, Key, Value)`.
+- The compiler injects `component_scope(Module, Inst, Scope)` facts.
+
+The E §6 module interface (`input`, `output` declarations, `export`,
+`contributes`) parses but is not supported yet: it lands with phase 6
+"Modules, instances, interfaces, grants".
 
 ### Policies
 
 Policies are packaged as policy packs and applied explicitly:
 
 ```prolog
-policy_pack baseline {
-  deny("db must not be public", {resource: Db}) :- ...
-  warn("prod should enable audit logging", {env: prod}) :- ...
+policy baseline {
+  deny("db must not be public", { resource: Db }) :- ...
+  warn("prod should enable audit logging", { env: prod }) :- ...
 }.
 
-apply_policy baseline.
+apply baseline.
 ```
 
 Every contribution to one attribute meets in one lattice cell; objects merge
 per key, and a list path several sources contribute to is declared a set:
 
 ```prolog
-type_lattice(iam.policy, statements, set).
+type_lattice(iam.policy, .statements, set).
 ```
 
 Settings are the same aggregate:
 
 ```prolog
-type_lattice(settings, audit.sinks, set).
-setting_add(prod, audit.sinks, ["s3"]).
+type_lattice(settings, .audit.sinks, set).
+setting_add(prod, .audit.sinks, ["s3"]).
 
 settings prod {
   audit.sinks += ["cloudwatch"]
@@ -541,6 +550,11 @@ UPDATE_GOLDEN=1 cargo test --test golden -- --test-threads=1
 ```
 
 See `tests/golden/README.md` for details.
+
+The parser's suite is `tests/syntax.rs`: every `.df` file in the repository
+and `tests/syntax/ok/` (E §7's programs among them) parses and prints back
+byte for byte, and each `tests/syntax/err/*.df` fails with the diagnostics
+pinned in its `.txt` (accept with `UPDATE_GOLDEN=1 cargo test --test syntax`).
 
 ## Status
 

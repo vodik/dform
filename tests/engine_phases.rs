@@ -199,7 +199,7 @@ fn a_pending_update_applies_after_the_boundary() {
     );
     s.write(
         "p.df",
-        "resource db.postgres main { size = 1 }.\nresource compute.vm app { db_host = ref(db.postgres, main, endpoint) }.\n",
+        "edition 2026.\nresource db.postgres main { size = 1 }.\nresource compute.vm app { db_host = ref(db.postgres, main, endpoint) }.\n",
     );
     let args = ["--file", "p.df", "--world", "w.json"];
     let r = s.run(&[&args[..], &["apply"]].concat()).success();

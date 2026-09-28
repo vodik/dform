@@ -24,10 +24,10 @@ fn the_resource_dag_follows_refs() {
 #[test]
 fn the_partition_graph_dashes_negative_edges() {
     let s = Scratch::new("graph-strata");
-    s.write("schema.df", "");
+    s.write("schema.df", "edition 2026.\n");
     s.write(
         "p.df",
-        "p(1). p(2). r(2). q(X) :- p(X), not r(X). s(X) :- q(X).",
+        "edition 2026.\np(1). p(2). r(2). q(X) :- p(X), not r(X). s(X) :- q(X).",
     );
     let run = |prog: &str| s.run(&["--file", prog, "--provider", "schema.df", "graph", "strata"]);
     let out = run("p.df").success().stdout;
@@ -40,7 +40,7 @@ fn the_partition_graph_dashes_negative_edges() {
     // the cycle.
     s.write(
         "bad.df",
-        "p(1). a(X) :- p(X), not b(X). b(X) :- p(X), not a(X).",
+        "edition 2026.\np(1). a(X) :- p(X), not b(X). b(X) :- p(X), not a(X).",
     );
     let bad = run("bad.df").failure();
     assert!(
@@ -58,7 +58,7 @@ fn any_binary_relation_is_a_graph() {
     golden("graph_dform_vpc_peer", &out);
 
     let s = Scratch::new("graph-arity");
-    s.write("p.df", "t(a, b, c).");
+    s.write("p.df", "edition 2026.\nt(a, b, c).");
     let r = s
         .run(&["--file", "p.df", "--world", "w.json", "graph", "t"])
         .failure();

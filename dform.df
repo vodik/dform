@@ -5,13 +5,15 @@
 #   cargo run -- plan --set env=prod
 #   cargo run -- apply
 
+edition 2026.
+
 # Defaults (stratified negation)
 has_env() :- input("env", _).
 env(staging) :- not has_env().
 env(E) :- input("env", E).
 
-data(zone, us-test-1a).
-data(zone, us-test-1b).
+data(zone, "us-test-1a").
+data(zone, "us-test-1b").
 
 # Guard blocks (when) apply a condition to everything inside.
 when env(prod) {
@@ -49,40 +51,40 @@ import "modules/iam.df".
 import "policies/baseline.df".
 import "modules/stdlib_net.df".
 
-apply_policy baseline.
+apply baseline.
 
-# Instantiate component defs (Terraform module-like).
-use network main {
+# Instantiate modules (Terraform module-like).
+instance network main {
   vpc_net = VpcNet
 } :-
   env(Env),
-  setting(Env, network.main.vpc_net, VpcNet).
+  setting(Env, .network.main.vpc_net, VpcNet).
 
-use network peer {
+instance network peer {
   vpc_net = VpcNet
 } :-
   env(Env),
-  setting(Env, network.peer.vpc_net, VpcNet).
+  setting(Env, .network.peer.vpc_net, VpcNet).
 
-use database main {
+instance database main {
   backup_days = Days
   multi_az = MA
 } :-
   env(Env),
-  setting(Env, db.backup_days, Days),
-  setting(Env, db.multi_az, MA).
+  setting(Env, .db.backup_days, Days),
+  setting(Env, .db.multi_az, MA).
 
-use kubernetes main {
+instance kubernetes main {
   private_api = PrivateApi
   nodepool_min = Min
   nodepool_max = Max
 } :-
   env(Env),
-  setting(Env, k8s.private_api, PrivateApi),
-  setting(Env, k8s.nodepool.min, Min),
-  setting(Env, k8s.nodepool.max, Max).
+  setting(Env, .k8s.private_api, PrivateApi),
+  setting(Env, .k8s.nodepool.min, Min),
+  setting(Env, .k8s.nodepool.max, Max).
 
-use iam main {}.
+instance iam main {}.
 
 # VPC peering intent: define edges between network instances.
 vpc_peer_inst(main, peer).
@@ -97,8 +99,8 @@ vpc_peer(A, B) :-
 
 # Create a peering resource per declared peering edge.
 resource net.vpc_peering Peer {
-  requester_vpc_id = ref(net.vpc, A, id)
-  accepter_vpc_id = ref(net.vpc, B, id)
+  requester_vpc_id = ref(net.vpc, A, .id)
+  accepter_vpc_id = ref(net.vpc, B, .id)
 } :-
   vpc_peer_inst(InstA, InstB),
   vpc_peer(A, B),
@@ -111,7 +113,7 @@ resource compute.vm bastion {
   private_ip = inet_host(VpcNet, 20)
 } :-
   env(Env),
-  setting(Env, network.main.vpc_net, VpcNet).
+  setting(Env, .network.main.vpc_net, VpcNet).
 
 # Constraints (policy)
 constraint("prod db must be multi_az") :-
@@ -119,11 +121,11 @@ constraint("prod db must be multi_az") :-
   component_scope(database, main, DbScope),
   Db = scoped(DbScope, db),
   want(db.postgres, Db),
-  not arg(db.postgres, Db, multi_az, true).
+  not arg(db.postgres, Db, .multi_az, true).
 
 constraint("prod k8s must have private api") :-
   env(prod),
   component_scope(kubernetes, main, KScope),
   C = scoped(KScope, cluster),
   want(k8s.cluster, C),
-  not arg(k8s.cluster, C, private_api, true).
+  not arg(k8s.cluster, C, .private_api, true).

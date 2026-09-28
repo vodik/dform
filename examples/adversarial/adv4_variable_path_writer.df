@@ -1,7 +1,10 @@
 # adv4: a variable-path writer (arg, *, *) that also reads an attribute.
 # E: "a policy that writes variable type and path reads no attribute".
 # This one does, so it must be rejected.
-override(net.vpc, main, tags, { team: x }).
+
+edition 2026.
+
+override(net.vpc, main, .tags, { team: x }).
 
 resource net.vpc main {
   cidr = inet("10.0.0.0/16"),
@@ -11,4 +14,4 @@ resource net.vpc main {
 arg(T, N, P, V) :-
   override(T, N, P, V),
   want(T, N),
-  arg(T, N, cidr, _C).
+  arg(T, N, .cidr, _C).

@@ -2,15 +2,18 @@
 # on ?gke_cluster/pngu#zones). An UNRELATED negation over `want` and an
 # UNRELATED aggregate over `want` must not become undetermined.
 # Run with --provider gke.
+
+edition 2026.
+
 resource gke_cluster pngu {
   name = "pngu-gke"
 }.
 
 resource gke_nodepool Np {
-  cluster = ref(gke_cluster, pngu, id),
+  cluster = ref(gke_cluster, pngu, .id),
   zone = Z
 } :-
-  arg(gke_cluster, pngu, zones, Zs),
+  arg(gke_cluster, pngu, .zones, Zs),
   member(Zs, Z),
   Np = format("np-%s", Z).
 

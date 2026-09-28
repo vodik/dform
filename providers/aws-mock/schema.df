@@ -16,6 +16,8 @@
 # Every type has tags (optional) and tags_all (computed: tags merged with the
 # provider's default_tags). ids and arns are computed; ids are fresh.
 
+edition 2026.
+
 # aws_vpc
 type_provider(aws_vpc, aws).
 type_attr(aws_vpc, id, string, [computed, id]).

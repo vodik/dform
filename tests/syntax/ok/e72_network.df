@@ -1,0 +1,33 @@
+module network {
+  input  vpc_net: inet where prefix_len(vpc_net) <= 20.
+  input  zones:   list(string) = ["us-test-1a", "us-test-1b"].     # @default contribution
+  output vpc:                addr.
+  output private_subnet_ids: list(ref(net.subnet)).
+  export subnet_of/2.
+
+  resource net.vpc vpc {
+    cidr = Net
+    tags = { env: E, component: "network" }
+  } :- env(E), vpc_net(Net).
+
+  zone_index(Z, I) :- zones(Zs), member(Zs, I, Z).
+
+  # Reads attr of net.vpc (partition (attr, net.vpc, .cidr)), writes arg of
+  # net.subnet (partitions (arg, net.subnet, .vpc_id) etc.): no cycle.
+  # vpc_id carries a fresh null; cidr is computed from a constant.
+  resource net.subnet Sn {
+    vpc_id     = ref(net.vpc, vpc, .id)
+    cidr       = inet_subnet(Net, 4, I)
+    zone       = Z
+    visibility = "private"
+  } :-
+    zone_index(Z, I),
+    attr(net.vpc, vpc, .cidr, Net),
+    Sn = format("private_%s", Z).
+
+  subnet_of(Sn, vpc) :- want(net.subnet, Sn).
+
+  output vpc = vpc.
+  output private_subnet_ids =
+    [ ref(net.subnet, Sn, .id) | want(net.subnet, Sn), attr(net.subnet, Sn, .visibility, "private") ].
+}.

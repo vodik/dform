@@ -3,7 +3,8 @@
 mod common;
 use common::Scratch;
 
-const PROG: &str = r#"
+const PROG: &str = r#"edition 2026.
+
 resource net.vpc main { cidr = "10.0.0.0/16" }.
 resource net.subnet a { vpc_id = ref(net.vpc, main, id), cidr = "10.0.1.0/24" }.
 "#;

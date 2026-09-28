@@ -122,23 +122,77 @@ pub enum Stmt {
     When(When),
     Resource(Resource),
     Import(Import),
-    Unique(Unique),
     Settings(Settings),
     Decl(Decl),
     Extern(Extern),
+    /// A statement the grammar has and the evaluator does not yet: lowering
+    /// rejects it naming the ticket that brings it.
+    Pending(Pending),
 }
 
-/// `extern p/N.`: `p/N` is defined by a provider, not by the program.
+/// Where a statement came from: a byte range in a source file registered
+/// with `diag::add_source`. Comparison and hashing ignore it, so two facts
+/// written in two places are still one fact.
+#[derive(Clone, Copy, Default)]
+pub struct Span {
+    /// `diag` source id; 0 for code the compiler wrote.
+    pub file: u32,
+    pub start: u32,
+    pub end: u32,
+}
+
+impl Span {
+    pub fn is_none(&self) -> bool {
+        self.file == 0
+    }
+}
+
+impl PartialEq for Span {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for Span {}
+
+impl PartialOrd for Span {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Span {
+    fn cmp(&self, _: &Self) -> Ordering {
+        Ordering::Equal
+    }
+}
+
+impl Hash for Span {
+    fn hash<H: Hasher>(&self, _: &mut H) {}
+}
+
+impl std::fmt::Debug for Span {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}..{}@{}", self.start, self.end, self.file)
+    }
+}
+
+/// `extern p/N.` (spelled `decl p/N.`): `p/N` is defined by a provider, not
+/// by the program.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Extern {
     pub pred: String,
     pub arity: usize,
+    pub span: Span,
 }
 
+/// `decl p(Field: type, ...)`: the field names (the variables, snake_cased)
+/// of `p`'s record form, in argument order.
 #[derive(Debug, Clone)]
 pub struct Decl {
     pub pred: String,
     pub fields: Vec<String>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
@@ -146,37 +200,47 @@ pub struct Component {
     pub comp: String,
     pub inst: String,
     pub body: Vec<Stmt>,
+    pub span: Span,
 }
 
+/// `module name { ... }`.
 #[derive(Debug, Clone)]
 pub struct ComponentDef {
     pub name: String,
     pub body: Vec<Stmt>,
+    pub span: Span,
 }
 
+/// `instance module name { k = v, ... } [:- body]`.
 #[derive(Debug, Clone)]
 pub struct Use {
     pub name: String,
     pub inst: String,
     pub params: Vec<(String, Term)>,
     pub body: Option<Vec<Lit>>,
+    pub span: Span,
 }
 
+/// `policy name { ... }`.
 #[derive(Debug, Clone)]
 pub struct PolicyPack {
     pub name: String,
     pub body: Vec<Stmt>,
+    pub span: Span,
 }
 
+/// `apply name`.
 #[derive(Debug, Clone)]
 pub struct ApplyPolicy {
     pub name: String,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
 pub struct When {
     pub guard: Lit,
     pub body: Vec<Stmt>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
@@ -187,6 +251,7 @@ pub struct Resource {
     pub rank: Option<Rank>,
     pub fields: Vec<FieldAssign>,
     pub body: Option<Vec<Lit>>,
+    pub span: Span,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -202,18 +267,14 @@ pub struct FieldAssign {
     pub value: Term,
     /// `key = value @override`; `None` takes the block's rank.
     pub rank: Option<Rank>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
 pub struct Import {
     pub path: String,
     pub alias: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-pub struct Unique {
-    pub pred: String,
-    pub key_arity: usize,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
@@ -223,6 +284,131 @@ pub struct Settings {
     pub rank: Option<Rank>,
     pub fields: Vec<FieldAssign>,
     pub body: Option<Vec<Lit>>,
+    pub span: Span,
+}
+
+/// A parsed statement with no lowering yet (E §6 constructs whose semantics
+/// are phase 6 tickets).
+#[derive(Debug, Clone)]
+pub struct Pending {
+    pub kind: PendingKind,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub enum PendingKind {
+    Provider {
+        name: String,
+        config: Vec<(String, Term)>,
+    },
+    Stack {
+        name: String,
+        config: Vec<(String, Term)>,
+    },
+    Input {
+        name: String,
+        ty: TypeExpr,
+        default: Option<Term>,
+        refinement: Vec<Lit>,
+    },
+    Output {
+        name: String,
+        ty: Option<TypeExpr>,
+        value: Option<Term>,
+    },
+    Export {
+        pred: String,
+        arity: usize,
+    },
+    Contributes(Grant),
+    ExternFn {
+        name: String,
+        args: Vec<BindArg>,
+        persist: bool,
+    },
+    TypeDecl {
+        name: String,
+        attrs: Vec<AttrDecl>,
+    },
+    DeclOpenType {
+        name: String,
+    },
+    DeclMixed {
+        pred: String,
+        arity: usize,
+    },
+    Scenario {
+        name: String,
+        body: Vec<Stmt>,
+    },
+}
+
+impl PendingKind {
+    /// What the statement is, and the WORK.org ticket that gives it meaning.
+    pub fn describe(&self) -> (&'static str, &'static str) {
+        const MODULES: &str = "phase 6 \"Modules, instances, interfaces, grants\"";
+        match self {
+            PendingKind::Provider { .. } => ("a provider statement", "phase 6 \"Stacks\""),
+            PendingKind::Stack { .. } => ("a stack statement", "phase 6 \"Stacks\""),
+            PendingKind::Input { .. } => ("an input declaration", "phase 6 \"Typed stack inputs\""),
+            PendingKind::Output { .. } => ("an output declaration", MODULES),
+            PendingKind::Export { .. } => ("an export", MODULES),
+            PendingKind::Contributes(_) => ("a contributes grant", MODULES),
+            PendingKind::ExternFn { .. } => (
+                "an extern with binding patterns",
+                "phase 6 \"Externs with binding patterns\"",
+            ),
+            PendingKind::TypeDecl { .. } => (
+                "a type block",
+                "phase 6 \"Refinement types, doc annotations, L15 inet\"",
+            ),
+            PendingKind::DeclOpenType { .. } => (
+                "`decl type ... open`",
+                "phase 6 \"Refinement types, doc annotations, L15 inet\"",
+            ),
+            PendingKind::DeclMixed { .. } => {
+                ("`decl p/N mixed`", "phase 6 \"Static secret labels\"")
+            }
+            PendingKind::Scenario { .. } => ("a scenario", "phase 6 \"Scenarios\""),
+        }
+    }
+}
+
+/// `type := name | name(type, ...) | { field: type, ... } | "string"`.
+#[derive(Debug, Clone)]
+pub enum TypeExpr {
+    Name(String),
+    Apply(String, Vec<TypeExpr>),
+    Object(Vec<(String, TypeExpr)>),
+    Str(String),
+}
+
+/// `contributes arg to T at P` (`None` for `_`) or `contributes pred`.
+#[derive(Debug, Clone)]
+pub enum Grant {
+    Arg {
+        typ: Option<String>,
+        path: Option<String>,
+    },
+    Pred(String),
+}
+
+/// `+name: type` (input) or `-name: type` (output) of an extern.
+#[derive(Debug, Clone)]
+pub struct BindArg {
+    pub input: bool,
+    pub name: String,
+    pub ty: Option<TypeExpr>,
+}
+
+/// `path: type flag* [where body]`, or a nested block of them.
+#[derive(Debug, Clone)]
+pub struct AttrDecl {
+    pub path: String,
+    pub ty: Option<TypeExpr>,
+    pub flags: Vec<String>,
+    pub refinement: Vec<Lit>,
+    pub children: Vec<AttrDecl>,
 }
 
 #[derive(Debug, Clone)]
@@ -231,10 +417,12 @@ pub struct RuleStmt {
     pub body: Vec<Lit>,
 }
 
+/// `constraint("message") :- body.`: a deny checked after evaluation.
 #[derive(Debug, Clone)]
 pub struct Constraint {
     pub message: String,
     pub body: Vec<Lit>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]

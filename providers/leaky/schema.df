@@ -10,6 +10,8 @@
 # The never-prints test drives a program through both and checks every
 # place dform prints or stores a resource's attributes.
 
+edition 2026.
+
 type_provider(leaky.vault, fakecloud).
 type_provider(leaky.oops, fakecloud).
 

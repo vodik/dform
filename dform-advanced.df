@@ -12,6 +12,8 @@
 #   cargo run -- --file dform-advanced.df plan --set env=prod
 #   cargo run -- --file dform-advanced.df query in_group
 
+edition 2026.
+
 # Environment default (stratified negation)
 has_env() :- input("env", _).
 env(staging) :- not has_env().
@@ -42,7 +44,7 @@ corp_net(inet("10.100.0.0/12")).
 # Explode tenant list into a relation (Pattern A), with index.
 tenant(T, I) :-
   env(Env),
-  setting(Env, tenants, Ts),
+  setting(Env, .tenants, Ts),
   member(Ts, I, T).
 
 # Shared services VPC (always exists)
@@ -86,7 +88,7 @@ resource net.route R {
 } :-
   reachable(A, B),
   A != B,
-  arg(net.vpc, B, cidr, NetB),
+  arg(net.vpc, B, .cidr, NetB),
   R = format("rt-%s-%s", A, B).
 
 # Policy: warn if we materialize *direct* routes between non-adjacent nodes in the mesh.
@@ -117,7 +119,7 @@ warn("mesh has direct route between non-adjacent nodes", { from: A, to: B }) :-
 
 # Declared so the check can negate it with no rows; uncomment the fact to
 # explicitly allow certain non-adjacent direct routes:
-extern mesh_allow_direct_route/2.
+decl mesh_allow_direct_route/2.
 # mesh_allow_direct_route(core_a, core_c).
 
 # --- Auto-mesh demo (derived links from a list) ---
@@ -128,7 +130,7 @@ extern mesh_allow_direct_route/2.
 
 mesh_vpc(Name, Net, I) :-
   env(Env),
-  setting(Env, mesh.vpcs, Vpcs),
+  setting(Env, .mesh.vpcs, Vpcs),
   member(Vpcs, I, { name: Name, net: Net }).
 
 resource net.vpc Name {
@@ -150,8 +152,8 @@ peer(A, B) :- mesh_peer(A, B).
 
 # Optional: materialize the derived peerings as explicit peering resources.
 resource net.vpc_peering P {
-  requester_vpc_id = ref(net.vpc, A, id)
-  accepter_vpc_id = ref(net.vpc, B, id)
+  requester_vpc_id = ref(net.vpc, A, .id)
+  accepter_vpc_id = ref(net.vpc, B, .id)
 } :-
   mesh_peer(A, B),
   P = format("mesh-peer-%s-%s", A, B).
@@ -159,8 +161,8 @@ resource net.vpc_peering P {
 # Policy 1: peered VPCs must not overlap.
 deny("peered vpcs must not overlap", { a: A, b: B }) :-
   peer(A, B),
-  arg(net.vpc, A, cidr, NetA),
-  arg(net.vpc, B, cidr, NetB),
+  arg(net.vpc, A, .cidr, NetA),
+  arg(net.vpc, B, .cidr, NetB),
   inet_overlaps(NetA, NetB).
 
 # Policy 2: tenant isolation.

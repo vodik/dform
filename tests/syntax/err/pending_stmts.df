@@ -1,0 +1,19 @@
+edition 2026.
+
+# Statements the grammar has and the evaluator does not yet: each parses
+# and lowering names the ticket that gives it meaning.
+provider fake { source = "./providers/fake" }.
+stack demo.main { backend = local(".dform/demo") }.
+input env: enum(dev, prod) = dev.
+extern file.json(+path: string, -value: any).
+type settings { db.backup_days: int where 1 <= db.backup_days <= 35 }.
+decl type k8s.custom open.
+decl secret_ish/2 mixed.
+scenario prod_is_safe { p(a). }.
+module m {
+  input zones: list(string) = ["a"].
+  output vpc: addr.
+  export subnet_of/2.
+  contributes iam_need.
+  contributes arg to _ at .tags.
+}.

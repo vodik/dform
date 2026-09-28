@@ -185,9 +185,8 @@ mod tests {
 
         // The specific bug (F13): the VPC itself must be among the derived
         // resources, not just some unrelated want/adopt fact.
-        let resources =
-            ir::compile_resources(res.facts.iter().cloned(), &Default::default())
-                .expect("compile resources");
+        let resources = ir::compile_resources(res.facts.iter().cloned(), &Default::default())
+            .expect("compile resources");
         assert!(
             resources.iter().any(|r| r.addr.typ == "net.vpc"),
             "expected a net.vpc resource to be derived, got: {:?}",
@@ -200,17 +199,17 @@ mod tests {
 
     #[test]
     fn warns_about_unread_param_key() {
-        // Mirrors F13 exactly: a `use` block sets `vpc_cidr`, the component
+        // Mirrors F13 exactly: an `instance` block sets `vpc_cidr`, the module
         // it instantiates reads `vpc_net`.
         let src = r#"
-            component_def widget {
+            module widget {
               resource net.vpc vpc {
                 cidr = VpcNet
               } :-
                 param(vpc_net, VpcNet).
             }.
 
-            use widget main {
+            instance widget main {
               vpc_cidr = "10.0.0.0/16"
             }.
         "#;
@@ -225,14 +224,14 @@ mod tests {
     #[test]
     fn no_warning_when_everything_is_read() {
         let src = r#"
-            component_def widget {
+            module widget {
               resource net.vpc vpc {
                 cidr = VpcNet
               } :-
                 param(vpc_net, VpcNet).
             }.
 
-            use widget main {
+            instance widget main {
               vpc_net = "10.0.0.0/16"
             }.
         "#;

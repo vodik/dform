@@ -125,7 +125,21 @@ enum Cmd {
     },
 }
 
-fn main() -> Result<()> {
+fn main() -> std::process::ExitCode {
+    match run() {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(e) => {
+            use std::io::IsTerminal;
+            eprint!(
+                "{}",
+                dform::diag::report(&e, std::io::stderr().is_terminal())
+            );
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+fn run() -> Result<()> {
     let mut cli = Cli::parse();
     let plan_file = match &cli.cmd {
         Cmd::Apply { plan_file, .. } => plan_file.clone(),

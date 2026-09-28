@@ -1,6 +1,7 @@
 use crate::ast::{
     Atom, Constraint, Extern, Lit, Program, Rank, Resource, RuleStmt, Settings, Stmt, Term, When,
 };
+use crate::diag::{Diagnostic, Diagnostics};
 use crate::schema::Schema;
 use crate::value::{NullClass, Value};
 use anyhow::{Result, bail};
@@ -9,11 +10,12 @@ use std::collections::{BTreeMap, BTreeSet};
 #[derive(Debug, Clone)]
 pub struct Lowered {
     pub program: Program,
-    /// `extern p/N.` declarations.
+    /// `decl p/N.` declarations.
     pub externs: BTreeSet<Extern>,
 }
 
 pub fn lower(program: &Program) -> Result<Lowered> {
+    reject_pending(&program.statements)?;
     let program = apply_decls(program)?;
     // In the future, imports should be handled in a loader before parsing.
     // For now, keep Import statements in the AST but drop them before eval.
@@ -30,6 +32,35 @@ pub fn lower(program: &Program) -> Result<Lowered> {
         program: expanded,
         externs,
     })
+}
+
+/// E §6 statements with no lowering yet are errors naming their ticket.
+fn reject_pending(stmts: &[Stmt]) -> Result<()> {
+    let mut diags = Vec::new();
+    fn walk(stmts: &[Stmt], diags: &mut Vec<Diagnostic>) {
+        for s in stmts {
+            match s {
+                Stmt::Pending(p) => {
+                    let (what, ticket) = p.kind.describe();
+                    diags.push(
+                        Diagnostic::error(p.span, format!("{what} is not yet supported"))
+                            .with_note(format!("it parses; its semantics land with {ticket}")),
+                    );
+                }
+                Stmt::ComponentDef(d) => walk(&d.body, diags),
+                Stmt::PolicyPack(p) => walk(&p.body, diags),
+                Stmt::Component(c) => walk(&c.body, diags),
+                Stmt::When(w) => walk(&w.body, diags),
+                _ => {}
+            }
+        }
+    }
+    walk(stmts, &mut diags);
+    if diags.is_empty() {
+        Ok(())
+    } else {
+        Err(Diagnostics(diags).into())
+    }
 }
 
 /// Rank of a contribution in the core form `arg(T, A, P, V, Rank)`.
@@ -156,8 +187,8 @@ fn lower_contributions(program: &Program) -> Result<Program> {
                 body: attr_lits(r.body)?,
             }),
             Stmt::Constraint(c) => Stmt::Constraint(Constraint {
-                message: c.message,
                 body: attr_lits(c.body)?,
+                ..c
             }),
             other => other,
         });
@@ -239,10 +270,7 @@ fn rewrite_stmt_records(stmt: Stmt, schemas: &BTreeMap<String, Vec<String>>) -> 
         }
         Stmt::Constraint(c) => {
             let body = rewrite_lits_records(c.body, schemas)?;
-            Stmt::Constraint(Constraint {
-                message: c.message,
-                body,
-            })
+            Stmt::Constraint(Constraint { body, ..c })
         }
         Stmt::When(w) => {
             let guard = rewrite_lit_records(w.guard, schemas)?;
@@ -250,7 +278,11 @@ fn rewrite_stmt_records(stmt: Stmt, schemas: &BTreeMap<String, Vec<String>>) -> 
             for s in w.body {
                 body.push(rewrite_stmt_records(s, schemas)?);
             }
-            Stmt::When(When { guard, body })
+            Stmt::When(When {
+                guard,
+                body,
+                span: w.span,
+            })
         }
         Stmt::Component(mut c) => {
             c.body = c
@@ -377,7 +409,12 @@ fn expand_component_defs_and_uses(program: &Program) -> Result<Program> {
             Stmt::ComponentDef(_) => {}
             Stmt::Use(u) => {
                 let Some(body) = defs.get(&u.name) else {
-                    bail!("use references unknown component_def '{}'", u.name);
+                    bail!(
+                        "instance {} {} names an unknown module '{}'",
+                        u.name,
+                        u.inst,
+                        u.name
+                    );
                 };
 
                 let mut comp_body: Vec<Stmt> = Vec::new();
@@ -403,6 +440,7 @@ fn expand_component_defs_and_uses(program: &Program) -> Result<Program> {
                     comp: u.name.clone(),
                     inst: u.inst.clone(),
                     body: comp_body,
+                    span: u.span,
                 }));
             }
             Stmt::Component(_) => {
@@ -441,7 +479,7 @@ fn expand_policy_packs(program: &Program) -> Result<Program> {
 
     for name in applied {
         let Some(body) = packs.get(&name) else {
-            bail!("apply_policy references unknown policy_pack '{name}'");
+            bail!("apply {name} names an unknown policy '{name}'");
         };
         out.extend(body.clone());
     }
@@ -896,7 +934,6 @@ fn drop_metadata(program: &Program) -> (Program, BTreeSet<Extern>) {
     let mut externs = BTreeSet::new();
     for s in &program.statements {
         match s {
-            Stmt::Unique(_) => {}
             Stmt::Extern(e) => {
                 externs.insert(e.clone());
             }
@@ -960,12 +997,13 @@ fn rewrite_stmt(stmt: Stmt, scope: &str) -> Stmt {
             body: r.body.into_iter().map(|l| rewrite_lit(l, scope)).collect(),
         }),
         Stmt::Constraint(c) => Stmt::Constraint(Constraint {
-            message: c.message,
             body: c.body.into_iter().map(|l| rewrite_lit(l, scope)).collect(),
+            ..c
         }),
         Stmt::When(w) => Stmt::When(When {
             guard: rewrite_lit(w.guard, scope),
             body: w.body.into_iter().map(|s| rewrite_stmt(s, scope)).collect(),
+            span: w.span,
         }),
         Stmt::Resource(r) => Stmt::Resource(Resource {
             typ: rewrite_term(r.typ, scope),
@@ -982,6 +1020,7 @@ fn rewrite_stmt(stmt: Stmt, scope: &str) -> Stmt {
             body: r
                 .body
                 .map(|xs| xs.into_iter().map(|l| rewrite_lit(l, scope)).collect()),
+            span: r.span,
         }),
         // Settings are addressed by environment, not by scope: only the
         // values and the body are rewritten.
@@ -1001,7 +1040,6 @@ fn rewrite_stmt(stmt: Stmt, scope: &str) -> Stmt {
         }),
         // These are metadata statements; leave them as-is.
         Stmt::Import(i) => Stmt::Import(i),
-        Stmt::Unique(u) => Stmt::Unique(u),
         Stmt::ComponentDef(d) => Stmt::ComponentDef(d),
         Stmt::Use(u) => Stmt::Use(u),
         Stmt::PolicyPack(p) => Stmt::PolicyPack(p),
@@ -1009,6 +1047,7 @@ fn rewrite_stmt(stmt: Stmt, scope: &str) -> Stmt {
         Stmt::Component(c) => Stmt::Component(c),
         Stmt::Decl(d) => Stmt::Decl(d),
         Stmt::Extern(e) => Stmt::Extern(e),
+        Stmt::Pending(p) => Stmt::Pending(p),
     }
 }
 
@@ -1149,10 +1188,7 @@ fn apply_guard(stmt: Stmt, guard: &Lit) -> Result<Vec<Stmt>> {
         Stmt::Constraint(c) => {
             let mut body = c.body;
             body.push(guard.clone());
-            vec![Stmt::Constraint(Constraint {
-                message: c.message,
-                body,
-            })]
+            vec![Stmt::Constraint(Constraint { body, ..c })]
         }
         Stmt::Resource(mut r) => {
             let mut body = r.body.unwrap_or_default();
@@ -1174,6 +1210,7 @@ fn apply_guard(stmt: Stmt, guard: &Lit) -> Result<Vec<Stmt>> {
             vec![Stmt::When(When {
                 guard: w.guard,
                 body,
+                span: w.span,
             })]
         }
         other => vec![other],
@@ -1491,8 +1528,8 @@ pub fn rewrite_computed_refs(
     let constraints = constraints
         .into_iter()
         .map(|c| Constraint {
-            message: c.message,
             body: rewrite_body_refs(c.body, schema, &mut n),
+            ..c
         })
         .collect();
     (out_rules, out_facts, constraints)

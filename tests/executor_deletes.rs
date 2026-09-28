@@ -20,7 +20,8 @@ fn deletes_run_in_reverse_dependency_order() {
     let s = Scratch::new("delete-order");
     s.write(
         "p.df",
-        r#"
+        r#"edition 2026.
+
 resource net.vpc main { cidr = "10.0.0.0/16" }.
 resource net.vpc_peering p { vpc_id = ref(net.vpc, main, id) }.
 resource net.route r { peering_id = ref(net.vpc_peering, p, id) }.
@@ -32,7 +33,10 @@ resource compute.vm keep { size = 1 }.
         json(&s, "w.state.json")["resources"]["net.route::r"]["deps"],
         serde_json::json!(["net.vpc_peering::p"])
     );
-    s.write("p.df", "resource compute.vm keep { size = 1 }.\n");
+    s.write(
+        "p.df",
+        "edition 2026.\nresource compute.vm keep { size = 1 }.\n",
+    );
     let r = dform(&s, &["apply"]).success();
     let order: Vec<&str> = r.stdout.lines().filter(|l| l.starts_with("- ")).collect();
     assert_eq!(
@@ -52,7 +56,8 @@ resource compute.vm keep { size = 1 }.
     );
 }
 
-const NET: &str = r#"
+const NET: &str = r#"edition 2026.
+
 resource net.vpc main { cidr = "10.0.0.0/16" }.
 resource net.subnet a { vpc_id = ref(net.vpc, main, id), tier = "web" }.
 "#;

@@ -4,12 +4,14 @@
 mod common;
 use common::Scratch;
 
-const NET: &str = r#"
+const NET: &str = r#"edition 2026.
+
 resource net.vpc main { cidr = "10.0.0.0/16" }.
 resource net.subnet a { vpc_id = ref(net.vpc, main, id), cidr = "10.0.1.0/24" }.
 "#;
 
-const DB: &str = r#"
+const DB: &str = r#"edition 2026.
+
 resource db.postgres main { backup_days = 7 }.
 "#;
 

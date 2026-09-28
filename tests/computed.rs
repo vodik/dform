@@ -51,7 +51,8 @@ fn a_fresh_stack_carries_nulls_until_apply() {
     assert!(!r.stdout.contains('?'), "{}", r.stdout);
 }
 
-const SECRET_SCHEMA: &str = r#"
+const SECRET_SCHEMA: &str = r#"edition 2026.
+
 type_provider(db.instance, mock).
 type_attr(db.instance, id, string, [computed, id]).
 type_attr(db.instance, password, string, [computed, sensitive]).
@@ -60,7 +61,8 @@ type_provider(app.secret, mock).
 type_attr(app.secret, id, string, [computed, id]).
 "#;
 
-const SECRET_PROG: &str = r#"
+const SECRET_PROG: &str = r#"edition 2026.
+
 resource db.instance main { master_password = "hunter2", size = 10 }.
 resource app.secret creds { value = ref(db.instance, main, password), db = ref(db.instance, main, id) }.
 "#;
@@ -140,11 +142,12 @@ fn optional_computed_is_the_programs_when_set_else_minted_at_apply() {
     let s = Scratch::new("computed-optional");
     s.write(
         "schema.df",
-        "type_provider(vm, mock).\ntype_attr(vm, id, string, [computed, id]).\ntype_attr(vm, zone, string, [optional_computed]).\n",
+        "edition 2026.\ntype_provider(vm, mock).\ntype_attr(vm, id, string, [computed, id]).\ntype_attr(vm, zone, string, [optional_computed]).\n",
     );
     s.write(
         "p.df",
-        r#"
+        r#"edition 2026.
+
 resource vm a { size = 1 }.
 resource vm b { zone = "z1" }.
 resource vm c { peer_zone = ref(vm, a, zone), other_zone = ref(vm, b, zone) }.

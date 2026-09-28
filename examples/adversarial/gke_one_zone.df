@@ -8,6 +8,9 @@
 # Run with the gke mock schema, which makes the cluster's zones, endpoint and
 # ca open nulls until the cluster exists:
 #   cargo run -- --file examples/adversarial/gke_two_phase.df --provider gke plan
+
+edition 2026.
+
 has_env() :- input("env", _).
 env(dev) :- not has_env().
 env(E) :- input("env", E).
@@ -25,10 +28,10 @@ settings dev {
 
 project(Id, Name, Region, NetId) :-
   env(E),
-  setting(E, project_id, Id),
-  setting(E, project_name, Name),
-  setting(E, region, Region),
-  setting(E, network_name, NetName),
+  setting(E, .project_id, Id),
+  setting(E, .project_name, Name),
+  setting(E, .region, Region),
+  setting(E, .network_name, NetName),
   NetId = format("projects/%s/global/networks/%s", Id, NetName).
 
 resource google_compute_subnetwork gke_subnet {
@@ -40,14 +43,14 @@ resource google_compute_subnetwork gke_subnet {
 } :-
   project(Id, Name, Region, NetId),
   env(E),
-  setting(E, gke.subnet_cidr, SubnetCidr).
+  setting(E, .gke.subnet_cidr, SubnetCidr).
 
 # Carries a fresh null (subnetwork_id) and is still definite.
 resource google_compute_address static_ip {
   project = Id,
   region = Region,
   name = "pngu-grpc",
-  subnetwork_id = ref(google_compute_subnetwork, gke_subnet, id)
+  subnetwork_id = ref(google_compute_subnetwork, gke_subnet, .id)
 } :-
   project(Id, _, Region, _).
 
@@ -56,20 +59,20 @@ resource gke_cluster pngu {
   project_id = Id,
   name = format("%s-gke", Name),
   network_id = NetId,
-  subnetwork_id = ref(google_compute_subnetwork, gke_subnet, id),
+  subnetwork_id = ref(google_compute_subnetwork, gke_subnet, .id),
   master_control_plane_cidr = CpCidr,
   node_locations = ["us-east1-b"],
   deletion_protection = true
 } :-
   env(E),
   project(Id, Name, _, NetId),
-  setting(E, gke.control_plane_cidr, CpCidr).
+  setting(E, .gke.control_plane_cidr, CpCidr).
 
 # Provider configured from phase-1 nulls (two open, one secret).
 provider_config(kubernetes, {
-  host: ref(gke_cluster, pngu, endpoint),
-  ca: ref(gke_cluster, pngu, ca_certificate),
-  token: ref(google.client_config, current, access_token)
+  host: ref(gke_cluster, pngu, .endpoint),
+  ca: ref(gke_cluster, pngu, .ca_certificate),
+  token: ref(google.client_config, current, .access_token)
 }).
 
 resource k8s.namespace pngu {
@@ -81,26 +84,26 @@ resource k8s.deployment api {
   namespace = Ns,
   image = "gcr.io/renfry/api:1.42",
   replicas = 3
-} :- arg(k8s.namespace, pngu, name, Ns).
+} :- arg(k8s.namespace, pngu, .name, Ns).
 
 resource k8s.secret db_credentials {
   namespace = Ns,
-  data = { password: ref(google.secret_manager_secret_version, db_pw, secret_data) }
-} :- arg(k8s.namespace, pngu, name, Ns).
+  data = { password: ref(google.secret_manager_secret_version, db_pw, .secret_data) }
+} :- arg(k8s.namespace, pngu, .name, Ns).
 
 # One nodepool per zone: member over an open null is a content position.
 resource gke_nodepool Np {
-  cluster = ref(gke_cluster, pngu, id),
+  cluster = ref(gke_cluster, pngu, .id),
   zone = Z,
   min = 1,
   max = 3
 } :-
-  arg(gke_cluster, pngu, zones, Zs),
+  arg(gke_cluster, pngu, .zones, Zs),
   member(Zs, Z),
   Np = format("np-%s", Z).
 
 zone_count(count(Z)) :-
-  arg(gke_cluster, pngu, zones, Zs),
+  arg(gke_cluster, pngu, .zones, Zs),
   member(Zs, Z).
 
 deny("cluster must be in at least two zones", { cluster: pngu }) :-
@@ -113,4 +116,4 @@ deny("cluster must be in at least two zones", { cluster: pngu }) :-
 # per key it is decided now, and holds.
 deny("cluster must not be deletable", { cluster: C }) :-
   want(gke_cluster, C),
-  not arg(gke_cluster, C, deletion_protection, true).
+  not arg(gke_cluster, C, .deletion_protection, true).

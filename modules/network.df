@@ -1,4 +1,6 @@
-component_def network {
+edition 2026.
+
+module network {
   resource net.vpc vpc {
     cidr = VpcNet,
     tags = { env: Env, component: network }
@@ -6,21 +8,21 @@ component_def network {
     env(Env),
     param(vpc_net, VpcNet).
 
-  zone_index(us-test-1a, 0).
-  zone_index(us-test-1b, 1).
+  zone_index("us-test-1a", 0).
+  zone_index("us-test-1b", 1).
 
   resource net.subnet Sn {
-    vpc_id = ref(net.vpc, vpc, id),
+    vpc_id = ref(net.vpc, vpc, .id),
     cidr = inet_subnet(VpcNet, 4, I),
     zone = Z,
     visibility = private
   } :-
     data(zone, Z),
     zone_index(Z, I),
-    arg(net.vpc, vpc, cidr, VpcNet),
+    arg(net.vpc, vpc, .cidr, VpcNet),
     Sn = format("private-%s", Z).
 
   output(private_subnet_ids,
-    [ ref(net.subnet, Sn, id) | want(net.subnet, Sn), arg(net.subnet, Sn, visibility, private) ]
+    [ ref(net.subnet, Sn, .id) | want(net.subnet, Sn), arg(net.subnet, Sn, .visibility, private) ]
   ) :- env(_Env).
 }.

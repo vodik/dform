@@ -1,9 +1,12 @@
 # Demo: schemas + record matching + wildcards
 
-decl project { id, name, region, network_name, proxy_cidr }.
+edition 2026.
 
-project(1, "alpha", us-east-1, "net-a", "10.0.0.0/24").
-project(2, "beta", us-east-1, "net-b", "10.1.0.0/24").
+# The variables name the record fields: NetworkName is `network_name`.
+decl project(Id: int, Name: string, Region: string, NetworkName: string, ProxyCidr: string).
+
+project(1, "alpha", "us-east-1", "net-a", "10.0.0.0/24").
+project(2, "beta", "us-east-1", "net-b", "10.1.0.0/24").
 
 # Match only the fields you care about (missing fields become wildcards in rule bodies).
 proj_basic(Id, Name, Region) :- project{ id: Id, name: Name, region: Region }.

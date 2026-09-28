@@ -98,7 +98,7 @@ fn an_undeformed_stack_is_a_document_too() {
     let s = Scratch::new("json-undeformed");
     s.write(
         "p.df",
-        "resource net.vpc main { cidr = \"10.0.0.0/16\" }.\n",
+        "edition 2026.\nresource net.vpc main { cidr = \"10.0.0.0/16\" }.\n",
     );
     let args = ["--file", "p.df", "--world", "w.json"];
     s.run(&[&args[..], &["apply"]].concat()).success();
@@ -113,7 +113,7 @@ fn query_json_lists_the_facts() {
     let s = Scratch::new("json-query");
     s.write(
         "p.df",
-        "resource net.vpc main { cidr = \"10.0.0.0/16\" }.\n",
+        "edition 2026.\nresource net.vpc main { cidr = \"10.0.0.0/16\" }.\n",
     );
     let r = s
         .run(&[
@@ -135,7 +135,7 @@ fn query_json_redacts_like_the_plan() {
     let s = Scratch::new("json-query-secret");
     s.write(
         "p.df",
-        "resource leaky.vault v { password = \"VAULT-SECRET-DO-NOT-PRINT\" }.\n\
+        "edition 2026.\nresource leaky.vault v { password = \"VAULT-SECRET-DO-NOT-PRINT\" }.\n\
          resource net.subnet a { vpc_id = ref(net.vpc, main, id) }.\n\
          resource net.vpc main { cidr = \"10.0.0.0/16\" }.\n",
     );
@@ -188,7 +188,7 @@ fn query_json_redacts_like_the_plan() {
 #[test]
 fn replace_denied_and_moved_are_in_the_document() {
     let s = Scratch::new("json-replace");
-    let net = "resource net.vpc main { cidr = \"10.0.0.0/16\" }.\n";
+    let net = "edition 2026.\nresource net.vpc main { cidr = \"10.0.0.0/16\" }.\n";
     s.write("p.df", net);
     let args = ["--file", "p.df", "--world", "w.json"];
     s.run(&[&args[..], &["apply"]].concat()).success();
@@ -211,7 +211,7 @@ fn replace_denied_and_moved_are_in_the_document() {
 
     s.write(
         "p.df",
-        "resource net.vpc core { cidr = \"10.0.0.0/16\" }.\nmoved(net.vpc, main, core).\n",
+        "edition 2026.\nresource net.vpc core { cidr = \"10.0.0.0/16\" }.\nmoved(net.vpc, main, core).\n",
     );
     let r = s.run(&[&args[..], &["plan", "--json"]].concat()).success();
     let p: Value = serde_json::from_str(&r.stdout).unwrap();

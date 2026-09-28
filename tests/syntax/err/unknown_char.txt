@@ -1,0 +1,1 @@
+tests/syntax/err/unknown_char.df:3:6: expected `.` to end the statement, found unknown character `?`

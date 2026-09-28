@@ -1,0 +1,51 @@
+edition 2026.
+
+# One of everything the grammar lowers today.
+import "../../../modules/stdlib_net.df".
+import "../../../modules/iam.df" as lib.
+
+decl provided/2.
+decl project(Id: int, NetworkName: string).
+
+project(1, "net-a").
+names(N) :- project{ network_name: N }.
+
+module m {
+  resource net.vpc vpc @default {
+    cidr = "10.0.0.0/16"
+    tags = { team: "x", "k-v": 1 }, size = 2 @override
+    list[0].name = "a"
+    audit.sinks += ["s3"]
+  } :- param(on, true).
+}.
+
+instance m main { on = true }.
+
+policy p {
+  arg(T, A, .tags, { owner: "ops" }) @override :- want(T, A).
+}.
+
+apply p.
+
+when env(prod) {
+  q(1).
+}.
+
+settings E @default {
+  db = { backup_days: 3 }
+} :- env(E).
+
+env(prod).
+p(X) :- q(X), X = 1 + 2 * 3 - -4 / (5 % 2), X != 0, X >= 1, X <= 9, X > 0, X < 10.
+r(V) :- setting(prod, .gke.static_ips."pngu-grpc".type, V).
+s(V) :- q(X), O = { a: { b: X } }, V = O.a.b.
+t(L) :- L = [X | q(X)], 1 in L, 2 not in L.
+u(A) :- ref(net.vpc, m.main/vpc, .id) = A.
+adopt(net.vpc, m.main/vpc, "vpc-123").
+moved(net.vpc, m.old/vpc, m.main/vpc).
+lifecycle(net.vpc, m.main/vpc, prevent_destroy).
+ignore_changes(net.vpc, m.main/vpc, .tags.owner).
+counts(count(X)) :- q(X).
+constraint("q must not be empty") :- not q(1).
+v(input, output, settings, type) :- input("env", _), output(k, _).
+p(a).q(b).

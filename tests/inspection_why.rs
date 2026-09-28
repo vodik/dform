@@ -55,7 +55,7 @@ fn why_prints_one_alternative_unless_all() {
     let s = Scratch::new("why-alts");
     s.write(
         "p.df",
-        "p(1). q(1). r(X) :- p(X). r(X) :- q(X). s(X) :- r(X), not t(X). t(2) :- p(2).",
+        "edition 2026.\np(1). q(1). r(X) :- p(X). r(X) :- q(X). s(X) :- r(X), not t(X). t(2) :- p(2).",
     );
     let why = |extra: &[&str]| {
         let mut a = vec!["--file", "p.df", "--world", "w.json", "why"];
@@ -89,7 +89,7 @@ fn why_prints_one_alternative_unless_all() {
 #[test]
 fn why_with_a_variable_prints_each_match() {
     let s = Scratch::new("why-vars");
-    s.write("p.df", "p(1). p(2). q(X) :- p(X).");
+    s.write("p.df", "edition 2026.\np(1). p(2). q(X) :- p(X).");
     let out = s
         .run(&["--file", "p.df", "--world", "w.json", "why", "q(N)"])
         .success()
@@ -107,7 +107,8 @@ fn why_never_prints_a_labeled_secret() {
     let s = Scratch::new("why-secret");
     s.write(
         "p.df",
-        r#"resource leaky.vault v { password = "VAULT-SECRET-DO-NOT-PRINT" }.
+        r#"edition 2026.
+resource leaky.vault v { password = "VAULT-SECRET-DO-NOT-PRINT" }.
            copy(P) :- attr(leaky.vault, v, password, P)."#,
     );
     let schema = repo().join("providers/leaky/schema.df");

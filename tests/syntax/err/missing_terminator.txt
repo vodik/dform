@@ -1,0 +1,2 @@
+tests/syntax/err/missing_terminator.df:4:1: expected `.` to end the statement, found an identifier `q`
+  help: every statement ends with `.`; is one missing on the line above?

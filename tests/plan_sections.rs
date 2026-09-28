@@ -44,7 +44,8 @@ fn a_deny_reading_a_stuck_predicate_may_derive_after_the_tick() {
     let s = Scratch::new("sections-may-derive");
     s.write(
         "extra.df",
-        r#"deny("no nodepool in zone z", {pool: N}) :-
+        r#"edition 2026.
+deny("no nodepool in zone z", {pool: N}) :-
   want(gke_nodepool, N),
   arg(gke_nodepool, N, zone, "us-east1-z").
 "#,
@@ -105,7 +106,8 @@ fn a_keyless_set_diffs_by_element() {
 #[test]
 fn a_keyed_list_diffs_by_element() {
     let s = Scratch::new("sections-keyed");
-    let one = r#"
+    let one = r#"edition 2026.
+
 resource k8s.deployment api {
   metadata.name = "api",
   spec.selector.matchLabels = {app: "api"},
@@ -140,7 +142,8 @@ fn shadowed_and_conflicts_are_sections() {
     let s = Scratch::new("sections-conflict");
     s.write(
         "p.df",
-        r#"
+        r#"edition 2026.
+
 resource net.vpc main { cidr = "10.0.0.0/16" }.
 arg(net.vpc, main, cidr, "10.1.0.0/16").
 resource net.vpc two @default { cidr = "10.0.0.0/16" }.
@@ -174,7 +177,8 @@ fn a_conflict_at_a_sensitive_path_is_redacted_in_the_plan() {
     let s = Scratch::new("sections-conflict-secret");
     s.write(
         "p.df",
-        r#"
+        r#"edition 2026.
+
 resource leaky.vault v { password = "VAULT-SECRET-A" }.
 arg(leaky.vault, v, password, "VAULT-SECRET-B").
 "#,
@@ -204,7 +208,7 @@ arg(leaky.vault, v, password, "VAULT-SECRET-B").
 #[test]
 fn a_denied_replace_is_a_section() {
     let s = Scratch::new("sections-denied");
-    let net = "resource net.vpc main { cidr = \"10.0.0.0/16\" }.\n";
+    let net = "edition 2026.\nresource net.vpc main { cidr = \"10.0.0.0/16\" }.\n";
     s.write("p.df", net);
     let args = ["--file", "p.df", "--world", "w.json"];
     s.run(&[&args[..], &["apply"]].concat()).success();

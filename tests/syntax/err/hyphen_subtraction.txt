@@ -1,0 +1,4 @@
+tests/syntax/err/hyphen_subtraction.df:4:8: `us-east` is arithmetic on two symbols
+  help: `-` and `/` are always operators; a name with them is a string: "us-east"
+tests/syntax/err/hyphen_subtraction.df:5:7: `a/b` is arithmetic on two symbols
+  help: `-` and `/` are always operators; a name with them is a string: "a/b"

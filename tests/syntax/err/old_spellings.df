@@ -1,0 +1,9 @@
+edition 2026.
+
+# Spellings from before edition 2026: each is one error with a hint.
+component_def net { p(a). }.
+use net main {}.
+policy_pack base { p(b). }.
+apply_policy base.
+unique setting(2).
+extern allowed/1.

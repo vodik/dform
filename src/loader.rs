@@ -24,8 +24,7 @@ fn load_file(path: &Path, seen: &mut BTreeSet<PathBuf>) -> Result<Program> {
         return Ok(Program { statements: vec![] });
     }
     let src = fs::read_to_string(&abs).with_context(|| format!("read {}", abs.display()))?;
-    let mut prog =
-        parser::parse_program(&src).with_context(|| format!("parse {}", abs.display()))?;
+    let mut prog = parser::parse_file(&display_name(&abs), &src)?;
 
     let base_dir = abs.parent().unwrap_or(Path::new("."));
     let mut out = Vec::new();
@@ -61,12 +60,13 @@ fn prefix_stmt(stmt: Stmt, alias: &str) -> Stmt {
             body: r.body.into_iter().map(|l| prefix_lit(l, alias)).collect(),
         }),
         Stmt::Constraint(c) => Stmt::Constraint(Constraint {
-            message: c.message,
             body: c.body.into_iter().map(|l| prefix_lit(l, alias)).collect(),
+            ..c
         }),
         Stmt::When(w) => Stmt::When(When {
             guard: prefix_lit(w.guard, alias),
             body: w.body.into_iter().map(|s| prefix_stmt(s, alias)).collect(),
+            span: w.span,
         }),
         Stmt::Resource(r) => Stmt::Resource(Resource {
             typ: prefix_term(r.typ, alias),
@@ -83,6 +83,7 @@ fn prefix_stmt(stmt: Stmt, alias: &str) -> Stmt {
             body: r
                 .body
                 .map(|xs| xs.into_iter().map(|l| prefix_lit(l, alias)).collect()),
+            span: r.span,
         }),
         Stmt::Component(mut c) => {
             c.body = c.body.into_iter().map(|s| prefix_stmt(s, alias)).collect();
@@ -122,6 +123,7 @@ fn prefix_stmt(stmt: Stmt, alias: &str) -> Stmt {
             body: s
                 .body
                 .map(|xs| xs.into_iter().map(|l| prefix_lit(l, alias)).collect()),
+            span: s.span,
         }),
         Stmt::Decl(mut d) => {
             if !is_core_pred(&d.pred) {
@@ -263,6 +265,25 @@ pub fn is_core_pred(pred: &str) -> bool {
             | "moved"
     ) || is_engine_pred(pred)
         || is_provider_pred(pred)
+}
+
+/// How diagnostics name a file: relative to the working directory when it
+/// is under it.
+fn display_name(abs: &Path) -> String {
+    let rel = std::env::current_dir()
+        .ok()
+        .and_then(|cwd| abs.strip_prefix(cwd).ok().map(Path::to_path_buf));
+    let mut out = PathBuf::new();
+    for c in rel.unwrap_or_else(|| abs.to_path_buf()).components() {
+        match c {
+            std::path::Component::ParentDir if out.file_name().is_some() => {
+                out.pop();
+            }
+            std::path::Component::CurDir => {}
+            c => out.push(c),
+        }
+    }
+    out.display().to_string()
 }
 
 fn absolutize(path: impl AsRef<Path>) -> Result<PathBuf> {

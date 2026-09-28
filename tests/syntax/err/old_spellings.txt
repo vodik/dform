@@ -1,0 +1,12 @@
+tests/syntax/err/old_spellings.df:4:1: expected a statement, found an identifier `component_def`
+  help: `component_def` is spelled `module` in edition 2026
+tests/syntax/err/old_spellings.df:5:1: expected a statement, found an identifier `use`
+  help: `use` is spelled `instance` in edition 2026
+tests/syntax/err/old_spellings.df:6:1: expected a statement, found an identifier `policy_pack`
+  help: `policy_pack` is spelled `policy` in edition 2026
+tests/syntax/err/old_spellings.df:7:1: expected a statement, found an identifier `apply_policy`
+  help: `apply_policy` is spelled `apply` in edition 2026
+tests/syntax/err/old_spellings.df:8:1: expected a statement, found an identifier `unique`
+  help: `unique` is gone: one value per key is what the attribute aggregate enforces
+tests/syntax/err/old_spellings.df:9:15: expected `(`, found `/`
+  help: `extern p/N` is spelled `decl p/N` in edition 2026

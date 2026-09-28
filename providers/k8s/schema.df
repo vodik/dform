@@ -17,6 +17,8 @@
 #
 # type_mint gives the mock's answer for a server-picked value.
 
+edition 2026.
+
 # Namespace (core/v1)
 type_provider(k8s.namespace, kubernetes).
 # Deleting a namespace deletes what is in it: the old one goes first.

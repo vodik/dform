@@ -1,0 +1,1 @@
+tests/syntax/err/late_edition.df:2:1: the edition pragma must be the first statement of the file

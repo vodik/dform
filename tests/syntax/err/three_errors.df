@@ -1,0 +1,10 @@
+edition 2026.
+
+# Three independent syntax errors: each is reported, and the statements
+# between them still parse.
+p(a) :- q(.
+ok(1).
+r(b) :- .
+ok(2).
+resource net.vpc { cidr = "10.0.0.0/16" }.
+ok(3).

@@ -1,4 +1,6 @@
-component_def iam {
+edition 2026.
+
+module iam {
   resource iam.role app_role {
     name = app,
     assume = { principals: [k8s.serviceaccount.app] }
@@ -14,7 +16,7 @@ component_def iam {
   }.
 
   resource iam.role_policy_attachment attach {
-    role_id = ref(iam.role, app_role, id),
-    policy_id = ref(iam.policy, app_policy, id)
+    role_id = ref(iam.role, app_role, .id),
+    policy_id = ref(iam.policy, app_policy, .id)
   }.
 }.

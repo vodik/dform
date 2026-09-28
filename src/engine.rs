@@ -380,7 +380,7 @@ pub fn query(body: &[Lit], facts: &BTreeSet<Atom>) -> Result<Vec<Answer>> {
 
 /// E §2.6: a body predicate with no definition is a compile error. Defined
 /// means: a fact or a rule head, a builtin, a compiler-owned or
-/// provider-injected predicate, a fact given to this run, or `extern p/N.`.
+/// provider-injected predicate, a fact given to this run, or `decl p/N.`.
 fn check_defined(
     rules: &[RuleStmt],
     constraints: &[Constraint],
@@ -421,7 +421,7 @@ fn check_defined(
     }
     if !errors.is_empty() {
         bail!(
-            "{}\n(declare a predicate a provider feeds with `extern p/N.`)",
+            "{}\n(declare a predicate a provider feeds with `decl p/N.`)",
             errors.join("\n")
         );
     }
@@ -2513,7 +2513,8 @@ mod tests {
         let (r, violations) = run("type_lattice(settings, sinks, set).
              settings prod { sinks += [\"cloudwatch\"], days = 14 }.
              setting_add(prod, sinks, [\"s3\"]).
-             component network main { output(ids, [a, b]). }.
+             module network { output(ids, [a, b]). }.
+             instance network main {}.
              got(S, D) :- setting(prod, sinks, S), setting(prod, days, D).
              ids(L) :- output(network.main, ids, L).
              deny(\"no audit\") :- not setting(prod, audit, true).")
@@ -2585,13 +2586,6 @@ mod tests {
             facts_of(&r, "seen"),
             vec![format!("seen({})", partition::fmt_value(&null))]
         );
-    }
-
-    /// `unique` lowers to nothing: one value per key is the aggregate's job.
-    #[test]
-    fn unique_lowers_to_nothing() {
-        let (r, _) = run("unique p(1). p(1, a). p(1, b).").unwrap();
-        assert_eq!(facts_of(&r, "p").len(), 2);
     }
 
     /// DR-1 acceptance: shuffling statement order yields identical attr/4.
@@ -2745,11 +2739,11 @@ mod tests {
         let (r, violations) = run("type_lattice(net.vpc, sgs, set).
              resource net.vpc a { sgs = [base] }.
              resource net.vpc b { }.
-             policy_pack p {
+             policy p {
                arg(T, N, sgs, [default_sg, ssh], default) :- want(T, N).
                arg(T, N, sgs, [audit]) :- want(T, N), N = \"a\".
              }.
-             apply_policy p.")
+             apply p.")
         .unwrap();
         assert!(violations.is_empty(), "{violations:?}");
         assert_eq!(
@@ -2776,11 +2770,11 @@ mod tests {
         );
     }
 
-    /// `extern p/N.` declares a provider-fed predicate; provider-injected
+    /// `decl p/N.` declares a provider-fed predicate; provider-injected
     /// predicates are defined with no rows.
     #[test]
     fn extern_and_provider_predicates_are_defined() {
-        let (r, _) = run("extern allowed/1.
+        let (r, _) = run("decl allowed/1.
              want(net.vpc, a).
              lonely(N) :- want(net.vpc, N), not allowed(N), not cloud_exists(net.vpc, N).")
         .unwrap();
@@ -2880,7 +2874,7 @@ mod tests {
     /// any other body, so the resource is derived (pngu.df's peerings).
     #[test]
     fn a_record_atom_in_a_resource_body_matches() {
-        let (r, _) = run("decl peering { env, name }.
+        let (r, _) = run("decl peering(Env: symbol, Name: symbol).
              peering{ env: prod, name: legacy }.
              resource net.peering Name { env = Env } :- peering{ env: Env, name: Name }.")
         .unwrap();
