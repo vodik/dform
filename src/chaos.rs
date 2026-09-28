@@ -10,6 +10,7 @@
 //! | `read-lag=T/N:K`               | Read returns nothing for K ticks after T/N is created   |
 //! | `mutate=T/N:PATH=JSON`         | after the tick, the world sets T/N's PATH to JSON       |
 //! | `latency=T/N:MS`               | Apply of T/N is recorded as taking MS (never slept)     |
+//! | `crash=T/N`                    | dform is killed as it calls Apply of T/N (exit 137)     |
 
 use crate::ir::Address;
 use anyhow::{Context, Result, anyhow, bail};
@@ -22,6 +23,7 @@ pub struct Chaos {
     pub read_lag: BTreeMap<Address, u64>,
     pub mutate: Vec<(Address, String, serde_json::Value)>,
     pub latency: BTreeMap<Address, u64>,
+    pub crash: BTreeSet<Address>,
 }
 
 /// `T/N`: the type has no slash, the name may (component scopes use `::`).
@@ -55,7 +57,7 @@ impl Chaos {
 
     fn add(&mut self, spec: &str) -> Result<()> {
         let (knob, arg) = spec.split_once('=').ok_or_else(|| {
-            anyhow!("expected KNOB=ARG (fail, timeout, read-lag, mutate, latency)")
+            anyhow!("expected KNOB=ARG (fail, timeout, crash, read-lag, mutate, latency)")
         })?;
         match knob {
             "fail" => {
@@ -63,6 +65,9 @@ impl Chaos {
             }
             "timeout" => {
                 self.timeout.insert(parse_addr(arg)?);
+            }
+            "crash" => {
+                self.crash.insert(parse_addr(arg)?);
             }
             "read-lag" => {
                 let (a, k) = addr_and(arg, "TICKS")?;
@@ -82,7 +87,9 @@ impl Chaos {
                 self.mutate.push((a, path, v));
             }
             other => {
-                bail!("unknown chaos knob '{other}' (fail, timeout, read-lag, mutate, latency)")
+                bail!(
+                    "unknown chaos knob '{other}' (fail, timeout, crash, read-lag, mutate, latency)"
+                )
             }
         }
         Ok(())
@@ -92,6 +99,7 @@ impl Chaos {
         let mut out: BTreeSet<&Address> = BTreeSet::new();
         out.extend(&self.fail);
         out.extend(&self.timeout);
+        out.extend(&self.crash);
         out.extend(self.read_lag.keys());
         out.extend(self.latency.keys());
         out.extend(self.mutate.iter().map(|m| &m.0));

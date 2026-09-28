@@ -2,6 +2,7 @@ pub mod ast;
 pub mod chaos;
 pub mod circuit;
 pub mod engine;
+pub mod executor;
 pub mod fakecloud;
 pub mod graph;
 pub mod ir;

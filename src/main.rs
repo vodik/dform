@@ -4,6 +4,7 @@ use dform::ast::Atom;
 use dform::ast::Term;
 use dform::chaos::Chaos;
 use dform::engine;
+use dform::executor;
 use dform::fakecloud::FakeCloud;
 use dform::graph;
 use dform::ir;
@@ -65,7 +66,7 @@ enum Cmd {
     Plan,
     Apply {
         /// Inject a failure into the fake provider (repeatable):
-        /// fail=T/N, timeout=T/N, read-lag=T/N:TICKS, mutate=T/N:PATH=JSON,
+        /// fail=T/N, timeout=T/N, crash=T/N, read-lag=T/N:TICKS, mutate=T/N:PATH=JSON,
         /// latency=T/N:MS. Deterministic; nothing sleeps.
         #[arg(long = "chaos")]
         chaos: Vec<String>,
@@ -298,11 +299,12 @@ fn main() -> Result<()> {
                     .iter()
                     .any(|a| !matches!(a.kind, ActionKind::Noop));
                 // Every apply is at least one tick of the fake world, also
-                // when there is nothing to do. State keeps every action that
-                // returned, also when a later one fails.
+                // when there is nothing to do. State is written after every
+                // Apply call (`executor`).
                 if tick == 1 || changed {
-                    let applied = backend.apply(&resources, &adopts, &mut st, &plan);
-                    st.save(&paths.state)?;
+                    let persist = |st: &state::State| st.save(&paths.state);
+                    let applied =
+                        executor::run_tick(&backend, &resources, &adopts, &mut st, &plan, &persist);
                     for note in backend.take_notes() {
                         println!("chaos: {note}");
                     }

@@ -204,6 +204,7 @@ file keeps a `tick` counter; every `apply` is one tick.
 |------|--------|
 | `fail=T/N` | Apply of `T/N` fails before it reaches the world |
 | `timeout=T/N` | Apply of `T/N` takes effect, then times out: the world has it, state does not |
+| `crash=T/N` | dform is killed (exit 137) as it calls Apply of `T/N`; nothing after that runs |
 | `read-lag=T/N:K` | Read (plan's refresh) returns nothing for `T/N` for `K` ticks after it is created |
 | `mutate=T/N:PATH=JSON` | after the tick, the world sets `T/N`'s `PATH` to `JSON` (drift) |
 | `latency=T/N:MS` | Apply of `T/N` is recorded as taking `MS`, reported, never slept |
@@ -214,8 +215,10 @@ cargo run -- apply --chaos 'mutate=net.vpc/network.main::vpc:cidr="10.9.0.0/16"'
 ```
 
 Addresses are `TYPE/NAME` and must name a resource of the stack. The world is
-saved after every action and state keeps every action that returned, so a
-failed apply leaves exactly what a real cloud would.
+saved after every action, and state (the identity mapping) is written after
+every Apply call that returns, so a failed or killed apply leaves exactly what
+a real cloud would: a failure or a crash at action N leaves the N-1 identities
+before it in state.
 
 ## dform model (current)
 

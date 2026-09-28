@@ -107,7 +107,7 @@ impl Provider for FakeCloud {
         state: &mut State,
         plan: &Plan,
     ) -> Result<()> {
-        self.apply_with_state(desired, plan, adopts, state)
+        crate::executor::run_tick(self, desired, adopts, state, plan, &|_| Ok(()))
     }
 }
 
@@ -582,163 +582,18 @@ impl FakeCloud {
             .unwrap_or(NullClass::Open)
     }
 
-    /// Apply the plan as one tick of the world. The world is saved after every
-    /// action (the cloud keeps what it did, whatever happens next); `state`
-    /// holds identity for every action that returned, also when a later one
-    /// fails.
-    pub fn apply_with_state(
-        &self,
-        desired: &[Resource],
-        plan: &Plan,
-        adopts: &[Adopt],
-        state: &mut State,
-    ) -> Result<()> {
-        let mut world = self.load()?;
-        let res = self.apply_actions(&mut world, desired, plan, adopts, state);
-        self.end_tick(&mut world, state);
-        self.save(&world)?;
-        res
-    }
-
-    fn apply_actions(
-        &self,
-        world: &mut RemoteState,
-        desired: &[Resource],
-        plan: &Plan,
-        adopts: &[Adopt],
-        state: &mut State,
-    ) -> Result<()> {
-        let inv = self.load_inventory()?;
-        let adopt_map = state::adopt_map(adopts);
-        let desired_by_addr: BTreeMap<Address, &Resource> =
-            desired.iter().map(|r| (r.addr.clone(), r)).collect();
-        let mut resolved: BTreeMap<Address, Json> = BTreeMap::new();
-        let mut clock = 0u64;
-
-        for a in &plan.actions {
-            let addr = &a.addr;
-            let at = format!("{}/{}", addr.typ, addr.name);
-            let doc = match a.kind {
-                ActionKind::Delete => Json::Null,
-                _ => {
-                    let r = desired_by_addr
-                        .get(addr)
-                        .ok_or_else(|| anyhow!("apply {at}: no desired resource"))?;
-                    let ctx = Ctx {
-                        world,
-                        inv: &inv,
-                        state,
-                        adopts: &adopt_map,
-                        resolved: &resolved,
-                        strict: (!matches!(a.kind, ActionKind::Noop | ActionKind::Pending))
-                            .then_some(addr),
-                    };
-                    let doc = self.resolve_doc(&ctx, r)?;
-                    resolved.insert(addr.clone(), doc.clone());
-                    doc
-                }
-            };
-            if matches!(a.kind, ActionKind::Noop | ActionKind::Pending) {
-                continue;
-            }
-            if self.chaos.fail.contains(addr) {
-                bail!("apply {at}: injected failure (chaos fail={at})");
-            }
-            if let Some(ms) = self.chaos.latency.get(addr) {
-                clock += ms;
-                self.note(format!("latency {at}: {ms}ms (simulated, not slept)"));
-            }
-            // A timed-out call takes effect in the world, but dform never
-            // hears back: no identity is recorded.
-            let answered = !self.chaos.timeout.contains(addr);
-            match a.kind {
-                ActionKind::Noop | ActionKind::Pending => {}
-                ActionKind::Delete => {
-                    if let Some(entry) = state.get(addr) {
-                        world.resources.remove(&key(&addr.typ, &entry.remote));
-                        if answered {
-                            state.remove(addr);
-                        }
-                    }
-                }
-                ActionKind::Create => {
-                    let remote_name = addr.name.clone();
-                    let k = key(&addr.typ, &remote_name);
-                    if world.resources.contains_key(&k) {
-                        bail!("apply {at}: create failed: {k} already exists in the world");
-                    }
-                    let computed = self.mint(&addr.typ, &remote_name, &doc);
-                    let hidden_until = self.chaos.read_lag.get(addr).map(|k| world.tick + k);
-                    world.resources.insert(
-                        k,
-                        RemoteResource {
-                            typ: addr.typ.clone(),
-                            name: remote_name.clone(),
-                            attrs: doc,
-                            computed,
-                            hidden_until,
-                        },
-                    );
-                    if answered {
-                        state.set(addr.clone(), self.id().to_string(), remote_name);
-                    }
-                }
-                ActionKind::Adopt => {
-                    let Some(remote_name) = adopt_map.get(addr) else {
-                        bail!("apply {at}: adopt action missing adopt mapping");
-                    };
-                    let k = key(&addr.typ, remote_name);
-                    let Some(inv_rr) = inv.resources.get(&k) else {
-                        bail!("apply {at}: adopt requested but inventory missing {k}");
-                    };
-                    let computed = inv_rr.computed.clone();
-                    world.resources.insert(
-                        k,
-                        RemoteResource {
-                            typ: addr.typ.clone(),
-                            name: remote_name.clone(),
-                            attrs: doc,
-                            computed,
-                            hidden_until: None,
-                        },
-                    );
-                    if answered {
-                        state.set(addr.clone(), self.id().to_string(), remote_name.clone());
-                    }
-                }
-                ActionKind::Update | ActionKind::Drift => {
-                    let Some(entry) = state.get(addr) else {
-                        bail!("apply {at}: update without a state entry");
-                    };
-                    let k = key(&addr.typ, &entry.remote);
-                    let computed = match world.resources.get(&k) {
-                        Some(cur) => cur.computed.clone(),
-                        None => self.mint(&addr.typ, &entry.remote, &doc),
-                    };
-                    world.resources.insert(
-                        k,
-                        RemoteResource {
-                            typ: addr.typ.clone(),
-                            name: entry.remote.clone(),
-                            attrs: doc,
-                            computed,
-                            hidden_until: None,
-                        },
-                    );
-                }
-            }
-            self.save(world)?;
-            if !answered {
-                bail!(
-                    "apply {at}: timed out waiting for the provider (chaos timeout={at}); \
-                     the change may have taken effect"
-                );
-            }
-        }
-        if clock > 0 {
-            self.note(format!("simulated apply time: {clock}ms"));
-        }
-        Ok(())
+    /// Open one tick of the world for the executor's per-action Apply calls
+    /// (`executor::run_tick`). The world is saved after every call.
+    pub fn begin_tick<'a>(&'a self, desired: &'a [Resource], adopts: &[Adopt]) -> Result<Tick<'a>> {
+        Ok(Tick {
+            cloud: self,
+            world: self.load()?,
+            inv: self.load_inventory()?,
+            adopt_map: state::adopt_map(adopts),
+            desired: desired.iter().map(|r| (r.addr.clone(), r)).collect(),
+            resolved: BTreeMap::new(),
+            clock: 0,
+        })
     }
 
     /// The tick ends: chaos mutations land, the clock advances, and a
@@ -941,6 +796,162 @@ impl FakeCloud {
                 out.insert(prefix.to_string(), (v.clone(), norm.to_string()));
             }
         }
+    }
+}
+
+/// One tick of the fake world, open for Apply calls. The executor decides
+/// the order; each call is one provider Apply and the world is saved after
+/// it (the cloud keeps what it did, whatever happens next).
+pub struct Tick<'a> {
+    cloud: &'a FakeCloud,
+    world: RemoteState,
+    inv: RemoteState,
+    adopt_map: BTreeMap<Address, String>,
+    desired: BTreeMap<Address, &'a Resource>,
+    /// Documents applied so far this tick, for configured-attribute refs.
+    resolved: BTreeMap<Address, Json>,
+    /// Simulated time spent in Apply (chaos `latency`).
+    clock: u64,
+}
+
+impl Tick<'_> {
+    /// One Apply call for `a`. Identity is recorded in `state` when the call
+    /// answers; a timed-out call takes effect in the world and records none.
+    pub fn apply(&mut self, a: &Action, state: &mut State) -> Result<()> {
+        let cloud = self.cloud;
+        let addr = &a.addr;
+        let at = format!("{}/{}", addr.typ, addr.name);
+        let doc = match a.kind {
+            ActionKind::Delete => Json::Null,
+            ActionKind::Noop | ActionKind::Pending => return Ok(()),
+            _ => {
+                let r = self
+                    .desired
+                    .get(addr)
+                    .ok_or_else(|| anyhow!("apply {at}: no desired resource"))?;
+                let ctx = Ctx {
+                    world: &self.world,
+                    inv: &self.inv,
+                    state,
+                    adopts: &self.adopt_map,
+                    resolved: &self.resolved,
+                    strict: Some(addr),
+                };
+                let doc = cloud.resolve_doc(&ctx, r)?;
+                self.resolved.insert(addr.clone(), doc.clone());
+                doc
+            }
+        };
+        if cloud.chaos.crash.contains(addr) {
+            eprintln!("chaos: crash during apply {at}: the process is killed");
+            std::process::exit(137);
+        }
+        if cloud.chaos.fail.contains(addr) {
+            bail!("apply {at}: injected failure (chaos fail={at})");
+        }
+        if let Some(ms) = cloud.chaos.latency.get(addr) {
+            self.clock += ms;
+            cloud.note(format!("latency {at}: {ms}ms (simulated, not slept)"));
+        }
+        // A timed-out call takes effect in the world, but dform never
+        // hears back: no identity is recorded.
+        let answered = !cloud.chaos.timeout.contains(addr);
+        let world = &mut self.world;
+        match a.kind {
+            ActionKind::Noop | ActionKind::Pending => {}
+            ActionKind::Delete => {
+                if let Some(entry) = state.get(addr) {
+                    world.resources.remove(&key(&addr.typ, &entry.remote));
+                    if answered {
+                        state.remove(addr);
+                    }
+                }
+            }
+            ActionKind::Create => {
+                let remote_name = addr.name.clone();
+                let k = key(&addr.typ, &remote_name);
+                if world.resources.contains_key(&k) {
+                    bail!("apply {at}: create failed: {k} already exists in the world");
+                }
+                let computed = cloud.mint(&addr.typ, &remote_name, &doc);
+                let hidden_until = cloud.chaos.read_lag.get(addr).map(|k| world.tick + k);
+                world.resources.insert(
+                    k,
+                    RemoteResource {
+                        typ: addr.typ.clone(),
+                        name: remote_name.clone(),
+                        attrs: doc,
+                        computed,
+                        hidden_until,
+                    },
+                );
+                if answered {
+                    state.set(addr.clone(), cloud.id().to_string(), remote_name);
+                }
+            }
+            ActionKind::Adopt => {
+                let Some(remote_name) = self.adopt_map.get(addr) else {
+                    bail!("apply {at}: adopt action missing adopt mapping");
+                };
+                let k = key(&addr.typ, remote_name);
+                let Some(inv_rr) = self.inv.resources.get(&k) else {
+                    bail!("apply {at}: adopt requested but inventory missing {k}");
+                };
+                let computed = inv_rr.computed.clone();
+                world.resources.insert(
+                    k,
+                    RemoteResource {
+                        typ: addr.typ.clone(),
+                        name: remote_name.clone(),
+                        attrs: doc,
+                        computed,
+                        hidden_until: None,
+                    },
+                );
+                if answered {
+                    state.set(addr.clone(), cloud.id().to_string(), remote_name.clone());
+                }
+            }
+            ActionKind::Update | ActionKind::Drift => {
+                let Some(entry) = state.get(addr) else {
+                    bail!("apply {at}: update without a state entry");
+                };
+                let k = key(&addr.typ, &entry.remote);
+                let computed = match world.resources.get(&k) {
+                    Some(cur) => cur.computed.clone(),
+                    None => cloud.mint(&addr.typ, &entry.remote, &doc),
+                };
+                world.resources.insert(
+                    k,
+                    RemoteResource {
+                        typ: addr.typ.clone(),
+                        name: entry.remote.clone(),
+                        attrs: doc,
+                        computed,
+                        hidden_until: None,
+                    },
+                );
+            }
+        }
+        cloud.save(world)?;
+        if !answered {
+            bail!(
+                "apply {at}: timed out waiting for the provider (chaos timeout={at}); \
+                 the change may have taken effect"
+            );
+        }
+        Ok(())
+    }
+
+    /// The tick ends: chaos mutations land, the clock advances, the world is
+    /// saved.
+    pub fn end(mut self, state: &State) -> Result<()> {
+        if self.clock > 0 {
+            self.cloud
+                .note(format!("simulated apply time: {}ms", self.clock));
+        }
+        self.cloud.end_tick(&mut self.world, state);
+        self.cloud.save(&self.world)
     }
 }
 
