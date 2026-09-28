@@ -45,12 +45,19 @@ use std::collections::{BTreeMap, BTreeSet};
 ///   moved(T, Old, New).                      state's identity for Old is New's
 ///   ignore_changes(T, A, Path).              Path is dropped from both sides
 ///                                            once T/A exists; a create sets it
+///
+/// And the refinements the engine does not check (F DR-13 revised): a
+/// `type_refine(T, Path, C)` on a path the schema marks `sensitive`, for
+/// every `attr(T, A, P, V)` whose value reaches `Path`, is an Apply
+/// assertion on `T/A` the provider checks after materializing the secret.
 #[derive(Debug, Clone, Default)]
 pub struct Lifecycle {
     pub create_before_destroy: BTreeSet<Address>,
     /// (old, new), applied to state before the diff.
     pub moved: Vec<(Address, Address)>,
     pub ignore_changes: BTreeMap<Address, Vec<String>>,
+    /// (path, refinement) per address, for its Apply `assertions`.
+    pub assertions: BTreeMap<Address, Vec<(String, crate::lattice::Constraint)>>,
 }
 
 impl Lifecycle {
@@ -61,7 +68,11 @@ impl Lifecycle {
         facts: impl IntoIterator<Item = &'a Atom>,
         schema: &Schema,
     ) -> Result<Lifecycle> {
-        let mut out = Lifecycle::default();
+        let facts: Vec<&Atom> = facts.into_iter().collect();
+        let mut out = Lifecycle {
+            assertions: provider_assertions(&facts, schema)?,
+            ..Lifecycle::default()
+        };
         for f in facts {
             if !matches!(f.pred.as_str(), "lifecycle" | "moved" | "ignore_changes") {
                 continue;
@@ -119,6 +130,61 @@ impl Lifecycle {
             ReplaceOrder::Either => self.create_before_destroy.contains(addr),
         }
     }
+}
+
+/// The Apply assertions of `Lifecycle::assertions`.
+fn provider_assertions(
+    facts: &[&Atom],
+    schema: &Schema,
+) -> Result<BTreeMap<Address, Vec<(String, crate::lattice::Constraint)>>> {
+    let mut refs = Vec::new();
+    for f in facts
+        .iter()
+        .filter(|f| f.pred == crate::refine::TYPE_REFINE)
+    {
+        let r = crate::refine::Stated::of(f)
+            .expect("a type_refine fact")
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        if schema.is_sensitive(&r.typ, &r.path) {
+            refs.push(r);
+        }
+    }
+    let mut out: BTreeMap<Address, Vec<(String, crate::lattice::Constraint)>> = BTreeMap::new();
+    if refs.is_empty() {
+        return Ok(out);
+    }
+    for f in facts.iter().filter(|f| f.pred == "attr") {
+        let [
+            Term::Val(Value::Str(t)),
+            Term::Val(Value::Str(a)),
+            Term::Val(Value::Str(p)),
+            Term::Val(v),
+        ] = f.args.as_slice()
+        else {
+            continue;
+        };
+        let addr = Value::Str(a.clone());
+        for r in refs.iter().filter(|r| r.applies(t, &addr, p)) {
+            let rest = r.path[p.len()..].trim_start_matches('.');
+            let reaches = rest.is_empty()
+                || rest
+                    .split('.')
+                    .try_fold(v, |v, k| match v {
+                        Value::Obj(m) => m.get(k),
+                        _ => None,
+                    })
+                    .is_some();
+            if reaches {
+                out.entry(Address {
+                    typ: t.clone(),
+                    name: a.clone(),
+                })
+                .or_default()
+                .push((r.path.clone(), r.constraint.clone()));
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// Policy over the plan (E §2.8: policy reads the deformation). The planner

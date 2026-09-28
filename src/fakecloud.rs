@@ -458,9 +458,15 @@ impl FakeCloud {
                     a.value.as_str().is_some_and(|p| s.starts_with(p))
                 }
                 ("len_ge" | "len_le" | "prefix", _) => false,
+                // A refinement's own op (`crate::refine::to_assertion`); a
+                // path the document does not set holds vacuously.
+                (op, v) if let Some(c) = crate::refine::from_assertion(op, &a.value) => v
+                    .is_none_or(|v| {
+                        c.check(&crate::provider::json_to_value(v)) == crate::lattice::Truth::True
+                    }),
                 (op, _) => {
                     return Err(Failed::Refused(format!(
-                        "apply {at}: unknown assertion {op} (eq, ne, len_ge, len_le, prefix)"
+                        "apply {at}: unknown assertion {op} (eq, ne, len_ge, len_le, prefix, or a refinement)"
                     )));
                 }
             };
