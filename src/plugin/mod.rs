@@ -3,6 +3,7 @@
 //! handshake line and serves `proto/dform/v1/provider.proto` over gRPC
 //! (`client`). `wire` maps values and documents to the protocol's messages.
 
+pub mod check;
 pub mod client;
 pub mod providers;
 pub mod spawn;

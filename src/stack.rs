@@ -3,7 +3,8 @@
 //! one stack. The name scopes the state (the entry file's basename when
 //! there is no `stack` statement), the backend is the directory it lives in, and a lock file
 //! there makes a second concurrent apply fail cleanly. `provider name {
-//! source = "path" }.` selects the provider schemas the mock plays.
+//! source = "path" }.` selects a provider: a plugin executable, or a schema
+//! the mock provider plays.
 //!
 //! Cross-stack values: an apply records the stack's outputs in its state
 //! and the stack's state path in the registry `.dform/stacks.json`; every
@@ -129,9 +130,11 @@ fn stack_config(c: &Config, out: &mut Stack, diags: &mut Vec<Diagnostic>) {
     }
 }
 
-/// A provider's schema: `source = "path"` (a directory holding
-/// `schema.df`, or a `.df` file, relative to the file the statement is in),
-/// else its name.
+/// A provider: `source = "path"`, relative to the file the statement is
+/// in: an executable speaking the plugin protocol, a directory holding one
+/// (`dform-provider*`), else a schema the mock plays (a directory holding
+/// `schema.df`, or a `.df` file); without `source`, its name
+/// (`plugin::spawn::resolve`).
 fn provider(c: &Config, diags: &mut Vec<Diagnostic>) -> String {
     let mut spec = c.name.clone();
     for (k, v, span) in &c.config {
@@ -147,7 +150,8 @@ fn provider(c: &Config, diags: &mut Vec<Diagnostic>) -> String {
                     .unwrap_or_default();
                 let mut path = base.join(src);
                 if path.is_dir() {
-                    path = path.join("schema.df");
+                    path = crate::plugin::spawn::plugin_in(&path)
+                        .unwrap_or_else(|| path.join("schema.df"));
                 }
                 spec = path.display().to_string();
                 if !spec.contains('/') {

@@ -172,6 +172,11 @@ enum Cmd {
         #[command(subcommand)]
         cmd: StackCmd,
     },
+    /// Provider tools.
+    Provider {
+        #[command(subcommand)]
+        cmd: ProviderCmd,
+    },
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -185,6 +190,15 @@ enum StackCmd {
         #[arg(long = "to")]
         to: String,
     },
+}
+
+#[derive(Subcommand, Debug, Clone)]
+enum ProviderCmd {
+    /// The conformance suite: run every protocol method against the
+    /// provider at PATH (an executable, a directory holding one, or a mock
+    /// schema, which the mock provider plays) with a synthetic schema, and
+    /// report what deviates. Fails if anything does.
+    Check { path: String },
 }
 
 fn main() -> std::process::ExitCode {
@@ -224,6 +238,23 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
         None => None,
     };
 
+    if let Cmd::Provider {
+        cmd: ProviderCmd::Check { path },
+    } = &cli.cmd
+    {
+        let (lines, failed) = plugin::check::run(path)?;
+        for l in &lines {
+            println!("{l}");
+        }
+        if failed > 0 {
+            bail!(
+                "provider {path}: {failed} of {} checks deviate",
+                lines.len()
+            );
+        }
+        println!("provider {path}: conforms");
+        return Ok(());
+    }
     if let Cmd::Fmt { paths, check } = &cli.cmd {
         let paths = if paths.is_empty() {
             default_files(&cli.files)?
@@ -694,7 +725,7 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
             println!("{}", json);
         }
         Cmd::Strata | Cmd::Test => unreachable!("handled before evaluation"),
-        Cmd::Fmt { .. } | Cmd::Controller { .. } | Cmd::Stack { .. } => {
+        Cmd::Fmt { .. } | Cmd::Controller { .. } | Cmd::Stack { .. } | Cmd::Provider { .. } => {
             unreachable!("handled before loading")
         }
         Cmd::Graph { what: None } => print!("{}", graph::resources(&resources)),
