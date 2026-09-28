@@ -199,7 +199,13 @@ true`. A change is `{op, path, before, after}` (`op` is `set`, or
 `add`/`remove` for a set element, with its `leaves`); a null is `{"null":
 LABEL, "class": CLASS}` and a secret `{"sensitive": LABEL}`.
 
-`cargo run -- query stuck` lists the stuck rule instances.
+`cargo run -- query stuck` lists the stuck rule instances. A rule can read
+them too, `stuck(RuleId, HeadPattern, Bindings, Nulls)`: a policy such as
+`deny("strict", { rule: R, on: N }) :- stuck(R, _, _, N).` refuses any plan
+with a stuck instance. `stuck/4` is derived above every rule that can stick,
+so a reader must not itself be able to stick (read it into fresh variables
+only) and nothing it derives may feed such a rule; otherwise the program is
+rejected with the negative cycle.
 
 `apply` runs in ticks. A tick applies every definite deformation in dependency
 order and holds what is pending. At the boundary the results come back as

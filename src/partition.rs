@@ -63,7 +63,7 @@ impl fmt::Display for Node {
 }
 
 impl Node {
-    fn plain(pred: &str) -> Node {
+    pub fn plain(pred: &str) -> Node {
         Node {
             pred: pred.into(),
             typ: None,
@@ -371,6 +371,12 @@ pub fn build_lowered(
             prelude.push((want, arg));
         }
     }
+    // stuck/4 is a relation when a rule reads it: a node the evaluator
+    // defines.
+    let stuck_read = rules.iter().any(reads_stuck);
+    if stuck_read {
+        defs.insert(Node::plain(STUCK));
+    }
     nodes.extend(defs.iter().cloned());
 
     // Aggregate edges: every (arg, T, P) definition feeds every (attr, T', P')
@@ -402,7 +408,8 @@ pub fn build_lowered(
         });
     }
 
-    // Rule edges.
+    // Rule edges. `read`: the nodes each rule's body reads.
+    let mut read: Vec<Vec<Node>> = vec![Vec::new(); rules.len()];
     for (i, r) in rules.iter().enumerate() {
         let head = head_node(&r.head);
         let agg_head = is_aggregate_head(&r.head);
@@ -434,6 +441,7 @@ pub fn build_lowered(
             let mut matched = false;
             for d in unifying(&defs, &pat) {
                 matched = true;
+                read[i].push(d.clone());
                 edges.push(Edge {
                     from: d.clone(),
                     to: head.clone(),
@@ -447,6 +455,7 @@ pub fn build_lowered(
                 // definition. E makes this a compile error; we record it as a
                 // plain node so the graph still stratifies.
                 nodes.insert(pat.clone());
+                read[i].push(pat.clone());
                 edges.push(Edge {
                     from: pat.clone(),
                     to: head.clone(),
@@ -458,11 +467,62 @@ pub fn build_lowered(
         }
     }
 
+    // stuck/4 is derived above every rule that can stick: its instances
+    // are those of the rule's stuck companion, which reads the rule's body
+    // (E §2.7), so an edge from every node such a body reads; and above
+    // every contribution partition, whose groups the aggregate can leave
+    // stuck. Negative: a reader sees every instance. A reader whose head
+    // feeds a rule that can stick is on a negative cycle, an error.
+    if stuck_read {
+        let stuck = Node::plain(STUCK);
+        let aggregates: BTreeSet<String> = rules
+            .iter()
+            .filter(|r| is_aggregate_head(&r.head))
+            .map(|r| r.head.pred.clone())
+            .chain(["attr".to_string()])
+            .collect();
+        for (i, r) in rules.iter().enumerate() {
+            if !crate::stuck::can_stick(&r.head, &r.body, &aggregates) {
+                continue;
+            }
+            let from: BTreeSet<&Node> = read[i].iter().collect();
+            for d in from {
+                edges.push(Edge {
+                    from: d.clone(),
+                    to: stuck.clone(),
+                    negative: true,
+                    rule: Some(i),
+                    why: "can stick (stuck/4)".into(),
+                });
+            }
+        }
+        for a in args {
+            edges.push(Edge {
+                from: a,
+                to: stuck.clone(),
+                negative: true,
+                rule: None,
+                why: "attribute aggregate can stick (stuck/4)".into(),
+            });
+        }
+    }
+
     Graph {
         nodes,
         edges,
         rules,
     }
+}
+
+/// The evaluator's companion relation of stuck rule instances.
+pub const STUCK: &str = "stuck";
+
+/// Does the rule read `stuck/4`?
+fn reads_stuck(r: &RuleStmt) -> bool {
+    r.body.iter().any(|l| match l {
+        Lit::Pos(a) | Lit::Not(a) => a.pred == STUCK,
+        _ => false,
+    })
 }
 
 /// The nodes of `defs` that unify with `pat`, in order. Nodes sort by

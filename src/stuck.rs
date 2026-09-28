@@ -16,7 +16,7 @@
 //! A positive read of an ordinary predicate with stuck instances is not
 //! undetermined: the facts are not there yet, which is monotone.
 
-use crate::ast::{Atom, Term};
+use crate::ast::{Atom, Lit, Term};
 use crate::lattice::{Truth, eq3, nulls_in};
 use crate::partition::fmt_atom;
 use crate::schema::Schema;
@@ -67,6 +67,52 @@ impl Stuck {
             span: Default::default(),
         }
     }
+}
+
+/// Can an instance of this rule (or constraint body under a `deny` head)
+/// be stuck? Only when it has a content position (Rule 2) or reads
+/// something Rule 3 can leave undetermined: a literal other than a
+/// relation read, a relation read that compares a column (a constant, a
+/// variable bound before or earlier in it, a function, list or object
+/// pattern), a read of an aggregate (`aggregates`), an aggregate head, a
+/// resource address in the head, or a builtin in the head. A rule that
+/// only reads relations into fresh variables and copies them into its
+/// head cannot: `stuck/4`'s readers must be such rules.
+pub fn can_stick(head: &Atom, body: &[Lit], aggregates: &BTreeSet<String>) -> bool {
+    fn has_func(t: &Term) -> bool {
+        match t {
+            Term::Func { .. } | Term::ListComp { .. } => true,
+            Term::List(xs) => xs.iter().any(has_func),
+            Term::Obj(m) => m.values().any(has_func),
+            _ => false,
+        }
+    }
+    if matches!(head.pred.as_str(), "want" | "arg" | "adopt") && head.args.len() >= 2 {
+        return true;
+    }
+    if head.args.iter().any(has_func) {
+        return true;
+    }
+    let mut bound: BTreeSet<&str> = BTreeSet::new();
+    for lit in body {
+        let Lit::Pos(a) = lit else {
+            return true;
+        };
+        if aggregates.contains(&a.pred)
+            || matches!(a.pred.as_str(), "member" | "enumerate")
+            || crate::ir::ops::is_builtin_pred(&a.pred)
+        {
+            return true;
+        }
+        for t in &a.args {
+            match t {
+                Term::Var(x) if !bound.insert(x) => return true,
+                Term::Var(_) | Term::Wildcard => {}
+                _ => return true,
+            }
+        }
+    }
+    false
 }
 
 /// Any null at all.

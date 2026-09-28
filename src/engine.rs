@@ -176,6 +176,12 @@ pub fn eval_resumable(
         .map(|i| c.rule_stratum[i])
         .min()
         .unwrap_or(c.fixes.len());
+    // Constraints are checked after the strata, but stuck/4 counts their
+    // instances: derive it again when one reads a later predicate.
+    let at = match c.stuck_at {
+        Some(s) if c.constraints.iter().any(|k| reads_later(&k.body)) => at.min(s),
+        _ => at,
+    };
     run_strata(&c, &mut st, 0..at)?;
     let state = st.clone();
     run(&c, &mut st, at)?;
@@ -214,6 +220,8 @@ struct Compiled {
     sigma: NodeId,
     /// Predicates defined by an aggregate rule, and `attr`.
     aggregates: BTreeSet<String>,
+    /// The stratum `stuck/4` is derived at, when a rule reads it.
+    stuck_at: Option<usize>,
 }
 
 /// Everything an evaluation accumulates.
@@ -224,6 +232,8 @@ struct State {
     known: RefCell<stuck::Known>,
     stucks: Vec<Stuck>,
     attrs: AttrAggregate,
+    /// The instances `stuck/4` was derived with, when a rule reads it.
+    stuck_facts: Option<BTreeSet<Stuck>>,
 }
 
 /// Compile the program, insert the given and stated facts, and stratify.
@@ -246,6 +256,13 @@ fn start(program: &Program, extra_facts: &[Atom]) -> Result<(Compiled, State)> {
             bail!(
                 "{} is derived by the attribute aggregate; contribute with arg instead: {}{}",
                 r.head.pred,
+                partition::fmt_rule(r),
+                at_suffix(r.head.span)
+            );
+        }
+        if r.head.pred == partition::STUCK {
+            bail!(
+                "stuck/4 is derived by the evaluator; no rule may: {}{}",
                 partition::fmt_rule(r),
                 at_suffix(r.head.span)
             );
@@ -340,6 +357,7 @@ fn start(program: &Program, extra_facts: &[Atom]) -> Result<(Compiled, State)> {
         .chain(["attr".to_string()])
         .collect();
     let attrs = AttrAggregate::new(&strata);
+    let stuck_at = strata.get(&Node::plain(partition::STUCK)).copied();
     Ok((
         Compiled {
             rules,
@@ -353,6 +371,7 @@ fn start(program: &Program, extra_facts: &[Atom]) -> Result<(Compiled, State)> {
             rule_leaf,
             sigma,
             aggregates,
+            stuck_at,
         },
         State {
             prov,
@@ -360,6 +379,7 @@ fn start(program: &Program, extra_facts: &[Atom]) -> Result<(Compiled, State)> {
             known: RefCell::new(stuck::Known::default()),
             stucks: Vec::new(),
             attrs,
+            stuck_facts: None,
         },
     ))
 }
@@ -374,6 +394,7 @@ fn run(c: &Compiled, st: &mut State, from: usize) -> Result<()> {
         known,
         stucks,
         attrs,
+        ..
     } = st;
     let ready = attrs.emit_ready(usize::MAX, prov, origins, &known.borrow(), c.sigma)?;
     stucks.extend(ready);
@@ -388,6 +409,7 @@ fn run_strata(c: &Compiled, st: &mut State, range: std::ops::Range<usize>) -> Re
         known,
         stucks,
         attrs,
+        stuck_facts,
     } = st;
     let known: &RefCell<stuck::Known> = known;
     let (rules, plans) = (&c.rules, &c.plans);
@@ -399,6 +421,9 @@ fn run_strata(c: &Compiled, st: &mut State, range: std::ops::Range<usize>) -> Re
         for st in ready {
             known.borrow_mut().add(&st);
             stucks.push(st);
+        }
+        if c.stuck_at == Some(s) {
+            *stuck_facts = Some(derive_stuck(c, prov, known, stucks, s)?);
         }
         if fix.rules.is_empty() {
             continue;
@@ -529,6 +554,7 @@ fn finish(c: &Compiled, st: State) -> Result<(EvalResult, Vec<String>)> {
         mut prov,
         known,
         mut stucks,
+        stuck_facts,
         ..
     } = st;
     let (rules, constraints) = (&c.rules, &c.constraints);
@@ -581,18 +607,16 @@ fn finish(c: &Compiled, st: State) -> Result<(EvalResult, Vec<String>)> {
     stucks.retain(|s| !s.head.pred.starts_with("__"));
     stucks.sort();
     stucks.dedup();
-    for s in &stucks {
-        let f = s.fact();
-        let by = match s.rule {
-            Some(i) if i < c.rule_leaf.len() => c.rule_leaf[i],
-            Some(i) => prov.rule(
-                format!("c{}", i - rules.len()),
-                &s.text,
-                constraints[i - rules.len()].span,
-            ),
-            None => c.sigma,
-        };
-        prov.record(f.clone(), vec![by], vec![]);
+    // Guard on the stratifier: stuck/4 was derived with every instance.
+    if let Some(derived) = &stuck_facts
+        && let Some(late) = stucks.iter().find(|s| !derived.contains(*s))
+    {
+        bail!(
+            "internal: {} was found stuck after stuck/4 was derived",
+            late.text
+        );
+    }
+    for f in record_stucks(c, &mut prov, &stucks) {
         facts.insert(f);
     }
 
@@ -607,6 +631,102 @@ fn finish(c: &Compiled, st: State) -> Result<(EvalResult, Vec<String>)> {
         },
         violations,
     ))
+}
+
+/// `stuck(RuleId, HeadPattern, Bindings, Nulls)` for each instance, with
+/// its rule (or the aggregate) as its firing; the facts.
+fn record_stucks(c: &Compiled, prov: &mut Prov, stucks: &[Stuck]) -> Vec<Atom> {
+    let mut out = Vec::new();
+    for s in stucks {
+        let f = s.fact();
+        let by = match s.rule {
+            Some(i) if i < c.rule_leaf.len() => c.rule_leaf[i],
+            Some(i) => prov.rule(
+                format!("c{}", i - c.rules.len()),
+                &s.text,
+                c.constraints[i - c.rules.len()].span,
+            ),
+            None => c.sigma,
+        };
+        prov.record(f.clone(), vec![by], vec![]);
+        out.push(f);
+    }
+    out
+}
+
+/// Derive `stuck/4` at stratum `s`, below which every body a stuck
+/// companion reads is complete (the partition graph's edges): the
+/// instances found so far, and those of every rule and constraint that
+/// can stick and has not run yet, by evaluating its body now (its stuck
+/// companion; it finds the same instances again when it runs). Returns
+/// the instances derived.
+///
+/// `s` is the top stratum: a stratum above it needs a negative edge from a
+/// node at or above it, and a rule reading that way can stick, which puts
+/// `stuck` above the node. So a resumed evaluation starting at the first
+/// rule that reads its later facts derives stuck/4 again.
+fn derive_stuck(
+    c: &Compiled,
+    prov: &mut Prov,
+    known: &RefCell<stuck::Known>,
+    stucks: &[Stuck],
+    s: usize,
+) -> Result<BTreeSet<Stuck>> {
+    let hi = prov.store.len();
+    let all = Window::below(hi);
+    let mut found: Vec<Stuck> = stucks.to_vec();
+    for (i, r) in c.rules.iter().enumerate() {
+        if c.rule_stratum[i] < s {
+            continue;
+        }
+        if !stuck::can_stick(&r.head, &r.body, &c.aggregates) {
+            continue;
+        }
+        let rec = Rec {
+            rule: i,
+            head: &r.head,
+            text: &c.rule_text[i],
+            known,
+            aggregates: &c.aggregates,
+            found: RefCell::new(Vec::new()),
+        };
+        let src = Src {
+            store: &prov.store,
+            body: &c.plans[i].body,
+            win: vec![all; r.body.len()],
+            all,
+        };
+        eval_rule(r, &c.plans[i], &src, &rec)?;
+        found.extend(rec.found.into_inner());
+    }
+    for (k, con) in c.constraints.iter().enumerate() {
+        let rule = partition::constraint_rule(con);
+        if !stuck::can_stick(&rule.head, &con.body, &c.aggregates) {
+            continue;
+        }
+        let text = partition::fmt_rule(&rule);
+        let rec = Rec {
+            rule: c.rules.len() + k,
+            head: &rule.head,
+            text: &text,
+            known,
+            aggregates: &c.aggregates,
+            found: RefCell::new(Vec::new()),
+        };
+        let src = Src {
+            store: &prov.store,
+            body: &c.constraint_bodies[k],
+            win: vec![all; con.body.len()],
+            all,
+        };
+        eval_body(&con.body, &src, &rec)?;
+        found.extend(rec.found.into_inner());
+    }
+    found.retain(|s| !s.head.pred.starts_with("__"));
+    found.sort();
+    found.dedup();
+    record_stucks(c, prov, &found);
+    Ok(found.into_iter().collect())
 }
 
 /// One answer to `query`: the bindings, and the facts matched in body order.
@@ -3816,5 +3936,106 @@ mod tests {
         assert!(why_leaves(&r, "env(\"prod\")").contains(&Leaf::Input {
             source: "--set env=prod".into()
         }));
+    }
+
+    /// gke_two_phase with a program appended, on the gke schema.
+    fn gke_with(extra: &str) -> Result<(EvalResult, Vec<String>)> {
+        let mut program =
+            crate::loader::load_program(&[repo_file("examples/adversarial/gke_two_phase.df")])
+                .unwrap();
+        program
+            .statements
+            .extend(crate::parser::parse_program(extra).unwrap().statements);
+        eval(&program, &crate::schema::gke().facts)
+    }
+
+    /// stuck/4 is a relation a policy reads (strict mode is "deny if any
+    /// stuck"): it is derived above every rule that can stick, so the
+    /// reader sees every instance, those of the rules above it included
+    /// (the zone-count deny is stuck in the top stratum).
+    #[test]
+    fn a_policy_denies_on_any_stuck_instance() {
+        let (r, violations) = gke_with(
+            r#"deny("stuck", { rule: R, on: N }) :- stuck(R, _, _, N).
+               seen(R, H) :- stuck(R, H, _, _)."#,
+        )
+        .unwrap();
+        assert!(!r.stuck.is_empty());
+        assert!(
+            violations.iter().any(|v| v.starts_with("stuck ctx=")),
+            "{violations:?}"
+        );
+        let seen: BTreeSet<String> = facts_of(&r, "seen").into_iter().collect();
+        let want: BTreeSet<String> = r
+            .stuck
+            .iter()
+            .map(|s| {
+                let f = s.fact();
+                format!(
+                    "seen({}, {})",
+                    partition::fmt_term(&f.args[0]),
+                    partition::fmt_term(&f.args[1])
+                )
+            })
+            .collect();
+        assert_eq!(seen, want);
+        assert!(
+            r.stuck
+                .iter()
+                .any(|s| s.text.contains("at least two zones")),
+            "{:?}",
+            r.stuck
+        );
+    }
+
+    /// A reader of stuck/4 whose head feeds a rule that can stick would
+    /// have to see its own consequences: a negative cycle, rejected.
+    #[test]
+    fn a_stuck_reader_on_a_cycle_is_an_error() {
+        let err = gke_with(
+            r#"flag(R) :- stuck(R, _, _, _).
+               deny("flagged") :- flag(R), R > 3."#,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("negative cycle through"), "{err}");
+        assert!(err.contains("can stick (stuck/4)"), "{err}");
+    }
+
+    #[test]
+    fn a_rule_cannot_define_stuck() {
+        let err = run("stuck(1, a, b, c) :- input(x, y).").unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("stuck/4 is derived by the evaluator")
+        );
+    }
+
+    /// A resumed evaluation derives stuck/4 again when a constraint reads
+    /// its later facts: the constraint is checked after the strata, and its
+    /// instances are stuck/4's too.
+    #[test]
+    fn a_resumed_evaluation_counts_a_constraints_stuck_instance() {
+        let program = crate::parser::parse_program(
+            r#"decl later/1.
+               strict(R) :- stuck(R, _, _, _).
+               constraint("later is positive") :- later(X), X > 0."#,
+        )
+        .unwrap();
+        let (_, _, resumable) = eval_resumable(&program, &[], &["later"]).unwrap();
+        let open = Value::Null {
+            label: "t/a#n".into(),
+            class: crate::value::NullClass::Open,
+            ty: "int".into(),
+        };
+        let later = Atom {
+            pred: "later".into(),
+            args: vec![Term::Val(open)],
+            record: None,
+            span: Default::default(),
+        };
+        let (r, _) = resumable.with(&[later]).unwrap();
+        assert_eq!(r.stuck.len(), 1, "{:?}", r.stuck);
+        assert_eq!(facts_of(&r, "strict").len(), 1);
     }
 }
