@@ -4,6 +4,12 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
+[features]
+# Mutants for the model test (`executor::hooks`), off unless set at run
+# time. Only the root package's dev-dependency turns it on: the `dform`
+# binary never carries it (CI checks).
+test-hooks = []
+
 [dependencies]
 anyhow = "1.0"
 ariadne = "0.6"

@@ -149,7 +149,7 @@ pub fn run_tick(
         {
             f.remaining.remove(&state::key(&a.addr));
         }
-        (opts.persist)(state)?;
+        persist_answered(opts, state)?;
         let end = start_ms[i] + tick.latency(&a.addr);
         spans.push((i, start_ms[i], end));
         match r {
@@ -196,6 +196,28 @@ pub fn run_tick(
         Some(e) => Err(e),
         None => Ok(returned),
     }
+}
+
+/// State after an Apply call returned. A `test-hooks` build (never the
+/// `dform` binary's: only tests turn the feature on, as a dev-dependency)
+/// can revert it to one write per tick, the end's, for the model test to
+/// catch (`tests/model.rs`).
+fn persist_answered(opts: &Options, state: &State) -> Result<()> {
+    #[cfg(feature = "test-hooks")]
+    if hooks::PERSIST_PER_TICK.load(std::sync::atomic::Ordering::SeqCst) {
+        return Ok(());
+    }
+    (opts.persist)(state)
+}
+
+/// Mutants the model test must catch; off unless a test sets one.
+#[cfg(feature = "test-hooks")]
+pub mod hooks {
+    use std::sync::atomic::AtomicBool;
+
+    /// Persist once per tick, at its end, instead of after every Apply
+    /// call that returns.
+    pub static PERSIST_PER_TICK: AtomicBool = AtomicBool::new(false);
 }
 
 /// For each action, the actions it waits for. A create, update or replace

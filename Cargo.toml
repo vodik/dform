@@ -51,6 +51,8 @@ name = "scale"
 harness = false
 
 [dev-dependencies]
+# tests/model.rs turns the executor's mutant on (`executor::hooks`).
+dform-core = { path = "crates/dform-core", features = ["test-hooks"] }
 # The direct and wire backends, for tests and benches (not the CLI's).
 dform-mock = { path = "crates/dform-mock" }
 tree-sitter = "0.26"
