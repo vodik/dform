@@ -880,7 +880,11 @@ mod tests {
 
     fn examples() -> Vec<(&'static str, PathBuf, Schema)> {
         vec![
-            ("dform.df", root().join("dform.df"), crate::schema::fake()),
+            (
+                "examples/demo/stacks/dform.df",
+                root().join("examples/demo/stacks/dform.df"),
+                crate::schema::fake(),
+            ),
             (
                 "dform-advanced.df",
                 root().join("dform-advanced.df"),
@@ -921,8 +925,8 @@ mod tests {
         // 17; the settings are the stack config's table, read in two more:
         // 19.
         let (v, _) = run_file(
-            "dform.df",
-            &[root().join("dform.df")],
+            "examples/demo/stacks/dform.df",
+            &[root().join("examples/demo/stacks/dform.df")],
             &crate::schema::fake(),
         )
         .unwrap();
@@ -939,7 +943,8 @@ mod tests {
     /// the contribution in stratum 0 and the attribute in stratum 3.
     #[test]
     fn a_ref_holding_contribution_sits_above_the_attribute_it_reads() {
-        let program = crate::loader::load_program(&[root().join("dform.df")]).unwrap();
+        let program =
+            crate::loader::load_program(&[root().join("examples/demo/stacks/dform.df")]).unwrap();
         let g = build(&program, &crate::schema::fake()).unwrap();
         let Verdict::Stratified { strata } = stratify(&g) else {
             panic!()

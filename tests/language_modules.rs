@@ -248,7 +248,7 @@ instance network third {
 vpc_peer_inst("main", "third")
 "#,
     );
-    let dform = common::repo().join("dform.df");
+    let dform = common::repo().join("examples/demo/stacks/dform.df");
     let root = s.path(".");
     let r = s
         .run(&[

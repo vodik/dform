@@ -71,7 +71,7 @@ fn gke_two_phase_plans_in_sections() {
 #[test]
 fn apply_then_replan_is_undeformed() {
     let s = Scratch::new("undeformed");
-    let prog = repo().join("dform.df");
+    let prog = repo().join("examples/demo/stacks/dform.df");
     let args = ["--file", prog.to_str().unwrap(), "--world", "w.json"];
     let run = |cmd: &str| s.run(&[&args[..], &[cmd]].concat()).success();
     let first = run("plan");

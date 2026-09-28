@@ -8,14 +8,23 @@ use inspection_common::{dform, golden};
 
 #[test]
 fn the_resource_dag_follows_refs() {
-    let out = dform("dform.df", &["--set", "env=prod", "graph"]);
+    let out = dform(
+        "examples/demo/stacks/dform.df",
+        &["--set", "env=prod", "graph"],
+    );
     assert!(
         out.contains(
             r#""net.subnet/network.main::private-us-test-1a" -> "net.vpc/network.main::vpc";"#
         ),
         "{out}"
     );
-    assert_eq!(out, dform("dform.df", &["--set", "env=prod", "graph"]));
+    assert_eq!(
+        out,
+        dform(
+            "examples/demo/stacks/dform.df",
+            &["--set", "env=prod", "graph"]
+        )
+    );
     golden("graph_dform_prod_resources", &out);
 }
 
@@ -53,8 +62,11 @@ fn the_partition_graph_dashes_negative_edges() {
 
 #[test]
 fn any_binary_relation_is_a_graph() {
-    let out = dform("dform.df", &["graph", "vpc_peer/2"]);
-    assert_eq!(out, dform("dform.df", &["graph", "vpc_peer"]));
+    let out = dform("examples/demo/stacks/dform.df", &["graph", "vpc_peer/2"]);
+    assert_eq!(
+        out,
+        dform("examples/demo/stacks/dform.df", &["graph", "vpc_peer"])
+    );
     golden("graph_dform_vpc_peer", &out);
 
     let s = Scratch::new("graph-arity");

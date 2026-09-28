@@ -11,7 +11,7 @@ settings prod {
   network.vpc_cidr = inet("10.20.0.0/16")
 }
 
-import "../modules/network.df"
+import "demo/modules/network.df"
 
 instance network main {
   vpc_net = settings[env].network.vpc_cidr

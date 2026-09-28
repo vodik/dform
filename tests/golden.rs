@@ -45,18 +45,18 @@ const fn case(program: &'static str, case: &'static str, file: &'static str) -> 
 }
 
 const CASES: &[Case] = &[
-    case("dform", "staging", "dform.df"),
+    case("dform", "staging", "examples/demo/stacks/dform.df"),
     Case {
         sets: &["env=prod"],
-        ..case("dform", "prod", "dform.df")
+        ..case("dform", "prod", "examples/demo/stacks/dform.df")
     },
     Case {
         sets: &["env=dev"],
-        ..case("dform", "dev", "dform.df")
+        ..case("dform", "dev", "examples/demo/stacks/dform.df")
     },
     Case {
         world_fixture: true,
-        ..case("dform", "world", "dform.df")
+        ..case("dform", "world", "examples/demo/stacks/dform.df")
     },
     case("dform_advanced", "default", "dform-advanced.df"),
     Case {

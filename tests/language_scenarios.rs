@@ -74,7 +74,7 @@ fn plan_with_a_scenario_is_a_what_if() {
 #[test]
 fn the_demo_scenarios_pass() {
     let s = Scratch::new("lang-scenario-demo");
-    let file = repo().join("dform.df");
+    let file = repo().join("examples/demo/stacks/dform.df");
     let r = s.run(&["--file", file.to_str().unwrap(), "test"]).success();
     assert!(
         r.stdout.contains("test: 2 scenarios, 0 failed"),

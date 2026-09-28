@@ -126,7 +126,7 @@ fn a_changed_program_is_refused() {
 #[test]
 fn other_inputs_are_refused() {
     let s = Scratch::new("planfile-inputs");
-    let prog = repo().join("dform.df");
+    let prog = repo().join("examples/demo/stacks/dform.df");
     let prog = prog.to_str().unwrap();
     s.run(&[
         "--file",

@@ -9,7 +9,7 @@ use inspection_common::{dform, golden};
 #[test]
 fn a_pattern_prints_one_column_per_variable() {
     let out = dform(
-        "dform.df",
+        "examples/demo/stacks/dform.df",
         &["--set", "env=prod", "query", "attr(net.vpc, N, .cidr, C)"],
     );
     assert!(out.starts_with("N "), "{out}");
@@ -24,7 +24,7 @@ fn a_pattern_prints_one_column_per_variable() {
 #[test]
 fn a_conjunction_is_evaluated_against_the_final_fact_store() {
     let out = dform(
-        "dform.df",
+        "examples/demo/stacks/dform.df",
         &[
             "--set",
             "env=prod",
@@ -38,7 +38,7 @@ fn a_conjunction_is_evaluated_against_the_final_fact_store() {
         "{out}"
     );
     let ground = dform(
-        "dform.df",
+        "examples/demo/stacks/dform.df",
         &["query", r#"want(net.vpc, "network.main::vpc")"#],
     );
     assert_eq!(ground, "yes\n");
@@ -47,14 +47,14 @@ fn a_conjunction_is_evaluated_against_the_final_fact_store() {
 /// A bare predicate name keeps working, printed as facts, not Debug.
 #[test]
 fn a_predicate_name_lists_its_facts() {
-    let out = dform("dform.df", &["query", "env"]);
+    let out = dform("examples/demo/stacks/dform.df", &["query", "env"]);
     assert_eq!(out, "env(\"staging\")\nmatches: 1\n");
 }
 
 #[test]
 fn a_query_that_does_not_parse_says_so() {
     let s = Scratch::new("query-parse");
-    let file = repo().join("dform.df");
+    let file = repo().join("examples/demo/stacks/dform.df");
     let r = s
         .run(&[
             "--file",

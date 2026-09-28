@@ -3600,7 +3600,8 @@ mod tests {
             }
         }
         let root = std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
-        let program = crate::loader::load_program(&[root.join("dform.df")]).unwrap();
+        let program =
+            crate::loader::load_program(&[root.join("examples/demo/stacks/dform.df")]).unwrap();
         for env in ["staging", "prod"] {
             let extra = [input("env", Value::Str(env.into()))];
             let attrs = |p: &Program| {
@@ -3678,12 +3679,12 @@ mod tests {
     }
 
     /// dform.df's settings are a `@default` layer plus per-environment
-    /// config (E §7.1; `config/{env}.yaml`). Every environment compiles to
+    /// config (E §7.1; `config/dform/{env}.yaml`). Every environment compiles to
     /// exactly the resources the three copied blocks it replaced did.
     #[test]
     fn dform_df_default_layer_matches_the_copied_blocks() {
         let root = std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
-        let src = std::fs::read_to_string(root.join("dform.df")).unwrap();
+        let src = std::fs::read_to_string(root.join("examples/demo/stacks/dform.df")).unwrap();
         let start = src.find("env_name(\"staging\")").unwrap();
         let end = src
             .find("# The settings of the selected environment")
@@ -3710,8 +3711,11 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let old = dir.join("dform.df");
         let old_src = format!("{}{}{}", &src[..start], copied, &src[end..])
-            .replace(", config = yaml(\"config/{env}.yaml\")", "")
-            .replace("import \"", &format!("import \"{}/", root.display()));
+            .replace(", config = yaml(\"../config/dform/{env}.yaml\")", "")
+            .replace(
+                "import \"",
+                &format!("import \"{}/", root.join("examples/demo/stacks").display()),
+            );
         std::fs::write(&old, old_src).unwrap();
         let resources = |path: &std::path::Path, env: Option<&str>| {
             let program = crate::loader::load_program(&[path.to_path_buf()]).unwrap();
@@ -3738,7 +3742,7 @@ mod tests {
             (docs, violations, r.warnings)
         };
         for env in [None, Some("staging"), Some("prod"), Some("dev")] {
-            let new = resources(&root.join("dform.df"), env);
+            let new = resources(&root.join("examples/demo/stacks/dform.df"), env);
             assert!(!new.0.is_empty());
             assert_eq!(new, resources(&old, env), "env={env:?}");
         }
@@ -4156,7 +4160,7 @@ mod tests {
     #[test]
     fn dform_df_under_nulls_is_single_phase() {
         let (r, violations, s) = run_file(
-            "dform.df",
+            "examples/demo/stacks/dform.df",
             &crate::schema::fake(),
             &[input("env", Value::Str("prod".into()))],
         );
@@ -4352,7 +4356,7 @@ mod tests {
     #[test]
     fn every_fact_has_a_circuit_node() {
         let (r, _, _) = run_file(
-            "dform.df",
+            "examples/demo/stacks/dform.df",
             &crate::schema::fake(),
             &[input("env", Value::Str("prod".into()))],
         );

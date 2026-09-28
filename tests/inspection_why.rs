@@ -11,7 +11,7 @@ use inspection_common::{dform, golden};
 #[test]
 fn why_a_tag_exists() {
     let out = dform(
-        "dform.df",
+        "examples/demo/stacks/dform.df",
         &[
             "--set",
             "env=prod",
@@ -32,7 +32,7 @@ fn why_a_tag_exists() {
 #[test]
 fn why_an_attribute_shows_every_contribution() {
     let out = dform(
-        "dform.df",
+        "examples/demo/stacks/dform.df",
         &[
             "--set",
             "env=prod",

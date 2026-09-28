@@ -87,7 +87,7 @@ resource net.vpc_peering peer_main_peer {
 fn dform_df_plans_in_every_env() {
     for env in ["dev", "staging", "prod"] {
         let s = Scratch::new(&format!("dangling-ref-{env}"));
-        let file = repo().join("dform.df");
+        let file = repo().join("examples/demo/stacks/dform.df");
         let r = s
             .run(&[
                 "--file",

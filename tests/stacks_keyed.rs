@@ -60,7 +60,7 @@ fn planning_prod_after_applying_staging_proposes_creates() {
 #[test]
 fn dform_df_plans_prod_after_staging_as_creates() {
     let s = Scratch::new("keyed-dform");
-    let file = repo().join("dform.df");
+    let file = repo().join("examples/demo/stacks/dform.df");
     let root = s.path(".");
     let args = |more: &[&'static str]| {
         let mut v = vec![

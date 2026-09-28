@@ -6,7 +6,7 @@ use common::{Scratch, repo};
 #[test]
 fn a_fresh_stack_carries_nulls_until_apply() {
     let s = Scratch::new("computed-fresh");
-    let prog = repo().join("dform.df");
+    let prog = repo().join("examples/demo/stacks/dform.df");
     let prog = prog.to_str().unwrap();
     let r = s
         .run(&["--file", prog, "--world", "w.json", "plan"])

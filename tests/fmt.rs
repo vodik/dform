@@ -28,8 +28,6 @@ fn corpus() -> Vec<PathBuf> {
     let mut out = Vec::new();
     df_files(repo(), &mut out);
     for d in [
-        "modules",
-        "policies",
         "examples",
         "crates/dform-mock/schemas",
         "tests/fixtures",

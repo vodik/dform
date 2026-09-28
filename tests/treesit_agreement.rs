@@ -34,8 +34,6 @@ fn corpus() -> Vec<PathBuf> {
     let mut out = Vec::new();
     df_files(repo(), &mut out);
     for d in [
-        "modules",
-        "policies",
         "examples",
         "crates/dform-mock/schemas",
         "tests/fixtures",
@@ -297,7 +295,7 @@ fn inside(n: Node, kinds: &[&str]) -> bool {
 /// block, `a = network[ia].vpc` in a rule body.
 #[test]
 fn the_reference_capture_is_on_field_values_and_not_on_reads() {
-    let src = std::fs::read_to_string(repo().join("dform.df")).unwrap();
+    let src = std::fs::read_to_string(repo().join("examples/demo/stacks/dform.df")).unwrap();
     let tree = ts_parse(&src);
     let refs = captures(&tree, &src, "variable.reference");
     let text = |n: &Node| src[n.byte_range()].to_string();

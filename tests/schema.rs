@@ -6,7 +6,7 @@ use common::{Scratch, repo};
 #[test]
 fn schema_facts_are_queryable_edb() {
     let s = Scratch::new("schema-query");
-    let prog = repo().join("dform.df");
+    let prog = repo().join("examples/demo/stacks/dform.df");
     let r = s
         .run(&["--file", prog.to_str().unwrap(), "query", "type_attr"])
         .success();

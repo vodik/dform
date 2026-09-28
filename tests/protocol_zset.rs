@@ -119,7 +119,8 @@ fn count(p: &[(String, ActionKind, BTreeSet<String>)], k: fn(&ActionKind) -> boo
 fn fixture_prod_is_eleven_updates() {
     let dir = scratch("prod");
     let (world, state) = fixture(&dir, |_| {});
-    let program = dform::loader::load_program(&[root().join("dform.df")]).unwrap();
+    let program =
+        dform::loader::load_program(&[root().join("examples/demo/stacks/dform.df")]).unwrap();
     let p = plan(&program, &[input("env", "prod")], &world, &state);
     // Six of them change a force_new cidr: replacements.
     assert_eq!(count(&p, |k| matches!(k, ActionKind::Update)), 5);
@@ -154,7 +155,8 @@ fn a_fresh_null_against_a_world_constant_is_drift() {
             r["computed"] = serde_json::json!({});
         }
     });
-    let program = dform::loader::load_program(&[root().join("dform.df")]).unwrap();
+    let program =
+        dform::loader::load_program(&[root().join("examples/demo/stacks/dform.df")]).unwrap();
     let p = plan(&program, &[], &world, &state);
     assert_eq!(count(&p, |k| matches!(k, ActionKind::Drift)), 10, "{p:?}");
     assert_eq!(count(&p, |k| matches!(k, ActionKind::Update)), 0, "{p:?}");
