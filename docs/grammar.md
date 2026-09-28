@@ -186,7 +186,7 @@ stmt       := provider | stack | import | input | inputrel | output | export
             | check | contribution | valuerule | rule | fact
 
 provider   := "provider" NAME block
-stack      := "stack" DOTTED block
+stack      := "stack" DOTTED ("[" NAME ("," NAME)* "]")? block  ; `[` glued to the name
 import     := "import" STRING
 input      := "input" NAME ":" type ("=" term)? ("where" body1)?
 inputrel   := "input" "relation" NAME "/" INT "from" term   ; file(STRING) | git(STRING, STRING, STRING)
@@ -240,6 +240,21 @@ of several lines is a `{ }` block or ends each line with `,`.
 A block states its `for` and `if` clauses first, before any field; both
 append to the block's one body (`for` binds, `if` guards; the split is for
 the reader). `provider` and `stack` blocks take no clause.
+
+### Stacks
+
+`stack app { .. }` names the program's stack; its block's settings are
+`backend = local("DIR")`, `unknowns = "strict" | "permissive"`,
+`role = "bootstrap"` and, on a keyed stack, `isolated = true`.
+`stack app[env]` and `stack app[env, region]` key it: each name in the
+brackets is one of the program's own inputs (a top-level `input`, not a
+secret; an error at the name otherwise), and each value of the key is a
+deployment of its own (`app[env=prod]`), with its own state. The `[` is
+glued to the stack's name, like an index; inside the brackets, spaces and
+the comma are free, and `fmt` prints `stack app[env, region]`. The key
+lowers to nothing: it is read by `stack::config` and decides where a run's
+state lives. For tree-sitter: the stack statement takes an optional key
+after its name, `"[" NAME ("," NAME)* "]"`, before the block.
 
 ### Block names
 

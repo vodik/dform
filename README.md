@@ -43,6 +43,48 @@ stack's lock, `<state dir>/state.lock` (the holder's pid): a second apply
 of the same stack while one runs fails naming the holder; a lock whose
 holder is gone (a killed apply) is taken over with a note.
 
+### Keyed stacks: one deployment per key value
+
+`stack app[env]` (or `stack app[env, region]`) names the inputs that are
+deployment identity. Each value of the key is its own deployment,
+`app[env=prod]`, with its own state directory (`.dform/app/env=prod/`;
+several keys are joined, `env=prod,region=us-east1`, and a value is escaped
+for the file system: every byte but letters, digits, `-`, `_` and a `.`
+that does not lead is `%XX`), lock, registry entry and controller. Inputs
+outside the key are parameters of a deployment: they deform it in place.
+The key's value comes from `--set`, an `--input-file`, a scenario's `with`,
+else the input's default; a key input with none is an error naming it.
+Nothing about environments is built in: `dform.df` is `stack dform[env]`,
+so `plan --set env=prod` plans prod against prod's state, not staging's.
+
+```bash
+cargo run -- apply                        # dform[env=staging]: .dform/dform/env=staging/
+cargo run -- plan --set env=prod          # dform[env=prod]: creates, beside staging
+cargo run -- stack rekey dform env=staging env=stg   # move a deployment's state
+```
+
+`dform stack rekey STACK K=V... K=V...` moves one deployment's state (and
+its registry entry) to another key value: the old key's pairs, then the
+new key's. Nothing in the cloud changes. First it lists, from provenance,
+the resources whose name-like attributes depend on the key: the next plan
+renames them, usually a replace. With the new key only (`rekey dform
+env=staging`) it moves the state a stack had before it was keyed, the
+files directly in `.dform/<stack>/`; a plan of a keyed stack whose
+deployment has no state yet but whose unkeyed state exists says so.
+
+The collision lint: in a keyed stack, a resource whose name-like attribute
+(`name`, `metadata.name`, `bucket`, or a path a provider's schema flags
+`name_like`) has no provenance path from any key input gets the same name
+in every deployment, and they collide in a shared account: a warning at
+the field, a deny under `unknowns = "strict"`. A read that only gates the
+resource's block counts as a path. `stack app[env] { isolated = true }`
+says each key value deploys into its own account (or world), and turns
+the lint off; `dform.df` says so, since its iam module's names are fixed.
+
+`stack_output("app[env=prod]", k, V)` reads one deployment's outputs,
+`dform stack handover 'app[env=prod]' --to ...` hands one over, and
+`dform controller --stack 'app[env=prod]' --set env=prod` runs one.
+
 Cross-stack values: `output k = t` at the top of a program is a stack
 output. `apply` records the stack's outputs whose values are known in its
 state and the stack's absolute state path in `.dform/stacks.json`; every
@@ -53,8 +95,9 @@ first `--file`, not the working directory, so stacks whose programs sit
 together share it wherever dform runs from; `--root DIR` puts it at
 `DIR/.dform/` instead.
 
-- Core state (Terraform-style address -> remote mapping, outputs): `.dform/<stack>/state.json`.
-- The fake backend's world (what "exists"): `.dform/<stack>/remote.json`.
+- Core state (Terraform-style address -> remote mapping, outputs): `.dform/<stack>/state.json`
+  (a keyed stack's deployment: `.dform/<stack>/<k>=<v>/state.json`).
+- The fake backend's world (what "exists"): `.dform/<stack>/remote.json`, beside the state.
 - Discovery inventory, shared by every stack: `.dform/inventory.json`.
 
 `--inventory PATH` points at the discovery inventory file directly (see
@@ -82,6 +125,9 @@ tests.
 
 A `.dform/` written before state was scoped (`.dform/state.json`,
 `.dform/remote.json`) is moved into the `dform` stack on the next run.
+`dform.df` is keyed by `env` now: a `.dform/dform/state.json` from before
+is not any deployment's until `cargo run -- stack rekey dform env=staging`
+moves it (the plan says so).
 
 ## Providers are processes; the mock plays schema files
 
@@ -995,7 +1041,8 @@ cargo run -- --file $W controller --poll 100 --max-events 3           # stop aft
 cargo run -- --file $W controller --once                              # what changed since the last run
 ```
 
-`--stack NAME` must be the program's own stack. `--poll MS` (default 500)
+`--stack NAME` must be the program's own stack; of a keyed stack, the
+deployment `--set` selects (`--stack 'app[env=prod]' --set env=prod`). `--poll MS` (default 500)
 is how often the sources and the world file are looked at: polling, no file
 notification. `--once` handles what changed since the last run (`event
 resync` when nothing did) and exits; `--max-events N` exits after N events
@@ -1073,7 +1120,7 @@ Deployment whose image is the `release` input relation, and a Service.
 controller runs in: it stays batch. `dform controller` refuses it (by its
 program or by the registry), and it is never handed over.
 
-`dform stack handover NAME --to BACKEND` moves the stack's state
+`dform stack handover NAME --to BACKEND` (NAME a deployment, `app[env=prod]`, of a keyed stack) moves the stack's state
 directory (state, world, controller memo) to the backend and records it in
 the registry, `.dform/stacks.json` (`{"state": ..., "backend": ...}`
 beside the plain state paths, absolute; the controller's `event world` line

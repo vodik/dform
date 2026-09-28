@@ -869,7 +869,19 @@ impl<'u> Lowerer<'u> {
                 let block = node(n, BLOCK);
                 let mut rc = self.rc(n, scope, outer);
                 let config = self.constant_assigns(&mut rc, block.as_ref())?;
-                let c = Config { name, config, span };
+                // The words between the header's `[` and `]`.
+                let keys = tokens(n)
+                    .skip_while(|t| t.kind() != L_BRACKET)
+                    .take_while(|t| t.kind() != R_BRACKET)
+                    .filter(|t| is_word(t.kind()))
+                    .map(|t| (t.text().to_string(), self.span_of(t.text_range())))
+                    .collect();
+                let c = Config {
+                    name,
+                    keys,
+                    config,
+                    span,
+                };
                 one(if n.kind() == PROVIDER {
                     Stmt::Provider(c)
                 } else {

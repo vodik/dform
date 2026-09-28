@@ -5,7 +5,10 @@
 //!
 //!   type_attr(T, Path, Ty, Flags).    % Flags drawn from required, computed,
 //!                                     % id, sensitive, nullable, optional_computed,
-//!                                     % force_new (a change replaces the object)
+//!                                     % force_new (a change replaces the object),
+//!                                     % name_like (the value names the object in
+//!                                     % the cloud; `name`, `metadata.name` and
+//!                                     % `bucket` always do)
 //!   type_list_key(T, Path, Keys).     % merge keys of a list attribute
 //!   type_provider(T, P).              % which provider owns T
 //!   type_retry(T, Attempts).          % optional: how many times Read is tried
@@ -41,7 +44,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-pub const FLAGS: [&str; 7] = [
+pub const FLAGS: [&str; 8] = [
     "required",
     "computed",
     "id",
@@ -49,7 +52,13 @@ pub const FLAGS: [&str; 7] = [
     "nullable",
     "optional_computed",
     "force_new",
+    "name_like",
 ];
+
+/// The paths that name an object in the cloud for every type: two
+/// deployments that write the same value there collide. A schema adds a
+/// type's own with the flag `name_like`.
+pub const NAME_LIKE: [&str; 3] = ["name", "metadata.name", "bucket"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AttrSpec {
@@ -196,6 +205,21 @@ impl Schema {
             .get(typ)
             .copied()
             .unwrap_or(DEFAULT_READ_ATTEMPTS)
+    }
+
+    /// The paths of `typ` that name the object in the cloud: [`NAME_LIKE`]
+    /// and the type's paths declared `name_like`.
+    pub fn name_like_paths(&self, typ: &str) -> BTreeSet<String> {
+        NAME_LIKE
+            .iter()
+            .map(|p| p.to_string())
+            .chain(
+                self.attrs
+                    .iter()
+                    .filter(|((t, _), a)| t == typ && a.has("name_like"))
+                    .map(|((_, p), _)| p.clone()),
+            )
+            .collect()
     }
 
     pub fn knows_type(&self, typ: &str) -> bool {
@@ -646,6 +670,26 @@ mod tests {
         );
         assert_eq!(s.provider_of.get("google.client_config"), None);
         assert_eq!(s.computed.len(), 17);
+    }
+
+    /// `name`, `metadata.name` and `bucket` name every type's objects; a
+    /// schema adds its own with `name_like`.
+    #[test]
+    fn name_like_paths_are_the_defaults_and_the_flagged() {
+        let s = Schema::parse(
+            r#"
+            type_attr("t", "name_prefix", "string", ["optional_computed", "name_like"])
+            type_attr("u", "name_prefix", "string", [])
+            "#,
+            "test",
+        )
+        .unwrap();
+        let paths = |t: &str| s.name_like_paths(t).into_iter().collect::<Vec<_>>();
+        assert_eq!(
+            paths("t"),
+            ["bucket", "metadata.name", "name", "name_prefix"]
+        );
+        assert_eq!(paths("u"), ["bucket", "metadata.name", "name"]);
     }
 
     #[test]

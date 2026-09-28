@@ -2,7 +2,15 @@
 //! unknowns = strict | permissive, role = bootstrap }.` One program owns
 //! one stack. The name scopes the state (the entry file's basename when
 //! there is no `stack` statement), the backend is the directory it lives in, and a lock file
-//! there makes a second concurrent apply fail cleanly. `provider name {
+//! there makes a second concurrent apply fail cleanly.
+//!
+//! Keyed stacks: `stack app[env, region] { .. }` names the inputs that are
+//! deployment identity. Each value of the key is its own deployment
+//! ([`Instance`]), `app[env=prod,region=us-east1]`, with its own state
+//! directory under the stack's (`.dform/app/env=prod,region=us-east1/`),
+//! lock, registry entry and controller; the other inputs are parameters of
+//! a deployment and change it in place. `rekey` moves one deployment's
+//! state to another key value. `provider name {
 //! source = "path" }.` selects a provider: a plugin executable, or a schema
 //! the mock provider plays.
 //!
@@ -17,7 +25,7 @@
 //! a new backend and records it in the registry, where every later run
 //! finds it.
 
-use crate::ast::{Config, Program, Span, Stmt, Term};
+use crate::ast::{Atom, Config, Program, Span, Stmt, Term};
 use crate::diag::{self, Diagnostic, Diagnostics};
 use crate::value::Value;
 use anyhow::{Context, Result, bail};
@@ -51,6 +59,13 @@ pub struct Stack {
     pub bootstrap: bool,
     /// Provider schemas, as `--provider` takes them: a name or a path.
     pub providers: Vec<String>,
+    /// `stack app[env, region]`: the inputs that key the stack, in order,
+    /// each a stack input (checked here).
+    pub keys: Vec<(String, Span)>,
+    /// `isolated = true`: every key value deploys into its own account (or
+    /// world), so a name that does not vary by key does not collide; the
+    /// collision lint (`lint::key_collisions`) is off.
+    pub isolated: bool,
 }
 
 fn string(t: &Term) -> Option<&str> {
@@ -65,8 +80,10 @@ pub fn config(program: &Program) -> Result<Stack> {
     let mut out = Stack::default();
     let mut diags = Vec::new();
     let mut first: Option<Span> = None;
+    let mut inputs: Vec<&crate::ast::InputDecl> = Vec::new();
     for s in &program.statements {
         match s {
+            Stmt::Input(i) => inputs.push(i),
             Stmt::Stack(c) => {
                 if let Some(at) = first {
                     diags.push(
@@ -80,17 +97,205 @@ pub fn config(program: &Program) -> Result<Stack> {
                 }
                 first = Some(c.span);
                 out.name = Some(c.name.clone());
+                out.keys = c.keys.clone();
                 stack_config(c, &mut out, &mut diags);
             }
             Stmt::Provider(c) => out.providers.push(provider(c, &mut diags)),
             _ => {}
         }
     }
+    check_keys(&out, &inputs, &mut diags);
     if diags.is_empty() {
         Ok(out)
     } else {
         Err(Diagnostics(diags).into())
     }
+}
+
+/// Each key of a keyed stack is one of its own inputs, named once, and not
+/// a secret (its value names a directory and a registry entry).
+fn check_keys(out: &Stack, inputs: &[&crate::ast::InputDecl], diags: &mut Vec<Diagnostic>) {
+    let name = out.name.as_deref().unwrap_or_default();
+    for (i, (k, span)) in out.keys.iter().enumerate() {
+        if let Some((_, at)) = out.keys[..i].iter().find(|(x, _)| x == k) {
+            diags.push(
+                Diagnostic::error(*span, format!("stack {name} is keyed by {k} twice"))
+                    .with_label(*at, "first here"),
+            );
+            continue;
+        }
+        let Some(decl) = inputs.iter().find(|d| &d.name == k) else {
+            let names: Vec<&str> = inputs.iter().map(|d| d.name.as_str()).collect();
+            let d = Diagnostic::error(
+                *span,
+                format!("stack {name} is keyed by {k}, which is not an input of the stack"),
+            );
+            diags.push(if names.is_empty() {
+                d.with_help(format!("declare it: `input {k}: string`"))
+            } else {
+                d.with_note(format!("its inputs: {}", names.join(", ")))
+            });
+            continue;
+        };
+        if matches!(&decl.ty, crate::ast::TypeExpr::Apply(n, _) if n == "secret") {
+            diags.push(
+                Diagnostic::error(
+                    *span,
+                    format!(
+                        "stack {name} is keyed by {k}, a secret input: a key's value names \
+                         the deployment's state directory and registry entry"
+                    ),
+                )
+                .with_label(decl.span, "declared secret here"),
+            );
+        }
+    }
+}
+
+/// One deployment of a stack: the stack's name and, when it is keyed, the
+/// value of each key input, in the header's order (as the value prints,
+/// a string bare).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Instance {
+    pub stack: String,
+    pub key: Vec<(String, String)>,
+}
+
+impl Instance {
+    /// `k1=v1,k2=v2`, each value escaped for a file name: the directory of
+    /// the deployment under the stack's, and the part of its name in
+    /// brackets. `None` for an unkeyed stack.
+    pub fn segment(&self) -> Option<String> {
+        if self.key.is_empty() {
+            return None;
+        }
+        Some(
+            self.key
+                .iter()
+                .map(|(k, v)| format!("{k}={}", escape(v)))
+                .collect::<Vec<_>>()
+                .join(","),
+        )
+    }
+
+    /// `app`, or `app[env=prod]`: what the registry, `stack_output/3`,
+    /// `handover`, `taint` and the controller call the deployment.
+    pub fn name(&self) -> String {
+        match self.segment() {
+            Some(seg) => format!("{}[{seg}]", self.stack),
+            None => self.stack.clone(),
+        }
+    }
+
+    /// The deployment's directory: `base` (the stack's directory) for an
+    /// unkeyed stack, else `base/<segment>`.
+    pub fn dir(&self, base: &Path) -> PathBuf {
+        match self.segment() {
+            Some(seg) => base.join(seg),
+            None => base.to_path_buf(),
+        }
+    }
+}
+
+/// A key value as a file name: ASCII letters, digits, `-`, `_` and a `.`
+/// that does not lead are kept; every other byte is `%XX`, so `=`, `,`,
+/// `/` and `%` itself never appear raw and `.`/`..` are not directories.
+pub fn escape(v: &str) -> String {
+    let mut out = String::new();
+    for (i, b) in v.bytes().enumerate() {
+        let keep = b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || (b == b'.' && i > 0);
+        if keep {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+/// The directory of the deployment named `name` (`app` or `app[env=prod]`,
+/// as [`Instance::name`] prints it) under the state root.
+pub fn instance_dir(root: &Path, name: &str) -> PathBuf {
+    match name.strip_suffix(']').and_then(|n| n.split_once('[')) {
+        Some((stack, seg)) => root.join(stack).join(seg),
+        None => root.join(name),
+    }
+}
+
+/// A value as a key prints it: a string bare, anything else as a value.
+pub fn key_text(v: &Value) -> String {
+    match v {
+        Value::Str(s) => s.clone(),
+        v => crate::partition::fmt_value(v),
+    }
+}
+
+/// The deployment a run is of: the stack, and each key input's value as
+/// this run gives it: `--set` (`set`, the `input(k, v)` facts), else an
+/// input fact or an `--input-file` contribution of the program, else the
+/// input's default. A key with none is an error naming the input.
+pub fn instance(cfg: &Stack, stack: &str, program: &Program, set: &[Atom]) -> Result<Instance> {
+    let mut key = Vec::new();
+    let mut diags = Vec::new();
+    for (k, span) in &cfg.keys {
+        let given = |a: &Atom| -> Option<Value> {
+            match (a.pred.as_str(), a.args.as_slice()) {
+                ("input", [Term::Val(Value::Str(x)), Term::Val(v)]) if x == k => Some(v.clone()),
+                (
+                    "arg",
+                    [
+                        Term::Val(Value::Str(t)),
+                        Term::Val(Value::Str(scope)),
+                        Term::Val(Value::Str(x)),
+                        Term::Val(v),
+                        _,
+                    ],
+                ) if t == crate::modules::INPUT && scope.is_empty() && x == k => Some(v.clone()),
+                _ => None,
+            }
+        };
+        let from_program = || {
+            program.statements.iter().find_map(|s| match s {
+                Stmt::Fact(a) => given(a),
+                _ => None,
+            })
+        };
+        let default = || {
+            program.statements.iter().find_map(|s| match s {
+                Stmt::Input(i) if &i.name == k => match &i.default {
+                    Some(Term::Val(v)) => Some(v.clone()),
+                    _ => None,
+                },
+                _ => None,
+            })
+        };
+        match set
+            .iter()
+            .rev()
+            .find_map(given)
+            .or_else(from_program)
+            .or_else(default)
+        {
+            Some(v) => key.push((k.clone(), key_text(&v))),
+            None => diags.push(
+                Diagnostic::error(
+                    *span,
+                    format!("stack {stack} is keyed by input {k}, which has no value"),
+                )
+                .with_help(format!(
+                    "give it with `--set {k}=...`: each value of the key is its own \
+                     deployment, with its own state"
+                )),
+            ),
+        }
+    }
+    if !diags.is_empty() {
+        return Err(Diagnostics(diags).into());
+    }
+    Ok(Instance {
+        stack: stack.to_string(),
+        key,
+    })
 }
 
 fn stack_config(c: &Config, out: &mut Stack, diags: &mut Vec<Diagnostic>) {
@@ -123,9 +328,20 @@ fn stack_config(c: &Config, out: &mut Stack, diags: &mut Vec<Diagnostic>) {
                 Some("bootstrap") => out.bootstrap = true,
                 _ => diags.push(Diagnostic::error(*span, "role is `bootstrap`")),
             },
+            "isolated" => match v {
+                Term::Val(Value::Bool(b)) if !c.keys.is_empty() => out.isolated = *b,
+                Term::Val(Value::Bool(_)) => diags.push(Diagnostic::error(
+                    *span,
+                    format!(
+                        "isolated says each key value deploys apart; stack {} has no key",
+                        c.name
+                    ),
+                )),
+                _ => diags.push(Diagnostic::error(*span, "isolated is `true` or `false`")),
+            },
             other => diags.push(
                 Diagnostic::error(*span, format!("stack {} has no setting {other}", c.name))
-                    .with_note("its settings: backend, unknowns, role"),
+                    .with_note("its settings: backend, unknowns, role, isolated"),
             ),
         }
     }
@@ -364,7 +580,8 @@ pub fn handed_over(root: &Path, stack: &str) -> Result<Option<(String, PathBuf)>
 /// directory, relative to the one holding `root`; `k8s("ns/name")` stands in for the in-cluster backend: a
 /// directory `k8s/ns/name` inside the state directory of the registered
 /// bootstrap stack (the one that owns the cluster). The stack's state is
-/// found in the registry, else at `<root>/<NAME>`. Returns the new
+/// found in the registry, else at `<root>/<NAME>` (`<root>/app/env=prod`
+/// for the deployment `app[env=prod]` of a keyed stack). Returns the new
 /// directory.
 pub fn handover(root: &Path, stack: &str, to: &str) -> Result<PathBuf> {
     let reg = registry(root)?;
@@ -400,7 +617,7 @@ pub fn handover(root: &Path, stack: &str, to: &str) -> Result<PathBuf> {
     }
     let from = match reg.get(stack) {
         Some(e) => e.state.parent().unwrap_or(Path::new("")).to_path_buf(),
-        None => root.join(stack),
+        None => instance_dir(root, stack),
     };
     let state = from.join("state.json");
     if state.with_extension("lock").exists() {
@@ -437,6 +654,69 @@ pub fn handover(root: &Path, stack: &str, to: &str) -> Result<PathBuf> {
     );
     save_registry(root, reg)?;
     Ok(target)
+}
+
+/// `dform stack rekey`: move the state of deployment `from` (its
+/// directory under `base`, the stack's directory) to deployment `to`, and
+/// its registry entry with it. Nothing in the cloud changes. An unkeyed
+/// `from` is the state the stack had before it was keyed: the files
+/// directly in `base`. Returns the new directory.
+pub fn rekey(root: &Path, base: &Path, from: &Instance, to: &Instance) -> Result<PathBuf> {
+    let (old, new) = (from.name(), to.name());
+    let mut reg = registry(root)?;
+    if let Some(b) = reg.get(&old).and_then(|e| e.backend.clone()) {
+        bail!(
+            "rekey {old}: it was handed over to {b}; its state is not under {}",
+            base.display()
+        );
+    }
+    let (src, dst) = (from.dir(base), to.dir(base));
+    let state = src.join("state.json");
+    if !state.exists() {
+        bail!("rekey {old}: no state at {}", state.display());
+    }
+    if state.with_extension("lock").exists() {
+        bail!(
+            "rekey {old}: the stack is locked ({}); wait for the apply to finish",
+            state.with_extension("lock").display()
+        );
+    }
+    if dst.exists() && fs::read_dir(&dst)?.next().is_some() {
+        bail!("rekey {old} to {new}: {} is not empty", dst.display());
+    }
+    if from.segment().is_some() {
+        if let Some(parent) = dst.parent() {
+            fs::create_dir_all(parent).with_context(|| format!("mkdir {}", parent.display()))?;
+        }
+        let _ = fs::remove_dir(&dst);
+        fs::rename(&src, &dst)
+            .with_context(|| format!("move {} to {}", src.display(), dst.display()))?;
+    } else {
+        // The unkeyed state: every file of the stack's directory (the
+        // deployments' directories stay).
+        fs::create_dir_all(&dst).with_context(|| format!("mkdir {}", dst.display()))?;
+        for e in fs::read_dir(&src).with_context(|| format!("read {}", src.display()))? {
+            let e = e?;
+            if e.file_type()?.is_file() {
+                let to = dst.join(e.file_name());
+                fs::rename(e.path(), &to)
+                    .with_context(|| format!("move {} to {}", e.path().display(), to.display()))?;
+            }
+        }
+    }
+    if let Some(e) = reg.remove(&old) {
+        let dst = fs::canonicalize(&dst).unwrap_or(dst.clone());
+        reg.insert(
+            new,
+            Entry {
+                state: dst.join("state.json"),
+                bootstrap: e.bootstrap,
+                backend: None,
+            },
+        );
+        save_registry(root, reg)?;
+    }
+    Ok(dst)
 }
 
 enum Backend {

@@ -304,6 +304,9 @@ pub struct Scenario {
 #[derive(Debug, Clone)]
 pub struct Config {
     pub name: String,
+    /// `stack app[env, region]`: the inputs that key the stack, each with
+    /// its span. Empty for a provider and an unkeyed stack.
+    pub keys: Vec<(String, Span)>,
     pub config: Vec<(String, Term, Span)>,
     pub span: Span,
 }

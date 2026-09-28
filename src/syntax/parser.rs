@@ -527,6 +527,15 @@ impl<'a> Parser<'a> {
             }),
             STACK_KW if !paren => self.simple(STACK, |p| {
                 p.dotted("a stack name")?;
+                // `stack app[env, region]`: the inputs that key it.
+                if p.at(L_BRACKET) && p.glued_next() {
+                    p.bump();
+                    p.expect_word()?;
+                    while p.eat(COMMA) {
+                        p.expect_word()?;
+                    }
+                    p.expect(R_BRACKET)?;
+                }
                 p.block()
             }),
             INPUT_KW if !paren && self.nth_text(1) == "relation" && self.nth(2) != COLON => self

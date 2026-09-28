@@ -208,6 +208,19 @@ enum StackCmd {
         #[arg(long = "to")]
         to: String,
     },
+    /// Move one deployment of a keyed stack to another key value: `rekey
+    /// app env=staging env=stg` moves the state of `app[env=staging]` to
+    /// `app[env=stg]`, and its registry entry. Nothing in the cloud
+    /// changes. First it lists the resources whose name-like attributes
+    /// depend on the key (from provenance): the next plan renames them,
+    /// usually a replace. With one side only (`rekey app env=staging`), it
+    /// moves the state the stack had before it was keyed.
+    Rekey {
+        stack: String,
+        /// Each key input as `k=v`: the old values, then the new ones.
+        #[arg(value_name = "K=V", required = true)]
+        pairs: Vec<String>,
+    },
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -301,6 +314,14 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
     }
     // `stack` and `provider` statements; `--provider` overrides the latter.
     let stack_cfg = dform::stack::config(&program)?;
+    // `stack rekey`: the run is of the old deployment (its state, its
+    // world), the provenance of its names is listed, and its state moves.
+    let rekey = match cli.cmd.clone() {
+        Cmd::Stack {
+            cmd: StackCmd::Rekey { stack, pairs },
+        } => Some(rekey_args(&mut cli, &stack_cfg, &files, &stack, &pairs)?),
+        _ => None,
+    };
     let providers = if cli.providers.is_empty() {
         stack_cfg.providers.clone()
     } else {
@@ -371,14 +392,51 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
         .name
         .clone()
         .unwrap_or_else(|| state::stack_name(&files[0]));
-    let mut paths = match (&cli.world, &stack_cfg.backend) {
-        (Some(w), _) => state::world_paths(&root, w),
-        (None, Some(dir)) => state::backend_paths(&root, &state::local_dir(&root, dir)),
-        (None, None) => state::stack_paths(&root, &stack),
+    let mut set = Vec::new();
+    for kv in &cli.set {
+        let (k, v) = split_kv(kv)?;
+        given.insert(k.to_string());
+        set.push((k.to_string(), v));
+    }
+    let set_facts = inputs::set_facts(&declared, &set)?;
+    // The deployment this run is of: the stack, or one value of its key.
+    let instance = match &rekey {
+        Some(r) => r.from.clone(),
+        None => dform::stack::instance(&stack_cfg, &stack, &program, &set_facts)?,
     };
+    let deployment = instance.name();
+    inputs::check_required(&declared, &given)?;
+    // The stack's directory, and the deployment's in it.
+    let base = match &stack_cfg.backend {
+        Some(dir) => state::local_dir(&root, dir),
+        None => root.join(&stack),
+    };
+    let mut paths = match &cli.world {
+        Some(w) => state::world_paths(&root, w),
+        None => state::backend_paths(&root, &instance.dir(&base)),
+    };
+    // A keyed stack whose state is still the unkeyed one.
+    if cli.world.is_none()
+        && rekey.is_none()
+        && instance.segment().is_some()
+        && !paths.state.exists()
+        && base.join("state.json").exists()
+    {
+        eprintln!(
+            "note: stack {stack} is keyed now, and its state from before is not any \
+             deployment's: {}; move it to this one with `dform stack rekey {stack} {}`",
+            base.join("state.json").display(),
+            instance
+                .key
+                .iter()
+                .map(|(k, v)| format!("{k}={v}"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+    }
     // A stack handed over to another backend lives there now.
     let handed = match &cli.world {
-        None => dform::stack::handed_over(&root, &stack)?,
+        None => dform::stack::handed_over(&root, &deployment)?,
         Some(_) => None,
     };
     if let Some((_, dir)) = &handed {
@@ -420,7 +478,7 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
     if let Some(h) = hook.as_deref_mut() {
         if stack_cfg.bootstrap {
             bail!(
-                "stack {stack} is role = bootstrap: it stays batch, and the controller never runs it"
+                "stack {deployment} is role = bootstrap: it stays batch, and the controller never runs it"
             );
         }
         h.open(
@@ -430,8 +488,8 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
         )?;
     } else if let (Cmd::Apply { .. }, Some((to, _))) = (&cli.cmd, &handed) {
         bail!(
-            "stack {stack} was handed over to {to}: the controller runs it \
-             (`dform controller --stack {stack}`), not a batch apply"
+            "stack {deployment} was handed over to {to}: the controller runs it \
+             (`dform controller --stack {deployment}`), not a batch apply"
         );
     }
     let chaos = match &cli.cmd {
@@ -474,16 +532,9 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
     }
     externs.preload(st.externs.clone());
 
-    let mut set = Vec::new();
-    for kv in &cli.set {
-        let (k, v) = split_kv(kv)?;
-        given.insert(k.to_string());
-        set.push((k.to_string(), v));
-    }
-    inputs::check_required(&declared, &given)?;
-    let mut base_extra = inputs::set_facts(&declared, &set)?;
+    let mut base_extra = set_facts;
     base_extra.extend(build_extra_facts(&cli.data)?);
-    base_extra.extend(dform::stack::stack_outputs(&root, &stack)?);
+    base_extra.extend(dform::stack::stack_outputs(&root, &deployment)?);
     let discovered = backend.discover()?;
     let scope = catalog_scope(&cli.cmd, &program, &base_extra, &discovered, &st);
     backend.load_schema(scope.as_ref())?;
@@ -545,6 +596,26 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
         (res, violations) = evaluate(&st)?;
     }
     // Policy messages quote values and rule text: printed redacted.
+    // The collision lint of a keyed stack: a name every deployment writes
+    // the same. A deny under strict mode.
+    if !stack_cfg.keys.is_empty()
+        && !stack_cfg.isolated
+        && matches!(cli.cmd, Cmd::Plan { .. } | Cmd::Apply { .. })
+    {
+        let keys: Vec<String> = stack_cfg.keys.iter().map(|(k, _)| k.clone()).collect();
+        for c in dform::lint::key_collisions(
+            &res.facts,
+            &res.circuit,
+            backend.schema(),
+            &keys,
+            &deployment,
+        ) {
+            match stack_cfg.unknowns {
+                dform::stack::Unknowns::Strict => violations.push(c),
+                dform::stack::Unknowns::Permissive => eprintln!("warning: {c}"),
+            }
+        }
+    }
     let redact = query::Redactor::new(&res.facts, backend.schema());
     for w in &res.warnings {
         eprintln!("warning: {}", redact.text(w));
@@ -564,7 +635,7 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
     // explain what blocks it.
     if !matches!(
         cli.cmd,
-        Cmd::Plan { .. } | Cmd::Query { .. } | Cmd::Why { .. }
+        Cmd::Plan { .. } | Cmd::Query { .. } | Cmd::Why { .. } | Cmd::Stack { .. }
     ) {
         blocked(&violations)?;
     }
@@ -776,6 +847,38 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
             println!("{}", json);
         }
         Cmd::Strata | Cmd::Test => unreachable!("handled before evaluation"),
+        Cmd::Stack {
+            cmd: StackCmd::Rekey { .. },
+        } => {
+            let Some(r) = rekey else {
+                unreachable!("rekey_args ran for rekey");
+            };
+            let keys: Vec<String> = stack_cfg.keys.iter().map(|(k, _)| k.clone()).collect();
+            let named = dform::lint::key_named(&res.facts, &res.circuit, backend.schema(), &keys);
+            if named.is_empty() {
+                println!(
+                    "no name-like attribute depends on the key ({})",
+                    keys.join(", ")
+                );
+            } else {
+                println!(
+                    "these name-like attributes depend on the key ({}); the next plan of {} \
+                     renames them, usually a replace:",
+                    keys.join(", "),
+                    r.to.name()
+                );
+                for n in &named {
+                    println!("  {n}");
+                }
+            }
+            let dir = dform::stack::rekey(&root, &base, &r.from, &r.to)?;
+            println!(
+                "stack {} rekeyed to {}: {}",
+                r.from.name(),
+                r.to.name(),
+                dir.display()
+            );
+        }
         Cmd::Fmt { .. }
         | Cmd::Controller { .. }
         | Cmd::Stack { .. }
@@ -883,8 +986,8 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
                     );
                 }
             }
-            // One apply at a time per stack.
-            let _lock = dform::stack::Lock::acquire(&paths.state, &stack)?;
+            // One apply at a time per deployment.
+            let _lock = dform::stack::Lock::acquire(&paths.state, &deployment)?;
             persist_externs(&mut st, &externs);
             let persist = |st: &state::State| st.save(&paths.state);
             if !moves.is_empty() {
@@ -1045,11 +1148,20 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
                         Default::default()
                     };
                     persist(&st)?;
-                    if (!st.outputs.is_empty() || stack_cfg.bootstrap) && cli.world.is_none() {
-                        dform::stack::register(&root, &stack, &paths.state, stack_cfg.bootstrap)?;
+                    // Every deployment of a keyed stack is registered.
+                    let keyed = instance.segment().is_some();
+                    if (!st.outputs.is_empty() || stack_cfg.bootstrap || keyed)
+                        && cli.world.is_none()
+                    {
+                        dform::stack::register(
+                            &root,
+                            &deployment,
+                            &paths.state,
+                            stack_cfg.bootstrap,
+                        )?;
                     }
                     if let Some(h) = hook.as_deref_mut() {
-                        h.finish(&stack, undeformed, &backend.observe(&st)?)?;
+                        h.finish(&deployment, undeformed, &backend.observe(&st)?)?;
                     } else if changed || tick > 1 {
                         println!("apply: complete");
                     } else {
@@ -1061,7 +1173,7 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
                     // Everything definite is held: wait for the next event.
                     st.in_flight = None;
                     persist(&st)?;
-                    h.finish(&stack, false, &backend.observe(&st)?)?;
+                    h.finish(&deployment, false, &backend.observe(&st)?)?;
                     break;
                 }
                 if !changed {
@@ -1127,10 +1239,18 @@ fn run_controller(cli: Cli) -> Result<()> {
     let files = default_files(&cli.files)?;
     let program = loader::load_program(&files)?;
     let cfg = dform::stack::config(&program)?;
-    let own = cfg
+    let name = cfg
         .name
         .clone()
         .unwrap_or_else(|| state::stack_name(&files[0]));
+    // One controller per deployment: of a keyed stack, the one `--set`
+    // selects.
+    let set = cli
+        .set
+        .iter()
+        .map(|kv| split_kv(kv).map(|(k, v)| (k.to_string(), v)))
+        .collect::<Result<Vec<_>>>()?;
+    let own = dform::stack::instance(&cfg, &name, &program, &inputs::set_facts(&[], &set)?)?.name();
     if let Some(s) = &stack
         && *s != own
     {
@@ -1202,6 +1322,103 @@ fn run_controller(cli: Cli) -> Result<()> {
             std::thread::sleep(std::time::Duration::from_millis(poll));
         }
     }
+}
+
+/// `stack rekey`: the deployment whose state moves, and where to.
+struct Rekey {
+    from: dform::stack::Instance,
+    to: dform::stack::Instance,
+}
+
+/// `stack rekey STACK K=V...`: STACK is the program's stack, and keyed; the
+/// pairs are the old key, then the new one, each naming every key input
+/// once (the old one left out: the state from before the stack was keyed).
+/// The run is set to the old values (the new ones for the unkeyed state),
+/// so it evaluates the deployment whose state moves.
+fn rekey_args(
+    cli: &mut Cli,
+    cfg: &dform::stack::Stack,
+    files: &[PathBuf],
+    stack: &str,
+    pairs: &[String],
+) -> Result<Rekey> {
+    let own = cfg
+        .name
+        .clone()
+        .unwrap_or_else(|| state::stack_name(&files[0]));
+    if stack != own {
+        bail!(
+            "stack rekey {stack}: the program ({}) owns stack {own}",
+            files[0].display()
+        );
+    }
+    if cli.world.is_some() {
+        bail!(
+            "stack rekey {stack}: with --world the state sits beside the world file; \
+             there is nothing to move"
+        );
+    }
+    let keys: Vec<&str> = cfg.keys.iter().map(|(k, _)| k.as_str()).collect();
+    if keys.is_empty() {
+        bail!(
+            "stack rekey {stack}: the stack has no key; key it first (`stack {stack}[env] {{ .. }}`)"
+        );
+    }
+    let side = |pairs: &[String]| -> Result<Vec<(String, String)>> {
+        for p in pairs {
+            let Some((k, _)) = p.split_once('=') else {
+                bail!("stack rekey {stack}: expected K=V, got '{p}'");
+            };
+            if !keys.contains(&k) {
+                bail!(
+                    "stack rekey {stack}: {k} is not a key of the stack (its key: {})",
+                    keys.join(", ")
+                );
+            }
+        }
+        keys.iter()
+            .map(|k| {
+                let vs: Vec<&str> = pairs
+                    .iter()
+                    .filter_map(|p| p.split_once('='))
+                    .filter(|(x, _)| x == k)
+                    .map(|(_, v)| v)
+                    .collect();
+                match vs.as_slice() {
+                    [v] => Ok((k.to_string(), v.to_string())),
+                    [] => bail!("stack rekey {stack}: no value for the key input {k}"),
+                    _ => bail!("stack rekey {stack}: {k} is given twice on one side"),
+                }
+            })
+            .collect()
+    };
+    let n = keys.len();
+    let (from, to) = if pairs.len() == n {
+        (Vec::new(), side(pairs)?)
+    } else if pairs.len() == 2 * n {
+        (side(&pairs[..n])?, side(&pairs[n..])?)
+    } else {
+        bail!(
+            "stack rekey {stack} K=V...: the old key, then the new one, each naming {}",
+            keys.join(", ")
+        );
+    };
+    if from == to {
+        bail!("stack rekey {stack}: the old key and the new one are the same");
+    }
+    let run_as = if from.is_empty() { &to } else { &from };
+    cli.set
+        .retain(|kv| !kv.split_once('=').is_some_and(|(x, _)| keys.contains(&x)));
+    cli.set
+        .extend(run_as.iter().map(|(k, v)| format!("{k}={v}")));
+    let instance = |key| dform::stack::Instance {
+        stack: own.clone(),
+        key,
+    };
+    Ok(Rekey {
+        from: instance(from),
+        to: instance(to),
+    })
 }
 
 /// The keys of the program's own `input("k", v)` facts.
@@ -1304,7 +1521,7 @@ fn taint(cli: &Cli, stack: &str, pred: &str, args: &[String]) -> Result<()> {
         Some(w) => state::world_paths(&root, w).state,
         None => match dform::stack::registry(&root)?.remove(stack) {
             Some(e) => e.state,
-            None => state::stack_paths(&root, stack).state,
+            None => state::state_path(dform::stack::instance_dir(&root, stack)),
         },
     };
     let call = format!("{pred}({})", args.join(", "));

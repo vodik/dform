@@ -105,6 +105,10 @@ fn space(prev: &SyntaxToken, cur: &SyntaxToken) -> &'static str {
     {
         return "";
     }
+    // A stack's key: `stack app[env, region]`.
+    if (matches!(c, L_BRACKET | R_BRACKET) || p == L_BRACKET) && cp == Some(STACK) {
+        return "";
+    }
     if matches!(p, PLUS | MINUS) && matches!(pp, Some(UNARY_EXPR | BIND_ARG)) {
         return "";
     }

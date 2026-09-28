@@ -1,0 +1,465 @@
+//! Keyed stacks: `stack app[env]` makes each value of the key its own
+//! deployment, with its own state, lock, registry entry and controller.
+//! Inputs outside the key are parameters of a deployment.
+
+mod common;
+use common::{Scratch, repo};
+
+/// A vpc whose cidr (force_new) and name depend on the key, and whose
+/// size is a parameter.
+const APP: &str = r#"edition 2026
+input env: enum("staging", "stg", "prod") = "staging"
+input size: int = 1
+stack app[env] {}
+net_of("staging", "10.1.0.0/16")
+net_of("stg", "10.1.0.0/16")
+net_of("prod", "10.2.0.0/16")
+resource net.vpc main {
+  name = "main-{env}"
+  cidr = net_of[env]
+  size = size
+}
+"#;
+
+/// The headline: with one state for every environment, planning prod
+/// after applying staging replaced staging's objects. Keyed, prod is its
+/// own deployment: it creates.
+#[test]
+fn planning_prod_after_applying_staging_proposes_creates() {
+    let s = Scratch::new("keyed-headline");
+    s.write("app.df", APP);
+    s.run(&["--file", "app.df", "apply"]).success();
+    let prod = s
+        .run(&["--file", "app.df", "plan", "--set", "env=prod"])
+        .success();
+    assert_eq!(
+        prod.summary(),
+        "plan: 1 deformation (1 create)",
+        "{}",
+        prod.stdout
+    );
+    // Staging is still what was applied; a parameter deforms it in place.
+    let staging = s.run(&["--file", "app.df", "plan"]).success();
+    assert_eq!(
+        staging.summary(),
+        "stack app is undeformed",
+        "{}",
+        staging.stdout
+    );
+    let size = s
+        .run(&["--file", "app.df", "plan", "--set", "size=2"])
+        .success();
+    assert!(
+        size.stdout.contains("~ net.vpc.main\n  size: 1 -> 2\n"),
+        "{}",
+        size.stdout
+    );
+}
+
+/// dform.df is keyed by env: prod's plan after staging's apply creates.
+#[test]
+fn dform_df_plans_prod_after_staging_as_creates() {
+    let s = Scratch::new("keyed-dform");
+    let file = repo().join("dform.df");
+    let root = s.path(".");
+    let args = |more: &[&'static str]| {
+        let mut v = vec![
+            "--root".to_string(),
+            root.to_str().unwrap().to_string(),
+            "--file".to_string(),
+            file.to_str().unwrap().to_string(),
+        ];
+        v.extend(more.iter().map(|m| m.to_string()));
+        v
+    };
+    let run = |more: &[&'static str]| {
+        let a = args(more);
+        s.run(&a.iter().map(String::as_str).collect::<Vec<_>>())
+    };
+    run(&["apply"]).success();
+    assert!(s.path(".dform/dform/env=staging/state.json").exists());
+    let prod = run(&["plan", "--set", "env=prod"]).success();
+    let summary = prod.summary();
+    assert!(
+        summary.starts_with("plan: ") && summary.ends_with(" create)"),
+        "{}",
+        prod.stdout
+    );
+}
+
+/// Each deployment has its own directory and registry entry, named by the
+/// key.
+#[test]
+fn the_key_names_the_state_and_the_registry_entry() {
+    let s = Scratch::new("keyed-dirs");
+    s.write("app.df", APP);
+    s.run(&["--file", "app.df", "apply"]).success();
+    s.run(&["--file", "app.df", "apply", "--set", "env=prod"])
+        .success();
+    assert!(s.path(".dform/app/env=staging/state.json").exists());
+    assert!(s.path(".dform/app/env=prod/state.json").exists());
+    assert!(!s.path(".dform/app/state.json").exists());
+    let registry: serde_json::Value = serde_json::from_str(&s.read(".dform/stacks.json")).unwrap();
+    for (name, dir) in [
+        ("app[env=staging]", "env=staging"),
+        ("app[env=prod]", "env=prod"),
+    ] {
+        let state = registry[name].as_str().unwrap_or_default();
+        assert!(
+            state.ends_with(&format!("app/{dir}/state.json")),
+            "{registry}"
+        );
+    }
+}
+
+/// A key value is escaped for the file system: `/`, a space, `=`, `,` and
+/// a leading `.` never reach a path raw. Two keys are joined by `,`.
+#[test]
+fn key_values_are_escaped_and_joined() {
+    let s = Scratch::new("keyed-escape");
+    s.write(
+        "app.df",
+        r#"edition 2026
+input team: string
+input region: string = "us-east1"
+stack app[team, region] {}
+resource net.vpc main {
+  name = "main-{team}-{region}"
+}
+"#,
+    );
+    s.run(&["--file", "app.df", "apply", "--set", "team=a/b c,=.x"])
+        .success();
+    assert!(
+        s.path(".dform/app/team=a%2Fb%20c%2C%3D.x,region=us-east1/state.json")
+            .exists()
+    );
+    let registry = s.read(".dform/stacks.json");
+    assert!(
+        registry.contains("\"app[team=a%2Fb%20c%2C%3D.x,region=us-east1]\""),
+        "{registry}"
+    );
+    s.run(&["--file", "app.df", "apply", "--set", "team=.."])
+        .success();
+    assert!(
+        s.path(".dform/app/team=%2E.,region=us-east1/state.json")
+            .exists()
+    );
+}
+
+/// A key input with no value is an error that names it; a key that is not
+/// an input is an error at the header.
+#[test]
+fn a_key_needs_an_input_and_a_value() {
+    let s = Scratch::new("keyed-errors");
+    s.write(
+        "app.df",
+        r#"edition 2026
+input env: string
+stack app[env] {}
+"#,
+    );
+    let r = s.run(&["--file", "app.df", "plan"]).failure();
+    assert!(
+        r.stderr
+            .contains("stack app is keyed by input env, which has no value"),
+        "{}",
+        r.stderr
+    );
+    assert!(r.stderr.contains("--set env="), "{}", r.stderr);
+
+    s.write(
+        "bad.df",
+        r#"edition 2026
+input env: string = "dev"
+stack app[region] {}
+"#,
+    );
+    let r = s.run(&["--file", "bad.df", "plan"]).failure();
+    assert!(
+        r.stderr
+            .contains("stack app is keyed by region, which is not an input of the stack"),
+        "{}",
+        r.stderr
+    );
+    assert!(r.stderr.contains("bad.df:3:11"), "{}", r.stderr);
+}
+
+/// `stack_output("app[env=prod]", k, v)` reads one deployment's outputs.
+#[test]
+fn stack_output_addresses_one_deployment() {
+    let s = Scratch::new("keyed-outputs");
+    s.write(
+        "app.df",
+        r#"edition 2026
+input env: string = "staging"
+stack app[env] {}
+output url = "https://{env}.example"
+"#,
+    );
+    s.write(
+        "web.df",
+        r#"edition 2026
+stack web {}
+resource net.vpc edge {
+  for stack_output("app[env=prod]", "url", u)
+  name = u
+}
+"#,
+    );
+    s.run(&["--file", "app.df", "apply"]).success();
+    s.run(&["--file", "app.df", "apply", "--set", "env=prod"])
+        .success();
+    let r = s.run(&["--file", "web.df", "plan"]).success();
+    assert!(
+        r.stdout
+            .contains("+ net.vpc.edge\n  name = \"https://prod.example\"\n"),
+        "{}",
+        r.stdout
+    );
+}
+
+/// `stack rekey` moves one deployment's state to another key value and
+/// first lists what the new key renames; nothing else changes.
+#[test]
+fn rekey_lists_what_the_key_renames_and_moves_the_state() {
+    let s = Scratch::new("keyed-rekey");
+    s.write("app.df", APP);
+    s.run(&["--file", "app.df", "apply"]).success();
+    let r = s
+        .run(&[
+            "--file",
+            "app.df",
+            "stack",
+            "rekey",
+            "app",
+            "env=staging",
+            "env=stg",
+        ])
+        .success();
+    assert!(
+        r.stdout.contains(
+            "these name-like attributes depend on the key (env); the next plan of \
+             app[env=stg] renames them, usually a replace:\n  net.vpc.main name = \"main-staging\"\n"
+        ),
+        "{}",
+        r.stdout
+    );
+    assert!(!s.path(".dform/app/env=staging").exists());
+    assert!(s.path(".dform/app/env=stg/state.json").exists());
+    let registry = s.read(".dform/stacks.json");
+    assert!(registry.contains("\"app[env=stg]\""), "{registry}");
+    assert!(!registry.contains("env=staging"), "{registry}");
+    let r = s
+        .run(&["--file", "app.df", "plan", "--set", "env=stg"])
+        .success();
+    assert!(
+        r.stdout
+            .contains("~ net.vpc.main\n  name: \"main-staging\" -> \"main-stg\"\n"),
+        "{}",
+        r.stdout
+    );
+}
+
+/// With no name that depends on the key, the rekeyed deployment is
+/// undeformed.
+#[test]
+fn rekey_moves_state_and_the_next_plan_is_undeformed() {
+    let s = Scratch::new("keyed-rekey-same");
+    s.write(
+        "app.df",
+        r#"edition 2026
+input env: string = "staging"
+stack app[env] { isolated = true }
+resource net.vpc main {
+  name = "main"
+}
+"#,
+    );
+    s.run(&["--file", "app.df", "apply"]).success();
+    let r = s
+        .run(&[
+            "--file",
+            "app.df",
+            "stack",
+            "rekey",
+            "app",
+            "env=staging",
+            "env=stg",
+        ])
+        .success();
+    assert!(
+        r.stdout
+            .contains("no name-like attribute depends on the key (env)"),
+        "{}",
+        r.stdout
+    );
+    let r = s
+        .run(&["--file", "app.df", "plan", "--set", "env=stg"])
+        .success();
+    assert_eq!(
+        r.summary(),
+        "stack app is undeformed",
+        "{}{}",
+        r.stdout,
+        r.stderr
+    );
+}
+
+/// A stack keyed after it was applied: its state is not any deployment's.
+/// The plan says so, and `rekey` with the new key only moves it.
+#[test]
+fn rekey_moves_the_state_from_before_the_stack_was_keyed() {
+    let s = Scratch::new("keyed-legacy");
+    let unkeyed = APP.replace("stack app[env] {}", "stack app {}");
+    s.write("app.df", &unkeyed);
+    s.run(&["--file", "app.df", "apply"]).success();
+    s.write("app.df", APP);
+    let r = s.run(&["--file", "app.df", "plan"]).success();
+    assert!(
+        r.stderr
+            .contains("move it to this one with `dform stack rekey app env=staging`"),
+        "{}",
+        r.stderr
+    );
+    s.run(&["--file", "app.df", "stack", "rekey", "app", "env=staging"])
+        .success();
+    assert!(!s.path(".dform/app/state.json").exists());
+    let r = s.run(&["--file", "app.df", "plan"]).success();
+    assert_eq!(r.summary(), "stack app is undeformed", "{}", r.stdout);
+}
+
+const FIXED: &str = r#"edition 2026
+input env: string = "staging"
+stack app[env] {}
+resource net.vpc logs {
+  bucket = "company-logs"
+}
+resource net.vpc main {
+  name = "main-{env}"
+}
+"#;
+
+/// In a keyed stack, a name-like attribute that does not depend on the key
+/// is written the same by every deployment: a warning at the field.
+#[test]
+fn a_fixed_bucket_name_in_a_keyed_stack_is_a_warning() {
+    let s = Scratch::new("keyed-lint");
+    s.write("app.df", FIXED);
+    let r = s.run(&["--file", "app.df", "plan"]).success();
+    assert!(
+        r.stderr.contains(
+            "warning: app.df:5:3: net.vpc.logs bucket = \"company-logs\" does not depend on \
+             the stack's key (env)"
+        ),
+        "{}",
+        r.stderr
+    );
+    assert!(!r.stderr.contains("net.vpc.main"), "{}", r.stderr);
+    // Isolated deployments do not share names.
+    s.write(
+        "app.df",
+        &FIXED.replace("stack app[env] {}", "stack app[env] { isolated = true }"),
+    );
+    let r = s.run(&["--file", "app.df", "plan"]).success();
+    assert!(!r.stderr.contains("does not depend"), "{}", r.stderr);
+}
+
+/// Under strict mode the collision is a deny.
+#[test]
+fn a_fixed_bucket_name_is_denied_under_strict() {
+    let s = Scratch::new("keyed-lint-strict");
+    s.write(
+        "app.df",
+        &FIXED.replace(
+            "stack app[env] {}",
+            "stack app[env] { unknowns = \"strict\" }",
+        ),
+    );
+    let r = s.run(&["--file", "app.df", "plan"]).failure();
+    assert!(
+        r.stderr
+            .contains("constraint violations:\n- app.df:5:3: net.vpc.logs bucket"),
+        "{}",
+        r.stderr
+    );
+    assert!(r.stderr.contains("blocked by constraints"), "{}", r.stderr);
+}
+
+/// One controller per deployment: `--stack` names the key value.
+#[test]
+fn the_controller_runs_one_deployment() {
+    let s = Scratch::new("keyed-controller");
+    s.write("app.df", APP);
+    let r = s
+        .run(&[
+            "--file",
+            "app.df",
+            "controller",
+            "--once",
+            "--stack",
+            "app[env=prod]",
+            "--set",
+            "env=prod",
+        ])
+        .success();
+    assert!(
+        r.stdout.contains("controller app[env=prod]"),
+        "{}",
+        r.stdout
+    );
+    assert!(s.path(".dform/app/env=prod/state.json").exists());
+    assert!(!s.path(".dform/app/env=staging").exists());
+    let r = s
+        .run(&[
+            "--file",
+            "app.df",
+            "controller",
+            "--once",
+            "--stack",
+            "app[env=prod]",
+        ])
+        .failure();
+    assert!(
+        r.stderr.contains("owns stack app[env=staging]"),
+        "{}",
+        r.stderr
+    );
+}
+
+/// `handover` takes a deployment: its directory moves, the others stay.
+#[test]
+fn handover_takes_a_key() {
+    let s = Scratch::new("keyed-handover");
+    s.write("app.df", APP);
+    s.run(&["--file", "app.df", "apply"]).success();
+    s.run(&["--file", "app.df", "apply", "--set", "env=prod"])
+        .success();
+    let r = s
+        .run(&[
+            "--file",
+            "app.df",
+            "stack",
+            "handover",
+            "app[env=prod]",
+            "--to",
+            "local(\"moved\")",
+        ])
+        .success();
+    assert!(
+        r.stdout.contains("stack app[env=prod] handed over"),
+        "{}",
+        r.stdout
+    );
+    assert!(s.path("moved/state.json").exists());
+    assert!(s.path(".dform/app/env=staging/state.json").exists());
+    let r = s
+        .run(&["--file", "app.df", "apply", "--set", "env=prod"])
+        .failure();
+    assert!(
+        r.stderr.contains("stack app[env=prod] was handed over"),
+        "{}",
+        r.stderr
+    );
+    s.run(&["--file", "app.df", "apply"]).success();
+}
