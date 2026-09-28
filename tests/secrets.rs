@@ -18,12 +18,11 @@
 //! design, not a leak. `leaky.oops`'s secret, mislabeled public, leaks
 //! through plan/apply output too — expected, it's what mislabeling means.
 //!
-//! Both secrets leak through `show`: the board already knows this (ticket
-//! "show and query print secrets unredacted", Phase 3) — that assertion is
-//! `#[ignore]`d with the ticket named in the reason, and demonstrated (not
-//! ignored) that it currently fails, so the suite stays green while the
-//! claim stays a claim until that ticket lands. `query` redacts (ticket
-//! "dform query with patterns and tables").
+//! `show`, `query`, `plan --json`, `query --json` and the policy
+//! messages on stderr print through one redactor (src/query.rs) and never
+//! print the labeled secret, also where a rule forwards it into another
+//! resource's attribute (ticket "show and query print secrets
+//! unredacted").
 
 mod common;
 use common::{Scratch, repo};
@@ -143,10 +142,8 @@ fn world_file_is_the_providers_own_storage_and_holds_both() {
     assert!(world.contains(OOPS_SECRET), "{world}");
 }
 
-/// Known-broken: `show` prints the raw fact-derived attrs with no
-/// redaction at all, so even the correctly labeled secret leaks.
+/// `show` prints the resource's attributes through the redactor.
 #[test]
-#[ignore = "ticket 'show and query print secrets unredacted': show does not redact yet"]
 fn show_never_prints_the_labeled_secret() {
     let s = Scratch::new("secrets-show");
     s.write("p.df", PROGRAM);
@@ -165,6 +162,14 @@ fn show_never_prints_the_labeled_secret() {
         ])
         .success();
     assert!(!r.stdout.contains(VAULT_SECRET), "{}", r.stdout);
+    assert!(
+        r.stdout
+            .contains(r#""password": {"sensitive": "leaky.vault/v#password"}"#)
+            || r.stdout
+                .contains("\"sensitive\": \"leaky.vault/v#password\""),
+        "{}",
+        r.stdout
+    );
 }
 
 /// `query` prints facts through the redacting printer (src/query.rs).
@@ -188,31 +193,42 @@ fn query_never_prints_the_labeled_secret() {
     assert!(!r.stdout.contains(VAULT_SECRET), "{}", r.stdout);
 }
 
-/// Demonstrates the leak the ignored show test above asserts against, so
-/// the report can name it precisely without relying on an ignored, unrun
-/// test: `show` currently prints the vault secret in full, byte for byte.
+/// A rule that copies the secret into another resource's public
+/// attribute, and a conflict at the sensitive path: neither the plan (text
+/// or JSON), `query --json`, nor the policy messages on stderr print it.
 #[test]
-fn show_currently_leaks_the_labeled_secret_documenting_the_bug() {
-    let s = Scratch::new("secrets-known-bug");
-    s.write("p.df", PROGRAM);
-    let schema = schema();
-    let show = s
-        .run(&[
-            "--file",
-            "p.df",
-            "--provider",
-            &schema,
-            "--world",
-            "w.json",
-            "show",
-            "leaky.vault",
-            "v",
-        ])
-        .success();
-    assert!(
-        show.stdout.contains(VAULT_SECRET),
-        "show no longer leaks the labeled secret -- if this is now fixed, \
-         un-ignore show_never_prints_the_labeled_secret and delete this test:\n{}",
-        show.stdout
+fn a_forwarded_secret_and_a_conflict_never_print() {
+    let s = Scratch::new("secrets-forwarded");
+    s.write(
+        "p.df",
+        &format!(
+            "{PROGRAM}
+resource leaky.oops copy {{ password = P }} :- arg(leaky.vault, v, password, P).
+"
+        ),
     );
+    let schema = schema();
+    let args = ["--file", "p.df", "--provider", &schema, "--world", "w.json"];
+    for cmd in [&["plan"][..], &["plan", "--json"], &["query", "arg", "--json"]] {
+        let r = s.run(&[&args[..], cmd].concat()).success();
+        assert!(!r.stdout.contains(VAULT_SECRET), "{cmd:?}: {}", r.stdout);
+        assert!(!r.stderr.contains(VAULT_SECRET), "{cmd:?}: {}", r.stderr);
+    }
+    let r = s.run(&[&args[..], &["plan"]].concat()).success();
+    assert!(
+        r.stdout
+            .contains("password = (sensitive leaky.vault/v#password)"),
+        "{}",
+        r.stdout
+    );
+
+    s.write(
+        "p.df",
+        &format!("{PROGRAM}\narg(leaky.vault, v, password, \"VAULT-SECRET-TWO\").\n"),
+    );
+    let r = s.run(&[&args[..], &["plan"]].concat()).failure();
+    assert!(r.stderr.contains("conflicting attribute contributions"), "{}", r.stderr);
+    for out in [&r.stdout, &r.stderr] {
+        assert!(!out.contains("VAULT-SECRET"), "{out}");
+    }
 }

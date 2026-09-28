@@ -223,8 +223,10 @@ fn main() -> Result<()> {
     if !moves.is_empty() {
         (res, violations) = evaluate(&st)?;
     }
+    // Policy messages quote values and rule text: printed redacted.
+    let redact = query::Redactor::new(&res.facts, backend.schema());
     for w in &res.warnings {
-        eprintln!("warning: {w}");
+        eprintln!("warning: {}", redact.text(w));
     }
     let blocked = |violations: &[String]| -> Result<()> {
         if violations.is_empty() {
@@ -232,7 +234,7 @@ fn main() -> Result<()> {
         }
         eprintln!("constraint violations:");
         for v in violations {
-            eprintln!("- {v}");
+            eprintln!("- {}", redact.text(v));
         }
         bail!("blocked by constraints");
     };
@@ -347,7 +349,7 @@ fn main() -> Result<()> {
             let Some(r) = resources.iter().find(|r| r.addr == addr) else {
                 bail!("resource not found");
             };
-            let json = serde_json::to_string_pretty(&r.attrs)?;
+            let json = serde_json::to_string_pretty(&redact.json(&r.attrs))?;
             println!("{}", json);
         }
         Cmd::Strata => unreachable!("handled before evaluation"),
@@ -579,13 +581,14 @@ fn main() -> Result<()> {
                 // The boundary.
                 executor::check_boundary(&backend, &seen, &pending, &st, tick)?;
                 let (next, violations) = evaluate(&st)?;
+                let redact = query::Redactor::new(&next.facts, backend.schema());
                 for w in &next.warnings {
-                    eprintln!("warning: {w}");
+                    eprintln!("warning: {}", redact.text(w));
                 }
                 if !violations.is_empty() {
                     eprintln!("constraint violations after tick {tick}:");
                     for v in &violations {
-                        eprintln!("- {v}");
+                        eprintln!("- {}", redact.text(v));
                     }
                     bail!("apply stopped after tick {tick}: blocked by constraints");
                 }

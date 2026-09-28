@@ -256,7 +256,11 @@ cargo run -- apply plan.json --chaos 'mutate=gke_cluster/pngu:name="other"'
 
 A `sensitive` computed value never leaves the provider: what dform sees, stores
 in consumers and prints is its label, `(sensitive T/N#Attr)`. A value at a
-`sensitive` path the program sets prints as `(sensitive)`.
+`sensitive` path the program sets prints as `(sensitive)` in a diff, and as its
+label wherever else it appears. Everything dform prints goes through one
+redactor: `plan` (text, `--json`, the plan file), `show`, `query`, `why`,
+`graph`, and the policy messages on stderr, whose context quotes values and
+rule text.
 
 ## Asking the fact store
 
