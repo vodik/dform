@@ -66,6 +66,10 @@ enum Cmd {
         /// latency=T/N:MS. Deterministic; nothing sleeps.
         #[arg(long = "chaos")]
         chaos: Vec<String>,
+        /// Stop after this many ticks (phase boundaries) if the stack is
+        /// still deformed.
+        #[arg(long = "max-ticks", default_value_t = 8)]
+        max_ticks: usize,
     },
     Query {
         pred: String,
@@ -106,7 +110,7 @@ fn main() -> Result<()> {
     };
     paths.inventory = resolve_inventory(&cli.inventory, &cli.world, &paths.inventory);
     let chaos = match &cli.cmd {
-        Cmd::Apply { chaos } => Chaos::parse(chaos)?,
+        Cmd::Apply { chaos, .. } => Chaos::parse(chaos)?,
         _ => Chaos::default(),
     };
     let backend =
@@ -116,11 +120,16 @@ fn main() -> Result<()> {
     let mut st = state::State::load(&paths.state)?;
     backend.bootstrap_state(&mut st)?;
 
-    let mut extra = build_extra_facts(&cli.set, &cli.data)?;
-    extra.extend(backend.catalog()?);
-    extra.extend(backend.discover()?);
-    extra.extend(backend.world_facts(&st)?);
-    let (res, violations) = engine::eval(&program, &extra)?;
+    let mut base_extra = build_extra_facts(&cli.set, &cli.data)?;
+    base_extra.extend(backend.catalog()?);
+    base_extra.extend(backend.discover()?);
+    // Refresh as facts: round 0 resolves every null the world can answer.
+    let evaluate = |st: &state::State| -> Result<(engine::EvalResult, Vec<String>)> {
+        let mut extra = base_extra.clone();
+        extra.extend(backend.world_facts(st)?);
+        engine::eval(&program, &extra)
+    };
+    let (res, violations) = evaluate(&st)?;
     for w in &res.warnings {
         eprintln!("warning: {w}");
     }
@@ -168,7 +177,7 @@ fn main() -> Result<()> {
             let plan = backend.plan(&resources, &adopts, &st)?;
             print_plan(&plan, cli.show_noop, &sections, &stack);
         }
-        Cmd::Apply { .. } => {
+        Cmd::Apply { max_ticks, .. } => {
             for addr in chaos.addresses() {
                 if !resources.iter().any(|r| &r.addr == addr) && st.get(addr).is_none() {
                     bail!(
@@ -178,32 +187,85 @@ fn main() -> Result<()> {
                     );
                 }
             }
-            let sections = plan_sections(&res, &resources, backend.schema());
-            let mut plan = backend.plan(&resources, &adopts, &st)?;
-            print_plan(&plan, cli.show_noop, &sections, &stack);
-            // A pending deformation waits for a boundary: not this apply.
-            plan.actions.retain(|a| {
-                !sections
-                    .pending
-                    .contains_key(&(a.addr.typ.clone(), a.addr.name.clone()))
-            });
-            let changed = plan
-                .actions
-                .iter()
-                .any(|a| !matches!(a.kind, ActionKind::Noop | ActionKind::Pending));
-            // Every apply is one tick of the fake world, also when there is
-            // nothing to do. State keeps every action that returned, also
-            // when a later one fails.
-            let res = backend.apply(&resources, &adopts, &mut st, &plan);
-            st.save(&paths.state)?;
-            for note in backend.take_notes() {
-                println!("chaos: {note}");
-            }
-            res?;
-            if changed {
-                println!("apply: complete");
-            } else {
-                println!("apply: nothing to do");
+            // Ticks (E §2.7): each applies every definite deformation in
+            // dependency order; what waits on a null is held. At the
+            // boundary the results come back as world facts, round 0
+            // resolves them, everything is re-derived and policy is checked
+            // again before the next tick.
+            let (mut res, mut resources, mut adopts) = (res, resources, adopts);
+            let mut tick = 1;
+            loop {
+                let sections = plan_sections(&res, &resources, backend.schema());
+                let mut plan = backend.plan(&resources, &adopts, &st)?;
+                let held: Vec<String> = plan
+                    .actions
+                    .iter()
+                    .filter_map(|a| waits_on(a, &sections))
+                    .flatten()
+                    .collect();
+                let boundary = !held.is_empty()
+                    || !sections.pending_groups.is_empty()
+                    || !sections.undetermined.is_empty();
+                if tick > 1 || boundary {
+                    println!("tick {tick}:");
+                }
+                print_plan(&plan, cli.show_noop, &sections, &stack);
+                plan.actions.retain(|a| waits_on(a, &sections).is_none());
+                let changed = plan
+                    .actions
+                    .iter()
+                    .any(|a| !matches!(a.kind, ActionKind::Noop));
+                // Every apply is at least one tick of the fake world, also
+                // when there is nothing to do. State keeps every action that
+                // returned, also when a later one fails.
+                if tick == 1 || changed {
+                    let applied = backend.apply(&resources, &adopts, &mut st, &plan);
+                    st.save(&paths.state)?;
+                    for note in backend.take_notes() {
+                        println!("chaos: {note}");
+                    }
+                    applied?;
+                }
+                if !boundary {
+                    if changed {
+                        println!("apply: complete");
+                    } else {
+                        println!("apply: nothing to do");
+                    }
+                    break;
+                }
+                if !changed {
+                    let mut waits: Vec<String> = sections.blocking.iter().cloned().collect();
+                    waits.extend(held);
+                    waits.sort();
+                    waits.dedup();
+                    let waits: Vec<String> = waits.iter().map(|n| format!("?{n}")).collect();
+                    bail!(
+                        "apply stopped at tick {tick}: nothing definite to apply, still waiting on {}",
+                        waits.join(" ")
+                    );
+                }
+                if tick == max_ticks {
+                    bail!(
+                        "apply stopped after {max_ticks} ticks (--max-ticks): the stack is still deformed"
+                    );
+                }
+                // The boundary.
+                let (next, violations) = evaluate(&st)?;
+                for w in &next.warnings {
+                    eprintln!("warning: {w}");
+                }
+                if !violations.is_empty() {
+                    eprintln!("constraint violations after tick {tick}:");
+                    for v in &violations {
+                        eprintln!("- {v}");
+                    }
+                    bail!("apply stopped after tick {tick}: blocked by constraints");
+                }
+                resources = ir::compile_resources(next.facts.iter().cloned(), backend.schema())?;
+                adopts = ir::compile_adopts(next.facts.iter())?;
+                res = next;
+                tick += 1;
             }
         }
     }

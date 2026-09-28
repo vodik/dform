@@ -81,3 +81,143 @@ fn apply_then_replan_is_undeformed() {
         "plan: 0 to create, 0 to update, 0 to delete\nstack dform is undeformed\n"
     );
 }
+
+fn gke(s: &Scratch, file: &str, extra: &[&str]) -> common::Run {
+    let prog = repo().join("examples/adversarial").join(file);
+    let args = [
+        "--file",
+        prog.to_str().unwrap(),
+        "--provider",
+        "gke",
+        "--world",
+        "w.json",
+    ];
+    s.run(&[&args[..], extra].concat())
+}
+
+fn world_resources(s: &Scratch) -> Vec<String> {
+    let w: serde_json::Value = serde_json::from_str(&s.read("w.json")).unwrap();
+    w["resources"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .cloned()
+        .collect()
+}
+
+/// E §2.7 item 6: tick 1 creates the subnet, the address and the cluster;
+/// the boundary resolves the cluster's zones, endpoint and ca; tick 2 creates
+/// a nodepool per zone and the kubernetes objects. Apply again: undeformed.
+#[test]
+fn gke_two_phase_applies_in_two_ticks() {
+    let s = Scratch::new("gke-ticks");
+    let r = gke(&s, "gke_two_phase.df", &["apply"]).success();
+    assert!(
+        r.stdout
+            .contains("tick 1:\nplan: 3 to create, 0 to update, 0 to delete, 3 pending\n"),
+        "{}",
+        r.stdout
+    );
+    assert!(
+        r.stdout
+            .contains("tick 2:\nplan: 5 to create, 0 to update, 0 to delete\n"),
+        "{}",
+        r.stdout
+    );
+    assert!(!r.stdout.contains("tick 3:"), "{}", r.stdout);
+    assert!(r.stdout.ends_with("apply: complete\n"), "{}", r.stdout);
+    assert_eq!(
+        world_resources(&s),
+        [
+            "gke_cluster::pngu",
+            "gke_nodepool::np-us-east1-b",
+            "gke_nodepool::np-us-east1-c",
+            "google_compute_address::static_ip",
+            "google_compute_subnetwork::gke_subnet",
+            "k8s.deployment::api",
+            "k8s.namespace::pngu",
+            "k8s.secret::db_credentials",
+        ]
+    );
+    let again = gke(&s, "gke_two_phase.df", &["apply"]).success();
+    assert_eq!(
+        again.stdout,
+        "plan: 0 to create, 0 to update, 0 to delete\nstack gke_two_phase is undeformed\napply: nothing to do\n"
+    );
+}
+
+/// The other branch of item 6: the cluster comes back with one zone, the
+/// policy derives at the boundary, and apply stops after tick 1 with the
+/// deny printed, before the nodepools and the kubernetes objects.
+#[test]
+fn gke_one_zone_stops_after_tick_one() {
+    let s = Scratch::new("gke-one-zone");
+    let r = gke(&s, "gke_one_zone.df", &["apply"]).failure();
+    assert!(r.stdout.contains("tick 1:"), "{}", r.stdout);
+    assert!(!r.stdout.contains("tick 2:"), "{}", r.stdout);
+    assert!(
+        r.stderr
+            .contains("- cluster must be in at least two zones ctx={\"cluster\":\"pngu\"}")
+            && r.stderr
+                .contains("apply stopped after tick 1: blocked by constraints"),
+        "{}",
+        r.stderr
+    );
+    assert_eq!(
+        world_resources(&s),
+        [
+            "gke_cluster::pngu",
+            "google_compute_address::static_ip",
+            "google_compute_subnetwork::gke_subnet",
+        ]
+    );
+}
+
+/// `--max-ticks` bounds the loop.
+#[test]
+fn max_ticks_bounds_the_loop() {
+    let s = Scratch::new("gke-max-ticks");
+    let r = gke(&s, "gke_two_phase.df", &["apply", "--max-ticks", "1"]).failure();
+    assert!(
+        r.stderr
+            .contains("apply stopped after 1 ticks (--max-ticks)"),
+        "{}",
+        r.stderr
+    );
+    assert_eq!(world_resources(&s).len(), 3);
+}
+
+/// An update pending on an open null (E §2.8) is decided and applied at
+/// the next tick, once the resource that owns the null exists.
+#[test]
+fn a_pending_update_applies_after_the_boundary() {
+    let s = Scratch::new("pending-update");
+    s.write(
+        "w.json",
+        r#"{"resources": {"compute.vm::app": {"typ": "compute.vm", "name": "app",
+            "attrs": {"db_host": "old.db.fake"}, "computed": {"id": "vm-1"}}}}"#,
+    );
+    s.write(
+        "p.df",
+        "resource db.postgres main { size = 1 }.\nresource compute.vm app { db_host = ref(db.postgres, main, endpoint) }.\n",
+    );
+    let args = ["--file", "p.df", "--world", "w.json"];
+    let r = s.run(&[&args[..], &["apply"]].concat()).success();
+    assert!(
+        r.stdout
+            .contains("tick 1:\nplan: 1 to create, 0 to update, 0 to delete, 1 pending\n"),
+        "{}",
+        r.stdout
+    );
+    assert!(
+        r.stdout.contains("tick 2:\nplan: 0 to create, 1 to update, 0 to delete\n~ compute.vm.app\n  db_host: \"old.db.fake\" -> \"main.db.fake\"\n"),
+        "{}",
+        r.stdout
+    );
+    let r = s.run(&[&args[..], &["plan"]].concat()).success();
+    assert!(
+        r.stdout.ends_with("stack p is undeformed\n"),
+        "{}",
+        r.stdout
+    );
+}

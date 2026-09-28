@@ -128,6 +128,17 @@ create, a delete, an update, or nothing. What cannot be decided yet is said so:
 
 `cargo run -- query stuck` lists the stuck rule instances.
 
+`apply` runs in ticks. A tick applies every definite deformation in dependency
+order and holds what is pending. At the boundary the results come back as
+world facts, round 0 resolves the nulls they answer, the program is
+re-evaluated and policy is checked again; a deny there stops the run with the
+reason printed. `--max-ticks N` (default 8) bounds the loop:
+
+```bash
+cargo run -- --file examples/adversarial/gke_two_phase.df --provider gke apply  # two ticks
+cargo run -- --file examples/adversarial/gke_one_zone.df --provider gke apply   # stops after tick 1
+```
+
 A `sensitive` computed value never leaves the provider: what dform sees, stores
 in consumers and prints is its label, `(sensitive T/N#Attr)`. A value at a
 `sensitive` path the program sets prints as `(sensitive)`.
