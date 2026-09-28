@@ -2674,9 +2674,15 @@ fn unify_term(pat: &Term, fv: &Value, out: &mut HashMap<String, Value>, rec: &Re
     }
 }
 
+/// A negated atom's pattern: every argument bound, but a wildcard, which
+/// matches anything (`not p(x, _)`: no `p` row with `x` first).
 fn ground_atom(atom: &Atom, state: &HashMap<String, Value>) -> Result<Atom> {
     let mut args = Vec::with_capacity(atom.args.len());
     for t in &atom.args {
+        if matches!(t, Term::Wildcard) {
+            args.push(Term::Wildcard);
+            continue;
+        }
         let v = eval_term(t, state).ok_or_else(|| anyhow!("unbound var in negation"))?;
         args.push(Term::Val(v));
     }
@@ -3418,6 +3424,23 @@ mod tests {
              snap(l) if all(l)")
         .unwrap();
         assert_eq!(facts_of(&r, "snap"), vec!["snap([1, 2, 3])".to_string()]);
+    }
+
+    /// A wildcard in a negated atom matches anything: `not has k` is
+    /// `not k(_)` (docs/grammar.md), `not p(x, _)` asks for no row with `x`
+    /// first.
+    #[test]
+    fn a_wildcard_in_a_negation_matches_anything() {
+        let (r, _) = run("p(1, 2)
+             k(0) if p(9, 9)
+             none(1) if not k(_)
+             lonely(x) if x in [1, 3], not p(x, _)
+             active = \"x\" if p(9, 9)
+             next = \"blue\" if not has active")
+        .unwrap();
+        assert_eq!(facts_of(&r, "none"), vec!["none(1)".to_string()]);
+        assert_eq!(facts_of(&r, "lonely"), vec!["lonely(3)".to_string()]);
+        assert_eq!(facts_of(&r, "next"), vec!["next(\"blue\")".to_string()]);
     }
 
     /// A cycle through negation is a compile error naming the cycle with
