@@ -71,7 +71,7 @@ fn why_prints_one_alternative_unless_all() {
         "{all}"
     );
     assert!(
-        all.contains("fact, statement 0 (p)") && all.contains("fact, statement 1 (q)"),
+        all.contains("fact, p.df:2:1 (p)") && all.contains("fact, p.df:2:7 (q)"),
         "{all}"
     );
 

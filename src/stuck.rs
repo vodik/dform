@@ -64,6 +64,7 @@ impl Stuck {
                 )),
             ],
             record: None,
+            span: Default::default(),
         }
     }
 }
@@ -104,6 +105,7 @@ pub fn head_pattern(
         pred: head.pred.clone(),
         args,
         record: None,
+        span: Default::default(),
     };
     normalize_contribution(pat)
 }
@@ -129,6 +131,7 @@ pub fn as_read(p: &Atom) -> Atom {
             pred: "attr".into(),
             args: p.args[..4].to_vec(),
             record: None,
+            span: Default::default(),
         };
     }
     p.clone()
@@ -255,6 +258,7 @@ pub fn sections(
                     Term::Wildcard,
                 ],
                 record: None,
+                span: Default::default(),
             };
             if patterns_unify(&read, &group) {
                 stuck_cells

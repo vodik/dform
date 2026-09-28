@@ -7,13 +7,17 @@
 use crate::common::{Scratch, repo};
 
 /// `dform --file REPO/FILE --world w.json ARGS` in a fresh scratch dir:
-/// stdout on success, panics with stderr otherwise.
+/// stdout on success (the repo's path stripped from the file names it
+/// prints, so snapshots are portable), panics with stderr otherwise.
 pub fn dform(file: &str, args: &[&str]) -> String {
     let s = Scratch::new("inspection");
     let file = repo().join(file);
     let mut all = vec!["--file", file.to_str().unwrap(), "--world", "w.json"];
     all.extend(args);
-    s.run(&all).success().stdout
+    s.run(&all)
+        .success()
+        .stdout
+        .replace(&format!("{}/", repo().display()), "")
 }
 
 /// Compare against tests/golden/inspection/NAME.txt, or write it when

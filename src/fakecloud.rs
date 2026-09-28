@@ -283,6 +283,7 @@ impl FakeCloud {
                 pred: "identity".into(),
                 args: vec![s(&addr.typ), s(&addr.name), s(&e.remote)],
                 record: None,
+                span: Default::default(),
             });
             let paths = self
                 .schema
@@ -303,6 +304,7 @@ impl FakeCloud {
                             Term::Val(json_to_value(v)),
                         ],
                         record: None,
+                        span: Default::default(),
                     });
                 }
             }
@@ -321,6 +323,7 @@ impl FakeCloud {
                     Term::Val(Value::Str(rr.name.clone())),
                 ],
                 record: None,
+                span: Default::default(),
             });
             // Flatten attrs + computed.
             flatten_json_facts(&mut out, "cloud_attr", &rr.typ, &rr.name, "", &rr.attrs);
@@ -1449,6 +1452,7 @@ fn flatten_json_facts(
                     Term::Val(val),
                 ],
                 record: None,
+                span: Default::default(),
             });
         }
     }

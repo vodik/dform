@@ -135,8 +135,9 @@ resource k8s.deployment api {
 }
 
 /// DR-9 revised and E §2.8: a shadowed disagreement is a section, and a
-/// conflict is a section naming the resource, the path and every witness;
-/// the conflicted address is not a deformation, and the plan refuses.
+/// conflict is a section naming the resource, the path and every witness
+/// with where it is written; the conflicted address is not a deformation,
+/// and the plan refuses.
 #[test]
 fn shadowed_and_conflicts_are_sections() {
     let s = Scratch::new("sections-conflict");
@@ -163,7 +164,8 @@ arg(net.vpc, two, cidr, "10.3.0.0/16").
     assert!(!r.stdout.contains("+ net.vpc.main"), "{}", r.stdout);
     for want in [
         "shadowed:\n! net.vpc.two cidr at rank default: two contributions disagree at cidr\n",
-        "conflicts:\n! net.vpc.main cidr: two contributions disagree\n    normal \"10.0.0.0/16\"  from arg(\"net.vpc\", \"main\", \"cidr\", \"10.0.0.0/16\", \"normal\")\n",
+        "conflicts:\n! net.vpc.main cidr: two contributions disagree\n    normal \"10.0.0.0/16\"  from arg(\"net.vpc\", \"main\", \"cidr\", \"10.0.0.0/16\", \"normal\") (at p.df:3:25)\n",
+        "    normal \"10.1.0.0/16\"  from arg(\"net.vpc\", \"main\", \"cidr\", \"10.1.0.0/16\", \"normal\") (at p.df:4:1)\n",
     ] {
         assert!(r.stdout.contains(want), "{want}\n---\n{}", r.stdout);
     }

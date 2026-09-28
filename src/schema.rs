@@ -321,6 +321,7 @@ impl Schema {
                 pred: f.pred.clone(),
                 args: args.into_iter().map(Term::Val).collect(),
                 record: None,
+                span: Default::default(),
             });
         }
         for (t, p) in s.list_keys.keys() {

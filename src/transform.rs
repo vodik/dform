@@ -1,7 +1,8 @@
 use crate::ast::{
-    Atom, Constraint, Extern, Lit, Program, Rank, Resource, RuleStmt, Settings, Stmt, Term, When,
+    Atom, Constraint, Extern, Lit, Program, Rank, Resource, RuleStmt, Settings, Span, Stmt, Term,
+    When,
 };
-use crate::diag::{Diagnostic, Diagnostics};
+use crate::diag::{self, Diagnostic, Diagnostics};
 use crate::schema::Schema;
 use crate::value::{NullClass, Value};
 use anyhow::{Result, bail};
@@ -32,6 +33,11 @@ pub fn lower(program: &Program) -> Result<Lowered> {
         program: expanded,
         externs,
     })
+}
+
+/// A lowering error at a statement.
+fn spanned(span: Span, msg: impl Into<String>) -> anyhow::Error {
+    Diagnostics(vec![Diagnostic::error(span, msg)]).into()
 }
 
 /// E §6 statements with no lowering yet are errors naming their ticket.
@@ -108,9 +114,10 @@ pub fn normalize_contribution(typ: &str, path: &str, value: Term) -> (String, Te
 /// constant path normalized.
 fn contribution_head(a: Atom) -> Result<Atom> {
     if a.pred == "merge_rule" {
-        bail!(
-            "merge_rule is gone: a path's lattice is declared with type_lattice(Type, Path, flat|map|set)"
-        );
+        return Err(spanned(
+            a.span,
+            "merge_rule is gone: a path's lattice is declared with type_lattice(Type, Path, flat|map|set)",
+        ));
     }
     let (typ, addr, path, value, rank) = match contribution_parts(&a) {
         Some((t, n, p, v)) => (t, n, p, v, str_term(NORMAL)),
@@ -131,6 +138,7 @@ fn contribution_head(a: Atom) -> Result<Atom> {
         pred: "arg".into(),
         args: vec![typ, addr, path, value, rank],
         record: None,
+        span: a.span,
     })
 }
 
@@ -138,9 +146,10 @@ fn contribution_head(a: Atom) -> Result<Atom> {
 /// `attr(T, A, P, V)`, the collapsed value (E §2.5).
 fn attr_read(a: Atom) -> Result<Atom> {
     if a.pred == "arg" && a.args.len() == 5 {
-        bail!(
-            "arg/5 in a rule body reads raw contributions; read the collapsed attr(T, A, P, V) instead"
-        );
+        return Err(spanned(
+            a.span,
+            "arg/5 in a rule body reads raw contributions; read the collapsed attr(T, A, P, V) instead",
+        ));
     }
     let Some((typ, addr, path, value)) = contribution_parts(&a) else {
         return Ok(a);
@@ -150,15 +159,19 @@ fn attr_read(a: Atom) -> Result<Atom> {
         && t != OUTPUT
         && p.contains('.')
     {
-        bail!(
-            "{}(..., {p:?}, ...) in a rule body: read the top-level attribute and destructure it",
-            a.pred
-        );
+        return Err(spanned(
+            a.span,
+            format!(
+                "{}(..., {p:?}, ...) in a rule body: read the top-level attribute and destructure it",
+                a.pred
+            ),
+        ));
     }
     Ok(Atom {
         pred: "attr".into(),
         args: vec![typ, addr, path, value],
         record: None,
+        span: a.span,
     })
 }
 
@@ -356,17 +369,22 @@ fn rewrite_atom_records(
         return Ok(atom);
     };
     let Some(order) = schemas.get(&atom.pred) else {
-        bail!(
-            "no schema for predicate '{}' (add decl {} {{ ... }})",
-            atom.pred,
-            atom.pred
-        );
+        return Err(spanned(
+            atom.span,
+            format!(
+                "no record fields declared for predicate '{}' (declare them with decl {}(Field: type, ...))",
+                atom.pred, atom.pred
+            ),
+        ));
     };
 
     // No extra fields.
     for k in fields.keys() {
         if !order.iter().any(|x| x == k) {
-            bail!("unknown field '{k}' for predicate '{}'", atom.pred);
+            return Err(spanned(
+                atom.span,
+                format!("unknown field '{k}' for predicate '{}'", atom.pred),
+            ));
         }
     }
 
@@ -377,17 +395,23 @@ fn rewrite_atom_records(
             Some(t) => args.push(t.clone()),
             None => {
                 if require_complete {
-                    bail!("missing field '{f}' for predicate '{}'", atom.pred);
+                    return Err(spanned(
+                        atom.span,
+                        format!("missing field '{f}' for predicate '{}'", atom.pred),
+                    ));
                 }
                 args.push(Term::Wildcard);
             }
         }
     }
     if require_complete && args.iter().any(|t| matches!(t, Term::Wildcard)) {
-        bail!(
-            "wildcards not allowed in fact/head for predicate '{}'",
-            atom.pred
-        );
+        return Err(spanned(
+            atom.span,
+            format!(
+                "wildcards not allowed in fact/head for predicate '{}'",
+                atom.pred
+            ),
+        ));
     }
 
     atom.args = args;
@@ -409,12 +433,13 @@ fn expand_component_defs_and_uses(program: &Program) -> Result<Program> {
             Stmt::ComponentDef(_) => {}
             Stmt::Use(u) => {
                 let Some(body) = defs.get(&u.name) else {
-                    bail!(
-                        "instance {} {} names an unknown module '{}'",
-                        u.name,
-                        u.inst,
-                        u.name
-                    );
+                    return Err(spanned(
+                        u.span,
+                        format!(
+                            "instance {} {} names an unknown module '{}'",
+                            u.name, u.inst, u.name
+                        ),
+                    ));
                 };
 
                 let mut comp_body: Vec<Stmt> = Vec::new();
@@ -424,6 +449,7 @@ fn expand_component_defs_and_uses(program: &Program) -> Result<Program> {
                         pred: "param".to_string(),
                         args: vec![Term::Val(Value::Str(k.clone())), v.clone()],
                         record: None,
+                        span: u.span,
                     };
                     if let Some(b) = &u.body {
                         comp_body.push(Stmt::Rule(RuleStmt {
@@ -435,7 +461,12 @@ fn expand_component_defs_and_uses(program: &Program) -> Result<Program> {
                     }
                 }
 
-                comp_body.extend(body.clone());
+                let mut body = body.clone();
+                set_origin(
+                    &mut body,
+                    diag::origin_id(&format!("module {} instance {}", u.name, u.inst)),
+                );
+                comp_body.extend(body);
                 out.push(Stmt::Component(crate::ast::Component {
                     comp: u.name.clone(),
                     inst: u.inst.clone(),
@@ -454,6 +485,48 @@ fn expand_component_defs_and_uses(program: &Program) -> Result<Program> {
     Ok(Program { statements: out })
 }
 
+/// Mark every statement (and each head, field and nested statement) as
+/// lowered out of `origin` (`diag::origin_id`): a pack or a module
+/// instance. What already has an origin keeps it.
+fn set_origin(stmts: &mut [Stmt], origin: u32) {
+    let fields = |fs: &mut [crate::ast::FieldAssign]| {
+        for f in fs {
+            f.span = f.span.within(origin);
+        }
+    };
+    for s in stmts {
+        match s {
+            Stmt::Fact(a) => a.span = a.span.within(origin),
+            Stmt::Rule(r) => r.head.span = r.head.span.within(origin),
+            Stmt::Constraint(c) => c.span = c.span.within(origin),
+            Stmt::Resource(r) => {
+                r.span = r.span.within(origin);
+                fields(&mut r.fields);
+            }
+            Stmt::Settings(st) => {
+                st.span = st.span.within(origin);
+                fields(&mut st.fields);
+            }
+            Stmt::When(w) => {
+                w.span = w.span.within(origin);
+                set_origin(&mut w.body, origin);
+            }
+            Stmt::Component(c) => {
+                c.span = c.span.within(origin);
+                set_origin(&mut c.body, origin);
+            }
+            Stmt::ComponentDef(d) => set_origin(&mut d.body, origin),
+            Stmt::PolicyPack(p) => set_origin(&mut p.body, origin),
+            Stmt::Use(u) => u.span = u.span.within(origin),
+            Stmt::ApplyPolicy(_)
+            | Stmt::Import(_)
+            | Stmt::Decl(_)
+            | Stmt::Extern(_)
+            | Stmt::Pending(_) => {}
+        }
+    }
+}
+
 fn expand_policy_packs(program: &Program) -> Result<Program> {
     let mut packs: BTreeMap<String, Vec<Stmt>> = BTreeMap::new();
     let mut applied = Vec::new();
@@ -463,7 +536,7 @@ fn expand_policy_packs(program: &Program) -> Result<Program> {
             Stmt::PolicyPack(p) => {
                 packs.insert(p.name.clone(), p.body.clone());
             }
-            Stmt::ApplyPolicy(a) => applied.push(a.name.clone()),
+            Stmt::ApplyPolicy(a) => applied.push((a.name.clone(), a.span)),
             _ => {}
         }
     }
@@ -477,11 +550,16 @@ fn expand_policy_packs(program: &Program) -> Result<Program> {
         }
     }
 
-    for name in applied {
+    for (name, span) in applied {
         let Some(body) = packs.get(&name) else {
-            bail!("apply {name} names an unknown policy '{name}'");
+            return Err(spanned(
+                span,
+                format!("apply {name} names an unknown policy '{name}'"),
+            ));
         };
-        out.extend(body.clone());
+        let mut body = body.clone();
+        set_origin(&mut body, diag::origin_id(&format!("policy {name}")));
+        out.extend(body);
     }
 
     Ok(Program { statements: out })
@@ -511,6 +589,7 @@ fn desugar_settings(program: &Program) -> Result<Program> {
                                 str_term(rank.name()),
                             ],
                             record: None,
+                            span: f.span,
                         };
                         out.push(fact_or_rule(head, &body));
                     }
@@ -605,6 +684,7 @@ fn rewrite_constraint_listcomps(
     let counts_all = count_vars_in_lits(&c.body);
     let mut helpers = Vec::new();
     c.body = rewrite_lits_listcomps(&c.body, &counts_all, counter, &mut helpers)?;
+    locate(&mut helpers, c.span);
     Ok((helpers, c))
 }
 
@@ -633,8 +713,18 @@ fn rewrite_rule_listcomps(mut r: RuleStmt, counter: &mut usize) -> Result<(Vec<S
     }
     r.head.args = new_args;
     r.body.extend(head_prefix);
+    locate(&mut helpers, r.head.span);
 
     Ok((helpers, r))
+}
+
+/// A comprehension's helper rules are where the comprehension is.
+fn locate(helpers: &mut [Stmt], span: Span) {
+    for h in helpers {
+        if let Stmt::Rule(r) = h {
+            r.head.span = span;
+        }
+    }
 }
 
 fn rewrite_lits_listcomps(
@@ -773,6 +863,7 @@ fn rewrite_term_listcomps(
                     pred: lc_pred.clone(),
                     args: helper_head_args,
                     record: None,
+                    span: Default::default(),
                 },
                 body,
             }));
@@ -786,6 +877,7 @@ fn rewrite_term_listcomps(
                     pred: lc_pred,
                     args: join_args,
                     record: None,
+                    span: Default::default(),
                 })],
             )
         }
@@ -975,11 +1067,12 @@ fn expand_component_stmt(stmt: &Stmt, out: &mut Vec<Stmt>) -> Result<()> {
                     Term::Val(Value::Str(scope.clone())),
                 ],
                 record: None,
+                span: c.span,
             }));
 
             for inner in &c.body {
-                if matches!(inner, Stmt::Component(_)) {
-                    bail!("nested components are not supported yet");
+                if let Stmt::Component(n) = inner {
+                    return Err(spanned(n.span, "nested components are not supported yet"));
                 }
                 out.push(rewrite_stmt(inner.clone(), &scope));
             }
@@ -1240,6 +1333,7 @@ fn resource_to_stmts(r: Resource) -> Result<Vec<Stmt>> {
             pred: "want".to_string(),
             args: vec![r.typ.clone(), r.name.clone()],
             record: None,
+            span: r.span,
         },
         &body,
     )];
@@ -1255,6 +1349,7 @@ fn resource_to_stmts(r: Resource) -> Result<Vec<Stmt>> {
                 str_term(rank.name()),
             ],
             record: None,
+            span: f.span,
         };
         out.push(fact_or_rule(head, &body));
     }
@@ -1288,6 +1383,7 @@ fn atom(pred: &str, args: Vec<Term>) -> Atom {
         pred: pred.into(),
         args,
         record: None,
+        span: Default::default(),
     }
 }
 
@@ -1429,14 +1525,20 @@ pub fn check_computed_writes(rules: &[RuleStmt], facts: &[Atom], schema: &Schema
                     Term::Val(v) => crate::partition::fmt_value(v),
                     other => crate::partition::fmt_term(other),
                 };
-                errors.push(format!(
-                    "resource {t} {addr}: attribute {path} is computed by the provider and cannot be set: {text}"
-                ));
+                errors.push(
+                    Diagnostic::error(
+                        h.span,
+                        format!(
+                            "resource {t} {addr}: attribute {path} is computed by the provider and cannot be set"
+                        ),
+                    )
+                    .with_note(format!("in: {text}")),
+                );
             }
         }
     }
     if !errors.is_empty() {
-        bail!("{}", errors.join("\n"));
+        return Err(Diagnostics(errors).into());
     }
     Ok(())
 }
@@ -1535,10 +1637,11 @@ pub fn rewrite_computed_refs(
     (out_rules, out_facts, constraints)
 }
 
-/// `deny("ref to an address no rule wants", {type, addr, path, from}) :-
-/// Body, not want(T, A).` for one ref `read` (`attr(T, A, P0, V)`) in the
-/// head of a rule with `body`. `from` names what holds the ref: the
-/// resource `T.A` for a contribution, else the head's predicate.
+/// `deny("ref to an address no rule wants", {type, addr, path, from, at})
+/// :- Body, not want(T, A).` for one ref `read` (`attr(T, A, P0, V)`) in
+/// the head of a rule with `body`. `from` names what holds the ref: the
+/// resource `T.A` for a contribution, else the head's predicate; `at` is
+/// where that is written.
 fn dangling_ref_deny(head: &Atom, read: &Atom, path: &str, mut body: Vec<Lit>) -> RuleStmt {
     let (typ, addr) = (read.args[0].clone(), read.args[1].clone());
     let from = if head.pred == "arg" && head.args.len() == 5 {
@@ -1580,14 +1683,20 @@ fn dangling_ref_deny(head: &Atom, read: &Atom, path: &str, mut body: Vec<Lit>) -
         }
     }
     body.insert(at, Lit::Not(atom("want", vec![typ.clone(), addr.clone()])));
-    let ctx = Term::Obj(BTreeMap::from([
+    let mut ctx = BTreeMap::from([
         ("type".to_string(), typ),
         ("addr".to_string(), addr),
         ("path".to_string(), str_term(path)),
         ("from".to_string(), from),
-    ]));
+    ]);
+    if let Some(at) = diag::place(head.span) {
+        ctx.insert("at".to_string(), str_term(&at));
+    }
     RuleStmt {
-        head: atom("deny", vec![str_term(DANGLING_REF), ctx]),
+        head: Atom {
+            span: head.span,
+            ..atom("deny", vec![str_term(DANGLING_REF), Term::Obj(ctx)])
+        },
         body,
     }
 }
@@ -1605,11 +1714,13 @@ fn rewrite_body_refs(body: Vec<Lit>, schema: &Schema, n: &mut usize) -> Vec<Lit>
                 pred: a.pred.clone(),
                 args: a.args.iter().map(&mut t).collect(),
                 record: None,
+                span: a.span,
             }),
             Lit::Not(a) => Lit::Not(Atom {
                 pred: a.pred.clone(),
                 args: a.args.iter().map(&mut t).collect(),
                 record: None,
+                span: a.span,
             }),
             Lit::Eq(a, b) => Lit::Eq(t(a), t(b)),
             Lit::Neq(a, b) => Lit::Neq(t(a), t(b)),
@@ -1638,6 +1749,7 @@ fn rewrite_atom_refs(
             .map(|t| rewrite_term_refs(t, schema, n, reads))
             .collect(),
         record: a.record.clone(),
+        span: a.span,
     }
 }
 

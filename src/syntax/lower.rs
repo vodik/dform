@@ -103,6 +103,7 @@ impl Lowerer {
             file: self.file,
             start: r.start().into(),
             end: r.end().into(),
+            origin: 0,
         }
     }
 
@@ -186,6 +187,7 @@ impl Lowerer {
                     file: self.file,
                     start: 0,
                     end: 0,
+                    origin: 0,
                 },
                 format!("missing the edition pragma `edition {EDITION_YEAR}.`"),
             )
@@ -685,6 +687,7 @@ impl Lowerer {
                     pred: "member".to_string(),
                     args: vec![list, item],
                     record: None,
+                    span: self.span(n),
                 };
                 Ok(vec![if n.kind() == LIT_IN {
                     Lit::Pos(member)
@@ -729,6 +732,7 @@ impl Lowerer {
                 pred,
                 args: Vec::new(),
                 record: Some(fields),
+                span: self.span(n),
             });
         }
         let args = self.args(n)?;
@@ -736,6 +740,7 @@ impl Lowerer {
             pred,
             args,
             record: None,
+            span: self.span(n),
         })
     }
 

@@ -199,12 +199,14 @@ pub fn deformation_facts<'a>(
                 s(&doc_digest(before.get(addr).and_then(Option::as_ref))),
             ],
             record: None,
+            span: Default::default(),
         });
         if seen.insert(addr) {
             out.push(Atom {
                 pred: "world_digest".into(),
                 args: vec![s(&addr.typ), s(&addr.name), s(&doc_digest(now.get(addr)))],
                 record: None,
+                span: Default::default(),
             });
         }
     }
@@ -776,6 +778,7 @@ mod tests {
                 crate::ast::Term::Val(Value::Str(v.into())),
             ],
             record: None,
+            span: Default::default(),
         }
     }
 

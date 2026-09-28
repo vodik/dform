@@ -308,6 +308,7 @@ pub fn constraint_rule(c: &Constraint) -> RuleStmt {
             pred: "deny".into(),
             args: vec![Term::Val(Value::Str(c.message.clone()))],
             record: None,
+            span: Default::default(),
         },
         body: c.body.clone(),
     }
@@ -749,7 +750,13 @@ pub fn cycle_error(g: &Graph, scc: &BTreeSet<Node>, negative_edges: &[Edge]) -> 
     );
     for e in negative_edges {
         let rule = match e.rule {
-            Some(i) => fmt_rule(&g.rules[i]),
+            Some(i) => {
+                let r = &g.rules[i];
+                match crate::diag::place(r.head.span) {
+                    Some(at) => format!("{} (at {at})", fmt_rule(r)),
+                    None => fmt_rule(r),
+                }
+            }
             None => "(compiler-generated)".into(),
         };
         out.push_str(&format!("\n  {} -> {} [{}]: {}", e.from, e.to, e.why, rule));

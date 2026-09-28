@@ -4,5 +4,5 @@ exit: error
 Error: program is not stratifiable: negative cycle through (arg, net.a, peer), (arg, net.b, name), (attr, net.a, peer), (attr, net.b, name)
   (arg, net.a, peer) -> (attr, net.a, peer) [attribute aggregate (lub_ranked)]: (compiler-generated)
   (arg, net.b, name) -> (attr, net.b, name) [attribute aggregate (lub_ranked)]: (compiler-generated)
-  (attr, net.b, name) -> (arg, net.a, peer) [reads attr (aggregate)]: arg("net.a", "x", "peer", P, "normal") :- attr("net.b", "y", "name", P)
-  (attr, net.a, peer) -> (arg, net.b, name) [reads attr (aggregate)]: arg("net.b", "y", "name", Q, "normal") :- attr("net.a", "x", "peer", Q)
+  (attr, net.b, name) -> (arg, net.a, peer) [reads attr (aggregate)]: arg("net.a", "x", "peer", P, "normal") :- attr("net.b", "y", "name", P) (at examples/adversarial/adv7_mutual_recursion_attr.df:7:3)
+  (attr, net.a, peer) -> (arg, net.b, name) [reads attr (aggregate)]: arg("net.b", "y", "name", Q, "normal") :- attr("net.a", "x", "peer", Q) (at examples/adversarial/adv7_mutual_recursion_attr.df:11:3)

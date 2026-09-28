@@ -97,6 +97,8 @@ pub struct Circuit {
     bindings: BTreeMap<NodeId, Vec<(String, Value)>>,
     /// Rule id -> rule text.
     rule_text: BTreeMap<String, String>,
+    /// Rule id -> where the rule is written (`diag::place`).
+    rule_at: BTreeMap<String, String>,
     /// Firings already absorbed or truncated, so naive re-evaluation does
     /// not re-test (or re-store) them.
     rejected: HashSet<(NodeId, Vec<NodeId>)>,
@@ -244,6 +246,15 @@ impl Circuit {
 
     pub fn rule_text(&self, id: &str) -> Option<&str> {
         self.rule_text.get(id).map(String::as_str)
+    }
+
+    /// Say where rule `id` is written, for printers.
+    pub fn locate_rule(&mut self, id: &str, at: String) {
+        self.rule_at.insert(id.to_string(), at);
+    }
+
+    pub fn rule_at(&self, id: &str) -> Option<&str> {
+        self.rule_at.get(id).map(String::as_str)
     }
 
     pub fn view(&self, id: NodeId) -> View<'_> {

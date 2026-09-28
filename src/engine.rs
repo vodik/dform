@@ -1,5 +1,6 @@
-use crate::ast::{Atom, Constraint, Lit, Program, RuleStmt, Stmt, Term};
+use crate::ast::{Atom, Constraint, Lit, Program, RuleStmt, Span, Term};
 use crate::circuit::{self, Circuit, Leaf, NodeId};
+use crate::diag;
 use crate::lattice::{self, Collapsed2, Lattice, Rank, RankedContribution, Shadowed, Witnesses};
 use crate::lattice::{Truth, nulls_in};
 use crate::partition::{self, Node};
@@ -64,8 +65,11 @@ impl Prov {
         self.record(a, vec![l], vec![]);
     }
 
-    fn rule(&mut self, id: String, text: &str) -> NodeId {
+    fn rule(&mut self, id: String, text: &str, span: Span) -> NodeId {
         self.circuit.name_rule(&id, text);
+        if let Some(at) = diag::place(span) {
+            self.circuit.locate_rule(&id, at);
+        }
         self.circuit.leaf(Leaf::Rule { id })
     }
 
@@ -127,39 +131,33 @@ pub fn eval(program: &Program, extra_facts: &[Atom]) -> Result<(EvalResult, Vec<
         facts.insert(g);
     }
 
-    // Source facts are known by statement index until the AST has spans.
-    let mut stmt_of: BTreeMap<Atom, usize> = BTreeMap::new();
-    for (i, stmt) in compiled.statements.iter().enumerate() {
-        if let Stmt::Fact(a) = stmt
-            && let Ok(g) = ensure_ground(a)
-        {
-            stmt_of.entry(g).or_insert(i);
-        }
-    }
     let (rules, constraints, fact_atoms) = (compiled.rules, compiled.constraints, compiled.facts);
     for r in &rules {
         if AGGREGATE_OUTPUTS.contains(&r.head.pred.as_str()) {
             bail!(
-                "{} is derived by the attribute aggregate; contribute with arg instead: {}",
+                "{} is derived by the attribute aggregate; contribute with arg instead: {}{}",
                 r.head.pred,
-                partition::fmt_rule(r)
+                partition::fmt_rule(r),
+                at_suffix(r.head.span)
             );
         }
         if LATTICE_DECLS.contains(&r.head.pred.as_str()) {
             bail!(
-                "{} must be a fact, not a rule: {}",
+                "{} must be a fact, not a rule: {}{}",
                 r.head.pred,
-                partition::fmt_rule(r)
+                partition::fmt_rule(r),
+                at_suffix(r.head.span)
             );
         }
     }
 
     for a in &fact_atoms {
         let g = ensure_ground(a)?;
-        origins.note(&g, partition::fmt_atom(&g));
-        let span = match stmt_of.get(&g) {
-            Some(i) => format!("statement {i} ({})", g.pred),
-            None => format!("compiler ({})", g.pred),
+        origins.note(&g, with_place(partition::fmt_atom(&g), g.span));
+        let span = match (diag::at(g.span), diag::origin(g.span)) {
+            (Some(at), Some(o)) => format!("{at} ({}, {o})", g.pred),
+            (Some(at), None) => format!("{at} ({})", g.pred),
+            (None, _) => format!("compiler ({})", g.pred),
         };
         prov.given(&g, Leaf::Base { span });
         facts.insert(g);
@@ -192,11 +190,12 @@ pub fn eval(program: &Program, extra_facts: &[Atom]) -> Result<(EvalResult, Vec<
     let rule_leaf: Vec<NodeId> = rule_text
         .iter()
         .enumerate()
-        .map(|(i, t)| prov.rule(format!("r{i}"), t))
+        .map(|(i, t)| prov.rule(format!("r{i}"), t, rules[i].head.span))
         .collect();
     let sigma = prov.rule(
         ATTR_SIGMA.into(),
         "attribute aggregate (lub_ranked, E §2.5)",
+        Span::default(),
     );
     let aggregates: BTreeSet<String> = rules
         .iter()
@@ -252,7 +251,10 @@ pub fn eval(program: &Program, extra_facts: &[Atom]) -> Result<(EvalResult, Vec<
                 derived.extend(eval_rule(r, &snapshot, rec)?.into_iter().map(|a| (*i, a)));
             }
             for (i, d) in derived {
-                origins.note(&d.head, rule_text[i].clone());
+                origins.note(
+                    &d.head,
+                    with_place(rule_text[i].clone(), rules[i].head.span),
+                );
                 let mut children = vec![rule_leaf[i]];
                 children.extend(d.used.iter().map(|k| prov.id(&snapshot[*k])));
                 for a in &d.absent {
@@ -293,6 +295,7 @@ pub fn eval(program: &Program, extra_facts: &[Atom]) -> Result<(EvalResult, Vec<
             pred: "deny".into(),
             args: vec![Term::Val(Value::Str(c.message.clone()))],
             record: None,
+            span: c.span,
         };
         let text = partition::fmt_rule(&partition::constraint_rule(c));
         let rec = Rec {
@@ -317,7 +320,11 @@ pub fn eval(program: &Program, extra_facts: &[Atom]) -> Result<(EvalResult, Vec<
         let f = st.fact();
         let by = match st.rule {
             Some(i) if i < rule_leaf.len() => rule_leaf[i],
-            Some(i) => prov.rule(format!("c{}", i - rules.len()), &st.text),
+            Some(i) => prov.rule(
+                format!("c{}", i - rules.len()),
+                &st.text,
+                constraints[i - rules.len()].span,
+            ),
             None => sigma,
         };
         prov.record(&f, vec![by], vec![]);
@@ -357,6 +364,7 @@ pub fn query(body: &[Lit], facts: &BTreeSet<Atom>) -> Result<Vec<Answer>> {
         pred: "query".into(),
         args: vec![],
         record: None,
+        span: Default::default(),
     };
     let known = RefCell::new(stuck::Known::default());
     let aggregates = BTreeSet::new();
@@ -411,25 +419,44 @@ fn check_defined(
                 continue;
             };
             if !is_defined(&a.pred) {
-                errors.push(format!(
-                    "undefined predicate {}/{} in rule: {text}",
-                    a.pred,
-                    a.args.len()
-                ));
+                errors.push(
+                    diag::Diagnostic::error(
+                        a.span,
+                        format!("undefined predicate {}/{}", a.pred, a.args.len()),
+                    )
+                    .with_note(format!("in rule: {text}"))
+                    .with_help(format!(
+                        "define it, or declare a predicate a provider feeds with `decl {}/{}.`",
+                        a.pred,
+                        a.args.len()
+                    )),
+                );
             }
         }
     }
     if !errors.is_empty() {
-        bail!(
-            "{}\n(declare a predicate a provider feeds with `decl p/N.`)",
-            errors.join("\n")
-        );
+        return Err(diag::Diagnostics(errors).into());
     }
     Ok(())
 }
 
+/// `text (at file:line:col, origin)`, or `text` for what the compiler wrote.
+fn with_place(text: String, span: Span) -> String {
+    match diag::place(span) {
+        Some(at) => format!("{text} (at {at})"),
+        None => text,
+    }
+}
+
+/// ` (at file:line:col)` for an error message, or nothing.
+fn at_suffix(span: Span) -> String {
+    diag::place(span)
+        .map(|at| format!(" (at {at})"))
+        .unwrap_or_default()
+}
+
 /// Where each contribution came from: the text of every rule that derived
-/// it, or "fact". The AST has no spans, so rule text is the provenance.
+/// it, or of the fact, with where it is written.
 #[derive(Default)]
 struct Origins(BTreeMap<Atom, BTreeSet<String>>);
 
@@ -523,6 +550,7 @@ impl AttrAggregate {
                     Term::Wildcard,
                 ],
                 record: None,
+                span: Default::default(),
             };
             let group_stuck = |nulls: BTreeSet<String>, reason: String| Stuck {
                 rule: None,
@@ -730,6 +758,7 @@ fn collapse_group(
             .chain(rest.into_iter().map(Term::Val))
             .collect(),
         record: None,
+        span: Default::default(),
     };
     let witness = |w: u32| {
         let (a, r, v) = &contribs[w as usize];
@@ -756,6 +785,7 @@ fn collapse_group(
         pred: pred.into(),
         args: vec![str_val(msg), Term::Val(ctx)],
         record: None,
+        span: Default::default(),
     };
     let mut out = Vec::new();
     let shadowed = match lattice::lub_ranked(lat, path, &cells) {
@@ -901,6 +931,7 @@ fn ensure_ground(a: &Atom) -> Result<Atom> {
         pred: a.pred.clone(),
         args,
         record: None,
+        span: a.span,
     })
 }
 
@@ -1040,6 +1071,7 @@ fn read_pattern(atom: &Atom, state: &HashMap<String, Value>) -> Atom {
             })
             .collect(),
         record: None,
+        span: Default::default(),
     }
 }
 
@@ -1208,6 +1240,7 @@ fn eval_rule_collect(
             pred: rule.head.pred.clone(),
             args: args_out,
             record: None,
+            span: Default::default(),
         };
         let mut key_pat = group.clone();
         key_pat.args[idx] = Term::Wildcard;
@@ -1743,6 +1776,7 @@ fn ground_atom(atom: &Atom, state: &HashMap<String, Value>) -> Result<Atom> {
         pred: atom.pred.clone(),
         args,
         record: None,
+        span: Default::default(),
     })
 }
 
@@ -1759,6 +1793,7 @@ fn instantiate_atom(atom: &Atom, state: &HashMap<String, Value>) -> Result<Atom>
         pred: atom.pred.clone(),
         args,
         record: None,
+        span: Default::default(),
     })
 }
 
@@ -2402,6 +2437,7 @@ fn u32_to_ipv4(v: u32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ast::Stmt;
 
     fn run(src: &str) -> Result<(EvalResult, Vec<String>)> {
         let program = crate::parser::parse_program(src)?;
@@ -2459,12 +2495,13 @@ mod tests {
             pred: "input".into(),
             args: vec![str_val(k), Term::Val(v)],
             record: None,
+            span: Default::default(),
         }
     }
 
     /// Two rules set one attribute to different values: no attr fact, an
     /// attr_conflict, and a deny naming the resource, the path and both
-    /// contributing rules.
+    /// contributing rules with where each is written.
     #[test]
     fn conflicting_contributions_derive_a_deny_naming_every_witness() {
         let (r, violations) = run("resource net.vpc main { cidr = \"10.0.0.0/16\" }.
@@ -2499,8 +2536,8 @@ mod tests {
         assert_eq!(
             from,
             vec![
-                "arg(\"net.vpc\", \"main\", \"cidr\", \"10.0.0.0/16\", \"normal\")".to_string(),
-                "arg(\"net.vpc\", \"main\", \"cidr\", \"10.1.0.0/16\", \"normal\") :- want(\"net.vpc\", \"main\")".to_string(),
+                "arg(\"net.vpc\", \"main\", \"cidr\", \"10.0.0.0/16\", \"normal\") (at <input>:1:25)".to_string(),
+                "arg(\"net.vpc\", \"main\", \"cidr\", \"10.1.0.0/16\", \"normal\") :- want(\"net.vpc\", \"main\") (at <input>:2:14)".to_string(),
             ]
         );
     }
@@ -3047,11 +3084,13 @@ mod tests {
             pred: "identity".into(),
             args: vec![s("vm"), s("a"), s("remote-a")],
             record: None,
+            span: Default::default(),
         });
         extra.push(Atom {
             pred: "world_attr".into(),
             args: vec![s("vm"), s("remote-a"), s("id"), s("vm-123")],
             record: None,
+            span: Default::default(),
         });
         let (r, _) = run_with(
             "resource vm a { size = 1 }.
@@ -3280,7 +3319,7 @@ mod tests {
         let (r, _) = run("p(1). p(2). s(2). q(X) :- p(X), not s(X).").unwrap();
         let why = why_leaves(&r, "q(1)");
         assert!(why.contains(&Leaf::Base {
-            span: "statement 0 (p)".into()
+            span: "<input>:1:1 (p)".into()
         }));
         assert!(why.contains(&Leaf::Absent {
             pattern: "s(1)".into()
@@ -3289,6 +3328,7 @@ mod tests {
             panic!("no rule leaf: {why:?}");
         };
         assert_eq!(r.circuit.rule_text(id), Some("q(X) :- p(X), not s(X)"));
+        assert_eq!(r.circuit.rule_at(id), Some("<input>:1:19"));
         let q = r
             .circuit
             .fact_id(&circuit_fact(

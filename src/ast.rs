@@ -139,11 +139,23 @@ pub struct Span {
     pub file: u32,
     pub start: u32,
     pub end: u32,
+    /// `diag` origin id: the policy pack or module instance a statement
+    /// was lowered out of; 0 for the program's own.
+    pub origin: u32,
 }
 
 impl Span {
     pub fn is_none(&self) -> bool {
         self.file == 0
+    }
+
+    /// This span, lowered out of `origin` unless it already was.
+    pub fn within(self, origin: u32) -> Span {
+        if self.origin == 0 {
+            Span { origin, ..self }
+        } else {
+            self
+        }
     }
 }
 
@@ -425,11 +437,26 @@ pub struct Constraint {
     pub span: Span,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// A predicate applied to terms. `span` is where it was written (or the
+/// statement it was lowered from); two atoms equal but for their spans are
+/// one fact.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Atom {
     pub pred: String,
     pub args: Vec<Term>,
     pub record: Option<BTreeMap<String, Term>>,
+    pub span: Span,
+}
+
+/// As derived before spans: a span is not part of an atom's printed form.
+impl std::fmt::Debug for Atom {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Atom")
+            .field("pred", &self.pred)
+            .field("args", &self.args)
+            .field("record", &self.record)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone)]

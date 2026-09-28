@@ -164,6 +164,7 @@ mod tests {
                 Term::Val(Value::Str("prod".to_string())),
             ],
             record: None,
+            span: Default::default(),
         };
         let (res, warnings) =
             crate::engine::eval(&program, &[set_env_prod]).expect("eval adopt_demo.df");

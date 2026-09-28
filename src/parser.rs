@@ -18,6 +18,7 @@ fn syntax_errors(file: u32, parse: &Parse) -> Vec<Diagnostic> {
                     file,
                     start: e.start as u32,
                     end: e.end as u32,
+                    origin: 0,
                 },
                 e.message.clone(),
             );

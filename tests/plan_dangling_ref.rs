@@ -25,6 +25,7 @@ resource net.subnet a { cidr = "10.0.1.0/24", vpc_id = ref(net.vpc, other, id) }
         r#""addr":"other""#,
         r#""path":"id""#,
         r#""from":"net.subnet.a""#,
+        r#""at":"p.df:4:47""#,
     ] {
         assert!(r.stderr.contains(want), "{want}: {}", r.stderr);
     }

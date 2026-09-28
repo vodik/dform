@@ -1034,5 +1034,6 @@ fn atom_kv(pred: &str, k: &str, v: Value) -> Atom {
         pred: pred.to_string(),
         args: vec![Term::Val(Value::Str(k.to_string())), Term::Val(v)],
         record: None,
+        span: Default::default(),
     }
 }

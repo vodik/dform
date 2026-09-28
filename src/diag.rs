@@ -47,9 +47,36 @@ pub fn at(span: Span) -> Option<String> {
     location(span).map(|(f, l, c)| format!("{f}:{l}:{c}"))
 }
 
-/// ` (file:line:col)` to append to a message, or nothing.
-pub fn suffix(span: Span) -> String {
-    at(span).map(|s| format!(" ({s})")).unwrap_or_default()
+static ORIGINS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// The id of an origin (`policy baseline`, `module network instance
+/// main`), for `Span::origin`.
+pub fn origin_id(name: &str) -> u32 {
+    let mut o = ORIGINS.lock().unwrap();
+    let i = match o.iter().position(|x| x == name) {
+        Some(i) => i,
+        None => {
+            o.push(name.to_string());
+            o.len() - 1
+        }
+    };
+    i as u32 + 1
+}
+
+pub fn origin(span: Span) -> Option<String> {
+    let o = ORIGINS.lock().unwrap();
+    o.get((span.origin as usize).checked_sub(1)?).cloned()
+}
+
+/// Where a statement is: `file:line:col`, then the pack or module
+/// instance it was lowered out of: `policies/baseline.df:10:3, policy
+/// baseline`. Nothing for a statement the compiler wrote.
+pub fn place(span: Span) -> Option<String> {
+    let at = at(span)?;
+    Some(match origin(span) {
+        Some(o) => format!("{at}, {o}"),
+        None => at,
+    })
 }
 
 #[derive(Debug, Clone)]

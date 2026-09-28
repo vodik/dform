@@ -141,6 +141,7 @@ impl Printer<'_> {
             pred: f.pred.clone(),
             args: f.args.iter().cloned().map(Term::Val).collect(),
             record: None,
+            span: Default::default(),
         })
     }
 
@@ -299,7 +300,8 @@ impl Printer<'_> {
     }
 
     /// An aggregate contribution's rank and owner: `arg/5`'s rank, and the
-    /// rule or statement of each of its firings.
+    /// rule or statement of each of its firings, with where it is written
+    /// and the pack or module instance it came from.
     fn owner(&self, id: NodeId) -> Option<String> {
         let View::Fact { fact, alts, .. } = self.circuit.view(id) else {
             return None;
@@ -316,7 +318,10 @@ impl Printer<'_> {
             for c in children {
                 match self.circuit.view(*c) {
                     View::Leaf(Leaf::Rule { id }) => {
-                        owners.insert(id.clone());
+                        owners.insert(match self.circuit.rule_at(id) {
+                            Some(at) => format!("{id} ({at})"),
+                            None => id.clone(),
+                        });
                     }
                     View::Leaf(Leaf::Base { span }) => {
                         owners.insert(span.clone());
