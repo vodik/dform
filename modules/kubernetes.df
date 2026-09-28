@@ -16,5 +16,6 @@ component_def kubernetes {
     param(nodepool_min, Min),
     param(nodepool_max, Max).
 
-  iam_need(app, k8s.describe_cluster, ref(k8s.cluster, cluster, id)).
+  # Only when the cluster exists in this environment.
+  iam_need(app, k8s.describe_cluster, ref(k8s.cluster, cluster, id)) :- param(private_api, _).
 }.

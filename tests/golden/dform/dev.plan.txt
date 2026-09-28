@@ -1,6 +1,6 @@
-exit: error
+exit: ok
 -- stdout --
-plan: 8 deformations (8 create)
+plan: 7 deformations (7 create)
 definite:
 + compute.vm.bastion
   private_ip = "10.90.0.21"
@@ -21,9 +21,6 @@ definite:
   tags.component = "network"
   tags.env = "dev"
   tags.team = "platform"
-+ net.vpc_peering.peer-main-peer
-  requester_vpc_id = ?net.vpc/network.main::vpc#id
-  tags.team = "platform"
 + net.subnet.network.main::private-us-test-1a
   cidr = "10.90.0.0/20"
   tags.team = "platform"
@@ -36,10 +33,5 @@ definite:
   visibility = "private"
   vpc_id = ?net.vpc/network.main::vpc#id
   zone = "us-test-1b"
-apply order: tick 1 [compute.vm.bastion iam.policy.iam.main::app_policy iam.role.iam.main::app_role iam.role_policy_attachment.iam.main::attach net.vpc.network.main::vpc net.vpc_peering.peer-main-peer net.subnet.network.main::private-us-test-1a net.subnet.network.main::private-us-test-1b]
+apply order: tick 1 [compute.vm.bastion iam.policy.iam.main::app_policy iam.role.iam.main::app_role iam.role_policy_attachment.iam.main::attach net.vpc.network.main::vpc net.subnet.network.main::private-us-test-1a net.subnet.network.main::private-us-test-1b]
 -- stderr --
-constraint violations:
-- ref to an address no rule wants ctx={"addr":"database.main::db","from":"iam_need","path":"id","type":"db.postgres"}
-- ref to an address no rule wants ctx={"addr":"kubernetes.main::cluster","from":"iam_need","path":"id","type":"k8s.cluster"}
-- ref to an address no rule wants ctx={"addr":"network.peer::vpc","from":"net.vpc_peering.peer-main-peer","path":"id","type":"net.vpc"}
-Error: blocked by constraints

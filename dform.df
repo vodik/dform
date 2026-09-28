@@ -102,6 +102,8 @@ resource net.vpc_peering Peer {
 } :-
   vpc_peer_inst(InstA, InstB),
   vpc_peer(A, B),
+  want(net.vpc, A),      # both ends must exist in this environment
+  want(net.vpc, B),
   Peer = format("peer-%s-%s", InstA, InstB).
 
 # Demo: allocate an IP from the main VPC.

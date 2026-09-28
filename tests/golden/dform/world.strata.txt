@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== dform.df: 132 nodes, 352 edges (149 negative)
+== dform.df: 132 nodes, 370 edges (149 negative)
    STRATIFIED, 13 strata
    stratum 0:
      (arg, iam.policy, name)
@@ -19,7 +19,6 @@ exit: ok
      (want, iam.role)
      (want, iam.role_policy_attachment)
      (want, net.route)
-     (want, net.vpc_peering)
      component_scope
      data
      env_name
@@ -38,7 +37,6 @@ exit: ok
      (arg, iam.role, id)
      (arg, iam.role_policy_attachment, id)
      (arg, net.route, id)
-     (arg, net.vpc_peering, id)
      (attr, iam.policy, name)
      (attr, iam.role, assume)
      (attr, iam.role, name)
@@ -61,14 +59,15 @@ exit: ok
      (arg, net.vpc, cidr)
      (arg, net.vpc, id)
      (arg, net.vpc, tags)
+     (arg, net.vpc_peering, id)
      (attr, iam.policy, id)
      (attr, iam.role, id)
      (attr, iam.role_policy_attachment, id)
      (attr, net.route, id)
-     (attr, net.vpc_peering, id)
      (want, compute.vm)
      (want, k8s.nodepool)
      (want, net.vpc)
+     (want, net.vpc_peering)
      param
    stratum 3:
      (arg, iam.role_policy_attachment, policy_id)
@@ -80,6 +79,7 @@ exit: ok
      (attr, k8s.nodepool, min)
      (attr, net.vpc, cidr)
      (attr, net.vpc, id)
+     (attr, net.vpc_peering, id)
    stratum 4:
      (arg, net.subnet, cidr)
      (arg, net.subnet, id)

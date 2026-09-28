@@ -10,5 +10,6 @@ component_def database {
     component_scope(network, main, NetScope),
     output(NetScope, private_subnet_ids, SubnetIds).
 
-  iam_need(app, db.connect, ref(db.postgres, db, id)).
+  # Only when the database exists in this environment.
+  iam_need(app, db.connect, ref(db.postgres, db, id)) :- param(backup_days, _).
 }.
