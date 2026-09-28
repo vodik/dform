@@ -18,6 +18,7 @@ The repo includes a demo program at `dform.df` that imports reusable chunks from
 cargo run -- plan
 cargo run -- apply
 cargo run -- plan --set env=prod
+cargo run -- test      # run the program's scenarios
 cargo run -- strata    # evaluation order: the partition graph's strata
 cargo run -- fmt modules/*.df          # format in place
 cargo run -- fmt --check $(git ls-files '*.df')   # CI: list unformatted files, fail
