@@ -206,11 +206,44 @@ fn print_strata(files: &[PathBuf], program: &dform::ast::Program) -> Result<()> 
     let graph = partition::build(program, &schema, &partition::Options::default())?;
     let verdict = partition::stratify(&graph);
     let name = files.iter().map(|f| f.display().to_string()).collect::<Vec<_>>().join(" ");
-    print!("{}", partition::report(&name, &graph, &verdict));
+    print!("{}", format_strata(&name, &graph, &verdict));
     if let partition::Verdict::Rejected { scc, negative_edges } = &verdict {
         bail!("{}", partition::cycle_error(&graph, scc, negative_edges));
     }
     Ok(())
+}
+
+/// A stable, multi-line rendering of the stratified case (one node per
+/// line, sorted) so `dform strata` can be pinned as a golden snapshot.
+/// Rejected (negative cycle) keeps `partition::report`'s own format.
+fn format_strata(name: &str, g: &partition::Graph, v: &partition::Verdict) -> String {
+    match v {
+        partition::Verdict::Stratified { strata } => {
+            let mut out = String::new();
+            out.push_str(&format!(
+                "== {name}: {} nodes, {} edges ({} negative)\n",
+                g.nodes.len(),
+                g.edges.len(),
+                g.edges.iter().filter(|e| e.negative).count()
+            ));
+            let max = strata.values().copied().max().unwrap_or(0);
+            out.push_str(&format!("   STRATIFIED, {} strata\n", max + 1));
+            let mut by: std::collections::BTreeMap<usize, Vec<String>> =
+                std::collections::BTreeMap::new();
+            for (n, s) in strata {
+                by.entry(*s).or_default().push(n.to_string());
+            }
+            for (s, mut ns) in by {
+                ns.sort();
+                out.push_str(&format!("   stratum {s}:\n"));
+                for n in ns {
+                    out.push_str(&format!("     {n}\n"));
+                }
+            }
+            out
+        }
+        partition::Verdict::Rejected { .. } => partition::report(name, g, v),
+    }
 }
 
 fn print_plan(plan: &dform::provider::Plan, show_noop: bool) {
