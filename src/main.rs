@@ -361,7 +361,7 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
         .unwrap_or_else(|| state::stack_name(&files[0]));
     let mut paths = match (&cli.world, &stack_cfg.backend) {
         (Some(w), _) => state::world_paths(&root, w),
-        (None, Some(dir)) => state::backend_paths(&root, dir),
+        (None, Some(dir)) => state::backend_paths(&root, &state::local_dir(&root, dir)),
         (None, None) => state::stack_paths(&root, &stack),
     };
     // A stack handed over to another backend lives there now.
@@ -387,9 +387,13 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
         .filter(|d| matches!(&d.decl.ty, dform::ast::TypeExpr::Apply(n, _) if n == "secret"))
         .map(|d| d.decl.name.clone())
         .collect();
-    let inputs = plan_inputs(&cli, &files, &secret_inputs, key.as_ref())?;
-    if let Some((path, saved)) = &saved {
-        let diff = saved.input_differences(&inputs);
+    // What the plan file records, when one is written or read.
+    let inputs = match &key {
+        Some(k) => Some(plan_inputs(&cli, &files, &secret_inputs, k)?),
+        None => None,
+    };
+    if let (Some((path, saved)), Some(inputs)) = (&saved, &inputs) {
+        let diff = saved.input_differences(inputs);
         if !diff.is_empty() {
             eprintln!(
                 "plan file {} is stale: its inputs are not this run's:",
@@ -816,7 +820,7 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
                 let file = zset::file::PlanFile {
                     version: zset::file::VERSION,
                     stack: stack.clone(),
-                    inputs,
+                    inputs: inputs.ok_or_else(|| anyhow::anyhow!("internal: no plan key"))?,
                     world_digest: zset::file::world_digest(&backend.world_facts(&st)?),
                     deformations,
                     pending_groups: report
@@ -1440,43 +1444,45 @@ fn print_query(
     Ok(())
 }
 
-/// This run's inputs as a plan file records them: a `--set` of a secret
-/// input as its label and, with the stack's key, the digest of its value.
+/// This run's inputs as a plan file records them: each `--input-file` and
+/// a `--set` of a secret input by their digest with the stack's key (the
+/// latter with its label).
 fn plan_inputs(
     cli: &Cli,
     files: &[PathBuf],
     secret: &BTreeSet<String>,
-    key: Option<&zset::file::Key>,
+    key: &zset::file::Key,
 ) -> Result<zset::file::Inputs> {
-    let digest = |fs: &[PathBuf]| {
-        fs.iter()
-            .map(|f| {
-                let bytes =
-                    std::fs::read(f).map_err(|e| anyhow::anyhow!("read {}: {e}", f.display()))?;
-                Ok(zset::file::FileDigest {
-                    path: f.display().to_string(),
-                    fnv64: zset::file::fnv64(&bytes),
-                })
-            })
-            .collect::<Result<Vec<_>>>()
-    };
-    let digests = digest(files)?;
+    let read =
+        |f: &PathBuf| std::fs::read(f).map_err(|e| anyhow::anyhow!("read {}: {e}", f.display()));
     let show = |p: &Option<PathBuf>| p.as_ref().map(|p| p.display().to_string());
     Ok(zset::file::Inputs {
-        files: digests,
-        input_files: digest(&cli.input_files)?,
+        files: files
+            .iter()
+            .map(|f| {
+                Ok(zset::file::FileDigest {
+                    path: f.display().to_string(),
+                    fnv64: zset::file::fnv64(&read(f)?),
+                })
+            })
+            .collect::<Result<_>>()?,
+        input_files: cli
+            .input_files
+            .iter()
+            .map(|f| {
+                Ok(zset::file::KeyedDigest {
+                    path: f.display().to_string(),
+                    digest: key.digest(&read(f)?),
+                })
+            })
+            .collect::<Result<_>>()?,
         set: cli
             .set
             .iter()
             .map(|kv| match kv.split_once('=') {
                 Some((k, v)) if secret.contains(k) => {
                     let label = dform::value::null_label(dform::modules::INPUT, "", k);
-                    match key {
-                        Some(key) => {
-                            serde_json::json!({ "sensitive": label, "digest": key.digest(v.as_bytes()) })
-                        }
-                        None => serde_json::json!({ "sensitive": label }),
-                    }
+                    serde_json::json!({ "sensitive": label, "digest": key.digest(v.as_bytes()) })
                 }
                 _ => serde_json::Value::String(kv.clone()),
             })

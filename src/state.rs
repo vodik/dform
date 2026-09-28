@@ -186,6 +186,14 @@ pub fn stack_paths(root: &Path, stack: &str) -> StackPaths {
     backend_paths(root, &root.join(stack))
 }
 
+/// The directory of a `local(DIR)` backend (a stack's, or a handover's):
+/// DIR relative to the directory holding the state root `root`
+/// (`<dir>/.dform`: `--root`, else the program's directory), not to the
+/// working directory.
+pub fn local_dir(root: &Path, dir: &Path) -> PathBuf {
+    root.parent().unwrap_or(Path::new("")).join(dir)
+}
+
 /// A stack whose backend is `local(dir)`: its state and world in `dir`.
 pub fn backend_paths(root: &Path, dir: &Path) -> StackPaths {
     StackPaths {

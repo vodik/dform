@@ -45,6 +45,52 @@ fn a_local_backend_holds_the_state() {
     );
 }
 
+/// `local(DIR)` is relative to the directory holding `.dform/` (the
+/// program's, or `--root`), not the working directory, and so is
+/// `handover --to local(DIR)`.
+#[test]
+fn a_local_backend_is_relative_to_the_root() {
+    let s = Scratch::new("lang-stack-backend-root");
+    s.write(
+        "infra/p.df",
+        "edition 2026.\nstack x { backend = local(\"state/x\") }.\nresource net.vpc main { cidr = \"10.0.0.0/16\" }.\n",
+    );
+    s.run(&["--file", "infra/p.df", "apply"]).success();
+    assert!(s.path("infra/state/x/state.json").exists());
+    assert!(!s.path("state").exists());
+    s.write("elsewhere/p.df", &s.read("infra/p.df"));
+    let r = s
+        .run_in(
+            "elsewhere",
+            &["--root", "../infra", "--file", "p.df", "plan"],
+        )
+        .success();
+    assert_eq!(r.summary(), "stack x is undeformed", "{}", r.stdout);
+    assert!(!s.path("elsewhere/state").exists());
+
+    s.write("infra/net.df", NET);
+    s.run(&["--file", "infra/net.df", "apply"]).success();
+    s.run(&[
+        "--root",
+        "infra",
+        "stack",
+        "handover",
+        "net.shared",
+        "--to",
+        "local(\"moved\")",
+    ])
+    .success();
+    assert!(s.path("infra/moved/state.json").exists());
+    assert!(!s.path("moved").exists());
+    let r = s.run(&["--file", "infra/net.df", "plan"]).success();
+    assert_eq!(
+        r.summary(),
+        "stack net.shared is undeformed",
+        "{}",
+        r.stdout
+    );
+}
+
 #[test]
 fn one_program_owns_one_stack() {
     let s = Scratch::new("lang-stack-two");

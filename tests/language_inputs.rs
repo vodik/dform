@@ -168,3 +168,51 @@ fn the_plan_file_records_input_files() {
         r.stderr
     );
 }
+
+/// An input file may hold a secret: the plan file records its digest keyed
+/// with the stack's plan key (HMAC-SHA256, as a sensitive leaf), never an
+/// unkeyed hash of its bytes that could be brute-forced.
+#[test]
+fn the_plan_file_digests_input_files_with_the_stack_key() {
+    let text = "edition 2026.\nenv(prod).\nowner(\"hunter2\").\n";
+    let fnv = {
+        let mut h: u64 = 0xcbf29ce484222325;
+        for b in text.bytes() {
+            h ^= b as u64;
+            h = h.wrapping_mul(0x100000001b3);
+        }
+        format!("{h:016x}")
+    };
+    let digest = |name: &str| -> String {
+        let s = Scratch::new(name);
+        s.write("p.df", P);
+        s.write("prod.df", text);
+        let args = [
+            "--file",
+            "p.df",
+            "--input-file",
+            "prod.df",
+            "plan",
+            "--out",
+            "plan.json",
+        ];
+        s.run(&args).success();
+        let f: serde_json::Value = serde_json::from_str(&s.read("plan.json")).unwrap();
+        let files = f["inputs"]["input_files"].as_array().unwrap().clone();
+        assert_eq!(files.len(), 1, "{f}");
+        assert_eq!(files[0]["path"], "prod.df");
+        let d = files[0]["digest"].as_str().unwrap_or_default().to_string();
+        assert!(!s.read("plan.json").contains(&fnv), "{f}");
+        s.run(&args).success();
+        let again: serde_json::Value = serde_json::from_str(&s.read("plan.json")).unwrap();
+        assert_eq!(
+            again["inputs"]["input_files"][0]["digest"],
+            d.as_str(),
+            "same key, same digest"
+        );
+        d
+    };
+    let (a, b) = (digest("lang-inputs-key-a"), digest("lang-inputs-key-b"));
+    assert_eq!(a.len(), 64, "{a}");
+    assert_ne!(a, b, "another stack key, another digest");
+}

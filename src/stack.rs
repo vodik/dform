@@ -361,7 +361,7 @@ pub fn handed_over(root: &Path, stack: &str) -> Result<Option<(String, PathBuf)>
 /// `dform stack handover NAME --to BACKEND`: move the stack's state
 /// directory (state, world, externs) to the backend and record it in the
 /// registry; every later run of the stack uses it. `local("DIR")` is a
-/// directory; `k8s("ns/name")` stands in for the in-cluster backend: a
+/// directory, relative to the one holding `root`; `k8s("ns/name")` stands in for the in-cluster backend: a
 /// directory `k8s/ns/name` inside the state directory of the registered
 /// bootstrap stack (the one that owns the cluster). The stack's state is
 /// found in the registry, else at `<root>/<NAME>`. Returns the new
@@ -369,7 +369,7 @@ pub fn handed_over(root: &Path, stack: &str) -> Result<Option<(String, PathBuf)>
 pub fn handover(root: &Path, stack: &str, to: &str) -> Result<PathBuf> {
     let reg = registry(root)?;
     let target = match parse_backend(to)? {
-        Backend::Local(dir) => dir,
+        Backend::Local(dir) => crate::state::local_dir(root, &dir),
         Backend::K8s(key) => {
             let boots: Vec<(&String, &Entry)> = reg.iter().filter(|(_, e)| e.bootstrap).collect();
             let (boot, e) = match boots.as_slice() {

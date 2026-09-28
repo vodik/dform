@@ -356,7 +356,7 @@ pub mod file {
     use std::collections::BTreeMap;
     use std::path::Path;
 
-    pub const VERSION: u32 = 2;
+    pub const VERSION: u32 = 3;
 
     /// The stack's plan-file key: 32 random bytes in `state.key` beside
     /// the stack's state (it moves with the state on a handover), made on
@@ -451,7 +451,7 @@ pub mod file {
         pub files: Vec<FileDigest>,
         /// `--input-file`s: stack inputs as facts.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        pub input_files: Vec<FileDigest>,
+        pub input_files: Vec<KeyedDigest>,
         /// `--set k=v`, a secret input's as `{"sensitive": label, "digest"}`.
         pub set: Vec<Json>,
         pub data: Vec<String>,
@@ -464,6 +464,15 @@ pub mod file {
     pub struct FileDigest {
         pub path: String,
         pub fnv64: String,
+    }
+
+    /// A file that may hold a secret (an `--input-file`): its digest is
+    /// keyed with the stack's plan key ([`Key::digest`]), as a sensitive
+    /// leaf's is, so the file does not let its bytes be guessed.
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    pub struct KeyedDigest {
+        pub path: String,
+        pub digest: String,
     }
 
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -651,12 +660,17 @@ pub mod file {
                     .map(|f| (f.path.clone(), f.fnv64.clone()))
                     .collect()
             };
+            let keyed = |fs: &[KeyedDigest]| -> BTreeMap<String, String> {
+                fs.iter()
+                    .map(|f| (f.path.clone(), f.digest.clone()))
+                    .collect()
+            };
             for (flag, a, b) in [
                 ("file", digests(&was.files), digests(&now.files)),
                 (
                     "input-file",
-                    digests(&was.input_files),
-                    digests(&now.input_files),
+                    keyed(&was.input_files),
+                    keyed(&now.input_files),
                 ),
             ] {
                 for (p, h) in &a {

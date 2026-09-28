@@ -29,7 +29,8 @@ State is scoped to a stack. One program owns one stack, named by its
 
 ```prolog
 stack demo.main {
-  backend = local(".dform/demo")   # where state, world and lock live; default .dform/<name>
+  backend = local(".dform/demo")   # where state, world and lock live, relative to the
+                                   # directory holding .dform/; default .dform/<name>
   unknowns = strict                # or permissive (the default); see "Strict mode"
   role = bootstrap                 # optional: it stays batch; see "Bootstrap and handover"
 }.
@@ -456,7 +457,8 @@ under one of them it prints the change and stops before any Apply call (run
 `apply` again to plan against the world as it now is).
 
 `plan --out PLAN.json` writes the plan file: the inputs (each `--file` with a
-digest of its content, each `--input-file` with its digest, `--set`,
+digest of its content, each `--input-file` with its digest keyed like a
+sensitive value's, since an input file may hold a secret, `--set`,
 `--data`, `--provider`, `--world`, `--inventory`), a digest of the
 refreshed world, and the deformation delta: each deformation's action,
 before and after values (redacted as the plan prints them; a sensitive one
@@ -984,7 +986,8 @@ stack is refused (the controller runs it), `plan` is not. The stack's
 state is found in the registry, else at `.dform/NAME`; the target must be
 empty and the stack not locked. Backends:
 
-- `local("DIR")`: a directory.
+- `local("DIR")`: a directory, relative to the one holding `.dform/`
+  (`--root`, else the program's directory), as a stack's `backend` is.
 - `k8s("namespace/name")`: the in-cluster backend. For now it stands in as
   the directory `k8s/namespace/name` inside the state directory of the
   registered `role = bootstrap` stack (there must be exactly one; an apply
