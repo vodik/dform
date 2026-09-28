@@ -5,6 +5,7 @@
 
 mod common;
 use common::Scratch;
+use std::path::PathBuf;
 
 const APP: &str = r#"edition 2026
 stack app[env] {}
@@ -436,7 +437,7 @@ fn outside_a_project_only_what_writes_no_state_runs() {
         .join(format!("outside-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    let s = Scratch { dir };
+    let s = Scratch::adopt(dir);
     s.write("net.df", NET);
     let r = s.run(&["plan", "net.df"]).success();
     assert_eq!(r.summary(), "plan: 1 deformation (1 create)");
@@ -532,4 +533,12 @@ resource x.thing "{n}" {
     let r = s.run(&["plan", "paths"]).success();
     assert!(r.stdout.contains("label = \"a-x-hello\""), "{}", r.stdout);
     assert!(r.stdout.contains("label = \"b-x-hello\""), "{}", r.stdout);
+}
+
+/// A Scratch can never own, and so never delete, a directory outside the
+/// test roots: the repository's own directory is refused.
+#[test]
+#[should_panic(expected = "not under a test root")]
+fn a_scratch_refuses_a_directory_outside_the_test_roots() {
+    let _ = Scratch::adopt(PathBuf::from(env!("CARGO_MANIFEST_DIR")));
 }

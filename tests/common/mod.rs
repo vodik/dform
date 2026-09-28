@@ -9,6 +9,19 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 pub struct Scratch {
     pub dir: PathBuf,
+    // Private: a Scratch is only made here, so it only ever owns (and on
+    // drop deletes) a directory under a test root. A test once wrapped the
+    // repository's own directory and deleted a worktree with it.
+    _owned: (),
+}
+
+/// The only places a Scratch may live: the OS temp directory and the
+/// build's per-test directory. Never the roots themselves.
+fn under_test_root(dir: &Path) -> bool {
+    let roots = [std::env::temp_dir(), PathBuf::from(env!("CARGO_TARGET_TMPDIR"))];
+    roots
+        .iter()
+        .any(|r| dir != r.as_path() && dir.starts_with(r))
 }
 
 impl Scratch {
@@ -29,7 +42,18 @@ impl Scratch {
             std::env::temp_dir().join(format!("dform-test-{}-{name}-{n}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        Scratch { dir }
+        Scratch::adopt(dir)
+    }
+
+    /// Take ownership of `dir`, which must be under a test root (the OS
+    /// temp directory or `CARGO_TARGET_TMPDIR`); it is deleted on drop.
+    pub fn adopt(dir: PathBuf) -> Self {
+        assert!(
+            under_test_root(&dir),
+            "Scratch::adopt: {} is not under a test root; refusing to own it",
+            dir.display()
+        );
+        Scratch { dir, _owned: () }
     }
 
     pub fn path(&self, rel: &str) -> PathBuf {
@@ -98,7 +122,12 @@ impl Scratch {
 
 impl Drop for Scratch {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.dir);
+        // Checked again here: `dir` is public and could have been changed.
+        if under_test_root(&self.dir) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        } else {
+            eprintln!("Scratch: not deleting {}: not under a test root", self.dir.display());
+        }
     }
 }
 
