@@ -1719,4 +1719,91 @@ mod tests {
             }
         }
     }
+
+    /// E §2.4 syntax: `@default` / `@override` after a value, and after a
+    /// `resource` or `settings` header for every leaf without its own.
+    #[test]
+    fn ranks_in_blocks() {
+        let (r, violations) = run(
+            "resource net.vpc main @default {
+               cidr = \"10.0.0.0/16\"
+               tags = { env: dev, team: net }
+               public = true @override
+             }.
+             resource net.vpc main {
+               cidr = \"10.1.0.0/16\"
+               tags = { team: platform }
+               public = false
+             }.
+             env_name(dev). env_name(prod).
+             settings E @default { days = 3, zones = [a] } :- env_name(E).
+             settings prod { days = 14 }.
+             got(E, D, Z) :- setting(E, days, D), setting(E, zones, Z).",
+        )
+        .unwrap();
+        assert!(violations.is_empty(), "{violations:?}");
+        assert_eq!(
+            facts_of(&r, "attr").into_iter().filter(|a| a.contains("net.vpc")).collect::<Vec<_>>(),
+            vec![
+                "attr(\"net.vpc\", \"main\", \"cidr\", \"10.1.0.0/16\")".to_string(),
+                "attr(\"net.vpc\", \"main\", \"public\", true)".to_string(),
+                "attr(\"net.vpc\", \"main\", \"tags\", {env: \"dev\", team: \"platform\"})".to_string(),
+            ]
+        );
+        assert_eq!(
+            facts_of(&r, "got"),
+            vec!["got(\"dev\", 3, [\"a\"])".to_string(), "got(\"prod\", 14, [\"a\"])".to_string()]
+        );
+    }
+
+    /// dform.df's settings are a `@default` layer plus per-environment
+    /// blocks (E §7.1). Every environment compiles to exactly the resources
+    /// the three copied blocks it replaced did.
+    #[test]
+    fn dform_df_default_layer_matches_the_copied_blocks() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let src = std::fs::read_to_string(root.join("dform.df")).unwrap();
+        let start = src.find("env_name(staging).").unwrap();
+        let end = src.find("import \"modules/network.df\".").unwrap();
+        let copied = "type_lattice(settings, audit.sinks, set).
+            settings prod {
+              network.main.vpc_net = inet(\"10.20.0.0/16\")
+              network.peer.vpc_net = inet(\"10.21.0.0/16\")
+              db = { backup_days: 14, multi_az: true }
+              k8s = { private_api: true, nodepool: { min: 3, max: 10 } }
+              audit.sinks += [\"cloudwatch\"]
+            }.
+            settings staging {
+              network.main.vpc_net = inet(\"10.50.0.0/16\")
+              network.peer.vpc_net = inet(\"10.60.0.0/16\")
+              db = { backup_days: 3, multi_az: false }
+              k8s = { private_api: false, nodepool: { min: 1, max: 3 } }
+            }.
+            settings dev {
+              network.main.vpc_net = inet(\"10.90.0.0/16\")
+            }.
+            ";
+        let dir = std::env::temp_dir().join(format!("dform-settings-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let old = dir.join("dform.df");
+        let old_src = format!("{}{}{}", &src[..start], copied, &src[end..]).replace("import \"", &format!("import \"{}/", root.display()));
+        std::fs::write(&old, old_src).unwrap();
+        let resources = |path: &std::path::Path, env: Option<&str>| {
+            let program = crate::loader::load_program(&[path.to_path_buf()]).unwrap();
+            let extra: Vec<Atom> = env.map(|e| input("env", Value::Str(e.into()))).into_iter().collect();
+            let (r, violations) = eval(&program, &extra).unwrap();
+            let docs: Vec<String> = crate::ir::compile_resources(r.facts.iter().cloned())
+                .unwrap()
+                .iter()
+                .map(|r| format!("{} {} {}", r.addr.typ, r.addr.name, partition::fmt_value(&r.attrs)))
+                .collect();
+            (docs, violations, r.warnings)
+        };
+        for env in [None, Some("staging"), Some("prod"), Some("dev")] {
+            let new = resources(&root.join("dform.df"), env);
+            assert!(!new.0.is_empty());
+            assert_eq!(new, resources(&old, env), "env={env:?}");
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }

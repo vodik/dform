@@ -523,6 +523,20 @@ impl Ranked {
     }
 }
 
+impl Rank {
+    /// The rank's name in the core form `arg(T, A, P, V, Rank)`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Rank::Default => "default",
+            Rank::Normal => "normal",
+            Rank::Override => "override",
+        }
+    }
+    pub fn parse(s: &str) -> Option<Rank> {
+        [Rank::Default, Rank::Normal, Rank::Override].into_iter().find(|r| r.name() == s)
+    }
+}
+
 fn rank_of(i: usize) -> Rank {
     match i {
         0 => Rank::Default,

@@ -18,20 +18,24 @@ when env(prod) {
   iam_need(app, audit.write, "audit-log").
 }.
 
-# Settings (branch as data) as blocks
+# Settings (branch as data). One @default layer for every environment that
+# has one; a per-environment block wins per leaf at the normal rank.
+env_name(staging).
+env_name(prod).
+
+settings E @default {
+  network.main.vpc_net = inet("10.50.0.0/16")
+  network.peer.vpc_net = inet("10.60.0.0/16")
+  db = { backup_days: 3, multi_az: false }
+  k8s = { private_api: false, nodepool: { min: 1, max: 3 } }
+} :- env_name(E).
+
 settings prod {
   network.main.vpc_net = inet("10.20.0.0/16")
   network.peer.vpc_net = inet("10.21.0.0/16")
   db = { backup_days: 14, multi_az: true }
   k8s = { private_api: true, nodepool: { min: 3, max: 10 } }
-  audit.sinks += ["cloudwatch"]
-}.
-
-settings staging {
-  network.main.vpc_net = inet("10.50.0.0/16")
-  network.peer.vpc_net = inet("10.60.0.0/16")
-  db = { backup_days: 3, multi_az: false }
-  k8s = { private_api: false, nodepool: { min: 1, max: 3 } }
+  audit.sinks += ["cloudwatch"]    # a set: unions with the baseline pack's ["s3"]
 }.
 
 settings dev {

@@ -1,6 +1,6 @@
 use crate::ast::{
     ApplyPolicy, Atom, Component, ComponentDef, Constraint, Import, Lit, PolicyPack, Program,
-    Decl, Settings, FieldAssign, FieldOp, Resource, RuleStmt, Stmt, Term, Unique, Use, When,
+    Decl, Settings, FieldAssign, FieldOp, Rank, Resource, RuleStmt, Stmt, Term, Unique, Use, When,
 };
 use crate::value::Value;
 use anyhow::{anyhow, bail, Context, Result};
@@ -126,6 +126,9 @@ fn parse_stmt(pair: Pair<Rule>) -> Result<Stmt> {
                             if !matches!(a.op, FieldOp::Assign) {
                                 bail!("use params do not support +=");
                             }
+                            if a.rank.is_some() {
+                                bail!("use params do not take a rank");
+                            }
                             params.push((a.key, a.value));
                         }
                     }
@@ -189,24 +192,31 @@ fn parse_stmt(pair: Pair<Rule>) -> Result<Stmt> {
         Rule::settings_stmt => {
             let mut it = pair.into_inner().filter(|p| !is_kw(p.as_rule()));
             let env = parse_term(it.next().unwrap())?;
+            let mut rank = None;
             let mut fields: Vec<FieldAssign> = Vec::new();
+            let mut body: Option<Vec<Lit>> = None;
             for p in it {
-                if p.as_rule() == Rule::res_fields {
-                    fields = parse_res_fields(p)?;
+                match p.as_rule() {
+                    Rule::rank => rank = Some(parse_rank(p)?),
+                    Rule::res_fields => fields = parse_res_fields(p)?,
+                    Rule::body => body = Some(parse_body(p.into_inner())?),
+                    _ => {}
                 }
             }
-            Ok(Stmt::Settings(Settings { env, fields }))
+            Ok(Stmt::Settings(Settings { env, rank, fields, body }))
         }
         Rule::resource_stmt => {
             let mut it = pair.into_inner().filter(|p| !is_kw(p.as_rule()));
             let typ = parse_term(it.next().unwrap())?;
             let name = parse_term(it.next().unwrap())?;
 
+            let mut rank = None;
             let mut fields: Vec<FieldAssign> = Vec::new();
             let mut body: Option<Vec<Lit>> = None;
 
             for p in it {
                 match p.as_rule() {
+                    Rule::rank => rank = Some(parse_rank(p)?),
                     Rule::res_fields => {
                         fields = parse_res_fields(p)?;
                     }
@@ -219,6 +229,7 @@ fn parse_stmt(pair: Pair<Rule>) -> Result<Stmt> {
             Ok(Stmt::Resource(Resource {
                 typ,
                 name,
+                rank,
                 fields,
                 body,
             }))
@@ -580,9 +591,15 @@ fn parse_res_fields(pair: Pair<Rule>) -> Result<Vec<FieldAssign>> {
             other => bail!("unknown field op: {other}"),
         };
         let value = parse_term(it.next().unwrap())?;
-        out.push(FieldAssign { key, op, value });
+        let rank = it.next().map(parse_rank).transpose()?;
+        out.push(FieldAssign { key, op, value, rank });
     }
     Ok(out)
+}
+
+fn parse_rank(pair: Pair<Rule>) -> Result<Rank> {
+    let s = pair.as_str().trim_start_matches('@');
+    Rank::parse(s).ok_or_else(|| anyhow!("unknown rank @{s}"))
 }
 
 fn parse_string_lit(pair: Pair<Rule>) -> Result<String> {

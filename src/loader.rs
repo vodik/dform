@@ -71,14 +71,11 @@ fn prefix_stmt(stmt: Stmt, alias: &str) -> Stmt {
         Stmt::Resource(r) => Stmt::Resource(Resource {
             typ: prefix_term(r.typ, alias),
             name: prefix_term(r.name, alias),
+            rank: r.rank,
             fields: r
                 .fields
                 .into_iter()
-                .map(|f| crate::ast::FieldAssign {
-                    key: f.key,
-                    op: f.op,
-                    value: prefix_term(f.value, alias),
-                })
+                .map(|f| crate::ast::FieldAssign { value: prefix_term(f.value, alias), ..f })
                 .collect(),
             body: r
                 .body
@@ -110,15 +107,13 @@ fn prefix_stmt(stmt: Stmt, alias: &str) -> Stmt {
         Stmt::ApplyPolicy(a) => Stmt::ApplyPolicy(a),
         Stmt::Settings(s) => Stmt::Settings(Settings {
             env: prefix_term(s.env, alias),
+            rank: s.rank,
             fields: s
                 .fields
                 .into_iter()
-                .map(|f| crate::ast::FieldAssign {
-                    key: f.key,
-                    op: f.op,
-                    value: prefix_term(f.value, alias),
-                })
+                .map(|f| crate::ast::FieldAssign { value: prefix_term(f.value, alias), ..f })
                 .collect(),
+            body: s.body.map(|xs| xs.into_iter().map(|l| prefix_lit(l, alias)).collect()),
         }),
         Stmt::Decl(mut d) => {
             if !is_core_pred(&d.pred) {

@@ -58,9 +58,13 @@ import_stmt = { IMPORT ~ string ~ (AS ~ ident)? }
 
 unique_stmt = { UNIQUE ~ pred ~ "(" ~ pos_int ~ ")" }
 
-settings_stmt = { SETTINGS ~ term ~ "{" ~ res_fields? ~ "}" }
+settings_stmt = { SETTINGS ~ term ~ rank? ~ "{" ~ res_fields? ~ "}" ~ (":-" ~ body)? }
 
-resource_stmt = { RESOURCE ~ term ~ term ~ "{" ~ res_fields? ~ "}" ~ (":-" ~ body)? }
+resource_stmt = { RESOURCE ~ term ~ term ~ rank? ~ "{" ~ res_fields? ~ "}" ~ (":-" ~ body)? }
+
+// `@default` / `@override` after a value, or after a block header to apply
+// to every leaf in the block. No annotation is the normal rank.
+rank = @{ "@" ~ ("default" | "override") ~ KW_TAIL }
 // Fields inside `{ ... }` blocks.
 //
 // Commas are optional so you can write either:
@@ -69,7 +73,7 @@ resource_stmt = { RESOURCE ~ term ~ term ~ "{" ~ res_fields? ~ "}" ~ (":-" ~ bod
 //   a = 1
 //   b = 2
 res_fields = { res_field ~ (","? ~ res_field)* ~ ","? }
-res_field = { keypath ~ field_op ~ term }
+res_field = { keypath ~ field_op ~ term ~ rank? }
 field_op = { "=" | "+=" }
 keypath = @{ (ASCII_ALPHANUMERIC | "_" | "." | "-" )+ }
 

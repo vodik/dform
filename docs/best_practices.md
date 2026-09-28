@@ -130,9 +130,31 @@ the lattice, not the operator, decides how they merge. A dotted path
 
 A conflict is a `deny("conflicting attribute contributions", ...)` naming the
 resource, the path, and every contributing rule with its value. It is resolved
-by rank, not by order: `arg(T, N, P, V, default)` loses to a plain
-contribution, `arg(T, N, P, V, override)` beats it, and a disagreement at a
-losing rank is only a warning.
+by rank, not by order. `@default` after a value loses to a plain contribution,
+`@override` beats it, and a disagreement at a losing rank is only a warning.
+After a `resource` or `settings` header the rank applies to every field
+without its own. The core form is `arg(T, N, P, V, default|normal|override)`.
+
+## Layer Environments With `@default`
+
+Write the common settings once at `@default` and let each environment
+override only what differs; an override wins per leaf:
+
+```prolog
+env_name(staging).
+env_name(prod).
+
+settings E @default {
+  db = { backup_days: 3, multi_az: false }
+} :- env_name(E).
+
+settings prod {
+  db = { backup_days: 14, multi_az: true }
+}.
+```
+
+The same shape gives org-wide defaults from a policy pack without reading the
+attribute it defaults: `arg(T, N, tags, { team: platform }, default) :- want(T, N).`
 
 Because the engine lowers these to the same small core, you keep composition and
 predictability without paying the verbosity tax.

@@ -1,3 +1,4 @@
+pub use crate::lattice::Rank;
 use crate::value::Value;
 use std::collections::BTreeMap;
 use std::cmp::Ordering;
@@ -174,6 +175,8 @@ pub struct When {
 pub struct Resource {
     pub typ: Term,
     pub name: Term,
+    /// `resource T N @default { ... }`: the rank of every field without its own.
+    pub rank: Option<Rank>,
     pub fields: Vec<FieldAssign>,
     pub body: Option<Vec<Lit>>,
 }
@@ -189,6 +192,8 @@ pub struct FieldAssign {
     pub key: String,
     pub op: FieldOp,
     pub value: Term,
+    /// `key = value @override`; `None` takes the block's rank.
+    pub rank: Option<Rank>,
 }
 
 #[derive(Debug, Clone)]
@@ -206,7 +211,10 @@ pub struct Unique {
 #[derive(Debug, Clone)]
 pub struct Settings {
     pub env: Term,
+    /// `settings E @default { ... }`: the rank of every leaf without its own.
+    pub rank: Option<Rank>,
     pub fields: Vec<FieldAssign>,
+    pub body: Option<Vec<Lit>>,
 }
 
 #[derive(Debug, Clone)]

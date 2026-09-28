@@ -1,4 +1,4 @@
-use crate::ast::{Atom, Constraint, FieldOp, Lit, Program, Resource, RuleStmt, Stmt, Term, When};
+use crate::ast::{Atom, Constraint, Lit, Program, Rank, Resource, RuleStmt, Settings, Stmt, Term, When};
 use crate::value::Value;
 use anyhow::{Result, bail};
 use std::collections::BTreeMap;
@@ -12,11 +12,11 @@ pub fn lower(program: &Program) -> Result<Lowered> {
     let program = apply_decls(program)?;
     // In the future, imports should be handled in a loader before parsing.
     // For now, keep Import statements in the AST but drop them before eval.
-    let expanded = desugar_settings(&program)?;
-    let expanded = expand_component_defs_and_uses(&expanded)?;
+    let expanded = expand_component_defs_and_uses(&program)?;
     let expanded = expand_policy_packs(&expanded)?;
     let expanded = expand_components(&expanded)?;
     let expanded = expand_when(&expanded)?;
+    let expanded = desugar_settings(&expanded)?;
     let expanded = drop_metadata(&expanded);
     let expanded = desugar_resources(&expanded)?;
     let expanded = desugar_comprehensions(&expanded)?;
@@ -243,6 +243,12 @@ fn rewrite_stmt_records(stmt: Stmt, schemas: &BTreeMap<String, Vec<String>>, ctx
                 .collect::<Result<Vec<_>>>()?;
             Stmt::PolicyPack(p)
         }
+        Stmt::Settings(mut s) => {
+            if let Some(b) = s.body {
+                s.body = Some(rewrite_lits_records(b, schemas)?);
+            }
+            Stmt::Settings(s)
+        }
         other => other,
     })
 }
@@ -384,16 +390,28 @@ fn expand_policy_packs(program: &Program) -> Result<Program> {
     Ok(Program { statements: out })
 }
 
+/// `settings E [@rank] { k = v, ... } [:- body].` is one contribution per
+/// leaf to the `settings` pseudo-type: `arg(settings, E, k, v, Rank)`. An
+/// object value is flattened into dotted leaves, each a declared key.
 fn desugar_settings(program: &Program) -> Result<Program> {
     let mut out = Vec::new();
     for stmt in &program.statements {
         match stmt {
             Stmt::Settings(s) => {
-                let mut facts = Vec::new();
+                let body = s.body.clone().unwrap_or_default();
                 for f in &s.fields {
-                    flatten_settings(&mut facts, s.env.clone(), f)?;
+                    let rank = f.rank.or(s.rank).unwrap_or(Rank::Normal);
+                    let mut leaves = Vec::new();
+                    flatten_settings(&mut leaves, &f.key, f.value.clone());
+                    for (key, value) in leaves {
+                        let head = Atom {
+                            pred: "arg".to_string(),
+                            args: vec![str_term(SETTINGS), s.env.clone(), str_term(&key), value, str_term(rank.name())],
+                            record: None,
+                        };
+                        out.push(fact_or_rule(head, &body));
+                    }
                 }
-                out.extend(facts);
             }
             _ => out.push(stmt.clone()),
         }
@@ -401,41 +419,25 @@ fn desugar_settings(program: &Program) -> Result<Program> {
     Ok(Program { statements: out })
 }
 
-fn flatten_settings(out: &mut Vec<Stmt>, env: Term, f: &crate::ast::FieldAssign) -> Result<()> {
-    flatten_settings_inner(out, env, &f.key, f.op, f.value.clone())
-}
-
-fn flatten_settings_inner(
-    out: &mut Vec<Stmt>,
-    env: Term,
-    key: &str,
-    op: FieldOp,
-    val: Term,
-) -> Result<()> {
+fn flatten_settings(out: &mut Vec<(String, Term)>, key: &str, val: Term) {
     match val {
         Term::Obj(m) => {
             for (k, v) in m {
-                let next = if key.is_empty() {
-                    k
-                } else {
-                    format!("{key}.{k}")
-                };
-                flatten_settings_inner(out, env.clone(), &next, op, v)?;
+                let next = if key.is_empty() { k } else { format!("{key}.{k}") };
+                flatten_settings(out, &next, v);
             }
         }
-        other => {
-            let pred = match op {
-                FieldOp::Assign => "setting",
-                FieldOp::Add => "setting_add",
-            };
-            out.push(Stmt::Fact(Atom {
-                pred: pred.to_string(),
-                args: vec![env, Term::Val(Value::Str(key.to_string())), other],
-                record: None,
-            }));
-        }
+        other => out.push((key.to_string(), other)),
     }
-    Ok(())
+}
+
+/// A head with no body and no variables is a fact; anything else a rule.
+fn fact_or_rule(head: Atom, body: &[Lit]) -> Stmt {
+    if body.is_empty() && head.args.iter().all(is_ground_term) {
+        Stmt::Fact(head)
+    } else {
+        Stmt::Rule(RuleStmt { head, body: body.to_vec() })
+    }
 }
 
 fn desugar_comprehensions(program: &Program) -> Result<Program> {
@@ -896,23 +898,30 @@ fn rewrite_stmt(stmt: Stmt, scope: &str) -> Stmt {
         Stmt::Resource(r) => Stmt::Resource(Resource {
             typ: rewrite_term(r.typ, scope),
             name: scoped_term(scope, rewrite_term(r.name, scope)),
+            rank: r.rank,
             fields: r
                 .fields
                 .into_iter()
-                .map(|f| crate::ast::FieldAssign {
-                    key: f.key,
-                    op: f.op,
-                    value: rewrite_term(f.value, scope),
-                })
+                .map(|f| crate::ast::FieldAssign { value: rewrite_term(f.value, scope), ..f })
                 .collect(),
             body: r
                 .body
                 .map(|xs| xs.into_iter().map(|l| rewrite_lit(l, scope)).collect()),
         }),
+        // Settings are addressed by environment, not by scope: only the
+        // values and the body are rewritten.
+        Stmt::Settings(s) => Stmt::Settings(Settings {
+            fields: s
+                .fields
+                .into_iter()
+                .map(|f| crate::ast::FieldAssign { value: rewrite_term(f.value, scope), ..f })
+                .collect(),
+            body: s.body.map(|xs| xs.into_iter().map(|l| rewrite_lit(l, scope)).collect()),
+            ..s
+        }),
         // These are metadata statements; leave them as-is.
         Stmt::Import(i) => Stmt::Import(i),
         Stmt::Unique(u) => Stmt::Unique(u),
-        Stmt::Settings(s) => Stmt::Settings(s),
         Stmt::ComponentDef(d) => Stmt::ComponentDef(d),
         Stmt::Use(u) => Stmt::Use(u),
         Stmt::PolicyPack(p) => Stmt::PolicyPack(p),
@@ -1070,6 +1079,12 @@ fn apply_guard(stmt: Stmt, guard: &Lit) -> Result<Vec<Stmt>> {
             r.body = Some(body);
             vec![Stmt::Resource(r)]
         }
+        Stmt::Settings(mut s) => {
+            let mut body = s.body.unwrap_or_default();
+            body.push(guard.clone());
+            s.body = Some(body);
+            vec![Stmt::Settings(s)]
+        }
         Stmt::When(w) => {
             let mut body = Vec::new();
             for s in w.body {
@@ -1094,51 +1109,24 @@ fn desugar_resources(program: &Program) -> Result<Program> {
     Ok(Program { statements: out })
 }
 
+/// `resource T N [@rank] { k = v [@rank], ... } [:- body].` is `want(T, N)`
+/// plus one contribution `arg(T, N, k, v, Rank)` per field, each with the
+/// whole body. `+=` is a plain contribution: the lattice decides the merge.
 fn resource_to_stmts(r: Resource) -> Result<Vec<Stmt>> {
-    let mut out = Vec::new();
     let body = r.body.unwrap_or_default();
-
-    let want_atom = Atom {
-        pred: "want".to_string(),
-        args: vec![r.typ.clone(), r.name.clone()],
-        record: None,
-    };
-
-    if body.is_empty() && is_ground_term(&r.typ) && is_ground_term(&r.name) {
-        out.push(Stmt::Fact(want_atom.clone()));
-    } else {
-        out.push(Stmt::Rule(RuleStmt {
-            head: want_atom.clone(),
-            body: body.clone(),
-        }));
-    }
-
+    let mut out = vec![fact_or_rule(
+        Atom { pred: "want".to_string(), args: vec![r.typ.clone(), r.name.clone()], record: None },
+        &body,
+    )];
     for f in r.fields {
-        let pred = match f.op {
-            FieldOp::Assign => "arg",
-            FieldOp::Add => "arg_add",
-        };
-
-        let arg_atom = Atom {
-            pred: pred.to_string(),
-            args: vec![
-                r.typ.clone(),
-                r.name.clone(),
-                Term::Val(Value::Str(f.key)),
-                f.value,
-            ],
+        let rank = f.rank.or(r.rank).unwrap_or(Rank::Normal);
+        let head = Atom {
+            pred: "arg".to_string(),
+            args: vec![r.typ.clone(), r.name.clone(), str_term(&f.key), f.value, str_term(rank.name())],
             record: None,
         };
-        if body.is_empty() && is_ground_term(&arg_atom.args[0]) && is_ground_term(&arg_atom.args[1]) && is_ground_term(&arg_atom.args[2]) && is_ground_term(&arg_atom.args[3]) {
-            out.push(Stmt::Fact(arg_atom));
-        } else {
-            out.push(Stmt::Rule(RuleStmt {
-                head: arg_atom,
-                body: body.clone(),
-            }));
-        }
+        out.push(fact_or_rule(head, &body));
     }
-
     Ok(out)
 }
 
