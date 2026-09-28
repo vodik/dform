@@ -119,7 +119,16 @@ impl Provider for FakeCloud {
         state: &mut State,
         plan: &Plan,
     ) -> Result<()> {
-        crate::executor::run_tick(self, desired, adopts, state, plan, &|_| Ok(())).map(|_| ())
+        crate::executor::run_tick(
+            self,
+            desired,
+            adopts,
+            &Lifecycle::default(),
+            state,
+            plan,
+            &|_| Ok(()),
+        )
+        .map(|_| ())
     }
 }
 
@@ -538,10 +547,17 @@ impl FakeCloud {
         let mut before: BTreeMap<Address, Json> = BTreeMap::new();
         for (addr, entry) in state.entries_for_provider(self.id()) {
             if let Some(cur) = world.resources.get(&key(&addr.typ, &entry.remote)) {
-                let doc = match resolved.get(&addr) {
+                let mut doc = match resolved.get(&addr) {
                     Some(d) => self.world_doc(&addr.typ, cur, d),
                     None => cur.attrs.clone(),
                 };
+                // ignore_changes: dropped from both sides (the desired
+                // side by `ir::compile_resources`).
+                if resolved.contains_key(&addr) {
+                    for p in lifecycle.ignore_changes.get(&addr).into_iter().flatten() {
+                        remove_path(&mut doc, p);
+                    }
+                }
                 before.insert(addr, doc);
             }
         }
@@ -690,8 +706,14 @@ impl FakeCloud {
 
     /// Open one tick of the world for the executor's per-action Apply calls
     /// (`executor::run_tick`). The world is saved after every call.
-    pub fn begin_tick<'a>(&'a self, desired: &'a [Resource], adopts: &[Adopt]) -> Result<Tick<'a>> {
+    pub fn begin_tick<'a>(
+        &'a self,
+        desired: &'a [Resource],
+        adopts: &[Adopt],
+        lifecycle: &'a Lifecycle,
+    ) -> Result<Tick<'a>> {
         Ok(Tick {
+            lifecycle,
             cloud: self,
             world: self.load()?,
             inv: self.load_inventory()?,
@@ -911,6 +933,7 @@ impl FakeCloud {
 /// it (the cloud keeps what it did, whatever happens next).
 pub struct Tick<'a> {
     cloud: &'a FakeCloud,
+    lifecycle: &'a Lifecycle,
     world: RemoteState,
     inv: RemoteState,
     adopt_map: BTreeMap<Address, String>,
@@ -1044,8 +1067,23 @@ impl Tick<'_> {
                     bail!("apply {at}: update without a state entry");
                 };
                 let k = key(&addr.typ, &entry.remote);
+                let mut doc = doc;
                 let computed = match self.world.resources.get(&k) {
-                    Some(cur) => cur.computed.clone(),
+                    Some(cur) => {
+                        // ignore_changes: the world keeps its value.
+                        for p in self
+                            .lifecycle
+                            .ignore_changes
+                            .get(addr)
+                            .into_iter()
+                            .flatten()
+                        {
+                            if let Some(v) = get_path(&cur.attrs, p) {
+                                set_path(&mut doc, p, v.clone());
+                            }
+                        }
+                        cur.computed.clone()
+                    }
                     None => cloud.mint(&addr.typ, &entry.remote, &doc),
                 };
                 self.world.resources.insert(
@@ -1194,6 +1232,26 @@ fn short_hash(s: &str) -> String {
         h /= 36;
     }
     out
+}
+
+/// Remove a dotted path; an object left empty by it goes too.
+fn remove_path(v: &mut Json, path: &str) {
+    let Some(m) = v.as_object_mut() else {
+        return;
+    };
+    match path.split_once('.') {
+        None => {
+            m.remove(path);
+        }
+        Some((head, rest)) => {
+            if let Some(child) = m.get_mut(head) {
+                remove_path(child, rest);
+                if child.as_object().is_some_and(|c| c.is_empty()) {
+                    m.remove(head);
+                }
+            }
+        }
+    }
 }
 
 pub fn set_path(v: &mut Json, path: &str, x: Json) {

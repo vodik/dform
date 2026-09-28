@@ -256,6 +256,8 @@ pub fn is_core_pred(pred: &str) -> bool {
             | "type_lattice"
             | "type_mint"
             | "ignore_changes"
+            | "lifecycle"
+            | "moved"
     ) || is_engine_pred(pred)
         || is_provider_pred(pred)
 }

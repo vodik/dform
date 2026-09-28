@@ -168,6 +168,24 @@ depends on it to the replacement and then deletes the deposed object
 (`- T.A  (deposed)`). A deposed object left by a failed apply is deleted by
 the next one.
 
+Lifecycle is plain facts the planner reads (and policy can read too):
+
+```prolog
+lifecycle(net.vpc, main, prevent_destroy).        % a delete or replace of it is a deny
+lifecycle(net.vpc, main, create_before_destroy).  % replace creates first (above)
+moved(net.vpc, "network.main::vpc", "network.core::vpc").  % rename without destroy
+ignore_changes(net.vpc, main, "tags.owner").      % dropped from both sides
+```
+
+`moved(T, Old, New)` rewrites state's identity from `Old` to `New` before the
+diff, so renaming a component instance with a `moved` fact per resource plans
+undeformed (`moved T.Old -> T.New` is printed; `apply` persists it). It applies
+only while state maps `Old` and not `New`, so the facts can stay.
+`ignore_changes` drops the path from the desired document and from the
+world's, and an update keeps the world's value there. `prevent_destroy`
+blocks `plan` and `apply` with `lifecycle prevent_destroy: the plan would
+delete T.A`.
+
 An apply that fails or is killed can be resumed: before a tick's first Apply
 call its deformations are written to state as in flight, each with the world
 document it was planned against, and each answered call takes its action out.

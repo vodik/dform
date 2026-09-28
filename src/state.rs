@@ -87,6 +87,23 @@ impl State {
         }
     }
 
+    /// `moved(T, Old, New)`: New takes Old's identity, so the object is
+    /// neither destroyed nor created. Applies only while state maps Old and
+    /// not New, so a move already made is a no-op. Returns the moves made.
+    pub fn apply_moves(&mut self, moves: &[(Address, Address)]) -> Vec<(Address, Address)> {
+        let mut out = Vec::new();
+        for (old, new) in moves {
+            if self.get(new).is_some() {
+                continue;
+            }
+            if let Some(e) = self.resources.remove(&key(old)) {
+                self.resources.insert(key(new), e);
+                out.push((old.clone(), new.clone()));
+            }
+        }
+        out
+    }
+
     /// Move `addr`'s identity aside as deposed, making room for its
     /// replacement.
     pub fn depose(&mut self, addr: &Address) {

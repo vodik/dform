@@ -32,20 +32,27 @@ use crate::value::{NullClass, Value};
 use anyhow::{Result, bail};
 use std::collections::{BTreeMap, BTreeSet};
 
-/// `lifecycle(T, A, Flag)` facts: plain facts the planner reads (E §2.8:
-/// filters and policy over the deformation).
+/// The lifecycle facts, plain facts the planner reads (E §2.8: filters and
+/// policy over the deformation; §3.4 for `moved`):
+///
+///   lifecycle(T, A, prevent_destroy).        a delete or replace of T/A is a deny
+///   lifecycle(T, A, create_before_destroy).  a replacement is created first
+///   moved(T, Old, New).                      state's identity for Old is New's
+///   ignore_changes(T, A, Path).              Path is dropped from both sides
 #[derive(Debug, Clone, Default)]
 pub struct Lifecycle {
-    /// `create_before_destroy`: a replacement is created before the old
-    /// object is deleted.
+    pub prevent_destroy: BTreeSet<Address>,
     pub create_before_destroy: BTreeSet<Address>,
+    /// (old, new), applied to state before the diff.
+    pub moved: Vec<(Address, Address)>,
+    pub ignore_changes: BTreeMap<Address, Vec<String>>,
 }
 
 impl Lifecycle {
     pub fn from_facts<'a>(facts: impl IntoIterator<Item = &'a Atom>) -> Result<Lifecycle> {
         let mut out = Lifecycle::default();
         for f in facts {
-            if f.pred != "lifecycle" {
+            if !matches!(f.pred.as_str(), "lifecycle" | "moved" | "ignore_changes") {
                 continue;
             }
             let strs: Option<Vec<&str>> = f
@@ -56,23 +63,54 @@ impl Lifecycle {
                     _ => None,
                 })
                 .collect();
-            let Some([typ, name, flag]) = strs.as_deref() else {
-                bail!("lifecycle/3 expects (Type, Addr, Flag), got {f:?}");
+            let Some([typ, a, b]) = strs.as_deref() else {
+                bail!("{}/3 expects three symbols or strings, got {f:?}", f.pred);
             };
-            let addr = Address {
+            let addr = |name: &str| Address {
                 typ: typ.to_string(),
                 name: name.to_string(),
             };
-            match *flag {
-                "create_before_destroy" => {
-                    out.create_before_destroy.insert(addr);
+            match (f.pred.as_str(), *b) {
+                ("lifecycle", "prevent_destroy") => {
+                    out.prevent_destroy.insert(addr(a));
                 }
-                other => bail!(
-                    "lifecycle({typ}, {name}, {other}): unknown flag (expected create_before_destroy)"
+                ("lifecycle", "create_before_destroy") => {
+                    out.create_before_destroy.insert(addr(a));
+                }
+                ("lifecycle", other) => bail!(
+                    "lifecycle({typ}, {a}, {other}): unknown flag \
+                     (expected prevent_destroy or create_before_destroy)"
                 ),
+                ("moved", _) => out.moved.push((addr(a), addr(b))),
+                _ => out
+                    .ignore_changes
+                    .entry(addr(a))
+                    .or_default()
+                    .push(b.to_string()),
             }
         }
         Ok(out)
+    }
+
+    /// `prevent_destroy` as a deny over the plan: every delete or replace
+    /// of a protected address.
+    pub fn denies(&self, actions: &[crate::provider::Action]) -> Vec<String> {
+        use crate::provider::ActionKind;
+        actions
+            .iter()
+            .filter(|a| self.prevent_destroy.contains(&a.addr))
+            .filter_map(|a| {
+                let what = match a.kind {
+                    ActionKind::Delete => "delete",
+                    ActionKind::Replace { .. } => "replace",
+                    _ => return None,
+                };
+                Some(format!(
+                    "lifecycle prevent_destroy: the plan would {what} {}.{}",
+                    a.addr.typ, a.addr.name
+                ))
+            })
+            .collect()
     }
 }
 

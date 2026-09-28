@@ -173,7 +173,13 @@ fn main() -> Result<()> {
         extra.extend(backend.world_facts(st)?);
         engine::eval(&program, &extra)
     };
-    let (res, violations) = evaluate(&st)?;
+    let (mut res, mut violations) = evaluate(&st)?;
+    // moved/3 rewrites state's identity before the diff (E §3.4); round 0
+    // must see the new addresses, so the program is evaluated again.
+    let moves = st.apply_moves(&zset::Lifecycle::from_facts(&res.facts)?.moved);
+    if !moves.is_empty() {
+        (res, violations) = evaluate(&st)?;
+    }
     for w in &res.warnings {
         eprintln!("warning: {w}");
     }
@@ -261,7 +267,16 @@ fn main() -> Result<()> {
         Cmd::Plan => {
             let sections = plan_sections(&res, &resources, backend.schema());
             let plan = backend.plan(&resources, &adopts, &lifecycle, &st)?;
+            print_moves(&moves);
             print_plan(&plan, cli.show_noop, &sections, &stack);
+            let denies = lifecycle.denies(&plan.actions);
+            if !denies.is_empty() {
+                eprintln!("constraint violations:");
+                for d in denies {
+                    eprintln!("- {d}");
+                }
+                bail!("blocked by constraints");
+            }
         }
         Cmd::Apply { max_ticks, .. } => {
             for addr in chaos.addresses() {
@@ -274,6 +289,10 @@ fn main() -> Result<()> {
                 }
             }
             let persist = |st: &state::State| st.save(&paths.state);
+            if !moves.is_empty() {
+                print_moves(&moves);
+                persist(&st)?;
+            }
             if let Some(f) = st.in_flight.take() {
                 let names: Vec<String> = f
                     .remaining
@@ -335,6 +354,14 @@ fn main() -> Result<()> {
                     println!("tick {tick}:");
                 }
                 print_plan(&plan, cli.show_noop, &sections, &stack);
+                let denies = lifecycle.denies(&plan.actions);
+                if !denies.is_empty() {
+                    eprintln!("constraint violations:");
+                    for d in denies {
+                        eprintln!("- {d}");
+                    }
+                    bail!("apply stopped at tick {tick}: blocked by constraints");
+                }
                 let observed = backend.observe(&st)?;
                 executor::begin(&mut st, tick, &plan, &observed);
                 persist(&st)?;
@@ -355,8 +382,9 @@ fn main() -> Result<()> {
                 // when there is nothing to do. State is written after every
                 // Apply call (`executor`).
                 if tick == 1 || changed {
-                    let applied =
-                        executor::run_tick(&backend, &resources, &adopts, &mut st, &plan, &persist);
+                    let applied = executor::run_tick(
+                        &backend, &resources, &adopts, &lifecycle, &mut st, &plan, &persist,
+                    );
                     for note in backend.take_notes() {
                         println!("chaos: {note}");
                     }
@@ -411,6 +439,13 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// `moved/3` rewrites applied to state before the plan.
+fn print_moves(moves: &[(ir::Address, ir::Address)]) {
+    for (old, new) in moves {
+        println!("moved {}.{} -> {}.{}", old.typ, old.name, new.typ, new.name);
+    }
 }
 
 /// `dform strata`: the partition graph's strata, or the negative cycle.

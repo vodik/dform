@@ -24,6 +24,7 @@ use crate::fakecloud::FakeCloud;
 use crate::ir::{Address, Adopt, Resource};
 use crate::provider::{ActionKind, Change, Plan, fmt_value};
 use crate::state::{self, InFlight, State};
+use crate::zset::Lifecycle;
 use anyhow::{Result, bail};
 use serde_json::Value as Json;
 use std::collections::{BTreeMap, BTreeSet};
@@ -43,11 +44,12 @@ pub fn run_tick(
     cloud: &FakeCloud,
     desired: &[Resource],
     adopts: &[Adopt],
+    lifecycle: &Lifecycle,
     state: &mut State,
     plan: &Plan,
     persist: Persist,
 ) -> Result<Seen> {
-    let mut tick = cloud.begin_tick(desired, adopts)?;
+    let mut tick = cloud.begin_tick(desired, adopts, lifecycle)?;
     let mut failed = None;
     for a in &plan.actions {
         if matches!(a.kind, ActionKind::Noop | ActionKind::Pending) {
