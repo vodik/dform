@@ -194,7 +194,44 @@ fn query_never_prints_the_labeled_secret() {
     assert!(!r.stdout.contains(VAULT_SECRET), "{}", r.stdout);
 }
 
-/// A rule that copies the secret into another resource's public
+/// A rule that would copy the secret into another resource's public
+/// attribute is refused before evaluation (E DR-19's static pass, E0304),
+/// and the error does not print it either.
+#[test]
+fn a_secret_into_a_public_attribute_is_a_compile_error() {
+    let s = Scratch::new("secrets-e0304");
+    s.write(
+        "p.df",
+        &format!(
+            "{PROGRAM}
+resource leaky.oops copy {{ password = P }} :- arg(leaky.vault, v, password, P).
+"
+        ),
+    );
+    let schema = schema();
+    let r = s
+        .run(&[
+            "--file",
+            "p.df",
+            "--provider",
+            &schema,
+            "--world",
+            "w.json",
+            "plan",
+        ])
+        .failure();
+    assert!(
+        r.stderr.contains(
+            "p.df:11:28: E0304: a secret reaches leaky.oops .password, not marked sensitive in the schema"
+        ),
+        "{}",
+        r.stderr
+    );
+    assert!(!r.stderr.contains(VAULT_SECRET), "{}", r.stderr);
+    assert!(!s.path("w.json").exists(), "refused before anything ran");
+}
+
+/// A rule that copies the secret into another resource's sensitive
 /// attribute, and a conflict at the sensitive path: neither the plan (text
 /// or JSON), `query --json`, nor the policy messages on stderr print it.
 #[test]
@@ -204,7 +241,7 @@ fn a_forwarded_secret_and_a_conflict_never_print() {
         "p.df",
         &format!(
             "{PROGRAM}
-resource leaky.oops copy {{ password = P }} :- arg(leaky.vault, v, password, P).
+resource leaky.vault copy {{ backup = P }} :- arg(leaky.vault, v, password, P).
 "
         ),
     );
@@ -220,12 +257,7 @@ resource leaky.oops copy {{ password = P }} :- arg(leaky.vault, v, password, P).
         assert!(!r.stderr.contains(VAULT_SECRET), "{cmd:?}: {}", r.stderr);
     }
     let r = s.run(&[&args[..], &["plan"]].concat()).success();
-    assert!(
-        r.stdout
-            .contains("password = (sensitive leaky.vault/v#password)"),
-        "{}",
-        r.stdout
-    );
+    assert!(r.stdout.contains("backup = (sensitive)\n"), "{}", r.stdout);
 
     s.write(
         "p.df",

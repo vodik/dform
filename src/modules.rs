@@ -160,9 +160,23 @@ impl Names {
 /// Expand `module`/`instance` and `policy`/`apply`: the program with every
 /// instance's body scoped and renamed and every applied pack renamed and
 /// checked against its grants.
-pub fn expand(program: &Program) -> Result<(Program, Vec<Declared>)> {
+/// A program with its modules and packs expanded, and the interface the
+/// later passes check: every typed input, and every output declared
+/// `secret(T)` (scope, key).
+pub struct Expanded {
+    pub program: Program,
+    pub inputs: Vec<Declared>,
+    pub secret_outputs: Vec<(String, String)>,
+}
+
+fn is_secret_type(t: &Option<TypeExpr>) -> bool {
+    matches!(t, Some(TypeExpr::Apply(n, _)) if n == "secret")
+}
+
+pub fn expand(program: &Program) -> Result<Expanded> {
     let mut diags = Vec::new();
     let mut declared = Vec::new();
+    let mut secret_outputs = Vec::new();
     let check_types = |who: &str, inputs: &[InputDecl], diags: &mut Vec<Diagnostic>| {
         for i in inputs {
             if let Err(e) = crate::inputs::check_type(&i.ty) {
@@ -246,7 +260,12 @@ pub fn expand(program: &Program) -> Result<(Program, Vec<Declared>)> {
                 });
             }
             // The stack's own output: `output(k, V)` in the root scope.
-            Stmt::Output(o) if o.value.is_some() => out.push(fact_or_rule(
+            Stmt::Output(o) if o.value.is_none() => {
+                if is_secret_type(&o.ty) {
+                    secret_outputs.push((String::new(), o.name.clone()));
+                }
+            }
+            Stmt::Output(o) => out.push(fact_or_rule(
                 atom(
                     "output",
                     vec![str_term(&o.name), o.value.clone().unwrap()],
@@ -291,6 +310,13 @@ pub fn expand(program: &Program) -> Result<(Program, Vec<Declared>)> {
                     out.push(rewrite_stmt(st, &scope));
                 }
                 out.extend(input_readers(&scope, &iface.inputs, &names));
+                secret_outputs.extend(
+                    iface
+                        .outputs
+                        .values()
+                        .filter(|o| is_secret_type(&o.ty))
+                        .map(|o| (scope.clone(), o.name.clone())),
+                );
                 declared.extend(iface.inputs.iter().map(|i| Declared {
                     scope: scope.clone(),
                     decl: i.clone(),
@@ -373,12 +399,13 @@ pub fn expand(program: &Program) -> Result<(Program, Vec<Declared>)> {
     }
 
     if diags.is_empty() {
-        Ok((
-            Program {
+        Ok(Expanded {
+            program: Program {
                 statements: expanded,
             },
-            declared,
-        ))
+            inputs: declared,
+            secret_outputs,
+        })
     } else {
         Err(Diagnostics(diags).into())
     }
@@ -624,11 +651,17 @@ pub fn refinement(i: &InputDecl, scope: &str) -> Vec<Stmt> {
     } else {
         format!("input {} of {scope}", i.name)
     };
+    // A secret input's value is not printed.
+    let ctx = if matches!(&i.ty, TypeExpr::Apply(n, _) if n == "secret") {
+        BTreeMap::new()
+    } else {
+        BTreeMap::from([("value".to_string(), v.clone())])
+    };
     let deny = atom(
         "deny",
         vec![
             str_term(&format!("{who} fails its refinement: {text}")),
-            Term::Obj(BTreeMap::from([("value".to_string(), v.clone())])),
+            Term::Obj(ctx),
         ],
         i.span,
     );

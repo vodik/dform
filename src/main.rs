@@ -287,6 +287,10 @@ fn run() -> Result<()> {
     let backend = FakeCloud::with_paths(&paths.world, &paths.inventory, load_schema(&providers)?)
         .with_chaos(chaos.clone())
         .with_answers(dform::externs::load_answers(&providers)?);
+    // The static secret pass, against the provider's schema.
+    if let Some(l) = &lowered {
+        dform::secrets::check(l, backend.schema())?;
+    }
     // Externs are asked on demand: of the file provider, else of the mock.
     let (no_program, no_fns) = (dform::ast::Program { statements: vec![] }, vec![]);
     let program_dir = files[0].parent().unwrap_or(Path::new("")).to_path_buf();
@@ -914,6 +918,7 @@ fn run_tests(
         let run = || -> Result<Vec<String>> {
             let p = dform::scenario::select(program, name)?;
             let lowered = dform::transform::lower(&p)?;
+            dform::secrets::check(&lowered, backend.schema())?;
             let mut given = input_fact_keys(&p);
             let mut pairs = Vec::new();
             for kv in set {

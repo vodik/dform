@@ -31,6 +31,7 @@ type_attr(k8s.deployment, id, string, [computed, id]).
 type_attr(k8s.deployment, uid, string, [computed, id]).
 type_attr(k8s.secret, id, string, [computed, id]).
 type_attr(k8s.secret, uid, string, [computed, id]).
+type_attr(k8s.secret, data, map, [sensitive]).
 
 type_attr(gke_cluster, endpoint, string, [computed]).
 type_attr(gke_cluster, ca_certificate, string, [computed]).

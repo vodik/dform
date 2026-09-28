@@ -22,6 +22,7 @@ pub mod provider;
 pub mod query;
 pub mod scenario;
 pub mod schema;
+pub mod secrets;
 pub mod stack;
 pub mod state;
 pub mod stuck;

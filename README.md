@@ -349,6 +349,24 @@ redactor: `plan` (text, `--json`, the plan file), `show`, `query`, `why`,
 `graph`, and the policy messages on stderr, whose context quotes values and
 rule text.
 
+Secrets are also checked statically (E DR-19): one dataflow pass over
+the predicate signatures labels every position a secret reaches, from a
+`sensitive` schema attribute, an input declared `secret(T)` (`input pw:
+secret(string)`) or an extern column declared `-value: secret(T)`, through
+rules, `format`, arithmetic, lists and objects. A rule that would leak one
+is a compile error with a span, before anything is evaluated:
+
+| code  | the secret reaches |
+|-------|--------------------|
+| E0301 | a comparison, a builtin predicate or an inspecting function (`len`, `split`, `inet_*`) |
+| E0302 | a negated literal |
+| E0303 | an aggregate other than `collect_*` (`count` leaks cardinality) |
+| E0304 | a public place: a resource attribute the schema does not mark `sensitive`, a setting, an output or input not declared `secret(T)`, a `deny`/`warn` |
+| E0305 | a resource address (`want`, a resource name, `ref`, `scoped`) |
+
+An input's own refinement (`input pw: secret(string) where len(pw) >=
+12`) is where a secret may be checked; its deny does not print the value.
+
 ## Asking the fact store
 
 `dform query` evaluates a pattern, or a conjunction of body literals, against

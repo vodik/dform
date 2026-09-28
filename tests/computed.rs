@@ -59,6 +59,7 @@ type_attr(db.instance, password, string, [computed, sensitive]).
 type_attr(db.instance, master_password, string, [sensitive]).
 type_provider(app.secret, mock).
 type_attr(app.secret, id, string, [computed, id]).
+type_attr(app.secret, value, string, [sensitive]).   # E0304 unless it is
 "#;
 
 const SECRET_PROG: &str = r#"edition 2026.

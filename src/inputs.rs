@@ -53,7 +53,7 @@ pub fn type_text(t: &TypeExpr) -> String {
 }
 
 /// The type names an input may have. `addr`, `ref(...)` and `any` are
-/// accepted unchecked.
+/// accepted unchecked; `secret(T)` is `T`, labeled secret (`secrets`).
 pub fn check_type(t: &TypeExpr) -> Result<(), String> {
     match t {
         TypeExpr::Name(n) => match n.as_str() {
@@ -69,7 +69,7 @@ pub fn check_type(t: &TypeExpr) -> Result<(), String> {
                 }
                 Ok(())
             }
-            ("list" | "set", [x]) => check_type(x),
+            ("list" | "set" | "secret", [x]) => check_type(x),
             ("ref", _) => Ok(()),
             _ => Err(format!("unknown type {}", type_text(t))),
         },
@@ -100,6 +100,7 @@ pub fn has_type(t: &TypeExpr, v: &Value) -> bool {
                 Value::List(xs) => xs.iter().all(|e| has_type(x, e)),
                 _ => false,
             },
+            ("secret", [x]) => has_type(x, v),
             _ => true,
         },
         TypeExpr::Object(fs) => match v {
@@ -123,6 +124,7 @@ pub fn coerce(t: &TypeExpr, v: Value) -> Value {
         },
         (TypeExpr::Name(n), Value::Int(i)) if n == "string" => Value::Str(i.to_string()),
         (TypeExpr::Name(n), Value::Bool(b)) if n == "string" => Value::Str(b.to_string()),
+        (TypeExpr::Apply(n, xs), v) if n == "secret" && xs.len() == 1 => coerce(&xs[0], v),
         (_, v) => v,
     }
 }

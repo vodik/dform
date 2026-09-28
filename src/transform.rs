@@ -16,6 +16,9 @@ pub struct Lowered {
     pub inputs: Vec<crate::inputs::Declared>,
     /// `extern p(+a, -b)` declarations: what the provider answers on demand.
     pub extern_fns: Vec<crate::ast::ExternFn>,
+    /// Outputs declared `secret(T)`: (scope, key), scope `""` for the
+    /// stack's own.
+    pub secret_outputs: Vec<(String, String)>,
 }
 
 pub fn lower(program: &Program) -> Result<Lowered> {
@@ -23,7 +26,11 @@ pub fn lower(program: &Program) -> Result<Lowered> {
     let program = apply_decls(program)?;
     // In the future, imports should be handled in a loader before parsing.
     // For now, keep Import statements in the AST but drop them before eval.
-    let (expanded, inputs) = crate::modules::expand(&program)?;
+    let crate::modules::Expanded {
+        program: expanded,
+        inputs,
+        secret_outputs,
+    } = crate::modules::expand(&program)?;
     let expanded = expand_when(&expanded)?;
     let expanded = desugar_settings(&expanded)?;
     let (expanded, externs, extern_fns) = drop_metadata(&expanded);
@@ -36,6 +43,7 @@ pub fn lower(program: &Program) -> Result<Lowered> {
         externs,
         inputs,
         extern_fns,
+        secret_outputs,
     })
 }
 

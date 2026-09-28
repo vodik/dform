@@ -1,0 +1,457 @@
+//! Static secret labels (E DR-19, A's information-flow pass): one dataflow
+//! fixpoint over predicate signatures, `public < secret`.
+//!
+//! Sources: a schema attribute marked `sensitive` (an `attr` read of it, a
+//! `ref` to it), an input declared `secret(T)`, an extern column declared
+//! `-v: secret(T)`. A head position is secret when a secret value reaches
+//! it through its rule: a variable bound at a secret position, or built
+//! from one (`format`, arithmetic, lists, objects, field access).
+//!
+//! Then each rule is checked, each violation a compile error with a span:
+//!
+//! - E0301 a comparison, a builtin predicate or an inspecting function
+//!   (`len`, `split`, `inet_*`, ...) over a secret: comparing leaks a bit;
+//! - E0302 a negated literal over a secret: absence leaks a bit;
+//! - E0303 an aggregate other than `collect_*` over a secret: `count`
+//!   leaks cardinality;
+//! - E0304 a secret reaching a public place: a resource attribute the
+//!   schema does not mark `sensitive`, a setting, an output not declared
+//!   `secret(T)`, an input not declared `secret(T)`, a `deny`/`warn`;
+//! - E0305 a secret reaching a resource address (`want`, `arg`, `ref`,
+//!   `scoped`): names are printed everywhere.
+//!
+//! An input's own refinement (`input pw: secret(string) where ...`) is the
+//! boundary where a secret may be checked, so its generated rules are
+//! exempt from E0301/E0302.
+
+use crate::ast::{Atom, Lit, Program, Span, Stmt, Term, TypeExpr};
+use crate::diag::{Diagnostic, Diagnostics};
+use crate::schema::Schema;
+use crate::transform::Lowered;
+use crate::value::Value;
+use anyhow::Result;
+use std::collections::BTreeSet;
+
+/// Functions a secret flows through without being inspected.
+const CARRY: &[&str] = &[
+    "format",
+    "concat",
+    "add",
+    "sub",
+    "mul",
+    "div",
+    "mod",
+    "to_string",
+    "__path",
+    "collect",
+    "collect_set",
+    "collect_list",
+];
+
+/// Aggregates that only collect: their result is secret, nothing leaks.
+const COLLECT: &[&str] = &["collect", "collect_set", "collect_list"];
+
+fn s(t: &Term) -> Option<&str> {
+    match t {
+        Term::Val(Value::Str(x)) => Some(x),
+        _ => None,
+    }
+}
+
+struct Pass<'a> {
+    schema: &'a Schema,
+    /// Secret positions: (predicate, column).
+    secret: BTreeSet<(String, usize)>,
+    /// Pseudo-type cells declared secret: (type, scope, key).
+    cells: BTreeSet<(String, String, String)>,
+}
+
+impl Pass<'_> {
+    /// Is `attr(T, A, P, _)` a secret cell?
+    fn attr_secret(&self, typ: &Term, addr: &Term, path: &Term) -> bool {
+        match (s(typ), s(path)) {
+            (Some(t), Some(p)) => {
+                let p = p.trim_start_matches('.');
+                if crate::transform::is_pseudo_type(t) {
+                    return s(addr).is_some_and(|a| {
+                        self.cells
+                            .contains(&(t.to_string(), a.to_string(), p.to_string()))
+                    });
+                }
+                // A read of an object holding a sensitive leaf is secret too.
+                self.schema.is_sensitive(t, p)
+                    || self.schema.facts.iter().any(|f| {
+                        f.pred == "type_attr"
+                            && s(&f.args[0]) == Some(t)
+                            && s(&f.args[1]).is_some_and(|q| q.starts_with(&format!("{p}.")))
+                            && self.flag(f, "sensitive")
+                    })
+            }
+            // A path the program computes: secret if any it could be is.
+            (Some(t), None) => self.schema.facts.iter().any(|f| {
+                f.pred == "type_attr" && s(&f.args[0]) == Some(t) && self.flag(f, "sensitive")
+            }),
+            (None, _) => self
+                .schema
+                .facts
+                .iter()
+                .any(|f| f.pred == "type_attr" && self.flag(f, "sensitive")),
+        }
+    }
+
+    fn flag(&self, f: &Atom, flag: &str) -> bool {
+        matches!(f.args.get(3), Some(Term::Val(Value::List(fs))) if fs.contains(&Value::Str(flag.into())))
+            || matches!(f.args.get(3), Some(Term::List(fs)) if fs.iter().any(|t| s(t) == Some(flag)))
+    }
+
+    /// Is `t` secret given the secret variables `vars`?
+    fn term_secret(&self, t: &Term, vars: &BTreeSet<String>) -> bool {
+        match t {
+            Term::Var(v) => vars.contains(v),
+            Term::Func { name, args } if name == "ref" && args.len() == 3 => {
+                self.attr_secret(&args[0], &args[1], &args[2])
+                    || args.iter().any(|a| self.term_secret(a, vars))
+            }
+            Term::Func { args, .. } | Term::List(args) => {
+                args.iter().any(|a| self.term_secret(a, vars))
+            }
+            Term::Obj(m) => m.values().any(|a| self.term_secret(a, vars)),
+            _ => false,
+        }
+    }
+
+    /// The secret variables of a body, to a fixpoint (an equality may come
+    /// before what binds its other side).
+    fn body_vars(&self, body: &[Lit]) -> BTreeSet<String> {
+        let mut vars = BTreeSet::new();
+        loop {
+            let before = vars.len();
+            for l in body {
+                match l {
+                    Lit::Pos(a) => {
+                        for (i, t) in a.args.iter().enumerate() {
+                            if self.position_secret(a, i) || self.term_secret(t, &vars) {
+                                collect_vars(t, &mut vars);
+                            }
+                        }
+                    }
+                    Lit::Eq(x, y) => {
+                        if self.term_secret(x, &vars) {
+                            collect_vars(y, &mut vars);
+                        }
+                        if self.term_secret(y, &vars) {
+                            collect_vars(x, &mut vars);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if vars.len() == before {
+                return vars;
+            }
+        }
+    }
+
+    /// The first leaf of a contribution `arg(T, A, P, V)` where a secret
+    /// meets a public path: `V` is taken apart by object keys (a
+    /// contribution to `a.b` is `{b: V}` at `a`).
+    fn public_leaf(
+        &self,
+        typ: &Term,
+        addr: &Term,
+        path: &Term,
+        value: &Term,
+        vars: &BTreeSet<String>,
+    ) -> Option<String> {
+        if !self.term_secret(value, vars) {
+            return None;
+        }
+        // Is the path public: not sensitive, nor under a sensitive one?
+        let here = |p: &str| match s(typ) {
+            Some(t) if !crate::transform::is_pseudo_type(t) => !self.schema.is_sensitive(t, p),
+            _ => !self.attr_secret(typ, addr, &Term::Val(Value::Str(p.into()))),
+        };
+        let Some(p) = s(path) else {
+            return (!self.attr_secret(typ, addr, path)).then(|| "?".to_string());
+        };
+        let p = p.trim_start_matches('.').to_string();
+        if !here(&p) {
+            return None;
+        }
+        match value {
+            Term::Obj(m) => m.iter().find_map(|(k, v)| {
+                self.public_leaf(
+                    typ,
+                    addr,
+                    &Term::Val(Value::Str(format!("{p}.{k}"))),
+                    v,
+                    vars,
+                )
+            }),
+            _ => Some(p),
+        }
+    }
+
+    fn position_secret(&self, a: &Atom, i: usize) -> bool {
+        match (a.pred.as_str(), a.args.len()) {
+            ("attr" | "world_attr", 4) if i == 3 => {
+                self.attr_secret(&a.args[0], &a.args[1], &a.args[2])
+            }
+            _ => self.secret.contains(&(a.pred.clone(), i)),
+        }
+    }
+}
+
+fn collect_vars(t: &Term, out: &mut BTreeSet<String>) {
+    match t {
+        Term::Var(v) => {
+            out.insert(v.clone());
+        }
+        Term::Func { args, .. } | Term::List(args) => {
+            args.iter().for_each(|a| collect_vars(a, out))
+        }
+        Term::Obj(m) => m.values().for_each(|a| collect_vars(a, out)),
+        _ => {}
+    }
+}
+
+/// Every rule and constraint: (head, body, span, is an input refinement).
+fn rules(program: &Program) -> Vec<(Option<&Atom>, &[Lit], Span)> {
+    program
+        .statements
+        .iter()
+        .filter_map(|st| match st {
+            Stmt::Rule(r) => Some((Some(&r.head), r.body.as_slice(), r.head.span)),
+            Stmt::Fact(a) => Some((Some(a), &[][..], a.span)),
+            Stmt::Constraint(c) => Some((None, c.body.as_slice(), c.span)),
+            _ => None,
+        })
+        .collect()
+}
+
+fn is_refinement(head: Option<&Atom>) -> bool {
+    head.is_some_and(|h| {
+        h.pred.rsplit("::").next().unwrap_or(&h.pred).starts_with("__refine_")
+            || (h.pred == "deny"
+                && matches!(h.args.first(), Some(Term::Val(Value::Str(m))) if m.contains("fails its refinement")))
+    })
+}
+
+fn is_secret_ty(t: &TypeExpr) -> bool {
+    matches!(t, TypeExpr::Apply(n, _) if n == "secret")
+}
+
+/// The pass over a lowered program against the provider schema.
+pub fn check(lowered: &Lowered, schema: &Schema) -> Result<()> {
+    let mut pass = Pass {
+        schema,
+        secret: BTreeSet::new(),
+        cells: BTreeSet::new(),
+    };
+    for d in &lowered.inputs {
+        if is_secret_ty(&d.decl.ty) {
+            pass.cells.insert((
+                crate::modules::INPUT.into(),
+                d.scope.clone(),
+                d.decl.name.clone(),
+            ));
+        }
+    }
+    for (scope, k) in &lowered.secret_outputs {
+        pass.cells
+            .insert((crate::transform::OUTPUT.into(), scope.clone(), k.clone()));
+    }
+    for f in &lowered.extern_fns {
+        for (i, b) in f.args.iter().enumerate() {
+            if crate::externs::is_secret(b) {
+                pass.secret.insert((f.name.clone(), i));
+            }
+        }
+    }
+    let rs = rules(&lowered.program);
+    // The fixpoint over predicate signatures.
+    loop {
+        let before = pass.secret.len();
+        for (head, body, _) in &rs {
+            let Some(h) = head else { continue };
+            let vars = pass.body_vars(body);
+            for (i, t) in h.args.iter().enumerate() {
+                if pass.term_secret(t, &vars) {
+                    pass.secret.insert((h.pred.clone(), i));
+                }
+            }
+        }
+        if pass.secret.len() == before {
+            break;
+        }
+    }
+
+    let mut diags = Vec::new();
+    for (head, body, span) in &rs {
+        let vars = pass.body_vars(body);
+        let refinement = is_refinement(*head);
+        let secret = |t: &Term| pass.term_secret(t, &vars);
+        for l in body.iter() {
+            match l {
+                Lit::Neq(x, y) | Lit::Gt(x, y) | Lit::Ge(x, y) | Lit::Lt(x, y) | Lit::Le(x, y)
+                    if !refinement && (secret(x) || secret(y)) =>
+                {
+                    diags.push(e0301(*span, "a comparison"));
+                }
+                Lit::Eq(x, y) if !refinement => {
+                    // `X = f(Secret)`: a function that inspects it.
+                    for t in [x, y] {
+                        if let Some(f) = inspecting(t, &|t| secret(t)) {
+                            diags.push(e0301(*span, &format!("{f}()")));
+                        }
+                    }
+                    // A test between two terms, neither a fresh variable.
+                    if !matches!(x, Term::Var(_))
+                        && !matches!(y, Term::Var(_))
+                        && (secret(x) || secret(y))
+                    {
+                        diags.push(e0301(*span, "an equality test"));
+                    }
+                }
+                Lit::Pos(a) if !refinement && is_builtin_pred(&a.pred) => {
+                    if a.args.iter().any(&secret) {
+                        diags.push(e0301(a.span, &format!("{}/{}", a.pred, a.args.len())));
+                    }
+                }
+                Lit::Not(a) if !refinement => {
+                    let bound_secret = a.args.iter().enumerate().any(|(i, t)| {
+                        secret(t) || (pass.position_secret(a, i) && !matches!(t, Term::Wildcard))
+                    });
+                    if bound_secret {
+                        diags.push(Diagnostic::error(
+                            a.span,
+                            format!(
+                                "E0302: `not {}(...)` over a secret: its absence leaks a bit",
+                                a.pred
+                            ),
+                        ));
+                    }
+                }
+                _ => {}
+            }
+        }
+        let Some(h) = head else { continue };
+        // E0303: an aggregate that is not a collect.
+        for t in &h.args {
+            if let Term::Func { name, args } = t
+                && matches!(name.as_str(), "count" | "sum" | "min" | "max")
+                && args.iter().any(&secret)
+            {
+                diags.push(Diagnostic::error(
+                    h.span,
+                    format!("E0303: {name}() over a secret leaks it; only collect_* may aggregate a secret"),
+                ));
+            }
+            if let Some(f) = inspecting(t, &|t| secret(t))
+                && !COLLECT.contains(&f.as_str())
+            {
+                diags.push(e0301(h.span, &format!("{f}()")));
+            }
+        }
+        // E0305: a name.
+        let named = |t: &Term| secret(t) || names_secret(t, &|t| secret(t));
+        let addr = match (h.pred.as_str(), h.args.len()) {
+            ("want", 2) | ("arg", 4 | 5) | ("adopt", 3) => Some(&h.args[1]),
+            _ => None,
+        };
+        if addr.is_some_and(named) || h.args.iter().any(|t| names_secret(t, &|t| secret(t))) {
+            diags.push(Diagnostic::error(
+                h.span,
+                "E0305: a secret reaches a resource address; names are printed everywhere",
+            ));
+        }
+        // E0304: a public place.
+        match (h.pred.as_str(), h.args.len()) {
+            ("arg", 5)
+                if let Some(leak) =
+                    pass.public_leaf(&h.args[0], &h.args[1], &h.args[2], &h.args[3], &vars) =>
+            {
+                let place = match (s(&h.args[0]), Some(leak.as_str())) {
+                    (Some(crate::transform::SETTINGS), Some(p)) => format!("setting .{p}"),
+                    (Some(crate::transform::OUTPUT), Some(p)) => {
+                        format!("output {p}, not declared secret(T)")
+                    }
+                    (Some(crate::modules::INPUT), Some(p)) => {
+                        format!("input {p}, not declared secret(T)")
+                    }
+                    (Some(t), Some("?")) => format!("{t} at a path the program computes"),
+                    (Some(t), Some(p)) => format!("{t} .{p}, not marked sensitive in the schema"),
+                    _ => "an attribute path the program computes".to_string(),
+                };
+                diags.push(Diagnostic::error(
+                    h.span,
+                    format!("E0304: a secret reaches {place}"),
+                ));
+            }
+            ("deny" | "warn", _) if !refinement && h.args.iter().any(secret) => {
+                diags.push(Diagnostic::error(
+                    h.span,
+                    format!(
+                        "E0304: a secret reaches a {} message or context, which is printed",
+                        h.pred
+                    ),
+                ));
+            }
+            _ => {}
+        }
+    }
+    if diags.is_empty() {
+        Ok(())
+    } else {
+        diags.dedup_by(|a, b| a.render(false) == b.render(false));
+        Err(Diagnostics(diags).into())
+    }
+}
+
+fn e0301(span: Span, what: &str) -> Diagnostic {
+    Diagnostic::error(
+        span,
+        format!("E0301: {what} over a secret: inspecting a secret leaks it"),
+    )
+    .with_help("check it at the input: `input k: secret(T) where ...`, or leave it to the provider")
+}
+
+fn is_builtin_pred(p: &str) -> bool {
+    matches!(
+        p,
+        "member" | "enumerate" | "inet_overlaps" | "inet_contains" | "ip_unspecified"
+    )
+}
+
+/// The first function in `t` that inspects a secret argument.
+fn inspecting(t: &Term, secret: &dyn Fn(&Term) -> bool) -> Option<String> {
+    match t {
+        Term::Func { name, args } => {
+            if !CARRY.contains(&name.as_str())
+                && !matches!(name.as_str(), "ref" | "scoped")
+                && args.iter().any(secret)
+            {
+                return Some(name.clone());
+            }
+            args.iter().find_map(|a| inspecting(a, secret))
+        }
+        Term::List(xs) => xs.iter().find_map(|a| inspecting(a, secret)),
+        Term::Obj(m) => m.values().find_map(|a| inspecting(a, secret)),
+        _ => None,
+    }
+}
+
+/// Does `t` name a resource with a secret (`ref(T, Secret, P)`,
+/// `scoped(S, Secret)`)?
+fn names_secret(t: &Term, secret: &dyn Fn(&Term) -> bool) -> bool {
+    match t {
+        Term::Func { name, args } => {
+            (name == "ref" && args.len() == 3 && secret(&args[1]))
+                || (name == "scoped" && args.iter().any(secret))
+                || args.iter().any(|a| names_secret(a, secret))
+        }
+        Term::List(xs) => xs.iter().any(|a| names_secret(a, secret)),
+        Term::Obj(m) => m.values().any(|a| names_secret(a, secret)),
+        _ => false,
+    }
+}
