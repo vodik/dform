@@ -243,6 +243,10 @@ impl Redactor {
         })
     }
 
+    pub fn is_secret(&self, v: &Value) -> bool {
+        self.secret(v).is_some()
+    }
+
     /// `partition::fmt_value`, with secrets as `(sensitive T/A#P)` and
     /// nulls as `?label`.
     pub fn fmt(&self, v: &Value) -> String {

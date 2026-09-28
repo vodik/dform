@@ -35,3 +35,13 @@ Review the diff (`git diff tests/golden/`) before committing — this
 records that the new output is intentional, not a regression. The
 engine's semantics work (nulls, phases, Z-set planning) is expected to
 change several of these snapshots; re-accept them as it lands.
+
+## Inspection snapshots
+
+`tests/golden/inspection/<name>.txt` pins `dform why`, `query` and `graph`
+output (stdout only), written by `tests/inspection_{why,query,graph}.rs`.
+Accept with the same variable:
+
+```bash
+UPDATE_GOLDEN=1 cargo test --test inspection_why --test inspection_query --test inspection_graph
+```

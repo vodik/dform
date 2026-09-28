@@ -5,6 +5,7 @@ use dform::ast::Term;
 use dform::chaos::Chaos;
 use dform::engine;
 use dform::fakecloud::FakeCloud;
+use dform::graph;
 use dform::ir;
 use dform::loader;
 use dform::partition;
@@ -93,6 +94,11 @@ enum Cmd {
     },
     /// Print the stratification of the program (partition graph strata)
     Strata,
+    /// Graphviz DOT: the resource dependency DAG (no argument), the
+    /// partition graph (`strata`), or a binary relation (`PRED` or `PRED/2`).
+    Graph {
+        what: Option<String>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -102,6 +108,28 @@ fn main() -> Result<()> {
     let program = loader::load_program(&files)?;
     if let Cmd::Strata = cli.cmd {
         return print_strata(&files, &program, &load_schema(&cli.providers)?);
+    }
+    if let Cmd::Graph { what: Some(w) } = &cli.cmd
+        && w == "strata"
+    {
+        let graph = partition::build(
+            &program,
+            &load_schema(&cli.providers)?,
+            &partition::Options::default(),
+        )?;
+        return match partition::stratify(&graph) {
+            partition::Verdict::Stratified { strata } => {
+                print!("{}", graph::strata(&graph, Some(&strata)));
+                Ok(())
+            }
+            partition::Verdict::Rejected {
+                scc,
+                negative_edges,
+            } => {
+                print!("{}", graph::strata(&graph, None));
+                bail!("{}", partition::cycle_error(&graph, &scc, &negative_edges))
+            }
+        };
     }
 
     let set_keys: Vec<String> = cli
@@ -221,6 +249,11 @@ fn main() -> Result<()> {
             println!("{}", json);
         }
         Cmd::Strata => unreachable!("handled before evaluation"),
+        Cmd::Graph { what: None } => print!("{}", graph::resources(&resources)),
+        Cmd::Graph { what: Some(spec) } => {
+            let redact = query::Redactor::new(&res.facts, backend.schema());
+            print!("{}", graph::relation(&spec, &res.facts, &redact)?);
+        }
         Cmd::Plan => {
             let sections = plan_sections(&res, &resources, backend.schema());
             let plan = backend.plan(&resources, &adopts, &st)?;

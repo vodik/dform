@@ -186,6 +186,14 @@ cargo run -- why 'attr(net.vpc, "network.main::vpc", "tags.team", "platform")' -
 #   └─ ... 1 other contribution (--all)
 ```
 
+`dform graph` prints Graphviz DOT, nodes and edges sorted:
+
+```bash
+cargo run -- graph | dot -Tsvg > resources.svg   # resource DAG: A -> B when A reads B (a ref, a null)
+cargo run -- graph strata                        # partition graph, a cluster per stratum, negative edges dashed
+cargo run -- graph vpc_peer/2                    # any binary relation of the fact store
+```
+
 ## Chaos: failure and latency injection
 
 `apply --chaos SPEC` (repeatable) makes the fake provider misbehave, the way a

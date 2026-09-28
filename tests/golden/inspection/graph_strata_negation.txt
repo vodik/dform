@@ -1,0 +1,16 @@
+digraph "strata" {
+  rankdir=LR;
+  subgraph cluster_0 {
+    label="stratum 0";
+    "p";
+    "r";
+  }
+  subgraph cluster_1 {
+    label="stratum 1";
+    "q";
+    "s";
+  }
+  "p" -> "q";
+  "q" -> "s";
+  "r" -> "q" [style=dashed];
+}

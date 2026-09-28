@@ -3,6 +3,7 @@ pub mod chaos;
 pub mod circuit;
 pub mod engine;
 pub mod fakecloud;
+pub mod graph;
 pub mod ir;
 pub mod lattice;
 pub mod lint;
