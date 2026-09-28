@@ -62,7 +62,7 @@ fn space(prev: &SyntaxToken, cur: &SyntaxToken) -> &'static str {
     if pp == cp && matches!(cp, Some(BLOCK_PATH | ADDR | QNAME_VAR)) {
         return "";
     }
-    if (c == SLASH || p == SLASH) && matches!(cp, Some(DECL | EXPORT)) {
+    if (c == SLASH || p == SLASH) && matches!(cp, Some(DECL | EXPORT | INPUT_RELATION)) {
         return "";
     }
     if p == MINUS && pp == Some(UNARY_EXPR) {

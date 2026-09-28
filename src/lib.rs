@@ -1,6 +1,7 @@
 pub mod ast;
 pub mod chaos;
 pub mod circuit;
+pub mod controller;
 pub mod diag;
 pub mod engine;
 pub mod executor;
@@ -29,5 +30,6 @@ pub mod stuck;
 pub mod syntax;
 pub mod transform;
 pub mod value;
+pub mod watch;
 pub mod why;
 pub mod zset;

@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 use dform::ast::Atom;
 use dform::ast::Term;
 use dform::chaos::Chaos;
+use dform::controller;
 use dform::engine;
 use dform::executor;
 use dform::fakecloud::FakeCloud;
@@ -18,12 +19,13 @@ use dform::schema;
 use dform::state;
 use dform::stuck;
 use dform::value::Value;
+use dform::watch;
 use dform::why;
 use dform::zset;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Clone)]
 #[command(name = "dform")]
 #[command(about = "Facts + rules + constraints for infra", long_about = None)]
 struct Cli {
@@ -69,7 +71,7 @@ struct Cli {
     inventory: Option<PathBuf>,
 }
 
-#[derive(Subcommand, Debug)]
+#[derive(Subcommand, Debug, Clone)]
 enum Cmd {
     Eval,
     Plan {
@@ -144,10 +146,31 @@ enum Cmd {
     Graph {
         what: Option<String>,
     },
+    /// Controller mode: wait for an input relation's source or the world to
+    /// change, then refresh, evaluate, plan, gate on policy and apply, one
+    /// log line per event and per tick.
+    Controller {
+        /// The stack to run: must be the program's own.
+        #[arg(long = "stack")]
+        stack: Option<String>,
+        /// How often to look at the sources and the world file, in
+        /// milliseconds (polling: no file notification).
+        #[arg(long = "poll", default_value_t = 500)]
+        poll: u64,
+        /// Handle what changed since the last run (or a resync), then exit.
+        #[arg(long)]
+        once: bool,
+        /// Exit after this many events (the start counts).
+        #[arg(long = "max-events")]
+        max_events: Option<usize>,
+        /// Per event, stop after this many ticks if still deformed.
+        #[arg(long = "max-ticks", default_value_t = 8)]
+        max_ticks: usize,
+    },
 }
 
 fn main() -> std::process::ExitCode {
-    match run() {
+    match run(Cli::parse(), None) {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(e) => {
             use std::io::IsTerminal;
@@ -160,8 +183,12 @@ fn main() -> std::process::ExitCode {
     }
 }
 
-fn run() -> Result<()> {
-    let mut cli = Cli::parse();
+/// One run of the command line. `hook`: controller mode's part of an apply
+/// (`controller::Hook`).
+fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
+    if let Cmd::Controller { .. } = cli.cmd {
+        return run_controller(cli);
+    }
     let plan_file = match &cli.cmd {
         Cmd::Apply { plan_file, .. } => plan_file.clone(),
         _ => None,
@@ -181,6 +208,12 @@ fn run() -> Result<()> {
     }
     let files = default_files(&cli.files)?;
     let mut program = loader::load_program(&files)?;
+    // Input relations: declared, and stated as their sources hold them now.
+    let relations = watch::take(&mut program)?;
+    if let Some(h) = hook.as_deref_mut() {
+        h.inputs(&relations);
+    }
+    program.statements.extend(watch::read(&relations)?);
     if let Cmd::Plan {
         scenario: Some(name),
         ..
@@ -280,6 +313,9 @@ fn run() -> Result<()> {
         (None, None) => state::stack_paths(&root, &stack),
     };
     paths.inventory = resolve_inventory(&cli.inventory, &cli.world, &paths.inventory);
+    if let Some(h) = hook.as_deref_mut() {
+        h.open(&paths.state, &paths.world)?;
+    }
     let chaos = match &cli.cmd {
         Cmd::Apply { chaos, .. } => Chaos::parse(chaos)?,
         _ => Chaos::default(),
@@ -326,6 +362,9 @@ fn run() -> Result<()> {
     base_extra.extend(dform::stack::stack_outputs(&root, &stack)?);
     base_extra.extend(backend.catalog()?);
     base_extra.extend(backend.discover()?);
+    if let Some(h) = hook.as_deref_mut() {
+        base_extra.extend(h.drift_facts(&backend.observe(&st)?));
+    }
     // Refresh as facts: round 0 resolves every null the world can answer,
     // except those of `withheld` addresses (being replaced). `more`: the
     // deformation facts of a policy pass, which continues the last
@@ -602,7 +641,9 @@ fn run() -> Result<()> {
             println!("{}", json);
         }
         Cmd::Strata | Cmd::Test => unreachable!("handled before evaluation"),
-        Cmd::Fmt { .. } => unreachable!("handled before loading"),
+        Cmd::Fmt { .. } | Cmd::Controller { .. } => {
+            unreachable!("handled before loading")
+        }
         Cmd::Graph { what: None } => print!("{}", graph::resources(&resources)),
         Cmd::Graph { what: Some(spec) } => {
             let redact = query::Redactor::new(&res.facts, backend.schema());
@@ -767,6 +808,17 @@ fn run() -> Result<()> {
                 } = plan_for(res, &violations, resources, &adopts, &lifecycle, &st)?;
                 (res, resources) = (r, docs);
                 check_saved(&plan, &res, &sections, tick)?;
+                // Controller mode: the report is one log line, and the
+                // policy pass gates what this tick may apply.
+                let mut undeformed = false;
+                if let Some(h) = hook.as_deref_mut() {
+                    let text = report_of(&plan, &res, &sections, tick, &[], &denies).text();
+                    undeformed = text
+                        .lines()
+                        .next()
+                        .is_some_and(|l| l.ends_with(" is undeformed"));
+                    h.gate(tick, &mut plan, &res.facts, &text);
+                }
                 let held: Vec<String> = plan
                     .actions
                     .iter()
@@ -776,17 +828,25 @@ fn run() -> Result<()> {
                 // A create_before_destroy replacement deposes an object that
                 // is deleted at the next tick, once what depends on it has
                 // moved to the replacement.
-                let boundary = !held.is_empty()
+                let mut boundary = !held.is_empty()
                     || !sections.pending_groups.is_empty()
                     || !sections.undetermined.is_empty()
                     || plan
                         .actions
                         .iter()
                         .any(|a| matches!(a.kind, ActionKind::Replace { create_first: true }));
-                if tick > 1 || boundary {
-                    println!("tick {tick}:");
+                // The controller applies ticks until a plan is undeformed:
+                // every tick that changes something is followed by another.
+                if hook.is_some() {
+                    boundary |= plan.actions.iter().any(|a| {
+                        !matches!(a.kind, ActionKind::Noop) && waits_on(a, &sections).is_none()
+                    });
+                } else {
+                    if tick > 1 || boundary {
+                        println!("tick {tick}:");
+                    }
+                    show(&plan, &res, &sections, tick, &[], &denies);
                 }
-                show(&plan, &res, &sections, tick, &[], &denies);
                 let refused = refusals(&res, &sections);
                 if !refused.is_empty() {
                     print!("{}", dform::stack::refusal_text(&stack, &refused));
@@ -850,11 +910,20 @@ fn run() -> Result<()> {
                     if !st.outputs.is_empty() && cli.world.is_none() {
                         dform::stack::register(&root, &stack, &paths.state)?;
                     }
-                    if changed || tick > 1 {
+                    if let Some(h) = hook.as_deref_mut() {
+                        h.finish(&stack, undeformed, &backend.observe(&st)?)?;
+                    } else if changed || tick > 1 {
                         println!("apply: complete");
                     } else {
                         println!("apply: nothing to do");
                     }
+                    break;
+                }
+                if !changed && let Some(h) = hook.as_deref_mut() {
+                    // Everything definite is held: wait for the next event.
+                    st.in_flight = None;
+                    persist(&st)?;
+                    h.finish(&stack, false, &backend.observe(&st)?)?;
                     break;
                 }
                 if !changed {
@@ -900,6 +969,79 @@ fn run() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// `dform controller`: a run per event (`controller::Hook`), until
+/// `--once` or `--max-events` says stop. A run that fails is logged and the
+/// controller goes on watching; the first one failing ends it.
+fn run_controller(cli: Cli) -> Result<()> {
+    let Cmd::Controller {
+        stack,
+        poll,
+        once,
+        max_events,
+        max_ticks,
+    } = cli.cmd.clone()
+    else {
+        unreachable!("run_controller is for `controller`");
+    };
+    let files = default_files(&cli.files)?;
+    let program = loader::load_program(&files)?;
+    let cfg = dform::stack::config(&program)?;
+    let own = cfg
+        .name
+        .clone()
+        .unwrap_or_else(|| state::stack_name(&files[0]));
+    if let Some(s) = &stack
+        && *s != own
+    {
+        bail!(
+            "controller --stack {s}: the program ({}) owns stack {own}",
+            files[0].display()
+        );
+    }
+    controller::log(format_args!(
+        "controller {own}: {}, poll {poll}ms",
+        files
+            .iter()
+            .map(|f| f.display().to_string())
+            .collect::<Vec<_>>()
+            .join(" ")
+    ));
+    let apply = Cli {
+        cmd: Cmd::Apply {
+            plan_file: None,
+            chaos: vec![],
+            max_ticks,
+            parallel: 1,
+        },
+        ..cli
+    };
+    let mut hook = controller::Hook::default();
+    let mut events = 0;
+    loop {
+        if let Err(e) = run(apply.clone(), Some(&mut hook)) {
+            let text = dform::diag::report(&e, false);
+            controller::log(format_args!(
+                "error: {}",
+                text.lines()
+                    .next()
+                    .unwrap_or("")
+                    .trim_start_matches("error: ")
+            ));
+            if events == 0 {
+                return Err(e);
+            }
+            hook.failed()?;
+        }
+        events += 1;
+        if once || max_events.is_some_and(|n| events >= n) {
+            return Ok(());
+        }
+        while !hook.changed() {
+            std::thread::sleep(std::time::Duration::from_millis(poll));
+        }
+    }
 }
 
 /// The keys of the program's own `input("k", v)` facts.

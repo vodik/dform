@@ -104,7 +104,7 @@ argument of `want`, `arg`, `arg_add`, `attr`, `adopt`, `lifecycle`,
 ## Statements
 
 ```
-stmt       := provider | stack | import | input | output | export | contributes
+stmt       := provider | stack | import | input | inputrel | output | export | contributes
             | extern | typedecl | decl
             | module | instance | policy | apply | scenario | when
             | resource | settings
@@ -114,6 +114,7 @@ provider   := "provider" IDENT block
 stack      := "stack" QNAME block
 import     := "import" STRING
 input      := "input" IDENT ":" type ("=" term)? ("where" body)?
+inputrel   := "input" "relation" IDENT "/" INT "from" term   ; term: file(STRING) | git(STRING, STRING, STRING)
 output     := "output" IDENT (":" type | "=" term)
 export     := "export" IDENT "/" INT
 contributes:= "contributes" "arg" "to" (QNAME | IDENT | "_") "at" (PATH | "_")
@@ -215,7 +216,8 @@ into today's AST:
 | `import "f.df"`                  | the file's statements, loaded once               |
 | `extern p(+a, -b) persist`       | `p/2` is declared; a body literal of it is asked on demand (`src/externs.rs`) |
 | `scenario n { ... }`             | nothing, unless run: `dform test`, `plan --scenario n` add its statements (`src/scenario.rs`) |
-| `stack n { ... }`, `provider p { ... }` | no rules: the stack's name, backend and unknowns, the mock's schemas (`src/stack.rs`) |
+| `stack n { ... }`, `provider p { ... }` | no rules: the stack's name, backend, unknowns and role, the mock's schemas (`src/stack.rs`) |
+| `input relation p/N from S`      | `decl p/N`, and the facts source `S` holds now, re-read when it changes (`src/watch.rs`) |
 | `decl p/N`                       | `p/N` is declared (a provider feeds it)          |
 | `decl p(A: t, BC: t)`            | record fields `a`, `b_c` for `p{a: .., b_c: ..}` |
 | `arg(T, A, P, V) @override`      | `arg(T, A, P, V, override)`                      |
@@ -253,3 +255,8 @@ ticket that gives them meaning: `type` blocks and `decl type ... open`
 - A comprehension lowers to today's `collect_list` helper, not E's
   `collect_set`; the attribute's lattice decides whether order and
   duplicates matter.
+- `input relation p/N from S` is not in E §6 (DESIGN.org "Reactive inputs
+  and controller mode"). `relation` and `from` are contextual words:
+  `input relation: T` is still an input named `relation`. The declaration
+  belongs at the top of the program; `S` is `file("path")` or
+  `git("repo", "ref", "path")`, paths relative to the declaring file.

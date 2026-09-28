@@ -5,6 +5,8 @@ import "../../../modules/stdlib_net.df".
 import "../../../modules/iam.df".
 
 decl provided/2.
+input relation seen/2 from file("seen.facts").
+input relation: string = "an input named relation".
 decl project(Id: int, NetworkName: string).
 
 project(1, "net-a").

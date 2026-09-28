@@ -1,0 +1,1 @@
+tests/syntax/err/input_relation_arity.df:4:24: expected `/`, found an identifier `from`

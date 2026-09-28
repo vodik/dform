@@ -722,6 +722,81 @@ cargo run -- test
 cargo run -- plan --scenario dev
 ```
 
+## Controller mode
+
+`dform controller` is the second executor over the same evaluator: the
+plan is the diff a reconciler applies, so nothing in the language changes.
+It waits for an input relation's source or the world file to change, then
+does what `apply` does (refresh, evaluate, plan, the policy pass, ticks
+until the plan is undeformed or `--max-ticks`), gated by policy, and logs
+one line per event and per tick:
+
+```
+04:22:01 event start
+04:22:01 tick 1: plan: 3 deformations (3 create)
+04:22:01 stack renfry.workload is undeformed
+04:22:07 input release changed (file release.facts)
+04:22:07 event input release
+04:22:07 tick 1: plan: 1 deformation (1 update)
+04:22:07 stack renfry.workload is undeformed
+04:22:12 event world .dform/renfry.workload/remote.json changed
+04:22:12 drift k8s.deployment.web spec.replicas: 3 -> 5 (auto_reconcile)
+04:22:12 tick 1: plan: 1 deformation (1 update)
+04:22:12 stack renfry.workload is undeformed
+```
+
+```bash
+W=examples/bootstrap/workload.df
+cargo run -- --file $W controller --stack renfry.workload             # poll every 500ms
+cargo run -- --file $W controller --poll 100 --max-events 3           # stop after 3 events
+cargo run -- --file $W controller --once                              # what changed since the last run
+```
+
+`--stack NAME` must be the program's own stack. `--poll MS` (default 500)
+is how often the sources and the world file are looked at: polling, no file
+notification. `--once` handles what changed since the last run (`event
+resync` when nothing did) and exits; `--max-events N` exits after N events
+(the start counts). A run that fails is logged (`error: ...`) and the
+controller goes on watching; a failure of the first run ends it. Times are
+UTC. Every run re-reads and re-evaluates the whole program.
+
+Input relations feed facts from outside the program, re-read whenever
+their source changes; `plan` and `apply` read them too:
+
+```prolog
+input relation release/1 from file("release.facts").        # release(Image).
+input relation approve/2 from git("ops.git", "main", "approvals.df").
+```
+
+A source is a `.df` file of facts (`edition 2026.` first) of the
+relations declared from it; a fact of any other predicate is an error
+naming it. Paths are relative to the declaring file. A `git` source is read
+at the ref with `git show REF:PATH` (a bare repository works) and changes
+when the ref names another commit.
+
+The controller keeps `controller.json` beside the stack's state: the stamps
+of the sources and the world file as its last run left them, and the world
+as that run accepted it (the baseline). It says what changed (`event start`,
+`event input NAMES`, `event world`, `event resync`) and hands the world's
+difference from the baseline to the program as facts, `drift(T, A, Path,
+Before, After)` (one per leaf, list elements by index; `Path` "" and `After`
+`absent` for an object that is gone). Policy decides about it, and the
+controller gates every tick on the policy pass:
+
+- `hold(T, A, Reason)` holds `T.A`'s deformation: `tick N: proceed: held,
+  Reason: T.A`. A prod-style hold names what releases it, over an input
+  relation: `hold(k8s.deployment, A, "needs approval") :- env(prod),
+  deformation(_, k8s.deployment, A, _), release(I), not release_approved(I).`
+- Drift of `T.A` is corrected when every drifted path is
+  `auto_reconcile(T, A, Path)` or `approve(T, A)` holds, or the event is an
+  input change. Otherwise the deformation is held (`drift at PATH needs
+  approval`) and its baseline kept, so it is held again at every event
+  until an approval or an input change.
+
+The rest of the plan still applies. `examples/bootstrap/workload.df` is the
+demo: replicas are `auto_reconcile`, any other drift waits for `approve`,
+and in prod a release waits for `release_approved`.
+
 ## Testing
 
 `cargo test` runs the integration tests under `tests/` (one file per

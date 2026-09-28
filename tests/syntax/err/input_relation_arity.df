@@ -1,0 +1,4 @@
+edition 2026.
+
+# The arity is part of the declaration.
+input relation release from file("release.facts").

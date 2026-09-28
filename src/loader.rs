@@ -55,6 +55,7 @@ pub const PROVIDER_PREDS: &[&str] = &[
     "identity",
     "deformation",
     "world_digest",
+    "drift",
     "type_attr",
     "type_list_key",
     "type_provider",

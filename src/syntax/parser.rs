@@ -368,6 +368,18 @@ impl<'a> Parser<'a> {
                 p.qname()?;
                 p.block()
             })?,
+            INPUT_KW if !paren && self.nth_text(1) == "relation" && self.nth(2) != COLON => self
+                .simple(INPUT_RELATION, |p| {
+                    p.bump();
+                    p.expect_name()?;
+                    p.expect(SLASH)?;
+                    p.expect(INT)?;
+                    if !p.at_contextual("from") {
+                        return p.err_expected("`from`");
+                    }
+                    p.bump();
+                    p.term(false).map(drop)
+                })?,
             INPUT_KW if !paren => self.simple(INPUT, |p| {
                 p.expect_name()?;
                 p.expect(COLON)?;

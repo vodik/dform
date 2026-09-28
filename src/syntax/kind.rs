@@ -99,6 +99,8 @@ pub enum SyntaxKind {
     /// `key = term` inside a provider or stack block.
     KV,
     INPUT,
+    /// `input relation p/N from source(...)`: a relation fed from outside.
+    INPUT_RELATION,
     OUTPUT_DECL,
     EXPORT,
     CONTRIBUTES,

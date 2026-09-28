@@ -119,6 +119,9 @@ pub enum Stmt {
     /// `input k: T [= default] [where refinement]`: a module's or the
     /// stack's typed input.
     Input(InputDecl),
+    /// `input relation p/N from file("path")`: `p/N` is fed from outside
+    /// the program and re-read when its source changes (`watch`).
+    InputRelation(InputRelation),
     /// `output k: T` (a declaration) or `output k = term` (its value).
     Output(OutputDecl),
     /// `export p/N`: a module predicate readable as `m.i.p`.
@@ -259,6 +262,16 @@ pub struct InputDecl {
     pub ty: TypeExpr,
     pub default: Option<Term>,
     pub refinement: Vec<Lit>,
+    pub span: Span,
+}
+
+/// `input relation p/N from SOURCE`: the source is a call term,
+/// `file("path")` or `git("repo", "ref", "path")`, checked by `watch`.
+#[derive(Debug, Clone)]
+pub struct InputRelation {
+    pub pred: String,
+    pub arity: usize,
+    pub source: Term,
     pub span: Span,
 }
 

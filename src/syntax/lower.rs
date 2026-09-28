@@ -7,9 +7,9 @@ use super::SyntaxKind::{self, *};
 use super::{SyntaxNode, SyntaxToken};
 use crate::ast::{
     ApplyPolicy, Atom, AttrDecl, BindArg, Config, Constraint, Contributes, Decl, Export, Extern,
-    ExternFn, FieldAssign, FieldOp, Grant, Import, InputDecl, Instance, Lit, Module, OutputDecl,
-    Pending, PendingKind, PolicyPack, Program, Rank, Resource, RuleStmt, Scenario, Settings, Span,
-    Stmt, Term, TypeExpr, When,
+    ExternFn, FieldAssign, FieldOp, Grant, Import, InputDecl, InputRelation, Instance, Lit, Module,
+    OutputDecl, Pending, PendingKind, PolicyPack, Program, Rank, Resource, RuleStmt, Scenario,
+    Settings, Span, Stmt, Term, TypeExpr, When,
 };
 use crate::diag::Diagnostic;
 use crate::value::Value;
@@ -261,6 +261,20 @@ impl Lowerer {
                     ty,
                     default,
                     refinement,
+                    span,
+                }))
+            }
+            INPUT_RELATION => {
+                let pred = self.name_text(n, 2);
+                let arity = self.arity(n)?;
+                let Some(source) = terms(n).next() else {
+                    return Err(Skip);
+                };
+                let source = self.term(&source)?;
+                Ok(Stmt::InputRelation(InputRelation {
+                    pred,
+                    arity,
+                    source,
                     span,
                 }))
             }
