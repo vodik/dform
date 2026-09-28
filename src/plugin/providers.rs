@@ -213,8 +213,16 @@ impl Providers {
                 .iter()
                 .map(wire::from_fact)
                 .collect::<Result<Vec<Atom>>>()?;
-            let s = Schema::from_facts(&facts)
+            let mut s = Schema::from_facts(&facts)
                 .with_context(|| format!("the schema of provider {}", conn.name))?;
+            if resp.checks_refinements {
+                s.checks_refinements = s
+                    .provider_of
+                    .keys()
+                    .chain(s.attrs.keys().map(|(t, _)| t))
+                    .cloned()
+                    .collect();
+            }
             for t in s.provider_of.keys().chain(s.attrs.keys().map(|(t, _)| t)) {
                 owner.entry(t.clone()).or_insert(i);
             }
@@ -1009,6 +1017,24 @@ impl Tick<'_> {
         let i = cloud.route(&addr.typ);
         let provider = cloud.conns[i].name.clone();
         let world = self.world.as_mut().expect("read above");
+        // Refinements on sensitive paths: the provider checks each after
+        // materializing the secret (F DR-13 revised).
+        let assertions: Vec<pb::Assertion> = self
+            .lifecycle
+            .assertions
+            .get(addr)
+            .into_iter()
+            .flatten()
+            .map(|(path, c)| {
+                let (op, value) = crate::refine::to_assertion(c);
+                pb::Assertion {
+                    path: path.clone(),
+                    op,
+                    value: Some(wire::doc(&value)),
+                    message: format!("{at} .{path} fails its refinement {c}"),
+                }
+            })
+            .collect();
         let call = |op: pb::Op, remote: &str, config: Option<&Json>, create_first: bool| {
             let req = pb::ApplyRequest {
                 op: op as i32,
@@ -1017,7 +1043,11 @@ impl Tick<'_> {
                 remote: remote.to_string(),
                 config: config.map(wire::doc),
                 create_first,
-                assertions: Vec::new(),
+                assertions: if config.is_some() {
+                    assertions.clone()
+                } else {
+                    Vec::new()
+                },
                 spans: Vec::new(),
             };
             let r = cloud.conns[i].try_call(|mut c| async move { c.apply(req).await });

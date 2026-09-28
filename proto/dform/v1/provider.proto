@@ -271,7 +271,10 @@ message ApplyRequest {
   repeated Span spans = 8;
 }
 
-// `path` OP `value`: OP is one of eq, ne, len_ge, len_le, prefix.
+// `path` OP `value`: OP is one of eq, ne, len_ge, len_le, prefix, or a
+// refinement's own name with its arguments as `value` (F DR-13 revised):
+// range [lo, hi], prefix_len_le N, prefix_len_ge N, enum [v, ...],
+// regex "S", type "int|string|bool|inet".
 message Assertion {
   string path = 1;
   string op = 2;
