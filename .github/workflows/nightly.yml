@@ -1,0 +1,33 @@
+name: Nightly
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # tests/model.rs over 10^4 seeds: random programs and chaos schedules
+  # against the executor (CI runs 300). A failure prints the seed, the
+  # minimized schedule and the command that replays it.
+  model:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install protoc (build.rs generates the provider protocol)
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: The executor under random chaos, 10^4 seeds
+        run: cargo test --test model -- the_executor_under_random_chaos
+        env:
+          DFORM_MODEL_SEEDS: "10000"

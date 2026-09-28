@@ -1249,6 +1249,34 @@ than one backend (`tests/common`'s `Backend`): the same cases, the same
 output. `--parallel` schedules are exact on the direct backend, which
 answers in simulated time.
 
+`tests/model.rs` is a model test of the executor: a seed picks a random
+program over the fake schema and a few versions of it (refs, force_new
+cidrs, `prevent_destroy`, `create_before_destroy`, `moved`), objects in the
+cloud dform does not manage, and a schedule of applies and plan-file
+applies under random chaos (every knob, `--parallel`, the order calls in
+flight answer in, drift between a plan and its apply), then one apply
+without chaos. Every run is the command line in the test's process over
+the direct backend, behind a recorder that sees every provider call. It
+checks that state on disk holds every answered Apply call by the
+provider's next call, that no Apply names an object dform does not manage
+or an address the plan file does not list, that a plan file is refused
+exactly when a fresh plan differs, that nothing dform made is missing from
+state, that no Create meets an object already there, and that the last
+apply ends undeformed or on a deny. CI runs 300 seeds; the nightly
+workflow 10^4. A failure prints the seed and the schedule minimized, and
+replays with:
+
+```bash
+DFORM_MODEL_SEED=N DFORM_MODEL_SCHEDULE='apply p=2 stop-after=1' cargo test --test model
+DFORM_MODEL_SEEDS=10000 cargo test --test model   # more seeds (DFORM_MODEL_START offsets them)
+DFORM_MODEL_STRICT=1 cargo test --test model      # a Create that took effect unanswered is not excused
+```
+
+It must catch the executor persisting once per tick instead of after
+every Apply call (`executor::hooks`, dform-core's `test-hooks` feature,
+which only the root package's dev-dependency turns on; CI checks the
+`dform` binary does not carry it).
+
 Golden (snapshot) tests pin `plan` and `strata` output for a table of
 example and adversarial programs: `tests/golden.rs`, snapshots under
 `tests/golden/<program>/<case>.<plan|strata>.txt`. Accept a change (after

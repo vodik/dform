@@ -268,6 +268,21 @@ pub fn main(
     }
 }
 
+/// The command line `args` in this process, as often as a caller likes:
+/// `main` returning the error instead of printing it. A process reaches its
+/// providers one way: every call passes the same `launch`, and `main` has
+/// not set another. For tests that drive many runs (`tests/model.rs`).
+pub fn run_in_process(
+    launch: &'static (dyn plugin::Launch + Sync),
+    args: impl IntoIterator<Item = std::ffi::OsString>,
+) -> Result<()> {
+    let set = *LAUNCH.get_or_init(|| launch);
+    if !std::ptr::addr_eq(set, launch) {
+        bail!("internal: this process reaches its providers through another backend");
+    }
+    run(Cli::try_parse_from(args)?, None)
+}
+
 /// One run of the command line. `hook`: controller mode's part of an apply
 /// (`controller::Hook`).
 fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
