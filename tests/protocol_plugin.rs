@@ -7,11 +7,11 @@
 mod common;
 use common::Scratch;
 
-const PROG: &str = r#"edition 2026.
+const PROG: &str = r#"edition 2026
 
-resource net.vpc main { cidr = "10.0.0.0/16" }.
-resource net.subnet a { vpc_id = ref(net.vpc, main, id), cidr = "10.0.1.0/24" }.
-resource compute.vm app { subnet_id = ref(net.subnet, a, id) }.
+resource net.vpc main { cidr = "10.0.0.0/16" }
+resource net.subnet a { vpc_id = ref(net.vpc, "main", "id"), cidr = "10.0.1.0/24" }
+resource compute.vm app { subnet_id = ref(net.subnet, "a", "id") }
 "#;
 
 const FAKE: &str = env!("CARGO_BIN_EXE_dform-provider-fake");
@@ -69,8 +69,7 @@ fn a_source_directory_holding_an_executable_is_that_plugin() {
     std::os::unix::fs::symlink(FAKE, s.path("prov/dform-provider-fake")).unwrap();
     s.write(
         "p.df",
-        "edition 2026.\n\nprovider fake { source = \"prov\" }.\n\
-         resource net.vpc main { cidr = \"10.0.0.0/16\" }.\n",
+        "edition 2026\n\nprovider fake { source = \"prov\" }\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\n",
     );
     let r = dform(&s, &["plan"]).success();
     assert!(r.stdout.contains("+ net.vpc.main"), "{}", r.stdout);

@@ -931,7 +931,7 @@ pub fn query(body: &[Lit], facts: &BTreeSet<Atom>) -> Result<Vec<Answer>> {
 
 /// E §2.6: a body predicate with no definition is a compile error. Defined
 /// means: a fact or a rule head, a builtin, a compiler-owned or
-/// provider-injected predicate, a fact given to this run, or `decl p/N.`.
+/// provider-injected predicate, a fact given to this run, or `decl p/N`.
 fn check_defined(
     rules: &[RuleStmt],
     constraints: &[Constraint],
@@ -969,7 +969,7 @@ fn check_defined(
                     )
                     .with_note(format!("in rule: {}", text(k)))
                     .with_help(format!(
-                        "define it, or declare a predicate a provider feeds with `decl {}/{}.`",
+                        "define it, or declare a predicate a provider feeds with `decl {}/{}`",
                         a.pred,
                         a.args.len()
                     )),
@@ -3359,12 +3359,12 @@ mod tests {
     /// aggregate used to see every partial result mid-fixpoint.
     #[test]
     fn aggregate_consumer_sees_one_complete_result() {
-        let (r, _) = run("decl n/1 mixed.
-             n(1).
-             n(2) :- n(1).
-             n(3) :- n(2).
-             all(collect_set(X)) :- n(X).
-             snap(L) :- all(L).")
+        let (r, _) = run("decl n/1 mixed
+             n(1)
+             n(2) if n(1)
+             n(3) if n(2)
+             all(collect_set(x)) if n(x)
+             snap(l) if all(l)")
         .unwrap();
         assert_eq!(facts_of(&r, "snap"), vec!["snap([1, 2, 3])".to_string()]);
     }
@@ -3373,9 +3373,9 @@ mod tests {
     /// the text of every rule on it.
     #[test]
     fn negative_cycle_is_an_error_with_rule_text() {
-        let err = run("q(1).
-             p(X) :- q(X), not r(X).
-             r(X) :- p(X).")
+        let err = run("q(1)
+             p(x) if q(x), not r(x)
+             r(x) if p(x)")
         .unwrap_err()
         .to_string();
         assert!(err.contains("negative cycle"), "{err}");
@@ -3386,10 +3386,10 @@ mod tests {
     /// of one type may negate, or aggregate over, `want` of another type.
     #[test]
     fn want_is_partitioned_by_type() {
-        let (r, _) = run("want(net.subnet, a).
-             want(net.subnet, b).
-             subnets(collect_set(S)) :- want(net.subnet, S).
-             want(db.postgres, db) :- subnets(L), member(L, a), not want(net.subnet, c).")
+        let (r, _) = run("want(\"net.subnet\", \"a\")
+             want(\"net.subnet\", \"b\")
+             subnets(collect_set(s)) if want(\"net.subnet\", s)
+             want(\"db.postgres\", \"db\") if subnets(l), member(l, \"a\"), not want(\"net.subnet\", \"c\")")
         .unwrap();
         assert!(facts_of(&r, "want").contains(&"want(\"db.postgres\", \"db\")".to_string()));
     }
@@ -3408,8 +3408,8 @@ mod tests {
     /// contributing rules with where each is written.
     #[test]
     fn conflicting_contributions_derive_a_deny_naming_every_witness() {
-        let (r, violations) = run("resource net.vpc main { cidr = \"10.0.0.0/16\" }.
-             arg(net.vpc, main, cidr, \"10.1.0.0/16\") :- want(net.vpc, main).")
+        let (r, violations) = run("resource net.vpc main { cidr = \"10.0.0.0/16\" }
+             arg(net.vpc, \"main\", \"cidr\", \"10.1.0.0/16\") if want(net.vpc, \"main\")")
         .unwrap();
         assert!(
             facts_of(&r, "attr").iter().all(|a| !a.contains("cidr")),
@@ -3451,14 +3451,15 @@ mod tests {
     /// contribution, and a Set path unions every author.
     #[test]
     fn setting_and_output_readers_read_the_collapsed_value() {
-        let (r, violations) = run("type_lattice(settings, sinks, set).
-             settings prod { sinks += [\"cloudwatch\"], days = 14 }.
-             setting_add(prod, sinks, [\"s3\"]).
-             module network { output ids: list(string). output(ids, [a, b]). }.
-             instance network main {}.
-             got(S, D) :- setting(prod, sinks, S), setting(prod, days, D).
-             ids(L) :- output(network.main, ids, L).
-             deny(\"no audit\") :- not setting(prod, audit, true).")
+        let (r, violations) = run("type_lattice(\"settings\", \"sinks\", \"set\")
+             settings prod { sinks += [\"cloudwatch\"], days = 14 }
+             setting_add(\"prod\", \"sinks\", [\"s3\"])
+             module network { output ids: list(string)
+             output(\"ids\", [\"a\", \"b\"]) }
+             instance network main {}
+             got(s, d) if setting(\"prod\", \"sinks\", s), setting(\"prod\", \"days\", d)
+             ids(l) if output(\"network.main\", \"ids\", l)
+             deny \"no audit\" if not setting(\"prod\", \"audit\", true)")
         .unwrap();
         assert_eq!(
             facts_of(&r, "got"),
@@ -3472,8 +3473,8 @@ mod tests {
     /// `tags`, which is a Map, so it meets the block's other tags per leaf.
     #[test]
     fn dotted_path_contributes_to_its_top_level_attribute() {
-        let (r, _) = run("resource net.vpc main { tags = { env: dev } }.
-             arg(net.vpc, main, \"tags.team\", platform) :- want(net.vpc, main).")
+        let (r, _) = run("resource net.vpc main { tags = { env: \"dev\" } }
+             arg(net.vpc, \"main\", \"tags.team\", \"platform\") if want(net.vpc, \"main\")")
         .unwrap();
         assert_eq!(
             facts_of(&r, "attr"),
@@ -3488,10 +3489,10 @@ mod tests {
     /// defaults under a normal value are a warning, not an error (F DR-9).
     #[test]
     fn highest_rank_wins_and_a_shadowed_disagreement_warns() {
-        let (r, violations) = run("want(net.vpc, main).
-             arg(net.vpc, main, cidr, \"10.0.0.0/16\", default).
-             arg(net.vpc, main, cidr, \"10.9.0.0/16\", default).
-             arg(net.vpc, main, cidr, \"10.1.0.0/16\").")
+        let (r, violations) = run("want(net.vpc, \"main\")
+             arg(net.vpc, \"main\", \"cidr\", \"10.0.0.0/16\", \"default\")
+             arg(net.vpc, \"main\", \"cidr\", \"10.9.0.0/16\", \"default\")
+             arg(net.vpc, \"main\", \"cidr\", \"10.1.0.0/16\")")
         .unwrap();
         assert!(violations.is_empty(), "{violations:?}");
         assert_eq!(
@@ -3516,9 +3517,9 @@ mod tests {
             ty: "string".into(),
         };
         let program = crate::parser::parse_program(
-            "want(net.subnet, a).
-             arg(net.subnet, a, vpc_id, V) :- input(vpc, V).
-             seen(V) :- arg(net.subnet, a, vpc_id, V).",
+            "want(\"net.subnet\", \"a\")
+             arg(\"net.subnet\", \"a\", \"vpc_id\", v) if input(\"vpc\", v)
+             seen(v) if arg(\"net.subnet\", \"a\", \"vpc_id\", v)",
         )
         .unwrap();
         let (r, violations) = eval(&program, &[input("vpc", null.clone())]).unwrap();
@@ -3572,18 +3573,23 @@ mod tests {
     fn ranks_in_blocks() {
         let (r, violations) = run("resource net.vpc main @default {
                cidr = \"10.0.0.0/16\"
-               tags = { env: dev, team: net }
+               tags = { env: \"dev\", team: \"net\" }
                public = true @override
-             }.
+             }
              resource net.vpc main {
                cidr = \"10.1.0.0/16\"
-               tags = { team: platform }
+               tags = { team: \"platform\" }
                public = false
-             }.
-             env_name(dev). env_name(prod).
-             settings E @default { days = 3, zones = [a] } :- env_name(E).
-             settings prod { days = 14 }.
-             got(E, D, Z) :- setting(E, days, D), setting(E, zones, Z).")
+             }
+             env_name(\"dev\")
+             env_name(\"prod\")
+             settings e @default {
+               for env_name(e)
+               days = 3
+               zones = [\"a\"]
+             }
+             settings prod { days = 14 }
+             got(e, d, z) if setting(e, \"days\", d), setting(e, \"zones\", z)")
         .unwrap();
         assert!(violations.is_empty(), "{violations:?}");
         assert_eq!(
@@ -3614,25 +3620,27 @@ mod tests {
     fn dform_df_default_layer_matches_the_copied_blocks() {
         let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let src = std::fs::read_to_string(root.join("dform.df")).unwrap();
-        let start = src.find("env_name(staging).").unwrap();
-        let end = src.find("import \"modules/network.df\".").unwrap();
-        let copied = "type_lattice(settings, audit.sinks, set).
+        let start = src.find("env_name(\"staging\")").unwrap();
+        let end = src
+            .find("# The settings of the selected environment")
+            .unwrap();
+        let copied = "type_lattice(\"settings\", \"audit.sinks\", \"set\")
             settings prod {
               network.main.vpc_net = inet(\"10.20.0.0/16\")
               network.peer.vpc_net = inet(\"10.21.0.0/16\")
               db = { backup_days: 14, multi_az: true }
               k8s = { private_api: true, nodepool: { min: 3, max: 10 } }
               audit.sinks += [\"cloudwatch\"]
-            }.
+            }
             settings staging {
               network.main.vpc_net = inet(\"10.50.0.0/16\")
               network.peer.vpc_net = inet(\"10.60.0.0/16\")
               db = { backup_days: 3, multi_az: false }
               k8s = { private_api: false, nodepool: { min: 1, max: 3 } }
-            }.
+            }
             settings dev {
               network.main.vpc_net = inet(\"10.90.0.0/16\")
-            }.
+            }
             ";
         let dir = std::env::temp_dir().join(format!("dform-settings-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -3676,15 +3684,15 @@ mod tests {
     /// replaced wholesale by a normal one, and same-shelf sets union.
     #[test]
     fn a_default_set_is_replaced_not_unioned() {
-        let (r, violations) = run("type_lattice(net.vpc, sgs, set).
-             resource net.vpc a { sgs = [base] }.
-             resource net.vpc b { }.
+        let (r, violations) = run("type_lattice(net.vpc, \"sgs\", \"set\")
+             resource net.vpc a { sgs = [\"base\"] }
+             resource net.vpc b { }
              policy p {
-               contributes arg to _ at .sgs.
-               arg(T, N, sgs, [default_sg, ssh], default) :- want(T, N).
-               arg(T, N, sgs, [audit]) :- want(T, N), N = \"a\".
-             }.
-             apply p.")
+               contributes _.sgs
+               arg(t, n, \"sgs\", [\"default_sg\", \"ssh\"], \"default\") if want(t, n)
+               arg(t, n, \"sgs\", [\"audit\"]) if want(t, n), n = \"a\"
+             }
+             apply p")
         .unwrap();
         assert!(violations.is_empty(), "{violations:?}");
         assert_eq!(
@@ -3700,8 +3708,11 @@ mod tests {
     /// predicate is a compile error naming it and the rule.
     #[test]
     fn undefined_predicate_is_an_error() {
-        let err = run("env(prod).
-             resource net.vpc main { cidr = \"10.0.0.0/16\" } :- envv(prod).")
+        let err = run("env(\"prod\")
+             resource net.vpc main {
+               for envv(\"prod\")
+               cidr = \"10.0.0.0/16\"
+             }")
         .unwrap_err()
         .to_string();
         assert!(err.contains("undefined predicate envv/1"), "{err}");
@@ -3711,13 +3722,13 @@ mod tests {
         );
     }
 
-    /// `decl p/N.` declares a provider-fed predicate; provider-injected
+    /// `decl p/N` declares a provider-fed predicate; provider-injected
     /// predicates are defined with no rows.
     #[test]
     fn extern_and_provider_predicates_are_defined() {
-        let (r, _) = run("decl allowed/1.
-             want(net.vpc, a).
-             lonely(N) :- want(net.vpc, N), not allowed(N), not cloud_exists(net.vpc, N).")
+        let (r, _) = run("decl allowed/1
+             want(net.vpc, \"a\")
+             lonely(n) if want(net.vpc, n), not allowed(n), not cloud_exists(net.vpc, n)")
         .unwrap();
         assert_eq!(facts_of(&r, "lonely"), vec!["lonely(\"a\")".to_string()]);
     }
@@ -3726,21 +3737,21 @@ mod tests {
     /// integers; conversions are explicit builtins.
     #[test]
     fn coercion_is_explicit() {
-        let err = run("s(\"10\"). n(X) :- s(S), X = S + 1.")
+        let err = run("s(\"10\")\nn(x) if s(s), x = s + 1")
             .unwrap_err()
             .to_string();
         assert!(err.contains("add(\"10\", 1) is not defined"), "{err}");
-        let err = run("n(X) :- X = to_int(\"abc\") + 1.")
+        let err = run("n(x) if x = to_int(\"abc\") + 1")
             .unwrap_err()
             .to_string();
         assert!(err.contains("to_int(\"abc\") is not defined"), "{err}");
-        let (r, _) = run("s(\"10\").
-             explicit(X) :- s(S), X = to_int(S) + 1.
-             text(T) :- T = to_string(14).
-             sizes(A, B, C) :- A = len([x, y]), B = len(\"héllo\"), C = len({k: 1}).
-             cases(L, U) :- L = lower(\"AbC\"), U = upper(\"AbC\").
-             parts(P) :- P = split(\"a,b,c\", \",\").
-             joined(J) :- J = join([a, 1, true], \"-\").")
+        let (r, _) = run("s(\"10\")
+             explicit(x) if s(s), x = to_int(s) + 1
+             text(t) if t = to_string(14)
+             sizes(a, b, c) if a = len([\"x\", \"y\"]), b = len(\"héllo\"), c = len({k: 1})
+             cases(l, u) if l = lower(\"AbC\"), u = upper(\"AbC\")
+             parts(p) if p = split(\"a,b,c\", \",\")
+             joined(j) if j = join([\"a\", 1, true], \"-\")")
         .unwrap();
         assert_eq!(facts_of(&r, "explicit"), vec!["explicit(11)".to_string()]);
         assert_eq!(facts_of(&r, "text"), vec!["text(\"14\")".to_string()]);
@@ -3764,8 +3775,8 @@ mod tests {
     #[test]
     fn a_builtin_over_a_null_is_stuck() {
         let (r, _) = run_with(
-            "want(net.vpc, a).
-             id_len(N) :- want(net.vpc, A), N = len(ref(net.vpc, A, id)).",
+            "want(net.vpc, \"a\")
+             id_len(n) if want(net.vpc, a), n = len(ref(net.vpc, a, \"id\"))",
             &crate::schema::fake().facts,
         )
         .unwrap();
@@ -3783,10 +3794,10 @@ mod tests {
     /// deeper than the old 200-iteration cap converges.
     #[test]
     fn a_300_deep_chain_converges() {
-        let (r, _) = run("decl n/1 mixed.
-             n(0).
-             n(Y) :- n(X), X < 300, Y = X + 1.
-             deepest(X) :- n(X), X >= 300.")
+        let (r, _) = run("decl n/1 mixed
+             n(0)
+             n(y) if n(x), x < 300, y = x + 1
+             deepest(x) if n(x), x >= 300")
         .unwrap();
         assert_eq!(facts_of(&r, "n").len(), 301);
         assert_eq!(facts_of(&r, "deepest"), vec!["deepest(300)".to_string()]);
@@ -3798,9 +3809,9 @@ mod tests {
     fn nested_dotted_paths_merge_recursively() {
         let (r, violations) = run("resource k8s.deployment web {
                spec.replicas = 3,
-               spec.template.metadata.labels = {app: web},
-               spec.template.spec.containers = [{name: web}]
-             }.")
+               spec.template.metadata.labels = {app: \"web\"},
+               spec.template.spec.containers = [{name: \"web\"}]
+             }")
         .unwrap();
         assert!(violations.is_empty(), "{violations:?}");
         assert_eq!(
@@ -3816,9 +3827,12 @@ mod tests {
     /// any other body, so the resource is derived (pngu.df's peerings).
     #[test]
     fn a_record_atom_in_a_resource_body_matches() {
-        let (r, _) = run("decl peering(Env: symbol, Name: symbol).
-             peering{ env: prod, name: legacy }.
-             resource net.peering Name { env = Env } :- peering{ env: Env, name: Name }.")
+        let (r, _) = run("decl peering(env: symbol, name: symbol)
+             peering{ env: \"prod\", name: \"legacy\" }
+             resource net.peering name {
+               for peering{ env: env, name: name }
+               env = env
+             }")
         .unwrap();
         assert_eq!(
             facts_of(&r, "attr"),
@@ -3841,14 +3855,14 @@ mod tests {
     #[test]
     fn optional_computed_mints_a_default_null() {
         let schema = schema_facts(
-            "type_provider(vm, mock).
-             type_attr(vm, id, string, [computed, id]).
-             type_attr(vm, zone, string, [optional_computed]).",
+            "type_provider(\"vm\", \"mock\")
+             type_attr(\"vm\", \"id\", \"string\", [\"computed\", \"id\"])
+             type_attr(\"vm\", \"zone\", \"string\", [\"optional_computed\"])",
         );
         let (r, violations) = run_with(
-            "resource vm a { size = 1 }.
-             resource vm b { zone = \"z1\" }.
-             resource vm c { peer_zone = ref(vm, a, zone), other_zone = ref(vm, b, zone), a_id = ref(vm, a, id) }.",
+            "resource vm a { size = 1 }
+             resource vm b { zone = \"z1\" }
+             resource vm c { peer_zone = ref(\"vm\", \"a\", \"zone\"), other_zone = ref(\"vm\", \"b\", \"zone\"), a_id = ref(\"vm\", \"a\", \"id\") }",
             &schema,
         )
         .unwrap();
@@ -3891,10 +3905,10 @@ mod tests {
     fn k8s_metadata_name_is_a_default_null_until_set() {
         let schema = crate::schema::load_provider("k8s").unwrap().facts;
         let (r, _) = run_with(
-            "resource k8s.deployment api { metadata.namespace = \"shop\" }.
-             resource k8s.deployment web { metadata.name = \"web\" }.
-             resource k8s.service api { spec.selector.app = ref(k8s.deployment, api, \"metadata.name\"),
-                                        spec.selector.web = ref(k8s.deployment, web, \"metadata.name\") }.",
+            "resource k8s.deployment api { metadata.namespace = \"shop\" }
+             resource k8s.deployment web { metadata.name = \"web\" }
+             resource k8s.service api { spec.selector.app = ref(k8s.deployment, \"api\", \"metadata.name\"),
+                                        spec.selector.web = ref(k8s.deployment, \"web\", \"metadata.name\") }",
             &schema,
         )
         .unwrap();
@@ -3930,8 +3944,8 @@ mod tests {
     fn aws_optional_computed_is_the_programs_when_set() {
         let schema = crate::schema::load_provider("aws-mock").unwrap().facts;
         let (r, violations) = run_with(
-            "resource aws_vpc main { cidr_block = \"10.0.0.0/16\" }.
-             resource aws_security_group web { vpc_id = ref(aws_vpc, main, id) }.",
+            "resource aws_vpc main { cidr_block = \"10.0.0.0/16\" }
+             resource aws_security_group web { vpc_id = ref(\"aws_vpc\", \"main\", \"id\") }",
             &schema,
         )
         .unwrap();
@@ -3958,18 +3972,18 @@ mod tests {
     #[test]
     fn writing_a_computed_path_is_an_error() {
         let schema = schema_facts(
-            "type_provider(vm, mock).
-             type_attr(vm, id, string, [computed, id]).
-             type_attr(vm, meta.uid, string, [computed, id]).",
+            "type_provider(\"vm\", \"mock\")
+             type_attr(\"vm\", \"id\", \"string\", [\"computed\", \"id\"])
+             type_attr(\"vm\", \"meta.uid\", \"string\", [\"computed\", \"id\"])",
         );
-        let err = run_with("resource vm a { id = \"x\" }.", &schema)
+        let err = run_with("resource vm a { id = \"x\" }", &schema)
             .unwrap_err()
             .to_string();
         assert!(
             err.contains("resource vm \"a\": attribute id is computed"),
             "{err}"
         );
-        let err = run_with("resource vm a { meta.uid = \"x\" }.", &schema)
+        let err = run_with("resource vm a { meta.uid = \"x\" }", &schema)
             .unwrap_err()
             .to_string();
         assert!(err.contains("attribute meta.uid is computed"), "{err}");
@@ -3980,9 +3994,9 @@ mod tests {
     #[test]
     fn round_zero_resolves_through_identity() {
         let mut extra = schema_facts(
-            "type_provider(vm, mock).
-             type_attr(vm, id, string, [computed, id]).
-             type_attr(vm, pw, string, [computed, sensitive]).",
+            "type_provider(\"vm\", \"mock\")
+             type_attr(\"vm\", \"id\", \"string\", [\"computed\", \"id\"])
+             type_attr(\"vm\", \"pw\", \"string\", [\"computed\", \"sensitive\"])",
         );
         let s = |x: &str| Term::Val(Value::Str(x.into()));
         extra.push(Atom {
@@ -3998,8 +4012,8 @@ mod tests {
             span: Default::default(),
         });
         let (r, _) = run_with(
-            "resource vm a { size = 1 }.
-             resource vm b { peer = ref(vm, a, id), secret = ref(vm, a, pw) }.",
+            "resource vm a { size = 1 }
+             resource vm b { peer = ref(\"vm\", \"a\", \"id\"), secret = ref(\"vm\", \"a\", \"pw\") }",
             &extra,
         )
         .unwrap();
@@ -4049,8 +4063,8 @@ mod tests {
     #[test]
     fn format_over_a_computed_ref_is_stuck() {
         let (r, violations) = run_with(
-            "resource net.vpc v { cidr = \"10.0.0.0/16\" }.
-             resource net.subnet s { name = format(\"%s-x\", ref(net.vpc, v, id)) }.",
+            "resource net.vpc v { cidr = \"10.0.0.0/16\" }
+             resource net.subnet s { name = format(\"%s-x\", ref(net.vpc, \"v\", \"id\")) }",
             &crate::schema::fake().facts,
         )
         .unwrap();
@@ -4158,12 +4172,18 @@ mod tests {
     #[test]
     fn a_resource_rule_reading_a_stuck_helper_may_derive() {
         let (r, violations) = run_with(
-            r#"resource db.postgres a {}.
-               resource db.postgres b {}.
-               up(D) :- attr(db.postgres, D, .endpoint, E), E != "".
-               ready(V) :- up(V).
-               resource net.subnet s { cidr = "10.0.1.0/24" } :- up("a").
-               resource net.subnet t { cidr = "10.0.2.0/24" } :- ready("b")."#,
+            r#"resource db.postgres a {}
+               resource db.postgres b {}
+               up(d) if attr(db.postgres, d, .endpoint, e), e != ""
+               ready(v) if up(v)
+               resource net.subnet s {
+                 for up("a")
+                 cidr = "10.0.1.0/24"
+               }
+               resource net.subnet t {
+                 for ready("b")
+                 cidr = "10.0.2.0/24"
+               }"#,
             &crate::schema::fake().facts,
         )
         .unwrap();
@@ -4283,7 +4303,7 @@ mod tests {
 
     #[test]
     fn a_firing_records_its_rule_body_facts_and_negations() {
-        let (r, _) = run("p(1). p(2). s(2). q(X) :- p(X), not s(X).").unwrap();
+        let (r, _) = run("p(1)\np(2)\ns(2)\nq(x) if p(x), not s(x)").unwrap();
         let why = why_leaves(&r, "q(1)");
         assert!(why.contains(&Leaf::Base {
             span: "<input>:1:1 (p)".into()
@@ -4295,7 +4315,7 @@ mod tests {
             panic!("no rule leaf: {why:?}");
         };
         assert_eq!(r.circuit.rule_text(id), Some("q(X) :- p(X), not s(X)"));
-        assert_eq!(r.circuit.rule_at(id), Some("<input>:1:19"));
+        assert_eq!(r.circuit.rule_at(id), Some("<input>:4:1"));
         let q = r
             .circuit
             .fact_id(&circuit_fact(
@@ -4314,9 +4334,9 @@ mod tests {
     #[test]
     fn an_attribute_carries_every_contribution() {
         let src = r#"
-            want(t, a).
-            arg(t, a, tags, {x: 1}, normal).
-            arg(t, a, tags, {y: 2}, normal) :- want(t, a).
+            want("t", "a")
+            arg("t", "a", "tags", {x: 1}, "normal")
+            arg("t", "a", "tags", {y: 2}, "normal") if want("t", "a")
         "#;
         let (r, _) = run(src).unwrap();
         let why = why_leaves(&r, r#"attr("t", "a", "tags", {x: 1, y: 2})"#);
@@ -4333,7 +4353,7 @@ mod tests {
     #[test]
     fn a_given_fact_is_an_input_leaf() {
         let (r, _) = run_with(
-            "env(E) :- input(env, E).",
+            "env(e) if input(\"env\", e)",
             &[input("env", Value::Str("prod".into()))],
         )
         .unwrap();
@@ -4360,8 +4380,8 @@ mod tests {
     #[test]
     fn a_policy_denies_on_any_stuck_instance() {
         let (r, violations) = gke_with(
-            r#"deny("stuck", { rule: R, on: N }) :- stuck(R, _, _, N).
-               seen(R, H) :- stuck(R, H, _, _)."#,
+            r#"deny "stuck" { rule: r, on: n } if stuck(r, _, _, n)
+               seen(r, h) if stuck(r, h, _, _)"#,
         )
         .unwrap();
         assert!(!r.stuck.is_empty());
@@ -4397,8 +4417,8 @@ mod tests {
     #[test]
     fn a_stuck_reader_on_a_cycle_is_an_error() {
         let err = gke_with(
-            r#"flag(R) :- stuck(R, _, _, _).
-               deny("flagged") :- flag(R), R > 3."#,
+            r#"flag(r) if stuck(r, _, _, _)
+               deny "flagged" if flag(r), r > 3"#,
         )
         .unwrap_err()
         .to_string();
@@ -4408,7 +4428,7 @@ mod tests {
 
     #[test]
     fn a_rule_cannot_define_stuck() {
-        let err = run("stuck(1, a, b, c) :- input(x, y).").unwrap_err();
+        let err = run("stuck(1, \"a\", \"b\", \"c\") if input(\"x\", \"y\")").unwrap_err();
         assert!(
             err.to_string()
                 .contains("stuck/4 is derived by the evaluator")
@@ -4421,9 +4441,9 @@ mod tests {
     #[test]
     fn a_resumed_evaluation_counts_a_constraints_stuck_instance() {
         let program = crate::parser::parse_program(
-            r#"decl later/1.
-               strict(R) :- stuck(R, _, _, _).
-               constraint("later is positive") :- later(X), X > 0."#,
+            r#"decl later/1
+               strict(r) if stuck(r, _, _, _)
+               constraint "later is positive" if later(x), x > 0"#,
         )
         .unwrap();
         let (_, _, resumable) = eval_resumable(&program, &[], &["later"]).unwrap();

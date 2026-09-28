@@ -4,6 +4,12 @@
 //! spaces within a line, the indentation, and the commas that a newline
 //! makes redundant are the formatter's. A file already in this form prints
 //! back byte for byte.
+//!
+//! Indentation: a line is one step deeper than the line that holds the
+//! innermost construct still open at its first token: a bracket, or a
+//! statement, block entry or clause that began on an earlier line (a
+//! continuation). A line that starts with a closer sits at the depth of
+//! the line that opened it.
 
 use crate::syntax::SyntaxKind::{self, *};
 use crate::syntax::{SyntaxNode, SyntaxToken};
@@ -30,49 +36,84 @@ fn is_close(k: SyntaxKind) -> bool {
     matches!(k, R_PAREN | R_BRACKET | R_BRACE)
 }
 
-/// A statement's terminating `.` (a `.` inside a block path is not one).
-fn is_terminator(t: &SyntaxToken) -> bool {
-    t.kind() == DOT && parent_kind(t) != Some(BLOCK_PATH)
+/// Nodes a line break inside continues: the next line is one step deeper.
+fn continues(k: SyntaxKind) -> bool {
+    matches!(
+        k,
+        RULE | FACT
+            | CHECK
+            | VALUE_RULE
+            | CONTRIBUTION
+            | CLAUSE
+            | ASSIGN
+            | LET
+            | WITH
+            | INPUT
+            | INPUT_RELATION
+            | OUTPUT_DECL
+            | ATTR_DECL
+            | WHEN
+            | FOR_STMT
+    )
+}
+
+/// A `{ }` body: its entries are separated by newlines or commas.
+fn is_block_body(n: &SyntaxNode) -> bool {
+    n.kind() == BODY
+        && n.children_with_tokens()
+            .find(|e| !e.kind().is_trivia())
+            .is_some_and(|e| e.kind() == L_BRACE)
 }
 
 /// A comma the formatter drops: before a closer, or where a newline already
-/// separates the entries of an assignment or type block.
+/// separates the entries of a block, a type block or a `{ }` body.
 fn drop_comma(t: &SyntaxToken, next: Option<&SyntaxToken>, newline_after: bool) -> bool {
     if t.kind() != COMMA {
         return false;
     }
     let Some(next) = next else { return false };
-    if matches!(next.kind(), R_BRACKET | R_BRACE) && parent_kind(t) != Some(ARG_LIST) {
+    let parent = t.parent();
+    if matches!(next.kind(), R_BRACKET | R_BRACE)
+        && !matches!(parent_kind(t), Some(ARG_LIST | BODY | CLAUSE))
+    {
         return true;
     }
-    newline_after && matches!(parent_kind(t), Some(BLOCK | TYPE_DECL | ATTR_DECL))
+    newline_after
+        && (matches!(parent_kind(t), Some(BLOCK | TYPE_DECL | ATTR_DECL))
+            || parent.as_ref().is_some_and(is_block_body))
 }
 
 /// The space between two tokens on one line: "" or " ".
 fn space(prev: &SyntaxToken, cur: &SyntaxToken) -> &'static str {
     let (p, c) = (prev.kind(), cur.kind());
     let (pp, cp) = (parent_kind(prev), parent_kind(cur));
-    if p == COMMENT {
+    if p == COMMENT || c == COMMENT {
         return " ";
     }
-    if c == COMMENT {
-        return " ";
-    }
-    // Glued forms: a block path, an address, `name.Var`, `p/2`.
-    if pp == cp && matches!(cp, Some(BLOCK_PATH | ADDR | QNAME_VAR)) {
+    // Chains, dotted names and paths: `a.b[e]/c`.
+    if p == DOT || c == DOT {
         return "";
     }
-    if (c == SLASH || p == SLASH) && matches!(cp, Some(DECL | EXPORT | INPUT_RELATION)) {
+    if (c == SLASH && cp != Some(BIN_EXPR)) || (p == SLASH && pp != Some(BIN_EXPR)) {
         return "";
     }
-    if p == MINUS && pp == Some(UNARY_EXPR) {
+    if c == L_BRACKET && matches!(cp, Some(INDEX | BLOCK_PATH)) {
         return "";
     }
-    if matches!(c, COMMA | R_PAREN | COLON) || is_terminator(cur) {
+    if (p == L_BRACKET && matches!(pp, Some(INDEX | BLOCK_PATH)))
+        || (c == R_BRACKET && matches!(cp, Some(INDEX | BLOCK_PATH)))
+    {
         return "";
     }
-    // Calls, atoms, type applications and records hug their name.
-    if c == L_PAREN && (p.is_name() || p == QNAME) {
+    if matches!(p, PLUS | MINUS) && matches!(pp, Some(UNARY_EXPR | BIND_ARG)) {
+        return "";
+    }
+    if matches!(c, COMMA | R_PAREN | COLON) {
+        return "";
+    }
+    // Calls, atoms, type applications, declarations and records hug their
+    // name.
+    if c == L_PAREN && matches!(cp, Some(ARG_LIST | TYPE_EXPR | DECL | EXTERN)) {
         return "";
     }
     if c == L_BRACE && cp == Some(RECORD_ATOM) {
@@ -82,15 +123,12 @@ fn space(prev: &SyntaxToken, cur: &SyntaxToken) -> &'static str {
     if is_open(p) && is_close(c) {
         return "";
     }
-    // Lists and argument lists are tight; comprehensions, objects, records
-    // and blocks breathe.
+    // Lists and argument lists are tight; comprehensions, objects, records,
+    // bodies and blocks breathe.
     if p == L_PAREN || c == R_PAREN {
         return "";
     }
     if p == L_BRACKET && pp == Some(LIST) || c == R_BRACKET && cp == Some(LIST) {
-        return "";
-    }
-    if c == L_BRACKET && cp == Some(BLOCK_PATH) || p == L_BRACKET && pp == Some(BLOCK_PATH) {
         return "";
     }
     " "
@@ -137,24 +175,12 @@ fn items(root: &SyntaxNode) -> Vec<Item> {
     out
 }
 
-/// The indentation of a line: one step per line that opened a bracket (or
-/// a rule's `:-`) still open, after the closers that start the line (the
-/// first is already popped; `rest` follows it).
-fn indent(stack: &[(SyntaxKind, usize)], rest: &[Item]) -> usize {
-    let mut stack = stack.to_vec();
-    for it in rest {
-        if it.newlines > 0 || !is_close(it.tok.kind()) {
-            break;
-        }
-        while let Some((top, _)) = stack.pop() {
-            if is_open(top) {
-                break;
-            }
-        }
-    }
-    let mut lines: Vec<usize> = stack.iter().map(|(_, l)| *l).collect();
-    lines.dedup();
-    lines.len()
+/// An open construct: a bracket (closed by its closer) or a continuing
+/// node (open until its text ends), and the output line it began on.
+struct Open {
+    bracket: bool,
+    end: u32,
+    line: usize,
 }
 
 /// Format a file's source; a file with syntax errors is not formatted.
@@ -170,16 +196,23 @@ pub fn format_source(name: &str, src: &str) -> anyhow::Result<String> {
 pub fn format(root: &SyntaxNode) -> String {
     let items = items(root);
     let mut out = String::new();
-    // Open brackets and rule necks: the output line each was printed on.
-    let mut stack: Vec<(SyntaxKind, usize)> = Vec::new();
+    let mut stack: Vec<Open> = Vec::new();
+    // The indentation of every output line.
+    let mut indents: Vec<usize> = vec![0];
     let mut line = 0usize;
     for (i, it) in items.iter().enumerate() {
         let t = &it.tok;
         let k = t.kind();
+        let start: u32 = t.text_range().start().into();
+        // Continuations that ended before this token.
+        while stack.last().is_some_and(|o| !o.bracket && o.end <= start) {
+            stack.pop();
+        }
+        let mut opener_line = None;
         if is_close(k) {
-            // Pop through any neck left open by an abandoned statement.
-            while let Some((top, _)) = stack.pop() {
-                if is_open(top) {
+            while let Some(o) = stack.pop() {
+                if o.bracket {
+                    opener_line = Some(o.line);
                     break;
                 }
             }
@@ -190,28 +223,56 @@ pub fn format(root: &SyntaxNode) -> String {
                 out.push('\n');
                 if blank {
                     out.push('\n');
+                    indents.push(0);
                 }
                 line += 1 + usize::from(blank);
-                for _ in 0..indent(&stack, &items[i + 1..]) {
+                let depth = match opener_line {
+                    Some(l) => indents[l],
+                    None => stack.last().map_or(0, |o| indents[o.line] + 1),
+                };
+                indents.push(depth);
+                for _ in 0..depth {
                     out.push_str(INDENT);
                 }
             } else {
                 out.push_str(space(&items[i - 1].tok, t));
             }
         }
+        // Continuing nodes that begin at this token.
+        let mut starts: Vec<(u32, SyntaxKind)> = t
+            .parent_ancestors()
+            .filter(|n| continues(n.kind()))
+            .filter(|n| first_token(n).is_some_and(|f| f == *t))
+            .map(|n| (n.text_range().end().into(), n.kind()))
+            .collect();
+        starts.reverse();
+        for (end, _) in starts {
+            stack.push(Open {
+                bracket: false,
+                end,
+                line,
+            });
+        }
         let text = t.text();
         out.push_str(if k == COMMENT { text.trim_end() } else { text });
-        if is_open(k) || k == NECK {
-            stack.push((k, line));
-        }
-        if is_terminator(t) && stack.last().is_some_and(|(top, _)| *top == NECK) {
-            stack.pop();
+        if is_open(k) {
+            stack.push(Open {
+                bracket: true,
+                end: u32::MAX,
+                line,
+            });
         }
     }
     if !out.is_empty() {
         out.push('\n');
     }
     out
+}
+
+fn first_token(n: &SyntaxNode) -> Option<SyntaxToken> {
+    n.descendants_with_tokens()
+        .filter_map(|e| e.into_token())
+        .find(|t| !t.kind().is_trivia())
 }
 
 #[cfg(test)]
@@ -227,44 +288,65 @@ mod tests {
 
     #[test]
     fn a_formatted_file_prints_back_unchanged() {
-        let src = "edition 2026.\n\n# c\np(a, \"b\") :-\n  q(X), # why\n  X != 1.\n";
+        let src = "edition 2026\n\n# c\np(a, \"b\") if\n  q(x), # why\n  x != 1\n";
         assert_eq!(fmt(src), src);
     }
 
     #[test]
     fn spaces_and_indentation_are_normalised() {
         assert_eq!(
-            fmt("p( a ,b ):-q(X),X>1 .\nresource  net.vpc  main{cidr=\"x\",tags={a:1}}.\n"),
-            "p(a, b) :- q(X), X > 1.\nresource net.vpc main { cidr = \"x\", tags = { a: 1 } }.\n"
+            fmt("p( a ,b )if q(x),x>1\nresource  net.vpc  main{cidr=\"x\",tags={a:1}}\n"),
+            "p(a, b) if q(x), x > 1\nresource net.vpc main { cidr = \"x\", tags = { a: 1 } }\n"
         );
         assert_eq!(
-            fmt("module m {\np(X) :-\nq(X).\n}.\n"),
-            "module m {\n  p(X) :-\n    q(X).\n}.\n"
+            fmt("module m {\np(x) if\nq(x)\n}\n"),
+            "module m {\n  p(x) if\n    q(x)\n}\n"
+        );
+        assert_eq!(
+            fmt("p(m.i/n.x,a /b,t[e].p)\n"),
+            "p(m.i/n.x, a / b, t[e].p)\n"
+        );
+    }
+
+    #[test]
+    fn clauses_and_bodies_indent() {
+        let src = "resource t n {\n  for a(x),\n    b(x)\n  f = x\n}\n\
+                   deny \"m\" { x } if {\n  a(x)\n  not b(x)\n}\n";
+        assert_eq!(fmt(src), src);
+        assert_eq!(
+            fmt("resource t n {\nfor a(x),\nb(x)\nf = x\n}\n"),
+            "resource t n {\n  for a(x),\n    b(x)\n  f = x\n}\n"
         );
     }
 
     #[test]
     fn commas_a_newline_makes_redundant_are_dropped() {
         assert_eq!(
-            fmt("resource t n {\n  a = 1,\n  b = [1, 2,],\n}.\n"),
-            "resource t n {\n  a = 1\n  b = [1, 2]\n}.\n"
+            fmt("resource t n {\n  a = 1,\n  b = [1, 2,],\n}\np(x) if {\n  q(x),\n  r(x)\n}\n"),
+            "resource t n {\n  a = 1\n  b = [1, 2]\n}\np(x) if {\n  q(x)\n  r(x)\n}\n"
         );
+        // A line that ends with a comma continues the body: it stays.
+        let src = "p(x) if q(x),\n  r(x)\n";
+        assert_eq!(fmt(src), src);
     }
 
     #[test]
     fn blank_lines_collapse_to_one() {
-        assert_eq!(fmt("p(a).\n\n\n\nq(b).\n\n"), "p(a).\n\nq(b).\n");
+        assert_eq!(
+            fmt("p(\"a\")\n\n\n\nq(\"b\")\n\n"),
+            "p(\"a\")\n\nq(\"b\")\n"
+        );
     }
 
     #[test]
     fn brackets_opened_on_one_line_indent_once() {
-        let src = "resource t n {\n  c = [{\n    a: 1\n  }]\n}.\n";
+        let src = "resource t n {\n  c = [{\n    a: 1\n  }]\n}\nf(\"k\", {\n  a: 1\n})\n";
         assert_eq!(fmt(src), src);
     }
 
     #[test]
     fn idempotent() {
-        let src = "p(X):-\n q(X) ,\n\n r(X).\nresource t n { a=1, b=2\n c=3 }.\n";
+        let src = "p(x)if\n q(x) ,\n\n r(x)\nresource t n { a=1, b=2\n c=3 }\n";
         let once = fmt(src);
         assert_eq!(fmt(&once), once);
     }

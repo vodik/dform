@@ -1,22 +1,19 @@
-edition 2026.
+edition 2026
 
 module iam {
   resource iam.role app_role {
-    name = app
-    assume = { principals: [k8s.serviceaccount.app] }
-  }.
+    name = "app"
+    assume = { principals: ["k8s.serviceaccount.app"] }
+  }
 
   resource iam.policy app_policy {
-    name = app
+    name = "app"
     # List comprehension sugar for collect(...)
-    statements = [
-      { action: Action, resource: Res }
-      | iam_need(app, Action, Res)
-    ]
-  }.
+    statements = [ { action: a, resource: r } | iam_need("app", a, r) ]
+  }
 
   resource iam.role_policy_attachment attach {
-    role_id = ref(iam.role, app_role, .id)
-    policy_id = ref(iam.policy, app_policy, .id)
-  }.
-}.
+    role_id = app_role.id
+    policy_id = app_policy.id
+  }
+}

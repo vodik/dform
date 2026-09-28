@@ -21,25 +21,25 @@ use std::path::{Path, PathBuf};
 const TYPE: &str = "check.thing";
 
 const SCHEMA: &str = r#"# The synthetic schema `dform provider check` configures a provider with.
-edition 2026.
+edition 2026
 
-type_provider(check.thing, check).
-type_attr(check.thing, id, string, [computed, id]).
-type_attr(check.thing, endpoint, string, [computed]).
-type_attr(check.thing, token, string, [computed, sensitive]).
-type_attr(check.thing, name, string, [required]).
-type_attr(check.thing, zone, string, [force_new]).
-type_attr(check.thing, password, string, [sensitive]).
-type_attr(check.thing, ports, list, []).
-type_list_key(check.thing, ports, [name]).
-type_retry(check.thing, 1).
+type_provider(check.thing, "check")
+type_attr(check.thing, "id", "string", ["computed", "id"])
+type_attr(check.thing, "endpoint", "string", ["computed"])
+type_attr(check.thing, "token", "string", ["computed", "sensitive"])
+type_attr(check.thing, "name", "string", ["required"])
+type_attr(check.thing, "zone", "string", ["force_new"])
+type_attr(check.thing, "password", "string", ["sensitive"])
+type_attr(check.thing, "ports", "list", [])
+type_list_key(check.thing, "ports", ["name"])
+type_retry(check.thing, 1)
 "#;
 
-const EXTERNS: &str = r#"edition 2026.
+const EXTERNS: &str = r#"edition 2026
 
-check.lookup("a", "1").
-check.lookup("a", "one").
-check.lookup("b", "2").
+check.lookup("a", "1")
+check.lookup("a", "one")
+check.lookup("b", "2")
 "#;
 
 /// One line of the report.

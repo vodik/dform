@@ -8,7 +8,6 @@ pub mod executor;
 pub mod externs;
 pub mod fakecloud;
 pub mod fmt;
-pub mod fmt_g;
 pub mod graph;
 pub mod inputs;
 pub mod ir;

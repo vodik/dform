@@ -1,2 +1,3 @@
 tests/syntax/err/bad_string.df:3:3: unknown escape `\q`
 tests/syntax/err/bad_string.df:4:3: integer out of range
+tests/syntax/err/bad_string.df:5:3: an interpolation `{` is never closed; a brace is `{{`

@@ -12,66 +12,65 @@
 # the cluster's endpoint and CA). Tick 3: the dform-controller Deployment,
 # which waits for its node pool to be up.
 
-edition 2026.
+edition 2026
 
 stack renfry.bootstrap {
-  role = bootstrap
-}.
+  role = "bootstrap"
+}
 
 provider gcp {
   source = "gcp.df"
-}.
-provider k8s {}.
+}
+provider k8s {}
 
 resource google_compute_network vpc {
   name = "renfry-vpc"
   auto_create_subnetworks = false
-}.
+}
 
 resource google_compute_subnetwork gke {
   name = "renfry-gke"
   region = "us-east1"
-  network = ref(google_compute_network, vpc, .id)
+  network = vpc.id
   ip_cidr_range = "10.141.76.0/22"
-}.
+}
 
 resource gke_cluster renfry {
   name = "renfry-gke"
-  network = ref(google_compute_network, vpc, .id)
-  subnetwork = ref(google_compute_subnetwork, gke, .id)
+  network = vpc.id
+  subnetwork = gke.id
   node_locations = ["us-east1-b", "us-east1-c"]
-}.
+}
 
 # One node pool per zone the cluster lands in.
-resource gke_nodepool Np {
-  cluster = ref(gke_cluster, renfry, .id)
-  zone = Z
+resource gke_nodepool "np-{z}" {
+  for z in renfry.zones
+  cluster = renfry.id
+  zone = z
   node_count = 1
-} :-
-  arg(gke_cluster, renfry, .zones, Zs),
-  member(Zs, Z),
-  Np = format("np-%s", Z).
+}
 
-provider_config(kubernetes, {
-  host: ref(gke_cluster, renfry, .endpoint),
-  ca: ref(gke_cluster, renfry, .ca_certificate)
-}).
+provider_config("kubernetes", {
+  host: renfry.endpoint,
+  ca: renfry.ca_certificate
+})
 
 resource k8s.namespace dform_system {
   metadata.name = "dform-system"
-}.
+}
 
 # A node pool is up once it has an instance group. Apply gives it, so the
 # comparison is decided the tick after the pool is created.
-node_pool_up(Np) :- attr(gke_nodepool, Np, .instance_group, G), G != "".
+node_pool_up(np) if gke_nodepool[np].instance_group != ""
 
 # dform in the cluster, running the workload stack: it lands on the first
 # zone's node pool once that pool is up. Until then the rule may derive
 # after the boundary, and the plan holds it as a pending group.
 resource k8s.deployment dform_controller {
+  if pool = "np-{renfry.zones[0]}", node_pool_up(pool)
   metadata.name = "dform-controller"
-  metadata.namespace = ref(k8s.namespace, dform_system, .metadata.name)
-  metadata.annotations = { "dform.io/node-pool": ref(gke_nodepool, Pool, .instance_group) }
+  metadata.namespace = dform_system.metadata.name
+  metadata.annotations = { "dform.io/node-pool": gke_nodepool[pool].instance_group }
   spec.replicas = 1
   spec.selector.matchLabels = { app: "dform-controller" }
   spec.template.metadata.labels = { app: "dform-controller" }
@@ -80,10 +79,6 @@ resource k8s.deployment dform_controller {
     image: "ghcr.io/renfry/dform:0.8",
     args: ["controller", "--stack", "renfry.workload", "--file", "workload.df"]
   }]
-} :-
-  arg(gke_cluster, renfry, .zones, Zs),
-  member(Zs, 0, Z),
-  Pool = format("np-%s", Z),
-  node_pool_up(Pool).
+}
 
-output endpoint = ref(gke_cluster, renfry, .endpoint).
+output endpoint = renfry.endpoint

@@ -183,7 +183,7 @@ pub fn from_term(t: &Term) -> Result<Constraint, String> {
 /// A constraint from its text (`Constraint`'s `Display`), as a
 /// `type_refine` fact carries it.
 pub fn parse(text: &str) -> Result<Constraint, String> {
-    let prog = crate::parser::parse_program(&format!("refinement({text})."))
+    let prog = crate::parser::parse_literal_text(&format!("refinement({text})"))
         .map_err(|_| format!("not a refinement: {text}"))?;
     match prog.statements.as_slice() {
         [Stmt::Fact(a)] if a.args.len() == 1 && !matches!(a.args[0], Term::Val(_)) => {
@@ -955,7 +955,8 @@ mod tests {
     use super::*;
 
     fn lits(src: &str) -> Vec<Lit> {
-        let p = crate::parser::parse_program(&format!("x(1) :- {src}.")).unwrap();
+        // A `where` names the attribute by its text.
+        let p = crate::parser::parse_literal_text(&format!("x(1) if {src}")).unwrap();
         match p.statements.as_slice() {
             [Stmt::Rule(r)] => r.body.clone(),
             other => panic!("{other:?}"),

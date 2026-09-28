@@ -5,16 +5,23 @@
 mod common;
 use common::{Scratch, repo};
 
-const P: &str = r#"edition 2026.
-extern file.json(+path, -value).
-extern file.text(+path, -value).
-extern random.password(+name, -value) persist.
-extern random.token(+name, -value).
-dash("dash.json").
-resource mon.dashboard main { json = D, note = T } :- dash(P), file.json(P, D), file.text("note.txt", T).
-resource db.user app { password = Pw, token = Tk } :-
-  random.password("app", Pw),
-  random.token("app", Tk).
+const P: &str = r#"edition 2026
+extern file.json(+path, -value)
+extern file.text(+path, -value)
+extern random.password(+name, -value) persist
+extern random.token(+name, -value)
+dash("dash.json")
+resource mon.dashboard main {
+  for dash(p), file.json(p, d), file.text("note.txt", t)
+  json = d
+  note = t
+}
+resource db.user app {
+  for random.password("app", pw),
+    random.token("app", tk)
+  password = pw
+  token = tk
+}
 "#;
 
 fn scratch() -> Scratch {
@@ -36,8 +43,7 @@ fn answers(s: &Scratch, v: &str) {
     s.write(
         "providers/fake/externs.df",
         &format!(
-            "edition 2026.\nrandom.password(\"app\", \"pw-{v}\").\nrandom.password(\"other\", \"x\").\n\
-             random.token(\"app\", \"tk-{v}\").\n"
+            "edition 2026\nrandom.password(\"app\", \"pw-{v}\")\nrandom.password(\"other\", \"x\")\nrandom.token(\"app\", \"tk-{v}\")\n"
         ),
     );
 }

@@ -1,6 +1,4 @@
 tests/syntax/err/pending_terms.df:4:3: the `null` literal (E DR-6) is not yet supported
   note: it parses; no WORK.org ticket gives it semantics yet
-tests/syntax/err/pending_terms.df:5:15: `not exists(...)` is not yet supported
-  note: it parses; no WORK.org ticket gives it semantics yet
-tests/syntax/err/pending_terms.df:6:13: an ordered comprehension is not yet supported
+tests/syntax/err/pending_terms.df:5:13: an ordered comprehension is not yet supported
   note: it parses; no WORK.org ticket gives it semantics yet

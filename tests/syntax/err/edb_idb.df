@@ -1,12 +1,12 @@
-edition 2026.
+edition 2026
 
 # E 2.6: a predicate with both ground facts and rules is a compile error
-# naming both, unless declared `decl p/N mixed.`.
-region("us-east-1").
-region(R) :- extra_region(R).
-extra_region("eu-west-1").
+# naming both, unless declared `decl p/N mixed`.
+region("us-east-1")
+region(r) if extra_region(r)
+extra_region("eu-west-1")
 
-zone("a").
-zone(Z) :- extra_zone(Z).
-extra_zone("b").
-decl zone/1 mixed.
+zone("a")
+zone(z) if extra_zone(z)
+extra_zone("b")
+decl zone/1 mixed

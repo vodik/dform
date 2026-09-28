@@ -4,7 +4,7 @@
 //! Every run reads them where they are now: `plan` and `apply` once, the
 //! controller whenever a source's stamp changes (`stamp`), by polling.
 //!
-//! A source is a `.df` file of facts (`edition 2026.` first, then `p(...).`)
+//! A source is a `.df` file of facts (`edition 2026` first, then `p(...)`)
 //! of the relations declared from it: a file may feed several relations, and a fact of any other predicate is an
 //! error naming it. Paths are relative to the file the declaration is in.
 //! A `git` source is read at the ref (`git show REF:PATH`, so a bare

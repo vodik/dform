@@ -17,583 +17,583 @@
 #
 # type_mint gives the mock's answer for a server-picked value.
 
-edition 2026.
+edition 2026
 
 # The real provider (dform-provider-k8s, src/k8s/) names a kind
 # k8s.<group>.<version>.<kind> (the core group as `core`, the kind in
 # snake_case) and serves each short name below as an alias of it, so a
 # program written against this mock plans the same against a cluster. The
 # mock ignores these facts.
-type_alias(k8s.namespace, k8s.core.v1.namespace).
-type_alias(k8s.config_map, k8s.core.v1.config_map).
-type_alias(k8s.secret, k8s.core.v1.secret).
-type_alias(k8s.service_account, k8s.core.v1.service_account).
-type_alias(k8s.service, k8s.core.v1.service).
-type_alias(k8s.persistent_volume_claim, k8s.core.v1.persistent_volume_claim).
-type_alias(k8s.deployment, k8s.apps.v1.deployment).
-type_alias(k8s.stateful_set, k8s.apps.v1.stateful_set).
-type_alias(k8s.daemon_set, k8s.apps.v1.daemon_set).
-type_alias(k8s.job, k8s.batch.v1.job).
-type_alias(k8s.cron_job, k8s.batch.v1.cron_job).
-type_alias(k8s.horizontal_pod_autoscaler, k8s.autoscaling.v2.horizontal_pod_autoscaler).
-type_alias(k8s.pod_disruption_budget, k8s.policy.v1.pod_disruption_budget).
-type_alias(k8s.network_policy, k8s.networking.k8s.io.v1.network_policy).
-type_alias(k8s.ingress, k8s.networking.k8s.io.v1.ingress).
+type_alias(k8s.namespace, "k8s.core.v1.namespace")
+type_alias(k8s.config_map, "k8s.core.v1.config_map")
+type_alias(k8s.secret, "k8s.core.v1.secret")
+type_alias(k8s.service_account, "k8s.core.v1.service_account")
+type_alias(k8s.service, "k8s.core.v1.service")
+type_alias(k8s.persistent_volume_claim, "k8s.core.v1.persistent_volume_claim")
+type_alias(k8s.deployment, "k8s.apps.v1.deployment")
+type_alias(k8s.stateful_set, "k8s.apps.v1.stateful_set")
+type_alias(k8s.daemon_set, "k8s.apps.v1.daemon_set")
+type_alias(k8s.job, "k8s.batch.v1.job")
+type_alias(k8s.cron_job, "k8s.batch.v1.cron_job")
+type_alias(k8s.horizontal_pod_autoscaler, "k8s.autoscaling.v2.horizontal_pod_autoscaler")
+type_alias(k8s.pod_disruption_budget, "k8s.policy.v1.pod_disruption_budget")
+type_alias(k8s.network_policy, "k8s.networking.k8s.io.v1.network_policy")
+type_alias(k8s.ingress, "k8s.networking.k8s.io.v1.ingress")
 
 # Namespace (core/v1)
-type_provider(k8s.namespace, kubernetes).
+type_provider(k8s.namespace, "kubernetes")
 # Deleting a namespace deletes what is in it: the old one goes first.
-type_replace(k8s.namespace, destroy_first).
-type_attr(k8s.namespace, metadata.name, string, [optional_computed, id]).
-type_mint(k8s.namespace, metadata.name, "{doc:metadata.generateName}{hash}").
-type_attr(k8s.namespace, metadata.generateName, string, []).
-type_attr(k8s.namespace, metadata.labels, map, []).
-type_attr(k8s.namespace, metadata.annotations, map, []).
-type_attr(k8s.namespace, metadata.uid, string, [computed, id]).
-type_attr(k8s.namespace, metadata.resourceVersion, string, [computed]).
-type_attr(k8s.namespace, metadata.generation, int, [computed]).
-type_attr(k8s.namespace, metadata.creationTimestamp, string, [computed]).
-type_mint(k8s.namespace, metadata.uid, "uid-{name}-{hash}").
-type_mint(k8s.namespace, metadata.resourceVersion, "{n}").
-type_mint(k8s.namespace, metadata.generation, 1).
-type_mint(k8s.namespace, metadata.creationTimestamp, "2026-01-01T00:00:00Z").
-type_attr(k8s.namespace, spec.finalizers, list, [computed]).
-type_mint(k8s.namespace, spec.finalizers, [kubernetes]).
-type_attr(k8s.namespace, status.phase, string, [computed]).
-type_mint(k8s.namespace, status.phase, "Active").
+type_replace(k8s.namespace, "destroy_first")
+type_attr(k8s.namespace, "metadata.name", "string", ["optional_computed", "id"])
+type_mint(k8s.namespace, "metadata.name", "{{doc:metadata.generateName}}{{hash}}")
+type_attr(k8s.namespace, "metadata.generateName", "string", [])
+type_attr(k8s.namespace, "metadata.labels", "map", [])
+type_attr(k8s.namespace, "metadata.annotations", "map", [])
+type_attr(k8s.namespace, "metadata.uid", "string", ["computed", "id"])
+type_attr(k8s.namespace, "metadata.resourceVersion", "string", ["computed"])
+type_attr(k8s.namespace, "metadata.generation", "int", ["computed"])
+type_attr(k8s.namespace, "metadata.creationTimestamp", "string", ["computed"])
+type_mint(k8s.namespace, "metadata.uid", "uid-{{name}}-{{hash}}")
+type_mint(k8s.namespace, "metadata.resourceVersion", "{{n}}")
+type_mint(k8s.namespace, "metadata.generation", 1)
+type_mint(k8s.namespace, "metadata.creationTimestamp", "2026-01-01T00:00:00Z")
+type_attr(k8s.namespace, "spec.finalizers", "list", ["computed"])
+type_mint(k8s.namespace, "spec.finalizers", ["kubernetes"])
+type_attr(k8s.namespace, "status.phase", "string", ["computed"])
+type_mint(k8s.namespace, "status.phase", "Active")
 
 # ConfigMap (core/v1)
-type_provider(k8s.config_map, kubernetes).
-type_attr(k8s.config_map, metadata.name, string, [optional_computed, id]).
-type_mint(k8s.config_map, metadata.name, "{doc:metadata.generateName}{hash}").
-type_attr(k8s.config_map, metadata.generateName, string, []).
-type_attr(k8s.config_map, metadata.namespace, string, [optional_computed]).
-type_mint(k8s.config_map, metadata.namespace, "default").
-type_attr(k8s.config_map, metadata.labels, map, []).
-type_attr(k8s.config_map, metadata.annotations, map, []).
-type_attr(k8s.config_map, metadata.uid, string, [computed, id]).
-type_attr(k8s.config_map, metadata.resourceVersion, string, [computed]).
-type_attr(k8s.config_map, metadata.generation, int, [computed]).
-type_attr(k8s.config_map, metadata.creationTimestamp, string, [computed]).
-type_mint(k8s.config_map, metadata.uid, "uid-{name}-{hash}").
-type_mint(k8s.config_map, metadata.resourceVersion, "{n}").
-type_mint(k8s.config_map, metadata.generation, 1).
-type_mint(k8s.config_map, metadata.creationTimestamp, "2026-01-01T00:00:00Z").
-type_attr(k8s.config_map, data, map, []).
-type_attr(k8s.config_map, binaryData, map, []).
-type_attr(k8s.config_map, immutable, bool, []).
+type_provider(k8s.config_map, "kubernetes")
+type_attr(k8s.config_map, "metadata.name", "string", ["optional_computed", "id"])
+type_mint(k8s.config_map, "metadata.name", "{{doc:metadata.generateName}}{{hash}}")
+type_attr(k8s.config_map, "metadata.generateName", "string", [])
+type_attr(k8s.config_map, "metadata.namespace", "string", ["optional_computed"])
+type_mint(k8s.config_map, "metadata.namespace", "default")
+type_attr(k8s.config_map, "metadata.labels", "map", [])
+type_attr(k8s.config_map, "metadata.annotations", "map", [])
+type_attr(k8s.config_map, "metadata.uid", "string", ["computed", "id"])
+type_attr(k8s.config_map, "metadata.resourceVersion", "string", ["computed"])
+type_attr(k8s.config_map, "metadata.generation", "int", ["computed"])
+type_attr(k8s.config_map, "metadata.creationTimestamp", "string", ["computed"])
+type_mint(k8s.config_map, "metadata.uid", "uid-{{name}}-{{hash}}")
+type_mint(k8s.config_map, "metadata.resourceVersion", "{{n}}")
+type_mint(k8s.config_map, "metadata.generation", 1)
+type_mint(k8s.config_map, "metadata.creationTimestamp", "2026-01-01T00:00:00Z")
+type_attr(k8s.config_map, "data", "map", [])
+type_attr(k8s.config_map, "binaryData", "map", [])
+type_attr(k8s.config_map, "immutable", "bool", [])
 
 # Secret (core/v1)
-type_provider(k8s.secret, kubernetes).
-type_attr(k8s.secret, metadata.name, string, [optional_computed, id]).
-type_mint(k8s.secret, metadata.name, "{doc:metadata.generateName}{hash}").
-type_attr(k8s.secret, metadata.generateName, string, []).
-type_attr(k8s.secret, metadata.namespace, string, [optional_computed]).
-type_mint(k8s.secret, metadata.namespace, "default").
-type_attr(k8s.secret, metadata.labels, map, []).
-type_attr(k8s.secret, metadata.annotations, map, []).
-type_attr(k8s.secret, metadata.uid, string, [computed, id]).
-type_attr(k8s.secret, metadata.resourceVersion, string, [computed]).
-type_attr(k8s.secret, metadata.generation, int, [computed]).
-type_attr(k8s.secret, metadata.creationTimestamp, string, [computed]).
-type_mint(k8s.secret, metadata.uid, "uid-{name}-{hash}").
-type_mint(k8s.secret, metadata.resourceVersion, "{n}").
-type_mint(k8s.secret, metadata.generation, 1).
-type_mint(k8s.secret, metadata.creationTimestamp, "2026-01-01T00:00:00Z").
-type_attr(k8s.secret, data, map, [sensitive]).
-type_attr(k8s.secret, stringData, map, [sensitive]).
-type_attr(k8s.secret, type, string, [optional_computed]).
-type_mint(k8s.secret, type, "Opaque").
-type_attr(k8s.secret, immutable, bool, []).
+type_provider(k8s.secret, "kubernetes")
+type_attr(k8s.secret, "metadata.name", "string", ["optional_computed", "id"])
+type_mint(k8s.secret, "metadata.name", "{{doc:metadata.generateName}}{{hash}}")
+type_attr(k8s.secret, "metadata.generateName", "string", [])
+type_attr(k8s.secret, "metadata.namespace", "string", ["optional_computed"])
+type_mint(k8s.secret, "metadata.namespace", "default")
+type_attr(k8s.secret, "metadata.labels", "map", [])
+type_attr(k8s.secret, "metadata.annotations", "map", [])
+type_attr(k8s.secret, "metadata.uid", "string", ["computed", "id"])
+type_attr(k8s.secret, "metadata.resourceVersion", "string", ["computed"])
+type_attr(k8s.secret, "metadata.generation", "int", ["computed"])
+type_attr(k8s.secret, "metadata.creationTimestamp", "string", ["computed"])
+type_mint(k8s.secret, "metadata.uid", "uid-{{name}}-{{hash}}")
+type_mint(k8s.secret, "metadata.resourceVersion", "{{n}}")
+type_mint(k8s.secret, "metadata.generation", 1)
+type_mint(k8s.secret, "metadata.creationTimestamp", "2026-01-01T00:00:00Z")
+type_attr(k8s.secret, "data", "map", ["sensitive"])
+type_attr(k8s.secret, "stringData", "map", ["sensitive"])
+type_attr(k8s.secret, "type", "string", ["optional_computed"])
+type_mint(k8s.secret, "type", "Opaque")
+type_attr(k8s.secret, "immutable", "bool", [])
 
 # ServiceAccount (core/v1)
-type_provider(k8s.service_account, kubernetes).
-type_attr(k8s.service_account, metadata.name, string, [optional_computed, id]).
-type_mint(k8s.service_account, metadata.name, "{doc:metadata.generateName}{hash}").
-type_attr(k8s.service_account, metadata.generateName, string, []).
-type_attr(k8s.service_account, metadata.namespace, string, [optional_computed]).
-type_mint(k8s.service_account, metadata.namespace, "default").
-type_attr(k8s.service_account, metadata.labels, map, []).
-type_attr(k8s.service_account, metadata.annotations, map, []).
-type_attr(k8s.service_account, metadata.uid, string, [computed, id]).
-type_attr(k8s.service_account, metadata.resourceVersion, string, [computed]).
-type_attr(k8s.service_account, metadata.generation, int, [computed]).
-type_attr(k8s.service_account, metadata.creationTimestamp, string, [computed]).
-type_mint(k8s.service_account, metadata.uid, "uid-{name}-{hash}").
-type_mint(k8s.service_account, metadata.resourceVersion, "{n}").
-type_mint(k8s.service_account, metadata.generation, 1).
-type_mint(k8s.service_account, metadata.creationTimestamp, "2026-01-01T00:00:00Z").
-type_attr(k8s.service_account, automountServiceAccountToken, bool, []).
-type_attr(k8s.service_account, imagePullSecrets, list, []).
-type_list_key(k8s.service_account, imagePullSecrets, [name]).
+type_provider(k8s.service_account, "kubernetes")
+type_attr(k8s.service_account, "metadata.name", "string", ["optional_computed", "id"])
+type_mint(k8s.service_account, "metadata.name", "{{doc:metadata.generateName}}{{hash}}")
+type_attr(k8s.service_account, "metadata.generateName", "string", [])
+type_attr(k8s.service_account, "metadata.namespace", "string", ["optional_computed"])
+type_mint(k8s.service_account, "metadata.namespace", "default")
+type_attr(k8s.service_account, "metadata.labels", "map", [])
+type_attr(k8s.service_account, "metadata.annotations", "map", [])
+type_attr(k8s.service_account, "metadata.uid", "string", ["computed", "id"])
+type_attr(k8s.service_account, "metadata.resourceVersion", "string", ["computed"])
+type_attr(k8s.service_account, "metadata.generation", "int", ["computed"])
+type_attr(k8s.service_account, "metadata.creationTimestamp", "string", ["computed"])
+type_mint(k8s.service_account, "metadata.uid", "uid-{{name}}-{{hash}}")
+type_mint(k8s.service_account, "metadata.resourceVersion", "{{n}}")
+type_mint(k8s.service_account, "metadata.generation", 1)
+type_mint(k8s.service_account, "metadata.creationTimestamp", "2026-01-01T00:00:00Z")
+type_attr(k8s.service_account, "automountServiceAccountToken", "bool", [])
+type_attr(k8s.service_account, "imagePullSecrets", "list", [])
+type_list_key(k8s.service_account, "imagePullSecrets", ["name"])
 
 # Service (core/v1)
-type_provider(k8s.service, kubernetes).
-type_replace(k8s.service, create_first).
-type_attr(k8s.service, metadata.name, string, [optional_computed, id]).
-type_mint(k8s.service, metadata.name, "{doc:metadata.generateName}{hash}").
-type_attr(k8s.service, metadata.generateName, string, []).
-type_attr(k8s.service, metadata.namespace, string, [optional_computed]).
-type_mint(k8s.service, metadata.namespace, "default").
-type_attr(k8s.service, metadata.labels, map, []).
-type_attr(k8s.service, metadata.annotations, map, []).
-type_attr(k8s.service, metadata.uid, string, [computed, id]).
-type_attr(k8s.service, metadata.resourceVersion, string, [computed]).
-type_attr(k8s.service, metadata.generation, int, [computed]).
-type_attr(k8s.service, metadata.creationTimestamp, string, [computed]).
-type_mint(k8s.service, metadata.uid, "uid-{name}-{hash}").
-type_mint(k8s.service, metadata.resourceVersion, "{n}").
-type_mint(k8s.service, metadata.generation, 1).
-type_mint(k8s.service, metadata.creationTimestamp, "2026-01-01T00:00:00Z").
-type_attr(k8s.service, spec.type, string, [optional_computed]).
-type_mint(k8s.service, spec.type, "ClusterIP").
-type_attr(k8s.service, spec.selector, map, []).
-type_attr(k8s.service, spec.ports, list, [required]).
-type_list_key(k8s.service, spec.ports, [port, protocol]).
-type_attr(k8s.service, spec.ports.port, int, [required]).
-type_attr(k8s.service, spec.ports.targetPort, string, [optional_computed]).
-type_attr(k8s.service, spec.ports.nodePort, int, [optional_computed]).
-type_attr(k8s.service, spec.clusterIP, string, [optional_computed]).
-type_mint(k8s.service, spec.clusterIP, "10.96.0.{n}").
-type_attr(k8s.service, spec.clusterIPs, list, [optional_computed]).
-type_attr(k8s.service, spec.sessionAffinity, string, [optional_computed]).
-type_mint(k8s.service, spec.sessionAffinity, "None").
-type_attr(k8s.service, spec.ipFamilies, list, [optional_computed]).
-type_mint(k8s.service, spec.ipFamilies, ["IPv4"]).
-type_attr(k8s.service, spec.internalTrafficPolicy, string, [optional_computed]).
-type_mint(k8s.service, spec.internalTrafficPolicy, "Cluster").
-type_attr(k8s.service, status.loadBalancer.ingress, list, [computed]).
+type_provider(k8s.service, "kubernetes")
+type_replace(k8s.service, "create_first")
+type_attr(k8s.service, "metadata.name", "string", ["optional_computed", "id"])
+type_mint(k8s.service, "metadata.name", "{{doc:metadata.generateName}}{{hash}}")
+type_attr(k8s.service, "metadata.generateName", "string", [])
+type_attr(k8s.service, "metadata.namespace", "string", ["optional_computed"])
+type_mint(k8s.service, "metadata.namespace", "default")
+type_attr(k8s.service, "metadata.labels", "map", [])
+type_attr(k8s.service, "metadata.annotations", "map", [])
+type_attr(k8s.service, "metadata.uid", "string", ["computed", "id"])
+type_attr(k8s.service, "metadata.resourceVersion", "string", ["computed"])
+type_attr(k8s.service, "metadata.generation", "int", ["computed"])
+type_attr(k8s.service, "metadata.creationTimestamp", "string", ["computed"])
+type_mint(k8s.service, "metadata.uid", "uid-{{name}}-{{hash}}")
+type_mint(k8s.service, "metadata.resourceVersion", "{{n}}")
+type_mint(k8s.service, "metadata.generation", 1)
+type_mint(k8s.service, "metadata.creationTimestamp", "2026-01-01T00:00:00Z")
+type_attr(k8s.service, "spec.type", "string", ["optional_computed"])
+type_mint(k8s.service, "spec.type", "ClusterIP")
+type_attr(k8s.service, "spec.selector", "map", [])
+type_attr(k8s.service, "spec.ports", "list", ["required"])
+type_list_key(k8s.service, "spec.ports", ["port", "protocol"])
+type_attr(k8s.service, "spec.ports.port", "int", ["required"])
+type_attr(k8s.service, "spec.ports.targetPort", "string", ["optional_computed"])
+type_attr(k8s.service, "spec.ports.nodePort", "int", ["optional_computed"])
+type_attr(k8s.service, "spec.clusterIP", "string", ["optional_computed"])
+type_mint(k8s.service, "spec.clusterIP", "10.96.0.{{n}}")
+type_attr(k8s.service, "spec.clusterIPs", "list", ["optional_computed"])
+type_attr(k8s.service, "spec.sessionAffinity", "string", ["optional_computed"])
+type_mint(k8s.service, "spec.sessionAffinity", "None")
+type_attr(k8s.service, "spec.ipFamilies", "list", ["optional_computed"])
+type_mint(k8s.service, "spec.ipFamilies", ["IPv4"])
+type_attr(k8s.service, "spec.internalTrafficPolicy", "string", ["optional_computed"])
+type_mint(k8s.service, "spec.internalTrafficPolicy", "Cluster")
+type_attr(k8s.service, "status.loadBalancer.ingress", "list", ["computed"])
 
 # PersistentVolumeClaim (core/v1)
-type_provider(k8s.persistent_volume_claim, kubernetes).
-type_attr(k8s.persistent_volume_claim, metadata.name, string, [optional_computed, id]).
-type_mint(k8s.persistent_volume_claim, metadata.name, "{doc:metadata.generateName}{hash}").
-type_attr(k8s.persistent_volume_claim, metadata.generateName, string, []).
-type_attr(k8s.persistent_volume_claim, metadata.namespace, string, [optional_computed]).
-type_mint(k8s.persistent_volume_claim, metadata.namespace, "default").
-type_attr(k8s.persistent_volume_claim, metadata.labels, map, []).
-type_attr(k8s.persistent_volume_claim, metadata.annotations, map, []).
-type_attr(k8s.persistent_volume_claim, metadata.uid, string, [computed, id]).
-type_attr(k8s.persistent_volume_claim, metadata.resourceVersion, string, [computed]).
-type_attr(k8s.persistent_volume_claim, metadata.generation, int, [computed]).
-type_attr(k8s.persistent_volume_claim, metadata.creationTimestamp, string, [computed]).
-type_mint(k8s.persistent_volume_claim, metadata.uid, "uid-{name}-{hash}").
-type_mint(k8s.persistent_volume_claim, metadata.resourceVersion, "{n}").
-type_mint(k8s.persistent_volume_claim, metadata.generation, 1).
-type_mint(k8s.persistent_volume_claim, metadata.creationTimestamp, "2026-01-01T00:00:00Z").
-type_attr(k8s.persistent_volume_claim, spec.accessModes, list, [required]).
-type_attr(k8s.persistent_volume_claim, spec.resources.requests.storage, string, [required]).
-type_attr(k8s.persistent_volume_claim, spec.storageClassName, string, [optional_computed]).
-type_mint(k8s.persistent_volume_claim, spec.storageClassName, "standard").
-type_attr(k8s.persistent_volume_claim, spec.volumeName, string, [optional_computed]).
-type_mint(k8s.persistent_volume_claim, spec.volumeName, "pvc-{hash}").
-type_attr(k8s.persistent_volume_claim, spec.volumeMode, string, [optional_computed]).
-type_mint(k8s.persistent_volume_claim, spec.volumeMode, "Filesystem").
-type_attr(k8s.persistent_volume_claim, status.phase, string, [computed]).
-type_mint(k8s.persistent_volume_claim, status.phase, "Bound").
-type_attr(k8s.persistent_volume_claim, status.capacity, map, [computed]).
+type_provider(k8s.persistent_volume_claim, "kubernetes")
+type_attr(k8s.persistent_volume_claim, "metadata.name", "string", ["optional_computed", "id"])
+type_mint(k8s.persistent_volume_claim, "metadata.name", "{{doc:metadata.generateName}}{{hash}}")
+type_attr(k8s.persistent_volume_claim, "metadata.generateName", "string", [])
+type_attr(k8s.persistent_volume_claim, "metadata.namespace", "string", ["optional_computed"])
+type_mint(k8s.persistent_volume_claim, "metadata.namespace", "default")
+type_attr(k8s.persistent_volume_claim, "metadata.labels", "map", [])
+type_attr(k8s.persistent_volume_claim, "metadata.annotations", "map", [])
+type_attr(k8s.persistent_volume_claim, "metadata.uid", "string", ["computed", "id"])
+type_attr(k8s.persistent_volume_claim, "metadata.resourceVersion", "string", ["computed"])
+type_attr(k8s.persistent_volume_claim, "metadata.generation", "int", ["computed"])
+type_attr(k8s.persistent_volume_claim, "metadata.creationTimestamp", "string", ["computed"])
+type_mint(k8s.persistent_volume_claim, "metadata.uid", "uid-{{name}}-{{hash}}")
+type_mint(k8s.persistent_volume_claim, "metadata.resourceVersion", "{{n}}")
+type_mint(k8s.persistent_volume_claim, "metadata.generation", 1)
+type_mint(k8s.persistent_volume_claim, "metadata.creationTimestamp", "2026-01-01T00:00:00Z")
+type_attr(k8s.persistent_volume_claim, "spec.accessModes", "list", ["required"])
+type_attr(k8s.persistent_volume_claim, "spec.resources.requests.storage", "string", ["required"])
+type_attr(k8s.persistent_volume_claim, "spec.storageClassName", "string", ["optional_computed"])
+type_mint(k8s.persistent_volume_claim, "spec.storageClassName", "standard")
+type_attr(k8s.persistent_volume_claim, "spec.volumeName", "string", ["optional_computed"])
+type_mint(k8s.persistent_volume_claim, "spec.volumeName", "pvc-{{hash}}")
+type_attr(k8s.persistent_volume_claim, "spec.volumeMode", "string", ["optional_computed"])
+type_mint(k8s.persistent_volume_claim, "spec.volumeMode", "Filesystem")
+type_attr(k8s.persistent_volume_claim, "status.phase", "string", ["computed"])
+type_mint(k8s.persistent_volume_claim, "status.phase", "Bound")
+type_attr(k8s.persistent_volume_claim, "status.capacity", "map", ["computed"])
 
 # Deployment (apps/v1)
-type_provider(k8s.deployment, kubernetes).
+type_provider(k8s.deployment, "kubernetes")
 # A Deployment rolls: the new one is up before the old one goes.
-type_replace(k8s.deployment, create_first).
-type_attr(k8s.deployment, metadata.name, string, [optional_computed, id]).
-type_mint(k8s.deployment, metadata.name, "{doc:metadata.generateName}{hash}").
-type_attr(k8s.deployment, metadata.generateName, string, []).
-type_attr(k8s.deployment, metadata.namespace, string, [optional_computed]).
-type_mint(k8s.deployment, metadata.namespace, "default").
-type_attr(k8s.deployment, metadata.labels, map, []).
-type_attr(k8s.deployment, metadata.annotations, map, []).
-type_attr(k8s.deployment, metadata.uid, string, [computed, id]).
-type_attr(k8s.deployment, metadata.resourceVersion, string, [computed]).
-type_attr(k8s.deployment, metadata.generation, int, [computed]).
-type_attr(k8s.deployment, metadata.creationTimestamp, string, [computed]).
-type_mint(k8s.deployment, metadata.uid, "uid-{name}-{hash}").
-type_mint(k8s.deployment, metadata.resourceVersion, "{n}").
-type_mint(k8s.deployment, metadata.generation, 1).
-type_mint(k8s.deployment, metadata.creationTimestamp, "2026-01-01T00:00:00Z").
-type_attr(k8s.deployment, spec.replicas, int, [optional_computed]).
-type_mint(k8s.deployment, spec.replicas, 1).
-type_attr(k8s.deployment, spec.selector.matchLabels, map, [required]).
-type_attr(k8s.deployment, spec.template.metadata.labels, map, []).
-type_attr(k8s.deployment, spec.template.spec.containers, list, [required]).
-type_list_key(k8s.deployment, spec.template.spec.containers, [name]).
-type_attr(k8s.deployment, spec.template.spec.containers.image, string, [required]).
-type_attr(k8s.deployment, spec.template.spec.containers.ports, list, []).
-type_list_key(k8s.deployment, spec.template.spec.containers.ports, [containerPort, protocol]).
-type_attr(k8s.deployment, spec.template.spec.containers.env, list, []).
-type_list_key(k8s.deployment, spec.template.spec.containers.env, [name]).
-type_attr(k8s.deployment, spec.template.spec.containers.volumeMounts, list, []).
-type_list_key(k8s.deployment, spec.template.spec.containers.volumeMounts, [mountPath]).
-type_attr(k8s.deployment, spec.template.spec.containers.imagePullPolicy, string, [optional_computed]).
-type_mint(k8s.deployment, spec.template.spec.containers.imagePullPolicy, "IfNotPresent").
-type_attr(k8s.deployment, spec.template.spec.initContainers, list, []).
-type_list_key(k8s.deployment, spec.template.spec.initContainers, [name]).
-type_attr(k8s.deployment, spec.template.spec.volumes, list, []).
-type_list_key(k8s.deployment, spec.template.spec.volumes, [name]).
-type_attr(k8s.deployment, spec.template.spec.serviceAccountName, string, [optional_computed]).
-type_mint(k8s.deployment, spec.template.spec.serviceAccountName, "default").
-type_attr(k8s.deployment, spec.template.spec.restartPolicy, string, [optional_computed]).
-type_mint(k8s.deployment, spec.template.spec.restartPolicy, "Always").
-type_attr(k8s.deployment, spec.template.spec.terminationGracePeriodSeconds, int, [optional_computed]).
-type_mint(k8s.deployment, spec.template.spec.terminationGracePeriodSeconds, 30).
-type_attr(k8s.deployment, spec.template.spec.dnsPolicy, string, [optional_computed]).
-type_mint(k8s.deployment, spec.template.spec.dnsPolicy, "ClusterFirst").
-type_attr(k8s.deployment, spec.template.spec.nodeSelector, map, []).
-type_attr(k8s.deployment, spec.template.spec.tolerations, list, []).
-type_attr(k8s.deployment, spec.strategy.type, string, [optional_computed]).
-type_mint(k8s.deployment, spec.strategy.type, "RollingUpdate").
-type_attr(k8s.deployment, spec.revisionHistoryLimit, int, [optional_computed]).
-type_mint(k8s.deployment, spec.revisionHistoryLimit, 10).
-type_attr(k8s.deployment, spec.progressDeadlineSeconds, int, [optional_computed]).
-type_mint(k8s.deployment, spec.progressDeadlineSeconds, 600).
-type_attr(k8s.deployment, status.replicas, int, [computed]).
-type_mint(k8s.deployment, status.replicas, 1).
-type_attr(k8s.deployment, status.readyReplicas, int, [computed]).
-type_mint(k8s.deployment, status.readyReplicas, 1).
-type_attr(k8s.deployment, status.availableReplicas, int, [computed]).
-type_mint(k8s.deployment, status.availableReplicas, 1).
-type_attr(k8s.deployment, status.updatedReplicas, int, [computed]).
-type_mint(k8s.deployment, status.updatedReplicas, 1).
-type_attr(k8s.deployment, status.observedGeneration, int, [computed]).
-type_mint(k8s.deployment, status.observedGeneration, 1).
-type_attr(k8s.deployment, status.conditions, list, [computed]).
+type_replace(k8s.deployment, "create_first")
+type_attr(k8s.deployment, "metadata.name", "string", ["optional_computed", "id"])
+type_mint(k8s.deployment, "metadata.name", "{{doc:metadata.generateName}}{{hash}}")
+type_attr(k8s.deployment, "metadata.generateName", "string", [])
+type_attr(k8s.deployment, "metadata.namespace", "string", ["optional_computed"])
+type_mint(k8s.deployment, "metadata.namespace", "default")
+type_attr(k8s.deployment, "metadata.labels", "map", [])
+type_attr(k8s.deployment, "metadata.annotations", "map", [])
+type_attr(k8s.deployment, "metadata.uid", "string", ["computed", "id"])
+type_attr(k8s.deployment, "metadata.resourceVersion", "string", ["computed"])
+type_attr(k8s.deployment, "metadata.generation", "int", ["computed"])
+type_attr(k8s.deployment, "metadata.creationTimestamp", "string", ["computed"])
+type_mint(k8s.deployment, "metadata.uid", "uid-{{name}}-{{hash}}")
+type_mint(k8s.deployment, "metadata.resourceVersion", "{{n}}")
+type_mint(k8s.deployment, "metadata.generation", 1)
+type_mint(k8s.deployment, "metadata.creationTimestamp", "2026-01-01T00:00:00Z")
+type_attr(k8s.deployment, "spec.replicas", "int", ["optional_computed"])
+type_mint(k8s.deployment, "spec.replicas", 1)
+type_attr(k8s.deployment, "spec.selector.matchLabels", "map", ["required"])
+type_attr(k8s.deployment, "spec.template.metadata.labels", "map", [])
+type_attr(k8s.deployment, "spec.template.spec.containers", "list", ["required"])
+type_list_key(k8s.deployment, "spec.template.spec.containers", ["name"])
+type_attr(k8s.deployment, "spec.template.spec.containers.image", "string", ["required"])
+type_attr(k8s.deployment, "spec.template.spec.containers.ports", "list", [])
+type_list_key(k8s.deployment, "spec.template.spec.containers.ports", ["containerPort", "protocol"])
+type_attr(k8s.deployment, "spec.template.spec.containers.env", "list", [])
+type_list_key(k8s.deployment, "spec.template.spec.containers.env", ["name"])
+type_attr(k8s.deployment, "spec.template.spec.containers.volumeMounts", "list", [])
+type_list_key(k8s.deployment, "spec.template.spec.containers.volumeMounts", ["mountPath"])
+type_attr(k8s.deployment, "spec.template.spec.containers.imagePullPolicy", "string", ["optional_computed"])
+type_mint(k8s.deployment, "spec.template.spec.containers.imagePullPolicy", "IfNotPresent")
+type_attr(k8s.deployment, "spec.template.spec.initContainers", "list", [])
+type_list_key(k8s.deployment, "spec.template.spec.initContainers", ["name"])
+type_attr(k8s.deployment, "spec.template.spec.volumes", "list", [])
+type_list_key(k8s.deployment, "spec.template.spec.volumes", ["name"])
+type_attr(k8s.deployment, "spec.template.spec.serviceAccountName", "string", ["optional_computed"])
+type_mint(k8s.deployment, "spec.template.spec.serviceAccountName", "default")
+type_attr(k8s.deployment, "spec.template.spec.restartPolicy", "string", ["optional_computed"])
+type_mint(k8s.deployment, "spec.template.spec.restartPolicy", "Always")
+type_attr(k8s.deployment, "spec.template.spec.terminationGracePeriodSeconds", "int", ["optional_computed"])
+type_mint(k8s.deployment, "spec.template.spec.terminationGracePeriodSeconds", 30)
+type_attr(k8s.deployment, "spec.template.spec.dnsPolicy", "string", ["optional_computed"])
+type_mint(k8s.deployment, "spec.template.spec.dnsPolicy", "ClusterFirst")
+type_attr(k8s.deployment, "spec.template.spec.nodeSelector", "map", [])
+type_attr(k8s.deployment, "spec.template.spec.tolerations", "list", [])
+type_attr(k8s.deployment, "spec.strategy.type", "string", ["optional_computed"])
+type_mint(k8s.deployment, "spec.strategy.type", "RollingUpdate")
+type_attr(k8s.deployment, "spec.revisionHistoryLimit", "int", ["optional_computed"])
+type_mint(k8s.deployment, "spec.revisionHistoryLimit", 10)
+type_attr(k8s.deployment, "spec.progressDeadlineSeconds", "int", ["optional_computed"])
+type_mint(k8s.deployment, "spec.progressDeadlineSeconds", 600)
+type_attr(k8s.deployment, "status.replicas", "int", ["computed"])
+type_mint(k8s.deployment, "status.replicas", 1)
+type_attr(k8s.deployment, "status.readyReplicas", "int", ["computed"])
+type_mint(k8s.deployment, "status.readyReplicas", 1)
+type_attr(k8s.deployment, "status.availableReplicas", "int", ["computed"])
+type_mint(k8s.deployment, "status.availableReplicas", 1)
+type_attr(k8s.deployment, "status.updatedReplicas", "int", ["computed"])
+type_mint(k8s.deployment, "status.updatedReplicas", 1)
+type_attr(k8s.deployment, "status.observedGeneration", "int", ["computed"])
+type_mint(k8s.deployment, "status.observedGeneration", 1)
+type_attr(k8s.deployment, "status.conditions", "list", ["computed"])
 
 # StatefulSet (apps/v1)
-type_provider(k8s.stateful_set, kubernetes).
-type_attr(k8s.stateful_set, metadata.name, string, [optional_computed, id]).
-type_mint(k8s.stateful_set, metadata.name, "{doc:metadata.generateName}{hash}").
-type_attr(k8s.stateful_set, metadata.generateName, string, []).
-type_attr(k8s.stateful_set, metadata.namespace, string, [optional_computed]).
-type_mint(k8s.stateful_set, metadata.namespace, "default").
-type_attr(k8s.stateful_set, metadata.labels, map, []).
-type_attr(k8s.stateful_set, metadata.annotations, map, []).
-type_attr(k8s.stateful_set, metadata.uid, string, [computed, id]).
-type_attr(k8s.stateful_set, metadata.resourceVersion, string, [computed]).
-type_attr(k8s.stateful_set, metadata.generation, int, [computed]).
-type_attr(k8s.stateful_set, metadata.creationTimestamp, string, [computed]).
-type_mint(k8s.stateful_set, metadata.uid, "uid-{name}-{hash}").
-type_mint(k8s.stateful_set, metadata.resourceVersion, "{n}").
-type_mint(k8s.stateful_set, metadata.generation, 1).
-type_mint(k8s.stateful_set, metadata.creationTimestamp, "2026-01-01T00:00:00Z").
-type_attr(k8s.stateful_set, spec.replicas, int, [optional_computed]).
-type_mint(k8s.stateful_set, spec.replicas, 1).
-type_attr(k8s.stateful_set, spec.serviceName, string, []).
-type_attr(k8s.stateful_set, spec.selector.matchLabels, map, [required]).
-type_attr(k8s.stateful_set, spec.template.metadata.labels, map, []).
-type_attr(k8s.stateful_set, spec.template.spec.containers, list, [required]).
-type_list_key(k8s.stateful_set, spec.template.spec.containers, [name]).
-type_attr(k8s.stateful_set, spec.template.spec.containers.image, string, [required]).
-type_attr(k8s.stateful_set, spec.template.spec.containers.ports, list, []).
-type_list_key(k8s.stateful_set, spec.template.spec.containers.ports, [containerPort, protocol]).
-type_attr(k8s.stateful_set, spec.template.spec.containers.env, list, []).
-type_list_key(k8s.stateful_set, spec.template.spec.containers.env, [name]).
-type_attr(k8s.stateful_set, spec.template.spec.containers.volumeMounts, list, []).
-type_list_key(k8s.stateful_set, spec.template.spec.containers.volumeMounts, [mountPath]).
-type_attr(k8s.stateful_set, spec.template.spec.containers.imagePullPolicy, string, [optional_computed]).
-type_mint(k8s.stateful_set, spec.template.spec.containers.imagePullPolicy, "IfNotPresent").
-type_attr(k8s.stateful_set, spec.template.spec.initContainers, list, []).
-type_list_key(k8s.stateful_set, spec.template.spec.initContainers, [name]).
-type_attr(k8s.stateful_set, spec.template.spec.volumes, list, []).
-type_list_key(k8s.stateful_set, spec.template.spec.volumes, [name]).
-type_attr(k8s.stateful_set, spec.template.spec.serviceAccountName, string, [optional_computed]).
-type_mint(k8s.stateful_set, spec.template.spec.serviceAccountName, "default").
-type_attr(k8s.stateful_set, spec.template.spec.restartPolicy, string, [optional_computed]).
-type_mint(k8s.stateful_set, spec.template.spec.restartPolicy, "Always").
-type_attr(k8s.stateful_set, spec.template.spec.terminationGracePeriodSeconds, int, [optional_computed]).
-type_mint(k8s.stateful_set, spec.template.spec.terminationGracePeriodSeconds, 30).
-type_attr(k8s.stateful_set, spec.template.spec.dnsPolicy, string, [optional_computed]).
-type_mint(k8s.stateful_set, spec.template.spec.dnsPolicy, "ClusterFirst").
-type_attr(k8s.stateful_set, spec.template.spec.nodeSelector, map, []).
-type_attr(k8s.stateful_set, spec.template.spec.tolerations, list, []).
-type_attr(k8s.stateful_set, spec.volumeClaimTemplates, list, []).
-type_attr(k8s.stateful_set, spec.podManagementPolicy, string, [optional_computed]).
-type_mint(k8s.stateful_set, spec.podManagementPolicy, "OrderedReady").
-type_attr(k8s.stateful_set, spec.updateStrategy.type, string, [optional_computed]).
-type_mint(k8s.stateful_set, spec.updateStrategy.type, "RollingUpdate").
-type_attr(k8s.stateful_set, status.replicas, int, [computed]).
-type_mint(k8s.stateful_set, status.replicas, 1).
-type_attr(k8s.stateful_set, status.readyReplicas, int, [computed]).
-type_mint(k8s.stateful_set, status.readyReplicas, 1).
-type_attr(k8s.stateful_set, status.currentReplicas, int, [computed]).
-type_mint(k8s.stateful_set, status.currentReplicas, 1).
-type_attr(k8s.stateful_set, status.observedGeneration, int, [computed]).
-type_mint(k8s.stateful_set, status.observedGeneration, 1).
+type_provider(k8s.stateful_set, "kubernetes")
+type_attr(k8s.stateful_set, "metadata.name", "string", ["optional_computed", "id"])
+type_mint(k8s.stateful_set, "metadata.name", "{{doc:metadata.generateName}}{{hash}}")
+type_attr(k8s.stateful_set, "metadata.generateName", "string", [])
+type_attr(k8s.stateful_set, "metadata.namespace", "string", ["optional_computed"])
+type_mint(k8s.stateful_set, "metadata.namespace", "default")
+type_attr(k8s.stateful_set, "metadata.labels", "map", [])
+type_attr(k8s.stateful_set, "metadata.annotations", "map", [])
+type_attr(k8s.stateful_set, "metadata.uid", "string", ["computed", "id"])
+type_attr(k8s.stateful_set, "metadata.resourceVersion", "string", ["computed"])
+type_attr(k8s.stateful_set, "metadata.generation", "int", ["computed"])
+type_attr(k8s.stateful_set, "metadata.creationTimestamp", "string", ["computed"])
+type_mint(k8s.stateful_set, "metadata.uid", "uid-{{name}}-{{hash}}")
+type_mint(k8s.stateful_set, "metadata.resourceVersion", "{{n}}")
+type_mint(k8s.stateful_set, "metadata.generation", 1)
+type_mint(k8s.stateful_set, "metadata.creationTimestamp", "2026-01-01T00:00:00Z")
+type_attr(k8s.stateful_set, "spec.replicas", "int", ["optional_computed"])
+type_mint(k8s.stateful_set, "spec.replicas", 1)
+type_attr(k8s.stateful_set, "spec.serviceName", "string", [])
+type_attr(k8s.stateful_set, "spec.selector.matchLabels", "map", ["required"])
+type_attr(k8s.stateful_set, "spec.template.metadata.labels", "map", [])
+type_attr(k8s.stateful_set, "spec.template.spec.containers", "list", ["required"])
+type_list_key(k8s.stateful_set, "spec.template.spec.containers", ["name"])
+type_attr(k8s.stateful_set, "spec.template.spec.containers.image", "string", ["required"])
+type_attr(k8s.stateful_set, "spec.template.spec.containers.ports", "list", [])
+type_list_key(k8s.stateful_set, "spec.template.spec.containers.ports", ["containerPort", "protocol"])
+type_attr(k8s.stateful_set, "spec.template.spec.containers.env", "list", [])
+type_list_key(k8s.stateful_set, "spec.template.spec.containers.env", ["name"])
+type_attr(k8s.stateful_set, "spec.template.spec.containers.volumeMounts", "list", [])
+type_list_key(k8s.stateful_set, "spec.template.spec.containers.volumeMounts", ["mountPath"])
+type_attr(k8s.stateful_set, "spec.template.spec.containers.imagePullPolicy", "string", ["optional_computed"])
+type_mint(k8s.stateful_set, "spec.template.spec.containers.imagePullPolicy", "IfNotPresent")
+type_attr(k8s.stateful_set, "spec.template.spec.initContainers", "list", [])
+type_list_key(k8s.stateful_set, "spec.template.spec.initContainers", ["name"])
+type_attr(k8s.stateful_set, "spec.template.spec.volumes", "list", [])
+type_list_key(k8s.stateful_set, "spec.template.spec.volumes", ["name"])
+type_attr(k8s.stateful_set, "spec.template.spec.serviceAccountName", "string", ["optional_computed"])
+type_mint(k8s.stateful_set, "spec.template.spec.serviceAccountName", "default")
+type_attr(k8s.stateful_set, "spec.template.spec.restartPolicy", "string", ["optional_computed"])
+type_mint(k8s.stateful_set, "spec.template.spec.restartPolicy", "Always")
+type_attr(k8s.stateful_set, "spec.template.spec.terminationGracePeriodSeconds", "int", ["optional_computed"])
+type_mint(k8s.stateful_set, "spec.template.spec.terminationGracePeriodSeconds", 30)
+type_attr(k8s.stateful_set, "spec.template.spec.dnsPolicy", "string", ["optional_computed"])
+type_mint(k8s.stateful_set, "spec.template.spec.dnsPolicy", "ClusterFirst")
+type_attr(k8s.stateful_set, "spec.template.spec.nodeSelector", "map", [])
+type_attr(k8s.stateful_set, "spec.template.spec.tolerations", "list", [])
+type_attr(k8s.stateful_set, "spec.volumeClaimTemplates", "list", [])
+type_attr(k8s.stateful_set, "spec.podManagementPolicy", "string", ["optional_computed"])
+type_mint(k8s.stateful_set, "spec.podManagementPolicy", "OrderedReady")
+type_attr(k8s.stateful_set, "spec.updateStrategy.type", "string", ["optional_computed"])
+type_mint(k8s.stateful_set, "spec.updateStrategy.type", "RollingUpdate")
+type_attr(k8s.stateful_set, "status.replicas", "int", ["computed"])
+type_mint(k8s.stateful_set, "status.replicas", 1)
+type_attr(k8s.stateful_set, "status.readyReplicas", "int", ["computed"])
+type_mint(k8s.stateful_set, "status.readyReplicas", 1)
+type_attr(k8s.stateful_set, "status.currentReplicas", "int", ["computed"])
+type_mint(k8s.stateful_set, "status.currentReplicas", 1)
+type_attr(k8s.stateful_set, "status.observedGeneration", "int", ["computed"])
+type_mint(k8s.stateful_set, "status.observedGeneration", 1)
 
 # DaemonSet (apps/v1)
-type_provider(k8s.daemon_set, kubernetes).
-type_attr(k8s.daemon_set, metadata.name, string, [optional_computed, id]).
-type_mint(k8s.daemon_set, metadata.name, "{doc:metadata.generateName}{hash}").
-type_attr(k8s.daemon_set, metadata.generateName, string, []).
-type_attr(k8s.daemon_set, metadata.namespace, string, [optional_computed]).
-type_mint(k8s.daemon_set, metadata.namespace, "default").
-type_attr(k8s.daemon_set, metadata.labels, map, []).
-type_attr(k8s.daemon_set, metadata.annotations, map, []).
-type_attr(k8s.daemon_set, metadata.uid, string, [computed, id]).
-type_attr(k8s.daemon_set, metadata.resourceVersion, string, [computed]).
-type_attr(k8s.daemon_set, metadata.generation, int, [computed]).
-type_attr(k8s.daemon_set, metadata.creationTimestamp, string, [computed]).
-type_mint(k8s.daemon_set, metadata.uid, "uid-{name}-{hash}").
-type_mint(k8s.daemon_set, metadata.resourceVersion, "{n}").
-type_mint(k8s.daemon_set, metadata.generation, 1).
-type_mint(k8s.daemon_set, metadata.creationTimestamp, "2026-01-01T00:00:00Z").
-type_attr(k8s.daemon_set, spec.selector.matchLabels, map, [required]).
-type_attr(k8s.daemon_set, spec.template.metadata.labels, map, []).
-type_attr(k8s.daemon_set, spec.template.spec.containers, list, [required]).
-type_list_key(k8s.daemon_set, spec.template.spec.containers, [name]).
-type_attr(k8s.daemon_set, spec.template.spec.containers.image, string, [required]).
-type_attr(k8s.daemon_set, spec.template.spec.containers.ports, list, []).
-type_list_key(k8s.daemon_set, spec.template.spec.containers.ports, [containerPort, protocol]).
-type_attr(k8s.daemon_set, spec.template.spec.containers.env, list, []).
-type_list_key(k8s.daemon_set, spec.template.spec.containers.env, [name]).
-type_attr(k8s.daemon_set, spec.template.spec.containers.volumeMounts, list, []).
-type_list_key(k8s.daemon_set, spec.template.spec.containers.volumeMounts, [mountPath]).
-type_attr(k8s.daemon_set, spec.template.spec.containers.imagePullPolicy, string, [optional_computed]).
-type_mint(k8s.daemon_set, spec.template.spec.containers.imagePullPolicy, "IfNotPresent").
-type_attr(k8s.daemon_set, spec.template.spec.initContainers, list, []).
-type_list_key(k8s.daemon_set, spec.template.spec.initContainers, [name]).
-type_attr(k8s.daemon_set, spec.template.spec.volumes, list, []).
-type_list_key(k8s.daemon_set, spec.template.spec.volumes, [name]).
-type_attr(k8s.daemon_set, spec.template.spec.serviceAccountName, string, [optional_computed]).
-type_mint(k8s.daemon_set, spec.template.spec.serviceAccountName, "default").
-type_attr(k8s.daemon_set, spec.template.spec.restartPolicy, string, [optional_computed]).
-type_mint(k8s.daemon_set, spec.template.spec.restartPolicy, "Always").
-type_attr(k8s.daemon_set, spec.template.spec.terminationGracePeriodSeconds, int, [optional_computed]).
-type_mint(k8s.daemon_set, spec.template.spec.terminationGracePeriodSeconds, 30).
-type_attr(k8s.daemon_set, spec.template.spec.dnsPolicy, string, [optional_computed]).
-type_mint(k8s.daemon_set, spec.template.spec.dnsPolicy, "ClusterFirst").
-type_attr(k8s.daemon_set, spec.template.spec.nodeSelector, map, []).
-type_attr(k8s.daemon_set, spec.template.spec.tolerations, list, []).
-type_attr(k8s.daemon_set, spec.updateStrategy.type, string, [optional_computed]).
-type_mint(k8s.daemon_set, spec.updateStrategy.type, "RollingUpdate").
-type_attr(k8s.daemon_set, status.desiredNumberScheduled, int, [computed]).
-type_mint(k8s.daemon_set, status.desiredNumberScheduled, 3).
-type_attr(k8s.daemon_set, status.currentNumberScheduled, int, [computed]).
-type_mint(k8s.daemon_set, status.currentNumberScheduled, 3).
-type_attr(k8s.daemon_set, status.numberReady, int, [computed]).
-type_mint(k8s.daemon_set, status.numberReady, 3).
-type_attr(k8s.daemon_set, status.observedGeneration, int, [computed]).
-type_mint(k8s.daemon_set, status.observedGeneration, 3).
+type_provider(k8s.daemon_set, "kubernetes")
+type_attr(k8s.daemon_set, "metadata.name", "string", ["optional_computed", "id"])
+type_mint(k8s.daemon_set, "metadata.name", "{{doc:metadata.generateName}}{{hash}}")
+type_attr(k8s.daemon_set, "metadata.generateName", "string", [])
+type_attr(k8s.daemon_set, "metadata.namespace", "string", ["optional_computed"])
+type_mint(k8s.daemon_set, "metadata.namespace", "default")
+type_attr(k8s.daemon_set, "metadata.labels", "map", [])
+type_attr(k8s.daemon_set, "metadata.annotations", "map", [])
+type_attr(k8s.daemon_set, "metadata.uid", "string", ["computed", "id"])
+type_attr(k8s.daemon_set, "metadata.resourceVersion", "string", ["computed"])
+type_attr(k8s.daemon_set, "metadata.generation", "int", ["computed"])
+type_attr(k8s.daemon_set, "metadata.creationTimestamp", "string", ["computed"])
+type_mint(k8s.daemon_set, "metadata.uid", "uid-{{name}}-{{hash}}")
+type_mint(k8s.daemon_set, "metadata.resourceVersion", "{{n}}")
+type_mint(k8s.daemon_set, "metadata.generation", 1)
+type_mint(k8s.daemon_set, "metadata.creationTimestamp", "2026-01-01T00:00:00Z")
+type_attr(k8s.daemon_set, "spec.selector.matchLabels", "map", ["required"])
+type_attr(k8s.daemon_set, "spec.template.metadata.labels", "map", [])
+type_attr(k8s.daemon_set, "spec.template.spec.containers", "list", ["required"])
+type_list_key(k8s.daemon_set, "spec.template.spec.containers", ["name"])
+type_attr(k8s.daemon_set, "spec.template.spec.containers.image", "string", ["required"])
+type_attr(k8s.daemon_set, "spec.template.spec.containers.ports", "list", [])
+type_list_key(k8s.daemon_set, "spec.template.spec.containers.ports", ["containerPort", "protocol"])
+type_attr(k8s.daemon_set, "spec.template.spec.containers.env", "list", [])
+type_list_key(k8s.daemon_set, "spec.template.spec.containers.env", ["name"])
+type_attr(k8s.daemon_set, "spec.template.spec.containers.volumeMounts", "list", [])
+type_list_key(k8s.daemon_set, "spec.template.spec.containers.volumeMounts", ["mountPath"])
+type_attr(k8s.daemon_set, "spec.template.spec.containers.imagePullPolicy", "string", ["optional_computed"])
+type_mint(k8s.daemon_set, "spec.template.spec.containers.imagePullPolicy", "IfNotPresent")
+type_attr(k8s.daemon_set, "spec.template.spec.initContainers", "list", [])
+type_list_key(k8s.daemon_set, "spec.template.spec.initContainers", ["name"])
+type_attr(k8s.daemon_set, "spec.template.spec.volumes", "list", [])
+type_list_key(k8s.daemon_set, "spec.template.spec.volumes", ["name"])
+type_attr(k8s.daemon_set, "spec.template.spec.serviceAccountName", "string", ["optional_computed"])
+type_mint(k8s.daemon_set, "spec.template.spec.serviceAccountName", "default")
+type_attr(k8s.daemon_set, "spec.template.spec.restartPolicy", "string", ["optional_computed"])
+type_mint(k8s.daemon_set, "spec.template.spec.restartPolicy", "Always")
+type_attr(k8s.daemon_set, "spec.template.spec.terminationGracePeriodSeconds", "int", ["optional_computed"])
+type_mint(k8s.daemon_set, "spec.template.spec.terminationGracePeriodSeconds", 30)
+type_attr(k8s.daemon_set, "spec.template.spec.dnsPolicy", "string", ["optional_computed"])
+type_mint(k8s.daemon_set, "spec.template.spec.dnsPolicy", "ClusterFirst")
+type_attr(k8s.daemon_set, "spec.template.spec.nodeSelector", "map", [])
+type_attr(k8s.daemon_set, "spec.template.spec.tolerations", "list", [])
+type_attr(k8s.daemon_set, "spec.updateStrategy.type", "string", ["optional_computed"])
+type_mint(k8s.daemon_set, "spec.updateStrategy.type", "RollingUpdate")
+type_attr(k8s.daemon_set, "status.desiredNumberScheduled", "int", ["computed"])
+type_mint(k8s.daemon_set, "status.desiredNumberScheduled", 3)
+type_attr(k8s.daemon_set, "status.currentNumberScheduled", "int", ["computed"])
+type_mint(k8s.daemon_set, "status.currentNumberScheduled", 3)
+type_attr(k8s.daemon_set, "status.numberReady", "int", ["computed"])
+type_mint(k8s.daemon_set, "status.numberReady", 3)
+type_attr(k8s.daemon_set, "status.observedGeneration", "int", ["computed"])
+type_mint(k8s.daemon_set, "status.observedGeneration", 3)
 
 # Job (batch/v1)
-type_provider(k8s.job, kubernetes).
-type_attr(k8s.job, metadata.name, string, [optional_computed, id]).
-type_mint(k8s.job, metadata.name, "{doc:metadata.generateName}{hash}").
-type_attr(k8s.job, metadata.generateName, string, []).
-type_attr(k8s.job, metadata.namespace, string, [optional_computed]).
-type_mint(k8s.job, metadata.namespace, "default").
-type_attr(k8s.job, metadata.labels, map, []).
-type_attr(k8s.job, metadata.annotations, map, []).
-type_attr(k8s.job, metadata.uid, string, [computed, id]).
-type_attr(k8s.job, metadata.resourceVersion, string, [computed]).
-type_attr(k8s.job, metadata.generation, int, [computed]).
-type_attr(k8s.job, metadata.creationTimestamp, string, [computed]).
-type_mint(k8s.job, metadata.uid, "uid-{name}-{hash}").
-type_mint(k8s.job, metadata.resourceVersion, "{n}").
-type_mint(k8s.job, metadata.generation, 1).
-type_mint(k8s.job, metadata.creationTimestamp, "2026-01-01T00:00:00Z").
-type_attr(k8s.job, spec.template.metadata.labels, map, []).
-type_attr(k8s.job, spec.template.spec.containers, list, [required]).
-type_list_key(k8s.job, spec.template.spec.containers, [name]).
-type_attr(k8s.job, spec.template.spec.containers.image, string, [required]).
-type_attr(k8s.job, spec.template.spec.containers.ports, list, []).
-type_list_key(k8s.job, spec.template.spec.containers.ports, [containerPort, protocol]).
-type_attr(k8s.job, spec.template.spec.containers.env, list, []).
-type_list_key(k8s.job, spec.template.spec.containers.env, [name]).
-type_attr(k8s.job, spec.template.spec.containers.volumeMounts, list, []).
-type_list_key(k8s.job, spec.template.spec.containers.volumeMounts, [mountPath]).
-type_attr(k8s.job, spec.template.spec.containers.imagePullPolicy, string, [optional_computed]).
-type_mint(k8s.job, spec.template.spec.containers.imagePullPolicy, "IfNotPresent").
-type_attr(k8s.job, spec.template.spec.initContainers, list, []).
-type_list_key(k8s.job, spec.template.spec.initContainers, [name]).
-type_attr(k8s.job, spec.template.spec.volumes, list, []).
-type_list_key(k8s.job, spec.template.spec.volumes, [name]).
-type_attr(k8s.job, spec.template.spec.serviceAccountName, string, [optional_computed]).
-type_mint(k8s.job, spec.template.spec.serviceAccountName, "default").
-type_attr(k8s.job, spec.template.spec.restartPolicy, string, [optional_computed]).
-type_mint(k8s.job, spec.template.spec.restartPolicy, "Never").
-type_attr(k8s.job, spec.template.spec.terminationGracePeriodSeconds, int, [optional_computed]).
-type_mint(k8s.job, spec.template.spec.terminationGracePeriodSeconds, 30).
-type_attr(k8s.job, spec.template.spec.dnsPolicy, string, [optional_computed]).
-type_mint(k8s.job, spec.template.spec.dnsPolicy, "ClusterFirst").
-type_attr(k8s.job, spec.template.spec.nodeSelector, map, []).
-type_attr(k8s.job, spec.template.spec.tolerations, list, []).
-type_attr(k8s.job, spec.backoffLimit, int, [optional_computed]).
-type_mint(k8s.job, spec.backoffLimit, 6).
-type_attr(k8s.job, spec.completions, int, [optional_computed]).
-type_mint(k8s.job, spec.completions, 1).
-type_attr(k8s.job, spec.parallelism, int, [optional_computed]).
-type_mint(k8s.job, spec.parallelism, 1).
-type_attr(k8s.job, spec.ttlSecondsAfterFinished, int, []).
-type_attr(k8s.job, spec.selector.matchLabels, map, [optional_computed]).
-type_attr(k8s.job, status.succeeded, int, [computed]).
-type_mint(k8s.job, status.succeeded, 1).
-type_attr(k8s.job, status.failed, int, [computed]).
-type_mint(k8s.job, status.failed, 0).
-type_attr(k8s.job, status.startTime, string, [computed]).
-type_mint(k8s.job, status.startTime, "2026-01-01T00:00:00Z").
-type_attr(k8s.job, status.completionTime, string, [computed]).
-type_mint(k8s.job, status.completionTime, "2026-01-01T00:01:00Z").
+type_provider(k8s.job, "kubernetes")
+type_attr(k8s.job, "metadata.name", "string", ["optional_computed", "id"])
+type_mint(k8s.job, "metadata.name", "{{doc:metadata.generateName}}{{hash}}")
+type_attr(k8s.job, "metadata.generateName", "string", [])
+type_attr(k8s.job, "metadata.namespace", "string", ["optional_computed"])
+type_mint(k8s.job, "metadata.namespace", "default")
+type_attr(k8s.job, "metadata.labels", "map", [])
+type_attr(k8s.job, "metadata.annotations", "map", [])
+type_attr(k8s.job, "metadata.uid", "string", ["computed", "id"])
+type_attr(k8s.job, "metadata.resourceVersion", "string", ["computed"])
+type_attr(k8s.job, "metadata.generation", "int", ["computed"])
+type_attr(k8s.job, "metadata.creationTimestamp", "string", ["computed"])
+type_mint(k8s.job, "metadata.uid", "uid-{{name}}-{{hash}}")
+type_mint(k8s.job, "metadata.resourceVersion", "{{n}}")
+type_mint(k8s.job, "metadata.generation", 1)
+type_mint(k8s.job, "metadata.creationTimestamp", "2026-01-01T00:00:00Z")
+type_attr(k8s.job, "spec.template.metadata.labels", "map", [])
+type_attr(k8s.job, "spec.template.spec.containers", "list", ["required"])
+type_list_key(k8s.job, "spec.template.spec.containers", ["name"])
+type_attr(k8s.job, "spec.template.spec.containers.image", "string", ["required"])
+type_attr(k8s.job, "spec.template.spec.containers.ports", "list", [])
+type_list_key(k8s.job, "spec.template.spec.containers.ports", ["containerPort", "protocol"])
+type_attr(k8s.job, "spec.template.spec.containers.env", "list", [])
+type_list_key(k8s.job, "spec.template.spec.containers.env", ["name"])
+type_attr(k8s.job, "spec.template.spec.containers.volumeMounts", "list", [])
+type_list_key(k8s.job, "spec.template.spec.containers.volumeMounts", ["mountPath"])
+type_attr(k8s.job, "spec.template.spec.containers.imagePullPolicy", "string", ["optional_computed"])
+type_mint(k8s.job, "spec.template.spec.containers.imagePullPolicy", "IfNotPresent")
+type_attr(k8s.job, "spec.template.spec.initContainers", "list", [])
+type_list_key(k8s.job, "spec.template.spec.initContainers", ["name"])
+type_attr(k8s.job, "spec.template.spec.volumes", "list", [])
+type_list_key(k8s.job, "spec.template.spec.volumes", ["name"])
+type_attr(k8s.job, "spec.template.spec.serviceAccountName", "string", ["optional_computed"])
+type_mint(k8s.job, "spec.template.spec.serviceAccountName", "default")
+type_attr(k8s.job, "spec.template.spec.restartPolicy", "string", ["optional_computed"])
+type_mint(k8s.job, "spec.template.spec.restartPolicy", "Never")
+type_attr(k8s.job, "spec.template.spec.terminationGracePeriodSeconds", "int", ["optional_computed"])
+type_mint(k8s.job, "spec.template.spec.terminationGracePeriodSeconds", 30)
+type_attr(k8s.job, "spec.template.spec.dnsPolicy", "string", ["optional_computed"])
+type_mint(k8s.job, "spec.template.spec.dnsPolicy", "ClusterFirst")
+type_attr(k8s.job, "spec.template.spec.nodeSelector", "map", [])
+type_attr(k8s.job, "spec.template.spec.tolerations", "list", [])
+type_attr(k8s.job, "spec.backoffLimit", "int", ["optional_computed"])
+type_mint(k8s.job, "spec.backoffLimit", 6)
+type_attr(k8s.job, "spec.completions", "int", ["optional_computed"])
+type_mint(k8s.job, "spec.completions", 1)
+type_attr(k8s.job, "spec.parallelism", "int", ["optional_computed"])
+type_mint(k8s.job, "spec.parallelism", 1)
+type_attr(k8s.job, "spec.ttlSecondsAfterFinished", "int", [])
+type_attr(k8s.job, "spec.selector.matchLabels", "map", ["optional_computed"])
+type_attr(k8s.job, "status.succeeded", "int", ["computed"])
+type_mint(k8s.job, "status.succeeded", 1)
+type_attr(k8s.job, "status.failed", "int", ["computed"])
+type_mint(k8s.job, "status.failed", 0)
+type_attr(k8s.job, "status.startTime", "string", ["computed"])
+type_mint(k8s.job, "status.startTime", "2026-01-01T00:00:00Z")
+type_attr(k8s.job, "status.completionTime", "string", ["computed"])
+type_mint(k8s.job, "status.completionTime", "2026-01-01T00:01:00Z")
 
 # CronJob (batch/v1)
-type_provider(k8s.cron_job, kubernetes).
-type_attr(k8s.cron_job, metadata.name, string, [optional_computed, id]).
-type_mint(k8s.cron_job, metadata.name, "{doc:metadata.generateName}{hash}").
-type_attr(k8s.cron_job, metadata.generateName, string, []).
-type_attr(k8s.cron_job, metadata.namespace, string, [optional_computed]).
-type_mint(k8s.cron_job, metadata.namespace, "default").
-type_attr(k8s.cron_job, metadata.labels, map, []).
-type_attr(k8s.cron_job, metadata.annotations, map, []).
-type_attr(k8s.cron_job, metadata.uid, string, [computed, id]).
-type_attr(k8s.cron_job, metadata.resourceVersion, string, [computed]).
-type_attr(k8s.cron_job, metadata.generation, int, [computed]).
-type_attr(k8s.cron_job, metadata.creationTimestamp, string, [computed]).
-type_mint(k8s.cron_job, metadata.uid, "uid-{name}-{hash}").
-type_mint(k8s.cron_job, metadata.resourceVersion, "{n}").
-type_mint(k8s.cron_job, metadata.generation, 1).
-type_mint(k8s.cron_job, metadata.creationTimestamp, "2026-01-01T00:00:00Z").
-type_attr(k8s.cron_job, spec.schedule, string, [required]).
-type_attr(k8s.cron_job, spec.timeZone, string, []).
-type_attr(k8s.cron_job, spec.jobTemplate.spec.template.metadata.labels, map, []).
-type_attr(k8s.cron_job, spec.jobTemplate.spec.template.spec.containers, list, [required]).
-type_list_key(k8s.cron_job, spec.jobTemplate.spec.template.spec.containers, [name]).
-type_attr(k8s.cron_job, spec.jobTemplate.spec.template.spec.containers.image, string, [required]).
-type_attr(k8s.cron_job, spec.jobTemplate.spec.template.spec.containers.ports, list, []).
-type_list_key(k8s.cron_job, spec.jobTemplate.spec.template.spec.containers.ports, [containerPort, protocol]).
-type_attr(k8s.cron_job, spec.jobTemplate.spec.template.spec.containers.env, list, []).
-type_list_key(k8s.cron_job, spec.jobTemplate.spec.template.spec.containers.env, [name]).
-type_attr(k8s.cron_job, spec.jobTemplate.spec.template.spec.containers.volumeMounts, list, []).
-type_list_key(k8s.cron_job, spec.jobTemplate.spec.template.spec.containers.volumeMounts, [mountPath]).
-type_attr(k8s.cron_job, spec.jobTemplate.spec.template.spec.containers.imagePullPolicy, string, [optional_computed]).
-type_mint(k8s.cron_job, spec.jobTemplate.spec.template.spec.containers.imagePullPolicy, "IfNotPresent").
-type_attr(k8s.cron_job, spec.jobTemplate.spec.template.spec.initContainers, list, []).
-type_list_key(k8s.cron_job, spec.jobTemplate.spec.template.spec.initContainers, [name]).
-type_attr(k8s.cron_job, spec.jobTemplate.spec.template.spec.volumes, list, []).
-type_list_key(k8s.cron_job, spec.jobTemplate.spec.template.spec.volumes, [name]).
-type_attr(k8s.cron_job, spec.jobTemplate.spec.template.spec.serviceAccountName, string, [optional_computed]).
-type_mint(k8s.cron_job, spec.jobTemplate.spec.template.spec.serviceAccountName, "default").
-type_attr(k8s.cron_job, spec.jobTemplate.spec.template.spec.restartPolicy, string, [optional_computed]).
-type_mint(k8s.cron_job, spec.jobTemplate.spec.template.spec.restartPolicy, "Never").
-type_attr(k8s.cron_job, spec.jobTemplate.spec.template.spec.terminationGracePeriodSeconds, int, [optional_computed]).
-type_mint(k8s.cron_job, spec.jobTemplate.spec.template.spec.terminationGracePeriodSeconds, 30).
-type_attr(k8s.cron_job, spec.jobTemplate.spec.template.spec.dnsPolicy, string, [optional_computed]).
-type_mint(k8s.cron_job, spec.jobTemplate.spec.template.spec.dnsPolicy, "ClusterFirst").
-type_attr(k8s.cron_job, spec.jobTemplate.spec.template.spec.nodeSelector, map, []).
-type_attr(k8s.cron_job, spec.jobTemplate.spec.template.spec.tolerations, list, []).
-type_attr(k8s.cron_job, spec.concurrencyPolicy, string, [optional_computed]).
-type_mint(k8s.cron_job, spec.concurrencyPolicy, "Allow").
-type_attr(k8s.cron_job, spec.suspend, bool, [optional_computed]).
-type_mint(k8s.cron_job, spec.suspend, false).
-type_attr(k8s.cron_job, spec.successfulJobsHistoryLimit, int, [optional_computed]).
-type_mint(k8s.cron_job, spec.successfulJobsHistoryLimit, 3).
-type_attr(k8s.cron_job, spec.failedJobsHistoryLimit, int, [optional_computed]).
-type_mint(k8s.cron_job, spec.failedJobsHistoryLimit, 1).
-type_attr(k8s.cron_job, status.lastScheduleTime, string, [computed]).
-type_mint(k8s.cron_job, status.lastScheduleTime, "2026-01-01T00:00:00Z").
+type_provider(k8s.cron_job, "kubernetes")
+type_attr(k8s.cron_job, "metadata.name", "string", ["optional_computed", "id"])
+type_mint(k8s.cron_job, "metadata.name", "{{doc:metadata.generateName}}{{hash}}")
+type_attr(k8s.cron_job, "metadata.generateName", "string", [])
+type_attr(k8s.cron_job, "metadata.namespace", "string", ["optional_computed"])
+type_mint(k8s.cron_job, "metadata.namespace", "default")
+type_attr(k8s.cron_job, "metadata.labels", "map", [])
+type_attr(k8s.cron_job, "metadata.annotations", "map", [])
+type_attr(k8s.cron_job, "metadata.uid", "string", ["computed", "id"])
+type_attr(k8s.cron_job, "metadata.resourceVersion", "string", ["computed"])
+type_attr(k8s.cron_job, "metadata.generation", "int", ["computed"])
+type_attr(k8s.cron_job, "metadata.creationTimestamp", "string", ["computed"])
+type_mint(k8s.cron_job, "metadata.uid", "uid-{{name}}-{{hash}}")
+type_mint(k8s.cron_job, "metadata.resourceVersion", "{{n}}")
+type_mint(k8s.cron_job, "metadata.generation", 1)
+type_mint(k8s.cron_job, "metadata.creationTimestamp", "2026-01-01T00:00:00Z")
+type_attr(k8s.cron_job, "spec.schedule", "string", ["required"])
+type_attr(k8s.cron_job, "spec.timeZone", "string", [])
+type_attr(k8s.cron_job, "spec.jobTemplate.spec.template.metadata.labels", "map", [])
+type_attr(k8s.cron_job, "spec.jobTemplate.spec.template.spec.containers", "list", ["required"])
+type_list_key(k8s.cron_job, "spec.jobTemplate.spec.template.spec.containers", ["name"])
+type_attr(k8s.cron_job, "spec.jobTemplate.spec.template.spec.containers.image", "string", ["required"])
+type_attr(k8s.cron_job, "spec.jobTemplate.spec.template.spec.containers.ports", "list", [])
+type_list_key(k8s.cron_job, "spec.jobTemplate.spec.template.spec.containers.ports", ["containerPort", "protocol"])
+type_attr(k8s.cron_job, "spec.jobTemplate.spec.template.spec.containers.env", "list", [])
+type_list_key(k8s.cron_job, "spec.jobTemplate.spec.template.spec.containers.env", ["name"])
+type_attr(k8s.cron_job, "spec.jobTemplate.spec.template.spec.containers.volumeMounts", "list", [])
+type_list_key(k8s.cron_job, "spec.jobTemplate.spec.template.spec.containers.volumeMounts", ["mountPath"])
+type_attr(k8s.cron_job, "spec.jobTemplate.spec.template.spec.containers.imagePullPolicy", "string", ["optional_computed"])
+type_mint(k8s.cron_job, "spec.jobTemplate.spec.template.spec.containers.imagePullPolicy", "IfNotPresent")
+type_attr(k8s.cron_job, "spec.jobTemplate.spec.template.spec.initContainers", "list", [])
+type_list_key(k8s.cron_job, "spec.jobTemplate.spec.template.spec.initContainers", ["name"])
+type_attr(k8s.cron_job, "spec.jobTemplate.spec.template.spec.volumes", "list", [])
+type_list_key(k8s.cron_job, "spec.jobTemplate.spec.template.spec.volumes", ["name"])
+type_attr(k8s.cron_job, "spec.jobTemplate.spec.template.spec.serviceAccountName", "string", ["optional_computed"])
+type_mint(k8s.cron_job, "spec.jobTemplate.spec.template.spec.serviceAccountName", "default")
+type_attr(k8s.cron_job, "spec.jobTemplate.spec.template.spec.restartPolicy", "string", ["optional_computed"])
+type_mint(k8s.cron_job, "spec.jobTemplate.spec.template.spec.restartPolicy", "Never")
+type_attr(k8s.cron_job, "spec.jobTemplate.spec.template.spec.terminationGracePeriodSeconds", "int", ["optional_computed"])
+type_mint(k8s.cron_job, "spec.jobTemplate.spec.template.spec.terminationGracePeriodSeconds", 30)
+type_attr(k8s.cron_job, "spec.jobTemplate.spec.template.spec.dnsPolicy", "string", ["optional_computed"])
+type_mint(k8s.cron_job, "spec.jobTemplate.spec.template.spec.dnsPolicy", "ClusterFirst")
+type_attr(k8s.cron_job, "spec.jobTemplate.spec.template.spec.nodeSelector", "map", [])
+type_attr(k8s.cron_job, "spec.jobTemplate.spec.template.spec.tolerations", "list", [])
+type_attr(k8s.cron_job, "spec.concurrencyPolicy", "string", ["optional_computed"])
+type_mint(k8s.cron_job, "spec.concurrencyPolicy", "Allow")
+type_attr(k8s.cron_job, "spec.suspend", "bool", ["optional_computed"])
+type_mint(k8s.cron_job, "spec.suspend", false)
+type_attr(k8s.cron_job, "spec.successfulJobsHistoryLimit", "int", ["optional_computed"])
+type_mint(k8s.cron_job, "spec.successfulJobsHistoryLimit", 3)
+type_attr(k8s.cron_job, "spec.failedJobsHistoryLimit", "int", ["optional_computed"])
+type_mint(k8s.cron_job, "spec.failedJobsHistoryLimit", 1)
+type_attr(k8s.cron_job, "status.lastScheduleTime", "string", ["computed"])
+type_mint(k8s.cron_job, "status.lastScheduleTime", "2026-01-01T00:00:00Z")
 
 # HorizontalPodAutoscaler (autoscaling/v2)
-type_provider(k8s.horizontal_pod_autoscaler, kubernetes).
-type_attr(k8s.horizontal_pod_autoscaler, metadata.name, string, [optional_computed, id]).
-type_mint(k8s.horizontal_pod_autoscaler, metadata.name, "{doc:metadata.generateName}{hash}").
-type_attr(k8s.horizontal_pod_autoscaler, metadata.generateName, string, []).
-type_attr(k8s.horizontal_pod_autoscaler, metadata.namespace, string, [optional_computed]).
-type_mint(k8s.horizontal_pod_autoscaler, metadata.namespace, "default").
-type_attr(k8s.horizontal_pod_autoscaler, metadata.labels, map, []).
-type_attr(k8s.horizontal_pod_autoscaler, metadata.annotations, map, []).
-type_attr(k8s.horizontal_pod_autoscaler, metadata.uid, string, [computed, id]).
-type_attr(k8s.horizontal_pod_autoscaler, metadata.resourceVersion, string, [computed]).
-type_attr(k8s.horizontal_pod_autoscaler, metadata.generation, int, [computed]).
-type_attr(k8s.horizontal_pod_autoscaler, metadata.creationTimestamp, string, [computed]).
-type_mint(k8s.horizontal_pod_autoscaler, metadata.uid, "uid-{name}-{hash}").
-type_mint(k8s.horizontal_pod_autoscaler, metadata.resourceVersion, "{n}").
-type_mint(k8s.horizontal_pod_autoscaler, metadata.generation, 1).
-type_mint(k8s.horizontal_pod_autoscaler, metadata.creationTimestamp, "2026-01-01T00:00:00Z").
-type_attr(k8s.horizontal_pod_autoscaler, spec.scaleTargetRef.apiVersion, string, []).
-type_attr(k8s.horizontal_pod_autoscaler, spec.scaleTargetRef.kind, string, [required]).
-type_attr(k8s.horizontal_pod_autoscaler, spec.scaleTargetRef.name, string, [required]).
-type_attr(k8s.horizontal_pod_autoscaler, spec.minReplicas, int, [optional_computed]).
-type_mint(k8s.horizontal_pod_autoscaler, spec.minReplicas, 1).
-type_attr(k8s.horizontal_pod_autoscaler, spec.maxReplicas, int, [required]).
-type_attr(k8s.horizontal_pod_autoscaler, spec.metrics, list, []).
-type_attr(k8s.horizontal_pod_autoscaler, status.currentReplicas, int, [computed]).
-type_mint(k8s.horizontal_pod_autoscaler, status.currentReplicas, 1).
-type_attr(k8s.horizontal_pod_autoscaler, status.desiredReplicas, int, [computed]).
-type_mint(k8s.horizontal_pod_autoscaler, status.desiredReplicas, 1).
-type_attr(k8s.horizontal_pod_autoscaler, status.currentMetrics, list, [computed]).
+type_provider(k8s.horizontal_pod_autoscaler, "kubernetes")
+type_attr(k8s.horizontal_pod_autoscaler, "metadata.name", "string", ["optional_computed", "id"])
+type_mint(k8s.horizontal_pod_autoscaler, "metadata.name", "{{doc:metadata.generateName}}{{hash}}")
+type_attr(k8s.horizontal_pod_autoscaler, "metadata.generateName", "string", [])
+type_attr(k8s.horizontal_pod_autoscaler, "metadata.namespace", "string", ["optional_computed"])
+type_mint(k8s.horizontal_pod_autoscaler, "metadata.namespace", "default")
+type_attr(k8s.horizontal_pod_autoscaler, "metadata.labels", "map", [])
+type_attr(k8s.horizontal_pod_autoscaler, "metadata.annotations", "map", [])
+type_attr(k8s.horizontal_pod_autoscaler, "metadata.uid", "string", ["computed", "id"])
+type_attr(k8s.horizontal_pod_autoscaler, "metadata.resourceVersion", "string", ["computed"])
+type_attr(k8s.horizontal_pod_autoscaler, "metadata.generation", "int", ["computed"])
+type_attr(k8s.horizontal_pod_autoscaler, "metadata.creationTimestamp", "string", ["computed"])
+type_mint(k8s.horizontal_pod_autoscaler, "metadata.uid", "uid-{{name}}-{{hash}}")
+type_mint(k8s.horizontal_pod_autoscaler, "metadata.resourceVersion", "{{n}}")
+type_mint(k8s.horizontal_pod_autoscaler, "metadata.generation", 1)
+type_mint(k8s.horizontal_pod_autoscaler, "metadata.creationTimestamp", "2026-01-01T00:00:00Z")
+type_attr(k8s.horizontal_pod_autoscaler, "spec.scaleTargetRef.apiVersion", "string", [])
+type_attr(k8s.horizontal_pod_autoscaler, "spec.scaleTargetRef.kind", "string", ["required"])
+type_attr(k8s.horizontal_pod_autoscaler, "spec.scaleTargetRef.name", "string", ["required"])
+type_attr(k8s.horizontal_pod_autoscaler, "spec.minReplicas", "int", ["optional_computed"])
+type_mint(k8s.horizontal_pod_autoscaler, "spec.minReplicas", 1)
+type_attr(k8s.horizontal_pod_autoscaler, "spec.maxReplicas", "int", ["required"])
+type_attr(k8s.horizontal_pod_autoscaler, "spec.metrics", "list", [])
+type_attr(k8s.horizontal_pod_autoscaler, "status.currentReplicas", "int", ["computed"])
+type_mint(k8s.horizontal_pod_autoscaler, "status.currentReplicas", 1)
+type_attr(k8s.horizontal_pod_autoscaler, "status.desiredReplicas", "int", ["computed"])
+type_mint(k8s.horizontal_pod_autoscaler, "status.desiredReplicas", 1)
+type_attr(k8s.horizontal_pod_autoscaler, "status.currentMetrics", "list", ["computed"])
 
 # PodDisruptionBudget (policy/v1)
-type_provider(k8s.pod_disruption_budget, kubernetes).
-type_attr(k8s.pod_disruption_budget, metadata.name, string, [optional_computed, id]).
-type_mint(k8s.pod_disruption_budget, metadata.name, "{doc:metadata.generateName}{hash}").
-type_attr(k8s.pod_disruption_budget, metadata.generateName, string, []).
-type_attr(k8s.pod_disruption_budget, metadata.namespace, string, [optional_computed]).
-type_mint(k8s.pod_disruption_budget, metadata.namespace, "default").
-type_attr(k8s.pod_disruption_budget, metadata.labels, map, []).
-type_attr(k8s.pod_disruption_budget, metadata.annotations, map, []).
-type_attr(k8s.pod_disruption_budget, metadata.uid, string, [computed, id]).
-type_attr(k8s.pod_disruption_budget, metadata.resourceVersion, string, [computed]).
-type_attr(k8s.pod_disruption_budget, metadata.generation, int, [computed]).
-type_attr(k8s.pod_disruption_budget, metadata.creationTimestamp, string, [computed]).
-type_mint(k8s.pod_disruption_budget, metadata.uid, "uid-{name}-{hash}").
-type_mint(k8s.pod_disruption_budget, metadata.resourceVersion, "{n}").
-type_mint(k8s.pod_disruption_budget, metadata.generation, 1).
-type_mint(k8s.pod_disruption_budget, metadata.creationTimestamp, "2026-01-01T00:00:00Z").
-type_attr(k8s.pod_disruption_budget, spec.minAvailable, string, []).
-type_attr(k8s.pod_disruption_budget, spec.maxUnavailable, string, []).
-type_attr(k8s.pod_disruption_budget, spec.selector.matchLabels, map, []).
-type_attr(k8s.pod_disruption_budget, status.currentHealthy, int, [computed]).
-type_mint(k8s.pod_disruption_budget, status.currentHealthy, 1).
-type_attr(k8s.pod_disruption_budget, status.desiredHealthy, int, [computed]).
-type_mint(k8s.pod_disruption_budget, status.desiredHealthy, 1).
-type_attr(k8s.pod_disruption_budget, status.disruptionsAllowed, int, [computed]).
-type_mint(k8s.pod_disruption_budget, status.disruptionsAllowed, 0).
-type_attr(k8s.pod_disruption_budget, status.expectedPods, int, [computed]).
-type_mint(k8s.pod_disruption_budget, status.expectedPods, 1).
+type_provider(k8s.pod_disruption_budget, "kubernetes")
+type_attr(k8s.pod_disruption_budget, "metadata.name", "string", ["optional_computed", "id"])
+type_mint(k8s.pod_disruption_budget, "metadata.name", "{{doc:metadata.generateName}}{{hash}}")
+type_attr(k8s.pod_disruption_budget, "metadata.generateName", "string", [])
+type_attr(k8s.pod_disruption_budget, "metadata.namespace", "string", ["optional_computed"])
+type_mint(k8s.pod_disruption_budget, "metadata.namespace", "default")
+type_attr(k8s.pod_disruption_budget, "metadata.labels", "map", [])
+type_attr(k8s.pod_disruption_budget, "metadata.annotations", "map", [])
+type_attr(k8s.pod_disruption_budget, "metadata.uid", "string", ["computed", "id"])
+type_attr(k8s.pod_disruption_budget, "metadata.resourceVersion", "string", ["computed"])
+type_attr(k8s.pod_disruption_budget, "metadata.generation", "int", ["computed"])
+type_attr(k8s.pod_disruption_budget, "metadata.creationTimestamp", "string", ["computed"])
+type_mint(k8s.pod_disruption_budget, "metadata.uid", "uid-{{name}}-{{hash}}")
+type_mint(k8s.pod_disruption_budget, "metadata.resourceVersion", "{{n}}")
+type_mint(k8s.pod_disruption_budget, "metadata.generation", 1)
+type_mint(k8s.pod_disruption_budget, "metadata.creationTimestamp", "2026-01-01T00:00:00Z")
+type_attr(k8s.pod_disruption_budget, "spec.minAvailable", "string", [])
+type_attr(k8s.pod_disruption_budget, "spec.maxUnavailable", "string", [])
+type_attr(k8s.pod_disruption_budget, "spec.selector.matchLabels", "map", [])
+type_attr(k8s.pod_disruption_budget, "status.currentHealthy", "int", ["computed"])
+type_mint(k8s.pod_disruption_budget, "status.currentHealthy", 1)
+type_attr(k8s.pod_disruption_budget, "status.desiredHealthy", "int", ["computed"])
+type_mint(k8s.pod_disruption_budget, "status.desiredHealthy", 1)
+type_attr(k8s.pod_disruption_budget, "status.disruptionsAllowed", "int", ["computed"])
+type_mint(k8s.pod_disruption_budget, "status.disruptionsAllowed", 0)
+type_attr(k8s.pod_disruption_budget, "status.expectedPods", "int", ["computed"])
+type_mint(k8s.pod_disruption_budget, "status.expectedPods", 1)
 
 # NetworkPolicy (networking.k8s.io/v1)
-type_provider(k8s.network_policy, kubernetes).
-type_attr(k8s.network_policy, metadata.name, string, [optional_computed, id]).
-type_mint(k8s.network_policy, metadata.name, "{doc:metadata.generateName}{hash}").
-type_attr(k8s.network_policy, metadata.generateName, string, []).
-type_attr(k8s.network_policy, metadata.namespace, string, [optional_computed]).
-type_mint(k8s.network_policy, metadata.namespace, "default").
-type_attr(k8s.network_policy, metadata.labels, map, []).
-type_attr(k8s.network_policy, metadata.annotations, map, []).
-type_attr(k8s.network_policy, metadata.uid, string, [computed, id]).
-type_attr(k8s.network_policy, metadata.resourceVersion, string, [computed]).
-type_attr(k8s.network_policy, metadata.generation, int, [computed]).
-type_attr(k8s.network_policy, metadata.creationTimestamp, string, [computed]).
-type_mint(k8s.network_policy, metadata.uid, "uid-{name}-{hash}").
-type_mint(k8s.network_policy, metadata.resourceVersion, "{n}").
-type_mint(k8s.network_policy, metadata.generation, 1).
-type_mint(k8s.network_policy, metadata.creationTimestamp, "2026-01-01T00:00:00Z").
-type_attr(k8s.network_policy, spec.podSelector, map, [required]).
-type_attr(k8s.network_policy, spec.policyTypes, list, [optional_computed]).
-type_mint(k8s.network_policy, spec.policyTypes, ["Ingress"]).
-type_attr(k8s.network_policy, spec.ingress, list, []).
-type_attr(k8s.network_policy, spec.egress, list, []).
+type_provider(k8s.network_policy, "kubernetes")
+type_attr(k8s.network_policy, "metadata.name", "string", ["optional_computed", "id"])
+type_mint(k8s.network_policy, "metadata.name", "{{doc:metadata.generateName}}{{hash}}")
+type_attr(k8s.network_policy, "metadata.generateName", "string", [])
+type_attr(k8s.network_policy, "metadata.namespace", "string", ["optional_computed"])
+type_mint(k8s.network_policy, "metadata.namespace", "default")
+type_attr(k8s.network_policy, "metadata.labels", "map", [])
+type_attr(k8s.network_policy, "metadata.annotations", "map", [])
+type_attr(k8s.network_policy, "metadata.uid", "string", ["computed", "id"])
+type_attr(k8s.network_policy, "metadata.resourceVersion", "string", ["computed"])
+type_attr(k8s.network_policy, "metadata.generation", "int", ["computed"])
+type_attr(k8s.network_policy, "metadata.creationTimestamp", "string", ["computed"])
+type_mint(k8s.network_policy, "metadata.uid", "uid-{{name}}-{{hash}}")
+type_mint(k8s.network_policy, "metadata.resourceVersion", "{{n}}")
+type_mint(k8s.network_policy, "metadata.generation", 1)
+type_mint(k8s.network_policy, "metadata.creationTimestamp", "2026-01-01T00:00:00Z")
+type_attr(k8s.network_policy, "spec.podSelector", "map", ["required"])
+type_attr(k8s.network_policy, "spec.policyTypes", "list", ["optional_computed"])
+type_mint(k8s.network_policy, "spec.policyTypes", ["Ingress"])
+type_attr(k8s.network_policy, "spec.ingress", "list", [])
+type_attr(k8s.network_policy, "spec.egress", "list", [])
 
 # Ingress (networking.k8s.io/v1)
-type_provider(k8s.ingress, kubernetes).
-type_attr(k8s.ingress, metadata.name, string, [optional_computed, id]).
-type_mint(k8s.ingress, metadata.name, "{doc:metadata.generateName}{hash}").
-type_attr(k8s.ingress, metadata.generateName, string, []).
-type_attr(k8s.ingress, metadata.namespace, string, [optional_computed]).
-type_mint(k8s.ingress, metadata.namespace, "default").
-type_attr(k8s.ingress, metadata.labels, map, []).
-type_attr(k8s.ingress, metadata.annotations, map, []).
-type_attr(k8s.ingress, metadata.uid, string, [computed, id]).
-type_attr(k8s.ingress, metadata.resourceVersion, string, [computed]).
-type_attr(k8s.ingress, metadata.generation, int, [computed]).
-type_attr(k8s.ingress, metadata.creationTimestamp, string, [computed]).
-type_mint(k8s.ingress, metadata.uid, "uid-{name}-{hash}").
-type_mint(k8s.ingress, metadata.resourceVersion, "{n}").
-type_mint(k8s.ingress, metadata.generation, 1).
-type_mint(k8s.ingress, metadata.creationTimestamp, "2026-01-01T00:00:00Z").
-type_attr(k8s.ingress, spec.ingressClassName, string, [optional_computed]).
-type_mint(k8s.ingress, spec.ingressClassName, "nginx").
-type_attr(k8s.ingress, spec.defaultBackend, map, []).
-type_attr(k8s.ingress, spec.rules, list, []).
-type_attr(k8s.ingress, spec.tls, list, []).
-type_attr(k8s.ingress, status.loadBalancer.ingress, list, [computed]).
-type_mint(k8s.ingress, status.loadBalancer.ingress, [{ ip: "203.0.113.10" }]).
+type_provider(k8s.ingress, "kubernetes")
+type_attr(k8s.ingress, "metadata.name", "string", ["optional_computed", "id"])
+type_mint(k8s.ingress, "metadata.name", "{{doc:metadata.generateName}}{{hash}}")
+type_attr(k8s.ingress, "metadata.generateName", "string", [])
+type_attr(k8s.ingress, "metadata.namespace", "string", ["optional_computed"])
+type_mint(k8s.ingress, "metadata.namespace", "default")
+type_attr(k8s.ingress, "metadata.labels", "map", [])
+type_attr(k8s.ingress, "metadata.annotations", "map", [])
+type_attr(k8s.ingress, "metadata.uid", "string", ["computed", "id"])
+type_attr(k8s.ingress, "metadata.resourceVersion", "string", ["computed"])
+type_attr(k8s.ingress, "metadata.generation", "int", ["computed"])
+type_attr(k8s.ingress, "metadata.creationTimestamp", "string", ["computed"])
+type_mint(k8s.ingress, "metadata.uid", "uid-{{name}}-{{hash}}")
+type_mint(k8s.ingress, "metadata.resourceVersion", "{{n}}")
+type_mint(k8s.ingress, "metadata.generation", 1)
+type_mint(k8s.ingress, "metadata.creationTimestamp", "2026-01-01T00:00:00Z")
+type_attr(k8s.ingress, "spec.ingressClassName", "string", ["optional_computed"])
+type_mint(k8s.ingress, "spec.ingressClassName", "nginx")
+type_attr(k8s.ingress, "spec.defaultBackend", "map", [])
+type_attr(k8s.ingress, "spec.rules", "list", [])
+type_attr(k8s.ingress, "spec.tls", "list", [])
+type_attr(k8s.ingress, "status.loadBalancer.ingress", "list", ["computed"])
+type_mint(k8s.ingress, "status.loadBalancer.ingress", [{ ip: "203.0.113.10" }])

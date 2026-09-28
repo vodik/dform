@@ -1,3 +1,3 @@
-tests/syntax/err/three_errors.df:5:11: expected a term, found `.`
-tests/syntax/err/three_errors.df:7:9: expected a term, found `.`
-tests/syntax/err/three_errors.df:9:18: expected a resource name (an identifier or a variable), found `{`
+tests/syntax/err/three_errors.df:5:13: expected a term, found `]`
+tests/syntax/err/three_errors.df:7:11: expected a term, found `,`
+tests/syntax/err/three_errors.df:9:18: expected a resource name (a name or a string), found `{`

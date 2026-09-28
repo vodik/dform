@@ -1,0 +1,10 @@
+edition 2026
+
+# A block's clauses come first; a let names a reference; `+=` adds to a
+# field, not to a value.
+resource net.vpc a {
+  cidr = "10.0.0.0/16"
+  for q(x)
+}
+let n = 3
+k += 1

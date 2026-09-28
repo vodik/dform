@@ -1,15 +1,15 @@
-edition 2026.
+edition 2026
 
 # Externs are asked once their + arguments are ground: never negated, never
 # in a recursive rule, never stated by the program, bound left to right.
-extern file.json(+path, -value).
-extern next.hop(+from, -to).
+extern file.json(+path, -value)
+extern next.hop(+from, -to)
 
-paths("a.json").
-file.json("b.json", {}).
-missing(P) :- paths(P), not file.json(P, _).
-early(V) :- file.json(P, V), paths(P).
-reach(A, B) :- next.hop(A, B), start(A).
-reach(A, C) :- reach(A, B), next.hop(B, C).
-start("x").
-arity(V) :- paths(P), file.json(P, V, 1).
+paths("a.json")
+file.json("b.json", {})
+missing(p) if paths(p), not file.json(p, _)
+early(v) if file.json(p, v), paths(p)
+reach(a, b) if next.hop(a, b), start(a)
+reach(a, c) if reach(a, b), next.hop(b, c)
+start("x")
+arity(v) if paths(p), file.json(p, v, 1)

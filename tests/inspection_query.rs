@@ -10,7 +10,7 @@ use inspection_common::{dform, golden};
 fn a_pattern_prints_one_column_per_variable() {
     let out = dform(
         "dform.df",
-        &["--set", "env=prod", "query", "attr(net.vpc, N, cidr, C)"],
+        &["--set", "env=prod", "query", "attr(net.vpc, N, .cidr, C)"],
     );
     assert!(out.starts_with("N "), "{out}");
     assert!(
@@ -29,7 +29,7 @@ fn a_conjunction_is_evaluated_against_the_final_fact_store() {
             "--set",
             "env=prod",
             "query",
-            "attr(T, A, cidr, C), want(T, A), T != net.subnet",
+            "attr(T, A, .cidr, C), want(T, A), T != net.subnet",
         ],
     );
     assert!(out.starts_with("T "), "{out}");
@@ -79,9 +79,9 @@ fn query_never_prints_a_labeled_secret() {
     let s = Scratch::new("query-secret");
     s.write(
         "p.df",
-        r#"edition 2026.
-resource leaky.vault v { password = "VAULT-SECRET-DO-NOT-PRINT" }.
-           note(N) :- attr(leaky.vault, v, password, P), N = concat("pw is ", P)."#,
+        r#"edition 2026
+resource leaky.vault v { password = "VAULT-SECRET-DO-NOT-PRINT" }
+           note(n) if attr(leaky.vault, "v", "password", p), n = concat("pw is ", p)"#,
     );
     let schema = repo().join("providers/leaky/schema.df");
     let q = |pattern: &str| {

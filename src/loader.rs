@@ -1,104 +1,31 @@
-use crate::ast::{Program, Stmt};
+use crate::ast::Program;
 use crate::diag;
-use crate::parser;
 use anyhow::{Context, Result};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-pub fn load_program(entry_files: &[PathBuf]) -> Result<Program> {
-    let mut seen: BTreeSet<PathBuf> = BTreeSet::new();
-    let mut statements = Vec::new();
-    for f in entry_files {
-        let abs = absolutize(f)?;
-        let p = load_file(&abs, &mut seen)?;
-        statements.extend(p.statements);
-    }
-    Ok(Program { statements })
-}
-
-/// A file as last parsed: its name and text, the parse, and the sources
-/// the parse registered (pinned while the entry lives).
+/// A file as last parsed: its name and text, the tree, and the source it
+/// registered (pinned while the entry lives). A long-running controller
+/// loads the program once per event and parses a file again only when its
+/// text changed (compared by text, not mtime: a rewrite within the clock's
+/// granularity is still seen).
 struct Parsed {
-    name: String,
-    text: String,
-    program: Program,
-    sources: Vec<u32>,
-}
-
-/// Every file loaded, by canonical path: a long-running controller loads
-/// the program once per event and parses a file again only when its text
-/// changed. (Compared by text, not mtime: a rewrite within the clock's
-/// granularity is still seen.)
-static PARSED: Mutex<BTreeMap<PathBuf, Parsed>> = Mutex::new(BTreeMap::new());
-
-fn parse_cached(abs: &Path, name: &str, text: String) -> Result<Program> {
-    let mut cache = PARSED.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(p) = cache.get(abs)
-        && p.name == name
-        && p.text == text
-    {
-        return Ok(p.program.clone());
-    }
-    let mark = diag::mark();
-    let program = parser::parse_file(name, &text)?;
-    let sources = diag::pin_since(mark);
-    if let Some(old) = cache.insert(
-        abs.to_path_buf(),
-        Parsed {
-            name: name.to_string(),
-            text,
-            program: program.clone(),
-            sources,
-        },
-    ) {
-        diag::remove(&old.sources);
-    }
-    Ok(program)
-}
-
-fn load_file(path: &Path, seen: &mut BTreeSet<PathBuf>) -> Result<Program> {
-    // One file reached two ways (`lib/x.df`, `lib/../lib/x.df`, a symlink)
-    // is one file: dedup by its canonical path.
-    let abs = absolutize(path)?;
-    let abs = fs::canonicalize(&abs).unwrap_or(abs);
-    if !seen.insert(abs.clone()) {
-        // already loaded
-        return Ok(Program { statements: vec![] });
-    }
-    let src = fs::read_to_string(&abs).with_context(|| format!("read {}", abs.display()))?;
-    let mut prog = parse_cached(&abs, &display_name(&abs), src)?;
-
-    let base_dir = abs.parent().unwrap_or(Path::new("."));
-    let mut out = Vec::new();
-    for s in prog.statements.drain(..) {
-        match s {
-            Stmt::Import(i) => {
-                let import_path = base_dir.join(&i.path);
-                out.extend(load_file(&import_path, seen)?.statements);
-            }
-            other => out.push(other),
-        }
-    }
-    Ok(Program { statements: out })
-}
-
-/// A file as last parsed by the proposal G parser: its name and text, the
-/// tree, and its source id.
-struct ParsedG {
     name: String,
     text: String,
     green: rowan::GreenNode,
     file: u32,
+    sources: Vec<u32>,
 }
 
-static PARSED_G: Mutex<BTreeMap<PathBuf, ParsedG>> = Mutex::new(BTreeMap::new());
+static PARSED: Mutex<BTreeMap<PathBuf, Parsed>> = Mutex::new(BTreeMap::new());
 
-/// The proposal G loader: every file of the program is parsed, then the
-/// whole program is resolved at once (a name declared in one file is
-/// used in another), each import inlined where it stands.
-pub fn load_program_g(entry_files: &[PathBuf]) -> Result<Program> {
+/// Every file of the program is parsed (imports followed, a file reached
+/// twice loaded once), then the whole program is resolved at once: a name
+/// declared in one file is used in another. Each import is inlined where
+/// it stands.
+pub fn load_program(entry_files: &[PathBuf]) -> Result<Program> {
     let mut units = Vec::new();
     let mut index: BTreeMap<PathBuf, usize> = BTreeMap::new();
     let mut entries = Vec::new();
@@ -108,8 +35,13 @@ pub fn load_program_g(entry_files: &[PathBuf]) -> Result<Program> {
             entries.push(i);
         }
     }
-    crate::syntax::resolve::lower(&units, &entries, true, false)
-        .map_err(|d| diag::Diagnostics(d).into())
+    crate::syntax::resolve::lower(
+        &units,
+        &entries,
+        true,
+        crate::syntax::resolve::Mode::Program,
+    )
+    .map_err(|d| diag::Diagnostics(d).into())
 }
 
 fn load_unit(
@@ -125,26 +57,29 @@ fn load_unit(
     let text = fs::read_to_string(&abs).with_context(|| format!("read {}", abs.display()))?;
     let name = display_name(&abs);
     let (green, file) = {
-        let mut cache = PARSED_G.lock().unwrap_or_else(|e| e.into_inner());
+        let mut cache = PARSED.lock().unwrap_or_else(|e| e.into_inner());
         match cache.get(&abs) {
             Some(p) if p.name == name && p.text == text => (p.green.clone(), p.file),
             _ => {
-                let parse = crate::syntax::parse::parse(&text);
-                let mark = diag::mark();
+                let parse = crate::syntax::parser::parse(&text);
                 if !parse.errors.is_empty() {
-                    return Err(crate::parser::syntax_diagnostics_g(&name, &text, &parse).into());
+                    return Err(crate::parser::syntax_diagnostics(&name, &text, &parse).into());
                 }
+                let mark = diag::mark();
                 let file = diag::add_source(&name, &text);
-                diag::pin_since(mark);
-                cache.insert(
+                let sources = diag::pin_since(mark);
+                if let Some(old) = cache.insert(
                     abs.clone(),
-                    ParsedG {
+                    Parsed {
                         name: name.clone(),
                         text: text.clone(),
                         green: parse.green.clone(),
                         file,
+                        sources,
                     },
-                );
+                ) {
+                    diag::remove(&old.sources);
+                }
                 (parse.green, file)
             }
         }
@@ -282,6 +217,8 @@ fn absolutize(path: impl AsRef<Path>) -> Result<PathBuf> {
 mod tests {
     use super::*;
     use crate::ast::Span;
+    use crate::ast::Stmt;
+    use std::collections::BTreeSet;
 
     fn file_ids(p: &Program) -> BTreeSet<u32> {
         p.statements
@@ -300,13 +237,13 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("dform-loader-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         let f = dir.join("p.df");
-        fs::write(&f, "edition 2026.\np(1).\n").unwrap();
+        fs::write(&f, "edition 2026\np(1)\n").unwrap();
         let a = load_program(std::slice::from_ref(&f)).unwrap();
         let b = load_program(std::slice::from_ref(&f)).unwrap();
         assert_eq!(file_ids(&a), file_ids(&b));
         let old = *file_ids(&a).first().unwrap();
 
-        fs::write(&f, "edition 2026.\np(2).\n").unwrap();
+        fs::write(&f, "edition 2026\np(2)\n").unwrap();
         let c = load_program(std::slice::from_ref(&f)).unwrap();
         assert_ne!(file_ids(&c), file_ids(&a));
         let span = |p: &Program| match &p.statements[0] {

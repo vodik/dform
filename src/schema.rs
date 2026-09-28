@@ -652,13 +652,13 @@ mod tests {
     fn flags_decide_the_class_and_optional_computed_is_separate() {
         let s = Schema::parse(
             r#"
-            type_attr(t, id, string, [computed, id]).
-            type_attr(t, endpoint, string, [computed]).
-            type_attr(t, password, string, [computed, sensitive]).
-            type_attr(t, zone, string, [optional_computed]).
-            type_attr(t, data, map, [sensitive]).
-            type_list_key(t, ports, [name, protocol]).
-            type_attr(t, ports, list, []).
+            type_attr("t", "id", "string", ["computed", "id"])
+            type_attr("t", "endpoint", "string", ["computed"])
+            type_attr("t", "password", "string", ["computed", "sensitive"])
+            type_attr("t", "zone", "string", ["optional_computed"])
+            type_attr("t", "data", "map", ["sensitive"])
+            type_list_key("t", "ports", ["name", "protocol"])
+            type_attr("t", "ports", "list", [])
             "#,
             "test",
         )
@@ -681,8 +681,12 @@ mod tests {
 
     #[test]
     fn unknown_flags_and_rules_are_rejected() {
-        let e = Schema::parse("type_attr(t, id, string, [computd]).", "test").unwrap_err();
+        let e = Schema::parse(
+            "type_attr(\"t\", \"id\", \"string\", [\"computd\"])",
+            "test",
+        )
+        .unwrap_err();
         assert!(format!("{e:#}").contains("unknown flag 'computd'"), "{e:#}");
-        assert!(Schema::parse("type_attr(t, X, string, []) :- foo(X).", "test").is_err());
+        assert!(Schema::parse("type_attr(\"t\", x, \"string\", []) if foo(x)", "test").is_err());
     }
 }

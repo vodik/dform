@@ -1,2 +1,2 @@
-tests/syntax/err/hyphen_symbol.df:4:15: expected `)`, found an identifier `a`
+tests/syntax/err/hyphen_symbol.df:4:15: expected `)`, found `a`
   help: `-` is always an operator; a hyphenated name is a string: "us-test-1a"

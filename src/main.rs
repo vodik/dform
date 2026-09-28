@@ -121,7 +121,7 @@ enum Cmd {
     },
     /// Query the final fact store: a predicate name (every fact of it) or
     /// body literals with variables, printed as a table with one column per
-    /// variable: `dform query 'attr(net.vpc, N, cidr, C)'`.
+    /// variable: `dform query 'attr(net.vpc, n, .cidr, c)'`.
     Query {
         pattern: String,
         /// Print the answer as one JSON document.
@@ -313,7 +313,7 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
         .as_ref()
         .map(|l| l.inputs.clone())
         .unwrap_or_default();
-    // An input a fact of the program gives (a scenario's `input(k, v).`).
+    // An input a fact of the program gives (a scenario's `with k = v`).
     let mut given: BTreeSet<String> = input_fact_keys(&program);
     for f in &cli.input_files {
         let src = std::fs::read_to_string(f)
@@ -1232,7 +1232,7 @@ fn run_tests(
     use std::io::IsTerminal;
     let names = dform::scenario::names(program)?;
     if names.is_empty() {
-        bail!("no scenarios: write `scenario NAME {{ facts; deny rules }}.`");
+        bail!("no scenarios: write `scenario NAME {{ with k = v; deny rules }}`");
     }
     let backend = Providers::start(providers, &plugin::Config::default())?;
     let program_dir = files[0].parent().unwrap_or(Path::new("")).to_path_buf();

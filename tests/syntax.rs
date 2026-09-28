@@ -65,13 +65,35 @@ fn every_file_parses_and_prints_back() {
     }
 }
 
+/// The files another file of the corpus imports: libraries (modules and
+/// policy packs) that read the program's inputs by name, so they lower
+/// inside the programs that import them, not on their own.
+fn libraries(files: &[PathBuf]) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for f in files {
+        let src = std::fs::read_to_string(f).unwrap();
+        for line in src.lines() {
+            if let Some(rest) = line.trim().strip_prefix("import \"")
+                && let Some(path) = rest.strip_suffix('"')
+            {
+                let lib = f.parent().unwrap().join(path);
+                out.push(std::fs::canonicalize(&lib).unwrap_or(lib));
+            }
+        }
+    }
+    out
+}
+
 /// The repository's programs lower to today's AST: the edition pragma is
 /// there and nothing they use is pending (E §7's programs are parse-only).
+/// A library is lowered through the programs that import it.
 #[test]
 fn every_program_lowers() {
-    for f in corpus() {
+    let files = corpus();
+    let libraries = libraries(&files);
+    for f in files {
         let name = rel(&f);
-        if name.starts_with("tests/syntax/ok/e7") {
+        if name.starts_with("tests/syntax/ok/e7") || libraries.contains(&f) {
             continue;
         }
         let program = dform::loader::load_program(std::slice::from_ref(&f))
@@ -128,13 +150,13 @@ fn three_independent_errors_are_three_diagnostics() {
     assert_eq!(d.0.len(), 3, "{err}");
     let lines: Vec<String> = d.0.iter().map(|d| d.to_string()).collect();
     for (l, want) in lines.iter().zip([
-        "three_errors.df:5:11: expected",
-        "three_errors.df:7:9: expected",
+        "three_errors.df:5:13: expected",
+        "three_errors.df:7:11: expected",
         "three_errors.df:9:18: expected",
     ]) {
         assert!(l.contains(want), "{l}");
     }
     let rendered = d.render(false);
-    assert!(rendered.contains("three_errors.df:5:11"), "{rendered}");
+    assert!(rendered.contains("three_errors.df:5:13"), "{rendered}");
     assert!(rendered.ends_with("3 errors\n"), "{rendered}");
 }

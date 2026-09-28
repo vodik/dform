@@ -10,17 +10,13 @@ fn gke(strict: bool) -> Scratch {
     let src =
         std::fs::read_to_string(repo().join("examples/adversarial/gke_two_phase.df")).unwrap();
     let stack = if strict {
-        "stack gke { unknowns = strict }."
+        "stack gke { unknowns = \"strict\" }"
     } else {
-        "stack gke {}."
+        "stack gke {}"
     };
     s.write(
         "g.df",
-        &src.replacen(
-            "provider gke {}.",
-            &format!("provider gke {{}}.\n{stack}"),
-            1,
-        ),
+        &src.replacen("provider gke {}", &format!("provider gke {{}}\n{stack}"), 1),
     );
     s
 }
@@ -91,8 +87,7 @@ fn fresh_nulls_still_flow() {
     let s = Scratch::new("lang-strict-fresh");
     s.write(
         "p.df",
-        "edition 2026.\nstack p { unknowns = strict }.\nresource net.vpc main { cidr = \"10.0.0.0/16\" }.\n\
-         resource net.subnet a { vpc_id = ref(net.vpc, main, .id), cidr = \"10.0.1.0/24\" }.\n",
+        "edition 2026\nstack p { unknowns = \"strict\" }\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nresource net.subnet a { vpc_id = ref(net.vpc, \"main\", .id), cidr = \"10.0.1.0/24\" }\n",
     );
     let r = s.run(&["--file", "p.df", "plan"]).success();
     assert!(
@@ -110,10 +105,7 @@ fn fresh_nulls_still_flow() {
 #[test]
 fn a_pending_group_is_refused_and_allow_stuck_relaxes_per_key() {
     let s = Scratch::new("lang-strict-allow");
-    let program = "edition 2026.\nstack p { unknowns = strict }.\n\
-         resource db.postgres a {}.\n\
-         up(D) :- attr(db.postgres, D, .endpoint, E), E != \"\".\n\
-         resource net.subnet s { cidr = \"10.0.1.0/24\" } :- up(\"a\").\n";
+    let program = "edition 2026\nstack p { unknowns = \"strict\" }\nresource db.postgres a {}\nup(d) if attr(db.postgres, d, .endpoint, e), e != \"\"\nresource net.subnet s {\n  for up(\"a\")\n  cidr = \"10.0.1.0/24\"\n}\n";
     s.write("p.df", program);
     let r = s.run(&["--file", "p.df", "plan"]).failure();
     assert!(
@@ -134,7 +126,7 @@ fn a_pending_group_is_refused_and_allow_stuck_relaxes_per_key() {
     // Relaxing the helper's key leaves the pending group refused.
     s.write(
         "p.df",
-        &format!("{program}allow_stuck(\"up(\\\"a\\\")\").\n"),
+        &format!("{program}allow_stuck(\"up(\\\"a\\\")\")\n"),
     );
     let r = s.run(&["--file", "p.df", "plan"]).failure();
     assert!(!r.stderr.contains("unresolved value"), "{}", r.stderr);
@@ -148,8 +140,8 @@ fn a_pending_group_is_refused_and_allow_stuck_relaxes_per_key() {
     s.write(
         "p.df",
         &format!(
-            "{program}allow_stuck(\"up(\\\"a\\\")\").\n\
-             allow_stuck(\"want(\\\"net.subnet\\\", \\\"s\\\")\").\n"
+            "{program}allow_stuck(\"up(\\\"a\\\")\")\n\
+             allow_stuck(\"want(\\\"net.subnet\\\", \\\"s\\\")\")\n"
         ),
     );
     let r = s.run(&["--file", "p.df", "plan"]).success();
@@ -163,7 +155,7 @@ fn a_pending_group_is_refused_and_allow_stuck_relaxes_per_key() {
     // allow_stuck is facts only.
     s.write(
         "p.df",
-        &format!("{program}allow_stuck(H) :- stuck(_, H, _, _).\n"),
+        &format!("{program}allow_stuck(h) if stuck(_, h, _, _)\n"),
     );
     let r = s.run(&["--file", "p.df", "plan"]).failure();
     assert!(

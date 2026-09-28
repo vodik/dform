@@ -10,12 +10,12 @@ fn a_file_reached_by_two_paths_loads_once() {
     let s = Scratch::new("lang-imports");
     s.write(
         "lib/net.df",
-        "edition 2026.\nmodule net {\n  resource net.vpc vpc { cidr = \"10.0.0.0/16\" }.\n}.\n",
+        "edition 2026\nmodule net {\n  resource net.vpc vpc { cidr = \"10.0.0.0/16\" }\n}\n",
     );
-    s.write("lib/more.df", "edition 2026.\nimport \"../lib/net.df\".\n");
+    s.write("lib/more.df", "edition 2026\nimport \"../lib/net.df\"\n");
     s.write(
         "p.df",
-        "edition 2026.\nimport \"lib/net.df\".\nimport \"lib/more.df\".\ninstance net main {}.\n",
+        "edition 2026\nimport \"lib/net.df\"\nimport \"lib/more.df\"\ninstance net main {}\n",
     );
     let r = s
         .run(&["--file", "p.df", "--world", "w.json", "plan"])

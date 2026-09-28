@@ -227,7 +227,7 @@ pub fn file_stmts(program: &Program, declared: &[Declared]) -> Result<Vec<Stmt>>
             _ => {
                 diags.push(Diagnostic::error(
                     Span::default(),
-                    "an input file holds facts, `name(value).`",
+                    "an input file holds facts, `name(value)`",
                 ));
                 continue;
             }

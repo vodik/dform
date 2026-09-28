@@ -17,7 +17,7 @@
 //! block's one shared body: a read in any field gates the whole block).
 
 use super::SyntaxKind::{self, *};
-use super::parse;
+use super::parser as parse;
 use super::{SyntaxNode, SyntaxToken};
 use crate::ast::{
     ApplyPolicy, Atom, AttrDecl, BindArg, Config, Constraint, Contributes, Decl, Export, Extern,
@@ -43,17 +43,30 @@ pub struct Unit {
     pub imports: Option<Vec<Option<usize>>>,
 }
 
+/// How text is read.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    /// A program.
+    Program,
+    /// Text the compiler printed (a refinement's `Display`): every name is
+    /// its own text and a string has no interpolation.
+    Text,
+    /// A `query` or `why` pattern, read without the program's declarations:
+    /// a dotted name that names nothing else is a type.
+    Pattern,
+}
+
 /// Lower `entries` (and, through their imports, the rest of `units`).
 /// `require_edition`: every file must start with the edition pragma.
-/// `lenient`: every name that is not a variable is its own text (a
-/// refinement or a constraint written as text).
 pub fn lower(
     units: &[Unit],
     entries: &[usize],
     require_edition: bool,
-    lenient: bool,
+    mode: Mode,
 ) -> Result<Program, Vec<Diagnostic>> {
-    let mut l = Lowerer::new(units, lenient);
+    let mut l = Lowerer::new(units, mode == Mode::Text);
+    l.text = mode == Mode::Text;
+    l.any_type = mode == Mode::Pattern;
     let mut statements = Vec::new();
     for &e in entries {
         statements.extend(l.unit(e, require_edition));
@@ -376,6 +389,10 @@ pub struct Lowerer<'u> {
     helpers: Vec<Stmt>,
     /// Whether the term being lowered is in a binding position.
     binding: bool,
+    /// Strings are literal: no interpolation (`Mode::Text`).
+    text: bool,
+    /// Any dotted name may be a type (`Mode::Pattern`).
+    any_type: bool,
 }
 
 impl<'u> Lowerer<'u> {
@@ -393,6 +410,8 @@ impl<'u> Lowerer<'u> {
             negs: 0,
             helpers: Vec::new(),
             binding: false,
+            text: false,
+            any_type: false,
         };
         for u in units {
             let scope = l.new_scope(PROGRAM);
@@ -404,6 +423,7 @@ impl<'u> Lowerer<'u> {
             .types
             .iter()
             .map(|t| t.split('.').next().unwrap_or(t).to_string())
+            .chain(schema_namespaces().iter().cloned())
             .collect();
         l
     }
@@ -505,6 +525,16 @@ impl<'u> Lowerer<'u> {
                         .find(|c| matches!(c.kind(), CALL | RECORD_ATOM))
                         && let Some(name) = self.callee(&h)
                     {
+                        // A schema's `type_provider(T, ...)`, `type_attr(T, ...)`
+                        // rows declare T.
+                        if name.starts_with("type_")
+                            && let Some(t) = node(&h, ARG_LIST)
+                                .and_then(|a| terms(&a).next())
+                                .and_then(|t| Chain::of(&t))
+                            && t.ops.iter().all(|o| matches!(o, Op::Field(..)))
+                        {
+                            self.decls.types.insert(t.fields().join("."));
+                        }
                         self.decls.relations.insert(name);
                     }
                 }
@@ -810,7 +840,8 @@ impl<'u> Lowerer<'u> {
         let fields = c.fields();
         let resource = (1..fields.len())
             .any(|i| self.resource_of_type(rc.scope, &fields[..i].join("."), &fields[i]));
-        (!local && !resource && !c.ops.is_empty()).then_some(name)
+        let namespace = self.decls.namespaces.contains(&c.head) || self.any_type;
+        (!local && !resource && namespace && !c.ops.is_empty()).then_some(name)
     }
 
     fn stmt1(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Vec<Stmt>> {
@@ -2242,7 +2273,7 @@ impl<'u> Lowerer<'u> {
     /// are braces.
     fn string_term(&mut self, rc: &mut Rc, t: &SyntaxToken, pre: &mut Vec<Lit>) -> L<Term> {
         let text = t.text();
-        if !text.contains(['{', '}']) {
+        if self.text || !text.contains(['{', '}']) {
             return Ok(str_term(&self.string(t)?));
         }
         let span = self.span_of(t.text_range());
@@ -2434,7 +2465,7 @@ impl<'u> Lowerer<'u> {
                     path,
                 });
             }
-            if c.head_kind == SETTINGS_KW {
+            if c.head_kind == SETTINGS_KW && !c.is_bare() {
                 return self.settings(rc, c, pre, span);
             }
             if h == "world" && !c.ops.is_empty() {
@@ -2442,6 +2473,10 @@ impl<'u> Lowerer<'u> {
             }
         }
         if c.is_bare() {
+            // `settings` alone is the pseudo-type's name (`type_lattice`).
+            if c.head_kind == SETTINGS_KW && !rc.vars.contains_key(h) {
+                return Ok(Res::Type(h.to_string()));
+            }
             return self.bare(rc, h, span);
         }
         if !rc.vars.contains_key(h) {
@@ -2471,11 +2506,20 @@ impl<'u> Lowerer<'u> {
             let path = self.segs(rc, &c.ops, pre)?;
             return Ok(Res::Var { var: var(&v), path });
         }
-        // A dotted name that names nothing else is a type's name.
-        if c.ops.iter().all(|o| matches!(o, Op::Field(..))) {
+        // A dotted name in a type namespace that names nothing else is a
+        // type's name.
+        if c.ops.iter().all(|o| matches!(o, Op::Field(..)))
+            && (self.decls.namespaces.contains(h) || self.any_type)
+        {
             return Ok(Res::Type(c.fields().join(".")));
         }
-        self.error(span, format!("unknown name `{h}`"))
+        let d = Diagnostic::error(span, format!("unknown name `{h}`")).with_help(format!(
+            "a resource, module, input, `let` or type is declared before it is read; a string \
+             is quoted: \"{}\"",
+            c.fields().join(".")
+        ));
+        self.diags.push(d);
+        Err(Skip)
     }
 
     /// A bare name: a variable, unless it names something no variable may.
@@ -2962,6 +3006,35 @@ impl<'u> Lowerer<'u> {
     }
 }
 
+/// The first segments of the types the built-in provider schemas declare
+/// (`type_provider`, `type_attr`, ... rows): a program names them without a
+/// resource header of its own. Read from the schema text, not resolved.
+fn schema_namespaces() -> &'static BTreeSet<String> {
+    static NS: std::sync::OnceLock<BTreeSet<String>> = std::sync::OnceLock::new();
+    NS.get_or_init(|| {
+        let mut out = BTreeSet::new();
+        for name in ["fake", "gke", "k8s", "aws-mock"] {
+            let Some(src) = crate::schema::builtin(name) else {
+                continue;
+            };
+            for line in src.lines() {
+                let Some((head, rest)) = line.split_once('(') else {
+                    continue;
+                };
+                if !head.starts_with("type_") {
+                    continue;
+                }
+                let first = rest.split([',', ')']).next().unwrap_or("").trim();
+                let t = first.trim_matches('"');
+                if let Some(ns) = t.split('.').next().filter(|n| !n.is_empty()) {
+                    out.insert(ns.to_string());
+                }
+            }
+        }
+        out
+    })
+}
+
 /// A fresh lowered name starting with `base`, reserved.
 fn fresh(rc: &mut Rc, base: &str) -> String {
     let base = if base.is_empty() { "V" } else { base };
@@ -3216,15 +3289,29 @@ mod tests {
             .collect()
     }
 
+    /// `src` as a file named `t.df` that needs no edition pragma.
+    fn parse(src: &str) -> anyhow::Result<crate::ast::Program> {
+        let file = crate::diag::add_source("t.df", src);
+        let parse = crate::syntax::parser::parse(src);
+        assert!(parse.errors.is_empty(), "{:?}", parse.errors);
+        let units = [super::Unit {
+            file,
+            root: parse.syntax(),
+            imports: None,
+        }];
+        super::lower(&units, &[0], false, super::Mode::Program)
+            .map_err(|d| crate::diag::Diagnostics(d).into())
+    }
+
     fn lower(src: &str) -> Vec<String> {
-        match crate::parser::parse_file_g("t.df", src, false) {
+        match parse(src) {
             Ok(p) => show(&p.statements),
             Err(e) => panic!("{e:#}"),
         }
     }
 
     fn error(src: &str) -> String {
-        match crate::parser::parse_file_g("t.df", src, false) {
+        match parse(src) {
             Ok(p) => panic!("lowered: {:?}", show(&p.statements)),
             Err(e) => format!("{e:#}"),
         }
@@ -3448,7 +3535,7 @@ mod tests {
             ]
         );
         assert!(matches!(
-            crate::parser::parse_file_g("t.df", "resource net.vpc n { size = 1 }\n", false)
+            parse("resource net.vpc n { size = 1 }\n")
                 .unwrap()
                 .statements[0],
             crate::ast::Stmt::Resource(crate::ast::Resource {

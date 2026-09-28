@@ -1,65 +1,68 @@
 # pngu.df, direction E. The renfry stack for one GCP project per environment.
 
-edition 2026.
+edition 2026
 
-provider google     { source = "registry.dform.dev/google",     version = ">=6" }.
-provider kubernetes { source = "registry.dform.dev/kubernetes", version = ">=3" }.
-provider file       { source = "registry.dform.dev/file" }.
-stack renfry.pngu   { backend = gcs("renfry-state", "pngu") }.
+provider google { source = "registry.dform.dev/google", version = ">=6" }
+provider kubernetes { source = "registry.dform.dev/kubernetes", version = ">=3" }
+provider file { source = "registry.dform.dev/file" }
+stack renfry.pngu { backend = gcs("renfry-state", "pngu") }
 
-input env: enum(dev, stg, prod) = dev.
+input env: enum("dev", "stg", "prod") = "dev"
 
 ########################################
 # Settings: base layer plus per-environment overrides
 ########################################
 
 type settings {
-  project_id:          string
-  project_name:        string
-  region:              string
-  network_name:        string
+  project_id: string
+  project_name: string
+  region: string
+  network_name: string
   regional_proxy_cidr: inet
   gke: {
-    control_plane_cidr: inet where prefix_len(control_plane_cidr) == 28,   # checkable: lives in the cell
-    subnet_cidr:        inet where prefix_len(subnet_cidr) == 22,
-    pods_cidr:          inet where prefix_len(pods_cidr) == 21,
-    services_cidr:      inet where prefix_len(services_cidr) == 21,
-    static_ips:         map({ type: enum("INTERNAL") })                     # was a constraint rule
+    control_plane_cidr: inet where prefix_len(control_plane_cidr) == 28 # checkable: lives in the cell
+    subnet_cidr: inet where prefix_len(subnet_cidr) == 22
+    pods_cidr: inet where prefix_len(pods_cidr) == 21
+    services_cidr: inet where prefix_len(services_cidr) == 21
+    static_ips: map({ type: enum("INTERNAL") }) # was a constraint rule
   }
-}.
+}
 
-settings E @default {
+settings e @default {
+  for env_name(e)
   region = "us-east1"
   gke.static_ips = { "pngu-grpc": { type: "INTERNAL" } }
-} :- env_name(E).
+}
 
-env_name(dev). env_name(stg). env_name(prod).
+env_name("dev")
+env_name("stg")
+env_name("prod")
 
 settings dev {
-  project_id   = "renfry-dev-973682"
+  project_id = "renfry-dev-973682"
   project_name = "renfry-dev"
   network_name = "renfry-dev-network"
   regional_proxy_cidr = inet("10.193.0.0/24")
   gke = {
     control_plane_cidr: inet("172.16.3.96/28"),
-    subnet_cidr:        inet("10.141.76.0/22"),
-    pods_cidr:          inet("10.141.80.0/21"),
-    services_cidr:      inet("10.141.88.0/21")
+    subnet_cidr: inet("10.141.76.0/22"),
+    pods_cidr: inet("10.141.80.0/21"),
+    services_cidr: inet("10.141.88.0/21")
   }
-}.
+}
 
 settings stg {
-  project_id   = "renfry-stg"
+  project_id = "renfry-stg"
   project_name = "renfry-stg"
   network_name = "renfry-stg-network"
   regional_proxy_cidr = inet("10.193.1.0/24")
   gke = {
     control_plane_cidr: inet("172.16.3.112/28"),
-    subnet_cidr:        inet("10.141.100.0/22"),
-    pods_cidr:          inet("10.141.104.0/21"),
-    services_cidr:      inet("10.141.112.0/21")
+    subnet_cidr: inet("10.141.100.0/22"),
+    pods_cidr: inet("10.141.104.0/21"),
+    services_cidr: inet("10.141.112.0/21")
   }
-}.
+}
 
 # prod elided; same shape.
 
@@ -67,113 +70,113 @@ settings stg {
 # Peerings, an env-keyed table
 ########################################
 
-decl peering(Env: symbol, Name: string, PeerNetwork: string).
+decl peering(env: symbol, name: string, peer_network: string)
 
-peering(dev,  "envoy-dev",         "projects/envoy-dev-426188/global/networks/envoy-dev-network").
-peering(stg,  "envoy-stg",         "projects/envoy-stg-597462/global/networks/envoy-stg-network").
-peering(stg,  "envoy-stg-legacy",  "projects/coherentpath-stg/global/networks/envoy-proxy-stg").
-peering(prod, "envoy-prod-legacy", "projects/coherentpath-prod/global/networks/envoy-proxy-prod").
+peering("dev", "envoy-dev", "projects/envoy-dev-426188/global/networks/envoy-dev-network")
+peering("stg", "envoy-stg", "projects/envoy-stg-597462/global/networks/envoy-stg-network")
+peering("stg", "envoy-stg-legacy", "projects/coherentpath-stg/global/networks/envoy-proxy-stg")
+peering("prod", "envoy-prod-legacy", "projects/coherentpath-prod/global/networks/envoy-proxy-prod")
 
 ########################################
 # Derived project facts for the active env
 ########################################
 
-project(Id, Name, Region, NetId) :-
-  env(E),
-  setting(E, .project_id, Id),
-  setting(E, .project_name, Name),
-  setting(E, .region, Region),
-  setting(E, .network_name, NetName),
-  NetId = format("projects/%s/global/networks/%s", Id, NetName).
+project(id, name, region, net_id) if
+  env(e),
+  setting(e, .project_id, id),
+  setting(e, .project_name, name),
+  setting(e, .region, region),
+  setting(e, .network_name, net_name),
+  net_id = format("projects/%s/global/networks/%s", id, net_name)
 
 ########################################
 # Network
 ########################################
 
 resource google.compute_subnetwork gke_subnet {
-  project               = Id
-  region                = Region
-  network               = NetId
-  name                  = format("%s-gke-subnet", Name)
-  ip_cidr_range         = SubnetCidr
+  for project(id, name, region, net_id),
+    env(e),
+    setting(e, .gke.subnet_cidr, subnet_cidr),
+    setting(e, .gke.pods_cidr, pods_cidr),
+    setting(e, .gke.services_cidr, svc_cidr)
+  project = id
+  region = region
+  network = net_id
+  name = format("%s-gke-subnet", name)
+  ip_cidr_range = subnet_cidr
   subnet_private_access = true
-  secondary_ranges      = [
-    { range_name: format("%s-gke-pods-range", Name), ip_cidr_range: PodsCidr },
-    { range_name: format("%s-gke-svc-range",  Name), ip_cidr_range: SvcCidr }
-  ]                                        # Keyed on .range_name per the google schema
-} :-
-  project(Id, Name, Region, NetId),
-  env(E),
-  setting(E, .gke.subnet_cidr, SubnetCidr),
-  setting(E, .gke.pods_cidr, PodsCidr),
-  setting(E, .gke.services_cidr, SvcCidr).
+  secondary_ranges = [
+    { range_name: format("%s-gke-pods-range", name), ip_cidr_range: pods_cidr },
+    { range_name: format("%s-gke-svc-range", name), ip_cidr_range: svc_cidr }
+  ] # Keyed on .range_name per the google schema
+}
 
 resource google.compute_subnetwork regional_proxy {
-  project       = Id
-  region        = Region
-  network       = NetId
-  name          = format("%s-proxy", Name)
-  purpose       = "REGIONAL_MANAGED_PROXY"
-  role          = "ACTIVE"
-  ip_cidr_range = ProxyCidr
-} :-
-  project(Id, Name, Region, NetId),
-  env(E), setting(E, .regional_proxy_cidr, ProxyCidr).
+  for project(id, name, region, net_id),
+    env(e), setting(e, .regional_proxy_cidr, proxy_cidr)
+  project = id
+  region = region
+  network = net_id
+  name = format("%s-proxy", name)
+  purpose = "REGIONAL_MANAGED_PROXY"
+  role = "ACTIVE"
+  ip_cidr_range = proxy_cidr
+}
 
-resource google.compute_network_peering P {
-  project      = Id
-  name         = PeerName
-  network      = NetId
-  peer_network = PeerNet
-} :-
-  project(Id, _, _, NetId),
-  env(E), peering(E, PeerName, PeerNet),
-  P = format("peering-%s", PeerName).
+resource google.compute_network_peering p {
+  for project(id, _, _, net_id),
+    env(e), peering(e, peer_name, peer_net),
+    p = format("peering-%s", peer_name)
+  project = id
+  name = peer_name
+  network = net_id
+  peer_network = peer_net
+}
 
 # One static address per declared static IP; the map explodes into rows.
-static_ip(IpName, Type) :-
-  env(E), setting(E, .gke.static_ips, Ips),
-  member_kv(Ips, IpName, { type: Type }).
+static_ip(ip_name, type_) if
+  env(e), setting(e, .gke.static_ips, ips),
+  member_kv(ips, ip_name, { type: type_ })
 
-resource google.compute_address S {
-  project       = Id
-  region        = Region
-  name          = IpName
-  address_type  = Type
-  subnetwork_id = ref(google.compute_subnetwork, gke_subnet, .id)
-} :-
-  project(Id, _, Region, _),
-  static_ip(IpName, Type),
-  S = format("static-ip-%s", IpName).
+resource google.compute_address s {
+  for project(id, _, region, _),
+    static_ip(ip_name, type_),
+    s = format("static-ip-%s", ip_name)
+  project = id
+  region = region
+  name = ip_name
+  address_type = type_
+  subnetwork_id = ref(google.compute_subnetwork, "gke_subnet", .id)
+}
 
 ########################################
 # GKE: phase 1
 ########################################
 
 resource gke.cluster pngu {
-  cluster_type              = "autopilot-private"
-  env                       = E
-  project_id                = Id
-  project_name              = Name
-  name                      = format("%s-gke", Name)
-  network_id                = NetId
-  subnetwork_id             = ref(google.compute_subnetwork, gke_subnet, .id)
-  master_control_plane_cidr = CpCidr
-  ip_range_pods             = format("%s-gke-pods-range", Name)
-  ip_range_services         = format("%s-gke-svc-range",  Name)
+  for env(e), project(id, name, _, net_id),
+    setting(e, .gke.control_plane_cidr, cp_cidr)
+  cluster_type = "autopilot-private"
+  env = e
+  project_id = id
+  project_name = name
+  name = format("%s-gke", name)
+  network_id = net_id
+  subnetwork_id = ref(google.compute_subnetwork, "gke_subnet", .id)
+  master_control_plane_cidr = cp_cidr
+  ip_range_pods = format("%s-gke-pods-range", name)
+  ip_range_services = format("%s-gke-svc-range", name)
   enable_secret_manager_addon = true
-  deletion_protection       = false @default
-} :-
-  env(E), project(Id, Name, _, NetId),
-  setting(E, .gke.control_plane_cidr, CpCidr).
+  deletion_protection = false @default
+}
 
 # Prod: deletion protection on, at normal rank, over the block's @default.
 # Two ranks, one value each, no conflict. The lifecycle fact is policeable.
-arg(gke.cluster, pngu, .deletion_protection, true) :- env(prod).
-lifecycle(gke.cluster, pngu, prevent_destroy) :- env(prod).
+arg("gke.cluster", "pngu", .deletion_protection, true) if env("prod")
+lifecycle("gke.cluster", "pngu", "prevent_destroy") if env("prod")
 
-deny(prod_deletion_protection, "prod cluster must have deletion protection", { cluster: pngu }) :-
-  env(prod), not attr(gke.cluster, pngu, .deletion_protection, true).
+deny("prod_deletion_protection", "prod cluster must have deletion protection", { cluster: "pngu" }) if
+  env("prod"), not attr("gke.cluster", "pngu", .deletion_protection, true)
 
 ########################################
 # Kubernetes: phase 2. The provider is configured from phase-1 nulls.
@@ -182,58 +185,59 @@ deny(prod_deletion_protection, "prod cluster must have deletion protection", { c
 # .endpoint and .ca_certificate are computed (open); .access_token is
 # computed and sensitive (secret). This fact is definite and carries three
 # nulls, so every kubernetes deformation is pending on them: phase 2.
-provider_config(kubernetes, {
-  host:  ref(gke.cluster, pngu, .endpoint),
-  ca:    ref(gke.cluster, pngu, .ca_certificate),
-  token: ref(google.client_config, current, .access_token)
-}).
+provider_config("kubernetes", {
+  host: ref("gke.cluster", "pngu", .endpoint),
+  ca: ref("gke.cluster", "pngu", .ca_certificate),
+  token: ref(google.client_config, "current", .access_token)
+})
 
-resource k8s.namespace pngu { name = "pngu" }.
+resource k8s.namespace pngu { name = "pngu" }
 
 resource k8s.deployment api {
-  namespace = ref(k8s.namespace, pngu, .name)        # configured attribute: rewritten to an attr join
-  image     = "gcr.io/renfry/api:1.42"
-  replicas  = 3
-}.
+  namespace = ref(k8s.namespace, "pngu", .name) # configured attribute: rewritten to an attr join
+  image = "gcr.io/renfry/api:1.42"
+  replicas = 3
+}
 
 # The secret never appears in the store as bytes: the kubernetes provider
 # resolves ?google.secret_manager_secret_version/db_pw#secret_data inside Apply.
 resource k8s.secret db_credentials {
-  namespace = ref(k8s.namespace, pngu, .name)
-  data      = { password: ref(google.secret_manager_secret_version, db_pw, .secret_data) }
-}.
+  namespace = ref(k8s.namespace, "pngu", .name)
+  data = { password: ref(google.secret_manager_secret_version, "db_pw", .secret_data) }
+}
 
 # One node pool per zone the autopilot cluster actually used. .zones is an
 # open null at plan time; member/2 over it is a content position, so this
 # rule is stuck on ?gke.cluster/pngu#zones and the plan prints one pending
 # group of unknown cardinality. After phase 1 it fires once per zone.
-resource gke.nodepool Np {
-  cluster = ref(gke.cluster, pngu, .id)
-  zone    = Z
-  min     = 1
-  max     = 3
-} :-
-  attr(gke.cluster, pngu, .zones, Zs), member(Zs, Z),
-  Np = format("np-%s", Z).
+resource gke.nodepool np {
+  for attr("gke.cluster", "pngu", .zones, zs), member(zs, z),
+    np = format("np-%s", z)
+  cluster = ref("gke.cluster", "pngu", .id)
+  zone = z
+  min = 1
+  max = 3
+}
 
 # A policy that cannot be decided at plan time and says so: the aggregate
 # has a stuck instance, so it is undetermined, and the deny is reported as
 # undetermined until phase 1 resolves .zones.
-zone_count(count(Z)) :- attr(gke.cluster, pngu, .zones, Zs), member(Zs, Z).
+zone_count(count(z)) if attr("gke.cluster", "pngu", .zones, zs), member(zs, z)
 
-deny(two_zones, "cluster must be in at least two zones", { cluster: pngu }) :-
-  want(gke.cluster, pngu), zone_count(N), N < 2.
+deny("two_zones", "cluster must be in at least two zones", { cluster: "pngu" }) if
+  want("gke.cluster", "pngu"), zone_count(n), n < 2
 
 ########################################
 # Monitoring: the dashboard JSON is a file extern, hashed, with provenance
 ########################################
 
-extern file.json(+path: string, -value: any).
+extern file.json(+path: string, -value: any)
 
 resource google.monitoring_dashboard pngu {
-  project        = Id
-  dashboard_json = Dash
-} :- project(Id, _, _, _), file.json("modules/monitoring/dashboard-pngu.json", Dash).
+  for project(id, _, _, _), file.json("modules/monitoring/dashboard-pngu.json", dash)
+  project = id
+  dashboard_json = dash
+}
 
-output(active_env, E)  :- env(E).
-output(project_id, Id) :- project(Id, _, _, _).
+output("active_env", e) if env(e)
+output("project_id", id) if project(id, _, _, _)

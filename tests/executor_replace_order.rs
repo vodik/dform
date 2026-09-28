@@ -6,10 +6,10 @@
 mod common;
 use common::Scratch;
 
-const NET: &str = r#"edition 2026.
+const NET: &str = r#"edition 2026
 
-resource net.vpc main { cidr = "10.0.0.0/16" }.
-resource net.subnet a { vpc_id = ref(net.vpc, main, id), cidr = "10.0.1.0/24" }.
+resource net.vpc main { cidr = "10.0.0.0/16" }
+resource net.subnet a { vpc_id = ref(net.vpc, "main", "id"), cidr = "10.0.1.0/24" }
 "#;
 
 /// Apply NET, change the subnet's cidr (force_new), and plan with the fake
@@ -47,7 +47,11 @@ fn replan(name: &str, order: &str, extra: &str) -> (Scratch, common::Run) {
 
 #[test]
 fn either_destroys_first_unless_lifecycle_says_otherwise() {
-    let (_s, r) = replan("order-either", "type_replace(net.subnet, either).\n", "");
+    let (_s, r) = replan(
+        "order-either",
+        "type_replace(\"net.subnet\", \"either\")\n",
+        "",
+    );
     let r = r.success();
     assert!(
         r.stdout.contains("-/+ net.subnet.a  (replace)"),
@@ -56,8 +60,8 @@ fn either_destroys_first_unless_lifecycle_says_otherwise() {
     );
     let (_s, r) = replan(
         "order-either-cbd",
-        "type_replace(net.subnet, either).\n",
-        "lifecycle(net.subnet, a, create_before_destroy).\n",
+        "type_replace(\"net.subnet\", \"either\")\n",
+        "lifecycle(\"net.subnet\", \"a\", \"create_before_destroy\")\n",
     );
     let r = r.success();
     assert!(
@@ -73,7 +77,7 @@ fn either_destroys_first_unless_lifecycle_says_otherwise() {
 fn create_first_needs_no_lifecycle_fact() {
     let (_s, r) = replan(
         "order-create-first",
-        "type_replace(net.subnet, create_first).\n",
+        "type_replace(\"net.subnet\", \"create_first\")\n",
         "",
     );
     let r = r.success();
@@ -84,8 +88,8 @@ fn create_first_needs_no_lifecycle_fact() {
     );
     let (_s, r) = replan(
         "order-create-first-cbd",
-        "type_replace(net.subnet, create_first).\n",
-        "lifecycle(net.subnet, a, create_before_destroy).\n",
+        "type_replace(\"net.subnet\", \"create_first\")\n",
+        "lifecycle(\"net.subnet\", \"a\", \"create_before_destroy\")\n",
     );
     assert!(
         r.success().stdout.contains("+/- net.subnet.a  (replace)"),
@@ -99,8 +103,8 @@ fn create_first_needs_no_lifecycle_fact() {
 fn create_before_destroy_on_a_destroy_first_type_is_an_error() {
     let (_s, r) = replan(
         "order-destroy-first",
-        "type_replace(net.subnet, destroy_first).\n",
-        "lifecycle(net.subnet, a, create_before_destroy).\n",
+        "type_replace(\"net.subnet\", \"destroy_first\")\n",
+        "lifecycle(\"net.subnet\", \"a\", \"create_before_destroy\")\n",
     );
     let r = r.failure();
     assert!(
@@ -113,7 +117,7 @@ fn create_before_destroy_on_a_destroy_first_type_is_an_error() {
     );
     let (_s, r) = replan(
         "order-destroy-first-plain",
-        "type_replace(net.subnet, destroy_first).\n",
+        "type_replace(\"net.subnet\", \"destroy_first\")\n",
         "",
     );
     assert!(

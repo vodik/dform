@@ -30,15 +30,15 @@ use common::{Scratch, repo};
 const VAULT_SECRET: &str = "VAULT-SECRET-DO-NOT-PRINT";
 const OOPS_SECRET: &str = "OOPS-SECRET-DO-NOT-PRINT";
 
-const PROGRAM: &str = r#"edition 2026.
+const PROGRAM: &str = r#"edition 2026
 
 resource leaky.vault v {
   password = "VAULT-SECRET-DO-NOT-PRINT"
-}.
+}
 
 resource leaky.oops o {
   password = "OOPS-SECRET-DO-NOT-PRINT"
-}.
+}
 "#;
 
 fn schema() -> String {
@@ -204,7 +204,10 @@ fn a_secret_into_a_public_attribute_is_a_compile_error() {
         "p.df",
         &format!(
             "{PROGRAM}
-resource leaky.oops copy {{ password = P }} :- arg(leaky.vault, v, password, P).
+resource leaky.oops copy {{
+  if p = v.password
+  password = p
+}}
 "
         ),
     );
@@ -222,7 +225,7 @@ resource leaky.oops copy {{ password = P }} :- arg(leaky.vault, v, password, P).
         .failure();
     assert!(
         r.stderr.contains(
-            "p.df:11:28: E0304: a secret reaches leaky.oops .password, not marked sensitive in the schema"
+            "p.df:13:3: E0304: a secret reaches leaky.oops .password, not marked sensitive in the schema"
         ),
         "{}",
         r.stderr
@@ -241,7 +244,10 @@ fn a_forwarded_secret_and_a_conflict_never_print() {
         "p.df",
         &format!(
             "{PROGRAM}
-resource leaky.vault copy {{ backup = P }} :- arg(leaky.vault, v, password, P).
+resource leaky.vault copy {{
+  if p = v.password
+  backup = p
+}}
 "
         ),
     );
@@ -261,7 +267,7 @@ resource leaky.vault copy {{ backup = P }} :- arg(leaky.vault, v, password, P).
 
     s.write(
         "p.df",
-        &format!("{PROGRAM}\narg(leaky.vault, v, password, \"VAULT-SECRET-TWO\").\n"),
+        &format!("{PROGRAM}\nv.password = \"VAULT-SECRET-TWO\"\n"),
     );
     let r = s.run(&[&args[..], &["plan"]].concat()).failure();
     assert!(
@@ -282,8 +288,7 @@ fn a_secret_input_never_prints_in_query_why_or_the_plan_file() {
     let s = Scratch::new("secrets-input");
     s.write(
         "p.df",
-        "edition 2026.\ninput pw: secret(string).\noutput token: secret(string).\n\
-         output(token, P) :- pw(P).\nresource leaky.vault v { password = P } :- pw(P).\n",
+        "edition 2026\ninput pw: secret(string)\noutput token: secret(string)\noutput(\"token\", p) if pw(p)\nresource leaky.vault v {\n  for pw(p)\n  password = p\n}\n",
     );
     let schema = schema();
     let args = ["--file", "p.df", "--provider", &schema, "--world", "w.json"];
@@ -376,8 +381,8 @@ fn a_secret_reaches_a_public_output_only_through_declassify() {
     let s = Scratch::new("secrets-declassify");
     let prog = |body: &str, policy: &str| {
         format!(
-            "edition 2026.\ninput pw: secret(string).\noutput pw_len: int.\n\
-             output(pw_len, N) :- pw(P), {body}.\n{policy}"
+            "edition 2026\ninput pw: secret(string)\noutput pw_len: int\n\
+             output(\"pw_len\", n) if pw(p), {body}\n{policy}"
         )
     };
     let args = [
@@ -388,7 +393,7 @@ fn a_secret_reaches_a_public_output_only_through_declassify() {
         "--set",
         "pw=HUNTER-TWO",
     ];
-    s.write("p.df", &prog("N = len(P)", ""));
+    s.write("p.df", &prog("n = len(p)", ""));
     let r = s.run(&[&args[..], &["plan"]].concat()).failure();
     assert!(
         r.stderr
@@ -399,10 +404,10 @@ fn a_secret_reaches_a_public_output_only_through_declassify() {
 
     s.write(
         "p.df",
-        &prog("N = declassify(len(P), \"its length is public\")", ""),
+        &prog("n = declassify(len(p), \"its length is public\")", ""),
     );
     let r = s
-        .run(&[&args[..], &["query", "attr(output, S, K, V)"]].concat())
+        .run(&[&args[..], &["query", "attr(\"output\", S, K, V)"]].concat())
         .success();
     assert!(r.stdout.contains("\"pw_len\"  10"), "{}", r.stdout);
     let r = s
@@ -417,8 +422,8 @@ fn a_secret_reaches_a_public_output_only_through_declassify() {
     s.write(
         "p.df",
         &prog(
-            "N = declassify(len(P), \"its length is public\")",
-            "deny(M) :- declassified(At, R), M = format(\"declassified at %s: %s\", At, R).\n",
+            "n = declassify(len(p), \"its length is public\")",
+            "deny(m) if declassified(at, r), m = \"declassified at {at}: {r}\"\n",
         ),
     );
     let r = s.run(&[&args[..], &["plan"]].concat()).failure();

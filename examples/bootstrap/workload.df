@@ -8,53 +8,55 @@
 # Edit release.facts and the controller deploys it; edit the world and
 # the replicas drift is corrected, the image drift is held for approval.
 
-edition 2026.
+edition 2026
 
-stack renfry.workload {}.
+stack renfry.workload {}
 
-provider k8s {}.
+provider k8s {}
 
-# The release to run, `release(Image).`; re-read whenever the file changes.
-input relation release/1 from file("release.facts").
-# `approve(T, A).`: accept the drift of T.A, correcting it.
-input relation approve/2 from file("approvals.facts").
-# `release_approved(Image).`: a prod release may roll out.
-input relation release_approved/1 from file("approvals.facts").
+# The release to run, `release(image)`; re-read whenever the file changes.
+input relation release/1 from file("release.facts")
+# `approve(t, a)`: accept the drift of t.a, correcting it.
+input relation approve/2 from file("approvals.facts")
+# `release_approved(image)`: a prod release may roll out.
+input relation release_approved/1 from file("approvals.facts")
 
-input env: enum(dev, prod) = dev.
+input env: enum("dev", "prod") = "dev"
 
 resource k8s.namespace web {
   metadata.name = "web"
-}.
+}
 
 resource k8s.deployment web {
+  for release(image)
   metadata.name = "web"
-  metadata.namespace = ref(k8s.namespace, web, .metadata.name)
+  metadata.namespace = k8s.namespace.web.metadata.name
   spec.replicas = 3
   spec.selector.matchLabels = { app: "web" }
   spec.template.metadata.labels = { app: "web" }
   spec.template.spec.containers = [{
     name: "web",
-    image: Image,
+    image: image,
     ports: [{ containerPort: 8080, protocol: "TCP" }]
   }]
-} :- release(Image).
+}
 
 resource k8s.service web {
   metadata.name = "web"
-  metadata.namespace = ref(k8s.namespace, web, .metadata.name)
+  metadata.namespace = k8s.namespace.web.metadata.name
   spec.selector = { app: "web" }
   spec.ports = [{ port: 80, targetPort: "8080", protocol: "TCP" }]
-}.
+}
 
 # Replicas are the autoscaler's business on the way back: a drift there is
 # corrected without asking. Any other drift waits for `approve`.
-auto_reconcile(T, A, P) :- drift(T, A, P, _, _), P = "spec.replicas".
+auto_reconcile(t, a, p) if drift(t, a, p, _, _), p == "spec.replicas"
 
 # In prod a rollout waits for its release to be approved.
-hold(k8s.deployment, A, "needs approval") :-
-  env(prod),
-  deformation(K, k8s.deployment, A, _),
-  K != delete,
-  release(Image),
-  not release_approved(Image).
+hold(k8s.deployment, a, "needs approval") if {
+  env == "prod"
+  deformation(k, k8s.deployment, a, _)
+  k != "delete"
+  release(image)
+  not release_approved(image)
+}

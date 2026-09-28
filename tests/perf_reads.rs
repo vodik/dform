@@ -10,11 +10,11 @@ fn run(src: &str) -> dform::engine::EvalResult {
 #[test]
 fn a_recursive_walk_reads_linearly() {
     let n = 2000;
-    let mut src = String::from("start(0).\n");
+    let mut src = String::from("start(0)\n");
     for i in 0..n {
-        src.push_str(&format!("edge({i}, {}).\n", i + 1));
+        src.push_str(&format!("edge({i}, {})\n", i + 1));
     }
-    src.push_str("reach(X) :- start(X).\nreach(Y) :- reach(X), edge(X, Y).\n");
+    src.push_str("reach(x) if start(x)\nreach(y) if reach(x), edge(x, y)\n");
     let r = run(&src);
     assert_eq!(r.facts.iter().filter(|a| a.pred == "reach").count(), n + 1);
     assert!(

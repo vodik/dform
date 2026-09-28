@@ -17,14 +17,17 @@ fn plan(src: &str) -> common::Run {
 #[test]
 fn a_module_predicate_is_private_to_its_instance() {
     let r = plan(
-        r#"edition 2026.
+        r#"edition 2026
 module m {
-  input n: int.
-  size(N) :- n(N).
-  resource net.vpc vpc { size = S } :- size(S).
-}.
-instance m a { n = 1 }.
-instance m b { n = 2 }.
+  input n: int
+  size(n_) if n(n_)
+  resource net.vpc vpc {
+    for size(s)
+    size = s
+  }
+}
+instance m a { n = 1 }
+instance m b { n = 2 }
 "#,
     )
     .success();
@@ -44,12 +47,12 @@ instance m b { n = 2 }.
 #[test]
 fn reading_a_private_predicate_is_an_error_naming_the_module() {
     let r = plan(
-        r#"edition 2026.
+        r#"edition 2026
 module m {
-  size(1).
-}.
-instance m a {}.
-big(S) :- size(S).
+  size(1)
+}
+instance m a {}
+big(s) if size(s)
 "#,
     )
     .failure();
@@ -66,18 +69,25 @@ big(S) :- size(S).
 #[test]
 fn exports_and_outputs_are_the_interface() {
     let r = plan(
-        r#"edition 2026.
+        r#"edition 2026
 module m {
-  input n: int.
-  output vpc: addr.
-  export size/1.
-  size(N) :- n(N).
-  resource net.vpc vpc { size = S } :- size(S).
-  output vpc = vpc.
-}.
-instance m a { n = 3 }.
-inst(a).
-resource net.subnet s { size = S, vpc = V } :- m.a.size(S), inst(I), output(m.I, vpc, V).
+  input n: int
+  output vpc: addr
+  export size/1
+  size(n_) if n(n_)
+  resource net.vpc vpc {
+    for size(s_)
+    size = s_
+  }
+  output vpc = vpc
+}
+instance m a { n = 3 }
+inst("a")
+resource net.subnet s {
+  for m.a.size(s_), inst(i), output(m[i], "vpc", v)
+  size = s_
+  vpc = v
+}
 "#,
     )
     .success();
@@ -93,13 +103,16 @@ resource net.subnet s { size = S, vpc = V } :- m.a.size(S), inst(I), output(m.I,
 /// where it sets one; a required input it does not set is a compile error.
 #[test]
 fn an_input_default_yields_to_the_instance() {
-    let src = r#"edition 2026.
+    let src = r#"edition 2026
 module m {
-  input n: int = 7.
-  resource net.vpc vpc { size = N } :- n(N).
-}.
-instance m a {}.
-instance m b { n = 1 }.
+  input n: int = 7
+  resource net.vpc vpc {
+    for n(n_)
+    size = n_
+  }
+}
+instance m a {}
+instance m b { n = 1 }
 "#;
     let r = plan(src).success();
     assert!(
@@ -113,10 +126,10 @@ instance m b { n = 1 }.
         r.stdout
     );
 
-    let r = plan(&src.replace("input n: int = 7.", "input n: int.")).failure();
+    let r = plan(&src.replace("input n: int = 7", "input n: int")).failure();
     assert!(
         r.stderr
-            .contains("p.df:6:1: instance m a does not set required input n"),
+            .contains("p.df:9:1: instance m a does not set required input n"),
         "{}",
         r.stderr
     );
@@ -125,12 +138,15 @@ instance m b { n = 1 }.
 #[test]
 fn a_refinement_on_a_module_input_is_a_deny() {
     let r = plan(
-        r#"edition 2026.
+        r#"edition 2026
 module m {
-  input n: int where n <= 5.
-  resource net.vpc vpc { size = N } :- n(N).
-}.
-instance m a { n = 9 }.
+  input n: int where n <= 5
+  resource net.vpc vpc {
+    for n(n_)
+    size = n_
+  }
+}
+instance m a { n = 9 }
 "#,
     )
     .failure();
@@ -146,14 +162,14 @@ instance m a { n = 9 }.
 /// are private unless granted.
 #[test]
 fn a_pack_writes_only_inside_its_grants() {
-    let src = r#"edition 2026.
-resource net.vpc main { cidr = "10.0.0.0/16" }.
+    let src = r#"edition 2026
+resource net.vpc main { cidr = "10.0.0.0/16" }
 policy tags {
-  contributes arg to _ at .tags.
-  arg(T, A, .tags, { team: "x" }) :- want(T, A).
-  arg(net.vpc, A, .cidr, "10.9.0.0/16") @override :- want(net.vpc, A).
-}.
-apply tags.
+  contributes _.tags
+  arg(t, a, .tags, { team: "x" }) if want(t, a)
+  arg(net.vpc, a, .cidr, "10.9.0.0/16") @override if want(net.vpc, a)
+}
+apply tags
 "#;
     let r = plan(src).failure();
     assert!(
@@ -163,8 +179,8 @@ apply tags.
         r.stderr
     );
     let r = plan(&src.replace(
-        "contributes arg to _ at .tags.",
-        "contributes arg to _ at .tags.\n  contributes arg to net.vpc at .cidr.",
+        "contributes _.tags",
+        "contributes _.tags\n  contributes net.vpc.cidr",
     ))
     .success();
     assert!(r.stdout.contains("cidr = \"10.9.0.0/16\""), "{}", r.stdout);

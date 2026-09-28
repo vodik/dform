@@ -16,7 +16,7 @@
 //!
 //! A module body reads every global relation. A policy pack is a module
 //! applied once, with no scope on resource names: its predicates are private
-//! too, and each `arg` it writes must fall in one of its `contributes arg to
+//! too, and each `arg` it writes must fall in one of its `contributes TYPE.path
 //! TypePat at PathPat` grants.
 
 use crate::ast::{
@@ -203,8 +203,8 @@ pub fn expand(program: &Program) -> Result<Expanded> {
                             Diagnostic::error(
                                 *span,
                                 format!(
-                                    "module {} takes a `contributes arg` grant: a module writes \
-                                     only its own resources",
+                                    "module {} takes a `contributes TYPE.path` grant: a module \
+                                     writes only its own resources",
                                     m.name
                                 ),
                             )
@@ -299,7 +299,7 @@ pub fn expand(program: &Program) -> Result<Expanded> {
                 let names = module_names(&scope, iface, body);
                 for (p, _) in names.map.iter().filter(|(_, n)| n.contains("::")) {
                     let help = format!(
-                        "`export {p}/N.` in module {} makes it readable as {}.INSTANCE.{p}, \
+                        "`export {p}/N` in module {} makes it readable as {}.INSTANCE.{p}, \
                          or pass the value through an output",
                         m.name, m.name
                     );
@@ -519,7 +519,7 @@ fn check_module(
     }
     let undeclared = |k: &str, span: Span| {
         Diagnostic::error(span, format!("module {} has no output {k}", m.name))
-            .with_help(format!("declare it: `output {k}: TYPE.`"))
+            .with_help(format!("declare it: `output {k}: TYPE`"))
     };
     for o in &iface.output_values {
         if !iface.outputs.contains_key(&o.name) {
@@ -581,7 +581,7 @@ fn pack_names(name: &str, iface: &Interface, body: &[Stmt], diags: &mut Vec<Diag
     if let Some((p, (_, span))) = iface.exports.iter().next() {
         diags.push(Diagnostic::error(
             *span,
-            format!("policy {name} exports {p}: a policy pack has no instances; grant it with `contributes {p}.`"),
+            format!("policy {name} exports {p}: a policy pack has no instances; grant it with `contributes {p}`"),
         ));
     }
     let mut defined = BTreeMap::new();
@@ -891,16 +891,14 @@ fn check_grants(owner: &str, body: &[Stmt], grants: &[(Grant, Span)], diags: &mu
         let pat_p = if matches!(path, Term::Val(_)) {
             p.clone()
         } else {
-            "_".into()
+            "._".into()
         };
         diags.push(
             Diagnostic::error(
                 span,
                 format!("{owner} writes {p} of {t} outside its grants"),
             )
-            .with_help(format!(
-                "grant it: `contributes arg to {pat_t} at {pat_p}.`"
-            )),
+            .with_help(format!("grant it: `contributes {pat_t}{pat_p}`")),
         );
     };
     fn walk(stmts: &[Stmt], check: &mut dyn FnMut(&Term, &Term, Span)) {

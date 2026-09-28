@@ -1,0 +1,2 @@
+tests/syntax/err/interpolation.df:4:3: an interpolation `{` is never closed; a brace is `{{`
+tests/syntax/err/interpolation.df:5:3: an unmatched `}` in a string; a brace is `}}`

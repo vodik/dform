@@ -2,25 +2,25 @@
 # whose endpoint, CA and zones are open until it exists, and node pools
 # whose instance group is open until they do.
 
-edition 2026.
+edition 2026
 
-type_provider(google_compute_network, google).
-type_provider(google_compute_subnetwork, google).
-type_provider(gke_cluster, google).
-type_provider(gke_nodepool, google).
+type_provider("google_compute_network", "google")
+type_provider("google_compute_subnetwork", "google")
+type_provider("gke_cluster", "google")
+type_provider("gke_nodepool", "google")
 
-type_attr(google_compute_network, id, string, [computed, id]).
-type_attr(google_compute_subnetwork, id, string, [computed, id]).
-type_attr(gke_cluster, id, string, [computed, id]).
-type_attr(gke_nodepool, id, string, [computed, id]).
+type_attr("google_compute_network", "id", "string", ["computed", "id"])
+type_attr("google_compute_subnetwork", "id", "string", ["computed", "id"])
+type_attr("gke_cluster", "id", "string", ["computed", "id"])
+type_attr("gke_nodepool", "id", "string", ["computed", "id"])
 
-type_attr(gke_cluster, endpoint, string, [computed]).
-type_attr(gke_cluster, ca_certificate, string, [computed]).
-type_attr(gke_cluster, zones, list, [computed]).
-type_attr(gke_nodepool, instance_group, string, [computed]).
+type_attr("gke_cluster", "endpoint", "string", ["computed"])
+type_attr("gke_cluster", "ca_certificate", "string", ["computed"])
+type_attr("gke_cluster", "zones", "list", ["computed"])
+type_attr("gke_nodepool", "instance_group", "string", ["computed"])
 
-type_mint(gke_cluster, endpoint, "https://{name}.gke.fake").
-type_mint(gke_cluster, ca_certificate, "ca-{name}-{hash}").
+type_mint("gke_cluster", "endpoint", "https://{{name}}.gke.fake")
+type_mint("gke_cluster", "ca_certificate", "ca-{{name}}-{{hash}}")
 # The zones a cluster lands in are the node locations it was configured with.
-type_mint(gke_cluster, zones, "{doc:node_locations}").
-type_mint(gke_nodepool, instance_group, "ig-{name}-{hash}").
+type_mint("gke_cluster", "zones", "{{doc:node_locations}}")
+type_mint("gke_nodepool", "instance_group", "ig-{{name}}-{{hash}}")

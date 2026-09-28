@@ -2,10 +2,7 @@
 //! from it to `ast`, and the formatter's view of it.
 
 mod kind;
-pub mod lower;
 pub mod parser;
+pub mod resolve;
 
 pub use kind::{Lang, SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken};
-pub mod lex;
-pub mod parse;
-pub mod resolve;

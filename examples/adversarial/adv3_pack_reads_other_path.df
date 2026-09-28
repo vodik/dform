@@ -2,18 +2,18 @@
 # DIFFERENT path. E §4.3 says this compiles under (type, path) partitions.
 # Reads (attr, iam.policy, name); writes (arg, iam.policy, statements).
 
-edition 2026.
+edition 2026
 
 resource iam.policy app_policy {
-  name = app
-  statements = [{ action: db.connect, resource: "db" }]
-}.
+  name = "app"
+  statements = [{ action: "db.connect", resource: "db" }]
+}
 
 policy p {
-  contributes arg to iam.policy at .statements.
-  type_lattice(iam.policy, .statements, set).
-  arg(iam.policy, P, .statements, [{ action: org.read, resource: "org" }]) :-
-    want(iam.policy, P),
-    arg(iam.policy, P, .name, app).
-}.
-apply p.
+  contributes iam.policy.statements
+  type_lattice("iam.policy", .statements, "set")
+  arg("iam.policy", p, .statements, [{ action: "org.read", resource: "org" }]) if
+    want("iam.policy", p),
+    arg("iam.policy", p, .name, "app")
+}
+apply p

@@ -13,24 +13,24 @@
 # - The monitoring dashboard JSON is read with the file provider from a stub,
 #   examples/files/dashboard-pngu.json (see terraform/modules/monitoring/dashboard-pngu.json).
 
-edition 2026.
+edition 2026
 
 ########################################
 # Schema declarations
 ########################################
 
 # The file provider answers file.json once its path is known.
-extern file.json(+ path, - value).
+extern file.json(+path, -value)
 
 # Keep decl for true relational tables.
-decl peering(Env: symbol, Name: string, PeerNetwork: string).
+decl peering(env: string, name: string, peer_network: string)
 
 ########################################
 # Environment selection
 ########################################
 
 # A typed stack input: --set env=qa is an error naming the input.
-input env: enum(dev, stg, prod) = dev.
+input env: enum("dev", "stg", "prod") = "dev"
 
 ########################################
 # Settings (branch-as-data)
@@ -51,7 +51,7 @@ settings dev {
     services_cidr: "10.141.88.0/21",
     static_ips: { "pngu-grpc": { type: "INTERNAL" } }
   }
-}.
+}
 
 settings stg {
   project_id = "renfry-stg"
@@ -68,7 +68,7 @@ settings stg {
     services_cidr: "10.141.112.0/21",
     static_ips: { "pngu-grpc": { type: "INTERNAL" } }
   }
-}.
+}
 
 settings prod {
   project_id = "renfry-prod"
@@ -85,153 +85,122 @@ settings prod {
     services_cidr: "10.141.136.0/21",
     static_ips: { "pngu-grpc": { type: "INTERNAL" } }
   }
-}.
+}
+
+# The selected environment's settings. Every use reads env and one leaf.
+let cfg = settings[env]
 
 ########################################
 # Peerings (explicit env-keyed table)
 ########################################
 
 # dev
-peering{ env: dev, name: "envoy-dev", peer_network: "projects/envoy-dev-426188/global/networks/envoy-dev-network" }.
+peering{ env: "dev", name: "envoy-dev", peer_network: "projects/envoy-dev-426188/global/networks/envoy-dev-network" }
 
 # stg
-peering{ env: stg, name: "envoy-stg", peer_network: "projects/envoy-stg-597462/global/networks/envoy-stg-network" }.
-peering{ env: stg, name: "envoy-stg-legacy", peer_network: "projects/coherentpath-stg/global/networks/envoy-proxy-stg" }.
+peering{ env: "stg", name: "envoy-stg", peer_network: "projects/envoy-stg-597462/global/networks/envoy-stg-network" }
+peering{ env: "stg", name: "envoy-stg-legacy", peer_network: "projects/coherentpath-stg/global/networks/envoy-proxy-stg" }
 
 # prod
-peering{ env: prod, name: "envoy-prod-legacy", peer_network: "projects/coherentpath-prod/global/networks/envoy-proxy-prod" }.
+peering{ env: "prod", name: "envoy-prod-legacy", peer_network: "projects/coherentpath-prod/global/networks/envoy-proxy-prod" }
 
 ########################################
-# Env-scoped validation/resources/outputs
+# Validation
 ########################################
 
-when env(Env) {
-  constraint("GKE static IPs must be INTERNAL") :-
-    setting(Env, .gke.static_ips."pngu-grpc".type, T),
-    T != "INTERNAL".
+constraint "GKE static IPs must be INTERNAL" if cfg.gke.static_ips."pngu-grpc".type != "INTERNAL"
 
-  ########################################
-  # Resources (renfry module intent)
-  ########################################
+########################################
+# Resources (renfry module intent)
+########################################
 
-  # GKE subnet (terraform-google-modules/network/google//modules/subnets)
-  resource google_compute_subnetwork gke_subnet {
-    project = ProjectId
-    region = Region
-    network = NetId
-    name = format("%s-gke-subnet", ProjectName)
-    ip_cidr_range = SubnetCidr
-    subnet_private_access = true
-    secondary_ranges = [
-      { range_name: format("%s-gke-pods-range", ProjectName), ip_cidr_range: PodsCidr },
-      { range_name: format("%s-gke-svc-range", ProjectName), ip_cidr_range: ServicesCidr }
-    ]
-  } :-
-    setting(Env, .project_id, ProjectId),
-    setting(Env, .project_name, ProjectName),
-    setting(Env, .region, Region),
-    setting(Env, .network_name, NetworkName),
-    NetId = format("projects/%s/global/networks/%s", ProjectId, NetworkName),
-    setting(Env, .gke.subnet_cidr, SubnetCidr),
-    setting(Env, .gke.pods_cidr, PodsCidr),
-    setting(Env, .gke.services_cidr, ServicesCidr).
+# GKE subnet (terraform-google-modules/network/google//modules/subnets)
+resource google_compute_subnetwork gke_subnet {
+  project = cfg.project_id
+  region = cfg.region
+  network = "projects/{cfg.project_id}/global/networks/{cfg.network_name}"
+  name = "{cfg.project_name}-gke-subnet"
+  ip_cidr_range = cfg.gke.subnet_cidr
+  subnet_private_access = true
+  secondary_ranges = [
+    { range_name: "{cfg.project_name}-gke-pods-range", ip_cidr_range: cfg.gke.pods_cidr },
+    { range_name: "{cfg.project_name}-gke-svc-range", ip_cidr_range: cfg.gke.services_cidr }
+  ]
+}
 
-  # Regional managed proxy subnet
-  resource google_compute_subnetwork regional_proxy {
-    project = ProjectId
-    region = Region
-    network = NetId
-    name = format("%s-proxy", ProjectName)
-    purpose = "REGIONAL_MANAGED_PROXY"
-    role = "ACTIVE"
-    ip_cidr_range = ProxyCidr
-  } :-
-    setting(Env, .project_id, ProjectId),
-    setting(Env, .project_name, ProjectName),
-    setting(Env, .region, Region),
-    setting(Env, .network_name, NetworkName),
-    NetId = format("projects/%s/global/networks/%s", ProjectId, NetworkName),
-    setting(Env, .regional_proxy_cidr, ProxyCidr).
+# Regional managed proxy subnet
+resource google_compute_subnetwork regional_proxy {
+  project = cfg.project_id
+  region = cfg.region
+  network = "projects/{cfg.project_id}/global/networks/{cfg.network_name}"
+  name = "{cfg.project_name}-proxy"
+  purpose = "REGIONAL_MANAGED_PROXY"
+  role = "ACTIVE"
+  ip_cidr_range = cfg.regional_proxy_cidr
+}
 
-  # VPC peerings
-  resource google_compute_network_peering PeeringRes {
-    project = ProjectId
-    name = PeeringName
-    network = NetId
-    peer_network = PeerNet
-  } :-
-    setting(Env, .project_id, ProjectId),
-    setting(Env, .network_name, NetworkName),
-    NetId = format("projects/%s/global/networks/%s", ProjectId, NetworkName),
-    peering{ env: Env, name: PeeringName, peer_network: PeerNet },
-    PeeringRes = format("peering-%s", PeeringName).
+# VPC peerings
+resource google_compute_network_peering "peering-{name}" {
+  for peering{ env: env, name: name, peer_network: peer }
+  project = cfg.project_id
+  name = name
+  network = "projects/{cfg.project_id}/global/networks/{cfg.network_name}"
+  peer_network = peer
+}
 
-  # Static IPs for services
-  resource google_compute_address StaticIpRes {
-    project = ProjectId
-    region = Region
-    name = IpName
-    address_type = IpType
-    subnetwork_id = ref(google_compute_subnetwork, gke_subnet, .id)
-  } :-
-    setting(Env, .project_id, ProjectId),
-    setting(Env, .region, Region),
-    IpName = "pngu-grpc",
-    setting(Env, .gke.static_ips."pngu-grpc".type, IpType),
-    StaticIpRes = format("static-ip-%s", IpName).
+# Static IPs for services
+resource google_compute_address "static-ip-{ip}" {
+  for ip = "pngu-grpc"
+  project = cfg.project_id
+  region = cfg.region
+  name = ip
+  address_type = cfg.gke.static_ips."pngu-grpc".type
+  subnetwork_id = gke_subnet.id
+}
 
-  ########################################
-  # Resources (GKE module intent)
-  ########################################
+########################################
+# Resources (GKE module intent)
+########################################
 
-  # Represents the external terraform-mi-gke module invocation.
-  resource gke_cluster pngu {
-    cluster_type = "autopilot-private"
-    env = Env
-    project_id = ProjectId
-    project_name = ProjectName
-    name = format("%s-gke", ProjectName)
-    network_id = NetId
-    subnetwork_id = ref(google_compute_subnetwork, gke_subnet, .id)
-    master_control_plane_cidr = CpCidr
-    ip_range_pods = format("%s-gke-pods-range", ProjectName)
-    ip_range_services = format("%s-gke-svc-range", ProjectName)
+# Represents the external terraform-mi-gke module invocation.
+resource gke_cluster pngu {
+  cluster_type = "autopilot-private"
+  env = env
+  project_id = cfg.project_id
+  project_name = cfg.project_name
+  name = "{cfg.project_name}-gke"
+  network_id = "projects/{cfg.project_id}/global/networks/{cfg.network_name}"
+  subnetwork_id = gke_subnet.id
+  master_control_plane_cidr = cfg.gke.control_plane_cidr
+  ip_range_pods = "{cfg.project_name}-gke-pods-range"
+  ip_range_services = "{cfg.project_name}-gke-svc-range"
 
-    enable_secret_manager_addon = true
-    deletion_protection = false
-  } :-
-    setting(Env, .project_id, ProjectId),
-    setting(Env, .project_name, ProjectName),
-    setting(Env, .network_name, NetworkName),
-    NetId = format("projects/%s/global/networks/%s", ProjectId, NetworkName),
-    setting(Env, .gke.control_plane_cidr, CpCidr).
+  enable_secret_manager_addon = true
+  deletion_protection = false
+}
 
-  ########################################
-  # Resources (monitoring module intent)
-  ########################################
+########################################
+# Resources (monitoring module intent)
+########################################
 
-  # The dashboard JSON is a file, read by the file provider.
-  resource google_monitoring_dashboard pngu {
-    project = ProjectId
-    dashboard_json = Dash
-  } :-
-    setting(Env, .project_id, ProjectId),
-    file.json("examples/files/dashboard-pngu.json", Dash).
+# The dashboard JSON is a file, read by the file provider.
+resource google_monitoring_dashboard pngu {
+  project = cfg.project_id
+  dashboard_json = file.json["examples/files/dashboard-pngu.json"]
+}
 
-  # Represents terraform-gcp-alert-metrics module invocation.
-  resource alert_metrics_pack pngu {
-    project_id = ProjectId
-    notification_channel_type = "slack"
-    notification_channel_display_name = "Slack"
-    enable_standard_gke_alerts = true
-    source = "git@github.com:coherentpath/terraform-gcp-alert-metrics.git?ref=v1.5.0"
-  } :-
-    setting(Env, .project_id, ProjectId).
+# Represents terraform-gcp-alert-metrics module invocation.
+resource alert_metrics_pack pngu {
+  project_id = cfg.project_id
+  notification_channel_type = "slack"
+  notification_channel_display_name = "Slack"
+  enable_standard_gke_alerts = true
+  source = "git@github.com:coherentpath/terraform-gcp-alert-metrics.git?ref=v1.5.0"
+}
 
-  ########################################
-  # Optional outputs (handy for wiring)
-  ########################################
+########################################
+# Optional outputs (handy for wiring)
+########################################
 
-  output(active_env, Env).
-  output(project_id, ProjectId) :- setting(Env, .project_id, ProjectId).
-}.
+output active_env = env
+output project_id = cfg.project_id

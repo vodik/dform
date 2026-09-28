@@ -1,40 +1,39 @@
-edition 2026.
+edition 2026
 
 policy baseline {
   # Grants are partition patterns: this pack writes .tags of every type,
   # iam.policy's .statements and settings' .audit.sinks, and nothing else.
-  contributes arg to _ at .tags.
-  contributes arg to iam.policy at .statements.
-  contributes arg to settings at .audit.sinks.
+  contributes _.tags
+  contributes iam.policy.statements
+  contributes settings.audit.sinks
 
   # Lattices for paths several authors contribute to. Object paths such as
   # `tags` are maps by default; a list is one value unless declared a set.
-  type_lattice(iam.policy, .statements, set).
-  type_lattice(settings, .audit.sinks, set).
+  type_lattice(iam.policy, .statements, "set")
+  type_lattice(settings, .audit.sinks, "set")
 
   # Example: add a shared tag to everything.
-  arg(Type, Name, .tags, { team: platform }) :-
-    want(Type, Name).
+  r.tags = { team: "platform" } if r in resource
 
   # Example: policy pack can contribute directly to an IAM policy. Reads
   # .name of the type it writes .statements on: legal under (type, path)
   # partitions.
-  arg(iam.policy, Policy, .statements, [{ action: org.read, resource: "org" }]) :-
-    env(prod),
-    want(iam.policy, Policy),
-    attr(iam.policy, Policy, .name, app).
+  p.statements = [{ action: "org.read", resource: "org" }] if {
+    env == "prod"
+    p in iam.policy
+    p.name == "app"
+  }
 
-  deny("db must not be public", { resource: Db }) :-
-    want(db.postgres, Db),
-    not attr(db.postgres, Db, .public, false).
+  deny "db must not be public" { resource: pg } if pg in db.postgres, not pg.public == false
 
   # Example warning: prod should enable an audit setting.
-  warn("prod should enable audit logging", { env: prod }) :-
-    env(prod),
-    not setting(prod, .audit.enabled, true).
+  warn "prod should enable audit logging" { env: "prod" } if {
+    env == "prod"
+    not settings.prod.audit.enabled
+  }
 
   # Example: policy pack can add a sink without owning the whole list.
-  arg(settings, prod, .audit.sinks, ["s3"]).
+  settings.prod.audit.sinks = ["s3"]
 
   # Networking invariants live in `modules/stdlib_net.df`.
-}.
+}

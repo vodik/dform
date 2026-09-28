@@ -14,12 +14,12 @@ fn plan(s: &Scratch, src: &str) -> Run {
     s.run(&["--file", "p.df", "--world", "w.json", "plan"])
 }
 
-const SETTINGS: &str = "edition 2026.
+const SETTINGS: &str = "edition 2026
 type settings {
   db.backup_days: int where 1 <= db.backup_days <= 35
-}.
-settings prod @default { db = { backup_days: 3 } }.
-settings prod { db = { backup_days: 14 } }.
+}
+settings prod @default { db = { backup_days: 3 } }
+settings prod { db = { backup_days: 14 } }
 ";
 
 /// A constraint is never out-ranked: an `@override` whose value violates
@@ -32,8 +32,8 @@ fn an_override_that_violates_a_refinement_is_a_deny() {
     let r = plan(
         &s,
         &format!(
-            "{SETTINGS}days(40).\n\
-             arg(settings, prod, \"db.backup_days\", D) @override :- days(D).\n"
+            "{SETTINGS}days(40)\n\
+             settings.prod.db.backup_days = d @override if days(d)\n"
         ),
     )
     .failure();
@@ -62,8 +62,8 @@ fn an_override_that_violates_a_refinement_is_a_deny() {
     plan(
         &s,
         &format!(
-            "{SETTINGS}days(40).\n\
-             arg(settings, prod, \"db.backup_days\", D) @default :- days(D).\n"
+            "{SETTINGS}days(40)\n\
+             settings.prod.db.backup_days = d @default if days(d)\n"
         ),
     )
     .success();
@@ -76,11 +76,11 @@ fn a_literal_that_violates_a_refinement_is_a_compile_error() {
     let s = Scratch::new("refine-literal");
     let r = plan(
         &s,
-        "edition 2026.
+        "edition 2026
 type settings {
   db.backup_days: int where 1 <= db.backup_days <= 35
-}.
-settings prod { db = { backup_days: 40 } }.
+}
+settings prod { db = { backup_days: 40 } }
 ",
     )
     .failure();
@@ -95,7 +95,7 @@ settings prod { db = { backup_days: 40 } }.
     // providers/fake/schema.df: type_refine(net.subnet, cidr, prefix_len_le(24)).
     let r = plan(
         &s,
-        "edition 2026.\nresource net.subnet a { cidr = \"10.0.0.0/26\" }.\n",
+        "edition 2026\nresource net.subnet a { cidr = \"10.0.0.0/26\" }\n",
     )
     .failure();
     assert!(
@@ -109,7 +109,7 @@ settings prod { db = { backup_days: 40 } }.
     );
     plan(
         &s,
-        "edition 2026.\nresource net.subnet a { cidr = \"10.0.1.0/24\" }.\n",
+        "edition 2026\nresource net.subnet a { cidr = \"10.0.1.0/24\" }\n",
     )
     .success();
 }
@@ -121,12 +121,12 @@ fn a_cross_attribute_refinement_lowers_to_a_deny() {
     let s = Scratch::new("refine-cross");
     let src = |min: i64| {
         format!(
-            "edition 2026.
+            "edition 2026
 type settings {{
   pool.min: int
   pool.max: int where pool.min <= pool.max
-}}.
-settings prod {{ pool = {{ min: {min}, max: 3 }} }}.
+}}
+settings prod {{ pool = {{ min: {min}, max: 3 }} }}
 "
         )
     };
@@ -177,7 +177,7 @@ fn a_refinement_on_a_null_is_deferred_and_fires_after_the_boundary() {
     assert!(
         r.stderr
             .contains("constraint violations after tick 1:\n- refinement violated ctx={\"addr\":\"pngu\",\"at\":\"")
-            && r.stderr.contains("examples/refine_gke.df:136:3\",\"constraint\":\"len_ge(3)\",\"path\":\"zones\"")
+            && r.stderr.contains("examples/refine_gke.df:126:3\",\"constraint\":\"len_ge(3)\",\"path\":\"zones\"")
             && r.stderr
                 .contains("apply stopped after tick 1: blocked by constraints"),
         "{}",
@@ -195,15 +195,15 @@ fn a_refinement_on_a_null_is_deferred_and_fires_after_the_boundary() {
     );
 }
 
-const VAULT: &str = "edition 2026.
-type_provider(vault.secret, fakecloud).
-type_attr(vault.secret, id, string, [computed, id]).
-type_attr(vault.secret, value, string, [computed, sensitive]).
-type_mint(vault.secret, value, \"MINT\").
-type_provider(app.db, fakecloud).
-type_attr(app.db, id, string, [computed, id]).
-type_attr(app.db, password, string, [sensitive]).
-type_refine(app.db, password, len_ge(16)).
+const VAULT: &str = "edition 2026
+type_provider(vault.secret, \"fakecloud\")
+type_attr(vault.secret, \"id\", \"string\", [\"computed\", \"id\"])
+type_attr(vault.secret, \"value\", \"string\", [\"computed\", \"sensitive\"])
+type_mint(vault.secret, \"value\", \"MINT\")
+type_provider(app.db, \"fakecloud\")
+type_attr(app.db, \"id\", \"string\", [\"computed\", \"id\"])
+type_attr(app.db, \"password\", \"string\", [\"sensitive\"])
+type_refine(app.db, \"password\", len_ge(16))
 ";
 
 /// F DR-13 revised: the engine never checks a secret. A refinement on a
@@ -216,9 +216,9 @@ fn a_refinement_on_a_secret_is_an_apply_assertion() {
         s.write("schema.df", &VAULT.replace("MINT", mint));
         s.write(
             "p.df",
-            "edition 2026.
-resource vault.secret pw {}.
-resource app.db main { password = ref(vault.secret, pw, .value) }.
+            "edition 2026
+resource vault.secret pw {}
+resource app.db main { password = ref(vault.secret, \"pw\", .value) }
 ",
         );
         let _ = std::fs::remove_file(s.path("w.json"));
@@ -259,12 +259,12 @@ fn e0306_a_refinement_on_a_sensitive_path_the_provider_cannot_check() {
     .unwrap();
     s.write(
         "p.df",
-        "edition 2026.
-provider k8s { source = \"./providers/k8s\" }.
+        "edition 2026
+provider k8s { source = \"./providers/k8s\" }
 type k8s.secret {
   data.password: string where len(data.password) >= 16
-}.
-resource k8s.secret db { metadata.name = \"db\", data = { password: \"x\" } }.
+}
+resource k8s.secret db { metadata.name = \"db\", data = { password: \"x\" } }
 ",
     );
     let out = Command::new(env!("CARGO_BIN_EXE_dform"))
@@ -293,15 +293,21 @@ fn a_refinement_names_its_attribute_by_name() {
     let s = Scratch::new("refine-names");
     let src = |name: &str, wide: &str| {
         format!(
-            "edition 2026.
+            "edition 2026
 type app.thing {{
   name: string where len(name) <= 3
   code: string where len(code) != 2
   net: string where prefix_len(net) >= prefix_len(wide)
   wide: string
-}}.
-resource app.thing a {{ name = N, code = N, net = \"10.0.0.0/24\", wide = \"{wide}\" }} :- n(N).
-n(\"{name}\").
+}}
+resource app.thing a {{
+  for n(x)
+  name = x
+  code = x
+  net = \"10.0.0.0/24\"
+  wide = \"{wide}\"
+}}
+n(\"{name}\")
 "
         )
     };
@@ -338,11 +344,11 @@ fn an_unknown_function_or_a_bad_pattern_is_a_compile_error() {
     let s = Scratch::new("refine-unknown");
     let r = plan(
         &s,
-        "edition 2026.
+        "edition 2026
 type app.thing {
   name: string where frobnicate(name) == 3
-}.
-resource app.thing a { name = \"x\" }.
+}
+resource app.thing a { name = \"x\" }
 ",
     )
     .failure();
@@ -354,10 +360,10 @@ resource app.thing a { name = \"x\" }.
     );
     let r = plan(
         &s,
-        "edition 2026.
+        "edition 2026
 type app.thing {
   name: string where matches(name, \"a(\")
-}.
+}
 ",
     )
     .failure();
@@ -367,7 +373,7 @@ type app.thing {
         "{}",
         r.stderr
     );
-    let r = plan(&s, "edition 2026.\ninput n: int = 1 where frob(n) == 1.\n").failure();
+    let r = plan(&s, "edition 2026\ninput n: int = 1 where frob(n) == 1\n").failure();
     assert!(
         r.stderr
             .contains("p.df:2:1: in a refinement: unknown function frob"),

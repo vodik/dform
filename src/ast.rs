@@ -126,7 +126,7 @@ pub enum Stmt {
     Output(OutputDecl),
     /// `export p/N`: a module predicate readable as `m.i.p`.
     Export(Export),
-    /// `contributes arg to T at P` or `contributes p`.
+    /// `contributes T.path`, `contributes _.path` or `contributes p`.
     Contributes(Contributes),
     /// `stack name { ... }`: the stack this program owns (`stack`).
     Stack(Config),
@@ -143,7 +143,7 @@ pub enum Stmt {
     Settings(Settings),
     Decl(Decl),
     Extern(Extern),
-    /// `decl p/N mixed.`: `p/N` may have both ground facts and rules (E
+    /// `decl p/N mixed`: `p/N` may have both ground facts and rules (E
     /// §2.6); without it, a predicate that has both is a compile error.
     Mixed(Extern),
     /// `extern p(+in, -out, ...) [persist]`: a predicate a provider answers
@@ -213,7 +213,7 @@ impl std::fmt::Debug for Span {
     }
 }
 
-/// `extern p/N.` (spelled `decl p/N.`): `p/N` is defined by a provider, not
+/// `decl p/N`: `p/N` is defined by a provider, not
 /// by the program.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Extern {
@@ -248,7 +248,7 @@ pub struct Module {
     pub span: Span,
 }
 
-/// `instance module name { k = v, ... } [:- body]`: each `k = v` is a
+/// `instance module name { [if body] k = v ... }`: each `k = v` is a
 /// contribution to input `k` of instance `module.name`.
 #[derive(Debug, Clone)]
 pub struct Instance {
@@ -418,7 +418,7 @@ pub enum TypeExpr {
     Str(String),
 }
 
-/// `contributes arg to T at P` (`None` for `_`) or `contributes pred`.
+/// `contributes T.path` (`None` for `_`) or `contributes pred`.
 #[derive(Debug, Clone)]
 pub enum Grant {
     Arg {
@@ -453,7 +453,7 @@ pub struct RuleStmt {
     pub body: Vec<Lit>,
 }
 
-/// `constraint("message") :- body.`: a deny checked after evaluation.
+/// `constraint "message" if body`: a deny checked after evaluation.
 #[derive(Debug, Clone)]
 pub struct Constraint {
     pub message: String,

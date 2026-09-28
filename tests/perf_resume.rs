@@ -82,8 +82,8 @@ fn the_policy_pass_resumed_is_the_policy_pass() {
         "examples/adversarial/gke_two_phase.df",
         "gke",
         None,
-        "deny(\"strict\", { rule: R }) :- stuck(R, _, _, _).
-         deny(\"zone\", { z: Z }) :- deformation(_, \"gke_cluster\", _, _),
-           arg(gke_cluster, pngu, .zones, Zs), member(Zs, Z).",
+        "deny \"strict\" { rule: r } if stuck(r, _, _, _)
+         deny \"zone\" { z: z } if deformation(_, \"gke_cluster\", _, _),
+           arg(\"gke_cluster\", \"pngu\", .zones, zs), member(zs, z)",
     );
 }

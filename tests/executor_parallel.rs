@@ -5,11 +5,11 @@
 mod common;
 use common::Scratch;
 
-const PROG: &str = r#"edition 2026.
+const PROG: &str = r#"edition 2026
 
-resource net.vpc a { cidr = "10.0.0.0/16" }.
-resource net.vpc b { cidr = "10.1.0.0/16" }.
-resource net.subnet s { vpc_id = ref(net.vpc, a, id), tier = "web" }.
+resource net.vpc a { cidr = "10.0.0.0/16" }
+resource net.vpc b { cidr = "10.1.0.0/16" }
+resource net.subnet s { vpc_id = ref(net.vpc, "a", "id"), tier = "web" }
 "#;
 
 fn apply(parallel: &str) -> (common::Run, Vec<(String, u64, u64)>) {

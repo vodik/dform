@@ -6,11 +6,11 @@ mod common;
 use common::Scratch;
 use std::process::{Command, Stdio};
 
-const NET: &str = r#"edition 2026.
-stack net.shared {}.
-resource net.vpc main { cidr = "10.0.0.0/16" }.
-output vpc_cidr = "10.0.0.0/16".
-output vpc_id = ref(net.vpc, main, .id).
+const NET: &str = r#"edition 2026
+stack net.shared {}
+resource net.vpc main { cidr = "10.0.0.0/16" }
+output vpc_cidr = "10.0.0.0/16"
+output vpc_id = ref(net.vpc, "main", .id)
 "#;
 
 #[test]
@@ -34,7 +34,7 @@ fn a_local_backend_holds_the_state() {
     let s = Scratch::new("lang-stack-backend");
     s.write(
         "p.df",
-        "edition 2026.\nstack x { backend = local(\"state/x\"), unknowns = permissive }.\nresource net.vpc main { cidr = \"10.0.0.0/16\" }.\n",
+        "edition 2026\nstack x { backend = local(\"state/x\"), unknowns = \"permissive\" }\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\n",
     );
     s.run(&["--file", "p.df", "apply"]).success();
     assert!(s.path("state/x/state.json").exists());
@@ -53,7 +53,7 @@ fn a_local_backend_is_relative_to_the_root() {
     let s = Scratch::new("lang-stack-backend-root");
     s.write(
         "infra/p.df",
-        "edition 2026.\nstack x { backend = local(\"state/x\") }.\nresource net.vpc main { cidr = \"10.0.0.0/16\" }.\n",
+        "edition 2026\nstack x { backend = local(\"state/x\") }\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\n",
     );
     s.run(&["--file", "infra/p.df", "apply"]).success();
     assert!(s.path("infra/state/x/state.json").exists());
@@ -94,7 +94,7 @@ fn a_local_backend_is_relative_to_the_root() {
 #[test]
 fn one_program_owns_one_stack() {
     let s = Scratch::new("lang-stack-two");
-    s.write("p.df", "edition 2026.\nstack a {}.\nstack b {}.\n");
+    s.write("p.df", "edition 2026\nstack a {}\nstack b {}\n");
     let r = s.run(&["--file", "p.df", "plan"]).failure();
     assert!(
         r.stderr
@@ -102,7 +102,7 @@ fn one_program_owns_one_stack() {
         "{}",
         r.stderr
     );
-    s.write("p.df", "edition 2026.\nstack a { backend = s3(\"b\") }.\n");
+    s.write("p.df", "edition 2026\nstack a { backend = s3(\"b\") }\n");
     let r = s.run(&["--file", "p.df", "plan"]).failure();
     assert!(r.stderr.contains("unknown backend"), "{}", r.stderr);
 }
@@ -177,11 +177,14 @@ fn another_stack_reads_the_outputs() {
     s.write("net.df", NET);
     s.write(
         "app.df",
-        r#"edition 2026.
-stack app {}.
-resource net.subnet a { cidr = C, vpc_id = V } :-
-  stack_output("net.shared", vpc_cidr, C),
-  stack_output("net.shared", vpc_id, V).
+        r#"edition 2026
+stack app {}
+resource net.subnet a {
+  for stack_output("net.shared", "vpc_cidr", c),
+    stack_output("net.shared", "vpc_id", v)
+  cidr = c
+  vpc_id = v
+}
 "#,
     );
     let r = s.run(&["--file", "app.df", "plan"]).success();
@@ -204,11 +207,14 @@ resource net.subnet a { cidr = C, vpc_id = V } :-
 fn the_registry_is_found_from_the_program_not_the_working_directory() {
     let s = Scratch::new("lang-stack-root");
     s.write("infra/net.df", NET);
-    let app = r#"edition 2026.
-stack app {}.
-resource net.subnet a { cidr = C, vpc_id = V } :-
-  stack_output("net.shared", vpc_cidr, C),
-  stack_output("net.shared", vpc_id, V).
+    let app = r#"edition 2026
+stack app {}
+resource net.subnet a {
+  for stack_output("net.shared", "vpc_cidr", c),
+    stack_output("net.shared", "vpc_id", v)
+  cidr = c
+  vpc_id = v
+}
 "#;
     s.write("infra/app.df", app);
     s.run(&["--file", "infra/net.df", "apply"]).success();
@@ -244,11 +250,11 @@ fn the_provider_statement_selects_the_schema() {
     let s = Scratch::new("lang-stack-provider");
     s.write(
         "mine/schema.df",
-        "type_provider(x.thing, fakecloud).\ntype_attr(x.thing, size, int, [required]).\n",
+        "type_provider(x.thing, \"fakecloud\")\ntype_attr(x.thing, \"size\", \"int\", [\"required\"])\n",
     );
     s.write(
         "p.df",
-        "edition 2026.\nprovider mine { source = \"mine\" }.\nresource x.thing a {}.\n",
+        "edition 2026\nprovider mine { source = \"mine\" }\nresource x.thing a {}\n",
     );
     let r = s.run(&["--file", "p.df", "plan"]).failure();
     assert!(r.stderr.contains("size"), "{}", r.stderr);

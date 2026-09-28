@@ -149,8 +149,8 @@ fn an_open_null_against_a_world_constant_is_pending() {
     )
     .unwrap();
     let program = dform::parser::parse_program(
-        "resource db.postgres main { size = 1 }.
-         resource compute.vm app { db_host = ref(db.postgres, main, endpoint) }.",
+        "resource db.postgres main { size = 1 }
+         resource compute.vm app { db_host = ref(db.postgres, \"main\", \"endpoint\") }",
     )
     .unwrap();
     let p = plan(&program, &[], &world, &dir.join("w.state.json"));

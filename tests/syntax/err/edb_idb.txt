@@ -1,3 +1,3 @@
 tests/syntax/err/edb_idb.df:6:1: region/1 has both ground facts and rules: it is extensional and intensional
   tests/syntax/err/edb_idb.df:5:1: a ground fact of region/1
-  help: derive the facts with rules too, or declare it: `decl region/1 mixed.`
+  help: derive the facts with rules too, or declare it: `decl region/1 mixed`

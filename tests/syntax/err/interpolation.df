@@ -1,0 +1,6 @@
+edition 2026
+
+# A string's braces are interpolation: a literal brace is doubled.
+a("{x")
+b("x}")
+c("{{ok}} {y}") if y = "fine"

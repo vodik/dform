@@ -4,120 +4,130 @@
 #   dform plan --set env=prod
 #   dform apply
 
-edition 2026.
+edition 2026
 
-provider fake { source = "./providers/fake" }.
-stack demo.main { backend = local(".dform/demo") }.
+provider fake { source = "./providers/fake" }
+stack demo.main { backend = local(".dform/demo") }
 
 # Typed stack input with a default. The default is a @default contribution
 # to input env; --set env=prod is a normal contribution and wins.
-input env: enum(dev, staging, prod) = staging.
+input env: enum("dev", "staging", "prod") = "staging"
 
-zone("us-test-1a").
-zone("us-test-1b").
+zone("us-test-1a")
+zone("us-test-1b")
 
-when env(prod) {
-  iam_need(app, "audit.write", "audit-log").
-}.
+when env("prod") {
+  iam_need("app", "audit.write", "audit-log")
+}
 
 # Settings are a resource of type `settings`, addressed by environment.
 # A user schema for the open type gives typed, refined settings.
 type settings {
   audit.sinks: set(string)
   db.backup_days: int where 1 <= db.backup_days <= 35
-}.
+}
 
 # Base layer at rank @default: every environment. Overrides below are the
 # normal rank and win per leaf. This replaces three copies of the block.
-settings E @default {
+settings e @default {
+  for env_name(e)
   network.main.vpc_net = inet("10.90.0.0/16")
   network.peer.vpc_net = inet("10.91.0.0/16")
-  db  = { backup_days: 3, multi_az: false }
+  db = { backup_days: 3, multi_az: false }
   k8s = { private_api: false, nodepool: { min: 1, max: 3 } }
-} :- env_name(E).
+}
 
-env_name(dev). env_name(staging). env_name(prod).
+env_name("dev")
+env_name("staging")
+env_name("prod")
 
 settings staging {
   network.main.vpc_net = inet("10.50.0.0/16")
   network.peer.vpc_net = inet("10.60.0.0/16")
-}.
+}
 
 settings prod {
   network.main.vpc_net = inet("10.20.0.0/16")
   network.peer.vpc_net = inet("10.21.0.0/16")
-  db  = { backup_days: 14, multi_az: true }
+  db = { backup_days: 14, multi_az: true }
   k8s = { private_api: true, nodepool: { min: 3, max: 10 } }
-  audit.sinks += ["cloudwatch"]          # Set path: unions with the policy pack's ["s3"]
-}.
+  audit.sinks += ["cloudwatch"] # Set path: unions with the policy pack's ["s3"]
+}
 
-import "modules/network.df".
-import "modules/database.df".
-import "modules/kubernetes.df".
-import "modules/iam.df".
-import "modules/stdlib_net.df".
-import "policies/baseline.df".
+import "modules/network.df"
+import "modules/database.df"
+import "modules/kubernetes.df"
+import "modules/iam.df"
+import "modules/stdlib_net.df"
+import "policies/baseline.df"
 
-apply baseline.
-apply stdlib_net.
+apply baseline
+apply stdlib_net
 
 # Module instances. Inputs are typed at the module; the body binds them.
-instance network main { vpc_net = V } :- env(E), setting(E, .network.main.vpc_net, V).
-instance network peer { vpc_net = V } :- env(E), setting(E, .network.peer.vpc_net, V).
+instance network main {
+  for env(e), setting(e, .network.main.vpc_net, v)
+  vpc_net = v
+}
+instance network peer {
+  for env(e), setting(e, .network.peer.vpc_net, v)
+  vpc_net = v
+}
 
 instance database main {
-  backup_days = Days
-  multi_az    = MA
-  subnet_ids  = Ids
-} :-
-  env(E),
-  setting(E, .db.backup_days, Days),
-  setting(E, .db.multi_az, MA),
-  output(network.main, private_subnet_ids, Ids).
+  for env(e),
+    setting(e, .db.backup_days, days),
+    setting(e, .db.multi_az, m_a),
+    output("network.main", "private_subnet_ids", ids)
+  backup_days = days
+  multi_az = m_a
+  subnet_ids = ids
+}
 
 instance kubernetes main {
-  private_api  = Api
-  nodepool_min = Min
-  nodepool_max = Max
-  subnet_ids   = Ids
-} :-
-  env(E),
-  setting(E, .k8s.private_api, Api),
-  setting(E, .k8s.nodepool.min, Min),
-  setting(E, .k8s.nodepool.max, Max),
-  output(network.main, private_subnet_ids, Ids).
+  for env(e),
+    setting(e, .k8s.private_api, api_),
+    setting(e, .k8s.nodepool.min, min),
+    setting(e, .k8s.nodepool.max, max),
+    output("network.main", "private_subnet_ids", ids)
+  private_api = api_
+  nodepool_min = min
+  nodepool_max = max
+  subnet_ids = ids
+}
 
-instance iam main {}.
+instance iam main {}
 
 # Peering between network instances. Each instance exports its vpc address.
-vpc_peer_inst(main, peer).
+vpc_peer_inst("main", "peer")
 
-vpc_peer(A, B) :-
-  vpc_peer_inst(IA, IB),
-  output(network.IA, vpc, A),
-  output(network.IB, vpc, B).
+vpc_peer(a_, b) if
+  vpc_peer_inst(i_a, i_b),
+  output(network[i_a], "vpc", a_),
+  output(network[i_b], "vpc", b)
 
 # requester_vpc_id and accepter_vpc_id are fresh nulls at plan time. They are
 # forwarded, never inspected, so this resource is definite and single-phase.
-resource net.vpc_peering Peer {
-  requester_vpc_id = ref(net.vpc, A, .id)
-  accepter_vpc_id  = ref(net.vpc, B, .id)
-} :-
-  vpc_peer_inst(IA, IB), vpc_peer(A, B),
-  Peer = format("peer-%s-%s", IA, IB).
+resource net.vpc_peering peer {
+  for vpc_peer_inst(i_a, i_b), vpc_peer(a_, b),
+    peer = format("peer-%s-%s", i_a, i_b)
+  requester_vpc_id = ref(net.vpc, a_, .id)
+  accepter_vpc_id = ref(net.vpc, b, .id)
+}
 
 # A bastion with an address carved from the main VPC. The setting is a
 # constant, so inet_host is not stuck; only subnet_id carries a null.
 resource compute.vm bastion {
-  private_ip = inet_host(Net, 20)
-  subnet_id  = ref(net.subnet, network.main/private_a, .id)
-} :- env(E), setting(E, .network.main.vpc_net, Net).
+  for env(e), setting(e, .network.main.vpc_net, net_)
+  private_ip = inet_host(net_, 20)
+  subnet_id = ref(net.subnet, network.main/private_a, .id)
+}
 
 # Stack-level policy. Ids are stable; messages are free text.
-deny(prod_db_multi_az, "prod db must be multi_az", { db: Db }) :-
-  env(prod), want(db.postgres, Db),
-  not attr(db.postgres, Db, .multi_az, true).
+deny("prod_db_multi_az", "prod db must be multi_az", { db: db_ }) if
+  env("prod"), want("db.postgres", db_),
+  not attr("db.postgres", db_, .multi_az, true)
 
-deny(prod_k8s_private_api, "prod k8s must have private api", { cluster: C }) :-
-  env(prod), want(k8s.cluster, C),
-  not attr(k8s.cluster, C, .private_api, true).
+deny("prod_k8s_private_api", "prod k8s must have private api", { cluster: c }) if
+  env("prod"), want(k8s.cluster, c),
+  not attr(k8s.cluster, c, .private_api, true)

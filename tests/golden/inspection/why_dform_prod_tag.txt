@@ -1,10 +1,10 @@
 attr("net.vpc", "network.main::vpc", "tags", {component: "network", env: "prod", team: "platform"})
   by Σattr: attribute aggregate (lub_ranked, E §2.5) over 2 contributions
   ├─ arg("net.vpc", "network.main::vpc", "tags", {team: "platform"}, "normal")   [rank normal, owner r14 (policies/baseline.df:16:3, policy baseline)]
-  │    by r14: arg(Type, Name, "tags", {team: "platform"}, "normal") :- want(Type, Name)
-  │    with Name = "network.main::vpc", Type = "net.vpc"
+  │    by r14: arg(Type, R, "tags", {team: "platform"}, "normal") :- want(Type, R)
+  │    with R = "network.main::vpc", Type = "net.vpc"
   │    └─ want("net.vpc", "network.main::vpc")
-  │         by r21: want("net.vpc", scoped("network.main", "vpc")) :- env(Env), network.main::vpc_net(VpcNet)
+  │         by r21: want("net.vpc", scoped("network.main", "vpc")) :- network.main::vpc_net(VpcNet), env(Env)
   │         with Env = "prod", VpcNet = 10.20.0.0/16
   │         ├─ env("prod")
   │         │    by r4: env(V) :- attr("input", "", "env", V)
@@ -21,13 +21,13 @@ attr("net.vpc", "network.main::vpc", "tags", {component: "network", env: "prod",
   │              with V = 10.20.0.0/16
   │              └─ attr("input", "network.main", "vpc_net", 10.20.0.0/16)
   │                   by Σattr: attribute aggregate (lub_ranked, E §2.5) over 1 contribution
-  │                   └─ arg("input", "network.main", "vpc_net", 10.20.0.0/16, "normal")   [rank normal, owner r20 (dform.df:65:3)]
+  │                   └─ arg("input", "network.main", "vpc_net", 10.20.0.0/16, "normal")   [rank normal, owner r20 (dform.df:70:3)]
   │                        by r20: arg("input", "network.main", "vpc_net", VpcNet, "normal") :- env(Env), attr("settings", Env, "network.main.vpc_net", VpcNet)
   │                        with Env = "prod", VpcNet = 10.20.0.0/16
   │                        ├─ attr("settings", "prod", "network.main.vpc_net", 10.20.0.0/16)
   │                        │    by Σattr: attribute aggregate (lub_ranked, E §2.5) over 2 contributions
-  │                        │    ├─ arg("settings", "prod", "network.main.vpc_net", 10.20.0.0/16, "normal")   fact, dform.df:41:3 (arg)   [rank normal, owner dform.df:41:3 (arg)]
-  │                        │    └─ arg("settings", "prod", "network.main.vpc_net", 10.50.0.0/16, "default")   [rank default, owner r7 (dform.df:34:3)]
+  │                        │    ├─ arg("settings", "prod", "network.main.vpc_net", 10.20.0.0/16, "normal")   fact, dform.df:42:3 (arg)   [rank normal, owner dform.df:42:3 (arg)]
+  │                        │    └─ arg("settings", "prod", "network.main.vpc_net", 10.50.0.0/16, "default")   [rank default, owner r7 (dform.df:35:3)]
   │                        │         by r7: arg("settings", E, "network.main.vpc_net", inet("10.50.0.0/16"), "default") :- env_name(E)
   │                        │         with E = "prod"
   │                        │         └─ env_name("prod")   fact, dform.df:31:1 (env_name)

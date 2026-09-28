@@ -12,7 +12,7 @@ const WORLD: &str = ".dform/renfry.workload/remote.json";
 fn release(s: &Scratch, image: &str) {
     s.write(
         "release.facts",
-        &format!("edition 2026.\n\nrelease(\"{image}\").\n"),
+        &format!("edition 2026\n\nrelease(\"{image}\")\n"),
     );
 }
 
@@ -20,7 +20,7 @@ fn setup(name: &str) -> Scratch {
     let s = Scratch::new(name);
     s.write("workload.df", WORKLOAD);
     release(&s, "gcr.io/renfry/web:1.0");
-    s.write("approvals.facts", "edition 2026.\n");
+    s.write("approvals.facts", "edition 2026\n");
     s
 }
 
@@ -124,7 +124,7 @@ fn approve_lets_a_world_event_correct_drift() {
     // the drift arrives with a world event, not an input change.
     s.write(
         "approvals.facts",
-        "edition 2026.\n\napprove(k8s.deployment, web).\n",
+        "edition 2026\n\napprove(\"k8s.deployment\", \"web\")\n",
     );
     assert_eq!(
         once(&s, &[]),
@@ -191,7 +191,7 @@ fn a_prod_rollout_is_held_until_its_release_is_approved() {
     assert!(!s.read(WORLD).contains("k8s.deployment"));
     s.write(
         "approvals.facts",
-        "edition 2026.\n\nrelease_approved(\"gcr.io/renfry/web:1.0\").\n",
+        "edition 2026\n\nrelease_approved(\"gcr.io/renfry/web:1.0\")\n",
     );
     assert_eq!(
         once(&s, &prod),
@@ -222,7 +222,7 @@ fn plan_reads_an_input_relation_and_rejects_a_stray_fact() {
     );
     s.write(
         "release.facts",
-        "edition 2026.\n\nrelease(\"a\").\nrelaese(\"b\").\n",
+        "edition 2026\n\nrelease(\"a\")\nrelaese(\"b\")\n",
     );
     let r = s.run(&["--file", "workload.df", "plan"]).failure();
     assert!(
@@ -233,7 +233,7 @@ fn plan_reads_an_input_relation_and_rejects_a_stray_fact() {
     );
     s.write(
         "bad.df",
-        "edition 2026.\n\ninput relation r/1 from url(\"http://x\").\nq(X) :- r(X).\n",
+        "edition 2026\n\ninput relation r/1 from url(\"http://x\")\nq(x) if r(x)\n",
     );
     let r = s.run(&["--file", "bad.df", "plan"]).failure();
     assert!(
@@ -268,7 +268,7 @@ fn a_git_source_is_read_at_its_ref() {
     let commit = |image: &str| {
         s.write(
             "work/web.facts",
-            &format!("edition 2026.\n\nrelease(\"{image}\").\n"),
+            &format!("edition 2026\n\nrelease(\"{image}\")\n"),
         );
         let w = s.path("work");
         git(&w, &["add", "web.facts"]);

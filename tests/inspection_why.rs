@@ -20,9 +20,7 @@ fn why_a_tag_exists() {
         ],
     );
     assert!(
-        out.contains(
-            r#"arg(Type, Name, "tags", {team: "platform"}, "normal") :- want(Type, Name)"#
-        ),
+        out.contains(r#"arg(Type, R, "tags", {team: "platform"}, "normal") :- want(Type, R)"#),
         "{out}"
     );
     assert!(out.contains("[rank normal, owner r"), "{out}");
@@ -39,7 +37,7 @@ fn why_an_attribute_shows_every_contribution() {
             "--set",
             "env=prod",
             "why",
-            r#"attr(net.vpc, "network.main::vpc", tags, X)"#,
+            r#"attr(net.vpc, "network.main::vpc", .tags, X)"#,
         ],
     );
     assert!(out.contains("by Σattr: attribute aggregate"), "{out}");
@@ -57,7 +55,7 @@ fn why_prints_one_alternative_unless_all() {
     let s = Scratch::new("why-alts");
     s.write(
         "p.df",
-        "edition 2026.\np(1). q(1). r(X) :- p(X). r(X) :- q(X). s(X) :- r(X), not t(X). t(2) :- p(2).",
+        "edition 2026\np(1)\nq(1)\nr(x) if p(x)\nr(x) if q(x)\ns(x) if r(x), not t(x)\nt(2) if p(2)",
     );
     let why = |extra: &[&str]| {
         let mut a = vec!["--file", "p.df", "--world", "w.json", "why"];
@@ -73,7 +71,7 @@ fn why_prints_one_alternative_unless_all() {
         "{all}"
     );
     assert!(
-        all.contains("fact, p.df:2:1 (p)") && all.contains("fact, p.df:2:7 (q)"),
+        all.contains("fact, p.df:2:1 (p)") && all.contains("fact, p.df:3:1 (q)"),
         "{all}"
     );
 
@@ -91,7 +89,7 @@ fn why_prints_one_alternative_unless_all() {
 #[test]
 fn why_with_a_variable_prints_each_match() {
     let s = Scratch::new("why-vars");
-    s.write("p.df", "edition 2026.\np(1). p(2). q(X) :- p(X).");
+    s.write("p.df", "edition 2026\np(1)\np(2)\nq(x) if p(x)");
     let out = s
         .run(&["--file", "p.df", "--world", "w.json", "why", "q(N)"])
         .success()
@@ -109,9 +107,9 @@ fn why_never_prints_a_labeled_secret() {
     let s = Scratch::new("why-secret");
     s.write(
         "p.df",
-        r#"edition 2026.
-resource leaky.vault v { password = "VAULT-SECRET-DO-NOT-PRINT" }.
-           copy(P) :- attr(leaky.vault, v, password, P)."#,
+        r#"edition 2026
+resource leaky.vault v { password = "VAULT-SECRET-DO-NOT-PRINT" }
+           copy(p) if attr(leaky.vault, "v", "password", p)"#,
     );
     let schema = repo().join("providers/leaky/schema.df");
     let out = s
@@ -139,14 +137,13 @@ fn why_labels_planner_facts_as_the_plan() {
     let s = Scratch::new("why-plan-leaf");
     s.write(
         "p.df",
-        "edition 2026.\nresource net.vpc main { cidr = \"10.0.0.0/16\" }.\n",
+        "edition 2026\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\n",
     );
     s.run(&["--file", "p.df", "--world", "w.json", "apply"])
         .success();
     s.write(
         "p.df",
-        "edition 2026.\nlifecycle(net.vpc, main, prevent_destroy).\n\
-         seen(A) :- identity(net.vpc, A, _).\n",
+        "edition 2026\nlifecycle(net.vpc, \"main\", \"prevent_destroy\")\nseen(a) if identity(net.vpc, a, _)\n",
     );
     let why = |q: &str| {
         s.run(&["--file", "p.df", "--world", "w.json", "why", q])
@@ -171,7 +168,7 @@ fn why_labels_facts_injected_at_a_tick() {
     use dform::ast::{Atom, Lit, Term};
     use dform::value::Value;
     let program =
-        dform::zset::with_policy_rules(dform::parser::parse_program("edition 2026.\n").unwrap())
+        dform::zset::with_policy_rules(dform::parser::parse_program("edition 2026\n").unwrap())
             .unwrap();
     let s = |x: &str| Term::Val(Value::Str(x.into()));
     let fact = |pred: &str, args: Vec<Term>| Atom {

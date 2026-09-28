@@ -1,5 +1,5 @@
-edition 2026.
+edition 2026
 
 # Statements the grammar has and the evaluator does not yet: each parses
 # and lowering names the ticket that gives it meaning.
-decl type k8s.custom open.
+decl type k8s.custom open

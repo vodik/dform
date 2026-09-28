@@ -27,7 +27,7 @@ pub enum Query {
     Body { body: Vec<Lit>, vars: Vec<String> },
 }
 
-/// Parse `pred`, or body literals such as `attr(T, A, cidr, C), want(T, A)`,
+/// Parse `pred`, or body literals such as `attr(t, a, .cidr, c), want(t, a)`,
 /// with the program's own parser.
 pub fn parse(src: &str) -> Result<Query> {
     let src = src.trim().trim_end_matches('.').trim();
@@ -38,7 +38,7 @@ pub fn parse(src: &str) -> Result<Query> {
     {
         return Ok(Query::Pred(src.to_string()));
     }
-    let program = crate::parser::parse_program(&format!("query__(0) :- {src} ."))
+    let program = crate::parser::parse_pattern(&format!("query__(0) if {src}"))
         .map_err(|e| anyhow::anyhow!("cannot parse query '{src}': {e:#}"))?;
     let [crate::ast::Stmt::Rule(r)] = program.statements.as_slice() else {
         bail!("cannot parse query '{src}': expected body literals");
@@ -336,7 +336,7 @@ mod tests {
 
     #[test]
     fn a_pattern_binds_one_column_per_variable() {
-        let f = facts("p(a, 1). p(b, 2). q(b).");
+        let f = facts("p(\"a\", 1)\np(\"b\", 2)\nq(\"b\")");
         let Query::Body { body, vars } = parse("p(X, N), q(X)").unwrap() else {
             panic!()
         };
@@ -369,7 +369,7 @@ mod tests {
     #[test]
     fn a_secret_prints_as_its_label_wherever_it_is_forwarded() {
         let schema = Schema::from_facts(
-            &crate::parser::parse_program("type_attr(v, pw, string, [sensitive]).")
+            &crate::parser::parse_program("type_attr(\"v\", \"pw\", \"string\", [\"sensitive\"])")
                 .unwrap()
                 .statements
                 .iter()
@@ -381,8 +381,9 @@ mod tests {
         )
         .unwrap();
         let f = facts(
-            r#"want(v, a). arg(v, a, pw, "hunter22", normal).
-               leak(S) :- attr(v, a, pw, P), S = concat("pw=", P)."#,
+            r#"want("v", "a")
+arg("v", "a", "pw", "hunter22", "normal")
+               leak(s) if attr("v", "a", "pw", p), s = concat("pw=", p)"#,
         );
         let r = Redactor::new(&f, &schema);
         let Query::Body { body, vars } = parse("leak(S)").unwrap() else {

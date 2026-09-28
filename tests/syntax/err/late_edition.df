@@ -1,2 +1,2 @@
-p(a).
-edition 2026.
+p("a")
+edition 2026

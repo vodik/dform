@@ -1,28 +1,24 @@
-edition 2026.
+edition 2026
 
 module kubernetes {
-  input private_api: bool.
-  input nodepool_min: int.
-  input nodepool_max: int.
-  input subnet_ids: list(ref(net.subnet)).
-  contributes iam_need.
+  input private_api: bool
+  input nodepool_min: int
+  input nodepool_max: int
+  input subnet_ids: list(ref(net.subnet))
+  contributes iam_need
 
   resource k8s.cluster cluster {
     version = "1.29"
-    private_api = PrivateApi
-    subnet_ids = SubnetIds
-  } :-
-    private_api(PrivateApi),
-    subnet_ids(SubnetIds).
+    private_api = private_api
+    subnet_ids = subnet_ids
+  }
 
   resource k8s.nodepool default {
-    cluster_id = ref(k8s.cluster, cluster, .id)
-    min = Min
-    max = Max
-  } :-
-    nodepool_min(Min),
-    nodepool_max(Max).
+    cluster_id = cluster.id
+    min = nodepool_min
+    max = nodepool_max
+  }
 
   # Only when the cluster exists in this environment.
-  iam_need(app, k8s.describe_cluster, ref(k8s.cluster, cluster, .id)) :- private_api(_).
-}.
+  iam_need("app", "k8s.describe_cluster", cluster.id) if has private_api
+}

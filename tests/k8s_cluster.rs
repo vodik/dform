@@ -79,32 +79,32 @@ fn dform(s: &Scratch, kubeconfig: &str, args: &[&str]) -> Run {
 
 fn program(ns: &str, image: &str) -> String {
     format!(
-        r#"edition 2026.
+        r#"edition 2026
 
-provider k8s {{ source = "./providers/k8s" }}.
+provider k8s {{ source = "./providers/k8s" }}
 
 resource k8s.namespace test {{
   metadata.name = "{ns}"
-}}.
+}}
 
 resource k8s.config_map settings {{
   metadata.generateName = "settings-"
-  metadata.namespace = ref(k8s.namespace, test, .metadata.name)
+  metadata.namespace = test.metadata.name
   data = {{ "MODE": "test" }}
-}}.
+}}
 
 resource k8s.deployment web {{
   metadata.name = "web"
-  metadata.namespace = ref(k8s.namespace, test, .metadata.name)
+  metadata.namespace = test.metadata.name
   spec.replicas = 1
   spec.selector.matchLabels = {{ app: "web" }}
   spec.template.metadata.labels = {{ app: "web" }}
   spec.template.spec.containers = [{{
     name: "web",
     image: "{image}",
-    envFrom: [{{ configMapRef: {{ name: ref(k8s.config_map, settings, .metadata.name) }} }}]
+    envFrom: [{{ configMapRef: {{ name: k8s.config_map.settings.metadata.name }} }}]
   }}]
-}}.
+}}
 "#
     )
 }

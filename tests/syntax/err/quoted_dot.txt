@@ -1,1 +1,1 @@
-tests/syntax/err/quoted_dot.df:3:23: the key "a.b" holds `.`, `[` or `]`, which today's dotted paths cannot carry
+tests/syntax/err/quoted_dot.df:3:25: the key "a.b" holds `.`, `[` or `]`, which today's dotted paths cannot carry

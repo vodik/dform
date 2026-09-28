@@ -1,0 +1,3 @@
+tests/syntax/err/positions.df:7:3: a `for` or `if` clause goes at the top of the block, before any field
+tests/syntax/err/positions.df:9:9: `let` names a reference (`let cfg = settings[env]`); a value is a value rule: `name = term`
+tests/syntax/err/positions.df:10:1: a value rule is `name = term`; `+=` adds to a field

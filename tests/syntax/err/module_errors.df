@@ -1,29 +1,29 @@
-edition 2026.
+edition 2026
 
 # E DR-3: the module interface is checked, predicates are private, and a
 # policy pack writes only inside its grants.
 module network {
-  input vpc_net: inet.
-  input zones: list(string) = ["a"].
-  output vpc: addr.
-  export subnet_of/2.
-  contributes arg to _ at .tags.
+  input vpc_net: inet
+  input zones: list(string) = ["a"]
+  output vpc: addr
+  export subnet_of/2
+  contributes _.tags
 
-  zone_index("a", 0).
-  output vpc = vpc.
-  output peers = [].
-}.
+  zone_index("a", 0)
+  output vpc = "vpc"
+  output peers = []
+}
 
-instance network main { vpc_cidr = "10.0.0.0/16" }.
-instance network peer {}.
+instance network main { vpc_cidr = "10.0.0.0/16" }
+instance network peer {}
 
-reads_private(Z) :- zone_index(Z, _).
+reads_private(z) if zone_index(z, _)
 
 policy tags {
-  contributes arg to _ at .tags.
-  arg(T, A, .tags, { team: "x" }) :- want(T, A).
-  arg(T, A, .labels, { team: "x" }) :- want(T, A).
-  arg(net.vpc, A, .cidr, "10.0.0.0/8") :- want(net.vpc, A).
-}.
+  contributes _.tags
+  r.tags = { team: "x" } if r in resource
+  r.labels = { team: "x" } if r in resource
+  v.cidr = "10.0.0.0/8" if v in net.vpc
+}
 
-apply tags.
+apply tags

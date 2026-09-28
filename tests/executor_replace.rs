@@ -14,11 +14,11 @@ fn json(s: &Scratch, f: &str) -> serde_json::Value {
     serde_json::from_str(&s.read(f)).unwrap()
 }
 
-const NET: &str = r#"edition 2026.
+const NET: &str = r#"edition 2026
 
-resource net.vpc main { cidr = "10.0.0.0/16" }.
-resource net.subnet a { vpc_id = ref(net.vpc, main, id), tier = "web" }.
-resource net.subnet b { vpc_id = ref(net.vpc, main, id), tier = "db" }.
+resource net.vpc main { cidr = "10.0.0.0/16" }
+resource net.subnet a { vpc_id = ref(net.vpc, "main", "id"), tier = "web" }
+resource net.subnet b { vpc_id = ref(net.vpc, "main", "id"), tier = "db" }
 "#;
 
 /// What the world's subnets point at, and the vpc's id.
@@ -89,7 +89,7 @@ fn create_before_destroy_moves_dependents_before_the_deposed_delete() {
     s.write(
         "p.df",
         &format!(
-            "{}lifecycle(net.vpc, main, create_before_destroy).\n",
+            "{}lifecycle(net.vpc, \"main\", \"create_before_destroy\")\n",
             NET.replace("10.0.0.0/16", "10.1.0.0/16")
         ),
     );
@@ -120,15 +120,15 @@ fn create_before_destroy_moves_dependents_before_the_deposed_delete() {
 #[test]
 fn a_deposed_object_is_held_while_a_dependent_is() {
     let s = Scratch::new("replace-deposed-held");
-    let net = r#"edition 2026.
+    let net = r#"edition 2026
 
-resource net.vpc main { cidr = "10.0.0.0/16" }.
-resource net.subnet a { vpc_id = ref(net.vpc, main, id), note = "x" }.
+resource net.vpc main { cidr = "10.0.0.0/16" }
+resource net.subnet a { vpc_id = ref(net.vpc, "main", "id"), note = "x" }
 "#;
     s.write("p.df", net);
     dform(&s, &["apply"]).success();
     let cbd = format!(
-        "{}lifecycle(net.vpc, main, create_before_destroy).\n",
+        "{}lifecycle(net.vpc, \"main\", \"create_before_destroy\")\n",
         net.replace("10.0.0.0/16", "10.1.0.0/16")
     );
     s.write("p.df", &cbd);
@@ -142,8 +142,8 @@ resource net.subnet a { vpc_id = ref(net.vpc, main, id), note = "x" }.
     s.write(
         "p.df",
         &format!(
-            "{}resource db.postgres d {{ size = 1 }}.\n",
-            cbd.replace("note = \"x\"", "note = ref(db.postgres, d, endpoint)")
+            "{}resource db.postgres d {{ size = 1 }}\n",
+            cbd.replace("note = \"x\"", "note = d.endpoint")
         ),
     );
     let r = dform(&s, &["plan"]).success();

@@ -11,9 +11,6 @@ pub enum SyntaxKind {
     COMMENT,
     // Names and literals.
     IDENT,
-    VAR,
-    QNAME,
-    FIELD,
     PATH,
     STRING,
     INT,
@@ -28,6 +25,7 @@ pub enum SyntaxKind {
     COMMA,
     DOT,
     COLON,
+    /// `:-`: lexed only so an old rule is told it is spelled `if`.
     NECK,
     EQ,
     EQ2,
@@ -43,7 +41,7 @@ pub enum SyntaxKind {
     SLASH,
     PERCENT,
     PIPE,
-    // Keywords (E §6), in the order of the list there.
+    // Keywords.
     EDITION_KW,
     PROVIDER_KW,
     STACK_KW,
@@ -66,26 +64,11 @@ pub enum SyntaxKind {
     NOT_KW,
     IN_KW,
     EXISTS_KW,
-    COLLECT_SET_KW,
-    COLLECT_LIST_KW,
-    COLLECT_ORDERED_KW,
-    COUNT_KW,
-    SUM_KW,
-    MIN_KW,
-    MAX_KW,
-    LUB_RANKED_KW,
-    ALLOCATE_KW,
     TRUE_KW,
     FALSE_KW,
     NULL_KW,
-    SECRET_KW,
     PERSIST_KW,
     WHERE_KW,
-    MOVED_KW,
-    ADOPT_KW,
-    LIFECYCLE_KW,
-    IGNORE_CHANGES_KW,
-    // Keywords of the proposal G surface.
     IF_KW,
     FOR_KW,
     LET_KW,
@@ -128,11 +111,11 @@ pub enum SyntaxKind {
     WHEN,
     RESOURCE,
     SETTINGS,
-    /// `{ assign* }` of a resource, settings or instance.
+    /// `{ clause* assign* }` of a resource, settings or instance.
     BLOCK,
     ASSIGN,
     BLOCK_PATH,
-    /// `{ (stmt ".")* }` of a module, policy, scenario or when.
+    /// `{ stmt* }` of a module, policy, scenario, `when` or `for`.
     STMT_BLOCK,
     RULE,
     FACT,
@@ -140,7 +123,6 @@ pub enum SyntaxKind {
     WHERE_CLAUSE,
     LIT_ATOM,
     LIT_NOT,
-    LIT_NOT_EXISTS,
     LIT_CMP,
     LIT_IN,
     LIT_NOT_IN,
@@ -150,13 +132,7 @@ pub enum SyntaxKind {
     ARG_LIST,
     // Terms.
     LITERAL,
-    NAME_REF,
-    VAR_REF,
     PATH_LIT,
-    FIELD_ACCESS,
-    ADDR,
-    /// `ident.Var`: a qualified name with a variable segment.
-    QNAME_VAR,
     CALL,
     LIST,
     OBJECT,
@@ -206,22 +182,12 @@ impl SyntaxKind {
         (EDITION_KW as u16..=CONSTRAINT_KW as u16).contains(&(self as u16))
     }
 
-    /// A token that can stand where a plain name is expected: a key in a
-    /// block path, an object or a record, or a symbol in term position.
-    /// Keywords are token kinds, but outside their statement they are names.
-    pub fn is_name(self) -> bool {
-        self == IDENT || (self.is_keyword() && !matches!(self, TRUE_KW | FALSE_KW | NULL_KW))
-    }
-
     /// How a token kind is named in "expected ..." diagnostics.
     pub fn describe(self) -> &'static str {
         match self {
             WHITESPACE => "whitespace",
             COMMENT => "a comment",
-            IDENT => "an identifier",
-            VAR => "a variable",
-            QNAME => "a qualified name",
-            FIELD => "a field access",
+            IDENT => "a name",
             PATH => "a keypath",
             STRING => "a string",
             INT => "an integer",

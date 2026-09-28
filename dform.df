@@ -5,37 +5,38 @@
 #   cargo run -- plan --set env=prod
 #   cargo run -- apply
 
-edition 2026.
+edition 2026
 
 # The provider the mock plays, and the stack this program owns: its state is
 # .dform/dform/ (the default backend, local(".dform/dform")). Strict: a plan
 # that needs a phase boundary is refused; fresh nulls (ids) still flow.
-provider fake { source = "providers/fake" }.
-stack dform { unknowns = strict }.
+provider fake { source = "providers/fake" }
+stack dform { unknowns = "strict" }
 
 # Typed stack input with a default. The default is a @default contribution
 # to input env; --set env=prod is a normal contribution and wins.
-input env: enum(dev, staging, prod) = staging.
+input env: enum("dev", "staging", "prod") = "staging"
 
-data(zone, "us-test-1a").
-data(zone, "us-test-1b").
+data("zone", "us-test-1a")
+data("zone", "us-test-1b")
 
 # Guard blocks (when) apply a condition to everything inside.
-when env(prod) {
-  iam_need(app, audit.write, "audit-log").
-}.
+when env == "prod" {
+  iam_need("app", "audit.write", "audit-log")
+}
 
 # Settings (branch as data). One @default layer for every environment that
 # has one; a per-environment block wins per leaf at the normal rank.
-env_name(staging).
-env_name(prod).
+env_name("staging")
+env_name("prod")
 
-settings E @default {
+settings e @default {
+  for env_name(e)
   network.main.vpc_net = inet("10.50.0.0/16")
   network.peer.vpc_net = inet("10.60.0.0/16")
   db = { backup_days: 3, multi_az: false }
   k8s = { private_api: false, nodepool: { min: 1, max: 3 } }
-} :- env_name(E).
+}
 
 settings prod {
   network.main.vpc_net = inet("10.20.0.0/16")
@@ -43,111 +44,95 @@ settings prod {
   db = { backup_days: 14, multi_az: true }
   k8s = { private_api: true, nodepool: { min: 3, max: 10 } }
   audit.sinks += ["cloudwatch"] # a set: unions with the baseline pack's ["s3"]
-}.
+}
 
 settings dev {
   network.main.vpc_net = inet("10.90.0.0/16")
-}.
+}
 
-import "modules/network.df".
-import "modules/database.df".
-import "modules/kubernetes.df".
-import "modules/iam.df".
-import "policies/baseline.df".
-import "modules/stdlib_net.df".
+# The settings of the selected environment, by name: every use reads env
+# and one leaf.
+let cfg = settings[env]
 
-apply baseline.
-apply stdlib_net.
+import "modules/network.df"
+import "modules/database.df"
+import "modules/kubernetes.df"
+import "modules/iam.df"
+import "policies/baseline.df"
+import "modules/stdlib_net.df"
+
+apply baseline
+apply stdlib_net
 
 # Instantiate modules (Terraform module-like). Inputs are declared by the
-# module; each `k = V` here is a contribution to one, under the body.
+# module; each `k = v` here is a contribution to one.
 instance network main {
-  vpc_net = VpcNet
-} :-
-  env(Env),
-  setting(Env, .network.main.vpc_net, VpcNet).
+  vpc_net = cfg.network.main.vpc_net
+}
 
 instance network peer {
-  vpc_net = VpcNet
-} :-
-  env(Env),
-  setting(Env, .network.peer.vpc_net, VpcNet).
+  vpc_net = cfg.network.peer.vpc_net
+}
 
 # Cross-instance values are wired through outputs.
 instance database main {
-  backup_days = Days
-  multi_az = MA
-  subnet_ids = Ids
-} :-
-  env(Env),
-  setting(Env, .db.backup_days, Days),
-  setting(Env, .db.multi_az, MA),
-  output(network.main, private_subnet_ids, Ids).
+  backup_days = cfg.db.backup_days
+  multi_az = cfg.db.multi_az
+  subnet_ids = network.main.private_subnet_ids
+}
 
 instance kubernetes main {
-  private_api = PrivateApi
-  nodepool_min = Min
-  nodepool_max = Max
-  subnet_ids = Ids
-} :-
-  env(Env),
-  setting(Env, .k8s.private_api, PrivateApi),
-  setting(Env, .k8s.nodepool.min, Min),
-  setting(Env, .k8s.nodepool.max, Max),
-  output(network.main, private_subnet_ids, Ids).
+  private_api = cfg.k8s.private_api
+  nodepool_min = cfg.k8s.nodepool.min
+  nodepool_max = cfg.k8s.nodepool.max
+  subnet_ids = network.main.private_subnet_ids
+}
 
-instance iam main {}.
+instance iam main {}
 
 # VPC peering intent: define edges between network instances.
-vpc_peer_inst(main, peer).
+vpc_peer_inst("main", "peer")
 
 # Each network instance outputs its vpc's address.
-vpc_peer(A, B) :-
-  vpc_peer_inst(InstA, InstB),
-  output(network.InstA, vpc, A),
-  output(network.InstB, vpc, B).
+vpc_peer(a, b) if vpc_peer_inst(ia, ib), a = network[ia].vpc, b = network[ib].vpc
 
 # Create a peering resource per declared peering edge.
-resource net.vpc_peering Peer {
-  requester_vpc_id = ref(net.vpc, A, .id)
-  accepter_vpc_id = ref(net.vpc, B, .id)
-} :-
-  vpc_peer_inst(InstA, InstB),
-  vpc_peer(A, B),
-  want(net.vpc, A), # both ends must exist in this environment
-  want(net.vpc, B),
-  Peer = format("peer-%s-%s", InstA, InstB).
+resource net.vpc_peering "peer-{ia}-{ib}" {
+  for vpc_peer_inst(ia, ib), vpc_peer(a, b)
+  if a in net.vpc, b in net.vpc # both ends must exist in this environment
+  requester_vpc_id = a.id
+  accepter_vpc_id = b.id
+}
 
 # Demo: allocate an IP from the main VPC.
 resource compute.vm bastion {
-  private_ip = inet_host(VpcNet, 20)
-} :-
-  env(Env),
-  setting(Env, .network.main.vpc_net, VpcNet).
+  private_ip = inet_host(cfg.network.main.vpc_net, 20)
+}
 
 # Constraints (policy)
-constraint("prod db must be multi_az") :-
-  env(prod),
-  want(db.postgres, database.main/db),
-  not attr(db.postgres, database.main/db, .multi_az, true).
+constraint "prod db must be multi_az" if {
+  env == "prod"
+  exists database.main/db
+  not database.main/db.multi_az
+}
 
-constraint("prod k8s must have private api") :-
-  env(prod),
-  want(k8s.cluster, kubernetes.main/cluster),
-  not attr(k8s.cluster, kubernetes.main/cluster, .private_api, true).
+constraint "prod k8s must have private api" if {
+  env == "prod"
+  exists kubernetes.main/cluster
+  not kubernetes.main/cluster.private_api
+}
 
 # Scenarios: policy over hypothetical inputs. `dform test` runs every one
 # against an empty mock world; `dform plan --scenario prod` plans the stack
 # as if env were prod.
 scenario prod {
-  input("env", prod).
-  deny("prod peers the two vpcs") :- not want(net.vpc_peering, "peer-main-peer").
-  deny("prod keeps 14 days of db backups") :-
-    not attr(db.postgres, database.main/db, .backup_days, 14).
-}.
+  with env = "prod"
+  deny "prod peers the two vpcs" if not "peer-main-peer" in net.vpc_peering
+  deny "prod keeps 14 days of db backups" if not database.main/db.backup_days == 14
+}
 
 scenario dev {
-  input("env", dev).
-  deny("dev has no database") :- want(db.postgres, _).
-  deny("dev has no peer network") :- want(net.vpc, network.peer/vpc).
-}.
+  with env = "dev"
+  deny "dev has no database" if _ in db.postgres
+  deny "dev has no peer network" if exists network.peer/vpc
+}

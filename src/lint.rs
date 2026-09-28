@@ -122,7 +122,7 @@ mod tests {
     #[test]
     fn warns_about_unread_cli_input() {
         let src = r#"
-            env(staging).
+            env("staging")
         "#;
         let program = crate::parser::parse_program(src).expect("parse");
         let warnings = lint(&program, &["region".to_string()]);

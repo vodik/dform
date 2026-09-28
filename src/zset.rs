@@ -206,14 +206,14 @@ fn provider_assertions(
 /// resuming an interrupted apply, its remaining ones come back as
 /// `remaining`.
 pub const POLICY_RULES: &str = r#"
-deny(M) :- lifecycle(T, A, prevent_destroy), deformation(delete, T, A, _),
-  M = format("lifecycle prevent_destroy: the plan would delete %s.%s", T, A).
-deny(M) :- lifecycle(T, A, prevent_destroy), deformation(replace, T, A, _),
-  M = format("lifecycle prevent_destroy: the plan would replace %s.%s", T, A).
-deny(M) :- deformation(pending, T, A, Before), world_digest(T, A, Now), Before != Now,
-  M = format("the world changed under a pending deformation: %s.%s", T, A).
-deny(M) :- deformation(remaining, T, A, Before), world_digest(T, A, Now), Before != Now,
-  M = format("the world changed under a remaining action: %s.%s", T, A).
+deny(m) if lifecycle(t, a, "prevent_destroy"), deformation("delete", t, a, _),
+  m = format("lifecycle prevent_destroy: the plan would delete %s.%s", t, a)
+deny(m) if lifecycle(t, a, "prevent_destroy"), deformation("replace", t, a, _),
+  m = format("lifecycle prevent_destroy: the plan would replace %s.%s", t, a)
+deny(m) if deformation("pending", t, a, before), world_digest(t, a, now), before != now,
+  m = format("the world changed under a pending deformation: %s.%s", t, a)
+deny(m) if deformation("remaining", t, a, before), world_digest(t, a, now), before != now,
+  m = format("the world changed under a remaining action: %s.%s", t, a)
 "#;
 
 /// The predicates a policy pass gives the program (`deformation_facts`).

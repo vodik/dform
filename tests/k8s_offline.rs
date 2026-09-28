@@ -35,8 +35,8 @@ fn dform(s: &Scratch, kubeconfig: Option<&str>, args: &[&str]) -> Run {
 fn real_demo(s: &Scratch) {
     let src = std::fs::read_to_string(repo().join("examples/k8s_demo.df")).unwrap();
     let real = src.replace(
-        "provider k8s {}.",
-        "provider k8s { source = \"./providers/k8s\" }.",
+        "provider k8s {}",
+        "provider k8s { source = \"./providers/k8s\" }",
     );
     assert_ne!(
         src, real,
@@ -95,10 +95,7 @@ fn the_demo_plans_the_same_against_the_real_provider_offline() {
     // The long names are the same types.
     real.write(
         "long.df",
-        "edition 2026.\nprovider k8s { source = \"./providers/k8s\" }.\n\
-         resource k8s.apps.v1.deployment api {\n  metadata.name = \"api\"\n  \
-         spec.selector.matchLabels = {app: \"api\"}\n  \
-         spec.template.spec.containers = [{name: \"api\", image: \"api:1\"}]\n}.\n",
+        "edition 2026\nprovider k8s { source = \"./providers/k8s\" }\nresource k8s.apps.v1.deployment api {\n  metadata.name = \"api\"\n  spec.selector.matchLabels = {app: \"api\"}\n  spec.template.spec.containers = [{name: \"api\", image: \"api:1\"}]\n}\n",
     );
     let r = dform(&real, None, &["--file", "long.df", "plan"]).success();
     assert!(
@@ -146,7 +143,7 @@ fn a_run_injects_the_schema_of_the_types_it_names() {
     let src = s.read("k8s_demo.df");
     s.write(
         "reads.df",
-        &format!("{src}\ncompletes(T) :- type_attr(T, \"spec.completions\", _, _).\n"),
+        &format!("{src}\ncompletes(t) if type_attr(t, \"spec.completions\", _, _)\n"),
     );
     let r = dform(&s, None, &["--file", "reads.df", "query", "completes"]).success();
     assert!(r.stdout.contains("k8s.batch.v1.job"), "{}", r.stdout);
@@ -160,9 +157,7 @@ fn offline_plan_validates_and_hides_secrets() {
     real_demo(&s);
     s.write(
         "p.df",
-        "edition 2026.\nprovider k8s { source = \"./providers/k8s\" }.\n\
-         resource k8s.secret token {\n  metadata.name = \"token\"\n  \
-         stringData = {password: \"hunter2\"}\n}.\n",
+        "edition 2026\nprovider k8s { source = \"./providers/k8s\" }\nresource k8s.secret token {\n  metadata.name = \"token\"\n  stringData = {password: \"hunter2\"}\n}\n",
     );
     let r = dform(&s, None, &["--file", "p.df", "plan"]).success();
     assert!(!r.stdout.contains("hunter2"), "{}", r.stdout);
@@ -174,9 +169,7 @@ fn offline_plan_validates_and_hides_secrets() {
 
     s.write(
         "p.df",
-        "edition 2026.\nprovider k8s { source = \"./providers/k8s\" }.\n\
-         resource k8s.deployment api {\n  metadata.name = \"api\"\n  \
-         spec.template.spec.containers = [{name: \"api\", image: \"api:1\"}]\n}.\n",
+        "edition 2026\nprovider k8s { source = \"./providers/k8s\" }\nresource k8s.deployment api {\n  metadata.name = \"api\"\n  spec.template.spec.containers = [{name: \"api\", image: \"api:1\"}]\n}\n",
     );
     let r = dform(&s, None, &["--file", "p.df", "plan"]).failure();
     assert!(
@@ -708,8 +701,8 @@ fn a_ref_to_a_server_defaulted_field_resolves_from_the_cluster() {
         "k8s_demo.df",
         &format!(
             "{}\nresource k8s.config_map endpoints {{\n  metadata.name = \"endpoints\"\n  \
-             metadata.namespace = ref(k8s.namespace, shop, .metadata.name)\n  \
-             data = {{ \"WEB\": ref(k8s.service, web, .spec.clusterIP) }}\n}}.\n",
+             metadata.namespace = shop.metadata.name\n  \
+             data = {{ \"WEB\": k8s.service[\"web\"].spec.clusterIP }}\n}}\n",
             s.read("k8s_demo.df")
         ),
     );
@@ -890,7 +883,7 @@ fn a_type_built_at_runtime_gets_the_whole_schema() {
     s.write(
         "k8s_demo.df",
         &format!(
-            "{}\nwant(T, batch) :- K = \"job\", T = format(\"k8s.batch.v1.%s\", K).\n",
+            "{}\nwant(t, \"batch\") if k = \"job\", t = \"k8s.batch.v1.{{k}}\"\n",
             s.read("k8s_demo.df")
         ),
     );
@@ -906,7 +899,7 @@ fn a_type_built_at_runtime_gets_the_whole_schema() {
             "--file",
             "k8s_demo.df",
             "query",
-            "attr(k8s.batch.v1.job, batch, metadata, V)",
+            "attr(k8s.batch.v1.job, \"batch\", .metadata, V)",
         ],
     )
     .success();

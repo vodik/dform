@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 #[derive(Debug, Clone)]
 pub struct Lowered {
     pub program: Program,
-    /// `decl p/N.` declarations.
+    /// `decl p/N` declarations.
     pub externs: BTreeSet<Extern>,
     /// The stack's and every module instance's typed inputs.
     pub inputs: Vec<crate::inputs::Declared>,
@@ -29,10 +29,10 @@ pub struct Lowered {
 /// its head pattern and the nulls as provenance. `allow_stuck(HeadPattern).`
 /// facts relax it per key.
 pub const STRICT_RULES: &str = r#"
-deny("strict: unresolved value at plan time", { rule: R, head: H, nulls: Ns }) :-
-  stuck(R, H, _, Ns), not allow_stuck(H).
-deny("strict: a pending group at plan time", { rule: R, head: H, nulls: Ns }) :-
-  may_derive(R, H, Ns), not allow_stuck(H).
+deny "strict: unresolved value at plan time" { rule: r, head: h, nulls: ns } if
+  stuck(r, h, _, ns), not allow_stuck(h)
+deny "strict: a pending group at plan time" { rule: r, head: h, nulls: ns } if
+  may_derive(r, h, ns), not allow_stuck(h)
 "#;
 
 /// `secret_cell(Type, Scope, Key)`: an input or output declared
@@ -313,7 +313,7 @@ fn lower_contributions(program: &Program) -> Result<Program> {
 }
 
 /// E §2.6: a predicate is extensional (ground facts) or intensional
-/// (rules), not both, unless declared `decl p/N mixed.`. Checked after
+/// (rules), not both, unless declared `decl p/N mixed`. Checked after
 /// modules and `when` are expanded (a guarded fact is a rule), over the
 /// program's own predicates: the compiler's (`want`, `arg`, ...) are
 /// written both ways by design.
@@ -352,7 +352,7 @@ fn check_mixed(program: &Program) -> Result<()> {
                 )
                 .with_label(*fact, format!("a ground fact of {p}/{n}"))
                 .with_help(format!(
-                    "derive the facts with rules too, or declare it: `decl {p}/{n} mixed.`"
+                    "derive the facts with rules too, or declare it: `decl {p}/{n} mixed`"
                 )),
             )
         })
@@ -605,7 +605,7 @@ fn rewrite_atom_records(
     Ok(atom)
 }
 
-/// `settings E [@rank] { k = v, ... } [:- body].` is one contribution per
+/// `settings E [@rank] { [for body] k = v ... }` is one contribution per
 /// leaf to the `settings` pseudo-type: `arg(settings, E, k, v, Rank)`. An
 /// object value is flattened into dotted leaves, each a declared key.
 fn desugar_settings(program: &Program) -> Result<Program> {
@@ -1180,7 +1180,7 @@ fn desugar_resources(program: &Program) -> Result<Program> {
     Ok(Program { statements: out })
 }
 
-/// `resource T N [@rank] { k = v [@rank], ... } [:- body].` is `want(T, N)`
+/// `resource T N [@rank] { [for body] k = v [@rank] ... }` is `want(T, N)`
 /// plus one contribution `arg(T, N, k, v, Rank)` per field, each with the
 /// whole body. `+=` is a plain contribution: the lattice decides the merge.
 fn resource_to_stmts(r: Resource) -> Result<Vec<Stmt>> {
