@@ -88,7 +88,7 @@ fn main() -> Result<()> {
     let files = default_files(&cli.files)?;
     let program = loader::load_program(&files)?;
     if let Cmd::Strata = cli.cmd {
-        return print_strata(&files, &program);
+        return print_strata(&files, &program, &load_schema(&cli.providers)?);
     }
 
     let set_keys: Vec<String> = cli
@@ -274,9 +274,12 @@ fn main() -> Result<()> {
 }
 
 /// `dform strata`: the partition graph's strata, or the negative cycle.
-fn print_strata(files: &[PathBuf], program: &dform::ast::Program) -> Result<()> {
-    let schema = dform::schema::fake();
-    let graph = partition::build(program, &schema, &partition::Options::default())?;
+fn print_strata(
+    files: &[PathBuf],
+    program: &dform::ast::Program,
+    schema: &schema::Schema,
+) -> Result<()> {
+    let graph = partition::build(program, schema, &partition::Options::default())?;
     let verdict = partition::stratify(&graph);
     let name = files
         .iter()

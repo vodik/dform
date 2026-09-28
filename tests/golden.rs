@@ -239,10 +239,13 @@ fn golden() {
         let (ok, out, err) = run(&scratch, &plan_args);
         check(c.program, c.case, "plan", &transcript(ok, &out, &err));
 
-        // -- strata -- (no --provider/--world/--inventory: `dform strata`
-        // always evaluates against the fake schema, regardless of the
-        // provider chosen for plan/apply)
+        // -- strata -- (no --world/--inventory: strata reads neither; the
+        // provider's schema expands the prelude, as in plan)
         let mut strata_args: Vec<String> = vec!["--file".into(), file.into()];
+        for p in c.providers {
+            strata_args.push("--provider".into());
+            strata_args.push((*p).into());
+        }
         for s in c.sets {
             strata_args.push("--set".into());
             strata_args.push((*s).into());

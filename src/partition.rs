@@ -281,10 +281,12 @@ pub fn build_lowered(
             defs.insert(attr);
         }
     }
-    // Prelude: (arg, T, P) :- (want, T) per computed schema row; expanded per row.
+    // Prelude: (arg, T, P) :- (want, T) per minted schema row (computed and
+    // optional_computed, E §2.5); expanded per row, P normalized.
     let mut prelude: Vec<(Node, Node)> = Vec::new();
-    for t in schema.types() {
-        for (attr_name, _) in schema.computed_of(&t) {
+    for (t, attr_name, _, _) in transform::minted_paths(schema) {
+        let attr_name = normalize_path(&Some(t.clone()), &attr_name);
+        {
             let arg = Node {
                 pred: "arg".into(),
                 typ: Some(t.clone()),
