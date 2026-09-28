@@ -32,7 +32,8 @@
 //! world has it, state does not". The orphan is excused. What follows
 //! from it is not in `Mode::Strict`: the next apply creates it again (the
 //! mock refuses, "already exists"; a real cloud may make a second one).
-//! CI runs `Mode::Lenient`, which excuses it too.
+//! Main fails that (`resume_repeats_a_create_that_was_in_flight`,
+//! ignored), so CI runs `Mode::Lenient`, which excuses it too.
 //!
 //! A failure prints the seed and the schedule minimized (delta debugging
 //! over its steps, then over each step's knobs), and how to replay it:
@@ -1252,6 +1253,36 @@ fn persisting_once_per_tick_is_caught() {
     dform::executor::hooks::PERSIST_PER_TICK.store(false, Ordering::SeqCst);
     let (seed, f, min) = found.expect("the model catches state written once per tick");
     assert_eq!(f.invariant, "identity", "{}", report(seed, &f, min));
+}
+
+/// WORK.org "Model test: the executor under random chaos never orphans or
+/// overreaches", found on main: `stop-after` stops dform with a Create in
+/// flight that the direct backend's clock has already run (as a process
+/// provider may have). The in-flight record lists the address as remaining,
+/// but the resumed apply plans a Create again: the mock refuses ("already
+/// exists"); a real cloud may make a second object.
+#[test]
+#[ignore = "fails on main: resume repeats a Create that was in flight when dform stopped"]
+fn resume_repeats_a_create_that_was_in_flight() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let steps = parse_schedule("apply p=2 stop-after=1");
+    if let Err(f) = replay(210, &steps, Mode::Strict) {
+        panic!("{}", report(210, &f, steps));
+    }
+}
+
+/// The same invariant after chaos `timeout` on a Create: the next apply
+/// creates it again. tests/chaos.rs pins this as the current behaviour
+/// (`timeout_takes_effect_but_leaves_an_orphan`); the ticket's invariant
+/// says otherwise.
+#[test]
+#[ignore = "fails on main: a Create that timed out is created again"]
+fn a_create_that_timed_out_is_not_created_again() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let steps = parse_schedule("apply p=1 timeout=compute.vm/r2");
+    if let Err(f) = replay(307, &steps, Mode::Strict) {
+        panic!("{}", report(307, &f, steps));
+    }
 }
 
 #[test]
