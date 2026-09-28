@@ -18,7 +18,10 @@ pub struct Scratch {
 /// The only places a Scratch may live: the OS temp directory and the
 /// build's per-test directory. Never the roots themselves.
 fn under_test_root(dir: &Path) -> bool {
-    let roots = [std::env::temp_dir(), PathBuf::from(env!("CARGO_TARGET_TMPDIR"))];
+    let roots = [
+        std::env::temp_dir(),
+        PathBuf::from(env!("CARGO_TARGET_TMPDIR")),
+    ];
     roots
         .iter()
         .any(|r| dir != r.as_path() && dir.starts_with(r))
@@ -126,7 +129,10 @@ impl Drop for Scratch {
         if under_test_root(&self.dir) {
             let _ = std::fs::remove_dir_all(&self.dir);
         } else {
-            eprintln!("Scratch: not deleting {}: not under a test root", self.dir.display());
+            eprintln!(
+                "Scratch: not deleting {}: not under a test root",
+                self.dir.display()
+            );
         }
     }
 }
