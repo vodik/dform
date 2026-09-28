@@ -6,7 +6,7 @@
 //!
 //! A source is a `.df` file of facts (`edition 2026` first, then `p(...)`)
 //! of the relations declared from it: a file may feed several relations, and a fact of any other predicate is an
-//! error naming it. Paths are relative to the file the declaration is in.
+//! error naming it. Paths resolve from the project root (`project::base_of`).
 //! A `git` source is read at the ref (`git show REF:PATH`, so a bare
 //! repository works) and stamped by the commit the ref names.
 
@@ -109,8 +109,9 @@ fn nested(s: &Stmt, diags: &mut Vec<Diagnostic>) {
 }
 
 fn source(r: &InputRelation) -> Result<Source, Diagnostic> {
+    // From the project root (`project::base_of`).
     let base = diag::location(r.span)
-        .and_then(|(file, _, _)| Path::new(&file).parent().map(Path::to_path_buf))
+        .map(|(file, _, _)| crate::project::base_of(Path::new(&file)))
         .unwrap_or_default();
     let bad = || {
         Diagnostic::error(

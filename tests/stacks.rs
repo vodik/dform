@@ -17,7 +17,7 @@ resource db.postgres main { backup_days = 7 }
 
 #[test]
 fn a_second_program_does_not_plan_deletes_of_the_first() {
-    let s = Scratch::new("stacks");
+    let s = Scratch::project("stacks");
     s.write("net.df", NET);
     s.write("db.df", DB);
 

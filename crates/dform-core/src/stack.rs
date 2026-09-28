@@ -380,8 +380,8 @@ fn stack_config(c: &Config, out: &mut Stack, diags: &mut Vec<Diagnostic>) {
     }
 }
 
-/// `jwks("url")` or `jwks_file("path")` (relative to the file the stack
-/// statement is in), each with an optional issuer.
+/// `jwks("url")` or `jwks_file("path")` (from the project root of the
+/// file the stack statement is in), each with an optional issuer.
 fn trust_root(at: Span, t: &Term) -> Option<crate::approval::TrustRoot> {
     use crate::approval::{Jwks, TrustRoot};
     let Term::Func { name, args } = t else {
@@ -397,7 +397,7 @@ fn trust_root(at: Span, t: &Term) -> Option<crate::approval::TrustRoot> {
         "jwks" => Jwks::Url(src.to_string()),
         "jwks_file" => {
             let base = diag::location(at)
-                .and_then(|(file, _, _)| Path::new(&file).parent().map(Path::to_path_buf))
+                .map(|(file, _, _)| crate::project::base_of(Path::new(&file)))
                 .unwrap_or_default();
             Jwks::File(base.join(src))
         }
@@ -406,8 +406,8 @@ fn trust_root(at: Span, t: &Term) -> Option<crate::approval::TrustRoot> {
     Some(TrustRoot { jwks, issuer })
 }
 
-/// A provider: `source = "path"`, relative to the file the statement is
-/// in: an executable speaking the plugin protocol, a directory holding one
+/// A provider: `source = "path"`, from the project root of the file the
+/// statement is in: an executable speaking the plugin protocol, a directory holding one
 /// (`dform-provider*`), else a schema the mock plays (a directory holding
 /// `schema.df`, or a `.df` file); without `source`, its name
 /// (`plugin::source::resolve`).
@@ -417,12 +417,7 @@ fn provider(c: &Config, diags: &mut Vec<Diagnostic>) -> String {
         match (k.as_str(), string(v)) {
             ("source", Some(src)) => {
                 let base = diag::location(c.span)
-                    .map(|(file, _, _)| {
-                        Path::new(&file)
-                            .parent()
-                            .map(Path::to_path_buf)
-                            .unwrap_or_default()
-                    })
+                    .map(|(file, _, _)| crate::project::base_of(Path::new(&file)))
                     .unwrap_or_default();
                 let mut path = base.join(src);
                 if path.is_dir() {

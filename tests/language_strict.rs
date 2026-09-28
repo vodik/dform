@@ -6,7 +6,7 @@ mod common;
 use common::{Scratch, repo};
 
 fn gke(strict: bool) -> Scratch {
-    let s = Scratch::new("lang-strict-gke");
+    let s = Scratch::project("lang-strict-gke");
     let src = std::fs::read_to_string(repo().join("examples/gke/stacks/gke_two_phase.df")).unwrap();
     let stack = if strict {
         "stack gke { unknowns = \"strict\" }"
@@ -81,7 +81,7 @@ fn a_two_phase_plan_is_refused_saying_why() {
 /// apply) is not refused.
 #[test]
 fn fresh_nulls_still_flow() {
-    let s = Scratch::new("lang-strict-fresh");
+    let s = Scratch::project("lang-strict-fresh");
     s.write(
         "p.df",
         "edition 2026\nstack p { unknowns = \"strict\" }\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nresource net.subnet a { vpc_id = ref(net.vpc, \"main\", .id), cidr = \"10.0.1.0/24\" }\n",
@@ -101,7 +101,7 @@ fn fresh_nulls_still_flow() {
 /// `allow_stuck(HeadPattern).` relaxes each per key.
 #[test]
 fn a_pending_group_is_refused_and_allow_stuck_relaxes_per_key() {
-    let s = Scratch::new("lang-strict-allow");
+    let s = Scratch::project("lang-strict-allow");
     let program = "edition 2026\nstack p { unknowns = \"strict\" }\nresource db.postgres a {}\nup(d) if attr(db.postgres, d, .endpoint, e), e != \"\"\nresource net.subnet s {\n  for up(\"a\")\n  cidr = \"10.0.1.0/24\"\n}\n";
     s.write("p.df", program);
     let r = s.run(&["plan", "p.df"]).failure();

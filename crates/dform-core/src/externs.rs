@@ -17,8 +17,8 @@
 //! win over asking again (a generated password stays the same).
 //!
 //! The first real provider is `file`: `file.json(+path, -value)` and
-//! `file.text(+path, -value)`, paths relative to the program's directory
-//! (the program file's).
+//! `file.text(+path, -value)`, paths from the program's project root
+//! (`project::base_of`).
 //! Other externs are asked of the providers over the plugin protocol
 //! (Query; the mock answers from `providers/<name>/externs.df`).
 
@@ -486,7 +486,7 @@ pub fn row(f: &ExternFn, inputs: &[Value], outs: Vec<Value>) -> Vec<Value> {
 }
 
 /// The `file` fact provider: `file.json(+path, -value)`, `file.text(+path,
-/// -value)`, a relative path from `base` (the program's directory). `None`
+/// -value)`, a relative path from `base` (the program's project root, `project::base_of`). `None`
 /// for an extern it does not answer.
 pub fn file(
     f: &ExternFn,

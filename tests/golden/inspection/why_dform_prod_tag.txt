@@ -32,8 +32,8 @@ attr("net.vpc", "network.main::vpc", "tags", {component: "network", env: "prod",
   │                             │    with E = "prod"
   │                             │    └─ env_name("prod")   fact, examples/demo/stacks/dform.df:34:1 (env_name)
   │                             └─ arg("settings", "prod", "network.main.vpc_net", "10.20.0.0/16", "normal")   [rank normal, owner r100 (examples/demo/stacks/dform.df:15:58)]
-  │                                  by r100: arg("settings", Env, "network.main.vpc_net", Value, "normal") :- env(Env), Path1 = format("../config/dform/%s.yaml", Env), table.yaml.stack.config(Path1, At, "network.main.vpc_net", Value)
-  │                                  with At = "../config/dform/prod.yaml:5", Env = "prod", Path1 = "../config/dform/prod.yaml", Value = "10.20.0.0/16"
-  │                                  ├─ table.yaml.stack.config("../config/dform/prod.yaml", "../config/dform/prod.yaml:5", "network.main.vpc_net", "10.20.0.0/16")   fact, ../config/dform/prod.yaml:5
+  │                                  by r100: arg("settings", Env, "network.main.vpc_net", Value, "normal") :- env(Env), Path1 = format("config/dform/%s.yaml", Env), table.yaml.stack.config(Path1, At, "network.main.vpc_net", Value)
+  │                                  with At = "config/dform/prod.yaml:5", Env = "prod", Path1 = "config/dform/prod.yaml", Value = "10.20.0.0/16"
+  │                                  ├─ table.yaml.stack.config("config/dform/prod.yaml", "config/dform/prod.yaml:5", "network.main.vpc_net", "10.20.0.0/16")   fact, config/dform/prod.yaml:5
   │                                  └─ env("prod")   (see above)
   └─ ... 1 other contribution (--all)

@@ -39,7 +39,7 @@ pub enum Jwks {
     /// `jwks("https://...")`: fetched at apply time when the cache beside
     /// the state is older than [`JWKS_MAX_AGE_SECS`].
     Url(String),
-    /// `jwks_file("path")`, relative to the program's file: offline.
+    /// `jwks_file("path")`, from the project root: offline.
     File(PathBuf),
 }
 

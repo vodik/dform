@@ -1,6 +1,7 @@
 //! Projects (docs/layout.md). A project is a directory tree whose root holds
-//! `dform.toml`; without one, the git root, else the directory itself. Its
-//! state is `dform.state/` at the root.
+//! `dform.toml`, found up from the working directory; there is no other
+//! kind (`dform init` makes one). Its state is `dform.state/` at the root,
+//! and every path a program states resolves from the root.
 //!
 //! The manifest is per project and small: `[project]` (a name, and the
 //! dform versions it takes), `[providers]` (each provider's source and
@@ -16,9 +17,9 @@
 //! Discovery walks the project for `.df` files: every file with a `stack`
 //! statement is a stack, and stack names are unique per project. A
 //! directory holding its own `dform.toml` is another project and is not
-//! walked. In a project with a manifest the layout is linted: a module or
-//! policy file with a `stack` statement is an error, and a `.df` outside
-//! the layout's directories is a warning.
+//! walked. The layout is linted: a module or policy file with a `stack`
+//! statement is an error, and a `.df` outside the layout's directories is a
+//! warning.
 
 use crate::ast::{Atom, Term};
 use crate::value::Value;
@@ -34,43 +35,116 @@ pub const MANIFEST: &str = "dform.toml";
 /// state, audit logs, the plan key, the registry, and `cache/`.
 pub const STATE_DIR: &str = "dform.state";
 
-/// Where `.df` files belong in a project with a manifest.
+/// Where `.df` files belong in a project.
 pub const LAYOUT_DIRS: &[&str] = &["stacks", "modules", "policies", "scenarios", "providers"];
 
-/// A project: its root, and its manifest when it has one.
+/// A project: its root and its manifest.
 #[derive(Debug, Clone)]
 pub struct Project {
     pub root: PathBuf,
-    pub manifest: Option<Manifest>,
+    pub manifest: Manifest,
 }
 
 impl Project {
     /// The project `dir` is in: the nearest directory up holding a
-    /// `dform.toml`, else the git root, else `dir`. `version` is the
+    /// `dform.toml`; `None` outside every project. `version` is the
     /// running dform's, which the manifest may constrain.
-    pub fn find(dir: &Path, version: &str) -> Result<Project> {
+    pub fn find(dir: &Path, version: &str) -> Result<Option<Project>> {
         let dir = absolute(dir)?;
-        if let Some(root) = manifest_root(&dir) {
-            let manifest = Manifest::load(&root.join(MANIFEST), version)?;
-            return Ok(Project {
-                root,
-                manifest: Some(manifest),
-            });
+        let Some(root) = manifest_root(&dir) else {
+            return Ok(None);
+        };
+        let manifest = Manifest::load(&root.join(MANIFEST), version)?;
+        Ok(Some(Project { root, manifest }))
+    }
+
+    /// The project `dir` is in, or the error that says there is none.
+    pub fn require(dir: &Path, version: &str) -> Result<Project> {
+        match Project::find(dir, version)? {
+            Some(p) => Ok(p),
+            None => Err(not_in_a_project(dir)),
         }
-        let root = dir
-            .ancestors()
-            .find(|d| d.join(".git").exists())
-            .unwrap_or(&dir)
-            .to_path_buf();
-        Ok(Project {
-            root,
-            manifest: None,
-        })
     }
 
     /// The project root's state directory, `dform.state/`.
     pub fn state_root(&self) -> PathBuf {
         self.root.join(STATE_DIR)
+    }
+}
+
+/// The error of a command that needs a project, run outside one.
+pub fn not_in_a_project(dir: &Path) -> anyhow::Error {
+    let dir = absolute(dir).unwrap_or_else(|_| dir.to_path_buf());
+    anyhow!(
+        "not in a project: no {MANIFEST} above {}; run `dform init` to make one",
+        dir.display()
+    )
+}
+
+/// `dform init [NAME]`: a minimal `dform.toml` in `dir`, and `dform.state/`
+/// in the nearest `.gitignore` (a new one in `dir` when there is none).
+/// Returns what it did, a line each.
+pub fn init(dir: &Path, name: Option<&str>) -> Result<Vec<String>> {
+    let dir = absolute(dir)?;
+    let manifest = dir.join(MANIFEST);
+    if manifest.exists() {
+        bail!(
+            "{} exists: {} is a project already",
+            manifest.display(),
+            dir.display()
+        );
+    }
+    let name = match name {
+        Some(n) => n.to_string(),
+        None => dir
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "project".into()),
+    };
+    std::fs::write(
+        &manifest,
+        format!("# The project's root (docs/layout.md).\n\n[project]\nname = {name:?}\n"),
+    )
+    .with_context(|| format!("write {}", manifest.display()))?;
+    let mut out = vec![format!("wrote {}", manifest.display())];
+    let ignore = dir
+        .ancestors()
+        .map(|d| d.join(".gitignore"))
+        .find(|f| f.is_file())
+        .unwrap_or_else(|| dir.join(".gitignore"));
+    let text = std::fs::read_to_string(&ignore).unwrap_or_default();
+    let ours = format!("{STATE_DIR}/");
+    if !text
+        .lines()
+        .any(|l| l.trim() == ours || l.trim() == STATE_DIR)
+    {
+        let mut text = text;
+        if !text.is_empty() && !text.ends_with('\n') {
+            text.push('\n');
+        }
+        text.push_str(&ours);
+        text.push('\n');
+        std::fs::write(&ignore, text).with_context(|| format!("write {}", ignore.display()))?;
+        out.push(format!("added {ours} to {}", ignore.display()));
+    }
+    Ok(out)
+}
+
+/// The directory a program file's paths resolve from: its project's root
+/// (named relative to the working directory when under it), else, outside
+/// every project, the file's own directory.
+pub fn base_of(file: &Path) -> PathBuf {
+    match manifest_root(file) {
+        Some(root) => {
+            let cwd = std::env::current_dir()
+                .map(|c| std::fs::canonicalize(&c).unwrap_or(c))
+                .unwrap_or_default();
+            match root.strip_prefix(&cwd) {
+                Ok(rel) => rel.to_path_buf(),
+                Err(_) => root,
+            }
+        }
+        None => file.parent().map(Path::to_path_buf).unwrap_or_default(),
     }
 }
 
@@ -341,10 +415,7 @@ impl Discovered {
 /// directory when under it (as diagnostics name them).
 pub fn discover(project: &Project) -> Discovered {
     let mut files = Vec::new();
-    let exclude: &[String] = project
-        .manifest
-        .as_ref()
-        .map_or(&[], |m| m.discovery.exclude.as_slice());
+    let exclude = project.manifest.discovery.exclude.as_slice();
     walk(&project.root, &project.root, exclude, &mut files);
     files.sort();
     let mut out = Discovered::default();
@@ -365,26 +436,24 @@ pub fn discover(project: &Project) -> Discovered {
             .unwrap_or_default()
             .to_string();
         let top = rel.components().count() > 1;
-        if project.manifest.is_some() {
-            if header.is_some() && top && (first == "modules" || first == "policies") {
-                out.errors.push(format!(
-                    "{}: a {} file has a `stack` statement; a stack is its own file, \
-                     stacks/<name>.df (docs/layout.md)",
-                    display(&f),
-                    if first == "modules" {
-                        "module"
-                    } else {
-                        "policy"
-                    }
-                ));
-            }
-            if !top || !LAYOUT_DIRS.contains(&first.as_str()) {
-                out.warnings.push(format!(
-                    "{} is outside the project layout ({}/ under the root; docs/layout.md)",
-                    display(&f),
-                    LAYOUT_DIRS.join("/, ")
-                ));
-            }
+        if header.is_some() && top && (first == "modules" || first == "policies") {
+            out.errors.push(format!(
+                "{}: a {} file has a `stack` statement; a stack is its own file, \
+                 stacks/<name>.df (docs/layout.md)",
+                display(&f),
+                if first == "modules" {
+                    "module"
+                } else {
+                    "policy"
+                }
+            ));
+        }
+        if !top || !LAYOUT_DIRS.contains(&first.as_str()) {
+            out.warnings.push(format!(
+                "{} is outside the project layout ({}/ under the root; docs/layout.md)",
+                display(&f),
+                LAYOUT_DIRS.join("/, ")
+            ));
         }
         if let Some((name, keys)) = header {
             out.stacks.push(Found {
@@ -415,10 +484,7 @@ pub fn discover(project: &Project) -> Discovered {
 /// names them (`dform fmt` with no path).
 pub fn df_files(project: &Project) -> Vec<PathBuf> {
     let mut files = Vec::new();
-    let exclude: &[String] = project
-        .manifest
-        .as_ref()
-        .map_or(&[], |m| m.discovery.exclude.as_slice());
+    let exclude = project.manifest.discovery.exclude.as_slice();
     walk(&project.root, &project.root, exclude, &mut files);
     files.sort();
     files

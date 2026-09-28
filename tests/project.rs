@@ -207,23 +207,17 @@ fn a_program_imports_modules_never_a_stack() {
         "{}",
         r.stderr
     );
-    // Imports resolve from the project root, `../` from the file.
+    // Imports resolve from the project root, whatever file imports.
     s.write(
         "modules/tags.df",
         "edition 2026\nresource net.vpc extra { cidr = \"10.1.0.0/16\" }\n",
     );
-    for import in ["modules/tags.df", "../modules/tags.df"] {
-        s.write(
-            "stacks/both.df",
-            &format!("edition 2026\nstack both {{}}\nimport \"{import}\"\n"),
-        );
-        let r = s.run(&["plan", "both"]).success();
-        assert!(
-            r.stdout.contains("+ net.vpc.extra"),
-            "{import}: {}",
-            r.stdout
-        );
-    }
+    s.write(
+        "stacks/both.df",
+        "edition 2026\nstack both {}\nimport \"modules/tags.df\"\n",
+    );
+    let r = s.run(&["plan", "both"]).success();
+    assert!(r.stdout.contains("+ net.vpc.extra"), "{}", r.stdout);
 }
 
 #[test]
@@ -431,4 +425,111 @@ fn fmt_with_no_path_formats_the_project() {
     assert_eq!(r.stdout, "stacks/net.df\n");
     s.run(&["fmt"]).success();
     s.run(&["fmt", "--check"]).success();
+}
+
+/// Outside a project a program plans, with no state; nothing that reads or
+/// writes state runs, and nothing is written. A directory inside a git
+/// repository (here, under the build's directory) is no project either.
+#[test]
+fn outside_a_project_only_what_writes_no_state_runs() {
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("outside-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let s = Scratch { dir };
+    s.write("net.df", NET);
+    let r = s.run(&["plan", "net.df"]).success();
+    assert_eq!(r.summary(), "plan: 1 deformation (1 create)");
+    for args in [
+        &["apply", "net.df"][..],
+        &["plan", "net.df", "--out", "plan.json"],
+        &["controller", "run", "net.df", "--once"],
+        &["log", "net.df"],
+        &["state", "show", "net.df"],
+        &["stack", "list"],
+        &["stack", "handover", "net", "--to", "local(\"x\")"],
+    ] {
+        let r = s.run(args).failure();
+        assert!(
+            r.stderr.contains("not in a project: no dform.toml above")
+                && r.stderr.contains("run `dform init`"),
+            "{args:?}: {}",
+            r.stderr
+        );
+    }
+    let r = s.run(&["plan", "net"]).failure();
+    assert!(
+        r.stderr.contains("stack net: not in a project")
+            && r.stderr.contains("name a program file"),
+        "{}",
+        r.stderr
+    );
+    assert!(!s.path("dform.state").exists());
+    assert!(!s.path("plan.json").exists());
+    // A world fixture's run keeps its state beside the world file.
+    s.run(&["dev", "--world", "w.json", "apply", "net.df"])
+        .success();
+    assert!(s.path("w.state.json").exists());
+    assert!(!s.path("dform.state").exists());
+    assert!(!common::repo().join("dform.state").exists());
+}
+
+/// The repository's root has no dform.toml: no project.
+#[test]
+fn the_repository_root_is_not_a_project() {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_dform"))
+        .arg("plan")
+        .current_dir(common::repo())
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("not in a project"), "{err}");
+}
+
+#[test]
+fn init_makes_a_project() {
+    let s = Scratch::new("init");
+    s.write(".gitignore", "target/\n");
+    s.write("stacks/net.df", NET);
+    let r = s.run(&["init", "shop"]).success();
+    assert!(r.stdout.contains("wrote"), "{}", r.stdout);
+    assert!(s.read("dform.toml").contains("name = \"shop\""));
+    assert_eq!(s.read(".gitignore"), "target/\ndform.state/\n");
+    s.run(&["apply", "net"]).success();
+    assert!(s.path("dform.state/net/state.json").exists());
+    let r = s.run(&["init"]).failure();
+    assert!(r.stderr.contains("is a project already"), "{}", r.stderr);
+}
+
+/// Every path a program states resolves from the project root, whichever
+/// file states it.
+#[test]
+fn program_paths_resolve_from_the_root() {
+    let s = project("root-paths");
+    s.write("data/peers.csv", "name\na\nb\n");
+    s.write("data/note.txt", "hello");
+    s.write("data/tags.facts", "edition 2026\n\ntag(\"x\")\n");
+    s.write(
+        "providers/cloud/schema.df",
+        "type_provider(x.thing, \"fakecloud\")\n",
+    );
+    s.write(
+        "stacks/paths.df",
+        r#"edition 2026
+stack paths {}
+provider cloud { source = "providers/cloud" }
+extern file.text(+path, -value)
+input relation peer(name: string) from csv("data/peers.csv")
+input relation tag/1 from file("data/tags.facts")
+note(v) if v = file.text["data/note.txt"]
+resource x.thing "{n}" {
+  for peer{name: n}, tag(g), note(v)
+  label = "{n}-{g}-{v}"
+}
+"#,
+    );
+    let r = s.run(&["plan", "paths"]).success();
+    assert!(r.stdout.contains("label = \"a-x-hello\""), "{}", r.stdout);
+    assert!(r.stdout.contains("label = \"b-x-hello\""), "{}", r.stdout);
 }

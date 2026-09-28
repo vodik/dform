@@ -12,6 +12,16 @@ pub struct Scratch {
 }
 
 impl Scratch {
+    /// A scratch project: the directory, with a `dform.toml`, so that
+    /// runs in it keep state (in its `dform.state/`).
+    pub fn project(name: &str) -> Self {
+        let s = Scratch::new(name);
+        std::fs::write(s.dir.join("dform.toml"), "").unwrap();
+        s
+    }
+
+    /// A scratch directory outside every project: plan runs, apply only
+    /// with a world fixture (`dev --world`).
     pub fn new(name: &str) -> Self {
         static N: AtomicUsize = AtomicUsize::new(0);
         let n = N.fetch_add(1, Ordering::SeqCst);

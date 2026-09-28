@@ -97,10 +97,11 @@ fn string(v: &Value) -> Option<&str> {
     }
 }
 
-/// Paths are relative to the file the declaration is in.
+/// Paths resolve from the project root of the file the declaration is in
+/// (`project::base_of`).
 fn base(span: Span) -> PathBuf {
     crate::diag::location(span)
-        .and_then(|(file, _, _)| Path::new(&file).parent().map(Path::to_path_buf))
+        .map(|(file, _, _)| crate::project::base_of(Path::new(&file)))
         .unwrap_or_default()
 }
 

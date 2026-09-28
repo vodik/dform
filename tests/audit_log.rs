@@ -31,7 +31,7 @@ fn kinds(es: &[serde_json::Value]) -> Vec<String> {
 
 #[test]
 fn a_full_apply_is_a_verifiable_chain() {
-    let s = Scratch::new("audit-full");
+    let s = Scratch::project("audit-full");
     s.write("p.df", PROG);
     dform(&s, &["apply"]).success();
     let es = entries(&s);
@@ -98,7 +98,7 @@ fn a_full_apply_is_a_verifiable_chain() {
 
 #[test]
 fn a_failed_apply_and_its_resume_are_one_chain() {
-    let s = Scratch::new("audit-resume");
+    let s = Scratch::project("audit-resume");
     s.write("p.df", PROG);
     dform(&s, &["apply", "--chaos", "fail=compute.vm/app"]).failure();
     dform(&s, &["apply"]).success();
@@ -125,7 +125,7 @@ fn a_failed_apply_and_its_resume_are_one_chain() {
 
 #[test]
 fn an_edited_entry_is_named() {
-    let s = Scratch::new("audit-edit");
+    let s = Scratch::project("audit-edit");
     s.write("p.df", PROG);
     dform(&s, &["apply"]).success();
     let log = s.read("w.state.audit.jsonl");
@@ -163,7 +163,7 @@ fn an_edited_entry_is_named() {
 
 #[test]
 fn a_controller_event_is_in_the_chain() {
-    let s = Scratch::new("audit-controller");
+    let s = Scratch::project("audit-controller");
     s.write("p.df", PROG);
     s.run(&["controller", "run", "--once", "p.df"]).success();
     s.run(&["controller", "run", "--once", "p.df"]).success();
@@ -184,7 +184,7 @@ fn a_controller_event_is_in_the_chain() {
 
 #[test]
 fn secrets_never_appear() {
-    let s = Scratch::new("audit-secrets");
+    let s = Scratch::project("audit-secrets");
     s.write(
         "p.df",
         "edition 2026\n\nresource leaky.vault v {\n  password = \"VAULT-SECRET-DO-NOT-LOG\"\n}\n",
@@ -212,7 +212,7 @@ fn secrets_never_appear() {
 
 #[test]
 fn a_sink_gets_every_entry_and_its_failure_is_a_warning() {
-    let s = Scratch::new("audit-sink");
+    let s = Scratch::project("audit-sink");
     s.write("p.df", PROG);
     dform(&s, &["--audit-sink", "cat >> sink.jsonl", "apply"]).success();
     assert_eq!(s.read("sink.jsonl"), s.read("w.state.audit.jsonl"));
@@ -229,7 +229,7 @@ fn a_sink_gets_every_entry_and_its_failure_is_a_warning() {
 
 #[test]
 fn a_handover_is_logged_where_the_state_goes() {
-    let s = Scratch::new("audit-handover");
+    let s = Scratch::project("audit-handover");
     s.write("p.df", PROG);
     s.run(&["apply", "p.df"]).success();
     s.run(&["stack", "handover", "p", "--to", "local(\"moved\")"])
@@ -244,7 +244,7 @@ fn a_handover_is_logged_where_the_state_goes() {
 
 #[test]
 fn a_rekey_is_logged_where_the_state_goes() {
-    let s = Scratch::new("audit-rekey");
+    let s = Scratch::project("audit-rekey");
     s.write(
         "k.df",
         "edition 2026\n\nstack k[env] {\n  isolated = true\n}\n\ninput env: string = \"a\"\n\n\

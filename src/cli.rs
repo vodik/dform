@@ -156,6 +156,9 @@ enum Command {
         #[command(subcommand)]
         cmd: ProviderCommand,
     },
+    /// Make the working directory a project: a minimal dform.toml, and
+    /// dform.state/ in the nearest .gitignore.
+    Init { name: Option<String> },
     /// Print a shell completion script: `dform completions zsh > _dform`.
     /// It completes stack names, key values and deployments by asking
     /// dform.
@@ -431,6 +434,8 @@ struct Cli {
     world: Option<PathBuf>,
     /// The state root, `dform.state/` at the project root.
     root: PathBuf,
+    /// The working directory is in a project (`resolve`).
+    in_project: bool,
     /// The program's project manifest.
     manifest: Option<crate::project::Manifest>,
     inventory: Option<PathBuf>,
@@ -510,6 +515,9 @@ enum Cmd {
     },
     ProviderSchema {
         provider: String,
+    },
+    Init {
+        name: Option<String>,
     },
     Completions {
         shell: Shell,
@@ -613,6 +621,7 @@ fn resolve(args: Args) -> Result<Cli> {
             ProviderCommand::Check { path } => (Cmd::ProviderCheck { path }, None),
             ProviderCommand::Schema { provider } => (Cmd::ProviderSchema { provider }, None),
         },
+        Command::Init { name } => (Cmd::Init { name }, None),
         Command::Completions { shell } => (Cmd::Completions { shell }, None),
         Command::Complete { words } => (Cmd::Complete { words }, None),
     };
@@ -628,7 +637,12 @@ fn resolve(args: Args) -> Result<Cli> {
         show_noop: inputs.show_noop,
         providers: mock.providers,
         world: mock.world,
-        root: project.state_root(),
+        in_project: project.is_some(),
+        // Outside a project nothing writes the state root (`needs_project`).
+        root: project.as_ref().map_or_else(
+            || PathBuf::from(crate::project::STATE_DIR),
+            |p| p.state_root(),
+        ),
         manifest: None,
         inventory: mock.inventory,
         audit_sink: inputs.audit_sink,
@@ -651,7 +665,7 @@ fn resolve(args: Args) -> Result<Cli> {
     let Some(target) = target else {
         return Ok(cli);
     };
-    let (file, keys) = target_of(&project, &target)?;
+    let (file, keys) = target_of(project.as_ref(), &target)?;
     cli.set.extend(keys.iter().map(|(k, v)| format!("{k}={v}")));
     cli.keys = keys;
     cli.files = vec![file];
@@ -745,7 +759,7 @@ fn run_cmd(r: Run) -> (Cmd, Option<Target>) {
 /// and trailing `K=V`s are the key. No target: the one stack under the
 /// working directory, else the stacks there are listed.
 fn target_of(
-    project: &crate::project::Project,
+    project: Option<&crate::project::Project>,
     t: &Target,
 ) -> Result<(PathBuf, Vec<(String, String)>)> {
     let mut keys = Vec::new();
@@ -774,7 +788,16 @@ fn target_of(
     for kv in &t.keys {
         keys.push(pair(kv)?);
     }
-    let found = || {
+    // A name, or no target, is the project's discovery's.
+    let project_or = |what: &str| {
+        project.ok_or_else(|| {
+            anyhow::anyhow!(
+                "{what}: {}; outside a project, name a program file (`dform plan path/to/file.df`)",
+                crate::project::not_in_a_project(Path::new("."))
+            )
+        })
+    };
+    let found = |project: &crate::project::Project| {
         let d = crate::project::discover(project);
         for w in &d.warnings {
             eprintln!("warning: {w}");
@@ -783,13 +806,14 @@ fn target_of(
     };
     let file = match name {
         Some(n) if n.ends_with(".df") || Path::new(&n).is_file() => {
-            if project.manifest.is_some() {
-                found().check()?;
+            if let Some(p) = project {
+                found(p).check()?;
             }
             PathBuf::from(n)
         }
         Some(n) => {
-            let d = found();
+            let project = project_or(&format!("stack {n}"))?;
+            let d = found(project);
             d.check()?;
             match d.named(&n).as_slice() {
                 [one] => one.file.clone(),
@@ -801,7 +825,8 @@ fn target_of(
             }
         }
         None => {
-            let d = found();
+            let project = project_or("no target")?;
+            let d = found(project);
             d.check()?;
             let here: Vec<&crate::project::Found> = d
                 .stacks
@@ -877,6 +902,17 @@ fn run_with(
     mut hook: Option<&mut controller::Hook>,
     session: &mut Option<Session>,
 ) -> Result<()> {
+    // A plan file's run is checked once its inputs (its world) are read.
+    let planned = matches!(
+        cli.cmd,
+        Cmd::Apply {
+            plan_file: Some(_),
+            ..
+        }
+    );
+    if !cli.in_project && !planned && needs_project(&cli) {
+        return Err(crate::project::not_in_a_project(Path::new(".")));
+    }
     if let Cmd::Controller { .. } = cli.cmd {
         return run_controller(cli);
     }
@@ -892,6 +928,12 @@ fn run_with(
         }
         Cmd::Taint { stack, pred, args } => return taint(&cli, stack, pred, args),
         Cmd::StackList => return stack_list(&cli),
+        Cmd::Init { name } => {
+            for line in crate::project::init(Path::new("."), name.as_deref())? {
+                println!("{line}");
+            }
+            return Ok(());
+        }
         Cmd::Completions { shell } => {
             print!("{}", completion_script(*shell));
             return Ok(());
@@ -925,7 +967,7 @@ fn run_with(
         Cmd::Fmt { paths, check } => {
             let paths = if paths.is_empty() {
                 let project =
-                    crate::project::Project::find(Path::new("."), env!("CARGO_PKG_VERSION"))?;
+                    crate::project::Project::require(Path::new("."), env!("CARGO_PKG_VERSION"))?;
                 crate::project::df_files(&project)
             } else {
                 paths.clone()
@@ -942,6 +984,9 @@ fn run_with(
         Some(p) => Some((p.clone(), with_plan_inputs(&mut cli, &p)?)),
         None => None,
     };
+    if !cli.in_project && needs_project(&cli) {
+        return Err(crate::project::not_in_a_project(Path::new(".")));
+    }
 
     let files = cli.files.clone();
     if files.is_empty() {
@@ -984,7 +1029,7 @@ fn run_with(
         .name
         .clone()
         .unwrap_or_else(|| state::stack_name(&files[0]));
-    check_keys(&cli, &stack_cfg, &own, saved.is_some() || hook.is_some())?;
+    check_keys(&cli, &stack_cfg, &own, saved.is_some())?;
     // `stack rekey`: the run is of the old deployment (its state, its
     // world), the provenance of its names is listed, and its state moves.
     let rekey = match cli.cmd.clone() {
@@ -1196,7 +1241,7 @@ fn run_with(
     // Externs are asked on demand: a table's of its file, else of the file
     // provider, else of the mock.
     let (no_program, no_fns) = (crate::ast::Program { statements: vec![] }, vec![]);
-    let program_dir = files[0].parent().unwrap_or(Path::new("")).to_path_buf();
+    let program_dir = crate::project::base_of(&files[0]);
     let tables = crate::tables::Tables::default();
     let externs = crate::externs::Externs::new(
         lowered.as_ref().map_or(&no_program, |l| &l.program),
@@ -1688,6 +1733,7 @@ fn run_with(
         | Cmd::StateMv { .. }
         | Cmd::ProviderCheck { .. }
         | Cmd::ProviderSchema { .. }
+        | Cmd::Init { .. }
         | Cmd::Completions { .. }
         | Cmd::Complete { .. }
         | Cmd::Taint { .. } => {
@@ -2257,7 +2303,30 @@ fn run_controller(cli: Cli) -> Result<()> {
         .clone()
         .unwrap_or_else(|| state::stack_name(&files[0]));
     // One controller per deployment: of a keyed stack, the one the target
-    // names.
+    // names, every key value spelled out.
+    let missing: Vec<&str> = cfg
+        .keys
+        .iter()
+        .map(|(k, _)| k.as_str())
+        .filter(|k| !cli.keys.iter().any(|(x, _)| x == k))
+        .collect();
+    if !missing.is_empty() {
+        bail!(
+            "controller run names its deployment: stack {name} is keyed by {}, and the target \
+             gives no {}: `dform controller run {name} {}`",
+            cfg.keys
+                .iter()
+                .map(|(k, _)| k.as_str())
+                .collect::<Vec<_>>()
+                .join(", "),
+            missing.join(", "),
+            cfg.keys
+                .iter()
+                .map(|(k, _)| format!("{k}=..."))
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+    }
     let set = cli
         .set
         .iter()
@@ -2458,7 +2527,7 @@ fn run_tests(
         bail!("no scenarios: write `scenario NAME {{ with k = v; deny rules }}`");
     }
     let backend = Providers::start(launch(), providers, &plugin::Config::default())?;
-    let program_dir = files[0].parent().unwrap_or(Path::new("")).to_path_buf();
+    let program_dir = crate::project::base_of(&files[0]);
     let mut failed = 0;
     for name in &names {
         let run = || -> Result<Vec<String>> {
@@ -3044,6 +3113,26 @@ fn fmt_files(paths: &[PathBuf], check: bool) -> Result<()> {
     Ok(())
 }
 
+/// Outside a project only what writes no state runs: a plan (without a
+/// plan file), a query, a `dev` view, or a run whose state is a world
+/// fixture's (`dev --world`, beside the world file).
+fn needs_project(cli: &Cli) -> bool {
+    match &cli.cmd {
+        Cmd::Apply { .. } | Cmd::Controller { .. } | Cmd::Plan { out: Some(_), .. } => {
+            cli.world.is_none()
+        }
+        Cmd::Log { .. }
+        | Cmd::StackList
+        | Cmd::Rekey { .. }
+        | Cmd::Handover { .. }
+        | Cmd::Unlock
+        | Cmd::StateShow
+        | Cmd::StateMv { .. }
+        | Cmd::Taint { .. } => true,
+        _ => false,
+    }
+}
+
 /// The manifest's `unknowns` default, said in the program's stack
 /// statement when it does not say its own: strict mode is the program's
 /// (`transform::STRICT_RULES`).
@@ -3080,7 +3169,7 @@ fn with_manifest(cfg: &mut crate::stack::Stack, m: &crate::project::Manifest, fi
 
 /// A key input's value is the target's: `--set` of one is an error, as is
 /// a target key the stack does not have; an `apply` that is not of a plan
-/// file (`planned`) names every one.
+/// file (`planned`) names every one, as the controller's do.
 fn check_keys(cli: &Cli, cfg: &crate::stack::Stack, stack: &str, planned: bool) -> Result<()> {
     let keys: Vec<&str> = cfg.keys.iter().map(|(k, _)| k.as_str()).collect();
     for kv in &cli.user_set {
@@ -3129,7 +3218,7 @@ fn check_keys(cli: &Cli, cfg: &crate::stack::Stack, stack: &str, planned: bool) 
 /// `dform stack list`: every stack discovery finds, its key and file, and
 /// per deployment with state its last apply and a pending saved plan.
 fn stack_list(cli: &Cli) -> Result<()> {
-    let project = crate::project::Project::find(Path::new("."), env!("CARGO_PKG_VERSION"))?;
+    let project = crate::project::Project::require(Path::new("."), env!("CARGO_PKG_VERSION"))?;
     let d = crate::project::discover(&project);
     for w in &d.warnings {
         eprintln!("warning: {w}");
@@ -3152,9 +3241,7 @@ fn stack_list(cli: &Cli) -> Result<()> {
             .ok()
             .and_then(|p| crate::stack::config(&p).ok())
             .and_then(|mut c| {
-                if let Some(m) = &project.manifest {
-                    with_manifest(&mut c, m, &s.file);
-                }
+                with_manifest(&mut c, &project.manifest, &s.file);
                 c.backend
             });
         let base = match backend {
@@ -3327,6 +3414,7 @@ const COMMANDS: &[&str] = &[
     "provider",
     "controller",
     "completions",
+    "init",
     "dev",
 ];
 
@@ -3407,7 +3495,11 @@ fn complete(words: &[String]) -> Result<()> {
             subcommands(noun).iter().map(|s| s.to_string()).collect()
         }
         _ => {
-            let project = crate::project::Project::find(Path::new("."), env!("CARGO_PKG_VERSION"))?;
+            let Some(project) =
+                crate::project::Project::find(Path::new("."), env!("CARGO_PKG_VERSION"))?
+            else {
+                return Ok(());
+            };
             let d = crate::project::discover(&project);
             let mut out: Vec<String> = Vec::new();
             match words.last().and_then(|w| d.named(w).first().copied()) {

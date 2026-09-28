@@ -17,7 +17,7 @@ fn release(s: &Scratch, image: &str) {
 }
 
 fn setup(name: &str) -> Scratch {
-    let s = Scratch::new(name);
+    let s = Scratch::project(name);
     s.write("stacks/workload.df", WORKLOAD);
     release(&s, "gcr.io/renfry/web:1.0");
     s.write("data/approvals.facts", "edition 2026\n");
@@ -74,7 +74,7 @@ fn input_changes_deploy_and_world_drift_is_gated_by_policy() {
     assert_eq!(
         once(&s, &[]),
         [
-            "input release changed (file stacks/../data/release.facts)",
+            "input release changed (file data/release.facts)",
             "event input release",
             "tick 1: plan: 1 deformation (1 update)",
             "stack renfry.workload is undeformed",
@@ -128,7 +128,7 @@ fn approve_lets_a_world_event_correct_drift() {
     assert_eq!(
         once(&s, &[]),
         [
-            "input approve approval changed (file stacks/../data/approvals.facts)",
+            "input approve approval changed (file data/approvals.facts)",
             "event input approve approval",
             "stack renfry.workload is undeformed",
         ]
@@ -237,7 +237,7 @@ fn a_prod_rollout_is_held_until_its_plan_is_approved() {
     assert_eq!(
         once(&s, &prod),
         [
-            "input approve approval changed (file stacks/../data/approvals.facts)".to_string(),
+            "input approve approval changed (file data/approvals.facts)".to_string(),
             "event input approve approval".to_string(),
             "tick 1: plan: 1 deformation (1 create)".to_string(),
             format!("tick 1: approved by alice: plan digest {digest}"),
@@ -293,9 +293,8 @@ fn plan_reads_an_input_relation_and_rejects_a_stray_fact() {
     );
     let r = s.run(&["plan", "stacks/workload.df"]).failure();
     assert!(
-        r.stderr.contains(
-            "relaese/1 is not an input relation declared from file stacks/../data/release.facts",
-        ),
+        r.stderr
+            .contains("relaese/1 is not an input relation declared from file data/release.facts",),
         "{}",
         r.stderr
     );
@@ -347,8 +346,8 @@ fn a_git_source_is_read_at_its_ref() {
     s.write(
         "stacks/workload.df",
         &WORKLOAD.replace(
-            "input relation release/1 from file(\"../data/release.facts\")",
-            "input relation release/1 from git(\"../releases.git\", \"main\", \"web.facts\")",
+            "input relation release/1 from file(\"data/release.facts\")",
+            "input relation release/1 from git(\"releases.git\", \"main\", \"web.facts\")",
         ),
     );
     let got = once(&s, &[]);
@@ -358,7 +357,7 @@ fn a_git_source_is_read_at_its_ref() {
     let got = once(&s, &[]);
     assert_eq!(
         got[0],
-        "input release changed (git stacks/../releases.git main:web.facts)"
+        "input release changed (git releases.git main:web.facts)"
     );
     assert!(s.read(WORLD).contains("web:2.1"));
 }
@@ -418,7 +417,7 @@ fn the_polling_loop_runs_an_event_per_change() {
             "event start",
             "tick 1: plan: 3 deformations (3 create)",
             "stack renfry.workload is undeformed",
-            "input release changed (file stacks/../data/release.facts)",
+            "input release changed (file data/release.facts)",
             "event input release",
             "tick 1: plan: 1 deformation (1 update)",
             "stack renfry.workload is undeformed",

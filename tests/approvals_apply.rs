@@ -30,7 +30,7 @@ fn signer(s: &Scratch, args: &[&str]) -> String {
 /// The example program applied in prod, a key whose JWKS is its trust
 /// root, and a plan file of a replace (`plan.json`); returns its digest.
 fn setup(name: &str) -> (Scratch, String) {
-    let s = Scratch::new(name);
+    let s = Scratch::project(name);
     s.write("stacks/approvals.df", PROGRAM);
     let jwks = signer(&s, &["keygen", "approver.key"]);
     s.write("approvers.jwks.json", &jwks);
@@ -284,7 +284,7 @@ fn an_edited_plan_file_is_refused() {
 /// moved since the plan is a stale plan.
 #[test]
 fn a_moved_git_commit_is_a_stale_plan() {
-    let s = Scratch::new("approvals-git");
+    let s = Scratch::project("approvals-git");
     let git = |dir: &std::path::Path, args: &[&str]| {
         let out = Command::new("git")
             .args(args)

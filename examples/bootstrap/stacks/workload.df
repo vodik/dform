@@ -20,17 +20,17 @@ edition 2026
 stack renfry.workload {
   # Whose signatures approve a plan: `dform-approve keygen approver.key`
   # prints this JWKS.
-  approvals = jwks_file("../approvers.jwks.json")
+  approvals = jwks_file("approvers.jwks.json")
 }
 
 provider k8s {}
 
 # The release to run, `release(image)`; re-read whenever the file changes.
-input relation release/1 from file("../data/release.facts")
+input relation release/1 from file("data/release.facts")
 # `approve(t, a)`: accept the drift of t.a, correcting it.
-input relation approve/2 from file("../data/approvals.facts")
+input relation approve/2 from file("data/approvals.facts")
 # `approval(token)`: a signed approval of a plan's digest.
-input relation approval/1 from file("../data/approvals.facts")
+input relation approval/1 from file("data/approvals.facts")
 
 input env: enum("dev", "prod") = "dev"
 

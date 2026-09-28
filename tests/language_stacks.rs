@@ -15,7 +15,7 @@ output vpc_id = ref(net.vpc, "main", .id)
 
 #[test]
 fn the_stack_name_scopes_the_state() {
-    let s = Scratch::new("lang-stack-name");
+    let s = Scratch::project("lang-stack-name");
     s.write("net.df", NET);
     s.run(&["apply", "net.df"]).success();
     assert!(s.path("dform.state/net.shared/state.json").exists());
@@ -31,7 +31,7 @@ fn the_stack_name_scopes_the_state() {
 
 #[test]
 fn a_local_backend_holds_the_state() {
-    let s = Scratch::new("lang-stack-backend");
+    let s = Scratch::project("lang-stack-backend");
     s.write(
         "p.df",
         "edition 2026\nstack x { backend = local(\"state/x\"), unknowns = \"permissive\" }\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\n",
@@ -50,7 +50,7 @@ fn a_local_backend_holds_the_state() {
 /// and so is `handover --to local(DIR)`.
 #[test]
 fn a_local_backend_is_relative_to_the_project_root() {
-    let s = Scratch::new("lang-stack-backend-root");
+    let s = Scratch::project("lang-stack-backend-root");
     s.write("infra/dform.toml", "");
     s.write(
         "infra/stacks/p.df",
@@ -89,7 +89,7 @@ fn a_local_backend_is_relative_to_the_project_root() {
 
 #[test]
 fn one_program_owns_one_stack() {
-    let s = Scratch::new("lang-stack-two");
+    let s = Scratch::project("lang-stack-two");
     s.write("p.df", "edition 2026\nstack a {}\nstack b {}\n");
     let r = s.run(&["plan", "p.df"]).failure();
     assert!(
@@ -108,7 +108,7 @@ fn one_program_owns_one_stack() {
 /// the holder; once the first is done the second goes through.
 #[test]
 fn a_second_concurrent_apply_fails_cleanly() {
-    let s = Scratch::new("lang-stack-lock");
+    let s = Scratch::project("lang-stack-lock");
     s.write("net.df", NET);
     let first = Command::new(env!("CARGO_BIN_EXE_dform"))
         .args(["apply", "net.df"])
@@ -150,7 +150,7 @@ fn a_second_concurrent_apply_fails_cleanly() {
 /// A lock left by an apply that is gone (killed) is taken over.
 #[test]
 fn a_stale_lock_is_taken_over() {
-    let s = Scratch::new("lang-stack-stale");
+    let s = Scratch::project("lang-stack-stale");
     s.write("net.df", NET);
     let mut dead = Command::new("true").spawn().unwrap();
     let pid = dead.id();
@@ -169,7 +169,7 @@ fn a_stale_lock_is_taken_over() {
 /// are `stack_output` facts for every other stack.
 #[test]
 fn another_stack_reads_the_outputs() {
-    let s = Scratch::new("lang-stack-outputs");
+    let s = Scratch::project("lang-stack-outputs");
     s.write("net.df", NET);
     s.write(
         "app.df",
@@ -201,7 +201,7 @@ resource net.subnet a {
 /// as if from DIR; the registry records absolute state paths.
 #[test]
 fn the_registry_is_the_projects() {
-    let s = Scratch::new("lang-stack-root");
+    let s = Scratch::project("lang-stack-root");
     s.write("infra/dform.toml", "");
     s.write("infra/stacks/net.df", NET);
     let app = r#"edition 2026
@@ -239,7 +239,7 @@ resource net.subnet a {
 /// `provider` picks the mock's schema; `--provider` overrides it.
 #[test]
 fn the_provider_statement_selects_the_schema() {
-    let s = Scratch::new("lang-stack-provider");
+    let s = Scratch::project("lang-stack-provider");
     s.write(
         "mine/schema.df",
         "type_provider(x.thing, \"fakecloud\")\ntype_attr(x.thing, \"size\", \"int\", [\"required\"])\n",

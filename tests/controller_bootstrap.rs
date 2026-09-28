@@ -157,7 +157,7 @@ fn bootstrap_handover_and_the_controller_runs_the_workload() {
     assert_eq!(
         controller(&s),
         [
-            "input release changed (file stacks/../data/release.facts)",
+            "input release changed (file data/release.facts)",
             "event input release",
             "tick 1: plan: 1 deformation (1 update)",
             "stack renfry.workload is undeformed",

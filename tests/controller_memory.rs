@@ -21,7 +21,7 @@ fn release(s: &Scratch, image: &str) {
 
 #[test]
 fn two_hundred_events_keep_the_source_registry_bounded() {
-    let s = Scratch::new("ctl-memory");
+    let s = Scratch::project("ctl-memory");
     s.write("stacks/workload.df", WORKLOAD);
     release(&s, "gcr.io/renfry/web:0");
     s.write("data/approvals.facts", "edition 2026\n");

@@ -93,8 +93,8 @@ fn load_unit(
         imports: None,
     });
     let base_dir = abs.parent().unwrap_or(Path::new(".")).to_path_buf();
-    // A project's imports resolve from its root (docs/layout.md); `./` and
-    // `../` from the importing file, as every import does outside a project.
+    // A project's imports resolve from its root (docs/layout.md); outside
+    // every project, from the importing file.
     let project = crate::project::manifest_root(&abs);
     let mut imports = Vec::new();
     for n in root
@@ -110,7 +110,7 @@ fn load_unit(
         };
         let rel = crate::syntax::resolve::unescape(t.text()).unwrap_or_default();
         let target = match &project {
-            Some(root) if !rel.starts_with("./") && !rel.starts_with("../") => root.join(&rel),
+            Some(root) => root.join(&rel),
             _ => base_dir.join(&rel),
         };
         let unit = load_unit(&target, units, index)?;

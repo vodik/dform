@@ -97,7 +97,7 @@ let cfg = settings[env]
 
 # The rows are data/peerings.csv's, typed column by column: a row whose env
 # is not one of these is an error naming its line.
-input relation peering(env: enum("dev", "stg", "prod"), name: string, peer_network: string) from csv("../data/peerings.csv")
+input relation peering(env: enum("dev", "stg", "prod"), name: string, peer_network: string) from csv("data/peerings.csv")
 
 ########################################
 # Validation
@@ -181,7 +181,7 @@ resource gke_cluster pngu {
 # The dashboard JSON is a file, read by the file provider.
 resource google_monitoring_dashboard pngu {
   project = cfg.project_id
-  dashboard_json = file.json["../files/dashboard-pngu.json"]
+  dashboard_json = file.json["files/dashboard-pngu.json"]
 }
 
 # Represents terraform-gcp-alert-metrics module invocation.

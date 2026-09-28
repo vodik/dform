@@ -26,7 +26,7 @@ resource net.vpc main {
 /// own deployment: it creates.
 #[test]
 fn planning_prod_after_applying_staging_proposes_creates() {
-    let s = Scratch::new("keyed-headline");
+    let s = Scratch::project("keyed-headline");
     s.write("app.df", APP);
     s.run(&["apply", "app.df", "env=staging"]).success();
     let prod = s.run(&["plan", "app.df", "env=prod"]).success();
@@ -55,7 +55,7 @@ fn planning_prod_after_applying_staging_proposes_creates() {
 /// dform.df is keyed by env: prod's plan after staging's apply creates.
 #[test]
 fn dform_df_plans_prod_after_staging_as_creates() {
-    let s = Scratch::new("keyed-dform");
+    let s = Scratch::project("keyed-dform");
     let file = repo().join("examples/demo/stacks/dform.df");
     let file = file.to_str().unwrap();
     s.run(&["apply", file, "env=staging"]).success();
@@ -73,7 +73,7 @@ fn dform_df_plans_prod_after_staging_as_creates() {
 /// key.
 #[test]
 fn the_key_names_the_state_and_the_registry_entry() {
-    let s = Scratch::new("keyed-dirs");
+    let s = Scratch::project("keyed-dirs");
     s.write("app.df", APP);
     s.run(&["apply", "app.df", "env=staging"]).success();
     s.run(&["apply", "app.df", "env=prod"]).success();
@@ -98,7 +98,7 @@ fn the_key_names_the_state_and_the_registry_entry() {
 /// a leading `.` never reach a path raw. Two keys are joined by `,`.
 #[test]
 fn key_values_are_escaped_and_joined() {
-    let s = Scratch::new("keyed-escape");
+    let s = Scratch::project("keyed-escape");
     s.write(
         "app.df",
         r#"edition 2026
@@ -170,7 +170,7 @@ stack app[region] {}
 /// `stack_output("app[env=prod]", k, v)` reads one deployment's outputs.
 #[test]
 fn stack_output_addresses_one_deployment() {
-    let s = Scratch::new("keyed-outputs");
+    let s = Scratch::project("keyed-outputs");
     s.write(
         "app.df",
         r#"edition 2026
@@ -204,7 +204,7 @@ resource net.vpc edge {
 /// first lists what the new key renames; nothing else changes.
 #[test]
 fn rekey_lists_what_the_key_renames_and_moves_the_state() {
-    let s = Scratch::new("keyed-rekey");
+    let s = Scratch::project("keyed-rekey");
     s.write("app.df", APP);
     s.run(&["apply", "app.df", "env=staging"]).success();
     let r = s
@@ -236,7 +236,7 @@ fn rekey_lists_what_the_key_renames_and_moves_the_state() {
 /// undeformed.
 #[test]
 fn rekey_moves_state_and_the_next_plan_is_undeformed() {
-    let s = Scratch::new("keyed-rekey-same");
+    let s = Scratch::project("keyed-rekey-same");
     s.write(
         "app.df",
         r#"edition 2026
@@ -271,7 +271,7 @@ resource net.vpc main {
 /// and `rekey` with the new key only moves it.
 #[test]
 fn rekey_moves_the_state_from_before_the_stack_was_keyed() {
-    let s = Scratch::new("keyed-legacy");
+    let s = Scratch::project("keyed-legacy");
     let unkeyed = APP.replace("stack app[env] {}", "stack app {}");
     s.write("app.df", &unkeyed);
     s.run(&["apply", "app.df"]).success();
@@ -297,7 +297,7 @@ resource net.vpc main {
 /// is written the same by every deployment: a warning at the field.
 #[test]
 fn a_fixed_bucket_name_in_a_keyed_stack_is_a_warning() {
-    let s = Scratch::new("keyed-lint");
+    let s = Scratch::project("keyed-lint");
     s.write("app.df", FIXED);
     let r = s.run(&["plan", "app.df"]).success();
     assert!(
@@ -321,7 +321,7 @@ fn a_fixed_bucket_name_in_a_keyed_stack_is_a_warning() {
 /// Under strict mode the collision is a deny.
 #[test]
 fn a_fixed_bucket_name_is_denied_under_strict() {
-    let s = Scratch::new("keyed-lint-strict");
+    let s = Scratch::project("keyed-lint-strict");
     s.write(
         "app.df",
         &FIXED.replace(
@@ -342,7 +342,7 @@ fn a_fixed_bucket_name_is_denied_under_strict() {
 /// One controller per deployment: the target names the key value.
 #[test]
 fn the_controller_runs_one_deployment() {
-    let s = Scratch::new("keyed-controller");
+    let s = Scratch::project("keyed-controller");
     s.write("app.df", APP);
     let r = s
         .run(&["controller", "run", "--once", "app.df", "env=prod"])
@@ -354,12 +354,20 @@ fn the_controller_runs_one_deployment() {
     );
     assert!(s.path("dform.state/app/env=prod/state.json").exists());
     assert!(!s.path("dform.state/app/env=staging").exists());
+    // Like apply, the controller names every key value.
+    let r = s.run(&["controller", "run", "--once", "app.df"]).failure();
+    assert!(
+        r.stderr
+            .contains("controller run names its deployment: stack app is keyed by env"),
+        "{}",
+        r.stderr
+    );
 }
 
 /// `handover` takes a deployment: its directory moves, the others stay.
 #[test]
 fn handover_takes_a_key() {
-    let s = Scratch::new("keyed-handover");
+    let s = Scratch::project("keyed-handover");
     s.write("app.df", APP);
     s.run(&["apply", "app.df", "env=staging"]).success();
     s.run(&["apply", "app.df", "env=prod"]).success();

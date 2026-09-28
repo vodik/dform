@@ -12,7 +12,7 @@ edition 2026
 # Isolated: each env deploys into its own account, so iam's fixed names do not collide.
 # Config: each env's settings are config/dform/{env}.yaml's, a leaf per contribution.
 provider fake {}
-stack dform[env] { unknowns = "strict", isolated = true, config = yaml("../config/dform/{env}.yaml") }
+stack dform[env] { unknowns = "strict", isolated = true, config = yaml("config/dform/{env}.yaml") }
 
 # Typed stack input with a default. The default is a @default contribution
 # to input env; --set env=prod is a normal contribution and wins.

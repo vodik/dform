@@ -119,7 +119,7 @@ input project: string                                 # the OVH Public Cloud pro
 
 # Per-env rows: config/ovh.infra/dev.yaml and prod.yaml (data tables ticket).
 input relation pool(name: string, flavor: string, min: int, max: int, generation: int)
-  from yaml("../config/ovh.infra/{env}.yaml")
+  from yaml("config/ovh.infra/{env}.yaml")
 
 settings dev  @default { region = "GRA9", vlan = 100, cidr = "10.10.0.0/16", kube = "1.31", db_plan = "essential" }
 settings prod @default { region = "GRA9", vlan = 200, cidr = "10.20.0.0/16", kube = "1.31", db_plan = "business" }
@@ -402,8 +402,8 @@ provider k8s {}          # in the cluster: the pod's service account, no kubecon
 
 input env: enum("dev", "prod") = "dev"
 
-import "../modules/app.df"
-import "../policies/ovh.df"
+import "modules/app.df"
+import "policies/ovh.df"
 apply change_management
 
 # What the infra stack exported for this env.

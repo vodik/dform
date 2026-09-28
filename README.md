@@ -23,7 +23,7 @@ cargo run -- -C examples/demo plan dform env=prod   # or 'dform[env=prod]'
 cargo run -- -C examples/demo test                  # run the program's scenarios
 cargo run -- -C examples/demo dev strata            # evaluation order: the partition graph's strata
 cargo run -- -C examples/demo fmt                   # format the project's .df files in place
-cargo run -- fmt --check $(git ls-files '*.df')     # CI: list unformatted files, fail
+cargo run -- fmt --check $(git ls-files '*.df' ':!tests/syntax/err' ':!editors')   # CI: list unformatted files, fail
 ```
 
 `-C DIR` runs as if dform started in DIR; from inside a project the same
@@ -35,9 +35,13 @@ A project is a directory with a `dform.toml` at its root: `stacks/` (one
 stack per file), `modules/`, `policies/`, `config/<stack>/<key>.yaml`,
 `data/`, `scenarios/`, `providers/<name>/` and a gitignored `dform.state/`.
 The root is the nearest directory up from the working directory holding a
-`dform.toml`, else the git root. Imports resolve from the project root
-(`./` and `../` from the importing file); other paths a program states are
-relative to the file that states them. Discovery walks the project: every
+`dform.toml`; `dform init [NAME]` makes one (and puts `dform.state/` in the
+nearest `.gitignore`). Every path a program states resolves from the project
+root: imports, table and config sources, `file.*` externs, input relations,
+provider sources and trust roots. Outside a project, `plan` and the `dev`
+views run on a program file with no state; `apply`, `controller`, `stack`,
+`state` and `log` refuse (a `dev --world` run keeps its state beside the
+world file, and runs anywhere). Discovery walks the project: every
 file with a `stack` statement is a stack, and a stack's name is unique in
 its project. A module or policy file with a `stack` statement is an error,
 importing a stack file is an error, and a `.df` outside the layout's
@@ -48,7 +52,7 @@ example under `examples/` follows it, and test-only programs are under
 assumes provider schemas the mocks do not have and a git repository of
 releases.
 
-`dform.toml` is small and optional; programs stay in `.df` files. It holds
+`dform.toml` is small; programs stay in `.df` files. It holds
 the project's name and the dform versions it takes, each provider's source
 and version (Cargo's semver syntax: `"2.1"` is `^2.1`), defaults a stack
 statement overrides, and globs discovery skips. Policy reads it as facts,
@@ -80,8 +84,8 @@ key (`dform plan 'shop.app[env=prod]'`, or `dform plan shop.app env=prod`).
 Key values belong to the target; other inputs stay `--set`, and `--set` of a
 key input is an error. With no target it is the one stack under the working
 directory, else the stacks are listed and dform exits non-zero. `apply`
-names every key value (`dform apply shop.app env=prod`), or takes a plan
-file (`dform apply plan.json`).
+and `controller run` name every key value (`dform apply shop.app env=prod`);
+`apply` also takes a plan file (`dform apply plan.json`).
 
 | Commands | |
 |---|---|
@@ -91,6 +95,7 @@ file (`dform apply plan.json`).
 | `provider check`, `provider schema` | providers |
 | `controller run` | controller mode |
 | `dev strata`, `dev graph`, `dev --world W --inventory I --provider P --chaos C COMMAND` | the mock and the evaluator |
+| `init [NAME]` | make the working directory a project |
 | `completions zsh\|bash\|fish` | a completion script |
 
 `dform stack list` shows every stack, its key and file, and per deployment
@@ -327,7 +332,7 @@ unchanged:
 
 ```dform
 provider k8s { source = "./providers/k8s" }   # a directory holding dform-provider-k8s
-provider k8s { source = "../target/debug/dform-provider-k8s" }
+provider k8s { source = "bin/dform-provider-k8s" }        # an executable
 ```
 
 - Types are `k8s.<group>.<version>.<kind>`, the core group as `core` and the
@@ -783,7 +788,7 @@ The approval service is not dform's. `dform-approve` (built with dform,
 ```bash
 cd examples/approvals
 A="cargo run -q -p dform-direct --bin dform-approve --"
-$A keygen approver.key > approvers.jwks.json      # the trust root: jwks_file("../approvers.jwks.json")
+$A keygen approver.key > approvers.jwks.json      # the trust root: jwks_file("approvers.jwks.json")
 cargo run -- apply approvals.demo env=prod
 cargo run -- plan approvals.demo env=prod --set cidr=10.1.0.0/16 --out plan.json
 $A sign approver.key --digest sha256:... --stack approvals.demo --key env=prod \
@@ -1006,7 +1011,7 @@ extern file.json(+path, -value)
 extern random.password(+name, -value) persist
 
 resource google_monitoring_dashboard pngu {
-  dashboard_json = file.json["../files/dashboard-pngu.json"]
+  dashboard_json = file.json["files/dashboard-pngu.json"]
 }
 ```
 

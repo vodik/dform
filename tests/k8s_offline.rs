@@ -70,10 +70,10 @@ fn planned(s: &Scratch) -> Json {
 /// and text.
 #[test]
 fn the_demo_plans_the_same_against_the_real_provider_offline() {
-    let mock = Scratch::new("k8s-demo-mock");
+    let mock = Scratch::project("k8s-demo-mock");
     mock_demo(&mock);
     let m = dform(&mock, None, &["plan", "--out", "plan.json", "k8s_demo.df"]).success();
-    let real = Scratch::new("k8s-demo-real");
+    let real = Scratch::project("k8s-demo-real");
     real_demo(&real);
     let r = dform(&real, None, &["plan", "--out", "plan.json", "k8s_demo.df"]).success();
     assert_eq!(r.stdout, m.stdout);
@@ -144,7 +144,7 @@ fn a_run_injects_the_schema_of_the_types_it_names() {
 /// is named with the resource, and a Secret's data is never printed.
 #[test]
 fn offline_plan_validates_and_hides_secrets() {
-    let s = Scratch::new("k8s-offline-plan");
+    let s = Scratch::project("k8s-offline-plan");
     real_demo(&s);
     s.write(
         "p.df",
@@ -174,7 +174,7 @@ fn offline_plan_validates_and_hides_secrets() {
 /// Offline, what needs the cluster fails naming why.
 #[test]
 fn offline_apply_fails_naming_why() {
-    let s = Scratch::new("k8s-offline-apply");
+    let s = Scratch::project("k8s-offline-apply");
     real_demo(&s);
     let r = dform(&s, None, &["apply", "k8s_demo.df"]).failure();
     assert!(
@@ -527,7 +527,7 @@ fn kubeconfig(s: &Scratch, url: &str) -> String {
 /// server standing in. The checks run on the provider's own examples.
 #[test]
 fn the_k8s_provider_conforms() {
-    let s = Scratch::new("k8s-check");
+    let s = Scratch::project("k8s-check");
     let (api, url) = Api::start();
     let kc = kubeconfig(&s, &url);
     let r = dform(&s, Some(&kc), &["provider", "check", &k8s()]).success();
@@ -567,7 +567,7 @@ fn the_k8s_provider_conforms() {
 /// defaults. The schema is cached in the stack's state directory.
 #[test]
 fn the_demo_applies_through_the_api_server() {
-    let s = Scratch::new("k8s-apply");
+    let s = Scratch::project("k8s-apply");
     real_demo(&s);
     let (api, url) = Api::start();
     let kc = kubeconfig(&s, &url);
@@ -594,7 +594,7 @@ fn the_demo_applies_through_the_api_server() {
     assert!(api.get("/api/v1/namespaces/shop/services/web").is_some());
 
     // The same program applied to the mock: the same documents.
-    let mock = Scratch::new("k8s-apply-mock");
+    let mock = Scratch::project("k8s-apply-mock");
     mock_demo(&mock);
     dform(
         &mock,
@@ -689,7 +689,7 @@ fn the_demo_applies_through_the_api_server() {
 /// a ref to it is a null until the Service exists, then the cluster's value.
 #[test]
 fn a_ref_to_a_server_defaulted_field_resolves_from_the_cluster() {
-    let s = Scratch::new("k8s-defaulted");
+    let s = Scratch::project("k8s-defaulted");
     real_demo(&s);
     s.write(
         "k8s_demo.df",
@@ -738,7 +738,7 @@ fn managers_of(obj: &Json, path: &str) -> Vec<String> {
 /// still not dform's, and nothing is left to do.
 #[test]
 fn an_update_leaves_server_defaulted_fields_to_the_server() {
-    let s = Scratch::new("k8s-defaulted-owner");
+    let s = Scratch::project("k8s-defaulted-owner");
     real_demo(&s);
     let (api, url) = Api::start();
     let kc = kubeconfig(&s, &url);
@@ -807,7 +807,7 @@ fn an_update_leaves_server_defaulted_fields_to_the_server() {
 /// and the apply (never forced) fails naming the manager and the field.
 #[test]
 fn a_field_another_manager_owns_fails_the_apply_naming_both() {
-    let s = Scratch::new("k8s-conflict");
+    let s = Scratch::project("k8s-conflict");
     real_demo(&s);
     let (api, url) = Api::start();
     let kc = kubeconfig(&s, &url);
@@ -854,7 +854,7 @@ fn a_field_another_manager_owns_fails_the_apply_naming_both() {
 /// the whole schema, so the Job still gets its computed nulls.
 #[test]
 fn a_type_built_at_runtime_gets_the_whole_schema() {
-    let s = Scratch::new("k8s-runtime-type");
+    let s = Scratch::project("k8s-runtime-type");
     real_demo(&s);
     s.write(
         "k8s_demo.df",
@@ -922,7 +922,7 @@ fn schema_of(conn: &mut dform::plugin::link::Link, types: Option<&[&str]>) -> Ve
 /// their alias targets') and every type_provider row.
 #[test]
 fn the_schema_is_derived_once_and_answered_for_the_types_asked_for() {
-    let s = Scratch::new("k8s-schema-cache");
+    let s = Scratch::project("k8s-schema-cache");
     let count =
         |facts: &[String], prefix: &str| facts.iter().filter(|f| f.starts_with(prefix)).count();
     let all = schema_of(&mut offline_provider(&s, "st"), None);

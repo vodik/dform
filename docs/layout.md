@@ -5,7 +5,7 @@ It is a convention, not a hard rule: discovery expects it, and the lints
 below say when a file is somewhere else.
 
 ```
-dform.toml                  the project root (optional; else the git root)
+dform.toml                  the project root (`dform init` writes one)
 stacks/<stack>.df           one stack per file: the only files with `stack`
 modules/<module>.df         one module per file
 policies/<pack>.df          policy packs
@@ -19,8 +19,9 @@ dform.state/                state: per deployment, audit logs, plan keys,
 ```
 
 - `dform.toml` marks the root: the nearest directory up from the working
-  directory holding one (else the git root). It is small and optional;
-  programs stay in `.df` files. It holds `[project]` (a name, and the dform
+  directory holding one. There is no project without one: outside, `plan`
+  and the `dev` views run on a program file with no state, and what reads
+  or writes state refuses. It is small; programs stay in `.df` files. It holds `[project]` (a name, and the dform
   versions the project takes), `[providers]` (each provider's source and
   version requirement, Cargo's semver syntax; a program's `provider NAME {}`
   takes its source from here), `[defaults]` (a `backend` template and
@@ -38,16 +39,15 @@ dform.state/                state: per deployment, audit logs, plan keys,
 - A keyed stack's config is one file per deployment under
   `config/<stack>/`, named by the key's value: `config/dform/prod.yaml` is
   `dform[env=prod]`'s.
-- Imports resolve from the project root (`import "modules/network.df"`);
-  one starting `./` or `../` from the importing file, as every import
-  outside a project does. Other paths a program states (`config`, tables,
-  `file(...)`, a provider's `source`, a trust root) are relative to the
-  file that states them, so a stack under `stacks/` reaches data with
-  `../`.
+- Every path a program states resolves from the project root: imports
+  (`import "modules/network.df"`), table and config sources
+  (`csv("data/peerings.csv")`, `config = yaml("config/dform/{env}.yaml")`),
+  `file.*` externs, input relations from files, a provider's `source` and a
+  trust root.
 - `dform.state/` is gitignored: each deployment's plan key (`state.key`,
   the HMAC key of its plan files and audit log) is a secret.
 
-The lints, in a project with a manifest: a module or policy file with a
+The lints: a module or policy file with a
 `stack` statement is an error; importing a stack file is an error
 (anywhere); a `.df` outside the layout's directories is a warning.
 

@@ -3711,7 +3711,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let old = dir.join("dform.df");
         let old_src = format!("{}{}{}", &src[..start], copied, &src[end..])
-            .replace(", config = yaml(\"../config/dform/{env}.yaml\")", "")
+            .replace(", config = yaml(\"config/dform/{env}.yaml\")", "")
             .replace(
                 "import \"",
                 &format!("import \"{}/", root.join("examples/demo").display()),
