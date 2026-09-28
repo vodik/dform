@@ -83,6 +83,9 @@ struct Memo {
     /// The approvals drop directory's stamp.
     #[serde(default)]
     drops: String,
+    /// The sources the last run's tables read, by table.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    tables: Vec<(String, watch::Source)>,
 }
 
 /// The controller's part of a run (see the module doc).
@@ -183,6 +186,13 @@ impl Hook {
         self.input_stamps = stamps(&self.relations, |r| watch::stamp(&r.source));
     }
 
+    fn table_sources(&self) -> Vec<(String, watch::Source)> {
+        self.tables
+            .iter()
+            .map(|r| (r.pred.clone(), r.source.clone()))
+            .collect()
+    }
+
     /// The run has read its tables: the sources, each with its stamp as
     /// read (the digest of the file, the commit the ref named).
     pub fn tables(&mut self, read: &[(Relation, String)]) {
@@ -215,6 +225,26 @@ impl Hook {
             ),
             Err(_) => None,
         };
+        // A controller that starts again (`--once`) knows its tables' last
+        // sources from the memo.
+        if let Some(m) = &memo
+            && self.tables.is_empty()
+            && !m.tables.is_empty()
+        {
+            self.tables = m
+                .tables
+                .iter()
+                .map(|(pred, source)| Relation {
+                    pred: pred.clone(),
+                    arity: 0,
+                    source: source.clone(),
+                    span: Default::default(),
+                })
+                .collect();
+            self.relations = [&self.declared[..], &self.tables].concat();
+            let now = stamps(&self.tables, |r| watch::stamp(&r.source));
+            self.input_stamps.extend(now);
+        }
         self.world = Some(world.to_path_buf());
         self.memo_path = Some(memo_path);
         self.held.clear();
@@ -535,6 +565,7 @@ impl Hook {
                 .as_deref()
                 .map(drops_stamp)
                 .unwrap_or_default(),
+            tables: self.table_sources(),
         })
     }
 
@@ -553,6 +584,7 @@ impl Hook {
                 .as_deref()
                 .map(drops_stamp)
                 .unwrap_or_default(),
+            tables: self.table_sources(),
         })
     }
 

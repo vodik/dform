@@ -724,7 +724,10 @@ fn run_with(
     }
     if matches!(cli.cmd, Cmd::Plan { .. } | Cmd::Apply { .. }) {
         for m in crate::tables::moved(&st.externs, &externs.recorded()) {
-            println!("{m}");
+            match hook {
+                Some(_) => controller::log(format_args!("{m}")),
+                None => println!("{m}"),
+            }
         }
     }
     // Policy messages quote values and rule text: printed redacted.
