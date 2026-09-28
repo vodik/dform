@@ -2,9 +2,10 @@
 //!
 //! A value maps one to one (`value`, `from_value`). A document is JSON in
 //! the engine and the fake: its null and secret markers (`provider::marker`)
-//! travel as `Null` messages, and a number that is not an `i64` or a JSON
-//! `null` as a string, as `externs::from_json` reads JSON (the value model
-//! has neither).
+//! travel as `Null` messages, a float as `Float`, and a number beyond `i64`
+//! or a JSON `null` as a string. The value model has no float: the engine
+//! reads a `Float` as the string of its shortest round-trip decimal
+//! ([`float`]), as `externs::from_json` reads JSON.
 
 use super::pb;
 use crate::ast::{Atom, Term};
@@ -77,6 +78,12 @@ pub fn value(v: &Value) -> pb::Value {
     })
 }
 
+/// A float as the engine holds it: the shortest decimal that parses back to
+/// the same `f64` (what a JSON number's text is).
+pub fn float(f: f64) -> String {
+    serde_json::Number::from_f64(f).map_or_else(|| f.to_string(), |n| n.to_string())
+}
+
 pub fn from_value(v: &pb::Value) -> Result<Value> {
     use pb::value::Kind;
     let Some(k) = &v.kind else {
@@ -120,6 +127,7 @@ pub fn from_value(v: &pb::Value) -> Result<Value> {
             class: from_class(n.class)?,
             ty: n.ty.clone(),
         },
+        Kind::Float(f) => Value::Str(float(*f)),
     })
 }
 
@@ -141,9 +149,10 @@ pub fn doc(j: &Json) -> pb::Value {
     msg(match j {
         Json::Null => Kind::Str("null".into()),
         Json::Bool(b) => Kind::Bool(*b),
-        Json::Number(n) => match n.as_i64() {
-            Some(i) => Kind::Int(i),
-            None => Kind::Str(n.to_string()),
+        Json::Number(n) => match (n.as_i64(), n.is_f64()) {
+            (Some(i), _) => Kind::Int(i),
+            (None, true) => Kind::Float(n.as_f64().unwrap_or_default()),
+            (None, false) => Kind::Str(n.to_string()),
         },
         Json::String(s) => Kind::Str(s.clone()),
         Json::Array(xs) => Kind::List(pb::List {
@@ -176,6 +185,7 @@ pub fn from_doc(v: &pb::Value) -> Result<Json> {
             NullClass::Secret => provider::secret_json(&n.label),
             _ => provider::null_json(&n.label),
         },
+        Kind::Float(f) => Json::String(float(*f)),
         other => bail!("a document holds JSON values, not {other:?}"),
     })
 }
@@ -271,5 +281,31 @@ mod tests {
         let d = json!({"a": [1, true, "x"], "id": {"$null": "t/a#id"},
                        "pw": {"$secret": "t/a#pw"}, "tags": {}});
         assert_eq!(from_doc(&doc(&d)).unwrap(), d);
+    }
+
+    /// A float crosses as `Float`; the engine reads it as the text of its
+    /// shortest round-trip decimal, what it read the JSON number as before.
+    #[test]
+    fn a_float_crosses_as_a_float_and_reads_as_its_decimal() {
+        use pb::value::Kind;
+        for (j, text) in [
+            (json!(0.1), "0.1"),
+            (json!(1e300), "1e+300"),
+            (json!(-2.5), "-2.5"),
+        ] {
+            let w = doc(&j);
+            let Some(Kind::Float(f)) = w.kind else {
+                panic!("{j} crosses as {w:?}");
+            };
+            assert_eq!(from_doc(&w).unwrap(), json!(text));
+            assert_eq!(from_value(&w).unwrap(), Value::Str(text.into()));
+            assert_eq!(text.parse::<f64>().unwrap(), f);
+            let Json::Number(n) = &j else { unreachable!() };
+            assert_eq!(n.to_string(), text, "the JSON number's own text");
+        }
+        assert_eq!(
+            doc(&json!(u64::MAX)).kind,
+            Some(Kind::Str(u64::MAX.to_string()))
+        );
     }
 }

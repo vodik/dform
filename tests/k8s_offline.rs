@@ -694,6 +694,49 @@ fn the_demo_applies_through_the_api_server() {
     );
 }
 
+/// A field the API server defaults (`spec.clusterIP`) is Optional+Computed:
+/// a ref to it is a null until the Service exists, then the cluster's value.
+#[test]
+fn a_ref_to_a_server_defaulted_field_resolves_from_the_cluster() {
+    let s = Scratch::new("k8s-defaulted");
+    real_demo(&s);
+    s.write(
+        "k8s_demo.df",
+        &format!(
+            "{}\nresource k8s.config_map endpoints {{\n  metadata.name = \"endpoints\"\n  \
+             metadata.namespace = ref(k8s.namespace, shop, .metadata.name)\n  \
+             data = {{ \"WEB\": ref(k8s.service, web, .spec.clusterIP) }}\n}}.\n",
+            s.read("k8s_demo.df")
+        ),
+    );
+    let (api, url) = Api::start();
+    let kc = kubeconfig(&s, &url);
+    let run = |args: &[&str]| {
+        dform(
+            &s,
+            Some(&kc),
+            &[&["--file", "k8s_demo.df"][..], args].concat(),
+        )
+    };
+    let r = run(&["plan"]).success();
+    assert!(
+        r.stdout
+            .contains("data.WEB = ?k8s.service/web#spec.clusterIP"),
+        "{}",
+        r.stdout
+    );
+    run(&["apply"]).success();
+    let svc = api.get("/api/v1/namespaces/shop/services/web").unwrap();
+    let ip = svc["spec"]["clusterIP"].as_str().unwrap().to_string();
+    assert!(ip.starts_with("10.96.0."), "{svc}");
+    let cm = api
+        .get("/api/v1/namespaces/shop/configmaps/endpoints")
+        .expect("the configmap");
+    assert_eq!(cm["data"]["WEB"], json!(ip));
+    let r = run(&["plan"]).success();
+    assert_eq!(r.summary(), "stack k8s_demo is undeformed", "{}", r.stdout);
+}
+
 /// Another field manager takes `spec.replicas`: dform's plan puts it back,
 /// and the apply (never forced) fails naming the manager and the field.
 #[test]

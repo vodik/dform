@@ -81,6 +81,18 @@ impl K8s {
         &self.derived.schema
     }
 
+    /// The computed values of a live object of `typ`.
+    fn computed(&self, typ: &str, live: &Json) -> Json {
+        let schema = self.schema();
+        let defaulted: Vec<String> = schema
+            .optional_computed_of(typ)
+            .into_iter()
+            .map(|(p, _)| p)
+            .filter(|p| !p.starts_with("metadata.") && !schema.in_list(typ, p))
+            .collect();
+        computed(live, &defaulted)
+    }
+
     fn cluster(&self, what: &str) -> Result<&Cluster> {
         self.cluster
             .as_ref()
@@ -96,7 +108,9 @@ impl K8s {
         let kind = self.derived.kind(typ)?;
         let c = self.cluster(&format!("read {typ}/{name}"))?;
         let (ns, n) = parse_remote(kind, remote_id, &c.namespace);
-        Ok(c.get(kind, ns, n).await?.map(|o| (attrs(&o), computed(&o))))
+        Ok(c.get(kind, ns, n)
+            .await?
+            .map(|o| (attrs(&o), self.computed(typ, &o))))
     }
 
     /// Plan one resource: validate, diff, and whether it replaces.
@@ -140,7 +154,7 @@ impl K8s {
         let obj = manifest(kind, d, &ns, n)?;
         match c.apply(kind, &ns, n, &obj, true).await {
             Ok(live) => {
-                let after = world_doc(schema, typ, &attrs(&live), &computed(&live), d);
+                let after = world_doc(schema, typ, &attrs(&live), &self.computed(typ, &live), d);
                 let changes = diff(schema, typ, prior, Some(&after));
                 let r = replaces(&changes);
                 Ok((changes, r))
@@ -164,7 +178,7 @@ impl K8s {
                 .and_then(Json::as_str)
                 .unwrap_or(n)
                 .to_string();
-            (name, attrs(&o), computed(&o))
+            (name, attrs(&o), self.computed(typ, &o))
         }))
     }
 
@@ -253,7 +267,7 @@ impl K8s {
         Ok(pb::ApplyResponse {
             remote: remote(kind, ns, name),
             attrs: Some(wire::doc(&attrs(&live))),
-            computed: Some(wire::doc(&computed(&live))),
+            computed: Some(wire::doc(&self.computed(typ, &live))),
             elapsed_ms: 0,
             notes,
         })

@@ -192,6 +192,29 @@ provider k8s { source = "../target/debug/dform-provider-k8s" }.
   where the object is set; a Secret's `data` and `stringData` are sensitive;
   `type_retry` is 5; a Deployment, Service or ConfigMap is replaced
   `create_first`, a Namespace `destroy_first`.
+- A field the API server defaults is `optional_computed`: one whose schema
+  has a `default` (a cluster's document; the snapshot drops them), and
+  `spec.clusterIP`, `spec.clusterIPs`, `spec.type`, `spec.sessionAffinity`,
+  `spec.ipFamilies`, `spec.ipFamilyPolicy`, `spec.internalTrafficPolicy`,
+  `spec.progressDeadlineSeconds`, `spec.revisionHistoryLimit`,
+  `spec.strategy.type` and the pod template's `dnsPolicy`, `restartPolicy`,
+  `schedulerName`, `terminationGracePeriodSeconds` and containers'
+  `imagePullPolicy`, `terminationMessagePath`, `terminationMessagePolicy`.
+  Read returns their live values as computed, so a ref to one
+  (`ref(k8s.service, web, .spec.clusterIP)`) is a null until the object
+  exists, then the cluster's value, as against the mock. Objects are never
+  flagged (a default object would carry the server's `rollingUpdate` beside
+  a program's `strategy.type = "Recreate"`), nor paths inside a list
+  element (a ref cannot name one).
+- The value model has no float. A float crosses the protocol as `Float`
+  and the engine reads it as a string, the shortest decimal that parses
+  back to the same number (`0.5`, `1e+300`). In the snapshot's kinds a
+  number is only ever a quantity, which the server takes as a string too;
+  a float field of a custom resource that a program sets reaches the server
+  as a string.
+- A Secret's `stringData` reads back from `data` (base64-decoded, the keys
+  dform applied); this is tested against the fake API server only, not yet
+  against a real one.
 - Remote ids are `NAMESPACE/NAME` (`NAME` for a cluster-scoped kind); Read
   and Import GET the object. Writes are server-side apply as the field
   manager `dform`, never forced: a field another manager owns fails the

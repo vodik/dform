@@ -10,13 +10,15 @@
 //! manager `dform` says which (server-side apply records each manager's
 //! fields as a `fieldsV1` set), so a default the server filled in or a field
 //! another manager set is not configuration and never a diff. The computed
-//! values are `status`, the server-written metadata, and the name and
-//! namespace (Optional+Computed: the engine compares them only where the
-//! program sets them). Neither side carries JSON nulls: Kubernetes reads a
+//! values are `status`, the server-written metadata, the name and
+//! namespace, and every other field the server defaults (Optional+Computed:
+//! the engine compares them only where the program sets them, and a ref to
+//! one resolves to the cluster's value). Neither side carries JSON nulls: Kubernetes reads a
 //! null as absent. A Secret's write-only `stringData` reads back from the
 //! `data` the server folded it into.
 
 use super::openapi::Kind;
+use crate::provider::{get_path, set_path};
 use anyhow::{Result, bail};
 use serde_json::{Map, Value as Json, json};
 
@@ -214,8 +216,9 @@ fn base64(s: &str) -> Option<Vec<u8>> {
 }
 
 /// The computed values of a live object: its server-written metadata, its
-/// name and namespace, and `status`.
-pub fn computed(live: &Json) -> Json {
+/// name and namespace, `status`, and its value at each path of `defaulted`
+/// (the type's other Optional+Computed paths outside a list element).
+pub fn computed(live: &Json, defaulted: &[String]) -> Json {
     let live = strip_nulls(live);
     let mut meta = Map::new();
     for k in COMPUTED_META.iter().chain(&["name", "namespace"]) {
@@ -228,7 +231,13 @@ pub fn computed(live: &Json) -> Json {
     if let Some(s) = live.get("status") {
         out.insert("status".into(), s.clone());
     }
-    Json::Object(out)
+    let mut out = Json::Object(out);
+    for p in defaulted {
+        if let Some(v) = get_path(&live, p) {
+            set_path(&mut out, p, v.clone());
+        }
+    }
+    out
 }
 
 /// A remote id: `NAMESPACE/NAME`, or `NAME` for a cluster-scoped kind (or
@@ -348,7 +357,7 @@ mod tests {
                    "metadata": {"generateName": "web-config-", "labels": {"team": "a"}}})
         );
         assert_eq!(
-            computed(&live),
+            computed(&live, &[]),
             json!({"metadata": {"name": "web-config-x7k2p", "namespace": "shop", "uid": "u-1",
                                 "resourceVersion": "42",
                                 "creationTimestamp": "2026-09-28T00:00:00Z"}})
@@ -381,7 +390,7 @@ mod tests {
             json!({"spec": {"finalizers": ["kubernetes"]}})
         );
         assert_eq!(
-            computed(&live),
+            computed(&live, &[]),
             json!({"metadata": {"name": "shop", "uid": "u"}, "status": {"phase": "Active"}})
         );
     }

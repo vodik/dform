@@ -22,6 +22,10 @@
 //!   `metadata.namespace` is `optional_computed` (the kubeconfig's
 //!   namespace); both are `force_new`, since another name is another
 //!   object;
+//! - a property the server defaults (its schema has a `default`, or it is
+//!   one of [`SERVER_DEFAULTED`]) and that is not an object is
+//!   `optional_computed`: a program may set it, and a ref to it is a null
+//!   the cluster's value resolves;
 //! - a property in its object's `required` list is `required`: Plan refuses
 //!   a document that sets the object but not the property;
 //! - a Secret's `data` and `stringData` are `sensitive`.
@@ -52,6 +56,33 @@ pub const PROVIDER: &str = "kubernetes";
 
 /// Read attempts before an object state maps is taken as gone.
 pub const RETRY: i64 = 5;
+
+/// Properties the API server defaults that the OpenAPI document does not
+/// mark with a `default` (the snapshot drops them all), by path: a list
+/// element's properties are dotted through the list. Leaves only: the value
+/// of an unset Optional+Computed path is the cluster's, so an object would
+/// carry the server's whole object into the document (`spec.strategy`'s
+/// `rollingUpdate` beside a program's `type: Recreate`, which the server
+/// refuses). `metadata.uid` is `computed` already.
+pub const SERVER_DEFAULTED: [&str; 17] = [
+    "spec.clusterIP",
+    "spec.clusterIPs",
+    "spec.type",
+    "spec.sessionAffinity",
+    "spec.ipFamilies",
+    "spec.ipFamilyPolicy",
+    "spec.internalTrafficPolicy",
+    "spec.progressDeadlineSeconds",
+    "spec.revisionHistoryLimit",
+    "spec.strategy.type",
+    "spec.template.spec.dnsPolicy",
+    "spec.template.spec.restartPolicy",
+    "spec.template.spec.schedulerName",
+    "spec.template.spec.terminationGracePeriodSeconds",
+    "spec.template.spec.containers.imagePullPolicy",
+    "spec.template.spec.containers.terminationMessagePath",
+    "spec.template.spec.containers.terminationMessagePolicy",
+];
 
 /// A kind the API serves: where its objects live and what they are called.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -362,7 +393,7 @@ impl<'a> Walk<'a> {
         ) || (p == "metadata.namespace" && !self.kind.namespaced)
     }
 
-    fn flags(&self, p: &str, ctx: Ctx, required: bool) -> Vec<&'static str> {
+    fn flags(&self, p: &str, ctx: Ctx, required: bool, defaulted: bool) -> Vec<&'static str> {
         match p {
             "metadata.name" => return vec!["optional_computed", "id", "force_new"],
             "metadata.namespace" => return vec!["optional_computed", "force_new"],
@@ -377,6 +408,8 @@ impl<'a> Walk<'a> {
         let mut out = Vec::new();
         if ctx.computed {
             out.push("computed");
+        } else if defaulted || SERVER_DEFAULTED.contains(&p) {
+            out.push("optional_computed");
         } else if required {
             out.push("required");
         }
@@ -402,18 +435,22 @@ impl<'a> Walk<'a> {
             if stack.contains(&n) {
                 // A recursive schema (a CRD's JSONSchemaProps): the rest is
                 // any value.
-                self.attrs
-                    .push((p.to_string(), "any", self.flags(p, ctx, required)));
+                self.attrs.push((
+                    p.to_string(),
+                    "any",
+                    self.flags(p, ctx, required, self.get(node, "default").is_some()),
+                ));
                 return;
             }
             stack.push(n);
         }
         let ty = self.ty(node);
+        let defaulted = self.get(node, "default").is_some() && ty != "object";
         // A computed value is minted per path, so computed paths do not
         // nest: an object the server writes is its leaves.
         if !(ctx.computed && ty == "object") {
             self.attrs
-                .push((p.to_string(), ty, self.flags(p, ctx, required)));
+                .push((p.to_string(), ty, self.flags(p, ctx, required, defaulted)));
         }
         match ty {
             "object" => self.object(node, p, ctx, stack),
@@ -523,5 +560,45 @@ mod tests {
             s.replace_order(dep),
             crate::schema::ReplaceOrder::CreateFirst
         );
+    }
+
+    /// What the server defaults is Optional+Computed: a `default` in the
+    /// document, else the known paths; an object never is.
+    #[test]
+    fn server_defaulted_fields_are_optional_computed() {
+        let s = snapshot().unwrap().schema;
+        let (svc, dep) = ("k8s.core.v1.service", "k8s.apps.v1.deployment");
+        for (t, p) in [
+            (svc, "spec.clusterIP"),
+            (svc, "spec.type"),
+            (dep, "spec.strategy.type"),
+            (dep, "spec.template.spec.containers.imagePullPolicy"),
+        ] {
+            assert!(s.attr(t, p).unwrap().has("optional_computed"), "{t} {p}");
+        }
+        assert!(
+            !s.attr(dep, "spec.strategy")
+                .unwrap()
+                .has("optional_computed")
+        );
+        assert!(s.attr(dep, "metadata.uid").unwrap().has("computed"));
+
+        let doc = serde_json::json!({"paths": {"apis/x.io/v1": {
+            "paths": {"/apis/x.io/v1/namespaces/{namespace}/things/{name}": {"patch": {
+                "x-kubernetes-group-version-kind":
+                    {"group": "x.io", "version": "v1", "kind": "Thing"}}}},
+            "components": {"schemas": {"Thing": {
+                "x-kubernetes-group-version-kind":
+                    [{"group": "x.io", "version": "v1", "kind": "Thing"}],
+                "properties": {"spec": {"type": "object", "properties": {
+                    "mode": {"type": "string", "default": "fast"},
+                    "size": {"type": "integer"},
+                    "opts": {"type": "object", "default": {},
+                             "properties": {"a": {"type": "string"}}}}}}}}}}}});
+        let s = derive(&doc, &[]).unwrap().schema;
+        let t = "k8s.x.io.v1.thing";
+        assert!(s.attr(t, "spec.mode").unwrap().has("optional_computed"));
+        assert!(!s.attr(t, "spec.size").unwrap().has("optional_computed"));
+        assert!(!s.attr(t, "spec.opts").unwrap().has("optional_computed"));
     }
 }

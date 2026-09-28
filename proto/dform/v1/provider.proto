@@ -41,7 +41,8 @@ service Provider {
   rpc Import(ImportRequest) returns (ImportResponse);
 }
 
-// A value, as src/value.rs has it.
+// A value, as src/value.rs has it, and a float, which it does not have: the
+// engine reads a float as the string of its shortest round-trip decimal.
 message Value {
   oneof kind {
     string str = 1;
@@ -56,6 +57,7 @@ message Value {
     Ref ref = 9;
     Ref cloud_ref = 10;
     Null null = 11;
+    double float = 12;
   }
 }
 
