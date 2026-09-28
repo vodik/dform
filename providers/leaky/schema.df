@@ -1,0 +1,20 @@
+# Mock schema for tests/secrets.rs, the never-prints-a-secret test.
+#
+# Two resource types differ only in whether `password` -- a value the
+# PROGRAM sets directly, not a provider-minted computed one -- carries the
+# schema's `sensitive` flag:
+#
+#   leaky.vault: password is [sensitive]           (labeled correctly)
+#   leaky.oops:  password has no flags              (mislabeled: public)
+#
+# The never-prints test drives a program through both and checks every
+# place dform prints or stores a resource's attributes.
+
+type_provider(leaky.vault, fakecloud).
+type_provider(leaky.oops, fakecloud).
+
+type_attr(leaky.vault, id, string, [computed, id]).
+type_attr(leaky.vault, password, string, [sensitive]).
+
+type_attr(leaky.oops, id, string, [computed, id]).
+type_attr(leaky.oops, password, string, []).
