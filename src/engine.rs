@@ -1,6 +1,8 @@
 use crate::ast::{Atom, Constraint, Lit, Program, RuleStmt, Span, Term};
 use crate::circuit::{self, Circuit, Leaf, NodeId};
 use crate::diag;
+use crate::ir::ops::{self, AggKind};
+use crate::ir::store::{Store, TupleId, Window};
 use crate::lattice::{self, Collapsed2, Lattice, Rank, RankedContribution, Shadowed, Witnesses};
 use crate::lattice::{Truth, nulls_in};
 use crate::partition::{self, Node};
@@ -9,6 +11,7 @@ use crate::transform;
 use crate::value::Value;
 use anyhow::{Context, Result, anyhow, bail};
 use std::cell::RefCell;
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 #[derive(Debug, Clone)]
@@ -20,6 +23,9 @@ pub struct EvalResult {
     pub stuck: Vec<Stuck>,
     /// Provenance (E §3.1, DR-10): every fact above has a node here.
     pub circuit: Circuit,
+    /// Work done: index lookups plus tuples read (a deterministic cost
+    /// for the scale benchmark).
+    pub reads: u64,
 }
 
 /// The circuit's spelling of a ground fact.
@@ -39,30 +45,45 @@ pub fn circuit_fact(a: &Atom) -> circuit::Fact {
 /// The aggregate marker Σ of the attribute aggregate (E §3.1).
 const ATTR_SIGMA: &str = "Σattr";
 
-/// The evaluator's side of the circuit: node ids by fact, so recording a
-/// firing needs no copy of a tuple the circuit already has.
-#[derive(Default)]
+/// The fact store and its provenance: every tuple in the store has a node
+/// in the circuit, recorded when the tuple is inserted and once more per
+/// distinct firing that derives it again.
+#[derive(Default, Clone)]
 struct Prov {
     circuit: Circuit,
-    ids: BTreeMap<Atom, NodeId>,
+    store: Store,
+    /// Circuit node per tuple id.
+    node: Vec<NodeId>,
 }
 
 impl Prov {
-    fn record(&mut self, a: &Atom, children: Vec<NodeId>, bindings: Vec<(String, Value)>) {
-        match self.ids.get(a) {
-            Some(&id) => self.circuit.fire(id, children, bindings),
+    /// Record one firing of `a` and insert it: its tuple id, and whether
+    /// it is new.
+    fn record(
+        &mut self,
+        a: Atom,
+        children: Vec<NodeId>,
+        bindings: Vec<(String, Value)>,
+    ) -> (TupleId, bool) {
+        match self.store.id(&a) {
+            Some(id) => {
+                self.circuit
+                    .fire(self.node[id as usize], children, bindings);
+                (id, false)
+            }
             None => {
-                let id = self
+                let n = self
                     .circuit
-                    .derive_with(circuit_fact(a), children, bindings);
-                self.ids.insert(a.clone(), id);
+                    .derive_with(circuit_fact(&a), children, bindings);
+                self.node.push(n);
+                (self.store.insert(a).0, true)
             }
         }
     }
 
-    fn given(&mut self, a: &Atom, leaf: Leaf) {
+    fn given(&mut self, a: Atom, leaf: Leaf) -> TupleId {
         let l = self.circuit.leaf(leaf);
-        self.record(a, vec![l], vec![]);
+        self.record(a, vec![l], vec![]).0
     }
 
     fn rule(&mut self, id: String, text: &str, span: Span) -> NodeId {
@@ -79,8 +100,8 @@ impl Prov {
         })
     }
 
-    fn id(&self, a: &Atom) -> NodeId {
-        self.ids[a]
+    fn id(&self, t: TupleId) -> NodeId {
+        self.node[t as usize]
     }
 }
 
@@ -118,17 +139,105 @@ const AGGREGATE_OUTPUTS: [&str; 3] = ["attr", "attr_conflict", "attr_stuck"];
 const LATTICE_DECLS: [&str; 2] = ["type_lattice", "type_list_key"];
 
 pub fn eval(program: &Program, extra_facts: &[Atom]) -> Result<(EvalResult, Vec<String>)> {
+    let (c, mut st) = start(program, extra_facts)?;
+    run(&c, &mut st, 0)?;
+    finish(&c, st)
+}
+
+/// An evaluation that can be continued with more given facts: the policy
+/// pass (E §2.8), which hands the plan's deformation back to the program.
+/// Only the strata from the first one that reads those facts are
+/// evaluated again, over a copy of the store (indexes included) as it was
+/// before that stratum.
+pub struct Resumable {
+    c: Compiled,
+    /// The first stratum a rule reading a later predicate is in.
+    at: usize,
+    state: State,
+}
+
+/// `eval`, keeping what `Resumable::with` needs to evaluate again with
+/// more given facts of the predicates `later` (which the program must
+/// define: `decl` or a core predicate).
+pub fn eval_resumable(
+    program: &Program,
+    extra_facts: &[Atom],
+    later: &[&str],
+) -> Result<(EvalResult, Vec<String>, Resumable)> {
+    let (c, mut st) = start(program, extra_facts)?;
+    let reads_later = |body: &[Lit]| {
+        body.iter().any(|l| match l {
+            Lit::Pos(a) | Lit::Not(a) => later.contains(&a.pred.as_str()),
+            _ => false,
+        })
+    };
+    let at = (0..c.rules.len())
+        .filter(|&i| reads_later(&c.rules[i].body))
+        .map(|i| c.rule_stratum[i])
+        .min()
+        .unwrap_or(c.fixes.len());
+    run_strata(&c, &mut st, 0..at)?;
+    let state = st.clone();
+    run(&c, &mut st, at)?;
+    let (res, violations) = finish(&c, st)?;
+    Ok((res, violations, Resumable { c, at, state }))
+}
+
+impl Resumable {
+    /// The evaluation with `more` given facts as well: the same result as
+    /// `eval` with `more` appended to the given facts, except that their
+    /// circuit nodes come after those of the strata below the first reader.
+    pub fn with(&self, more: &[Atom]) -> Result<(EvalResult, Vec<String>)> {
+        let mut st = self.state.clone();
+        for f in more {
+            let g = ensure_ground(f)?;
+            let leaf = given_leaf(&g, &self.c.externs);
+            st.prov.given(g, leaf);
+        }
+        run(&self.c, &mut st, self.at)?;
+        finish(&self.c, st)
+    }
+}
+
+/// The program compiled for evaluation: rules and constraints, their
+/// operator IR, the strata, and the circuit's rule leaves.
+struct Compiled {
+    rules: Vec<RuleStmt>,
+    constraints: Vec<Constraint>,
+    externs: BTreeSet<crate::ast::Extern>,
+    plans: Vec<ops::Rule>,
+    constraint_bodies: Vec<ops::Body>,
+    rule_stratum: Vec<usize>,
+    fixes: Vec<ops::Fix>,
+    rule_text: Vec<String>,
+    rule_leaf: Vec<NodeId>,
+    sigma: NodeId,
+    /// Predicates defined by an aggregate rule, and `attr`.
+    aggregates: BTreeSet<String>,
+}
+
+/// Everything an evaluation accumulates.
+#[derive(Clone)]
+struct State {
+    prov: Prov,
+    origins: Origins,
+    known: RefCell<stuck::Known>,
+    stucks: Vec<Stuck>,
+    attrs: AttrAggregate,
+}
+
+/// Compile the program, insert the given and stated facts, and stratify.
+fn start(program: &Program, extra_facts: &[Atom]) -> Result<(Compiled, State)> {
     // The program as it runs and the partition graph it is stratified by,
     // built in one place (`dform strata` prints the same graph).
     let compiled = partition::compile(program, extra_facts)?;
     let externs = compiled.externs;
-    let mut facts: BTreeSet<Atom> = BTreeSet::new();
     let mut origins = Origins::default();
     let mut prov = Prov::default();
     for f in extra_facts {
         let g = ensure_ground(f)?;
-        prov.given(&g, given_leaf(&g, &externs));
-        facts.insert(g);
+        let leaf = given_leaf(&g, &externs);
+        prov.given(g, leaf);
     }
 
     let (rules, constraints, fact_atoms) = (compiled.rules, compiled.constraints, compiled.facts);
@@ -153,17 +262,20 @@ pub fn eval(program: &Program, extra_facts: &[Atom]) -> Result<(EvalResult, Vec<
 
     for a in &fact_atoms {
         let g = ensure_ground(a)?;
-        origins.note(&g, with_place(partition::fmt_atom(&g), g.span));
+        let at = g.span;
         let span = match (diag::at(g.span), diag::origin(g.span)) {
             (Some(at), Some(o)) => format!("{at} ({}, {o})", g.pred),
             (Some(at), None) => format!("{at} ({})", g.pred),
             (None, _) => format!("compiler ({})", g.pred),
         };
-        prov.given(&g, Leaf::Base { span });
-        facts.insert(g);
+        let contribution = is_contribution(&g);
+        let t = prov.given(g, Leaf::Base { span });
+        if contribution {
+            origins.note(t, Origin::Fact(at));
+        }
     }
 
-    check_defined(&rules, &constraints, &facts, &externs)?;
+    check_defined(&rules, &constraints, prov.store.atoms(), &externs)?;
 
     // Stratified evaluation over the partition graph (E §2.6, F DR-12
     // revised). Every rule runs in the stratum of its head node.
@@ -186,7 +298,25 @@ pub fn eval(program: &Program, extra_facts: &[Atom]) -> Result<(EvalResult, Vec<
                 .unwrap_or(0)
         })
         .collect();
+    // The operator IR: one body per rule and constraint, a Fix per
+    // stratum.
+    let extern_preds: BTreeSet<String> = externs.iter().map(|e| e.pred.clone()).collect();
+    let plans: Vec<ops::Rule> = rules
+        .iter()
+        .map(|r| ops::compile_rule(r, &extern_preds))
+        .collect();
+    let constraint_bodies: Vec<ops::Body> = constraints
+        .iter()
+        .map(|c| ops::compile_body(&c.body, &extern_preds))
+        .collect();
+    let fixes = ops::fixes(&rules, &rule_stratum, &plans);
+
     let rule_text: Vec<String> = rules.iter().map(partition::fmt_rule).collect();
+    origins.rules = rule_text
+        .iter()
+        .zip(&rules)
+        .map(|(t, r)| with_place(t.clone(), r.head.span))
+        .collect();
     let rule_leaf: Vec<NodeId> = rule_text
         .iter()
         .enumerate()
@@ -203,137 +333,236 @@ pub fn eval(program: &Program, extra_facts: &[Atom]) -> Result<(EvalResult, Vec<
         .map(|r| r.head.pred.clone())
         .chain(["attr".to_string()])
         .collect();
-    let mut stucks: Vec<Stuck> = Vec::new();
-    let known = RefCell::new(stuck::Known::default());
-    let mut attrs = AttrAggregate::new(&strata);
-    let max_stratum = rule_stratum.iter().copied().max().unwrap_or(0);
-    for s in 0..=max_stratum {
+    let attrs = AttrAggregate::new(&strata);
+    Ok((
+        Compiled {
+            rules,
+            constraints,
+            externs,
+            plans,
+            constraint_bodies,
+            rule_stratum,
+            fixes,
+            rule_text,
+            rule_leaf,
+            sigma,
+            aggregates,
+        },
+        State {
+            prov,
+            origins,
+            known: RefCell::new(stuck::Known::default()),
+            stucks: Vec::new(),
+            attrs,
+        },
+    ))
+}
+
+/// Evaluate every stratum from `from`, then collapse what is left of the
+/// attribute aggregate.
+fn run(c: &Compiled, st: &mut State, from: usize) -> Result<()> {
+    run_strata(c, st, from..c.fixes.len())?;
+    let State {
+        prov,
+        origins,
+        known,
+        stucks,
+        attrs,
+    } = st;
+    let ready = attrs.emit_ready(usize::MAX, prov, origins, &known.borrow(), c.sigma)?;
+    stucks.extend(ready);
+    attrs.check_complete()
+}
+
+/// Evaluate strata `range` in order.
+fn run_strata(c: &Compiled, st: &mut State, range: std::ops::Range<usize>) -> Result<()> {
+    let State {
+        prov,
+        origins,
+        known,
+        stucks,
+        attrs,
+    } = st;
+    let known: &RefCell<stuck::Known> = known;
+    let (rules, plans) = (&c.rules, &c.plans);
+    for s in range {
+        let fix = &c.fixes[s];
         // Attribute groups whose contributors all sit below this stratum
         // are complete: collapse them before any rule here reads them.
-        let ready = attrs.emit_ready(s, &mut facts, &origins, &known.borrow(), &mut prov, sigma)?;
+        let ready = attrs.emit_ready(s, prov, origins, &known.borrow(), c.sigma)?;
         for st in ready {
             known.borrow_mut().add(&st);
             stucks.push(st);
         }
-        let rules_s: Vec<(usize, &RuleStmt)> = rules
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| rule_stratum[*i] == s)
-            .collect();
-        if rules_s.is_empty() {
+        if fix.rules.is_empty() {
             continue;
         }
-        let recs: Vec<Rec> = rules_s
+        let recs: Vec<Rec> = fix
+            .rules
             .iter()
-            .map(|(i, r)| Rec {
-                rule: *i,
-                head: &r.head,
-                text: &rule_text[*i],
-                known: &known,
-                aggregates: &aggregates,
+            .map(|&i| Rec {
+                rule: i,
+                head: &rules[i].head,
+                text: &c.rule_text[i],
+                known,
+                aggregates: &c.aggregates,
                 found: RefCell::new(Vec::new()),
             })
             .collect();
 
-        // Naive iteration to the stratum's fixpoint. It terminates: facts
-        // only grow, and a stratum derives finitely many unless a builtin
-        // invents values without bound (`n(Y) :- n(X), Y = X + 1`). An
-        // aggregate may share a stratum with its readers, so a stuck
-        // instance found here is known to the next round (Rule 3).
+        // Semi-naive iteration to the stratum's fixpoint. It terminates:
+        // facts only grow, and a stratum derives finitely many unless a
+        // builtin invents values without bound (`n(Y) :- n(X), Y = X + 1`).
+        //
+        // The first round reads every tuple. After it, a round joins each
+        // rule once per body position against the tuples the last round
+        // derived there (the delta): the positions before it read the
+        // tuples older than the delta, the positions after it every tuple.
+        // So every combination of tuples is joined in exactly one round,
+        // the round after its newest tuple arrived.
+        //
+        // An aggregate may share a stratum with its readers, so a stuck
+        // instance found here is known to the next round (Rule 3). Rule 3
+        // can turn a combination that fired into a stuck one, so a round
+        // after a stuck instance is found reads every tuple again, as the
+        // first does.
         let mut seen = vec![0usize; recs.len()];
-        let mut changed = true;
-        while changed {
-            changed = false;
-
-            let snapshot: Vec<Atom> = facts.iter().cloned().collect();
+        let mut full = true;
+        let mut delta = Window::below(0);
+        loop {
+            let hi = prov.store.len();
             let mut derived: Vec<(usize, Derived)> = Vec::new();
-            for ((i, r), rec) in rules_s.iter().zip(&recs) {
-                derived.extend(eval_rule(r, &snapshot, rec)?.into_iter().map(|a| (*i, a)));
+            for (&i, rec) in fix.rules.iter().zip(&recs) {
+                let plan = &plans[i];
+                let wins = |w: &dyn Fn(usize) -> Window| -> Vec<Window> {
+                    (0..rules[i].body.len()).map(w).collect()
+                };
+                if full {
+                    let src = Src {
+                        store: &prov.store,
+                        body: &plan.body,
+                        win: wins(&|_| Window::below(hi)),
+                        all: Window::below(hi),
+                    };
+                    let out = eval_rule(&rules[i], plan, &src, rec)?;
+                    derived.extend(out.into_iter().map(|d| (i, d)));
+                    continue;
+                }
+                if matches!(plan.head, ops::Head::Agg { .. }) {
+                    // Every relation an aggregate reads is complete below
+                    // this stratum: the first round decided it.
+                    continue;
+                }
+                for read in plan.body.reads() {
+                    if !prov.store.any_in(&read.rel, delta) {
+                        continue;
+                    }
+                    let at = read.lit;
+                    let src = Src {
+                        store: &prov.store,
+                        body: &plan.body,
+                        win: wins(&|l| match l.cmp(&at) {
+                            Ordering::Less => Window::below(delta.lo),
+                            Ordering::Equal => delta,
+                            Ordering::Greater => Window::below(hi),
+                        }),
+                        all: Window::below(hi),
+                    };
+                    let out = eval_rule(&rules[i], plan, &src, rec)?;
+                    derived.extend(out.into_iter().map(|d| (i, d)));
+                }
             }
+            // The order a naive round would derive in (rule, then the
+            // tuples each body literal matched, in fact order): it decides
+            // circuit node ids, and so the order `why` prints children in.
+            let store = &prov.store;
+            derived.sort_by(|(i, a), (j, b)| {
+                i.cmp(j).then_with(|| cmp_order(store, &a.order, &b.order))
+            });
+            let mut changed = false;
             for (i, d) in derived {
-                origins.note(
-                    &d.head,
-                    with_place(rule_text[i].clone(), rules[i].head.span),
-                );
-                let mut children = vec![rule_leaf[i]];
-                children.extend(d.used.iter().map(|k| prov.id(&snapshot[*k])));
+                let contribution = is_contribution(&d.head);
+                let mut children = vec![c.rule_leaf[i]];
+                children.extend(d.used.iter().map(|&t| prov.id(t)));
                 for a in &d.absent {
                     children.push(prov.absent(a));
                 }
-                prov.record(&d.head, children, d.bindings);
-                if facts.insert(d.head) {
-                    changed = true;
+                let (t, new) = prov.record(d.head, children, d.bindings);
+                if contribution {
+                    origins.note(t, Origin::Rule(i));
                 }
+                changed |= new;
             }
+            let mut grew = false;
             for (rec, n) in recs.iter().zip(seen.iter_mut()) {
                 let found = rec.found.borrow();
                 for st in &found[*n..] {
                     known.borrow_mut().add(st);
-                    changed = true;
+                    grew = true;
                 }
                 *n = found.len();
             }
+            if !changed && !grew {
+                break;
+            }
+            full = grew;
+            delta = Window {
+                lo: hi,
+                hi: prov.store.len(),
+            };
         }
         stucks.extend(recs.into_iter().flat_map(|r| r.found.into_inner()));
     }
-    let ready = attrs.emit_ready(
-        usize::MAX,
-        &mut facts,
-        &origins,
-        &known.borrow(),
-        &mut prov,
-        sigma,
-    )?;
-    stucks.extend(ready);
-    attrs.check_complete(&facts)?;
+    Ok(())
+}
 
+/// Check the constraints against the final facts, read the policy facts,
+/// and derive `stuck/4`.
+fn finish(c: &Compiled, st: State) -> Result<(EvalResult, Vec<String>)> {
+    let State {
+        mut prov,
+        known,
+        mut stucks,
+        ..
+    } = st;
+    let (rules, constraints) = (&c.rules, &c.constraints);
     // Constraints are checked against the final fact set.
-    let snapshot: Vec<Atom> = facts.iter().cloned().collect();
+    let hi = prov.store.len();
     let mut violations = Vec::new();
-    for (k, c) in constraints.iter().enumerate() {
+    for (k, con) in constraints.iter().enumerate() {
         let head = Atom {
             pred: "deny".into(),
-            args: vec![Term::Val(Value::Str(c.message.clone()))],
+            args: vec![Term::Val(Value::Str(con.message.clone()))],
             record: None,
-            span: c.span,
+            span: con.span,
         };
-        let text = partition::fmt_rule(&partition::constraint_rule(c));
+        let text = partition::fmt_rule(&partition::constraint_rule(con));
         let rec = Rec {
             rule: rules.len() + k,
             head: &head,
             text: &text,
             known: &known,
-            aggregates: &aggregates,
+            aggregates: &c.aggregates,
             found: RefCell::new(Vec::new()),
         };
-        if constraint_violated(c, &snapshot, &rec)? {
-            violations.push(c.message.clone());
+        let src = Src {
+            store: &prov.store,
+            body: &c.constraint_bodies[k],
+            win: vec![Window::below(hi); con.body.len()],
+            all: Window::below(hi),
+        };
+        if !eval_body(&con.body, &src, &rec)?.is_empty() {
+            violations.push(con.message.clone());
         }
         stucks.extend(rec.found.into_inner());
     }
-    // A compiler-generated companion (`__ref_dep`) is stuck exactly when
-    // the contribution it shadows is.
-    stucks.retain(|s| !s.head.pred.starts_with("__"));
-    stucks.sort();
-    stucks.dedup();
-    for st in &stucks {
-        let f = st.fact();
-        let by = match st.rule {
-            Some(i) if i < rule_leaf.len() => rule_leaf[i],
-            Some(i) => prov.rule(
-                format!("c{}", i - rules.len()),
-                &st.text,
-                constraints[i - rules.len()].span,
-            ),
-            None => sigma,
-        };
-        prov.record(&f, vec![by], vec![]);
-        facts.insert(f);
+    let mut facts: BTreeSet<Atom> = BTreeSet::new();
+    for a in prov.store.atoms() {
+        facts.insert(a.clone());
     }
-
     // Policy facts: deny/warn.
     let mut warnings = Vec::new();
-    for a in &snapshot {
+    for a in &facts {
         match a.pred.as_str() {
             "warn" => warnings.push(format_policy_fact(a)?),
             "deny" => violations.push(format_policy_fact(a)?),
@@ -341,12 +570,34 @@ pub fn eval(program: &Program, extra_facts: &[Atom]) -> Result<(EvalResult, Vec<
         }
     }
 
+    // A compiler-generated companion (`__ref_dep`) is stuck exactly when
+    // the contribution it shadows is.
+    stucks.retain(|s| !s.head.pred.starts_with("__"));
+    stucks.sort();
+    stucks.dedup();
+    for s in &stucks {
+        let f = s.fact();
+        let by = match s.rule {
+            Some(i) if i < c.rule_leaf.len() => c.rule_leaf[i],
+            Some(i) => prov.rule(
+                format!("c{}", i - rules.len()),
+                &s.text,
+                constraints[i - rules.len()].span,
+            ),
+            None => c.sigma,
+        };
+        prov.record(f.clone(), vec![by], vec![]);
+        facts.insert(f);
+    }
+
+    let reads = prov.store.reads.get();
     Ok((
         EvalResult {
             facts,
             warnings,
             stuck: stucks,
             circuit: prov.circuit,
+            reads,
         },
         violations,
     ))
@@ -359,7 +610,12 @@ pub type Answer = (BTreeMap<String, Value>, Vec<Atom>);
 /// `dform why`): every way to satisfy it, with the facts each matched, in
 /// body order. Read-only: nothing is derived and nothing is recorded stuck.
 pub fn query(body: &[Lit], facts: &BTreeSet<Atom>) -> Result<Vec<Answer>> {
-    let snapshot: Vec<Atom> = facts.iter().cloned().collect();
+    let plan = ops::compile_body(body, &BTreeSet::new());
+    // Tuple ids in fact order: answers come out in fact order.
+    let mut store = Store::default();
+    for a in facts {
+        store.insert(a.clone());
+    }
     let head = Atom {
         pred: "query".into(),
         args: vec![],
@@ -376,11 +632,18 @@ pub fn query(body: &[Lit], facts: &BTreeSet<Atom>) -> Result<Vec<Answer>> {
         aggregates: &aggregates,
         found: RefCell::new(Vec::new()),
     };
-    Ok(eval_body(body, &snapshot, &rec)?
+    let all = Window::below(store.len());
+    let src = Src {
+        store: &store,
+        body: &plan,
+        win: vec![all; body.len()],
+        all,
+    };
+    Ok(eval_body(body, &src, &rec)?
         .into_iter()
         .map(|r| {
             let b = r.s.into_iter().filter(|(k, _)| !k.starts_with("__"));
-            let used = r.used.iter().map(|k| snapshot[*k].clone()).collect();
+            let used = r.used.iter().map(|&t| store.get(t).clone()).collect();
             (b.collect(), used)
         })
         .collect())
@@ -392,7 +655,7 @@ pub fn query(body: &[Lit], facts: &BTreeSet<Atom>) -> Result<Vec<Answer>> {
 fn check_defined(
     rules: &[RuleStmt],
     constraints: &[Constraint],
-    facts: &BTreeSet<Atom>,
+    facts: &[Atom],
     externs: &BTreeSet<crate::ast::Extern>,
 ) -> Result<()> {
     let mut defined: BTreeSet<&str> = facts.iter().map(|a| a.pred.as_str()).collect();
@@ -400,20 +663,20 @@ fn check_defined(
     defined.extend(externs.iter().map(|e| e.pred.as_str()));
     let is_defined = |p: &str| {
         defined.contains(p)
-            || is_builtin_pred(p)
+            || ops::is_builtin_pred(p)
             || matches!(p, "member" | "enumerate")
             || crate::loader::is_core_pred(p)
     };
+    let text = |k: usize| match rules.get(k) {
+        Some(r) => partition::fmt_rule(r),
+        None => partition::fmt_rule(&partition::constraint_rule(&constraints[k - rules.len()])),
+    };
     let bodies = rules
         .iter()
-        .map(|r| (&r.body, partition::fmt_rule(r)))
-        .chain(
-            constraints
-                .iter()
-                .map(|c| (&c.body, partition::fmt_rule(&partition::constraint_rule(c)))),
-        );
+        .map(|r| &r.body)
+        .chain(constraints.iter().map(|c| &c.body));
     let mut errors = Vec::new();
-    for (body, text) in bodies {
+    for (k, body) in bodies.enumerate() {
         for lit in body {
             let (Lit::Pos(a) | Lit::Not(a)) = lit else {
                 continue;
@@ -424,7 +687,7 @@ fn check_defined(
                         a.span,
                         format!("undefined predicate {}/{}", a.pred, a.args.len()),
                     )
-                    .with_note(format!("in rule: {text}"))
+                    .with_note(format!("in rule: {}", text(k)))
                     .with_help(format!(
                         "define it, or declare a predicate a provider feeds with `decl {}/{}.`",
                         a.pred,
@@ -455,31 +718,57 @@ fn at_suffix(span: Span) -> String {
         .unwrap_or_default()
 }
 
+/// A contribution to the attribute aggregate: `arg/5`.
+fn is_contribution(a: &Atom) -> bool {
+    a.pred == "arg" && a.args.len() == 5
+}
+
+/// One place a contribution came from.
+#[derive(Debug, Clone, Copy)]
+enum Origin {
+    /// The program states it, here.
+    Fact(Span),
+    /// Rule `i` derived it.
+    Rule(usize),
+}
+
 /// Where each contribution came from: the text of every rule that derived
-/// it, or of the fact, with where it is written.
-#[derive(Default)]
-struct Origins(BTreeMap<Atom, BTreeSet<String>>);
+/// it, or of the fact, with where it is written. Spelled out only for a
+/// witness the aggregate names.
+#[derive(Default, Clone)]
+struct Origins {
+    by: HashMap<TupleId, Vec<Origin>>,
+    /// Each rule's text with its place.
+    rules: Vec<String>,
+}
 
 impl Origins {
-    fn note(&mut self, a: &Atom, from: String) {
-        if a.pred == "arg" && a.args.len() == 5 {
-            self.0.entry(a.clone()).or_default().insert(from);
-        }
+    fn note(&mut self, t: TupleId, o: Origin) {
+        self.by.entry(t).or_default().push(o);
     }
-    fn of(&self, a: &Atom) -> Vec<String> {
-        self.0
-            .get(a)
-            .map(|s| s.iter().cloned().collect())
-            .unwrap_or_default()
+
+    /// The origins of tuple `t` (which is `a`), sorted.
+    fn of(&self, t: TupleId, a: &Atom) -> Vec<String> {
+        let texts: BTreeSet<String> = self
+            .by
+            .get(&t)
+            .into_iter()
+            .flatten()
+            .map(|o| match o {
+                Origin::Fact(span) => with_place(partition::fmt_atom(a), *span),
+                Origin::Rule(i) => self.rules[*i].clone(),
+            })
+            .collect();
+        texts.into_iter().collect()
     }
 }
 
 /// One attribute group `(T, A, P)`: the type, the address, the normalized path.
 type GroupKey = (String, Value, String);
 
-/// One contribution to a group: the `arg/5` fact, its rank, and its value
+/// One contribution to a group: the `arg/5` tuple, its rank, and its value
 /// after path normalization.
-type Contribution = (Atom, Rank, Value);
+type Contribution = (TupleId, Rank, Value);
 
 /// The attribute aggregate of E §2.5 inside the evaluator: `attr/4`,
 /// `attr_conflict/5` and `attr_stuck/4` from the `arg/5` contributions, one
@@ -487,9 +776,24 @@ type Contribution = (Atom, Rank, Value);
 /// (DR-9 revised). A group is collapsed once, as soon as every partition
 /// node that can contribute to it is in a lower stratum; the stratifier
 /// puts every reader of the group above that.
+///
+/// Contributions are grouped as they arrive (the `arg/5` tuples inserted
+/// since the last collapse), so a stratum costs the groups it collapses,
+/// not a pass over every fact.
+#[derive(Clone)]
 struct AttrAggregate {
     arg_nodes: Vec<(Node, usize)>,
-    emitted: BTreeMap<GroupKey, Vec<Atom>>,
+    /// `ready_at` per `T`, then `P`.
+    ready: HashMap<String, HashMap<String, usize>>,
+    /// `arg/5` tuples below this id are grouped.
+    grouped: TupleId,
+    lattices: Option<BTreeMap<(String, String), Lattice>>,
+    pending: HashMap<GroupKey, Vec<Contribution>>,
+    /// The pending groups by the stratum they are complete at.
+    waiting: BTreeMap<usize, BTreeSet<GroupKey>>,
+    emitted: BTreeSet<GroupKey>,
+    /// Groups that gained a contribution after they were collapsed.
+    late: BTreeSet<GroupKey>,
 }
 
 impl AttrAggregate {
@@ -501,23 +805,66 @@ impl AttrAggregate {
             .collect();
         AttrAggregate {
             arg_nodes,
-            emitted: BTreeMap::new(),
+            ready: HashMap::new(),
+            grouped: 0,
+            lattices: None,
+            pending: HashMap::new(),
+            waiting: BTreeMap::new(),
+            emitted: BTreeSet::new(),
+            late: BTreeSet::new(),
         }
     }
 
     /// The first stratum at which group `(typ, path)` is complete.
-    fn ready_at(&self, typ: &str, path: &str) -> usize {
+    fn ready_at(&mut self, typ: &str, path: &str) -> usize {
+        if let Some(s) = self.ready.get(typ).and_then(|p| p.get(path)) {
+            return *s;
+        }
         let node = Node {
             pred: "arg".into(),
             typ: Some(typ.into()),
             path: Some(path.into()),
         };
-        self.arg_nodes
+        let s = self
+            .arg_nodes
             .iter()
             .filter(|(n, _)| n.unifies(&node))
             .map(|(_, s)| s + 1)
             .max()
-            .unwrap_or(0)
+            .unwrap_or(0);
+        self.ready
+            .entry(typ.to_string())
+            .or_default()
+            .insert(path.to_string(), s);
+        s
+    }
+
+    /// Group the contributions inserted since the last call, in fact order.
+    fn group_new(&mut self, store: &Store) -> Result<()> {
+        let rel = ops::Rel {
+            pred: "arg".into(),
+            arity: 5,
+        };
+        let w = Window {
+            lo: self.grouped,
+            hi: store.len(),
+        };
+        self.grouped = store.len();
+        let mut new: Vec<TupleId> = store.ids(&rel, w).to_vec();
+        new.sort_by(|a, b| store.get(*a).cmp(store.get(*b)));
+        for t in new {
+            let (key, rank, value) = contribution(store.get(t))?;
+            if self.emitted.contains(&key) {
+                self.late.insert(key);
+            } else {
+                if !self.pending.contains_key(&key) {
+                    let at = self.ready_at(&key.0, &key.2);
+                    self.waiting.entry(at).or_default().insert(key.clone());
+                }
+                self.pending.entry(key).or_default().push((t, rank, value));
+            }
+        }
+        Ok(())
     }
 
     /// Collapse every complete group. Rule 3 per key: a group that a stuck
@@ -527,19 +874,29 @@ impl AttrAggregate {
     fn emit_ready(
         &mut self,
         stratum: usize,
-        facts: &mut BTreeSet<Atom>,
+        prov: &mut Prov,
         origins: &Origins,
         known: &stuck::Known,
-        prov: &mut Prov,
         sigma: NodeId,
     ) -> Result<Vec<Stuck>> {
-        let lattices = declared_lattices(facts)?;
+        if self.lattices.is_none() {
+            self.lattices = Some(declared_lattices(prov.store.atoms())?);
+        }
+        self.group_new(&prov.store)?;
+        // The groups complete at this stratum, in group order.
+        let later = match stratum.checked_add(1) {
+            Some(next) => self.waiting.split_off(&next),
+            None => BTreeMap::new(),
+        };
+        let keys: BTreeSet<GroupKey> = std::mem::replace(&mut self.waiting, later)
+            .into_values()
+            .flatten()
+            .collect();
         let mut out = Vec::new();
         let mut stuck_groups = Vec::new();
-        for (key, contribs) in groups(facts)? {
-            if self.emitted.contains_key(&key) || self.ready_at(&key.0, &key.2) > stratum {
-                continue;
-            }
+        for key in keys {
+            let mut contribs = self.pending.remove(&key).unwrap_or_default();
+            contribs.sort_by(|a, b| prov.store.get(a.0).cmp(prov.store.get(b.0)));
             let (typ, addr, path) = &key;
             let read = Atom {
                 pred: "attr".into(),
@@ -566,11 +923,13 @@ impl AttrAggregate {
                     "a stuck rule instance may still contribute to this attribute".into(),
                 ));
             } else {
-                let lat = lattices
-                    .get(&(typ.clone(), path.clone()))
+                let lat = self
+                    .lattices
+                    .as_ref()
+                    .and_then(|l| l.get(&(typ.clone(), path.clone())))
                     .cloned()
                     .unwrap_or_else(|| infer_lattice(&contribs));
-                let cell = collapse_group(&key, &contribs, &lat, origins);
+                let cell = collapse_group(&key, &contribs, &lat, origins, &prov.store);
                 for a in &cell {
                     if a.pred == "attr_stuck"
                         && let Some(Term::Val(Value::List(ls))) = a.args.get(3)
@@ -584,33 +943,30 @@ impl AttrAggregate {
                 }
                 // Σ over the group: every contribution that reached it.
                 let children: Vec<NodeId> = std::iter::once(sigma)
-                    .chain(contribs.iter().map(|(a, _, _)| prov.id(a)))
+                    .chain(contribs.iter().map(|(t, _, _)| prov.id(*t)))
                     .collect();
-                for a in &cell {
-                    prov.record(a, children.clone(), vec![]);
+                for a in cell {
+                    out.push((a, children.clone()));
                 }
-                out.extend(cell);
             }
-            self.emitted
-                .insert(key, contribs.into_iter().map(|(a, _, _)| a).collect());
+            self.emitted.insert(key);
         }
-        facts.extend(out);
+        for (a, children) in out {
+            prov.record(a, children, vec![]);
+        }
         Ok(stuck_groups)
     }
 
     /// Guard on the stratifier: no contribution arrived after its group was
     /// collapsed.
-    fn check_complete(&self, facts: &BTreeSet<Atom>) -> Result<()> {
-        for (key, contribs) in groups(facts)? {
-            let now: Vec<Atom> = contribs.into_iter().map(|(a, _, _)| a).collect();
-            if self.emitted.get(&key) != Some(&now) {
-                bail!(
-                    "internal: attribute {} {} {} gained a contribution after it was collapsed",
-                    key.0,
-                    partition::fmt_value(&key.1),
-                    key.2
-                );
-            }
+    fn check_complete(&self) -> Result<()> {
+        if let Some(key) = self.late.iter().next() {
+            bail!(
+                "internal: attribute {} {} {} gained a contribution after it was collapsed",
+                key.0,
+                partition::fmt_value(&key.1),
+                key.2
+            );
         }
         Ok(())
     }
@@ -633,51 +989,42 @@ fn rank_name(r: Rank) -> &'static str {
     }
 }
 
-/// Every `arg/5` contribution, grouped by `(T, A, normalized P)`.
-fn groups(facts: &BTreeSet<Atom>) -> Result<BTreeMap<GroupKey, Vec<Contribution>>> {
-    let mut out: BTreeMap<GroupKey, Vec<Contribution>> = BTreeMap::new();
-    for a in facts
+/// An `arg/5` contribution's group `(T, A, normalized P)`, rank and value.
+fn contribution(a: &Atom) -> Result<(GroupKey, Rank, Value)> {
+    let vals: Vec<&Value> = a
+        .args
         .iter()
-        .filter(|a| a.pred == "arg" && a.args.len() == 5)
-    {
-        let vals: Vec<&Value> = a
-            .args
-            .iter()
-            .map(|t| match t {
-                Term::Val(v) => Ok(v),
-                _ => Err(anyhow!("internal: non-ground contribution")),
-            })
-            .collect::<Result<_>>()?;
-        let (Some(typ), Some(path)) = (vals[0].as_str(), vals[2].as_str()) else {
-            bail!(
-                "contribution {} needs a string type and path",
-                partition::fmt_atom(a)
-            );
-        };
-        let Some(rank) = parse_rank(vals[4]) else {
-            bail!(
-                "contribution {}: rank must be default, normal or override",
-                partition::fmt_atom(a)
-            );
-        };
-        let (path, value) =
-            transform::normalize_contribution(typ, path, Term::Val(vals[3].clone()));
-        let value =
-            eval_term(&value, &HashMap::new()).ok_or_else(|| anyhow!("internal: normalize"))?;
-        out.entry((typ.to_string(), vals[1].clone(), path))
-            .or_default()
-            .push((a.clone(), rank, value));
-    }
-    Ok(out)
+        .map(|t| match t {
+            Term::Val(v) => Ok(v),
+            _ => Err(anyhow!("internal: non-ground contribution")),
+        })
+        .collect::<Result<_>>()?;
+    let (Some(typ), Some(path)) = (vals[0].as_str(), vals[2].as_str()) else {
+        bail!(
+            "contribution {} needs a string type and path",
+            partition::fmt_atom(a)
+        );
+    };
+    let Some(rank) = parse_rank(vals[4]) else {
+        bail!(
+            "contribution {}: rank must be default, normal or override",
+            partition::fmt_atom(a)
+        );
+    };
+    let (path, value) = transform::normalize_contribution(typ, path, Term::Val(vals[3].clone()));
+    let value = eval_term(&value, &HashMap::new()).ok_or_else(|| anyhow!("internal: normalize"))?;
+    Ok(((typ.to_string(), vals[1].clone(), path), rank, value))
 }
 
 /// `type_lattice(T, P, flat|map|set)` and `type_list_key(T, P, Keys)` facts.
-fn declared_lattices(facts: &BTreeSet<Atom>) -> Result<BTreeMap<(String, String), Lattice>> {
-    let mut out = BTreeMap::new();
-    for a in facts
+fn declared_lattices(facts: &[Atom]) -> Result<BTreeMap<(String, String), Lattice>> {
+    let mut decls: Vec<&Atom> = facts
         .iter()
         .filter(|a| LATTICE_DECLS.contains(&a.pred.as_str()))
-    {
+        .collect();
+    decls.sort();
+    let mut out = BTreeMap::new();
+    for a in decls {
         let [
             Term::Val(Value::Str(t)),
             Term::Val(Value::Str(p)),
@@ -744,6 +1091,7 @@ fn collapse_group(
     contribs: &[Contribution],
     lat: &Lattice,
     origins: &Origins,
+    store: &Store,
 ) -> Vec<Atom> {
     let (typ, addr, path) = key;
     let cells: Vec<RankedContribution> = contribs
@@ -761,13 +1109,19 @@ fn collapse_group(
         span: Default::default(),
     };
     let witness = |w: u32| {
-        let (a, r, v) = &contribs[w as usize];
+        let (t, r, v) = &contribs[w as usize];
         obj(vec![
             ("rank", Value::Str(rank_name(*r).into())),
             ("value", v.clone()),
             (
                 "from",
-                Value::List(origins.of(a).into_iter().map(Value::Str).collect()),
+                Value::List(
+                    origins
+                        .of(*t, store.get(*t))
+                        .into_iter()
+                        .map(Value::Str)
+                        .collect(),
+                ),
             ),
         ])
     };
@@ -1075,24 +1429,66 @@ fn read_pattern(atom: &Atom, state: &HashMap<String, Value>) -> Atom {
     }
 }
 
+/// One choice a body made on the way to a row: the tuple a relation read
+/// matched, or the element a `member`/`enumerate` expanded to.
+#[derive(Debug, Clone, Copy)]
+enum Choice {
+    Tuple(TupleId),
+    Nth(u32),
+}
+
+/// The order a naive evaluation over the facts in fact order would produce
+/// rows in: lexicographic in the choices, a tuple by its fact.
+fn cmp_order(store: &Store, a: &[Choice], b: &[Choice]) -> Ordering {
+    for (x, y) in a.iter().zip(b) {
+        let o = match (x, y) {
+            (Choice::Tuple(x), Choice::Tuple(y)) if x == y => Ordering::Equal,
+            (Choice::Tuple(x), Choice::Tuple(y)) => store.get(*x).cmp(store.get(*y)),
+            (Choice::Nth(x), Choice::Nth(y)) => x.cmp(y),
+            (Choice::Tuple(_), Choice::Nth(_)) => Ordering::Less,
+            (Choice::Nth(_), Choice::Tuple(_)) => Ordering::Greater,
+        };
+        if o != Ordering::Equal {
+            return o;
+        }
+    }
+    a.len().cmp(&b.len())
+}
+
 /// One derived head with what it was derived from, for the circuit.
 struct Derived {
     head: Atom,
-    /// Indices into the `facts` the body was evaluated against.
-    used: Vec<usize>,
+    /// The tuples the body matched.
+    used: Vec<TupleId>,
     absent: Vec<Atom>,
     bindings: Vec<(String, Value)>,
+    order: Vec<Choice>,
 }
 
-fn eval_rule(rule: &RuleStmt, facts: &[Atom], rec: &Rec) -> Result<Vec<Derived>> {
-    let collect = find_collect(&rule.head);
-    if let Some((idx, kind)) = collect {
-        return eval_rule_collect(rule, facts, idx, kind, rec);
+/// What a body reads: the store, the compiled body, and per body literal
+/// the window of tuples a relation read there sees (semi-naive: the tuples
+/// before the delta, the delta, or every tuple). Negation reads `all`.
+struct Src<'a> {
+    store: &'a Store,
+    body: &'a ops::Body,
+    win: Vec<Window>,
+    all: Window,
+}
+
+fn eval_rule(rule: &RuleStmt, plan: &ops::Rule, src: &Src, rec: &Rec) -> Result<Vec<Derived>> {
+    if let ops::Head::Agg { col, kind } = plan.head {
+        return eval_rule_collect(rule, src, col, kind, rec);
     }
 
     let mut out = Vec::new();
-    let rows = eval_body(&rule.body, facts, rec)?;
-    for Row { s: b, used, absent } in rows {
+    let rows = eval_body(&rule.body, src, rec)?;
+    for Row {
+        s: b,
+        used,
+        absent,
+        order,
+    } in rows
+    {
         // Rule 2: an address argument is a content position. A head whose
         // address carries a null is stuck, not derived.
         if matches!(rule.head.pred.as_str(), "want" | "arg" | "adopt")
@@ -1120,16 +1516,10 @@ fn eval_rule(rule: &RuleStmt, facts: &[Atom], rec: &Rec) -> Result<Vec<Derived>>
             used,
             absent,
             bindings,
+            order,
         });
     }
     Ok(out)
-}
-
-#[derive(Debug, Copy, Clone)]
-enum CollectKind {
-    Set,
-    List,
-    Count,
 }
 
 /// An aggregate rule. Rule 2: the group key is a content position, and so
@@ -1139,9 +1529,9 @@ enum CollectKind {
 /// predicate the body reads.
 fn eval_rule_collect(
     rule: &RuleStmt,
-    facts: &[Atom],
+    src: &Src,
     idx: usize,
-    kind: CollectKind,
+    kind: AggKind,
     rec: &Rec,
 ) -> Result<Vec<Derived>> {
     let Term::Func { name: _, args } = &rule.head.args[idx] else {
@@ -1152,12 +1542,15 @@ fn eval_rule_collect(
     }
     let item_term = args[0].clone();
 
-    let rows = eval_body(&rule.body, facts, rec)?;
+    let rows = eval_body(&rule.body, src, rec)?;
     let mut groups_set: BTreeMap<Vec<Value>, BTreeSet<Value>> = BTreeMap::new();
     let mut groups_list: BTreeMap<Vec<Value>, Vec<Value>> = BTreeMap::new();
     // Σ over the group: every body fact and negation of every member.
-    let mut group_prov: BTreeMap<Vec<Value>, (BTreeSet<usize>, BTreeSet<Atom>)> = BTreeMap::new();
-    for Row { s: b, used, absent } in rows {
+    let mut group_prov: BTreeMap<Vec<Value>, (BTreeSet<TupleId>, BTreeSet<Atom>)> = BTreeMap::new();
+    for Row {
+        s: b, used, absent, ..
+    } in rows
+    {
         if rec.any_blocked(&rule.head.args, &b) {
             continue;
         }
@@ -1176,7 +1569,7 @@ fn eval_rule_collect(
             rec.stuck(&b, key_nulls, "aggregate group key carries a null");
             continue;
         }
-        if matches!(kind, CollectKind::Count) && stuck::has_null(&item) {
+        if matches!(kind, AggKind::Count) && stuck::has_null(&item) {
             rec.stuck(&b, nulls_in(&item), "count over a null");
             continue;
         }
@@ -1184,10 +1577,10 @@ fn eval_rule_collect(
         prov.0.extend(used);
         prov.1.extend(absent);
         match kind {
-            CollectKind::Set => {
+            AggKind::Set => {
                 groups_set.entry(key).or_default().insert(item);
             }
-            CollectKind::List | CollectKind::Count => {
+            AggKind::List | AggKind::Count => {
                 groups_list.entry(key).or_default().push(item);
             }
         }
@@ -1197,7 +1590,7 @@ fn eval_rule_collect(
     // feed undetermined.
     for lit in &rule.body {
         let Lit::Pos(a) = lit else { continue };
-        if a.pred == "member" || a.pred == "enumerate" || is_builtin_pred(&a.pred) {
+        if a.pred == "member" || a.pred == "enumerate" || ops::is_builtin_pred(&a.pred) {
             continue;
         }
         let pat = read_pattern(a, &HashMap::new());
@@ -1228,7 +1621,7 @@ fn eval_rule_collect(
         for i in 0..rule.head.args.len() {
             if i == idx {
                 match kind {
-                    CollectKind::Count => args_out.push(Term::Val(Value::Int(items.len() as i64))),
+                    AggKind::Count => args_out.push(Term::Val(Value::Int(items.len() as i64))),
                     _ => args_out.push(Term::Val(Value::List(items.clone()))),
                 }
             } else {
@@ -1250,11 +1643,13 @@ fn eval_rule_collect(
         {
             return;
         }
+        let n = out.len() as u32;
         out.push(Derived {
             head: group,
             used: used.into_iter().collect(),
             absent: absent.into_iter().collect(),
             bindings: vec![],
+            order: vec![Choice::Nth(n)],
         });
     };
 
@@ -1268,37 +1663,13 @@ fn eval_rule_collect(
     Ok(out)
 }
 
-fn find_collect(head: &Atom) -> Option<(usize, CollectKind)> {
-    for (i, t) in head.args.iter().enumerate() {
-        let Term::Func { name, args } = t else {
-            continue;
-        };
-        if args.len() != 1 {
-            continue;
-        }
-        match name.as_str() {
-            // Back-compat: `collect(X)` is set-like.
-            "collect" | "collect_set" => return Some((i, CollectKind::Set)),
-            "collect_list" => return Some((i, CollectKind::List)),
-            "count" => return Some((i, CollectKind::Count)),
-            _ => {}
-        }
-    }
-    None
-}
-
-fn constraint_violated(c: &Constraint, facts: &[Atom], rec: &Rec) -> Result<bool> {
-    let rows = eval_body(&c.body, facts, rec)?;
-    Ok(!rows.is_empty())
-}
-
-/// One way to satisfy a body: the bindings, and for provenance the facts
-/// it matched (indices into the `facts` it was evaluated against) and the
-/// negations that held.
+/// One way to satisfy a body: the bindings, and for provenance the tuples
+/// it matched and the negations that held; `order` for the naive order.
 struct Row {
     s: HashMap<String, Value>,
-    used: Vec<usize>,
+    used: Vec<TupleId>,
     absent: Vec<Atom>,
+    order: Vec<Choice>,
 }
 
 impl Row {
@@ -1307,17 +1678,19 @@ impl Row {
             s,
             used: self.used.clone(),
             absent: self.absent.clone(),
+            order: self.order.clone(),
         }
     }
 }
 
-fn eval_body(body: &[Lit], facts: &[Atom], rec: &Rec) -> Result<Vec<Row>> {
+fn eval_body(body: &[Lit], src: &Src, rec: &Rec) -> Result<Vec<Row>> {
     let mut states: Vec<Row> = vec![Row {
         s: HashMap::new(),
         used: Vec::new(),
         absent: Vec::new(),
+        order: Vec::new(),
     }];
-    for lit in body {
+    for (i, lit) in body.iter().enumerate() {
         let mut next = Vec::new();
         match lit {
             Lit::Pos(atom) => {
@@ -1326,10 +1699,14 @@ fn eval_body(body: &[Lit], facts: &[Atom], rec: &Rec) -> Result<Vec<Row>> {
                         if !rec.any_blocked(&atom.args, &row.s) {
                             let mut out = Vec::new();
                             eval_member_like(atom, &row.s, &mut out, rec)?;
-                            next.extend(out.into_iter().map(|s| row.with(s)));
+                            next.extend(out.into_iter().enumerate().map(|(n, s)| {
+                                let mut r = row.with(s);
+                                r.order.push(Choice::Nth(n as u32));
+                                r
+                            }));
                         }
                     }
-                } else if is_builtin_pred(&atom.pred) {
+                } else if ops::is_builtin_pred(&atom.pred) {
                     for row in &states {
                         if !rec.any_blocked(&atom.args, &row.s) && eval_builtin_pred(atom, &row.s)?
                         {
@@ -1337,6 +1714,10 @@ fn eval_body(body: &[Lit], facts: &[Atom], rec: &Rec) -> Result<Vec<Row>> {
                         }
                     }
                 } else {
+                    let read =
+                        src.body.op(i).read().ok_or_else(|| {
+                            anyhow!("internal: {} is not a relation read", atom.pred)
+                        })?;
                     for row in &states {
                         let s = &row.s;
                         if rec.any_blocked(&atom.args, s) {
@@ -1355,14 +1736,11 @@ fn eval_body(body: &[Lit], facts: &[Atom], rec: &Rec) -> Result<Vec<Row>> {
                                 );
                             }
                         }
-                        for (k, f) in facts
-                            .iter()
-                            .enumerate()
-                            .filter(|(_, x)| x.pred == atom.pred)
-                        {
-                            if let Some(s2) = unify_atom(atom, f, s, rec)? {
+                        for t in src.store.candidates(&read.rel, src.win[i]) {
+                            if let Some(s2) = unify_atom(atom, src.store.get(t), s, rec)? {
                                 let mut r = row.with(s2);
-                                r.used.push(k);
+                                r.used.push(t);
+                                r.order.push(Choice::Tuple(t));
                                 next.push(r);
                             }
                         }
@@ -1391,7 +1769,7 @@ fn eval_body(body: &[Lit], facts: &[Atom], rec: &Rec) -> Result<Vec<Row>> {
                         // (it would require checking existence over an implicit domain).
                         bail!("negation not supported for enumerate/3");
                     }
-                    if is_builtin_pred(&atom.pred) {
+                    if ops::is_builtin_pred(&atom.pred) {
                         // Negation-as-failure for builtin predicates is just boolean negation.
                         if !eval_builtin_pred(atom, s)? {
                             next.push(row.with(s.clone()));
@@ -1400,7 +1778,7 @@ fn eval_body(body: &[Lit], facts: &[Atom], rec: &Rec) -> Result<Vec<Row>> {
                     }
                     let grounded = ground_atom(atom, s)
                         .with_context(|| format!("unsafe negation: not {}(...)", atom.pred))?;
-                    if eval_not(&grounded, facts, s, rec) {
+                    if eval_not(&grounded, src, s, rec) {
                         let mut r = row.with(s.clone());
                         r.absent.push(grounded);
                         next.push(r);
@@ -1441,7 +1819,7 @@ fn eval_body(body: &[Lit], facts: &[Atom], rec: &Rec) -> Result<Vec<Row>> {
 /// null, or a fact that equals it only Unknown-ly, needs content. Rule 3:
 /// the negation is undetermined while a stuck head of `p` unifies with
 /// `p(t)`. Fresh nulls are decided under the Unique Name Assumption.
-fn eval_not(grounded: &Atom, facts: &[Atom], s: &HashMap<String, Value>, rec: &Rec) -> bool {
+fn eval_not(grounded: &Atom, src: &Src, s: &HashMap<String, Value>, rec: &Rec) -> bool {
     let mut open = BTreeSet::new();
     for t in &grounded.args {
         if let Term::Val(v) = t
@@ -1462,10 +1840,9 @@ fn eval_not(grounded: &Atom, facts: &[Atom], s: &HashMap<String, Value>, rec: &R
         return false;
     }
     let mut unknown = BTreeSet::new();
-    for f in facts
-        .iter()
-        .filter(|f| f.pred == grounded.pred && f.args.len() == grounded.args.len())
-    {
+    let rel = ops::Rel::of(grounded);
+    for t in src.store.candidates(&rel, src.all) {
+        let f = src.store.get(t);
         let mut t = Truth::True;
         for (a, b) in f.args.iter().zip(&grounded.args) {
             let (Term::Val(a), Term::Val(b)) = (a, b) else {
@@ -1515,10 +1892,6 @@ fn eval_not(grounded: &Atom, facts: &[Atom], s: &HashMap<String, Value>, rec: &R
         return false;
     }
     true
-}
-
-fn is_builtin_pred(pred: &str) -> bool {
-    matches!(pred, "inet_overlaps" | "inet_contains" | "ip_unspecified")
 }
 
 fn eval_builtin_pred(atom: &Atom, state: &HashMap<String, Value>) -> Result<bool> {

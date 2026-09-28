@@ -1,3 +1,9 @@
+//! The resource IR (`compile_resources`) and, in [`ops`], the operator IR
+//! rules compile to.
+
+pub mod ops;
+pub mod store;
+
 use crate::ast::{Atom, Term};
 use crate::schema::Schema;
 use crate::transform;
