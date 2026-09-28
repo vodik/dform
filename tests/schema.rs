@@ -12,8 +12,7 @@ fn schema_facts_are_queryable_edb() {
         .success();
     assert!(r.stdout.contains("matches: 14"), "{}", r.stdout);
     assert!(
-        r.stdout
-            .contains(r#"Val(Str("db.postgres")), Val(Str("endpoint"))"#),
+        r.stdout.contains(r#"type_attr("db.postgres", "endpoint""#),
         "{}",
         r.stdout
     );

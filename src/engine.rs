@@ -219,7 +219,7 @@ pub fn eval(program: &Program, extra_facts: &[Atom]) -> Result<(EvalResult, Vec<
         .collect();
     let sigma = prov.rule(
         ATTR_SIGMA.into(),
-        "attribute aggregate: lub_ranked over the group's arg contributions (E §2.5)",
+        "attribute aggregate (lub_ranked, E §2.5)",
     );
     let aggregates: BTreeSet<String> = rules
         .iter()
@@ -366,6 +366,39 @@ pub fn eval(program: &Program, extra_facts: &[Atom]) -> Result<(EvalResult, Vec<
         },
         violations,
     ))
+}
+
+/// One answer to `query`: the bindings, and the facts matched in body order.
+pub type Answer = (BTreeMap<String, Value>, Vec<Atom>);
+
+/// A conjunction evaluated against a final fact store (`dform query`,
+/// `dform why`): every way to satisfy it, with the facts each matched, in
+/// body order. Read-only: nothing is derived and nothing is recorded stuck.
+pub fn query(body: &[Lit], facts: &BTreeSet<Atom>) -> Result<Vec<Answer>> {
+    let snapshot: Vec<Atom> = facts.iter().cloned().collect();
+    let head = Atom {
+        pred: "query".into(),
+        args: vec![],
+        record: None,
+    };
+    let known = RefCell::new(stuck::Known::default());
+    let aggregates = BTreeSet::new();
+    let rec = Rec {
+        rule: 0,
+        head: &head,
+        text: "query",
+        known: &known,
+        aggregates: &aggregates,
+        found: RefCell::new(Vec::new()),
+    };
+    Ok(eval_body(body, &snapshot, &rec)?
+        .into_iter()
+        .map(|r| {
+            let b = r.s.into_iter().filter(|(k, _)| !k.starts_with("__"));
+            let used = r.used.iter().map(|k| snapshot[*k].clone()).collect();
+            (b.collect(), used)
+        })
+        .collect())
 }
 
 /// The provider schema among this run's facts: the catalog the provider
@@ -866,7 +899,7 @@ fn value_to_json_string(v: &Value) -> Result<String> {
     Ok(serde_json::to_string(&value_to_json(v))?)
 }
 
-fn value_to_json(v: &Value) -> serde_json::Value {
+pub fn value_to_json(v: &Value) -> serde_json::Value {
     match v {
         Value::Str(s) => serde_json::Value::String(s.clone()),
         Value::Int(i) => serde_json::Value::Number((*i).into()),

@@ -9,6 +9,7 @@ use dform::ir;
 use dform::loader;
 use dform::partition;
 use dform::provider::{ActionKind, Provider, fmt_value};
+use dform::query;
 use dform::schema;
 use dform::state;
 use dform::stuck;
@@ -71,8 +72,11 @@ enum Cmd {
         #[arg(long = "max-ticks", default_value_t = 8)]
         max_ticks: usize,
     },
+    /// Query the final fact store: a predicate name (every fact of it) or
+    /// body literals with variables, printed as a table with one column per
+    /// variable: `dform query 'attr(net.vpc, N, cidr, C)'`.
     Query {
-        pred: String,
+        pattern: String,
     },
     Show {
         typ: String,
@@ -153,15 +157,24 @@ fn main() -> Result<()> {
                 println!("- {}.{}", r.addr.typ, r.addr.name);
             }
         }
-        Cmd::Query { pred } => {
-            let mut count = 0usize;
-            for a in &res.facts {
-                if a.pred == pred {
-                    count += 1;
-                    println!("{:?}", a);
+        Cmd::Query { pattern } => {
+            let redact = query::Redactor::new(&res.facts, backend.schema());
+            match query::parse(&pattern)? {
+                query::Query::Pred(pred) => {
+                    let mut count = 0usize;
+                    for a in res.facts.iter().filter(|a| a.pred == pred) {
+                        count += 1;
+                        println!("{}", redact.fmt_atom(a));
+                    }
+                    println!("matches: {count}");
+                }
+                query::Query::Body { body, vars } => {
+                    print!(
+                        "{}",
+                        query::table(&body, &vars, &res.facts)?.render(&redact)
+                    );
                 }
             }
-            println!("matches: {count}");
         }
         Cmd::Show { typ, name } => {
             let addr = ir::Address { typ, name };

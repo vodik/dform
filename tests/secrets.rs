@@ -18,11 +18,12 @@
 //! design, not a leak. `leaky.oops`'s secret, mislabeled public, leaks
 //! through plan/apply output too — expected, it's what mislabeling means.
 //!
-//! Both secrets leak through `show` and `query`: the board already knows
-//! this (ticket "show and query print secrets unredacted", Phase 3) — those
-//! assertions are `#[ignore]`d with that ticket named in the reason, and
-//! demonstrated (not ignored) that they currently fail, so the suite stays
-//! green while the claim stays a claim until that ticket lands.
+//! Both secrets leak through `show`: the board already knows this (ticket
+//! "show and query print secrets unredacted", Phase 3) — that assertion is
+//! `#[ignore]`d with the ticket named in the reason, and demonstrated (not
+//! ignored) that it currently fails, so the suite stays green while the
+//! claim stays a claim until that ticket lands. `query` redacts (ticket
+//! "dform query with patterns and tables").
 
 mod common;
 use common::{Scratch, repo};
@@ -166,9 +167,8 @@ fn show_never_prints_the_labeled_secret() {
     assert!(!r.stdout.contains(VAULT_SECRET), "{}", r.stdout);
 }
 
-/// Known-broken: same as above, for `query`.
+/// `query` prints facts through the redacting printer (src/query.rs).
 #[test]
-#[ignore = "ticket 'show and query print secrets unredacted': query does not redact yet"]
 fn query_never_prints_the_labeled_secret() {
     let s = Scratch::new("secrets-query");
     s.write("p.df", PROGRAM);
@@ -188,12 +188,11 @@ fn query_never_prints_the_labeled_secret() {
     assert!(!r.stdout.contains(VAULT_SECRET), "{}", r.stdout);
 }
 
-/// Demonstrates the leak these two ignored tests above assert against,
-/// so the report can name it precisely without relying on an ignored,
-/// unrun test: `show` and `query` currently print the vault secret in
-/// full, byte for byte.
+/// Demonstrates the leak the ignored show test above asserts against, so
+/// the report can name it precisely without relying on an ignored, unrun
+/// test: `show` currently prints the vault secret in full, byte for byte.
 #[test]
-fn show_and_query_currently_leak_the_labeled_secret_documenting_the_bug() {
+fn show_currently_leaks_the_labeled_secret_documenting_the_bug() {
     let s = Scratch::new("secrets-known-bug");
     s.write("p.df", PROGRAM);
     let schema = schema();
@@ -215,23 +214,5 @@ fn show_and_query_currently_leak_the_labeled_secret_documenting_the_bug() {
         "show no longer leaks the labeled secret -- if this is now fixed, \
          un-ignore show_never_prints_the_labeled_secret and delete this test:\n{}",
         show.stdout
-    );
-    let query = s
-        .run(&[
-            "--file",
-            "p.df",
-            "--provider",
-            &schema,
-            "--world",
-            "w.json",
-            "query",
-            "arg",
-        ])
-        .success();
-    assert!(
-        query.stdout.contains(VAULT_SECRET),
-        "query no longer leaks the labeled secret -- if this is now fixed, \
-         un-ignore query_never_prints_the_labeled_secret and delete this test:\n{}",
-        query.stdout
     );
 }

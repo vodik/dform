@@ -143,6 +143,26 @@ A `sensitive` computed value never leaves the provider: what dform sees, stores
 in consumers and prints is its label, `(sensitive T/N#Attr)`. A value at a
 `sensitive` path the program sets prints as `(sensitive)`.
 
+## Asking the fact store
+
+`dform query` evaluates a pattern, or a conjunction of body literals, against
+the final fact store and prints a table with one column per variable:
+
+```bash
+cargo run -- query 'attr(net.vpc, N, cidr, C)' --set env=prod
+# N                    C
+# "network.main::vpc"  10.20.0.0/16
+# "network.peer::vpc"  10.21.0.0/16
+# (2 rows)
+cargo run -- query 'attr(T, A, cidr, C), want(T, A), T != net.subnet'
+cargo run -- query 'want(net.vpc, "network.main::vpc")'    # yes / no
+cargo run -- query want                                    # every want fact
+```
+
+Secrets print as their label, `(sensitive T/A#P)`: a value at a
+`sensitive` path, and any value equal to it or string containing it, so a
+rule that forwards a secret does not leak it either.
+
 ## Chaos: failure and latency injection
 
 `apply --chaos SPEC` (repeatable) makes the fake provider misbehave, the way a

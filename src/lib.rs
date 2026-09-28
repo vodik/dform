@@ -10,6 +10,7 @@ pub mod loader;
 pub mod parser;
 pub mod partition;
 pub mod provider;
+pub mod query;
 pub mod schema;
 pub mod state;
 pub mod stuck;
