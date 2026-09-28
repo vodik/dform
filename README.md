@@ -797,10 +797,47 @@ is an error naming the input and its type, and so is `--set` of an input
 the program does not declare. A value the program computes (a module
 instance's input) is checked after evaluation and a wrong type blocks the
 plan. A required input with no value is an error at its declaration. `where
-R` is a deny unless `R` holds; `R` names the input by its name.
+R` refines the input (`R` names it by its name; see Refinement types).
 
 A program with no `input` declarations reads `--set k=v` as the fact
 `input("k", v)`.
+
+### Refinement types
+
+A `where` on an input, on an attribute of a `type` block, or a provider
+schema's `type_refine(T, Path, C)` fact refines a value:
+
+```prolog
+type settings {
+  db.backup_days: int where 1 <= db.backup_days <= 35
+  gke: { control_plane_cidr: inet where prefix_len(control_plane_cidr) == 28 }
+}.
+type gke_cluster { zones: list(string) where len(zones) >= 3 }.
+```
+
+A `where` over the value alone that fits the checkable table is a
+constraint in the attribute's cell: `lo <= x <= hi` is `range(Lo, Hi)`,
+`prefix_len(x) <= N` (`>=`, `==`) is `prefix_len_le(N)` / `prefix_len_ge(N)`,
+`len(x) <= N` is `len_le(N)` / `len_ge(N)`, `x in [..]` or `x == v` is
+`enum([..])`, `matches(x, "re")` is `regex("re")`; a `type` block's `int`,
+`string`, `bool`, `inet` or `enum(...)` is a type check. A schema writes
+the same terms: `type_refine(net.subnet, cidr, prefix_len_le(24)).` The
+constraint is rank-blind: it is checked against the value that wins, so an
+`@override` cannot get past it. A violation is `deny("refinement
+violated", {type, addr, path, constraint, value, reason, at, witnesses})`
+and the plan lists it with the conflicts; a literal that violates one is a
+compile error naming both places. A value that carries a null is checked
+when the null resolves: the plan prints `? refinement on ?T/A#P deferred`
+in its undetermined section, and a violation found at the boundary stops
+apply like any deny between ticks (`examples/refine_gke.df`). On a path the
+schema marks `sensitive` the engine never checks the value: the refinement
+goes to the provider as an Apply assertion, checked once the secret is
+materialized, and a provider whose Schema does not declare
+`checks_refinements` makes it a compile error (E0306). Anything else (one
+bound alone, another attribute, a user predicate) lowers to a deny with the
+refinement's place; a secret input's refinement is always one, and it does
+not print the value. A `type` block's flags are not supported yet (they
+come from the provider's schema).
 
 ### Modules
 
@@ -838,8 +875,8 @@ Inside an instance:
   is a normal-rank contribution to the cell `(input, m.i, k)` of the
   attribute aggregate and `D` an `@default` one, so `why` shows both. An
   instance that sets an undeclared input, or leaves out one with no
-  default, is a compile error. `where R` is a deny unless `R` holds (`R`
-  names the input by its name);
+  default, is a compile error. `where R` refines the input (`R` names it
+  by its name; see Refinement types);
 - `output k: T` declares an output and `output k = t` (or a rule for
   `output(k, V)`) gives it a value, read anywhere as `output(m.i, k, V)`;
   an `addr` output is the scoped address of the instance's resource.

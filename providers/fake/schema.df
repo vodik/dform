@@ -55,3 +55,8 @@ type_mint(db.postgres, endpoint, "{name}.db.fake").
 type_retry(db.postgres, 5).
 type_mint(k8s.cluster, api_endpoint, "https://{name}.k8s.fake").
 type_mint(k8s.cluster, ca_cert, "FAKECERT").
+
+# Checkable refinements (E DR-13; `src/refine.rs`): a subnet is a /24 or
+# larger, a database keeps backups for one to 35 days.
+type_refine(net.subnet, cidr, prefix_len_le(24)).
+type_refine(db.postgres, backup_days, range(1, 35)).

@@ -1,0 +1,137 @@
+# gke_two_phase.df with refinements (E §4.1 case 4, DR-13): the cluster's
+# zones are an open null until the cluster exists, so the refinement on
+# them is deferred at plan time ("refinement on ?gke_cluster/pngu#zones
+# deferred"). Tick 1 creates the cluster in the two zones its
+# node_locations name; the boundary resolves the zones, the refinement is
+# checked against them, fails (len_ge(3)), and apply stops before the
+# nodepools and the kubernetes objects:
+#   cargo run -- --file examples/refine_gke.df apply
+#
+# The settings refinements are checked at compile time against the literal
+# CIDRs (they hold), and again in the cell.
+#
+# C's two-phase GKE / kubernetes stack (E §7.4), in the current syntax.
+# Run with the gke mock schema, which makes the cluster's zones, endpoint and
+# ca open nulls until the cluster exists:
+#   cargo run -- --file examples/refine_gke.df plan
+
+edition 2026.
+
+provider gke {}.
+
+input env: enum(dev, stg, prod) = dev.
+
+settings dev {
+  project_id = "renfry-dev-973682"
+  project_name = "renfry-dev"
+  region = "us-east1"
+  network_name = "renfry-dev-network"
+  gke = {
+    control_plane_cidr: inet("172.16.3.96/28"),
+    subnet_cidr: inet("10.141.76.0/22")
+  }
+}.
+
+project(Id, Name, Region, NetId) :-
+  env(E),
+  setting(E, .project_id, Id),
+  setting(E, .project_name, Name),
+  setting(E, .region, Region),
+  setting(E, .network_name, NetName),
+  NetId = format("projects/%s/global/networks/%s", Id, NetName).
+
+resource google_compute_subnetwork gke_subnet {
+  project = Id
+  region = Region
+  network = NetId
+  name = format("%s-gke-subnet", Name)
+  ip_cidr_range = SubnetCidr
+} :-
+  project(Id, Name, Region, NetId),
+  env(E),
+  setting(E, .gke.subnet_cidr, SubnetCidr).
+
+# Carries a fresh null (subnetwork_id) and is still definite.
+resource google_compute_address static_ip {
+  project = Id
+  region = Region
+  name = "pngu-grpc"
+  subnetwork_id = ref(google_compute_subnetwork, gke_subnet, .id)
+} :-
+  project(Id, _, Region, _).
+
+resource gke_cluster pngu {
+  env = E
+  project_id = Id
+  name = format("%s-gke", Name)
+  network_id = NetId
+  subnetwork_id = ref(google_compute_subnetwork, gke_subnet, .id)
+  master_control_plane_cidr = CpCidr
+  node_locations = ["us-east1-b", "us-east1-c"]
+  deletion_protection = true
+} :-
+  env(E),
+  project(Id, Name, _, NetId),
+  setting(E, .gke.control_plane_cidr, CpCidr).
+
+# Provider configured from phase-1 nulls (two open, one secret).
+provider_config(kubernetes, {
+  host: ref(gke_cluster, pngu, .endpoint),
+  ca: ref(gke_cluster, pngu, .ca_certificate),
+  token: ref(google.client_config, current, .access_token)
+}).
+
+resource k8s.namespace pngu {
+  name = "pngu"
+}.
+
+# ref to a configured attribute is an attr join (E: rewritten by the compiler).
+resource k8s.deployment api {
+  namespace = Ns
+  image = "gcr.io/renfry/api:1.42"
+  replicas = 3
+} :- arg(k8s.namespace, pngu, .name, Ns).
+
+resource k8s.secret db_credentials {
+  namespace = Ns
+  data = { password: ref(google.secret_manager_secret_version, db_pw, .secret_data) }
+} :- arg(k8s.namespace, pngu, .name, Ns).
+
+# One nodepool per zone: member over an open null is a content position.
+resource gke_nodepool Np {
+  cluster = ref(gke_cluster, pngu, .id)
+  zone = Z
+  min = 1
+  max = 3
+} :-
+  arg(gke_cluster, pngu, .zones, Zs),
+  member(Zs, Z),
+  Np = format("np-%s", Z).
+
+zone_count(count(Z)) :-
+  arg(gke_cluster, pngu, .zones, Zs),
+  member(Zs, Z).
+
+deny("cluster must be in at least two zones", { cluster: pngu }) :-
+  want(gke_cluster, pngu),
+  zone_count(N),
+  N < 2.
+
+# A policy that has nothing to do with zones. Under coarse Rule 3 it would be
+# undetermined anyway (a `want` rule is stuck), which is the spurious case;
+# per key it is decided now, and holds.
+deny("cluster must not be deletable", { cluster: C }) :-
+  want(gke_cluster, C),
+  not arg(gke_cluster, C, .deletion_protection, true).
+
+# Refinements (E §7.4's settings type, and one the cluster cannot meet).
+type settings {
+  gke: {
+    control_plane_cidr: inet where prefix_len(control_plane_cidr) == 28
+    subnet_cidr: inet where prefix_len(subnet_cidr) == 22
+  }
+}.
+
+type gke_cluster {
+  zones: list(string) where len(zones) >= 3
+}.

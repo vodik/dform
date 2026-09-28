@@ -209,7 +209,8 @@ into today's AST:
 | `instance m i { k = V } :- B`    | `arg(input, "m.i", k, V, normal) :- B` per input |
 | `input k: T = D` in module `m`   | `m.i::k(V) :- attr(input, "m.i", k, V)`, and `D` at `@default` |
 | `input k: T = D` at the top      | `k(V) :- attr(input, "", k, V)`, `D` at `@default`, and `arg(input, "", k, V, normal) :- input("k", V)` (`--set`) |
-| `input k: T where R`             | a deny unless `R` holds of the value (`k` names it in `R`) |
+| `input k: T where R`             | `attr_refine(input, Scope, k, C)` per checkable part of `R`; a deny unless the rest holds (`k` names the value) |
+| `type T { p: t where R }`        | `type_refine(T, p, C)` per checkable part of `R` and for `t` a scalar or enum; a deny unless the rest holds (`p` names the value) (`src/refine.rs`) |
 | `output k = t` in module `m`     | `output("m.i", k, t)`; `t` is `scoped("m.i", t)` for `output k: addr` |
 | a predicate `p` of module `m`    | `m.i::p` (private), `m.i.p` with `export p/N`, `p` with `contributes p` |
 | `policy p { ... }` / `apply p`   | the pack's body once, its predicates `p::q` unless granted |
@@ -234,9 +235,10 @@ into today's AST:
 | `[T \| B]`                       | a `collect_list` helper rule over `B`            |
 
 These parse and are rejected with "not yet supported", naming the WORK.org
-ticket that gives them meaning: `type` blocks and `decl type ... open`
-(phase 6 "Refinement types, doc annotations, L15 inet"). With no ticket yet: the `null` literal,
-`not exists(...)`, and the ordered comprehension.
+ticket that gives them meaning: `decl type ... open`, a flag on a `type`
+block attribute, and a `type` block anywhere but the top of the program
+(phase 6 "Refinement types, doc annotations, L15 inet"). With no ticket
+yet: the `null` literal, `not exists(...)`, and the ordered comprehension.
 
 ## Deviations from E §6
 
