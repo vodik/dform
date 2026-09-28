@@ -1,8 +1,9 @@
 exit: ok
 -- stdout --
-== pngu.df: 153 nodes, 385 edges (266 negative)
+== pngu.df: 153 nodes, 383 edges (266 negative)
    STRATIFIED, 4 strata
    stratum 0:
+     (arg, input, env)
      (arg, settings, gke.control_plane_cidr)
      (arg, settings, gke.pods_cidr)
      (arg, settings, gke.services_cidr)
@@ -24,8 +25,6 @@ exit: ok
      (want, net.subnet)
      (want, net.vpc)
      (want, net.vpc_peering)
-     allowed_env
-     has_env
      identity
      input
      peering
@@ -47,7 +46,7 @@ exit: ok
      (arg, net.subnet, id)
      (arg, net.vpc, id)
      (arg, net.vpc_peering, id)
-     (arg, output, active_env)
+     (attr, input, env)
      (attr, settings, gke.control_plane_cidr)
      (attr, settings, gke.pods_cidr)
      (attr, settings, gke.services_cidr)
@@ -58,7 +57,6 @@ exit: ok
      (attr, settings, project_name)
      (attr, settings, region)
      (attr, settings, regional_proxy_cidr)
-     env
    stratum 2:
      (arg, alert_metrics_pack, enable_standard_gke_alerts)
      (arg, alert_metrics_pack, notification_channel_display_name)
@@ -97,6 +95,7 @@ exit: ok
      (arg, google_compute_subnetwork, subnet_private_access)
      (arg, google_monitoring_dashboard, dashboard_json)
      (arg, google_monitoring_dashboard, project)
+     (arg, output, active_env)
      (arg, output, project_id)
      (attr, compute.vm, id)
      (attr, db.postgres, endpoint)
@@ -112,7 +111,6 @@ exit: ok
      (attr, net.subnet, id)
      (attr, net.vpc, id)
      (attr, net.vpc_peering, id)
-     (attr, output, active_env)
      (want, alert_metrics_pack)
      (want, gke_cluster)
      (want, google_compute_address)
@@ -120,6 +118,7 @@ exit: ok
      (want, google_compute_subnetwork)
      (want, google_monitoring_dashboard)
      deny
+     env
    stratum 3:
      (attr, alert_metrics_pack, enable_standard_gke_alerts)
      (attr, alert_metrics_pack, notification_channel_display_name)
@@ -158,5 +157,6 @@ exit: ok
      (attr, google_compute_subnetwork, subnet_private_access)
      (attr, google_monitoring_dashboard, dashboard_json)
      (attr, google_monitoring_dashboard, project)
+     (attr, output, active_env)
      (attr, output, project_id)
 -- stderr --

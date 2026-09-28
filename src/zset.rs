@@ -368,6 +368,9 @@ pub mod file {
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
     pub struct Inputs {
         pub files: Vec<FileDigest>,
+        /// `--input-file`s: stack inputs as facts.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pub input_files: Vec<FileDigest>,
         pub set: Vec<String>,
         pub data: Vec<String>,
         pub providers: Vec<String>,
@@ -548,22 +551,31 @@ pub mod file {
         pub fn input_differences(&self, now: &Inputs) -> Vec<String> {
             let was = &self.inputs;
             let mut out = Vec::new();
-            let files = |i: &Inputs| -> BTreeMap<String, String> {
-                i.files
-                    .iter()
+            let digests = |fs: &[FileDigest]| -> BTreeMap<String, String> {
+                fs.iter()
                     .map(|f| (f.path.clone(), f.fnv64.clone()))
                     .collect()
             };
-            let (a, b) = (files(was), files(now));
-            for (p, h) in &a {
-                match b.get(p) {
-                    None => out.push(format!("--file {p}: in the plan file, not given now")),
-                    Some(h2) if h2 != h => out.push(format!("--file {p}: changed since the plan")),
-                    _ => {}
+            for (flag, a, b) in [
+                ("file", digests(&was.files), digests(&now.files)),
+                (
+                    "input-file",
+                    digests(&was.input_files),
+                    digests(&now.input_files),
+                ),
+            ] {
+                for (p, h) in &a {
+                    match b.get(p) {
+                        None => out.push(format!("--{flag} {p}: in the plan file, not given now")),
+                        Some(h2) if h2 != h => {
+                            out.push(format!("--{flag} {p}: changed since the plan"))
+                        }
+                        _ => {}
+                    }
                 }
-            }
-            for p in b.keys().filter(|p| !a.contains_key(*p)) {
-                out.push(format!("--file {p}: given now, not in the plan file"));
+                for p in b.keys().filter(|p| !a.contains_key(*p)) {
+                    out.push(format!("--{flag} {p}: given now, not in the plan file"));
+                }
             }
             let mut flag = |name: &str, x: String, y: String| {
                 if x != y {

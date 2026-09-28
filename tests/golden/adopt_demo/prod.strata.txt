@@ -1,8 +1,9 @@
 exit: ok
 -- stdout --
-== examples/adopt_demo.df: 78 nodes, 147 edges (58 negative)
+== examples/adopt_demo.df: 79 nodes, 147 edges (59 negative)
    STRATIFIED, 10 strata
    stratum 0:
+     (arg, input, env)
      (arg, output, vpc)
      (arg, settings, network.vpc_cidr)
      (want, compute.vm)
@@ -16,7 +17,6 @@ exit: ok
      (want, net.vpc_peering)
      cloud_exists
      data
-     has_env
      identity
      input
      network.main::zone_index
@@ -24,7 +24,6 @@ exit: ok
      resolved
      world_attr
    stratum 1:
-     (adopt, net.vpc)
      (arg, compute.vm, id)
      (arg, db.postgres, endpoint)
      (arg, db.postgres, id)
@@ -36,14 +35,15 @@ exit: ok
      (arg, k8s.cluster, id)
      (arg, k8s.nodepool, id)
      (arg, net.route, id)
-     (arg, net.vpc, adopted_id)
-     (arg, net.vpc, owner_tag)
      (arg, net.vpc_peering, id)
+     (attr, input, env)
      (attr, output, vpc)
      (attr, settings, network.vpc_cidr)
-     env
    stratum 2:
+     (adopt, net.vpc)
      (arg, input, vpc_net)
+     (arg, net.vpc, adopted_id)
+     (arg, net.vpc, owner_tag)
      (attr, compute.vm, id)
      (attr, db.postgres, endpoint)
      (attr, db.postgres, id)
@@ -55,11 +55,12 @@ exit: ok
      (attr, k8s.cluster, id)
      (attr, k8s.nodepool, id)
      (attr, net.route, id)
-     (attr, net.vpc, adopted_id)
-     (attr, net.vpc, owner_tag)
      (attr, net.vpc_peering, id)
+     env
    stratum 3:
      (attr, input, vpc_net)
+     (attr, net.vpc, adopted_id)
+     (attr, net.vpc, owner_tag)
    stratum 4:
      (arg, net.vpc, cidr)
      (arg, net.vpc, id)

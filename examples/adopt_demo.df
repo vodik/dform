@@ -5,9 +5,7 @@
 
 edition 2026.
 
-has_env() :- input("env", _).
-env(staging) :- not has_env().
-env(E) :- input("env", E).
+input env: enum(staging, prod) = staging.
 
 settings prod {
   network.vpc_cidr = inet("10.20.0.0/16")

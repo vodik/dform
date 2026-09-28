@@ -489,6 +489,38 @@ arg(net.vpc, network.main/vpc, .adopted_id, cloud_ref(net.vpc, "existing-prod-vp
 `network.main` (it lowers to `scoped("network.main", vpc)`).
 ```
 
+### Stack inputs
+
+A program declares its inputs, typed, with an optional default and an
+optional refinement:
+
+```prolog
+input env: enum(dev, staging, prod) = staging.
+input replicas: int = 2 where 1 <= replicas, replicas <= 10.
+input allowed_cidrs: list(inet) = [].
+input owner: string.                      # required: no default
+```
+
+Each is read as a relation, `env(E)`. An input is a cell of the attribute
+aggregate: the default is an `@default` contribution, `--set env=prod` a
+normal one that wins (and `why` shows both). `--input-file FILE.df`
+(repeatable) gives inputs as facts, one per input, `env(prod).
+allowed_cidrs([inet("10.0.0.0/8")]).`, each a normal contribution stated
+where the file states it; the plan file records each input file's digest.
+
+Types are `int`, `string`, `bool`, `inet`, `enum(a, b, ...)`, `list(T)`,
+`set(T)` and objects `{ k: T }` (`addr`, `ref(...)` and `any` are
+unchecked). A `--set` value is read as its input's type (an `inet` parses,
+a `string` takes the text) and checked before evaluation: `--set env=qa`
+is an error naming the input and its type, and so is `--set` of an input
+the program does not declare. A value the program computes (a module
+instance's input) is checked after evaluation and a wrong type blocks the
+plan. A required input with no value is an error at its declaration. `where
+R` is a deny unless `R` holds; `R` names the input by its name.
+
+A program with no `input` declarations reads `--set k=v` as the fact
+`input("k", v)`.
+
 ### Modules
 
 A module groups rules behind an interface; an instance of it scopes them

@@ -1,8 +1,9 @@
 exit: ok
 -- stdout --
-== examples/adversarial/gke_two_phase.df: 124 nodes, 195 edges (95 negative)
+== examples/adversarial/gke_two_phase.df: 125 nodes, 195 edges (96 negative)
    STRATIFIED, 5 strata
    stratum 0:
+     (arg, input, env)
      (arg, k8s.namespace, name)
      (arg, settings, gke.control_plane_cidr)
      (arg, settings, gke.subnet_cidr)
@@ -23,7 +24,6 @@ exit: ok
      (want, net.subnet)
      (want, net.vpc)
      (want, net.vpc_peering)
-     has_env
      identity
      input
      provider_config
@@ -49,6 +49,7 @@ exit: ok
      (arg, net.subnet, id)
      (arg, net.vpc, id)
      (arg, net.vpc_peering, id)
+     (attr, input, env)
      (attr, k8s.namespace, name)
      (attr, settings, gke.control_plane_cidr)
      (attr, settings, gke.subnet_cidr)
@@ -57,7 +58,6 @@ exit: ok
      (attr, settings, project_name)
      (attr, settings, region)
      (want, gke_nodepool)
-     env
      zone_count
    stratum 2:
      (arg, gke_cluster, deletion_protection)
@@ -105,6 +105,7 @@ exit: ok
      (want, google_compute_subnetwork)
      (want, k8s.deployment)
      (want, k8s.secret)
+     env
      project
    stratum 3:
      (attr, gke_cluster, deletion_protection)

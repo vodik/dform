@@ -207,6 +207,7 @@ into today's AST:
 | `module m { ... }`               | a module: its body, once per instance            |
 | `instance m i { k = V } :- B`    | `arg(input, "m.i", k, V, normal) :- B` per input |
 | `input k: T = D` in module `m`   | `m.i::k(V) :- attr(input, "m.i", k, V)`, and `D` at `@default` |
+| `input k: T = D` at the top      | `k(V) :- attr(input, "", k, V)`, `D` at `@default`, and `arg(input, "", k, V, normal) :- input("k", V)` (`--set`) |
 | `input k: T where R`             | a deny unless `R` holds of the value (`k` names it in `R`) |
 | `output k = t` in module `m`     | `output("m.i", k, t)`; `t` is `scoped("m.i", t)` for `output k: addr` |
 | a predicate `p` of module `m`    | `m.i::p` (private), `m.i.p` with `export p/N`, `p` with `contributes p` |
@@ -227,8 +228,8 @@ into today's AST:
 
 These parse and are rejected with "not yet supported", naming the WORK.org
 ticket that gives them meaning: `provider`, `stack` (phase 6 "Stacks"),
-`input` at the top of a program (phase 6 "Typed stack inputs"), `extern` with binding
-patterns (phase 6 "Externs with binding patterns"), `type` blocks and
+`extern` with binding patterns (phase 6 "Externs with binding
+patterns"), `type` blocks and
 `decl type ... open` (phase 6 "Refinement types, doc annotations, L15
 inet"), `decl p/N mixed` (phase 6 "Static secret labels"), `scenario`
 (phase 6 "Scenarios"). With no ticket yet: the `null` literal, `not

@@ -20,5 +20,10 @@ fn a_file_reached_by_two_paths_loads_once() {
     let r = s
         .run(&["--file", "p.df", "--world", "w.json", "plan"])
         .success();
-    assert_eq!(r.summary(), "plan: 1 deformation (1 create)", "{}", r.stdout);
+    assert_eq!(
+        r.summary(),
+        "plan: 1 deformation (1 create)",
+        "{}",
+        r.stdout
+    );
 }

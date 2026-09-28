@@ -7,6 +7,7 @@ use dform::engine;
 use dform::executor;
 use dform::fakecloud::FakeCloud;
 use dform::graph;
+use dform::inputs;
 use dform::ir;
 use dform::loader;
 use dform::partition;
@@ -36,6 +37,11 @@ struct Cli {
     /// Provide input facts: --set env=prod
     #[arg(long = "set", global = true)]
     set: Vec<String>,
+
+    /// Stack inputs from a .df file of facts, one `name(value).` per input
+    /// (repeatable). Each is a normal contribution, like --set.
+    #[arg(long = "input-file", global = true)]
+    input_files: Vec<PathBuf>,
 
     /// Provide data facts: --data zone=us-test-1a
     #[arg(long = "data", global = true)]
@@ -167,7 +173,24 @@ fn run() -> Result<()> {
         return fmt_files(&paths, *check);
     }
     let files = default_files(&cli.files)?;
-    let program = loader::load_program(&files)?;
+    let mut program = loader::load_program(&files)?;
+    // The stack's and the instances' typed inputs, when the program lowers
+    // (when it does not, evaluation reports why).
+    let declared = dform::transform::lower(&program)
+        .map(|l| l.inputs)
+        .unwrap_or_default();
+    let mut given: BTreeSet<String> = BTreeSet::new();
+    for f in &cli.input_files {
+        let src = std::fs::read_to_string(f)
+            .map_err(|e| anyhow::anyhow!("read --input-file {}: {e}", f.display()))?;
+        let facts = dform::parser::parse_file(&f.display().to_string(), &src)?;
+        let stmts = inputs::file_stmts(&facts, &declared)?;
+        given.extend(facts.statements.iter().filter_map(|s| match s {
+            dform::ast::Stmt::Fact(a) => Some(a.pred.clone()),
+            _ => None,
+        }));
+        program.statements.extend(stmts);
+    }
     if let Cmd::Strata = cli.cmd {
         return print_strata(&files, &program, &load_schema(&cli.providers)?);
     }
@@ -236,7 +259,15 @@ fn run() -> Result<()> {
     let mut st = state::State::load(&paths.state)?;
     backend.bootstrap_state(&mut st)?;
 
-    let mut base_extra = build_extra_facts(&cli.set, &cli.data)?;
+    let mut set = Vec::new();
+    for kv in &cli.set {
+        let (k, v) = split_kv(kv)?;
+        given.insert(k.to_string());
+        set.push((k.to_string(), v));
+    }
+    inputs::check_required(&declared, &given)?;
+    let mut base_extra = inputs::set_facts(&declared, &set)?;
+    base_extra.extend(build_extra_facts(&cli.data)?);
     base_extra.extend(backend.catalog()?);
     base_extra.extend(backend.discover()?);
     // Refresh as facts: round 0 resolves every null the world can answer,
@@ -249,7 +280,9 @@ fn run() -> Result<()> {
         let mut extra = base_extra.clone();
         extra.extend(executor::withhold(backend.world_facts(st)?, withheld));
         extra.extend(more.iter().cloned());
-        engine::eval(&program, &extra)
+        let (res, mut violations) = engine::eval(&program, &extra)?;
+        violations.extend(inputs::violations(&res.facts, &declared));
+        Ok((res, violations))
     };
     let evaluate = |st: &state::State| evaluate_with(st, &BTreeSet::new(), &[]);
     let (mut res, mut violations) = evaluate(&st)?;
@@ -885,20 +918,23 @@ fn print_query(
 
 /// This run's inputs as a plan file records them.
 fn plan_inputs(cli: &Cli, files: &[PathBuf]) -> Result<zset::file::Inputs> {
-    let digests = files
-        .iter()
-        .map(|f| {
-            let bytes =
-                std::fs::read(f).map_err(|e| anyhow::anyhow!("read {}: {e}", f.display()))?;
-            Ok(zset::file::FileDigest {
-                path: f.display().to_string(),
-                fnv64: zset::file::fnv64(&bytes),
+    let digest = |fs: &[PathBuf]| {
+        fs.iter()
+            .map(|f| {
+                let bytes =
+                    std::fs::read(f).map_err(|e| anyhow::anyhow!("read {}: {e}", f.display()))?;
+                Ok(zset::file::FileDigest {
+                    path: f.display().to_string(),
+                    fnv64: zset::file::fnv64(&bytes),
+                })
             })
-        })
-        .collect::<Result<Vec<_>>>()?;
+            .collect::<Result<Vec<_>>>()
+    };
+    let digests = digest(files)?;
     let show = |p: &Option<PathBuf>| p.as_ref().map(|p| p.display().to_string());
     Ok(zset::file::Inputs {
         files: digests,
+        input_files: digest(&cli.input_files)?,
         set: cli.set.clone(),
         data: cli.data.clone(),
         providers: cli.providers.clone(),
@@ -917,6 +953,13 @@ fn with_plan_inputs(cli: &mut Cli, path: &Path) -> Result<zset::file::PlanFile> 
     }
     if cli.set.is_empty() {
         cli.set = i.set.clone();
+    }
+    if cli.input_files.is_empty() {
+        cli.input_files = i
+            .input_files
+            .iter()
+            .map(|f| PathBuf::from(&f.path))
+            .collect();
     }
     if cli.data.is_empty() {
         cli.data = i.data.clone();
@@ -1000,12 +1043,8 @@ fn default_files(files: &[PathBuf]) -> Result<Vec<PathBuf>> {
     bail!("no input files: pass --file <path.df> (or create ./dform.df)")
 }
 
-fn build_extra_facts(set: &[String], data: &[String]) -> Result<Vec<Atom>> {
+fn build_extra_facts(data: &[String]) -> Result<Vec<Atom>> {
     let mut out = Vec::new();
-    for kv in set {
-        let (k, v) = split_kv(kv)?;
-        out.push(atom_kv("input", k, v));
-    }
     for kv in data {
         let (k, v) = split_kv(kv)?;
         out.push(atom_kv("data", k, v));

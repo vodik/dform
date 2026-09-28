@@ -7,10 +7,9 @@
 
 edition 2026.
 
-# Defaults (stratified negation)
-has_env() :- input("env", _).
-env(staging) :- not has_env().
-env(E) :- input("env", E).
+# Typed stack input with a default. The default is a @default contribution
+# to input env; --set env=prod is a normal contribution and wins.
+input env: enum(dev, staging, prod) = staging.
 
 data(zone, "us-test-1a").
 data(zone, "us-test-1b").

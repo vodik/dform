@@ -12,6 +12,8 @@ pub struct Lowered {
     pub program: Program,
     /// `decl p/N.` declarations.
     pub externs: BTreeSet<Extern>,
+    /// The stack's and every module instance's typed inputs.
+    pub inputs: Vec<crate::inputs::Declared>,
 }
 
 pub fn lower(program: &Program) -> Result<Lowered> {
@@ -19,7 +21,7 @@ pub fn lower(program: &Program) -> Result<Lowered> {
     let program = apply_decls(program)?;
     // In the future, imports should be handled in a loader before parsing.
     // For now, keep Import statements in the AST but drop them before eval.
-    let expanded = crate::modules::expand(&program)?;
+    let (expanded, inputs) = crate::modules::expand(&program)?;
     let expanded = expand_when(&expanded)?;
     let expanded = desugar_settings(&expanded)?;
     let (expanded, externs) = drop_metadata(&expanded);
@@ -29,6 +31,7 @@ pub fn lower(program: &Program) -> Result<Lowered> {
     Ok(Lowered {
         program: expanded,
         externs,
+        inputs,
     })
 }
 
@@ -61,12 +64,6 @@ fn reject_pending(stmts: &[Stmt]) -> Result<()> {
                 Stmt::Module(d) => walk(&d.body, At::Module, diags),
                 Stmt::PolicyPack(p) => walk(&p.body, At::Module, diags),
                 Stmt::When(w) => walk(&w.body, At::Nested, diags),
-                Stmt::Input(i) if at == At::Top => diags.push(
-                    Diagnostic::error(i.span, "an input declaration is not yet supported")
-                        .with_note(
-                            "it parses; its semantics land with phase 6 \"Typed stack inputs\"",
-                        ),
-                ),
                 Stmt::Input(i) if at == At::Nested => diags.push(misplaced(
                     i.span,
                     "an input is declared at the top of a module",

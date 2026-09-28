@@ -7,6 +7,7 @@ pub mod executor;
 pub mod fakecloud;
 pub mod fmt;
 pub mod graph;
+pub mod inputs;
 pub mod ir;
 pub mod lattice;
 pub mod lexer;

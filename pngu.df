@@ -25,18 +25,8 @@ decl peering(Env: symbol, Name: string, PeerNetwork: string).
 # Environment selection
 ########################################
 
-# True anonymous wildcard `_` (Prolog / Souffle style).
-has_env() :- input("env", _).
-env(dev) :- not has_env().
-env(E) :- input("env", E).
-
-allowed_env(dev).
-allowed_env(stg).
-allowed_env(prod).
-
-constraint("env must be one of: dev, stg, prod") :-
-  env(E),
-  not allowed_env(E).
+# A typed stack input: --set env=qa is an error naming the input.
+input env: enum(dev, stg, prod) = dev.
 
 ########################################
 # Settings (branch-as-data)

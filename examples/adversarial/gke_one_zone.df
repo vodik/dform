@@ -11,9 +11,7 @@
 
 edition 2026.
 
-has_env() :- input("env", _).
-env(dev) :- not has_env().
-env(E) :- input("env", E).
+input env: enum(dev, stg, prod) = dev.
 
 settings dev {
   project_id = "renfry-dev-973682"

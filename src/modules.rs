@@ -24,6 +24,7 @@ use crate::ast::{
     Settings, Span, Stmt, Term, TypeExpr, When,
 };
 use crate::diag::{self, Diagnostic, Diagnostics};
+use crate::inputs::Declared;
 use crate::value::Value;
 use anyhow::Result;
 use std::collections::{BTreeMap, BTreeSet};
@@ -61,24 +62,6 @@ fn is_ground(t: &Term) -> bool {
         Term::Func { args, .. } => args.iter().all(is_ground),
         Term::List(xs) => xs.iter().all(is_ground),
         Term::Obj(m) => m.values().all(is_ground),
-    }
-}
-
-fn type_text(t: &TypeExpr) -> String {
-    match t {
-        TypeExpr::Name(n) => n.clone(),
-        TypeExpr::Apply(n, args) => format!(
-            "{n}({})",
-            args.iter().map(type_text).collect::<Vec<_>>().join(", ")
-        ),
-        TypeExpr::Object(fs) => format!(
-            "{{ {} }}",
-            fs.iter()
-                .map(|(k, t)| format!("{k}: {}", type_text(t)))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
-        TypeExpr::Str(s) => format!("{s:?}"),
     }
 }
 
@@ -177,8 +160,19 @@ impl Names {
 /// Expand `module`/`instance` and `policy`/`apply`: the program with every
 /// instance's body scoped and renamed and every applied pack renamed and
 /// checked against its grants.
-pub fn expand(program: &Program) -> Result<Program> {
+pub fn expand(program: &Program) -> Result<(Program, Vec<Declared>)> {
     let mut diags = Vec::new();
+    let mut declared = Vec::new();
+    let check_types = |who: &str, inputs: &[InputDecl], diags: &mut Vec<Diagnostic>| {
+        for i in inputs {
+            if let Err(e) = crate::inputs::check_type(&i.ty) {
+                diags.push(Diagnostic::error(
+                    i.span,
+                    format!("{who} input {}: {e}", i.name),
+                ));
+            }
+        }
+    };
     let mut modules: BTreeMap<String, (&crate::ast::Module, Interface, Vec<Stmt>)> =
         BTreeMap::new();
     let mut packs: BTreeMap<String, &crate::ast::PolicyPack> = BTreeMap::new();
@@ -203,6 +197,7 @@ pub fn expand(program: &Program) -> Result<Program> {
                     }
                 }
                 check_module(m, &i, &rest, &mut diags);
+                check_types(&format!("module {}", m.name), &i.inputs, &mut diags);
                 if modules.insert(m.name.clone(), (m, i, rest)).is_some() {
                     diags.push(Diagnostic::error(
                         m.span,
@@ -224,6 +219,32 @@ pub fn expand(program: &Program) -> Result<Program> {
     for s in &program.statements {
         match s {
             Stmt::Module(_) | Stmt::PolicyPack(_) => {}
+            // The stack's own input: read as `k(V)`, given by `--set` (an
+            // `input(k, V)` fact) at the normal rank.
+            Stmt::Input(i) => {
+                check_types("stack", std::slice::from_ref(i), &mut diags);
+                out.extend(input_reader("", i, &i.name));
+                let v = Term::Var("V".into());
+                out.push(Stmt::Rule(RuleStmt {
+                    head: atom(
+                        "arg",
+                        vec![
+                            str_term(INPUT),
+                            str_term(""),
+                            str_term(&i.name),
+                            v.clone(),
+                            str_term(crate::transform::NORMAL),
+                        ],
+                        i.span,
+                    ),
+                    body: vec![Lit::Pos(atom("input", vec![str_term(&i.name), v], i.span))],
+                }));
+                out.extend(refinement(i, ""));
+                declared.push(Declared {
+                    scope: String::new(),
+                    decl: i.clone(),
+                });
+            }
             // The stack's own output: `output(k, V)` in the root scope.
             Stmt::Output(o) if o.value.is_some() => out.push(fact_or_rule(
                 atom(
@@ -270,6 +291,10 @@ pub fn expand(program: &Program) -> Result<Program> {
                     out.push(rewrite_stmt(st, &scope));
                 }
                 out.extend(input_readers(&scope, &iface.inputs, &names));
+                declared.extend(iface.inputs.iter().map(|i| Declared {
+                    scope: scope.clone(),
+                    decl: i.clone(),
+                }));
             }
             other => out.push(other.clone()),
         }
@@ -348,9 +373,12 @@ pub fn expand(program: &Program) -> Result<Program> {
     }
 
     if diags.is_empty() {
-        Ok(Program {
-            statements: expanded,
-        })
+        Ok((
+            Program {
+                statements: expanded,
+            },
+            declared,
+        ))
     } else {
         Err(Diagnostics(diags).into())
     }
@@ -401,7 +429,11 @@ fn instance_inputs(
                 )
                 .with_label(
                     i.span,
-                    format!("{}: {} declared here", i.name, type_text(&i.ty)),
+                    format!(
+                        "{}: {} declared here",
+                        i.name,
+                        crate::inputs::type_text(&i.ty)
+                    ),
                 )
                 .with_help(format!("add `{} = ...` to the instance block", i.name)),
             );

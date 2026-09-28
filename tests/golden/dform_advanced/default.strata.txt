@@ -1,8 +1,9 @@
 exit: ok
 -- stdout --
-== dform-advanced.df: 82 nodes, 165 edges (54 negative)
+== dform-advanced.df: 83 nodes, 165 edges (55 negative)
    STRATIFIED, 6 strata
    stratum 0:
+     (arg, input, env)
      (arg, settings, mesh.vpcs)
      (arg, settings, tenants)
      (want, compute.vm)
@@ -16,7 +17,6 @@ exit: ok
      corp_net
      group_edge
      group_member
-     has_env
      identity
      in_group
      input
@@ -36,10 +36,9 @@ exit: ok
      (arg, k8s.cluster, id)
      (arg, k8s.nodepool, id)
      (arg, net.subnet, id)
+     (attr, input, env)
      (attr, settings, mesh.vpcs)
      (attr, settings, tenants)
-     env
-     peer_intent
    stratum 2:
      (arg, net.vpc, cidr)
      (arg, net.vpc, id)
@@ -58,12 +57,14 @@ exit: ok
      (attr, net.subnet, id)
      (want, net.vpc)
      (want, net.vpc_peering)
+     env
      link
      mesh_adjacent
      mesh_node
      mesh_peer
      mesh_vpc
      peer
+     peer_intent
      reachable
      tenant
    stratum 3:

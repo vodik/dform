@@ -1,11 +1,12 @@
 exit: ok
 -- stdout --
-== dform.df: 156 nodes, 388 edges (172 negative)
+== dform.df: 157 nodes, 388 edges (173 negative)
    STRATIFIED, 17 strata
    stratum 0:
      (arg, iam.policy, name)
      (arg, iam.role, assume)
      (arg, iam.role, name)
+     (arg, input, env)
      (arg, output, vpc)
      (arg, settings, audit.sinks)
      (arg, settings, db.backup_days)
@@ -22,7 +23,6 @@ exit: ok
      (want, net.route)
      data
      env_name
-     has_env
      identity
      input
      network.main::zone_index
@@ -40,6 +40,7 @@ exit: ok
      (attr, iam.policy, name)
      (attr, iam.role, assume)
      (attr, iam.role, name)
+     (attr, input, env)
      (attr, output, vpc)
      (attr, settings, audit.sinks)
      (attr, settings, db.backup_days)
@@ -49,8 +50,6 @@ exit: ok
      (attr, settings, k8s.private_api)
      (attr, settings, network.main.vpc_net)
      (attr, settings, network.peer.vpc_net)
-     env
-     warn
    stratum 2:
      (arg, compute.vm, id)
      (arg, compute.vm, private_ip)
@@ -60,7 +59,9 @@ exit: ok
      (attr, iam.role_policy_attachment, id)
      (attr, net.route, id)
      (want, compute.vm)
+     env
      vpc_peer
+     warn
    stratum 3:
      (arg, iam.role_policy_attachment, policy_id)
      (arg, iam.role_policy_attachment, role_id)
