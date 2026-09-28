@@ -122,8 +122,10 @@ create, a delete, an update, or nothing. The first line counts it in those
 terms, `plan: 3 deformations (2 create, 1 update), 4 pending, 1 undetermined`,
 and the sections follow in this order; what cannot be decided yet is said so:
 
+- `moved T.Old -> T.New` lines first, one per `moved/3` rename of state.
 - `definite:` deformations that run in this tick, grouped by resource: `+`
-  create, `~` update, `-` delete, `>` adopt. An update diffs a keyless set, or
+  create, `~` update, `-` delete, `>` adopt, `-/+` and `+/-` replace,
+  `- T.A  (deposed)` for an object a replacement deposed. An update diffs a keyless set, or
   a list with merge keys (`containers[name=web]`), by element: an element that
   is new or gone is one `+`/`-` line with its leaves, not every later index
   shifting. Map leaves print one per line.
@@ -141,8 +143,11 @@ and the sections follow in this order; what cannot be decided yet is said so:
   `conflicts:` cells whose contributions disagree at the winning rank, each
   naming the resource, the path and every witness. A conflicted address is not
   a deformation; the plan still prints, then refuses with the deny.
+- `denied:` denies over the plan itself (`lifecycle prevent_destroy: the plan
+  would replace T.A`); the plan still prints, then refuses.
 - `apply order: tick 1 [...] tick 2 [...]`: which tick each deformation runs
-  in, from the dependency DAG and the nulls it waits on.
+  in, from the dependency DAG and the nulls it waits on (a `+/-` replacement's
+  deposed object is deleted the tick after).
 - `(drift: ...)` marks an update where a fresh null meets a value the world
   already has: the identity mapping is stale.
 - `stack NAME is undeformed`: nothing to do, nothing stuck (the only line).
@@ -151,7 +156,9 @@ and the sections follow in this order; what cannot be decided yet is said so:
 editors consume: `stack`, `undeformed`, a `summary` of counts, then the
 sections as arrays in the order above (`definite`, `pending`,
 `pending_groups`, `undetermined`, `shadowed`, `conflicts`, `apply_order`,
-`unscheduled`). A change is `{op, path, before, after}` (`op` is `set`, or
+`unscheduled`, `moved`, `denied`). A deformation is `{action, type, name,
+changes}`, a replace with `create_first`, a deposed delete with `deposed:
+true`. A change is `{op, path, before, after}` (`op` is `set`, or
 `add`/`remove` for a set element, with its `leaves`); a null is `{"null":
 LABEL, "class": CLASS}` and a secret `{"sensitive": LABEL}`.
 
