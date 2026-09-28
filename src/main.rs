@@ -53,8 +53,10 @@ struct Cli {
     #[arg(long, global = true)]
     show_noop: bool,
 
-    /// Provider schema to mock: a name (providers/NAME/schema.df, else a
-    /// built-in) or a path to a schema .df file. Repeatable; default `fake`.
+    /// A provider: a schema the mock provider plays (a name,
+    /// providers/NAME/schema.df else a built-in, or a path to a schema .df
+    /// file), or a plugin executable (a path to one, or to a directory
+    /// holding a `dform-provider*`). Repeatable; default `fake`.
     #[arg(long = "provider", global = true)]
     providers: Vec<String>,
 
