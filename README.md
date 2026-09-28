@@ -257,5 +257,5 @@ This is an MVP:
 - safe(ish) negation: `not` requires the atom be ground at evaluation time
 
 Provider model (in progress): the demo uses an in-process `fakecloud` provider that supplies
-catalog facts (type ownership/capabilities) and discovery facts (inventory), and supports
-plan/apply against a simulated world.
+schema facts (`providers/<name>/schema.df`) and discovery facts (inventory), and supports
+plan/apply against a world file, with chaos injection.
