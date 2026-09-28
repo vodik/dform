@@ -825,7 +825,8 @@ mod tests {
         // F section 4.1 counted 11 strata for dform.df over the program
         // before the ref rewrite; the graph evaluation runs with also orders
         // every ref-holding contribution above the attribute it reads (see
-        // below): 13.
+        // below), and module inputs are cells of the aggregate too (phase 6):
+        // 17.
         let (v, _) = run_file(
             "dform.df",
             &[root().join("dform.df")],
@@ -835,7 +836,7 @@ mod tests {
         let Verdict::Stratified { strata } = v else {
             panic!()
         };
-        assert_eq!(strata.values().max().copied().unwrap() + 1, 13);
+        assert_eq!(strata.values().max().copied().unwrap() + 1, 17);
     }
 
     /// The graph `dform strata` prints is the one evaluation runs with: a

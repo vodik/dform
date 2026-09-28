@@ -197,11 +197,8 @@ deny("databases must be protected", {addr: A}) :-
     );
     s.write(
         "p.df",
-        &s.read("p.df").replacen(
-            "edition 2026.\n",
-            "edition 2026.\nimport \"lib.df\" as lib.\n",
-            1,
-        ),
+        &s.read("p.df")
+            .replacen("edition 2026.\n", "edition 2026.\nimport \"lib.df\".\n", 1),
     );
     dform(&s, &["plan"]).success();
 }

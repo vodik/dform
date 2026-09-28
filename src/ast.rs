@@ -114,9 +114,17 @@ pub enum Stmt {
     Fact(Atom),
     Rule(RuleStmt),
     Constraint(Constraint),
-    Component(Component),
-    ComponentDef(ComponentDef),
-    Use(Use),
+    Module(Module),
+    Instance(Instance),
+    /// `input k: T [= default] [where refinement]`: a module's or the
+    /// stack's typed input.
+    Input(InputDecl),
+    /// `output k: T` (a declaration) or `output k = term` (its value).
+    Output(OutputDecl),
+    /// `export p/N`: a module predicate readable as `m.i.p`.
+    Export(Export),
+    /// `contributes arg to T at P` or `contributes p`.
+    Contributes(Contributes),
     PolicyPack(PolicyPack),
     ApplyPolicy(ApplyPolicy),
     When(When),
@@ -207,29 +215,53 @@ pub struct Decl {
     pub span: Span,
 }
 
+/// `module name { ... }` (E DR-3): its predicates are private to each
+/// instance unless exported.
 #[derive(Debug, Clone)]
-pub struct Component {
-    pub comp: String,
-    pub inst: String,
-    pub body: Vec<Stmt>,
-    pub span: Span,
-}
-
-/// `module name { ... }`.
-#[derive(Debug, Clone)]
-pub struct ComponentDef {
+pub struct Module {
     pub name: String,
     pub body: Vec<Stmt>,
     pub span: Span,
 }
 
-/// `instance module name { k = v, ... } [:- body]`.
+/// `instance module name { k = v, ... } [:- body]`: each `k = v` is a
+/// contribution to input `k` of instance `module.name`.
 #[derive(Debug, Clone)]
-pub struct Use {
+pub struct Instance {
+    pub module: String,
     pub name: String,
-    pub inst: String,
-    pub params: Vec<(String, Term)>,
+    pub inputs: Vec<(String, Term, Span)>,
     pub body: Option<Vec<Lit>>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct InputDecl {
+    pub name: String,
+    pub ty: TypeExpr,
+    pub default: Option<Term>,
+    pub refinement: Vec<Lit>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct OutputDecl {
+    pub name: String,
+    pub ty: Option<TypeExpr>,
+    pub value: Option<Term>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct Export {
+    pub pred: String,
+    pub arity: usize,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct Contributes {
+    pub grant: Grant,
     pub span: Span,
 }
 
@@ -285,7 +317,6 @@ pub struct FieldAssign {
 #[derive(Debug, Clone)]
 pub struct Import {
     pub path: String,
-    pub alias: Option<String>,
     pub span: Span,
 }
 
@@ -317,22 +348,6 @@ pub enum PendingKind {
         name: String,
         config: Vec<(String, Term)>,
     },
-    Input {
-        name: String,
-        ty: TypeExpr,
-        default: Option<Term>,
-        refinement: Vec<Lit>,
-    },
-    Output {
-        name: String,
-        ty: Option<TypeExpr>,
-        value: Option<Term>,
-    },
-    Export {
-        pred: String,
-        arity: usize,
-    },
-    Contributes(Grant),
     ExternFn {
         name: String,
         args: Vec<BindArg>,
@@ -358,14 +373,9 @@ pub enum PendingKind {
 impl PendingKind {
     /// What the statement is, and the WORK.org ticket that gives it meaning.
     pub fn describe(&self) -> (&'static str, &'static str) {
-        const MODULES: &str = "phase 6 \"Modules, instances, interfaces, grants\"";
         match self {
             PendingKind::Provider { .. } => ("a provider statement", "phase 6 \"Stacks\""),
             PendingKind::Stack { .. } => ("a stack statement", "phase 6 \"Stacks\""),
-            PendingKind::Input { .. } => ("an input declaration", "phase 6 \"Typed stack inputs\""),
-            PendingKind::Output { .. } => ("an output declaration", MODULES),
-            PendingKind::Export { .. } => ("an export", MODULES),
-            PendingKind::Contributes(_) => ("a contributes grant", MODULES),
             PendingKind::ExternFn { .. } => (
                 "an extern with binding patterns",
                 "phase 6 \"Externs with binding patterns\"",

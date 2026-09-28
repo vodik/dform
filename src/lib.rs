@@ -12,6 +12,7 @@ pub mod lattice;
 pub mod lexer;
 pub mod lint;
 pub mod loader;
+pub mod modules;
 pub mod parser;
 pub mod partition;
 pub mod plan_print;

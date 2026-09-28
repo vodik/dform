@@ -1,17 +1,8 @@
-//! A small lint pass over the lowered program (F13's aftermath): warn about
-//! an `input(...)`/`param(...)` key that no rule body reads, and about a
-//! `--set` input that no rule body reads either.
+//! A small lint pass over the lowered program: warn about an
+//! `input(...)` key, from `--set` or a fact, that no rule body reads.
 //!
-//! F13 was exactly this shape: `use network main { vpc_cidr = VpcCidr }`
-//! produced `param("vpc_cidr", ...)`, but `modules/network.df` reads
-//! `param(vpc_net, VpcNet)` -- a different key -- so the module silently
-//! derived nothing and the plan came out empty. This pass would have caught
-//! it: `vpc_cidr` is produced but never read.
-//!
-//! `param` is scoped per component instance after lowering (`param(Scope,
-//! Key, Value)`); `input` is a flat, unscoped `input(Key, Value)`. Both keys
-//! must be ground (a literal string) to be checked; a computed key is out of
-//! scope for this pass.
+//! Its F13 half is a compile error now: an instance that sets a key its
+//! module does not declare as an input names the key (`modules`).
 
 use crate::ast::{Atom, Lit, Program, Stmt, Term};
 use crate::transform;
@@ -32,106 +23,36 @@ pub fn lint(program: &Program, cli_keys: &[String]) -> Vec<String> {
 }
 
 fn lint_lowered(program: &Program, cli_keys: &[String]) -> Vec<String> {
-    let mut produced_input: BTreeSet<String> = cli_keys.iter().cloned().collect();
-    let mut produced_param: BTreeSet<(String, String)> = BTreeSet::new();
-    let mut read_input: BTreeSet<String> = BTreeSet::new();
-    let mut read_param: BTreeSet<(String, String)> = BTreeSet::new();
-
+    let mut produced: BTreeSet<String> = cli_keys.iter().cloned().collect();
+    let mut read: BTreeSet<String> = BTreeSet::new();
     for stmt in &program.statements {
         match stmt {
-            Stmt::Fact(a) => record_produced(a, &mut produced_input, &mut produced_param),
+            Stmt::Fact(a) => produced.extend(input_key(a)),
             Stmt::Rule(r) => {
-                record_produced(&r.head, &mut produced_input, &mut produced_param);
-                for lit in &r.body {
-                    record_read(lit, &mut read_input, &mut read_param);
-                }
+                produced.extend(input_key(&r.head));
+                read.extend(r.body.iter().filter_map(read_key));
             }
-            Stmt::Constraint(c) => {
-                for lit in &c.body {
-                    record_read(lit, &mut read_input, &mut read_param);
-                }
-            }
+            Stmt::Constraint(c) => read.extend(c.body.iter().filter_map(read_key)),
             _ => {}
         }
     }
-
-    let mut warnings = Vec::new();
-    for key in &produced_input {
-        if !read_input.contains(key) {
-            warnings.push(format!(
-                "input(\"{key}\", _) is set but no rule body reads it"
-            ));
-        }
-    }
-    for (scope, key) in &produced_param {
-        if !read_param.contains(&(scope.clone(), key.clone())) {
-            warnings.push(format!(
-                "param(\"{key}\", _) in scope '{scope}' is set but no rule body reads it"
-            ));
-        }
-    }
-    warnings
+    produced
+        .difference(&read)
+        .map(|key| format!("input(\"{key}\", _) is set but no rule body reads it"))
+        .collect()
 }
 
-fn record_produced(
-    atom: &Atom,
-    produced_input: &mut BTreeSet<String>,
-    produced_param: &mut BTreeSet<(String, String)>,
-) {
-    match key_of(atom) {
-        Some(Key::Input(k)) => {
-            produced_input.insert(k);
-        }
-        Some(Key::Param(scope, k)) => {
-            produced_param.insert((scope, k));
-        }
-        None => {}
-    }
-}
-
-fn record_read(
-    lit: &Lit,
-    read_input: &mut BTreeSet<String>,
-    read_param: &mut BTreeSet<(String, String)>,
-) {
-    let atom = match lit {
-        Lit::Pos(a) | Lit::Not(a) => a,
-        _ => return,
-    };
-    match key_of(atom) {
-        Some(Key::Input(k)) => {
-            read_input.insert(k);
-        }
-        Some(Key::Param(scope, k)) => {
-            read_param.insert((scope, k));
-        }
-        None => {}
-    }
-}
-
-enum Key {
-    Input(String),
-    Param(String, String),
-}
-
-/// After full lowering, `input` is `input(Key, Value)` (arity 2, unscoped)
-/// and `param` is `param(Scope, Key, Value)` (arity 3, scoped per component
-/// instance) -- see `transform::rewrite_atom`.
-fn key_of(atom: &Atom) -> Option<Key> {
-    match atom.pred.as_str() {
-        "input" if atom.args.len() == 2 => literal_str(&atom.args[0]).map(Key::Input),
-        "param" if atom.args.len() == 3 => {
-            let scope = literal_str(&atom.args[0])?;
-            let key = literal_str(&atom.args[1])?;
-            Some(Key::Param(scope, key))
-        }
+fn read_key(lit: &Lit) -> Option<String> {
+    match lit {
+        Lit::Pos(a) | Lit::Not(a) => input_key(a),
         _ => None,
     }
 }
 
-fn literal_str(t: &Term) -> Option<String> {
-    match t {
-        Term::Val(Value::Str(s)) => Some(s.clone()),
+/// The key of `input(Key, Value)` when it is a literal.
+fn input_key(atom: &Atom) -> Option<String> {
+    match (atom.pred.as_str(), atom.args.as_slice()) {
+        ("input", [Term::Val(Value::Str(k)), _]) => Some(k.clone()),
         _ => None,
     }
 }
@@ -196,49 +117,6 @@ mod tests {
                 .map(|r| (&r.addr.typ, &r.addr.name))
                 .collect::<Vec<_>>()
         );
-    }
-
-    #[test]
-    fn warns_about_unread_param_key() {
-        // Mirrors F13 exactly: an `instance` block sets `vpc_cidr`, the module
-        // it instantiates reads `vpc_net`.
-        let src = r#"
-            module widget {
-              resource net.vpc vpc {
-                cidr = VpcNet
-              } :-
-                param(vpc_net, VpcNet).
-            }.
-
-            instance widget main {
-              vpc_cidr = "10.0.0.0/16"
-            }.
-        "#;
-        let program = crate::parser::parse_program(src).expect("parse");
-        let warnings = lint(&program, &[]);
-        assert!(
-            warnings.iter().any(|w| w.contains("vpc_cidr")),
-            "expected a warning naming the unread 'vpc_cidr' param, got: {warnings:?}"
-        );
-    }
-
-    #[test]
-    fn no_warning_when_everything_is_read() {
-        let src = r#"
-            module widget {
-              resource net.vpc vpc {
-                cidr = VpcNet
-              } :-
-                param(vpc_net, VpcNet).
-            }.
-
-            instance widget main {
-              vpc_net = "10.0.0.0/16"
-            }.
-        "#;
-        let program = crate::parser::parse_program(src).expect("parse");
-        let warnings = lint(&program, &[]);
-        assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
     }
 
     #[test]

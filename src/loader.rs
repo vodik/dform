@@ -1,5 +1,4 @@
-use crate::ast::Term;
-use crate::ast::{Atom, Constraint, Lit, Program, Resource, RuleStmt, Settings, Stmt, When};
+use crate::ast::{Program, Stmt};
 use crate::parser;
 use anyhow::{Context, Result};
 use std::collections::BTreeSet;
@@ -32,169 +31,12 @@ fn load_file(path: &Path, seen: &mut BTreeSet<PathBuf>) -> Result<Program> {
         match s {
             Stmt::Import(i) => {
                 let import_path = base_dir.join(&i.path);
-                let mut child = load_file(&import_path, seen)?;
-                if let Some(alias) = i.alias {
-                    child = prefix_program(&child, &alias);
-                }
-                out.extend(child.statements);
+                out.extend(load_file(&import_path, seen)?.statements);
             }
             other => out.push(other),
         }
     }
     Ok(Program { statements: out })
-}
-
-fn prefix_program(program: &Program, alias: &str) -> Program {
-    let mut out = Vec::new();
-    for s in &program.statements {
-        out.push(prefix_stmt(s.clone(), alias));
-    }
-    Program { statements: out }
-}
-
-fn prefix_stmt(stmt: Stmt, alias: &str) -> Stmt {
-    match stmt {
-        Stmt::Fact(a) => Stmt::Fact(prefix_atom(a, alias)),
-        Stmt::Rule(r) => Stmt::Rule(RuleStmt {
-            head: prefix_atom(r.head, alias),
-            body: r.body.into_iter().map(|l| prefix_lit(l, alias)).collect(),
-        }),
-        Stmt::Constraint(c) => Stmt::Constraint(Constraint {
-            body: c.body.into_iter().map(|l| prefix_lit(l, alias)).collect(),
-            ..c
-        }),
-        Stmt::When(w) => Stmt::When(When {
-            guard: prefix_lit(w.guard, alias),
-            body: w.body.into_iter().map(|s| prefix_stmt(s, alias)).collect(),
-            span: w.span,
-        }),
-        Stmt::Resource(r) => Stmt::Resource(Resource {
-            typ: prefix_term(r.typ, alias),
-            name: prefix_term(r.name, alias),
-            rank: r.rank,
-            fields: r
-                .fields
-                .into_iter()
-                .map(|f| crate::ast::FieldAssign {
-                    value: prefix_term(f.value, alias),
-                    ..f
-                })
-                .collect(),
-            body: r
-                .body
-                .map(|xs| xs.into_iter().map(|l| prefix_lit(l, alias)).collect()),
-            span: r.span,
-        }),
-        Stmt::Component(mut c) => {
-            c.body = c.body.into_iter().map(|s| prefix_stmt(s, alias)).collect();
-            Stmt::Component(c)
-        }
-        Stmt::ComponentDef(mut c) => {
-            c.body = c.body.into_iter().map(|s| prefix_stmt(s, alias)).collect();
-            Stmt::ComponentDef(c)
-        }
-        Stmt::Use(mut u) => {
-            u.params = u
-                .params
-                .into_iter()
-                .map(|(k, v)| (k, prefix_term(v, alias)))
-                .collect();
-            u.body = u
-                .body
-                .map(|xs| xs.into_iter().map(|l| prefix_lit(l, alias)).collect());
-            Stmt::Use(u)
-        }
-        Stmt::PolicyPack(mut p) => {
-            p.body = p.body.into_iter().map(|s| prefix_stmt(s, alias)).collect();
-            Stmt::PolicyPack(p)
-        }
-        Stmt::ApplyPolicy(a) => Stmt::ApplyPolicy(a),
-        Stmt::Settings(s) => Stmt::Settings(Settings {
-            env: prefix_term(s.env, alias),
-            rank: s.rank,
-            fields: s
-                .fields
-                .into_iter()
-                .map(|f| crate::ast::FieldAssign {
-                    value: prefix_term(f.value, alias),
-                    ..f
-                })
-                .collect(),
-            body: s
-                .body
-                .map(|xs| xs.into_iter().map(|l| prefix_lit(l, alias)).collect()),
-            span: s.span,
-        }),
-        Stmt::Decl(mut d) => {
-            if !is_core_pred(&d.pred) {
-                d.pred = format!("{alias}.{}", d.pred);
-            }
-            Stmt::Decl(d)
-        }
-        Stmt::Extern(mut e) => {
-            if !is_core_pred(&e.pred) {
-                e.pred = format!("{alias}.{}", e.pred);
-            }
-            Stmt::Extern(e)
-        }
-        // Do not prefix component statements or metadata; they are local structure.
-        other => other,
-    }
-}
-
-fn prefix_lit(lit: Lit, alias: &str) -> Lit {
-    match lit {
-        Lit::Pos(a) => Lit::Pos(prefix_atom(a, alias)),
-        Lit::Not(a) => Lit::Not(prefix_atom(a, alias)),
-        Lit::Eq(a, b) => Lit::Eq(prefix_term(a, alias), prefix_term(b, alias)),
-        Lit::Neq(a, b) => Lit::Neq(prefix_term(a, alias), prefix_term(b, alias)),
-        Lit::Gt(a, b) => Lit::Gt(prefix_term(a, alias), prefix_term(b, alias)),
-        Lit::Ge(a, b) => Lit::Ge(prefix_term(a, alias), prefix_term(b, alias)),
-        Lit::Lt(a, b) => Lit::Lt(prefix_term(a, alias), prefix_term(b, alias)),
-        Lit::Le(a, b) => Lit::Le(prefix_term(a, alias), prefix_term(b, alias)),
-    }
-}
-
-fn prefix_atom(mut atom: Atom, alias: &str) -> Atom {
-    if !is_core_pred(&atom.pred) {
-        atom.pred = format!("{alias}.{}", atom.pred);
-    }
-    atom.args = atom
-        .args
-        .into_iter()
-        .map(|t| prefix_term(t, alias))
-        .collect();
-
-    if let Some(rec) = atom.record.take() {
-        atom.record = Some(
-            rec.into_iter()
-                .map(|(k, v)| (k, prefix_term(v, alias)))
-                .collect(),
-        );
-    }
-    atom
-}
-
-fn prefix_term(term: Term, alias: &str) -> Term {
-    match term {
-        Term::Val(v) => Term::Val(v),
-        Term::Var(v) => Term::Var(v),
-        Term::Wildcard => Term::Wildcard,
-        Term::List(xs) => Term::List(xs.into_iter().map(|t| prefix_term(t, alias)).collect()),
-        Term::Obj(m) => Term::Obj(
-            m.into_iter()
-                .map(|(k, v)| (k, prefix_term(v, alias)))
-                .collect(),
-        ),
-        Term::Func { name, args } => Term::Func {
-            name,
-            args: args.into_iter().map(|t| prefix_term(t, alias)).collect(),
-        },
-        Term::ListComp { item, body } => Term::ListComp {
-            item: Box::new(prefix_term(*item, alias)),
-            body: body.into_iter().map(|l| prefix_lit(l, alias)).collect(),
-        },
-    }
 }
 
 /// Predicates the provider or the CLI injects as facts (discovery, world,
@@ -230,8 +72,8 @@ pub fn is_engine_pred(pred: &str) -> bool {
     ENGINE_PREDS.contains(&pred)
 }
 
-/// Compiler-owned predicates: never namespaced by `import ... as`, and
-/// defined whether or not the program writes them.
+/// Compiler-owned predicates: never private to a module, and defined
+/// whether or not the program writes them.
 pub fn is_core_pred(pred: &str) -> bool {
     matches!(
         pred,
@@ -244,8 +86,6 @@ pub fn is_core_pred(pred: &str) -> bool {
             | "setting"
             | "setting_add"
             | "output"
-            | "component_scope"
-            | "param"
             | "merge_rule"
             | "warn"
             | "deny"

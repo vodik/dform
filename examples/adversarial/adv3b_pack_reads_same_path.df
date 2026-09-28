@@ -9,8 +9,9 @@ resource iam.policy app_policy {
 }.
 
 policy p {
+  contributes arg to iam.policy at .statements.
   type_lattice(iam.policy, .statements, set).
-  arg_add(iam.policy, P, .statements, [{ action: org.read, resource: "org" }]) :-
+  arg(iam.policy, P, .statements, [{ action: org.read, resource: "org" }]) :-
     want(iam.policy, P),
     arg(iam.policy, P, .statements, S),
     not member(S, { action: org.read, resource: "org" }).

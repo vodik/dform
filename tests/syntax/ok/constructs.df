@@ -2,7 +2,7 @@ edition 2026.
 
 # One of everything the grammar lowers today.
 import "../../../modules/stdlib_net.df".
-import "../../../modules/iam.df" as lib.
+import "../../../modules/iam.df".
 
 decl provided/2.
 decl project(Id: int, NetworkName: string).
@@ -11,17 +11,27 @@ project(1, "net-a").
 names(N) :- project{ network_name: N }.
 
 module m {
+  input on: bool.
+  output vpc: addr.
+  export on_vpc/1.
+  contributes iam_need.
+
   resource net.vpc vpc @default {
     cidr = "10.0.0.0/16"
     tags = { team: "x", "k-v": 1 }, size = 2 @override
     list[0].name = "a"
     audit.sinks += ["s3"]
-  } :- param(on, true).
+  } :- on(true).
+
+  on_vpc(vpc) :- on(true).
+  iam_need(app, "net.read", ref(net.vpc, vpc, .id)).
+  output vpc = vpc.
 }.
 
 instance m main { on = true }.
 
 policy p {
+  contributes arg to _ at .tags.
   arg(T, A, .tags, { owner: "ops" }) @override :- want(T, A).
 }.
 
@@ -49,3 +59,6 @@ counts(count(X)) :- q(X).
 constraint("q must not be empty") :- not q(1).
 v(input, output, settings, type) :- input("env", _), output(k, _).
 p(a). q(b).
+w(V) :- m.main.on_vpc(V).
+vpc_inst(main).
+x(I, A) :- vpc_inst(I), output(m.I, vpc, A).

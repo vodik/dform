@@ -1,11 +1,12 @@
 exit: ok
 -- stdout --
-== dform.df: 132 nodes, 370 edges (149 negative)
-   STRATIFIED, 13 strata
+== dform.df: 156 nodes, 388 edges (172 negative)
+   STRATIFIED, 17 strata
    stratum 0:
      (arg, iam.policy, name)
      (arg, iam.role, assume)
      (arg, iam.role, name)
+     (arg, output, vpc)
      (arg, settings, audit.sinks)
      (arg, settings, db.backup_days)
      (arg, settings, db.multi_az)
@@ -19,19 +20,18 @@ exit: ok
      (want, iam.role)
      (want, iam.role_policy_attachment)
      (want, net.route)
-     component_scope
      data
      env_name
      has_env
      identity
      input
+     network.main::zone_index
+     network.peer::zone_index
      resolve
      resolved
      type_lattice
-     vpc_peer
      vpc_peer_inst
      world_attr
-     zone_index
    stratum 1:
      (arg, iam.policy, id)
      (arg, iam.role, id)
@@ -40,6 +40,7 @@ exit: ok
      (attr, iam.policy, name)
      (attr, iam.role, assume)
      (attr, iam.role, name)
+     (attr, output, vpc)
      (attr, settings, audit.sinks)
      (attr, settings, db.backup_days)
      (attr, settings, db.multi_az)
@@ -53,34 +54,35 @@ exit: ok
    stratum 2:
      (arg, compute.vm, id)
      (arg, compute.vm, private_ip)
-     (arg, k8s.nodepool, id)
-     (arg, k8s.nodepool, max)
-     (arg, k8s.nodepool, min)
-     (arg, net.vpc, cidr)
-     (arg, net.vpc, id)
-     (arg, net.vpc, tags)
-     (arg, net.vpc_peering, id)
+     (arg, input, vpc_net)
      (attr, iam.policy, id)
      (attr, iam.role, id)
      (attr, iam.role_policy_attachment, id)
      (attr, net.route, id)
      (want, compute.vm)
-     (want, k8s.nodepool)
-     (want, net.vpc)
-     (want, net.vpc_peering)
-     param
+     vpc_peer
    stratum 3:
      (arg, iam.role_policy_attachment, policy_id)
      (arg, iam.role_policy_attachment, role_id)
      (attr, compute.vm, id)
      (attr, compute.vm, private_ip)
-     (attr, k8s.nodepool, id)
-     (attr, k8s.nodepool, max)
-     (attr, k8s.nodepool, min)
+     (attr, input, vpc_net)
+   stratum 4:
+     (arg, net.vpc, cidr)
+     (arg, net.vpc, id)
+     (arg, net.vpc, tags)
+     (arg, net.vpc_peering, id)
+     (attr, iam.role_policy_attachment, policy_id)
+     (attr, iam.role_policy_attachment, role_id)
+     (want, net.vpc)
+     (want, net.vpc_peering)
+     network.main::vpc_net
+     network.peer::vpc_net
+   stratum 5:
      (attr, net.vpc, cidr)
      (attr, net.vpc, id)
      (attr, net.vpc_peering, id)
-   stratum 4:
+   stratum 6:
      (arg, net.subnet, cidr)
      (arg, net.subnet, id)
      (arg, net.subnet, visibility)
@@ -88,10 +90,8 @@ exit: ok
      (arg, net.subnet, zone)
      (arg, net.vpc_peering, accepter_vpc_id)
      (arg, net.vpc_peering, requester_vpc_id)
-     (attr, iam.role_policy_attachment, policy_id)
-     (attr, iam.role_policy_attachment, role_id)
      (want, net.subnet)
-   stratum 5:
+   stratum 7:
      (attr, net.subnet, cidr)
      (attr, net.subnet, id)
      (attr, net.subnet, visibility)
@@ -99,13 +99,27 @@ exit: ok
      (attr, net.subnet, zone)
      (attr, net.vpc_peering, accepter_vpc_id)
      (attr, net.vpc_peering, requester_vpc_id)
-   stratum 6:
+   stratum 8:
      (arg, output, private_subnet_ids)
      __lc_1
      __lc_2
-   stratum 7:
+   stratum 9:
      (attr, output, private_subnet_ids)
-   stratum 8:
+   stratum 10:
+     (arg, input, backup_days)
+     (arg, input, multi_az)
+     (arg, input, nodepool_max)
+     (arg, input, nodepool_min)
+     (arg, input, private_api)
+     (arg, input, subnet_ids)
+   stratum 11:
+     (attr, input, backup_days)
+     (attr, input, multi_az)
+     (attr, input, nodepool_max)
+     (attr, input, nodepool_min)
+     (attr, input, private_api)
+     (attr, input, subnet_ids)
+   stratum 12:
      (arg, *, tags)
      (arg, db.postgres, backup_days)
      (arg, db.postgres, endpoint)
@@ -119,9 +133,20 @@ exit: ok
      (arg, k8s.cluster, private_api)
      (arg, k8s.cluster, subnet_ids)
      (arg, k8s.cluster, version)
+     (arg, k8s.nodepool, id)
+     (arg, k8s.nodepool, max)
+     (arg, k8s.nodepool, min)
      (want, db.postgres)
      (want, k8s.cluster)
-   stratum 9:
+     (want, k8s.nodepool)
+     database.main::backup_days
+     database.main::multi_az
+     database.main::subnet_ids
+     kubernetes.main::nodepool_max
+     kubernetes.main::nodepool_min
+     kubernetes.main::private_api
+     kubernetes.main::subnet_ids
+   stratum 13:
      (attr, *, tags)
      (attr, db.postgres, backup_days)
      (attr, db.postgres, endpoint)
@@ -135,16 +160,19 @@ exit: ok
      (attr, k8s.cluster, private_api)
      (attr, k8s.cluster, subnet_ids)
      (attr, k8s.cluster, version)
+     (attr, k8s.nodepool, id)
+     (attr, k8s.nodepool, max)
+     (attr, k8s.nodepool, min)
      (attr, net.vpc, tags)
-   stratum 10:
+   stratum 14:
      (arg, k8s.nodepool, cluster_id)
      __ref_dep
      deny
      iam_need
-   stratum 11:
+   stratum 15:
      (arg, iam.policy, statements)
      (attr, k8s.nodepool, cluster_id)
      __lc_3
-   stratum 12:
+   stratum 16:
      (attr, iam.policy, statements)
 -- stderr --

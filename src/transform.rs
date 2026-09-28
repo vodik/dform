@@ -1,6 +1,5 @@
 use crate::ast::{
-    Atom, Constraint, Extern, Lit, Program, Rank, Resource, RuleStmt, Settings, Span, Stmt, Term,
-    When,
+    Atom, Constraint, Extern, Lit, Program, Rank, Resource, RuleStmt, Span, Stmt, Term, When,
 };
 use crate::diag::{self, Diagnostic, Diagnostics};
 use crate::schema::Schema;
@@ -20,9 +19,7 @@ pub fn lower(program: &Program) -> Result<Lowered> {
     let program = apply_decls(program)?;
     // In the future, imports should be handled in a loader before parsing.
     // For now, keep Import statements in the AST but drop them before eval.
-    let expanded = expand_component_defs_and_uses(&program)?;
-    let expanded = expand_policy_packs(&expanded)?;
-    let expanded = expand_components(&expanded)?;
+    let expanded = crate::modules::expand(&program)?;
     let expanded = expand_when(&expanded)?;
     let expanded = desugar_settings(&expanded)?;
     let (expanded, externs) = drop_metadata(&expanded);
@@ -40,11 +37,19 @@ fn spanned(span: Span, msg: impl Into<String>) -> anyhow::Error {
     Diagnostics(vec![Diagnostic::error(span, msg)]).into()
 }
 
-/// E §6 statements with no lowering yet are errors naming their ticket.
+/// E §6 statements with no lowering yet are errors naming their ticket,
+/// and an interface statement (`input`, `output`, `export`, `contributes`)
+/// where it has no meaning is an error naming where it belongs.
 fn reject_pending(stmts: &[Stmt]) -> Result<()> {
-    let mut diags = Vec::new();
-    fn walk(stmts: &[Stmt], diags: &mut Vec<Diagnostic>) {
+    #[derive(Clone, Copy, PartialEq)]
+    enum At {
+        Top,
+        Module,
+        Nested,
+    }
+    fn walk(stmts: &[Stmt], at: At, diags: &mut Vec<Diagnostic>) {
         for s in stmts {
+            let misplaced = |span, what: &str| Diagnostic::error(span, what.to_string());
             match s {
                 Stmt::Pending(p) => {
                     let (what, ticket) = p.kind.describe();
@@ -53,15 +58,36 @@ fn reject_pending(stmts: &[Stmt]) -> Result<()> {
                             .with_note(format!("it parses; its semantics land with {ticket}")),
                     );
                 }
-                Stmt::ComponentDef(d) => walk(&d.body, diags),
-                Stmt::PolicyPack(p) => walk(&p.body, diags),
-                Stmt::Component(c) => walk(&c.body, diags),
-                Stmt::When(w) => walk(&w.body, diags),
+                Stmt::Module(d) => walk(&d.body, At::Module, diags),
+                Stmt::PolicyPack(p) => walk(&p.body, At::Module, diags),
+                Stmt::When(w) => walk(&w.body, At::Nested, diags),
+                Stmt::Input(i) if at == At::Top => diags.push(
+                    Diagnostic::error(i.span, "an input declaration is not yet supported")
+                        .with_note(
+                            "it parses; its semantics land with phase 6 \"Typed stack inputs\"",
+                        ),
+                ),
+                Stmt::Input(i) if at == At::Nested => diags.push(misplaced(
+                    i.span,
+                    "an input is declared at the top of a module",
+                )),
+                Stmt::Output(o) if at == At::Nested => diags.push(misplaced(
+                    o.span,
+                    "an output is declared at the top of a module or the program",
+                )),
+                Stmt::Export(e) if at != At::Module => {
+                    diags.push(misplaced(e.span, "`export` belongs at the top of a module"))
+                }
+                Stmt::Contributes(c) if at != At::Module => diags.push(misplaced(
+                    c.span,
+                    "`contributes` belongs at the top of a module or policy pack",
+                )),
                 _ => {}
             }
         }
     }
-    walk(stmts, &mut diags);
+    let mut diags = Vec::new();
+    walk(stmts, At::Top, &mut diags);
     if diags.is_empty() {
         Ok(())
     } else {
@@ -76,6 +102,12 @@ pub const NORMAL: &str = "normal";
 /// by environment, outputs by component scope ("" for the root program).
 pub const SETTINGS: &str = "settings";
 pub const OUTPUT: &str = "output";
+
+/// Pseudo-types of the attribute aggregate that are not resources:
+/// settings, outputs and inputs (`modules::INPUT`).
+pub fn is_pseudo_type(typ: &str) -> bool {
+    matches!(typ, SETTINGS | OUTPUT | crate::modules::INPUT)
+}
 
 fn str_term(s: &str) -> Term {
     Term::Val(Value::Str(s.to_string()))
@@ -233,19 +265,11 @@ fn apply_decls(program: &Program) -> Result<Program> {
         "output".to_string(),
         vec!["scope".into(), "key".into(), "value".into()],
     );
-    schemas.insert(
-        "component_scope".to_string(),
-        vec!["comp".into(), "inst".into(), "scope".into()],
-    );
     schemas.insert("input".to_string(), vec!["key".into(), "value".into()]);
     schemas.insert("data".to_string(), vec!["key".into(), "value".into()]);
     schemas.insert(
         "merge_rule".to_string(),
         vec!["type".into(), "path".into(), "op".into()],
-    );
-    schemas.insert(
-        "param".to_string(),
-        vec!["scope".into(), "key".into(), "value".into()],
     );
     schemas.insert("warn".to_string(), vec!["msg".into(), "ctx".into()]);
     schemas.insert("deny".to_string(), vec!["msg".into(), "ctx".into()]);
@@ -297,27 +321,19 @@ fn rewrite_stmt_records(stmt: Stmt, schemas: &BTreeMap<String, Vec<String>>) -> 
                 span: w.span,
             })
         }
-        Stmt::Component(mut c) => {
+        Stmt::Module(mut c) => {
             c.body = c
                 .body
                 .into_iter()
                 .map(|s| rewrite_stmt_records(s, schemas))
                 .collect::<Result<Vec<_>>>()?;
-            Stmt::Component(c)
+            Stmt::Module(c)
         }
-        Stmt::ComponentDef(mut c) => {
-            c.body = c
-                .body
-                .into_iter()
-                .map(|s| rewrite_stmt_records(s, schemas))
-                .collect::<Result<Vec<_>>>()?;
-            Stmt::ComponentDef(c)
-        }
-        Stmt::Use(mut u) => {
+        Stmt::Instance(mut u) => {
             if let Some(b) = u.body {
                 u.body = Some(rewrite_lits_records(b, schemas)?);
             }
-            Stmt::Use(u)
+            Stmt::Instance(u)
         }
         Stmt::PolicyPack(mut p) => {
             p.body = p
@@ -417,152 +433,6 @@ fn rewrite_atom_records(
     atom.args = args;
     atom.record = None;
     Ok(atom)
-}
-
-fn expand_component_defs_and_uses(program: &Program) -> Result<Program> {
-    let mut defs: BTreeMap<String, Vec<Stmt>> = BTreeMap::new();
-    for s in &program.statements {
-        if let Stmt::ComponentDef(d) = s {
-            defs.insert(d.name.clone(), d.body.clone());
-        }
-    }
-
-    let mut out = Vec::new();
-    for s in &program.statements {
-        match s {
-            Stmt::ComponentDef(_) => {}
-            Stmt::Use(u) => {
-                let Some(body) = defs.get(&u.name) else {
-                    return Err(spanned(
-                        u.span,
-                        format!(
-                            "instance {} {} names an unknown module '{}'",
-                            u.name, u.inst, u.name
-                        ),
-                    ));
-                };
-
-                let mut comp_body: Vec<Stmt> = Vec::new();
-                // Params become `param(Key, Value)` statements inside the component.
-                for (k, v) in &u.params {
-                    let atom = Atom {
-                        pred: "param".to_string(),
-                        args: vec![Term::Val(Value::Str(k.clone())), v.clone()],
-                        record: None,
-                        span: u.span,
-                    };
-                    if let Some(b) = &u.body {
-                        comp_body.push(Stmt::Rule(RuleStmt {
-                            head: atom,
-                            body: b.clone(),
-                        }));
-                    } else {
-                        comp_body.push(Stmt::Fact(atom));
-                    }
-                }
-
-                let mut body = body.clone();
-                set_origin(
-                    &mut body,
-                    diag::origin_id(&format!("module {} instance {}", u.name, u.inst)),
-                );
-                comp_body.extend(body);
-                out.push(Stmt::Component(crate::ast::Component {
-                    comp: u.name.clone(),
-                    inst: u.inst.clone(),
-                    body: comp_body,
-                    span: u.span,
-                }));
-            }
-            Stmt::Component(_) => {
-                // Allow legacy direct component usage.
-                out.push(s.clone());
-            }
-            other => out.push(other.clone()),
-        }
-    }
-
-    Ok(Program { statements: out })
-}
-
-/// Mark every statement (and each head, field and nested statement) as
-/// lowered out of `origin` (`diag::origin_id`): a pack or a module
-/// instance. What already has an origin keeps it.
-fn set_origin(stmts: &mut [Stmt], origin: u32) {
-    let fields = |fs: &mut [crate::ast::FieldAssign]| {
-        for f in fs {
-            f.span = f.span.within(origin);
-        }
-    };
-    for s in stmts {
-        match s {
-            Stmt::Fact(a) => a.span = a.span.within(origin),
-            Stmt::Rule(r) => r.head.span = r.head.span.within(origin),
-            Stmt::Constraint(c) => c.span = c.span.within(origin),
-            Stmt::Resource(r) => {
-                r.span = r.span.within(origin);
-                fields(&mut r.fields);
-            }
-            Stmt::Settings(st) => {
-                st.span = st.span.within(origin);
-                fields(&mut st.fields);
-            }
-            Stmt::When(w) => {
-                w.span = w.span.within(origin);
-                set_origin(&mut w.body, origin);
-            }
-            Stmt::Component(c) => {
-                c.span = c.span.within(origin);
-                set_origin(&mut c.body, origin);
-            }
-            Stmt::ComponentDef(d) => set_origin(&mut d.body, origin),
-            Stmt::PolicyPack(p) => set_origin(&mut p.body, origin),
-            Stmt::Use(u) => u.span = u.span.within(origin),
-            Stmt::ApplyPolicy(_)
-            | Stmt::Import(_)
-            | Stmt::Decl(_)
-            | Stmt::Extern(_)
-            | Stmt::Pending(_) => {}
-        }
-    }
-}
-
-fn expand_policy_packs(program: &Program) -> Result<Program> {
-    let mut packs: BTreeMap<String, Vec<Stmt>> = BTreeMap::new();
-    let mut applied = Vec::new();
-
-    for s in &program.statements {
-        match s {
-            Stmt::PolicyPack(p) => {
-                packs.insert(p.name.clone(), p.body.clone());
-            }
-            Stmt::ApplyPolicy(a) => applied.push((a.name.clone(), a.span)),
-            _ => {}
-        }
-    }
-
-    let mut out = Vec::new();
-    for s in &program.statements {
-        match s {
-            Stmt::PolicyPack(_) => {}
-            Stmt::ApplyPolicy(_) => {}
-            other => out.push(other.clone()),
-        }
-    }
-
-    for (name, span) in applied {
-        let Some(body) = packs.get(&name) else {
-            return Err(spanned(
-                span,
-                format!("apply {name} names an unknown policy '{name}'"),
-            ));
-        };
-        let mut body = body.clone();
-        set_origin(&mut body, diag::origin_id(&format!("policy {name}")));
-        out.extend(body);
-    }
-
-    Ok(Program { statements: out })
 }
 
 /// `settings E [@rank] { k = v, ... } [:- body].` is one contribution per
@@ -1035,214 +905,19 @@ fn drop_metadata(program: &Program) -> (Program, BTreeSet<Extern>) {
             Stmt::Settings(_) => {
                 // lowered away by desugar_settings
             }
-            Stmt::Use(_) | Stmt::ComponentDef(_) | Stmt::PolicyPack(_) | Stmt::ApplyPolicy(_) => {
+            Stmt::Instance(_) | Stmt::Module(_) | Stmt::PolicyPack(_) | Stmt::ApplyPolicy(_) => {
                 // lowered away earlier
             }
             Stmt::Decl(_) => {
                 // lowered away by apply_decls
             }
+            Stmt::Output(_) => {
+                // a declaration: the interface, not a rule
+            }
             _ => statements.push(s.clone()),
         }
     }
     (Program { statements }, externs)
-}
-
-fn expand_components(program: &Program) -> Result<Program> {
-    let mut out = Vec::new();
-    for stmt in &program.statements {
-        expand_component_stmt(stmt, &mut out)?;
-    }
-    Ok(Program { statements: out })
-}
-
-fn expand_component_stmt(stmt: &Stmt, out: &mut Vec<Stmt>) -> Result<()> {
-    match stmt {
-        Stmt::Component(c) => {
-            let scope = format!("{}.{}", c.comp, c.inst);
-            out.push(Stmt::Fact(Atom {
-                pred: "component_scope".to_string(),
-                args: vec![
-                    Term::Val(Value::Str(c.comp.clone())),
-                    Term::Val(Value::Str(c.inst.clone())),
-                    Term::Val(Value::Str(scope.clone())),
-                ],
-                record: None,
-                span: c.span,
-            }));
-
-            for inner in &c.body {
-                if let Stmt::Component(n) = inner {
-                    return Err(spanned(n.span, "nested components are not supported yet"));
-                }
-                out.push(rewrite_stmt(inner.clone(), &scope));
-            }
-        }
-        _ => out.push(stmt.clone()),
-    }
-    Ok(())
-}
-
-fn rewrite_stmt(stmt: Stmt, scope: &str) -> Stmt {
-    match stmt {
-        Stmt::Fact(a) => Stmt::Fact(rewrite_atom(a, scope)),
-        Stmt::Rule(r) => Stmt::Rule(RuleStmt {
-            head: rewrite_atom(r.head, scope),
-            body: r.body.into_iter().map(|l| rewrite_lit(l, scope)).collect(),
-        }),
-        Stmt::Constraint(c) => Stmt::Constraint(Constraint {
-            body: c.body.into_iter().map(|l| rewrite_lit(l, scope)).collect(),
-            ..c
-        }),
-        Stmt::When(w) => Stmt::When(When {
-            guard: rewrite_lit(w.guard, scope),
-            body: w.body.into_iter().map(|s| rewrite_stmt(s, scope)).collect(),
-            span: w.span,
-        }),
-        Stmt::Resource(r) => Stmt::Resource(Resource {
-            typ: rewrite_term(r.typ, scope),
-            name: scoped_term(scope, rewrite_term(r.name, scope)),
-            rank: r.rank,
-            fields: r
-                .fields
-                .into_iter()
-                .map(|f| crate::ast::FieldAssign {
-                    value: rewrite_term(f.value, scope),
-                    ..f
-                })
-                .collect(),
-            body: r
-                .body
-                .map(|xs| xs.into_iter().map(|l| rewrite_lit(l, scope)).collect()),
-            span: r.span,
-        }),
-        // Settings are addressed by environment, not by scope: only the
-        // values and the body are rewritten.
-        Stmt::Settings(s) => Stmt::Settings(Settings {
-            fields: s
-                .fields
-                .into_iter()
-                .map(|f| crate::ast::FieldAssign {
-                    value: rewrite_term(f.value, scope),
-                    ..f
-                })
-                .collect(),
-            body: s
-                .body
-                .map(|xs| xs.into_iter().map(|l| rewrite_lit(l, scope)).collect()),
-            ..s
-        }),
-        // These are metadata statements; leave them as-is.
-        Stmt::Import(i) => Stmt::Import(i),
-        Stmt::ComponentDef(d) => Stmt::ComponentDef(d),
-        Stmt::Use(u) => Stmt::Use(u),
-        Stmt::PolicyPack(p) => Stmt::PolicyPack(p),
-        Stmt::ApplyPolicy(a) => Stmt::ApplyPolicy(a),
-        Stmt::Component(c) => Stmt::Component(c),
-        Stmt::Decl(d) => Stmt::Decl(d),
-        Stmt::Extern(e) => Stmt::Extern(e),
-        Stmt::Pending(p) => Stmt::Pending(p),
-    }
-}
-
-fn rewrite_lit(lit: Lit, scope: &str) -> Lit {
-    match lit {
-        Lit::Pos(a) => Lit::Pos(rewrite_atom(a, scope)),
-        Lit::Not(a) => Lit::Not(rewrite_atom(a, scope)),
-        Lit::Eq(a, b) => Lit::Eq(rewrite_term(a, scope), rewrite_term(b, scope)),
-        Lit::Neq(a, b) => Lit::Neq(rewrite_term(a, scope), rewrite_term(b, scope)),
-        Lit::Gt(a, b) => Lit::Gt(rewrite_term(a, scope), rewrite_term(b, scope)),
-        Lit::Ge(a, b) => Lit::Ge(rewrite_term(a, scope), rewrite_term(b, scope)),
-        Lit::Lt(a, b) => Lit::Lt(rewrite_term(a, scope), rewrite_term(b, scope)),
-        Lit::Le(a, b) => Lit::Le(rewrite_term(a, scope), rewrite_term(b, scope)),
-    }
-}
-
-fn rewrite_atom(mut atom: Atom, scope: &str) -> Atom {
-    match atom.pred.as_str() {
-        "want" if atom.args.len() == 2 => {
-            atom.args[1] = scoped_term(scope, rewrite_term(atom.args[1].clone(), scope));
-        }
-        "arg" if atom.args.len() == 4 || atom.args.len() == 5 => {
-            atom.args[1] = scoped_term(scope, rewrite_term(atom.args[1].clone(), scope));
-            atom.args[3] = rewrite_term(atom.args[3].clone(), scope);
-        }
-        "arg_add" if atom.args.len() == 4 => {
-            atom.args[1] = scoped_term(scope, rewrite_term(atom.args[1].clone(), scope));
-            atom.args[3] = rewrite_term(atom.args[3].clone(), scope);
-        }
-        "adopt" if atom.args.len() == 3 => {
-            atom.args[1] = scoped_term(scope, rewrite_term(atom.args[1].clone(), scope));
-            atom.args[2] = rewrite_term(atom.args[2].clone(), scope);
-        }
-        "param" if atom.args.len() == 2 => {
-            // Scope parameters so multiple component instances don't collide.
-            let key = rewrite_term(atom.args[0].clone(), scope);
-            let val = rewrite_term(atom.args[1].clone(), scope);
-            atom.args = vec![Term::Val(Value::Str(scope.to_string())), key, val];
-        }
-        "param" if atom.args.len() == 3 => {
-            // Fully-qualified param/3; rewrite nested terms.
-            atom.args = atom
-                .args
-                .into_iter()
-                .map(|t| rewrite_term(t, scope))
-                .collect();
-        }
-        // Sugar: inside a component, allow output(Key, Value)
-        // which becomes output(Scope, Key, Value).
-        "output" if atom.args.len() == 2 => {
-            let key = rewrite_term(atom.args[0].clone(), scope);
-            let val = rewrite_term(atom.args[1].clone(), scope);
-            atom.args = vec![Term::Val(Value::Str(scope.to_string())), key, val];
-        }
-        // output/3 is the fully-qualified form.
-        _ => {
-            atom.args = atom
-                .args
-                .into_iter()
-                .map(|t| rewrite_term(t, scope))
-                .collect();
-        }
-    }
-    atom
-}
-
-fn rewrite_term(term: Term, scope: &str) -> Term {
-    match term {
-        Term::Val(v) => Term::Val(v),
-        Term::Var(v) => Term::Var(v),
-        Term::Wildcard => Term::Wildcard,
-        Term::List(xs) => Term::List(xs.into_iter().map(|t| rewrite_term(t, scope)).collect()),
-        Term::Obj(m) => Term::Obj(
-            m.into_iter()
-                .map(|(k, v)| (k, rewrite_term(v, scope)))
-                .collect::<BTreeMap<_, _>>(),
-        ),
-        Term::ListComp { item, body } => Term::ListComp {
-            item: Box::new(rewrite_term(*item, scope)),
-            body: body.into_iter().map(|l| rewrite_lit(l, scope)).collect(),
-        },
-        Term::Func { name, args } => {
-            if name == "ref" && args.len() == 3 {
-                let mut out = args;
-                out[0] = rewrite_term(out[0].clone(), scope);
-                out[1] = scoped_term(scope, rewrite_term(out[1].clone(), scope));
-                out[2] = rewrite_term(out[2].clone(), scope);
-                return Term::Func { name, args: out };
-            }
-            Term::Func {
-                name,
-                args: args.into_iter().map(|t| rewrite_term(t, scope)).collect(),
-            }
-        }
-    }
-}
-
-fn scoped_term(scope: &str, name_term: Term) -> Term {
-    Term::Func {
-        name: "scoped".to_string(),
-        args: vec![Term::Val(Value::Str(scope.to_string())), name_term],
-    }
 }
 
 fn expand_when(program: &Program) -> Result<Program> {

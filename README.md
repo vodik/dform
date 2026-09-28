@@ -437,7 +437,7 @@ and fails listing the files that would change.
   - list comprehensions: `[X | pred(...), pred2(...)]` (lowers to a `collect_list(...)` rule).
   - expression terms: `IB = IA + 1` lowers to `IB = add(IA, 1)`.
   - `when <guard> { ... }.` applies a guard to each statement inside.
-  - `import "path".` includes another file; `import "path" as ns.` namespaces it.
+  - `import "path".` includes another file, once.
 
 - Schemas and wildcards:
   - `decl pred(Field1: type, FieldTwo: type).` enables record-style matching: `pred{field1: X, field_two: Y}`.
@@ -491,35 +491,64 @@ arg(net.vpc, network.main/vpc, .adopted_id, cloud_ref(net.vpc, "existing-prod-vp
 
 ### Modules
 
-A module groups rules; an instance of it scopes them (Terraform-module-like):
+A module groups rules behind an interface; an instance of it scopes them
+(E DR-3, Terraform-module-like):
 
 ```prolog
 module network {
-  resource net.vpc vpc { cidr = Cidr } :- param(vpc_cidr, Cidr).
+  input vpc_net: inet.                       # set by each instance
+  input zones: list(string) = ["a", "b"].    # a default: @default rank
+  output vpc: addr.
+  output private_subnet_ids: list(ref(net.subnet)).
+  export subnet_of/2.                        # readable as network.main.subnet_of
+
+  resource net.vpc vpc { cidr = Net } :- vpc_net(Net).
+  zone_index(Z, I) :- zones(Zs), member(Zs, I, Z).   # private
+  ...
+  output vpc = vpc.
 }.
 
-instance network main { vpc_cidr = "10.0.0.0/16" }.
+instance network main { vpc_net = V } :- env(E), setting(E, .network.main.vpc_net, V).
+instance database main { subnet_ids = Ids } :- output(network.main, private_subnet_ids, Ids).
 ```
 
 Inside an instance:
 
-- resource names are automatically scoped with `scoped("module.inst", Name)`
-  (written `network.main/vpc` from outside).
-- `ref/3` defaults to referring to instance-local resources.
-- `output(Key, Value)` is sugar for `output(Scope, Key, Value)`.
-- The compiler injects `component_scope(Module, Inst, Scope)` facts.
+- resource names are scoped, `network.main::vpc` (written `network.main/vpc`
+  from outside), in `want`, `arg`, `attr`, `adopt` and `ref`;
+- every predicate the module defines is private to the instance: another
+  instance's `zone_index` is a different relation, and reading it from
+  outside is an error naming the module. `export p/N` makes it readable as
+  `m.INSTANCE.p`; `contributes p` makes the module a contributor to the
+  global `p` (the demo's `iam_need`);
+- `input k: T [= D] [where R]` is read as `k(V)`. The instance's `k = V :- B`
+  is a normal-rank contribution to the cell `(input, m.i, k)` of the
+  attribute aggregate and `D` an `@default` one, so `why` shows both. An
+  instance that sets an undeclared input, or leaves out one with no
+  default, is a compile error. `where R` is a deny unless `R` holds (`R`
+  names the input by its name);
+- `output k: T` declares an output and `output k = t` (or a rule for
+  `output(k, V)`) gives it a value, read anywhere as `output(m.i, k, V)`;
+  an `addr` output is the scoped address of the instance's resource.
+  `output(network.I, vpc, A)` reads it with a variable instance.
 
-The E §6 module interface (`input`, `output` declarations, `export`,
-`contributes`) parses but is not supported yet: it lands with phase 6
-"Modules, instances, interfaces, grants".
+The module reads every global relation; cross-instance values go through
+outputs.
 
 ### Policies
 
-Policies are packaged as policy packs and applied explicitly:
+Policies are packaged as policy packs and applied explicitly. A pack is a
+module applied once: its own relations are private, and every `arg` it
+writes must fall in one of its grants, the stratification partition spelled
+by the author (E §2.6). A write outside them is a compile error at the head.
 
 ```prolog
 policy baseline {
-  deny("db must not be public", { resource: Db }) :- ...
+  contributes arg to _ at .tags.                 # any type, .tags and below
+  contributes arg to settings at .audit.sinks.
+
+  arg(T, A, .tags, { team: platform }) :- want(T, A).
+  deny("db must be private", { resource: Db }) :- ...   # deny/warn need no grant
   warn("prod should enable audit logging", { env: prod }) :- ...
 }.
 

@@ -4,4 +4,3 @@ edition 2026.
 p(null).
 q(X) :- r(X), not exists(s(X)).
 t(L) :- L = [X ordered by X | r(X)].
-u(V) :- output(network.I, vpc, V), r(I).

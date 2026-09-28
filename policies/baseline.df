@@ -1,26 +1,32 @@
 edition 2026.
 
 policy baseline {
+  # Grants are partition patterns: this pack writes .tags of every type,
+  # iam.policy's .statements and settings' .audit.sinks, and nothing else.
+  contributes arg to _ at .tags.
+  contributes arg to iam.policy at .statements.
+  contributes arg to settings at .audit.sinks.
+
   # Lattices for paths several authors contribute to. Object paths such as
   # `tags` are maps by default; a list is one value unless declared a set.
   type_lattice(iam.policy, .statements, set).
   type_lattice(settings, .audit.sinks, set).
 
   # Example: add a shared tag to everything.
-  arg_add(Type, Name, .tags, { team: platform }) :-
+  arg(Type, Name, .tags, { team: platform }) :-
     want(Type, Name).
 
-  # Example: policy pack can contribute directly to an IAM policy.
-  arg_add(iam.policy, Policy, .statements, [{ action: org.read, resource: "org" }]) :-
+  # Example: policy pack can contribute directly to an IAM policy. Reads
+  # .name of the type it writes .statements on: legal under (type, path)
+  # partitions.
+  arg(iam.policy, Policy, .statements, [{ action: org.read, resource: "org" }]) :-
     env(prod),
-    component_scope(iam, main, IScope),
-    Policy = scoped(IScope, app_policy).
+    want(iam.policy, Policy),
+    attr(iam.policy, Policy, .name, app).
 
   deny("db must not be public", { resource: Db }) :-
-    component_scope(database, main, DbScope),
-    Db = scoped(DbScope, db),
     want(db.postgres, Db),
-    not arg(db.postgres, Db, .public, false).
+    not attr(db.postgres, Db, .public, false).
 
   # Example warning: prod should enable an audit setting.
   warn("prod should enable audit logging", { env: prod }) :-
@@ -28,7 +34,7 @@ policy baseline {
     not setting(prod, .audit.enabled, true).
 
   # Example: policy pack can add a sink without owning the whole list.
-  setting_add(prod, .audit.sinks, ["s3"]).
+  arg(settings, prod, .audit.sinks, ["s3"]).
 
   # Networking invariants live in `modules/stdlib_net.df`.
 }.

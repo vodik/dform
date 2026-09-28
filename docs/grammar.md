@@ -112,7 +112,7 @@ stmt       := provider | stack | import | input | output | export | contributes
 
 provider   := "provider" IDENT block
 stack      := "stack" QNAME block
-import     := "import" STRING ("as" IDENT)?
+import     := "import" STRING
 input      := "input" IDENT ":" type ("=" term)? ("where" body)?
 output     := "output" IDENT (":" type | "=" term)
 export     := "export" IDENT "/" INT
@@ -204,9 +204,13 @@ into today's AST:
 
 | written                          | lowers to                                        |
 |----------------------------------|--------------------------------------------------|
-| `module m { ... }`               | a component definition                           |
-| `instance m i { k = V } :- B`    | a component use: `param(k, V) :- B` inside `m.i` |
-| `policy p { ... }` / `apply p`   | a policy pack and its application                |
+| `module m { ... }`               | a module: its body, once per instance            |
+| `instance m i { k = V } :- B`    | `arg(input, "m.i", k, V, normal) :- B` per input |
+| `input k: T = D` in module `m`   | `m.i::k(V) :- attr(input, "m.i", k, V)`, and `D` at `@default` |
+| `input k: T where R`             | a deny unless `R` holds of the value (`k` names it in `R`) |
+| `output k = t` in module `m`     | `output("m.i", k, t)`; `t` is `scoped("m.i", t)` for `output k: addr` |
+| a predicate `p` of module `m`    | `m.i::p` (private), `m.i.p` with `export p/N`, `p` with `contributes p` |
+| `policy p { ... }` / `apply p`   | the pack's body once, its predicates `p::q` unless granted |
 | `import "f.df"`                  | the file's statements, loaded once               |
 | `decl p/N`                       | `p/N` is declared (a provider feeds it)          |
 | `decl p(A: t, BC: t)`            | record fields `a`, `b_c` for `p{a: .., b_c: ..}` |
@@ -215,6 +219,7 @@ into today's AST:
 | `.a.b`, `"s"`, `sym`, `a.b`      | the string value                                 |
 | `X.a`                            | `__path(X, "a")`                                 |
 | `m.i/r` in an address position   | `scoped("m.i", "r")`                             |
+| `m.I` (a variable segment)       | `format("m.%s", I)`: the instance scope, `I` bound |
 | `x in L` / `x not in L`          | `member(L, x)` / `not member(L, x)`              |
 | `a + b` (and `- * / %`)          | `add(a, b)` (`sub mul div mod`)                  |
 | `-t`                             | `sub(0, t)`; `-5` is the integer -5              |
@@ -222,9 +227,7 @@ into today's AST:
 
 These parse and are rejected with "not yet supported", naming the WORK.org
 ticket that gives them meaning: `provider`, `stack` (phase 6 "Stacks"),
-`input` (phase 6 "Typed stack inputs"), `output` declarations, `export`,
-`contributes`, a qualified name with a variable segment `network.I`
-(phase 6 "Modules, instances, interfaces, grants"), `extern` with binding
+`input` at the top of a program (phase 6 "Typed stack inputs"), `extern` with binding
 patterns (phase 6 "Externs with binding patterns"), `type` blocks and
 `decl type ... open` (phase 6 "Refinement types, doc annotations, L15
 inet"), `decl p/N mixed` (phase 6 "Static secret labels"), `scenario`
@@ -239,8 +242,8 @@ exists(...)`, and the ordered comprehension.
   newline; a type may be an object `{ k: t }` or a string (`enum("X")`), as
   E §7.4 writes.
 - Comparisons chain (`1 <= x <= 35`, E §7.1) and `==` is `=`.
-- `import "f.df" as alias` keeps today's alias; phase 6 "Modules,
-  instances, interfaces, grants" replaces it.
+- `import "f.df" as alias` still parses, to be reported: the alias is
+  gone (E DR-3), and a module is how rules are reused.
 - `constraint("msg") :- body` is an ordinary rule head that lowers to
   today's constraint.
 - INT has no sign; the sign is unary minus, folded on a literal.

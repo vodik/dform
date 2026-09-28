@@ -1,8 +1,9 @@
 exit: ok
 -- stdout --
-== examples/adopt_demo.df: 75 nodes, 145 edges (55 negative)
-   STRATIFIED, 8 strata
+== examples/adopt_demo.df: 78 nodes, 147 edges (58 negative)
+   STRATIFIED, 10 strata
    stratum 0:
+     (arg, output, vpc)
      (arg, settings, network.vpc_cidr)
      (want, compute.vm)
      (want, db.postgres)
@@ -14,15 +15,14 @@ exit: ok
      (want, net.route)
      (want, net.vpc_peering)
      cloud_exists
-     component_scope
      data
      has_env
      identity
      input
+     network.main::zone_index
      resolve
      resolved
      world_attr
-     zone_index
    stratum 1:
      (adopt, net.vpc)
      (arg, compute.vm, id)
@@ -39,12 +39,11 @@ exit: ok
      (arg, net.vpc, adopted_id)
      (arg, net.vpc, owner_tag)
      (arg, net.vpc_peering, id)
+     (attr, output, vpc)
      (attr, settings, network.vpc_cidr)
      env
    stratum 2:
-     (arg, net.vpc, cidr)
-     (arg, net.vpc, id)
-     (arg, net.vpc, tags)
+     (arg, input, vpc_net)
      (attr, compute.vm, id)
      (attr, db.postgres, endpoint)
      (attr, db.postgres, id)
@@ -59,13 +58,19 @@ exit: ok
      (attr, net.vpc, adopted_id)
      (attr, net.vpc, owner_tag)
      (attr, net.vpc_peering, id)
-     (want, net.vpc)
-     param
    stratum 3:
+     (attr, input, vpc_net)
+   stratum 4:
+     (arg, net.vpc, cidr)
+     (arg, net.vpc, id)
+     (arg, net.vpc, tags)
+     (want, net.vpc)
+     network.main::vpc_net
+   stratum 5:
      (attr, net.vpc, cidr)
      (attr, net.vpc, id)
      (attr, net.vpc, tags)
-   stratum 4:
+   stratum 6:
      (arg, net.subnet, cidr)
      (arg, net.subnet, id)
      (arg, net.subnet, visibility)
@@ -73,16 +78,16 @@ exit: ok
      (arg, net.subnet, zone)
      (want, net.subnet)
      __ref_dep
-   stratum 5:
+   stratum 7:
      (attr, net.subnet, cidr)
      (attr, net.subnet, id)
      (attr, net.subnet, visibility)
      (attr, net.subnet, vpc_id)
      (attr, net.subnet, zone)
-   stratum 6:
+   stratum 8:
      (arg, output, private_subnet_ids)
      __lc_1
      deny
-   stratum 7:
+   stratum 9:
      (attr, output, private_subnet_ids)
 -- stderr --

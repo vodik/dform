@@ -2550,7 +2550,7 @@ mod tests {
         let (r, violations) = run("type_lattice(settings, sinks, set).
              settings prod { sinks += [\"cloudwatch\"], days = 14 }.
              setting_add(prod, sinks, [\"s3\"]).
-             module network { output(ids, [a, b]). }.
+             module network { output ids: list(string). output(ids, [a, b]). }.
              instance network main {}.
              got(S, D) :- setting(prod, sinks, S), setting(prod, days, D).
              ids(L) :- output(network.main, ids, L).
@@ -2637,8 +2637,7 @@ mod tests {
             }
             for s in stmts.iter_mut() {
                 match s {
-                    Stmt::Component(c) => shuffle(&mut c.body, seed),
-                    Stmt::ComponentDef(c) => shuffle(&mut c.body, seed),
+                    Stmt::Module(c) => shuffle(&mut c.body, seed),
                     Stmt::PolicyPack(p) => shuffle(&mut p.body, seed),
                     _ => {}
                 }
@@ -2777,6 +2776,7 @@ mod tests {
              resource net.vpc a { sgs = [base] }.
              resource net.vpc b { }.
              policy p {
+               contributes arg to _ at .sgs.
                arg(T, N, sgs, [default_sg, ssh], default) :- want(T, N).
                arg(T, N, sgs, [audit]) :- want(T, N), N = \"a\".
              }.

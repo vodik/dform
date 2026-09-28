@@ -59,7 +59,7 @@ pub fn compile_resources(
             ("want", _) => bail!("want/2 expected"),
             ("attr", 4) => {
                 let typ = as_str_val(&f.args[0])?;
-                if typ == transform::SETTINGS || typ == transform::OUTPUT {
+                if transform::is_pseudo_type(typ) {
                     continue;
                 }
                 let name = as_str_val(&f.args[1])?.to_string();

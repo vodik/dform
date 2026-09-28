@@ -79,7 +79,7 @@ fn why_names_the_pack_and_the_module_instance() {
         "edition 2026.\n\
          module m {\n  resource net.vpc vpc { cidr = \"10.0.0.0/16\" }.\n}.\n\
          instance m main {}.\n\
-         policy tags {\n  arg(T, A, .tags, { team: \"x\" }) :- want(T, A).\n}.\n\
+         policy tags {\n  contributes arg to _ at .tags.\n  arg(T, A, .tags, { team: \"x\" }) :- want(T, A).\n}.\n\
          apply tags.\n",
     );
     let out = s
@@ -98,5 +98,5 @@ fn why_names_the_pack_and_the_module_instance() {
         out.contains("owner p.df:3:26 (arg, module m instance main)"),
         "{out}"
     );
-    assert!(out.contains("(p.df:7:3, policy tags)]"), "{out}");
+    assert!(out.contains("(p.df:8:3, policy tags)]"), "{out}");
 }

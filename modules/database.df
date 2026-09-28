@@ -1,17 +1,21 @@
 edition 2026.
 
 module database {
+  input backup_days: int.
+  input multi_az: bool.
+  input subnet_ids: list(ref(net.subnet)).
+  contributes iam_need.
+
   resource db.postgres db {
     public = false
     subnet_ids = SubnetIds
     backup_days = Days
     multi_az = MA
   } :-
-    param(backup_days, Days),
-    param(multi_az, MA),
-    component_scope(network, main, NetScope),
-    output(NetScope, private_subnet_ids, SubnetIds).
+    backup_days(Days),
+    multi_az(MA),
+    subnet_ids(SubnetIds).
 
   # Only when the database exists in this environment.
-  iam_need(app, db.connect, ref(db.postgres, db, .id)) :- param(backup_days, _).
+  iam_need(app, db.connect, ref(db.postgres, db, .id)) :- backup_days(_).
 }.

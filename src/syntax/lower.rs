@@ -1,15 +1,15 @@
 //! From the lossless tree to `ast`: names become values, keypaths strings,
-//! and each E §6 statement today's equivalent (`module` a component
-//! definition, `instance` a use, `policy` a pack, `apply` its application,
-//! `decl p/N` an extern). Statements with no equivalent yet become
-//! `Stmt::Pending`, which lowering rejects naming their ticket.
+//! and each E §6 statement its `ast` form (`decl p/N` is an extern).
+//! Statements with no semantics yet become `Stmt::Pending`, which lowering
+//! rejects naming their ticket.
 
 use super::SyntaxKind::{self, *};
 use super::{SyntaxNode, SyntaxToken};
 use crate::ast::{
-    ApplyPolicy, Atom, AttrDecl, BindArg, ComponentDef, Constraint, Decl, Extern, FieldAssign,
-    FieldOp, Grant, Import, Lit, Pending, PendingKind, PolicyPack, Program, Rank, Resource,
-    RuleStmt, Settings, Span, Stmt, Term, TypeExpr, Use, When,
+    ApplyPolicy, Atom, AttrDecl, BindArg, Constraint, Contributes, Decl, Export, Extern,
+    FieldAssign, FieldOp, Grant, Import, InputDecl, Instance, Lit, Module, OutputDecl, Pending,
+    PendingKind, PolicyPack, Program, Rank, Resource, RuleStmt, Settings, Span, Stmt, Term,
+    TypeExpr, When,
 };
 use crate::diag::Diagnostic;
 use crate::value::Value;
@@ -224,11 +224,14 @@ impl Lowerer {
             IMPORT => {
                 let path = tokens(n).find(|t| t.kind() == STRING).unwrap();
                 let path = self.string(&path)?;
-                let alias = tokens(n)
-                    .filter(|t| t.kind().is_name())
-                    .nth(2)
-                    .map(|t| t.text().to_string());
-                Ok(Stmt::Import(Import { path, alias, span }))
+                if tokens(n).filter(|t| t.kind().is_name()).nth(1).is_some() {
+                    return self.error(
+                        span,
+                        "`import ... as` is gone: an import is a file include; wrap reusable \
+                         rules in a `module` and instantiate it (E DR-3)",
+                    );
+                }
+                Ok(Stmt::Import(Import { path, span }))
             }
             PROVIDER | STACK => {
                 let name = tokens(n)
@@ -249,23 +252,29 @@ impl Lowerer {
                 let ty = self.type_expr(&node(n, TYPE_EXPR).unwrap());
                 let default = terms(n).next().map(|t| self.term(&t)).transpose()?;
                 let refinement = self.where_clause(n)?;
-                pending(PendingKind::Input {
+                Ok(Stmt::Input(InputDecl {
                     name,
                     ty,
                     default,
                     refinement,
-                })
+                    span,
+                }))
             }
             OUTPUT_DECL => {
                 let name = self.name_text(n, 1);
                 let ty = node(n, TYPE_EXPR).map(|t| self.type_expr(&t));
                 let value = terms(n).next().map(|t| self.term(&t)).transpose()?;
-                pending(PendingKind::Output { name, ty, value })
+                Ok(Stmt::Output(OutputDecl {
+                    name,
+                    ty,
+                    value,
+                    span,
+                }))
             }
             EXPORT => {
                 let pred = self.name_text(n, 1);
                 let arity = self.arity(n)?;
-                pending(PendingKind::Export { pred, arity })
+                Ok(Stmt::Export(Export { pred, arity, span }))
             }
             CONTRIBUTES => {
                 let toks: Vec<SyntaxToken> = tokens(n).skip(1).collect();
@@ -278,7 +287,7 @@ impl Lowerer {
                 } else {
                     Grant::Pred(toks[0].text().to_string())
                 };
-                pending(PendingKind::Contributes(grant))
+                Ok(Stmt::Contributes(Contributes { grant, span }))
             }
             EXTERN => {
                 let name = self.name_text(n, 1);
@@ -308,7 +317,7 @@ impl Lowerer {
                 let name = self.name_text(n, 1);
                 let body = self.stmts(node(n, STMT_BLOCK));
                 Ok(match n.kind() {
-                    MODULE => Stmt::ComponentDef(ComponentDef { name, body, span }),
+                    MODULE => Stmt::Module(Module { name, body, span }),
                     POLICY => Stmt::PolicyPack(PolicyPack { name, body, span }),
                     _ => Stmt::Pending(Pending {
                         kind: PendingKind::Scenario { name, body },
@@ -321,9 +330,9 @@ impl Lowerer {
                 span,
             })),
             INSTANCE => {
-                let name = self.name_text(n, 1);
-                let inst = self.name_text(n, 2);
-                let mut params = Vec::new();
+                let module = self.name_text(n, 1);
+                let name = self.name_text(n, 2);
+                let mut inputs = Vec::new();
                 for f in self.assigns(node(n, BLOCK).as_ref())? {
                     if matches!(f.op, FieldOp::Add) {
                         return self.error(f.span, "an instance input is set with `=`, not `+=`");
@@ -331,13 +340,13 @@ impl Lowerer {
                     if f.rank.is_some() {
                         return self.error(f.span, "an instance input takes no rank");
                     }
-                    params.push((f.key, f.value));
+                    inputs.push((f.key, f.value, f.span));
                 }
                 let body = self.opt_body(n)?;
-                Ok(Stmt::Use(Use {
+                Ok(Stmt::Instance(Instance {
+                    module,
                     name,
-                    inst,
-                    params,
+                    inputs,
                     body,
                     span,
                 }))
@@ -790,11 +799,18 @@ impl Lowerer {
                     args: vec![str_term(toks[0].text()), str_term(toks[2].text())],
                 })
             }
-            QNAME_VAR => Err(self.not_yet(
-                n,
-                "a qualified name with a variable segment",
-                Some("phase 6 \"Modules, instances, interfaces, grants\""),
-            )),
+            // `network.I`: the instance scope named by a bound variable
+            // (E §7.1's `output(network.IA, vpc, A)`).
+            QNAME_VAR => {
+                let toks: Vec<SyntaxToken> = tokens(n).collect();
+                Ok(Term::Func {
+                    name: "format".into(),
+                    args: vec![
+                        str_term(&format!("{}.%s", toks[0].text())),
+                        Term::Var(toks[2].text().to_string()),
+                    ],
+                })
+            }
             CALL => Ok(Term::Func {
                 name: first().text().to_string(),
                 args: self.args(n)?,
@@ -968,8 +984,8 @@ mod tests {
             .statements
             .iter()
             .map(|s| match s {
-                Stmt::ComponentDef(d) => format!("def {}", d.name),
-                Stmt::Use(u) => format!("use {} {} {:?}", u.name, u.inst, u.params[0].0),
+                Stmt::Module(d) => format!("def {}", d.name),
+                Stmt::Instance(u) => format!("use {} {} {:?}", u.module, u.name, u.inputs[0].0),
                 Stmt::PolicyPack(p) => format!("pack {}", p.name),
                 Stmt::ApplyPolicy(a) => format!("apply {}", a.name),
                 Stmt::Extern(e) => format!("extern {}/{}", e.pred, e.arity),

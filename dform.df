@@ -52,8 +52,10 @@ import "policies/baseline.df".
 import "modules/stdlib_net.df".
 
 apply baseline.
+apply stdlib_net.
 
-# Instantiate modules (Terraform module-like).
+# Instantiate modules (Terraform module-like). Inputs are declared by the
+# module; each `k = V` here is a contribution to one, under the body.
 instance network main {
   vpc_net = VpcNet
 } :-
@@ -66,36 +68,39 @@ instance network peer {
   env(Env),
   setting(Env, .network.peer.vpc_net, VpcNet).
 
+# Cross-instance values are wired through outputs.
 instance database main {
   backup_days = Days
   multi_az = MA
+  subnet_ids = Ids
 } :-
   env(Env),
   setting(Env, .db.backup_days, Days),
-  setting(Env, .db.multi_az, MA).
+  setting(Env, .db.multi_az, MA),
+  output(network.main, private_subnet_ids, Ids).
 
 instance kubernetes main {
   private_api = PrivateApi
   nodepool_min = Min
   nodepool_max = Max
+  subnet_ids = Ids
 } :-
   env(Env),
   setting(Env, .k8s.private_api, PrivateApi),
   setting(Env, .k8s.nodepool.min, Min),
-  setting(Env, .k8s.nodepool.max, Max).
+  setting(Env, .k8s.nodepool.max, Max),
+  output(network.main, private_subnet_ids, Ids).
 
 instance iam main {}.
 
 # VPC peering intent: define edges between network instances.
 vpc_peer_inst(main, peer).
 
-# Resolve instance names to actual VPC resource names (scoped addresses).
+# Each network instance outputs its vpc's address.
 vpc_peer(A, B) :-
   vpc_peer_inst(InstA, InstB),
-  component_scope(network, InstA, ScopeA),
-  component_scope(network, InstB, ScopeB),
-  A = scoped(ScopeA, vpc),
-  B = scoped(ScopeB, vpc).
+  output(network.InstA, vpc, A),
+  output(network.InstB, vpc, B).
 
 # Create a peering resource per declared peering edge.
 resource net.vpc_peering Peer {
@@ -118,14 +123,10 @@ resource compute.vm bastion {
 # Constraints (policy)
 constraint("prod db must be multi_az") :-
   env(prod),
-  component_scope(database, main, DbScope),
-  Db = scoped(DbScope, db),
-  want(db.postgres, Db),
-  not arg(db.postgres, Db, .multi_az, true).
+  want(db.postgres, database.main/db),
+  not attr(db.postgres, database.main/db, .multi_az, true).
 
 constraint("prod k8s must have private api") :-
   env(prod),
-  component_scope(kubernetes, main, KScope),
-  C = scoped(KScope, cluster),
-  want(k8s.cluster, C),
-  not arg(k8s.cluster, C, .private_api, true).
+  want(k8s.cluster, kubernetes.main/cluster),
+  not attr(k8s.cluster, kubernetes.main/cluster, .private_api, true).

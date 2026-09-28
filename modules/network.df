@@ -1,12 +1,16 @@
 edition 2026.
 
 module network {
+  input vpc_net: inet.
+  output vpc: addr.
+  output private_subnet_ids: list(ref(net.subnet)).
+
   resource net.vpc vpc {
     cidr = VpcNet
     tags = { env: Env, component: network }
   } :-
     env(Env),
-    param(vpc_net, VpcNet).
+    vpc_net(VpcNet).
 
   zone_index("us-test-1a", 0).
   zone_index("us-test-1b", 1).
@@ -19,10 +23,9 @@ module network {
   } :-
     data(zone, Z),
     zone_index(Z, I),
-    arg(net.vpc, vpc, .cidr, VpcNet),
+    attr(net.vpc, vpc, .cidr, VpcNet),
     Sn = format("private-%s", Z).
 
-  output(private_subnet_ids,
-    [ ref(net.subnet, Sn, .id) | want(net.subnet, Sn), arg(net.subnet, Sn, .visibility, private) ]
-  ) :- env(_Env).
+  output vpc = vpc.
+  output private_subnet_ids = [ ref(net.subnet, Sn, .id) | want(net.subnet, Sn), attr(net.subnet, Sn, .visibility, private) ].
 }.
