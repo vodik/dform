@@ -62,7 +62,7 @@ fn plan_on(
             inventory: world.with_extension("inv"),
             chaos: vec![],
             cache: None,
-            configured: Default::default(),
+            ..Default::default()
         },
     )
     .unwrap();

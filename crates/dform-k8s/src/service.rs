@@ -23,13 +23,16 @@
 
 use crate::cluster::{Cluster, WriteError};
 use crate::object::{
-    KEY_ANNOTATION, attrs, computed, idempotency_key, manifest, parse_remote, remote,
+    KEY_ANNOTATION, STACK_LABEL, attrs, computed, idempotency_key, manifest, parse_remote, remote,
+    stack_label, stamp,
 };
 use crate::openapi::{self, Derived, Kind};
 use anyhow::{Result, anyhow, bail};
+use dform_core::plugin::providers::CREATED;
 use dform_core::plugin::wire;
 use dform_core::provider::{self, diff, get_path, marker, set_path};
 use dform_core::schema::Schema;
+use dform_core::value::Value;
 use dform_grpc::pb;
 use serde_json::{Value as Json, json};
 use std::path::PathBuf;
@@ -50,6 +53,9 @@ pub struct K8s {
     pub derived: Arc<Derived>,
     /// The cluster, or why there is none.
     pub cluster: std::result::Result<Cluster, String>,
+    /// The `STACK_LABEL` value every object applied carries: the
+    /// deployment's (Configure's `stack`), if it names one.
+    pub stack: Option<String>,
 }
 
 impl K8s {
@@ -73,6 +79,7 @@ impl K8s {
                         return Ok(K8s {
                             derived: Arc::new(derived),
                             cluster: Ok(c),
+                            stack: None,
                         });
                     }
                     Err(e) => format!("{}: {e:#}", c.url),
@@ -88,6 +95,7 @@ impl K8s {
         Ok(K8s {
             derived: Arc::new(openapi::snapshot_cached(cache.as_deref())?),
             cluster: Err(why),
+            stack: None,
         })
     }
 
@@ -98,6 +106,7 @@ impl K8s {
         Ok(K8s {
             derived: Arc::new(openapi::snapshot_cached(cache.as_deref())?),
             cluster: Err("the program configures it (provider_config) and has not yet".into()),
+            stack: None,
         })
     }
 
@@ -107,6 +116,7 @@ impl K8s {
         K8s {
             derived: self.derived.clone(),
             cluster: Ok(cluster),
+            stack: self.stack.clone(),
         }
     }
 
@@ -124,6 +134,34 @@ impl K8s {
             .filter(|p| !p.starts_with("metadata.") && !schema.in_list(typ, p))
             .collect();
         computed(live, &defaulted)
+    }
+
+    /// The object `doc` describes (`object::manifest`), marked with the
+    /// deployment it is of.
+    fn manifest(&self, kind: &Kind, doc: &Json, ns: &str, name: &str) -> Result<Json> {
+        let mut obj = manifest(kind, doc, ns, name)?;
+        if let Some(label) = &self.stack {
+            stamp(&mut obj, label);
+        }
+        Ok(obj)
+    }
+
+    /// `provider.created(Type, Name, Key)`: the remote id of the object a
+    /// Create with idempotency key `key` made, if there is one: of the
+    /// objects of the type that carry this deployment's label (every one,
+    /// with no label configured), the one whose `KEY_ANNOTATION` is `key`.
+    pub async fn created(&self, typ: &str, key: &str) -> Result<Option<String>> {
+        let kind = self.derived.kind(typ)?;
+        let c = self.cluster(&format!("find what {key} made"))?;
+        let selector = self.stack.as_ref().map(|l| format!("{STACK_LABEL}={l}"));
+        Ok(c.list(kind, selector.as_deref())
+            .await?
+            .iter()
+            .find(|o| idempotency_key(o) == Some(key))
+            .map(|o| {
+                let s = |p: &str| get_path(o, p).and_then(Json::as_str).unwrap_or("");
+                remote(kind, s("metadata.namespace"), s("metadata.name"))
+            }))
     }
 
     fn cluster(&self, what: &str) -> Result<&Cluster> {
@@ -203,7 +241,7 @@ impl K8s {
             (None, Some(ns)) => ns.to_string(),
             _ => namespace(d, &c.namespace),
         };
-        let obj = manifest(kind, d, &ns, n)?;
+        let obj = self.manifest(kind, d, &ns, n)?;
         match c.apply(kind, &ns, n, &obj, true).await {
             Ok(live) => {
                 let after = world_doc(schema, typ, &attrs(&live), &self.computed(typ, &live), d);
@@ -261,7 +299,9 @@ impl K8s {
             }
             pb::Op::Update | pb::Op::Adopt => {
                 let (ns, n) = parse_remote(kind, &req.remote, &c.namespace);
-                let obj = manifest(kind, config, ns, n).map_err(|e| refused(&at, e))?;
+                let obj = self
+                    .manifest(kind, config, ns, n)
+                    .map_err(|e| refused(&at, e))?;
                 self.write(c, kind, ns, n, &obj, &at).await?
             }
             pb::Op::Delete => {
@@ -380,7 +420,9 @@ impl K8s {
                 "{at}: no free name from generateName after 5 tries"
             )));
         };
-        let mut obj = manifest(kind, config, &ns, &name).map_err(|e| refused(at, e))?;
+        let mut obj = self
+            .manifest(kind, config, &ns, &name)
+            .map_err(|e| refused(at, e))?;
         if !key.is_empty()
             && let Some(meta) = obj.get_mut("metadata").and_then(Json::as_object_mut)
         {
@@ -617,7 +659,7 @@ impl pb::provider_server::Provider for Service {
         Ok(Response::new(pb::HandshakeResponse {
             protocol_version: dform_grpc::spawn::VERSION,
             name: openapi::PROVIDER.into(),
-            capabilities: vec!["resource".into()],
+            capabilities: vec!["resource".into(), "managed".into()],
         }))
     }
 
@@ -651,6 +693,13 @@ impl pb::provider_server::Provider for Service {
             }
             (None, _) => K8s::configure(cache).await.map_err(invalid)?,
         };
+        let k8s = K8s {
+            stack: match config.get("stack").and_then(Json::as_str) {
+                Some(s) if !stack_label(s).is_empty() => Some(stack_label(s)),
+                _ => k8s.stack,
+            },
+            ..k8s
+        };
         *self.k8s.write().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(k8s));
         Ok(Response::new(pb::ConfigureResponse {}))
     }
@@ -671,10 +720,39 @@ impl pb::provider_server::Provider for Service {
     >;
 
     async fn query(&self, req: Request<pb::QueryRequest>) -> Reply<Self::QueryStream> {
-        Err(Status::unimplemented(format!(
-            "the Kubernetes provider answers no extern ({})",
-            req.into_inner().pred
-        )))
+        let r = req.into_inner();
+        if r.pred != CREATED {
+            return Err(Status::unimplemented(format!(
+                "the Kubernetes provider answers no extern ({})",
+                r.pred
+            )));
+        }
+        let k8s = self.k8s()?;
+        let args = r
+            .inputs
+            .iter()
+            .map(wire::from_value)
+            .collect::<Result<Vec<_>>>()
+            .map_err(invalid)?;
+        let [Value::Str(typ), Value::Str(name), Value::Str(key)] = args.as_slice() else {
+            return Err(Status::invalid_argument(format!(
+                "{CREATED} is asked with Type, Name and Key bound"
+            )));
+        };
+        let found = k8s
+            .created(typ, key)
+            .await
+            .map_err(|e| Status::unavailable(format!("{e:#}")))?;
+        let s = |x: &str| wire::value(&Value::Str(x.to_string()));
+        let rows = found
+            .map(|remote| {
+                Ok(pb::Row {
+                    values: vec![s(typ), s(name), s(key), s(&remote)],
+                })
+            })
+            .into_iter()
+            .collect::<Vec<_>>();
+        Ok(Response::new(tonic::codegen::tokio_stream::iter(rows)))
     }
 
     async fn read(&self, req: Request<pb::ReadRequest>) -> Reply<pb::ReadResponse> {

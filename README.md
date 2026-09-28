@@ -466,6 +466,13 @@ provider k8s { source = "bin/dform-provider-k8s" }        # an executable
   is picked by the provider (`generateName` plus five characters), since
   server-side apply needs a name. Delete propagates in the background and
   waits for the object to go. Watches are not used.
+- Every object dform applies carries the label `dform.io/stack` (the
+  deployment's name as a label value), and a Create's idempotency key rides
+  on the annotation `dform.io/idempotency-key`; neither is configuration.
+  The provider has the `managed` capability: a Create whose answer was lost
+  (a generated name nobody knows yet) is found by listing the type with that
+  label as the selector and matching the annotation, so the next run maps
+  it, and deletes it if the program has dropped it.
 - With no cluster in reach, or `DFORM_K8S_OFFLINE` set, the provider is
   offline: the schema is the checked-in snapshot of Kubernetes v1.36.0's
   document (`crates/dform-k8s/openapi-snapshot.json`, trimmed to the mock's

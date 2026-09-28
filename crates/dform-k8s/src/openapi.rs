@@ -143,15 +143,24 @@ impl Kind {
     /// The URL path of the kind's objects in `ns` (ignored for a
     /// cluster-scoped kind).
     pub fn collection(&self, ns: &str) -> String {
-        let base = if self.group.is_empty() {
-            format!("/api/{}", self.version)
-        } else {
-            format!("/apis/{}/{}", self.group, self.version)
-        };
+        let base = self.base();
         if self.namespaced {
             format!("{base}/namespaces/{ns}/{}", self.plural)
         } else {
             format!("{base}/{}", self.plural)
+        }
+    }
+
+    /// The URL path of the kind's objects in every namespace.
+    pub fn collection_all(&self) -> String {
+        format!("{}/{}", self.base(), self.plural)
+    }
+
+    fn base(&self) -> String {
+        if self.group.is_empty() {
+            format!("/api/{}", self.version)
+        } else {
+            format!("/apis/{}/{}", self.group, self.version)
         }
     }
 }

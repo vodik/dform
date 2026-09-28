@@ -57,6 +57,10 @@ pub struct Config {
     /// its settings come later, and serves nothing until they do
     /// ([`Providers::configure_from`]).
     pub configured: BTreeSet<String>,
+    /// The deployment the run is of (`app`, `app[env=prod]`): a provider
+    /// may mark what it creates with it, to find an object whose Create
+    /// answer was lost (`provider.created`).
+    pub stack: String,
 }
 
 /// How a run reaches its providers: a backend (`plugin::backend`). The
@@ -182,6 +186,7 @@ impl Providers {
             "world": path(&cfg.world),
             "inventory": path(&cfg.inventory),
             "chaos": cfg.chaos,
+            "stack": cfg.stack,
         });
         let mut base = base;
         if let Some(c) = &cfg.cache {

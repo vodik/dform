@@ -30,6 +30,38 @@ pub const MANAGER: &str = "dform";
 /// configuration: `attrs` leaves it out, and the next update drops it.
 pub const KEY_ANNOTATION: &str = "dform.io/idempotency-key";
 
+/// The label every object dform applies carries: the deployment it is
+/// of (`stack_label`). A Create whose answer was lost is found by it and
+/// its `KEY_ANNOTATION` (`provider.created`). Not configuration: `attrs`
+/// leaves it out.
+pub const STACK_LABEL: &str = "dform.io/stack";
+
+/// A deployment's name as a label value: at most 63 of `[A-Za-z0-9-_.]`,
+/// alphanumeric at both ends (`app[env=prod]` is `app_env_prod`). Two
+/// deployments may share one; the idempotency key tells their objects
+/// apart.
+pub fn stack_label(stack: &str) -> String {
+    let v: String = stack
+        .chars()
+        .map(|c| match c.is_ascii_alphanumeric() || "-_.".contains(c) {
+            true => c,
+            false => '_',
+        })
+        .take(63)
+        .collect();
+    v.trim_matches(|c: char| !c.is_ascii_alphanumeric())
+        .to_string()
+}
+
+/// Mark `obj` (a manifest) with `STACK_LABEL` = `label`.
+pub fn stamp(obj: &mut Json, label: &str) {
+    if let Some(meta) = obj.get_mut("metadata").and_then(Json::as_object_mut)
+        && let Json::Object(labels) = meta.entry("labels").or_insert_with(|| json!({}))
+    {
+        labels.insert(STACK_LABEL.into(), json!(label));
+    }
+}
+
 /// The idempotency key the Create that made `live` carried, if any.
 pub fn idempotency_key(live: &Json) -> Option<&str> {
     live.pointer("/metadata/annotations")?
@@ -185,10 +217,12 @@ pub fn attrs(live: &Json) -> Json {
         if let Some(g) = live.pointer("/metadata/generateName") {
             meta.insert("generateName".into(), g.clone());
         }
-        if let Some(Json::Object(a)) = meta.get_mut("annotations") {
-            a.remove(KEY_ANNOTATION);
-            if a.is_empty() {
-                meta.remove("annotations");
+        for (field, k) in [("annotations", KEY_ANNOTATION), ("labels", STACK_LABEL)] {
+            if let Some(Json::Object(a)) = meta.get_mut(field) {
+                a.remove(k);
+                if a.is_empty() {
+                    meta.remove(field);
+                }
             }
         }
     }
@@ -423,6 +457,20 @@ mod tests {
                                 "resourceVersion": "42",
                                 "creationTimestamp": "2026-09-28T00:00:00Z"}})
         );
+    }
+
+    #[test]
+    fn the_stack_label_is_not_configuration() {
+        assert_eq!(stack_label("app[env=prod]"), "app_env_prod");
+        assert_eq!(stack_label("k8s_demo"), "k8s_demo");
+        assert_eq!(stack_label(&"x".repeat(80)).len(), 63);
+        let mut m = json!({"metadata": {"name": "a", "labels": {"app": "a"}}, "data": {}});
+        stamp(&mut m, "p");
+        assert_eq!(m["metadata"]["labels"][STACK_LABEL], "p");
+        let live = json!({"kind": "ConfigMap", "metadata": {"name": "a",
+            "labels": {STACK_LABEL: "p"}, "annotations": {KEY_ANNOTATION: "dform-1"}},
+            "data": {"A": "b"}});
+        assert_eq!(attrs(&live), json!({"data": {"A": "b"}}));
     }
 
     #[test]

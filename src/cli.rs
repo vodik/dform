@@ -1261,6 +1261,7 @@ fn run_with(
             chaos: chaos_specs,
             cache: cli.world.is_none().then(|| cache.clone()),
             configured: provider_configs(&program),
+            stack: deployment.clone(),
         },
     )?;
     // Externs are asked on demand: a table's of its file, else of the file

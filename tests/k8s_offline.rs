@@ -195,6 +195,9 @@ struct Api {
     /// Each request's `Authorization` header.
     auth: Mutex<Vec<String>>,
     serial: Mutex<u64>,
+    /// How many of the next writes (a PATCH not a dry run) take effect
+    /// but close the connection instead of answering: a lost answer.
+    lose_answers: Mutex<usize>,
 }
 
 fn snapshot() -> Json {
@@ -345,6 +348,13 @@ impl Api {
                 .unwrap()
                 .push(format!("{method} {target}"));
             let (code, out) = self.route(&method, &target, &body);
+            if method == "PATCH" && !target.contains("dryRun=") {
+                let mut lose = self.lose_answers.lock().unwrap();
+                if *lose > 0 {
+                    *lose -= 1;
+                    return;
+                }
+            }
             let out = serde_json::to_vec(&out).unwrap();
             let head = format!(
                 "HTTP/1.1 {code} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
@@ -384,6 +394,37 @@ impl Api {
             Some(&"apis") => &segs[3..],
             _ => return status(404, "NotFound", "no such path", json!([])),
         };
+        // A list of a kind in every namespace, by label selector.
+        if method == "GET" && rest.len() == 1 {
+            let prefix = &path[..path.len() - rest[0].len()];
+            let selector = q("labelSelector").map(|s| {
+                s.replace("%2F", "/")
+                    .replace("%3D", "=")
+                    .replace("%2C", ",")
+            });
+            let matches = |o: &Json| {
+                selector.iter().flat_map(|s| s.split(',')).all(|term| {
+                    let (k, v) = term.split_once('=').unwrap_or((term, ""));
+                    let label = o.pointer("/metadata/labels").and_then(|l| l.get(k));
+                    match v {
+                        "" => label.is_some(),
+                        v => label.and_then(Json::as_str) == Some(v),
+                    }
+                })
+            };
+            let objects = self.objects.lock().unwrap();
+            let items: Vec<Json> = objects
+                .iter()
+                .filter(|(p, o)| {
+                    p.starts_with(prefix) && p.rsplit('/').nth(1) == Some(rest[0]) && matches(o)
+                })
+                .map(|(_, o)| o.clone())
+                .collect();
+            return (
+                200,
+                json!({"kind": "List", "apiVersion": "v1", "items": items}),
+            );
+        }
         if rest.len() != 2 && rest.len() != 4 {
             return status(404, "NotFound", "no such path", json!([]));
         }
@@ -543,7 +584,8 @@ fn the_k8s_provider_conforms() {
         "ok    Plan marks a sensitive attribute sensitive",
         "ok    Apply CREATE returns the object with its computed values",
         "ok    Apply CREATE again with the same idempotency key answers the object it made",
-        "skip  Query provider.created: no `managed` capability",
+        "ok    Query provider.created answers what an idempotency key made",
+        "ok    Query provider.created answers nothing for a key that made nothing",
         "ok    Apply UPDATE changes the object in place",
         "ok    Apply REPLACE makes a new object",
         "ok    Apply DELETE removes the object",
@@ -622,12 +664,17 @@ fn the_demo_applies_through_the_api_server() {
         ] {
             m.remove(k);
         }
-        // The Create's idempotency key rides on an annotation, not
-        // configuration.
+        // The Create's idempotency key rides on an annotation, and the
+        // deployment on a label: not configuration.
         let a = m["annotations"].as_object_mut().unwrap();
         assert!(a.remove("dform.io/idempotency-key").is_some(), "{a:?}");
         if a.is_empty() {
             m.remove("annotations");
+        }
+        let l = m["labels"].as_object_mut().unwrap();
+        assert_eq!(l.remove("dform.io/stack"), Some(json!("k8s_demo")), "{l:?}");
+        if l.is_empty() {
+            m.remove("labels");
         }
         o
     };
@@ -1088,4 +1135,75 @@ fn a_kubeconfig_held_as_a_secret_configures_the_provider() {
             .iter()
             .all(|a| a == &format!("Bearer {TOKEN}"))
     );
+}
+
+/// A Create whose answer is lost (the server applied it and the
+/// connection closed) made an object with a generated name, which the
+/// next run cannot know. It finds it by the deployment's label and the
+/// Create's idempotency-key annotation (`provider.created`), maps it, and,
+/// the program having dropped the resource, deletes it: nothing is left in
+/// the cluster.
+#[test]
+fn a_create_whose_answer_was_lost_is_found_by_its_label_and_key() {
+    let s = Scratch::project("k8s-lost-create");
+    std::fs::create_dir_all(s.path("providers/k8s")).unwrap();
+    std::os::unix::fs::symlink(k8s(), s.path("providers/k8s/dform-provider-k8s")).unwrap();
+    let head = "edition 2026\nprovider k8s { source = \"./providers/k8s\" }\n";
+    let cm = "resource k8s.config_map settings {\n  metadata.generateName = \"settings-\"\n  \
+              data = { \"MODE\": \"test\" }\n}\n";
+    s.write("p.df", &format!("{head}{cm}"));
+    let (api, url) = Api::start();
+    let kc = kubeconfig(&s, &url);
+    let run = |args: &[&str]| dform(&s, Some(&kc), &common::on("p.df", &[], args));
+    let configmaps = || -> Vec<(String, Json)> {
+        api.objects
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(p, _)| p.starts_with("/api/v1/namespaces/default/configmaps/"))
+            .map(|(p, o)| (p.clone(), o.clone()))
+            .collect()
+    };
+    *api.lose_answers.lock().unwrap() = 1;
+    let r = run(&["apply"]).failure();
+    let made = configmaps();
+    assert_eq!(made.len(), 1, "{}\n{}", r.stdout, r.stderr);
+    let (path, obj) = &made[0];
+    assert_eq!(obj["metadata"]["labels"]["dform.io/stack"], "p");
+    assert!(
+        obj["metadata"]["annotations"]["dform.io/idempotency-key"]
+            .as_str()
+            .is_some_and(|k| k.starts_with("dform-")),
+        "{obj}"
+    );
+
+    // The program drops the resource before the next run.
+    s.write("p.df", head);
+    let lists = api.count(
+        "GET /api/v1/configmaps?",
+        &["labelSelector=dform.io%2Fstack%3Dp"],
+    );
+    let r = run(&["apply"]).success();
+    assert!(
+        api.count(
+            "GET /api/v1/configmaps?",
+            &["labelSelector=dform.io%2Fstack%3Dp"]
+        ) > lists,
+        "found by a label selector"
+    );
+    let name = path.rsplit('/').next().unwrap();
+    assert!(
+        r.stderr.contains(&format!(
+            "k8s.config_map/settings: the create whose answer was lost made default/{name}"
+        )),
+        "{}\n{}",
+        r.stdout,
+        r.stderr
+    );
+    assert!(
+        r.stdout.contains("- k8s.config_map.settings"),
+        "{}",
+        r.stdout
+    );
+    assert!(configmaps().is_empty(), "nothing is left in the cluster");
 }

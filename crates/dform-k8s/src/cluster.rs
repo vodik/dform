@@ -7,7 +7,7 @@ use crate::openapi::Kind;
 use anyhow::{Context, Result, anyhow, bail};
 use kube::config::Kubeconfig;
 use kube::core::Status;
-use kube::core::params::{DeleteParams, GetParams, Patch, PatchParams};
+use kube::core::params::{DeleteParams, GetParams, ListParams, Patch, PatchParams};
 use kube::core::request::Request;
 use serde_json::{Value as Json, json};
 use std::path::Path;
@@ -299,6 +299,27 @@ impl Cluster {
                 crate::object::remote(kind, ns, name)
             ))),
         }
+    }
+
+    /// The objects of `kind` in every namespace whose labels match
+    /// `selector` (all of them without one).
+    pub async fn list(&self, kind: &Kind, selector: Option<&str>) -> Result<Vec<Json>> {
+        let mut lp = ListParams::default();
+        if let Some(s) = selector {
+            lp = lp.labels(s);
+        }
+        let req = Request::new(kind.collection_all())
+            .list(&lp)
+            .map_err(|e| anyhow!("{e}"))?;
+        let list = self
+            .client
+            .request::<Json>(req)
+            .await
+            .with_context(|| format!("LIST {}", kind.kind))?;
+        Ok(match list.get("items") {
+            Some(Json::Array(items)) => items.clone(),
+            _ => Vec::new(),
+        })
     }
 
     /// Server-side apply `obj` as `dform`, not forced; `dry_run` persists
