@@ -630,6 +630,7 @@ fn providers(world: &Path) -> Result<Providers> {
             inventory: scratch().join("no-inventory.json"),
             chaos: vec![],
             cache: None,
+            configured: Default::default(),
         },
     )
 }

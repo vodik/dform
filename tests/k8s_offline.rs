@@ -192,6 +192,8 @@ fn offline_apply_fails_naming_why() {
 struct Api {
     objects: Mutex<BTreeMap<String, Json>>,
     requests: Mutex<Vec<String>>,
+    /// Each request's `Authorization` header.
+    auth: Mutex<Vec<String>>,
     serial: Mutex<u64>,
 }
 
@@ -326,10 +328,12 @@ impl Api {
                 if h.is_empty() {
                     break;
                 }
-                if let Some((k, v)) = h.split_once(':')
-                    && k.eq_ignore_ascii_case("content-length")
-                {
-                    len = v.trim().parse().unwrap_or(0);
+                if let Some((k, v)) = h.split_once(':') {
+                    if k.eq_ignore_ascii_case("content-length") {
+                        len = v.trim().parse().unwrap_or(0);
+                    } else if k.eq_ignore_ascii_case("authorization") {
+                        self.auth.lock().unwrap().push(v.trim().to_string());
+                    }
                 }
             }
             let mut body = vec![0; len];
@@ -971,4 +975,117 @@ fn the_schema_is_derived_once_and_answered_for_the_types_asked_for() {
     );
     assert_eq!(count(&ns, probe), 0);
     assert!(!std::fs::read_to_string(&cache).unwrap().contains("another"));
+}
+
+/// Every file under `dir`, recursively.
+fn files_under(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+    for e in std::fs::read_dir(dir).unwrap().flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            files_under(&p, out);
+        } else {
+            out.push(p);
+        }
+    }
+}
+
+/// `provider_config("kubernetes", {kubeconfig: K})` with K a secret input:
+/// the provider is configured from the text, in memory, and talks to the
+/// cluster it names with its token; the environment's kubeconfig is not
+/// read. No byte of the token is in state, the plan file, the audit log,
+/// the schema cache or the output. Host and token as separate fields work
+/// the same.
+#[test]
+fn a_kubeconfig_held_as_a_secret_configures_the_provider() {
+    let s = Scratch::project("k8s-kubeconfig-secret");
+    std::fs::create_dir_all(s.path("providers/k8s")).unwrap();
+    std::os::unix::fs::symlink(k8s(), s.path("providers/k8s/dform-provider-k8s")).unwrap();
+    let (api, url) = Api::start();
+    const TOKEN: &str = "tok-5ecret-9f2a71c4";
+    let kc = json!({
+        "apiVersion": "v1", "kind": "Config", "current-context": "fake",
+        "clusters": [{"name": "fake", "cluster": {"server": url}}],
+        "contexts": [{"name": "fake", "context": {"cluster": "fake", "user": "fake",
+                                                  "namespace": "default"}}],
+        "users": [{"name": "fake", "user": {"token": TOKEN}}]
+    })
+    .to_string();
+    let program = |settings: &str| {
+        format!(
+            "edition 2026\nprovider k8s {{ source = \"./providers/k8s\" }}\n\
+             input kubeconfig: secret(string)\n\
+             provider_config(\"kubernetes\", {settings}) if kubeconfig(k)\n\
+             resource k8s.config_map settings {{\n  metadata.name = \"settings\"\n  \
+             data = {{ \"MODE\": \"test\" }}\n}}\n"
+        )
+    };
+    s.write("p.df", &program("{ kubeconfig: k }"));
+    // The environment names no cluster dform may use.
+    let env_kc = s.path("no-such-kubeconfig").display().to_string();
+    let set = format!("kubeconfig={kc}");
+    let run = |args: &[&str]| {
+        let mut all = common::on("p.df", &[], args);
+        all.extend(["--set".to_string(), set.clone()]);
+        dform(&s, Some(&env_kc), &all)
+    };
+    let mut out = String::new();
+    let r = run(&["plan", "--out", "plan.json"]).success();
+    out += &(r.stdout + &r.stderr);
+    let r = run(&["apply"]).success();
+    out += &(r.stdout + &r.stderr);
+    assert!(
+        api.get("/api/v1/namespaces/default/configmaps/settings")
+            .is_some(),
+        "{out}"
+    );
+    assert!(
+        api.auth
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|a| a == &format!("Bearer {TOKEN}")),
+        "the token from the program authenticates"
+    );
+    let r = run(&["plan"]).success();
+    assert_eq!(r.summary(), "stack p is undeformed", "{}", r.stdout);
+    out += &(r.stdout + &r.stderr);
+    assert!(!out.contains(TOKEN), "{out}");
+    let mut files = Vec::new();
+    files_under(&s.dir, &mut files);
+    assert!(
+        files.iter().any(|f| f.ends_with("state.audit.jsonl")),
+        "{files:?}"
+    );
+    assert!(files.iter().any(|f| f.ends_with("plan.json")));
+    for f in files.iter().filter(|f| !f.ends_with("p.df")) {
+        let bytes = std::fs::read(f).unwrap();
+        assert!(
+            !bytes.windows(TOKEN.len()).any(|w| w == TOKEN.as_bytes()),
+            "{} holds the token",
+            f.display()
+        );
+    }
+
+    // Host and token as separate fields.
+    let (api, url) = Api::start();
+    s.write(
+        "p.df",
+        &program(&format!("{{ host: \"{url}\", token: k }}")),
+    );
+    let set = format!("kubeconfig={TOKEN}");
+    let mut args = common::on("p.df", &[], &["apply"]);
+    args.extend(["--set".to_string(), set]);
+    let r = dform(&s, Some(&env_kc), &args).success();
+    assert!(!(r.stdout + &r.stderr).contains(TOKEN));
+    assert!(
+        api.get("/api/v1/namespaces/default/configmaps/settings")
+            .is_some()
+    );
+    assert!(
+        api.auth
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|a| a == &format!("Bearer {TOKEN}"))
+    );
 }

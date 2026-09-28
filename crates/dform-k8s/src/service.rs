@@ -6,7 +6,10 @@
 //! (`dform.state/cache/`; else beside the world file). With no cluster to reach, or
 //! `DFORM_K8S_OFFLINE` set, the provider is offline: the schema is the
 //! checked-in snapshot's, Plan diffs locally, and Read, Apply and Import
-//! fail naming why.
+//! fail naming why. A program that names its cluster
+//! (`provider_config("kubernetes", ...)`) is configured `deferred` first
+//! (the snapshot's schema, the environment ignored) and again with its
+//! `settings` once they are known (`Cluster::configured`).
 //!
 //! Remote ids are `NAMESPACE/NAME` (`NAME` for a cluster-scoped kind).
 //! Read and Import GET the object. Plan validates the document, then
@@ -44,7 +47,7 @@ const REPLACE_WAIT: Duration = Duration::from_secs(120);
 
 /// A configured provider.
 pub struct K8s {
-    pub derived: Derived,
+    pub derived: Arc<Derived>,
     /// The cluster, or why there is none.
     pub cluster: std::result::Result<Cluster, String>,
 }
@@ -68,7 +71,7 @@ impl K8s {
                             openapi::derive(&doc.parse()?, &openapi::aliases()?)
                         })?;
                         return Ok(K8s {
-                            derived,
+                            derived: Arc::new(derived),
                             cluster: Ok(c),
                         });
                     }
@@ -83,9 +86,28 @@ impl K8s {
             );
         }
         Ok(K8s {
-            derived: openapi::snapshot_cached(cache.as_deref())?,
+            derived: Arc::new(openapi::snapshot_cached(cache.as_deref())?),
             cluster: Err(why),
         })
+    }
+
+    /// Configure for a program that names its cluster itself
+    /// (`provider_config("kubernetes", ...)`): the schema is the snapshot's
+    /// until then, and nothing in the environment is contacted.
+    pub fn deferred(cache: Option<PathBuf>) -> Result<K8s> {
+        Ok(K8s {
+            derived: Arc::new(openapi::snapshot_cached(cache.as_deref())?),
+            cluster: Err("the program configures it (provider_config) and has not yet".into()),
+        })
+    }
+
+    /// The program's configuration arrived (`Cluster::configured`): the
+    /// same schema, this cluster.
+    pub fn with_cluster(&self, cluster: Cluster) -> K8s {
+        K8s {
+            derived: self.derived.clone(),
+            cluster: Ok(cluster),
+        }
     }
 
     fn schema(&self) -> &Schema {
@@ -613,7 +635,22 @@ impl pb::provider_server::Provider for Service {
                     .and_then(Json::as_str)
                     .and_then(|w| std::path::Path::new(w).parent().map(PathBuf::from))
             });
-        let k8s = K8s::configure(cache).await.map_err(invalid)?;
+        // The program's own configuration, a second Configure: the schema
+        // the run already has, the cluster it names.
+        let settings = config.get("settings").cloned().unwrap_or(Json::Null);
+        let configured = Cluster::configured(&settings).await.map_err(invalid)?;
+        let current = self.k8s.read().unwrap_or_else(|e| e.into_inner()).clone();
+        let k8s = match (configured, current) {
+            (Some(c), Some(k8s)) => k8s.with_cluster(c),
+            (Some(c), None) => {
+                let k8s = K8s::deferred(cache).map_err(invalid)?;
+                k8s.with_cluster(c)
+            }
+            (None, _) if config.get("deferred") == Some(&Json::Bool(true)) => {
+                K8s::deferred(cache).map_err(invalid)?
+            }
+            (None, _) => K8s::configure(cache).await.map_err(invalid)?,
+        };
         *self.k8s.write().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(k8s));
         Ok(Response::new(pb::ConfigureResponse {}))
     }

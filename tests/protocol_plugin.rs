@@ -218,6 +218,7 @@ fn a_scoped_run_loads_the_schema_of_its_types_on(launch: &dyn Launch) {
             inventory: s.path("inv.json"),
             chaos: vec![],
             cache: None,
+            configured: Default::default(),
         },
     )
     .unwrap();

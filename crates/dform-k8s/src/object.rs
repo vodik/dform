@@ -239,6 +239,25 @@ fn base64(s: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// Standard base64, padded.
+pub fn base64_encode(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    for chunk in bytes.chunks(3) {
+        let n = chunk
+            .iter()
+            .enumerate()
+            .fold(0u32, |n, (i, b)| n | u32::from(*b) << (16 - 8 * i));
+        for i in 0..4 {
+            out.push(match i <= chunk.len() {
+                true => ALPHABET[(n >> (18 - 6 * i) & 63) as usize] as char,
+                false => '=',
+            });
+        }
+    }
+    out
+}
+
 /// The computed values of a live object: its server-written metadata, its
 /// name and namespace, `status`, and its value at each path of `defaulted`
 /// (the type's other Optional+Computed paths outside a list element).
@@ -419,6 +438,10 @@ mod tests {
         assert_eq!(attrs(&live), json!({"stringData": {"password": "hunter2"}}));
         assert_eq!(base64("aGk=").unwrap(), b"hi");
         assert_eq!(base64("YWJj").unwrap(), b"abc");
+        for s in ["", "h", "hi", "abc", "abcd"] {
+            assert_eq!(base64(&base64_encode(s.as_bytes())).unwrap(), s.as_bytes());
+        }
+        assert_eq!(base64_encode(b"hi"), "aGk=");
     }
 
     #[test]

@@ -52,6 +52,11 @@ pub struct Config {
     /// Where a provider may cache what it fetched (the k8s provider's
     /// OpenAPI document): `dform.state/cache/`. None: beside the world.
     pub cache: Option<PathBuf>,
+    /// The providers, by name, the program configures itself
+    /// (`provider_config(Name, Settings)`): each is told at Configure that
+    /// its settings come later, and serves nothing until they do
+    /// ([`Providers::configure_from`]).
+    pub configured: BTreeSet<String>,
 }
 
 /// How a run reaches its providers: a backend (`plugin::backend`). The
@@ -116,6 +121,13 @@ pub struct Providers {
     imported: RefCell<BTreeMap<String, Option<Object>>>,
     /// What the providers said during the last apply, for the CLI to print.
     notes: RefCell<Vec<String>>,
+    /// Each link's Configure document, as the engine first sent it.
+    bases: Vec<Json>,
+    /// The links whose settings the program gives and has not yet (a
+    /// null, or not evaluated): they serve no state entry.
+    awaiting: RefCell<BTreeSet<usize>>,
+    /// The settings each link was last configured with from the program.
+    settings: RefCell<BTreeMap<usize, Json>>,
 }
 
 /// What the providers' Schema calls answered.
@@ -175,24 +187,70 @@ impl Providers {
         if let Some(c) = &cfg.cache {
             base["cache"] = path(c);
         }
-        let mut links = Vec::new();
+        let (mut links, mut bases, mut awaiting) = (Vec::new(), Vec::new(), BTreeSet::new());
         if !mocks.is_empty() {
             let mut link = launch.mock()?;
             let mut config = base.clone();
             config["schemas"] = json!(mocks);
-            configure(&mut link, config)?;
+            configure(&mut link, config.clone())?;
             links.push(link);
+            bases.push(config);
         }
         for p in plugins {
             let mut link = launch.plugin(&p)?;
-            configure(&mut link, base.clone())
+            let mut config = base.clone();
+            if cfg.configured.contains(&link.name) {
+                config["deferred"] = json!(true);
+                awaiting.insert(links.len());
+            }
+            configure(&mut link, config)
                 .with_context(|| format!("configure provider {}", p.display()))?;
             links.push(link);
+            bases.push(base.clone());
         }
         if links.is_empty() {
             bail!("no providers");
         }
-        Ok(Self::deferred(links))
+        let p = Self::deferred(links);
+        Ok(Providers {
+            bases,
+            awaiting: RefCell::new(awaiting),
+            ..p
+        })
+    }
+
+    /// Configure each provider the program configures
+    /// (`provider_config(Name, Settings)` in `facts`) whose settings are
+    /// known now and changed: Configure again with them as `settings`.
+    /// Settings holding a null (a cluster not created yet) wait. Whether
+    /// any provider was configured: then what was read is read again.
+    pub fn configure_from<'a>(&self, facts: impl IntoIterator<Item = &'a Atom>) -> Result<bool> {
+        let mut changed = false;
+        for a in facts.into_iter().filter(|a| a.pred == "provider_config") {
+            let [Term::Val(Value::Str(name)), Term::Val(v)] = a.args.as_slice() else {
+                continue;
+            };
+            let Some(i) = self.link_named(name) else {
+                continue;
+            };
+            let Some(settings) = known_json(v) else {
+                continue;
+            };
+            if self.settings.borrow().get(&i) == Some(&settings) {
+                continue;
+            }
+            let mut config = self.bases.get(i).cloned().unwrap_or_else(|| json!({}));
+            config["settings"] = settings.clone();
+            configure(&mut self.links[i].borrow_mut(), config)
+                .with_context(|| format!("configure provider {name} from provider_config"))?;
+            self.settings.borrow_mut().insert(i, settings);
+            self.awaiting.borrow_mut().remove(&i);
+            changed = true;
+        }
+        if changed {
+            self.invalidate();
+        }
+        Ok(changed)
     }
 
     /// The providers of started, configured links, their schema loaded.
@@ -215,6 +273,9 @@ impl Providers {
             refreshed: RefCell::new(None),
             imported: RefCell::new(BTreeMap::new()),
             notes: RefCell::new(Vec::new()),
+            bases: Vec::new(),
+            awaiting: RefCell::new(BTreeSet::new()),
+            settings: RefCell::new(BTreeMap::new()),
         }
     }
 
@@ -319,13 +380,17 @@ impl Providers {
         self.imported.borrow_mut().clear();
     }
 
-    /// State's entries some provider of this stack serves.
+    /// State's entries some provider of this stack serves (one awaiting
+    /// the program's settings serves none yet).
     fn entries<'a>(
         &'a self,
         map: &'a BTreeMap<String, StateEntry>,
     ) -> impl Iterator<Item = (Address, &'a StateEntry)> + 'a {
         map.iter()
-            .filter(|(_, e)| self.link_named(&e.provider).is_some())
+            .filter(|(_, e)| {
+                self.link_named(&e.provider)
+                    .is_some_and(|i| !self.awaiting.borrow().contains(&i))
+            })
             .filter_map(|(k, e)| state::parse_key(k).map(|a| (a, e)))
     }
 
@@ -1429,6 +1494,30 @@ fn uncertain_from_here(a: &Action, addr: &Address, remote: &str, state: &mut Sta
 
 /// Deletes in reverse dependency order: an object goes before every object
 /// at an address it depended on. Ties keep address order.
+/// A provider_config value as the provider receives it, if it is known:
+/// no null, no ref to resolve.
+fn known_json(v: &Value) -> Option<Json> {
+    Some(match v {
+        Value::Str(s) => json!(s),
+        Value::Int(i) => json!(i),
+        Value::Bool(b) => json!(b),
+        Value::List(xs) => Json::Array(xs.iter().map(known_json).collect::<Option<_>>()?),
+        Value::Obj(m) => Json::Object(
+            m.iter()
+                .map(|(k, x)| Some((k.clone(), known_json(x)?)))
+                .collect::<Option<_>>()?,
+        ),
+        Value::Ip(n) => json!(crate::value::u32_to_ipv4(*n)),
+        Value::IpNet { addr, prefix } => json!(crate::value::ipnet_to_string(*addr, *prefix)),
+        Value::IpRange { start, end } => json!(format!(
+            "{}-{}",
+            crate::value::u32_to_ipv4(*start),
+            crate::value::u32_to_ipv4(*end)
+        )),
+        Value::Ref { .. } | Value::CloudRef { .. } | Value::Null { .. } => return None,
+    })
+}
+
 fn reverse_dependency_order(mut deletes: Vec<(Action, &[String])>) -> Vec<Action> {
     let mut out = Vec::new();
     while !deletes.is_empty() {

@@ -1260,6 +1260,7 @@ fn run_with(
             inventory: paths.inventory.clone(),
             chaos: chaos_specs,
             cache: cli.world.is_none().then(|| cache.clone()),
+            configured: provider_configs(&program),
         },
     )?;
     // Externs are asked on demand: a table's of its file, else of the file
@@ -1330,8 +1331,16 @@ fn run_with(
         let mut extra = base_extra.clone();
         extra.extend(executor::withhold(backend.world_facts(st)?, withheld));
         let (res, mut violations) = if more.is_empty() {
-            let (res, violations, resumable) =
+            let (mut res, mut violations, mut resumable) =
                 externs.eval_resumable(&program, &extra, zset::POLICY_INPUTS)?;
+            // A provider the program configures, its settings now known,
+            // is configured, and what it serves read again.
+            if backend.configure_from(&res.facts)? {
+                extra = base_extra.clone();
+                extra.extend(executor::withhold(backend.world_facts(st)?, withheld));
+                (res, violations, resumable) =
+                    externs.eval_resumable(&program, &extra, zset::POLICY_INPUTS)?;
+            }
             *last.borrow_mut() = Some((extra, resumable));
             (res, violations)
         } else {
@@ -2991,6 +3000,26 @@ fn print_query(
         }
     }
     Ok(())
+}
+
+/// The providers the program configures itself: the constant names of
+/// its `provider_config(Name, Settings)` facts and rules.
+fn provider_configs(program: &crate::ast::Program) -> BTreeSet<String> {
+    use crate::ast::{Stmt, Term};
+    program
+        .statements
+        .iter()
+        .filter_map(|st| match st {
+            Stmt::Fact(a) => Some(a),
+            Stmt::Rule(r) => Some(&r.head),
+            _ => None,
+        })
+        .filter(|a| a.pred == "provider_config")
+        .filter_map(|a| match a.args.first() {
+            Some(Term::Val(crate::value::Value::Str(n))) => Some(n.clone()),
+            _ => None,
+        })
+        .collect()
 }
 
 /// This run's inputs as a plan file records them: each `--input-file` and
