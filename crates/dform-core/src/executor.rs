@@ -233,6 +233,22 @@ pub mod hooks {
     /// Persist once per tick, at its end, instead of after every Apply
     /// call that returns.
     pub static PERSIST_PER_TICK: AtomicBool = AtomicBool::new(false);
+
+    /// Resolve an uncertain Create or Replace as if the provider could not
+    /// say what its idempotency key made (the k8s provider today): the
+    /// record is dropped, and an object it made is left unmapped.
+    pub static CREATED_UNKNOWN: AtomicBool = AtomicBool::new(false);
+}
+
+/// What `cloud` says the Create or Replace with idempotency key `key` at
+/// `addr` made. A `test-hooks` build can make it say nothing, for the model
+/// test to catch (`hooks::CREATED_UNKNOWN`).
+fn created(cloud: &Providers, addr: &Address, key: &str) -> Result<Option<String>> {
+    #[cfg(feature = "test-hooks")]
+    if hooks::CREATED_UNKNOWN.load(std::sync::atomic::Ordering::SeqCst) {
+        return Ok(None);
+    }
+    cloud.created(addr, key)
 }
 
 /// `approver_allowed(Who, D)`: may `Who` approve the deformation `D`?
@@ -484,7 +500,7 @@ pub fn resolve_uncertain(cloud: &Providers, state: &mut State) -> Result<Vec<Str
             UncertainOp::Create | UncertainOp::Replace { .. } => {
                 // A create's address may still map an object that is gone.
                 let mapped = state.get(&addr).map(|e| e.remote.clone());
-                if let Some(remote) = cloud.created(&addr, &u.key)? {
+                if let Some(remote) = created(cloud, &addr, &u.key)? {
                     if let UncertainOp::Replace { create_first: true } = u.op
                         && mapped.as_ref().is_some_and(|m| *m != remote)
                     {

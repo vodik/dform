@@ -28,9 +28,11 @@
 //!
 //! A Create or Replace that may have taken effect without dform hearing
 //! its answer (chaos `timeout`, `crash`, or in flight when `stop-after`
-//! stopped dform) leaves an object state does not know until the next run
-//! asks the provider for what its idempotency key made. That orphan is
-//! excused; the next apply creating it again is not (repeat-create).
+//! stopped dform) leaves an object state does not map, only records as
+//! uncertain, until the next apply asks the provider for what its
+//! idempotency key made. That orphan is excused while state records it;
+//! once the record is resolved the object must be in state or gone, and the
+//! next apply creating it again is not excused (repeat-create).
 //!
 //! A failure prints the seed and the schedule minimized (delta debugging
 //! over its steps, then over each step's knobs), and how to replay it:
@@ -660,9 +662,6 @@ struct Runner<'a> {
     dir: PathBuf,
     ep: &'a Episode,
     version: usize,
-    /// (type, name) of Creates and Replaces that may have taken effect
-    /// unanswered.
-    ambiguous: BTreeSet<(String, String)>,
     foreign: BTreeSet<(String, String)>,
 }
 
@@ -672,7 +671,6 @@ struct Ran {
     submitted: Vec<Req>,
     answered: Vec<(Req, Answer)>,
     end_ticks: usize,
-    unanswered: Vec<Req>,
 }
 
 fn read_json(p: &Path) -> Json {
@@ -755,7 +753,6 @@ impl Runner<'_> {
             submitted: log.submitted,
             answered: log.answered,
             end_ticks: log.end_ticks,
-            unanswered: log.applies.into_values().collect(),
         })
     }
 
@@ -763,8 +760,7 @@ impl Runner<'_> {
         Err(Failure { invariant, what })
     }
 
-    /// The per-run invariants: foreign, repeat-create, orphan. Records
-    /// what became ambiguous.
+    /// The per-run invariants: foreign, repeat-create, orphan.
     fn after(&mut self, ran: &Ran, what: &str) -> Result<(), Failure> {
         for r in &ran.submitted {
             let named = match r.op {
@@ -782,7 +778,6 @@ impl Runner<'_> {
             }
         }
         for (r, a) in &ran.answered {
-            let key = (r.typ.clone(), r.name.clone());
             if let Answer::Refused(m) = a
                 && r.op == pb::Op::Create
                 && m.contains("already exists in the world")
@@ -795,36 +790,34 @@ impl Runner<'_> {
                     ),
                 );
             }
-            if matches!(a, Answer::MaybeApplied | Answer::Crashed)
-                && matches!(r.op, pb::Op::Create | pb::Op::Replace)
-            {
-                self.ambiguous.insert(key);
-            }
-        }
-        for r in &ran.unanswered {
-            if matches!(r.op, pb::Op::Create | pb::Op::Replace) {
-                self.ambiguous.insert((r.typ.clone(), r.name.clone()));
-            }
         }
         self.orphans(what)
-    }
-
-    /// Whether `typ/remote` may be the object of a Create or Replace
-    /// that took effect unanswered.
-    fn ambiguous(&self, typ: &str, remote: &str) -> bool {
-        self.ambiguous.iter().any(|(t, n)| {
-            t == typ
-                && (remote == n
-                    || remote
-                        .strip_prefix(n.as_str())
-                        .and_then(|s| s.strip_prefix('-'))
-                        .is_some_and(|s| s.parse::<u32>().is_ok()))
-        })
     }
 
     fn orphans(&self, what: &str) -> Result<(), Failure> {
         let world = read_json(&self.path("w.json"));
         let st = read_json(&self.path("w.state.json"));
+        // The Creates and Replaces state records as uncertain: what they
+        // made is not mapped until an apply resolves them.
+        let uncertain: Vec<(&str, &str)> = st["uncertain"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .filter(|(_, u)| u["op"] == "create" || u["op"].get("replace").is_some())
+            .filter_map(|(k, _)| k.split_once("::"))
+            .collect();
+        // The object an uncertain Create or Replace at `typ/n` may have
+        // made: `n`, or `n-N` with fresh ids.
+        let uncertain = |typ: &str, remote: &str| {
+            uncertain.iter().any(|&(t, n)| {
+                t == typ
+                    && (remote == n
+                        || remote
+                            .strip_prefix(n)
+                            .and_then(|s| s.strip_prefix('-'))
+                            .is_some_and(|s| s.parse::<u32>().is_ok()))
+            })
+        };
         let mut known: BTreeSet<(String, String)> = BTreeSet::new();
         for section in ["resources", "deposed"] {
             for (k, e) in st[section].as_object().into_iter().flatten() {
@@ -844,10 +837,13 @@ impl Runner<'_> {
             let typ = rr["typ"].as_str().unwrap_or("").to_string();
             let name = rr["name"].as_str().unwrap_or("").to_string();
             let id = (typ.clone(), name.clone());
-            if !known.contains(&id) && !self.foreign.contains(&id) && !self.ambiguous(&typ, &name) {
+            if !known.contains(&id) && !self.foreign.contains(&id) && !uncertain(&typ, &name) {
                 return Self::fail(
                     "orphan",
-                    format!("after {what}: {typ}/{name} is in the world, and not in state"),
+                    format!(
+                        "after {what}: {typ}/{name} is in the world, and neither in state nor \
+                         recorded there as uncertain"
+                    ),
                 );
             }
         }
@@ -1062,7 +1058,6 @@ fn replay(seed: u64, steps: &[Step]) -> Result<(), Failure> {
         dir: s.dir.clone(),
         ep: &ep,
         version: 0,
-        ambiguous: BTreeSet::new(),
         foreign,
     };
     r.write_program();
@@ -1223,6 +1218,29 @@ fn persisting_once_per_tick_is_caught() {
     dform::executor::hooks::PERSIST_PER_TICK.store(false, Ordering::SeqCst);
     let (seed, f, min) = found.expect("the model catches state written once per tick");
     assert_eq!(f.invariant, "identity", "{}", report(seed, &f, min));
+}
+
+/// An uncertain Create resolved as if the provider could not say what its
+/// idempotency key made (`executor::hooks::CREATED_UNKNOWN`, the k8s
+/// provider's lookup today) leaves the object it made unmapped once the
+/// record is gone: an orphan, though no later apply creates it again (seed
+/// 233: the next version drops the database).
+#[test]
+fn an_uncertain_create_resolved_to_nothing_is_an_orphan() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    use std::sync::atomic::Ordering;
+    let steps = parse_schedule(
+        "next; apply p=3 seed=945 fresh-ids timeout=db.postgres/r1; next; plan-apply p=1",
+    );
+    dform::executor::hooks::CREATED_UNKNOWN.store(true, Ordering::SeqCst);
+    let out = replay(233, &steps);
+    dform::executor::hooks::CREATED_UNKNOWN.store(false, Ordering::SeqCst);
+    let f = out.expect_err("the model catches the unmapped create");
+    assert_eq!(f.invariant, "orphan", "{}", report(233, &f, steps.clone()));
+    // Without the planted bug the same schedule settles.
+    if let Err(f) = replay(233, &steps) {
+        panic!("{}", report(233, &f, steps));
+    }
 }
 
 /// WORK.org "Resume repeats a Create that may already have happened" (seed
