@@ -14,7 +14,9 @@
 //! * a positive reader of an undetermined aggregate is undetermined.
 //!
 //! A positive read of an ordinary predicate with stuck instances is not
-//! undetermined: the facts are not there yet, which is monotone.
+//! undetermined: the facts are not there yet, which is monotone. The rule
+//! may derive after the boundary that resolves the nulls ([`MayDerive`]):
+//! a resource rule is a pending group, a deny may derive after tick N.
 
 use crate::ast::{Atom, Lit, Term};
 use crate::lattice::{Truth, eq3, nulls_in};
@@ -66,6 +68,42 @@ impl Stuck {
             record: None,
             span: Default::default(),
         }
+    }
+}
+
+/// A rule instance that may derive after a boundary (F DR-2 revised, last
+/// clause, for every rule): its body positively reads a predicate with a
+/// stuck instance, or with one that may derive, that unifies with the read
+/// under the bindings of the literals before it.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct MayDerive {
+    /// Index of the rule in the evaluated program (constraints follow).
+    pub rule: usize,
+    /// The head with the bound columns instantiated, the rest wildcards.
+    pub head: Atom,
+    pub nulls: BTreeSet<String>,
+    /// The stuck head read, as the body reads it.
+    pub reads: Atom,
+    /// Whether `reads` is itself only a may-derive head (transitively).
+    pub transitive: bool,
+}
+
+impl MayDerive {
+    pub fn reason(&self) -> String {
+        let what = if self.transitive {
+            "which may derive after a boundary"
+        } else {
+            "which is stuck"
+        };
+        format!("reads {}, {what}", fmt_atom(&self.reads))
+    }
+
+    pub fn nulls_text(&self) -> String {
+        self.nulls
+            .iter()
+            .map(|n| format!("?{n}"))
+            .collect::<Vec<_>>()
+            .join(" ")
     }
 }
 
@@ -240,14 +278,24 @@ impl Heads {
 
 impl Known {
     pub fn add(&mut self, s: &Stuck) {
-        let read = as_read(&s.head);
+        self.add_head(&s.head, &s.nulls);
+    }
+
+    /// A head (in its derived form) with the nulls it waits on.
+    pub fn add_head(&mut self, head: &Atom, nulls: &BTreeSet<String>) {
+        let read = as_read(head);
         let heads = self.by_pred.entry(read.pred.clone()).or_default();
         let i = heads.all.len();
         match first_const(&read) {
             Some(v) => heads.by_first.entry(v.clone()).or_default().push(i),
             None => heads.open_first.push(i),
         }
-        heads.all.push((read, s.nulls.clone()));
+        heads.all.push((read, nulls.clone()));
+    }
+
+    /// Has `pred` any head at all?
+    pub fn has_pred(&self, pred: &str) -> bool {
+        self.by_pred.contains_key(pred)
     }
 
     /// The nulls of every stuck head of `pat.pred` that unifies with `pat`;
@@ -304,9 +352,11 @@ pub struct Sections {
 /// null owned by a resource whose Apply resolves a blocking null (or by a
 /// held resource), when its provider's configuration does, or when one of
 /// its attribute cells is stuck. A document's own computed nulls are not
-/// edges (F5): `docs` is assembled without them.
+/// edges (F5): `docs` is assembled without them. A stuck resource rule is a
+/// pending group, and so is one that may derive after a boundary.
 pub fn sections(
     stuck: &[Stuck],
+    may_derive: &[MayDerive],
     facts: &BTreeSet<Atom>,
     docs: &BTreeMap<(String, String), Value>,
     schema: &Schema,
@@ -440,6 +490,14 @@ pub fn sections(
             }
             _ => {}
         }
+    }
+    for m in may_derive.iter().filter(|m| m.head.pred == "want") {
+        pending_groups.push(format!(
+            "{} x unknown, on {}  ({})",
+            fmt_atom(&m.head),
+            m.nulls_text(),
+            m.reason()
+        ));
     }
     pending_groups.dedup();
     undetermined.sort();

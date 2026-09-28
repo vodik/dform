@@ -186,6 +186,9 @@ and the sections follow in this order; what cannot be decided yet is said so:
   are scheduled by this plan.
 - `pending groups:` resource rules stuck on a null (`gke_nodepool.? x
   unknown, on ?gke_cluster/pngu#zones`): how many there will be is not known.
+  A resource rule that reads a predicate with a stuck instance is one too
+  (`(reads node_pool_up("np-a"), which is stuck)`): it may derive after the
+  boundary, so `apply` runs another tick for it.
 - `undetermined:` policies that cannot be decided yet, `decided after tick
   N`; and denies that read a predicate with a stuck instance, which `may
   derive after tick N`. They are never reported as satisfied.

@@ -1324,7 +1324,7 @@ fn plan_sections(
         .iter()
         .map(|r| ((r.addr.typ.clone(), r.addr.name.clone()), r.attrs.clone()))
         .collect();
-    stuck::sections(&res.stuck, &res.facts, &docs, schema)
+    stuck::sections(&res.stuck, &res.may_derive, &res.facts, &docs, schema)
 }
 
 /// `query`'s output, redacted: every fact of a predicate, or a table with

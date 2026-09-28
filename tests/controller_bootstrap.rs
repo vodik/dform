@@ -56,6 +56,38 @@ fn ticks(stdout: &str) -> Vec<&str> {
     stdout.lines().filter(|l| l.starts_with("tick ")).collect()
 }
 
+/// The dform-controller Deployment reads the helper `node_pool_up`, whose
+/// instances are stuck until the pools have instance groups: at tick 2 the
+/// rule is a pending group (F DR-2 revised, last clause), so the apply
+/// runs a third tick instead of stopping complete a tick early.
+#[test]
+fn a_resource_rule_reading_a_stuck_helper_is_a_pending_group() {
+    let s = demo("bootstrap-helper");
+    let r = s.run(&["--file", "bootstrap.df", "apply"]).success();
+    let tick2 = r
+        .stdout
+        .split("tick 2:\n")
+        .nth(1)
+        .and_then(|t| t.split("tick 3:\n").next())
+        .unwrap_or_default();
+    assert!(
+        tick2.contains(
+            "pending groups:\n? k8s.deployment.dform_controller x unknown, on \
+             ?gke_nodepool/np-us-east1-b#instance_group, resolves after tick 2  \
+             (reads node_pool_up(\"np-us-east1-b\"), which is stuck)\n"
+        ),
+        "{}",
+        r.stdout
+    );
+    assert!(
+        tick2.contains("tick 3 [k8s.deployment.dform_controller]"),
+        "{tick2}"
+    );
+    assert!(r.stdout.ends_with("apply: complete\n"), "{}", r.stdout);
+    let world = s.read(".dform/renfry.bootstrap/remote.json");
+    assert!(world.contains("\"dform-controller\""), "{world}");
+}
+
 #[test]
 fn bootstrap_handover_and_the_controller_runs_the_workload() {
     let s = demo("bootstrap");

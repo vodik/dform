@@ -21,6 +21,9 @@ pub struct EvalResult {
     /// Rule instances that need a null's content (E §2.7 Rule 2) or read
     /// something undetermined (Rule 3); also derived as `stuck/4`.
     pub stuck: Vec<Stuck>,
+    /// Rule instances that may derive after a boundary: a positive read of
+    /// a predicate with a stuck instance (F DR-2 revised, last clause).
+    pub may_derive: Vec<stuck::MayDerive>,
     /// Provenance (E §3.1, DR-10): every fact above has a node here.
     pub circuit: Circuit,
     /// Work done: index lookups plus tuples read (a deterministic cost
@@ -619,6 +622,7 @@ fn finish(c: &Compiled, st: State) -> Result<(EvalResult, Vec<String>)> {
     for f in record_stucks(c, &mut prov, &stucks) {
         facts.insert(f);
     }
+    let may_derive = may_derive(c, &prov, &known, &stucks)?;
 
     let reads = prov.store.reads.get();
     Ok((
@@ -626,11 +630,117 @@ fn finish(c: &Compiled, st: State) -> Result<(EvalResult, Vec<String>)> {
             facts,
             warnings,
             stuck: stucks,
+            may_derive,
             circuit: prov.circuit,
             reads,
         },
         violations,
     ))
+}
+
+/// F DR-2 revised, last clause, for every rule: an instance whose body
+/// positively reads a predicate with a stuck instance may derive after the
+/// boundary that resolves it. Per rule and read position: the literals
+/// before the read are evaluated (Rule 2 and 3 as they ran), the read is
+/// matched against the stuck heads under those bindings, and the head is
+/// instantiated with what that binds; the literals after it are not asked
+/// (the answer over-approximates). A head found this way is read the same
+/// way in turn, so a helper of a helper is found. A rule with a stuck
+/// instance is already reported as one, and a ground head already derived
+/// adds nothing.
+fn may_derive(
+    c: &Compiled,
+    prov: &Prov,
+    known: &RefCell<stuck::Known>,
+    stucks: &[Stuck],
+) -> Result<Vec<stuck::MayDerive>> {
+    if stucks.is_empty() {
+        return Ok(Vec::new());
+    }
+    let hi = prov.store.len();
+    let all = Window::below(hi);
+    let mut heads = stuck::Known::default();
+    for s in stucks {
+        heads.add(s);
+    }
+    let stuck_rules: BTreeSet<usize> = stucks.iter().filter_map(|s| s.rule).collect();
+    let constraint_rules: Vec<RuleStmt> = c
+        .constraints
+        .iter()
+        .map(partition::constraint_rule)
+        .collect();
+    let bodies: Vec<(&RuleStmt, &ops::Body)> = c
+        .rules
+        .iter()
+        .zip(c.plans.iter().map(|p| &p.body))
+        .chain(constraint_rules.iter().zip(&c.constraint_bodies))
+        .collect();
+    let mut out: Vec<stuck::MayDerive> = Vec::new();
+    let mut transitive: BTreeSet<Atom> = BTreeSet::new();
+    loop {
+        let before = out.len();
+        for (i, (r, body)) in bodies.iter().enumerate() {
+            if stuck_rules.contains(&i) || r.head.pred.starts_with("__") {
+                continue;
+            }
+            for (j, lit) in r.body.iter().enumerate() {
+                let Lit::Pos(a) = lit else { continue };
+                if !heads.has_pred(&a.pred) {
+                    continue;
+                }
+                // The prefix as it ran; what it finds stuck is already known.
+                let rec = Rec {
+                    rule: i,
+                    head: &r.head,
+                    text: "",
+                    known,
+                    aggregates: &c.aggregates,
+                    found: RefCell::new(Vec::new()),
+                };
+                let src = Src {
+                    store: &prov.store,
+                    body,
+                    win: vec![all; r.body.len()],
+                    all,
+                };
+                for row in eval_body(&r.body[..j], &src, &rec)? {
+                    let pat = stuck::as_read(&read_pattern(a, &row.s));
+                    for (read, nulls) in heads.matching(&pat) {
+                        let mut s = row.s.clone();
+                        for (t, v) in a.args.iter().zip(&read.args) {
+                            if let (Term::Var(x), Term::Val(v)) = (t, v) {
+                                s.entry(x.clone()).or_insert_with(|| v.clone());
+                            }
+                        }
+                        let head = stuck::head_pattern(&r.head, &s, eval_term);
+                        let ground = head.args.iter().all(|t| matches!(t, Term::Val(_)));
+                        if ground && prov.store.id(&head).is_some() {
+                            continue;
+                        }
+                        let m = stuck::MayDerive {
+                            rule: i,
+                            head,
+                            nulls,
+                            transitive: transitive.contains(&read),
+                            reads: read,
+                        };
+                        if !out.contains(&m) {
+                            out.push(m);
+                        }
+                    }
+                }
+            }
+        }
+        if out.len() == before {
+            break;
+        }
+        for m in &out[before..] {
+            heads.add_head(&m.head, &m.nulls);
+            transitive.insert(stuck::as_read(&m.head));
+        }
+    }
+    out.sort();
+    Ok(out)
 }
 
 /// `stuck(RuleId, HeadPattern, Bindings, Nulls)` for each instance, with
@@ -3696,7 +3806,7 @@ mod tests {
             .into_iter()
             .map(|d| ((d.addr.typ, d.addr.name), d.attrs))
             .collect();
-        let sections = stuck::sections(&r.stuck, &r.facts, &docs, schema);
+        let sections = stuck::sections(&r.stuck, &r.may_derive, &r.facts, &docs, schema);
         (r, violations, sections)
     }
 
@@ -3807,6 +3917,68 @@ mod tests {
             "{:?}",
             r.stuck
         );
+    }
+
+    /// F DR-2 revised, last clause, for a resource rule: a rule that
+    /// positively reads a helper with a stuck instance derives nothing yet
+    /// and may derive after the boundary; so may a reader of that reader.
+    /// Only the helper's instance the rule's key reads is named.
+    #[test]
+    fn a_resource_rule_reading_a_stuck_helper_may_derive() {
+        let (r, violations) = run_with(
+            r#"resource db.postgres a {}.
+               resource db.postgres b {}.
+               up(D) :- attr(db.postgres, D, .endpoint, E), E != "".
+               ready(V) :- up(V).
+               resource net.subnet s { cidr = "10.0.1.0/24" } :- up("a").
+               resource net.subnet t { cidr = "10.0.2.0/24" } :- ready("b")."#,
+            &crate::schema::fake().facts,
+        )
+        .unwrap();
+        assert!(violations.is_empty(), "{violations:?}");
+        assert!(
+            facts_of(&r, "want")
+                .iter()
+                .all(|w| !w.contains("net.subnet"))
+        );
+        let may: Vec<String> = r
+            .may_derive
+            .iter()
+            .map(|m| {
+                format!(
+                    "{} {} ({})",
+                    partition::fmt_atom(&m.head),
+                    m.nulls_text(),
+                    m.reason()
+                )
+            })
+            .collect();
+        assert!(
+            may.contains(&r#"want("net.subnet", "s") ?db.postgres/a#endpoint (reads up("a"), which is stuck)"#.to_string()),
+            "{may:#?}"
+        );
+        assert!(
+            may.contains(&r#"want("net.subnet", "t") ?db.postgres/b#endpoint (reads ready("b"), which may derive after a boundary)"#.to_string()),
+            "{may:#?}"
+        );
+        assert!(
+            !may.iter()
+                .any(|m| m.contains("db.postgres/b#") && m.contains("\"s\"")),
+            "{may:#?}"
+        );
+        let docs = crate::ir::compile_resources(r.facts.iter().cloned(), &crate::schema::fake())
+            .unwrap()
+            .into_iter()
+            .map(|d| ((d.addr.typ, d.addr.name), d.attrs))
+            .collect();
+        let s = stuck::sections(
+            &r.stuck,
+            &r.may_derive,
+            &r.facts,
+            &docs,
+            &crate::schema::fake(),
+        );
+        assert_eq!(s.pending_groups.len(), 2, "{:?}", s.pending_groups);
     }
 
     /// adv2: per-key Rule 3. An unrelated negation and an unrelated

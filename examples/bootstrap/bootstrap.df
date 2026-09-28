@@ -61,10 +61,13 @@ resource k8s.namespace dform_system {
   metadata.name = "dform-system"
 }.
 
+# A node pool is up once it has an instance group. Apply gives it, so the
+# comparison is decided the tick after the pool is created.
+node_pool_up(Np) :- attr(gke_nodepool, Np, .instance_group, G), G != "".
+
 # dform in the cluster, running the workload stack: it lands on the first
-# zone's node pool once that pool is up, which is once it has an instance
-# group. Apply gives it, so the comparison is decided the tick after the
-# pool is created.
+# zone's node pool once that pool is up. Until then the rule may derive
+# after the boundary, and the plan holds it as a pending group.
 resource k8s.deployment dform_controller {
   metadata.name = "dform-controller"
   metadata.namespace = ref(k8s.namespace, dform_system, .metadata.name)
@@ -81,7 +84,6 @@ resource k8s.deployment dform_controller {
   arg(gke_cluster, renfry, .zones, Zs),
   member(Zs, 0, Z),
   Pool = format("np-%s", Z),
-  attr(gke_nodepool, Pool, .instance_group, G),
-  G != "".
+  node_pool_up(Pool).
 
 output endpoint = ref(gke_cluster, renfry, .endpoint).

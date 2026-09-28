@@ -14,14 +14,14 @@
 //! a sensitive path as `(sensitive LABEL)`. Nothing here formats a
 //! sensitive value's bytes.
 
-use crate::ast::{Atom, Lit, Program, Stmt, Term};
+use crate::ast::{Atom, Program, Term};
 use crate::engine::EvalResult;
 use crate::ir::Address;
 use crate::partition::{fmt_atom, fmt_value};
 use crate::provider::{Action, ActionKind, Change, NULL_KEY, Plan, marker};
 use crate::query::Redactor;
 use crate::schema::Schema;
-use crate::stuck::{self, Known, Sections, Stuck};
+use crate::stuck::{Sections, Stuck};
 use crate::value::{Value, null_owner};
 use serde_json::{Value as Json, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -329,7 +329,7 @@ pub fn report(i: &Input) -> Report {
         })
         .collect();
 
-    let groups = groups(&i.res.stuck, &tick_of, &resolves);
+    let groups = groups(i.res, &tick_of, &resolves);
     let policies = policies(i, &tick_of, &resolves);
 
     let mut ticks: BTreeMap<usize, Vec<String>> = BTreeMap::new();
@@ -366,7 +366,8 @@ pub fn report(i: &Input) -> Report {
         && held.is_empty()
         && conflicts.is_empty()
         && i.sections.blocking.is_empty()
-        && i.sections.undetermined.is_empty();
+        && i.sections.undetermined.is_empty()
+        && i.sections.pending_groups.is_empty();
     let classes = pending
         .iter()
         .flat_map(|b| b.on.iter())
@@ -408,15 +409,26 @@ fn nulls(s: &Stuck) -> Vec<String> {
     s.nulls.iter().cloned().collect()
 }
 
-/// Stuck resource rules: a group of unknown cardinality.
+/// Stuck resource rules, and resource rules that may derive after a
+/// boundary: a group of unknown cardinality.
 fn groups(
-    stuck: &[Stuck],
+    res: &EvalResult,
     tick_of: &BTreeMap<(String, String), usize>,
     resolves: &Resolves,
 ) -> Vec<Group> {
+    let stuck = res
+        .stuck
+        .iter()
+        .filter(|s| s.head.pred == "want")
+        .map(|s| (&s.head, nulls(s), s.reason.clone()));
+    let may = res
+        .may_derive
+        .iter()
+        .filter(|m| m.head.pred == "want")
+        .map(|m| (&m.head, m.nulls.iter().cloned().collect(), m.reason()));
     let mut out: Vec<Group> = Vec::new();
-    for s in stuck.iter().filter(|s| s.head.pred == "want") {
-        let pattern = match s.head.args.as_slice() {
+    for (head, on, reason) in stuck.chain(may) {
+        let pattern = match head.args.as_slice() {
             [Term::Val(Value::Str(t)), a] => {
                 let a = match a {
                     Term::Val(v) => fmt_value(v).trim_matches('"').to_string(),
@@ -424,14 +436,13 @@ fn groups(
                 };
                 format!("{t}.{a}")
             }
-            _ => fmt_atom(&s.head),
+            _ => fmt_atom(head),
         };
-        let on = nulls(s);
         let g = Group {
             pattern,
             resolves_after: resolves(&on, tick_of),
             on,
-            reason: s.reason.clone(),
+            reason,
         };
         if !out
             .iter()
@@ -477,33 +488,18 @@ fn policies(
     }
     out.sort_by(|a, b| (&a.message, &a.on).cmp(&(&b.message, &b.on)));
 
-    let mut known = Known::default();
-    for s in &i.res.stuck {
-        known.add(s);
-    }
-    let Ok(lowered) = crate::transform::lower(i.program) else {
-        return out;
-    };
-    let denies = lowered.program.statements.iter().filter_map(|s| match s {
-        Stmt::Rule(r) if r.head.pred == "deny" => Some((deny_message(&r.head), &r.body)),
-        Stmt::Constraint(c) => Some((c.message.clone(), &c.body)),
-        _ => None,
-    });
-    let mut may: Vec<Policy> = Vec::new();
-    for (message, body) in denies {
+    let mut found: BTreeMap<String, (BTreeSet<String>, Vec<String>)> = BTreeMap::new();
+    for m in i.res.may_derive.iter().filter(|m| m.head.pred == "deny") {
+        let message = deny_message(&m.head);
         if out.iter().any(|p| p.message == message) {
             continue;
         }
-        let mut on = BTreeSet::new();
-        let mut reads = Vec::new();
-        for l in body {
-            let Lit::Pos(a) = l else { continue };
-            let pat = stuck::as_read(a);
-            for (head, nulls) in known.matching(&pat) {
-                on.extend(nulls);
-                reads.push(fmt_atom(&head));
-            }
-        }
+        let (on, reads) = found.entry(message).or_default();
+        on.extend(m.nulls.iter().cloned());
+        reads.push(fmt_atom(&m.reads));
+    }
+    let mut may: Vec<Policy> = Vec::new();
+    for (message, (on, mut reads)) in found {
         if on.is_empty() {
             continue;
         }
