@@ -11,6 +11,7 @@ pub mod lint;
 pub mod loader;
 pub mod parser;
 pub mod partition;
+pub mod plan_print;
 pub mod provider;
 pub mod query;
 pub mod schema;

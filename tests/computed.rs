@@ -44,7 +44,7 @@ fn a_fresh_stack_carries_nulls_until_apply() {
         .success();
     assert_eq!(
         r.summary(),
-        "plan: 0 to create, 0 to update, 0 to delete, 14 no-op",
+        "plan: 0 deformations, 14 no-op",
         "{}",
         r.stdout
     );
@@ -118,7 +118,7 @@ fn secrets_are_labels_and_print_redacted() {
     let steady = run("plan");
     assert_eq!(
         steady.summary(),
-        "plan: 0 to create, 0 to update, 0 to delete",
+        "stack p is undeformed",
         "{}",
         steady.stdout
     );
@@ -184,7 +184,7 @@ resource vm c { peer_zone = ref(vm, a, zone), other_zone = ref(vm, b, zone) }.
     let steady = run("plan");
     assert_eq!(
         steady.summary(),
-        "plan: 0 to create, 0 to update, 0 to delete",
+        "stack p is undeformed",
         "{}",
         steady.stdout
     );

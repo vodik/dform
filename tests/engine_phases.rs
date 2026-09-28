@@ -4,7 +4,8 @@
 mod common;
 use common::{Scratch, repo};
 
-const GKE_PLAN: &str = r#"plan: 3 to create, 0 to update, 0 to delete, 3 pending
+const GKE_PLAN: &str = r#"plan: 3 deformations (3 create), 4 pending, 1 undetermined
+definite:
 + google_compute_subnetwork.gke_subnet
   ip_cidr_range = "10.141.76.0/22"
   name = "renfry-dev-gke-subnet"
@@ -26,7 +27,7 @@ const GKE_PLAN: &str = r#"plan: 3 to create, 0 to update, 0 to delete, 3 pending
   project = "renfry-dev-973682"
   region = "us-east1"
   subnetwork_id = ?google_compute_subnetwork/gke_subnet#id
-pending on ?gke_cluster/pngu#ca_certificate ?gke_cluster/pngu#endpoint:
+pending on ?gke_cluster/pngu#ca_certificate ?gke_cluster/pngu#endpoint (resolves after tick 1):
 + k8s.deployment.api
   image = "gcr.io/renfry/api:1.42"
   namespace = "pngu"
@@ -37,13 +38,15 @@ pending on ?gke_cluster/pngu#ca_certificate ?gke_cluster/pngu#endpoint:
   data.password = (sensitive google.secret_manager_secret_version/db_pw#secret_data)
   namespace = "pngu"
 pending groups:
-? want("gke_nodepool", _) x unknown, on ?gke_cluster/pngu#zones  (member/2 over a null list)
+? gke_nodepool.? x unknown, on ?gke_cluster/pngu#zones, resolves after tick 1  (member/2 over a null list)
 undetermined:
-? deny "cluster must be in at least two zones" on ?gke_cluster/pngu#zones  (reads undetermined aggregate zone_count)
+? deny "cluster must be in at least two zones" on ?gke_cluster/pngu#zones, decided after tick 1  (reads undetermined aggregate zone_count)
+apply order: tick 1 [google_compute_subnetwork.gke_subnet gke_cluster.pngu google_compute_address.static_ip] tick 2 [k8s.deployment.api k8s.namespace.pngu k8s.secret.db_credentials gke_nodepool.?]
 "#;
 
 /// Three definite, three pending on the kubernetes provider's configuration,
-/// one pending group, one undetermined policy (E §7.4, F 4.4 per key).
+/// one pending group, one undetermined policy, and the apply order (E §7.4,
+/// F 4.4 per key).
 #[test]
 fn gke_two_phase_plans_in_sections() {
     let s = Scratch::new("gke-sections");
@@ -76,10 +79,7 @@ fn apply_then_replan_is_undeformed() {
     assert!(!first.stdout.contains("undeformed"), "{}", first.stdout);
     run("apply");
     let again = run("plan");
-    assert_eq!(
-        again.stdout,
-        "plan: 0 to create, 0 to update, 0 to delete\nstack dform is undeformed\n"
-    );
+    assert_eq!(again.stdout, "stack dform is undeformed\n");
 }
 
 fn gke(s: &Scratch, file: &str, extra: &[&str]) -> common::Run {
@@ -114,13 +114,13 @@ fn gke_two_phase_applies_in_two_ticks() {
     let r = gke(&s, "gke_two_phase.df", &["apply"]).success();
     assert!(
         r.stdout
-            .contains("tick 1:\nplan: 3 to create, 0 to update, 0 to delete, 3 pending\n"),
+            .contains("tick 1:\nplan: 3 deformations (3 create), 4 pending, 1 undetermined\n"),
         "{}",
         r.stdout
     );
     assert!(
         r.stdout
-            .contains("tick 2:\nplan: 5 to create, 0 to update, 0 to delete\n"),
+            .contains("tick 2:\nplan: 5 deformations (5 create)\n"),
         "{}",
         r.stdout
     );
@@ -142,7 +142,7 @@ fn gke_two_phase_applies_in_two_ticks() {
     let again = gke(&s, "gke_two_phase.df", &["apply"]).success();
     assert_eq!(
         again.stdout,
-        "plan: 0 to create, 0 to update, 0 to delete\nstack gke_two_phase is undeformed\napply: nothing to do\n"
+        "stack gke_two_phase is undeformed\napply: nothing to do\n"
     );
 }
 
@@ -205,12 +205,12 @@ fn a_pending_update_applies_after_the_boundary() {
     let r = s.run(&[&args[..], &["apply"]].concat()).success();
     assert!(
         r.stdout
-            .contains("tick 1:\nplan: 1 to create, 0 to update, 0 to delete, 1 pending\n"),
+            .contains("tick 1:\nplan: 1 deformation (1 create), 1 pending\n"),
         "{}",
         r.stdout
     );
     assert!(
-        r.stdout.contains("tick 2:\nplan: 0 to create, 1 to update, 0 to delete\n~ compute.vm.app\n  db_host: \"old.db.fake\" -> \"main.db.fake\"\n"),
+        r.stdout.contains("tick 2:\nplan: 1 deformation (1 update)\ndefinite:\n~ compute.vm.app\n  db_host: \"old.db.fake\" -> \"main.db.fake\"\n"),
         "{}",
         r.stdout
     );

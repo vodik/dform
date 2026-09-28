@@ -1,5 +1,4 @@
 exit: ok
 -- stdout --
-plan: 0 to create, 0 to update, 0 to delete
 stack decl_demo is undeformed
 -- stderr --

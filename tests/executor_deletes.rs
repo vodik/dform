@@ -68,8 +68,9 @@ fn a_force_new_change_replaces_destroying_first() {
     let r = dform(&s, &["apply"]).success();
     assert_eq!(
         r.stdout,
-        "plan: 0 to create, 0 to update, 0 to delete, 1 to replace\n\
+        "plan: 1 deformation (1 replace)\ndefinite:\n\
          -/+ net.vpc.main  (replace)\n  cidr: \"10.0.0.0/16\" -> \"10.1.0.0/16\"\n\
+         apply order: tick 1 [net.vpc.main]\n\
          apply: complete\n"
     );
     let w = json(&s, "w.json");
@@ -112,7 +113,7 @@ fn create_before_destroy_deposes_the_old_object_until_dependents_move() {
     let r = dform(&s, &["apply"]).success();
     assert!(
         r.stdout.contains(
-            "plan: 0 to create, 1 to update, 1 to delete\n\
+            "plan: 2 deformations (1 update, 1 delete)\ndefinite:\n\
              ~ net.subnet.a\n  vpc_id: \"net.vpc:main\" -> \"net.vpc:main-2\"\n\
              - net.vpc.main  (deposed)\n  cidr was \"10.0.0.0/16\"\n"
         ),
@@ -154,13 +155,13 @@ fn create_before_destroy_in_one_apply_takes_two_ticks() {
     let r = dform(&s, &["apply"]).success();
     assert!(
         r.stdout
-            .starts_with("tick 1:\nplan: 0 to create, 0 to update, 0 to delete, 1 to replace\n"),
+            .starts_with("tick 1:\nplan: 1 deformation (1 replace)\n"),
         "{}",
         r.stdout
     );
     assert!(
         r.stdout
-            .contains("tick 2:\nplan: 0 to create, 1 to update, 1 to delete\n"),
+            .contains("tick 2:\nplan: 2 deformations (1 update, 1 delete)\n"),
         "{}",
         r.stdout
     );

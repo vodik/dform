@@ -30,7 +30,7 @@ fn optional_computed_is_a_constant_when_set_and_a_null_when_not() {
     let r = run(&s, &args, "plan").success();
     assert_eq!(
         r.summary(),
-        "plan: 7 to create, 0 to update, 0 to delete",
+        "plan: 7 deformations (7 create)",
         "{}",
         r.stdout
     );
@@ -81,12 +81,7 @@ fn optional_computed_is_a_constant_when_set_and_a_null_when_not() {
     );
 
     let r = run(&s, &args, "plan").success();
-    assert_eq!(
-        r.summary(),
-        "plan: 0 to create, 0 to update, 0 to delete",
-        "{}",
-        r.stdout
-    );
+    assert_eq!(r.summary(), "stack aws_demo is undeformed", "{}", r.stdout);
 }
 
 #[test]
@@ -103,12 +98,7 @@ fn keyless_sets_ignore_order() {
     ingress.reverse();
     s.write("w.json", &serde_json::to_string_pretty(&w).unwrap());
     let r = run(&s, &args, "plan").success();
-    assert_eq!(
-        r.summary(),
-        "plan: 0 to create, 0 to update, 0 to delete",
-        "{}",
-        r.stdout
-    );
+    assert_eq!(r.summary(), "stack aws_demo is undeformed", "{}", r.stdout);
 
     // Someone opened port 22 by hand: an update of the set.
     let mut w: serde_json::Value = serde_json::from_str(&s.read("w.json")).unwrap();
@@ -120,7 +110,7 @@ fn keyless_sets_ignore_order() {
     let r = run(&s, &args, "plan").success();
     assert_eq!(
         r.summary(),
-        "plan: 0 to create, 1 to update, 0 to delete",
+        "plan: 1 deformation (1 update)",
         "{}",
         r.stdout
     );

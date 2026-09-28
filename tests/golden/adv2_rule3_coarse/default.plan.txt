@@ -1,5 +1,12 @@
 exit: error
 -- stdout --
+plan: 2 deformations (2 create)
+definite:
++ gke_cluster.pngu
+  name = "pngu-gke"
++ k8s.namespace.pngu
+  name = "pngu"
+apply order: tick 1 [gke_cluster.pngu k8s.namespace.pngu]
 -- stderr --
 constraint violations:
 - namespace without deployment ctx={"ns":"pngu"}

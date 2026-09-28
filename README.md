@@ -118,19 +118,34 @@ cargo run -- plan
 ```
 
 The plan is the Z-set `desired - world` (proposal E §2.8): per address a
-create, a delete, an update, or nothing. What cannot be decided yet is said so:
+create, a delete, an update, or nothing. The first line counts it in those
+terms, `plan: 3 deformations (2 create, 1 update), 4 pending, 1 undetermined`,
+and the sections follow in this order; what cannot be decided yet is said so:
 
-- `pending on ?nulls:` lists deformations held until those nulls resolve:
-  downstream of an Apply that resolves a null something is stuck on, or an
-  update whose new value is an open null against the world's value. Their
-  diffs are shown now.
-- `pending groups:` lists resource rules stuck on a null (`want(gke_nodepool, _)
-  x unknown, on ?gke_cluster/pngu#zones`): how many there will be is not known.
-- `undetermined:` lists policies that cannot be decided yet. They are never
-  reported as satisfied.
+- `definite:` deformations that run in this tick, grouped by resource: `+`
+  create, `~` update, `-` delete, `>` adopt. An update diffs a keyless set, or
+  a list with merge keys (`containers[name=web]`), by element: an element that
+  is new or gone is one `+`/`-` line with its leaves, not every later index
+  shifting. Map leaves print one per line.
+- `pending on ?nulls (resolves after tick N):` deformations held until those
+  nulls resolve: downstream of an Apply that resolves a null something is
+  stuck on, or an update whose new value is an open null against the world's
+  value. Their diffs are shown now. The hint appears when the nulls' owners
+  are scheduled by this plan.
+- `pending groups:` resource rules stuck on a null (`gke_nodepool.? x
+  unknown, on ?gke_cluster/pngu#zones`): how many there will be is not known.
+- `undetermined:` policies that cannot be decided yet, `decided after tick
+  N`; and denies that read a predicate with a stuck instance, which `may
+  derive after tick N`. They are never reported as satisfied.
+- `shadowed:` contributions at a losing rank that disagree (a warning), and
+  `conflicts:` cells whose contributions disagree at the winning rank, each
+  naming the resource, the path and every witness. A conflicted address is not
+  a deformation; the plan still prints, then refuses with the deny.
+- `apply order: tick 1 [...] tick 2 [...]`: which tick each deformation runs
+  in, from the dependency DAG and the nulls it waits on.
 - `(drift: ...)` marks an update where a fresh null meets a value the world
   already has: the identity mapping is stale.
-- `stack NAME is undeformed`: nothing to do, nothing stuck.
+- `stack NAME is undeformed`: nothing to do, nothing stuck (the only line).
 
 `cargo run -- query stuck` lists the stuck rule instances.
 

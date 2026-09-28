@@ -1,6 +1,7 @@
 exit: ok
 -- stdout --
-plan: 16 to create, 0 to update, 0 to delete
+plan: 16 deformations (16 create)
+definite:
 + net.route.rt-core_a-core_b
   destination = "10.220.0.0/16"
   from = "core_a"
@@ -59,6 +60,7 @@ plan: 16 to create, 0 to update, 0 to delete
 + net.vpc_peering.mesh-peer-core_b-core_c
   accepter_vpc_id = ?net.vpc/core_c#id
   requester_vpc_id = ?net.vpc/core_b#id
+apply order: tick 1 [net.route.rt-core_a-core_b net.route.rt-core_a-core_c net.route.rt-core_b-core_a net.route.rt-core_b-core_c net.route.rt-core_c-core_a net.route.rt-core_c-core_b net.route.rt-shared-tenant_a net.route.rt-tenant_a-shared net.vpc.core_a net.vpc.core_b net.vpc.core_c net.vpc.shared net.vpc.tenant_a net.vpc.tenant_b net.vpc_peering.mesh-peer-core_a-core_b net.vpc_peering.mesh-peer-core_b-core_c]
 -- stderr --
 warning: mesh has direct route between non-adjacent nodes ctx={"from":"core_a","to":"core_c"}
 warning: mesh has direct route between non-adjacent nodes ctx={"from":"core_c","to":"core_a"}

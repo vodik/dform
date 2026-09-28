@@ -10,7 +10,8 @@ use dform::graph;
 use dform::ir;
 use dform::loader;
 use dform::partition;
-use dform::provider::{ActionKind, Provider, fmt_value};
+use dform::plan_print::{self, waits_on};
+use dform::provider::{ActionKind, Provider};
 use dform::query;
 use dform::schema;
 use dform::state;
@@ -187,18 +188,47 @@ fn main() -> Result<()> {
     for w in &res.warnings {
         eprintln!("warning: {w}");
     }
-    if !violations.is_empty() {
+    let blocked = |violations: &[String]| -> Result<()> {
+        if violations.is_empty() {
+            return Ok(());
+        }
         eprintln!("constraint violations:");
         for v in violations {
             eprintln!("- {v}");
         }
         bail!("blocked by constraints");
+    };
+    // A plan prints what it would do, conflicts included (E §2.8: a
+    // conflict is a fact, not an abort), and then refuses.
+    if !matches!(cli.cmd, Cmd::Plan) {
+        blocked(&violations)?;
     }
 
     let resources = ir::compile_resources(res.facts.iter().cloned(), backend.schema())?;
     let stack = state::stack_name(&files[0]);
     let adopts = ir::compile_adopts(res.facts.iter())?;
     let lifecycle = zset::Lifecycle::from_facts(&res.facts)?;
+    let schema = backend.schema();
+    let show = |plan: &dform::provider::Plan,
+                res: &engine::EvalResult,
+                sections: &stuck::Sections,
+                tick: usize,
+                moved: &[(ir::Address, ir::Address)],
+                denies: &[String]| {
+        let report = plan_print::report(&plan_print::Input {
+            plan,
+            res,
+            sections,
+            program: &program,
+            schema,
+            stack: &stack,
+            show_noop: cli.show_noop,
+            tick,
+            moved,
+            denies,
+        });
+        print!("{}", report.text());
+    };
 
     match cli.cmd {
         Cmd::Eval => {
@@ -271,16 +301,9 @@ fn main() -> Result<()> {
         Cmd::Plan => {
             let sections = plan_sections(&res, &resources, backend.schema());
             let plan = backend.plan(&resources, &adopts, &lifecycle, &st)?;
-            print_moves(&moves);
-            print_plan(&plan, cli.show_noop, &sections, &stack);
             let denies = lifecycle.denies(&plan.actions);
-            if !denies.is_empty() {
-                eprintln!("constraint violations:");
-                for d in denies {
-                    eprintln!("- {d}");
-                }
-                bail!("blocked by constraints");
-            }
+            show(&plan, &res, &sections, 1, &moves, &denies);
+            blocked(&[violations, denies].concat())?;
         }
         Cmd::Apply {
             max_ticks,
@@ -361,8 +384,8 @@ fn main() -> Result<()> {
                 if tick > 1 || boundary {
                     println!("tick {tick}:");
                 }
-                print_plan(&plan, cli.show_noop, &sections, &stack);
                 let denies = lifecycle.denies(&plan.actions);
+                show(&plan, &res, &sections, tick, &[], &denies);
                 if !denies.is_empty() {
                     eprintln!("constraint violations:");
                     for d in denies {
@@ -455,9 +478,7 @@ fn main() -> Result<()> {
 
 /// `moved/3` rewrites applied to state before the plan.
 fn print_moves(moves: &[(ir::Address, ir::Address)]) {
-    for (old, new) in moves {
-        println!("moved {}.{} -> {}.{}", old.typ, old.name, new.typ, new.name);
-    }
+    print!("{}", plan_print::moved_text(moves));
 }
 
 /// `dform strata`: the partition graph's strata, or the negative cycle.
@@ -528,170 +549,6 @@ fn plan_sections(
         .map(|r| ((r.addr.typ.clone(), r.addr.name.clone()), r.attrs.clone()))
         .collect();
     stuck::sections(&res.stuck, &res.facts, &docs, schema)
-}
-
-/// What a deformation waits on: a boundary (the evaluator's sections), or
-/// a comparison against an open null (the Z-set's pending update). `None`
-/// when it is definite.
-fn waits_on(a: &dform::provider::Action, sections: &stuck::Sections) -> Option<Vec<String>> {
-    let key = (a.addr.typ.clone(), a.addr.name.clone());
-    let on: Vec<String> = match (sections.pending.get(&key), &a.kind) {
-        (Some(ns), _) => ns.iter().cloned().collect(),
-        (None, ActionKind::Pending) => a.on.iter().cloned().collect(),
-        (None, _) => return None,
-    };
-    Some(on)
-}
-
-fn print_plan(
-    plan: &dform::provider::Plan,
-    show_noop: bool,
-    sections: &stuck::Sections,
-    stack: &str,
-) {
-    let (held, plan_actions): (Vec<dform::provider::Action>, Vec<_>) = plan
-        .actions
-        .iter()
-        .cloned()
-        .partition(|a| waits_on(a, sections).is_some());
-    let mut creates = 0usize;
-    let mut adopts = 0usize;
-    let mut updates = 0usize;
-    let mut deletes = 0usize;
-    let mut replaces = 0usize;
-    let mut noops = 0usize;
-    for a in &plan_actions {
-        match a.kind {
-            ActionKind::Create => creates += 1,
-            ActionKind::Adopt => adopts += 1,
-            ActionKind::Update | ActionKind::Drift => updates += 1,
-            ActionKind::Delete | ActionKind::DeleteDeposed => deletes += 1,
-            ActionKind::Replace { .. } => replaces += 1,
-            ActionKind::Noop => noops += 1,
-            ActionKind::Pending => {}
-        }
-    }
-
-    let mut suffix = String::new();
-    if replaces > 0 {
-        suffix.push_str(&format!(", {replaces} to replace"));
-    }
-    if adopts > 0 {
-        suffix.push_str(&format!(", {adopts} to adopt"));
-    }
-    if show_noop {
-        suffix.push_str(&format!(", {noops} no-op"));
-    }
-    if !held.is_empty() {
-        suffix.push_str(&format!(", {} pending", held.len()));
-    }
-    println!("plan: {creates} to create, {updates} to update, {deletes} to delete{suffix}");
-    print_actions(&plan_actions, show_noop);
-
-    // Held for a boundary, grouped by what they wait on; their diffs are
-    // shown now.
-    let mut by_nulls: std::collections::BTreeMap<String, Vec<dform::provider::Action>> =
-        Default::default();
-    for a in held.iter().cloned() {
-        let on = waits_on(&a, sections)
-            .unwrap_or_default()
-            .iter()
-            .map(|n| format!("?{n}"))
-            .collect::<Vec<_>>()
-            .join(" ");
-        by_nulls.entry(on).or_default().push(a);
-    }
-    for (on, actions) in by_nulls {
-        println!("pending on {on}:");
-        print_actions(&actions, true);
-    }
-    if !sections.pending_groups.is_empty() {
-        println!("pending groups:");
-        for g in &sections.pending_groups {
-            println!("? {g}");
-        }
-    }
-    if !sections.undetermined.is_empty() {
-        println!("undetermined:");
-        for u in &sections.undetermined {
-            println!("? {u}");
-        }
-    }
-    // E §2.7: undeformed is the zero Z-set, nothing stuck, no cell stuck.
-    let zero = plan_actions
-        .iter()
-        .all(|a| matches!(a.kind, ActionKind::Noop));
-    if zero && held.is_empty() && sections.blocking.is_empty() && sections.undetermined.is_empty() {
-        println!("stack {stack} is undeformed");
-    }
-}
-
-fn print_actions(actions: &[dform::provider::Action], show_noop: bool) {
-    for a in actions {
-        if matches!(a.kind, ActionKind::Noop) && !show_noop {
-            continue;
-        }
-        let prefix = match a.kind {
-            ActionKind::Create => "+",
-            ActionKind::Adopt => ">",
-            ActionKind::Update | ActionKind::Drift | ActionKind::Pending => "~",
-            ActionKind::Delete | ActionKind::DeleteDeposed => "-",
-            ActionKind::Replace {
-                create_first: false,
-            } => "-/+",
-            ActionKind::Replace { create_first: true } => "+/-",
-            ActionKind::Noop => "=",
-        };
-        let note = match a.kind {
-            ActionKind::Drift => {
-                "  (drift: a fresh null where the world has a value; its identity is stale)"
-            }
-            ActionKind::DeleteDeposed => "  (deposed)",
-            ActionKind::Replace { .. } => "  (replace)",
-            _ => "",
-        };
-        println!("{prefix} {}.{}{note}", a.addr.typ, a.addr.name);
-
-        if a.changes.is_empty() {
-            continue;
-        }
-
-        // Keep plan output readable.
-        let max = 40usize;
-        for (i, ch) in a.changes.iter().enumerate() {
-            if i == max {
-                println!("  ... ({} more changes)", a.changes.len() - max);
-                break;
-            }
-            let side = |v: Option<&serde_json::Value>| {
-                if ch.sensitive && v.is_some() {
-                    "(sensitive)".to_string()
-                } else {
-                    fmt_value(v)
-                }
-            };
-            match a.kind {
-                ActionKind::Create | ActionKind::Adopt => {
-                    println!("  {} = {}", ch.path, side(ch.after.as_ref()));
-                }
-                ActionKind::Delete | ActionKind::DeleteDeposed => {
-                    println!("  {} was {}", ch.path, side(ch.before.as_ref()));
-                }
-                ActionKind::Update
-                | ActionKind::Drift
-                | ActionKind::Pending
-                | ActionKind::Replace { .. } => {
-                    println!(
-                        "  {}: {} -> {}",
-                        ch.path,
-                        side(ch.before.as_ref()),
-                        side(ch.after.as_ref())
-                    );
-                }
-                ActionKind::Noop => {}
-            }
-        }
-    }
 }
 
 fn load_schema(providers: &[String]) -> Result<schema::Schema> {

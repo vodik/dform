@@ -54,12 +54,7 @@ fn k8s_demo_plans_against_the_mock() {
         "ClusterIP"
     );
     let r = s.run(&[&args[..], &["plan"]].concat()).success();
-    assert_eq!(
-        r.summary(),
-        "plan: 0 to create, 0 to update, 0 to delete",
-        "{}",
-        r.stdout
-    );
+    assert_eq!(r.summary(), "stack k8s_demo is undeformed", "{}", r.stdout);
 }
 
 const TWO: &str = r#"
@@ -89,12 +84,7 @@ fn containers_diff_by_merge_key_not_index() {
     cs.reverse();
     s.write("w.json", &serde_json::to_string_pretty(&w).unwrap());
     let r = s.run(&[&args[..], &["plan"]].concat()).success();
-    assert_eq!(
-        r.summary(),
-        "plan: 0 to create, 0 to update, 0 to delete",
-        "{}",
-        r.stdout
-    );
+    assert_eq!(r.summary(), "stack p is undeformed", "{}", r.stdout);
 
     s.write("p.df", &TWO.replace("envoy:1", "envoy:2"));
     let r = s.run(&[&args[..], &["plan"]].concat()).success();

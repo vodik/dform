@@ -55,7 +55,7 @@ fn a_crash_at_action_n_leaves_n_minus_one_identities() {
     let r = dform(&s, &["plan"]).success();
     assert_eq!(
         r.summary(),
-        "plan: 1 to create, 0 to update, 0 to delete",
+        "plan: 1 deformation (1 create)",
         "{}",
         r.stdout
     );

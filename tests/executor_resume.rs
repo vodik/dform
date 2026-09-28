@@ -38,8 +38,9 @@ fn apply_after_a_crash_finishes_the_remaining_actions() {
     assert_eq!(
         r.stdout,
         "resuming the apply interrupted at tick 1; remaining: compute.vm.app\n\
-         plan: 1 to create, 0 to update, 0 to delete\n\
+         plan: 1 deformation (1 create)\ndefinite:\n\
          + compute.vm.app\n  subnet_id = \"net.subnet:a\"\n\
+         apply order: tick 1 [compute.vm.app]\n\
          apply: complete\n"
     );
     let st = state(&s);

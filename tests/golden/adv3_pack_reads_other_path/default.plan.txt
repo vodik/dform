@@ -1,10 +1,12 @@
 exit: ok
 -- stdout --
-plan: 1 to create, 0 to update, 0 to delete
+plan: 1 deformation (1 create)
+definite:
 + iam.policy.app_policy
   name = "app"
   statements[0].action = "db.connect"
   statements[0].resource = "db"
   statements[1].action = "org.read"
   statements[1].resource = "org"
+apply order: tick 1 [iam.policy.app_policy]
 -- stderr --

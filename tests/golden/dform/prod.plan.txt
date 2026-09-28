@@ -1,6 +1,7 @@
 exit: ok
 -- stdout --
-plan: 14 to create, 0 to update, 0 to delete
+plan: 14 deformations (14 create)
+definite:
 + compute.vm.bastion
   private_ip = "10.20.0.21"
   tags.team = "platform"
@@ -79,5 +80,6 @@ plan: 14 to create, 0 to update, 0 to delete
   policy_id = ?iam.policy/iam.main::app_policy#id
   role_id = ?iam.role/iam.main::app_role#id
   tags.team = "platform"
+apply order: tick 1 [compute.vm.bastion iam.role.iam.main::app_role net.vpc.network.main::vpc net.vpc.network.peer::vpc net.vpc_peering.peer-main-peer net.subnet.network.main::private-us-test-1a net.subnet.network.main::private-us-test-1b net.subnet.network.peer::private-us-test-1a net.subnet.network.peer::private-us-test-1b db.postgres.database.main::db k8s.cluster.kubernetes.main::cluster k8s.nodepool.kubernetes.main::default iam.policy.iam.main::app_policy iam.role_policy_attachment.iam.main::attach]
 -- stderr --
 warning: prod should enable audit logging ctx={"env":"prod"}

@@ -25,19 +25,14 @@ fn a_second_program_does_not_plan_deletes_of_the_first() {
     let db = s.run(&["--file", "db.df", "plan"]).success();
     assert_eq!(
         db.summary(),
-        "plan: 1 to create, 0 to update, 0 to delete",
+        "plan: 1 deformation (1 create)",
         "{}",
         db.stdout
     );
 
     s.run(&["--file", "db.df", "apply"]).success();
     let net = s.run(&["--file", "net.df", "plan"]).success();
-    assert_eq!(
-        net.summary(),
-        "plan: 0 to create, 0 to update, 0 to delete",
-        "{}",
-        net.stdout
-    );
+    assert_eq!(net.summary(), "stack net is undeformed", "{}", net.stdout);
 }
 
 #[test]
@@ -59,12 +54,7 @@ fn unscoped_state_migrates_to_the_dform_stack() {
 
     let r = s.run(&["--file", "dform.df", "plan"]).success();
     assert!(r.stderr.contains("moved unscoped"), "{}", r.stderr);
-    assert_eq!(
-        r.summary(),
-        "plan: 0 to create, 0 to update, 0 to delete",
-        "{}",
-        r.stdout
-    );
+    assert_eq!(r.summary(), "stack dform is undeformed", "{}", r.stdout);
     assert!(!s.path(".dform/state.json").exists());
     assert!(s.path(".dform/dform/state.json").exists());
 }

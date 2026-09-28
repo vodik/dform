@@ -64,7 +64,7 @@ fn a_mutation_elsewhere_is_drift_and_the_run_continues() {
     assert!(
         r.stdout.contains(
             "drift after tick 1:\n~ db.postgres.main\n  size: 1 -> 9\n\
-             tick 2:\nplan: 0 to create, 2 to update, 0 to delete\n"
+             tick 2:\nplan: 2 deformations (2 update)\n"
         ),
         "{}",
         r.stdout

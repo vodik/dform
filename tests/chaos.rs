@@ -41,7 +41,7 @@ fn fail_stops_before_the_action_and_keeps_what_came_before() {
     let r = dform(&s, &["plan"]).success();
     assert_eq!(
         r.summary(),
-        "plan: 1 to create, 0 to update, 0 to delete",
+        "plan: 1 deformation (1 create)",
         "{}",
         r.stdout
     );
@@ -105,12 +105,7 @@ fn read_lag_past_the_retry_budget_is_gone() {
     // Those three Reads used up the lag: visible and undeformed.
     let r = dform(&s, &["plan"]).success();
     assert_eq!(r.stderr, "");
-    assert_eq!(
-        r.summary(),
-        "plan: 0 to create, 0 to update, 0 to delete",
-        "{}",
-        r.stdout
-    );
+    assert_eq!(r.summary(), "stack p is undeformed", "{}", r.stdout);
 }
 
 #[test]
@@ -135,7 +130,7 @@ fn mutate_changes_the_world_after_the_tick() {
     let r = dform(&s, &["plan"]).success();
     assert_eq!(
         r.summary(),
-        "plan: 0 to create, 0 to update, 0 to delete, 1 to replace",
+        "plan: 1 deformation (1 replace)",
         "{}",
         r.stdout
     );

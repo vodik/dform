@@ -1,6 +1,7 @@
 exit: ok
 -- stdout --
-plan: 8 to create, 0 to update, 0 to delete
+plan: 8 deformations (8 create)
+definite:
 + alert_metrics_pack.pngu
   enable_standard_gke_alerts = true
   notification_channel_display_name = "Slack"
@@ -59,4 +60,5 @@ plan: 8 to create, 0 to update, 0 to delete
   project = "renfry-stg"
   region = "us-east1"
   subnetwork_id = ?google_compute_subnetwork/gke_subnet#id
+apply order: tick 1 [alert_metrics_pack.pngu google_compute_network_peering.peering-envoy-stg google_compute_network_peering.peering-envoy-stg-legacy google_compute_subnetwork.gke_subnet google_compute_subnetwork.regional_proxy google_monitoring_dashboard.pngu gke_cluster.pngu google_compute_address.static-ip-pngu-grpc]
 -- stderr --

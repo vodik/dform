@@ -21,12 +21,7 @@ fn editing_the_world_file_shows_drift_and_apply_writes_it_back() {
     let r = s
         .run(&["--file", &prog, "--world", &world, "plan"])
         .success();
-    assert_eq!(
-        r.summary(),
-        "plan: 0 to create, 0 to update, 0 to delete",
-        "{}",
-        r.stdout
-    );
+    assert_eq!(r.summary(), "stack dform is undeformed", "{}", r.stdout);
 
     // Someone changed the VM out of band.
     let edited = s
@@ -38,7 +33,7 @@ fn editing_the_world_file_shows_drift_and_apply_writes_it_back() {
         .success();
     assert_eq!(
         r.summary(),
-        "plan: 0 to create, 1 to update, 0 to delete",
+        "plan: 1 deformation (1 update)",
         "{}",
         r.stdout
     );
@@ -56,12 +51,7 @@ fn editing_the_world_file_shows_drift_and_apply_writes_it_back() {
     let r = s
         .run(&["--file", &prog, "--world", &world, "plan"])
         .success();
-    assert_eq!(
-        r.summary(),
-        "plan: 0 to create, 0 to update, 0 to delete",
-        "{}",
-        r.stdout
-    );
+    assert_eq!(r.summary(), "stack dform is undeformed", "{}", r.stdout);
     assert!(
         !s.path(".dform").exists(),
         "--world keeps everything beside the world file"
@@ -76,10 +66,5 @@ fn a_world_file_without_state_is_taken_as_what_exists() {
     let r = s
         .run(&["--file", &prog, "--world", &world, "plan"])
         .success();
-    assert_eq!(
-        r.summary(),
-        "plan: 0 to create, 0 to update, 0 to delete",
-        "{}",
-        r.stdout
-    );
+    assert_eq!(r.summary(), "stack dform is undeformed", "{}", r.stdout);
 }

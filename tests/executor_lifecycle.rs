@@ -83,7 +83,7 @@ component network {inst} {{
     let r = dform(&s, &["plan"]).success();
     assert_eq!(
         r.summary(),
-        "plan: 2 to create, 0 to update, 2 to delete",
+        "plan: 4 deformations (2 create, 2 delete)",
         "{}",
         r.stdout
     );
@@ -101,7 +101,6 @@ component network {inst} {{
         r.stdout,
         "moved net.subnet.network.main::a -> net.subnet.network.core::a\n\
          moved net.vpc.network.main::vpc -> net.vpc.network.core::vpc\n\
-         plan: 0 to create, 0 to update, 0 to delete\n\
          stack p is undeformed\n"
     );
     // plan does not write state; apply does.
@@ -122,10 +121,7 @@ component network {inst} {{
     );
     assert_eq!(world(&s)["resources"], before["resources"]);
     let r = dform(&s, &["plan"]).success();
-    assert_eq!(
-        r.stdout,
-        "plan: 0 to create, 0 to update, 0 to delete\nstack p is undeformed\n"
-    );
+    assert_eq!(r.stdout, "stack p is undeformed\n");
 }
 
 /// ignore_changes drops the path from both sides: a value the world has
@@ -159,7 +155,7 @@ fn ignore_changes_drops_the_path_from_both_sides() {
     let r = dform(&s, &["apply"]).success();
     assert!(
         r.stdout
-            .contains("~ net.vpc.main\n  tags.team: \"a\" -> \"b\"\napply: complete\n"),
+            .contains("~ net.vpc.main\n  tags.team: \"a\" -> \"b\"\napply order: tick 1 [net.vpc.main]\napply: complete\n"),
         "{}",
         r.stdout
     );

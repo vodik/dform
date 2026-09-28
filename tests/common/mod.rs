@@ -93,11 +93,11 @@ impl Run {
         self
     }
 
-    /// The `plan: ...` summary line.
+    /// The `plan: ...` summary line, or `stack NAME is undeformed`.
     pub fn summary(&self) -> &str {
         self.stdout
             .lines()
-            .find(|l| l.starts_with("plan:"))
+            .find(|l| l.starts_with("plan:") || l.ends_with(" is undeformed"))
             .unwrap_or("")
     }
 }

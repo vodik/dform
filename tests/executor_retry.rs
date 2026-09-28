@@ -24,10 +24,7 @@ fn a_read_lag_within_the_retry_budget_is_not_drift() {
         r.stderr,
         "retry net.vpc/main read (2/3)\nretry net.vpc/main read (3/3)\n"
     );
-    assert_eq!(
-        r.stdout,
-        "plan: 0 to create, 0 to update, 0 to delete\nstack p is undeformed\n"
-    );
+    assert_eq!(r.stdout, "stack p is undeformed\n");
 }
 
 /// `type_retry(T, N)` in the provider schema sets the budget per type.
@@ -83,7 +80,7 @@ fn a_boundary_refresh_retries() {
     );
     assert!(
         r.stdout
-            .contains("tick 2:\nplan: 0 to create, 1 to update, 0 to delete\n"),
+            .contains("tick 2:\nplan: 1 deformation (1 update)\n"),
         "{}",
         r.stdout
     );

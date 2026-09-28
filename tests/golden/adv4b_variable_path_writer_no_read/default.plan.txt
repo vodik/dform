@@ -1,8 +1,10 @@
 exit: ok
 -- stdout --
-plan: 1 to create, 0 to update, 0 to delete
+plan: 1 deformation (1 create)
+definite:
 + net.vpc.main
   cidr = "10.0.0.0/16"
   tags.env = "dev"
   tags.team = "x"
+apply order: tick 1 [net.vpc.main]
 -- stderr --

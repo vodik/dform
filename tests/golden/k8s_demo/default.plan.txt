@@ -1,6 +1,7 @@
 exit: ok
 -- stdout --
-plan: 4 to create, 0 to update, 0 to delete
+plan: 4 deformations (4 create)
+definite:
 + k8s.namespace.shop
   metadata.labels.team = "storefront"
   metadata.name = "shop"
@@ -27,4 +28,5 @@ plan: 4 to create, 0 to update, 0 to delete
   spec.template.spec.containers[name=web].name = "web"
   spec.template.spec.containers[name=web].ports[containerPort=8080,protocol=TCP].containerPort = 8080
   spec.template.spec.containers[name=web].ports[containerPort=8080,protocol=TCP].protocol = "TCP"
+apply order: tick 1 [k8s.namespace.shop k8s.service.web k8s.config_map.web_config k8s.deployment.web]
 -- stderr --

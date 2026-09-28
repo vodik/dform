@@ -1,6 +1,7 @@
 exit: ok
 -- stdout --
-plan: 7 to create, 0 to update, 0 to delete
+plan: 7 deformations (7 create)
+definite:
 + aws_vpc.main
   cidr_block = "10.0.0.0/16"
   tags.Name = "main"
@@ -41,4 +42,5 @@ plan: 7 to create, 0 to update, 0 to delete
   instance_type = "t3.micro"
   tags.subnet_az = "us-east-1a"
   tags.web_az = ?aws_instance/web#availability_zone
+apply order: tick 1 [aws_vpc.main aws_security_group.web aws_subnet.a aws_db_instance.app aws_instance.web aws_eip.web aws_instance.bastion]
 -- stderr --
