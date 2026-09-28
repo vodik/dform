@@ -9,6 +9,11 @@ use std::path::{Path, PathBuf};
 pub struct State {
     pub version: u32,
     pub resources: BTreeMap<String, StateEntry>,
+    /// Objects replaced under `create_before_destroy`: the old object's
+    /// identity, kept from the moment its replacement is created until the
+    /// deposed object is deleted.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub deposed: BTreeMap<String, StateEntry>,
     /// The apply in progress, while it runs and after it fails or is killed:
     /// what `apply` needs to resume it (`executor`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -30,6 +35,11 @@ pub struct InFlight {
 pub struct StateEntry {
     pub provider: String,
     pub remote: String,
+    /// The addresses this object's document referenced when it was last
+    /// applied, so that a delete, which has no desired document left to
+    /// read them from, runs before the deletes of what it depends on.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deps: Vec<String>,
 }
 
 impl State {
@@ -59,8 +69,40 @@ impl State {
     }
 
     pub fn set(&mut self, addr: Address, provider: String, remote: String) {
-        self.resources
-            .insert(key(&addr), StateEntry { provider, remote });
+        let deps = self.get(&addr).map(|e| e.deps.clone()).unwrap_or_default();
+        self.resources.insert(
+            key(&addr),
+            StateEntry {
+                provider,
+                remote,
+                deps,
+            },
+        );
+    }
+
+    /// Record what `addr`'s object depends on (no-op without an identity).
+    pub fn set_deps(&mut self, addr: &Address, deps: impl IntoIterator<Item = Address>) {
+        if let Some(e) = self.resources.get_mut(&key(addr)) {
+            e.deps = deps.into_iter().map(|d| key(&d)).collect();
+        }
+    }
+
+    /// Move `addr`'s identity aside as deposed, making room for its
+    /// replacement.
+    pub fn depose(&mut self, addr: &Address) {
+        if let Some(e) = self.resources.remove(&key(addr)) {
+            self.deposed.insert(key(addr), e);
+        }
+    }
+
+    pub fn deposed_for_provider<'a>(
+        &'a self,
+        provider: &'a str,
+    ) -> impl Iterator<Item = (Address, &'a StateEntry)> + 'a {
+        self.deposed
+            .iter()
+            .filter(move |(_, e)| e.provider == provider)
+            .filter_map(|(k, e)| parse_key(k).map(|a| (a, e)))
     }
 
     pub fn remove(&mut self, addr: &Address) {

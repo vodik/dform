@@ -1,6 +1,7 @@
 use crate::ast::Atom;
 use crate::ir::{Adopt, Resource};
 use crate::state::State;
+use crate::zset::Lifecycle;
 use anyhow::Result;
 
 #[derive(Debug, Clone)]
@@ -13,7 +14,16 @@ pub enum ActionKind {
     Drift,
     /// An update that waits on a null (`Action::on`) until a boundary.
     Pending,
+    /// An update that changes a `force_new` path: the provider cannot
+    /// update in place. The old object is deleted before the new one is
+    /// created, or after under `lifecycle(T, A, create_before_destroy)`
+    /// (`create_first`), when it stays deposed in state until then.
+    Replace {
+        create_first: bool,
+    },
     Delete,
+    /// Delete the object a `create_before_destroy` replacement deposed.
+    DeleteDeposed,
     Noop,
 }
 
@@ -100,7 +110,13 @@ pub trait Provider {
         Ok(())
     }
 
-    fn plan(&self, desired: &[Resource], adopts: &[Adopt], state: &State) -> Result<Plan>;
+    fn plan(
+        &self,
+        desired: &[Resource],
+        adopts: &[Adopt],
+        lifecycle: &Lifecycle,
+        state: &State,
+    ) -> Result<Plan>;
 
     fn apply(
         &self,

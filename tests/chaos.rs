@@ -128,16 +128,17 @@ fn mutate_changes_the_world_after_the_tick() {
         "{}",
         r.stdout
     );
+    // The fake schema's cidr is force_new: undoing the drift replaces.
     let r = dform(&s, &["plan"]).success();
     assert_eq!(
         r.summary(),
-        "plan: 0 to create, 1 to update, 0 to delete",
+        "plan: 0 to create, 0 to update, 0 to delete, 1 to replace",
         "{}",
         r.stdout
     );
     assert!(
         r.stdout
-            .contains("cidr: \"10.9.0.0/16\" -> \"10.0.0.0/16\""),
+            .contains("-/+ net.vpc.main  (replace)\n  cidr: \"10.9.0.0/16\" -> \"10.0.0.0/16\""),
         "{}",
         r.stdout
     );

@@ -10,7 +10,7 @@ fn schema_facts_are_queryable_edb() {
     let r = s
         .run(&["--file", prog.to_str().unwrap(), "query", "type_attr"])
         .success();
-    assert!(r.stdout.contains("matches: 14"), "{}", r.stdout);
+    assert!(r.stdout.contains("matches: 16"), "{}", r.stdout);
     assert!(
         r.stdout.contains(r#"type_attr("db.postgres", "endpoint""#),
         "{}",

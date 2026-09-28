@@ -17,6 +17,7 @@ use dform::state;
 use dform::stuck;
 use dform::value::Value;
 use dform::why;
+use dform::zset;
 use std::path::{Path, PathBuf};
 
 #[derive(Parser, Debug)]
@@ -186,6 +187,7 @@ fn main() -> Result<()> {
     let resources = ir::compile_resources(res.facts.iter().cloned(), backend.schema())?;
     let stack = state::stack_name(&files[0]);
     let adopts = ir::compile_adopts(res.facts.iter())?;
+    let lifecycle = zset::Lifecycle::from_facts(&res.facts)?;
 
     match cli.cmd {
         Cmd::Eval => {
@@ -257,7 +259,7 @@ fn main() -> Result<()> {
         }
         Cmd::Plan => {
             let sections = plan_sections(&res, &resources, backend.schema());
-            let plan = backend.plan(&resources, &adopts, &st)?;
+            let plan = backend.plan(&resources, &adopts, &lifecycle, &st)?;
             print_plan(&plan, cli.show_noop, &sections, &stack);
         }
         Cmd::Apply { max_ticks, .. } => {
@@ -303,20 +305,28 @@ fn main() -> Result<()> {
             // boundary the results come back as world facts, round 0
             // resolves them, everything is re-derived and policy is checked
             // again before the next tick.
-            let (mut res, mut resources, mut adopts) = (res, resources, adopts);
+            let (mut res, mut resources, mut adopts, mut lifecycle) =
+                (res, resources, adopts, lifecycle);
             let mut tick = 1;
             loop {
                 let sections = plan_sections(&res, &resources, backend.schema());
-                let mut plan = backend.plan(&resources, &adopts, &st)?;
+                let mut plan = backend.plan(&resources, &adopts, &lifecycle, &st)?;
                 let held: Vec<String> = plan
                     .actions
                     .iter()
                     .filter_map(|a| waits_on(a, &sections))
                     .flatten()
                     .collect();
+                // A create_before_destroy replacement deposes an object that
+                // is deleted at the next tick, once what depends on it has
+                // moved to the replacement.
                 let boundary = !held.is_empty()
                     || !sections.pending_groups.is_empty()
-                    || !sections.undetermined.is_empty();
+                    || !sections.undetermined.is_empty()
+                    || plan
+                        .actions
+                        .iter()
+                        .any(|a| matches!(a.kind, ActionKind::Replace { create_first: true }));
                 if tick > 1 || boundary {
                     println!("tick {tick}:");
                 }
@@ -380,6 +390,7 @@ fn main() -> Result<()> {
                 }
                 resources = ir::compile_resources(next.facts.iter().cloned(), backend.schema())?;
                 adopts = ir::compile_adopts(next.facts.iter())?;
+                lifecycle = zset::Lifecycle::from_facts(&next.facts)?;
                 res = next;
                 tick += 1;
             }
@@ -487,19 +498,24 @@ fn print_plan(
     let mut adopts = 0usize;
     let mut updates = 0usize;
     let mut deletes = 0usize;
+    let mut replaces = 0usize;
     let mut noops = 0usize;
     for a in &plan_actions {
         match a.kind {
             ActionKind::Create => creates += 1,
             ActionKind::Adopt => adopts += 1,
             ActionKind::Update | ActionKind::Drift => updates += 1,
-            ActionKind::Delete => deletes += 1,
+            ActionKind::Delete | ActionKind::DeleteDeposed => deletes += 1,
+            ActionKind::Replace { .. } => replaces += 1,
             ActionKind::Noop => noops += 1,
             ActionKind::Pending => {}
         }
     }
 
     let mut suffix = String::new();
+    if replaces > 0 {
+        suffix.push_str(&format!(", {replaces} to replace"));
+    }
     if adopts > 0 {
         suffix.push_str(&format!(", {adopts} to adopt"));
     }
@@ -559,13 +575,19 @@ fn print_actions(actions: &[dform::provider::Action], show_noop: bool) {
             ActionKind::Create => "+",
             ActionKind::Adopt => ">",
             ActionKind::Update | ActionKind::Drift | ActionKind::Pending => "~",
-            ActionKind::Delete => "-",
+            ActionKind::Delete | ActionKind::DeleteDeposed => "-",
+            ActionKind::Replace {
+                create_first: false,
+            } => "-/+",
+            ActionKind::Replace { create_first: true } => "+/-",
             ActionKind::Noop => "=",
         };
         let note = match a.kind {
             ActionKind::Drift => {
                 "  (drift: a fresh null where the world has a value; its identity is stale)"
             }
+            ActionKind::DeleteDeposed => "  (deposed)",
+            ActionKind::Replace { .. } => "  (replace)",
             _ => "",
         };
         println!("{prefix} {}.{}{note}", a.addr.typ, a.addr.name);
@@ -592,10 +614,13 @@ fn print_actions(actions: &[dform::provider::Action], show_noop: bool) {
                 ActionKind::Create | ActionKind::Adopt => {
                     println!("  {} = {}", ch.path, side(ch.after.as_ref()));
                 }
-                ActionKind::Delete => {
+                ActionKind::Delete | ActionKind::DeleteDeposed => {
                     println!("  {} was {}", ch.path, side(ch.before.as_ref()));
                 }
-                ActionKind::Update | ActionKind::Drift | ActionKind::Pending => {
+                ActionKind::Update
+                | ActionKind::Drift
+                | ActionKind::Pending
+                | ActionKind::Replace { .. } => {
                     println!(
                         "  {}: {} -> {}",
                         ch.path,

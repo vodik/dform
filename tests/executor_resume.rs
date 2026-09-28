@@ -62,12 +62,7 @@ fn apply_stops_when_the_world_changed_under_a_remaining_action() {
     let s = Scratch::new("resume-changed");
     s.write("p.df", PROG);
     dform(&s, &["apply"]).success();
-    s.write(
-        "p.df",
-        &PROG
-            .replace("10.0.0.0/16", "10.1.0.0/16")
-            .replace("10.0.1.0/24", "10.1.1.0/24"),
-    );
+    s.write("p.df", &PROG.replace("\" }", "\", tier = \"web\" }"));
     dform(
         &s,
         &[
@@ -99,7 +94,7 @@ fn apply_stops_when_the_world_changed_under_a_remaining_action() {
     let r = dform(&s, &["apply"]).success();
     assert!(
         r.stdout.contains(
-            "~ net.subnet.a\n  cidr: \"10.0.1.0/24\" -> \"10.1.1.0/24\"\n  tags.owner: \"someone\" -> <none>\n"
+            "~ net.subnet.a\n  tags.owner: \"someone\" -> <none>\n  tier: <none> -> \"web\"\n"
         ),
         "{}",
         r.stdout

@@ -8,6 +8,8 @@
 #   - keyless sets (type set, no type_list_key): security group ingress and
 #     egress, route table routes, vpc_security_group_ids. Element order is
 #     not a change; an element has no identity but its whole content.
+#   - force_new: changing a vpc's or subnet's cidr_block, a subnet's zone or a
+#     bucket's name replaces the object, as the provider's RequiresReplace does.
 #
 # Every type has tags (optional) and tags_all (computed: tags merged with the
 # provider's default_tags). ids and arns are computed; ids are fresh.
@@ -20,7 +22,7 @@ type_attr(aws_vpc, arn, string, [computed]).
 type_mint(aws_vpc, arn, "arn:aws:ec2:us-east-1:123456789012:vpc/{name}").
 type_attr(aws_vpc, tags, map, []).
 type_attr(aws_vpc, tags_all, map, [computed]).
-type_attr(aws_vpc, cidr_block, string, [optional_computed]).
+type_attr(aws_vpc, cidr_block, string, [optional_computed, force_new]).
 type_mint(aws_vpc, cidr_block, "10.0.0.0/16").
 type_attr(aws_vpc, instance_tenancy, string, []).
 type_attr(aws_vpc, enable_dns_support, bool, []).
@@ -50,8 +52,8 @@ type_mint(aws_subnet, arn, "arn:aws:ec2:us-east-1:123456789012:subnet/{name}").
 type_attr(aws_subnet, tags, map, []).
 type_attr(aws_subnet, tags_all, map, [computed]).
 type_attr(aws_subnet, vpc_id, string, [required]).
-type_attr(aws_subnet, cidr_block, string, []).
-type_attr(aws_subnet, availability_zone, string, [optional_computed]).
+type_attr(aws_subnet, cidr_block, string, [force_new]).
+type_attr(aws_subnet, availability_zone, string, [optional_computed, force_new]).
 type_mint(aws_subnet, availability_zone, "us-east-1a").
 type_attr(aws_subnet, availability_zone_id, string, [optional_computed]).
 type_mint(aws_subnet, availability_zone_id, "use1-az1").
@@ -180,7 +182,7 @@ type_attr(aws_s3_bucket, arn, string, [computed]).
 type_mint(aws_s3_bucket, arn, "arn:aws:s3:us-east-1:123456789012:s3_bucket/{name}").
 type_attr(aws_s3_bucket, tags, map, []).
 type_attr(aws_s3_bucket, tags_all, map, [computed]).
-type_attr(aws_s3_bucket, bucket, string, [optional_computed]).
+type_attr(aws_s3_bucket, bucket, string, [optional_computed, force_new]).
 type_mint(aws_s3_bucket, bucket, "terraform-{hash}").
 type_attr(aws_s3_bucket, bucket_prefix, string, [optional_computed]).
 type_attr(aws_s3_bucket, force_destroy, bool, []).

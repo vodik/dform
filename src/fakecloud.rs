@@ -20,7 +20,7 @@ use crate::provider::{self, Action, ActionKind, Change, Plan, Provider};
 use crate::schema::Schema;
 use crate::state::{self, State};
 use crate::value::{NullClass, Value};
-use crate::zset;
+use crate::zset::{self, Lifecycle};
 use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as Json, json};
@@ -96,8 +96,14 @@ impl Provider for FakeCloud {
         Ok(())
     }
 
-    fn plan(&self, desired: &[Resource], adopts: &[Adopt], state: &State) -> Result<Plan> {
-        self.plan_with_state(desired, adopts, state)
+    fn plan(
+        &self,
+        desired: &[Resource],
+        adopts: &[Adopt],
+        lifecycle: &Lifecycle,
+        state: &State,
+    ) -> Result<Plan> {
+        self.plan_with_state(desired, adopts, lifecycle, state)
     }
 
     fn apply(
@@ -441,12 +447,16 @@ impl FakeCloud {
     }
 
     /// Plan: refresh, then the Z-set `desired − world` (`zset::deformation`),
-    /// then this provider's per-resource plan (the diff, and adopt) for each
-    /// deformation. Actions come in dependency order, deletes last.
+    /// then this provider's per-resource plan (the diff, adopt, and replace
+    /// when a `force_new` path changes) for each deformation. Actions come
+    /// in dependency order; deletes last, in reverse dependency order (from
+    /// the dependencies state recorded), with the objects deposed by a
+    /// `create_before_destroy` replacement among them.
     pub fn plan_with_state(
         &self,
         desired: &[Resource],
         adopts: &[Adopt],
+        lifecycle: &Lifecycle,
         state: &State,
     ) -> Result<Plan> {
         let world = self.refresh()?;
@@ -476,18 +486,13 @@ impl FakeCloud {
         // is gone is no row (a desired one is created again); one no longer
         // desired is deleted from state with nothing to delete.
         let mut before: BTreeMap<Address, Json> = BTreeMap::new();
-        let mut vanished = Vec::new();
         for (addr, entry) in state.entries_for_provider(self.id()) {
-            match world.resources.get(&key(&addr.typ, &entry.remote)) {
-                Some(cur) => {
-                    let doc = match resolved.get(&addr) {
-                        Some(d) => self.world_doc(&addr.typ, cur, d),
-                        None => cur.attrs.clone(),
-                    };
-                    before.insert(addr, doc);
-                }
-                None if !resolved.contains_key(&addr) => vanished.push(addr),
-                None => {}
+            if let Some(cur) = world.resources.get(&key(&addr.typ, &entry.remote)) {
+                let doc = match resolved.get(&addr) {
+                    Some(d) => self.world_doc(&addr.typ, cur, d),
+                    None => cur.attrs.clone(),
+                };
+                before.insert(addr, doc);
             }
         }
 
@@ -503,11 +508,7 @@ impl FakeCloud {
                 .collect();
 
         let mut actions = Vec::new();
-        let deletes = deformations
-            .keys()
-            .filter(|a| !resolved.contains_key(*a))
-            .cloned();
-        for addr in order.iter().cloned().chain(deletes) {
+        for addr in order.iter().cloned() {
             let d = &deformations[&addr];
             let typ = addr.typ.as_str();
             let after = resolved.get(&addr);
@@ -526,9 +527,23 @@ impl FakeCloud {
                     }
                     _ => (ActionKind::Create, self.diff(typ, None, after)),
                 },
-                zset::Kind::Delete => (ActionKind::Delete, self.diff(typ, prior, None)),
-                zset::Kind::Update => (ActionKind::Update, self.diff(typ, prior, after)),
-                zset::Kind::Drift => (ActionKind::Drift, self.diff(typ, prior, after)),
+                zset::Kind::Delete => unreachable!("a desired address is never deleted"),
+                zset::Kind::Update | zset::Kind::Drift => {
+                    let changes = self.diff(typ, prior, after);
+                    let kind = if changes
+                        .iter()
+                        .any(|c| self.schema.forces_new(typ, &norm_path(&c.path)))
+                    {
+                        ActionKind::Replace {
+                            create_first: lifecycle.create_before_destroy.contains(&addr),
+                        }
+                    } else if d.kind == zset::Kind::Drift {
+                        ActionKind::Drift
+                    } else {
+                        ActionKind::Update
+                    };
+                    (kind, changes)
+                }
                 zset::Kind::Pending => (ActionKind::Pending, self.diff(typ, prior, after)),
                 zset::Kind::Undeformed => (ActionKind::Noop, vec![]),
             };
@@ -543,14 +558,41 @@ impl FakeCloud {
                 on,
             });
         }
-        for addr in vanished {
-            actions.push(Action {
-                kind: ActionKind::Delete,
-                addr,
-                changes: vec![],
-                on: BTreeSet::new(),
-            });
+
+        // Deletes: what is no longer desired, what state maps to a vanished
+        // resource, and deposed objects. One goes before the deletes of what
+        // it depends on.
+        let mut deletes: Vec<(Action, &[String])> = Vec::new();
+        for (addr, entry) in state.entries_for_provider(self.id()) {
+            if resolved.contains_key(&addr) {
+                continue;
+            }
+            // A vanished resource has no world document: nothing to show.
+            let changes = self.diff(&addr.typ, before.get(&addr), None);
+            deletes.push((
+                Action {
+                    kind: ActionKind::Delete,
+                    addr,
+                    changes,
+                    on: BTreeSet::new(),
+                },
+                &entry.deps,
+            ));
         }
+        for (addr, entry) in state.deposed_for_provider(self.id()) {
+            let prior = world.resources.get(&key(&addr.typ, &entry.remote));
+            deletes.push((
+                Action {
+                    kind: ActionKind::DeleteDeposed,
+                    changes: self.diff(&addr.typ, prior.map(|rr| &rr.attrs), None),
+                    addr,
+                    on: BTreeSet::new(),
+                },
+                &entry.deps,
+            ));
+        }
+        deletes.sort_by(|a, b| a.0.addr.cmp(&b.0.addr));
+        actions.extend(reverse_dependency_order(deletes));
         Ok(Plan { actions })
     }
 
@@ -838,7 +880,7 @@ impl Tick<'_> {
         let addr = &a.addr;
         let at = format!("{}/{}", addr.typ, addr.name);
         let doc = match a.kind {
-            ActionKind::Delete => Json::Null,
+            ActionKind::Delete | ActionKind::DeleteDeposed => Json::Null,
             ActionKind::Noop | ActionKind::Pending => return Ok(()),
             _ => {
                 let r = self
@@ -872,37 +914,54 @@ impl Tick<'_> {
         // A timed-out call takes effect in the world, but dform never
         // hears back: no identity is recorded.
         let answered = !cloud.chaos.timeout.contains(addr);
-        let world = &mut self.world;
+        let deps = self.desired.get(addr).map(|r| r.deps.clone());
         match a.kind {
             ActionKind::Noop | ActionKind::Pending => {}
             ActionKind::Delete => {
                 if let Some(entry) = state.get(addr) {
-                    world.resources.remove(&key(&addr.typ, &entry.remote));
+                    self.delete_object(&addr.typ, &entry.remote.clone());
                     if answered {
                         state.remove(addr);
                     }
                 }
             }
-            ActionKind::Create => {
-                let remote_name = addr.name.clone();
-                let k = key(&addr.typ, &remote_name);
-                if world.resources.contains_key(&k) {
-                    bail!("apply {at}: create failed: {k} already exists in the world");
+            ActionKind::DeleteDeposed => {
+                if let Some(entry) = state.deposed.get(&state::key(addr)) {
+                    self.delete_object(&addr.typ, &entry.remote.clone());
+                    if answered {
+                        state.deposed.remove(&state::key(addr));
+                    }
                 }
-                let computed = cloud.mint(&addr.typ, &remote_name, &doc);
-                let hidden_until = cloud.chaos.read_lag.get(addr).map(|k| world.tick + k);
-                world.resources.insert(
-                    k,
-                    RemoteResource {
-                        typ: addr.typ.clone(),
-                        name: remote_name.clone(),
-                        attrs: doc,
-                        computed,
-                        hidden_until,
-                    },
-                );
+            }
+            ActionKind::Create => {
+                let remote = addr.name.clone();
+                if self.world.resources.contains_key(&key(&addr.typ, &remote)) {
+                    bail!(
+                        "apply {at}: create failed: {} already exists in the world",
+                        key(&addr.typ, &remote)
+                    );
+                }
+                self.create_object(addr, &remote, doc);
                 if answered {
-                    state.set(addr.clone(), cloud.id().to_string(), remote_name);
+                    state.set(addr.clone(), cloud.id().to_string(), remote);
+                }
+            }
+            ActionKind::Replace { create_first } => {
+                let Some(old) = state.get(addr).map(|e| e.remote.clone()) else {
+                    bail!("apply {at}: replace without a state entry");
+                };
+                if create_first {
+                    // The old object stays, deposed, until it is deleted
+                    // after what depends on it has moved to the new one.
+                    state.depose(addr);
+                } else {
+                    self.delete_object(&addr.typ, &old);
+                    state.remove(addr);
+                }
+                let remote = self.free_name(&addr.typ, &addr.name);
+                self.create_object(addr, &remote, doc);
+                if answered {
+                    state.set(addr.clone(), cloud.id().to_string(), remote);
                 }
             }
             ActionKind::Adopt => {
@@ -914,7 +973,7 @@ impl Tick<'_> {
                     bail!("apply {at}: adopt requested but inventory missing {k}");
                 };
                 let computed = inv_rr.computed.clone();
-                world.resources.insert(
+                self.world.resources.insert(
                     k,
                     RemoteResource {
                         typ: addr.typ.clone(),
@@ -933,11 +992,11 @@ impl Tick<'_> {
                     bail!("apply {at}: update without a state entry");
                 };
                 let k = key(&addr.typ, &entry.remote);
-                let computed = match world.resources.get(&k) {
+                let computed = match self.world.resources.get(&k) {
                     Some(cur) => cur.computed.clone(),
                     None => cloud.mint(&addr.typ, &entry.remote, &doc),
                 };
-                world.resources.insert(
+                self.world.resources.insert(
                     k,
                     RemoteResource {
                         typ: addr.typ.clone(),
@@ -949,7 +1008,10 @@ impl Tick<'_> {
                 );
             }
         }
-        cloud.save(world)?;
+        if let Some(deps) = deps {
+            state.set_deps(addr, deps);
+        }
+        cloud.save(&self.world)?;
         if !answered {
             bail!(
                 "apply {at}: timed out waiting for the provider (chaos timeout={at}); \
@@ -959,9 +1021,47 @@ impl Tick<'_> {
         Ok(())
     }
 
-    /// The tick ends: chaos mutations land, the clock advances, the world is
-    /// saved.
-    pub fn end(mut self, state: &State) -> Result<()> {
+    /// A new object at `remote`, its computed values minted.
+    fn create_object(&mut self, addr: &Address, remote: &str, doc: Json) {
+        let computed = self.cloud.mint(&addr.typ, remote, &doc);
+        let hidden_until = self
+            .cloud
+            .chaos
+            .read_lag
+            .get(addr)
+            .map(|k| self.world.tick + k);
+        self.world.resources.insert(
+            key(&addr.typ, remote),
+            RemoteResource {
+                typ: addr.typ.clone(),
+                name: remote.to_string(),
+                attrs: doc,
+                computed,
+                hidden_until,
+            },
+        );
+    }
+
+    fn delete_object(&mut self, typ: &str, remote: &str) {
+        self.world.resources.remove(&key(typ, remote));
+    }
+
+    /// `name`, or the first `name-N` no object of `typ` has: a replacement
+    /// created before its old object is deleted cannot take its name.
+    fn free_name(&self, typ: &str, name: &str) -> String {
+        std::iter::once(name.to_string())
+            .chain((2..).map(|n| format!("{name}-{n}")))
+            .find(|r| !self.world.resources.contains_key(&key(typ, r)))
+            .unwrap()
+    }
+
+    /// The tick ends: state records every desired object's dependencies,
+    /// chaos mutations land, the clock advances, the world is saved.
+    pub fn end(mut self, state: &mut State) -> Result<()> {
+        // What each object depends on, for ordering its delete later.
+        for (addr, r) in &self.desired {
+            state.set_deps(addr, r.deps.iter().cloned());
+        }
         if self.clock > 0 {
             self.cloud
                 .note(format!("simulated apply time: {}ms", self.clock));
@@ -1128,6 +1228,42 @@ fn flatten_json_facts(
             });
         }
     }
+}
+
+/// A change's path without list indices or keys: the schema's spelling.
+fn norm_path(path: &str) -> String {
+    let mut out = String::new();
+    let mut depth = 0;
+    for c in path.chars() {
+        match c {
+            '[' => depth += 1,
+            ']' => depth -= 1,
+            _ if depth == 0 => out.push(c),
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Deletes in reverse dependency order: an object goes before every object
+/// at an address it depended on. Ties keep address order.
+fn reverse_dependency_order(mut deletes: Vec<(Action, &[String])>) -> Vec<Action> {
+    let mut out = Vec::new();
+    while !deletes.is_empty() {
+        // Ready: nothing still to be deleted depends on it.
+        let ready = (0..deletes.len())
+            .find(|&i| {
+                let k = state::key(&deletes[i].0.addr);
+                !deletes
+                    .iter()
+                    .enumerate()
+                    .any(|(j, (_, deps))| j != i && deps.contains(&k))
+            })
+            // A cycle cannot come from a DAG; break it in address order.
+            .unwrap_or(0);
+        out.push(deletes.remove(ready).0);
+    }
+    out
 }
 
 fn topo_sort(desired: &[Resource]) -> Result<Vec<Resource>> {

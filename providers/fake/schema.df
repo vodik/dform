@@ -1,14 +1,15 @@
 # The fake provider behind dform.df, dform-advanced.df and the examples.
 #
 #   type_attr(Type, Path, Ty, Flags).   Flags: required computed id sensitive
-#                                       nullable optional_computed
+#                                       nullable optional_computed force_new
 #   type_provider(Type, Provider).
 #   type_mint(Type, Path, Template).    how the mock mints a computed value at
 #                                       Apply: {type} {name} {attr} {hash}
 #
 # Every type has a fresh `id`; db.postgres and k8s.cluster have open
-# endpoints. Attributes a program sets are not listed: the fake provider
-# accepts any configured attribute.
+# endpoints. Attributes a program sets are not listed (the fake provider
+# accepts any configured attribute) unless a change to one replaces the
+# object: a vpc's or a subnet's cidr is force_new.
 
 type_provider(net.vpc, fakecloud).
 type_provider(net.subnet, fakecloud).
@@ -33,6 +34,9 @@ type_attr(k8s.nodepool, id, string, [computed, id]).
 type_attr(iam.role, id, string, [computed, id]).
 type_attr(iam.policy, id, string, [computed, id]).
 type_attr(iam.role_policy_attachment, id, string, [computed, id]).
+
+type_attr(net.vpc, cidr, string, [force_new]).
+type_attr(net.subnet, cidr, string, [force_new]).
 
 type_attr(db.postgres, endpoint, string, [computed]).
 type_attr(k8s.cluster, api_endpoint, string, [computed]).

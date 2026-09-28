@@ -4,7 +4,8 @@
 //! `providers/<name>/schema.df`:
 //!
 //!   type_attr(T, Path, Ty, Flags).    % Flags drawn from required, computed,
-//!                                     % id, sensitive, nullable, optional_computed
+//!                                     % id, sensitive, nullable, optional_computed,
+//!                                     % force_new (a change replaces the object)
 //!   type_list_key(T, Path, Keys).     % merge keys of a list attribute
 //!   type_provider(T, P).              % which provider owns T
 //!   type_mint(T, Path, Value).        % optional: what the mock mints for a
@@ -28,13 +29,14 @@ use anyhow::{Context, Result, anyhow, bail};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-pub const FLAGS: [&str; 6] = [
+pub const FLAGS: [&str; 7] = [
     "required",
     "computed",
     "id",
     "sensitive",
     "nullable",
     "optional_computed",
+    "force_new",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -120,6 +122,14 @@ impl Schema {
             self.attr(typ, p)
                 .is_some_and(|a| a.ty == "list" || a.ty == "set")
         })
+    }
+
+    /// Whether changing the value at `path` (normalized: dotted, no
+    /// indices) replaces the object: the path or an ancestor is declared
+    /// `force_new`.
+    pub fn forces_new(&self, typ: &str, path: &str) -> bool {
+        std::iter::successors(Some(path), |p| p.rsplit_once('.').map(|x| x.0))
+            .any(|p| self.attr(typ, p).is_some_and(|a| a.has("force_new")))
     }
 
     pub fn knows_type(&self, typ: &str) -> bool {

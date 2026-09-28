@@ -68,6 +68,7 @@ schemas built into the binary (`fake`, `gke`).
 type_provider(net.vpc, fakecloud).                    % who owns the type
 type_attr(net.vpc, id, string, [computed, id]).       % Flags: required computed id
 type_attr(db.postgres, endpoint, string, [computed]). %   sensitive nullable optional_computed
+type_attr(net.vpc, cidr, string, [force_new]).         %   force_new
 type_list_key(k8s.deployment, spec.template.spec.containers, [name]).  % list merge keys
 type_mint(db.postgres, endpoint, "{name}.db.fake").   % optional: how the mock mints it
 ```
@@ -90,6 +91,10 @@ secret, `computed` alone is open (proposal E §2.2). `optional_computed` is
 Terraform's Optional+Computed: the program may set it, else Apply picks it.
 Setting a plain `computed` attribute is a compile error naming the resource
 and the path.
+
+`force_new` is the provider's "requires replace": an update that changes that
+path (or one under it) is planned as a replace, `-/+` (see "Deletes and
+replacement" below). The fake schema's vpc and subnet `cidr` are `force_new`.
 
 The facts are injected into the program, so rules can read them and
 `cargo run -- query type_attr` lists the schema.
@@ -138,6 +143,17 @@ reason printed. `--max-ticks N` (default 8) bounds the loop:
 cargo run -- --file examples/adversarial/gke_two_phase.df --provider gke apply  # two ticks
 cargo run -- --file examples/adversarial/gke_one_zone.df --provider gke apply   # stops after tick 1
 ```
+
+Deletes and replacement. Deletes run after every create and update, in
+reverse dependency order (a delete has no desired document left, so state
+records each object's dependencies when it is applied). A replace (`-/+`)
+deletes the old object, then creates the new one under the same name. With
+`lifecycle(T, A, create_before_destroy).` it is `+/-`: the new object is
+created first under a free name (`main-2`), the old one is *deposed* (kept in
+state's `deposed` section), and a boundary follows; the next tick moves what
+depends on it to the replacement and then deletes the deposed object
+(`- T.A  (deposed)`). A deposed object left by a failed apply is deleted by
+the next one.
 
 An apply that fails or is killed can be resumed: before a tick's first Apply
 call its deformations are written to state as in flight, each with the world

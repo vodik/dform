@@ -25,10 +25,56 @@
 //! The provider's per-resource `Plan` (the fake provider's diff) turns each
 //! deformation into an action and decides replace.
 
+use crate::ast::{Atom, Term};
 use crate::ir::Address;
 use crate::lattice::{Truth, eq3, nulls_in};
 use crate::value::{NullClass, Value};
+use anyhow::{Result, bail};
 use std::collections::{BTreeMap, BTreeSet};
+
+/// `lifecycle(T, A, Flag)` facts: plain facts the planner reads (E §2.8:
+/// filters and policy over the deformation).
+#[derive(Debug, Clone, Default)]
+pub struct Lifecycle {
+    /// `create_before_destroy`: a replacement is created before the old
+    /// object is deleted.
+    pub create_before_destroy: BTreeSet<Address>,
+}
+
+impl Lifecycle {
+    pub fn from_facts<'a>(facts: impl IntoIterator<Item = &'a Atom>) -> Result<Lifecycle> {
+        let mut out = Lifecycle::default();
+        for f in facts {
+            if f.pred != "lifecycle" {
+                continue;
+            }
+            let strs: Option<Vec<&str>> = f
+                .args
+                .iter()
+                .map(|t| match t {
+                    Term::Val(Value::Str(s)) => Some(s.as_str()),
+                    _ => None,
+                })
+                .collect();
+            let Some([typ, name, flag]) = strs.as_deref() else {
+                bail!("lifecycle/3 expects (Type, Addr, Flag), got {f:?}");
+            };
+            let addr = Address {
+                typ: typ.to_string(),
+                name: name.to_string(),
+            };
+            match *flag {
+                "create_before_destroy" => {
+                    out.create_before_destroy.insert(addr);
+                }
+                other => bail!(
+                    "lifecycle({typ}, {name}, {other}): unknown flag (expected create_before_destroy)"
+                ),
+            }
+        }
+        Ok(out)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Kind {
@@ -239,7 +285,7 @@ mod tests {
         assert!(violations.is_empty(), "{violations:?}");
         let desired = crate::ir::compile_resources(res.facts.iter().cloned(), &schema).unwrap();
         backend
-            .plan(&desired, &[], &st)
+            .plan(&desired, &[], &Lifecycle::default(), &st)
             .unwrap()
             .actions
             .into_iter()
@@ -271,7 +317,8 @@ mod tests {
         p.iter().filter(|x| k(&x.1)).count()
     }
 
-    /// F 4.3: on the fixture, env=prod is eleven updates and three
+    /// F 4.3: on the fixture, env=prod is eleven updates (six of them
+    /// replacements, the fake schema's cidrs being force_new) and three
     /// undeformed, the same eleven addresses the planner reported before the
     /// Z-set replaced its diff; nothing is pending (round 0).
     #[test]
@@ -280,7 +327,9 @@ mod tests {
         let (world, state) = fixture(&dir, |_| {});
         let program = crate::loader::load_program(&[root().join("dform.df")]).unwrap();
         let p = plan(&program, &[input("env", "prod")], &world, &state);
-        assert_eq!(count(&p, |k| matches!(k, ActionKind::Update)), 11);
+        // Six of them change a force_new cidr: replacements.
+        assert_eq!(count(&p, |k| matches!(k, ActionKind::Update)), 5);
+        assert_eq!(count(&p, |k| matches!(k, ActionKind::Replace { .. })), 6);
         assert_eq!(count(&p, |k| matches!(k, ActionKind::Noop)), 3);
         assert_eq!(p.len(), 14);
         let noop: BTreeSet<&str> = p
