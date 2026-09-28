@@ -1,5 +1,6 @@
 use crate::ast::{Atom, Constraint, Lit, Program, RuleStmt, Stmt, Term, Unique};
 use crate::merge;
+use crate::partition;
 use crate::transform;
 use crate::value::Value;
 use anyhow::{anyhow, bail, Context, Result};
@@ -63,14 +64,35 @@ pub fn eval(program: &Program, extra_facts: &[Atom]) -> Result<(EvalResult, Vec<
         crate::sim::with(|s| s.rules = all);
     }
 
-    // Stratified evaluation (so defaults via `not` behave).
-    let strata = compute_strata(&rules)?;
-    let max_stratum = strata.values().copied().max().unwrap_or(0);
+    // Stratified evaluation over the partition graph (E §2.6, F DR-12
+    // revised). Every rule runs in the stratum of its head node.
+    let mut graph_rules = rules.clone();
+    graph_rules.extend(constraints.iter().map(partition::constraint_rule));
+    let fact_atoms: Vec<Atom> = program
+        .statements
+        .iter()
+        .filter_map(|s| match s {
+            Stmt::Fact(a) => Some(a.clone()),
+            _ => None,
+        })
+        .collect();
+    let graph = partition::build_lowered(graph_rules, &fact_atoms, &crate::schema::fake(), &partition::Options::default());
+    let strata = match partition::stratify(&graph) {
+        partition::Verdict::Stratified { strata } => strata,
+        partition::Verdict::Rejected { scc, negative_edges } => {
+            bail!("{}", partition::cycle_error(&graph, &scc, &negative_edges))
+        }
+    };
+    let rule_stratum: Vec<usize> = rules
+        .iter()
+        .map(|r| strata.get(&partition::head_node(&r.head)).copied().unwrap_or(0))
+        .collect();
+    let max_stratum = rule_stratum.iter().copied().max().unwrap_or(0);
     for s in 0..=max_stratum {
         let rules_s: Vec<(usize, RuleStmt)> = rules
             .iter()
             .enumerate()
-            .filter(|(_, r)| strata.get(&r.head.pred).copied().unwrap_or(0) == s)
+            .filter(|(i, _)| rule_stratum[*i] == s)
             .map(|(i, r)| (i, r.clone()))
             .collect();
         if rules_s.is_empty() {
@@ -242,62 +264,6 @@ fn enforce_uniques(facts: &BTreeSet<Atom>, uniques: &[Unique]) -> Result<()> {
         }
     }
     Ok(())
-}
-
-fn compute_strata(rules: &[RuleStmt]) -> Result<BTreeMap<String, usize>> {
-    let mut preds: BTreeSet<String> = BTreeSet::new();
-    for r in rules {
-        preds.insert(r.head.pred.clone());
-        for lit in &r.body {
-            match lit {
-                Lit::Pos(a) | Lit::Not(a) => {
-                    preds.insert(a.pred.clone());
-                }
-                _ => {}
-            }
-        }
-    }
-
-    let mut stratum: BTreeMap<String, usize> = preds.into_iter().map(|p| (p, 0usize)).collect();
-    let edges: Vec<(String, String, bool)> = rules
-        .iter()
-        .flat_map(|r| {
-            let head = r.head.pred.clone();
-            r.body.iter().filter_map(move |lit| match lit {
-                Lit::Pos(a) => Some((head.clone(), a.pred.clone(), false)),
-                Lit::Not(a) => Some((head.clone(), a.pred.clone(), true)),
-                _ => None,
-            })
-        })
-        .collect();
-
-    // Relax constraints until fixed point. A negation cycle will keep increasing.
-    for _ in 0..10_000 {
-        let mut changed = false;
-        for (h, b, neg) in &edges {
-            let req = stratum.get(b).copied().unwrap_or(0) + if *neg { 1 } else { 0 };
-            let cur = stratum.get(h).copied().unwrap_or(0);
-            if cur < req {
-                stratum.insert(h.clone(), req);
-                changed = true;
-            }
-        }
-        if !changed {
-            // Validate: any negative edge must be strictly lower.
-            for (h, b, neg) in &edges {
-                if *neg {
-                    let hs = stratum.get(h).copied().unwrap_or(0);
-                    let bs = stratum.get(b).copied().unwrap_or(0);
-                    if hs <= bs {
-                        bail!("negation cycle detected involving {h} and {b}");
-                    }
-                }
-            }
-            return Ok(stratum);
-        }
-    }
-
-    bail!("failed to stratify program (possible negation cycle)")
 }
 
 fn ensure_ground(a: &Atom) -> Result<Atom> {
@@ -1577,4 +1543,62 @@ fn ipv4_to_u32(ip: &str) -> Option<u32> {
 
 fn u32_to_ipv4(v: u32) -> String {
     crate::value::u32_to_ipv4(v)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(src: &str) -> Result<(EvalResult, Vec<String>)> {
+        let program = crate::parser::parse_program(src)?;
+        eval(&program, &[])
+    }
+
+    fn facts_of(r: &EvalResult, pred: &str) -> Vec<String> {
+        r.facts.iter().filter(|a| a.pred == pred).map(partition::fmt_atom).collect()
+    }
+
+    /// DESIGN.org "Aggregates are not stratified": a consumer of an
+    /// aggregate used to see every partial result mid-fixpoint.
+    #[test]
+    fn aggregate_consumer_sees_one_complete_result() {
+        let (r, _) = run(
+            "n(1).
+             n(2) :- n(1).
+             n(3) :- n(2).
+             all(collect_set(X)) :- n(X).
+             snap(L) :- all(L).",
+        )
+        .unwrap();
+        assert_eq!(facts_of(&r, "snap"), vec!["snap([1, 2, 3])".to_string()]);
+    }
+
+    /// A cycle through negation is a compile error naming the cycle with
+    /// the text of every rule on it.
+    #[test]
+    fn negative_cycle_is_an_error_with_rule_text() {
+        let err = run(
+            "q(1).
+             p(X) :- q(X), not r(X).
+             r(X) :- p(X).",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("negative cycle"), "{err}");
+        assert!(err.contains("p(X) :- q(X), not r(X)"), "{err}");
+    }
+
+    /// Rules run in the stratum of their head's partition node: a `want`
+    /// of one type may negate, or aggregate over, `want` of another type.
+    #[test]
+    fn want_is_partitioned_by_type() {
+        let (r, _) = run(
+            "want(net.subnet, a).
+             want(net.subnet, b).
+             subnets(collect_set(S)) :- want(net.subnet, S).
+             want(db.postgres, db) :- subnets(L), member(L, a), not want(net.subnet, c).",
+        )
+        .unwrap();
+        assert!(facts_of(&r, "want").contains(&"want(\"db.postgres\", \"db\")".to_string()));
+    }
 }

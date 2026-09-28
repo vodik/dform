@@ -7,6 +7,7 @@ use dform::engine;
 use dform::fakecloud::FakeCloud;
 use dform::ir;
 use dform::loader;
+use dform::partition;
 use dform::provider::{ActionKind, Provider, fmt_value};
 use dform::schema;
 use dform::state;
@@ -66,6 +67,8 @@ enum Cmd {
         typ: String,
         name: String,
     },
+    /// Print the stratification of the program (partition graph strata)
+    Strata,
 }
 
 fn main() -> Result<()> {
@@ -73,6 +76,9 @@ fn main() -> Result<()> {
 
     let files = default_files(&cli.files)?;
     let program = loader::load_program(&files)?;
+    if let Cmd::Strata = cli.cmd {
+        return print_strata(&files, &program);
+    }
 
     let set_keys: Vec<String> = cli
         .set
@@ -146,6 +152,7 @@ fn main() -> Result<()> {
             let json = serde_json::to_string_pretty(&r.attrs)?;
             println!("{}", json);
         }
+        Cmd::Strata => unreachable!("handled before evaluation"),
         Cmd::Plan => {
             let plan = backend.plan(&resources, &adopts, &st)?;
             print_plan(&plan, cli.show_noop);
@@ -183,6 +190,19 @@ fn main() -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+/// `dform strata`: the partition graph's strata, or the negative cycle.
+fn print_strata(files: &[PathBuf], program: &dform::ast::Program) -> Result<()> {
+    let schema = dform::schema::fake();
+    let graph = partition::build(program, &schema, &partition::Options::default())?;
+    let verdict = partition::stratify(&graph);
+    let name = files.iter().map(|f| f.display().to_string()).collect::<Vec<_>>().join(" ");
+    print!("{}", partition::report(&name, &graph, &verdict));
+    if let partition::Verdict::Rejected { scc, negative_edges } = &verdict {
+        bail!("{}", partition::cycle_error(&graph, scc, negative_edges));
+    }
     Ok(())
 }
 

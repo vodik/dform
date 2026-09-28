@@ -1,5 +1,7 @@
-//! The partition graph of proposal E §2.6 / DR-12, run over the LOWERED
-//! program (`transform::lower`) exactly as the current pipeline produces it.
+//! The partition graph of proposal E §2.6 / DR-12 as revised by F, run over
+//! the LOWERED program (`transform::lower`). This is the evaluator's
+//! stratifier: `engine::eval` evaluates strata in the order computed here and
+//! assigns every rule to the stratum of its head node.
 //!
 //! Nodes:
 //!   * `arg`/`arg_add`/`setting`/`setting_add`/`output` heads are
@@ -11,9 +13,9 @@
 //!   * Body reads of `arg`/`arg_add`/`setting`/`output` are reads of the
 //!     aggregate: they connect to every `(attr, T, P)` node they unify with,
 //!     with a NEGATIVE edge (every reader of an aggregate is above its group).
-//!   * `want` is one node when `partition_want == false` (E as written:
-//!     "every other predicate is one node") and `(want, T)` nodes when true
-//!     (the F fix).
+//!   * Every other type-keyed core predicate (`want`, `adopt`, ...; F's
+//!     DR-12 revised) is one node per constant type, `(want, T)`, or
+//!     `(want, *)` when the type is not constant.
 //!   * Every other predicate is one node.
 //!
 //! Edges run body -> head. Negative when: the literal is under `not`; the
@@ -27,7 +29,7 @@
 //! no spans (DESIGN.org "No source locations"), so a rule is identified by its
 //! index in the lowered program and its pretty-printed text.
 
-use crate::ast::{Atom, Lit, Program, RuleStmt, Stmt, Term};
+use crate::ast::{Atom, Constraint, Lit, Program, RuleStmt, Stmt, Term};
 use crate::schema::Schema;
 use crate::transform;
 use crate::value::Value;
@@ -91,20 +93,10 @@ pub struct Graph {
     pub rules: Vec<RuleStmt>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Options {
-    /// F fix: partition `want` (and `adopt`) by constant type.
-    pub partition_want: bool,
-    /// Treat `collect_set`/`collect_list` heads as aggregates (E: yes).
-    pub aggregate_collect: bool,
     /// Predicates that are externs (negative edges into their readers).
     pub externs: BTreeSet<String>,
-}
-
-impl Default for Options {
-    fn default() -> Self {
-        Options { partition_want: false, aggregate_collect: true, externs: BTreeSet::new() }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -162,15 +154,21 @@ fn contrib_node(atom: &Atom) -> Option<(Node, Node)> {
     Some((arg, attr))
 }
 
-fn want_like(pred: &str) -> bool {
-    matches!(pred, "want" | "adopt")
+/// Compiler-owned predicates whose first column is a resource type (F's
+/// DR-12 revised). Each is one node per constant type.
+fn type_keyed(pred: &str) -> bool {
+    matches!(
+        pred,
+        "want" | "adopt" | "identity" | "lifecycle" | "ignore_changes" | "moved" | "desired" | "world"
+    )
 }
 
-fn head_node(atom: &Atom, opts: &Options) -> Node {
+/// The node a rule with this head defines.
+pub fn head_node(atom: &Atom) -> Node {
     if let Some((arg, _)) = contrib_node(atom) {
         return arg;
     }
-    if opts.partition_want && want_like(&atom.pred) && !atom.args.is_empty() {
+    if type_keyed(&atom.pred) && !atom.args.is_empty() {
         return Node { pred: atom.pred.clone(), typ: const_str(&atom.args[0]), path: None };
     }
     Node::plain(&atom.pred)
@@ -178,14 +176,11 @@ fn head_node(atom: &Atom, opts: &Options) -> Node {
 
 /// The pattern a body literal reads. For a contribution predicate the read
 /// is of the aggregate `attr`.
-fn body_pattern(atom: &Atom, opts: &Options) -> Node {
+fn body_pattern(atom: &Atom) -> Node {
     if let Some((_, attr)) = contrib_node(atom) {
         return attr;
     }
-    if opts.partition_want && want_like(&atom.pred) && !atom.args.is_empty() {
-        return Node { pred: atom.pred.clone(), typ: const_str(&atom.args[0]), path: None };
-    }
-    Node::plain(&atom.pred)
+    head_node(atom)
 }
 
 fn is_builtin_or_edb(pred: &str) -> bool {
@@ -202,7 +197,7 @@ pub fn is_aggregate_head(head: &Atom) -> bool {
     })
 }
 
-/// Build the graph over the lowered program plus the schema's prelude.
+/// Build the graph over a program: lower it, then `build_lowered`.
 pub fn build(program: &Program, schema: &Schema, opts: &Options) -> Result<Graph> {
     let lowered = transform::lower(program)?;
     let mut rules: Vec<RuleStmt> = Vec::new();
@@ -211,20 +206,25 @@ pub fn build(program: &Program, schema: &Schema, opts: &Options) -> Result<Graph
         match s {
             Stmt::Rule(r) => rules.push(r.clone()),
             Stmt::Fact(a) => fact_atoms.push(a.clone()),
-            Stmt::Constraint(c) => {
-                // A constraint is a `deny` rule with a message head.
-                rules.push(RuleStmt {
-                    head: Atom {
-                        pred: "deny".into(),
-                        args: vec![Term::Val(Value::Str(c.message.clone()))],
-                        record: None,
-                    },
-                    body: c.body.clone(),
-                });
-            }
+            Stmt::Constraint(c) => rules.push(constraint_rule(c)),
             _ => {}
         }
     }
+    Ok(build_lowered(rules, &fact_atoms, schema, opts))
+}
+
+/// A constraint is a `deny` rule with a message head.
+pub fn constraint_rule(c: &Constraint) -> RuleStmt {
+    RuleStmt {
+        head: Atom { pred: "deny".into(), args: vec![Term::Val(Value::Str(c.message.clone()))], record: None },
+        body: c.body.clone(),
+    }
+}
+
+/// Build the graph over lowered rules and facts plus the schema's prelude.
+/// `Graph::rules` is `rules` in the given order, so a rule's index in the
+/// graph is its index in the caller's list.
+pub fn build_lowered(rules: Vec<RuleStmt>, fact_atoms: &[Atom], schema: &Schema, opts: &Options) -> Graph {
 
     let mut nodes: BTreeSet<Node> = BTreeSet::new();
     let mut edges: Vec<Edge> = Vec::new();
@@ -232,16 +232,16 @@ pub fn build(program: &Program, schema: &Schema, opts: &Options) -> Result<Graph
     // Definition nodes: every head, every fact's predicate, every aggregate
     // node behind a contribution, and the prelude's computed contributions.
     let mut defs: BTreeSet<Node> = BTreeSet::new();
-    for a in &fact_atoms {
+    for a in fact_atoms {
         if let Some((arg, attr)) = contrib_node(a) {
             defs.insert(arg);
             defs.insert(attr);
         } else {
-            defs.insert(head_node(a, opts));
+            defs.insert(head_node(a));
         }
     }
     for r in &rules {
-        let h = head_node(&r.head, opts);
+        let h = head_node(&r.head);
         defs.insert(h.clone());
         if let Some((_, attr)) = contrib_node(&r.head) {
             defs.insert(attr);
@@ -253,11 +253,7 @@ pub fn build(program: &Program, schema: &Schema, opts: &Options) -> Result<Graph
         for (attr_name, _) in schema.computed_of(&t) {
             let arg = Node { pred: "arg".into(), typ: Some(t.clone()), path: Some(attr_name.clone()) };
             let attr = Node { pred: "attr".into(), typ: Some(t.clone()), path: Some(attr_name) };
-            let want = if opts.partition_want {
-                Node { pred: "want".into(), typ: Some(t.clone()), path: None }
-            } else {
-                Node::plain("want")
-            };
+            let want = Node { pred: "want".into(), typ: Some(t.clone()), path: None };
             defs.insert(arg.clone());
             defs.insert(attr.clone());
             defs.insert(want.clone());
@@ -290,8 +286,8 @@ pub fn build(program: &Program, schema: &Schema, opts: &Options) -> Result<Graph
 
     // Rule edges.
     for (i, r) in rules.iter().enumerate() {
-        let head = head_node(&r.head, opts);
-        let agg_head = opts.aggregate_collect && is_aggregate_head(&r.head);
+        let head = head_node(&r.head);
+        let agg_head = is_aggregate_head(&r.head);
         for lit in &r.body {
             let (atom, negated) = match lit {
                 Lit::Pos(a) => (a, false),
@@ -301,7 +297,7 @@ pub fn build(program: &Program, schema: &Schema, opts: &Options) -> Result<Graph
             if is_builtin_or_edb(&atom.pred) {
                 continue;
             }
-            let pat = body_pattern(atom, opts);
+            let pat = body_pattern(atom);
             let reads_aggregate = pat.pred == "attr";
             let is_extern = opts.externs.contains(&atom.pred);
             let negative = negated || agg_head || reads_aggregate || is_extern;
@@ -334,7 +330,7 @@ pub fn build(program: &Program, schema: &Schema, opts: &Options) -> Result<Graph
         }
     }
 
-    Ok(Graph { nodes, edges, rules })
+    Graph { nodes, edges, rules }
 }
 
 /// Tarjan SCC over the node graph; a negative edge inside an SCC is a
@@ -531,6 +527,23 @@ pub fn report(name: &str, g: &Graph, v: &Verdict) -> String {
     out
 }
 
+/// The compile error for a negative cycle: every node on it and every
+/// negative edge inside it, each with the full text of the rule that makes it.
+pub fn cycle_error(g: &Graph, scc: &BTreeSet<Node>, negative_edges: &[Edge]) -> String {
+    let mut out = format!(
+        "program is not stratifiable: negative cycle through {}",
+        scc.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(", ")
+    );
+    for e in negative_edges {
+        let rule = match e.rule {
+            Some(i) => fmt_rule(&g.rules[i]),
+            None => "(prelude)".into(),
+        };
+        out.push_str(&format!("\n  {} -> {} [{}]: {}", e.from, e.to, e.why, rule));
+    }
+    out
+}
+
 /// Convenience: load, build, stratify, report.
 pub fn run_file(name: &str, files: &[std::path::PathBuf], schema: &Schema, opts: &Options) -> Result<(Verdict, String)> {
     let program = crate::loader::load_program(files)?;
@@ -559,28 +572,11 @@ mod tests {
         ]
     }
 
-    /// E §2.6 / DR-12 as written: `want` is one node.
-    #[test]
-    fn dr12_as_written_over_the_five_example_programs() {
-        let opts = Options::default();
-        let mut results = Vec::new();
-        for (name, path, schema) in examples() {
-            let (v, r) = run_file(name, &[path], &schema, &opts).unwrap();
-            println!("{r}");
-            results.push((name, matches!(v, Verdict::Stratified { .. })));
-        }
-        println!("DR-12 as written: {:?}", results);
-        // The finding: dform.df is REJECTED under DR-12 as written, because
-        // `want` is a single node and the database/kubernetes modules read
-        // `output(private_subnet_ids)`, an aggregate over `want(net.subnet)`.
-        let dform = results.iter().find(|(n, _)| *n == "dform.df").unwrap();
-        assert!(!dform.1, "dform.df unexpectedly stratified under DR-12 as written");
-    }
-
-    /// F fix: partition `want` by constant type too.
+    /// F's DR-12 revised: `want` is partitioned by constant type, so the
+    /// cross-module wiring through `output(private_subnet_ids)` stratifies.
     #[test]
     fn dr12_revised_partitions_want_by_type() {
-        let opts = Options { partition_want: true, ..Default::default() };
+        let opts = Options::default();
         let mut results = Vec::new();
         for (name, path, schema) in examples() {
             let (v, r) = run_file(name, &[path], &schema, &opts).unwrap();
@@ -591,12 +587,17 @@ mod tests {
         for (name, ok) in &results {
             assert!(ok, "{name} rejected under revised DR-12");
         }
+        // F section 4.1: dform.df in 11 strata (vpc, subnets, the subnet-id
+        // output, then the database and cluster that consume it, then policy).
+        let (v, _) = run_file("dform.df", &[root().join("dform.df")], &crate::schema::fake(), &opts).unwrap();
+        let Verdict::Stratified { strata } = v else { panic!() };
+        assert_eq!(strata.values().max().copied().unwrap() + 1, 11);
     }
 
     /// Adversarial programs, in the current syntax so they lower today.
     #[test]
     fn adversarial_programs_under_revised_dr12() {
-        let opts = Options { partition_want: true, ..Default::default() };
+        let opts = Options::default();
         let dir = root().join("examples/adversarial");
         let cases: Vec<(&str, bool)> = vec![
             ("adv3_pack_reads_other_path.df", true),

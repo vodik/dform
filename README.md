@@ -18,6 +18,7 @@ The repo includes a demo program at `dform.df` that imports reusable chunks from
 cargo run -- plan
 cargo run -- apply
 cargo run -- plan --set env=prod
+cargo run -- strata    # evaluation order: the partition graph's strata
 ```
 
 State is scoped to a stack. Until a `stack` statement exists, the stack is the
