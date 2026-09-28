@@ -18,7 +18,7 @@ settings prod {
 import "../modules/network.df".
 
 use network main {
-  vpc_cidr = VpcCidr
+  vpc_net = VpcCidr
 } :-
   env(Env),
   setting(Env, network.vpc_cidr, VpcCidr).

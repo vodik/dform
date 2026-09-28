@@ -55,6 +55,15 @@ fn main() -> Result<()> {
     let files = default_files(&cli.files)?;
     let program = loader::load_program(&files)?;
 
+    let set_keys: Vec<String> = cli
+        .set
+        .iter()
+        .filter_map(|kv| kv.split_once('=').map(|(k, _)| k.to_string()))
+        .collect();
+    for w in dform::lint::lint(&program, &set_keys) {
+        eprintln!("warning: {w}");
+    }
+
     let root = PathBuf::from(".dform");
     let backend = FakeCloud::new(root.clone());
 

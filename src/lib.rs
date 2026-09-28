@@ -4,6 +4,7 @@ pub mod engine;
 pub mod fakecloud;
 pub mod ir;
 pub mod lattice;
+pub mod lint;
 pub mod loader;
 pub mod merge;
 pub mod parser;
