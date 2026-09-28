@@ -2,10 +2,13 @@
 //! a provider that dies during an Apply is a failed action naming the
 //! resource and the next apply resumes, a `provider` source directory
 //! holding an executable is that plugin, and `dform provider check` is the
-//! conformance suite.
+//! conformance suite, which the mock passes on every backend (a process
+//! over gRPC, linked in, linked in across prost).
 
 mod common;
-use common::Scratch;
+use common::{BACKENDS, Backend, Scratch};
+use dform::plugin::link::Link;
+use dform::plugin::{Config, Launch, Providers};
 
 const PROG: &str = r#"edition 2026
 
@@ -80,15 +83,39 @@ fn a_source_directory_holding_an_executable_is_that_plugin() {
 #[test]
 fn the_mock_conforms() {
     let s = Scratch::new("protocol-check");
-    let r = s.run(&["provider", "check", &fake()]).success();
-    assert!(!r.stdout.contains("FAIL"), "{}", r.stdout);
-    assert!(
-        r.stdout
-            .contains("ok    Apply refuses an action whose assertion fails"),
-        "{}",
-        r.stdout
-    );
-    assert!(r.stdout.ends_with("conforms\n"), "{}", r.stdout);
+    let exe = fake();
+    let runs = BACKENDS
+        .into_iter()
+        .map(|b| (b, "fake"))
+        .chain([(Backend::Process, exe.as_str())]);
+    let mut reports = Vec::new();
+    for (backend, path) in runs {
+        let r = s.run_on(backend, &["provider", "check", path]).success();
+        assert!(!r.stdout.contains("FAIL"), "{backend:?}: {}", r.stdout);
+        assert!(
+            r.stdout
+                .contains("ok    Apply refuses an action whose assertion fails"),
+            "{backend:?}: {}",
+            r.stdout
+        );
+        assert!(
+            r.stdout.ends_with("conforms\n"),
+            "{backend:?}: {}",
+            r.stdout
+        );
+        reports.push(r.stdout.replace(path, "PATH"));
+    }
+    // The same cases, the same report.
+    assert!(reports.windows(2).all(|w| w[0] == w[1]), "{reports:#?}");
+}
+
+/// The backends a test links: the process one, the direct and wire ones.
+fn launches() -> [(Backend, Box<dyn Launch>); 3] {
+    [
+        (Backend::Process, Box::new(dform_grpc::client::Process)),
+        (Backend::Direct, Box::new(dform_mock::Linked::direct())),
+        (Backend::Wire, Box::new(dform_mock::Linked::wire())),
+    ]
 }
 
 /// An executable that does not speak the protocol is a deviation, not a
@@ -115,7 +142,7 @@ fn a_provider_without_a_handshake_deviates() {
 /// The type of each `type_attr` row of a Schema answer, and how many
 /// `type_provider` rows it holds.
 fn schema_rows(
-    conn: &mut dform::plugin::link::Link,
+    conn: &mut Link,
     types: Option<&[&str]>,
 ) -> (std::collections::BTreeSet<String>, usize) {
     use dform::plugin::{pb, wire};
@@ -145,8 +172,13 @@ fn schema_rows(
 /// they alias), and every type_provider row; none names all of them.
 #[test]
 fn the_mock_answers_the_schema_of_the_types_asked_for() {
+    for (_, launch) in launches() {
+        the_mock_answers_the_schema_asked_for(launch.mock().unwrap());
+    }
+}
+
+fn the_mock_answers_the_schema_asked_for(mut conn: Link) {
     let s = Scratch::new("protocol-schema-scope");
-    let mut conn = dform_grpc::client::Conn::link(std::path::Path::new(&fake())).unwrap();
     let config = serde_json::json!({
         "schemas": ["fake", "k8s"],
         "world": s.path("w.json").display().to_string(),
@@ -170,11 +202,17 @@ fn the_mock_answers_the_schema_of_the_types_asked_for() {
 /// for more.
 #[test]
 fn a_scoped_run_loads_the_schema_of_its_types() {
+    for (_, launch) in launches() {
+        a_scoped_run_loads_the_schema_of_its_types_on(&*launch);
+    }
+}
+
+fn a_scoped_run_loads_the_schema_of_its_types_on(launch: &dyn Launch) {
     let s = Scratch::new("protocol-schema-load");
-    let backend = dform::plugin::Providers::start_deferred(
-        &dform_grpc::client::Process,
+    let backend = Providers::start_deferred(
+        launch,
         &[],
-        &dform::plugin::Config {
+        &Config {
             world: s.path("w.json"),
             inventory: s.path("inv.json"),
             chaos: vec![],

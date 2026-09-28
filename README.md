@@ -1277,19 +1277,23 @@ loop's, byte for byte, circuit node ids included.
 fresh `id` everywhere, an open `endpoint` on every tenth), N resources
 (each with a `parent` ref to an earlier one, one in a hundred stuck on a
 `format` over an endpoint), a recursive closure over the first thousand,
-and a 500-rule policy pack, then plans them with the `dform` binary:
+and a 500-rule policy pack, then plans them with the command line over
+the direct backend (the mock linked in), in a child process:
 
 ```bash
 cargo bench --bench scale                  # 10^3 resources (CI-sized)
 cargo bench --bench scale -- --full        # 10^4 and 10^5 resources
 cargo bench --bench scale -- --resources 5000 --out /tmp/gen   # keep the programs
-cargo bench --bench scale -- --bin path/to/other/dform         # A/B a build
+cargo bench --bench scale -- --process                         # also `dform` over gRPC
+cargo bench --bench scale -- --bin path/to/other/dform         # ... another build of it
 ```
 
 It reports partition-graph nodes, provenance bytes per fact, stuck
 instances per null, the evaluator's read count (index lookups plus tuples
-read, deterministic), and `dform plan` wall time with /proc/loadavg and
-instructions (when `perf` is installed).
+read, deterministic), and per backend the plan's wall time with
+/proc/loadavg and instructions (when `perf` is installed; over gRPC the
+provider process's included), and on the direct backend the provider's
+share: the time spent in the mock's calls.
 
 ## Status
 

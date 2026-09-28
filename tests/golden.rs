@@ -11,7 +11,7 @@
 //! like any other output.
 
 mod common;
-use common::{Scratch, repo};
+use common::{Backend, Scratch, repo};
 use std::path::PathBuf;
 
 struct Case {
@@ -190,12 +190,28 @@ fn check(program: &str, case: &str, ext: &str, got: &str) {
 }
 
 fn run(s: &Scratch, args: &[&str]) -> (bool, String, String) {
-    let r = s.run(args);
+    run_on(Backend::Process, s, args)
+}
+
+fn run_on(backend: Backend, s: &Scratch, args: &[&str]) -> (bool, String, String) {
+    let r = s.run_on(backend, args);
     (r.ok, r.stdout, r.stderr)
 }
 
 #[test]
 fn golden() {
+    golden_on(Backend::Process, true);
+}
+
+/// Every case's plan with the mock linked in (the direct backend): the same
+/// snapshot as over gRPC.
+#[test]
+fn golden_direct() {
+    golden_on(Backend::Direct, false);
+}
+
+fn golden_on(backend: Backend, strata: bool) {
+    let run = |s: &Scratch, args: &[&str]| run_on(backend, s, args);
     for c in CASES {
         let scratch = Scratch::new(&format!("golden-{}-{}", c.program, c.case));
         let file = repo().join(c.file);
@@ -238,6 +254,9 @@ fn golden() {
         let plan_args: Vec<&str> = plan_args.iter().map(String::as_str).collect();
         let (ok, out, err) = run(&scratch, &plan_args);
         check(c.program, c.case, "plan", &transcript(ok, &out, &err));
+        if !strata {
+            continue;
+        }
 
         // -- strata -- (no --world/--inventory: strata reads neither; the
         // provider's schema expands the prelude, as in plan)

@@ -1,9 +1,10 @@
 //! The Z-set planner through the provider protocol: the fixture world
 //! planned by the mock provider, as the CLI plans it (refresh facts feed
-//! round 0, then the Z-set).
+//! round 0, then the Z-set), on every backend: a process over gRPC, linked
+//! in, linked in across prost.
 
 use dform::ast::{Atom, Program, Term};
-use dform::plugin::{Config, Providers};
+use dform::plugin::{Config, Launch, Providers};
 use dform::provider::ActionKind;
 use dform::value::Value;
 use dform::zset::Lifecycle;
@@ -26,16 +27,35 @@ fn input(k: &str, v: &str) -> Atom {
     }
 }
 
+type Planned = Vec<(String, ActionKind, BTreeSet<String>)>;
+
 /// Plan `program` against a world file and its state, the way the CLI
-/// does: refresh facts feed round 0, then the Z-set.
-fn plan(
+/// does, on every backend: the same plan on each.
+fn plan(program: &Program, extra: &[Atom], world: &Path, state: &Path) -> Planned {
+    let launches: [Box<dyn Launch>; 3] = [
+        Box::new(dform_grpc::client::Process),
+        Box::new(dform_mock::Linked::direct()),
+        Box::new(dform_mock::Linked::wire()),
+    ];
+    let plans: Vec<Planned> = launches
+        .iter()
+        .map(|l| plan_on(&**l, program, extra, world, state))
+        .collect();
+    let spelled: Vec<String> = plans.iter().map(|p| format!("{p:?}")).collect();
+    assert!(spelled.windows(2).all(|w| w[0] == w[1]), "{spelled:#?}");
+    plans.into_iter().next().unwrap()
+}
+
+/// Refresh facts feed round 0, then the Z-set.
+fn plan_on(
+    launch: &dyn Launch,
     program: &Program,
     extra: &[Atom],
     world: &Path,
     state: &Path,
-) -> Vec<(String, ActionKind, BTreeSet<String>)> {
+) -> Planned {
     let backend = Providers::start(
-        &dform_grpc::client::Process,
+        launch,
         &[],
         &Config {
             world: world.to_path_buf(),

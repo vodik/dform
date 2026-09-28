@@ -23,10 +23,18 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: cargo build
-        run: cargo build --verbose
+        run: cargo build --workspace --verbose
+
+      - name: dform-core builds without a network stack
+        run: |
+          cargo build -p dform-core
+          if cargo tree -p dform-core -e normal,build | grep -E '\b(tonic|tokio|hyper)\b'; then
+            echo "dform-core depends on a network crate (above)" >&2
+            exit 1
+          fi
 
       - name: cargo test
-        run: cargo test --verbose
+        run: cargo test --workspace --verbose
 
       - name: cargo run -- plan
         run: cargo run -q -- plan

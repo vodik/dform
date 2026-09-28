@@ -667,7 +667,7 @@ impl pb::provider_server::Provider for Service {
     }
 }
 
-/// Serve as a provider (`plugin::transport`: TCP on the loopback, or a unix
+/// Serve as a provider (`dform_grpc::transport`: TCP on the loopback, or a unix
 /// socket), and exit when stdin closes.
 pub fn serve() -> Result<()> {
     dform_grpc::transport::serve(

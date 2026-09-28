@@ -1,5 +1,5 @@
 //! The editor grammar (`tree-sitter-dform/`) and the compiler's parser
-//! (`src/syntax/parser.rs`) read the corpus the same way: every file the
+//! (`crates/dform-core/src/syntax/parser.rs`) read the corpus the same way: every file the
 //! compiler reads parses without an ERROR or MISSING node, both trees have
 //! the same statements, blocks and literals at the same byte ranges, and a
 //! file has a tree-sitter error exactly when it has a syntax error. The
@@ -224,7 +224,7 @@ fn both_parsers_build_the_same_statements_and_literals() {
 }
 
 /// The files whose errors are in a string's text or holes: the compiler
-/// finds those while lowering the string (src/syntax/resolve.rs), the
+/// finds those while lowering the string (crates/dform-core/src/syntax/resolve.rs), the
 /// editor grammar while parsing it.
 const STRING_ERRORS: &[&str] = &["bad_string.df", "interpolation.df"];
 

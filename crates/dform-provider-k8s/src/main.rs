@@ -1,4 +1,4 @@
-//! The Kubernetes provider (`src/k8s/`) behind the plugin protocol:
+//! The Kubernetes provider (`dform-k8s`) behind the plugin protocol:
 //! `provider k8s { source = "path/to/dform-provider-k8s" }`.
 
 fn main() -> std::process::ExitCode {

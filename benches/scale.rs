@@ -1,11 +1,12 @@
 //! Scale benchmark (WORK.org phase 7): programs generated from a mock
-//! schema, planned by the `dform` binary, with the numbers that gate the
-//! phase.
+//! schema, planned by the command line with the mock linked in (the direct
+//! backend), with the numbers that gate the phase.
 //!
 //!   cargo bench --bench scale                  # CI-sized: 10^3 resources
 //!   cargo bench --bench scale -- --full        # 10^4 and 10^5 resources
 //!   cargo bench --bench scale -- --resources 5000
-//!   cargo bench --bench scale -- --bin PATH    # plan with another build
+//!   cargo bench --bench scale -- --process     # also plan with `dform` over gRPC
+//!   cargo bench --bench scale -- --bin PATH    # ... with another build of it
 //!   cargo bench --bench scale -- --out DIR     # keep the generated programs
 //!
 //! Each scale generates a schema of 10^3 types (`type_attr` rows: a fresh
@@ -18,9 +19,17 @@
 //!
 //! Reported per scale: partition-graph nodes, provenance bytes per fact,
 //! stuck instances per null, the evaluator's read count (index lookups
-//! plus tuples read: deterministic), and for `dform plan` wall time and
-//! instructions (`perf stat`, when perf is installed) with /proc/loadavg.
+//! plus tuples read: deterministic), and for the plan wall time and
+//! instructions (`perf stat`, when perf is installed) with /proc/loadavg,
+//! and the provider's share: the time spent in the mock's calls, which the
+//! direct backend runs on the planning thread. The plan runs in a child
+//! process (this bench, run again with `--plan-child DIR`) so perf counts
+//! it alone.
 
+use dform::plugin::Launch;
+use dform::plugin::backend::{Call, CallError, Handler, Reply};
+use dform::plugin::link::Link;
+use dform::plugin::queue::{Order, Queue};
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -147,23 +156,101 @@ fn loadavg() -> String {
         .unwrap_or_else(|_| "n/a".into())
 }
 
-/// `dform plan` over the generated program: wall time, and instructions
-/// when `perf` can count them.
-fn plan(bin: &Path, dir: &Path) -> (f64, Option<u64>, bool) {
-    let args = ["--provider", "schema.df", "--file", "main.df", "plan"];
+const PLAN: [&str; 5] = ["--provider", "schema.df", "--file", "main.df", "plan"];
+
+/// The mock, its calls timed.
+struct Timed<H>(H);
+
+/// Time spent in the provider's calls, in ns.
+static IN_PROVIDER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+impl<H: Handler> Handler for Timed<H> {
+    fn handle(&self, call: Call) -> Result<Reply, CallError> {
+        let start = Instant::now();
+        let r = self.0.handle(call);
+        IN_PROVIDER.fetch_add(
+            start.elapsed().as_nanos() as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        r
+    }
+}
+
+/// The direct backend, the mock's calls timed.
+struct TimedDirect;
+
+impl Launch for TimedDirect {
+    fn mock(&self) -> anyhow::Result<Link> {
+        let q = Queue::new(Timed(dform_mock::Mock::linked()), Order::Clock, false);
+        Link::start("the mock (direct, timed)", Box::new(q))
+    }
+
+    fn plugin(&self, exe: &Path) -> anyhow::Result<Link> {
+        anyhow::bail!("{}: the bench plans with the mock only", exe.display())
+    }
+}
+
+/// `--plan-child DIR`: plan there with the direct backend, then say how
+/// long the provider's calls took (on stderr: `provider-ns N`).
+fn plan_child(dir: &Path) -> ! {
+    std::env::set_current_dir(dir).expect("cd");
+    let args = std::iter::once("dform").chain(PLAN).map(Into::into);
+    let code = dform::cli::main(&TimedDirect, args);
+    eprintln!(
+        "provider-ns {}",
+        IN_PROVIDER.load(std::sync::atomic::Ordering::Relaxed)
+    );
+    std::process::exit(if code == std::process::ExitCode::SUCCESS {
+        0
+    } else {
+        1
+    })
+}
+
+/// How a plan runs: this bench's child over the direct backend, or a
+/// `dform` binary over gRPC.
+enum How {
+    Direct,
+    Process(PathBuf),
+}
+
+struct Planned {
+    wall: f64,
+    instructions: Option<u64>,
+    planned: bool,
+    /// Seconds in the provider's calls (the direct backend).
+    provider: Option<f64>,
+}
+
+/// A plan of the generated program: wall time, and instructions when
+/// `perf` can count them (a process backend's provider process included).
+fn plan(how: &How, dir: &Path) -> Planned {
     let perf = Command::new("perf").arg("--version").output().is_ok();
+    let mut cmd = match how {
+        How::Direct => {
+            let mut c = Command::new(std::env::current_exe().expect("this bench"));
+            // It runs in `dir` (below).
+            c.args(["--plan-child", "."]);
+            c
+        }
+        How::Process(bin) => {
+            let mut c = Command::new(bin);
+            c.args(PLAN);
+            c
+        }
+    };
     let start = Instant::now();
     let out = if perf {
         Command::new("perf")
             .args(["stat", "-x,", "-e", "instructions:u", "--"])
-            .arg(bin)
-            .args(args)
+            .arg(cmd.get_program())
+            .args(cmd.get_args())
             .current_dir(dir)
             .output()
     } else {
-        Command::new(bin).args(args).current_dir(dir).output()
+        cmd.current_dir(dir).output()
     }
-    .expect("run dform");
+    .expect("run the plan");
     let wall = start.elapsed().as_secs_f64();
     let stderr = String::from_utf8_lossy(&out.stderr);
     let instructions = perf
@@ -174,12 +261,22 @@ fn plan(bin: &Path, dir: &Path) -> (f64, Option<u64>, bool) {
                 .and_then(|l| l.split(',').next()?.parse().ok())
         })
         .flatten();
+    let provider = stderr
+        .lines()
+        .find_map(|l| l.strip_prefix("provider-ns "))
+        .and_then(|n| n.parse::<u64>().ok())
+        .map(|ns| ns as f64 / 1e9);
     let planned = String::from_utf8_lossy(&out.stdout).contains("plan:");
     if !planned {
         let head: Vec<&str> = stderr.lines().take(5).collect();
         println!("  plan failed:\n    {}", head.join("\n    "));
     }
-    (wall, instructions, planned)
+    Planned {
+        wall,
+        instructions,
+        planned,
+        provider,
+    }
 }
 
 /// In-process: the partition graph, the provenance circuit and the stuck
@@ -208,7 +305,13 @@ fn inspect(dir: &Path) -> anyhow::Result<String> {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let mut bin = PathBuf::from(env!("CARGO_BIN_EXE_dform"));
+    if let [flag, dir] = args.as_slice()
+        && flag == "--plan-child"
+    {
+        plan_child(Path::new(dir));
+    }
+    let mut hows = vec![("direct", How::Direct)];
+    let mut bin: Option<PathBuf> = None;
     let mut out: Option<PathBuf> = None;
     let mut sizes = vec![1_000];
     let mut inspect_it = true;
@@ -223,11 +326,17 @@ fn main() {
                         .expect("--resources N"),
                 ]
             }
-            "--bin" => bin = PathBuf::from(it.next().expect("--bin PATH")),
+            "--process" => {
+                bin.get_or_insert_with(|| PathBuf::from(env!("CARGO_BIN_EXE_dform")));
+            }
+            "--bin" => bin = Some(PathBuf::from(it.next().expect("--bin PATH"))),
             "--out" => out = Some(PathBuf::from(it.next().expect("--out DIR"))),
             "--no-inspect" => inspect_it = false,
             _ => {} // `cargo bench` passes --bench
         }
+    }
+    if let Some(bin) = bin {
+        hows.push(("process", How::Process(bin)));
     }
     let keep = out.is_some();
     let root = out.unwrap_or_else(|| {
@@ -254,16 +363,25 @@ fn main() {
                 Err(e) => println!("  inspect failed: {e:#}"),
             }
         }
-        let before = loadavg();
-        let (wall, instructions, planned) = plan(&bin, &dir);
-        println!(
-            "  plan wall             {wall:.3}s{} (loadavg {before} -> {})",
-            if planned { "" } else { " (no plan printed)" },
-            loadavg()
-        );
-        match instructions {
-            Some(i) => println!("  plan instructions     {i}"),
-            None => println!("  plan instructions     n/a (perf not available)"),
+        for (name, how) in &hows {
+            let before = loadavg();
+            let p = plan(how, &dir);
+            println!(
+                "  plan ({name:7}) wall   {:.3}s{} (loadavg {before} -> {})",
+                p.wall,
+                if p.planned { "" } else { " (no plan printed)" },
+                loadavg()
+            );
+            match p.instructions {
+                Some(i) => println!("  plan ({name:7}) instr  {i}"),
+                None => println!("  plan ({name:7}) instr  n/a (perf not available)"),
+            }
+            if let Some(t) = p.provider {
+                println!(
+                    "  plan ({name:7}) provider {t:.3}s ({:.1}% of the wall)",
+                    100.0 * t / p.wall
+                );
+            }
         }
     }
     if !keep {
