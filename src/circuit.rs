@@ -43,6 +43,13 @@ pub enum Leaf {
     World {
         event: String,
     },
+    /// A fact the planner hands back to the program for the policy pass
+    /// (`zset::POLICY_INPUTS`): the plan's deformation, as planned at apply
+    /// tick `tick` (`None`: by `plan`).
+    Plan {
+        fact: String,
+        tick: Option<usize>,
+    },
     /// A fact given on the command line (`--set`, `--data`).
     Input {
         source: String,
@@ -536,6 +543,7 @@ fn leaf_bytes(l: &Leaf) -> usize {
         | Leaf::Rule { id: s }
         | Leaf::Schema { span: s }
         | Leaf::World { event: s }
+        | Leaf::Plan { fact: s, .. }
         | Leaf::Input { source: s }
         | Leaf::Extern { call: s }
         | Leaf::Absent { pattern: s } => s.len(),

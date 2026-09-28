@@ -488,11 +488,13 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
     // except those of `withheld` addresses (being replaced). `more`: the
     // deformation facts of a policy pass, which continues the last
     // evaluation over the same facts from the first stratum that reads
-    // them (`engine::Resumable`).
+    // them (`engine::Resumable`); `why` labels them as the plan's, of apply
+    // tick `tick` (`None`: of `plan`).
     let last: std::cell::RefCell<Option<(Vec<Atom>, engine::Resumable)>> = Default::default();
     let evaluate_with = |st: &state::State,
                          withheld: &BTreeSet<ir::Address>,
-                         more: &[Atom]|
+                         more: &[Atom],
+                         tick: Option<usize>|
      -> Result<(engine::EvalResult, Vec<String>)> {
         let mut extra = base_extra.clone();
         extra.extend(executor::withhold(backend.world_facts(st)?, withheld));
@@ -503,7 +505,7 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
             (res, violations)
         } else {
             let resumed = match &*last.borrow() {
-                Some((seen, resumable)) if *seen == extra => Some(resumable.with(more)?),
+                Some((seen, resumable)) if *seen == extra => Some(resumable.with_at(more, tick)?),
                 _ => None,
             };
             match resumed {
@@ -513,14 +515,14 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
                     // taken with are not all of them any more.
                     *last.borrow_mut() = None;
                     extra.extend(more.iter().cloned());
-                    externs.eval(&program, &extra)?
+                    externs.eval_at(&program, &extra, tick)?
                 }
             }
         };
         violations.extend(inputs::violations(&res.facts, &declared));
         Ok((res, violations))
     };
-    let evaluate = |st: &state::State| evaluate_with(st, &BTreeSet::new(), &[]);
+    let evaluate = |st: &state::State| evaluate_with(st, &BTreeSet::new(), &[], None);
     let (mut res, mut violations) = evaluate(&st)?;
     // moved/3 rewrites state's identity before the diff (E §3.4); round 0
     // must see the new addresses, so the program is evaluated again.
@@ -579,7 +581,7 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
         let (res, violations, resources) = if replaced.is_empty() {
             (res, violations.to_vec(), resources)
         } else {
-            let (again, violations) = evaluate_with(st, &replaced, &[])?;
+            let (again, violations) = evaluate_with(st, &replaced, &[], None)?;
             let docs = ir::compile_resources(again.facts.iter().cloned(), schema)?;
             plan = backend.plan_retracting(&docs, adopts, lifecycle, st, &replaced)?;
             executor::hold_dependents(&mut plan, &docs, &replaced);
@@ -610,7 +612,7 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
             &observed,
         );
         facts.extend(may_derive);
-        let (res, all) = evaluate_with(st, &replaced, &facts)?;
+        let (res, all) = evaluate_with(st, &replaced, &facts, None)?;
         let again = ir::compile_resources(res.facts.iter().cloned(), schema)?;
         if again.len() != resources.len()
             || again
@@ -883,21 +885,35 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
                     f.tick,
                     names.join(", ")
                 );
-                let changed = executor::changed_under(
-                    &backend,
-                    &executor::remaining(&f),
-                    &backend.observe(&st)?,
-                );
+                // The remaining deformations come back as facts with the
+                // documents they were planned against, as the held ones do
+                // at a boundary: the evaluator derives the deny when the
+                // world moved under one (`zset::POLICY_RULES`).
+                let remaining = executor::remaining(&f);
+                let observed = backend.observe(&st)?;
+                let changed = executor::changed_under(&backend, &remaining, &observed);
                 if !changed.is_empty() {
                     eprint!(
                         "the world changed under a remaining action:\n{}",
                         executor::format_changes(&changed)
                     );
+                }
+                let facts = zset::deformation_facts(
+                    remaining.keys().map(|a| ("remaining", a)),
+                    &remaining,
+                    &observed,
+                );
+                let (after, denies) = evaluate_with(&st, &BTreeSet::new(), &facts, Some(f.tick))?;
+                if !denies.is_empty() {
+                    let redact = query::Redactor::new(&after.facts, backend.schema());
+                    eprintln!("constraint violations:");
+                    for d in &denies {
+                        eprintln!("- {}", redact.text(d));
+                    }
                     persist(&st)?;
                     bail!(
-                        "apply stopped: the world changed under {} remaining actions of the \
-                         interrupted apply; review `dform plan`, then apply again",
-                        changed.len()
+                        "apply stopped: blocked by constraints on the remaining actions of the \
+                         interrupted apply; review `dform plan`, then apply again"
                     );
                 }
             }
@@ -1050,7 +1066,8 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
                 // with the documents they were planned against: the
                 // evaluator derives the deny when the world moved under one.
                 let held = executor::check_boundary(&backend, &seen, &pending, &st, tick)?;
-                let (next, next_violations) = evaluate_with(&st, &BTreeSet::new(), &held)?;
+                let (next, next_violations) =
+                    evaluate_with(&st, &BTreeSet::new(), &held, Some(tick))?;
                 violations = next_violations;
                 let redact = query::Redactor::new(&next.facts, backend.schema());
                 for w in &next.warnings {

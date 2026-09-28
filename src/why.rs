@@ -219,6 +219,7 @@ impl Printer<'_> {
         Some(match l {
             Leaf::Schema { .. } => "provider schema".into(),
             Leaf::World { .. } => "world (refresh)".into(),
+            Leaf::Plan { tick, .. } => plan_text(*tick),
             Leaf::Extern { .. } => "extern".into(),
             l => self.redact.text(&leaf_text(l)),
         })
@@ -335,12 +336,21 @@ impl Printer<'_> {
     }
 }
 
+/// Where a planner-injected fact came from: the plan, or the apply tick.
+fn plan_text(tick: Option<usize>) -> String {
+    match tick {
+        Some(n) => format!("plan (tick {n})"),
+        None => "plan".into(),
+    }
+}
+
 fn leaf_text(l: &Leaf) -> String {
     match l {
         Leaf::Base { span } => format!("fact, {span}"),
         Leaf::Input { source } => format!("input {source}"),
         Leaf::Schema { span } => format!("provider schema {span}"),
         Leaf::World { event } => format!("world {event}"),
+        Leaf::Plan { fact, tick } => format!("{} {fact}", plan_text(*tick)),
         Leaf::Extern { call } => format!("extern {call}"),
         Leaf::Rule { id } => format!("by {id}"),
         Leaf::Absent { pattern } => format!("not {pattern}   (absent)"),

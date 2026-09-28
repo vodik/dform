@@ -127,15 +127,18 @@ impl Lifecycle {
 ///
 ///   deformation(Kind, T, A, Before)  one per deformation: Kind is create,
 ///                                    adopt, update, drift, pending, replace,
-///                                    delete or delete_deposed; Before the
-///                                    digest of the world document it was
-///                                    planned against (`absent` for none)
+///                                    delete, delete_deposed or remaining;
+///                                    Before the digest of the world
+///                                    document it was planned against
+///                                    (`absent` for none)
 ///   world_digest(T, A, Now)          the world document's digest now
 ///
 /// and these rules, appended to the program, derive the lifecycle denies
 /// from them, so `why` explains them and a policy can read the same facts.
 /// At a phase boundary the held deformations come back as `pending` with
-/// the digest they were planned against, against the refreshed world.
+/// the digest they were planned against, against the refreshed world; on
+/// resuming an interrupted apply, its remaining ones come back as
+/// `remaining`.
 pub const POLICY_RULES: &str = r#"
 deny(M) :- lifecycle(T, A, prevent_destroy), deformation(delete, T, A, _),
   M = format("lifecycle prevent_destroy: the plan would delete %s.%s", T, A).
@@ -143,6 +146,8 @@ deny(M) :- lifecycle(T, A, prevent_destroy), deformation(replace, T, A, _),
   M = format("lifecycle prevent_destroy: the plan would replace %s.%s", T, A).
 deny(M) :- deformation(pending, T, A, Before), world_digest(T, A, Now), Before != Now,
   M = format("the world changed under a pending deformation: %s.%s", T, A).
+deny(M) :- deformation(remaining, T, A, Before), world_digest(T, A, Now), Before != Now,
+  M = format("the world changed under a remaining action: %s.%s", T, A).
 "#;
 
 /// The predicates a policy pass gives the program (`deformation_facts`).

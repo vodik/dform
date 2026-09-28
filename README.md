@@ -418,14 +418,16 @@ delete T.A`.
 Policy over the plan. Once the plan is computed its deformations go back to
 the evaluator as facts and the program is evaluated once more (the policy
 pass): `deformation(Kind, T, A, Before)` per deformation (`Kind` is
-`create`, `adopt`, `update`, `drift`, `pending`, `replace`, `delete` or
-`delete_deposed`; `Before` a digest of the world document it was planned
+`create`, `adopt`, `update`, `drift`, `pending`, `replace`, `delete`,
+`delete_deposed` or `remaining`; `Before` a digest of the world document it was planned
 against, `absent` for none) and `world_digest(T, A, Now)`. The lifecycle
 denies are rules over them (`zset::POLICY_RULES`): `prevent_destroy` reads
 `lifecycle/3` and a `delete` or `replace`, and at a phase boundary the held
 deformations come back as `pending` with the digest they were planned
-against, so the world moving under one is a deny too. `why` explains them,
-and a policy can read the same facts:
+against, so the world moving under one is a deny too; so do the remaining
+deformations of an interrupted apply, as `remaining`, when it resumes.
+`why` explains them (the injected facts print as `plan`, or `plan (tick
+N)` when given at an apply tick), and a policy can read the same facts:
 
 ```prolog
 deny(M) :- deformation(delete, T, A, _), M = format("no deletes here: %s.%s", T, A).
@@ -453,7 +455,8 @@ call its deformations are written to state as in flight, each with the world
 document it was planned against, and each answered call takes its action out.
 The next `apply` prints `resuming the apply interrupted at tick N; remaining:
 ...`, refreshes, and finishes the remaining actions; if the world changed
-under one of them it prints the change and stops before any Apply call (run
+under one of them it prints the change and stops before any Apply call, on
+the deny the policy pass derives from `deformation(remaining, ...)` (run
 `apply` again to plan against the world as it now is).
 
 `plan --out PLAN.json` writes the plan file: the inputs (each `--file` with a
@@ -549,7 +552,7 @@ circuit every evaluation records (proposal E §3, DR-10): the rule (its id
 and text), the rule's bindings, and the facts the firing read, recursively;
 a fact given to the run says where it came from (`fact, statement N` until
 the parser keeps spans, `input --set env=prod`, the provider schema, the
-world). An attribute shows every contribution with its rank and owner.
+world, the plan for the facts the planner hands to the policy pass). An attribute shows every contribution with its rank and owner.
 Variables are allowed and every match is printed. A fact derived more than
 one way shows its first derivation and `... N more alternatives`; `--all`
 shows them all. An `attr`/`arg` pattern may name part of an object

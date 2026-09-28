@@ -329,8 +329,19 @@ impl<'a> Externs<'a> {
     /// Evaluate `program` with the externs answered: rounds until no call
     /// is new.
     pub fn eval(&self, program: &Program, extra: &[Atom]) -> Result<(EvalResult, Vec<String>)> {
+        self.eval_at(program, extra, None)
+    }
+
+    /// `eval`, the planner's facts in `extra` given at apply tick `tick`
+    /// (`engine::eval_at`).
+    pub fn eval_at(
+        &self,
+        program: &Program,
+        extra: &[Atom],
+        tick: Option<usize>,
+    ) -> Result<(EvalResult, Vec<String>)> {
         let (res, violations, ()) = self.rounds(extra, |given| {
-            engine::eval(program, given).map(|(r, v)| (r, v, ()))
+            engine::eval_at(program, given, tick).map(|(r, v)| (r, v, ()))
         })?;
         Ok((res, violations))
     }

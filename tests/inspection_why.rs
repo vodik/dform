@@ -130,3 +130,86 @@ resource leaky.vault v { password = "VAULT-SECRET-DO-NOT-PRINT" }.
     assert!(!out.contains("VAULT-SECRET"), "{out}");
     assert!(out.contains("(sensitive leaky.vault/v#password)"), "{out}");
 }
+
+/// The deformation the planner hands back for the policy pass is the
+/// plan's, not the world's: `why` labels it `plan`, and a refreshed world
+/// fact keeps `world (refresh)`.
+#[test]
+fn why_labels_planner_facts_as_the_plan() {
+    let s = Scratch::new("why-plan-leaf");
+    s.write(
+        "p.df",
+        "edition 2026.\nresource net.vpc main { cidr = \"10.0.0.0/16\" }.\n",
+    );
+    s.run(&["--file", "p.df", "--world", "w.json", "apply"])
+        .success();
+    s.write(
+        "p.df",
+        "edition 2026.\nlifecycle(net.vpc, main, prevent_destroy).\n\
+         seen(A) :- identity(net.vpc, A, _).\n",
+    );
+    let why = |q: &str| {
+        s.run(&["--file", "p.df", "--world", "w.json", "why", q])
+            .success()
+            .stdout
+    };
+    let out = why("deny(M)");
+    let line = out
+        .lines()
+        .find(|l| l.contains("─ deformation(\"delete\""))
+        .unwrap_or_else(|| panic!("{out}"));
+    assert!(line.ends_with("   plan"), "{out}");
+    assert!(!out.contains("world (refresh)"), "{out}");
+    let out = why("seen(A)");
+    assert!(out.contains("   world (refresh)"), "{out}");
+}
+
+/// Facts injected at an apply tick (a boundary, a resume) are labelled
+/// with it, and the resume stop is a deny derived from them.
+#[test]
+fn why_labels_facts_injected_at_a_tick() {
+    use dform::ast::{Atom, Lit, Term};
+    use dform::value::Value;
+    let program =
+        dform::zset::with_policy_rules(dform::parser::parse_program("edition 2026.\n").unwrap())
+            .unwrap();
+    let s = |x: &str| Term::Val(Value::Str(x.into()));
+    let fact = |pred: &str, args: Vec<Term>| Atom {
+        pred: pred.into(),
+        args,
+        record: None,
+        span: Default::default(),
+    };
+    let facts = [
+        fact(
+            "deformation",
+            vec![s("remaining"), s("net.subnet"), s("a"), s("d1")],
+        ),
+        fact("world_digest", vec![s("net.subnet"), s("a"), s("d2")]),
+    ];
+    let (res, denies) = dform::engine::eval_at(&program, &facts, Some(3)).unwrap();
+    assert_eq!(
+        denies,
+        ["the world changed under a remaining action: net.subnet.a"]
+    );
+    let schema = dform::schema::Schema::default();
+    let redact = dform::query::Redactor::new(&res.facts, &schema);
+    let printer = dform::why::Printer {
+        circuit: &res.circuit,
+        redact: &redact,
+        all: false,
+    };
+    let dform::query::Query::Body { body, .. } = dform::query::parse("deny(M)").unwrap() else {
+        unreachable!()
+    };
+    let [Lit::Pos(pat)] = body.as_slice() else {
+        unreachable!()
+    };
+    let (deny, _) = dform::why::find(pat, &res.facts).unwrap().remove(0);
+    let id = res
+        .circuit
+        .fact_id(&dform::engine::circuit_fact(&deny))
+        .unwrap();
+    let out = printer.tree(id, None);
+    assert_eq!(out.matches("   plan (tick 3)\n").count(), 2, "{out}");
+}

@@ -109,9 +109,12 @@ impl Prov {
 }
 
 /// The leaf for a fact given to this run rather than stated by the program.
-fn given_leaf(a: &Atom, externs: &BTreeSet<crate::ast::Extern>) -> Leaf {
+/// `tick`: the apply tick the planner injected its facts at (`None`: the
+/// plan).
+fn given_leaf(a: &Atom, externs: &BTreeSet<crate::ast::Extern>, tick: Option<usize>) -> Leaf {
     let text = partition::fmt_atom(a);
     match a.pred.as_str() {
+        p if crate::zset::POLICY_INPUTS.contains(&p) => Leaf::Plan { fact: text, tick },
         "input" | "data" => {
             let flag = if a.pred == "input" { "set" } else { "data" };
             let kv = match a.args.as_slice() {
@@ -142,7 +145,17 @@ const AGGREGATE_OUTPUTS: [&str; 3] = ["attr", "attr_conflict", "attr_stuck"];
 const LATTICE_DECLS: [&str; 2] = ["type_lattice", "type_list_key"];
 
 pub fn eval(program: &Program, extra_facts: &[Atom]) -> Result<(EvalResult, Vec<String>)> {
-    let (c, mut st) = start(program, extra_facts)?;
+    eval_at(program, extra_facts, None)
+}
+
+/// `eval`, with the facts the planner injects (`zset::POLICY_INPUTS`)
+/// labelled as given at apply tick `tick`.
+pub fn eval_at(
+    program: &Program,
+    extra_facts: &[Atom],
+    tick: Option<usize>,
+) -> Result<(EvalResult, Vec<String>)> {
+    let (c, mut st) = start(program, extra_facts, tick)?;
     run(&c, &mut st, 0)?;
     finish(&c, st)
 }
@@ -167,7 +180,7 @@ pub fn eval_resumable(
     extra_facts: &[Atom],
     later: &[&str],
 ) -> Result<(EvalResult, Vec<String>, Resumable)> {
-    let (c, mut st) = start(program, extra_facts)?;
+    let (c, mut st) = start(program, extra_facts, None)?;
     let reads_later = |body: &[Lit]| {
         body.iter().any(|l| match l {
             Lit::Pos(a) | Lit::Not(a) => later.contains(&a.pred.as_str()),
@@ -197,10 +210,15 @@ impl Resumable {
     /// `eval` with `more` appended to the given facts, except that their
     /// circuit nodes come after those of the strata below the first reader.
     pub fn with(&self, more: &[Atom]) -> Result<(EvalResult, Vec<String>)> {
+        self.with_at(more, None)
+    }
+
+    /// `with`, the planner's facts in `more` given at apply tick `tick`.
+    pub fn with_at(&self, more: &[Atom], tick: Option<usize>) -> Result<(EvalResult, Vec<String>)> {
         let mut st = self.state.clone();
         for f in more {
             let g = ensure_ground(f)?;
-            let leaf = given_leaf(&g, &self.c.externs);
+            let leaf = given_leaf(&g, &self.c.externs, tick);
             st.prov.given(g, leaf);
         }
         run(&self.c, &mut st, self.at)?;
@@ -240,7 +258,11 @@ struct State {
 }
 
 /// Compile the program, insert the given and stated facts, and stratify.
-fn start(program: &Program, extra_facts: &[Atom]) -> Result<(Compiled, State)> {
+fn start(
+    program: &Program,
+    extra_facts: &[Atom],
+    tick: Option<usize>,
+) -> Result<(Compiled, State)> {
     // The program as it runs and the partition graph it is stratified by,
     // built in one place (`dform strata` prints the same graph).
     let compiled = partition::compile(program, extra_facts)?;
@@ -249,7 +271,7 @@ fn start(program: &Program, extra_facts: &[Atom]) -> Result<(Compiled, State)> {
     let mut prov = Prov::default();
     for f in extra_facts {
         let g = ensure_ground(f)?;
-        let leaf = given_leaf(&g, &externs);
+        let leaf = given_leaf(&g, &externs, tick);
         prov.given(g, leaf);
     }
 

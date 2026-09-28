@@ -57,8 +57,8 @@ fn apply_after_a_crash_finishes_the_remaining_actions() {
 
 /// The first apply updates the vpc and fails on the subnet; after that tick
 /// the world changes the subnet under the remaining update. The next apply
-/// prints the change and stops before any Apply call; the one after that
-/// plans against the world as it now is.
+/// prints the change, derives the deny and stops before any Apply call; the
+/// one after that plans against the world as it now is.
 #[test]
 fn apply_stops_when_the_world_changed_under_a_remaining_action() {
     let s = Scratch::new("resume-changed");
@@ -85,9 +85,19 @@ fn apply_stops_when_the_world_changed_under_a_remaining_action() {
         "{}",
         r.stderr
     );
+    // The stop is a deny the evaluator derives from the remaining
+    // deformation and the world's digest (`zset::POLICY_RULES`), as at a
+    // phase boundary.
+    assert!(
+        r.stderr.contains(
+            "constraint violations:\n- the world changed under a remaining action: net.subnet.a\n"
+        ),
+        "{}",
+        r.stderr
+    );
     assert!(
         r.stderr
-            .contains("apply stopped: the world changed under 1 remaining actions"),
+            .contains("apply stopped: blocked by constraints on the remaining actions"),
         "{}",
         r.stderr
     );
