@@ -202,7 +202,12 @@ fn golden() {
         let file = file.to_str().unwrap();
 
         // -- plan --
-        let mut plan_args: Vec<String> = vec!["--file".into(), file.into()];
+        // --root pins state inside the scratch dir: without it a program's
+        // state lives beside the program, and a developer's own .dform/ in
+        // the repo would leak into the snapshot.
+        let root = scratch.path(".").to_str().unwrap().to_string();
+        let mut plan_args: Vec<String> =
+            vec!["--root".into(), root.clone(), "--file".into(), file.into()];
         for p in c.providers {
             plan_args.push("--provider".into());
             plan_args.push((*p).into());
@@ -236,7 +241,8 @@ fn golden() {
 
         // -- strata -- (no --world/--inventory: strata reads neither; the
         // provider's schema expands the prelude, as in plan)
-        let mut strata_args: Vec<String> = vec!["--file".into(), file.into()];
+        let mut strata_args: Vec<String> =
+            vec!["--root".into(), root, "--file".into(), file.into()];
         for p in c.providers {
             strata_args.push("--provider".into());
             strata_args.push((*p).into());
