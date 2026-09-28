@@ -134,7 +134,7 @@ failed apply leaves exactly what a real cloud would.
 
 - Ergonomic sugar (implemented as a lowering pass):
   - `resource Type Name { key = value, ... } :- ... .` lowers to `want/arg`.
-  - resource merge fields: `tags += { team: platform }` lowers to `arg_add(..., "tags", {..})`.
+  - resource merge fields: `tags += { team: platform }` is a plain contribution; how contributions merge is the path's lattice (see `docs/best_practices.md`, "One Merge Law").
   - record atoms: `setting{env: prod, key: db.backup_days, value: 14}.` (optional)
   - settings blocks: `settings prod { db.backup_days = 14 }.` (commas optional) lowers to `setting(prod, db.backup_days, 14).`
   - literals: lists `[a, b]` and objects `{k: v}`.
@@ -227,17 +227,17 @@ policy_pack baseline {
 
 apply_policy baseline.
 
-Merge behavior for `arg_add/4` can be controlled per keypath:
+Every contribution to one attribute meets in one lattice cell; objects merge
+per key, and a list path several sources contribute to is declared a set:
 
 ```prolog
-merge_rule(tags, map_merge).
-merge_rule(iam.policy, statements, set).
+type_lattice(iam.policy, statements, set).
 ```
 
-Settings can be layered similarly via `setting_add/3`:
+Settings are the same aggregate:
 
 ```prolog
-merge_rule(setting, audit.sinks, set).
+type_lattice(settings, audit.sinks, set).
 setting_add(prod, audit.sinks, ["s3"]).
 
 settings prod {
