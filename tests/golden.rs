@@ -3,9 +3,9 @@
 //!
 //! Cases: the five example programs (dform.df across envs, dform-advanced.df,
 //! pngu.df across envs, examples/decl_demo.df, examples/adopt_demo.df with
-//! the discovery inventory), the nine examples/adversarial/*.df programs, and
+//! the discovery inventory), the nine tests/fixtures/adversarial/*.df programs, and
 //! examples/k8s_demo.df / examples/aws_demo.df. Each runs against a fresh
-//! (empty) world, and dform.df additionally against the examples/world/
+//! (empty) world, and dform.df additionally against the tests/fixtures/world/
 //! fixture. A case that errors (a rejected stratification, a blocked
 //! constraint) still gets a snapshot: its stdout+stderr+exit status, pinned
 //! like any other output.
@@ -25,7 +25,7 @@ struct Case {
     providers: &'static [&'static str],
     /// `--set` args, as `key=value`.
     sets: &'static [&'static str],
-    /// Copy examples/world/dform.json (+ its .state.json) into the scratch
+    /// Copy tests/fixtures/world/dform.json (+ its .state.json) into the scratch
     /// dir and pass `--world` at it.
     world_fixture: bool,
     /// `--inventory PATH`, relative to the repo root.
@@ -74,53 +74,53 @@ const CASES: &[Case] = &[
     case("decl_demo", "default", "examples/decl_demo.df"),
     Case {
         sets: &["env=prod"],
-        inventory: Some("examples/world/inventory.json"),
+        inventory: Some("tests/fixtures/world/inventory.json"),
         ..case("adopt_demo", "prod", "examples/adopt_demo.df")
     },
     case(
         "adv2_rule3_coarse",
         "default",
-        "examples/adversarial/adv2_rule3_coarse.df",
+        "tests/fixtures/adversarial/adv2_rule3_coarse.df",
     ),
     case(
         "adv3_pack_reads_other_path",
         "default",
-        "examples/adversarial/adv3_pack_reads_other_path.df",
+        "tests/fixtures/adversarial/adv3_pack_reads_other_path.df",
     ),
     case(
         "adv3b_pack_reads_same_path",
         "default",
-        "examples/adversarial/adv3b_pack_reads_same_path.df",
+        "tests/fixtures/adversarial/adv3b_pack_reads_same_path.df",
     ),
     case(
         "adv4_variable_path_writer",
         "default",
-        "examples/adversarial/adv4_variable_path_writer.df",
+        "tests/fixtures/adversarial/adv4_variable_path_writer.df",
     ),
     case(
         "adv4b_variable_path_writer_no_read",
         "default",
-        "examples/adversarial/adv4b_variable_path_writer_no_read.df",
+        "tests/fixtures/adversarial/adv4b_variable_path_writer_no_read.df",
     ),
     case(
         "adv7_mutual_recursion_attr",
         "default",
-        "examples/adversarial/adv7_mutual_recursion_attr.df",
+        "tests/fixtures/adversarial/adv7_mutual_recursion_attr.df",
     ),
     case(
         "adv7b_mutual_via_different_paths",
         "default",
-        "examples/adversarial/adv7b_mutual_via_different_paths.df",
+        "tests/fixtures/adversarial/adv7b_mutual_via_different_paths.df",
     ),
     case(
         "adv9_default_tag_unless_present",
         "default",
-        "examples/adversarial/adv9_default_tag_unless_present.df",
+        "tests/fixtures/adversarial/adv9_default_tag_unless_present.df",
     ),
     case(
         "gke_two_phase",
         "default",
-        "examples/adversarial/gke_two_phase.df",
+        "tests/fixtures/adversarial/gke_two_phase.df",
     ),
     // The provider is the program's `provider` statement.
     case("k8s_demo", "default", "examples/k8s_demo.df"),
@@ -238,12 +238,12 @@ fn golden_on(backend: Backend, strata: bool) {
         }
         if c.world_fixture {
             std::fs::copy(
-                repo().join("examples/world/dform.json"),
+                repo().join("tests/fixtures/world/dform.json"),
                 scratch.path("dform.json"),
             )
             .unwrap();
             std::fs::copy(
-                repo().join("examples/world/dform.state.json"),
+                repo().join("tests/fixtures/world/dform.state.json"),
                 scratch.path("dform.state.json"),
             )
             .unwrap();
@@ -286,7 +286,7 @@ fn golden_on(backend: Backend, strata: bool) {
 #[test]
 fn golden_gke_plan_json() {
     let scratch = Scratch::new("golden-gke-json");
-    let file = repo().join("examples/adversarial/gke_two_phase.df");
+    let file = repo().join("tests/fixtures/adversarial/gke_two_phase.df");
     let (ok, out, err) = run(
         &scratch,
         &[

@@ -96,14 +96,14 @@ fn scratch(name: &str) -> PathBuf {
 
 fn fixture(dir: &Path, edit: impl Fn(&mut serde_json::Value)) -> (PathBuf, PathBuf) {
     let mut w: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(root().join("examples/world/dform.json")).unwrap(),
+        &std::fs::read_to_string(root().join("tests/fixtures/world/dform.json")).unwrap(),
     )
     .unwrap();
     edit(&mut w);
     let world = dir.join("dform.json");
     std::fs::write(&world, serde_json::to_string(&w).unwrap()).unwrap();
     let state = dir.join("dform.state.json");
-    std::fs::copy(root().join("examples/world/dform.state.json"), &state).unwrap();
+    std::fs::copy(root().join("tests/fixtures/world/dform.state.json"), &state).unwrap();
     (world, state)
 }
 

@@ -75,11 +75,16 @@ fn check(file: &str, provider: &str, env: Option<&str>, append: &str) {
 fn the_policy_pass_resumed_is_the_policy_pass() {
     check("dform.df", "fake", Some("prod"), "");
     check("pngu.df", "fake", Some("prod"), "");
-    check("examples/adversarial/gke_two_phase.df", "gke", None, "");
+    check(
+        "tests/fixtures/adversarial/gke_two_phase.df",
+        "gke",
+        None,
+        "",
+    );
     // stuck/4 counts the instances of the rules that read the deformation
     // (this one is stuck on the cluster's zones once a deformation names it).
     check(
-        "examples/adversarial/gke_two_phase.df",
+        "tests/fixtures/adversarial/gke_two_phase.df",
         "gke",
         None,
         "deny \"strict\" { rule: r } if stuck(r, _, _, _)

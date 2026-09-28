@@ -7,7 +7,7 @@ use common::{Scratch, repo};
 
 fn run(body: &str) -> common::Run {
     let s = Scratch::new("lang-secrets");
-    let schema = repo().join("providers/leaky/schema.df");
+    let schema = repo().join("tests/fixtures/providers/leaky/schema.df");
     s.write(
         "p.df",
         &format!(

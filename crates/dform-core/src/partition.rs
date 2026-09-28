@@ -957,7 +957,7 @@ mod tests {
     /// Adversarial programs, in the current syntax so they lower today.
     #[test]
     fn adversarial_programs_under_revised_dr12() {
-        let dir = root().join("examples/adversarial");
+        let dir = root().join("tests/fixtures/adversarial");
         let cases: Vec<(&str, bool)> = vec![
             ("adv3_pack_reads_other_path.df", true),
             ("adv3b_pack_reads_same_path.df", false),

@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== examples/adversarial/adv7b_mutual_via_different_paths.df: 51 nodes, 94 edges (34 negative)
+== tests/fixtures/adversarial/adv7b_mutual_via_different_paths.df: 51 nodes, 94 edges (34 negative)
    STRATIFIED, 6 strata
    stratum 0:
      (arg, net.a, z)

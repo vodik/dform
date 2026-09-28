@@ -1,7 +1,7 @@
 # Demo: adopting an existing resource from inventory.
 #
 # Runs from a clean clone, no setup needed:
-#   cargo run -- --file examples/adopt_demo.df --inventory examples/world/inventory.json plan --set env=prod
+#   cargo run -- --file examples/adopt_demo.df --inventory tests/fixtures/world/inventory.json plan --set env=prod
 
 edition 2026
 

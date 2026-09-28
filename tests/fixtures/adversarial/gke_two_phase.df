@@ -1,13 +1,7 @@
-# gke_two_phase.df with a cluster in one zone: E §2.7 worked example item 6,
-# the other branch. Tick 1 creates the cluster; its zones come back with one
-# element, so at the boundary deny(two_zones) derives and apply stops before
-# touching the nodepools and the kubernetes objects:
-#   cargo run -- --file examples/adversarial/gke_one_zone.df apply
-#
-# The rest is C's two-phase GKE / kubernetes stack (E §7.4), in the current syntax.
+# C's two-phase GKE / kubernetes stack (E §7.4), in the current syntax.
 # Run with the gke mock schema, which makes the cluster's zones, endpoint and
 # ca open nulls until the cluster exists:
-#   cargo run -- --file examples/adversarial/gke_two_phase.df plan
+#   cargo run -- --file tests/fixtures/adversarial/gke_two_phase.df plan
 
 edition 2026
 
@@ -57,7 +51,7 @@ resource gke_cluster pngu {
   network_id = net_id
   subnetwork_id = gke_subnet.id
   master_control_plane_cidr = cfg.gke.control_plane_cidr
-  node_locations = ["us-east1-b"]
+  node_locations = ["us-east1-b", "us-east1-c"]
   deletion_protection = true
 }
 

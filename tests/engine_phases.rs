@@ -50,7 +50,7 @@ apply order: tick 1 [google_compute_subnetwork.gke_subnet gke_cluster.pngu googl
 #[test]
 fn gke_two_phase_plans_in_sections() {
     let s = Scratch::new("gke-sections");
-    let prog = repo().join("examples/adversarial/gke_two_phase.df");
+    let prog = repo().join("tests/fixtures/adversarial/gke_two_phase.df");
     let r = s
         .run(&[
             "--file",
@@ -83,7 +83,7 @@ fn apply_then_replan_is_undeformed() {
 }
 
 fn gke(s: &Scratch, file: &str, extra: &[&str]) -> common::Run {
-    let prog = repo().join("examples/adversarial").join(file);
+    let prog = repo().join("tests/fixtures/adversarial").join(file);
     let args = [
         "--file",
         prog.to_str().unwrap(),

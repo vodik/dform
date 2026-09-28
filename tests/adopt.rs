@@ -10,7 +10,7 @@ use common::{Scratch, repo};
 fn adopt_demo_plans_with_dotted_cloud_refs() {
     let s = Scratch::new("adopt");
     let prog = repo().join("examples/adopt_demo.df");
-    let inventory = repo().join("examples/world/inventory.json");
+    let inventory = repo().join("tests/fixtures/world/inventory.json");
     let r = s
         .run(&[
             "--file",
@@ -38,7 +38,7 @@ fn world_flag_defaults_inventory_beside_it() {
     let prog = repo().join("examples/adopt_demo.df");
     std::fs::create_dir_all(s.path("world")).unwrap();
     std::fs::copy(
-        repo().join("examples/world/inventory.json"),
+        repo().join("tests/fixtures/world/inventory.json"),
         s.path("world/inventory.json"),
     )
     .unwrap();

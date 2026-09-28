@@ -2,7 +2,7 @@
 //! Apply": *"A `sensitive` computed value never leaves the provider... A
 //! value at a `sensitive` path the program sets prints as `(sensitive)`."*).
 //!
-//! providers/leaky/schema.df has two near-identical types: `leaky.vault`
+//! tests/fixtures/providers/leaky/schema.df has two near-identical types: `leaky.vault`
 //! declares `password` `[sensitive]`, `leaky.oops` mislabels the same kind
 //! of value as public (no flags). A program sets a literal, distinctive
 //! password string on one resource of each type and this test drives it
@@ -43,7 +43,7 @@ resource leaky.oops o {
 
 fn schema() -> String {
     repo()
-        .join("providers/leaky/schema.df")
+        .join("tests/fixtures/providers/leaky/schema.df")
         .to_str()
         .unwrap()
         .to_string()

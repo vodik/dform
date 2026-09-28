@@ -4,5 +4,5 @@ exit: error
 Error: program is not stratifiable: negative cycle through (arg, *, tags), (attr, *, tags), (attr, net.vpc, tags)
   (arg, *, tags) -> (attr, *, tags) [attribute aggregate (lub_ranked)]: (compiler-generated)
   (arg, *, tags) -> (attr, net.vpc, tags) [attribute aggregate (lub_ranked)]: (compiler-generated)
-  (attr, *, tags) -> (arg, *, tags) [not]: arg(T, N, "tags", {team: "platform"}, "normal") :- want(T, N), not attr(T, N, "tags", {team: "platform"}) (at examples/adversarial/adv9_default_tag_unless_present.df:12:1)
-  (attr, net.vpc, tags) -> (arg, *, tags) [not]: arg(T, N, "tags", {team: "platform"}, "normal") :- want(T, N), not attr(T, N, "tags", {team: "platform"}) (at examples/adversarial/adv9_default_tag_unless_present.df:12:1)
+  (attr, *, tags) -> (arg, *, tags) [not]: arg(T, N, "tags", {team: "platform"}, "normal") :- want(T, N), not attr(T, N, "tags", {team: "platform"}) (at tests/fixtures/adversarial/adv9_default_tag_unless_present.df:12:1)
+  (attr, net.vpc, tags) -> (arg, *, tags) [not]: arg(T, N, "tags", {team: "platform"}, "normal") :- want(T, N), not attr(T, N, "tags", {team: "platform"}) (at tests/fixtures/adversarial/adv9_default_tag_unless_present.df:12:1)

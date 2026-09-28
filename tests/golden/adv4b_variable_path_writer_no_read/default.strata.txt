@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== examples/adversarial/adv4b_variable_path_writer_no_read.df: 51 nodes, 137 edges (65 negative)
+== tests/fixtures/adversarial/adv4b_variable_path_writer_no_read.df: 51 nodes, 137 edges (65 negative)
    STRATIFIED, 4 strata
    stratum 0:
      (arg, net.vpc, cidr)

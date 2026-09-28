@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== examples/adversarial/adv3_pack_reads_other_path.df: 48 nodes, 91 edges (31 negative)
+== tests/fixtures/adversarial/adv3_pack_reads_other_path.df: 48 nodes, 91 edges (31 negative)
    STRATIFIED, 4 strata
    stratum 0:
      (arg, iam.policy, name)

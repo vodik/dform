@@ -7,8 +7,8 @@ use common::{Scratch, repo};
 
 fn gke(strict: bool) -> Scratch {
     let s = Scratch::new("lang-strict-gke");
-    let src =
-        std::fs::read_to_string(repo().join("examples/adversarial/gke_two_phase.df")).unwrap();
+    let src = std::fs::read_to_string(repo().join("tests/fixtures/adversarial/gke_two_phase.df"))
+        .unwrap();
     let stack = if strict {
         "stack gke { unknowns = \"strict\" }"
     } else {

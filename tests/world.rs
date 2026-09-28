@@ -4,8 +4,8 @@ mod common;
 use common::{Scratch, repo};
 
 fn fixture(s: &Scratch) -> (String, String) {
-    let world = repo().join("examples/world/dform.json");
-    let state = repo().join("examples/world/dform.state.json");
+    let world = repo().join("tests/fixtures/world/dform.json");
+    let state = repo().join("tests/fixtures/world/dform.state.json");
     std::fs::copy(world, s.path("dform.json")).unwrap();
     std::fs::copy(state, s.path("dform.state.json")).unwrap();
     (

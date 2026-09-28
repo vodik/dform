@@ -6,7 +6,7 @@ mod common;
 use common::{Scratch, repo};
 
 fn gke(s: &Scratch, extra: &[&str], cmd: &str) -> common::Run {
-    let prog = repo().join("examples/adversarial/gke_two_phase.df");
+    let prog = repo().join("tests/fixtures/adversarial/gke_two_phase.df");
     let mut args = vec!["--file", prog.to_str().unwrap()];
     for e in extra {
         args.extend(["--file", e]);
@@ -185,7 +185,7 @@ resource leaky.vault v { password = "VAULT-SECRET-A" }
 arg(leaky.vault, "v", "password", "VAULT-SECRET-B")
 "#,
     );
-    let schema = repo().join("providers/leaky/schema.df");
+    let schema = repo().join("tests/fixtures/providers/leaky/schema.df");
     let r = s
         .run(&[
             "--file",

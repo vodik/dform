@@ -189,7 +189,7 @@ fn secrets_never_appear() {
         "p.df",
         "edition 2026\n\nresource leaky.vault v {\n  password = \"VAULT-SECRET-DO-NOT-LOG\"\n}\n",
     );
-    let schema = repo().join("providers/leaky/schema.df");
+    let schema = repo().join("tests/fixtures/providers/leaky/schema.df");
     let args = ["--provider", schema.to_str().unwrap()];
     dform(&s, &[&args[..], &["apply"]].concat()).success();
     s.write(

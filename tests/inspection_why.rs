@@ -111,7 +111,7 @@ fn why_never_prints_a_labeled_secret() {
 resource leaky.vault v { password = "VAULT-SECRET-DO-NOT-PRINT" }
            copy(p) if attr(leaky.vault, "v", "password", p)"#,
     );
-    let schema = repo().join("providers/leaky/schema.df");
+    let schema = repo().join("tests/fixtures/providers/leaky/schema.df");
     let out = s
         .run(&[
             "--file",

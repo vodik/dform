@@ -6,7 +6,7 @@ use common::{Scratch, repo};
 use serde_json::{Value, json};
 
 fn gke_json(s: &Scratch) -> Value {
-    let prog = repo().join("examples/adversarial/gke_two_phase.df");
+    let prog = repo().join("tests/fixtures/adversarial/gke_two_phase.df");
     let r = s
         .run(&[
             "--file",
@@ -137,7 +137,7 @@ fn query_json_redacts_like_the_plan() {
         "p.df",
         "edition 2026\nresource leaky.vault v { password = \"VAULT-SECRET-DO-NOT-PRINT\" }\nresource net.subnet a { vpc_id = ref(net.vpc, \"main\", \"id\") }\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\n",
     );
-    let leaky = repo().join("providers/leaky/schema.df");
+    let leaky = repo().join("tests/fixtures/providers/leaky/schema.df");
     let r = s
         .run(&[
             "--file",

@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== examples/adversarial/adv2_rule3_coarse.df: 58 nodes, 100 edges (38 negative)
+== tests/fixtures/adversarial/adv2_rule3_coarse.df: 58 nodes, 100 edges (38 negative)
    STRATIFIED, 3 strata
    stratum 0:
      (arg, gke_cluster, name)

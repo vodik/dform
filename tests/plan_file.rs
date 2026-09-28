@@ -158,7 +158,7 @@ fn the_file_never_carries_a_labeled_secret() {
         "p.df",
         "edition 2026\nresource leaky.vault v { password = \"VAULT-SECRET-DO-NOT-PRINT\" }\n",
     );
-    let schema = repo().join("providers/leaky/schema.df");
+    let schema = repo().join("tests/fixtures/providers/leaky/schema.df");
     s.run(&[
         "--file",
         "p.df",
@@ -182,7 +182,7 @@ fn the_file_never_carries_a_labeled_secret() {
 #[test]
 fn a_two_phase_plan_file_applies_across_the_boundary() {
     let s = Scratch::new("planfile-gke");
-    let prog = repo().join("examples/adversarial/gke_two_phase.df");
+    let prog = repo().join("tests/fixtures/adversarial/gke_two_phase.df");
     s.run(&[
         "--file",
         prog.to_str().unwrap(),

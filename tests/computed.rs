@@ -37,7 +37,7 @@ fn a_fresh_stack_carries_nulls_until_apply() {
         assert!(rr.as_object_mut().unwrap().remove("key").is_some(), "{rr}");
     }
     let want: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(repo().join("examples/world/dform.json")).unwrap(),
+        &std::fs::read_to_string(repo().join("tests/fixtures/world/dform.json")).unwrap(),
     )
     .unwrap();
     assert_eq!(got, want);
