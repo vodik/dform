@@ -1,43 +1,62 @@
-//! Starting a provider's executable and reading its handshake line. The
-//! mock provider is `dform-provider-fake`, found beside the `dform`
-//! executable (or named by `DFORM_PROVIDER_FAKE`); which sources are
-//! executables is `dform_core::plugin::source`.
+//! Starting a provider's executable and reading its handshake line. Which
+//! sources are executables is `dform_core::plugin::source`; the mock is
+//! `dform __provider fake` (`client::Process`).
 
 use anyhow::{Context, Result, anyhow, bail};
+use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::time::Duration;
 
 /// The first stdout line of a provider: `dform-provider|VERSION|ADDRESS`.
 pub const MAGIC: &str = dform_core::plugin::source::MAGIC;
 pub use dform_core::plugin::backend::VERSION;
-/// The mock provider's executable.
+/// The mock provider's own executable, for the conformance suite and for
+/// use outside dform (`crates/dform-provider-fake`).
 pub const FAKE: &str = "dform-provider-fake";
+/// Names a mock provider executable to run instead of `dform __provider
+/// fake`.
+pub const FAKE_ENV: &str = "DFORM_PROVIDER_FAKE";
 
 /// How long a provider may take to print its handshake line.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(20);
 
-/// The mock provider's executable: `DFORM_PROVIDER_FAKE`, else beside the
-/// running executable (or one directory up, where a test binary's
-/// `deps/` sits under the directory cargo builds binaries into).
-pub fn fake_executable() -> Result<PathBuf> {
-    if let Some(p) = std::env::var_os("DFORM_PROVIDER_FAKE") {
-        return Ok(PathBuf::from(p));
-    }
-    let exe = std::env::current_exe().context("locate the running executable")?;
-    let dir = exe.parent().unwrap_or(Path::new("."));
-    for d in [Some(dir), dir.parent()].into_iter().flatten() {
-        let p = d.join(FAKE);
-        if p.is_file() {
-            return Ok(p);
+/// A provider to start: an executable and its arguments.
+#[derive(Debug, Clone)]
+pub struct Program {
+    pub exe: PathBuf,
+    pub args: Vec<OsString>,
+}
+
+impl Program {
+    /// The executable `exe`, with no arguments.
+    pub fn exe(exe: impl Into<PathBuf>) -> Program {
+        Program {
+            exe: exe.into(),
+            args: Vec::new(),
         }
     }
-    bail!(
-        "the mock provider {FAKE} is not beside {} (build it with `cargo build`, or name it \
-         with DFORM_PROVIDER_FAKE)",
-        exe.display()
-    )
+
+    /// The running executable, run as `EXE __provider NAME`: a provider
+    /// always of the same build as the dform that starts it.
+    pub fn this(name: &str) -> Result<Program> {
+        let exe = std::env::current_exe().context("locate the running executable")?;
+        Ok(Program {
+            exe,
+            args: vec!["__provider".into(), name.into()],
+        })
+    }
+
+    /// The program, for messages: `dform __provider fake`.
+    pub fn display(&self) -> String {
+        let mut s = self.exe.display().to_string();
+        for a in &self.args {
+            s.push(' ');
+            s.push_str(&a.to_string_lossy());
+        }
+        s
+    }
 }
 
 /// Environment the provider starts with beyond dform's own: variables to
@@ -82,18 +101,20 @@ pub struct Started {
     pub address: String,
 }
 
-/// Start `exe` with `env` and read its handshake line. Its stderr is
+/// Start `program` with `env` and read its handshake line. Its stderr is
 /// dform's; what it prints on stdout after the handshake goes to dform's
 /// stderr.
-pub fn start(exe: &Path, env: &Env) -> Result<Started> {
-    let mut cmd = Command::new(exe);
+pub fn start(program: &Program, env: &Env) -> Result<Started> {
+    let exe = program.display();
+    let mut cmd = Command::new(&program.exe);
+    cmd.args(&program.args);
     env.apply(&mut cmd);
     let mut child = cmd
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .spawn()
-        .with_context(|| format!("start provider {}", exe.display()))?;
+        .with_context(|| format!("start provider {exe}"))?;
     let stdout = child.stdout.take().expect("piped stdout");
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
@@ -107,13 +128,13 @@ pub fn start(exe: &Path, env: &Env) -> Result<Started> {
         }
     });
     let line = match rx.recv_timeout(HANDSHAKE_TIMEOUT) {
-        Ok(r) => r.with_context(|| format!("read the handshake of provider {}", exe.display()))?,
+        Ok(r) => r.with_context(|| format!("read the handshake of provider {exe}"))?,
         Err(_) => {
             let _ = child.kill();
             let _ = child.wait();
             bail!(
                 "provider {} printed no handshake line in {}s",
-                exe.display(),
+                exe,
                 HANDSHAKE_TIMEOUT.as_secs()
             );
         }
@@ -124,11 +145,8 @@ pub fn start(exe: &Path, env: &Env) -> Result<Started> {
             let _ = child.kill();
             let status = child.wait().ok();
             return Err(match (line.is_empty(), status) {
-                (true, Some(s)) => anyhow!(
-                    "provider {} exited before its handshake ({s})",
-                    exe.display()
-                ),
-                _ => e.context(format!("provider {}", exe.display())),
+                (true, Some(s)) => anyhow!("provider {} exited before its handshake ({s})", exe),
+                _ => e.context(format!("provider {exe}")),
             });
         }
     };

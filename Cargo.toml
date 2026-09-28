@@ -47,6 +47,9 @@ dform-core = { path = "crates/dform-core" }
 dform-grpc = { path = "crates/dform-grpc" }
 # The s3 state backend (`store`): the S3 client, kept out of dform-core.
 dform-s3 = { path = "crates/dform-s3" }
+# The mock, served by `dform __provider fake`: dform spawns itself for it,
+# so the mock is always of its own build.
+dform-mock = { path = "crates/dform-mock" }
 
 [[bin]]
 name = "dform"
@@ -62,8 +65,6 @@ dform-core = { path = "crates/dform-core", features = ["test-hooks"] }
 # tests/s3.rs: the S3 store, and a fake S3 server to run it against.
 dform-s3 = { path = "crates/dform-s3", features = ["fake"] }
 rusty-s3 = { version = "0.10", default-features = false, features = ["rustcrypto", "xml"] }
-# The direct and wire backends, for tests and benches (not the CLI's).
-dform-mock = { path = "crates/dform-mock" }
 tree-sitter = "0.26"
 tree-sitter-dform = { path = "tree-sitter-dform" }
 # tests/k8s_cluster.rs talks to the cluster it applies to.

@@ -985,10 +985,11 @@ impl Handler for Mock {
                 }
                 Reply::Handshake(pb::HandshakeResponse {
                     protocol_version: VERSION,
-                    name: "fakecloud".into(),
+                    name: backend::FAKECLOUD.into(),
                     capabilities: ["resource", "fact", "inventory", "managed"]
                         .map(String::from)
                         .to_vec(),
+                    version: backend::BUILD.into(),
                 })
             }
             C::Configure(req) => {

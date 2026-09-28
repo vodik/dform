@@ -53,7 +53,7 @@ pub const SNAPSHOT: &str = include_str!("../openapi-snapshot.json");
 const MOCK: &str = include_str!("../../dform-mock/schemas/k8s.df");
 
 /// The provider's name: `type_provider` and state record it.
-pub const PROVIDER: &str = "kubernetes";
+pub const PROVIDER: &str = dform_core::plugin::backend::KUBERNETES;
 
 /// Read attempts before an object state maps is taken as gone.
 pub const RETRY: i64 = 5;

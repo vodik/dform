@@ -22,6 +22,19 @@ use super::pb;
 /// The protocol version this dform speaks.
 pub const VERSION: u32 = 1;
 
+/// This build of dform: its version and the git commit it was built from
+/// (`build.rs`; `unknown` built outside a git checkout). Its built-in
+/// providers' handshakes carry it, and dform refuses one built otherwise.
+pub const BUILD: &str = concat!(env!("CARGO_PKG_VERSION"), "+", env!("DFORM_COMMIT"));
+
+/// The mock's name (`dform-mock`), as its handshake gives it.
+pub const FAKECLOUD: &str = "fakecloud";
+/// The Kubernetes provider's name (`dform-k8s`).
+pub const KUBERNETES: &str = "kubernetes";
+/// The providers built with dform, by the names their handshakes give:
+/// one whose [`BUILD`] differs is stale.
+pub const BUILT_IN: [&str; 2] = [FAKECLOUD, KUBERNETES];
+
 /// A submitted call, as its backend names it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Ticket(pub u64);

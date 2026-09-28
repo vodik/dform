@@ -34,10 +34,11 @@ type Planned = Vec<(String, ActionKind, BTreeSet<String>)>;
 /// Plan `program` against a world file and its state, the way the CLI
 /// does, on every backend: the same plan on each.
 fn plan(program: &Program, extra: &[Atom], world: &Path, state: &Path) -> Planned {
-    // The process backend spawns the mock provider.
-    common::exe("dform-provider-fake");
+    // The process backend spawns the mock provider: in a test binary,
+    // its own executable.
+    let fake = common::exe("dform-provider-fake");
     let launches: [Box<dyn Launch>; 3] = [
-        Box::new(dform_grpc::client::Process),
+        Box::new(dform_grpc::client::Process::Mock(fake.into())),
         Box::new(dform_mock::Linked::direct()),
         Box::new(dform_mock::Linked::wire()),
     ];

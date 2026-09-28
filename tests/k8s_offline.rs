@@ -1025,7 +1025,8 @@ fn offline_provider(s: &Scratch, dir: &str) -> dform::plugin::link::Link {
     let env = dform_grpc::spawn::Env::default()
         .unset("KUBECONFIG")
         .set("DFORM_K8S_OFFLINE", "1");
-    let mut conn = dform_grpc::client::Conn::link(std::path::Path::new(&k8s()), &env).unwrap();
+    let mut conn =
+        dform_grpc::client::Conn::link(&dform_grpc::spawn::Program::exe(k8s()), &env).unwrap();
     let config = json!({"world": s.path(&format!("{dir}/world.json")).display().to_string()});
     let config = Some(dform::plugin::wire::doc(&config));
     let _: dform::plugin::pb::ConfigureResponse = conn

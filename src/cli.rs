@@ -174,6 +174,10 @@ enum Command {
     /// The completion scripts' helper: candidates for the next word.
     #[command(name = "__complete", hide = true)]
     Complete { words: Vec<String> },
+    /// Serve a provider built into dform (`fake`, the mock) over gRPC:
+    /// how dform starts the mock, so it is always of the same build.
+    #[command(name = "__provider", hide = true)]
+    ServeProvider { name: String },
 }
 
 /// The commands that run on a target, at the top level and under `dev`.
@@ -537,7 +541,12 @@ pub fn main(
     if LAUNCH.set(launch).is_err() {
         panic!("internal: cli::main runs once per process");
     }
-    match resolve(Args::parse_from(args)).and_then(|cli| run(cli, None)) {
+    let args = Args::parse_from(args);
+    let result = match &args.cmd {
+        Command::ServeProvider { name } => serve_provider(name),
+        _ => resolve(args).and_then(|cli| run(cli, None)),
+    };
+    match result {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(e) => {
             use std::io::IsTerminal;
@@ -547,6 +556,16 @@ pub fn main(
             );
             std::process::ExitCode::FAILURE
         }
+    }
+}
+
+/// `dform __provider NAME`: serve the built-in provider NAME until stdin
+/// closes. The mock is the only one; the Kubernetes provider is its own
+/// executable (`dform-provider-k8s`).
+fn serve_provider(name: &str) -> Result<()> {
+    match name {
+        "fake" => dform_grpc::server::serve(dform_mock::Mock::process()),
+        _ => bail!("no built-in provider {name:?}: dform serves only `fake`"),
     }
 }
 
@@ -624,6 +643,7 @@ fn resolve(args: Args) -> Result<Cli> {
         Command::Init { name } => (Cmd::Init { name }, None),
         Command::Completions { shell } => (Cmd::Completions { shell }, None),
         Command::Complete { words } => (Cmd::Complete { words }, None),
+        Command::ServeProvider { .. } => bail!("internal: `__provider` serves before a project"),
     };
     let inputs = args.inputs;
     let mut cli = Cli {

@@ -64,6 +64,51 @@ fn a_provider_crash_mid_apply_fails_the_action_and_resume_finishes() {
     assert_eq!(r.summary(), "stack p is undeformed", "{}", r.stdout);
 }
 
+/// The mock is dform itself (`dform __provider fake`), never an executable
+/// found beside it that may be of another build: here a `dform` whose
+/// neighbouring `dform-provider-fake` is `false`. `DFORM_PROVIDER_FAKE`
+/// still names another executable to run instead.
+#[test]
+fn the_mock_is_dform_itself_not_the_executable_beside_it() {
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("selfspawn-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let s = Scratch::adopt(dir);
+    // Linked, not copied: the same filesystem as the build, and nothing
+    // written just before its exec (ETXTBSY).
+    std::fs::hard_link(env!("CARGO_BIN_EXE_dform"), s.path("dform")).unwrap();
+    std::os::unix::fs::symlink("/bin/false", s.path("dform-provider-fake")).unwrap();
+    s.write("dform.toml", "");
+    s.write("p.df", PROG);
+    let run = |fake: Option<&str>| {
+        let mut c = std::process::Command::new(s.path("dform"));
+        c.env_remove("DFORM_PROVIDER_FAKE");
+        if let Some(f) = fake {
+            c.env("DFORM_PROVIDER_FAKE", f);
+        }
+        let args = common::on("p.df", &["--world", "w.json"], &["plan"]);
+        common::Run::from(c.args(args).current_dir(&s.dir).output().unwrap())
+    };
+    let r = run(None).success();
+    assert!(r.stdout.contains("+ net.vpc.main"), "{}", r.stdout);
+    let stale = s.path("dform-provider-fake");
+    let r = run(Some(stale.to_str().unwrap())).failure();
+    assert!(
+        r.stderr
+            .contains("dform-provider-fake exited before its handshake"),
+        "{}",
+        r.stderr
+    );
+    // The command is dform's, not the user's.
+    let help = std::process::Command::new(s.path("dform"))
+        .arg("--help")
+        .output()
+        .unwrap();
+    assert!(help.status.success());
+    assert!(!String::from_utf8_lossy(&help.stdout).contains("__provider"));
+}
+
 /// `provider NAME { source = "DIR" }` where DIR holds an executable
 /// `dform-provider*`: that executable is the provider (here the mock
 /// itself, which plays the `fake` schema when given none).
@@ -113,10 +158,13 @@ fn the_mock_conforms() {
 
 /// The backends a test links: the process one, the direct and wire ones.
 fn launches() -> [(Backend, Box<dyn Launch>); 3] {
-    // The process backend spawns the mock provider.
-    fake();
+    // The process backend spawns the mock provider: in a test binary,
+    // its own executable.
     [
-        (Backend::Process, Box::new(dform_grpc::client::Process)),
+        (
+            Backend::Process,
+            Box::new(dform_grpc::client::Process::Mock(fake().into())),
+        ),
         (Backend::Direct, Box::new(dform_mock::Linked::direct())),
         (Backend::Wire, Box::new(dform_mock::Linked::wire())),
     ]

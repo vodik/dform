@@ -703,6 +703,7 @@ impl pb::provider_server::Provider for Service {
             protocol_version: dform_grpc::spawn::VERSION,
             name: openapi::PROVIDER.into(),
             capabilities: vec!["resource".into(), "managed".into(), "inventory".into()],
+            version: dform_core::plugin::backend::BUILD.into(),
         }))
     }
 

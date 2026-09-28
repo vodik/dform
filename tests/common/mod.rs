@@ -233,9 +233,9 @@ pub fn exe(name: &str) -> String {
     dform.with_file_name(name).to_str().unwrap().to_string()
 }
 
-/// `dform`, with the mock provider it spawns (`dform-provider-fake`) built.
+/// `dform`. The mock provider it spawns is itself (`dform __provider
+/// fake`).
 pub fn dform() -> Command {
-    exe("dform-provider-fake");
     Command::new(env!("CARGO_BIN_EXE_dform"))
 }
 

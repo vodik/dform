@@ -124,6 +124,10 @@ message HandshakeResponse {
   // bound: the object an Apply CREATE or REPLACE of address Name with
   // idempotency key Key made, if it made one).
   repeated string capabilities = 3;
+  // The provider's build: its crate version and the git commit it was
+  // built from (`0.1.0+1a2b3c4`). dform refuses one of its own built-in
+  // providers (`fakecloud`, `kubernetes`) whose build is not its own.
+  string version = 4;
 }
 
 message ConfigureRequest {

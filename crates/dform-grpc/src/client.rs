@@ -9,12 +9,12 @@
 
 use crate::pb;
 use crate::pb::provider_client::ProviderClient;
-use crate::spawn::{self, Env, Started};
+use crate::spawn::{self, Env, Program, Started};
 use anyhow::{Context, Result};
 use dform_core::plugin::Launch;
 use dform_core::plugin::backend::{Call, CallError, Provider, Reply, Ticket};
 use dform_core::plugin::link::Link;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ExitStatus};
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -43,18 +43,18 @@ pub struct Conn {
 }
 
 impl Conn {
-    /// Start the provider at `exe`, with `env`, and dial it.
-    pub fn start(exe: &Path, env: &Env) -> Result<Conn> {
+    /// Start the provider `program`, with `env`, and dial it.
+    pub fn start(program: &Program, env: &Env) -> Result<Conn> {
         let Started {
             child,
             stdin,
             address,
-        } = spawn::start(exe, env)?;
+        } = spawn::start(program, env)?;
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .context("start the provider client runtime")?;
-        let program = exe.display().to_string();
+        let program = program.display();
         let channel = rt
             .block_on(crate::transport::dial(&address))
             .with_context(|| format!("dial provider {program} at {address}"))?;
@@ -77,10 +77,10 @@ impl Conn {
         })
     }
 
-    /// Start the provider at `exe`, with `env`, dial it and shake hands.
-    pub fn link(exe: &Path, env: &Env) -> Result<Link> {
-        let conn = Conn::start(exe, env)?;
-        Link::start(exe.display().to_string(), Box::new(conn))
+    /// Start the provider `program`, with `env`, dial it and shake hands.
+    pub fn link(program: &Program, env: &Env) -> Result<Link> {
+        let conn = Conn::start(program, env)?;
+        Link::start(program.display(), Box::new(conn))
     }
 
     /// Whether the process has exited, waiting up to `grace` for it.
@@ -210,16 +210,35 @@ impl Drop for Conn {
     }
 }
 
-/// The CLI's backend: every provider a process, the mock
-/// `dform-provider-fake` (`spawn::fake_executable`).
-pub struct Process;
+/// Every provider a process. The mock is the running executable itself
+/// (`dform __provider fake`, `Process::Cli`), so it is always of dform's
+/// own build, unless `DFORM_PROVIDER_FAKE` names another executable.
+pub enum Process {
+    /// The `dform` binary's.
+    Cli,
+    /// A binary that is not `dform` (a test's): the mock is the
+    /// executable at this path (`dform-provider-fake`).
+    Mock(PathBuf),
+}
+
+impl Process {
+    fn mock_program(&self) -> Result<Program> {
+        if let Some(p) = std::env::var_os(spawn::FAKE_ENV) {
+            return Ok(Program::exe(p));
+        }
+        match self {
+            Process::Cli => Program::this("fake"),
+            Process::Mock(exe) => Ok(Program::exe(exe)),
+        }
+    }
+}
 
 impl Launch for Process {
     fn mock(&self) -> Result<Link> {
-        Conn::link(&spawn::fake_executable()?, &Env::default())
+        Conn::link(&self.mock_program()?, &Env::default())
     }
 
     fn plugin(&self, exe: &Path) -> Result<Link> {
-        Conn::link(exe, &Env::default())
+        Conn::link(&Program::exe(exe), &Env::default())
     }
 }

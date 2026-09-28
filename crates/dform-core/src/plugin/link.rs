@@ -3,7 +3,7 @@
 //! that arrives meanwhile (an Apply in flight) is kept for whoever waits
 //! for it.
 
-use super::backend::{Call, CallError, Provider, Reply, Ticket, VERSION};
+use super::backend::{BUILD, BUILT_IN, Call, CallError, Provider, Reply, Ticket, VERSION};
 use super::pb;
 use anyhow::{Result, bail};
 use std::collections::BTreeMap;
@@ -17,6 +17,25 @@ pub struct Link {
     backend: Box<dyn Provider>,
     /// Answers taken while waiting for another call.
     done: BTreeMap<Ticket, Result<Reply, CallError>>,
+}
+
+/// A provider built with dform (`BUILT_IN`) must be this build: one built
+/// from another commit, or before handshakes carried a version, plays by
+/// other rules with no error saying so.
+fn check_build(program: &str, hs: &pb::HandshakeResponse) -> Result<()> {
+    if BUILT_IN.contains(&hs.name.as_str()) && hs.version != BUILD {
+        let build = if hs.version.is_empty() {
+            "a build with no version".to_string()
+        } else {
+            format!("version {}", hs.version)
+        };
+        bail!(
+            "provider {program} ({}) is {build}; this dform is {BUILD}: rebuild: cargo build \
+             --workspace",
+            hs.name
+        );
+    }
+    Ok(())
 }
 
 impl Link {
@@ -40,6 +59,7 @@ impl Link {
                 hs.protocol_version,
             );
         }
+        check_build(&link.program, &hs)?;
         link.name = hs.name;
         link.capabilities = hs.capabilities;
         Ok(link)
@@ -132,5 +152,47 @@ impl Link {
                 other.method()
             ))
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::backend::{FAKECLOUD, Handler, KUBERNETES};
+    use super::super::queue::{Order, Queue};
+    use super::*;
+
+    /// Answers the handshake as `name` at `version`.
+    struct Hello(&'static str, &'static str);
+
+    impl Handler for Hello {
+        fn handle(&self, _: Call) -> Result<Reply, CallError> {
+            Ok(Reply::Handshake(pb::HandshakeResponse {
+                protocol_version: VERSION,
+                name: self.0.into(),
+                capabilities: vec!["resource".into()],
+                version: self.1.into(),
+            }))
+        }
+    }
+
+    fn start(name: &'static str, version: &'static str) -> Result<Link> {
+        let q = Queue::new(Hello(name, version), Order::Clock, false);
+        Link::start("prov", Box::new(q))
+    }
+
+    #[test]
+    fn a_built_in_provider_of_another_build_is_refused_with_the_rebuild_hint() {
+        assert_eq!(start(FAKECLOUD, BUILD).unwrap().name, FAKECLOUD);
+        for (name, version) in [(FAKECLOUD, "0.1.0+0000000"), (KUBERNETES, "")] {
+            let e = start(name, version).err().expect("refused").to_string();
+            assert!(
+                e.contains(&format!("provider prov ({name})"))
+                    && e.contains(BUILD)
+                    && e.ends_with("rebuild: cargo build --workspace"),
+                "{e}"
+            );
+        }
+        // A provider not built with dform versions itself.
+        assert_eq!(start("acme", "2.0.0").unwrap().name, "acme");
     }
 }

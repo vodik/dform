@@ -286,8 +286,17 @@ on TCP unless `DFORM_PROVIDER_TRANSPORT=unix` is in its environment (which it
 inherits from dform): then on a socket in the temporary directory, removed
 when it exits.
 
-The mock provider, `dform-provider-fake` (built with dform, `crates/dform-mock`),
-can pretend to be any provider: a provider it plays is a schema file of
+The mock provider (`crates/dform-mock`) is dform itself: dform starts it as
+`dform __provider fake` (a hidden command), a process of its own over gRPC
+but always of the same build. `DFORM_PROVIDER_FAKE=PATH` names another
+executable to run instead; `dform-provider-fake` is the same mock as an
+executable of its own, for the conformance suite and use outside dform. A
+handshake carries the provider's build (`0.1.0+COMMIT`, the git commit it
+was built from), and dform refuses one of its built-in providers (the mock,
+`fakecloud`, and `dform-provider-k8s`, `kubernetes`) built otherwise:
+`rebuild: cargo build --workspace`.
+
+The mock can pretend to be any provider: a provider it plays is a schema file of
 plain facts, `providers/<name>/schema.df`, selected by the program's
 `provider` statements (`provider gke {}`, or `provider aws { source =
 "providers/aws-mock" }` for a directory or `.df` file relative to the
@@ -1793,7 +1802,7 @@ This is an MVP:
 - list helper predicate: `member(List, Item)` and `member(List, Index, Item)` (Index starts at 0)
 - safe(ish) negation: `not` requires the atom be ground at evaluation time
 
-Provider model (in progress): the demo uses the mock provider, `dform-provider-fake`, a
+Provider model (in progress): the demo uses the mock provider, `dform __provider fake`, a
 separate process behind the plugin protocol (tests and benches may link it in
 instead, `dform-direct`) that supplies schema facts
 (`providers/<name>/schema.df`) and discovery facts (inventory), and supports plan/apply
