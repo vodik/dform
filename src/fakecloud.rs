@@ -20,6 +20,7 @@ use crate::provider::{self, Action, ActionKind, Change, Plan, Provider};
 use crate::schema::Schema;
 use crate::state::{self, State};
 use crate::value::{NullClass, Value};
+use crate::zset;
 use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as Json, json};
@@ -425,6 +426,9 @@ impl FakeCloud {
         Ok(world)
     }
 
+    /// Plan: refresh, then the Z-set `desired − world` (`zset::deformation`),
+    /// then this provider's per-resource plan (the diff, and adopt) for each
+    /// deformation. Actions come in dependency order, deletes last.
     pub fn plan_with_state(
         &self,
         desired: &[Resource],
@@ -434,10 +438,11 @@ impl FakeCloud {
         let world = self.refresh()?;
         let inv = self.load_inventory()?;
         let adopt_map = state::adopt_map(adopts);
-        let desired_set: BTreeSet<Address> = desired.iter().map(|r| r.addr.clone()).collect();
-        let mut resolved = BTreeMap::new();
-        let mut actions = Vec::new();
 
+        // desired: the assembled documents, refs and nulls resolved as far
+        // as the world allows.
+        let mut resolved: BTreeMap<Address, Json> = BTreeMap::new();
+        let mut order = Vec::new();
         for r in topo_sort(desired)? {
             let ctx = Ctx {
                 world: &world,
@@ -449,62 +454,132 @@ impl FakeCloud {
             };
             let doc = self.resolve_doc(&ctx, &r)?;
             self.check_required(&r.addr, &doc)?;
-            let typ = r.addr.typ.as_str();
-            let (kind, changes) = match state.get(&r.addr) {
-                None => match adopt_map.get(&r.addr) {
-                    Some(remote_name) => {
+            order.push(r.addr.clone());
+            resolved.insert(r.addr.clone(), doc);
+        }
+
+        // world: through the identity mapping. A state entry whose resource
+        // is gone is no row (a desired one is created again); one no longer
+        // desired is deleted from state with nothing to delete.
+        let mut before: BTreeMap<Address, Json> = BTreeMap::new();
+        let mut vanished = Vec::new();
+        for (addr, entry) in state.entries_for_provider(self.id()) {
+            match world.resources.get(&key(&addr.typ, &entry.remote)) {
+                Some(cur) => {
+                    let doc = match resolved.get(&addr) {
+                        Some(d) => self.world_doc(&addr.typ, cur, d),
+                        None => cur.attrs.clone(),
+                    };
+                    before.insert(addr, doc);
+                }
+                None if !resolved.contains_key(&addr) => vanished.push(addr),
+                None => {}
+            }
+        }
+
+        let flat = |docs: &BTreeMap<Address, Json>| {
+            docs.iter()
+                .map(|(a, d)| (a.clone(), self.flat_value(&a.typ, d)))
+                .collect::<BTreeMap<Address, Value>>()
+        };
+        let deformations: BTreeMap<Address, zset::Deformation> =
+            zset::deformation(&flat(&resolved), &flat(&before))
+                .into_iter()
+                .map(|d| (d.addr.clone(), d))
+                .collect();
+
+        let mut actions = Vec::new();
+        let deletes = deformations
+            .keys()
+            .filter(|a| !resolved.contains_key(*a))
+            .cloned();
+        for addr in order.iter().cloned().chain(deletes) {
+            let d = &deformations[&addr];
+            let typ = addr.typ.as_str();
+            let after = resolved.get(&addr);
+            let prior = before.get(&addr);
+            let (kind, changes) = match d.kind {
+                zset::Kind::Create => match adopt_map.get(&addr) {
+                    Some(remote_name) if state.get(&addr).is_none() => {
                         let inv_key = key(typ, remote_name);
                         let Some(inv_rr) = inv.resources.get(&inv_key) else {
                             bail!("adopt requested but inventory missing {inv_key}");
                         };
                         (
                             ActionKind::Adopt,
-                            self.diff(typ, Some(&inv_rr.attrs), Some(&doc)),
+                            self.diff(typ, Some(&inv_rr.attrs), after),
                         )
                     }
-                    None => (ActionKind::Create, self.diff(typ, None, Some(&doc))),
+                    _ => (ActionKind::Create, self.diff(typ, None, after)),
                 },
-                Some(entry) => match world.resources.get(&key(typ, &entry.remote)) {
-                    // Drift: state says it existed but the world doesn't.
-                    None => (ActionKind::Create, self.diff(typ, None, Some(&doc))),
-                    Some(cur) => {
-                        let changes =
-                            self.diff(typ, Some(&self.world_doc(typ, cur, &doc)), Some(&doc));
-                        let kind = if changes.is_empty() {
-                            ActionKind::Noop
-                        } else {
-                            ActionKind::Update
-                        };
-                        (kind, changes)
-                    }
-                },
+                zset::Kind::Delete => (ActionKind::Delete, self.diff(typ, prior, None)),
+                zset::Kind::Update => (ActionKind::Update, self.diff(typ, prior, after)),
+                zset::Kind::Drift => (ActionKind::Drift, self.diff(typ, prior, after)),
+                zset::Kind::Pending => (ActionKind::Pending, self.diff(typ, prior, after)),
+                zset::Kind::Undeformed => (ActionKind::Noop, vec![]),
             };
-            resolved.insert(r.addr.clone(), doc);
+            let on = match d.kind {
+                zset::Kind::Pending => d.unresolved.clone(),
+                _ => BTreeSet::new(),
+            };
             actions.push(Action {
                 kind,
-                addr: r.addr.clone(),
+                addr,
                 changes,
+                on,
             });
         }
-
-        // Deletes for anything in state not in desired.
-        for (addr, entry) in state.entries_for_provider("fakecloud") {
-            if desired_set.contains(&addr) {
-                continue;
-            }
-            let before = world
-                .resources
-                .get(&key(&addr.typ, &entry.remote))
-                .map(|x| &x.attrs);
-            let changes = self.diff(&addr.typ, before, None);
+        for addr in vanished {
             actions.push(Action {
                 kind: ActionKind::Delete,
                 addr,
-                changes,
+                changes: vec![],
+                on: BTreeSet::new(),
             });
         }
-
         Ok(Plan { actions })
+    }
+
+    /// A document in the canonical form the Z-set compares: leaf path to
+    /// leaf value, keyed lists by key, sets sorted (`flatten`), null and
+    /// secret markers as labeled nulls of the schema's class.
+    fn flat_value(&self, typ: &str, doc: &Json) -> Value {
+        let mut leaves = BTreeMap::new();
+        self.flatten(typ, doc, "", "", &mut leaves);
+        Value::Obj(
+            leaves
+                .into_iter()
+                .map(|(p, (v, _))| {
+                    let v = match provider::marker(&v) {
+                        Some((provider::NULL_KEY, label)) => Value::Null {
+                            label: label.to_string(),
+                            class: self.null_class(label),
+                            ty: String::new(),
+                        },
+                        Some((_, label)) => Value::Null {
+                            label: label.to_string(),
+                            class: NullClass::Secret,
+                            ty: String::new(),
+                        },
+                        None => json_to_value(&v),
+                    };
+                    (p, v)
+                })
+                .collect(),
+        )
+    }
+
+    /// The class of the null labeled `T/A#P`: the schema's, else open (a
+    /// ref to a configured attribute nobody set).
+    fn null_class(&self, label: &str) -> NullClass {
+        let Some((ta, path)) = label.split_once('#') else {
+            return NullClass::Open;
+        };
+        let typ = ta.split_once('/').map(|x| x.0).unwrap_or(ta);
+        self.schema
+            .class_of(typ, path)
+            .or_else(|| self.schema.optional_computed_class(typ, path))
+            .unwrap_or(NullClass::Open)
     }
 
     /// Apply the plan as one tick of the world. The world is saved after every
@@ -555,14 +630,15 @@ impl FakeCloud {
                         state,
                         adopts: &adopt_map,
                         resolved: &resolved,
-                        strict: (!matches!(a.kind, ActionKind::Noop)).then_some(addr),
+                        strict: (!matches!(a.kind, ActionKind::Noop | ActionKind::Pending))
+                            .then_some(addr),
                     };
                     let doc = self.resolve_doc(&ctx, r)?;
                     resolved.insert(addr.clone(), doc.clone());
                     doc
                 }
             };
-            if matches!(a.kind, ActionKind::Noop) {
+            if matches!(a.kind, ActionKind::Noop | ActionKind::Pending) {
                 continue;
             }
             if self.chaos.fail.contains(addr) {
@@ -576,7 +652,7 @@ impl FakeCloud {
             // hears back: no identity is recorded.
             let answered = !self.chaos.timeout.contains(addr);
             match a.kind {
-                ActionKind::Noop => {}
+                ActionKind::Noop | ActionKind::Pending => {}
                 ActionKind::Delete => {
                     if let Some(entry) = state.get(addr) {
                         world.resources.remove(&key(&addr.typ, &entry.remote));
@@ -630,7 +706,7 @@ impl FakeCloud {
                         state.set(addr.clone(), self.id().to_string(), remote_name.clone());
                     }
                 }
-                ActionKind::Update => {
+                ActionKind::Update | ActionKind::Drift => {
                     let Some(entry) = state.get(addr) else {
                         bail!("apply {at}: update without a state entry");
                     };

@@ -61,3 +61,23 @@ fn gke_two_phase_plans_in_sections() {
         .success();
     assert_eq!(r.stdout, GKE_PLAN);
 }
+
+/// F DR-11 revised: apply, then re-plan. Round 0 resolves every null through
+/// the identity mapping before the Z-set is taken, so the stack cancels to
+/// the zero Z-set with no null anywhere.
+#[test]
+fn apply_then_replan_is_undeformed() {
+    let s = Scratch::new("undeformed");
+    let prog = repo().join("dform.df");
+    let args = ["--file", prog.to_str().unwrap(), "--world", "w.json"];
+    let run = |cmd: &str| s.run(&[&args[..], &[cmd]].concat()).success();
+    let first = run("plan");
+    assert!(first.stdout.contains('?'), "{}", first.stdout);
+    assert!(!first.stdout.contains("undeformed"), "{}", first.stdout);
+    run("apply");
+    let again = run("plan");
+    assert_eq!(
+        again.stdout,
+        "plan: 0 to create, 0 to update, 0 to delete\nstack dform is undeformed\n"
+    );
+}

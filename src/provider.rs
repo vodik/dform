@@ -8,6 +8,11 @@ pub enum ActionKind {
     Create,
     Adopt,
     Update,
+    /// An update against a stale identity (F DR-11 revised): a fresh null
+    /// where the world holds a constant. Applied as an update.
+    Drift,
+    /// An update that waits on a null (`Action::on`) until a boundary.
+    Pending,
     Delete,
     Noop,
 }
@@ -72,6 +77,8 @@ pub struct Action {
     pub kind: ActionKind,
     pub addr: crate::ir::Address,
     pub changes: Vec<Change>,
+    /// Pending: the nulls the comparison waits on.
+    pub on: std::collections::BTreeSet<String>,
 }
 
 #[derive(Debug, Clone)]

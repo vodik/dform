@@ -111,6 +111,23 @@ cargo run -- plan
 #   vpc_id = ?net.vpc/network.main::vpc#id
 ```
 
+The plan is the Z-set `desired - world` (proposal E §2.8): per address a
+create, a delete, an update, or nothing. What cannot be decided yet is said so:
+
+- `pending on ?nulls:` lists deformations held until those nulls resolve:
+  downstream of an Apply that resolves a null something is stuck on, or an
+  update whose new value is an open null against the world's value. Their
+  diffs are shown now.
+- `pending groups:` lists resource rules stuck on a null (`want(gke_nodepool, _)
+  x unknown, on ?gke_cluster/pngu#zones`): how many there will be is not known.
+- `undetermined:` lists policies that cannot be decided yet. They are never
+  reported as satisfied.
+- `(drift: ...)` marks an update where a fresh null meets a value the world
+  already has: the identity mapping is stale.
+- `stack NAME is undeformed`: nothing to do, nothing stuck.
+
+`cargo run -- query stuck` lists the stuck rule instances.
+
 A `sensitive` computed value never leaves the provider: what dform sees, stores
 in consumers and prints is its label, `(sensitive T/N#Attr)`. A value at a
 `sensitive` path the program sets prints as `(sensitive)`.

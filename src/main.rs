@@ -133,6 +133,7 @@ fn main() -> Result<()> {
     }
 
     let resources = ir::compile_resources(res.facts.iter().cloned(), backend.schema())?;
+    let stack = state::stack_name(&files[0]);
     let adopts = ir::compile_adopts(res.facts.iter())?;
 
     match cli.cmd {
@@ -165,7 +166,7 @@ fn main() -> Result<()> {
         Cmd::Plan => {
             let sections = plan_sections(&res, &resources, backend.schema());
             let plan = backend.plan(&resources, &adopts, &st)?;
-            print_plan(&plan, cli.show_noop, &sections);
+            print_plan(&plan, cli.show_noop, &sections, &stack);
         }
         Cmd::Apply { .. } => {
             for addr in chaos.addresses() {
@@ -179,7 +180,7 @@ fn main() -> Result<()> {
             }
             let sections = plan_sections(&res, &resources, backend.schema());
             let mut plan = backend.plan(&resources, &adopts, &st)?;
-            print_plan(&plan, cli.show_noop, &sections);
+            print_plan(&plan, cli.show_noop, &sections, &stack);
             // A pending deformation waits for a boundary: not this apply.
             plan.actions.retain(|a| {
                 !sections
@@ -189,7 +190,7 @@ fn main() -> Result<()> {
             let changed = plan
                 .actions
                 .iter()
-                .any(|a| !matches!(a.kind, ActionKind::Noop));
+                .any(|a| !matches!(a.kind, ActionKind::Noop | ActionKind::Pending));
             // Every apply is one tick of the fake world, also when there is
             // nothing to do. State keeps every action that returned, also
             // when a later one fails.
@@ -277,14 +278,30 @@ fn plan_sections(
     stuck::sections(&res.stuck, &res.facts, &docs, schema)
 }
 
-fn print_plan(plan: &dform::provider::Plan, show_noop: bool, sections: &stuck::Sections) {
-    let is_pending = |a: &dform::provider::Action| {
-        sections
-            .pending
-            .contains_key(&(a.addr.typ.clone(), a.addr.name.clone()))
+/// What a deformation waits on: a boundary (the evaluator's sections), or
+/// a comparison against an open null (the Z-set's pending update). `None`
+/// when it is definite.
+fn waits_on(a: &dform::provider::Action, sections: &stuck::Sections) -> Option<Vec<String>> {
+    let key = (a.addr.typ.clone(), a.addr.name.clone());
+    let on: Vec<String> = match (sections.pending.get(&key), &a.kind) {
+        (Some(ns), _) => ns.iter().cloned().collect(),
+        (None, ActionKind::Pending) => a.on.iter().cloned().collect(),
+        (None, _) => return None,
     };
-    let (held, plan_actions): (Vec<_>, Vec<_>) =
-        plan.actions.iter().cloned().partition(|a| is_pending(a));
+    Some(on)
+}
+
+fn print_plan(
+    plan: &dform::provider::Plan,
+    show_noop: bool,
+    sections: &stuck::Sections,
+    stack: &str,
+) {
+    let (held, plan_actions): (Vec<dform::provider::Action>, Vec<_>) = plan
+        .actions
+        .iter()
+        .cloned()
+        .partition(|a| waits_on(a, sections).is_some());
     let mut creates = 0usize;
     let mut adopts = 0usize;
     let mut updates = 0usize;
@@ -294,9 +311,10 @@ fn print_plan(plan: &dform::provider::Plan, show_noop: bool, sections: &stuck::S
         match a.kind {
             ActionKind::Create => creates += 1,
             ActionKind::Adopt => adopts += 1,
-            ActionKind::Update => updates += 1,
+            ActionKind::Update | ActionKind::Drift => updates += 1,
             ActionKind::Delete => deletes += 1,
             ActionKind::Noop => noops += 1,
+            ActionKind::Pending => {}
         }
     }
 
@@ -307,8 +325,8 @@ fn print_plan(plan: &dform::provider::Plan, show_noop: bool, sections: &stuck::S
     if show_noop {
         suffix.push_str(&format!(", {noops} no-op"));
     }
-    if !sections.pending.is_empty() {
-        suffix.push_str(&format!(", {} pending", sections.pending.len()));
+    if !held.is_empty() {
+        suffix.push_str(&format!(", {} pending", held.len()));
     }
     println!("plan: {creates} to create, {updates} to update, {deletes} to delete{suffix}");
     print_actions(&plan_actions, show_noop);
@@ -317,9 +335,9 @@ fn print_plan(plan: &dform::provider::Plan, show_noop: bool, sections: &stuck::S
     // shown now.
     let mut by_nulls: std::collections::BTreeMap<String, Vec<dform::provider::Action>> =
         Default::default();
-    for a in held {
-        let key = (a.addr.typ.clone(), a.addr.name.clone());
-        let on = sections.pending[&key]
+    for a in held.iter().cloned() {
+        let on = waits_on(&a, sections)
+            .unwrap_or_default()
             .iter()
             .map(|n| format!("?{n}"))
             .collect::<Vec<_>>()
@@ -342,6 +360,13 @@ fn print_plan(plan: &dform::provider::Plan, show_noop: bool, sections: &stuck::S
             println!("? {u}");
         }
     }
+    // E §2.7: undeformed is the zero Z-set, nothing stuck, no cell stuck.
+    let zero = plan_actions
+        .iter()
+        .all(|a| matches!(a.kind, ActionKind::Noop));
+    if zero && held.is_empty() && sections.blocking.is_empty() && sections.undetermined.is_empty() {
+        println!("stack {stack} is undeformed");
+    }
 }
 
 fn print_actions(actions: &[dform::provider::Action], show_noop: bool) {
@@ -352,11 +377,17 @@ fn print_actions(actions: &[dform::provider::Action], show_noop: bool) {
         let prefix = match a.kind {
             ActionKind::Create => "+",
             ActionKind::Adopt => ">",
-            ActionKind::Update => "~",
+            ActionKind::Update | ActionKind::Drift | ActionKind::Pending => "~",
             ActionKind::Delete => "-",
             ActionKind::Noop => "=",
         };
-        println!("{prefix} {}.{}", a.addr.typ, a.addr.name);
+        let note = match a.kind {
+            ActionKind::Drift => {
+                "  (drift: a fresh null where the world has a value; its identity is stale)"
+            }
+            _ => "",
+        };
+        println!("{prefix} {}.{}{note}", a.addr.typ, a.addr.name);
 
         if a.changes.is_empty() {
             continue;
@@ -383,7 +414,7 @@ fn print_actions(actions: &[dform::provider::Action], show_noop: bool) {
                 ActionKind::Delete => {
                     println!("  {} was {}", ch.path, side(ch.before.as_ref()));
                 }
-                ActionKind::Update => {
+                ActionKind::Update | ActionKind::Drift | ActionKind::Pending => {
                     println!(
                         "  {}: {} -> {}",
                         ch.path,
