@@ -1,4 +1,5 @@
-# Demo: schemas + record matching + wildcards
+# Demo: schemas + record matching + wildcards. No resources.
+# To run it, from this directory: README.md.
 
 edition 2026
 stack decl_demo {}

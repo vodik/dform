@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== examples/crud-api/stacks/crud_api.df: 222 nodes, 1421 edges (374 negative)
+== examples/crud-api/stacks/crud_api.df: 222 nodes, 1417 edges (366 negative)
    STRATIFIED, 15 strata
    stratum 0:
      (arg, google_sql_database, instance)

@@ -1,11 +1,15 @@
 # Demo: adopting an existing resource from inventory.
 #
-# Runs from a clean clone, no setup needed:
-#   cargo run -- -C examples/adopt dev --inventory ../../tests/fixtures/world/inventory.json plan --set env=prod
+# Staging creates the VPC; prod adopts the one the inventory already has.
+# To run it, from this directory: README.md.
 
 edition 2026
 stack adopt_demo {}
 input env: enum("staging", "prod") = "staging"
+
+settings staging {
+  network.vpc_cidr = inet("10.10.0.0/16")
+}
 
 settings prod {
   network.vpc_cidr = inet("10.20.0.0/16")

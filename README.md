@@ -28,6 +28,8 @@ cargo run -- fmt --check $(git ls-files '*.df' ':!tests/syntax/err' ':!editors')
 
 `-C DIR` runs as if dform started in DIR; from inside a project the same
 commands need no `-C`: `cd examples/demo/stacks && cargo run -- plan`.
+`apply` names a keyed stack's deployment (`dform env=staging`), and the
+stack when the project has several.
 
 ### Project layout
 
@@ -48,9 +50,9 @@ importing a stack file is an error, and a `.df` outside the layout's
 directories is a warning. `docs/layout.md` has the convention; every
 example under `examples/` follows it, and test-only programs are under
 `tests/fixtures/`.
-`examples/crud-api` (proposal G's blue/green rollout) does not plan yet: it
-assumes provider schemas the mocks do not have and a git repository of
-releases.
+Each example's `README.md` says what it shows and lists the commands to
+run from its directory (`dform` there is `cargo run --` in a checkout);
+`tests/examples.rs` runs them: plan, apply, and plan again, undeformed.
 
 `dform.toml` is small; programs stay in `.df` files. It holds
 the project's name and the dform versions it takes, each provider's source
@@ -1336,7 +1338,8 @@ and the plan lists it with the conflicts; a literal that violates one is a
 compile error naming both places. A value that carries a null is checked
 when the null resolves: the plan prints `? refinement on ?T/A#P deferred`
 in its undetermined section, and a violation found at the boundary stops
-apply like any deny between ticks (`examples/refine/stacks/refine_gke.df`). On a path the
+apply like any deny between ticks (`examples/refine`: `dform apply --set zones=2`
+there stops after tick 1; its default, three zones, applies). On a path the
 schema marks `sensitive` the engine never checks the value: the refinement
 goes to the provider as an Apply assertion, checked once the secret is
 materialized, and a provider whose Schema does not declare

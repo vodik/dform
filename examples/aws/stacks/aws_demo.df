@@ -1,8 +1,7 @@
 # A small web stack planned against the Terraform-shaped mock AWS provider
 # (dform.toml: aws is the built-in aws-mock). No account: the world is a JSON file.
 #
-#   cargo run -- -C examples/aws plan
-#   cargo run -- -C examples/aws apply
+# To run it, from this directory: README.md.
 #
 # Two shapes to look at:
 #   - Optional+Computed: subnet `a` sets availability_zone, so a ref to it is

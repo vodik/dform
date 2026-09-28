@@ -7,8 +7,7 @@
 # every replica of it is ready) the Service's selector; the old color is
 # retired on the next tick, because the world now says the new one serves.
 #
-#   dform -C examples/crud-api plan crud_api
-#   dform controller run shop.crud_api
+# To run it, from this directory: README.md.
 #
 # From proposals/G-corpus/crud_api.org (edition 2027 there; the compiler
 # reads 2026). It plans against the mock (dform.toml: the built-in k8s
@@ -265,8 +264,10 @@ module app {
     }]
   }
 
-  output ready_replicas = deploy.status.readyReplicas
-  output total_replicas = deploy.status.replicas
+  # Only while the instance runs: a color with no run has no Deployment,
+  # and a ref to it would dangle.
+  output("ready_replicas", n) if has color, n = deploy.status.readyReplicas
+  output("total_replicas", n) if has color, n = deploy.status.replicas
 }
 
 ########################################

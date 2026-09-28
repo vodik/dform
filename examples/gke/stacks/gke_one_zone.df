@@ -1,13 +1,12 @@
 # gke_two_phase.df with a cluster in one zone: E §2.7 worked example item 6,
 # the other branch. Tick 1 creates the cluster; its zones come back with one
 # element, so at the boundary deny(two_zones) derives and apply stops before
-# touching the nodepools and the kubernetes objects:
-#   cargo run -- -C examples/gke apply gke_one_zone
+# touching the nodepools and the kubernetes objects.
+# To run it, from this directory: README.md.
 #
-# The rest is C's two-phase GKE / kubernetes stack (E §7.4), in the current syntax.
-# Run with the gke mock schema, which makes the cluster's zones, endpoint and
-# ca open nulls until the cluster exists:
-#   cargo run -- -C examples/gke plan gke_two_phase
+# The rest is C's two-phase GKE / kubernetes stack (E §7.4), in the current
+# syntax, with the gke mock schema, which makes the cluster's zones,
+# endpoint and ca open nulls until the cluster exists.
 
 edition 2026
 stack gke_one_zone {}

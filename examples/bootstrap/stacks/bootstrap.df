@@ -2,9 +2,7 @@
 # creates the cluster and installs dform in it as a controller, in three
 # ticks, and stays batch: the controller refuses a `role = bootstrap` stack.
 #
-#   cargo run -- -C examples/bootstrap apply renfry.bootstrap
-#   cargo run -- -C examples/bootstrap stack handover renfry.workload --to 'k8s("dform-system/workload")'
-#   cargo run -- -C examples/bootstrap controller run renfry.workload
+# To run it, from this directory: README.md.
 #
 # Tick 1: the network, the subnetwork and the cluster. The node pools are a
 # pending group: one per zone, and the zones are the cluster's. Tick 2: the

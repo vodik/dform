@@ -1,9 +1,6 @@
 # dform demo: component-scoped resources + settings tables + IAM policy assembly.
 #
-# Try:
-#   cargo run -- -C examples/demo plan
-#   cargo run -- -C examples/demo plan dform env=prod
-#   cargo run -- -C examples/demo apply dform env=staging
+# To run it, from this directory: README.md.
 
 edition 2026
 
