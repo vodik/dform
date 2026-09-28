@@ -1045,6 +1045,12 @@ programs (every example in this repo) stay single-phase. The chase, EGDs,
 =some=, =choose= and quoted atoms from C are rejected; the only existential is
 the prelude rule and §2.7 shows it needs no termination theory.
 
+*Amendment (2026-09-28, proposal G decision 2).* The code keeps a =ref= to a
+configured attribute as =Value::Ref=: resolved at apply from the program's
+value (else the world's), an apply-order edge, printed =ref(...)=. It is not
+rewritten to an =attr/4= join; G-6 relies on that. A ref to a computed
+attribute is the labeled null as above.
+
 *Consequences.*
 - The "for_each depends on unknown" error class does not exist; the
   replacement is a plan line naming the pending group and its null.
