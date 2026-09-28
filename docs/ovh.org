@@ -1,0 +1,766 @@
+#+TITLE: dform on OVH Public Cloud, worked through
+#+STARTUP: overview
+
+A worked example in today's surface syntax (docs/grammar.md, edition
+2026): a private network, OVH Managed Kubernetes (MKS) on it, an app on the
+cluster, and continuous delivery by the in-cluster controller. The last
+part is the interesting one: changing the cluster while it runs, with the
+controller living on it.
+
+*None of this runs today.* It parses against the grammar as it stands, but
+three pieces do not exist yet, and the text marks every place it leans on
+one of them:
+
+- *An OVH provider.* The shortest route is the parked Terraform bridge over
+  =ovh/ovh=; types below keep that provider's resource names under an
+  =ovh.= namespace (=ovh_cloud_project_kube= is =ovh.cloud_project_kube=).
+  Part 1 lists the schema facts the example assumes.
+- *A kubeconfig as a secret credential.* MKS returns one sensitive
+  kubeconfig, not an endpoint and a CA; the Kubernetes provider must accept
+  it through Configure and hold it in memory only.
+- *An S3-compatible state backend with leased locks.* OVH Object Storage
+  speaks S3. The controller's state has to live off the cluster it manages,
+  and its lock has to expire if the pod holding it dies.
+
+Tickets touched by this document are named where they matter.
+
+* Part 0: the shape
+
+Two stacks, split at the trust boundary, both keyed by environment:
+
+| Stack          | Runs from                 | Owns                                                   |
+|----------------+---------------------------+--------------------------------------------------------|
+| =ovh.infra[env]= | CI, batch, =role = "bootstrap"= | vRack network, subnet, gateway, MKS cluster, node pools, the managed Postgres, the state bucket, the controller's Deployment |
+| =shop.app[env]=  | the controller, in the cluster | the app's namespace, Deployment, Service, HPA, PDB, network policies, the DB Secret |
+
+The controller never runs =ovh.infra=: it would be able to delete the
+nodes it runs on. The app stack reads what it needs from the infra stack's
+outputs, and nothing flows the other way.
+
+#+begin_example
+repo/
+  infra.df            the ovh.infra[env] stack
+  app.df              the shop.app[env] stack
+  modules/app.df      the app, as a module
+  policies/ovh.df     change-management policy for both stacks
+  config/prod.yaml    per-env configuration rows (data tables ticket)
+  providers/ovh/      the bridged schema, as facts
+#+end_example
+
+* Part 1: what the OVH schema has to say
+
+The provider publishes these as schema facts; they are the assumptions the
+rest of the document leans on. Only the lines that change behaviour are
+shown. =force_new= means a change replaces the object; =type_replace= says
+which order a replacement may take.
+
+#+begin_src dform
+# providers/ovh/schema.df (excerpt): what the bridge would emit.
+
+# vRack private network and its subnet: the VLAN and the CIDR are fixed at birth.
+type_attr(ovh.cloud_project_network_private, "vlan_id", "int", ["force_new"])
+type_attr(ovh.cloud_project_network_private, "id", "string", ["computed", "id"])
+type_attr(ovh.cloud_project_network_private_subnet, "network", "string", ["force_new"])
+type_attr(ovh.cloud_project_network_private_subnet, "id", "string", ["computed", "id"])
+
+# The MKS cluster. Region, network, subnet and kube-proxy mode are fixed at
+# birth; the version upgrades in place (one minor at a time, server-side).
+type_attr(ovh.cloud_project_kube, "region", "string", ["force_new"])
+type_attr(ovh.cloud_project_kube, "private_network_id", "string", ["force_new"])
+type_attr(ovh.cloud_project_kube, "nodes_subnet_id", "string", ["force_new"])
+type_attr(ovh.cloud_project_kube, "kube_proxy_mode", "string", ["force_new"])
+type_attr(ovh.cloud_project_kube, "version", "string", ["optional_computed"])
+type_attr(ovh.cloud_project_kube, "id", "string", ["computed", "id"])
+type_attr(ovh.cloud_project_kube, "kubeconfig", "string", ["computed", "sensitive"])
+type_attr(ovh.cloud_project_kube, "url", "string", ["computed"])
+type_replace(ovh.cloud_project_kube, "destroy_first")    # one name per project
+
+# Node pools. The flavor and anti-affinity are fixed at birth; the size is
+# not, and the autoscaler moves it. Two pools can coexist, so a replacement
+# creates the new pool first.
+type_attr(ovh.cloud_project_kube_nodepool, "flavor_name", "string", ["force_new"])
+type_attr(ovh.cloud_project_kube_nodepool, "anti_affinity", "bool", ["force_new"])
+type_attr(ovh.cloud_project_kube_nodepool, "desired_nodes", "int", ["optional_computed"])
+type_attr(ovh.cloud_project_kube_nodepool, "available_nodes", "int", ["computed"])
+type_replace(ovh.cloud_project_kube_nodepool, "create_first")
+type_refine(ovh.cloud_project_kube_nodepool, "max_nodes", range(1, 100))
+
+# Managed Postgres: the private endpoint arrives after creation.
+type_attr(ovh.cloud_project_database, "endpoints", "list", ["computed"])
+type_attr(ovh.cloud_project_database_postgresql_user, "password", "string", ["computed", "sensitive"])
+
+# OVH operations are asynchronous tasks: reads lag creation.
+type_retry(ovh.cloud_project_kube, 30)
+type_retry(ovh.cloud_project_kube_nodepool, 30)
+#+end_src
+
+* Part 2: the infrastructure
+
+#+begin_src dform
+# infra.df: the network, the cluster, the database, and the controller.
+#
+#   dform --file infra.df plan --set env=prod
+#   dform --file infra.df apply --set env=prod     (from CI, never from the cluster)
+
+edition 2026
+
+stack ovh.infra[env] {
+  role = "bootstrap"
+  unknowns = "permissive"                   # phases are expected here; see Part 5
+  backend = s3("dform-state", "infra/{env}", endpoint: "https://s3.gra.io.cloud.ovh.net")   # not implemented
+}
+
+provider ovh { source = "providers/ovh" }             # the bridge; not implemented
+provider k8s {}
+
+input env: enum("dev", "prod") = "dev"
+input project: string                                 # the OVH Public Cloud project id
+
+# Per-env rows: config/dev.yaml and config/prod.yaml (data tables ticket).
+input relation pool(name: string, flavor: string, min: int, max: int, generation: int)
+  from yaml("config/{env}.yaml")
+
+settings dev  @default { region = "GRA9", vlan = 100, cidr = "10.10.0.0/16", kube = "1.31", db_plan = "essential" }
+settings prod @default { region = "GRA9", vlan = 200, cidr = "10.20.0.0/16", kube = "1.31", db_plan = "business" }
+let cfg = settings[env]
+
+########################################
+# The private network (vRack), its subnet, and a gateway for egress.
+########################################
+
+resource ovh.cloud_project_network_private net {
+  service_name = project
+  name = "shop-{env}"
+  vlan_id = cfg.vlan
+  regions = [cfg.region]
+}
+
+resource ovh.cloud_project_network_private_subnet nodes {
+  service_name = project
+  network_id = net.id
+  region = cfg.region
+  network = cfg.cidr
+  start = inet_host(cfg.cidr, 10)
+  end = inet_host(cfg.cidr, 250)
+  dhcp = true
+}
+
+resource ovh.cloud_project_gateway egress {
+  service_name = project
+  name = "shop-{env}-gw"
+  model = "s"
+  region = cfg.region
+  network_id = net.id
+  subnet_id = nodes.id
+}
+
+########################################
+# The cluster. The version is the only field meant to change in place.
+########################################
+
+resource ovh.cloud_project_kube main {
+  service_name = project
+  name = "shop-{env}"
+  region = cfg.region
+  version = cfg.kube
+  private_network_id = net.id
+  nodes_subnet_id = nodes.id
+  private_network_configuration = { default_vrack_gateway: "", private_network_routing_as_default: true }
+  kube_proxy_mode = "ipvs"
+  update_policy = "MINIMAL_DOWNTIME"
+}
+
+# Node pools come from config rows, one per (name, generation). Part 5 uses
+# the generation to replace a pool without a gap.
+resource ovh.cloud_project_kube_nodepool "{name}-g{generation}" {
+  for pool(name, flavor, min, max, generation)
+  service_name = project
+  kube_id = main.id
+  name = "{name}-g{generation}"
+  flavor_name = flavor
+  min_nodes = min
+  max_nodes = max
+  autoscale = true
+  anti_affinity = true
+  template = { metadata: { labels: { pool: name, generation: "{generation}" } } }
+}
+
+# The autoscaler owns the size: never plan it back.
+ignore_changes(ovh.cloud_project_kube_nodepool, _, "desired_nodes")
+
+########################################
+# The managed database, private to the vRack.
+########################################
+
+resource ovh.cloud_project_database pg {
+  service_name = project
+  engine = "postgresql"
+  version = "16"
+  plan = cfg.db_plan
+  flavor = "db1-4"
+  nodes = [{ region: cfg.region, network_id: net.id, subnet_id: nodes.id }]
+}
+
+resource ovh.cloud_project_database_postgresql_user app {
+  service_name = project
+  cluster_id = pg.id
+  name = "shop"
+}
+
+########################################
+# The Kubernetes provider, configured from the cluster's kubeconfig.
+# The kubeconfig is a secret null until tick 1 creates the cluster; the
+# provider materializes it in memory, never on disk (not implemented:
+# today the k8s provider reads a kubeconfig file).
+########################################
+
+provider_config("kubernetes", { kubeconfig: main.kubeconfig })
+
+resource k8s.namespace dform_system {
+  metadata.name = "dform-system"
+}
+
+# The controller's state credentials, from an OVH S3 user.
+resource ovh.cloud_project_user state_writer {
+  service_name = project
+  description = "dform controller, {env}"
+  role_names = ["objectstore_operator"]
+}
+
+resource ovh.cloud_project_user_s3_credential state_writer {
+  service_name = project
+  user_id = state_writer.id
+}
+
+# OVH Object Storage speaks the S3 API, so the backend takes an S3 key
+# pair; these are OVH credentials of the user above, nothing from AWS. The
+# backend reads them from DFORM_S3_* (not implemented, like the backend).
+resource k8s.secret dform_state {
+  metadata.name = "dform-state"
+  metadata.namespace = dform_system.metadata.name
+  stringData = {
+    DFORM_S3_ACCESS_KEY_ID: state_writer.access_key_id,
+    DFORM_S3_SECRET_ACCESS_KEY: state_writer.secret_access_key
+  }
+}
+
+# The controller, running shop.app for this env. It lands only once a pool
+# of the current generation has nodes (a read of a computed value: the rule
+# may derive after the boundary, and the plan shows it pending).
+current_pool_up if pool(n, _, _, _, g), ovh.cloud_project_kube_nodepool["{n}-g{g}"].available_nodes > 0
+
+resource k8s.deployment dform_controller {
+  if current_pool_up
+  metadata.name = "dform-controller"
+  metadata.namespace = dform_system.metadata.name
+  spec.replicas = 1
+  spec.strategy = { type: "Recreate" }         # one lock holder at a time
+  spec.selector.matchLabels = { app: "dform-controller" }
+  spec.template.metadata.labels = { app: "dform-controller" }
+  spec.template.spec.containers = [{
+    name: "dform",
+    image: "ghcr.io/shop/dform@sha256:3f1c...",
+    args: ["controller", "--stack", "shop.app", "--set", "env={env}"],
+    envFrom: [{ secretRef: { name: dform_state.metadata.name } }],
+    resources: { requests: { cpu: "100m", memory: "256Mi" }, limits: { memory: "512Mi" } }
+  }]
+}
+
+########################################
+# What the app stack may read.
+########################################
+
+output db_host = pg.endpoints[0].domain
+output db_port = pg.endpoints[0].port
+output db_user = app.name
+output db_password = app.password               # secret: a label crosses, never bytes
+output region = cfg.region
+output lb_subnet = nodes.id
+#+end_src
+
+The plan of a fresh =prod=, as the printer would show it (abridged):
+
+#+begin_example
+plan: 7 deformations (7 create), 6 pending, 0 undetermined
+definite:
++ ovh.cloud_project_network_private.net
++ ovh.cloud_project_network_private_subnet.nodes      network_id = ?ovh.cloud_project_network_private/net#id
++ ovh.cloud_project_gateway.egress
++ ovh.cloud_project_kube.main                          version = "1.31"   kubeconfig: (sensitive, after apply)
++ ovh.cloud_project_database.pg
++ ovh.cloud_project_database_postgresql_user.app
++ ovh.cloud_project_user.state_writer
+pending on ?ovh.cloud_project_kube/main#id (resolves after tick 1):
++ ovh.cloud_project_kube_nodepool.general-g1          flavor_name = "b3-16"
++ ovh.cloud_project_kube_nodepool.batch-g1            flavor_name = "c3-8"
+pending on ?ovh.cloud_project_kube/main#kubeconfig (provider configuration):
++ k8s.namespace.dform_system
++ k8s.secret.dform_state                              stringData: (sensitive)
+pending groups:
+? k8s.deployment.dform_controller, on ?ovh.cloud_project_kube_nodepool/general-g1#available_nodes
+apply order: tick 1 [net subnet gateway kube pg user state_writer]
+             tick 2 [nodepools, namespace, secret]
+             tick 3 [dform_controller]
+#+end_example
+
+* Part 3: the app on the cluster
+
+The app is a module, so a second service is one =instance= line. It knows
+nothing about OVH: the only OVH-shaped thing it sees is that a
+=LoadBalancer= Service gets an external IP some minutes after creation,
+which is an open null like any other.
+
+#+begin_src dform
+# modules/app.df
+
+edition 2026
+
+module app {
+  input name: string
+  input image: string
+  input replicas: int
+  input port: int
+  input db_secret: string
+  input pool: string                        # the node pool label to run on
+  output url: string
+
+  resource k8s.namespace ns {
+    metadata.name = name
+    metadata.labels = { "pod-security.kubernetes.io/enforce": "restricted" }
+  }
+
+  resource k8s.deployment web {
+    metadata.name = name
+    metadata.namespace = ns.metadata.name
+    spec.replicas = replicas
+    spec.strategy = { rollingUpdate: { maxUnavailable: 0, maxSurge: 1 } }
+    spec.selector.matchLabels = { app: name }
+    spec.template.metadata.labels = { app: name }
+    spec.template.spec.nodeSelector = { pool: pool }
+    spec.template.spec.topologySpreadConstraints = [{
+      maxSkew: 1, topologyKey: "kubernetes.io/hostname",
+      whenUnsatisfiable: "ScheduleAnyway", labelSelector: { matchLabels: { app: name } }
+    }]
+    spec.template.spec.containers = [{
+      name: "web",
+      image: image,
+      ports: [{ containerPort: port, protocol: "TCP" }],
+      envFrom: [{ secretRef: { name: db_secret } }],
+      readinessProbe: { httpGet: { path: "/healthz", port: port } },
+      resources: { requests: { cpu: "250m", memory: "256Mi" }, limits: { memory: "512Mi" } }
+    }]
+  }
+
+  # A LoadBalancer Service: OVH provisions an Octavia load balancer; its IP
+  # is an open null until then. OVH-specific annotations would go here.
+  resource k8s.service web {
+    metadata.name = name
+    metadata.namespace = ns.metadata.name
+    spec.type = "LoadBalancer"
+    spec.selector = { app: name }
+    spec.ports = [{ port: 443, targetPort: port, protocol: "TCP" }]
+  }
+
+  resource k8s.poddisruptionbudget web {
+    metadata.name = name
+    metadata.namespace = ns.metadata.name
+    spec.minAvailable = 1
+    spec.selector.matchLabels = { app: name }
+  }
+
+  resource k8s.horizontalpodautoscaler web {
+    metadata.name = name
+    metadata.namespace = ns.metadata.name
+    spec.scaleTargetRef = { apiVersion: "apps/v1", kind: "Deployment", name: web.metadata.name }
+    spec.minReplicas = replicas
+    spec.maxReplicas = replicas * 4
+    spec.metrics = [{ type: "Resource", resource: { name: "cpu", target: { type: "Utilization", averageUtilization: 70 } } }]
+  }
+
+  resource k8s.networkpolicy default_deny {
+    metadata.name = "default-deny"
+    metadata.namespace = ns.metadata.name
+    spec.policyTypes = ["Ingress", "Egress"]
+  }
+
+  output url = "https://{web.status.loadBalancer.ingress[0].ip}"
+}
+#+end_src
+
+#+begin_src dform
+# app.df: run by the controller inside the cluster, one deployment per env.
+
+edition 2026
+
+stack shop.app[env] {
+  unknowns = "strict"
+  backend = s3("dform-state", "app/{env}", endpoint: "https://s3.gra.io.cloud.ovh.net")   # not implemented
+}
+
+provider k8s {}          # in the cluster: the pod's service account, no kubeconfig
+
+input env: enum("dev", "prod") = "dev"
+
+import "modules/app.df"
+import "policies/ovh.df"
+apply change_management
+
+# What the infra stack exported for this env.
+infra = "ovh.infra[env={env}]"
+db_host = h if stack_output(infra, "db_host", h)
+db_port = p if stack_output(infra, "db_port", p)
+db_user = u if stack_output(infra, "db_user", u)
+db_password = s if stack_output(infra, "db_password", s)      # a secret null here
+
+# The release, per env, from git (Part 4).
+input relation release(service: string, image: string, replicas: int)
+  from yaml(git("git@github.com:shop/deploys.git", "env/{env}", "release.yaml"))
+
+resource k8s.secret db {
+  for release(svc, _, _)
+  metadata.name = "{svc}-db"
+  metadata.namespace = app[svc].ns.metadata.name
+  stringData = {
+    PGHOST: db_host, PGPORT: "{db_port}", PGUSER: db_user,
+    PGPASSWORD: db_password, PGDATABASE: svc
+  }
+}
+
+# One instance per released service; the pool comes from the infra config.
+for release(svc, image, replicas) {
+  instance app svc {
+    name = svc
+    image = image
+    replicas = replicas
+    port = 8080
+    db_secret = "{svc}-db"
+    pool = "general"
+  }
+}
+
+# The controller may fix replica drift itself (the HPA moves it anyway);
+# everything else waits for a human.
+auto_reconcile(k8s.deployment, _, "spec.replicas")
+#+end_src
+
+The last block leans on a construct the grammar does not have: an
+=instance= under =for=, one per row. Proposal G's decision 12 deferred
+looping over module instances. Today the same thing is one =instance= line
+per service, which is fine for a handful and is what the corpus does.
+
+* Part 4: continuous delivery
+
+A deploy is a commit to =env/prod:release.yaml=:
+
+#+begin_src yaml
+- service: shop
+  image: ghcr.io/shop/shop@sha256:9f2c...
+  replicas: 3
+#+end_src
+
+The controller polls the ref, pins the commit it read, plans, gates on
+policy, applies, and writes every step to the audit log. Policy decides
+what needs a human:
+
+#+begin_src dform
+# policies/ovh.df: change management for both stacks.
+
+edition 2026
+
+policy change_management {
+  # Prod changes to running software need a signed approval of the exact
+  # plan (approvals ticket: the token signs the plan digest).
+  requires_approval(d, "prod rollout") if {
+    env == "prod"
+    deformation(k, k8s.deployment, d, _)
+    k != "delete"
+  }
+
+  # Any replacement or deletion of cluster or network objects needs one,
+  # in any env: these are the changes that can take the platform down.
+  requires_approval(d, "replaces platform infrastructure") if {
+    deformation(k, t, d, _)
+    k == "replace" or k == "delete"
+    t in [ovh.cloud_project_kube, ovh.cloud_project_network_private,
+          ovh.cloud_project_network_private_subnet]
+  }
+
+  # And the cluster itself is never deleted in prod by a plan.
+  lifecycle(ovh.cloud_project_kube, "main", "prevent_destroy") if env == "prod"
+  lifecycle(ovh.cloud_project_database, "pg", "prevent_destroy") if env == "prod"
+
+  deny "image not pinned by digest" { resource: d } if {
+    d in k8s.deployment
+    some c in d.spec.template.spec.containers
+    not matches(c.image, "@sha256:[0-9a-f]{64}$")
+  }
+}
+#+end_src
+
+=k == "replace" or k == "delete"= is shorthand the grammar does not have;
+today it is two rules. The controller's log for a prod release:
+
+#+begin_example
+14:02:11 input  deploys.git env/prod 3b1c7e0 -> a9d0f11  release.yaml
+14:02:11 plan   1 deformation (1 update), digest sha256:7e41...
+14:02:11 policy needs approval: k8s.deployment.shop (prod rollout)
+14:02:11 hold   published sha256:7e41... to approvals/pending/
+14:09:40 input  approval for sha256:7e41... from alice@shop (expires 14:39)
+14:09:40 tick 1 ~ k8s.deployment.shop  image ...@sha256:9f2c...
+14:10:22 event  k8s.deployment.shop ready 3/3
+14:10:22 stack shop.app[env=prod] is undeformed
+#+end_example
+
+* Part 5: changing Kubernetes while it runs
+
+Every change to the cluster falls into one of four classes, and the
+schema facts of Part 1 decide which one dform plans. The controller runs
+on the cluster being changed, but it never applies these changes: they
+come from CI through =ovh.infra=, and the controller only has to survive
+them.
+
+| Change                       | Schema says                  | dform plans                  | OVH does                                  |
+|------------------------------+------------------------------+------------------------------+-------------------------------------------|
+| pool size, autoscaler range  | in place; size ignored       | an update, or nothing        | adds or removes nodes                     |
+| Kubernetes minor version     | in place                     | one update on the cluster    | rolling upgrade, draining node by node    |
+| node flavor, anti-affinity   | =force_new=, =create_first=  | a new pool, then the old one | builds nodes; drains and deletes the old  |
+| network, subnet, proxy mode, region | =force_new=, =destroy_first= | a replace, refused in prod | deletes the cluster and everything in it |
+
+** 5.1 Size
+
+Nothing to design. =min_nodes= and =max_nodes= update in place, and the
+autoscaler's =desired_nodes= is ignored on both sides (Part 2), so its
+movements are never drift and never planned back.
+
+** 5.2 Upgrading Kubernetes
+
+A version bump in =config= is one in-place update on the cluster and
+nothing else in the plan: the pools, the namespace and the controller are
+unchanged, because nothing they carry depends on the version. OVH upgrades
+the control plane, then replaces nodes one at a time under
+=update_policy = "MINIMAL_DOWNTIME"=, evicting pods through their
+disruption budgets.
+
+OVH upgrades one minor version at a time. That is a rule about the change,
+not about the value, so it reads the live version and compares:
+
+#+begin_src dform
+minor(v) = to_int(split(v, ".")[1])
+
+deny "upgrade Kubernetes one minor version at a time" { from: live, to: want } if {
+  live = world.ovh.cloud_project_kube["main"].version
+  want = cfg.kube
+  minor(want) - minor(live) > 1
+}
+deny "Kubernetes versions only go up" { from: live, to: want } if {
+  live = world.ovh.cloud_project_kube["main"].version
+  want = cfg.kube
+  minor(want) < minor(live)
+}
+#+end_src
+
+=minor(v) = ...= as a function definition is not in the grammar; today it
+is a relation =minor(v, m) if m = to_int(split(v, ".")[1])= and a join.
+
+While the upgrade runs, the API server blinks and the controller's node is
+drained. What makes that survivable is already in the executor, plus the
+two missing pieces from the preface:
+
+- the controller's pod is rescheduled onto an upgraded node; its
+  Deployment uses =Recreate=, so two controllers never overlap;
+- its state is in Object Storage, not on the node, and its lock is a lease
+  that expires, so the new pod can take over from a dead one (*S3 backend
+  with leased locks: not implemented*);
+- identity is persisted after every Apply call, and an interrupted tick
+  resumes where it stopped (landed);
+- reads that fail while the API server restarts are retried per
+  =type_retry= and are not drift (landed).
+
+** 5.3 Replacing a node pool without a gap
+
+Changing a pool's flavor forces a replacement. The schema lets the new
+pool be created first, but "first" only orders the two API calls: OVH would
+start draining the old nodes while the new ones are still booting. The
+safe version keeps the old pool until the new one has capacity. With pools
+as config rows and a generation per row, that is two rules, not an
+executor feature:
+
+#+begin_src yaml
+# config/prod.yaml: the new flavor, one generation up.
+- { name: general, flavor: b3-32, min: 3, max: 12, generation: 2 }
+- { name: batch,   flavor: c3-8,  min: 0, max: 6,  generation: 1 }
+#+end_src
+
+#+begin_src dform
+# infra.df, replacing the nodepool block of Part 2.
+
+# A generation is up when it has at least its minimum of nodes.
+pool_up(n, g) if {
+  pool(n, _, min, _, g)
+  ovh.cloud_project_kube_nodepool["{n}-g{g}"].available_nodes >= min
+}
+
+# The target generation, always.
+pool_row(n, f, mn, mx, g) if pool(n, f, mn, mx, g)
+
+# The previous generation, as it exists in the world, until the target is up.
+pool_row(n, f, mn, mx, prev) if {
+  pool(n, _, mn, mx, g)
+  prev = g - 1
+  f = world.ovh.cloud_project_kube_nodepool["{n}-g{prev}"].flavor_name
+  not pool_up(n, g)
+}
+
+resource ovh.cloud_project_kube_nodepool "{name}-g{generation}" {
+  for pool_row(name, flavor, min, max, generation)
+  # ... fields as in Part 2 ...
+}
+#+end_src
+
+What the plan and the apply look like:
+
+#+begin_example
+$ dform --file infra.df apply --set env=prod
+tick 1: plan: 1 deformation (1 create), 1 pending
+  + ovh.cloud_project_kube_nodepool.general-g2   flavor_name = "b3-32"
+  pending group: delete of general-g1, may derive after tick 1 (reads pool_up(general, 2))
+  apply + general-g2                                        ok  4m12s
+  boundary: available_nodes of general-g2 := 3
+tick 2: plan: 1 deformation (1 delete)
+  - ovh.cloud_project_kube_nodepool.general-g1
+  apply - general-g1                                        ok  6m40s   (OVH drains 3 nodes)
+stack ovh.infra[env=prod] is undeformed
+#+end_example
+
+The pods move because both generations carry the label =pool: general=
+that the app's =nodeSelector= asks for, and the disruption budget keeps at
+least one replica up while OVH drains. The controller is evicted with
+everyone else and resumes on the new pool.
+
+This is the pattern the design was built for: the rollout order is data
+and rules over the live world, it shows up in the plan as a pending group
+before anything happens, and nothing in the executor knows what a node
+pool is.
+
+** 5.4 Changes that replace the cluster
+
+A new VLAN, subnet, kube-proxy mode or region forces a new cluster, and
+MKS cannot create a second cluster with the same name, so the replacement
+is destroy-first: everything running on it is lost. dform's answer today:
+
+#+begin_example
+plan: 1 deformation (1 replace), 5 pending
+  -/+ ovh.cloud_project_kube.main    (replace: kube_proxy_mode "ipvs" -> "iptables")
+denied:
+  lifecycle prevent_destroy: the plan would delete ovh.cloud_project_kube.main
+needs approval:
+  ovh.cloud_project_kube.main        replaces platform infrastructure
+#+end_example
+
+That stops the accident, but it does not show the damage. The plan names
+the five objects of =ovh.infra= that ride on the cluster (the namespace,
+the secret, the controller), and not one of the app stack's, because the
+app stack's dependence on the cluster is not a relation anywhere: its
+=provider k8s {}= is simply "the cluster I am running in". A cross-stack
+blast radius needs the app stack to say which cluster it targets, for
+example =provider k8s { cluster = stack_output(infra, "cluster_id") }=, so
+a replacement upstream shows downstream as "every object recreated". That
+is new work, not a ticket yet.
+
+The real answer is not to replace a production cluster in place. Keyed
+stacks make the alternative ordinary: put the cluster generation in the
+key.
+
+#+begin_src dform
+stack ovh.infra[env, cluster] { role = "bootstrap" }
+input cluster: enum("a", "b")
+#+end_src
+
+=ovh.infra[env=prod, cluster=b]= is a second, independent deployment with
+its own network, pools and controller. Run the app stack against it, move
+traffic at DNS, then =dform stack handover= the app stack to the new
+controller and destroy =cluster=a= with an approval. Every step is an
+ordinary plan. The collision lint from the keyed-stacks ticket checks that
+the two clusters' names differ, and =isolated= stays off, because both live
+in the same OVH project.
+
+* Part 6: running it
+
+Not all at once. Each environment has a one-time setup, one batch apply
+from CI, and after that, deploys are git commits. Every =apply= is one
+command that runs all of its ticks and stops early only on a deny, a
+missing approval, or =--max-ticks=.
+
+** Once per OVH project
+
+1. Create the Public Cloud project and attach it to a vRack (OVH console).
+2. Create API credentials for the provider, scoped to the project, and give
+   them to CI: =OVH_ENDPOINT=, =OVH_APPLICATION_KEY=,
+   =OVH_APPLICATION_SECRET=, =OVH_CONSUMER_KEY= (the names the =ovh/ovh=
+   provider reads; the bridge passes them through Configure).
+3. The state bucket. =ovh.infra= keeps its state in Object Storage, but it
+   cannot create the bucket its own state lives in. Either create
+   =dform-state= by hand, or run the first apply with a local backend and
+   move the state afterwards with =dform stack handover= (below).
+
+** Once per environment: the infrastructure
+
+#+begin_src sh
+# Review, then apply. Three ticks: network, cluster and database; pools,
+# namespace and state secret; the controller once a pool has nodes.
+dform --file infra.df plan  --set env=dev --set project=$OVH_PROJECT
+dform --file infra.df apply --set env=dev --set project=$OVH_PROJECT
+
+# If the first apply used a local backend: move the state into the bucket.
+dform stack handover 'ovh.infra[env=dev]' --to 's3("dform-state", "infra/dev")'
+#+end_src
+
+For prod, CI plans on a pull request and applies the saved plan after
+approval, so what was reviewed is what runs:
+
+#+begin_src sh
+dform --file infra.df plan --set env=prod --set project=$OVH_PROJECT --out plan.json
+# ... the approval service shows the plan, collects the checkmark, returns a token ...
+dform --file infra.df apply plan.json --approval token.jws
+#+end_src
+
+** The app: nothing to run
+
+Tick 3 of the infra apply started the controller in the cluster. It runs
+=shop.app[env=dev]=, starts from empty state in the bucket, reads
+=env/dev:release.yaml= from the deploys repository, and deploys it. There
+is no first app apply to run by hand; watching it is
+=kubectl -n dform-system logs deploy/dform-controller -f=, or =dform log=
+against the app stack's audit log.
+
+** Day two
+
+| To                                  | Do                                                      |
+|-------------------------------------+---------------------------------------------------------|
+| deploy a release                    | commit =release.yaml= on =env/<env>= in the deploys repo |
+| approve a prod release              | the approval service drops the token the controller asked for |
+| roll back                           | =git revert= that commit                                |
+| resize pools, upgrade Kubernetes    | edit =config/<env>.yaml=, then the CI plan and apply of =ovh.infra= |
+| replace a pool's flavor             | bump its =generation= in the config (Part 5.3)          |
+| see why something is the way it is  | =dform why ...= against either stack                    |
+| check nothing was tampered with     | =dform log verify=                                      |
+
+The only commands a human runs after bootstrap are the CI ones for
+=ovh.infra=, and those are the changes that can hurt the platform, so they
+are the ones that stay batch, reviewed and approved.
+
+* What would have to exist
+
+| Piece                                              | Where                          | Size                        |
+|----------------------------------------------------+--------------------------------+-----------------------------|
+| OVH provider (=ovh/ovh= through the Terraform bridge) | parked Terraform bridge ticket | large                       |
+| Kubernetes provider takes a kubeconfig as a secret credential | k8s provider            | small                       |
+| S3-compatible state backend with leased locks      | stacks                         | medium                      |
+| Live-object reads (=world.T[e].p=) from the OVH and k8s providers | Query =inventory= capability | medium per provider |
+| =instance= under =for=; =or= in bodies; function-style value rules | grammar                  | small each                  |
+| Cross-stack blast radius through the provider's cluster | new                          | medium                      |
+
+Everything else in this document, keyed stacks, phases, pending groups,
+lifecycle denies, approvals over plan digests, the audit log, git-sourced
+tables, the controller, handover, per-action persistence and resume, is on
+main or in flight on the board.
