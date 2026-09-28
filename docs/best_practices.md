@@ -8,48 +8,46 @@ and predictable behavior.
 
 If you see lots of repeated guards like:
 
-```prolog
-arg(db.postgres, Db, backup_days, 14) :- env(prod), want(db.postgres, Db).
-arg(db.postgres, Db, backup_days, 3) :- env(staging), want(db.postgres, Db).
+```dform
+pg.backup_days = 14 if env == "prod", pg in db.postgres
+pg.backup_days = 3 if env == "staging", pg in db.postgres
 ```
 
 Prefer a lookup table:
 
-```prolog
+```dform
 settings prod {
   db.backup_days = 14
-}.
+}
 
 settings staging {
   db.backup_days = 3
-}.
+}
 
-arg(db.postgres, Db, backup_days, Days) :-
-  want(db.postgres, Db),
-  env(Env),
-  setting(Env, db.backup_days, Days).
+pg.backup_days = settings[env].db.backup_days if pg in db.postgres
 ```
 
 Why it scales:
 - you change env behavior by editing facts, not duplicating rules
 - rules stay reusable across stacks/components
-- you can move the `setting/3` facts into policy packs later
+- you can move the settings into policy packs later
 
 ## Keep Facts Ground (No Variables in Facts)
 
-In dform, `Fact(...)` statements must be fully ground. If you want a statement to
-apply to many bindings, it must be a rule:
+In dform, a fact must be fully ground. If you want a statement to apply to
+many bindings, it must be a rule, and a name no literal binds is not a
+variable at all:
 
-Bad:
+Bad (`sn` is an unknown name):
 
-```prolog
-arg(net.subnet, Sn, visibility, private).
+```dform
+net.subnet[sn].visibility = "private"
 ```
 
 Good:
 
-```prolog
-arg(net.subnet, Sn, visibility, private) :- want(net.subnet, Sn).
+```dform
+sn.visibility = "private" if sn in net.subnet
 ```
 
 ## Prefer Sugar That Lowers to Core IR
@@ -57,51 +55,47 @@ arg(net.subnet, Sn, visibility, private) :- want(net.subnet, Sn).
 For authoring, prefer:
 
 - `resource` blocks over repeated `want/arg`
-- record atoms (`setting{...}`) over positional arguments
+- reads where the value is used (`cidr = vpc.cidr`, `cfg.region`) over a
+  variable bound in one line and used in another
+- record atoms (`peering{ env: env, name: n }`) over positional arguments
 - object/list literals (`{k: v}`, `[a, b]`) over lots of `tags.foo` keypaths
-- list comprehensions (`[X | ...]`) over hand-written `collect(...)` rules
+- list comprehensions (`[x | ...]`) over hand-written `collect(...)` rules
 - `when <guard> { ... }` to avoid repeating the same guard on many statements
-- declare a set lattice for list attributes several sources contribute to (`type_lattice(iam.policy, statements, set)`)
+- declare a set lattice for list attributes several sources contribute to (`type_lattice(iam.policy, .statements, "set")`)
 
 ## Explode Lists Into Rows With `member/2`
 
 If humans want to write lists, but your infra wants one resource per item, convert the list into a relation:
 
-```prolog
+```dform
 settings prod {
   vm.ips = ["10.0.0.10", "10.0.0.11"]
-}.
+}
 
-vm_ip(Env, Ip) :-
-  setting(Env, vm.ips, Ips),
-  member(Ips, Ip).
+vm_ip(e, ip) if ip in settings[e].vm.ips
 
-# If you need stable indices (order-sensitive), use member/3:
-vm_ip_indexed(Env, I, Ip) :-
-  setting(Env, vm.ips, Ips),
-  member(Ips, I, Ip).
+# If you need stable indices (order-sensitive), bind the index too:
+vm_ip_indexed(e, i, ip) if some i, ip in settings[e].vm.ips
 
-resource compute.vm Vm {
-  private_ip = Ip
-} :-
-  env(Env),
-  vm_ip(Env, Ip),
-  Vm = format("vm-%s", Ip).
+resource compute.vm "vm-{ip}" {
+  for vm_ip(env, ip)
+  private_ip = ip
+}
 ```
 
 This is the Pattern A win: derive one resource per row, not index-based `count`.
 
 Note: Datalog has no intrinsic ordering, so dform's aggregates are deterministic:
 
-- `collect_set(X)` returns a sorted list of unique values
-- `collect_list(X)` returns a sorted list that may include duplicates
+- `collect_set(x)` returns a sorted list of unique values
+- `collect_list(x)` returns a sorted list that may include duplicates
 
 ## One Merge Law for Shared Attributes
 
 Every contribution to one attribute, whichever resource block, module or
 policy pack it comes from, meets in one cell: the attribute aggregate
-`attr(Type, Name, Path, Value)`. Rules that read `arg(...)`, `setting(...)` or
-`output(...)` in a body read that collapsed value, never a single
+`attr(Type, Name, Path, Value)`. A read of an attribute (`vpc.cidr` in a
+body, `settings.prod.x`, `m.i.k`) reads that collapsed value, never a single
 contribution, and the stratifier runs them after every contribution is in.
 Statement order never matters.
 
@@ -111,22 +105,22 @@ How a path merges is its lattice:
   are a conflict;
 - an object is a map, merged per key (nested objects too, so the dotted
   paths `spec.replicas` and `spec.template.spec.containers` both land in `spec`): `tags = { env: dev }` in a resource and
-  `arg(T, N, tags, { team: platform })` in a policy pack give both tags;
+  `r.tags = { team: "platform" } if r in resource` in a policy pack give both tags;
   two sources disagreeing on one key are a conflict;
 - a list declared a set is the union of every source at the highest rank
   present; a `@default` set is replaced wholesale by a normal one:
 
-```prolog
-type_lattice(iam.policy, statements, set).
-type_lattice(settings, audit.sinks, set).
-setting_add(prod, audit.sinks, ["s3"]).
+```dform
+type_lattice(iam.policy, .statements, "set")
+type_lattice(settings, .audit.sinks, "set")
+settings.prod.audit.sinks += ["s3"]
 
 settings prod {
   audit.sinks += ["cloudwatch"]
-}.
+}
 ```
 
-`+=`, `arg_add` and `setting_add` are plain contributions, the same as `=`;
+`+=` is a plain contribution, the same as `=`;
 the lattice, not the operator, decides how they merge. A dotted path
 `tags.team` contributes `{ team: V }` to `tags`.
 
@@ -142,28 +136,29 @@ without its own. The core form is `arg(T, N, P, V, default|normal|override)`.
 Write the common settings once at `@default` and let each environment
 override only what differs; an override wins per leaf:
 
-```prolog
-env_name(staging).
-env_name(prod).
+```dform
+env_name("staging")
+env_name("prod")
 
-settings E @default {
+settings e @default {
+  for env_name(e)
   db = { backup_days: 3, multi_az: false }
-} :- env_name(E).
+}
 
 settings prod {
   db = { backup_days: 14, multi_az: true }
-}.
+}
 ```
 
 The same shape gives org-wide defaults from a policy pack without reading the
-attribute it defaults: `arg(T, N, tags, { team: platform }, default) :- want(T, N).`
+attribute it defaults: `r.tags = { team: "platform" } @default if r in resource`.
 
 Because the engine lowers these to the same small core, you keep composition and
 predictability without paying the verbosity tax.
 
 ## Prefer Small, Composable Predicates
 
-- Keep predicates narrow and reusable (`setting/3`, `env/1`, `stack/1`).
+- Keep predicates narrow and reusable (`zone_index/2`, `peer/2`).
 - Avoid embedding meaning into long strings; derive them from facts.
 - Use helper predicates for readability rather than repeating long bodies.
 
@@ -174,8 +169,8 @@ builtin, or one the provider feeds (`input`, `data`, `cloud_exists`, ...). A
 misspelled predicate is a compile error naming it and the rule, not an empty
 relation. A table that may legitimately have no rows is declared:
 
-```prolog
-extern mesh_allow_direct_route/2.
+```dform
+decl mesh_allow_direct_route/2
 ```
 
 ## Convert Explicitly
@@ -190,10 +185,10 @@ Negation is most useful for defaults and "absence" checks.
 
 Pattern:
 
-```prolog
-has_env() :- input("env", _).
-env("staging") :- not has_env().
-env(E) :- input("env", E).
+```dform
+has_region() if input("region", _)
+region = r if input("region", r)
+region = "us-east1" if not has_region()
 ```
 
 Rules that rely on `not ...` should be:

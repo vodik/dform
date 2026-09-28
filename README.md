@@ -27,13 +27,13 @@ cargo run -- fmt --check $(git ls-files '*.df')   # CI: list unformatted files, 
 State is scoped to a stack. One program owns one stack, named by its
 `stack` statement:
 
-```prolog
+```dform
 stack demo.main {
   backend = local(".dform/demo")   # where state, world and lock live, relative to the
                                    # directory holding .dform/; default .dform/<name>
-  unknowns = strict                # or permissive (the default); see "Strict mode"
-  role = bootstrap                 # optional: it stays batch; see "Bootstrap and handover"
-}.
+  unknowns = "strict"              # or "permissive" (the default); see "Strict mode"
+  role = "bootstrap"               # optional: it stays batch; see "Bootstrap and handover"
+}
 ```
 
 Without a `stack` statement the stack is the basename of the first `--file`
@@ -103,8 +103,8 @@ when it exits.
 The mock provider, `dform-provider-fake` (built with dform, `src/fakecloud.rs`),
 can pretend to be any provider: a provider it plays is a schema file of
 plain facts, `providers/<name>/schema.df`, selected by the program's
-`provider` statements (`provider gke {}.`, or `provider aws { source =
-"providers/aws-mock" }.` for a directory or `.df` file relative to the
+`provider` statements (`provider gke {}`, or `provider aws { source =
+"providers/aws-mock" }` for a directory or `.df` file relative to the
 program's file) or, overriding them, with `--provider NAME` (repeatable;
 default `fake`). `--provider path/to/schema.df` loads a file directly. A
 `providers/<name>/schema.df` in the working directory wins over the schemas
@@ -126,15 +126,15 @@ cargo run -- provider check providers/fake        # the mock
 cargo run -- provider check ./my-provider         # any plugin executable
 ```
 
-```prolog
-type_provider(net.vpc, fakecloud).                    % who owns the type
-type_attr(net.vpc, id, string, [computed, id]).       % Flags: required computed id
-type_attr(db.postgres, endpoint, string, [computed]). %   sensitive nullable optional_computed
-type_attr(net.vpc, cidr, string, [force_new]).         %   force_new
-type_list_key(k8s.deployment, spec.template.spec.containers, [name]).  % list merge keys
-type_mint(db.postgres, endpoint, "{name}.db.fake").   % optional: how the mock mints it
-type_retry(db.postgres, 5).                           % optional: Read attempts (default 3)
-type_replace(k8s.deployment, create_first).           % optional: create_first, destroy_first, either (default)
+```dform
+type_provider(net.vpc, "fakecloud")                         # who owns the type
+type_attr(net.vpc, "id", "string", ["computed", "id"])      # Flags: required computed id
+type_attr(db.postgres, "endpoint", "string", ["computed"])  #   sensitive nullable optional_computed
+type_attr(net.vpc, "cidr", "string", ["force_new"])         #   force_new
+type_list_key(k8s.deployment, "spec.template.spec.containers", ["name"])  # list merge keys
+type_mint(db.postgres, "endpoint", "{{name}}.db.fake")      # optional: how the mock mints it
+type_retry(db.postgres, 5)                                  # optional: Read attempts (default 3)
+type_replace(k8s.deployment, "create_first")                # optional: create_first, destroy_first, either (default)
 ```
 
 Built-in mock schemas: `fake` (the demo's), `gke` (pngu.df), `k8s` (fifteen
@@ -172,7 +172,7 @@ facts. The providers are asked for only those types' rows too (the
 Schema request's `types`). A `query` or `why` of a schema predicate, a
 rule reading one for a type it does not spell out (`type_attr(T, ...)`),
 or a rule wanting a resource whose type is built at runtime
-(`want(T, A) :- T = format("k8s.%s", K)`), sees all of it.
+(`want(t, a) if t = "k8s.{k}"`), sees all of it.
 
 ## The Kubernetes provider
 
@@ -182,9 +182,9 @@ environment names (`KUBECONFIG`, else `~/.kube/config`, else the pod's service
 account). Select it by path; the program the mock plans applies to a cluster
 unchanged:
 
-```prolog
-provider k8s { source = "./providers/k8s" }.   % a directory holding dform-provider-k8s
-provider k8s { source = "../target/debug/dform-provider-k8s" }.
+```dform
+provider k8s { source = "./providers/k8s" }   # a directory holding dform-provider-k8s
+provider k8s { source = "../target/debug/dform-provider-k8s" }
 ```
 
 - Types are `k8s.<group>.<version>.<kind>`, the core group as `core` and the
@@ -325,15 +325,15 @@ and the sections follow in this order; what cannot be decided yet is said so:
   already has: the identity mapping is stale.
 - `stack NAME is undeformed`: nothing to do, nothing stuck (the only line).
 
-Strict mode. `stack NAME { unknowns = strict }` refuses a plan that needs a
+Strict mode. `stack NAME { unknowns = "strict" }` refuses a plan that needs a
 phase boundary, exactly Terraform's refusal. It is two generated denies,
 so the refusal has provenance (`why`) and policy can relax it:
 
-```
-deny("strict: unresolved value at plan time", { rule: R, head: H, nulls: Ns }) :-
-  stuck(R, H, _, Ns), not allow_stuck(H).
-deny("strict: a pending group at plan time", { rule: R, head: H, nulls: Ns }) :-
-  may_derive(R, H, Ns), not allow_stuck(H).
+```dform
+deny "strict: unresolved value at plan time" { rule: r, head: h, nulls: ns } if
+  stuck(r, h, _, ns), not allow_stuck(h)
+deny "strict: a pending group at plan time" { rule: r, head: h, nulls: ns } if
+  may_derive(r, h, ns), not allow_stuck(h)
 ```
 
 The first covers every stuck derivation: a stuck resource rule (a pending
@@ -342,7 +342,7 @@ the second a resource rule that may derive after the boundary
 (`may_derive/3`, given to the plan's policy pass). The plan still prints,
 then the violations name each instance's head pattern and nulls, and it
 exits non-zero; `apply` refuses before its first Apply call.
-`allow_stuck("want(\"gke_nodepool\", _)").` (a fact; no rule may derive
+`allow_stuck("want(\"gke_nodepool\", _)")` (a fact; no rule may derive
 `allow_stuck`) allows one key's boundary. Fresh nulls still flow: a create
 whose document carries `?T/A#id` of a resource created in the same tick is
 definite, so single-phase plans pass. Strict is the expected default for
@@ -362,7 +362,7 @@ LABEL, "class": CLASS}` and a secret `{"sensitive": LABEL}`.
 
 `cargo run -- query stuck` lists the stuck rule instances. A rule can read
 them too, `stuck(RuleId, HeadPattern, Bindings, Nulls)`: a policy such as
-`deny("strict", { rule: R, on: N }) :- stuck(R, _, _, N).` refuses any plan
+`deny "strict" { rule: r, on: n } if stuck(r, _, _, n)` refuses any plan
 with a stuck instance. `stuck/4` is derived above every rule that can stick,
 so a reader must not itself be able to stick (read it into fresh variables
 only) and nothing it derives may feed such a rule; otherwise the program is
@@ -423,11 +423,11 @@ cargo run -- apply --chaos fresh-ids --set env=prod   # tick 1 replaces vpcs and
 
 Lifecycle is plain facts the planner reads (and policy can read too):
 
-```prolog
-lifecycle(net.vpc, main, prevent_destroy).        % a delete or replace of it is a deny
-lifecycle(net.vpc, main, create_before_destroy).  % replace creates first (type_replace either)
-moved(net.vpc, "network.main::vpc", "network.core::vpc").  % rename without destroy
-ignore_changes(net.vpc, main, "tags.owner").      % set on create, then ignored
+```dform
+lifecycle(net.vpc, "main", "prevent_destroy")        # a delete or replace of it is a deny
+lifecycle(net.vpc, "main", "create_before_destroy")  # replace creates first (type_replace either)
+moved(net.vpc, "network.main::vpc", "network.core::vpc")  # rename without destroy
+ignore_changes(net.vpc, "main", "tags.owner")        # set on create, then ignored
 ```
 
 `moved(T, Old, New)` rewrites state's identity from `Old` to `New` before the
@@ -454,12 +454,12 @@ deformations of an interrupted apply, as `remaining`, when it resumes.
 `why` explains them (the injected facts print as `plan`, or `plan (tick
 N)` when given at an apply tick), and a policy can read the same facts:
 
-```prolog
-deny(M) :- deformation(delete, T, A, _), M = format("no deletes here: %s.%s", T, A).
+```dform
+deny(m) if deformation("delete", t, a, _), m = "no deletes here: {t}.{a}"
 ```
 
 ```bash
-cargo run -- why 'deny(M)'    # the deny, the lifecycle fact and the deformation it read
+cargo run -- why 'deny(m)'    # the deny, the lifecycle fact and the deformation it read
 ```
 
 Only policy may read the deformation: a resource rule over it would make the
@@ -547,9 +547,9 @@ value is `V`, public to the pass (what is inside it may be inspected), and
 the rule also derives `declassified(Site, Reason)`, `Site` where the rule
 is written, for a policy to read or deny:
 
-```prolog
-output(pw_len, N) :- pw(P), N = declassify(len(P), "its length is public").
-deny(M) :- declassified(At, R), M = format("declassified at %s: %s", At, R).
+```dform
+output pw_len = declassify(len(pw), "its length is public")
+deny(m) if declassified(at, r), m = "declassified at {at}: {r}"
 ```
 
 The value of an input or output declared `secret(T)` prints as its label,
@@ -564,12 +564,12 @@ value.
 the final fact store and prints a table with one column per variable:
 
 ```bash
-cargo run -- query 'attr(net.vpc, N, cidr, C)' --set env=prod
+cargo run -- query 'attr(net.vpc, n, .cidr, c)' --set env=prod
 # N                    C
 # "network.main::vpc"  10.20.0.0/16
 # "network.peer::vpc"  10.21.0.0/16
 # (2 rows)
-cargo run -- query 'attr(T, A, cidr, C), want(T, A), T != net.subnet'
+cargo run -- query 'attr(t, a, .cidr, c), want(t, a), t != net.subnet'
 cargo run -- query 'want(net.vpc, "network.main::vpc")'    # yes / no
 cargo run -- query want                                    # every want fact
 ```
@@ -599,8 +599,8 @@ cargo run -- why 'attr(net.vpc, "network.main::vpc", "tags.team", "platform")' -
 # attr("net.vpc", "network.main::vpc", "tags", {component: "network", env: "prod", team: "platform"})
 #   by Σattr: attribute aggregate (lub_ranked, E §2.5) over 2 contributions
 #   ├─ arg("net.vpc", "network.main::vpc", "tags", {team: "platform"}, "normal")   [rank normal, owner r69]
-#   │    by r69: arg(Type, Name, "tags", {team: "platform"}, "normal") :- want(Type, Name)
-#   │    with Name = "network.main::vpc", Type = "net.vpc"
+#   │    by r69: arg(Type, R, "tags", {team: "platform"}, "normal") :- want(Type, R)
+#   │    with R = "network.main::vpc", Type = "net.vpc"
 #   ...
 #   └─ ... 1 other contribution (--all)
 ```
@@ -648,44 +648,56 @@ before it in state.
 
 ## dform model (current)
 
-The grammar is `docs/grammar.md` (edition 2026). Every `.df` file starts with
-`edition 2026.`; uppercase names are variables, lowercase names symbols, `a.b`
-a qualified symbol, `.a.b` a keypath, `X.a` a field of `X`; `-` and `/` are
-always operators, so hyphenated or slashed names are strings (`"us-east-1"`).
-A syntax error names `file:line:col` and what was expected, and parsing goes
-on to the next statement, so every error in a file is reported at once.
+The grammar is `docs/grammar.md` (edition 2026; proposal G's surface,
+`proposals/G-surface-syntax.org`). Every `.df` file starts with
+`edition 2026`, and a newline ends a statement. Case decides nothing: names
+are resolved. A constant is quoted (`"prod"`), a variable is a lowercase
+name bound where it is written, an input or a value rule is read by its
+name (`env == "prod"`), a resource is reached through a dot (`vpc.cidr`,
+`k8s.namespace.web.metadata.name`, `net.vpc[b]`, `database.main/db`), and
+`.a.b` is a keypath. A dot is a reference where it is a whole value (a
+field: `vpc_id = vpc.id`) and a read everywhere else. `-` and `/` are
+operators, so hyphenated names are strings (`"us-east-1"`). A syntax error
+names `file:line:col` and what was expected, and parsing goes on to the
+next statement, so every error in a file is reported at once.
 
 `dform fmt [PATH...]` formats files in place (no PATH: the `--file` files):
-two-space indentation per open bracket or rule body, one space around
-operators and after commas, `{ a: 1 }` inside braces, at most one blank line,
-and no comma where a newline already separates block entries. Line breaks
-are the author's. A formatted file prints back byte for byte, and a file
-with a syntax error is reported, not rewritten. `--check` rewrites nothing
-and fails listing the files that would change.
+two-space indentation per open bracket or continued statement, one space
+around operators and after commas, `{ a: 1 }` inside braces, at most one
+blank line, and no comma where a newline already separates block entries.
+Line breaks are the author's. A formatted file prints back byte for byte,
+and a file with a syntax error is reported, not rewritten. `--check`
+rewrites nothing and fails listing the files that would change.
 
-- Core intent IR:
-  - `want(Type, Name).` declares a resource instance.
-  - `arg(Type, Name, KeyPath, Value).` contributes attributes (KeyPath supports dots).
+- Core intent IR (what the surface lowers to; `why` and `strata` print it):
+  - `want(Type, Name)` declares a resource instance.
+  - `arg(Type, Name, KeyPath, Value)` contributes attributes (KeyPath supports dots).
   - `ref(Type, Name, .attr)` expresses dependencies.
-  - `collect_set(X)` / `collect(X)` aggregates unique items (set-like).
-  - `collect_list(X)` aggregates items with duplicates (multiset-like).
-  - `constraint("message") :- ... .` enforces invariants.
+  - `collect_set(x)` / `collect_list(x)` aggregate in a head.
+  - `constraint "message" if ...` enforces invariants.
 
-- Ergonomic sugar (implemented as a lowering pass):
-  - `resource Type Name { key = value, ... } :- ... .` lowers to `want/arg`.
-  - resource merge fields: `tags += { team: platform }` is a plain contribution; how contributions merge is the path's lattice (see `docs/best_practices.md`, "One Merge Law").
-  - record atoms: `setting{env: prod, key: .db.backup_days, value: 14}.` (optional)
-  - settings blocks: `settings prod { db.backup_days = 14 }.` (newline or comma between entries) lowers to `setting(prod, .db.backup_days, 14).`
-  - literals: lists `[a, b]` and objects `{k: v}`.
-  - list comprehensions: `[X | pred(...), pred2(...)]` (lowers to a `collect_list(...)` rule).
-  - expression terms: `IB = IA + 1` lowers to `IB = add(IA, 1)`.
-  - `when <guard> { ... }.` applies a guard to each statement inside.
-  - `import "path".` includes another file, once.
+- The surface:
+  - `resource Type name { for B  if B  key = value ... }`: the clauses bind
+    and guard, a field's reads hoist into the block's body; a name in
+    quotes interpolates (`"private-{z}"`).
+  - `head if body`, `head if { lit NL lit }`; `name = term if body` is a
+    value rule, read by name.
+  - `r.tags = { team: "platform" } if r in resource`: a contribution.
+  - `deny "msg" { key: v } if body`, `warn ...`.
+  - `x in net.vpc` ranges over the wanted resources of a type; `exists r`,
+    `has r.p`, `not r.p` (not true, absent included).
+  - `let cfg = settings[env]` names a reference; `cfg.gke.pods_cidr` reads it.
+  - settings blocks: `settings prod { db.backup_days = 14 }`.
+  - literals: lists `[a, b]` and objects `{ k: v }` (`{ a, b }` is `{ a: a, b: b }`).
+  - list comprehensions: `[x | pred(x), pred2(x)]` (lowers to a `collect_list` rule).
+  - expression terms: `ib = ia + 1` lowers to `IB = add(IA, 1)`.
+  - `when B { ... }`, `for B { ... }` apply a guard to each statement inside.
+  - `import "path"` includes another file, once.
 
 - Schemas and wildcards:
-  - `decl pred(Field1: type, FieldTwo: type).` enables record-style matching: `pred{field1: X, field_two: Y}`.
-  - `decl pred/N.` declares a predicate a provider feeds (it may have no rows).
-  - `decl pred/N mixed.` lets a predicate have both ground facts and rules (E §2.6); without it, one that has both is a compile error naming the rule and the fact. A fact inside a `when` block is a rule.
+  - `decl pred(field_one: type, field_two: type)` enables record-style matching: `pred{field_one: x}`.
+  - `decl pred/N` declares a predicate a provider feeds (it may have no rows).
+  - `decl pred/N mixed` lets a predicate have both ground facts and rules (E §2.6); without it, one that has both is a compile error naming the rule and the fact. A fact inside a `when` block is a rule.
   - `_` is an anonymous wildcard term (matches anything, never binds).
 
 ## Externs
@@ -693,12 +705,13 @@ and fails listing the files that would change.
 An extern is a predicate a provider answers on demand, declared with a
 binding pattern: `+` arguments are inputs, `-` arguments answers.
 
-```prolog
-extern file.json(+path, -value).
-extern random.password(+name, -value) persist.
+```dform
+extern file.json(+path, -value)
+extern random.password(+name, -value) persist
 
-resource google_monitoring_dashboard pngu { dashboard_json = D } :-
-  file.json("examples/files/dashboard-pngu.json", D).
+resource google_monitoring_dashboard pngu {
+  dashboard_json = file.json["examples/files/dashboard-pngu.json"]
+}
 ```
 
 A body literal of an extern is asked once the literals before it bind its
@@ -731,10 +744,8 @@ dform taint p random.password app    # the next plan generates a new one
 
 `member(List, Item)` is a built-in predicate that lets you "explode" list settings into rows:
 
-```prolog
-host_ip(Env, Ip) :-
-  setting(Env, .vm.ips, Ips),
-  member(Ips, Ip).
+```dform
+host_ip(e, ip) if ip in settings[e].vm.ips
 ```
 
 ### Discovery facts
@@ -758,12 +769,12 @@ term. In the fake backend it resolves against `.dform/inventory.json`.
 `adopt(Type, LocalName, RemoteName)` marks a desired resource as existing already.
 Planning will produce an `Adopt` action (`>` in plan output) instead of `Create`.
 
-```prolog
-adopt(net.vpc, network.main/vpc, "existing-prod-vpc") :-
-  env(prod),
-  cloud_exists(net.vpc, "existing-prod-vpc").
+```dform
+adopt(net.vpc, network.main/vpc, "existing-prod-vpc") if
+  env == "prod",
+  "existing-prod-vpc" in world.net.vpc
 
-arg(net.vpc, network.main/vpc, .adopted_id, cloud_ref(net.vpc, "existing-prod-vpc", .id)).
+network.main/vpc.adopted_id = cloud_ref(net.vpc, "existing-prod-vpc", .id)
 ```
 
 `network.main/vpc` is an address: resource `vpc` of module instance
@@ -775,11 +786,11 @@ arg(net.vpc, network.main/vpc, .adopted_id, cloud_ref(net.vpc, "existing-prod-vp
 A program declares its inputs, typed, with an optional default and an
 optional refinement:
 
-```prolog
-input env: enum(dev, staging, prod) = staging.
-input replicas: int = 2 where 1 <= replicas, replicas <= 10.
-input allowed_cidrs: list(inet) = [].
-input owner: string.                      # required: no default
+```dform
+input env: enum("dev", "staging", "prod") = "staging"
+input replicas: int = 2 where 1 <= replicas, replicas <= 10
+input allowed_cidrs: list(inet) = []
+input owner: string                       # required: no default
 ```
 
 Each is read as a relation, `env(E)`. An input is a cell of the attribute
@@ -807,12 +818,12 @@ A program with no `input` declarations reads `--set k=v` as the fact
 A `where` on an input, on an attribute of a `type` block, or a provider
 schema's `type_refine(T, Path, C)` fact refines a value:
 
-```prolog
+```dform
 type settings {
   db.backup_days: int where 1 <= db.backup_days <= 35
   gke: { control_plane_cidr: inet where prefix_len(control_plane_cidr) == 28 }
-}.
-type gke_cluster { zones: list(string) where len(zones) >= 3 }.
+}
+type gke_cluster { zones: list(string) where len(zones) >= 3 }
 ```
 
 A `where` over the value alone that fits the checkable table is a
@@ -847,22 +858,22 @@ come from the provider's schema).
 A module groups rules behind an interface; an instance of it scopes them
 (E DR-3, Terraform-module-like):
 
-```prolog
+```dform
 module network {
-  input vpc_net: inet.                       # set by each instance
-  input zones: list(string) = ["a", "b"].    # a default: @default rank
-  output vpc: addr.
-  output private_subnet_ids: list(ref(net.subnet)).
-  export subnet_of/2.                        # readable as network.main.subnet_of
+  input vpc_net: inet                        # set by each instance
+  input zones: list(string) = ["a", "b"]     # a default: @default rank
+  output vpc: net.vpc                        # an address output
+  output private_subnet_ids: list(ref(net.subnet))
+  export subnet_of/2                         # readable as network.main.subnet_of
 
-  resource net.vpc vpc { cidr = Net } :- vpc_net(Net).
-  zone_index(Z, I) :- zones(Zs), member(Zs, I, Z).   # private
+  resource net.vpc vpc { cidr = vpc_net }
+  zone_index(z, i) if some i, z in zones    # private
   ...
-  output vpc = vpc.
-}.
+  output vpc = vpc
+}
 
-instance network main { vpc_net = V } :- env(E), setting(E, .network.main.vpc_net, V).
-instance database main { subnet_ids = Ids } :- output(network.main, private_subnet_ids, Ids).
+instance network main { vpc_net = settings[env].network.main.vpc_net }
+instance database main { subnet_ids = network.main.private_subnet_ids }
 ```
 
 Inside an instance:
@@ -874,16 +885,18 @@ Inside an instance:
   outside is an error naming the module. `export p/N` makes it readable as
   `m.INSTANCE.p`; `contributes p` makes the module a contributor to the
   global `p` (the demo's `iam_need`);
-- `input k: T [= D] [where R]` is read as `k(V)`. The instance's `k = V :- B`
-  is a normal-rank contribution to the cell `(input, m.i, k)` of the
+- `input k: T [= D] [where R]` is read by its name `k` inside the module.
+  The instance's `k = v` (under its `if` clause) is a normal-rank contribution to the cell `(input, m.i, k)` of the
   attribute aggregate and `D` an `@default` one, so `why` shows both. An
   instance that sets an undeclared input, or leaves out one with no
   default, is a compile error. `where R` refines the input (`R` names it
   by its name; see Refinement types);
 - `output k: T` declares an output and `output k = t` (or a rule for
-  `output(k, V)`) gives it a value, read anywhere as `output(m.i, k, V)`;
-  an `addr` output is the scoped address of the instance's resource.
-  `output(network.I, vpc, A)` reads it with a variable instance.
+  `output(k, v)`) gives it a value, read anywhere as `m.i.k` (`output(m.i,
+  k, V)`);
+  an output typed by a resource type (`output vpc: net.vpc`) is the scoped
+  address of the instance's resource. `network[i].vpc` reads it with a
+  variable instance.
 
 The module reads every global relation; cross-instance values go through
 outputs.
@@ -895,35 +908,35 @@ module applied once: its own relations are private, and every `arg` it
 writes must fall in one of its grants, the stratification partition spelled
 by the author (E §2.6). A write outside them is a compile error at the head.
 
-```prolog
+```dform
 policy baseline {
-  contributes arg to _ at .tags.                 # any type, .tags and below
-  contributes arg to settings at .audit.sinks.
+  contributes _.tags                  # any type, .tags and below
+  contributes settings.audit.sinks
 
-  arg(T, A, .tags, { team: platform }) :- want(T, A).
-  deny("db must be private", { resource: Db }) :- ...   # deny/warn need no grant
-  warn("prod should enable audit logging", { env: prod }) :- ...
-}.
+  r.tags = { team: "platform" } if r in resource
+  deny "db must be private" { resource: pg } if ...   # deny/warn need no grant
+  warn "prod should enable audit logging" { env: "prod" } if ...
+}
 
-apply baseline.
+apply baseline
 ```
 
 Every contribution to one attribute meets in one lattice cell; objects merge
 per key, and a list path several sources contribute to is declared a set:
 
-```prolog
-type_lattice(iam.policy, .statements, set).
+```dform
+type_lattice(iam.policy, .statements, "set")
 ```
 
 Settings are the same aggregate:
 
-```prolog
-type_lattice(settings, .audit.sinks, set).
-setting_add(prod, .audit.sinks, ["s3"]).
+```dform
+type_lattice(settings, .audit.sinks, "set")
+settings.prod.audit.sinks += ["s3"]
 
 settings prod {
   audit.sinks += ["cloudwatch"]
-}.
+}
 ```
 
 ## Scenarios
@@ -931,12 +944,11 @@ settings prod {
 A scenario is a test: hypothetical facts plus ordinary deny rules, no
 `expect` syntax (DESIGN L12).
 
-```prolog
+```dform
 scenario prod {
-  input("env", prod).
-  deny("prod keeps 14 days of db backups") :-
-    not attr(db.postgres, database.main/db, .backup_days, 14).
-}.
+  with env = "prod"
+  deny "prod keeps 14 days of db backups" if not database.main/db.backup_days == 14
+}
 ```
 
 A scenario is part of the program only when it is run. `dform test` runs
@@ -994,12 +1006,12 @@ UTC. Every run re-reads and re-evaluates the whole program.
 Input relations feed facts from outside the program, re-read whenever
 their source changes; `plan` and `apply` read them too:
 
-```prolog
-input relation release/1 from file("release.facts").        # release(Image).
-input relation approve/2 from git("ops.git", "main", "approvals.df").
+```dform
+input relation release/1 from file("release.facts")        # release(image)
+input relation approve/2 from git("ops.git", "main", "approvals.df")
 ```
 
-A source is a `.df` file of facts (`edition 2026.` first) of the
+A source is a `.df` file of facts (`edition 2026` first) of the
 relations declared from it; a fact of any other predicate is an error
 naming it. Paths are relative to the declaring file. A `git` source is read
 at the ref with `git show REF:PATH` (a bare repository works) and changes
@@ -1016,8 +1028,8 @@ controller gates every tick on the policy pass:
 
 - `hold(T, A, Reason)` holds `T.A`'s deformation: `tick N: proceed: held,
   Reason: T.A`. A prod-style hold names what releases it, over an input
-  relation: `hold(k8s.deployment, A, "needs approval") :- env(prod),
-  deformation(_, k8s.deployment, A, _), release(I), not release_approved(I).`
+  relation: `hold(k8s.deployment, a, "needs approval") if env == "prod",
+  deformation(_, k8s.deployment, a, _), release(i), not release_approved(i)`.
 - Drift of `T.A` is corrected when every drifted path is
   `auto_reconcile(T, A, Path)` or `approve(T, A)` holds, or the event is an
   input change. Otherwise the deformation is held (`drift at PATH needs
