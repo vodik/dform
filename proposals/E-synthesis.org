@@ -1131,6 +1131,13 @@ empty; this design adds labeled nulls and must not confuse the two.
 them as four things. =is_null/1= tests the API null; asking it of a labeled
 null is a type error.
 
+*Amendment (2026-09-28).* ={}= is "present and empty", a value distinct from
+absent, where the schema declares the path =object= (a structure, not a
+=map=) and none of its own fields is =required= (Kubernetes' =podSelector:
+{}=, every pod): the document carries it and a diff compares it as a leaf.
+At a Map or Set path, and wherever another contribution gives the object a
+key, ={}= is still the identity.
+
 ** DR-7 Impure values: externs, results persisted in state
 
 *Context.* Random suffixes, timestamps, generated passwords.

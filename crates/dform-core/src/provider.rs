@@ -251,6 +251,8 @@ pub fn diff(
 /// labels an element of a keyless set by a hash of its content,
 /// `ingress[#k3j2d]`, so a diff shows an element added or removed rather
 /// than every later index shifting; otherwise by its sorted position.
+/// An empty object is a leaf where the schema says `{}` is a value
+/// (`Schema::empty_is_present`); elsewhere it has no leaf, as absent.
 pub fn flatten(
     schema: &Schema,
     typ: &str,
@@ -265,6 +267,11 @@ pub fn flatten(
         return;
     }
     match v {
+        Json::Object(m) if m.is_empty() && !norm.is_empty() => {
+            if schema.empty_is_present(typ, norm) {
+                out.insert(prefix.to_string(), (v.clone(), norm.to_string()));
+            }
+        }
         Json::Object(m) => {
             for (k, vv) in m {
                 let join = |p: &str| {
@@ -328,6 +335,45 @@ pub fn flatten(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_empty_object_is_a_leaf_only_where_the_schema_says_it_is_a_value() {
+        let schema = Schema::parse(
+            r#"edition 2026
+type_attr(k8s.np, "spec.podSelector", "object", [])
+type_attr(k8s.np, "spec.podSelector.matchLabels", "map", [])
+type_attr(k8s.np, "spec.podSelector.matchExpressions", "list", [])
+type_attr(k8s.np, "spec.podSelector.matchExpressions.key", "string", ["required"])
+type_attr(k8s.np, "metadata.labels", "map", [])
+type_attr(k8s.np, "spec.ref", "object", [])
+type_attr(k8s.np, "spec.ref.name", "string", ["required"])
+"#,
+            "test",
+        )
+        .unwrap();
+        let doc = json!({"spec": {"podSelector": {}, "ref": {}}, "metadata": {"labels": {}}});
+        let mut out = BTreeMap::new();
+        flatten(&schema, "k8s.np", &doc, "", "", true, &mut out);
+        assert_eq!(out.keys().collect::<Vec<_>>(), ["spec.podSelector"]);
+        // Absent and {} differ where it is a value: adding it is a change.
+        let changes = diff(
+            &schema,
+            "k8s.np",
+            Some(&json!({"spec": {}})),
+            Some(&json!({"spec": {"podSelector": {}}})),
+        );
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].path, "spec.podSelector");
+        assert_eq!(changes[0].after, Some(json!({})));
+        // A key under it is the leaf instead.
+        let mut out = BTreeMap::new();
+        let doc = json!({"spec": {"podSelector": {"matchLabels": {"a": "b"}}}});
+        flatten(&schema, "k8s.np", &doc, "", "", true, &mut out);
+        assert_eq!(
+            out.keys().collect::<Vec<_>>(),
+            ["spec.podSelector.matchLabels.a"]
+        );
+    }
 
     #[test]
     fn get_path_walks_dots_and_indices() {

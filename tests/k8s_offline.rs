@@ -1207,3 +1207,45 @@ fn a_create_whose_answer_was_lost_is_found_by_its_label_and_key() {
     );
     assert!(configmaps().is_empty(), "nothing is left in the cluster");
 }
+
+/// `spec.podSelector = {}` (every pod) is a value, not absent: the path is
+/// an object with no required field (`Schema::empty_is_present`). Added to
+/// a NetworkPolicy that has none, it is a change the plan shows and the
+/// apply sends; then nothing is left to do.
+#[test]
+fn an_empty_pod_selector_is_present() {
+    let s = Scratch::project("k8s-empty-object");
+    std::fs::create_dir_all(s.path("providers/k8s")).unwrap();
+    std::os::unix::fs::symlink(k8s(), s.path("providers/k8s/dform-provider-k8s")).unwrap();
+    let program = |selector: &str| {
+        format!(
+            "edition 2026\nprovider k8s {{ source = \"./providers/k8s\" }}\n\
+             resource k8s.network_policy deny {{\n  metadata.name = \"deny\"\n{selector}  \
+             spec.policyTypes = [\"Ingress\"]\n}}\n"
+        )
+    };
+    s.write("p.df", &program(""));
+    let (api, url) = Api::start();
+    let kc = kubeconfig(&s, &url);
+    let run = |args: &[&str]| dform(&s, Some(&kc), &common::on("p.df", &[], args));
+    run(&["apply"]).success();
+    let path = "/apis/networking.k8s.io/v1/namespaces/default/networkpolicies/deny";
+    assert!(api.get(path).unwrap()["spec"].get("podSelector").is_none());
+
+    s.write("p.df", &program("  spec.podSelector = {}\n"));
+    let r = run(&["plan"]).success();
+    assert!(
+        r.stdout.contains("~ k8s.network_policy.deny"),
+        "{}",
+        r.stdout
+    );
+    assert!(
+        r.stdout.contains("spec.podSelector: <none> -> {}"),
+        "{}",
+        r.stdout
+    );
+    run(&["apply"]).success();
+    assert_eq!(api.get(path).unwrap()["spec"]["podSelector"], json!({}));
+    let r = run(&["plan"]).success();
+    assert_eq!(r.summary(), "stack p is undeformed", "{}", r.stdout);
+}

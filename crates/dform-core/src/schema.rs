@@ -182,6 +182,24 @@ impl Schema {
         })
     }
 
+    /// Whether `{}` at `path` (normalized) is a value, "present and
+    /// empty", rather than the join's identity (absent, E DR-6): the path
+    /// is declared `object` (a structure, not a `map`) and none of its own
+    /// fields is `required` (a field's own required fields bind only where
+    /// the field is set), so the empty object is a complete one
+    /// (Kubernetes' `podSelector: {}`, every pod).
+    pub fn empty_is_present(&self, typ: &str, path: &str) -> bool {
+        if self.attr(typ, path).is_none_or(|a| a.ty != "object") {
+            return false;
+        }
+        let under = format!("{path}.");
+        !self
+            .attrs
+            .range((typ.to_string(), under.clone())..)
+            .take_while(|((t, p), _)| t == typ && p.starts_with(&under))
+            .any(|((_, p), a)| !p[under.len()..].contains('.') && a.has("required"))
+    }
+
     /// Whether changing the value at `path` (normalized: dotted, no
     /// indices) replaces the object: the path or an ancestor is declared
     /// `force_new`.
