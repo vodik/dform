@@ -271,10 +271,29 @@ fn map_normalize(elem: &Lattice, path: &str, items: Vec<(Value, Witnesses)>) -> 
     Elem::Val(Value::Obj(out), ws)
 }
 
+/// A whole-value null (a computed list) at a Set or Keyed path. Alone it is
+/// the value, carried like any other; beside other contributions the union
+/// is unknown until it resolves, so the cell is Stuck on it.
+fn null_collection(items: &[(Value, Witnesses)]) -> Option<Elem> {
+    if !items.iter().any(|(v, _)| matches!(v, Value::Null { .. })) {
+        return None;
+    }
+    let mut merged = dedup_equal(items.to_vec());
+    if merged.len() == 1 {
+        let (v, w) = merged.pop().unwrap();
+        return Some(Elem::Val(v, w));
+    }
+    let nulls = merged.iter().flat_map(|(v, _)| nulls_in(v)).collect();
+    Some(Elem::Stuck { vals: merged, nulls })
+}
+
 /// Keyed-list normal form: group elements by their merge-key projection
 /// (equality of keys is `eq3`; an unknown key comparison keeps the groups
 /// apart until resolution), then `elem` normal form per group.
 fn keyed_normalize(keys: &[String], elem: &Lattice, path: &str, items: Vec<(Value, Witnesses)>) -> Elem {
+    if let Some(e) = null_collection(&items) {
+        return e;
+    }
     let items = dedup_equal(items);
     let mut ws = Witnesses::new();
     let mut groups: Vec<(Vec<Value>, Vec<(Value, Witnesses)>)> = Vec::new();
@@ -318,6 +337,9 @@ fn keyed_normalize(keys: &[String], elem: &Lattice, path: &str, items: Vec<(Valu
 /// stuck: two elements that *might* be equal are both kept until a null
 /// resolves, and the provider receives both.
 fn set_normalize(path: &str, items: Vec<(Value, Witnesses)>) -> Elem {
+    if let Some(e) = null_collection(&items) {
+        return e;
+    }
     let mut elems: Vec<Value> = Vec::new();
     let mut ws = Witnesses::new();
     for (v, w) in &items {
@@ -348,9 +370,12 @@ fn normalize(lat: &Lattice, path: &str, items: Vec<(Value, Witnesses)>) -> Elem 
 }
 
 /// Join two elements under `lat` at `path`: concatenate and re-normalize.
+/// There is no fast path around the normal form: `⊥ ⊔ e = normalize(e)`
+/// (F8), so a lone contribution is normalized exactly like two.
 pub fn join(lat: &Lattice, path: &str, x: Elem, y: Elem) -> Elem {
     match (x, y) {
-        (Elem::Bottom, e) | (e, Elem::Bottom) => e,
+        (Elem::Bottom, Elem::Bottom) => Elem::Bottom,
+        (Elem::Bottom, e) | (e, Elem::Bottom) => normalize(lat, path, e.contributions()),
         (x, y) => {
             let mut items = x.contributions();
             items.extend(y.contributions());
@@ -365,7 +390,7 @@ pub fn lub(lat: &Lattice, path: &str, contribs: impl IntoIterator<Item = (Witnes
 }
 
 // ---------------------------------------------------------------------------
-// Ranked cells (Flat only)
+// Ranked cells
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -407,9 +432,13 @@ impl Constraint {
     }
 }
 
-/// A ranked Flat cell: one Flat element per rank plus rank-blind constraints.
-/// Join is pointwise on ranks and union on constraints, so it is commutative,
-/// associative and idempotent whenever Flat join is.
+/// A ranked cell: one element per rank (a "shelf") plus rank-blind
+/// constraints. Join is pointwise on the shelves under the path's lattice and
+/// union on constraints, so it is commutative, associative and idempotent
+/// whenever that lattice's join is. For Flat, `join`; for Set and Keyed,
+/// `join_in`: collapse then takes the highest non-empty shelf whole, so an
+/// `@override` set replaces the set and a `@default` set is discarded, not
+/// unioned, when a higher shelf is non-empty (DESIGN.org, reopening E DR-9).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ranked {
     pub ranks: [Elem; 3],
@@ -448,9 +477,12 @@ impl Ranked {
         r
     }
     pub fn join(&self, other: &Ranked, path: &str) -> Ranked {
+        self.join_in(&Lattice::Flat, other, path)
+    }
+    pub fn join_in(&self, lat: &Lattice, other: &Ranked, path: &str) -> Ranked {
         let mut out = self.clone();
         for i in 0..3 {
-            out.ranks[i] = join(&Lattice::Flat, path, self.ranks[i].clone(), other.ranks[i].clone());
+            out.ranks[i] = join(lat, path, self.ranks[i].clone(), other.ranks[i].clone());
         }
         for (c, w) in &other.constraints {
             let e = out.constraints.entry(c.clone()).or_default();
@@ -591,6 +623,149 @@ mod tests {
         let mut out = Vec::new();
         go(a.len(), &mut a, &mut out);
         out
+    }
+
+    /// `ranked_all_orders` for any lattice, with F's shadow-aware collapse.
+    fn ranked_all_orders_in(lat: &Lattice, parts: &[Ranked]) -> (Ranked, Collapsed2) {
+        let fold = |ps: &[Ranked]| ps.iter().fold(Ranked::default(), |acc, p| acc.join_in(lat, p, ".x"));
+        let base = fold(parts);
+        let basec = base.collapse_shadow_aware();
+        for p in permutations(parts) {
+            let r = fold(&p);
+            assert_eq!(r, base, "ranked join is order dependent");
+            assert_eq!(r.collapse_shadow_aware(), basec, "collapse is order dependent");
+        }
+        let doubled: Vec<Ranked> = parts.iter().chain(parts.iter()).cloned().collect();
+        assert_eq!(fold(&doubled), base, "ranked join is not idempotent");
+        (base, basec)
+    }
+
+    fn list(xs: &[Value]) -> Value {
+        Value::List(xs.to_vec())
+    }
+
+    // ---- ranked Set and Keyed: three shelves ----------------------------------
+
+    #[test]
+    fn ranked_set_collapses_to_the_highest_nonempty_shelf() {
+        // Same shelf: union. A @default set under a normal one is discarded,
+        // not unioned.
+        let (_, c) = ranked_all_orders_in(
+            &Lattice::Set,
+            &[
+                Ranked::at(Rank::Default, 1, list(&[s("a"), s("b")])),
+                Ranked::at(Rank::Normal, 2, list(&[s("d")])),
+                Ranked::at(Rank::Normal, 3, list(&[s("c"), s("d")])),
+            ],
+        );
+        let Collapsed2::Val { value, rank: Rank::Normal, witnesses, shadowed, .. } = c else { panic!("{c:?}") };
+        assert_eq!(value, list(&[s("c"), s("d")]));
+        assert_eq!(witnesses, Witnesses::from([2, 3]));
+        assert!(shadowed.is_empty(), "a set shelf never disagrees");
+
+        // @override replaces the whole set.
+        let (_, c) = ranked_all_orders_in(
+            &Lattice::Set,
+            &[
+                Ranked::at(Rank::Default, 1, list(&[s("a")])),
+                Ranked::at(Rank::Normal, 2, list(&[s("b"), s("c")])),
+                Ranked::at(Rank::Override, 3, list(&[s("z")])),
+            ],
+        );
+        assert!(matches!(&c, Collapsed2::Val { value, rank: Rank::Override, .. } if *value == list(&[s("z")])));
+
+        // Only defaults: they are the value, unioned and normalized.
+        let (_, c) = ranked_all_orders_in(
+            &Lattice::Set,
+            &[Ranked::at(Rank::Default, 1, list(&[s("b"), s("a"), s("b")])), Ranked::at(Rank::Default, 2, list(&[s("c")]))],
+        );
+        assert!(matches!(&c, Collapsed2::Val { value, rank: Rank::Default, .. } if *value == list(&[s("a"), s("b"), s("c")])));
+
+        // An empty set at a higher shelf is non-empty as a contribution: it
+        // replaces the defaults with nothing.
+        let (_, c) = ranked_all_orders_in(
+            &Lattice::Set,
+            &[Ranked::at(Rank::Default, 1, list(&[s("a")])), Ranked::at(Rank::Normal, 2, list(&[]))],
+        );
+        assert!(matches!(&c, Collapsed2::Val { value, rank: Rank::Normal, .. } if *value == list(&[])));
+    }
+
+    #[test]
+    fn ranked_keyed_collapses_to_the_highest_nonempty_shelf() {
+        let lat = Lattice::Keyed { keys: vec!["port".into()], elem: Box::new(Lattice::Map(Box::new(Lattice::Flat))) };
+        let row = |p: i64, proto: &str| obj(&[("port", i(p)), ("proto", s(proto))]);
+        let (_, c) = ranked_all_orders_in(
+            &lat,
+            &[
+                Ranked::at(Rank::Default, 1, list(&[row(22, "tcp")])),
+                Ranked::at(Rank::Normal, 2, list(&[row(443, "tcp")])),
+                Ranked::at(Rank::Normal, 3, list(&[row(80, "tcp"), row(443, "tcp")])),
+            ],
+        );
+        let Collapsed2::Val { value, rank: Rank::Normal, .. } = c else { panic!("{c:?}") };
+        assert_eq!(value, list(&[row(80, "tcp"), row(443, "tcp")]));
+
+        // A same-key disagreement on the winning shelf is a conflict; on a
+        // losing shelf it is shadowed.
+        let (_, c) = ranked_all_orders_in(
+            &lat,
+            &[Ranked::at(Rank::Normal, 1, list(&[row(22, "tcp")])), Ranked::at(Rank::Normal, 2, list(&[row(22, "udp")]))],
+        );
+        assert!(matches!(c, Collapsed2::Conflict { rank: Some(Rank::Normal), .. }), "{c:?}");
+        let (_, c) = ranked_all_orders_in(
+            &lat,
+            &[
+                Ranked::at(Rank::Default, 1, list(&[row(22, "tcp")])),
+                Ranked::at(Rank::Default, 2, list(&[row(22, "udp")])),
+                Ranked::at(Rank::Override, 3, list(&[row(80, "tcp")])),
+            ],
+        );
+        let Collapsed2::Val { value, shadowed, .. } = c else { panic!("{c:?}") };
+        assert_eq!(value, list(&[row(80, "tcp")]));
+        assert!(matches!(&shadowed[..], [Shadowed::Conflict { rank: Rank::Default, .. }]));
+    }
+
+    /// A whole-value null at a Set path (a computed list): carried alone,
+    /// stuck beside another contribution on the same shelf, discarded under
+    /// a higher one.
+    #[test]
+    fn ranked_set_carries_a_null_contribution() {
+        let (_, c) = ranked_all_orders_in(&Lattice::Set, &[Ranked::at(Rank::Normal, 1, fresh("sg/a#ids"))]);
+        assert!(matches!(&c, Collapsed2::Val { value, .. } if *value == fresh("sg/a#ids")));
+        let (_, c) = ranked_all_orders_in(
+            &Lattice::Set,
+            &[Ranked::at(Rank::Normal, 1, fresh("sg/a#ids")), Ranked::at(Rank::Normal, 2, list(&[s("x")]))],
+        );
+        assert!(matches!(&c, Collapsed2::Stuck { nulls, .. } if nulls.contains("sg/a#ids")), "{c:?}");
+        let (_, c) = ranked_all_orders_in(
+            &Lattice::Set,
+            &[Ranked::at(Rank::Default, 1, fresh("sg/a#ids")), Ranked::at(Rank::Normal, 2, list(&[s("x")]))],
+        );
+        assert!(matches!(&c, Collapsed2::Val { value, .. } if *value == list(&[s("x")])));
+    }
+
+    /// F8 and the laws for Set, now that a lone contribution is normalized.
+    #[test]
+    fn set_join_is_commutative_associative_idempotent() {
+        let sample = [
+            Elem::Bottom,
+            Elem::Val(list(&[s("b"), s("a"), s("b")]), Witnesses::from([1])),
+            Elem::Val(list(&[s("c")]), Witnesses::from([2])),
+            Elem::Val(list(&[fresh("f1"), s("a")]), Witnesses::from([3])),
+            Elem::Val(list(&[open("o1")]), Witnesses::from([4])),
+            Elem::Val(list(&[]), Witnesses::from([5])),
+        ];
+        let j = |x: &Elem, y: &Elem| join(&Lattice::Set, ".x", x.clone(), y.clone());
+        for a in &sample {
+            assert_eq!(j(&j(a, a), a), j(a, a), "idempotent {a:?}");
+            assert_eq!(j(a, &Elem::Bottom), j(&j(a, &Elem::Bottom), &Elem::Bottom), "lone contribution normalized {a:?}");
+            for b in &sample {
+                assert_eq!(j(a, b), j(b, a), "commutative {a:?} {b:?}");
+                for c in &sample {
+                    assert_eq!(j(&j(a, b), c), j(a, &j(b, c)), "associative {a:?} {b:?} {c:?}");
+                }
+            }
+        }
     }
 
     /// Fold a list of ranked contributions in every order; assert every order
@@ -1020,39 +1195,24 @@ fn max_rank(contribs: &[RankedContribution]) -> Rank {
 
 /// The attribute aggregate of E §2.5 for one `(T, A, P)` group: the least
 /// upper bound of every contribution under `lat`, collapsed with F's
-/// shadow-aware rule. Flat cells are ranked. A Map is ranked at its leaves:
-/// each key is its own cell under the element lattice, so a `@default` tag and
-/// a normal tag on another key both survive. A Map path with a contribution
-/// that is not an object is assembled as one Flat value (which conflicts,
-/// or is stuck, on the non-object). Set and Keyed are unranked here: every
-/// contribution joins in one element, reported at the highest rank present.
+/// shadow-aware rule. Flat, Set and Keyed cells are ranked shelves (see
+/// `Ranked`). A Map is ranked at its leaves: each key is its own cell under
+/// the element lattice, so a `@default` tag and a normal tag on another key
+/// both survive. A Map path with a contribution that is not an object is
+/// assembled as one Flat value (which conflicts, or is stuck, on the
+/// non-object).
 pub fn lub_ranked(lat: &Lattice, path: &str, contribs: &[RankedContribution]) -> Collapsed2 {
     match lat {
-        Lattice::Flat => contribs
-            .iter()
-            .fold(Ranked::default(), |acc, (w, r, v)| acc.join(&Ranked::at(*r, *w, v.clone()), path))
-            .collapse_shadow_aware(),
         Lattice::Map(elem) => {
             if !contribs.iter().all(|(_, _, v)| matches!(v, Value::Obj(_))) {
                 return lub_ranked(&Lattice::Flat, path, contribs);
             }
             lub_ranked_map(elem, path, contribs)
         }
-        Lattice::Set | Lattice::Keyed { .. } => {
-            let rank = max_rank(contribs);
-            match lub(lat, path, contribs.iter().map(|(w, _, v)| (*w, v.clone()))) {
-                Elem::Bottom => Collapsed2::Bottom,
-                Elem::Val(value, witnesses) => {
-                    Collapsed2::Val { value, rank, witnesses, deferred: vec![], shadowed: vec![] }
-                }
-                Elem::Stuck { nulls, .. } => Collapsed2::Stuck { rank, nulls, shadowed: vec![] },
-                e @ Elem::Conflict { .. } => {
-                    let witnesses = e.witnesses();
-                    let Elem::Conflict { a, b, reason, .. } = e else { unreachable!() };
-                    Collapsed2::Conflict { rank: Some(rank), a, b, reason, witnesses, shadowed: vec![] }
-                }
-            }
-        }
+        Lattice::Flat | Lattice::Set | Lattice::Keyed { .. } => contribs
+            .iter()
+            .fold(Ranked::default(), |acc, (w, r, v)| acc.join_in(lat, &Ranked::at(*r, *w, v.clone()), path))
+            .collapse_shadow_aware(),
     }
 }
 
@@ -1208,21 +1368,20 @@ mod f_tests {
         // Same priority, different value: conflict, naming both.
         let e = lub(&keyed, ".args", [(1, Value::List(vec![row(10, "--verbose")])), (2, Value::List(vec![row(10, "--quiet")]))]);
         assert!(matches!(e, Elem::Conflict { .. }));
-        // Set is NOT an answer for an ordered list: it sorts. And here is a
-        // bug in E's prototype found on the way: a LONE contribution is never
-        // normalized (`join(Bottom, e)` returns `e` as is), so one Set
-        // contribution keeps its order and duplicates while the same
-        // contribution given twice is sorted and deduplicated. Idempotence
-        // (lub(C) == lub(C ++ C)) fails for Set on a single contribution.
+        // Set is NOT an answer for an ordered list: it sorts. F8, found on
+        // the way: E's prototype never normalized a LONE contribution
+        // (`join(Bottom, e)` returned `e` as is), so one Set contribution
+        // kept its order and duplicates while the same contribution given
+        // twice was sorted and deduplicated. Fixed: `⊥ ⊔ e = normalize(e)`.
         let one = lub(&Lattice::Set, ".args", [(1, Value::List(vec![s("--z"), s("--a"), s("--z")]))]);
         let twice = lub(&Lattice::Set, ".args", [(1, Value::List(vec![s("--z"), s("--a"), s("--z")])), (1, Value::List(vec![s("--z"), s("--a"), s("--z")]))]);
         println!("Set, one contribution:   {one:?}");
         println!("Set, same given twice:   {twice:?}");
         let Elem::Val(Value::List(xs1), _) = &one else { panic!() };
         let Elem::Val(Value::List(xs2), _) = &twice else { panic!() };
-        assert_eq!(xs1, &vec![s("--z"), s("--a"), s("--z")], "lone contribution is not normalized");
-        assert_eq!(xs2, &vec![s("--a"), s("--z")], "two copies are");
-        assert_ne!(one, twice, "E's Set lub is not idempotent on one contribution");
+        assert_eq!(xs1, &vec![s("--a"), s("--z")], "a lone contribution is normalized");
+        assert_eq!(xs2, &vec![s("--a"), s("--z")]);
+        assert_eq!(one, twice, "Set lub is idempotent on one contribution");
     }
 
     /// Order independence of the shadow-aware collapse under every

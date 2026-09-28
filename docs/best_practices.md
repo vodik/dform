@@ -112,7 +112,8 @@ How a path merges is its lattice:
 - an object is a map, merged per key: `tags = { env: dev }` in a resource and
   `arg(T, N, tags, { team: platform })` in a policy pack give both tags;
   two sources disagreeing on one key are a conflict;
-- a list declared a set is the union of every source:
+- a list declared a set is the union of every source at the highest rank
+  present; a `@default` set is replaced wholesale by a normal one:
 
 ```prolog
 type_lattice(iam.policy, statements, set).

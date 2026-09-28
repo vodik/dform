@@ -1806,4 +1806,29 @@ mod tests {
         }
         std::fs::remove_dir_all(&dir).unwrap();
     }
+
+    /// A ranked Set is three shelves: a policy pack's `@default` set is
+    /// replaced wholesale by a normal one, and same-shelf sets union.
+    #[test]
+    fn a_default_set_is_replaced_not_unioned() {
+        let (r, violations) = run(
+            "type_lattice(net.vpc, sgs, set).
+             resource net.vpc a { sgs = [base] }.
+             resource net.vpc b { }.
+             policy_pack p {
+               arg(T, N, sgs, [default_sg, ssh], default) :- want(T, N).
+               arg(T, N, sgs, [audit]) :- want(T, N), N = \"a\".
+             }.
+             apply_policy p.",
+        )
+        .unwrap();
+        assert!(violations.is_empty(), "{violations:?}");
+        assert_eq!(
+            facts_of(&r, "attr"),
+            vec![
+                "attr(\"net.vpc\", \"a\", \"sgs\", [\"audit\", \"base\"])".to_string(),
+                "attr(\"net.vpc\", \"b\", \"sgs\", [\"default_sg\", \"ssh\"])".to_string(),
+            ]
+        );
+    }
 }
