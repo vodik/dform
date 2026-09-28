@@ -219,7 +219,8 @@ pub fn is_aggregate_head(head: &Atom) -> bool {
     })
 }
 
-/// Build the graph over a program: lower it, then `build_lowered`.
+/// Build the graph over a program: lower it, then `build_lowered` with the
+/// program's `extern` declarations added to `opts`.
 pub fn build(program: &Program, schema: &Schema, opts: &Options) -> Result<Graph> {
     let lowered = transform::lower(program)?;
     let mut rules: Vec<RuleStmt> = Vec::new();
@@ -232,7 +233,9 @@ pub fn build(program: &Program, schema: &Schema, opts: &Options) -> Result<Graph
             _ => {}
         }
     }
-    Ok(build_lowered(rules, &fact_atoms, schema, opts))
+    let mut opts = opts.clone();
+    opts.externs.extend(lowered.externs.into_iter().map(|e| e.pred));
+    Ok(build_lowered(rules, &fact_atoms, schema, &opts))
 }
 
 /// A constraint is a `deny` rule with a message head.
