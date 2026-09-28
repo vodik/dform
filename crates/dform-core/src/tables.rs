@@ -54,10 +54,6 @@ fn parse_name(name: &str) -> Option<(&str, &str)> {
     name.strip_prefix(PREFIX)?.split_once('.')
 }
 
-pub fn is_table(name: &str) -> bool {
-    parse_name(name).is_some()
-}
-
 /// What a table extern reads, for messages: `input relation p`, `the
 /// stack's config`.
 pub fn describe(name: &str) -> Option<String> {
@@ -70,12 +66,12 @@ pub fn describe(name: &str) -> Option<String> {
 /// Where a table's row is, `file:line`, when `a` is one: its `at`, after
 /// a path (`path:line`) or a repository, commit and path
 /// (`repo@commit:path:line`).
-pub fn at(a: &crate::ast::Atom) -> Option<String> {
+pub fn at(a: &Atom) -> Option<String> {
     let ("csv" | "json" | "yaml" | "toml", _) = parse_name(&a.pred)? else {
         return None;
     };
     let s = |i: usize| match a.args.get(i) {
-        Some(crate::ast::Term::Val(Value::Str(s))) => Some(s.as_str()),
+        Some(Term::Val(Value::Str(s))) => Some(s.as_str()),
         _ => None,
     };
     let first = s(0)?;
