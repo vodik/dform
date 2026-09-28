@@ -65,9 +65,13 @@ fn main() -> Result<()> {
     }
 
     let root = PathBuf::from(".dform");
-    let backend = FakeCloud::new(root.clone());
+    for note in state::migrate_unscoped(&root)? {
+        eprintln!("note: {note}");
+    }
+    let paths = state::stack_paths(&root, &state::stack_name(&files[0]));
+    let backend = FakeCloud::with_paths(&paths.world, &paths.inventory);
 
-    let mut st = state::State::load(&state::state_path(&root))?;
+    let mut st = state::State::load(&paths.state)?;
     backend.bootstrap_state(&mut st)?;
 
     let mut extra = build_extra_facts(&cli.set, &cli.data)?;
@@ -127,7 +131,7 @@ fn main() -> Result<()> {
                 .any(|a| !matches!(a.kind, ActionKind::Noop));
             if changed {
                 backend.apply(&resources, &adopts, &mut st, &plan)?;
-                st.save(&state::state_path(&root))?;
+                st.save(&paths.state)?;
                 println!("apply: complete");
             } else {
                 println!("apply: nothing to do");

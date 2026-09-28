@@ -20,9 +20,17 @@ cargo run -- apply
 cargo run -- plan --set env=prod
 ```
 
-Remote state for the fake backend is written to `.dform/remote.json`.
+State is scoped to a stack. Until a `stack` statement exists, the stack is the
+basename of the first `--file` without its extension: `dform.df` is stack
+`dform`, `pngu.df` is stack `pngu`. Two programs never see each other's
+resources.
 
-Core state (Terraform-style address -> remote mapping) is written to `.dform/state.json`.
+- Core state (Terraform-style address -> remote mapping): `.dform/<stack>/state.json`.
+- The fake backend's world (what "exists"): `.dform/<stack>/remote.json`.
+- Discovery inventory, shared by every stack: `.dform/inventory.json`.
+
+A `.dform/` written before state was scoped (`.dform/state.json`,
+`.dform/remote.json`) is moved into the `dform` stack on the next run.
 
 ## dform model (current)
 

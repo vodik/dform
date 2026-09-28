@@ -24,7 +24,8 @@ pub struct RemoteResource {
 }
 
 pub struct FakeCloud {
-    root: PathBuf,
+    world: PathBuf,
+    inventory: PathBuf,
 }
 
 impl Provider for FakeCloud {
@@ -73,8 +74,18 @@ impl Provider for FakeCloud {
 }
 
 impl FakeCloud {
+    /// A fake cloud whose world is `<root>/remote.json` and whose inventory is
+    /// `<root>/inventory.json`.
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
+        let root = root.into();
+        Self::with_paths(root.join("remote.json"), root.join("inventory.json"))
+    }
+
+    pub fn with_paths(world: impl Into<PathBuf>, inventory: impl Into<PathBuf>) -> Self {
+        Self {
+            world: world.into(),
+            inventory: inventory.into(),
+        }
     }
 
     pub fn load(&self) -> Result<RemoteState> {
@@ -182,9 +193,11 @@ impl FakeCloud {
     }
 
     pub fn save(&self, st: &RemoteState) -> Result<()> {
-        fs::create_dir_all(&self.root).with_context(|| format!("mkdir {}", self.root.display()))?;
+        if let Some(dir) = self.world.parent() {
+            fs::create_dir_all(dir).with_context(|| format!("mkdir {}", dir.display()))?;
+        }
         let bytes = serde_json::to_vec_pretty(st)?;
-        fs::write(self.remote_path(), bytes)?;
+        fs::write(&self.world, bytes).with_context(|| format!("write {}", self.world.display()))?;
         Ok(())
     }
 
@@ -461,11 +474,11 @@ impl FakeCloud {
     }
 
     fn remote_path(&self) -> PathBuf {
-        self.root.join("remote.json")
+        self.world.clone()
     }
 
     fn inventory_path(&self) -> PathBuf {
-        self.root.join("inventory.json")
+        self.inventory.clone()
     }
 }
 

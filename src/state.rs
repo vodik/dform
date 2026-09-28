@@ -79,6 +79,67 @@ pub fn state_path(root: impl AsRef<Path>) -> PathBuf {
     root.as_ref().join("state.json")
 }
 
+/// The stack a program's state belongs to. Until a `stack` statement exists
+/// this is the basename of the program's entry file without its extension:
+/// `dform.df` is `dform`, `pngu.df` is `pngu`.
+pub fn stack_name(entry: &Path) -> String {
+    entry
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "default".to_string())
+}
+
+/// Where one stack's files live under the state root (`.dform/`).
+#[derive(Debug, Clone)]
+pub struct StackPaths {
+    /// dform's identity mapping for the stack: `<root>/<stack>/state.json`.
+    pub state: PathBuf,
+    /// The fake provider's world for the stack: `<root>/<stack>/remote.json`.
+    pub world: PathBuf,
+    /// Discovery facts, shared by every stack: `<root>/inventory.json`.
+    pub inventory: PathBuf,
+}
+
+pub fn stack_paths(root: &Path, stack: &str) -> StackPaths {
+    let dir = root.join(stack);
+    StackPaths {
+        state: dir.join("state.json"),
+        world: dir.join("remote.json"),
+        inventory: root.join("inventory.json"),
+    }
+}
+
+/// The stack that inherits state written before state was scoped.
+pub const LEGACY_STACK: &str = "dform";
+
+/// Move `<root>/state.json` and `<root>/remote.json`, written before state was
+/// scoped to a stack, into the `dform` stack (the default program's). Returns
+/// a note for each file moved. A file is left in place if the `dform` stack
+/// already has one.
+pub fn migrate_unscoped(root: &Path) -> Result<Vec<String>> {
+    let target = stack_paths(root, LEGACY_STACK);
+    let mut notes = Vec::new();
+    for (old, new) in [
+        (root.join("state.json"), target.state),
+        (root.join("remote.json"), target.world),
+    ] {
+        if !old.exists() || new.exists() {
+            continue;
+        }
+        if let Some(dir) = new.parent() {
+            fs::create_dir_all(dir).with_context(|| format!("mkdir {}", dir.display()))?;
+        }
+        fs::rename(&old, &new)
+            .with_context(|| format!("move {} to {}", old.display(), new.display()))?;
+        notes.push(format!(
+            "moved unscoped {} to {} (stack '{LEGACY_STACK}')",
+            old.display(),
+            new.display()
+        ));
+    }
+    Ok(notes)
+}
+
 pub fn adopt_map(adopts: &[Adopt]) -> BTreeMap<Address, String> {
     adopts
         .iter()
