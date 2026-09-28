@@ -16,6 +16,9 @@ prost = "0.13"
 tokio = { version = "1", features = ["rt", "net", "macros", "io-util", "time"] }
 tonic = "0.13"
 sha2 = "0.10"
+# The Kubernetes provider (src/k8s/): a client, and the API types it needs.
+kube = "4.2"
+k8s-openapi = { version = "0.28", features = ["latest"] }
 
 [build-dependencies]
 tonic-build = "0.13"
@@ -29,6 +32,12 @@ path = "src/main.rs"
 [[bin]]
 name = "dform-provider-fake"
 path = "src/bin/dform-provider-fake.rs"
+
+# The Kubernetes provider (`src/k8s/`): server-side apply against the
+# cluster the kubeconfig names, its schema derived from `/openapi/v3`.
+[[bin]]
+name = "dform-provider-k8s"
+path = "src/bin/dform-provider-k8s.rs"
 
 [[bench]]
 name = "scale"

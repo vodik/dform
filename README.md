@@ -158,6 +158,65 @@ replacement" below). The fake schema's vpc and subnet `cidr` are `force_new`.
 The facts are injected into the program, so rules can read them and
 `cargo run -- query type_attr` lists the schema.
 
+## The Kubernetes provider
+
+`dform-provider-k8s` (built with dform, `src/k8s/`) is a real provider: it
+speaks the same protocol against the API server of the cluster the
+environment names (`KUBECONFIG`, else `~/.kube/config`, else the pod's service
+account). Select it by path; the program the mock plans applies to a cluster
+unchanged:
+
+```prolog
+provider k8s { source = "./providers/k8s" }.   % a directory holding dform-provider-k8s
+provider k8s { source = "../target/debug/dform-provider-k8s" }.
+```
+
+- Types are `k8s.<group>.<version>.<kind>`, the core group as `core` and the
+  kind in snake_case (`k8s.apps.v1.deployment`, `k8s.core.v1.config_map`,
+  `k8s.networking.k8s.io.v1.ingress`): a type name is a lowercase qualified
+  name. The mock's short names (`k8s.deployment`) are aliases of them
+  (`type_alias` in `providers/k8s/schema.df`), so `examples/k8s_demo.df`
+  plans the same against either.
+- The schema is derived at Configure from the cluster's `/openapi/v3`, and
+  cached as `k8s-openapi.json` in the stack's state directory (fetched again
+  when the server's index changes). `x-kubernetes-list-map-keys` are
+  `type_list_key`, list-type `set` a `set`; the leaves of `status.*` and the
+  server-written metadata are computed (`metadata.uid` the identity);
+  `metadata.name` (a program may set `metadata.generateName` instead) and
+  `metadata.namespace` (default: the kubeconfig's) are `optional_computed`
+  and `force_new`; a property its object lists as `required` is required
+  where the object is set; a Secret's `data` and `stringData` are sensitive;
+  `type_retry` is 5; a Deployment, Service or ConfigMap is replaced
+  `create_first`, a Namespace `destroy_first`.
+- Remote ids are `NAMESPACE/NAME` (`NAME` for a cluster-scoped kind); Read
+  and Import GET the object. Writes are server-side apply as the field
+  manager `dform`, never forced: a field another manager owns fails the
+  action naming the manager and the field. What Read returns as
+  configuration is only the fields `dform` owns (`metadata.managedFields`),
+  so a server default or another manager's field is never a diff. Plan is a
+  dry-run apply (`dryRun=All`) diffed against the world; a change to a field
+  the server will not change in place plans a replacement. A generated name
+  is picked by the provider (`generateName` plus five characters), since
+  server-side apply needs a name. Delete propagates in the background and
+  waits for the object to go. Watches are not used.
+- With no cluster in reach, or `DFORM_K8S_OFFLINE` set, the provider is
+  offline: the schema is the checked-in snapshot of Kubernetes v1.36.0's
+  document (`providers/k8s/openapi-snapshot.json`, trimmed to the mock's
+  kinds, Pod, ReplicaSet and RBAC by `providers/k8s/trim_openapi.py`), Plan
+  diffs locally, and Read, Apply and Import fail naming why.
+
+```bash
+cargo build
+cargo run -- provider check target/debug/dform-provider-k8s   # creates and deletes a ConfigMap
+DFORM_K8S_OFFLINE=1 cargo run -- --file my.df plan             # no cluster: the snapshot's schema
+```
+
+`tests/k8s_offline.rs` runs without a cluster: offline, and against a fake API
+server (conformance, a whole apply, a field-manager conflict).
+`tests/k8s_cluster.rs` runs against a real one in a namespace
+`dform-test-<random>` it deletes afterwards, only when
+`DFORM_K8S_TEST_KUBECONFIG` names its kubeconfig.
+
 ## Computed values come from Apply
 
 Plan never invents a computed value. The evaluator mints one labeled null
