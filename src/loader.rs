@@ -17,7 +17,10 @@ pub fn load_program(entry_files: &[PathBuf]) -> Result<Program> {
 }
 
 fn load_file(path: &Path, seen: &mut BTreeSet<PathBuf>) -> Result<Program> {
+    // One file reached two ways (`lib/x.df`, `lib/../lib/x.df`, a symlink)
+    // is one file: dedup by its canonical path.
     let abs = absolutize(path)?;
+    let abs = fs::canonicalize(&abs).unwrap_or(abs);
     if !seen.insert(abs.clone()) {
         // already loaded
         return Ok(Program { statements: vec![] });
