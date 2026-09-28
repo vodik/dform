@@ -25,6 +25,18 @@ use serde_json::{Map, Value as Json, json};
 /// The field manager dform applies as.
 pub const MANAGER: &str = "dform";
 
+/// The annotation a Create's idempotency key rides on: a Create again with
+/// the same key finds the object it made by name and answers with it. Not
+/// configuration: `attrs` leaves it out, and the next update drops it.
+pub const KEY_ANNOTATION: &str = "dform.io/idempotency-key";
+
+/// The idempotency key the Create that made `live` carried, if any.
+pub fn idempotency_key(live: &Json) -> Option<&str> {
+    live.pointer("/metadata/annotations")?
+        .get(KEY_ANNOTATION)?
+        .as_str()
+}
+
 /// The server-written metadata dform returns as computed values.
 const COMPUTED_META: [&str; 6] = [
     "uid",
@@ -172,6 +184,12 @@ pub fn attrs(live: &Json) -> Json {
         }
         if let Some(g) = live.pointer("/metadata/generateName") {
             meta.insert("generateName".into(), g.clone());
+        }
+        if let Some(Json::Object(a)) = meta.get_mut("annotations") {
+            a.remove(KEY_ANNOTATION);
+            if a.is_empty() {
+                meta.remove("annotations");
+            }
         }
     }
     if m.get("metadata").is_some_and(|x| x == &json!({})) {

@@ -410,6 +410,21 @@ fn apply(
     config: Option<&Json>,
     assertions: Vec<pb::Assertion>,
 ) -> std::result::Result<pb::ApplyResponse, CallError> {
+    apply_keyed(conn, op, typ, remote, config, assertions, "")
+}
+
+/// The idempotency key the checks' CREATE carries.
+const KEY: &str = "dform-check-create";
+
+fn apply_keyed(
+    conn: &Conn,
+    op: pb::Op,
+    typ: &str,
+    remote: &str,
+    config: Option<&Json>,
+    assertions: Vec<pb::Assertion>,
+    key: &str,
+) -> std::result::Result<pb::ApplyResponse, CallError> {
     let req = pb::ApplyRequest {
         op: op as i32,
         r#type: typ.into(),
@@ -417,9 +432,43 @@ fn apply(
         remote: remote.into(),
         config: config.map(wire::doc),
         assertions,
+        idempotency_key: key.into(),
         ..Default::default()
     };
     conn.borrow_mut().try_call(req)
+}
+
+/// `provider.created(Type, "a", Key, Remote)`: the remote ids it answers.
+fn made_by(conn: &Conn, typ: &str, key: &str) -> Result<Vec<String>> {
+    let s = |x: &str| wire::value(&Value::Str(x.into()));
+    let rows: Vec<pb::Row> = call(
+        conn,
+        pb::QueryRequest {
+            pred: super::providers::CREATED.into(),
+            input: vec![true, true, true, false],
+            inputs: vec![s(typ), s("a"), s(key)],
+        },
+    )?;
+    rows.iter()
+        .map(|row| {
+            match row
+                .values
+                .iter()
+                .map(wire::from_value)
+                .collect::<Result<Vec<_>>>()?
+                .as_slice()
+            {
+                [Value::Str(t), Value::Str(n), Value::Str(k), Value::Str(r)]
+                    if t == typ && n == "a" && k == key =>
+                {
+                    Ok(r.clone())
+                }
+                row => Err(anyhow::anyhow!(
+                    "a row that is not ({typ}, \"a\", {key:?}, Remote): {row:?}"
+                )),
+            }
+        })
+        .collect()
 }
 
 /// A sensitive computed value leaves the provider as a secret null only.
@@ -549,7 +598,7 @@ fn resources(conn: &Conn, r: &mut Report, schema: &Schema, f: &Fixture) {
     );
 
     // Apply: a create mints computed values and hides the secret.
-    let created = apply(conn, pb::Op::Create, typ, "", Some(doc), vec![]);
+    let created = apply_keyed(conn, pb::Op::Create, typ, "", Some(doc), vec![], KEY);
     let remote = match &created {
         Ok(resp) => resp.remote.clone(),
         Err(_) => String::new(),
@@ -579,6 +628,30 @@ fn resources(conn: &Conn, r: &mut Report, schema: &Schema, f: &Fixture) {
             secret(&computed)
         }),
     );
+    r.check(
+        "Apply CREATE again with the same idempotency key answers the object it made",
+        apply_keyed(conn, pb::Op::Create, typ, "", Some(doc), vec![], KEY)
+            .map_err(anyhow::Error::new)
+            .and_then(|resp| {
+                ensure(resp.remote == remote, || {
+                    format!("remote {} is not {remote}", resp.remote)
+                })
+            }),
+    );
+    if conn.borrow().has("managed") {
+        r.check(
+            "Query provider.created answers what an idempotency key made",
+            made_by(conn, typ, KEY)
+                .and_then(|rows| ensure(rows == [remote.clone()], || format!("got {rows:?}"))),
+        );
+        r.check(
+            "Query provider.created answers nothing for a key that made nothing",
+            made_by(conn, typ, "dform-check-nothing")
+                .and_then(|rows| ensure(rows.is_empty(), || format!("got {rows:?}"))),
+        );
+    } else {
+        r.skip("Query provider.created", "no `managed` capability");
+    }
     r.check(
         "Import answers a managed object by remote id",
         import(conn, typ, &remote).and_then(|o| ensure(o.is_some(), || "not found".into())),

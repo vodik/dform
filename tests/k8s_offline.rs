@@ -549,6 +549,8 @@ fn the_k8s_provider_conforms() {
         "ok    Plan spells a keyed list by key",
         "ok    Plan marks a sensitive attribute sensitive",
         "ok    Apply CREATE returns the object with its computed values",
+        "ok    Apply CREATE again with the same idempotency key answers the object it made",
+        "skip  Query provider.created: no `managed` capability",
         "ok    Apply UPDATE changes the object in place",
         "ok    Apply REPLACE makes a new object",
         "ok    Apply DELETE removes the object",
@@ -632,6 +634,13 @@ fn the_demo_applies_through_the_api_server() {
             "managedFields",
         ] {
             m.remove(k);
+        }
+        // The Create's idempotency key rides on an annotation, not
+        // configuration.
+        let a = m["annotations"].as_object_mut().unwrap();
+        assert!(a.remove("dform.io/idempotency-key").is_some(), "{a:?}");
+        if a.is_empty() {
+            m.remove("annotations");
         }
         o
     };

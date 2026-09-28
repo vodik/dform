@@ -25,7 +25,7 @@ use dform_core::ir::Address;
 use dform_core::plugin::backend::{self, CallError, Handler, Reply, VERSION};
 use dform_core::plugin::link::Link;
 use dform_core::plugin::pb;
-use dform_core::plugin::providers::{INVENTORY, Launch};
+use dform_core::plugin::providers::{CREATED, INVENTORY, Launch};
 use dform_core::plugin::queue::{Order, Queue};
 use dform_core::plugin::wire;
 use dform_core::provider::{self, Change, get_path, norm_path, set_path, short_hash};
@@ -76,6 +76,10 @@ pub struct RemoteResource {
     /// resource (eventual consistency after Create).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub read_lag: Option<u64>,
+    /// The idempotency key of the Create or Replace that made it: a second
+    /// call with the key answers with this object.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub key: String,
 }
 
 fn key(typ: &str, name: &str) -> String {
@@ -112,6 +116,8 @@ pub struct Call {
     pub config: Json,
     pub create_first: bool,
     pub assertions: Vec<Assertion>,
+    /// A Create's or a Replace's idempotency key; empty for none.
+    pub key: String,
 }
 
 /// `path` `op` `value` (F DR-13), checked after secrets are materialized.
@@ -247,7 +253,9 @@ impl FakeCloud {
     /// Query (E DR-18): the rows of `pred` whose `+` columns (`plus`) are
     /// `inputs`, in order. The mock's answer facts for an extern; the
     /// inventory flattened for `cloud_exists/2`, `cloud_attr/4`,
-    /// `cloud_computed/4`. No row is an answer too: nothing matches.
+    /// `cloud_computed/4`; for `CREATED`, the object the Create or Replace
+    /// with the key made, whatever its name. No row is an answer too:
+    /// nothing matches.
     pub fn query(
         &mut self,
         pred: &str,
@@ -255,6 +263,23 @@ impl FakeCloud {
         inputs: &[Value],
     ) -> Result<Vec<Vec<Value>>> {
         let all = match pred {
+            CREATED => match inputs {
+                [Value::Str(typ), name, Value::Str(k)] if !k.is_empty() => self
+                    .world()?
+                    .resources
+                    .values()
+                    .filter(|rr| rr.typ == *typ && rr.key == *k)
+                    .map(|rr| {
+                        vec![
+                            Value::Str(typ.clone()),
+                            name.clone(),
+                            Value::Str(k.clone()),
+                            Value::Str(rr.name.clone()),
+                        ]
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            },
             _ if INVENTORY.iter().any(|(p, _)| *p == pred) => {
                 let mut atoms = Vec::new();
                 for rr in self.inventory()?.resources.values() {
@@ -524,7 +549,25 @@ impl FakeCloud {
         let answered = !self.chaos.timeout.contains(addr);
         let doc = c.config;
         self.world().map_err(refuse)?;
+        // The same key again: the object the first call made, unchanged.
+        let made = match c.op {
+            pb::Op::Create | pb::Op::Replace if !c.key.is_empty() => self
+                .world_ref()
+                .resources
+                .values()
+                .find(|rr| rr.typ == addr.typ && rr.key == c.key)
+                .map(|rr| rr.name.clone()),
+            _ => None,
+        };
         let remote = match c.op {
+            _ if made.is_some() => {
+                out.notes.push(format!(
+                    "apply {at}: idempotency key {} made {} already",
+                    c.key,
+                    made.as_deref().unwrap_or_default()
+                ));
+                made
+            }
             pb::Op::Delete => {
                 self.delete_object(&addr.typ, &c.remote);
                 self.remotes.remove(addr);
@@ -538,7 +581,7 @@ impl FakeCloud {
                         "apply {at}: create failed: {k} already exists in the world"
                     )));
                 }
-                self.create_object(addr, &remote, doc);
+                self.create_object(addr, &remote, doc, &c.key);
                 Some(remote)
             }
             pb::Op::Replace => {
@@ -546,7 +589,7 @@ impl FakeCloud {
                     self.delete_object(&addr.typ, &c.remote);
                 }
                 let remote = self.free_name(&addr.typ, &addr.name);
-                self.create_object(addr, &remote, doc);
+                self.create_object(addr, &remote, doc, &c.key);
                 Some(remote)
             }
             pb::Op::Adopt => {
@@ -565,17 +608,18 @@ impl FakeCloud {
                         attrs: doc,
                         computed,
                         read_lag: None,
+                        key: String::new(),
                     },
                 );
                 Some(c.remote.clone())
             }
             pb::Op::Update => {
                 let k = key(&addr.typ, &c.remote);
-                let computed = match self.world_ref().resources.get(&k) {
-                    Some(cur) => cur.computed.clone(),
+                let (computed, made_by) = match self.world_ref().resources.get(&k) {
+                    Some(cur) => (cur.computed.clone(), cur.key.clone()),
                     None => {
                         let salt = self.salt();
-                        self.mint(&addr.typ, &c.remote, &doc, salt)
+                        (self.mint(&addr.typ, &c.remote, &doc, salt), String::new())
                     }
                 };
                 self.world_mut().resources.insert(
@@ -586,6 +630,7 @@ impl FakeCloud {
                         attrs: doc,
                         computed,
                         read_lag: None,
+                        key: made_by,
                     },
                 );
                 Some(c.remote.clone())
@@ -679,7 +724,7 @@ impl FakeCloud {
     }
 
     /// A new object at `remote`, its computed values minted.
-    fn create_object(&mut self, addr: &Address, remote: &str, doc: Json) {
+    fn create_object(&mut self, addr: &Address, remote: &str, doc: Json, idempotency_key: &str) {
         let salt = self.salt();
         let computed = self.mint(&addr.typ, remote, &doc, salt);
         let read_lag = self.chaos.read_lag.get(addr).copied();
@@ -691,6 +736,7 @@ impl FakeCloud {
                 attrs: doc,
                 computed,
                 read_lag,
+                key: idempotency_key.to_string(),
             },
         );
     }
@@ -928,7 +974,9 @@ impl Handler for Mock {
                 Reply::Handshake(pb::HandshakeResponse {
                     protocol_version: VERSION,
                     name: "fakecloud".into(),
-                    capabilities: ["resource", "fact", "inventory"].map(String::from).to_vec(),
+                    capabilities: ["resource", "fact", "inventory", "managed"]
+                        .map(String::from)
+                        .to_vec(),
                 })
             }
             C::Configure(req) => {
@@ -1076,6 +1124,7 @@ impl Mock {
             config: doc_of(r.config.as_ref())?.unwrap_or(Json::Null),
             create_first: r.create_first,
             assertions,
+            key: r.idempotency_key,
         };
         match self.cloud().apply(call) {
             Ok(a) => Ok(pb::ApplyResponse {

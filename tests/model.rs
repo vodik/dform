@@ -28,12 +28,9 @@
 //!
 //! A Create or Replace that may have taken effect without dform hearing
 //! its answer (chaos `timeout`, `crash`, or in flight when `stop-after`
-//! stopped dform) leaves an object state does not know: the README's "the
-//! world has it, state does not". The orphan is excused. What follows
-//! from it is not in `Mode::Strict`: the next apply creates it again (the
-//! mock refuses, "already exists"; a real cloud may make a second one).
-//! Main fails that (`resume_repeats_a_create_that_was_in_flight`,
-//! ignored), so CI runs `Mode::Lenient`, which excuses it too.
+//! stopped dform) leaves an object state does not know until the next run
+//! asks the provider for what its idempotency key made. That orphan is
+//! excused; the next apply creating it again is not (repeat-create).
 //!
 //! A failure prints the seed and the schedule minimized (delta debugging
 //! over its steps, then over each step's knobs), and how to replay it:
@@ -42,8 +39,7 @@
 //!
 //! `DFORM_MODEL_SEEDS=K` (default 300, about 30s in a debug build) runs
 //! seeds 0..K; `DFORM_MODEL_START` offsets them (the nightly workflow runs
-//! 10^4). `DFORM_MODEL_STRICT` runs `Mode::Strict`; `DFORM_MODEL_VERBOSE`
-//! prints every run's result and Apply calls.
+//! 10^4). `DFORM_MODEL_VERBOSE` prints every run's result and Apply calls.
 
 mod common;
 
@@ -653,17 +649,6 @@ impl Provider for Recorder {
 
 // ----------------------------------------------------------------- runner
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum Mode {
-    /// A Create or Replace that may have taken effect unanswered leaves an
-    /// object state does not know (an orphan, excused in either mode);
-    /// here also the Create that meets it later, and a settling apply that
-    /// stops on it.
-    Lenient,
-    /// Only the orphan is excused: resuming must not create it again.
-    Strict,
-}
-
 /// An invariant that failed: its name and what happened.
 #[derive(Debug, Clone)]
 struct Failure {
@@ -674,7 +659,6 @@ struct Failure {
 struct Runner<'a> {
     dir: PathBuf,
     ep: &'a Episode,
-    mode: Mode,
     version: usize,
     /// (type, name) of Creates and Replaces that may have taken effect
     /// unanswered.
@@ -798,7 +782,6 @@ impl Runner<'_> {
             if let Answer::Refused(m) = a
                 && r.op == pb::Op::Create
                 && m.contains("already exists in the world")
-                && !(self.mode == Mode::Lenient && self.ambiguous.contains(&key))
             {
                 return Self::fail(
                     "repeat-create",
@@ -1015,17 +998,7 @@ impl Runner<'_> {
         self.after(&ran, "the settling apply")?;
         match &ran.result {
             Err(e) if e.contains("blocked by constraints") => return Ok(()),
-            Err(e) => {
-                let excused = ran.answered.iter().any(|(r, a)| {
-                    matches!(a, Answer::Refused(m) if m.contains("already exists in the world"))
-                        && self.mode == Mode::Lenient
-                        && self.ambiguous(&r.typ, &r.name)
-                });
-                if excused {
-                    return Ok(());
-                }
-                return Self::fail("settle", format!("the settling apply failed: {e}"));
-            }
+            Err(e) => return Self::fail("settle", format!("the settling apply failed: {e}")),
             Ok(()) => {}
         }
         let out = self.path("settled.json");
@@ -1056,7 +1029,7 @@ impl Runner<'_> {
 }
 
 /// Run `seed`'s episode with `steps`: the first invariant that fails.
-fn replay(seed: u64, steps: &[Step], mode: Mode) -> Result<(), Failure> {
+fn replay(seed: u64, steps: &[Step]) -> Result<(), Failure> {
     let ep = episode(seed);
     let s = common::Scratch::new(&format!("model-{seed}"));
     let foreign: BTreeSet<(String, String)> = ep
@@ -1084,7 +1057,6 @@ fn replay(seed: u64, steps: &[Step], mode: Mode) -> Result<(), Failure> {
     let mut r = Runner {
         dir: s.dir.clone(),
         ep: &ep,
-        mode,
         version: 0,
         ambiguous: BTreeSet::new(),
         foreign,
@@ -1105,8 +1077,8 @@ fn replay(seed: u64, steps: &[Step], mode: Mode) -> Result<(), Failure> {
 /// Delta debugging over the steps (ddmin), then each step's knobs one at a
 /// time, then `--parallel 1` and the clock: the smallest schedule that
 /// still fails `invariant`.
-fn minimize(seed: u64, steps: Vec<Step>, mode: Mode, invariant: &str) -> Vec<Step> {
-    let fails = |s: &[Step]| replay(seed, s, mode).is_err_and(|f| f.invariant == invariant);
+fn minimize(seed: u64, steps: Vec<Step>, invariant: &str) -> Vec<Step> {
+    let fails = |s: &[Step]| replay(seed, s).is_err_and(|f| f.invariant == invariant);
     let mut cur = steps;
     let mut n = 2;
     while cur.len() >= 2 {
@@ -1180,12 +1152,12 @@ fn env_u64(k: &str) -> Option<u64> {
 }
 
 /// Seeds `from..to`: the first that fails, minimized.
-fn search(from: u64, to: u64, mode: Mode) -> Option<(u64, Failure, Vec<Step>)> {
+fn search(from: u64, to: u64) -> Option<(u64, Failure, Vec<Step>)> {
     for seed in from..to {
         let steps = episode(seed).steps;
-        if let Err(f) = replay(seed, &steps, mode) {
-            let min = minimize(seed, steps, mode, f.invariant);
-            let f = replay(seed, &min, mode).err().unwrap_or(f);
+        if let Err(f) = replay(seed, &steps) {
+            let min = minimize(seed, steps, f.invariant);
+            let f = replay(seed, &min).err().unwrap_or(f);
             return Some((seed, f, min));
         }
     }
@@ -1218,23 +1190,19 @@ fn report(seed: u64, f: &Failure, steps: Vec<Step>) -> String {
 #[test]
 fn the_executor_under_random_chaos_never_orphans_or_overreaches() {
     let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let mode = match std::env::var_os("DFORM_MODEL_STRICT") {
-        Some(_) => Mode::Strict,
-        None => Mode::Lenient,
-    };
     if let Some(seed) = env_u64("DFORM_MODEL_SEED") {
         let steps = match std::env::var("DFORM_MODEL_SCHEDULE") {
             Ok(s) => parse_schedule(&s),
             Err(_) => episode(seed).steps,
         };
-        if let Err(f) = replay(seed, &steps, mode) {
+        if let Err(f) = replay(seed, &steps) {
             panic!("{}", report(seed, &f, steps));
         }
         return;
     }
     let from = env_u64("DFORM_MODEL_START").unwrap_or(0);
     let n = env_u64("DFORM_MODEL_SEEDS").unwrap_or(300);
-    if let Some((seed, f, min)) = search(from, from + n, mode) {
+    if let Some((seed, f, min)) = search(from, from + n) {
         panic!("{}", report(seed, &f, min));
     }
 }
@@ -1247,39 +1215,45 @@ fn persisting_once_per_tick_is_caught() {
     let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     use std::sync::atomic::Ordering;
     dform::executor::hooks::PERSIST_PER_TICK.store(true, Ordering::SeqCst);
-    let found = search(0, 10, Mode::Lenient);
+    let found = search(0, 10);
     dform::executor::hooks::PERSIST_PER_TICK.store(false, Ordering::SeqCst);
     let (seed, f, min) = found.expect("the model catches state written once per tick");
     assert_eq!(f.invariant, "identity", "{}", report(seed, &f, min));
 }
 
-/// WORK.org "Model test: the executor under random chaos never orphans or
-/// overreaches", found on main: `stop-after` stops dform with a Create in
-/// flight that the direct backend's clock has already run (as a process
-/// provider may have). The in-flight record lists the address as remaining,
-/// but the resumed apply plans a Create again: the mock refuses ("already
-/// exists"); a real cloud may make a second object.
+/// WORK.org "Resume repeats a Create that may already have happened" (seed
+/// 210): `stop-after` stops dform with a Create in flight that the direct
+/// backend's clock has already run (as a process provider may have). The
+/// resumed apply asks the provider for what the Create's idempotency key
+/// made, finds it and maps it, and does not create it again.
 #[test]
-#[ignore = "fails on main: resume repeats a Create that was in flight when dform stopped"]
-fn resume_repeats_a_create_that_was_in_flight() {
-    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let steps = parse_schedule("apply p=2 stop-after=1");
-    if let Err(f) = replay(210, &steps, Mode::Strict) {
-        panic!("{}", report(210, &f, steps));
-    }
+fn resume_does_not_repeat_a_create_that_was_in_flight() {
+    replays(210, "apply p=2 stop-after=1");
 }
 
-/// The same invariant after chaos `timeout` on a Create: the next apply
-/// creates it again. tests/chaos.rs pins this as the current behaviour
-/// (`timeout_takes_effect_but_leaves_an_orphan`); the ticket's invariant
-/// says otherwise.
+/// The same after chaos `timeout` on a Create (seed 307): DEADLINE_EXCEEDED
+/// may have taken effect.
 #[test]
-#[ignore = "fails on main: a Create that timed out is created again"]
 fn a_create_that_timed_out_is_not_created_again() {
+    replays(307, "apply p=1 timeout=compute.vm/r2");
+}
+
+/// A Create at an address state still maps to an object that is gone (the
+/// world lost it; `moved` gave the address its identity) times out: what
+/// its key made is found although state maps the address (seed 732).
+#[test]
+fn a_timed_out_create_at_a_mapped_address_is_found() {
+    replays(
+        732,
+        "apply p=1; next; plan-apply p=2 remove=1; apply p=4 seed=566 timeout=net.subnet/r2",
+    );
+}
+
+fn replays(seed: u64, schedule: &str) {
     let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let steps = parse_schedule("apply p=1 timeout=compute.vm/r2");
-    if let Err(f) = replay(307, &steps, Mode::Strict) {
-        panic!("{}", report(307, &f, steps));
+    let steps = parse_schedule(schedule);
+    if let Err(f) = replay(seed, &steps) {
+        panic!("{}", report(seed, &f, steps));
     }
 }
 

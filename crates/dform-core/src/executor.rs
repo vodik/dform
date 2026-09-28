@@ -25,6 +25,13 @@
 //! takes only the remaining documents, so a saved plan file can feed it the
 //! same way.
 //!
+//! Uncertainty. A call whose answer was lost (a timeout, a crash, in flight
+//! when dform stopped) may have taken effect: it stays in
+//! `State::uncertain`, and the next run resolves it before it plans
+//! (`resolve_uncertain`). Every Create and Replace carries an idempotency
+//! key, written to state with the in-flight record (`mark_creates`), so
+//! the provider can say what it made, and a retry never makes it twice.
+//!
 //! Replacement. A replace makes a new object: every null that named the old
 //! one (its id, every computed path) is retracted, so the program is
 //! evaluated again without the replaced identities (`withhold`), and what
@@ -41,7 +48,7 @@ use crate::lattice::nulls_in;
 use crate::plan_print::waits_on;
 use crate::plugin::Providers;
 use crate::provider::{Action, ActionKind, Change, Plan, fmt_value};
-use crate::state::{self, InFlight, State};
+use crate::state::{self, InFlight, State, Uncertain, UncertainOp};
 use crate::stuck::Sections;
 use crate::value::{Value, null_owner};
 use crate::zset::Lifecycle;
@@ -403,6 +410,147 @@ pub fn begin(state: &mut State, tick: usize, plan: &Plan, observed: &BTreeMap<Ad
         .map(|a| (state::key(&a.addr), observed.get(&a.addr).cloned()))
         .collect();
     state.in_flight = Some(InFlight { tick, remaining });
+}
+
+/// Give every Create and Replace of the tick (`actions`, the definite ones)
+/// its idempotency key before the tick's first call, so that the state
+/// written with the in-flight record already names it: a call in flight
+/// when dform is killed is uncertain on disk (`State::uncertain`). One that
+/// was uncertain already keeps its key: the retry must send the same one.
+pub fn mark_creates<'a>(
+    state: &mut State,
+    stack: &str,
+    actions: impl IntoIterator<Item = &'a Action>,
+) {
+    for a in actions {
+        let op = match a.kind {
+            ActionKind::Create => UncertainOp::Create,
+            ActionKind::Replace { create_first } => UncertainOp::Replace { create_first },
+            _ => continue,
+        };
+        let k = state::key(&a.addr);
+        let key = state
+            .uncertain
+            .get(&k)
+            .map(|u| u.key.clone())
+            .filter(|key| !key.is_empty())
+            .unwrap_or_else(|| state.new_idempotency_key(stack, &a.addr, a));
+        let remote = state
+            .get(&a.addr)
+            .map(|e| e.remote.clone())
+            .unwrap_or_default();
+        state.uncertain.insert(k, Uncertain { op, remote, key });
+    }
+}
+
+/// Resolve every uncertain Apply call (`State::uncertain`) before anything
+/// is planned, so that a call whose answer was lost is neither repeated nor
+/// forgotten. Returns what was resolved, a line each.
+///
+/// * A create or a replace: ask the provider for the object its idempotency
+///   key made (`Providers::created`). Found, it is the address's: state maps
+///   it (a create-first replacement's old object deposed), and the action
+///   is no longer remaining. Not found, the call is retried with the same
+///   key: the entry stays while an apply of it is outstanding (the
+///   in-flight record lists the address), else it goes. A destroy-first
+///   replacement whose old object is gone becomes a create.
+/// * An update: its outcome is whatever the refresh Reads. The plan is
+///   computed from it, so the update is no longer remaining: the world
+///   moving under it is its own doing, not someone else's.
+/// * A delete: a Read. Gone, state forgets it; there, the plan deletes it
+///   again.
+pub fn resolve_uncertain(cloud: &Providers, state: &mut State) -> Result<Vec<String>> {
+    let mut out = Vec::new();
+    let outstanding = |state: &State, k: &str| {
+        state
+            .in_flight
+            .as_ref()
+            .is_some_and(|f| f.remaining.contains_key(k))
+    };
+    let done = |state: &mut State, k: &str| {
+        state.uncertain.remove(k);
+        if let Some(f) = &mut state.in_flight {
+            f.remaining.remove(k);
+        }
+    };
+    for (k, u) in state.uncertain.clone() {
+        let deposed = matches!(u.op, UncertainOp::DeleteDeposed);
+        let Some(addr) = state::parse_key(k.strip_suffix("#deposed").unwrap_or(&k)) else {
+            state.uncertain.remove(&k);
+            continue;
+        };
+        let at = format!("{}/{}", addr.typ, addr.name);
+        match u.op {
+            UncertainOp::Create | UncertainOp::Replace { .. } => {
+                // A create's address may still map an object that is gone.
+                let mapped = state.get(&addr).map(|e| e.remote.clone());
+                if let Some(remote) = cloud.created(&addr, &u.key)? {
+                    if let UncertainOp::Replace { create_first: true } = u.op
+                        && mapped.as_ref().is_some_and(|m| *m != remote)
+                    {
+                        state.depose(&addr);
+                    }
+                    let provider = cloud.provider_of(&addr.typ).to_string();
+                    state.set(addr.clone(), provider, remote.clone());
+                    done(state, &k);
+                    out.push(format!(
+                        "{at}: the {} whose answer was lost made {remote}; state maps it",
+                        op_name(&u.op)
+                    ));
+                    continue;
+                }
+                // A destroy-first replacement that deleted the old object
+                // and made nothing: what is left is a create.
+                if let UncertainOp::Replace {
+                    create_first: false,
+                } = u.op
+                    && mapped.is_some_and(|m| m == u.remote)
+                    && !cloud.exists(&addr, &u.remote)?
+                {
+                    state.remove(&addr);
+                    if let Some(e) = state.uncertain.get_mut(&k) {
+                        e.op = UncertainOp::Create;
+                        e.remote.clear();
+                    }
+                    out.push(format!(
+                        "{at}: the replace whose answer was lost deleted {} and made nothing;                          it is created again",
+                        u.remote
+                    ));
+                    continue;
+                }
+                if !outstanding(state, &k) {
+                    state.uncertain.remove(&k);
+                }
+            }
+            UncertainOp::Update => done(state, &k),
+            UncertainOp::Delete | UncertainOp::DeleteDeposed => {
+                let gone = !cloud.exists(&addr, &u.remote)?;
+                if gone {
+                    match deposed {
+                        true => {
+                            state.deposed.remove(&state::key(&addr));
+                        }
+                        false => state.remove(&addr),
+                    }
+                    out.push(format!(
+                        "{at}: the delete whose answer was lost took effect; {} is gone",
+                        u.remote
+                    ));
+                }
+                done(state, &k);
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn op_name(op: &UncertainOp) -> &'static str {
+    match op {
+        UncertainOp::Create => "create",
+        UncertainOp::Replace { .. } => "replace",
+        UncertainOp::Update => "update",
+        UncertainOp::Delete | UncertainOp::DeleteDeposed => "delete",
+    }
 }
 
 /// The addresses whose world document is no longer the one they were

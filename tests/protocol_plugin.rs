@@ -92,12 +92,14 @@ fn the_mock_conforms() {
     for (backend, path) in runs {
         let r = s.run_on(backend, &["provider", "check", path]).success();
         assert!(!r.stdout.contains("FAIL"), "{backend:?}: {}", r.stdout);
-        assert!(
-            r.stdout
-                .contains("ok    Apply refuses an action whose assertion fails"),
-            "{backend:?}: {}",
-            r.stdout
-        );
+        for line in [
+            "ok    Apply refuses an action whose assertion fails",
+            "ok    Apply CREATE again with the same idempotency key answers the object it made",
+            "ok    Query provider.created answers what an idempotency key made",
+            "ok    Query provider.created answers nothing for a key that made nothing",
+        ] {
+            assert!(r.stdout.contains(line), "{backend:?}: {line}\n{}", r.stdout);
+        }
         assert!(
             r.stdout.ends_with("conforms\n"),
             "{backend:?}: {}",

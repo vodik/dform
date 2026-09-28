@@ -119,7 +119,10 @@ message HandshakeResponse {
   string name = 2;
   // "resource" (Read, Plan, Apply, Import), "fact" (Query), "inventory"
   // (Query answers cloud_exists/2, cloud_attr/4 and cloud_computed/4 with
-  // every argument free).
+  // every argument free), "managed" (Query answers
+  // provider.created(Type, Name, Key, Remote) with Type, Name and Key
+  // bound: the object an Apply CREATE or REPLACE of address Name with
+  // idempotency key Key made, if it made one).
   repeated string capabilities = 3;
 }
 
@@ -269,6 +272,14 @@ message ApplyRequest {
   // does not hold.
   repeated Assertion assertions = 7;
   repeated Span spans = 8;
+  // CREATE and REPLACE: a key unique to this intended creation. The same
+  // key twice must not create twice: a second call with a key a first one
+  // already made an object for answers with that object, whatever became
+  // of the first call's answer. A provider whose API takes a client token
+  // passes the key through. dform retries a call whose outcome it does not
+  // know (DEADLINE_EXCEEDED, a crash, dform killed with it in flight) with
+  // the same key, after asking for the object (the "managed" capability).
+  string idempotency_key = 9;
 }
 
 // `path` OP `value`: OP is one of eq, ne, len_ge, len_le, prefix, or a

@@ -83,6 +83,11 @@ fn key(typ: &str, remote: &str) -> String {
     format!("{typ}::{remote}")
 }
 
+/// The Query predicate a provider with the `managed` capability answers
+/// with Type, Name and Key bound: `(Type, Name, Key, RemoteId)` for the
+/// object an Apply Create or Replace of address Name with idempotency key
+/// Key made, if it made one.
+pub const CREATED: &str = "provider.created";
 /// The inventory relations a provider with the `inventory` capability
 /// answers with every argument free, and their arities.
 pub const INVENTORY: [(&str, usize); 3] = [
@@ -365,6 +370,42 @@ impl Providers {
             }
         }
         Ok(out)
+    }
+
+    /// The provider that owns `typ`, by name, as state records it.
+    pub fn provider_of(&self, typ: &str) -> &str {
+        &self.names[self.route(typ)]
+    }
+
+    /// The object an Apply Create or Replace of `addr` with the
+    /// idempotency key `key` made (`CREATED`): its remote id. `None` when
+    /// it made none, or when its provider cannot say (no `managed`
+    /// capability): then only a retry with the same key finds out.
+    pub fn created(&self, addr: &Address, key: &str) -> Result<Option<String>> {
+        let i = self.route(&addr.typ);
+        if !self.links[i].borrow().has("managed") {
+            return Ok(None);
+        }
+        let s = |x: &str| Value::Str(x.to_string());
+        let rows = self.query_at(
+            i,
+            CREATED,
+            &[true, true, true, false],
+            &[s(&addr.typ), s(&addr.name), s(key)],
+        )?;
+        match rows.first().map(Vec::as_slice) {
+            None => Ok(None),
+            Some([_, _, _, Value::Str(remote)]) => Ok(Some(remote.clone())),
+            Some(row) => bail!(
+                "provider {}: {CREATED} answers (Type, Name, Key, RemoteId), not {row:?}",
+                self.names[i]
+            ),
+        }
+    }
+
+    /// Whether the object `remote` of `addr`'s type is there: one Read.
+    pub fn exists(&self, addr: &Address, remote: &str) -> Result<bool> {
+        Ok(self.read(self.route(&addr.typ), addr, remote)?.is_some())
     }
 
     fn object(attrs: Option<&pb::Value>, computed: Option<&pb::Value>) -> Result<Object> {
@@ -1094,6 +1135,7 @@ impl Tick<'_> {
                 })
                 .collect(),
         };
+        let idempotency_key = uncertain_from_here(a, addr, &remote, state);
         let req = pb::ApplyRequest {
             op: op as i32,
             r#type: addr.typ.clone(),
@@ -1103,6 +1145,7 @@ impl Tick<'_> {
             create_first,
             assertions,
             spans: Vec::new(),
+            idempotency_key,
         };
         let link = cloud.route(&addr.typ);
         let ticket = cloud.links[link].borrow_mut().submit(req);
@@ -1165,6 +1208,12 @@ impl Tick<'_> {
             Err(e) => Err(e),
         };
         self.forget_object(&f, &result, state);
+        if !matches!(
+            result,
+            Err(CallError::MaybeApplied(_) | CallError::Crashed(_))
+        ) {
+            state.uncertain.remove(&uncertain_key(&f.kind, &f.addr));
+        }
         (f.id, self.answered(f.kind, &f.addr, &result, state))
     }
 
@@ -1327,6 +1376,48 @@ impl Tick<'_> {
         self.cloud.invalidate();
         Ok(self.returned)
     }
+}
+
+/// `State::uncertain`'s key for a call of `kind` on `addr`.
+fn uncertain_key(kind: &ActionKind, addr: &Address) -> String {
+    match kind {
+        ActionKind::DeleteDeposed => state::deposed_key(addr),
+        _ => state::key(addr),
+    }
+}
+
+/// A call is uncertain from its submission until it answers: record it,
+/// and return the idempotency key a create or a replace carries (the one
+/// `executor::mark_creates` gave it before the tick, else a new one).
+fn uncertain_from_here(a: &Action, addr: &Address, remote: &str, state: &mut State) -> String {
+    use state::UncertainOp as Op;
+    let op = match a.kind {
+        ActionKind::Create => Op::Create,
+        ActionKind::Replace { create_first } => Op::Replace { create_first },
+        ActionKind::Update | ActionKind::Drift => Op::Update,
+        ActionKind::Delete => Op::Delete,
+        ActionKind::DeleteDeposed => Op::DeleteDeposed,
+        ActionKind::Adopt | ActionKind::Noop | ActionKind::Pending => return String::new(),
+    };
+    let k = uncertain_key(&a.kind, addr);
+    let key = match op {
+        Op::Create | Op::Replace { .. } => state
+            .uncertain
+            .get(&k)
+            .map(|u| u.key.clone())
+            .filter(|key| !key.is_empty())
+            .unwrap_or_else(|| state.new_idempotency_key("", addr, a)),
+        _ => String::new(),
+    };
+    state.uncertain.insert(
+        k,
+        state::Uncertain {
+            op,
+            remote: remote.to_string(),
+            key: key.clone(),
+        },
+    );
+    key
 }
 
 /// Deletes in reverse dependency order: an object goes before every object

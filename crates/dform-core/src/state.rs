@@ -18,6 +18,17 @@ pub struct State {
     /// what `apply` needs to resume it (`executor`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub in_flight: Option<InFlight>,
+    /// Apply calls whose outcome dform may not know (`Uncertain`), by
+    /// address (`key`; a deposed object's delete by `deposed_key`): every
+    /// Create and Replace of a tick from before its first call, every other
+    /// call from its submission, until the call answers. The next run
+    /// resolves them before it plans (`executor::resolve_uncertain`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub uncertain: BTreeMap<String, Uncertain>,
+    /// How many idempotency keys this state has given out: the next one's
+    /// nonce (`new_idempotency_key`).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub keys: u64,
     /// The stack's outputs as of its last apply: what other stacks read as
     /// `stack_output(Stack, Key, Value)` (`stack`).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -37,6 +48,31 @@ pub struct State {
 pub struct InFlight {
     pub tick: usize,
     pub remaining: BTreeMap<String, Option<serde_json::Value>>,
+}
+
+/// An Apply call that may or may not have taken effect: in flight when dform
+/// stopped, or answered with "may have taken effect" (a timeout, a crash).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Uncertain {
+    pub op: UncertainOp,
+    /// The object the call acts on: an update's or a delete's, a replace's
+    /// old one; empty for a create.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub remote: String,
+    /// A create's or a replace's idempotency key: the retry sends the same
+    /// one, so a provider never makes the object twice.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub key: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum UncertainOp {
+    Create,
+    Replace { create_first: bool },
+    Update,
+    Delete,
+    DeleteDeposed,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -86,6 +122,42 @@ impl State {
                 && a.inputs.iter().zip(args).all(|(v, x)| raw(v) == *x)
         })?;
         Some(self.externs.remove(i))
+    }
+
+    /// A new idempotency key for `action` of `addr` in the deployment
+    /// `stack` (the stack and its key values): a digest of the stack, the
+    /// address, the action's own digest (its kind and its changes, a
+    /// sensitive one by path only) and a nonce, the count of keys given out
+    /// before. The nonce makes it one intended creation's: a later Create
+    /// of the same document at the same address (after a delete) is
+    /// another creation, and a provider that remembers a client token
+    /// longer than its object must not answer it with the first one.
+    pub fn new_idempotency_key(
+        &mut self,
+        stack: &str,
+        addr: &Address,
+        action: &crate::provider::Action,
+    ) -> String {
+        let changes: Vec<serde_json::Value> = action
+            .changes
+            .iter()
+            .map(|c| match c.sensitive {
+                true => serde_json::json!([c.path]),
+                false => serde_json::json!([c.path, c.after]),
+            })
+            .collect();
+        self.keys += 1;
+        let v = serde_json::json!({
+            "stack": stack,
+            "address": key(addr),
+            "action": crate::approval::digest_of(&serde_json::json!({
+                "kind": format!("{:?}", action.kind),
+                "changes": changes,
+            })),
+            "nonce": self.keys,
+        });
+        let hex = crate::approval::sha256_hex(crate::approval::canonical_json(&v).as_bytes());
+        format!("dform-{}", &hex[..32])
     }
 
     pub fn get(&self, addr: &Address) -> Option<&StateEntry> {
@@ -163,6 +235,12 @@ impl State {
 
 pub fn key(addr: &Address) -> String {
     format!("{}::{}", addr.typ, addr.name)
+}
+
+/// A deposed object's key in `State::uncertain`: its address may have a
+/// call of its own there too.
+pub fn deposed_key(addr: &Address) -> String {
+    format!("{}#deposed", key(addr))
 }
 
 pub fn parse_key(k: &str) -> Option<Address> {
@@ -266,4 +344,8 @@ pub fn adopt_map(adopts: &[Adopt]) -> BTreeMap<Address, String> {
         .iter()
         .map(|a| (a.addr.clone(), a.remote.clone()))
         .collect()
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
 }

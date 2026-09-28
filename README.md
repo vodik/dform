@@ -822,7 +822,7 @@ file keeps a `tick` counter; every `apply` is one tick.
 | SPEC | Effect |
 |------|--------|
 | `fail=T/N` | Apply of `T/N` fails before it reaches the world |
-| `timeout=T/N` | Apply of `T/N` takes effect, then times out: the world has it, state does not |
+| `timeout=T/N` | Apply of `T/N` takes effect, then times out: the world has it, state does not, until the next run finds it (see below) |
 | `crash=T/N` | the provider process dies (exit 137) as it is called to Apply `T/N`: the action fails, nothing after it runs, and the next `apply` resumes (the mock linked in, `dform-direct`, is gone from that call on instead) |
 | `stop-after=N` | dform itself stops, as if killed, once `N` Apply calls have returned (counted across the run's ticks), each persisted: nothing still in flight is waited for, the tick never ends, and the next `apply` resumes. The executor's knob, so it works with any provider |
 | `read-lag=T/N:K` | the first `K` Reads of `T/N` after it is created return nothing (eventual consistency) |
@@ -846,6 +846,22 @@ saved after every action, and state (the identity mapping) is written after
 every Apply call that returns, so a failed or killed apply leaves exactly what
 a real cloud would: a failure or a crash at action N leaves the N-1 identities
 before it in state.
+
+A call whose outcome dform does not know (it timed out, the provider
+crashed, or dform stopped with it in flight) is recorded as `uncertain` in
+state, and the next run resolves it before it plans, a `resolved: ...` line
+on stderr each. Every Create and Replace carries an idempotency key
+(`ApplyRequest.idempotency_key`, written to state before the tick's first
+call): the next run asks the provider for the object that key made (the
+`managed` capability's `provider.created` Query). Found, state maps it;
+not found, the Create is sent again with the same key, and the protocol
+says the same key twice never makes two objects. An uncertain delete is
+resolved by a Read; an uncertain update is planned again from what the
+refresh Reads. The mock records each key on its object and answers the
+lookup; the Kubernetes provider has no lookup, and puts the key on the
+object as the annotation `dform.io/idempotency-key` instead: a Create with
+the same key finds the object by name and answers with it (a generated
+name's suffix comes from the key, so the name is the same too).
 
 ## dform model (current)
 
@@ -1458,14 +1474,15 @@ provider's next call, that no Apply names an object dform does not manage
 or an address the plan file does not list, that a plan file is refused
 exactly when a fresh plan differs, that nothing dform made is missing from
 state, that no Create meets an object already there, and that the last
-apply ends undeformed or on a deny. CI runs 300 seeds; the nightly
+apply ends undeformed or on a deny. A Create or Replace that took effect
+unanswered is excused only as an object state does not know yet, until the
+next run resolves it (see "Chaos"). CI runs 300 seeds; the nightly
 workflow 10^4. A failure prints the seed and the schedule minimized, and
 replays with:
 
 ```bash
 DFORM_MODEL_SEED=N DFORM_MODEL_SCHEDULE='apply p=2 stop-after=1' cargo test --test model
 DFORM_MODEL_SEEDS=10000 cargo test --test model   # more seeds (DFORM_MODEL_START offsets them)
-DFORM_MODEL_STRICT=1 cargo test --test model      # a Create that took effect unanswered is not excused
 ```
 
 It must catch the executor persisting once per tick instead of after

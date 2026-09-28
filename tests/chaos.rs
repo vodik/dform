@@ -53,8 +53,12 @@ fn fail_stops_before_the_action_and_keeps_what_came_before() {
     );
 }
 
+/// A timed-out Create may have taken effect (DEADLINE_EXCEEDED): it is
+/// uncertain, and the next run asks the provider for what its idempotency
+/// key made before it plans. The object is found and state maps it: no
+/// orphan, and no Create again.
 #[test]
-fn timeout_takes_effect_but_leaves_an_orphan() {
+fn a_create_that_timed_out_is_found_not_created_again() {
     let s = stack("chaos-timeout");
     let r = dform(&s, &["apply", "--chaos", "timeout=net.subnet/a"]).failure();
     assert!(
@@ -64,14 +68,50 @@ fn timeout_takes_effect_but_leaves_an_orphan() {
     );
     assert!(world(&s)["resources"].get("net.subnet::a").is_some());
     assert!(state(&s)["resources"].get("net.subnet::a").is_none());
-    // dform does not know it exists: it plans a create, and the cloud refuses.
+    assert_eq!(state(&s)["uncertain"]["net.subnet::a"]["op"], "create");
+    // The plan asks first: the subnet is there, and nothing is to do.
     let r = dform(&s, &["plan"]).success();
-    assert!(r.stdout.contains("+ net.subnet.a"), "{}", r.stdout);
-    let r = dform(&s, &["apply"]).failure();
     assert!(
-        r.stderr.contains("net.subnet::a already exists"),
+        r.stderr
+            .contains("resolved: net.subnet/a: the create whose answer was lost made a"),
         "{}",
         r.stderr
+    );
+    assert_eq!(r.summary(), "stack p is undeformed", "{}", r.stdout);
+    let r = dform(&s, &["apply"]).success();
+    assert!(!r.stdout.contains("+ net.subnet.a"), "{}", r.stdout);
+    assert_eq!(state(&s)["resources"]["net.subnet::a"]["remote"], "a");
+    assert!(
+        state(&s).get("uncertain").is_none(),
+        "{}",
+        s.read("w.state.json")
+    );
+}
+
+/// Not found (the timed-out call never reached the world), the Create is
+/// sent again with the same idempotency key.
+#[test]
+fn a_create_that_was_not_found_is_retried_with_its_key() {
+    let s = stack("chaos-timeout-retry");
+    dform(&s, &["apply", "--chaos", "timeout=net.subnet/a"]).failure();
+    let key = state(&s)["uncertain"]["net.subnet::a"]["key"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    // The world lost it after all.
+    let mut w = world(&s);
+    w["resources"]
+        .as_object_mut()
+        .unwrap()
+        .remove("net.subnet::a");
+    std::fs::write(s.path("w.json"), w.to_string()).unwrap();
+    let r = dform(&s, &["apply"]).success();
+    assert!(r.stdout.contains("+ net.subnet.a"), "{}", r.stdout);
+    assert_eq!(world(&s)["resources"]["net.subnet::a"]["key"], key.as_str());
+    assert!(
+        state(&s).get("uncertain").is_none(),
+        "{}",
+        s.read("w.state.json")
     );
 }
 

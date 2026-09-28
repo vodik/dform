@@ -659,6 +659,11 @@ fn run_with(
     let discovered = backend.discover()?;
     let scope = catalog_scope(&cli.cmd, &program, &base_extra, &discovered, &st);
     backend.load_schema(scope.as_ref())?;
+    // Apply calls whose answer was lost, resolved before anything is
+    // planned: a plan sees what they did (`apply` writes it down).
+    for line in executor::resolve_uncertain(&backend, &mut st)? {
+        eprintln!("resolved: {line}");
+    }
     // The static secret pass and the refinement checks (a literal that
     // violates one, E0306), against the provider's schema.
     if let Some(l) = &lowered {
@@ -1470,6 +1475,13 @@ fn run_with(
                 }
                 let observed = backend.observe(&st)?;
                 executor::begin(&mut st, tick, &plan, &observed);
+                executor::mark_creates(
+                    &mut st,
+                    &deployment,
+                    plan.actions
+                        .iter()
+                        .filter(|a| waits_on(a, &sections).is_none()),
+                );
                 persist(&st)?;
                 let pending: BTreeSet<ir::Address> = plan
                     .actions
@@ -2244,6 +2256,7 @@ fn catalog_scope(
         st.resources
             .keys()
             .chain(st.deposed.keys())
+            .chain(st.uncertain.keys())
             .filter_map(|k| state::parse_key(k).map(|a| a.typ)),
     );
     Some(named)

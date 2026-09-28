@@ -19,7 +19,9 @@
 //! the background and waits (bounded) for the object to go.
 
 use crate::cluster::{Cluster, WriteError};
-use crate::object::{attrs, computed, manifest, parse_remote, remote};
+use crate::object::{
+    KEY_ANNOTATION, attrs, computed, idempotency_key, manifest, parse_remote, remote,
+};
 use crate::openapi::{self, Derived, Kind};
 use anyhow::{Result, anyhow, bail};
 use dform_core::plugin::wire;
@@ -231,7 +233,10 @@ impl K8s {
             .map_err(|e| Failed::Refused(format!("{e:#}")))?;
         let mut notes = Vec::new();
         let live = match op {
-            pb::Op::Create => self.create(c, kind, typ, &at, config).await?,
+            pb::Op::Create => {
+                self.create(c, kind, typ, &at, config, &req.idempotency_key)
+                    .await?
+            }
             pb::Op::Update | pb::Op::Adopt => {
                 let (ns, n) = parse_remote(kind, &req.remote, &c.namespace);
                 let obj = manifest(kind, config, ns, n).map_err(|e| refused(&at, e))?;
@@ -282,7 +287,8 @@ impl K8s {
                         )));
                     }
                 }
-                self.create(c, kind, typ, &at, config).await?
+                self.create(c, kind, typ, &at, config, &req.idempotency_key)
+                    .await?
             }
             _ => return Err(Failed::Refused(format!("{at}: no operation"))),
         };
@@ -302,7 +308,10 @@ impl K8s {
     }
 
     /// A new object: named by the document, or by its `generateName` and a
-    /// random suffix. An object of that name is not taken over.
+    /// random suffix. An object of that name is not taken over, unless the
+    /// Create that made it carried the same idempotency key `key` (its
+    /// `KEY_ANNOTATION`): then it is the answer. A generated name's first
+    /// suffix comes from the key, so a Create again finds it by name.
     async fn create(
         &self,
         c: &Cluster,
@@ -310,14 +319,16 @@ impl K8s {
         typ: &str,
         at: &str,
         config: &Json,
+        key: &str,
     ) -> std::result::Result<Json, Failed> {
         let ns = namespace(config, &c.namespace);
         let named = get_path(config, "metadata.name").and_then(Json::as_str);
         let generate = get_path(config, "metadata.generateName").and_then(Json::as_str);
         let mut name = None;
-        for _ in 0..5 {
+        for i in 0..5 {
             let n = match (named, generate) {
                 (Some(n), _) => n.to_string(),
+                (None, Some(g)) if i == 0 && !key.is_empty() => format!("{g}{}", keyed_suffix(key)),
                 (None, Some(g)) => format!("{g}{}", suffix()),
                 (None, None) => {
                     return Err(Failed::Refused(format!(
@@ -329,6 +340,9 @@ impl K8s {
                 None => {
                     name = Some(n);
                     break;
+                }
+                Some(live) if !key.is_empty() && idempotency_key(&live) == Some(key) => {
+                    return Ok(live);
                 }
                 Some(_) if named.is_some() => {
                     return Err(Failed::Refused(format!(
@@ -344,7 +358,15 @@ impl K8s {
                 "{at}: no free name from generateName after 5 tries"
             )));
         };
-        let obj = manifest(kind, config, &ns, &name).map_err(|e| refused(at, e))?;
+        let mut obj = manifest(kind, config, &ns, &name).map_err(|e| refused(at, e))?;
+        if !key.is_empty()
+            && let Some(meta) = obj.get_mut("metadata").and_then(Json::as_object_mut)
+        {
+            let annotations = meta.entry("annotations").or_insert_with(|| json!({}));
+            if let Json::Object(a) = annotations {
+                a.insert(KEY_ANNOTATION.into(), json!(key));
+            }
+        }
         self.write(c, kind, &ns, &name, &obj, at).await
     }
 
@@ -455,6 +477,22 @@ fn has_marker(v: &Json) -> bool {
 }
 
 /// Five characters as the API server picks them for `generateName`.
+/// A generated name's suffix from an idempotency key: the same key, the
+/// same name.
+fn keyed_suffix(key: &str) -> String {
+    const ALPHABET: &[u8] = b"bcdfghjklmnpqrstvwxz2456789";
+    let mut n = key.bytes().fold(0xcbf29ce484222325u64, |h, b| {
+        (h ^ u64::from(b)).wrapping_mul(0x100000001b3)
+    });
+    (0..5)
+        .map(|_| {
+            let c = ALPHABET[(n % ALPHABET.len() as u64) as usize] as char;
+            n /= ALPHABET.len() as u64;
+            c
+        })
+        .collect()
+}
+
 fn suffix() -> String {
     use std::hash::{BuildHasher, Hasher};
     const ALPHABET: &[u8] = b"bcdfghjklmnpqrstvwxz2456789";
@@ -715,6 +753,14 @@ mod tests {
             missing_required(&s.schema, typ, &json!({"metadata": {"name": "a"}})),
             None
         );
+    }
+
+    #[test]
+    fn a_keyed_suffix_is_the_same_for_the_same_key() {
+        let a = keyed_suffix("dform-0123");
+        assert_eq!(a, keyed_suffix("dform-0123"));
+        assert_ne!(a, keyed_suffix("dform-0124"));
+        assert_eq!(a.len(), 5);
     }
 
     #[test]
