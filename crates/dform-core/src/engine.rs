@@ -26,6 +26,8 @@ pub struct EvalResult {
     pub may_derive: Vec<stuck::MayDerive>,
     /// Provenance (E §3.1, DR-10): every fact above has a node here.
     pub circuit: Circuit,
+    /// The lowered rules, by the index in their circuit id (`r{i}`).
+    pub rules: std::sync::Arc<Vec<RuleStmt>>,
     /// Work done: index lookups plus tuples read (a deterministic cost
     /// for the scale benchmark).
     pub reads: u64,
@@ -46,7 +48,7 @@ pub fn circuit_fact(a: &Atom) -> circuit::Fact {
 }
 
 /// The aggregate marker Σ of the attribute aggregate (E §3.1).
-const ATTR_SIGMA: &str = "Σattr";
+pub const ATTR_SIGMA: &str = "Σattr";
 
 /// The fact store and its provenance: every tuple in the store has a node
 /// in the circuit, recorded when the tuple is inserted and once more per
@@ -242,7 +244,7 @@ impl Resumable {
 /// The program compiled for evaluation: rules and constraints, their
 /// operator IR, the strata, and the circuit's rule leaves.
 struct Compiled {
-    rules: Vec<RuleStmt>,
+    rules: std::sync::Arc<Vec<RuleStmt>>,
     constraints: Vec<Constraint>,
     externs: BTreeSet<crate::ast::Extern>,
     plans: Vec<ops::Rule>,
@@ -406,7 +408,7 @@ fn start(
     let stuck_at = strata.get(&Node::plain(partition::STUCK)).copied();
     Ok((
         Compiled {
-            rules,
+            rules: std::sync::Arc::new(rules),
             constraints,
             externs,
             plans,
@@ -681,6 +683,7 @@ fn finish(c: &Compiled, st: State) -> Result<(EvalResult, Vec<String>)> {
             stuck: stucks,
             may_derive,
             circuit: prov.circuit,
+            rules: c.rules.clone(),
             reads,
         },
         violations,

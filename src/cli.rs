@@ -1386,23 +1386,26 @@ fn run_with(
     }
     // Policy messages quote values and rule text: printed redacted.
     // The collision lint of a keyed stack: a name every deployment writes
-    // the same. A deny under strict mode.
-    if !stack_cfg.keys.is_empty()
+    // the same. Under strict mode a `deny` fact, which `query` and `why`
+    // see too.
+    let strict = stack_cfg.unknowns == crate::stack::Unknowns::Strict;
+    let collisions = if !stack_cfg.keys.is_empty()
         && !stack_cfg.isolated
-        && matches!(cli.cmd, Cmd::Plan { .. } | Cmd::Apply { .. })
-    {
-        let keys: Vec<String> = stack_cfg.keys.iter().map(|(k, _)| k.clone()).collect();
-        for c in crate::lint::key_collisions(
-            &res.facts,
-            &res.circuit,
-            backend.schema(),
-            &keys,
-            &deployment,
+        && matches!(
+            cli.cmd,
+            Cmd::Plan { .. } | Cmd::Apply { .. } | Cmd::Query { .. } | Cmd::Why { .. }
         ) {
-            match stack_cfg.unknowns {
-                crate::stack::Unknowns::Strict => violations.push(c),
-                crate::stack::Unknowns::Permissive => eprintln!("warning: {c}"),
-            }
+        let keys: Vec<String> = stack_cfg.keys.iter().map(|(k, _)| k.clone()).collect();
+        crate::lint::key_collisions(&res, backend.schema(), &keys, &deployment)
+    } else {
+        Vec::new()
+    };
+    if strict {
+        crate::lint::deny_collisions(&mut res, &collisions);
+        violations.extend(collisions.iter().map(|c| c.text.clone()));
+    } else if matches!(cli.cmd, Cmd::Plan { .. } | Cmd::Apply { .. }) {
+        for c in &collisions {
+            eprintln!("warning: {}", c.text);
         }
     }
     let redact = query::Redactor::new(&res.facts, backend.schema());
@@ -1674,12 +1677,18 @@ fn run_with(
             }
         }
         Cmd::Query { pattern, json } => {
-            let res = explained(res);
+            let mut res = explained(res);
+            if strict {
+                crate::lint::deny_collisions(&mut res, &collisions);
+            }
             let redact = query::Redactor::new(&res.facts, backend.schema());
             print_query(&pattern, &res.facts, &redact, json)?;
         }
         Cmd::Why { pattern, all } => {
-            let res = explained(res);
+            let mut res = explained(res);
+            if strict {
+                crate::lint::deny_collisions(&mut res, &collisions);
+            }
             let redact = query::Redactor::new(&res.facts, backend.schema());
             let query::Query::Body { body, .. } = query::parse(&pattern)? else {
                 bail!("why: expected a fact pattern such as 'want(net.vpc, N)', got '{pattern}'");
@@ -1720,7 +1729,7 @@ fn run_with(
                 unreachable!("rekey_args ran for rekey");
             };
             let keys: Vec<String> = stack_cfg.keys.iter().map(|(k, _)| k.clone()).collect();
-            let named = crate::lint::key_named(&res.facts, &res.circuit, backend.schema(), &keys);
+            let named = crate::lint::key_named(&res, backend.schema(), &keys);
             if named.is_empty() {
                 println!(
                     "no name-like attribute depends on the key ({})",

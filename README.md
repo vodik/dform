@@ -213,10 +213,13 @@ deployment has no state yet but whose unkeyed state exists says so.
 
 The collision lint: in a keyed stack, a resource whose name-like attribute
 (`name`, `metadata.name`, `bucket`, or a path a provider's schema flags
-`name_like`) has no provenance path from any key input gets the same name
-in every deployment, and they collide in a shared account: a warning at
-the field, a deny under `unknowns = "strict"`. A read that only gates the
-resource's block counts as a path. `stack app[env] { isolated = true }`
+`name_like`) has a value no key input flows into gets the same name in
+every deployment, and they collide in a shared account: a warning at the
+field, a deny under `unknowns = "strict"` (a `deny` fact, so `dform why
+'deny(M)'` explains it). The value flows through bindings, interpolation,
+calls, lookups (`settings[env].bucket`), module inputs and refs; a read
+that only gates the resource's block, or feeds another field, does not
+count, and neither does it for `rekey`'s list. `stack app[env] { isolated = true }`
 says each key value deploys into its own account (or world), and turns
 the lint off; `dform.df` says so, since its iam module's names are fixed.
 

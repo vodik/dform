@@ -5,14 +5,15 @@
 //! module does not declare as an input names the key (`modules`).
 //!
 //! And, over an evaluation, the collision lint of a keyed stack
-//! ([`key_collisions`]): a resource whose name-like attribute has no
-//! provenance path from any key input is named the same by every
+//! ([`key_collisions`]): a resource whose name-like attribute's value does
+//! not depend on any key input ([`from_key`]) is named the same by every
 //! deployment of the stack. `dform stack rekey` lists the other side
 //! ([`key_named`]): the resources whose names do depend on the key, and so
 //! change when it does.
 
-use crate::ast::{Atom, Lit, Program, Stmt, Term};
-use crate::circuit::{self, Circuit, View};
+use crate::ast::{Atom, Lit, Program, RuleStmt, Stmt, Term};
+use crate::circuit::{self, Circuit, Leaf, NodeId, View};
+use crate::engine::EvalResult;
 use crate::ir::Address;
 use crate::schema::Schema;
 use crate::transform;
@@ -101,37 +102,235 @@ pub fn name_like(facts: &BTreeSet<Atom>, schema: &Schema) -> Vec<Named> {
     out
 }
 
-/// Does `fact`'s provenance reach one of the stack's inputs `keys`
-/// (`attr("input", "", k, _)`)? Every derivation is followed, the reads
-/// that only gate a rule included.
-pub fn from_key(circuit: &Circuit, fact: &circuit::Fact, keys: &[String]) -> bool {
-    let is_key = |f: &circuit::Fact| {
+/// Does the value of the name-like attribute `n` depend on one of the
+/// stack's inputs `keys` (`attr("input", "", k, _)`)? Value dependence: a
+/// key input's value flows into the value term of a rule that derived it,
+/// through bindings, interpolation, calls, lookups or refs. A read that
+/// only gates a rule, or feeds another field, does not count.
+///
+/// Within a rule the flow is static: from the variables of the head's
+/// term, across `=` and every positive literal sharing one (a lookup's
+/// key selects its value). Between rules it follows the circuit: each such
+/// literal's matched fact, at the columns the flow reaches, and each ref's
+/// attribute.
+pub fn from_key(res: &EvalResult, n: &Named, keys: &[String]) -> bool {
+    let Some(start) = res.circuit.fact_id(&n.fact) else {
+        return false;
+    };
+    let below: Vec<String> = match n.fact.args.get(2) {
+        Some(Value::Str(p)) => n
+            .path
+            .strip_prefix(&format!("{p}."))
+            .map(|rest| rest.split('.').map(str::to_string).collect())
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    };
+    let mut flow = Flow {
+        res,
+        keys,
+        seen: BTreeSet::new(),
+    };
+    flow.fact(start, &BTreeSet::from([3]), &below)
+}
+
+struct Flow<'a> {
+    res: &'a EvalResult,
+    keys: &'a [String],
+    seen: BTreeSet<(NodeId, BTreeSet<usize>)>,
+}
+
+impl Flow<'_> {
+    fn is_key(&self, f: &circuit::Fact) -> bool {
         f.pred == "attr"
             && matches!(f.args.as_slice(),
                 [Value::Str(t), Value::Str(scope), Value::Str(k), _]
-                    if t == crate::modules::INPUT && scope.is_empty() && keys.contains(k))
-    };
-    let Some(start) = circuit.fact_id(fact) else {
-        return false;
-    };
-    let mut seen = BTreeSet::new();
-    let mut todo = vec![start];
-    while let Some(id) = todo.pop() {
-        if !seen.insert(id) {
-            continue;
+                    if t == crate::modules::INPUT && scope.is_empty() && self.keys.contains(k))
+    }
+
+    /// Do columns `cols` of the fact at `id` depend on a key? `below`: the
+    /// path inside the value column the question is about.
+    fn fact(&mut self, id: NodeId, cols: &BTreeSet<usize>, below: &[String]) -> bool {
+        if !self.seen.insert((id, cols.clone())) {
+            return false;
         }
-        match circuit.view(id) {
-            View::Fact { fact, alts, .. } => {
-                if is_key(fact) {
+        let View::Fact { fact, alts, .. } = self.res.circuit.view(id) else {
+            return false;
+        };
+        if self.is_key(fact) && cols.contains(&3) {
+            return true;
+        }
+        // A ref's value is its attribute's.
+        let mut refs = Vec::new();
+        for &c in cols {
+            if let Some(v) = fact.args.get(c) {
+                refs_in(v, &mut refs);
+            }
+        }
+        for (t, a, p) in refs {
+            let top = p.split('.').next().unwrap_or(&p);
+            let target = self.res.facts.iter().find(|f| {
+                f.pred == "attr"
+                    && matches!(f.args.as_slice(),
+                        [Term::Val(Value::Str(ft)), Term::Val(Value::Str(fa)), Term::Val(Value::Str(fp)), _]
+                            if *ft == t && *fa == a && fp == top)
+            });
+            if let Some(id) =
+                target.and_then(|f| self.res.circuit.fact_id(&crate::engine::circuit_fact(f)))
+                && self.fact(id, &BTreeSet::from([3]), &[])
+            {
+                return true;
+            }
+        }
+        alts.iter().any(|&alt| self.firing(alt, cols, below))
+    }
+
+    fn firing(&mut self, alt: NodeId, cols: &BTreeSet<usize>, below: &[String]) -> bool {
+        let View::Times { children, bindings } = self.res.circuit.view(alt) else {
+            return false;
+        };
+        let rule = children
+            .iter()
+            .find_map(|&c| match self.res.circuit.view(c) {
+                View::Leaf(Leaf::Rule { id }) => Some(id.clone()),
+                _ => None,
+            });
+        let Some(rule) = rule else {
+            // A fact the program states, or one given: no key flows in.
+            return false;
+        };
+        let facts: Vec<NodeId> = children
+            .iter()
+            .copied()
+            .filter(|&c| matches!(self.res.circuit.view(c), View::Fact { .. }))
+            .collect();
+        if rule == crate::engine::ATTR_SIGMA {
+            // attr(T, A, P, V) over its contributions arg(T, A, P, V, R).
+            return facts.iter().any(|&f| self.fact(f, cols, below));
+        }
+        let Some(r) = rule
+            .strip_prefix('r')
+            .and_then(|i| i.parse::<usize>().ok())
+            .and_then(|i| self.res.rules.get(i))
+        else {
+            // Another aggregate: every contribution, every column.
+            return facts.iter().any(|&f| self.fact(f, cols, &[]));
+        };
+        let terms: Vec<&Term> = cols
+            .iter()
+            .filter_map(|&c| r.head.args.get(c))
+            .map(|t| narrow(t, below))
+            .collect();
+        let sources = flows_into(r, &terms);
+        let bound = |t: &Term| match t {
+            Term::Val(v) => Some(v.clone()),
+            Term::Var(x) => bindings
+                .iter()
+                .find(|(k, _)| k == x)
+                .map(|(_, v)| v.clone()),
+            _ => None,
+        };
+        for (a, cols) in sources {
+            let want: Vec<Option<Value>> = a.args.iter().map(bound).collect();
+            for &f in &facts {
+                let View::Fact { fact, .. } = self.res.circuit.view(f) else {
+                    continue;
+                };
+                let matches = fact.pred == a.pred
+                    && fact.args.len() == want.len()
+                    && fact
+                        .args
+                        .iter()
+                        .zip(&want)
+                        .all(|(v, w)| w.as_ref().is_none_or(|w| w == v));
+                if matches && self.fact(f, &cols, &[]) {
                     return true;
                 }
-                todo.extend_from_slice(alts);
             }
-            View::Times { children, .. } => todo.extend_from_slice(children),
-            View::Leaf(_) | View::Dead => {}
+        }
+        false
+    }
+}
+
+/// The part of `t` at `path`, as far as `t` spells it out.
+fn narrow<'t>(t: &'t Term, path: &[String]) -> &'t Term {
+    match (t, path.split_first()) {
+        (Term::Obj(m), Some((k, rest))) => m.get(k).map_or(t, |v| narrow(v, rest)),
+        _ => t,
+    }
+}
+
+/// A positive body literal, and the columns of it a flow reaches.
+type Source<'r> = (&'r Atom, BTreeSet<usize>);
+
+/// What flows into `terms` in rule `r`: the positive body literals, each
+/// with the columns the flow reaches.
+fn flows_into<'r>(r: &'r RuleStmt, terms: &[&'r Term]) -> Vec<Source<'r>> {
+    let mut vars = BTreeSet::new();
+    for t in terms {
+        term_vars(t, &mut vars);
+    }
+    loop {
+        let before = vars.len();
+        for l in &r.body {
+            let mut here = BTreeSet::new();
+            match l {
+                Lit::Eq(a, b) => {
+                    term_vars(a, &mut here);
+                    term_vars(b, &mut here);
+                }
+                Lit::Pos(a) => a.args.iter().for_each(|t| term_vars(t, &mut here)),
+                _ => continue,
+            }
+            if !here.is_disjoint(&vars) {
+                vars.extend(here);
+            }
+        }
+        if vars.len() == before {
+            break;
         }
     }
-    false
+    r.body
+        .iter()
+        .filter_map(|l| match l {
+            Lit::Pos(a) => Some(a),
+            _ => None,
+        })
+        .filter_map(|a| {
+            let cols: BTreeSet<usize> = a
+                .args
+                .iter()
+                .enumerate()
+                .filter(|(_, t)| {
+                    let mut here = BTreeSet::new();
+                    term_vars(t, &mut here);
+                    !here.is_disjoint(&vars)
+                })
+                .map(|(i, _)| i)
+                .collect();
+            (!cols.is_empty()).then_some((a, cols))
+        })
+        .collect()
+}
+
+fn term_vars<'t>(t: &'t Term, out: &mut BTreeSet<&'t str>) {
+    match t {
+        Term::Var(v) => {
+            out.insert(v);
+        }
+        Term::Func { args, .. } | Term::List(args) => args.iter().for_each(|a| term_vars(a, out)),
+        Term::Obj(m) => m.values().for_each(|a| term_vars(a, out)),
+        Term::Val(_) | Term::Wildcard | Term::ListComp { .. } => {}
+    }
+}
+
+/// The `(type, address, path)` of every ref in `v`.
+fn refs_in(v: &Value, out: &mut Vec<(String, String, String)>) {
+    match v {
+        Value::Ref { typ, name, attr } => out.push((typ.clone(), name.clone(), attr.clone())),
+        Value::List(xs) => xs.iter().for_each(|x| refs_in(x, out)),
+        Value::Obj(m) => m.values().for_each(|x| refs_in(x, out)),
+        _ => {}
+    }
 }
 
 /// Where the value of an `attr` fact is written: the place of the rule or
@@ -165,24 +364,31 @@ fn owner(circuit: &Circuit, fact: &circuit::Fact) -> Option<String> {
     None
 }
 
-/// The collision lint of a keyed stack: one message per name-like
-/// attribute with no provenance path from any key input, at the place it
+/// One finding of the collision lint: its message, and the `attr` fact it
+/// is about.
+#[derive(Debug, Clone)]
+pub struct Collision {
+    pub text: String,
+    pub fact: circuit::Fact,
+}
+
+/// The collision lint of a keyed stack: one finding per name-like
+/// attribute whose value does not depend on any key input, at the place it
 /// is written. `stack` is the deployment's name.
 pub fn key_collisions(
-    facts: &BTreeSet<Atom>,
-    circuit: &Circuit,
+    res: &EvalResult,
     schema: &Schema,
     keys: &[String],
     stack: &str,
-) -> Vec<String> {
-    name_like(facts, schema)
+) -> Vec<Collision> {
+    name_like(&res.facts, schema)
         .into_iter()
-        .filter(|n| !from_key(circuit, &n.fact, keys))
+        .filter(|n| !from_key(res, n, keys))
         .map(|n| {
-            let at = owner(circuit, &n.fact)
+            let at = owner(&res.circuit, &n.fact)
                 .map(|at| format!("{at}: "))
                 .unwrap_or_default();
-            format!(
+            let text = format!(
                 "{at}{} does not depend on the stack's key ({}): every deployment of \
                  {stack} gives it this name, and they collide; derive it from the key \
                  (\"...{{{}}}\"), or say `isolated = true` on the stack when each key value \
@@ -190,22 +396,51 @@ pub fn key_collisions(
                 n.text(),
                 keys.join(", "),
                 keys[0],
-            )
+            );
+            Collision { text, fact: n.fact }
         })
         .collect()
 }
 
+/// The rule id of a collision's deny in the circuit.
+const COLLISION_RULE: &str = "lint:collision";
+
+/// Under strict mode each collision is a `deny(Message)` fact, derived in
+/// the circuit from the attribute it names, so `why` and `query` see it.
+pub fn deny_collisions(res: &mut EvalResult, collisions: &[Collision]) {
+    if collisions.is_empty() {
+        return;
+    }
+    res.circuit.name_rule(
+        COLLISION_RULE,
+        "deny(Message) :- attr(T, A, P, V), P names the object, V does not depend on the \
+         stack's key (the collision lint of a keyed stack)",
+    );
+    let rule = res.circuit.leaf(Leaf::Rule {
+        id: COLLISION_RULE.to_string(),
+    });
+    for c in collisions {
+        let Some(attr) = res.circuit.fact_id(&c.fact) else {
+            continue;
+        };
+        let deny = Atom {
+            pred: "deny".to_string(),
+            args: vec![Term::Val(Value::Str(c.text.clone()))],
+            record: None,
+            span: Default::default(),
+        };
+        res.circuit
+            .derive(crate::engine::circuit_fact(&deny), vec![rule, attr]);
+        res.facts.insert(deny);
+    }
+}
+
 /// The name-like attributes that depend on a key input: what a new key
 /// value renames, usually a replace. One line per attribute.
-pub fn key_named(
-    facts: &BTreeSet<Atom>,
-    circuit: &Circuit,
-    schema: &Schema,
-    keys: &[String],
-) -> Vec<String> {
-    name_like(facts, schema)
+pub fn key_named(res: &EvalResult, schema: &Schema, keys: &[String]) -> Vec<String> {
+    name_like(&res.facts, schema)
         .into_iter()
-        .filter(|n| from_key(circuit, &n.fact, keys))
+        .filter(|n| from_key(res, n, keys))
         .map(|n| n.text())
         .collect()
 }

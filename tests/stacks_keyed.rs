@@ -339,6 +339,89 @@ fn a_fixed_bucket_name_is_denied_under_strict() {
     assert!(r.stderr.contains("blocked by constraints"), "{}", r.stderr);
 }
 
+/// A block that reads the key only to gate itself, or for another field,
+/// still writes the same bucket in every deployment: the lint follows what
+/// flows into the value, not what the rule reads. A ref to a name that
+/// depends on the key does too.
+const GATED: &str = r#"edition 2026
+input env: string = "staging"
+stack app[env] {}
+resource net.vpc logs {
+  if env != "dev"
+  bucket = "company-logs"
+  tags = { env: env }
+}
+resource net.vpc main {
+  name = "main-{env}"
+}
+resource net.vpc peer {
+  name = net.vpc.main.name
+}
+"#;
+
+#[test]
+fn a_fixed_bucket_in_a_block_that_reads_the_key_is_a_warning() {
+    let s = Scratch::project("keyed-lint-gated");
+    s.write("app.df", GATED);
+    let r = s.run(&["plan", "app.df"]).success();
+    assert!(
+        r.stderr.contains(
+            "warning: app.df:6:3: net.vpc.logs bucket = \"company-logs\" does not depend on \
+             the stack's key (env)"
+        ),
+        "{}",
+        r.stderr
+    );
+    assert!(!r.stderr.contains("net.vpc.main"), "{}", r.stderr);
+    // A ref's value is its attribute's.
+    assert!(!r.stderr.contains("net.vpc.peer"), "{}", r.stderr);
+    // Rekey lists what the key renames: main's name, not the bucket.
+    s.run(&["apply", "app.df", "env=staging"]).success();
+    let r = s
+        .run(&["stack", "rekey", "app", "env=staging", "env=stg"])
+        .success();
+    assert!(
+        r.stdout
+            .contains("  net.vpc.main name = \"main-staging\"\n"),
+        "{}",
+        r.stdout
+    );
+    assert!(!r.stdout.contains("net.vpc.logs"), "{}", r.stdout);
+}
+
+/// Under strict mode the collision is a `deny` fact: `why` explains it
+/// from the attribute it names.
+#[test]
+fn the_strict_collision_deny_is_a_fact_why_explains() {
+    let s = Scratch::project("keyed-lint-why");
+    s.write(
+        "app.df",
+        &GATED.replace(
+            "stack app[env] {}",
+            "stack app[env] { unknowns = \"strict\" }",
+        ),
+    );
+    let r = s.run(&["plan", "app.df"]).failure();
+    assert!(
+        r.stderr
+            .contains("constraint violations:\n- app.df:6:3: net.vpc.logs bucket"),
+        "{}",
+        r.stderr
+    );
+    let r = s.run(&["why", "deny(M)", "app.df"]).success();
+    assert!(
+        r.stdout.contains("deny(\"app.df:6:3: net.vpc.logs bucket"),
+        "{}",
+        r.stdout
+    );
+    assert!(
+        r.stdout
+            .contains("attr(\"net.vpc\", \"logs\", \"bucket\", \"company-logs\")"),
+        "{}",
+        r.stdout
+    );
+}
+
 /// One controller per deployment: the target names the key value.
 #[test]
 fn the_controller_runs_one_deployment() {
