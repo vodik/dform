@@ -2338,4 +2338,24 @@ mod tests {
         assert_eq!(facts_of(&r, "n").len(), 301);
         assert_eq!(facts_of(&r, "deepest"), vec!["deepest(300)".to_string()]);
     }
+
+    /// Dotted paths under one attribute meet in nested maps: two fields of
+    /// `spec.template` do not conflict on `template`.
+    #[test]
+    fn nested_dotted_paths_merge_recursively() {
+        let (r, violations) = run("resource k8s.deployment web {
+               spec.replicas = 3,
+               spec.template.metadata.labels = {app: web},
+               spec.template.spec.containers = [{name: web}]
+             }.")
+        .unwrap();
+        assert!(violations.is_empty(), "{violations:?}");
+        assert_eq!(
+            facts_of(&r, "attr"),
+            vec![
+                "attr(\"k8s.deployment\", \"web\", \"spec\", {replicas: 3, template: {metadata: {labels: {app: \"web\"}}, spec: {containers: [{name: \"web\"}]}}})"
+                    .to_string()
+            ]
+        );
+    }
 }

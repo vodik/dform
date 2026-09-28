@@ -1638,7 +1638,8 @@ fn max_rank(contribs: &[RankedContribution]) -> Rank {
 /// shadow-aware rule. Flat, Set and Keyed cells are ranked shelves (see
 /// `Ranked`). A Map is ranked at its leaves: each key is its own cell under
 /// the element lattice, so a `@default` tag and a normal tag on another key
-/// both survive. A Map path with a contribution that is not an object is
+/// both survive; a key whose every contribution is an object is itself a
+/// Map, so nested objects merge recursively. A Map path with a contribution that is not an object is
 /// assembled as one Flat value (which conflicts, or is stuck, on the
 /// non-object).
 pub fn lub_ranked(lat: &Lattice, path: &str, contribs: &[RankedContribution]) -> Collapsed2 {
@@ -1677,7 +1678,16 @@ fn lub_ranked_map(elem: &Lattice, path: &str, contribs: &[RankedContribution]) -
     let mut shadowed = Vec::new();
     let mut stuck: Option<(Rank, BTreeSet<String>)> = None;
     for (k, cs) in per_key {
-        match lub_ranked(elem, &format!("{path}.{k}"), &cs) {
+        // Nested objects merge per key too: a dotted path `a.b.c` is the
+        // contribution `{b: {c: V}}` to `a`, so two dotted paths under one
+        // attribute meet here and must not conflict on `b`.
+        let nested = Lattice::Map(Box::new(elem.clone()));
+        let lat = if cs.iter().all(|(_, _, v)| matches!(v, Value::Obj(_))) {
+            &nested
+        } else {
+            elem
+        };
+        match lub_ranked(lat, &format!("{path}.{k}"), &cs) {
             Collapsed2::Bottom => {}
             Collapsed2::Val {
                 value,

@@ -109,7 +109,8 @@ How a path merges is its lattice:
 
 - a scalar or a list is one value (Flat): two sources with different values
   are a conflict;
-- an object is a map, merged per key: `tags = { env: dev }` in a resource and
+- an object is a map, merged per key (nested objects too, so the dotted
+  paths `spec.replicas` and `spec.template.spec.containers` both land in `spec`): `tags = { env: dev }` in a resource and
   `arg(T, N, tags, { team: platform })` in a policy pack give both tags;
   two sources disagreeing on one key are a conflict;
 - a list declared a set is the union of every source at the highest rank
