@@ -228,6 +228,20 @@ fn fields_of(v: &Json) -> Json {
     }
 }
 
+/// A `fieldsV1` set as the document shape `drop_owned` walks: each
+/// `f:NAME` key as `f:f:NAME`, so dropping it from another set's document
+/// drops the field.
+fn fields_set(set: &Json) -> Json {
+    match set {
+        Json::Object(m) => Json::Object(
+            m.iter()
+                .map(|(k, x)| (format!("f:{k}"), fields_set(x)))
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
 /// Leaf paths (lists whole) of an object, as `.a.b`.
 fn leaves(v: &Json, at: &str, out: &mut Vec<(String, Json)>) {
     match v {
@@ -327,7 +341,7 @@ impl Api {
                 parts.next().unwrap_or("").to_string(),
                 parts.next().unwrap_or("").to_string(),
             );
-            let mut len = 0;
+            let (mut len, mut merge) = (0, false);
             loop {
                 let mut h = String::new();
                 if r.read_line(&mut h).unwrap_or(0) == 0 {
@@ -342,6 +356,8 @@ impl Api {
                         len = v.trim().parse().unwrap_or(0);
                     } else if k.eq_ignore_ascii_case("authorization") {
                         self.auth.lock().unwrap().push(v.trim().to_string());
+                    } else if k.eq_ignore_ascii_case("content-type") {
+                        merge = v.trim() == "application/merge-patch+json";
                     }
                 }
             }
@@ -353,7 +369,10 @@ impl Api {
                 .lock()
                 .unwrap()
                 .push(format!("{method} {target}"));
-            let (code, out) = self.route(&method, &target, &body);
+            let (code, out) = match merge {
+                true => self.merge_patch(&target, &body),
+                false => self.route(&method, &target, &body),
+            };
             if method == "PATCH" && !target.contains("dryRun=") {
                 let mut lose = self.lose_answers.lock().unwrap();
                 if *lose > 0 {
@@ -574,6 +593,31 @@ impl Api {
             }
             _ => status(405, "MethodNotAllowed", method, json!([])),
         }
+    }
+
+    /// A JSON merge patch by another field manager, as `kubectl patch`
+    /// sends one (an Update): the fields it sets become its own, taken
+    /// from whoever owned them.
+    fn merge_patch(&self, target: &str, body: &[u8]) -> (u16, Json) {
+        let (path, query) = target.split_once('?').unwrap_or((target, ""));
+        let manager = query
+            .split('&')
+            .find_map(|kv| kv.strip_prefix("fieldManager="))
+            .unwrap_or("kubectl-patch")
+            .to_string();
+        let patch: Json = serde_json::from_slice(body).unwrap();
+        let mut objects = self.objects.lock().unwrap();
+        let Some(obj) = objects.get_mut(path) else {
+            return status(404, "NotFound", "not found", json!([]));
+        };
+        merge(obj, &patch);
+        let fields = fields_of(&patch);
+        let entries = obj["metadata"]["managedFields"].as_array_mut().unwrap();
+        for e in entries.iter_mut() {
+            drop_owned(&mut e["fieldsV1"], &fields_set(&fields));
+        }
+        entries.push(json!({"manager": manager, "operation": "Update", "fieldsV1": fields}));
+        (200, obj.clone())
     }
 
     fn get(&self, path: &str) -> Option<Json> {
@@ -1324,5 +1368,56 @@ fn a_world_read_is_answered_from_the_live_object() {
         api.count("GET /apis/apps/v1/deployments?", &[]),
         0,
         "a kind the program does not read is not listed"
+    );
+}
+
+/// Drift: `kubectl patch` (a merge patch, another field manager) changes a
+/// field dform applied. The field is that manager's now, so the next plan
+/// puts dform's value back; the apply, never forced, then fails naming the
+/// manager and the field.
+#[test]
+fn drift_from_a_kubectl_patch_is_planned_back() {
+    let s = Scratch::project("k8s-drift");
+    real_demo(&s);
+    let (api, url) = Api::start();
+    let kc = kubeconfig(&s, &url);
+    let run = |args: &[&str]| dform(&s, Some(&kc), &common::on("k8s_demo.df", &[], args));
+    run(&["apply"]).success();
+    // What `kubectl patch deployment web -p '{"spec":{"replicas":5}}'` sends.
+    let body = serde_json::to_vec(&json!({"spec": {"replicas": 5}})).unwrap();
+    let head = format!(
+        "PATCH /apis/apps/v1/namespaces/shop/deployments/web?fieldManager=kubectl-patch HTTP/1.1\r\n\
+         Host: x\r\nContent-Type: application/merge-patch+json\r\nContent-Length: {}\r\n\r\n",
+        body.len()
+    );
+    let mut conn = TcpStream::connect(url.trim_start_matches("http://")).unwrap();
+    conn.write_all(head.as_bytes()).unwrap();
+    conn.write_all(&body).unwrap();
+    let mut status_line = String::new();
+    BufReader::new(conn).read_line(&mut status_line).unwrap();
+    assert!(status_line.contains(" 200 "), "{status_line}");
+    assert_eq!(
+        managers_of(
+            &api.get("/apis/apps/v1/namespaces/shop/deployments/web")
+                .unwrap(),
+            ".spec.replicas"
+        ),
+        ["kubectl-patch"]
+    );
+
+    let r = run(&["plan"]).success();
+    assert!(
+        r.stdout.contains("~ k8s.deployment.web")
+            && r.stdout.contains("spec.replicas: <none> -> 3"),
+        "{}",
+        r.stdout
+    );
+    let r = run(&["apply"]).failure();
+    assert!(
+        r.stderr
+            .contains(".spec.replicas is owned by field manager \"kubectl-patch\""),
+        "{}\n{}",
+        r.stdout,
+        r.stderr
     );
 }

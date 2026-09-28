@@ -452,8 +452,7 @@ provider k8s { source = "bin/dform-provider-k8s" }        # an executable
   a float field of a custom resource that a program sets reaches the server
   as a string.
 - A Secret's `stringData` reads back from `data` (base64-decoded, the keys
-  dform applied); this is tested against the fake API server only, not yet
-  against a real one.
+  dform applied).
 - Remote ids are `NAMESPACE/NAME` (`NAME` for a cluster-scoped kind); Read
   and Import GET the object. Writes are server-side apply as the field
   manager `dform`, never forced: a field another manager owns fails the
@@ -496,7 +495,12 @@ DFORM_K8S_OFFLINE=1 cargo run -- plan my.df                    # no cluster: the
 server (conformance, a whole apply, a field-manager conflict).
 `tests/k8s_cluster.rs` runs against a real one in a namespace
 `dform-test-<random>` it deletes afterwards, only when
-`DFORM_K8S_TEST_KUBECONFIG` names its kubeconfig.
+`DFORM_K8S_TEST_KUBECONFIG` names its kubeconfig (a kind cluster:
+`kind create cluster --name dform-test --kubeconfig target/kind.kubeconfig`;
+with rootless podman, `KIND_EXPERIMENTAL_PROVIDER=podman`): the demo
+converging, an update, a delete, a field-manager conflict, drift from a
+`kubectl patch`, a Create whose answer was lost, a Secret's `stringData`,
+a kubeconfig held as a secret, and a world read of a live object.
 
 ## Computed values come from Apply
 
