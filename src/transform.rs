@@ -98,10 +98,12 @@ fn attr_read(a: Atom) -> Result<Atom> {
     let Some((typ, addr, path, value)) = contribution_parts(&a) else {
         return Ok(a);
     };
-    if let (Term::Val(Value::Str(t)), Term::Val(Value::Str(p))) = (&typ, &path) {
-        if t != SETTINGS && t != OUTPUT && p.contains('.') {
-            bail!("{}(..., {p:?}, ...) in a rule body: read the top-level attribute and destructure it", a.pred);
-        }
+    if let (Term::Val(Value::Str(t)), Term::Val(Value::Str(p))) = (&typ, &path)
+        && t != SETTINGS
+        && t != OUTPUT
+        && p.contains('.')
+    {
+        bail!("{}(..., {p:?}, ...) in a rule body: read the top-level attribute and destructure it", a.pred);
     }
     Ok(Atom { pred: "attr".into(), args: vec![typ, addr, path, value], record: None })
 }
@@ -180,7 +182,7 @@ fn apply_decls(program: &Program) -> Result<Program> {
         if matches!(s, Stmt::Decl(_)) {
             continue;
         }
-        out.push(rewrite_stmt_records(s.clone(), &schemas, Ctx::Body)?);
+        out.push(rewrite_stmt_records(s.clone(), &schemas)?);
     }
     Ok(Program { statements: out })
 }
@@ -192,7 +194,7 @@ enum Ctx {
     Body,
 }
 
-fn rewrite_stmt_records(stmt: Stmt, schemas: &BTreeMap<String, Vec<String>>, ctx: Ctx) -> Result<Stmt> {
+fn rewrite_stmt_records(stmt: Stmt, schemas: &BTreeMap<String, Vec<String>>) -> Result<Stmt> {
     Ok(match stmt {
         Stmt::Fact(a) => Stmt::Fact(rewrite_atom_records(a, schemas, Ctx::Fact)?),
         Stmt::Rule(r) => {
@@ -211,7 +213,7 @@ fn rewrite_stmt_records(stmt: Stmt, schemas: &BTreeMap<String, Vec<String>>, ctx
             let guard = rewrite_lit_records(w.guard, schemas)?;
             let mut body = Vec::new();
             for s in w.body {
-                body.push(rewrite_stmt_records(s, schemas, ctx)?);
+                body.push(rewrite_stmt_records(s, schemas)?);
             }
             Stmt::When(When { guard, body })
         }
@@ -219,7 +221,7 @@ fn rewrite_stmt_records(stmt: Stmt, schemas: &BTreeMap<String, Vec<String>>, ctx
             c.body = c
                 .body
                 .into_iter()
-                .map(|s| rewrite_stmt_records(s, schemas, ctx))
+                .map(|s| rewrite_stmt_records(s, schemas))
                 .collect::<Result<Vec<_>>>()?;
             Stmt::Component(c)
         }
@@ -227,7 +229,7 @@ fn rewrite_stmt_records(stmt: Stmt, schemas: &BTreeMap<String, Vec<String>>, ctx
             c.body = c
                 .body
                 .into_iter()
-                .map(|s| rewrite_stmt_records(s, schemas, ctx))
+                .map(|s| rewrite_stmt_records(s, schemas))
                 .collect::<Result<Vec<_>>>()?;
             Stmt::ComponentDef(c)
         }
@@ -241,7 +243,7 @@ fn rewrite_stmt_records(stmt: Stmt, schemas: &BTreeMap<String, Vec<String>>, ctx
             p.body = p
                 .body
                 .into_iter()
-                .map(|s| rewrite_stmt_records(s, schemas, ctx))
+                .map(|s| rewrite_stmt_records(s, schemas))
                 .collect::<Result<Vec<_>>>()?;
             Stmt::PolicyPack(p)
         }

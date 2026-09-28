@@ -179,6 +179,9 @@ impl Elem {
     }
 }
 
+/// A contribution list: each value with the witnesses that contributed it.
+type Contributions = Vec<(Value, Witnesses)>;
+
 /// Merge contributions that are definitely equal; sort for canonical order.
 fn dedup_equal(mut items: Vec<(Value, Witnesses)>) -> Vec<(Value, Witnesses)> {
     let mut merged: Vec<(Value, Witnesses)> = Vec::new();
@@ -296,7 +299,7 @@ fn keyed_normalize(keys: &[String], elem: &Lattice, path: &str, items: Vec<(Valu
     }
     let items = dedup_equal(items);
     let mut ws = Witnesses::new();
-    let mut groups: Vec<(Vec<Value>, Vec<(Value, Witnesses)>)> = Vec::new();
+    let mut groups: Vec<(Vec<Value>, Contributions)> = Vec::new();
     for (v, w) in &items {
         ws = union(&ws, w);
         let Value::List(xs) = v else {
@@ -615,7 +618,7 @@ mod tests {
             }
             go(k - 1, a, out);
             for i in 0..k - 1 {
-                if k % 2 == 0 { a.swap(i, k - 1) } else { a.swap(0, k - 1) }
+                if k.is_multiple_of(2) { a.swap(i, k - 1) } else { a.swap(0, k - 1) }
                 go(k - 1, a, out);
             }
         }

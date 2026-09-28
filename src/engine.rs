@@ -494,13 +494,15 @@ fn eval_rule(rule: &RuleStmt, facts: &[Atom]) -> Result<Vec<Atom>> {
     for b in bindings {
         // Rule 2 (E §2.7): an address argument is a content position. A head
         // whose address carries a null is stuck, not derived.
-        if crate::sim::active() && matches!(rule.head.pred.as_str(), "want" | "arg" | "adopt") && rule.head.args.len() >= 2 {
-            if let Some(v) = eval_term(&rule.head.args[1], &b) {
-                let nulls = crate::lattice::nulls_in(&v);
-                if !nulls.is_empty() {
-                    crate::sim::record_stuck(&b, nulls, "resource address carries a null");
-                    continue;
-                }
+        if crate::sim::active()
+            && matches!(rule.head.pred.as_str(), "want" | "arg" | "adopt")
+            && rule.head.args.len() >= 2
+            && let Some(v) = eval_term(&rule.head.args[1], &b)
+        {
+            let nulls = crate::lattice::nulls_in(&v);
+            if !nulls.is_empty() {
+                crate::sim::record_stuck(&b, nulls, "resource address carries a null");
+                continue;
             }
         }
         let head = instantiate_atom(&rule.head, &b)
@@ -706,10 +708,10 @@ fn eval_body(body: &[Lit], facts: &[Atom]) -> Result<Vec<HashMap<String, Value>>
                             // are decided under UNA (by label).
                             let mut open = BTreeSet::new();
                             for t in &grounded.args {
-                                if let Term::Val(v) = t {
-                                    if crate::sim::has_open_or_secret(v) {
-                                        open.extend(crate::lattice::nulls_in(v));
-                                    }
+                                if let Term::Val(v) = t
+                                    && crate::sim::has_open_or_secret(v)
+                                {
+                                    open.extend(crate::lattice::nulls_in(v));
                                 }
                             }
                             if !open.is_empty() {
@@ -855,7 +857,7 @@ fn eval_not_member2(atom: &Atom, state: &HashMap<String, Value>) -> Result<bool>
         }
         return Ok(true);
     }
-    Ok(!items.iter().any(|x| *x == item_v))
+    Ok(!items.contains(&item_v))
 }
 
 fn eval_not_member3(atom: &Atom, state: &HashMap<String, Value>) -> Result<bool> {
@@ -1805,7 +1807,7 @@ mod tests {
     /// DR-1 acceptance: shuffling statement order yields identical attr/4.
     #[test]
     fn statement_order_does_not_change_attr() {
-        fn shuffle(stmts: &mut Vec<Stmt>, seed: &mut u64) {
+        fn shuffle(stmts: &mut [Stmt], seed: &mut u64) {
             for i in (1..stmts.len()).rev() {
                 *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
                 stmts.swap(i, (*seed >> 33) as usize % (i + 1));

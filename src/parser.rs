@@ -274,12 +274,9 @@ fn parse_guard(pair: Pair<Rule>) -> Result<Lit> {
 fn parse_body(pairs: Pairs<Rule>) -> Result<Vec<Lit>> {
     let mut out = Vec::new();
     for pair in pairs {
-        match pair.as_rule() {
-            Rule::lit => {
-                let inner = pair.into_inner().next().unwrap();
-                out.push(parse_lit(inner)?);
-            }
-            _ => {}
+        if pair.as_rule() == Rule::lit {
+            let inner = pair.into_inner().next().unwrap();
+            out.push(parse_lit(inner)?);
         }
     }
     Ok(out)

@@ -326,6 +326,69 @@ pub fn build_lowered(rules: Vec<RuleStmt>, fact_atoms: &[Atom], schema: &Schema,
     Graph { nodes, edges, rules }
 }
 
+/// Tarjan's strongly connected components: `comp[v]` is v's component.
+struct Tarjan<'a> {
+    adj: &'a [Vec<usize>],
+    index: usize,
+    st: Vec<usize>,
+    on: Vec<bool>,
+    ix: Vec<Option<usize>>,
+    low: Vec<usize>,
+    comp: Vec<usize>,
+    ncomp: usize,
+}
+
+impl Tarjan<'_> {
+    fn sccs(adj: &[Vec<usize>]) -> Vec<usize> {
+        let n = adj.len();
+        let mut t = Tarjan {
+            adj,
+            index: 0,
+            st: vec![],
+            on: vec![false; n],
+            ix: vec![None; n],
+            low: vec![0; n],
+            comp: vec![usize::MAX; n],
+            ncomp: 0,
+        };
+        for v in 0..n {
+            if t.ix[v].is_none() {
+                t.dfs(v);
+            }
+        }
+        t.comp
+    }
+
+    fn dfs(&mut self, v: usize) {
+        self.ix[v] = Some(self.index);
+        self.low[v] = self.index;
+        self.index += 1;
+        self.st.push(v);
+        self.on[v] = true;
+        for &w in &self.adj[v] {
+            match self.ix[w] {
+                None => {
+                    self.dfs(w);
+                    self.low[v] = self.low[v].min(self.low[w]);
+                }
+                Some(iw) if self.on[w] => self.low[v] = self.low[v].min(iw),
+                Some(_) => {}
+            }
+        }
+        if Some(self.low[v]) == self.ix[v] {
+            loop {
+                let w = self.st.pop().unwrap();
+                self.on[w] = false;
+                self.comp[w] = self.ncomp;
+                if w == v {
+                    break;
+                }
+            }
+            self.ncomp += 1;
+        }
+    }
+}
+
 /// Tarjan SCC over the node graph; a negative edge inside an SCC is a
 /// negative cycle.
 pub fn stratify(g: &Graph) -> Verdict {
@@ -336,55 +399,7 @@ pub fn stratify(g: &Graph) -> Verdict {
         let (Some(&a), Some(&b)) = (idx.get(&e.from), idx.get(&e.to)) else { continue };
         adj[a].push(b);
     }
-    // Tarjan.
-    let mut index = 0usize;
-    let mut st: Vec<usize> = vec![];
-    let mut on: Vec<bool> = vec![false; n];
-    let mut ix: Vec<Option<usize>> = vec![None; n];
-    let mut low: Vec<usize> = vec![0; n];
-    let mut comp: Vec<usize> = vec![usize::MAX; n];
-    let mut ncomp = 0usize;
-    fn dfs(
-        v: usize,
-        adj: &Vec<Vec<usize>>,
-        index: &mut usize,
-        st: &mut Vec<usize>,
-        on: &mut Vec<bool>,
-        ix: &mut Vec<Option<usize>>,
-        low: &mut Vec<usize>,
-        comp: &mut Vec<usize>,
-        ncomp: &mut usize,
-    ) {
-        ix[v] = Some(*index);
-        low[v] = *index;
-        *index += 1;
-        st.push(v);
-        on[v] = true;
-        for &w in &adj[v] {
-            if ix[w].is_none() {
-                dfs(w, adj, index, st, on, ix, low, comp, ncomp);
-                low[v] = low[v].min(low[w]);
-            } else if on[w] {
-                low[v] = low[v].min(ix[w].unwrap());
-            }
-        }
-        if low[v] == ix[v].unwrap() {
-            loop {
-                let w = st.pop().unwrap();
-                on[w] = false;
-                comp[w] = *ncomp;
-                if w == v {
-                    break;
-                }
-            }
-            *ncomp += 1;
-        }
-    }
-    for v in 0..n {
-        if ix[v].is_none() {
-            dfs(v, &adj, &mut index, &mut st, &mut on, &mut ix, &mut low, &mut comp, &mut ncomp);
-        }
-    }
+    let comp = Tarjan::sccs(&adj);
     let node_vec: Vec<&Node> = g.nodes.iter().collect();
     for e in &g.edges {
         if !e.negative {

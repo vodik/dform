@@ -112,7 +112,7 @@ fn collect_deps(v: &Value, out: &mut BTreeSet<Address>) {
             }
         }
         Value::Obj(m) => {
-            for (_, x) in m {
+            for x in m.values() {
                 collect_deps(x, out);
             }
         }
