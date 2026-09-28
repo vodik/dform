@@ -3617,9 +3617,22 @@ mod tests {
         );
     }
 
+    /// `eval`, with the tables the program reads (`crate::tables`):
+    /// dform.df's settings are its stack config's. Any other extern has no
+    /// answer, as under `eval`.
+    fn eval_tables(program: &Program, extra: &[Atom]) -> Result<(EvalResult, Vec<String>)> {
+        let lowered = crate::transform::lower(program)?;
+        let tables = crate::tables::Tables::default();
+        let externs =
+            crate::externs::Externs::new(&lowered.program, &lowered.extern_fns, |f, ins| {
+                tables.answer(f, ins).unwrap_or(Ok(Vec::new()))
+            });
+        externs.eval(program, extra)
+    }
+
     /// dform.df's settings are a `@default` layer plus per-environment
-    /// blocks (E §7.1). Every environment compiles to exactly the resources
-    /// the three copied blocks it replaced did.
+    /// config (E §7.1; `config/{env}.yaml`). Every environment compiles to
+    /// exactly the resources the three copied blocks it replaced did.
     #[test]
     fn dform_df_default_layer_matches_the_copied_blocks() {
         let root = std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
@@ -3630,26 +3643,27 @@ mod tests {
             .unwrap();
         let copied = "type_lattice(\"settings\", \"audit.sinks\", \"set\")
             settings prod {
-              network.main.vpc_net = inet(\"10.20.0.0/16\")
-              network.peer.vpc_net = inet(\"10.21.0.0/16\")
+              network.main.vpc_net = \"10.20.0.0/16\"
+              network.peer.vpc_net = \"10.21.0.0/16\"
               db = { backup_days: 14, multi_az: true }
               k8s = { private_api: true, nodepool: { min: 3, max: 10 } }
               audit.sinks += [\"cloudwatch\"]
             }
             settings staging {
-              network.main.vpc_net = inet(\"10.50.0.0/16\")
-              network.peer.vpc_net = inet(\"10.60.0.0/16\")
+              network.main.vpc_net = \"10.50.0.0/16\"
+              network.peer.vpc_net = \"10.60.0.0/16\"
               db = { backup_days: 3, multi_az: false }
               k8s = { private_api: false, nodepool: { min: 1, max: 3 } }
             }
             settings dev {
-              network.main.vpc_net = inet(\"10.90.0.0/16\")
+              network.main.vpc_net = \"10.90.0.0/16\"
             }
             ";
         let dir = std::env::temp_dir().join(format!("dform-settings-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let old = dir.join("dform.df");
         let old_src = format!("{}{}{}", &src[..start], copied, &src[end..])
+            .replace(", config = yaml(\"config/{env}.yaml\")", "")
             .replace("import \"", &format!("import \"{}/", root.display()));
         std::fs::write(&old, old_src).unwrap();
         let resources = |path: &std::path::Path, env: Option<&str>| {
@@ -3658,7 +3672,7 @@ mod tests {
                 .map(|e| input("env", Value::Str(e.into())))
                 .into_iter()
                 .collect();
-            let (r, violations) = eval(&program, &extra).unwrap();
+            let (r, violations) = eval_tables(&program, &extra).unwrap();
             let docs: Vec<String> = crate::ir::compile_resources(
                 r.facts.iter().cloned(),
                 &crate::schema::Schema::default(),
@@ -4050,7 +4064,7 @@ mod tests {
         let program = crate::loader::load_program(&[repo_file(rel)]).unwrap();
         let mut extra = extra.to_vec();
         extra.extend(schema.facts.clone());
-        let (r, violations) = eval(&program, &extra).unwrap();
+        let (r, violations) = eval_tables(&program, &extra).unwrap();
         let docs = crate::ir::compile_resources(r.facts.iter().cloned(), schema)
             .unwrap()
             .into_iter()
