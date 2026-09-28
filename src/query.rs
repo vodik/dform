@@ -148,7 +148,7 @@ impl Table {
     }
 
     /// A JSON array of objects keyed by variable, secrets as
-    /// `{"$secret": label}`.
+    /// `{"sensitive": label}`, nulls as `{"null": label, "class": c}`.
     pub fn json(&self, r: &Redactor) -> serde_json::Value {
         serde_json::Value::Array(
             self.rows
@@ -300,14 +300,16 @@ impl Redactor {
 
     pub fn json(&self, v: &Value) -> serde_json::Value {
         if let Some(l) = self.secret(v) {
-            return crate::provider::secret_json(&l);
+            return serde_json::json!({ "sensitive": l });
         }
         match v {
             Value::List(xs) => serde_json::Value::Array(xs.iter().map(|x| self.json(x)).collect()),
             Value::Obj(m) => serde_json::Value::Object(
                 m.iter().map(|(k, x)| (k.clone(), self.json(x))).collect(),
             ),
-            Value::Null { label, .. } => crate::provider::null_json(label),
+            Value::Null { label, class, .. } => {
+                serde_json::json!({"null": label, "class": class.name()})
+            }
             v => engine::value_to_json(v),
         }
     }
