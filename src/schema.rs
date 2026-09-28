@@ -387,6 +387,131 @@ impl Schema {
         self.facts.extend(other.facts);
         Ok(self)
     }
+
+    /// The facts to inject into a run whose program and given facts name
+    /// the types `named` ([`named_types`]): every `type_provider` and
+    /// `type_alias` row, and the rows of the named types and of the types
+    /// they alias. A type nothing names derives no `want`, so its rows (and
+    /// the computed prelude expanded from them) change nothing but a read
+    /// of the schema itself.
+    pub fn facts_for(&self, named: &BTreeSet<String>) -> Vec<Atom> {
+        let mut keep = named.clone();
+        loop {
+            let before = keep.len();
+            for f in self.facts.iter().filter(|f| f.pred == "type_alias") {
+                if let [Term::Val(Value::Str(a)), Term::Val(Value::Str(t))] = f.args.as_slice()
+                    && keep.contains(a)
+                {
+                    keep.insert(t.clone());
+                }
+            }
+            if keep.len() == before {
+                break;
+            }
+        }
+        self.facts
+            .iter()
+            .filter(|f| {
+                !PER_TYPE.contains(&f.pred.as_str())
+                    || matches!(f.args.first(), Some(Term::Val(Value::Str(t))) if keep.contains(t))
+            })
+            .cloned()
+            .collect()
+    }
+}
+
+/// Schema predicates with a row per type (the type in the first column).
+const PER_TYPE: [&str; 5] = [
+    "type_attr",
+    "type_list_key",
+    "type_retry",
+    "type_replace",
+    "type_mint",
+];
+
+/// Whether `pred` is a schema predicate: a read of it sees the whole schema.
+pub fn is_schema_pred(pred: &str) -> bool {
+    PER_TYPE.contains(&pred) || matches!(pred, "type_provider" | "type_alias")
+}
+
+/// The types a lowered program and the facts given to it name: every
+/// symbol they hold, and the type of every ref. `None` when a rule reads a
+/// per-type schema predicate for a type it does not spell out
+/// (`type_attr(T, ...)`): such a program sees the whole schema.
+pub fn named_types(program: &crate::ast::Program, facts: &[Atom]) -> Option<BTreeSet<String>> {
+    use crate::ast::Lit;
+    fn value(v: &Value, out: &mut BTreeSet<String>) {
+        match v {
+            Value::Str(s) => {
+                out.insert(s.clone());
+            }
+            Value::Ref { typ, .. } | Value::CloudRef { typ, .. } => {
+                out.insert(typ.clone());
+            }
+            Value::List(xs) => xs.iter().for_each(|x| value(x, out)),
+            Value::Obj(m) => m.values().for_each(|x| value(x, out)),
+            _ => {}
+        }
+    }
+    fn term(t: &Term, out: &mut BTreeSet<String>) -> Option<()> {
+        match t {
+            Term::Val(v) => value(v, out),
+            Term::Func { args, .. } | Term::List(args) => {
+                args.iter().try_for_each(|a| term(a, out))?
+            }
+            Term::Obj(m) => m.values().try_for_each(|a| term(a, out))?,
+            Term::ListComp { item, body } => {
+                term(item, out)?;
+                body.iter().try_for_each(|l| lit(l, out))?
+            }
+            Term::Var(_) | Term::Wildcard => {}
+        }
+        Some(())
+    }
+    fn atom(a: &Atom, out: &mut BTreeSet<String>) -> Option<()> {
+        a.args.iter().try_for_each(|t| term(t, out))?;
+        a.record
+            .iter()
+            .flat_map(|r| r.values())
+            .try_for_each(|t| term(t, out))
+    }
+    fn lit(l: &Lit, out: &mut BTreeSet<String>) -> Option<()> {
+        match l {
+            Lit::Pos(a) | Lit::Not(a) => {
+                if PER_TYPE.contains(&a.pred.as_str())
+                    && !matches!(a.args.first(), Some(Term::Val(_)))
+                {
+                    return None;
+                }
+                atom(a, out)
+            }
+            Lit::Eq(x, y)
+            | Lit::Neq(x, y)
+            | Lit::Gt(x, y)
+            | Lit::Ge(x, y)
+            | Lit::Lt(x, y)
+            | Lit::Le(x, y) => {
+                term(x, out)?;
+                term(y, out)
+            }
+        }
+    }
+    let mut out = BTreeSet::new();
+    for s in &program.statements {
+        match s {
+            Stmt::Fact(a) => atom(a, &mut out)?,
+            Stmt::Rule(r) => {
+                atom(&r.head, &mut out)?;
+                r.body.iter().try_for_each(|l| lit(l, &mut out))?
+            }
+            Stmt::Constraint(c) => c.body.iter().try_for_each(|l| lit(l, &mut out))?,
+            _ => {}
+        }
+    }
+    for f in facts {
+        atom(f, &mut out)?;
+    }
+    Some(out)
 }
 
 fn ground(t: &Term) -> Result<Value> {

@@ -110,6 +110,48 @@ fn the_demo_plans_the_same_against_the_real_provider_offline() {
     );
 }
 
+/// The derived schema is 16k facts; a run injects those of the types the
+/// program names (and their aliases' targets), while a query of the schema,
+/// or a rule reading the schema of a type it does not name, sees all of it.
+#[test]
+fn a_run_injects_the_schema_of_the_types_it_names() {
+    let s = Scratch::new("k8s-schema-scope");
+    real_demo(&s);
+    let count = |r: &Run| -> usize {
+        let last = r.stdout.lines().last().unwrap_or_default();
+        last.rsplit(' ').next().unwrap().parse().expect(&r.stdout)
+    };
+    let r = dform(&s, None, &["--file", "k8s_demo.df", "eval"]).success();
+    let facts: usize = r.stdout.lines().next().unwrap()["facts: ".len()..]
+        .parse()
+        .unwrap();
+    assert!(
+        facts < 5_000,
+        "{facts} facts: the whole schema was injected"
+    );
+    let all = count(&dform(&s, None, &["--file", "k8s_demo.df", "query", "type_attr"]).success());
+    assert!(all > 15_000, "query type_attr lists {all}");
+    let r = dform(
+        &s,
+        None,
+        &[
+            "--file",
+            "k8s_demo.df",
+            "query",
+            "type_attr(k8s.batch.v1.job, P, T, F)",
+        ],
+    )
+    .success();
+    assert!(r.stdout.contains("spec.completions"), "{}", r.stdout);
+    let src = s.read("k8s_demo.df");
+    s.write(
+        "reads.df",
+        &format!("{src}\ncompletes(T) :- type_attr(T, \"spec.completions\", _, _).\n"),
+    );
+    let r = dform(&s, None, &["--file", "reads.df", "query", "completes"]).success();
+    assert!(r.stdout.contains("k8s.batch.v1.job"), "{}", r.stdout);
+}
+
 /// Offline, Plan validates against the derived schema: a required field
 /// is named with the resource, and a Secret's data is never printed.
 #[test]

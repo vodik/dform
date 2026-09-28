@@ -471,8 +471,12 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
     let mut base_extra = inputs::set_facts(&declared, &set)?;
     base_extra.extend(build_extra_facts(&cli.data)?);
     base_extra.extend(dform::stack::stack_outputs(&root, &stack)?);
-    base_extra.extend(backend.catalog()?);
-    base_extra.extend(backend.discover()?);
+    let discovered = backend.discover()?;
+    base_extra.extend(
+        backend
+            .catalog(catalog_scope(&cli.cmd, &program, &base_extra, &discovered, &st).as_ref())?,
+    );
+    base_extra.extend(discovered);
     if let Some(h) = hook.as_deref_mut() {
         base_extra.extend(h.drift_facts(&backend.observe(&st)?));
     }
@@ -1209,7 +1213,7 @@ fn run_tests(
             inputs::check_required(&lowered.inputs, &given)?;
             let mut extra = inputs::set_facts(&lowered.inputs, &pairs)?;
             extra.extend(build_extra_facts(data)?);
-            extra.extend(backend.catalog()?);
+            extra.extend(backend.catalog(schema::named_types(&lowered.program, &extra).as_ref())?);
             let externs =
                 dform::externs::Externs::new(&lowered.program, &lowered.extern_fns, |f, ins| {
                     if let Some(r) = dform::externs::file(f, ins, &program_dir) {
@@ -1337,6 +1341,41 @@ fn format_strata(name: &str, g: &partition::Graph, v: &partition::Verdict) -> St
         }
         partition::Verdict::Rejected { .. } => partition::report(name, g, v),
     }
+}
+
+/// The types whose schema facts a run injects (`Providers::catalog`):
+/// those the program, the facts given to it and state name; `None` (all of
+/// them) for a `query` or `why` of a schema predicate, or a program that
+/// reads the schema of a type it does not name.
+fn catalog_scope(
+    cmd: &Cmd,
+    program: &dform::ast::Program,
+    given: &[Atom],
+    discovered: &[Atom],
+    st: &state::State,
+) -> Option<BTreeSet<String>> {
+    if let Cmd::Query { pattern, .. } | Cmd::Why { pattern, .. } = cmd {
+        let reads_schema = match query::parse(pattern).ok()? {
+            query::Query::Pred(p) => schema::is_schema_pred(&p),
+            query::Query::Body { body, .. } => body.iter().any(|l| {
+                matches!(l, dform::ast::Lit::Pos(a) | dform::ast::Lit::Not(a)
+                    if schema::is_schema_pred(&a.pred))
+            }),
+        };
+        if reads_schema {
+            return None;
+        }
+    }
+    let lowered = dform::transform::lower(program).ok()?;
+    let facts: Vec<Atom> = given.iter().chain(discovered).cloned().collect();
+    let mut named = schema::named_types(&lowered.program, &facts)?;
+    named.extend(
+        st.resources
+            .keys()
+            .chain(st.deposed.keys())
+            .filter_map(|k| state::parse_key(k).map(|a| a.typ)),
+    );
+    Some(named)
 }
 
 /// E §2.7's sections for this evaluation: what waits on a boundary.

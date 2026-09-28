@@ -189,9 +189,13 @@ impl Providers {
     }
 
     /// The providers' schema facts (`type_attr`, `type_list_key`,
-    /// `type_provider`, `type_mint`, ...), injected into the program as EDB.
-    pub fn catalog(&self) -> Result<Vec<Atom>> {
-        Ok(self.schema.facts.clone())
+    /// `type_provider`, `type_mint`, ...), injected into the program as EDB:
+    /// those of the `named` types ([`Schema::facts_for`]), or all of them.
+    pub fn catalog(&self, named: Option<&BTreeSet<String>>) -> Result<Vec<Atom>> {
+        Ok(match named {
+            Some(named) => self.schema.facts_for(named),
+            None => self.schema.facts.clone(),
+        })
     }
 
     /// What the providers said during the last apply.

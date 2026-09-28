@@ -156,7 +156,11 @@ path (or one under it) is planned as a replace, `-/+` (see "Deletes and
 replacement" below). The fake schema's vpc and subnet `cidr` are `force_new`.
 
 The facts are injected into the program, so rules can read them and
-`cargo run -- query type_attr` lists the schema.
+`cargo run -- query type_attr` lists the schema. A run injects the rows of
+the types its program, its inputs and state name (and the types they
+alias), plus every `type_provider`: a derived Kubernetes schema is 16k
+facts. A `query` or `why` of a schema predicate, or a rule reading one for
+a type it does not spell out (`type_attr(T, ...)`), sees all of it.
 
 ## The Kubernetes provider
 
