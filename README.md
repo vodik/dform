@@ -33,6 +33,8 @@ stack demo.main {
                                    # directory holding .dform/; default .dform/<name>
   unknowns = "strict"              # or "permissive" (the default); see "Strict mode"
   role = "bootstrap"               # optional: it stays batch; see "Bootstrap and handover"
+  approvals = jwks("https://...")  # optional: who may approve a plan; see "Approvals"
+  audit_sink = "logger -t dform"   # optional: each audit entry to a command; see "The audit log"
 }
 ```
 
@@ -555,8 +557,10 @@ refreshed world, and the deformation delta: each deformation's action,
 before and after values (redacted as the plan prints them; a sensitive one
 as `{"sensitive": label, "digest": HMAC}`), the nulls it
 waits on and the tick it runs in; the pending groups; the nulls round 0
-resolved and the ones the delta still carries; the tick schedule; and the
-extern answers the plan read. `apply PLAN.json` takes its inputs from the
+resolved and the ones the delta still carries; the tick schedule; the
+extern answers the plan read; the commit each `git` input relation's ref
+named; and the plan's digest, with what needs an approval (see
+"Approvals"). `apply PLAN.json` takes its inputs from the
 file (flags given on the command line must match them), refreshes and re-evaluates at
 every tick, and refuses unless the delta it computes is the file's:
 Terraform's stale-plan rule, stated for Z-sets. Every deformation must be in
@@ -620,6 +624,136 @@ The value of an input or output declared `secret(T)` prints as its label,
 `show`. The plan file records a secret input's `--set` as its label and
 digest, so `apply PLAN` asks for `--set pw=...` again and refuses another
 value.
+
+## Approvals
+
+Policy decides what needs an approval. `requires_approval(D, Reason)` is an
+ordinary relation a program derives over `deformation/4` in the policy
+pass; `D` is the address as the plan prints it (`T.A`). No rows, no token
+needed:
+
+```dform
+stack app[env] { approvals = jwks_file("approvers.jwks.json") }
+
+requires_approval(d, "a replace in prod") if {
+  env == "prod"
+  deformation("replace", t, a, _)
+  d = "{t}.{a}"
+}
+
+# Optional: who may approve what. Without it, any key of the trust root may.
+approver_allowed(who, d) if requires_approval(d, _), who in ["alice", "bob"]
+```
+
+A plan with rows prints a `needs approval:` section, each deformation and
+its reason, and the plan's digest, `plan digest: sha256:...` (a plan that
+writes a file says its digest on stderr, `plan file: PLAN (plan digest:
+sha256:...)`); `plan --json` has them as
+`needs_approval` and `digest`. The digest is sha256 over the canonical JSON
+(sorted keys, no whitespace) of the plan file without its `digest` field:
+the delta, the inputs, the commit each `git` input relation's ref named
+(`git_commits`; `apply PLAN` refuses when one moved) and the extern
+answers, with every secret already the stack's HMAC of it. The plan file
+records it (`digest`) and the rows (`needs_approval`).
+
+A token is a signed statement: the approver, the plan digest, the stack and
+its key, and an expiry. Two shapes are accepted, nothing vendor-specific:
+
+- a JWT (RS256, ES256 or EdDSA) with the claims `digest`, `stack`, `key`
+  (`{"env": "prod"}`; `{}` for an unkeyed stack), `sub` (the approver) and
+  `exp`;
+- a DSSE envelope, `payloadType` `application/vnd.dform.approval+json`,
+  whose payload is `{stack, key, digest, approver, expires}` (`expires` RFC
+  3339, UTC), signed with Ed25519; the envelope may also be given in base64.
+
+The trust root is a stack property: `approvals = jwks("https://...")`, a
+JWKS document fetched at apply time (with `curl`) only when the copy cached
+beside the state is older than an hour (a failed fetch falls back to a stale
+copy, with a warning), or `jwks_file("path")` (relative to the program) for
+offline use; a list of them is fine. A second argument, `jwks(URL, ISSUER)`,
+is the `iss` a JWT from it must name. A key is found by the token's `kid`
+(the envelope's `keyid`); a DSSE signature needs an Ed25519 (`OKP`) key.
+
+`apply PLAN --approval FILE` verifies the token offline before any Apply
+call: the signature against the trust root, the digest against the plan
+file's (recomputed from its content: a file edited after the plan is
+refused), the stack and its key against the deployment, the expiry, and,
+when the program states `approver_allowed`, that it holds for the approver
+and every deformation that needs the approval. A missing or invalid token is
+a refusal naming what failed. The stale-plan check then guarantees that what
+is applied is what was approved. A plain `apply` of a plan that needs an
+approval is refused (plan with `--out`, have the digest approved, apply the
+file). Provider credentials stay the environment's: a provider inherits
+dform's environment, and dform mints and exchanges no tokens.
+
+In controller mode a deformation that needs an approval is held (`tick N:
+proceed: held, needs approval (Reason): T.A`) and the plan's digest is
+published: a log line, `tick N: approval needed: plan digest sha256:...`,
+and `approval-pending.json` beside the state. A token for that digest
+releases it when it arrives through the input relation `approval/1` (the
+token's text; `input relation approval/1 from file("approvals.facts")`) or
+as a file in the drop directory `approvals/` beside the state (`event
+approval`); `tick N: approved by WHO: plan digest ...`. A token for another
+plan is ignored, one that fails otherwise is logged (`approval refused:
+...`). `examples/bootstrap/workload.df` holds a prod rollout this way.
+
+The approval service is not dform's. `dform-approve` (built with dform,
+`crates/dform-direct`) is the example signer, a local Ed25519 key:
+
+```bash
+A="cargo run -q -p dform-direct --bin dform-approve --"
+$A keygen approver.key > approvers.jwks.json      # the trust root: jwks_file("approvers.jwks.json")
+cargo run -- --file approvals.df plan --set env=prod --set cidr=10.1.0.0/16 --out plan.json
+$A sign approver.key --digest sha256:... --stack approvals.demo --key env=prod \
+  --approver alice --ttl 3600 > approval.json      # --format jwt; --format fact for approval/1
+cargo run -- apply plan.json --approval approval.json
+```
+
+`examples/approvals/approvals.df` is that program.
+
+## The audit log
+
+Every deployment has an append-only audit log beside its state,
+`state.audit.jsonl` (`<stem>.state.audit.jsonl` beside a `--world` file),
+which moves with the state on a rekey or a handover. Each entry is a line
+of canonical JSON: `seq`, `time` (UTC), `kind`, `prev` (the previous entry's
+`hash`), the kind's fields, and `hash`, sha256 over the entry without it.
+The kinds:
+
+- `plan`: the digest, the plan file (if any), the inputs, the pinned git
+  commits, the rows that need an approval, and who (`plan --out`, and every
+  apply of the plan it applies);
+- `approval`: the verified statement and the token, or `not required`, or
+  why it was refused;
+- `apply_start`: who, dform's version, the providers and the protocol
+  version;
+- `action`: the kind, the address, the result (and the error), the remote
+  id, and a digest of the redacted diff;
+- `tick`: the world as the executor saw it, as an HMAC with the stack's key;
+- `apply_end`: `ok` or `failed` and the error;
+- `controller`: each event, holds for approval and the run's result; and
+  `rekey` and `handover`.
+
+Who is `DFORM_ACTOR` when the environment sets it (say a CI job's OIDC
+subject), else `user@host`. Secrets never appear: a diff is a digest of its
+redacted form, where a sensitive leaf is already the stack's HMAC of it.
+Nothing in plan or apply reads the log as truth (E DR-16).
+
+```bash
+cargo run -- log                        # SEQ TIME KIND field=value ...
+cargo run -- log --since 2026-09-28     # or --since SEQ; --json for one JSON array
+cargo run -- log verify                 # the chain holds, or the first broken link
+```
+
+`log verify` checks that every entry's hash is its content's, that its
+`prev` is the entry before's hash and that `seq` counts from 1, and fails
+naming the first entry that breaks the chain: an edited entry by its own
+hash, a removed or reordered one by the next entry's `prev`.
+
+`--audit-sink CMD` (or the stack's `audit_sink = "CMD"`) also pipes each
+entry, a JSON line, to `sh -c CMD`, once per entry: a SIEM forwarder, say.
+A sink that fails is a warning, never a failed apply; the local log is
+authoritative.
 
 ## Asking the fact store
 
@@ -1092,9 +1226,9 @@ Before, After)` (one per leaf, list elements by index; `Path` "" and `After`
 controller gates every tick on the policy pass:
 
 - `hold(T, A, Reason)` holds `T.A`'s deformation: `tick N: proceed: held,
-  Reason: T.A`. A prod-style hold names what releases it, over an input
-  relation: `hold(k8s.deployment, a, "needs approval") if env == "prod",
-  deformation(_, k8s.deployment, a, _), release(i), not release_approved(i)`.
+  Reason: T.A`, for as long as the policy derives it.
+- `requires_approval(D, Reason)` holds a deformation until a signed
+  approval of the plan's digest arrives (see "Approvals").
 - Drift of `T.A` is corrected when every drifted path is
   `auto_reconcile(T, A, Path)` or `approve(T, A)` holds, or the event is an
   input change. Otherwise the deformation is held (`drift at PATH needs
@@ -1111,7 +1245,7 @@ event, so a long-running controller does not grow per event.
 
 The rest of the plan still applies. `examples/bootstrap/workload.df` is the
 demo: replicas are `auto_reconcile`, any other drift waits for `approve`,
-and in prod a release waits for `release_approved`.
+and in prod a rollout waits for an approval of its plan (`approval/1`).
 
 ## Bootstrap and handover
 

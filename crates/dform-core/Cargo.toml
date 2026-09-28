@@ -21,4 +21,9 @@ prost = "0.13"
 # `regex(S)` refinements (src/refine.rs).
 regex = "1"
 sha2 = "0.10"
+# Approvals (src/approval.rs): DSSE envelopes signed with ed25519, and JWTs
+# (RS256, ES256, EdDSA) verified against a JWKS; pure Rust crypto.
+base64 = "0.22"
+ed25519-dalek = "2"
+jsonwebtoken = { version = "11", default-features = false, features = ["rust_crypto"] }
 dform-wire = { path = "../dform-wire" }

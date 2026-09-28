@@ -91,6 +91,12 @@ struct Cli {
     /// exists, else .dform/inventory.json.
     #[arg(long = "inventory", global = true)]
     inventory: Option<PathBuf>,
+
+    /// Also pipe every audit log entry, a JSON line, to this command
+    /// (`sh -c CMD`, once per entry). Overrides the stack's `audit_sink`.
+    /// A sink that fails is a warning; the local log is authoritative.
+    #[arg(long = "audit-sink", global = true)]
+    audit_sink: Option<String>,
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -131,6 +137,12 @@ enum Cmd {
         /// independent actions overlap.
         #[arg(long = "parallel", default_value_t = 1, value_parser = clap::value_parser!(u64).range(1..))]
         parallel: u64,
+        /// A signed approval of the plan file's digest (a JWT, or a DSSE
+        /// envelope): verified against the stack's `approvals` trust root
+        /// before any Apply call. Required when the policy says
+        /// `requires_approval` of a deformation.
+        #[arg(long = "approval", requires = "plan_file")]
+        approval: Option<PathBuf>,
     },
     /// Query the final fact store: a predicate name (every fact of it) or
     /// body literals with variables, printed as a table with one column per
@@ -198,6 +210,20 @@ enum Cmd {
         pred: String,
         args: Vec<String>,
     },
+    /// The deployment's audit log (`state.audit.jsonl` beside its state),
+    /// one line per entry; `log verify` checks its hash chain and names the
+    /// first broken link.
+    Log {
+        #[command(subcommand)]
+        cmd: Option<LogCmd>,
+        /// Entries from this one on: a sequence number, or a time (RFC
+        /// 3339, or a prefix of one: `2026-09-28`).
+        #[arg(long)]
+        since: Option<String>,
+        /// Print the entries as one JSON array.
+        #[arg(long)]
+        json: bool,
+    },
     /// Stack operations.
     Stack {
         #[command(subcommand)]
@@ -234,6 +260,13 @@ enum StackCmd {
         #[arg(value_name = "K=V", required = true)]
         pairs: Vec<String>,
     },
+}
+
+#[derive(Subcommand, Debug, Clone)]
+enum LogCmd {
+    /// Check the chain: every entry's hash is its content's and names the
+    /// entry before. Fails naming the first broken link.
+    Verify,
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -283,9 +316,37 @@ pub fn run_in_process(
     run(Cli::try_parse_from(args)?, None)
 }
 
+/// An apply's audit session: its log, and the stack's lock, held until the
+/// apply's end is logged.
+struct Session {
+    log: crate::audit::Log,
+    _lock: crate::stack::Lock,
+}
+
 /// One run of the command line. `hook`: controller mode's part of an apply
-/// (`controller::Hook`).
-fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
+/// (`controller::Hook`). An apply's end, whatever it is, goes to the audit
+/// log.
+fn run(cli: Cli, hook: Option<&mut controller::Hook>) -> Result<()> {
+    let mut session = None;
+    let r = run_with(cli, hook, &mut session);
+    if let Some(s) = session {
+        let end = match &r {
+            Ok(()) => serde_json::json!({ "result": "ok" }),
+            Err(e) => serde_json::json!({ "result": "failed", "error": e.to_string() }),
+        };
+        let logged = s.log.append("apply_end", end);
+        r?;
+        logged?;
+        return Ok(());
+    }
+    r
+}
+
+fn run_with(
+    mut cli: Cli,
+    mut hook: Option<&mut controller::Hook>,
+    session: &mut Option<Session>,
+) -> Result<()> {
     if let Cmd::Controller { .. } = cli.cmd {
         return run_controller(cli);
     }
@@ -294,6 +355,10 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
     } = &cli.cmd
     {
         let dir = crate::stack::handover(&state_root(&cli, &cli.files), stack, to)?;
+        crate::audit::Log::beside(&state::state_path(&dir), cli.audit_sink.clone()).append(
+            "handover",
+            serde_json::json!({ "stack": stack, "to": to, "who": crate::audit::who() }),
+        )?;
         println!("stack {stack} handed over to {to}: {}", dir.display());
         return Ok(());
     }
@@ -342,6 +407,8 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
         h.inputs(&relations);
     }
     program.statements.extend(watch::read(&relations)?);
+    // The commit each git input relation's ref names: a plan file pins them.
+    let pinned = pinned_commits(&relations);
     if let Cmd::Plan {
         scenario: Some(name),
         ..
@@ -480,10 +547,18 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
         paths = state::backend_paths(&root, dir);
     }
     paths.inventory = resolve_inventory(&cli.inventory, &cli.world, &paths.inventory);
-    // The stack's plan-file key: a plan that writes a file, or an apply of
-    // one, digests secrets with it.
+    // The deployment's audit log, beside its state.
+    let audit = crate::audit::Log::beside(
+        &paths.state,
+        cli.audit_sink.clone().or(stack_cfg.audit_sink.clone()),
+    );
+    if let Cmd::Log { cmd, since, json } = &cli.cmd {
+        return print_log(&audit, &deployment, cmd.as_ref(), since.as_deref(), *json);
+    }
+    // The stack's plan-file key: a plan that writes a file, and an apply,
+    // digest secrets with it (the plan file's, the audit log's).
     let key = match (&saved, &cli.cmd) {
-        (Some(_), _) | (None, Cmd::Plan { out: Some(_), .. }) => {
+        (Some(_), _) | (None, Cmd::Plan { out: Some(_), .. }) | (None, Cmd::Apply { .. }) => {
             Some(zset::file::Key::load_or_create(&paths.state)?)
         }
         _ => None,
@@ -500,7 +575,8 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
         None => None,
     };
     if let (Some((path, saved)), Some(inputs)) = (&saved, &inputs) {
-        let diff = saved.input_differences(inputs);
+        let mut diff = saved.input_differences(inputs);
+        diff.extend(saved.commit_differences(&pinned));
         if !diff.is_empty() {
             eprintln!(
                 "plan file {} is stale: its inputs are not this run's:",
@@ -518,6 +594,7 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
                 "stack {deployment} is role = bootstrap: it stays batch, and the controller never runs it"
             );
         }
+        h.audit = Some(audit.clone());
         h.open(
             &paths.state,
             &paths.world,
@@ -837,7 +914,86 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
         bail!("stale plan: run plan again");
     };
 
-    match cli.cmd {
+    // The plan file of a plan: its delta at tick 1, the inputs, the pinned
+    // commits, the extern answers and the `requires_approval` rows.
+    let plan_file_of = |plan: &crate::provider::Plan,
+                        res: &engine::EvalResult,
+                        sections: &stuck::Sections,
+                        resources: &[ir::Resource],
+                        st: &state::State,
+                        key: &zset::file::Key,
+                        inputs: zset::file::Inputs|
+     -> Result<zset::file::PlanFile> {
+        let report = report_of(plan, res, sections, 1, &[], &[]);
+        let redact = query::Redactor::new(&res.facts, schema);
+        let mut deformations = zset::file::delta(plan, sections, &report, schema, &redact, key);
+        for e in deformations
+            .iter_mut()
+            .filter(|e| e.action.starts_with("replace"))
+        {
+            let addr = ir::Address {
+                typ: e.typ.clone(),
+                name: e.name.clone(),
+            };
+            e.dependents = resources
+                .iter()
+                .filter(|r| r.deps.contains(&addr))
+                .map(|r| format!("{}.{}", r.addr.typ, r.addr.name))
+                .collect();
+        }
+        let mut unresolved: std::collections::BTreeSet<String> = deformations
+            .iter()
+            .flat_map(|e| e.on.iter().cloned())
+            .collect();
+        for a in &plan.actions {
+            for c in &a.changes {
+                if let Some((crate::provider::NULL_KEY, l)) =
+                    c.after.as_ref().and_then(crate::provider::marker)
+                {
+                    unresolved.insert(l.to_string());
+                }
+            }
+        }
+        Ok(zset::file::PlanFile {
+            version: zset::file::VERSION,
+            stack: stack.clone(),
+            inputs,
+            world_digest: zset::file::world_digest(&backend.world_facts(st)?),
+            deformations,
+            pending_groups: report
+                .groups
+                .iter()
+                .map(|g| zset::file::Group {
+                    pattern: g.pattern.clone(),
+                    on: g.on.clone(),
+                })
+                .collect(),
+            nulls: zset::file::Nulls {
+                resolved: zset::file::resolved(&res.facts, &redact, key),
+                unresolved: unresolved.into_iter().collect(),
+            },
+            ticks: report
+                .ticks
+                .iter()
+                .map(|(t, xs)| zset::file::Tick {
+                    tick: *t,
+                    addresses: xs.clone(),
+                })
+                .collect(),
+            externs: externs.recorded(),
+            git_commits: pinned.clone(),
+            needs_approval: crate::approval::needs(&res.facts)
+                .into_iter()
+                .map(|(deformation, reason)| zset::file::NeedsApproval {
+                    deformation,
+                    reason,
+                })
+                .collect(),
+            digest: None,
+        })
+    };
+
+    match cli.cmd.clone() {
         Cmd::Eval => {
             println!("facts: {}", res.facts.len());
             println!("resources: {}", resources.len());
@@ -912,6 +1068,18 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
                 }
             }
             let dir = crate::stack::rekey(&root, &base, &r.from, &r.to)?;
+            crate::audit::Log::beside(
+                &state::state_path(&dir),
+                cli.audit_sink.clone().or(stack_cfg.audit_sink.clone()),
+            )
+            .append(
+                "rekey",
+                serde_json::json!({
+                    "from": r.from.name(),
+                    "to": r.to.name(),
+                    "who": crate::audit::who(),
+                }),
+            )?;
             println!(
                 "stack {} rekeyed to {}: {}",
                 r.from.name(),
@@ -921,6 +1089,7 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
         }
         Cmd::Fmt { .. }
         | Cmd::Controller { .. }
+        | Cmd::Log { .. }
         | Cmd::Stack { .. }
         | Cmd::Provider { .. }
         | Cmd::Taint { .. } => {
@@ -940,81 +1109,69 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
                 denies,
             } = plan_for(res, &violations, resources, &adopts, &lifecycle, &st)?;
             let report = report_of(&plan, &res, &sections, 1, &moves, &denies);
+            // The plan file, when one is written or the plan needs an
+            // approval: its digest is what an approver signs.
+            let needs = crate::approval::needs(&res.facts);
+            let file = if out.is_some() || !needs.is_empty() {
+                let loaded;
+                let key = match &key {
+                    Some(k) => k,
+                    None => {
+                        loaded = zset::file::Key::load_or_create(&paths.state)?;
+                        &loaded
+                    }
+                };
+                let inputs = match &inputs {
+                    Some(i) => i.clone(),
+                    None => plan_inputs(&cli, &files, &secret_inputs, key)?,
+                };
+                let mut f = plan_file_of(&plan, &res, &sections, &resources, &st, key, inputs)?;
+                f.digest = Some(f.digest());
+                Some(f)
+            } else {
+                None
+            };
             if json {
-                println!("{}", serde_json::to_string_pretty(&report.json())?);
+                let mut j = report.json();
+                if let Some(f) = &file {
+                    j["needs_approval"] = serde_json::to_value(&f.needs_approval)?;
+                    j["digest"] = serde_json::to_value(&f.digest)?;
+                }
+                println!("{}", serde_json::to_string_pretty(&j)?);
             } else {
                 print!("{}", report.text());
+                // What needs an approval, and the digest to approve; a
+                // plan file's digest is on stderr beside its path.
+                if let Some(f) = file.as_ref().filter(|f| !f.needs_approval.is_empty()) {
+                    print!("{}", needs_text(&f.needs_approval));
+                    println!("plan digest: {}", f.digest.as_deref().unwrap_or_default());
+                }
             }
             blocked(&[violations, denies].concat())?;
-            if let Some(out) = out {
-                let redact = query::Redactor::new(&res.facts, schema);
-                let key = key
-                    .as_ref()
-                    .ok_or_else(|| anyhow::anyhow!("internal: no plan key"))?;
-                let mut deformations =
-                    zset::file::delta(&plan, &sections, &report, schema, &redact, key);
-                for e in deformations
-                    .iter_mut()
-                    .filter(|e| e.action.starts_with("replace"))
-                {
-                    let addr = ir::Address {
-                        typ: e.typ.clone(),
-                        name: e.name.clone(),
-                    };
-                    e.dependents = resources
-                        .iter()
-                        .filter(|r| r.deps.contains(&addr))
-                        .map(|r| format!("{}.{}", r.addr.typ, r.addr.name))
-                        .collect();
-                }
-                let mut unresolved: std::collections::BTreeSet<String> = deformations
-                    .iter()
-                    .flat_map(|e| e.on.iter().cloned())
-                    .collect();
-                for a in &plan.actions {
-                    for c in &a.changes {
-                        if let Some((crate::provider::NULL_KEY, l)) =
-                            c.after.as_ref().and_then(crate::provider::marker)
-                        {
-                            unresolved.insert(l.to_string());
-                        }
-                    }
-                }
-                let file = zset::file::PlanFile {
-                    version: zset::file::VERSION,
-                    stack: stack.clone(),
-                    inputs: inputs.ok_or_else(|| anyhow::anyhow!("internal: no plan key"))?,
-                    world_digest: zset::file::world_digest(&backend.world_facts(&st)?),
-                    deformations,
-                    pending_groups: report
-                        .groups
-                        .iter()
-                        .map(|g| zset::file::Group {
-                            pattern: g.pattern.clone(),
-                            on: g.on.clone(),
-                        })
-                        .collect(),
-                    nulls: zset::file::Nulls {
-                        resolved: zset::file::resolved(&res.facts, &redact, key),
-                        unresolved: unresolved.into_iter().collect(),
-                    },
-                    ticks: report
-                        .ticks
-                        .iter()
-                        .map(|(t, xs)| zset::file::Tick {
-                            tick: *t,
-                            addresses: xs.clone(),
-                        })
-                        .collect(),
-                    externs: externs.recorded(),
-                };
+            if let (Some(out), Some(file)) = (out, &file) {
                 file.save(&out)?;
-                eprintln!("plan file: {}", out.display());
+                eprintln!(
+                    "plan file: {} (plan digest: {})",
+                    out.display(),
+                    file.digest.as_deref().unwrap_or_default()
+                );
+                audit.append(
+                    "plan",
+                    serde_json::json!({
+                        "digest": file.digest,
+                        "file": out.display().to_string(),
+                        "inputs": file.inputs,
+                        "git_commits": file.git_commits,
+                        "needs_approval": file.needs_approval,
+                        "who": crate::audit::who(),
+                    }),
+                )?;
             }
         }
         Cmd::Apply {
             max_ticks,
             parallel,
+            approval,
             ..
         } => {
             for addr in chaos.addresses() {
@@ -1026,8 +1183,55 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
                     );
                 }
             }
-            // One apply at a time per deployment.
-            let _lock = crate::stack::Lock::acquire(&paths.state, &deployment)?;
+            // One apply at a time per deployment; the lock is held until the
+            // apply's end is in the audit log.
+            *session = Some(Session {
+                log: audit.clone(),
+                _lock: crate::stack::Lock::acquire(&paths.state, &deployment)?,
+            });
+            let key = key
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("internal: no plan key"))?;
+            let inputs = inputs
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("internal: no plan inputs"))?;
+            // Approvals (README "Approvals"): a token verifies against the
+            // stack's trust root (loaded once), for this plan's digest and
+            // this deployment, by an approver `approver_allowed` admits
+            // when the program restricts them.
+            let restricts = crate::approval::restricts_approvers(&program);
+            let roots: std::cell::OnceCell<Vec<_>> = std::cell::OnceCell::new();
+            let verify_token = |token: &str,
+                                needs: &[(String, String)],
+                                digest: &str,
+                                facts: &BTreeSet<Atom>|
+             -> Result<crate::approval::Verified> {
+                if stack_cfg.approvals.is_empty() {
+                    bail!(
+                        "stack {deployment} has no approvals trust root \
+                         (`stack ... {{ approvals = jwks(\"https://...\") }}`)"
+                    );
+                }
+                let roots = match roots.get() {
+                    Some(r) => r,
+                    None => {
+                        let dir = paths.state.parent().unwrap_or(Path::new(""));
+                        let r = crate::approval::load_roots(&stack_cfg.approvals, dir)?;
+                        roots.get_or_init(|| r)
+                    }
+                };
+                let expect = crate::approval::Expect {
+                    stack: &instance.stack,
+                    key: &instance.key,
+                    digest,
+                    now: crate::approval::now(),
+                };
+                let allowed = |w: &str, d: &str| crate::approval::approver_allowed(facts, w, d);
+                let allowed: Option<executor::Allowed> =
+                    if restricts { Some(&allowed) } else { None };
+                executor::approve(token, needs, roots, &expect, allowed)
+            };
+            let mut approved: Option<crate::approval::Verified> = None;
             persist_externs(&mut st, &externs);
             let persist = |st: &state::State| st.save(&paths.state);
             if !moves.is_empty() {
@@ -1096,8 +1300,58 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
                 } = plan_for(res, &violations, resources, &adopts, &lifecycle, &st)?;
                 (res, resources) = (r, docs);
                 check_saved(&plan, &res, &sections, tick)?;
+                // What the policy pass says needs an approval, and the
+                // digest of this plan: the file's, else of the plan as a
+                // file would record it.
+                let mut needs = crate::approval::needs(&res.facts);
+                if let (1, Some((_, f))) = (tick, &saved) {
+                    needs.extend(
+                        f.needs_approval
+                            .iter()
+                            .map(|n| (n.deformation.clone(), n.reason.clone())),
+                    );
+                    needs.sort();
+                    needs.dedup();
+                }
+                let digest = match &saved {
+                    _ if tick > 1 && (hook.is_none() || needs.is_empty()) => None,
+                    Some((path, f)) => {
+                        let d = f.digest();
+                        if f.digest.as_ref().is_some_and(|x| *x != d) {
+                            bail!(
+                                "plan file {}: its digest {} is not its content's ({d}): \
+                                 it was edited after the plan",
+                                path.display(),
+                                f.digest.as_deref().unwrap_or_default()
+                            );
+                        }
+                        Some(d)
+                    }
+                    None => Some(
+                        plan_file_of(&plan, &res, &sections, &resources, &st, key, inputs.clone())?
+                            .digest(),
+                    ),
+                };
+                if tick == 1 {
+                    audit.append(
+                        "plan",
+                        serde_json::json!({
+                            "digest": digest,
+                            "file": saved.as_ref().map(|(p, _)| p.display().to_string()),
+                            "inputs": inputs,
+                            "git_commits": pinned,
+                            "needs_approval": needs
+                                .iter()
+                                .map(|(d, r)| serde_json::json!({ "deformation": d, "reason": r }))
+                                .collect::<Vec<_>>(),
+                            "who": crate::audit::who(),
+                        }),
+                    )?;
+                }
                 // Controller mode: the report is one log line, and the
-                // policy pass gates what this tick may apply.
+                // policy pass gates what this tick may apply; a deformation
+                // that needs an approval is held until a token for the
+                // plan's digest arrives.
                 let mut undeformed = false;
                 if let Some(h) = hook.as_deref_mut() {
                     let text = report_of(&plan, &res, &sections, tick, &[], &denies).text();
@@ -1106,6 +1360,30 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
                         .next()
                         .is_some_and(|l| l.ends_with(" is undeformed"));
                     h.gate(tick, &mut plan, &res.facts, &text);
+                    if let (false, Some(digest)) = (needs.is_empty(), &digest) {
+                        let mut tokens: Vec<String> = res
+                            .facts
+                            .iter()
+                            .filter(|a| a.pred == "approval")
+                            .filter_map(|a| match a.args.as_slice() {
+                                [Term::Val(Value::Str(t))] => Some(t.clone()),
+                                _ => None,
+                            })
+                            .collect();
+                        tokens.extend(h.dropped_tokens());
+                        let (mut ok, mut refused) = (None, Vec::new());
+                        for t in &tokens {
+                            match verify_token(t, &needs, digest, &res.facts) {
+                                Ok(v) => {
+                                    ok = Some(v);
+                                    break;
+                                }
+                                Err(e) if e.is::<crate::approval::OtherDigest>() => {}
+                                Err(e) => refused.push(e.to_string()),
+                            }
+                        }
+                        h.approvals(tick, &mut plan, &needs, digest, ok.as_ref(), &refused)?;
+                    }
                 }
                 let held: Vec<String> = plan
                     .actions
@@ -1143,6 +1421,36 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
                     }
                     bail!("apply stopped at tick {tick}: blocked by constraints");
                 }
+                if hook.is_none() {
+                    approve_entry(
+                        tick,
+                        &needs,
+                        digest.as_deref(),
+                        approval.as_deref(),
+                        saved.is_some(),
+                        &mut approved,
+                        &audit,
+                        &|t: &str, d: &str| verify_token(t, &needs, d, &res.facts),
+                        &|w: &str, d: &str| {
+                            !restricts || crate::approval::approver_allowed(&res.facts, w, d)
+                        },
+                    )?;
+                }
+                if tick == 1 {
+                    audit.append(
+                        "apply_start",
+                        serde_json::json!({
+                            "who": crate::audit::who(),
+                            "dform": env!("CARGO_PKG_VERSION"),
+                            "providers": if providers.is_empty() {
+                                vec!["fake".to_string()]
+                            } else {
+                                providers.clone()
+                            },
+                            "protocol": crate::plugin::backend::VERSION,
+                        }),
+                    )?;
+                }
                 let observed = backend.observe(&st)?;
                 executor::begin(&mut st, tick, &plan, &observed);
                 persist(&st)?;
@@ -1163,10 +1471,50 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
                 // when there is nothing to do. State is written after every
                 // Apply call (`executor`).
                 if tick == 1 || changed {
+                    // Each action goes to the audit log: its result, its
+                    // remote id, and a digest of its redacted diff.
+                    let redact = query::Redactor::new(&res.facts, schema);
+                    let report = report_of(&plan, &res, &sections, tick, &[], &[]);
+                    let diffs: std::collections::BTreeMap<ir::Address, String> =
+                        zset::file::delta(&plan, &sections, &report, schema, &redact, key)
+                            .into_iter()
+                            .map(|e| {
+                                let digest = crate::approval::digest_of(
+                                    &serde_json::to_value(&e).unwrap_or_default(),
+                                );
+                                (
+                                    ir::Address {
+                                        typ: e.typ,
+                                        name: e.name,
+                                    },
+                                    digest,
+                                )
+                            })
+                            .collect();
+                    let audit_failed = std::cell::RefCell::new(None);
+                    let on_action = |a: &crate::provider::Action,
+                                     err: Option<&anyhow::Error>,
+                                     st: &state::State| {
+                        let mut e = serde_json::json!({
+                            "tick": tick,
+                            "action": zset::deformation_kind(&a.kind, false).unwrap_or("no-op"),
+                            "address": format!("{}.{}", a.addr.typ, a.addr.name),
+                            "result": if err.is_some() { "failed" } else { "ok" },
+                            "remote": st.get(&a.addr).map(|e| e.remote.clone()),
+                            "diff": diffs.get(&a.addr),
+                        });
+                        if let Some(err) = err {
+                            e["error"] = redact.text(&format!("{err:#}")).into();
+                        }
+                        if let Err(x) = audit.append("action", e) {
+                            audit_failed.borrow_mut().get_or_insert(x);
+                        }
+                    };
                     let opts = executor::Options {
                         parallel: parallel as usize,
                         persist: &persist,
                         stop_after: stop_after.as_ref(),
+                        on_action: Some(&on_action),
                     };
                     let applied = executor::run_tick(
                         &backend, &resources, &adopts, &lifecycle, &mut st, &plan, &opts,
@@ -1174,7 +1522,24 @@ fn run(mut cli: Cli, mut hook: Option<&mut controller::Hook>) -> Result<()> {
                     for note in backend.take_notes() {
                         println!("chaos: {note}");
                     }
+                    if let Some(e) = audit_failed.into_inner() {
+                        return Err(e);
+                    }
                     seen.extend(applied?);
+                    // The world as the executor saw it, keyed like a
+                    // secret: a document may hold one.
+                    let world: serde_json::Map<String, serde_json::Value> = seen
+                        .iter()
+                        .map(|(a, d)| (state::key(a), d.clone().unwrap_or_default()))
+                        .collect();
+                    let canonical = crate::approval::canonical_json(&world.into());
+                    audit.append(
+                        "tick",
+                        serde_json::json!({
+                            "tick": tick,
+                            "world": format!("hmac-sha256:{}", key.digest(canonical.as_bytes())),
+                        }),
+                    )?;
                 }
                 if !boundary {
                     st.in_flight = None;
@@ -1320,6 +1685,7 @@ fn run_controller(cli: Cli) -> Result<()> {
             chaos: vec![],
             max_ticks,
             parallel: 1,
+            approval: None,
         },
         ..cli
     };
@@ -1606,6 +1972,162 @@ struct Planned {
     /// own evaluation (`lifecycle prevent_destroy`, a policy on
     /// `deformation/4`).
     denies: Vec<String>,
+}
+
+/// A batch apply's approval, before its Apply calls: at tick 1 the token
+/// given (`--approval FILE`), verified (`verify`), or, with none, a
+/// refusal if anything needs one; at a later tick, a new deformation that
+/// needs one must be one the approver may approve (`allowed`). Each
+/// verdict at tick 1 goes to the audit log.
+#[allow(clippy::too_many_arguments)]
+fn approve_entry(
+    tick: usize,
+    needs: &[(String, String)],
+    digest: Option<&str>,
+    token: Option<&Path>,
+    from_file: bool,
+    approved: &mut Option<crate::approval::Verified>,
+    audit: &crate::audit::Log,
+    verify: &dyn Fn(&str, &str) -> Result<crate::approval::Verified>,
+    allowed: &dyn Fn(&str, &str) -> bool,
+) -> Result<()> {
+    let list = |needs: &[(String, String)]| {
+        let names: Vec<String> = needs.iter().map(|(d, r)| format!("{d} ({r})")).collect();
+        match names.len() {
+            1 => format!("{} needs", names[0]),
+            _ => format!("{} need", names.join(", ")),
+        }
+    };
+    if tick > 1 {
+        if needs.is_empty() {
+            return Ok(());
+        }
+        let Some(v) = approved else {
+            bail!(
+                "apply stopped at tick {tick}: {} an approval, and the apply has none",
+                list(needs)
+            );
+        };
+        let who = &v.statement.approver;
+        let refused: Vec<(String, String)> = needs
+            .iter()
+            .filter(|(d, _)| !allowed(who, d))
+            .cloned()
+            .collect();
+        if !refused.is_empty() {
+            bail!(
+                "apply stopped at tick {tick}: approver_allowed({who:?}, D) does not hold for {}",
+                refused
+                    .iter()
+                    .map(|(d, _)| d.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+        return Ok(());
+    }
+    let digest = digest.unwrap_or_default();
+    let Some(path) = token else {
+        if needs.is_empty() {
+            return audit.append("approval", serde_json::json!({ "result": "not required" }));
+        }
+        let error = format!("{} an approval, and no --approval was given", list(needs));
+        audit.append(
+            "approval",
+            serde_json::json!({ "result": "refused", "digest": digest, "error": error }),
+        )?;
+        let how = if from_file {
+            "apply it with --approval FILE, a signed approval of that digest"
+        } else {
+            "write the plan with `plan --out PLAN`, have its digest approved, and \
+             `apply PLAN --approval FILE`"
+        };
+        bail!("apply refused: {error}; the plan's digest is {digest}: {how}");
+    };
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| anyhow::anyhow!("read --approval {}: {e}", path.display()))?;
+    match verify(&text, digest) {
+        Ok(v) => {
+            audit.append(
+                "approval",
+                serde_json::json!({ "result": "approved", "digest": digest, "attestation": v }),
+            )?;
+            println!("approved by {}: plan digest {digest}", v.statement.approver);
+            *approved = Some(v);
+            Ok(())
+        }
+        Err(e) => {
+            audit.append(
+                "approval",
+                serde_json::json!({ "result": "refused", "digest": digest, "error": e.to_string() }),
+            )?;
+            bail!("apply refused: {e}")
+        }
+    }
+}
+
+/// The `needs approval:` section of a plan: each deformation and why.
+fn needs_text(needs: &[zset::file::NeedsApproval]) -> String {
+    if needs.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("needs approval:\n");
+    for n in needs {
+        out.push_str(&format!("  {}  ({})\n", n.deformation, n.reason));
+    }
+    out
+}
+
+/// The commit each `git` input relation's ref names now, but the
+/// `approval` relation's: its tokens approve a plan, they are not part of
+/// it.
+fn pinned_commits(relations: &[watch::Relation]) -> Vec<zset::file::Pinned> {
+    let mut out: Vec<zset::file::Pinned> = relations
+        .iter()
+        .filter(|r| r.pred != "approval" && matches!(r.source, watch::Source::Git { .. }))
+        .map(|r| zset::file::Pinned {
+            source: r.source.to_string(),
+            commit: watch::stamp(&r.source),
+        })
+        .collect();
+    out.sort_by(|a, b| a.source.cmp(&b.source));
+    out.dedup();
+    out
+}
+
+/// `dform log [verify]`: the deployment's audit log.
+fn print_log(
+    log: &crate::audit::Log,
+    deployment: &str,
+    cmd: Option<&LogCmd>,
+    since: Option<&str>,
+    json: bool,
+) -> Result<()> {
+    let path = log.path();
+    if let Some(LogCmd::Verify) = cmd {
+        if !path.exists() {
+            bail!("stack {deployment} has no audit log at {}", path.display());
+        }
+        return match crate::audit::verify(path)? {
+            (n, None) => {
+                println!("audit log {}: {n} entries, the chain holds", path.display());
+                Ok(())
+            }
+            (_, Some(b)) => bail!("audit log {}: {}", path.display(), b.why),
+        };
+    }
+    let mut entries = crate::audit::read(path)?;
+    if let Some(s) = since {
+        entries = crate::audit::since(entries, s);
+    }
+    if json {
+        println!("{}", serde_json::to_string_pretty(&entries)?);
+    } else {
+        for e in &entries {
+            println!("{}", crate::audit::line(e));
+        }
+    }
+    Ok(())
 }
 
 /// `moved/3` rewrites applied to state before the plan.

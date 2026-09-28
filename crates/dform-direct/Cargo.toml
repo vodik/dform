@@ -11,3 +11,8 @@ publish = false
 dform = { path = "../.." }
 dform-core = { path = "../dform-core" }
 dform-mock = { path = "../dform-mock" }
+# `dform-approve`, the example signer (examples/approvals/).
+anyhow = "1.0"
+base64 = "0.22"
+ed25519-dalek = "2"
+serde_json = "1.0"

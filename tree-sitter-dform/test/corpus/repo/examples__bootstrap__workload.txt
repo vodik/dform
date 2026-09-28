@@ -11,10 +11,21 @@ examples/bootstrap/workload.df
 #
 # Edit release.facts and the controller deploys it; edit the world and
 # the replicas drift is corrected, the image drift is held for approval.
+# In prod a rollout waits for a signed approval of the plan's digest
+# (README "Approvals"): the controller publishes the digest in
+# approval-pending.json beside the state, and a token for it, from the
+# example signer, releases it:
+#
+#   cargo run -q -p dform-direct --bin dform-approve -- sign approver.key \
+#     --digest sha256:... --stack renfry.workload --approver alice --format fact >> approvals.facts
 
 edition 2026
 
-stack renfry.workload {}
+stack renfry.workload {
+  # Whose signatures approve a plan: `dform-approve keygen approver.key`
+  # prints this JWKS.
+  approvals = jwks_file("approvers.jwks.json")
+}
 
 provider k8s {}
 
@@ -22,8 +33,8 @@ provider k8s {}
 input relation release/1 from file("release.facts")
 # `approve(t, a)`: accept the drift of t.a, correcting it.
 input relation approve/2 from file("approvals.facts")
-# `release_approved(image)`: a prod release may roll out.
-input relation release_approved/1 from file("approvals.facts")
+# `approval(token)`: a signed approval of a plan's digest.
+input relation approval/1 from file("approvals.facts")
 
 input env: enum("dev", "prod") = "dev"
 
@@ -56,18 +67,25 @@ resource k8s.service web {
 # corrected without asking. Any other drift waits for `approve`.
 auto_reconcile(t, a, p) if drift(t, a, p, _, _), p == "spec.replicas"
 
-# In prod a rollout waits for its release to be approved.
-hold(k8s.deployment, a, "needs approval") if {
+# In prod a rollout needs an approval: the controller holds it until a
+# token for the plan's digest arrives.
+requires_approval(d, "a prod rollout") if {
   env == "prod"
   deformation(k, k8s.deployment, a, _)
   k != "delete"
-  release(image)
-  not release_approved(image)
+  d = "k8s.deployment.{a}"
 }
 
 ---
 
 (source_file
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
   (comment)
   (comment)
   (comment)
@@ -83,7 +101,17 @@ hold(k8s.deployment, a, "needs approval") if {
     (dotted_name
       (identifier)
       (identifier))
-    (block))
+    (block
+      (comment)
+      (comment)
+      (field
+        (block_path
+          (identifier))
+        (call
+          (identifier)
+          (arguments
+            (string
+              (string_content)))))))
   (provider
     (identifier)
     (block))
@@ -296,13 +324,11 @@ hold(k8s.deployment, a, "needs approval") if {
         (string
           (string_content)))))
   (comment)
+  (comment)
   (rule
     (call
       (identifier)
       (arguments
-        (member_expression
-          (identifier)
-          (identifier))
         (identifier)
         (string
           (string_content))))
@@ -325,14 +351,9 @@ hold(k8s.deployment, a, "needs approval") if {
         (identifier)
         (string
           (string_content)))
-      (atom_literal
-        (call
-          (identifier)
-          (arguments
-            (identifier))))
-      (not_literal
-        (atom_literal
-          (call
-            (identifier)
-            (arguments
-              (identifier))))))))
+      (comparison
+        (identifier)
+        (string
+          (string_content)
+          (interpolation
+            (identifier)))))))

@@ -22,7 +22,14 @@
 //!   `auto_reconcile(T, A, Path)` for each drifted path nor `approve(T, A)`.
 //!   Held drift stays in the baseline, so it is held again at every world
 //!   event until an input change or an approval releases it.
+//! * Approvals (README "Approvals"): a deformation the policy pass says
+//!   `requires_approval(D, Reason)` is held until a token for the plan's
+//!   digest arrives, through the input relation `approval/1` (the token's
+//!   text) or as a file in the drop directory `approvals/` beside the
+//!   state. While it is held the digest is published: a log line and
+//!   `approval-pending.json` beside the state.
 //! * The log: one line per event and per tick, `HH:MM:SS` (UTC) first.
+//!   Events, holds and releases also go to the stack's audit log.
 
 use crate::ast::{Atom, Span, Term};
 use crate::ir::Address;
@@ -58,6 +65,8 @@ pub fn log(msg: impl std::fmt::Display) {
 pub enum Event {
     Start,
     Input(Vec<String>),
+    /// A token arrived in the approvals drop directory.
+    Approval,
     World,
     Resync,
 }
@@ -71,6 +80,9 @@ struct Memo {
     world: String,
     /// The world as the last run accepted it, per `state::key`.
     baseline: BTreeMap<String, Json>,
+    /// The approvals drop directory's stamp.
+    #[serde(default)]
+    drops: String,
 }
 
 /// The controller's part of a run (see the module doc).
@@ -87,6 +99,14 @@ pub struct Hook {
     drift: Vec<Drift>,
     /// Addresses held by this run.
     held: BTreeSet<Address>,
+    /// The deployment's audit log.
+    pub audit: Option<crate::audit::Log>,
+    /// The approvals drop directory, beside the state.
+    drop_dir: Option<PathBuf>,
+    /// Where a held approval's digest is published, beside the state.
+    pending_path: Option<PathBuf>,
+    /// Whether this run published one.
+    published: bool,
 }
 
 /// A leaf where the world moved away from the baseline.
@@ -118,6 +138,34 @@ fn file_stamp(p: &Path) -> String {
     watch::stamp(&watch::Source::File(p.to_path_buf()))
 }
 
+/// The drop directory's files, by name, with their contents.
+fn drops(dir: &Path) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+        .filter_map(|e| {
+            let text = std::fs::read_to_string(e.path()).ok()?;
+            Some((e.file_name().to_string_lossy().into_owned(), text))
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+/// The drop directory's stamp: "" when it holds nothing.
+fn drops_stamp(dir: &Path) -> String {
+    use std::hash::{Hash, Hasher};
+    let files = drops(dir);
+    if files.is_empty() {
+        return String::new();
+    }
+    let mut h = std::hash::DefaultHasher::new();
+    files.hash(&mut h);
+    format!("{:016x}", h.finish())
+}
+
 impl Hook {
     /// The run has read its input relations: stamp them (before reading, so
     /// a change during the run is seen by the next one).
@@ -134,6 +182,9 @@ impl Hook {
     /// the directory holding the state root, when it is under it).
     pub fn open(&mut self, state: &Path, world: &Path, root: &Path) -> Result<()> {
         let memo_path = state.with_file_name("controller.json");
+        let drop_dir = state.with_file_name("approvals");
+        self.pending_path = Some(state.with_file_name("approval-pending.json"));
+        self.published = false;
         let memo: Option<Memo> = match std::fs::read(&memo_path) {
             Ok(b) => Some(
                 serde_json::from_slice(&b)
@@ -163,6 +214,8 @@ impl Hook {
                         log(format_args!("input {} changed ({source})", preds.join(" ")));
                     }
                     Event::Input(changed)
+                } else if m.drops != drops_stamp(&drop_dir) {
+                    Event::Approval
                 } else if m.world != file_stamp(world) {
                     Event::World
                 } else {
@@ -170,17 +223,120 @@ impl Hook {
                 }
             }
         };
-        match &event {
-            Event::Start => log("event start"),
-            Event::Input(names) => log(format_args!("event input {}", names.join(" "))),
-            Event::World => log(format_args!(
-                "event world {} changed",
-                relative_to(world, root).display()
-            )),
-            Event::Resync => log("event resync"),
+        self.drop_dir = Some(drop_dir);
+        let text = match &event {
+            Event::Start => "event start".to_string(),
+            Event::Input(names) => format!("event input {}", names.join(" ")),
+            Event::Approval => format!(
+                "event approval ({} changed)",
+                relative_to(self.drop_dir.as_deref().unwrap_or(Path::new("")), root).display()
+            ),
+            Event::World => format!("event world {} changed", relative_to(world, root).display()),
+            Event::Resync => "event resync".to_string(),
+        };
+        log(&text);
+        if let Some(a) = &self.audit {
+            a.append("controller", serde_json::json!({ "event": text }))?;
         }
         self.memo = memo;
         self.event = Some(event);
+        Ok(())
+    }
+
+    /// The tokens in the approvals drop directory.
+    pub fn dropped_tokens(&self) -> Vec<String> {
+        self.drop_dir
+            .as_deref()
+            .map(drops)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(_, t)| t)
+            .collect()
+    }
+
+    /// After the gate of tick `tick`: the deformations `needs` names need an
+    /// approval of the plan whose digest is `digest`. `approved` is the
+    /// token that verified, if one did, and `refused` why the others did
+    /// not (a token for another plan is left out). Unapproved, they are
+    /// held and the digest is published; approved, the release is logged.
+    pub fn approvals(
+        &mut self,
+        tick: usize,
+        plan: &mut Plan,
+        needs: &[(String, String)],
+        digest: &str,
+        approved: Option<&crate::approval::Verified>,
+        refused: &[String],
+    ) -> Result<()> {
+        if needs.is_empty() {
+            return Ok(());
+        }
+        for r in refused {
+            log(format_args!("tick {tick}: approval refused: {r}"));
+        }
+        if let Some(v) = approved {
+            log(format_args!(
+                "tick {tick}: approved by {}: plan digest {digest}",
+                v.statement.approver
+            ));
+            if let Some(a) = &self.audit {
+                a.append(
+                    "approval",
+                    serde_json::json!({ "digest": digest, "attestation": v }),
+                )?;
+            }
+            return Ok(());
+        }
+        // What the plan does to them, or did before the gate held them at
+        // an earlier tick.
+        let mut held = Vec::new();
+        let candidates: BTreeSet<&Address> = plan
+            .actions
+            .iter()
+            .filter(|a| !matches!(a.kind, ActionKind::Noop))
+            .map(|a| &a.addr)
+            .chain(&self.held)
+            .collect();
+        for (d, reason) in needs {
+            for addr in &candidates {
+                if format!("{}.{}", addr.typ, addr.name) == *d {
+                    log(format_args!(
+                        "tick {tick}: proceed: held, needs approval ({reason}): {d}"
+                    ));
+                    held.push((*addr).clone());
+                }
+            }
+        }
+        if held.is_empty() {
+            return Ok(());
+        }
+        let pending = self.pending_path.clone().unwrap_or_default();
+        let doc = serde_json::json!({
+            "digest": digest,
+            "needs_approval": needs
+                .iter()
+                .map(|(d, r)| serde_json::json!({ "deformation": d, "reason": r }))
+                .collect::<Vec<_>>(),
+            "published": crate::approval::rfc3339(crate::approval::now()),
+        });
+        std::fs::write(&pending, serde_json::to_vec_pretty(&doc)?)
+            .with_context(|| format!("write {}", pending.display()))?;
+        self.published = true;
+        log(format_args!(
+            "tick {tick}: approval needed: plan digest {digest} ({})",
+            pending.file_name().unwrap_or_default().to_string_lossy()
+        ));
+        if let Some(a) = &self.audit {
+            a.append(
+                "controller",
+                serde_json::json!({ "tick": tick, "held": needs
+                    .iter()
+                    .map(|(d, r)| serde_json::json!({ "deformation": d, "reason": r }))
+                    .collect::<Vec<_>>(), "needs_approval": digest }),
+            )?;
+        }
+        self.held.extend(held);
+        plan.actions.retain(|a| !self.held.contains(&a.addr));
         Ok(())
     }
 
@@ -302,17 +458,31 @@ impl Hook {
         undeformed: bool,
         observed: &BTreeMap<Address, Json>,
     ) -> Result<()> {
-        if undeformed && self.held.is_empty() {
-            log(format_args!("stack {stack} is undeformed"));
+        let line = if undeformed && self.held.is_empty() {
+            Some(format!("stack {stack} is undeformed"))
         } else if !self.held.is_empty() {
-            log(format_args!(
+            Some(format!(
                 "stack {stack} is deformed: {} held",
                 self.held
                     .iter()
                     .map(|a| format!("{}.{}", a.typ, a.name))
                     .collect::<Vec<_>>()
                     .join(", ")
-            ));
+            ))
+        } else {
+            None
+        };
+        if let Some(line) = line {
+            log(&line);
+            if let Some(a) = &self.audit {
+                a.append("controller", serde_json::json!({ "result": line }))?;
+            }
+        }
+        // A digest published by an earlier run that holds nothing now.
+        if !self.published
+            && let Some(p) = &self.pending_path
+        {
+            let _ = std::fs::remove_file(p);
         }
         let old = self.memo.take().unwrap_or_default();
         let mut baseline: BTreeMap<String, Json> = observed
@@ -334,6 +504,11 @@ impl Hook {
             inputs: self.input_stamps.clone(),
             world: self.world.as_deref().map(file_stamp).unwrap_or_default(),
             baseline,
+            drops: self
+                .drop_dir
+                .as_deref()
+                .map(drops_stamp)
+                .unwrap_or_default(),
         })
     }
 
@@ -347,6 +522,11 @@ impl Hook {
             inputs: self.input_stamps.clone(),
             world: self.world.as_deref().map(file_stamp).unwrap_or_default(),
             baseline: old.baseline,
+            drops: self
+                .drop_dir
+                .as_deref()
+                .map(drops_stamp)
+                .unwrap_or_default(),
         })
     }
 
@@ -367,6 +547,10 @@ impl Hook {
             return true;
         };
         memo.world != file_stamp(world)
+            || self
+                .drop_dir
+                .as_deref()
+                .is_some_and(|d| memo.drops != drops_stamp(d))
             || self
                 .relations
                 .iter()

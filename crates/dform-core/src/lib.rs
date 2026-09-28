@@ -1,4 +1,6 @@
+pub mod approval;
 pub mod ast;
+pub mod audit;
 pub mod chaos;
 pub mod circuit;
 pub mod controller;

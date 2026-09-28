@@ -68,7 +68,13 @@ pub struct Options<'a> {
     /// dform stops as if killed (`None`: no limit). Counted across the
     /// run's ticks.
     pub stop_after: Option<&'a Cell<usize>>,
+    /// The audit log's hook: told how each action ended, once state has
+    /// been written for it (`report_action`).
+    pub on_action: Option<ActionHook<'a>>,
 }
+
+/// How an action ended: its error, if it failed; state as written after it.
+pub type ActionHook<'a> = &'a dyn Fn(&Action, Option<&anyhow::Error>, &State);
 
 /// Apply every definite action of `plan` as one tick of the world, walking
 /// the tick's dependency DAG with at most `parallel` calls in flight. The
@@ -129,6 +135,7 @@ pub fn run_tick(
                 Ok(false) => at_once.push_back(i),
                 Err(e) => {
                     (opts.persist)(state)?;
+                    report_action(opts, actions[i], Some(&e), state);
                     spans.push((i, now, now));
                     failed = Some(e);
                 }
@@ -150,6 +157,7 @@ pub fn run_tick(
             f.remaining.remove(&state::key(&a.addr));
         }
         persist_answered(opts, state)?;
+        report_action(opts, a, r.as_ref().err(), state);
         let end = start_ms[i] + tick.latency(&a.addr);
         spans.push((i, start_ms[i], end));
         match r {
@@ -218,6 +226,46 @@ pub mod hooks {
     /// Persist once per tick, at its end, instead of after every Apply
     /// call that returns.
     pub static PERSIST_PER_TICK: AtomicBool = AtomicBool::new(false);
+}
+
+/// `approver_allowed(Who, D)`: may `Who` approve the deformation `D`?
+pub type Allowed<'a> = &'a dyn Fn(&str, &str) -> bool;
+
+/// Tell the audit hook how `a` ended.
+fn report_action(opts: &Options, a: &Action, err: Option<&anyhow::Error>, state: &State) {
+    if let Some(hook) = opts.on_action {
+        hook(a, err, state);
+    }
+}
+
+/// Apply's entry check, before any Apply call (README "Approvals"): verify
+/// `token` against the stack's trust root `roots` and what this apply is
+/// (`expect`: the plan digest, the stack and its key, the time), and, when
+/// the program restricts approvers (`allowed`), that the approver may
+/// approve every deformation `needs` names. The error names what failed.
+pub fn approve(
+    token: &str,
+    needs: &[(String, String)],
+    roots: &[(jsonwebtoken::jwk::JwkSet, Option<String>)],
+    expect: &crate::approval::Expect,
+    allowed: Option<Allowed>,
+) -> Result<crate::approval::Verified> {
+    let v = crate::approval::verify(token, roots, expect)?;
+    if let Some(allowed) = allowed {
+        let who = &v.statement.approver;
+        let refused: Vec<&str> = needs
+            .iter()
+            .filter(|(d, _)| !allowed(who, d))
+            .map(|(d, _)| d.as_str())
+            .collect();
+        if !refused.is_empty() {
+            bail!(
+                "approval by {who}: approver_allowed({who:?}, D) does not hold for {}",
+                refused.join(", ")
+            );
+        }
+    }
+    Ok(v)
 }
 
 /// For each action, the actions it waits for. A create, update or replace

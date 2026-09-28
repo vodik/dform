@@ -66,6 +66,12 @@ pub struct Stack {
     /// world), so a name that does not vary by key does not collide; the
     /// collision lint (`lint::key_collisions`) is off.
     pub isolated: bool,
+    /// `approvals = jwks("https://...")` (or `jwks_file("path")`, or a
+    /// list of them): whose signatures approve a plan (`approval`).
+    pub approvals: Vec<crate::approval::TrustRoot>,
+    /// `audit_sink = "CMD"`: each audit log entry is also piped to CMD
+    /// (`audit`); `--audit-sink` overrides it.
+    pub audit_sink: Option<String>,
 }
 
 fn string(t: &Term) -> Option<&str> {
@@ -339,12 +345,65 @@ fn stack_config(c: &Config, out: &mut Stack, diags: &mut Vec<Diagnostic>) {
                 )),
                 _ => diags.push(Diagnostic::error(*span, "isolated is `true` or `false`")),
             },
+            "approvals" => {
+                let roots = match v {
+                    Term::List(xs) => xs.iter().collect(),
+                    one => vec![one],
+                };
+                for t in roots {
+                    match trust_root(c.span, t) {
+                        Some(r) => out.approvals.push(r),
+                        None => diags.push(
+                            Diagnostic::error(*span, "approvals is a JWKS trust root").with_help(
+                                "`jwks(\"https://...\")` or `jwks_file(\"path\")`, each with \
+                                     an optional issuer a JWT must name as a second argument; \
+                                     or a list of them",
+                            ),
+                        ),
+                    }
+                }
+            }
+            "audit_sink" => match string(v) {
+                Some(cmd) => out.audit_sink = Some(cmd.to_string()),
+                None => diags.push(Diagnostic::error(
+                    *span,
+                    "audit_sink is a command string, run with `sh -c`",
+                )),
+            },
             other => diags.push(
                 Diagnostic::error(*span, format!("stack {} has no setting {other}", c.name))
-                    .with_note("its settings: backend, unknowns, role, isolated"),
+                    .with_note(
+                        "its settings: backend, unknowns, role, isolated, approvals, audit_sink",
+                    ),
             ),
         }
     }
+}
+
+/// `jwks("url")` or `jwks_file("path")` (relative to the file the stack
+/// statement is in), each with an optional issuer.
+fn trust_root(at: Span, t: &Term) -> Option<crate::approval::TrustRoot> {
+    use crate::approval::{Jwks, TrustRoot};
+    let Term::Func { name, args } = t else {
+        return None;
+    };
+    let args: Vec<&str> = args.iter().map(string).collect::<Option<_>>()?;
+    let (src, issuer) = match args.as_slice() {
+        [src] => (*src, None),
+        [src, iss] => (*src, Some(iss.to_string())),
+        _ => return None,
+    };
+    let jwks = match name.as_str() {
+        "jwks" => Jwks::Url(src.to_string()),
+        "jwks_file" => {
+            let base = diag::location(at)
+                .and_then(|(file, _, _)| Path::new(&file).parent().map(Path::to_path_buf))
+                .unwrap_or_default();
+            Jwks::File(base.join(src))
+        }
+        _ => return None,
+    };
+    Some(TrustRoot { jwks, issuer })
 }
 
 /// A provider: `source = "path"`, relative to the file the statement is

@@ -129,8 +129,8 @@ fn approve_lets_a_world_event_correct_drift() {
     assert_eq!(
         once(&s, &[]),
         [
-            "input approve release_approved changed (file approvals.facts)",
-            "event input approve release_approved",
+            "input approve approval changed (file approvals.facts)",
+            "event input approve approval",
             "stack renfry.workload is undeformed",
         ]
     );
@@ -171,43 +171,111 @@ fn an_input_change_reconciles_held_drift() {
     assert!(s.read(WORLD).contains("web:1.2"));
 }
 
+/// The published digest of a held approval.
+fn pending_digest(s: &Scratch) -> String {
+    let doc: serde_json::Value =
+        serde_json::from_str(&s.read(".dform/renfry.workload/approval-pending.json")).unwrap();
+    doc["digest"].as_str().unwrap().to_string()
+}
+
+/// A token from the example signer (`dform-approve`), as an `approval/1`
+/// fact.
+fn approval_fact(s: &Scratch, digest: &str) -> String {
+    let out = Command::new(common::exe("dform-approve"))
+        .args(["sign", "approver.key", "--digest", digest])
+        .args(["--stack", "renfry.workload", "--approver", "alice"])
+        .args(["--format", "fact"])
+        .current_dir(&s.dir)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8(out.stdout).unwrap()
+}
+
 #[test]
-fn a_prod_rollout_is_held_until_its_release_is_approved() {
+fn a_prod_rollout_is_held_until_its_plan_is_approved() {
     let s = setup("ctl-hold");
+    let out = Command::new(common::exe("dform-approve"))
+        .args(["keygen", "approver.key"])
+        .current_dir(&s.dir)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    s.write(
+        "approvers.jwks.json",
+        &String::from_utf8(out.stdout).unwrap(),
+    );
     let prod = ["--set", "env=prod"];
     // The hold covers a create as well; the rest applies, and the tick
-    // after holds it again.
+    // after holds it again, publishing that plan's digest.
+    let got = once(&s, &prod);
+    let digest = pending_digest(&s);
     assert_eq!(
-        once(&s, &prod),
+        got,
         [
-            "event start",
-            "tick 1: plan: 3 deformations (3 create)",
-            "tick 1: proceed: held, needs approval: k8s.deployment.web",
-            "tick 2: plan: 1 deformation (1 create)",
-            "tick 2: proceed: held, needs approval: k8s.deployment.web",
-            "stack renfry.workload is deformed: k8s.deployment.web held",
+            "event start".to_string(),
+            "tick 1: plan: 3 deformations (3 create)".to_string(),
+            "tick 1: proceed: held, needs approval (a prod rollout): k8s.deployment.web"
+                .to_string(),
+            got[3].clone(),
+            "tick 2: plan: 1 deformation (1 create)".to_string(),
+            "tick 2: proceed: held, needs approval (a prod rollout): k8s.deployment.web"
+                .to_string(),
+            format!("tick 2: approval needed: plan digest {digest} (approval-pending.json)"),
+            "stack renfry.workload is deformed: k8s.deployment.web held".to_string(),
         ]
     );
     assert!(!s.read(WORLD).contains("k8s.deployment"));
+    // A token for the digest, through the input relation, releases it.
     s.write(
         "approvals.facts",
-        "edition 2026\n\nrelease_approved(\"gcr.io/renfry/web:1.0\")\n",
+        &format!("edition 2026\n\n{}", approval_fact(&s, &digest)),
     );
     assert_eq!(
         once(&s, &prod),
         [
-            "input approve release_approved changed (file approvals.facts)",
-            "event input approve release_approved",
-            "tick 1: plan: 1 deformation (1 create)",
-            "stack renfry.workload is undeformed",
+            "input approve approval changed (file approvals.facts)".to_string(),
+            "event input approve approval".to_string(),
+            "tick 1: plan: 1 deformation (1 create)".to_string(),
+            format!("tick 1: approved by alice: plan digest {digest}"),
+            "stack renfry.workload is undeformed".to_string(),
         ]
     );
-    // The next release is held again.
-    release(&s, "gcr.io/renfry/web:1.1");
-    assert_eq!(
-        once(&s, &prod)[3],
-        "tick 1: proceed: held, needs approval: k8s.deployment.web"
+    assert!(s.read(WORLD).contains("k8s.deployment"));
+    assert!(
+        !s.path(".dform/renfry.workload/approval-pending.json")
+            .exists()
     );
+    // The next release is another plan: held again, the old token is for
+    // another digest.
+    release(&s, "gcr.io/renfry/web:1.1");
+    let got = once(&s, &prod);
+    assert_eq!(
+        got[3],
+        "tick 1: proceed: held, needs approval (a prod rollout): k8s.deployment.web"
+    );
+    let digest = pending_digest(&s);
+    // A token in the drop directory beside the state releases it too.
+    let fact = approval_fact(&s, &digest);
+    let token = fact
+        .trim()
+        .trim_start_matches("approval(\"")
+        .trim_end_matches("\")");
+    s.write(".dform/renfry.workload/approvals/alice.token", token);
+    let got = once(&s, &prod);
+    assert_eq!(
+        got[..2],
+        [
+            "event approval (.dform/renfry.workload/approvals changed)".to_string(),
+            "tick 1: plan: 1 deformation (1 update)".to_string(),
+        ]
+    );
+    assert_eq!(got.last().unwrap(), "stack renfry.workload is undeformed");
+    assert!(s.read(WORLD).contains("web:1.1"));
 }
 
 #[test]
