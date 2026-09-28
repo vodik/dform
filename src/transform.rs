@@ -1,11 +1,13 @@
-use crate::ast::{Atom, Constraint, Lit, Program, Rank, Resource, RuleStmt, Settings, Stmt, Term, When};
+use crate::ast::{Atom, Constraint, Extern, Lit, Program, Rank, Resource, RuleStmt, Settings, Stmt, Term, When};
 use crate::value::Value;
 use anyhow::{Result, bail};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone)]
 pub struct Lowered {
     pub program: Program,
+    /// `extern p/N.` declarations.
+    pub externs: BTreeSet<Extern>,
 }
 
 pub fn lower(program: &Program) -> Result<Lowered> {
@@ -17,11 +19,11 @@ pub fn lower(program: &Program) -> Result<Lowered> {
     let expanded = expand_components(&expanded)?;
     let expanded = expand_when(&expanded)?;
     let expanded = desugar_settings(&expanded)?;
-    let expanded = drop_metadata(&expanded);
+    let (expanded, externs) = drop_metadata(&expanded);
     let expanded = desugar_resources(&expanded)?;
     let expanded = desugar_comprehensions(&expanded)?;
     let expanded = lower_contributions(&expanded)?;
-    Ok(Lowered { program: expanded })
+    Ok(Lowered { program: expanded, externs })
 }
 
 /// Rank of a contribution in the core form `arg(T, A, P, V, Rank)`.
@@ -821,13 +823,18 @@ fn merge_counts(dst: &mut BTreeMap<String, usize>, src: &BTreeMap<String, usize>
     }
 }
 
-/// Drop statements that carry no rules. `unique` lowers to nothing: one
-/// value per key is what the attribute aggregate already enforces.
-fn drop_metadata(program: &Program) -> Program {
+/// Drop statements that carry no rules, keeping the `extern` declarations.
+/// `unique` lowers to nothing: one value per key is what the attribute
+/// aggregate already enforces.
+fn drop_metadata(program: &Program) -> (Program, BTreeSet<Extern>) {
     let mut statements = Vec::new();
+    let mut externs = BTreeSet::new();
     for s in &program.statements {
         match s {
             Stmt::Unique(_) => {}
+            Stmt::Extern(e) => {
+                externs.insert(e.clone());
+            }
             Stmt::Import(_) => {
                 // Loader-level feature, ignored in evaluator for now.
             }
@@ -843,7 +850,7 @@ fn drop_metadata(program: &Program) -> Program {
             _ => statements.push(s.clone()),
         }
     }
-    Program { statements }
+    (Program { statements }, externs)
 }
 
 fn expand_components(program: &Program) -> Result<Program> {
@@ -928,6 +935,7 @@ fn rewrite_stmt(stmt: Stmt, scope: &str) -> Stmt {
         Stmt::ApplyPolicy(a) => Stmt::ApplyPolicy(a),
         Stmt::Component(c) => Stmt::Component(c),
         Stmt::Decl(d) => Stmt::Decl(d),
+        Stmt::Extern(e) => Stmt::Extern(e),
     }
 }
 

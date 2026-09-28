@@ -166,6 +166,17 @@ predictability without paying the verbosity tax.
 - Avoid embedding meaning into long strings; derive them from facts.
 - Use helper predicates for readability rather than repeating long bodies.
 
+## Every Predicate Read Must Be Defined
+
+A rule body may only read a predicate that some fact or rule defines, a
+builtin, or one the provider feeds (`input`, `data`, `cloud_exists`, ...). A
+misspelled predicate is a compile error naming it and the rule, not an empty
+relation. A table that may legitimately have no rows is declared:
+
+```prolog
+extern mesh_allow_direct_route/2.
+```
+
 ## Use Stratified Negation for Defaults
 
 Negation is most useful for defaults and "absence" checks.

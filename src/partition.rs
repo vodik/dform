@@ -530,7 +530,7 @@ pub fn cycle_error(g: &Graph, scc: &BTreeSet<Node>, negative_edges: &[Edge]) -> 
     for e in negative_edges {
         let rule = match e.rule {
             Some(i) => fmt_rule(&g.rules[i]),
-            None => "(prelude)".into(),
+            None => "(compiler-generated)".into(),
         };
         out.push_str(&format!("\n  {} -> {} [{}]: {}", e.from, e.to, e.why, rule));
     }

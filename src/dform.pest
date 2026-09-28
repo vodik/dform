@@ -28,6 +28,7 @@ UNIQUE = @{ "unique" ~ KW_TAIL }
 SETTINGS = @{ "settings" ~ KW_TAIL }
 RESOURCE = @{ "resource" ~ KW_TAIL }
 CONSTRAINT = @{ "constraint" ~ KW_TAIL }
+EXTERN = @{ "extern" ~ KW_TAIL }
 
 TRUE = @{ "true" ~ KW_TAIL }
 FALSE = @{ "false" ~ KW_TAIL }
@@ -37,9 +38,12 @@ LOWER = _{ 'a'..'z' }
 
 program = { SOI ~ stmt* ~ EOI }
 
-stmt = { (decl_stmt | component_stmt | component_def_stmt | use_stmt | policy_pack_stmt | apply_policy_stmt | when_stmt | import_stmt | unique_stmt | settings_stmt | resource_stmt | constraint_stmt | rule_stmt | fact) ~ "." }
+stmt = { (extern_stmt | decl_stmt | component_stmt | component_def_stmt | use_stmt | policy_pack_stmt | apply_policy_stmt | when_stmt | import_stmt | unique_stmt | settings_stmt | resource_stmt | constraint_stmt | rule_stmt | fact) ~ "." }
 
 decl_stmt = { DECL ~ pred ~ "{" ~ decl_fields? ~ "}" }
+
+// `extern p/N.` declares a predicate a provider feeds (it may have no rows).
+extern_stmt = { EXTERN ~ pred ~ "/" ~ pos_int }
 decl_fields = { ident ~ ("," ~ ident)* ~ ","? }
 
 component_stmt = { COMPONENT ~ ident ~ ident ~ "{" ~ stmt* ~ "}" }

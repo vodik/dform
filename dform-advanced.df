@@ -115,7 +115,9 @@ warn("mesh has direct route between non-adjacent nodes", { from: A, to: B }) :-
   want(net.route, R),
   not mesh_allow_direct_route(A, B).
 
-# Uncomment to explicitly allow certain non-adjacent direct routes:
+# Declared so the check can negate it with no rows; uncomment the fact to
+# explicitly allow certain non-adjacent direct routes:
+extern mesh_allow_direct_route/2.
 # mesh_allow_direct_route(core_a, core_c).
 
 # --- Auto-mesh demo (derived links from a list) ---

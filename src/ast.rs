@@ -125,6 +125,14 @@ pub enum Stmt {
     Unique(Unique),
     Settings(Settings),
     Decl(Decl),
+    Extern(Extern),
+}
+
+/// `extern p/N.`: `p/N` is defined by a provider, not by the program.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Extern {
+    pub pred: String,
+    pub arity: usize,
 }
 
 #[derive(Debug, Clone)]

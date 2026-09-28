@@ -1,6 +1,6 @@
 use crate::ast::{
     ApplyPolicy, Atom, Component, ComponentDef, Constraint, Import, Lit, PolicyPack, Program,
-    Decl, Settings, FieldAssign, FieldOp, Rank, Resource, RuleStmt, Stmt, Term, Unique, Use, When,
+    Decl, Extern, Settings, FieldAssign, FieldOp, Rank, Resource, RuleStmt, Stmt, Term, Unique, Use, When,
 };
 use crate::value::Value;
 use anyhow::{anyhow, bail, Context, Result};
@@ -29,6 +29,7 @@ fn is_kw(rule: Rule) -> bool {
             | Rule::SETTINGS
             | Rule::RESOURCE
             | Rule::CONSTRAINT
+            | Rule::EXTERN
             | Rule::NOT
             | Rule::IN
             | Rule::TRUE
@@ -70,6 +71,12 @@ fn parse_stmt(pair: Pair<Rule>) -> Result<Stmt> {
                 }
             }
             Ok(Stmt::Decl(Decl { pred, fields }))
+        }
+        Rule::extern_stmt => {
+            let mut it = pair.into_inner().filter(|p| !is_kw(p.as_rule()));
+            let pred = it.next().unwrap().as_str().to_string();
+            let arity: usize = it.next().unwrap().as_str().parse()?;
+            Ok(Stmt::Extern(Extern { pred, arity }))
         }
         Rule::fact => Ok(Stmt::Fact(parse_atom(pair.into_inner().next().unwrap())?)),
         Rule::rule_stmt => {

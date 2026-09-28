@@ -121,6 +121,12 @@ fn prefix_stmt(stmt: Stmt, alias: &str) -> Stmt {
             }
             Stmt::Decl(d)
         }
+        Stmt::Extern(mut e) => {
+            if !is_core_pred(&e.pred) {
+                e.pred = format!("{alias}.{}", e.pred);
+            }
+            Stmt::Extern(e)
+        }
         // Do not prefix component statements or metadata; they are local structure.
         other => other,
     }
@@ -181,7 +187,29 @@ fn prefix_term(term: Term, alias: &str) -> Term {
     }
 }
 
-fn is_core_pred(pred: &str) -> bool {
+/// Predicates the provider or the CLI injects as facts (discovery, world,
+/// schema, inputs). They are defined even when a run has no rows for them.
+pub const PROVIDER_PREDS: &[&str] = &[
+    "input",
+    "data",
+    "cloud_exists",
+    "cloud_attr",
+    "cloud_computed",
+    "world_attr",
+    "type_attr",
+    "type_list_key",
+    "type_provider",
+    "capability",
+    "tag_path",
+];
+
+pub fn is_provider_pred(pred: &str) -> bool {
+    PROVIDER_PREDS.contains(&pred)
+}
+
+/// Compiler-owned predicates: never namespaced by `import ... as`, and
+/// defined whether or not the program writes them.
+pub fn is_core_pred(pred: &str) -> bool {
     matches!(
         pred,
         "want"
@@ -204,7 +232,11 @@ fn is_core_pred(pred: &str) -> bool {
             | "member"
             | "env"
             | "has_env"
-    )
+            | "attr"
+            | "attr_conflict"
+            | "attr_stuck"
+            | "type_lattice"
+    ) || is_provider_pred(pred)
 }
 
 fn absolutize(path: impl AsRef<Path>) -> Result<PathBuf> {

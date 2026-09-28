@@ -22,6 +22,7 @@ const LATTICE_DECLS: [&str; 2] = ["type_lattice", "type_list_key"];
 pub fn eval(program: &Program, extra_facts: &[Atom]) -> Result<(EvalResult, Vec<String>)> {
     let lowered = transform::lower(program)?;
     let program = lowered.program;
+    let externs = lowered.externs;
     let mut facts: BTreeSet<Atom> = BTreeSet::new();
     let mut origins = Origins::default();
     for f in extra_facts {
@@ -56,6 +57,8 @@ pub fn eval(program: &Program, extra_facts: &[Atom]) -> Result<(EvalResult, Vec<
         }
     }
 
+    check_defined(&rules, &constraints, &facts, &externs)?;
+
     // Simulation (proposal F): the recorder needs the rule list to print
     // stuck instances; constraints are appended as deny rules.
     if crate::sim::active() {
@@ -73,7 +76,8 @@ pub fn eval(program: &Program, extra_facts: &[Atom]) -> Result<(EvalResult, Vec<
     // revised). Every rule runs in the stratum of its head node.
     let mut graph_rules = rules.clone();
     graph_rules.extend(constraints.iter().map(partition::constraint_rule));
-    let graph = partition::build_lowered(graph_rules, &fact_atoms, &crate::schema::fake(), &partition::Options::default());
+    let opts = partition::Options { externs: externs.iter().map(|e| e.pred.clone()).collect() };
+    let graph = partition::build_lowered(graph_rules, &fact_atoms, &crate::schema::fake(), &opts);
     let strata = match partition::stratify(&graph) {
         partition::Verdict::Stratified { strata } => strata,
         partition::Verdict::Rejected { scc, negative_edges } => {
@@ -147,6 +151,40 @@ pub fn eval(program: &Program, extra_facts: &[Atom]) -> Result<(EvalResult, Vec<
     }
 
     Ok((EvalResult { facts, warnings }, violations))
+}
+
+/// E §2.6: a body predicate with no definition is a compile error. Defined
+/// means: a fact or a rule head, a builtin, a compiler-owned or
+/// provider-injected predicate, a fact given to this run, or `extern p/N.`.
+fn check_defined(
+    rules: &[RuleStmt],
+    constraints: &[Constraint],
+    facts: &BTreeSet<Atom>,
+    externs: &BTreeSet<crate::ast::Extern>,
+) -> Result<()> {
+    let mut defined: BTreeSet<&str> = facts.iter().map(|a| a.pred.as_str()).collect();
+    defined.extend(rules.iter().map(|r| r.head.pred.as_str()));
+    defined.extend(externs.iter().map(|e| e.pred.as_str()));
+    let is_defined = |p: &str| {
+        defined.contains(p) || is_builtin_pred(p) || matches!(p, "member" | "enumerate") || crate::loader::is_core_pred(p)
+    };
+    let bodies = rules
+        .iter()
+        .map(|r| (&r.body, partition::fmt_rule(r)))
+        .chain(constraints.iter().map(|c| (&c.body, partition::fmt_rule(&partition::constraint_rule(c)))));
+    let mut errors = Vec::new();
+    for (body, text) in bodies {
+        for lit in body {
+            let (Lit::Pos(a) | Lit::Not(a)) = lit else { continue };
+            if !is_defined(&a.pred) {
+                errors.push(format!("undefined predicate {}/{} in rule: {text}", a.pred, a.args.len()));
+            }
+        }
+    }
+    if !errors.is_empty() {
+        bail!("{}\n(declare a predicate a provider feeds with `extern p/N.`)", errors.join("\n"));
+    }
+    Ok(())
 }
 
 /// Where each contribution came from: the text of every rule that derived
@@ -1830,5 +1868,32 @@ mod tests {
                 "attr(\"net.vpc\", \"b\", \"sgs\", [\"default_sg\", \"ssh\"])".to_string(),
             ]
         );
+    }
+
+    /// DESIGN.org "Unknown predicates are silently empty": a misspelled
+    /// predicate is a compile error naming it and the rule.
+    #[test]
+    fn undefined_predicate_is_an_error() {
+        let err = run(
+            "env(prod).
+             resource net.vpc main { cidr = \"10.0.0.0/16\" } :- envv(prod).",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("undefined predicate envv/1"), "{err}");
+        assert!(err.contains("want(\"net.vpc\", \"main\") :- envv(\"prod\")"), "{err}");
+    }
+
+    /// `extern p/N.` declares a provider-fed predicate; provider-injected
+    /// predicates are defined with no rows.
+    #[test]
+    fn extern_and_provider_predicates_are_defined() {
+        let (r, _) = run(
+            "extern allowed/1.
+             want(net.vpc, a).
+             lonely(N) :- want(net.vpc, N), not allowed(N), not cloud_exists(net.vpc, N).",
+        )
+        .unwrap();
+        assert_eq!(facts_of(&r, "lonely"), vec!["lonely(\"a\")".to_string()]);
     }
 }
