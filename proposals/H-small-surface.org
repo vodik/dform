@@ -559,3 +559,34 @@ bring back the second spellings H removes:
   not rewrite one into the other, so section 1's rule keeps it out. It is
   the one Terraform readers will ask for first; revisit if the two-row form
   proves to be a real cost in practice, not before.
+
+* Addendum (2026-09-29): section 8 as implemented
+
+These are the implementation's decisions, recorded when stage 2 landed
+(branch =fanout/proposal-h=); they settle section 8 and do not revise the
+decisions above.
+
+- *The edition* (the user's decision, over section 9's =edition 2027=):
+  there are no releases and edition 2026 was never formalized, so the new
+  grammar is =edition 2026= itself. The compiler reads only =edition
+  2026=; the grammar before it is deleted, with no compatibility path.
+- *H-6*: the golden strata listings differ only by the value nodes of the
+  =let=s that hold a reference (=cfg=, =live=): one node each, and the
+  edges from it. No partition coarsened, and the number of strata is
+  unchanged. Every golden plan is byte-identical.
+- *H-8*: the constraint branch of the phase handling (=reads_later=,
+  =stuck_at=) is deleted with =constraint=. The resumed-evaluation test that
+  drove it, its constraint written as a deny, passes unchanged, so deny
+  rules carry the phase handling as they are. The CLI still prints the
+  denies that block a plan under =constraint violations:=.
+- *H-15*: in a program file these are errors that print the surface
+  form: in a body, =want=, =attr=, =setting=, =output=, =cloud_attr= and
+  =cloud_exists= with a static type (or row, or path); in a head, =want=,
+  =arg= and =arg_add= with a static type, =setting=, =output/2=, =input/2=,
+  and =deny=/=warn= with a literal message; =member= anywhere (H-9); and a
+  body that reads =deny= or =warn= (H-8). The core stays writable with a
+  variable type or path, as a raw =arg= read in a body, and in text that is
+  not a program file (provider schemas, the compiler's own tests). The
+  adversarial fixtures were rewritten to the surface forms where the
+  lowering is identical; what they keep in the core is what only the core
+  can say.
