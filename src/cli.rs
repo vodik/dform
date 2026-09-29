@@ -173,6 +173,10 @@ enum Command {
         #[command(subcommand)]
         cmd: DevCommand,
     },
+    /// Serve the language server protocol on stdin and stdout: diagnostics
+    /// of the selected environment, a contributors hover, schema
+    /// completion (README "Language server").
+    Lsp,
     /// The completion scripts' helper: candidates for the next word.
     #[command(name = "__complete", hide = true)]
     Complete { words: Vec<String> },
@@ -556,6 +560,10 @@ pub fn main(
     let args = Args::parse_from(args);
     let result = match &args.cmd {
         Command::ServeProvider { name } => serve_provider(name),
+        Command::Lsp => dform_lsp::serve_stdio(dform_lsp::Options {
+            version: env!("CARGO_PKG_VERSION"),
+            real: launch,
+        }),
         _ => resolve(args).and_then(|cli| run(cli, None)),
     };
     match result {
@@ -656,6 +664,7 @@ fn resolve(args: Args) -> Result<Cli> {
         Command::Completions { shell } => (Cmd::Completions { shell }, None),
         Command::Complete { words } => (Cmd::Complete { words }, None),
         Command::ServeProvider { .. } => bail!("internal: `__provider` serves before a project"),
+        Command::Lsp => bail!("internal: `lsp` serves before a project"),
     };
     let inputs = args.inputs;
     let mut cli = Cli {
@@ -3812,6 +3821,7 @@ const COMMANDS: &[&str] = &[
     "controller",
     "completions",
     "init",
+    "lsp",
     "dev",
 ];
 

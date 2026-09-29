@@ -11,6 +11,7 @@ members = [
     "crates/dform-direct",
     "crates/dform-proptest",
     "crates/dform-s3",
+    "crates/dform-lsp",
     "tree-sitter-dform",
 ]
 # `cargo build` and `cargo test` build the provider binaries the CLI spawns
@@ -28,6 +29,7 @@ default-members = [
     "crates/dform-direct",
     "crates/dform-proptest",
     "crates/dform-s3",
+    "crates/dform-lsp",
 ]
 resolver = "3"
 
@@ -50,6 +52,8 @@ dform-s3 = { path = "crates/dform-s3" }
 # The mock, served by `dform __provider fake`: dform spawns itself for it,
 # so the mock is always of its own build.
 dform-mock = { path = "crates/dform-mock" }
+# `dform lsp`, the language server.
+dform-lsp = { path = "crates/dform-lsp" }
 
 [[bin]]
 name = "dform"

@@ -114,6 +114,7 @@ Apply.
 | `dev strata`, `dev graph`, `dev --world W --inventory I --provider P --chaos C COMMAND` | the mock and the evaluator |
 | `init [NAME]` | make the working directory a project |
 | `completions zsh\|bash\|fish` | a completion script |
+| `lsp` | the language server, on stdin and stdout (see "Language server") |
 
 `dform stack list` shows every stack, its key and file, and per deployment
 with state its last apply (time, actor and the project's commit, from the
@@ -1755,13 +1756,10 @@ automatically (`dform-ts-mode.el` looks for `tree-sitter-dform/` next
 to `editors/`), a standalone install needs the repository's URL and
 `:source-dir "tree-sitter-dform/src"` in `treesit-language-source-alist`.
 
-The eglot half is configuration only, since the `dform lsp` language
-server does not exist yet: an `eglot-server-programs` entry for `dform
-lsp`, and two commands, `dform-select-environment` and
-`dform-why-at-point`, wired to `eglot-execute-command` (command names
-`dform.selectEnvironment` and `dform.why`). Both will work once a
-`dform lsp` server ships and implements those two commands; until
-then they error with "no active eglot server". No `lsp-mode`
+The eglot half: an `eglot-server-programs` entry for `dform lsp` (the
+language server below), and two commands, `dform-select-environment`
+and `dform-why-at-point`, wired to `eglot-execute-command` (command
+names `dform.selectEnvironment` and `dform.why`). No `lsp-mode`
 dependency.
 
 `editors/emacs/test/dform-ts-mode-test.el` holds the `ert` tests
@@ -1773,6 +1771,49 @@ emacs --batch -Q -L editors/emacs -l ert \
   -l editors/emacs/test/dform-ts-mode-test.el \
   -f ert-run-tests-batch-and-exit
 ```
+
+## Language server
+
+`dform lsp` serves the language server protocol on stdin and stdout
+(`crates/dform-lsp`, lsp-server; synchronous, one evaluation at a
+time). An edit re-evaluates the edited file's project once edits pause
+for 300 ms: every stack discovery finds, as `dform plan` would, up to the
+plan's policy pass, with the open buffers' unsaved text. Evaluation is
+read only: the deployment's recorded world and state are read, never
+written, nothing is applied, and the providers are the mock linked into
+the server; a real provider process is started only when the client
+sets the initialization option `"dform.lsp.real_providers": true`. On
+examples/demo an evaluation takes about 30 ms in a release build.
+
+- *Diagnostics of the selected environment*: parse and compile errors at
+  their spans; each `deny` and `warn` at the rule that derived it (a
+  conflict at a contribution), the contributions below it as related
+  information; a violated constraint at the constraint; lint warnings.
+- *Contributors hover*: on an attribute in a resource block, a stated
+  fact or rule, or an attribute read in a rule's body (`a.cidr`): each
+  attribute's collapsed value, the winning rank and every contribution
+  with its rank and owner (rule, `file:line:col`, pack or module
+  instance), then the derivation as `dform why` prints it.
+- *Schema completion*: a resource block's paths (type, flags and
+  refinements from the provider's schema facts) and an enum path's
+  values; types after `resource`; an instance block's module inputs and
+  `module.instance.`'s outputs; `contributes` patterns, and in a policy
+  pack the paths its grants allow.
+- Formatting (`dform fmt`'s formatter) and go-to-definition of modules,
+  policies and predicates.
+
+Two commands (`workspace/executeCommand`), which the Emacs mode binds:
+
+| Command | Argument | |
+|---|---|---|
+| `dform.selectEnvironment` | a map of key values (`{"env": "prod"}`), `"env=prod"`, a scenario's name, `"default"`; none: the choices | evaluate every stack of the workspace as that deployment or scenario; a key a stack does not have is ignored |
+| `dform.why` | `{textDocument, position}` | the derivation text `dform why` prints for the attribute under the cursor (also shown as a message) |
+
+With no argument `dform.selectEnvironment` returns `{current, choices}`,
+each choice a `label` and its `keys` or `scenario` (key values from the
+key inputs' enum types). After a selection the server sends the
+notification `dform/environment` with `{label, deployments}`
+(`deployments`: `dform[env=prod]`), for a mode line.
 
 ## Testing
 
