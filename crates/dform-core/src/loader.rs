@@ -26,12 +26,22 @@ static PARSED: Mutex<BTreeMap<PathBuf, Parsed>> = Mutex::new(BTreeMap::new());
 /// declared in one file is used in another. Each import is inlined where
 /// it stands.
 pub fn load_program(entry_files: &[PathBuf]) -> Result<Program> {
+    load_program_with(entry_files, &|p| fs::read_to_string(p))
+}
+
+/// [`load_program`], each file's text read by `read` (given the file's
+/// canonical path): a language server's open buffers, unsaved, over the
+/// files on disk.
+pub fn load_program_with(
+    entry_files: &[PathBuf],
+    read: &dyn Fn(&Path) -> std::io::Result<String>,
+) -> Result<Program> {
     let mut units = Vec::new();
     let mut index: BTreeMap<PathBuf, usize> = BTreeMap::new();
     let mut entries = Vec::new();
     for f in entry_files {
         let abs = absolutize(f)?;
-        if let Some(i) = load_unit(&abs, &mut units, &mut index)? {
+        if let Some(i) = load_unit(&abs, read, &mut units, &mut index)? {
             entries.push(i);
         }
     }
@@ -46,6 +56,7 @@ pub fn load_program(entry_files: &[PathBuf]) -> Result<Program> {
 
 fn load_unit(
     path: &Path,
+    read: &dyn Fn(&Path) -> std::io::Result<String>,
     units: &mut Vec<crate::syntax::resolve::Unit>,
     index: &mut BTreeMap<PathBuf, usize>,
 ) -> Result<Option<usize>> {
@@ -54,7 +65,7 @@ fn load_unit(
     if index.contains_key(&abs) {
         return Ok(None);
     }
-    let text = fs::read_to_string(&abs).with_context(|| format!("read {}", abs.display()))?;
+    let text = read(&abs).with_context(|| format!("read {}", abs.display()))?;
     let name = display_name(&abs);
     let (green, file) = {
         let mut cache = PARSED.lock().unwrap_or_else(|e| e.into_inner());
@@ -115,7 +126,7 @@ fn load_unit(
             Some(root) => root.join(&rel),
             _ => base_dir.join(&rel),
         };
-        let unit = load_unit(&target, units, index)?;
+        let unit = load_unit(&target, read, units, index)?;
         // One program owns one stack: what it imports is a module.
         let imported = index.get(&fs::canonicalize(&target).unwrap_or(target.clone()));
         if let Some(&u) = imported
@@ -300,6 +311,36 @@ mod tests {
             })
             .is_none()
         );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// `load_program_with` reads each file through its reader: an open
+    /// buffer's text, not the file's on disk, and an import of it too.
+    #[test]
+    fn a_reader_stands_in_for_the_disk() {
+        let dir = std::env::temp_dir().join(format!("dform-loader-with-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let (main, lib) = (dir.join("main.df"), dir.join("lib.df"));
+        fs::write(&main, "edition 2026\nimport \"lib.df\"\np(1)\n").unwrap();
+        fs::write(&lib, "edition 2026\nq(1)\n").unwrap();
+        let buffer = |p: &Path| -> std::io::Result<String> {
+            if p.ends_with("lib.df") {
+                Ok("edition 2026\nq(2)\n".into())
+            } else {
+                fs::read_to_string(p)
+            }
+        };
+        let p = load_program_with(std::slice::from_ref(&main), &buffer).unwrap();
+        let facts: Vec<String> = p
+            .statements
+            .iter()
+            .filter_map(|s| match s {
+                Stmt::Fact(a) => Some(crate::partition::fmt_atom(a)),
+                _ => None,
+            })
+            .collect();
+        assert!(facts.contains(&"q(2)".to_string()), "{facts:?}");
+        assert!(!facts.contains(&"q(1)".to_string()), "{facts:?}");
         let _ = fs::remove_dir_all(&dir);
     }
 }
