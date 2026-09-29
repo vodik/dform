@@ -9,8 +9,8 @@ and predictable behavior.
 If you see lots of repeated guards like:
 
 ```dform
-pg.backup_days = 14 if env == "prod", pg in db.postgres
-pg.backup_days = 3 if env == "staging", pg in db.postgres
+set pg.backup_days = 14 if env == "prod", pg in db.postgres
+set pg.backup_days = 3 if env == "staging", pg in db.postgres
 ```
 
 Prefer a lookup table:
@@ -24,7 +24,7 @@ settings staging {
   db.backup_days = 3
 }
 
-pg.backup_days = settings[env].db.backup_days if pg in db.postgres
+set pg.backup_days = settings[env].db.backup_days if pg in db.postgres
 ```
 
 Why it scales:
@@ -41,13 +41,13 @@ variable at all:
 Bad (`sn` is an unknown name):
 
 ```dform
-net.subnet[sn].visibility = "private"
+set net.subnet[sn].visibility = "private"
 ```
 
 Good:
 
 ```dform
-sn.visibility = "private" if sn in net.subnet
+set sn.visibility = "private" if sn in net.subnet
 ```
 
 ## Prefer Sugar That Lowers to Core IR
@@ -57,13 +57,14 @@ For authoring, prefer:
 - `resource` blocks over repeated `want/arg`
 - reads where the value is used (`cidr = vpc.cidr`, `cfg.region`) over a
   variable bound in one line and used in another
-- record atoms (`peering{ env: env, name: n }`) over positional arguments
-- object/list literals (`{k: v}`, `[a, b]`) over lots of `tags.foo` keypaths
+- named arguments (`peering(env: env, name: n)`) over positional arguments
+- object/list literals (`{k: v}`, `[a, b]`) over lots of `tags.foo` entries
 - list comprehensions (`[x | ...]`) over hand-written `collect(...)` rules
-- `when <guard> { ... }` to avoid repeating the same guard on many statements
-- declare a set lattice for list attributes several sources contribute to (`type_lattice(iam.policy, .statements, "set")`)
+- a module `instance` with an `if` clause to gate a group of resources on
+  one guard
+- declare a set lattice for list attributes several sources contribute to (`type_lattice(iam.policy, "statements", "set")`)
 
-## Explode Lists Into Rows With `member/2`
+## Explode Lists Into Rows With `in`
 
 If humans want to write lists, but your infra wants one resource per item, convert the list into a relation:
 
@@ -75,10 +76,10 @@ settings prod {
 vm_ip(e, ip) if ip in settings[e].vm.ips
 
 # If you need stable indices (order-sensitive), bind the index too:
-vm_ip_indexed(e, i, ip) if some i, ip in settings[e].vm.ips
+vm_ip_indexed(e, i, ip) if ip = settings[e].vm.ips[i]
 
-resource compute.vm "vm-{ip}" {
-  for vm_ip(env, ip)
+resource compute.vm "vm-${ip}" {
+  if vm_ip(env, ip)
   private_ip = ip
 }
 ```
@@ -95,7 +96,7 @@ Note: Datalog has no intrinsic ordering, so dform's aggregates are deterministic
 Every contribution to one attribute, whichever resource block, module or
 policy pack it comes from, meets in one cell: the attribute aggregate
 `attr(Type, Name, Path, Value)`. A read of an attribute (`vpc.cidr` in a
-body, `settings.prod.x`, `m.i.k`) reads that collapsed value, never a single
+body, `settings["prod"].x`, `m.i.k`) reads that collapsed value, never a single
 contribution, and the stratifier runs them after every contribution is in.
 Statement order never matters.
 
@@ -105,15 +106,15 @@ How a path merges is its lattice:
   are a conflict;
 - an object is a map, merged per key (nested objects too, so the dotted
   paths `spec.replicas` and `spec.template.spec.containers` both land in `spec`): `tags = { env: dev }` in a resource and
-  `r.tags = { team: "platform" } if r in resource` in a policy pack give both tags;
+  `set r.tags = { team: "platform" } if r in resource` in a policy pack give both tags;
   two sources disagreeing on one key are a conflict;
 - a list declared a set is the union of every source at the highest rank
   present; a `@default` set is replaced wholesale by a normal one:
 
 ```dform
-type_lattice(iam.policy, .statements, "set")
-type_lattice(settings, .audit.sinks, "set")
-settings.prod.audit.sinks += ["s3"]
+type_lattice(iam.policy, "statements", "set")
+type_lattice(settings, "audit.sinks", "set")
+set settings["prod"].audit.sinks += ["s3"]
 
 settings prod {
   audit.sinks += ["cloudwatch"]
@@ -141,7 +142,7 @@ env_name("staging")
 env_name("prod")
 
 settings e @default {
-  for env_name(e)
+  if env_name(e)
   db = { backup_days: 3, multi_az: false }
 }
 
@@ -151,7 +152,7 @@ settings prod {
 ```
 
 The same shape gives org-wide defaults from a policy pack without reading the
-attribute it defaults: `r.tags = { team: "platform" } @default if r in resource`.
+attribute it defaults: `set r.tags = { team: "platform" } @default if r in resource`.
 
 Because the engine lowers these to the same small core, you keep composition and
 predictability without paying the verbosity tax.
@@ -170,7 +171,7 @@ misspelled predicate is a compile error naming it and the rule, not an empty
 relation. A table that may legitimately have no rows is declared:
 
 ```dform
-decl mesh_allow_direct_route/2
+decl mesh_allow_direct_route(from, to)
 ```
 
 ## Convert Explicitly
@@ -186,9 +187,12 @@ Negation is most useful for defaults and "absence" checks.
 Pattern:
 
 ```dform
-has_region() if input("region", _)
-region = r if input("region", r)
-region = "us-east1" if not has_region()
+input region: string = "us-east1"      # a default, and --set region=... wins
+
+# or, over a relation that may have no row:
+has_region(true) if region_of(_)
+let region = r if region_of(r)
+let region = "us-east1" if not has_region(true)
 ```
 
 Rules that rely on `not ...` should be:
@@ -203,9 +207,9 @@ Components give you the Terraform module benefits:
 - explicit outputs for wiring
 
 Inside a component:
-- keep resources local (`want/2`, `arg/4`)
-- publish only what consumers need via `output/2`
-- import policy via global constraints or future policy packs
+- keep resources local (`resource` blocks)
+- publish only what consumers need via `output k: T = t`
+- bring in policy with a pack: `use baseline`
 
 ## Keep Resource Identity Stable
 
@@ -213,18 +217,18 @@ Prefer stable resource names and express change via attributes. If you bake lots
 of configuration into the resource name, you create needless replacements.
 
 Good:
-- `net.vpc.network.main::vpc` (stable)
+- `net.vpc["network.main::vpc"]` (stable)
 - `cidr` changes across envs
 
 Risky:
 - names that include computed values, timestamps, or random suffixes
 
-## Make Constraints Read Like Policies
+## Make Denies Read Like Policies
 
-Constraints are strongest when written as invariants:
+Denies are strongest when written as invariants:
 
 - "db must not be public"
 - "prod db must be multi_az"
 
-Avoid constraints that replicate half of your config; prefer checking the final
+Avoid denies that replicate half of your config; prefer checking the final
 desired shape.

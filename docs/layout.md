@@ -10,7 +10,7 @@ stacks/<stack>.df           one stack per file: the only files with `stack`
 modules/<module>.df         one module per file
 policies/<pack>.df          policy packs
 config/<stack>/<key>.yaml   per-deployment rows: a keyed stack's `config`
-data/<table>.csv            tables (`input relation p(...) from csv(...)`)
+data/<table>.csv            tables (`input p(...) from csv(...)`)
 scenarios/<name>.df         what-if programs
 providers/<name>/           a local provider: a plugin executable, or a
                             schema (and externs) the mock plays
@@ -46,7 +46,7 @@ dform.state/                state: per deployment, audit logs, plan keys,
   input defaulting to `"prod"` or `"production"` is a warning.
 - Every path a program states resolves from the project root: imports
   (`import "modules/network.df"`), table and config sources
-  (`csv("data/peerings.csv")`, `config = yaml("config/dform/{env}.yaml")`),
+  (`csv("data/peerings.csv")`, `config = yaml("config/dform/${env}.yaml")`),
   `file.*` externs, input relations from files, a provider's `source` and a
   trust root.
 - `dform.state/` is gitignored: each deployment's plan key (`state.key`,

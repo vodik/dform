@@ -432,7 +432,7 @@ and read like any rule reads: inputs, settings rows, value names, tables and
 ```dform
 provider google {
   project = cfg.project_id                                # the env's settings row
-  credentials = env_var("GOOGLE_CREDENTIALS_{env}")       # a secret, per key
+  credentials = env_var("GOOGLE_CREDENTIALS_${env}")      # a secret, per key
   expect_account = cfg.project_id
 }
 ```
@@ -492,7 +492,7 @@ type_attr(net.vpc, "id", "string", ["computed", "id"])      # Flags: required co
 type_attr(db.postgres, "endpoint", "string", ["computed"])  #   sensitive nullable optional_computed
 type_attr(net.vpc, "cidr", "string", ["force_new"])         #   force_new
 type_list_key(k8s.deployment, "spec.template.spec.containers", ["name"])  # list merge keys
-type_mint(db.postgres, "endpoint", "{{name}}.db.fake")      # optional: how the mock mints it
+type_mint(db.postgres, "endpoint", "{name}.db.fake")        # optional: how the mock mints it
 type_retry(db.postgres, 5)                                  # optional: Read attempts (default 3)
 type_replace(k8s.deployment, "create_first")                # optional: create_first, destroy_first, either (default)
 type_doc(net.vpc, "cidr", "The network's IPv4 range.")      # optional: a path's description ("" the type's)
@@ -534,7 +534,7 @@ facts. The providers are asked for only those types' rows too (the
 Schema request's `types`). A `query` or `why` of a schema predicate, a
 rule reading one for a type it does not spell out (`type_attr(T, ...)`),
 or a rule wanting a resource whose type is built at runtime
-(`want(t, a) if t = "k8s.{k}"`), sees all of it. `type_doc` rows, the
+(`want(t, a) if t = "k8s.${k}"`), sees all of it. `type_doc` rows, the
 descriptions the language server shows, are never injected.
 
 ## The Kubernetes provider
@@ -601,7 +601,7 @@ provider k8s { source = "bin/dform-provider-k8s" }        # an executable
   containers' `imagePullPolicy`, `terminationMessagePath`,
   `terminationMessagePolicy`.
   Read returns their live values as computed, so a ref to one
-  (`ref(k8s.service, web, .spec.clusterIP)`) is a null until the object
+  (`ref(k8s.service, "web", "spec.clusterIP")`) is a null until the object
   exists, then the cluster's value, as against the mock. An update never
   sends such a value unless the program sets it, so the server's value
   stays unowned rather than becoming `dform`'s (and neither `status` nor
@@ -735,10 +735,8 @@ phase boundary, exactly Terraform's refusal. It is two generated denies,
 so the refusal has provenance (`why`) and policy can relax it:
 
 ```dform
-deny "strict: unresolved value at plan time" { rule: r, head: h, nulls: ns } if
-  stuck(r, h, _, ns), not allow_stuck(h)
-deny "strict: a pending group at plan time" { rule: r, head: h, nulls: ns } if
-  may_derive(r, h, ns), not allow_stuck(h)
+deny "strict: unresolved value at plan time" { rule: r, head: h, nulls: ns } if stuck(r, h, _, ns), not allow_stuck(h)
+deny "strict: a pending group at plan time" { rule: r, head: h, nulls: ns } if may_derive(r, h, ns), not allow_stuck(h)
 ```
 
 The first covers every stuck derivation: a stuck resource rule (a pending
@@ -860,7 +858,7 @@ deformations of an interrupted apply, as `remaining`, when it resumes.
 N)` when given at an apply tick), and a policy can read the same facts:
 
 ```dform
-deny(m) if deformation("delete", t, a, _), m = "no deletes here: {t}.{a}"
+deny "no deletes here: ${t}[\"${a}\"]" if deformation("delete", t, a, _)
 ```
 
 ```bash
@@ -961,7 +959,7 @@ is written, for a policy to read or deny:
 
 ```dform
 output pw_len = declassify(len(pw), "its length is public")
-deny(m) if declassified(at, r), m = "declassified at {at}: {r}"
+deny "declassified at ${at}: ${r}" if declassified(at, r)
 ```
 
 The value of an input or output declared `secret(T)` prints as its label,
@@ -983,7 +981,7 @@ stack app[env] { approvals = jwks_file("approvers.jwks.json") }
 requires_approval(d, "a replace in prod") if {
   env == "prod"
   deformation("replace", t, a, _)
-  d = "{t}[\"{a}\"]"
+  d = "${t}[\"${a}\"]"
 }
 
 # Optional: who may approve what. Without it, any key of the trust root may.
@@ -1036,7 +1034,7 @@ proceed: held, needs approval (Reason): T["A"]`) and the plan's digest is
 published: a log line, `tick N: approval needed: plan digest sha256:...`,
 and `approval-pending.json` beside the state. A token for that digest
 releases it when it arrives through the input relation `approval/1` (the
-token's text; `input relation approval/1 from file("approvals.facts")`) or
+token's text; `input approval(token) from facts("approvals.facts")`) or
 as a file in the drop directory `approvals/` beside the state (`event
 approval`); `tick N: approved by WHO: plan digest ...`. A token for another
 plan is ignored, one that fails otherwise is logged (`approval refused:
@@ -1114,12 +1112,12 @@ authoritative.
 the final fact store and prints a table with one column per variable:
 
 ```bash
-cargo run -- -C examples/demo query 'attr(net.vpc, n, .cidr, c)' dform env=prod
+cargo run -- -C examples/demo query 'attr(net.vpc, n, "cidr", c)' dform env=prod
 # N                    C
 # "network.main::vpc"  10.20.0.0/16
 # "network.peer::vpc"  10.21.0.0/16
 # (2 rows)
-cargo run -- -C examples/demo query 'attr(t, a, .cidr, c), want(t, a), t != net.subnet'
+cargo run -- -C examples/demo query 'attr(t, a, "cidr", c), want(t, a), t != net.subnet'
 cargo run -- -C examples/demo query 'want(net.vpc, "network.main::vpc")'    # yes / no
 cargo run -- -C examples/demo query want                                    # every want fact
 cargo run -- -C examples/demo query 'net.vpc["network.main::vpc"]'          # its attributes: path, value
@@ -1220,59 +1218,69 @@ name's suffix comes from the key, so the name is the same too).
 
 ## dform model (current)
 
-The grammar is `docs/grammar.md` (edition 2026; proposal G's surface,
-`proposals/G-surface-syntax.org`). Every `.df` file starts with
-`edition 2026`, and a newline ends a statement. Case decides nothing: names
-are resolved. A constant is quoted (`"prod"`), a variable is a lowercase
-name bound where it is written, an input or a value rule is read by its
-name (`env == "prod"`), a resource is reached through a dot (`vpc.cidr`,
-`k8s.namespace.web.metadata.name`, `net.vpc[b]`, `database.main/db`), and
-`.a.b` is a keypath. A dot is a reference where it is a whole value (a
-field: `vpc_id = vpc.id`) and a read everywhere else. `-` and `/` are
-operators, so hyphenated names are strings (`"us-east-1"`). A syntax error
-names `file:line:col` and what was expected, and parsing goes on to the
-next statement, so every error in a file is reported at once.
+The grammar is `docs/grammar.md` (edition 2026; proposal H's surface, one
+spelling per construct, `proposals/H-small-surface.org`). Every `.df` file
+starts with `edition 2026`; the first token decides what a statement is,
+and a newline ends it. Case decides nothing: names are resolved. A constant
+is quoted (`"prod"`), a path that is data too (`"tags.team"`), a variable
+is a lowercase name bound where it is written, an input or a `let` is read
+by its name (`env == "prod"`), and a resource in scope by its name
+(`vpc.cidr`); anywhere else a resource is its address, `T["A"]`
+(`net.vpc[b]`, `db.postgres["database.main::db"]`), the spelling `plan`
+prints and every command takes. `.` is static and `[ ]` a key computed at
+run time. A dot is a reference where it is a whole value (a field:
+`vpc_id = vpc.id`) and a read everywhere else. `-` and `/` are operators,
+so hyphenated names are strings (`"us-east-1"`). A syntax error names
+`file:line:col` and what was expected, and parsing goes on to the next
+statement, so every error in a file is reported at once.
 
 `dform fmt [PATH...]` formats files in place (no PATH: the project's `.df` files):
-two-space indentation per open bracket or continued statement, one space
-around operators and after commas, `{ a: 1 }` inside braces, at most one
-blank line, and no comma where a newline already separates block entries.
-Line breaks are the author's. A formatted file prints back byte for byte,
-and a file with a syntax error is reported, not rewritten. `--check`
-rewrites nothing and fails listing the files that would change.
+each construct in its normal form (a body on one line when it fits in 100
+columns, else `if { .. }`; `{ a }` for `{ a: a }`; `==` between bound
+sides; docs/grammar.md "Formatting"), two-space indentation per open
+bracket, block or body, one space around operators and after commas,
+`{ a: 1 }` inside braces, at most one blank line, and no comma where a
+newline already separates block entries. A formatted file prints back byte
+for byte, and a file with a syntax error is reported, not rewritten.
+`--check` rewrites nothing and fails listing the files that would change.
 
 - Core intent IR (what the surface lowers to; `why` and `strata` print it):
   - `want(Type, Name)` declares a resource instance.
   - `arg(Type, Name, KeyPath, Value)` contributes attributes (KeyPath supports dots).
-  - `ref(Type, Name, .attr)` expresses dependencies.
+  - `ref(Type, Name, "attr")` expresses dependencies.
   - `collect_set(x)` / `collect_list(x)`, `count(x)`, `sum(x)`, `min(x)`,
     `max(x)` aggregate in a head, per group of the head's other arguments.
     `sum` folds ints, `min`/`max` ints or strings; a group with a value of
     another kind derives a deny, and one whose value is a null is stuck.
-  - `constraint "message" if ...` enforces invariants.
+  - `deny("message", ctx)` and `warn(..)` are the checks, read after evaluation.
 
 - The surface:
-  - `resource Type name { for B  if B  key = value ... }`: the clauses bind
-    and guard, a field's reads hoist into the block's body; a name in
-    quotes interpolates (`"private-{z}"`).
-  - `head if body`, `head if { lit NL lit }`; `name = term if body` is a
-    value rule, read by name.
-  - `r.tags = { team: "platform" } if r in resource`: a contribution.
-  - `deny "msg" { key: v } if body`, `warn ...`.
-  - `x in net.vpc` ranges over the wanted resources of a type; `exists r`,
-    `has r.p`, `not r.p` (not true, absent included).
-  - `let cfg = settings[env]` names a reference; `cfg.gke.pods_cidr` reads it.
+  - `resource Type name { if B  key = value ... }`: the one clause is a
+    query (a resource per match), a field's reads hoist into the block's
+    body; a name in quotes interpolates (`"private-${z}"`).
+  - `head if body`, `head if { lit NL lit }`; `let name = term if body` is a
+    value, read by name.
+  - `set r.tags = { team: "platform" } if r in resource`: a contribution.
+  - `deny "msg" { key: v } if body`, `warn ...`; the message interpolates.
+  - `x in net.vpc` ranges over the wanted resources of a type; `r in T`,
+    `has r.p`, `not r.p` (not true, absent included); `x in list`, and
+    `x = list[i]` for the index too.
+  - `let cfg = settings[env]` is a value whose type is the row's
+    reference; `cfg.gke.pods_cidr` reads through it.
   - settings blocks: `settings prod { db.backup_days = 14 }`.
+  - `output k: T = t if body`: an output in one statement.
   - literals: lists `[a, b]` and objects `{ k: v }` (`{ a, b }` is `{ a: a, b: b }`).
   - list comprehensions: `[x | pred(x), pred2(x)]` (lowers to a `collect_list` rule).
   - expression terms: `ib = ia + 1` lowers to `IB = add(IA, 1)`.
-  - `when B { ... }`, `for B { ... }` apply a guard to each statement inside.
   - `import "path"` includes another file, once.
 
 - Schemas and wildcards:
-  - `decl pred(field_one: type, field_two: type)` enables record-style matching: `pred{field_one: x}`.
-  - `decl pred/N` declares a predicate a provider feeds (it may have no rows).
-  - `decl pred/N mixed` lets a predicate have both ground facts and rules (E §2.6); without it, one that has both is a compile error naming the rule and the fact. A fact inside a `when` block is a rule.
+  - `decl pred(field_one: type, field_two)` declares a relation by its
+    columns (a type optional); named arguments match by them:
+    `pred(field_one: x)`.
+  - A `decl` of a relation no rule defines declares one a provider feeds
+    (it may have no rows).
+  - `decl pred(a, b) mixed` lets a predicate have both ground facts and rules (E §2.6); without it, one that has both is a compile error naming the rule and the fact.
   - `_` is an anonymous wildcard term (matches anything, never binds).
 
 ## Externs
@@ -1339,8 +1347,8 @@ A table is an input relation whose rows are a data file's, typed column by
 column:
 
 ```dform
-input relation peering(env: enum("dev", "stg", "prod"), name: string, peer_network: string) from csv("data/peerings.csv")
-input relation pins(app: string, image: string) from yaml(git("ops.git", "env/{env}", "pins.yaml"))
+input peering(env: enum("dev", "stg", "prod"), name: string, peer_network: string) from csv("data/peerings.csv")
+input pins(app: string, image: string) from yaml(git("ops.git", "env/${env}", "pins.yaml"))
 ```
 
 The formats are `csv` (a header naming the columns), `json` and `yaml` (a
@@ -1351,11 +1359,11 @@ an `inet` in any format), and a row that is not is an error naming the file
 and line: `data/peerings.csv:3: column env: "qa" is not enum(dev, stg,
 prod)`. A `secret` column is a compile error: rows are read in the clear.
 The loader never reshapes: transforms belong in rules. Paths are relative
-to the declaring file; `peering{env: e, name: n}` reads a row by its
+to the declaring file; `peering(env: e, name: n)` reads a row by its
 columns' names.
 
 A table is an extern (see "Externs"): the source, `path` or `git(repo, ref,
-path)` with holes (`{env}`), is its bound input, so rules may compute it; a
+path)` with holes (`${env}`), is its bound input, so rules may compute it; a
 source that reads the table's own rows is the extern-in-a-recursive-rule
 compile error. The rows are its answers: the plan file records them, and
 `apply PLAN` reads none again. `why` names each row's line, `fact,
@@ -1379,23 +1387,24 @@ or a ref that names another commit, is an input event (`input pins changed
 A keyed stack's `config` is a table of its settings, per deployment:
 
 ```dform
-stack dform[env] { config = yaml("config/{env}.yaml") }
+stack dform[env] { config = yaml("config/${env}.yaml") }
 ```
 
 Every leaf of the document (a mapping; a CSV with the columns `path` and
 `value`) is a contribution at the normal rank to the settings row named by
 the key's value (several keys' joined by `/`), at the leaf's dotted path:
-`db: { backup_days: 14 }` in `config/prod.yaml` is `settings.prod.db.backup_days =
+`db: { backup_days: 14 }` in `config/prod.yaml` is `set settings["prod"].db.backup_days =
 14`, and wins over an `@default` layer per leaf. A leaf at a path the program
 neither writes nor reads is a deny naming the file and line (a typo).
-The demo's per-environment settings are `config/dform/{env}.yaml`; its CIDRs
+The demo's per-environment settings are `config/dform/${env}.yaml`; its CIDRs
 are strings there, made inets by `inet(...)` where they are used.
 
 ## Escape hatches
 
 ### List membership
 
-`member(List, Item)` is a built-in predicate that lets you "explode" list settings into rows:
+`x in e` "explodes" a list, a setting's included, into rows (it lowers to the
+built-in `member(List, Item)`):
 
 ```dform
 host_ip(e, ip) if ip in settings[e].vm.ips
@@ -1419,7 +1428,7 @@ To reference discovered values in resource attributes without manually joining
 `cloud_attr/cloud_computed`, you can use `cloud_ref(Type, Name, Attr)` as a value
 term. In the fake backend it resolves against `dform.state/inventory.json`.
 
-`Attr` supports dotted and indexed paths like `.tags.owner` or `.subnets[0].id`.
+`Attr` is a path string, dotted and indexed: `"tags.owner"`, `"subnets[0].id"`.
 
 ### Adopt existing resources
 
@@ -1427,15 +1436,13 @@ term. In the fake backend it resolves against `dform.state/inventory.json`.
 Planning will produce an `Adopt` action (`>` in plan output) instead of `Create`.
 
 ```dform
-adopt(net.vpc, network.main/vpc, "existing-prod-vpc") if
-  env == "prod",
-  "existing-prod-vpc" in world.net.vpc
+adopt(net.vpc, "network.main::vpc", "existing-prod-vpc") if env == "prod", "existing-prod-vpc" in world.net.vpc
 
-network.main/vpc.adopted_id = cloud_ref(net.vpc, "existing-prod-vpc", .id)
+set net.vpc["network.main::vpc"].adopted_id = cloud_ref(net.vpc, "existing-prod-vpc", "id") if env == "prod"
 ```
 
-`network.main/vpc` is an address: resource `vpc` of module instance
-`network.main` (it lowers to `scoped("network.main", vpc)`).
+`net.vpc["network.main::vpc"]` is an address: resource `vpc` of module
+instance `network.main`, spelled as `plan` prints it.
 ```
 
 ### Stack inputs
@@ -1523,14 +1530,13 @@ A module groups rules behind an interface; an instance of it scopes them
 module network {
   input vpc_net: inet                        # set by each instance
   input zones: list(string) = ["a", "b"]     # a default: @default rank
-  output vpc: net.vpc                        # an address output
-  output private_subnet_ids: list(ref(net.subnet))
-  export subnet_of/2                         # readable as network.main.subnet_of
+  export subnet_of                           # readable as network.main.subnet_of
 
   resource net.vpc vpc { cidr = vpc_net }
-  zone_index(z, i) if some i, z in zones    # private
+  zone_index(z, i) if z = zones[i]           # private
   ...
-  output vpc = vpc
+  output vpc: net.vpc = vpc                  # an address output
+  output private_subnet_ids: list(ref(net.subnet)) = [s.id | s in net.subnet]
 }
 
 instance network main { vpc_net = settings[env].network.main.vpc_net }
@@ -1539,11 +1545,12 @@ instance database main { subnet_ids = network.main.private_subnet_ids }
 
 Inside an instance:
 
-- resource names are scoped, `network.main::vpc` (written `network.main/vpc`
-  from outside), in `want`, `arg`, `attr`, `adopt` and `ref`;
+- resource names are scoped, `network.main::vpc` (its address from outside
+  `net.vpc["network.main::vpc"]`), in `want`, `arg`, `attr`, `adopt` and
+  `ref`; inside the module `T[e]` is relative to the instance;
 - every predicate the module defines is private to the instance: another
   instance's `zone_index` is a different relation, and reading it from
-  outside is an error naming the module. `export p/N` makes it readable as
+  outside is an error naming the module. `export p` makes it readable as
   `m.INSTANCE.p`; `contributes p` makes the module a contributor to the
   global `p` (the demo's `iam_need`);
 - `input k: T [= D] [where R]` is read by its name `k` inside the module.
@@ -1552,11 +1559,10 @@ Inside an instance:
   instance that sets an undeclared input, or leaves out one with no
   default, is a compile error. `where R` refines the input (`R` names it
   by its name; see Refinement types);
-- `output k: T` declares an output and `output k = t` (or a rule for
-  `output(k, v)`) gives it a value, read anywhere as `m.i.k` (`output(m.i,
-  k, V)`);
-  an output typed by a resource type (`output vpc: net.vpc`) is the scoped
-  address of the instance's resource. `network[i].vpc` reads it with a
+- `output k: T = t [if B]` declares an output and gives it its value in
+  one statement (the type is optional), read anywhere as `m.i.k`
+  (`output(m.i, k, V)`); an output typed by a resource type (`output vpc:
+  net.vpc = vpc`) is the scoped address of the instance's resource. `network[i].vpc` reads it with a
   variable instance.
 
 The module reads every global relation; cross-instance values go through
@@ -1564,7 +1570,7 @@ outputs.
 
 ### Policies
 
-Policies are packaged as policy packs and applied explicitly. A pack is a
+Policies are packaged as policy packs and used explicitly. A pack is a
 module applied once: its own relations are private, and every `arg` it
 writes must fall in one of its grants, the stratification partition spelled
 by the author (E §2.6). A write outside them is a compile error at the head.
@@ -1574,26 +1580,26 @@ policy baseline {
   contributes _.tags                  # any type, .tags and below
   contributes settings.audit.sinks
 
-  r.tags = { team: "platform" } if r in resource
+  set r.tags = { team: "platform" } if r in resource
   deny "db must be private" { resource: pg } if ...   # deny/warn need no grant
   warn "prod should enable audit logging" { env: "prod" } if ...
 }
 
-apply baseline
+use baseline
 ```
 
 Every contribution to one attribute meets in one lattice cell; objects merge
 per key, and a list path several sources contribute to is declared a set:
 
 ```dform
-type_lattice(iam.policy, .statements, "set")
+type_lattice(iam.policy, "statements", "set")
 ```
 
 Settings are the same aggregate:
 
 ```dform
-type_lattice(settings, .audit.sinks, "set")
-settings.prod.audit.sinks += ["s3"]
+type_lattice(settings, "audit.sinks", "set")
+set settings["prod"].audit.sinks += ["s3"]
 
 settings prod {
   audit.sinks += ["cloudwatch"]
@@ -1607,8 +1613,8 @@ A scenario is a test: hypothetical facts plus ordinary deny rules, no
 
 ```dform
 scenario prod {
-  with env = "prod"
-  deny "prod keeps 14 days of db backups" if not database.main/db.backup_days == 14
+  set env = "prod"
+  deny "prod keeps 14 days of db backups" if not db.postgres["database.main::db"].backup_days == 14
 }
 ```
 
@@ -1669,8 +1675,8 @@ their source changes (a table's too, see "Tables"); `plan` and `apply`
 read them too:
 
 ```dform
-input relation release/1 from file("release.facts")        # release(image)
-input relation approve/2 from git("ops.git", "main", "approvals.df")
+input release(image) from facts("release.facts")
+input approve(t, a) from facts(git("ops.git", "main", "approvals.df"))
 ```
 
 A source is a `.df` file of facts (`edition 2026` first) of the
@@ -1777,14 +1783,14 @@ editors only: the compiler keeps its own parser (`crates/dform-core/src/syntax/`
 captured `@comment.documentation` too), and the generated `src/parser.c` is
 committed, so an editor builds it with a C compiler and no tree-sitter
 CLI. A small external scanner (`src/scanner.c`) makes a newline outside
-brackets end a statement and reads a string's text around its `{e}`
+brackets end a statement and reads a string's text around its `${e}`
 holes.
 
 The highlight query captures a dot in a field-value position as
 `@variable.reference` (a field's value, a head or `output` argument, an
 element of a list or object there, a comprehension's item) and leaves a
 dot anywhere else a plain read, as proposal G (G-6) lowers them. This is
-the syntax's answer: a chain whose head is a `let` alias of `settings`
+the syntax's answer: a chain whose head is a `let` of a settings row
 or an instance output is a read in any position, which only the resolver
 (and a language server) knows.
 
@@ -1870,7 +1876,7 @@ examples/demo an evaluation takes about 30 ms in a release build.
 - *Diagnostics of the selected environment*: parse and compile errors at
   their spans; each `deny` and `warn` at the rule that derived it (a
   conflict at a contribution), the contributions below it as related
-  information; a violated constraint at the constraint; lint warnings.
+  information; lint warnings.
 - *Contributors hover*: on an attribute in a resource block, a rule's or
   fact's name, or an attribute read in a rule's body (`a.cidr`): each
   attribute's collapsed value, the provider's description of its path
@@ -1900,14 +1906,14 @@ examples/demo an evaluation takes about 30 ms in a release build.
 - *Quick fixes* (`textDocument/codeAction`), each on its diagnostic: a
   pack writing outside its grants (add the `contributes` line), an
   unknown name (quote it), a predicate with both facts and rules (`decl
-  p/N mixed`), the collision lint (interpolate the key into the name, or
+  p(a, b) mixed`), the collision lint (interpolate the key into the name, or
   say `isolated = true` on the stack), a required attribute nothing sets
   (a typed placeholder in the resource's block) and a ref to an address
   no rule wants (guard the block on it: `if "other" in net.vpc`). An edit
   to a formatted file leaves it formatted.
-- *References* of a predicate, an input or value name, a `let` or type
-  alias, a module, an instance, a resource (by every spelling of its
-  address: `n`, `T.n`, `m.i/n`), a settings row or a policy, across the
+- *References* of a predicate, an input or value name (a `{ k }` field
+  included), a `let` or type alias, a module, an instance, a resource (by
+  its name in scope), a settings row or a policy, across the
   project's files and unsaved buffers, read in the resolver's order
   (docs/grammar.md "Names"); a relation a module or pack defines and does
   not grant is its own (two modules' private `helper` are two). On an attribute path (a field of a
@@ -1918,7 +1924,9 @@ examples/demo an evaluation takes about 30 ms in a release build.
   module whose addresses have state in the selected deployment adds, in
   the same edit, `moved("T", "old", "new")` per address just after the
   declaration's block, so the next plan is a move and not a destroy and a
-  create. A rename is checked: the selected deployment is evaluated with
+  create; an address written as a string at the top of a program
+  (`net.vpc["network.main::vpc"]`, `"network.main::vpc" in net.vpc`) is
+  renamed with it. A rename is checked: the selected deployment is evaluated with
   the edit applied to the buffers, and the rename is refused, naming
   what changed, if it adds a diagnostic or changes the plan in anything
   but the renamed addresses. `prepareRename` refuses keywords, builtins,
