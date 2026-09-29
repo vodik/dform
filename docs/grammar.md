@@ -46,7 +46,7 @@ body block (`if { }`) separate their entries by a newline or a comma.
 ## Tokens
 
 ```
-IDENT    := [A-Za-z_][A-Za-z0-9_]*       ; case decides nothing; "_" alone is the wildcard
+IDENT    := [A-Za-z_][A-Za-z0-9_]*       ; case decides nothing; "_" alone is the placeholder
 STRING   := "\"" ... "\""                ; escapes \" \\ \n \t \u{hex}; ${e} interpolates
 INT      := [0-9]+                       ; -1 is unary minus applied to 1
 RANK     := "@default" | "@override"
@@ -264,7 +264,7 @@ output     := "output" NAME (":" type)? ("=" term)? ("if" body)?
 let        := "let" NAME "=" term ("if" body)?
 set        := "set" chain ("=" | "+=") term RANK? ("if" body)?
 export     := "export" NAME | "export" "type" NAME
-contributes:= "contributes" chain                  ; `p`, `_.path`, `settings.path`, `TYPE.path`
+contributes:= "contributes" chain                  ; `p`, `t.path` (every type), `settings.path`, `TYPE.path`
 module     := "module" NAME stmts
 instance   := "instance" NAME NAME block
 policy     := "policy" NAME stmts
@@ -428,7 +428,29 @@ A resource's or settings row's header name is a string or a name. A string
 with holes (`"private-${z}"`) is the variable `Addr`, bound last in the
 body by `format`. A name the block's clause binds is that variable
 (`resource net.vpc t { if tenant(t, i) ... }`); any other name is the
-static name (`resource net.vpc shared`).
+static name (`resource net.vpc shared`), and it may not be a value in
+scope (`settings env` with `input env` is an error: write `settings _`
+for every row, or `settings "env"` for the literal one). A block (header,
+clause, entries, interpolated names) is one rule; a header name's scope
+is its block.
+
+`settings _ @r { .. }` contributes to every settings row that exists: a
+row the program reads (`settings[e]`) or anything writes (a named block,
+`set settings[e]`, the stack's `config`). It lowers to
+`arg("settings", Row, P, V, r) :- settings_row(Row)`, and `transform`
+derives `settings_row` from the program's reads and writes (the literals
+before a read, less those that read the settings).
+
+### The placeholder `_`
+
+`_` alone stands where a variable could and is never accessed (H-17): an
+argument of a relation in a body, the left of `in`, an index (`xs[_]`), a
+part of a pattern. `_.p`, `_[k]`, and `_` as a field's value, a
+function's argument, an interpolation or a comparison's side are errors
+that say to name it. `p(_)` in a head is an error naming the column (it
+has no finite set of values); `resource T _` and `instance m _` name
+nothing; `set T[_].p = t` is `set r.p = t if r in T`, and the error prints
+it. A name that starts with `_` (`_x`) is an ordinary name.
 
 ## Literals and terms
 
@@ -528,7 +550,7 @@ as it is.
 | `deny "a ${x}" if B`                      | `deny(M, ..) :- B, M = format("a %s", X)`              |
 | `set R.p = t @r if B` (`+=`: `arg_add`)   | `arg(T, A, "p", t', r) :- B, reads`                    |
 | `set settings[e].p = t`                   | `arg("settings", e', "p", t')`                         |
-| `contributes t.p`, `contributes T.p`      | a grant of `.p` on any type, on `T`                    |
+| `contributes t.p`, `contributes T.p`      | a grant of `.p` on any type (a name no type starts with), on `T` |
 | `output k: T = t` (`T` a resource type)   | `output k: addr`, and its value                        |
 | `output k = t` (no reads)                 | `output k = t'`                                        |
 | `output k = t if B` (reads, or a body)    | `output(k, t') :- B, reads`                            |

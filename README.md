@@ -1281,7 +1281,7 @@ for byte, and a file with a syntax error is reported, not rewritten.
   - A `decl` of a relation no rule defines declares one a provider feeds
     (it may have no rows).
   - `decl pred(a, b) mixed` lets a predicate have both ground facts and rules (E §2.6); without it, one that has both is a compile error naming the rule and the fact.
-  - `_` is an anonymous wildcard term (matches anything, never binds).
+  - `_` is a placeholder (matches anything, never binds, never read: `_.p` or `_` as a value is an error); `settings _ @default { .. }` contributes to every settings row that exists. `_x` is an ordinary name.
 
 ## Externs
 

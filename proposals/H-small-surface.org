@@ -67,6 +67,7 @@ stack dform[env] { unknowns = "strict", isolated = true, config = yaml("config/d
 type environment = enum("dev", "staging", "prod")
 input env: environment = "staging"
 let cfg = settings[env]                          # a value: the settings row's reference
+settings _ @default { db.backup_days = 3 }       # _: every settings row that exists (H-17)
 
 data("zone", "us-test-1a")
 iam_need("app", "audit.write", "audit-log") if env == "prod"
@@ -169,7 +170,8 @@ resource  settings  deny  warn
 Body words: =not in has=. Block clause: =if=. Literals: =true false=.
 Contextual words in declarations, where the position is fixed: =from=,
 =where=, =persist=, =mixed=, the attribute flags (=required computed id
-sensitive nullable=). Roots: =settings=, =world=.
+sensitive nullable=). Roots: =settings=, =world=. =_= alone is the
+placeholder (H-17); =_x= is an ordinary name.
 
 Gone as keywords: =when for with some exists constraint apply relation
 open ordered by null=.
@@ -464,6 +466,28 @@ plan lines; a shell user quotes addresses (=why 'net.vpc["x"].cidr'=). The
 null label =T/A#P= stays internal (it is a Skolem name in the state), and
 is never printed.
 
+** H-17 =_= is a placeholder, never accessed
+
+*Context.* =_= was a wildcard in a body and, by accident, a name elsewhere:
+=_.tags= in a grant, =settings e @default { if env_name(e) .. }= to reach
+every row, and a header name that is also a value (=settings env=) read as
+the literal row ="env"=. *Decision.* =_= alone stands where a variable
+could and is never accessed: =_.p=, =_[k]=, =_= as a field's value, a
+function's argument, an interpolation or a comparison's side are errors
+that say to name it; so are =p(_)= in a head (a column with no finite set
+of values), =resource T _=, =instance m _= and =set T[_].p = t= (the error
+prints =set r.p = t if r in T=). =settings _ { .. }= contributes to every
+settings row that exists, one the program reads (=settings[e]=) or
+anything writes (a named block, =set settings[e]=, the stack's =config=):
+=arg("settings", R, P, V, rank) :- settings_row(R)=. A grant on every type
+is =contributes t.tags=, a name no type starts with. A name that starts
+with =_= (=_x=) is an ordinary identifier. A block (header, clause,
+entries, interpolated names) is one rule; a header name's scope is its
+block, and a header name that is a value in scope is an error (write =_=
+for every row, or quote the literal name). *Consequences.* The demo's
+=env_name= facts go; dev gets the defaults and its instances are gated
+by =if env != "dev"=.
+
 * 7. Considered and not taken
 
 - *Namespace roots for every name* (=var.env=, =input.env=, =module.m.i=):
@@ -474,8 +498,6 @@ is never printed.
 - *=for= as the one clause word*: section H-3.
 - *=patch= for contributions*: section H-5.
 - *Enforcing G's =for=/=if= split*: section H-3.
-- *A =settings @default { }= that applies to every row* without a
-  generator: an addition, not a collapse; its own ticket if wanted.
 - *Terraform's plan vocabulary* (=Plan: N to create=, =(known after
   apply)=): output wording, not the language; its own ticket.
 
