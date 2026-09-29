@@ -1,32 +1,30 @@
-//! One evaluation of one deployment for the editor: `dform plan`'s path
-//! (`cli::run_with`) up to and including the plan's policy pass, read
-//! only. The program's files are read through the editor's buffers; the
-//! world and state are the deployment's own, read and never written;
+//! One evaluation of one deployment for the editor: `dform plan`'s
+//! (`dform_core::deployment::evaluate`), up to and including the plan's
+//! policy pass, read only. The program's files are read through the
+//! editor's buffers; the world and state are the deployment's own, read
+//! and never written (a bucket's when there are credentials for it);
 //! nothing is applied. What `plan` prints as an error or a warning comes
-//! back as a [`Problem`] at the span it names.
+//! back as a [`Problem`] at the span it names, with the fixes its
+//! diagnostic carries.
 
 use anyhow::Result;
-use dform_core::ast::{Atom, Program, Span, Stmt, Term};
+use dform_core::ast::{Program, Span, Stmt};
 use dform_core::circuit::{Leaf, NodeId, View};
-use dform_core::diag::{Diagnostic, Diagnostics};
-use dform_core::engine::{self, EvalResult};
-use dform_core::plugin::{self, Launch, Providers};
-use dform_core::project::{self, Manifest};
+use dform_core::deployment::{self, At, Note, Notes};
+use dform_core::engine::EvalResult;
+use dform_core::lint::Collision;
+use dform_core::plugin::Launch;
+use dform_core::project;
 use dform_core::query::Redactor;
 use dform_core::schema::Schema;
-use dform_core::store::{self, Location, S3Spec};
-use dform_core::value::Value;
-use dform_core::{
-    executor, externs, inputs, ir, lint, loader, plan_print, refine, scenario, secrets, stack,
-    state, stuck, tables, transform, watch, zset,
-};
-use std::cell::OnceCell;
+use dform_core::store::{self, S3Spec};
+use dform_core::{loader, scenario, transform};
+use std::cell::{OnceCell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-/// What the editor reads a file's text through: its buffer if open, else
-/// the disk.
-pub type Reader<'a> = &'a dyn Fn(&Path) -> std::io::Result<String>;
+pub use dform_core::deployment::{Reader, Severity};
 
 /// The deployment to evaluate: a stack's file, the key values the
 /// selected environment names (the rest take their defaults), and a
@@ -36,12 +34,6 @@ pub struct Target {
     pub file: PathBuf,
     pub keys: Vec<(String, String)>,
     pub scenario: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Severity {
-    Error,
-    Warning,
 }
 
 /// Where a problem or a contributor is.
@@ -59,18 +51,26 @@ pub enum Where {
     Line(PathBuf, usize, usize),
 }
 
-/// By place: a span by its bytes (`Span`'s own equality holds of any two).
+/// By place: a span by where it is (`Span`'s own equality holds of any two).
 impl PartialEq for Where {
     fn eq(&self, other: &Where) -> bool {
         match (self, other) {
-            (Where::Span(a), Where::Span(b)) => {
-                (a.file, a.start, a.end) == (b.file, b.start, b.end)
-            }
+            (Where::Span(a), Where::Span(b)) => a.same_place(b),
             (Where::Place(a), Where::Place(b)) => a == b,
             (Where::Top, Where::Top) => true,
             (Where::Bytes(f, a, b), Where::Bytes(g, c, d)) => (f, a, b) == (g, c, d),
             (Where::Line(f, a, b), Where::Line(g, c, d)) => (f, a, b) == (g, c, d),
             _ => false,
+        }
+    }
+}
+
+impl From<At> for Where {
+    fn from(at: At) -> Where {
+        match at {
+            At::Span(s) => Where::Span(s),
+            At::Place(p) => Where::Place(p),
+            At::Top => Where::Top,
         }
     }
 }
@@ -105,12 +105,21 @@ impl Where {
     }
 }
 
+/// A fix a problem's diagnostic carries, resolved: per edit, a file, a
+/// byte range in it and the text that replaces it.
+#[derive(Debug, Clone)]
+pub struct Fix {
+    pub title: String,
+    pub edits: Vec<(PathBuf, usize, usize, String)>,
+}
+
 #[derive(Debug, Clone)]
 pub struct Problem {
     pub severity: Severity,
     pub message: String,
     pub at: Where,
     pub related: Vec<(Where, String)>,
+    pub fixes: Vec<Fix>,
 }
 
 impl Problem {
@@ -120,6 +129,7 @@ impl Problem {
             message: message.into(),
             at: Where::Top,
             related: Vec::new(),
+            fixes: Vec::new(),
         }
     }
 }
@@ -139,6 +149,8 @@ pub struct Evaluated {
     pub program: Program,
     pub lowered: Option<Program>,
     pub redact: Redactor,
+    /// The collision lint's findings over the program's own evaluation.
+    pub collisions: Vec<Collision>,
     /// The circuit read upward: per fact node, the fact nodes derived
     /// from it; per rule id, the fact nodes it derived.
     index: OnceCell<Index>,
@@ -199,9 +211,7 @@ impl Evaluated {
 
     /// Where rule `id` (`r12`) is written, when it is.
     pub fn rule_span(&self, id: &str) -> Option<Span> {
-        let i: usize = id.strip_prefix('r')?.parse().ok()?;
-        let span = self.res.rules.get(i)?.head.span;
-        (!span.is_none()).then_some(span)
+        deployment::rule_span(&self.res, id)
     }
 }
 
@@ -222,12 +232,11 @@ pub fn evaluate(t: &Target, launch: &dyn Launch, read: Reader, version: &str) ->
     let mut evaluated = match run(t, launch, read, version, &mut problems) {
         Ok(e) => Some(e),
         Err(e) => {
-            problems.extend(of_error(&e));
+            problems.extend(deployment::of_error(&e).into_iter().map(of_core));
             None
         }
     };
     if let Some(e) = &mut evaluated {
-        problems.extend(policy_problems(e));
         let ids = e
             .res
             .rules
@@ -256,9 +265,19 @@ pub fn evaluate(t: &Target, launch: &dyn Launch, read: Reader, version: &str) ->
             }
         }
     }
+    // A place in no file the editor can open (the policy rules every
+    // evaluation carries, `zset::POLICY_RULES`) is the stack's file's top.
     let canon = |w: Where| match w.resolve(&cwd) {
-        Where::Bytes(f, a, b) => Where::Bytes(std::fs::canonicalize(&f).unwrap_or(f), a, b),
-        Where::Line(f, a, b) => Where::Line(std::fs::canonicalize(&f).unwrap_or(f), a, b),
+        Where::Bytes(f, a, b) => match std::fs::canonicalize(&f) {
+            Ok(f) => Where::Bytes(f, a, b),
+            Err(_) if read(&f).is_ok() => Where::Bytes(f, a, b),
+            Err(_) => Where::Top,
+        },
+        Where::Line(f, a, b) => match std::fs::canonicalize(&f) {
+            Ok(f) => Where::Line(f, a, b),
+            Err(_) if read(&f).is_ok() => Where::Line(f, a, b),
+            Err(_) => Where::Top,
+        },
         w => w,
     };
     for p in &mut problems {
@@ -273,32 +292,37 @@ pub fn evaluate(t: &Target, launch: &dyn Launch, read: Reader, version: &str) ->
     }
 }
 
-/// An error as problems: its diagnostics at their spans, else its text at
-/// the top of the stack's file.
-pub fn of_error(e: &anyhow::Error) -> Vec<Problem> {
-    match e.chain().find_map(|x| x.downcast_ref::<Diagnostics>()) {
-        Some(Diagnostics(ds)) => ds.iter().map(of_diagnostic).collect(),
-        None => vec![Problem::top(Severity::Error, format!("{e:#}"))],
-    }
-}
-
-fn of_diagnostic(d: &Diagnostic) -> Problem {
-    let mut message = d.message.clone();
-    for n in &d.notes {
-        message.push_str(&format!("\nnote: {n}"));
-    }
-    if let Some(h) = &d.help {
-        message.push_str(&format!("\nhelp: {h}"));
-    }
+/// A problem of the evaluation's, its fixes resolved to files while their
+/// sources are registered; a fix with an edit that has no place is left
+/// out.
+fn of_core(p: deployment::Problem) -> Problem {
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let fixes = p
+        .fixes
+        .iter()
+        .filter_map(|f| {
+            let edits = f
+                .edits
+                .iter()
+                .map(|(span, text)| {
+                    let (name, _, _) = dform_core::diag::location(*span)?;
+                    let file = cwd.join(name);
+                    let file = std::fs::canonicalize(&file).unwrap_or(file);
+                    Some((file, span.start as usize, span.end as usize, text.clone()))
+                })
+                .collect::<Option<Vec<_>>>()?;
+            Some(Fix {
+                title: f.title.clone(),
+                edits,
+            })
+        })
+        .collect();
     Problem {
-        severity: Severity::Error,
-        message,
-        at: Where::Span(d.span),
-        related: d
-            .labels
-            .iter()
-            .map(|(s, m)| (Where::Span(*s), m.clone()))
-            .collect(),
+        severity: p.severity,
+        message: p.message,
+        at: p.at.into(),
+        related: p.related.into_iter().map(|(w, m)| (w.into(), m)).collect(),
+        fixes,
     }
 }
 
@@ -309,600 +333,129 @@ fn run(
     version: &str,
     problems: &mut Vec<Problem>,
 ) -> Result<Evaluated> {
-    let files = vec![t.file.clone()];
-    let manifest = match project::manifest_root(&t.file) {
-        Some(root) => Some(Manifest::load(&root.join(project::MANIFEST), version)?),
-        None => None,
-    };
+    let mut notes = Notes::default();
+    let unread = RefCell::new(Vec::new());
+    let r = run_noted(t, launch, read, version, &mut notes, &unread, problems);
+    // What the evaluation said as it went: the lint's warnings, the
+    // collision lint's, a scenario not the stack's, a bucket not read; a
+    // `warn` fact is published at its rule.
+    for w in unread.into_inner() {
+        problems.push(Problem::top(Severity::Warning, w));
+    }
+    for n in &notes.0 {
+        match n {
+            Note::Warning(w) | Note::Collision(w) => {
+                problems.push(Problem::top(Severity::Warning, w.clone()))
+            }
+            Note::Policy(_) | Note::Resolved(_) | Note::TableMoved(_) => {}
+        }
+    }
+    r
+}
+
+fn run_noted(
+    t: &Target,
+    launch: &dyn Launch,
+    read: Reader,
+    version: &str,
+    notes: &mut Notes,
+    unread: &RefCell<Vec<String>>,
+    problems: &mut Vec<Problem>,
+) -> Result<Evaluated> {
     let root = match project::Project::find(t.file.parent().unwrap_or(Path::new(".")), version)? {
         Some(p) => p.state_root(),
         None => PathBuf::from(project::STATE_DIR),
     };
-    let mut program = loader::load_program_with(&files, read)?;
-    let relations = watch::take(&mut program)?;
-    program.statements.extend(watch::read(&relations)?);
-    if let Some(name) = &t.scenario {
+    let target = deployment::Target {
+        files: vec![t.file.clone()],
+        scenario: t.scenario.clone(),
         // The selected scenario is one stack's; another is evaluated as is.
-        if scenario::names(&program)?.contains(name) {
-            program = scenario::select(&program, name)?;
-        } else {
-            problems.push(Problem::top(
-                Severity::Warning,
-                format!("the selected scenario {name} is not this stack's: evaluated without it"),
-            ));
-        }
-    }
-    if let Some(m) = &manifest {
-        with_default_unknowns(&mut program, m);
-    }
-    let mut cfg = stack::config(&program)?;
-    if let Some(m) = &manifest {
-        with_manifest(&mut cfg, m, &t.file);
-    }
-    let stack_name = cfg
-        .name
-        .clone()
-        .unwrap_or_else(|| state::stack_name(&t.file));
-    let key_names: Vec<&str> = cfg.keys.iter().map(|(k, _)| k.as_str()).collect();
+        scenario_optional: true,
+        ..Default::default()
+    };
+    let loaded = deployment::load(&target, version, read, notes)?;
     // The selected environment names keys of every stack in the project;
     // this stack takes its own.
-    let keys: Vec<(String, String)> = t
+    let set = t
         .keys
         .iter()
-        .filter(|(k, _)| key_names.contains(&k.as_str()))
-        .cloned()
+        .filter(|(k, _)| loaded.cfg.keys.iter().any(|(x, _)| x == k))
+        .map(|(k, v)| (k.clone(), deployment::value_of(v)))
         .collect();
-    let providers = cfg.providers.clone();
-    let lowered = transform::lower(&program).ok();
-    let declared = lowered
-        .as_ref()
-        .map(|l| l.inputs.clone())
-        .unwrap_or_default();
-    let mut given = input_fact_keys(&program);
-    let set_keys: Vec<String> = keys.iter().map(|(k, _)| k.clone()).collect();
-    for w in lint::lint(&program, &set_keys) {
-        problems.push(Problem::top(Severity::Warning, w));
-    }
-    let program = zset::with_policy_rules(program)?;
-    let mut set = Vec::new();
-    for (k, v) in &keys {
-        given.insert(k.clone());
-        set.push((k.clone(), value_of(v)));
-    }
-    let set_facts = inputs::set_facts(&declared, &set)?;
-    let instance = stack::instance(&cfg, &stack_name, &program, &set_facts)?;
-    let deployment = instance.name();
-    inputs::check_required(&declared, &given)?;
-    // Where the stack's deployments are, and this one's objects: there, or
-    // where it was handed over to (`cli::run_with`).
-    let base = match &cfg.backend {
-        Some(stack::Backend::Local(dir)) => Location::Local(state::local_dir(&root, dir)),
-        Some(stack::Backend::S3(spec)) => Location::S3(spec.clone()),
-        None => Location::Local(root.join(&stack_name)),
-    };
-    let home = instance.dir(&root.join(&stack_name));
-    let location = match stack::handed_over(&root, &deployment)? {
-        Some((_, loc)) => loc,
-        None => base.child(instance.segment().as_deref()),
-    };
-    let paths = state::StackPaths {
-        state: match &location {
-            Location::Local(dir) => state::state_path(dir),
-            Location::S3(_) => state::state_path(&home),
-        },
-        world: stack::world_file(&location, &home),
-        inventory: root.join("inventory.json"),
-    };
-    // A bucket is out of the editor's reach: an s3 deployment is evaluated
-    // as if nothing were deployed, and another stack's outputs published
-    // there are not read.
-    let no_s3 = |spec: &S3Spec| -> Result<std::sync::Arc<dyn store::Store>> {
-        anyhow::bail!("{spec}: the language server does not read s3")
-    };
-    let mut st = match &location {
-        Location::S3(spec) => {
-            problems.push(Problem::top(
-                Severity::Warning,
-                format!(
-                    "deployment {deployment}: its state is in {spec}, which the language \
-                     server does not read; evaluated as if nothing were deployed"
-                ),
-            ));
-            state::State {
-                version: 1,
-                ..Default::default()
+    // A bucket is read when there are credentials for it; without, the
+    // deployment is evaluated as if nothing were deployed there.
+    let s3 = |spec: &S3Spec| -> Result<Arc<dyn store::Store>> {
+        match dform_s3::S3Store::open(spec, "") {
+            Ok(s) => Ok(Arc::new(s)),
+            Err(e) => {
+                let w = format!(
+                    "{spec} is not read ({e:#}): evaluated as if nothing were deployed there"
+                );
+                if !unread.borrow().contains(&w) {
+                    unread.borrow_mut().push(w);
+                }
+                Ok(Arc::new(store::MemoryStore::new()))
             }
         }
-        Location::Local(_) => {
-            store::Deployment::new(location.open(&no_s3)?, &deployment, Default::default())
-                .load_state()?
-        }
     };
-    let (named, any_name) = lowered
-        .as_ref()
-        .map(|l| stack::named_outputs(&l.program))
-        .unwrap_or_default();
-    let remotes = manifest.as_ref().map(|m| m.remotes()).unwrap_or_default();
-    let read_outputs = match stack::stack_outputs(
-        &root,
-        &deployment,
-        (!any_name).then_some(&named),
-        &remotes,
-        &no_s3,
-    ) {
+    let located = loaded.locate(
+        &deployment::Selection {
+            root: root.clone(),
+            set,
+            ..Default::default()
+        },
+        &s3,
+        notes,
+    )?;
+    let outputs = match located.read_outputs(&s3) {
         Ok(r) => r,
         Err(e) => {
-            problems.push(Problem::top(
-                Severity::Warning,
-                format!("other stacks' outputs are not read: {e:#}"),
-            ));
+            unread
+                .borrow_mut()
+                .push(format!("other stacks' outputs are not read: {e:#}"));
             Vec::new()
         }
     };
-    let secret_outputs = stack::secret_outputs(&read_outputs);
-    let backend = Providers::start_deferred(
-        launch,
-        &providers,
-        &plugin::Config {
-            world: paths.world.clone(),
-            inventory: paths.inventory.clone(),
-            chaos: Vec::new(),
-            cache: Some(root.join("cache")),
-            configured: provider_configs(&program),
-            stack: deployment.clone(),
-            blocks: cfg.provider_blocks.clone(),
-            ..Default::default()
-        },
-    )?;
-    let (no_program, no_fns) = (Program { statements: vec![] }, vec![]);
-    let program_dir = project::base_of(&t.file);
-    let tables = tables::Tables::default();
-    let externs = externs::Externs::new(
-        lowered.as_ref().map_or(&no_program, |l| &l.program),
-        lowered.as_ref().map_or(&no_fns, |l| &l.extern_fns),
-        |f, inputs| {
-            if let Some(r) = tables.answer(f, inputs) {
-                return r;
-            }
-            if let Some(r) = externs::file(f, inputs, &program_dir) {
-                return r;
-            }
-            if let Some(r) = externs::env_var(f, inputs) {
-                return r;
-            }
-            let plus: Vec<bool> = f.args.iter().map(|b| b.input).collect();
-            backend.query(&f.name, &plus, inputs)
-        },
-    );
-    externs.preload_persisted(st.externs.clone());
-    let mut base_extra = set_facts;
-    base_extra.extend(stack::output_facts(&read_outputs));
-    if let Some(m) = &manifest {
-        base_extra.extend(m.facts());
-    }
-    let discovered = backend.discover(world_types(lowered.as_ref()).as_ref())?;
-    let scope = catalog_scope(&program, &base_extra, &discovered, &st);
-    backend.load_schema(scope.as_ref())?;
-    backend.check_types(&program, &providers)?;
-    if let Some(l) = &lowered {
-        backend.check_configuration(&l.program, &l.extern_fns, |p| {
-            p == dform_core::syntax::resolve::ENV_VAR
-                || p.starts_with("file.")
-                || tables::describe(p).is_some()
-        })?;
-        secrets::check(l, backend.schema(), &secret_outputs)?;
-        refine::check(&l.program, backend.schema())?;
-    }
-    let secret_accounts = lowered
-        .as_ref()
-        .map(|l| secrets::secret_expected_accounts(l, backend.schema(), &secret_outputs))
-        .unwrap_or_default();
-    base_extra.extend(backend.catalog(scope.as_ref())?);
-    base_extra.extend(discovered);
-
-    let evaluate = |st: &state::State| -> Result<(EvalResult, Vec<String>, engine::Resumable)> {
-        let mut extra = base_extra.clone();
-        extra.extend(backend.world_facts(st)?);
-        let (mut res, mut violations, mut resumable) =
-            externs.eval_resumable(&program, &extra, zset::POLICY_INPUTS)?;
-        if backend.configure_from(&res.facts)? {
-            extra = base_extra.clone();
-            extra.extend(backend.world_facts(st)?);
-            (res, violations, resumable) =
-                externs.eval_resumable(&program, &extra, zset::POLICY_INPUTS)?;
-        }
-        backend.check_accounts(&res.facts, &secret_accounts)?;
-        violations.extend(inputs::violations(&res.facts, &declared));
-        Ok((res, violations, resumable))
+    let opts = deployment::Options {
+        cache: Some(root.join("cache")),
+        check_types: true,
+        collisions: true,
+        policy: true,
+        ..deployment::Options::new(launch)
     };
-    let (mut res, mut violations, mut resumable) = evaluate(&st)?;
-    let moves = st.apply_moves(&zset::Lifecycle::from_facts(&res.facts, backend.schema())?.moved);
-    if !moves.is_empty() {
-        (res, violations, resumable) = evaluate(&st)?;
-    }
-    let schema = backend.schema();
-    let strict = cfg.unknowns == stack::Unknowns::Strict;
-    let collisions = if !cfg.keys.is_empty() && !cfg.isolated {
-        let keys: Vec<String> = cfg.keys.iter().map(|(k, _)| k.clone()).collect();
-        lint::key_collisions(&res, schema, &keys, &deployment)
-    } else {
-        Vec::new()
-    };
-    if !strict {
-        for c in &collisions {
-            problems.push(Problem::top(Severity::Warning, c.text.clone()));
-        }
-    }
-
-    // The policy pass (E §2.8): the plan's deformations go back to the
-    // program as facts, and what it denies of them is denied. A plan that
-    // cannot be made leaves the program's own evaluation.
-    let policy = || -> Result<(EvalResult, Vec<String>)> {
-        let resources = ir::compile_resources(res.facts.iter().cloned(), schema)?;
-        let adopts = ir::compile_adopts(res.facts.iter())?;
-        let lifecycle = zset::Lifecycle::from_facts(&res.facts, schema)?;
-        let mut plan = backend.plan(&resources, &adopts, &lifecycle, &st)?;
-        let docs = resources
-            .iter()
-            .map(|r| ((r.addr.typ.clone(), r.addr.name.clone()), r.attrs.clone()))
-            .collect();
-        let sections = stuck::sections(&res.stuck, &res.may_derive, &res.facts, &docs, schema);
-        executor::hold_deposed(&mut plan, &resources, &sections);
-        let observed = backend.observe(&st)?;
-        let before = observed
-            .iter()
-            .map(|(a, d)| (a.clone(), Some(d.clone())))
-            .collect();
-        let mut facts = zset::deformation_facts(
-            plan.actions.iter().filter_map(|a| {
-                let held = plan_print::waits_on(a, &sections).is_some();
-                Some((zset::deformation_kind(&a.kind, held)?, &a.addr))
-            }),
-            &before,
-            &observed,
-        );
-        facts.extend(
-            res.may_derive
-                .iter()
-                .filter(|m| m.head.pred == "want")
-                .map(|m| m.fact()),
-        );
-        let (again, all) = match resumable.with_at(&facts, None)? {
-            (r, v) if externs.settle(&r.facts)? => (r, v),
-            _ => {
-                let mut extra = base_extra.clone();
-                extra.extend(backend.world_facts(&st)?);
-                extra.extend(facts);
-                externs.eval_at(&program, &extra, None)?
-            }
-        };
-        let denies = all
-            .into_iter()
-            .filter(|v| !violations.contains(v))
-            .collect();
-        Ok((again, denies))
-    };
-    let (mut res, denies) = match policy() {
-        Ok(p) => p,
-        Err(e) => {
-            problems.extend(of_error(&e));
-            (res, Vec::new())
-        }
-    };
-    violations.extend(denies);
-    if strict {
-        lint::deny_collisions(&mut res, &collisions);
-    }
-    let redact = Redactor::new(&res.facts, schema);
-    // A violation no deny fact or constraint accounts for (an input of the
-    // wrong type): at the top of the stack's file.
-    let constraints: BTreeSet<&str> = program
-        .statements
-        .iter()
-        .filter_map(|s| match s {
-            Stmt::Constraint(c) => Some(c.message.as_str()),
-            _ => None,
-        })
-        .collect();
-    let denied: BTreeSet<String> = res
-        .facts
-        .iter()
-        .filter(|a| a.pred == "deny")
-        .filter_map(policy_text)
-        .collect();
-    for v in &violations {
-        if !constraints.contains(v.as_str()) && !denied.contains(v) {
-            problems.push(Problem::top(Severity::Error, redact.text(v)));
-        }
-    }
-    let violated: Vec<String> = violations
-        .into_iter()
-        .filter(|v| constraints.contains(v.as_str()))
-        .collect();
-    let lowered_program = transform::lower(&program).ok().map(|l| l.program);
-    for s in &program.statements {
-        if let Stmt::Constraint(c) = s
-            && violated.contains(&c.message)
-        {
-            problems.push(Problem {
-                severity: Severity::Error,
-                message: format!("constraint violated: {}", c.message),
-                at: Where::Span(c.span),
-                related: Vec::new(),
-            });
-        }
-    }
+    let mut ev = located.evaluate(outputs, &opts, notes)?;
+    let explained = ev.explained();
+    let program = ev.evaluator.program.clone();
+    problems.extend(explained.problems(&program).into_iter().map(of_core));
     Ok(Evaluated {
-        deployment: instance.describe(),
-        providers,
+        deployment: ev.located.instance.describe(),
+        providers: ev.located.loaded.providers.clone(),
         files: BTreeMap::new(),
-        schema: schema.clone(),
-        res,
+        schema: ev.schema().clone(),
+        res: explained.res,
+        lowered: transform::lower(&program).ok().map(|l| l.program),
         program,
-        lowered: lowered_program,
-        redact,
+        redact: explained.redact,
+        collisions: std::mem::take(&mut ev.collisions),
         index: OnceCell::new(),
     })
-}
-
-/// A `deny` or `warn` fact as the evaluator words its violation (`engine`'s
-/// `format_policy_fact`).
-fn policy_text(a: &Atom) -> Option<String> {
-    let Some(Term::Val(Value::Str(msg))) = a.args.first() else {
-        return None;
-    };
-    match a.args.get(1) {
-        None => Some(msg.clone()),
-        Some(Term::Val(ctx)) => Some(format!(
-            "{msg} ctx={}",
-            serde_json::to_string(&engine::value_to_json(ctx)).ok()?
-        )),
-        Some(_) => None,
-    }
-}
-
-/// Every `deny` and `warn` fact, at the rule that derived it, the
-/// contributions it reads as related information.
-fn policy_problems(e: &Evaluated) -> Vec<Problem> {
-    let mut out = Vec::new();
-    for a in &e.res.facts {
-        let severity = match a.pred.as_str() {
-            "deny" => Severity::Error,
-            "warn" => Severity::Warning,
-            _ => continue,
-        };
-        let Some(text) = policy_text(a) else { continue };
-        let Some(id) = e.res.circuit.fact_id(&engine::circuit_fact(a)) else {
-            continue;
-        };
-        let (at, related) = provenance(e, id);
-        out.push(Problem {
-            severity,
-            message: e.redact.text(&text),
-            at: at.unwrap_or(Where::Top),
-            related,
-        });
-    }
-    out
 }
 
 /// Where fact `id` comes from: the nearest rule (or stated fact) that is
 /// written somewhere, and the contributions of the attributes below it,
 /// each with its rank.
 pub fn provenance(e: &Evaluated, id: NodeId) -> (Option<Where>, Vec<(Where, String)>) {
-    let c = &e.res.circuit;
-    let mut at = None;
-    let mut related = Vec::new();
-    let mut seen = BTreeSet::new();
-    let mut queue = std::collections::VecDeque::from([(id, 0usize)]);
-    while let Some((n, depth)) = queue.pop_front() {
-        if depth > 8 || !seen.insert(n) || seen.len() > 400 {
-            continue;
-        }
-        let View::Fact { fact, alts, .. } = c.view(n) else {
-            continue;
-        };
-        let Some(&alt) = alts.first() else { continue };
-        let View::Times { children, .. } = c.view(alt) else {
-            continue;
-        };
-        let mut sigma = false;
-        for ch in children {
-            match c.view(*ch) {
-                View::Leaf(Leaf::Rule { id }) => {
-                    sigma = id.starts_with('Σ');
-                    if at.is_none()
-                        && let Some(s) = e.rule_span(id)
-                    {
-                        at = Some(Where::Span(s));
-                    }
-                }
-                View::Leaf(Leaf::Base { span }) if at.is_none() => {
-                    at = Some(Where::Place(span.clone()));
-                }
-                _ => {}
-            }
-        }
-        for ch in children {
-            if let View::Fact { fact: f, .. } = c.view(*ch) {
-                if sigma && let Some(w) = written(e, *ch) {
-                    let rank = match f.args.get(4) {
-                        Some(Value::Str(r)) => r.clone(),
-                        _ => "?".into(),
-                    };
-                    let what = format!(
-                        "contribution to {}.{} .{} at rank {rank}",
-                        text_of(fact.args.first()),
-                        text_of(fact.args.get(1)),
-                        text_of(fact.args.get(2)),
-                    );
-                    if !related.iter().any(|(x, _)| *x == w) {
-                        related.push((w, what));
-                    }
-                }
-                queue.push_back((*ch, depth + 1));
-            }
-        }
-    }
-    (at, related)
+    let (at, related) = deployment::provenance(&e.res, id);
+    (
+        at.map(Where::from),
+        related.into_iter().map(|(w, m)| (w.into(), m)).collect(),
+    )
 }
 
 /// Where the firings of fact `id` are written: its first rule or stated
 /// fact that has a place.
 pub fn written(e: &Evaluated, id: NodeId) -> Option<Where> {
-    let c = &e.res.circuit;
-    let View::Fact { alts, .. } = c.view(id) else {
-        return None;
-    };
-    for a in alts {
-        let View::Times { children, .. } = c.view(*a) else {
-            continue;
-        };
-        for ch in children {
-            match c.view(*ch) {
-                View::Leaf(Leaf::Rule { id }) => {
-                    if let Some(s) = e.rule_span(id) {
-                        return Some(Where::Span(s));
-                    }
-                }
-                View::Leaf(Leaf::Base { span }) => return Some(Where::Place(span.clone())),
-                _ => {}
-            }
-        }
-    }
-    None
-}
-
-fn text_of(v: Option<&Value>) -> String {
-    match v {
-        Some(Value::Str(s)) => s.clone(),
-        Some(v) => dform_core::partition::fmt_value(v),
-        None => String::new(),
-    }
-}
-
-/// A key value as `--set` reads it.
-fn value_of(raw: &str) -> Value {
-    if raw == "true" {
-        Value::Bool(true)
-    } else if raw == "false" {
-        Value::Bool(false)
-    } else if let Ok(i) = raw.parse::<i64>() {
-        Value::Int(i)
-    } else {
-        Value::Str(raw.to_string())
-    }
-}
-
-// What follows mirrors the command line's helpers of the same names
-// (src/cli.rs), which are private to it.
-
-fn with_default_unknowns(program: &mut Program, m: &Manifest) {
-    let Some(u) = &m.defaults.unknowns else {
-        return;
-    };
-    for s in &mut program.statements {
-        if let Stmt::Stack(c) = s
-            && !c.config.iter().any(|(k, _, _)| k == "unknowns")
-        {
-            c.config
-                .push(("unknowns".into(), Term::Val(Value::Str(u.clone())), c.span));
-        }
-    }
-}
-
-fn with_manifest(cfg: &mut stack::Stack, m: &Manifest, file: &Path) {
-    for p in &mut cfg.providers {
-        if !p.contains('/')
-            && let Some(src) = m.provider_source(p)
-        {
-            *p = src;
-        }
-    }
-    let name = cfg.name.clone().unwrap_or_else(|| state::stack_name(file));
-    if cfg.backend.is_none() {
-        cfg.backend = m.backend(&name);
-    }
-}
-
-fn input_fact_keys(program: &Program) -> BTreeSet<String> {
-    program
-        .statements
-        .iter()
-        .filter_map(|s| match s {
-            Stmt::Fact(a) if a.pred == "input" => match a.args.first() {
-                Some(Term::Val(Value::Str(k))) => Some(k.clone()),
-                _ => None,
-            },
-            _ => None,
-        })
-        .collect()
-}
-
-fn provider_configs(program: &Program) -> BTreeSet<String> {
-    program
-        .statements
-        .iter()
-        .filter_map(|st| match st {
-            Stmt::Fact(a) => Some(a),
-            Stmt::Rule(r) => Some(&r.head),
-            _ => None,
-        })
-        .filter(|a| a.pred == "provider_config")
-        .filter_map(|a| match a.args.first() {
-            Some(Term::Val(Value::Str(n))) => Some(n.clone()),
-            _ => None,
-        })
-        .collect()
-}
-
-fn world_types(lowered: Option<&transform::Lowered>) -> Option<BTreeSet<String>> {
-    use dform_core::ast::Lit;
-    let mut out = BTreeSet::new();
-    for st in &lowered?.program.statements {
-        let body = match st {
-            Stmt::Rule(r) => &r.body,
-            Stmt::Constraint(c) => &c.body,
-            _ => continue,
-        };
-        for l in body {
-            let (Lit::Pos(a) | Lit::Not(a)) = l else {
-                continue;
-            };
-            if !plugin::providers::INVENTORY
-                .iter()
-                .any(|(p, _)| *p == a.pred)
-            {
-                continue;
-            }
-            match a.args.first() {
-                Some(Term::Val(Value::Str(t))) => {
-                    out.insert(t.clone());
-                }
-                _ => return None,
-            }
-        }
-    }
-    Some(out)
-}
-
-fn catalog_scope(
-    program: &Program,
-    given: &[Atom],
-    discovered: &[Atom],
-    st: &state::State,
-) -> Option<BTreeSet<String>> {
-    let lowered = transform::lower(program).ok()?;
-    let facts: Vec<Atom> = given.iter().chain(discovered).cloned().collect();
-    let mut named = dform_core::schema::named_types(&lowered.program, &facts)?;
-    named.extend(
-        st.resources
-            .keys()
-            .chain(st.deposed.keys())
-            .chain(st.uncertain.keys())
-            .filter_map(|k| state::parse_key(k).map(|a| a.typ)),
-    );
-    Some(named)
+    deployment::written(&e.res, id).map(Where::from)
 }
 
 /// The key values and scenarios a stack offers: each enum value of each

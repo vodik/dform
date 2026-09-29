@@ -27,7 +27,12 @@ struct Client {
 
 impl Client {
     fn start(root: &Path, options: Value) -> Client {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_dform"))
+        Client::start_with(root, options, Command::new(env!("CARGO_BIN_EXE_dform")))
+    }
+
+    /// A server run as `command` (its environment) says.
+    fn start_with(root: &Path, options: Value, mut command: Command) -> Client {
+        let mut child = command
             .arg("lsp")
             .current_dir(root)
             .stdin(Stdio::piped())
@@ -1462,5 +1467,154 @@ fn same_named_private_relations_rename_independently() {
     assert!(text.contains("seen(x) if helper(x)"), "{text}");
     let text = std::fs::read_to_string(&iam).unwrap();
     assert!(text.contains("seen(x) if iam_helper(x)"), "{text}");
+    c.shutdown();
+}
+
+/// The server's diagnostics are `dform plan`'s, also for a plan with a
+/// replacement: the vpc is replaced, so the subnet that reads its id waits
+/// on the new one (the program evaluated again without the replaced
+/// object), and a policy denies what waits. Both refuse the same.
+#[test]
+fn diagnostics_of_a_plan_with_a_replacement_are_the_plans() {
+    let s = common::Scratch::project("lsp-replace");
+    let net = r#"edition 2026
+
+stack p {}
+
+resource net.vpc main { cidr = "10.0.0.0/16" }
+resource net.subnet a { vpc_id = ref(net.vpc, "main", "id"), tier = "web" }
+
+deny(m) if deformation("pending", t, n, _), m = format("%s.%s waits on a replacement", t, n)
+"#;
+    let file = s.write("stacks/p.df", net);
+    s.run(&["apply", "p"]).success();
+    std::fs::write(&file, net.replace("10.0.0.0/16", "10.1.0.0/16")).unwrap();
+    let plan = s.run(&["plan", "p"]).failure();
+    let refused: Vec<String> = plan
+        .stderr
+        .split("constraint violations:\n")
+        .nth(1)
+        .unwrap_or_else(|| panic!("{}", plan.stderr))
+        .lines()
+        .filter_map(|l| l.strip_prefix("- "))
+        .map(str::to_string)
+        .collect();
+    assert_eq!(
+        refused,
+        ["net.subnet.a waits on a replacement"],
+        "{}{}",
+        plan.stdout,
+        plan.stderr
+    );
+
+    let root = std::fs::canonicalize(&s.dir).unwrap();
+    let file = root.join("stacks/p.df");
+    let mut c = Client::start(&root, json!({}));
+    c.open(&file);
+    let ds = c.diagnostics(&file);
+    let mut errors: Vec<String> = ds
+        .iter()
+        .filter(|d| d["severity"] == 1)
+        .map(|d| d["message"].as_str().unwrap().to_string())
+        .collect();
+    errors.sort();
+    assert_eq!(errors, refused, "{}", json!(ds));
+    c.shutdown();
+}
+
+/// A deployment whose state is in a bucket is read there when the server
+/// has the backend's credentials: the vpc applied there, and gone from the
+/// program, is a delete that `prevent_destroy` denies, as `dform plan`
+/// says. Without credentials it is evaluated as if nothing were deployed,
+/// and says so.
+#[test]
+fn an_s3_deployment_is_read_with_credentials() {
+    let server = dform_s3::fake::Server::start();
+    let s = common::Scratch::project("lsp-s3");
+    s.write(
+        "dform.toml",
+        &format!(
+            "[defaults]\nbackend = 's3(\"dform-test\", \"lsp/{{stack}}\", \
+             {{endpoint: \"{}\", region: \"us-east-1\"}})'\n",
+            server.endpoint
+        ),
+    );
+    let spec = dform_core::store::S3Spec {
+        bucket: "dform-test".into(),
+        prefix: "lsp".into(),
+        endpoint: Some(server.endpoint.clone()),
+        region: Some("us-east-1".into()),
+    };
+    dform_s3::S3Store::with_credentials(&spec, "", rusty_s3::Credentials::new("fake", "fake"))
+        .unwrap()
+        .create_bucket()
+        .unwrap();
+    let vpc = "resource net.vpc main { cidr = \"10.0.0.0/16\" }\n";
+    let net = format!(
+        "edition 2026\n\nstack p {{}}\n\n{vpc}lifecycle(net.vpc, \"main\", \"prevent_destroy\")\n"
+    );
+    let file = s.write("stacks/p.df", &net);
+    let creds = [
+        ("DFORM_S3_ACCESS_KEY_ID", "fake"),
+        ("DFORM_S3_SECRET_ACCESS_KEY", "fake"),
+    ];
+    let dform = |args: &[&str]| {
+        let out = common::dform()
+            .args(args)
+            .current_dir(&s.dir)
+            .envs(creds)
+            .output()
+            .unwrap();
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        (out.status.success(), text)
+    };
+    let (ok, text) = dform(&["apply", "--yes", "p"]);
+    assert!(ok, "{text}");
+    assert!(!s.path("dform.state/p/state.json").exists(), "{text}");
+    std::fs::write(&file, net.replace(vpc, "")).unwrap();
+    let deny = "lifecycle prevent_destroy: the plan would delete net.vpc.main";
+    let (ok, text) = dform(&["plan", "p"]);
+    assert!(!ok && text.contains(&format!("- {deny}")), "{text}");
+
+    let root = std::fs::canonicalize(&s.dir).unwrap();
+    let file = root.join("stacks/p.df");
+    let errors = |ds: &[Value]| -> Vec<String> {
+        ds.iter()
+            .filter(|d| d["severity"] == 1)
+            .map(|d| d["message"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let mut with = Command::new(env!("CARGO_BIN_EXE_dform"));
+    with.envs(creds);
+    let mut c = Client::start_with(&root, json!({}), with);
+    c.open(&file);
+    let ds = c.diagnostics(&file);
+    assert_eq!(errors(&ds), [deny], "{}", json!(ds));
+    c.shutdown();
+
+    let mut without = Command::new(env!("CARGO_BIN_EXE_dform"));
+    for k in [
+        "DFORM_S3_ACCESS_KEY_ID",
+        "DFORM_S3_SECRET_ACCESS_KEY",
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+    ] {
+        without.env_remove(k);
+    }
+    let mut c = Client::start_with(&root, json!({}), without);
+    c.open(&file);
+    let ds = c.diagnostics(&file);
+    assert!(errors(&ds).is_empty(), "{}", json!(ds));
+    assert!(
+        messages(&ds)
+            .iter()
+            .any(|m| m.contains("evaluated as if nothing were deployed there")),
+        "{}",
+        json!(ds)
+    );
     c.shutdown();
 }

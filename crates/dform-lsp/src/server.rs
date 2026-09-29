@@ -880,7 +880,7 @@ impl Server<'_> {
         };
         let mut found = Vec::new();
         for ev in self.workspaces.get(&root).map_or(&[][..], |w| &w.stacks) {
-            found.extend(actions::compiled(&ev.file, &read));
+            found.extend(actions::compiled(&ev.outcome));
             if let Some(e) = &ev.outcome.evaluated {
                 found.extend(actions::evaluated(e, &ev.file, &read));
             }

@@ -1838,10 +1838,14 @@ emacs --batch -Q -L editors/emacs -l ert \
 `dform lsp` serves the language server protocol on stdin and stdout
 (`crates/dform-lsp`, lsp-server; synchronous, one evaluation at a
 time). An edit re-evaluates the edited file's project once edits pause
-for 300 ms: every stack discovery finds, as `dform plan` would, up to the
-plan's policy pass, with the open buffers' unsaved text. Evaluation is
-read only: the deployment's recorded world and state are read, never
-written, nothing is applied, and the providers are the mock linked into
+for 300 ms: every stack discovery finds, as `dform plan` does (one
+evaluation, `dform_core::deployment`), up to the plan's policy pass, with
+the open buffers' unsaved text. Evaluation is read only: the
+deployment's recorded world and state are read, never written, nothing
+is applied. State and published outputs in a bucket are read when the
+server has the s3 backend's credentials (as `dform plan` takes them);
+without, the deployment is evaluated as if nothing were deployed there,
+with a warning. The providers are the mock linked into
 the server; a real provider process is started only when the client
 sets the initialization option `"dform.lsp.real_providers": true`. On
 examples/demo an evaluation takes about 30 ms in a release build.

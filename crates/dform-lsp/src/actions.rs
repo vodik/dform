@@ -7,12 +7,11 @@
 //! ref to an address no rule wants (guard the block on it). Every edit is
 //! formatted by `dform fmt`'s formatter when the file was formatted.
 
-use crate::analysis::{self, Evaluated, Reader, Where};
-use dform_core::ast::{Span, Term};
-use dform_core::diag::{self, Diagnostics};
+use crate::analysis::{self, Evaluated, Outcome, Reader, Where};
+use dform_core::ast::Term;
 use dform_core::syntax::{SyntaxKind, SyntaxNode};
 use dform_core::value::Value;
-use dform_core::{engine, ir, lint, loader, provider, stack, transform};
+use dform_core::{engine, ir, provider, stack, transform};
 use rowan::TextSize;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -49,42 +48,22 @@ impl Action {
     }
 }
 
-/// A span as a file (relative to the working directory, the project's
-/// root) and a byte range, while its source is registered.
-fn resolve(span: Span, cwd: &Path) -> Option<(PathBuf, usize, usize)> {
-    let (name, _, _) = diag::location(span)?;
-    let f = cwd.join(name);
-    let f = std::fs::canonicalize(&f).unwrap_or(f);
-    Some((f, span.start as usize, span.end as usize))
-}
-
-/// The fixes the compiler's diagnostics of the program at `stack` carry:
-/// it is loaded and lowered again (as the evaluation did) to have them.
-pub fn compiled(stack: &Path, read: Reader) -> Vec<Action> {
-    let _scope = diag::Scope::new();
-    let cwd = std::env::current_dir().unwrap_or_default();
-    let err = match loader::load_program_with(&[stack.to_path_buf()], read) {
-        Ok(p) => match transform::lower(&p) {
-            Ok(_) => return Vec::new(),
-            Err(e) => e,
-        },
-        Err(e) => e,
-    };
-    let Some(Diagnostics(ds)) = err.chain().find_map(|x| x.downcast_ref::<Diagnostics>()) else {
-        return Vec::new();
-    };
+/// The fixes the compiler's diagnostics of an evaluation carry, as the
+/// evaluation resolved them.
+pub fn compiled(outcome: &Outcome) -> Vec<Action> {
     let mut out = Vec::new();
-    for d in ds {
-        let Some(at) = resolve(d.span, &cwd) else {
+    for p in &outcome.problems {
+        let Where::Bytes(file, start, end) = &p.at else {
             continue;
         };
-        'fix: for f in &d.fixes {
-            let mut a = Action::new(f.title.clone(), d.message.clone(), Some(at.clone()));
-            for (span, text) in &f.edits {
-                let Some((file, start, end)) = resolve(*span, &cwd) else {
-                    continue 'fix;
-                };
-                a = a.edit(&file, start, end, text.clone());
+        for f in &p.fixes {
+            let mut a = Action::new(
+                f.title.clone(),
+                p.message.clone(),
+                Some((file.clone(), *start, *end)),
+            );
+            for (file, start, end, text) in &f.edits {
+                a = a.edit(file, *start, *end, text.clone());
             }
             out.push(a);
         }
@@ -259,12 +238,9 @@ fn collisions(e: &Evaluated, stack_file: &Path, read: Reader) -> Vec<Action> {
         return Vec::new();
     }
     let keys: Vec<String> = cfg.keys.iter().map(|(k, _)| k.clone()).collect();
-    // `dform[env=staging] (env from its default)`: the deployment's name
-    // is what the lint names.
-    let deployment = e.deployment.split(" (").next().unwrap_or_default();
     let isolated = isolate(stack_file, read);
     let mut out = Vec::new();
-    for c in lint::key_collisions(&e.res, &e.schema, &keys, deployment) {
+    for c in &e.collisions {
         let message = e.redact.text(&c.text);
         let at = e
             .res

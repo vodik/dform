@@ -645,6 +645,7 @@ dependencies = [
  "crossbeam-channel",
  "dform-core",
  "dform-mock",
+ "dform-s3",
  "lsp-server",
  "lsp-types",
  "rowan",
