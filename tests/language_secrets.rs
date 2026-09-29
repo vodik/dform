@@ -11,7 +11,7 @@ fn run(body: &str) -> common::Run {
     s.write(
         "p.df",
         &format!(
-            "edition 2026\ninput pw: secret(string) where len(pw) >= 3\n\
+            "edition 2027\ninput pw: secret(string) where len(pw) >= 3\n\
              extern vault.read(+path, -value: secret(string))\n{body}"
         ),
     );
@@ -40,11 +40,7 @@ fn refused(body: &str, want: &str) {
 fn a_secret_flows_to_sensitive_places() {
     let r = run("resource leaky.vault v {\n  if pw(p)\n  password = p\n}\noutput token: secret(string)\noutput(\"token\", p) if pw(p)\nresource leaky.vault w {\n  if pw(p), q = format(\"pw:%s\", p)\n  backup = q\n}\n")
     .success();
-    assert!(
-        r.stdout.contains("let password = (sensitive)"),
-        "{}",
-        r.stdout
-    );
+    assert!(r.stdout.contains("password = (sensitive)"), "{}", r.stdout);
     assert!(!r.stdout.contains("hunter2"), "{}", r.stdout);
 }
 
@@ -85,7 +81,7 @@ fn e0304_a_public_place() {
         "E0304: a secret reaches a warn message or context",
     );
     refused(
-        "output token: string\noutput(\"token\", p) if pw(p)\n",
+        "output token: string = p if pw(p)\n",
         "E0304: a secret reaches output token, not declared secret(T)",
     );
     // Through a derived relation and an extern's secret column.

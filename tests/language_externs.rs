@@ -46,7 +46,7 @@ fn answers(s: &Scratch, v: &str) {
     s.write(
         "providers/fake/externs.df",
         &format!(
-            "edition 2026\nrandom.password(\"app\", \"pw-{v}\")\nrandom.password(\"other\", \"x\")\nrandom.token(\"app\", \"tk-{v}\")\n"
+            "edition 2027\nrandom.password(\"app\", \"pw-{v}\")\nrandom.password(\"other\", \"x\")\nrandom.token(\"app\", \"tk-{v}\")\n"
         ),
     );
 }

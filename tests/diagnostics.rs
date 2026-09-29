@@ -15,7 +15,7 @@ fn plan(src: &str) -> common::Run {
 /// and what was expected; every error in the file, then a count.
 #[test]
 fn syntax_errors_print_with_their_source_line() {
-    let r = plan("edition 2026\np(\"a\") if q(]\nr(\"b\") if ,\n").failure();
+    let r = plan("edition 2027\np(\"a\") if q(]\nr(\"b\") if ,\n").failure();
     assert!(
         r.stderr.contains("p.df:2:13: expected a term, found `]`"),
         "{}",
@@ -78,7 +78,7 @@ fn an_unknown_function_names_its_call() {
 #[test]
 fn a_negative_cycle_names_each_rule() {
     let r = plan(
-        "edition 2027\nresource net.vpc x {\n  if p = net.subnet.y.name\n  peer = p\n}\nresource net.subnet y {\n  if q = net.vpc.x.peer\n  name = q\n}\n",
+        "edition 2027\nresource net.vpc x {\n  if p = y.name\n  peer = p\n}\nresource net.subnet y {\n  if q = x.peer\n  name = q\n}\n",
     )
     .failure();
     assert!(r.stderr.contains("not stratifiable"), "{}", r.stderr);

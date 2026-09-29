@@ -153,7 +153,7 @@ fn offline_plan_validates_and_hides_secrets() {
     let r = dform(&s, None, &["plan", "p.df"]).success();
     assert!(!r.stdout.contains("hunter2"), "{}", r.stdout);
     assert!(
-        r.stdout.contains("set stringData.password = (sensitive)"),
+        r.stdout.contains("stringData.password = (sensitive)"),
         "{}",
         r.stdout
     );
@@ -1147,7 +1147,7 @@ fn a_kubeconfig_held_as_a_secret_configures_the_provider() {
     .to_string();
     let program = |settings: &str| {
         format!(
-            "edition 2026\nprovider k8s {{ source = \"./providers/k8s\" }}\n\
+            "edition 2027\nprovider k8s {{ source = \"./providers/k8s\" }}\n\
              input kubeconfig: secret(string)\n\
              provider_config(\"kubernetes\", {settings}) if kubeconfig(k)\n\
              resource k8s.config_map settings {{\n  metadata.name = \"settings\"\n  \
@@ -1307,7 +1307,7 @@ fn an_empty_pod_selector_is_present() {
     std::os::unix::fs::symlink(k8s(), s.path("providers/k8s/dform-provider-k8s")).unwrap();
     let program = |selector: &str| {
         format!(
-            "edition 2026\nprovider k8s {{ source = \"./providers/k8s\" }}\n\
+            "edition 2027\nprovider k8s {{ source = \"./providers/k8s\" }}\n\
              resource k8s.network_policy deny {{\n  metadata.name = \"deny\"\n{selector}  \
              spec.policyTypes = [\"Ingress\"]\n}}\n"
         )
@@ -1454,8 +1454,7 @@ fn a_held_secret_is_read_from_the_cluster() {
            metadata.name = \"creds\"\n\
            stringData = { pw: p }\n\
          }\n\
-         output pw: secret(string)\n\
-         output pw = k8s.secret.creds.stringData.pw\n\
+         output pw: secret(string) = creds.stringData.pw\n\
          ",
     );
     s.write(

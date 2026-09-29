@@ -801,12 +801,11 @@ input env: string = "staging"
 let cfg = settings[env]
 module network {
   input vpc_net: inet
-  output vpc: net.vpc
   resource net.vpc vpc {
     cidr = vpc_net
     tags = { env: env }
   }
-  output vpc = vpc
+  output vpc: net.vpc = vpc
   q(x) if zone_index[x] = 1, vpc.cidr == x
 }
 instance network main { vpc_net = inet(cfg.a) }

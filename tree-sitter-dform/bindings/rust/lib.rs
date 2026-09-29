@@ -8,7 +8,7 @@
 //! parser
 //!     .set_language(&tree_sitter_dform::LANGUAGE.into())
 //!     .expect("Error loading dform parser");
-//! let tree = parser.parse("edition 2026\np(\"a\")\n", None).unwrap();
+//! let tree = parser.parse("edition 2027\np(\"a\")\n", None).unwrap();
 //! assert!(!tree.root_node().has_error());
 //! ```
 //!

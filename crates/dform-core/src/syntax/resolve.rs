@@ -3271,7 +3271,11 @@ impl<'u> Lowerer<'u> {
             if self.is_value(rc.scope, h) {
                 return self.value(rc, c, pre, span);
             }
-            if c.head_kind == SETTINGS_KW && !c.is_bare() {
+            // `settings.x` names a resource called `settings` in scope; a
+            // settings row is only ever `settings[e]`.
+            let resource =
+                matches!(c.ops.first(), Some(Op::Field(_))) && self.resource(rc.scope, h).is_some();
+            if c.head_kind == SETTINGS_KW && !c.is_bare() && !resource {
                 return self.settings(rc, c, pre, span);
             }
             if h == "world" && !c.ops.is_empty() {

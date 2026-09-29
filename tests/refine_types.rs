@@ -110,7 +110,7 @@ fn a_cross_attribute_refinement_lowers_to_a_deny() {
     let s = Scratch::new("refine-cross");
     let src = |min: i64| {
         format!(
-            "edition 2026
+            "edition 2027
 type settings {{
   pool.min: int
   pool.max: int where pool.min <= pool.max
@@ -259,7 +259,7 @@ fn a_refinement_names_its_attribute_by_name() {
     let s = Scratch::new("refine-names");
     let src = |name: &str, wide: &str| {
         format!(
-            "edition 2026
+            "edition 2027
 type app.thing {{
   name: string where len(name) <= 3
   code: string where len(code) != 2

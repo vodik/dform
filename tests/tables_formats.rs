@@ -9,7 +9,7 @@ use tables_common::scratch;
 /// A table of peerings in `format`, and a vpc per dev row.
 fn program(format: &str) -> String {
     format!(
-        r#"edition 2026
+        r#"edition 2027
 
 input relation peering(env: enum("dev", "prod"), name: string, port: int, cidr: inet, on: bool) from {format}("data/p.{format}")
 

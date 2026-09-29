@@ -9,7 +9,7 @@ use tables_common::scratch;
 const PROGRAM: &str = r#"edition 2027
 
 input env: enum("dev", "prod") = "dev"
-stack app[env] { config = FORMAT("config/$${env}.FORMAT") }
+stack app[env] { config = FORMAT("config/${env}.FORMAT") }
 
 settings dev @default {
   db = { size: 1, zone: "a" }
@@ -109,7 +109,7 @@ fn a_stack_keyed_twice_names_the_row_by_both() {
 
 input env: string = "dev"
 input region: string = "eu"
-stack app[env, region] { config = yaml("config/$${env}-$${region}.yaml") }
+stack app[env, region] { config = yaml("config/${env}-${region}.yaml") }
 
 settings "dev/eu" @default {
   size = 1

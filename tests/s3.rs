@@ -877,7 +877,7 @@ fn a_server_that_ignores_conditions_is_refused() {
     let p = Project::of(&t, "lax-approval", |s| {
         s.write(
             "stacks/app.df",
-            "edition 2027\nstack app {}\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nrequires_approval(d, \"every change\") if {\ndeformation(_, t, a, _)\nd = \"$${t}[\\\"$${a}\\\"]\"\n}\n",
+            "edition 2027\nstack app {}\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nrequires_approval(d, \"every change\") if {\ndeformation(_, t, a, _)\nd = \"${t}[\\\"${a}\\\"]\"\n}\n",
         );
     });
     let r = p.run(&["plan", "app"]).failure();
@@ -907,7 +907,7 @@ fn a_project_reads_another_projects_outputs_through_its_s3_backend() {
                 "edition 2027\n\
                  input env: string = \"dev\"\n\
                  stack cluster[env] {}\n\
-                 output endpoint = \"https://$${env}.cluster.example\"\n\
+                 output endpoint = \"https://${env}.cluster.example\"\n\
                  ",
             );
         });

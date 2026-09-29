@@ -113,7 +113,7 @@ fn check_lists_unformatted_files_and_fmt_rewrites_them() {
 #[test]
 fn fmt_refuses_a_file_that_does_not_parse() {
     let s = Scratch::new("fmt-error");
-    let bad = "edition 2026\np(\"a\") if q(]\n";
+    let bad = "edition 2027\np(\"a\") if q(]\n";
     s.write("bad.df", bad);
     let r = s.run(&["fmt", "bad.df"]).failure();
     assert!(r.stderr.contains("bad.df:2:"), "{}", r.stderr);

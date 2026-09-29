@@ -25,7 +25,10 @@ fn a_pattern_prints_one_column_per_variable() {
 fn a_conjunction_is_evaluated_against_the_final_fact_store() {
     let out = dform(
         "examples/demo/stacks/dform.df env=prod",
-        &["query", "attr(T, A, .cidr, C), want(T, A), T != net.subnet"],
+        &[
+            "query",
+            "attr(T, A, \"cidr\", C), want(T, A), T != net.subnet",
+        ],
     );
     assert!(out.starts_with("T "), "{out}");
     assert!(
@@ -76,7 +79,7 @@ fn query_never_prints_a_labeled_secret() {
         "p.df",
         r#"edition 2027
 resource leaky.vault v { password = "VAULT-SECRET-DO-NOT-PRINT" }
-           note(n) if attr(leaky.vault, "v", "password", p), n = concat("pw is ", p)"#,
+           note(n) if p = v.password, n = concat("pw is ", p)"#,
     );
     let schema = repo().join("tests/fixtures/providers/leaky/schema.df");
     let q = |pattern: &str| {

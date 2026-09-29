@@ -46,7 +46,7 @@ fn doc_comments_lower_to_doc_facts() {
     );
     s.write(
         "p.df",
-        "edition 2026\n\
+        "edition 2027\n\
          import \"lib.df\"\n\
          #| A network.\n\
          #| owner: net-team\n\
@@ -55,7 +55,7 @@ fn doc_comments_lower_to_doc_facts() {
          \x20 #| Its range.\n\
          \x20 input cidr: string\n\
          \x20 # a plain comment is no doc\n\
-         \x20 output id: string\n\
+         \x20 output id: string = cidr\n\
          }\n\
          #| deprecated: read zones/1\n\
          zone_of(\"a\")\n\
@@ -86,7 +86,7 @@ fn a_policy_can_require_docs() {
     let s = Scratch::new("docs-policy");
     s.write(
         "p.df",
-        "edition 2026\n\
+        "edition 2027\n\
          #| Has an owner.\n\
          #| owner: a-team\n\
          module owned {}\n\

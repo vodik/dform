@@ -15,7 +15,7 @@ net_of("staging", "10.1.0.0/16")
 net_of("stg", "10.1.0.0/16")
 net_of("prod", "10.2.0.0/16")
 resource net.vpc main {
-  name = "main-$${env}"
+  name = "main-${env}"
   cidr = net_of[env]
   size = size
 }
@@ -107,7 +107,7 @@ input team: string
 input region: string = "us-east1"
 stack app[team, region] {}
 resource net.vpc main {
-  name = "main-$${team}-$${region}"
+  name = "main-${team}-${region}"
 }
 "#,
     );
@@ -177,7 +177,7 @@ fn stack_output_addresses_one_deployment() {
         r#"edition 2027
 input env: string = "staging"
 stack app[env] {}
-output url = "https://$${env}.example"
+output url = "https://${env}.example"
 "#,
     );
     s.write(
@@ -290,7 +290,7 @@ resource net.vpc logs {
   bucket = "company-logs"
 }
 resource net.vpc main {
-  name = "main-$${env}"
+  name = "main-${env}"
 }
 "#;
 
@@ -353,10 +353,10 @@ resource net.vpc logs {
   tags = { env: env }
 }
 resource net.vpc main {
-  name = "main-$${env}"
+  name = "main-${env}"
 }
 resource net.vpc peer {
-  name = net.vpc.main.name
+  name = main.name
 }
 "#;
 

@@ -13,7 +13,7 @@ type environment = enum("dev", "prod")
 input env: environment = "dev"
 stack app[env] {}
 provider fake {
-  account = env_var("FAKE_ACCOUNT_$${env}")
+  account = env_var("FAKE_ACCOUNT_${env}")
   region = cfg.region
   expect_account = cfg.account
 }
@@ -113,7 +113,7 @@ fn a_provider_configured_from_what_it_serves_is_a_cycle() {
         "bykey-cycle",
         "edition 2027\n\
          provider fake { zone = z }\n\
-         let z = net.vpc.main.cidr\n\
+         let z = main.cidr\n\
          resource net.vpc main {\n\
            cidr = \"10.0.0.0/16\"\n\
          }\n\

@@ -14,7 +14,7 @@ const EVENTS: usize = 200;
 fn release(s: &Scratch, image: &str) {
     s.write(
         "data/release.facts",
-        &format!("edition 2026\n\nrelease(\"{image}\")\n"),
+        &format!("edition 2027\n\nrelease(\"{image}\")\n"),
     );
 }
 

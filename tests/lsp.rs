@@ -1555,7 +1555,7 @@ fn an_s3_deployment_is_read_with_credentials() {
         .unwrap();
     let vpc = "resource net.vpc main { cidr = \"10.0.0.0/16\" }\n";
     let net = format!(
-        "edition 2026\n\nstack p {{}}\n\n{vpc}lifecycle(net.vpc, \"main\", \"prevent_destroy\")\n"
+        "edition 2027\n\nstack p {{}}\n\n{vpc}lifecycle(net.vpc, \"main\", \"prevent_destroy\")\n"
     );
     let file = s.write("stacks/p.df", &net);
     let creds = [

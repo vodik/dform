@@ -70,7 +70,7 @@ fn moved_closes_rename_is_destroy() {
     let s = Scratch::new("moved");
     let prog = |inst: &str| {
         format!(
-            r#"edition 2026
+            r#"edition 2027
 
 module network {{
   resource net.vpc vpc {{ cidr = "10.0.0.0/16" }}
@@ -137,7 +137,7 @@ fn ignore_changes_drops_the_path_from_both_sides() {
     let s = Scratch::new("ignore-changes");
     let prog = |team: &str| {
         format!(
-            "edition 2026\nresource net.vpc main {{ cidr = \"10.0.0.0/16\", tags = {{ team: \"{team}\" }} }}\n\
+            "edition 2027\nresource net.vpc main {{ cidr = \"10.0.0.0/16\", tags = {{ team: \"{team}\" }} }}\n\
              ignore_changes(net.vpc, \"main\", \"tags.owner\")\n"
         )
     };
@@ -181,8 +181,10 @@ fn policy_reads_lifecycle_facts() {
         r#"edition 2027
 
 resource db.postgres main { size = 1 }
-deny "databases must be protected" {addr: a} if
-  want(db.postgres, a), not lifecycle(db.postgres, a, "prevent_destroy")
+deny "databases must be protected" {addr: a} if {
+  a in db.postgres
+  not lifecycle(db.postgres, a, "prevent_destroy")
+}
 "#,
     );
     let r = dform(&s, &["plan"]).failure();
@@ -210,7 +212,7 @@ fn ignore_changes_still_sets_the_path_on_create() {
     let s = Scratch::new("ignore-changes-create");
     let prog = |owner: &str| {
         format!(
-            "edition 2026\nresource net.vpc main {{ cidr = \"10.0.0.0/16\", tags = {{ owner: \"{owner}\" }} }}\n\
+            "edition 2027\nresource net.vpc main {{ cidr = \"10.0.0.0/16\", tags = {{ owner: \"{owner}\" }} }}\n\
              ignore_changes(net.vpc, \"main\", \"tags.owner\")\n"
         )
     };

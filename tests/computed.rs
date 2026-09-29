@@ -93,7 +93,7 @@ fn secrets_are_labels_and_print_redacted() {
         plan.stdout
     );
     assert!(
-        plan.stdout.contains("let master_password = (sensitive)"),
+        plan.stdout.contains("master_password = (sensitive)"),
         "{}",
         plan.stdout
     );
@@ -208,7 +208,7 @@ fn an_update_leaves_a_picked_optional_computed_value_to_the_provider() {
     );
     let program = |size: u32| {
         format!(
-            "edition 2026\n\nresource vm a {{ size = {size} }}\nresource vm b {{ size = {size}, zone = \"z1\" }}\n"
+            "edition 2027\n\nresource vm a {{ size = {size} }}\nresource vm b {{ size = {size}, zone = \"z1\" }}\n"
         )
     };
     s.write("p.df", &program(1));

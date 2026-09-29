@@ -307,7 +307,7 @@ fn a_default_yields_to_the_stack_statement() {
     s.write("dform.toml", "[defaults]\nunknowns = \"strict\"\n");
     let two_phase = |stack: &str| {
         format!(
-            "edition 2026\n{stack}\nresource db.postgres main {{ size = 1 }}\n\
+            "edition 2027\n{stack}\nresource db.postgres main {{ size = 1 }}\n\
              resource compute.vm app {{\n  for want(\"db.postgres\", \"main\"), \
              e = ref(db.postgres, \"main\", \"endpoint\"), e != \"\"\n  size = 1\n}}\n"
         )
@@ -437,7 +437,7 @@ fn completion_lists_stacks_keys_and_deployments() {
     let r = s.run(&["__complete", "plan"]).success();
     assert_eq!(r.stdout, "app\nnet\n");
     let r = s.run(&["__complete", "plan", "app"]).success();
-    assert_eq!(r.stdout, "let env=prod\nlet env=staging\n");
+    assert_eq!(r.stdout, "env=prod\nenv=staging\n");
     s.run(&["apply", "app", "env=prod"]).success();
     let r = s.run(&["__complete", "plan"]).success();
     assert_eq!(r.stdout, "app\napp[env=prod]\nnet\n");

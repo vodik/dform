@@ -72,14 +72,13 @@ fn exports_and_outputs_are_the_interface() {
         r#"edition 2027
 module m {
   input n: int
-  output vpc: addr
   export size
   size(n_) if n(n_)
   resource net.vpc vpc {
     if size(s_)
     size = s_
   }
-  output vpc = vpc
+  output vpc: addr = vpc
 }
 instance m a { n = 3 }
 inst("a")

@@ -62,11 +62,7 @@ fn plan_and_apply_redact_the_labeled_secret_but_not_the_mislabeled_one() {
         "vault's labeled secret leaked in plan output:\n{}",
         r.stdout
     );
-    assert!(
-        r.stdout.contains("let password = (sensitive)"),
-        "{}",
-        r.stdout
-    );
+    assert!(r.stdout.contains("password = (sensitive)"), "{}", r.stdout);
     // The mislabeled type has no way to know it should hide this: the
     // schema says it's public, so it prints like any other attribute.
     assert!(
@@ -266,11 +262,7 @@ resource leaky.vault copy {{
         assert!(!r.stderr.contains(VAULT_SECRET), "{cmd:?}: {}", r.stderr);
     }
     let r = s.run(&common::on("p.df", &mock, &["plan"])).success();
-    assert!(
-        r.stdout.contains("let backup = (sensitive)\n"),
-        "{}",
-        r.stdout
-    );
+    assert!(r.stdout.contains("backup = (sensitive)\n"), "{}", r.stdout);
 
     s.write(
         "p.df",
@@ -390,23 +382,22 @@ fn a_secret_reaches_a_public_output_only_through_declassify() {
     let s = Scratch::new("secrets-declassify");
     let prog = |body: &str, policy: &str| {
         format!(
-            "edition 2026\ninput pw: secret(string)\noutput pw_len: int\n\
-             output(\"pw_len\", n) if pw(p), {body}\n{policy}"
+            "edition 2027\ninput pw: secret(string)\noutput pw_len: int = n if pw(p), {body}\n{policy}"
         )
     };
     let mock = ["--world", "w.json", "--set", "pw=HUNTER-TWO"];
-    s.write("p.df", &prog("let n = len(p)", ""));
+    s.write("p.df", &prog("n = len(p)", ""));
     let r = s.run(&common::on("p.df", &mock, &["plan"])).failure();
     assert!(
         r.stderr
-            .contains("p.df:4:1: E0304: a secret reaches output pw_len, not declared secret(T)"),
+            .contains("p.df:3:1: E0304: a secret reaches output pw_len, not declared secret(T)"),
         "{}",
         r.stderr
     );
 
     s.write(
         "p.df",
-        &prog("let n = declassify(len(p), \"its length is public\")", ""),
+        &prog("n = declassify(len(p), \"its length is public\")", ""),
     );
     let r = s
         .run(&common::on(
@@ -424,7 +415,7 @@ fn a_secret_reaches_a_public_output_only_through_declassify() {
         ))
         .success();
     assert!(
-        r.stdout.contains("\"p.df:4:1\"  \"its length is public\""),
+        r.stdout.contains("\"p.df:3:1\"  \"its length is public\""),
         "{}",
         r.stdout
     );
@@ -432,14 +423,14 @@ fn a_secret_reaches_a_public_output_only_through_declassify() {
     s.write(
         "p.df",
         &prog(
-            "let n = declassify(len(p), \"its length is public\")",
-            "deny(m) if declassified(at, r), m = \"declassified at ${at}: ${r}\"\n",
+            "n = declassify(len(p), \"its length is public\")",
+            "deny \"declassified at ${at}: ${r}\" if declassified(at, r)\n",
         ),
     );
     let r = s.run(&common::on("p.df", &mock, &["plan"])).failure();
     assert!(
         r.stderr
-            .contains("- declassified at p.df:4:1: its length is public\n"),
+            .contains("- declassified at p.df:3:1: its length is public\n"),
         "{}",
         r.stderr
     );
@@ -457,10 +448,8 @@ resource leaky.vault v {
   if pw(p)
   password = p
 }
-output token: secret(string)
-output token = pw
-output pass: secret(string)
-output pass = leaky.vault.v.password
+output token: secret(string) = pw
+output pass: secret(string) = v.password
 "#;
 
 const PRODUCED: &str = "PRODUCED-SECRET-DO-NOT-STORE";

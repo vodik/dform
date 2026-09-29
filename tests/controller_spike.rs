@@ -12,7 +12,7 @@ const WORLD: &str = "dform.state/renfry.workload/remote.json";
 fn release(s: &Scratch, image: &str) {
     s.write(
         "data/release.facts",
-        &format!("edition 2026\n\nrelease(\"{image}\")\n"),
+        &format!("edition 2027\n\nrelease(\"{image}\")\n"),
     );
 }
 
@@ -232,7 +232,7 @@ fn a_prod_rollout_is_held_until_its_plan_is_approved() {
     // A token for the digest, through the input relation, releases it.
     s.write(
         "data/approvals.facts",
-        &format!("edition 2026\n\n{}", approval_fact(&s, &digest)),
+        &format!("edition 2027\n\n{}", approval_fact(&s, &digest)),
     );
     assert_eq!(
         once(&s, &prod),
@@ -335,7 +335,7 @@ fn a_git_source_is_read_at_its_ref() {
     let commit = |image: &str| {
         s.write(
             "work/web.facts",
-            &format!("edition 2026\n\nrelease(\"{image}\")\n"),
+            &format!("edition 2027\n\nrelease(\"{image}\")\n"),
         );
         let w = s.path("work");
         git(&w, &["add", "web.facts"]);
