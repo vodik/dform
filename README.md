@@ -119,7 +119,8 @@ Apply.
 `dform stack list` shows every stack, its key and file, and per deployment
 with state its last apply (time, actor and the project's commit, from the
 audit log) and a saved plan not yet applied. `dform state show TARGET`
-prints the deployment's objects; `dform state mv FROM TO TARGET` gives the
+prints the deployment's objects (it, `state mv`, `log` and `stack unlock`
+need the deployment's key, not the program's other inputs); `dform state mv FROM TO TARGET` gives the
 object at `TYPE/NAME` another address; `dform stack unlock TARGET` removes
 an apply lock whose holder is gone (breaks an s3 backend's lease). `dform provider schema NAME` prints a
 provider's schema facts. `dform completions zsh > _dform` completes stack
@@ -191,9 +192,11 @@ refused ("state write refused by fencing") and writes nothing; the new
 holder resumes the interrupted apply as after any crash. The lease is also
 checked before each Apply call is submitted, so a stale holder that can see
 its lease is gone makes no provider call ("no provider call was made"),
-and before the published outputs and the controller's memo are written
-("the controller's memo was not written"); a controller whose apply
-failed, its lease released, keeps that memo in memory only. What a stale holder can still do: the calls it submitted before the lease
+and before the published outputs, the controller's memo and its approval
+digest are written ("the controller's memo was not written", "the
+approval digest was not written"); a controller whose apply failed, its
+lease released, keeps that memo in memory, starts its next run from it,
+and writes it once that run holds the lease. What a stale holder can still do: the calls it submitted before the lease
 was lost carry on at the provider (at most `--parallel` of them; none is
 recalled), and a call whose check passed is sent however long the holder
 stalls between the check and the send. Neither answer can be written down;
@@ -297,7 +300,11 @@ and a reader's plan that puts it in a field is refused ("... is a secret
 output of prod that no provider holds"). The mock reads a held secret
 from the producing deployment's world (a directory's; the project's own
 bucket deployments' too) and keeps what it read in the reader's world as
-`materialized`; `dform-provider-k8s` does not read one yet. A saved plan records the
+`materialized`. `dform-provider-k8s` reads one its own objects hold from
+the cluster (a Secret's `stringData` key from its `data`), refuses one
+another provider holds, and marks the object with the references it read
+(the annotation `dform.io/held`, never the value), so the object reads
+back as the reference and compares equal to the document that made it. A saved plan records the
 digest of each outputs object it read, and `apply PLAN` refuses once one
 has changed ("stack_output of NAME: its published outputs changed since
 the plan").

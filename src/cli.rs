@@ -1164,7 +1164,15 @@ fn run_with(
         None => crate::stack::instance(&stack_cfg, &stack, &program, &set_facts)?,
     };
     let deployment = instance.name();
-    inputs::check_required(&declared, &given)?;
+    // A command that only reads or moves the deployment's own objects
+    // needs its key (above), not the program's other inputs.
+    let objects_only = matches!(
+        cli.cmd,
+        Cmd::StateShow | Cmd::StateMv { .. } | Cmd::Log { .. } | Cmd::Unlock
+    );
+    if !objects_only {
+        inputs::check_required(&declared, &given)?;
+    }
     // A keyed stack's plan and apply say first which deployment they are
     // of, and which of its key values are defaults.
     let text_plan = matches!(cli.cmd, Cmd::Plan { json: false, .. });
@@ -2045,6 +2053,10 @@ fn run_with(
                 log: audit.clone(),
                 _lock: dep.lock()?,
             });
+            // Under the lease again: a memo the last run kept in memory.
+            if let Some(h) = hook.as_deref_mut() {
+                h.flush()?;
+            }
             let key = key
                 .as_ref()
                 .ok_or_else(|| anyhow::anyhow!("internal: no plan key"))?;

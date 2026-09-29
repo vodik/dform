@@ -1422,3 +1422,83 @@ fn drift_from_a_kubectl_patch_is_planned_back() {
         r.stderr
     );
 }
+
+/// A secret output of one stack, a Secret's `stringData` key, read into a
+/// Secret of another: the provider reads it from the cluster where it is
+/// held, inside the Apply (E DR-19), and the object reads back as the
+/// reference (`dform.io/held`), so the next plan is undeformed; the bytes
+/// are never in dform's output or files.
+#[test]
+fn a_held_secret_is_read_from_the_cluster() {
+    const PW: &str = "k8s-held-5ecret-31c9";
+    let s = Scratch::project("k8s-held");
+    std::fs::create_dir_all(s.path("providers/k8s")).unwrap();
+    std::os::unix::fs::symlink(k8s(), s.path("providers/k8s/dform-provider-k8s")).unwrap();
+    s.write(
+        "a.df",
+        "edition 2026\nstack a {}\nprovider k8s { source = \"./providers/k8s\" }\n\
+         input pw: secret(string)\nresource k8s.secret creds {\n  for pw(p)\n  \
+         metadata.name = \"creds\"\n  stringData = { pw: p }\n}\noutput pw: secret(string)\n\
+         output pw = k8s.secret.creds.stringData.pw\n",
+    );
+    s.write(
+        "b.df",
+        "edition 2026\nstack b {}\nprovider k8s { source = \"./providers/k8s\" }\n\
+         resource k8s.secret copy {\n  for stack_output(\"a\", \"pw\", p)\n  \
+         metadata.name = \"copy\"\n  stringData = { pw: p }\n}\n",
+    );
+    let (api, url) = Api::start();
+    let kc = kubeconfig(&s, &url);
+    let set = format!("pw={PW}");
+    let mut out = String::new();
+    let r = dform(&s, Some(&kc), &["apply", "a.df", "--set", &set]).success();
+    out += &(r.stdout + &r.stderr);
+    let r = dform(&s, Some(&kc), &["apply", "b.df"]).success();
+    out += &(r.stdout + &r.stderr);
+    let copy = api
+        .get("/api/v1/namespaces/default/secrets/copy")
+        .expect("the copy");
+    let got = copy["stringData"]["pw"]
+        .as_str()
+        .map(str::to_string)
+        .or_else(|| {
+            let d = copy["data"]["pw"].as_str()?;
+            Some(String::from_utf8(dform_k8s_base64(d)).unwrap())
+        });
+    assert_eq!(got.as_deref(), Some(PW), "{copy}");
+    let r = dform(&s, Some(&kc), &["plan", "b.df"]).success();
+    assert_eq!(r.summary(), "stack b is undeformed", "{}", r.stdout);
+    out += &(r.stdout + &r.stderr);
+    assert!(!out.contains(PW), "{out}");
+    let mut files = Vec::new();
+    files_under(&s.path("dform.state"), &mut files);
+    for f in &files {
+        let bytes = std::fs::read(f).unwrap();
+        assert!(
+            !bytes.windows(PW.len()).any(|w| w == PW.as_bytes()),
+            "{} holds the secret",
+            f.display()
+        );
+    }
+}
+
+fn dform_k8s_base64(s: &str) -> Vec<u8> {
+    let mut out = Vec::new();
+    let (mut acc, mut bits) = (0u32, 0);
+    for c in s.bytes().filter(|c| *c != b'=') {
+        let v = match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' => 62,
+            _ => 63,
+        };
+        acc = (acc << 6) | u32::from(v);
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+        }
+    }
+    out
+}

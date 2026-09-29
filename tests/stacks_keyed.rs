@@ -592,3 +592,31 @@ fn a_key_defaulting_to_production_is_warned() {
     let r = s.run(&["plan", "app.df"]).success();
     assert!(!r.stderr.contains("defaults to"), "{}", r.stderr);
 }
+
+/// `state show` (and `log`) read the deployment's own objects: they need
+/// its key, not the program's other inputs (a required secret here).
+#[test]
+fn state_show_needs_the_key_not_the_other_inputs() {
+    let s = Scratch::project("keyed-state-show");
+    s.write(
+        "stacks/app.df",
+        "edition 2026\ninput env: string\ninput pw: secret(string)\nstack app[env] {}\n\
+         resource net.vpc main { cidr = \"10.0.0.0/16\" }\n",
+    );
+    s.run(&["apply", "app", "env=prod", "--set", "pw=x"])
+        .success();
+    let r = s.run(&["state", "show", "app", "env=prod"]).success();
+    assert!(
+        r.stdout.contains("  net.vpc/main  fakecloud main"),
+        "{}",
+        r.stdout
+    );
+    s.run(&["log", "app", "env=prod"]).success();
+    let r = s.run(&["state", "show", "app"]).failure();
+    assert!(
+        r.stderr
+            .contains("stack app is keyed by input env, which has no value"),
+        "{}",
+        r.stderr
+    );
+}

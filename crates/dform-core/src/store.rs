@@ -979,21 +979,42 @@ impl Deployment {
         Ok(())
     }
 
-    /// Write the controller's memo ([`MEMO`]) beside the state. In a store
-    /// that fences, only under this run's lease, checked first, so a stale
-    /// controller cannot overwrite a newer one's: a run that holds no lease
-    /// (its apply ended, or never took it) writes nothing (`Ok(false)`),
-    /// and one whose lease was taken over is refused.
-    pub fn put_memo(&self, bytes: &[u8]) -> Result<bool> {
-        let inner = &self.inner;
-        if inner.store.fenced() {
-            if inner.lease.lock().expect("lease").is_none() {
-                return Ok(false);
-            }
-            self.check_lease()
-                .context("the controller's memo was not written")?;
+    /// Write one of the deployment's own objects beside the state (the
+    /// controller's [`MEMO`], its [`PENDING`] digest), `what` in messages.
+    /// In a store that fences, only under this run's lease, checked
+    /// first, so a stale controller cannot overwrite a newer one's: a run
+    /// that holds no lease (its apply ended, or never took it) writes
+    /// nothing (`Ok(false)`), and one whose lease was taken over is
+    /// refused.
+    pub fn put_fenced(&self, key: &str, bytes: &[u8], what: &str) -> Result<bool> {
+        if !self.fence_for(what)? {
+            return Ok(false);
         }
-        inner.store.put(MEMO, bytes, &Cond::Any)?;
+        self.inner.store.put(key, bytes, &Cond::Any)?;
+        Ok(true)
+    }
+
+    /// Remove one of the deployment's own objects, as
+    /// [`Deployment::put_fenced`] writes one.
+    pub fn delete_fenced(&self, key: &str, what: &str) -> Result<bool> {
+        if !self.fence_for(what)? {
+            return Ok(false);
+        }
+        self.inner.store.delete(key)?;
+        Ok(true)
+    }
+
+    /// May this run write its objects now? Always where the store does not
+    /// fence; else only under its lease, checked.
+    fn fence_for(&self, what: &str) -> Result<bool> {
+        if !self.inner.store.fenced() {
+            return Ok(true);
+        }
+        if self.inner.lease.lock().expect("lease").is_none() {
+            return Ok(false);
+        }
+        self.check_lease()
+            .with_context(|| format!("{what} was not written"))?;
         Ok(true)
     }
 

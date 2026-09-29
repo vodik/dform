@@ -37,6 +37,14 @@ pub const KEY_ANNOTATION: &str = "dform.io/idempotency-key";
 /// leaves it out.
 pub const STACK_LABEL: &str = "dform.io/stack";
 
+/// The annotation that says which paths of an object hold a secret the
+/// provider read where another object holds it (E DR-19): path -> the
+/// marker dform sent, `{"$secret": L, "held": ..}`, never the value.
+/// `attrs` reads each such path back as its marker, so the object compares
+/// equal to the document that made it, and dform never reads the bytes;
+/// the annotation itself is not configuration.
+pub const HELD_ANNOTATION: &str = "dform.io/held";
+
 /// A deployment's name as a label value: at most 63 of `[A-Za-z0-9-_.]`,
 /// alphanumeric at both ends (`app[env=prod]` is `app_env_prod`). Two
 /// deployments may share one; the idempotency key tells their objects
@@ -197,6 +205,23 @@ pub fn owned(live: &Json, set: &Json) -> Option<Json> {
 /// but the server's, if the object records no managed fields), without
 /// what its type and computed values say, and `metadata.generateName`.
 pub fn attrs(live: &Json) -> Json {
+    let mut out = attrs_raw(live);
+    let held = live
+        .pointer("/metadata/annotations")
+        .and_then(|a| a.get(HELD_ANNOTATION))
+        .and_then(Json::as_str)
+        .and_then(|s| serde_json::from_str::<Map<String, Json>>(s).ok());
+    for (path, m) in held.into_iter().flatten() {
+        if dform_core::provider::get_path(&out, &path).is_some() {
+            dform_core::provider::set_path(&mut out, &path, m);
+        }
+    }
+    out
+}
+
+/// `attrs` with the values a held secret was materialized to, as the
+/// cluster has them: what another object's held reference reads.
+pub fn attrs_raw(live: &Json) -> Json {
     let live = strip_nulls(live);
     let mut out = match managed(&live).and_then(|set| owned(&live, set)) {
         Some(o) => o,
@@ -218,7 +243,11 @@ pub fn attrs(live: &Json) -> Json {
         if let Some(g) = live.pointer("/metadata/generateName") {
             meta.insert("generateName".into(), g.clone());
         }
-        for (field, k) in [("annotations", KEY_ANNOTATION), ("labels", STACK_LABEL)] {
+        for (field, k) in [
+            ("annotations", KEY_ANNOTATION),
+            ("annotations", HELD_ANNOTATION),
+            ("labels", STACK_LABEL),
+        ] {
             if let Some(Json::Object(a)) = meta.get_mut(field) {
                 a.remove(k);
                 if a.is_empty() {
@@ -252,7 +281,7 @@ pub fn attrs(live: &Json) -> Json {
 }
 
 /// Standard base64, padded.
-fn base64(s: &str) -> Option<Vec<u8>> {
+pub fn base64(s: &str) -> Option<Vec<u8>> {
     let mut out = Vec::new();
     let (mut acc, mut bits) = (0u32, 0);
     for c in s.bytes().filter(|c| *c != b'=') {

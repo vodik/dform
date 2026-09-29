@@ -23,8 +23,8 @@
 
 use crate::cluster::{Cluster, WriteError};
 use crate::object::{
-    KEY_ANNOTATION, STACK_LABEL, attrs, computed, idempotency_key, inventory, manifest,
-    parse_remote, remote, stack_label, stamp,
+    HELD_ANNOTATION, KEY_ANNOTATION, STACK_LABEL, attrs, attrs_raw, base64, computed,
+    idempotency_key, inventory, manifest, parse_remote, remote, stack_label, stamp,
 };
 use crate::openapi::{self, Derived, Kind};
 use anyhow::{Result, anyhow, bail};
@@ -334,6 +334,10 @@ impl K8s {
         let c = self
             .cluster(&at)
             .map_err(|e| Failed::Refused(format!("{e:#}")))?;
+        let config = &match op {
+            pb::Op::Delete => config.clone(),
+            _ => self.materialize(c, &at, config).await?,
+        };
         let mut notes = Vec::new();
         let live = match op {
             pb::Op::Create => {
@@ -410,6 +414,96 @@ impl K8s {
             elapsed_ms: 0,
             notes,
         })
+    }
+
+    /// The document with every secret another stack's object holds
+    /// (`{"$secret": L, "held": ..}`, `provider::Held`) read where it is
+    /// held, inside this call: an object this provider manages, read from
+    /// the cluster (a Secret's `stringData` key from its `data`, decoded).
+    /// One held by another provider, or not found, refuses the call naming
+    /// the path; nothing is written.
+    async fn materialize(
+        &self,
+        c: &Cluster,
+        at: &str,
+        doc: &Json,
+    ) -> std::result::Result<Json, Failed> {
+        fn held_at(v: &Json, path: &str, out: &mut Vec<(String, provider::Held, String)>) {
+            if let Some(h) = provider::held(v) {
+                let l = marker(v).map(|(_, l)| l.to_string()).unwrap_or_default();
+                out.push((path.to_string(), h, l));
+                return;
+            }
+            let join = |k: &str| match path {
+                "" => k.to_string(),
+                p => format!("{p}.{k}"),
+            };
+            match v {
+                Json::Object(m) => m.iter().for_each(|(k, x)| held_at(x, &join(k), out)),
+                Json::Array(xs) => xs
+                    .iter()
+                    .enumerate()
+                    .for_each(|(i, x)| held_at(x, &join(&i.to_string()), out)),
+                _ => {}
+            }
+        }
+        let mut found = Vec::new();
+        held_at(doc, "", &mut found);
+        let mut out = doc.clone();
+        if found.is_empty() {
+            return Ok(out);
+        }
+        // Where each was, for `attrs` to read back as the marker.
+        let markers: serde_json::Map<String, Json> = found
+            .iter()
+            .filter_map(|(p, _, _)| Some((p.clone(), get_path(doc, p)?.clone())))
+            .collect();
+        for (path, h, label) in found {
+            let refuse = |why: String| {
+                Failed::Refused(format!(
+                    "{at}: {path}: the secret {label} cannot be read: {why}"
+                ))
+            };
+            if h.provider != openapi::PROVIDER {
+                return Err(refuse(format!(
+                    "it is held by the provider {}, not this one",
+                    h.provider
+                )));
+            }
+            let kind = self
+                .derived
+                .kind(&h.typ)
+                .map_err(|e| refuse(format!("{e:#}")))?;
+            let (ns, n) = parse_remote(kind, &h.remote, &c.namespace);
+            let live = c
+                .get(kind, ns, n)
+                .await
+                .map_err(|e| refuse(format!("{e:#}")))?
+                .ok_or_else(|| refuse(format!("{} {} is not in the cluster", h.typ, h.remote)))?;
+            let v = get_path(&attrs_raw(&live), &h.path).cloned().or_else(|| {
+                let k = h.path.strip_prefix("stringData.")?;
+                let text = base64(live.get("data")?.get(k)?.as_str()?)?;
+                String::from_utf8(text).ok().map(Json::String)
+            });
+            let Some(v) = v.filter(|v| marker(v).is_none()) else {
+                return Err(refuse(format!(
+                    "{} {} does not set {}",
+                    h.typ, h.remote, h.path
+                )));
+            };
+            set_path(&mut out, &path, v);
+        }
+        let annotations = match get_path(&out, "metadata.annotations") {
+            Some(Json::Object(a)) => a.clone(),
+            _ => serde_json::Map::new(),
+        };
+        let mut annotations = annotations;
+        annotations.insert(
+            HELD_ANNOTATION.into(),
+            Json::String(Json::Object(markers).to_string()),
+        );
+        set_path(&mut out, "metadata.annotations", Json::Object(annotations));
+        Ok(out)
     }
 
     /// A new object: named by the document, or by its `generateName` and a

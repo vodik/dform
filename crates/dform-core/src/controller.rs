@@ -35,7 +35,7 @@
 use crate::ast::{Atom, Span, Term};
 use crate::ir::Address;
 use crate::provider::{ActionKind, Plan};
-use crate::store::{Cond, DROPS, MEMO, PENDING, Store};
+use crate::store::{DROPS, MEMO, PENDING, Store};
 use crate::value::Value;
 use crate::watch::{self, Relation};
 use anyhow::{Context, Result};
@@ -108,6 +108,8 @@ pub struct Hook {
     /// The deployment of that store: the memo is written through it,
     /// fenced by its lease.
     deployment: Option<crate::store::Deployment>,
+    /// The memo was kept in memory only (`save`): not yet written.
+    unsaved: bool,
     memo: Option<Memo>,
     /// The stamps of the sources as this run read them.
     input_stamps: BTreeMap<String, String>,
@@ -226,7 +228,9 @@ impl Hook {
     ) -> Result<()> {
         self.published = false;
         let store = deployment.store().clone();
+        // A memo the last run could not write is newer than the stored one.
         let memo: Option<Memo> = match store.get(MEMO)? {
+            _ if self.unsaved && self.memo.is_some() => self.memo.take(),
             Some(o) => Some(
                 serde_json::from_slice(&o.bytes)
                     .with_context(|| format!("parse {}", store.locate(MEMO)))?,
@@ -374,7 +378,7 @@ impl Hook {
         if held.is_empty() {
             return Ok(());
         }
-        let Some(store) = self.store.clone() else {
+        let Some(dep) = self.deployment.clone() else {
             anyhow::bail!("internal: the controller published before it opened its store");
         };
         let doc = serde_json::json!({
@@ -385,7 +389,18 @@ impl Hook {
                 .collect::<Vec<_>>(),
             "published": crate::approval::rfc3339(crate::approval::now()),
         });
-        store.put(PENDING, &serde_json::to_vec_pretty(&doc)?, &Cond::Any)?;
+        // Under the apply's lease, as the memo: a stale controller's digest
+        // never replaces a newer one's.
+        if !dep.put_fenced(
+            PENDING,
+            &serde_json::to_vec_pretty(&doc)?,
+            "the approval digest",
+        )? {
+            anyhow::bail!(
+                "the approval digest was not published: this run holds no lease on {}",
+                dep.name()
+            );
+        }
         self.published = true;
         log(format_args!(
             "tick {tick}: approval needed: plan digest {digest} ({PENDING})"
@@ -544,9 +559,10 @@ impl Hook {
         }
         // A digest published by an earlier run that holds nothing now.
         if !self.published
-            && let Some(s) = &self.store
+            && let Some(d) = &self.deployment
+            && d.store().get(PENDING)?.is_some()
         {
-            let _ = s.delete(PENDING);
+            d.delete_fenced(PENDING, "the approval digest")?;
         }
         let old = self.memo.take().unwrap_or_default();
         let mut baseline: BTreeMap<String, Json> = observed
@@ -589,14 +605,36 @@ impl Hook {
     }
 
     /// Keep the memo, and write it under the run's lease
-    /// (`Deployment::put_memo`); after the apply's lease is gone (a failed
-    /// run, in a store that fences) it is kept in memory only.
+    /// (`Deployment::put_fenced`). After the apply's lease is gone (a
+    /// failed run, in a store that fences) it is kept in memory, `unsaved`:
+    /// the next run starts from it, not the stored one, and writes it once
+    /// it holds the lease again ([`Hook::flush`]).
     fn save(&mut self, memo: Memo) -> Result<()> {
         let Some(dep) = &self.deployment else {
             return Ok(());
         };
-        dep.put_memo(&serde_json::to_vec_pretty(&memo)?)?;
+        self.unsaved = !dep.put_fenced(
+            MEMO,
+            &serde_json::to_vec_pretty(&memo)?,
+            "the controller's memo",
+        )?;
         self.memo = Some(memo);
+        Ok(())
+    }
+
+    /// The run holds the lease again: write a memo kept in memory only.
+    pub fn flush(&mut self) -> Result<()> {
+        if !self.unsaved {
+            return Ok(());
+        }
+        let (Some(dep), Some(memo)) = (&self.deployment, &self.memo) else {
+            return Ok(());
+        };
+        self.unsaved = !dep.put_fenced(
+            MEMO,
+            &serde_json::to_vec_pretty(memo)?,
+            "the controller's memo",
+        )?;
         Ok(())
     }
 
@@ -740,7 +778,9 @@ mod tests {
             })
             .unwrap()
         };
-        store.put(MEMO, &memo("first"), &Cond::Any).unwrap();
+        store
+            .put(MEMO, &memo("first"), &crate::store::Cond::Any)
+            .unwrap();
         let times = LeaseTimes {
             duration: std::time::Duration::from_secs(60),
             renewal: std::time::Duration::from_secs(15),
@@ -756,7 +796,7 @@ mod tests {
         let b = Deployment::new(store.clone(), "app", times);
         b.load_state().unwrap();
         let gb = b.lock().unwrap();
-        assert!(b.put_memo(&memo("second")).unwrap());
+        assert!(b.put_fenced(MEMO, &memo("second"), "the memo").unwrap());
         let e = hook.failed().unwrap_err();
         assert!(
             format!("{e:#}").contains("the controller's memo was not written"),
@@ -764,14 +804,69 @@ mod tests {
         );
         assert_eq!(store.get(MEMO).unwrap().unwrap().bytes, memo("second"));
         drop(ga);
-        // Its lease released, the next controller's memo stays in memory.
+        // A run that failed after its lease was released keeps its memo in
+        // memory; the next run starts from it and writes it once it holds
+        // the lease again.
         drop(gb);
         let mut hook = Hook::default();
         hook.open(&b, Path::new("world.json"), Path::new(""))
             .unwrap();
+        hook.input_stamps.insert("p".into(), "third".into());
         hook.failed().unwrap();
         assert_eq!(store.get(MEMO).unwrap().unwrap().bytes, memo("second"));
-        assert!(hook.memo.is_some());
+        hook.open(&b, Path::new("world.json"), Path::new(""))
+            .unwrap();
+        assert_eq!(hook.memo.as_ref().unwrap().inputs["p"], "third");
+        let gb = b.lock().unwrap();
+        hook.flush().unwrap();
+        let stored: Memo =
+            serde_json::from_slice(&store.get(MEMO).unwrap().unwrap().bytes).unwrap();
+        assert_eq!(stored.inputs["p"], "third");
+        drop(gb);
+    }
+
+    /// The approval digest is published under the lease, as the memo is: a
+    /// controller whose lease was taken over publishes nothing.
+    #[test]
+    fn a_stale_controllers_approval_digest_is_refused_by_fencing() {
+        use crate::store::{Deployment, LOCK, LeaseTimes, MemoryStore};
+        let store = Arc::new(MemoryStore::new());
+        let times = LeaseTimes {
+            duration: std::time::Duration::from_secs(60),
+            renewal: std::time::Duration::from_secs(15),
+        };
+        let a = Deployment::new(store.clone(), "app", times);
+        a.load_state().unwrap();
+        let ga = a.lock().unwrap();
+        let mut hook = Hook::default();
+        hook.open(&a, Path::new("world.json"), Path::new(""))
+            .unwrap();
+        let addr = Address {
+            typ: "net.vpc".into(),
+            name: "main".into(),
+        };
+        let mut plan = Plan {
+            actions: vec![crate::provider::Action {
+                kind: ActionKind::Create,
+                addr,
+                changes: Vec::new(),
+                on: BTreeSet::new(),
+            }],
+        };
+        let needs = [("net.vpc.main".to_string(), "every change".to_string())];
+        store.break_lease(LOCK, "app").unwrap();
+        let b = Deployment::new(store.clone(), "app", times);
+        b.load_state().unwrap();
+        let gb = b.lock().unwrap();
+        let e = hook
+            .approvals(1, &mut plan, &needs, "sha256:00", None, &[])
+            .unwrap_err();
+        assert!(
+            format!("{e:#}").contains("the approval digest was not written"),
+            "{e:#}"
+        );
+        assert!(store.get(PENDING).unwrap().is_none());
+        drop((ga, gb));
     }
 
     #[test]
