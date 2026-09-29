@@ -1068,7 +1068,6 @@ fn references_of_every_kind_of_name() {
     let (_s, root) = example("demo");
     let stack = root.join("stacks/dform.df");
     let network = root.join("modules/network.df");
-    let baseline = root.join("policies/baseline.df");
     let mut c = Client::start(&root, json!({}));
     c.open(&stack);
     c.open(&network);
