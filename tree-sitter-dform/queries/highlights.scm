@@ -3,6 +3,11 @@
 
 (comment) @comment
 
+; A doc comment (`#|` lines above an item; docs/grammar.md "Doc comments")
+; is a comment to the grammar.
+((comment) @comment.documentation
+  (#match? @comment.documentation "^#[|]"))
+
 ; --- literals ---------------------------------------------------------------
 
 (string) @string

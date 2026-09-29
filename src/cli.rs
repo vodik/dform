@@ -143,6 +143,12 @@ enum Command {
         #[arg(long)]
         check: bool,
     },
+    /// The project's doc comments (`#|` lines above an item) as Markdown on
+    /// stdout: every .df file's, or with a TARGET its program's.
+    Doc {
+        #[command(flatten)]
+        target: Target,
+    },
     /// The project's stacks and their deployments.
     Stack {
         #[command(subcommand)]
@@ -496,6 +502,7 @@ enum Cmd {
         paths: Vec<PathBuf>,
         check: bool,
     },
+    Doc,
     Graph {
         what: Option<String>,
     },
@@ -639,6 +646,7 @@ fn resolve(args: Args) -> Result<Cli> {
             }
         }
         Command::Fmt { paths, check } => (Cmd::Fmt { paths, check }, None),
+        Command::Doc { target } => (Cmd::Doc, target.target.is_some().then_some(target)),
         Command::Stack { cmd } => match cmd {
             StackCommand::List => (Cmd::StackList, None),
             StackCommand::Rekey { stack, pairs } => {
@@ -1020,6 +1028,7 @@ fn run_with(
             };
             return fmt_files(&paths, *check);
         }
+        Cmd::Doc => return doc(&cli.files),
         _ => {}
     }
     let plan_file = match &cli.cmd {
@@ -1936,6 +1945,7 @@ fn run_with(
             );
         }
         Cmd::Fmt { .. }
+        | Cmd::Doc
         | Cmd::Controller { .. }
         | Cmd::Log { .. }
         | Cmd::StackList
@@ -3564,6 +3574,38 @@ fn resolve_inventory(
 
 /// `dform fmt`: rewrite each file in its formatted form, or with `check`
 /// list the files that are not and fail.
+/// `dform doc [TARGET]`: the doc comments of the project's .df files, or
+/// of the target's program (its file and every file it imports), as
+/// Markdown (`syntax::doc::markdown`).
+fn doc(files: &[PathBuf]) -> Result<()> {
+    let project = crate::project::Project::find(Path::new("."), env!("CARGO_PKG_VERSION"))?;
+    let (title, files) = match (files, &project) {
+        ([], Some(p)) => (p.manifest.project.name.clone(), crate::project::df_files(p)),
+        ([], None) => return Err(crate::project::not_in_a_project(Path::new("."))),
+        (fs, _) => (None, crate::loader::program_files(fs)?),
+    };
+    let title = title
+        .or_else(|| {
+            let f = files.first()?;
+            Some(f.file_stem()?.to_string_lossy().into_owned())
+        })
+        .unwrap_or_default();
+    let cwd = std::env::current_dir()?;
+    let cwd = std::fs::canonicalize(&cwd).unwrap_or(cwd);
+    let mut trees = Vec::new();
+    for f in &files {
+        let text = std::fs::read_to_string(f).with_context(|| format!("read {}", f.display()))?;
+        let name = f.strip_prefix(&cwd).unwrap_or(f).display().to_string();
+        let parse = crate::syntax::parser::parse(&text);
+        if !parse.errors.is_empty() {
+            return Err(crate::parser::syntax_diagnostics(&name, &text, &parse).into());
+        }
+        trees.push((name, parse.syntax()));
+    }
+    print!("{}", crate::syntax::doc::markdown(&title, &trees));
+    Ok(())
+}
+
 fn fmt_files(paths: &[PathBuf], check: bool) -> Result<()> {
     let mut unformatted = Vec::new();
     for p in paths {
@@ -3871,6 +3913,7 @@ const COMMANDS: &[&str] = &[
     "query",
     "test",
     "fmt",
+    "doc",
     "log",
     "stack",
     "state",

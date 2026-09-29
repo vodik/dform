@@ -1104,7 +1104,8 @@ fn the_schema_is_derived_once_and_answered_for_the_types_asked_for() {
         Some(&["k8s.core.v1.namespace"]),
     );
     assert_eq!(count(&ns, probe), 0);
-    assert!(!std::fs::read_to_string(&cache).unwrap().contains("another"));
+    let c: Json = serde_json::from_str(&std::fs::read_to_string(&cache).unwrap()).unwrap();
+    assert_ne!(c["key"], json!("another"));
 }
 
 /// Every file under `dir`, recursively.

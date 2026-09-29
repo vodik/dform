@@ -14,11 +14,11 @@ edition 2026
 # Config: each env's settings are config/dform/{env}.yaml's, a leaf per contribution.
 provider fake {}
 stack dform[env] { unknowns = "strict", isolated = true, config = yaml("config/dform/{env}.yaml") }
-
-# Typed stack input with a default. The default is a @default contribution
-# to input env; --set env=prod is a normal contribution and wins. Its type
-# is an alias: `environment` is the enum wherever it is written.
+#| The environments: an alias, the enum wherever it is written.
 type environment = enum("dev", "staging", "prod")
+#| The deployment's environment, the stack's key. The default is a @default
+#| contribution; --set env=prod is a normal contribution and wins.
+#| owner: platform
 input env: environment = "staging"
 
 data("zone", "us-test-1a")
@@ -84,15 +84,15 @@ instance kubernetes main {
 
 instance iam main {}
 
-# VPC peering intent: define edges between network instances.
+#| VPC peering intent: define edges between network instances.
 vpc_peer_inst("main", "peer")
 
-# Each network instance outputs its vpc's address; an edge's pair is the
-# two instances' vpcs, joined on the instance names.
+#| Each network instance outputs its vpc's address; an edge's pair is the
+#| two instances' vpcs, joined on the instance names.
 vpc_peer_pair(ia, ib, a, b) if vpc_peer_inst(ia, ib), a = network[ia].vpc, b = network[ib].vpc
 vpc_peer(a, b) if vpc_peer_pair(_, _, a, b)
 
-# Create a peering resource per declared peering edge.
+#| A peering resource per declared peering edge.
 resource net.vpc_peering "peer-{ia}-{ib}" {
   for vpc_peer_pair(ia, ib, a, b)
   if a in net.vpc, b in net.vpc # both ends must exist in this environment
@@ -100,7 +100,7 @@ resource net.vpc_peering "peer-{ia}-{ib}" {
   accepter_vpc_id = b.id
 }
 
-# Demo: allocate an IP from the main VPC.
+#| Demo: allocate an IP from the main VPC.
 resource compute.vm bastion {
   private_ip = inet_host(inet(cfg.network.main.vpc_net), 20)
 }
@@ -118,9 +118,9 @@ constraint "prod k8s must have private api" if {
   not kubernetes.main/cluster.private_api
 }
 
-# Scenarios: policy over hypothetical inputs. `dform test` runs every one
-# against an empty mock world; `dform plan --scenario prod` plans the stack
-# as if env were prod.
+#| Policy over hypothetical inputs: `dform test` runs every scenario
+#| against an empty mock world; `dform plan --scenario prod` plans the stack
+#| as if env were prod.
 scenario prod {
   with env = "prod"
   deny "prod peers the two vpcs" if not "peer-main-peer" in net.vpc_peering
@@ -174,8 +174,6 @@ scenario dev {
                 (identifier))
               (string_content)))))))
   (comment)
-  (comment)
-  (comment)
   (type_alias
     (identifier)
     (type
@@ -187,6 +185,9 @@ scenario dev {
         (string_content))
       (string
         (string_content))))
+  (comment)
+  (comment)
+  (comment)
   (input
     (identifier)
     (type

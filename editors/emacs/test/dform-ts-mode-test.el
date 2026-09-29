@@ -64,6 +64,16 @@ in a condition does not."
     (should-not (eq (dform-ts-mode-test--face-at "database.main/db.multi_az")
                      'dform-reference-face))))
 
+(ert-deftest dform-ts-mode-test-doc-comment-face ()
+  "A `#|' doc comment gets `font-lock-doc-face'; a plain comment does not."
+  (dform-ts-mode-test--ensure-grammar)
+  (with-temp-buffer
+    (insert "edition 2026\n# plain\n#| The input.\ninput x: int\n")
+    (dform-ts-mode)
+    (font-lock-ensure)
+    (should (eq (dform-ts-mode-test--face-at "#| The") 'font-lock-doc-face))
+    (should (eq (dform-ts-mode-test--face-at "# plain") 'font-lock-comment-face))))
+
 (ert-deftest dform-ts-mode-test-indent-round-trip ()
   "`indent-region' leaves a correctly indented file unchanged."
   (dform-ts-mode-test--ensure-grammar)

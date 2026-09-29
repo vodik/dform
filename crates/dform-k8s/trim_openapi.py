@@ -8,8 +8,9 @@ one per group-version). Output: the shape the provider caches a cluster's
 `/openapi/v3` in, `{"paths": {"apis/apps/v1": DOC, ...}}`, trimmed to the
 kinds below: each document keeps the `{name}` path of each kind (its patch
 operation's group-version-kind only) and the component schemas those kinds
-reach, without descriptions. A property's `default` stays: the provider
-derives a defaulted leaf as optional_computed from it.
+reach. A property's `default` stays: the provider derives a defaulted leaf
+as optional_computed from it; so does its `description`: the provider's
+`type_doc` for the path (the language server's hover).
 
     python3 crates/dform-k8s/trim_openapi.py DIR v1.36.0 > crates/dform-k8s/openapi-snapshot.json
 """
@@ -30,7 +31,7 @@ KINDS = {
                                           "ClusterRoleBinding"],
 }
 
-DROP = {"description", "uniqueItems", "x-kubernetes-patch-strategy",
+DROP = {"uniqueItems", "x-kubernetes-patch-strategy",
         "x-kubernetes-patch-merge-key"}
 
 

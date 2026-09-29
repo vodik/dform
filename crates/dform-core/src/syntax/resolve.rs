@@ -778,6 +778,17 @@ impl<'u> Lowerer<'u> {
             }
             first = false;
         }
+        // Each doc comment is a `doc(Kind, Name, Key, Value)` fact per pair
+        // (docs/grammar.md "Doc comments").
+        if !self.text && !self.any_type {
+            for d in super::doc::collect(&root) {
+                let span = self.span_of(d.range);
+                for (k, v) in &d.pairs {
+                    let args = [d.kind, &d.name, k, v].map(str_term).to_vec();
+                    statements.push(Stmt::Fact(atom_at("doc", args, span)));
+                }
+            }
+        }
         if first && require_edition {
             let d = Diagnostic::error(
                 Span {

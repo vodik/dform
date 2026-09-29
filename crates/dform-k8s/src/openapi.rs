@@ -28,7 +28,9 @@
 //!   the cluster's value resolves;
 //! - a property in its object's `required` list is `required`: Plan refuses
 //!   a document that sets the object but not the property;
-//! - a Secret's `data` and `stringData` are `sensitive`.
+//! - a Secret's `data` and `stringData` are `sensitive`;
+//! - a property's `description` is its path's `type_doc`, the kind's its
+//!   type's (path `""`).
 //!
 //! Every type gets `type_retry(T, 5)` and a `type_replace` order: a
 //! Deployment, Service or ConfigMap `create_first`, a Namespace
@@ -268,7 +270,11 @@ pub fn derive(doc: &Json, aliases: &[(String, String)]) -> Result<Derived> {
                 kind: &kind,
                 attrs: Vec::new(),
                 keys: Vec::new(),
+                docs: Vec::new(),
             };
+            if let Some(d) = root.get("description").and_then(Json::as_str) {
+                w.docs.push((String::new(), d.to_string()));
+            }
             w.object(root, "", Ctx::default(), &mut Vec::new());
             facts.extend(type_facts(&typ, &kind, &w));
             kinds.insert(typ, kind);
@@ -472,6 +478,9 @@ fn type_facts(typ: &str, kind: &Kind, w: &Walk) -> Vec<Atom> {
             vec![sym(typ), sym(path), sym(ty), Term::List(flags.collect())],
         ));
     }
+    for (path, text) in &w.docs {
+        out.push(atom("type_doc", vec![sym(typ), sym(path), sym(text)]));
+    }
     for (path, keys) in &w.keys {
         let keys = keys.iter().map(|k| sym(k)).collect();
         out.push(atom(
@@ -495,6 +504,8 @@ struct Walk<'a> {
     kind: &'a Kind,
     attrs: Vec<(String, &'static str, Vec<&'static str>)>,
     keys: Vec<(String, Vec<String>)>,
+    /// Each path's description.
+    docs: Vec<(String, String)>,
 }
 
 impl<'a> Walk<'a> {
@@ -640,6 +651,9 @@ impl<'a> Walk<'a> {
         if !(ctx.computed && ty == "object") {
             self.attrs
                 .push((p.to_string(), ty, self.flags(p, ctx, required, defaulted)));
+            if let Some(d) = self.get(node, "description").and_then(Json::as_str) {
+                self.docs.push((p.to_string(), d.to_string()));
+            }
         }
         match ty {
             "object" => self.object(node, p, ctx, stack),
@@ -748,6 +762,21 @@ mod tests {
         assert_eq!(
             s.replace_order(dep),
             dform_core::schema::ReplaceOrder::CreateFirst
+        );
+    }
+
+    /// OpenAPI descriptions are `type_doc` facts: the kind's and each
+    /// property's, the short names' too.
+    #[test]
+    fn descriptions_are_type_docs() {
+        let s = snapshot().unwrap().schema;
+        let docs = s.docs();
+        let dep = "k8s.apps.v1.deployment";
+        assert!(docs[&(dep, "")].starts_with("Deployment enables declarative updates"));
+        assert!(docs[&(dep, "spec.replicas")].contains("Number of desired pods"));
+        assert_eq!(
+            docs[&("k8s.deployment", "spec.replicas")],
+            docs[&(dep, "spec.replicas")]
         );
     }
 

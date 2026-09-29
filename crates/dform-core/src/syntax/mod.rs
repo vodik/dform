@@ -1,6 +1,7 @@
 //! The syntax layer: a lossless tree (rowan) the parser builds, the lowering
-//! from it to `ast`, and the formatter's view of it.
+//! from it to `ast`, its doc comments, and the formatter's view of it.
 
+pub mod doc;
 mod kind;
 pub mod parser;
 pub mod resolve;

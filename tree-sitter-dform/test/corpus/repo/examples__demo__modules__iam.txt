@@ -3,7 +3,7 @@ examples/demo/modules/iam.df
 ============================
 
 edition 2026
-
+#| The app's role, and one policy of every permission the modules need.
 module iam {
   resource iam.role app_role {
     name = "app"
@@ -27,6 +27,7 @@ module iam {
 (source_file
   (edition
     (integer))
+  (comment)
   (module
     (identifier)
     (statement_block

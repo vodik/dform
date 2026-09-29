@@ -48,6 +48,58 @@ type_mint("gke_cluster", "endpoint", "https://{{name}}.gke.fake")
 # The zones a cluster lands in are the node locations it was configured with.
 type_mint("gke_cluster", "zones", "{{doc:node_locations}}")
 
+# Descriptions (`type_doc(Type, Path, Text)`; the path "" is the type's),
+# for the paths the examples write: the language server's hover and
+# completion show them.
+type_doc("gke_cluster", "", "A GKE cluster, as the terraform-mi-gke module creates it.")
+type_doc("gke_cluster", "cluster_type", "The module's cluster flavour, such as \"autopilot-private\".")
+type_doc("gke_cluster", "env", "The environment the cluster serves.")
+type_doc("gke_cluster", "project_id", "The id of the Google Cloud project the cluster is in.")
+type_doc("gke_cluster", "project_name", "The project's name, the prefix of the cluster's resources.")
+type_doc("gke_cluster", "name", "The cluster's name, unique in the project and location.")
+type_doc("gke_cluster", "network", "The VPC network the cluster attaches to.")
+type_doc("gke_cluster", "network_id", "The VPC network's self link (projects/P/global/networks/N).")
+type_doc("gke_cluster", "subnetwork", "The subnetwork the cluster's nodes are in.")
+type_doc("gke_cluster", "subnetwork_id", "The id of the subnetwork the cluster's nodes are in.")
+type_doc("gke_cluster", "master_control_plane_cidr", "The /28 range of the private control plane's endpoints.")
+type_doc("gke_cluster", "ip_range_pods", "The name of the subnetwork's secondary range for pod addresses.")
+type_doc("gke_cluster", "ip_range_services", "The name of the subnetwork's secondary range for service addresses.")
+type_doc("gke_cluster", "node_locations", "The zones the cluster's nodes run in.")
+type_doc("gke_cluster", "enable_secret_manager_addon", "Whether workloads read Secret Manager secrets through the CSI add-on.")
+type_doc("gke_cluster", "deletion_protection", "Whether Terraform refuses to destroy the cluster.")
+type_doc("gke_cluster", "endpoint", "The control plane's address, known once the cluster exists.")
+type_doc("gke_cluster", "ca_certificate", "The cluster's CA certificate, known once the cluster exists.")
+type_doc("gke_nodepool", "", "A node pool of a GKE cluster.")
+type_doc("gke_nodepool", "cluster", "The cluster the pool's nodes join.")
+type_doc("gke_nodepool", "zone", "The zone the pool's nodes run in.")
+type_doc("gke_nodepool", "node_count", "The number of nodes, when the pool does not autoscale.")
+type_doc("gke_nodepool", "min", "The fewest nodes autoscaling keeps.")
+type_doc("gke_nodepool", "max", "The most nodes autoscaling adds.")
+type_doc("google_compute_subnetwork", "", "A regional subnetwork of a VPC network.")
+type_doc("google_compute_subnetwork", "project", "The project the subnetwork is in.")
+type_doc("google_compute_subnetwork", "region", "The region the subnetwork is in.")
+type_doc("google_compute_subnetwork", "network", "The VPC network the subnetwork belongs to.")
+type_doc("google_compute_subnetwork", "name", "The subnetwork's name, unique in the project.")
+type_doc("google_compute_subnetwork", "ip_cidr_range", "The subnetwork's primary IPv4 range; ranges in a network may not overlap.")
+type_doc("google_compute_subnetwork", "subnet_private_access", "Whether VMs without external addresses reach Google APIs (Private Google Access).")
+type_doc("google_compute_subnetwork", "secondary_ranges", "Named alias IP ranges, each a range_name and an ip_cidr_range (GKE's pod and service ranges).")
+type_doc("google_compute_subnetwork", "purpose", "What the subnetwork is for: PRIVATE, or REGIONAL_MANAGED_PROXY for Envoy-based load balancers.")
+type_doc("google_compute_subnetwork", "role", "ACTIVE or BACKUP, for a REGIONAL_MANAGED_PROXY subnetwork.")
+type_doc("google_compute_network_peering", "", "A peering from one VPC network to another.")
+type_doc("google_compute_network_peering", "project", "The project of the local network.")
+type_doc("google_compute_network_peering", "name", "The peering's name.")
+type_doc("google_compute_network_peering", "network", "The local network's self link.")
+type_doc("google_compute_network_peering", "peer_network", "The peer network's self link.")
+type_doc("google_compute_address", "", "A static IP address.")
+type_doc("google_compute_address", "project", "The project the address is in.")
+type_doc("google_compute_address", "region", "The region the address is in.")
+type_doc("google_compute_address", "name", "The address's name, unique in the project.")
+type_doc("google_compute_address", "address_type", "INTERNAL (from a subnetwork) or EXTERNAL.")
+type_doc("google_compute_address", "subnetwork_id", "The subnetwork an INTERNAL address is taken from.")
+type_doc("google_monitoring_dashboard", "", "A Cloud Monitoring dashboard.")
+type_doc("google_monitoring_dashboard", "project", "The project the dashboard is in.")
+type_doc("google_monitoring_dashboard", "dashboard_json", "The dashboard's definition, as the Monitoring API's JSON.")
+
 ---
 
 (source_file
@@ -432,4 +484,485 @@ type_mint("gke_cluster", "zones", "{{doc:node_locations}}")
         (string
           (escape_sequence)
           (string_content)
-          (escape_sequence))))))
+          (escape_sequence)))))
+  (comment)
+  (comment)
+  (comment)
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string)
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)
+          (escape_sequence)
+          (string_content)
+          (escape_sequence)
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string)
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string)
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string)
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string)
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string)
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content))))))

@@ -1,11 +1,11 @@
 edition 2026
-
+#| One VPC, and a private subnet in every zone.
 module network {
-  # A type alias, exported: every file that imports this one may write
-  # `subnets` for the type (modules/database.df, modules/kubernetes.df).
+  #| A type alias, exported: every file that imports this one may write
+  #| `subnets` for the type (modules/database.df, modules/kubernetes.df).
   type subnets = list(ref(net.subnet))
   export type subnets
-
+  #| The VPC's IPv4 range; each zone's subnet is a /20 of it.
   input vpc_net: inet
   output vpc: net.vpc
   output private_subnet_ids: subnets
@@ -25,7 +25,7 @@ module network {
     zone = z
     visibility = "private"
   }
-
+  #| The network's VPC, for peering.
   output vpc = vpc
   output private_subnet_ids = [ s.id | s in net.subnet, s.visibility == "private" ]
 }

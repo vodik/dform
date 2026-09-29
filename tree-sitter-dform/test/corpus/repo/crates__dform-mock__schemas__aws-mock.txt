@@ -350,6 +350,37 @@ type_mint("aws_eip", "public_dns", "ec2-198-51-100-{{n}}.compute-1.amazonaws.com
 type_attr("aws_eip", "private_ip", "string", ["computed"])
 type_mint("aws_eip", "private_ip", "10.0.1.{{n}}")
 
+# Descriptions (`type_doc(Type, Path, Text)`; the path "" is the type's),
+# after the provider's documentation, for the paths the examples write:
+# the language server's hover and completion show them.
+type_doc("aws_vpc", "", "A VPC: an isolated virtual network.")
+type_doc("aws_vpc", "cidr_block", "The IPv4 CIDR block of the VPC. Changing it replaces the VPC.")
+type_doc("aws_vpc", "tags", "A map of tags to assign to the resource.")
+type_doc("aws_subnet", "", "A subnet of a VPC.")
+type_doc("aws_subnet", "vpc_id", "The VPC ID.")
+type_doc("aws_subnet", "cidr_block", "The IPv4 CIDR block for the subnet. Changing it replaces the subnet.")
+type_doc("aws_subnet", "availability_zone", "The AZ for the subnet; AWS picks one when it is not set.")
+type_doc("aws_security_group", "", "A security group: stateful firewall rules for the instances in it.")
+type_doc("aws_security_group", "name", "The name of the security group; AWS generates one when it is not set.")
+type_doc("aws_security_group", "vpc_id", "The VPC ID; the default VPC when it is not set.")
+type_doc("aws_security_group", "ingress", "Ingress rules, a set: each from_port, to_port, protocol and cidr_blocks.")
+type_doc("aws_security_group", "egress", "Egress rules, a set: each from_port, to_port, protocol and cidr_blocks.")
+type_doc("aws_instance", "", "An EC2 instance.")
+type_doc("aws_instance", "ami", "The AMI to use for the instance.")
+type_doc("aws_instance", "instance_type", "The instance type, such as t3.micro.")
+type_doc("aws_instance", "subnet_id", "The VPC subnet ID to launch in; AWS picks one when it is not set.")
+type_doc("aws_instance", "vpc_security_group_ids", "The security group IDs to associate with, a set.")
+type_doc("aws_instance", "tags", "A map of tags to assign to the resource.")
+type_doc("aws_eip", "", "An Elastic IP address.")
+type_doc("aws_eip", "domain", "Whether the address is for use in a VPC (\"vpc\").")
+type_doc("aws_eip", "instance", "The EC2 instance ID the address is associated with.")
+type_doc("aws_db_instance", "", "An RDS database instance.")
+type_doc("aws_db_instance", "identifier", "The name of the RDS instance; AWS generates one when it is not set.")
+type_doc("aws_db_instance", "instance_class", "The instance type of the RDS instance, such as db.t3.micro.")
+type_doc("aws_db_instance", "password", "The password for the master database user.")
+type_doc("aws_db_instance", "skip_final_snapshot", "Whether no final snapshot is taken before the instance is deleted.")
+type_doc("aws_db_instance", "vpc_security_group_ids", "The VPC security groups to associate with, a set.")
+
 ---
 
 (source_file
@@ -4060,4 +4091,275 @@ type_mint("aws_eip", "private_ip", "10.0.1.{{n}}")
           (string_content)
           (escape_sequence)
           (string_content)
-          (escape_sequence))))))
+          (escape_sequence)))))
+  (comment)
+  (comment)
+  (comment)
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string)
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string)
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string)
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string)
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string)
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)
+          (escape_sequence)
+          (string_content)
+          (escape_sequence)
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string)
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content))))))

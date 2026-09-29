@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== examples/demo/stacks/dform.df: 170 nodes, 804 edges (577 negative)
+== examples/demo/stacks/dform.df: 171 nodes, 804 edges (577 negative)
    STRATIFIED, 19 strata
    stratum 0:
      (arg, iam.policy, name)
@@ -15,6 +15,7 @@ exit: ok
      __config_path
      allow_stuck
      data
+     doc
      env_name
      identity
      input

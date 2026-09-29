@@ -6,7 +6,7 @@ edition 2026
 
 # The network module's `subnets` type.
 import "modules/network.df"
-
+#| A PostgreSQL database in the network's private subnets.
 module database {
   input backup_days: int
   input multi_az: bool
@@ -20,7 +20,7 @@ module database {
     multi_az = multi_az
   }
 
-  # Only when the database exists in this environment.
+  #| Only when the database exists in this environment.
   iam_need("app", "db.connect", db.id) if has backup_days
 }
 
@@ -33,6 +33,7 @@ module database {
   (import
     (string
       (string_content)))
+  (comment)
   (module
     (identifier)
     (statement_block

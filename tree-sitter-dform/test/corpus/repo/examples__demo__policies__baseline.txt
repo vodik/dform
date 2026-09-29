@@ -3,7 +3,7 @@ examples/demo/policies/baseline.df
 ==================================
 
 edition 2026
-
+#| The baseline every stack applies: a team tag, audit sinks, no public database.
 policy baseline {
   # Grants are partition patterns: this pack writes .tags of every type,
   # iam.policy's .statements and settings' .audit.sinks, and nothing else.
@@ -30,7 +30,7 @@ policy baseline {
 
   deny "db must not be public" { resource: pg } if pg in db.postgres, not pg.public == false
 
-  # Example warning: prod should enable an audit setting.
+  #| Prod should enable audit logging.
   warn "prod should enable audit logging" { env: "prod" } if {
     env == "prod"
     not settings.prod.audit.enabled
@@ -47,6 +47,7 @@ policy baseline {
 (source_file
   (edition
     (integer))
+  (comment)
   (policy
     (identifier)
     (statement_block

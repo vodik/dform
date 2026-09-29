@@ -112,6 +112,7 @@ Apply.
 | `provider check`, `provider schema` | providers |
 | `controller run` | controller mode |
 | `dev strata`, `dev graph`, `dev --world W --inventory I --provider P --chaos C COMMAND` | the mock and the evaluator |
+| `doc [TARGET]` | the doc comments as Markdown, on stdout |
 | `init [NAME]` | make the working directory a project |
 | `completions zsh\|bash\|fish` | a completion script |
 | `lsp` | the language server, on stdin and stdout (see "Language server") |
@@ -123,7 +124,12 @@ prints the deployment's objects (it, `state mv`, `log` and `stack unlock`
 need the deployment's key, not the program's other inputs); `dform state mv FROM TO TARGET` gives the
 object at `TYPE/NAME` another address; `dform stack unlock TARGET` removes
 an apply lock whose holder is gone (breaks an s3 backend's lease). `dform provider schema NAME` prints a
-provider's schema facts. `dform completions zsh > _dform` completes stack
+provider's schema facts. `dform doc` prints the project's doc comments
+(`#|` lines above an item, docs/grammar.md "Doc comments") as Markdown: per
+file, each documented item's kind and name, its first line, its
+description and its other keys (`owner`, `since`, `deprecated`, ...);
+`dform doc TARGET` only its program's files (the stack's and every file
+it imports). `dform completions zsh > _dform` completes stack
 names, key values (from the key inputs' enum types) and deployments with
 state.
 
@@ -489,6 +495,7 @@ type_list_key(k8s.deployment, "spec.template.spec.containers", ["name"])  # list
 type_mint(db.postgres, "endpoint", "{{name}}.db.fake")      # optional: how the mock mints it
 type_retry(db.postgres, 5)                                  # optional: Read attempts (default 3)
 type_replace(k8s.deployment, "create_first")                # optional: create_first, destroy_first, either (default)
+type_doc(net.vpc, "cidr", "The network's IPv4 range.")      # optional: a path's description ("" the type's)
 ```
 
 Built-in mock schemas: `fake` (the demo's), `gke` (pngu.df), `k8s` (fifteen
@@ -527,7 +534,8 @@ facts. The providers are asked for only those types' rows too (the
 Schema request's `types`). A `query` or `why` of a schema predicate, a
 rule reading one for a type it does not spell out (`type_attr(T, ...)`),
 or a rule wanting a resource whose type is built at runtime
-(`want(t, a) if t = "k8s.{k}"`), sees all of it.
+(`want(t, a) if t = "k8s.{k}"`), sees all of it. `type_doc` rows, the
+descriptions the language server shows, are never injected.
 
 ## The Kubernetes provider
 
@@ -573,7 +581,9 @@ provider k8s { source = "bin/dform-provider-k8s" }        # an executable
   and `force_new`; a property its object lists as `required` is required
   where the object is set; a Secret's `data` and `stringData` are sensitive;
   `type_retry` is 5; a Deployment, Service or ConfigMap is replaced
-  `create_first`, a Namespace `destroy_first`.
+  `create_first`, a Namespace `destroy_first`. An OpenAPI `description`
+  is its path's `type_doc` (the kind's is the type's): the snapshot keeps
+  them (868K; 213K without).
 - A field the API server defaults is `optional_computed`: one whose schema
   has a `default` other than the zero value (the snapshot keeps them:
   ports' `protocol`, a few volume sources), and, as a fallback for what the
@@ -1746,7 +1756,8 @@ of a deployment's objects, and the stack not be locked. Backends:
 `tree-sitter-dform/` is a tree-sitter grammar for `.df` files, for
 editors only: the compiler keeps its own parser (`crates/dform-core/src/syntax/`). It has
 `queries/highlights.scm`, `queries/indents.scm` and `queries/locals.scm`
-(nvim-treesitter capture names), and the generated `src/parser.c` is
+(nvim-treesitter capture names; a `#|` doc comment is a comment,
+captured `@comment.documentation` too), and the generated `src/parser.c` is
 committed, so an editor builds it with a C compiler and no tree-sitter
 CLI. A small external scanner (`src/scanner.c`) makes a newline outside
 brackets end a statement and reads a string's text around its `{e}`
@@ -1782,7 +1793,7 @@ is not on the PATH.)
 `editors/emacs/dform-ts-mode.el` is a `treesit` major mode for `.df`
 files (Emacs 29.1+; developed against Emacs 30/32): font-lock from
 `highlights.scm` (the reference capture gets `dform-reference-face`,
-underlined by default), indentation from `indents.scm`, and imenu and
+underlined by default, a doc comment `font-lock-doc-face`), indentation from `indents.scm`, and imenu and
 defun navigation for rules (by head predicate), modules, instances,
 resources (by type and name), stacks and policies.
 

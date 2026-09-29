@@ -88,6 +88,54 @@ and `}}` are literal braces; a lone `}` is an error. A hole may not hold a
 string (bind it first). A hole is a content position: a dot in it reads
 now (see "Reference or read"). A literal part may not contain `%s`.
 
+### Doc comments
+
+```
+DOCLINE  := "#|" to end of line          ; a COMMENT to the lexer and to tree-sitter
+```
+
+`#|` lines directly above a statement, with no blank line between them
+and it, document it; a `#|` after code on its line is that line's
+comment. Each line is `key: value` when it starts with a lowercase name
+(letters, digits, `_`, `-`) and a colon; any other line (`#|` alone is an
+empty one) is a line of the item's description, and `description:` adds
+to it. Keys are free-form; these are documented:
+
+| key           | what                                          |
+|---------------|-----------------------------------------------|
+| `description` | what the item is (the bare lines)             |
+| `owner`       | who answers for it                            |
+| `since`       | the version or date it appeared               |
+| `deprecated`  | why not to use it, and what to use instead    |
+
+```dform
+#| The deployment's environment, the stack's key.
+#| owner: platform
+input env: environment = "staging"
+```
+
+What a doc comment may document, and the `Kind` and `Name` of its facts:
+
+| statement                                   | Kind        | Name                  |
+|---------------------------------------------|-------------|-----------------------|
+| `module m`, `policy p`, `scenario s`        | `module`, `policy`, `scenario` | `m`, `p`, `s` |
+| `input k`                                   | `input`     | `k`                   |
+| `output k: T`, `output k = t`               | `output`    | `k`                   |
+| `decl p/N`, `extern p(..)`, `input relation p`, `export p/N` | `predicate` | `p` |
+| `p(..) if ..`, a fact, `k = t`, `deny "m"`, `warn "m"`, `constraint "m"` | `rule` | `p`, `k`, `m` (the message) |
+| `type a = T`                                | `alias`     | `a`                   |
+| `resource T n`, `resource T "n-{e}"`        | `resource`  | `T.n`, `T.n-{e}` (as written) |
+
+Inside a module, policy or scenario the name is `BLOCK.NAME`
+(`network.vpc_net`). Each pair lowers to a fact of the compiler's own
+relation `doc/4`, spanned at the comment: `doc(Kind, Name, Key, Value)`,
+so a policy can read and require them (`deny "a module has no owner" {
+module: m } if doc("module", m, "description", _), not doc("module", m,
+"owner", _)`).
+The language server shows them on hover, and `dform doc` renders a
+project's as Markdown. A doc comment above anything else documents
+nothing.
+
 ## Names
 
 Case decides nothing; a resolver does (`src/syntax/resolve.rs`, G section
@@ -434,6 +482,7 @@ are unchanged.
 | `k = t [if B]`                            | `k(t') :- B, reads`; with neither, the fact `k(t')`   |
 | `let a = CHAIN`                           | nothing: each `a` is `CHAIN`                           |
 | `type a = T`, `export type a`             | nothing: each use of `a` is `T`                        |
+| `#\| k: v` above an item (Doc comments)  | `doc(Kind, Name, "k", "v")`                            |
 | `provider p { k = t, expect_account = a }` | `provider_config("p", {k: t'}) :- reads`, `provider_expect_account("p", a') :- reads` ("Provider blocks") |
 | `env_var(t)`                              | `V`, reading `env_var(t', V)`                          |
 | `resource T n { for B1 if B2 f = t }`     | `resource T n { f = t' } :- B1, B2, reads`             |

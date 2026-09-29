@@ -6,7 +6,7 @@ edition 2026
 
 # The network module's `subnets` type.
 import "modules/network.df"
-
+#| A Kubernetes cluster and one node pool in the network's private subnets.
 module kubernetes {
   input private_api: bool
   input nodepool_min: int
@@ -26,7 +26,7 @@ module kubernetes {
     max = nodepool_max
   }
 
-  # Only when the cluster exists in this environment.
+  #| Only when the cluster exists in this environment.
   iam_need("app", "k8s.describe_cluster", cluster.id) if has private_api
 }
 
@@ -39,6 +39,7 @@ module kubernetes {
   (import
     (string
       (string_content)))
+  (comment)
   (module
     (identifier)
     (statement_block

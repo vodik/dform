@@ -141,7 +141,11 @@ apply-order edge, not its content read now (`docs/grammar.md'
   (treesit-font-lock-rules
    :language 'dform
    :feature 'comment
-   '((comment) @font-lock-comment-face)
+   ;; A doc comment (`#|' lines above an item) is a comment to the
+   ;; grammar; its face says it is documentation.
+   '(((comment) @font-lock-doc-face
+      (:match "\\`#|" @font-lock-doc-face))
+     (comment) @font-lock-comment-face)
 
    :language 'dform
    :feature 'string

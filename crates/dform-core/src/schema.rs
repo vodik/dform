@@ -259,6 +259,25 @@ impl Schema {
         }
     }
 
+    /// Each `type_doc(T, Path, Text)`: a type's (path `""`) and its
+    /// attributes' descriptions, by type and path.
+    pub fn docs(&self) -> BTreeMap<(&str, &str), &str> {
+        fn s(t: &Term) -> Option<&str> {
+            match t {
+                Term::Val(Value::Str(s)) => Some(s),
+                _ => None,
+            }
+        }
+        self.facts
+            .iter()
+            .filter(|f| f.pred == "type_doc")
+            .filter_map(|f| match f.args.as_slice() {
+                [t, p, d] => Some(((s(t)?, s(p)?), s(d)?)),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// Build a schema from `type_attr`, `type_list_key`, `type_provider` and
     /// `type_mint` facts. Other predicates are carried into `facts` untouched.
     pub fn from_facts(facts: &[Atom]) -> Result<Schema> {
@@ -478,8 +497,9 @@ impl Schema {
 }
 
 /// Schema predicates with a row per type (the type in the first column).
-const PER_TYPE: [&str; 6] = [
+const PER_TYPE: [&str; 7] = [
     "type_attr",
+    "type_doc",
     "type_list_key",
     "type_retry",
     "type_replace",

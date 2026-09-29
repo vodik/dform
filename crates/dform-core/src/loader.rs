@@ -54,6 +54,24 @@ pub fn load_program_with(
     .map_err(|d| diag::Diagnostics(d).into())
 }
 
+/// The files of the program `entry_files` name, in the order they load:
+/// each entry file, and every file its imports reach.
+pub fn program_files(entry_files: &[PathBuf]) -> Result<Vec<PathBuf>> {
+    let mut units = Vec::new();
+    let mut index: BTreeMap<PathBuf, usize> = BTreeMap::new();
+    for f in entry_files {
+        load_unit(
+            &absolutize(f)?,
+            &|p| fs::read_to_string(p),
+            &mut units,
+            &mut index,
+        )?;
+    }
+    let mut files: Vec<(usize, PathBuf)> = index.into_iter().map(|(p, i)| (i, p)).collect();
+    files.sort();
+    Ok(files.into_iter().map(|(_, p)| p).collect())
+}
+
 fn load_unit(
     path: &Path,
     read: &dyn Fn(&Path) -> std::io::Result<String>,
@@ -176,6 +194,7 @@ pub const PROVIDER_PREDS: &[&str] = &[
     "may_derive",
     "drift",
     "type_attr",
+    "type_doc",
     "type_list_key",
     "type_provider",
     "type_retry",
@@ -231,6 +250,7 @@ pub fn is_core_pred(pred: &str) -> bool {
             | "lifecycle"
             | "moved"
             | "allow_stuck"
+            | "doc"
     ) || is_engine_pred(pred)
         || is_provider_pred(pred)
 }

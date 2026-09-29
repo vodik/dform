@@ -753,8 +753,10 @@ impl Providers {
 
     /// The providers' schema facts (`type_attr`, `type_list_key`,
     /// `type_provider`, `type_mint`, ...), injected into the program as EDB:
-    /// those of the `named` types ([`Schema::facts_for`]), or all of them.
-    /// A schema loaded for fewer types than asked for is an error.
+    /// those of the `named` types ([`Schema::facts_for`]), or all of them;
+    /// never `type_doc`, the descriptions the language server shows (a
+    /// derived Kubernetes schema's are as many rows as its attributes, and
+    /// long). A schema loaded for fewer types than asked for is an error.
     pub fn catalog(&self, named: Option<&BTreeSet<String>>) -> Result<Vec<Atom>> {
         let l = self.loaded();
         if let Some(scope) = &l.scope
@@ -762,10 +764,12 @@ impl Providers {
         {
             bail!("internal: the schema was loaded for fewer types than the run names");
         }
-        Ok(match named {
+        let mut facts = match named {
             Some(named) => l.schema.facts_for(named),
             None => l.schema.facts.clone(),
-        })
+        };
+        facts.retain(|f| f.pred != "type_doc");
+        Ok(facts)
     }
 
     /// What the providers said during the last apply.
