@@ -87,9 +87,19 @@ A command runs on a target: a stack's name (`dform plan infra`), its file
 key (`dform plan 'shop.app[env=prod]'`, or `dform plan shop.app env=prod`).
 Key values belong to the target; other inputs stay `--set`, and `--set` of a
 key input is an error. With no target it is the one stack under the working
-directory, else the stacks are listed and dform exits non-zero. `apply`
-and `controller run` name every key value (`dform apply shop.app env=prod`);
-`apply` also takes a plan file (`dform apply plan.json`).
+directory, else the stacks are listed and dform exits non-zero. A key the
+target does not name is its input's default, for `plan` and `apply` alike;
+both print the deployment first, `deployment: shop.app[env=dev] (env from its
+default)` (`plan --json`: `deployment` and `key_defaults`). `controller run`,
+which runs unattended, names every key value (`dform controller run shop.app
+env=prod`). `apply` also takes a plan file (`dform apply plan.json`).
+
+`apply` prints the plan and asks `Apply these N deformations to
+shop.app[env=prod]? [y/N]`; only `y` or `yes` proceeds. `--yes` (`-y`)
+applies without asking, as a script or CI does: with no terminal to ask on
+and no `--yes`, apply refuses at once, naming the flag. An undeformed plan
+asks nothing, nor does `apply plan.json` (the file was reviewed; approvals
+guard it) or the controller.
 
 | Commands | |
 |---|---|
@@ -194,7 +204,10 @@ that does not lead is `%XX`), lock, registry entry and controller. Inputs
 outside the key are parameters of a deployment: they deform it in place.
 The key's value comes from the target, an `--input-file`, a scenario's
 `with`, else the input's default; a key input with none is an error naming
-it.
+it. `plan` and `apply` name the deployment on their first line, and say
+which key values are defaults. A key input whose default is `"prod"` or
+`"production"` is a lint warning: a run that forgets the key would be of
+production.
 Nothing about environments is built in: `dform.df` is `stack dform[env]`,
 so `plan dform env=prod` plans prod against prod's state, not staging's.
 

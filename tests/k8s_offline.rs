@@ -21,7 +21,7 @@ fn k8s() -> String {
 /// one `kubeconfig` names (none: offline).
 fn dform<S: AsRef<std::ffi::OsStr>>(s: &Scratch, kubeconfig: Option<&str>, args: &[S]) -> Run {
     let mut c = Command::new(env!("CARGO_BIN_EXE_dform"));
-    c.args(args)
+    c.args(common::yes(args))
         .current_dir(&s.dir)
         .env_remove("KUBERNETES_SERVICE_HOST")
         .env_remove("KUBERNETES_SERVICE_PORT");

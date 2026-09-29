@@ -1,5 +1,6 @@
 exit: ok
 -- stdout --
+deployment: dform[env=dev]
 plan: 7 deformations (7 create)
 definite:
 + compute.vm.bastion

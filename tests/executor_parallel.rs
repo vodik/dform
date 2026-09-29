@@ -201,7 +201,15 @@ fn any_answer_order_ends_in_the_same_world() {
         if let Some(seed) = seed {
             c.env("DFORM_SEED", seed.to_string());
         }
-        let args = ["dev", "--world", "w.json", "apply", "p.df", "--parallel"];
+        let args = [
+            "dev",
+            "--world",
+            "w.json",
+            "apply",
+            "--yes",
+            "p.df",
+            "--parallel",
+        ];
         let out = c
             .args(args)
             .arg(parallel)

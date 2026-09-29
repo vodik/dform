@@ -159,6 +159,8 @@ exit: ok
     }
   ],
   "denied": [],
+  "deployment": "gke_two_phase",
+  "key_defaults": [],
   "moved": [],
   "pending": [
     {

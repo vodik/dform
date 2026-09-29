@@ -39,7 +39,10 @@ dform.state/                state: per deployment, audit logs, plan keys,
   planned, never imported.
 - A keyed stack's config is one file per deployment under
   `config/<stack>/`, named by the key's value: `config/dform/prod.yaml` is
-  `dform[env=prod]`'s.
+  `dform[env=prod]`'s. A key the target leaves out is its input's default,
+  for `plan` and `apply` alike (both print `deployment: dform[env=staging]
+  (env from its default)` first); `controller run` names every key. A key
+  input defaulting to `"prod"` or `"production"` is a warning.
 - Every path a program states resolves from the project root: imports
   (`import "modules/network.df"`), table and config sources
   (`csv("data/peerings.csv")`, `config = yaml("config/dform/{env}.yaml")`),

@@ -8,9 +8,9 @@ mod common;
 use common::{Scratch, copy_dir, repo};
 use std::path::PathBuf;
 
-/// What the test adds to each README apply: none yet. When apply asks for
-/// confirmation, `"--yes"` (the README's commands stay interactive).
-const APPLY_FLAGS: &[&str] = &[];
+/// What the test adds to each README apply: apply asks for confirmation,
+/// and the README's commands stay interactive.
+const APPLY_FLAGS: &[&str] = &["--yes"];
 
 /// How one stack's apply ends.
 enum Apply {

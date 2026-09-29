@@ -108,14 +108,14 @@ impl Scratch {
     pub fn run_in<S: AsRef<std::ffi::OsStr>>(&self, rel: &str, args: &[S]) -> Run {
         let dir = self.path(rel);
         std::fs::create_dir_all(&dir).unwrap();
-        let out = dform().args(args).current_dir(&dir).output().unwrap();
+        let out = dform().args(yes(args)).current_dir(&dir).output().unwrap();
         Run::from(out)
     }
 
     /// Run the command line `ARGS` over `backend`.
     pub fn run_on<S: AsRef<std::ffi::OsStr>>(&self, backend: Backend, args: &[S]) -> Run {
         let mut c = backend.command();
-        Run::from(c.args(args).current_dir(&self.dir).output().unwrap())
+        Run::from(c.args(yes(args)).current_dir(&self.dir).output().unwrap())
     }
 }
 
@@ -233,6 +233,23 @@ pub fn exe(name: &str) -> String {
     dform.with_file_name(name).to_str().unwrap().to_string()
 }
 
+/// `ARGS` with `--yes` after `apply` (once): a test applies with no
+/// terminal to confirm on. A test of the confirmation runs `dform()` itself.
+pub fn yes<S: AsRef<std::ffi::OsStr>>(args: &[S]) -> Vec<std::ffi::OsString> {
+    let mut out: Vec<std::ffi::OsString> = Vec::new();
+    let mut done = args
+        .iter()
+        .any(|a| a.as_ref() == "--yes" || a.as_ref() == "-y");
+    for a in args {
+        out.push(a.as_ref().to_os_string());
+        if !done && a.as_ref() == "apply" {
+            out.push("--yes".into());
+            done = true;
+        }
+    }
+    out
+}
+
 /// `dform`. The mock provider it spawns is itself (`dform __provider
 /// fake`).
 pub fn dform() -> Command {
@@ -328,7 +345,10 @@ pub fn on(file: &str, mock: &[&str], args: &[&str]) -> Vec<String> {
     if !planned && !untargeted {
         out.push(file);
     }
-    out.into_iter().map(String::from).collect()
+    yes(&out)
+        .into_iter()
+        .map(|a| a.into_string().unwrap())
+        .collect()
 }
 
 /// The repository root, for programs and fixtures the tests read.

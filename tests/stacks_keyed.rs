@@ -437,7 +437,8 @@ fn the_controller_runs_one_deployment() {
     );
     assert!(s.path("dform.state/app/env=prod/state.json").exists());
     assert!(!s.path("dform.state/app/env=staging").exists());
-    // Like apply, the controller names every key value.
+    // Unlike apply, the controller runs unattended: it takes no default,
+    // it names every key value.
     let r = s.run(&["controller", "run", "--once", "app.df"]).failure();
     assert!(
         r.stderr
@@ -477,4 +478,117 @@ fn handover_takes_a_key() {
         r.stderr
     );
     s.run(&["apply", "app.df", "env=staging"]).success();
+}
+
+/// Plan and apply say first which deployment they are of, and which key
+/// values are defaults; `--json` names it too. Apply takes the default as
+/// plan does.
+#[test]
+fn plan_and_apply_name_the_deployment_first() {
+    let s = Scratch::project("keyed-deployment-line");
+    s.write("app.df", APP);
+    let r = s.run(&["plan", "app.df"]).success();
+    assert!(
+        r.stdout
+            .starts_with("deployment: app[env=staging] (env from its default)\nplan: "),
+        "{}",
+        r.stdout
+    );
+    let r = s.run(&["plan", "app.df", "env=prod"]).success();
+    assert!(
+        r.stdout.starts_with("deployment: app[env=prod]\nplan: "),
+        "{}",
+        r.stdout
+    );
+    let r = s.run(&["plan", "--json", "app.df"]).success();
+    let j: serde_json::Value = serde_json::from_str(&r.stdout).unwrap();
+    assert_eq!(j["deployment"], "app[env=staging]");
+    assert_eq!(j["key_defaults"], serde_json::json!(["env"]));
+    let r = s.run(&["plan", "--json", "app.df", "env=prod"]).success();
+    let j: serde_json::Value = serde_json::from_str(&r.stdout).unwrap();
+    assert_eq!(j["deployment"], "app[env=prod]");
+    assert_eq!(j["key_defaults"], serde_json::json!([]));
+
+    let r = s.run(&["apply", "app.df"]).success();
+    assert!(
+        r.stdout
+            .starts_with("deployment: app[env=staging] (env from its default)\n"),
+        "{}",
+        r.stdout
+    );
+    assert!(s.path("dform.state/app/env=staging/state.json").exists());
+    assert!(!s.path("dform.state/app/env=prod").exists());
+}
+
+/// `apply` asks before it changes anything; with no terminal to ask on
+/// it refuses at once, naming `--yes`, and applies nothing. `--yes` and
+/// `-y` skip the question; an undeformed apply and `apply PLAN.json` ask
+/// nothing.
+#[test]
+fn apply_asks_unless_yes() {
+    let s = Scratch::project("keyed-confirm");
+    s.write("app.df", APP);
+    let apply = |args: &[&str]| {
+        common::Run::from(
+            common::dform()
+                .args(args)
+                .current_dir(&s.dir)
+                .stdin(std::process::Stdio::null())
+                .output()
+                .unwrap(),
+        )
+    };
+    let r = apply(&["apply", "app.df", "env=prod"]).failure();
+    assert!(
+        r.stderr.contains(
+            "apply app[env=prod]: nothing to ask on (stdin is not a terminal); \
+             pass --yes to apply without asking"
+        ),
+        "{}",
+        r.stderr
+    );
+    // The plan was shown; nothing was applied.
+    assert!(r.stdout.contains("+ net.vpc.main"), "{}", r.stdout);
+    assert!(!s.path("dform.state/app/env=prod/state.json").exists());
+
+    apply(&["apply", "-y", "app.df", "env=prod"]).success();
+    assert!(s.path("dform.state/app/env=prod/state.json").exists());
+    // Undeformed: nothing to confirm.
+    let r = apply(&["apply", "app.df", "env=prod"]).success();
+    assert!(r.stdout.contains("stack app is undeformed"), "{}", r.stdout);
+
+    // A reviewed plan file is applied without asking.
+    apply(&["plan", "--out", "stg.json", "app.df", "env=stg"]).success();
+    apply(&["apply", "stg.json"]).success();
+    assert!(s.path("dform.state/app/env=stg/state.json").exists());
+    apply(&["apply", "--yes", "app.df"]).success();
+    assert!(s.path("dform.state/app/env=staging/state.json").exists());
+}
+
+/// A key input that defaults to production is a lint warning: a run that
+/// names no value of the key is of production.
+#[test]
+fn a_key_defaulting_to_production_is_warned() {
+    let s = Scratch::project("keyed-prod-default");
+    s.write(
+        "app.df",
+        &APP.replace(
+            r#"input env: enum("staging", "stg", "prod") = "staging""#,
+            r#"input env: enum("staging", "stg", "prod") = "prod""#,
+        ),
+    );
+    let r = s.run(&["plan", "app.df"]).success();
+    assert!(
+        r.stderr.contains(
+            "warning: app.df:2:1: input env keys stack app and defaults to \"prod\": a plan \
+             or apply that names no env is of app[env=prod]; default to another value, or give none"
+        ),
+        "{}",
+        r.stderr
+    );
+    let r = s.run(&["plan", "app.df", "env=stg"]).success();
+    assert!(r.stderr.contains("defaults to \"prod\""), "{}", r.stderr);
+    s.write("app.df", APP);
+    let r = s.run(&["plan", "app.df"]).success();
+    assert!(!r.stderr.contains("defaults to"), "{}", r.stderr);
 }

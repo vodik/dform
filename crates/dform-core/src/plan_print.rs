@@ -825,7 +825,8 @@ impl Report {
             .collect()
     }
 
-    fn deformations(&self) -> usize {
+    /// How many definite deformations the plan has (the summary's count).
+    pub fn deformations(&self) -> usize {
         self.kinds().iter().map(|(_, n)| n).sum()
     }
 

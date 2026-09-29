@@ -71,7 +71,7 @@ impl Drop for Namespace {
 
 fn dform(s: &Scratch, kubeconfig: &str, args: &[&str]) -> Run {
     let out = Command::new(env!("CARGO_BIN_EXE_dform"))
-        .args(args)
+        .args(common::yes(args))
         .current_dir(&s.dir)
         .env("KUBECONFIG", kubeconfig)
         .env_remove("DFORM_K8S_OFFLINE")

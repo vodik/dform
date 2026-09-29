@@ -220,6 +220,11 @@ enum Run {
         /// `requires_approval` of a deformation.
         #[arg(long = "approval")]
         approval: Option<PathBuf>,
+        /// Apply without asking. Without it, apply prints the plan and asks
+        /// before changing anything, and refuses when there is no terminal
+        /// to ask on. `apply PLAN.json` never asks.
+        #[arg(long = "yes", short = 'y')]
+        yes: bool,
     },
     /// Print how a fact was derived: rule, bindings, the facts it read,
     /// recursively. Variables are allowed; every match is printed.
@@ -462,6 +467,8 @@ enum Cmd {
         max_ticks: usize,
         parallel: u64,
         approval: Option<PathBuf>,
+        /// `--yes`: no confirmation.
+        yes: bool,
     },
     Query {
         pattern: String,
@@ -713,6 +720,7 @@ fn run_cmd(r: Run) -> (Cmd, Option<Target>) {
             max_ticks,
             parallel,
             approval,
+            yes,
         } => (
             Cmd::Apply {
                 plan_file: None,
@@ -720,6 +728,7 @@ fn run_cmd(r: Run) -> (Cmd, Option<Target>) {
                 max_ticks,
                 parallel,
                 approval,
+                yes,
             },
             Some(target),
         ),
@@ -1044,12 +1053,12 @@ fn run_with(
     if let Some(m) = &cli.manifest {
         with_manifest(&mut stack_cfg, m, &files[0]);
     }
-    // A key's value is the target's; `apply` names every one.
+    // A key's value is the target's, else its input's default.
     let own = stack_cfg
         .name
         .clone()
         .unwrap_or_else(|| state::stack_name(&files[0]));
-    check_keys(&cli, &stack_cfg, &own, saved.is_some())?;
+    check_keys(&cli, &stack_cfg, &own)?;
     // `stack rekey`: the run is of the old deployment (its state, its
     // world), the provenance of its names is listed, and its state moves.
     let rekey = match cli.cmd.clone() {
@@ -1139,6 +1148,15 @@ fn run_with(
     };
     let deployment = instance.name();
     inputs::check_required(&declared, &given)?;
+    // A keyed stack's plan and apply say first which deployment they are
+    // of, and which of its key values are defaults.
+    let text_plan = matches!(cli.cmd, Cmd::Plan { json: false, .. });
+    if !instance.key.is_empty()
+        && hook.is_none()
+        && (text_plan || matches!(cli.cmd, Cmd::Apply { .. }))
+    {
+        println!("deployment: {}", instance.describe());
+    }
     // The stack's directory, and the deployment's in it.
     let base = match &stack_cfg.backend {
         Some(crate::stack::Backend::Local(dir)) => state::local_dir(&root, dir),
@@ -1880,6 +1898,8 @@ fn run_with(
             };
             if json {
                 let mut j = report.json();
+                j["deployment"] = serde_json::json!(deployment);
+                j["key_defaults"] = serde_json::json!(instance.defaulted);
                 if let Some(f) = &file {
                     j["needs_approval"] = serde_json::to_value(&f.needs_approval)?;
                     j["digest"] = serde_json::to_value(&f.digest)?;
@@ -1919,6 +1939,7 @@ fn run_with(
             max_ticks,
             parallel,
             approval,
+            yes,
             ..
         } => {
             for addr in chaos.addresses() {
@@ -2166,6 +2187,15 @@ fn run_with(
                         eprintln!("- {}", redact.text(&d));
                     }
                     bail!("apply stopped at tick {tick}: blocked by constraints");
+                }
+                // A batch apply asks before it changes anything, unless
+                // `--yes` or it applies a reviewed plan file.
+                if tick == 1 && hook.is_none() && !yes && saved.is_none() {
+                    let report = report_of(&plan, &res, &sections, tick, &[], &denies);
+                    if !report.undeformed {
+                        let n = report.deformations() + report.pending_count();
+                        confirm(n, &deployment)?;
+                    }
                 }
                 if hook.is_none() {
                     approve_entry(
@@ -2459,6 +2489,8 @@ fn run_controller(cli: Cli) -> Result<()> {
             max_ticks,
             parallel: 1,
             approval: None,
+            // The controller runs unattended: it never asks.
+            yes: true,
         },
         ..cli
     };
@@ -2501,6 +2533,29 @@ fn run_controller(cli: Cli) -> Result<()> {
         while !hook.changed() {
             std::thread::sleep(std::time::Duration::from_millis(poll));
         }
+    }
+}
+
+/// Ask on the terminal whether to apply `n` deformations to `deployment`:
+/// only `y` or `yes` proceeds. With no terminal to ask on, a refusal naming
+/// `--yes`, never a wait.
+fn confirm(n: usize, deployment: &str) -> Result<()> {
+    use std::io::{BufRead, IsTerminal, Write};
+    let stdin = std::io::stdin();
+    if !stdin.is_terminal() {
+        bail!(
+            "apply {deployment}: nothing to ask on (stdin is not a terminal); \
+             pass --yes to apply without asking"
+        );
+    }
+    let s = if n == 1 { "" } else { "s" };
+    print!("Apply these {n} deformation{s} to {deployment}? [y/N] ");
+    std::io::stdout().flush()?;
+    let mut answer = String::new();
+    stdin.lock().read_line(&mut answer)?;
+    match answer.trim().to_ascii_lowercase().as_str() {
+        "y" | "yes" => Ok(()),
+        _ => bail!("apply {deployment}: not confirmed; nothing was applied"),
     }
 }
 
@@ -2597,6 +2652,7 @@ fn rekey_args(
     let instance = |key| crate::stack::Instance {
         stack: own.clone(),
         key,
+        defaulted: Vec::new(),
     };
     Ok(Rekey {
         from: instance(from),
@@ -3353,9 +3409,10 @@ fn with_manifest(cfg: &mut crate::stack::Stack, m: &crate::project::Manifest, fi
 }
 
 /// A key input's value is the target's: `--set` of one is an error, as is
-/// a target key the stack does not have; an `apply` that is not of a plan
-/// file (`planned`) names every one, as the controller's do.
-fn check_keys(cli: &Cli, cfg: &crate::stack::Stack, stack: &str, planned: bool) -> Result<()> {
+/// a target key the stack does not have. A key the target does not name is
+/// its input's default, for `plan` and `apply` alike (the controller names
+/// every one: `run_controller`).
+fn check_keys(cli: &Cli, cfg: &crate::stack::Stack, stack: &str) -> Result<()> {
     let keys: Vec<&str> = cfg.keys.iter().map(|(k, _)| k.as_str()).collect();
     for kv in &cli.user_set {
         if let Some((k, _)) = kv.split_once('=')
@@ -3375,25 +3432,6 @@ fn check_keys(cli: &Cli, cfg: &crate::stack::Stack, stack: &str, planned: bool) 
             bail!(
                 "{k} is not a key of stack {stack} (its key: {}); give an input with `--set {k}=...`",
                 keys.join(", ")
-            );
-        }
-    }
-    if matches!(cli.cmd, Cmd::Apply { .. }) && !planned {
-        let missing: Vec<&str> = keys
-            .iter()
-            .filter(|k| !cli.keys.iter().any(|(x, _)| x == *k))
-            .copied()
-            .collect();
-        if !missing.is_empty() {
-            bail!(
-                "apply names its deployment: stack {stack} is keyed by {}, and the target gives \
-                 no {}: `dform apply {stack} {}`",
-                keys.join(", "),
-                missing.join(", "),
-                keys.iter()
-                    .map(|k| format!("{k}=..."))
-                    .collect::<Vec<_>>()
-                    .join(" ")
             );
         }
     }

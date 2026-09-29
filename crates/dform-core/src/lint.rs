@@ -1,5 +1,6 @@
 //! A small lint pass over the lowered program: warn about an
-//! `input(...)` key, from `--set` or a fact, that no rule body reads.
+//! `input(...)` key, from `--set` or a fact, that no rule body reads, and
+//! about a stack key input that defaults to production.
 //!
 //! Its F13 half is a compile error now: an instance that sets a key its
 //! module does not declare as an input names the key (`modules`).
@@ -452,10 +453,45 @@ pub fn key_named(res: &EvalResult, schema: &Schema, keys: &[String]) -> Vec<Stri
 /// Lowering errors are swallowed here (not this pass's job to report; the
 /// real evaluation will surface them) -- an empty list is returned instead.
 pub fn lint(program: &Program, cli_keys: &[String]) -> Vec<String> {
+    let mut out = production_defaults(program);
     let Ok(lowered) = transform::lower(program) else {
+        return out;
+    };
+    out.extend(lint_lowered(&lowered.program, cli_keys));
+    out
+}
+
+/// A key input whose default is `"prod"` or `"production"`: a plan or
+/// apply that names no value of the key is of the production deployment.
+fn production_defaults(program: &Program) -> Vec<String> {
+    let Some((stack, keys)) = program.statements.iter().find_map(|s| match s {
+        Stmt::Stack(c) => Some((c.name.as_str(), &c.keys)),
+        _ => None,
+    }) else {
         return Vec::new();
     };
-    lint_lowered(&lowered.program, cli_keys)
+    let mut out = Vec::new();
+    for s in &program.statements {
+        let Stmt::Input(i) = s else { continue };
+        let Some(Term::Val(Value::Str(v))) = &i.default else {
+            continue;
+        };
+        let production = ["prod", "production"]
+            .iter()
+            .any(|p| v.eq_ignore_ascii_case(p));
+        if !production || !keys.iter().any(|(k, _)| k == &i.name) {
+            continue;
+        }
+        let at = crate::diag::at(i.span)
+            .map(|a| format!("{a}: "))
+            .unwrap_or_default();
+        out.push(format!(
+            "{at}input {k} keys stack {stack} and defaults to \"{v}\": a plan or apply that \
+             names no {k} is of {stack}[{k}={v}]; default to another value, or give none",
+            k = i.name
+        ));
+    }
+    out
 }
 
 fn lint_lowered(program: &Program, cli_keys: &[String]) -> Vec<String> {

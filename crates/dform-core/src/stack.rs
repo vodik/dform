@@ -254,6 +254,9 @@ fn check_keys(out: &Stack, inputs: &[&crate::ast::InputDecl], diags: &mut Vec<Di
 pub struct Instance {
     pub stack: String,
     pub key: Vec<(String, String)>,
+    /// The key inputs whose value is the input's default: the run named
+    /// none.
+    pub defaulted: Vec<String>,
 }
 
 impl Instance {
@@ -279,6 +282,16 @@ impl Instance {
         match self.segment() {
             Some(seg) => format!("{}[{seg}]", self.stack),
             None => self.stack.clone(),
+        }
+    }
+
+    /// What `plan` and `apply` print first: the name, and which key values
+    /// are defaults, `pngu[env=dev] (env from its default)`.
+    pub fn describe(&self) -> String {
+        match self.defaulted.as_slice() {
+            [] => self.name(),
+            [k] => format!("{} ({k} from its default)", self.name()),
+            ks => format!("{} ({} from their defaults)", self.name(), ks.join(", ")),
         }
     }
 
@@ -328,9 +341,10 @@ pub fn key_text(v: &Value) -> String {
 /// The deployment a run is of: the stack, and each key input's value as
 /// this run gives it: `--set` (`set`, the `input(k, v)` facts), else an
 /// input fact or an `--input-file` contribution of the program, else the
-/// input's default. A key with none is an error naming the input.
+/// input's default (named in [`Instance::defaulted`]). A key with none is
+/// an error naming the input.
 pub fn instance(cfg: &Stack, stack: &str, program: &Program, set: &[Atom]) -> Result<Instance> {
-    let mut key = Vec::new();
+    let (mut key, mut defaulted) = (Vec::new(), Vec::new());
     let mut diags = Vec::new();
     for (k, span) in &cfg.keys {
         let given = |a: &Atom| -> Option<Value> {
@@ -364,13 +378,11 @@ pub fn instance(cfg: &Stack, stack: &str, program: &Program, set: &[Atom]) -> Re
                 _ => None,
             })
         };
-        match set
-            .iter()
-            .rev()
-            .find_map(given)
-            .or_else(from_program)
-            .or_else(default)
-        {
+        let named = set.iter().rev().find_map(given).or_else(from_program);
+        if named.is_none() && default().is_some() {
+            defaulted.push(k.clone());
+        }
+        match named.or_else(default) {
             Some(v) => key.push((k.clone(), key_text(&v))),
             None => diags.push(
                 Diagnostic::error(
@@ -390,6 +402,7 @@ pub fn instance(cfg: &Stack, stack: &str, program: &Program, set: &[Atom]) -> Re
     Ok(Instance {
         stack: stack.to_string(),
         key,
+        defaulted,
     })
 }
 

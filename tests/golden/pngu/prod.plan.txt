@@ -1,5 +1,6 @@
 exit: ok
 -- stdout --
+deployment: pngu[env=prod]
 plan: 7 deformations (7 create)
 definite:
 + alert_metrics_pack.pngu

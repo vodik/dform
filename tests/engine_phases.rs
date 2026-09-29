@@ -83,7 +83,10 @@ fn apply_then_replan_is_undeformed() {
     s.run(&["dev", "--world", "w.json", "apply", prog, "env=staging"])
         .success();
     let again = run("plan");
-    assert_eq!(again.stdout, "stack dform is undeformed\n");
+    assert_eq!(
+        again.stdout,
+        "deployment: dform[env=staging] (env from its default)\nstack dform is undeformed\n"
+    );
 }
 
 fn gke(s: &Scratch, file: &str, extra: &[&str]) -> common::Run {

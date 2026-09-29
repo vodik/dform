@@ -64,17 +64,19 @@ fn a_target_is_a_name_a_file_or_a_deployment() {
     let r = s.run_in("stacks", &["plan", "net"]).success();
     assert_eq!(r.stdout, by_name.stdout);
 
-    // Apply names every key value.
-    let r = s.run(&["apply", "app"]).failure();
-    assert!(
-        r.stderr
-            .contains("apply names its deployment: stack app is keyed by env"),
-        "{}",
-        r.stderr
-    );
+    // Apply, as plan does, takes the key's default when the target names
+    // none, and says so first.
     s.run(&["apply", "app[env=prod]"]).success();
     assert!(s.path("dform.state/app/env=prod/state.json").exists());
     assert!(!s.path("dform.state/app/env=staging").exists());
+    let r = s.run(&["apply", "app"]).success();
+    assert!(
+        r.stdout
+            .starts_with("deployment: app[env=staging] (env from its default)\n"),
+        "{}",
+        r.stdout
+    );
+    assert!(s.path("dform.state/app/env=staging/state.json").exists());
 }
 
 #[test]

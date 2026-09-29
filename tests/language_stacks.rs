@@ -128,7 +128,7 @@ fn a_second_concurrent_apply_fails_cleanly() {
     let s = Scratch::project("lang-stack-lock");
     s.write("net.df", NET);
     let first = common::dform()
-        .args(["apply", "net.df"])
+        .args(["apply", "--yes", "net.df"])
         .current_dir(&s.dir)
         .env("DFORM_TEST_HOLD_LOCK", s.path("release"))
         .stdout(Stdio::piped())
@@ -306,7 +306,10 @@ fn a_type_the_provider_does_not_declare_is_a_plan_error() {
     // The provider block is labeled; nothing was planned.
     assert!(r.stderr.contains("provider fake {"), "{}", r.stderr);
     assert!(r.stderr.contains("─ provider fake\n"), "{}", r.stderr);
-    assert!(r.stdout.is_empty(), "{}", r.stdout);
+    assert_eq!(
+        r.stdout,
+        "deployment: pngu[env=dev] (env from its default)\n"
+    );
     // A type no known schema declares says so.
     s.write(
         "stacks/pngu.df",
@@ -325,7 +328,7 @@ fn a_type_the_provider_does_not_declare_is_a_plan_error() {
     );
 
     s.write("stacks/pngu.df", &src);
-    s.run(&["apply", "pngu", "env=dev"]).success();
+    s.run(&["apply", "pngu"]).success();
     let r = s.run(&["plan", "pngu"]).success();
     assert!(r.stdout.contains("is undeformed"), "{}", r.stdout);
 }

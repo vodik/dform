@@ -707,7 +707,7 @@ impl Runner<'_> {
                 ..Log::default()
             };
         }
-        let argv: Vec<std::ffi::OsString> = argv.iter().map(Into::into).collect();
+        let argv = common::yes(&argv);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             dform::cli::run_in_process(&MODEL, argv)
         }));
