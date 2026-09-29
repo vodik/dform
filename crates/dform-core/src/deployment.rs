@@ -1,0 +1,1310 @@
+//! One evaluation of one deployment: the program loaded (through a reader,
+//! an editor's unsaved buffers), its deployment resolved and located, the
+//! providers it names started (through [`Launch`]) and configured, the
+//! schema asked for, the program evaluated over the world and state (the
+//! extern rounds, `moved/3`), the plan made and the policy pass run over
+//! it (E §2.8), the re-evaluation without the replaced objects included.
+//! Read only: state and the world are read through the deployment's
+//! [`store::Deployment`], and nothing is written or applied.
+//!
+//! `dform plan`, `apply`, the controller (an apply with a
+//! `controller::Hook`), `query` and `why` run this, and so does the
+//! language server; an apply does its writes and ticks on top, through
+//! the [`Evaluator`] the evaluation hands back. The steps are also public
+//! for the commands that stop between them: [`load`] (`dform test`,
+//! `strata`), [`Loaded::locate`] (`state show`, `log`, ...).
+
+use crate::ast::{Atom, Lit, Program, Span, Stmt, Term};
+use crate::circuit::{Leaf, NodeId, View};
+use crate::diag::{Diagnostic, Diagnostics, Fix};
+use crate::engine::{self, EvalResult};
+use crate::externs::{self, Externs};
+use crate::inputs::{self, Declared};
+use crate::ir::{self, Address};
+use crate::plugin::{self, Launch, Providers};
+use crate::project::{self, Manifest};
+use crate::query::Redactor;
+use crate::schema::{self, Schema};
+use crate::stack::{self, Instance};
+use crate::state::{self, State};
+use crate::store::{self, Location, OpenS3};
+use crate::value::Value;
+use crate::watch::Relation;
+use crate::{
+    executor, lint, loader, plan_print, provider, scenario, stuck, tables, transform, zset,
+};
+use anyhow::{Context, Result, bail};
+use std::cell::RefCell;
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
+
+/// What a program's files are read through: an editor's buffer when one
+/// is open, else the disk.
+pub type Reader<'a> = &'a dyn Fn(&Path) -> std::io::Result<String>;
+
+/// What an evaluation says as it goes, besides its result: the command
+/// line prints each where it prints it, the editor publishes some.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Note {
+    /// A warning: the lint's, a scenario that is not the stack's.
+    Warning(String),
+    /// A `warn` fact of the program's own evaluation, redacted.
+    Policy(String),
+    /// The collision lint of a keyed stack, when it is not strict (strict,
+    /// it is a violation and a `deny` fact).
+    Collision(String),
+    /// An Apply call whose answer was lost, resolved.
+    Resolved(String),
+    /// A git table whose ref names another commit than at the last apply.
+    TableMoved(String),
+}
+
+/// What a caller does at an evaluation's steps. Each defaults to nothing.
+pub trait Observer {
+    fn note(&mut self, _note: Note) {}
+    /// The program's input relations, before they are read.
+    fn relations(&mut self, _relations: &[Relation]) {}
+    /// The tables read, with their sources as read.
+    fn tables(&mut self, _read: &[(Relation, String)]) {}
+    /// Facts to evaluate with besides the world's (the controller's
+    /// drift), once the providers are configured.
+    fn facts(&mut self, _backend: &Providers, _st: &State) -> Result<Vec<Atom>> {
+        Ok(Vec::new())
+    }
+}
+
+/// An observer that keeps the notes.
+#[derive(Debug, Default)]
+pub struct Notes(pub Vec<Note>);
+
+impl Observer for Notes {
+    fn note(&mut self, note: Note) {
+        self.0.push(note);
+    }
+}
+
+/// The program to evaluate.
+#[derive(Debug, Clone, Default)]
+pub struct Target {
+    pub files: Vec<PathBuf>,
+    /// A scenario to evaluate the program under.
+    pub scenario: Option<String>,
+    /// A scenario the program does not have is a warning, and the program
+    /// is evaluated without it (the editor's selection is the project's);
+    /// otherwise an error.
+    pub scenario_optional: bool,
+    /// Stack inputs from `.df` files of facts (`--input-file`).
+    pub input_files: Vec<PathBuf>,
+    /// The providers, over the program's `provider` statements
+    /// (`--provider`); none: the program's.
+    pub providers: Vec<String>,
+}
+
+/// A program loaded: its statements, its stack, its declared inputs.
+pub struct Loaded {
+    pub files: Vec<PathBuf>,
+    /// The program's project's manifest.
+    pub manifest: Option<Manifest>,
+    /// The program, its input relations read, a scenario selected, the
+    /// input files' facts added.
+    pub program: Program,
+    /// The input relations, as declared.
+    pub relations: Vec<Relation>,
+    /// The `stack` and `provider` statements over the manifest's defaults.
+    pub cfg: stack::Stack,
+    /// The stack's name.
+    pub stack: String,
+    pub providers: Vec<String>,
+    /// The program lowered, when it lowers (when it does not, evaluation
+    /// reports why).
+    pub lowered: Option<transform::Lowered>,
+    /// The stack's and the instances' typed inputs.
+    pub declared: Vec<Declared>,
+    /// The inputs a fact of the program gives (a scenario's `with k = v`,
+    /// an input file's).
+    pub given: BTreeSet<String>,
+}
+
+/// Load the program of `t`, its files read through `read`; `version` is the
+/// running dform's (for dform.toml's requirement).
+pub fn load(t: &Target, version: &str, read: Reader, obs: &mut dyn Observer) -> Result<Loaded> {
+    let files = t.files.clone();
+    let Some(first) = files.first() else {
+        bail!("internal: a run with no program");
+    };
+    let manifest = match project::manifest_root(first) {
+        Some(root) => Some(Manifest::load(&root.join(project::MANIFEST), version)?),
+        None => None,
+    };
+    let mut program = loader::load_program_with(&files, read)?;
+    // Input relations: declared, and stated as their sources hold them now.
+    let relations = crate::watch::take(&mut program)?;
+    obs.relations(&relations);
+    program.statements.extend(crate::watch::read(&relations)?);
+    if let Some(name) = &t.scenario {
+        if !t.scenario_optional || scenario::names(&program)?.contains(name) {
+            program = scenario::select(&program, name)?;
+        } else {
+            obs.note(Note::Warning(format!(
+                "the selected scenario {name} is not this stack's: evaluated without it"
+            )));
+        }
+    }
+    // `stack` and `provider` statements, over the manifest's defaults.
+    if let Some(m) = &manifest {
+        with_default_unknowns(&mut program, m);
+    }
+    let mut cfg = stack::config(&program)?;
+    if let Some(m) = &manifest {
+        with_manifest(&mut cfg, m, first);
+    }
+    let stack = cfg.name.clone().unwrap_or_else(|| state::stack_name(first));
+    let providers = if t.providers.is_empty() {
+        cfg.providers.clone()
+    } else {
+        t.providers.clone()
+    };
+    let lowered = transform::lower(&program).ok();
+    let declared = lowered
+        .as_ref()
+        .map(|l| l.inputs.clone())
+        .unwrap_or_default();
+    let mut given = input_fact_keys(&program);
+    for f in &t.input_files {
+        let src = std::fs::read_to_string(f)
+            .map_err(|e| anyhow::anyhow!("read --input-file {}: {e}", f.display()))?;
+        let facts = crate::parser::parse_file(&f.display().to_string(), &src)?;
+        let stmts = inputs::file_stmts(&facts, &declared)?;
+        given.extend(facts.statements.iter().filter_map(|s| match s {
+            Stmt::Fact(a) => Some(a.pred.clone()),
+            _ => None,
+        }));
+        program.statements.extend(stmts);
+    }
+    Ok(Loaded {
+        files,
+        manifest,
+        program,
+        relations,
+        cfg,
+        stack,
+        providers,
+        lowered,
+        declared,
+        given,
+    })
+}
+
+/// Which deployment of a loaded program, and where its objects are.
+#[derive(Debug, Clone, Default)]
+pub struct Selection {
+    /// The state root, `dform.state/` at the project root.
+    pub root: PathBuf,
+    /// Stack inputs: `--set`, and the key values.
+    pub set: Vec<(String, Value)>,
+    /// The deployment, over the one `set` names (`stack rekey`'s old one).
+    pub instance: Option<Instance>,
+    /// A world fixture (`dev --world`): state beside it, not the stack's.
+    pub world: Option<PathBuf>,
+    /// The discovery inventory, over the default.
+    pub inventory: Option<PathBuf>,
+    /// The run reads or moves the deployment's objects only: the
+    /// program's other inputs need not be given.
+    pub objects_only: bool,
+}
+
+/// A deployment located: which it is and where its state and world are.
+pub struct Located {
+    pub loaded: Loaded,
+    /// The program with the policy rules (`zset::POLICY_RULES`) every
+    /// evaluation carries.
+    pub program: Program,
+    /// The `input` facts of `Selection::set`.
+    pub set_facts: Vec<Atom>,
+    pub instance: Instance,
+    /// `instance`'s name.
+    pub deployment: String,
+    /// Where the stack's deployments are: its backend's, else the state
+    /// root's.
+    pub base: Location,
+    /// The deployment's directory under the state root.
+    pub home: PathBuf,
+    /// Where the deployment was handed over to, and whom.
+    pub handed: Option<(String, Location)>,
+    /// Where the deployment's objects are.
+    pub location: Location,
+    pub paths: state::StackPaths,
+    pub times: store::LeaseTimes,
+    pub dep: store::Deployment,
+    pub root: PathBuf,
+    pub world: Option<PathBuf>,
+}
+
+impl Loaded {
+    /// The deployment `sel` selects, its store opened through `s3` when
+    /// it is in a bucket.
+    pub fn locate(self, sel: &Selection, s3: OpenS3, obs: &mut dyn Observer) -> Result<Located> {
+        let set_keys: Vec<String> = sel.set.iter().map(|(k, _)| k.clone()).collect();
+        for w in lint::lint(&self.program, &set_keys) {
+            obs.note(Note::Warning(w));
+        }
+        // Every evaluation carries the rules that derive the lifecycle
+        // denies from the deformation the planner hands back.
+        let program = zset::with_policy_rules(self.program.clone())?;
+        let mut given = self.given.clone();
+        given.extend(set_keys);
+        let set_facts = inputs::set_facts(&self.declared, &sel.set)?;
+        let instance = match &sel.instance {
+            Some(i) => i.clone(),
+            None => stack::instance(&self.cfg, &self.stack, &program, &set_facts)?,
+        };
+        let deployment = instance.name();
+        if !sel.objects_only {
+            inputs::check_required(&self.declared, &given)?;
+        }
+        let root = sel.root.clone();
+        let base = stack_location(&root, &self.stack, self.cfg.backend.as_ref());
+        // The deployment's own directory under the state root: its world's
+        // when its state is in a bucket (the world is the provider's).
+        let home = instance.dir(&root.join(&self.stack));
+        let handed = match &sel.world {
+            None => stack::handed_over(&root, &deployment)?,
+            Some(_) => None,
+        };
+        let location = match &handed {
+            Some((_, loc)) => loc.clone(),
+            None => base.child(instance.segment().as_deref()),
+        };
+        let mut paths = match &sel.world {
+            Some(w) => state::world_paths(&root, w),
+            None => state::StackPaths {
+                state: match &location {
+                    Location::Local(dir) => state::state_path(dir),
+                    Location::S3(_) => state::state_path(&home),
+                },
+                world: stack::world_file(&location, &home),
+                inventory: root.join("inventory.json"),
+            },
+        };
+        paths.inventory = inventory(&sel.inventory, &sel.world, &paths.inventory);
+        let times = self
+            .manifest
+            .as_ref()
+            .map(|m| m.lease_times())
+            .unwrap_or_default();
+        let dep = match &sel.world {
+            Some(_) => store::Deployment::local(&paths.state, &deployment),
+            None => store::Deployment::new(location.open(s3)?, &deployment, times),
+        };
+        Ok(Located {
+            loaded: self,
+            program,
+            set_facts,
+            instance,
+            deployment,
+            base,
+            home,
+            handed,
+            location,
+            paths,
+            times,
+            dep,
+            root,
+            world: sel.world.clone(),
+        })
+    }
+}
+
+/// How far an evaluation goes, and what it is given besides its program.
+pub struct Options<'a> {
+    /// How the providers are reached.
+    pub launch: &'a dyn Launch,
+    /// Facts given (`--data`).
+    pub data: Vec<Atom>,
+    /// Failures the fake provider injects (`apply --chaos`).
+    pub chaos: Vec<String>,
+    /// Where providers and trust roots cache what they fetch.
+    pub cache: Option<PathBuf>,
+    /// The key a provider digests a sensitive value with.
+    pub digest_key: Option<String>,
+    /// Extern answers a plan file recorded: asked of nothing again.
+    pub recorded: Vec<externs::Answer>,
+    /// Every type the program plans is one its providers declare.
+    pub check_types: bool,
+    /// Every type's objects are discovered, not only those the program
+    /// reads (`query`, `why`).
+    pub discover_all: bool,
+    /// The whole schema and catalog are read (a query of the schema), not
+    /// the types the program names.
+    pub whole_schema: bool,
+    /// The collision lint of a keyed stack.
+    pub collisions: bool,
+    /// A violation stops the evaluation before its resources are compiled
+    /// and planned (`Evaluation::violations` says which).
+    pub blocking: bool,
+    /// The plan and the policy pass over it.
+    pub policy: bool,
+}
+
+impl<'a> Options<'a> {
+    /// Nothing given, nothing checked beyond evaluating.
+    pub fn new(launch: &'a dyn Launch) -> Options<'a> {
+        Options {
+            launch,
+            data: Vec::new(),
+            chaos: Vec::new(),
+            cache: None,
+            digest_key: None,
+            recorded: Vec::new(),
+            check_types: false,
+            discover_all: false,
+            whole_schema: false,
+            collisions: false,
+            blocking: false,
+            policy: false,
+        }
+    }
+}
+
+/// An evaluation's resources, as compiled from its facts.
+#[derive(Debug, Clone)]
+pub struct Compiled {
+    pub resources: Vec<ir::Resource>,
+    pub adopts: Vec<ir::Adopt>,
+    pub lifecycle: zset::Lifecycle,
+}
+
+impl Compiled {
+    pub fn of(res: &EvalResult, schema: &Schema) -> Result<Compiled> {
+        Ok(Compiled {
+            resources: ir::compile_resources(res.facts.iter().cloned(), schema)?,
+            adopts: ir::compile_adopts(res.facts.iter())?,
+            lifecycle: zset::Lifecycle::from_facts(&res.facts, schema)?,
+        })
+    }
+}
+
+/// A plan and the evaluation that sees it ([`Evaluator::plan`]).
+pub struct Planned {
+    /// The policy pass: the program with the plan's deformations as facts.
+    pub res: EvalResult,
+    /// The documents the plan was taken from.
+    pub resources: Vec<ir::Resource>,
+    pub plan: provider::Plan,
+    pub sections: stuck::Sections,
+    /// Denies over the plan: what the policy pass derives beyond the plan's
+    /// own evaluation (`lifecycle prevent_destroy`, a policy on
+    /// `deformation/4`).
+    pub denies: Vec<String>,
+}
+
+/// What evaluates the program again, over the same providers and extern
+/// answers: at a boundary, for the next tick's plan, for the outputs.
+pub struct Evaluator {
+    pub backend: Rc<Providers>,
+    pub externs: Externs<'static>,
+    pub tables: Rc<tables::Tables>,
+    /// The program with the policy rules.
+    pub program: Program,
+    base_extra: Vec<Atom>,
+    declared: Vec<Declared>,
+    secret_accounts: BTreeSet<String>,
+    deployment: String,
+    /// The last evaluation's facts and where it can be continued from.
+    last: RefCell<Option<(Vec<Atom>, engine::Resumable)>>,
+}
+
+impl Evaluator {
+    pub fn schema(&self) -> &Schema {
+        self.backend.schema()
+    }
+
+    /// The program over the world as `st` has it, as facts: round 0
+    /// resolves every null the world can answer, except those of
+    /// `withheld` addresses (being replaced). `more`: the deformation
+    /// facts of a policy pass, which continues the last evaluation over
+    /// the same facts from the first stratum that reads them; `why` labels
+    /// them as the plan's, of apply tick `tick` (`None`: of `plan`).
+    /// Returns the evaluation and its violations.
+    pub fn evaluate_with(
+        &self,
+        st: &State,
+        withheld: &BTreeSet<Address>,
+        more: &[Atom],
+        tick: Option<usize>,
+    ) -> Result<(EvalResult, Vec<String>)> {
+        let backend = &self.backend;
+        let externs = &self.externs;
+        let program = &self.program;
+        let mut extra = self.base_extra.clone();
+        extra.extend(executor::withhold(backend.world_facts(st)?, withheld));
+        let (res, mut violations) = if more.is_empty() {
+            let (mut res, mut violations, mut resumable) =
+                externs.eval_resumable(program, &extra, zset::POLICY_INPUTS)?;
+            // A provider the program configures, its settings now known,
+            // is configured, and what it serves read again.
+            if backend.configure_from(&res.facts)? {
+                extra = self.base_extra.clone();
+                extra.extend(executor::withhold(backend.world_facts(st)?, withheld));
+                (res, violations, resumable) =
+                    externs.eval_resumable(program, &extra, zset::POLICY_INPUTS)?;
+            }
+            // Each provider reaches the account the program expects of it
+            // (`expect_account`), or nothing is planned.
+            backend
+                .check_accounts(&res.facts, &self.secret_accounts)
+                .with_context(|| format!("deployment {}", self.deployment))?;
+            *self.last.borrow_mut() = Some((extra, resumable));
+            (res, violations)
+        } else {
+            let resumed = match &*self.last.borrow() {
+                Some((seen, resumable)) if *seen == extra => Some(resumable.with_at(more, tick)?),
+                _ => None,
+            };
+            match resumed {
+                Some((res, violations)) if externs.settle(&res.facts)? => (res, violations),
+                _ => {
+                    // A new extern call: the answers the resumable was
+                    // taken with are not all of them any more.
+                    *self.last.borrow_mut() = None;
+                    extra.extend(more.iter().cloned());
+                    externs.eval_at(program, &extra, tick)?
+                }
+            }
+        };
+        violations.extend(inputs::violations(&res.facts, &self.declared));
+        Ok((res, violations))
+    }
+
+    /// The program over the world as `st` has it.
+    pub fn evaluate(&self, st: &State) -> Result<(EvalResult, Vec<String>)> {
+        self.evaluate_with(st, &BTreeSet::new(), &[], None)
+    }
+
+    /// The provider's plan for evaluation `res` (whose violations are
+    /// `violations`, its resources `resources`, `adopts` and `lifecycle`),
+    /// and the policy over it. A replace
+    /// makes a new object, so the nulls that named the old one are
+    /// retracted (`executor`): the program is evaluated again without the
+    /// replaced identities, and what reads them is held until the
+    /// replacement exists. Then the policy pass (E §2.8): the plan's
+    /// deformations go back to the evaluator as facts and the program is
+    /// evaluated once more; the denies it derives beyond the plan's own
+    /// evaluation are the denies over the plan.
+    pub fn plan(
+        &self,
+        res: EvalResult,
+        violations: &[String],
+        resources: Vec<ir::Resource>,
+        adopts: &[ir::Adopt],
+        lifecycle: &zset::Lifecycle,
+        st: &State,
+    ) -> Result<Planned> {
+        let backend = &self.backend;
+        let schema = self.schema();
+        let mut plan = backend.plan(&resources, adopts, lifecycle, st)?;
+        let replaced = executor::replaced(&plan);
+        let (res, violations, resources) = if replaced.is_empty() {
+            (res, violations.to_vec(), resources)
+        } else {
+            let (again, violations) = self.evaluate_with(st, &replaced, &[], None)?;
+            let docs = ir::compile_resources(again.facts.iter().cloned(), schema)?;
+            plan = backend.plan_retracting(&docs, adopts, lifecycle, st, &replaced)?;
+            executor::hold_dependents(&mut plan, &docs, &replaced);
+            (again, violations, docs)
+        };
+        let sections = sections(&res, &resources, schema);
+        executor::hold_deposed(&mut plan, &resources, &sections);
+        // The resource rules that may derive after a boundary (pending
+        // groups), for strict mode.
+        let may_derive: Vec<Atom> = res
+            .may_derive
+            .iter()
+            .filter(|m| m.head.pred == "want")
+            .map(|m| m.fact())
+            .collect();
+        drop(res);
+        let observed = backend.observe(st)?;
+        let before = observed
+            .iter()
+            .map(|(a, d)| (a.clone(), Some(d.clone())))
+            .collect();
+        let mut facts = zset::deformation_facts(
+            plan.actions.iter().filter_map(|a| {
+                let held = plan_print::waits_on(a, &sections).is_some();
+                Some((zset::deformation_kind(&a.kind, held)?, &a.addr))
+            }),
+            &before,
+            &observed,
+        );
+        facts.extend(may_derive);
+        let (res, all) = self.evaluate_with(st, &replaced, &facts, None)?;
+        let again = ir::compile_resources(res.facts.iter().cloned(), schema)?;
+        if again.len() != resources.len()
+            || again
+                .iter()
+                .zip(&resources)
+                .any(|(a, b)| a.addr != b.addr || a.attrs != b.attrs)
+        {
+            bail!(
+                "a resource rule reads deformation/4 or world_digest/3: the plan would \
+                 depend on itself (only policy may read the deformation)"
+            );
+        }
+        let denies = all
+            .into_iter()
+            .filter(|v| !violations.contains(v))
+            .collect();
+        Ok(Planned {
+            res,
+            resources,
+            plan,
+            sections,
+            denies,
+        })
+    }
+}
+
+/// E §2.7's sections for an evaluation: what waits on a boundary.
+pub fn sections(res: &EvalResult, resources: &[ir::Resource], schema: &Schema) -> stuck::Sections {
+    let docs = resources
+        .iter()
+        .map(|r| ((r.addr.typ.clone(), r.addr.name.clone()), r.attrs.clone()))
+        .collect();
+    stuck::sections(&res.stuck, &res.may_derive, &res.facts, &docs, schema)
+}
+
+/// An evaluation of a deployment.
+pub struct Evaluation {
+    pub located: Located,
+    /// Other stacks' published outputs, as read.
+    pub outputs: Vec<stack::Read>,
+    /// The deployment's state, `moved/3` applied, uncertain calls resolved.
+    pub st: State,
+    /// The moves `moved/3` made.
+    pub moves: Vec<(Address, Address)>,
+    /// The program's own evaluation (the collision lint's denies in it
+    /// under strict mode), and its violations.
+    pub res: EvalResult,
+    pub violations: Vec<String>,
+    /// The collision lint's findings.
+    pub collisions: Vec<lint::Collision>,
+    /// The stack is `unknowns = strict`.
+    pub strict: bool,
+    /// Prints `res`'s values redacted.
+    pub redact: Redactor,
+    /// The resources of `res`; not compiled when a violation blocks
+    /// (`Options::blocking`).
+    pub compiled: Result<Compiled>,
+    /// The plan and its policy pass, when asked for.
+    pub policy: Option<Result<Planned>>,
+    pub evaluator: Evaluator,
+}
+
+impl Located {
+    /// Other stacks' published outputs: each deployment the program names,
+    /// of the project (every registered one, when it names one by a
+    /// variable) or of a remote, through its backend (`s3`).
+    pub fn read_outputs(&self, s3: OpenS3) -> Result<Vec<stack::Read>> {
+        let (named, any_name) = self
+            .loaded
+            .lowered
+            .as_ref()
+            .map(|l| stack::named_outputs(&l.program))
+            .unwrap_or_default();
+        let remotes = self
+            .loaded
+            .manifest
+            .as_ref()
+            .map(|m| m.remotes())
+            .unwrap_or_default();
+        stack::stack_outputs(
+            &self.root,
+            &self.deployment,
+            (!any_name).then_some(&named),
+            &remotes,
+            s3,
+        )
+    }
+
+    /// Evaluate the deployment, `outputs` the other stacks' it reads.
+    pub fn evaluate(
+        self,
+        outputs: Vec<stack::Read>,
+        opts: &Options,
+        obs: &mut dyn Observer,
+    ) -> Result<Evaluation> {
+        let l = &self.loaded;
+        let lowered = l.lowered.as_ref();
+        let secret_outputs = stack::secret_outputs(&outputs);
+        let held = stack::held(&outputs);
+        let backend = Rc::new(Providers::start_deferred(
+            opts.launch,
+            &l.providers,
+            &plugin::Config {
+                world: self.paths.world.clone(),
+                inventory: self.paths.inventory.clone(),
+                chaos: opts.chaos.clone(),
+                cache: opts.cache.clone(),
+                configured: provider_configs(&self.program),
+                stack: self.deployment.clone(),
+                blocks: l.cfg.provider_blocks.clone(),
+                digest_key: opts.digest_key.clone(),
+                held: held.clone(),
+                worlds: outputs
+                    .iter()
+                    .filter(|r| held.values().any(|h| h.deployment == r.name))
+                    .filter_map(|r| Some((r.name.clone(), r.world.clone()?)))
+                    .collect(),
+            },
+        )?);
+        // Externs are asked on demand: a table's of its file, else of the
+        // file provider, else of the providers.
+        let tables = Rc::new(tables::Tables::default());
+        let externs = {
+            let (no_program, no_fns) = (Program { statements: vec![] }, vec![]);
+            let program_dir = project::base_of(&l.files[0]);
+            let (tables, backend) = (tables.clone(), backend.clone());
+            Externs::new(
+                lowered.map_or(&no_program, |l| &l.program),
+                lowered.map_or(&no_fns, |l| &l.extern_fns),
+                move |f, inputs| {
+                    if let Some(r) = tables.answer(f, inputs) {
+                        return r;
+                    }
+                    if let Some(r) = externs::file(f, inputs, &program_dir) {
+                        return r;
+                    }
+                    if let Some(r) = externs::env_var(f, inputs) {
+                        return r;
+                    }
+                    backend.query_extern(f, inputs)
+                },
+            )
+        };
+        let mut st = self.dep.load_state()?;
+        // What the plan file read, then what state persisted, before asking.
+        externs.preload(opts.recorded.clone());
+        externs.preload_persisted(st.externs.clone());
+        // A persisted secret is replayed by where it is held, never its value.
+        for a in &st.externs {
+            backend.hold(&a.held);
+        }
+        let mut base_extra = self.set_facts.clone();
+        base_extra.extend(opts.data.iter().cloned());
+        base_extra.extend(stack::output_facts(&outputs));
+        // The manifest, as facts policy may read.
+        if let Some(m) = &l.manifest {
+            base_extra.extend(m.facts());
+        }
+        // The schema is asked for once the run knows the types it names.
+        let types = match opts.discover_all {
+            true => None,
+            false => world_types(lowered),
+        };
+        let discovered = backend.discover(types.as_ref())?;
+        let scope = match opts.whole_schema {
+            true => None,
+            false => catalog_scope(&self.program, &base_extra, &discovered, &st),
+        };
+        backend.load_schema(scope.as_ref())?;
+        // What a run plans, its providers declare: a type none does would
+        // be handed to one that knows nothing of it.
+        if opts.check_types {
+            backend.check_types(&self.program, &l.providers)?;
+        }
+        // A provider configured from what it serves itself is a cycle.
+        if let Some(l) = lowered {
+            backend.check_configuration(&l.program, &l.extern_fns, |p| {
+                p == crate::syntax::resolve::ENV_VAR
+                    || p.starts_with("file.")
+                    || tables::describe(p).is_some()
+            })?;
+        }
+        // Apply calls whose answer was lost, resolved before anything is
+        // planned: a plan sees what they did (`apply` writes it down).
+        for line in executor::resolve_uncertain(&backend, &mut st)? {
+            obs.note(Note::Resolved(line));
+        }
+        // The static secret pass and the refinement checks (a literal that
+        // violates one, E0306), against the provider's schema.
+        if let Some(l) = lowered {
+            crate::secrets::check(l, backend.schema(), &secret_outputs)?;
+            crate::refine::check(&l.program, backend.schema())?;
+        }
+        // An `expect_account` a secret reaches is named by its label.
+        let secret_accounts = lowered
+            .map(|l| crate::secrets::secret_expected_accounts(l, backend.schema(), &secret_outputs))
+            .unwrap_or_default();
+        base_extra.extend(backend.catalog(scope.as_ref())?);
+        base_extra.extend(discovered);
+        base_extra.extend(obs.facts(&backend, &st)?);
+        let evaluator = Evaluator {
+            backend: backend.clone(),
+            externs,
+            tables: tables.clone(),
+            program: self.program.clone(),
+            base_extra,
+            declared: l.declared.clone(),
+            secret_accounts,
+            deployment: self.deployment.clone(),
+            last: RefCell::new(None),
+        };
+        let (mut res, mut violations) = evaluator.evaluate(&st)?;
+        // moved/3 rewrites state's identity before the diff (E §3.4); round
+        // 0 must see the new addresses, so the program is evaluated again.
+        let moves =
+            st.apply_moves(&zset::Lifecycle::from_facts(&res.facts, backend.schema())?.moved);
+        if !moves.is_empty() {
+            (res, violations) = evaluator.evaluate(&st)?;
+        }
+        // The tables' sources; a git table whose ref has moved since the
+        // deployment was last applied says so.
+        obs.tables(&tables.sources());
+        for m in tables::moved(&st.externs, &evaluator.externs.recorded()) {
+            obs.note(Note::TableMoved(m));
+        }
+        // The collision lint of a keyed stack: a name every deployment
+        // writes the same. Under strict mode a `deny` fact, which `query`
+        // and `why` see too.
+        let strict = l.cfg.unknowns == stack::Unknowns::Strict;
+        let collisions = if opts.collisions && !l.cfg.keys.is_empty() && !l.cfg.isolated {
+            let keys: Vec<String> = l.cfg.keys.iter().map(|(k, _)| k.clone()).collect();
+            lint::key_collisions(&res, backend.schema(), &keys, &self.deployment)
+        } else {
+            Vec::new()
+        };
+        if strict {
+            lint::deny_collisions(&mut res, &collisions);
+            violations.extend(collisions.iter().map(|c| c.text.clone()));
+        } else {
+            for c in &collisions {
+                obs.note(Note::Collision(c.text.clone()));
+            }
+        }
+        // Policy messages quote values and rule text: redacted.
+        let redact = Redactor::new(&res.facts, backend.schema());
+        for w in &res.warnings {
+            obs.note(Note::Policy(redact.text(w)));
+        }
+        let (compiled, policy) = if opts.blocking && !violations.is_empty() {
+            (Err(anyhow::anyhow!("blocked by constraints")), None)
+        } else {
+            let compiled = Compiled::of(&res, backend.schema());
+            // No plan when the resources do not compile: that is why.
+            let plan = |c: &Compiled| {
+                evaluator.plan(
+                    res.clone(),
+                    &violations,
+                    c.resources.clone(),
+                    &c.adopts,
+                    &c.lifecycle,
+                    &st,
+                )
+            };
+            let policy = match (&compiled, opts.policy) {
+                (Ok(c), true) => Some(plan(c)),
+                (Err(_), true) => Some(Compiled::of(&res, backend.schema()).and_then(|c| plan(&c))),
+                (_, false) => None,
+            };
+            (compiled, policy)
+        };
+        Ok(Evaluation {
+            located: self,
+            outputs,
+            st,
+            moves,
+            res,
+            violations,
+            collisions,
+            strict,
+            redact,
+            compiled,
+            policy,
+            evaluator,
+        })
+    }
+}
+
+/// Load, locate and evaluate the deployment `sel` selects of the program
+/// of `t`: read only.
+pub fn evaluate(
+    t: &Target,
+    sel: &Selection,
+    version: &str,
+    read: Reader,
+    s3: OpenS3,
+    opts: &Options,
+    obs: &mut dyn Observer,
+) -> Result<Evaluation> {
+    let located = load(t, version, read, obs)?.locate(sel, s3, obs)?;
+    let outputs = located.read_outputs(s3)?;
+    located.evaluate(outputs, opts, obs)
+}
+
+/// What `why` and `query` read, and an editor shows: the policy pass's
+/// evaluation, else (no plan could be made) the program's own.
+pub struct Explained {
+    pub res: EvalResult,
+    /// The program's violations and the denies over the plan.
+    pub violations: Vec<String>,
+    /// Why no plan could be made.
+    pub error: Option<anyhow::Error>,
+    pub redact: Redactor,
+}
+
+impl Evaluation {
+    pub fn schema(&self) -> &Schema {
+        self.evaluator.schema()
+    }
+
+    /// The evaluation to explain: the policy pass's when there is one,
+    /// with the collision lint's denies under strict mode.
+    pub fn explained(&mut self) -> Explained {
+        let mut violations = self.violations.clone();
+        let (mut res, error) = match self.policy.take() {
+            Some(Ok(p)) => {
+                violations.extend(p.denies);
+                (p.res, None)
+            }
+            Some(Err(e)) => (self.res.clone(), Some(e)),
+            None => (self.res.clone(), None),
+        };
+        if self.strict {
+            lint::deny_collisions(&mut res, &self.collisions);
+        }
+        let redact = Redactor::new(&res.facts, self.schema());
+        Explained {
+            res,
+            violations,
+            error,
+            redact,
+        }
+    }
+}
+
+/// How bad a problem is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Severity {
+    Error,
+    Warning,
+}
+
+/// Where a problem, or what it relates to, is.
+#[derive(Debug, Clone)]
+pub enum At {
+    /// A span of a source the loader registered.
+    Span(Span),
+    /// `file:line:col ...`, as a stated fact's provenance names it.
+    Place(String),
+    /// Nowhere more precise: the stack's own file, at its start.
+    Top,
+}
+
+/// By place: a span by where it is (`Span`'s own equality holds of any two).
+impl PartialEq for At {
+    fn eq(&self, other: &At) -> bool {
+        match (self, other) {
+            (At::Span(a), At::Span(b)) => a.same_place(b),
+            (At::Place(a), At::Place(b)) => a == b,
+            (At::Top, At::Top) => true,
+            _ => false,
+        }
+    }
+}
+
+/// An error or warning of an evaluation, where it is, what it relates to
+/// (the contributions a policy read), and the fixes it carries.
+#[derive(Debug, Clone)]
+pub struct Problem {
+    pub severity: Severity,
+    pub message: String,
+    pub at: At,
+    pub related: Vec<(At, String)>,
+    pub fixes: Vec<Fix>,
+}
+
+impl Problem {
+    pub fn top(severity: Severity, message: impl Into<String>) -> Problem {
+        Problem {
+            severity,
+            message: message.into(),
+            at: At::Top,
+            related: Vec::new(),
+            fixes: Vec::new(),
+        }
+    }
+
+    fn of_diagnostic(d: &Diagnostic) -> Problem {
+        let mut message = d.message.clone();
+        for n in &d.notes {
+            message.push_str(&format!("\nnote: {n}"));
+        }
+        if let Some(h) = &d.help {
+            message.push_str(&format!("\nhelp: {h}"));
+        }
+        Problem {
+            severity: Severity::Error,
+            message,
+            at: At::Span(d.span),
+            related: d
+                .labels
+                .iter()
+                .map(|(s, m)| (At::Span(*s), m.clone()))
+                .collect(),
+            fixes: d.fixes.clone(),
+        }
+    }
+}
+
+/// An error as problems: its diagnostics at their spans, with their
+/// fixes, else its text at the top of the stack's file.
+pub fn of_error(e: &anyhow::Error) -> Vec<Problem> {
+    match e.chain().find_map(|x| x.downcast_ref::<Diagnostics>()) {
+        Some(Diagnostics(ds)) => ds.iter().map(Problem::of_diagnostic).collect(),
+        None => vec![Problem::top(Severity::Error, format!("{e:#}"))],
+    }
+}
+
+impl Explained {
+    /// What `dform plan` refuses and warns of, where it is: every `deny`
+    /// and `warn` fact at the rule that derived it (the contributions it
+    /// reads as related), every violated constraint at the constraint, a
+    /// violation nothing accounts for (an input of the wrong type) at the
+    /// top, and why no plan could be made.
+    pub fn problems(&self, program: &Program) -> Vec<Problem> {
+        let mut out: Vec<Problem> = self.error.iter().flat_map(of_error).collect();
+        let constraints: BTreeSet<&str> = program
+            .statements
+            .iter()
+            .filter_map(|s| match s {
+                Stmt::Constraint(c) => Some(c.message.as_str()),
+                _ => None,
+            })
+            .collect();
+        let denied: BTreeSet<String> = self
+            .res
+            .facts
+            .iter()
+            .filter(|a| a.pred == "deny")
+            .filter_map(policy_text)
+            .collect();
+        for v in &self.violations {
+            if !constraints.contains(v.as_str()) && !denied.contains(v) {
+                out.push(Problem::top(Severity::Error, self.redact.text(v)));
+            }
+        }
+        for s in &program.statements {
+            if let Stmt::Constraint(c) = s
+                && self.violations.contains(&c.message)
+            {
+                out.push(Problem {
+                    severity: Severity::Error,
+                    message: format!("constraint violated: {}", c.message),
+                    at: At::Span(c.span),
+                    related: Vec::new(),
+                    fixes: Vec::new(),
+                });
+            }
+        }
+        for a in &self.res.facts {
+            let severity = match a.pred.as_str() {
+                "deny" => Severity::Error,
+                "warn" => Severity::Warning,
+                _ => continue,
+            };
+            let Some(text) = policy_text(a) else { continue };
+            let Some(id) = self.res.circuit.fact_id(&engine::circuit_fact(a)) else {
+                continue;
+            };
+            let (at, related) = provenance(&self.res, id);
+            out.push(Problem {
+                severity,
+                message: self.redact.text(&text),
+                at: at.unwrap_or(At::Top),
+                related,
+                fixes: Vec::new(),
+            });
+        }
+        out
+    }
+}
+
+/// A `deny` or `warn` fact as the evaluator words its violation (`engine`'s
+/// `format_policy_fact`).
+pub fn policy_text(a: &Atom) -> Option<String> {
+    let Some(Term::Val(Value::Str(msg))) = a.args.first() else {
+        return None;
+    };
+    match a.args.get(1) {
+        None => Some(msg.clone()),
+        Some(Term::Val(ctx)) => Some(format!(
+            "{msg} ctx={}",
+            serde_json::to_string(&engine::value_to_json(ctx)).ok()?
+        )),
+        Some(_) => None,
+    }
+}
+
+/// Where rule `id` (`r12`) of `res` is written, when it is.
+pub fn rule_span(res: &EvalResult, id: &str) -> Option<Span> {
+    let i: usize = id.strip_prefix('r')?.parse().ok()?;
+    let span = res.rules.get(i)?.head.span;
+    (!span.is_none()).then_some(span)
+}
+
+/// Where fact `id` comes from: the nearest rule (or stated fact) that is
+/// written somewhere, and the contributions of the attributes below it,
+/// each with its rank.
+pub fn provenance(res: &EvalResult, id: NodeId) -> (Option<At>, Vec<(At, String)>) {
+    let c = &res.circuit;
+    let mut at = None;
+    let mut related = Vec::new();
+    let mut seen = BTreeSet::new();
+    let mut queue = std::collections::VecDeque::from([(id, 0usize)]);
+    while let Some((n, depth)) = queue.pop_front() {
+        if depth > 8 || !seen.insert(n) || seen.len() > 400 {
+            continue;
+        }
+        let View::Fact { fact, alts, .. } = c.view(n) else {
+            continue;
+        };
+        let Some(&alt) = alts.first() else { continue };
+        let View::Times { children, .. } = c.view(alt) else {
+            continue;
+        };
+        let mut sigma = false;
+        for ch in children {
+            match c.view(*ch) {
+                View::Leaf(Leaf::Rule { id }) => {
+                    sigma = id.starts_with('Σ');
+                    if at.is_none()
+                        && let Some(s) = rule_span(res, id)
+                    {
+                        at = Some(At::Span(s));
+                    }
+                }
+                View::Leaf(Leaf::Base { span }) if at.is_none() => {
+                    at = Some(At::Place(span.clone()));
+                }
+                _ => {}
+            }
+        }
+        for ch in children {
+            if let View::Fact { fact: f, .. } = c.view(*ch) {
+                if sigma && let Some(w) = written(res, *ch) {
+                    let rank = match f.args.get(4) {
+                        Some(Value::Str(r)) => r.clone(),
+                        _ => "?".into(),
+                    };
+                    let what = format!(
+                        "contribution to {}.{} .{} at rank {rank}",
+                        text_of(fact.args.first()),
+                        text_of(fact.args.get(1)),
+                        text_of(fact.args.get(2)),
+                    );
+                    if !related.iter().any(|(x, _)| *x == w) {
+                        related.push((w, what));
+                    }
+                }
+                queue.push_back((*ch, depth + 1));
+            }
+        }
+    }
+    (at, related)
+}
+
+/// Where the firings of fact `id` are written: its first rule or stated
+/// fact that has a place.
+pub fn written(res: &EvalResult, id: NodeId) -> Option<At> {
+    let c = &res.circuit;
+    let View::Fact { alts, .. } = c.view(id) else {
+        return None;
+    };
+    for a in alts {
+        let View::Times { children, .. } = c.view(*a) else {
+            continue;
+        };
+        for ch in children {
+            match c.view(*ch) {
+                View::Leaf(Leaf::Rule { id }) => {
+                    if let Some(s) = rule_span(res, id) {
+                        return Some(At::Span(s));
+                    }
+                }
+                View::Leaf(Leaf::Base { span }) => return Some(At::Place(span.clone())),
+                _ => {}
+            }
+        }
+    }
+    None
+}
+
+fn text_of(v: Option<&Value>) -> String {
+    match v {
+        Some(Value::Str(s)) => s.clone(),
+        Some(v) => crate::partition::fmt_value(v),
+        None => String::new(),
+    }
+}
+
+/// A value as `--set` and a key value read it: a bool, an integer, else a
+/// string.
+pub fn value_of(raw: &str) -> Value {
+    if raw == "true" {
+        Value::Bool(true)
+    } else if raw == "false" {
+        Value::Bool(false)
+    } else if let Ok(i) = raw.parse::<i64>() {
+        Value::Int(i)
+    } else {
+        Value::Str(raw.to_string())
+    }
+}
+
+/// The manifest's `unknowns` default, said in the program's stack
+/// statement when it does not say its own: strict mode is the program's
+/// (`transform::STRICT_RULES`).
+fn with_default_unknowns(program: &mut Program, m: &Manifest) {
+    let Some(u) = &m.defaults.unknowns else {
+        return;
+    };
+    for s in &mut program.statements {
+        if let Stmt::Stack(c) = s
+            && !c.config.iter().any(|(k, _, _)| k == "unknowns")
+        {
+            c.config
+                .push(("unknowns".into(), Term::Val(Value::Str(u.clone())), c.span));
+        }
+    }
+}
+
+/// The manifest under the program's own statements: a provider named
+/// without a `source` takes the manifest's entry of that name, and a stack
+/// statement that does not say its backend takes the manifest's default.
+pub fn with_manifest(cfg: &mut stack::Stack, m: &Manifest, file: &Path) {
+    for p in &mut cfg.providers {
+        if !p.contains('/')
+            && let Some(src) = m.provider_source(p)
+        {
+            *p = src;
+        }
+    }
+    let name = cfg.name.clone().unwrap_or_else(|| state::stack_name(file));
+    if cfg.backend.is_none() {
+        cfg.backend = m.backend(&name);
+    }
+}
+
+/// The keys of the program's own `input("k", v)` facts.
+pub fn input_fact_keys(program: &Program) -> BTreeSet<String> {
+    program
+        .statements
+        .iter()
+        .filter_map(|s| match s {
+            Stmt::Fact(a) if a.pred == "input" => match a.args.first() {
+                Some(Term::Val(Value::Str(k))) => Some(k.clone()),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect()
+}
+
+/// `inventory`, else `<world dir>/inventory.json` when a world fixture is
+/// given and that file exists, else `default`.
+fn inventory(explicit: &Option<PathBuf>, world: &Option<PathBuf>, default: &Path) -> PathBuf {
+    if let Some(p) = explicit {
+        return p.clone();
+    }
+    if let Some(w) = world {
+        let dir = w.parent().unwrap_or_else(|| Path::new("."));
+        let candidate = dir.join("inventory.json");
+        if candidate.exists() {
+            return candidate;
+        }
+    }
+    default.to_path_buf()
+}
+
+/// The providers the program configures itself: the constant names of
+/// its `provider_config(Name, Settings)` facts and rules.
+fn provider_configs(program: &Program) -> BTreeSet<String> {
+    program
+        .statements
+        .iter()
+        .filter_map(|st| match st {
+            Stmt::Fact(a) => Some(a),
+            Stmt::Rule(r) => Some(&r.head),
+            _ => None,
+        })
+        .filter(|a| a.pred == "provider_config")
+        .filter_map(|a| match a.args.first() {
+            Some(Term::Val(Value::Str(n))) => Some(n.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The types the program reads of the discovery inventory, when every read
+/// names its type; `None`: all of them.
+fn world_types(lowered: Option<&transform::Lowered>) -> Option<BTreeSet<String>> {
+    let mut out = BTreeSet::new();
+    for st in &lowered?.program.statements {
+        let body = match st {
+            Stmt::Rule(r) => &r.body,
+            Stmt::Constraint(c) => &c.body,
+            _ => continue,
+        };
+        for l in body {
+            let (Lit::Pos(a) | Lit::Not(a)) = l else {
+                continue;
+            };
+            if !plugin::providers::INVENTORY
+                .iter()
+                .any(|(p, _)| *p == a.pred)
+            {
+                continue;
+            }
+            match a.args.first() {
+                Some(Term::Val(Value::Str(t))) => {
+                    out.insert(t.clone());
+                }
+                _ => return None,
+            }
+        }
+    }
+    Some(out)
+}
+
+/// The types whose schema and catalog the run asks for: those the program
+/// names, given its facts, and those state has objects of; `None`: all.
+fn catalog_scope(
+    program: &Program,
+    given: &[Atom],
+    discovered: &[Atom],
+    st: &State,
+) -> Option<BTreeSet<String>> {
+    let lowered = transform::lower(program).ok()?;
+    let facts: Vec<Atom> = given.iter().chain(discovered).cloned().collect();
+    let mut named = schema::named_types(&lowered.program, &facts)?;
+    named.extend(
+        st.resources
+            .keys()
+            .chain(st.deposed.keys())
+            .chain(st.uncertain.keys())
+            .filter_map(|k| state::parse_key(k).map(|a| a.typ)),
+    );
+    Some(named)
+}
+
+/// Where a stack's deployments are: its backend's location, else its
+/// directory under the state root.
+pub fn stack_location(root: &Path, stack: &str, backend: Option<&stack::Backend>) -> Location {
+    match backend {
+        Some(stack::Backend::Local(dir)) => Location::Local(state::local_dir(root, dir)),
+        Some(stack::Backend::S3(spec)) => Location::S3(spec.clone()),
+        None => Location::Local(root.join(stack)),
+    }
+}

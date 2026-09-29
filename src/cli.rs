@@ -5,6 +5,7 @@ use crate::ast::Atom;
 use crate::ast::Term;
 use crate::chaos::Chaos;
 use crate::controller;
+use crate::deployment::{self, Planned};
 use crate::engine;
 use crate::executor;
 use crate::graph;
@@ -1048,87 +1049,50 @@ fn run_with(
     if files.is_empty() {
         bail!("internal: a run with no program");
     }
-    // The program's project's manifest (a plan file's program's, too).
-    if let Some(root) = crate::project::manifest_root(&files[0]) {
-        cli.manifest = Some(crate::project::Manifest::load(
-            &root.join(crate::project::MANIFEST),
-            env!("CARGO_PKG_VERSION"),
-        )?);
-    }
-    let mut program = loader::load_program(&files)?;
-    // Input relations: declared, and stated as their sources hold them now.
-    let relations = watch::take(&mut program)?;
-    if let Some(h) = hook.as_deref_mut() {
-        h.inputs(&relations);
-    }
-    program.statements.extend(watch::read(&relations)?);
+    // The program, as `deployment::load` reads it: its input relations
+    // read, the scenario selected, the input files' facts added; `stack`
+    // and `provider` statements over the manifest's defaults, `--provider`
+    // over the latter.
+    let target = deployment::Target {
+        files: files.clone(),
+        scenario: match &cli.cmd {
+            Cmd::Plan { scenario, .. } => scenario.clone(),
+            _ => None,
+        },
+        scenario_optional: false,
+        input_files: cli.input_files.clone(),
+        providers: cli.providers.clone(),
+    };
+    let loaded = deployment::load(
+        &target,
+        env!("CARGO_PKG_VERSION"),
+        &|p: &Path| std::fs::read_to_string(p),
+        &mut Watch::new(hook.as_deref_mut(), &cli.cmd),
+    )?;
+    cli.manifest = loaded.manifest.clone();
     // The commit each git input relation's ref names: a plan file pins them.
-    let pinned = pinned_commits(&relations);
-    if let Cmd::Plan {
-        scenario: Some(name),
-        ..
-    } = &cli.cmd
-    {
-        program = crate::scenario::select(&program, name)?;
-    }
-    // `stack` and `provider` statements, over the manifest's defaults;
-    // `--provider` overrides the latter.
-    if let Some(m) = &cli.manifest {
-        with_default_unknowns(&mut program, m);
-    }
-    let mut stack_cfg = crate::stack::config(&program)?;
-    if let Some(m) = &cli.manifest {
-        with_manifest(&mut stack_cfg, m, &files[0]);
-    }
+    let pinned = pinned_commits(&loaded.relations);
     // A key's value is the target's, else its input's default.
-    let own = stack_cfg
-        .name
-        .clone()
-        .unwrap_or_else(|| state::stack_name(&files[0]));
-    check_keys(&cli, &stack_cfg, &own)?;
+    check_keys(&cli, &loaded.cfg, &loaded.stack)?;
     // `stack rekey`: the run is of the old deployment (its state, its
     // world), the provenance of its names is listed, and its state moves.
     let rekey = match cli.cmd.clone() {
         Cmd::Rekey { stack, pairs } => {
-            Some(rekey_args(&mut cli, &stack_cfg, &files, &stack, &pairs)?)
+            Some(rekey_args(&mut cli, &loaded.cfg, &files, &stack, &pairs)?)
         }
         _ => None,
     };
-    let providers = if cli.providers.is_empty() {
-        stack_cfg.providers.clone()
-    } else {
-        cli.providers.clone()
-    };
-    // The stack's and the instances' typed inputs, when the program lowers
-    // (when it does not, evaluation reports why).
-    let lowered = crate::transform::lower(&program).ok();
-    let declared = lowered
-        .as_ref()
-        .map(|l| l.inputs.clone())
-        .unwrap_or_default();
-    // An input a fact of the program gives (a scenario's `with k = v`).
-    let mut given: BTreeSet<String> = input_fact_keys(&program);
-    for f in &cli.input_files {
-        let src = std::fs::read_to_string(f)
-            .map_err(|e| anyhow::anyhow!("read --input-file {}: {e}", f.display()))?;
-        let facts = crate::parser::parse_file(&f.display().to_string(), &src)?;
-        let stmts = inputs::file_stmts(&facts, &declared)?;
-        given.extend(facts.statements.iter().filter_map(|s| match s {
-            crate::ast::Stmt::Fact(a) => Some(a.pred.clone()),
-            _ => None,
-        }));
-        program.statements.extend(stmts);
-    }
+    let providers = loaded.providers.clone();
     if let Cmd::Test = cli.cmd {
-        return run_tests(&program, &providers, &cli, &files);
+        return run_tests(&loaded.program, &providers, &cli, &files);
     }
     if let Cmd::Strata = cli.cmd {
-        return print_strata(&files, &program, &load_schema(&providers)?);
+        return print_strata(&files, &loaded.program, &load_schema(&providers)?);
     }
     if let Cmd::Graph { what: Some(w) } = &cli.cmd
         && w == "strata"
     {
-        let graph = partition::build(&program, &load_schema(&providers)?)?;
+        let graph = partition::build(&loaded.program, &load_schema(&providers)?)?;
         return match partition::stratify(&graph) {
             partition::Verdict::Stratified { strata } => {
                 print!("{}", graph::strata(&graph, Some(&strata)));
@@ -1144,86 +1108,12 @@ fn run_with(
         };
     }
 
-    let set_keys: Vec<String> = cli
+    let root = cli.root.clone();
+    let set = cli
         .set
         .iter()
-        .filter_map(|kv| kv.split_once('=').map(|(k, _)| k.to_string()))
-        .collect();
-    for w in crate::lint::lint(&program, &set_keys) {
-        eprintln!("warning: {w}");
-    }
-    // Every evaluation carries the rules that derive the lifecycle denies
-    // from the deformation the planner hands back (`zset::POLICY_RULES`).
-    let program = zset::with_policy_rules(program)?;
-
-    let root = cli.root.clone();
-    let stack = stack_cfg
-        .name
-        .clone()
-        .unwrap_or_else(|| state::stack_name(&files[0]));
-    let mut set = Vec::new();
-    for kv in &cli.set {
-        let (k, v) = split_kv(kv)?;
-        given.insert(k.to_string());
-        set.push((k.to_string(), v));
-    }
-    let set_facts = inputs::set_facts(&declared, &set)?;
-    // The deployment this run is of: the stack, or one value of its key.
-    let instance = match &rekey {
-        Some(r) => r.from.clone(),
-        None => crate::stack::instance(&stack_cfg, &stack, &program, &set_facts)?,
-    };
-    let deployment = instance.name();
-    // A command that only reads or moves the deployment's own objects
-    // needs its key (above), not the program's other inputs.
-    let objects_only = matches!(
-        cli.cmd,
-        Cmd::StateShow | Cmd::StateMv { .. } | Cmd::Log { .. } | Cmd::Unlock
-    );
-    if !objects_only {
-        inputs::check_required(&declared, &given)?;
-    }
-    // A keyed stack's plan and apply say first which deployment they are
-    // of, and which of its key values are defaults.
-    let text_plan = matches!(cli.cmd, Cmd::Plan { json: false, .. });
-    if !instance.key.is_empty()
-        && hook.is_none()
-        && (text_plan || matches!(cli.cmd, Cmd::Apply { .. }))
-    {
-        println!("deployment: {}", instance.describe());
-    }
-    // Where the stack's deployments are (its backend's, else the state
-    // root's), and this one's objects: there, or where it was handed over
-    // to. A `--world` fixture's are beside it.
-    let base = stack_location(&root, &stack, stack_cfg.backend.as_ref());
-    // The deployment's own directory under the state root: its world's
-    // when its state is in a bucket (the world is the provider's).
-    let home = instance.dir(&root.join(&stack));
-    let handed = match &cli.world {
-        None => crate::stack::handed_over(&root, &deployment)?,
-        Some(_) => None,
-    };
-    let location = match &handed {
-        Some((_, loc)) => loc.clone(),
-        None => base.child(instance.segment().as_deref()),
-    };
-    let mut paths = match &cli.world {
-        Some(w) => state::world_paths(&root, w),
-        None => state::StackPaths {
-            state: match &location {
-                store::Location::Local(dir) => state::state_path(dir),
-                store::Location::S3(_) => state::state_path(&home),
-            },
-            world: crate::stack::world_file(&location, &home),
-            inventory: root.join("inventory.json"),
-        },
-    };
-    paths.inventory = resolve_inventory(&cli.inventory, &cli.world, &paths.inventory);
-    let times = cli
-        .manifest
-        .as_ref()
-        .map(|m| m.lease_times())
-        .unwrap_or_default();
+        .map(|kv| split_kv(kv).map(|(k, v)| (k.to_string(), v)))
+        .collect::<Result<Vec<_>>>()?;
     // A run that writes the deployment's objects checks first that a
     // bucket keeps the conditions of a write; a plan only reads.
     let writes = hook.is_some()
@@ -1235,12 +1125,41 @@ fn run_with(
                 | Cmd::Unlock
                 | Cmd::Rekey { .. }
         );
-    let dep = match &cli.world {
-        Some(_) => store::Deployment::local(&paths.state, &deployment),
-        None => store::Deployment::new(location.open(&open_s3(&root, writes))?, &deployment, times),
-    };
+    // The deployment this run is of: the stack, or one value of its key
+    // (rekey's old one), and where its objects are. A command that only
+    // reads or moves them needs its key, not the program's other inputs.
+    let located = loaded.locate(
+        &deployment::Selection {
+            root: root.clone(),
+            set,
+            instance: rekey.as_ref().map(|r| r.from.clone()),
+            world: cli.world.clone(),
+            inventory: cli.inventory.clone(),
+            objects_only: matches!(
+                cli.cmd,
+                Cmd::StateShow | Cmd::StateMv { .. } | Cmd::Log { .. } | Cmd::Unlock
+            ),
+        },
+        &open_s3(&root, writes),
+        &mut Watch::new(hook.as_deref_mut(), &cli.cmd),
+    )?;
+    let deployment = located.deployment.clone();
+    // A keyed stack's plan and apply say first which deployment they are
+    // of, and which of its key values are defaults.
+    let text_plan = matches!(cli.cmd, Cmd::Plan { json: false, .. });
+    if !located.instance.key.is_empty()
+        && hook.is_none()
+        && (text_plan || matches!(cli.cmd, Cmd::Apply { .. }))
+    {
+        println!("deployment: {}", located.instance.describe());
+    }
+    let dep = located.dep.clone();
     // The deployment's audit log, beside its state.
-    let audit = dep.audit(cli.audit_sink.clone().or(stack_cfg.audit_sink.clone()));
+    let audit = dep.audit(
+        cli.audit_sink
+            .clone()
+            .or(located.loaded.cfg.audit_sink.clone()),
+    );
     match &cli.cmd {
         Cmd::Log {
             verify,
@@ -1267,35 +1186,17 @@ fn run_with(
         }
         _ => None,
     };
-    let secret_inputs: BTreeSet<String> = declared
+    let secret_inputs: BTreeSet<String> = located
+        .loaded
+        .declared
         .iter()
         .filter(|d| d.scope.is_empty())
         .filter(|d| matches!(&d.decl.ty, crate::ast::TypeExpr::Apply(n, _) if n == "secret"))
         .map(|d| d.decl.name.clone())
         .collect();
-    // Other stacks' published outputs: each deployment the program names,
-    // of the project (every registered one, when it names one by a
-    // variable) or of a remote, through its backend. Read once, as facts;
-    // a plan file records their digests, and an apply of it refuses when
-    // one moved.
-    let (named, any_name) = lowered
-        .as_ref()
-        .map(|l| crate::stack::named_outputs(&l.program))
-        .unwrap_or_default();
-    let remotes = cli
-        .manifest
-        .as_ref()
-        .map(|m| m.remotes())
-        .unwrap_or_default();
-    let read_outputs = crate::stack::stack_outputs(
-        &root,
-        &deployment,
-        (!any_name).then_some(&named),
-        &remotes,
-        &open_s3(&root, false),
-    )?;
-    let secret_outputs = crate::stack::secret_outputs(&read_outputs);
-    let held = crate::stack::held(&read_outputs);
+    // Other stacks' published outputs, read once, as facts; a plan file
+    // records their digests, and an apply of it refuses when one moved.
+    let read_outputs = located.read_outputs(&open_s3(&root, false))?;
     let outputs_read: Vec<zset::file::OutputsDigest> = read_outputs
         .iter()
         .map(|r| zset::file::OutputsDigest {
@@ -1339,14 +1240,18 @@ fn run_with(
         }
     }
     if let Some(h) = hook.as_deref_mut() {
-        if stack_cfg.bootstrap {
+        if located.loaded.cfg.bootstrap {
             bail!(
                 "stack {deployment} is role = bootstrap: it stays batch, and the controller never runs it"
             );
         }
         h.audit = Some(audit.clone());
-        h.open(&dep, &paths.world, root.parent().unwrap_or(Path::new("")))?;
-    } else if let (Cmd::Apply { .. }, Some((to, _))) = (&cli.cmd, &handed) {
+        h.open(
+            &dep,
+            &located.paths.world,
+            root.parent().unwrap_or(Path::new("")),
+        )?;
+    } else if let (Cmd::Apply { .. }, Some((to, _))) = (&cli.cmd, &located.handed) {
         bail!(
             "stack {deployment} was handed over to {to}: the controller runs it \
              (`dform controller run {deployment}`), not a batch apply"
@@ -1358,224 +1263,62 @@ fn run_with(
     };
     // Chaos `stop-after`: the executor's, counted across the run's ticks.
     let stop_after = chaos.stop_after.map(std::cell::Cell::new);
-    let chaos_specs = match &cli.cmd {
-        Cmd::Apply { chaos, .. } => chaos.clone(),
-        _ => Vec::new(),
-    };
     // What providers and trust roots fetch is cached in the state root's
     // cache/, a world fixture's beside it.
     let cache = match &cli.world {
         Some(w) => w.parent().unwrap_or(Path::new("")).to_path_buf(),
         None => root.join("cache"),
     };
-    // The schema is asked for once the run knows the types it names.
     let existing_key = match &key {
         None => dep.existing_plan_key()?,
         Some(_) => None,
     };
-    let backend = Providers::start_deferred(
-        launch(),
-        &providers,
-        &plugin::Config {
-            world: paths.world.clone(),
-            inventory: paths.inventory.clone(),
-            chaos: chaos_specs,
-            cache: cli.world.is_none().then(|| cache.clone()),
-            configured: provider_configs(&program),
-            stack: deployment.clone(),
-            blocks: stack_cfg.provider_blocks.clone(),
-            // A plan that makes no key digests with the one there is.
-            digest_key: match &key {
-                Some(k) => Some(k),
-                None => existing_key.as_ref(),
-            }
-            .map(|k| k.derive("provider digest").to_hex()),
-            held: held.clone(),
-            worlds: read_outputs
-                .iter()
-                .filter(|r| held.values().any(|h| h.deployment == r.name))
-                .filter_map(|r| Some((r.name.clone(), r.world.clone()?)))
-                .collect(),
+    // query and why read the policy pass, so a deny over the plan can be
+    // asked for and explained; a plan prints what it would do, conflicts
+    // included (E §2.8: a conflict is a fact, not an abort), and then
+    // refuses. Any other run is blocked by a violation.
+    let explains = matches!(cli.cmd, Cmd::Query { .. } | Cmd::Why { .. });
+    let opts = deployment::Options {
+        launch: launch(),
+        data: build_extra_facts(&cli.data)?,
+        chaos: match &cli.cmd {
+            Cmd::Apply { chaos, .. } => chaos.clone(),
+            _ => Vec::new(),
         },
-    )?;
-    // Externs are asked on demand: a table's of its file, else of the file
-    // provider, else of the mock.
-    let (no_program, no_fns) = (crate::ast::Program { statements: vec![] }, vec![]);
-    let program_dir = crate::project::base_of(&files[0]);
-    let tables = crate::tables::Tables::default();
-    let externs = crate::externs::Externs::new(
-        lowered.as_ref().map_or(&no_program, |l| &l.program),
-        lowered.as_ref().map_or(&no_fns, |l| &l.extern_fns),
-        |f, inputs| {
-            if let Some(r) = tables.answer(f, inputs) {
-                return r;
-            }
-            if let Some(r) = crate::externs::file(f, inputs, &program_dir) {
-                return r;
-            }
-            if let Some(r) = crate::externs::env_var(f, inputs) {
-                return r;
-            }
-            backend.query_extern(f, inputs)
-        },
-    );
-
-    let mut st = dep.load_state()?;
-    // What the plan file read, then what state persisted, before asking.
-    if let Some((_, saved)) = &saved {
-        externs.preload(saved.externs.clone());
-    }
-    externs.preload_persisted(st.externs.clone());
-    // A persisted secret is replayed by where it is held, never its value.
-    for a in &st.externs {
-        backend.hold(&a.held);
-    }
-
-    let mut base_extra = set_facts;
-    base_extra.extend(build_extra_facts(&cli.data)?);
-    base_extra.extend(crate::stack::output_facts(&read_outputs));
-    // The manifest, as facts policy may read.
-    if let Some(m) = &cli.manifest {
-        base_extra.extend(m.facts());
-    }
-    let discovered = backend.discover(world_types(&cli.cmd, lowered.as_ref()).as_ref())?;
-    let scope = catalog_scope(&cli.cmd, &program, &base_extra, &discovered, &st);
-    backend.load_schema(scope.as_ref())?;
-    // What a run plans, its providers declare: a type none does would be
-    // handed to one that knows nothing of it.
-    if matches!(cli.cmd, Cmd::Plan { .. } | Cmd::Apply { .. }) || hook.is_some() {
-        backend.check_types(&program, &providers)?;
-    }
-    // A provider configured from what it serves itself is a cycle.
-    if let Some(l) = &lowered {
-        backend.check_configuration(&l.program, &l.extern_fns, |p| {
-            p == crate::syntax::resolve::ENV_VAR
-                || p.starts_with("file.")
-                || crate::tables::describe(p).is_some()
-        })?;
-    }
-    // Apply calls whose answer was lost, resolved before anything is
-    // planned: a plan sees what they did (`apply` writes it down).
-    for line in executor::resolve_uncertain(&backend, &mut st)? {
-        eprintln!("resolved: {line}");
-    }
-    // The static secret pass and the refinement checks (a literal that
-    // violates one, E0306), against the provider's schema.
-    if let Some(l) = &lowered {
-        crate::secrets::check(l, backend.schema(), &secret_outputs)?;
-        crate::refine::check(&l.program, backend.schema())?;
-    }
-    // An `expect_account` a secret reaches is named by its label.
-    let secret_accounts = lowered
-        .as_ref()
-        .map(|l| crate::secrets::secret_expected_accounts(l, backend.schema(), &secret_outputs))
-        .unwrap_or_default();
-    base_extra.extend(backend.catalog(scope.as_ref())?);
-    base_extra.extend(discovered);
-    if let Some(h) = hook.as_deref_mut() {
-        base_extra.extend(h.drift_facts(&backend.stored_world(&backend.observe(&st)?)));
-    }
-    // Refresh as facts: round 0 resolves every null the world can answer,
-    // except those of `withheld` addresses (being replaced). `more`: the
-    // deformation facts of a policy pass, which continues the last
-    // evaluation over the same facts from the first stratum that reads
-    // them (`engine::Resumable`); `why` labels them as the plan's, of apply
-    // tick `tick` (`None`: of `plan`).
-    let last: std::cell::RefCell<Option<(Vec<Atom>, engine::Resumable)>> = Default::default();
-    let evaluate_with = |st: &state::State,
-                         withheld: &BTreeSet<ir::Address>,
-                         more: &[Atom],
-                         tick: Option<usize>|
-     -> Result<(engine::EvalResult, Vec<String>)> {
-        let mut extra = base_extra.clone();
-        extra.extend(executor::withhold(backend.world_facts(st)?, withheld));
-        let (res, mut violations) = if more.is_empty() {
-            let (mut res, mut violations, mut resumable) =
-                externs.eval_resumable(&program, &extra, zset::POLICY_INPUTS)?;
-            // A provider the program configures, its settings now known,
-            // is configured, and what it serves read again.
-            if backend.configure_from(&res.facts)? {
-                extra = base_extra.clone();
-                extra.extend(executor::withhold(backend.world_facts(st)?, withheld));
-                (res, violations, resumable) =
-                    externs.eval_resumable(&program, &extra, zset::POLICY_INPUTS)?;
-            }
-            // Each provider reaches the account the program expects of it
-            // (`expect_account`), or nothing is planned.
-            backend
-                .check_accounts(&res.facts, &secret_accounts)
-                .with_context(|| format!("deployment {deployment}"))?;
-            *last.borrow_mut() = Some((extra, resumable));
-            (res, violations)
-        } else {
-            let resumed = match &*last.borrow() {
-                Some((seen, resumable)) if *seen == extra => Some(resumable.with_at(more, tick)?),
-                _ => None,
-            };
-            match resumed {
-                Some((res, violations)) if externs.settle(&res.facts)? => (res, violations),
-                _ => {
-                    // A new extern call: the answers the resumable was
-                    // taken with are not all of them any more.
-                    *last.borrow_mut() = None;
-                    extra.extend(more.iter().cloned());
-                    externs.eval_at(&program, &extra, tick)?
-                }
-            }
-        };
-        violations.extend(inputs::violations(&res.facts, &declared));
-        Ok((res, violations))
-    };
-    let evaluate = |st: &state::State| evaluate_with(st, &BTreeSet::new(), &[], None);
-    let (mut res, mut violations) = evaluate(&st)?;
-    // moved/3 rewrites state's identity before the diff (E §3.4); round 0
-    // must see the new addresses, so the program is evaluated again.
-    let moves = st.apply_moves(&zset::Lifecycle::from_facts(&res.facts, backend.schema())?.moved);
-    if !moves.is_empty() {
-        (res, violations) = evaluate(&st)?;
-    }
-    // The tables' sources, for the controller; a git table whose ref has
-    // moved since the deployment was last applied says so.
-    if let Some(h) = hook.as_deref_mut() {
-        h.tables(&tables.sources());
-    }
-    if matches!(cli.cmd, Cmd::Plan { .. } | Cmd::Apply { .. }) {
-        for m in crate::tables::moved(&st.externs, &externs.recorded()) {
-            match hook {
-                Some(_) => controller::log(format_args!("{m}")),
-                None => println!("{m}"),
-            }
+        cache: cli.world.is_none().then(|| cache.clone()),
+        // A plan that makes no key digests with the one there is.
+        digest_key: match &key {
+            Some(k) => Some(k),
+            None => existing_key.as_ref(),
         }
-    }
-    // Policy messages quote values and rule text: printed redacted.
-    // The collision lint of a keyed stack: a name every deployment writes
-    // the same. Under strict mode a `deny` fact, which `query` and `why`
-    // see too.
-    let strict = stack_cfg.unknowns == crate::stack::Unknowns::Strict;
-    let collisions = if !stack_cfg.keys.is_empty()
-        && !stack_cfg.isolated
-        && matches!(
+        .map(|k| k.derive("provider digest").to_hex()),
+        recorded: saved
+            .as_ref()
+            .map(|(_, f)| f.externs.clone())
+            .unwrap_or_default(),
+        // What a run plans, its providers declare.
+        check_types: matches!(cli.cmd, Cmd::Plan { .. } | Cmd::Apply { .. }) || hook.is_some(),
+        discover_all: explains,
+        whole_schema: match &cli.cmd {
+            Cmd::Query { pattern, .. } | Cmd::Why { pattern, .. } => reads_schema(pattern),
+            _ => false,
+        },
+        collisions: matches!(
             cli.cmd,
             Cmd::Plan { .. } | Cmd::Apply { .. } | Cmd::Query { .. } | Cmd::Why { .. }
-        ) {
-        let keys: Vec<String> = stack_cfg.keys.iter().map(|(k, _)| k.clone()).collect();
-        crate::lint::key_collisions(&res, backend.schema(), &keys, &deployment)
-    } else {
-        Vec::new()
+        ),
+        blocking: !matches!(
+            cli.cmd,
+            Cmd::Plan { .. } | Cmd::Query { .. } | Cmd::Why { .. } | Cmd::Rekey { .. }
+        ),
+        policy: explains || matches!(cli.cmd, Cmd::Plan { .. }),
     };
-    if strict {
-        crate::lint::deny_collisions(&mut res, &collisions);
-        violations.extend(collisions.iter().map(|c| c.text.clone()));
-    } else if matches!(cli.cmd, Cmd::Plan { .. } | Cmd::Apply { .. }) {
-        for c in &collisions {
-            eprintln!("warning: {}", c.text);
-        }
-    }
-    let redact = query::Redactor::new(&res.facts, backend.schema());
-    for w in &res.warnings {
-        eprintln!("warning: {}", redact.text(w));
-    }
-    let blocked = |violations: &[String]| -> Result<()> {
+    let mut ev = located.evaluate(
+        read_outputs,
+        &opts,
+        &mut Watch::new(hook.as_deref_mut(), &cli.cmd),
+    )?;
+    let blocked = |violations: &[String], redact: &query::Redactor| -> Result<()> {
         if violations.is_empty() {
             return Ok(());
         }
@@ -1585,113 +1328,57 @@ fn run_with(
         }
         bail!("blocked by constraints");
     };
-    // A plan prints what it would do, conflicts included (E §2.8: a
-    // conflict is a fact, not an abort), and then refuses; query and why
-    // explain what blocks it.
-    if !matches!(
-        cli.cmd,
-        Cmd::Plan { .. } | Cmd::Query { .. } | Cmd::Why { .. } | Cmd::Rekey { .. }
-    ) {
-        blocked(&violations)?;
+    if opts.blocking {
+        blocked(&ev.violations, &ev.redact)?;
     }
-
-    let resources = ir::compile_resources(res.facts.iter().cloned(), backend.schema())?;
-    let adopts = ir::compile_adopts(res.facts.iter())?;
-    let lifecycle = zset::Lifecycle::from_facts(&res.facts, backend.schema())?;
+    if explains {
+        let x = ev.explained();
+        match &cli.cmd {
+            Cmd::Query { pattern, json } => print_query(pattern, &x.res.facts, &x.redact, *json)?,
+            Cmd::Why { pattern, all } => why_tree(pattern, *all, &x.res, &x.redact)?,
+            _ => unreachable!("explains is query or why"),
+        }
+        return Ok(());
+    }
+    let deployment::Evaluation {
+        located,
+        mut st,
+        moves,
+        res,
+        violations,
+        redact,
+        compiled,
+        mut policy,
+        evaluator,
+        ..
+    } = ev;
+    let deployment::Compiled {
+        resources,
+        adopts,
+        lifecycle,
+    } = compiled?;
+    let backend = &*evaluator.backend;
+    let externs = &evaluator.externs;
+    let program = &evaluator.program;
     let schema = backend.schema();
-    // The provider's plan for this evaluation (whose violations are
-    // `violations`), and the policy over it. A replace makes a new object,
-    // so the nulls that named the old one are retracted (`executor`): the
-    // program is evaluated again without the replaced identities, and what
-    // reads them is held until the replacement exists. Then the policy pass
-    // (E §2.8): the plan's deformations go back to the evaluator as facts
-    // and the program is evaluated once more; the denies it derives beyond
-    // the plan's own evaluation are the denies over the plan. Returns that
-    // evaluation, the documents the plan was taken from, the plan, its
-    // sections and the denies.
+    let stack = &located.loaded.stack;
+    let stack_cfg = &located.loaded.cfg;
+    let instance = &located.instance;
+    let location = &located.location;
+    let times = located.times;
+    let evaluate_with =
+        |st: &state::State,
+         withheld: &BTreeSet<ir::Address>,
+         more: &[Atom],
+         tick: Option<usize>| { evaluator.evaluate_with(st, withheld, more, tick) };
+    let evaluate = |st: &state::State| evaluator.evaluate(st);
     let plan_for = |res: engine::EvalResult,
                     violations: &[String],
                     resources: Vec<ir::Resource>,
                     adopts: &[ir::Adopt],
                     lifecycle: &zset::Lifecycle,
-                    st: &state::State|
-     -> Result<Planned> {
-        let mut plan = backend.plan(&resources, adopts, lifecycle, st)?;
-        let replaced = executor::replaced(&plan);
-        let (res, violations, resources) = if replaced.is_empty() {
-            (res, violations.to_vec(), resources)
-        } else {
-            let (again, violations) = evaluate_with(st, &replaced, &[], None)?;
-            let docs = ir::compile_resources(again.facts.iter().cloned(), schema)?;
-            plan = backend.plan_retracting(&docs, adopts, lifecycle, st, &replaced)?;
-            executor::hold_dependents(&mut plan, &docs, &replaced);
-            (again, violations, docs)
-        };
-        let sections = plan_sections(&res, &resources, schema);
-        executor::hold_deposed(&mut plan, &resources, &sections);
-        // The resource rules that may derive after a boundary (pending
-        // groups), for strict mode.
-        let may_derive: Vec<Atom> = res
-            .may_derive
-            .iter()
-            .filter(|m| m.head.pred == "want")
-            .map(|m| m.fact())
-            .collect();
-        drop(res);
-        let observed = backend.observe(st)?;
-        let before = observed
-            .iter()
-            .map(|(a, d)| (a.clone(), Some(d.clone())))
-            .collect();
-        let mut facts = zset::deformation_facts(
-            plan.actions.iter().filter_map(|a| {
-                let held = waits_on(a, &sections).is_some();
-                Some((zset::deformation_kind(&a.kind, held)?, &a.addr))
-            }),
-            &before,
-            &observed,
-        );
-        facts.extend(may_derive);
-        let (res, all) = evaluate_with(st, &replaced, &facts, None)?;
-        let again = ir::compile_resources(res.facts.iter().cloned(), schema)?;
-        if again.len() != resources.len()
-            || again
-                .iter()
-                .zip(&resources)
-                .any(|(a, b)| a.addr != b.addr || a.attrs != b.attrs)
-        {
-            bail!(
-                "a resource rule reads deformation/4 or world_digest/3: the plan would \
-                 depend on itself (only policy may read the deformation)"
-            );
-        }
-        let denies = all
-            .into_iter()
-            .filter(|v| !violations.contains(v))
-            .collect();
-        Ok(Planned {
-            res,
-            resources,
-            plan,
-            sections,
-            denies,
-        })
-    };
-    // query and why read the policy pass, so a deny over the plan can be
-    // asked for and explained; when there is no plan (planning fails), the
-    // program's own evaluation.
-    let explained = |res: engine::EvalResult| -> engine::EvalResult {
-        match plan_for(
-            res.clone(),
-            &violations,
-            resources.clone(),
-            &adopts,
-            &lifecycle,
-            &st,
-        ) {
-            Ok(p) => p.res,
-            Err(_) => res,
-        }
+                    st: &state::State| {
+        evaluator.plan(res, violations, resources, adopts, lifecycle, st)
     };
     let report_of = |plan: &crate::provider::Plan,
                      res: &engine::EvalResult,
@@ -1703,9 +1390,9 @@ fn run_with(
             plan,
             res,
             sections,
-            program: &program,
+            program,
             schema,
-            stack: &stack,
+            stack,
             show_noop: cli.show_noop,
             tick,
             moved,
@@ -1842,45 +1529,7 @@ fn run_with(
                 println!("- {}.{}", r.addr.typ, r.addr.name);
             }
         }
-        Cmd::Query { pattern, json } => {
-            let mut res = explained(res);
-            if strict {
-                crate::lint::deny_collisions(&mut res, &collisions);
-            }
-            let redact = query::Redactor::new(&res.facts, backend.schema());
-            print_query(&pattern, &res.facts, &redact, json)?;
-        }
-        Cmd::Why { pattern, all } => {
-            let mut res = explained(res);
-            if strict {
-                crate::lint::deny_collisions(&mut res, &collisions);
-            }
-            let redact = query::Redactor::new(&res.facts, backend.schema());
-            let query::Query::Body { body, .. } = query::parse(&pattern)? else {
-                bail!("why: expected a fact pattern such as 'want(net.vpc, N)', got '{pattern}'");
-            };
-            let [crate::ast::Lit::Pos(pat)] = body.as_slice() else {
-                bail!("why: expected one fact pattern, got '{pattern}'");
-            };
-            let matched = why::find(pat, &res.facts)?;
-            if matched.is_empty() {
-                bail!("why: no fact matches {pattern}");
-            }
-            let printer = why::Printer {
-                circuit: &res.circuit,
-                redact: &redact,
-                all,
-            };
-            for (i, (a, focus)) in matched.iter().enumerate() {
-                let Some(id) = res.circuit.fact_id(&engine::circuit_fact(a)) else {
-                    bail!("internal: no provenance for {}", partition::fmt_atom(a));
-                };
-                if i > 0 {
-                    println!();
-                }
-                print!("{}", printer.tree(id, focus.as_ref()));
-            }
-        }
+        Cmd::Query { .. } | Cmd::Why { .. } => unreachable!("explained before"),
         Cmd::Show { typ, name } => {
             let addr = ir::Address { typ, name };
             let Some(r) = resources.iter().find(|r| r.addr == addr) else {
@@ -1913,9 +1562,9 @@ fn run_with(
                 }
             }
             let place = |i: &crate::stack::Instance| {
-                let location = base.child(i.segment().as_deref());
+                let location = located.base.child(i.segment().as_deref());
                 crate::stack::Place {
-                    world: crate::stack::world_file(&location, &i.dir(&root.join(&stack))),
+                    world: crate::stack::world_file(&location, &i.dir(&root.join(stack))),
                     location,
                 }
             };
@@ -1974,7 +1623,9 @@ fn run_with(
                 plan,
                 sections,
                 denies,
-            } = plan_for(res, &violations, resources, &adopts, &lifecycle, &st)?;
+            } = policy
+                .take()
+                .ok_or_else(|| anyhow::anyhow!("internal: a plan without its policy pass"))??;
             let report = report_of(&plan, &res, &sections, 1, &moves, &denies);
             // The plan file, when one is written or the plan needs an
             // approval: its digest is what an approver signs.
@@ -2021,7 +1672,7 @@ fn run_with(
                     println!("plan digest: {}", f.digest.as_deref().unwrap_or_default());
                 }
             }
-            blocked(&[violations, denies].concat())?;
+            blocked(&[violations, denies].concat(), &redact)?;
             if let (Some(out), Some(file)) = (out, &file) {
                 file.save(&out)?;
                 eprintln!(
@@ -2078,7 +1729,7 @@ fn run_with(
             // stack's trust root (loaded once), for this plan's digest and
             // this deployment, by an approver `approver_allowed` admits
             // when the program restricts them.
-            let restricts = crate::approval::restricts_approvers(&program);
+            let restricts = crate::approval::restricts_approvers(program);
             let roots: std::cell::OnceCell<Vec<_>> = std::cell::OnceCell::new();
             let verify_token = |token: &str,
                                 needs: &[(String, String)],
@@ -2110,7 +1761,7 @@ fn run_with(
                 executor::approve(token, needs, roots, &expect, allowed)
             };
             let mut approved: Option<crate::approval::Verified> = None;
-            persist_externs(&mut st, &externs, &backend);
+            persist_externs(&mut st, externs, backend);
             let persist = |st: &state::State| dep.save_state(st);
             // Nothing is written, to state or the world, until the apply is
             // confirmed: the moves, the resolution of uncertain calls and the
@@ -2138,7 +1789,7 @@ fn run_with(
                 let remaining = executor::remaining(f);
                 // As the record keeps it: a sensitive leaf by its digest.
                 let observed = backend.stored_world(&backend.observe(&st)?);
-                let changed = executor::changed_under(&backend, &remaining, &observed);
+                let changed = executor::changed_under(backend, &remaining, &observed);
                 if !changed.is_empty() {
                     eprint!(
                         "the world changed under a remaining action:\n{}",
@@ -2425,7 +2076,7 @@ fn run_with(
                         before_submit: Some(&fence),
                     };
                     let applied = executor::run_tick(
-                        &backend, &resources, &adopts, &lifecycle, &mut st, &plan, &opts,
+                        backend, &resources, &adopts, &lifecycle, &mut st, &plan, &opts,
                     );
                     for note in backend.take_notes() {
                         println!("chaos: {note}");
@@ -2455,11 +2106,11 @@ fn run_with(
                     // stacks to read (evaluated again only when it has any:
                     // the evaluation refreshes). A --world fixture is not
                     // registered: everything stays beside the world file.
-                    persist_externs(&mut st, &externs, &backend);
+                    persist_externs(&mut st, externs, backend);
                     crate::tables::record(&mut st.externs, &externs.recorded());
                     // A secret one by its label and digest, never its
                     // value (E DR-19); a ref resolved, as the world is.
-                    let secret_types = crate::stack::secret_output_types(&program);
+                    let secret_types = crate::stack::secret_output_types(program);
                     let outputs = if crate::stack::has_outputs(&res.facts) {
                         crate::stack::outputs(
                             &evaluate(&st)?.0.facts,
@@ -2493,7 +2144,7 @@ fn run_with(
                         || keyed)
                         && cli.world.is_none()
                     {
-                        crate::stack::register(&root, &deployment, &location, stack_cfg.bootstrap)?;
+                        crate::stack::register(&root, &deployment, location, stack_cfg.bootstrap)?;
                     }
                     if let Some(h) = hook.as_deref_mut() {
                         h.finish(
@@ -2538,7 +2189,7 @@ fn run_with(
                 // The boundary. The held deformations come back as facts
                 // with the documents they were planned against: the
                 // evaluator derives the deny when the world moved under one.
-                let held = executor::check_boundary(&backend, &seen, &pending, &st, tick)?;
+                let held = executor::check_boundary(backend, &seen, &pending, &st, tick)?;
                 let (next, next_violations) =
                     evaluate_with(&st, &BTreeSet::new(), &held, Some(tick))?;
                 violations = next_violations;
@@ -2563,6 +2214,108 @@ fn run_with(
     }
 
     Ok(())
+}
+
+/// `dform why PATTERN`: the provenance tree of each fact of `res` that
+/// matches, redacted.
+fn why_tree(
+    pattern: &str,
+    all: bool,
+    res: &engine::EvalResult,
+    redact: &query::Redactor,
+) -> Result<()> {
+    let query::Query::Body { body, .. } = query::parse(pattern)? else {
+        bail!("why: expected a fact pattern such as 'want(net.vpc, N)', got '{pattern}'");
+    };
+    let [crate::ast::Lit::Pos(pat)] = body.as_slice() else {
+        bail!("why: expected one fact pattern, got '{pattern}'");
+    };
+    let matched = why::find(pat, &res.facts)?;
+    if matched.is_empty() {
+        bail!("why: no fact matches {pattern}");
+    }
+    let printer = why::Printer {
+        circuit: &res.circuit,
+        redact,
+        all,
+    };
+    for (i, (a, focus)) in matched.iter().enumerate() {
+        let Some(id) = res.circuit.fact_id(&engine::circuit_fact(a)) else {
+            bail!("internal: no provenance for {}", partition::fmt_atom(a));
+        };
+        if i > 0 {
+            println!();
+        }
+        print!("{}", printer.tree(id, focus.as_ref()));
+    }
+    Ok(())
+}
+
+/// A `query` or `why` pattern reads the schema's predicates: the whole
+/// schema is asked for.
+fn reads_schema(pattern: &str) -> bool {
+    match query::parse(pattern) {
+        Ok(query::Query::Pred(p)) => schema::is_schema_pred(&p),
+        Ok(query::Query::Body { body, .. }) => body.iter().any(|l| {
+            matches!(l, crate::ast::Lit::Pos(a) | crate::ast::Lit::Not(a)
+                if schema::is_schema_pred(&a.pred))
+        }),
+        Err(_) => false,
+    }
+}
+
+/// What the command line does at an evaluation's steps
+/// (`deployment::Observer`): it prints what the evaluation says, and
+/// controller mode's hook stamps the inputs and tables and adds the drift.
+struct Watch<'a> {
+    hook: Option<&'a mut controller::Hook>,
+    cmd: &'a Cmd,
+}
+
+impl<'a> Watch<'a> {
+    fn new(hook: Option<&'a mut controller::Hook>, cmd: &'a Cmd) -> Watch<'a> {
+        Watch { hook, cmd }
+    }
+
+    fn plans(&self) -> bool {
+        matches!(self.cmd, Cmd::Plan { .. } | Cmd::Apply { .. })
+    }
+}
+
+impl deployment::Observer for Watch<'_> {
+    fn note(&mut self, note: deployment::Note) {
+        use deployment::Note;
+        match note {
+            Note::Warning(w) | Note::Policy(w) => eprintln!("warning: {w}"),
+            Note::Collision(w) if self.plans() => eprintln!("warning: {w}"),
+            Note::Collision(_) => {}
+            Note::Resolved(line) => eprintln!("resolved: {line}"),
+            Note::TableMoved(m) if self.plans() => match self.hook {
+                Some(_) => controller::log(format_args!("{m}")),
+                None => println!("{m}"),
+            },
+            Note::TableMoved(_) => {}
+        }
+    }
+
+    fn relations(&mut self, relations: &[watch::Relation]) {
+        if let Some(h) = self.hook.as_deref_mut() {
+            h.inputs(relations);
+        }
+    }
+
+    fn tables(&mut self, read: &[(watch::Relation, String)]) {
+        if let Some(h) = self.hook.as_deref_mut() {
+            h.tables(read);
+        }
+    }
+
+    fn facts(&mut self, backend: &Providers, st: &state::State) -> Result<Vec<Atom>> {
+        Ok(match self.hook.as_deref_mut() {
+            Some(h) => h.drift_facts(&backend.stored_world(&backend.observe(st)?)),
+            None => Vec::new(),
+        })
+    }
 }
 
 /// `dform controller run`: a run per event (`controller::Hook`), until
@@ -2818,21 +2571,6 @@ fn rekey_args(
     })
 }
 
-/// The keys of the program's own `input("k", v)` facts.
-fn input_fact_keys(program: &crate::ast::Program) -> BTreeSet<String> {
-    program
-        .statements
-        .iter()
-        .filter_map(|s| match s {
-            crate::ast::Stmt::Fact(a) if a.pred == "input" => match a.args.first() {
-                Some(Term::Val(Value::Str(k))) => Some(k.clone()),
-                _ => None,
-            },
-            _ => None,
-        })
-        .collect()
-}
-
 /// `dform test`: every scenario evaluated against an empty mock world (the
 /// provider's schema, no world, no state); a scenario fails when anything
 /// is denied or it does not compile.
@@ -2857,7 +2595,7 @@ fn run_tests(
             let lowered = crate::transform::lower(&p)?;
             crate::secrets::check(&lowered, backend.schema(), &Default::default())?;
             crate::refine::check(&lowered.program, backend.schema())?;
-            let mut given = input_fact_keys(&p);
+            let mut given = deployment::input_fact_keys(&p);
             let mut pairs = Vec::new();
             for kv in set {
                 let (k, v) = split_kv(kv)?;
@@ -2960,22 +2698,6 @@ fn open_s3(root: &Path, writes: bool) -> impl Fn(&store::S3Spec) -> Result<Arc<d
     }
 }
 
-/// Where a stack's deployments are: its backend's location, else its
-/// directory under the state root.
-fn stack_location(
-    root: &Path,
-    stack: &str,
-    backend: Option<&crate::stack::Backend>,
-) -> store::Location {
-    match backend {
-        Some(crate::stack::Backend::Local(dir)) => {
-            store::Location::Local(state::local_dir(root, dir))
-        }
-        Some(crate::stack::Backend::S3(spec)) => store::Location::S3(spec.clone()),
-        None => store::Location::Local(root.join(stack)),
-    }
-}
-
 /// The backend of the project's stack `stack`, as its program (over the
 /// manifest's default) says; `None` when it says none, or there is no
 /// such stack.
@@ -2985,7 +2707,7 @@ fn stack_backend(
 ) -> Option<crate::stack::Backend> {
     let program = loader::load_program(std::slice::from_ref(&found.file)).ok()?;
     let mut cfg = crate::stack::config(&program).ok()?;
-    with_manifest(&mut cfg, &project.manifest, &found.file);
+    deployment::with_manifest(&mut cfg, &project.manifest, &found.file);
     cfg.backend
 }
 
@@ -3016,7 +2738,7 @@ fn place_of(cli: &Cli, name: &str) -> Result<(crate::stack::Place, PathBuf, stor
                     _ => None,
                 }
             });
-            stack_location(root, stack, backend.as_ref()).child(seg)
+            deployment::stack_location(root, stack, backend.as_ref()).child(seg)
         }
     };
     let place = crate::stack::Place {
@@ -3038,20 +2760,6 @@ fn persist_externs(st: &mut state::State, externs: &crate::externs::Externs, bac
             st.externs.push(a);
         }
     }
-}
-
-/// A plan and the evaluation that sees it (`plan_for` in `main`).
-struct Planned {
-    /// The policy pass: the program with the plan's deformations as facts.
-    res: engine::EvalResult,
-    /// The documents the plan was taken from.
-    resources: Vec<ir::Resource>,
-    plan: crate::provider::Plan,
-    sections: stuck::Sections,
-    /// Denies over the plan: what the policy pass derives beyond the plan's
-    /// own evaluation (`lifecycle prevent_destroy`, a policy on
-    /// `deformation/4`).
-    denies: Vec<String>,
 }
 
 /// A batch apply's approval, before its Apply calls: at tick 1 the token
@@ -3272,55 +2980,6 @@ fn format_strata(name: &str, g: &partition::Graph, v: &partition::Verdict) -> St
     }
 }
 
-/// The types whose schema facts a run injects (`Providers::catalog`):
-/// those the program, the facts given to it and state name; `None` (all of
-/// them) for a `query` or `why` of a schema predicate, or a program that
-/// reads the schema of a type it does not name.
-fn catalog_scope(
-    cmd: &Cmd,
-    program: &crate::ast::Program,
-    given: &[Atom],
-    discovered: &[Atom],
-    st: &state::State,
-) -> Option<BTreeSet<String>> {
-    if let Cmd::Query { pattern, .. } | Cmd::Why { pattern, .. } = cmd {
-        let reads_schema = match query::parse(pattern).ok()? {
-            query::Query::Pred(p) => schema::is_schema_pred(&p),
-            query::Query::Body { body, .. } => body.iter().any(|l| {
-                matches!(l, crate::ast::Lit::Pos(a) | crate::ast::Lit::Not(a)
-                    if schema::is_schema_pred(&a.pred))
-            }),
-        };
-        if reads_schema {
-            return None;
-        }
-    }
-    let lowered = crate::transform::lower(program).ok()?;
-    let facts: Vec<Atom> = given.iter().chain(discovered).cloned().collect();
-    let mut named = schema::named_types(&lowered.program, &facts)?;
-    named.extend(
-        st.resources
-            .keys()
-            .chain(st.deposed.keys())
-            .chain(st.uncertain.keys())
-            .filter_map(|k| state::parse_key(k).map(|a| a.typ)),
-    );
-    Some(named)
-}
-
-/// E §2.7's sections for this evaluation: what waits on a boundary.
-fn plan_sections(
-    res: &engine::EvalResult,
-    resources: &[ir::Resource],
-    schema: &schema::Schema,
-) -> stuck::Sections {
-    let docs = resources
-        .iter()
-        .map(|r| ((r.addr.typ.clone(), r.addr.name.clone()), r.attrs.clone()))
-        .collect();
-    stuck::sections(&res.stuck, &res.may_derive, &res.facts, &docs, schema)
-}
-
 /// `query`'s output, redacted: every fact of a predicate, or a table with
 /// one column per variable; `--json` prints one document either way.
 fn print_query(
@@ -3368,64 +3027,6 @@ fn print_query(
         }
     }
     Ok(())
-}
-
-/// The types the program reads the inventory of (`world.T[e].p`,
-/// `x in world.T`: `cloud_exists`, `cloud_attr`, `cloud_computed` with a
-/// constant type), for discovery to ask about only those. `None` (every
-/// type) for a query or why, which may ask about any, and for a program
-/// whose type there is not a constant or that does not lower.
-fn world_types(cmd: &Cmd, lowered: Option<&crate::transform::Lowered>) -> Option<BTreeSet<String>> {
-    use crate::ast::{Lit, Stmt, Term};
-    if matches!(cmd, Cmd::Query { .. } | Cmd::Why { .. }) {
-        return None;
-    }
-    let mut out = BTreeSet::new();
-    for st in &lowered?.program.statements {
-        let body = match st {
-            Stmt::Rule(r) => &r.body,
-            Stmt::Constraint(c) => &c.body,
-            _ => continue,
-        };
-        for l in body {
-            let (Lit::Pos(a) | Lit::Not(a)) = l else {
-                continue;
-            };
-            if !plugin::providers::INVENTORY
-                .iter()
-                .any(|(p, _)| *p == a.pred)
-            {
-                continue;
-            }
-            match a.args.first() {
-                Some(Term::Val(crate::value::Value::Str(t))) => {
-                    out.insert(t.clone());
-                }
-                _ => return None,
-            }
-        }
-    }
-    Some(out)
-}
-
-/// The providers the program configures itself: the constant names of
-/// its `provider_config(Name, Settings)` facts and rules.
-fn provider_configs(program: &crate::ast::Program) -> BTreeSet<String> {
-    use crate::ast::{Stmt, Term};
-    program
-        .statements
-        .iter()
-        .filter_map(|st| match st {
-            Stmt::Fact(a) => Some(a),
-            Stmt::Rule(r) => Some(&r.head),
-            _ => None,
-        })
-        .filter(|a| a.pred == "provider_config")
-        .filter_map(|a| match a.args.first() {
-            Some(Term::Val(crate::value::Value::Str(n))) => Some(n.clone()),
-            _ => None,
-        })
-        .collect()
 }
 
 /// The environment variables `env_var` reads, by label (`env_var/NAME`),
@@ -3553,26 +3154,6 @@ fn load_schema(providers: &[String]) -> Result<schema::Schema> {
     )
 }
 
-/// `--inventory PATH`, else `<world dir>/inventory.json` when `--world` is
-/// given and that file exists, else the stack's default (`dform.state/inventory.json`).
-fn resolve_inventory(
-    explicit: &Option<PathBuf>,
-    world: &Option<PathBuf>,
-    default: &Path,
-) -> PathBuf {
-    if let Some(p) = explicit {
-        return p.clone();
-    }
-    if let Some(w) = world {
-        let dir = w.parent().unwrap_or_else(|| Path::new("."));
-        let candidate = dir.join("inventory.json");
-        if candidate.exists() {
-            return candidate;
-        }
-    }
-    default.to_path_buf()
-}
-
 /// `dform fmt`: rewrite each file in its formatted form, or with `check`
 /// list the files that are not and fail.
 /// `dform doc [TARGET]`: the doc comments of the project's .df files, or
@@ -3649,40 +3230,6 @@ fn needs_project(cli: &Cli) -> bool {
     }
 }
 
-/// The manifest's `unknowns` default, said in the program's stack
-/// statement when it does not say its own: strict mode is the program's
-/// (`transform::STRICT_RULES`).
-fn with_default_unknowns(program: &mut crate::ast::Program, m: &crate::project::Manifest) {
-    let Some(u) = &m.defaults.unknowns else {
-        return;
-    };
-    for s in &mut program.statements {
-        if let crate::ast::Stmt::Stack(c) = s
-            && !c.config.iter().any(|(k, _, _)| k == "unknowns")
-        {
-            c.config
-                .push(("unknowns".into(), Term::Val(Value::Str(u.clone())), c.span));
-        }
-    }
-}
-
-/// The manifest under the program's own statements: a provider named
-/// without a `source` takes the manifest's entry of that name, and a stack
-/// statement that does not say its backend takes the manifest's default.
-fn with_manifest(cfg: &mut crate::stack::Stack, m: &crate::project::Manifest, file: &Path) {
-    for p in &mut cfg.providers {
-        if !p.contains('/')
-            && let Some(src) = m.provider_source(p)
-        {
-            *p = src;
-        }
-    }
-    let name = cfg.name.clone().unwrap_or_else(|| state::stack_name(file));
-    if cfg.backend.is_none() {
-        cfg.backend = m.backend(&name);
-    }
-}
-
 /// A key input's value is the target's: `--set` of one is an error, as is
 /// a target key the stack does not have. A key the target does not name is
 /// its input's default, for `plan` and `apply` alike (the controller names
@@ -3736,7 +3283,8 @@ fn stack_list(cli: &Cli) -> Result<()> {
         println!("{}{key}  {}", s.name, s.file.display());
         // Where the stack's deployments are: its backend's, else the state
         // root's.
-        let base = stack_location(&cli.root, &s.name, stack_backend(&project, s).as_ref());
+        let base =
+            deployment::stack_location(&cli.root, &s.name, stack_backend(&project, s).as_ref());
         if let store::Location::S3(spec) = &base {
             println!("  state in {spec}");
         }
@@ -4079,16 +3627,7 @@ fn split_kv(s: &str) -> Result<(&str, Value)> {
     let (k, raw) = s
         .split_once('=')
         .ok_or_else(|| anyhow::anyhow!("expected key=value, got '{s}'"))?;
-    let v = if raw == "true" {
-        Value::Bool(true)
-    } else if raw == "false" {
-        Value::Bool(false)
-    } else if let Ok(i) = raw.parse::<i64>() {
-        Value::Int(i)
-    } else {
-        Value::Str(raw.to_string())
-    };
-    Ok((k, v))
+    Ok((k, deployment::value_of(raw)))
 }
 
 fn atom_kv(pred: &str, k: &str, v: Value) -> Atom {

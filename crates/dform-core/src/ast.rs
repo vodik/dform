@@ -173,6 +173,13 @@ impl Span {
         self.file == 0
     }
 
+    /// The two spans are the same place: the same bytes of the same
+    /// source. (`==` holds of any two spans, so that facts compare by
+    /// content.)
+    pub fn same_place(&self, other: &Span) -> bool {
+        (self.file, self.start, self.end) == (other.file, other.start, other.end)
+    }
+
     /// This span, lowered out of `origin` unless it already was.
     pub fn within(self, origin: u32) -> Span {
         if self.origin == 0 {
