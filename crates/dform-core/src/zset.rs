@@ -435,6 +435,21 @@ pub mod file {
     pub struct Key([u8; 32]);
 
     impl Key {
+        /// The key of the deployment whose objects are `store`'s, when it
+        /// has one.
+        pub fn load(store: &dyn crate::store::Store) -> Result<Option<Key>> {
+            use crate::store::KEY;
+            let Some(o) = store.get(KEY)? else {
+                return Ok(None);
+            };
+            let key: [u8; 32] = o
+                .bytes
+                .as_slice()
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("plan key {}: not 32 bytes", store.locate(KEY)))?;
+            Ok(Some(Key(key)))
+        }
+
         /// The key of the deployment whose objects are `store`'s.
         pub fn load_or_create(store: &dyn crate::store::Store) -> Result<Key> {
             use crate::store::{Cond, KEY};
@@ -466,6 +481,31 @@ pub mod file {
                 return parse(&o.bytes);
             }
             Ok(Key(key))
+        }
+
+        /// A key derived from this one for `what`: its HMAC, so the derived
+        /// key says nothing of this one. What a provider is given to digest
+        /// a secret it holds (`Config::digest_key`).
+        pub fn derive(&self, what: &str) -> Key {
+            let hex = self.digest(what.as_bytes());
+            Key::from_hex(&hex).expect("a digest is 32 bytes of hex")
+        }
+
+        /// The key's bytes, hex.
+        pub fn to_hex(&self) -> String {
+            self.0.iter().map(|b| format!("{b:02x}")).collect()
+        }
+
+        /// A key from 64 hex digits.
+        pub fn from_hex(hex: &str) -> Option<Key> {
+            if hex.len() != 64 || !hex.is_ascii() {
+                return None;
+            }
+            let mut k = [0u8; 32];
+            for (i, b) in k.iter_mut().enumerate() {
+                *b = u8::from_str_radix(&hex[2 * i..2 * i + 2], 16).ok()?;
+            }
+            Some(Key(k))
         }
 
         /// HMAC-SHA256 (RFC 2104) of `bytes`, hex.

@@ -210,6 +210,7 @@ fn suite(start: impl FnOnce() -> Result<Link>, dir: &Path) -> Result<(Vec<String
                     pred: "check.lookup".into(),
                     input: vec![true, false],
                     inputs: vec![wire::value(&Value::Str(input.into()))],
+                    secret: Vec::new(),
                 },
             )
             .and_then(|rows| {
@@ -447,6 +448,7 @@ fn made_by(conn: &Conn, typ: &str, key: &str) -> Result<Vec<String>> {
             pred: super::providers::CREATED.into(),
             input: vec![true, true, true, false],
             inputs: vec![s(typ), s("a"), s(key)],
+            secret: Vec::new(),
         },
     )?;
     rows.iter()

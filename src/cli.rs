@@ -1351,6 +1351,10 @@ fn run_with(
         None => root.join("cache"),
     };
     // The schema is asked for once the run knows the types it names.
+    let existing_key = match &key {
+        None => dep.existing_plan_key()?,
+        Some(_) => None,
+    };
     let backend = Providers::start_deferred(
         launch(),
         &providers,
@@ -1362,6 +1366,12 @@ fn run_with(
             configured: provider_configs(&program),
             stack: deployment.clone(),
             blocks: stack_cfg.provider_blocks.clone(),
+            // A plan that makes no key digests with the one there is.
+            digest_key: match &key {
+                Some(k) => Some(k),
+                None => existing_key.as_ref(),
+            }
+            .map(|k| k.derive("provider digest").to_hex()),
             held: held.clone(),
             worlds: read_outputs
                 .iter()
@@ -1388,8 +1398,7 @@ fn run_with(
             if let Some(r) = crate::externs::env_var(f, inputs) {
                 return r;
             }
-            let plus: Vec<bool> = f.args.iter().map(|b| b.input).collect();
-            backend.query(&f.name, &plus, inputs)
+            backend.query_extern(f, inputs)
         },
     );
 
@@ -1399,6 +1408,10 @@ fn run_with(
         externs.preload(saved.externs.clone());
     }
     externs.preload_persisted(st.externs.clone());
+    // A persisted secret is replayed by where it is held, never its value.
+    for a in &st.externs {
+        backend.hold(&a.held);
+    }
 
     let mut base_extra = set_facts;
     base_extra.extend(build_extra_facts(&cli.data)?);
@@ -1442,7 +1455,7 @@ fn run_with(
     base_extra.extend(backend.catalog(scope.as_ref())?);
     base_extra.extend(discovered);
     if let Some(h) = hook.as_deref_mut() {
-        base_extra.extend(h.drift_facts(&backend.observe(&st)?));
+        base_extra.extend(h.drift_facts(&backend.stored_world(&backend.observe(&st)?)));
     }
     // Refresh as facts: round 0 resolves every null the world can answer,
     // except those of `withheld` addresses (being replaced). `more`: the
@@ -2074,7 +2087,7 @@ fn run_with(
                 executor::approve(token, needs, roots, &expect, allowed)
             };
             let mut approved: Option<crate::approval::Verified> = None;
-            persist_externs(&mut st, &externs);
+            persist_externs(&mut st, &externs, &backend);
             let persist = |st: &state::State| dep.save_state(st);
             // Nothing is written, to state or the world, until the apply is
             // confirmed: the moves, the resolution of uncertain calls and the
@@ -2100,7 +2113,8 @@ fn run_with(
                 // at a boundary: the evaluator derives the deny when the
                 // world moved under one (`zset::POLICY_RULES`).
                 let remaining = executor::remaining(f);
-                let observed = backend.observe(&st)?;
+                // As the record keeps it: a sensitive leaf by its digest.
+                let observed = backend.stored_world(&backend.observe(&st)?);
                 let changed = executor::changed_under(&backend, &remaining, &observed);
                 if !changed.is_empty() {
                     eprint!(
@@ -2312,7 +2326,8 @@ fn run_with(
                         }),
                     )?;
                 }
-                let observed = backend.observe(&st)?;
+                // Kept in state: a sensitive leaf by its digest.
+                let observed = backend.stored_world(&backend.observe(&st)?);
                 executor::begin(&mut st, tick, &plan, &observed);
                 executor::mark_creates(
                     &mut st,
@@ -2417,7 +2432,7 @@ fn run_with(
                     // stacks to read (evaluated again only when it has any:
                     // the evaluation refreshes). A --world fixture is not
                     // registered: everything stays beside the world file.
-                    persist_externs(&mut st, &externs);
+                    persist_externs(&mut st, &externs, &backend);
                     crate::tables::record(&mut st.externs, &externs.recorded());
                     // A secret one by its label and digest, never its
                     // value (E DR-19); a ref resolved, as the world is.
@@ -2458,7 +2473,11 @@ fn run_with(
                         crate::stack::register(&root, &deployment, &location, stack_cfg.bootstrap)?;
                     }
                     if let Some(h) = hook.as_deref_mut() {
-                        h.finish(&deployment, undeformed, &backend.observe(&st)?)?;
+                        h.finish(
+                            &deployment,
+                            undeformed,
+                            &backend.stored_world(&backend.observe(&st)?),
+                        )?;
                     } else if changed || tick > 1 {
                         println!("apply: complete");
                     } else {
@@ -2470,7 +2489,11 @@ fn run_with(
                     // Everything definite is held: wait for the next event.
                     st.in_flight = None;
                     persist(&st)?;
-                    h.finish(&deployment, false, &backend.observe(&st)?)?;
+                    h.finish(
+                        &deployment,
+                        false,
+                        &backend.stored_world(&backend.observe(&st)?),
+                    )?;
                     break;
                 }
                 if !changed {
@@ -2832,8 +2855,7 @@ fn run_tests(
                     if let Some(r) = crate::externs::file(f, ins, &program_dir) {
                         return r;
                     }
-                    let plus: Vec<bool> = f.args.iter().map(|b| b.input).collect();
-                    backend.query(&f.name, &plus, ins)
+                    backend.query_extern(f, ins)
                 });
             let p = zset::with_policy_rules(p)?;
             let (res, mut violations) = externs.eval(&p, &extra)?;
@@ -2981,8 +3003,10 @@ fn place_of(cli: &Cli, name: &str) -> Result<(crate::stack::Place, PathBuf, stor
     Ok((place, home, times))
 }
 
-fn persist_externs(st: &mut state::State, externs: &crate::externs::Externs) {
-    for a in externs.persisted() {
+fn persist_externs(st: &mut state::State, externs: &crate::externs::Externs, backend: &Providers) {
+    for mut a in externs.persisted() {
+        // A secret column by its label, and where its provider holds it.
+        a.held = backend.held_of(&a.secret_labels());
         if !st
             .externs
             .iter()

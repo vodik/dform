@@ -80,6 +80,10 @@ pub struct Config {
     /// The mock's world of each deployment a held secret names: its
     /// objects are there, not in this run's world.
     pub worlds: BTreeMap<String, PathBuf>,
+    /// A key derived from the deployment's plan key (`Key::derive`, hex),
+    /// for a provider to digest a secret it holds (`provider::Held`'s
+    /// digest); `None` when the run has no plan key (a plain plan).
+    pub digest_key: Option<String>,
 }
 
 /// How a run reaches its providers: a backend (`plugin::backend`). The
@@ -158,8 +162,13 @@ pub struct Providers {
     mock_blocks: BTreeMap<String, String>,
     /// The account each link's last Configure reported, if it tells.
     accounts: RefCell<BTreeMap<usize, String>>,
-    /// [`Config::held`].
-    held: BTreeMap<String, provider::Held>,
+    /// Where each secret the run knows of is held, by its label:
+    /// [`Config::held`], an extern's secret column as its provider answered
+    /// it ([`Providers::query_extern`]), a persisted answer's ([`Providers::hold`]).
+    held: RefCell<BTreeMap<String, provider::Held>>,
+    /// [`Config::digest_key`]: what a sensitive leaf of a world document
+    /// dform keeps is digested with ([`Providers::stored`]).
+    digest_key: Option<crate::zset::file::Key>,
 }
 
 /// What the providers' Schema calls answered.
@@ -220,6 +229,9 @@ impl Providers {
         let mut base = base;
         if let Some(c) = &cfg.cache {
             base["cache"] = path(c);
+        }
+        if let Some(k) = &cfg.digest_key {
+            base["digest_key"] = json!(k);
         }
         if !cfg.worlds.is_empty() {
             base["worlds"] = cfg
@@ -293,7 +305,11 @@ impl Providers {
             blocks,
             mock_blocks,
             accounts: RefCell::new(accounts),
-            held: cfg.held.clone(),
+            held: RefCell::new(cfg.held.clone()),
+            digest_key: cfg
+                .digest_key
+                .as_deref()
+                .and_then(crate::zset::file::Key::from_hex),
             ..p
         })
     }
@@ -364,7 +380,8 @@ impl Providers {
             blocks: BTreeMap::new(),
             mock_blocks: BTreeMap::new(),
             accounts: RefCell::new(BTreeMap::new()),
-            held: BTreeMap::new(),
+            held: RefCell::new(BTreeMap::new()),
+            digest_key: None,
         }
     }
 
@@ -800,6 +817,157 @@ impl Providers {
         self.query_at(i, pred, plus, inputs)
     }
 
+    /// An extern's answer (`query`), its secret columns (`secret(T)`) as
+    /// the provider holds them: each a secret null, labeled
+    /// [`crate::externs::secret_label`], whose place ([`provider::Held`])
+    /// the run keeps for the Apply documents that carry it. A secret column
+    /// answered with its value is refused: the bytes would be in the
+    /// engine, the plan and state.
+    pub fn query_extern(
+        &self,
+        f: &crate::ast::ExternFn,
+        inputs: &[Value],
+    ) -> Result<Vec<Vec<Value>>> {
+        let plus: Vec<bool> = f.args.iter().map(|b| b.input).collect();
+        let secret: Vec<bool> = f.args.iter().map(crate::externs::is_secret).collect();
+        if !secret.contains(&true) {
+            return self.query(&f.name, &plus, inputs);
+        }
+        let i = self
+            .loaded()
+            .externs
+            .get(&f.name)
+            .copied()
+            .unwrap_or(self.fallback);
+        let rows: Vec<pb::Row> = self.links[i].borrow_mut().call(pb::QueryRequest {
+            pred: f.name.clone(),
+            input: plus,
+            inputs: inputs.iter().map(wire::value).collect(),
+            secret: secret.clone(),
+        })?;
+        let mut out = Vec::new();
+        for r in &rows {
+            let mut row = Vec::new();
+            for (c, v) in r.values.iter().enumerate() {
+                if !secret.get(c).copied().unwrap_or(false) {
+                    row.push(wire::from_value(v)?);
+                    continue;
+                }
+                let held = match &v.kind {
+                    Some(pb::value::Kind::Null(n)) if n.class == pb::NullClass::Secret as i32 => {
+                        n.held.as_ref()
+                    }
+                    _ => None,
+                };
+                let Some(h) = held else {
+                    bail!(
+                        "provider {}: extern {} column {} is secret(T), and it answered with \
+                         a value, not where it holds one (a SECRET null with `held`): a secret \
+                         never enters dform",
+                        self.names[i],
+                        f.name,
+                        c + 1
+                    );
+                };
+                let label = crate::externs::secret_label(&f.name, inputs, c);
+                self.held.borrow_mut().insert(
+                    label.clone(),
+                    provider::Held {
+                        provider: h.provider.clone(),
+                        deployment: h.deployment.clone(),
+                        typ: h.r#type.clone(),
+                        remote: h.remote.clone(),
+                        path: h.path.clone(),
+                        digest: h.digest.clone(),
+                    },
+                );
+                let ty = match &f.args[c].ty {
+                    Some(crate::ast::TypeExpr::Apply(_, a)) => match a.as_slice() {
+                        [crate::ast::TypeExpr::Name(t)] => t.clone(),
+                        _ => String::new(),
+                    },
+                    _ => String::new(),
+                };
+                row.push(Value::Null {
+                    label,
+                    class: NullClass::Secret,
+                    ty,
+                });
+            }
+            out.push(row);
+        }
+        Ok(out)
+    }
+
+    /// A world document as dform keeps it beyond the run (the in-flight
+    /// record, the controller's baseline) and compares with what it kept:
+    /// each leaf at a path the schema marks sensitive as its keyed digest,
+    /// `"(sensitive hmac-sha256:..)"` (`"(sensitive)"` with no key), never
+    /// its value. A marker, and a leaf already kept so, stays.
+    pub fn stored(&self, typ: &str, doc: &Json) -> Json {
+        fn walk(p: &Providers, typ: &str, v: &Json, path: &str) -> Json {
+            if provider::marker(v).is_some()
+                || v.as_str().is_some_and(|s| s.starts_with("(sensitive"))
+            {
+                return v.clone();
+            }
+            if !path.is_empty() && p.schema().is_sensitive(typ, &provider::norm_path(path)) {
+                return Json::String(match &p.digest_key {
+                    Some(k) => format!(
+                        "(sensitive hmac-sha256:{})",
+                        k.digest(crate::approval::canonical_json(v).as_bytes())
+                    ),
+                    None => "(sensitive)".into(),
+                });
+            }
+            let join = |k: &str| match path {
+                "" => k.to_string(),
+                p => format!("{p}.{k}"),
+            };
+            match v {
+                Json::Object(m) => Json::Object(
+                    m.iter()
+                        .map(|(k, x)| (k.clone(), walk(p, typ, x, &join(k))))
+                        .collect(),
+                ),
+                Json::Array(xs) => Json::Array(
+                    xs.iter()
+                        .enumerate()
+                        .map(|(i, x)| walk(p, typ, x, &format!("{path}[{i}]")))
+                        .collect(),
+                ),
+                v => v.clone(),
+            }
+        }
+        walk(self, typ, doc, "")
+    }
+
+    /// [`Providers::stored`] of each document.
+    pub fn stored_world(&self, docs: &BTreeMap<Address, Json>) -> BTreeMap<Address, Json> {
+        docs.iter()
+            .map(|(a, d)| (a.clone(), self.stored(&a.typ, d)))
+            .collect()
+    }
+
+    /// Where each of `labels` is held, of the secrets the run knows.
+    pub fn held_of<'a>(
+        &self,
+        labels: impl IntoIterator<Item = &'a String>,
+    ) -> BTreeMap<String, provider::Held> {
+        let held = self.held.borrow();
+        labels
+            .into_iter()
+            .filter_map(|l| Some((l.clone(), held.get(l)?.clone())))
+            .collect()
+    }
+
+    /// Secrets held where `held` says (a persisted extern answer's).
+    pub fn hold(&self, held: &BTreeMap<String, provider::Held>) {
+        self.held
+            .borrow_mut()
+            .extend(held.iter().map(|(l, h)| (l.clone(), h.clone())));
+    }
+
     fn query_at(
         &self,
         i: usize,
@@ -811,6 +979,7 @@ impl Providers {
             pred: pred.to_string(),
             input: plus.to_vec(),
             inputs: inputs.iter().map(wire::value).collect(),
+            secret: Vec::new(),
         })?;
         rows.iter()
             .map(|r| r.values.iter().map(wire::from_value).collect())
@@ -1104,7 +1273,7 @@ impl Providers {
     /// materializes it. Plan shows what is still unknown as `?label`.
     fn resolve_null(&self, ctx: &Ctx, label: &str, class: NullClass) -> Result<Json> {
         if class == NullClass::Secret {
-            return Ok(match self.held.get(label) {
+            return Ok(match self.held.borrow().get(label) {
                 Some(h) => provider::held_json(label, h),
                 None => provider::secret_json(label),
             });
@@ -1156,7 +1325,7 @@ impl Providers {
                 label,
                 class: NullClass::Secret,
                 ..
-            } if !self.held.contains_key(label) => {
+            } if !self.held.borrow().contains_key(label) => {
                 if let Some(("stack_output", name)) = crate::value::null_owner(label)
                     .as_ref()
                     .map(|(t, n)| (t.as_str(), n.as_str()))

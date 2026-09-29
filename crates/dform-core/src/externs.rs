@@ -38,12 +38,48 @@ pub struct Call {
     pub inputs: Vec<Value>,
 }
 
-/// A call and its answer: every row a full tuple of the extern.
+/// A call and its answer: every row a full tuple of the extern. A secret
+/// column is a secret null ([`secret_label`]), never the value, and
+/// `held` says where its provider holds each (E DR-19): what a replay
+/// hands the provider that reads it inside Apply.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Answer {
     pub pred: String,
     pub inputs: Vec<Value>,
     pub rows: Vec<Vec<Value>>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub held: BTreeMap<String, crate::provider::Held>,
+}
+
+impl Answer {
+    /// The labels of the secret nulls in its rows.
+    pub fn secret_labels(&self) -> Vec<String> {
+        self.rows
+            .iter()
+            .flatten()
+            .filter_map(|v| match v {
+                Value::Null {
+                    label,
+                    class: crate::value::NullClass::Secret,
+                    ..
+                } => Some(label.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+}
+
+/// The label of the secret an extern's call answers in column `col` (from
+/// 0): `pred/INPUTS#N`, `N` the column from 1.
+pub fn secret_label(pred: &str, inputs: &[Value], col: usize) -> String {
+    let ins: Vec<String> = inputs
+        .iter()
+        .map(|v| match v {
+            Value::Str(s) => s.clone(),
+            v => crate::partition::fmt_value(v),
+        })
+        .collect();
+    crate::value::null_label(pred, &ins.join(","), &(col + 1).to_string())
 }
 
 fn vars(t: &Term, out: &mut BTreeSet<String>) {
@@ -469,6 +505,7 @@ impl<'a> Externs<'a> {
                     pred: c.pred.clone(),
                     inputs: c.inputs.clone(),
                     rows: known.get(c)?.clone(),
+                    held: BTreeMap::new(),
                 })
             })
             .collect()

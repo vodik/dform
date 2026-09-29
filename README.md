@@ -1279,6 +1279,26 @@ value), so the next plan asks the provider again:
 dform state taint p random.password app    # the next plan generates a new one
 ```
 
+A `secret(T)` column (`extern random.password(+key, -value: secret(string))
+persist`) never enters dform (E DR-19). The Query names the secret columns
+(`QueryRequest.secret`), and the provider answers each with where it holds
+the value: a SECRET null whose `held` names the provider, the deployment,
+the extern and its inputs, the column, and the value's keyed digest (with a
+key derived from the deployment's plan key, `digest_key` at Configure). The
+run has a secret null, labeled `random.password/crud-api-db#2` (the extern,
+its inputs, the column from 1); a sensitive field it reaches goes to the
+provider in the Apply document as that label and where it is held, and the
+provider reads the value there, inside the call. A persisted answer keeps
+the label, the digest and the reference in state, and a replay hands the
+reference on; a provider that answers a secret column with its value is
+refused. The mock keeps what it answered in its world (`held`), a real
+provider in its own store (a secret manager).
+
+What dform keeps of a world document beyond a run, the in-flight record of
+an interrupted apply and the controller's baseline, holds a leaf at a
+`sensitive` path as its keyed digest, `"(sensitive hmac-sha256:..)"`, and
+the resume and the controller compare the world with it the same way.
+
 ## Tables
 
 A table is an input relation whose rows are a data file's, typed column by

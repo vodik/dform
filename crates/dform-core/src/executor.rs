@@ -629,8 +629,11 @@ pub fn changed_under(
 ) -> Vec<(Address, Vec<Change>)> {
     let mut out = Vec::new();
     for (addr, planned) in expected {
-        let now = observed.get(addr);
-        let changes = cloud.diff(&addr.typ, planned.as_ref(), now);
+        // Compared as kept: a resumed record's sensitive leaves are digests.
+        let planned = planned.as_ref().map(|d| cloud.stored(&addr.typ, d));
+        let now = observed.get(addr).map(|d| cloud.stored(&addr.typ, d));
+        let (planned, now) = (planned.as_ref(), now.as_ref());
+        let changes = cloud.diff(&addr.typ, planned, now);
         if !changes.is_empty() || planned.is_some() != now.is_some() {
             out.push((addr.clone(), changes));
         }
@@ -677,12 +680,15 @@ pub fn check_boundary(
     }
     let before: BTreeMap<Address, Option<Json>> = pending
         .iter()
-        .map(|a| (a.clone(), seen.get(a).cloned().flatten()))
+        .map(|a| {
+            let d = seen.get(a).cloned().flatten();
+            (a.clone(), d.map(|d| cloud.stored(&a.typ, &d)))
+        })
         .collect();
     Ok(crate::zset::deformation_facts(
         pending.iter().map(|a| ("pending", a)),
         &before,
-        &observed,
+        &cloud.stored_world(&observed),
     ))
 }
 

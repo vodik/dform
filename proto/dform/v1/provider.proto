@@ -217,6 +217,11 @@ message QueryRequest {
   repeated bool input = 2;
   // The `+` columns' values, in order.
   repeated Value inputs = 3;
+  // Per column, whether it is declared `secret(T)`. A provider answers a
+  // secret column with a Null of class SECRET whose `held` says where it
+  // keeps the value (its label is the engine's to choose), never the
+  // value: the engine refuses a value there.
+  repeated bool secret = 4;
 }
 
 // One answer: a full tuple of the predicate.

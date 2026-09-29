@@ -614,3 +614,144 @@ fn a_secret_output_reaches_a_sensitive_field_in_another_stack() {
         r.stderr
     );
 }
+
+/// examples/crud-api's generated password (`extern random.password(+key,
+/// -value: secret(string)) persist`): the random provider holds it, and
+/// nothing dform keeps carries it (E DR-19): not state (its persisted
+/// answer is the label, digest and where it is held), the in-flight record,
+/// the audit log, the controller's memo, nor a plan file. The Secret and
+/// the database user still get it: the mock reads it where it is held,
+/// inside Apply.
+#[test]
+fn a_persisted_extern_secret_is_held_by_its_provider_never_stored() {
+    const PASSWORD: &str = "mock-password-7f3c9a";
+    let s = Scratch::new("secrets-extern");
+    common::copy_dir(&repo().join("examples/crud-api"), &s.dir);
+    let _ = std::fs::remove_dir_all(s.path("dform.state"));
+    // A plan file taken before anything exists, applied; an apply that
+    // fails midway keeps its in-flight record; the next one resumes it.
+    s.run(&["plan", "--out", "first.json"]).success();
+    let first = s.read("first.json");
+    assert!(!first.contains(PASSWORD), "{first}");
+    s.run(&[
+        "dev",
+        "apply",
+        "first.json",
+        "--chaos",
+        "fail=k8s.job/migrate-v42",
+    ])
+    .failure();
+    let state = s.read("dform.state/shop.crud_api/state.json");
+    assert!(state.contains("\"in_flight\""), "{state}");
+    assert!(!state.contains(PASSWORD), "{state}");
+    s.run(&["apply"]).success();
+    let r = s.run(&["plan", "--out", "plan.json"]).success();
+    assert_eq!(
+        r.summary(),
+        "stack shop.crud_api is undeformed",
+        "{}",
+        r.stdout
+    );
+    s.run(&["controller", "run", "shop.crud_api", "--once"])
+        .success();
+    let mut files = Vec::new();
+    stored_files(&s.path("dform.state"), &mut files);
+    files.push(("plan.json".into(), s.read("plan.json")));
+    assert!(
+        files.iter().any(|(p, _)| p.ends_with("controller.json")),
+        "{:?}",
+        files.iter().map(|(p, _)| p).collect::<Vec<_>>()
+    );
+    for (path, text) in &files {
+        assert!(!text.contains(PASSWORD), "{path}:\n{text}");
+    }
+    let state: serde_json::Value =
+        serde_json::from_str(&s.read("dform.state/shop.crud_api/state.json")).unwrap();
+    let answer = &state["externs"][0];
+    assert_eq!(
+        answer["rows"][0][1]["v"]["label"], "random.password/crud-api-db#2",
+        "{answer}"
+    );
+    let held = &answer["held"]["random.password/crud-api-db#2"];
+    assert_eq!(held["type"], "random.password", "{answer}");
+    assert!(
+        held["digest"]
+            .as_str()
+            .is_some_and(|d| d.starts_with("hmac-sha256:")),
+        "{answer}"
+    );
+
+    // The provider's world: it keeps the value, and the objects that read
+    // it have it.
+    let world: serde_json::Value =
+        serde_json::from_str(&s.read("dform.state/shop.crud_api/remote.json")).unwrap();
+    let r = &world["resources"];
+    assert_eq!(
+        r["k8s.secret::db_conn"]["materialized"]["stringData.PGPASSWORD"], PASSWORD,
+        "{world}"
+    );
+    assert_eq!(
+        r["google_sql_user::crud_user"]["materialized"]["password"], PASSWORD,
+        "{world}"
+    );
+}
+
+/// A world document dform keeps beyond a run, the in-flight record of an
+/// interrupted apply and the controller's baseline, holds a sensitive leaf
+/// as its keyed digest, never the value (here a secret input's, in the
+/// world as the program set it). The resume and the controller compare
+/// what they kept with the world the same way.
+#[test]
+fn kept_world_documents_hold_a_sensitive_leaf_by_its_digest() {
+    let schema = schema();
+    let s = Scratch::project("secrets-kept");
+    s.write(
+        "stacks/s.df",
+        "edition 2026\ninput pw: secret(string)\nstack s {}\nresource leaky.vault v {\n  \
+         for pw(p)\n  password = p\n}\n",
+    );
+    let dev = |args: &[&str]| {
+        let mut a = vec!["dev", "--provider", schema.as_str()];
+        a.extend_from_slice(args);
+        s.run(&a)
+    };
+    dev(&["apply", "s", "--set", "pw=FIRST-KEPT-SECRET"]).success();
+    dev(&[
+        "apply",
+        "s",
+        "--set",
+        "pw=SECOND-KEPT-SECRET",
+        "--chaos",
+        "fail=leaky.vault/v",
+    ])
+    .failure();
+    let state = s.read("dform.state/s/state.json");
+    assert!(state.contains("\"in_flight\""), "{state}");
+    assert!(
+        state.contains("\"password\": \"(sensitive hmac-sha256:"),
+        "{state}"
+    );
+    assert!(!state.contains("KEPT-SECRET"), "{state}");
+    let r = dev(&["apply", "s", "--set", "pw=SECOND-KEPT-SECRET"]).success();
+    assert!(
+        r.stdout
+            .contains("resuming the apply interrupted at tick 1"),
+        "{}",
+        r.stdout
+    );
+    dev(&[
+        "controller",
+        "run",
+        "s",
+        "--once",
+        "--set",
+        "pw=SECOND-KEPT-SECRET",
+    ])
+    .success();
+    let memo = s.read("dform.state/s/controller.json");
+    assert!(
+        memo.contains("\"password\": \"(sensitive hmac-sha256:"),
+        "{memo}"
+    );
+    assert!(!memo.contains("KEPT-SECRET"), "{memo}");
+}

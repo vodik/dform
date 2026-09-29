@@ -1144,6 +1144,11 @@ impl Deployment {
     pub fn plan_key(&self) -> Result<crate::zset::file::Key> {
         crate::zset::file::Key::load_or_create(self.inner.store.as_ref())
     }
+
+    /// The plan key, when the deployment has one; a read makes none.
+    pub fn existing_plan_key(&self) -> Result<Option<crate::zset::file::Key>> {
+        crate::zset::file::Key::load(self.inner.store.as_ref())
+    }
 }
 
 /// Tests stop an apply as it is about to make its Nth state write

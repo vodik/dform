@@ -16,7 +16,9 @@
 //! Read and Apply hand back is its label, `{"$secret": "T/N#Attr"}`. A
 //! secret label in an Apply document is materialized inside the call and
 //! kept as the object's `materialized`: another stack's (`"held"`) from that
-//! deployment's world (`worlds` at Configure), which must have it.
+//! deployment's world (`worlds` at Configure), which must have it. An
+//! extern's secret column is answered with where the mock keeps it (the
+//! world's `held`), never the value (`FakeCloud::hold`).
 //!
 //! The program's settings (a `provider` block's, `provider_config`) arrive
 //! at a second Configure as `settings`; the mock reports `settings.account`
@@ -59,6 +61,12 @@ pub struct RemoteState {
     /// its minted values with the next serial.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub serial: u64,
+    /// The secrets the mock answered an extern's secret column with, kept
+    /// here (the provider's own store, as a real one keeps them in a secret
+    /// manager) and handed out as where they are held: by
+    /// `key(pred, inputs)`, column (from 1) -> value.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub held: BTreeMap<String, BTreeMap<String, Json>>,
 }
 
 /// One Apply call on the simulated clock.
@@ -154,6 +162,12 @@ pub struct FakeCloud {
     /// Other deployments' worlds, by the name the run reads them by
     /// (`worlds` at Configure): where a held secret of theirs is.
     worlds: BTreeMap<String, PathBuf>,
+    /// The deployment the run is of (`stack` at Configure): whose world
+    /// this one is.
+    stack: String,
+    /// The key a secret the mock holds is digested with (`digest_key` at
+    /// Configure); none, no digest.
+    digest_key: Option<dform_core::zset::file::Key>,
     inventory: Option<RemoteState>,
     /// The chaos `mutate` specs that have landed this run.
     mutated: BTreeSet<usize>,
@@ -216,6 +230,18 @@ impl FakeCloud {
         self.schema = schema;
         self.answers = dform_core::externs::load_answers(&specs)?;
         self.world_path = path_of(config, "world")?;
+        self.stack = config
+            .get("stack")
+            .and_then(Json::as_str)
+            .unwrap_or_default()
+            .to_string();
+        self.digest_key = match config.get("digest_key").and_then(Json::as_str) {
+            Some(h) => Some(
+                dform_core::zset::file::Key::from_hex(h)
+                    .ok_or_else(|| anyhow!("config digest_key: 64 hex digits"))?,
+            ),
+            None => None,
+        };
         self.worlds = match config.get("worlds") {
             None | Some(Json::Null) => BTreeMap::new(),
             Some(w) => serde_json::from_value(w.clone())
@@ -491,27 +517,114 @@ impl FakeCloud {
             .cloned())
     }
 
-    /// A secret held by another deployment's object (`Held`): read from
-    /// that deployment's world.
-    fn materialize_held(&self, h: &provider::Held) -> Result<Json> {
-        let Some(path) = self.worlds.get(&h.deployment) else {
-            bail!(
-                "it is held by {} of {}, whose world this run was not given",
-                h.typ,
-                h.deployment
-            );
+    /// Answer an extern's secret columns (`secret`, per column) with where
+    /// the mock holds them: each value kept in the world's `held`, and
+    /// answered as a SECRET null with its place (`Null.held`) and the
+    /// keyed digest of the value. The label is the engine's to choose.
+    pub fn hold(
+        &mut self,
+        pred: &str,
+        inputs: &[Value],
+        secret: &[bool],
+        rows: Vec<Vec<Value>>,
+    ) -> Result<Vec<pb::Row>> {
+        let remote = serde_json::to_string(
+            &inputs
+                .iter()
+                .map(dform_core::engine::value_to_json)
+                .collect::<Vec<_>>(),
+        )?;
+        let mut out = Vec::new();
+        let mut kept = BTreeMap::new();
+        for row in rows {
+            let mut values = Vec::new();
+            for (c, v) in row.iter().enumerate() {
+                if !secret.get(c).copied().unwrap_or(false) {
+                    values.push(wire::value(v));
+                    continue;
+                }
+                let j = dform_core::engine::value_to_json(v);
+                let digest = self
+                    .digest_key
+                    .as_ref()
+                    .map(|k| {
+                        format!(
+                            "hmac-sha256:{}",
+                            k.digest(dform_core::approval::canonical_json(&j).as_bytes())
+                        )
+                    })
+                    .unwrap_or_default();
+                let path = (c + 1).to_string();
+                kept.insert(path.clone(), j);
+                values.push(pb::Value {
+                    kind: Some(pb::value::Kind::Null(pb::Null {
+                        label: format!("{pred}#{path}"),
+                        class: pb::NullClass::Secret as i32,
+                        ty: String::new(),
+                        held: Some(pb::Held {
+                            provider: backend::FAKECLOUD.into(),
+                            deployment: self.stack.clone(),
+                            r#type: pred.to_string(),
+                            remote: remote.clone(),
+                            path,
+                            digest,
+                        }),
+                    })),
+                });
+            }
+            out.push(pb::Row { values });
+        }
+        if !kept.is_empty() {
+            self.world()?.held.insert(key(pred, &remote), kept);
+            self.save()?;
+        }
+        Ok(out)
+    }
+
+    /// A secret held by an object (`Held`), this deployment's or another's:
+    /// read from that deployment's world, where the mock kept it (an
+    /// extern's), else the object's attribute (what it materialized there,
+    /// else what it was sent), else its computed value.
+    fn materialize_held(&mut self, h: &provider::Held) -> Result<Json> {
+        let (world, at) = if h.deployment == self.stack {
+            (
+                self.world()?.clone(),
+                self.world_path
+                    .as_ref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default(),
+            )
+        } else {
+            let Some(path) = self.worlds.get(&h.deployment) else {
+                bail!(
+                    "it is held by {} of {}, whose world this run was not given",
+                    h.typ,
+                    h.deployment
+                );
+            };
+            (
+                load_json(&Some(path.clone()), "world")?,
+                path.display().to_string(),
+            )
         };
-        let world = load_json(&Some(path.clone()), "world")?;
+        if let Some(v) = world
+            .held
+            .get(&key(&h.typ, &h.remote))
+            .and_then(|m| m.get(&h.path))
+        {
+            return Ok(v.clone());
+        }
         let Some(rr) = world.resources.get(&key(&h.typ, &h.remote)) else {
             bail!(
-                "{} {} of {} is not in its world {}",
+                "{} {} of {} is not in its world {at}",
                 h.typ,
                 h.remote,
                 h.deployment,
-                path.display()
             );
         };
-        get_path(&rr.attrs, &h.path)
+        rr.materialized
+            .get(&h.path)
+            .or_else(|| get_path(&rr.attrs, &h.path))
             .or_else(|| get_path(&rr.computed, &h.path))
             .cloned()
             .ok_or_else(|| {
@@ -1138,16 +1251,12 @@ impl Handler for Mock {
                     .map(wire::from_value)
                     .collect::<Result<Vec<_>>>()
                     .map_err(invalid)?;
-                let rows = self
-                    .cloud()
-                    .query(&q.pred, &q.input, &inputs)
-                    .map_err(invalid)?;
+                let mut cloud = self.cloud();
+                let rows = cloud.query(&q.pred, &q.input, &inputs).map_err(invalid)?;
                 Reply::Query(
-                    rows.iter()
-                        .map(|r| pb::Row {
-                            values: r.iter().map(wire::value).collect(),
-                        })
-                        .collect(),
+                    cloud
+                        .hold(&q.pred, &inputs, &q.secret, rows)
+                        .map_err(invalid)?,
                 )
             }
             C::Read(r) => {
