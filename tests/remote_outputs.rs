@@ -59,7 +59,10 @@ fn a_project_reads_another_projects_outputs_through_a_local_remote() {
         published.contains("\"deployment\": \"cluster[env=prod]\""),
         "{published}"
     );
-    assert!(published.contains("\"token\": \"string\""), "{published}");
+    assert!(
+        published.contains("\"label\": \"output/#token\""),
+        "{published}"
+    );
     assert!(!published.contains(SECRET), "{published}");
 
     let r = app.run(&["plan", "app"]).success();

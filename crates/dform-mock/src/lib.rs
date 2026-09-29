@@ -13,7 +13,10 @@
 //!
 //! Apply mints computed values per the schema (`type_mint` or a default by
 //! class and type). A sensitive computed value stays in the world; what
-//! Read and Apply hand back is its label, `{"$secret": "T/N#Attr"}`.
+//! Read and Apply hand back is its label, `{"$secret": "T/N#Attr"}`. A
+//! secret label in an Apply document is materialized inside the call and
+//! kept as the object's `materialized`: another stack's (`"held"`) from that
+//! deployment's world (`worlds` at Configure), which must have it.
 //!
 //! The program's settings (a `provider` block's, `provider_config`) arrive
 //! at a second Configure as `settings`; the mock reports `settings.account`
@@ -84,6 +87,11 @@ pub struct RemoteResource {
     /// call with the key answers with this object.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub key: String,
+    /// What the cloud holds where the document dform sent has a secret's
+    /// label (`attrs` keeps the label, as dform sent it): the value, read
+    /// inside Apply from the object that holds it, by path.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub materialized: BTreeMap<String, Json>,
 }
 
 fn key(typ: &str, name: &str) -> String {
@@ -143,6 +151,9 @@ pub struct FakeCloud {
     answers: Vec<Atom>,
     /// The world, read once: the fake is its only writer during a run.
     world: Option<RemoteState>,
+    /// Other deployments' worlds, by the name the run reads them by
+    /// (`worlds` at Configure): where a held secret of theirs is.
+    worlds: BTreeMap<String, PathBuf>,
     inventory: Option<RemoteState>,
     /// The chaos `mutate` specs that have landed this run.
     mutated: BTreeSet<usize>,
@@ -205,6 +216,11 @@ impl FakeCloud {
         self.schema = schema;
         self.answers = dform_core::externs::load_answers(&specs)?;
         self.world_path = path_of(config, "world")?;
+        self.worlds = match config.get("worlds") {
+            None | Some(Json::Null) => BTreeMap::new(),
+            Some(w) => serde_json::from_value(w.clone())
+                .context("config worlds: deployment -> world file")?,
+        };
         self.inventory_path = path_of(config, "inventory")?;
         self.chaos = Chaos::parse(&strings(config, "chaos")?)?;
         self.world = None;
@@ -475,6 +491,89 @@ impl FakeCloud {
             .cloned())
     }
 
+    /// A secret held by another deployment's object (`Held`): read from
+    /// that deployment's world.
+    fn materialize_held(&self, h: &provider::Held) -> Result<Json> {
+        let Some(path) = self.worlds.get(&h.deployment) else {
+            bail!(
+                "it is held by {} of {}, whose world this run was not given",
+                h.typ,
+                h.deployment
+            );
+        };
+        let world = load_json(&Some(path.clone()), "world")?;
+        let Some(rr) = world.resources.get(&key(&h.typ, &h.remote)) else {
+            bail!(
+                "{} {} of {} is not in its world {}",
+                h.typ,
+                h.remote,
+                h.deployment,
+                path.display()
+            );
+        };
+        get_path(&rr.attrs, &h.path)
+            .or_else(|| get_path(&rr.computed, &h.path))
+            .cloned()
+            .ok_or_else(|| {
+                anyhow!(
+                    "{} {} of {} does not set {}",
+                    h.typ,
+                    h.remote,
+                    h.deployment,
+                    h.path
+                )
+            })
+    }
+
+    /// Every secret label in an Apply document, by path, materialized: a
+    /// held one from the object that holds it (one that cannot be read is a
+    /// refusal naming the path), another from this world's computed values
+    /// when an object here has it.
+    fn materialize_doc(&mut self, at: &str, doc: &Json) -> Result<BTreeMap<String, Json>, Failed> {
+        fn walk(v: &Json, path: &str, out: &mut Vec<(String, Json)>) {
+            if provider::marker(v).is_some_and(|(k, _)| k == provider::SECRET_KEY) {
+                out.push((path.to_string(), v.clone()));
+                return;
+            }
+            let join = |k: &str| match path {
+                "" => k.to_string(),
+                p => format!("{p}.{k}"),
+            };
+            match v {
+                Json::Object(m) => m.iter().for_each(|(k, x)| walk(x, &join(k), out)),
+                Json::Array(xs) => xs
+                    .iter()
+                    .enumerate()
+                    .for_each(|(i, x)| walk(x, &join(&i.to_string()), out)),
+                _ => {}
+            }
+        }
+        let mut found = Vec::new();
+        walk(doc, "", &mut found);
+        let mut out = BTreeMap::new();
+        for (path, m) in found {
+            let label = provider::marker(&m)
+                .map(|(_, l)| l.to_string())
+                .unwrap_or_default();
+            let v = match provider::held(&m) {
+                Some(h) => self.materialize_held(&h).map(Some),
+                None => self.materialize(&label),
+            };
+            match v {
+                Ok(Some(v)) => {
+                    out.insert(path, v);
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    return Err(Failed::Refused(format!(
+                        "apply {at}: {path}: the secret {label} cannot be read: {e:#}"
+                    )));
+                }
+            }
+        }
+        Ok(out)
+    }
+
     fn check_assertions(&mut self, at: &str, c: &Call) -> Result<(), Failed> {
         for a in &c.assertions {
             let mut v = get_path(&c.config, &a.path).cloned();
@@ -561,6 +660,10 @@ impl FakeCloud {
         let answered = !self.chaos.timeout.contains(addr);
         let doc = c.config;
         self.world().map_err(refuse)?;
+        let materialized = match c.op {
+            pb::Op::Delete => BTreeMap::new(),
+            _ => self.materialize_doc(&at, &doc)?,
+        };
         // The same key again: the object the first call made, unchanged.
         let made = match c.op {
             pb::Op::Create | pb::Op::Replace if !c.key.is_empty() => self
@@ -621,6 +724,7 @@ impl FakeCloud {
                         computed,
                         read_lag: None,
                         key: String::new(),
+                        materialized: BTreeMap::new(),
                     },
                 );
                 Some(c.remote.clone())
@@ -643,6 +747,7 @@ impl FakeCloud {
                         computed,
                         read_lag: None,
                         key: made_by,
+                        materialized: BTreeMap::new(),
                     },
                 );
                 Some(c.remote.clone())
@@ -656,6 +761,9 @@ impl FakeCloud {
         };
         if let Some(r) = &remote {
             self.remotes.insert(addr.clone(), r.clone());
+            if let Some(rr) = self.world_mut().resources.get_mut(&key(&addr.typ, r)) {
+                rr.materialized = materialized;
+            }
             let rr = &self.world_ref().resources[&key(&addr.typ, r)];
             out.attrs = rr.attrs.clone();
             out.computed = self.outward(&addr.typ, r, &rr.computed);
@@ -749,6 +857,7 @@ impl FakeCloud {
                 computed,
                 read_lag,
                 key: idempotency_key.to_string(),
+                materialized: BTreeMap::new(),
             },
         );
     }

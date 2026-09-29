@@ -35,7 +35,7 @@ use crate::diag::{self, Diagnostic, Diagnostics};
 use crate::store::{Deployment, Location, OpenS3, S3Spec, Store};
 use crate::value::Value;
 use anyhow::{Context, Result, bail};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -998,37 +998,45 @@ fn backend_term(text: &str) -> Option<String> {
 
 /// A deployment's published outputs (`store::OUTPUTS`, beside its state and
 /// apart from it): what other stacks read as `stack_output/3`, needing
-/// read access to this object only. A secret output crosses as its label,
-/// never its value: the reader's static pass treats it as secret (E0304
-/// where it reaches a public place), and its value is a secret null no
-/// plan resolves.
+/// read access to this object only. A secret output crosses as its label
+/// and where a provider holds it, never its value: the reader's static
+/// pass treats it as secret (E0304 where it reaches a public place), its
+/// value is a secret null no plan resolves, and the reader's provider
+/// reads it where it is held inside Apply (E DR-19).
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Published {
     /// The deployment, as its own project names it.
     pub deployment: String,
     #[serde(default)]
     pub outputs: BTreeMap<String, Value>,
-    /// The outputs declared `secret(T)`, each with T's name.
+    /// The outputs declared `secret(T)`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub secret: BTreeMap<String, String>,
+    pub secret: BTreeMap<String, SecretOutput>,
+}
+
+/// A secret output as state records it and `outputs.json` publishes it:
+/// its label (`output/#K`), T's name, and the keyed digest of its value
+/// (the deployment's plan key, `hmac-sha256:..`) when the run knew the
+/// value; and where a provider holds it: the object whose attribute it is.
+/// A secret the program has only as bytes (an input's) is held nowhere, and
+/// no other stack can use it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SecretOutput {
+    pub label: String,
+    #[serde(rename = "type", default, skip_serializing_if = "String::is_empty")]
+    pub ty: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub digest: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub held: Option<crate::provider::Held>,
 }
 
 impl Published {
-    /// `outputs` as the apply recorded them, those declared secret
-    /// (`secret`, key and type) by label only.
-    pub fn new(
-        deployment: &str,
-        outputs: &BTreeMap<String, Value>,
-        secret: &BTreeMap<String, String>,
-    ) -> Published {
+    pub fn new(deployment: &str, outputs: &Outputs) -> Published {
         Published {
             deployment: deployment.to_string(),
-            outputs: outputs
-                .iter()
-                .filter(|(k, _)| !secret.contains_key(*k))
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect(),
-            secret: secret.clone(),
+            outputs: outputs.known.clone(),
+            secret: outputs.secret.clone(),
         }
     }
 
@@ -1039,7 +1047,8 @@ impl Published {
     }
 
     /// `stack_output(Name, Key, Value)`, `Name` as the reader names the
-    /// deployment; a secret one's value its label.
+    /// deployment; a secret one's value a secret null labeled
+    /// `stack_output/Name#Key`.
     fn facts(&self, name: &str) -> Vec<Atom> {
         let fact = |k: &str, v: Value| Atom {
             pred: "stack_output".into(),
@@ -1051,23 +1060,213 @@ impl Published {
             record: None,
             span: Span::default(),
         };
+        let null = |k: &str, class, ty: &str| Value::Null {
+            label: output_label(name, k),
+            class,
+            ty: ty.to_string(),
+        };
         let mut out: Vec<Atom> = self
             .outputs
             .iter()
             .map(|(k, v)| fact(k, v.clone()))
             .collect();
-        for (k, ty) in &self.secret {
-            out.push(fact(
-                k,
-                Value::Null {
-                    label: format!("stack_output/{name}#{k}"),
-                    class: crate::value::NullClass::Secret,
-                    ty: ty.clone(),
-                },
-            ));
+        for (k, o) in &self.secret {
+            out.push(fact(k, null(k, crate::value::NullClass::Secret, &o.ty)));
         }
         out
     }
+}
+
+/// The label of the null a reader has for the output `k` of the deployment
+/// it names `name`.
+fn output_label(name: &str, k: &str) -> String {
+    crate::value::null_label("stack_output", name, k)
+}
+
+/// The stack's outputs after an apply (`output k = t` at the top), as its
+/// state records them and `outputs.json` publishes them.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Outputs {
+    /// The public outputs whose value is known (a null is not recorded).
+    pub known: BTreeMap<String, Value>,
+    pub secret: BTreeMap<String, SecretOutput>,
+}
+
+impl Outputs {
+    pub fn is_empty(&self) -> bool {
+        self.known.is_empty() && self.secret.is_empty()
+    }
+}
+
+/// The stack's outputs in an evaluation (`facts`: `attr(output, "", k,
+/// V)`), after an apply whose state is `state` and whose world's
+/// configured attributes are `world` (by address). A secret output
+/// (`secret`: key -> T's name) records no
+/// value: its label, its value's keyed digest (`digest`, the deployment's
+/// plan key) when the run knows the value, and where a provider holds it
+/// when it is a resource's attribute (a ref, or a sensitive computed
+/// value's null): the object `state` maps, managed for `deployment`.
+pub fn outputs(
+    facts: &BTreeSet<Atom>,
+    secret: &BTreeMap<String, String>,
+    world: &BTreeMap<crate::ir::Address, serde_json::Value>,
+    state: &crate::state::State,
+    deployment: &str,
+    digest: &dyn Fn(&[u8]) -> String,
+) -> Outputs {
+    let attrs: BTreeMap<(&str, &str, &str), &Value> = facts
+        .iter()
+        .filter(|a| a.pred == "attr")
+        .filter_map(|a| match a.args.as_slice() {
+            [
+                Term::Val(Value::Str(t)),
+                Term::Val(Value::Str(n)),
+                Term::Val(Value::Str(p)),
+                Term::Val(v),
+            ] => Some(((t.as_str(), n.as_str(), p.as_str()), v)),
+            _ => None,
+        })
+        .collect();
+    let resolver = Resolver {
+        attrs: &attrs,
+        world,
+    };
+    let mut out = Outputs::default();
+    for ((t, scope, k), v) in &attrs {
+        if *t != crate::transform::OUTPUT || !scope.is_empty() {
+            continue;
+        }
+        let Some(ty) = secret.get(*k) else {
+            if crate::lattice::nulls_in(v).is_empty() {
+                out.known.insert(k.to_string(), (*v).clone());
+            }
+            continue;
+        };
+        // The value, a ref to a configured attribute resolved to the
+        // program's value of it, else the world's.
+        let known = resolver.resolve(v, 0);
+        let at = match v {
+            Value::Ref { typ, name, attr } => Some((typ.clone(), name.clone(), attr.clone())),
+            Value::Null {
+                label,
+                class: crate::value::NullClass::Secret,
+                ..
+            } => crate::value::null_owner(label)
+                .zip(label.split_once('#').map(|(_, p)| p.to_string()))
+                .map(|((t, n), p)| (t, n, p)),
+            _ => None,
+        };
+        let held = at.and_then(|(typ, name, path)| {
+            let addr = crate::ir::Address {
+                typ: typ.clone(),
+                name: name.clone(),
+            };
+            // A provider's label names the object by its remote id.
+            let e = state.get(&addr).or_else(|| {
+                state.resources.iter().find_map(|(k, e)| {
+                    let a = crate::state::parse_key(k)?;
+                    (a.typ == typ && e.remote == name).then_some(e)
+                })
+            })?;
+            Some(crate::provider::Held {
+                provider: e.provider.clone(),
+                deployment: deployment.to_string(),
+                typ,
+                remote: e.remote.clone(),
+                path,
+                digest: String::new(),
+            })
+        });
+        let digest = known
+            .map(|v| {
+                let j = serde_json::to_value(&v).expect("a value serializes");
+                format!(
+                    "hmac-sha256:{}",
+                    digest(crate::approval::canonical_json(&j).as_bytes())
+                )
+            })
+            .unwrap_or_default();
+        out.secret.insert(
+            k.to_string(),
+            SecretOutput {
+                label: crate::value::null_label(crate::transform::OUTPUT, "", k),
+                ty: ty.clone(),
+                held,
+                digest,
+            },
+        );
+    }
+    out
+}
+
+/// A value with its refs to configured attributes resolved: `None` while
+/// any part of it is unknown.
+struct Resolver<'a> {
+    attrs: &'a BTreeMap<(&'a str, &'a str, &'a str), &'a Value>,
+    world: &'a BTreeMap<crate::ir::Address, serde_json::Value>,
+}
+
+impl Resolver<'_> {
+    fn resolve(&self, v: &Value, depth: usize) -> Option<Value> {
+        // A chain of refs longer than this is a cycle.
+        if depth > 32 {
+            return None;
+        }
+        match v {
+            Value::Null { .. } => None,
+            Value::List(xs) => xs
+                .iter()
+                .map(|x| self.resolve(x, depth))
+                .collect::<Option<_>>()
+                .map(Value::List),
+            Value::Obj(m) => m
+                .iter()
+                .map(|(k, x)| Some((k.clone(), self.resolve(x, depth)?)))
+                .collect::<Option<_>>()
+                .map(Value::Obj),
+            Value::Ref { typ, name, attr } => {
+                match self
+                    .attrs
+                    .get(&(typ.as_str(), name.as_str(), attr.as_str()))
+                {
+                    Some(v) => self.resolve(v, depth + 1),
+                    None => {
+                        let addr = crate::ir::Address {
+                            typ: typ.clone(),
+                            name: name.clone(),
+                        };
+                        let v = crate::provider::get_path(self.world.get(&addr)?, attr)?;
+                        crate::provider::marker(v)
+                            .is_none()
+                            .then(|| crate::provider::json_to_value(v))
+                    }
+                }
+            }
+            v => Some(v.clone()),
+        }
+    }
+}
+
+/// Where the reader's provider finds each secret output it reads that a
+/// provider holds, by the label of the reader's null
+/// (`stack_output/NAME#K`); the held object's deployment as the reader
+/// names it.
+pub fn held(read: &[Read]) -> BTreeMap<String, crate::provider::Held> {
+    let mut out = BTreeMap::new();
+    for r in read {
+        let Some(p) = &r.published else { continue };
+        for (k, o) in &p.secret {
+            if let Some(h) = &o.held {
+                let h = crate::provider::Held {
+                    deployment: r.name.clone(),
+                    digest: o.digest.clone(),
+                    ..h.clone()
+                };
+                out.insert(output_label(&r.name, k), h);
+            }
+        }
+    }
+    out
 }
 
 /// The outputs a program declares `secret(T)`, with T's name (the stack's
@@ -1101,6 +1300,10 @@ pub struct Read {
     /// The object's digest, `absent` when there is none.
     pub digest: String,
     pub published: Option<Published>,
+    /// The mock's world of the deployment, when it is known (a directory's,
+    /// or the project's own bucket deployment's): where the reader's mock
+    /// finds a secret the deployment's objects hold.
+    pub world: Option<PathBuf>,
 }
 
 /// The digest of an outputs object as a plan records it.
@@ -1121,6 +1324,7 @@ pub fn read_published(loc: &Location, s3: OpenS3, name: &str, own: &str) -> Resu
             name: name.to_string(),
             digest: outputs_digest(None),
             published: None,
+            world: None,
         });
     };
     let p: Published =
@@ -1136,6 +1340,10 @@ pub fn read_published(loc: &Location, s3: OpenS3, name: &str, own: &str) -> Resu
         name: name.to_string(),
         digest: outputs_digest(Some(&o.bytes)),
         published: Some(p),
+        world: match loc {
+            Location::Local(dir) => Some(dir.join(crate::state::WORLD)),
+            Location::S3(_) => None,
+        },
     })
 }
 
@@ -1229,7 +1437,21 @@ pub fn stack_outputs(
         if name == own || named.is_some_and(|n| !n.contains(name)) {
             continue;
         }
-        out.push(read_published(&e.state, s3, name, name)?);
+        let mut r = read_published(&e.state, s3, name, name)?;
+        // A bucket's deployment keeps its world in its directory under the
+        // state root.
+        if r.world.is_none() {
+            let (stack, seg) = match name.strip_suffix(']').and_then(|n| n.split_once('[')) {
+                Some((b, s)) => (b, Some(s)),
+                None => (name.as_str(), None),
+            };
+            let home = root.join(stack);
+            r.world = Some(world_file(
+                &e.state,
+                &seg.map_or(home.clone(), |s| home.join(s)),
+            ));
+        }
+        out.push(r);
     }
     let project = root.parent().unwrap_or(Path::new(""));
     for name in named.into_iter().flatten() {
@@ -1266,32 +1488,4 @@ pub fn has_outputs(facts: &std::collections::BTreeSet<crate::ast::Atom>) -> bool
             && matches!(a.args.as_slice(), [Term::Val(Value::Str(t)), Term::Val(Value::Str(scope)), ..]
                 if t == crate::transform::OUTPUT && scope.is_empty())
     })
-}
-
-/// The stack's own outputs in an evaluation: `attr(output, "", k, V)`,
-/// those whose value is known (a null is not recorded).
-pub fn outputs(facts: &std::collections::BTreeSet<crate::ast::Atom>) -> BTreeMap<String, Value> {
-    fn known(v: &Value) -> bool {
-        match v {
-            Value::Null { .. } => false,
-            Value::List(xs) => xs.iter().all(known),
-            Value::Obj(m) => m.values().all(known),
-            _ => true,
-        }
-    }
-    facts
-        .iter()
-        .filter(|a| a.pred == "attr")
-        .filter_map(|a| match a.args.as_slice() {
-            [
-                Term::Val(Value::Str(t)),
-                Term::Val(Value::Str(scope)),
-                Term::Val(Value::Str(k)),
-                Term::Val(v),
-            ] if t == crate::transform::OUTPUT && scope.is_empty() && known(v) => {
-                Some((k.clone(), v.clone()))
-            }
-            _ => None,
-        })
-        .collect()
 }

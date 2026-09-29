@@ -1277,6 +1277,7 @@ fn run_with(
         &open_s3(&root, false),
     )?;
     let secret_outputs = crate::stack::secret_outputs(&read_outputs);
+    let held = crate::stack::held(&read_outputs);
     let outputs_read: Vec<zset::file::OutputsDigest> = read_outputs
         .iter()
         .map(|r| zset::file::OutputsDigest {
@@ -1365,6 +1366,12 @@ fn run_with(
             configured: provider_configs(&program),
             stack: deployment.clone(),
             blocks: stack_cfg.provider_blocks.clone(),
+            held: held.clone(),
+            worlds: read_outputs
+                .iter()
+                .filter(|r| held.values().any(|h| h.deployment == r.name))
+                .filter_map(|r| Some((r.name.clone(), r.world.clone()?)))
+                .collect(),
         },
     )?;
     // Externs are asked on demand: a table's of its file, else of the file
@@ -2411,27 +2418,37 @@ fn run_with(
                     // registered: everything stays beside the world file.
                     persist_externs(&mut st, &externs);
                     crate::tables::record(&mut st.externs, &externs.recorded());
-                    st.outputs = if crate::stack::has_outputs(&res.facts) {
-                        crate::stack::outputs(&evaluate(&st)?.0.facts)
+                    // A secret one by its label and digest, never its
+                    // value (E DR-19); a ref resolved, as the world is.
+                    let secret_types = crate::stack::secret_output_types(&program);
+                    let outputs = if crate::stack::has_outputs(&res.facts) {
+                        crate::stack::outputs(
+                            &evaluate(&st)?.0.facts,
+                            &secret_types,
+                            &backend.observe(&st)?,
+                            &st,
+                            &deployment,
+                            &|b| key.digest(b),
+                        )
                     } else {
                         Default::default()
                     };
+                    st.outputs = outputs.known.clone();
+                    st.secret_outputs = outputs.secret.clone();
                     persist(&st)?;
                     // Published beside the state, apart from it: what
-                    // other stacks read (a secret output by its label).
-                    let secret_types = crate::stack::secret_output_types(&program);
+                    // other stacks read.
                     if cli.world.is_none()
-                        && (!st.outputs.is_empty()
+                        && (!outputs.is_empty()
                             || !secret_types.is_empty()
                             || dep.store().get(store::OUTPUTS)?.is_some())
                     {
-                        let published =
-                            crate::stack::Published::new(&deployment, &st.outputs, &secret_types);
+                        let published = crate::stack::Published::new(&deployment, &outputs);
                         dep.publish(&published.bytes())?;
                     }
                     // Every deployment of a keyed stack is registered.
                     let keyed = instance.segment().is_some();
-                    if (!st.outputs.is_empty()
+                    if (!outputs.is_empty()
                         || !secret_types.is_empty()
                         || stack_cfg.bootstrap
                         || keyed)
@@ -3759,6 +3776,9 @@ fn state_show(dep: &crate::store::Deployment) -> Result<()> {
     }
     for (k, v) in &st.outputs {
         println!("  output {k} = {}", partition::fmt_value(v));
+    }
+    for (k, o) in &st.secret_outputs {
+        println!("  output {k} = (sensitive {})", o.label);
     }
     if st.in_flight.is_some() {
         println!("  an apply was interrupted: the next apply resumes it");

@@ -74,6 +74,7 @@ pub fn value(v: &Value) -> pb::Value {
             label: label.clone(),
             class: class(*c) as i32,
             ty: ty.clone(),
+            held: None,
         }),
     })
 }
@@ -144,6 +145,14 @@ pub fn doc(j: &Json) -> pb::Value {
                 pb::NullClass::Open
             } as i32,
             ty: String::new(),
+            held: provider::held(j).map(|h| pb::Held {
+                provider: h.provider,
+                deployment: h.deployment,
+                r#type: h.typ,
+                remote: h.remote,
+                path: h.path,
+                digest: h.digest,
+            }),
         }));
     }
     msg(match j {
@@ -182,7 +191,20 @@ pub fn from_doc(v: &pb::Value) -> Result<Json> {
                 .collect::<Result<_>>()?,
         ),
         Kind::Null(n) => match from_class(n.class)? {
-            NullClass::Secret => provider::secret_json(&n.label),
+            NullClass::Secret => match &n.held {
+                Some(h) => provider::held_json(
+                    &n.label,
+                    &provider::Held {
+                        provider: h.provider.clone(),
+                        deployment: h.deployment.clone(),
+                        typ: h.r#type.clone(),
+                        remote: h.remote.clone(),
+                        path: h.path.clone(),
+                        digest: h.digest.clone(),
+                    },
+                ),
+                None => provider::secret_json(&n.label),
+            },
             _ => provider::null_json(&n.label),
         },
         Kind::Float(f) => Json::String(float(*f)),
@@ -295,7 +317,10 @@ mod tests {
     #[test]
     fn documents_round_trip_with_their_markers() {
         let d = json!({"a": [1, true, "x"], "id": {"$null": "t/a#id"},
-                       "pw": {"$secret": "t/a#pw"}, "tags": {}});
+                       "pw": {"$secret": "t/a#pw"}, "tags": {},
+                       "other": {"$secret": "stack_output/prod#pw", "held": {
+                           "provider": "fakecloud", "deployment": "prod", "type": "t",
+                           "remote": "a-1", "path": "pw", "digest": "hmac-sha256:00"}}});
         assert_eq!(from_doc(&doc(&d)).unwrap(), d);
     }
 

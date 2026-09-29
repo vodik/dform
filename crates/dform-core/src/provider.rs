@@ -56,11 +56,46 @@ pub fn secret_json(label: &str) -> serde_json::Value {
     serde_json::json!({ SECRET_KEY: label })
 }
 
+/// A secret marker's second key, when another stack's secret is read
+/// (`stack_output`): where a provider holds it, a [`Held`].
+pub const HELD_KEY: &str = "held";
+
+/// Where a provider holds a secret another stack reads (E DR-19): the
+/// object `remote` of type `typ` that the provider `provider` manages for
+/// the deployment `deployment`, at `path`. The reading stack's provider
+/// reads the bytes there inside Apply; they never pass through dform or
+/// its stores. `digest` is the keyed digest of the value when the
+/// deployment that manages it knew the value (a configured attribute), so
+/// a change to it changes the reader's document; empty when it never did
+/// (a sensitive computed value).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Held {
+    pub provider: String,
+    pub deployment: String,
+    #[serde(rename = "type")]
+    pub typ: String,
+    pub remote: String,
+    pub path: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub digest: String,
+}
+
+/// A secret marker that says where its value is held:
+/// `{"$secret": label, "held": {..}}`.
+pub fn held_json(label: &str, held: &Held) -> serde_json::Value {
+    serde_json::json!({
+        SECRET_KEY: label,
+        HELD_KEY: serde_json::to_value(held).expect("a held secret serializes"),
+    })
+}
+
 /// A null or secret marker's key and label.
 pub fn marker(v: &serde_json::Value) -> Option<(&'static str, &str)> {
     let m = v.as_object()?;
-    if m.len() != 1 {
-        return None;
+    match m.len() {
+        1 => {}
+        2 if m.contains_key(SECRET_KEY) && m.contains_key(HELD_KEY) => {}
+        _ => return None,
     }
     for k in [NULL_KEY, SECRET_KEY] {
         if let Some(serde_json::Value::String(l)) = m.get(k) {
@@ -68,6 +103,12 @@ pub fn marker(v: &serde_json::Value) -> Option<(&'static str, &str)> {
         }
     }
     None
+}
+
+/// Where a secret marker's value is held, when it says.
+pub fn held(v: &serde_json::Value) -> Option<Held> {
+    marker(v)?;
+    serde_json::from_value(v.get(HELD_KEY)?.clone()).ok()
 }
 
 /// Render one side of a change for plan output.

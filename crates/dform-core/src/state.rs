@@ -33,6 +33,11 @@ pub struct State {
     /// `stack_output(Stack, Key, Value)` (`stack`).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub outputs: BTreeMap<String, crate::value::Value>,
+    /// The outputs declared `secret(T)`: each by its label and the keyed
+    /// digest of its value, never the value (E DR-19), and where a provider
+    /// holds it when one does (`stack::SecretOutput`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub secret_outputs: BTreeMap<String, crate::stack::SecretOutput>,
     /// The answers of `persist` externs (E DR-7): kept, and never asked
     /// again, so a generated value stays the same.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

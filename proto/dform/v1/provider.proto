@@ -91,6 +91,26 @@ message Null {
   string label = 1;
   NullClass class = 2;
   string ty = 3;
+  // A SECRET of another stack (a `stack_output`): where a provider holds
+  // it. The provider that receives it in an Apply document reads the value
+  // there, inside the call; dform never has it.
+  optional Held held = 4;
+}
+
+// An object a provider manages for another deployment, and the path in it
+// that holds a secret. A provider that is not `provider`, or cannot reach
+// the object, refuses the Apply naming the resource and the path.
+message Held {
+  string provider = 1;
+  // The deployment that manages the object, as the reading run names it.
+  string deployment = 2;
+  string type = 3;
+  // The object's remote id.
+  string remote = 4;
+  string path = 5;
+  // The keyed digest of the value when that deployment knew it, else
+  // empty: it changes when the value does, so the reader's document does.
+  string digest = 6;
 }
 
 enum NullClass {

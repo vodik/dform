@@ -451,6 +451,7 @@ fn run(
             configured: provider_configs(&program),
             stack: deployment.clone(),
             blocks: cfg.provider_blocks.clone(),
+            ..Default::default()
         },
     )?;
     let (no_program, no_fns) = (Program { statements: vec![] }, vec![]);

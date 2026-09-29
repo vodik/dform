@@ -72,6 +72,14 @@ pub struct Config {
     /// block's settings lower to) finds its link by the block's name as
     /// well as by the provider's own.
     pub blocks: BTreeMap<String, String>,
+    /// The secrets of other stacks the run reads (`stack_output`) that a
+    /// provider holds, by the label of the run's null: an Apply document
+    /// carries each as its label and where it is held (`provider::Held`),
+    /// and the provider reads it there.
+    pub held: BTreeMap<String, provider::Held>,
+    /// The mock's world of each deployment a held secret names: its
+    /// objects are there, not in this run's world.
+    pub worlds: BTreeMap<String, PathBuf>,
 }
 
 /// How a run reaches its providers: a backend (`plugin::backend`). The
@@ -150,6 +158,8 @@ pub struct Providers {
     mock_blocks: BTreeMap<String, String>,
     /// The account each link's last Configure reported, if it tells.
     accounts: RefCell<BTreeMap<usize, String>>,
+    /// [`Config::held`].
+    held: BTreeMap<String, provider::Held>,
 }
 
 /// What the providers' Schema calls answered.
@@ -210,6 +220,13 @@ impl Providers {
         let mut base = base;
         if let Some(c) = &cfg.cache {
             base["cache"] = path(c);
+        }
+        if !cfg.worlds.is_empty() {
+            base["worlds"] = cfg
+                .worlds
+                .iter()
+                .map(|(d, w)| (d.clone(), path(w)))
+                .collect();
         }
         let (mut links, mut bases, mut awaiting) = (Vec::new(), Vec::new(), BTreeSet::new());
         let mut accounts = BTreeMap::new();
@@ -276,6 +293,7 @@ impl Providers {
             blocks,
             mock_blocks,
             accounts: RefCell::new(accounts),
+            held: cfg.held.clone(),
             ..p
         })
     }
@@ -346,6 +364,7 @@ impl Providers {
             blocks: BTreeMap::new(),
             mock_blocks: BTreeMap::new(),
             accounts: RefCell::new(BTreeMap::new()),
+            held: BTreeMap::new(),
         }
     }
 
@@ -1085,7 +1104,10 @@ impl Providers {
     /// materializes it. Plan shows what is still unknown as `?label`.
     fn resolve_null(&self, ctx: &Ctx, label: &str, class: NullClass) -> Result<Json> {
         if class == NullClass::Secret {
-            return Ok(provider::secret_json(label));
+            return Ok(match self.held.get(label) {
+                Some(h) => provider::held_json(label, h),
+                None => provider::secret_json(label),
+            });
         }
         let mut found = None;
         if let (Some((_, path)), Some((typ, name))) =
@@ -1118,6 +1140,46 @@ impl Providers {
             return Ok(v.clone());
         }
         bail!("cloud_ref missing attribute {typ}.{name}.{attr}");
+    }
+
+    /// A secret output of another stack in a resource's document must be
+    /// held by a provider (`Config::held`): its value is bytes that stack's
+    /// program had (an input's) otherwise, and nothing can read it here.
+    /// `verb` and `addr` name the resource, `path` the attribute.
+    fn check_held(&self, verb: &str, addr: &Address, path: &str, v: &Value) -> Result<()> {
+        let join = |k: &str| match path {
+            "" => k.to_string(),
+            p => format!("{p}.{k}"),
+        };
+        match v {
+            Value::Null {
+                label,
+                class: NullClass::Secret,
+                ..
+            } if !self.held.contains_key(label) => {
+                if let Some(("stack_output", name)) = crate::value::null_owner(label)
+                    .as_ref()
+                    .map(|(t, n)| (t.as_str(), n.as_str()))
+                {
+                    bail!(
+                        "{verb} {}/{} {path}: {label} is a secret output of {name} that no \
+                         provider holds (its value is not an attribute of a resource there), so \
+                         no provider can read it; output a resource's secret attribute instead",
+                        addr.typ,
+                        addr.name
+                    );
+                }
+                Ok(())
+            }
+            Value::List(xs) => xs
+                .iter()
+                .enumerate()
+                .try_for_each(|(i, x)| self.check_held(verb, addr, &join(&i.to_string()), x)),
+            Value::Obj(m) => m
+                .iter()
+                .try_for_each(|(k, x)| self.check_held(verb, addr, &join(k), x)),
+            _ => Ok(()),
+        }
     }
 
     fn resolve_value(&self, ctx: &Ctx, v: &Value) -> Result<Json> {
@@ -1207,6 +1269,7 @@ impl Providers {
                 strict: None,
                 retracted,
             };
+            self.check_held("plan", &r.addr, "", &r.attrs)?;
             let doc = self.resolve_value(&ctx, &r.attrs)?;
             order.push(r.addr.clone());
             resolved.insert(r.addr.clone(), doc);
@@ -1353,7 +1416,10 @@ impl Providers {
 
     /// A document in the canonical form the Z-set compares: leaf path to
     /// leaf value, keyed lists by key, sets sorted (`provider::flatten`),
-    /// null and secret markers as labeled nulls of the schema's class.
+    /// null and secret markers as labeled nulls of the schema's class. A
+    /// secret held by another stack's object is where it is held and its
+    /// digest: what the reader knows of it, definite, so a changed one
+    /// updates and an unchanged one is no change.
     fn flat_value(&self, typ: &str, doc: &Json) -> Value {
         let mut leaves = BTreeMap::new();
         provider::flatten(self.schema(), typ, doc, "", "", false, &mut leaves);
@@ -1367,10 +1433,16 @@ impl Providers {
                             class: self.null_class(label),
                             ty: String::new(),
                         },
-                        Some((_, label)) => Value::Null {
-                            label: label.to_string(),
-                            class: NullClass::Secret,
-                            ty: String::new(),
+                        Some((_, label)) => match provider::held(&v) {
+                            Some(h) => Value::Str(format!(
+                                "(sensitive {label} held by {} {} {}/{}#{} {})",
+                                h.provider, h.deployment, h.typ, h.remote, h.path, h.digest
+                            )),
+                            None => Value::Null {
+                                label: label.to_string(),
+                                class: NullClass::Secret,
+                                ty: String::new(),
+                            },
                         },
                         None => provider::json_to_value(&v),
                     };

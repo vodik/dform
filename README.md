@@ -272,9 +272,24 @@ state, publishes them beside it as their own object, `outputs.json`, and
 records where the deployment's objects are (an absolute directory, or
 `s3://...`) in `dform.state/stacks.json`; every other program reads them
 as facts, `stack_output("net.shared", vpc_id, V)`, from `outputs.json`
-only, never the state. An output declared `secret(T)` is published as its
-label, never its value: a reader gets a secret null, and using it in a
-public place is the static secret error (E0304). A saved plan records the
+only, never the state. An output declared `secret(T)` is recorded and
+published as its label (`output/#k`) and the keyed digest of its value
+(`hmac-sha256:..`, the deployment's plan key), never its value (E DR-19):
+a reader gets a secret null, and using it in a public place is the static
+secret error (E0304). A secret output that is a resource's attribute
+(`output pw = db.user.main.password`, or a sensitive computed value) is
+also published with where it is held: the provider, the object's type
+and remote id, and the path. Read into a sensitive field of another
+stack, it travels to that stack's provider in the Apply document as its
+label and that reference (the protocol's `Null.held`), and the provider
+reads the value there inside the call; the bytes never pass through
+dform. A changed digest updates the reader's field. A secret output
+that is only bytes the program had (an input's value) is held nowhere,
+and a reader's plan that puts it in a field is refused ("... is a secret
+output of prod that no provider holds"). The mock reads a held secret
+from the producing deployment's world (a directory's; the project's own
+bucket deployments' too) and keeps what it read in the reader's world as
+`materialized`; `dform-provider-k8s` does not read one yet. A saved plan records the
 digest of each outputs object it read, and `apply PLAN` refuses once one
 has changed ("stack_output of NAME: its published outputs changed since
 the plan").

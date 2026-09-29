@@ -440,3 +440,177 @@ fn a_secret_reaches_a_public_output_only_through_declassify() {
         assert!(!out.contains("HUNTER"), "{out}");
     }
 }
+
+/// A stack whose secret outputs are an input's value (`token`) and a
+/// resource's sensitive attribute (`pass`, a ref to what the provider holds).
+const PRODUCER: &str = r#"edition 2026
+input pw: secret(string)
+stack prod {}
+resource leaky.vault v {
+  for pw(p)
+  password = p
+}
+output token: secret(string)
+output token = pw
+output pass: secret(string)
+output pass = leaky.vault.v.password
+"#;
+
+const PRODUCED: &str = "PRODUCED-SECRET-DO-NOT-STORE";
+
+/// Every file under `dir` but the mock's worlds (the provider's own
+/// storage, `remote.json`), with its path.
+fn stored_files(dir: &std::path::Path, out: &mut Vec<(String, String)>) {
+    for e in std::fs::read_dir(dir).unwrap() {
+        let p = e.unwrap().path();
+        if p.is_dir() {
+            stored_files(&p, out);
+        } else if p.file_name().is_some_and(|n| n != "remote.json") {
+            let text = String::from_utf8_lossy(&std::fs::read(&p).unwrap()).into_owned();
+            out.push((p.display().to_string(), text));
+        }
+    }
+}
+
+/// E DR-19: a secret output's bytes never enter the store. The state
+/// records it by its label and the keyed digest of its value, and the
+/// published outputs likewise, with where a provider holds it; on a
+/// directory and in a bucket alike.
+#[test]
+fn a_secret_output_is_stored_by_label_and_digest_never_by_value() {
+    let schema = schema();
+    let set = format!("pw={PRODUCED}");
+    let apply = ["dev", "--provider", &schema, "apply", "prod", "--set", &set];
+
+    // A directory.
+    let s = Scratch::project("secrets-output-local");
+    s.write("stacks/prod.df", PRODUCER);
+    s.run(&apply).success();
+    let mut files = Vec::new();
+    stored_files(&s.path("dform.state"), &mut files);
+    for (path, text) in &files {
+        assert!(!text.contains(PRODUCED), "{path}:\n{text}");
+    }
+    let state = s.read("dform.state/prod/state.json");
+    assert!(state.contains("\"label\": \"output/#token\""), "{state}");
+    assert!(state.contains("\"digest\": \"hmac-sha256:"), "{state}");
+    let published = s.read("dform.state/prod/outputs.json");
+    assert!(
+        published.contains("\"label\": \"output/#pass\""),
+        "{published}"
+    );
+    assert!(published.contains("\"path\": \"password\""), "{published}");
+
+    // A bucket (the fake S3 server).
+    let server = dform_s3::fake::Server::start();
+    let s = Scratch::project("secrets-output-s3");
+    s.write("stacks/prod.df", PRODUCER);
+    s.write(
+        "dform.toml",
+        &format!(
+            "[defaults]\nbackend = 's3(\"dform-test\", \"secrets/{{stack}}\", \
+             {{endpoint: \"{}\", region: \"us-east-1\"}})'\n",
+            server.endpoint
+        ),
+    );
+    let spec = dform_core::store::S3Spec {
+        bucket: "dform-test".into(),
+        prefix: "secrets".into(),
+        endpoint: Some(server.endpoint.clone()),
+        region: Some("us-east-1".into()),
+    };
+    let bucket =
+        dform_s3::S3Store::with_credentials(&spec, "", rusty_s3::Credentials::new("fake", "fake"))
+            .unwrap();
+    bucket.create_bucket().unwrap();
+    let r = common::dform()
+        .args(common::yes(&apply))
+        .current_dir(&s.dir)
+        .env("DFORM_S3_ACCESS_KEY_ID", "fake")
+        .env("DFORM_S3_SECRET_ACCESS_KEY", "fake")
+        .output()
+        .unwrap();
+    common::Run::from(r).success();
+    use dform_core::store::Store;
+    let keys = bucket.list("").unwrap();
+    assert!(keys.iter().any(|k| k == "prod/state.json"), "{keys:?}");
+    assert!(keys.iter().any(|k| k == "prod/outputs.json"), "{keys:?}");
+    for k in &keys {
+        let o = bucket.get(k).unwrap().expect("listed");
+        let text = String::from_utf8_lossy(&o.bytes);
+        assert!(!text.contains(PRODUCED), "{k}:\n{text}");
+        if k == "prod/state.json" {
+            assert!(text.contains("\"label\": \"output/#token\""), "{text}");
+        }
+    }
+    let mut files = Vec::new();
+    stored_files(&s.path("dform.state"), &mut files);
+    for (path, text) in &files {
+        assert!(!text.contains(PRODUCED), "{path}:\n{text}");
+    }
+}
+
+/// A secret output crosses stacks as a reference (E DR-19): the reader's
+/// provider reads it where the producer's provider holds it, inside Apply.
+/// The reader's field applies, a changed secret updates it, and neither
+/// run prints it. A secret the producer holds nowhere (an input's value)
+/// cannot cross, and the plan says so.
+#[test]
+fn a_secret_output_reaches_a_sensitive_field_in_another_stack() {
+    let schema = schema();
+    let s = Scratch::project("secrets-output-cross");
+    s.write("stacks/prod.df", PRODUCER);
+    s.write(
+        "stacks/app.df",
+        "edition 2026\nstack app {}\nresource leaky.vault copy {\n  \
+         for stack_output(\"prod\", \"pass\", p)\n  backup = p\n}\n",
+    );
+    let dev = |args: &[&str]| {
+        let mut a = vec!["dev", "--provider", schema.as_str()];
+        a.extend_from_slice(args);
+        s.run(&a)
+    };
+    let set = format!("pw={PRODUCED}");
+    dev(&["apply", "prod", "--set", &set]).success();
+    let materialized = |s: &Scratch| -> serde_json::Value {
+        let w: serde_json::Value =
+            serde_json::from_str(&s.read("dform.state/app/remote.json")).unwrap();
+        w["resources"]["leaky.vault::copy"]["materialized"]["backup"].clone()
+    };
+
+    let r = dev(&["apply", "app"]).success();
+    for out in [&r.stdout, &r.stderr] {
+        assert!(!out.contains(PRODUCED), "{out}");
+    }
+    assert!(
+        r.stdout
+            .contains("+ leaky.vault.copy\n  backup = (sensitive stack_output/prod#pass)\n"),
+        "{}",
+        r.stdout
+    );
+    assert_eq!(materialized(&s), PRODUCED);
+    let r = dev(&["plan", "app"]).success();
+    assert_eq!(r.summary(), "stack app is undeformed", "{}", r.stdout);
+
+    // The producer's secret changes: the reader's field is updated.
+    dev(&["apply", "prod", "--set", "pw=ROTATED-SECRET"]).success();
+    let r = dev(&["apply", "app"]).success();
+    assert!(r.stdout.contains("~ leaky.vault.copy"), "{}", r.stdout);
+    assert!(!r.stdout.contains("ROTATED"), "{}", r.stdout);
+    assert_eq!(materialized(&s), "ROTATED-SECRET");
+
+    // An input's value is held nowhere: no provider can read it.
+    s.write(
+        "stacks/app.df",
+        &s.read("stacks/app.df").replace("\"pass\"", "\"token\""),
+    );
+    let r = dev(&["plan", "app"]).failure();
+    assert!(
+        r.stderr.contains(
+            "plan leaky.vault/copy backup: stack_output/prod#token is a secret output of prod \
+             that no provider holds"
+        ),
+        "{}",
+        r.stderr
+    );
+}
