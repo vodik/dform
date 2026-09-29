@@ -180,8 +180,9 @@ enum Command {
         cmd: DevCommand,
     },
     /// Serve the language server protocol on stdin and stdout: diagnostics
-    /// of the selected environment, a contributors hover, schema
-    /// completion (README "Language server").
+    /// of the selected environment, a contributors hover and docs at
+    /// point, schema completion, signature help (README "Language
+    /// server").
     Lsp,
     /// The completion scripts' helper: candidates for the next word.
     #[command(name = "__complete", hide = true)]

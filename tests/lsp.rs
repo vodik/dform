@@ -233,10 +233,11 @@ fn hover_shows_every_contribution_and_why_prints_the_derivation() {
     let at = find(&network, "tags = { env: env", 1);
     let hover = c.at("textDocument/hover", &network, at);
     let text = hover["contents"]["value"].as_str().unwrap().to_string();
-    assert!(
-        text.contains("dform[env=staging] (env from its default)"),
-        "{text}"
-    );
+    // The deployment is the `dform/environment` notification's, not the
+    // hover's.
+    assert!(!text.contains("dform[env=staging]"), "{text}");
+    // The schema's description of the path.
+    assert!(text.contains("Key-value labels on the network."), "{text}");
     assert!(
         text.contains("**net.vpc network.main::vpc .tags**"),
         "{text}"
@@ -286,6 +287,155 @@ fn hover_shows_every_contribution_and_why_prints_the_derivation() {
         text.contains("modules/network.df:14:5, module network instance peer"),
         "{hover}"
     );
+    c.shutdown();
+}
+
+/// The hover's content by what is under point: a declared name's doc
+/// comment (an input's, an alias's definition, a module instance's inputs
+/// and outputs with theirs, an output read through its instance), a
+/// builtin's or keyword's reference entry, a schema path's description;
+/// and nothing on whitespace, a comment or a string literal.
+#[test]
+fn hover_shows_docs_builtins_keywords_and_nothing_elsewhere() {
+    let (_s, root) = example("demo");
+    let stack = root.join("stacks/dform.df");
+    let network = root.join("modules/network.df");
+    let mut c = Client::start(&root, json!({}));
+    c.open(&stack);
+    c.open(&network);
+    let hover = |c: &mut Client, file: &Path, needle: &str, ahead: u32| -> Value {
+        let h = c.at("textDocument/hover", file, find(file, needle, ahead));
+        h["contents"]["value"].clone()
+    };
+
+    // Nothing: whitespace, a comment, a string literal, even inside a
+    // block or a fact that derives something.
+    assert_eq!(
+        hover(&mut c, &network, "    cidr = vpc_net", 1),
+        Value::Null
+    );
+    assert_eq!(hover(&mut c, &stack, "# both ends", 4), Value::Null);
+    assert_eq!(hover(&mut c, &stack, "\"us-test-1a\"", 3), Value::Null);
+
+    // An input read by name: its declaration and doc comment.
+    let text = hover(&mut c, &stack, "when env ==", 6);
+    let text = text.as_str().unwrap();
+    assert!(
+        text.contains("input env: environment = \"staging\""),
+        "{text}"
+    );
+    assert!(text.contains("The deployment's environment"), "{text}");
+    assert!(text.contains("- **owner**: platform"), "{text}");
+
+    // An alias: its definition.
+    let text = hover(&mut c, &stack, "input env: environment", 12);
+    let text = text.as_str().unwrap();
+    assert!(
+        text.contains("type environment = enum(\"dev\", \"staging\", \"prod\")"),
+        "{text}"
+    );
+    assert!(text.contains("The environments: an alias"), "{text}");
+
+    // A module instance: the module's docs, its inputs and outputs.
+    let text = hover(&mut c, &stack, "instance network main", 10);
+    let text = text.as_str().unwrap();
+    assert!(
+        text.contains("One VPC, and a private subnet in every zone."),
+        "{text}"
+    );
+    assert!(
+        text.contains("- `input vpc_net: inet`: The VPC's IPv4 range"),
+        "{text}"
+    );
+    assert!(
+        text.contains("- `output vpc: net.vpc`: The network's VPC, for peering."),
+        "{text}"
+    );
+    assert!(
+        text.contains("- `output private_subnet_ids: subnets`\n"),
+        "{text}"
+    );
+
+    // An output read through its instance.
+    let text = hover(&mut c, &stack, "network.main.private_subnet_ids", 15);
+    assert!(
+        text.as_str()
+            .unwrap()
+            .contains("output private_subnet_ids: subnets"),
+        "{text}"
+    );
+
+    // A builtin, a keyword.
+    let text = hover(&mut c, &stack, "inet_host(", 2);
+    let text = text.as_str().unwrap();
+    assert!(
+        text.contains("inet_host(net: inet, n: int) -> ip"),
+        "{text}"
+    );
+    assert!(text.contains("usable host"), "{text}");
+    let text = hover(&mut c, &stack, "scenario prod {", 2);
+    assert!(
+        text.as_str()
+            .unwrap()
+            .contains("scenario NAME { with KEY = VALUE"),
+        "{text}"
+    );
+
+    // A schema type: its description.
+    let text = hover(&mut c, &network, "resource net.vpc vpc", 11);
+    assert!(
+        text.as_str().unwrap().contains("A virtual network"),
+        "{text}"
+    );
+    c.shutdown();
+}
+
+/// Signature help on a builtin's call and on an extern's (its declaration's
+/// parameters and doc comment), with the argument point is in; a call being
+/// typed has one too.
+#[test]
+fn signature_help_of_builtins_and_externs() {
+    let (_s, root) = example("demo");
+    let stack = root.join("stacks/dform.df");
+    let mut c = Client::start(&root, json!({}));
+    c.open(&stack);
+    let help = c.at(
+        "textDocument/signatureHelp",
+        &stack,
+        find(&stack, "vpc_net), 20)", 9),
+    );
+    assert_eq!(
+        help["signatures"][0]["label"], "inet_host(net: inet, n: int) -> ip",
+        "{help}"
+    );
+    assert_eq!(help["activeParameter"], 1, "{help}");
+
+    let text = std::fs::read_to_string(&stack).unwrap();
+    let typed = format!(
+        "{text}\n#| The address a name resolves to.\nextern dns.lookup(+name: string, -addr: string)\nx(a) if dns.lookup(\"db\", "
+    );
+    c.change(&stack, 2, &typed);
+    let n = typed.lines().count() as u32;
+    let last = typed.lines().last().unwrap().len() as u32;
+    let help = c.at("textDocument/signatureHelp", &stack, (n - 1, last));
+    let sig = &help["signatures"][0];
+    assert_eq!(
+        sig["label"], "dns.lookup(+name: string, -addr: string)",
+        "{help}"
+    );
+    assert_eq!(
+        sig["documentation"]["value"],
+        "The address a name resolves to."
+    );
+    assert_eq!(help["activeParameter"], 1, "{help}");
+
+    // Outside every call: none.
+    let help = c.at(
+        "textDocument/signatureHelp",
+        &stack,
+        find(&stack, "input env", 3),
+    );
+    assert_eq!(help, Value::Null);
     c.shutdown();
 }
 
@@ -415,6 +565,20 @@ fn completion_reads_the_schema_and_the_modules() {
     );
     let names = labels(&items);
     assert!(names.contains(&"cidr".to_string()), "{names:?}");
+    // The schema's description of each path.
+    let cidr = items
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["label"] == "cidr")
+        .unwrap();
+    assert!(
+        cidr["documentation"]
+            .as_str()
+            .unwrap()
+            .starts_with("The network's IPv4 range"),
+        "{cidr}"
+    );
     assert!(
         !names.contains(&"id".to_string()),
         "computed paths are not written: {names:?}"
@@ -456,6 +620,14 @@ fn completion_reads_the_schema_and_the_modules() {
     let grants = labels(&c.at("textDocument/completion", &stack, (n - 2, 23)));
     assert!(grants.contains(&"_.cidr".to_string()), "{grants:?}");
     assert!(grants.contains(&"net.vpc.cidr".to_string()), "{grants:?}");
+
+    // A plain word: the builtins it starts, their signatures.
+    let typed = format!("{original}\ny = inet_h");
+    c.change(&stack, 3, &typed);
+    let n = typed.lines().count() as u32;
+    let items = c.at("textDocument/completion", &stack, (n - 1, 10));
+    assert_eq!(labels(&items), vec!["inet_host"], "{items}");
+    assert_eq!(items[0]["detail"], "inet_host(net: inet, n: int) -> ip");
 
     // In a policy pack, `r.`: the paths its grants allow.
     let baseline = root.join("policies/baseline.df");

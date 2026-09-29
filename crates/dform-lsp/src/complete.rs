@@ -3,9 +3,12 @@
 //! provider's schema facts; resource types after `resource`; a module
 //! instance's inputs and, after `module.instance.`, its outputs; grant
 //! patterns in `contributes`, and in a policy the paths its grants allow.
+//! A type's or path's documentation is its `type_doc`. Elsewhere a word
+//! completes to the builtins and keywords it starts (`engine::REFERENCE`).
 
 use crate::nav;
 use dform_core::ast::{Atom, Term};
+use dform_core::engine::{self, RefKind};
 use dform_core::schema::Schema;
 use dform_core::syntax::{SyntaxKind, SyntaxNode};
 use dform_core::value::Value;
@@ -133,6 +136,8 @@ pub fn complete(
         .collect();
     let before_word = line[..line.len() - word.len()].trim_end();
     let attrs = attrs(schema);
+    let docs = schema.docs();
+    let doc_of = |t: &str, p: &str| docs.get(&(t, p)).map(|d| d.to_string());
 
     // `contributes T.path`: every type's paths, and `_.path`.
     if before_word.ends_with("contributes") {
@@ -143,14 +148,14 @@ pub fn complete(
                 t.clone(),
                 CompletionItemKind::CLASS,
                 "every path of the type".into(),
-                None,
+                doc_of(t, ""),
             ));
             for (p, a) in ps {
                 out.push(item(
                     format!("{t}.{p}"),
                     CompletionItemKind::FIELD,
                     a.ty.clone(),
-                    None,
+                    doc_of(t, p),
                 ));
                 any.entry(p.clone()).or_default().push(t.clone());
             }
@@ -174,7 +179,7 @@ pub fn complete(
                     t.clone(),
                     CompletionItemKind::CLASS,
                     "resource type".into(),
-                    None,
+                    doc_of(t, ""),
                 )
             })
             .collect();
@@ -252,7 +257,8 @@ pub fn complete(
     };
     // A resource block's attribute paths.
     if let Some(r) = in_block(SyntaxKind::RESOURCE) {
-        let Some(ps) = nav::name_after_keyword(&r).and_then(|t| attrs.get(&t)) else {
+        let Some((t, ps)) = nav::name_after_keyword(&r).and_then(|t| attrs.get_key_value(&t))
+        else {
             return Vec::new();
         };
         return ps
@@ -263,8 +269,12 @@ pub fn complete(
                 if !a.flags.is_empty() {
                     detail.push_str(&format!(" [{}]", a.flags.join(", ")));
                 }
-                let doc = (!a.refinements.is_empty())
+                let refined = (!a.refinements.is_empty())
                     .then(|| format!("refined: {}", a.refinements.join(", ")));
+                let doc = match (doc_of(t, p), refined) {
+                    (Some(d), Some(r)) => Some(format!("{d}\n\n{r}")),
+                    (d, r) => d.or(r),
+                };
                 item(p.clone(), CompletionItemKind::FIELD, detail, doc)
             })
             .collect();
@@ -314,5 +324,20 @@ pub fn complete(
             })
             .collect();
     }
-    Vec::new()
+    // A plain word: the builtins and keywords it starts.
+    if word.is_empty() || word.contains('.') {
+        return Vec::new();
+    }
+    engine::REFERENCE
+        .iter()
+        .filter(|r| r.name.starts_with(word.as_str()))
+        .map(|r| {
+            let kind = match r.kind {
+                RefKind::Keyword => CompletionItemKind::KEYWORD,
+                _ => CompletionItemKind::FUNCTION,
+            };
+            let doc = format!("{}\n\n{}", r.summary, r.example);
+            item(r.name.to_string(), kind, r.signature.to_string(), Some(doc))
+        })
+        .collect()
 }

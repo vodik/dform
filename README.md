@@ -1850,16 +1850,32 @@ examples/demo an evaluation takes about 30 ms in a release build.
   their spans; each `deny` and `warn` at the rule that derived it (a
   conflict at a contribution), the contributions below it as related
   information; a violated constraint at the constraint; lint warnings.
-- *Contributors hover*: on an attribute in a resource block, a stated
-  fact or rule, or an attribute read in a rule's body (`a.cidr`): each
-  attribute's collapsed value, the winning rank and every contribution
-  with its rank and owner (rule, `file:line:col`, pack or module
-  instance), then the derivation as `dform why` prints it.
-- *Schema completion*: a resource block's paths (type, flags and
-  refinements from the provider's schema facts) and an enum path's
-  values; types after `resource`; an instance block's module inputs and
+- *Contributors hover*: on an attribute in a resource block, a rule's or
+  fact's name, or an attribute read in a rule's body (`a.cidr`): each
+  attribute's collapsed value, the provider's description of its path
+  (`type_doc`), the winning rank and every contribution with its rank and
+  owner (rule, `file:line:col`, pack or module instance), then the
+  derivation as `dform why` prints it.
+- *Docs at point*: on a declared name, where it is declared or used, its
+  declaration's first line and doc comment (docs/grammar.md "Doc
+  comments"); an alias its definition; a module, or an instance, the
+  module's docs and its inputs and outputs with theirs; `m.i.k` the
+  output's; a schema type its description; a builtin or a keyword its
+  signature, summary and an example (`engine::REFERENCE`). Point on
+  anything else (whitespace, a comment, a literal, a variable) has no
+  hover; the deployment is the `dform/environment` notification's, never
+  a hover's.
+- *Signature help* (`textDocument/signatureHelp`) in a call of a builtin
+  (`inet_subnet(`) or of an extern the project declares (`dns.lookup(`,
+  `dns.lookup[`): the signature, the argument point is in, and the
+  builtin's summary or the extern's doc comment. A call being typed has
+  one too.
+- *Schema completion*: a resource block's paths (type, flags,
+  refinements and description from the provider's schema facts) and an
+  enum path's values; types after `resource`; an instance block's module inputs and
   `module.instance.`'s outputs; `contributes` patterns, and in a policy
-  pack the paths its grants allow.
+  pack the paths its grants allow; elsewhere the builtins and keywords a
+  word starts, each with its signature.
 - *Quick fixes* (`textDocument/codeAction`), each on its diagnostic: a
   pack writing outside its grants (add the `contributes` line), an
   unknown name (quote it), a predicate with both facts and rules (`decl

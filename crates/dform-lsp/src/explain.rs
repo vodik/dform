@@ -1,15 +1,26 @@
-//! What the code under the cursor derives, and why: the facts of the
-//! innermost rule or stated fact written there, read up to the attributes
-//! they contribute to, printed as `dform why` prints them. A cursor on an
-//! `attr` read in a rule's body names the attributes that rule read.
+//! The hover. What the code under the cursor derives, and why: the facts
+//! of the innermost rule or stated fact written there, read up to the
+//! attributes they contribute to, printed as `dform why` prints them (a
+//! cursor on an `attr` read in a rule's body names the attributes that
+//! rule read), with the schema's description of each attribute. A
+//! declared name shows its declaration's first line and doc comment (an
+//! alias its definition; a module or an instance the module's inputs and
+//! outputs with theirs); a builtin or a keyword its reference entry. Point
+//! on anything else (whitespace, a comment, a literal, a variable) has no
+//! hover.
 
 use crate::analysis::Evaluated;
+use crate::nav;
+use crate::refs::{self, Decls, Symbol, What};
 use dform_core::ast::{Atom, Lit, Span, Stmt, Term};
 use dform_core::circuit::{Leaf, NodeId, View};
-use dform_core::engine;
+use dform_core::engine::{self, Reference};
 use dform_core::lattice::Rank;
+use dform_core::syntax::doc;
+use dform_core::syntax::{SyntaxKind, SyntaxNode, SyntaxToken};
 use dform_core::value::Value;
 use dform_core::why;
+use std::path::Path;
 
 /// What is written at a place: a rule (its index), an `attr` read in a
 /// rule's body, or a stated fact.
@@ -205,11 +216,14 @@ pub fn why_text(e: &Evaluated, facts: &[NodeId]) -> String {
         .join("\n")
 }
 
-/// The hover: per attribute its collapsed value, the winning rank and
-/// every contribution with its rank and owner; then the derivations.
+/// The contributors hover: per attribute its collapsed value, the schema's
+/// description of its path, the winning rank and every contribution with
+/// its rank and owner; then the derivations. The deployment is not said:
+/// the client has it from `dform/environment`.
 pub fn hover(e: &Evaluated, facts: &[NodeId]) -> String {
     let c = &e.res.circuit;
-    let mut out = format!("*{}*\n\n", e.deployment);
+    let docs = e.schema.docs();
+    let mut out = String::new();
     for n in facts.iter().take(8) {
         let View::Fact { fact, alts, .. } = c.view(*n) else {
             continue;
@@ -229,6 +243,11 @@ pub fn hover(e: &Evaluated, facts: &[NodeId]) -> String {
             s(&fact.args[2]),
             e.redact.fmt(&fact.args[3])
         ));
+        if let (Value::Str(t), Value::Str(p)) = (&fact.args[0], &fact.args[2])
+            && let Some(d) = docs.get(&(t.as_str(), p.as_str()))
+        {
+            out.push_str(&format!("{d}\n\n"));
+        }
         let mut contributions = Vec::new();
         for a in alts.iter().take(1) {
             let View::Times { children, .. } = c.view(*a) else {
@@ -311,4 +330,274 @@ fn atom_of(f: &dform_core::circuit::Fact) -> Atom {
         record: None,
         span: Default::default(),
     }
+}
+
+/// The hover at byte `at` of `path`, from the project's files and
+/// evaluations; `None` where point is on nothing with content.
+pub fn hover_at(p: &refs::Project, path: &Path, at: usize) -> Option<String> {
+    let files = p.parse();
+    let d = Decls::of(files.iter().map(|f| &f.tree));
+    let f = files.iter().find(|f| f.path == path)?;
+    let t = nav::token_at(&f.tree, at)?;
+    if t.kind().is_keyword() {
+        // A keyword where a name is expected is that name.
+        let as_name = t
+            .parent()
+            .is_some_and(|n| matches!(n.kind(), SyntaxKind::CHAIN | SyntaxKind::BLOCK_PATH));
+        return (!as_name)
+            .then(|| engine::reference(t.text(), false))
+            .flatten()
+            .map(reference_md);
+    }
+    if t.kind() != SyntaxKind::IDENT {
+        return None;
+    }
+    let contributors = || -> Option<String> {
+        p.evaluated.iter().find_map(|e| {
+            let in_file = |id: u32| e.files.get(&id).is_some_and(|f| f == path);
+            let facts = targets(e, &in_file, at);
+            (!facts.is_empty()).then(|| hover(e, &facts))
+        })
+    };
+    let joined = |a: Option<String>, b: Option<String>| match (a, b) {
+        (Some(a), Some(b)) => Some(format!("{a}\n---\n\n{b}")),
+        (a, b) => a.or(b),
+    };
+    match refs::classify(&d, &t) {
+        What::Name(sym, _) => {
+            let decls: Vec<SyntaxNode> = refs::occurrences(&d, &files, &sym)
+                .into_iter()
+                .filter(|(_, _, is_decl)| *is_decl)
+                .filter_map(|(_, t, _)| statement(&t))
+                .collect();
+            if decls.is_empty()
+                && let Some(r) = builtin(&t)
+            {
+                return Some(reference_md(r));
+            }
+            let documented = decls
+                .iter()
+                .find(|n| doc::comment(n).is_some())
+                .or(decls.first());
+            let own = match &sym {
+                Symbol::Module(m) => module_md(&files, m),
+                Symbol::Instance(m, _) => joined(documented.map(item_md), module_md(&files, m)),
+                _ => documented.map(item_md),
+            };
+            match sym {
+                Symbol::Predicate(..)
+                | Symbol::Resource(..)
+                | Symbol::Value(..)
+                | Symbol::Settings(..) => joined(own, contributors()),
+                _ => own,
+            }
+        }
+        What::Path => contributors().or_else(|| field_doc(p, &t)),
+        What::Type => type_md(p, &t),
+        What::Provider | What::Other => builtin(&t)
+            .map(reference_md)
+            .or_else(|| output_md(&files, &t)),
+    }
+}
+
+/// A reference entry: its signature, summary and example.
+pub fn reference_md(r: &Reference) -> String {
+    format!(
+        "```dform\n{}\n```\n\n{}\n\n```dform\n{}\n```\n",
+        r.signature, r.summary, r.example
+    )
+}
+
+/// The builtin a call's name is (`inet_subnet(..)`, `env_var(..)`).
+fn builtin(t: &SyntaxToken) -> Option<&'static Reference> {
+    let chain = t.parent().filter(|c| c.kind() == SyntaxKind::CHAIN)?;
+    chain.parent().filter(|c| c.kind() == SyntaxKind::CALL)?;
+    let only = chain
+        .children_with_tokens()
+        .filter_map(|e| e.into_token())
+        .filter(|x| !x.kind().is_trivia())
+        .count()
+        == 1;
+    only.then(|| engine::reference(t.text(), true)).flatten()
+}
+
+/// The statement a declaration's name token stands in.
+fn statement(t: &SyntaxToken) -> Option<SyntaxNode> {
+    use SyntaxKind::*;
+    t.parent()?.ancestors().find(|n| {
+        doc::item(n).is_some() || matches!(n.kind(), INSTANCE | LET | SETTINGS | PROVIDER)
+    })
+}
+
+/// A doc comment's description and pairs.
+fn pairs_md(pairs: &[(String, String)]) -> String {
+    let mut out = String::new();
+    for (k, v) in pairs {
+        if k == "description" {
+            out.push_str(&format!("\n{v}\n"));
+        }
+    }
+    let rest: Vec<String> = pairs
+        .iter()
+        .filter(|(k, _)| k != "description")
+        .map(|(k, v)| format!("- **{k}**: {v}\n"))
+        .collect();
+    if !rest.is_empty() {
+        out.push('\n');
+        out.push_str(&rest.concat());
+    }
+    out
+}
+
+/// A statement's first line (an alias: its definition), and its doc
+/// comment.
+fn item_md(n: &SyntaxNode) -> String {
+    let mut out = format!("```dform\n{}\n```\n", doc::header(n));
+    if let Some((_, pairs)) = doc::comment(n) {
+        out.push_str(&pairs_md(&pairs));
+    }
+    out
+}
+
+fn module_node(files: &[refs::Parsed], m: &str) -> Option<SyntaxNode> {
+    files.iter().flat_map(|f| f.tree.descendants()).find(|n| {
+        n.kind() == SyntaxKind::MODULE && nav::declared_name(n).is_some_and(|t| t.text() == m)
+    })
+}
+
+/// A module's statements of `kind` (`INPUT`, `OUTPUT_DECL`) by name, in
+/// order: an output declared (`output k: T`) and defined (`output k = t`)
+/// is one, its typed line shown, its doc comment from either.
+fn members(module: &SyntaxNode, kind: SyntaxKind) -> Vec<(String, String, Option<String>)> {
+    let mut out: Vec<(String, String, Option<String>)> = Vec::new();
+    let Some(block) = module
+        .children()
+        .find(|c| c.kind() == SyntaxKind::STMT_BLOCK)
+    else {
+        return out;
+    };
+    for n in block.children().filter(|n| n.kind() == kind) {
+        let Some((_, name)) = doc::item(&n) else {
+            continue;
+        };
+        let typed = n.children().any(|c| c.kind() == SyntaxKind::TYPE_EXPR)
+            || n.kind() == SyntaxKind::INPUT;
+        let description = doc::comment(&n).and_then(|(_, ps)| {
+            ps.into_iter()
+                .find(|(k, _)| k == "description")
+                .map(|(_, v)| v)
+        });
+        match out.iter_mut().find(|(n, _, _)| *n == name) {
+            Some(m) => {
+                if typed {
+                    m.1 = doc::header(&n);
+                }
+                if m.2.is_none() {
+                    m.2 = description;
+                }
+            }
+            None => out.push((name, doc::header(&n), description)),
+        }
+    }
+    out
+}
+
+/// A module's first line and doc comment, then its inputs and outputs with
+/// theirs.
+fn module_md(files: &[refs::Parsed], m: &str) -> Option<String> {
+    let module = module_node(files, m)?;
+    let mut out = item_md(&module);
+    for (kind, title) in [
+        (SyntaxKind::INPUT, "inputs"),
+        (SyntaxKind::OUTPUT_DECL, "outputs"),
+    ] {
+        let ms = members(&module, kind);
+        if ms.is_empty() {
+            continue;
+        }
+        out.push_str(&format!("\n**{title}**\n\n"));
+        for (_, header, description) in ms {
+            match description {
+                Some(d) => out.push_str(&format!("- `{header}`: {}\n", d.replace('\n', " "))),
+                None => out.push_str(&format!("- `{header}`\n")),
+            }
+        }
+    }
+    Some(out)
+}
+
+/// An output read through its instance, `m.i.k` or `m[e].k`: the output's
+/// declaration and doc comment.
+fn output_md(files: &[refs::Parsed], t: &SyntaxToken) -> Option<String> {
+    let chain = t.parent().filter(|c| c.kind() == SyntaxKind::CHAIN)?;
+    let text = chain.text().to_string();
+    let segs: Vec<&str> = text.split('.').collect();
+    let (m, k) = match segs.as_slice() {
+        [m, _, k, ..] if !m.contains('[') => (*m, *k),
+        [m, k, ..] => (m.split_once('[')?.0, *k),
+        _ => return None,
+    };
+    if k != t.text() {
+        return None;
+    }
+    let module = module_node(files, m)?;
+    let (_, header, description) = members(&module, SyntaxKind::OUTPUT_DECL)
+        .into_iter()
+        .find(|(n, _, _)| n == k)?;
+    let mut out = format!("```dform\n{header}\n```\n\noutput of module `{m}`\n");
+    if let Some(d) = description {
+        out.push_str(&format!("\n{d}\n"));
+    }
+    Some(out)
+}
+
+/// The description the evaluated schemas give `typ`'s `path`.
+fn schema_doc(p: &refs::Project, typ: &str, path: &str) -> Option<String> {
+    p.evaluated
+        .iter()
+        .find_map(|e| e.schema.docs().get(&(typ, path)).map(|d| d.to_string()))
+}
+
+/// A resource block's field, with no evaluation to read: its path's
+/// description.
+fn field_doc(p: &refs::Project, t: &SyntaxToken) -> Option<String> {
+    let path = t.parent().filter(|n| n.kind() == SyntaxKind::BLOCK_PATH)?;
+    let resource = path
+        .ancestors()
+        .find(|n| n.kind() == SyntaxKind::RESOURCE)?;
+    let typ = refs::header(&resource)?.typ;
+    let path = path.text().to_string().replace(' ', "");
+    let d = schema_doc(p, &typ, &path)?;
+    Some(format!("**{typ} .{path}**\n\n{d}\n"))
+}
+
+/// A schema type's name: its description.
+fn type_md(p: &refs::Project, t: &SyntaxToken) -> Option<String> {
+    // The dotted run of names the token is in.
+    let glued = |x: &SyntaxToken| matches!(x.kind(), SyntaxKind::IDENT | SyntaxKind::DOT);
+    let mut first = t.clone();
+    while let Some(prev) = first.prev_token().filter(glued) {
+        first = prev;
+    }
+    let mut typ = String::new();
+    let mut cur = Some(first);
+    while let Some(x) = cur.filter(glued) {
+        typ.push_str(x.text());
+        cur = x.next_token();
+    }
+    let typ = typ.trim_matches('.').to_string();
+    let known = p.evaluated.iter().any(|e| {
+        e.schema
+            .facts
+            .iter()
+            .any(|f| matches!(f.args.first(), Some(Term::Val(Value::Str(x))) if *x == typ))
+    });
+    if !known {
+        return None;
+    }
+    let mut out = format!("resource type `{typ}`\n");
+    if let Some(d) = schema_doc(p, &typ, "") {
+        out.push_str(&format!("\n{d}\n"));
+    }
+    Some(out)
 }

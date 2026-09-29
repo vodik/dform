@@ -4,7 +4,7 @@
 //! request that reads an evaluation evaluates a dirty project first.
 
 use crate::analysis::{self, Evaluated, Outcome, Problem, Severity, Target, Where};
-use crate::{complete, explain, nav, text};
+use crate::{complete, explain, nav, refs, signature, text};
 use anyhow::{Context, Result, anyhow};
 use crossbeam_channel::RecvTimeoutError;
 use dform_core::plugin::{Launch, Providers};
@@ -192,6 +192,7 @@ pub fn serve(conn: &Connection, opts: Options) -> Result<()> {
                 "textDocumentSync": { "openClose": true, "change": 1, "save": {} },
                 "hoverProvider": true,
                 "completionProvider": { "triggerCharacters": [".", " "] },
+                "signatureHelpProvider": { "triggerCharacters": ["(", ",", "["] },
                 "definitionProvider": true,
                 "referencesProvider": true,
                 "renameProvider": { "prepareProvider": true },
@@ -309,13 +310,26 @@ impl Server<'_> {
             "textDocument/hover" => {
                 let p: HoverParams = serde_json::from_value(req.params)?;
                 let path = self.path(&p.text_document_position_params.text_document.uri)?;
-                let pos = p.text_document_position_params.position;
-                Ok(match self.explain(&path, pos)? {
-                    Some((e, facts)) => json!({
-                        "contents": { "kind": "markdown", "value": explain::hover(e, &facts) }
-                    }),
+                let root = self.root_of(&path);
+                self.fresh(&root);
+                let text = self.read(&path)?;
+                let at = text::offset(&text, p.text_document_position_params.position);
+                Ok(match explain::hover_at(&self.project(&root), &path, at) {
+                    Some(value) => json!({ "contents": { "kind": "markdown", "value": value } }),
                     None => Json::Null,
                 })
+            }
+            "textDocument/signatureHelp" => {
+                let p: lsp_types::SignatureHelpParams = serde_json::from_value(req.params)?;
+                let path = self.path(&p.text_document_position_params.text_document.uri)?;
+                let text = self.read(&path)?;
+                let at = text::offset(&text, p.text_document_position_params.position);
+                let trees: Vec<SyntaxNode> = self
+                    .files(&self.root_of(&path))
+                    .iter()
+                    .filter_map(|f| Some(self.tree(f)?.1))
+                    .collect();
+                Ok(serde_json::to_value(signature::help(&text, at, &trees))?)
             }
             "textDocument/completion" => {
                 let p: CompletionParams = serde_json::from_value(req.params)?;
@@ -606,6 +620,29 @@ impl Server<'_> {
                 Some((f.clone(), text::line_range(&text, *line, *col)))
             }
             Where::Span(_) | Where::Place(_) => None,
+        }
+    }
+
+    /// The project at `root` as references and the hover read it: its
+    /// files as the editor has them, its stacks' evaluations.
+    fn project(&self, root: &Path) -> refs::Project<'_> {
+        refs::Project {
+            dir: if root.is_dir() {
+                root.to_path_buf()
+            } else {
+                root.parent().unwrap_or(Path::new("/")).to_path_buf()
+            },
+            files: self
+                .files(root)
+                .into_iter()
+                .filter_map(|f| Some((f.clone(), self.read(&f).ok()?)))
+                .collect(),
+            evaluated: self.workspaces.get(root).map_or(Vec::new(), |w| {
+                w.stacks
+                    .iter()
+                    .filter_map(|ev| ev.outcome.evaluated.as_ref())
+                    .collect()
+            }),
         }
     }
 
