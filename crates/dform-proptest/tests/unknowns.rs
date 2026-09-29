@@ -143,7 +143,8 @@ enum Guard {
     NotIn(u8, Arg),
     /// `"p-{sS.endpoint}" != "p-c"`: a builtin over a null.
     Fmt(u8, u8),
-    /// `cK(n), n < m` over a count, `cK(l), "c" in l` over a set.
+    /// `cK(n), n < m` over a count, a sum or an int min/max, `cK(l), "c"
+    /// in l` over a set, `cK(v), v == "c"` over a string min/max.
     Agg(u8, Cmp, u8),
 }
 
@@ -159,6 +160,18 @@ enum PredDef {
 enum AggKind {
     Count,
     Set,
+    Sum,
+    Min,
+    Max,
+}
+
+/// What `sum`, `min` and `max` fold (`count` and `collect_set` fold `x`):
+/// `x` itself (`len(x)` for `sum`), `len(x)`, or `sS.size`, an open int.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Item {
+    X,
+    Len,
+    Size(u8),
 }
 
 /// A definition: a predicate `pI` or an aggregate `cI`, reading only the
@@ -172,6 +185,7 @@ enum Def {
 #[derive(Clone, Debug, PartialEq)]
 struct AggDef {
     kind: AggKind,
+    item: Item,
     bind: Gen,
     guards: Vec<Guard>,
 }
@@ -237,14 +251,32 @@ impl Printer<'_> {
             .collect()
     }
 
-    /// The aggregates among the first `n` definitions, with their kinds.
-    fn aggs(&self, n: usize) -> Vec<(usize, AggKind)> {
+    /// The aggregates among the first `n` definitions.
+    fn aggs(&self, n: usize) -> Vec<(usize, &AggDef)> {
         (0..n)
             .filter_map(|i| match &self.p.defs[i] {
-                Def::Agg(a) => Some((i, a.kind)),
+                Def::Agg(a) => Some((i, a)),
                 Def::Pred(_) => None,
             })
             .collect()
+    }
+
+    /// The aggregate's head term.
+    fn agg(&self, a: &AggDef) -> String {
+        let item = match (a.kind, a.item) {
+            (AggKind::Count | AggKind::Set, _) => "x".to_string(),
+            (AggKind::Sum, Item::X | Item::Len) | (_, Item::Len) => "len(x)".to_string(),
+            (_, Item::X) => "x".to_string(),
+            (_, Item::Size(s)) => format!("{}.size", self.src(s)),
+        };
+        let name = match a.kind {
+            AggKind::Count => "count",
+            AggKind::Set => "collect_set",
+            AggKind::Sum => "sum",
+            AggKind::Min => "min",
+            AggKind::Max => "max",
+        };
+        format!("{name}({item})")
     }
 
     /// `pJ`, the `j`th predicate modulo those in scope.
@@ -312,12 +344,14 @@ impl Printer<'_> {
                 if aggs.is_empty() {
                     return None;
                 }
-                let (k, kind) = aggs[k as usize % aggs.len()];
-                match kind {
-                    AggKind::Count => format!("c{k}(n{i}), n{i} {} {}", Self::cmp(c), n % 4),
-                    AggKind::Set => {
-                        format!("c{k}(l{i}), \"{}\" in l{i}", POOL[n as usize % POOL.len()])
+                let (k, a) = aggs[k as usize % aggs.len()];
+                let pool = POOL[n as usize % POOL.len()];
+                match (a.kind, a.item) {
+                    (AggKind::Set, _) => format!("c{k}(l{i}), \"{pool}\" in l{i}"),
+                    (AggKind::Min | AggKind::Max, Item::X) => {
+                        format!("c{k}(v{i}), v{i} == \"{pool}\"")
                     }
+                    _ => format!("c{k}(n{i}), n{i} {} {}", Self::cmp(c), n % 4),
                 }
             }
             _ => return None,
@@ -435,13 +469,10 @@ impl fmt::Display for Program {
                     writeln!(f, "p{i}(x) if x = {}.{path}", pr.src(*s))?;
                 }
                 Def::Agg(a) => {
-                    let head = match a.kind {
-                        AggKind::Count => "count",
-                        AggKind::Set => "collect_set",
-                    };
                     writeln!(
                         f,
-                        "c{i}({head}(x)) if {}",
+                        "c{i}({}) if {}",
+                        pr.agg(a),
                         pr.body(Some(a.bind), &a.guards, sc).join(", ")
                     )?;
                 }
@@ -534,11 +565,27 @@ fn pred_def() -> impl Strategy<Value = PredDef> {
 /// undetermined.
 fn agg_def() -> impl Strategy<Value = AggDef> {
     (
-        prop_oneof![Just(AggKind::Count), Just(AggKind::Set)],
+        prop_oneof![
+            Just(AggKind::Count),
+            Just(AggKind::Set),
+            Just(AggKind::Sum),
+            Just(AggKind::Min),
+            Just(AggKind::Max),
+        ],
+        prop_oneof![
+            Just(Item::X),
+            Just(Item::Len),
+            any::<u8>().prop_map(Item::Size)
+        ],
         prop_oneof![3 => any::<u8>().prop_map(Gen::Zones), 2 => bind()],
         guards(),
     )
-        .prop_map(|(kind, bind, guards)| AggDef { kind, bind, guards })
+        .prop_map(|(kind, item, bind, guards)| AggDef {
+            kind,
+            item,
+            bind,
+            guards,
+        })
 }
 
 fn def() -> impl Strategy<Value = Def> {
@@ -1011,6 +1058,29 @@ fn properties(first: &Planned, second: &Planned, by: &BTreeMap<String, Value>) -
         seen.new_wants += w2.difference(&w1).count();
         seen.undetermined += first.report.policies.len();
         seen.denies_after += fired2.difference(&fired1).count();
+        let folds: BTreeSet<&str> = first
+            .res
+            .rules
+            .iter()
+            .filter(|r| {
+                r.head.args.iter().any(|t| {
+                    matches!(t, Term::Func { name, .. } if matches!(name.as_str(), "sum" | "min" | "max"))
+                })
+            })
+            .map(|r| r.head.pred.as_str())
+            .collect();
+        seen.folds += first
+            .res
+            .facts
+            .iter()
+            .filter(|a| folds.contains(a.pred.as_str()))
+            .count();
+        seen.folds_stuck += first
+            .res
+            .stuck
+            .iter()
+            .filter(|s| folds.contains(s.head.pred.as_str()) && s.reason.ends_with("over a null"))
+            .count();
     });
     Ok(())
 }
@@ -1030,6 +1100,10 @@ struct Seen {
     undetermined: usize,
     /// Denies that fire after resolution only.
     denies_after: usize,
+    /// `sum`, `min` and `max` groups derived before resolution.
+    folds: usize,
+    /// Their groups stuck on a null they fold (Rule 2).
+    folds_stuck: usize,
 }
 
 thread_local! {
