@@ -194,6 +194,7 @@ pub fn serve(conn: &Connection, opts: Options) -> Result<()> {
                 "completionProvider": { "triggerCharacters": [".", " "] },
                 "definitionProvider": true,
                 "documentFormattingProvider": true,
+                "codeActionProvider": { "codeActionKinds": ["quickfix"] },
                 "executeCommandProvider": { "commands": [SELECT_ENVIRONMENT, WHY] },
             },
             "serverInfo": { "name": "dform", "version": opts.version },
@@ -340,6 +341,10 @@ impl Server<'_> {
                     range: text::range(&text, 0, text.len()),
                     new_text: formatted,
                 }])?)
+            }
+            "textDocument/codeAction" => {
+                let p: lsp_types::CodeActionParams = serde_json::from_value(req.params)?;
+                self.code_actions(p)
             }
             "workspace/executeCommand" => {
                 let p: lsp_types::ExecuteCommandParams = serde_json::from_value(req.params)?;
@@ -815,5 +820,65 @@ impl Server<'_> {
             }
         }
         Ok(locs)
+    }
+
+    /// The quick fixes of the diagnostics the client names (`actions`):
+    /// each one's edits, as one formatted edit per file.
+    fn code_actions(&mut self, p: lsp_types::CodeActionParams) -> Result<Json> {
+        use crate::actions;
+        let path = self.path(&p.text_document.uri)?;
+        let root = self.root_of(&path);
+        self.fresh(&root);
+        enter(&root)?;
+        let read = |f: &Path| -> std::io::Result<String> {
+            match self.docs.get(f) {
+                Some(t) => Ok(t.clone()),
+                None => std::fs::read_to_string(f),
+            }
+        };
+        let mut found = Vec::new();
+        for ev in self.workspaces.get(&root).map_or(&[][..], |w| &w.stacks) {
+            found.extend(actions::compiled(&ev.file, &read));
+            if let Some(e) = &ev.outcome.evaluated {
+                found.extend(actions::evaluated(e, &ev.file, &read));
+            }
+        }
+        let text = self.read(&path)?;
+        let mut seen = BTreeSet::new();
+        let mut out = Vec::new();
+        for a in found {
+            let fixes: Vec<lsp_types::Diagnostic> = p
+                .context
+                .diagnostics
+                .iter()
+                .filter(|d| {
+                    d.message.contains(&a.message)
+                        && a.at.as_ref().is_none_or(|(f, s, e)| {
+                            *f == path && text::range(&text, *s, *e) == d.range
+                        })
+                })
+                .cloned()
+                .collect();
+            if fixes.is_empty() || !seen.insert((a.title.clone(), format!("{:?}", a.edits))) {
+                continue;
+            }
+            let mut changes = serde_json::Map::new();
+            for (f, edits) in &a.edits {
+                let t = self.read(f)?;
+                let (s, e, new_text) = actions::apply(&f.display().to_string(), &t, edits);
+                let edit = TextEdit {
+                    range: text::range(&t, s, e),
+                    new_text,
+                };
+                changes.insert(text::uri_of(f).as_str().to_string(), json!([edit]));
+            }
+            out.push(json!({
+                "title": a.title,
+                "kind": "quickfix",
+                "diagnostics": fixes,
+                "edit": { "changes": changes },
+            }));
+        }
+        Ok(Json::Array(out))
     }
 }

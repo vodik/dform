@@ -1,7 +1,8 @@
 //! `dform lsp` over stdio, on copies of examples/demo and examples/pngu:
 //! the contributors hover and `dform.why`, diagnostics of the selected
-//! environment (`dform.selectEnvironment`), schema completion, and the
-//! free ones (parse diagnostics, formatting, go-to-definition). The server
+//! environment (`dform.selectEnvironment`), schema completion, quick
+//! fixes, and the free ones (parse diagnostics, formatting,
+//! go-to-definition). The server
 //! evaluates read only: the copies gain no dform.state/.
 
 mod common;
@@ -598,4 +599,251 @@ fn pngu_by_environment_and_latency_per_keystroke() {
     );
     assert!(waits.iter().all(|d| *d < Duration::from_secs(30)));
     c.shutdown();
+}
+
+/// Byte offset of an LSP position (UTF-16 columns) in `text`.
+fn offset_of(text: &str, pos: &Value) -> usize {
+    let line = pos["line"].as_u64().unwrap() as usize;
+    let col = pos["character"].as_u64().unwrap() as usize;
+    let start: usize = text.split_inclusive('\n').take(line).map(str::len).sum();
+    let mut units = 0;
+    for (i, ch) in text[start..].char_indices() {
+        if units >= col || ch == '\n' {
+            return start + i;
+        }
+        units += ch.len_utf16();
+    }
+    text.len()
+}
+
+/// A quick fix end to end: with `edited` as `file`'s text, a diagnostic
+/// whose message contains `needle` is published; the code action titled
+/// `title...` is offered for it; applied (to the files), the diagnostic
+/// is gone and `dform fmt --check` passes on every file it edited. The
+/// edited files' texts.
+fn quick_fix(root: &Path, file: &Path, edited: &str, needle: &str, title: &str) -> Vec<String> {
+    std::fs::write(file, edited).unwrap();
+    let mut c = Client::start(root, json!({}));
+    c.open(file);
+    let ds = c.diagnostics(file);
+    let d = ds
+        .iter()
+        .find(|d| d["message"].as_str().unwrap().contains(needle))
+        .unwrap_or_else(|| panic!("{needle}: {ds:?}"))
+        .clone();
+    let actions = c.request(
+        "textDocument/codeAction",
+        json!({
+            "textDocument": { "uri": uri(file) },
+            "range": d["range"],
+            "context": { "diagnostics": [d] },
+        }),
+    );
+    let action = actions
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["title"].as_str().unwrap().starts_with(title))
+        .unwrap_or_else(|| panic!("{title}: {actions}"))
+        .clone();
+    assert_eq!(action["kind"], "quickfix", "{action}");
+    assert_eq!(action["diagnostics"], json!([d]), "{action}");
+    let mut texts = Vec::new();
+    for (u, edits) in action["edit"]["changes"].as_object().unwrap() {
+        let path = PathBuf::from(u.strip_prefix("file://").unwrap());
+        let mut text = std::fs::read_to_string(&path).unwrap();
+        for e in edits.as_array().unwrap().iter().rev() {
+            let start = offset_of(&text, &e["range"]["start"]);
+            let end = offset_of(&text, &e["range"]["end"]);
+            text.replace_range(start..end, e["newText"].as_str().unwrap());
+        }
+        std::fs::write(&path, &text).unwrap();
+        if path == file {
+            c.change(file, 2, &text);
+        }
+        let fmt = Command::new(env!("CARGO_BIN_EXE_dform"))
+            .args(["fmt", "--check"])
+            .arg(&path)
+            .current_dir(root)
+            .output()
+            .unwrap();
+        assert!(
+            fmt.status.success(),
+            "fmt --check {}: {}\n{text}",
+            path.display(),
+            String::from_utf8_lossy(&fmt.stderr)
+        );
+        texts.push(text);
+    }
+    c.notify(
+        "textDocument/didSave",
+        json!({ "textDocument": { "uri": uri(file) } }),
+    );
+    let ds = c.diagnostics(file);
+    assert!(
+        !messages(&ds).iter().any(|m| m.contains(needle)),
+        "{needle} after {title}: {ds:?}"
+    );
+    c.shutdown();
+    texts
+}
+
+/// A pack writing outside its grants: the grant, after its others.
+#[test]
+fn quick_fix_grants_what_a_pack_writes() {
+    let (_s, root) = example("demo");
+    let baseline = root.join("policies/baseline.df");
+    let text = std::fs::read_to_string(&baseline).unwrap();
+    let edited = text.replace(
+        "  # Networking invariants",
+        "  r.cidr = \"10.0.0.0/8\" if r in net.vpc\n\n  # Networking invariants",
+    );
+    let texts = quick_fix(
+        &root,
+        &baseline,
+        &edited,
+        "policy baseline writes .cidr of net.vpc outside its grants",
+        "grant it: `contributes net.vpc.cidr`",
+    );
+    assert!(
+        texts[0].contains("  contributes settings.audit.sinks\n  contributes net.vpc.cidr\n"),
+        "{}",
+        texts[0]
+    );
+}
+
+/// An unknown name: quoted.
+#[test]
+fn quick_fix_quotes_an_unknown_name() {
+    let (_s, root) = example("demo");
+    let stack = root.join("stacks/dform.df");
+    let text = std::fs::read_to_string(&stack).unwrap();
+    let edited = format!(
+        "{text}\nresource net.vpc extra {{\n  cidr = \"10.1.0.0/16\"\n  name = bogus\n}}\n"
+    );
+    let texts = quick_fix(
+        &root,
+        &stack,
+        &edited,
+        "unknown name `bogus`",
+        "quote it: \"bogus\"",
+    );
+    assert!(texts[0].contains("  name = \"bogus\"\n"), "{}", texts[0]);
+}
+
+/// A predicate with both facts and rules: `decl p/N mixed` before them.
+#[test]
+fn quick_fix_declares_a_predicate_mixed() {
+    let (_s, root) = example("demo");
+    let stack = root.join("stacks/dform.df");
+    let text = std::fs::read_to_string(&stack).unwrap();
+    let edited = format!("{text}\nq(1)\nq(x) if data(\"zone\", x)\n");
+    let texts = quick_fix(
+        &root,
+        &stack,
+        &edited,
+        "q/1 has both ground facts and rules",
+        "declare it: `decl q/1 mixed`",
+    );
+    assert!(
+        texts[0].ends_with("\ndecl q/1 mixed\nq(1)\nq(x) if data(\"zone\", x)\n"),
+        "{}",
+        texts[0]
+    );
+}
+
+/// The collision lint (a deny in the strict demo): the key interpolated
+/// into the name, or the stack said isolated.
+#[test]
+fn quick_fix_derives_a_colliding_name_from_the_key_or_isolates_the_stack() {
+    let collides = |root: &Path| {
+        let stack = root.join("stacks/dform.df");
+        let text = std::fs::read_to_string(&stack).unwrap();
+        let text = text.replace(", isolated = true", "");
+        let edited = format!(
+            "{text}\nresource net.vpc fixed {{\n  cidr = \"10.1.0.0/16\"\n  name = \"fixed\"\n}}\n"
+        );
+        (stack, edited)
+    };
+    let needle = "net.vpc.fixed name = \"fixed\" does not depend on the stack's key (env)";
+    let (_s, root) = example("demo");
+    let (stack, edited) = collides(&root);
+    let texts = quick_fix(
+        &root,
+        &stack,
+        &edited,
+        needle,
+        "derive the name from the key",
+    );
+    assert!(
+        texts[0].contains("  name = \"fixed-{env}\"\n"),
+        "{}",
+        texts[0]
+    );
+
+    let (_s, root) = example("demo");
+    let (stack, edited) = collides(&root);
+    let texts = quick_fix(
+        &root,
+        &stack,
+        &edited,
+        needle,
+        "say `isolated = true` on the stack",
+    );
+    assert!(
+        texts[0].contains(
+            "stack dform[env] { unknowns = \"strict\", config = yaml(\"config/dform/{env}.yaml\"), isolated = true }\n"
+        ),
+        "{}",
+        texts[0]
+    );
+}
+
+/// A required attribute no contribution sets (the provider refuses the
+/// plan, at the top of the stack's file): set, with a typed placeholder.
+#[test]
+fn quick_fix_sets_a_required_attribute() {
+    let (_s, root) = example("k8s");
+    let stack = root.join("stacks/k8s_demo.df");
+    let text = std::fs::read_to_string(&stack).unwrap();
+    let edited = format!(
+        "{text}\nresource k8s.persistent_volume_claim data {{\n  metadata.name = \"data\"\n}}\n"
+    );
+    let texts = quick_fix(
+        &root,
+        &stack,
+        &edited,
+        "k8s.persistent_volume_claim/data: required attribute spec.accessModes is not set",
+        "set the required spec.accessModes, spec.resources.requests.storage",
+    );
+    assert!(
+        texts[0].ends_with(
+            "  metadata.name = \"data\"\n  spec.accessModes = []\n  spec.resources.requests.storage = \"\"\n}\n"
+        ),
+        "{}",
+        texts[0]
+    );
+}
+
+/// A ref to an address no rule wants: the block guarded on it.
+#[test]
+fn quick_fix_guards_a_dangling_ref() {
+    let (_s, root) = example("demo");
+    let stack = root.join("stacks/dform.df");
+    let text = std::fs::read_to_string(&stack).unwrap();
+    let edited = format!(
+        "{text}\nresource net.subnet extra {{\n  cidr = \"10.0.1.0/24\"\n  vpc_id = ref(net.vpc, \"other\", \"id\")\n}}\n"
+    );
+    let texts = quick_fix(
+        &root,
+        &stack,
+        &edited,
+        "ref to an address no rule wants",
+        "guard the block on net.vpc other existing",
+    );
+    assert!(
+        texts[0].contains("resource net.subnet extra {\n  if \"other\" in net.vpc\n  cidr"),
+        "{}",
+        texts[0]
+    );
 }

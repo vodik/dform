@@ -1849,6 +1849,14 @@ examples/demo an evaluation takes about 30 ms in a release build.
   values; types after `resource`; an instance block's module inputs and
   `module.instance.`'s outputs; `contributes` patterns, and in a policy
   pack the paths its grants allow.
+- *Quick fixes* (`textDocument/codeAction`), each on its diagnostic: a
+  pack writing outside its grants (add the `contributes` line), an
+  unknown name (quote it), a predicate with both facts and rules (`decl
+  p/N mixed`), the collision lint (interpolate the key into the name, or
+  say `isolated = true` on the stack), a required attribute nothing sets
+  (a typed placeholder in the resource's block) and a ref to an address
+  no rule wants (guard the block on it: `if "other" in net.vpc`). An edit
+  to a formatted file leaves it formatted.
 - Formatting (`dform fmt`'s formatter) and go-to-definition of modules,
   policies and predicates.
 
