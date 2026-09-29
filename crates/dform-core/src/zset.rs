@@ -559,6 +559,18 @@ pub mod file {
         /// digest keyed with the plan key: never the value.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         pub env: Vec<Json>,
+        /// Other stacks' published outputs the program reads
+        /// (`stack_output`), each deployment with the digest of its
+        /// outputs object as read (`absent` when it had none).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pub stack_outputs: Vec<OutputsDigest>,
+    }
+
+    /// A deployment's published outputs as a plan read them.
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    pub struct OutputsDigest {
+        pub deployment: String,
+        pub digest: String,
     }
 
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -823,6 +835,24 @@ pub mod file {
                 match now_env.get(&label) {
                     None => out.push(format!("{label}: in the plan file, not set now")),
                     Some(d) if *d != digest => out.push(format!("{label}: changed since the plan")),
+                    _ => {}
+                }
+            }
+            let outputs = |xs: &[OutputsDigest]| -> BTreeMap<String, String> {
+                xs.iter()
+                    .map(|o| (o.deployment.clone(), o.digest.clone()))
+                    .collect()
+            };
+            let now_outputs = outputs(&now.stack_outputs);
+            for (d, digest) in outputs(&was.stack_outputs) {
+                match now_outputs.get(&d) {
+                    None => out.push(format!(
+                        "stack_output of {d}: the plan read its outputs, this run does not"
+                    )),
+                    Some(n) if *n != digest => out.push(format!(
+                        "stack_output of {d}: its published outputs changed since the plan \
+                         ({digest} -> {n})"
+                    )),
                     _ => {}
                 }
             }

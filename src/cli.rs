@@ -18,6 +18,7 @@ use crate::provider::ActionKind;
 use crate::query;
 use crate::schema;
 use crate::state;
+use crate::store;
 use crate::stuck;
 use crate::value::Value;
 use crate::watch;
@@ -27,6 +28,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// How this run reaches its providers (`main`'s `launch`).
 static LAUNCH: std::sync::OnceLock<&'static (dyn plugin::Launch + Sync)> =
@@ -318,7 +320,8 @@ enum StackCommand {
     List,
     /// Move one deployment of a keyed stack to another key value: `rekey
     /// app env=staging env=stg` moves the state of `app[env=staging]` to
-    /// `app[env=stg]`, and its registry entry. Nothing in the cloud
+    /// `app[env=stg]` (a directory, or a prefix of the stack's bucket), and
+    /// its registry entry. Nothing in the cloud
     /// changes. First it lists the resources whose name-like attributes
     /// depend on the key (from provenance): the next plan renames them,
     /// usually a replace. With one side only (`rekey app env=staging`), it
@@ -329,10 +332,12 @@ enum StackCommand {
         #[arg(value_name = "K=V", required = true)]
         pairs: Vec<String>,
     },
-    /// Move a stack's state to another backend and record it in the
-    /// registry: `local("DIR")`, or `k8s("ns/name")`, the in-cluster backend
-    /// (for now a directory in the bootstrap stack's state). The controller
-    /// runs the stack from there; a batch `apply` refuses it.
+    /// Move a deployment's state to another backend and record it in the
+    /// registry: `local("DIR")`, `s3("BUCKET", "PREFIX", {endpoint: "URL",
+    /// region: "R"})` (the deployment's own prefix), or `k8s("ns/name")`,
+    /// the in-cluster backend (for now a directory in the bootstrap stack's
+    /// state). The controller runs the stack from there; a batch `apply`
+    /// refuses it.
     Handover {
         stack: String,
         #[arg(long = "to")]
@@ -948,12 +953,14 @@ fn run_with(
     }
     match &cli.cmd {
         Cmd::Handover { stack, to } => {
-            let dir = crate::stack::handover(&cli.root, stack, to)?;
-            crate::audit::Log::beside(&state::state_path(&dir), cli.audit_sink.clone()).append(
+            let (from, home, times) = place_of(&cli, stack)?;
+            let opener = open_s3(&cli.root, true);
+            let moved = crate::stack::handover(&cli.root, stack, &from, &home, to, &opener, times)?;
+            crate::audit::Log::new(moved.open(&opener)?, cli.audit_sink.clone()).append(
                 "handover",
                 serde_json::json!({ "stack": stack, "to": to, "who": crate::audit::who() }),
             )?;
-            println!("stack {stack} handed over to {to}: {}", dir.display());
+            println!("stack {stack} handed over to {to}: {moved}");
             return Ok(());
         }
         Cmd::Taint { stack, pred, args } => return taint(&cli, stack, pred, args),
@@ -1158,44 +1165,52 @@ fn run_with(
     {
         println!("deployment: {}", instance.describe());
     }
-    // The stack's directory, and the deployment's in it.
-    let base = match &stack_cfg.backend {
-        Some(crate::stack::Backend::Local(dir)) => state::local_dir(&root, dir),
-        // An s3 stack's world (the mock's) stays where a local stack's is.
-        Some(crate::stack::Backend::S3(_)) | None => root.join(&stack),
-    };
-    let mut paths = match &cli.world {
-        Some(w) => state::world_paths(&root, w),
-        None => state::backend_paths(&root, &instance.dir(&base)),
-    };
-    // A stack handed over to another backend lives there now.
+    // Where the stack's deployments are (its backend's, else the state
+    // root's), and this one's objects: there, or where it was handed over
+    // to. A `--world` fixture's are beside it.
+    let base = stack_location(&root, &stack, stack_cfg.backend.as_ref());
+    // The deployment's own directory under the state root: its world's
+    // when its state is in a bucket (the world is the provider's).
+    let home = instance.dir(&root.join(&stack));
     let handed = match &cli.world {
         None => crate::stack::handed_over(&root, &deployment)?,
         Some(_) => None,
     };
-    if let Some((_, dir)) = &handed {
-        paths = state::backend_paths(&root, dir);
-    }
-    paths.inventory = resolve_inventory(&cli.inventory, &cli.world, &paths.inventory);
-    // Where the deployment's state, plan key, audit log and lock are: its
-    // backend's store (a `--world` fixture's beside it).
-    let s3 = match (&stack_cfg.backend, &cli.world, &handed) {
-        (Some(crate::stack::Backend::S3(spec)), None, None) => Some(spec),
-        _ => None,
+    let location = match &handed {
+        Some((_, loc)) => loc.clone(),
+        None => base.child(instance.segment().as_deref()),
     };
-    let dep = match s3 {
-        Some(spec) => crate::store::Deployment::new(
-            std::sync::Arc::new(dform_s3::S3Store::open(
-                spec,
-                instance.segment().as_deref().unwrap_or_default(),
-            )?),
-            &deployment,
-            cli.manifest
-                .as_ref()
-                .map(|m| m.lease_times())
-                .unwrap_or_default(),
-        ),
-        None => crate::store::Deployment::local(&paths.state, &deployment),
+    let mut paths = match &cli.world {
+        Some(w) => state::world_paths(&root, w),
+        None => state::StackPaths {
+            state: match &location {
+                store::Location::Local(dir) => state::state_path(dir),
+                store::Location::S3(_) => state::state_path(&home),
+            },
+            world: crate::stack::world_file(&location, &home),
+            inventory: root.join("inventory.json"),
+        },
+    };
+    paths.inventory = resolve_inventory(&cli.inventory, &cli.world, &paths.inventory);
+    let times = cli
+        .manifest
+        .as_ref()
+        .map(|m| m.lease_times())
+        .unwrap_or_default();
+    // A run that writes the deployment's objects checks first that a
+    // bucket keeps the conditions of a write; a plan only reads.
+    let writes = hook.is_some()
+        || matches!(
+            cli.cmd,
+            Cmd::Apply { .. }
+                | Cmd::Plan { out: Some(_), .. }
+                | Cmd::StateMv { .. }
+                | Cmd::Unlock
+                | Cmd::Rekey { .. }
+        );
+    let dep = match &cli.world {
+        Some(_) => store::Deployment::local(&paths.state, &deployment),
+        None => store::Deployment::new(location.open(&open_s3(&root, writes))?, &deployment, times),
     };
     // The deployment's audit log, beside its state.
     let audit = dep.audit(cli.audit_sink.clone().or(stack_cfg.audit_sink.clone()));
@@ -1231,9 +1246,44 @@ fn run_with(
         .filter(|d| matches!(&d.decl.ty, crate::ast::TypeExpr::Apply(n, _) if n == "secret"))
         .map(|d| d.decl.name.clone())
         .collect();
+    // Other stacks' published outputs: each deployment the program names,
+    // of the project (every registered one, when it names one by a
+    // variable) or of a remote, through its backend. Read once, as facts;
+    // a plan file records their digests, and an apply of it refuses when
+    // one moved.
+    let (named, any_name) = lowered
+        .as_ref()
+        .map(|l| crate::stack::named_outputs(&l.program))
+        .unwrap_or_default();
+    let remotes = cli
+        .manifest
+        .as_ref()
+        .map(|m| m.remotes())
+        .unwrap_or_default();
+    let read_outputs = crate::stack::stack_outputs(
+        &root,
+        &deployment,
+        (!any_name).then_some(&named),
+        &remotes,
+        &open_s3(&root, false),
+    )?;
+    let secret_outputs = crate::stack::secret_outputs(&read_outputs);
+    let outputs_read: Vec<zset::file::OutputsDigest> = read_outputs
+        .iter()
+        .map(|r| zset::file::OutputsDigest {
+            deployment: r.name.clone(),
+            digest: r.digest.clone(),
+        })
+        .collect();
+    let plan_inputs = |key: &zset::file::Key| -> Result<zset::file::Inputs> {
+        Ok(zset::file::Inputs {
+            stack_outputs: outputs_read.clone(),
+            ..plan_inputs(&cli, &files, &secret_inputs, key)?
+        })
+    };
     // What the plan file records, when one is written or read.
     let inputs = match &key {
-        Some(k) => Some(plan_inputs(&cli, &files, &secret_inputs, k)?),
+        Some(k) => Some(plan_inputs(k)?),
         None => None,
     };
     if let (Some((path, saved)), Some(inputs), Some(k)) = (&saved, &inputs, &key) {
@@ -1266,15 +1316,9 @@ fn run_with(
                 "stack {deployment} is role = bootstrap: it stays batch, and the controller never runs it"
             );
         }
-        if let Some(spec) = s3 {
-            bail!(
-                "stack {deployment}: its backend is {spec}; the controller keeps its memo \
-                 beside local state, and does not run an s3 stack yet"
-            );
-        }
         h.audit = Some(audit.clone());
         h.open(
-            &paths.state,
+            dep.store().clone(),
             &paths.world,
             root.parent().unwrap_or(Path::new("")),
         )?;
@@ -1346,7 +1390,7 @@ fn run_with(
 
     let mut base_extra = set_facts;
     base_extra.extend(build_extra_facts(&cli.data)?);
-    base_extra.extend(crate::stack::stack_outputs(&root, &deployment)?);
+    base_extra.extend(crate::stack::output_facts(&read_outputs));
     // The manifest, as facts policy may read.
     if let Some(m) = &cli.manifest {
         base_extra.extend(m.facts());
@@ -1375,13 +1419,13 @@ fn run_with(
     // The static secret pass and the refinement checks (a literal that
     // violates one, E0306), against the provider's schema.
     if let Some(l) = &lowered {
-        crate::secrets::check(l, backend.schema())?;
+        crate::secrets::check(l, backend.schema(), &secret_outputs)?;
         crate::refine::check(&l.program, backend.schema())?;
     }
     // An `expect_account` a secret reaches is named by its label.
     let secret_accounts = lowered
         .as_ref()
-        .map(|l| crate::secrets::secret_expected_accounts(l, backend.schema()))
+        .map(|l| crate::secrets::secret_expected_accounts(l, backend.schema(), &secret_outputs))
         .unwrap_or_default();
     base_extra.extend(backend.catalog(scope.as_ref())?);
     base_extra.extend(discovered);
@@ -1825,9 +1869,23 @@ fn run_with(
                     println!("  {n}");
                 }
             }
-            let dir = crate::stack::rekey(&root, &base, &r.from, &r.to)?;
-            crate::audit::Log::beside(
-                &state::state_path(&dir),
+            let place = |i: &crate::stack::Instance| {
+                let location = base.child(i.segment().as_deref());
+                crate::stack::Place {
+                    world: crate::stack::world_file(&location, &i.dir(&root.join(&stack))),
+                    location,
+                }
+            };
+            let opener = open_s3(&root, true);
+            let moved = crate::stack::rekey(
+                &root,
+                (&r.from, &place(&r.from)),
+                (&r.to, &place(&r.to)),
+                &opener,
+                times,
+            )?;
+            crate::audit::Log::new(
+                moved.open(&opener)?,
                 cli.audit_sink.clone().or(stack_cfg.audit_sink.clone()),
             )
             .append(
@@ -1839,10 +1897,9 @@ fn run_with(
                 }),
             )?;
             println!(
-                "stack {} rekeyed to {}: {}",
+                "stack {} rekeyed to {}: {moved}",
                 r.from.name(),
                 r.to.name(),
-                dir.display()
             );
         }
         Cmd::Fmt { .. }
@@ -1889,7 +1946,7 @@ fn run_with(
                 };
                 let inputs = match &inputs {
                     Some(i) => i.clone(),
-                    None => plan_inputs(&cli, &files, &secret_inputs, key)?,
+                    None => plan_inputs(key)?,
                 };
                 let mut f = plan_file_of(&plan, &res, &sections, &resources, &st, key, inputs)?;
                 f.digest = Some(f.digest());
@@ -2304,11 +2361,13 @@ fn run_with(
                             audit_failed.borrow_mut().get_or_insert(x);
                         }
                     };
+                    let fence = || dep.check_fence();
                     let opts = executor::Options {
                         parallel: parallel as usize,
                         persist: &persist,
                         stop_after: stop_after.as_ref(),
                         on_action: Some(&on_action),
+                        before_submit: Some(&fence),
                     };
                     let applied = executor::run_tick(
                         &backend, &resources, &adopts, &lifecycle, &mut st, &plan, &opts,
@@ -2349,19 +2408,27 @@ fn run_with(
                         Default::default()
                     };
                     persist(&st)?;
-                    // Every deployment of a keyed stack is registered
-                    // (a local one: the registry holds state paths).
-                    let keyed = instance.segment().is_some();
-                    if (!st.outputs.is_empty() || stack_cfg.bootstrap || keyed)
-                        && cli.world.is_none()
-                        && s3.is_none()
+                    // Published beside the state, apart from it: what
+                    // other stacks read (a secret output by its label).
+                    let secret_types = crate::stack::secret_output_types(&program);
+                    if cli.world.is_none()
+                        && (!st.outputs.is_empty()
+                            || !secret_types.is_empty()
+                            || dep.store().get(store::OUTPUTS)?.is_some())
                     {
-                        crate::stack::register(
-                            &root,
-                            &deployment,
-                            &paths.state,
-                            stack_cfg.bootstrap,
-                        )?;
+                        let published =
+                            crate::stack::Published::new(&deployment, &st.outputs, &secret_types);
+                        dep.publish(&published.bytes())?;
+                    }
+                    // Every deployment of a keyed stack is registered.
+                    let keyed = instance.segment().is_some();
+                    if (!st.outputs.is_empty()
+                        || !secret_types.is_empty()
+                        || stack_cfg.bootstrap
+                        || keyed)
+                        && cli.world.is_none()
+                    {
+                        crate::stack::register(&root, &deployment, &location, stack_cfg.bootstrap)?;
                     }
                     if let Some(h) = hook.as_deref_mut() {
                         h.finish(&deployment, undeformed, &backend.observe(&st)?)?;
@@ -2614,9 +2681,6 @@ fn rekey_args(
              there is nothing to move"
         );
     }
-    if let Some(crate::stack::Backend::S3(spec)) = &cfg.backend {
-        bail!("stack rekey {stack}: its backend is {spec}; rekey moves local state only, for now");
-    }
     let keys: Vec<&str> = cfg.keys.iter().map(|(k, _)| k.as_str()).collect();
     if keys.is_empty() {
         bail!(
@@ -2718,7 +2782,7 @@ fn run_tests(
         let run = || -> Result<Vec<String>> {
             let p = crate::scenario::select(program, name)?;
             let lowered = crate::transform::lower(&p)?;
-            crate::secrets::check(&lowered, backend.schema())?;
+            crate::secrets::check(&lowered, backend.schema(), &Default::default())?;
             crate::refine::check(&lowered.program, backend.schema())?;
             let mut given = input_fact_keys(&p);
             let mut pairs = Vec::new();
@@ -2778,25 +2842,27 @@ fn run_tests(
 
 /// Keep the answers of `persist` externs in state: never asked again.
 /// `dform state taint STACK EXTERN ARGS...`: remove the answer from the stack's
-/// state (beside `--world`, else where the registry has it, else under the
-/// state root), under the stack's lock.
+/// state (beside `--world`, else where the registry has it, else where its
+/// program's backend says), under the stack's lock.
 fn taint(cli: &Cli, stack: &str, pred: &str, args: &[String]) -> Result<()> {
-    let root = cli.root.clone();
-    let path = match &cli.world {
-        Some(w) => state::world_paths(&root, w).state,
-        None => match crate::stack::registry(&root)?.remove(stack) {
-            Some(e) => e.state,
-            None => state::state_path(crate::stack::instance_dir(&root, stack)),
-        },
+    let dep = match &cli.world {
+        Some(w) => store::Deployment::local(&state::world_paths(&cli.root, w).state, stack),
+        None => {
+            let (place, _, times) = place_of(cli, stack)?;
+            store::Deployment::new(
+                place.location.open(&open_s3(&cli.root, true))?,
+                stack,
+                times,
+            )
+        }
     };
     let call = format!("{pred}({})", args.join(", "));
-    if !path.exists() {
+    if !dep.has_state()? {
         bail!(
             "taint {call}: stack {stack} has no state at {}",
-            path.display()
+            dep.locate(store::STATE)
         );
     }
-    let dep = crate::store::Deployment::local(&path, stack);
     let _lock = dep.lock()?;
     let mut st = dep.load_state()?;
     if st.taint(pred, args).is_none() {
@@ -2805,6 +2871,87 @@ fn taint(cli: &Cli, stack: &str, pred: &str, args: &[String]) -> Result<()> {
     dep.save_state(&st)?;
     println!("tainted {call} of stack {stack}: the next plan asks again");
     Ok(())
+}
+
+/// Opens an s3 location's store with the environment's credentials.
+/// `writes`: the run writes there, so the bucket's conditional writes are
+/// checked first (once per bucket: a pass is kept in the state root's
+/// `cache/`).
+fn open_s3(root: &Path, writes: bool) -> impl Fn(&store::S3Spec) -> Result<Arc<dyn store::Store>> {
+    let cache = root.join("cache");
+    move |spec| {
+        let s = dform_s3::S3Store::open(spec, "")?;
+        if writes {
+            s.check_conditions(Some(&cache))?;
+        }
+        Ok(Arc::new(s))
+    }
+}
+
+/// Where a stack's deployments are: its backend's location, else its
+/// directory under the state root.
+fn stack_location(
+    root: &Path,
+    stack: &str,
+    backend: Option<&crate::stack::Backend>,
+) -> store::Location {
+    match backend {
+        Some(crate::stack::Backend::Local(dir)) => {
+            store::Location::Local(state::local_dir(root, dir))
+        }
+        Some(crate::stack::Backend::S3(spec)) => store::Location::S3(spec.clone()),
+        None => store::Location::Local(root.join(stack)),
+    }
+}
+
+/// The backend of the project's stack `stack`, as its program (over the
+/// manifest's default) says; `None` when it says none, or there is no
+/// such stack.
+fn stack_backend(
+    project: &crate::project::Project,
+    found: &crate::project::Found,
+) -> Option<crate::stack::Backend> {
+    let program = loader::load_program(std::slice::from_ref(&found.file)).ok()?;
+    let mut cfg = crate::stack::config(&program).ok()?;
+    with_manifest(&mut cfg, &project.manifest, &found.file);
+    cfg.backend
+}
+
+/// Where the deployment `name` (`app`, `app[env=prod]`) is, for a command
+/// that runs no program: where the registry has it, else where its stack's
+/// program's backend says, else under the state root. With its default
+/// directory (its world's when its state is in a bucket) and the lease
+/// times.
+fn place_of(cli: &Cli, name: &str) -> Result<(crate::stack::Place, PathBuf, store::LeaseTimes)> {
+    let root = &cli.root;
+    let home = crate::stack::instance_dir(root, name);
+    let project = crate::project::Project::find(Path::new("."), env!("CARGO_PKG_VERSION"))?;
+    let times = project
+        .as_ref()
+        .map(|p| p.manifest.lease_times())
+        .unwrap_or_default();
+    let location = match crate::stack::registry(root)?.remove(name) {
+        Some(e) => e.state,
+        None => {
+            let (stack, seg) = match name.strip_suffix(']').and_then(|n| n.split_once('[')) {
+                Some((stack, seg)) => (stack, Some(seg)),
+                None => (name, None),
+            };
+            let backend = project.as_ref().and_then(|p| {
+                let d = crate::project::discover(p);
+                match d.named(stack).as_slice() {
+                    [one] => stack_backend(p, one),
+                    _ => None,
+                }
+            });
+            stack_location(root, stack, backend.as_ref()).child(seg)
+        }
+    };
+    let place = crate::stack::Place {
+        world: crate::stack::world_file(&location, &home),
+        location,
+    };
+    Ok((place, home, times))
 }
 
 fn persist_externs(st: &mut state::State, externs: &crate::externs::Externs) {
@@ -3272,6 +3419,7 @@ fn plan_inputs(
         world: show(&cli.world),
         inventory: show(&cli.inventory),
         env: Vec::new(),
+        stack_outputs: Vec::new(),
     })
 }
 
@@ -3480,38 +3628,32 @@ fn stack_list(cli: &Cli) -> Result<()> {
             format!("[{}]", s.keys.join(", "))
         };
         println!("{}{key}  {}", s.name, s.file.display());
-        // The stack's directory: its backend's, else the state root's.
-        let backend = loader::load_program(std::slice::from_ref(&s.file))
-            .ok()
-            .and_then(|p| crate::stack::config(&p).ok())
-            .and_then(|mut c| {
-                with_manifest(&mut c, &project.manifest, &s.file);
-                c.backend
-            });
-        let base = match backend {
-            Some(crate::stack::Backend::Local(dir)) => state::local_dir(&cli.root, &dir),
-            Some(crate::stack::Backend::S3(spec)) => {
-                println!("  state in {spec}");
+        // Where the stack's deployments are: its backend's, else the state
+        // root's.
+        let base = stack_location(&cli.root, &s.name, stack_backend(&project, s).as_ref());
+        if let store::Location::S3(spec) = &base {
+            println!("  state in {spec}");
+        }
+        let opener = open_s3(&cli.root, false);
+        let keys = match base.open(&opener).and_then(|st| st.list("")) {
+            Ok(k) => k,
+            Err(e) => {
+                println!("  {base}: {e:#}");
                 continue;
             }
-            None => cli.root.join(&s.name),
         };
-        let mut deployments: Vec<(String, PathBuf)> = Vec::new();
+        let mut deployments: Vec<(String, store::Location)> = Vec::new();
         if s.keys.is_empty() {
-            deployments.push((s.name.clone(), state::state_path(&base)));
-        } else if let Ok(entries) = std::fs::read_dir(&base) {
-            let mut segs: Vec<String> = entries
-                .flatten()
-                .filter(|e| e.path().is_dir())
-                .map(|e| e.file_name().to_string_lossy().into_owned())
-                .filter(|n| n.contains('='))
+            deployments.push((s.name.clone(), base.clone()));
+        } else {
+            let mut segs: Vec<&str> = keys
+                .iter()
+                .filter_map(|k| k.split_once('/').map(|(seg, _)| seg))
+                .filter(|seg| seg.contains('='))
                 .collect();
-            segs.sort();
+            segs.dedup();
             for seg in segs {
-                deployments.push((
-                    format!("{}[{seg}]", s.name),
-                    state::state_path(base.join(&seg)),
-                ));
+                deployments.push((format!("{}[{seg}]", s.name), base.child(Some(seg))));
             }
         }
         for (name, e) in &registry {
@@ -3521,8 +3663,18 @@ fn stack_list(cli: &Cli) -> Result<()> {
             }
         }
         let mut any = false;
-        for (name, path) in deployments {
-            if !path.exists() && !crate::audit::path_beside(&path).exists() {
+        for (name, location) in deployments {
+            let store = match location.open(&opener) {
+                Ok(st) => st,
+                Err(e) => {
+                    println!("  {name}: {e:#}");
+                    continue;
+                }
+            };
+            let entries = crate::audit::Log::new(store.clone(), None)
+                .entries()
+                .unwrap_or_default();
+            if entries.is_empty() && store.get(store::STATE)?.is_none() {
                 continue;
             }
             any = true;
@@ -3531,7 +3683,7 @@ fn stack_list(cli: &Cli) -> Result<()> {
                 .and_then(|e| e.backend.clone())
                 .map(|b| format!(" (handed over to {b})"))
                 .unwrap_or_default();
-            println!("  {name}{handed}: {}", last_apply(&path));
+            println!("  {name}{handed}: {}", last_apply(&entries));
         }
         if !any {
             println!("  no deployment has state");
@@ -3541,8 +3693,7 @@ fn stack_list(cli: &Cli) -> Result<()> {
 }
 
 /// A deployment's last apply and pending saved plan, from its audit log.
-fn last_apply(state: &Path) -> String {
-    let entries = crate::audit::read(&crate::audit::path_beside(state)).unwrap_or_default();
+fn last_apply(entries: &[serde_json::Value]) -> String {
     let field = |e: &serde_json::Value, k: &str| e[k].as_str().unwrap_or("").to_string();
     let start = entries.iter().rposition(|e| e["kind"] == "apply_start");
     let mut out = match start {

@@ -7,10 +7,11 @@
 #
 # The image is quay.io/minio/minio, else (it is no longer public) Bitnami's
 # archived build of MinIO, docker.io/bitnamilegacy/minio; DFORM_S3_TEST_IMAGE
-# picks another. The port is published on 127.0.0.1:9000, or, when podman
-# cannot publish one (rootless networking needs /dev/net/tun), the container
-# shares the host's network and MinIO listens on 127.0.0.1:9000 only. The
-# data is a podman volume, dform-minio-data.
+# picks another. The port is published on 127.0.0.1:9000 (MinIO listens on
+# the container's every address, where the published port arrives), or,
+# when podman cannot publish one (rootless networking needs /dev/net/tun),
+# the container shares the host's network and MinIO listens on
+# 127.0.0.1:9000 only. The data is a podman volume, dform-minio-data.
 set -eu
 
 name=dform-minio
@@ -31,15 +32,18 @@ start() {
     fi
     [ -n "$image" ] || { echo "minio.sh: no MinIO image could be pulled" >&2; exit 1; }
     binary=$(podman run --rm --network=none --entrypoint sh "$image" -c 'command -v minio')
+    # run ADDRESS PODMAN-ARGS...
     run() {
+        address=$1
+        shift
         podman run -d --name "$name" --user 0:0 -v "$volume:/data" \
             -e MINIO_ROOT_USER="$user" -e MINIO_ROOT_PASSWORD="$password" \
             --entrypoint "$binary" "$@" "$image" \
-            server /data --address 127.0.0.1:9000 --console-address 127.0.0.1:9001 >/dev/null
+            server /data --address "$address:9000" --console-address "$address:9001" >/dev/null
     }
-    if ! run -p 127.0.0.1:9000:9000 2>/dev/null; then
+    if ! run "" -p 127.0.0.1:9000:9000 2>/dev/null; then
         podman rm -f "$name" >/dev/null 2>&1 || true
-        run --network=host
+        run 127.0.0.1 --network=host
     fi
     for _ in $(seq 100); do
         if curl -fs http://127.0.0.1:9000/minio/health/ready >/dev/null 2>&1; then

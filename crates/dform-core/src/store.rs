@@ -6,7 +6,11 @@
 //! network stack, and the command line wires the S3 store in.
 //!
 //! A deployment's objects: [`STATE`], [`KEY`] (the plan key), [`AUDIT`]
-//! and [`LOCK`].
+//! (and, where a store cannot append in place, its segments under
+//! [`AUDIT_SEGMENTS`]), [`LOCK`], [`OUTPUTS`] (what other stacks read),
+//! and the controller's [`MEMO`], [`PENDING`] and drop directory
+//! [`DROPS`]. [`Location`] says where they are: a directory or a bucket
+//! prefix.
 //!
 //! Leases, in a store that fences ([`Store::fenced`]): the lock is an
 //! object holding the holder, an expiry and a fencing counter
@@ -23,6 +27,16 @@
 //! check, or by the ETag the new holder's first write moved. Expiry is
 //! wall-clock time: the clocks of the machines sharing a backend must
 //! agree to well within a lease.
+//!
+//! Provider calls are fenced too, as far as they can be: the executor asks
+//! [`Deployment::check_fence`] before it submits each Apply call, so a
+//! stale holder makes no call once it can see its lease is gone. What it
+//! can still do: the calls it submitted before the lease was lost carry
+//! on at the provider (at most `--parallel` of them, none recalled), and
+//! a call whose check passed is sent however long the holder stalls
+//! between the check and the send. Neither answer can be written down
+//! (the state write is fenced); the new holder finds them as uncertain
+//! calls and resolves them by their idempotency keys.
 
 use crate::state::State;
 use anyhow::{Context, Result, anyhow, bail};
@@ -41,6 +55,30 @@ pub const KEY: &str = "state.key";
 pub const AUDIT: &str = "state.audit.jsonl";
 /// The deployment's lock: the local backend's pid file, else the lease.
 pub const LOCK: &str = "state.lock";
+/// The audit log's segments, in a store that does not append in place
+/// (`audit`): `state.audit/000001.jsonl`, ...
+pub const AUDIT_SEGMENTS: &str = "state.audit/";
+/// The deployment's published outputs: what other stacks read as
+/// `stack_output/3`, apart from the state (`stack::Published`).
+pub const OUTPUTS: &str = "outputs.json";
+/// The controller's memo (`controller`).
+pub const MEMO: &str = "controller.json";
+/// The controller's approvals drop directory: one token per object under
+/// `approvals/`.
+pub const DROPS: &str = "approvals";
+/// Where the controller publishes the digest a held approval waits for.
+pub const PENDING: &str = "approval-pending.json";
+
+/// Is `key` one of a deployment's own objects (not a keyed deployment's
+/// under it, nor anything else a directory holds)? Its own are the
+/// top-level objects but the local world file, and those under its drop
+/// directory and its audit segments.
+pub fn own_key(key: &str) -> bool {
+    match key.split_once('/') {
+        None => key != crate::state::WORLD,
+        Some((first, _)) => first == DROPS || format!("{first}/") == AUDIT_SEGMENTS,
+    }
+}
 
 /// An object and its version.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -112,6 +150,63 @@ pub trait Store: Send + Sync {
     /// content, without losing a concurrent append.
     fn append(&self, key: &str, line: &mut dyn FnMut(&[u8]) -> Vec<u8>) -> Result<()> {
         append(self, key, line)
+    }
+
+    /// Does [`Store::append`] add to the object in place? Else it rewrites
+    /// it whole, and a log that grows is kept in segments (`audit`).
+    fn appends_in_place(&self) -> bool {
+        false
+    }
+}
+
+/// Opens the store of an s3 location: the command line's (dform-core has
+/// no network stack).
+pub type OpenS3<'a> = &'a dyn Fn(&S3Spec) -> Result<Arc<dyn Store>>;
+
+/// Where one deployment's objects are.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Location {
+    /// A directory: the state is `DIR/state.json`.
+    Local(PathBuf),
+    /// A bucket prefix, the deployment's own (a keyed deployment's
+    /// segment included).
+    S3(S3Spec),
+}
+
+impl Location {
+    /// The location of the keyed deployment `seg` under this one (the
+    /// stack's), or this one itself.
+    pub fn child(&self, seg: Option<&str>) -> Location {
+        let Some(seg) = seg else {
+            return self.clone();
+        };
+        match self {
+            Location::Local(d) => Location::Local(d.join(seg)),
+            Location::S3(spec) => Location::S3(S3Spec {
+                prefix: match spec.prefix.as_str() {
+                    "" => seg.to_string(),
+                    p => format!("{p}/{seg}"),
+                },
+                ..spec.clone()
+            }),
+        }
+    }
+
+    /// The store of its objects.
+    pub fn open(&self, s3: OpenS3) -> Result<Arc<dyn Store>> {
+        match self {
+            Location::Local(d) => Ok(Arc::new(LocalStore::beside(&d.join(STATE)))),
+            Location::S3(spec) => s3(spec),
+        }
+    }
+}
+
+impl std::fmt::Display for Location {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Location::Local(d) => write!(f, "{}", d.display()),
+            Location::S3(spec) => write!(f, "{spec}"),
+        }
     }
 }
 
@@ -578,6 +673,10 @@ impl Store for LocalStore {
         ))
     }
 
+    fn appends_in_place(&self) -> bool {
+        true
+    }
+
     /// The file is locked (`flock`) while it is read and written, so two
     /// processes appending (a `plan --out` beside an apply) do not fork an
     /// audit log's chain.
@@ -737,6 +836,7 @@ struct Inner {
     /// Why the lease was lost, once the renewer found out.
     lost: Mutex<Option<String>>,
     writes: AtomicUsize,
+    submits: AtomicUsize,
 }
 
 impl Deployment {
@@ -751,6 +851,7 @@ impl Deployment {
                 lease: Mutex::new(None),
                 lost: Mutex::new(None),
                 writes: AtomicUsize::new(0),
+                submits: AtomicUsize::new(0),
             }),
         }
     }
@@ -806,7 +907,7 @@ impl Deployment {
     /// in it, and only over the version this run last read or wrote.
     pub fn save_state(&self, st: &State) -> Result<()> {
         let inner = &self.inner;
-        stall_at_write(inner.writes.fetch_add(1, Ordering::SeqCst) + 1);
+        stall_at("DFORM_TEST_STALL_AT_WRITE", &inner.writes);
         if inner.store.fenced() {
             self.save_fenced(st)?;
         } else {
@@ -847,6 +948,35 @@ impl Deployment {
                 inner.store.locate(STATE)
             ),
         }
+    }
+
+    /// Before an Apply call: in a store that fences, is the lease still
+    /// this run's? A stale holder makes no call once it can see it is not
+    /// (the module doc says what it can still do).
+    pub fn check_fence(&self) -> Result<()> {
+        stall_at("DFORM_TEST_STALL_AT_SUBMIT", &self.inner.submits);
+        if !self.inner.store.fenced() {
+            return Ok(());
+        }
+        self.check_lease()
+            .map(|_| ())
+            .context("no provider call was made")
+    }
+
+    /// Publish the deployment's outputs (`stack::Published`) beside its
+    /// state, under its lease in a store that fences. Unchanged, nothing
+    /// is written.
+    pub fn publish(&self, bytes: &[u8]) -> Result<()> {
+        let inner = &self.inner;
+        if inner.store.get(OUTPUTS)?.is_some_and(|o| o.bytes == bytes) {
+            return Ok(());
+        }
+        if inner.store.fenced() {
+            self.check_lease()
+                .context("the outputs were not published")?;
+        }
+        inner.store.put(OUTPUTS, bytes, &Cond::Any)?;
+        Ok(())
     }
 
     /// The fencing counter of this run's lease, once the lease object says
@@ -998,11 +1128,14 @@ impl Deployment {
     }
 }
 
-/// Tests stop an apply as it is about to make its Nth state write, to kill
-/// or pause it there: `DFORM_TEST_STALL_AT_WRITE=N:DIR` makes
-/// `DIR/stalled` (holding the pid) and waits for `DIR/resume`.
-fn stall_at_write(n: usize) {
-    let Some(spec) = std::env::var_os("DFORM_TEST_STALL_AT_WRITE") else {
+/// Tests stop an apply as it is about to make its Nth state write
+/// (`DFORM_TEST_STALL_AT_WRITE`), or its Nth Apply call
+/// (`DFORM_TEST_STALL_AT_SUBMIT`, before the lease check), to kill or
+/// pause it there: `VAR=N:DIR` makes `DIR/stalled` (holding the pid) and
+/// waits for `DIR/resume`. `count` counts them.
+fn stall_at(var: &str, count: &AtomicUsize) {
+    let n = count.fetch_add(1, Ordering::SeqCst) + 1;
+    let Some(spec) = std::env::var_os(var) else {
         return;
     };
     let spec = spec.to_string_lossy();

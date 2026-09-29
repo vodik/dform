@@ -2,7 +2,8 @@
 //! `If-None-Match: *`), DELETE and ListObjectsV2 over HTTP/1.1 on
 //! 127.0.0.1, its objects a `dform_core::store::MemoryStore`, so it keeps
 //! S3's rules for ETags and conditional writes. It does not check
-//! signatures, and every bucket exists.
+//! signatures, and every bucket exists. [`Server::ignoring_conditions`]
+//! is a server that does not keep them, as some S3-compatible ones do not.
 
 use dform_core::store::{Cond, MemoryStore, Store};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -17,13 +18,23 @@ pub struct Server {
 
 impl Server {
     pub fn start() -> Server {
+        Server::serve(false)
+    }
+
+    /// A server that takes every PUT, whatever its `If-Match` or
+    /// `If-None-Match` say.
+    pub fn ignoring_conditions() -> Server {
+        Server::serve(true)
+    }
+
+    fn serve(lax: bool) -> Server {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind the fake S3 server");
         let endpoint = format!("http://{}", listener.local_addr().expect("its address"));
         let objects = Arc::new(MemoryStore::new());
         std::thread::spawn(move || {
             for conn in listener.incoming().flatten() {
                 let objects = objects.clone();
-                std::thread::spawn(move || serve(conn, &objects));
+                std::thread::spawn(move || serve(conn, &objects, lax));
             }
         });
         Server { endpoint }
@@ -76,7 +87,7 @@ fn error(status: u16, code: &str) -> Answer {
     }
 }
 
-fn serve(conn: TcpStream, objects: &MemoryStore) {
+fn serve(conn: TcpStream, objects: &MemoryStore, lax: bool) {
     let mut out = match conn.try_clone() {
         Ok(c) => c,
         Err(_) => return,
@@ -114,7 +125,7 @@ fn serve(conn: TcpStream, objects: &MemoryStore) {
         if r.read_exact(&mut body).is_err() {
             return;
         }
-        let answer = handle(&method, &target, &header, &body, objects);
+        let answer = handle(&method, &target, &header, &body, objects, lax);
         let reason = match answer.status {
             200 => "OK",
             204 => "No Content",
@@ -143,6 +154,7 @@ fn handle(
     header: &dyn Fn(&str) -> Option<String>,
     body: &[u8],
     objects: &MemoryStore,
+    lax: bool,
 ) -> Answer {
     let (path, query) = target.split_once('?').unwrap_or((target, ""));
     let path = decode(path.trim_start_matches('/'), false);
@@ -209,6 +221,7 @@ fn handle(
                 (None, Some(s)) if s == "*" => Cond::IfAbsent,
                 _ => Cond::Any,
             };
+            let cond = if lax { Cond::Any } else { cond };
             match objects.put(&full, body, &cond) {
                 Ok(Some(etag)) => Answer {
                     status: 200,

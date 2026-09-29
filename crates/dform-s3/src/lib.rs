@@ -9,6 +9,12 @@
 //! rustls: blocking, with no async runtime, so the command line stays
 //! synchronous and dform-core keeps no network stack.
 //!
+//! Conditional writes are checked once per bucket ([`S3Store::check_conditions`])
+//! before a deployment's objects are written there: a server that ignores
+//! `If-Match` or `If-None-Match` would let two writers overwrite each
+//! other, and is refused. The answer is cached under the state root's
+//! `cache/`.
+//!
 //! Credentials: `DFORM_S3_ACCESS_KEY_ID` and `DFORM_S3_SECRET_ACCESS_KEY`
 //! (and `DFORM_S3_SESSION_TOKEN`), else AWS's `AWS_ACCESS_KEY_ID`,
 //! `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN`. Only the environment:
@@ -20,6 +26,7 @@ use rusty_s3::actions::{
     CreateBucket, DeleteObject, GetObject, ListObjectsV2, PutObject, S3Action,
 };
 use rusty_s3::{Bucket, Credentials, UrlStyle};
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 #[cfg(any(test, feature = "fake"))]
@@ -33,6 +40,8 @@ const READ_LIMIT: u64 = 1 << 30;
 
 /// One deployment's objects: `s3://BUCKET/PREFIX[/<k>=<v>]/<key>`.
 pub struct S3Store {
+    /// The endpoint as given (`None`: AWS's), for the conditions cache.
+    endpoint: Option<String>,
     bucket: Bucket,
     creds: Credentials,
     /// The deployment's prefix, without a trailing `/`.
@@ -104,11 +113,92 @@ impl S3Store {
             .build()
             .new_agent();
         Ok(S3Store {
+            endpoint: spec.endpoint.clone(),
             bucket,
             creds,
             prefix,
             agent,
         })
+    }
+
+    /// Does the server keep the conditions of a write, `If-None-Match: *`
+    /// and `If-Match`? Asked once per endpoint and bucket, with a probe
+    /// object under the prefix (written, refused over, deleted); a bucket
+    /// that passed is remembered in `cache` (the state root's `cache/`).
+    /// Refused, naming what the server ignored.
+    pub fn check_conditions(&self, cache: Option<&Path>) -> Result<()> {
+        let seen = cache.map(|c| self.conditions_mark(c));
+        if seen.as_ref().is_some_and(|p| p.exists()) {
+            return Ok(());
+        }
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let key = format!(".dform-conditions-{}-{nonce:x}", std::process::id());
+        let r = self.probe(&key);
+        let _ = self.delete(&key);
+        let ignored = r?;
+        if let Some(what) = ignored {
+            bail!(
+                "s3 bucket {} at {}: the server ignores {what} on a PUT; dform's leases and \
+                 state writes rely on conditional writes (AWS S3 since November 2024, MinIO), \
+                 and would let two writers overwrite each other here",
+                self.bucket.name(),
+                self.endpoint.as_deref().unwrap_or("AWS")
+            );
+        }
+        if let Some(p) = seen {
+            if let Some(dir) = p.parent() {
+                std::fs::create_dir_all(dir).with_context(|| format!("mkdir {}", dir.display()))?;
+            }
+            std::fs::write(
+                &p,
+                format!(
+                    "s3 bucket {} at {} keeps If-Match and If-None-Match\n",
+                    self.bucket.name(),
+                    self.endpoint.as_deref().unwrap_or("AWS")
+                ),
+            )
+            .with_context(|| format!("write {}", p.display()))?;
+        }
+        Ok(())
+    }
+
+    /// Where the check's pass for this endpoint and bucket is kept.
+    fn conditions_mark(&self, cache: &Path) -> PathBuf {
+        let id = format!(
+            "{} {}",
+            self.endpoint.as_deref().unwrap_or("aws"),
+            self.bucket.name()
+        );
+        let digest = dform_core::approval::sha256_hex(id.as_bytes());
+        cache.join("s3-conditions").join(&digest[..32])
+    }
+
+    /// The probe: which condition the server ignored, if one was.
+    fn probe(&self, key: &str) -> Result<Option<&'static str>> {
+        let Some(first) = self.put(key, b"1", &Cond::IfAbsent)? else {
+            bail!(
+                "s3 bucket {}: the probe {} exists already",
+                self.bucket.name(),
+                self.locate(key)
+            );
+        };
+        if self.put(key, b"2", &Cond::IfAbsent)?.is_some() {
+            return Ok(Some("If-None-Match: *"));
+        }
+        let wrong = if first == "\"0\"" { "\"1\"" } else { "\"0\"" };
+        if self.put(key, b"3", &Cond::IfMatch(wrong.into()))?.is_some() {
+            return Ok(Some("If-Match"));
+        }
+        if self.put(key, b"4", &Cond::IfMatch(first))?.is_none() {
+            bail!(
+                "s3 bucket {}: a PUT with If-Match of the object's own ETag was refused",
+                self.bucket.name()
+            );
+        }
+        Ok(None)
     }
 
     fn object(&self, key: &str) -> String {
@@ -321,6 +411,43 @@ mod tests {
         s.delete(STATE).unwrap();
         s.delete(STATE).unwrap();
         assert_eq!(s.list("").unwrap(), [LOCK]);
+    }
+
+    #[test]
+    fn a_server_that_ignores_conditions_is_refused_once_and_a_good_one_remembered() {
+        let cache = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-scratch")
+            .join(format!("s3-conditions-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&cache);
+        let lax = fake::Server::ignoring_conditions();
+        let e = store(&lax, "p", "app")
+            .check_conditions(Some(&cache))
+            .unwrap_err();
+        assert!(
+            e.to_string()
+                .contains("the server ignores If-None-Match: *"),
+            "{e}"
+        );
+        assert!(!cache.exists(), "a refusal is not cached");
+        assert_eq!(
+            store(&lax, "p", "app").list("").unwrap(),
+            Vec::<String>::new()
+        );
+        let good = fake::Server::start();
+        store(&good, "p", "app")
+            .check_conditions(Some(&cache))
+            .unwrap();
+        assert_eq!(
+            std::fs::read_dir(cache.join("s3-conditions"))
+                .unwrap()
+                .count(),
+            1
+        );
+        assert_eq!(
+            store(&good, "p", "app").list("").unwrap(),
+            Vec::<String>::new()
+        );
+        let _ = std::fs::remove_dir_all(&cache);
     }
 
     #[test]

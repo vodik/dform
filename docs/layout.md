@@ -26,8 +26,9 @@ dform.state/                state: per deployment, audit logs, plan keys,
   version requirement, Cargo's semver syntax; a program's `provider NAME {}`
   takes its source from here), `[defaults]` (a `backend` template and
   `unknowns`, which a stack statement overrides, and an s3 backend's
-  `lease_duration` and `lease_renewal`) and `[discovery]`
-  (`exclude` globs). Never inputs, keys, settings or anything per
+  `lease_duration` and `lease_renewal`), `[discovery]`
+  (`exclude` globs) and `[remotes]` (other projects whose stacks' outputs
+  this one reads, each by its backend: `platform = { backend = "..." }`). Never inputs, keys, settings or anything per
   deployment. Policy reads it as `project_provider(Name, Constraint)` and
   `project_default(Key, Value)`.
 - Discovery walks the project for `.df` files: every file with a `stack`

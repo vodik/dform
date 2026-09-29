@@ -153,7 +153,10 @@ deployment's files in a directory. `backend = s3("BUCKET", "PREFIX",
 {endpoint: "URL", region: "R"})` keeps them in an S3 bucket under PREFIX
 (a keyed stack's deployment under `PREFIX/<k>=<v>`): the state (identity,
 in-flight and uncertain records, outputs), the plan key `state.key`, the
-audit log `state.audit.jsonl` and the lease `state.lock`. The record is
+audit log (in segments, `state.audit/000001.jsonl`, ...: see "The audit
+log"), the lease `state.lock`, the published outputs `outputs.json` and the
+controller's memo `controller.json` (and its `approvals/` drop directory
+and `approval-pending.json`). The record is
 optional: without an endpoint it is AWS S3's regional endpoint
 (virtual-host style), with one the URL path-style (MinIO, OVH Object
 Storage, anything S3-compatible); the region defaults to `us-east-1`. The
@@ -184,17 +187,34 @@ counter goes up; the new holder writes its counter into the state at
 once, and every state write first checks that the lease is still its own.
 A holder that stalled past its lease and wakes after a takeover is
 refused ("state write refused by fencing") and writes nothing; the new
-holder resumes the interrupted apply as after any crash. `dform stack
-unlock` breaks a lease whoever holds it. The machines sharing a backend
+holder resumes the interrupted apply as after any crash. The lease is also
+checked before each Apply call is submitted, so a stale holder that can see
+its lease is gone makes no provider call ("no provider call was made").
+What a stale holder can still do: the calls it submitted before the lease
+was lost carry on at the provider (at most `--parallel` of them; none is
+recalled), and a call whose check passed is sent however long the holder
+stalls between the check and the send. Neither answer can be written down;
+the new holder finds them as uncertain calls and resolves them by their
+idempotency keys, as after a crash. `dform stack unlock` breaks a lease
+whoever holds it. The machines sharing a backend
 must agree on the time to well within a lease: expiry is wall-clock.
 `[defaults] lease_duration` and `lease_renewal` (`500ms`, `30s`, `2m`; 60s
 and 20s by default) set the lease; the renewal must be shorter.
 
-Not yet for an s3 stack: `controller run` (its memo is local), `stack
-rekey` and `handover` (they move directories), `state taint` (it finds
-state through the local registry), and `stack_output` reads of it from
-other stacks (the registry holds local paths). The audit log is rewritten
-whole on each entry.
+Before it writes to a bucket, dform checks once that the server keeps the
+conditions (a probe object under the prefix: written with `If-None-Match:
+*`, written over with each condition, deleted) and refuses a server that
+ignores `If-Match` or `If-None-Match`, naming which; a pass is remembered
+per endpoint and bucket in `dform.state/cache/s3-conditions/`. OVH Object
+Storage and any other S3-compatible service is taken on that check.
+
+Every command takes an s3 stack as it takes a local one: `plan`, `apply`,
+`controller run` (its memo in the bucket), `stack rekey` and `stack
+handover` (they move the deployment's objects between prefixes, or between
+a bucket and a directory), `state taint`, `state show`, `state mv`, `log`,
+`stack unlock` and `stack list` (which lists the deployments under the
+stack's prefix), and other stacks read its outputs (the registry records
+`s3://BUCKET/PREFIX/state.json` with the endpoint and region).
 
 ### Keyed stacks: one deployment per key value
 
@@ -247,15 +267,46 @@ the lint off; `dform.df` says so, since its iam module's names are fixed.
 
 Cross-stack values: `output k = t` at the top of a program is a stack
 output. `apply` records the stack's outputs whose values are known in its
-state and the stack's absolute state path in `dform.state/stacks.json`; every
-other program reads them as facts, `stack_output("net.shared", vpc_id, V)`.
+state, publishes them beside it as their own object, `outputs.json`, and
+records where the deployment's objects are (an absolute directory, or
+`s3://...`) in `dform.state/stacks.json`; every other program reads them
+as facts, `stack_output("net.shared", vpc_id, V)`, from `outputs.json`
+only, never the state. An output declared `secret(T)` is published as its
+label, never its value: a reader gets a secret null, and using it in a
+public place is the static secret error (E0304). A saved plan records the
+digest of each outputs object it read, and `apply PLAN` refuses once one
+has changed ("stack_output of NAME: its published outputs changed since
+the plan").
+
+#### Remote outputs
+
+A project reads the outputs of another project's stacks through that
+project's backend, named in its `dform.toml`:
+
+```toml
+[remotes]
+platform = { backend = 's3("acme-dform", "prod/{stack}", {endpoint: "https://s3.gra.io.cloud.ovh.net", region: "gra"})' }
+network = { backend = 'local("../network/dform.state")' }
+```
+
+`stack_output("platform.cluster[env=prod]", "endpoint", E)` names the
+remote, then the stack and its key: when this project has no stack of that
+name, it is read from `platform`'s backend, `{stack}` the stack's name
+(without `{stack}`, the stacks are under the backend by name, as under a
+state root), a keyed deployment under its key's segment, and the object is
+that deployment's `outputs.json`. A reader needs read access to that object
+only. A `local` directory is relative to the project root. A deployment the
+remote has not applied has no outputs. The program names the deployment as
+a string: which remote deployments are read comes from its
+`stack_output` literals.
 
 `dform.state/` (every path below, and the registry) is at the project
 root, so the project's stacks share it wherever in the project dform runs
 from. It is gitignored: it holds each deployment's plan key.
 
 - Core state (Terraform-style address -> remote mapping, outputs): `dform.state/<stack>/state.json`
-  (a keyed stack's deployment: `dform.state/<stack>/<k>=<v>/state.json`).
+  (a keyed stack's deployment: `dform.state/<stack>/<k>=<v>/state.json`), and
+  beside it the published outputs `outputs.json`.
 - The fake backend's world (what "exists"): `dform.state/<stack>/remote.json`, beside the state.
 - Discovery inventory, shared by every stack: `dform.state/inventory.json`.
 - What providers and trust roots fetch (the k8s OpenAPI document, JWKS): `dform.state/cache/`.
@@ -961,7 +1012,12 @@ cargo run -- apply plan.json --approval approval.json
 
 Every deployment has an append-only audit log beside its state,
 `state.audit.jsonl` (`<stem>.state.audit.jsonl` beside a `--world` file),
-which moves with the state on a rekey or a handover. Each entry is a line
+which moves with the state on a rekey or a handover. In a bucket, where an
+object is written whole, the log is kept in segments of 100 entries,
+`state.audit/000001.jsonl`, ...: an entry rewrites only the last segment
+(conditionally on what it read, so concurrent entries never fork the
+chain), and the log is the segments in order (after a `state.audit.jsonl`
+written before segments, which the first segment continues). Each entry is a line
 of canonical JSON: `seq`, `time` (UTC), `kind`, `prev` (the previous entry's
 `hash`), the kind's fields, and `hash`, sha256 over the entry without it.
 The kinds:
@@ -1545,7 +1601,9 @@ naming it. Paths are relative to the declaring file. A `git` source is read
 at the ref with `git show REF:PATH` (a bare repository works) and changes
 when the ref names another commit.
 
-The controller keeps `controller.json` beside the stack's state: the stamps
+The controller keeps `controller.json` beside the stack's state (in its
+store: a directory, or the bucket of an s3 stack, as are its `approvals/`
+drop directory and `approval-pending.json`): the stamps
 of the sources and the world file as its last run left them, and the world
 as that run accepted it (the baseline). It says what changed (`event start`,
 `event input NAMES`, `event world`, `event resync`) and hands the world's
@@ -1579,14 +1637,22 @@ and in prod a rollout waits for an approval of its plan (`approval/1`).
 ## Bootstrap and handover
 
 One program creates the cluster and installs dform in it; the workload's
-state then moves into the cluster and the controller runs it from there.
-`examples/bootstrap/` is the demo, on the mocks:
+state then moves where the in-cluster controller reaches it, a bucket, and
+the controller runs it from there. `examples/bootstrap/` is the demo, on
+the mocks and MinIO (`crates/dform-s3/minio.sh`; its test,
+`tests/controller_bootstrap.rs`, takes the fake S3 server when MinIO is not
+there):
 
 ```bash
+eval "$(crates/dform-s3/minio.sh start)"
 cargo run -- -C examples/bootstrap apply renfry.bootstrap   # 3 ticks
-cargo run -- -C examples/bootstrap stack handover renfry.workload --to 'k8s("dform-system/workload")'
+cargo run -- -C examples/bootstrap stack handover renfry.workload \
+  --to 's3("dform-test", "renfry/workload", {endpoint: "http://127.0.0.1:9000"})'
 cargo run -- -C examples/bootstrap controller run renfry.workload
+crates/dform-s3/minio.sh stop
 ```
+
+The bucket must exist (dform makes none; the test makes `dform-test`).
 
 `stacks/bootstrap.df` (stack `renfry.bootstrap`, mock GCP from `providers/gcp/schema.df` and
 mock Kubernetes) creates the network, the subnetwork and the cluster in
@@ -1601,18 +1667,24 @@ Deployment whose image is the `release` input relation, and a Service.
 controller runs in: it stays batch. `dform controller run` refuses it (by its
 program or by the registry), and it is never handed over.
 
-`dform stack handover NAME --to BACKEND` (NAME a deployment, `app[env=prod]`, of a keyed stack) moves the stack's state
-directory (state, world, controller memo) to the backend and records it in
-the registry, `dform.state/stacks.json` (`{"state": ..., "backend": ...}`
+`dform stack handover NAME --to BACKEND` (NAME a deployment, `app[env=prod]`, of a keyed stack) moves the deployment's
+objects (state, plan key, audit log, published outputs, controller memo)
+to the backend, under the deployment's lock, and records it in the
+registry, `dform.state/stacks.json` (`{"state": ..., "backend": ...}`
 beside the plain state paths, absolute; the controller's `event world` line
-names it relative to the root). Every later run of the stack uses it,
-whatever the program's `backend` says; a batch `apply` of a handed-over
-stack is refused (the controller runs it), `plan` is not. The stack's
-state is found in the registry, else at `dform.state/NAME`; the target must be
-empty and the stack not locked. Backends:
+names it relative to the root). The mock's world goes with the state into
+a directory; for a bucket it stays in `dform.state/NAME/` (it is the
+provider's). Every later run of the stack uses it, whatever the program's
+`backend` says; a batch `apply` of a handed-over stack is refused (the
+controller runs it), `plan` is not. The stack's state is found in the
+registry, else where its program's backend says; the target must hold none
+of a deployment's objects, and the stack not be locked. Backends:
 
 - `local("DIR")`: a directory, relative to the project root, as a stack's
   `backend` is.
+- `s3("BUCKET", "PREFIX", {endpoint: "URL", region: "R"})`: the
+  deployment's own prefix of a bucket (a handover between prefixes, or
+  between buckets, works alike).
 - `k8s("namespace/name")`: the in-cluster backend. For now it stands in as
   the directory `k8s/namespace/name` inside the state directory of the
   registered `role = bootstrap` stack (there must be exactly one; an apply

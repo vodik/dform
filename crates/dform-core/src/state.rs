@@ -251,6 +251,10 @@ pub fn parse_key(k: &str) -> Option<Address> {
     })
 }
 
+/// The mock's world file in a deployment's directory: the provider's, not
+/// state, so it stays on the machine when the state is in a bucket.
+pub const WORLD: &str = "remote.json";
+
 pub fn state_path(root: impl AsRef<Path>) -> PathBuf {
     root.as_ref().join("state.json")
 }
@@ -291,7 +295,7 @@ pub fn local_dir(root: &Path, dir: &Path) -> PathBuf {
 pub fn backend_paths(root: &Path, dir: &Path) -> StackPaths {
     StackPaths {
         state: dir.join("state.json"),
-        world: dir.join("remote.json"),
+        world: dir.join(WORLD),
         inventory: root.join("inventory.json"),
     }
 }

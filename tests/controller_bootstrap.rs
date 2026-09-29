@@ -1,10 +1,13 @@
 //! The bootstrap and handover demo (examples/bootstrap/, README "Bootstrap
 //! and handover"): a batch stack creates the cluster and installs dform in
-//! it, the workload stack's state is handed over to the in-cluster backend,
-//! and the controller runs the workload from there.
+//! it, the workload stack's state is handed over to a bucket (s3: MinIO
+//! when `DFORM_S3_TEST_ENDPOINT` names one, as tests/s3.rs takes it, else
+//! the fake S3 server), and the controller runs the workload from there.
 
 mod common;
-use common::Scratch;
+use common::{Run, Scratch};
+use dform_core::store::{S3Spec, Store};
+use dform_s3::S3Store;
 
 const HANDED: &str = "dform.state/renfry.bootstrap/k8s/dform-system/workload";
 
@@ -29,6 +32,104 @@ fn controller(s: &Scratch) -> Vec<String> {
         .run(&["controller", "run", "--once", "renfry.workload"])
         .success();
     log(&r.stdout)
+}
+
+/// Where the handed-over workload's state goes: a fresh prefix of a
+/// bucket, emptied when dropped.
+struct Bucket {
+    endpoint: String,
+    bucket: String,
+    id: String,
+    secret: String,
+    prefix: String,
+}
+
+impl Bucket {
+    fn new(name: &str) -> Bucket {
+        static FAKE: std::sync::OnceLock<dform_s3::fake::Server> = std::sync::OnceLock::new();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .subsec_nanos();
+        let prefix = format!("dform-test-{}-{nanos:x}-{name}", std::process::id());
+        let b = match std::env::var("DFORM_S3_TEST_ENDPOINT") {
+            Ok(e) if !e.is_empty() => Bucket {
+                endpoint: e,
+                bucket: std::env::var("DFORM_S3_TEST_BUCKET")
+                    .unwrap_or_else(|_| "dform-test".into()),
+                id: std::env::var("DFORM_S3_ACCESS_KEY_ID").expect("DFORM_S3_ACCESS_KEY_ID"),
+                secret: std::env::var("DFORM_S3_SECRET_ACCESS_KEY")
+                    .expect("DFORM_S3_SECRET_ACCESS_KEY"),
+                prefix,
+            },
+            _ => {
+                eprintln!("{name}: on the fake S3 server (DFORM_S3_TEST_ENDPOINT is not set)");
+                Bucket {
+                    endpoint: FAKE
+                        .get_or_init(dform_s3::fake::Server::start)
+                        .endpoint
+                        .clone(),
+                    bucket: "dform-test".into(),
+                    id: "fake".into(),
+                    secret: "fake".into(),
+                    prefix,
+                }
+            }
+        };
+        b.store("").create_bucket().unwrap();
+        b
+    }
+
+    fn store(&self, rel: &str) -> S3Store {
+        let spec = S3Spec {
+            bucket: self.bucket.clone(),
+            prefix: self.prefix.clone(),
+            endpoint: Some(self.endpoint.clone()),
+            region: Some("us-east-1".into()),
+        };
+        S3Store::with_credentials(
+            &spec,
+            rel,
+            rusty_s3::Credentials::new(&self.id, &self.secret),
+        )
+        .unwrap()
+    }
+
+    /// `s3(...)` of `rel` under the prefix.
+    fn term(&self, rel: &str) -> String {
+        format!(
+            "s3(\"{}\", \"{}/{rel}\", {{endpoint: \"{}\", region: \"us-east-1\"}})",
+            self.bucket, self.prefix, self.endpoint
+        )
+    }
+
+    /// `dform ARGS` in `s`, with the bucket's credentials.
+    fn run(&self, s: &Scratch, args: &[&str]) -> Run {
+        let out = common::dform()
+            .args(common::yes(args))
+            .current_dir(&s.dir)
+            .env("DFORM_S3_ACCESS_KEY_ID", &self.id)
+            .env("DFORM_S3_SECRET_ACCESS_KEY", &self.secret)
+            .output()
+            .unwrap();
+        Run::from(out)
+    }
+
+    fn controller(&self, s: &Scratch) -> Vec<String> {
+        let r = self
+            .run(s, &["controller", "run", "--once", "renfry.workload"])
+            .success();
+        log(&r.stdout)
+    }
+}
+
+impl Drop for Bucket {
+    fn drop(&mut self) {
+        let all = self.store("");
+        for k in all.list("").unwrap_or_default() {
+            let _ = all.delete(&k);
+        }
+    }
 }
 
 fn edit(s: &Scratch, rel: &str, from: &str, to: &str) {
@@ -106,56 +207,61 @@ fn bootstrap_handover_and_the_controller_runs_the_workload() {
         r.stderr
     );
 
-    // The workload was planned from its default place; hand it over.
-    let r = s
-        .run(&[
-            "stack",
-            "handover",
-            "renfry.workload",
-            "--to",
-            "k8s(\"dform-system/workload\")",
-        ])
+    // The workload was planned from its default place; hand it over to
+    // the bucket.
+    let b = Bucket::new("bootstrap");
+    let to = b.term("workload");
+    let r = b
+        .run(&s, &["stack", "handover", "renfry.workload", "--to", &to])
         .success();
     assert!(
         r.stdout
-            .starts_with("stack renfry.workload handed over to k8s(\"dform-system/workload\"): "),
+            .starts_with(&format!("stack renfry.workload handed over to {to}: s3://")),
         "{}",
         r.stdout
     );
     let registry = s.read("dform.state/stacks.json");
     assert!(
-        registry.contains("\"backend\": \"k8s(\\\"dform-system/workload\\\")\""),
+        registry.contains(&format!(
+            "\"state\": \"s3://{}/{}/workload/state.json\"",
+            b.bucket, b.prefix
+        )),
         "{registry}"
     );
 
-    // The controller starts on the workload, in its new place.
+    // The controller starts on the workload, its state in the bucket; the
+    // world (the mock's cluster) is the provider's and stays.
     assert_eq!(
-        controller(&s),
+        b.controller(&s),
         [
             "event start",
             "tick 1: plan: 3 deformations (3 create)",
             "stack renfry.workload is undeformed",
         ]
     );
-    let world = format!("{HANDED}/remote.json");
-    assert!(s.read(&world).contains("gcr.io/renfry/web:1.0"));
-    assert!(!s.path("dform.state/renfry.workload").exists());
+    let keys = b.store("workload").list("").unwrap();
+    for k in ["state.json", "state.key", "controller.json"] {
+        assert!(keys.iter().any(|x| x == k), "{k} in {keys:?}");
+    }
+    let world = "dform.state/renfry.workload/remote.json";
+    assert!(s.read(world).contains("gcr.io/renfry/web:1.0"));
+    assert!(!s.path("dform.state/renfry.workload/state.json").exists());
     // A batch apply of a handed-over stack is refused; plan still reads it.
-    let r = s.run(&["apply", "renfry.workload"]).failure();
+    let r = b.run(&s, &["apply", "renfry.workload"]).failure();
     assert!(
-        r.stderr.contains(
-            "stack renfry.workload was handed over to k8s(\"dform-system/workload\"): the controller runs it"
-        ),
+        r.stderr.contains(&format!(
+            "stack renfry.workload was handed over to {to}: the controller runs it"
+        )),
         "{}",
         r.stderr
     );
-    let r = s.run(&["plan", "renfry.workload"]).success();
+    let r = b.run(&s, &["plan", "renfry.workload"]).success();
     assert_eq!(r.summary(), "stack renfry.workload is undeformed");
 
     // A release: deployed.
     edit(&s, "data/release.facts", "web:1.0", "web:1.1");
     assert_eq!(
-        controller(&s),
+        b.controller(&s),
         [
             "input release changed (file data/release.facts)",
             "event input release",
@@ -163,14 +269,12 @@ fn bootstrap_handover_and_the_controller_runs_the_workload() {
             "stack renfry.workload is undeformed",
         ]
     );
-    assert!(s.read(&world).contains("gcr.io/renfry/web:1.1"));
+    assert!(s.read(world).contains("gcr.io/renfry/web:1.1"));
 
-    // Someone edits the cluster: replicas and the image. (The registry
-    // holds the handed-over place as an absolute path; the log names it
-    // from the root.)
-    edit(&s, &world, "\"replicas\": 3", "\"replicas\": 5");
+    // Someone edits the cluster: replicas and the image.
+    edit(&s, world, "\"replicas\": 3", "\"replicas\": 5");
     assert_eq!(
-        controller(&s),
+        b.controller(&s),
         [
             &format!("event world {world} changed"),
             "drift k8s.deployment.web spec.replicas: 3 -> 5 (auto_reconcile)",
@@ -180,12 +284,12 @@ fn bootstrap_handover_and_the_controller_runs_the_workload() {
     );
     edit(
         &s,
-        &world,
+        world,
         "gcr.io/renfry/web:1.1",
         "gcr.io/renfry/web:debug",
     );
     assert_eq!(
-        controller(&s),
+        b.controller(&s),
         [
             &format!("event world {world} changed"),
             "drift k8s.deployment.web spec.template.spec.containers[0].image: \
@@ -197,7 +301,7 @@ fn bootstrap_handover_and_the_controller_runs_the_workload() {
             "stack renfry.workload is deformed: k8s.deployment.web held",
         ]
     );
-    let w = s.read(&world);
+    let w = s.read(world);
     assert!(
         w.contains("\"replicas\": 3") && w.contains("web:debug"),
         "{w}"
@@ -231,15 +335,39 @@ fn handover_needs_one_bootstrap_stack_and_an_empty_target() {
         .run(&["stack", "handover", "renfry.workload", "--to", "s3(\"x\")"])
         .failure();
     assert!(
-        r.stderr.contains("unknown backend s3(\"x\")"),
+        r.stderr
+            .contains("s3(\"x\"): backend s3(\"BUCKET\", \"PREFIX\", {endpoint: \"URL\", region: \"R\"}) takes a bucket, a prefix"),
         "{}",
         r.stderr
     );
-    s.write(&format!("{HANDED}/stray"), "");
+    let r = s
+        .run(&["stack", "handover", "renfry.workload", "--to", "gcs(\"x\")"])
+        .failure();
+    assert!(
+        r.stderr.contains("unknown backend gcs(\"x\")"),
+        "{}",
+        r.stderr
+    );
+    s.write(&format!("{HANDED}/state.json"), "{}");
     let r = s
         .run(&["stack", "handover", "renfry.workload", "--to", to])
         .failure();
-    assert!(r.stderr.contains("is not empty"), "{}", r.stderr);
+    assert!(
+        r.stderr.contains("is not empty: it holds state.json"),
+        "{}",
+        r.stderr
+    );
+    // Emptied, the in-cluster stand-in takes it, and the controller runs
+    // it there.
+    std::fs::remove_file(s.path(&format!("{HANDED}/state.json"))).unwrap();
+    s.run(&["stack", "handover", "renfry.workload", "--to", to])
+        .success();
+    assert_eq!(
+        controller(&s).last().unwrap(),
+        "stack renfry.workload is undeformed"
+    );
+    assert!(s.path(&format!("{HANDED}/state.json")).exists());
+    assert!(s.path(&format!("{HANDED}/remote.json")).exists());
 }
 
 #[test]

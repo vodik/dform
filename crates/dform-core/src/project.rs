@@ -178,9 +178,22 @@ pub struct Manifest {
     pub defaults: Defaults,
     #[serde(default)]
     pub discovery: DiscoveryConfig,
+    #[serde(default)]
+    pub remotes: BTreeMap<String, RemoteEntry>,
     /// The project root (the manifest's directory).
     #[serde(skip)]
     pub root: PathBuf,
+}
+
+/// `[remotes] NAME = { backend = "TERM" }`: another project whose stacks'
+/// outputs this one reads, `stack_output("NAME.STACK[k=v]", ..)`, through
+/// its backend (`stack::remote_location`).
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RemoteEntry {
+    /// A backend term as `[defaults] backend` writes it, `{stack}` the
+    /// stack's name; without `{stack}`, the stacks are under it by name.
+    pub backend: String,
 }
 
 /// `[project]`.
@@ -329,6 +342,23 @@ impl Manifest {
                 t.duration
             );
         }
+        for (name, r) in &m.remotes {
+            if name.is_empty() || name.contains(['.', '[', ']']) {
+                bail!(
+                    "{}: a remote's name is read as the first part of a dotted stack name;                      it has no `.`, `[` or `]`",
+                    at(&format!("[remotes] {name:?}"))
+                );
+            }
+            if crate::stack::parse_backend(&r.backend.replace("{stack}", "stack")).is_err() {
+                bail!(
+                    "{} = {:?}: the backends are `local(\"DIR\")`, DIR relative to the \
+                     project root, and `s3(\"BUCKET\", \"PREFIX\", {{endpoint: \"URL\", \
+                     region: \"R\"}})`; `{{stack}}` is the stack's name",
+                    at(&format!("[remotes] {name} backend")),
+                    r.backend
+                );
+            }
+        }
         for g in &m.discovery.exclude {
             if g.starts_with('/') {
                 bail!(
@@ -389,6 +419,14 @@ impl Manifest {
     pub fn backend(&self, stack: &str) -> Option<crate::stack::Backend> {
         let text = self.defaults.backend.as_deref()?.replace("{stack}", stack);
         crate::stack::parse_backend(&text).ok()
+    }
+
+    /// `[remotes]`: each remote's backend term.
+    pub fn remotes(&self) -> BTreeMap<String, String> {
+        self.remotes
+            .iter()
+            .map(|(k, r)| (k.clone(), r.backend.clone()))
+            .collect()
     }
 
     /// The lease's duration and renewal interval (an `s3` backend's).

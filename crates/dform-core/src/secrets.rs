@@ -3,7 +3,8 @@
 //!
 //! Sources: a schema attribute marked `sensitive` (an `attr` read of it, a
 //! `ref` to it), an input declared `secret(T)`, an extern column declared
-//! `-v: secret(T)`. A head position is secret when a secret value reaches
+//! `-v: secret(T)`, another stack's output published as secret (the value
+//! of a `stack_output` of it: `stack::Published`). A head position is secret when a secret value reaches
 //! it through its rule: a variable bound at a secret position, or built
 //! from one (`format`, arithmetic, lists, objects, field access).
 //!
@@ -72,6 +73,8 @@ struct Pass<'a> {
     secret: BTreeSet<(String, usize)>,
     /// Pseudo-type cells declared secret: (type, scope, key).
     cells: BTreeSet<(String, String, String)>,
+    /// Other stacks' secret outputs: (deployment, key).
+    outputs: &'a BTreeSet<(String, String)>,
 }
 
 impl Pass<'_> {
@@ -207,6 +210,14 @@ impl Pass<'_> {
             ("attr" | "world_attr", 4) if i == 3 => {
                 self.attr_secret(&a.args[0], &a.args[1], &a.args[2])
             }
+            // A name or key the program computes: secret if any it could
+            // be is.
+            ("stack_output", 3) if i == 2 => {
+                let (d, k) = (s(&a.args[0]), s(&a.args[1]));
+                self.outputs
+                    .iter()
+                    .any(|(x, y)| d.is_none_or(|d| d == x) && k.is_none_or(|k| k == y))
+            }
             _ => self.secret.contains(&(a.pred.clone(), i)),
         }
     }
@@ -253,11 +264,16 @@ fn is_secret_ty(t: &TypeExpr) -> bool {
 
 /// The secret positions of a lowered program: the fixpoint over predicate
 /// signatures, from the sources to every head a secret reaches.
-fn fixpoint<'a>(lowered: &Lowered, schema: &'a Schema) -> Pass<'a> {
+fn fixpoint<'a>(
+    lowered: &Lowered,
+    schema: &'a Schema,
+    outputs: &'a BTreeSet<(String, String)>,
+) -> Pass<'a> {
     let mut pass = Pass {
         schema,
         secret: BTreeSet::new(),
         cells: BTreeSet::new(),
+        outputs,
     };
     for d in &lowered.inputs {
         if is_secret_ty(&d.decl.ty) {
@@ -302,8 +318,13 @@ fn fixpoint<'a>(lowered: &Lowered, schema: &'a Schema) -> Pass<'a> {
 /// The providers whose `expect_account` a secret reaches (an `env_var`, a
 /// secret input): a refusal names that account by its label, never its
 /// value (`Providers::check_accounts`).
-pub fn secret_expected_accounts(lowered: &Lowered, schema: &Schema) -> BTreeSet<String> {
-    let pass = fixpoint(lowered, schema);
+/// `outputs`: other stacks' secret outputs the run read, (deployment, key).
+pub fn secret_expected_accounts(
+    lowered: &Lowered,
+    schema: &Schema,
+    outputs: &BTreeSet<(String, String)>,
+) -> BTreeSet<String> {
+    let pass = fixpoint(lowered, schema, outputs);
     rules(&lowered.program)
         .into_iter()
         .filter_map(|(head, body, _)| {
@@ -317,9 +338,14 @@ pub fn secret_expected_accounts(lowered: &Lowered, schema: &Schema) -> BTreeSet<
         .collect()
 }
 
-/// The pass over a lowered program against the provider schema.
-pub fn check(lowered: &Lowered, schema: &Schema) -> Result<()> {
-    let pass = fixpoint(lowered, schema);
+/// The pass over a lowered program against the provider schema; `outputs`
+/// are other stacks' secret outputs the run read, (deployment, key).
+pub fn check(
+    lowered: &Lowered,
+    schema: &Schema,
+    outputs: &BTreeSet<(String, String)>,
+) -> Result<()> {
+    let pass = fixpoint(lowered, schema, outputs);
     let rs = rules(&lowered.program);
 
     let mut diags = Vec::new();

@@ -6,7 +6,8 @@
 //!
 //! What the hook adds to a run:
 //!
-//! * The event. Its memo (`<state dir>/controller.json`) holds the stamps
+//! * The event. Its memo (`controller.json`, an object of the stack's
+//!   store beside its state, so a bucket's too) holds the stamps
 //!   of the sources and the world as the last run left them, and the world
 //!   as that run accepted it (the baseline). A run compares the stamps to
 //!   say what changed: `start` (no memo), `input NAME...`, `world`, or
@@ -25,7 +26,7 @@
 //! * Approvals (README "Approvals"): a deformation the policy pass says
 //!   `requires_approval(D, Reason)` is held until a token for the plan's
 //!   digest arrives, through the input relation `approval/1` (the token's
-//!   text) or as a file in the drop directory `approvals/` beside the
+//!   text) or as an object in the drop directory `approvals/` beside the
 //!   state. While it is held the digest is published: a log line and
 //!   `approval-pending.json` beside the state.
 //! * The log: one line per event and per tick, `HH:MM:SS` (UTC) first.
@@ -34,6 +35,7 @@
 use crate::ast::{Atom, Span, Term};
 use crate::ir::Address;
 use crate::provider::{ActionKind, Plan};
+use crate::store::{Cond, DROPS, MEMO, PENDING, Store};
 use crate::value::Value;
 use crate::watch::{self, Relation};
 use anyhow::{Context, Result};
@@ -41,6 +43,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// `HH:MM:SS` of the wall clock, UTC.
 pub fn clock() -> String {
@@ -99,7 +102,9 @@ pub struct Hook {
     /// The sources the last run's tables read (`tables::Tables::sources`).
     tables: Vec<Relation>,
     world: Option<PathBuf>,
-    memo_path: Option<PathBuf>,
+    /// The stack's store: the memo, the drop directory, the published
+    /// digest.
+    store: Option<Arc<dyn Store>>,
     memo: Option<Memo>,
     /// The stamps of the sources as this run read them.
     input_stamps: BTreeMap<String, String>,
@@ -109,11 +114,7 @@ pub struct Hook {
     held: BTreeSet<Address>,
     /// The deployment's audit log.
     pub audit: Option<crate::audit::Log>,
-    /// The approvals drop directory, beside the state.
-    drop_dir: Option<PathBuf>,
-    /// Where a held approval's digest is published, beside the state.
-    pending_path: Option<PathBuf>,
-    /// Whether this run published one.
+    /// Whether this run published an approval's digest.
     published: bool,
 }
 
@@ -146,16 +147,17 @@ fn file_stamp(p: &Path) -> String {
     watch::stamp(&watch::Source::File(p.to_path_buf()))
 }
 
-/// The drop directory's files, by name, with their contents.
-fn drops(dir: &Path) -> Vec<(String, String)> {
-    let mut out: Vec<(String, String)> = std::fs::read_dir(dir)
+/// The drop directory's objects, by name, with their contents.
+fn drops(store: &dyn Store) -> Vec<(String, String)> {
+    let prefix = format!("{DROPS}/");
+    let mut out: Vec<(String, String)> = store
+        .list(&prefix)
+        .unwrap_or_default()
         .into_iter()
-        .flatten()
-        .flatten()
-        .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
-        .filter_map(|e| {
-            let text = std::fs::read_to_string(e.path()).ok()?;
-            Some((e.file_name().to_string_lossy().into_owned(), text))
+        .filter_map(|k| {
+            let o = store.get(&k).ok()??;
+            let name = k.strip_prefix(&prefix)?.to_string();
+            Some((name, String::from_utf8(o.bytes).ok()?))
         })
         .collect();
     out.sort();
@@ -163,9 +165,9 @@ fn drops(dir: &Path) -> Vec<(String, String)> {
 }
 
 /// The drop directory's stamp: "" when it holds nothing.
-fn drops_stamp(dir: &Path) -> String {
+fn drops_stamp(store: &dyn Store) -> String {
     use std::hash::{Hash, Hasher};
-    let files = drops(dir);
+    let files = drops(store);
     if files.is_empty() {
         return String::new();
     }
@@ -210,20 +212,17 @@ impl Hook {
         self.input_stamps.extend(now);
     }
 
-    /// The run knows where the stack lives: load the memo, say what
-    /// changed, and log the event (the world's path relative to `root`,
-    /// the directory holding the state root, when it is under it).
-    pub fn open(&mut self, state: &Path, world: &Path, root: &Path) -> Result<()> {
-        let memo_path = state.with_file_name("controller.json");
-        let drop_dir = state.with_file_name("approvals");
-        self.pending_path = Some(state.with_file_name("approval-pending.json"));
+    /// The run knows where the stack lives, its store: load the memo, say
+    /// what changed, and log the event (the world's path relative to
+    /// `root`, the directory holding the state root, when it is under it).
+    pub fn open(&mut self, store: Arc<dyn Store>, world: &Path, root: &Path) -> Result<()> {
         self.published = false;
-        let memo: Option<Memo> = match std::fs::read(&memo_path) {
-            Ok(b) => Some(
-                serde_json::from_slice(&b)
-                    .with_context(|| format!("parse {}", memo_path.display()))?,
+        let memo: Option<Memo> = match store.get(MEMO)? {
+            Some(o) => Some(
+                serde_json::from_slice(&o.bytes)
+                    .with_context(|| format!("parse {}", store.locate(MEMO)))?,
             ),
-            Err(_) => None,
+            None => None,
         };
         // A controller that starts again (`--once`) knows its tables' last
         // sources from the memo.
@@ -246,7 +245,6 @@ impl Hook {
             self.input_stamps.extend(now);
         }
         self.world = Some(world.to_path_buf());
-        self.memo_path = Some(memo_path);
         self.held.clear();
         let event = match &memo {
             None => Event::Start,
@@ -270,7 +268,7 @@ impl Hook {
                         log(format_args!("input {} changed ({source})", preds.join(" ")));
                     }
                     Event::Input(changed)
-                } else if m.drops != drops_stamp(&drop_dir) {
+                } else if m.drops != drops_stamp(store.as_ref()) {
                     Event::Approval
                 } else if m.world != file_stamp(world) {
                     Event::World
@@ -279,13 +277,12 @@ impl Hook {
                 }
             }
         };
-        self.drop_dir = Some(drop_dir);
         let text = match &event {
             Event::Start => "event start".to_string(),
             Event::Input(names) => format!("event input {}", names.join(" ")),
             Event::Approval => format!(
                 "event approval ({} changed)",
-                relative_to(self.drop_dir.as_deref().unwrap_or(Path::new("")), root).display()
+                relative_to(Path::new(&store.locate(DROPS)), root).display()
             ),
             Event::World => format!("event world {} changed", relative_to(world, root).display()),
             Event::Resync => "event resync".to_string(),
@@ -296,12 +293,13 @@ impl Hook {
         }
         self.memo = memo;
         self.event = Some(event);
+        self.store = Some(store);
         Ok(())
     }
 
     /// The tokens in the approvals drop directory.
     pub fn dropped_tokens(&self) -> Vec<String> {
-        self.drop_dir
+        self.store
             .as_deref()
             .map(drops)
             .unwrap_or_default()
@@ -366,7 +364,9 @@ impl Hook {
         if held.is_empty() {
             return Ok(());
         }
-        let pending = self.pending_path.clone().unwrap_or_default();
+        let Some(store) = self.store.clone() else {
+            anyhow::bail!("internal: the controller published before it opened its store");
+        };
         let doc = serde_json::json!({
             "digest": digest,
             "needs_approval": needs
@@ -375,12 +375,10 @@ impl Hook {
                 .collect::<Vec<_>>(),
             "published": crate::approval::rfc3339(crate::approval::now()),
         });
-        std::fs::write(&pending, serde_json::to_vec_pretty(&doc)?)
-            .with_context(|| format!("write {}", pending.display()))?;
+        store.put(PENDING, &serde_json::to_vec_pretty(&doc)?, &Cond::Any)?;
         self.published = true;
         log(format_args!(
-            "tick {tick}: approval needed: plan digest {digest} ({})",
-            pending.file_name().unwrap_or_default().to_string_lossy()
+            "tick {tick}: approval needed: plan digest {digest} ({PENDING})"
         ));
         if let Some(a) = &self.audit {
             a.append(
@@ -536,9 +534,9 @@ impl Hook {
         }
         // A digest published by an earlier run that holds nothing now.
         if !self.published
-            && let Some(p) = &self.pending_path
+            && let Some(s) = &self.store
         {
-            let _ = std::fs::remove_file(p);
+            let _ = s.delete(PENDING);
         }
         let old = self.memo.take().unwrap_or_default();
         let mut baseline: BTreeMap<String, Json> = observed
@@ -560,11 +558,7 @@ impl Hook {
             inputs: self.input_stamps.clone(),
             world: self.world.as_deref().map(file_stamp).unwrap_or_default(),
             baseline,
-            drops: self
-                .drop_dir
-                .as_deref()
-                .map(drops_stamp)
-                .unwrap_or_default(),
+            drops: self.store.as_deref().map(drops_stamp).unwrap_or_default(),
             tables: self.table_sources(),
         })
     }
@@ -579,21 +573,16 @@ impl Hook {
             inputs: self.input_stamps.clone(),
             world: self.world.as_deref().map(file_stamp).unwrap_or_default(),
             baseline: old.baseline,
-            drops: self
-                .drop_dir
-                .as_deref()
-                .map(drops_stamp)
-                .unwrap_or_default(),
+            drops: self.store.as_deref().map(drops_stamp).unwrap_or_default(),
             tables: self.table_sources(),
         })
     }
 
     fn save(&mut self, memo: Memo) -> Result<()> {
-        let Some(path) = &self.memo_path else {
+        let Some(store) = &self.store else {
             return Ok(());
         };
-        std::fs::write(path, serde_json::to_vec_pretty(&memo)?)
-            .with_context(|| format!("write {}", path.display()))?;
+        store.put(MEMO, &serde_json::to_vec_pretty(&memo)?, &Cond::Any)?;
         self.memo = Some(memo);
         Ok(())
     }
@@ -606,9 +595,9 @@ impl Hook {
         };
         memo.world != file_stamp(world)
             || self
-                .drop_dir
+                .store
                 .as_deref()
-                .is_some_and(|d| memo.drops != drops_stamp(d))
+                .is_some_and(|s| memo.drops != drops_stamp(s))
             || stamps(&self.relations, |r| watch::stamp(&r.source))
                 .iter()
                 .any(|(p, s)| memo.inputs.get(p) != Some(s))

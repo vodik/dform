@@ -17,18 +17,22 @@
 //! (`provider_config`, lowered by the resolver).
 //!
 //! Cross-stack values: an apply records the stack's outputs in its state
-//! and the stack's absolute state path in the registry `stacks.json` under
-//! the state root (`dform.state/` at the project root); every
-//! other program reads them as `stack_output(Stack, Key, Value)` facts, a
-//! fact provider over local state.
+//! and publishes them beside it, apart ([`Published`], `outputs.json`), and
+//! records where the deployment's objects are in the registry `stacks.json`
+//! under the state root (`dform.state/` at the project root); every other
+//! program reads them as `stack_output(Stack, Key, Value)` facts. A
+//! project reads another's through that one's backend (`[remotes]`,
+//! [`remote_location`]): the same read of the same object.
 //!
 //! `role = bootstrap` marks the stack that creates what a controller runs
-//! in: the controller refuses it. `handover` moves another stack's state to
-//! a new backend and records it in the registry, where every later run
-//! finds it.
+//! in: the controller refuses it. `handover` moves another stack's objects
+//! to a new backend and records it in the registry, where every later run
+//! finds it; `rekey` moves them to another key value. Both go through the
+//! stores ([`crate::store::Store`]), so a directory and a bucket move alike.
 
 use crate::ast::{Atom, Config, Program, Span, Stmt, Term};
 use crate::diag::{self, Diagnostic, Diagnostics};
+use crate::store::{Deployment, Location, OpenS3, S3Spec, Store};
 use crate::value::Value;
 use anyhow::{Context, Result, bail};
 use std::collections::BTreeMap;
@@ -543,7 +547,8 @@ fn registry_path(root: &Path) -> PathBuf {
 
 /// A registered stack: where its state is, whether it is a bootstrap stack,
 /// and the backend it was handed over to (`handover`). An entry with
-/// neither is written as the bare state path.
+/// neither, of local state, is written as the bare state path; state in a
+/// bucket is `s3://BUCKET/PREFIX/state.json` with the endpoint and region.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(untagged)]
 enum Written {
@@ -554,49 +559,87 @@ enum Written {
         bootstrap: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         backend: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        endpoint: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        region: Option<String>,
     },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
-    pub state: PathBuf,
+    /// Where the deployment's objects are.
+    pub state: Location,
     pub bootstrap: bool,
-    /// `k8s("ns/name")` or `local("dir")`: the stack was handed over there
-    /// and its state is `state`, wherever its program's backend says.
+    /// `k8s("ns/name")`, `local("dir")` or `s3(...)`: the stack was handed
+    /// over there and its state is `state`, wherever its program's backend
+    /// says.
     pub backend: Option<String>,
+}
+
+/// `s3://BUCKET/PREFIX/state.json` as a location.
+fn s3_location(state: &str, endpoint: Option<String>, region: Option<String>) -> Option<Location> {
+    let rest = state.strip_prefix("s3://")?;
+    let (bucket, key) = rest.split_once('/')?;
+    let prefix = match key.strip_suffix(crate::store::STATE)? {
+        "" => "",
+        p => p.strip_suffix('/')?,
+    };
+    Some(Location::S3(S3Spec {
+        bucket: bucket.to_string(),
+        prefix: prefix.to_string(),
+        endpoint,
+        region,
+    }))
 }
 
 impl From<Written> for Entry {
     fn from(w: Written) -> Entry {
-        match w {
-            Written::Path(state) => Entry {
-                state,
-                bootstrap: false,
-                backend: None,
-            },
+        let (state, bootstrap, backend, endpoint, region) = match w {
+            Written::Path(state) => (state, false, None, None, None),
             Written::Entry {
                 state,
                 bootstrap,
                 backend,
-            } => Entry {
-                state,
-                bootstrap,
-                backend,
-            },
+                endpoint,
+                region,
+            } => (state, bootstrap, backend, endpoint, region),
+        };
+        let text = state.to_string_lossy();
+        let state = s3_location(&text, endpoint, region).unwrap_or_else(|| {
+            Location::Local(state.parent().unwrap_or(Path::new("")).to_path_buf())
+        });
+        Entry {
+            state,
+            bootstrap,
+            backend,
         }
     }
 }
 
 impl From<Entry> for Written {
     fn from(e: Entry) -> Written {
-        if !e.bootstrap && e.backend.is_none() {
-            Written::Path(e.state)
-        } else {
-            Written::Entry {
-                state: e.state,
+        match e.state {
+            Location::Local(dir) if !e.bootstrap && e.backend.is_none() => {
+                Written::Path(dir.join(crate::store::STATE))
+            }
+            Location::Local(dir) => Written::Entry {
+                state: dir.join(crate::store::STATE),
                 bootstrap: e.bootstrap,
                 backend: e.backend,
-            }
+                endpoint: None,
+                region: None,
+            },
+            Location::S3(spec) => Written::Entry {
+                state: PathBuf::from(match spec.prefix.as_str() {
+                    "" => format!("s3://{}/{}", spec.bucket, crate::store::STATE),
+                    p => format!("s3://{}/{p}/{}", spec.bucket, crate::store::STATE),
+                }),
+                bootstrap: e.bootstrap,
+                backend: e.backend,
+                endpoint: spec.endpoint,
+                region: spec.region,
+            },
         }
     }
 }
@@ -620,17 +663,26 @@ fn save_registry(root: &Path, r: BTreeMap<String, Entry>) -> Result<()> {
         .with_context(|| format!("write {}", path.display()))
 }
 
-/// Record that `stack`'s state is `state`, so other stacks can read its
+/// A location as the registry keeps it: a directory absolute.
+fn absolute(loc: &Location) -> Result<Location> {
+    Ok(match loc {
+        Location::Local(dir) => Location::Local(
+            fs::canonicalize(dir)
+                .or_else(|_| std::path::absolute(dir))
+                .with_context(|| format!("absolute path of {}", dir.display()))?,
+        ),
+        s3 => s3.clone(),
+    })
+}
+
+/// Record that `stack`'s state is at `state`, so other stacks can read its
 /// outputs (and `handover` can find a bootstrap stack). A handover's
 /// backend is kept.
-pub fn register(root: &Path, stack: &str, state: &Path, bootstrap: bool) -> Result<()> {
+pub fn register(root: &Path, stack: &str, state: &Location, bootstrap: bool) -> Result<()> {
     let mut r = registry(root)?;
-    let abs = fs::canonicalize(state)
-        .or_else(|_| std::path::absolute(state))
-        .with_context(|| format!("absolute path of {}", state.display()))?;
     let backend = r.get(stack).and_then(|e| e.backend.clone());
     let entry = Entry {
-        state: abs,
+        state: absolute(state)?,
         bootstrap,
         backend,
     };
@@ -641,28 +693,141 @@ pub fn register(root: &Path, stack: &str, state: &Path, bootstrap: bool) -> Resu
     save_registry(root, r)
 }
 
-/// The backend a stack was handed over to, and the directory its state now
-/// lives in.
-pub fn handed_over(root: &Path, stack: &str) -> Result<Option<(String, PathBuf)>> {
-    Ok(registry(root)?.remove(stack).and_then(|e| {
-        let dir = e.state.parent()?.to_path_buf();
-        Some((e.backend?, dir))
-    }))
+/// The backend a stack was handed over to, and where its state now is.
+pub fn handed_over(root: &Path, stack: &str) -> Result<Option<(String, Location)>> {
+    Ok(registry(root)?
+        .remove(stack)
+        .and_then(|e| Some((e.backend?, e.state))))
 }
 
-/// `dform stack handover NAME --to BACKEND`: move the stack's state
-/// directory (state, world, externs) to the backend and record it in the
-/// registry; every later run of the stack uses it. `local("DIR")` is a
-/// directory, relative to the one holding `root`; `k8s("ns/name")` stands in for the in-cluster backend: a
+/// Where the mock's world file of a deployment at `loc` is: in its
+/// directory, or, for state in a bucket, in its default directory under
+/// the state root (`home`): the world is the provider's, not state.
+pub fn world_file(loc: &Location, home: &Path) -> PathBuf {
+    match loc {
+        Location::Local(dir) => dir.join(crate::state::WORLD),
+        Location::S3(_) => home.join(crate::state::WORLD),
+    }
+}
+
+/// One deployment's place for a move: its location, and its world file.
+pub struct Place {
+    pub location: Location,
+    pub world: PathBuf,
+}
+
+/// Move a deployment's own objects (`store::own_key`) from `from` to `to`
+/// under the source's lock, and its world file with them when it lives
+/// elsewhere there: `commit` runs (the registry) once every object is
+/// copied, then the source's are deleted. The target must hold none of a
+/// deployment's objects; every copy is conditional on there being none.
+fn transfer(
+    what: &str,
+    from: &Place,
+    to: &Place,
+    s3: OpenS3,
+    times: crate::store::LeaseTimes,
+    commit: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    use crate::store::{Cond, LOCK, own_key};
+    let (src, dst) = (from.location.open(s3)?, to.location.open(s3)?);
+    let lease_free = |k: &str, store: &dyn Store| -> Result<bool> {
+        // A released lease is no deployment's.
+        if k != LOCK || !store.fenced() {
+            return Ok(false);
+        }
+        let Some(o) = store.get(k)? else {
+            return Ok(true);
+        };
+        Ok(
+            serde_json::from_slice::<crate::store::LeaseRecord>(&o.bytes)
+                .is_ok_and(|r| r.holder.is_empty()),
+        )
+    };
+    let mut there = Vec::new();
+    for k in dst.list("")? {
+        if own_key(&k) && !lease_free(&k, dst.as_ref())? {
+            there.push(k);
+        }
+    }
+    if to.world != from.world && to.world.exists() {
+        there.push(to.world.display().to_string());
+    }
+    if let Some(k) = there.first() {
+        bail!("{what}: {} is not empty: it holds {k}", to.location);
+    }
+    let lock = Deployment::new(src.clone(), what, times).lock()?;
+    let keys: Vec<String> = src
+        .list("")?
+        .into_iter()
+        .filter(|k| own_key(k) && k != LOCK)
+        .collect();
+    for k in &keys {
+        let Some(o) = src.get(k)? else { continue };
+        if dst.put(k, &o.bytes, &Cond::IfAbsent)?.is_none() {
+            bail!(
+                "{what}: {} appeared while the state was being moved; nothing was removed from {}",
+                dst.locate(k),
+                from.location
+            );
+        }
+    }
+    if let Location::Local(dir) = &to.location {
+        fs::create_dir_all(dir).with_context(|| format!("mkdir {}", dir.display()))?;
+    }
+    if to.world != from.world && from.world.exists() {
+        if let Some(parent) = to.world.parent() {
+            fs::create_dir_all(parent).with_context(|| format!("mkdir {}", parent.display()))?;
+        }
+        fs::rename(&from.world, &to.world)
+            .with_context(|| format!("move {} to {}", from.world.display(), to.world.display()))?;
+    }
+    commit()?;
+    for k in &keys {
+        src.delete(k)?;
+    }
+    drop(lock);
+    if src.fenced() {
+        src.delete(LOCK)?;
+    }
+    // A directory left empty goes (its drop directory first).
+    for dir in [&from.location, &Location::Local(from.world.clone())] {
+        if let Location::Local(d) = dir {
+            let d = if d.ends_with(crate::state::WORLD) {
+                d.parent().unwrap_or(Path::new("")).to_path_buf()
+            } else {
+                d.clone()
+            };
+            let _ = fs::remove_dir(d.join(crate::store::DROPS));
+            let _ = fs::remove_dir(&d);
+        }
+    }
+    Ok(())
+}
+
+/// `dform stack handover NAME --to BACKEND`: move the deployment's objects
+/// (state, plan key, audit log, published outputs, the controller's memo)
+/// from `from` to the backend and record it in the registry; every later
+/// run of the stack uses it. `local("DIR")` is a directory, relative to
+/// the one holding `root`; `s3("BUCKET", "PREFIX", {..})` the deployment's
+/// own prefix; `k8s("ns/name")` stands in for the in-cluster backend: a
 /// directory `k8s/ns/name` inside the state directory of the registered
-/// bootstrap stack (the one that owns the cluster). The stack's state is
-/// found in the registry, else at `<root>/<NAME>` (`<root>/app/env=prod`
-/// for the deployment `app[env=prod]` of a keyed stack). Returns the new
-/// directory.
-pub fn handover(root: &Path, stack: &str, to: &str) -> Result<PathBuf> {
+/// bootstrap stack (the one that owns the cluster). `home` is the
+/// deployment's default directory, where its world is when its state is in
+/// a bucket. Returns the new location.
+pub fn handover(
+    root: &Path,
+    stack: &str,
+    from: &Place,
+    home: &Path,
+    to: &str,
+    s3: OpenS3,
+    times: crate::store::LeaseTimes,
+) -> Result<Location> {
     let reg = registry(root)?;
     let target = match parse_target(to)? {
-        Target::Local(dir) => crate::state::local_dir(root, &dir),
+        Target::Local(dir) => Location::Local(crate::state::local_dir(root, &dir)),
+        Target::S3(spec) => Location::S3(spec),
         Target::K8s(key) => {
             let boots: Vec<(&String, &Entry)> = reg.iter().filter(|(_, e)| e.bootstrap).collect();
             let (boot, e) = match boots.as_slice() {
@@ -684,130 +849,117 @@ pub fn handover(root: &Path, stack: &str, to: &str) -> Result<PathBuf> {
             if boot == stack {
                 bail!("handover {stack}: a bootstrap stack stays batch and is never handed over");
             }
-            let dir = e.state.parent().unwrap_or(Path::new("")).to_path_buf();
-            dir.join("k8s").join(key)
+            let Location::Local(dir) = &e.state else {
+                bail!(
+                    "handover {stack} to {to}: the bootstrap stack {boot}'s state is in {}; \
+                     k8s(..) stands in as a directory beside local state only",
+                    e.state
+                );
+            };
+            Location::Local(dir.join("k8s").join(key))
         }
     };
     if reg.get(stack).is_some_and(|e| e.bootstrap) {
         bail!("handover {stack}: a bootstrap stack stays batch and is never handed over");
     }
-    let from = match reg.get(stack) {
-        Some(e) => e.state.parent().unwrap_or(Path::new("")).to_path_buf(),
-        None => instance_dir(root, stack),
+    if target == from.location {
+        bail!("handover {stack} to {to}: its state is there already");
+    }
+    let to_place = Place {
+        world: world_file(&target, home),
+        location: target.clone(),
     };
-    let state = from.join("state.json");
-    if state.with_extension("lock").exists() {
-        bail!(
-            "handover {stack}: the stack is locked ({}); wait for the apply to finish",
-            state.with_extension("lock").display()
-        );
-    }
-    if target.exists() && fs::read_dir(&target)?.next().is_some() {
-        bail!(
-            "handover {stack} to {to}: {} is not empty",
-            target.display()
-        );
-    }
-    if let Some(parent) = target.parent() {
-        fs::create_dir_all(parent).with_context(|| format!("mkdir {}", parent.display()))?;
-    }
-    if from.exists() {
-        let _ = fs::remove_dir(&target);
-        fs::rename(&from, &target)
-            .with_context(|| format!("move {} to {}", from.display(), target.display()))?;
-    } else {
-        fs::create_dir_all(&target).with_context(|| format!("mkdir {}", target.display()))?;
-    }
-    let target = fs::canonicalize(&target).unwrap_or(target);
-    let mut reg = reg;
-    reg.insert(
-        stack.to_string(),
-        Entry {
-            state: target.join("state.json"),
-            bootstrap: false,
-            backend: Some(to.to_string()),
-        },
-    );
-    save_registry(root, reg)?;
-    Ok(target)
-}
-
-/// `dform stack rekey`: move the state of deployment `from` (its
-/// directory under `base`, the stack's directory) to deployment `to`, and
-/// its registry entry with it. Nothing in the cloud changes. An unkeyed
-/// `from` is the state the stack had before it was keyed: the files
-/// directly in `base`. Returns the new directory.
-pub fn rekey(root: &Path, base: &Path, from: &Instance, to: &Instance) -> Result<PathBuf> {
-    let (old, new) = (from.name(), to.name());
-    let mut reg = registry(root)?;
-    if let Some(b) = reg.get(&old).and_then(|e| e.backend.clone()) {
-        bail!(
-            "rekey {old}: it was handed over to {b}; its state is not under {}",
-            base.display()
-        );
-    }
-    let (src, dst) = (from.dir(base), to.dir(base));
-    let state = src.join("state.json");
-    if !state.exists() {
-        bail!("rekey {old}: no state at {}", state.display());
-    }
-    if state.with_extension("lock").exists() {
-        bail!(
-            "rekey {old}: the stack is locked ({}); wait for the apply to finish",
-            state.with_extension("lock").display()
-        );
-    }
-    if dst.exists() && fs::read_dir(&dst)?.next().is_some() {
-        bail!("rekey {old} to {new}: {} is not empty", dst.display());
-    }
-    if from.segment().is_some() {
-        if let Some(parent) = dst.parent() {
-            fs::create_dir_all(parent).with_context(|| format!("mkdir {}", parent.display()))?;
-        }
-        let _ = fs::remove_dir(&dst);
-        fs::rename(&src, &dst)
-            .with_context(|| format!("move {} to {}", src.display(), dst.display()))?;
-    } else {
-        // The unkeyed state: every file of the stack's directory (the
-        // deployments' directories stay).
-        fs::create_dir_all(&dst).with_context(|| format!("mkdir {}", dst.display()))?;
-        for e in fs::read_dir(&src).with_context(|| format!("read {}", src.display()))? {
-            let e = e?;
-            if e.file_type()?.is_file() {
-                let to = dst.join(e.file_name());
-                fs::rename(e.path(), &to)
-                    .with_context(|| format!("move {} to {}", e.path().display(), to.display()))?;
-            }
-        }
-    }
-    if let Some(e) = reg.remove(&old) {
-        let dst = fs::canonicalize(&dst).unwrap_or(dst.clone());
+    let what = format!("handover {stack} to {to}");
+    let mut saved = None;
+    transfer(&what, from, &to_place, s3, times, || {
+        let mut reg = reg;
+        let state = absolute(&target)?;
         reg.insert(
-            new,
+            stack.to_string(),
             Entry {
-                state: dst.join("state.json"),
-                bootstrap: e.bootstrap,
-                backend: None,
+                state: state.clone(),
+                bootstrap: false,
+                backend: Some(to.to_string()),
             },
         );
-        save_registry(root, reg)?;
+        saved = Some(state);
+        save_registry(root, reg)
+    })?;
+    Ok(saved.unwrap_or(target))
+}
+
+/// `dform stack rekey`: move the objects of deployment `from` to
+/// deployment `to`, and its registry entry with it. Nothing in the cloud
+/// changes. An unkeyed `from` is the state the stack had before it was
+/// keyed: the objects directly in the stack's location. Returns the new
+/// location.
+pub fn rekey(
+    root: &Path,
+    (from, from_place): (&Instance, &Place),
+    (to, to_place): (&Instance, &Place),
+    s3: OpenS3,
+    times: crate::store::LeaseTimes,
+) -> Result<Location> {
+    let (old, new) = (from.name(), to.name());
+    let reg = registry(root)?;
+    if let Some(b) = reg.get(&old).and_then(|e| e.backend.clone()) {
+        bail!(
+            "rekey {old}: it was handed over to {b}; its state is not at {}",
+            from_place.location
+        );
     }
-    Ok(dst)
+    let store = from_place.location.open(s3)?;
+    if store.get(crate::store::STATE)?.is_none() {
+        bail!(
+            "rekey {old}: no state at {}",
+            store.locate(crate::store::STATE)
+        );
+    }
+    let what = format!("rekey {old} to {new}");
+    transfer(&what, from_place, to_place, s3, times, || {
+        let mut reg = reg;
+        if let Some(e) = reg.remove(&old) {
+            reg.insert(
+                new.clone(),
+                Entry {
+                    state: absolute(&to_place.location)?,
+                    bootstrap: e.bootstrap,
+                    backend: None,
+                },
+            );
+            save_registry(root, reg)?;
+        }
+        Ok(())
+    })?;
+    absolute(&to_place.location)
 }
 
 enum Target {
     Local(PathBuf),
     K8s(String),
+    S3(S3Spec),
 }
 
-/// `local("DIR")` or `k8s("ns/name")`, as the command line gives it.
+/// `local("DIR")`, `k8s("ns/name")` or `s3("BUCKET", "PREFIX", {..})`, as
+/// the command line gives it.
 fn parse_target(to: &str) -> Result<Target> {
     let bad = || {
         anyhow::anyhow!(
-            "unknown backend {to}: the backends are local(\"DIR\") and k8s(\"ns/name\")"
+            "unknown backend {to}: the backends are local(\"DIR\"), k8s(\"ns/name\") and \
+             s3(\"BUCKET\", \"PREFIX\", {{endpoint: \"URL\", region: \"R\"}})"
         )
     };
     let (kind, rest) = to.split_once('(').ok_or_else(bad)?;
+    if kind.trim() == "s3" {
+        return match parse_backend(to) {
+            Ok(Backend::S3(spec)) => Ok(Target::S3(spec)),
+            Ok(_) => Err(bad()),
+            Err(_) => match backend_term(to) {
+                Some(e) => bail!("{to}: {e}"),
+                None => Err(bad()),
+            },
+        };
+    }
     let arg = rest
         .strip_suffix(')')
         .map(|a| a.trim().trim_matches('"'))
@@ -831,30 +983,280 @@ fn parse_target(to: &str) -> Result<Target> {
     }
 }
 
-/// `stack_output(Stack, Key, Value)` for every output of every other
-/// registered stack, read from its state.
-pub fn stack_outputs(root: &Path, own: &str) -> Result<Vec<crate::ast::Atom>> {
+/// What a backend term that parses says is wrong with it, if anything.
+fn backend_term(text: &str) -> Option<String> {
+    let program = crate::parser::parse_program(&format!("stack _ {{ backend = {text} }}")).ok()?;
+    program.statements.iter().find_map(|s| match s {
+        Stmt::Stack(c) => c
+            .config
+            .iter()
+            .find(|(k, _, _)| k == "backend")
+            .and_then(|(_, v, _)| backend(v).err()),
+        _ => None,
+    })
+}
+
+/// A deployment's published outputs (`store::OUTPUTS`, beside its state and
+/// apart from it): what other stacks read as `stack_output/3`, needing
+/// read access to this object only. A secret output crosses as its label,
+/// never its value: the reader's static pass treats it as secret (E0304
+/// where it reaches a public place), and its value is a secret null no
+/// plan resolves.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Published {
+    /// The deployment, as its own project names it.
+    pub deployment: String,
+    #[serde(default)]
+    pub outputs: BTreeMap<String, Value>,
+    /// The outputs declared `secret(T)`, each with T's name.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub secret: BTreeMap<String, String>,
+}
+
+impl Published {
+    /// `outputs` as the apply recorded them, those declared secret
+    /// (`secret`, key and type) by label only.
+    pub fn new(
+        deployment: &str,
+        outputs: &BTreeMap<String, Value>,
+        secret: &BTreeMap<String, String>,
+    ) -> Published {
+        Published {
+            deployment: deployment.to_string(),
+            outputs: outputs
+                .iter()
+                .filter(|(k, _)| !secret.contains_key(*k))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+            secret: secret.clone(),
+        }
+    }
+
+    pub fn bytes(&self) -> Vec<u8> {
+        let mut b = serde_json::to_vec_pretty(self).expect("published outputs serialize");
+        b.push(b'\n');
+        b
+    }
+
+    /// `stack_output(Name, Key, Value)`, `Name` as the reader names the
+    /// deployment; a secret one's value its label.
+    fn facts(&self, name: &str) -> Vec<Atom> {
+        let fact = |k: &str, v: Value| Atom {
+            pred: "stack_output".into(),
+            args: vec![
+                Term::Val(Value::Str(name.to_string())),
+                Term::Val(Value::Str(k.to_string())),
+                Term::Val(v),
+            ],
+            record: None,
+            span: Span::default(),
+        };
+        let mut out: Vec<Atom> = self
+            .outputs
+            .iter()
+            .map(|(k, v)| fact(k, v.clone()))
+            .collect();
+        for (k, ty) in &self.secret {
+            out.push(fact(
+                k,
+                Value::Null {
+                    label: format!("stack_output/{name}#{k}"),
+                    class: crate::value::NullClass::Secret,
+                    ty: ty.clone(),
+                },
+            ));
+        }
+        out
+    }
+}
+
+/// The outputs a program declares `secret(T)`, with T's name (the stack's
+/// own, not a module's).
+pub fn secret_output_types(program: &Program) -> BTreeMap<String, String> {
+    program
+        .statements
+        .iter()
+        .filter_map(|s| match s {
+            Stmt::Output(o) => match &o.ty {
+                Some(crate::ast::TypeExpr::Apply(n, args)) if n == "secret" => {
+                    let ty = match args.as_slice() {
+                        [crate::ast::TypeExpr::Name(t)] => t.clone(),
+                        _ => String::new(),
+                    };
+                    Some((o.name.clone(), ty))
+                }
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect()
+}
+
+/// One deployment's outputs as a run read them.
+#[derive(Debug, Clone)]
+pub struct Read {
+    /// The deployment as the reader names it: `app[env=prod]`, or
+    /// `platform.cluster[env=prod]` of the remote `platform`.
+    pub name: String,
+    /// The object's digest, `absent` when there is none.
+    pub digest: String,
+    pub published: Option<Published>,
+}
+
+/// The digest of an outputs object as a plan records it.
+fn outputs_digest(bytes: Option<&[u8]>) -> String {
+    match bytes {
+        Some(b) => format!("sha256:{}", crate::approval::sha256_hex(b)),
+        None => "absent".into(),
+    }
+}
+
+/// Read the outputs a deployment published at `loc`; `name` is the
+/// reader's name of it, `own` the project's (checked against the object).
+pub fn read_published(loc: &Location, s3: OpenS3, name: &str, own: &str) -> Result<Read> {
+    let store = loc.open(s3)?;
+    let at = store.locate(crate::store::OUTPUTS);
+    let Some(o) = store.get(crate::store::OUTPUTS)? else {
+        return Ok(Read {
+            name: name.to_string(),
+            digest: outputs_digest(None),
+            published: None,
+        });
+    };
+    let p: Published =
+        serde_json::from_slice(&o.bytes).with_context(|| format!("parse the outputs {at}"))?;
+    if p.deployment != own {
+        bail!(
+            "stack_output(\"{name}\", ..): {at} holds the outputs of {}, not {own}; check the \
+             backend it was read through",
+            p.deployment
+        );
+    }
+    Ok(Read {
+        name: name.to_string(),
+        digest: outputs_digest(Some(&o.bytes)),
+        published: Some(p),
+    })
+}
+
+/// Where a remote project's deployment `name` (`platform.cluster[env=prod]`)
+/// is, from `[remotes] platform = { backend = "..." }` (`remotes`, name ->
+/// backend term). The term's `{stack}` is the stack's name (`cluster`);
+/// without one the stacks are under it by name, as under a state root. A
+/// local directory is relative to the project root `project`. `None`: no
+/// remote is named so.
+pub fn remote_location(
+    name: &str,
+    remotes: &BTreeMap<String, String>,
+    project: &Path,
+) -> Result<Option<(Location, String)>> {
+    let (base, seg) = match name.strip_suffix(']').and_then(|n| n.split_once('[')) {
+        Some((b, s)) => (b, Some(s)),
+        None => (name, None),
+    };
+    let Some((remote, stack)) = base.split_once('.') else {
+        return Ok(None);
+    };
+    let Some(term) = remotes.get(remote) else {
+        return Ok(None);
+    };
+    let templated = term.contains("{stack}");
+    let b = parse_backend(&term.replace("{stack}", stack))
+        .with_context(|| format!("[remotes] {remote}: backend {term}"))?;
+    let loc = match b {
+        Backend::Local(dir) => Location::Local(project.join(dir)),
+        Backend::S3(spec) => Location::S3(spec),
+    };
+    let loc = if templated {
+        loc
+    } else {
+        loc.child(Some(stack))
+    };
+    let own = match seg {
+        Some(s) => format!("{stack}[{s}]"),
+        None => stack.to_string(),
+    };
+    Ok(Some((loc.child(seg), own)))
+}
+
+/// The deployments a program names in `stack_output(Name, ..)` with a
+/// constant name, and whether one names it otherwise (a variable: it may
+/// read any).
+pub fn named_outputs(program: &Program) -> (std::collections::BTreeSet<String>, bool) {
+    let mut named = std::collections::BTreeSet::new();
+    let mut any = false;
+    let mut see = |a: &Atom| {
+        if a.pred == "stack_output" {
+            match a.args.first() {
+                Some(Term::Val(Value::Str(n))) => {
+                    named.insert(n.clone());
+                }
+                _ => any = true,
+            }
+        }
+    };
+    for s in &program.statements {
+        let body = match s {
+            Stmt::Rule(r) => &r.body[..],
+            Stmt::Constraint(c) => &c.body[..],
+            _ => continue,
+        };
+        for l in body {
+            if let crate::ast::Lit::Pos(a) | crate::ast::Lit::Not(a) = l {
+                see(a);
+            }
+        }
+    }
+    (named, any)
+}
+
+/// What a run reads of other stacks' outputs: each deployment the program
+/// names (`named`; `None`: it names one by a variable, and every
+/// registered deployment of the project is read), but its own (`own`): a
+/// registered one of the project where the registry has it, else one of a
+/// remote project through the remote's backend. A name neither has has no
+/// outputs yet.
+pub fn stack_outputs(
+    root: &Path,
+    own: &str,
+    named: Option<&std::collections::BTreeSet<String>>,
+    remotes: &BTreeMap<String, String>,
+    s3: OpenS3,
+) -> Result<Vec<Read>> {
     let mut out = Vec::new();
-    for (name, e) in registry(root)? {
-        let path = e.state;
-        if name == own || !path.exists() {
+    let reg = registry(root)?;
+    for (name, e) in &reg {
+        if name == own || named.is_some_and(|n| !n.contains(name)) {
             continue;
         }
-        let st = crate::state::State::load(&path)?;
-        for (k, v) in st.outputs {
-            out.push(crate::ast::Atom {
-                pred: "stack_output".into(),
-                args: vec![
-                    Term::Val(Value::Str(name.clone())),
-                    Term::Val(Value::Str(k)),
-                    Term::Val(v),
-                ],
-                record: None,
-                span: Span::default(),
-            });
+        out.push(read_published(&e.state, s3, name, name)?);
+    }
+    let project = root.parent().unwrap_or(Path::new(""));
+    for name in named.into_iter().flatten() {
+        if name == own || reg.contains_key(name) {
+            continue;
+        }
+        if let Some((loc, theirs)) = remote_location(name, remotes, project)? {
+            out.push(read_published(&loc, s3, name, &theirs)?);
         }
     }
     Ok(out)
+}
+
+/// The `stack_output` facts of what was read.
+pub fn output_facts(read: &[Read]) -> Vec<Atom> {
+    read.iter()
+        .filter_map(|r| Some(r.published.as_ref()?.facts(&r.name)))
+        .flatten()
+        .collect()
+}
+
+/// The secret outputs among what was read: (reader's name, key).
+pub fn secret_outputs(read: &[Read]) -> std::collections::BTreeSet<(String, String)> {
+    read.iter()
+        .filter_map(|r| Some((r, r.published.as_ref()?)))
+        .flat_map(|(r, p)| p.secret.keys().map(|k| (r.name.clone(), k.clone())))
+        .collect()
 }
 
 /// Does the program give the stack an output (`output k = t` at the top)?

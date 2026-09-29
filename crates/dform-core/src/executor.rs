@@ -78,6 +78,10 @@ pub struct Options<'a> {
     /// The audit log's hook: told how each action ended, once state has
     /// been written for it (`report_action`).
     pub on_action: Option<ActionHook<'a>>,
+    /// Asked before each Apply call is submitted: an error stops the tick
+    /// as the call's failure, and no call is made (the lease fence,
+    /// `store::Deployment::check_fence`).
+    pub before_submit: Option<&'a dyn Fn() -> Result<()>>,
 }
 
 /// How an action ended: its error, if it failed; state as written after it.
@@ -137,6 +141,11 @@ pub fn run_tick(
             started[i] = true;
             start_ms[i] = now;
             seq[i] = started.iter().filter(|s| **s).count();
+            if let Err(e) = opts.before_submit.map_or(Ok(()), |check| check()) {
+                started[i] = false;
+                failed = Some(e);
+                break;
+            }
             match tick.submit(i, actions[i], state) {
                 Ok(true) => in_flight += 1,
                 Ok(false) => at_once.push_back(i),
@@ -206,10 +215,13 @@ pub fn run_tick(
         tick.record(&actions[i].addr, start, end);
     }
     let returned = tick.end(state)?;
-    (opts.persist)(state)?;
-    match failed {
-        Some(e) => Err(e),
-        None => Ok(returned),
+    let persisted = (opts.persist)(state);
+    match (failed, persisted) {
+        (Some(e), Ok(())) => Err(e),
+        // Why the tick stopped first, then why its state was not written.
+        (Some(e), Err(p)) => Err(p.context(format!("{e:#}"))),
+        (None, Err(p)) => Err(p),
+        (None, Ok(())) => Ok(returned),
     }
 }
 

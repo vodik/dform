@@ -2,7 +2,11 @@
 //! object per stack deployment in its backend beside its state,
 //! `state.audit.jsonl` (`<stem>.state.audit.jsonl` beside a `--world`
 //! file; under the prefix of an `s3` backend), moving with the state on a
-//! rekey or a handover.
+//! rekey or a handover. A store that cannot append in place (a bucket:
+//! an object is written whole) keeps the log in segments of
+//! [`SEGMENT`] entries, `state.audit/000001.jsonl`, ...: an entry
+//! rewrites only the last one. The log is the segments in order, after
+//! `state.audit.jsonl` when a log from before segments has one.
 //!
 //! Every entry is one line of canonical JSON: `seq` (from 1), `time` (RFC
 //! 3339, UTC), `kind`, `prev` (the previous entry's `hash`, "" for the
@@ -26,23 +30,21 @@
 //! a sink that fails is a warning, and the local log stays authoritative.
 
 use crate::approval::{canonical_json, digest_of, now, rfc3339};
-use crate::store::{AUDIT, LocalStore, Store};
+use crate::store::{AUDIT, AUDIT_SEGMENTS, Cond, LocalStore, Store};
 use anyhow::{Context, Result};
 use serde_json::{Map, Value as Json};
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
+
+/// The entries of one segment of a log kept in segments.
+pub const SEGMENT: usize = 100;
 
 /// A deployment's audit log: the object `state.audit.jsonl` of its store.
 #[derive(Clone)]
 pub struct Log {
     store: Arc<dyn Store>,
     sink: Option<String>,
-}
-
-/// The log beside the state file `state`.
-pub fn path_beside(state: &Path) -> PathBuf {
-    state.with_extension("audit.jsonl")
 }
 
 impl Log {
@@ -64,12 +66,29 @@ impl Log {
 
     /// The log's text; `None` when there is no log.
     pub fn text(&self) -> Result<Option<String>> {
-        match self.store.get(AUDIT)? {
-            None => Ok(None),
-            Some(o) => String::from_utf8(o.bytes)
-                .map(Some)
-                .with_context(|| format!("{}: not UTF-8", self.locate())),
+        let mut parts = Vec::new();
+        if let Some(o) = self.store.get(AUDIT)? {
+            parts.push((self.locate(), o.bytes));
         }
+        if !self.store.appends_in_place() {
+            for k in self.store.list(AUDIT_SEGMENTS)? {
+                if let Some(o) = self.store.get(&k)? {
+                    parts.push((self.store.locate(&k), o.bytes));
+                }
+            }
+        }
+        if parts.is_empty() {
+            return Ok(None);
+        }
+        let mut text = String::new();
+        for (at, bytes) in parts {
+            let t = String::from_utf8(bytes).with_context(|| format!("{at}: not UTF-8"))?;
+            text.push_str(&t);
+            if !text.is_empty() && !text.ends_with('\n') {
+                text.push('\n');
+            }
+        }
+        Ok(Some(text))
     }
 
     /// The entries, in order (none when there is no log).
@@ -82,7 +101,7 @@ impl Log {
     /// `plan --out` beside an apply), so the chain does not fork.
     pub fn append(&self, kind: &str, fields: Json) -> Result<()> {
         let mut written = String::new();
-        self.store.append(AUDIT, &mut |text: &[u8]| {
+        let mut line = |text: &[u8]| {
             let text = String::from_utf8_lossy(text);
             let (seq, prev) = match text.lines().rev().find(|l| !l.trim().is_empty()) {
                 None => (1, String::new()),
@@ -111,13 +130,68 @@ impl Log {
             entry.insert("hash".into(), hash.into());
             written = canonical_json(&Json::Object(entry));
             format!("{written}\n").into_bytes()
-        })?;
+        };
+        if self.store.appends_in_place() {
+            self.store.append(AUDIT, &mut line)?;
+        } else {
+            self.append_segment(&mut line)?;
+        }
         if let Some(cmd) = &self.sink
             && let Err(e) = send(cmd, &written)
         {
             eprintln!("warning: audit sink `{cmd}`: {e:#}; the local log has the entry");
         }
         Ok(())
+    }
+}
+
+impl Log {
+    /// Append to the last segment what `line` makes of it (a new segment
+    /// once it holds [`SEGMENT`] entries; the first one continues a log
+    /// from before segments), without losing a concurrent append: every
+    /// write is conditional on what was read.
+    fn append_segment(&self, line: &mut dyn FnMut(&[u8]) -> Vec<u8>) -> Result<()> {
+        let segment = |n: usize| format!("{AUDIT_SEGMENTS}{n:06}.jsonl");
+        for _ in 0..20 {
+            let last = self.store.list(AUDIT_SEGMENTS)?.pop();
+            let n = last
+                .as_deref()
+                .and_then(|k| k.strip_prefix(AUDIT_SEGMENTS)?.strip_suffix(".jsonl"))
+                .and_then(|n| n.parse::<usize>().ok());
+            let got = match &last {
+                Some(k) => self.store.get(k)?,
+                None => None,
+            };
+            let (key, bytes, cond) = match (n, got) {
+                (Some(n), Some(o)) => {
+                    let entries = o
+                        .bytes
+                        .split(|b| *b == b'\n')
+                        .filter(|l| !l.is_empty())
+                        .count();
+                    if entries < SEGMENT {
+                        let mut bytes = o.bytes.clone();
+                        bytes.extend(line(&o.bytes));
+                        (segment(n), bytes, Cond::IfMatch(o.etag))
+                    } else {
+                        (segment(n + 1), line(&o.bytes), Cond::IfAbsent)
+                    }
+                }
+                // Gone since the listing: look again.
+                (Some(_), None) => continue,
+                (None, _) => {
+                    let before = self.store.get(AUDIT)?.map(|o| o.bytes).unwrap_or_default();
+                    (segment(1), line(&before), Cond::IfAbsent)
+                }
+            };
+            if self.store.put(&key, &bytes, &cond)?.is_some() {
+                return Ok(());
+            }
+        }
+        anyhow::bail!(
+            "append to {}: it changed under every attempt",
+            self.store.locate(AUDIT_SEGMENTS)
+        )
     }
 }
 
@@ -157,16 +231,6 @@ pub fn who() -> String {
         .map(|h| h.trim().to_string())
         .unwrap_or_else(|_| "unknown".into());
     format!("{user}@{host}")
-}
-
-/// The entries of the log at `path`, in order (none when there is no log).
-pub fn read(path: &Path) -> Result<Vec<Json>> {
-    let text = match std::fs::read_to_string(path) {
-        Ok(t) => t,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(e) => return Err(e).with_context(|| format!("read {}", path.display())),
-    };
-    entries(&text, &path.display().to_string())
 }
 
 /// The entries of a log's `text`; `at` names it.
@@ -290,5 +354,33 @@ mod tests {
         let (_, broken) = verify(&format!("{}\n{}\n", lines[0], lines[2]));
         assert!(broken.unwrap().why.starts_with("entry 2 (tick): its prev"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_log_in_segments_continues_an_old_one_and_rolls_over() {
+        use crate::store::MemoryStore;
+        let store = Arc::new(MemoryStore::new());
+        let log = Log::new(store.clone(), None);
+        // A log from before segments: one entry in the one object.
+        log.append("tick", json!({ "tick": 0 })).unwrap();
+        let first = format!("{AUDIT_SEGMENTS}000001.jsonl");
+        let old = store.get(&first).unwrap().unwrap().bytes;
+        store.delete(&first).unwrap();
+        store.put(AUDIT, &old, &Cond::Any).unwrap();
+        for i in 1..=SEGMENT + 5 {
+            log.append("tick", json!({ "tick": i })).unwrap();
+        }
+        assert_eq!(
+            store.list(AUDIT_SEGMENTS).unwrap(),
+            [first.clone(), format!("{AUDIT_SEGMENTS}000002.jsonl")]
+        );
+        let second = store
+            .get(&format!("{AUDIT_SEGMENTS}000002.jsonl"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(String::from_utf8(second.bytes).unwrap().lines().count(), 5);
+        let text = log.text().unwrap().unwrap();
+        assert_eq!(verify(&text), (SEGMENT + 6, None));
+        assert_eq!(log.entries().unwrap().last().unwrap()["seq"], SEGMENT + 6);
     }
 }

@@ -68,8 +68,15 @@ struct Project<'a> {
 
 impl<'a> Project<'a> {
     fn new(t: &'a Target, name: &str) -> Project<'a> {
-        let s = Scratch::new(&format!("s3-{name}"));
-        common::copy_dir(&common::repo().join("examples/demo"), &s.dir);
+        Project::of(t, name, |s| {
+            common::copy_dir(&common::repo().join("examples/demo"), &s.dir)
+        })
+    }
+
+    /// A project `setup` writes, its stacks' state in the bucket.
+    fn of(t: &'a Target, name: &str, setup: impl FnOnce(&Scratch)) -> Project<'a> {
+        let s = Scratch::project(&format!("s3-{name}"));
+        setup(&s);
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -86,24 +93,37 @@ impl<'a> Project<'a> {
         ));
         std::fs::write(s.path("dform.toml"), toml).unwrap();
         let p = Project { t, s, prefix };
-        p.store().create_bucket().unwrap();
+        p.bucket("").create_bucket().unwrap();
         p
     }
 
-    /// The deployment `dform[env=staging]`'s objects.
-    fn store(&self) -> S3Store {
+    /// The objects under `rel` in the project's prefix.
+    fn bucket(&self, rel: &str) -> S3Store {
         let spec = S3Spec {
             bucket: self.t.bucket.clone(),
-            prefix: format!("{}/dform", self.prefix),
+            prefix: self.prefix.clone(),
             endpoint: Some(self.t.endpoint.clone()),
             region: Some("us-east-1".into()),
         };
         S3Store::with_credentials(
             &spec,
-            "env=staging",
+            rel,
             rusty_s3::Credentials::new(&self.t.id, &self.t.secret),
         )
         .unwrap()
+    }
+
+    /// The deployment `dform[env=staging]`'s objects.
+    fn store(&self) -> S3Store {
+        self.bucket("dform/env=staging")
+    }
+
+    /// `s3(...)` of `rel` in the project's prefix, as a backend term.
+    fn term(&self, rel: &str) -> String {
+        format!(
+            "s3(\"{}\", \"{}/{rel}\", {{endpoint: \"{}\", region: \"us-east-1\"}})",
+            self.t.bucket, self.prefix, self.t.endpoint
+        )
     }
 
     fn command(&self, args: &[&str], env: &[(&str, &str)]) -> Command {
@@ -148,19 +168,7 @@ impl<'a> Project<'a> {
 
 impl Drop for Project<'_> {
     fn drop(&mut self) {
-        let store = self.store();
-        let all = S3Store::with_credentials(
-            &S3Spec {
-                bucket: self.t.bucket.clone(),
-                prefix: self.prefix.clone(),
-                endpoint: Some(self.t.endpoint.clone()),
-                region: Some("us-east-1".into()),
-            },
-            "",
-            rusty_s3::Credentials::new(&self.t.id, &self.t.secret),
-        )
-        .unwrap();
-        drop(store);
+        let all = self.bucket("");
         for k in all.list("").unwrap_or_default() {
             let _ = all.delete(&k);
         }
@@ -232,9 +240,20 @@ fn plan_and_apply_of_the_demo_keep_state_in_the_bucket() {
         // Everything the local backend keeps is in the bucket, nothing of it
         // beside the project (the mock's world is the provider's, and stays).
         let keys = p.store().list("").unwrap();
-        for k in ["state.json", "state.key", "state.audit.jsonl", "state.lock"] {
+        for k in [
+            "state.json",
+            "state.key",
+            "state.audit/000001.jsonl",
+            "state.lock",
+        ] {
             assert!(keys.iter().any(|x| x == k), "{}: {k} in {keys:?}", t.what);
         }
+        // The audit log is in segments: an entry rewrites the last one only.
+        assert!(
+            !keys.iter().any(|x| x == "state.audit.jsonl"),
+            "{}: {keys:?}",
+            t.what
+        );
         let local = p.s.path("dform.state/dform/env=staging");
         assert!(local.join("remote.json").exists(), "{}", t.what);
         for f in ["state.json", "state.key", "state.audit.jsonl", "state.lock"] {
@@ -470,34 +489,429 @@ fn the_server_refuses_a_conditional_write_over_another_version() {
     }
 }
 
-/// What does not take an s3 stack yet says so, naming the backend; the
-/// stack list says where its state is.
+/// The controller's lines without their `HH:MM:SS ` stamps and its first
+/// line.
+fn controller_log(stdout: &str) -> Vec<String> {
+    stdout
+        .lines()
+        .map(|l| l[9..].to_string())
+        .filter(|l| !l.starts_with("controller "))
+        .collect()
+}
+
+/// `controller run` keeps its memo in the bucket beside the state.
 #[test]
-fn the_controller_and_rekey_refuse_an_s3_stack() {
-    let t = &targets("the_controller_and_rekey_refuse_an_s3_stack")[0];
-    let p = Project::new(t, "refuse");
-    let r = p
-        .run(&["controller", "run", "--once", "dform", "env=staging"])
-        .failure();
+fn the_controller_runs_an_s3_stack() {
+    for t in &targets("the_controller_runs_an_s3_stack") {
+        let p = Project::new(t, "controller");
+        let once = ["controller", "run", "--once", "dform", "env=staging"];
+        let r = p.run(&once).success();
+        assert_eq!(
+            controller_log(&r.stdout).first().map(String::as_str),
+            Some("event start"),
+            "{}: {}",
+            t.what,
+            r.stdout
+        );
+        assert!(
+            r.stdout
+                .ends_with("stack dform[env=staging] is undeformed\n"),
+            "{}: {}",
+            t.what,
+            r.stdout
+        );
+        let keys = p.store().list("").unwrap();
+        assert!(
+            keys.iter().any(|k| k == "controller.json"),
+            "{}: {keys:?}",
+            t.what
+        );
+        assert!(
+            !p.s.path("dform.state/dform/env=staging/controller.json")
+                .exists(),
+            "{}",
+            t.what
+        );
+        let r = p.run(&once).success();
+        assert_eq!(
+            controller_log(&r.stdout),
+            ["event resync", "stack dform[env=staging] is undeformed"],
+            "{}",
+            t.what
+        );
+        // Its deployment is listed, with its last apply.
+        let r = p.run(&["stack", "list"]).success();
+        assert!(
+            r.stdout.contains("  dform[env=staging]: last apply "),
+            "{}: {}",
+            t.what,
+            r.stdout
+        );
+    }
+}
+
+/// `stack rekey` moves a deployment's objects to the new key's prefix, and
+/// its world with them.
+#[test]
+fn rekey_moves_an_s3_deployment_in_the_bucket() {
+    for t in &targets("rekey_moves_an_s3_deployment_in_the_bucket") {
+        let p = Project::new(t, "rekey");
+        p.run(APPLY).success();
+        let before = p.state();
+        let r = p
+            .run(&["stack", "rekey", "dform", "env=staging", "env=dev"])
+            .success();
+        assert!(
+            r.stdout.contains(&format!(
+                "stack dform[env=staging] rekeyed to dform[env=dev]: s3://{}/{}/dform/env=dev",
+                t.bucket, p.prefix
+            )),
+            "{}: {}",
+            t.what,
+            r.stdout
+        );
+        assert_eq!(
+            p.store().list("").unwrap(),
+            Vec::<String>::new(),
+            "{}: nothing is left behind",
+            t.what
+        );
+        let moved = p.bucket("dform/env=dev");
+        let keys = moved.list("").unwrap();
+        for k in ["state.json", "state.key", "state.audit/000001.jsonl"] {
+            assert!(keys.iter().any(|x| x == k), "{}: {k} in {keys:?}", t.what);
+        }
+        let now: serde_json::Value =
+            serde_json::from_slice(&moved.get(STATE).unwrap().unwrap().bytes).unwrap();
+        assert_eq!(now["resources"], before["resources"], "{}", t.what);
+        assert!(p.s.path("dform.state/dform/env=dev/remote.json").exists());
+        assert!(!p.s.path("dform.state/dform/env=staging").exists());
+        let log = p.run(&["log", "verify", "dform[env=dev]"]).success();
+        assert!(
+            log.stdout.contains("the chain holds"),
+            "{}: {}",
+            t.what,
+            log.stdout
+        );
+        let log = p.run(&["log", "dform[env=dev]"]).success();
+        assert!(log.stdout.contains(" rekey "), "{}: {}", t.what, log.stdout);
+    }
+}
+
+/// `stack handover` moves a deployment between prefixes, and from a bucket
+/// to a directory; the controller runs it where it is.
+#[test]
+fn handover_moves_an_s3_deployment_between_prefixes_and_to_local() {
+    for t in &targets("handover_moves_an_s3_deployment_between_prefixes_and_to_local") {
+        let p = Project::new(t, "handover");
+        p.run(APPLY).success();
+        let to = p.term("moved");
+        let r = p
+            .run(&["stack", "handover", "dform[env=staging]", "--to", &to])
+            .success();
+        assert!(
+            r.stdout.contains(&format!(
+                "handed over to {to}: s3://{}/{}/moved",
+                t.bucket, p.prefix
+            )),
+            "{}: {}",
+            t.what,
+            r.stdout
+        );
+        assert_eq!(
+            p.store().list("").unwrap(),
+            Vec::<String>::new(),
+            "{}",
+            t.what
+        );
+        let registry = p.s.read("dform.state/stacks.json");
+        assert!(
+            registry.contains(&format!(
+                "\"state\": \"s3://{}/{}/moved/state.json\"",
+                t.bucket, p.prefix
+            )),
+            "{}: {registry}",
+            t.what
+        );
+        let r = p.run(PLAN).success();
+        assert!(r.stdout.contains("undeformed"), "{}: {}", t.what, r.stdout);
+        let r = p.run(APPLY).failure();
+        assert!(
+            r.stderr.contains("the controller runs it"),
+            "{}: {}",
+            t.what,
+            r.stderr
+        );
+        let r = p
+            .run(&["controller", "run", "--once", "dform", "env=staging"])
+            .success();
+        assert_eq!(
+            controller_log(&r.stdout),
+            ["event start", "stack dform[env=staging] is undeformed"],
+            "{}",
+            t.what
+        );
+        assert!(
+            p.bucket("moved")
+                .list("")
+                .unwrap()
+                .contains(&"controller.json".to_string()),
+            "{}",
+            t.what
+        );
+        // Out of the bucket: the world joins the state in the directory.
+        p.run(&[
+            "stack",
+            "handover",
+            "dform[env=staging]",
+            "--to",
+            "local(\"here\")",
+        ])
+        .success();
+        assert_eq!(p.bucket("moved").list("").unwrap(), Vec::<String>::new());
+        for f in [
+            "state.json",
+            "remote.json",
+            "controller.json",
+            "state.audit.jsonl",
+        ] {
+            assert!(p.s.path("here").join(f).exists(), "{}: {f}", t.what);
+        }
+        let r = p.run(PLAN).success();
+        assert!(r.stdout.contains("undeformed"), "{}: {}", t.what, r.stdout);
+        let log = p.run(&["log", "verify", "dform[env=staging]"]).success();
+        assert!(
+            log.stdout.contains("the chain holds"),
+            "{}: {}",
+            t.what,
+            log.stdout
+        );
+    }
+}
+
+const PERSISTED: &str = r#"edition 2026
+stack p {}
+extern random.password(+name, -value) persist
+resource db.user app {
+  for random.password("app", pw)
+  password = pw
+}
+"#;
+
+/// `state taint` finds an s3 stack's state through its program's backend.
+#[test]
+fn taint_forgets_an_answer_in_the_bucket() {
+    for t in &targets("taint_forgets_an_answer_in_the_bucket") {
+        let p = Project::of(t, "taint", |s| {
+            s.write("stacks/p.df", PERSISTED);
+            s.write(
+                "providers/fake/schema.df",
+                &(std::fs::read_to_string(
+                    common::repo().join("crates/dform-mock/schemas/fake.df"),
+                )
+                .unwrap()
+                    + "type_provider(db.user, \"fakecloud\")\n"),
+            );
+            s.write(
+                "providers/fake/externs.df",
+                "edition 2026\nrandom.password(\"app\", \"pw-first\")\n",
+            );
+        });
+        p.run(&["apply", "p"]).success();
+        let state = |p: &Project| {
+            String::from_utf8(p.bucket("p").get(STATE).unwrap().unwrap().bytes).unwrap()
+        };
+        assert!(state(&p).contains("pw-first"), "{}", t.what);
+        let r = p
+            .run(&["state", "taint", "p", "random.password", "app"])
+            .success();
+        assert_eq!(
+            r.stdout, "tainted random.password(app) of stack p: the next plan asks again\n",
+            "{}",
+            t.what
+        );
+        assert!(!state(&p).contains("pw-first"), "{}", t.what);
+    }
+}
+
+const NET: &str = r#"edition 2026
+stack net.shared {}
+resource net.vpc main { cidr = "10.0.0.0/16" }
+output vpc_cidr = "10.0.0.0/16"
+output vpc_id = ref(net.vpc, "main", .id)
+"#;
+
+const APP: &str = r#"edition 2026
+stack app {}
+resource net.subnet a {
+  for stack_output("net.shared", "vpc_cidr", c),
+    stack_output("net.shared", "vpc_id", v)
+  cidr = c
+  vpc_id = v
+}
+"#;
+
+/// Another stack reads an s3 stack's outputs from the object it publishes
+/// beside its state.
+#[test]
+fn another_stack_reads_an_s3_stacks_outputs() {
+    for t in &targets("another_stack_reads_an_s3_stacks_outputs") {
+        let p = Project::of(t, "outputs", |s| {
+            s.write("stacks/net.df", NET);
+            s.write("stacks/app.df", APP);
+        });
+        p.run(&["apply", "net.shared"]).success();
+        let published: serde_json::Value = serde_json::from_slice(
+            &p.bucket("net.shared")
+                .get("outputs.json")
+                .unwrap()
+                .expect("published outputs")
+                .bytes,
+        )
+        .unwrap();
+        assert_eq!(
+            published["deployment"], "net.shared",
+            "{}: {published}",
+            t.what
+        );
+        let r = p.run(&["plan", "app"]).success();
+        assert!(
+            r.stdout.contains(
+                "+ net.subnet.a\n  cidr = \"10.0.0.0/16\"\n  vpc_id = \"net.vpc:main\"\n"
+            ),
+            "{}: {}",
+            t.what,
+            r.stdout
+        );
+    }
+}
+
+/// A stale holder that wakes after a takeover makes no provider call: the
+/// lease is checked before each one is submitted.
+#[test]
+fn a_stale_holder_makes_no_provider_call() {
+    for t in &targets("a_stale_holder_makes_no_provider_call") {
+        let p = Project::new(t, "stale-submit");
+        // A stops as it is about to submit its first Apply call, after
+        // its last state write, and is paused until its lease expires.
+        let dir = stall_dir(&p, "stall-submit");
+        let a = p.spawn(
+            APPLY,
+            &[("DFORM_TEST_STALL_AT_SUBMIT", &format!("1:{dir}"))],
+        );
+        wait_for("the apply to stall", Duration::from_secs(60), || {
+            Path::new(&dir).join("stalled").exists()
+        });
+        signal(a.id(), "-STOP");
+        let expires = p.lease().unwrap()["expires_ms"].as_u64().unwrap();
+        wait_for("the lease to expire", LEASE * 3, || {
+            dform_core::store::now_ms() > expires + 100
+        });
+        let release = p.s.path("release");
+        let b = p.spawn(
+            APPLY,
+            &[("DFORM_TEST_HOLD_LOCK", release.to_str().unwrap())],
+        );
+        wait_for("B's lease", Duration::from_secs(30), || {
+            p.state()["fence"] == 2
+        });
+        let world = p.s.path("dform.state/dform/env=staging/remote.json");
+        let objects = || -> usize {
+            std::fs::read(&world)
+                .ok()
+                .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+                .and_then(|w| Some(w["resources"].as_object()?.len()))
+                .unwrap_or(0)
+        };
+        assert_eq!(objects(), 0, "{}", t.what);
+        std::fs::write(Path::new(&dir).join("resume"), "").unwrap();
+        signal(a.id(), "-CONT");
+        let a = finish(a).failure();
+        assert!(
+            a.stderr.contains("no provider call was made"),
+            "{}: {}",
+            t.what,
+            a.stderr
+        );
+        assert_eq!(
+            objects(),
+            0,
+            "{}: A's call did not reach the provider",
+            t.what
+        );
+        std::fs::write(&release, "").unwrap();
+        let b = finish(b).success();
+        assert!(
+            b.stdout.contains("apply: complete"),
+            "{}: {}",
+            t.what,
+            b.stdout
+        );
+    }
+}
+
+/// A bucket whose server ignores the conditions of a write is refused
+/// before anything is written; one that keeps them is checked once.
+#[test]
+fn a_server_that_ignores_conditions_is_refused() {
+    let lax = dform_s3::fake::Server::ignoring_conditions();
+    let t = Target {
+        what: "lax",
+        endpoint: lax.endpoint.clone(),
+        bucket: "dform-test".into(),
+        id: "fake".into(),
+        secret: "fake".into(),
+    };
+    let p = Project::new(&t, "lax");
+    let r = p.run(APPLY).failure();
     assert!(
-        r.stderr
-            .contains("stack dform[env=staging]: its backend is s3://dform-test/")
-            && r.stderr.contains("does not run an s3 stack yet"),
+        r.stderr.contains("the server ignores If-None-Match: *"),
         "{}",
         r.stderr
     );
-    let r = p
-        .run(&["stack", "rekey", "dform", "env=staging", "env=prod"])
-        .failure();
-    assert!(
-        r.stderr.contains("rekey moves local state only"),
-        "{}",
-        r.stderr
-    );
-    let r = p.run(&["stack", "list"]).success();
-    assert!(
-        r.stdout.contains("  state in s3://dform-test/"),
-        "{}",
-        r.stdout
-    );
+    assert_eq!(p.store().list("").unwrap(), Vec::<String>::new());
+    let good = &targets("a_server_that_ignores_conditions_is_refused")[0];
+    let p = Project::new(good, "conditions-cached");
+    p.run(APPLY).success();
+    let cached = std::fs::read_dir(p.s.path("dform.state/cache/s3-conditions"))
+        .unwrap()
+        .count();
+    assert_eq!(cached, 1);
+}
+
+/// A project reads another's outputs through its s3 backend: `[remotes]`
+/// names the bucket, and only the published outputs object is read.
+#[test]
+fn a_project_reads_another_projects_outputs_through_its_s3_backend() {
+    for t in &targets("a_project_reads_another_projects_outputs_through_its_s3_backend") {
+        let p = Project::of(t, "remote", |s| {
+            s.write(
+                "stacks/cluster.df",
+                "edition 2026\ninput env: string = \"dev\"\nstack cluster[env] {}\n\
+                 output endpoint = \"https://{env}.cluster.example\"\n",
+            );
+        });
+        p.run(&["apply", "cluster", "env=prod"]).success();
+        let app = Scratch::project("s3-remote-app");
+        app.write(
+            "dform.toml",
+            &format!(
+                "[remotes]\nplatform = {{ backend = '{}' }}\n",
+                p.term("{stack}")
+            ),
+        );
+        app.write(
+            "stacks/app.df",
+            "edition 2026\nstack app {}\nresource net.vpc edge {\n  for \
+             stack_output(\"platform.cluster[env=prod]\", \"endpoint\", e)\n  name = e\n}\n",
+        );
+        let mut c = p.command(&["plan", "app"], &[]);
+        let r = Run::from(c.current_dir(&app.dir).output().unwrap()).success();
+        assert!(
+            r.stdout.contains("name = \"https://prod.cluster.example\""),
+            "{}: {}",
+            t.what,
+            r.stdout
+        );
+    }
 }
