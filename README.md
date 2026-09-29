@@ -1857,6 +1857,21 @@ examples/demo an evaluation takes about 30 ms in a release build.
   (a typed placeholder in the resource's block) and a ref to an address
   no rule wants (guard the block on it: `if "other" in net.vpc`). An edit
   to a formatted file leaves it formatted.
+- *References* of a predicate, an input or value name, a `let` or type
+  alias, a module, an instance, a resource (by every spelling of its
+  address: `n`, `T.n`, `m.i/n`), a settings row or a policy, across the
+  project's files and unsaved buffers, read in the resolver's order
+  (docs/grammar.md "Names"). On an attribute path (a field of a
+  resource block, `r.p` in a body, an `attr` literal): every rule
+  contributing to that cell, across modules and policy packs, as the
+  hover lists them.
+- *Rename* of the same names. Renaming a resource, an instance or a
+  module whose addresses have state in the selected deployment adds, in
+  the same edit, `moved("T", "old", "new")` per address just after the
+  declaration's block, so the next plan is a move and not a destroy and a
+  create. `prepareRename` refuses keywords, builtins, schema types,
+  attribute paths, provider names and dform's own relations (`data`,
+  `attr`, ...).
 - Formatting (`dform fmt`'s formatter) and go-to-definition of modules,
   policies and predicates.
 

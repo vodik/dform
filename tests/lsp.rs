@@ -1,9 +1,10 @@
 //! `dform lsp` over stdio, on copies of examples/demo and examples/pngu:
 //! the contributors hover and `dform.why`, diagnostics of the selected
 //! environment (`dform.selectEnvironment`), schema completion, quick
-//! fixes, and the free ones (parse diagnostics, formatting,
-//! go-to-definition). The server
-//! evaluates read only: the copies gain no dform.state/.
+//! fixes, references and rename (a rename with state plans as a move),
+//! and the free ones (parse diagnostics, formatting, go-to-definition).
+//! The server evaluates read only: the copies gain no dform.state/ but by
+//! an explicit apply.
 
 mod common;
 
@@ -846,4 +847,369 @@ fn quick_fix_guards_a_dangling_ref() {
         "{}",
         texts[0]
     );
+/// Locations as `(file relative to root, 1-based line)`, sorted.
+fn places(root: &Path, locs: &Value) -> Vec<(String, u64)> {
+    let prefix = uri(root) + "/";
+    let mut out: Vec<(String, u64)> = locs
+        .as_array()
+        .unwrap_or_else(|| panic!("{locs}"))
+        .iter()
+        .map(|l| {
+            let u = l["uri"].as_str().unwrap();
+            (
+                u.strip_prefix(&prefix).unwrap_or(u).to_string(),
+                l["range"]["start"]["line"].as_u64().unwrap() + 1,
+            )
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+fn references(c: &mut Client, root: &Path, file: &Path, at: (u32, u32)) -> Vec<(String, u64)> {
+    let locs = c.request(
+        "textDocument/references",
+        json!({
+            "textDocument": { "uri": uri(file) },
+            "position": { "line": at.0, "character": at.1 },
+            "context": { "includeDeclaration": true },
+        }),
+    );
+    places(root, &locs)
+}
+
+fn at_places(file: &str, lines: &[u64]) -> Vec<(String, u64)> {
+    lines.iter().map(|l| (file.to_string(), *l)).collect()
+}
+
+/// References of each kind of name, across the project's files and its
+/// unsaved buffers; on an attribute path, the contributions to its cell.
+#[test]
+fn references_of_every_kind_of_name() {
+    let (_s, root) = example("demo");
+    let stack = root.join("stacks/dform.df");
+    let network = root.join("modules/network.df");
+    let baseline = root.join("policies/baseline.df");
+    let mut c = Client::start(&root, json!({}));
+    c.open(&stack);
+    c.open(&network);
+
+    // A predicate: its rule's head and the bodies that read it.
+    let found = references(&mut c, &root, &stack, find(&stack, "vpc_peer_pair(ia", 2));
+    assert_eq!(found, at_places("stacks/dform.df", &[88, 89, 93]));
+
+    // An input: the stack's own reads, a module's and a pack's, the
+    // scenarios' `with`.
+    let found = references(&mut c, &root, &stack, find(&stack, "input env:", 6));
+    for want in [
+        ("stacks/dform.df".to_string(), 18),
+        ("stacks/dform.df".into(), 24),
+        ("stacks/dform.df".into(), 45),
+        ("stacks/dform.df".into(), 121),
+        ("modules/network.df".into(), 15),
+        ("policies/baseline.df".into(), 22),
+    ] {
+        assert!(found.contains(&want), "{want:?} in {found:?}");
+    }
+
+    // A module's input: declared in the module, read there, given by
+    // each instance block.
+    let found = references(&mut c, &root, &network, find(&network, "input vpc_net", 6));
+    assert_eq!(
+        found,
+        vec![
+            ("modules/network.df".into(), 9),
+            ("modules/network.df".into(), 14),
+            ("stacks/dform.df".into(), 60),
+            ("stacks/dform.df".into(), 64),
+        ]
+    );
+
+    // A let alias and a type alias.
+    let found = references(&mut c, &root, &stack, find(&stack, "let cfg", 4));
+    assert_eq!(
+        found,
+        at_places("stacks/dform.df", &[45, 60, 64, 69, 70, 75, 76, 77, 101])
+    );
+    let found = references(&mut c, &root, &network, find(&network, "type subnets", 5));
+    assert_eq!(
+        found,
+        vec![
+            ("modules/database.df".into(), 9),
+            ("modules/kubernetes.df".into(), 10),
+            ("modules/network.df".into(), 6),
+            ("modules/network.df".into(), 7),
+            ("modules/network.df".into(), 11),
+        ]
+    );
+
+    // A module, an instance, a policy.
+    let found = references(&mut c, &root, &network, find(&network, "module network", 7));
+    assert_eq!(
+        found,
+        vec![
+            ("modules/network.df".into(), 3),
+            ("stacks/dform.df".into(), 59),
+            ("stacks/dform.df".into(), 63),
+            ("stacks/dform.df".into(), 71),
+            ("stacks/dform.df".into(), 78),
+            ("stacks/dform.df".into(), 88),
+            ("stacks/dform.df".into(), 88),
+            ("stacks/dform.df".into(), 129),
+        ]
+    );
+    let found = references(
+        &mut c,
+        &root,
+        &stack,
+        find(&stack, "instance database main", 18),
+    );
+    assert_eq!(found, at_places("stacks/dform.df", &[68, 107, 108, 123]));
+    let found = references(&mut c, &root, &stack, find(&stack, "apply baseline", 6));
+    assert_eq!(
+        found,
+        vec![
+            ("policies/baseline.df".into(), 3),
+            ("stacks/dform.df".into(), 54),
+        ]
+    );
+
+    // A resource by its address: `vpc` in its module, `network.peer/vpc`
+    // from the stack.
+    let found = references(&mut c, &root, &network, find(&network, "net.vpc vpc", 8));
+    assert_eq!(
+        found,
+        vec![
+            ("modules/network.df".into(), 13),
+            ("modules/network.df".into(), 23),
+            ("modules/network.df".into(), 24),
+            ("modules/network.df".into(), 29),
+            ("stacks/dform.df".into(), 129),
+        ]
+    );
+
+    // A settings row, by `settings.prod`.
+    let found = references(
+        &mut c,
+        &root,
+        &baseline,
+        find(&baseline, "settings.prod.audit.enabled", 9),
+    );
+    assert_eq!(found, at_places("policies/baseline.df", &[32, 36]));
+
+    // An unsaved buffer's reads count.
+    let original = std::fs::read_to_string(&stack).unwrap();
+    c.change(
+        &stack,
+        2,
+        &format!("{original}\nextra(x) if vpc_peer_pair(x, _, _, _)\n"),
+    );
+    let found = references(&mut c, &root, &stack, find(&stack, "vpc_peer_pair(ia", 2));
+    assert_eq!(found, at_places("stacks/dform.df", &[88, 89, 93, 132]));
+
+    // An attribute path: every rule contributing to the cell, the
+    // module's field and the pack's.
+    let found = references(&mut c, &root, &network, find(&network, "tags = { env", 1));
+    assert_eq!(
+        found,
+        vec![
+            ("modules/network.df".into(), 15),
+            ("policies/baseline.df".into(), 16),
+        ]
+    );
+    c.shutdown();
+}
+
+/// Apply a workspace edit's `changes` to the files on disk and, as an
+/// editor would, to the server's buffers (the demo is ASCII: a UTF-16
+/// column is a byte).
+fn apply_edit(c: &mut Client, root: &Path, edit: &Value) {
+    let prefix = uri(root) + "/";
+    for (u, edits) in edit["changes"]
+        .as_object()
+        .unwrap_or_else(|| panic!("{edit}"))
+    {
+        let file = root.join(u.strip_prefix(&prefix).unwrap());
+        let mut text = std::fs::read_to_string(&file).unwrap();
+        let offset = |text: &str, p: &Value| -> usize {
+            let line = p["line"].as_u64().unwrap() as usize;
+            let start: usize = text.split_inclusive('\n').take(line).map(str::len).sum();
+            start + p["character"].as_u64().unwrap() as usize
+        };
+        let mut spans: Vec<(usize, usize, String)> = edits
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| {
+                (
+                    offset(&text, &e["range"]["start"]),
+                    offset(&text, &e["range"]["end"]),
+                    e["newText"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect();
+        spans.sort_by_key(|s| std::cmp::Reverse(s.0));
+        for (s, e, t) in spans {
+            text.replace_range(s..e, &t);
+        }
+        std::fs::write(&file, &text).unwrap();
+        c.change(&file, 100, &text);
+    }
+}
+
+fn rename(c: &mut Client, file: &Path, at: (u32, u32), new: &str) -> Value {
+    c.request(
+        "textDocument/rename",
+        json!({
+            "textDocument": { "uri": uri(file) },
+            "position": { "line": at.0, "character": at.1 },
+            "newName": new,
+        }),
+    )
+}
+
+/// The error a request answers with.
+fn refused(c: &mut Client, method: &str, params: Value) -> String {
+    c.next += 1;
+    let id = c.next;
+    c.send(json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }));
+    loop {
+        let m = c.recv();
+        if m.get("id") == Some(&json!(id)) && m.get("method").is_none() {
+            return m["error"]["message"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{method} was not refused: {m}"))
+                .to_string();
+        }
+        c.notes.push(m);
+    }
+}
+
+/// prepareRename offers names and refuses keywords, builtins, schema
+/// types and what a provider owns; a rename rewrites every reference.
+#[test]
+fn prepare_rename_refuses_what_is_not_the_programs() {
+    let (_s, root) = example("demo");
+    let stack = root.join("stacks/dform.df");
+    let network = root.join("modules/network.df");
+    let mut c = Client::start(&root, json!({}));
+    c.open(&stack);
+    let prepare = |file: &Path, at: (u32, u32)| json!({ "textDocument": { "uri": uri(file) }, "position": { "line": at.0, "character": at.1 } });
+    let ok = c.request(
+        "textDocument/prepareRename",
+        prepare(&stack, find(&stack, "compute.vm bastion", 12)),
+    );
+    assert_eq!(ok["placeholder"], "bastion", "{ok}");
+    for (file, needle, ahead, why) in [
+        (&stack, "resource compute.vm bastion", 2, "keyword"),
+        (&stack, "inet_host(", 2, "builtin"),
+        (&stack, "compute.vm bastion", 9, "schema type"),
+        (&network, "cidr = vpc_net", 1, "attribute path"),
+        (
+            &stack,
+            "data(\"zone\", \"us-test-1a\")",
+            1,
+            "dform's own relation",
+        ),
+        (&stack, "provider fake", 10, "provider's name"),
+        (&stack, "vpc_peer_pair(ia, ib", 15, "variable"),
+    ] {
+        let params = prepare(file, find(file, needle, ahead));
+        let e = refused(&mut c, "textDocument/prepareRename", params);
+        assert!(e.contains(why), "{needle}: {e}");
+    }
+    let params = json!({
+        "textDocument": { "uri": uri(&stack) },
+        "position": { "line": find(&stack, "compute.vm bastion", 12).0, "character": 22 },
+        "newName": "not",
+    });
+    let e = refused(&mut c, "textDocument/rename", params);
+    assert!(e.contains("not a name"), "{e}");
+
+    // A module input: its declaration, its read and both instance blocks;
+    // and with no state, no `moved`.
+    let edit = rename(
+        &mut c,
+        &network,
+        find(&network, "input vpc_net", 6),
+        "cidr_block",
+    );
+    apply_edit(&mut c, &root, &edit);
+    let text = std::fs::read_to_string(&network).unwrap();
+    assert!(text.contains("input cidr_block: inet") && text.contains("cidr = cidr_block"));
+    let text = std::fs::read_to_string(&stack).unwrap();
+    assert_eq!(text.matches("  cidr_block = inet(cfg").count(), 2, "{text}");
+    let edit = rename(
+        &mut c,
+        &stack,
+        find(&stack, "compute.vm bastion", 12),
+        "jump",
+    );
+    assert!(
+        !edit.to_string().contains("moved("),
+        "no state, no moved: {edit}"
+    );
+    c.shutdown();
+}
+
+/// Renaming a resource, and a module's resource, that have state offers
+/// a `moved` fact per address in the same edit: the next plan is a move.
+#[test]
+fn rename_of_a_resource_with_state_plans_as_a_move() {
+    let (_s, root) = example("demo");
+    let run = |args: &[&str]| {
+        let out = common::dform()
+            .args(args)
+            .current_dir(&root)
+            .output()
+            .unwrap();
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(out.status.success(), "dform {args:?}: {text}");
+        text
+    };
+    run(&["apply", "--yes", "dform", "env=staging"]);
+    let stack = root.join("stacks/dform.df");
+    let network = root.join("modules/network.df");
+    let mut c = Client::start(&root, json!({}));
+    c.open(&stack);
+
+    let edit = rename(
+        &mut c,
+        &stack,
+        find(&stack, "compute.vm bastion", 12),
+        "jump",
+    );
+    let text = edit.to_string();
+    assert!(
+        text.contains(r#"moved(\"compute.vm\", \"bastion\", \"jump\")"#),
+        "{edit}"
+    );
+    apply_edit(&mut c, &root, &edit);
+    let edit = rename(&mut c, &network, find(&network, "net.vpc vpc", 8), "net0");
+    for i in ["main", "peer"] {
+        let fact = format!(r#"moved(\"net.vpc\", \"network.{i}::vpc\", \"network.{i}::net0\")"#);
+        assert!(edit.to_string().contains(&fact), "{fact} in {edit}");
+    }
+    apply_edit(&mut c, &root, &edit);
+    c.shutdown();
+
+    let written = std::fs::read_to_string(&stack).unwrap();
+    assert!(
+        written.contains("resource compute.vm jump {") && written.contains("network.peer/net0"),
+        "{written}"
+    );
+    let plan = run(&["plan", "dform", "env=staging"]);
+    assert!(
+        plan.contains("moved compute.vm.bastion -> compute.vm.jump"),
+        "{plan}"
+    );
+    assert!(
+        plan.contains("moved net.vpc.network.main::vpc -> net.vpc.network.main::net0"),
+        "{plan}"
+    );
+    assert!(plan.contains("stack dform is undeformed"), "{plan}");
 }

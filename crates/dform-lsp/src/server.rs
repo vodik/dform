@@ -193,6 +193,8 @@ pub fn serve(conn: &Connection, opts: Options) -> Result<()> {
                 "hoverProvider": true,
                 "completionProvider": { "triggerCharacters": [".", " "] },
                 "definitionProvider": true,
+                "referencesProvider": true,
+                "renameProvider": { "prepareProvider": true },
                 "documentFormattingProvider": true,
                 "codeActionProvider": { "codeActionKinds": ["quickfix"] },
                 "executeCommandProvider": { "commands": [SELECT_ENVIRONMENT, WHY] },
@@ -353,6 +355,52 @@ impl Server<'_> {
                     SELECT_ENVIRONMENT => self.select_environment(arg),
                     WHY => self.why(arg),
                     c => Err(anyhow!("no command {c}")),
+                }
+            }
+            "textDocument/references" | "textDocument/prepareRename" | "textDocument/rename" => {
+                let p: lsp_types::TextDocumentPositionParams =
+                    serde_json::from_value(req.params.clone())?;
+                let path = self.path(&p.text_document.uri)?;
+                let root = self.root_of(&path);
+                self.fresh(&root);
+                let text = self.read(&path)?;
+                let at = text::offset(&text, p.position);
+                let files = self
+                    .files(&root)
+                    .into_iter()
+                    .filter_map(|f| Some((f.clone(), self.read(&f).ok()?)))
+                    .collect();
+                let project = crate::refs::Project {
+                    dir: if root.is_dir() {
+                        root.clone()
+                    } else {
+                        root.parent().unwrap_or(Path::new("/")).to_path_buf()
+                    },
+                    files,
+                    evaluated: self.workspaces.get(&root).map_or(Vec::new(), |w| {
+                        w.stacks
+                            .iter()
+                            .filter_map(|ev| ev.outcome.evaluated.as_ref())
+                            .collect()
+                    }),
+                };
+                match req.method.as_str() {
+                    "textDocument/references" => {
+                        let r: lsp_types::ReferenceParams = serde_json::from_value(req.params)?;
+                        let decl = r.context.include_declaration;
+                        Ok(serde_json::to_value(crate::refs::references(
+                            &project, &path, at, decl,
+                        ))?)
+                    }
+                    "textDocument/prepareRename" => {
+                        let (range, placeholder) = crate::rename::prepare(&project, &path, at)?;
+                        Ok(json!({ "range": range, "placeholder": placeholder }))
+                    }
+                    _ => {
+                        let r: lsp_types::RenameParams = serde_json::from_value(req.params)?;
+                        let edit = crate::rename::rename(&project, &path, at, &r.new_name)?;
+                        Ok(edit)
+                    }
                 }
             }
             "dform/stats" => {
