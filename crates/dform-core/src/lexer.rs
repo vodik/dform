@@ -109,49 +109,51 @@ fn kind(t: Tok) -> SyntaxKind {
     }
 }
 
+/// The keywords, each its token kind.
+pub const KEYWORDS: &[(&str, SyntaxKind)] = &[
+    ("edition", EDITION_KW),
+    ("provider", PROVIDER_KW),
+    ("stack", STACK_KW),
+    ("import", IMPORT_KW),
+    ("input", INPUT_KW),
+    ("output", OUTPUT_KW),
+    ("export", EXPORT_KW),
+    ("contributes", CONTRIBUTES_KW),
+    ("module", MODULE_KW),
+    ("instance", INSTANCE_KW),
+    ("policy", POLICY_KW),
+    ("apply", APPLY_KW),
+    ("resource", RESOURCE_KW),
+    ("settings", SETTINGS_KW),
+    ("scenario", SCENARIO_KW),
+    ("extern", EXTERN_KW),
+    ("type", TYPE_KW),
+    ("decl", DECL_KW),
+    ("when", WHEN_KW),
+    ("not", NOT_KW),
+    ("in", IN_KW),
+    ("exists", EXISTS_KW),
+    ("true", TRUE_KW),
+    ("false", FALSE_KW),
+    ("null", NULL_KW),
+    ("persist", PERSIST_KW),
+    ("where", WHERE_KW),
+    ("if", IF_KW),
+    ("for", FOR_KW),
+    ("let", LET_KW),
+    ("has", HAS_KW),
+    ("some", SOME_KW),
+    ("with", WITH_KW),
+    ("deny", DENY_KW),
+    ("warn", WARN_KW),
+    ("constraint", CONSTRAINT_KW),
+];
+
 /// Keywords are token kinds. An identifier whose text is one of these lexes
 /// as the keyword; the parser takes one as a plain name wherever a name is
 /// expected and the keyword's own construct is not.
 pub fn keyword(text: &str) -> Option<SyntaxKind> {
-    Some(match text {
-        "edition" => EDITION_KW,
-        "provider" => PROVIDER_KW,
-        "stack" => STACK_KW,
-        "import" => IMPORT_KW,
-        "input" => INPUT_KW,
-        "output" => OUTPUT_KW,
-        "export" => EXPORT_KW,
-        "contributes" => CONTRIBUTES_KW,
-        "module" => MODULE_KW,
-        "instance" => INSTANCE_KW,
-        "policy" => POLICY_KW,
-        "apply" => APPLY_KW,
-        "resource" => RESOURCE_KW,
-        "settings" => SETTINGS_KW,
-        "scenario" => SCENARIO_KW,
-        "extern" => EXTERN_KW,
-        "type" => TYPE_KW,
-        "decl" => DECL_KW,
-        "when" => WHEN_KW,
-        "not" => NOT_KW,
-        "in" => IN_KW,
-        "exists" => EXISTS_KW,
-        "true" => TRUE_KW,
-        "false" => FALSE_KW,
-        "null" => NULL_KW,
-        "persist" => PERSIST_KW,
-        "where" => WHERE_KW,
-        "if" => IF_KW,
-        "for" => FOR_KW,
-        "let" => LET_KW,
-        "has" => HAS_KW,
-        "some" => SOME_KW,
-        "with" => WITH_KW,
-        "deny" => DENY_KW,
-        "warn" => WARN_KW,
-        "constraint" => CONSTRAINT_KW,
-        _ => return None,
-    })
+    KEYWORDS.iter().find(|(w, _)| *w == text).map(|(_, k)| *k)
 }
 
 /// One token: its kind and its byte range in the source.

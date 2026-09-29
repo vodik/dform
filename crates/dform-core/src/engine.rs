@@ -2921,6 +2921,600 @@ pub const FUNCTIONS: &[&str] = &[
     "join",
 ];
 
+/// What a [`Reference`] entry documents.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefKind {
+    /// A builtin function ([`FUNCTIONS`]).
+    Function,
+    /// An aggregate, written in a rule head (`partition::AGGREGATES`).
+    Aggregate,
+    /// A builtin extern (`env_var`).
+    Extern,
+    /// A keyword (`lexer::KEYWORDS`).
+    Keyword,
+}
+
+/// One entry of the language's reference: a builtin, an aggregate, a
+/// builtin extern or a keyword. The language server's hover, completion
+/// detail and signature help read it; a builtin without an entry fails
+/// `tests::every_builtin_and_keyword_has_a_reference`.
+#[derive(Debug, Clone, Copy)]
+pub struct Reference {
+    pub name: &'static str,
+    pub kind: RefKind,
+    /// A call's `name(param: type, ...) -> type` (signature help splits
+    /// its parameters at the top-level commas), or a keyword's syntax.
+    pub signature: &'static str,
+    pub summary: &'static str,
+    pub example: &'static str,
+}
+
+const fn r(
+    name: &'static str,
+    kind: RefKind,
+    signature: &'static str,
+    summary: &'static str,
+    example: &'static str,
+) -> Reference {
+    Reference {
+        name,
+        kind,
+        signature,
+        summary,
+        example,
+    }
+}
+
+use RefKind::{Aggregate, Extern as Ext, Function as Fun, Keyword as Kw};
+
+/// The reference, builtins first, then the keywords.
+pub const REFERENCE: &[Reference] = &[
+    r(
+        "add",
+        Fun,
+        "add(a: int, b: int) -> int",
+        "The sum of two integers; `a + b` lowers to it.",
+        "n = add(replicas, 1)",
+    ),
+    r(
+        "sub",
+        Fun,
+        "sub(a: int, b: int) -> int",
+        "The difference of two integers; `a - b` lowers to it.",
+        "spare = sub(max, used)",
+    ),
+    r(
+        "mul",
+        Fun,
+        "mul(a: int, b: int) -> int",
+        "The product of two integers; `a * b` lowers to it.",
+        "bytes = mul(gib, 1073741824)",
+    ),
+    r(
+        "div",
+        Fun,
+        "div(a: int, b: int) -> int",
+        "Integer division, no value when `b` is 0; `a / b` lowers to it.",
+        "half = div(n, 2)",
+    ),
+    r(
+        "mod",
+        Fun,
+        "mod(a: int, b: int) -> int",
+        "The remainder of integer division, no value when `b` is 0; `a % b` lowers to it.",
+        "odd(n) if mod(n, 2) == 1",
+    ),
+    r(
+        "ip",
+        Fun,
+        "ip(text: string) -> ip",
+        "An IPv4 address from its dotted text.",
+        "gw = ip(\"10.0.0.1\")",
+    ),
+    r(
+        "ip_str",
+        Fun,
+        "ip_str(addr: ip) -> string",
+        "An IPv4 address's dotted text (a string is itself).",
+        "text = ip_str(inet_host(net, 1))",
+    ),
+    r(
+        "inet",
+        Fun,
+        "inet(cidr: string) -> inet",
+        "A network from its CIDR text.",
+        "vpc_net = inet(\"10.50.0.0/16\")",
+    ),
+    r(
+        "inet_str",
+        Fun,
+        "inet_str(net: inet) -> string",
+        "A network's CIDR text (a string is itself).",
+        "cidr = inet_str(inet_subnet(net, 8, 1))",
+    ),
+    r(
+        "iprange",
+        Fun,
+        "iprange(a: ip, b: ip) -> iprange",
+        "The range of addresses between two, in either order.",
+        "pool = iprange(ip(\"10.0.0.10\"), ip(\"10.0.0.99\"))",
+    ),
+    r(
+        "ip_unspecified",
+        Fun,
+        "ip_unspecified(addr: ip) -> bool",
+        "Whether the address is 0.0.0.0; also a predicate.",
+        "deny \"no bind address\" if ip_unspecified(a)",
+    ),
+    r(
+        "inet_contains",
+        Fun,
+        "inet_contains(net: inet, addr: ip) -> bool",
+        "Whether the network holds the address; also a predicate.",
+        "inside(a) if inet_contains(inet(\"10.0.0.0/8\"), a)",
+    ),
+    r(
+        "inet_overlaps",
+        Fun,
+        "inet_overlaps(a: inet, b: inet) -> bool",
+        "Whether two networks share an address; also a predicate.",
+        "deny \"overlap\" if inet_overlaps(a.cidr, b.cidr), a != b",
+    ),
+    r(
+        "inet_addr",
+        Fun,
+        "inet_addr(net: inet, n: int) -> ip",
+        "The network's address `n` places after its base address.",
+        "first = inet_addr(net, 0)",
+    ),
+    r(
+        "inet_host",
+        Fun,
+        "inet_host(net: inet, n: int) -> ip",
+        "The network's `n`th usable host (network and broadcast excluded), no value past the last.",
+        "private_ip = inet_host(inet(cfg.vpc_net), 20)",
+    ),
+    r(
+        "inet_subnet",
+        Fun,
+        "inet_subnet(net: inet, newbits: int, netnum: int) -> inet",
+        "The `netnum`th subnet of `net` with `newbits` more prefix bits.",
+        "cidr = inet_subnet(vpc.cidr, 4, zone_index[z])",
+    ),
+    r(
+        "scoped",
+        Fun,
+        "scoped(scope: string, name: string) -> string",
+        "A name inside a module instance, `scope::name`, as module lowering writes it.",
+        "n = scoped(\"network.main\", \"vpc\")",
+    ),
+    r(
+        "format",
+        Fun,
+        "format(template: string, value: any, ...) -> string",
+        "The template with each `%s` replaced by the next value's text; `\"a{e}\"` lowers to it.",
+        "name = format(\"%s-%s\", env, zone)",
+    ),
+    r(
+        "concat",
+        Fun,
+        "concat(value: any, ...) -> string",
+        "The values' texts, joined.",
+        "id = concat(prefix, \"-\", n)",
+    ),
+    r(
+        "ref",
+        Fun,
+        "ref(type: string, name: string, path: string) -> ref",
+        "A reference to an attribute of the program's own resource: an apply-order edge; `vpc.id` in a field lowers to it.",
+        "vpc_id = ref(\"net.vpc\", \"vpc\", \"id\")",
+    ),
+    r(
+        "declassify",
+        Fun,
+        "declassify(value: any, reason: string) -> any",
+        "The value, its secret label removed; `declassified/2` records why (E DR-19).",
+        "fingerprint = declassify(key.sha, \"a digest is public\")",
+    ),
+    r(
+        "cloud_ref",
+        Fun,
+        "cloud_ref(type: string, name: string, path: string) -> ref",
+        "A reference to an attribute of an object in the world, one the program does not manage.",
+        "adopted_id = cloud_ref(net.vpc, \"existing-vpc\", .id)",
+    ),
+    r(
+        "gref",
+        Fun,
+        "gref(type: string, name: string, path: string) -> ref",
+        "A reference by a resource's global name: `ref` without the module scope.",
+        "peer = gref(\"net.vpc\", \"network.peer::vpc\", \"id\")",
+    ),
+    r(
+        "cidrsubnet",
+        Fun,
+        "cidrsubnet(cidr: string, newbits: int, netnum: int) -> string",
+        "Terraform's cidrsubnet over CIDR text: the `netnum`th subnet with `newbits` more bits.",
+        "cidr_block = cidrsubnet(\"10.0.0.0/16\", 8, 2)",
+    ),
+    r(
+        "to_int",
+        Fun,
+        "to_int(value: string) -> int",
+        "An integer from its text (an integer is itself); strings never coerce silently.",
+        "port = to_int(cfg.port)",
+    ),
+    r(
+        "to_string",
+        Fun,
+        "to_string(value: any) -> string",
+        "A scalar's text; lists, objects, references and nulls have none.",
+        "label = to_string(replicas)",
+    ),
+    r(
+        "prefix_len",
+        Fun,
+        "prefix_len(net: inet) -> int",
+        "The network's prefix length.",
+        "deny \"too small\" if prefix_len(vpc.cidr) > 24",
+    ),
+    r(
+        "len",
+        Fun,
+        "len(value: list) -> int",
+        "The number of elements of a list, keys of an object or characters of a string.",
+        "zones = len(subnet_ids)",
+    ),
+    r(
+        "lower",
+        Fun,
+        "lower(text: string) -> string",
+        "The text in lower case.",
+        "name = lower(team)",
+    ),
+    r(
+        "upper",
+        Fun,
+        "upper(text: string) -> string",
+        "The text in upper case.",
+        "code = upper(region)",
+    ),
+    r(
+        "split",
+        Fun,
+        "split(text: string, sep: string) -> list(string)",
+        "The text's parts between each `sep` (not empty).",
+        "parts = split(\"a,b\", \",\")",
+    ),
+    r(
+        "join",
+        Fun,
+        "join(parts: list, sep: string) -> string",
+        "The scalars' texts joined by `sep`.",
+        "hosts = join(names, \",\")",
+    ),
+    r(
+        "collect",
+        Aggregate,
+        "collect(x: any) -> set",
+        "The set of every `x` the body binds per group; the same as `collect_set`.",
+        "members(g, collect(u)) if member_of(u, g)",
+    ),
+    r(
+        "collect_set",
+        Aggregate,
+        "collect_set(x: any) -> set",
+        "The set of every `x` the body binds per group of the head's other arguments.",
+        "ids(collect_set(s.id)) if s in net.subnet",
+    ),
+    r(
+        "collect_list",
+        Aggregate,
+        "collect_list(x: any) -> list",
+        "The list of every `x` the body binds per group, in order; a comprehension lowers to it.",
+        "names(collect_list(n)) if host(n)",
+    ),
+    r(
+        "count",
+        Aggregate,
+        "count(x: any) -> int",
+        "The number of distinct `x` the body binds per group.",
+        "subnets(count(s)) if s in net.subnet",
+    ),
+    r(
+        "sum",
+        Aggregate,
+        "sum(x: int) -> int",
+        "The sum of `x` per group (accepted in a head; the engine does not evaluate it yet).",
+        "total(sum(n)) if size(_, n)",
+    ),
+    r(
+        "min",
+        Aggregate,
+        "min(x: any) -> any",
+        "The least `x` per group (accepted in a head; the engine does not evaluate it yet).",
+        "first(min(n)) if size(_, n)",
+    ),
+    r(
+        "max",
+        Aggregate,
+        "max(x: any) -> any",
+        "The greatest `x` per group (accepted in a head; the engine does not evaluate it yet).",
+        "last(max(n)) if size(_, n)",
+    ),
+    r(
+        "env_var",
+        Ext,
+        "env_var(name: string) -> secret(string)",
+        "The environment variable of the process that plans: a builtin extern, a secret.",
+        "token = env_var(\"API_TOKEN\")",
+    ),
+    r(
+        "edition",
+        Kw,
+        "edition 2026",
+        "The first line of every .df file: the grammar's edition.",
+        "edition 2026",
+    ),
+    r(
+        "provider",
+        Kw,
+        "provider NAME { KEY = TERM, ... }",
+        "A provider's configuration; `source` is a constant, every other setting a term.",
+        "provider aws { region = \"us-east-1\" }",
+    ),
+    r(
+        "stack",
+        Kw,
+        "stack NAME[KEY, ...] { SETTING = VALUE, ... }",
+        "The program's stack, keyed by inputs: each key value is a deployment with its own state.",
+        "stack app[env] { unknowns = \"strict\" }",
+    ),
+    r(
+        "import",
+        Kw,
+        "import \"PATH\"",
+        "Include a file, once, where the import stands; paths are from the project's root.",
+        "import \"modules/network.df\"",
+    ),
+    r(
+        "input",
+        Kw,
+        "input NAME: TYPE (= DEFAULT)? (where BODY)?",
+        "A typed input of the stack or module; `input relation` reads a table or a fact file.",
+        "input env: environment = \"staging\"",
+    ),
+    r(
+        "output",
+        Kw,
+        "output NAME: TYPE | output NAME = TERM",
+        "A module's or stack's output: declared with its type, defined by a term.",
+        "output vpc = vpc",
+    ),
+    r(
+        "export",
+        Kw,
+        "export NAME/ARITY | export type NAME",
+        "Make a module's relation, or its type alias, visible to its importers.",
+        "export type subnets",
+    ),
+    r(
+        "contributes",
+        Kw,
+        "contributes TYPE.PATH | _.PATH | settings.PATH | PRED",
+        "A policy pack's grant: what it may write.",
+        "contributes _.tags",
+    ),
+    r(
+        "module",
+        Kw,
+        "module NAME { STATEMENTS }",
+        "A reusable block of statements, instantiated by `instance`; its predicates are private per instance.",
+        "module network { input vpc_net: inet }",
+    ),
+    r(
+        "instance",
+        Kw,
+        "instance MODULE NAME { INPUT = TERM, ... }",
+        "One instance of a module; each field is a contribution to one of its inputs.",
+        "instance network main { vpc_net = inet(\"10.0.0.0/16\") }",
+    ),
+    r(
+        "policy",
+        Kw,
+        "policy NAME { STATEMENTS }",
+        "A policy pack: checks and contributions, writing only what it `contributes`.",
+        "policy baseline { contributes _.tags }",
+    ),
+    r(
+        "apply",
+        Kw,
+        "apply POLICY",
+        "Apply a policy pack to the program.",
+        "apply baseline",
+    ),
+    r(
+        "resource",
+        Kw,
+        "resource TYPE NAME @RANK? { for BODY, if BODY, PATH = TERM, ... }",
+        "A resource the program wants, its fields contributions; `x in resource` is any resource.",
+        "resource net.vpc vpc { cidr = vpc_net }",
+    ),
+    r(
+        "settings",
+        Kw,
+        "settings NAME @RANK? { PATH = TERM, ... }",
+        "A settings row: configuration by name, read as `settings[e].path`.",
+        "settings prod { db.multi_az = true }",
+    ),
+    r(
+        "scenario",
+        Kw,
+        "scenario NAME { with KEY = VALUE, STATEMENTS }",
+        "Policy over hypothetical inputs: `dform test` runs every scenario.",
+        "scenario prod { with env = \"prod\" }",
+    ),
+    r(
+        "extern",
+        Kw,
+        "extern NAME(+IN: TYPE, -OUT: TYPE, ...) persist?",
+        "A relation asked of the provider on demand, its `+` columns bound; `persist` keeps its answers.",
+        "extern dns.lookup(+name, -addr: string)",
+    ),
+    r(
+        "type",
+        Kw,
+        "type NAME = TYPE | type TYPE { PATH: TYPE FLAG*, ... }",
+        "A type alias, or a resource type's attributes.",
+        "type environment = enum(\"dev\", \"prod\")",
+    ),
+    r(
+        "decl",
+        Kw,
+        "decl NAME/ARITY mixed? | decl NAME(FIELD: TYPE, ...)",
+        "Declare a predicate: an extern, one with both facts and rules (`mixed`), or a record.",
+        "decl zone_index/2 mixed",
+    ),
+    r(
+        "when",
+        Kw,
+        "when BODY { STATEMENTS }",
+        "Guard every statement inside by the body.",
+        "when env == \"prod\" { audit(\"on\") }",
+    ),
+    r(
+        "not",
+        Kw,
+        "not LITERAL | not { BODY }",
+        "Negation: holds when the literal, or the whole body, has no match.",
+        "unused(s) if s in net.subnet, not attached(s)",
+    ),
+    r(
+        "in",
+        Kw,
+        "TERM in TYPE | TERM in resource | TERM in LIST",
+        "Membership: a resource of a type, any resource, or an element of a list.",
+        "vpc_peer(a, b) if a in net.vpc, b in net.vpc",
+    ),
+    r(
+        "exists",
+        Kw,
+        "exists REFERENCE",
+        "The resource is wanted in this evaluation.",
+        "if exists database.main/db",
+    ),
+    r("true", Kw, "true", "The boolean true.", "multi_az = true"),
+    r(
+        "false",
+        Kw,
+        "false",
+        "The boolean false.",
+        "private_api = false",
+    ),
+    r(
+        "null",
+        Kw,
+        "null",
+        "The null literal (not yet supported).",
+        "x = null",
+    ),
+    r(
+        "persist",
+        Kw,
+        "extern NAME(...) persist",
+        "An extern whose answers are kept in state and asked again only when its inputs change.",
+        "extern registry.digest(+image, -digest) persist",
+    ),
+    r(
+        "where",
+        Kw,
+        "... where BODY",
+        "A refinement: a check an input's or attribute's value must pass, naming it by its own name.",
+        "input replicas: int = 2 where replicas >= 1",
+    ),
+    r(
+        "if",
+        Kw,
+        "HEAD if BODY | { if BODY }",
+        "The condition of a rule, check or contribution; in a block, a guard on the whole block.",
+        "vpc_peer(a, b) if vpc_peer_pair(_, _, a, b)",
+    ),
+    r(
+        "for",
+        Kw,
+        "for BODY { STATEMENTS } | { for BODY }",
+        "Bind variables over a body: one statement, or one block, per match.",
+        "resource net.subnet \"private-{z}\" { for data(\"zone\", z) }",
+    ),
+    r(
+        "let",
+        Kw,
+        "let NAME = REFERENCE",
+        "Name a reference: each use of the name is the reference.",
+        "let cfg = settings[env]",
+    ),
+    r(
+        "has",
+        Kw,
+        "has REFERENCE.PATH",
+        "The attribute has a value.",
+        "tagged(r) if has r.tags.owner",
+    ),
+    r(
+        "some",
+        Kw,
+        "some INDEX, TERM in LIST",
+        "Membership with the element's index.",
+        "first(x) if some i, x in xs, i == 0",
+    ),
+    r(
+        "with",
+        Kw,
+        "with KEY = VALUE",
+        "In a scenario: the input's value.",
+        "with env = \"prod\"",
+    ),
+    r(
+        "deny",
+        Kw,
+        "deny \"MESSAGE\" {FIELDS}? if BODY",
+        "A check: plan fails with the message when the body holds.",
+        "deny \"prod needs multi_az\" if env == \"prod\", not db.multi_az",
+    ),
+    r(
+        "warn",
+        Kw,
+        "warn \"MESSAGE\" {FIELDS}? if BODY",
+        "A check: plan warns with the message when the body holds.",
+        "warn \"no owner tag\" if r in net.vpc, not has r.tags.owner",
+    ),
+    r(
+        "constraint",
+        Kw,
+        "constraint \"MESSAGE\" if BODY",
+        "An integrity constraint: the evaluation is refused when the body holds.",
+        "constraint \"one vpc\" if a in net.vpc, b in net.vpc, a != b",
+    ),
+];
+
+/// The reference entry of `name`: a call's (function, aggregate or
+/// extern) when `call`, else a keyword's before a builtin's.
+pub fn reference(name: &str, call: bool) -> Option<&'static Reference> {
+    let is = |e: &&Reference| e.name == name;
+    if call {
+        REFERENCE
+            .iter()
+            .filter(is)
+            .find(|e| e.kind != RefKind::Keyword)
+    } else {
+        REFERENCE
+            .iter()
+            .filter(is)
+            .find(|e| e.kind == RefKind::Keyword)
+            .or_else(|| REFERENCE.iter().find(is))
+    }
+}
+
 fn eval_func(name: &str, args: &[Term], state: &HashMap<String, Value>) -> Option<Value> {
     // Rule 2: every builtin argument is a content position. A builtin
     // over a null has no value; the literal that needs it is stuck.
@@ -3428,6 +4022,27 @@ mod tests {
             .filter(|a| a.pred == pred)
             .map(partition::fmt_atom)
             .collect()
+    }
+
+    /// Hover, completion and signature help read `REFERENCE`: every
+    /// builtin, aggregate and keyword has its entry.
+    #[test]
+    fn every_builtin_and_keyword_has_a_reference() {
+        let calls = FUNCTIONS
+            .iter()
+            .chain(partition::AGGREGATES)
+            .chain([&crate::syntax::resolve::ENV_VAR]);
+        for name in calls {
+            let e = reference(name, true).unwrap_or_else(|| panic!("no reference for {name}"));
+            assert!(e.signature.starts_with(&format!("{name}(")), "{e:?}");
+        }
+        for (name, _) in crate::lexer::KEYWORDS {
+            let e = reference(name, false).unwrap_or_else(|| panic!("no reference for {name}"));
+            assert_eq!(e.kind, RefKind::Keyword, "{e:?}");
+        }
+        for e in REFERENCE {
+            assert!(!e.summary.is_empty() && !e.example.is_empty(), "{e:?}");
+        }
     }
 
     /// DESIGN.org "Aggregates are not stratified": a consumer of an
