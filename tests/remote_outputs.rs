@@ -171,3 +171,67 @@ fn a_remote_needs_a_backend_term() {
         r.stderr
     );
 }
+
+/// An output of a configured attribute (`net.vpc.main.cidr`, a ref the
+/// program keeps) is published resolved, as the program set it; one nobody
+/// knows yet is published pending, and its reader waits on the null until
+/// the output is known.
+#[test]
+fn an_output_of_a_configured_attribute_is_published_resolved_or_pending() {
+    let s = Scratch::project("outputs-resolved");
+    let net = "edition 2026\nstack net {}\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\n\
+               output c = net.vpc.main.cidr\noutput n = net.vpc.main.name\n";
+    s.write("stacks/net.df", net);
+    s.write(
+        "stacks/app.df",
+        "edition 2026\nstack app {}\nresource net.vpc edge {\n  \
+         for stack_output(\"net\", \"c\", c)\n  cidr = c\n}\nresource net.vpc other {\n  \
+         for stack_output(\"net\", \"n\", n)\n  name = n\n}\n",
+    );
+    s.run(&["apply", "net"]).success();
+    let published: serde_json::Value =
+        serde_json::from_str(&s.read("dform.state/net/outputs.json")).unwrap();
+    assert_eq!(
+        published["outputs"]["c"],
+        serde_json::json!({"t": "Str", "v": "10.0.0.0/16"}),
+        "{published}"
+    );
+    assert_eq!(
+        published["pending"],
+        serde_json::json!(["n"]),
+        "{published}"
+    );
+
+    let r = s.run(&["plan", "app"]).success();
+    assert!(
+        r.stdout.contains(
+            "definite:\n+ net.vpc.edge\n  cidr = \"10.0.0.0/16\"\npending on \
+             ?stack_output/net#n:\n+ net.vpc.other\n  name = ?stack_output/net#n\n"
+        ),
+        "{}",
+        r.stdout
+    );
+    let r = s.run(&["apply", "app"]).failure();
+    assert!(
+        r.stderr
+            .contains("nothing definite to apply, still waiting on ?stack_output/net#n"),
+        "{}",
+        r.stderr
+    );
+
+    // The producer sets it: published, and the reader applies.
+    s.write(
+        "stacks/net.df",
+        &net.replace(
+            "cidr = \"10.0.0.0/16\"",
+            "cidr = \"10.0.0.0/16\"\n  name = \"main\"",
+        ),
+    );
+    s.run(&["apply", "net"]).success();
+    let r = s.run(&["apply", "app"]).success();
+    assert!(
+        r.stdout.contains("+ net.vpc.other\n  name = \"main\"\n"),
+        "{}",
+        r.stdout
+    );
+}

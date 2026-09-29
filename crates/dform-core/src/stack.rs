@@ -1002,14 +1002,19 @@ fn backend_term(text: &str) -> Option<String> {
 /// and where a provider holds it, never its value: the reader's static
 /// pass treats it as secret (E0304 where it reaches a public place), its
 /// value is a secret null no plan resolves, and the reader's provider
-/// reads it where it is held inside Apply (E DR-19).
+/// reads it where it is held inside Apply (E DR-19). An output whose value
+/// is not known yet is pending: the reader has an open null.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Published {
     /// The deployment, as its own project names it.
     pub deployment: String,
     #[serde(default)]
     pub outputs: BTreeMap<String, Value>,
-    /// The outputs declared `secret(T)`.
+    /// The public outputs not known yet.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub pending: BTreeSet<String>,
+    /// The outputs declared `secret(T)`; one not known yet has neither a
+    /// digest nor a place it is held.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub secret: BTreeMap<String, SecretOutput>,
 }
@@ -1031,11 +1036,19 @@ pub struct SecretOutput {
     pub held: Option<crate::provider::Held>,
 }
 
+impl SecretOutput {
+    /// Not known yet: neither its value nor where it is held.
+    pub fn pending(&self) -> bool {
+        self.digest.is_empty() && self.held.is_none()
+    }
+}
+
 impl Published {
     pub fn new(deployment: &str, outputs: &Outputs) -> Published {
         Published {
             deployment: deployment.to_string(),
             outputs: outputs.known.clone(),
+            pending: outputs.pending.clone(),
             secret: outputs.secret.clone(),
         }
     }
@@ -1047,8 +1060,8 @@ impl Published {
     }
 
     /// `stack_output(Name, Key, Value)`, `Name` as the reader names the
-    /// deployment; a secret one's value a secret null labeled
-    /// `stack_output/Name#Key`.
+    /// deployment; a secret one's value a secret null, a pending one's an
+    /// open null, each labeled `stack_output/Name#Key`.
     fn facts(&self, name: &str) -> Vec<Atom> {
         let fact = |k: &str, v: Value| Atom {
             pred: "stack_output".into(),
@@ -1070,8 +1083,15 @@ impl Published {
             .iter()
             .map(|(k, v)| fact(k, v.clone()))
             .collect();
+        for k in &self.pending {
+            out.push(fact(k, null(k, crate::value::NullClass::Open, "")));
+        }
         for (k, o) in &self.secret {
-            out.push(fact(k, null(k, crate::value::NullClass::Secret, &o.ty)));
+            let class = match o.pending() {
+                true => crate::value::NullClass::Open,
+                false => crate::value::NullClass::Secret,
+            };
+            out.push(fact(k, null(k, class, &o.ty)));
         }
         out
     }
@@ -1087,21 +1107,26 @@ fn output_label(name: &str, k: &str) -> String {
 /// state records them and `outputs.json` publishes them.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Outputs {
-    /// The public outputs whose value is known (a null is not recorded).
+    /// The public outputs whose value is known; a ref to a configured
+    /// attribute resolved to the program's value, else the world's.
     pub known: BTreeMap<String, Value>,
+    /// The public outputs whose value is not known yet.
+    pub pending: BTreeSet<String>,
     pub secret: BTreeMap<String, SecretOutput>,
 }
 
 impl Outputs {
     pub fn is_empty(&self) -> bool {
-        self.known.is_empty() && self.secret.is_empty()
+        self.known.is_empty() && self.pending.is_empty() && self.secret.is_empty()
     }
 }
 
 /// The stack's outputs in an evaluation (`facts`: `attr(output, "", k,
 /// V)`), after an apply whose state is `state` and whose world's
-/// configured attributes are `world` (by address). A secret output
-/// (`secret`: key -> T's name) records no
+/// configured attributes are `world` (by address). A ref to a configured
+/// attribute (E DR-2 as amended keeps it a ref) is resolved to the
+/// program's value of it, else the world's; one neither knows, and a null,
+/// is pending. A secret output (`secret`: key -> T's name) records no
 /// value: its label, its value's keyed digest (`digest`, the deployment's
 /// plan key) when the run knows the value, and where a provider holds it
 /// when it is a resource's attribute (a ref, or a sensitive computed
@@ -1136,15 +1161,18 @@ pub fn outputs(
         if *t != crate::transform::OUTPUT || !scope.is_empty() {
             continue;
         }
+        let known = resolver.resolve(v, 0);
         let Some(ty) = secret.get(*k) else {
-            if crate::lattice::nulls_in(v).is_empty() {
-                out.known.insert(k.to_string(), (*v).clone());
+            match known {
+                Some(v) => {
+                    out.known.insert(k.to_string(), v);
+                }
+                None => {
+                    out.pending.insert(k.to_string());
+                }
             }
             continue;
         };
-        // The value, a ref to a configured attribute resolved to the
-        // program's value of it, else the world's.
-        let known = resolver.resolve(v, 0);
         let at = match v {
             Value::Ref { typ, name, attr } => Some((typ.clone(), name.clone(), attr.clone())),
             Value::Null {

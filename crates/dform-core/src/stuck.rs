@@ -517,6 +517,7 @@ pub fn sections(
                         &o != addr && (boundary.contains(&o) || pending.contains_key(&o))
                     })
                 })
+                .chain(other_stacks(doc))
                 .collect();
             if !waits.is_empty() {
                 pending.insert(addr.clone(), waits);
@@ -568,6 +569,23 @@ pub fn sections(
         pending,
         pending_groups,
         undetermined,
+    }
+}
+
+/// The nulls in `v` of another stack's outputs that it has not published
+/// yet (`stack_output/NAME#K`, not a secret, which its reader's provider
+/// reads where it is held): nothing in this run resolves one.
+fn other_stacks(v: &Value) -> BTreeSet<String> {
+    match v {
+        Value::Null { label, class, .. }
+            if *class != crate::value::NullClass::Secret
+                && null_owner(label).is_some_and(|(t, _)| t == "stack_output") =>
+        {
+            BTreeSet::from([label.clone()])
+        }
+        Value::List(xs) => xs.iter().flat_map(other_stacks).collect(),
+        Value::Obj(m) => m.values().flat_map(other_stacks).collect(),
+        _ => BTreeSet::new(),
     }
 }
 

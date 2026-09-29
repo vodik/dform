@@ -979,6 +979,24 @@ impl Deployment {
         Ok(())
     }
 
+    /// Write the controller's memo ([`MEMO`]) beside the state. In a store
+    /// that fences, only under this run's lease, checked first, so a stale
+    /// controller cannot overwrite a newer one's: a run that holds no lease
+    /// (its apply ended, or never took it) writes nothing (`Ok(false)`),
+    /// and one whose lease was taken over is refused.
+    pub fn put_memo(&self, bytes: &[u8]) -> Result<bool> {
+        let inner = &self.inner;
+        if inner.store.fenced() {
+            if inner.lease.lock().expect("lease").is_none() {
+                return Ok(false);
+            }
+            self.check_lease()
+                .context("the controller's memo was not written")?;
+        }
+        inner.store.put(MEMO, bytes, &Cond::Any)?;
+        Ok(true)
+    }
+
     /// The fencing counter of this run's lease, once the lease object says
     /// it is still this run's (renewed first when it lapsed without being
     /// taken over).

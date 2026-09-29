@@ -870,6 +870,23 @@ fn a_server_that_ignores_conditions_is_refused() {
         r.stderr
     );
     assert_eq!(p.store().list("").unwrap(), Vec::<String>::new());
+    // A plan without --out that needs an approval writes the plan key
+    // (its digest is keyed): it is checked first too.
+    let p = Project::of(&t, "lax-approval", |s| {
+        s.write(
+            "stacks/app.df",
+            "edition 2026\nstack app {}\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\n\
+             requires_approval(d, \"every change\") if {\n  deformation(_, t, a, _)\n  \
+             d = \"{t}.{a}\"\n}\n",
+        );
+    });
+    let r = p.run(&["plan", "app"]).failure();
+    assert!(
+        r.stderr.contains("the server ignores If-None-Match: *"),
+        "{}",
+        r.stderr
+    );
+    assert_eq!(p.bucket("").list("").unwrap(), Vec::<String>::new());
     let good = &targets("a_server_that_ignores_conditions_is_refused")[0];
     let p = Project::new(good, "conditions-cached");
     p.run(APPLY).success();

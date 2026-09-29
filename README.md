@@ -190,8 +190,10 @@ A holder that stalled past its lease and wakes after a takeover is
 refused ("state write refused by fencing") and writes nothing; the new
 holder resumes the interrupted apply as after any crash. The lease is also
 checked before each Apply call is submitted, so a stale holder that can see
-its lease is gone makes no provider call ("no provider call was made").
-What a stale holder can still do: the calls it submitted before the lease
+its lease is gone makes no provider call ("no provider call was made"),
+and before the published outputs and the controller's memo are written
+("the controller's memo was not written"); a controller whose apply
+failed, its lease released, keeps that memo in memory only. What a stale holder can still do: the calls it submitted before the lease
 was lost carry on at the provider (at most `--parallel` of them; none is
 recalled), and a call whose check passed is sent however long the holder
 stalls between the check and the send. Neither answer can be written down;
@@ -202,7 +204,8 @@ must agree on the time to well within a lease: expiry is wall-clock.
 `[defaults] lease_duration` and `lease_renewal` (`500ms`, `30s`, `2m`; 60s
 and 20s by default) set the lease; the renewal must be shorter.
 
-Before it writes to a bucket, dform checks once that the server keeps the
+Before it writes to a bucket (a `plan` too, when it makes the plan key
+for a plan that needs an approval), dform checks once that the server keeps the
 conditions (a probe object under the prefix: written with `If-None-Match:
 *`, written over with each condition, deleted) and refuses a server that
 ignores `If-Match` or `If-None-Match`, naming which; a pass is remembered
@@ -272,7 +275,12 @@ state, publishes them beside it as their own object, `outputs.json`, and
 records where the deployment's objects are (an absolute directory, or
 `s3://...`) in `dform.state/stacks.json`; every other program reads them
 as facts, `stack_output("net.shared", vpc_id, V)`, from `outputs.json`
-only, never the state. An output declared `secret(T)` is recorded and
+only, never the state. An output of a configured attribute (`output c =
+net.vpc.main.cidr`, which the program keeps as a ref) is published as the
+program's value of it, else the world's; one whose value is not known yet
+is published as pending, and its reader has a null (`?stack_output/net#c`)
+that its resources wait on until a later apply publishes the value. An
+output declared `secret(T)` is recorded and
 published as its label (`output/#k`) and the keyed digest of its value
 (`hmac-sha256:..`, the deployment's plan key), never its value (E DR-19):
 a reader gets a secret null, and using it in a public place is the static

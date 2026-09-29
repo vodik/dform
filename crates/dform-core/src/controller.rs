@@ -105,6 +105,9 @@ pub struct Hook {
     /// The stack's store: the memo, the drop directory, the published
     /// digest.
     store: Option<Arc<dyn Store>>,
+    /// The deployment of that store: the memo is written through it,
+    /// fenced by its lease.
+    deployment: Option<crate::store::Deployment>,
     memo: Option<Memo>,
     /// The stamps of the sources as this run read them.
     input_stamps: BTreeMap<String, String>,
@@ -215,8 +218,14 @@ impl Hook {
     /// The run knows where the stack lives, its store: load the memo, say
     /// what changed, and log the event (the world's path relative to
     /// `root`, the directory holding the state root, when it is under it).
-    pub fn open(&mut self, store: Arc<dyn Store>, world: &Path, root: &Path) -> Result<()> {
+    pub fn open(
+        &mut self,
+        deployment: &crate::store::Deployment,
+        world: &Path,
+        root: &Path,
+    ) -> Result<()> {
         self.published = false;
+        let store = deployment.store().clone();
         let memo: Option<Memo> = match store.get(MEMO)? {
             Some(o) => Some(
                 serde_json::from_slice(&o.bytes)
@@ -294,6 +303,7 @@ impl Hook {
         self.memo = memo;
         self.event = Some(event);
         self.store = Some(store);
+        self.deployment = Some(deployment.clone());
         Ok(())
     }
 
@@ -578,11 +588,14 @@ impl Hook {
         })
     }
 
+    /// Keep the memo, and write it under the run's lease
+    /// (`Deployment::put_memo`); after the apply's lease is gone (a failed
+    /// run, in a store that fences) it is kept in memory only.
     fn save(&mut self, memo: Memo) -> Result<()> {
-        let Some(store) = &self.store else {
+        let Some(dep) = &self.deployment else {
             return Ok(());
         };
-        store.put(MEMO, &serde_json::to_vec_pretty(&memo)?, &Cond::Any)?;
+        dep.put_memo(&serde_json::to_vec_pretty(&memo)?)?;
         self.memo = Some(memo);
         Ok(())
     }
@@ -712,6 +725,54 @@ fn json_value(j: &Json) -> Value {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// The memo is written through the deployment's lease: a controller
+    /// whose lease was taken over cannot overwrite the new holder's memo,
+    /// and one whose apply has ended keeps it in memory only.
+    #[test]
+    fn a_stale_controllers_memo_is_refused_by_fencing() {
+        use crate::store::{Deployment, LOCK, LeaseTimes, MemoryStore};
+        let store = Arc::new(MemoryStore::new());
+        let memo = |world: &str| {
+            serde_json::to_vec(&Memo {
+                world: world.into(),
+                ..Memo::default()
+            })
+            .unwrap()
+        };
+        store.put(MEMO, &memo("first"), &Cond::Any).unwrap();
+        let times = LeaseTimes {
+            duration: std::time::Duration::from_secs(60),
+            renewal: std::time::Duration::from_secs(15),
+        };
+        let a = Deployment::new(store.clone(), "app", times);
+        a.load_state().unwrap();
+        let ga = a.lock().unwrap();
+        let mut hook = Hook::default();
+        hook.open(&a, Path::new("world.json"), Path::new(""))
+            .unwrap();
+        // Another controller takes the lease over and writes its memo.
+        store.break_lease(LOCK, "app").unwrap();
+        let b = Deployment::new(store.clone(), "app", times);
+        b.load_state().unwrap();
+        let gb = b.lock().unwrap();
+        assert!(b.put_memo(&memo("second")).unwrap());
+        let e = hook.failed().unwrap_err();
+        assert!(
+            format!("{e:#}").contains("the controller's memo was not written"),
+            "{e:#}"
+        );
+        assert_eq!(store.get(MEMO).unwrap().unwrap().bytes, memo("second"));
+        drop(ga);
+        // Its lease released, the next controller's memo stays in memory.
+        drop(gb);
+        let mut hook = Hook::default();
+        hook.open(&b, Path::new("world.json"), Path::new(""))
+            .unwrap();
+        hook.failed().unwrap();
+        assert_eq!(store.get(MEMO).unwrap().unwrap().bytes, memo("second"));
+        assert!(hook.memo.is_some());
+    }
 
     #[test]
     fn drift_is_per_leaf_and_names_a_gone_object() {

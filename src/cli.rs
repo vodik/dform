@@ -1327,11 +1327,7 @@ fn run_with(
             );
         }
         h.audit = Some(audit.clone());
-        h.open(
-            dep.store().clone(),
-            &paths.world,
-            root.parent().unwrap_or(Path::new("")),
-        )?;
+        h.open(&dep, &paths.world, root.parent().unwrap_or(Path::new("")))?;
     } else if let (Cmd::Apply { .. }, Some((to, _))) = (&cli.cmd, &handed) {
         bail!(
             "stack {deployment} was handed over to {to}: the controller runs it \
@@ -1956,6 +1952,11 @@ fn run_with(
                 let key = match &key {
                     Some(k) => k,
                     None => {
+                        // The key may be made now: a bucket is checked
+                        // first, as for any run that writes.
+                        if let (None, store::Location::S3(spec)) = (&cli.world, &location) {
+                            open_s3(&root, true)(spec)?;
+                        }
                         loaded = dep.plan_key()?;
                         &loaded
                     }
