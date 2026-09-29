@@ -7,7 +7,7 @@
 # Apply: until then the Deployment's configMapRef carries the null
 # ?k8s.config_map/web_config#metadata.name.
 
-edition 2026
+edition 2027
 stack k8s_demo {}
 provider k8s {}
 
@@ -25,7 +25,7 @@ resource k8s.config_map web_config {
 }
 
 resource k8s.deployment name {
-  for app(name, image, replicas)
+  if app(name, image, replicas)
   metadata.name = name
   metadata.namespace = shop.metadata.name
   spec.replicas = replicas
@@ -40,7 +40,7 @@ resource k8s.deployment name {
 }
 
 resource k8s.service name {
-  for app(name, _, _)
+  if app(name, _, _)
   metadata.name = name
   metadata.namespace = shop.metadata.name
   spec.selector = { app: name }

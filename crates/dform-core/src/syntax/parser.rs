@@ -1,12 +1,12 @@
 //! Recursive descent over the token stream into a lossless rowan tree
 //! (docs/grammar.md). Statements are hand-written productions, terms a Pratt
-//! parser. Names are parsed unresolved: a `CHAIN` is `name (.seg | [t] |
-//! /name)*`, and what it denotes is the resolver's business
-//! (`syntax::lower`).
+//! parser. Names are parsed unresolved: a `CHAIN` is `name (.seg | [t])*`,
+//! and what it denotes is the resolver's business (`syntax::resolve`).
 //!
-//! A newline outside `( )`, `[ ]` and the braces of an object ends a
-//! statement, a block entry or a literal of a `{ }` body; a line that ends
-//! with `,`, an operator or a keyword that needs more continues. An error
+//! A statement's first token decides what it is (H-2): a name followed by
+//! `(` is a fact or a rule, anything else starts with a keyword. A newline
+//! outside `( )`, `[ ]` and an object's braces ends a statement, a block
+//! entry or a literal of a `{ }` body; nothing continues a line. An error
 //! inside a statement abandons it: the rest of it, up to the next line
 //! outside its brackets or the `}` that ends its block, becomes one ERROR
 //! node, so one bad statement is one diagnostic and parsing goes on.
@@ -44,18 +44,18 @@ pub fn parse(src: &str) -> Parse {
     p.into_parse()
 }
 
-/// Parse one term, for an interpolation hole: the tree is a SOURCE_FILE
-/// holding the term (and an ERROR node for anything after it).
+/// Parse one term, for an interpolation hole or an address: the tree is a
+/// SOURCE_FILE holding the term (and an ERROR node for anything after it).
 pub fn parse_term(src: &str) -> Parse {
     let mut p = Parser::new(src);
     p.start_root();
     p.nl.push(false);
     if p.term().is_ok() && p.nth(0) != EOF {
-        let msg = format!("expected the end of the hole, found {}", p.found());
+        let msg = format!("expected the end of the term, found {}", p.found());
         p.error_here(msg, None);
     }
     p.start(ERROR);
-    while p.nth(0) != EOF {
+    while p.raw(0) != EOF {
         p.bump();
     }
     p.finish();
@@ -74,21 +74,7 @@ type P<T = ()> = Result<T, Bail>;
 /// that has no construct of its own in a term.
 fn term_name(k: SyntaxKind) -> bool {
     k == IDENT
-        || (k.is_keyword()
-            && !matches!(
-                k,
-                NOT_KW
-                    | IN_KW
-                    | IF_KW
-                    | FOR_KW
-                    | HAS_KW
-                    | SOME_KW
-                    | EXISTS_KW
-                    | TRUE_KW
-                    | FALSE_KW
-                    | NULL_KW
-                    | WHERE_KW
-            ))
+        || (k.is_keyword() && !matches!(k, NOT_KW | IN_KW | IF_KW | HAS_KW | TRUE_KW | FALSE_KW))
 }
 
 /// Any word: a key, a path segment, a declared name.
@@ -100,46 +86,20 @@ fn is_cmp(k: SyntaxKind) -> bool {
     matches!(k, EQ | EQ2 | NEQ | LT | LE | GT | GE)
 }
 
-/// Keywords that start a statement: error recovery resynchronises on a line
-/// that starts with one in column 0.
-fn stmt_keyword(k: SyntaxKind) -> bool {
-    matches!(
-        k,
-        EDITION_KW
-            | PROVIDER_KW
-            | STACK_KW
-            | IMPORT_KW
-            | INPUT_KW
-            | OUTPUT_KW
-            | EXPORT_KW
-            | CONTRIBUTES_KW
-            | MODULE_KW
-            | INSTANCE_KW
-            | POLICY_KW
-            | APPLY_KW
-            | RESOURCE_KW
-            | SETTINGS_KW
-            | SCENARIO_KW
-            | EXTERN_KW
-            | TYPE_KW
-            | DECL_KW
-            | WHEN_KW
-            | FOR_KW
-            | LET_KW
-            | DENY_KW
-            | WARN_KW
-            | CONSTRAINT_KW
-    )
-}
-
-/// Statements of the old, Prolog-shaped surface.
+/// Statements of an earlier surface, and what each is spelled now.
 fn old_spelling(word: &str) -> Option<&'static str> {
     Some(match word {
+        "when" | "for" => {
+            "statement groups are gone (H-4): put `if B` on each statement, or gate a group of \
+             resources by an `instance` with an `if` clause"
+        }
+        "with" => "`with k = v` is spelled `set k = v`",
+        "constraint" => "`constraint` is spelled `deny` (H-8)",
+        "apply" => "`apply pack` is spelled `use pack`",
         "component_def" => "`component_def` is spelled `module`",
-        "use" => "`use` is spelled `instance`",
         "component" => "a component is a `module` and an `instance` of it",
         "policy_pack" => "`policy_pack` is spelled `policy`",
-        "apply_policy" => "`apply_policy` is spelled `apply`",
+        "apply_policy" => "`apply_policy` is spelled `use`",
         "unique" => "`unique` is gone: one value per key is what the attribute aggregate enforces",
         _ => return None,
     })
@@ -154,8 +114,10 @@ struct Parser<'a> {
     depth: usize,
     errors: Vec<ParseError>,
     /// Whether a newline ends what is being parsed: true at statement level
-    /// and in blocks and `{ }` bodies, false inside brackets.
+    /// and in blocks and `{ }` bodies, false inside brackets and objects.
     nl: Vec<bool>,
+    /// The token whose preceding newline a separator has taken.
+    nl_eaten: Option<usize>,
 }
 
 impl<'a> Parser<'a> {
@@ -168,6 +130,7 @@ impl<'a> Parser<'a> {
             depth: 0,
             errors: Vec::new(),
             nl: vec![true],
+            nl_eaten: None,
         }
     }
 
@@ -190,26 +153,23 @@ impl<'a> Parser<'a> {
             .map(|(i, _)| self.pos + i)
     }
 
-    fn nth(&self, n: usize) -> SyntaxKind {
+    /// The `n`th significant token ahead, newlines aside.
+    fn raw(&self, n: usize) -> SyntaxKind {
         self.nth_index(n).map_or(EOF, |i| self.toks[i].kind)
+    }
+
+    /// The `n`th token ahead; the next one is `NEWLINE` when a newline
+    /// before it ends what is being parsed.
+    fn nth(&self, n: usize) -> SyntaxKind {
+        if n == 0 && self.nl_stop() {
+            return NEWLINE;
+        }
+        self.raw(n)
     }
 
     fn nth_text(&self, n: usize) -> &'a str {
         self.nth_index(n)
             .map_or("", |i| &self.src[self.toks[i].start..self.toks[i].end])
-    }
-
-    /// The `n`th token ahead starts exactly where the one before it ends.
-    fn glued(&self, n: usize) -> bool {
-        match (self.nth_index(n.wrapping_sub(1)), self.nth_index(n)) {
-            (Some(a), Some(b)) if n > 0 => self.toks[a].end == self.toks[b].start,
-            _ => false,
-        }
-    }
-
-    /// No trivia between the last token bumped and the next one.
-    fn glued_next(&self) -> bool {
-        self.pos > 0 && self.nth_index(0) == Some(self.pos)
     }
 
     fn at(&self, k: SyntaxKind) -> bool {
@@ -232,9 +192,22 @@ impl<'a> Parser<'a> {
             .any(|t| self.src[t.start..t.end].contains('\n'))
     }
 
-    /// The next token is on a new line where a newline ends the construct.
+    /// The next token is on a new line where a newline ends the construct,
+    /// and no separator has taken that newline.
     fn nl_stop(&self) -> bool {
-        self.nl.last().copied().unwrap_or(true) && self.on_new_line()
+        self.nl.last().copied().unwrap_or(true)
+            && self.on_new_line()
+            && self.nl_eaten != self.nth_index(0)
+    }
+
+    /// Take the newline before the next token as a separator.
+    fn eat_nl(&mut self) -> bool {
+        if self.nth(0) == NEWLINE {
+            self.nl_eaten = self.nth_index(0);
+            true
+        } else {
+            false
+        }
     }
 
     /// The next token starts its line in column 0.
@@ -318,10 +291,11 @@ impl<'a> Parser<'a> {
     fn found(&self) -> String {
         match self.nth(0) {
             EOF => "the end of the file".to_string(),
+            NEWLINE => "the end of the line".to_string(),
             ERROR_TOKEN => format!("unknown character `{}`", self.nth_text(0)),
             k if k.is_keyword() => format!("keyword `{}`", self.nth_text(0)),
             IDENT => format!("`{}`", self.nth_text(0)),
-            PATH | STRING | INT | RANK => {
+            STRING | INT | RANK => {
                 format!("{} `{}`", self.nth(0).describe(), self.nth_text(0))
             }
             k => k.describe().to_string(),
@@ -330,8 +304,16 @@ impl<'a> Parser<'a> {
 
     fn error_here(&mut self, message: String, hint: Option<String>) {
         let (start, end) = match self.nth_index(0) {
-            Some(i) => (self.toks[i].start, self.toks[i].end),
-            None => (self.src.len(), self.src.len()),
+            Some(i) if self.nth(0) != NEWLINE => (self.toks[i].start, self.toks[i].end),
+            // At the end of a line: the point after the last token.
+            _ => {
+                let at = self.toks[..self.pos.min(self.toks.len())]
+                    .iter()
+                    .rev()
+                    .find(|t| !t.kind.is_trivia())
+                    .map_or(self.src.len(), |t| t.end);
+                (at, at)
+            }
         };
         self.errors.push(ParseError {
             start,
@@ -351,12 +333,28 @@ impl<'a> Parser<'a> {
     /// A hint for an error at the next token, when it looks like a slip.
     fn hint(&self) -> Option<String> {
         match self.nth(0) {
+            NEWLINE => {
+                return Some(
+                    "a newline ends a statement: a body of several lines is `if { .. }`, one \
+                     literal per line; a long term wraps inside brackets"
+                        .to_string(),
+                );
+            }
             NECK => return Some("a rule is `head if body`: `:-` is spelled `if`".to_string()),
-            DOT if !self.glued_next() || matches!(self.nth(1), EOF) || self.on_new_line_at(1) => {
+            DOT if matches!(self.raw(1), EOF) || self.on_new_line_at(1) => {
                 return Some(
                     "a statement ends at the end of its line; there is no `.` terminator"
                         .to_string(),
                 );
+            }
+            DOT => {
+                return Some(
+                    "a path that is data is a string (`\"cidr\"`, H-12); a `.` is member access"
+                        .to_string(),
+                );
+            }
+            SLASH if self.raw(1) == SLASH => {
+                return Some("a comment starts with `#`".to_string());
             }
             _ => {}
         }
@@ -429,13 +427,13 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// `name (.name)*` with no spaces: a type, a stack, an extern.
+    /// `name (.name)*`: a type, a stack, an extern, a relation.
     fn dotted(&mut self, what: &str) -> P {
         if !word(self.nth(0)) {
             return self.err_expected(what);
         }
         self.bump();
-        while self.at(DOT) && self.glued_next() && word(self.nth(1)) && self.glued(1) {
+        while self.at(DOT) && word(self.raw(1)) {
             self.bump();
             self.bump();
         }
@@ -459,11 +457,13 @@ impl<'a> Parser<'a> {
         self.start(ERROR);
         let mut skipped = false;
         loop {
-            match self.nth(0) {
+            match self.raw(0) {
                 EOF => break,
                 R_BRACE if nest == 0 && in_block => break,
                 _ if skipped && nest == 0 && self.on_new_line() => break,
-                k if skipped && self.on_new_line() && self.at_col0() && stmt_keyword(k) => break,
+                k if skipped && self.on_new_line() && self.at_col0() && k.is_stmt_keyword() => {
+                    break;
+                }
                 L_PAREN | L_BRACE | L_BRACKET => nest += 1,
                 R_PAREN | R_BRACE | R_BRACKET => nest = (nest - 1).max(0),
                 _ => {}
@@ -480,6 +480,7 @@ impl<'a> Parser<'a> {
     /// `{ ... }` block.
     fn stmts(&mut self, in_block: bool) {
         loop {
+            self.eat_nl();
             match self.nth(0) {
                 EOF => break,
                 R_BRACE if in_block => break,
@@ -501,63 +502,81 @@ impl<'a> Parser<'a> {
     /// A statement ends at a newline, the `}` of its block, or the file's end.
     fn stmt_end(&mut self, in_block: bool) -> P {
         match self.nth(0) {
-            EOF => Ok(()),
+            EOF | NEWLINE => Ok(()),
             R_BRACE if in_block => Ok(()),
-            _ if self.on_new_line() => Ok(()),
             _ => self.err_expected("the end of the line"),
+        }
+    }
+
+    /// The statement ahead is `NAME (.NAME)* (`: a fact or a rule.
+    fn at_head(&self) -> bool {
+        if !word(self.nth(0)) {
+            return false;
+        }
+        let mut i = 1;
+        loop {
+            match self.raw(i) {
+                L_PAREN => return true,
+                DOT if word(self.raw(i + 1)) => i += 2,
+                _ => return false,
+            }
         }
     }
 
     fn stmt(&mut self) -> P {
         let k = self.nth(0);
-        let paren = self.nth(1) == L_PAREN && self.glued(1);
+        // The first token decides: a name followed by `(` is a fact or a
+        // rule, whatever the name.
+        if self.at_head() {
+            return self.rule();
+        }
         match k {
             EDITION_KW => self.simple(EDITION, |p| p.expect(INT)),
-            IMPORT_KW => self.simple(IMPORT, |p| {
-                p.expect(STRING)?;
-                if p.at_contextual("as") {
-                    p.bump();
-                    p.expect_word()?;
-                }
-                Ok(())
-            }),
-            PROVIDER_KW if !paren => self.simple(PROVIDER, |p| {
+            IMPORT_KW => self.simple(IMPORT, |p| p.expect(STRING)),
+            PROVIDER_KW => self.simple(PROVIDER, |p| {
                 p.expect_word()?;
                 p.block()
             }),
-            STACK_KW if !paren => self.simple(STACK, |p| {
+            STACK_KW => self.simple(STACK, |p| {
                 p.dotted("a stack name")?;
                 // `stack app[env, region]`: the inputs that key it.
-                if p.at(L_BRACKET) && p.glued_next() {
-                    p.bump();
-                    p.expect_word()?;
-                    while p.eat(COMMA) {
+                if p.eat(L_BRACKET) {
+                    p.with_nl(false, |p| {
                         p.expect_word()?;
-                    }
-                    p.expect(R_BRACKET)?;
+                        while p.eat(COMMA) {
+                            p.expect_word()?;
+                        }
+                        p.expect(R_BRACKET)
+                    })?;
                 }
                 p.block()
             }),
-            INPUT_KW if !paren && self.nth_text(1) == "relation" && self.nth(2) != COLON => self
-                .simple(INPUT_RELATION, |p| {
-                    p.bump();
-                    p.expect_word()?;
-                    // `p/N` (facts from a `.df` file) or `p(col: type, ...)`
-                    // (a table: rows from a data file).
-                    if p.at(L_PAREN) {
-                        p.columns()?;
-                    } else if p.eat(SLASH) {
-                        p.expect(INT)?;
-                    } else {
-                        return p.err_expected("`/` or `(`");
-                    }
-                    if !p.at_contextual("from") {
-                        return p.err_expected("`from`");
-                    }
-                    p.bump();
-                    p.term().map(drop)
-                }),
-            INPUT_KW if !paren => self.simple(INPUT, |p| {
+            INPUT_KW if self.raw(1) == IDENT && self.nth_text(1) == "relation" => {
+                self.bump();
+                let msg = format!(
+                    "expected `:` or `(` after the input's name, found `{}`",
+                    self.nth_text(1)
+                );
+                self.error_here(
+                    msg,
+                    Some(
+                        "`input relation p(cols) from ..` is spelled `input p(cols) from ..`, \
+                         and `from file(..)` is `from facts(..)`"
+                            .to_string(),
+                    ),
+                );
+                Err(Bail)
+            }
+            INPUT_KW if self.raw(2) == L_PAREN => self.simple(INPUT_RELATION, |p| {
+                p.expect_word()?;
+                p.columns(false)?;
+                if !p.at_contextual("from") {
+                    return p.err_expected("`from`");
+                }
+                p.bump();
+                p.term().map(drop)
+            }),
+            INPUT_KW => self.simple(INPUT, |p| {
                 p.expect_word()?;
                 p.expect(COLON)?;
                 p.type_expr()?;
@@ -566,14 +585,33 @@ impl<'a> Parser<'a> {
                 }
                 p.where_clause(false)
             }),
-            OUTPUT_KW if !paren => self.simple(OUTPUT_DECL, |p| {
+            OUTPUT_KW => self.simple(OUTPUT_DECL, |p| {
                 p.expect_word()?;
                 if p.eat(COLON) {
-                    p.type_expr()
-                } else {
-                    p.expect(EQ)?;
-                    p.term().map(drop)
+                    p.type_expr()?;
                 }
+                if p.eat(EQ) {
+                    p.term()?;
+                }
+                p.opt_if_body()
+            }),
+            LET_KW => self.simple(LET, |p| {
+                p.expect_word()?;
+                p.expect(EQ)?;
+                p.term()?;
+                p.opt_if_body()
+            }),
+            SET_KW => self.simple(SET, |p| {
+                if !term_name(p.nth(0)) {
+                    return p.err_expected("what the contribution sets: `r.path`, an input");
+                }
+                p.chain()?;
+                if !(p.eat(EQ) || p.eat(PLUS_EQ)) {
+                    return p.err_expected("`=` or `+=`");
+                }
+                p.term()?;
+                p.eat(RANK);
+                p.opt_if_body()
             }),
             EXPORT_KW => self.simple(EXPORT, |p| {
                 // `export type NAME`: a module's type alias, for its importers.
@@ -581,8 +619,15 @@ impl<'a> Parser<'a> {
                     return p.expect_word();
                 }
                 p.expect_word()?;
-                p.expect(SLASH)?;
-                p.expect(INT)
+                if p.at(SLASH) {
+                    let msg = format!("expected the end of the line, found {}", p.found());
+                    p.error_here(
+                        msg,
+                        Some("a relation is exported by its name: `export p`".to_string()),
+                    );
+                    return Err(Bail);
+                }
+                Ok(())
             }),
             CONTRIBUTES_KW => self.simple(CONTRIBUTES, |p| {
                 if !term_name(p.nth(0)) {
@@ -590,15 +635,10 @@ impl<'a> Parser<'a> {
                         "a grant: a relation, or TYPE.path, `_.path`, `settings.path`",
                     );
                 }
-                p.chain().map(drop)
+                p.chain()
             }),
             EXTERN_KW => self.simple(EXTERN, |p| {
                 p.dotted("an extern name")?;
-                if p.at(SLASH) {
-                    let msg = format!("expected `(`, found {}", p.found());
-                    p.error_here(msg, Some("`extern p/N` is spelled `decl p/N`".to_string()));
-                    return Err(Bail);
-                }
                 p.expect(L_PAREN)?;
                 p.with_nl(false, |p| {
                     loop {
@@ -609,20 +649,37 @@ impl<'a> Parser<'a> {
                     }
                     p.expect(R_PAREN)
                 })?;
-                p.eat(PERSIST_KW);
+                if p.at_contextual("persist") {
+                    p.bump();
+                }
                 Ok(())
             }),
             // `type NAME = TYPE`: an alias.
-            TYPE_KW if !paren && self.nth(2) == EQ => self.simple(TYPE_ALIAS, |p| {
+            TYPE_KW if self.raw(2) == EQ => self.simple(TYPE_ALIAS, |p| {
                 p.expect_word()?;
                 p.expect(EQ)?;
                 p.type_expr()
             }),
-            TYPE_KW if !paren => self.simple(TYPE_DECL, |p| {
+            TYPE_KW => self.simple(TYPE_DECL, |p| {
                 p.dotted("a type name")?;
                 p.attr_block()
             }),
-            DECL_KW => self.simple(DECL, |p| p.decl()),
+            DECL_KW => self.simple(DECL, |p| {
+                p.dotted("a relation name")?;
+                if !p.at(L_PAREN) {
+                    let hint = p.at(SLASH).then(|| {
+                        "a relation is declared by its columns: `decl p(a, b)`".to_string()
+                    });
+                    let msg = format!("expected `(`, found {}", p.found());
+                    p.error_here(msg, hint);
+                    return Err(Bail);
+                }
+                p.columns(true)?;
+                if p.at_contextual("mixed") {
+                    p.bump();
+                }
+                Ok(())
+            }),
             MODULE_KW | POLICY_KW | SCENARIO_KW => {
                 let kind = match k {
                     MODULE_KW => MODULE,
@@ -634,28 +691,11 @@ impl<'a> Parser<'a> {
                     p.stmt_block()
                 })
             }
-            APPLY_KW => self.simple(APPLY, |p| p.expect_word()),
+            USE_KW => self.simple(USE, |p| p.expect_word()),
             INSTANCE_KW => self.simple(INSTANCE, |p| {
                 p.expect_word()?;
                 p.expect_word()?;
                 p.block()
-            }),
-            WHEN_KW | FOR_KW => {
-                let kind = if k == WHEN_KW { WHEN } else { FOR_STMT };
-                self.simple(kind, |p| {
-                    p.body1()?;
-                    p.stmt_block()
-                })
-            }
-            LET_KW => self.simple(LET, |p| {
-                p.expect_word()?;
-                p.expect(EQ)?;
-                p.term().map(drop)
-            }),
-            WITH_KW => self.simple(WITH, |p| {
-                p.expect_word()?;
-                p.expect(EQ)?;
-                p.term().map(drop)
             }),
             RESOURCE_KW => self.simple(RESOURCE, |p| {
                 if !word(p.nth(0)) {
@@ -670,75 +710,49 @@ impl<'a> Parser<'a> {
                 p.eat(RANK);
                 p.block()
             }),
-            SETTINGS_KW if !(paren || matches!(self.nth(1), DOT | L_BRACKET) && self.glued(1)) => {
-                self.simple(SETTINGS, |p| {
-                    if word(p.nth(0)) || p.at(STRING) {
-                        p.bump();
-                    } else {
-                        return p.err_expected("an environment (a name or a string)");
-                    }
-                    p.eat(RANK);
-                    p.block()
-                })
-            }
-            DENY_KW | WARN_KW | CONSTRAINT_KW if self.nth(1) == STRING => self.simple(CHECK, |p| {
-                p.bump();
-                if p.at(L_BRACE) && !p.on_new_line() {
+            SETTINGS_KW => self.simple(SETTINGS, |p| {
+                if word(p.nth(0)) || p.at(STRING) {
+                    p.bump();
+                } else {
+                    let hint = matches!(p.nth(0), DOT | L_BRACKET).then(|| {
+                        "a contribution to a settings row is `set settings[e].path = t`"
+                            .to_string()
+                    });
+                    let msg = format!(
+                        "expected a settings row's name (a name or a string), found {}",
+                        p.found()
+                    );
+                    p.error_here(msg, hint);
+                    return Err(Bail);
+                }
+                p.eat(RANK);
+                p.block()
+            }),
+            DENY_KW | WARN_KW => self.simple(CHECK, |p| {
+                p.expect(STRING)?;
+                if p.at(L_BRACE) {
                     p.with_nl(false, |p| p.object().map(drop))?;
                 }
                 p.opt_if_body()
             }),
-            _ if term_name(k) && matches!(self.nth(1), EQ | PLUS_EQ) => {
-                self.simple(VALUE_RULE, |p| {
-                    p.bump();
-                    p.term()?;
-                    p.eat(RANK);
-                    p.opt_if_body()
-                })
-            }
-            _ if term_name(k)
-                && old_spelling(self.nth_text(0)).is_some()
-                && !matches!(self.nth(1), L_PAREN | EQ | DOT) =>
-            {
-                let msg = format!("expected a statement, found {}", self.found());
-                let hint = old_spelling(self.nth_text(0)).map(str::to_string);
-                self.error_here(msg, hint);
-                Err(Bail)
-            }
-            _ if term_name(k) => {
-                let cp = self.checkpoint();
-                let kind = self.chain_term()?;
-                if matches!(self.nth(0), EQ | PLUS_EQ) && !self.on_new_line() {
-                    self.start_at(cp, CONTRIBUTION);
-                    self.bump();
-                    self.term()?;
-                    self.eat(RANK);
-                    self.opt_if_body()?;
-                    self.finish();
-                    return Ok(());
-                }
-                if !matches!(kind, CALL | RECORD_ATOM) {
-                    let msg = format!("expected `(` or `=` after the name, found {}", self.found());
-                    let hint = self.hint();
-                    self.error_here(msg, hint);
-                    return Err(Bail);
-                }
-                self.eat(RANK);
-                let has_body = self.at(IF_KW) && !self.on_new_line();
-                self.start_at(cp, if has_body { RULE } else { FACT });
-                self.opt_if_body()?;
-                self.finish();
-                Ok(())
-            }
             _ => {
+                let text = self.nth_text(0);
+                let hint = if k == IDENT
+                    && let Some(h) = old_spelling(text)
+                {
+                    Some(h.to_string())
+                } else if k == IF_KW {
+                    Some("`if` goes on the line of the head it guards".to_string())
+                } else if term_name(k) && matches!(self.raw(1), EQ | PLUS_EQ) {
+                    Some(format!("a value is `let {text} = t`"))
+                } else if term_name(k) && matches!(self.raw(1), DOT | L_BRACKET) {
+                    Some(
+                        "a contribution to another block's field is `set r.path = t`".to_string(),
+                    )
+                } else {
+                    self.hint()
+                };
                 let msg = format!("expected a statement, found {}", self.found());
-                let hint = old_spelling(self.nth_text(0))
-                    .map(str::to_string)
-                    .or_else(|| {
-                        (k == IF_KW)
-                            .then(|| "`if` goes on the line of the head it guards".to_string())
-                    })
-                    .or_else(|| self.hint());
                 self.error_here(msg, hint);
                 Err(Bail)
             }
@@ -754,52 +768,44 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
+    /// `p(args) [rank] [if body]`: a fact or a rule.
+    fn rule(&mut self) -> P {
+        let cp = self.checkpoint();
+        self.chain_term()?;
+        self.eat(RANK);
+        let has_body = self.at(IF_KW);
+        self.start_at(cp, if has_body { RULE } else { FACT });
+        self.opt_if_body()?;
+        self.finish();
+        Ok(())
+    }
+
     /// `[if body]` on the line the statement is on.
     fn opt_if_body(&mut self) -> P {
-        if self.at(NECK) && !self.on_new_line() {
+        if self.at(NECK) {
             return self.err_expected("`if` or the end of the line");
         }
-        if self.at(IF_KW) && !self.on_new_line() {
-            self.bump();
+        if self.eat(IF_KW) {
             self.body()?;
         }
         Ok(())
     }
 
-    /// `decl p/N [mixed]`, `decl p(field: type, ...)`, `decl type Q open`.
-    fn decl(&mut self) -> P {
-        if self.at(TYPE_KW) {
-            self.bump();
-            self.dotted("a type name")?;
-            if !self.at_contextual("open") {
-                return self.err_expected("`open`");
-            }
-            self.bump();
-            return Ok(());
-        }
-        self.dotted("a relation name")?;
-        if self.eat(SLASH) {
-            self.expect(INT)?;
-            if self.at_contextual("mixed") {
-                self.bump();
-            }
-            return Ok(());
-        }
-        if !self.at(L_PAREN) {
-            return self.err_expected("`/` or `(`");
-        }
-        self.columns()
-    }
-
-    /// `(name: type, ...)`: a record's fields, a table's columns.
-    fn columns(&mut self) -> P {
+    /// `(name [: type], ...)`: a declaration's columns, a table's.
+    fn columns(&mut self, types_optional: bool) -> P {
         self.expect(L_PAREN)?;
         self.with_nl(false, |p| {
             loop {
                 p.start(BIND_ARG);
                 p.expect_word()?;
-                p.expect(COLON)?;
-                p.type_expr()?;
+                if types_optional {
+                    if p.eat(COLON) {
+                        p.type_expr()?;
+                    }
+                } else {
+                    p.expect(COLON)?;
+                    p.type_expr()?;
+                }
                 p.finish();
                 if !p.eat(COMMA) || p.at(R_PAREN) {
                     break;
@@ -834,24 +840,56 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    /// `{ clause* assign* }` of a resource, settings, instance, provider or
+    /// After an entry of a block or a literal of a `{ }` body: `,`, a
+    /// newline, or the closing `}`.
+    fn sep(&mut self) -> P {
+        if self.eat(COMMA) {
+            self.eat_nl();
+            return Ok(());
+        }
+        if self.eat_nl() || self.at(R_BRACE) {
+            return Ok(());
+        }
+        self.err_expected("`,`, a new line or `}`")
+    }
+
+    /// `{ [if body] entry* }` of a resource, settings, instance, provider or
     /// stack: entries separated by a newline or a comma.
     fn block(&mut self) -> P {
         self.start(BLOCK);
         self.expect(L_BRACE)?;
         self.with_nl(true, |p| {
+            p.eat_nl();
+            if p.at(IF_KW) {
+                p.start(CLAUSE);
+                p.bump();
+                p.body()?;
+                p.finish();
+                p.sep()?;
+            }
             while !p.at(R_BRACE) {
-                if matches!(p.nth(0), FOR_KW | IF_KW) {
-                    p.start(CLAUSE);
-                    p.bump();
-                    p.body1()?;
-                    p.finish();
-                } else {
-                    p.assign()?;
+                if p.at(IF_KW) {
+                    let msg = format!("expected an entry or `}}`, found {}", p.found());
+                    p.error_here(
+                        msg,
+                        Some(
+                            "a block takes one `if` clause, before its entries: join the \
+                             literals, `if { .. }`"
+                                .to_string(),
+                        ),
+                    );
+                    return Err(Bail);
                 }
-                if !p.eat(COMMA) && !p.at(R_BRACE) && !p.on_new_line() {
-                    return p.err_expected("`,`, a new line or `}`");
+                if p.at_contextual("for") && !matches!(p.raw(1), EQ | PLUS_EQ | DOT | L_BRACKET) {
+                    let msg = format!("expected an entry or `}}`, found {}", p.found());
+                    p.error_here(msg, Some("a block's clause is spelled `if` (H-3)".to_string()));
+                    return Err(Bail);
                 }
+                if p.at(EOF) {
+                    return p.err_expected("`}`");
+                }
+                p.assign()?;
+                p.sep()?;
             }
             Ok(())
         })?;
@@ -872,7 +910,7 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    /// A keypath without its leading dot: `a.b[0]."c-d"`.
+    /// A path in a block: `a.b[0]."c-d"`.
     fn block_path(&mut self) -> P {
         self.start(BLOCK_PATH);
         if word(self.nth(0)) || self.at(STRING) {
@@ -881,14 +919,14 @@ impl<'a> Parser<'a> {
             return self.err_expected("an attribute path");
         }
         loop {
-            if self.at(DOT) && self.glued_next() {
+            if self.at(DOT) {
                 self.bump();
                 if word(self.nth(0)) || self.at(STRING) {
                     self.bump();
                 } else {
                     return self.err_expected("a path segment");
                 }
-            } else if self.at(L_BRACKET) && self.glued_next() {
+            } else if self.at(L_BRACKET) {
                 self.bump();
                 self.expect(INT)?;
                 self.expect(R_BRACKET)?;
@@ -905,7 +943,11 @@ impl<'a> Parser<'a> {
     fn attr_block(&mut self) -> P {
         self.expect(L_BRACE)?;
         self.with_nl(true, |p| {
+            p.eat_nl();
             while !p.at(R_BRACE) {
+                if p.at(EOF) {
+                    return p.err_expected("`}`");
+                }
                 p.start(ATTR_DECL);
                 p.block_path()?;
                 p.expect(COLON)?;
@@ -919,16 +961,13 @@ impl<'a> Parser<'a> {
                             "required" | "computed" | "id" | "sensitive" | "nullable"
                         )
                         && !p.at_attr_decl()
-                        && !p.on_new_line()
                     {
                         p.bump();
                     }
                     p.where_clause(true)?;
                 }
                 p.finish();
-                if !p.eat(COMMA) && !p.at(R_BRACE) && !p.on_new_line() {
-                    return p.err_expected("`,`, a new line or `}`");
-                }
+                p.sep()?;
             }
             Ok(())
         })?;
@@ -938,11 +977,11 @@ impl<'a> Parser<'a> {
 
     /// The next tokens start an attribute declaration: `path:`.
     fn at_attr_decl(&self) -> bool {
-        (word(self.nth(0)) || self.nth(0) == STRING) && self.nth(1) == COLON
+        (word(self.nth(0)) || self.nth(0) == STRING) && self.raw(1) == COLON
     }
 
     fn where_clause(&mut self, in_type: bool) -> P {
-        if !self.at(WHERE_KW) || self.on_new_line() {
+        if !self.at_contextual("where") {
             return Ok(());
         }
         self.start(WHERE_CLAUSE);
@@ -961,7 +1000,7 @@ impl<'a> Parser<'a> {
     }
 
     fn attr_decl_after_comma(&self) -> bool {
-        (word(self.nth(1)) || self.nth(1) == STRING) && self.nth(2) == COLON
+        (word(self.raw(1)) || self.raw(1) == STRING) && self.raw(2) == COLON
     }
 
     /// `type := name | name(type, ...) | { name: type, ... } | STRING`
@@ -991,7 +1030,7 @@ impl<'a> Parser<'a> {
             }
             k if word(k) => {
                 self.dotted("a type")?;
-                if self.at(L_PAREN) && self.glued_next() {
+                if self.at(L_PAREN) {
                     self.bump();
                     self.with_nl(false, |p| {
                         loop {
@@ -1012,7 +1051,7 @@ impl<'a> Parser<'a> {
 
     // --- bodies and literals ---------------------------------------------
 
-    /// `{ lit (, | newline) lit ... }` or `lit, lit, ...`.
+    /// `{ lit (, | newline) lit ... }` or `lit, lit, ...` on one line.
     fn body(&mut self) -> P {
         if self.at(L_BRACE) {
             return self.body_block();
@@ -1036,11 +1075,13 @@ impl<'a> Parser<'a> {
         self.start(BODY);
         self.bump();
         self.with_nl(true, |p| {
+            p.eat_nl();
             while !p.at(R_BRACE) {
-                p.lit()?;
-                if !p.eat(COMMA) && !p.at(R_BRACE) && !p.on_new_line() {
-                    return p.err_expected("`,`, a new line or `}`");
+                if p.at(EOF) {
+                    return p.err_expected("`}`");
                 }
+                p.lit()?;
+                p.sep()?;
             }
             Ok(())
         })?;
@@ -1050,14 +1091,14 @@ impl<'a> Parser<'a> {
     }
 
     fn lit(&mut self) -> P {
-        if self.at(NOT_KW) && self.nth(1) == L_BRACE {
+        if self.at(NOT_KW) && self.raw(1) == L_BRACE {
             self.start(LIT_NOT_BLOCK);
             self.bump();
             self.body_block()?;
             self.finish();
             return Ok(());
         }
-        if self.at(NOT_KW) && self.nth(1) != IN_KW {
+        if self.at(NOT_KW) && self.raw(1) != IN_KW {
             self.start(LIT_NOT);
             self.bump();
             self.lit1()?;
@@ -1068,43 +1109,34 @@ impl<'a> Parser<'a> {
     }
 
     fn lit1(&mut self) -> P {
-        match self.nth(0) {
-            EXISTS_KW => {
-                self.start(LIT_EXISTS);
-                self.bump();
-                self.term()?;
-                self.finish();
-                return Ok(());
-            }
-            HAS_KW => {
-                self.start(LIT_HAS);
-                self.bump();
-                self.term()?;
-                self.finish();
-                return Ok(());
-            }
-            SOME_KW => {
-                self.start(LIT_SOME);
-                self.bump();
-                self.term()?;
-                if self.eat(COMMA) {
-                    self.term()?;
-                }
-                self.expect(IN_KW)?;
-                self.term()?;
-                self.finish();
-                return Ok(());
-            }
-            _ => {}
+        if self.at(HAS_KW) {
+            self.start(LIT_HAS);
+            self.bump();
+            self.term()?;
+            self.finish();
+            return Ok(());
+        }
+        if self.at(IDENT)
+            && matches!(self.nth_text(0), "exists" | "some")
+            && (term_name(self.raw(1)) || self.raw(1) == STRING)
+            && !matches!(self.raw(1), L_PAREN)
+        {
+            let hint = if self.nth_text(0) == "exists" {
+                "`exists R` is `R in T` (H-9): a resource named in scope is its address"
+            } else {
+                "`some x in e` is `x in e`; `some i, x in e` is `x = e[i]` (H-9)"
+            };
+            let msg = format!("expected a literal, found {}", self.found());
+            self.error_here(msg, Some(hint.to_string()));
+            return Err(Bail);
         }
         let cp = self.checkpoint();
         let kind = self.term()?;
-        let next = if self.nl_stop() { EOF } else { self.nth(0) };
-        match next {
+        match self.nth(0) {
             k if is_cmp(k) => {
                 self.start_at(cp, LIT_CMP);
                 // `lo <= x <= hi` chains: each operator compares its neighbours.
-                while is_cmp(self.nth(0)) && !self.nl_stop() {
+                while is_cmp(self.nth(0)) {
                     self.bump();
                     self.term()?;
                 }
@@ -1118,13 +1150,13 @@ impl<'a> Parser<'a> {
                     self.term()?;
                 }
             }
-            NOT_KW if self.nth(1) == IN_KW => {
+            NOT_KW if self.raw(1) == IN_KW => {
                 self.start_at(cp, LIT_NOT_IN);
                 self.bump();
                 self.bump();
                 self.term()?;
             }
-            _ if matches!(kind, CALL | RECORD_ATOM) => self.start_at(cp, LIT_ATOM),
+            _ if kind == CALL => self.start_at(cp, LIT_ATOM),
             _ if kind == CHAIN => self.start_at(cp, LIT_TRUTH),
             _ => return self.err_expected("a comparison, `in` or `not in` after the term"),
         }
@@ -1132,12 +1164,21 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
+    /// `(term, ...)` or `(name: term, ...)`.
     fn arg_list(&mut self) -> P {
         self.start(ARG_LIST);
         self.expect(L_PAREN)?;
         self.with_nl(false, |p| {
             while !p.at(R_PAREN) {
-                p.term()?;
+                if word(p.nth(0)) && p.raw(1) == COLON {
+                    p.start(NAMED_ARG);
+                    p.bump();
+                    p.bump();
+                    p.term()?;
+                    p.finish();
+                } else {
+                    p.term()?;
+                }
                 if !p.eat(COMMA) {
                     break;
                 }
@@ -1167,9 +1208,6 @@ impl<'a> Parser<'a> {
             self.primary()?
         };
         loop {
-            if self.nl_stop() {
-                break;
-            }
             let (l, r) = match self.nth(0) {
                 PLUS | MINUS => (1, 2),
                 STAR | SLASH | PERCENT => (3, 4),
@@ -1190,8 +1228,7 @@ impl<'a> Parser<'a> {
     fn primary(&mut self) -> P<SyntaxKind> {
         let k = self.nth(0);
         match k {
-            INT | STRING | TRUE_KW | FALSE_KW | NULL_KW => self.leaf(LITERAL),
-            PATH => self.leaf(PATH_LIT),
+            INT | STRING | TRUE_KW | FALSE_KW => self.leaf(LITERAL),
             L_PAREN => {
                 self.start(PAREN);
                 self.bump();
@@ -1216,54 +1253,40 @@ impl<'a> Parser<'a> {
         Ok(kind)
     }
 
-    /// A chain, then a glued `(` makes it a call and a glued `{` after a
-    /// plain name a record atom.
+    /// A chain, then a `(` makes it a call.
     fn chain_term(&mut self) -> P<SyntaxKind> {
         let cp = self.checkpoint();
-        let plain = self.chain()?;
-        if self.at(L_PAREN) && self.glued_next() {
+        self.chain()?;
+        if self.at(L_PAREN) {
             self.start_at(cp, CALL);
             self.arg_list()?;
             self.finish();
             return Ok(CALL);
         }
-        if plain && self.at(L_BRACE) && self.glued_next() {
-            self.start_at(cp, RECORD_ATOM);
-            self.bump();
-            self.with_nl(false, |p| {
-                while !p.at(R_BRACE) {
-                    p.start(RECORD_FIELD);
-                    p.expect_word()?;
-                    p.expect(COLON)?;
-                    p.term()?;
-                    p.finish();
-                    if !p.eat(COMMA) {
-                        break;
-                    }
-                }
-                p.expect(R_BRACE)
-            })?;
-            self.finish();
-            return Ok(RECORD_ATOM);
+        if self.at(L_BRACE) && word(self.raw(1)) && self.raw(2) == COLON {
+            let msg = format!("expected the end of the term, found {}", self.found());
+            self.error_here(
+                msg,
+                Some("a record atom `p{a: x}` is spelled with named arguments, `p(a: x)`".into()),
+            );
+            return Err(Bail);
         }
         Ok(CHAIN)
     }
 
-    /// `name (.seg | [t, ...] | /name)*`, each part glued to the last.
-    /// Returns whether the chain is a single name.
-    fn chain(&mut self) -> P<bool> {
+    /// `name (.seg | [t, ...])*`.
+    fn chain(&mut self) -> P {
         self.start(CHAIN);
         self.bump();
-        let mut plain = true;
         loop {
-            if self.at(DOT) && self.glued_next() {
+            if self.at(DOT) {
                 self.bump();
                 if word(self.nth(0)) || self.at(STRING) {
                     self.bump();
                 } else {
                     return self.err_expected("a name after `.`");
                 }
-            } else if self.at(L_BRACKET) && self.glued_next() {
+            } else if self.at(L_BRACKET) {
                 self.start(INDEX);
                 self.bump();
                 self.with_nl(false, |p| {
@@ -1276,19 +1299,15 @@ impl<'a> Parser<'a> {
                     p.expect(R_BRACKET)
                 })?;
                 self.finish();
-            } else if self.at(SLASH) && self.glued_next() && word(self.nth(1)) && self.glued(1) {
-                self.bump();
-                self.bump();
             } else {
                 break;
             }
-            plain = false;
         }
         self.finish();
-        Ok(plain)
+        Ok(())
     }
 
-    /// `[a, b]`, `[item | body]`, `[item ordered by key | body]`.
+    /// `[a, b]`, `[item | body]`.
     fn list(&mut self) -> P<SyntaxKind> {
         let cp = self.checkpoint();
         self.bump();
@@ -1300,17 +1319,9 @@ impl<'a> Parser<'a> {
                 return Ok(LIST);
             }
             p.term()?;
-            if p.at(PIPE) || p.at_contextual("ordered") {
+            if p.at(PIPE) {
                 p.start_at(cp, COMPREHENSION);
-                if p.at_contextual("ordered") {
-                    p.bump();
-                    if !p.at_contextual("by") {
-                        return p.err_expected("`by`");
-                    }
-                    p.bump();
-                    p.term()?;
-                }
-                p.expect(PIPE)?;
+                p.bump();
                 p.body1()?;
                 p.expect(R_BRACKET)?;
                 p.finish();
@@ -1364,6 +1375,14 @@ mod tests {
         parse(src).errors.into_iter().map(|e| e.message).collect()
     }
 
+    fn hints(src: &str) -> Vec<String> {
+        parse(src)
+            .errors
+            .into_iter()
+            .map(|e| e.hint.unwrap_or_default())
+            .collect()
+    }
+
     fn kinds(src: &str, want: &[SyntaxKind]) -> Vec<SyntaxKind> {
         parse(src)
             .syntax()
@@ -1376,7 +1395,7 @@ mod tests {
     #[test]
     fn lossless_even_with_errors() {
         for src in [
-            "edition 2026\np(a) if q(x), x > 1 # c\n",
+            "edition 2027\np(a) if q(x), x > 1 # c\n",
             "p(a if\nq(b)\n}}\n",
             "resource net.vpc main { cidr = \"x\" }\nq(b)",
         ] {
@@ -1391,14 +1410,29 @@ mod tests {
     }
 
     #[test]
-    fn a_newline_ends_a_statement() {
-        assert!(errors("p(a)\nq(b)\nr(c) if q(c),\n  p(c)\n").is_empty());
+    fn a_newline_ends_a_statement_and_nothing_continues_it() {
+        assert!(errors("p(a)\nq(b)\nr(c) if {\n  q(c)\n  p(c)\n}\n").is_empty());
         let e = parse("p(a) q(b)\n").errors;
         assert_eq!(e.len(), 1);
         assert!(
             e[0].message.starts_with("expected the end of the line"),
             "{e:?}"
         );
+        for src in [
+            "r(c) if q(c),\n  p(c)\n",
+            "r(c) if\n  q(c)\n",
+            "let x = 1 +\n  2\n",
+            "resource t a {\n  b =\n    1\n}\n",
+        ] {
+            let e = parse(src).errors;
+            assert!(!e.is_empty(), "{src}");
+            assert!(
+                e[0].message.ends_with("found the end of the line"),
+                "{src}: {e:?}"
+            );
+        }
+        // Inside brackets a newline is whitespace.
+        assert!(errors("p(a,\n  b)\nlet x = (1 +\n  2)\n").is_empty());
     }
 
     #[test]
@@ -1414,13 +1448,46 @@ mod tests {
     }
 
     #[test]
-    fn statement_shapes() {
-        let src = "k = 1 if p(1)\nr.tags = {} if r in resource\ndeny \"m\" { a } if p(a)\n\
-                   p(x) if { q(x)\n r(x) }\nlet cfg = settings[env]\n";
+    fn the_first_token_decides() {
+        let src = "let k = 1 if p(1)\nset r.tags = {} if r in resource\ndeny \"m\" { a } if p(a)\n\
+                   p(x) if { q(x)\n r(x) }\nlet cfg = settings[env]\ndeny(\"m\") if q(1)\n\
+                   input(\"a\", 1)\nfor(1)\n";
+        assert!(errors(src).is_empty(), "{:?}", errors(src));
         assert_eq!(
-            kinds(src, &[VALUE_RULE, CONTRIBUTION, CHECK, RULE, LET]),
-            vec![VALUE_RULE, CONTRIBUTION, CHECK, RULE, LET]
+            kinds(src, &[LET, SET, CHECK, RULE, FACT]),
+            vec![LET, SET, CHECK, RULE, LET, RULE, FACT, FACT]
         );
+    }
+
+    #[test]
+    fn old_spellings_name_the_new_one() {
+        for (src, hint) in [
+            ("when p(1) { q(1) }\n", "statement groups are gone"),
+            ("with env = \"prod\"\n", "`set k = v`"),
+            ("constraint \"m\" if p(1)\n", "spelled `deny`"),
+            ("apply baseline\n", "`use pack`"),
+            ("k = 1\n", "`let k = t`"),
+            ("r.tags = {}\n", "`set r.path = t`"),
+            ("decl p/2\n", "`decl p(a, b)`"),
+            ("export p/2\n", "`export p`"),
+            (
+                "input relation p/2 from file(\"x\")\n",
+                "`input p(cols) from ..`",
+            ),
+            ("p(x) if exists x\n", "`R in T`"),
+            ("p(x) if some x in [1]\n", "`x in e`"),
+            ("p(x) if q(x), x == .cidr\n", "is a string"),
+            ("p(x) if q{a: x}\n", "`p(a: x)`"),
+            ("resource t a {\n  for q(x)\n  b = x\n}\n", "spelled `if`"),
+            (
+                "resource t a {\n  if q(x)\n  if r(x)\n}\n",
+                "one `if` clause",
+            ),
+            ("// a comment\n", "`#`"),
+        ] {
+            let h = hints(src);
+            assert!(h.iter().any(|x| x.contains(hint)), "{src}: {h:?}");
+        }
     }
 
     #[test]
@@ -1435,8 +1502,9 @@ mod tests {
 
     #[test]
     fn literal_shapes() {
-        let src = "p(x) if q(x), x.a, x.b == 1, x in net.vpc, has x.c, exists y, \
-                   not x.d, some i, v in xs, x not in ys, not { r(x) }, e{a: x}\n";
+        let src = "p(x) if q(x), x.a, x.b == 1, x in net.vpc, has x.c, \
+                   not x.d, v = xs[i], x not in ys, not { r(x) }, e(a: x)\n";
+        assert!(errors(src).is_empty(), "{:?}", errors(src));
         assert_eq!(
             kinds(
                 src,
@@ -1446,9 +1514,7 @@ mod tests {
                     LIT_CMP,
                     LIT_IN,
                     LIT_HAS,
-                    LIT_EXISTS,
                     LIT_NOT,
-                    LIT_SOME,
                     LIT_NOT_IN,
                     LIT_NOT_BLOCK
                 ]
@@ -1459,35 +1525,45 @@ mod tests {
                 LIT_CMP,
                 LIT_IN,
                 LIT_HAS,
-                LIT_EXISTS,
                 LIT_NOT,
                 LIT_TRUTH,
-                LIT_SOME,
+                LIT_CMP,
                 LIT_NOT_IN,
                 LIT_NOT_BLOCK,
                 LIT_ATOM,
                 LIT_ATOM
             ]
         );
+        assert_eq!(kinds(src, &[NAMED_ARG]).len(), 1);
     }
 
     #[test]
-    fn blocks_take_clauses_then_fields() {
-        let src = "resource net.subnet \"s-{z}\" {\n  for data(\"zone\", z)\n  if z != \"x\"\n  \
+    fn a_block_takes_one_clause_then_its_entries() {
+        let src = "resource net.subnet \"s-${z}\" {\n  if {\n    data(\"zone\", z)\n    z != \"x\"\n  }\n  \
                    cidr = inet_subnet(vpc.cidr, 4, zone_index[z])\n  zone = z\n}\n";
         assert!(errors(src).is_empty(), "{:?}", errors(src));
+        assert_eq!(kinds(src, &[CLAUSE, ASSIGN]), vec![CLAUSE, ASSIGN, ASSIGN]);
+    }
+
+    #[test]
+    fn a_dot_is_member_access_and_a_slash_division() {
+        let src = "p(m.i.n.x, a / b, a/b, t[e].p, f(x))\n";
+        assert!(errors(src).is_empty(), "{:?}", errors(src));
         assert_eq!(
-            kinds(src, &[CLAUSE, ASSIGN]),
-            vec![CLAUSE, CLAUSE, ASSIGN, ASSIGN]
+            kinds(src, &[INDEX, BIN_EXPR]),
+            vec![BIN_EXPR, BIN_EXPR, INDEX]
         );
     }
 
     #[test]
-    fn chains_are_glued() {
-        let src = "p(m.i/n.x, a / b, t[e].p, f(x))\n";
+    fn declarations_by_their_columns() {
+        let src = "decl p(a, b: int) mixed\ninput q(a: string) from csv(\"q.csv\")\nexport p\n\
+                   output k: int = 1 if p(1, 2)\n";
         assert!(errors(src).is_empty(), "{:?}", errors(src));
-        assert_eq!(kinds(src, &[CHAIN]).len(), 8);
-        assert_eq!(kinds(src, &[INDEX, BIN_EXPR]), vec![BIN_EXPR, INDEX]);
+        assert_eq!(
+            kinds(src, &[DECL, INPUT_RELATION, EXPORT, OUTPUT_DECL]),
+            vec![DECL, INPUT_RELATION, EXPORT, OUTPUT_DECL]
+        );
     }
 
     #[test]

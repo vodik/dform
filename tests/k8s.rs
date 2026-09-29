@@ -51,7 +51,7 @@ fn k8s_demo_plans_against_the_mock() {
     assert_eq!(r.summary(), "stack k8s_demo is undeformed", "{}", r.stdout);
 }
 
-const TWO: &str = r#"edition 2026
+const TWO: &str = r#"edition 2027
 
 resource k8s.deployment api {
   metadata.name = "api",
@@ -97,7 +97,7 @@ fn a_missing_required_attribute_names_resource_and_path() {
     let s = Scratch::new("k8s-required");
     s.write(
         "p.df",
-        r#"edition 2026
+        r#"edition 2027
 resource k8s.deployment api { spec.template.spec.containers = [{name: "a", image: "b"}] }"#,
     );
     let r = s

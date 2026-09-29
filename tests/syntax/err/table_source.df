@@ -1,14 +1,14 @@
-edition 2026
+edition 2027
 
 # A table's columns are typed, and never secret; its source is FORMAT(SOURCE).
-input relation token(name: string, value: secret(string)) from csv("tokens.csv")
-input relation peers(name: string) from xml("peers.xml")
-input relation pins(name: string) from yaml(git("ops.git", "pins.yaml"))
-input relation dup(name: string, name: int) from csv("dup.csv")
-input relation typo(name: strng) from csv("typo.csv")
+input token(name: string, value: secret(string)) from csv("tokens.csv")
+input peers(name: string) from xml("peers.xml")
+input pins(name: string) from yaml(git("ops.git", "pins.yaml"))
+input dup(name: string, name: int) from csv("dup.csv")
+input typo(name: strng) from csv("typo.csv")
 
 module m {
-  input relation inner(name: string) from csv("inner.csv")
+  input inner(name: string) from csv("inner.csv")
 }
 
 # A stack's config is per deployment: the stack needs a key.

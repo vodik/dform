@@ -427,7 +427,7 @@ impl Printer<'_> {
 impl fmt::Display for Program {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let pr = Printer { p: self };
-        writeln!(f, "edition 2026\n\ndecl b/1")?;
+        writeln!(f, "edition 2027\n\ndecl b/1")?;
         let mut base: Vec<usize> = self.base.iter().map(|c| *c as usize % POOL.len()).collect();
         base.sort();
         base.dedup();
@@ -1196,7 +1196,7 @@ fn holds(src: &str, choices: &[u8]) {
 #[test]
 fn regression_a_negation_over_a_predicate_that_may_derive() {
     holds(
-        r#"edition 2026
+        r#"edition 2027
 
 b("a")
 
@@ -1217,7 +1217,7 @@ deny "d0" if b(x), not p1(x)
 #[test]
 fn regression_an_aggregate_over_a_predicate_that_may_derive() {
     holds(
-        r#"edition 2026
+        r#"edition 2027
 
 resource pt.src s0 {
   label = "s0"
@@ -1246,7 +1246,7 @@ c1(count(x)) if p0(x)
 /// so `d0` is pending until `m0`'s want is decided.
 #[test]
 fn regression_a_reference_to_a_stuck_resource_is_definite() {
-    let src = r#"edition 2026
+    let src = r#"edition 2027
 
 resource pt.src s0 {
   label = "s0"

@@ -8,12 +8,12 @@ use common::{Backend, Run, Scratch};
 
 /// The mock (`fake`) configured per env: its account from the
 /// environment, the account each env expects from its settings row.
-const APP: &str = r#"edition 2026
+const APP: &str = r#"edition 2027
 type environment = enum("dev", "prod")
 input env: environment = "dev"
 stack app[env] {}
 provider fake {
-  account = env_var("FAKE_ACCOUNT_{env}")
+  account = env_var("FAKE_ACCOUNT_${env}")
   region = cfg.region
   expect_account = cfg.account
 }
@@ -89,8 +89,12 @@ fn a_mismatched_account_refuses_to_plan() {
 fn an_expected_account_the_provider_does_not_report_is_refused() {
     let s = project(
         "bykey-silent",
-        "edition 2026\nprovider fake { expect_account = \"acct\" }\n\
-         resource net.vpc main {\n  cidr = \"10.0.0.0/16\"\n}\n",
+        "edition 2027\n\
+         provider fake { expect_account = \"acct\" }\n\
+         resource net.vpc main {\n\
+           cidr = \"10.0.0.0/16\"\n\
+         }\n\
+         ",
     );
     let r = s.run(&["plan", "stacks/app.df"]).failure();
     assert!(
@@ -107,8 +111,13 @@ fn an_expected_account_the_provider_does_not_report_is_refused() {
 fn a_provider_configured_from_what_it_serves_is_a_cycle() {
     let s = project(
         "bykey-cycle",
-        "edition 2026\nprovider fake { zone = z }\nz = net.vpc.main.cidr\n\
-         resource net.vpc main {\n  cidr = \"10.0.0.0/16\"\n}\n",
+        "edition 2027\n\
+         provider fake { zone = z }\n\
+         let z = net.vpc.main.cidr\n\
+         resource net.vpc main {\n\
+           cidr = \"10.0.0.0/16\"\n\
+         }\n\
+         ",
     );
     let r = s.run(&["plan", "stacks/app.df"]).failure();
     assert!(
@@ -134,8 +143,12 @@ fn a_provider_configured_from_what_it_serves_is_a_cycle() {
 fn an_env_var_is_in_the_plan_file_only_as_its_label() {
     let s = project(
         "bykey-label",
-        "edition 2026\nprovider fake { token = env_var(\"FAKE_TOKEN\") }\n\
-         resource net.vpc main {\n  cidr = \"10.0.0.0/16\"\n}\n",
+        "edition 2027\n\
+         provider fake { token = env_var(\"FAKE_TOKEN\") }\n\
+         resource net.vpc main {\n\
+           cidr = \"10.0.0.0/16\"\n\
+         }\n\
+         ",
     );
     let env = [("FAKE_TOKEN", "tok-5ecret")];
     run_with_env(&s, &env, &["plan", "--out", "plan.json", "stacks/app.df"]).success();
@@ -167,8 +180,12 @@ fn an_env_var_is_in_the_plan_file_only_as_its_label() {
 fn a_changed_env_var_makes_a_saved_plan_stale() {
     let s = project(
         "bykey-stale",
-        "edition 2026\nprovider fake { token = env_var(\"FAKE_TOKEN\") }\n\
-         resource net.vpc main {\n  cidr = \"10.0.0.0/16\"\n}\n",
+        "edition 2027\n\
+         provider fake { token = env_var(\"FAKE_TOKEN\") }\n\
+         resource net.vpc main {\n\
+           cidr = \"10.0.0.0/16\"\n\
+         }\n\
+         ",
     );
     run_with_env(
         &s,
@@ -200,9 +217,15 @@ fn a_changed_env_var_makes_a_saved_plan_stale() {
 fn a_secret_expected_account_is_refused_by_its_label() {
     let s = project(
         "bykey-secret-account",
-        "edition 2026\nprovider fake {\n  account = \"acct-real\"\n  \
-         expect_account = env_var(\"WANT_ACCOUNT\")\n}\n\
-         resource net.vpc main {\n  cidr = \"10.0.0.0/16\"\n}\n",
+        "edition 2027\n\
+         provider fake {\n\
+           account = \"acct-real\"\n\
+           expect_account = env_var(\"WANT_ACCOUNT\")\n\
+         }\n\
+         resource net.vpc main {\n\
+           cidr = \"10.0.0.0/16\"\n\
+         }\n\
+         ",
     );
     let r = run_with_env(
         &s,

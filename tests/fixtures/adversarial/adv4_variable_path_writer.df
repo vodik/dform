@@ -2,9 +2,9 @@
 # E: "a policy that writes variable type and path reads no attribute".
 # This one does, so it must be rejected.
 
-edition 2026
+edition 2027
 
-override(net.vpc, "main", .tags, { team: "x" })
+override(net.vpc, "main", "tags", { team: "x" })
 
 resource net.vpc main {
   cidr = inet("10.0.0.0/16")
@@ -12,6 +12,8 @@ resource net.vpc main {
 }
 
 arg(t, n, p, v) if
-  override(t, n, p, v),
-  want(t, n),
-  arg(t, n, .cidr, _c)
+  {
+    override(t, n, p, v)
+    want(t, n)
+    arg(t, n, "cidr", _c)
+  }

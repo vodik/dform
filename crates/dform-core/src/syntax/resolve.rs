@@ -6,11 +6,14 @@
 //! one file is named in another. `lower` takes every file of the program
 //! (each with the files its imports resolved to), collects the
 //! declarations, then lowers the entry files, inlining each import where it
-//! stands. A chain (`a.b[e]/c.d`) is resolved in this order: a `let`
-//! alias, a value name (an input or a value rule), `settings`, `world`, a
-//! resource, a module instance, a relation or extern lookup, a type; a bare
-//! name that is none of these is a variable, and may not take the name of a
-//! resource, a module or a type namespace in scope.
+//! stands. A chain (`a.b[e].c`) is resolved in this order: a variable of
+//! the rule with a static type, a value name (an input or a `let`, which
+//! may hold a reference), `settings`, `world`, a resource in scope, a
+//! module instance, a type's resource by key (`T[e]`), a relation or extern
+//! lookup, a type; a bare name that is none of these is a variable, and may
+//! not take the name of a resource, a module or a type namespace in scope.
+//! A `.` is static (H section 5.1): a name after it that nothing declares is
+//! an error, never a string.
 //!
 //! Where a read lands: in a rule body, just before the literal that holds
 //! it; in a head, a field or an instance input, appended to the body (the
@@ -20,10 +23,10 @@ use super::SyntaxKind::{self, *};
 use super::parser as parse;
 use super::{SyntaxNode, SyntaxToken};
 use crate::ast::{
-    ApplyPolicy, Atom, AttrDecl, BindArg, Config, Constraint, Contributes, Decl, Export, Extern,
-    ExternFn, FieldAssign, FieldOp, Grant, Import, InputDecl, InputRelation, Instance, Lit, Module,
+    ApplyPolicy, Atom, AttrDecl, BindArg, Config, Contributes, Decl, Export, Extern, ExternFn,
+    FieldAssign, FieldOp, Grant, Import, InputDecl, InputRelation, Instance, Lit, Module,
     OutputDecl, Pending, PendingKind, PolicyPack, Program, Rank, Resource, RuleStmt, Scenario,
-    Settings, Span, Stmt, Term, TypeExpr, When,
+    Settings, Span, Stmt, Term, TypeExpr,
 };
 use crate::diag::Diagnostic;
 use crate::value::Value;
@@ -34,7 +37,7 @@ mod provider;
 pub use provider::ENV_VAR;
 
 /// The one edition this compiler reads.
-pub const EDITION_YEAR: i64 = 2026;
+pub const EDITION_YEAR: i64 = 2027;
 
 /// One parsed file of a program.
 pub struct Unit {
@@ -90,17 +93,35 @@ pub fn lower(
 
 // --- declarations ---------------------------------------------------------
 
+/// The static type of a value name whose value is a reference (H-6): a dot
+/// on it reads through the reference.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum VType {
+    /// A settings row's key: `let cfg = settings[env]`.
+    Settings,
+    /// A resource's address, of the type: `let db = db.postgres["main"]`.
+    Ref(String),
+    /// A live object's name, of the type: `let o = world.net.vpc[n]`.
+    World(String),
+}
+
 #[derive(Default)]
 struct Scope {
     parent: Option<usize>,
-    /// Inputs and value rules: names read bare.
+    /// Inputs and `let`s: names read bare.
     values: BTreeSet<String>,
+    /// A `let`'s rows: the terms it is defined by.
+    lets: BTreeMap<String, Vec<SyntaxNode>>,
     /// Resources with a static name: name -> the types declaring it.
     resources: BTreeMap<String, Vec<String>>,
-    /// `let` aliases: name -> the chain it names.
-    lets: BTreeMap<String, SyntaxNode>,
+    /// Settings rows with a static name declared here.
+    settings: BTreeSet<String>,
+    /// Module instances declared here: (module, name).
+    instances: BTreeSet<(String, String)>,
     /// A module's `output k: T`: `Some(T)` when T is a resource type.
     outputs: BTreeMap<String, Option<String>>,
+    /// The arities each relation this scope's heads and `decl`s give it.
+    arities: BTreeMap<String, BTreeSet<usize>>,
 }
 
 #[derive(Default)]
@@ -112,7 +133,8 @@ struct Decls {
     blocks: BTreeMap<(u32, u32), usize>,
     modules: BTreeMap<String, usize>,
     instances: BTreeMap<String, BTreeSet<String>>,
-    /// Resource types: every resource header's, every `type` block's.
+    /// Resource types: every resource header's, every `type` block's, every
+    /// `type_*` fact's, and the built-in provider schemas'.
     types: BTreeSet<String>,
     /// First segments of the types: no variable may take one.
     namespaces: BTreeSet<String>,
@@ -120,6 +142,8 @@ struct Decls {
     relations: BTreeSet<String>,
     /// `extern` relations: their columns, `(input, name)`.
     externs: BTreeMap<String, Vec<(bool, String)>>,
+    /// Scenario scopes: a `set` of a stack input is theirs.
+    scenarios: BTreeSet<usize>,
 }
 
 const PROGRAM: usize = 0;
@@ -138,10 +162,8 @@ fn is_term(k: SyntaxKind) -> bool {
     matches!(
         k,
         LITERAL
-            | PATH_LIT
             | CHAIN
             | CALL
-            | RECORD_ATOM
             | LIST
             | OBJECT
             | COMPREHENSION
@@ -240,7 +262,6 @@ pub fn capitalise(s: &str) -> String {
 enum Op {
     Field(String),
     Index(Vec<SyntaxNode>, rowan::TextRange),
-    Slash(String, rowan::TextRange),
 }
 
 /// A chain: its head word and the parts after it.
@@ -270,7 +291,7 @@ impl Chain {
                 }
                 rowan::NodeOrToken::Node(_) => {}
                 rowan::NodeOrToken::Token(t) => match (pending, t.kind()) {
-                    (None, DOT | SLASH) => pending = Some(t.kind()),
+                    (None, DOT) => pending = Some(t.kind()),
                     (Some(DOT), STRING) => {
                         let s = crate::syntax::resolve::unescape(t.text()).unwrap_or_default();
                         ops.push(Op::Field(s));
@@ -278,10 +299,6 @@ impl Chain {
                     }
                     (Some(DOT), _) => {
                         ops.push(Op::Field(t.text().to_string()));
-                        pending = None;
-                    }
-                    (Some(SLASH), _) => {
-                        ops.push(Op::Slash(t.text().to_string(), t.text_range()));
                         pending = None;
                     }
                     _ => {}
@@ -458,14 +475,14 @@ impl<'u> Lowerer<'u> {
         for u in units {
             let scope = l.new_scope(PROGRAM);
             l.decls.files.insert(u.file, scope);
-            l.collect(u.file, &u.root, scope, PROGRAM);
+            l.collect(u.file, &u.root, PROGRAM);
         }
+        l.decls.types.extend(schema_types().iter().cloned());
         l.decls.namespaces = l
             .decls
             .types
             .iter()
             .map(|t| t.split('.').next().unwrap_or(t).to_string())
-            .chain(schema_namespaces().iter().cloned())
             .collect();
         l.collect_aliases();
         l
@@ -479,27 +496,33 @@ impl<'u> Lowerer<'u> {
         self.decls.scopes.len() - 1
     }
 
-    /// Record the declarations of a statement list. `lets` is the scope
-    /// `let`s land in, `decl` the one everything else does.
-    fn collect(&mut self, file: u32, parent: &SyntaxNode, lets: usize, decl: usize) {
+    /// Record the declarations of a statement list in `decl`.
+    fn collect(&mut self, file: u32, parent: &SyntaxNode, decl: usize) {
+        let arity = |n: &SyntaxNode| n.children().filter(|c| c.kind() == BIND_ARG).count();
         for n in parent.children() {
             match n.kind() {
                 INPUT => {
                     let name = word_text(&n, 1);
                     self.decls.scopes[decl].values.insert(name);
                 }
-                VALUE_RULE => {
-                    let name = word_text(&n, 0);
+                LET => {
+                    let name = word_text(&n, 1);
                     self.decls.relations.insert(name.clone());
-                    self.decls.scopes[decl].values.insert(name);
+                    let s = &mut self.decls.scopes[decl];
+                    s.values.insert(name.clone());
+                    s.arities.entry(name.clone()).or_default().insert(1);
+                    if let Some(t) = terms(&n).next() {
+                        s.lets.entry(name).or_default().push(t);
+                    }
                 }
                 INPUT_RELATION => {
-                    self.decls.relations.insert(word_text(&n, 2));
-                }
-                LET => {
-                    if let Some(t) = terms(&n).next() {
-                        self.decls.scopes[lets].lets.insert(word_text(&n, 1), t);
-                    }
+                    let name = word_text(&n, 1);
+                    self.decls.relations.insert(name.clone());
+                    self.decls.scopes[decl]
+                        .arities
+                        .entry(name)
+                        .or_default()
+                        .insert(arity(&n));
                 }
                 OUTPUT_DECL => {
                     if let Some(t) = node(&n, TYPE_EXPR) {
@@ -520,10 +543,13 @@ impl<'u> Lowerer<'u> {
                     self.decls.externs.insert(name, cols);
                 }
                 DECL => {
-                    let toks: Vec<SyntaxToken> = tokens(&n).collect();
-                    if toks.get(1).is_some_and(|t| t.kind() != TYPE_KW) {
-                        self.decls.relations.insert(dotted_text(&n, 1));
-                    }
+                    let name = dotted_text(&n, 1);
+                    self.decls.relations.insert(name.clone());
+                    self.decls.scopes[decl]
+                        .arities
+                        .entry(name)
+                        .or_default()
+                        .insert(arity(&n));
                 }
                 TYPE_DECL => {
                     self.decls.types.insert(dotted_text(&n, 1));
@@ -539,45 +565,68 @@ impl<'u> Lowerer<'u> {
                             .push(typ);
                     }
                 }
+                SETTINGS => {
+                    if let Some(name) = self.static_header(&n) {
+                        self.decls.scopes[decl].settings.insert(name);
+                    }
+                }
                 INSTANCE => {
+                    let (m, i) = (word_text(&n, 1), word_text(&n, 2));
                     self.decls
                         .instances
-                        .entry(word_text(&n, 1))
+                        .entry(m.clone())
                         .or_default()
-                        .insert(word_text(&n, 2));
+                        .insert(i.clone());
+                    self.decls.scopes[decl].instances.insert((m, i));
                 }
                 MODULE | POLICY | SCENARIO => {
-                    let scope = self.new_scope(lets);
+                    let scope = self.new_scope(decl);
                     let start: u32 = n.text_range().start().into();
                     self.decls.blocks.insert((file, start), scope);
-                    if n.kind() == MODULE {
-                        self.decls.modules.insert(word_text(&n, 1), scope);
+                    match n.kind() {
+                        MODULE => {
+                            self.decls.modules.insert(word_text(&n, 1), scope);
+                        }
+                        SCENARIO => {
+                            self.decls.scenarios.insert(scope);
+                        }
+                        _ => {}
                     }
                     if let Some(b) = node(&n, STMT_BLOCK) {
-                        self.collect(file, &b, scope, scope);
-                    }
-                }
-                WHEN | FOR_STMT => {
-                    if let Some(b) = node(&n, STMT_BLOCK) {
-                        self.collect(file, &b, lets, decl);
+                        self.collect(file, &b, scope);
                     }
                 }
                 RULE | FACT => {
-                    if let Some(h) = n
-                        .children()
-                        .find(|c| matches!(c.kind(), CALL | RECORD_ATOM))
+                    if let Some(h) = n.children().find(|c| c.kind() == CALL)
                         && let Some(name) = self.callee(&h)
                     {
                         // A schema's `type_provider(T, ...)`, `type_attr(T, ...)`
                         // rows declare T.
+                        let first = node(&h, ARG_LIST).and_then(|a| terms(&a).next());
                         if name.starts_with("type_")
-                            && let Some(t) = node(&h, ARG_LIST)
-                                .and_then(|a| terms(&a).next())
-                                .and_then(|t| Chain::of(&t))
-                            && t.ops.iter().all(|o| matches!(o, Op::Field(..)))
+                            && let Some(t) = &first
                         {
-                            self.decls.types.insert(t.fields().join("."));
+                            if let Some(c) = Chain::of(t)
+                                && c.ops.iter().all(|o| matches!(o, Op::Field(..)))
+                            {
+                                self.decls.types.insert(c.fields().join("."));
+                            } else if t.kind() == LITERAL
+                                && let Some(s) = tokens(t).find(|x| x.kind() == STRING)
+                                && let Ok(s) = unescape(s.text())
+                            {
+                                self.decls.types.insert(s);
+                            }
                         }
+                        let n_args = node(&h, ARG_LIST).map_or(0, |a| {
+                            a.children()
+                                .filter(|c| is_term(c.kind()) || c.kind() == NAMED_ARG)
+                                .count()
+                        });
+                        self.decls.scopes[decl]
+                            .arities
+                            .entry(name.clone())
+                            .or_default()
+                            .insert(n_args);
                         self.decls.relations.insert(name);
                     }
                 }
@@ -592,10 +641,10 @@ impl<'u> Lowerer<'u> {
         let t = self.header_token(n)?;
         if t.kind() == STRING {
             let text = t.text();
-            if text.contains('{') {
+            if has_hole(text) {
                 return None;
             }
-            return unescape(text).ok();
+            return string_value(text).ok();
         }
         let name = t.text().to_string();
         let block = node(n, BLOCK)?;
@@ -650,10 +699,87 @@ impl<'u> Lowerer<'u> {
         out
     }
 
-    fn find_let(&self, scope: usize, name: &str) -> Option<SyntaxNode> {
-        self.chain_of(scope)
-            .into_iter()
-            .find_map(|s| self.decls.scopes[s].lets.get(name).cloned())
+    /// A `let`'s rows and the scope that declares it.
+    fn find_let(&self, scope: usize, name: &str) -> Option<(usize, Vec<SyntaxNode>)> {
+        self.chain_of(scope).into_iter().find_map(|s| {
+            self.decls.scopes[s]
+                .lets
+                .get(name)
+                .map(|rows| (s, rows.clone()))
+        })
+    }
+
+    /// The static type of a value name whose value is a reference (H-6):
+    /// what every row of its `let` names, read from the rows' text. `Err`
+    /// names the rows' types when they disagree.
+    fn value_type(&self, scope: usize, name: &str) -> Result<Option<VType>, String> {
+        self.value_type_depth(scope, name, 0)
+    }
+
+    fn value_type_depth(
+        &self,
+        scope: usize,
+        name: &str,
+        depth: usize,
+    ) -> Result<Option<VType>, String> {
+        let Some((at, rows)) = self.find_let(scope, name) else {
+            return Ok(None);
+        };
+        if depth > 8 {
+            return Ok(None);
+        }
+        let mut ty: Option<Option<VType>> = None;
+        for row in &rows {
+            let t = self.term_vtype(at, row, depth);
+            match &ty {
+                None => ty = Some(t),
+                Some(u) if *u == t => {}
+                Some(u) => {
+                    let show = |v: &Option<VType>| match v {
+                        None => "a value".to_string(),
+                        Some(VType::Settings) => "a settings row".to_string(),
+                        Some(VType::Ref(t)) => format!("a {t} reference"),
+                        Some(VType::World(t)) => format!("a live {t}"),
+                    };
+                    return Err(format!(
+                        "`let {name}` is {} in one row and {} in another",
+                        show(u),
+                        show(&t)
+                    ));
+                }
+            }
+        }
+        Ok(ty.flatten())
+    }
+
+    /// The reference a `let` row's term names, if it names one: a settings
+    /// row, a resource (by name in scope or `T[e]`), a live object, or
+    /// another `let` holding one.
+    fn term_vtype(&self, scope: usize, t: &SyntaxNode, depth: usize) -> Option<VType> {
+        let c = Chain::of(t)?;
+        let index_then_end = |ops: &[Op]| matches!(ops, [Op::Index(ts, _)] if ts.len() == 1);
+        if c.head_kind == SETTINGS_KW {
+            return index_then_end(&c.ops).then_some(VType::Settings);
+        }
+        if c.head == "world" {
+            let fields = c.fields();
+            let rest = &c.ops[fields.len() - 1..];
+            return (fields.len() > 1 && index_then_end(rest))
+                .then(|| VType::World(fields[1..].join(".")));
+        }
+        if c.is_bare() {
+            if self.is_value(scope, &c.head) {
+                return self.value_type_depth(scope, &c.head, depth + 1).ok().flatten();
+            }
+            return match self.resource(scope, &c.head) {
+                Some(types) if types.len() == 1 => Some(VType::Ref(types[0].clone())),
+                _ => None,
+            };
+        }
+        let fields = c.fields();
+        let rest = &c.ops[fields.len() - 1..];
+        let typ = fields.join(".");
+        (self.decls.types.contains(&typ) && index_then_end(rest)).then_some(VType::Ref(typ))
     }
 
     fn is_value(&self, scope: usize, name: &str) -> bool {
@@ -699,16 +825,6 @@ impl<'u> Lowerer<'u> {
         Err(Skip)
     }
 
-    fn not_yet(&mut self, n: &SyntaxNode, what: &str, ticket: Option<&str>) -> Skip {
-        let note = match ticket {
-            Some(t) => format!("it parses; its semantics land with {t}"),
-            None => "it parses; no WORK.org ticket gives it semantics yet".to_string(),
-        };
-        let d =
-            Diagnostic::error(self.span(n), format!("{what} is not yet supported")).with_note(note);
-        self.diags.push(d);
-        Skip
-    }
 
     // --- files --------------------------------------------------------------
 
@@ -967,28 +1083,41 @@ impl<'u> Lowerer<'u> {
                     span,
                 }))
             }
-            INPUT_RELATION if node(n, BIND_ARG).is_some() => self.table(n, scope, outer),
             INPUT_RELATION => {
-                let pred = word_text(n, 2);
-                let arity = self.arity(n)?;
                 let source = terms(n).next().ok_or(Skip)?;
-                let mut rc = self.rc(n, scope, outer);
-                let source = self.calls(Calls::Data, |l| l.constant(&mut rc, &source))?;
-                one(Stmt::InputRelation(InputRelation {
-                    pred,
-                    arity,
-                    source,
-                    span,
-                }))
+                if source.kind() == CALL && self.callee(&source).as_deref() == Some("facts") {
+                    return self.facts_relation(n, &source, scope, outer);
+                }
+                self.table(n, scope, outer)
             }
             OUTPUT_DECL => self.output(n, scope, outer),
             // An alias lowers to nothing: each use is its type.
             TYPE_ALIAS => Ok(Vec::new()),
             EXPORT if tokens(n).nth(1).is_some_and(|t| t.kind() == TYPE_KW) => Ok(Vec::new()),
             EXPORT => {
+                // `export p`: every arity the module gives `p`.
                 let pred = word_text(n, 1);
-                let arity = self.arity(n)?;
-                one(Stmt::Export(Export { pred, arity, span }))
+                let arities = self.decls.scopes[scope]
+                    .arities
+                    .get(&pred)
+                    .cloned()
+                    .unwrap_or_default();
+                if arities.is_empty() {
+                    return self.error(
+                        span,
+                        format!("export {pred}: this module declares no relation {pred}"),
+                    );
+                }
+                Ok(arities
+                    .into_iter()
+                    .map(|arity| {
+                        Stmt::Export(Export {
+                            pred: pred.clone(),
+                            arity,
+                            span,
+                        })
+                    })
+                    .collect())
             }
             CONTRIBUTES => {
                 let c = n.children().find_map(|c| Chain::of(&c)).ok_or(Skip)?;
@@ -1006,7 +1135,7 @@ impl<'u> Lowerer<'u> {
                         ty: node(&b, TYPE_EXPR).map(|t| self.type_expr(&t)),
                     })
                     .collect();
-                let persist = tokens(n).any(|t| t.kind() == PERSIST_KW);
+                let persist = tokens(n).any(|t| t.text() == "persist");
                 one(Stmt::ExternFn(ExternFn {
                     name,
                     args,
@@ -1022,7 +1151,7 @@ impl<'u> Lowerer<'u> {
                     span,
                 }))
             }
-            DECL => self.decl(n, span).map(|s| vec![s]),
+            DECL => Ok(self.decl(n, span)),
             MODULE | POLICY | SCENARIO => {
                 let name = word_text(n, 1);
                 let start: u32 = n.text_range().start().into();
@@ -1034,39 +1163,15 @@ impl<'u> Lowerer<'u> {
                     _ => Stmt::Scenario(Scenario { name, body, span }),
                 })
             }
-            APPLY => one(Stmt::ApplyPolicy(ApplyPolicy {
+            USE => one(Stmt::ApplyPolicy(ApplyPolicy {
                 name: word_text(n, 1),
                 span,
             })),
-            LET => {
-                let t = terms(n).next().ok_or(Skip)?;
-                if Chain::of(&t).is_none() {
-                    return self.error(
-                        self.span(&t),
-                        "`let` names a reference (`let cfg = settings[env]`); a value is a value \
-                         rule: `name = term`",
-                    );
-                }
-                Ok(Vec::new())
-            }
-            WITH => {
-                let key = word_text(n, 1);
-                let mut rc = self.rc(n, scope, outer);
-                let t = terms(n).next().ok_or(Skip)?;
-                let value = self.constant(&mut rc, &t)?;
-                one(Stmt::Fact(Atom {
-                    pred: "input".to_string(),
-                    args: vec![str_term(&key), value],
-                    record: None,
-                    span,
-                }))
-            }
-            WHEN | FOR_STMT => self.when(n, scope, outer),
+            LET => self.let_stmt(n, scope, outer),
+            SET => self.set(n, scope, outer),
             INSTANCE => self.instance(n, scope, outer),
             RESOURCE | SETTINGS => self.block_stmt(n, scope, outer),
             RULE | FACT => self.rule(n, scope, outer),
-            VALUE_RULE => self.value_rule(n, scope, outer),
-            CONTRIBUTION => self.contribution(n, scope, outer),
             CHECK => self.check(n, scope, outer),
             k => self.error(span, format!("unexpected {k:?}")),
         }
@@ -1074,41 +1179,74 @@ impl<'u> Lowerer<'u> {
 
     // --- declarations that lower to themselves ----------------------------
 
-    /// `decl p/N` is an extern, `decl p/N mixed` lets `p/N` have both facts
-    /// and rules; `decl p(field: type, ...)` a record declaration; `decl
-    /// type ... open` is pending.
-    fn decl(&mut self, n: &SyntaxNode, span: Span) -> L<Stmt> {
-        let toks: Vec<SyntaxToken> = tokens(n).collect();
-        if toks.get(1).is_some_and(|t| t.kind() == TYPE_KW) {
-            return Ok(Stmt::Pending(Pending {
-                kind: PendingKind::DeclOpenType {
-                    name: dotted_text(n, 2),
-                },
-                span,
-            }));
-        }
+    /// `decl p(a, b)` declares the relation `p/2` by its columns (a
+    /// relation a provider may feed, H-11); `decl p(a, b) mixed` lets it
+    /// have both facts and rules. The column names are the record form's.
+    fn decl(&mut self, n: &SyntaxNode, span: Span) -> Vec<Stmt> {
         let pred = dotted_text(n, 1);
-        if toks.iter().any(|t| t.kind() == SLASH) {
-            let arity = self.arity(n)?;
-            if toks.last().is_some_and(|t| t.text() == "mixed") {
-                return Ok(Stmt::Mixed(Extern { pred, arity, span }));
-            }
-            return Ok(Stmt::Extern(Extern { pred, arity, span }));
-        }
-        let fields = n
+        let fields: Vec<String> = n
             .children()
             .filter(|c| c.kind() == BIND_ARG)
             .map(|b| word_text(&b, 0))
             .collect();
-        Ok(Stmt::Decl(Decl { pred, fields, span }))
+        let arity = fields.len();
+        let mixed = tokens(n).last().is_some_and(|t| t.text() == "mixed");
+        let e = Extern {
+            pred: pred.clone(),
+            arity,
+            span,
+        };
+        vec![
+            if mixed { Stmt::Mixed(e) } else { Stmt::Extern(e) },
+            Stmt::Decl(Decl { pred, fields, span }),
+        ]
     }
 
-    fn arity(&mut self, n: &SyntaxNode) -> L<usize> {
-        let t = tokens(n).find(|t| t.kind() == INT).ok_or(Skip)?;
-        match t.text().parse() {
-            Ok(a) => Ok(a),
-            Err(_) => self.error(self.span_of(t.text_range()), "arity out of range"),
+    /// `input p(a: T, ..) from facts(PATH)`: a relation read from a dform
+    /// fact file (`facts(git(REPO, REF, PATH))` from git), re-read when it
+    /// changes.
+    fn facts_relation(
+        &mut self,
+        n: &SyntaxNode,
+        source: &SyntaxNode,
+        scope: usize,
+        outer: &Rc,
+    ) -> L<Vec<Stmt>> {
+        let span = self.span(n);
+        let pred = word_text(n, 1);
+        if n.parent().is_some_and(|p| p.kind() != SOURCE_FILE) {
+            return self.error(span, "an input relation belongs at the top of the program");
         }
+        let fields: Vec<String> = n
+            .children()
+            .filter(|c| c.kind() == BIND_ARG)
+            .map(|b| word_text(&b, 0))
+            .collect();
+        let args: Vec<SyntaxNode> = node(source, ARG_LIST)
+            .map(|l| terms(&l).collect())
+            .unwrap_or_default();
+        let [arg] = args.as_slice() else {
+            return self.error(
+                self.span(source),
+                "facts takes one source: a path, or `git(REPO, REF, PATH)`",
+            );
+        };
+        let mut rc = self.rc(n, scope, outer);
+        let source = self.calls(Calls::Data, |l| l.constant(&mut rc, arg))?;
+        // The core's source: `file(PATH)` or `git(REPO, REF, PATH)`.
+        let source = match source {
+            s @ Term::Func { .. } => s,
+            path => func("file", vec![path]),
+        };
+        Ok(vec![
+            Stmt::InputRelation(InputRelation {
+                pred: pred.clone(),
+                arity: fields.len(),
+                source,
+                span,
+            }),
+            Stmt::Decl(Decl { pred, fields, span }),
+        ])
     }
 
     fn rank_tok(&mut self, n: &SyntaxNode) -> L<Option<Rank>> {
@@ -1278,45 +1416,13 @@ impl<'u> Lowerer<'u> {
         Ok(s)
     }
 
-    /// `.a."b-c"[0]` as `.a.b-c[0]` (leading dot kept): quoted segments
-    /// unquoted.
-    fn keypath(&mut self, t: &SyntaxToken) -> L<String> {
-        let text = t.text();
-        let mut out = String::new();
-        let mut rest = text;
-        while let Some(c) = rest.chars().next() {
-            if c == '"' {
-                let mut end = 1;
-                let bytes = rest.as_bytes();
-                while bytes[end] != b'"' {
-                    end += if bytes[end] == b'\\' { 2 } else { 1 };
-                }
-                let lit = &rest[..=end];
-                let s = unescape(lit).map_err(|e| {
-                    self.diags
-                        .push(Diagnostic::error(self.span_of(t.text_range()), e));
-                    Skip
-                })?;
-                if s.contains(['.', '[', ']']) {
-                    return self.error(
-                        self.span_of(t.text_range()),
-                        format!(
-                            "the key {s:?} holds `.`, `[` or `]`, which today's dotted paths cannot carry"
-                        ),
-                    );
-                }
-                out.push_str(&s);
-                rest = &rest[end + 1..];
-            } else {
-                out.push(c);
-                rest = &rest[c.len_utf8()..];
-            }
-        }
-        Ok(out)
-    }
-
     fn string(&mut self, t: &SyntaxToken) -> L<String> {
-        match unescape(t.text()) {
+        let text = if self.text {
+            unescape(t.text())
+        } else {
+            string_value(t.text())
+        };
+        match text {
             Ok(s) => Ok(s),
             Err(e) => self.error(self.span_of(t.text_range()), e),
         }
@@ -1364,14 +1470,14 @@ impl<'u> Lowerer<'u> {
         Ok(out)
     }
 
-    /// `input relation p(col: type, ...) from FORMAT(SOURCE)`: a table
+    /// `input p(col: type, ...) from FORMAT(SOURCE)`: a table
     /// (`crate::tables`). Its rows are the answers of the extern
     /// `table.FORMAT.p`, asked once the source is known:
     /// `p(Cols) :- reads, Path = SOURCE, table.FORMAT.p(Path, At, Cols)`.
     /// `decl p(col, ...)` names the columns for the record form.
     fn table(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Vec<Stmt>> {
         let span = self.span(n);
-        let pred = word_text(n, 2);
+        let pred = word_text(n, 1);
         if n.parent().is_some_and(|p| p.kind() != SOURCE_FILE) {
             return self.error(span, "an input relation belongs at the top of the program");
         }
@@ -1617,37 +1723,54 @@ impl<'u> Lowerer<'u> {
         Ok(out)
     }
 
+    /// `output k [: T] = t [if B]` (H-7): the declaration, when typed, and
+    /// its value; a value that reads, or one with a condition, is the rule
+    /// `output(k, t') :- B, reads`.
     fn output(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Vec<Stmt>> {
         let span = self.span(n);
         let name = word_text(n, 1);
+        let mut out = Vec::new();
         if let Some(t) = node(n, TYPE_EXPR) {
             let ty = match self.resource_type(&t) {
                 Some(_) => TypeExpr::Name("addr".to_string()),
                 None => self.type_expr(&t),
             };
-            return Ok(vec![Stmt::Output(OutputDecl {
-                name,
+            out.push(Stmt::Output(OutputDecl {
+                name: name.clone(),
                 ty: Some(ty),
                 value: None,
                 span,
-            })]);
+            }));
         }
-        let t = terms(n).next().ok_or(Skip)?;
+        let Some(t) = terms(n).next() else {
+            let d = Diagnostic::error(span, format!("output {name} has no value"))
+                .with_help(format!("an output is one statement: `output {name}: T = term`"));
+            self.diags.push(d);
+            return Err(Skip);
+        };
         let mut rc = self.rc(n, scope, outer);
-        let mut pre = Vec::new();
+        let mut pre = self.opt_body(&mut rc, n)?;
+        let has_body = node(n, BODY).is_some();
         // A bare resource name is its address.
         let value = match Chain::of(&t) {
-            Some(c) if c.is_bare() && self.resource(scope, &c.head).is_some() => str_term(&c.head),
+            Some(c)
+                if c.is_bare()
+                    && !rc.vars.contains_key(&c.head)
+                    && self.resource(scope, &c.head).is_some() =>
+            {
+                str_term(&c.head)
+            }
             _ => self.term(&mut rc, &t, Pos::Whole, &mut pre)?,
         };
-        if pre.is_empty() {
+        if pre.is_empty() && !has_body {
             self.check_bound(&rc, &[], &[&value])?;
-            return Ok(vec![Stmt::Output(OutputDecl {
+            out.push(Stmt::Output(OutputDecl {
                 name,
                 ty: None,
                 value: Some(value),
                 span,
-            })]);
+            }));
+            return Ok(out);
         }
         let head = Atom {
             pred: "output".to_string(),
@@ -1656,46 +1779,16 @@ impl<'u> Lowerer<'u> {
             span,
         };
         self.check_bound(&rc, &pre, &head.args.iter().collect::<Vec<_>>())?;
-        Ok(vec![Stmt::Rule(RuleStmt { head, body: pre })])
+        out.push(Stmt::Rule(RuleStmt { head, body: pre }));
+        Ok(out)
     }
 
-    /// `when B { S }` and `for B { S }`: a nested `when` per literal of B.
-    fn when(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Vec<Stmt>> {
-        let span = self.span(n);
-        let b = node(n, BODY).ok_or(Skip)?;
-        let mut rc = self.rc(&b, scope, outer);
-        let guard = self.body(&mut rc, &b)?;
-        self.check_bound(&rc, &guard, &[])?;
-        let inner = Rc {
-            vars: rc.vars.clone(),
-            types: rc.types.clone(),
-            ..Rc::default()
-        };
-        let mut body = self.stmts(node(n, STMT_BLOCK), scope, &inner);
-        for g in guard.into_iter().rev() {
-            body = vec![Stmt::When(When {
-                guard: g,
-                body,
-                span,
-            })];
-        }
-        Ok(body)
-    }
-
-    /// The clauses of a block: its `for` and `if` bodies, in order.
+    /// The clause of a block: its `if` body.
     fn clauses(&mut self, rc: &mut Rc, block: &SyntaxNode) -> L<Vec<Lit>> {
         let mut out = Vec::new();
-        let mut field_seen = false;
         let mut failed = false;
         for c in block.children() {
             match c.kind() {
-                ASSIGN => field_seen = true,
-                CLAUSE if field_seen => {
-                    return self.error(
-                        self.span(&c),
-                        "a `for` or `if` clause goes at the top of the block, before any field",
-                    );
-                }
                 CLAUSE => match node(&c, BODY) {
                     Some(b) => match self.body(rc, &b) {
                         Ok(ls) => out.extend(ls),
@@ -1787,7 +1880,7 @@ impl<'u> Lowerer<'u> {
         body.extend(reads);
         // The header: a string with holes is bound last, by `format`; a
         // name the clauses bind is that variable; anything else static.
-        let name = if header.kind() == STRING && header.text().contains('{') {
+        let name = if header.kind() == STRING && has_hole(header.text()) {
             let mut pre = Vec::new();
             let t = self.string_term(&mut rc, &header, &mut pre)?;
             body.extend(pre);
@@ -1843,10 +1936,7 @@ impl<'u> Lowerer<'u> {
 
     fn rule(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Vec<Stmt>> {
         let span = self.span(n);
-        let head_node = n
-            .children()
-            .find(|c| matches!(c.kind(), CALL | RECORD_ATOM))
-            .ok_or(Skip)?;
+        let head_node = n.children().find(|c| c.kind() == CALL).ok_or(Skip)?;
         let mut rc = self.rc(n, scope, outer);
         let mut body = self.opt_body(&mut rc, n)?;
         let has_body = node(n, BODY).is_some();
@@ -1866,23 +1956,8 @@ impl<'u> Lowerer<'u> {
             }
             head.args.push(str_term(rank.name()));
         }
+        self.core_head(&head_node, &head, has_body)?;
         self.check_bound(&rc, &body, &atom_terms(&head))?;
-        if head.pred == "constraint" {
-            let [Term::Val(Value::Str(message))] = head.args.as_slice() else {
-                return self.error(span, "a constraint head is `constraint \"message\"`");
-            };
-            if !has_body {
-                return self.error(
-                    span,
-                    "a constraint needs a body: `constraint \"...\" if ...`",
-                );
-            }
-            return Ok(vec![Stmt::Constraint(Constraint {
-                message: message.clone(),
-                body,
-                span,
-            })]);
-        }
         Ok(vec![if body.is_empty() && !has_body {
             Stmt::Fact(head)
         } else {
@@ -1890,21 +1965,20 @@ impl<'u> Lowerer<'u> {
         }])
     }
 
-    /// `k = t [if B]`: the relation `k(t)`, read by name.
-    fn value_rule(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Vec<Stmt>> {
+    /// `let k = t [if B]` (H-6): the relation `k(t)`, read by name. When
+    /// `t` is a reference, `k`'s value is that reference and a dot on `k`
+    /// reads through it.
+    fn let_stmt(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Vec<Stmt>> {
         let span = self.span(n);
-        if tokens(n).any(|t| t.kind() == PLUS_EQ) {
-            return self.error(span, "a value rule is `name = term`; `+=` adds to a field");
+        let name = word_text(n, 1);
+        if let Err(e) = self.value_type(scope, &name) {
+            return self.error(span, e);
         }
-        let name = word_text(n, 0);
         let mut rc = self.rc(n, scope, outer);
         let mut body = self.opt_body(&mut rc, n)?;
         let has_body = node(n, BODY).is_some();
         let t = terms(n).next().ok_or(Skip)?;
-        let value = self.term(&mut rc, &t, Pos::Whole, &mut body)?;
-        if self.rank_tok(n)?.is_some() {
-            return self.error(span, "a value rule takes no rank");
-        }
+        let value = self.let_value(&mut rc, &t, &mut body)?;
         let head = Atom {
             pred: name,
             args: vec![value],
@@ -1919,42 +1993,91 @@ impl<'u> Lowerer<'u> {
         }])
     }
 
-    /// `R.p = t [@rank] [if B]`: a contribution `arg(T, A, p, t)`.
-    fn contribution(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Vec<Stmt>> {
+    /// A `let`'s value: a reference is its key (a settings row's, a
+    /// resource's address, a live object's name); anything else the term.
+    fn let_value(&mut self, rc: &mut Rc, t: &SyntaxNode, body: &mut Vec<Lit>) -> L<Term> {
+        if let Some(c) = Chain::of(t) {
+            let mut pre = Vec::new();
+            let mut rc2 = rc.clone();
+            if let Ok(res) = self.probe(|l| l.resolve(&mut rc2, &c, &mut pre)) {
+                let key = match &res {
+                    Res::Settings { addr, path } if path.is_empty() => Some(addr.clone()),
+                    Res::Ref { addr, path, .. } if path.is_empty() => Some(addr.clone()),
+                    Res::World { addr, path, .. } if path.is_empty() => Some(addr.clone()),
+                    _ => None,
+                };
+                if let Some(k) = key {
+                    *rc = rc2;
+                    body.extend(pre);
+                    return Ok(k);
+                }
+            }
+        }
+        self.term(rc, t, Pos::Whole, body)
+    }
+
+    /// `set chain (=|+=) t [@rank] [if B]` (H-5): a contribution to a
+    /// resource's attribute (`arg(T, A, p, t)`), a settings row's leaf, or
+    /// an input (a stack input's `input(k, t)`, a module instance's).
+    fn set(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Vec<Stmt>> {
         let span = self.span(n);
         let mut rc = self.rc(n, scope, outer);
         let mut body = self.opt_body(&mut rc, n)?;
         let has_body = node(n, BODY).is_some();
-        let mut ts = terms(n);
-        let lhs = ts.next().ok_or(Skip)?;
-        let rhs = ts.next().ok_or(Skip)?;
-        let Some(c) = Chain::of(&lhs) else {
-            return self.error(self.span(&lhs), "expected a reference and a path to assign");
-        };
-        let mut pre = Vec::new();
-        let res = self.resolve(&mut rc, &c, &mut pre)?;
-        body.extend(pre);
-        let (typ, addr, path) = match res {
-            Res::Ref { typ, addr, path } if !path.is_empty() => (typ, addr, path),
-            Res::Settings { addr, path } if !path.is_empty() => (str_term("settings"), addr, path),
-            _ => {
-                return self.error(
-                    self.span(&lhs),
-                    "the left side of a contribution is a resource or settings row and a path \
-                     (`r.tags`, `settings.prod.x`)",
-                );
-            }
-        };
-        let Some(path) = path_string(&path) else {
-            return self.error(self.span(&lhs), "a contribution's path is constant");
-        };
-        let value = self.term(&mut rc, &rhs, Pos::Whole, &mut body)?;
+        let lhs = n.children().find(|c| c.kind() == CHAIN).ok_or(Skip)?;
+        let rhs = terms(n).find(|t| *t != lhs).ok_or(Skip)?;
+        let c = Chain::of(&lhs).ok_or(Skip)?;
         let add = tokens(n).any(|t| t.kind() == PLUS_EQ);
-        let mut args = vec![typ, addr, str_term(&path), value];
-        if let Some(rank) = self.rank_tok(n)? {
-            if add {
-                return self.error(span, "a rank applies to `=`, not `+=`");
+        let rank = self.rank_tok(n)?;
+        if add && rank.is_some() {
+            return self.error(span, "a rank applies to `=`, not `+=`");
+        }
+        let (typ, addr, path, block) = match self.set_target(&mut rc, &c, &mut body, span)? {
+            Target::Cell(typ, addr, path, block) => (typ, addr, path, block),
+            Target::Input(k) => {
+                // A stack input: `input(k, t)`, as `--set k=t` gives it.
+                if !self.decls.scenarios.contains(&scope) && !has_body {
+                    let d = Diagnostic::error(
+                        span,
+                        format!("`set {k}` at the top of the program sets the program's own input"),
+                    )
+                    .with_help(format!(
+                        "give `input {k}` a default, or pass `--set {k}=...` on the command line"
+                    ));
+                    self.diags.push(d);
+                    return Err(Skip);
+                }
+                if add || rank.is_some() {
+                    return self.error(span, "an input is set with `=` and no rank");
+                }
+                let value = self.term(&mut rc, &rhs, Pos::Whole, &mut body)?;
+                let head = atom_at("input", vec![str_term(&k), value], span);
+                self.check_bound(&rc, &body, &atom_terms(&head))?;
+                return Ok(vec![if body.is_empty() && !has_body {
+                    Stmt::Fact(head)
+                } else {
+                    Stmt::Rule(RuleStmt { head, body })
+                }]);
             }
+        };
+        if let Some(block) = block
+            && !has_body
+        {
+            let d = Diagnostic::error(
+                self.span(&lhs),
+                format!(
+                    "`set {}` with no condition is an entry of `{block}`, declared in the same \
+                     scope",
+                    lhs.text()
+                ),
+            )
+            .with_help(format!("write `{path} = ...` in the block `{block} {{ .. }}`"));
+            self.diags.push(d);
+            return Err(Skip);
+        }
+        let value = self.term(&mut rc, &rhs, Pos::Whole, &mut body)?;
+        let mut args = vec![typ, addr, str_term(&path), value];
+        if let Some(rank) = rank {
             args.push(str_term(rank.name()));
         }
         let head = Atom {
@@ -1971,7 +2094,214 @@ impl<'u> Lowerer<'u> {
         }])
     }
 
-    /// `deny "m" {o} if B`, `warn ...`, `constraint "m" if B`.
+    /// What a `set` sets: a cell `(T, A, path)` and, when the block that
+    /// owns the cell is declared in the same scope, how that block is
+    /// written; or a stack input.
+    fn set_target(
+        &mut self,
+        rc: &mut Rc,
+        c: &Chain,
+        body: &mut Vec<Lit>,
+        span: Span,
+    ) -> L<Target> {
+        let scope = rc.scope;
+        // A stack input, set by name.
+        if c.is_bare() && self.is_value(scope, &c.head) && self.find_let(scope, &c.head).is_none()
+        {
+            return Ok(Target::Input(c.head.clone()));
+        }
+        // A module instance's input: `m.i.k`.
+        if let [Op::Field(i), Op::Field(k)] = c.ops.as_slice()
+            && self.decls.modules.contains_key(&c.head)
+            && self
+                .decls
+                .instances
+                .get(&c.head)
+                .is_some_and(|s| s.contains(i))
+        {
+            let own = self.decls.scopes[scope]
+                .instances
+                .contains(&(c.head.clone(), i.clone()));
+            return Ok(Target::Cell(
+                str_term(crate::modules::INPUT),
+                str_term(&format!("{}.{i}", c.head)),
+                k.clone(),
+                own.then(|| format!("instance {} {i}", c.head)),
+            ));
+        }
+        let mut pre = Vec::new();
+        let res = self.resolve(rc, c, &mut pre)?;
+        body.extend(pre);
+        let (typ, addr, path) = match res {
+            Res::Ref { typ, addr, path } if !path.is_empty() => (typ, addr, path),
+            Res::Settings { addr, path } if !path.is_empty() => (str_term("settings"), addr, path),
+            _ => {
+                return self.error(
+                    span,
+                    "`set` sets a resource's attribute (`r.tags`, `T[e].p`), a settings row's \
+                     leaf (`settings[e].p`) or an input",
+                );
+            }
+        };
+        let Some(path) = path_string(&path) else {
+            return self.error(span, "a contribution's path is constant");
+        };
+        let s = &self.decls.scopes[scope];
+        let block = match (&typ, &addr) {
+            (Term::Val(Value::Str(t)), Term::Val(Value::Str(a))) if t == "settings" => {
+                s.settings.contains(a).then(|| format!("settings {a}"))
+            }
+            (Term::Val(Value::Str(t)), Term::Val(Value::Str(a))) => s
+                .resources
+                .get(a)
+                .is_some_and(|ts| ts.contains(t))
+                .then(|| format!("resource {t} {a}")),
+            _ => None,
+        };
+        Ok(Target::Cell(typ, addr, path, block))
+    }
+
+    /// A core relation written where a surface form says it (H-15): an
+    /// error that prints the surface form. The core stays writable where
+    /// nothing else reaches: a variable type or path, a read of the
+    /// contributions before they merge (`arg` in a body).
+    fn core_head(&mut self, n: &SyntaxNode, head: &Atom, has_body: bool) -> L<()> {
+        if self.lenient || self.any_type || self.text {
+            return Ok(());
+        }
+        let a = arg_texts(n);
+        let s = |i: usize| match head.args.get(i) {
+            Some(Term::Val(Value::Str(s))) => Some(s.clone()),
+            _ => None,
+        };
+        let cond = if has_body { " if .." } else { "" };
+        let surface = match (head.pred.as_str(), head.args.len()) {
+            ("want", 2) if s(0).is_some() => Some(format!(
+                "a resource is declared by a block: `resource {} {} {{ .. }}`",
+                s(0).unwrap(),
+                a[1]
+            )),
+            ("arg" | "arg_add", 4 | 5) if s(0).is_some() && s(2).is_some() => {
+                let op = if head.pred == "arg" { "=" } else { "+=" };
+                let (t, p) = (s(0).unwrap(), s(2).unwrap());
+                let target = match t.as_str() {
+                    "settings" => format!("settings[{}].{p}", a[1]),
+                    crate::modules::INPUT if s(1).as_deref() == Some("") => p.clone(),
+                    crate::modules::INPUT => format!("{}.{p}", s(1).unwrap_or_default()),
+                    _ => format!("{t}[{}].{p}", a[1]),
+                };
+                Some(format!("`set {target} {op} {}{cond}`", a[3]))
+            }
+            ("setting", 3) if s(1).is_some() => Some(format!(
+                "`set settings[{}].{} = {}{cond}`",
+                a[0],
+                s(1).unwrap(),
+                a[2]
+            )),
+            ("output", 2) if s(0).is_some() => {
+                Some(format!("`output {} = {}{cond}`", s(0).unwrap(), a[1]))
+            }
+            ("input", 2) if s(0).is_some() => {
+                Some(format!("`set {} = {}{cond}` (in a scenario)", s(0).unwrap(), a[1]))
+            }
+            ("deny" | "warn", 1 | 2) if s(0).is_some() => Some(format!(
+                "`{} {}{}{cond}`",
+                head.pred,
+                a[0],
+                a.get(1).map(|o| format!(" {o}")).unwrap_or_default()
+            )),
+            _ => None,
+        };
+        let Some(surface) = surface else {
+            return Ok(());
+        };
+        let d = Diagnostic::error(
+            head.span,
+            format!(
+                "`{}` is the core's spelling of a surface form",
+                n.text().to_string().trim()
+            ),
+        )
+        .with_help(format!("write {surface} (H-15)"));
+        self.diags.push(d);
+        Err(Skip)
+    }
+
+    /// A body's read of a core relation a surface form says (H-15), of
+    /// `member` (H-9), or of `deny`/`warn` (H-8).
+    fn core_read(&mut self, n: &SyntaxNode, atom: &Atom) -> L<()> {
+        if self.lenient || self.any_type || self.text {
+            return Ok(());
+        }
+        let a = arg_texts(n);
+        let s = |i: usize| match atom.args.get(i) {
+            Some(Term::Val(Value::Str(s))) => Some(s.clone()),
+            _ => None,
+        };
+        let (msg, help) = match (atom.pred.as_str(), atom.args.len()) {
+            ("deny" | "warn", _) => (
+                format!("a rule reads `{}`", atom.pred),
+                "a deny or a warn is checked after evaluation: no rule may read deny/2 or \
+                 warn/2 (H-8); read what the deny reads instead"
+                    .to_string(),
+            ),
+            ("member", 2) => (
+                "`member` is what `in` lowers to".to_string(),
+                format!("write `{} in {}` (H-9)", a[1], a[0]),
+            ),
+            ("member", 3) => (
+                "`member` is what an index lowers to".to_string(),
+                format!("write `{} = {}[{}]` (H-9)", a[2], a[0], a[1]),
+            ),
+            ("want", 2) if s(0).is_some() => (
+                format!("`{}` is the core's spelling of `in`", n.text()),
+                format!("write `{} in {}` (H-15)", a[1], s(0).unwrap()),
+            ),
+            ("attr", 4) if s(0).is_some() && s(2).is_some() => (
+                format!("`{}` is the core's spelling of a read", n.text()),
+                format!(
+                    "write `{} = {}[{}].{}` (H-15)",
+                    a[3],
+                    s(0).unwrap(),
+                    a[1],
+                    s(2).unwrap()
+                ),
+            ),
+            ("setting", 3) if s(1).is_some() => (
+                format!("`{}` is the core's spelling of a read", n.text()),
+                format!("write `{} = settings[{}].{}` (H-15)", a[2], a[0], s(1).unwrap()),
+            ),
+            ("output", 3) if s(0).is_some() && s(1).is_some() => (
+                format!("`{}` is the core's spelling of a read", n.text()),
+                format!(
+                    "write `{} = {}.{}` (H-15)",
+                    a[2],
+                    s(0).unwrap(),
+                    s(1).unwrap()
+                ),
+            ),
+            ("cloud_attr", 4) if s(0).is_some() && s(2).is_some() => (
+                format!("`{}` is the core's spelling of a read", n.text()),
+                format!(
+                    "write `{} = world.{}[{}].{}` (H-15)",
+                    a[3],
+                    s(0).unwrap(),
+                    a[1],
+                    s(2).unwrap()
+                ),
+            ),
+            ("cloud_exists", 2) if s(0).is_some() => (
+                format!("`{}` is the core's spelling of `in`", n.text()),
+                format!("write `{} in world.{}` (H-15)", a[1], s(0).unwrap()),
+            ),
+            _ => return Ok(()),
+        };
+        let d = Diagnostic::error(atom.span, msg).with_help(help);
+        self.diags.push(d);
+        Err(Skip)
+    }
+
+    /// `deny "m" {o} if B`, `warn ...`.
     fn check(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Vec<Stmt>> {
         let span = self.span(n);
         let kw = tokens(n).next().ok_or(Skip)?;
@@ -1980,23 +2310,6 @@ impl<'u> Lowerer<'u> {
         let mut rc = self.rc(n, scope, outer);
         let mut body = self.opt_body(&mut rc, n)?;
         let has_body = node(n, BODY).is_some();
-        if kw.kind() == CONSTRAINT_KW {
-            if node(n, OBJECT).is_some() {
-                return self.error(span, "a constraint takes a message and no object");
-            }
-            if !has_body {
-                return self.error(
-                    span,
-                    "a constraint needs a body: `constraint \"...\" if ...`",
-                );
-            }
-            self.check_bound(&rc, &body, &[])?;
-            return Ok(vec![Stmt::Constraint(Constraint {
-                message,
-                body,
-                span,
-            })]);
-        }
         let mut args = vec![str_term(&message)];
         if let Some(o) = node(n, OBJECT) {
             args.push(self.term(&mut rc, &o, Pos::Whole, &mut body)?);
@@ -2074,6 +2387,7 @@ impl<'u> Lowerer<'u> {
             LIT_ATOM => {
                 let a = terms(n).next().ok_or(Skip)?;
                 let atom = self.atom(rc, &a, Pos::Content, out)?;
+                self.core_read(&a, &atom)?;
                 out.push(Lit::Pos(atom));
             }
             LIT_TRUTH => {
@@ -2091,21 +2405,6 @@ impl<'u> Lowerer<'u> {
             LIT_IN | LIT_NOT_IN => {
                 let lit = self.membership(rc, n, out)?;
                 out.push(if n.kind() == LIT_IN { lit } else { negate(lit) });
-            }
-            LIT_SOME => {
-                let ts: Vec<SyntaxNode> = terms(n).collect();
-                let (binders, list) = ts.split_at(ts.len() - 1);
-                let list = self.bind(false, |l| l.term(rc, &list[0], Pos::Content, out))?;
-                let mut args = vec![list];
-                for b in binders {
-                    args.push(self.term(rc, b, Pos::Content, out)?);
-                }
-                out.push(Lit::Pos(atom_at("member", args, span)));
-            }
-            LIT_EXISTS => {
-                let c = terms(n).next().and_then(|t| Chain::of(&t)).ok_or(Skip)?;
-                let (typ, addr) = self.reference(rc, &c, out, span)?;
-                out.push(Lit::Pos(atom_at("want", vec![typ, addr], span)));
             }
             LIT_HAS => {
                 let c = terms(n).next().and_then(|t| Chain::of(&t)).ok_or(Skip)?;
@@ -2156,18 +2455,13 @@ impl<'u> Lowerer<'u> {
             LIT_ATOM => {
                 let a = terms(n).next().ok_or(Skip)?;
                 let atom = self.atom(rc, &a, Pos::Content, out)?;
+                self.core_read(&a, &atom)?;
                 out.push(Lit::Not(atom));
                 return Ok(());
             }
             LIT_IN => {
                 let lit = self.membership(rc, n, out)?;
                 out.push(negate(lit));
-                return Ok(());
-            }
-            LIT_EXISTS => {
-                let c = terms(n).next().and_then(|t| Chain::of(&t)).ok_or(Skip)?;
-                let (typ, addr) = self.reference(rc, &c, out, span)?;
-                out.push(Lit::Not(atom_at("want", vec![typ, addr], span)));
                 return Ok(());
             }
             LIT_TRUTH | LIT_HAS => {
@@ -2433,17 +2727,20 @@ impl<'u> Lowerer<'u> {
         }
         match self.resolve(rc, c, out)? {
             Res::Ref { typ, addr, path } if path.is_empty() => Ok((typ, addr)),
-            _ => self.error(
-                span,
-                "`exists` takes a resource: a name, `T.name`, `T[e]` or `m.i/name`",
-            ),
+            _ => self.error(span, "expected a resource: a name in scope, or `T[e]`"),
         }
     }
 
     fn ambiguous<T>(&mut self, name: &str, types: &[String], span: Span) -> L<T> {
         let list = types
             .iter()
-            .map(|t| format!("{t}.{name}"))
+            .map(|t| {
+                crate::ir::Address {
+                    typ: t.clone(),
+                    name: name.to_string(),
+                }
+                .to_string()
+            })
             .collect::<Vec<_>>()
             .join(", ");
         self.error(
@@ -2455,20 +2752,32 @@ impl<'u> Lowerer<'u> {
         )
     }
 
-    /// A relation atom: a call or a record, its arguments lowered at `pos`.
+    /// A relation atom, its arguments lowered at `pos`: positional, or
+    /// named by the relation's columns (`p(a: x)`, H-12).
     fn atom(&mut self, rc: &mut Rc, n: &SyntaxNode, pos: Pos, pre: &mut Vec<Lit>) -> L<Atom> {
         let span = self.span(n);
         let pred = self.callee(n).ok_or(Skip);
         let Ok(pred) = pred else {
             return self.error(span, "a relation is named by a plain name (`p` or `m.i.p`)");
         };
-        if n.kind() == RECORD_ATOM {
+        let list = node(n, ARG_LIST);
+        let named: Vec<SyntaxNode> = list
+            .iter()
+            .flat_map(|l| l.children().filter(|c| c.kind() == NAMED_ARG))
+            .collect();
+        if !named.is_empty() {
+            if list.iter().any(|l| terms(l).next().is_some()) {
+                return self.error(
+                    span,
+                    "an atom's arguments are all positional or all named",
+                );
+            }
             let mut fields = BTreeMap::new();
-            for f in n.children().filter(|c| c.kind() == RECORD_FIELD) {
+            for f in named {
                 let key = tokens(&f).next().ok_or(Skip)?.text().to_string();
                 let value = self.term(rc, &terms(&f).next().ok_or(Skip)?, pos, pre)?;
                 if fields.insert(key.clone(), value).is_some() {
-                    return self.error(self.span(&f), format!("field `{key}` given twice"));
+                    return self.error(self.span(&f), format!("column `{key}` given twice"));
                 }
             }
             return Ok(Atom {
@@ -2589,13 +2898,8 @@ impl<'u> Lowerer<'u> {
                     },
                     STRING => self.string_term(rc, &t, pre),
                     TRUE_KW => Ok(Term::Val(Value::Bool(true))),
-                    FALSE_KW => Ok(Term::Val(Value::Bool(false))),
-                    _ => Err(self.not_yet(n, "the `null` literal (E DR-6)", None)),
+                    _ => Ok(Term::Val(Value::Bool(false))),
                 }
-            }
-            PATH_LIT => {
-                let p = self.keypath(&first())?;
-                Ok(str_term(&p[1..]))
             }
             CHAIN => {
                 let c = Chain::of(n).ok_or(Skip)?;
@@ -2610,15 +2914,20 @@ impl<'u> Lowerer<'u> {
                 let Some(name) = name else {
                     return self.error(span, "a function is named by a plain name");
                 };
+                if node(n, ARG_LIST).is_some_and(|l| node(&l, NAMED_ARG).is_some()) {
+                    return self.error(
+                        span,
+                        format!(
+                            "`{name}` is a function here: named arguments name a relation's \
+                             columns in an atom"
+                        ),
+                    );
+                }
                 self.check_function(&name, span);
                 let args = self.bind(false, |l| l.args(rc, n, Pos::Content, pre))?;
                 self.check_aggregated(&name, &args, span);
                 Ok(Term::Func { name, args })
             }
-            RECORD_ATOM => self.error(
-                span,
-                "a record `p{...}` is a literal or a head, not a value",
-            ),
             LIST => {
                 let mut out = Vec::new();
                 for t in terms(n) {
@@ -2656,9 +2965,6 @@ impl<'u> Lowerer<'u> {
                 Ok(Term::Obj(m))
             }
             COMPREHENSION => {
-                if tokens(n).any(|t| t.text() == "ordered") {
-                    return Err(self.not_yet(n, "an ordered comprehension", None));
-                }
                 let saved = (
                     std::mem::take(&mut rc.reads),
                     std::mem::take(&mut rc.values),
@@ -2722,11 +3028,11 @@ impl<'u> Lowerer<'u> {
         }
     }
 
-    /// A string literal: `"a{e}b"` is `format("a%sb", e)`, `{{` and `}}`
-    /// are braces.
+    /// A string literal: `"a${e}b"` is `format("a%sb", e)` (H-13), `$${`
+    /// is a literal `${`, and a brace is itself.
     fn string_term(&mut self, rc: &mut Rc, t: &SyntaxToken, pre: &mut Vec<Lit>) -> L<Term> {
         let text = t.text();
-        if self.text || !text.contains(['{', '}']) {
+        if self.text || !text.contains("${") {
             return Ok(str_term(&self.string(t)?));
         }
         let span = self.span_of(t.text_range());
@@ -2765,17 +3071,13 @@ impl<'u> Lowerer<'u> {
                     lit.push_str(&inner[i..end.min(inner.len())]);
                     i = end;
                 }
-                b'{' if bytes.get(i + 1) == Some(&b'{') => {
-                    lit.push('{');
-                    i += 2;
+                b'$' if bytes.get(i + 1) == Some(&b'$') && bytes.get(i + 2) == Some(&b'{') => {
+                    lit.push_str("${");
+                    i += 3;
                 }
-                b'}' if bytes.get(i + 1) == Some(&b'}') => {
-                    lit.push('}');
-                    i += 2;
-                }
-                b'{' => {
+                b'$' if bytes.get(i + 1) == Some(&b'{') => {
                     let mut depth = 1;
-                    let mut j = i + 1;
+                    let mut j = i + 2;
                     while j < bytes.len() && depth > 0 {
                         match bytes[j] {
                             b'{' => depth += 1,
@@ -2787,19 +3089,16 @@ impl<'u> Lowerer<'u> {
                     if depth > 0 {
                         return self.error(
                             span,
-                            "an interpolation `{` is never closed; a brace is `{{`",
+                            "an interpolation `${` is never closed; a literal `${` is `$${`",
                         );
                     }
                     flush(&mut lit, &mut fmt, self)?;
                     fmt.push_str("%s");
-                    let hole = &inner[i + 1..j - 1];
+                    let hole = &inner[i + 2..j - 1];
                     // +1: the opening quote.
-                    let at = base + 1 + i as u32 + 1;
+                    let at = base + 1 + i as u32 + 2;
                     args.push(self.bind(false, |l| l.hole(rc, hole, at, pre))?);
                     i = j;
-                }
-                b'}' => {
-                    return self.error(span, "an unmatched `}` in a string; a brace is `}}`");
                 }
                 _ => {
                     let c = inner[i..].chars().next().unwrap();
@@ -2866,16 +3165,6 @@ impl<'u> Lowerer<'u> {
     /// What a chain denotes (section "Names" of docs/grammar.md). Index
     /// terms are lowered in `rc`, their reads into `pre`.
     fn resolve(&mut self, rc: &mut Rc, c: &Chain, pre: &mut Vec<Lit>) -> L<Res> {
-        self.resolve_depth(rc, c, pre, 0)
-    }
-
-    fn resolve_depth(
-        &mut self,
-        rc: &mut Rc,
-        c: &Chain,
-        pre: &mut Vec<Lit>,
-        depth: usize,
-    ) -> L<Res> {
         let span = self.span_of(c.range);
         let h = c.head.as_str();
         if self.lenient && !rc.vars.contains_key(h) {
@@ -2898,28 +3187,8 @@ impl<'u> Lowerer<'u> {
             });
         }
         if !rc.vars.contains_key(h) {
-            if let Some(l) = self.find_let(rc.scope, h) {
-                if depth > 8 {
-                    return self.error(span, format!("`let {h}` refers to itself"));
-                }
-                let Some(mut inner) = Chain::of(&l) else {
-                    return self.error(span, format!("`let {h}` does not name a reference"));
-                };
-                // The alias's own names resolve where it is used; its
-                // position is the use's.
-                inner.ops.extend(c.ops.iter().cloned());
-                inner.range = c.range;
-                let saved_file = self.file;
-                let r = self.resolve_depth(rc, &inner, pre, depth + 1);
-                self.file = saved_file;
-                return r;
-            }
             if self.is_value(rc.scope, h) {
-                let path = self.segs(rc, &c.ops, pre)?;
-                return Ok(Res::Value {
-                    pred: h.to_string(),
-                    path,
-                });
+                return self.value(rc, c, pre, span);
             }
             if c.head_kind == SETTINGS_KW && !c.is_bare() {
                 return self.settings(rc, c, pre, span);
@@ -2962,12 +3231,22 @@ impl<'u> Lowerer<'u> {
             let path = self.segs(rc, &c.ops, pre)?;
             return Ok(Res::Var { var: var(&v), path });
         }
-        // A dotted name in a type namespace that names nothing else is a
-        // type's name.
+        // A dotted name in a type namespace is a type's name, and must be a
+        // known type (H-10): a typo is an error, never a string.
         if c.ops.iter().all(|o| matches!(o, Op::Field(..)))
             && (self.decls.namespaces.contains(h) || self.any_type)
         {
-            return Ok(Res::Type(c.fields().join(".")));
+            let name = c.fields().join(".");
+            if self.any_type || self.decls.types.contains(&name) {
+                return Ok(Res::Type(name));
+            }
+            return self.error(
+                span,
+                format!(
+                    "unknown type `{name}`: no resource header, `type` block or provider schema \
+                     declares it"
+                ),
+            );
         }
         let quoted = format!("\"{}\"", c.fields().join("."));
         let mut d = Diagnostic::error(span, format!("unknown name `{h}`")).with_help(format!(
@@ -2979,6 +3258,55 @@ impl<'u> Lowerer<'u> {
         }
         self.diags.push(d);
         Err(Skip)
+    }
+
+    /// A value name: `k(V)`, read once per rule. A `let` holding a
+    /// reference (H-6) reads through it: `cfg.x` is `cfg(E), setting(E,
+    /// "x", V)`.
+    fn value(&mut self, rc: &mut Rc, c: &Chain, pre: &mut Vec<Lit>, span: Span) -> L<Res> {
+        let pred = c.head.clone();
+        let ty = match self.value_type(rc.scope, &pred) {
+            Ok(t) => t,
+            Err(e) => return self.error(span, e),
+        };
+        let Some(ty) = ty.filter(|_| !c.is_bare()) else {
+            let path = self.segs(rc, &c.ops, pre)?;
+            return Ok(Res::Value { pred, path });
+        };
+        let key = match rc.values.get(&pred) {
+            Some(v) => var(v),
+            None => {
+                let name = fresh(rc, &capitalise(&pred));
+                pre.push(Lit::Pos(atom_at(&pred, vec![var(&name)], span)));
+                rc.values.insert(pred.clone(), name.clone());
+                var(&name)
+            }
+        };
+        match ty {
+            VType::Settings => {
+                let path = self.segs(rc, &c.ops, pre)?;
+                Ok(Res::Settings { addr: key, path })
+            }
+            VType::Ref(typ) => {
+                let path = self.segs(rc, &c.ops, pre)?;
+                Ok(Res::Ref {
+                    typ: str_term(&typ),
+                    addr: key,
+                    path,
+                })
+            }
+            VType::World(typ) => {
+                let segs = self.segs(rc, &c.ops, pre)?;
+                let Some(path) = path_string(&segs) else {
+                    return self.error(span, "a live object's path is constant");
+                };
+                Ok(Res::World {
+                    typ,
+                    addr: key,
+                    path,
+                })
+            }
+        }
     }
 
     /// A bare name: a variable, unless it names something no variable may.
@@ -3024,30 +3352,27 @@ impl<'u> Lowerer<'u> {
                     let t = self.bind(true, |l| l.term(rc, &ts[0], Pos::Content, pre))?;
                     out.push(Seg::I(t));
                 }
-                Op::Slash(_, r) => {
-                    return self.error(
-                        self.span_of(*r),
-                        "`/` names a resource of an instance: `m.i/name`",
-                    );
-                }
             }
         }
         Ok(out)
     }
 
-    /// `settings.n.path`, `settings[e].path`.
+    /// `settings[e].path`: a settings row by its key.
     fn settings(&mut self, rc: &mut Rc, c: &Chain, pre: &mut Vec<Lit>, span: Span) -> L<Res> {
         let addr = match c.ops.first() {
-            Some(Op::Field(n)) => str_term(n),
             Some(Op::Index(ts, _)) if ts.len() == 1 => {
                 self.bind(true, |l| l.term(rc, &ts[0], Pos::Content, pre))?
             }
-            _ => {
-                return self.error(
+            Some(Op::Field(n)) => {
+                let d = Diagnostic::error(
                     span,
-                    "settings are read as `settings.NAME.path` or `settings[e].path`",
-                );
+                    format!("a settings row is named by its key: `settings[\"{n}\"]`"),
+                )
+                .with_help("`.` is static, `[ ]` is a key (H section 5.1)");
+                self.diags.push(d);
+                return Err(Skip);
             }
+            _ => return self.error(span, "a settings row is read as `settings[e].path`"),
         };
         let path = self.segs(rc, &c.ops[1..], pre)?;
         Ok(Res::Settings { addr, path })
@@ -3072,8 +3397,7 @@ impl<'u> Lowerer<'u> {
         Ok(Res::World { typ, addr, path })
     }
 
-    /// `m.i.k` (an output), `m.i/n.p` (a resource of an instance), `m[e]`,
-    /// `m.i` (the instance scope).
+    /// `m.i.k` (an output), `m[e].k`, `m.i` (the instance scope).
     fn module_path(
         &mut self,
         rc: &mut Rc,
@@ -3082,19 +3406,19 @@ impl<'u> Lowerer<'u> {
         span: Span,
     ) -> L<Option<Res>> {
         let m = c.head.as_str();
-        let is_module = self.decls.modules.contains_key(m);
+        if !self.decls.modules.contains_key(m) {
+            return Ok(None);
+        }
         let (inst, rest) = match c.ops.first() {
-            Some(Op::Field(i))
-                if is_module && self.decls.instances.get(m).is_some_and(|s| s.contains(i)) =>
-            {
+            Some(Op::Field(i)) if self.decls.instances.get(m).is_some_and(|s| s.contains(i)) => {
                 (str_term(&format!("{m}.{i}")), &c.ops[1..])
             }
-            // `a.b/c` is the address of `c` in instance `a.b`, even when
-            // the module is not in view.
-            Some(Op::Field(i)) if matches!(c.ops.get(1), Some(Op::Slash(..))) => {
-                (str_term(&format!("{m}.{i}")), &c.ops[1..])
+            Some(Op::Field(i)) => {
+                return self
+                    .error(span, format!("module {m} has no instance `{i}`"))
+                    .map(Some);
             }
-            Some(Op::Index(ts, _)) if is_module && ts.len() == 1 => {
+            Some(Op::Index(ts, _)) if ts.len() == 1 => {
                 let e = self.bind(true, |l| l.term(rc, &ts[0], Pos::Content, pre))?;
                 (
                     func("format", vec![str_term(&format!("{m}.%s")), e]),
@@ -3103,34 +3427,8 @@ impl<'u> Lowerer<'u> {
             }
             _ => return Ok(None),
         };
-        let scoped = |n: &str| match &inst {
-            Term::Val(Value::Str(s)) => func("scoped", vec![str_term(s), str_term(n)]),
-            t => func("scoped", vec![t.clone(), str_term(n)]),
-        };
         match rest.first() {
             None => Ok(Some(Res::Val(inst))),
-            Some(Op::Slash(n, _)) => {
-                let path = self.segs(rc, &rest[1..], pre)?;
-                if path.is_empty() {
-                    // An address needs no type.
-                    let typ = self.module_resource_type(m, n).unwrap_or_default();
-                    return Ok(Some(Res::Ref {
-                        typ: str_term(&typ),
-                        addr: scoped(n),
-                        path,
-                    }));
-                }
-                let Some(typ) = self.module_resource_type(m, n) else {
-                    return self
-                        .error(span, format!("module {m} declares no resource `{n}`"))
-                        .map(Some);
-                };
-                Ok(Some(Res::Ref {
-                    typ: str_term(&typ),
-                    addr: scoped(n),
-                    path,
-                }))
-            }
             Some(Op::Field(k)) => {
                 let path = self.segs(rc, &rest[1..], pre)?;
                 let typed = self
@@ -3165,19 +3463,14 @@ impl<'u> Lowerer<'u> {
                 }))
             }
             Some(_) => self
-                .error(span, "after an instance: `.output`, `/resource`")
+                .error(span, "after an instance: `.output`")
                 .map(Some),
         }
     }
 
-    fn module_resource_type(&self, m: &str, n: &str) -> Option<String> {
-        let s = *self.decls.modules.get(m)?;
-        let types = self.decls.scopes[s].resources.get(n)?;
-        (types.len() == 1).then(|| types[0].clone())
-    }
-
-    /// `T.n.path` for a resource `n` of type `T`, `T[e].path`, and the
-    /// lookups `p[a, b]` and `ext[a]`.
+    /// `T[e].path` for a resource of type `T` by its key, and the lookups
+    /// `p[a, b]` and `ext[a]`. `T.n`, a resource by a dot after its type,
+    /// is an error that names the spelling (H-10).
     fn typed_path(
         &mut self,
         rc: &mut Rc,
@@ -3187,16 +3480,32 @@ impl<'u> Lowerer<'u> {
     ) -> L<Option<Res>> {
         let fields = c.fields();
         let k = fields.len();
-        // The longest `T.n` with `n` a declared resource of type `T`.
+        // `T.n`: the longest `T` with a resource `n` of that type in scope.
         for i in (1..k).rev() {
             let typ = fields[..i].join(".");
             if self.resource_of_type(rc.scope, &typ, &fields[i]) {
-                let path = self.segs(rc, &c.ops[i..], pre)?;
-                return Ok(Some(Res::Ref {
-                    typ: str_term(&typ),
-                    addr: str_term(&fields[i]),
-                    path,
-                }));
+                let n = &fields[i];
+                let unique = self
+                    .resource(rc.scope, n)
+                    .is_some_and(|ts| ts.len() == 1);
+                let write = if unique {
+                    n.clone()
+                } else {
+                    crate::ir::Address {
+                        typ,
+                        name: n.clone(),
+                    }
+                    .to_string()
+                };
+                let d = Diagnostic::error(
+                    span,
+                    format!("`{}` names a resource by a dot after its type", fields[..=i].join(".")),
+                )
+                .with_help(format!(
+                    "a resource in scope is named `{write}` (H-10); `.` is static, `[ ]` a key"
+                ));
+                self.diags.push(d);
+                return Err(Skip);
             }
         }
         let Some(Op::Index(ts, _)) = c.ops.get(k - 1) else {
@@ -3248,9 +3557,27 @@ impl<'u> Lowerer<'u> {
                 path,
             }));
         }
-        if self.decls.types.contains(&name) || k > 1 {
+        if self.decls.types.contains(&name) || (k > 1 && self.any_type) {
             if ts.len() != 1 {
-                return self.error(span, "a resource is `T[name]`").map(Some);
+                return self.error(span, "a resource is `T[key]`").map(Some);
+            }
+            // `T["n"]` for a resource `n` in scope: it is named `n` (H-10).
+            if !self.any_type
+                && let Some(LITERAL) = ts.first().map(|t| t.kind())
+                && let Some(s) = tokens(&ts[0]).find(|t| t.kind() == STRING)
+                && let Ok(n) = string_value(s.text())
+                && !has_hole(s.text())
+                && self
+                    .resource(rc.scope, &n)
+                    .is_some_and(|types| types == vec![name.clone()])
+            {
+                let d = Diagnostic::error(
+                    span,
+                    format!("`{name}[\"{n}\"]` names the resource `{n}` in scope"),
+                )
+                .with_help(format!("write `{n}` (H-10)"));
+                self.diags.push(d);
+                return Err(Skip);
             }
             let addr = self.bind(true, |l| l.term(rc, &ts[0], Pos::Content, pre))?;
             let path = self.segs(rc, rest, pre)?;
@@ -3259,6 +3586,17 @@ impl<'u> Lowerer<'u> {
                 addr,
                 path,
             }));
+        }
+        if k > 1 && self.decls.namespaces.contains(&c.head) {
+            return self
+                .error(
+                    span,
+                    format!(
+                        "unknown type `{name}`: no resource header, `type` block or provider \
+                         schema declares it"
+                    ),
+                )
+                .map(Some);
         }
         self.error(span, format!("unknown relation or type `{name}`"))
             .map(Some)
@@ -3465,19 +3803,78 @@ impl<'u> Lowerer<'u> {
     }
 }
 
-/// The first segments of the types the built-in provider schemas declare
-/// (`type_provider`, `type_attr`, ... rows): a program names them without a
-/// resource header of its own. Read from the schema text, not resolved.
-fn schema_namespaces() -> &'static BTreeSet<String> {
-    static NS: std::sync::OnceLock<BTreeSet<String>> = std::sync::OnceLock::new();
-    NS.get_or_init(|| {
+
+/// What a `set` sets.
+enum Target {
+    /// `(T, A, path)`, and the block that owns the cell when it is
+    /// declared in the same scope.
+    Cell(Term, Term, String, Option<String>),
+    /// A stack input.
+    Input(String),
+}
+
+/// The source text of a call's arguments, for a diagnostic.
+fn arg_texts(n: &SyntaxNode) -> Vec<String> {
+    let mut out: Vec<String> = node(n, ARG_LIST)
+        .map(|l| {
+            l.children()
+                .filter(|c| is_term(c.kind()) || c.kind() == NAMED_ARG)
+                .map(|c| c.text().to_string().trim().to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+    // Unquote a type or a path the core writes as a string.
+    for s in &mut out {
+        if s.starts_with('"') && s.ends_with('"') && !s[1..s.len() - 1].contains(['"', '$']) {
+            let inner = &s[1..s.len() - 1];
+            if inner
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.'))
+                && !inner.is_empty()
+            {
+                *s = inner.to_string();
+            }
+        }
+    }
+    out.resize(out.len().max(5), String::new());
+    out
+}
+
+/// A string literal holds an interpolation `${..}` (`$${` is a literal
+/// `${`).
+fn has_hole(text: &str) -> bool {
+    let b = text.as_bytes();
+    let mut i = 0;
+    while i + 1 < b.len() {
+        match b[i] {
+            b'\\' => i += 2,
+            b'$' if b[i + 1] == b'$' && b.get(i + 2) == Some(&b'{') => i += 3,
+            b'$' if b[i + 1] == b'{' => return true,
+            _ => i += 1,
+        }
+    }
+    false
+}
+
+/// A string literal with no holes as its value: escapes, and `$${` as
+/// `${`.
+fn string_value(text: &str) -> Result<String, String> {
+    Ok(unescape(text)?.replace("$${", "${"))
+}
+
+/// The types the built-in provider schemas declare (`type_provider`,
+/// `type_attr`, ... rows): a program names them without a resource header
+/// of its own. Read from the schema text, not resolved.
+fn schema_types() -> &'static BTreeSet<String> {
+    static TYPES: std::sync::OnceLock<BTreeSet<String>> = std::sync::OnceLock::new();
+    TYPES.get_or_init(|| {
         let mut out = BTreeSet::new();
         for name in ["fake", "gke", "k8s", "aws-mock"] {
             let Some(src) = crate::schema::builtin(name) else {
                 continue;
             };
             for line in src.lines() {
-                let Some((head, rest)) = line.split_once('(') else {
+                let Some((head, rest)) = line.trim().split_once('(') else {
                     continue;
                 };
                 if !head.starts_with("type_") {
@@ -3485,8 +3882,8 @@ fn schema_namespaces() -> &'static BTreeSet<String> {
                 }
                 let first = rest.split([',', ')']).next().unwrap_or("").trim();
                 let t = first.trim_matches('"');
-                if let Some(ns) = t.split('.').next().filter(|n| !n.is_empty()) {
-                    out.insert(ns.to_string());
+                if !t.is_empty() {
+                    out.insert(t.to_string());
                 }
             }
         }

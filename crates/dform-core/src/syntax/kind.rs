@@ -11,7 +11,6 @@ pub enum SyntaxKind {
     COMMENT,
     // Names and literals.
     IDENT,
-    PATH,
     STRING,
     INT,
     RANK,
@@ -41,45 +40,41 @@ pub enum SyntaxKind {
     SLASH,
     PERCENT,
     PIPE,
-    // Keywords.
+    // Keywords: the statement keywords (a statement's first token), then
+    // the body words, the clause word and the literals.
     EDITION_KW,
+    IMPORT_KW,
     PROVIDER_KW,
     STACK_KW,
-    IMPORT_KW,
+    TYPE_KW,
+    DECL_KW,
+    EXTERN_KW,
     INPUT_KW,
     OUTPUT_KW,
+    LET_KW,
+    SET_KW,
     EXPORT_KW,
     CONTRIBUTES_KW,
     MODULE_KW,
     INSTANCE_KW,
     POLICY_KW,
-    APPLY_KW,
+    USE_KW,
+    SCENARIO_KW,
     RESOURCE_KW,
     SETTINGS_KW,
-    SCENARIO_KW,
-    EXTERN_KW,
-    TYPE_KW,
-    DECL_KW,
-    WHEN_KW,
-    NOT_KW,
-    IN_KW,
-    EXISTS_KW,
-    TRUE_KW,
-    FALSE_KW,
-    NULL_KW,
-    PERSIST_KW,
-    WHERE_KW,
-    IF_KW,
-    FOR_KW,
-    LET_KW,
-    HAS_KW,
-    SOME_KW,
-    WITH_KW,
     DENY_KW,
     WARN_KW,
-    CONSTRAINT_KW,
+    NOT_KW,
+    IN_KW,
+    HAS_KW,
+    IF_KW,
+    TRUE_KW,
+    FALSE_KW,
     /// A character no token starts with.
     ERROR_TOKEN,
+    /// The end of a line where a newline ends what is being parsed: the
+    /// parser's lookahead only, never in the tree.
+    NEWLINE,
 
     // Nodes.
     SOURCE_FILE,
@@ -89,15 +84,16 @@ pub enum SyntaxKind {
     IMPORT,
     PROVIDER,
     STACK,
-    /// `key = term` inside a provider or stack block.
-    KV,
+    /// `input k: T [= t] [where B]`.
     INPUT,
-    /// `input relation p/N from source(...)`: a relation fed from outside.
+    /// `input p(cols) from FORMAT(SOURCE)`: a relation fed from outside.
     INPUT_RELATION,
+    /// `output k [: T] = t [if B]`.
     OUTPUT_DECL,
     EXPORT,
     CONTRIBUTES,
     EXTERN,
+    /// An extern's `+name: T`, a column `name [: T]`.
     BIND_ARG,
     TYPE_DECL,
     ATTR_DECL,
@@ -106,16 +102,17 @@ pub enum SyntaxKind {
     MODULE,
     INSTANCE,
     POLICY,
-    APPLY,
+    USE,
     SCENARIO,
-    WHEN,
     RESOURCE,
     SETTINGS,
-    /// `{ clause* assign* }` of a resource, settings or instance.
+    /// `{ [if body] entry* }` of a resource, settings, instance, provider
+    /// or stack.
     BLOCK,
+    /// `path (=|+=) term [rank]` in a block.
     ASSIGN,
     BLOCK_PATH,
-    /// `{ stmt* }` of a module, policy, scenario, `when` or `for`.
+    /// `{ stmt* }` of a module, policy or scenario.
     STMT_BLOCK,
     RULE,
     FACT,
@@ -126,13 +123,11 @@ pub enum SyntaxKind {
     LIT_CMP,
     LIT_IN,
     LIT_NOT_IN,
-    ATOM,
-    RECORD_ATOM,
-    RECORD_FIELD,
     ARG_LIST,
+    /// `name: term` in an argument list.
+    NAMED_ARG,
     // Terms.
     LITERAL,
-    PATH_LIT,
     CALL,
     LIST,
     OBJECT,
@@ -141,31 +136,21 @@ pub enum SyntaxKind {
     PAREN,
     BIN_EXPR,
     UNARY_EXPR,
-    // Nodes of the proposal G surface.
-    /// `name (.seg | [terms] | /name)*`, parsed unresolved.
+    /// `name (.seg | [terms])*`, parsed unresolved.
     CHAIN,
     /// `[t, ...]` after a chain.
     INDEX,
-    /// `for body` or `if body` at the top of a block.
+    /// `if body` at the top of a block.
     CLAUSE,
-    /// `let a = chain`.
+    /// `let k = t [if B]`.
     LET,
-    /// `with k = t` in a scenario.
-    WITH,
-    /// `for body { stmts }`.
-    FOR_STMT,
-    /// `deny|warn|constraint "msg" [object] [if body]`.
+    /// `set chain (=|+=) t [rank] [if B]`: a contribution.
+    SET,
+    /// `deny|warn "msg" [object] [if body]`.
     CHECK,
-    /// `chain.path (=|+=) term [rank] [if body]`.
-    CONTRIBUTION,
-    /// `name = term [if body]`.
-    VALUE_RULE,
     /// A chain alone as a literal: a truth test.
     LIT_TRUTH,
-    LIT_EXISTS,
     LIT_HAS,
-    /// `some b [, b] in term`.
-    LIT_SOME,
     /// `not { body }`.
     LIT_NOT_BLOCK,
     /// `type NAME = TYPE`: a type alias.
@@ -180,8 +165,13 @@ impl SyntaxKind {
         matches!(self, WHITESPACE | COMMENT)
     }
 
+    /// A keyword a statement starts with (H section 4).
+    pub fn is_stmt_keyword(self) -> bool {
+        (EDITION_KW as u16..=WARN_KW as u16).contains(&(self as u16))
+    }
+
     pub fn is_keyword(self) -> bool {
-        (EDITION_KW as u16..=CONSTRAINT_KW as u16).contains(&(self as u16))
+        (EDITION_KW as u16..=FALSE_KW as u16).contains(&(self as u16))
     }
 
     /// How a token kind is named in "expected ..." diagnostics.
@@ -190,7 +180,6 @@ impl SyntaxKind {
             WHITESPACE => "whitespace",
             COMMENT => "a comment",
             IDENT => "a name",
-            PATH => "a keypath",
             STRING => "a string",
             INT => "an integer",
             RANK => "a rank",
@@ -219,6 +208,7 @@ impl SyntaxKind {
             PERCENT => "`%`",
             PIPE => "`|`",
             ERROR_TOKEN => "an unknown character",
+            NEWLINE => "the end of the line",
             k if k.is_keyword() => "a keyword",
             _ => "a node",
         }

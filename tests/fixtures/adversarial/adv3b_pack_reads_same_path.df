@@ -1,7 +1,7 @@
 # adv3b: the same pack reads the path it contributes to. Under E this is a
 # negative self-loop on (attr, iam.policy, statements) and must be rejected.
 
-edition 2026
+edition 2027
 
 resource iam.policy app_policy {
   name = "app"
@@ -10,10 +10,12 @@ resource iam.policy app_policy {
 
 policy p {
   contributes iam.policy.statements
-  type_lattice("iam.policy", .statements, "set")
-  arg("iam.policy", p, .statements, [{ action: "org.read", resource: "org" }]) if
-    want("iam.policy", p),
-    arg("iam.policy", p, .statements, s),
-    not member(s, { action: "org.read", resource: "org" })
+  type_lattice("iam.policy", "statements", "set")
+  arg("iam.policy", p, "statements", [{ action: "org.read", resource: "org" }]) if
+    {
+      want("iam.policy", p)
+      arg("iam.policy", p, "statements", s)
+      not member(s, { action: "org.read", resource: "org" })
+    }
 }
-apply p
+use p

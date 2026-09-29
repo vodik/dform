@@ -1,4 +1,4 @@
 # A mock of the random provider: no resource types, one extern
 # (random.password, answered from externs.df).
 
-edition 2026
+edition 2027

@@ -689,11 +689,11 @@ fn handover_moves_an_s3_deployment_between_prefixes_and_to_local() {
     }
 }
 
-const PERSISTED: &str = r#"edition 2026
+const PERSISTED: &str = r#"edition 2027
 stack p {}
 extern random.password(+name, -value) persist
 resource db.user app {
-  for random.password("app", pw)
+  if random.password("app", pw)
   password = pw
 }
 "#;
@@ -714,7 +714,7 @@ fn taint_forgets_an_answer_in_the_bucket() {
             );
             s.write(
                 "providers/fake/externs.df",
-                "edition 2026\nrandom.password(\"app\", \"pw-first\")\n",
+                "edition 2027\nrandom.password(\"app\", \"pw-first\")\n",
             );
         });
         p.run(&["apply", "p"]).success();
@@ -734,18 +734,20 @@ fn taint_forgets_an_answer_in_the_bucket() {
     }
 }
 
-const NET: &str = r#"edition 2026
+const NET: &str = r#"edition 2027
 stack net.shared {}
 resource net.vpc main { cidr = "10.0.0.0/16" }
 output vpc_cidr = "10.0.0.0/16"
-output vpc_id = ref(net.vpc, "main", .id)
+output vpc_id = ref(net.vpc, "main", "id")
 "#;
 
-const APP: &str = r#"edition 2026
+const APP: &str = r#"edition 2027
 stack app {}
 resource net.subnet a {
-  for stack_output("net.shared", "vpc_cidr", c),
+  if {
+    stack_output("net.shared", "vpc_cidr", c)
     stack_output("net.shared", "vpc_id", v)
+  }
   cidr = c
   vpc_id = v
 }
@@ -875,9 +877,14 @@ fn a_server_that_ignores_conditions_is_refused() {
     let p = Project::of(&t, "lax-approval", |s| {
         s.write(
             "stacks/app.df",
-            "edition 2026\nstack app {}\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\n\
-             requires_approval(d, \"every change\") if {\n  deformation(_, t, a, _)\n  \
-             d = \"{t}[\\\"{a}\\\"]\"\n}\n",
+            "edition 2027\n\
+             stack app {}\n\
+             resource net.vpc main { cidr = \"10.0.0.0/16\" }\n\
+             requires_approval(d, \"every change\") if {\n\
+               deformation(_, t, a, _)\n\
+               d = \"${t}[\\\"${a}\\\"]\"\n\
+             }\n\
+             ",
         );
     });
     let r = p.run(&["plan", "app"]).failure();
@@ -904,8 +911,11 @@ fn a_project_reads_another_projects_outputs_through_its_s3_backend() {
         let p = Project::of(t, "remote", |s| {
             s.write(
                 "stacks/cluster.df",
-                "edition 2026\ninput env: string = \"dev\"\nstack cluster[env] {}\n\
-                 output endpoint = \"https://{env}.cluster.example\"\n",
+                "edition 2027\n\
+                 input env: string = \"dev\"\n\
+                 stack cluster[env] {}\n\
+                 output endpoint = \"https://${env}.cluster.example\"\n\
+                 ",
             );
         });
         p.run(&["apply", "cluster", "env=prod"]).success();
@@ -919,8 +929,13 @@ fn a_project_reads_another_projects_outputs_through_its_s3_backend() {
         );
         app.write(
             "stacks/app.df",
-            "edition 2026\nstack app {}\nresource net.vpc edge {\n  for \
-             stack_output(\"platform.cluster[env=prod]\", \"endpoint\", e)\n  name = e\n}\n",
+            "edition 2027\n\
+             stack app {}\n\
+             resource net.vpc edge {\n\
+               if stack_output(\"platform.cluster[env=prod]\", \"endpoint\", e)\n\
+               name = e\n\
+             }\n\
+             ",
         );
         let mut c = p.command(&["plan", "app"], &[]);
         let r = Run::from(c.current_dir(&app.dir).output().unwrap()).success();

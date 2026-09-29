@@ -2,7 +2,7 @@
 # DIFFERENT path. E §4.3 says this compiles under (type, path) partitions.
 # Reads (attr, iam.policy, name); writes (arg, iam.policy, statements).
 
-edition 2026
+edition 2027
 
 resource iam.policy app_policy {
   name = "app"
@@ -11,9 +11,11 @@ resource iam.policy app_policy {
 
 policy p {
   contributes iam.policy.statements
-  type_lattice("iam.policy", .statements, "set")
-  arg("iam.policy", p, .statements, [{ action: "org.read", resource: "org" }]) if
-    want("iam.policy", p),
-    arg("iam.policy", p, .name, "app")
+  type_lattice("iam.policy", "statements", "set")
+  arg("iam.policy", p, "statements", [{ action: "org.read", resource: "org" }]) if
+    {
+      want("iam.policy", p)
+      arg("iam.policy", p, "name", "app")
+    }
 }
-apply p
+use p

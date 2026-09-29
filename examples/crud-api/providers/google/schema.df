@@ -2,7 +2,7 @@
 # SQL instance, database and user. The instance's private IP is computed
 # (an open null until it exists); the user's password is sensitive.
 
-edition 2026
+edition 2027
 
 type_provider("google_compute_network", "google")
 type_attr("google_compute_network", "id", "string", ["computed", "id"])

@@ -1,6 +1,6 @@
 # Minimal networking stdlib demo rules/policies.
 
-edition 2026
+edition 2027
 #| Networking invariants: peered VPCs do not overlap, a VM has an address.
 policy stdlib_net {
   #| Deny if peered VPC CIDRs overlap.

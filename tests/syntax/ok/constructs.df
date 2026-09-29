@@ -1,4 +1,4 @@
-edition 2026
+edition 2027
 
 # One of everything the grammar lowers today.
 import "../../../examples/demo/modules/stdlib_net.df"
@@ -6,22 +6,22 @@ import "../../../examples/demo/modules/iam.df"
 
 decl provided/2
 input relation seen/2 from file("seen.facts")
-input relation peers(env: enum("dev", "prod"), name: string) from csv("peers.csv")
-input relation pinned(name: string) from yaml(git("ops.git", "main", "pinned.yaml"))
+input peers(env: enum("dev", "prod"), name: string) from csv("peers.csv")
+input pinned(name: string) from yaml(git("ops.git", "main", "pinned.yaml"))
 input relation: string = "an input named relation"
 decl project(id: int, network_name: string)
 
 project(1, "net-a")
-names(n) if project{ network_name: n }
+names(n) if project( network_name: n )
 
 module m {
   input on: bool
   output vpc: addr
-  export on_vpc/1
+  export on_vpc
   contributes iam_need
 
   resource net.vpc vpc @default {
-    for on(true)
+    if on(true)
     cidr = "10.0.0.0/16"
     tags = { team: "x", "k-v": 1 }
     size = 2 @override
@@ -30,7 +30,7 @@ module m {
   }
 
   on_vpc("vpc") if on(true)
-  iam_need("app", "net.read", ref(net.vpc, "vpc", .id))
+  iam_need("app", "net.read", ref(net.vpc, "vpc", "id"))
   output vpc = vpc
 }
 
@@ -38,32 +38,32 @@ instance m main { on = true }
 
 policy p {
   contributes _.tags
-  arg(t, a_, .tags, { owner: "ops" }) @override if want(t, a_)
+  arg(t, a_, "tags", { owner: "ops" }) @override if want(t, a_)
 }
 
-apply p
+use p
 
 when env("prod") {
   q(1)
 }
 
 settings e @default {
-  for env(e)
+  if env(e)
   db = { backup_days: 3 }
 }
 
 env("prod")
 p(x_) if q(x_), x_ = 1 + 2 * 3 - -4 / (5 % 2), x_ != 0, x_ >= 1, x_ <= 9, x_ > 0, x_ < 10
-r(v) if setting("prod", .gke.static_ips."pngu-grpc".type, v)
+r(v) if setting("prod", "gke.static_ips.pngu-grpc.type", v)
 s(v) if q(x_), o = { a: { b: x_ } }, v = o.a.b
 t(l) if l = [ x_ | q(x_) ], 1 in l, 2 not in l
-u(a_) if ref(net.vpc, m.main/vpc, .id) = a_
+u(a_) if ref(net.vpc, m.main/vpc, "id") = a_
 adopt(net.vpc, m.main/vpc, "vpc-123")
 moved(net.vpc, m.old/vpc, m.main/vpc)
 lifecycle(net.vpc, m.main/vpc, "prevent_destroy")
-ignore_changes(net.vpc, m.main/vpc, .tags.owner)
+ignore_changes(net.vpc, m.main/vpc, "tags.owner")
 counts(count(x_)) if q(x_)
-constraint "q must not be empty" if not q(1)
+deny "q must not be empty" if not q(1)
 v("input", "output", "settings", "type") if input("env", _), output("k", _)
 decl p/1 mixed
 decl q/1 mixed

@@ -14,7 +14,7 @@
 # the gke mock schema, which makes the cluster's zones, endpoint and ca open
 # nulls until the cluster exists.
 
-edition 2026
+edition 2027
 stack refine_gke {}
 provider gke {}
 
@@ -41,20 +41,20 @@ settings dev {
 let cfg = settings[env]
 
 project(cfg.project_id, cfg.project_name, cfg.region,
-  "projects/{cfg.project_id}/global/networks/{cfg.network_name}")
+  "projects/${cfg.project_id}/global/networks/${cfg.network_name}")
 
 resource google_compute_subnetwork gke_subnet {
-  for project(id, name, region, net_id)
+  if project(id, name, region, net_id)
   project = id
   region = region
   network = net_id
-  name = "{name}-gke-subnet"
+  name = "${name}-gke-subnet"
   ip_cidr_range = cfg.gke.subnet_cidr
 }
 
 # Carries a fresh null (subnetwork_id) and is still definite.
 resource google_compute_address static_ip {
-  for project(id, _, region, _)
+  if project(id, _, region, _)
   project = id
   region = region
   name = "pngu-grpc"
@@ -62,10 +62,10 @@ resource google_compute_address static_ip {
 }
 
 resource gke_cluster pngu {
-  for project(id, name, _, net_id)
+  if project(id, name, _, net_id)
   env = env
   project_id = id
-  name = "{name}-gke"
+  name = "${name}-gke"
   network_id = net_id
   subnetwork_id = gke_subnet.id
   master_control_plane_cidr = cfg.gke.control_plane_cidr
@@ -99,8 +99,8 @@ resource k8s.secret db_credentials {
 }
 
 # One nodepool per zone: member over an open null is a content position.
-resource gke_nodepool "np-{z}" {
-  for z in gke_cluster.pngu.zones
+resource gke_nodepool "np-${z}" {
+  if z in gke_cluster.pngu.zones
   cluster = gke_cluster.pngu.id
   zone = z
   min = 1

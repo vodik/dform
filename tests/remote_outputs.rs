@@ -8,19 +8,19 @@
 mod common;
 use common::Scratch;
 
-const CLUSTER: &str = r#"edition 2026
+const CLUSTER: &str = r#"edition 2027
 input env: string = "dev"
 input token: secret(string)
 stack cluster[env] {}
-output endpoint = "https://{env}.cluster.example"
+output endpoint = "https://${env}.cluster.example"
 output token: secret(string)
 output token = token
 "#;
 
-const APP: &str = r#"edition 2026
+const APP: &str = r#"edition 2027
 stack app {}
 resource net.vpc edge {
-  for stack_output("platform.cluster[env=prod]", "endpoint", e)
+  if stack_output("platform.cluster[env=prod]", "endpoint", e)
   name = e
 }
 "#;
@@ -179,14 +179,26 @@ fn a_remote_needs_a_backend_term() {
 #[test]
 fn an_output_of_a_configured_attribute_is_published_resolved_or_pending() {
     let s = Scratch::project("outputs-resolved");
-    let net = "edition 2026\nstack net {}\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\n\
-               output c = net.vpc.main.cidr\noutput n = net.vpc.main.name\n";
+    let net = "edition 2027\n\
+               stack net {}\n\
+               resource net.vpc main { cidr = \"10.0.0.0/16\" }\n\
+               output c = net.vpc.main.cidr\n\
+               output n = net.vpc.main.name\n\
+               ";
     s.write("stacks/net.df", net);
     s.write(
         "stacks/app.df",
-        "edition 2026\nstack app {}\nresource net.vpc edge {\n  \
-         for stack_output(\"net\", \"c\", c)\n  cidr = c\n}\nresource net.vpc other {\n  \
-         for stack_output(\"net\", \"n\", n)\n  name = n\n}\n",
+        "edition 2027\n\
+         stack app {}\n\
+         resource net.vpc edge {\n\
+           if stack_output(\"net\", \"c\", c)\n\
+           cidr = c\n\
+         }\n\
+         resource net.vpc other {\n\
+           if stack_output(\"net\", \"n\", n)\n\
+           name = n\n\
+         }\n\
+         ",
     );
     s.run(&["apply", "net"]).success();
     let published: serde_json::Value =

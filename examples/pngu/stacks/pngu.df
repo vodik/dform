@@ -14,7 +14,7 @@
 # - The monitoring dashboard JSON is read with the file provider from a stub,
 #   files/dashboard-pngu.json (see terraform/modules/monitoring/dashboard-pngu.json).
 
-edition 2026
+edition 2027
 stack pngu[env] { isolated = true }
 ########################################
 # Schema declarations
@@ -116,13 +116,13 @@ provider gke {
 
 # The rows are data/peerings.csv's, typed column by column: a row whose env
 # is not one of these is an error naming its line.
-input relation peering(env: environment, name: string, peer_network: string) from csv("data/peerings.csv")
+input peering(env: environment, name: string, peer_network: string) from csv("data/peerings.csv")
 
 ########################################
 # Validation
 ########################################
 
-constraint "GKE static IPs must be INTERNAL" if cfg.gke.static_ips."pngu-grpc".type != "INTERNAL"
+deny "GKE static IPs must be INTERNAL" if cfg.gke.static_ips."pngu-grpc".type != "INTERNAL"
 
 ########################################
 # Resources (renfry module intent)
@@ -132,13 +132,13 @@ constraint "GKE static IPs must be INTERNAL" if cfg.gke.static_ips."pngu-grpc".t
 resource google_compute_subnetwork gke_subnet {
   project = cfg.project_id
   region = cfg.region
-  network = "projects/{cfg.project_id}/global/networks/{cfg.network_name}"
-  name = "{cfg.project_name}-gke-subnet"
+  network = "projects/${cfg.project_id}/global/networks/${cfg.network_name}"
+  name = "${cfg.project_name}-gke-subnet"
   ip_cidr_range = cfg.gke.subnet_cidr
   subnet_private_access = true
   secondary_ranges = [
-    { range_name: "{cfg.project_name}-gke-pods-range", ip_cidr_range: cfg.gke.pods_cidr },
-    { range_name: "{cfg.project_name}-gke-svc-range", ip_cidr_range: cfg.gke.services_cidr }
+    { range_name: "${cfg.project_name}-gke-pods-range", ip_cidr_range: cfg.gke.pods_cidr },
+    { range_name: "${cfg.project_name}-gke-svc-range", ip_cidr_range: cfg.gke.services_cidr }
   ]
 }
 
@@ -146,25 +146,25 @@ resource google_compute_subnetwork gke_subnet {
 resource google_compute_subnetwork regional_proxy {
   project = cfg.project_id
   region = cfg.region
-  network = "projects/{cfg.project_id}/global/networks/{cfg.network_name}"
-  name = "{cfg.project_name}-proxy"
+  network = "projects/${cfg.project_id}/global/networks/${cfg.network_name}"
+  name = "${cfg.project_name}-proxy"
   purpose = "REGIONAL_MANAGED_PROXY"
   role = "ACTIVE"
   ip_cidr_range = cfg.regional_proxy_cidr
 }
 
 # VPC peerings
-resource google_compute_network_peering "peering-{name}" {
-  for peering{ env: env, name: name, peer_network: peer }
+resource google_compute_network_peering "peering-${name}" {
+  if peering( env: env, name: name, peer_network: peer )
   project = cfg.project_id
   name = name
-  network = "projects/{cfg.project_id}/global/networks/{cfg.network_name}"
+  network = "projects/${cfg.project_id}/global/networks/${cfg.network_name}"
   peer_network = peer
 }
 
 # Static IPs for services
-resource google_compute_address "static-ip-{ip}" {
-  for ip = "pngu-grpc"
+resource google_compute_address "static-ip-${ip}" {
+  if ip = "pngu-grpc"
   project = cfg.project_id
   region = cfg.region
   name = ip
@@ -182,12 +182,12 @@ resource gke_cluster pngu {
   env = env
   project_id = cfg.project_id
   project_name = cfg.project_name
-  name = "{cfg.project_name}-gke"
-  network_id = "projects/{cfg.project_id}/global/networks/{cfg.network_name}"
+  name = "${cfg.project_name}-gke"
+  network_id = "projects/${cfg.project_id}/global/networks/${cfg.network_name}"
   subnetwork_id = gke_subnet.id
   master_control_plane_cidr = cfg.gke.control_plane_cidr
-  ip_range_pods = "{cfg.project_name}-gke-pods-range"
-  ip_range_services = "{cfg.project_name}-gke-svc-range"
+  ip_range_pods = "${cfg.project_name}-gke-pods-range"
+  ip_range_services = "${cfg.project_name}-gke-svc-range"
 
   enable_secret_manager_addon = true
   deletion_protection = false

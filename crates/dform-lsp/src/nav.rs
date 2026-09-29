@@ -59,7 +59,7 @@ pub fn head_name(node: &SyntaxNode) -> Option<SyntaxToken> {
             let chain = call.children().find(|c| c.kind() == SyntaxKind::CHAIN)?;
             single_ident(&chain)
         }
-        SyntaxKind::VALUE_RULE => declared_name(node),
+        SyntaxKind::LET => declared_name(node),
         _ => None,
     }
 }
@@ -93,7 +93,7 @@ pub fn reference(t: &SyntaxToken) -> Option<Ref> {
         SyntaxKind::INSTANCE if declared_name(&parent).as_ref() == Some(t) => {
             Some(Ref::Module(name))
         }
-        SyntaxKind::APPLY => Some(Ref::Policy(name)),
+        SyntaxKind::USE => Some(Ref::Policy(name)),
         SyntaxKind::CHAIN => {
             let first = parent
                 .children_with_tokens()
@@ -126,7 +126,7 @@ pub fn definitions(root: &SyntaxNode, r: &Ref) -> Vec<(usize, usize)> {
         let t = match (r, n.kind()) {
             (Ref::Module(m), SyntaxKind::MODULE) => declared_name(&n).filter(|t| t.text() == m),
             (Ref::Policy(p), SyntaxKind::POLICY) => declared_name(&n).filter(|t| t.text() == p),
-            (Ref::Predicate(p), SyntaxKind::RULE | SyntaxKind::FACT | SyntaxKind::VALUE_RULE) => {
+            (Ref::Predicate(p), SyntaxKind::RULE | SyntaxKind::FACT | SyntaxKind::LET) => {
                 head_name(&n).filter(|t| t.text() == p)
             }
             _ => None,

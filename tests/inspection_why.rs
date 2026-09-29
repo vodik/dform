@@ -79,7 +79,7 @@ fn why_prints_one_alternative_unless_all() {
     let s = Scratch::new("why-alts");
     s.write(
         "p.df",
-        "edition 2026\np(1)\nq(1)\nr(x) if p(x)\nr(x) if q(x)\ns(x) if r(x), not t(x)\nt(2) if p(2)",
+        "edition 2027\np(1)\nq(1)\nr(x) if p(x)\nr(x) if q(x)\ns(x) if r(x), not t(x)\nt(2) if p(2)",
     );
     let why = |extra: &[&str]| {
         let mut a = vec!["dev", "--world", "w.json", "why"];
@@ -114,7 +114,7 @@ fn why_prints_one_alternative_unless_all() {
 #[test]
 fn why_with_a_variable_prints_each_match() {
     let s = Scratch::new("why-vars");
-    s.write("p.df", "edition 2026\np(1)\np(2)\nq(x) if p(x)");
+    s.write("p.df", "edition 2027\np(1)\np(2)\nq(x) if p(x)");
     let out = s
         .run(&["dev", "--world", "w.json", "why", "q(N)", "p.df"])
         .success()
@@ -132,7 +132,7 @@ fn why_never_prints_a_labeled_secret() {
     let s = Scratch::new("why-secret");
     s.write(
         "p.df",
-        r#"edition 2026
+        r#"edition 2027
 resource leaky.vault v { password = "VAULT-SECRET-DO-NOT-PRINT" }
            copy(p) if attr(leaky.vault, "v", "password", p)"#,
     );
@@ -165,13 +165,13 @@ fn why_labels_planner_facts_as_the_plan() {
     let s = Scratch::new("why-plan-leaf");
     s.write(
         "p.df",
-        "edition 2026\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\n",
+        "edition 2027\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\n",
     );
     s.run(&["dev", "--world", "w.json", "apply", "p.df"])
         .success();
     s.write(
         "p.df",
-        "edition 2026\nlifecycle(net.vpc, \"main\", \"prevent_destroy\")\nseen(a) if identity(net.vpc, a, _)\n",
+        "edition 2027\nlifecycle(net.vpc, \"main\", \"prevent_destroy\")\nseen(a) if identity(net.vpc, a, _)\n",
     );
     let why = |q: &str| {
         s.run(&["dev", "--world", "w.json", "why", q, "p.df"])
@@ -196,7 +196,7 @@ fn why_labels_facts_injected_at_a_tick() {
     use dform::ast::{Atom, Lit, Term};
     use dform::value::Value;
     let program =
-        dform::zset::with_policy_rules(dform::parser::parse_program("edition 2026\n").unwrap())
+        dform::zset::with_policy_rules(dform::parser::parse_program("edition 2027\n").unwrap())
             .unwrap();
     let s = |x: &str| Term::Val(Value::Str(x.into()));
     let fact = |pred: &str, args: Vec<Term>| Atom {

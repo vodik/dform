@@ -1,6 +1,8 @@
 //! The lexer (docs/grammar.md "Tokens"). Lossless: whitespace and comments
 //! are tokens too, so the concatenated token texts are the file. Newlines
 //! are in whitespace tokens; the parser decides where one ends a statement.
+//! No token depends on the whitespace around it (H section 1, rule 3): `.`
+//! is always a dot, `/` always a slash.
 
 use crate::syntax::SyntaxKind::{self, *};
 use logos::Logos;
@@ -9,13 +11,11 @@ use logos::Logos;
 enum Tok {
     #[regex(r"[ \t\r\n\f]+")]
     Whitespace,
-    #[regex(r"(#|//)[^\n]*", allow_greedy = true)]
+    #[regex(r"#[^\n]*", allow_greedy = true)]
     Comment,
 
     #[regex(r"[A-Za-z_][A-Za-z0-9_]*")]
     Ident,
-    #[regex(r#"\.([A-Za-z_][A-Za-z0-9_]*|"([^"\\\n]|\\.)*")(\.([A-Za-z_][A-Za-z0-9_]*|"([^"\\\n]|\\.)*")|\[[0-9]+\])*"#)]
-    Path,
     #[regex(r#""([^"\\]|\\.)*""#)]
     String,
     #[regex(r"[0-9]+")]
@@ -78,7 +78,6 @@ fn kind(t: Tok) -> SyntaxKind {
         Tok::Whitespace => WHITESPACE,
         Tok::Comment => COMMENT,
         Tok::Ident => IDENT,
-        Tok::Path => PATH,
         Tok::String => STRING,
         Tok::Int => INT,
         Tok::Rank => RANK,
@@ -109,44 +108,37 @@ fn kind(t: Tok) -> SyntaxKind {
     }
 }
 
-/// The keywords, each its token kind.
+/// The keywords, each its token kind: the 22 a statement starts with,
+/// the body words, the block clause and the literals (H section 4).
 pub const KEYWORDS: &[(&str, SyntaxKind)] = &[
     ("edition", EDITION_KW),
+    ("import", IMPORT_KW),
     ("provider", PROVIDER_KW),
     ("stack", STACK_KW),
-    ("import", IMPORT_KW),
+    ("type", TYPE_KW),
+    ("decl", DECL_KW),
+    ("extern", EXTERN_KW),
     ("input", INPUT_KW),
     ("output", OUTPUT_KW),
+    ("let", LET_KW),
+    ("set", SET_KW),
     ("export", EXPORT_KW),
     ("contributes", CONTRIBUTES_KW),
     ("module", MODULE_KW),
     ("instance", INSTANCE_KW),
     ("policy", POLICY_KW),
-    ("apply", APPLY_KW),
+    ("use", USE_KW),
+    ("scenario", SCENARIO_KW),
     ("resource", RESOURCE_KW),
     ("settings", SETTINGS_KW),
-    ("scenario", SCENARIO_KW),
-    ("extern", EXTERN_KW),
-    ("type", TYPE_KW),
-    ("decl", DECL_KW),
-    ("when", WHEN_KW),
-    ("not", NOT_KW),
-    ("in", IN_KW),
-    ("exists", EXISTS_KW),
-    ("true", TRUE_KW),
-    ("false", FALSE_KW),
-    ("null", NULL_KW),
-    ("persist", PERSIST_KW),
-    ("where", WHERE_KW),
-    ("if", IF_KW),
-    ("for", FOR_KW),
-    ("let", LET_KW),
-    ("has", HAS_KW),
-    ("some", SOME_KW),
-    ("with", WITH_KW),
     ("deny", DENY_KW),
     ("warn", WARN_KW),
-    ("constraint", CONSTRAINT_KW),
+    ("not", NOT_KW),
+    ("in", IN_KW),
+    ("has", HAS_KW),
+    ("if", IF_KW),
+    ("true", TRUE_KW),
+    ("false", FALSE_KW),
 ];
 
 /// Keywords are token kinds. An identifier whose text is one of these lexes
@@ -164,44 +156,25 @@ pub struct Token {
     pub end: usize,
 }
 
-/// Tokens after which a `.` with no whitespace before it is member access
-/// (`vpc.cidr`, `f[0].x`, `."a-b".c`) rather than the start of a keypath.
-fn joins(k: SyntaxKind) -> bool {
-    matches!(k, IDENT | R_PAREN | R_BRACKET | STRING) || k.is_keyword()
-}
-
 /// Every token of `src`, trivia included. Never fails: a character no token
 /// starts with is an `ERROR_TOKEN` the parser reports.
 pub fn lex(src: &str) -> Vec<Token> {
-    let mut out: Vec<Token> = Vec::new();
-    let mut base = 0;
-    'restart: loop {
-        let mut lx = Tok::lexer(&src[base..]);
-        while let Some(t) = lx.next() {
-            let r = lx.span();
-            let (start, end) = (base + r.start, base + r.end);
-            let k = match t {
-                Ok(Tok::Ident) => keyword(&src[start..end]).unwrap_or(IDENT),
-                Ok(Tok::Path) if out.last().is_some_and(|p| p.end == start && joins(p.kind)) => {
-                    out.push(Token {
-                        kind: DOT,
-                        start,
-                        end: start + 1,
-                    });
-                    base = start + 1;
-                    continue 'restart;
-                }
-                Ok(t) => kind(t),
-                Err(()) => ERROR_TOKEN,
-            };
-            out.push(Token {
-                kind: k,
-                start,
-                end,
-            });
-        }
-        return out;
+    let mut lx = Tok::lexer(src);
+    let mut out = Vec::new();
+    while let Some(t) = lx.next() {
+        let r = lx.span();
+        let kind = match t {
+            Ok(Tok::Ident) => keyword(&src[r.clone()]).unwrap_or(IDENT),
+            Ok(t) => kind(t),
+            Err(()) => ERROR_TOKEN,
+        };
+        out.push(Token {
+            kind,
+            start: r.start,
+            end: r.end,
+        });
     }
+    out
 }
 
 #[cfg(test)]
@@ -225,11 +198,11 @@ mod tests {
     }
 
     #[test]
-    fn a_dot_after_a_name_is_member_access_and_a_keypath_otherwise() {
+    fn a_dot_and_a_slash_are_themselves_whatever_the_spaces() {
         assert_eq!(
-            kinds("vpc.cidr .tags.team (.a) m.i/n"),
+            kinds("vpc.cidr vpc .cidr a/b a / b"),
             vec![
-                IDENT, DOT, IDENT, PATH, L_PAREN, PATH, R_PAREN, IDENT, DOT, IDENT, SLASH, IDENT
+                IDENT, DOT, IDENT, IDENT, DOT, IDENT, IDENT, SLASH, IDENT, IDENT, SLASH, IDENT
             ]
         );
         assert_eq!(
@@ -244,14 +217,19 @@ mod tests {
     #[test]
     fn keywords_are_kinds_but_longer_names_are_not() {
         assert_eq!(
-            kinds("resource resources if iff not in inet"),
-            vec![RESOURCE_KW, IDENT, IF_KW, IDENT, NOT_KW, IN_KW, IDENT]
+            kinds("resource resources if iff not in inet when for some"),
+            vec![RESOURCE_KW, IDENT, IF_KW, IDENT, NOT_KW, IN_KW, IDENT, IDENT, IDENT, IDENT]
         );
     }
 
     #[test]
+    fn a_comment_is_a_hash() {
+        assert_eq!(kinds("a # b\nc // d"), vec![IDENT, IDENT, SLASH, SLASH, IDENT]);
+    }
+
+    #[test]
     fn lossless() {
-        let src = "p(a, \"b{x}\") if q(x), # c\n  x != 1\n\u{1F600}";
+        let src = "p(a, \"b${x}\") if q(x), # c\n  x != 1\n\u{1F600}";
         let toks = lex(src);
         let text: String = toks.iter().map(|t| &src[t.start..t.end]).collect();
         assert_eq!(text, src);

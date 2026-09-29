@@ -39,9 +39,10 @@ fn doc_comments_lower_to_doc_facts() {
     let s = Scratch::new("docs-facts");
     s.write(
         "lib.df",
-        "edition 2026\n\
+        "edition 2027\n\
          #| Shared names.\n\
-         type zone = enum(\"a\", \"b\")\n",
+         type zone = enum(\"a\", \"b\")\n\
+         ",
     );
     s.write(
         "p.df",

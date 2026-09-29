@@ -1,4 +1,4 @@
-edition 2026
+edition 2027
 
 # A stack's key is glued to its name and closed.
 input env: string = "dev"

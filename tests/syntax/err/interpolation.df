@@ -1,8 +1,8 @@
-edition 2026
+edition 2027
 
 # A string's braces are interpolation: a literal brace is doubled.
-a("{x")
+a("${}")
 b("x}")
-c("{{ok}} {y}") if y = "fine"
+c("{ok} ${y}") if y = "fine"
 q("a")
-d("n-{x.}") if q(x)
+d("n-${x.}") if q(x)

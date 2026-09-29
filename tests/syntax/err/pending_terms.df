@@ -1,4 +1,4 @@
-edition 2026
+edition 2027
 
 # Terms and literals the grammar has and the evaluator does not yet.
 p(null)

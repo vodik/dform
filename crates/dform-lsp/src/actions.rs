@@ -192,36 +192,48 @@ fn dangling_refs(e: &Evaluated, read: Reader) -> Vec<Action> {
         let Some(block) = resource_block(&root, start) else {
             continue;
         };
-        let clauses: Vec<SyntaxNode> = block
-            .children()
-            .filter(|n| n.kind() == SyntaxKind::CLAUSE)
-            .collect();
-        let has_for = clauses.iter().any(|c| {
-            c.first_token()
-                .is_some_and(|t| t.kind() == SyntaxKind::FOR_KW)
-        });
+        let clause = block.children().find(|n| n.kind() == SyntaxKind::CLAUSE);
         let quoted = format!("\"{addr}\"");
-        if has_for && !text.get(start..end).is_some_and(|w| w.contains(&quoted)) {
+        // A clause that binds rows: the ref may name each row's own; guard
+        // only a ref written as the address itself.
+        if clause.is_some() && !text.get(start..end).is_some_and(|w| w.contains(&quoted)) {
             continue;
         }
-        let after = match clauses.last() {
-            Some(c) => usize::from(c.text_range().end()),
+        let lit = format!("{quoted} in {typ}");
+        // The block takes one clause (H-3): the guard joins it, or is it.
+        let (at_edit, insert) = match clause.as_ref().and_then(|c| {
+            c.children().find(|b| b.kind() == SyntaxKind::BODY)
+        }) {
+            Some(body)
+                if body
+                    .first_token()
+                    .is_some_and(|t| t.kind() == SyntaxKind::L_BRACE) =>
+            {
+                let Some(close) = body.last_token() else {
+                    continue;
+                };
+                let at = usize::from(close.text_range().start());
+                (at, format!("  {lit}\n"))
+            }
+            Some(body) => (usize::from(body.text_range().end()), format!(", {lit}")),
             None => match block
                 .children_with_tokens()
                 .find(|t| t.kind() == SyntaxKind::L_BRACE)
             {
-                Some(b) => usize::from(b.text_range().end()),
+                Some(b) => {
+                    let at = usize::from(b.text_range().end());
+                    (at, line_after(&text, at, &format!("if {lit}")))
+                }
                 None => continue,
             },
         };
-        let guard = format!("if {quoted} in {typ}");
         out.push(
             Action::new(
-                format!("guard the block on {typ} {addr} existing: `{guard}`"),
+                format!("guard the block on {typ} {addr} existing: `{lit}`"),
                 transform::DANGLING_REF.to_string(),
                 Some(at),
             )
-            .edit(&file, after, after, line_after(&text, after, &guard)),
+            .edit(&file, at_edit, at_edit, insert),
         );
     }
     out

@@ -5,28 +5,28 @@
 mod common;
 use common::{Scratch, repo};
 
-const P: &str = r#"edition 2026
+const P: &str = r#"edition 2027
 input env: enum("dev", "prod")
 input size: int = 1
 resource net.vpc main {
-  for size(s)
+  if size(s)
   cidr = "10.0.0.0/16"
   size = s
 }
 resource db.postgres main {
-  for env("prod")
+  if env("prod")
   multi_az = true
 }
 deny "size is small" if size(s), s > 5
 
 scenario prod {
-  with env = "prod"
+  set env = "prod"
   deny "prod has a database" if not want(db.postgres, "main")
 }
 
 scenario dev_is_small {
-  with env = "dev"
-  with size = 9
+  set env = "dev"
+  set size = 9
   deny "dev has no database" if want(db.postgres, _)
 }
 "#;

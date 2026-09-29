@@ -20,7 +20,7 @@ fn setup(name: &str) -> Scratch {
     let s = Scratch::project(name);
     s.write("stacks/workload.df", WORKLOAD);
     release(&s, "gcr.io/renfry/web:1.0");
-    s.write("data/approvals.facts", "edition 2026\n");
+    s.write("data/approvals.facts", "edition 2027\n");
     s
 }
 
@@ -123,7 +123,7 @@ fn approve_lets_a_world_event_correct_drift() {
     // the drift arrives with a world event, not an input change.
     s.write(
         "data/approvals.facts",
-        "edition 2026\n\napprove(\"k8s.deployment\", \"web\")\n",
+        "edition 2027\n\napprove(\"k8s.deployment\", \"web\")\n",
     );
     assert_eq!(
         once(&s, &[]),
@@ -289,7 +289,7 @@ fn plan_reads_an_input_relation_and_rejects_a_stray_fact() {
     );
     s.write(
         "data/release.facts",
-        "edition 2026\n\nrelease(\"a\")\nrelaese(\"b\")\n",
+        "edition 2027\n\nrelease(\"a\")\nrelaese(\"b\")\n",
     );
     let r = s.run(&["plan", "stacks/workload.df"]).failure();
     assert!(
@@ -300,7 +300,7 @@ fn plan_reads_an_input_relation_and_rejects_a_stray_fact() {
     );
     s.write(
         "bad.df",
-        "edition 2026\n\ninput relation r/1 from url(\"http://x\")\nq(x) if r(x)\n",
+        "edition 2027\n\ninput relation r/1 from url(\"http://x\")\nq(x) if r(x)\n",
     );
     let r = s.run(&["plan", "bad.df"]).failure();
     assert!(

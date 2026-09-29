@@ -90,9 +90,7 @@ impl Decls {
                 let name = || declared_name(&n).map(|t| t.text().to_string());
                 match n.kind() {
                     SyntaxKind::LET => d.lets.extend(name().map(|x| (scope(), x))),
-                    SyntaxKind::INPUT | SyntaxKind::VALUE_RULE => {
-                        d.values.extend(name().map(|x| (scope(), x)))
-                    }
+                    SyntaxKind::INPUT => d.values.extend(name().map(|x| (scope(), x))),
                     SyntaxKind::TYPE_ALIAS => d.aliases.extend(name()),
                     SyntaxKind::MODULE => d.modules.extend(name()),
                     SyntaxKind::POLICY => d.policies.extend(name()),
@@ -364,7 +362,6 @@ enum Part {
     Name(SyntaxToken),
     Settings,
     Dot,
-    Slash,
     Index,
 }
 
@@ -377,7 +374,6 @@ fn parts(chain: &SyntaxNode) -> Vec<Part> {
                 SyntaxKind::IDENT => Some(Part::Name(t)),
                 SyntaxKind::SETTINGS_KW => Some(Part::Settings),
                 SyntaxKind::DOT => Some(Part::Dot),
-                SyntaxKind::SLASH => Some(Part::Slash),
                 _ => None,
             },
         })
@@ -399,13 +395,11 @@ pub fn classify(d: &Decls, t: &SyntaxToken) -> What {
     let used = |s: Option<Symbol>| s.map_or(What::Other, |s| What::Name(s, false));
     match parent.kind() {
         SyntaxKind::LET if is_declared() => decl(Symbol::Let(scope, name)),
-        SyntaxKind::INPUT | SyntaxKind::VALUE_RULE if is_declared() => {
-            decl(Symbol::Value(scope, name))
-        }
+        SyntaxKind::INPUT if is_declared() => decl(Symbol::Value(scope, name)),
         SyntaxKind::TYPE_ALIAS if is_declared() => decl(Symbol::Alias(name)),
         SyntaxKind::MODULE if is_declared() => decl(Symbol::Module(name)),
         SyntaxKind::POLICY if is_declared() => decl(Symbol::Policy(name)),
-        SyntaxKind::APPLY => used(Some(Symbol::Policy(name))),
+        SyntaxKind::USE => used(Some(Symbol::Policy(name))),
         SyntaxKind::PROVIDER => What::Provider,
         SyntaxKind::DECL | SyntaxKind::EXTERN | SyntaxKind::INPUT_RELATION
             if relation_name(&parent).as_ref() == Some(t) =>
@@ -427,7 +421,6 @@ pub fn classify(d: &Decls, t: &SyntaxToken) -> What {
             [m, ..] if m == t => used(Some(Symbol::Module(name))),
             _ => What::Other,
         },
-        SyntaxKind::WITH => used(d.value(&scope, &name)),
         SyntaxKind::RESOURCE | SyntaxKind::SETTINGS => match header(&parent) {
             Some(h) if &h.name == t && h.is_static => {
                 if parent.kind() == SyntaxKind::RESOURCE {
@@ -464,9 +457,6 @@ pub fn classify(d: &Decls, t: &SyntaxToken) -> What {
                 Some(i) if i.kind() == SyntaxKind::INSTANCE => What::Other,
                 _ => What::Path,
             }
-        }
-        SyntaxKind::RECORD_ATOM if idents(&parent).first() == Some(t) => {
-            used(Some(d.predicate(&scope, &name)))
         }
         SyntaxKind::CHAIN => chain(d, &parent, t, &scope),
         _ => What::Other,
@@ -526,10 +516,8 @@ fn chain(d: &Decls, c: &SyntaxNode, t: &SyntaxToken, scope: &Scope) -> What {
         return What::Other;
     }
     // 4: a resource in scope (bare, only where a bare name is an address).
-    let addressed = matches!(
-        context,
-        Some(SyntaxKind::OUTPUT_DECL | SyntaxKind::LIT_EXISTS)
-    ) || (context == Some(SyntaxKind::LIT_IN)
+    let addressed = context == Some(SyntaxKind::OUTPUT_DECL)
+        || (context == Some(SyntaxKind::LIT_IN)
         && c.parent().and_then(|p| p.first_child()).as_ref() == Some(c));
     if (!only || addressed)
         && !matches!(ps.get(1), Some(Part::Index))
@@ -571,14 +559,8 @@ fn chain(d: &Decls, c: &SyntaxNode, t: &SyntaxToken, scope: &Scope) -> What {
         if k == 2 {
             return What::Name(Symbol::Instance(name0, t.text().to_string()), false);
         }
-        return match (ps.get(3), k) {
-            (Some(Part::Slash), 4) => {
-                What::Name(Symbol::Resource(Some(name0), t.text().to_string()), false)
-            }
-            (Some(Part::Slash), _) => path(5),
-            // `m.i.k`: an output; after it, a path.
-            _ => path(5),
-        };
+        // `m.i.k`: an output; after it, a path.
+        return path(5);
     }
     // 6: a type followed by `.n` (the longest such type), a relation's
     // `p[..]`.
@@ -814,7 +796,7 @@ fn locate(p: &Project, e: &Evaluated, w: Where) -> Option<Location> {
 mod tests {
     use super::*;
 
-    const SRC: &str = r#"edition 2026
+    const SRC: &str = r#"edition 2027
 input env: string = "staging"
 let cfg = settings[env]
 module network {
@@ -896,7 +878,7 @@ zone_index("a", 0)
         );
     }
 
-    const PRIVATE: &str = r#"edition 2026
+    const PRIVATE: &str = r#"edition 2027
 module a {
   helper(1)
   shared(1)
@@ -904,7 +886,7 @@ module a {
   q(x) if helper(x), shared(x)
 }
 module b {
-  export helper/1
+  export helper
   helper(2)
   r(x) if helper(x)
 }

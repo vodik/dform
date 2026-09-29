@@ -7,7 +7,7 @@ mod common;
 use common::Scratch;
 use std::path::PathBuf;
 
-const APP: &str = r#"edition 2026
+const APP: &str = r#"edition 2027
 stack app[env] {}
 input env: enum("staging", "prod") = "staging"
 resource net.vpc main {
@@ -16,7 +16,7 @@ resource net.vpc main {
 }
 "#;
 
-const NET: &str = r#"edition 2026
+const NET: &str = r#"edition 2027
 stack net {}
 resource net.vpc shared {
   cidr = "10.9.0.0/16"
@@ -166,7 +166,7 @@ fn stack_names_are_unique_in_a_project() {
 fn the_layout_lints() {
     let s = project("target-lints");
     // A module with a stack statement is an error.
-    s.write("modules/m.df", "edition 2026\nstack m {}\n");
+    s.write("modules/m.df", "edition 2027\nstack m {}\n");
     let r = s.run(&["plan", "net"]).failure();
     assert!(
         r.stderr
@@ -176,7 +176,7 @@ fn the_layout_lints() {
     );
     std::fs::remove_file(s.path("modules/m.df")).unwrap();
     // A .df outside the layout is a warning.
-    s.write("loose.df", "edition 2026\n");
+    s.write("loose.df", "edition 2027\n");
     let r = s.run(&["plan", "net"]).success();
     assert!(
         r.stderr
@@ -199,7 +199,7 @@ fn a_program_imports_modules_never_a_stack() {
     let s = project("target-import-stack");
     s.write(
         "stacks/both.df",
-        "edition 2026\nstack both {}\nimport \"stacks/net.df\"\n",
+        "edition 2027\nstack both {}\nimport \"stacks/net.df\"\n",
     );
     let r = s.run(&["plan", "both"]).failure();
     assert!(
@@ -213,11 +213,11 @@ fn a_program_imports_modules_never_a_stack() {
     // Imports resolve from the project root, whatever file imports.
     s.write(
         "modules/tags.df",
-        "edition 2026\nresource net.vpc extra { cidr = \"10.1.0.0/16\" }\n",
+        "edition 2027\nresource net.vpc extra { cidr = \"10.1.0.0/16\" }\n",
     );
     s.write(
         "stacks/both.df",
-        "edition 2026\nstack both {}\nimport \"modules/tags.df\"\n",
+        "edition 2027\nstack both {}\nimport \"modules/tags.df\"\n",
     );
     let r = s.run(&["plan", "both"]).success();
     assert!(r.stdout.contains("+ net.vpc[\"extra\"]"), "{}", r.stdout);
@@ -258,7 +258,7 @@ unknowns = "strict"
     );
     s.write(
         "stacks/p.df",
-        r#"edition 2026
+        r#"edition 2027
 stack p {}
 provider cloud {}
 resource x.thing a { size = 1 }
@@ -450,7 +450,7 @@ fn fmt_with_no_path_formats_the_project() {
     let s = project("fmt-project");
     s.write(
         "stacks/net.df",
-        "edition 2026\nstack net {}\nresource net.vpc shared {cidr=\"10.9.0.0/16\"}\n",
+        "edition 2027\nstack net {}\nresource net.vpc shared {cidr=\"10.9.0.0/16\"}\n",
     );
     let r = s.run(&["fmt", "--check"]).failure();
     assert_eq!(r.stdout, "stacks/net.df\n");
@@ -540,23 +540,23 @@ fn program_paths_resolve_from_the_root() {
     let s = project("root-paths");
     s.write("data/peers.csv", "name\na\nb\n");
     s.write("data/note.txt", "hello");
-    s.write("data/tags.facts", "edition 2026\n\ntag(\"x\")\n");
+    s.write("data/tags.facts", "edition 2027\n\ntag(\"x\")\n");
     s.write(
         "providers/cloud/schema.df",
         "type_provider(x.thing, \"fakecloud\")\n",
     );
     s.write(
         "stacks/paths.df",
-        r#"edition 2026
+        r#"edition 2027
 stack paths {}
 provider cloud { source = "providers/cloud" }
 extern file.text(+path, -value)
-input relation peer(name: string) from csv("data/peers.csv")
+input peer(name: string) from csv("data/peers.csv")
 input relation tag/1 from file("data/tags.facts")
 note(v) if v = file.text["data/note.txt"]
-resource x.thing "{n}" {
-  for peer{name: n}, tag(g), note(v)
-  label = "{n}-{g}-{v}"
+resource x.thing "${n}" {
+  if peer(name: n), tag(g), note(v)
+  label = "${n}-${g}-${v}"
 }
 "#,
     );

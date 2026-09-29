@@ -10,7 +10,7 @@ use common::{BACKENDS, Backend, Scratch};
 use dform::plugin::link::Link;
 use dform::plugin::{Config, Launch, Providers};
 
-const PROG: &str = r#"edition 2026
+const PROG: &str = r#"edition 2027
 
 resource net.vpc main { cidr = "10.0.0.0/16" }
 resource net.subnet a { vpc_id = ref(net.vpc, "main", "id"), cidr = "10.0.1.0/24" }
@@ -119,7 +119,7 @@ fn a_source_directory_holding_an_executable_is_that_plugin() {
     std::os::unix::fs::symlink(fake(), s.path("prov/dform-provider-fake")).unwrap();
     s.write(
         "p.df",
-        "edition 2026\n\nprovider fake { source = \"prov\" }\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\n",
+        "edition 2027\n\nprovider fake { source = \"prov\" }\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\n",
     );
     let r = dform(&s, &["plan"]).success();
     assert!(r.stdout.contains("+ net.vpc[\"main\"]"), "{}", r.stdout);

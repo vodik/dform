@@ -8,7 +8,7 @@
 mod common;
 use common::{BACKENDS, Backend, Scratch};
 
-const PROG: &str = r#"edition 2026
+const PROG: &str = r#"edition 2027
 
 resource net.vpc a { cidr = "10.0.0.0/16" }
 resource net.vpc b { cidr = "10.1.0.0/16" }

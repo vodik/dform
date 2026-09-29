@@ -19,11 +19,11 @@ fn a_misspelled_attribute_in_a_field_warns_at_the_read() {
     let s = Scratch::new("field-read");
     let r = plan(
         &s,
-        r#"edition 2026
+        r#"edition 2027
 resource net.vpc main { cidr = "10.0.0.0/16" }
 resource net.subnet a {
   cidr = "10.0.1.0/24"
-  name = "a-{net.vpc.main.cidrr}"
+  name = "a-${net.vpc.main.cidrr}"
 }
 "#,
     )
@@ -43,17 +43,17 @@ fn a_read_that_finds_a_row_or_a_gated_block_is_quiet() {
     let s = Scratch::new("field-read-ok");
     let r = plan(
         &s,
-        r#"edition 2026
+        r#"edition 2027
 input env: string = "prod"
 resource net.vpc main { cidr = "10.0.0.0/16" }
 resource net.subnet a {
   cidr = "10.0.1.0/24"
-  name = "a-{net.vpc.main.cidr}"
+  name = "a-${net.vpc.main.cidr}"
 }
 resource net.subnet b {
   if env == "staging"
   cidr = "10.0.2.0/24"
-  name = "b-{net.vpc.main.cidrr}"
+  name = "b-${net.vpc.main.cidrr}"
 }
 resource net.vpc gated {
   if env == "staging"
@@ -61,7 +61,7 @@ resource net.vpc gated {
 }
 resource net.subnet c {
   cidr = "10.0.3.0/24"
-  name = "c-{net.vpc.gated.cidr}"
+  name = "c-${net.vpc.gated.cidr}"
 }
 "#,
     )
@@ -75,12 +75,12 @@ fn under_strict_mode_it_is_a_deny() {
     let s = Scratch::new("field-read-strict");
     let r = plan(
         &s,
-        r#"edition 2026
+        r#"edition 2027
 stack s { unknowns = "strict" }
 resource net.vpc main { cidr = "10.0.0.0/16" }
 resource net.subnet a {
   cidr = "10.0.1.0/24"
-  name = "a-{net.vpc.main.cidrr}"
+  name = "a-${net.vpc.main.cidrr}"
 }
 "#,
     )

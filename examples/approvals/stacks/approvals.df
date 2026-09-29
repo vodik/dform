@@ -9,7 +9,7 @@
 #     --digest sha256:... --stack approvals.demo --key env=prod --approver alice > approval.json
 #   dform apply plan.json --approval approval.json
 
-edition 2026
+edition 2027
 
 stack approvals.demo[env] {
   # Whose signatures approve a plan: a JWKS document (`jwks("https://...")`
@@ -28,7 +28,7 @@ resource net.vpc main {
 requires_approval(d, "a replace in prod") if {
   env == "prod"
   deformation("replace", t, a, _)
-  d = "{t}[\"{a}\"]"
+  d = "${t}[\"${a}\"]"
 }
 
 # Optional: who may approve what. Without it, any key in the trust root may.

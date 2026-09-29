@@ -8,7 +8,7 @@
 #
 # To run it, from this directory: README.md.
 
-edition 2026
+edition 2027
 stack advanced {}
 input env: enum("staging", "prod") = "staging"
 
@@ -35,7 +35,7 @@ settings prod {
 corp_net(inet("10.100.0.0/12"))
 
 # Explode tenant list into a relation (Pattern A), with index.
-tenant(t, i) if some i, t in settings[env].tenants
+tenant(t, i) if t = settings[env].tenants[i]
 
 # Shared services VPC (always exists)
 resource net.vpc shared {
@@ -45,7 +45,7 @@ resource net.vpc shared {
 
 # One VPC per tenant, with deterministic CIDRs derived from corp_net.
 resource net.vpc t {
-  for tenant(t, i), corp_net(corp)
+  if tenant(t, i), corp_net(corp)
   cidr = inet_subnet(corp, 4, i)
   tags = { segment: "tenant", tenant: t }
 }
@@ -74,9 +74,12 @@ reachable(a, c) if reachable(a, b), link(b, c)
 # Derived infra: create a route for every reachable pair (excluding self).
 # `dest` is bound in the clause, so it is read now (an attr join);
 # `destination = net.vpc[b].cidr` would be a reference.
-resource net.route "rt-{a}-{b}" {
-  for reachable(a, b), a != b
-  if dest = net.vpc[b].cidr
+resource net.route "rt-${a}-${b}" {
+  if {
+    reachable(a, b)
+    a != b
+    dest = net.vpc[b].cidr
+  }
   from = a
   to = b
   destination = dest
@@ -105,7 +108,7 @@ mesh_non_adjacent_pair(a, b) if {
 
 warn "mesh has direct route between non-adjacent nodes" { from: a, to: b } if {
   mesh_non_adjacent_pair(a, b)
-  "rt-{a}-{b}" in net.route
+  "rt-${a}-${b}" in net.route
   not mesh_allow_direct_route(a, b)
 }
 
@@ -120,10 +123,10 @@ decl mesh_allow_direct_route/2
 # We immediately explode it into row facts, then derive edges, then rely on
 # reachability closure to fill in the implied connectivity.
 
-mesh_vpc(name, cidr, i) if some i, { name: name, net: cidr } in settings[env].mesh.vpcs
+mesh_vpc(name, cidr, i) if { name: name, net: cidr } = settings[env].mesh.vpcs[i]
 
 resource net.vpc name {
-  for mesh_vpc(name, cidr, _)
+  if mesh_vpc(name, cidr, _)
   cidr = cidr
   tags = { segment: "mesh" }
 }
@@ -141,8 +144,8 @@ mesh_peer(a, b) if {
 peer(a, b) if mesh_peer(a, b)
 
 # Optional: materialize the derived peerings as explicit peering resources.
-resource net.vpc_peering "mesh-peer-{a}-{b}" {
-  for mesh_peer(a, b)
+resource net.vpc_peering "mesh-peer-${a}-${b}" {
+  if mesh_peer(a, b)
   requester_vpc_id = net.vpc[a].id
   accepter_vpc_id = net.vpc[b].id
 }

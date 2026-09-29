@@ -17,12 +17,12 @@ fn plan(src: &str) -> common::Run {
 #[test]
 fn a_module_predicate_is_private_to_its_instance() {
     let r = plan(
-        r#"edition 2026
+        r#"edition 2027
 module m {
   input n: int
   size(n_) if n(n_)
   resource net.vpc vpc {
-    for size(s)
+    if size(s)
     size = s
   }
 }
@@ -47,7 +47,7 @@ instance m b { n = 2 }
 #[test]
 fn reading_a_private_predicate_is_an_error_naming_the_module() {
     let r = plan(
-        r#"edition 2026
+        r#"edition 2027
 module m {
   size(1)
 }
@@ -69,14 +69,14 @@ big(s) if size(s)
 #[test]
 fn exports_and_outputs_are_the_interface() {
     let r = plan(
-        r#"edition 2026
+        r#"edition 2027
 module m {
   input n: int
   output vpc: addr
-  export size/1
+  export size
   size(n_) if n(n_)
   resource net.vpc vpc {
-    for size(s_)
+    if size(s_)
     size = s_
   }
   output vpc = vpc
@@ -84,7 +84,7 @@ module m {
 instance m a { n = 3 }
 inst("a")
 resource net.subnet s {
-  for m.a.size(s_), inst(i), output(m[i], "vpc", v)
+  if m.a.size(s_), inst(i), output(m[i], "vpc", v)
   size = s_
   vpc = v
 }
@@ -103,11 +103,11 @@ resource net.subnet s {
 /// where it sets one; a required input it does not set is a compile error.
 #[test]
 fn an_input_default_yields_to_the_instance() {
-    let src = r#"edition 2026
+    let src = r#"edition 2027
 module m {
   input n: int = 7
   resource net.vpc vpc {
-    for n(n_)
+    if n(n_)
     size = n_
   }
 }
@@ -138,11 +138,11 @@ instance m b { n = 1 }
 #[test]
 fn a_refinement_on_a_module_input_is_a_deny() {
     let r = plan(
-        r#"edition 2026
+        r#"edition 2027
 module m {
   input n: int where n <= 5
   resource net.vpc vpc {
-    for n(n_)
+    if n(n_)
     size = n_
   }
 }
@@ -162,14 +162,14 @@ instance m a { n = 9 }
 /// are private unless granted.
 #[test]
 fn a_pack_writes_only_inside_its_grants() {
-    let src = r#"edition 2026
+    let src = r#"edition 2027
 resource net.vpc main { cidr = "10.0.0.0/16" }
 policy tags {
   contributes _.tags
-  arg(t, a, .tags, { team: "x" }) if want(t, a)
-  arg(net.vpc, a, .cidr, "10.9.0.0/16") @override if want(net.vpc, a)
+  arg(t, a, "tags", { team: "x" }) if want(t, a)
+  arg(net.vpc, a, "cidr", "10.9.0.0/16") @override if want(net.vpc, a)
 }
-apply tags
+use tags
 "#;
     let r = plan(src).failure();
     assert!(
@@ -195,7 +195,7 @@ fn a_stack_input_passed_to_a_module_input_of_the_same_name_stratifies() {
     let s = Scratch::new("lang-modules");
     s.write(
         "p.df",
-        r#"edition 2026
+        r#"edition 2027
 input replicas: int = 2
 module app {
   input replicas: int

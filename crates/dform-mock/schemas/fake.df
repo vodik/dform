@@ -12,7 +12,7 @@
 # accepts any configured attribute) unless a change to one replaces the
 # object: a vpc's or a subnet's cidr is force_new.
 
-edition 2026
+edition 2027
 
 type_provider(net.vpc, "fakecloud")
 type_provider(net.subnet, "fakecloud")
@@ -49,11 +49,11 @@ type_attr("db.postgres", "endpoint", "string", ["computed"])
 type_attr(k8s.cluster, "api_endpoint", "string", ["computed"])
 type_attr(k8s.cluster, "ca_cert", "string", ["computed"])
 
-type_mint("db.postgres", "endpoint", "{{name}}.db.fake")
+type_mint("db.postgres", "endpoint", "{name}.db.fake")
 
 # A new database is slow to show up in Read: five attempts before it is gone.
 type_retry("db.postgres", 5)
-type_mint(k8s.cluster, "api_endpoint", "https://{{name}}.k8s.fake")
+type_mint(k8s.cluster, "api_endpoint", "https://{name}.k8s.fake")
 type_mint(k8s.cluster, "ca_cert", "FAKECERT")
 
 # Checkable refinements (E DR-13; `src/refine.rs`): a subnet is a /24 or
@@ -97,7 +97,7 @@ type_doc(k8s.nodepool, "min", "The fewest nodes the pool scales down to.")
 type_doc(k8s.nodepool, "max", "The most nodes the pool scales up to.")
 type_doc("iam.role", "", "An identity workloads assume.")
 type_doc("iam.role", "name", "The role's name, unique in the account.")
-type_doc("iam.role", "assume", "Who may assume the role: `{{ principals: [...] }}`.")
+type_doc("iam.role", "assume", "Who may assume the role: `{ principals: [...] }`.")
 type_doc("iam.policy", "", "A set of permissions.")
 type_doc("iam.policy", "name", "The policy's name, unique in the account.")
 type_doc("iam.policy", "statements", "The policy's statements: each an effect, actions and resources.")

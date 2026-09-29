@@ -1,4 +1,4 @@
-edition 2026
+edition 2027
 
 provider fake {
   source = "providers/fake"
@@ -9,8 +9,7 @@ stack demo {
 }
 
 resource net.vpc "main" {
-  for zone in zones
-  if zone != "excluded"
+  if zone in zones, zone != "excluded"
   cidr = "10.0.0.0/16"
 }
 

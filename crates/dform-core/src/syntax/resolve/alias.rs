@@ -127,11 +127,6 @@ impl Lowerer<'_> {
                         self.alias_stmts(file, &b, inner, file_scope, own);
                     }
                 }
-                WHEN | FOR_STMT => {
-                    if let Some(b) = node(&n, STMT_BLOCK) {
-                        self.alias_stmts(file, &b, decl, file_scope, own);
-                    }
-                }
                 _ => {}
             }
         }

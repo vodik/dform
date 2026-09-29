@@ -150,10 +150,10 @@ pub fn item(n: &SyntaxNode) -> Option<(&'static str, String)> {
         POLICY => ("policy", word(n, 1)?),
         SCENARIO => ("scenario", word(n, 1)?),
         INPUT => ("input", word(n, 1)?),
-        INPUT_RELATION => ("predicate", word(n, 2)?),
+        INPUT_RELATION => ("predicate", word(n, 1)?),
         OUTPUT_DECL => ("output", word(n, 1)?),
         TYPE_ALIAS => ("alias", word(n, 1)?),
-        DECL if tokens(n).nth(1).is_none_or(|t| t.kind() != TYPE_KW) => ("predicate", dotted(n)?),
+        DECL => ("predicate", dotted(n)?),
         EXTERN => ("predicate", dotted(n)?),
         EXPORT if tokens(n).nth(1).is_none_or(|t| t.kind() != TYPE_KW) => {
             ("predicate", word(n, 1)?)
@@ -163,11 +163,12 @@ pub fn item(n: &SyntaxNode) -> Option<(&'static str, String)> {
             let chain = call.children().find(|c| c.kind() == CHAIN)?;
             ("rule", chain.text().to_string())
         }
-        VALUE_RULE => ("rule", word(n, 0)?),
+        LET => ("rule", word(n, 1)?),
         CHECK => ("rule", unquote(&tokens(n).find(|t| t.kind() == STRING)?)),
         RESOURCE => {
             // `resource net.vpc vpc @rank`: the type's words and dots, then
-            // the name (a word or a string).
+            // the name (a word or a string); named as its address,
+            // `net.vpc["vpc"]`.
             let ts: Vec<SyntaxToken> = tokens(n).filter(|t| t.kind() != RANK).skip(1).collect();
             let (name, typ) = ts.split_last()?;
             let name = match name.kind() {
@@ -176,7 +177,7 @@ pub fn item(n: &SyntaxNode) -> Option<(&'static str, String)> {
                 _ => return None,
             };
             let typ: String = typ.iter().map(|t| t.text()).collect();
-            ("resource", format!("{typ}.{name}"))
+            ("resource", format!("{typ}[\"{name}\"]"))
         }
         _ => return None,
     })
@@ -285,37 +286,7 @@ mod tests {
 
     #[test]
     fn doc_lines_directly_above_an_item_document_it() {
-        let src = "edition 2026
-
-#| The network.
-#| owner: platform
-#|
-#| Its subnets are private.
-module network {
-  #| The VPC's range.
-  #| since: 2026.1
-  input vpc_net: inet
-
-  #| not this: a blank line follows
-
-  output vpc: net.vpc
-  #| A subnet.
-  resource net.subnet \"private-{z}\" @default {
-    for data(\"zone\", z)
-  }
-}
-x = 1 #| a trailing comment
-y = 2
-# a plain comment
-#| deprecated: use q
-p(a) if q(a)
-#| Checked.
-deny \"no\" if p(1)
-#| Named.
-type env = enum(\"a\")
-#| An extern.
-extern dns.lookup(+name, -addr)
-";
+        let src = "edition 2027\n\n#| The network.\n#| owner: platform\n#|\n#| Its subnets are private.\nmodule network {\n  #| The VPC's range.\n  #| since: 2026.1\n  input vpc_net: inet\n\n  #| not this: a blank line follows\n\n  output vpc: net.vpc\n  #| A subnet.\n  resource net.subnet \"private-${z}\" @default {\n    if data(\"zone\", z)\n  }\n}\nlet x = 1 #| a trailing comment\nlet y = 2\n# a plain comment\n#| deprecated: use q\np(a) if q(a)\n#| Checked.\ndeny \"no\" if p(1)\n#| Named.\ntype env = enum(\"a\")\n#| An extern.\nextern dns.lookup(+name, -addr)\n";
         assert_eq!(
             docs(src),
             vec![

@@ -13,13 +13,7 @@ fn plan(s: &Scratch, src: &str) -> Run {
     s.run(&["dev", "--world", "w.json", "plan", "p.df"])
 }
 
-const SETTINGS: &str = "edition 2026
-type settings {
-  db.backup_days: int where 1 <= db.backup_days <= 35
-}
-settings prod @default { db = { backup_days: 3 } }
-settings prod { db = { backup_days: 14 } }
-";
+const SETTINGS: &str = "edition 2027\ntype settings {\n  db.backup_days: int where 1 <= db.backup_days <= 35\n}\nsettings prod @default { db = { backup_days: 3 } }\nsettings prod { db = { backup_days: 14 } }\n";
 
 /// A constraint is never out-ranked: an `@override` whose value violates
 /// it is a deny naming the refinement's place and both witnesses, and the
@@ -76,12 +70,7 @@ fn a_literal_that_violates_a_refinement_is_a_compile_error() {
     let s = Scratch::new("refine-literal");
     let r = plan(
         &s,
-        "edition 2026
-type settings {
-  db.backup_days: int where 1 <= db.backup_days <= 35
-}
-settings prod { db = { backup_days: 40 } }
-",
+        "edition 2027\ntype settings {\n  db.backup_days: int where 1 <= db.backup_days <= 35\n}\nsettings prod { db = { backup_days: 40 } }\n",
     )
     .failure();
     assert!(
@@ -95,7 +84,7 @@ settings prod { db = { backup_days: 40 } }
     // crates/dform-mock/schemas/fake.df: type_refine(net.subnet, cidr, prefix_len_le(24)).
     let r = plan(
         &s,
-        "edition 2026\nresource net.subnet a { cidr = \"10.0.0.0/26\" }\n",
+        "edition 2027\nresource net.subnet a { cidr = \"10.0.0.0/26\" }\n",
     )
     .failure();
     assert!(
@@ -109,7 +98,7 @@ settings prod { db = { backup_days: 40 } }
     );
     plan(
         &s,
-        "edition 2026\nresource net.subnet a { cidr = \"10.0.1.0/24\" }\n",
+        "edition 2027\nresource net.subnet a { cidr = \"10.0.1.0/24\" }\n",
     )
     .success();
 }
@@ -190,16 +179,7 @@ fn a_refinement_on_a_null_is_deferred_and_fires_after_the_boundary() {
     );
 }
 
-const VAULT: &str = "edition 2026
-type_provider(vault.secret, \"fakecloud\")
-type_attr(vault.secret, \"id\", \"string\", [\"computed\", \"id\"])
-type_attr(vault.secret, \"value\", \"string\", [\"computed\", \"sensitive\"])
-type_mint(vault.secret, \"value\", \"MINT\")
-type_provider(app.db, \"fakecloud\")
-type_attr(app.db, \"id\", \"string\", [\"computed\", \"id\"])
-type_attr(app.db, \"password\", \"string\", [\"sensitive\"])
-type_refine(app.db, \"password\", len_ge(16))
-";
+const VAULT: &str = "edition 2027\ntype_provider(vault.secret, \"fakecloud\")\ntype_attr(vault.secret, \"id\", \"string\", [\"computed\", \"id\"])\ntype_attr(vault.secret, \"value\", \"string\", [\"computed\", \"sensitive\"])\ntype_mint(vault.secret, \"value\", \"MINT\")\ntype_provider(app.db, \"fakecloud\")\ntype_attr(app.db, \"id\", \"string\", [\"computed\", \"id\"])\ntype_attr(app.db, \"password\", \"string\", [\"sensitive\"])\ntype_refine(app.db, \"password\", len_ge(16))\n";
 
 /// F DR-13 revised: the engine never checks a secret. A refinement on a
 /// sensitive path is an Apply assertion; the mock materializes the secret,
@@ -211,10 +191,7 @@ fn a_refinement_on_a_secret_is_an_apply_assertion() {
         s.write("schema.df", &VAULT.replace("MINT", mint));
         s.write(
             "p.df",
-            "edition 2026
-resource vault.secret pw {}
-resource app.db main { password = ref(vault.secret, \"pw\", .value) }
-",
+            "edition 2027\nresource vault.secret pw {}\nresource app.db main { password = ref(vault.secret, \"pw\", \"value\") }\n",
         );
         let _ = std::fs::remove_file(s.path("w.json"));
         let _ = std::fs::remove_dir_all(s.path("dform.state"));
@@ -254,13 +231,7 @@ fn e0306_a_refinement_on_a_sensitive_path_the_provider_cannot_check() {
     .unwrap();
     s.write(
         "p.df",
-        "edition 2026
-provider k8s { source = \"./providers/k8s\" }
-type k8s.secret {
-  data.password: string where len(data.password) >= 16
-}
-resource k8s.secret db { metadata.name = \"db\", data = { password: \"x\" } }
-",
+        "edition 2027\nprovider k8s { source = \"./providers/k8s\" }\ntype k8s.secret {\n  data.password: string where len(data.password) >= 16\n}\nresource k8s.secret db { metadata.name = \"db\", data = { password: \"x\" } }\n",
     );
     let out = common::dform()
         .args(["plan", "p.df"])
@@ -339,12 +310,7 @@ fn an_unknown_function_or_a_bad_pattern_is_a_compile_error() {
     let s = Scratch::new("refine-unknown");
     let r = plan(
         &s,
-        "edition 2026
-type app.thing {
-  name: string where frobnicate(name) == 3
-}
-resource app.thing a { name = \"x\" }
-",
+        "edition 2027\ntype app.thing {\n  name: string where frobnicate(name) == 3\n}\nresource app.thing a { name = \"x\" }\n",
     )
     .failure();
     assert!(
@@ -355,11 +321,7 @@ resource app.thing a { name = \"x\" }
     );
     let r = plan(
         &s,
-        "edition 2026
-type app.thing {
-  name: string where matches(name, \"a(\")
-}
-",
+        "edition 2027\ntype app.thing {\n  name: string where matches(name, \"a(\")\n}\n",
     )
     .failure();
     assert!(
@@ -368,7 +330,7 @@ type app.thing {
         "{}",
         r.stderr
     );
-    let r = plan(&s, "edition 2026\ninput n: int = 1 where frob(n) == 1\n").failure();
+    let r = plan(&s, "edition 2027\ninput n: int = 1 where frob(n) == 1\n").failure();
     assert!(
         r.stderr
             .contains("p.df:2:1: in a refinement: unknown function frob"),

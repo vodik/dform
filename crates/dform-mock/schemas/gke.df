@@ -6,7 +6,7 @@
 # google.client_config and google.secret_manager_secret_version are data
 # sources: no type_provider.
 
-edition 2026
+edition 2027
 
 type_provider("google_compute_subnetwork", "google")
 type_provider("google_compute_network_peering", "google")
@@ -40,9 +40,9 @@ type_attr("gke_cluster", "zones", "list", ["computed"])
 type_attr(google.client_config, "access_token", "string", ["computed", "sensitive"])
 type_attr(google.secret_manager_secret_version, "secret_data", "string", ["computed", "sensitive"])
 
-type_mint("gke_cluster", "endpoint", "https://{{name}}.gke.fake")
+type_mint("gke_cluster", "endpoint", "https://{name}.gke.fake")
 # The zones a cluster lands in are the node locations it was configured with.
-type_mint("gke_cluster", "zones", "{{doc:node_locations}}")
+type_mint("gke_cluster", "zones", "{doc:node_locations}")
 
 # Descriptions (`type_doc(Type, Path, Text)`; the path "" is the type's),
 # for the paths the examples write: the language server's hover and

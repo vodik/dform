@@ -3,17 +3,19 @@
 # UNRELATED aggregate over `want` must not become undetermined.
 # Run with --provider gke.
 
-edition 2026
+edition 2027
 
 resource gke_cluster pngu {
   name = "pngu-gke"
 }
 
 resource gke_nodepool np {
-  for arg("gke_cluster", "pngu", .zones, zs),
-    member(zs, z),
+  if {
+    arg("gke_cluster", "pngu", "zones", zs)
+    member(zs, z)
     np = format("np-%s", z)
-  cluster = ref("gke_cluster", "pngu", .id)
+  }
+  cluster = ref("gke_cluster", "pngu", "id")
   zone = z
 }
 
@@ -23,17 +25,23 @@ resource k8s.namespace pngu {
 
 # Unrelated negation over want (different type): decidable now.
 deny "namespace without deployment" { ns: n } if
-  want(k8s.namespace, n),
-  not want(k8s.deployment, n)
+  {
+    want(k8s.namespace, n)
+    not want(k8s.deployment, n)
+  }
 
 # Unrelated aggregate over want (different type): decidable now.
 ns_count(collect_set(n)) if want(k8s.namespace, n)
 
 deny "need the pngu namespace" if
-  ns_count(l),
-  not member(l, "pngu")
+  {
+    ns_count(l)
+    not member(l, "pngu")
+  }
 
 # Related negation (same type as the stuck head): correctly undetermined.
 deny "no nodepool in zone b" if
-  want("gke_cluster", "pngu"),
-  not want("gke_nodepool", "np-us-east1-b")
+  {
+    want("gke_cluster", "pngu")
+    not want("gke_nodepool", "np-us-east1-b")
+  }

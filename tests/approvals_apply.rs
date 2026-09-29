@@ -309,8 +309,14 @@ fn a_moved_git_commit_is_a_stale_plan() {
     commit("owner(\"a\")");
     s.write(
         "p.df",
-        "edition 2026\n\ninput relation owner/1 from git(\"ops.git\", \"main\", \"tags.facts\")\n\n\
-         resource net.vpc main {\n  cidr = \"10.0.0.0/16\"\n}\n",
+        "edition 2027\n\
+         \n\
+         input relation owner/1 from git(\"ops.git\", \"main\", \"tags.facts\")\n\
+         \n\
+         resource net.vpc main {\n\
+           cidr = \"10.0.0.0/16\"\n\
+         }\n\
+         ",
     );
     s.run(&["plan", "--out", "plan.json", "p.df"]).success();
     let file: serde_json::Value = serde_json::from_str(&s.read("plan.json")).unwrap();

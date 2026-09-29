@@ -1,4 +1,4 @@
-edition 2026
+edition 2027
 
 module network {
   input vpc_net: inet
@@ -13,8 +13,8 @@ module network {
   zone_index("us-test-1a", 0)
   zone_index("us-test-1b", 1)
 
-  resource net.subnet "private-{z}" {
-    for data("zone", z)
+  resource net.subnet "private-${z}" {
+    if data("zone", z)
     vpc_id = vpc.id
     cidr = inet_subnet(vpc.cidr, 4, zone_index[z])
     zone = z

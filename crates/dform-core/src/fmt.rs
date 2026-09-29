@@ -42,18 +42,14 @@ fn continues(k: SyntaxKind) -> bool {
         k,
         RULE | FACT
             | CHECK
-            | VALUE_RULE
-            | CONTRIBUTION
+            | SET
             | CLAUSE
             | ASSIGN
             | LET
-            | WITH
             | INPUT
             | INPUT_RELATION
             | OUTPUT_DECL
             | ATTR_DECL
-            | WHEN
-            | FOR_STMT
     )
 }
 
@@ -73,9 +69,7 @@ fn drop_comma(t: &SyntaxToken, next: Option<&SyntaxToken>, newline_after: bool) 
     }
     let Some(next) = next else { return false };
     let parent = t.parent();
-    if matches!(next.kind(), R_BRACKET | R_BRACE)
-        && !matches!(parent_kind(t), Some(ARG_LIST | BODY | CLAUSE))
-    {
+    if matches!(next.kind(), R_BRACKET | R_BRACE) && parent_kind(t) != Some(ARG_LIST) {
         return true;
     }
     newline_after
@@ -90,11 +84,8 @@ fn space(prev: &SyntaxToken, cur: &SyntaxToken) -> &'static str {
     if p == COMMENT || c == COMMENT {
         return " ";
     }
-    // Chains, dotted names and paths: `a.b[e]/c`.
+    // Chains, dotted names and paths: `a.b[e].c`.
     if p == DOT || c == DOT {
-        return "";
-    }
-    if (c == SLASH && cp != Some(BIN_EXPR)) || (p == SLASH && pp != Some(BIN_EXPR)) {
         return "";
     }
     if c == L_BRACKET && matches!(cp, Some(INDEX | BLOCK_PATH)) {
@@ -123,9 +114,6 @@ fn space(prev: &SyntaxToken, cur: &SyntaxToken) -> &'static str {
             Some(ARG_LIST | TYPE_EXPR | DECL | EXTERN | INPUT_RELATION)
         )
     {
-        return "";
-    }
-    if c == L_BRACE && cp == Some(RECORD_ATOM) {
         return "";
     }
     // Empty brackets.
@@ -297,7 +285,7 @@ mod tests {
 
     #[test]
     fn a_formatted_file_prints_back_unchanged() {
-        let src = "edition 2026\n\n# c\np(a, \"b\") if\n  q(x), # why\n  x != 1\n";
+        let src = "edition 2027\n\n# c\np(a, \"b\") if\n  {\n    q(x)\n    x != 1\n  }\n";
         assert_eq!(fmt(src), src);
     }
 

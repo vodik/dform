@@ -7,7 +7,7 @@ use common::{Scratch, repo};
 
 /// A vpc whose cidr (force_new) and name depend on the key, and whose
 /// size is a parameter.
-const APP: &str = r#"edition 2026
+const APP: &str = r#"edition 2027
 input env: enum("staging", "stg", "prod") = "staging"
 input size: int = 1
 stack app[env] {}
@@ -15,7 +15,7 @@ net_of("staging", "10.1.0.0/16")
 net_of("stg", "10.1.0.0/16")
 net_of("prod", "10.2.0.0/16")
 resource net.vpc main {
-  name = "main-{env}"
+  name = "main-${env}"
   cidr = net_of[env]
   size = size
 }
@@ -102,12 +102,12 @@ fn key_values_are_escaped_and_joined() {
     let s = Scratch::project("keyed-escape");
     s.write(
         "app.df",
-        r#"edition 2026
+        r#"edition 2027
 input team: string
 input region: string = "us-east1"
 stack app[team, region] {}
 resource net.vpc main {
-  name = "main-{team}-{region}"
+  name = "main-${team}-${region}"
 }
 "#,
     );
@@ -137,7 +137,7 @@ fn a_key_needs_an_input_and_a_value() {
     let s = Scratch::new("keyed-errors");
     s.write(
         "app.df",
-        r#"edition 2026
+        r#"edition 2027
 input env: string
 stack app[env] {}
 "#,
@@ -153,7 +153,7 @@ stack app[env] {}
 
     s.write(
         "bad.df",
-        r#"edition 2026
+        r#"edition 2027
 input env: string = "dev"
 stack app[region] {}
 "#,
@@ -174,18 +174,18 @@ fn stack_output_addresses_one_deployment() {
     let s = Scratch::project("keyed-outputs");
     s.write(
         "app.df",
-        r#"edition 2026
+        r#"edition 2027
 input env: string = "staging"
 stack app[env] {}
-output url = "https://{env}.example"
+output url = "https://${env}.example"
 "#,
     );
     s.write(
         "web.df",
-        r#"edition 2026
+        r#"edition 2027
 stack web {}
 resource net.vpc edge {
-  for stack_output("app[env=prod]", "url", u)
+  if stack_output("app[env=prod]", "url", u)
   name = u
 }
 "#,
@@ -240,7 +240,7 @@ fn rekey_moves_state_and_the_next_plan_is_undeformed() {
     let s = Scratch::project("keyed-rekey-same");
     s.write(
         "app.df",
-        r#"edition 2026
+        r#"edition 2027
 input env: string = "staging"
 stack app[env] { isolated = true }
 resource net.vpc main {
@@ -283,14 +283,14 @@ fn rekey_moves_the_state_from_before_the_stack_was_keyed() {
     assert_eq!(r.summary(), "stack app is undeformed", "{}", r.stdout);
 }
 
-const FIXED: &str = r#"edition 2026
+const FIXED: &str = r#"edition 2027
 input env: string = "staging"
 stack app[env] {}
 resource net.vpc logs {
   bucket = "company-logs"
 }
 resource net.vpc main {
-  name = "main-{env}"
+  name = "main-${env}"
 }
 "#;
 
@@ -344,7 +344,7 @@ fn a_fixed_bucket_name_is_denied_under_strict() {
 /// still writes the same bucket in every deployment: the lint follows what
 /// flows into the value, not what the rule reads. A ref to a name that
 /// depends on the key does too.
-const GATED: &str = r#"edition 2026
+const GATED: &str = r#"edition 2027
 input env: string = "staging"
 stack app[env] {}
 resource net.vpc logs {
@@ -353,7 +353,7 @@ resource net.vpc logs {
   tags = { env: env }
 }
 resource net.vpc main {
-  name = "main-{env}"
+  name = "main-${env}"
 }
 resource net.vpc peer {
   name = net.vpc.main.name
@@ -602,8 +602,12 @@ fn state_show_needs_the_key_not_the_other_inputs() {
     let s = Scratch::project("keyed-state-show");
     s.write(
         "stacks/app.df",
-        "edition 2026\ninput env: string\ninput pw: secret(string)\nstack app[env] {}\n\
-         resource net.vpc main { cidr = \"10.0.0.0/16\" }\n",
+        "edition 2027\n\
+         input env: string\n\
+         input pw: secret(string)\n\
+         stack app[env] {}\n\
+         resource net.vpc main { cidr = \"10.0.0.0/16\" }\n\
+         ",
     );
     s.run(&["apply", "app", "env=prod", "--set", "pw=x"])
         .success();

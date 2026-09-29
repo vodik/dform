@@ -12,7 +12,7 @@ fn a_ref_to_an_unwanted_address_is_denied() {
     let s = Scratch::new("dangling-ref");
     s.write(
         "p.df",
-        r#"edition 2026
+        r#"edition 2027
 
 resource net.vpc main { cidr = "10.0.0.0/16" }
 resource net.subnet a { cidr = "10.0.1.0/24", vpc_id = ref(net.vpc, "other", "id") }
@@ -37,7 +37,7 @@ fn a_ref_to_a_wanted_address_is_not_denied() {
     let s = Scratch::new("dangling-ref-ok");
     s.write(
         "p.df",
-        r#"edition 2026
+        r#"edition 2027
 
 resource net.vpc main { cidr = "10.0.0.0/16" }
 resource net.subnet a { cidr = "10.0.1.0/24", vpc_id = ref(net.vpc, "main", "id") }
@@ -55,15 +55,15 @@ fn a_peering_between_unwanted_vpcs_is_blocked() {
     let s = Scratch::new("dangling-ref-peering");
     s.write(
         "p.df",
-        r#"edition 2026
+        r#"edition 2027
 
 input_env("stg")
 resource net.vpc main {
-  for input_env("prod")
+  if input_env("prod")
   cidr = "10.0.0.0/16"
 }
 resource net.vpc peer {
-  for input_env("prod")
+  if input_env("prod")
   cidr = "10.1.0.0/16"
 }
 resource net.vpc_peering peer_main_peer {

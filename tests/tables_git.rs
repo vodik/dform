@@ -8,12 +8,12 @@ mod tables_common;
 use common::Scratch;
 use tables_common::{push, repo, scratch};
 
-const PROGRAM: &str = r#"edition 2026
+const PROGRAM: &str = r#"edition 2027
 
-input relation node(name: string) from csv(git("ops.git", "main", "nodes.csv"))
+input node(name: string) from csv(git("ops.git", "main", "nodes.csv"))
 
-resource compute.vm "{n}" {
-  for node(n)
+resource compute.vm "${n}" {
+  if node(n)
   size = 1
 }
 "#;

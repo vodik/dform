@@ -5,20 +5,22 @@
 mod common;
 use common::{Scratch, repo};
 
-const P: &str = r#"edition 2026
+const P: &str = r#"edition 2027
 extern file.json(+path, -value)
 extern file.text(+path, -value)
 extern random.password(+name, -value) persist
 extern random.token(+name, -value)
 dash("dash.json")
 resource mon.dashboard main {
-  for dash(p), file.json(p, d), file.text("note.txt", t)
+  if dash(p), file.json(p, d), file.text("note.txt", t)
   json = d
   note = t
 }
 resource db.user app {
-  for random.password("app", pw),
+  if {
+    random.password("app", pw)
     random.token("app", tk)
+  }
   password = pw
   token = tk
 }
