@@ -35,11 +35,11 @@ fn gke_plan_has_the_summary_hints_and_apply_order() {
         "plan: 3 deformations (3 create), 4 pending, 1 undetermined"
     );
     for want in [
-        "definite:\n+ google_compute_subnetwork.gke_subnet\n",
-        "pending on ?gke_cluster/pngu#ca_certificate ?gke_cluster/pngu#endpoint (resolves after tick 1):\n",
-        "? gke_nodepool.? x unknown, on ?gke_cluster/pngu#zones, resolves after tick 1",
-        "? deny \"cluster must be in at least two zones\" on ?gke_cluster/pngu#zones, decided after tick 1",
-        "apply order: tick 1 [google_compute_subnetwork.gke_subnet gke_cluster.pngu google_compute_address.static_ip] tick 2 [k8s.deployment.api k8s.namespace.pngu k8s.secret.db_credentials gke_nodepool.?]\n",
+        "definite:\n+ google_compute_subnetwork[\"gke_subnet\"]\n",
+        "pending on ?gke_cluster[\"pngu\"].ca_certificate ?gke_cluster[\"pngu\"].endpoint (resolves after tick 1):\n",
+        "? gke_nodepool[?] x unknown, on ?gke_cluster[\"pngu\"].zones, resolves after tick 1",
+        "? deny \"cluster must be in at least two zones\" on ?gke_cluster[\"pngu\"].zones, decided after tick 1",
+        "apply order:\n  tick 1\n    google_compute_subnetwork[\"gke_subnet\"]\n    gke_cluster[\"pngu\"]\n    google_compute_address[\"static_ip\"]\n  tick 2\n    k8s.deployment[\"api\"]\n    k8s.namespace[\"pngu\"]\n    k8s.secret[\"db_credentials\"]\n    gke_nodepool[?]\n",
     ] {
         assert!(r.stdout.contains(want), "{want}\n---\n{}", r.stdout);
     }
@@ -63,7 +63,7 @@ deny "no nodepool in zone z" {pool: n} if
     let r = gke(&s, &["extra.df"], "plan").success();
     assert!(
         r.stdout.contains(
-            "? deny \"no nodepool in zone z\" on ?gke_cluster/pngu#zones, may derive after tick 1"
+            "? deny \"no nodepool in zone z\" on ?gke_cluster[\"pngu\"].zones, may derive after tick 1"
         ),
         "{}",
         r.stdout
@@ -100,7 +100,7 @@ fn a_keyless_set_diffs_by_element() {
     let r = aws(&s, "plan").success();
     assert!(
         r.stdout.contains(
-            "~ aws_security_group.web\n  - ingress[]\n      cidr_blocks[0] was \"0.0.0.0/0\"\n      from_port was 22\n      protocol was \"tcp\"\n      to_port was 22\napply order"
+            "~ aws_security_group[\"web\"]\n  - ingress[]\n      cidr_blocks[0] was \"0.0.0.0/0\"\n      from_port was 22\n      protocol was \"tcp\"\n      to_port was 22\napply order"
         ),
         "{}",
         r.stdout
@@ -143,7 +143,7 @@ resource k8s.deployment api {
         .success();
     assert!(
         r.stdout.contains(
-            "~ k8s.deployment.api\n  + spec.template.spec.containers[name=sidecar]\n      image = \"envoy:1\"\n      name = \"sidecar\"\n"
+            "~ k8s.deployment[\"api\"]\n  + spec.template.spec.containers[name=sidecar]\n      image = \"envoy:1\"\n      name = \"sidecar\"\n"
         ),
         "{}",
         r.stdout
@@ -177,10 +177,10 @@ arg(net.vpc, "two", "cidr", "10.3.0.0/16")
         "{}",
         r.stdout
     );
-    assert!(!r.stdout.contains("+ net.vpc.main"), "{}", r.stdout);
+    assert!(!r.stdout.contains("+ net.vpc[\"main\"]"), "{}", r.stdout);
     for want in [
-        "shadowed:\n! net.vpc.two cidr at rank default: two contributions disagree at cidr\n",
-        "conflicts:\n! net.vpc.main cidr: two contributions disagree\n    normal \"10.0.0.0/16\"  from arg(\"net.vpc\", \"main\", \"cidr\", \"10.0.0.0/16\", \"normal\") (at p.df:3:25)\n",
+        "shadowed:\n! net.vpc[\"two\"].cidr at rank default: two contributions disagree at cidr\n",
+        "conflicts:\n! net.vpc[\"main\"].cidr: two contributions disagree\n    normal \"10.0.0.0/16\"  from arg(\"net.vpc\", \"main\", \"cidr\", \"10.0.0.0/16\", \"normal\") (at p.df:3:25)\n",
         "    normal \"10.1.0.0/16\"  from arg(\"net.vpc\", \"main\", \"cidr\", \"10.1.0.0/16\", \"normal\") (at p.df:4:1)\n",
     ] {
         assert!(r.stdout.contains(want), "{want}\n---\n{}", r.stdout);
@@ -214,7 +214,8 @@ arg(leaky.vault, "v", "password", "VAULT-SECRET-B")
         ])
         .failure();
     assert!(
-        r.stdout.contains("conflicts:\n! leaky.vault.v password"),
+        r.stdout
+            .contains("conflicts:\n! leaky.vault[\"v\"].password"),
         "{}",
         r.stdout
     );
@@ -243,9 +244,9 @@ fn a_denied_replace_is_a_section() {
     assert_eq!(
         r.stdout,
         "plan: 1 deformation (1 replace)\ndefinite:\n\
-         -/+ net.vpc.main  (replace)\n  cidr: \"10.0.0.0/16\" -> \"10.1.0.0/16\"\n\
-         denied:\n! lifecycle prevent_destroy: the plan would replace net.vpc.main\n\
-         apply order: tick 1 [net.vpc.main]\n"
+         -/+ net.vpc[\"main\"]  (replace)\n  cidr: \"10.0.0.0/16\" -> \"10.1.0.0/16\"\n\
+         denied:\n! lifecycle prevent_destroy: the plan would replace net.vpc[\"main\"]\n\
+         apply order:\n  tick 1\n    net.vpc[\"main\"]\n"
     );
     assert!(r.stderr.contains("blocked by constraints"), "{}", r.stderr);
 }

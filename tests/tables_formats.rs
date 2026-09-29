@@ -74,7 +74,7 @@ fn every_format_reads_typed_rows() {
         let r = s.run(&["plan", "p.df"]).success();
         assert_eq!(r.summary(), "plan: 2 deformations (2 create)", "{format}");
         assert!(
-            r.stdout.contains("+ net.vpc.v-a\n"),
+            r.stdout.contains("+ net.vpc[\"v-a\"]\n"),
             "{format}: {}",
             r.stdout
         );
@@ -84,7 +84,7 @@ fn every_format_reads_typed_rows() {
             r.stdout
         );
         assert!(
-            r.stdout.contains("+ net.vpc.v-c\n"),
+            r.stdout.contains("+ net.vpc[\"v-c\"]\n"),
             "{format}: {}",
             r.stdout
         );
@@ -185,7 +185,7 @@ resource compute.vm "{n}" {
     s.write("data/dev.csv", "name\nd1\n");
     s.write("data/prod.csv", "name\np1\np2\n");
     let r = s.run(&["plan", "p.df"]).success();
-    assert!(r.stdout.contains("+ compute.vm.d1"), "{}", r.stdout);
+    assert!(r.stdout.contains("+ compute.vm[\"d1\"]"), "{}", r.stdout);
     let r = s.run(&["plan", "--set", "env=prod", "p.df"]).success();
     assert_eq!(r.summary(), "plan: 2 deformations (2 create)");
     let r = s

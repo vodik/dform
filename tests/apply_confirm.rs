@@ -26,8 +26,8 @@ moved(net.vpc, "main", "core")
 "#;
 
 const MARKS: &str = "resumed from the apply interrupted at tick 1:\n  \
-    net.vpc.peer  (retried with its idempotency key: nothing it made was found)\n  \
-    net.subnet.a  (retried with its idempotency key: nothing it made was found)\n\
+    net.vpc[\"peer\"]  (retried with its idempotency key: nothing it made was found)\n  \
+    net.subnet[\"a\"]  (retried with its idempotency key: nothing it made was found)\n\
     Apply these 2 deformations to p? [y/N] ";
 
 /// An apply the provider crashed under at `net.vpc.peer`: `net.vpc.main`
@@ -38,7 +38,7 @@ fn interrupted() -> Scratch {
     s.write("p.df", PROG);
     s.run(&common::on(
         "p.df",
-        &["--world", "w.json", "--chaos", "crash=net.vpc/peer"],
+        &["--world", "w.json", "--chaos", "crash=net.vpc[\"peer\"]"],
         &["apply"],
     ))
     .failure();
@@ -92,7 +92,7 @@ fn declining_a_resumed_apply_changes_nothing() {
     let (before, after, code) = answer(&s, "n");
     assert!(before.ends_with(MARKS), "{before}");
     assert!(
-        before.contains("moved net.vpc.main -> net.vpc.core\n"),
+        before.contains("moved net.vpc[\"main\"] -> net.vpc[\"core\"]\n"),
         "{before}"
     );
     assert!(

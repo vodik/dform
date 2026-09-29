@@ -80,7 +80,7 @@ fn the_demo_plans_the_same_against_the_real_provider_offline() {
     assert_eq!(planned(&real), planned(&mock));
     assert!(
         r.stdout
-            .contains("configMapRef.name = ?k8s.config_map/web_config#metadata.name"),
+            .contains("configMapRef.name = ?k8s.config_map[\"web_config\"].metadata.name"),
         "{}",
         r.stdout
     );
@@ -91,7 +91,7 @@ fn the_demo_plans_the_same_against_the_real_provider_offline() {
     );
     let r = dform(&real, None, &["plan", "long.df"]).success();
     assert!(
-        r.stdout.contains("+ k8s.apps.v1.deployment.api")
+        r.stdout.contains("+ k8s.apps.v1.deployment[\"api\"]")
             && r.stdout
                 .contains("spec.template.spec.containers[name=api].image = \"api:1\""),
         "{}",
@@ -165,7 +165,7 @@ fn offline_plan_validates_and_hides_secrets() {
     let r = dform(&s, None, &["plan", "p.df"]).failure();
     assert!(
         r.stderr
-            .contains("plan k8s.deployment/api: required attribute spec.selector is not set"),
+            .contains("plan k8s.deployment[\"api\"]: required attribute spec.selector is not set"),
         "{}",
         r.stderr
     );
@@ -839,7 +839,7 @@ fn a_ref_to_a_server_defaulted_field_resolves_from_the_cluster() {
     let r = run(&["plan"]).success();
     assert!(
         r.stdout
-            .contains("data.WEB = ?k8s.service/web#spec.clusterIP"),
+            .contains("data.WEB = ?k8s.service[\"web\"].spec.clusterIP"),
         "{}",
         r.stdout
     );
@@ -887,7 +887,7 @@ fn an_update_leaves_server_defaulted_fields_to_the_server() {
         &s.read("k8s_demo.df").replace("port: 80,", "port: 8080,"),
     );
     let r = run(&["plan"]).success();
-    assert!(r.stdout.contains("~ k8s.service.web"), "{}", r.stdout);
+    assert!(r.stdout.contains("~ k8s.service[\"web\"]"), "{}", r.stdout);
     assert!(!r.stdout.contains("clusterIP"), "{}", r.stdout);
     let updates = api.count("PATCH /api/v1/namespaces/shop/services/web?", &[]);
     run(&["apply"]).success();
@@ -965,10 +965,14 @@ fn a_field_another_manager_owns_fails_the_apply_naming_both() {
                             "fieldsV1": {"f:spec": {"f:replicas": {}}}}));
     }
     let r = run(&["plan"]).success();
-    assert!(r.stdout.contains("~ k8s.deployment.web"), "{}", r.stdout);
+    assert!(
+        r.stdout.contains("~ k8s.deployment[\"web\"]"),
+        "{}",
+        r.stdout
+    );
     let r = run(&["apply"]).failure();
     assert!(
-        r.stderr.contains("apply k8s.deployment/web")
+        r.stderr.contains("apply k8s.deployment[\"web\"]")
             && r.stderr
                 .contains(".spec.replicas is owned by field manager \"kubectl\""),
         "{}\n{}",
@@ -1013,7 +1017,7 @@ fn a_type_built_at_runtime_gets_the_whole_schema() {
     .success();
     assert!(
         r.stdout
-            .contains("uid: ?k8s.batch.v1.job/batch#metadata.uid"),
+            .contains("uid: ?k8s.batch.v1.job[\"batch\"].metadata.uid"),
         "{}",
         r.stdout
     );
@@ -1278,14 +1282,14 @@ fn a_create_whose_answer_was_lost_is_found_by_its_label_and_key() {
     let name = path.rsplit('/').next().unwrap();
     assert!(
         r.stderr.contains(&format!(
-            "k8s.config_map/settings: the create whose answer was lost made default/{name}"
+            "k8s.config_map[\"settings\"]: the create whose answer was lost made default/{name}"
         )),
         "{}\n{}",
         r.stdout,
         r.stderr
     );
     assert!(
-        r.stdout.contains("- k8s.config_map.settings"),
+        r.stdout.contains("- k8s.config_map[\"settings\"]"),
         "{}",
         r.stdout
     );
@@ -1319,7 +1323,7 @@ fn an_empty_pod_selector_is_present() {
     s.write("p.df", &program("  spec.podSelector = {}\n"));
     let r = run(&["plan"]).success();
     assert!(
-        r.stdout.contains("~ k8s.network_policy.deny"),
+        r.stdout.contains("~ k8s.network_policy[\"deny\"]"),
         "{}",
         r.stdout
     );
@@ -1409,7 +1413,7 @@ fn drift_from_a_kubectl_patch_is_planned_back() {
 
     let r = run(&["plan"]).success();
     assert!(
-        r.stdout.contains("~ k8s.deployment.web")
+        r.stdout.contains("~ k8s.deployment[\"web\"]")
             && r.stdout.contains("spec.replicas: <none> -> 3"),
         "{}",
         r.stdout

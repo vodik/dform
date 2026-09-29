@@ -244,11 +244,11 @@ fn hover_shows_every_contribution_and_why_prints_the_derivation() {
     // The schema's description of the path.
     assert!(text.contains("Key-value labels on the network."), "{text}");
     assert!(
-        text.contains("**net.vpc network.main::vpc .tags**"),
+        text.contains("**net.vpc[\"network.main::vpc\"].tags**"),
         "{text}"
     );
     assert!(
-        text.contains("**net.vpc network.peer::vpc .tags**"),
+        text.contains("**net.vpc[\"network.peer::vpc\"].tags**"),
         "{text}"
     );
     assert!(text.contains("winning rank: normal"), "{text}");
@@ -285,7 +285,7 @@ fn hover_shows_every_contribution_and_why_prints_the_derivation() {
     let hover = c.at("textDocument/hover", &stdlib, find(&stdlib, "a.cidr", 3));
     let text = hover["contents"]["value"].as_str().unwrap_or_default();
     assert!(
-        text.contains("**net.vpc network.main::vpc .cidr** = `10.50.0.0/16`"),
+        text.contains("**net.vpc[\"network.main::vpc\"].cidr** = `10.50.0.0/16`"),
         "{hover}"
     );
     assert!(
@@ -943,7 +943,7 @@ fn quick_fix_derives_a_colliding_name_from_the_key_or_isolates_the_stack() {
         );
         (stack, edited)
     };
-    let needle = "net.vpc.fixed name = \"fixed\" does not depend on the stack's key (env)";
+    let needle = "net.vpc[\"fixed\"].name = \"fixed\" does not depend on the stack's key (env)";
     let (_s, root) = example("demo");
     let (stack, edited) = collides(&root);
     let texts = quick_fix(
@@ -991,7 +991,7 @@ fn quick_fix_sets_a_required_attribute() {
         &root,
         &stack,
         &edited,
-        "k8s.persistent_volume_claim/data: required attribute spec.accessModes is not set",
+        "k8s.persistent_volume_claim[\"data\"]: required attribute spec.accessModes is not set",
         "set the required spec.accessModes, spec.resources.requests.storage",
     );
     assert!(
@@ -1383,11 +1383,11 @@ fn rename_of_a_resource_with_state_plans_as_a_move() {
     );
     let plan = run(&["plan", "dform", "env=staging"]);
     assert!(
-        plan.contains("moved compute.vm.bastion -> compute.vm.jump"),
+        plan.contains("moved compute.vm[\"bastion\"] -> compute.vm[\"jump\"]"),
         "{plan}"
     );
     assert!(
-        plan.contains("moved net.vpc.network.main::vpc -> net.vpc.network.main::net0"),
+        plan.contains("moved net.vpc[\"network.main::vpc\"] -> net.vpc[\"network.main::net0\"]"),
         "{plan}"
     );
     assert!(plan.contains("stack dform is undeformed"), "{plan}");
@@ -1425,7 +1425,7 @@ fn a_rename_that_changes_the_plan_is_refused() {
         }),
     );
     assert!(
-        e.contains("would no longer plan create net.vpc_peering.peer-main-peer"),
+        e.contains("would no longer plan create net.vpc_peering[\"peer-main-peer\"]"),
         "{e}"
     );
     // Nothing was changed.
@@ -1576,7 +1576,7 @@ fn an_s3_deployment_is_read_with_credentials() {
     assert!(ok, "{text}");
     assert!(!s.path("dform.state/p/state.json").exists(), "{text}");
     std::fs::write(&file, net.replace(vpc, "")).unwrap();
-    let deny = "lifecycle prevent_destroy: the plan would delete net.vpc.main";
+    let deny = "lifecycle prevent_destroy: the plan would delete net.vpc[\"main\"]";
     let (ok, text) = dform(&["plan", "p"]);
     assert!(!ok && text.contains(&format!("- {deny}")), "{text}");
 

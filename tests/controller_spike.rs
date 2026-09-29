@@ -88,7 +88,7 @@ fn input_changes_deploy_and_world_drift_is_gated_by_policy() {
         once(&s, &[]),
         [
             &format!("event world {WORLD} changed"),
-            "drift k8s.deployment.web spec.replicas: 3 -> 5 (auto_reconcile)",
+            "drift k8s.deployment[\"web\"].spec.replicas: 3 -> 5 (auto_reconcile)",
             "tick 1: plan: 1 deformation (1 update)",
             "stack renfry.workload is undeformed",
         ]
@@ -99,12 +99,12 @@ fn input_changes_deploy_and_world_drift_is_gated_by_policy() {
     // next event, until approved.
     edit_world(&s, "gcr.io/renfry/web:1.1", "evil:latest");
     let held = [
-        "drift k8s.deployment.web spec.template.spec.containers[0].image: \
+        "drift k8s.deployment[\"web\"].spec.template.spec.containers[0].image: \
          \"gcr.io/renfry/web:1.1\" -> \"evil:latest\" (held until approve or an input change)",
         "tick 1: plan: 1 deformation (1 update)",
         "tick 1: proceed: held, drift at spec.template.spec.containers[0].image needs approval: \
-         k8s.deployment.web",
-        "stack renfry.workload is deformed: k8s.deployment.web held",
+         k8s.deployment[\"web\"]",
+        "stack renfry.workload is deformed: k8s.deployment[\"web\"] held",
     ];
     let mut want = vec![format!("event world {WORLD} changed")];
     want.extend(held.iter().map(|l| l.to_string()));
@@ -138,7 +138,7 @@ fn approve_lets_a_world_event_correct_drift() {
         once(&s, &[]),
         [
             &format!("event world {WORLD} changed"),
-            "drift k8s.deployment.web spec.template.spec.containers[0].image: \
+            "drift k8s.deployment[\"web\"].spec.template.spec.containers[0].image: \
              \"gcr.io/renfry/web:1.0\" -> \"evil:latest\" (approved)",
             "tick 1: plan: 1 deformation (1 update)",
             "stack renfry.workload is undeformed",
@@ -154,13 +154,13 @@ fn an_input_change_reconciles_held_drift() {
     edit_world(&s, "gcr.io/renfry/web:1.0", "evil:latest");
     assert_eq!(
         once(&s, &[]).last().unwrap(),
-        "stack renfry.workload is deformed: k8s.deployment.web held"
+        "stack renfry.workload is deformed: k8s.deployment[\"web\"] held"
     );
     release(&s, "gcr.io/renfry/web:1.2");
     let got = once(&s, &[]);
     assert!(
         got.contains(
-            &"drift k8s.deployment.web spec.template.spec.containers[0].image: \
+            &"drift k8s.deployment[\"web\"].spec.template.spec.containers[0].image: \
               \"gcr.io/renfry/web:1.0\" -> \"evil:latest\" (reconciled with the input change)"
                 .to_string()
         ),
@@ -218,14 +218,14 @@ fn a_prod_rollout_is_held_until_its_plan_is_approved() {
         [
             "event start".to_string(),
             "tick 1: plan: 3 deformations (3 create)".to_string(),
-            "tick 1: proceed: held, needs approval (a prod rollout): k8s.deployment.web"
+            "tick 1: proceed: held, needs approval (a prod rollout): k8s.deployment[\"web\"]"
                 .to_string(),
             got[3].clone(),
             "tick 2: plan: 1 deformation (1 create)".to_string(),
-            "tick 2: proceed: held, needs approval (a prod rollout): k8s.deployment.web"
+            "tick 2: proceed: held, needs approval (a prod rollout): k8s.deployment[\"web\"]"
                 .to_string(),
             format!("tick 2: approval needed: plan digest {digest} (approval-pending.json)"),
-            "stack renfry.workload is deformed: k8s.deployment.web held".to_string(),
+            "stack renfry.workload is deformed: k8s.deployment[\"web\"] held".to_string(),
         ]
     );
     assert!(!s.read(WORLD).contains("k8s.deployment"));
@@ -255,7 +255,7 @@ fn a_prod_rollout_is_held_until_its_plan_is_approved() {
     let got = once(&s, &prod);
     assert_eq!(
         got[3],
-        "tick 1: proceed: held, needs approval (a prod rollout): k8s.deployment.web"
+        "tick 1: proceed: held, needs approval (a prod rollout): k8s.deployment[\"web\"]"
     );
     let digest = pending_digest(&s);
     // A token in the drop directory beside the state releases it too.

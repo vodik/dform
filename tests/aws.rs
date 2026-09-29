@@ -34,7 +34,7 @@ fn optional_computed_is_a_constant_when_set_and_a_null_when_not() {
     );
     assert!(
         r.stdout
-            .contains("tags.web_az = ?aws_instance/web#availability_zone"),
+            .contains("tags.web_az = ?aws_instance[\"web\"].availability_zone"),
         "{}",
         r.stdout
     );
@@ -108,7 +108,7 @@ fn keyless_sets_ignore_order() {
         r.stdout
     );
     assert!(
-        r.stdout.contains("~ aws_security_group.web"),
+        r.stdout.contains("~ aws_security_group[\"web\"]"),
         "{}",
         r.stdout
     );

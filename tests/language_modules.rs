@@ -32,12 +32,12 @@ instance m b { n = 2 }
     )
     .success();
     assert!(
-        r.stdout.contains("+ net.vpc.m.a::vpc\n  size = 1\n"),
+        r.stdout.contains("+ net.vpc[\"m.a::vpc\"]\n  size = 1\n"),
         "{}",
         r.stdout
     );
     assert!(
-        r.stdout.contains("+ net.vpc.m.b::vpc\n  size = 2\n"),
+        r.stdout.contains("+ net.vpc[\"m.b::vpc\"]\n  size = 2\n"),
         "{}",
         r.stdout
     );
@@ -93,7 +93,7 @@ resource net.subnet s {
     .success();
     assert!(
         r.stdout
-            .contains("+ net.subnet.s\n  size = 3\n  vpc = \"m.a::vpc\"\n"),
+            .contains("+ net.subnet[\"s\"]\n  size = 3\n  vpc = \"m.a::vpc\"\n"),
         "{}",
         r.stdout
     );
@@ -116,12 +116,12 @@ instance m b { n = 1 }
 "#;
     let r = plan(src).success();
     assert!(
-        r.stdout.contains("+ net.vpc.m.a::vpc\n  size = 7\n"),
+        r.stdout.contains("+ net.vpc[\"m.a::vpc\"]\n  size = 7\n"),
         "{}",
         r.stdout
     );
     assert!(
-        r.stdout.contains("+ net.vpc.m.b::vpc\n  size = 1\n"),
+        r.stdout.contains("+ net.vpc[\"m.b::vpc\"]\n  size = 1\n"),
         "{}",
         r.stdout
     );
@@ -220,13 +220,13 @@ instance app green { replicas = 7 }
         .success();
     assert!(
         r.stdout
-            .contains("+ compute.vm.app.blue::vm\n  count = 3\n"),
+            .contains("+ compute.vm[\"app.blue::vm\"]\n  count = 3\n"),
         "{}",
         r.stdout
     );
     assert!(
         r.stdout
-            .contains("+ compute.vm.app.green::vm\n  count = 7\n"),
+            .contains("+ compute.vm[\"app.green::vm\"]\n  count = 7\n"),
         "{}",
         r.stdout
     );
@@ -252,14 +252,14 @@ vpc_peer_inst("main", "third")
     );
     let r = s.run(&["plan", "dform"]).success();
     assert_eq!(
-        r.stdout.matches("\n+ net.vpc_peering.").count(),
+        r.stdout.matches("\n+ net.vpc_peering[").count(),
         2,
         "{}",
         r.stdout
     );
     for (name, accepter) in [("peer-main-peer", "peer"), ("peer-main-third", "third")] {
         let want = format!(
-            "+ net.vpc_peering.{name}\n  accepter_vpc_id = ?net.vpc/network.{accepter}::vpc#id\n  requester_vpc_id = ?net.vpc/network.main::vpc#id\n"
+            "+ net.vpc_peering[\"{name}\"]\n  accepter_vpc_id = ?net.vpc[\"network.{accepter}::vpc\"].id\n  requester_vpc_id = ?net.vpc[\"network.main::vpc\"].id\n"
         );
         assert!(r.stdout.contains(&want), "{want}\n---\n{}", r.stdout);
     }

@@ -6,15 +6,18 @@
 //! tick counter, which every apply advances by one, and for `read-lag` the
 //! count of Reads, so that a retried Read can see the object.
 //!
+//! An address is written as `plan` prints it, `T["N"]` (`ir::parse_address`);
+//! quote the spec for the shell.
+//!
 //! | SPEC                           | effect                                                  |
 //! |--------------------------------+---------------------------------------------------------|
-//! | `fail=T/N`                     | Apply of T/N fails before it reaches the world          |
-//! | `timeout=T/N`                  | Apply of T/N takes effect, then the call times out      |
-//! | `read-lag=T/N:K`               | the first K Reads of T/N after its Create miss it       |
-//! | `mutate=T/N:PATH=JSON`         | once, after the first tick T/N exists at, the world     |
-//! |                                | sets T/N's PATH to JSON                                 |
-//! | `latency=T/N:MS`               | Apply of T/N is recorded as taking MS (never slept)     |
-//! | `crash=T/N`                    | the provider dies as it is called to Apply T/N: exit    |
+//! | `fail=T["N"]`                  | Apply of T["N"] fails before it reaches the world       |
+//! | `timeout=T["N"]`               | Apply of T["N"] takes effect, then the call times out   |
+//! | `read-lag=T["N"]:K`            | the first K Reads of T["N"] after its Create miss it    |
+//! | `mutate=T["N"].PATH=JSON`      | once, after the first tick T["N"] exists at, the world  |
+//! |                                | sets its PATH to JSON                                   |
+//! | `latency=T["N"]:MS`            | Apply of T["N"] is recorded as taking MS (never slept)  |
+//! | `crash=T["N"]`                 | the provider dies as it is called to Apply T["N"]: exit |
 //! |                                | 137 as a process, gone from then on when linked in      |
 //! | `stop-after=N`                 | dform stops as if killed once N Apply calls returned,   |
 //! |                                | each persisted: nothing in flight is waited for         |
@@ -40,23 +43,13 @@ pub struct Chaos {
     pub fresh_ids: bool,
 }
 
-/// `T/N`: the type has no slash, the name may (component scopes use `::`).
-pub fn parse_addr(s: &str) -> Result<Address> {
-    let (typ, name) = s
-        .split_once('/')
-        .filter(|(t, n)| !t.is_empty() && !n.is_empty())
-        .ok_or_else(|| anyhow!("expected an address TYPE/NAME, got '{s}'"))?;
-    Ok(Address {
-        typ: typ.to_string(),
-        name: name.to_string(),
-    })
-}
+use crate::ir::parse_resource_address as parse_addr;
 
-/// `T/N:X`: the last `:` splits, so a name with `::` in it survives.
+/// `T["N"]:X`: the last `:` splits, so a name with `::` in it survives.
 fn addr_and(s: &str, what: &str) -> Result<(Address, String)> {
     let (a, x) = s
         .rsplit_once(':')
-        .ok_or_else(|| anyhow!("expected TYPE/NAME:{what}, got '{s}'"))?;
+        .ok_or_else(|| anyhow!("expected T[\"N\"]:{what}, got '{s}'"))?;
     Ok((parse_addr(a)?, x.to_string()))
 }
 
@@ -106,10 +99,10 @@ impl Chaos {
                 self.latency.insert(a, ms.parse().context("milliseconds")?);
             }
             "mutate" => {
-                let (lhs, json) = arg
-                    .split_once('=')
-                    .ok_or_else(|| anyhow!("expected mutate=TYPE/NAME:PATH=JSON"))?;
-                let (a, path) = addr_and(lhs, "PATH")?;
+                let bad = || anyhow!("expected mutate=T[\"N\"].PATH=JSON");
+                let (lhs, json) = arg.split_once('=').ok_or_else(bad)?;
+                let (a, path) = crate::ir::parse_address(lhs)?;
+                let path = path.ok_or_else(bad)?;
                 let v =
                     serde_json::from_str(json).with_context(|| format!("JSON value '{json}'"))?;
                 self.mutate.push((a, path, v));
@@ -152,27 +145,28 @@ mod tests {
     #[test]
     fn specs_parse_with_scoped_names() {
         let c = Chaos::parse(&[
-            "fail=net.subnet/private-a".into(),
-            "read-lag=net.vpc/network.main::vpc:3".into(),
-            r#"mutate=net.vpc/network.main::vpc:tags.env="prod""#.into(),
-            "latency=net.vpc/v:250".into(),
+            r#"fail=net.subnet["private-a"]"#.into(),
+            r#"read-lag=net.vpc["network.main::vpc"]:3"#.into(),
+            r#"mutate=net.vpc["network.main::vpc"].tags.env="prod""#.into(),
+            r#"latency=net.vpc["v"]:250"#.into(),
             "fresh-ids".into(),
         ])
         .unwrap();
         assert!(c.fresh_ids);
         assert!(
             c.fail
-                .contains(&parse_addr("net.subnet/private-a").unwrap())
+                .contains(&parse_addr(r#"net.subnet["private-a"]"#).unwrap())
         );
         assert_eq!(
             c.read_lag
-                .get(&parse_addr("net.vpc/network.main::vpc").unwrap()),
+                .get(&parse_addr(r#"net.vpc["network.main::vpc"]"#).unwrap()),
             Some(&3)
         );
         assert_eq!(c.mutate[0].1, "tags.env");
         assert_eq!(c.mutate[0].2, serde_json::json!("prod"));
         assert_eq!(c.latency.values().next(), Some(&250));
-        assert!(Chaos::parse(&["explode=net.vpc/v".into()]).is_err());
+        assert!(Chaos::parse(&[r#"explode=net.vpc["v"]"#.into()]).is_err());
+        assert!(Chaos::parse(&["fail=net.vpc/v".into()]).is_err());
         assert!(Chaos::parse(&["fail=novpc".into()]).is_err());
     }
 }

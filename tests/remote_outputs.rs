@@ -68,7 +68,7 @@ fn a_project_reads_another_projects_outputs_through_a_local_remote() {
     let r = app.run(&["plan", "app"]).success();
     assert!(
         r.stdout
-            .contains("+ net.vpc.edge\n  name = \"https://prod.cluster.example\"\n"),
+            .contains("+ net.vpc[\"edge\"]\n  name = \"https://prod.cluster.example\"\n"),
         "{}",
         r.stdout
     );
@@ -205,8 +205,8 @@ fn an_output_of_a_configured_attribute_is_published_resolved_or_pending() {
     let r = s.run(&["plan", "app"]).success();
     assert!(
         r.stdout.contains(
-            "definite:\n+ net.vpc.edge\n  cidr = \"10.0.0.0/16\"\npending on \
-             ?stack_output/net#n:\n+ net.vpc.other\n  name = ?stack_output/net#n\n"
+            "definite:\n+ net.vpc[\"edge\"]\n  cidr = \"10.0.0.0/16\"\npending on \
+             ?stack_output[\"net\"].n:\n+ net.vpc[\"other\"]\n  name = ?stack_output[\"net\"].n\n"
         ),
         "{}",
         r.stdout
@@ -214,7 +214,7 @@ fn an_output_of_a_configured_attribute_is_published_resolved_or_pending() {
     let r = s.run(&["apply", "app"]).failure();
     assert!(
         r.stderr
-            .contains("nothing definite to apply, still waiting on ?stack_output/net#n"),
+            .contains("nothing definite to apply, still waiting on ?stack_output[\"net\"].n"),
         "{}",
         r.stderr
     );
@@ -230,7 +230,8 @@ fn an_output_of_a_configured_attribute_is_published_resolved_or_pending() {
     s.run(&["apply", "net"]).success();
     let r = s.run(&["apply", "app"]).success();
     assert!(
-        r.stdout.contains("+ net.vpc.other\n  name = \"main\"\n"),
+        r.stdout
+            .contains("+ net.vpc[\"other\"]\n  name = \"main\"\n"),
         "{}",
         r.stdout
     );

@@ -68,5 +68,5 @@ requires_approval(d, "a prod rollout") if {
   env == "prod"
   deformation(k, k8s.deployment, a, _)
   k != "delete"
-  d = "k8s.deployment.{a}"
+  d = "k8s.deployment[\"{a}\"]"
 }

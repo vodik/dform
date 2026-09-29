@@ -1,6 +1,7 @@
 //! The resource IR (`compile_resources`) and, in [`ops`], the operator IR
 //! rules compile to.
 
+mod address;
 pub mod fx;
 pub mod ops;
 pub mod store;
@@ -11,6 +12,11 @@ use crate::transform;
 use crate::value::Value;
 use anyhow::{Result, bail};
 use std::collections::{BTreeMap, BTreeSet};
+
+pub use address::{
+    label, parse as parse_address, parse_resource as parse_resource_address, path_suffix,
+    string_literal,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Address {
@@ -121,9 +127,8 @@ pub fn compile_resources(
     for (addr, path, value) in attrs {
         let Some(root) = by_addr.get_mut(&addr) else {
             bail!(
-                "attribute {path} for resource not declared by want: {}.{}",
-                addr.typ,
-                addr.name
+                "attribute {} for resource not declared by want",
+                addr.attr(&path),
             );
         };
         root.insert(path, value);

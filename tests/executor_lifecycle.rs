@@ -31,10 +31,10 @@ fn prevent_destroy_makes_a_delete_a_deny() {
         "edition 2026\nlifecycle(net.vpc, \"main\", \"prevent_destroy\")\n",
     );
     let r = dform(&s, &["plan"]).failure();
-    assert!(r.stdout.contains("- net.vpc.main"), "{}", r.stdout);
+    assert!(r.stdout.contains("- net.vpc[\"main\"]"), "{}", r.stdout);
     assert!(
         r.stderr.contains(
-            "constraint violations:\n- lifecycle prevent_destroy: the plan would delete net.vpc.main\n"
+            "constraint violations:\n- lifecycle prevent_destroy: the plan would delete net.vpc[\"main\"]\n"
         ),
         "{}",
         r.stderr
@@ -52,7 +52,7 @@ fn prevent_destroy_makes_a_delete_a_deny() {
     let r = dform(&s, &["apply"]).failure();
     assert!(
         r.stderr
-            .contains("- lifecycle prevent_destroy: the plan would replace net.vpc.main\n"),
+            .contains("- lifecycle prevent_destroy: the plan would replace net.vpc[\"main\"]\n"),
         "{}",
         r.stderr
     );
@@ -105,8 +105,8 @@ instance network {inst} {{}}
     let r = dform(&s, &["plan"]).success();
     assert_eq!(
         r.stdout,
-        "moved net.subnet.network.main::a -> net.subnet.network.core::a\n\
-         moved net.vpc.network.main::vpc -> net.vpc.network.core::vpc\n\
+        "moved net.subnet[\"network.main::a\"] -> net.subnet[\"network.core::a\"]\n\
+         moved net.vpc[\"network.main::vpc\"] -> net.vpc[\"network.core::vpc\"]\n\
          stack p is undeformed\n"
     );
     // plan does not write state; apply does.
@@ -147,7 +147,7 @@ fn ignore_changes_drops_the_path_from_both_sides() {
         &[
             "apply",
             "--chaos",
-            r#"mutate=net.vpc/main:tags.owner="ops""#,
+            r#"mutate=net.vpc["main"].tags.owner="ops""#,
         ],
     )
     .success();
@@ -161,7 +161,7 @@ fn ignore_changes_drops_the_path_from_both_sides() {
     let r = dform(&s, &["apply"]).success();
     assert!(
         r.stdout
-            .contains("~ net.vpc.main\n  tags.team: \"a\" -> \"b\"\napply order: tick 1 [net.vpc.main]\napply: complete\n"),
+            .contains("~ net.vpc[\"main\"]\n  tags.team: \"a\" -> \"b\"\napply order:\n  tick 1\n    net.vpc[\"main\"]\napply: complete\n"),
         "{}",
         r.stdout
     );
@@ -218,7 +218,7 @@ fn ignore_changes_still_sets_the_path_on_create() {
     let r = dform(&s, &["plan"]).success();
     assert!(
         r.stdout
-            .contains("+ net.vpc.main\n  cidr = \"10.0.0.0/16\"\n  tags.owner = \"ops\"\n"),
+            .contains("+ net.vpc[\"main\"]\n  cidr = \"10.0.0.0/16\"\n  tags.owner = \"ops\"\n"),
         "{}",
         r.stdout
     );
@@ -247,7 +247,7 @@ fn ignore_changes_update_leaves_an_absent_path_absent() {
     );
     let r = dform(&s, &["apply"]).success();
     assert!(
-        r.stdout.contains("~ net.vpc.main\n  size: 1 -> 2\n"),
+        r.stdout.contains("~ net.vpc[\"main\"]\n  size: 1 -> 2\n"),
         "{}",
         r.stdout
     );
@@ -274,7 +274,7 @@ fn why_explains_prevent_destroy() {
     let r = dform(&s, &["why", "deny(M)"]).success();
     assert!(
         r.stdout.starts_with(
-            "deny(\"lifecycle prevent_destroy: the plan would delete net.vpc.main\")\n"
+            "deny(\"lifecycle prevent_destroy: the plan would delete net.vpc[\\\"main\\\"]\")\n"
         ),
         "{}",
         r.stdout

@@ -44,10 +44,10 @@ fn the_file_records_inputs_delta_nulls_and_ticks() {
     assert_eq!(vm["on"][0], "db.postgres/main#endpoint");
     assert_eq!(
         vm["changes"][0]["after"],
-        serde_json::json!({"null": "db.postgres/main#endpoint", "class": "open"})
+        serde_json::json!({"null": "db.postgres[\"main\"].endpoint", "class": "open"})
     );
     assert_eq!(f["nulls"]["unresolved"][0], "db.postgres/main#endpoint");
-    assert_eq!(f["ticks"][1]["addresses"][0], "compute.vm.app");
+    assert_eq!(f["ticks"][1]["addresses"][0], "compute.vm[\"app\"]");
 }
 
 /// The file's delta reproduced: apply runs it, with no other flags.
@@ -71,7 +71,7 @@ fn drift_after_the_plan_is_refused() {
     let r = s.run(&["apply", "plan.json"]).failure();
     assert!(
         r.stderr.contains(
-            "compute.vm.app db_host: the plan saw \"old.db.fake\", the world now has \"older.db.fake\""
+            "compute.vm[\"app\"].db_host: the plan saw \"old.db.fake\", the world now has \"older.db.fake\""
         ),
         "{}",
         r.stderr
@@ -89,7 +89,7 @@ fn a_world_mutated_between_ticks_is_refused_at_the_boundary() {
         .run(&[
             "dev",
             "--chaos",
-            "mutate=db.postgres/main:size=2",
+            "mutate=db.postgres[\"main\"].size=2",
             "apply",
             "plan.json",
         ])
@@ -101,7 +101,7 @@ fn a_world_mutated_between_ticks_is_refused_at_the_boundary() {
     );
     assert!(
         r.stderr.contains(
-            "update db.postgres.main: deformed again at tick 2; the plan file ran it in tick 1"
+            "update db.postgres[\"main\"]: deformed again at tick 2; the plan file ran it in tick 1"
         ),
         "{}",
         r.stderr
@@ -226,7 +226,7 @@ fn a_create_before_destroy_plan_file_applies_in_two_ticks() {
     .success();
     let f: serde_json::Value = serde_json::from_str(&s.read("plan.json")).unwrap();
     assert_eq!(f["deformations"][0]["action"], "replace_create_first");
-    assert_eq!(f["deformations"][0]["dependents"][0], "net.subnet.a");
+    assert_eq!(f["deformations"][0]["dependents"][0], "net.subnet[\"a\"]");
     let r = s.run(&["apply", "plan.json"]).success();
     assert!(r.stdout.ends_with("apply: complete\n"), "{}", r.stdout);
 }

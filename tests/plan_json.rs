@@ -35,6 +35,10 @@ fn plan_json_has_every_section() {
     assert_eq!(p["definite"].as_array().unwrap().len(), 3);
     let subnet = &p["definite"][0];
     assert_eq!(subnet["action"], "create");
+    assert_eq!(
+        subnet["address"],
+        "google_compute_subnetwork[\"gke_subnet\"]"
+    );
     assert_eq!(subnet["type"], "google_compute_subnetwork");
     assert_eq!(
         subnet["changes"][0],
@@ -43,7 +47,7 @@ fn plan_json_has_every_section() {
     let block = &p["pending"][0];
     assert_eq!(
         block["on"][0],
-        json!({"null": "gke_cluster/pngu#ca_certificate", "class": "open"})
+        json!({"null": "gke_cluster[\"pngu\"].ca_certificate", "class": "open"})
     );
     assert_eq!(block["resolves_after"], 1);
     let secret = block["deformations"]
@@ -60,9 +64,9 @@ fn plan_json_has_every_section() {
         .unwrap();
     assert_eq!(
         password["after"],
-        json!({"sensitive": "google.secret_manager_secret_version/db_pw#secret_data"})
+        json!({"sensitive": "google.secret_manager_secret_version[\"db_pw\"].secret_data"})
     );
-    assert_eq!(p["pending_groups"][0]["pattern"], "gke_nodepool.?");
+    assert_eq!(p["pending_groups"][0]["pattern"], "gke_nodepool[?]");
     assert_eq!(p["undetermined"][0]["kind"], "undetermined");
     assert_eq!(p["undetermined"][0]["after"], 1);
     assert_eq!(p["apply_order"][1]["tick"], 2);
@@ -89,7 +93,7 @@ fn plan_json_nulls_carry_their_class() {
         .unwrap();
     assert_eq!(
         sub["after"],
-        json!({"null": "google_compute_subnetwork/gke_subnet#id", "class": "fresh"})
+        json!({"null": "google_compute_subnetwork[\"gke_subnet\"].id", "class": "fresh"})
     );
 }
 
@@ -163,7 +167,7 @@ fn query_json_redacts_like_the_plan() {
     let q: Value = serde_json::from_str(&r.stdout).unwrap();
     assert_eq!(
         q["rows"][0]["V"],
-        json!({"sensitive": "leaky.vault/v#password"})
+        json!({"sensitive": "leaky.vault[\"v\"].password"})
     );
     let r = s
         .run(&[
@@ -183,7 +187,7 @@ fn query_json_redacts_like_the_plan() {
     let q: Value = serde_json::from_str(&r.stdout).unwrap();
     assert_eq!(
         q["rows"][0]["V"],
-        json!({"null": "net.vpc/main#id", "class": "fresh"})
+        json!({"null": "net.vpc[\"main\"].id", "class": "fresh"})
     );
 }
 
@@ -216,7 +220,7 @@ fn replace_denied_and_moved_are_in_the_document() {
     assert_eq!(p["definite"][0]["create_first"], false);
     assert_eq!(
         p["denied"][0],
-        "lifecycle prevent_destroy: the plan would replace net.vpc.main"
+        "lifecycle prevent_destroy: the plan would replace net.vpc[\"main\"]"
     );
 
     s.write(
@@ -233,7 +237,10 @@ fn replace_denied_and_moved_are_in_the_document() {
     let p: Value = serde_json::from_str(&r.stdout).unwrap();
     assert_eq!(
         p["moved"][0],
-        json!({"from": {"type": "net.vpc", "name": "main"}, "to": {"type": "net.vpc", "name": "core"}})
+        json!({
+            "from": {"address": "net.vpc[\"main\"]", "type": "net.vpc", "name": "main"},
+            "to": {"address": "net.vpc[\"core\"]", "type": "net.vpc", "name": "core"}
+        })
     );
     assert_eq!(p["undeformed"], true);
 }

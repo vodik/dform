@@ -29,10 +29,14 @@ fn dform(s: &Scratch, args: &[&str]) -> common::Run {
 #[test]
 fn a_mutation_under_a_pending_deformation_stops_before_tick_two() {
     let s = stack("mutate-pending");
-    let r = dform(&s, &["apply", "--chaos", "mutate=compute.vm/app:size=2"]).failure();
+    let r = dform(
+        &s,
+        &["apply", "--chaos", "mutate=compute.vm[\"app\"].size=2"],
+    )
+    .failure();
     assert!(
         r.stdout
-            .contains("chaos: mutate compute.vm/app: size = 2 after tick 0"),
+            .contains("chaos: mutate compute.vm[\"app\"].size = 2 after tick 0"),
         "{}",
         r.stdout
     );
@@ -40,7 +44,7 @@ fn a_mutation_under_a_pending_deformation_stops_before_tick_two() {
     assert!(
         r.stderr.contains(
             "the world changed under a pending deformation after tick 1:\n\
-             ~ compute.vm.app\n  size: <none> -> 2\n"
+             ~ compute.vm[\"app\"]\n  size: <none> -> 2\n"
         ),
         "{}",
         r.stderr
@@ -49,7 +53,7 @@ fn a_mutation_under_a_pending_deformation_stops_before_tick_two() {
     assert!(
         r.stderr.contains(
             "constraint violations after tick 1:\n\
-             - the world changed under a pending deformation: compute.vm.app\n"
+             - the world changed under a pending deformation: compute.vm[\"app\"]\n"
         ),
         "{}",
         r.stderr
@@ -70,17 +74,22 @@ fn a_mutation_under_a_pending_deformation_stops_before_tick_two() {
 #[test]
 fn a_mutation_elsewhere_is_drift_and_the_run_continues() {
     let s = stack("mutate-elsewhere");
-    let r = dform(&s, &["apply", "--chaos", "mutate=db.postgres/main:size=9"]).success();
+    let r = dform(
+        &s,
+        &["apply", "--chaos", "mutate=db.postgres[\"main\"].size=9"],
+    )
+    .success();
     assert!(
         r.stdout.contains(
-            "drift after tick 1:\n~ db.postgres.main\n  size: 1 -> 9\n\
+            "drift after tick 1:\n~ db.postgres[\"main\"]\n  size: 1 -> 9\n\
              tick 2:\nplan: 2 deformations (2 update)\n"
         ),
         "{}",
         r.stdout
     );
     assert!(
-        r.stdout.contains("~ db.postgres.main\n  size: 9 -> 1\n"),
+        r.stdout
+            .contains("~ db.postgres[\"main\"]\n  size: 9 -> 1\n"),
         "{}",
         r.stdout
     );

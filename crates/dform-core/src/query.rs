@@ -6,7 +6,7 @@
 //! `attr`, `world_attr`, `cloud_attr` or `cloud_computed`, or of an input or
 //! output declared `secret(T)` (`secret_cell/3`), is a secret, and so is
 //! every scalar inside it; any printed value equal to a secret, or a
-//! string containing a secret string, prints as `(sensitive T/A#P)`. A
+//! string containing a secret string, prints as `(sensitive T["A"].p)`. A
 //! `secret` null prints as its label the same way. So a rule that forwards a
 //! secret into another predicate does not leak it either.
 
@@ -27,9 +27,42 @@ pub enum Query {
     Body { body: Vec<Lit>, vars: Vec<String> },
 }
 
-/// Parse `pred`, or body literals such as `attr(t, a, .cidr, c), want(t, a)`,
-/// with the program's own parser.
+/// An address as `plan` prints it (H-16, `ir::parse_address`), as a
+/// pattern: `T["A"].p` is its attribute, `attr(T, A, "p", value)`; `T["A"]`
+/// is the resource, `want(T, A)` for `why` and every `attr(T, A, path,
+/// value)` for `query`.
+pub fn address(src: &str, why: bool) -> Option<Query> {
+    let (addr, path) = crate::ir::parse_address(src).ok()?;
+    let s = |x: &str| Term::Val(Value::Str(x.to_string()));
+    let v = |x: &str| Term::Var(x.to_string());
+    let (pred, args) = match (path, why) {
+        (Some(p), _) => ("attr", vec![s(&addr.typ), s(&addr.name), s(&p), v("value")]),
+        (None, true) => ("want", vec![s(&addr.typ), s(&addr.name)]),
+        (None, false) => (
+            "attr",
+            vec![s(&addr.typ), s(&addr.name), v("path"), v("value")],
+        ),
+    };
+    let atom = Atom {
+        pred: pred.into(),
+        args,
+        record: None,
+        span: Default::default(),
+    };
+    let mut vars = Vec::new();
+    atom.args.iter().for_each(|t| term_vars(t, &mut vars));
+    Some(Query::Body {
+        body: vec![Lit::Pos(atom)],
+        vars,
+    })
+}
+
+/// Parse an address (`address`), `pred`, or body literals such as
+/// `attr(t, a, .cidr, c), want(t, a)`, with the program's own parser.
 pub fn parse(src: &str) -> Result<Query> {
+    if let Some(q) = address(src, false) {
+        return Ok(q);
+    }
     let src = src.trim().trim_end_matches('.').trim();
     if !src.is_empty()
         && src
@@ -257,11 +290,11 @@ impl Redactor {
         self.secret(v).is_some()
     }
 
-    /// `partition::fmt_value`, with secrets as `(sensitive T/A#P)` and
-    /// nulls as `?label`.
+    /// `partition::fmt_value`, with secrets as `(sensitive T["A"].p)` and
+    /// nulls as `?T["A"].p` (`ir::label`).
     pub fn fmt(&self, v: &Value) -> String {
         if let Some(l) = self.secret(v) {
-            return format!("(sensitive {l})");
+            return format!("(sensitive {})", crate::ir::label(&l));
         }
         match v {
             Value::List(xs) => format!(
@@ -278,7 +311,7 @@ impl Redactor {
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
-            Value::Null { label, .. } => format!("?{label}"),
+            Value::Null { label, .. } => format!("?{}", crate::ir::label(label)),
             v => partition::fmt_value(v),
         }
     }
@@ -301,8 +334,9 @@ impl Redactor {
         let mut out = s.to_string();
         for (k, l) in &self.secrets {
             if let Value::Str(k) = k {
-                out = out.replace(&format!("{k:?}"), &format!("(sensitive {l})"));
-                out = out.replace(k.as_str(), &format!("(sensitive {l})"));
+                let shown = format!("(sensitive {})", crate::ir::label(l));
+                out = out.replace(&format!("{k:?}"), &shown);
+                out = out.replace(k.as_str(), &shown);
             }
         }
         out
@@ -310,7 +344,7 @@ impl Redactor {
 
     pub fn json(&self, v: &Value) -> serde_json::Value {
         if let Some(l) = self.secret(v) {
-            return serde_json::json!({ "sensitive": l });
+            return serde_json::json!({ "sensitive": crate::ir::label(&l) });
         }
         match v {
             Value::List(xs) => serde_json::Value::Array(xs.iter().map(|x| self.json(x)).collect()),
@@ -318,7 +352,7 @@ impl Redactor {
                 m.iter().map(|(k, x)| (k.clone(), self.json(x))).collect(),
             ),
             Value::Null { label, class, .. } => {
-                serde_json::json!({"null": label, "class": class.name()})
+                serde_json::json!({"null": crate::ir::label(label), "class": class.name()})
             }
             v => engine::value_to_json(v),
         }
@@ -391,6 +425,6 @@ arg("v", "a", "pw", "hunter22", "normal")
         };
         let out = table(&body, &vars, &f).unwrap().render(&r);
         assert!(!out.contains("hunter22"), "{out}");
-        assert!(out.contains("(sensitive v/a#pw)"), "{out}");
+        assert!(out.contains("(sensitive v[\"a\"].pw)"), "{out}");
     }
 }

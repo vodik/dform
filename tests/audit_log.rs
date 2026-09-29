@@ -64,9 +64,9 @@ fn a_full_apply_is_a_verifiable_chain() {
     assert_eq!(
         actions,
         [
-            ("create", "net.vpc.main", "ok"),
-            ("create", "net.subnet.a", "ok"),
-            ("create", "compute.vm.app", "ok")
+            ("create", "net.vpc[\"main\"]", "ok"),
+            ("create", "net.subnet[\"a\"]", "ok"),
+            ("create", "compute.vm[\"app\"]", "ok")
         ]
     );
     assert!(es[3]["remote"].is_string(), "{}", es[3]);
@@ -100,7 +100,7 @@ fn a_full_apply_is_a_verifiable_chain() {
 fn a_failed_apply_and_its_resume_are_one_chain() {
     let s = Scratch::project("audit-resume");
     s.write("p.df", PROG);
-    dform(&s, &["apply", "--chaos", "fail=compute.vm/app"]).failure();
+    dform(&s, &["apply", "--chaos", "fail=compute.vm[\"app\"]"]).failure();
     dform(&s, &["apply"]).success();
     let es = entries(&s);
     let failed: Vec<&serde_json::Value> = es
@@ -108,7 +108,7 @@ fn a_failed_apply_and_its_resume_are_one_chain() {
         .filter(|e| e["kind"] == "action" && e["result"] == "failed")
         .collect();
     assert_eq!(failed.len(), 1, "{es:#?}");
-    assert_eq!(failed[0]["address"], "compute.vm.app");
+    assert_eq!(failed[0]["address"], "compute.vm[\"app\"]");
     assert!(failed[0]["error"].is_string());
     let ends: Vec<&str> = es
         .iter()
@@ -118,7 +118,7 @@ fn a_failed_apply_and_its_resume_are_one_chain() {
     assert_eq!(ends, ["failed", "ok"]);
     // The resume applies the vm.
     let last_action = es.iter().rev().find(|e| e["kind"] == "action").unwrap();
-    assert_eq!(last_action["address"], "compute.vm.app");
+    assert_eq!(last_action["address"], "compute.vm[\"app\"]");
     assert_eq!(last_action["result"], "ok");
     dform(&s, &["log", "verify"]).success();
 }
@@ -132,7 +132,7 @@ fn an_edited_entry_is_named() {
     // The subnet's action (entry 5) claims another remote id.
     let lines: Vec<&str> = log.lines().collect();
     let edited: serde_json::Value = serde_json::from_str(lines[4]).unwrap();
-    assert_eq!(edited["address"], "net.subnet.a");
+    assert_eq!(edited["address"], "net.subnet[\"a\"]");
     let remote = edited["remote"].as_str().unwrap();
     let forged = lines[4].replace(&format!("\"remote\":\"{remote}\""), "\"remote\":\"forged\"");
     assert_ne!(forged, lines[4]);

@@ -90,7 +90,7 @@ fn plan_on(
         .unwrap()
         .actions
         .into_iter()
-        .map(|a| (format!("{}.{}", a.addr.typ, a.addr.name), a.kind, a.on))
+        .map(|a| (a.addr.to_string(), a.kind, a.on))
         .collect()
 }
 
@@ -142,9 +142,9 @@ fn fixture_prod_is_eleven_updates() {
     assert_eq!(
         noop,
         BTreeSet::from([
-            "iam.role.iam.main::app_role",
-            "iam.role_policy_attachment.iam.main::attach",
-            "net.vpc_peering.peer-main-peer",
+            "iam.role[\"iam.main::app_role\"]",
+            "iam.role_policy_attachment[\"iam.main::attach\"]",
+            "net.vpc_peering[\"peer-main-peer\"]",
         ])
     );
     let p = plan(&program, &[], &world, &state);
@@ -197,7 +197,7 @@ fn an_open_null_against_a_world_constant_is_pending() {
     )
     .unwrap();
     let p = plan(&program, &[], &world, &dir.join("w.state.json"));
-    let app = p.iter().find(|x| x.0 == "compute.vm.app").unwrap();
+    let app = p.iter().find(|x| x.0 == "compute.vm[\"app\"]").unwrap();
     assert!(matches!(app.1, ActionKind::Pending), "{p:?}");
     assert_eq!(
         app.2,

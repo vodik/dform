@@ -207,13 +207,13 @@ fn provider_assertions(
 /// `remaining`.
 pub const POLICY_RULES: &str = r#"
 deny(m) if lifecycle(t, a, "prevent_destroy"), deformation("delete", t, a, _),
-  m = format("lifecycle prevent_destroy: the plan would delete %s.%s", t, a)
+  m = format("lifecycle prevent_destroy: the plan would delete %s[\"%s\"]", t, a)
 deny(m) if lifecycle(t, a, "prevent_destroy"), deformation("replace", t, a, _),
-  m = format("lifecycle prevent_destroy: the plan would replace %s.%s", t, a)
+  m = format("lifecycle prevent_destroy: the plan would replace %s[\"%s\"]", t, a)
 deny(m) if deformation("pending", t, a, before), world_digest(t, a, now), before != now,
-  m = format("the world changed under a pending deformation: %s.%s", t, a)
+  m = format("the world changed under a pending deformation: %s[\"%s\"]", t, a)
 deny(m) if deformation("remaining", t, a, before), world_digest(t, a, now), before != now,
-  m = format("the world changed under a remaining action: %s.%s", t, a)
+  m = format("the world changed under a remaining action: %s[\"%s\"]", t, a)
 "#;
 
 /// The predicates a policy pass gives the program (`deformation_facts`).
@@ -747,7 +747,7 @@ pub mod file {
                 serde_json::to_vec(&v).unwrap_or_default()
             })
         };
-        let name = format!("{}.{}", a.addr.typ, a.addr.name);
+        let name = a.addr.to_string();
         Entry {
             typ: a.addr.typ.clone(),
             name: a.addr.name.clone(),
@@ -949,7 +949,11 @@ pub mod file {
                 current.iter().map(|e| (key(e), e)).collect();
             let mut out = Vec::new();
             for (k, c) in &now {
-                let at = format!("{}.{}", k.0, k.1);
+                let at = crate::ir::Address {
+                    typ: k.0.clone(),
+                    name: k.1.clone(),
+                }
+                .to_string();
                 // The object a create_before_destroy replacement deposed
                 // is deleted the tick after.
                 let deposed = c.action == "delete_deposed"
@@ -963,7 +967,7 @@ pub mod file {
                     let grouped = self
                         .pending_groups
                         .iter()
-                        .any(|g| g.pattern == format!("{}.?", k.0));
+                        .any(|g| g.pattern == format!("{}[?]", k.0));
                     // A dependent of an earlier replace follows its new
                     // identity.
                     let follows = c.action == "update"
@@ -997,9 +1001,13 @@ pub mod file {
                 if s.tick.is_some_and(|t| t < tick) || now.contains_key(k) {
                     continue;
                 }
+                let at = crate::ir::Address {
+                    typ: k.0.clone(),
+                    name: k.1.clone(),
+                };
                 out.push(format!(
-                    "{} {}.{}: in the plan file, no longer a deformation",
-                    s.action, k.0, k.1
+                    "{} {at}: in the plan file, no longer a deformation",
+                    s.action
                 ));
             }
             out
@@ -1024,18 +1032,21 @@ pub mod file {
             }
             _ => serde_json::to_string(v).unwrap_or_default(),
         };
+        // The leaf `p` of the address `at`: `T["A"].p`.
+        let leaf = |p: &str| format!("{at}{}", crate::ir::path_suffix(p));
         let mut out = Vec::new();
         for (p, l) in &n {
+            let at = leaf(p);
             match s.get(p) {
                 None => out.push(format!(
-                    "{at} {p}: not in the plan file ({} -> {})",
+                    "{at}: not in the plan file ({} -> {})",
                     text(&l.before),
                     text(&l.after)
                 )),
                 Some(sl) => {
                     if sl.before != l.before {
                         out.push(format!(
-                            "{at} {p}: the plan saw {}, the world now has {}",
+                            "{at}: the plan saw {}, the world now has {}",
                             text(&sl.before),
                             text(&l.before)
                         ));
@@ -1043,7 +1054,7 @@ pub mod file {
                     // A null the file carries matches what it resolved to.
                     if sl.after != l.after && !is_null(&sl.after) {
                         out.push(format!(
-                            "{at} {p}: the plan file sets {}, re-evaluation sets {}",
+                            "{at}: the plan file sets {}, re-evaluation sets {}",
                             text(&sl.after),
                             text(&l.after)
                         ));
@@ -1054,7 +1065,8 @@ pub mod file {
         for (p, sl) in &s {
             if !n.contains_key(p) {
                 out.push(format!(
-                    "{at} {p}: in the plan file ({} -> {}), no longer a change",
+                    "{}: in the plan file ({} -> {}), no longer a change",
+                    leaf(p),
                     text(&sl.before),
                     text(&sl.after)
                 ));

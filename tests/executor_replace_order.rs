@@ -50,7 +50,7 @@ fn either_destroys_first_unless_lifecycle_says_otherwise() {
     );
     let r = r.success();
     assert!(
-        r.stdout.contains("-/+ net.subnet.a  (replace)"),
+        r.stdout.contains("-/+ net.subnet[\"a\"]  (replace)"),
         "{}",
         r.stdout
     );
@@ -61,7 +61,7 @@ fn either_destroys_first_unless_lifecycle_says_otherwise() {
     );
     let r = r.success();
     assert!(
-        r.stdout.contains("+/- net.subnet.a  (replace)"),
+        r.stdout.contains("+/- net.subnet[\"a\"]  (replace)"),
         "{}",
         r.stdout
     );
@@ -78,7 +78,7 @@ fn create_first_needs_no_lifecycle_fact() {
     );
     let r = r.success();
     assert!(
-        r.stdout.contains("+/- net.subnet.a  (replace)"),
+        r.stdout.contains("+/- net.subnet[\"a\"]  (replace)"),
         "{}",
         r.stdout
     );
@@ -88,7 +88,9 @@ fn create_first_needs_no_lifecycle_fact() {
         "lifecycle(\"net.subnet\", \"a\", \"create_before_destroy\")\n",
     );
     assert!(
-        r.success().stdout.contains("+/- net.subnet.a  (replace)"),
+        r.success()
+            .stdout
+            .contains("+/- net.subnet[\"a\"]  (replace)"),
         "redundant lifecycle fact"
     );
 }
@@ -117,7 +119,9 @@ fn create_before_destroy_on_a_destroy_first_type_is_an_error() {
         "",
     );
     assert!(
-        r.success().stdout.contains("-/+ net.subnet.a  (replace)"),
+        r.success()
+            .stdout
+            .contains("-/+ net.subnet[\"a\"]  (replace)"),
         "destroy_first without the fact"
     );
 }

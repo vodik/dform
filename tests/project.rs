@@ -220,7 +220,7 @@ fn a_program_imports_modules_never_a_stack() {
         "edition 2026\nstack both {}\nimport \"modules/tags.df\"\n",
     );
     let r = s.run(&["plan", "both"]).success();
-    assert!(r.stdout.contains("+ net.vpc.extra"), "{}", r.stdout);
+    assert!(r.stdout.contains("+ net.vpc[\"extra\"]"), "{}", r.stdout);
 }
 
 #[test]
@@ -268,7 +268,7 @@ default(k, v) if project_default(k, v)
     );
     // The provider is the manifest's source: its schema knows x.thing.
     let r = s.run(&["apply", "p"]).success();
-    assert!(r.stdout.contains("+ x.thing.a"), "{}", r.stdout);
+    assert!(r.stdout.contains("+ x.thing[\"a\"]"), "{}", r.stdout);
     // The default backend, under the project root.
     assert!(s.path("state/p/state.json").exists());
     // A plan file's program takes its project's manifest too.
@@ -349,20 +349,48 @@ fn state_show_mv_and_unlock() {
     s.run(&["apply", "net"]).success();
     let r = s.run(&["state", "show", "net"]).success();
     assert!(
-        r.stdout.contains("  net.vpc/shared  fakecloud shared"),
+        r.stdout.contains("  net.vpc[\"shared\"]  fakecloud shared"),
         "{}",
         r.stdout
     );
-    s.run(&["state", "mv", "net.vpc/shared", "net.vpc/moved", "net"])
-        .success();
+    s.run(&[
+        "state",
+        "mv",
+        r#"net.vpc["shared"]"#,
+        r#"net.vpc["moved"]"#,
+        "net",
+    ])
+    .success();
     let r = s.run(&["state", "show", "net"]).success();
-    assert!(r.stdout.contains("  net.vpc/moved  "), "{}", r.stdout);
+    assert!(r.stdout.contains("  net.vpc[\"moved\"]  "), "{}", r.stdout);
+    // An address as plan prints it names one object; the old spelling is
+    // refused.
+    let one = r#"net.vpc["moved"]"#;
+    let r = s.run(&["state", "show", "net", "--address", one]).success();
+    assert_eq!(r.stdout, "net.vpc[\"moved\"]  fakecloud shared\n");
     let r = s
-        .run(&["state", "mv", "net.vpc/shared", "net.vpc/x", "net"])
+        .run(&["state", "show", "net", "--address", r#"net.vpc["shared"]"#])
         .failure();
     assert!(
         r.stderr
-            .contains("state mv: stack net has no object at net.vpc/shared"),
+            .contains("stack net has no object at net.vpc[\"shared\"]"),
+        "{}",
+        r.stderr
+    );
+    s.run(&["state", "mv", "net.vpc/moved", "net.vpc/x", "net"])
+        .failure();
+    let r = s
+        .run(&[
+            "state",
+            "mv",
+            r#"net.vpc["shared"]"#,
+            r#"net.vpc["x"]"#,
+            "net",
+        ])
+        .failure();
+    assert!(
+        r.stderr
+            .contains("state mv: stack net has no object at net.vpc[\"shared\"]"),
         "{}",
         r.stderr
     );

@@ -32,7 +32,7 @@ resource net.subnet a {
     for want in [r#""resource":"net.subnet.a""#, r#""at":"p.df:5:14""#] {
         assert!(r.stderr.contains(want), "{want}: {}", r.stderr);
     }
-    assert!(!r.stdout.contains("net.subnet.a"), "{}", r.stdout);
+    assert!(!r.stdout.contains("net.subnet[\"a\"]"), "{}", r.stdout);
 }
 
 /// A read that finds its row, a block whose own `if` does not hold, and a
@@ -67,7 +67,7 @@ resource net.subnet c {
     )
     .success();
     assert!(!r.stderr.contains(MSG), "{}", r.stderr);
-    assert!(r.stdout.contains("net.subnet.a"), "{}", r.stdout);
+    assert!(r.stdout.contains("net.subnet[\"a\"]"), "{}", r.stdout);
 }
 
 #[test]

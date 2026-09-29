@@ -1651,7 +1651,7 @@ fn collapse_group(
                     "undecided until {}",
                     nulls
                         .iter()
-                        .map(|n| format!("?{n}"))
+                        .map(|n| format!("?{}", crate::ir::label(n)))
                         .collect::<Vec<_>>()
                         .join(" ")
                 ),
@@ -4961,7 +4961,7 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(
-            err.contains("resource vm \"a\": attribute id is computed"),
+            err.contains("resource vm[\"a\"]: attribute id is computed"),
             "{err}"
         );
         let err = run_with("resource vm a { meta.uid = \"x\" }", &schema)
@@ -5146,8 +5146,9 @@ mod tests {
         assert_eq!(facts_of(&r, "want").len(), 6);
         assert_eq!(s.pending_groups.len(), 1, "{:?}", s.pending_groups);
         assert!(
-            s.pending_groups[0]
-                .starts_with("want(\"gke_nodepool\", _) x unknown, on ?gke_cluster/pngu#zones")
+            s.pending_groups[0].starts_with(
+                "want(\"gke_nodepool\", _) x unknown, on ?gke_cluster[\"pngu\"].zones"
+            )
         );
         assert_eq!(s.undetermined.len(), 1, "{:?}", s.undetermined);
         assert!(s.undetermined[0].starts_with("deny \"cluster must be in at least two zones\""));
@@ -5199,16 +5200,16 @@ mod tests {
             })
             .collect();
         assert!(
-            may.contains(&r#"want("net.subnet", "s") ?db.postgres/a#endpoint (reads up("a"), which is stuck)"#.to_string()),
+            may.contains(&r#"want("net.subnet", "s") ?db.postgres["a"].endpoint (reads up("a"), which is stuck)"#.to_string()),
             "{may:#?}"
         );
         assert!(
-            may.contains(&r#"want("net.subnet", "t") ?db.postgres/b#endpoint (reads ready("b"), which may derive after a boundary)"#.to_string()),
+            may.contains(&r#"want("net.subnet", "t") ?db.postgres["b"].endpoint (reads ready("b"), which may derive after a boundary)"#.to_string()),
             "{may:#?}"
         );
         assert!(
             !may.iter()
-                .any(|m| m.contains("db.postgres/b#") && m.contains("\"s\"")),
+                .any(|m| m.contains(r#"db.postgres["b"]"#) && m.contains("\"s\"")),
             "{may:#?}"
         );
         let docs = crate::ir::compile_resources(r.facts.iter().cloned(), &crate::schema::fake())

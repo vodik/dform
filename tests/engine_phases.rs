@@ -6,13 +6,13 @@ use common::{Scratch, repo};
 
 const GKE_PLAN: &str = r#"plan: 3 deformations (3 create), 4 pending, 1 undetermined
 definite:
-+ google_compute_subnetwork.gke_subnet
++ google_compute_subnetwork["gke_subnet"]
   ip_cidr_range = "10.141.76.0/22"
   name = "renfry-dev-gke-subnet"
   network = "projects/renfry-dev-973682/global/networks/renfry-dev-network"
   project = "renfry-dev-973682"
   region = "us-east1"
-+ gke_cluster.pngu
++ gke_cluster["pngu"]
   deletion_protection = true
   env = "dev"
   master_control_plane_cidr = "172.16.3.96/28"
@@ -21,27 +21,36 @@ definite:
   node_locations[0] = "us-east1-b"
   node_locations[1] = "us-east1-c"
   project_id = "renfry-dev-973682"
-  subnetwork_id = ?google_compute_subnetwork/gke_subnet#id
-+ google_compute_address.static_ip
+  subnetwork_id = ?google_compute_subnetwork["gke_subnet"].id
++ google_compute_address["static_ip"]
   name = "pngu-grpc"
   project = "renfry-dev-973682"
   region = "us-east1"
-  subnetwork_id = ?google_compute_subnetwork/gke_subnet#id
-pending on ?gke_cluster/pngu#ca_certificate ?gke_cluster/pngu#endpoint (resolves after tick 1):
-+ k8s.deployment.api
+  subnetwork_id = ?google_compute_subnetwork["gke_subnet"].id
+pending on ?gke_cluster["pngu"].ca_certificate ?gke_cluster["pngu"].endpoint (resolves after tick 1):
++ k8s.deployment["api"]
   image = "gcr.io/renfry/api:1.42"
   namespace = "pngu"
   replicas = 3
-+ k8s.namespace.pngu
++ k8s.namespace["pngu"]
   name = "pngu"
-+ k8s.secret.db_credentials
-  data.password = (sensitive google.secret_manager_secret_version/db_pw#secret_data)
++ k8s.secret["db_credentials"]
+  data.password = (sensitive google.secret_manager_secret_version["db_pw"].secret_data)
   namespace = "pngu"
 pending groups:
-? gke_nodepool.? x unknown, on ?gke_cluster/pngu#zones, resolves after tick 1  (member/2 over a null list)
+? gke_nodepool[?] x unknown, on ?gke_cluster["pngu"].zones, resolves after tick 1  (member/2 over a null list)
 undetermined:
-? deny "cluster must be in at least two zones" on ?gke_cluster/pngu#zones, decided after tick 1  (reads undetermined aggregate zone_count)
-apply order: tick 1 [google_compute_subnetwork.gke_subnet gke_cluster.pngu google_compute_address.static_ip] tick 2 [k8s.deployment.api k8s.namespace.pngu k8s.secret.db_credentials gke_nodepool.?]
+? deny "cluster must be in at least two zones" on ?gke_cluster["pngu"].zones, decided after tick 1  (reads undetermined aggregate zone_count)
+apply order:
+  tick 1
+    google_compute_subnetwork["gke_subnet"]
+    gke_cluster["pngu"]
+    google_compute_address["static_ip"]
+  tick 2
+    k8s.deployment["api"]
+    k8s.namespace["pngu"]
+    k8s.secret["db_credentials"]
+    gke_nodepool[?]
 "#;
 
 /// Three definite, three pending on the kubernetes provider's configuration,
@@ -215,7 +224,7 @@ fn a_pending_update_applies_after_the_boundary() {
         r.stdout
     );
     assert!(
-        r.stdout.contains("tick 2:\nplan: 1 deformation (1 update)\ndefinite:\n~ compute.vm.app\n  db_host: \"old.db.fake\" -> \"main.db.fake\"\n"),
+        r.stdout.contains("tick 2:\nplan: 1 deformation (1 update)\ndefinite:\n~ compute.vm[\"app\"]\n  db_host: \"old.db.fake\" -> \"main.db.fake\"\n"),
         "{}",
         r.stdout
     );

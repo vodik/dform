@@ -10,7 +10,8 @@ fn a_fresh_stack_carries_nulls_until_apply() {
     let prog = prog.to_str().unwrap();
     let r = s.run(&["dev", "--world", "w.json", "plan", prog]).success();
     assert!(
-        r.stdout.contains("vpc_id = ?net.vpc/network.main::vpc#id"),
+        r.stdout
+            .contains("vpc_id = ?net.vpc[\"network.main::vpc\"].id"),
         "{}",
         r.stdout
     );
@@ -87,7 +88,7 @@ fn secrets_are_labels_and_print_redacted() {
     let plan = run("plan");
     assert!(
         plan.stdout
-            .contains("value = (sensitive db.instance/main#password)"),
+            .contains("value = (sensitive db.instance[\"main\"].password)"),
         "{}",
         plan.stdout
     );
@@ -97,7 +98,7 @@ fn secrets_are_labels_and_print_redacted() {
         plan.stdout
     );
     assert!(
-        plan.stdout.contains("db = ?db.instance/main#id"),
+        plan.stdout.contains("db = ?db.instance[\"main\"].id"),
         "{}",
         plan.stdout
     );
@@ -165,7 +166,7 @@ resource vm c { peer_zone = ref("vm", "a", "zone"), other_zone = ref("vm", "b", 
     };
     let plan = run("plan");
     assert!(
-        plan.stdout.contains("peer_zone = ?vm/a#zone"),
+        plan.stdout.contains("peer_zone = ?vm[\"a\"].zone"),
         "{}",
         plan.stdout
     );

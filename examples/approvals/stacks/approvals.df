@@ -28,7 +28,7 @@ resource net.vpc main {
 requires_approval(d, "a replace in prod") if {
   env == "prod"
   deformation("replace", t, a, _)
-  d = "{t}.{a}"
+  d = "{t}[\"{a}\"]"
 }
 
 # Optional: who may approve what. Without it, any key in the trust root may.

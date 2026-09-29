@@ -113,14 +113,14 @@ fn a_provider_configured_from_what_it_serves_is_a_cycle() {
     let r = s.run(&["plan", "stacks/app.df"]).failure();
     assert!(
         r.stderr.contains(
-            "provider fake is configured from net.vpc.main.cidr, which it serves itself: a cycle"
+            "provider fake is configured from net.vpc[\"main\"].cidr, which it serves itself: a cycle"
         ),
         "{}",
         r.stderr
     );
     assert!(
         r.stderr.contains(
-            "the cycle: provider fake's configuration -> reads z -> reads net.vpc.main.cidr \
+            "the cycle: provider fake's configuration -> reads z -> reads net.vpc[\"main\"].cidr \
              -> which provider fake serves"
         ),
         "{}",

@@ -23,7 +23,7 @@ fn plans_with_the_mock_linked_in() {
             .unwrap();
         let stdout = String::from_utf8_lossy(&out.stdout);
         assert!(out.status.success(), "{backend}: {out:?}");
-        assert!(stdout.contains("+ net.vpc.a"), "{backend}: {stdout}");
+        assert!(stdout.contains("+ net.vpc[\"a\"]"), "{backend}: {stdout}");
     }
     let _ = std::fs::remove_dir_all(&dir);
 }

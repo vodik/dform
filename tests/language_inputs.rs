@@ -107,7 +107,7 @@ fn an_input_file_gives_inputs_as_facts() {
     assert!(r.stdout.contains("env = \"prod\""), "{}", r.stdout);
     assert!(
         r.stdout
-            .contains("+ net.subnet.s1\n  cidr = \"10.0.1.0/24\""),
+            .contains("+ net.subnet[\"s1\"]\n  cidr = \"10.0.1.0/24\""),
         "{}",
         r.stdout
     );

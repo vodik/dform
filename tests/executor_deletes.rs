@@ -41,7 +41,11 @@ resource compute.vm keep { size = 1 }
     let order: Vec<&str> = r.stdout.lines().filter(|l| l.starts_with("- ")).collect();
     assert_eq!(
         order,
-        ["- net.route.r", "- net.vpc_peering.p", "- net.vpc.main"],
+        [
+            "- net.route[\"r\"]",
+            "- net.vpc_peering[\"p\"]",
+            "- net.vpc[\"main\"]"
+        ],
         "{}",
         r.stdout
     );
@@ -75,10 +79,10 @@ fn a_force_new_change_replaces_destroying_first() {
     assert_eq!(
         r.stdout,
         "tick 1:\nplan: 1 deformation (1 replace), 1 pending\ndefinite:\n\
-         -/+ net.vpc.main  (replace)\n  cidr: \"10.0.0.0/16\" -> \"10.1.0.0/16\"\n\
-         pending on ?net.vpc/main#id (resolves after tick 1):\n\
-         ~ net.subnet.a\n  vpc_id: \"net.vpc:main\" -> ?net.vpc/main#id\n\
-         apply order: tick 1 [net.vpc.main] tick 2 [net.subnet.a]\n\
+         -/+ net.vpc[\"main\"]  (replace)\n  cidr: \"10.0.0.0/16\" -> \"10.1.0.0/16\"\n\
+         pending on ?net.vpc[\"main\"].id (resolves after tick 1):\n\
+         ~ net.subnet[\"a\"]\n  vpc_id: \"net.vpc:main\" -> ?net.vpc[\"main\"].id\n\
+         apply order:\n  tick 1\n    net.vpc[\"main\"]\n  tick 2\n    net.subnet[\"a\"]\n\
          tick 2:\nstack p is undeformed\n\
          apply: complete\n"
     );
@@ -108,7 +112,7 @@ fn create_before_destroy_deposes_the_old_object_until_dependents_move() {
     // Stop after tick 1: the old object is deposed in state.
     let r = dform(&s, &["apply", "--max-ticks", "1"]).failure();
     assert!(
-        r.stdout.contains("+/- net.vpc.main  (replace)"),
+        r.stdout.contains("+/- net.vpc[\"main\"]  (replace)"),
         "{}",
         r.stdout
     );
@@ -123,8 +127,8 @@ fn create_before_destroy_deposes_the_old_object_until_dependents_move() {
     assert!(
         r.stdout.contains(
             "plan: 2 deformations (1 update, 1 delete)\ndefinite:\n\
-             ~ net.subnet.a\n  vpc_id: \"net.vpc:main\" -> \"net.vpc:main-2\"\n\
-             - net.vpc.main  (deposed)\n  cidr was \"10.0.0.0/16\"\n"
+             ~ net.subnet[\"a\"]\n  vpc_id: \"net.vpc:main\" -> \"net.vpc:main-2\"\n\
+             - net.vpc[\"main\"]  (deposed)\n  cidr was \"10.0.0.0/16\"\n"
         ),
         "{}",
         r.stdout

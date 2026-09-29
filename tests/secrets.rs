@@ -157,17 +157,16 @@ fn show_never_prints_the_labeled_secret() {
             "--world",
             "w.json",
             "show",
-            "leaky.vault",
-            "v",
+            r#"leaky.vault["v"]"#,
             "p.df",
         ])
         .success();
     assert!(!r.stdout.contains(VAULT_SECRET), "{}", r.stdout);
     assert!(
         r.stdout
-            .contains(r#""password": {"sensitive": "leaky.vault/v#password"}"#)
+            .contains(r#""password": {"sensitive": "leaky.vault[\"v\"].password"}"#)
             || r.stdout
-                .contains("\"sensitive\": \"leaky.vault/v#password\""),
+                .contains(r#""sensitive": "leaky.vault[\"v\"].password""#),
         "{}",
         r.stdout
     );
@@ -307,7 +306,7 @@ fn a_secret_input_never_prints_in_query_why_or_the_plan_file() {
             assert!(!out.contains("HUNTER-TWO"), "{cmd:?}: {out}");
         }
         if cmd[0] != "plan" {
-            assert!(r.stdout.contains("input/#pw"), "{cmd:?}: {}", r.stdout);
+            assert!(r.stdout.contains("input.pw"), "{cmd:?}: {}", r.stdout);
         }
     }
     let file = s.read("plan.json");
@@ -364,7 +363,7 @@ fn a_sensitive_leaf_changed_between_plan_and_apply_is_refused() {
     let r = s.run(&["apply", "plan.json"]).failure();
     assert!(
         r.stderr
-            .contains("leaky.vault.v password: the plan saw (sensitive, digest "),
+            .contains("leaky.vault[\"v\"].password: the plan saw (sensitive, digest "),
         "{}",
         r.stderr
     );
@@ -583,8 +582,9 @@ fn a_secret_output_reaches_a_sensitive_field_in_another_stack() {
         assert!(!out.contains(PRODUCED), "{out}");
     }
     assert!(
-        r.stdout
-            .contains("+ leaky.vault.copy\n  backup = (sensitive stack_output/prod#pass)\n"),
+        r.stdout.contains(
+            "+ leaky.vault[\"copy\"]\n  backup = (sensitive stack_output[\"prod\"].pass)\n"
+        ),
         "{}",
         r.stdout
     );
@@ -595,7 +595,7 @@ fn a_secret_output_reaches_a_sensitive_field_in_another_stack() {
     // The producer's secret changes: the reader's field is updated.
     dev(&["apply", "prod", "--set", "pw=ROTATED-SECRET"]).success();
     let r = dev(&["apply", "app"]).success();
-    assert!(r.stdout.contains("~ leaky.vault.copy"), "{}", r.stdout);
+    assert!(r.stdout.contains("~ leaky.vault[\"copy\"]"), "{}", r.stdout);
     assert!(!r.stdout.contains("ROTATED"), "{}", r.stdout);
     assert_eq!(materialized(&s), "ROTATED-SECRET");
 
@@ -607,7 +607,7 @@ fn a_secret_output_reaches_a_sensitive_field_in_another_stack() {
     let r = dev(&["plan", "app"]).failure();
     assert!(
         r.stderr.contains(
-            "plan leaky.vault/copy backup: stack_output/prod#token is a secret output of prod \
+            "plan leaky.vault[\"copy\"].backup: stack_output[\"prod\"].token is a secret output of prod \
              that no provider holds"
         ),
         "{}",
@@ -638,7 +638,7 @@ fn a_persisted_extern_secret_is_held_by_its_provider_never_stored() {
         "apply",
         "first.json",
         "--chaos",
-        "fail=k8s.job/migrate-v42",
+        "fail=k8s.job[\"migrate-v42\"]",
     ])
     .failure();
     let state = s.read("dform.state/shop.crud_api/state.json");
@@ -722,7 +722,7 @@ fn kept_world_documents_hold_a_sensitive_leaf_by_its_digest() {
         "--set",
         "pw=SECOND-KEPT-SECRET",
         "--chaos",
-        "fail=leaky.vault/v",
+        "fail=leaky.vault[\"v\"]",
     ])
     .failure();
     let state = s.read("dform.state/s/state.json");

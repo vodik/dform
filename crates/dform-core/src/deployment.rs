@@ -1098,11 +1098,13 @@ pub fn provenance(res: &EvalResult, id: NodeId) -> (Option<At>, Vec<(At, String)
                         Some(Value::Str(r)) => r.clone(),
                         _ => "?".into(),
                     };
+                    let at = crate::ir::Address {
+                        typ: text_of(fact.args.first()),
+                        name: text_of(fact.args.get(1)),
+                    };
                     let what = format!(
-                        "contribution to {}.{} .{} at rank {rank}",
-                        text_of(fact.args.first()),
-                        text_of(fact.args.get(1)),
-                        text_of(fact.args.get(2)),
+                        "contribution to {} at rank {rank}",
+                        at.attr(&text_of(fact.args.get(2)))
                     );
                     if !related.iter().any(|(x, _)| *x == w) {
                         related.push((w, what));

@@ -117,8 +117,8 @@ pub fn fmt_value(v: Option<&serde_json::Value>) -> String {
         return "<none>".to_string();
     };
     match marker(v) {
-        Some((NULL_KEY, l)) => return format!("?{l}"),
-        Some((_, l)) => return format!("(sensitive {l})"),
+        Some((NULL_KEY, l)) => return format!("?{}", crate::ir::label(l)),
+        Some((_, l)) => return format!("(sensitive {})", crate::ir::label(l)),
         None => {}
     }
     match v {

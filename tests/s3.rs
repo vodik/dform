@@ -213,7 +213,7 @@ fn plan_and_apply_of_the_demo_keep_state_in_the_bucket() {
         let p = Project::new(t, "apply");
         let plan = p.run(PLAN).success();
         assert!(
-            plan.stdout.contains("+ net.vpc.network.main::vpc"),
+            plan.stdout.contains("+ net.vpc[\"network.main::vpc\"]"),
             "{}: {}",
             t.what,
             plan.stdout
@@ -777,7 +777,7 @@ fn another_stack_reads_an_s3_stacks_outputs() {
         let r = p.run(&["plan", "app"]).success();
         assert!(
             r.stdout.contains(
-                "+ net.subnet.a\n  cidr = \"10.0.0.0/16\"\n  vpc_id = \"net.vpc:main\"\n"
+                "+ net.subnet[\"a\"]\n  cidr = \"10.0.0.0/16\"\n  vpc_id = \"net.vpc:main\"\n"
             ),
             "{}: {}",
             t.what,
@@ -877,7 +877,7 @@ fn a_server_that_ignores_conditions_is_refused() {
             "stacks/app.df",
             "edition 2026\nstack app {}\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\n\
              requires_approval(d, \"every change\") if {\n  deformation(_, t, a, _)\n  \
-             d = \"{t}.{a}\"\n}\n",
+             d = \"{t}[\\\"{a}\\\"]\"\n}\n",
         );
     });
     let r = p.run(&["plan", "app"]).failure();

@@ -162,7 +162,7 @@ impl Version {
     fn addrs(&self) -> Vec<String> {
         self.res
             .iter()
-            .map(|r| format!("{}/{}", r.typ, r.name))
+            .map(|r| format!("{}[\"{}\"]", r.typ, r.name))
             .collect()
     }
 }
@@ -1230,7 +1230,7 @@ fn an_uncertain_create_resolved_to_nothing_is_an_orphan() {
     let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     use std::sync::atomic::Ordering;
     let steps = parse_schedule(
-        "next; apply p=3 seed=945 fresh-ids timeout=db.postgres/r1; next; plan-apply p=1",
+        "next; apply p=3 seed=945 fresh-ids timeout=db.postgres[\"r1\"]; next; plan-apply p=1",
     );
     dform::executor::hooks::CREATED_UNKNOWN.store(true, Ordering::SeqCst);
     let out = replay(233, &steps);
@@ -1257,7 +1257,7 @@ fn resume_does_not_repeat_a_create_that_was_in_flight() {
 /// may have taken effect.
 #[test]
 fn a_create_that_timed_out_is_not_created_again() {
-    replays(307, "apply p=1 timeout=compute.vm/r2");
+    replays(307, "apply p=1 timeout=compute.vm[\"r2\"]");
 }
 
 /// A Create at an address state still maps to an object that is gone (the
@@ -1267,7 +1267,7 @@ fn a_create_that_timed_out_is_not_created_again() {
 fn a_timed_out_create_at_a_mapped_address_is_found() {
     replays(
         732,
-        "apply p=1; next; plan-apply p=2 remove=1; apply p=4 seed=566 timeout=net.subnet/r2",
+        "apply p=1; next; plan-apply p=2 remove=1; apply p=4 seed=566 timeout=net.subnet[\"r2\"]",
     );
 }
 

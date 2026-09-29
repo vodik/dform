@@ -367,7 +367,7 @@ impl Hook {
             .collect();
         for (d, reason) in needs {
             for addr in &candidates {
-                if format!("{}.{}", addr.typ, addr.name) == *d {
+                if addr.to_string() == *d {
                     log(format_args!(
                         "tick {tick}: proceed: held, needs approval ({reason}): {d}"
                     ));
@@ -468,11 +468,11 @@ impl Hook {
                     "held until approve or an input change"
                 };
                 log(format_args!(
-                    "drift {t}.{a} {}: {} -> {} ({verdict})",
+                    "drift {}: {} -> {} ({verdict})",
                     if d.path.is_empty() {
-                        "(object)"
+                        format!("{} (object)", d.addr)
                     } else {
-                        &d.path
+                        d.addr.attr(&d.path)
                     },
                     crate::partition::fmt_value(&d.before),
                     crate::partition::fmt_value(&d.after),
@@ -519,10 +519,7 @@ impl Hook {
             }
         }
         for (addr, why) in &held {
-            log(format_args!(
-                "tick {tick}: proceed: held, {why}: {}.{}",
-                addr.typ, addr.name
-            ));
+            log(format_args!("tick {tick}: proceed: held, {why}: {addr}"));
             self.held.insert(addr.clone());
         }
         plan.actions.retain(|a| !self.held.contains(&a.addr));
@@ -544,7 +541,7 @@ impl Hook {
                 "stack {stack} is deformed: {} held",
                 self.held
                     .iter()
-                    .map(|a| format!("{}.{}", a.typ, a.name))
+                    .map(|a| a.to_string())
                     .collect::<Vec<_>>()
                     .join(", ")
             ))
@@ -853,7 +850,7 @@ mod tests {
                 on: BTreeSet::new(),
             }],
         };
-        let needs = [("net.vpc.main".to_string(), "every change".to_string())];
+        let needs = [(r#"net.vpc["main"]"#.to_string(), "every change".to_string())];
         store.break_lease(LOCK, "app").unwrap();
         let b = Deployment::new(store.clone(), "app", times);
         b.load_state().unwrap();

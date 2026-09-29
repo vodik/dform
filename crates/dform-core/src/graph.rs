@@ -67,7 +67,7 @@ impl Dot {
 /// The resource dependency DAG: `A -> B` when resource A reads B (a ref or
 /// a null B's Apply resolves), so B is applied first.
 pub fn resources(rs: &[Resource]) -> String {
-    let addr = |a: &crate::ir::Address| format!("{}/{}", a.typ, a.name);
+    let addr = |a: &crate::ir::Address| a.to_string();
     let mut d = Dot::new("resources");
     for r in rs {
         d.nodes.insert(addr(&r.addr));

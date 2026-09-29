@@ -37,8 +37,9 @@ fn an_override_that_violates_a_refinement_is_a_deny() {
     )
     .failure();
     assert!(
-        r.stdout
-            .contains("conflicts:\n! settings.prod db.backup_days: 40 violates range(1, 35)\n"),
+        r.stdout.contains(
+            "conflicts:\n! settings[\"prod\"].db.backup_days: 40 violates range(1, 35)\n"
+        ),
         "{}",
         r.stdout
     );
@@ -160,7 +161,7 @@ fn a_refinement_on_a_null_is_deferred_and_fires_after_the_boundary() {
     let r = gke(&s, &["plan"]).success();
     assert!(
         r.stdout.contains(
-            "? refinement on ?gke_cluster/pngu#zones deferred: len_ge(3) of gke_cluster.pngu .zones, decided after tick 1\n"
+            "? refinement on ?gke_cluster[\"pngu\"].zones deferred: len_ge(3) of gke_cluster[\"pngu\"].zones, decided after tick 1\n"
         ),
         "{}",
         r.stdout
@@ -230,7 +231,7 @@ resource app.db main { password = ref(vault.secret, \"pw\", .value) }
     let r = apply("hunter2").failure();
     assert!(
         r.stderr.contains(
-            "apply app.db/main: assertion failed: app.db/main .password fails its refinement len_ge(16)"
+            "apply app.db[\"main\"]: assertion failed: app.db[\"main\"].password fails its refinement len_ge(16)"
         ),
         "{}",
         r.stderr
@@ -309,21 +310,21 @@ n(\"{name}\")
     let r = plan(&s, &src("abcd", "10.0.0.0/16")).failure();
     assert!(
         r.stdout
-            .contains("! app.thing.a name: \"abcd\" violates len_le(3)\n"),
+            .contains("! app.thing[\"a\"].name: \"abcd\" violates len_le(3)\n"),
         "{}",
         r.stdout
     );
     let r = plan(&s, &src("ab", "10.0.0.0/16")).failure();
     assert!(
         r.stdout
-            .contains("! app.thing.a code: ab does not satisfy len(code) != 2\n"),
+            .contains("! app.thing[\"a\"].code: ab does not satisfy len(code) != 2\n"),
         "{}",
         r.stdout
     );
     let r = plan(&s, &src("abc", "10.0.0.0/28")).failure();
     assert!(
         r.stdout.contains(
-            "! app.thing.a net: 10.0.0.0/24 does not satisfy prefix_len(net) >= prefix_len(wide)\n"
+            "! app.thing[\"a\"].net: 10.0.0.0/24 does not satisfy prefix_len(net) >= prefix_len(wide)\n"
         ),
         "{}",
         r.stdout

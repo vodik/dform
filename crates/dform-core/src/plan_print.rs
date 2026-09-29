@@ -31,11 +31,13 @@ use std::collections::{BTreeMap, BTreeSet};
 pub enum Shown {
     Absent,
     Value(Json),
+    /// A null, by its printed label (`T["A"].p`).
     Null {
         label: String,
         class: String,
     },
-    /// A secret (with its label) or a value at a sensitive path (none).
+    /// A secret (with its printed label) or a value at a sensitive path
+    /// (none).
     Sensitive(Option<String>),
 }
 
@@ -48,10 +50,10 @@ pub fn shown(v: Option<&Json>, sensitive: bool, schema: &Schema, r: &Redactor) -
     };
     match marker(v) {
         Some((NULL_KEY, l)) => Shown::Null {
-            label: l.to_string(),
+            label: crate::ir::label(l),
             class: null_class(l, schema),
         },
-        Some((_, l)) => Shown::Sensitive(Some(l.to_string())),
+        Some((_, l)) => Shown::Sensitive(Some(crate::ir::label(l))),
         None if sensitive || has_secret(v) => Shown::Sensitive(None),
         None => match secret_in(&r.json(&json_value(v))) {
             Some(l) => Shown::Sensitive(Some(l)),
@@ -342,7 +344,7 @@ pub fn report(i: &Input) -> Report {
         if matches!(a.kind, ActionKind::Noop) {
             continue;
         }
-        let name = format!("{}.{}", a.addr.typ, a.addr.name);
+        let name = a.addr.to_string();
         match tick_of.get(&(a.addr.typ.clone(), a.addr.name.clone())) {
             Some(t) => ticks.entry(*t).or_default().push(name),
             None => unscheduled.push(name),
@@ -355,7 +357,7 @@ pub fn report(i: &Input) -> Report {
             ticks
                 .entry(i.tick + 1)
                 .or_default()
-                .push(format!("{}.{} (deposed)", a.addr.typ, a.addr.name));
+                .push(format!("{} (deposed)", a.addr));
         }
     }
     for g in &groups {
@@ -433,13 +435,15 @@ fn groups(
     let mut out: Vec<Group> = Vec::new();
     for (head, on, reason) in stuck.chain(may) {
         let pattern = match head.args.as_slice() {
-            [Term::Val(Value::Str(t)), a] => {
-                let a = match a {
-                    Term::Val(v) => fmt_value(v).trim_matches('"').to_string(),
-                    _ => "?".into(),
-                };
-                format!("{t}.{a}")
-            }
+            // An address, or `T[?]`: an unknown number of `T`.
+            [Term::Val(Value::Str(t)), a] => match a {
+                Term::Val(v) => Address {
+                    typ: t.clone(),
+                    name: fmt_value(v).trim_matches('"').to_string(),
+                }
+                .to_string(),
+                _ => format!("{t}[?]"),
+            },
             _ => fmt_atom(head),
         };
         let g = Group {
@@ -559,7 +563,14 @@ fn deferred(
             v => fmt_value(v),
         };
         out.push(Policy {
-            message: format!("{c} of {t}.{addr} .{path}"),
+            message: format!(
+                "{c} of {}",
+                Address {
+                    typ: t.to_string(),
+                    name: addr,
+                }
+                .attr(path)
+            ),
             after: resolves(&on, tick_of),
             on,
             reason: "the value carries a null".into(),
@@ -796,7 +807,7 @@ fn kind_name(k: &ActionKind) -> &'static str {
 
 fn nulls_text(on: &[String]) -> String {
     on.iter()
-        .map(|n| format!("?{n}"))
+        .map(|n| format!("?{}", crate::ir::label(n)))
         .collect::<Vec<_>>()
         .join(" ")
 }
@@ -932,10 +943,7 @@ impl Report {
                     .as_ref()
                     .map(|r| format!(" at rank {r}"))
                     .unwrap_or_default();
-                out.push_str(&format!(
-                    "! {}.{} {}{rank}: {}\n",
-                    d.addr.typ, d.addr.name, d.path, d.reason
-                ));
+                out.push_str(&format!("! {}{rank}: {}\n", d.addr.attr(&d.path), d.reason));
                 for (r, v, from) in &d.witnesses {
                     let from = if from.is_empty() {
                         String::new()
@@ -953,15 +961,17 @@ impl Report {
             }
         }
         if !self.ticks.is_empty() || !self.unscheduled.is_empty() {
-            let mut parts: Vec<String> = self
-                .ticks
-                .iter()
-                .map(|(t, xs)| format!("tick {t} [{}]", xs.join(" ")))
-                .collect();
-            if !self.unscheduled.is_empty() {
-                parts.push(format!("unscheduled [{}]", self.unscheduled.join(" ")));
+            // One address per line, so each pastes into `why` or a program.
+            out.push_str("apply order:\n");
+            let unscheduled = (!self.unscheduled.is_empty())
+                .then(|| ("unscheduled".to_string(), &self.unscheduled));
+            let ticks = self.ticks.iter().map(|(t, xs)| (format!("tick {t}"), xs));
+            for (head, xs) in ticks.chain(unscheduled) {
+                out.push_str(&format!("  {head}\n"));
+                for x in xs {
+                    out.push_str(&format!("    {x}\n"));
+                }
             }
-            out.push_str(&format!("apply order: {}\n", parts.join(" ")));
         }
         if self.undeformed {
             out.push_str(&format!("stack {} is undeformed\n", self.stack));
@@ -974,12 +984,7 @@ impl Report {
 pub fn moved_text(moves: &[(Address, Address)]) -> String {
     moves
         .iter()
-        .map(|(old, new)| {
-            format!(
-                "moved {}.{} -> {}.{}\n",
-                old.typ, old.name, new.typ, new.name
-            )
-        })
+        .map(|(old, new)| format!("moved {old} -> {new}\n"))
         .collect()
 }
 
@@ -996,7 +1001,7 @@ impl Report {
                         .get(l)
                         .cloned()
                         .unwrap_or_else(|| "unknown".into());
-                    json!({"null": l, "class": class})
+                    json!({"null": crate::ir::label(l), "class": class})
                 })
                 .collect()
         };
@@ -1049,8 +1054,8 @@ impl Report {
             })).collect::<Vec<_>>(),
             "unscheduled": self.unscheduled,
             "moved": self.moved.iter().map(|(old, new)| json!({
-                "from": {"type": old.typ, "name": old.name},
-                "to": {"type": new.typ, "name": new.name},
+                "from": {"address": old.to_string(), "type": old.typ, "name": old.name},
+                "to": {"address": new.to_string(), "type": new.typ, "name": new.name},
             })).collect::<Vec<_>>(),
             "denied": self.denies,
         })
@@ -1060,6 +1065,7 @@ impl Report {
 fn deformation_json(d: &Deformation) -> Json {
     let mut m = serde_json::Map::new();
     m.insert("action".into(), json!(kind_name(&d.kind)));
+    m.insert("address".into(), json!(d.addr.to_string()));
     m.insert("type".into(), json!(d.addr.typ));
     m.insert("name".into(), json!(d.addr.name));
     match d.kind {
@@ -1100,6 +1106,7 @@ fn line_json(l: &Line) -> Json {
 
 fn diag_json(d: &Diag) -> Json {
     json!({
+        "address": d.addr.attr(&d.path),
         "type": d.addr.typ,
         "name": d.addr.name,
         "path": d.path,
@@ -1122,12 +1129,7 @@ fn write_deformation(out: &mut String, d: &Deformation) {
         ActionKind::Replace { .. } => "  (replace)",
         _ => "",
     };
-    out.push_str(&format!(
-        "{} {}.{}{note}\n",
-        marker_of(&d.kind),
-        d.addr.typ,
-        d.addr.name
-    ));
+    out.push_str(&format!("{} {}{note}\n", marker_of(&d.kind), d.addr));
     // Keep plan output readable.
     let max = 40usize;
     for (i, l) in d.lines.iter().enumerate() {

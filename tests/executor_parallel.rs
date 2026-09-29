@@ -26,11 +26,11 @@ fn apply(backend: Backend, parallel: &str) -> (common::Run, Vec<(String, u64, u6
                 "--world",
                 "w.json",
                 "--chaos",
-                "latency=net.vpc/a:100",
+                "latency=net.vpc[\"a\"]:100",
                 "--chaos",
-                "latency=net.vpc/b:100",
+                "latency=net.vpc[\"b\"]:100",
                 "--chaos",
-                "latency=net.subnet/s:50",
+                "latency=net.subnet[\"s\"]:50",
                 "apply",
                 "--parallel",
                 parallel,
@@ -70,9 +70,9 @@ fn one_at_a_time(r: &common::Run, spans: &[(String, u64, u64)]) {
     assert_eq!(
         spans,
         [
-            span("net.vpc/a", 0, 100),
-            span("net.vpc/b", 100, 200),
-            span("net.subnet/s", 200, 250),
+            span(r#"net.vpc["a"]"#, 0, 100),
+            span(r#"net.vpc["b"]"#, 100, 200),
+            span(r#"net.subnet["s"]"#, 200, 250),
         ]
     );
     assert!(
@@ -95,9 +95,9 @@ fn independent_creates_overlap_on(backend: Backend) {
     assert_eq!(
         spans,
         [
-            span("net.vpc/a", 0, 100),
-            span("net.vpc/b", 0, 100),
-            span("net.subnet/s", 100, 150),
+            span(r#"net.vpc["a"]"#, 0, 100),
+            span(r#"net.vpc["b"]"#, 0, 100),
+            span(r#"net.subnet["s"]"#, 100, 150),
         ]
     );
     assert!(
@@ -121,8 +121,8 @@ fn independent_creates_overlap_on(backend: Backend) {
 fn a_dependent_waits_for_its_dependency() {
     for backend in BACKENDS {
         let (_, spans) = apply(backend, "8");
-        let a = spans.iter().find(|x| x.0 == "net.vpc/a").unwrap();
-        let s = spans.iter().find(|x| x.0 == "net.subnet/s").unwrap();
+        let a = spans.iter().find(|x| x.0 == r#"net.vpc["a"]"#).unwrap();
+        let s = spans.iter().find(|x| x.0 == r#"net.subnet["s"]"#).unwrap();
         assert!(s.1 >= a.2, "{backend:?}: {spans:?}");
     }
 }
@@ -161,7 +161,7 @@ fn a_failure_stops_new_calls() {
                     "--world",
                     "w.json",
                     "--chaos",
-                    "fail=net.vpc/b",
+                    "fail=net.vpc[\"b\"]",
                     "apply",
                     "--parallel",
                     "2",
@@ -170,7 +170,7 @@ fn a_failure_stops_new_calls() {
             )
             .failure();
         assert!(
-            r.stderr.contains("apply net.vpc/b: injected failure"),
+            r.stderr.contains("apply net.vpc[\"b\"]: injected failure"),
             "{backend:?}: {}",
             r.stderr
         );

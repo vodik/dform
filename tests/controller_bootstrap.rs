@@ -158,15 +158,15 @@ fn a_resource_rule_reading_a_stuck_helper_is_a_pending_group() {
         .unwrap_or_default();
     assert!(
         tick2.contains(
-            "pending groups:\n? k8s.deployment.dform_controller x unknown, on \
-             ?gke_nodepool/np-us-east1-b#instance_group, resolves after tick 2  \
+            "pending groups:\n? k8s.deployment[\"dform_controller\"] x unknown, on \
+             ?gke_nodepool[\"np-us-east1-b\"].instance_group, resolves after tick 2  \
              (reads node_pool_up(\"np-us-east1-b\"), which is stuck)\n"
         ),
         "{}",
         r.stdout
     );
     assert!(
-        tick2.contains("tick 3 [k8s.deployment.dform_controller]"),
+        tick2.contains("  tick 3\n    k8s.deployment[\"dform_controller\"]\n"),
         "{tick2}"
     );
     assert!(r.stdout.ends_with("apply: complete\n"), "{}", r.stdout);
@@ -277,7 +277,7 @@ fn bootstrap_handover_and_the_controller_runs_the_workload() {
         b.controller(&s),
         [
             &format!("event world {world} changed"),
-            "drift k8s.deployment.web spec.replicas: 3 -> 5 (auto_reconcile)",
+            "drift k8s.deployment[\"web\"].spec.replicas: 3 -> 5 (auto_reconcile)",
             "tick 1: plan: 1 deformation (1 update)",
             "stack renfry.workload is undeformed",
         ]
@@ -292,13 +292,13 @@ fn bootstrap_handover_and_the_controller_runs_the_workload() {
         b.controller(&s),
         [
             &format!("event world {world} changed"),
-            "drift k8s.deployment.web spec.template.spec.containers[0].image: \
+            "drift k8s.deployment[\"web\"].spec.template.spec.containers[0].image: \
              \"gcr.io/renfry/web:1.1\" -> \"gcr.io/renfry/web:debug\" \
              (held until approve or an input change)",
             "tick 1: plan: 1 deformation (1 update)",
             "tick 1: proceed: held, drift at spec.template.spec.containers[0].image needs \
-             approval: k8s.deployment.web",
-            "stack renfry.workload is deformed: k8s.deployment.web held",
+             approval: k8s.deployment[\"web\"]",
+            "stack renfry.workload is deformed: k8s.deployment[\"web\"] held",
         ]
     );
     let w = s.read(world);

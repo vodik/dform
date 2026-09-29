@@ -3,23 +3,23 @@ exit: ok
 deployment: pngu[env=stg]
 plan: 8 deformations (8 create)
 definite:
-+ alert_metrics_pack.pngu
++ alert_metrics_pack["pngu"]
   enable_standard_gke_alerts = true
   notification_channel_display_name = "Slack"
   notification_channel_type = "slack"
   project_id = "renfry-stg"
   source = "git@github.com:coherentpath/terraform-gcp-alert-metrics.git?ref=v1.5.0"
-+ google_compute_network_peering.peering-envoy-stg
++ google_compute_network_peering["peering-envoy-stg"]
   name = "envoy-stg"
   network = "projects/renfry-stg/global/networks/renfry-stg-network"
   peer_network = "projects/envoy-stg-597462/global/networks/envoy-stg-network"
   project = "renfry-stg"
-+ google_compute_network_peering.peering-envoy-stg-legacy
++ google_compute_network_peering["peering-envoy-stg-legacy"]
   name = "envoy-stg-legacy"
   network = "projects/renfry-stg/global/networks/renfry-stg-network"
   peer_network = "projects/coherentpath-stg/global/networks/envoy-proxy-stg"
   project = "renfry-stg"
-+ google_compute_subnetwork.gke_subnet
++ google_compute_subnetwork["gke_subnet"]
   ip_cidr_range = "10.141.100.0/22"
   name = "renfry-stg-gke-subnet"
   network = "projects/renfry-stg/global/networks/renfry-stg-network"
@@ -30,7 +30,7 @@ definite:
   secondary_ranges[1].ip_cidr_range = "10.141.112.0/21"
   secondary_ranges[1].range_name = "renfry-stg-gke-svc-range"
   subnet_private_access = true
-+ google_compute_subnetwork.regional_proxy
++ google_compute_subnetwork["regional_proxy"]
   ip_cidr_range = "10.193.1.0/24"
   name = "renfry-stg-proxy"
   network = "projects/renfry-stg/global/networks/renfry-stg-network"
@@ -38,11 +38,11 @@ definite:
   purpose = "REGIONAL_MANAGED_PROXY"
   region = "us-east1"
   role = "ACTIVE"
-+ google_monitoring_dashboard.pngu
++ google_monitoring_dashboard["pngu"]
   dashboard_json.displayName = "pngu"
   dashboard_json.note = "stubbed; see terraform/modules/monitoring/dashboard-pngu.json"
   project = "renfry-stg"
-+ gke_cluster.pngu
++ gke_cluster["pngu"]
   cluster_type = "autopilot-private"
   deletion_protection = false
   enable_secret_manager_addon = true
@@ -54,12 +54,21 @@ definite:
   network_id = "projects/renfry-stg/global/networks/renfry-stg-network"
   project_id = "renfry-stg"
   project_name = "renfry-stg"
-  subnetwork_id = ?google_compute_subnetwork/gke_subnet#id
-+ google_compute_address.static-ip-pngu-grpc
+  subnetwork_id = ?google_compute_subnetwork["gke_subnet"].id
++ google_compute_address["static-ip-pngu-grpc"]
   address_type = "INTERNAL"
   name = "pngu-grpc"
   project = "renfry-stg"
   region = "us-east1"
-  subnetwork_id = ?google_compute_subnetwork/gke_subnet#id
-apply order: tick 1 [alert_metrics_pack.pngu google_compute_network_peering.peering-envoy-stg google_compute_network_peering.peering-envoy-stg-legacy google_compute_subnetwork.gke_subnet google_compute_subnetwork.regional_proxy google_monitoring_dashboard.pngu gke_cluster.pngu google_compute_address.static-ip-pngu-grpc]
+  subnetwork_id = ?google_compute_subnetwork["gke_subnet"].id
+apply order:
+  tick 1
+    alert_metrics_pack["pngu"]
+    google_compute_network_peering["peering-envoy-stg"]
+    google_compute_network_peering["peering-envoy-stg-legacy"]
+    google_compute_subnetwork["gke_subnet"]
+    google_compute_subnetwork["regional_proxy"]
+    google_monitoring_dashboard["pngu"]
+    gke_cluster["pngu"]
+    google_compute_address["static-ip-pngu-grpc"]
 -- stderr --

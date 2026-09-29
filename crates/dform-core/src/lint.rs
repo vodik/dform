@@ -35,10 +35,8 @@ pub struct Named {
 impl Named {
     fn text(&self) -> String {
         format!(
-            "{}.{} {} = {}",
-            self.addr.typ,
-            self.addr.name,
-            self.path,
+            "{} = {}",
+            self.addr.attr(&self.path),
             crate::partition::fmt_value(&self.value)
         )
     }

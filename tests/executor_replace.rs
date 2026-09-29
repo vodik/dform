@@ -55,8 +55,8 @@ fn a_replace_updates_its_dependents_after_the_create() {
     let r = dform(&s, &["plan"]).success();
     assert!(
         r.stdout.contains(
-            "pending on ?net.vpc/main#id (resolves after tick 1):\n\
-             ~ net.subnet.a\n  vpc_id: \"net.vpc:main@1\" -> ?net.vpc/main#id\n"
+            "pending on ?net.vpc[\"main\"].id (resolves after tick 1):\n\
+             ~ net.subnet[\"a\"]\n  vpc_id: \"net.vpc:main@1\" -> ?net.vpc[\"main\"].id\n"
         ),
         "{}",
         r.stdout
@@ -102,9 +102,9 @@ fn create_before_destroy_moves_dependents_before_the_deposed_delete() {
     assert_eq!(
         order,
         [
-            "~ net.subnet.a",
-            "~ net.subnet.b",
-            "- net.vpc.main  (deposed)"
+            "~ net.subnet[\"a\"]",
+            "~ net.subnet[\"b\"]",
+            "- net.vpc[\"main\"]  (deposed)"
         ],
         "{}",
         r.stdout
@@ -149,15 +149,15 @@ resource net.subnet a { vpc_id = ref(net.vpc, "main", "id"), note = "x" }
     let r = dform(&s, &["plan"]).success();
     assert!(
         r.stdout.contains(
-            "pending on ?db.postgres/d#endpoint (resolves after tick 1):\n\
-             ~ net.subnet.a\n"
-        ) && r.stdout.contains("- net.vpc.main  (deposed)\n"),
+            "pending on ?db.postgres[\"d\"].endpoint (resolves after tick 1):\n\
+             ~ net.subnet[\"a\"]\n"
+        ) && r.stdout.contains("- net.vpc[\"main\"]  (deposed)\n"),
         "{}",
         r.stdout
     );
     assert!(
         r.stdout
-            .contains("apply order: tick 1 [db.postgres.d] tick 2 [net.subnet.a net.vpc.main]"),
+            .contains("apply order:\n  tick 1\n    db.postgres[\"d\"]\n  tick 2\n    net.subnet[\"a\"]\n    net.vpc[\"main\"]"),
         "{}",
         r.stdout
     );

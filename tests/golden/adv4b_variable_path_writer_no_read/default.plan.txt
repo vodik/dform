@@ -2,9 +2,11 @@ exit: ok
 -- stdout --
 plan: 1 deformation (1 create)
 definite:
-+ net.vpc.main
++ net.vpc["main"]
   cidr = "10.0.0.0/16"
   tags.env = "dev"
   tags.team = "x"
-apply order: tick 1 [net.vpc.main]
+apply order:
+  tick 1
+    net.vpc["main"]
 -- stderr --

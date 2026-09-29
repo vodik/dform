@@ -120,9 +120,9 @@ Apply.
 `dform stack list` shows every stack, its key and file, and per deployment
 with state its last apply (time, actor and the project's commit, from the
 audit log) and a saved plan not yet applied. `dform state show TARGET`
-prints the deployment's objects (it, `state mv`, `log` and `stack unlock`
+prints the deployment's objects, `--address ADDR` only the one at `ADDR` (it, `state mv`, `log` and `stack unlock`
 need the deployment's key, not the program's other inputs); `dform state mv FROM TO TARGET` gives the
-object at `TYPE/NAME` another address; `dform stack unlock TARGET` removes
+object at the address `FROM` the address `TO`; `dform stack unlock TARGET` removes
 an apply lock whose holder is gone (breaks an s3 backend's lease). `dform provider schema NAME` prints a
 provider's schema facts. `dform doc` prints the project's doc comments
 (`#|` lines above an item, docs/grammar.md "Doc comments") as Markdown: per
@@ -669,7 +669,7 @@ a kubeconfig held as a secret, and a world read of a live object.
 ## Computed values come from Apply
 
 Plan never invents a computed value. The evaluator mints one labeled null
-`?T/N#Attr` per wanted resource and computed attribute (proposal E §2.5), at
+`?T["N"].attr` per wanted resource and computed attribute (proposal E §2.5), at
 normal rank for `computed` and at `@default` for `optional_computed`, so a
 program's own value wins. A `ref(T, N, Attr)` to such an attribute reads that
 cell: the null, or the program's value. Once `N` exists, the world's value
@@ -679,19 +679,28 @@ endpoints and secrets per the schema and fills the nulls in dependency order.
 
 ```bash
 cargo run -- -C examples/demo plan
-# + net.subnet.network.main::private-us-test-1a
-#   vpc_id = ?net.vpc/network.main::vpc#id
+# + net.subnet["network.main::private-us-test-1a"]
+#   vpc_id = ?net.vpc["network.main::vpc"].id
 ```
+
+Every address dform prints is the source term that names it, `T["A"]` (`A`
+the full address, a module instance's scope `m.i::` included), and an
+attribute of it is `.path` after it: plan lines, the apply order, nulls,
+secret labels, `state show`, `dev graph` and diagnostics. Every address the
+command line takes is read the same way (`why`, `query`, `state show`,
+`state mv`, `dev show`, `--chaos`), so an address copied from a plan pastes
+into a program, a query or a command; quote it for the shell
+(`why 'net.vpc["network.main::vpc"].cidr'`).
 
 The plan is the Z-set `desired - world` (proposal E §2.8): per address a
 create, a delete, an update, or nothing. The first line counts it in those
 terms, `plan: 3 deformations (2 create, 1 update), 4 pending, 1 undetermined`,
 and the sections follow in this order; what cannot be decided yet is said so:
 
-- `moved T.Old -> T.New` lines first, one per `moved/3` rename of state.
+- `moved T["Old"] -> T["New"]` lines first, one per `moved/3` rename of state.
 - `definite:` deformations that run in this tick, grouped by resource: `+`
   create, `~` update, `-` delete, `>` adopt, `-/+` and `+/-` replace,
-  `- T.A  (deposed)` for an object a replacement deposed. An update diffs a keyless set, or
+  `- T["A"]  (deposed)` for an object a replacement deposed. An update diffs a keyless set, or
   a list with merge keys (`containers[name=web]`), by element: an element that
   is new or gone is one `+`/`-` line with its leaves, not every later index
   shifting. Map leaves print one per line.
@@ -713,8 +722,8 @@ and the sections follow in this order; what cannot be decided yet is said so:
   naming the resource, the path and every witness. A conflicted address is not
   a deformation; the plan still prints, then refuses with the deny.
 - `denied:` denies over the plan itself (`lifecycle prevent_destroy: the plan
-  would replace T.A`); the plan still prints, then refuses.
-- `apply order: tick 1 [...] tick 2 [...]`: which tick each deformation runs
+  would replace T["A"]`); the plan still prints, then refuses.
+- `apply order:`, one address per line under each `tick N`: which tick each deformation runs
   in, from the dependency DAG and the nulls it waits on (a `+/-` replacement's
   deposed object is deleted the tick after).
 - `(drift: ...)` marks an update where a fresh null meets a value the world
@@ -740,7 +749,7 @@ then the violations name each instance's head pattern and nulls, and it
 exits non-zero; `apply` refuses before its first Apply call.
 `allow_stuck("want(\"gke_nodepool\", _)")` (a fact; no rule may derive
 `allow_stuck`) allows one key's boundary. Fresh nulls still flow: a create
-whose document carries `?T/A#id` of a resource created in the same tick is
+whose document carries `?T["A"].id` of a resource created in the same tick is
 definite, so single-phase plans pass. Strict is the expected default for
 production stacks (`dform.df` is strict); `permissive`, the default, is for
 controller mode and iterative development, where a two-phase plan applies
@@ -750,8 +759,8 @@ tick by tick.
 editors consume: `stack`, `undeformed`, a `summary` of counts, then the
 sections as arrays in the order above (`definite`, `pending`,
 `pending_groups`, `undetermined`, `shadowed`, `conflicts`, `apply_order`,
-`unscheduled`, `moved`, `denied`). A deformation is `{action, type, name,
-changes}`, a replace with `create_first`, a deposed delete with `deposed:
+`unscheduled`, `moved`, `denied`). A deformation is `{action, address,
+type, name, changes}` (`address` as the text prints it), a replace with `create_first`, a deposed delete with `deposed:
 true`. A change is `{op, path, before, after}` (`op` is `set`, or
 `add`/`remove` for a set element, with its `leaves`); a null is `{"null":
 LABEL, "class": CLASS}` and a secret `{"sensitive": LABEL}`.
@@ -785,7 +794,7 @@ run goes on, the next tick deforming it back:
 
 ```bash
 cargo run -- -C examples/gke dev \
-  --chaos 'mutate=gke_cluster/pngu:deletion_protection=false' apply gke_two_phase   # drift, tick 2 undoes it
+  --chaos 'mutate=gke_cluster["pngu"].deletion_protection=false' apply gke_two_phase   # drift, tick 2 undoes it
 ```
 
 Deletes and replacement. Deletes run after every create and update, in
@@ -802,12 +811,12 @@ object, then creates the new one under the same name. A `+/-` one: the new objec
 created first under a free name (`main-2`), the old one is *deposed* (kept in
 state's `deposed` section), and a boundary follows; the next tick moves what
 depends on it to the replacement and then deletes the deposed object
-(`- T.A  (deposed)`). A deposed object left by a failed apply is deleted by
+(`- T["A"]  (deposed)`). A deposed object left by a failed apply is deleted by
 the next one, once nothing that depends on it is still pending.
 
 Either way the replacement is a new object, so every null that named the old
 one (its id, its other computed values) is unresolved again: an existing
-object that reads one is `pending on ?T/A#id (resolves after tick N)` and is
+object that reads one is `pending on ?T["A"].id (resolves after tick N)` and is
 updated to the new value the tick after the replacement; a new object that
 reads one is created after it in the same tick. `dev --chaos fresh-ids` makes
 the mock mint a new id on every create, so the difference shows:
@@ -834,7 +843,7 @@ only while state maps `Old` and not `New`, so the facts can stay.
 drops the path from the desired document and from the world's, and an
 update keeps the world's value there (or its absence). `prevent_destroy`
 blocks `plan` and `apply` with `lifecycle prevent_destroy: the plan would
-delete T.A`.
+delete T["A"]`.
 
 Policy over the plan. Once the plan is computed its deformations go back to
 the evaluator as facts and the program is evaluated once more (the policy
@@ -869,8 +878,8 @@ clock from the time its provider says it took; on the mock (chaos `latency`)
 the difference shows there:
 
 ```bash
-cargo run -- -C examples/demo dev --chaos latency=net.vpc/network.main::vpc:100 \
-  --chaos latency=net.vpc/network.peer::vpc:100 apply dform env=staging --parallel 4   # the two vpcs overlap: 100ms, not 200ms
+cargo run -- -C examples/demo dev --chaos 'latency=net.vpc["network.main::vpc"]:100' \
+  --chaos 'latency=net.vpc["network.peer::vpc"]:100' apply dform env=staging --parallel 4   # the two vpcs overlap: 100ms, not 200ms
 ```
 
 An apply that fails or is killed can be resumed: before a tick's first Apply
@@ -917,11 +926,11 @@ G=examples/gke/stacks/gke_two_phase.df
 cargo run -- dev --world w.json plan $G --out plan.json
 cargo run -- apply plan.json                          # the file's delta, two ticks
 # the world moves after tick 1: tick 2 refuses
-cargo run -- dev --chaos 'mutate=gke_cluster/pngu:name="other"' apply plan.json
+cargo run -- dev --chaos 'mutate=gke_cluster["pngu"].name="other"' apply plan.json
 ```
 
 A `sensitive` computed value never leaves the provider: what dform sees, stores
-in consumers and prints is its label, `(sensitive T/N#Attr)`. A value at a
+in consumers and prints is its label, `(sensitive T["N"].attr)`. A value at a
 `sensitive` path the program sets prints as `(sensitive)` in a diff, and as its
 label wherever else it appears. Everything dform prints goes through one
 redactor: `plan` (text, `--json`, the plan file), `show`, `query`, `why`,
@@ -965,7 +974,7 @@ value.
 
 Policy decides what needs an approval. `requires_approval(D, Reason)` is an
 ordinary relation a program derives over `deformation/4` in the policy
-pass; `D` is the address as the plan prints it (`T.A`). No rows, no token
+pass; `D` is the address as the plan prints it (`T["A"]`). No rows, no token
 needed:
 
 ```dform
@@ -974,7 +983,7 @@ stack app[env] { approvals = jwks_file("approvers.jwks.json") }
 requires_approval(d, "a replace in prod") if {
   env == "prod"
   deformation("replace", t, a, _)
-  d = "{t}.{a}"
+  d = "{t}[\"{a}\"]"
 }
 
 # Optional: who may approve what. Without it, any key of the trust root may.
@@ -1023,7 +1032,7 @@ file). Provider credentials stay the environment's: a provider inherits
 dform's environment, and dform mints and exchanges no tokens.
 
 In controller mode a deformation that needs an approval is held (`tick N:
-proceed: held, needs approval (Reason): T.A`) and the plan's digest is
+proceed: held, needs approval (Reason): T["A"]`) and the plan's digest is
 published: a log line, `tick N: approval needed: plan digest sha256:...`,
 and `approval-pending.json` beside the state. A token for that digest
 releases it when it arrives through the input relation `approval/1` (the
@@ -1113,13 +1122,15 @@ cargo run -- -C examples/demo query 'attr(net.vpc, n, .cidr, c)' dform env=prod
 cargo run -- -C examples/demo query 'attr(t, a, .cidr, c), want(t, a), t != net.subnet'
 cargo run -- -C examples/demo query 'want(net.vpc, "network.main::vpc")'    # yes / no
 cargo run -- -C examples/demo query want                                    # every want fact
+cargo run -- -C examples/demo query 'net.vpc["network.main::vpc"]'          # its attributes: path, value
+cargo run -- -C examples/demo query 'net.vpc["network.main::vpc"].cidr'     # one attribute's value
 ```
 
 `query --json` prints one document: `{query, count, facts}` for a predicate
 name, `{query, columns, count, rows}` for a pattern, values spelled as in
 `plan --json`.
 
-Secrets print as their label, `(sensitive T/A#P)`: a value at a
+Secrets print as their label, `(sensitive T["A"].p)`: a value at a
 `sensitive` path, and any value equal to it or string containing it, so a
 rule that forwards a secret does not leak it either.
 
@@ -1131,7 +1142,9 @@ the parser keeps spans, `input --set env=prod`, the provider schema, the
 world, the plan for the facts the planner hands to the policy pass). An attribute shows every contribution with its rank and owner.
 Variables are allowed and every match is printed. A fact derived more than
 one way shows its first derivation and `... N more alternatives`; `--all`
-shows them all. An `attr`/`arg` pattern may name part of an object
+shows them all. An address as plan prints it is a pattern too: `why
+'T["A"]'` explains the resource's `want`, `why 'T["A"].path'` the
+attribute's `attr`. An `attr`/`arg` pattern may name part of an object
 attribute, by dotted path or by object value, and then shows only the
 contributions that hold it:
 
@@ -1162,27 +1175,28 @@ file keeps a `tick` counter; every `apply` is one tick.
 
 | SPEC | Effect |
 |------|--------|
-| `fail=T/N` | Apply of `T/N` fails before it reaches the world |
-| `timeout=T/N` | Apply of `T/N` takes effect, then times out: the world has it, state does not, until the next run finds it (see below) |
-| `crash=T/N` | the provider process dies (exit 137) as it is called to Apply `T/N`: the action fails, nothing after it runs, and the next `apply` resumes (the mock linked in, `dform-direct`, is gone from that call on instead) |
+| `fail=T["N"]` | Apply of `T["N"]` fails before it reaches the world |
+| `timeout=T["N"]` | Apply of `T["N"]` takes effect, then times out: the world has it, state does not, until the next run finds it (see below) |
+| `crash=T["N"]` | the provider process dies (exit 137) as it is called to Apply `T["N"]`: the action fails, nothing after it runs, and the next `apply` resumes (the mock linked in, `dform-direct`, is gone from that call on instead) |
 | `stop-after=N` | dform itself stops, as if killed, once `N` Apply calls have returned (counted across the run's ticks), each persisted: nothing still in flight is waited for, the tick never ends, and the next `apply` resumes. The executor's knob, so it works with any provider |
-| `read-lag=T/N:K` | the first `K` Reads of `T/N` after it is created return nothing (eventual consistency) |
-| `mutate=T/N:PATH=JSON` | once per run, after the first tick `T/N` exists at, the world sets its `PATH` to `JSON` (drift) |
-| `latency=T/N:MS` | Apply of `T/N` takes `MS` on a simulated clock, reported, never slept; the world's `timeline` records each call's start and end |
+| `read-lag=T["N"]:K` | the first `K` Reads of `T["N"]` after it is created return nothing (eventual consistency) |
+| `mutate=T["N"].PATH=JSON` | once per run, after the first tick `T["N"]` exists at, the world sets its `PATH` to `JSON` (drift) |
+| `latency=T["N"]:MS` | Apply of `T["N"]` takes `MS` on a simulated clock, reported, never slept; the world's `timeline` records each call's start and end |
 | `fresh-ids` | every Create mints new ids (the world keeps a `serial`), as a real cloud does; without it a destroy-first replacement under the same name gets its predecessor's id |
 
 ```bash
-cargo run -- -C examples/demo dev --chaos fail=net.subnet/network.main::private-us-test-1a apply dform env=staging
-cargo run -- -C examples/demo dev --chaos 'mutate=net.vpc/network.main::vpc:cidr="10.9.0.0/16"' apply dform env=staging
+cargo run -- -C examples/demo dev --chaos 'fail=net.subnet["network.main::private-us-test-1a"]' apply dform env=staging
+cargo run -- -C examples/demo dev --chaos 'mutate=net.vpc["network.main::vpc"].cidr="10.9.0.0/16"' apply dform env=staging
 ```
 
 Refresh reads every object state maps; a Read that returns nothing is retried
 up to the type's `type_retry(T, Attempts)` (a schema fact, default 3), each
-retry logged on stderr as `retry T/N read (2/3)`. A lag within that budget is
+retry logged on stderr as `retry T["N"] read (2/3)`. A lag within that budget is
 not drift; an object still missing after the last attempt is taken as gone
-(`read T/N: nothing after 3 attempts; taken as gone`).
+(`read T["N"]: nothing after 3 attempts; taken as gone`).
 
-Addresses are `TYPE/NAME` and must name a resource of the stack. The world is
+Addresses are written as the plan prints them, `T["N"]` (quote the spec for
+the shell), and must name a resource of the stack. The world is
 saved after every action, and state (the identity mapping) is written after
 every Apply call that returns, so a failed or killed apply leaves exactly what
 a real cloud would: a failure or a crash at action N leaves the N-1 identities
@@ -1484,7 +1498,7 @@ constraint is rank-blind: it is checked against the value that wins, so an
 violated", {type, addr, path, constraint, value, reason, at, witnesses})`
 and the plan lists it with the conflicts; a literal that violates one is a
 compile error naming both places. A value that carries a null is checked
-when the null resolves: the plan prints `? refinement on ?T/A#P deferred`
+when the null resolves: the plan prints `? refinement on ?T["A"].p deferred`
 in its undetermined section, and a violation found at the boundary stops
 apply like any deny between ticks (`examples/refine`: `dform apply --set zones=2`
 there stops after tick 1; its default, three zones, applies). On a path the
@@ -1676,11 +1690,11 @@ Before, After)` (one per leaf, list elements by index; `Path` "" and `After`
 `absent` for an object that is gone). Policy decides about it, and the
 controller gates every tick on the policy pass:
 
-- `hold(T, A, Reason)` holds `T.A`'s deformation: `tick N: proceed: held,
-  Reason: T.A`, for as long as the policy derives it.
+- `hold(T, A, Reason)` holds `T["A"]`'s deformation: `tick N: proceed: held,
+  Reason: T["A"]`, for as long as the policy derives it.
 - `requires_approval(D, Reason)` holds a deformation until a signed
   approval of the plan's digest arrives (see "Approvals").
-- Drift of `T.A` is corrected when every drifted path is
+- Drift of `T["A"]` is corrected when every drifted path is
   `auto_reconcile(T, A, Path)` or `approve(T, A)` holds, or the event is an
   input change. Otherwise the deformation is held (`drift at PATH needs
   approval`) and its baseline kept, so it is held again at every event

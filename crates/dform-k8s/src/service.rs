@@ -214,7 +214,7 @@ impl K8s {
         name: &str,
     ) -> Result<Option<(Json, Json)>> {
         let kind = self.derived.kind(typ)?;
-        let c = self.cluster(&format!("read {typ}/{name}"))?;
+        let c = self.cluster(&format!("read {}", address(typ, name)))?;
         let (ns, n) = parse_remote(kind, remote_id, &c.namespace);
         Ok(c.get(kind, ns, n)
             .await?
@@ -235,7 +235,7 @@ impl K8s {
     ) -> Result<(Vec<provider::Change>, bool)> {
         let kind = self.derived.kind(typ)?;
         let schema = self.schema();
-        let at = format!("plan {typ}/{name}");
+        let at = format!("plan {}", address(typ, name));
         let Some(d) = desired else {
             return Ok((diff(schema, typ, prior, None), false));
         };
@@ -326,7 +326,7 @@ impl K8s {
             return Ok(pb::ApplyResponse::default());
         }
         let typ = req.r#type.as_str();
-        let at = format!("apply {typ}/{}", req.name);
+        let at = format!("apply {}", address(typ, &req.name));
         let kind = self
             .derived
             .kind(typ)
@@ -1001,6 +1001,14 @@ pub fn serve() -> Result<()> {
                 .max_encoding_message_size(usize::MAX),
         ),
     )
+}
+
+/// A resource's address as dform prints it, `T["N"]`.
+fn address(typ: &str, name: &str) -> dform_core::ir::Address {
+    dform_core::ir::Address {
+        typ: typ.to_string(),
+        name: name.to_string(),
+    }
 }
 
 #[cfg(test)]

@@ -422,7 +422,7 @@ impl FakeCloud {
             return Ok(None);
         };
         if let Some(lag) = rr.read_lag {
-            let at = format!("{}/{}", rr.typ, rr.name);
+            let at = addr.to_string();
             for attempt in 2..=attempts.min(lag + 1) {
                 eprintln!("retry {at} read ({attempt}/{attempts})");
             }
@@ -465,10 +465,7 @@ impl FakeCloud {
                 continue;
             }
             if !self.schema.in_list(typ, path) && get_path(doc, path).is_none() {
-                bail!(
-                    "plan {typ}/{}: required attribute {path} is not set",
-                    addr.name
-                );
+                bail!("plan {addr}: required attribute {path} is not set");
             }
         }
         Ok(())
@@ -743,7 +740,7 @@ impl FakeCloud {
     /// did, whatever happens next).
     pub fn apply(&mut self, c: Call) -> Result<Applied, Failed> {
         let addr = &c.addr;
-        let at = format!("{}/{}", addr.typ, addr.name);
+        let at = addr.to_string();
         let refuse = |e: anyhow::Error| Failed::Refused(format!("{e:#}"));
         self.check_assertions(&at, &c)?;
         if self.chaos.crash.contains(addr) {
@@ -921,7 +918,7 @@ impl FakeCloud {
             if self.mutated.contains(&i) {
                 continue;
             }
-            let at = format!("{}/{}", addr.typ, addr.name);
+            let at = addr.to_string();
             let remote = remotes
                 .get(addr)
                 .cloned()
@@ -932,7 +929,8 @@ impl FakeCloud {
                     set_path(&mut rr.attrs, path, v.clone());
                     self.mutated.insert(i);
                     notes.push(format!(
-                        "mutate {at}: {path} = {v} after tick {}",
+                        "mutate {} = {v} after tick {}",
+                        addr.attr(path),
                         world.tick
                     ));
                 }

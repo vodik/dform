@@ -3,8 +3,8 @@
 //! offline before its first Apply call.
 //!
 //! * `requires_approval(D, Reason)` is an ordinary relation the program
-//!   derives over `deformation/4` in the policy pass; `D` is the address,
-//!   `"T.A"`. No rows, no token needed.
+//!   derives over `deformation/4` in the policy pass; `D` is the address
+//!   as plan prints it, `T["A"]`. No rows, no token needed.
 //! * The plan digest is sha256 over the canonical JSON (sorted keys, no
 //!   whitespace) of the plan file without its `digest` field: the delta,
 //!   the inputs, the pinned git commits of the input relations and the
@@ -125,7 +125,7 @@ impl std::fmt::Display for OtherDigest {
 impl std::error::Error for OtherDigest {}
 
 /// The policy pass's `requires_approval(D, Reason)` rows, `D` as the plan
-/// prints an address (`T.A`), sorted.
+/// prints an address (`T["A"]`), sorted.
 pub fn needs(facts: &std::collections::BTreeSet<crate::ast::Atom>) -> Vec<(String, String)> {
     let text = |t: &crate::ast::Term| match t {
         crate::ast::Term::Val(crate::value::Value::Str(s)) => s.clone(),

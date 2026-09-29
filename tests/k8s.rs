@@ -105,7 +105,7 @@ resource k8s.deployment api { spec.template.spec.containers = [{name: "a", image
         .failure();
     assert!(
         r.stderr.contains(
-            "plan k8s.deployment/api: required attribute spec.selector.matchLabels is not set"
+            "plan k8s.deployment[\"api\"]: required attribute spec.selector.matchLabels is not set"
         ),
         "{}",
         r.stderr

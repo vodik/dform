@@ -35,7 +35,7 @@ fn identities(s: &Scratch) -> Vec<String> {
 #[test]
 fn a_failure_at_action_n_leaves_n_minus_one_identities() {
     let s = stack("persist-fail");
-    dform(&s, &["apply", "--chaos", "fail=compute.vm/app"]).failure();
+    dform(&s, &["apply", "--chaos", "fail=compute.vm[\"app\"]"]).failure();
     assert_eq!(identities(&s), ["net.subnet::a", "net.vpc::main"]);
 }
 
@@ -44,10 +44,10 @@ fn a_failure_at_action_n_leaves_n_minus_one_identities() {
 #[test]
 fn a_crash_at_action_n_leaves_n_minus_one_identities() {
     let s = stack("persist-crash");
-    let r = dform(&s, &["apply", "--chaos", "crash=compute.vm/app"]).failure();
+    let r = dform(&s, &["apply", "--chaos", "crash=compute.vm[\"app\"]"]).failure();
     assert!(
         r.stderr
-            .contains("chaos: crash during apply compute.vm/app"),
+            .contains("chaos: crash during apply compute.vm[\"app\"]"),
         "{}",
         r.stderr
     );

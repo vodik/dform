@@ -26,6 +26,37 @@ fn why_a_tag_exists() {
     golden("why_dform_prod_tag", &out);
 }
 
+/// H-16: an address as plan prints it is a `why` and a `query` argument.
+/// `T["A"]` explains the want, `T["A"].path` the attribute; any other
+/// spelling of an address is refused.
+#[test]
+fn why_and_query_take_an_address_as_plan_prints_it() {
+    let at = "examples/demo/stacks/dform.df env=prod";
+    let want = dform(at, &["why", r#"net.vpc["network.main::vpc"]"#]);
+    assert!(
+        want.starts_with("want(\"net.vpc\", \"network.main::vpc\")\n"),
+        "{want}"
+    );
+    let tag = dform(at, &["why", r#"net.vpc["network.main::vpc"].tags.team"#]);
+    assert!(
+        tag.contains(r#"arg(Type, R, "tags", {team: "platform"}, "normal") :- want(Type, R)"#),
+        "{tag}"
+    );
+    let cidr = dform(at, &["query", r#"net.vpc["network.main::vpc"].cidr"#]);
+    assert!(cidr.contains("10.20.0.0/16"), "{cidr}");
+    let all = dform(at, &["query", r#"net.vpc["network.main::vpc"]"#]);
+    assert!(
+        all.contains("\"tags\"") && all.contains("\"cidr\""),
+        "{all}"
+    );
+    let s = Scratch::new("why-old-address");
+    common::copy_dir(&repo().join("examples/demo"), &s.dir);
+    let r = s
+        .run(&["why", "net.vpc/network.main::vpc", "dform", "env=prod"])
+        .failure();
+    assert!(r.stderr.contains("cannot parse"), "{}", r.stderr);
+}
+
 /// Every contribution of an aggregate, and bindings, and a given input.
 #[test]
 fn why_an_attribute_shows_every_contribution() {
@@ -120,7 +151,10 @@ resource leaky.vault v { password = "VAULT-SECRET-DO-NOT-PRINT" }
         .success()
         .stdout;
     assert!(!out.contains("VAULT-SECRET"), "{out}");
-    assert!(out.contains("(sensitive leaky.vault/v#password)"), "{out}");
+    assert!(
+        out.contains("(sensitive leaky.vault[\"v\"].password)"),
+        "{out}"
+    );
 }
 
 /// The deformation the planner hands back for the policy pass is the
@@ -181,7 +215,7 @@ fn why_labels_facts_injected_at_a_tick() {
     let (res, denies) = dform::engine::eval_at(&program, &facts, Some(3)).unwrap();
     assert_eq!(
         denies,
-        ["the world changed under a remaining action: net.subnet.a"]
+        ["the world changed under a remaining action: net.subnet[\"a\"]"]
     );
     let schema = dform::schema::Schema::default();
     let redact = dform::query::Redactor::new(&res.facts, &schema);

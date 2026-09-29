@@ -87,7 +87,7 @@ fn a_prod_replace_plans_with_needs_approval() {
     let r = s.run(&args).success();
     assert!(
         r.stdout
-            .contains("needs approval:\n  net.vpc.main  (a replace in prod)\n"),
+            .contains("needs approval:\n  net.vpc[\"main\"]  (a replace in prod)\n"),
         "{}",
         r.stdout
     );
@@ -102,7 +102,7 @@ fn a_prod_replace_plans_with_needs_approval() {
     assert_eq!(j["digest"], digest.as_str());
     assert_eq!(
         j["needs_approval"],
-        serde_json::json!([{ "deformation": "net.vpc.main", "reason": "a replace in prod" }])
+        serde_json::json!([{ "deformation": "net.vpc[\"main\"]", "reason": "a replace in prod" }])
     );
     // Staging: the policy asks for nothing, and the plan says nothing.
     let staging = [&["plan", "stacks/approvals.df"][..], &NEW_CIDR].concat();
@@ -118,7 +118,7 @@ fn apply_refuses_until_a_valid_token_for_the_plans_digest() {
     let r = s.run(&["apply", "plan.json"]).failure();
     assert!(
         r.stderr.contains(
-            "apply refused: net.vpc.main (a replace in prod) needs an approval, and no \
+            "apply refused: net.vpc[\"main\"] (a replace in prod) needs an approval, and no \
              --approval was given"
         ),
         "{}",
@@ -256,7 +256,7 @@ fn a_token_for_another_deployment_signer_or_approver_is_refused() {
     let e = refused("carol.json");
     assert!(
         e.contains(
-            "approval by carol: approver_allowed(\"carol\", D) does not hold for net.vpc.main"
+            "approval by carol: approver_allowed(\"carol\", D) does not hold for net.vpc[\"main\"]"
         ),
         "{e}"
     );

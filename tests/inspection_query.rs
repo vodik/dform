@@ -97,7 +97,7 @@ resource leaky.vault v { password = "VAULT-SECRET-DO-NOT-PRINT" }
         let out = q(pattern);
         assert!(!out.contains("VAULT-SECRET"), "{pattern}: {out}");
         assert!(
-            out.contains("(sensitive leaky.vault/v#password)"),
+            out.contains("(sensitive leaky.vault[\"v\"].password)"),
             "{pattern}: {out}"
         );
     }

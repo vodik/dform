@@ -205,8 +205,9 @@ resource net.subnet a {
     s.run(&["apply", "net.df"]).success();
     let r = s.run(&["plan", "app.df"]).success();
     assert!(
-        r.stdout
-            .contains("+ net.subnet.a\n  cidr = \"10.0.0.0/16\"\n  vpc_id = \"net.vpc:main\"\n"),
+        r.stdout.contains(
+            "+ net.subnet[\"a\"]\n  cidr = \"10.0.0.0/16\"\n  vpc_id = \"net.vpc:main\"\n"
+        ),
         "{}",
         r.stdout
     );
@@ -239,7 +240,7 @@ resource net.subnet a {
     let state = registry["net.shared"].as_str().unwrap();
     assert!(std::path::Path::new(state).is_absolute(), "{registry}");
 
-    let want = "+ net.subnet.a\n  cidr = \"10.0.0.0/16\"\n";
+    let want = "+ net.subnet[\"a\"]\n  cidr = \"10.0.0.0/16\"\n";
     let r = s.run_in("infra/stacks", &["plan", "app"]).success();
     assert!(r.stdout.contains(want), "{}", r.stdout);
 
@@ -271,7 +272,7 @@ fn the_provider_statement_selects_the_schema() {
     let r = s
         .run(&["dev", "--provider", "./other.df", "plan", "p.df"])
         .success();
-    assert!(r.stdout.contains("+ x.thing.a"), "{}", r.stdout);
+    assert!(r.stdout.contains("+ x.thing[\"a\"]"), "{}", r.stdout);
 }
 
 /// A resource's type is declared by the schema of the provider that

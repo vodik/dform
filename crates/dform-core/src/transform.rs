@@ -1561,14 +1561,19 @@ pub fn check_computed_writes(rules: &[RuleStmt], facts: &[Atom], schema: &Schema
         for path in paths {
             if schema.class_of(t, &path).is_some() {
                 let addr = match &h.args[1] {
-                    Term::Val(v) => crate::partition::fmt_value(v),
-                    other => crate::partition::fmt_term(other),
+                    Term::Val(Value::Str(a)) => crate::ir::Address {
+                        typ: t.to_string(),
+                        name: a.clone(),
+                    }
+                    .to_string(),
+                    Term::Val(v) => format!("{t}[{}]", crate::partition::fmt_value(v)),
+                    other => format!("{t}[{}]", crate::partition::fmt_term(other)),
                 };
                 errors.push(
                     Diagnostic::error(
                         h.span,
                         format!(
-                            "resource {t} {addr}: attribute {path} is computed by the provider and cannot be set"
+                            "resource {addr}: attribute {path} is computed by the provider and cannot be set"
                         ),
                     )
                     .with_note(format!("in: {text}")),

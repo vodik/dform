@@ -36,10 +36,15 @@ fn apply_after_a_crash_finishes_the_remaining_actions() {
 fn apply_after_a_crash_finishes_on(backend: Backend) {
     let s = Scratch::new("resume-crash");
     s.write("p.df", PROG);
-    let r = dform_on(&s, backend, &["apply", "--chaos", "crash=compute.vm/app"]).failure();
+    let r = dform_on(
+        &s,
+        backend,
+        &["apply", "--chaos", "crash=compute.vm[\"app\"]"],
+    )
+    .failure();
     assert!(
         r.stderr
-            .contains("apply compute.vm/app: the provider fakecloud exited during the call"),
+            .contains("apply compute.vm[\"app\"]: the provider fakecloud exited during the call"),
         "{backend:?}: {}",
         r.stderr
     );
@@ -56,12 +61,12 @@ fn apply_after_a_crash_finishes_on(backend: Backend) {
     let r = dform_on(&s, backend, &["apply"]).success();
     assert_eq!(
         r.stdout,
-        "resuming the apply interrupted at tick 1; remaining: compute.vm.app\n\
+        "resuming the apply interrupted at tick 1; remaining: compute.vm[\"app\"]\n\
          plan: 1 deformation (1 create)\ndefinite:\n\
-         + compute.vm.app\n  subnet_id = \"net.subnet:a\"\n\
-         apply order: tick 1 [compute.vm.app]\n\
+         + compute.vm[\"app\"]\n  subnet_id = \"net.subnet:a\"\n\
+         apply order:\n  tick 1\n    compute.vm[\"app\"]\n\
          resumed from the apply interrupted at tick 1:\n  \
-         compute.vm.app  (retried with its idempotency key: nothing it made was found)\n\
+         compute.vm[\"app\"]  (retried with its idempotency key: nothing it made was found)\n\
          apply: complete\n"
     );
     let st = state(&s);
@@ -86,7 +91,7 @@ fn apply_after_a_stop_finishes_the_remaining_actions() {
         let r = dform_on(&s, backend, &["apply", "--chaos", "stop-after=2"]).failure();
         assert!(
             r.stderr.contains(
-                "apply net.subnet/a: dform stopped after this Apply call returned \
+                "apply net.subnet[\"a\"]: dform stopped after this Apply call returned \
                  (chaos stop-after)"
             ),
             "{backend:?}: {}",
@@ -117,7 +122,7 @@ fn apply_after_a_stop_finishes_the_remaining_actions() {
         let r = dform_on(&s, backend, &["apply"]).success();
         assert!(
             r.stdout.starts_with(
-                "resuming the apply interrupted at tick 1; remaining: compute.vm.app\n"
+                "resuming the apply interrupted at tick 1; remaining: compute.vm[\"app\"]\n"
             ),
             "{backend:?}: {}",
             r.stdout
@@ -142,9 +147,9 @@ fn apply_stops_when_the_world_changed_under_a_remaining_action() {
         &[
             "apply",
             "--chaos",
-            "fail=net.subnet/a",
+            "fail=net.subnet[\"a\"]",
             "--chaos",
-            r#"mutate=net.subnet/a:tags.owner="someone""#,
+            r#"mutate=net.subnet["a"].tags.owner="someone""#,
         ],
     )
     .failure();
@@ -152,7 +157,7 @@ fn apply_stops_when_the_world_changed_under_a_remaining_action() {
     let r = dform(&s, &["apply"]).failure();
     assert!(
         r.stderr.contains(
-            "the world changed under a remaining action:\n~ net.subnet.a\n  tags.owner: <none> -> \"someone\"\n"
+            "the world changed under a remaining action:\n~ net.subnet[\"a\"]\n  tags.owner: <none> -> \"someone\"\n"
         ),
         "{}",
         r.stderr
@@ -162,7 +167,7 @@ fn apply_stops_when_the_world_changed_under_a_remaining_action() {
     // phase boundary.
     assert!(
         r.stderr.contains(
-            "constraint violations:\n- the world changed under a remaining action: net.subnet.a\n"
+            "constraint violations:\n- the world changed under a remaining action: net.subnet[\"a\"]\n"
         ),
         "{}",
         r.stderr
@@ -178,7 +183,7 @@ fn apply_stops_when_the_world_changed_under_a_remaining_action() {
     let r = dform(&s, &["apply"]).success();
     assert!(
         r.stdout.contains(
-            "~ net.subnet.a\n  tags.owner: \"someone\" -> <none>\n  tier: <none> -> \"web\"\n"
+            "~ net.subnet[\"a\"]\n  tags.owner: \"someone\" -> <none>\n  tier: <none> -> \"web\"\n"
         ),
         "{}",
         r.stdout

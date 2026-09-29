@@ -2,10 +2,10 @@ exit: ok
 -- stdout --
 plan: 8 deformations (8 create), 10 pending, 7 undetermined
 definite:
-+ google_compute_network.vpc
++ google_compute_network["vpc"]
   auto_create_subnetworks = false
   name = "shop-dev"
-+ google_sql_database_instance.db
++ google_sql_database_instance["db"]
   database_version = "POSTGRES_16"
   deletion_protection = true
   name = "crud-api-dev"
@@ -14,32 +14,32 @@ definite:
   settings.backup_configuration.enabled = true
   settings.backup_configuration.point_in_time_recovery_enabled = true
   settings.ip_configuration.ipv4_enabled = false
-  settings.ip_configuration.private_network = ?google_compute_network/vpc#id
+  settings.ip_configuration.private_network = ?google_compute_network["vpc"].id
   settings.tier = "db-f1-micro"
-+ google_sql_user.crud_user
++ google_sql_user["crud_user"]
   instance = "crud-api-dev"
   name = "crud_api"
-  password = (sensitive random.password/crud-api-db#2)
-+ k8s.namespace.shop
+  password = (sensitive random.password["crud-api-db"]."2")
++ k8s.namespace["shop"]
   metadata.labels.pod-security.kubernetes.io/enforce = "restricted"
   metadata.name = "shop"
-+ k8s.network_policy.default_deny
++ k8s.network_policy["default_deny"]
   metadata.name = "default-deny"
   metadata.namespace = "shop"
   spec.podSelector = {}
   spec.policyTypes[0] = "Ingress"
   spec.policyTypes[1] = "Egress"
-+ google_sql_database.crud_db
++ google_sql_database["crud_db"]
   instance = "crud-api-dev"
   name = "crud_api"
-+ k8s.secret.db_conn
++ k8s.secret["db_conn"]
   metadata.name = "crud-api-db"
   metadata.namespace = "shop"
   stringData.PGDATABASE = (sensitive)
-  stringData.PGHOST = ?google_sql_database_instance/db#private_ip_address
-  stringData.PGPASSWORD = (sensitive random.password/crud-api-db#2)
+  stringData.PGHOST = ?google_sql_database_instance["db"].private_ip_address
+  stringData.PGPASSWORD = (sensitive random.password["crud-api-db"]."2")
   stringData.PGUSER = (sensitive)
-+ k8s.job.migrate-v42
++ k8s.job["migrate-v42"]
   metadata.labels.app = "crud-api"
   metadata.labels.schema = "42"
   metadata.name = "crud-api-migrate-v42"
@@ -57,23 +57,43 @@ definite:
   spec.template.spec.containers[name=migrate].resources.requests.memory = "128Mi"
   spec.template.spec.restartPolicy = "Never"
 pending groups:
-? k8s.deployment.app.blue::deploy x unknown, on ?k8s.job/migrate-v42#status.succeeded, resolves after tick 1  (reads app.blue::color(_), which is stuck)
-? k8s.horizontal_pod_autoscaler.app.blue::hpa x unknown, on ?k8s.job/migrate-v42#status.succeeded, resolves after tick 1  (reads app.blue::color(_), which is stuck)
-? k8s.pod_disruption_budget.app.blue::pdb x unknown, on ?k8s.job/migrate-v42#status.succeeded, resolves after tick 1  (reads app.blue::color(_), which is stuck)
-? k8s.network_policy.app.blue::allow_http x unknown, on ?k8s.job/migrate-v42#status.succeeded, resolves after tick 1  (reads app.blue::color(_), which is stuck)
-? k8s.deployment.app.green::deploy x unknown, on ?k8s.job/migrate-v42#status.succeeded, resolves after tick 1  (reads app.green::color(_), which is stuck)
-? k8s.horizontal_pod_autoscaler.app.green::hpa x unknown, on ?k8s.job/migrate-v42#status.succeeded, resolves after tick 1  (reads app.green::color(_), which is stuck)
-? k8s.pod_disruption_budget.app.green::pdb x unknown, on ?k8s.job/migrate-v42#status.succeeded, resolves after tick 1  (reads app.green::color(_), which is stuck)
-? k8s.network_policy.app.green::allow_http x unknown, on ?k8s.job/migrate-v42#status.succeeded, resolves after tick 1  (reads app.green::color(_), which is stuck)
-? k8s.service.api x unknown, on ?k8s.job/migrate-v42#status.succeeded, resolves after tick 1  (reads serving("blue"), which may derive after a boundary)
-? k8s.service.api x unknown, on ?k8s.job/migrate-v42#status.succeeded, resolves after tick 1  (reads serving(_), which is stuck)
+? k8s.deployment["app.blue::deploy"] x unknown, on ?k8s.job["migrate-v42"].status.succeeded, resolves after tick 1  (reads app.blue::color(_), which is stuck)
+? k8s.horizontal_pod_autoscaler["app.blue::hpa"] x unknown, on ?k8s.job["migrate-v42"].status.succeeded, resolves after tick 1  (reads app.blue::color(_), which is stuck)
+? k8s.pod_disruption_budget["app.blue::pdb"] x unknown, on ?k8s.job["migrate-v42"].status.succeeded, resolves after tick 1  (reads app.blue::color(_), which is stuck)
+? k8s.network_policy["app.blue::allow_http"] x unknown, on ?k8s.job["migrate-v42"].status.succeeded, resolves after tick 1  (reads app.blue::color(_), which is stuck)
+? k8s.deployment["app.green::deploy"] x unknown, on ?k8s.job["migrate-v42"].status.succeeded, resolves after tick 1  (reads app.green::color(_), which is stuck)
+? k8s.horizontal_pod_autoscaler["app.green::hpa"] x unknown, on ?k8s.job["migrate-v42"].status.succeeded, resolves after tick 1  (reads app.green::color(_), which is stuck)
+? k8s.pod_disruption_budget["app.green::pdb"] x unknown, on ?k8s.job["migrate-v42"].status.succeeded, resolves after tick 1  (reads app.green::color(_), which is stuck)
+? k8s.network_policy["app.green::allow_http"] x unknown, on ?k8s.job["migrate-v42"].status.succeeded, resolves after tick 1  (reads app.green::color(_), which is stuck)
+? k8s.service["api"] x unknown, on ?k8s.job["migrate-v42"].status.succeeded, resolves after tick 1  (reads serving("blue"), which may derive after a boundary)
+? k8s.service["api"] x unknown, on ?k8s.job["migrate-v42"].status.succeeded, resolves after tick 1  (reads serving(_), which is stuck)
 undetermined:
-? deny "cutover to a color with unready pods" on ?k8s.job/migrate-v42#status.succeeded, decided after tick 1  (reads undetermined aggregate attr)
-? deny "migration failed; the rollout is held" on ?k8s.job/migrate-v42#status.conditions, decided after tick 1  (member/2 over a null list)
-? deny "ref to an address no rule wants" on ?k8s.job/migrate-v42#status.succeeded, decided after tick 1  (not want("k8s.deployment", "app.blue::deploy"): want has a stuck instance that may derive it)
-? deny "ref to an address no rule wants" on ?k8s.job/migrate-v42#status.succeeded, decided after tick 1  (not want("k8s.deployment", "app.green::deploy"): want has a stuck instance that may derive it)
-? deny "a rollout runs a schema the migration has not reached" on ?k8s.job/migrate-v42#status.succeeded, may derive after tick 1  (reads run(_, _, 42) with a stuck instance)
-? deny "container without resource limits" on ?k8s.job/migrate-v42#status.succeeded, may derive after tick 1  (reads container("app.blue::deploy", _), container("app.green::deploy", _) with a stuck instance)
-? deny "image not pinned by digest" on ?k8s.job/migrate-v42#status.succeeded, may derive after tick 1  (reads container("app.blue::deploy", _), container("app.green::deploy", _) with a stuck instance)
-apply order: tick 1 [google_compute_network.vpc google_sql_database_instance.db google_sql_user.crud_user k8s.namespace.shop k8s.network_policy.default_deny google_sql_database.crud_db k8s.secret.db_conn k8s.job.migrate-v42] tick 2 [k8s.deployment.app.blue::deploy k8s.horizontal_pod_autoscaler.app.blue::hpa k8s.pod_disruption_budget.app.blue::pdb k8s.network_policy.app.blue::allow_http k8s.deployment.app.green::deploy k8s.horizontal_pod_autoscaler.app.green::hpa k8s.pod_disruption_budget.app.green::pdb k8s.network_policy.app.green::allow_http k8s.service.api k8s.service.api]
+? deny "cutover to a color with unready pods" on ?k8s.job["migrate-v42"].status.succeeded, decided after tick 1  (reads undetermined aggregate attr)
+? deny "migration failed; the rollout is held" on ?k8s.job["migrate-v42"].status.conditions, decided after tick 1  (member/2 over a null list)
+? deny "ref to an address no rule wants" on ?k8s.job["migrate-v42"].status.succeeded, decided after tick 1  (not want("k8s.deployment", "app.blue::deploy"): want has a stuck instance that may derive it)
+? deny "ref to an address no rule wants" on ?k8s.job["migrate-v42"].status.succeeded, decided after tick 1  (not want("k8s.deployment", "app.green::deploy"): want has a stuck instance that may derive it)
+? deny "a rollout runs a schema the migration has not reached" on ?k8s.job["migrate-v42"].status.succeeded, may derive after tick 1  (reads run(_, _, 42) with a stuck instance)
+? deny "container without resource limits" on ?k8s.job["migrate-v42"].status.succeeded, may derive after tick 1  (reads container("app.blue::deploy", _), container("app.green::deploy", _) with a stuck instance)
+? deny "image not pinned by digest" on ?k8s.job["migrate-v42"].status.succeeded, may derive after tick 1  (reads container("app.blue::deploy", _), container("app.green::deploy", _) with a stuck instance)
+apply order:
+  tick 1
+    google_compute_network["vpc"]
+    google_sql_database_instance["db"]
+    google_sql_user["crud_user"]
+    k8s.namespace["shop"]
+    k8s.network_policy["default_deny"]
+    google_sql_database["crud_db"]
+    k8s.secret["db_conn"]
+    k8s.job["migrate-v42"]
+  tick 2
+    k8s.deployment["app.blue::deploy"]
+    k8s.horizontal_pod_autoscaler["app.blue::hpa"]
+    k8s.pod_disruption_budget["app.blue::pdb"]
+    k8s.network_policy["app.blue::allow_http"]
+    k8s.deployment["app.green::deploy"]
+    k8s.horizontal_pod_autoscaler["app.green::hpa"]
+    k8s.pod_disruption_budget["app.green::pdb"]
+    k8s.network_policy["app.green::allow_http"]
+    k8s.service["api"]
+    k8s.service["api"]
 -- stderr --

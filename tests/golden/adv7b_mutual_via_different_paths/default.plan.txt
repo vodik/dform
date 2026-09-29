@@ -2,10 +2,13 @@ exit: ok
 -- stdout --
 plan: 2 deformations (2 create)
 definite:
-+ net.subnet.y
++ net.subnet["y"]
   x = 1
-+ net.vpc.x
++ net.vpc["x"]
   y = 1
   z = 1
-apply order: tick 1 [net.subnet.y net.vpc.x]
+apply order:
+  tick 1
+    net.subnet["y"]
+    net.vpc["x"]
 -- stderr --

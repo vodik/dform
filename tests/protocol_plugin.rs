@@ -42,10 +42,10 @@ fn identities(s: &Scratch) -> Vec<String> {
 fn a_provider_crash_mid_apply_fails_the_action_and_resume_finishes() {
     let s = Scratch::new("protocol-crash");
     s.write("p.df", PROG);
-    let r = dform(&s, &["apply", "--chaos", "crash=compute.vm/app"]).failure();
+    let r = dform(&s, &["apply", "--chaos", "crash=compute.vm[\"app\"]"]).failure();
     assert!(
         r.stderr.contains(
-            "apply compute.vm/app: the provider fakecloud exited during the call \
+            "apply compute.vm[\"app\"]: the provider fakecloud exited during the call \
              (exit status: 137)"
         ),
         "{}",
@@ -55,7 +55,7 @@ fn a_provider_crash_mid_apply_fails_the_action_and_resume_finishes() {
     let r = dform(&s, &["apply"]).success();
     assert!(
         r.stdout
-            .contains("resuming the apply interrupted at tick 1; remaining: compute.vm.app"),
+            .contains("resuming the apply interrupted at tick 1; remaining: compute.vm[\"app\"]"),
         "{}",
         r.stdout
     );
@@ -91,7 +91,7 @@ fn the_mock_is_dform_itself_not_the_executable_beside_it() {
         common::Run::from(c.args(args).current_dir(&s.dir).output().unwrap())
     };
     let r = run(None).success();
-    assert!(r.stdout.contains("+ net.vpc.main"), "{}", r.stdout);
+    assert!(r.stdout.contains("+ net.vpc[\"main\"]"), "{}", r.stdout);
     let stale = s.path("dform-provider-fake");
     let r = run(Some(stale.to_str().unwrap())).failure();
     assert!(
@@ -122,7 +122,7 @@ fn a_source_directory_holding_an_executable_is_that_plugin() {
         "edition 2026\n\nprovider fake { source = \"prov\" }\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\n",
     );
     let r = dform(&s, &["plan"]).success();
-    assert!(r.stdout.contains("+ net.vpc.main"), "{}", r.stdout);
+    assert!(r.stdout.contains("+ net.vpc[\"main\"]"), "{}", r.stdout);
 }
 
 #[test]

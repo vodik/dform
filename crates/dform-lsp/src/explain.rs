@@ -236,11 +236,13 @@ pub fn hover(e: &Evaluated, facts: &[NodeId]) -> String {
             Value::Str(s) => s.clone(),
             v => e.redact.fmt(v),
         };
+        let at = dform_core::ir::Address {
+            typ: s(&fact.args[0]),
+            name: s(&fact.args[1]),
+        };
         out.push_str(&format!(
-            "**{} {} .{}** = `{}`\n\n",
-            s(&fact.args[0]),
-            s(&fact.args[1]),
-            s(&fact.args[2]),
+            "**{}** = `{}`\n\n",
+            at.attr(&s(&fact.args[2])),
             e.redact.fmt(&fact.args[3])
         ));
         if let (Value::Str(t), Value::Str(p)) = (&fact.args[0], &fact.args[2])

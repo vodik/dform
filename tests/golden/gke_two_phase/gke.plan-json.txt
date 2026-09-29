@@ -4,18 +4,18 @@ exit: ok
   "apply_order": [
     {
       "addresses": [
-        "google_compute_subnetwork.gke_subnet",
-        "gke_cluster.pngu",
-        "google_compute_address.static_ip"
+        "google_compute_subnetwork[\"gke_subnet\"]",
+        "gke_cluster[\"pngu\"]",
+        "google_compute_address[\"static_ip\"]"
       ],
       "tick": 1
     },
     {
       "addresses": [
-        "k8s.deployment.api",
-        "k8s.namespace.pngu",
-        "k8s.secret.db_credentials",
-        "gke_nodepool.?"
+        "k8s.deployment[\"api\"]",
+        "k8s.namespace[\"pngu\"]",
+        "k8s.secret[\"db_credentials\"]",
+        "gke_nodepool[?]"
       ],
       "tick": 2
     }
@@ -24,6 +24,7 @@ exit: ok
   "definite": [
     {
       "action": "create",
+      "address": "google_compute_subnetwork[\"gke_subnet\"]",
       "changes": [
         {
           "after": "10.141.76.0/22",
@@ -61,6 +62,7 @@ exit: ok
     },
     {
       "action": "create",
+      "address": "gke_cluster[\"pngu\"]",
       "changes": [
         {
           "after": true,
@@ -113,7 +115,7 @@ exit: ok
         {
           "after": {
             "class": "fresh",
-            "null": "google_compute_subnetwork/gke_subnet#id"
+            "null": "google_compute_subnetwork[\"gke_subnet\"].id"
           },
           "before": null,
           "op": "set",
@@ -125,6 +127,7 @@ exit: ok
     },
     {
       "action": "create",
+      "address": "google_compute_address[\"static_ip\"]",
       "changes": [
         {
           "after": "pngu-grpc",
@@ -147,7 +150,7 @@ exit: ok
         {
           "after": {
             "class": "fresh",
-            "null": "google_compute_subnetwork/gke_subnet#id"
+            "null": "google_compute_subnetwork[\"gke_subnet\"].id"
           },
           "before": null,
           "op": "set",
@@ -167,6 +170,7 @@ exit: ok
       "deformations": [
         {
           "action": "create",
+          "address": "k8s.deployment[\"api\"]",
           "changes": [
             {
               "after": "gcr.io/renfry/api:1.42",
@@ -192,6 +196,7 @@ exit: ok
         },
         {
           "action": "create",
+          "address": "k8s.namespace[\"pngu\"]",
           "changes": [
             {
               "after": "pngu",
@@ -205,10 +210,11 @@ exit: ok
         },
         {
           "action": "create",
+          "address": "k8s.secret[\"db_credentials\"]",
           "changes": [
             {
               "after": {
-                "sensitive": "google.secret_manager_secret_version/db_pw#secret_data"
+                "sensitive": "google.secret_manager_secret_version[\"db_pw\"].secret_data"
               },
               "before": null,
               "op": "set",
@@ -228,11 +234,11 @@ exit: ok
       "on": [
         {
           "class": "open",
-          "null": "gke_cluster/pngu#ca_certificate"
+          "null": "gke_cluster[\"pngu\"].ca_certificate"
         },
         {
           "class": "open",
-          "null": "gke_cluster/pngu#endpoint"
+          "null": "gke_cluster[\"pngu\"].endpoint"
         }
       ],
       "resolves_after": 1
@@ -243,10 +249,10 @@ exit: ok
       "on": [
         {
           "class": "open",
-          "null": "gke_cluster/pngu#zones"
+          "null": "gke_cluster[\"pngu\"].zones"
         }
       ],
-      "pattern": "gke_nodepool.?",
+      "pattern": "gke_nodepool[?]",
       "reason": "member/2 over a null list",
       "resolves_after": 1
     }
@@ -275,7 +281,7 @@ exit: ok
       "on": [
         {
           "class": "open",
-          "null": "gke_cluster/pngu#zones"
+          "null": "gke_cluster[\"pngu\"].zones"
         }
       ],
       "policy": "deny",

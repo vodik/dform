@@ -260,11 +260,18 @@ impl Renaming {
                 })
                 .collect();
             let planned_after = deformations(a);
+            let at = |t: &String, x: &String| dform_core::ir::Address {
+                typ: t.clone(),
+                name: x.clone(),
+            };
             for (k, t, x) in planned_before.difference(&planned_after) {
-                changed.push(format!("{deployment} would no longer plan {k} {t}.{x}"));
+                changed.push(format!(
+                    "{deployment} would no longer plan {k} {}",
+                    at(t, x)
+                ));
             }
             for (k, t, x) in planned_after.difference(&planned_before) {
-                changed.push(format!("{deployment} would plan {k} {t}.{x}"));
+                changed.push(format!("{deployment} would plan {k} {}", at(t, x)));
             }
         }
         if !changed.is_empty() {

@@ -469,10 +469,16 @@ impl Providers {
                 );
                 let t = a.args.first().and_then(text).filter(|_| typed)?;
                 let what = match (a.args.get(1).and_then(text), a.args.get(2).and_then(text)) {
-                    (Some(n), Some(p)) if a.pred != "cloud_exists" => {
-                        format!("{t}.{n}.{}", p.trim_start_matches('.'))
+                    (Some(n), Some(p)) if a.pred != "cloud_exists" => Address {
+                        typ: t.clone(),
+                        name: n,
                     }
-                    (Some(n), _) => format!("{t}.{n}"),
+                    .attr(p.trim_start_matches('.')),
+                    (Some(n), _) => Address {
+                        typ: t.clone(),
+                        name: n,
+                    }
+                    .to_string(),
                     _ => t.clone(),
                 };
                 types.contains(&t).then_some(what)
@@ -480,18 +486,25 @@ impl Providers {
             // A reference in a head: `ref(T, N, P)` of a type it serves.
             fn reference(t: &Term, types: &BTreeSet<String>) -> Option<String> {
                 match t {
-                    Term::Val(Value::Ref { typ, name, attr }) if types.contains(typ) => {
-                        Some(format!("{typ}.{name}.{attr}"))
-                    }
+                    Term::Val(Value::Ref { typ, name, attr }) if types.contains(typ) => Some(
+                        Address {
+                            typ: typ.clone(),
+                            name: name.clone(),
+                        }
+                        .attr(attr),
+                    ),
                     Term::Func { name, args } if name == "ref" => match args.as_slice() {
                         [Term::Val(Value::Str(t)), Term::Val(Value::Str(n)), p]
                             if types.contains(t) =>
                         {
-                            let p = match p {
-                                Term::Val(Value::Str(p)) => p.trim_start_matches('.').to_string(),
-                                _ => "..".to_string(),
+                            let a = Address {
+                                typ: t.clone(),
+                                name: n.clone(),
                             };
-                            Some(format!("{t}.{n}.{p}"))
+                            Some(match p {
+                                Term::Val(Value::Str(p)) => a.attr(p.trim_start_matches('.')),
+                                _ => format!("{a}.."),
+                            })
                         }
                         _ => None,
                     },
@@ -1262,9 +1275,8 @@ impl Providers {
             Some(v) => Ok(v.clone()),
             None => match ctx.strict {
                 Some(at) => bail!(
-                    "apply {}/{}: ?{label} is still unknown ({typ}/{name} does not set {attr})",
-                    at.typ,
-                    at.name
+                    "apply {at}: ?{} is still unknown ({addr} does not set {attr})",
+                    crate::ir::label(&label)
                 ),
                 None => Ok(provider::null_json(&label)),
             },
@@ -1296,9 +1308,8 @@ impl Providers {
         match (found, ctx.strict) {
             (Some(v), _) => Ok(v),
             (None, Some(at)) => bail!(
-                "apply {}/{}: ?{label} is still unknown (its resource has not been created)",
-                at.typ,
-                at.name
+                "apply {at}: ?{} is still unknown (its resource has not been created)",
+                crate::ir::label(label)
             ),
             (None, None) => Ok(provider::null_json(label)),
         }
@@ -1312,7 +1323,14 @@ impl Providers {
         if let Some(v) = get_path(&cur.computed, attr).or_else(|| get_path(&cur.attrs, attr)) {
             return Ok(v.clone());
         }
-        bail!("cloud_ref missing attribute {typ}.{name}.{attr}");
+        bail!(
+            "cloud_ref missing attribute {}",
+            Address {
+                typ: typ.to_string(),
+                name: name.to_string()
+            }
+            .attr(attr)
+        );
     }
 
     /// A secret output of another stack in a resource's document must be
@@ -1335,11 +1353,11 @@ impl Providers {
                     .map(|(t, n)| (t.as_str(), n.as_str()))
                 {
                     bail!(
-                        "{verb} {}/{} {path}: {label} is a secret output of {name} that no \
+                        "{verb} {}: {} is a secret output of {name} that no \
                          provider holds (its value is not an attribute of a resource there), so \
                          no provider can read it; output a resource's secret attribute instead",
-                        addr.typ,
-                        addr.name
+                        addr.attr(path),
+                        crate::ir::label(label)
                     );
                 }
                 Ok(())
@@ -1738,7 +1756,7 @@ impl Tick<'_> {
     pub fn submit(&mut self, id: usize, a: &Action, state: &mut State) -> Result<bool> {
         let cloud = self.cloud;
         let addr = &a.addr;
-        let at = format!("{}/{}", addr.typ, addr.name);
+        let at = addr.to_string();
         if matches!(a.kind, ActionKind::Noop | ActionKind::Pending) {
             return Ok(false);
         }
@@ -1835,7 +1853,7 @@ impl Tick<'_> {
                         path: path.clone(),
                         op,
                         value: Some(wire::doc(&value)),
-                        message: format!("{at} .{path} fails its refinement {c}"),
+                        message: format!("{} fails its refinement {c}", addr.attr(path)),
                     }
                 })
                 .collect(),
@@ -2011,7 +2029,7 @@ impl Tick<'_> {
         result: &std::result::Result<Option<pb::ApplyResponse>, CallError>,
         state: &mut State,
     ) -> Result<()> {
-        let at = format!("{}/{}", addr.typ, addr.name);
+        let at = addr.to_string();
         if let Ok(Some(resp)) = result {
             self.elapsed.insert(addr.clone(), resp.elapsed_ms);
             self.cloud
@@ -2049,7 +2067,7 @@ impl Tick<'_> {
     /// Record an Apply call's span on the executor's clock.
     pub fn record(&mut self, addr: &Address, start_ms: u64, end_ms: u64) {
         self.timeline.push(pb::Span {
-            addr: format!("{}/{}", addr.typ, addr.name),
+            addr: addr.to_string(),
             start_ms,
             end_ms,
         });

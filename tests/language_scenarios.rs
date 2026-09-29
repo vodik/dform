@@ -57,7 +57,7 @@ fn plan_with_a_scenario_is_a_what_if() {
     let r = s.run(&["plan", "p.df"]).failure();
     assert!(r.stderr.contains("input env is required"), "{}", r.stderr);
     let r = s.run(&["plan", "--scenario", "prod", "p.df"]).success();
-    assert!(r.stdout.contains("+ db.postgres.main"), "{}", r.stdout);
+    assert!(r.stdout.contains("+ db.postgres[\"main\"]"), "{}", r.stdout);
     let r = s.run(&["plan", "--scenario", "qa", "p.df"]).failure();
     assert!(
         r.stderr

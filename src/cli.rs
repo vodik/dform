@@ -365,8 +365,12 @@ enum StackCommand {
 
 #[derive(Subcommand, Debug, Clone)]
 enum StateCommand {
-    /// The deployment's state: each address, its provider and remote id.
+    /// The deployment's state: each address, its provider and remote id;
+    /// with `--address ADDR` (`T["N"]`, as plan prints it), that object's
+    /// only.
     Show {
+        #[arg(long = "address", value_name = "ADDR")]
+        addr: Option<String>,
         #[command(flatten)]
         target: Target,
     },
@@ -379,8 +383,9 @@ enum StateCommand {
         pred: String,
         args: Vec<String>,
     },
-    /// Give the object at FROM the address TO (each TYPE/NAME): nothing in
-    /// the cloud changes, and the next plan sees the object under TO.
+    /// Give the object at FROM the address TO (each `T["N"]`, as plan
+    /// prints it): nothing in the cloud changes, and the next plan sees the
+    /// object under TO.
     Mv {
         from: String,
         to: String,
@@ -425,11 +430,11 @@ enum DevCommand {
         #[command(flatten)]
         target: Target,
     },
-    /// A resource's desired document.
+    /// A resource's desired document, by its address (`T["N"]`, as plan
+    /// prints it).
     Show {
-        #[arg(value_name = "TYPE")]
-        typ: String,
-        name: String,
+        #[arg(value_name = "ADDR")]
+        addr: String,
         #[command(flatten)]
         target: Target,
     },
@@ -496,8 +501,7 @@ enum Cmd {
         all: bool,
     },
     Show {
-        typ: String,
-        name: String,
+        addr: String,
     },
     Strata,
     Fmt {
@@ -534,7 +538,9 @@ enum Cmd {
         to: String,
     },
     Unlock,
-    StateShow,
+    StateShow {
+        addr: Option<String>,
+    },
     StateMv {
         from: String,
         to: String,
@@ -644,7 +650,7 @@ fn resolve(args: Args) -> Result<Cli> {
                     Some(target),
                 ),
                 DevCommand::Eval { target } => (Cmd::Eval, Some(target)),
-                DevCommand::Show { typ, name, target } => (Cmd::Show { typ, name }, Some(target)),
+                DevCommand::Show { addr, target } => (Cmd::Show { addr }, Some(target)),
             }
         }
         Command::Fmt { paths, check } => (Cmd::Fmt { paths, check }, None),
@@ -662,7 +668,7 @@ fn resolve(args: Args) -> Result<Cli> {
             StackCommand::Unlock { target } => (Cmd::Unlock, Some(target)),
         },
         Command::State { cmd } => match cmd {
-            StateCommand::Show { target } => (Cmd::StateShow, Some(target)),
+            StateCommand::Show { addr, target } => (Cmd::StateShow { addr }, Some(target)),
             StateCommand::Taint { stack, pred, args } => (Cmd::Taint { stack, pred, args }, None),
             StateCommand::Mv { from, to, target } => (Cmd::StateMv { from, to }, Some(target)),
         },
@@ -1137,7 +1143,7 @@ fn run_with(
             inventory: cli.inventory.clone(),
             objects_only: matches!(
                 cli.cmd,
-                Cmd::StateShow | Cmd::StateMv { .. } | Cmd::Log { .. } | Cmd::Unlock
+                Cmd::StateShow { .. } | Cmd::StateMv { .. } | Cmd::Log { .. } | Cmd::Unlock
             ),
         },
         &open_s3(&root, writes),
@@ -1172,7 +1178,7 @@ fn run_with(
             println!("{}", dep.unlock()?);
             return Ok(());
         }
-        Cmd::StateShow => return state_show(&dep),
+        Cmd::StateShow { addr } => return state_show(&dep, addr.as_deref()),
         Cmd::StateMv { from, to } => {
             return state_mv(&dep, from, to, &audit);
         }
@@ -1463,7 +1469,7 @@ fn run_with(
             e.dependents = resources
                 .iter()
                 .filter(|r| r.deps.contains(&addr))
-                .map(|r| format!("{}.{}", r.addr.typ, r.addr.name))
+                .map(|r| r.addr.to_string())
                 .collect();
         }
         let mut unresolved: std::collections::BTreeSet<String> = deformations
@@ -1526,14 +1532,14 @@ fn run_with(
             println!("facts: {}", res.facts.len());
             println!("resources: {}", resources.len());
             for r in &resources {
-                println!("- {}.{}", r.addr.typ, r.addr.name);
+                println!("- {}", r.addr);
             }
         }
         Cmd::Query { .. } | Cmd::Why { .. } => unreachable!("explained before"),
-        Cmd::Show { typ, name } => {
-            let addr = ir::Address { typ, name };
+        Cmd::Show { addr } => {
+            let addr = ir::parse_resource_address(&addr)?;
             let Some(r) = resources.iter().find(|r| r.addr == addr) else {
-                bail!("resource not found");
+                bail!("no resource {addr} in this deployment");
             };
             let json = serde_json::to_string_pretty(&redact.json(&r.attrs))?;
             println!("{}", json);
@@ -1601,7 +1607,7 @@ fn run_with(
         | Cmd::StackList
         | Cmd::Handover { .. }
         | Cmd::Unlock
-        | Cmd::StateShow
+        | Cmd::StateShow { .. }
         | Cmd::StateMv { .. }
         | Cmd::ProviderCheck { .. }
         | Cmd::ProviderSchema { .. }
@@ -1702,11 +1708,7 @@ fn run_with(
         } => {
             for addr in chaos.addresses() {
                 if !resources.iter().any(|r| &r.addr == addr) && st.get(addr).is_none() {
-                    bail!(
-                        "--chaos: {}/{} is not a resource of this stack",
-                        addr.typ,
-                        addr.name
-                    );
+                    bail!("--chaos: {addr} is not a resource of this stack");
                 }
             }
             // One apply at a time per deployment; the lock is held until the
@@ -1775,7 +1777,7 @@ fn run_with(
                     .remaining
                     .keys()
                     .filter_map(|k| state::parse_key(k))
-                    .map(|a| format!("{}.{}", a.typ, a.name))
+                    .map(|a| a.to_string())
                     .collect();
                 println!(
                     "resuming the apply interrupted at tick {}; remaining: {}",
@@ -2055,7 +2057,7 @@ fn run_with(
                         let mut e = serde_json::json!({
                             "tick": tick,
                             "action": zset::deformation_kind(&a.kind, false).unwrap_or("no-op"),
-                            "address": format!("{}.{}", a.addr.typ, a.addr.name),
+                            "address": a.addr.to_string(),
                             "result": if err.is_some() { "failed" } else { "ok" },
                             "remote": st.get(&a.addr).map(|e| e.remote.clone()),
                             "diff": diffs.get(&a.addr),
@@ -2175,7 +2177,8 @@ fn run_with(
                     waits.extend(held);
                     waits.sort();
                     waits.dedup();
-                    let waits: Vec<String> = waits.iter().map(|n| format!("?{n}")).collect();
+                    let waits: Vec<String> =
+                        waits.iter().map(|n| format!("?{}", ir::label(n))).collect();
                     bail!(
                         "apply stopped at tick {tick}: nothing definite to apply, still waiting on {}",
                         waits.join(" ")
@@ -2224,8 +2227,15 @@ fn why_tree(
     res: &engine::EvalResult,
     redact: &query::Redactor,
 ) -> Result<()> {
-    let query::Query::Body { body, .. } = query::parse(pattern)? else {
-        bail!("why: expected a fact pattern such as 'want(net.vpc, N)', got '{pattern}'");
+    let parsed = match query::address(pattern, true) {
+        Some(q) => q,
+        None => query::parse(pattern)?,
+    };
+    let query::Query::Body { body, .. } = parsed else {
+        bail!(
+            "why: expected an address such as 'net.vpc[\"main\"]' or 'net.vpc[\"main\"].cidr', \
+             or a fact pattern such as 'want(net.vpc, N)', got '{pattern}'"
+        );
     };
     let [crate::ast::Lit::Pos(pat)] = body.as_slice() else {
         bail!("why: expected one fact pattern, got '{pattern}'");
@@ -3223,7 +3233,7 @@ fn needs_project(cli: &Cli) -> bool {
         | Cmd::Rekey { .. }
         | Cmd::Handover { .. }
         | Cmd::Unlock
-        | Cmd::StateShow
+        | Cmd::StateShow { .. }
         | Cmd::StateMv { .. }
         | Cmd::Taint { .. } => true,
         _ => false,
@@ -3386,44 +3396,48 @@ fn last_apply(entries: &[serde_json::Value]) -> String {
     out
 }
 
-/// `dform state show`: the deployment's objects, by address.
-fn state_show(dep: &crate::store::Deployment) -> Result<()> {
+/// `dform state show [ADDR]`: the deployment's objects, by address; with
+/// ADDR, that object's only.
+fn state_show(dep: &crate::store::Deployment, only: Option<&str>) -> Result<()> {
+    let only = only.map(ir::parse_resource_address).transpose()?;
     let (deployment, at) = (dep.name(), dep.locate(crate::store::STATE));
     if !dep.has_state()? {
         bail!("stack {deployment} has no state at {at}: it was never applied");
     }
     let st = dep.load_state()?;
+    if let Some(a) = &only {
+        let key = state::key(a);
+        let (live, deposed) = (st.resources.get(&key), st.deposed.get(&key));
+        if live.is_none() && deposed.is_none() {
+            bail!("stack {deployment} has no object at {a}");
+        }
+        if let Some(e) = live {
+            println!("{a}  {} {}", e.provider, e.remote);
+        }
+        if let Some(e) = deposed {
+            println!("{a} (deposed)  {} {}", e.provider, e.remote);
+        }
+        return Ok(());
+    }
     println!("{deployment}: {at}");
     for (k, e) in &st.resources {
-        let addr = state::parse_key(k).map_or(k.clone(), |a| format!("{}/{}", a.typ, a.name));
+        let addr = state::parse_key(k).map_or(k.clone(), |a| a.to_string());
         println!("  {addr}  {} {}", e.provider, e.remote);
     }
     for (k, e) in &st.deposed {
-        let addr = state::parse_key(k).map_or(k.clone(), |a| format!("{}/{}", a.typ, a.name));
+        let addr = state::parse_key(k).map_or(k.clone(), |a| a.to_string());
         println!("  {addr} (deposed)  {} {}", e.provider, e.remote);
     }
     for (k, v) in &st.outputs {
         println!("  output {k} = {}", partition::fmt_value(v));
     }
     for (k, o) in &st.secret_outputs {
-        println!("  output {k} = (sensitive {})", o.label);
+        println!("  output {k} = (sensitive {})", ir::label(&o.label));
     }
     if st.in_flight.is_some() {
         println!("  an apply was interrupted: the next apply resumes it");
     }
     Ok(())
-}
-
-/// `TYPE/NAME`.
-fn parse_address(s: &str) -> Result<ir::Address> {
-    let (typ, name) = s
-        .split_once('/')
-        .filter(|(t, n)| !t.is_empty() && !n.is_empty())
-        .ok_or_else(|| anyhow::anyhow!("expected an address TYPE/NAME, got '{s}'"))?;
-    Ok(ir::Address {
-        typ: typ.to_string(),
-        name: name.to_string(),
-    })
 }
 
 /// `dform state mv FROM TO`: the object state maps at FROM, at TO; under
@@ -3435,15 +3449,19 @@ fn state_mv(
     audit: &crate::audit::Log,
 ) -> Result<()> {
     let deployment = dep.name();
-    let (old, new) = (parse_address(from)?, parse_address(to)?);
+    let (old, new) = (
+        ir::parse_resource_address(from)?,
+        ir::parse_resource_address(to)?,
+    );
     let _lock = dep.lock()?;
     let mut st = dep.load_state()?;
     if st.get(&old).is_none() {
-        bail!("state mv: stack {deployment} has no object at {from}");
+        bail!("state mv: stack {deployment} has no object at {old}");
     }
     if st.get(&new).is_some() {
-        bail!("state mv: stack {deployment} already has an object at {to}");
+        bail!("state mv: stack {deployment} already has an object at {new}");
     }
+    let (from, to) = (old.to_string(), new.to_string());
     st.apply_moves(&[(old, new)]);
     dep.save_state(&st)?;
     audit.append(

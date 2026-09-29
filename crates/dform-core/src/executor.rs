@@ -191,10 +191,9 @@ pub fn run_tick(
                 // As if dform were killed here: nothing in flight is
                 // waited for, and the tick never ends.
                 bail!(
-                    "apply {}/{}: dform stopped after this Apply call returned \
+                    "apply {}: dform stopped after this Apply call returned \
                      (chaos stop-after); the next apply resumes",
-                    a.addr.typ,
-                    a.addr.name
+                    a.addr
                 );
             }
         }
@@ -204,9 +203,7 @@ pub fn run_tick(
     {
         let a = &actions[i].addr;
         failed = Some(anyhow::anyhow!(
-            "apply {}/{}: its dependencies never finished (a cycle)",
-            a.typ,
-            a.name
+            "apply {a}: its dependencies never finished (a cycle)"
         ));
     }
     // The timeline in the order the calls started.
@@ -507,7 +504,7 @@ pub fn resolve_uncertain(cloud: &Providers, state: &mut State) -> Result<Vec<Str
             state.uncertain.remove(&k);
             continue;
         };
-        let at = format!("{}/{}", addr.typ, addr.name);
+        let at = addr.to_string();
         match u.op {
             UncertainOp::Create | UncertainOp::Replace { .. } => {
                 // A create's address may still map an object that is gone.
@@ -600,7 +597,7 @@ pub fn carried_over(resumed: Option<&InFlight>, state: &State, plan: &Plan) -> S
                 None => "carried over from an interrupted apply:\n".to_string(),
             };
         }
-        out.push_str(&format!("  {}.{}", a.addr.typ, a.addr.name));
+        out.push_str(&format!("  {}", a.addr));
         if retried {
             out.push_str("  (retried with its idempotency key: nothing it made was found)");
         }
@@ -692,12 +689,12 @@ pub fn check_boundary(
     ))
 }
 
-/// `~ T.N` and a `path: before -> after` line per change, as plan prints an
+/// `~ T["N"]` and a `path: before -> after` line per change, as plan prints an
 /// update; a resource that appeared or vanished says so.
 pub fn format_changes(changed: &[(Address, Vec<Change>)]) -> String {
     let mut out = String::new();
     for (addr, changes) in changed {
-        out.push_str(&format!("~ {}.{}\n", addr.typ, addr.name));
+        out.push_str(&format!("~ {addr}\n"));
         for ch in changes {
             let side = |v: Option<&Json>| match (ch.sensitive, v) {
                 (true, Some(_)) => "(sensitive)".to_string(),

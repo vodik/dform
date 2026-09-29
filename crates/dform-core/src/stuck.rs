@@ -46,7 +46,7 @@ impl Stuck {
     pub fn nulls_text(&self) -> String {
         self.nulls
             .iter()
-            .map(|n| format!("?{n}"))
+            .map(|n| format!("?{}", crate::ir::label(n)))
             .collect::<Vec<_>>()
             .join(" ")
     }
@@ -128,7 +128,7 @@ impl MayDerive {
     pub fn nulls_text(&self) -> String {
         self.nulls
             .iter()
-            .map(|n| format!("?{n}"))
+            .map(|n| format!("?{}", crate::ir::label(n)))
             .collect::<Vec<_>>()
             .join(" ")
     }

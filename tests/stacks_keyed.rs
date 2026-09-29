@@ -46,7 +46,8 @@ fn planning_prod_after_applying_staging_proposes_creates() {
     );
     let size = s.run(&["plan", "--set", "size=2", "app.df"]).success();
     assert!(
-        size.stdout.contains("~ net.vpc.main\n  size: 1 -> 2\n"),
+        size.stdout
+            .contains("~ net.vpc[\"main\"]\n  size: 1 -> 2\n"),
         "{}",
         size.stdout
     );
@@ -194,7 +195,7 @@ resource net.vpc edge {
     let r = s.run(&["plan", "web.df"]).success();
     assert!(
         r.stdout
-            .contains("+ net.vpc.edge\n  name = \"https://prod.example\"\n"),
+            .contains("+ net.vpc[\"edge\"]\n  name = \"https://prod.example\"\n"),
         "{}",
         r.stdout
     );
@@ -213,7 +214,7 @@ fn rekey_lists_what_the_key_renames_and_moves_the_state() {
     assert!(
         r.stdout.contains(
             "these name-like attributes depend on the key (env); the next plan of \
-             app[env=stg] renames them, usually a replace:\n  net.vpc.main name = \"main-staging\"\n"
+             app[env=stg] renames them, usually a replace:\n  net.vpc[\"main\"].name = \"main-staging\"\n"
         ),
         "{}",
         r.stdout
@@ -226,7 +227,7 @@ fn rekey_lists_what_the_key_renames_and_moves_the_state() {
     let r = s.run(&["plan", "app.df", "env=stg"]).success();
     assert!(
         r.stdout
-            .contains("~ net.vpc.main\n  name: \"main-staging\" -> \"main-stg\"\n"),
+            .contains("~ net.vpc[\"main\"]\n  name: \"main-staging\" -> \"main-stg\"\n"),
         "{}",
         r.stdout
     );
@@ -302,13 +303,13 @@ fn a_fixed_bucket_name_in_a_keyed_stack_is_a_warning() {
     let r = s.run(&["plan", "app.df"]).success();
     assert!(
         r.stderr.contains(
-            "warning: app.df:5:3: net.vpc.logs bucket = \"company-logs\" does not depend on \
+            "warning: app.df:5:3: net.vpc[\"logs\"].bucket = \"company-logs\" does not depend on \
              the stack's key (env)"
         ),
         "{}",
         r.stderr
     );
-    assert!(!r.stderr.contains("net.vpc.main"), "{}", r.stderr);
+    assert!(!r.stderr.contains("net.vpc[\"main\"]"), "{}", r.stderr);
     // Isolated deployments do not share names.
     s.write(
         "app.df",
@@ -332,7 +333,7 @@ fn a_fixed_bucket_name_is_denied_under_strict() {
     let r = s.run(&["plan", "app.df"]).failure();
     assert!(
         r.stderr
-            .contains("constraint violations:\n- app.df:5:3: net.vpc.logs bucket"),
+            .contains("constraint violations:\n- app.df:5:3: net.vpc[\"logs\"].bucket"),
         "{}",
         r.stderr
     );
@@ -366,15 +367,15 @@ fn a_fixed_bucket_in_a_block_that_reads_the_key_is_a_warning() {
     let r = s.run(&["plan", "app.df"]).success();
     assert!(
         r.stderr.contains(
-            "warning: app.df:6:3: net.vpc.logs bucket = \"company-logs\" does not depend on \
+            "warning: app.df:6:3: net.vpc[\"logs\"].bucket = \"company-logs\" does not depend on \
              the stack's key (env)"
         ),
         "{}",
         r.stderr
     );
-    assert!(!r.stderr.contains("net.vpc.main"), "{}", r.stderr);
+    assert!(!r.stderr.contains("net.vpc[\"main\"]"), "{}", r.stderr);
     // A ref's value is its attribute's.
-    assert!(!r.stderr.contains("net.vpc.peer"), "{}", r.stderr);
+    assert!(!r.stderr.contains("net.vpc[\"peer\"]"), "{}", r.stderr);
     // Rekey lists what the key renames: main's name, not the bucket.
     s.run(&["apply", "app.df", "env=staging"]).success();
     let r = s
@@ -382,11 +383,11 @@ fn a_fixed_bucket_in_a_block_that_reads_the_key_is_a_warning() {
         .success();
     assert!(
         r.stdout
-            .contains("  net.vpc.main name = \"main-staging\"\n"),
+            .contains("  net.vpc[\"main\"].name = \"main-staging\"\n"),
         "{}",
         r.stdout
     );
-    assert!(!r.stdout.contains("net.vpc.logs"), "{}", r.stdout);
+    assert!(!r.stdout.contains("net.vpc[\"logs\"]"), "{}", r.stdout);
 }
 
 /// Under strict mode the collision is a `deny` fact: `why` explains it
@@ -404,13 +405,14 @@ fn the_strict_collision_deny_is_a_fact_why_explains() {
     let r = s.run(&["plan", "app.df"]).failure();
     assert!(
         r.stderr
-            .contains("constraint violations:\n- app.df:6:3: net.vpc.logs bucket"),
+            .contains("constraint violations:\n- app.df:6:3: net.vpc[\"logs\"].bucket"),
         "{}",
         r.stderr
     );
     let r = s.run(&["why", "deny(M)", "app.df"]).success();
     assert!(
-        r.stdout.contains("deny(\"app.df:6:3: net.vpc.logs bucket"),
+        r.stdout
+            .contains("deny(\"app.df:6:3: net.vpc[\\\"logs\\\"].bucket"),
         "{}",
         r.stdout
     );
@@ -548,7 +550,7 @@ fn apply_asks_unless_yes() {
         r.stderr
     );
     // The plan was shown; nothing was applied.
-    assert!(r.stdout.contains("+ net.vpc.main"), "{}", r.stdout);
+    assert!(r.stdout.contains("+ net.vpc[\"main\"]"), "{}", r.stdout);
     assert!(!s.path("dform.state/app/env=prod/state.json").exists());
 
     apply(&["apply", "-y", "app.df", "env=prod"]).success();
@@ -607,7 +609,7 @@ fn state_show_needs_the_key_not_the_other_inputs() {
         .success();
     let r = s.run(&["state", "show", "app", "env=prod"]).success();
     assert!(
-        r.stdout.contains("  net.vpc/main  fakecloud main"),
+        r.stdout.contains("  net.vpc[\"main\"]  fakecloud main"),
         "{}",
         r.stdout
     );

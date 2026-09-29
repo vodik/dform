@@ -25,7 +25,7 @@ fn a_two_phase_plan_is_refused_saying_why() {
     // per stuck instance with its rule, head pattern and nulls.
     assert!(
         r.stdout
-            .contains("pending groups:\n? gke_nodepool.? x unknown"),
+            .contains("pending groups:\n? gke_nodepool[?] x unknown"),
         "{}",
         r.stdout
     );
@@ -88,7 +88,7 @@ fn fresh_nulls_still_flow() {
     );
     let r = s.run(&["plan", "p.df"]).success();
     assert!(
-        r.stdout.contains("vpc_id = ?net.vpc/main#id"),
+        r.stdout.contains("vpc_id = ?net.vpc[\"main\"].id"),
         "{}",
         r.stdout
     );
@@ -144,7 +144,7 @@ fn a_pending_group_is_refused_and_allow_stuck_relaxes_per_key() {
     let r = s.run(&["plan", "p.df"]).success();
     assert!(
         r.stdout
-            .contains("pending groups:\n? net.subnet.s x unknown"),
+            .contains("pending groups:\n? net.subnet[\"s\"] x unknown"),
         "{}",
         r.stdout
     );

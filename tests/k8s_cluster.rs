@@ -176,7 +176,7 @@ fn a_field_another_manager_owns_fails_the_apply() {
 
     let r = dform(&s, &kc, &["apply", "p.df"]).failure();
     assert!(
-        r.stderr.contains("apply k8s.deployment/web")
+        r.stderr.contains("apply k8s.deployment[\"web\"]")
             && r.stderr
                 .contains(".spec.replicas is owned by field manager \"dform-test-other\""),
         "{}\n{}",
@@ -200,7 +200,11 @@ fn a_removed_resource_is_deleted() {
     let without = &without[..without.find("resource k8s.deployment").unwrap()];
     s.write("p.df", without);
     let r = dform(&s, &kc, &["apply", "p.df"]).success();
-    assert!(r.stdout.contains("- k8s.deployment.web"), "{}", r.stdout);
+    assert!(
+        r.stdout.contains("- k8s.deployment[\"web\"]"),
+        "{}",
+        r.stdout
+    );
 
     let (rt, client) = client(&kc);
     let api: kube::Api<k8s_openapi::api::apps::v1::Deployment> =
@@ -238,7 +242,7 @@ fn the_k8s_demo_applies_and_converges() {
     s.write("k8s_demo.df", &demo.replace("nginx:1.27", "nginx:1.28"));
     let r = dform(&s, &kc, &["plan", "k8s_demo.df"]).success();
     assert!(
-        r.stdout.contains("~ k8s.deployment.web")
+        r.stdout.contains("~ k8s.deployment[\"web\"]")
             && r.stdout.contains(
                 "spec.template.spec.containers[name=web].image: \"nginx:1.27\" -> \"nginx:1.28\""
             ),
@@ -279,7 +283,7 @@ fn drift_from_a_kubectl_patch_is_planned_back() {
 
     let r = dform(&s, &kc, &["plan", "p.df"]).success();
     assert!(
-        r.stdout.contains("~ k8s.deployment.web") && r.stdout.contains("spec.replicas"),
+        r.stdout.contains("~ k8s.deployment[\"web\"]") && r.stdout.contains("spec.replicas"),
         "{}",
         r.stdout
     );
@@ -379,7 +383,7 @@ fn a_create_whose_answer_was_lost_is_found_not_made_again() {
     let r = dform(&s, &kc, &["apply", "p.df"]).success();
     assert!(
         r.stderr.contains(&format!(
-            "k8s.config_map/settings: the create whose answer was lost made {}/{name}",
+            "k8s.config_map[\"settings\"]: the create whose answer was lost made {}/{name}",
             ns.name
         )),
         "{}\n{}",
@@ -416,7 +420,7 @@ fn a_secrets_string_data_reads_back() {
     s.write("p.df", &program("hunter3"));
     let r = dform(&s, &kc, &["plan", "p.df"]).success();
     assert!(
-        r.stdout.contains("~ k8s.secret.token") && !r.stdout.contains("hunter"),
+        r.stdout.contains("~ k8s.secret[\"token\"]") && !r.stdout.contains("hunter"),
         "{}",
         r.stdout
     );
@@ -452,8 +456,8 @@ fn an_empty_pod_selector_converges() {
     s.write("p.df", &program("  spec.podSelector = {}\n"));
     let r = dform(&s, &kc, &["plan", "p.df"]).success();
     assert!(
-        r.stdout.contains("~ k8s.network_policy.other")
-            && !r.stdout.contains("k8s.network_policy.all"),
+        r.stdout.contains("~ k8s.network_policy[\"other\"]")
+            && !r.stdout.contains("k8s.network_policy[\"all\"]"),
         "{}",
         r.stdout
     );
