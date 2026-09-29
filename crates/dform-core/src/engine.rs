@@ -1859,6 +1859,9 @@ fn forwards_nulls(name: &str) -> bool {
             | "collect_set"
             | "collect_list"
             | "count"
+            | "sum"
+            | "min"
+            | "max"
             | "__null"
             | "__label"
             | "__path"
@@ -2002,10 +2005,17 @@ fn eval_rule(rule: &RuleStmt, plan: &ops::Rule, src: &Src, rec: &Rec) -> Result<
 }
 
 /// An aggregate rule. Rule 2: the group key is a content position, and so
-/// is the aggregated value of `count`; `collect_set`/`collect_list` forward
-/// nulls. Rule 3: a group is undetermined, and not derived, when its key
-/// unifies with a stuck instance of this rule or with a stuck head of a
-/// predicate the body reads.
+/// is the aggregated value of `count`, `sum`, `min` and `max` (a fresh null
+/// too: its order and its sum are content); `collect_set`/`collect_list`
+/// forward nulls. Rule 3: a group is undetermined, and not derived, when
+/// its key unifies with a stuck instance of this rule or with a stuck head
+/// of a predicate the body reads.
+///
+/// `count` and `sum` fold every body match of the group, `min` and `max`
+/// their least and greatest; a group has at least one match, so an empty
+/// group derives nothing. A group `sum` has a non-int in, or `min`/`max`
+/// one that is neither an int nor a string or a mix of the two, derives a
+/// deny naming the group and the value instead of its head.
 fn eval_rule_collect(
     rule: &RuleStmt,
     src: &Src,
@@ -2013,7 +2023,7 @@ fn eval_rule_collect(
     kind: AggKind,
     rec: &Rec,
 ) -> Result<Vec<Derived>> {
-    let Term::Func { name: _, args } = &rule.head.args[idx] else {
+    let Term::Func { name, args } = &rule.head.args[idx] else {
         bail!("internal: collect idx not func");
     };
     if args.len() != 1 {
@@ -2048,8 +2058,8 @@ fn eval_rule_collect(
             rec.stuck(&b, key_nulls, "aggregate group key carries a null");
             continue;
         }
-        if matches!(kind, AggKind::Count) && stuck::has_null(&item) {
-            rec.stuck(&b, nulls_in(&item), "count over a null");
+        if !matches!(kind, AggKind::Set | AggKind::List) && stuck::has_null(&item) {
+            rec.stuck(&b, nulls_in(&item), format!("{name} over a null"));
             continue;
         }
         let prov = group_prov.entry(key.clone()).or_default();
@@ -2059,7 +2069,7 @@ fn eval_rule_collect(
             AggKind::Set => {
                 groups_set.entry(key).or_default().insert(item);
             }
-            AggKind::List | AggKind::Count => {
+            AggKind::List | AggKind::Count | AggKind::Sum | AggKind::Min | AggKind::Max => {
                 groups_list.entry(key).or_default().push(item);
             }
         }
@@ -2095,36 +2105,53 @@ fn eval_rule_collect(
         // Deterministic output: Datalog doesn't define an order, so we sort.
         items.sort();
 
-        let mut args_out = Vec::with_capacity(rule.head.args.len());
-        let mut k = 0usize;
-        for i in 0..rule.head.args.len() {
-            if i == idx {
-                match kind {
-                    AggKind::Count => args_out.push(Term::Val(Value::Int(items.len() as i64))),
-                    _ => args_out.push(Term::Val(Value::List(items.clone()))),
-                }
-            } else {
-                args_out.push(Term::Val(key[k].clone()));
-                k += 1;
-            }
-        }
-        let group = Atom {
+        let mut key_pat = Atom {
             pred: rule.head.pred.clone(),
-            args: args_out,
+            args: Vec::with_capacity(rule.head.args.len()),
             record: None,
             span: Default::default(),
         };
-        let mut key_pat = group.clone();
-        key_pat.args[idx] = Term::Wildcard;
+        let mut k = 0usize;
+        for i in 0..rule.head.args.len() {
+            if i == idx {
+                key_pat.args.push(Term::Wildcard);
+            } else {
+                key_pat.args.push(Term::Val(key[k].clone()));
+                k += 1;
+            }
+        }
         if undetermined
             .iter()
             .any(|u| stuck::patterns_unify(u, &key_pat))
         {
             return;
         }
+        let head = match fold(name, kind, items) {
+            Ok(v) => {
+                let mut group = key_pat;
+                group.args[idx] = Term::Val(v);
+                group
+            }
+            Err(msg) => Atom {
+                pred: "deny".into(),
+                args: vec![
+                    Term::Val(Value::Str(format!(
+                        "{}: {msg}",
+                        partition::fmt_atom(&key_pat)
+                    ))),
+                    Term::Val(obj(vec![
+                        ("pred", Value::Str(rule.head.pred.clone())),
+                        ("group", Value::List(key)),
+                        ("rule", Value::Str(rec.text.to_string())),
+                    ])),
+                ],
+                record: None,
+                span: rule.head.span,
+            },
+        };
         let n = out.len() as u32;
         out.push(Derived {
-            head: group,
+            head,
             used: used.into_iter().collect(),
             absent: absent.into_iter().collect(),
             bindings: vec![],
@@ -2140,6 +2167,54 @@ fn eval_rule_collect(
     }
 
     Ok(out)
+}
+
+/// A group's aggregated value, from its items sorted; `Err` with what is
+/// wrong with them.
+fn fold(name: &str, kind: AggKind, items: Vec<Value>) -> std::result::Result<Value, String> {
+    match kind {
+        AggKind::Set | AggKind::List => Ok(Value::List(items)),
+        AggKind::Count => Ok(Value::Int(items.len() as i64)),
+        AggKind::Sum => {
+            let mut total = 0i64;
+            for v in &items {
+                let Value::Int(n) = v else {
+                    return Err(format!(
+                        "{name}() over {}, which is not an int",
+                        partition::fmt_value(v)
+                    ));
+                };
+                total = total
+                    .checked_add(*n)
+                    .ok_or_else(|| format!("{name}() overflows at {}", partition::fmt_value(v)))?;
+            }
+            Ok(Value::Int(total))
+        }
+        AggKind::Min | AggKind::Max => {
+            // Sorted, kind first: every item is of one kind iff the first
+            // and the last are.
+            let (Some(first), Some(last)) = (items.first(), items.last()) else {
+                return Err(format!("{name}() over no value"));
+            };
+            for v in [first, last] {
+                if !matches!(v, Value::Int(_) | Value::Str(_)) {
+                    return Err(format!(
+                        "{name}() over {}, which is neither an int nor a string",
+                        partition::fmt_value(v)
+                    ));
+                }
+            }
+            if std::mem::discriminant(first) != std::mem::discriminant(last) {
+                return Err(format!(
+                    "{name}() over {} and {}, an int and a string",
+                    partition::fmt_value(first),
+                    partition::fmt_value(last)
+                ));
+            }
+            let v = if kind == AggKind::Min { first } else { last };
+            Ok(v.clone())
+        }
+    }
 }
 
 /// One way to satisfy a body: the bindings, and for provenance the tuples
@@ -3225,21 +3300,21 @@ pub const REFERENCE: &[Reference] = &[
         "sum",
         Aggregate,
         "sum(x: int) -> int",
-        "The sum of `x` per group (accepted in a head; the engine does not evaluate it yet).",
+        "The sum of `x` over every match of the body per group; a non-int is a deny.",
         "total(sum(n)) if size(_, n)",
     ),
     r(
         "min",
         Aggregate,
-        "min(x: any) -> any",
-        "The least `x` per group (accepted in a head; the engine does not evaluate it yet).",
+        "min(x: int | string) -> int | string",
+        "The least `x` per group, ints or strings (a mix is a deny).",
         "first(min(n)) if size(_, n)",
     ),
     r(
         "max",
         Aggregate,
-        "max(x: any) -> any",
-        "The greatest `x` per group (accepted in a head; the engine does not evaluate it yet).",
+        "max(x: int | string) -> int | string",
+        "The greatest `x` per group, ints or strings (a mix is a deny).",
         "last(max(n)) if size(_, n)",
     ),
     r(
@@ -4057,6 +4132,167 @@ mod tests {
              snap(l) if all(l)")
         .unwrap();
         assert_eq!(facts_of(&r, "snap"), vec!["snap([1, 2, 3])".to_string()]);
+    }
+
+    /// `sum` folds every body match of a group, as `count` counts them:
+    /// two matches of the same size are both summed. An empty group
+    /// derives nothing, for `count` as for `sum`.
+    #[test]
+    fn sum_folds_every_match_per_group() {
+        let (r, violations) = run(r#"size("a", "x", 3)
+             size("b", "x", 3)
+             size("c", "y", 4)
+             total(g, sum(n)) if size(_, g, n)
+             all(sum(n)) if size(_, _, n)
+             sizes(count(n)) if size(_, _, n)
+             big(sum(n)) if size(_, _, n), n > 9
+             many(count(n)) if size(_, _, n), n > 9"#)
+        .unwrap();
+        assert!(violations.is_empty(), "{violations:?}");
+        assert_eq!(
+            facts_of(&r, "total"),
+            [r#"total("x", 6)"#, r#"total("y", 4)"#]
+        );
+        assert_eq!(facts_of(&r, "all"), ["all(10)"]);
+        assert_eq!(facts_of(&r, "sizes"), ["sizes(3)"]);
+        assert!(facts_of(&r, "big").is_empty());
+        assert!(facts_of(&r, "many").is_empty());
+    }
+
+    /// `min` and `max` over ints and over strings, per group.
+    #[test]
+    fn min_and_max_order_ints_and_strings() {
+        let (r, violations) = run(r#"v("a", 3)
+             v("a", 1)
+             v("a", 12)
+             v("b", "q")
+             v("b", "p")
+             lo(g, min(x)) if v(g, x)
+             hi(g, max(x)) if v(g, x)"#)
+        .unwrap();
+        assert!(violations.is_empty(), "{violations:?}");
+        assert_eq!(facts_of(&r, "lo"), [r#"lo("a", 1)"#, r#"lo("b", "p")"#]);
+        assert_eq!(facts_of(&r, "hi"), [r#"hi("a", 12)"#, r#"hi("b", "q")"#]);
+    }
+
+    /// A group `sum` has a non-int in, or `min`/`max` a mix of ints and
+    /// strings or another kind, derives a deny naming the group and the
+    /// value, and not its head; the other groups derive theirs.
+    #[test]
+    fn an_ill_kinded_group_is_a_deny() {
+        let (r, violations) = run(r#"v("a", 1)
+             v("a", "p")
+             v("b", true)
+             v("c", 2)
+             s(g, sum(x)) if v(g, x)
+             m(g, max(x)) if v(g, x)"#)
+        .unwrap();
+        assert_eq!(facts_of(&r, "s"), [r#"s("c", 2)"#]);
+        assert_eq!(facts_of(&r, "m"), [r#"m("c", 2)"#]);
+        let has = |m: &str| violations.iter().any(|v| v.starts_with(m));
+        assert!(
+            has(r#"s("a", _): sum() over "p", which is not an int"#),
+            "{violations:?}"
+        );
+        assert!(
+            has(r#"s("b", _): sum() over true, which is not an int"#),
+            "{violations:?}"
+        );
+        assert!(
+            has(r#"m("a", _): max() over "p" and 1, an int and a string"#),
+            "{violations:?}"
+        );
+        assert!(
+            has(r#"m("b", _): max() over true, which is neither an int nor a string"#),
+            "{violations:?}"
+        );
+        let (_, violations) = run(&format!("v({})\n v(1)\n s(sum(x)) if v(x)", i64::MAX)).unwrap();
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.starts_with("s(_): sum() overflows")),
+            "{violations:?}"
+        );
+    }
+
+    /// `sum` of a value known not to be an int, `min`/`max` of one neither
+    /// an int nor a string, is a compile error at the call.
+    #[test]
+    fn a_statically_ill_kinded_aggregate_is_an_error() {
+        for (src, want) in [
+            (
+                r#"s(sum("a")) if b(x)"#,
+                "`sum` aggregates ints, not a string",
+            ),
+            (
+                r#"s(sum("p-{x}")) if b(x)"#,
+                "`sum` aggregates ints, not a string",
+            ),
+            (
+                r#"s(min([x])) if b(x)"#,
+                "`min` aggregates ints or strings, not a list",
+            ),
+            (
+                r#"s(max(true)) if b(x)"#,
+                "`max` aggregates ints or strings, not a bool",
+            ),
+        ] {
+            let err = run(&format!("b(1)\n{src}")).unwrap_err();
+            assert!(format!("{err:#}").contains(want), "{src}: {err:#}");
+        }
+        run("b(1)\ns(sum(x)) if b(x)\nt(max(\"p-{x}\")) if b(x)").unwrap();
+    }
+
+    /// Rule 2: the aggregated value of `sum`, `min` and `max` is a content
+    /// position. A group with a null in, open or fresh, is stuck and derives
+    /// nothing (a fresh null's order is content too); the others derive.
+    #[test]
+    fn sum_min_max_over_a_null_is_stuck() {
+        let null = |class, label: &str| Value::Null {
+            label: label.into(),
+            class,
+            ty: "int".into(),
+        };
+        let fact = |g: &str, v: Value| Atom {
+            pred: "size".into(),
+            args: vec![str_val(g), Term::Val(v)],
+            record: None,
+            span: Default::default(),
+        };
+        let extra = [
+            fact("a", null(crate::value::NullClass::Open, "t/a#size")),
+            fact("a", Value::Int(1)),
+            fact("b", null(crate::value::NullClass::Fresh, "t/b#size")),
+            fact("c", Value::Int(2)),
+        ];
+        let (r, violations) = run_with(
+            "decl size/2
+             total(g, sum(n)) if size(g, n)
+             lo(g, min(n)) if size(g, n)
+             hi(g, max(n)) if size(g, n)
+             all(sum(n)) if size(_, n)",
+            &extra,
+        )
+        .unwrap();
+        assert!(violations.is_empty(), "{violations:?}");
+        assert_eq!(facts_of(&r, "total"), [r#"total("c", 2)"#]);
+        assert_eq!(facts_of(&r, "lo"), [r#"lo("c", 2)"#]);
+        assert_eq!(facts_of(&r, "hi"), [r#"hi("c", 2)"#]);
+        assert!(facts_of(&r, "all").is_empty());
+        for (pred, name) in [
+            ("total", "sum"),
+            ("lo", "min"),
+            ("hi", "max"),
+            ("all", "sum"),
+        ] {
+            assert!(
+                r.stuck
+                    .iter()
+                    .any(|s| s.head.pred == pred && s.reason == format!("{name} over a null")),
+                "{pred}: {:?}",
+                r.stuck
+            );
+        }
     }
 
     /// A wildcard in a negated atom matches anything: `not has k` is

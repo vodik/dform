@@ -2487,6 +2487,49 @@ impl<'u> Lowerer<'u> {
         })
     }
 
+    /// `sum` of a value known here not to be an int, `min`/`max` of one
+    /// neither an int nor a string: an error at the call rather than a
+    /// deny of every group.
+    fn check_aggregated(&mut self, name: &str, args: &[Term], span: Span) {
+        if self.lenient || self.calls != Calls::Head {
+            return;
+        }
+        let kind = match args {
+            [Term::Val(Value::Int(_))] => "an int",
+            [Term::Val(Value::Str(_))] => "a string",
+            [Term::Func { name, .. }]
+                if matches!(
+                    name.as_str(),
+                    "format" | "concat" | "to_string" | "lower" | "upper" | "join"
+                ) =>
+            {
+                "a string"
+            }
+            [Term::Val(Value::Bool(_))] => "a bool",
+            [Term::Val(Value::List(_)) | Term::List(_) | Term::ListComp { .. }] => "a list",
+            [Term::Val(Value::Obj(_)) | Term::Obj(_)] => "an object",
+            _ => return,
+        };
+        let ok: &[&str] = match name {
+            "sum" => &["an int"],
+            "min" | "max" => &["an int", "a string"],
+            _ => return,
+        };
+        if !ok.contains(&kind) {
+            self.diags.push(Diagnostic::error(
+                span,
+                format!(
+                    "`{name}` aggregates {}, not {kind}",
+                    if ok.len() == 1 {
+                        "ints"
+                    } else {
+                        "ints or strings"
+                    }
+                ),
+            ));
+        }
+    }
+
     /// A call to a function the evaluator does not have would have no value
     /// and fail its literal quietly: an error at the call. A refinement's
     /// calls are `refine::check_rest`'s, with the refinement's own message.
@@ -2569,6 +2612,7 @@ impl<'u> Lowerer<'u> {
                 };
                 self.check_function(&name, span);
                 let args = self.bind(false, |l| l.args(rc, n, Pos::Content, pre))?;
+                self.check_aggregated(&name, &args, span);
                 Ok(Term::Func { name, args })
             }
             RECORD_ATOM => self.error(

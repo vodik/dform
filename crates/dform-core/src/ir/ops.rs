@@ -107,6 +107,9 @@ pub enum AggKind {
     Set,
     List,
     Count,
+    Sum,
+    Min,
+    Max,
 }
 
 /// A body compiled to operators.
@@ -265,6 +268,9 @@ pub fn find_agg(head: &Atom) -> Option<(usize, AggKind)> {
             "collect" | "collect_set" => return Some((i, AggKind::Set)),
             "collect_list" => return Some((i, AggKind::List)),
             "count" => return Some((i, AggKind::Count)),
+            "sum" => return Some((i, AggKind::Sum)),
+            "min" => return Some((i, AggKind::Min)),
+            "max" => return Some((i, AggKind::Max)),
             _ => {}
         }
     }

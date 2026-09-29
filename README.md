@@ -1231,7 +1231,10 @@ rewrites nothing and fails listing the files that would change.
   - `want(Type, Name)` declares a resource instance.
   - `arg(Type, Name, KeyPath, Value)` contributes attributes (KeyPath supports dots).
   - `ref(Type, Name, .attr)` expresses dependencies.
-  - `collect_set(x)` / `collect_list(x)` aggregate in a head.
+  - `collect_set(x)` / `collect_list(x)`, `count(x)`, `sum(x)`, `min(x)`,
+    `max(x)` aggregate in a head, per group of the head's other arguments.
+    `sum` folds ints, `min`/`max` ints or strings; a group with a value of
+    another kind derives a deny, and one whose value is a null is stuck.
   - `constraint "message" if ...` enforces invariants.
 
 - The surface:
