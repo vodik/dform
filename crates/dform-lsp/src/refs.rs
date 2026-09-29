@@ -296,20 +296,15 @@ fn dotted_after_keyword(n: &SyntaxNode) -> String {
     out
 }
 
-/// The name a `decl`, `extern` or `input relation` declares, when it is
-/// one name (`decl p/2`; not `decl type ..` nor a dotted extern).
+/// The name a `decl`, `extern` or relation `input` declares, when it is
+/// one name (`decl p(a, b)`; not a dotted extern).
 fn relation_name(n: &SyntaxNode) -> Option<SyntaxToken> {
     let ts = own_tokens(n);
     if ts.iter().any(|t| t.kind() == SyntaxKind::TYPE_KW) {
         return None;
     }
     let mut ids = ts.iter().skip_while(|t| !t.kind().is_keyword()).skip(1);
-    let first = if n.kind() == SyntaxKind::INPUT_RELATION {
-        // `input relation NAME`: `relation` is a name the parser reads.
-        ids.find(|t| t.kind() == SyntaxKind::IDENT && t.text() != "relation")?
-    } else {
-        ids.next()?
-    };
+    let first = ids.next()?;
     let next = ts
         .iter()
         .skip_while(|t| *t != first)
@@ -501,12 +496,9 @@ fn chain(d: &Decls, c: &SyntaxNode, t: &SyntaxToken, scope: &Scope) -> What {
     let Some(first) = ps.first() else {
         return What::Other;
     };
-    // `settings.n.p`: the row `n`.
+    // `settings[e].p`: a row by its key (H 5.1), then its path.
     if matches!(first, Part::Settings) {
-        return match (ps.get(1), k) {
-            (Some(Part::Dot), 2) => What::Name(Symbol::Settings(t.text().to_string()), false),
-            _ => path(3),
-        };
+        return path(1);
     }
     let Some(name0) = name_at(0) else {
         return What::Other;
