@@ -528,7 +528,7 @@ as it is.
 | `deny "a ${x}" if B`                      | `deny(M, ..) :- B, M = format("a %s", X)`              |
 | `set R.p = t @r if B` (`+=`: `arg_add`)   | `arg(T, A, "p", t', r) :- B, reads`                    |
 | `set settings[e].p = t`                   | `arg("settings", e', "p", t')`                         |
-| `contributes _.p`, `contributes T.p`      | a grant of `.p` on any type, on `T`                    |
+| `contributes t.p`, `contributes T.p`      | a grant of `.p` on any type, on `T`                    |
 | `output k: T = t` (`T` a resource type)   | `output k: addr`, and its value                        |
 | `output k = t` (no reads)                 | `output k = t'`                                        |
 | `output k = t if B` (reads, or a body)    | `output(k, t') :- B, reads`                            |

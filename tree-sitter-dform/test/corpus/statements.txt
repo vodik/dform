@@ -263,7 +263,7 @@ Modules, policies, scenarios
 module network {
   input vpc_net: inet
   export subnet_of
-  contributes _.tags
+  contributes t.tags
   output vpc: net.vpc = vpc
   output n = 1 if q(1)
 }

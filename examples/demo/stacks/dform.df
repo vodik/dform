@@ -23,15 +23,11 @@ data("zone", "us-test-1b")
 # A fact with a condition: it holds in prod only.
 iam_need("app", "audit.write", "audit-log") if env == "prod"
 
-# Settings (branch as data). One @default layer for every environment that
-# has one; each environment's config/dform/{env}.yaml (the stack's config) wins
+# Settings (branch as data). One @default layer for every settings row that
+# exists; each environment's config/dform/{env}.yaml (the stack's config) wins
 # per leaf at the normal rank. A CIDR is a string there, made an inet where
 # it is used.
-env_name("staging")
-env_name("prod")
-
-settings e @default {
-  if env_name(e)
+settings _ @default {
   network.main.vpc_net = "10.50.0.0/16"
   network.peer.vpc_net = "10.60.0.0/16"
   db = { backup_days: 3, multi_az: false }
@@ -58,18 +54,22 @@ instance network main {
   vpc_net = inet(cfg.network.main.vpc_net)
 }
 
+# Dev is small: one network, no database, no cluster.
 instance network peer {
+  if env != "dev"
   vpc_net = inet(cfg.network.peer.vpc_net)
 }
 
 # Cross-instance values are wired through outputs.
 instance database main {
+  if env != "dev"
   backup_days = cfg.db.backup_days
   multi_az = cfg.db.multi_az
   subnet_ids = network.main.private_subnet_ids
 }
 
 instance kubernetes main {
+  if env != "dev"
   private_api = cfg.k8s.private_api
   nodepool_min = cfg.k8s.nodepool.min
   nodepool_max = cfg.k8s.nodepool.max

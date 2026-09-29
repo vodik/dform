@@ -6,7 +6,7 @@ module network {
   input vpc_net: inet
   input zones: list(string) = ["a"]
   export subnet_of
-  contributes _.tags
+  contributes t.tags
 
   zone_index("a", 0)
   output vpc: addr = "vpc"
@@ -19,7 +19,7 @@ instance network peer {}
 reads_private(z) if zone_index(z, _)
 
 policy tags {
-  contributes _.tags
+  contributes t.tags
   set r.tags = { team: "x" } if r in resource
   set r.labels = { team: "x" } if r in resource
   set v.cidr = "10.0.0.0/8" if v in net.vpc

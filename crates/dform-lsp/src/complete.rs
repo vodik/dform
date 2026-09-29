@@ -162,7 +162,7 @@ pub fn complete(
         }
         for (p, ts) in any {
             out.push(item(
-                format!("_.{p}"),
+                format!("t.{p}"),
                 CompletionItemKind::FIELD,
                 format!("every type's .{p}"),
                 Some(format!("types with .{p}: {}", ts.join(", "))),
@@ -306,14 +306,21 @@ pub fn complete(
         return grants
             .iter()
             .filter_map(|g| {
-                let (t, p) = match g.strip_prefix("_.") {
-                    Some(p) => ("_", p),
+                // `t.tags`: a name no type starts with is every type.
+                let (h, rest) = g.split_once('.')?;
+                let typed = h == "settings"
+                    || attrs
+                        .keys()
+                        .any(|t| t == h || t.starts_with(&format!("{h}.")));
+                let (t, p) = if !typed {
+                    ("_", rest)
+                } else {
                     // `net.vpc.cidr` by the schema's types; `settings.x`,
                     // a type no schema declares, by its first name.
-                    None => match attrs.keys().find(|t| g.starts_with(&format!("{t}."))) {
+                    match attrs.keys().find(|t| g.starts_with(&format!("{t}."))) {
                         Some(t) => (t.as_str(), &g[t.len() + 1..]),
-                        None => g.split_once('.')?,
-                    },
+                        None => (h, rest),
+                    }
                 };
                 Some(item(
                     p.to_string(),

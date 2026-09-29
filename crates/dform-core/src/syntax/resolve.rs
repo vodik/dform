@@ -969,7 +969,142 @@ impl<'u> Lowerer<'u> {
         let mut out = self.stmt1(n, scope, outer).unwrap_or_default();
         out.append(&mut self.helpers);
         self.helpers = saved;
+        if !(self.core || self.lenient || self.text || self.any_type) {
+            let span = self.span(n);
+            if self.placeholders(&out, span).is_err() {
+                return Vec::new();
+            }
+        }
         out
+    }
+
+    /// `_` stands where a variable could and is never accessed: not as a
+    /// head's column (it has no value to derive), a field's value, a
+    /// function's argument (an interpolation's included) or a comparison's
+    /// side. Checked on what a statement lowered to.
+    fn placeholders(&mut self, stmts: &[Stmt], span: Span) -> L<()> {
+        fn has(t: &Term) -> bool {
+            match t {
+                Term::Wildcard => true,
+                Term::Func { args, .. } | Term::List(args) => args.iter().any(has),
+                Term::Obj(m) => m.values().any(has),
+                Term::ListComp { item, body } => has(item) || lits(body),
+                _ => false,
+            }
+        }
+        // `_` inside a function's arguments, anywhere in `t`.
+        fn in_func(t: &Term) -> bool {
+            match t {
+                Term::Func { args, .. } => args.iter().any(has),
+                Term::List(xs) => xs.iter().any(in_func),
+                Term::Obj(m) => m.values().any(in_func),
+                Term::ListComp { item, body } => has(item) || lits(body),
+                _ => false,
+            }
+        }
+        fn lits(body: &[Lit]) -> bool {
+            body.iter().any(|l| match l {
+                Lit::Pos(a) | Lit::Not(a) => {
+                    a.args.iter().any(in_func)
+                        || a.record.as_ref().is_some_and(|r| r.values().any(in_func))
+                }
+                Lit::Eq(a, b)
+                | Lit::Neq(a, b)
+                | Lit::Gt(a, b)
+                | Lit::Ge(a, b)
+                | Lit::Lt(a, b)
+                | Lit::Le(a, b) => has(a) || has(b),
+            })
+        }
+        let never = "`_` is a placeholder and is never accessed: name it (`env.p`, `x`)";
+        let bad = |l: &mut Self, at: Span, msg: String| {
+            l.diags
+                .push(Diagnostic::error(at, msg).with_help(never.to_string()));
+        };
+        let before = self.diags.len();
+        for st in stmts {
+            let (head, body): (Option<&Atom>, &[Lit]) = match st {
+                Stmt::Fact(a) => (Some(a), &[]),
+                Stmt::Rule(r) => (Some(&r.head), &r.body),
+                Stmt::Resource(r) => {
+                    for f in r.fields.iter().filter(|f| has(&f.value)) {
+                        bad(
+                            self,
+                            f.span,
+                            format!("`{}` is given `_`, which has no value", f.key),
+                        );
+                    }
+                    (None, r.body.as_deref().unwrap_or_default())
+                }
+                Stmt::Settings(r) => {
+                    for f in r.fields.iter().filter(|f| has(&f.value)) {
+                        bad(
+                            self,
+                            f.span,
+                            format!("`{}` is given `_`, which has no value", f.key),
+                        );
+                    }
+                    (None, r.body.as_deref().unwrap_or_default())
+                }
+                Stmt::Instance(i) => {
+                    for (k, _, at) in i.inputs.iter().filter(|(_, v, _)| has(v)) {
+                        bad(
+                            self,
+                            *at,
+                            format!("input `{k}` is given `_`, which has no value"),
+                        );
+                    }
+                    (None, i.body.as_deref().unwrap_or_default())
+                }
+                Stmt::Output(o) => {
+                    if o.value.as_ref().is_some_and(has) {
+                        bad(
+                            self,
+                            o.span,
+                            format!("output `{}` is `_`, which has no value", o.name),
+                        );
+                    }
+                    (None, &[])
+                }
+                _ => (None, &[]),
+            };
+            if let Some(h) = head {
+                let columns: Vec<(String, &Term)> = match &h.record {
+                    Some(r) => r.iter().map(|(k, v)| (format!("`{k}`"), v)).collect(),
+                    None => h
+                        .args
+                        .iter()
+                        .enumerate()
+                        .map(|(i, v)| (format!("{}", i + 1), v))
+                        .collect(),
+                };
+                if let Some((c, _)) = columns.iter().find(|(_, v)| has(v)) {
+                    bad(
+                        self,
+                        h.span,
+                        format!(
+                            "`_` in the head of `{}`: column {c} has no finite set of values; \
+                             bind a variable there in the body",
+                            h.pred
+                        ),
+                    );
+                }
+            }
+            if lits(body) {
+                bad(
+                    self,
+                    span,
+                    "`_` as a value: a function's argument, an interpolation or a comparison \
+                     reads it"
+                        .to_string(),
+                );
+            }
+        }
+        if self.diags.len() > before {
+            Err(Skip)
+        } else {
+            Ok(())
+        }
     }
 
     /// A fresh rule context for a statement in `scope`.
@@ -1303,17 +1438,31 @@ impl<'u> Lowerer<'u> {
         }
     }
 
-    /// `contributes p`, `contributes _.path`, `contributes settings.path`,
+    /// `contributes p`, `contributes t.path` (every type), `contributes settings.path`,
     /// `contributes TYPE.path`.
     fn grant(&mut self, c: &Chain, span: Span) -> L<Grant> {
         if c.ops.iter().any(|o| !matches!(o, Op::Field(..))) {
             return self.error(span, "a grant is a relation or TYPE.path");
         }
         let segs = c.fields();
-        if segs.len() == 1 && c.head != "_" {
+        if c.head == "_" {
+            let path = segs[1..].join(".");
+            return self.error(
+                span,
+                format!(
+                    "`_` is a placeholder and is never accessed: name the type, \
+                     `contributes t.{path}` grants `.{path}` on every type"
+                ),
+            );
+        }
+        if segs.len() == 1 {
             return Ok(Grant::Pred(c.head.clone()));
         }
-        let split = if c.head == "_" || c.head_kind == SETTINGS_KW {
+        // `t.path`: a name no type starts with stands for every type.
+        let any = c.head_kind != SETTINGS_KW
+            && !self.decls.namespaces.contains(&c.head)
+            && !self.decls.types.contains(&c.head);
+        let split = if c.head_kind == SETTINGS_KW || any {
             1
         } else if let Some(i) = (1..segs.len())
             .rev()
@@ -1328,7 +1477,7 @@ impl<'u> Lowerer<'u> {
         let typ = segs[..split].join(".");
         let path = segs[split..].join(".");
         Ok(Grant::Arg {
-            typ: (typ != "_").then_some(typ),
+            typ: (!any).then_some(typ),
             path: (!path.is_empty() && path != "_").then_some(path),
         })
     }
@@ -1901,6 +2050,21 @@ impl<'u> Lowerer<'u> {
         let span = self.span(n);
         let module = word_text(n, 1);
         let name = word_text(n, 2);
+        if name == "_" {
+            return self.error(
+                span,
+                format!("an instance is written by its name: `instance {module} _` names nothing"),
+            );
+        }
+        if self.is_value(scope, &name) {
+            return self.error(
+                span,
+                format!(
+                    "`{name}` is a value in scope, but an instance's name is literal: this is the \
+                     instance {module}.{name}; name it otherwise"
+                ),
+            );
+        }
         let block = node(n, BLOCK).ok_or(Skip)?;
         let mut rc = self.rc(n, scope, outer);
         let mut body = self.clauses(&mut rc, &block)?;
@@ -1955,7 +2119,42 @@ impl<'u> Lowerer<'u> {
             let bound = bound_vars(&body);
             match rc.vars.get(text) {
                 Some(v) if bound.contains(v) || rc.outer.contains(v) => var(v),
-                _ if text == "_" => Term::Wildcard,
+                _ if text == "_" && n.kind() == SETTINGS => {
+                    // `settings _`: every settings row that exists.
+                    let v = fresh(&mut rc, "Row");
+                    body.push(Lit::Pos(atom_at(
+                        crate::transform::SETTINGS_ROW,
+                        vec![var(&v)],
+                        span,
+                    )));
+                    var(&v)
+                }
+                _ if text == "_" => {
+                    return self.error(
+                        self.span_of(header.text_range()),
+                        "a resource is written by its name: `_` names nothing; name it, or \
+                         bind the name in the clause (`resource T n { if p(n) .. }`)",
+                    );
+                }
+                _ if self.is_value(scope, text) => {
+                    let (kind, every) = if n.kind() == SETTINGS {
+                        ("settings row", "`settings _` for every row, or ")
+                    } else {
+                        ("resource", "")
+                    };
+                    let d = Diagnostic::error(
+                        self.span_of(header.text_range()),
+                        format!(
+                            "`{text}` is a value in scope, but a header name the clause does not \
+                             bind is the {kind}'s literal name: this is the {kind} \"{text}\""
+                        ),
+                    )
+                    .with_help(format!(
+                        "write {every}`\"{text}\"` for a {kind} named \"{text}\""
+                    ));
+                    self.diags.push(d);
+                    return Err(Skip);
+                }
                 _ => str_term(text),
             }
         };
@@ -2184,6 +2383,32 @@ impl<'u> Lowerer<'u> {
                 k.clone(),
                 own.then(|| format!("instance {} {i}", c.head)),
             ));
+        }
+        // `set T[_].p = t`: every resource of `T` is `r in T` (H-5).
+        if let Some(k) = c.ops.iter().position(|o| {
+            matches!(o, Op::Index(ts, _) if ts.len() == 1
+                && Chain::of(&ts[0]).is_some_and(|x| x.head == "_" && x.is_bare()))
+        }) {
+            let typ: Vec<&str> = std::iter::once(c.head.as_str())
+                .chain(c.ops[..k].iter().filter_map(|o| match o {
+                    Op::Field(f) => Some(f.as_str()),
+                    Op::Index(..) => None,
+                }))
+                .collect();
+            let typ = typ.join(".");
+            let path: String = c.ops[k + 1..]
+                .iter()
+                .filter_map(|o| match o {
+                    Op::Field(f) => Some(format!(".{f}")),
+                    Op::Index(..) => None,
+                })
+                .collect();
+            return self.error(
+                span,
+                format!(
+                    "`{typ}[_]` is every resource of `{typ}`: write `set r{path} = .. if r in {typ}`"
+                ),
+            );
         }
         let mut pre = Vec::new();
         let res = self.resolve(rc, c, &mut pre)?;
@@ -3270,6 +3495,13 @@ impl<'u> Lowerer<'u> {
         }
         if h == "_" && c.is_bare() {
             return Ok(Res::Val(Term::Wildcard));
+        }
+        if h == "_" {
+            return self.error(
+                span,
+                "`_` is a placeholder and is never accessed: `_.p` and `_[k]` read nothing; \
+                 name it (`env.p`)",
+            );
         }
         // A typed variable: a reference.
         if let Some(t) = rc.types.get(h).cloned() {

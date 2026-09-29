@@ -894,6 +894,7 @@ fn check_defined(
         defined.contains(p)
             || ops::is_builtin_pred(p)
             || matches!(p, "member" | "enumerate")
+            || p == crate::transform::SETTINGS_ROW
             || crate::loader::is_core_pred(p)
     };
     let text = |k: usize| partition::fmt_rule(&rules[k]);
@@ -912,9 +913,9 @@ fn check_defined(
                     )
                     .with_note(format!("in rule: {}", text(k)))
                     .with_help(format!(
-                        "define it, or declare a predicate a provider feeds with `decl {}/{}`",
+                        "define it, or declare a predicate a provider feeds with `decl {}({})`",
                         a.pred,
-                        a.args.len()
+                        crate::transform::columns(a.args.len())
                     )),
                 );
             }
@@ -3320,7 +3321,7 @@ pub const REFERENCE: &[Reference] = &[
         Kw,
         "contributes TYPE.PATH | _.PATH | settings.PATH | PRED",
         "A policy pack's grant: what it may write.",
-        "contributes _.tags",
+        "contributes t.tags",
     ),
     r(
         "module",
@@ -3341,7 +3342,7 @@ pub const REFERENCE: &[Reference] = &[
         Kw,
         "policy NAME { STATEMENTS }",
         "A policy pack: checks and contributions, writing only what it `contributes`.",
-        "policy baseline { contributes _.tags }",
+        "policy baseline { contributes t.tags }",
     ),
     r(
         "use",
@@ -3950,6 +3951,22 @@ mod tests {
             .collect()
     }
 
+    /// `settings _` contributes to every row that exists: one the program
+    /// reads (`settings[e]`) or writes, and no other.
+    #[test]
+    fn settings_placeholder_reaches_every_row_read_or_written() {
+        let (r, _) = run("edition 2026\n\
+             input env: string = \"qa\"\n\
+             settings _ @default { x = 1 }\n\
+             settings prod { y = 2 }\n\
+             v(n) if n = settings[env].x\n")
+        .unwrap();
+        assert_eq!(facts_of(&r, "v"), ["v(1)"]);
+        let mut rows = facts_of(&r, "settings_row");
+        rows.sort();
+        assert_eq!(rows, ["settings_row(\"prod\")", "settings_row(\"qa\")"]);
+    }
+
     /// Hover, completion and signature help read `REFERENCE`: every
     /// builtin, aggregate and keyword has its entry.
     #[test]
@@ -4413,7 +4430,7 @@ mod tests {
     fn dform_df_default_layer_matches_the_copied_blocks() {
         let root = std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
         let src = std::fs::read_to_string(root.join("examples/demo/stacks/dform.df")).unwrap();
-        let start = src.find("env_name(\"staging\")").unwrap();
+        let start = src.find("settings _ @default").unwrap();
         let end = src
             .find("# The settings of the selected environment")
             .unwrap();
@@ -4481,7 +4498,7 @@ mod tests {
     /// replaced wholesale by a normal one, and same-shelf sets union.
     #[test]
     fn a_default_set_is_replaced_not_unioned() {
-        let (r, violations) = run("type_lattice(net.vpc, \"sgs\", \"set\")\n             resource net.vpc a { sgs = [\"base\"] }\n             resource net.vpc b { }\n             policy p {\n               contributes _.sgs\n               arg(t, n, \"sgs\", [\"default_sg\", \"ssh\"], \"default\") if want(t, n)\n               arg(t, n, \"sgs\", [\"audit\"]) if want(t, n), n = \"a\"\n             }\n             use p")
+        let (r, violations) = run("type_lattice(net.vpc, \"sgs\", \"set\")\n             resource net.vpc a { sgs = [\"base\"] }\n             resource net.vpc b { }\n             policy p {\n               contributes t.sgs\n               arg(t, n, \"sgs\", [\"default_sg\", \"ssh\"], \"default\") if want(t, n)\n               arg(t, n, \"sgs\", [\"audit\"]) if want(t, n), n = \"a\"\n             }\n             use p")
         .unwrap();
         assert!(violations.is_empty(), "{violations:?}");
         assert_eq!(

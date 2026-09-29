@@ -1577,7 +1577,7 @@ by the author (E §2.6). A write outside them is a compile error at the head.
 
 ```dform
 policy baseline {
-  contributes _.tags                  # any type, .tags and below
+  contributes t.tags                  # any type, .tags and below
   contributes settings.audit.sinks
 
   set r.tags = { team: "platform" } if r in resource

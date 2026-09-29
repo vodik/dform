@@ -125,7 +125,7 @@ pub enum Stmt {
     Output(OutputDecl),
     /// `export p`: a module predicate readable as `m.i.p`, one per arity.
     Export(Export),
-    /// `contributes T.path`, `contributes _.path` or `contributes p`.
+    /// `contributes T.path`, `contributes t.path` (every type) or `contributes p`.
     Contributes(Contributes),
     /// `stack name { ... }`: the stack this program owns (`stack`).
     Stack(Config),

@@ -104,7 +104,7 @@ fn why_names_the_pack_and_the_module_instance() {
     let s = Scratch::new("diag-why");
     s.write(
         "p.df",
-        "edition 2026\nmodule m {\n  resource net.vpc vpc { cidr = \"10.0.0.0/16\" }\n}\ninstance m main {}\npolicy tags {\n  contributes _.tags\n  arg(t, a, \"tags\", { team: \"x\" }) if want(t, a)\n}\nuse tags\n",
+        "edition 2026\nmodule m {\n  resource net.vpc vpc { cidr = \"10.0.0.0/16\" }\n}\ninstance m main {}\npolicy tags {\n  contributes t.tags\n  arg(t, a, \"tags\", { team: \"x\" }) if want(t, a)\n}\nuse tags\n",
     );
     let out = s
         .run(&[

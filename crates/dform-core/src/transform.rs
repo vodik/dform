@@ -63,6 +63,7 @@ pub fn lower(program: &Program) -> Result<Lowered> {
     let mut expanded = declassified(lower_contributions(&expanded)?);
     // A stack's config contributes per settings path the program knows.
     expanded = crate::tables::expand_config(expanded);
+    expanded = settings_rows(expanded);
     crate::externs::check(&expanded, &extern_fns)?;
     // The cells of secret inputs and outputs, for the Redactor.
     let secret_inputs = inputs
@@ -168,6 +169,9 @@ pub const NORMAL: &str = "normal";
 /// Pseudo-types of the attribute aggregate (E §2.5): settings are addressed
 /// by environment, outputs by component scope ("" for the root program).
 pub const SETTINGS: &str = "settings";
+/// `settings_row(R)`: the settings rows that exist, the rows `settings _`
+/// contributes to.
+pub const SETTINGS_ROW: &str = "settings_row";
 pub const OUTPUT: &str = "output";
 
 /// Pseudo-types of the attribute aggregate that are not resources:
@@ -645,6 +649,117 @@ fn flatten_settings(out: &mut Vec<(String, Term)>, key: &str, val: Term) {
         }
         other => out.push((key.to_string(), other)),
     }
+}
+
+/// `settings _ { .. }` contributes to `settings_row(R)`, every settings row
+/// that exists: one something writes (a named block, `set settings[e]`,
+/// the stack's `config` for the key) or the program reads (`settings[e]`).
+/// A write's row holds where its rule's body holds; a read's where the
+/// literals before the read hold. Literals that read the settings
+/// (directly or through a relation that does) are left out of a row's
+/// body, so the rows never wait on the defaults they receive. Nothing is
+/// added to a program without `settings _`.
+fn settings_rows(mut program: Program) -> Program {
+    let uses = |r: &RuleStmt| {
+        r.body
+            .iter()
+            .any(|l| matches!(l, Lit::Pos(a) if a.pred == SETTINGS_ROW))
+    };
+    if !program
+        .statements
+        .iter()
+        .any(|s| matches!(s, Stmt::Rule(r) if uses(r)))
+    {
+        return program;
+    }
+    let is_settings =
+        |t: Option<&Term>| !matches!(t, Some(Term::Val(Value::Str(s))) if s != SETTINGS);
+    // The relations that read a settings cell, however indirectly (a
+    // variable type may be the settings).
+    let reads = |l: &Lit| match l {
+        Lit::Pos(a) | Lit::Not(a) => {
+            (matches!(a.pred.as_str(), "attr" | "arg" | "arg_add") && is_settings(a.args.first()))
+                || matches!(a.pred.as_str(), "setting" | "setting_add")
+        }
+        _ => false,
+    };
+    let mut tainted: BTreeSet<String> = BTreeSet::new();
+    loop {
+        let before = tainted.len();
+        for st in &program.statements {
+            if let Stmt::Rule(r) = st
+                && r.body.iter().any(|l| {
+                    reads(l) || matches!(l, Lit::Pos(a) | Lit::Not(a) if tainted.contains(&a.pred))
+                })
+            {
+                tainted.insert(r.head.pred.clone());
+            }
+        }
+        if tainted.len() == before {
+            break;
+        }
+    }
+    let row = |key: &Term, prefix: &[Lit]| -> Option<Stmt> {
+        let kept: Vec<Lit> = prefix
+            .iter()
+            .filter(|l| match l {
+                Lit::Pos(a) => !reads(l) && !tainted.contains(&a.pred) && a.pred != SETTINGS_ROW,
+                Lit::Eq(..) => true,
+                _ => false,
+            })
+            .cloned()
+            .collect();
+        let bound = bound_by(&kept.iter().collect::<Vec<_>>());
+        let kept: Vec<Lit> = kept
+            .into_iter()
+            .filter(|l| match l {
+                Lit::Eq(a, b) => [a, b]
+                    .iter()
+                    .all(|t| count_vars_in_term(t).keys().all(|v| bound.contains(v))),
+                _ => true,
+            })
+            .collect();
+        if !count_vars_in_term(key).keys().all(|v| bound.contains(v)) {
+            return None;
+        }
+        let head = Atom {
+            pred: SETTINGS_ROW.to_string(),
+            args: vec![key.clone()],
+            record: None,
+            span: Span::default(),
+        };
+        Some(fact_or_rule(head, &kept))
+    };
+    let mut rows = Vec::new();
+    for st in &program.statements {
+        let (head, body): (&Atom, &[Lit]) = match st {
+            Stmt::Fact(a) => (a, &[]),
+            Stmt::Rule(r) if !uses(r) => (&r.head, &r.body),
+            _ => continue,
+        };
+        if matches!(head.pred.as_str(), "arg" | "arg_add")
+            && matches!(head.args.first(), Some(Term::Val(Value::Str(s))) if s == SETTINGS)
+            && let Some(key) = head.args.get(1)
+        {
+            rows.extend(row(key, body));
+        }
+        for (k, l) in body.iter().enumerate() {
+            if let Lit::Pos(a) | Lit::Not(a) = l
+                && a.pred == "attr"
+                && matches!(a.args.first(), Some(Term::Val(Value::Str(s))) if s == SETTINGS)
+                && let Some(key) = a.args.get(1)
+            {
+                rows.extend(row(key, &body[..k]));
+            }
+        }
+    }
+    let mut seen = BTreeSet::new();
+    for r in rows {
+        if seen.insert(format!("{r:?}")) {
+            program.statements.push(r);
+        }
+    }
+    program
 }
 
 /// A head with no body and no variables is a fact; anything else a rule.

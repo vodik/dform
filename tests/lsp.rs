@@ -623,7 +623,7 @@ fn completion_reads_the_schema_and_the_modules() {
     let outputs = labels(&c.at("textDocument/completion", &stack, (n - 3, 17)));
     assert_eq!(outputs, vec!["vpc", "private_subnet_ids"], "{outputs:?}");
     let grants = labels(&c.at("textDocument/completion", &stack, (n - 2, 23)));
-    assert!(grants.contains(&"_.cidr".to_string()), "{grants:?}");
+    assert!(grants.contains(&"t.cidr".to_string()), "{grants:?}");
     assert!(grants.contains(&"net.vpc.cidr".to_string()), "{grants:?}");
 
     // A plain word: the builtins it starts, their signatures.
@@ -1082,7 +1082,7 @@ fn references_of_every_kind_of_name() {
     for want in [
         ("stacks/dform.df".to_string(), 18),
         ("stacks/dform.df".into(), 24),
-        ("stacks/dform.df".into(), 43),
+        ("stacks/dform.df".into(), 39),
         ("stacks/dform.df".into(), 111),
         ("modules/network.df".into(), 13),
         ("policies/baseline.df".into(), 22),
@@ -1098,8 +1098,8 @@ fn references_of_every_kind_of_name() {
         vec![
             ("modules/network.df".into(), 9),
             ("modules/network.df".into(), 12),
-            ("stacks/dform.df".into(), 58),
-            ("stacks/dform.df".into(), 62),
+            ("stacks/dform.df".into(), 54),
+            ("stacks/dform.df".into(), 60),
         ]
     );
 
@@ -1107,7 +1107,7 @@ fn references_of_every_kind_of_name() {
     let found = references(&mut c, &root, &stack, find(&stack, "let cfg", 4));
     assert_eq!(
         found,
-        at_places("stacks/dform.df", &[43, 58, 62, 67, 68, 73, 74, 75, 99])
+        at_places("stacks/dform.df", &[39, 54, 60, 66, 67, 73, 74, 75, 99])
     );
     let found = references(&mut c, &root, &network, find(&network, "type subnets", 5));
     assert_eq!(
@@ -1127,9 +1127,9 @@ fn references_of_every_kind_of_name() {
         found,
         vec![
             ("modules/network.df".into(), 3),
-            ("stacks/dform.df".into(), 57),
-            ("stacks/dform.df".into(), 61),
-            ("stacks/dform.df".into(), 69),
+            ("stacks/dform.df".into(), 53),
+            ("stacks/dform.df".into(), 58),
+            ("stacks/dform.df".into(), 68),
             ("stacks/dform.df".into(), 76),
             ("stacks/dform.df".into(), 86),
             ("stacks/dform.df".into(), 86),
@@ -1142,13 +1142,13 @@ fn references_of_every_kind_of_name() {
         find(&stack, "instance database main", 18),
     );
     // Its resources' addresses from outside are strings (H-16).
-    assert_eq!(found, at_places("stacks/dform.df", &[66]));
+    assert_eq!(found, at_places("stacks/dform.df", &[64]));
     let found = references(&mut c, &root, &stack, find(&stack, "use baseline", 6));
     assert_eq!(
         found,
         vec![
             ("policies/baseline.df".into(), 3),
-            ("stacks/dform.df".into(), 52),
+            ("stacks/dform.df".into(), 48),
         ]
     );
 

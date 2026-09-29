@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== examples/demo/stacks/dform.df: 172 nodes, 805 edges (577 negative)
+== examples/demo/stacks/dform.df: 172 nodes, 862 edges (613 negative)
    STRATIFIED, 19 strata
    stratum 0:
      (arg, iam.policy, name)
@@ -16,7 +16,6 @@ exit: ok
      allow_stuck
      data
      doc
-     env_name
      identity
      input
      may_derive
@@ -54,6 +53,7 @@ exit: ok
      (attr, net.route, id)
      cfg
      env
+     settings_row
      vpc_peer
      vpc_peer_pair
    stratum 3:

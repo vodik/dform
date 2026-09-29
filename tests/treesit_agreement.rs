@@ -402,7 +402,7 @@ fn edge_cases_agree() {
         "p(x) if v = xs[i], has x.a, 1 <= x <= 3\n",
         "p(x) if exists x\n",
         "when env == \"prod\" {\n  q(1)\n}\n",
-        "module m {\n  input on: bool = true where on\n  output v: net.vpc = vpc\n  export q\n  export type t\n  contributes _.tags\n}\n",
+        "module m {\n  input on: bool = true where on\n  output v: net.vpc = vpc\n  export q\n  export type t\n  contributes t.tags\n}\n",
         "output k: int = n if q(n)\n",
         "extern file.json(+path, -value: string) persist\n",
         "decl p(a, b) mixed\ndecl q(a: int, b: list(string))\n",

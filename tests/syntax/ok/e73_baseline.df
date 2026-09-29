@@ -2,7 +2,7 @@ policy baseline {
   # Grants are partition patterns: this pack sits above readers of .tags,
   # of iam.policy's .statements and of settings' .audit.sinks, and may read
   # every other attribute path.
-  contributes _.tags
+  contributes t.tags
   contributes iam.policy.statements
   contributes settings.audit.sinks
 

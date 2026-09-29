@@ -899,7 +899,7 @@ fn check_grants(
         let pat_t = if matches!(typ, Term::Val(_)) {
             term_text(typ)
         } else {
-            "_".into()
+            "t".into()
         };
         let pat_p = if matches!(path, Term::Val(_)) {
             p.clone()

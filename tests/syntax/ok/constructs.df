@@ -36,7 +36,7 @@ module m {
 instance m main { on = true }
 
 policy p {
-  contributes _.tags
+  contributes t.tags
   arg(t, a_, "tags", { owner: "ops" }) @override if want(t, a_)
 }
 

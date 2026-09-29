@@ -164,7 +164,7 @@ fn a_pack_writes_only_inside_its_grants() {
     let src = r#"edition 2026
 resource net.vpc main { cidr = "10.0.0.0/16" }
 policy tags {
-  contributes _.tags
+  contributes t.tags
   arg(t, a, "tags", { team: "x" }) if want(t, a)
   set a.cidr = "10.9.0.0/16" @override if a in net.vpc
 }
@@ -178,8 +178,8 @@ use tags
         r.stderr
     );
     let r = plan(&src.replace(
-        "contributes _.tags",
-        "contributes _.tags\n  contributes net.vpc.cidr",
+        "contributes t.tags",
+        "contributes t.tags\n  contributes net.vpc.cidr",
     ))
     .success();
     assert!(r.stdout.contains("cidr = \"10.9.0.0/16\""), "{}", r.stdout);
