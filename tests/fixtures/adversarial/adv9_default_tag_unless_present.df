@@ -9,8 +9,7 @@ resource net.vpc main {
   tags = { env: "dev" }
 }
 
-arg_add(t, n, "tags", { team: "platform" }) if
-  {
+arg_add(t, n, "tags", { team: "platform" }) if {
     want(t, n)
     not arg(t, n, "tags", { team: "platform" })
   }

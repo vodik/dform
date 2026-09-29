@@ -1,6 +1,6 @@
 # The crud-api release: the image digest and the schema version it needs.
 
-edition 2026
+edition 2027
 
 release("crud_api", "digest", "sha256:9f2c4d0e8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d")
 release("crud_api", "schema", 42)

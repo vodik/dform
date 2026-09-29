@@ -14,7 +14,7 @@
 # schema and this project's providers/google and providers/random), and
 # applies to a cluster with kubernetes = "providers/k8s" there. In
 # production the release and the approvals come from git:
-#   input relation release/3 from file("data/releases.facts")
+#   input release(app, key, value) from facts("data/releases.facts")
 # The live objects are read through the kubernetes provider's inventory
 # (`world.T[e].p`), named by remote id (`shop/crud-api`).
 
@@ -33,9 +33,9 @@ input replicas: int = 2 where replicas >= 1
 
 # release("crud_api", "digest", "sha256:9f2c...")
 # release("crud_api", "schema", 42)
-input relation release/3 from file("data/releases.facts")
+input release(app, key, value) from facts("data/releases.facts")
 # approve(t, a): accept the drift of t.a
-input relation approve/2 from file("data/approvals.facts")
+input approve(type, address) from facts("data/approvals.facts")
 
 # A generated password: a secret null until the first apply, the same
 # value on every later run (persisted in state, E DR-7).
@@ -213,8 +213,6 @@ module app {
   input namespace: string
   input db_secret: string
   input replicas: int
-  output ready_replicas: int
-  output total_replicas: int
 
   let labels = { app: "crud-api", color: color }
 
@@ -266,8 +264,8 @@ module app {
 
   # Only while the instance runs: a color with no run has no Deployment,
   # and a ref to it would dangle.
-  output("ready_replicas", n) if has color, n = deploy.status.readyReplicas
-  output("total_replicas", n) if has color, n = deploy.status.replicas
+  output ready_replicas: int = n if has color, n = deploy.status.readyReplicas
+  output total_replicas: int = n if has color, n = deploy.status.replicas
 }
 
 ########################################

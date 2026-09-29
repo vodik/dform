@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== examples/gke/stacks/gke_two_phase.df: 130 nodes, 239 edges (122 negative)
+== examples/gke/stacks/gke_two_phase.df: 131 nodes, 251 edges (122 negative)
    STRATIFIED, 6 strata
    stratum 0:
      (arg, google.client_config, access_token)
@@ -81,6 +81,7 @@ exit: ok
      (want, k8s.deployment)
      (want, k8s.secret)
      __refine_zones
+     cfg
      env
      project
      zones

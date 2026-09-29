@@ -16,7 +16,6 @@ names(n) if project( network_name: n )
 
 module m {
   input on: bool
-  output vpc: addr
   export on_vpc
   contributes iam_need
 
@@ -31,7 +30,7 @@ module m {
 
   on_vpc("vpc") if on(true)
   iam_need("app", "net.read", ref(net.vpc, "vpc", "id"))
-  output vpc = vpc
+  output vpc: addr = vpc
 }
 
 instance m main { on = true }

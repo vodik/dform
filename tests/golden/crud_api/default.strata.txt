@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== examples/crud-api/stacks/crud_api.df: 222 nodes, 1417 edges (366 negative)
+== examples/crud-api/stacks/crud_api.df: 224 nodes, 1427 edges (366 negative)
    STRATIFIED, 15 strata
    stratum 0:
      (arg, google_sql_database, instance)
@@ -25,6 +25,7 @@ exit: ok
      drift
      identity
      input
+     live
      live_image
      live_schema
      other
@@ -117,6 +118,7 @@ exit: ok
      (want, google_compute_network)
      (want, google_sql_database_instance)
      __refine_replicas
+     cfg
      env
      region
      replicas

@@ -5,7 +5,7 @@ policy baseline {
   # iam.policy's .statements and settings' .audit.sinks, and nothing else.
   contributes _.tags
   contributes iam.policy.statements
-  contributes settings["audit"].sinks
+  contributes settings.audit.sinks
 
   # Lattices for paths several authors contribute to. Object paths such as
   # `tags` are maps by default; a list is one value unless declared a set.

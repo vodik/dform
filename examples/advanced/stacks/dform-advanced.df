@@ -54,11 +54,9 @@ resource net.vpc t {
 # In staging, only tenant_a peers with shared.
 # In prod, tenant_b also peers with shared, which creates tenant->tenant reachability via shared.
 # A fact and a guarded fact (a rule): declared mixed (E 2.6).
-decl peer_intent/1 mixed
+decl peer_intent(tenant) mixed
 peer_intent("tenant_a")
-when env == "prod" {
-  peer_intent("tenant_b")
-}
+peer_intent("tenant_b") if env == "prod"
 
 peer("shared", t) if peer_intent(t), tenant(t, _)
 
@@ -114,7 +112,7 @@ warn "mesh has direct route between non-adjacent nodes" { from: a, to: b } if {
 
 # Declared so the check can negate it with no rows; uncomment the fact to
 # explicitly allow certain non-adjacent direct routes:
-decl mesh_allow_direct_route/2
+decl mesh_allow_direct_route(from, to)
 # mesh_allow_direct_route("core_a", "core_c")
 
 # --- Auto-mesh demo (derived links from a list) ---
@@ -123,7 +121,7 @@ decl mesh_allow_direct_route/2
 # We immediately explode it into row facts, then derive edges, then rely on
 # reachability closure to fill in the implied connectivity.
 
-mesh_vpc(name, cidr, i) if { name: name, net: cidr } = settings[env].mesh.vpcs[i]
+mesh_vpc(name, cidr, i) if settings[env].mesh.vpcs[i] = { name: name, net: cidr }
 
 resource net.vpc name {
   if mesh_vpc(name, cidr, _)

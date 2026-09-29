@@ -81,8 +81,7 @@ peering("prod", "envoy-prod-legacy", "projects/coherentpath-prod/global/networks
 # Derived project facts for the active env
 ########################################
 
-project(id, name, region, net_id) if
-  {
+project(id, name, region, net_id) if {
     env(e)
     setting(e, "project_id", id)
     setting(e, "project_name", name)
@@ -144,8 +143,7 @@ resource google.compute_network_peering p {
 }
 
 # One static address per declared static IP; the map explodes into rows.
-static_ip(ip_name, type_) if
-  {
+static_ip(ip_name, type_) if {
     env(e)
     setting(e, "gke.static_ips", ips)
     member_kv(ips, ip_name, { type: type_ })

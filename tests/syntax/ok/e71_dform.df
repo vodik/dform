@@ -105,8 +105,7 @@ instance iam main {}
 # Peering between network instances. Each instance exports its vpc address.
 vpc_peer_inst("main", "peer")
 
-vpc_peer(a_, b) if
-  {
+vpc_peer(a_, b) if {
     vpc_peer_inst(i_a, i_b)
     output(network[i_a], "vpc", a_)
     output(network[i_b], "vpc", b)
@@ -133,15 +132,13 @@ resource compute.vm bastion {
 }
 
 # Stack-level policy. Ids are stable; messages are free text.
-deny("prod_db_multi_az", "prod db must be multi_az", { db: db_ }) if
-  {
+deny("prod_db_multi_az", "prod db must be multi_az", { db: db_ }) if {
     env("prod")
     want("db.postgres", db_)
     not attr("db.postgres", db_, "multi_az", true)
   }
 
-deny("prod_k8s_private_api", "prod k8s must have private api", { cluster: c }) if
-  {
+deny("prod_k8s_private_api", "prod k8s must have private api", { cluster: c }) if {
     env("prod")
     want(k8s.cluster, c)
     not attr(k8s.cluster, c, "private_api", true)

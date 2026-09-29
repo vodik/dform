@@ -4,7 +4,7 @@ policy baseline {
   # every other attribute path.
   contributes _.tags
   contributes iam.policy.statements
-  contributes settings["audit"].sinks
+  contributes settings.audit.sinks
 
   arg(t, a_, "tags", { team: "platform" }) if want(t, a_)
 

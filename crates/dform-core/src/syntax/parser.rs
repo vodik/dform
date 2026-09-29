@@ -569,7 +569,7 @@ impl<'a> Parser<'a> {
             }
             INPUT_KW if self.raw(2) == L_PAREN => self.simple(INPUT_RELATION, |p| {
                 p.expect_word()?;
-                p.columns(false)?;
+                p.columns(true)?;
                 if !p.at_contextual("from") {
                     return p.err_expected("`from`");
                 }

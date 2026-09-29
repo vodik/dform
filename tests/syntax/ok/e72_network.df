@@ -1,8 +1,6 @@
 module network {
   input vpc_net: inet where prefix_len(vpc_net) <= 20
   input zones: list(string) = ["us-test-1a", "us-test-1b"] # @default contribution
-  output vpc: addr
-  output private_subnet_ids: list(ref(net.subnet))
   export subnet_of
 
   resource net.vpc vpc {
@@ -30,7 +28,7 @@ module network {
 
   subnet_of(sn, "vpc") if want(net.subnet, sn)
 
-  output vpc = vpc
-  output private_subnet_ids =
+  output vpc: addr = vpc
+  output private_subnet_ids: list(ref(net.subnet)) = 
     [ ref(net.subnet, sn, "id") | want(net.subnet, sn), attr(net.subnet, sn, "visibility", "private") ]
 }

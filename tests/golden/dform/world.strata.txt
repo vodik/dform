@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== examples/demo/stacks/dform.df: 171 nodes, 804 edges (577 negative)
+== examples/demo/stacks/dform.df: 172 nodes, 805 edges (577 negative)
    STRATIFIED, 19 strata
    stratum 0:
      (arg, iam.policy, name)
@@ -52,6 +52,7 @@ exit: ok
      (attr, iam.role, id)
      (attr, iam.role_policy_attachment, id)
      (attr, net.route, id)
+     cfg
      env
      vpc_peer
      vpc_peer_pair

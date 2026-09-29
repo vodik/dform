@@ -2,8 +2,6 @@ edition 2027
 
 module network {
   input vpc_net: inet
-  output vpc: net.vpc
-  output private_subnet_ids: list(ref(net.subnet))
 
   resource net.vpc vpc {
     cidr = vpc_net
@@ -21,6 +19,6 @@ module network {
     visibility = "private"
   }
 
-  output vpc = vpc
-  output private_subnet_ids = [ s.id | s in net.subnet, s.visibility == "private" ]
+  output vpc: net.vpc = vpc
+  output private_subnet_ids: list(ref(net.subnet)) = [ s.id | s in net.subnet, s.visibility == "private" ]
 }

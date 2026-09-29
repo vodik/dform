@@ -144,6 +144,8 @@ struct Decls {
     externs: BTreeMap<String, Vec<(bool, String)>>,
     /// Scenario scopes: a `set` of a stack input is theirs.
     scenarios: BTreeSet<usize>,
+    /// Relations the program's own facts and rules define.
+    heads: BTreeSet<String>,
 }
 
 const PROGRAM: usize = 0;
@@ -475,7 +477,7 @@ impl<'u> Lowerer<'u> {
         for u in units {
             let scope = l.new_scope(PROGRAM);
             l.decls.files.insert(u.file, scope);
-            l.collect(u.file, &u.root, PROGRAM);
+            l.collect(u.file, &u.root, PROGRAM, scope);
         }
         l.decls.types.extend(schema_types().iter().cloned());
         l.decls.namespaces = l
@@ -495,9 +497,10 @@ impl<'u> Lowerer<'u> {
         });
         self.decls.scopes.len() - 1
     }
-
+    /// Record the declarations of a statement list in `decl`; a module,
+    /// policy or scenario block nests in `outer`.
     /// Record the declarations of a statement list in `decl`.
-    fn collect(&mut self, file: u32, parent: &SyntaxNode, decl: usize) {
+    fn collect(&mut self, file: u32, parent: &SyntaxNode, decl: usize, outer: usize) {
         let arity = |n: &SyntaxNode| n.children().filter(|c| c.kind() == BIND_ARG).count();
         for n in parent.children() {
             match n.kind() {
@@ -580,7 +583,7 @@ impl<'u> Lowerer<'u> {
                     self.decls.scopes[decl].instances.insert((m, i));
                 }
                 MODULE | POLICY | SCENARIO => {
-                    let scope = self.new_scope(decl);
+                    let scope = self.new_scope(outer);
                     let start: u32 = n.text_range().start().into();
                     self.decls.blocks.insert((file, start), scope);
                     match n.kind() {
@@ -593,7 +596,7 @@ impl<'u> Lowerer<'u> {
                         _ => {}
                     }
                     if let Some(b) = node(&n, STMT_BLOCK) {
-                        self.collect(file, &b, scope);
+                        self.collect(file, &b, scope, scope);
                     }
                 }
                 RULE | FACT => {
@@ -627,6 +630,7 @@ impl<'u> Lowerer<'u> {
                             .entry(name.clone())
                             .or_default()
                             .insert(n_args);
+                        self.decls.heads.insert(name.clone());
                         self.decls.relations.insert(name);
                     }
                 }
@@ -972,7 +976,11 @@ impl<'u> Lowerer<'u> {
             let Some(lhs) = ts.next().and_then(|t| Chain::of(&t)) else {
                 continue;
             };
-            if !lhs.is_bare() || rc.types.contains_key(&lhs.head) {
+            // A resource named in scope is its address, not a variable.
+            if !lhs.is_bare()
+                || rc.types.contains_key(&lhs.head)
+                || self.resource(scope, &lhs.head).is_some()
+            {
                 continue;
             }
             if tokens(&c).any(|t| t.kind() == RESOURCE_KW) {
@@ -1179,9 +1187,10 @@ impl<'u> Lowerer<'u> {
 
     // --- declarations that lower to themselves ----------------------------
 
-    /// `decl p(a, b)` declares the relation `p/2` by its columns (a
-    /// relation a provider may feed, H-11); `decl p(a, b) mixed` lets it
-    /// have both facts and rules. The column names are the record form's.
+    /// `decl p(a, b)` declares the relation `p/2` by its columns (H-11):
+    /// one no rule of the program defines is fed from outside (a provider,
+    /// a given fact); `decl p(a, b) mixed` lets it have both facts and
+    /// rules. The column names are the named-argument form's.
     fn decl(&mut self, n: &SyntaxNode, span: Span) -> Vec<Stmt> {
         let pred = dotted_text(n, 1);
         let fields: Vec<String> = n
@@ -1196,10 +1205,14 @@ impl<'u> Lowerer<'u> {
             arity,
             span,
         };
-        vec![
-            if mixed { Stmt::Mixed(e) } else { Stmt::Extern(e) },
-            Stmt::Decl(Decl { pred, fields, span }),
-        ]
+        let mut out = Vec::new();
+        if mixed {
+            out.push(Stmt::Mixed(e));
+        } else if !self.decls.heads.contains(&pred) {
+            out.push(Stmt::Extern(e));
+        }
+        out.push(Stmt::Decl(Decl { pred, fields, span }));
+        out
     }
 
     /// `input p(a: T, ..) from facts(PATH)`: a relation read from a dform
@@ -1486,6 +1499,12 @@ impl<'u> Lowerer<'u> {
             let name = word_text(&b, 0);
             let ty = node(&b, TYPE_EXPR).map(|t| self.type_expr(&t));
             let at = self.span(&b);
+            if ty.is_none() {
+                return self.error(
+                    at,
+                    format!("input relation {pred}: a table's column {name} needs a type"),
+                );
+            }
             if cols.iter().any(|c| c.name == name) {
                 return self.error(
                     at,
@@ -2601,6 +2620,32 @@ impl<'u> Lowerer<'u> {
                 }
             }
         }
+        // `pattern = e[i]` (or `e[i] = pattern`): an element matched by a
+        // pattern is `member(e, i, pattern)` (H-9).
+        if ts.len() == 2 && ops.as_slice() == [EQ] {
+            for (c, p) in [(&ts[1], &ts[0]), (&ts[0], &ts[1])] {
+                if !matches!(p.kind(), OBJECT | LIST) {
+                    continue;
+                }
+                let Some(ch) = Chain::of(c) else { continue };
+                let Some(Op::Index(ix, _)) = ch.ops.last() else {
+                    continue;
+                };
+                if ix.len() != 1 {
+                    continue;
+                }
+                let ix = ix[0].clone();
+                let mut list = ch.clone();
+                list.ops.pop();
+                let res = self.resolve(rc, &list, out)?;
+                let span = self.span(n);
+                let l = self.realize(rc, res, Pos::Content, out, span)?;
+                let i = self.bind(true, |x| x.term(rc, &ix, Pos::Content, out))?;
+                let pat = self.bind(true, |x| x.term(rc, p, Pos::Content, out))?;
+                out.push(Lit::Pos(atom_at("member", vec![l, i, pat], span)));
+                return Ok(());
+            }
+        }
         let mut lowered = Vec::new();
         for (i, t) in ts.iter().enumerate() {
             // `=` binds either side; `==`, `!=` and the orders test.
@@ -3412,11 +3457,6 @@ impl<'u> Lowerer<'u> {
         let (inst, rest) = match c.ops.first() {
             Some(Op::Field(i)) if self.decls.instances.get(m).is_some_and(|s| s.contains(i)) => {
                 (str_term(&format!("{m}.{i}")), &c.ops[1..])
-            }
-            Some(Op::Field(i)) => {
-                return self
-                    .error(span, format!("module {m} has no instance `{i}`"))
-                    .map(Some);
             }
             Some(Op::Index(ts, _)) if ts.len() == 1 => {
                 let e = self.bind(true, |l| l.term(rc, &ts[0], Pos::Content, pre))?;

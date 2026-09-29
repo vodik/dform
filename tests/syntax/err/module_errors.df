@@ -5,12 +5,11 @@ edition 2027
 module network {
   input vpc_net: inet
   input zones: list(string) = ["a"]
-  output vpc: addr
   export subnet_of
   contributes _.tags
 
   zone_index("a", 0)
-  output vpc = "vpc"
+  output vpc: addr = "vpc"
   output peers = []
 }
 

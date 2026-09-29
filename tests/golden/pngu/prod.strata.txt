@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== examples/pngu/stacks/pngu.df: 160 nodes, 428 edges (297 negative)
+== examples/pngu/stacks/pngu.df: 161 nodes, 449 edges (297 negative)
    STRATIFIED, 6 strata
    stratum 0:
      (arg, google.client_config, access_token)
@@ -111,6 +111,7 @@ exit: ok
      (want, google_compute_network_peering)
      (want, google_compute_subnetwork)
      (want, google_monitoring_dashboard)
+     cfg
      env
      provider_config
      provider_expect_account

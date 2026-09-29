@@ -7,8 +7,6 @@ module network {
   export type subnets
   #| The VPC's IPv4 range; each zone's subnet is a /20 of it.
   input vpc_net: inet
-  output vpc: net.vpc
-  output private_subnet_ids: subnets
 
   resource net.vpc vpc {
     cidr = vpc_net
@@ -26,6 +24,6 @@ module network {
     visibility = "private"
   }
   #| The network's VPC, for peering.
-  output vpc = vpc
-  output private_subnet_ids = [ s.id | s in net.subnet, s.visibility == "private" ]
+  output vpc: net.vpc = vpc
+  output private_subnet_ids: subnets = [ s.id | s in net.subnet, s.visibility == "private" ]
 }
