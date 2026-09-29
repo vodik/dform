@@ -20,9 +20,7 @@ input env: enum("dev", "staging", "prod") = "staging"
 zone("us-test-1a")
 zone("us-test-1b")
 
-when env("prod") {
-  iam_need("app", "audit.write", "audit-log")
-}
+iam_need("app", "audit.write", "audit-log") if env == "prod"
 
 # Settings are a resource of type `settings`, addressed by environment.
 # A user schema for the open type gives typed, refined settings.
@@ -34,7 +32,7 @@ type settings {
 # Base layer at rank @default: every environment. Overrides below are the
 # normal rank and win per leaf. This replaces three copies of the block.
 settings e @default {
-  for env_name(e)
+  if env_name(e)
   network.main.vpc_net = inet("10.90.0.0/16")
   network.peer.vpc_net = inet("10.91.0.0/16")
   db = { backup_days: 3, multi_az: false }
@@ -65,35 +63,39 @@ import "modules/iam.df"
 import "modules/stdlib_net.df"
 import "policies/baseline.df"
 
-apply baseline
-apply stdlib_net
+use baseline
+use stdlib_net
 
 # Module instances. Inputs are typed at the module; the body binds them.
 instance network main {
-  for env(e), setting(e, .network.main.vpc_net, v)
+  if e = env, setting(e, "network.main.vpc_net", v)
   vpc_net = v
 }
 instance network peer {
-  for env(e), setting(e, .network.peer.vpc_net, v)
+  if e = env, setting(e, "network.peer.vpc_net", v)
   vpc_net = v
 }
 
 instance database main {
-  for env(e),
-    setting(e, .db.backup_days, days),
-    setting(e, .db.multi_az, m_a),
+  if {
+    e = env
+    setting(e, "db.backup_days", days)
+    setting(e, "db.multi_az", m_a)
     output("network.main", "private_subnet_ids", ids)
+  }
   backup_days = days
   multi_az = m_a
   subnet_ids = ids
 }
 
 instance kubernetes main {
-  for env(e),
-    setting(e, .k8s.private_api, api_),
-    setting(e, .k8s.nodepool.min, min),
-    setting(e, .k8s.nodepool.max, max),
+  if {
+    e = env
+    setting(e, "k8s.private_api", api_)
+    setting(e, "k8s.nodepool.min", min)
+    setting(e, "k8s.nodepool.max", max)
     output("network.main", "private_subnet_ids", ids)
+  }
   private_api = api_
   nodepool_min = min
   nodepool_max = max
@@ -105,36 +107,40 @@ instance iam main {}
 # Peering between network instances. Each instance exports its vpc address.
 vpc_peer_inst("main", "peer")
 
-vpc_peer(a_, b) if
-  vpc_peer_inst(i_a, i_b),
-  output(network[i_a], "vpc", a_),
+vpc_peer(a_, b) if {
+  vpc_peer_inst(i_a, i_b)
+  output(network[i_a], "vpc", a_)
   output(network[i_b], "vpc", b)
+}
 
 # requester_vpc_id and accepter_vpc_id are fresh nulls at plan time. They are
 # forwarded, never inspected, so this resource is definite and single-phase.
 resource net.vpc_peering peer {
-  for vpc_peer_inst(i_a, i_b), vpc_peer(a_, b),
-    peer = format("peer-%s-%s", i_a, i_b)
-  requester_vpc_id = ref(net.vpc, a_, .id)
-  accepter_vpc_id = ref(net.vpc, b, .id)
+  if vpc_peer_inst(i_a, i_b), vpc_peer(a_, b), peer = format("peer-%s-%s", i_a, i_b)
+  requester_vpc_id = ref(net.vpc, a_, "id")
+  accepter_vpc_id = ref(net.vpc, b, "id")
 }
 
 # A bastion with an address carved from the main VPC. The setting is a
 # constant, so inet_host is not stuck; only subnet_id carries a null.
 resource compute.vm bastion {
-  for env(e), setting(e, .network.main.vpc_net, net_)
+  if e = env, setting(e, "network.main.vpc_net", net_)
   private_ip = inet_host(net_, 20)
-  subnet_id = ref(net.subnet, network.main/private_a, .id)
+  subnet_id = ref(net.subnet, network.main / private_a, "id")
 }
 
 # Stack-level policy. Ids are stable; messages are free text.
-deny("prod_db_multi_az", "prod db must be multi_az", { db: db_ }) if
-  env("prod"), want("db.postgres", db_),
-  not attr("db.postgres", db_, .multi_az, true)
+deny("prod_db_multi_az", "prod db must be multi_az", { db: db_ }) if {
+  env == "prod"
+  want("db.postgres", db_)
+  not attr("db.postgres", db_, "multi_az", true)
+}
 
-deny("prod_k8s_private_api", "prod k8s must have private api", { cluster: c }) if
-  env("prod"), want(k8s.cluster, c),
-  not attr(k8s.cluster, c, .private_api, true)
+deny("prod_k8s_private_api", "prod k8s must have private api", { cluster: c }) if {
+  env == "prod"
+  want(k8s.cluster, c)
+  not attr(k8s.cluster, c, "private_api", true)
+}
 
 ---
 
@@ -194,25 +200,21 @@ deny("prod_k8s_private_api", "prod k8s must have private api", { cluster: c }) i
       (arguments
         (string
           (string_content)))))
-  (when
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content))))
     (body
-      (atom_literal
-        (call
-          (identifier)
-          (arguments
-            (string
-              (string_content))))))
-    (statement_block
-      (fact
-        (call
-          (identifier)
-          (arguments
-            (string
-              (string_content))
-            (string
-              (string_content))
-            (string
-              (string_content)))))))
+      (comparison
+        (identifier)
+        (string
+          (string_content)))))
   (comment)
   (comment)
   (type_declaration
@@ -419,9 +421,9 @@ deny("prod_k8s_private_api", "prod k8s must have private api", { cluster: c }) i
   (import
     (string
       (string_content)))
-  (apply
+  (use
     (identifier))
-  (apply
+  (use
     (identifier))
   (comment)
   (instance
@@ -430,17 +432,16 @@ deny("prod_k8s_private_api", "prod k8s must have private api", { cluster: c }) i
     (block
       (clause
         (body
-          (atom_literal
-            (call
-              (identifier)
-              (arguments
-                (identifier))))
+          (comparison
+            (identifier)
+            (identifier))
           (atom_literal
             (call
               (identifier)
               (arguments
                 (identifier)
-                (keypath)
+                (string
+                  (string_content))
                 (identifier))))))
       (field
         (block_path
@@ -452,17 +453,16 @@ deny("prod_k8s_private_api", "prod k8s must have private api", { cluster: c }) i
     (block
       (clause
         (body
-          (atom_literal
-            (call
-              (identifier)
-              (arguments
-                (identifier))))
+          (comparison
+            (identifier)
+            (identifier))
           (atom_literal
             (call
               (identifier)
               (arguments
                 (identifier)
-                (keypath)
+                (string
+                  (string_content))
                 (identifier))))))
       (field
         (block_path
@@ -473,25 +473,25 @@ deny("prod_k8s_private_api", "prod k8s must have private api", { cluster: c }) i
     (identifier)
     (block
       (clause
-        (body
+        (body_block
+          (comparison
+            (identifier)
+            (identifier))
           (atom_literal
             (call
               (identifier)
               (arguments
+                (identifier)
+                (string
+                  (string_content))
                 (identifier))))
           (atom_literal
             (call
               (identifier)
               (arguments
                 (identifier)
-                (keypath)
-                (identifier))))
-          (atom_literal
-            (call
-              (identifier)
-              (arguments
-                (identifier)
-                (keypath)
+                (string
+                  (string_content))
                 (identifier))))
           (atom_literal
             (call
@@ -519,32 +519,33 @@ deny("prod_k8s_private_api", "prod k8s must have private api", { cluster: c }) i
     (identifier)
     (block
       (clause
-        (body
+        (body_block
+          (comparison
+            (identifier)
+            (identifier))
           (atom_literal
             (call
               (identifier)
               (arguments
+                (identifier)
+                (string
+                  (string_content))
                 (identifier))))
           (atom_literal
             (call
               (identifier)
               (arguments
                 (identifier)
-                (keypath)
+                (string
+                  (string_content))
                 (identifier))))
           (atom_literal
             (call
               (identifier)
               (arguments
                 (identifier)
-                (keypath)
-                (identifier))))
-          (atom_literal
-            (call
-              (identifier)
-              (arguments
-                (identifier)
-                (keypath)
+                (string
+                  (string_content))
                 (identifier))))
           (atom_literal
             (call
@@ -590,7 +591,7 @@ deny("prod_k8s_private_api", "prod k8s must have private api", { cluster: c }) i
       (arguments
         (identifier)
         (identifier)))
-    (body
+    (body_block
       (atom_literal
         (call
           (identifier)
@@ -658,7 +659,8 @@ deny("prod_k8s_private_api", "prod k8s must have private api", { cluster: c }) i
               (identifier)
               (identifier))
             (identifier)
-            (keypath))))
+            (string
+              (string_content)))))
       (field
         (block_path
           (identifier))
@@ -669,7 +671,8 @@ deny("prod_k8s_private_api", "prod k8s must have private api", { cluster: c }) i
               (identifier)
               (identifier))
             (identifier)
-            (keypath))))))
+            (string
+              (string_content)))))))
   (comment)
   (comment)
   (resource
@@ -680,17 +683,16 @@ deny("prod_k8s_private_api", "prod k8s must have private api", { cluster: c }) i
     (block
       (clause
         (body
-          (atom_literal
-            (call
-              (identifier)
-              (arguments
-                (identifier))))
+          (comparison
+            (identifier)
+            (identifier))
           (atom_literal
             (call
               (identifier)
               (arguments
                 (identifier)
-                (keypath)
+                (string
+                  (string_content))
                 (identifier))))))
       (field
         (block_path
@@ -709,12 +711,13 @@ deny("prod_k8s_private_api", "prod k8s must have private api", { cluster: c }) i
             (member_expression
               (identifier)
               (identifier))
-            (instance_expression
+            (binary_expression
               (member_expression
                 (identifier)
                 (identifier))
-              (instance_name))
-            (keypath))))))
+              (identifier))
+            (string
+              (string_content)))))))
   (comment)
   (rule
     (call
@@ -728,13 +731,11 @@ deny("prod_k8s_private_api", "prod k8s must have private api", { cluster: c }) i
           (object_field
             (identifier)
             (identifier)))))
-    (body
-      (atom_literal
-        (call
-          (identifier)
-          (arguments
-            (string
-              (string_content)))))
+    (body_block
+      (comparison
+        (identifier)
+        (string
+          (string_content)))
       (atom_literal
         (call
           (identifier)
@@ -750,7 +751,8 @@ deny("prod_k8s_private_api", "prod k8s must have private api", { cluster: c }) i
               (string
                 (string_content))
               (identifier)
-              (keypath)
+              (string
+                (string_content))
               (true)))))))
   (rule
     (call
@@ -764,13 +766,11 @@ deny("prod_k8s_private_api", "prod k8s must have private api", { cluster: c }) i
           (object_field
             (identifier)
             (identifier)))))
-    (body
-      (atom_literal
-        (call
-          (identifier)
-          (arguments
-            (string
-              (string_content)))))
+    (body_block
+      (comparison
+        (identifier)
+        (string
+          (string_content)))
       (atom_literal
         (call
           (identifier)
@@ -788,5 +788,6 @@ deny("prod_k8s_private_api", "prod k8s must have private api", { cluster: c }) i
                 (identifier)
                 (identifier))
               (identifier)
-              (keypath)
+              (string
+                (string_content))
               (true))))))))

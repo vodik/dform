@@ -6,27 +6,25 @@ edition 2026
 
 module network {
   input vpc_net: inet
-  output vpc: net.vpc
-  output private_subnet_ids: list(ref(net.subnet))
 
   resource net.vpc vpc {
     cidr = vpc_net
-    tags = { env: env, component: "network" }
+    tags = { env, component: "network" }
   }
 
   zone_index("us-test-1a", 0)
   zone_index("us-test-1b", 1)
 
-  resource net.subnet "private-{z}" {
-    for data("zone", z)
+  resource net.subnet "private-${z}" {
+    if data("zone", z)
     vpc_id = vpc.id
     cidr = inet_subnet(vpc.cidr, 4, zone_index[z])
     zone = z
     visibility = "private"
   }
 
-  output vpc = vpc
-  output private_subnet_ids = [ s.id | s in net.subnet, s.visibility == "private" ]
+  output vpc: net.vpc = vpc
+  output private_subnet_ids: list(ref(net.subnet)) = [ s.id | s in net.subnet, s.visibility == "private" ]
 }
 
 ---
@@ -42,24 +40,6 @@ module network {
         (type
           (dotted_name
             (identifier))))
-      (output
-        (identifier)
-        (type
-          (dotted_name
-            (identifier)
-            (identifier))))
-      (output
-        (identifier)
-        (type
-          (dotted_name
-            (identifier))
-          (type
-            (dotted_name
-              (identifier))
-            (type
-              (dotted_name
-                (identifier)
-                (identifier))))))
       (resource
         (dotted_name
           (identifier)
@@ -75,7 +55,6 @@ module network {
               (identifier))
             (object
               (object_field
-                (identifier)
                 (identifier))
               (object_field
                 (identifier)
@@ -143,9 +122,23 @@ module network {
               (string_content)))))
       (output
         (identifier)
+        (type
+          (dotted_name
+            (identifier)
+            (identifier)))
         (identifier))
       (output
         (identifier)
+        (type
+          (dotted_name
+            (identifier))
+          (type
+            (dotted_name
+              (identifier))
+            (type
+              (dotted_name
+                (identifier)
+                (identifier)))))
         (comprehension
           (member_expression
             (identifier)

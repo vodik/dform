@@ -3,10 +3,10 @@ Headers
 ================================================================================
 
 edition 2026
-import "modules/network.df" as net
+import "modules/network.df"
 provider fake { source = "providers/fake" }
 stack dform { unknowns = "strict" }
-stack app[env] { config = yaml("config/{env}.yaml") }
+stack app[env] { config = yaml("config/${env}.yaml") }
 stack renfry.app[env, region] { backend = "x" }
 
 --------------------------------------------------------------------------------
@@ -16,8 +16,7 @@ stack renfry.app[env, region] { backend = "x" }
     (integer))
   (import
     (string
-      (string_content))
-    (identifier))
+      (string_content)))
   (provider
     (identifier)
     (block
@@ -70,19 +69,19 @@ Declarations
 
 input env: enum("dev", "prod") = "dev"
 input replicas: int = 2 where replicas >= 1
-input relation seen/2 from file("seen.facts")
-input relation peers(env: enum("dev", "prod"), name: string) from csv("peers.csv")
-input relation pinned(name: string) from yaml(git("ops.git", "main", "pinned.yaml"))
+input seen(a, b) from facts("seen.facts")
+input peers(env: enum("dev", "prod"), name: string) from csv("peers.csv")
+input pinned(name: string) from yaml(git("ops.git", "main", "pinned.yaml"))
 input relation: string = "an input named relation"
 extern file.json(+path, -value: string) persist
-decl p/2 mixed
+decl p(a, b) mixed
 decl project(id: int, name: string)
-decl type k8s.custom open
 type db.pg {
   backup_days: int required where 1 <= backup_days <= 35
   net: { cidr: inet, id: string computed id }
 }
 let cfg = settings[env]
+let big = n if size(n), n > 3
 
 --------------------------------------------------------------------------------
 
@@ -111,7 +110,11 @@ let cfg = settings[env]
           (integer)))))
   (input_relation
     (identifier)
-    (integer)
+    (columns
+      (field_declaration
+        (identifier))
+      (field_declaration
+        (identifier)))
     (call
       (identifier)
       (arguments
@@ -119,20 +122,21 @@ let cfg = settings[env]
           (string_content)))))
   (input_relation
     (identifier)
-    (field_declaration
-      (identifier)
-      (type
-        (dotted_name
-          (identifier))
-        (string
-          (string_content))
-        (string
-          (string_content))))
-    (field_declaration
-      (identifier)
-      (type
-        (dotted_name
-          (identifier))))
+    (columns
+      (field_declaration
+        (identifier)
+        (type
+          (dotted_name
+            (identifier))
+          (string
+            (string_content))
+          (string
+            (string_content))))
+      (field_declaration
+        (identifier)
+        (type
+          (dotted_name
+            (identifier)))))
     (call
       (identifier)
       (arguments
@@ -140,11 +144,12 @@ let cfg = settings[env]
           (string_content)))))
   (input_relation
     (identifier)
-    (field_declaration
-      (identifier)
-      (type
-        (dotted_name
-          (identifier))))
+    (columns
+      (field_declaration
+        (identifier)
+        (type
+          (dotted_name
+            (identifier)))))
     (call
       (identifier)
       (arguments
@@ -178,24 +183,25 @@ let cfg = settings[env]
   (decl
     (dotted_name
       (identifier))
-    (integer))
+    (columns
+      (field_declaration
+        (identifier))
+      (field_declaration
+        (identifier))))
   (decl
     (dotted_name
       (identifier))
-    (field_declaration
-      (identifier)
-      (type
-        (dotted_name
-          (identifier))))
-    (field_declaration
-      (identifier)
-      (type
-        (dotted_name
-          (identifier)))))
-  (decl
-    (dotted_name
-      (identifier)
-      (identifier)))
+    (columns
+      (field_declaration
+        (identifier)
+        (type
+          (dotted_name
+            (identifier))))
+      (field_declaration
+        (identifier)
+        (type
+          (dotted_name
+            (identifier))))))
   (type_declaration
     (dotted_name
       (identifier)
@@ -236,7 +242,19 @@ let cfg = settings[env]
     (identifier)
     (index_expression
       (identifier)
-      (identifier))))
+      (identifier)))
+  (let
+    (identifier)
+    (identifier)
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier))))
+      (comparison
+        (identifier)
+        (integer)))))
 
 ================================================================================
 Modules, policies, scenarios
@@ -244,25 +262,19 @@ Modules, policies, scenarios
 
 module network {
   input vpc_net: inet
-  output vpc: net.vpc
-  export subnet_of/2
+  export subnet_of
   contributes _.tags
-  output vpc = vpc
+  output vpc: net.vpc = vpc
+  output n = 1 if q(1)
 }
 instance network main { vpc_net = cfg.network.main.vpc_net }
 policy tags {
-  r.tags = { team: "x" } if r in resource
+  set r.tags = { team: "x" } if r in resource
 }
-apply tags
+use tags
 scenario prod {
-  with env = "prod"
+  set env = "prod"
   deny "no db" if _ in db.postgres
-}
-when env == "prod" {
-  q(1)
-}
-for z in zones {
-  q(z)
 }
 
 --------------------------------------------------------------------------------
@@ -276,22 +288,28 @@ for z in zones {
         (type
           (dotted_name
             (identifier))))
-      (output
-        (identifier)
-        (type
-          (dotted_name
-            (identifier)
-            (identifier))))
       (export
-        (identifier)
-        (integer))
+        (identifier))
       (contributes
         (member_expression
           (identifier)
           (identifier)))
       (output
         (identifier)
-        (identifier))))
+        (type
+          (dotted_name
+            (identifier)
+            (identifier)))
+        (identifier))
+      (output
+        (identifier)
+        (integer)
+        (body
+          (atom_literal
+            (call
+              (identifier)
+              (arguments
+                (integer))))))))
   (instance
     (identifier)
     (identifier)
@@ -309,7 +327,7 @@ for z in zones {
   (policy
     (identifier)
     (statement_block
-      (contribution
+      (set
         (member_expression
           (identifier)
           (identifier))
@@ -322,12 +340,12 @@ for z in zones {
           (in_literal
             (identifier)
             (any_resource))))))
-  (apply
+  (use
     (identifier))
   (scenario
     (identifier)
     (statement_block
-      (with
+      (set
         (identifier)
         (string
           (string_content)))
@@ -339,45 +357,21 @@ for z in zones {
             (identifier)
             (member_expression
               (identifier)
-              (identifier)))))))
-  (when
-    (body
-      (comparison
-        (identifier)
-        (string
-          (string_content))))
-    (statement_block
-      (fact
-        (call
-          (identifier)
-          (arguments
-            (integer))))))
-  (for
-    (body
-      (in_literal
-        (identifier)
-        (identifier)))
-    (statement_block
-      (fact
-        (call
-          (identifier)
-          (arguments
-            (identifier)))))))
+              (identifier))))))))
 
 ================================================================================
 Rules, facts, checks and contributions
 ================================================================================
 
 zone("a")
-names(n) if project{ name: n }
-arg(t, a, .tags, { owner: "ops" }) @override if want(t, a)
-k = 1 if p(1)
-settings.prod.audit.sinks += ["s3"]
+names(n) if project(name: n)
+arg(t, a, "tags", { owner: "ops" }) @override if want(t, a)
+set settings["prod"].audit.sinks += ["s3"]
 input("env", v) if q(v)
 deny("m", "t", { a: b }) if q(b)
 deny "m" { a } if q(a)
 warn "w"
-constraint "c" if not q(1)
+deny "c ${x}" if not q(x)
 
 --------------------------------------------------------------------------------
 
@@ -395,18 +389,20 @@ constraint "c" if not q(1)
         (identifier)))
     (body
       (atom_literal
-        (record
+        (call
           (identifier)
-          (record_field
-            (identifier)
-            (identifier))))))
+          (arguments
+            (named_argument
+              (identifier)
+              (identifier)))))))
   (rule
     (call
       (identifier)
       (arguments
         (identifier)
         (identifier)
-        (keypath)
+        (string
+          (string_content))
         (object
           (object_field
             (identifier)
@@ -420,21 +416,13 @@ constraint "c" if not q(1)
           (arguments
             (identifier)
             (identifier))))))
-  (value_rule
-    (identifier)
-    (integer)
-    (body
-      (atom_literal
-        (call
-          (identifier)
-          (arguments
-            (integer))))))
-  (contribution
+  (set
     (member_expression
       (member_expression
-        (member_expression
+        (index_expression
           (identifier)
-          (identifier))
+          (string
+            (string_content)))
         (identifier))
       (identifier))
     (list
@@ -488,20 +476,22 @@ constraint "c" if not q(1)
       (string_content)))
   (check
     (string
-      (string_content))
+      (string_content)
+      (interpolation
+        (identifier)))
     (body
       (not_literal
         (atom_literal
           (call
             (identifier)
             (arguments
-              (integer))))))))
+              (identifier))))))))
 
 ================================================================================
 Literals
 ================================================================================
 
-p(x) if q(x), x.a, x.b == 1, x in net.vpc, has x.c, exists y, not x.d, some i, v in xs, x not in ys, not { r(x) }, e{a: x}, y in resource, not "n" in net.vpc
+p(x) if q(x), x.a, x.b == 1, x in net.vpc, has x.c, not x.d, v = xs[i], x not in ys, not { r(x) }, e(a: x), y in resource, not "n" in net.vpc
 
 --------------------------------------------------------------------------------
 
@@ -535,17 +525,16 @@ p(x) if q(x), x.a, x.b == 1, x in net.vpc, has x.c, exists y, not x.d, some i, v
         (member_expression
           (identifier)
           (identifier)))
-      (exists_literal
-        (identifier))
       (not_literal
         (truth_literal
           (member_expression
             (identifier)
             (identifier))))
-      (some_literal
+      (comparison
         (identifier)
-        (identifier)
-        (identifier))
+        (index_expression
+          (identifier)
+          (identifier)))
       (not_in_literal
         (identifier)
         (identifier))
@@ -557,11 +546,12 @@ p(x) if q(x), x.a, x.b == 1, x in net.vpc, has x.c, exists y, not x.d, some i, v
               (arguments
                 (identifier))))))
       (atom_literal
-        (record
+        (call
           (identifier)
-          (record_field
-            (identifier)
-            (identifier))))
+          (arguments
+            (named_argument
+              (identifier)
+              (identifier)))))
       (in_literal
         (identifier)
         (any_resource))
@@ -577,7 +567,7 @@ p(x) if q(x), x.a, x.b == 1, x in net.vpc, has x.c, exists y, not x.d, some i, v
 Terms
 ================================================================================
 
-p(x) if y = 1 + 2 * 3 - -4 / (5 % 2), z = a/b, w = x / 2, v = m.i/n.p, u = t[x].p, s = f[0].x, q(.tags."a.b"[0], .id), r = [x ordered by x | q(x)], o = { a, "b-c": 1, type: 2 }, n = null, b = true
+p(x) if y = 1 + 2 * 3 - -4 / (5 % 2), z = a / b, v = m.i.p, u = t[x].p, s = f[0].x, q("tags.a.b[0]", "id"), r = [x | q(x)], o = { a, "b-c": 1, type: 2 }, b = true
 
 --------------------------------------------------------------------------------
 
@@ -605,22 +595,15 @@ p(x) if y = 1 + 2 * 3 - -4 / (5 % 2), z = a/b, w = x / 2, v = m.i/n.p, u = t[x].
                 (integer))))))
       (comparison
         (identifier)
-        (instance_expression
-          (identifier)
-          (instance_name)))
-      (comparison
-        (identifier)
         (binary_expression
           (identifier)
-          (integer)))
+          (identifier)))
       (comparison
         (identifier)
         (member_expression
-          (instance_expression
-            (member_expression
-              (identifier)
-              (identifier))
-            (instance_name))
+          (member_expression
+            (identifier)
+            (identifier))
           (identifier)))
       (comparison
         (identifier)
@@ -640,12 +623,13 @@ p(x) if y = 1 + 2 * 3 - -4 / (5 % 2), z = a/b, w = x / 2, v = m.i/n.p, u = t[x].
         (call
           (identifier)
           (arguments
-            (keypath)
-            (keypath))))
+            (string
+              (string_content))
+            (string
+              (string_content)))))
       (comparison
         (identifier)
         (comprehension
-          (identifier)
           (identifier)
           (body
             (atom_literal
@@ -667,28 +651,14 @@ p(x) if y = 1 + 2 * 3 - -4 / (5 % 2), z = a/b, w = x / 2, v = m.i/n.p, u = t[x].
             (integer))))
       (comparison
         (identifier)
-        (null))
-      (comparison
-        (identifier)
         (true)))))
 
 ================================================================================
-A keyword term is not a name
+A body word is not a name
 :error
 ================================================================================
 
-x = exists{ a: 1 }
-
---------------------------------------------------------------------------------
-
-
-
-================================================================================
-A call is glued
-:error
-================================================================================
-
-p (a)
+let x = in
 
 --------------------------------------------------------------------------------
 

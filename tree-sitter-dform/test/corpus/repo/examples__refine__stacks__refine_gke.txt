@@ -45,20 +45,20 @@ settings dev {
 let cfg = settings[env]
 
 project(cfg.project_id, cfg.project_name, cfg.region,
-  "projects/{cfg.project_id}/global/networks/{cfg.network_name}")
+  "projects/${cfg.project_id}/global/networks/${cfg.network_name}")
 
 resource google_compute_subnetwork gke_subnet {
-  for project(id, name, region, net_id)
+  if project(id, name, region, net_id)
   project = id
   region = region
   network = net_id
-  name = "{name}-gke-subnet"
+  name = "${name}-gke-subnet"
   ip_cidr_range = cfg.gke.subnet_cidr
 }
 
 # Carries a fresh null (subnetwork_id) and is still definite.
 resource google_compute_address static_ip {
-  for project(id, _, region, _)
+  if project(id, _, region, _)
   project = id
   region = region
   name = "pngu-grpc"
@@ -66,10 +66,10 @@ resource google_compute_address static_ip {
 }
 
 resource gke_cluster pngu {
-  for project(id, name, _, net_id)
+  if project(id, name, _, net_id)
   env = env
   project_id = id
-  name = "{name}-gke"
+  name = "${name}-gke"
   network_id = net_id
   subnetwork_id = gke_subnet.id
   master_control_plane_cidr = cfg.gke.control_plane_cidr
@@ -79,8 +79,8 @@ resource gke_cluster pngu {
 
 # Provider configured from phase-1 nulls (two open, one secret).
 provider_config("kubernetes", {
-  host: gke_cluster.pngu.endpoint,
-  ca: gke_cluster.pngu.ca_certificate,
+  host: gke_cluster["pngu"].endpoint,
+  ca: gke_cluster["pngu"].ca_certificate,
   token: google.client_config["current"].access_token
 })
 
@@ -90,31 +90,31 @@ resource k8s.namespace pngu {
 
 # A read in the clause is an attr join (the value now), not a reference.
 resource k8s.deployment api {
-  if ns = k8s.namespace.pngu.name
+  if ns = k8s.namespace["pngu"].name
   namespace = ns
   image = "gcr.io/renfry/api:1.42"
   replicas = 3
 }
 
 resource k8s.secret db_credentials {
-  if ns = k8s.namespace.pngu.name
+  if ns = k8s.namespace["pngu"].name
   namespace = ns
   data = { password: google.secret_manager_secret_version["db_pw"].secret_data }
 }
 
 # One nodepool per zone: member over an open null is a content position.
-resource gke_nodepool "np-{z}" {
-  for z in gke_cluster.pngu.zones
-  cluster = gke_cluster.pngu.id
+resource gke_nodepool "np-${z}" {
+  if z in gke_cluster["pngu"].zones
+  cluster = gke_cluster["pngu"].id
   zone = z
   min = 1
   max = 3
 }
 
-zone_count(count(z)) if z in gke_cluster.pngu.zones
+zone_count(count(z)) if z in gke_cluster["pngu"].zones
 
 deny "cluster must be in at least two zones" { cluster: "pngu" } if {
-  exists gke_cluster.pngu
+  "pngu" in gke_cluster
   zone_count(n)
   n < 2
 }
@@ -436,16 +436,18 @@ type gke_cluster {
           (object_field
             (identifier)
             (member_expression
-              (member_expression
+              (index_expression
                 (identifier)
-                (identifier))
+                (string
+                  (string_content)))
               (identifier)))
           (object_field
             (identifier)
             (member_expression
-              (member_expression
+              (index_expression
                 (identifier)
-                (identifier))
+                (string
+                  (string_content)))
               (identifier)))
           (object_field
             (identifier)
@@ -480,11 +482,12 @@ type gke_cluster {
           (comparison
             (identifier)
             (member_expression
-              (member_expression
+              (index_expression
                 (member_expression
                   (identifier)
                   (identifier))
-                (identifier))
+                (string
+                  (string_content)))
               (identifier)))))
       (field
         (block_path
@@ -510,11 +513,12 @@ type gke_cluster {
           (comparison
             (identifier)
             (member_expression
-              (member_expression
+              (index_expression
                 (member_expression
                   (identifier)
                   (identifier))
-                (identifier))
+                (string
+                  (string_content)))
               (identifier)))))
       (field
         (block_path
@@ -548,17 +552,19 @@ type gke_cluster {
           (in_literal
             (identifier)
             (member_expression
-              (member_expression
+              (index_expression
                 (identifier)
-                (identifier))
+                (string
+                  (string_content)))
               (identifier)))))
       (field
         (block_path
           (identifier))
         (member_expression
-          (member_expression
+          (index_expression
             (identifier)
-            (identifier))
+            (string
+              (string_content)))
           (identifier)))
       (field
         (block_path
@@ -584,9 +590,10 @@ type gke_cluster {
       (in_literal
         (identifier)
         (member_expression
-          (member_expression
+          (index_expression
             (identifier)
-            (identifier))
+            (string
+              (string_content)))
           (identifier)))))
   (check
     (string
@@ -597,10 +604,10 @@ type gke_cluster {
         (string
           (string_content))))
     (body_block
-      (exists_literal
-        (member_expression
-          (identifier)
-          (identifier)))
+      (in_literal
+        (string
+          (string_content))
+        (identifier))
       (atom_literal
         (call
           (identifier)

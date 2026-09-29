@@ -8,17 +8,14 @@ tests/fixtures/adversarial/adv4_variable_path_writer.df
 
 edition 2026
 
-override(net.vpc, "main", .tags, { team: "x" })
+override(net.vpc, "main", "tags", { team: "x" })
 
 resource net.vpc main {
   cidr = inet("10.0.0.0/16")
   tags = { env: "dev" }
 }
 
-arg(t, n, p, v) if
-  override(t, n, p, v),
-  want(t, n),
-  arg(t, n, .cidr, _c)
+arg(t, n, p, v) if override(t, n, p, v), want(t, n), arg(t, n, "cidr", _c)
 
 ---
 
@@ -37,7 +34,8 @@ arg(t, n, p, v) if
           (identifier))
         (string
           (string_content))
-        (keypath)
+        (string
+          (string_content))
         (object
           (object_field
             (identifier)
@@ -94,5 +92,6 @@ arg(t, n, p, v) if
           (arguments
             (identifier)
             (identifier)
-            (keypath)
+            (string
+              (string_content))
             (identifier)))))))

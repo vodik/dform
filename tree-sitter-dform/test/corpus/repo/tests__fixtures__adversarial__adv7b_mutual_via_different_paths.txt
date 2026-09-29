@@ -13,12 +13,10 @@ resource net.vpc x {
   z = 1
 }
 
-arg(net.vpc, "x", .y, p) if
-  want(net.vpc, "x"),
-  arg(net.subnet, "y", .x, p)
+set x.y = p if x in net.vpc, arg(net.subnet, "y", "x", p)
 
 resource net.subnet y {
-  for arg(net.vpc, "x", .z, q)
+  if arg(net.vpc, "x", "z", q)
   x = q
 }
 
@@ -41,27 +39,17 @@ resource net.subnet y {
         (block_path
           (identifier))
         (integer))))
-  (rule
-    (call
+  (set
+    (member_expression
       (identifier)
-      (arguments
+      (identifier))
+    (identifier)
+    (body
+      (in_literal
+        (identifier)
         (member_expression
           (identifier)
-          (identifier))
-        (string
-          (string_content))
-        (keypath)
-        (identifier)))
-    (body
-      (atom_literal
-        (call
-          (identifier)
-          (arguments
-            (member_expression
-              (identifier)
-              (identifier))
-            (string
-              (string_content)))))
+          (identifier)))
       (atom_literal
         (call
           (identifier)
@@ -71,7 +59,8 @@ resource net.subnet y {
               (identifier))
             (string
               (string_content))
-            (keypath)
+            (string
+              (string_content))
             (identifier))))))
   (resource
     (dotted_name
@@ -90,7 +79,8 @@ resource net.subnet y {
                   (identifier))
                 (string
                   (string_content))
-                (keypath)
+                (string
+                  (string_content))
                 (identifier))))))
       (field
         (block_path

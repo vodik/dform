@@ -46,24 +46,24 @@ resource aws_instance web {
   ami = "ami-0abcdef1234567890"
   instance_type = "t3.small"
   subnet_id = a.id
-  vpc_security_group_ids = [aws_security_group.web.id]
+  vpc_security_group_ids = [aws_security_group["web"].id]
 }
 
 resource aws_instance bastion {
   instance_type = "t3.micro"
-  tags = { subnet_az: a.availability_zone, web_az: aws_instance.web.availability_zone }
+  tags = { subnet_az: a.availability_zone, web_az: aws_instance["web"].availability_zone }
 }
 
 resource aws_eip web {
   domain = "vpc"
-  instance = aws_instance.web.id
+  instance = aws_instance["web"].id
 }
 
 resource aws_db_instance app {
   identifier = "app"
   instance_class = "db.t3.micro"
   password = "correct-horse-battery-staple"
-  vpc_security_group_ids = [aws_security_group.web.id]
+  vpc_security_group_ids = [aws_security_group["web"].id]
   skip_final_snapshot = true
 }
 
@@ -229,9 +229,10 @@ resource aws_db_instance app {
           (identifier))
         (list
           (member_expression
-            (member_expression
+            (index_expression
               (identifier)
-              (identifier))
+              (string
+                (string_content)))
             (identifier))))))
   (resource
     (dotted_name
@@ -255,9 +256,10 @@ resource aws_db_instance app {
           (object_field
             (identifier)
             (member_expression
-              (member_expression
+              (index_expression
                 (identifier)
-                (identifier))
+                (string
+                  (string_content)))
               (identifier)))))))
   (resource
     (dotted_name
@@ -273,9 +275,10 @@ resource aws_db_instance app {
         (block_path
           (identifier))
         (member_expression
-          (member_expression
+          (index_expression
             (identifier)
-            (identifier))
+            (string
+              (string_content)))
           (identifier)))))
   (resource
     (dotted_name
@@ -302,9 +305,10 @@ resource aws_db_instance app {
           (identifier))
         (list
           (member_expression
-            (member_expression
+            (index_expression
               (identifier)
-              (identifier))
+              (string
+                (string_content)))
             (identifier))))
       (field
         (block_path

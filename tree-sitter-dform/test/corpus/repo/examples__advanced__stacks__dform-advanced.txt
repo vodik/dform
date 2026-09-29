@@ -39,7 +39,7 @@ settings prod {
 corp_net(inet("10.100.0.0/12"))
 
 # Explode tenant list into a relation (Pattern A), with index.
-tenant(t, i) if some i, t in settings[env].tenants
+tenant(t, i) if t = settings[env].tenants[i]
 
 # Shared services VPC (always exists)
 resource net.vpc shared {
@@ -49,7 +49,7 @@ resource net.vpc shared {
 
 # One VPC per tenant, with deterministic CIDRs derived from corp_net.
 resource net.vpc t {
-  for tenant(t, i), corp_net(corp)
+  if tenant(t, i), corp_net(corp)
   cidr = inet_subnet(corp, 4, i)
   tags = { segment: "tenant", tenant: t }
 }
@@ -58,11 +58,9 @@ resource net.vpc t {
 # In staging, only tenant_a peers with shared.
 # In prod, tenant_b also peers with shared, which creates tenant->tenant reachability via shared.
 # A fact and a guarded fact (a rule): declared mixed (E 2.6).
-decl peer_intent/1 mixed
+decl peer_intent(tenant) mixed
 peer_intent("tenant_a")
-when env == "prod" {
-  peer_intent("tenant_b")
-}
+peer_intent("tenant_b") if env == "prod"
 
 peer("shared", t) if peer_intent(t), tenant(t, _)
 
@@ -78,9 +76,8 @@ reachable(a, c) if reachable(a, b), link(b, c)
 # Derived infra: create a route for every reachable pair (excluding self).
 # `dest` is bound in the clause, so it is read now (an attr join);
 # `destination = net.vpc[b].cidr` would be a reference.
-resource net.route "rt-{a}-{b}" {
-  for reachable(a, b), a != b
-  if dest = net.vpc[b].cidr
+resource net.route "rt-${a}-${b}" {
+  if reachable(a, b), a != b, dest = net.vpc[b].cidr
   from = a
   to = b
   destination = dest
@@ -109,13 +106,13 @@ mesh_non_adjacent_pair(a, b) if {
 
 warn "mesh has direct route between non-adjacent nodes" { from: a, to: b } if {
   mesh_non_adjacent_pair(a, b)
-  "rt-{a}-{b}" in net.route
+  "rt-${a}-${b}" in net.route
   not mesh_allow_direct_route(a, b)
 }
 
 # Declared so the check can negate it with no rows; uncomment the fact to
 # explicitly allow certain non-adjacent direct routes:
-decl mesh_allow_direct_route/2
+decl mesh_allow_direct_route(from, to)
 # mesh_allow_direct_route("core_a", "core_c")
 
 # --- Auto-mesh demo (derived links from a list) ---
@@ -124,10 +121,10 @@ decl mesh_allow_direct_route/2
 # We immediately explode it into row facts, then derive edges, then rely on
 # reachability closure to fill in the implied connectivity.
 
-mesh_vpc(name, cidr, i) if some i, { name: name, net: cidr } in settings[env].mesh.vpcs
+mesh_vpc(name, cidr, i) if settings[env].mesh.vpcs[i] = { name, net: cidr }
 
 resource net.vpc name {
-  for mesh_vpc(name, cidr, _)
+  if mesh_vpc(name, cidr, _)
   cidr = cidr
   tags = { segment: "mesh" }
 }
@@ -137,7 +134,7 @@ resource net.vpc name {
 mesh_peer(a, b) if {
   mesh_vpc(a, cidr_a, ia)
   mesh_vpc(b, cidr_b, ib)
-  ib = ia + 1
+  ib == ia + 1
   not inet_overlaps(cidr_a, cidr_b)
 }
 
@@ -145,14 +142,17 @@ mesh_peer(a, b) if {
 peer(a, b) if mesh_peer(a, b)
 
 # Optional: materialize the derived peerings as explicit peering resources.
-resource net.vpc_peering "mesh-peer-{a}-{b}" {
-  for mesh_peer(a, b)
+resource net.vpc_peering "mesh-peer-${a}-${b}" {
+  if mesh_peer(a, b)
   requester_vpc_id = net.vpc[a].id
   accepter_vpc_id = net.vpc[b].id
 }
 
 # Policy 1: peered VPCs must not overlap.
-deny "peered vpcs must not overlap" { a, b } if peer(a, b), inet_overlaps(net.vpc[a].cidr, net.vpc[b].cidr)
+deny "peered vpcs must not overlap" { a, b } if {
+  peer(a, b)
+  inet_overlaps(net.vpc[a].cidr, net.vpc[b].cidr)
+}
 
 # Policy 2: tenant isolation.
 # Only enforced in prod, and depends on the reachability closure.
@@ -329,12 +329,13 @@ warn "user is effectively admin (via group nesting)" { user: u } if in_group(u, 
         (identifier)
         (identifier)))
     (body
-      (some_literal
+      (comparison
         (identifier)
-        (identifier)
-        (member_expression
-          (index_expression
-            (identifier)
+        (index_expression
+          (member_expression
+            (index_expression
+              (identifier)
+              (identifier))
             (identifier))
           (identifier)))))
   (comment)
@@ -407,26 +408,26 @@ warn "user is effectively admin (via group nesting)" { user: u } if in_group(u, 
   (decl
     (dotted_name
       (identifier))
-    (integer))
+    (columns
+      (field_declaration
+        (identifier))))
   (fact
     (call
       (identifier)
       (arguments
         (string
           (string_content)))))
-  (when
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))))
     (body
       (comparison
         (identifier)
         (string
-          (string_content))))
-    (statement_block
-      (fact
-        (call
-          (identifier)
-          (arguments
-            (string
-              (string_content)))))))
+          (string_content)))))
   (rule
     (call
       (identifier)
@@ -532,9 +533,7 @@ warn "user is effectively admin (via group nesting)" { user: u } if in_group(u, 
                 (identifier))))
           (comparison
             (identifier)
-            (identifier))))
-      (clause
-        (body
+            (identifier))
           (comparison
             (identifier)
             (member_expression
@@ -676,7 +675,11 @@ warn "user is effectively admin (via group nesting)" { user: u } if in_group(u, 
   (decl
     (dotted_name
       (identifier))
-    (integer))
+    (columns
+      (field_declaration
+        (identifier))
+      (field_declaration
+        (identifier))))
   (comment)
   (comment)
   (comment)
@@ -691,22 +694,22 @@ warn "user is effectively admin (via group nesting)" { user: u } if in_group(u, 
         (identifier)
         (identifier)))
     (body
-      (some_literal
-        (identifier)
-        (object
-          (object_field
-            (identifier)
-            (identifier))
-          (object_field
-            (identifier)
-            (identifier)))
-        (member_expression
+      (comparison
+        (index_expression
           (member_expression
-            (index_expression
-              (identifier)
+            (member_expression
+              (index_expression
+                (identifier)
+                (identifier))
               (identifier))
             (identifier))
-          (identifier)))))
+          (identifier))
+        (object
+          (object_field
+            (identifier))
+          (object_field
+            (identifier)
+            (identifier))))))
   (resource
     (dotted_name
       (identifier)
@@ -833,7 +836,7 @@ warn "user is effectively admin (via group nesting)" { user: u } if in_group(u, 
         (identifier))
       (object_field
         (identifier)))
-    (body
+    (body_block
       (atom_literal
         (call
           (identifier)

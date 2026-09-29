@@ -13,7 +13,7 @@ edition 2026
 # Isolated: each env deploys into its own account, so iam's fixed names do not collide.
 # Config: each env's settings are config/dform/{env}.yaml's, a leaf per contribution.
 provider fake {}
-stack dform[env] { unknowns = "strict", isolated = true, config = yaml("config/dform/{env}.yaml") }
+stack dform[env] { unknowns = "strict", isolated = true, config = yaml("config/dform/${env}.yaml") }
 #| The environments: an alias, the enum wherever it is written.
 type environment = enum("dev", "staging", "prod")
 #| The deployment's environment, the stack's key. The default is a @default
@@ -24,10 +24,8 @@ input env: environment = "staging"
 data("zone", "us-test-1a")
 data("zone", "us-test-1b")
 
-# Guard blocks (when) apply a condition to everything inside.
-when env == "prod" {
-  iam_need("app", "audit.write", "audit-log")
-}
+# A fact with a condition: it holds in prod only.
+iam_need("app", "audit.write", "audit-log") if env == "prod"
 
 # Settings (branch as data). One @default layer for every environment that
 # has one; each environment's config/dform/{env}.yaml (the stack's config) wins
@@ -37,7 +35,7 @@ env_name("staging")
 env_name("prod")
 
 settings e @default {
-  for env_name(e)
+  if env_name(e)
   network.main.vpc_net = "10.50.0.0/16"
   network.peer.vpc_net = "10.60.0.0/16"
   db = { backup_days: 3, multi_az: false }
@@ -55,8 +53,8 @@ import "modules/iam.df"
 import "policies/baseline.df"
 import "modules/stdlib_net.df"
 
-apply baseline
-apply stdlib_net
+use baseline
+use stdlib_net
 
 # Instantiate modules (Terraform module-like). Inputs are declared by the
 # module; each `k = v` here is a contribution to one.
@@ -93,9 +91,9 @@ vpc_peer_pair(ia, ib, a, b) if vpc_peer_inst(ia, ib), a = network[ia].vpc, b = n
 vpc_peer(a, b) if vpc_peer_pair(_, _, a, b)
 
 #| A peering resource per declared peering edge.
-resource net.vpc_peering "peer-{ia}-{ib}" {
-  for vpc_peer_pair(ia, ib, a, b)
-  if a in net.vpc, b in net.vpc # both ends must exist in this environment
+resource net.vpc_peering "peer-${ia}-${ib}" {
+  # Both ends must exist in this environment.
+  if vpc_peer_pair(ia, ib, a, b), a in net.vpc, b in net.vpc
   requester_vpc_id = a.id
   accepter_vpc_id = b.id
 }
@@ -105,32 +103,24 @@ resource compute.vm bastion {
   private_ip = inet_host(inet(cfg.network.main.vpc_net), 20)
 }
 
-# Constraints (policy)
-constraint "prod db must be multi_az" if {
-  env == "prod"
-  exists database.main/db
-  not database.main/db.multi_az
-}
+# Policy, over every resource of a type (a module's resources included).
+deny "prod db must be multi_az" if env == "prod", pg in db.postgres, not pg.multi_az
 
-constraint "prod k8s must have private api" if {
-  env == "prod"
-  exists kubernetes.main/cluster
-  not kubernetes.main/cluster.private_api
-}
+deny "prod k8s must have private api" if env == "prod", c in k8s.cluster, not c.private_api
 
 #| Policy over hypothetical inputs: `dform test` runs every scenario
 #| against an empty mock world; `dform plan --scenario prod` plans the stack
 #| as if env were prod.
 scenario prod {
-  with env = "prod"
+  set env = "prod"
   deny "prod peers the two vpcs" if not "peer-main-peer" in net.vpc_peering
-  deny "prod keeps 14 days of db backups" if not database.main/db.backup_days == 14
+  deny "prod keeps 14 days of db backups" if not db.postgres["database.main::db"].backup_days == 14
 }
 
 scenario dev {
-  with env = "dev"
+  set env = "dev"
   deny "dev has no database" if _ in db.postgres
-  deny "dev has no peer network" if exists network.peer/vpc
+  deny "dev has no peer network" if "network.peer::vpc" in net.vpc
 }
 
 ---
@@ -212,23 +202,21 @@ scenario dev {
         (string
           (string_content)))))
   (comment)
-  (when
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content))))
     (body
       (comparison
         (identifier)
         (string
-          (string_content))))
-    (statement_block
-      (fact
-        (call
-          (identifier)
-          (arguments
-            (string
-              (string_content))
-            (string
-              (string_content))
-            (string
-              (string_content)))))))
+          (string_content)))))
   (comment)
   (comment)
   (comment)
@@ -321,9 +309,9 @@ scenario dev {
   (import
     (string
       (string_content)))
-  (apply
+  (use
     (identifier))
-  (apply
+  (use
     (identifier))
   (comment)
   (comment)
@@ -502,6 +490,7 @@ scenario dev {
       (interpolation
         (identifier)))
     (block
+      (comment)
       (clause
         (body
           (atom_literal
@@ -511,9 +500,7 @@ scenario dev {
                 (identifier)
                 (identifier)
                 (identifier)
-                (identifier))))))
-      (clause
-        (body
+                (identifier))))
           (in_literal
             (identifier)
             (member_expression
@@ -524,7 +511,6 @@ scenario dev {
             (member_expression
               (identifier)
               (identifier)))))
-      (comment)
       (field
         (block_path
           (identifier))
@@ -565,48 +551,38 @@ scenario dev {
   (check
     (string
       (string_content))
-    (body_block
+    (body
       (comparison
         (identifier)
         (string
           (string_content)))
-      (exists_literal
-        (instance_expression
-          (member_expression
-            (identifier)
-            (identifier))
-          (instance_name)))
+      (in_literal
+        (identifier)
+        (member_expression
+          (identifier)
+          (identifier)))
       (not_literal
         (truth_literal
           (member_expression
-            (instance_expression
-              (member_expression
-                (identifier)
-                (identifier))
-              (instance_name))
+            (identifier)
             (identifier))))))
   (check
     (string
       (string_content))
-    (body_block
+    (body
       (comparison
         (identifier)
         (string
           (string_content)))
-      (exists_literal
-        (instance_expression
-          (member_expression
-            (identifier)
-            (identifier))
-          (instance_name)))
+      (in_literal
+        (identifier)
+        (member_expression
+          (identifier)
+          (identifier)))
       (not_literal
         (truth_literal
           (member_expression
-            (instance_expression
-              (member_expression
-                (identifier)
-                (identifier))
-              (instance_name))
+            (identifier)
             (identifier))))))
   (comment)
   (comment)
@@ -614,7 +590,7 @@ scenario dev {
   (scenario
     (identifier)
     (statement_block
-      (with
+      (set
         (identifier)
         (string
           (string_content)))
@@ -636,17 +612,18 @@ scenario dev {
           (not_literal
             (comparison
               (member_expression
-                (instance_expression
+                (index_expression
                   (member_expression
                     (identifier)
                     (identifier))
-                  (instance_name))
+                  (string
+                    (string_content)))
                 (identifier))
               (integer)))))))
   (scenario
     (identifier)
     (statement_block
-      (with
+      (set
         (identifier)
         (string
           (string_content)))
@@ -663,9 +640,9 @@ scenario dev {
         (string
           (string_content))
         (body
-          (exists_literal
-            (instance_expression
-              (member_expression
-                (identifier)
-                (identifier))
-              (instance_name))))))))
+          (in_literal
+            (string
+              (string_content))
+            (member_expression
+              (identifier)
+              (identifier))))))))

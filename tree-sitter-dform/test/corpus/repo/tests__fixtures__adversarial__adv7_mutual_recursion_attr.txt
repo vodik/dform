@@ -8,12 +8,12 @@ tests/fixtures/adversarial/adv7_mutual_recursion_attr.df
 edition 2026
 
 resource net.vpc x {
-  for arg(net.subnet, "y", .name, p)
+  if arg(net.subnet, "y", "name", p)
   peer = p
 }
 
 resource net.subnet y {
-  for arg(net.vpc, "x", .peer, q)
+  if arg(net.vpc, "x", "peer", q)
   name = q
 }
 
@@ -41,7 +41,8 @@ resource net.subnet y {
                   (identifier))
                 (string
                   (string_content))
-                (keypath)
+                (string
+                  (string_content))
                 (identifier))))))
       (field
         (block_path
@@ -64,7 +65,8 @@ resource net.subnet y {
                   (identifier))
                 (string
                   (string_content))
-                (keypath)
+                (string
+                  (string_content))
                 (identifier))))))
       (field
         (block_path

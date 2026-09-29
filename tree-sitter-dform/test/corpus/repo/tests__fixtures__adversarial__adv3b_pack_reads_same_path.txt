@@ -14,13 +14,14 @@ resource iam.policy app_policy {
 
 policy p {
   contributes iam.policy.statements
-  type_lattice("iam.policy", .statements, "set")
-  arg("iam.policy", p, .statements, [{ action: "org.read", resource: "org" }]) if
-    want("iam.policy", p),
-    arg("iam.policy", p, .statements, s),
-    not member(s, { action: "org.read", resource: "org" })
+  type_lattice("iam.policy", "statements", "set")
+  set p.statements = [{ action: "org.read", resource: "org" }] if {
+    p in iam.policy
+    arg("iam.policy", p, "statements", s)
+    { action: "org.read", resource: "org" } not in s
+  }
 }
-apply p
+use p
 
 ---
 
@@ -68,35 +69,30 @@ apply p
           (arguments
             (string
               (string_content))
-            (keypath)
-            (string
-              (string_content)))))
-      (rule
-        (call
-          (identifier)
-          (arguments
             (string
               (string_content))
+            (string
+              (string_content)))))
+      (set
+        (member_expression
+          (identifier)
+          (identifier))
+        (list
+          (object
+            (object_field
+              (identifier)
+              (string
+                (string_content)))
+            (object_field
+              (identifier)
+              (string
+                (string_content)))))
+        (body_block
+          (in_literal
             (identifier)
-            (keypath)
-            (list
-              (object
-                (object_field
-                  (identifier)
-                  (string
-                    (string_content)))
-                (object_field
-                  (identifier)
-                  (string
-                    (string_content)))))))
-        (body
-          (atom_literal
-            (call
+            (member_expression
               (identifier)
-              (arguments
-                (string
-                  (string_content))
-                (identifier))))
+              (identifier)))
           (atom_literal
             (call
               (identifier)
@@ -104,22 +100,19 @@ apply p
                 (string
                   (string_content))
                 (identifier)
-                (keypath)
+                (string
+                  (string_content))
                 (identifier))))
-          (not_literal
-            (atom_literal
-              (call
+          (not_in_literal
+            (object
+              (object_field
                 (identifier)
-                (arguments
-                  (identifier)
-                  (object
-                    (object_field
-                      (identifier)
-                      (string
-                        (string_content)))
-                    (object_field
-                      (identifier)
-                      (string
-                        (string_content))))))))))))
-  (apply
+                (string
+                  (string_content)))
+              (object_field
+                (identifier)
+                (string
+                  (string_content))))
+            (identifier))))))
+  (use
     (identifier)))

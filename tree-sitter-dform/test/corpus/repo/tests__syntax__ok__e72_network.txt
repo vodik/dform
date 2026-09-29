@@ -7,24 +7,22 @@ module network {
   input zones: list(string) = ["us-test-1a", "us-test-1b"] # @default contribution
   output vpc: addr
   output private_subnet_ids: list(ref(net.subnet))
-  export subnet_of/2
+  export subnet_of
 
   resource net.vpc vpc {
-    for env(e), vpc_net(net_)
+    if env(e), net_ = vpc_net
     cidr = net_
     tags = { env: e, component: "network" }
   }
 
-  zone_index(z, i) if zones(zs), member(zs, i, z)
+  zone_index(z, i) if zs = zones, member(zs, i, z)
 
   # Reads attr of net.vpc (partition (attr, net.vpc, .cidr)), writes arg of
   # net.subnet (partitions (arg, net.subnet, .vpc_id) etc.): no cycle.
   # vpc_id carries a fresh null; cidr is computed from a constant.
   resource net.subnet sn {
-    for zone_index(z, i),
-      attr(net.vpc, "vpc", .cidr, net_),
-      sn = format("private_%s", z)
-    vpc_id = ref(net.vpc, "vpc", .id)
+    if zone_index(z, i), attr(net.vpc, "vpc", "cidr", net_), sn = format("private_%s", z)
+    vpc_id = ref(net.vpc, "vpc", "id")
     cidr = inet_subnet(net_, 4, i)
     zone = z
     visibility = "private"
@@ -33,8 +31,7 @@ module network {
   subnet_of(sn, "vpc") if want(net.subnet, sn)
 
   output vpc = vpc
-  output private_subnet_ids =
-    [ ref(net.subnet, sn, .id) | want(net.subnet, sn), attr(net.subnet, sn, .visibility, "private") ]
+  output private_subnet_ids = [ ref(net.subnet, sn, "id") | want(net.subnet, sn), attr(net.subnet, sn, "visibility", "private") ]
 }
 
 ---
@@ -88,8 +85,7 @@ module network {
                 (identifier)
                 (identifier))))))
       (export
-        (identifier)
-        (integer))
+        (identifier))
       (resource
         (dotted_name
           (identifier)
@@ -103,11 +99,9 @@ module network {
                   (identifier)
                   (arguments
                     (identifier))))
-              (atom_literal
-                (call
-                  (identifier)
-                  (arguments
-                    (identifier))))))
+              (comparison
+                (identifier)
+                (identifier))))
           (field
             (block_path
               (identifier))
@@ -130,11 +124,9 @@ module network {
             (identifier)
             (identifier)))
         (body
-          (atom_literal
-            (call
-              (identifier)
-              (arguments
-                (identifier))))
+          (comparison
+            (identifier)
+            (identifier))
           (atom_literal
             (call
               (identifier)
@@ -168,7 +160,8 @@ module network {
                       (identifier))
                     (string
                       (string_content))
-                    (keypath)
+                    (string
+                      (string_content))
                     (identifier))))
               (comparison
                 (identifier)
@@ -189,7 +182,8 @@ module network {
                   (identifier))
                 (string
                   (string_content))
-                (keypath))))
+                (string
+                  (string_content)))))
           (field
             (block_path
               (identifier))
@@ -237,7 +231,8 @@ module network {
                 (identifier)
                 (identifier))
               (identifier)
-              (keypath)))
+              (string
+                (string_content))))
           (body
             (atom_literal
               (call
@@ -255,6 +250,7 @@ module network {
                     (identifier)
                     (identifier))
                   (identifier)
-                  (keypath)
+                  (string
+                    (string_content))
                   (string
                     (string_content)))))))))))

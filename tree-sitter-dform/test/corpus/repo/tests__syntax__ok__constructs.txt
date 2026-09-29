@@ -8,24 +8,23 @@ edition 2026
 import "../../../examples/demo/modules/stdlib_net.df"
 import "../../../examples/demo/modules/iam.df"
 
-decl provided/2
-input relation seen/2 from file("seen.facts")
-input relation peers(env: enum("dev", "prod"), name: string) from csv("peers.csv")
-input relation pinned(name: string) from yaml(git("ops.git", "main", "pinned.yaml"))
+decl provided(a, b)
+input seen(a, b) from facts("seen.facts")
+input peers(env: enum("dev", "prod"), name: string) from csv("peers.csv")
+input pinned(name: string) from yaml(git("ops.git", "main", "pinned.yaml"))
 input relation: string = "an input named relation"
 decl project(id: int, network_name: string)
 
 project(1, "net-a")
-names(n) if project{ network_name: n }
+names(n) if project(network_name: n)
 
 module m {
   input on: bool
-  output vpc: addr
-  export on_vpc/1
+  export on_vpc
   contributes iam_need
 
   resource net.vpc vpc @default {
-    for on(true)
+    if on == true
     cidr = "10.0.0.0/16"
     tags = { team: "x", "k-v": 1 }
     size = 2 @override
@@ -33,44 +32,42 @@ module m {
     audit.sinks += ["s3"]
   }
 
-  on_vpc("vpc") if on(true)
-  iam_need("app", "net.read", ref(net.vpc, "vpc", .id))
-  output vpc = vpc
+  on_vpc("vpc") if on == true
+  iam_need("app", "net.read", ref(net.vpc, "vpc", "id"))
+  output vpc: addr = vpc
 }
 
 instance m main { on = true }
 
 policy p {
   contributes _.tags
-  arg(t, a_, .tags, { owner: "ops" }) @override if want(t, a_)
+  arg(t, a_, "tags", { owner: "ops" }) @override if want(t, a_)
 }
 
-apply p
+use p
 
-when env("prod") {
-  q(1)
-}
+q(1) if env("prod")
 
 settings e @default {
-  for env(e)
+  if env(e)
   db = { backup_days: 3 }
 }
 
 env("prod")
-p(x_) if q(x_), x_ = 1 + 2 * 3 - -4 / (5 % 2), x_ != 0, x_ >= 1, x_ <= 9, x_ > 0, x_ < 10
-r(v) if setting("prod", .gke.static_ips."pngu-grpc".type, v)
+p(x_) if q(x_), x_ == 1 + 2 * 3 - -4 / (5 % 2), x_ != 0, x_ >= 1, x_ <= 9, x_ > 0, x_ < 10
+r(v) if v = settings["prod"].gke.static_ips."pngu-grpc".type
 s(v) if q(x_), o = { a: { b: x_ } }, v = o.a.b
 t(l) if l = [ x_ | q(x_) ], 1 in l, 2 not in l
-u(a_) if ref(net.vpc, m.main/vpc, .id) = a_
-adopt(net.vpc, m.main/vpc, "vpc-123")
-moved(net.vpc, m.old/vpc, m.main/vpc)
-lifecycle(net.vpc, m.main/vpc, "prevent_destroy")
-ignore_changes(net.vpc, m.main/vpc, .tags.owner)
+u(a_) if ref(net.vpc, "m.main::vpc", "id") = a_
+adopt(net.vpc, "m.main::vpc", "vpc-123")
+moved(net.vpc, "m.old::vpc", "m.main::vpc")
+lifecycle(net.vpc, "m.main::vpc", "prevent_destroy")
+ignore_changes(net.vpc, "m.main::vpc", "tags.owner")
 counts(count(x_)) if q(x_)
-constraint "q must not be empty" if not q(1)
+deny "q must not be empty" if not q(1)
 v("input", "output", "settings", "type") if input("env", _), output("k", _)
-decl p/1 mixed
-decl q/1 mixed
+decl p(a) mixed
+decl q(a) mixed
 p("a")
 q("b")
 w(v) if m.main.on_vpc(v)
@@ -97,10 +94,18 @@ stack app[tier, region] { unknowns = "permissive" }
   (decl
     (dotted_name
       (identifier))
-    (integer))
+    (columns
+      (field_declaration
+        (identifier))
+      (field_declaration
+        (identifier))))
   (input_relation
     (identifier)
-    (integer)
+    (columns
+      (field_declaration
+        (identifier))
+      (field_declaration
+        (identifier)))
     (call
       (identifier)
       (arguments
@@ -108,20 +113,21 @@ stack app[tier, region] { unknowns = "permissive" }
           (string_content)))))
   (input_relation
     (identifier)
-    (field_declaration
-      (identifier)
-      (type
-        (dotted_name
-          (identifier))
-        (string
-          (string_content))
-        (string
-          (string_content))))
-    (field_declaration
-      (identifier)
-      (type
-        (dotted_name
-          (identifier))))
+    (columns
+      (field_declaration
+        (identifier)
+        (type
+          (dotted_name
+            (identifier))
+          (string
+            (string_content))
+          (string
+            (string_content))))
+      (field_declaration
+        (identifier)
+        (type
+          (dotted_name
+            (identifier)))))
     (call
       (identifier)
       (arguments
@@ -129,11 +135,12 @@ stack app[tier, region] { unknowns = "permissive" }
           (string_content)))))
   (input_relation
     (identifier)
-    (field_declaration
-      (identifier)
-      (type
-        (dotted_name
-          (identifier))))
+    (columns
+      (field_declaration
+        (identifier)
+        (type
+          (dotted_name
+            (identifier)))))
     (call
       (identifier)
       (arguments
@@ -156,16 +163,17 @@ stack app[tier, region] { unknowns = "permissive" }
   (decl
     (dotted_name
       (identifier))
-    (field_declaration
-      (identifier)
-      (type
-        (dotted_name
-          (identifier))))
-    (field_declaration
-      (identifier)
-      (type
-        (dotted_name
-          (identifier)))))
+    (columns
+      (field_declaration
+        (identifier)
+        (type
+          (dotted_name
+            (identifier))))
+      (field_declaration
+        (identifier)
+        (type
+          (dotted_name
+            (identifier))))))
   (fact
     (call
       (identifier)
@@ -180,11 +188,12 @@ stack app[tier, region] { unknowns = "permissive" }
         (identifier)))
     (body
       (atom_literal
-        (record
+        (call
           (identifier)
-          (record_field
-            (identifier)
-            (identifier))))))
+          (arguments
+            (named_argument
+              (identifier)
+              (identifier)))))))
   (module
     (identifier)
     (statement_block
@@ -193,14 +202,8 @@ stack app[tier, region] { unknowns = "permissive" }
         (type
           (dotted_name
             (identifier))))
-      (output
-        (identifier)
-        (type
-          (dotted_name
-            (identifier))))
       (export
-        (identifier)
-        (integer))
+        (identifier))
       (contributes
         (identifier))
       (resource
@@ -212,11 +215,9 @@ stack app[tier, region] { unknowns = "permissive" }
         (block
           (clause
             (body
-              (atom_literal
-                (call
-                  (identifier)
-                  (arguments
-                    (true))))))
+              (comparison
+                (identifier)
+                (true))))
           (field
             (block_path
               (identifier))
@@ -260,11 +261,9 @@ stack app[tier, region] { unknowns = "permissive" }
             (string
               (string_content))))
         (body
-          (atom_literal
-            (call
-              (identifier)
-              (arguments
-                (true))))))
+          (comparison
+            (identifier)
+            (true))))
       (fact
         (call
           (identifier)
@@ -281,9 +280,13 @@ stack app[tier, region] { unknowns = "permissive" }
                   (identifier))
                 (string
                   (string_content))
-                (keypath))))))
+                (string
+                  (string_content)))))))
       (output
         (identifier)
+        (type
+          (dotted_name
+            (identifier)))
         (identifier))))
   (instance
     (identifier)
@@ -306,7 +309,8 @@ stack app[tier, region] { unknowns = "permissive" }
           (arguments
             (identifier)
             (identifier)
-            (keypath)
+            (string
+              (string_content))
             (object
               (object_field
                 (identifier)
@@ -320,22 +324,20 @@ stack app[tier, region] { unknowns = "permissive" }
               (arguments
                 (identifier)
                 (identifier))))))))
-  (apply
+  (use
     (identifier))
-  (when
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (integer)))
     (body
       (atom_literal
         (call
           (identifier)
           (arguments
             (string
-              (string_content))))))
-    (statement_block
-      (fact
-        (call
-          (identifier)
-          (arguments
-            (integer))))))
+              (string_content)))))))
   (settings
     (identifier)
     (rank)
@@ -407,14 +409,21 @@ stack app[tier, region] { unknowns = "permissive" }
       (arguments
         (identifier)))
     (body
-      (atom_literal
-        (call
-          (identifier)
-          (arguments
+      (comparison
+        (identifier)
+        (member_expression
+          (member_expression
+            (member_expression
+              (member_expression
+                (index_expression
+                  (identifier)
+                  (string
+                    (string_content)))
+                (identifier))
+              (identifier))
             (string
-              (string_content))
-            (keypath)
-            (identifier))))))
+              (string_content)))
+          (identifier)))))
   (rule
     (call
       (identifier)
@@ -477,12 +486,10 @@ stack app[tier, region] { unknowns = "permissive" }
             (member_expression
               (identifier)
               (identifier))
-            (instance_expression
-              (member_expression
-                (identifier)
-                (identifier))
-              (instance_name))
-            (keypath)))
+            (string
+              (string_content))
+            (string
+              (string_content))))
         (identifier))))
   (fact
     (call
@@ -491,11 +498,8 @@ stack app[tier, region] { unknowns = "permissive" }
         (member_expression
           (identifier)
           (identifier))
-        (instance_expression
-          (member_expression
-            (identifier)
-            (identifier))
-          (instance_name))
+        (string
+          (string_content))
         (string
           (string_content)))))
   (fact
@@ -505,28 +509,8 @@ stack app[tier, region] { unknowns = "permissive" }
         (member_expression
           (identifier)
           (identifier))
-        (instance_expression
-          (member_expression
-            (identifier)
-            (identifier))
-          (instance_name))
-        (instance_expression
-          (member_expression
-            (identifier)
-            (identifier))
-          (instance_name)))))
-  (fact
-    (call
-      (identifier)
-      (arguments
-        (member_expression
-          (identifier)
-          (identifier))
-        (instance_expression
-          (member_expression
-            (identifier)
-            (identifier))
-          (instance_name))
+        (string
+          (string_content))
         (string
           (string_content)))))
   (fact
@@ -536,12 +520,21 @@ stack app[tier, region] { unknowns = "permissive" }
         (member_expression
           (identifier)
           (identifier))
-        (instance_expression
-          (member_expression
-            (identifier)
-            (identifier))
-          (instance_name))
-        (keypath))))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
   (rule
     (call
       (identifier)
@@ -596,11 +589,15 @@ stack app[tier, region] { unknowns = "permissive" }
   (decl
     (dotted_name
       (identifier))
-    (integer))
+    (columns
+      (field_declaration
+        (identifier))))
   (decl
     (dotted_name
       (identifier))
-    (integer))
+    (columns
+      (field_declaration
+        (identifier))))
   (fact
     (call
       (identifier)

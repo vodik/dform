@@ -23,11 +23,11 @@ type_attr("gke_cluster", "ca_certificate", "string", ["computed"])
 type_attr("gke_cluster", "zones", "list", ["computed"])
 type_attr("gke_nodepool", "instance_group", "string", ["computed"])
 
-type_mint("gke_cluster", "endpoint", "https://{{name}}.gke.fake")
-type_mint("gke_cluster", "ca_certificate", "ca-{{name}}-{{hash}}")
+type_mint("gke_cluster", "endpoint", "https://{name}.gke.fake")
+type_mint("gke_cluster", "ca_certificate", "ca-{name}-{hash}")
 # The zones a cluster lands in are the node locations it was configured with.
-type_mint("gke_cluster", "zones", "{{doc:node_locations}}")
-type_mint("gke_nodepool", "instance_group", "ig-{{name}}-{{hash}}")
+type_mint("gke_cluster", "zones", "{doc:node_locations}")
+type_mint("gke_nodepool", "instance_group", "ig-{name}-{hash}")
 
 ---
 
@@ -190,10 +190,6 @@ type_mint("gke_nodepool", "instance_group", "ig-{{name}}-{{hash}}")
         (string
           (string_content))
         (string
-          (string_content)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)
           (string_content)))))
   (fact
     (call
@@ -204,14 +200,7 @@ type_mint("gke_nodepool", "instance_group", "ig-{{name}}-{{hash}}")
         (string
           (string_content))
         (string
-          (string_content)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)))))
+          (string_content)))))
   (comment)
   (fact
     (call
@@ -222,9 +211,7 @@ type_mint("gke_nodepool", "instance_group", "ig-{{name}}-{{hash}}")
         (string
           (string_content))
         (string
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)))))
+          (string_content)))))
   (fact
     (call
       (identifier)
@@ -234,11 +221,4 @@ type_mint("gke_nodepool", "instance_group", "ig-{{name}}-{{hash}}")
         (string
           (string_content))
         (string
-          (string_content)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence))))))
+          (string_content))))))

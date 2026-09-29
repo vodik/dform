@@ -4,7 +4,7 @@ A newline ends a statement
 
 p(a)
 q(b) if p(b)
-k = 1
+let k = 1
 
 --------------------------------------------------------------------------------
 
@@ -25,85 +25,9 @@ k = 1
           (identifier)
           (arguments
             (identifier))))))
-  (value_rule
+  (let
     (identifier)
     (integer)))
-
-================================================================================
-A trailing comma, operator or if continues the line
-================================================================================
-
-p(a) if q(a),
-  r(a)
-x = 1 +
-  2
-s(a) if
-  q(a)
-
---------------------------------------------------------------------------------
-
-(source_file
-  (rule
-    (call
-      (identifier)
-      (arguments
-        (identifier)))
-    (body
-      (atom_literal
-        (call
-          (identifier)
-          (arguments
-            (identifier))))
-      (atom_literal
-        (call
-          (identifier)
-          (arguments
-            (identifier))))))
-  (value_rule
-    (identifier)
-    (binary_expression
-      (integer)
-      (integer)))
-  (rule
-    (call
-      (identifier)
-      (arguments
-        (identifier)))
-    (body
-      (atom_literal
-        (call
-          (identifier)
-          (arguments
-            (identifier)))))))
-
-================================================================================
-A leading comma continues the line, past comments
-================================================================================
-
-p(a) if q(a)
-  # why
-  , r(a)
-
---------------------------------------------------------------------------------
-
-(source_file
-  (rule
-    (call
-      (identifier)
-      (arguments
-        (identifier)))
-    (body
-      (atom_literal
-        (call
-          (identifier)
-          (arguments
-            (identifier))))
-      (comment)
-      (atom_literal
-        (call
-          (identifier)
-          (arguments
-            (identifier)))))))
 
 ================================================================================
 Inside brackets a newline is whitespace
@@ -113,8 +37,10 @@ p(
   a,
   b,
 )
-k = [x | q(x),
+let k = [x | q(x),
   r(x)]
+let o = { a: 1,
+  b }
 
 --------------------------------------------------------------------------------
 
@@ -125,7 +51,7 @@ k = [x | q(x),
       (arguments
         (identifier)
         (identifier))))
-  (value_rule
+  (let
     (identifier)
     (comprehension
       (identifier)
@@ -139,16 +65,23 @@ k = [x | q(x),
           (call
             (identifier)
             (arguments
-              (identifier))))))))
+              (identifier)))))))
+  (let
+    (identifier)
+    (object
+      (object_field
+        (identifier)
+        (integer))
+      (object_field
+        (identifier)))))
 
 ================================================================================
 A body block separates literals by newlines or commas
 ================================================================================
 
-constraint "m" if {
-  env == "prod", exists network.main/vpc
-
-  not network.main/vpc.private
+deny "m" if {
+  env == "prod", vpc in net.vpc
+  not vpc.private
 }
 
 --------------------------------------------------------------------------------
@@ -162,29 +95,23 @@ constraint "m" if {
         (identifier)
         (string
           (string_content)))
-      (exists_literal
-        (instance_expression
-          (member_expression
-            (identifier)
-            (identifier))
-          (instance_name)))
+      (in_literal
+        (identifier)
+        (member_expression
+          (identifier)
+          (identifier)))
       (not_literal
         (truth_literal
           (member_expression
-            (instance_expression
-              (member_expression
-                (identifier)
-                (identifier))
-              (instance_name))
+            (identifier)
             (identifier)))))))
 
 ================================================================================
-Blocks: clauses first, then fields, by newline or comma
+Blocks: one clause first, then fields, by newline or comma
 ================================================================================
 
-resource net.subnet "private-{z}" @default {
-  for data("zone", z), z != "x"
-  if exists vpc
+resource net.subnet "private-${z}" @default {
+  if data("zone", z), z != "x"
   vpc_id = vpc.id, zone = z
   tags.team += ["a"] @override
   list[0]."k-v" = 1
@@ -216,10 +143,6 @@ resource net.subnet "private-{z}" @default {
             (identifier)
             (string
               (string_content)))))
-      (clause
-        (body
-          (exists_literal
-            (identifier))))
       (field
         (block_path
           (identifier))
@@ -292,11 +215,37 @@ p(a)
 
 
 ================================================================================
+A leading comma does not continue a line
+:error
+================================================================================
+
+p(a) if q(a)
+  , r(a)
+
+--------------------------------------------------------------------------------
+
+
+
+================================================================================
 Two fields on one line
 :error
 ================================================================================
 
 resource net.vpc a { cidr = "x" name = "a" }
+
+--------------------------------------------------------------------------------
+
+
+
+================================================================================
+A clause after a field
+:error
+================================================================================
+
+resource net.vpc a {
+  cidr = "x"
+  if q(x)
+}
 
 --------------------------------------------------------------------------------
 
@@ -319,6 +268,17 @@ A type name has no spaces
 ================================================================================
 
 resource net. vpc a {}
+
+--------------------------------------------------------------------------------
+
+
+
+================================================================================
+A value is let
+:error
+================================================================================
+
+k = 1
 
 --------------------------------------------------------------------------------
 

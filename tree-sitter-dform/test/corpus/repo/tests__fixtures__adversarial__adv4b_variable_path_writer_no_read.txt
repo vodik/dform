@@ -7,20 +7,16 @@ tests/fixtures/adversarial/adv4b_variable_path_writer_no_read.df
 
 edition 2026
 
-override(net.vpc, "main", .tags, { team: "x" })
+override(net.vpc, "main", "tags", { team: "x" })
 
 resource net.vpc main {
   cidr = inet("10.0.0.0/16")
   tags = { env: "dev" }
 }
 
-arg(t, n, p, v) if
-  override(t, n, p, v),
-  want(t, n)
+arg(t, n, p, v) if override(t, n, p, v), want(t, n)
 
-deny "vpc without cidr" { vpc: n } if
-  want(net.vpc, n),
-  not arg(net.vpc, n, .cidr, inet("10.0.0.0/16"))
+deny "vpc without cidr" { vpc: n } if n in net.vpc, not arg(net.vpc, n, "cidr", inet("10.0.0.0/16"))
 
 ---
 
@@ -38,7 +34,8 @@ deny "vpc without cidr" { vpc: n } if
           (identifier))
         (string
           (string_content))
-        (keypath)
+        (string
+          (string_content))
         (object
           (object_field
             (identifier)
@@ -97,14 +94,11 @@ deny "vpc without cidr" { vpc: n } if
         (identifier)
         (identifier)))
     (body
-      (atom_literal
-        (call
+      (in_literal
+        (identifier)
+        (member_expression
           (identifier)
-          (arguments
-            (member_expression
-              (identifier)
-              (identifier))
-            (identifier))))
+          (identifier)))
       (not_literal
         (atom_literal
           (call
@@ -114,7 +108,8 @@ deny "vpc without cidr" { vpc: n } if
                 (identifier)
                 (identifier))
               (identifier)
-              (keypath)
+              (string
+                (string_content))
               (call
                 (identifier)
                 (arguments

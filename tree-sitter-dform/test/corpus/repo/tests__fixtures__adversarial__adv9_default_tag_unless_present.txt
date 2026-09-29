@@ -13,9 +13,10 @@ resource net.vpc main {
   tags = { env: "dev" }
 }
 
-arg_add(t, n, .tags, { team: "platform" }) if
-  want(t, n),
-  not arg(t, n, .tags, { team: "platform" })
+arg_add(t, n, "tags", { team: "platform" }) if {
+  want(t, n)
+  not arg(t, n, "tags", { team: "platform" })
+}
 
 ---
 
@@ -53,13 +54,14 @@ arg_add(t, n, .tags, { team: "platform" }) if
       (arguments
         (identifier)
         (identifier)
-        (keypath)
+        (string
+          (string_content))
         (object
           (object_field
             (identifier)
             (string
               (string_content))))))
-    (body
+    (body_block
       (atom_literal
         (call
           (identifier)
@@ -73,7 +75,8 @@ arg_add(t, n, .tags, { team: "platform" }) if
             (arguments
               (identifier)
               (identifier)
-              (keypath)
+              (string
+                (string_content))
               (object
                 (object_field
                   (identifier)

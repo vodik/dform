@@ -26,18 +26,19 @@ instance network main {
 }
 
 # Adopt the VPC from inventory, but manage it under the local name `network.main::vpc`.
-adopt(net.vpc, network.main/vpc, "existing-prod-vpc") if
-  env == "prod",
+adopt(net.vpc, "network.main::vpc", "existing-prod-vpc") if {
+  env == "prod"
   "existing-prod-vpc" in world.net.vpc
+}
 
 # Example: use discovered inventory values directly in config.
-network.main/vpc.adopted_id = cloud_ref(net.vpc, "existing-prod-vpc", .id) if env == "prod"
+set net.vpc["network.main::vpc"].adopted_id = cloud_ref(net.vpc, "existing-prod-vpc", "id") if env == "prod"
 
 # Keep the existing owner tag stable (avoids a "remove tag" diff on adopt).
-network.main/vpc.tags.owner = cloud_ref(net.vpc, "existing-prod-vpc", .tags.owner) if env == "prod"
+set net.vpc["network.main::vpc"].tags.owner = cloud_ref(net.vpc, "existing-prod-vpc", "tags.owner") if env == "prod"
 
 # Also copy it into a separate attribute to demonstrate dotted path lookup.
-network.main/vpc.owner_tag = cloud_ref(net.vpc, "existing-prod-vpc", .tags.owner) if env == "prod"
+set net.vpc["network.main::vpc"].owner_tag = cloud_ref(net.vpc, "existing-prod-vpc", "tags.owner") if env == "prod"
 
 ---
 
@@ -112,14 +113,11 @@ network.main/vpc.owner_tag = cloud_ref(net.vpc, "existing-prod-vpc", .tags.owner
         (member_expression
           (identifier)
           (identifier))
-        (instance_expression
-          (member_expression
-            (identifier)
-            (identifier))
-          (instance_name))
+        (string
+          (string_content))
         (string
           (string_content))))
-    (body
+    (body_block
       (comparison
         (identifier)
         (string
@@ -133,13 +131,14 @@ network.main/vpc.owner_tag = cloud_ref(net.vpc, "existing-prod-vpc", .tags.owner
             (identifier))
           (identifier)))))
   (comment)
-  (contribution
+  (set
     (member_expression
-      (instance_expression
+      (index_expression
         (member_expression
           (identifier)
           (identifier))
-        (instance_name))
+        (string
+          (string_content)))
       (identifier))
     (call
       (identifier)
@@ -149,21 +148,23 @@ network.main/vpc.owner_tag = cloud_ref(net.vpc, "existing-prod-vpc", .tags.owner
           (identifier))
         (string
           (string_content))
-        (keypath)))
+        (string
+          (string_content))))
     (body
       (comparison
         (identifier)
         (string
           (string_content)))))
   (comment)
-  (contribution
+  (set
     (member_expression
       (member_expression
-        (instance_expression
+        (index_expression
           (member_expression
             (identifier)
             (identifier))
-          (instance_name))
+          (string
+            (string_content)))
         (identifier))
       (identifier))
     (call
@@ -174,20 +175,22 @@ network.main/vpc.owner_tag = cloud_ref(net.vpc, "existing-prod-vpc", .tags.owner
           (identifier))
         (string
           (string_content))
-        (keypath)))
+        (string
+          (string_content))))
     (body
       (comparison
         (identifier)
         (string
           (string_content)))))
   (comment)
-  (contribution
+  (set
     (member_expression
-      (instance_expression
+      (index_expression
         (member_expression
           (identifier)
           (identifier))
-        (instance_name))
+        (string
+          (string_content)))
       (identifier))
     (call
       (identifier)
@@ -197,7 +200,8 @@ network.main/vpc.owner_tag = cloud_ref(net.vpc, "existing-prod-vpc", .tags.owner
           (identifier))
         (string
           (string_content))
-        (keypath)))
+        (string
+          (string_content))))
     (body
       (comparison
         (identifier)

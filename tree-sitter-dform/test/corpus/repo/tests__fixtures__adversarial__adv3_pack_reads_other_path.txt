@@ -15,12 +15,13 @@ resource iam.policy app_policy {
 
 policy p {
   contributes iam.policy.statements
-  type_lattice("iam.policy", .statements, "set")
-  arg("iam.policy", p, .statements, [{ action: "org.read", resource: "org" }]) if
-    want("iam.policy", p),
-    arg("iam.policy", p, .name, "app")
+  type_lattice("iam.policy", "statements", "set")
+  set p.statements = [{ action: "org.read", resource: "org" }] if {
+    p in iam.policy
+    arg("iam.policy", p, "name", "app")
+  }
 }
-apply p
+use p
 
 ---
 
@@ -69,35 +70,30 @@ apply p
           (arguments
             (string
               (string_content))
-            (keypath)
-            (string
-              (string_content)))))
-      (rule
-        (call
-          (identifier)
-          (arguments
             (string
               (string_content))
-            (identifier)
-            (keypath)
-            (list
-              (object
-                (object_field
-                  (identifier)
-                  (string
-                    (string_content)))
-                (object_field
-                  (identifier)
-                  (string
-                    (string_content)))))))
-        (body
-          (atom_literal
-            (call
+            (string
+              (string_content)))))
+      (set
+        (member_expression
+          (identifier)
+          (identifier))
+        (list
+          (object
+            (object_field
               (identifier)
-              (arguments
-                (string
-                  (string_content))
-                (identifier))))
+              (string
+                (string_content)))
+            (object_field
+              (identifier)
+              (string
+                (string_content)))))
+        (body_block
+          (in_literal
+            (identifier)
+            (member_expression
+              (identifier)
+              (identifier)))
           (atom_literal
             (call
               (identifier)
@@ -105,8 +101,9 @@ apply p
                 (string
                   (string_content))
                 (identifier)
-                (keypath)
+                (string
+                  (string_content))
                 (string
                   (string_content)))))))))
-  (apply
+  (use
     (identifier)))

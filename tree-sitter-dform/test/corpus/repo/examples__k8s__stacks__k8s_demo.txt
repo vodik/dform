@@ -29,22 +29,22 @@ resource k8s.config_map web_config {
 }
 
 resource k8s.deployment name {
-  for app(name, image, replicas)
+  if app(name, image, replicas)
   metadata.name = name
   metadata.namespace = shop.metadata.name
   spec.replicas = replicas
   spec.selector.matchLabels = { app: name }
   spec.template.metadata.labels = { app: name }
   spec.template.spec.containers = [{
-    name: name,
-    image: image,
+    name,
+    image,
     ports: [{ containerPort: 8080, protocol: "TCP" }],
     envFrom: [{ configMapRef: { name: web_config.metadata.name } }]
   }]
 }
 
 resource k8s.service name {
-  for app(name, _, _)
+  if app(name, _, _)
   metadata.name = name
   metadata.namespace = shop.metadata.name
   spec.selector = { app: name }
@@ -198,10 +198,8 @@ resource k8s.service name {
         (list
           (object
             (object_field
-              (identifier)
               (identifier))
             (object_field
-              (identifier)
               (identifier))
             (object_field
               (identifier)

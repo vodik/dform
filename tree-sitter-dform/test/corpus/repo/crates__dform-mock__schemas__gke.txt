@@ -44,9 +44,9 @@ type_attr("gke_cluster", "zones", "list", ["computed"])
 type_attr(google.client_config, "access_token", "string", ["computed", "sensitive"])
 type_attr(google.secret_manager_secret_version, "secret_data", "string", ["computed", "sensitive"])
 
-type_mint("gke_cluster", "endpoint", "https://{{name}}.gke.fake")
+type_mint("gke_cluster", "endpoint", "https://{name}.gke.fake")
 # The zones a cluster lands in are the node locations it was configured with.
-type_mint("gke_cluster", "zones", "{{doc:node_locations}}")
+type_mint("gke_cluster", "zones", "{doc:node_locations}")
 
 # Descriptions (`type_doc(Type, Path, Text)`; the path "" is the type's),
 # for the paths the examples write: the language server's hover and
@@ -467,10 +467,6 @@ type_doc("google_monitoring_dashboard", "dashboard_json", "The dashboard's defin
         (string
           (string_content))
         (string
-          (string_content)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)
           (string_content)))))
   (comment)
   (fact
@@ -482,9 +478,7 @@ type_doc("google_monitoring_dashboard", "dashboard_json", "The dashboard's defin
         (string
           (string_content))
         (string
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)))))
+          (string_content)))))
   (comment)
   (comment)
   (comment)

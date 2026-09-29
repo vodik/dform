@@ -44,8 +44,8 @@ resource gke_cluster renfry {
 }
 
 # One node pool per zone the cluster lands in.
-resource gke_nodepool "np-{z}" {
-  for z in renfry.zones
+resource gke_nodepool "np-${z}" {
+  if z in renfry.zones
   cluster = renfry.id
   zone = z
   node_count = 1
@@ -68,7 +68,7 @@ node_pool_up(np) if gke_nodepool[np].instance_group != ""
 # zone's node pool once that pool is up. Until then the rule may derive
 # after the boundary, and the plan holds it as a pending group.
 resource k8s.deployment dform_controller {
-  if pool = "np-{renfry.zones[0]}", node_pool_up(pool)
+  if pool = "np-${renfry.zones[0]}", node_pool_up(pool)
   metadata.name = "dform-controller"
   metadata.namespace = dform_system.metadata.name
   metadata.annotations = { "dform.io/node-pool": gke_nodepool[pool].instance_group }

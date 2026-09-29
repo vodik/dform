@@ -1,17 +1,19 @@
 /**
  * @file The dform grammar for editors (docs/grammar.md).
  *
- * The compiler's parser is src/syntax/parser.rs; this grammar is for
- * highlighting, indentation and navigation, and tests/treesit_agreement.rs
- * holds the two to the same corpus. A newline outside brackets ends a
- * statement, a block entry or a literal of a `{ }` body: the external
- * scanner (src/scanner.c) emits it only where the grammar can take one, so
- * everywhere else it is whitespace, as in the compiler.
+ * The compiler's parser is crates/dform-core/src/syntax/parser.rs; this
+ * grammar is for highlighting, indentation and navigation, and
+ * tests/treesit_agreement.rs holds the two to the same corpus. A
+ * statement's first token decides what it is (proposal H, H-2). A newline
+ * outside `( )`, `[ ]` and an object's braces ends a statement, a block
+ * entry or a literal of a `{ }` body, and nothing continues a line: the
+ * external scanner (src/scanner.c) emits a newline only where the grammar
+ * can take one, so everywhere else it is whitespace, as in the compiler.
  *
  * One consequence: where a statement cannot end yet, a newline is
- * whitespace here but an end to the compiler, so a line broken before an
- * operator (`r.tags` then `= {}` on the next line, `x` then `in xs`) is an
- * error only in the compiler's diagnostics.
+ * whitespace here but an end to the compiler, so a line broken after an
+ * operator, a comma or `if`, or before a block's `{`, is an error only in
+ * the compiler's diagnostics.
  */
 
 /// <reference types="tree-sitter-cli/dsl" />
@@ -19,58 +21,32 @@
 
 const IDENT = /[A-Za-z_][A-Za-z0-9_]*/;
 
-// Keywords (docs/grammar.md "Tokens"). Anywhere a plain name is expected a
-// keyword is a name; `_word` says so where a keyword could otherwise start
-// its own construct.
-const KEYWORDS = [
-  'edition', 'provider', 'stack', 'import', 'input', 'output', 'export',
-  'contributes', 'module', 'instance', 'policy', 'apply', 'resource',
-  'settings', 'scenario', 'extern', 'type', 'decl', 'when', 'not', 'in',
-  'exists', 'persist', 'where', 'if', 'for', 'let', 'has', 'some', 'with',
-  'deny', 'warn', 'constraint',
+// The statement keywords: a statement's first token (docs/grammar.md
+// "Tokens"). Anywhere a plain name is expected a keyword is a name.
+const STATEMENT_KEYWORDS = [
+  'edition', 'import', 'provider', 'stack', 'type', 'decl', 'extern',
+  'input', 'output', 'let', 'set', 'export', 'contributes', 'module',
+  'instance', 'policy', 'use', 'scenario', 'resource', 'settings', 'deny',
+  'warn',
 ];
 
-// Contextual words: keywords only where their construct is expected.
+// The body words and literals: never a name in a term.
+const TERM_WORDS = ['not', 'in', 'has', 'if', 'true', 'false'];
+
+// Contextual words: plain names but where their construct is expected.
 const CONTEXTUAL = [
-  'relation', 'from', 'mixed', 'open', 'ordered', 'by', 'as',
+  'from', 'mixed', 'persist', 'where',
   'required', 'computed', 'id', 'sensitive', 'nullable',
 ];
 
-// Keywords that may start a chain in a term (parser.rs `term_name`).
-const TERM_KEYWORDS = KEYWORDS.filter(k => ![
-  'not', 'in', 'if', 'for', 'has', 'some', 'exists', 'where',
-].includes(k));
+// Words that may start a chain in a term (parser.rs `term_name`).
+const TERM_NAMES = [...STATEMENT_KEYWORDS, ...CONTEXTUAL];
 
 const PREC = {
   add: 1,
   mul: 2,
   unary: 3,
 };
-
-/**
- * Items separated by `sep`, with any number of separators before, between
- * and after them.
- *
- * @param {RuleOrLiteral} item
- * @param {RuleOrLiteral} sep
- * @returns {SeqRule}
- */
-function lines(item, sep) {
-  return seq(repeat(sep), repeat(seq(item, repeat1(sep))), optional(item));
-}
-
-/**
- * Entries of a block or a `{ }` body: separated by a newline or a comma,
- * with blank lines anywhere and a trailing comma allowed.
- *
- * @param {GrammarSymbols<string>} $
- * @param {RuleOrLiteral} item
- * @returns {SeqRule}
- */
-function entries($, item) {
-  const sep = choice(seq(',', repeat($._newline)), repeat1($._newline));
-  return seq(repeat($._newline), repeat(seq(item, sep)), optional(item));
-}
 
 /**
  * @param {RuleOrLiteral} rule
@@ -95,11 +71,11 @@ export default grammar({
 
   word: $ => $.identifier,
 
-  // Keywords with a construct of their own in a term are never a name
-  // there (parser.rs `term_name`); every keyword is a name where only a
-  // name can go (`_word`).
+  // The body words have a construct of their own in a term and are never a
+  // name there (parser.rs `term_name`); every keyword is a name where only
+  // a name can go (`_word`).
   reserved: {
-    global: _ => ['not', 'in', 'if', 'for', 'has', 'some', 'exists', 'where', 'true', 'false', 'null'],
+    global: _ => TERM_WORDS,
     names: _ => [],
   },
 
@@ -118,54 +94,54 @@ export default grammar({
   ],
 
   rules: {
-    source_file: $ => lines($._statement, $._newline),
+    source_file: $ => seq(
+      repeat($._newline),
+      repeat(seq($._statement, repeat1($._newline))),
+      optional($._statement),
+    ),
 
-    comment: _ => token(seq(choice('#', '//'), /[^\n]*/)),
+    comment: _ => token(seq('#', /[^\n]*/)),
 
     _statement: $ => choice(
       $.edition,
+      $.import,
       $.provider,
       $.stack,
-      $.import,
       $.input,
       $.input_relation,
       $.output,
+      $.let,
+      $.set,
       $.export,
       $.contributes,
       $.extern,
       $.type_declaration,
       $.type_alias,
       $.decl,
-      $.let,
       $.module,
       $.instance,
       $.policy,
-      $.apply,
+      $.use,
       $.scenario,
-      $.when,
-      $.for,
-      $.with,
       $.resource,
       $.settings,
       $.check,
-      $.contribution,
-      $.value_rule,
       $.rule,
       $.fact,
     ),
 
     edition: $ => seq('edition', field('version', $.integer)),
 
+    import: $ => seq('import', field('path', $.string)),
+
     provider: $ => seq('provider', field('name', $._word), field('body', $.block)),
 
     stack: $ => seq(
       'stack',
       field('name', $.dotted_name),
-      optional(seq('[', commaSep1(field('key', $.identifier)), ']')),
+      optional(seq('[', commaSep1(field('key', $._word)), ']')),
       field('body', $.block),
     ),
-
-    import: $ => seq('import', field('path', $.string), optional(seq('as', field('alias', $._word)))),
 
     input: $ => seq(
       'input',
@@ -176,30 +152,48 @@ export default grammar({
       optional($.where_clause),
     ),
 
-    // `p/N` (facts from a .df file) or `p(col: type, ...)` (a table).
+    // `input p(cols) from SOURCE`: a relation the world gives.
     input_relation: $ => seq(
       'input',
-      'relation',
       field('name', $._word),
-      choice(
-        seq('/', field('arity', $.integer)),
-        seq('(', commaSep1($.field_declaration), optional(','), ')'),
-      ),
+      $.columns,
       'from',
       field('source', $._term),
     ),
 
+    // `output k: T = t [if B]`: one statement.
     output: $ => seq(
       'output',
       field('name', $._word),
-      choice(seq(':', field('type', $._type)), seq('=', field('value', $._term))),
+      optional(seq(':', field('type', $._type))),
+      optional(seq('=', field('value', $._term))),
+      optional(seq('if', field('condition', $._body))),
+    ),
+
+    // `let k = t [if B]`: a value.
+    let: $ => seq(
+      'let',
+      field('name', $._word),
+      '=',
+      field('value', $._term),
+      optional(seq('if', field('condition', $._body))),
+    ),
+
+    // `set r.p = t [@rank] [if B]`: a contribution.
+    set: $ => seq(
+      'set',
+      field('target', $._chain),
+      field('operator', choice('=', '+=')),
+      field('value', $._term),
+      optional(field('rank', $.rank)),
+      optional(seq('if', field('condition', $._body))),
     ),
 
     export: $ => seq(
       'export',
       choice(
-        seq(field('name', $._word), '/', field('arity', $.integer)),
-        seq('type', field('type', $.identifier)),
+        field('name', $._word),
+        seq('type', field('type', $._word)),
       ),
     ),
 
@@ -225,7 +219,13 @@ export default grammar({
     // `type NAME = TYPE`: a transparent alias.
     type_alias: $ => seq('type', field('name', $.identifier), '=', field('type', $._type)),
 
-    attribute_block: $ => seq('{', entries($, $.attribute_declaration), '}'),
+    attribute_block: $ => seq(
+      '{',
+      repeat($._newline),
+      repeat(seq($.attribute_declaration, $._separator)),
+      optional($.attribute_declaration),
+      '}',
+    ),
 
     attribute_declaration: $ => seq(
       field('path', $.block_path),
@@ -243,15 +243,20 @@ export default grammar({
 
     flag: _ => choice('required', 'computed', 'id', 'sensitive', 'nullable'),
 
-    decl: $ => seq('decl', choice(
-      seq(field('name', $.dotted_name), '/', field('arity', $.integer), optional('mixed')),
-      seq(field('name', $.dotted_name), '(', commaSep1($.field_declaration), optional(','), ')'),
-      seq('type', field('type', $.dotted_name), 'open'),
-    )),
+    // `decl p(a, b: T) [mixed]`: a relation by its columns.
+    decl: $ => seq(
+      'decl',
+      field('name', $.dotted_name),
+      $.columns,
+      optional('mixed'),
+    ),
 
-    field_declaration: $ => seq(field('name', $._word), ':', field('type', $._type)),
+    columns: $ => seq('(', commaSep1($.field_declaration), optional(','), ')'),
 
-    let: $ => seq('let', field('name', $._word), '=', field('value', $._term)),
+    field_declaration: $ => seq(
+      field('name', $._word),
+      optional(seq(':', field('type', $._type))),
+    ),
 
     module: $ => seq('module', field('name', $._word), field('body', $.statement_block)),
 
@@ -266,15 +271,15 @@ export default grammar({
       field('body', $.block),
     ),
 
-    apply: $ => seq('apply', field('name', $._word)),
+    use: $ => seq('use', field('name', $._word)),
 
-    when: $ => seq('when', field('condition', $.body), field('body', $.statement_block)),
-
-    for: $ => seq('for', field('condition', $.body), field('body', $.statement_block)),
-
-    with: $ => seq('with', field('name', $._word), '=', field('value', $._term)),
-
-    statement_block: $ => seq('{', lines($._statement, $._newline), '}'),
+    statement_block: $ => seq(
+      '{',
+      repeat($._newline),
+      repeat(seq($._statement, repeat1($._newline))),
+      optional($._statement),
+      '}',
+    ),
 
     resource: $ => seq(
       'resource',
@@ -292,10 +297,26 @@ export default grammar({
     ),
 
     // A resource's, settings row's, instance's, provider's or stack's
-    // entries: clauses, then fields.
-    block: $ => seq('{', entries($, choice($.clause, $.field)), '}'),
+    // entries: one `if` clause first, then fields, separated by a newline
+    // or a comma.
+    block: $ => seq(
+      '{',
+      repeat($._newline),
+      optional(choice(
+        seq($.clause, optional(seq($._separator, optional($._fields)))),
+        $._fields,
+      )),
+      '}',
+    ),
 
-    clause: $ => seq(choice('for', 'if'), field('condition', $.body)),
+    _fields: $ => choice(
+      seq(repeat(seq($.field, $._separator)), $.field),
+      repeat1(seq($.field, $._separator)),
+    ),
+
+    _separator: $ => choice(seq(',', repeat($._newline)), repeat1($._newline)),
+
+    clause: $ => seq('if', field('condition', $._body)),
 
     field: $ => seq(
       field('path', $.block_path),
@@ -304,9 +325,9 @@ export default grammar({
       optional(field('rank', $.rank)),
     ),
 
-    // A keypath without its dot: `a.b[0]."c-d"`.
+    // An attribute path: `a.b[0]."c-d"`.
     block_path: $ => seq(
-      choice($._field_word, $.string),
+      choice($._word, $.string),
       repeat(choice(
         seq(token.immediate('.'), choice($._word, $.string)),
         seq(token.immediate('['), $.integer, ']'),
@@ -314,37 +335,21 @@ export default grammar({
     ),
 
     check: $ => seq(
-      field('kind', choice('deny', 'warn', 'constraint')),
+      field('kind', choice('deny', 'warn')),
       field('message', $.string),
       optional(field('details', $.object)),
       optional(seq('if', field('condition', $._body))),
     ),
 
-    contribution: $ => seq(
-      field('target', choice($.member_expression, $.index_expression, $.instance_expression)),
-      field('operator', choice('=', '+=')),
-      field('value', $._term),
-      optional(field('rank', $.rank)),
-      optional(seq('if', field('condition', $._body))),
-    ),
-
-    value_rule: $ => seq(
-      field('name', $.identifier),
-      field('operator', choice('=', '+=')),
-      field('value', $._term),
-      optional(field('rank', $.rank)),
-      optional(seq('if', field('condition', $._body))),
-    ),
-
     rule: $ => seq(
-      field('head', choice($.call, $.record)),
+      field('head', $.call),
       optional(field('rank', $.rank)),
       'if',
       field('body', $._body),
     ),
 
     fact: $ => seq(
-      field('head', choice($.call, $.record)),
+      field('head', $.call),
       optional(field('rank', $.rank)),
     ),
 
@@ -356,14 +361,22 @@ export default grammar({
 
     body: $ => prec.right(commaSep1($._literal)),
 
-    body_block: $ => seq('{', entries($, $._literal), '}'),
+    body_block: $ => seq(
+      '{',
+      repeat($._newline),
+      repeat(seq($._literal, $._separator)),
+      optional($._literal),
+      '}',
+    ),
 
     _literal: $ => choice(
       $.not_literal,
       $.not_block,
-      $.exists_literal,
+      $._positive_literal,
+    ),
+
+    _positive_literal: $ => choice(
       $.has_literal,
-      $.some_literal,
       $.comparison,
       $.in_literal,
       $.not_in_literal,
@@ -371,21 +384,11 @@ export default grammar({
       $.truth_literal,
     ),
 
-    not_literal: $ => seq('not', $._literal),
+    not_literal: $ => seq('not', $._positive_literal),
 
     not_block: $ => prec(1, seq('not', $.body_block)),
 
-    exists_literal: $ => seq('exists', $._term),
-
     has_literal: $ => seq('has', $._term),
-
-    some_literal: $ => seq(
-      'some',
-      field('index', $._term),
-      optional(seq(',', field('element', $._term))),
-      'in',
-      field('collection', $._term),
-    ),
 
     comparison: $ => seq($._term, repeat1(seq(field('operator', choice('=', '==', '!=', '<', '<=', '>', '>=')), $._term))),
 
@@ -397,7 +400,7 @@ export default grammar({
 
     not_in_literal: $ => seq(field('element', $._term), 'not', 'in', field('collection', $._term)),
 
-    atom_literal: $ => choice($.call, $.record),
+    atom_literal: $ => $.call,
 
     truth_literal: $ => $._chain,
 
@@ -421,11 +424,8 @@ export default grammar({
       $.string,
       $.true,
       $.false,
-      $.null,
-      $.keypath,
       $._chain,
       $.call,
-      $.record,
       $.list,
       $.comprehension,
       $.object,
@@ -434,17 +434,16 @@ export default grammar({
 
     parenthesized: $ => seq('(', $._term, ')'),
 
-    // `name (.seg | [terms] | /name)*`, each part glued to the last.
+    // `name (.seg | [terms])*`: `.` is static, `[ ]` a key (H 5.1).
     _chain: $ => choice(
       $._chain_head,
       $.member_expression,
       $.index_expression,
-      $.instance_expression,
     ),
 
     _chain_head: $ => choice(
       $.identifier,
-      alias(choice(...TERM_KEYWORDS), $.identifier),
+      alias(choice(...TERM_NAMES), $.identifier),
     ),
 
     member_expression: $ => seq(
@@ -460,36 +459,23 @@ export default grammar({
       ']',
     ),
 
-    // `m.i/n`: the `/` glued on both sides.
-    instance_expression: $ => seq(
-      field('instance', $._chain),
-      field('name', alias(token.immediate(seq('/', IDENT)), $.instance_name)),
-    ),
-
     call: $ => seq(
       field('function', $._chain),
-      token.immediate('('),
+      '(',
       field('arguments', optional(alias($._arguments, $.arguments))),
       ')',
     ),
 
-    _arguments: $ => seq(commaSep1($._term), optional(',')),
+    _arguments: $ => seq(commaSep1(choice($._term, $.named_argument)), optional(',')),
 
-    record: $ => seq(
-      field('name', $._chain_head),
-      token.immediate('{'),
-      commaSepTrailing($.record_field),
-      '}',
-    ),
-
-    record_field: $ => seq(field('key', $._word), ':', field('value', $._term)),
+    // `p(a: x)`: an argument by its column's name.
+    named_argument: $ => seq(field('name', $._word), ':', field('value', $._term)),
 
     list: $ => seq('[', commaSepTrailing($._term), ']'),
 
     comprehension: $ => seq(
       '[',
       field('item', $._term),
-      optional(seq('ordered', 'by', field('order', $._term))),
       '|',
       field('condition', $.body),
       ']',
@@ -508,7 +494,7 @@ export default grammar({
 
     type: $ => seq(
       field('name', $.dotted_name),
-      optional(seq(token.immediate('('), commaSep1(field('argument', $._type)), ')')),
+      optional(seq('(', commaSep1(field('argument', $._type)), ')')),
     ),
 
     record_type: $ => seq('{', commaSepTrailing($.field_declaration), '}'),
@@ -523,13 +509,7 @@ export default grammar({
 
     _word: $ => reserved('names', choice(
       $.identifier,
-      alias(choice(...KEYWORDS, ...CONTEXTUAL), $.identifier),
-    )),
-
-    // A field's first segment: `for` and `if` start a clause there.
-    _field_word: $ => reserved('names', choice(
-      $.identifier,
-      alias(choice(...KEYWORDS.filter(k => k !== 'for' && k !== 'if'), ...CONTEXTUAL), $.identifier),
+      alias(choice(...STATEMENT_KEYWORDS, ...TERM_WORDS, ...CONTEXTUAL), $.identifier),
     )),
 
     identifier: _ => IDENT,
@@ -538,16 +518,8 @@ export default grammar({
 
     true: _ => 'true',
     false: _ => 'false',
-    null: _ => 'null',
 
     rank: _ => /@[a-z_]+/,
-
-    // `.tags."a.b"[0]`: a keypath literal, one token.
-    keypath: _ => token(seq(
-      '.',
-      choice(IDENT, /"([^"\\\n]|\\.)*"/),
-      repeat(choice(seq('.', choice(IDENT, /"([^"\\\n]|\\.)*"/)), /\[[0-9]+\]/)),
-    )),
 
     string: $ => seq(
       '"',
@@ -562,10 +534,10 @@ export default grammar({
     escape_sequence: _ => token.immediate(choice(
       /\\["\\nt]/,
       /\\u\{[0-9A-Fa-f]+\}/,
-      '{{',
-      '}}',
+      '$${',
     )),
 
-    interpolation: $ => seq(token.immediate('{'), field('value', $._term), '}'),
+    // `${e}`: a hole (H-13).
+    interpolation: $ => seq(token.immediate('${'), field('value', $._term), '}'),
   },
 });

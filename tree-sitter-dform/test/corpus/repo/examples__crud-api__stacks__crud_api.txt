@@ -18,7 +18,7 @@ examples/crud-api/stacks/crud_api.df
 # schema and this project's providers/google and providers/random), and
 # applies to a cluster with kubernetes = "providers/k8s" there. In
 # production the release and the approvals come from git:
-#   input relation release/3 from file("data/releases.facts")
+#   input release(app, key, value) from facts("data/releases.facts")
 # The live objects are read through the kubernetes provider's inventory
 # (`world.T[e].p`), named by remote id (`shop/crud-api`).
 
@@ -37,9 +37,9 @@ input replicas: int = 2 where replicas >= 1
 
 # release("crud_api", "digest", "sha256:9f2c...")
 # release("crud_api", "schema", 42)
-input relation release/3 from file("data/releases.facts")
+input release(app, key, value) from facts("data/releases.facts")
 # approve(t, a): accept the drift of t.a
-input relation approve/2 from file("data/approvals.facts")
+input approve(type, address) from facts("data/approvals.facts")
 
 # A generated password: a secret null until the first apply, the same
 # value on every later run (persisted in state, E DR-7).
@@ -53,38 +53,38 @@ let cfg = settings[env]
 # The release, and what the world runs now
 ########################################
 
-digest = d if release("crud_api", "digest", d)
-schema = v if release("crud_api", "schema", v)
-released_image = "gcr.io/shop/crud-api@{digest}"
+let digest = d if release("crud_api", "digest", d)
+let schema = v if release("crud_api", "schema", v)
+let released_image = "gcr.io/shop/crud-api@${digest}"
 
 # The live Service's selector names the serving color; nothing serves yet
 # on the first deploy.
-active = world.k8s.service["shop/crud-api"].spec.selector.color
-let live = world.k8s.deployment["shop/crud-api-{active}"]
-live_image = live.spec.template.spec.containers[0].image
-live_schema = to_int(live.metadata.labels.schema)
+let active = world.k8s.service["shop/crud-api"].spec.selector.color
+let live = world.k8s.deployment["shop/crud-api-${active}"]
+let live_image = live.spec.template.spec.containers[0].image
+let live_schema = to_int(live.metadata.labels.schema)
 
 other("blue", "green")
 other("green", "blue")
 
-next = other[active]
-next = "blue" if not has active
+let next = other[active]
+let next = "blue" if not has active
 
 # A rollout is needed when the serving Deployment does not run the release.
-rollout = next if live_image != released_image
-rollout = next if not has active
+let rollout = next if live_image != released_image
+let rollout = next if not has active
 
 ########################################
 # The database: private, regional in prod, password from an extern
 ########################################
 
 resource google_compute_network vpc {
-  name = "shop-{env}"
+  name = "shop-${env}"
   auto_create_subnetworks = false
 }
 
 resource google_sql_database_instance db {
-  name = "crud-api-{env}"
+  name = "crud-api-${env}"
   region = region
   database_version = "POSTGRES_16"
   deletion_protection = true
@@ -144,16 +144,16 @@ resource k8s.secret db_conn {
 # The migration: one Job per schema version
 ########################################
 
-resource k8s.job "migrate-v{schema}" {
-  metadata.name = "crud-api-migrate-v{schema}"
+resource k8s.job "migrate-v${schema}" {
+  metadata.name = "crud-api-migrate-v${schema}"
   metadata.namespace = shop.metadata.name
-  metadata.labels = { app: "crud-api", schema: "{schema}" }
+  metadata.labels = { app: "crud-api", schema: "${schema}" }
   spec.backoffLimit = 2
   spec.template.spec.restartPolicy = "Never"
   spec.template.spec.containers = [{
     name: "migrate",
     image: released_image,
-    args: ["migrate", "--to", "{schema}"],
+    args: ["migrate", "--to", "${schema}"],
     envFrom: [{ secretRef: { name: db_conn.metadata.name } }],
     resources: {
       requests: { cpu: "100m", memory: "128Mi" },
@@ -164,7 +164,7 @@ resource k8s.job "migrate-v{schema}" {
 
 # status.succeeded is an open null until the Job finishes: until then
 # migrated/1 is undetermined and so is everything gated on it.
-migrated(schema) if k8s.job["migrate-v{schema}"].status.succeeded == 1
+migrated(schema) if k8s.job["migrate-v${schema}"].status.succeeded == 1
 
 ########################################
 # The app, one instance per running color
@@ -199,9 +199,9 @@ instance app green {
 # the Deployment reports).
 ready(c) if run(c, _, _), app[c].ready_replicas == app[c].total_replicas
 
-cutover = rollout if ready(rollout)
-serving = cutover
-serving = active if not has cutover
+let cutover = rollout if ready(rollout)
+let serving = cutover
+let serving = active if not has cutover
 
 resource k8s.service api {
   metadata.name = "crud-api"
@@ -217,20 +217,18 @@ module app {
   input namespace: string
   input db_secret: string
   input replicas: int
-  output ready_replicas: int
-  output total_replicas: int
 
-  labels = { app: "crud-api", color: color }
+  let labels = { app: "crud-api", color }
 
   resource k8s.deployment deploy {
-    metadata.name = "crud-api-{color}"
+    metadata.name = "crud-api-${color}"
     metadata.namespace = namespace
-    metadata.labels = { app: "crud-api", color: color, schema: "{schema}" }
+    metadata.labels = { app: "crud-api", color, schema: "${schema}" }
     spec.selector.matchLabels = labels
     spec.template.metadata.labels = labels
     spec.template.spec.containers = [{
       name: "api",
-      image: image,
+      image,
       ports: [{ containerPort: 8080, protocol: "TCP" }],
       envFrom: [{ secretRef: { name: db_secret } }],
       readinessProbe: { httpGet: { path: "/healthz", port: 8080 } },
@@ -243,7 +241,7 @@ module app {
 
   # The autoscaler owns spec.replicas; the Deployment does not set it.
   resource k8s.horizontal_pod_autoscaler hpa {
-    metadata.name = "crud-api-{color}"
+    metadata.name = "crud-api-${color}"
     metadata.namespace = namespace
     spec.scaleTargetRef = { apiVersion: "apps/v1", kind: "Deployment", name: deploy.metadata.name }
     spec.minReplicas = replicas
@@ -251,14 +249,14 @@ module app {
   }
 
   resource k8s.pod_disruption_budget pdb {
-    metadata.name = "crud-api-{color}"
+    metadata.name = "crud-api-${color}"
     metadata.namespace = namespace
     spec.minAvailable = 1
     spec.selector.matchLabels = labels
   }
 
   resource k8s.network_policy allow_http {
-    metadata.name = "crud-api-{color}-http"
+    metadata.name = "crud-api-${color}-http"
     metadata.namespace = namespace
     spec.podSelector.matchLabels = labels
     spec.policyTypes = ["Ingress"]
@@ -270,16 +268,16 @@ module app {
 
   # Only while the instance runs: a color with no run has no Deployment,
   # and a ref to it would dangle.
-  output("ready_replicas", n) if has color, n = deploy.status.readyReplicas
-  output("total_replicas", n) if has color, n = deploy.status.replicas
+  output ready_replicas: int = n if has color, n = deploy.status.readyReplicas
+  output total_replicas: int = n if has color, n = deploy.status.replicas
 }
 
 ########################################
 # Rollout invariants
 ########################################
 
-deny "migration failed; the rollout is held" { job: "migrate-v{schema}" } if {
-  some c in k8s.job["migrate-v{schema}"].status.conditions
+deny "migration failed; the rollout is held" { job: "migrate-v${schema}" } if {
+  c in k8s.job["migrate-v${schema}"].status.conditions
   c.type == "Failed"
   c.status == "True"
 }
@@ -300,8 +298,8 @@ deny "cutover to a color with unready pods" { color: c } if {
 # Best practice
 ########################################
 
-container(w, c) if w in k8s.deployment, some c in w.spec.template.spec.containers
-container(w, c) if w in k8s.job, some c in w.spec.template.spec.containers
+container(w, c) if w in k8s.deployment, c in w.spec.template.spec.containers
+container(w, c) if w in k8s.job, c in w.spec.template.spec.containers
 
 deny "container without resource limits" { workload: w, container: c.name } if {
   container(w, c)
@@ -352,7 +350,7 @@ owned_label("app")
 owned_label("color")
 owned_label("schema")
 
-auto_reconcile(t, a, p) if drift(t, a, p, _, _), owned_label(l), p == "metadata.labels.{l}"
+auto_reconcile(t, a, p) if drift(t, a, p, _, _), owned_label(l), p == "metadata.labels.${l}"
 
 ---
 
@@ -426,7 +424,13 @@ auto_reconcile(t, a, p) if drift(t, a, p, _, _), owned_label(l), p == "metadata.
   (comment)
   (input_relation
     (identifier)
-    (integer)
+    (columns
+      (field_declaration
+        (identifier))
+      (field_declaration
+        (identifier))
+      (field_declaration
+        (identifier)))
     (call
       (identifier)
       (arguments
@@ -435,7 +439,11 @@ auto_reconcile(t, a, p) if drift(t, a, p, _, _), owned_label(l), p == "metadata.
   (comment)
   (input_relation
     (identifier)
-    (integer)
+    (columns
+      (field_declaration
+        (identifier))
+      (field_declaration
+        (identifier)))
     (call
       (identifier)
       (arguments
@@ -498,7 +506,7 @@ auto_reconcile(t, a, p) if drift(t, a, p, _, _), owned_label(l), p == "metadata.
   (comment)
   (comment)
   (comment)
-  (value_rule
+  (let
     (identifier)
     (identifier)
     (body
@@ -511,7 +519,7 @@ auto_reconcile(t, a, p) if drift(t, a, p, _, _), owned_label(l), p == "metadata.
             (string
               (string_content))
             (identifier))))))
-  (value_rule
+  (let
     (identifier)
     (identifier)
     (body
@@ -524,7 +532,7 @@ auto_reconcile(t, a, p) if drift(t, a, p, _, _), owned_label(l), p == "metadata.
             (string
               (string_content))
             (identifier))))))
-  (value_rule
+  (let
     (identifier)
     (string
       (string_content)
@@ -532,7 +540,7 @@ auto_reconcile(t, a, p) if drift(t, a, p, _, _), owned_label(l), p == "metadata.
         (identifier))))
   (comment)
   (comment)
-  (value_rule
+  (let
     (identifier)
     (member_expression
       (member_expression
@@ -560,7 +568,7 @@ auto_reconcile(t, a, p) if drift(t, a, p, _, _), owned_label(l), p == "metadata.
         (string_content)
         (interpolation
           (identifier)))))
-  (value_rule
+  (let
     (identifier)
     (member_expression
       (index_expression
@@ -575,7 +583,7 @@ auto_reconcile(t, a, p) if drift(t, a, p, _, _), owned_label(l), p == "metadata.
           (identifier))
         (integer))
       (identifier)))
-  (value_rule
+  (let
     (identifier)
     (call
       (identifier)
@@ -603,12 +611,12 @@ auto_reconcile(t, a, p) if drift(t, a, p, _, _), owned_label(l), p == "metadata.
           (string_content))
         (string
           (string_content)))))
-  (value_rule
+  (let
     (identifier)
     (index_expression
       (identifier)
       (identifier)))
-  (value_rule
+  (let
     (identifier)
     (string
       (string_content))
@@ -617,14 +625,14 @@ auto_reconcile(t, a, p) if drift(t, a, p, _, _), owned_label(l), p == "metadata.
         (has_literal
           (identifier)))))
   (comment)
-  (value_rule
+  (let
     (identifier)
     (identifier)
     (body
       (comparison
         (identifier)
         (identifier))))
-  (value_rule
+  (let
     (identifier)
     (identifier)
     (body
@@ -1155,7 +1163,7 @@ auto_reconcile(t, a, p) if drift(t, a, p, _, _), owned_label(l), p == "metadata.
             (identifier)
             (identifier))
           (identifier)))))
-  (value_rule
+  (let
     (identifier)
     (identifier)
     (body
@@ -1164,10 +1172,10 @@ auto_reconcile(t, a, p) if drift(t, a, p, _, _), owned_label(l), p == "metadata.
           (identifier)
           (arguments
             (identifier))))))
-  (value_rule
+  (let
     (identifier)
     (identifier))
-  (value_rule
+  (let
     (identifier)
     (identifier)
     (body
@@ -1260,17 +1268,7 @@ auto_reconcile(t, a, p) if drift(t, a, p, _, _), owned_label(l), p == "metadata.
         (type
           (dotted_name
             (identifier))))
-      (output
-        (identifier)
-        (type
-          (dotted_name
-            (identifier))))
-      (output
-        (identifier)
-        (type
-          (dotted_name
-            (identifier))))
-      (value_rule
+      (let
         (identifier)
         (object
           (object_field
@@ -1278,7 +1276,6 @@ auto_reconcile(t, a, p) if drift(t, a, p, _, _), owned_label(l), p == "metadata.
             (string
               (string_content)))
           (object_field
-            (identifier)
             (identifier))))
       (resource
         (dotted_name
@@ -1309,7 +1306,6 @@ auto_reconcile(t, a, p) if drift(t, a, p, _, _), owned_label(l), p == "metadata.
                 (string
                   (string_content)))
               (object_field
-                (identifier)
                 (identifier))
               (object_field
                 (identifier)
@@ -1342,7 +1338,6 @@ auto_reconcile(t, a, p) if drift(t, a, p, _, _), owned_label(l), p == "metadata.
                   (string
                     (string_content)))
                 (object_field
-                  (identifier)
                   (identifier))
                 (object_field
                   (identifier)
@@ -1550,13 +1545,12 @@ auto_reconcile(t, a, p) if drift(t, a, p, _, _), owned_label(l), p == "metadata.
                           (string_content)))))))))))
       (comment)
       (comment)
-      (rule
-        (call
-          (identifier)
-          (arguments
-            (string
-              (string_content))
+      (output
+        (identifier)
+        (type
+          (dotted_name
             (identifier)))
+        (identifier)
         (body
           (has_literal
             (identifier))
@@ -1567,13 +1561,12 @@ auto_reconcile(t, a, p) if drift(t, a, p, _, _), owned_label(l), p == "metadata.
                 (identifier)
                 (identifier))
               (identifier)))))
-      (rule
-        (call
-          (identifier)
-          (arguments
-            (string
-              (string_content))
+      (output
+        (identifier)
+        (type
+          (dotted_name
             (identifier)))
+        (identifier)
         (body
           (has_literal
             (identifier))
@@ -1598,7 +1591,7 @@ auto_reconcile(t, a, p) if drift(t, a, p, _, _), owned_label(l), p == "metadata.
           (interpolation
             (identifier)))))
     (body_block
-      (some_literal
+      (in_literal
         (identifier)
         (member_expression
           (member_expression
@@ -1692,7 +1685,7 @@ auto_reconcile(t, a, p) if drift(t, a, p, _, _), owned_label(l), p == "metadata.
         (member_expression
           (identifier)
           (identifier)))
-      (some_literal
+      (in_literal
         (identifier)
         (member_expression
           (member_expression
@@ -1715,7 +1708,7 @@ auto_reconcile(t, a, p) if drift(t, a, p, _, _), owned_label(l), p == "metadata.
         (member_expression
           (identifier)
           (identifier)))
-      (some_literal
+      (in_literal
         (identifier)
         (member_expression
           (member_expression

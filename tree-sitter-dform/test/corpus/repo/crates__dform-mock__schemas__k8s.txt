@@ -49,7 +49,7 @@ type_provider(k8s.namespace, "kubernetes")
 # Deleting a namespace deletes what is in it: the old one goes first.
 type_replace(k8s.namespace, "destroy_first")
 type_attr(k8s.namespace, "metadata.name", "string", ["optional_computed", "id"])
-type_mint(k8s.namespace, "metadata.name", "{{doc:metadata.generateName}}{{hash}}")
+type_mint(k8s.namespace, "metadata.name", "{doc:metadata.generateName}{hash}")
 type_attr(k8s.namespace, "metadata.generateName", "string", [])
 type_attr(k8s.namespace, "metadata.labels", "map", [])
 type_attr(k8s.namespace, "metadata.annotations", "map", [])
@@ -57,8 +57,8 @@ type_attr(k8s.namespace, "metadata.uid", "string", ["computed", "id"])
 type_attr(k8s.namespace, "metadata.resourceVersion", "string", ["computed"])
 type_attr(k8s.namespace, "metadata.generation", "int", ["computed"])
 type_attr(k8s.namespace, "metadata.creationTimestamp", "string", ["computed"])
-type_mint(k8s.namespace, "metadata.uid", "uid-{{name}}-{{hash}}")
-type_mint(k8s.namespace, "metadata.resourceVersion", "{{n}}")
+type_mint(k8s.namespace, "metadata.uid", "uid-{name}-{hash}")
+type_mint(k8s.namespace, "metadata.resourceVersion", "{n}")
 type_mint(k8s.namespace, "metadata.generation", 1)
 type_mint(k8s.namespace, "metadata.creationTimestamp", "2026-01-01T00:00:00Z")
 type_attr(k8s.namespace, "spec.finalizers", "list", ["computed"])
@@ -69,7 +69,7 @@ type_mint(k8s.namespace, "status.phase", "Active")
 # ConfigMap (core/v1)
 type_provider(k8s.config_map, "kubernetes")
 type_attr(k8s.config_map, "metadata.name", "string", ["optional_computed", "id"])
-type_mint(k8s.config_map, "metadata.name", "{{doc:metadata.generateName}}{{hash}}")
+type_mint(k8s.config_map, "metadata.name", "{doc:metadata.generateName}{hash}")
 type_attr(k8s.config_map, "metadata.generateName", "string", [])
 type_attr(k8s.config_map, "metadata.namespace", "string", ["optional_computed"])
 type_mint(k8s.config_map, "metadata.namespace", "default")
@@ -79,8 +79,8 @@ type_attr(k8s.config_map, "metadata.uid", "string", ["computed", "id"])
 type_attr(k8s.config_map, "metadata.resourceVersion", "string", ["computed"])
 type_attr(k8s.config_map, "metadata.generation", "int", ["computed"])
 type_attr(k8s.config_map, "metadata.creationTimestamp", "string", ["computed"])
-type_mint(k8s.config_map, "metadata.uid", "uid-{{name}}-{{hash}}")
-type_mint(k8s.config_map, "metadata.resourceVersion", "{{n}}")
+type_mint(k8s.config_map, "metadata.uid", "uid-{name}-{hash}")
+type_mint(k8s.config_map, "metadata.resourceVersion", "{n}")
 type_mint(k8s.config_map, "metadata.generation", 1)
 type_mint(k8s.config_map, "metadata.creationTimestamp", "2026-01-01T00:00:00Z")
 type_attr(k8s.config_map, "data", "map", [])
@@ -90,7 +90,7 @@ type_attr(k8s.config_map, "immutable", "bool", [])
 # Secret (core/v1)
 type_provider(k8s.secret, "kubernetes")
 type_attr(k8s.secret, "metadata.name", "string", ["optional_computed", "id"])
-type_mint(k8s.secret, "metadata.name", "{{doc:metadata.generateName}}{{hash}}")
+type_mint(k8s.secret, "metadata.name", "{doc:metadata.generateName}{hash}")
 type_attr(k8s.secret, "metadata.generateName", "string", [])
 type_attr(k8s.secret, "metadata.namespace", "string", ["optional_computed"])
 type_mint(k8s.secret, "metadata.namespace", "default")
@@ -100,8 +100,8 @@ type_attr(k8s.secret, "metadata.uid", "string", ["computed", "id"])
 type_attr(k8s.secret, "metadata.resourceVersion", "string", ["computed"])
 type_attr(k8s.secret, "metadata.generation", "int", ["computed"])
 type_attr(k8s.secret, "metadata.creationTimestamp", "string", ["computed"])
-type_mint(k8s.secret, "metadata.uid", "uid-{{name}}-{{hash}}")
-type_mint(k8s.secret, "metadata.resourceVersion", "{{n}}")
+type_mint(k8s.secret, "metadata.uid", "uid-{name}-{hash}")
+type_mint(k8s.secret, "metadata.resourceVersion", "{n}")
 type_mint(k8s.secret, "metadata.generation", 1)
 type_mint(k8s.secret, "metadata.creationTimestamp", "2026-01-01T00:00:00Z")
 type_attr(k8s.secret, "data", "map", ["sensitive"])
@@ -113,7 +113,7 @@ type_attr(k8s.secret, "immutable", "bool", [])
 # ServiceAccount (core/v1)
 type_provider(k8s.service_account, "kubernetes")
 type_attr(k8s.service_account, "metadata.name", "string", ["optional_computed", "id"])
-type_mint(k8s.service_account, "metadata.name", "{{doc:metadata.generateName}}{{hash}}")
+type_mint(k8s.service_account, "metadata.name", "{doc:metadata.generateName}{hash}")
 type_attr(k8s.service_account, "metadata.generateName", "string", [])
 type_attr(k8s.service_account, "metadata.namespace", "string", ["optional_computed"])
 type_mint(k8s.service_account, "metadata.namespace", "default")
@@ -123,8 +123,8 @@ type_attr(k8s.service_account, "metadata.uid", "string", ["computed", "id"])
 type_attr(k8s.service_account, "metadata.resourceVersion", "string", ["computed"])
 type_attr(k8s.service_account, "metadata.generation", "int", ["computed"])
 type_attr(k8s.service_account, "metadata.creationTimestamp", "string", ["computed"])
-type_mint(k8s.service_account, "metadata.uid", "uid-{{name}}-{{hash}}")
-type_mint(k8s.service_account, "metadata.resourceVersion", "{{n}}")
+type_mint(k8s.service_account, "metadata.uid", "uid-{name}-{hash}")
+type_mint(k8s.service_account, "metadata.resourceVersion", "{n}")
 type_mint(k8s.service_account, "metadata.generation", 1)
 type_mint(k8s.service_account, "metadata.creationTimestamp", "2026-01-01T00:00:00Z")
 type_attr(k8s.service_account, "automountServiceAccountToken", "bool", [])
@@ -135,7 +135,7 @@ type_list_key(k8s.service_account, "imagePullSecrets", ["name"])
 type_provider(k8s.service, "kubernetes")
 type_replace(k8s.service, "create_first")
 type_attr(k8s.service, "metadata.name", "string", ["optional_computed", "id"])
-type_mint(k8s.service, "metadata.name", "{{doc:metadata.generateName}}{{hash}}")
+type_mint(k8s.service, "metadata.name", "{doc:metadata.generateName}{hash}")
 type_attr(k8s.service, "metadata.generateName", "string", [])
 type_attr(k8s.service, "metadata.namespace", "string", ["optional_computed"])
 type_mint(k8s.service, "metadata.namespace", "default")
@@ -145,8 +145,8 @@ type_attr(k8s.service, "metadata.uid", "string", ["computed", "id"])
 type_attr(k8s.service, "metadata.resourceVersion", "string", ["computed"])
 type_attr(k8s.service, "metadata.generation", "int", ["computed"])
 type_attr(k8s.service, "metadata.creationTimestamp", "string", ["computed"])
-type_mint(k8s.service, "metadata.uid", "uid-{{name}}-{{hash}}")
-type_mint(k8s.service, "metadata.resourceVersion", "{{n}}")
+type_mint(k8s.service, "metadata.uid", "uid-{name}-{hash}")
+type_mint(k8s.service, "metadata.resourceVersion", "{n}")
 type_mint(k8s.service, "metadata.generation", 1)
 type_mint(k8s.service, "metadata.creationTimestamp", "2026-01-01T00:00:00Z")
 type_attr(k8s.service, "spec.type", "string", ["optional_computed"])
@@ -158,7 +158,7 @@ type_attr(k8s.service, "spec.ports.port", "int", ["required"])
 type_attr(k8s.service, "spec.ports.targetPort", "int_or_string", ["optional_computed"])
 type_attr(k8s.service, "spec.ports.nodePort", "int", ["optional_computed"])
 type_attr(k8s.service, "spec.clusterIP", "string", ["optional_computed"])
-type_mint(k8s.service, "spec.clusterIP", "10.96.0.{{n}}")
+type_mint(k8s.service, "spec.clusterIP", "10.96.0.{n}")
 type_attr(k8s.service, "spec.clusterIPs", "list", ["optional_computed"])
 type_attr(k8s.service, "spec.sessionAffinity", "string", ["optional_computed"])
 type_mint(k8s.service, "spec.sessionAffinity", "None")
@@ -171,7 +171,7 @@ type_attr(k8s.service, "status.loadBalancer.ingress", "list", ["computed"])
 # PersistentVolumeClaim (core/v1)
 type_provider(k8s.persistent_volume_claim, "kubernetes")
 type_attr(k8s.persistent_volume_claim, "metadata.name", "string", ["optional_computed", "id"])
-type_mint(k8s.persistent_volume_claim, "metadata.name", "{{doc:metadata.generateName}}{{hash}}")
+type_mint(k8s.persistent_volume_claim, "metadata.name", "{doc:metadata.generateName}{hash}")
 type_attr(k8s.persistent_volume_claim, "metadata.generateName", "string", [])
 type_attr(k8s.persistent_volume_claim, "metadata.namespace", "string", ["optional_computed"])
 type_mint(k8s.persistent_volume_claim, "metadata.namespace", "default")
@@ -181,8 +181,8 @@ type_attr(k8s.persistent_volume_claim, "metadata.uid", "string", ["computed", "i
 type_attr(k8s.persistent_volume_claim, "metadata.resourceVersion", "string", ["computed"])
 type_attr(k8s.persistent_volume_claim, "metadata.generation", "int", ["computed"])
 type_attr(k8s.persistent_volume_claim, "metadata.creationTimestamp", "string", ["computed"])
-type_mint(k8s.persistent_volume_claim, "metadata.uid", "uid-{{name}}-{{hash}}")
-type_mint(k8s.persistent_volume_claim, "metadata.resourceVersion", "{{n}}")
+type_mint(k8s.persistent_volume_claim, "metadata.uid", "uid-{name}-{hash}")
+type_mint(k8s.persistent_volume_claim, "metadata.resourceVersion", "{n}")
 type_mint(k8s.persistent_volume_claim, "metadata.generation", 1)
 type_mint(k8s.persistent_volume_claim, "metadata.creationTimestamp", "2026-01-01T00:00:00Z")
 type_attr(k8s.persistent_volume_claim, "spec.accessModes", "list", ["required"])
@@ -190,7 +190,7 @@ type_attr(k8s.persistent_volume_claim, "spec.resources.requests.storage", "strin
 type_attr(k8s.persistent_volume_claim, "spec.storageClassName", "string", ["optional_computed"])
 type_mint(k8s.persistent_volume_claim, "spec.storageClassName", "standard")
 type_attr(k8s.persistent_volume_claim, "spec.volumeName", "string", ["optional_computed"])
-type_mint(k8s.persistent_volume_claim, "spec.volumeName", "pvc-{{hash}}")
+type_mint(k8s.persistent_volume_claim, "spec.volumeName", "pvc-{hash}")
 type_attr(k8s.persistent_volume_claim, "spec.volumeMode", "string", ["optional_computed"])
 type_mint(k8s.persistent_volume_claim, "spec.volumeMode", "Filesystem")
 type_attr(k8s.persistent_volume_claim, "status.phase", "string", ["computed"])
@@ -202,7 +202,7 @@ type_provider(k8s.deployment, "kubernetes")
 # A Deployment rolls: the new one is up before the old one goes.
 type_replace(k8s.deployment, "create_first")
 type_attr(k8s.deployment, "metadata.name", "string", ["optional_computed", "id"])
-type_mint(k8s.deployment, "metadata.name", "{{doc:metadata.generateName}}{{hash}}")
+type_mint(k8s.deployment, "metadata.name", "{doc:metadata.generateName}{hash}")
 type_attr(k8s.deployment, "metadata.generateName", "string", [])
 type_attr(k8s.deployment, "metadata.namespace", "string", ["optional_computed"])
 type_mint(k8s.deployment, "metadata.namespace", "default")
@@ -212,8 +212,8 @@ type_attr(k8s.deployment, "metadata.uid", "string", ["computed", "id"])
 type_attr(k8s.deployment, "metadata.resourceVersion", "string", ["computed"])
 type_attr(k8s.deployment, "metadata.generation", "int", ["computed"])
 type_attr(k8s.deployment, "metadata.creationTimestamp", "string", ["computed"])
-type_mint(k8s.deployment, "metadata.uid", "uid-{{name}}-{{hash}}")
-type_mint(k8s.deployment, "metadata.resourceVersion", "{{n}}")
+type_mint(k8s.deployment, "metadata.uid", "uid-{name}-{hash}")
+type_mint(k8s.deployment, "metadata.resourceVersion", "{n}")
 type_mint(k8s.deployment, "metadata.generation", 1)
 type_mint(k8s.deployment, "metadata.creationTimestamp", "2026-01-01T00:00:00Z")
 type_attr(k8s.deployment, "spec.replicas", "int", ["optional_computed"])
@@ -266,7 +266,7 @@ type_attr(k8s.deployment, "status.conditions", "list", ["computed"])
 # StatefulSet (apps/v1)
 type_provider(k8s.stateful_set, "kubernetes")
 type_attr(k8s.stateful_set, "metadata.name", "string", ["optional_computed", "id"])
-type_mint(k8s.stateful_set, "metadata.name", "{{doc:metadata.generateName}}{{hash}}")
+type_mint(k8s.stateful_set, "metadata.name", "{doc:metadata.generateName}{hash}")
 type_attr(k8s.stateful_set, "metadata.generateName", "string", [])
 type_attr(k8s.stateful_set, "metadata.namespace", "string", ["optional_computed"])
 type_mint(k8s.stateful_set, "metadata.namespace", "default")
@@ -276,8 +276,8 @@ type_attr(k8s.stateful_set, "metadata.uid", "string", ["computed", "id"])
 type_attr(k8s.stateful_set, "metadata.resourceVersion", "string", ["computed"])
 type_attr(k8s.stateful_set, "metadata.generation", "int", ["computed"])
 type_attr(k8s.stateful_set, "metadata.creationTimestamp", "string", ["computed"])
-type_mint(k8s.stateful_set, "metadata.uid", "uid-{{name}}-{{hash}}")
-type_mint(k8s.stateful_set, "metadata.resourceVersion", "{{n}}")
+type_mint(k8s.stateful_set, "metadata.uid", "uid-{name}-{hash}")
+type_mint(k8s.stateful_set, "metadata.resourceVersion", "{n}")
 type_mint(k8s.stateful_set, "metadata.generation", 1)
 type_mint(k8s.stateful_set, "metadata.creationTimestamp", "2026-01-01T00:00:00Z")
 type_attr(k8s.stateful_set, "spec.replicas", "int", ["optional_computed"])
@@ -327,7 +327,7 @@ type_mint(k8s.stateful_set, "status.observedGeneration", 1)
 # DaemonSet (apps/v1)
 type_provider(k8s.daemon_set, "kubernetes")
 type_attr(k8s.daemon_set, "metadata.name", "string", ["optional_computed", "id"])
-type_mint(k8s.daemon_set, "metadata.name", "{{doc:metadata.generateName}}{{hash}}")
+type_mint(k8s.daemon_set, "metadata.name", "{doc:metadata.generateName}{hash}")
 type_attr(k8s.daemon_set, "metadata.generateName", "string", [])
 type_attr(k8s.daemon_set, "metadata.namespace", "string", ["optional_computed"])
 type_mint(k8s.daemon_set, "metadata.namespace", "default")
@@ -337,8 +337,8 @@ type_attr(k8s.daemon_set, "metadata.uid", "string", ["computed", "id"])
 type_attr(k8s.daemon_set, "metadata.resourceVersion", "string", ["computed"])
 type_attr(k8s.daemon_set, "metadata.generation", "int", ["computed"])
 type_attr(k8s.daemon_set, "metadata.creationTimestamp", "string", ["computed"])
-type_mint(k8s.daemon_set, "metadata.uid", "uid-{{name}}-{{hash}}")
-type_mint(k8s.daemon_set, "metadata.resourceVersion", "{{n}}")
+type_mint(k8s.daemon_set, "metadata.uid", "uid-{name}-{hash}")
+type_mint(k8s.daemon_set, "metadata.resourceVersion", "{n}")
 type_mint(k8s.daemon_set, "metadata.generation", 1)
 type_mint(k8s.daemon_set, "metadata.creationTimestamp", "2026-01-01T00:00:00Z")
 type_attr(k8s.daemon_set, "spec.selector.matchLabels", "map", ["required"])
@@ -382,7 +382,7 @@ type_mint(k8s.daemon_set, "status.observedGeneration", 3)
 # Job (batch/v1)
 type_provider(k8s.job, "kubernetes")
 type_attr(k8s.job, "metadata.name", "string", ["optional_computed", "id"])
-type_mint(k8s.job, "metadata.name", "{{doc:metadata.generateName}}{{hash}}")
+type_mint(k8s.job, "metadata.name", "{doc:metadata.generateName}{hash}")
 type_attr(k8s.job, "metadata.generateName", "string", [])
 type_attr(k8s.job, "metadata.namespace", "string", ["optional_computed"])
 type_mint(k8s.job, "metadata.namespace", "default")
@@ -392,8 +392,8 @@ type_attr(k8s.job, "metadata.uid", "string", ["computed", "id"])
 type_attr(k8s.job, "metadata.resourceVersion", "string", ["computed"])
 type_attr(k8s.job, "metadata.generation", "int", ["computed"])
 type_attr(k8s.job, "metadata.creationTimestamp", "string", ["computed"])
-type_mint(k8s.job, "metadata.uid", "uid-{{name}}-{{hash}}")
-type_mint(k8s.job, "metadata.resourceVersion", "{{n}}")
+type_mint(k8s.job, "metadata.uid", "uid-{name}-{hash}")
+type_mint(k8s.job, "metadata.resourceVersion", "{n}")
 type_mint(k8s.job, "metadata.generation", 1)
 type_mint(k8s.job, "metadata.creationTimestamp", "2026-01-01T00:00:00Z")
 type_attr(k8s.job, "spec.template.metadata.labels", "map", [])
@@ -444,7 +444,7 @@ type_mint(k8s.job, "status.completionTime", "2026-01-01T00:01:00Z")
 # CronJob (batch/v1)
 type_provider(k8s.cron_job, "kubernetes")
 type_attr(k8s.cron_job, "metadata.name", "string", ["optional_computed", "id"])
-type_mint(k8s.cron_job, "metadata.name", "{{doc:metadata.generateName}}{{hash}}")
+type_mint(k8s.cron_job, "metadata.name", "{doc:metadata.generateName}{hash}")
 type_attr(k8s.cron_job, "metadata.generateName", "string", [])
 type_attr(k8s.cron_job, "metadata.namespace", "string", ["optional_computed"])
 type_mint(k8s.cron_job, "metadata.namespace", "default")
@@ -454,8 +454,8 @@ type_attr(k8s.cron_job, "metadata.uid", "string", ["computed", "id"])
 type_attr(k8s.cron_job, "metadata.resourceVersion", "string", ["computed"])
 type_attr(k8s.cron_job, "metadata.generation", "int", ["computed"])
 type_attr(k8s.cron_job, "metadata.creationTimestamp", "string", ["computed"])
-type_mint(k8s.cron_job, "metadata.uid", "uid-{{name}}-{{hash}}")
-type_mint(k8s.cron_job, "metadata.resourceVersion", "{{n}}")
+type_mint(k8s.cron_job, "metadata.uid", "uid-{name}-{hash}")
+type_mint(k8s.cron_job, "metadata.resourceVersion", "{n}")
 type_mint(k8s.cron_job, "metadata.generation", 1)
 type_mint(k8s.cron_job, "metadata.creationTimestamp", "2026-01-01T00:00:00Z")
 type_attr(k8s.cron_job, "spec.schedule", "string", ["required"])
@@ -500,7 +500,7 @@ type_mint(k8s.cron_job, "status.lastScheduleTime", "2026-01-01T00:00:00Z")
 # HorizontalPodAutoscaler (autoscaling/v2)
 type_provider(k8s.horizontal_pod_autoscaler, "kubernetes")
 type_attr(k8s.horizontal_pod_autoscaler, "metadata.name", "string", ["optional_computed", "id"])
-type_mint(k8s.horizontal_pod_autoscaler, "metadata.name", "{{doc:metadata.generateName}}{{hash}}")
+type_mint(k8s.horizontal_pod_autoscaler, "metadata.name", "{doc:metadata.generateName}{hash}")
 type_attr(k8s.horizontal_pod_autoscaler, "metadata.generateName", "string", [])
 type_attr(k8s.horizontal_pod_autoscaler, "metadata.namespace", "string", ["optional_computed"])
 type_mint(k8s.horizontal_pod_autoscaler, "metadata.namespace", "default")
@@ -510,8 +510,8 @@ type_attr(k8s.horizontal_pod_autoscaler, "metadata.uid", "string", ["computed", 
 type_attr(k8s.horizontal_pod_autoscaler, "metadata.resourceVersion", "string", ["computed"])
 type_attr(k8s.horizontal_pod_autoscaler, "metadata.generation", "int", ["computed"])
 type_attr(k8s.horizontal_pod_autoscaler, "metadata.creationTimestamp", "string", ["computed"])
-type_mint(k8s.horizontal_pod_autoscaler, "metadata.uid", "uid-{{name}}-{{hash}}")
-type_mint(k8s.horizontal_pod_autoscaler, "metadata.resourceVersion", "{{n}}")
+type_mint(k8s.horizontal_pod_autoscaler, "metadata.uid", "uid-{name}-{hash}")
+type_mint(k8s.horizontal_pod_autoscaler, "metadata.resourceVersion", "{n}")
 type_mint(k8s.horizontal_pod_autoscaler, "metadata.generation", 1)
 type_mint(k8s.horizontal_pod_autoscaler, "metadata.creationTimestamp", "2026-01-01T00:00:00Z")
 type_attr(k8s.horizontal_pod_autoscaler, "spec.scaleTargetRef.apiVersion", "string", [])
@@ -530,7 +530,7 @@ type_attr(k8s.horizontal_pod_autoscaler, "status.currentMetrics", "list", ["comp
 # PodDisruptionBudget (policy/v1)
 type_provider(k8s.pod_disruption_budget, "kubernetes")
 type_attr(k8s.pod_disruption_budget, "metadata.name", "string", ["optional_computed", "id"])
-type_mint(k8s.pod_disruption_budget, "metadata.name", "{{doc:metadata.generateName}}{{hash}}")
+type_mint(k8s.pod_disruption_budget, "metadata.name", "{doc:metadata.generateName}{hash}")
 type_attr(k8s.pod_disruption_budget, "metadata.generateName", "string", [])
 type_attr(k8s.pod_disruption_budget, "metadata.namespace", "string", ["optional_computed"])
 type_mint(k8s.pod_disruption_budget, "metadata.namespace", "default")
@@ -540,8 +540,8 @@ type_attr(k8s.pod_disruption_budget, "metadata.uid", "string", ["computed", "id"
 type_attr(k8s.pod_disruption_budget, "metadata.resourceVersion", "string", ["computed"])
 type_attr(k8s.pod_disruption_budget, "metadata.generation", "int", ["computed"])
 type_attr(k8s.pod_disruption_budget, "metadata.creationTimestamp", "string", ["computed"])
-type_mint(k8s.pod_disruption_budget, "metadata.uid", "uid-{{name}}-{{hash}}")
-type_mint(k8s.pod_disruption_budget, "metadata.resourceVersion", "{{n}}")
+type_mint(k8s.pod_disruption_budget, "metadata.uid", "uid-{name}-{hash}")
+type_mint(k8s.pod_disruption_budget, "metadata.resourceVersion", "{n}")
 type_mint(k8s.pod_disruption_budget, "metadata.generation", 1)
 type_mint(k8s.pod_disruption_budget, "metadata.creationTimestamp", "2026-01-01T00:00:00Z")
 type_attr(k8s.pod_disruption_budget, "spec.minAvailable", "int_or_string", [])
@@ -559,7 +559,7 @@ type_mint(k8s.pod_disruption_budget, "status.expectedPods", 1)
 # NetworkPolicy (networking.k8s.io/v1)
 type_provider(k8s.network_policy, "kubernetes")
 type_attr(k8s.network_policy, "metadata.name", "string", ["optional_computed", "id"])
-type_mint(k8s.network_policy, "metadata.name", "{{doc:metadata.generateName}}{{hash}}")
+type_mint(k8s.network_policy, "metadata.name", "{doc:metadata.generateName}{hash}")
 type_attr(k8s.network_policy, "metadata.generateName", "string", [])
 type_attr(k8s.network_policy, "metadata.namespace", "string", ["optional_computed"])
 type_mint(k8s.network_policy, "metadata.namespace", "default")
@@ -569,8 +569,8 @@ type_attr(k8s.network_policy, "metadata.uid", "string", ["computed", "id"])
 type_attr(k8s.network_policy, "metadata.resourceVersion", "string", ["computed"])
 type_attr(k8s.network_policy, "metadata.generation", "int", ["computed"])
 type_attr(k8s.network_policy, "metadata.creationTimestamp", "string", ["computed"])
-type_mint(k8s.network_policy, "metadata.uid", "uid-{{name}}-{{hash}}")
-type_mint(k8s.network_policy, "metadata.resourceVersion", "{{n}}")
+type_mint(k8s.network_policy, "metadata.uid", "uid-{name}-{hash}")
+type_mint(k8s.network_policy, "metadata.resourceVersion", "{n}")
 type_mint(k8s.network_policy, "metadata.generation", 1)
 type_mint(k8s.network_policy, "metadata.creationTimestamp", "2026-01-01T00:00:00Z")
 # An object, not a map: `spec.podSelector = {}` (every pod) is a value.
@@ -585,7 +585,7 @@ type_attr(k8s.network_policy, "spec.egress", "list", [])
 # Ingress (networking.k8s.io/v1)
 type_provider(k8s.ingress, "kubernetes")
 type_attr(k8s.ingress, "metadata.name", "string", ["optional_computed", "id"])
-type_mint(k8s.ingress, "metadata.name", "{{doc:metadata.generateName}}{{hash}}")
+type_mint(k8s.ingress, "metadata.name", "{doc:metadata.generateName}{hash}")
 type_attr(k8s.ingress, "metadata.generateName", "string", [])
 type_attr(k8s.ingress, "metadata.namespace", "string", ["optional_computed"])
 type_mint(k8s.ingress, "metadata.namespace", "default")
@@ -595,8 +595,8 @@ type_attr(k8s.ingress, "metadata.uid", "string", ["computed", "id"])
 type_attr(k8s.ingress, "metadata.resourceVersion", "string", ["computed"])
 type_attr(k8s.ingress, "metadata.generation", "int", ["computed"])
 type_attr(k8s.ingress, "metadata.creationTimestamp", "string", ["computed"])
-type_mint(k8s.ingress, "metadata.uid", "uid-{{name}}-{{hash}}")
-type_mint(k8s.ingress, "metadata.resourceVersion", "{{n}}")
+type_mint(k8s.ingress, "metadata.uid", "uid-{name}-{hash}")
+type_mint(k8s.ingress, "metadata.resourceVersion", "{n}")
 type_mint(k8s.ingress, "metadata.generation", 1)
 type_mint(k8s.ingress, "metadata.creationTimestamp", "2026-01-01T00:00:00Z")
 type_attr(k8s.ingress, "spec.ingressClassName", "string", ["optional_computed"])
@@ -621,7 +621,7 @@ type_doc(k8s.deployment, "metadata.labels", "Map of string keys and values that 
 type_doc(k8s.deployment, "metadata.name", "Name must be unique within a namespace.")
 type_doc(k8s.deployment, "metadata.namespace", "Namespace defines the space within which each name must be unique.")
 type_doc(k8s.deployment, "spec.replicas", "Number of desired pods.")
-type_doc(k8s.deployment, "spec.selector.matchLabels", "matchLabels is a map of {{key,value}} pairs.")
+type_doc(k8s.deployment, "spec.selector.matchLabels", "matchLabels is a map of {key,value} pairs.")
 type_doc(k8s.deployment, "spec.template.metadata.labels", "Map of string keys and values that can be used to organize and categorize (scope and select) objects.")
 type_doc(k8s.deployment, "spec.template.spec.containers", "List of containers belonging to the pod.")
 type_doc(k8s.horizontal_pod_autoscaler, "", "HorizontalPodAutoscaler is the configuration for a horizontal pod autoscaler, which automatically manages the replica count of any resource implementing the scale subresource based on the metrics specified.")
@@ -645,13 +645,13 @@ type_doc(k8s.network_policy, "metadata.name", "Name must be unique within a name
 type_doc(k8s.network_policy, "metadata.namespace", "Namespace defines the space within which each name must be unique.")
 type_doc(k8s.network_policy, "spec.ingress", "ingress is a list of ingress rules to be applied to the selected pods.")
 type_doc(k8s.network_policy, "spec.podSelector", "podSelector selects the pods to which this NetworkPolicy object applies.")
-type_doc(k8s.network_policy, "spec.podSelector.matchLabels", "matchLabels is a map of {{key,value}} pairs.")
+type_doc(k8s.network_policy, "spec.podSelector.matchLabels", "matchLabels is a map of {key,value} pairs.")
 type_doc(k8s.network_policy, "spec.policyTypes", "policyTypes is a list of rule types that the NetworkPolicy relates to.")
 type_doc(k8s.pod_disruption_budget, "", "PodDisruptionBudget is an object to define the max disruption that can be caused to a collection of pods")
 type_doc(k8s.pod_disruption_budget, "metadata.name", "Name must be unique within a namespace.")
 type_doc(k8s.pod_disruption_budget, "metadata.namespace", "Namespace defines the space within which each name must be unique.")
 type_doc(k8s.pod_disruption_budget, "spec.minAvailable", "An eviction is allowed if at least \"minAvailable\" pods selected by \"selector\" will still be available after the eviction, i.e.")
-type_doc(k8s.pod_disruption_budget, "spec.selector.matchLabels", "matchLabels is a map of {{key,value}} pairs.")
+type_doc(k8s.pod_disruption_budget, "spec.selector.matchLabels", "matchLabels is a map of {key,value} pairs.")
 type_doc(k8s.secret, "", "Secret holds secret data of a certain type.")
 type_doc(k8s.secret, "data", "Data contains the secret data.")
 type_doc(k8s.secret, "metadata.name", "Name must be unique within a namespace.")
@@ -872,12 +872,7 @@ type_doc(k8s.service, "spec.selector", "Route service traffic to pods with label
         (string
           (string_content))
         (string
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)))))
+          (string_content)))))
   (fact
     (call
       (identifier)
@@ -982,14 +977,7 @@ type_doc(k8s.service, "spec.selector", "Route service traffic to pods with label
         (string
           (string_content))
         (string
-          (string_content)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)))))
+          (string_content)))))
   (fact
     (call
       (identifier)
@@ -1000,9 +988,7 @@ type_doc(k8s.service, "spec.selector", "Route service traffic to pods with label
         (string
           (string_content))
         (string
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)))))
+          (string_content)))))
   (fact
     (call
       (identifier)
@@ -1111,12 +1097,7 @@ type_doc(k8s.service, "spec.selector", "Route service traffic to pods with label
         (string
           (string_content))
         (string
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)))))
+          (string_content)))))
   (fact
     (call
       (identifier)
@@ -1246,14 +1227,7 @@ type_doc(k8s.service, "spec.selector", "Route service traffic to pods with label
         (string
           (string_content))
         (string
-          (string_content)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)))))
+          (string_content)))))
   (fact
     (call
       (identifier)
@@ -1264,9 +1238,7 @@ type_doc(k8s.service, "spec.selector", "Route service traffic to pods with label
         (string
           (string_content))
         (string
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)))))
+          (string_content)))))
   (fact
     (call
       (identifier)
@@ -1360,12 +1332,7 @@ type_doc(k8s.service, "spec.selector", "Route service traffic to pods with label
         (string
           (string_content))
         (string
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)))))
+          (string_content)))))
   (fact
     (call
       (identifier)
@@ -1495,14 +1462,7 @@ type_doc(k8s.service, "spec.selector", "Route service traffic to pods with label
         (string
           (string_content))
         (string
-          (string_content)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)))))
+          (string_content)))))
   (fact
     (call
       (identifier)
@@ -1513,9 +1473,7 @@ type_doc(k8s.service, "spec.selector", "Route service traffic to pods with label
         (string
           (string_content))
         (string
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)))))
+          (string_content)))))
   (fact
     (call
       (identifier)
@@ -1638,12 +1596,7 @@ type_doc(k8s.service, "spec.selector", "Route service traffic to pods with label
         (string
           (string_content))
         (string
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)))))
+          (string_content)))))
   (fact
     (call
       (identifier)
@@ -1773,14 +1726,7 @@ type_doc(k8s.service, "spec.selector", "Route service traffic to pods with label
         (string
           (string_content))
         (string
-          (string_content)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)))))
+          (string_content)))))
   (fact
     (call
       (identifier)
@@ -1791,9 +1737,7 @@ type_doc(k8s.service, "spec.selector", "Route service traffic to pods with label
         (string
           (string_content))
         (string
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)))))
+          (string_content)))))
   (fact
     (call
       (identifier)
@@ -1896,12 +1840,7 @@ type_doc(k8s.service, "spec.selector", "Route service traffic to pods with label
         (string
           (string_content))
         (string
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)))))
+          (string_content)))))
   (fact
     (call
       (identifier)
@@ -2031,14 +1970,7 @@ type_doc(k8s.service, "spec.selector", "Route service traffic to pods with label
         (string
           (string_content))
         (string
-          (string_content)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)))))
+          (string_content)))))
   (fact
     (call
       (identifier)
@@ -2049,9 +1981,7 @@ type_doc(k8s.service, "spec.selector", "Route service traffic to pods with label
         (string
           (string_content))
         (string
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)))))
+          (string_content)))))
   (fact
     (call
       (identifier)
@@ -2204,10 +2134,7 @@ type_doc(k8s.service, "spec.selector", "Route service traffic to pods with label
         (string
           (string_content))
         (string
-          (string_content)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)))))
+          (string_content)))))
   (fact
     (call
       (identifier)
@@ -2348,12 +2275,7 @@ type_doc(k8s.service, "spec.selector", "Route service traffic to pods with label
         (string
           (string_content))
         (string
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)))))
+          (string_content)))))
   (fact
     (call
       (identifier)
@@ -2483,14 +2405,7 @@ type_doc(k8s.service, "spec.selector", "Route service traffic to pods with label
         (string
           (string_content))
         (string
-          (string_content)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)))))
+          (string_content)))))
   (fact
     (call
       (identifier)
@@ -2501,9 +2416,7 @@ type_doc(k8s.service, "spec.selector", "Route service traffic to pods with label
         (string
           (string_content))
         (string
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)))))
+          (string_content)))))
   (fact
     (call
       (identifier)
@@ -2602,10 +2515,7 @@ type_doc(k8s.service, "spec.selector", "Route service traffic to pods with label
         (string
           (string_content))
         (string
-          (string_content)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)))))
+          (string_content)))))
   (fact
     (call
       (identifier)
@@ -2716,12 +2626,7 @@ type_doc(k8s.service, "spec.selector", "Route service traffic to pods with label
         (string
           (string_content))
         (string
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)))))
+          (string_content)))))
   (fact
     (call
       (identifier)
@@ -2851,14 +2756,7 @@ type_doc(k8s.service, "spec.selector", "Route service traffic to pods with label
         (string
           (string_content))
         (string
-          (string_content)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)))))
+          (string_content)))))
   (fact
     (call
       (identifier)
@@ -2869,9 +2767,7 @@ type_doc(k8s.service, "spec.selector", "Route service traffic to pods with label
         (string
           (string_content))
         (string
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)))))
+          (string_content)))))
   (fact
     (call
       (identifier)
@@ -3496,12 +3392,7 @@ type_doc(k8s.service, "spec.selector", "Route service traffic to pods with label
         (string
           (string_content))
         (string
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)))))
+          (string_content)))))
   (fact
     (call
       (identifier)
@@ -3631,14 +3522,7 @@ type_doc(k8s.service, "spec.selector", "Route service traffic to pods with label
         (string
           (string_content))
         (string
-          (string_content)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)))))
+          (string_content)))))
   (fact
     (call
       (identifier)
@@ -3649,9 +3533,7 @@ type_doc(k8s.service, "spec.selector", "Route service traffic to pods with label
         (string
           (string_content))
         (string
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)))))
+          (string_content)))))
   (fact
     (call
       (identifier)
@@ -4239,12 +4121,7 @@ type_doc(k8s.service, "spec.selector", "Route service traffic to pods with label
         (string
           (string_content))
         (string
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)))))
+          (string_content)))))
   (fact
     (call
       (identifier)
@@ -4374,14 +4251,7 @@ type_doc(k8s.service, "spec.selector", "Route service traffic to pods with label
         (string
           (string_content))
         (string
-          (string_content)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)))))
+          (string_content)))))
   (fact
     (call
       (identifier)
@@ -4392,9 +4262,7 @@ type_doc(k8s.service, "spec.selector", "Route service traffic to pods with label
         (string
           (string_content))
         (string
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)))))
+          (string_content)))))
   (fact
     (call
       (identifier)
@@ -4909,12 +4777,7 @@ type_doc(k8s.service, "spec.selector", "Route service traffic to pods with label
         (string
           (string_content))
         (string
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)))))
+          (string_content)))))
   (fact
     (call
       (identifier)
@@ -5044,14 +4907,7 @@ type_doc(k8s.service, "spec.selector", "Route service traffic to pods with label
         (string
           (string_content))
         (string
-          (string_content)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)))))
+          (string_content)))))
   (fact
     (call
       (identifier)
@@ -5062,9 +4918,7 @@ type_doc(k8s.service, "spec.selector", "Route service traffic to pods with label
         (string
           (string_content))
         (string
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)))))
+          (string_content)))))
   (fact
     (call
       (identifier)
@@ -5673,12 +5527,7 @@ type_doc(k8s.service, "spec.selector", "Route service traffic to pods with label
         (string
           (string_content))
         (string
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)))))
+          (string_content)))))
   (fact
     (call
       (identifier)
@@ -5808,14 +5657,7 @@ type_doc(k8s.service, "spec.selector", "Route service traffic to pods with label
         (string
           (string_content))
         (string
-          (string_content)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)))))
+          (string_content)))))
   (fact
     (call
       (identifier)
@@ -5826,9 +5668,7 @@ type_doc(k8s.service, "spec.selector", "Route service traffic to pods with label
         (string
           (string_content))
         (string
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)))))
+          (string_content)))))
   (fact
     (call
       (identifier)
@@ -6356,12 +6196,7 @@ type_doc(k8s.service, "spec.selector", "Route service traffic to pods with label
         (string
           (string_content))
         (string
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)))))
+          (string_content)))))
   (fact
     (call
       (identifier)
@@ -6491,14 +6326,7 @@ type_doc(k8s.service, "spec.selector", "Route service traffic to pods with label
         (string
           (string_content))
         (string
-          (string_content)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)))))
+          (string_content)))))
   (fact
     (call
       (identifier)
@@ -6509,9 +6337,7 @@ type_doc(k8s.service, "spec.selector", "Route service traffic to pods with label
         (string
           (string_content))
         (string
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)))))
+          (string_content)))))
   (fact
     (call
       (identifier)
@@ -6721,12 +6547,7 @@ type_doc(k8s.service, "spec.selector", "Route service traffic to pods with label
         (string
           (string_content))
         (string
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)))))
+          (string_content)))))
   (fact
     (call
       (identifier)
@@ -6856,14 +6677,7 @@ type_doc(k8s.service, "spec.selector", "Route service traffic to pods with label
         (string
           (string_content))
         (string
-          (string_content)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)))))
+          (string_content)))))
   (fact
     (call
       (identifier)
@@ -6874,9 +6688,7 @@ type_doc(k8s.service, "spec.selector", "Route service traffic to pods with label
         (string
           (string_content))
         (string
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)))))
+          (string_content)))))
   (fact
     (call
       (identifier)
@@ -7066,12 +6878,7 @@ type_doc(k8s.service, "spec.selector", "Route service traffic to pods with label
         (string
           (string_content))
         (string
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)))))
+          (string_content)))))
   (fact
     (call
       (identifier)
@@ -7201,14 +7008,7 @@ type_doc(k8s.service, "spec.selector", "Route service traffic to pods with label
         (string
           (string_content))
         (string
-          (string_content)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)))))
+          (string_content)))))
   (fact
     (call
       (identifier)
@@ -7219,9 +7019,7 @@ type_doc(k8s.service, "spec.selector", "Route service traffic to pods with label
         (string
           (string_content))
         (string
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)))))
+          (string_content)))))
   (fact
     (call
       (identifier)
@@ -7368,12 +7166,7 @@ type_doc(k8s.service, "spec.selector", "Route service traffic to pods with label
         (string
           (string_content))
         (string
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)))))
+          (string_content)))))
   (fact
     (call
       (identifier)
@@ -7503,14 +7296,7 @@ type_doc(k8s.service, "spec.selector", "Route service traffic to pods with label
         (string
           (string_content))
         (string
-          (string_content)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)))))
+          (string_content)))))
   (fact
     (call
       (identifier)
@@ -7521,9 +7307,7 @@ type_doc(k8s.service, "spec.selector", "Route service traffic to pods with label
         (string
           (string_content))
         (string
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)))))
+          (string_content)))))
   (fact
     (call
       (identifier)
@@ -7757,10 +7541,6 @@ type_doc(k8s.service, "spec.selector", "Route service traffic to pods with label
         (string
           (string_content))
         (string
-          (string_content)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)
           (string_content)))))
   (fact
     (call
@@ -8021,10 +7801,6 @@ type_doc(k8s.service, "spec.selector", "Route service traffic to pods with label
         (string
           (string_content))
         (string
-          (string_content)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)
           (string_content)))))
   (fact
     (call
@@ -8098,10 +7874,6 @@ type_doc(k8s.service, "spec.selector", "Route service traffic to pods with label
         (string
           (string_content))
         (string
-          (string_content)
-          (escape_sequence)
-          (string_content)
-          (escape_sequence)
           (string_content)))))
   (fact
     (call

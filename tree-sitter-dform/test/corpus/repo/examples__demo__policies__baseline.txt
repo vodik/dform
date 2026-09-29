@@ -13,16 +13,16 @@ policy baseline {
 
   # Lattices for paths several authors contribute to. Object paths such as
   # `tags` are maps by default; a list is one value unless declared a set.
-  type_lattice(iam.policy, .statements, "set")
-  type_lattice(settings, .audit.sinks, "set")
+  type_lattice(iam.policy, "statements", "set")
+  type_lattice(settings, "audit.sinks", "set")
 
   # Example: add a shared tag to everything.
-  r.tags = { team: "platform" } if r in resource
+  set r.tags = { team: "platform" } if r in resource
 
   # Example: policy pack can contribute directly to an IAM policy. Reads
   # .name of the type it writes .statements on: legal under (type, path)
   # partitions.
-  p.statements = [{ action: "org.read", resource: "org" }] if {
+  set p.statements = [{ action: "org.read", resource: "org" }] if {
     env == "prod"
     p in iam.policy
     p.name == "app"
@@ -33,11 +33,11 @@ policy baseline {
   #| Prod should enable audit logging.
   warn "prod should enable audit logging" { env: "prod" } if {
     env == "prod"
-    not settings.prod.audit.enabled
+    not settings["prod"].audit.enabled
   }
 
   # Example: policy pack can add a sink without owning the whole list.
-  settings.prod.audit.sinks = ["s3"]
+  set settings["prod"].audit.sinks = ["s3"]
 
   # Networking invariants live in `modules/stdlib_net.df`.
 }
@@ -78,7 +78,8 @@ policy baseline {
             (member_expression
               (identifier)
               (identifier))
-            (keypath)
+            (string
+              (string_content))
             (string
               (string_content)))))
       (fact
@@ -86,11 +87,12 @@ policy baseline {
           (identifier)
           (arguments
             (identifier)
-            (keypath)
+            (string
+              (string_content))
             (string
               (string_content)))))
       (comment)
-      (contribution
+      (set
         (member_expression
           (identifier)
           (identifier))
@@ -106,7 +108,7 @@ policy baseline {
       (comment)
       (comment)
       (comment)
-      (contribution
+      (set
         (member_expression
           (identifier)
           (identifier))
@@ -173,18 +175,20 @@ policy baseline {
             (truth_literal
               (member_expression
                 (member_expression
-                  (member_expression
+                  (index_expression
                     (identifier)
-                    (identifier))
+                    (string
+                      (string_content)))
                   (identifier))
                 (identifier))))))
       (comment)
-      (contribution
+      (set
         (member_expression
           (member_expression
-            (member_expression
+            (index_expression
               (identifier)
-              (identifier))
+              (string
+                (string_content)))
             (identifier))
           (identifier))
         (list

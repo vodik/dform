@@ -29,11 +29,11 @@ stack renfry.workload {
 provider k8s {}
 
 # The release to run, `release(image)`; re-read whenever the file changes.
-input relation release/1 from file("data/release.facts")
+input release(image) from facts("data/release.facts")
 # `approve(t, a)`: accept the drift of t.a, correcting it.
-input relation approve/2 from file("data/approvals.facts")
+input approve(type, address) from facts("data/approvals.facts")
 # `approval(token)`: a signed approval of a plan's digest.
-input relation approval/1 from file("data/approvals.facts")
+input approval(token) from facts("data/approvals.facts")
 
 input env: enum("dev", "prod") = "dev"
 
@@ -42,22 +42,22 @@ resource k8s.namespace web {
 }
 
 resource k8s.deployment web {
-  for release(image)
+  if release(image)
   metadata.name = "web"
-  metadata.namespace = k8s.namespace.web.metadata.name
+  metadata.namespace = k8s.namespace["web"].metadata.name
   spec.replicas = 3
   spec.selector.matchLabels = { app: "web" }
   spec.template.metadata.labels = { app: "web" }
   spec.template.spec.containers = [{
     name: "web",
-    image: image,
+    image,
     ports: [{ containerPort: 8080, protocol: "TCP" }]
   }]
 }
 
 resource k8s.service web {
   metadata.name = "web"
-  metadata.namespace = k8s.namespace.web.metadata.name
+  metadata.namespace = k8s.namespace["web"].metadata.name
   spec.selector = { app: "web" }
   spec.ports = [{ port: 80, targetPort: 8080, protocol: "TCP" }]
 }
@@ -72,7 +72,7 @@ requires_approval(d, "a prod rollout") if {
   env == "prod"
   deformation(k, k8s.deployment, a, _)
   k != "delete"
-  d = "k8s.deployment.{a}"
+  d = "k8s.deployment[\"${a}\"]"
 }
 
 ---
@@ -116,7 +116,9 @@ requires_approval(d, "a prod rollout") if {
   (comment)
   (input_relation
     (identifier)
-    (integer)
+    (columns
+      (field_declaration
+        (identifier)))
     (call
       (identifier)
       (arguments
@@ -125,7 +127,11 @@ requires_approval(d, "a prod rollout") if {
   (comment)
   (input_relation
     (identifier)
-    (integer)
+    (columns
+      (field_declaration
+        (identifier))
+      (field_declaration
+        (identifier)))
     (call
       (identifier)
       (arguments
@@ -134,7 +140,9 @@ requires_approval(d, "a prod rollout") if {
   (comment)
   (input_relation
     (identifier)
-    (integer)
+    (columns
+      (field_declaration
+        (identifier)))
     (call
       (identifier)
       (arguments
@@ -188,11 +196,12 @@ requires_approval(d, "a prod rollout") if {
           (identifier))
         (member_expression
           (member_expression
-            (member_expression
+            (index_expression
               (member_expression
                 (identifier)
                 (identifier))
-              (identifier))
+              (string
+                (string_content)))
             (identifier))
           (identifier)))
       (field
@@ -234,7 +243,6 @@ requires_approval(d, "a prod rollout") if {
               (string
                 (string_content)))
             (object_field
-              (identifier)
               (identifier))
             (object_field
               (identifier)
@@ -265,11 +273,12 @@ requires_approval(d, "a prod rollout") if {
           (identifier))
         (member_expression
           (member_expression
-            (member_expression
+            (index_expression
               (member_expression
                 (identifier)
                 (identifier))
-              (identifier))
+              (string
+                (string_content)))
             (identifier))
           (identifier)))
       (field
@@ -352,5 +361,8 @@ requires_approval(d, "a prod rollout") if {
         (identifier)
         (string
           (string_content)
+          (escape_sequence)
           (interpolation
-            (identifier)))))))
+            (identifier))
+          (escape_sequence)
+          (string_content))))))

@@ -10,7 +10,6 @@
   (attribute_block)
   (body_block)
   (object)
-  (record)
   (record_type)
   (list)
   (comprehension)
@@ -19,11 +18,12 @@
   (index_expression)
 ] @indent.begin
 
-; A body of one line continued after a `,` (a `{ }` body indents itself).
+; A body of one line (a `{ }` body indents itself).
 (rule body: (body)) @indent.begin
 (check condition: (body)) @indent.begin
-(value_rule condition: (body)) @indent.begin
-(contribution condition: (body)) @indent.begin
+(let condition: (body)) @indent.begin
+(set condition: (body)) @indent.begin
+(output condition: (body)) @indent.begin
 (clause) @indent.begin
 
 [
