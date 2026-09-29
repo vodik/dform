@@ -4382,6 +4382,18 @@ mod tests {
     }
 
     #[test]
+    fn a_resource_named_settings_is_read_by_its_name() {
+        let got = lower(
+            "resource net.vpc settings { name = \"s\" }\n\
+             p(n) if n = settings.name\n",
+        );
+        assert_eq!(
+            got.last().unwrap(),
+            "p(N) :- attr(\"net.vpc\", \"settings\", \"name\", N)"
+        );
+    }
+
+    #[test]
     fn the_type_after_in_picks_among_resources_of_one_name() {
         let got = lower(
             "resource db.postgres main {}\n\
