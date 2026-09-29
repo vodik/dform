@@ -63,6 +63,7 @@ Every example is a project under `examples/<name>/`, with its own
 
 | project                | what it shows                                             |
 |------------------------|-----------------------------------------------------------|
+| `examples/tour`        | start here: a tutorial, read top to bottom                |
 | `examples/demo`        | the demo: modules, a policy pack, per-env config          |
 | `examples/pngu`        | a GKE stack, its peerings a CSV table                     |
 | `examples/advanced`    | transitive closure: reachability, routes, group membership|

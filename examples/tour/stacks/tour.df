@@ -1,0 +1,268 @@
+# A tour of dform, top to bottom.
+#
+# dform describes infrastructure the way Terraform does: you write what
+# should exist, dform plans the change, and apply makes it. The difference
+# is the language. A dform program is facts and rules, like a small
+# database query, and everything dform prints (a plan, a policy failure, a
+# reason) comes from the same rules.
+#
+# Each numbered section below adds one idea. It says what the idea is,
+# the command to run, and the line of output to look for. Run the commands
+# in order, from the directory holding dform.toml (examples/tour). In a
+# checkout of the dform repository, `dform` is `cargo run --`; lines
+# starting with `$` are commands, and the lines under one are part of what
+# it prints.
+#
+# The resources are on a fake cloud built into dform: nothing to sign up
+# for, no credentials, and nothing real is made.
+
+edition 2026
+
+provider fake {}
+
+# 1. One resource
+#
+# A resource block says that something should exist, with these
+# attributes. This one is a network (a VPC) with an address range.
+#
+#   $ dform plan
+#   plan: 11 deformations (11 create)
+#   + net.vpc["main"]
+#     cidr = "10.0.0.0/16"
+#
+# The plan lists everything in this file, so it is longer than one
+# resource; `net.vpc["main"]` is this one. `+` is a create: the fake cloud
+# is empty, so everything is new. The program is a set of facts about
+# what should exist; the plan is the difference between those facts and
+# the world. (Its first line, `deployment: tour[env=dev]`, is section 4.)
+
+resource net.vpc main {
+  cidr = inet("10.0.0.0/16")
+}
+
+# 2. A resource that points at another
+#
+# A subnet lives in a network, so it needs the network's id. `main.id`
+# refers to the network above. The id does not exist until the network
+# is made, and the plan says so instead of hiding it:
+#
+#   + net.subnet["public"]
+#     vpc_id = ?net.vpc["main"].id
+#
+# `?` marks an unknown, and names the value it waits for: the id of
+# `net.vpc["main"]`. Because the subnet refers to the network, apply
+# makes the network first. Apply prints the plan and asks before it
+# changes anything:
+#
+#   $ dform apply
+#   apply: complete
+#
+# The unknown is now the id the fake cloud gave the network:
+#
+#   $ dform query 'net.subnet["public"].vpc_id'
+#   "net.vpc:main"
+#
+# Plan again, and there is nothing to do:
+#
+#   $ dform plan
+#   stack tour is undeformed
+#
+# Undeformed means the world matches the program.
+
+resource net.subnet public {
+  vpc_id = main.id
+  cidr = "10.0.0.0/24"
+  visibility = "public"
+}
+
+# 3. Many resources from one rule
+#
+# A line like `zone("us-test-1a", 1)` is a fact: a row in a table named
+# `zone`. The block below has an `if`: it makes one subnet for every row
+# that matches, and the name `"private-${z}"` gives each its own name.
+# `inet_subnet(main.cidr, 8, n)` cuts the network's range into /24s and
+# takes the n-th. Two zones, two subnets:
+#
+#   + net.subnet["private-us-test-1a"]
+#     cidr = "10.0.1.0/24"
+#   + net.subnet["private-us-test-1b"]
+#     cidr = "10.0.2.0/24"
+#
+# That was in the first plan; they exist now. To list them, ask for every
+# subnet's zone. `attr(type, name, attribute, value)` is the table dform
+# keeps every attribute in, and the lower-case names `s` and `z` are
+# blanks to fill in, one row per answer:
+#
+#   $ dform query 'attr(net.subnet, s, "zone", z)'
+#   "private-us-test-1a"                 "us-test-1a"
+#   "private-us-test-1b"                 "us-test-1b"
+#
+# The `network.` rows are section 7's networks, which read `zone` too. A
+# third zone is one more line here, and every rule that reads `zone`
+# follows it.
+
+zone("us-test-1a", 1)
+zone("us-test-1b", 2)
+
+resource net.subnet "private-${z}" {
+  if zone(z, n)
+  vpc_id = main.id
+  cidr = inet_subnet(main.cidr, 8, n)
+  zone = z
+  visibility = "private"
+}
+
+# 4. Settings per environment, and a stack per environment
+#
+# The stack is named `tour`, and keyed by `env`: each value of `env` is a
+# deployment of its own, with its own state. `dform plan` plans the
+# default, `dev`. A settings block is a row of named values, one per
+# environment, and `cfg` is the row of the environment being planned.
+# The database below takes its backups and redundancy from it.
+#
+# dev is applied already. prod has never been, so for prod the same
+# program is all creates, with prod's settings:
+#
+#   $ dform plan tour env=prod
+#   deployment: tour[env=prod]
+#   plan: 11 deformations (11 create)
+#   + db.postgres["orders"]
+#     backup_days = 14
+#     multi_az = true
+#
+# The database also has an `input`, `public_db`: a value given on the
+# command line. It defaults to false; section 5 is why it should stay so.
+
+stack tour[env] {}
+
+input env: enum("dev", "prod") = "dev"
+
+settings dev {
+  backup_days = 1
+  multi_az = false
+}
+
+settings prod {
+  backup_days = 14
+  multi_az = true
+}
+
+let cfg = settings[env]
+
+input public_db: bool = false
+
+resource db.postgres orders {
+  subnet_ids = [ s.id | s in net.subnet, s.visibility == "private" ]
+  backup_days = cfg.backup_days
+  multi_az = cfg.multi_az
+  public = public_db
+}
+
+# 5. Policy
+#
+# Policy is written in the same language: it is more rules. The first
+# rule below reads every resource (`r in resource`) and adds a tag to it,
+# so every create in the plans above had `tags.team = "shop"`. The second
+# is a `deny`: a rule whose matches stop the plan. Nothing matches now.
+# Ask for a public database, and it does:
+#
+#   $ dform plan --set public_db=true
+#   ~ db.postgres["orders"]
+#     public: false -> true
+#   constraint violations:
+#   - a database must not be public ctx={"database":"orders"}
+#   Error: blocked by constraints
+#
+# The plan shows the change it refuses (`~` is an update) and the rule
+# that refused it. There is no separate policy step to run: every plan and
+# every apply checks every deny.
+
+set r.tags = { team: "shop" } if r in resource
+
+deny "a database must not be public" { database: pg } if pg in db.postgres, pg.public
+
+# 6. Why
+#
+# Any value dform works out can be asked where it came from. The network
+# has a tag nobody wrote in its block:
+#
+#   $ dform why 'net.vpc["main"].tags.team'
+#   attr("net.vpc", "main", "tags", {team: "shop"})
+#     └─ arg("net.vpc", "main", "tags", {team: "shop"}, "normal")   [rank normal, owner r18 (stacks/tour.df:180:1)]
+#          by r18: arg(Type, R, "tags", {team: "shop"}, "normal") :- want(Type, R)
+#          └─ want("net.vpc", "main")   fact, stacks/tour.df:39:1 (want)
+#
+# (Shortened.) Read it from the top: the network's tags have one
+# contribution, made by the rule at stacks/tour.df line 180, section 5's
+# tag rule, because the network exists, which line 39 says. The address
+# is the one the plan printed, pasted. The same works for a cidr, a
+# subnet's name or a deny: whatever the plan shows, `why` can explain.
+
+# 7. A module, used twice
+#
+# Sections 1 to 3 wrote one network by hand. A module is the same shape
+# with its inputs named, so it can be made more than once. `instance`
+# makes one, giving its inputs; here there are two, blue and green.
+#
+# They were in the first plan:
+#
+#   + net.vpc["network.blue::vpc"]
+#     cidr = "10.1.0.0/16"
+#     tags.team = "shop"
+#   + net.subnet["network.green::private-us-test-1b"]
+#     vpc_id = ?net.vpc["network.green::vpc"].id
+#
+# and apply made them. Every network now, with its range:
+#
+#   $ dform query 'attr(net.vpc, v, "cidr", c)'
+#   "main"                10.0.0.0/16
+#   "network.blue::vpc"   10.1.0.0/16
+#   "network.green::vpc"  10.2.0.0/16
+#
+# A module's resources are named for their instance, and they are
+# resources like any other: section 5's tag rule reached them without
+# being told about modules. In a larger project a module has a file of its
+# own under modules/ (docs/layout.md), imported with `import`.
+
+module network {
+  input cidr: inet
+
+  resource net.vpc vpc {
+    cidr = cidr
+  }
+
+  resource net.subnet "private-${z}" {
+    if zone(z, n)
+    vpc_id = vpc.id
+    cidr = inet_subnet(cidr, 8, n)
+    zone = z
+  }
+}
+
+instance network blue {
+  cidr = inet("10.1.0.0/16")
+}
+
+instance network green {
+  cidr = inet("10.2.0.0/16")
+}
+
+# 8. Where to go next
+#
+# Each project under examples/ has a README that says what it shows and
+# the commands to run:
+#
+#   demo       modules in their own files, a policy pack, settings from YAML
+#              files, scenarios (`dform test`)
+#   pngu       a table read from a CSV file
+#   advanced   recursive rules: reachability, routes, group membership
+#   adopt      taking over a resource that already exists
+#   refine     types with conditions (`where`), checked when values are known
+#   gke        a plan in two ticks: values only the first one makes
+#   k8s, aws   other fake providers, shaped like Kubernetes and AWS
+#   bootstrap  two stacks, one of them a controller's
+#   approvals  approving a signed plan
+#   crud-api   a blue/green rollout
+#
+# docs/best_practices.md is how to write a program; docs/grammar.md is
+# the language.

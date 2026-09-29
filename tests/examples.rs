@@ -3,6 +3,9 @@
 //! plan, apply, and plan again, which finds the stack undeformed.
 //!
 //! A new example directory needs a case in `CASES`, and a test naming it.
+//! The tour's stack file is also a walkthrough: every command its comments
+//! tell the reader to run runs as written, in order, and prints what they
+//! quote (`walkthrough`).
 
 mod common;
 use common::{Scratch, copy_dir, repo};
@@ -123,6 +126,10 @@ const CASES: &[Case] = &[
                 Apply::Stops("refinement violated"),
             ),
         ],
+    },
+    Case {
+        name: "tour",
+        stacks: &[one(&["apply"], Apply::Converges(1))],
     },
 ];
 
@@ -312,4 +319,111 @@ fn pngu() {
 #[test]
 fn refine() {
     check("refine");
+}
+
+#[test]
+fn tour() {
+    check("tour");
+    walkthrough("tour", "stacks/tour.df");
+}
+
+/// A command a stack file's comments tell the reader to run, and the lines
+/// they quote from what it prints.
+struct Step {
+    line: String,
+    args: Vec<String>,
+    quoted: Vec<String>,
+}
+
+/// The steps of a walkthrough: each comment line `#   $ dform ARGS`, and
+/// under it the `#   ` lines up to the next line that is not one.
+fn steps(df: &str) -> Vec<Step> {
+    let mut out: Vec<Step> = vec![];
+    let mut open = false;
+    for l in df.lines() {
+        match l.strip_prefix("#   ") {
+            Some(cmd) if cmd.starts_with("$ ") => {
+                let line = cmd[2..].trim().to_string();
+                let mut args = words(&line);
+                assert_eq!(args.remove(0), "dform", "{line}");
+                out.push(Step {
+                    line,
+                    args,
+                    quoted: vec![],
+                });
+                open = true;
+            }
+            Some(quoted) if open => out.last_mut().unwrap().quoted.push(quoted.trim().into()),
+            _ => open = false,
+        }
+    }
+    out
+}
+
+/// A command line's words, as a shell splits one with only single quotes.
+fn words(line: &str) -> Vec<String> {
+    let mut out = vec![];
+    let mut word = None::<String>;
+    let mut quoted = false;
+    for c in line.chars() {
+        match c {
+            '\'' => {
+                quoted = !quoted;
+                word.get_or_insert_default();
+            }
+            ' ' if !quoted => out.extend(word.take()),
+            c => word.get_or_insert_default().push(c),
+        }
+    }
+    assert!(!quoted, "an unclosed quote: {line}");
+    out.extend(word);
+    out
+}
+
+/// Run a stack file's steps in order in a fresh copy of its project: each
+/// succeeds and prints every line it quotes (one quoting an `Error:` line
+/// fails and prints it), and every README command is one of them.
+fn walkthrough(name: &str, file: &str) {
+    let from = repo().join("examples").join(name);
+    let df = std::fs::read_to_string(from.join(file)).unwrap();
+    let steps = steps(&df);
+    assert!(
+        !steps.is_empty(),
+        "examples/{name}/{file} has no `#   $ dform` lines"
+    );
+    let readme = std::fs::read_to_string(from.join("README.md")).unwrap();
+    for line in commands(&readme).iter().filter(|l| l.starts_with("dform ")) {
+        assert!(
+            steps.iter().any(|s| s.line == *line),
+            "examples/{name}/README.md lists `{line}`, which {file} does not"
+        );
+    }
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!(
+        "examples-{}-{name}-walkthrough",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    copy_dir(&from, &dir);
+    let s = Scratch::adopt(dir);
+    for step in &steps {
+        let mut args = step.args.clone();
+        if args[0] == "apply" {
+            args.extend(APPLY_FLAGS.iter().map(|f| f.to_string()));
+        }
+        let r = s.run(&args);
+        let fails = step.quoted.iter().any(|q| q.starts_with("Error:"));
+        let out = format!("{}{}", r.stdout, r.stderr);
+        assert_eq!(
+            !r.ok, fails,
+            "examples/{name}/{file}: `{}`\n{out}",
+            step.line
+        );
+        for q in &step.quoted {
+            assert!(
+                out.contains(q.as_str()),
+                "examples/{name}/{file}: `{}` does not print `{q}`\n{out}",
+                step.line
+            );
+        }
+    }
 }
