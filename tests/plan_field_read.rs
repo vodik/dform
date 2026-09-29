@@ -23,7 +23,7 @@ fn a_misspelled_attribute_in_a_field_warns_at_the_read() {
 resource net.vpc main { cidr = "10.0.0.0/16" }
 resource net.subnet a {
   cidr = "10.0.1.0/24"
-  name = "a-${net.vpc.main.cidrr}"
+  name = "a-$${net.vpc.main.cidrr}"
 }
 "#,
     )
@@ -48,12 +48,12 @@ input env: string = "prod"
 resource net.vpc main { cidr = "10.0.0.0/16" }
 resource net.subnet a {
   cidr = "10.0.1.0/24"
-  name = "a-${net.vpc.main.cidr}"
+  name = "a-$${net.vpc.main.cidr}"
 }
 resource net.subnet b {
   if env == "staging"
   cidr = "10.0.2.0/24"
-  name = "b-${net.vpc.main.cidrr}"
+  name = "b-$${net.vpc.main.cidrr}"
 }
 resource net.vpc gated {
   if env == "staging"
@@ -61,7 +61,7 @@ resource net.vpc gated {
 }
 resource net.subnet c {
   cidr = "10.0.3.0/24"
-  name = "c-${net.vpc.gated.cidr}"
+  name = "c-$${net.vpc.gated.cidr}"
 }
 "#,
     )
@@ -80,7 +80,7 @@ stack s { unknowns = "strict" }
 resource net.vpc main { cidr = "10.0.0.0/16" }
 resource net.subnet a {
   cidr = "10.0.1.0/24"
-  name = "a-${net.vpc.main.cidrr}"
+  name = "a-$${net.vpc.main.cidrr}"
 }
 "#,
     )

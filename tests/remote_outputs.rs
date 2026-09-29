@@ -12,7 +12,7 @@ const CLUSTER: &str = r#"edition 2027
 input env: string = "dev"
 input token: secret(string)
 stack cluster[env] {}
-output endpoint = "https://${env}.cluster.example"
+output endpoint = "https://$${env}.cluster.example"
 output token: secret(string)
 output token = token
 "#;
@@ -80,7 +80,7 @@ fn a_project_reads_another_projects_outputs_through_a_local_remote() {
     // output moves, and the plan is stale.
     app.write(
         "stacks/app.df",
-        &APP.replace("name = e", "name = e\n  cidr = \"10.1.0.0/16\""),
+        &APP.replace("name = e", "let name = e\n  let cidr = \"10.1.0.0/16\""),
     );
     app.run(&["plan", "app", "--out", "plan.json"]).success();
     let plan = app.read("plan.json");
@@ -236,7 +236,7 @@ fn an_output_of_a_configured_attribute_is_published_resolved_or_pending() {
         "stacks/net.df",
         &net.replace(
             "cidr = \"10.0.0.0/16\"",
-            "cidr = \"10.0.0.0/16\"\n  name = \"main\"",
+            "let cidr = \"10.0.0.0/16\"\n  let name = \"main\"",
         ),
     );
     s.run(&["apply", "net"]).success();

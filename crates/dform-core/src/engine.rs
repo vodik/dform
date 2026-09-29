@@ -1,4 +1,4 @@
-use crate::ast::{Atom, Constraint, Lit, Program, RuleStmt, Span, Term};
+use crate::ast::{Atom, Lit, Program, RuleStmt, Span, Term};
 use crate::circuit::{self, Circuit, Leaf, NodeId};
 use crate::diag;
 use crate::ir::ops::{self, AggKind};
@@ -207,12 +207,6 @@ pub fn eval_resumable(
         .map(|i| c.rule_stratum[i])
         .min()
         .unwrap_or(c.fixes.len());
-    // Constraints are checked after the strata, but stuck/4 counts their
-    // instances: derive it again when one reads a later predicate.
-    let at = match c.stuck_at {
-        Some(s) if c.constraints.iter().any(|k| reads_later(&k.body)) => at.min(s),
-        _ => at,
-    };
     run_strata(&c, &mut st, 0..at)?;
     let state = st.clone();
     run(&c, &mut st, at)?;
@@ -241,14 +235,12 @@ impl Resumable {
     }
 }
 
-/// The program compiled for evaluation: rules and constraints, their
+/// The program compiled for evaluation: rules, their
 /// operator IR, the strata, and the circuit's rule leaves.
 struct Compiled {
     rules: std::sync::Arc<Vec<RuleStmt>>,
-    constraints: Vec<Constraint>,
     externs: BTreeSet<crate::ast::Extern>,
     plans: Vec<ops::Rule>,
-    constraint_bodies: Vec<ops::Body>,
     rule_stratum: Vec<usize>,
     fixes: Vec<ops::Fix>,
     rule_text: Vec<String>,
@@ -290,7 +282,7 @@ fn start(
         prov.given(g, leaf);
     }
 
-    let (rules, constraints, fact_atoms) = (compiled.rules, compiled.constraints, compiled.facts);
+    let (rules, fact_atoms) = (compiled.rules, compiled.facts);
     for r in &rules {
         if AGGREGATE_OUTPUTS.contains(&r.head.pred.as_str()) {
             bail!(
@@ -340,7 +332,7 @@ fn start(
         }
     }
 
-    check_defined(&rules, &constraints, prov.store.atoms(), &externs)?;
+    check_defined(&rules, prov.store.atoms(), &externs)?;
 
     // Stratified evaluation over the partition graph (E §2.6, F DR-12
     // revised). Every rule runs in the stratum of its head node.
@@ -363,19 +355,15 @@ fn start(
                 .unwrap_or(0)
         })
         .collect();
-    // The operator IR: one body per rule and constraint, a Fix per
+    // The operator IR: one body per rule, a Fix per
     // stratum, and the indexes the bodies read through.
     let extern_preds: BTreeSet<String> = externs.iter().map(|e| e.pred.clone()).collect();
     let plans: Vec<ops::Rule> = rules
         .iter()
         .map(|r| ops::compile_rule(r, &extern_preds))
         .collect();
-    let constraint_bodies: Vec<ops::Body> = constraints
-        .iter()
-        .map(|c| ops::compile_body(&c.body, &extern_preds))
-        .collect();
     let fixes = ops::fixes(&rules, &rule_stratum, &plans);
-    let bodies = plans.iter().map(|p| &p.body).chain(&constraint_bodies);
+    let bodies = plans.iter().map(|p| &p.body);
     for (rel, keys) in ops::indexes(bodies) {
         for key in keys {
             prov.store.index(&rel, &key);
@@ -409,10 +397,8 @@ fn start(
     Ok((
         Compiled {
             rules: std::sync::Arc::new(rules),
-            constraints,
             externs,
             plans,
-            constraint_bodies,
             rule_stratum,
             fixes,
             rule_text,
@@ -601,8 +587,7 @@ fn run_strata(c: &Compiled, st: &mut State, range: std::ops::Range<usize>) -> Re
     Ok(())
 }
 
-/// Check the constraints against the final facts, read the policy facts,
-/// and derive `stuck/4`.
+/// Read the policy facts of the final fact set, and derive `stuck/4`.
 fn finish(c: &Compiled, st: State) -> Result<(EvalResult, Vec<String>)> {
     let State {
         mut prov,
@@ -611,37 +596,7 @@ fn finish(c: &Compiled, st: State) -> Result<(EvalResult, Vec<String>)> {
         stuck_facts,
         ..
     } = st;
-    let (rules, constraints) = (&c.rules, &c.constraints);
-    // Constraints are checked against the final fact set.
-    let hi = prov.store.len();
     let mut violations = Vec::new();
-    for (k, con) in constraints.iter().enumerate() {
-        let head = Atom {
-            pred: "deny".into(),
-            args: vec![Term::Val(Value::Str(con.message.clone()))],
-            record: None,
-            span: con.span,
-        };
-        let text = partition::fmt_rule(&partition::constraint_rule(con));
-        let rec = Rec {
-            rule: rules.len() + k,
-            head: &head,
-            text: &text,
-            known: &known,
-            aggregates: &c.aggregates,
-            found: RefCell::new(Vec::new()),
-        };
-        let src = Src {
-            store: &prov.store,
-            body: &c.constraint_bodies[k],
-            win: vec![Window::below(hi); con.body.len()],
-            all: Window::below(hi),
-        };
-        if !eval_body(&con.body, &src, &rec)?.is_empty() {
-            violations.push(con.message.clone());
-        }
-        stucks.extend(rec.found.into_inner());
-    }
     let mut facts: BTreeSet<Atom> = BTreeSet::new();
     for a in prov.store.atoms() {
         facts.insert(a.clone());
@@ -715,14 +670,14 @@ fn may_derive(
     }
     let heads = RefCell::new(heads);
     let skip: BTreeSet<usize> = stucks.iter().filter_map(|s| s.rule).collect();
-    let over: Vec<usize> = (0..c.rules.len() + c.constraints.len()).collect();
+    let over: Vec<usize> = (0..c.rules.len()).collect();
     let mut out = may_derive_over(c, &prov.store, known, &heads, &over, &skip)?;
     out.sort();
     Ok(out)
 }
 
-/// The may-derive instances of the rules `over` (indices into the rules,
-/// then the constraints; those in `skip` left out), reading the heads in
+/// The may-derive instances of the rules `over` (indices into the rules;
+/// those in `skip` left out), reading the heads in
 /// `heads`, to a fixpoint: each head found is added to `heads` and read in
 /// turn. `known` is what the literals before a read are evaluated with
 /// (Rule 3); it may be `heads` itself, as it is while the strata run.
@@ -735,20 +690,7 @@ fn may_derive_over(
     skip: &BTreeSet<usize>,
 ) -> Result<Vec<stuck::MayDerive>> {
     let all = Window::below(store.len());
-    let n = c.rules.len();
-    let constraint_rules: Vec<(usize, RuleStmt)> = over
-        .iter()
-        .filter(|&&i| i >= n)
-        .map(|&i| (i, partition::constraint_rule(&c.constraints[i - n])))
-        .collect();
-    let rule_of = |i: usize| -> (&RuleStmt, &ops::Body) {
-        if i < n {
-            (&c.rules[i], &c.plans[i].body)
-        } else {
-            let r = &constraint_rules.iter().find(|(k, _)| *k == i).unwrap().1;
-            (r, &c.constraint_bodies[i - n])
-        }
-    };
+    let rule_of = |i: usize| -> (&RuleStmt, &ops::Body) { (&c.rules[i], &c.plans[i].body) };
     let mut out: Vec<stuck::MayDerive> = Vec::new();
     let mut transitive: BTreeSet<Atom> = BTreeSet::new();
     loop {
@@ -825,12 +767,7 @@ fn record_stucks(c: &Compiled, prov: &mut Prov, stucks: &[Stuck]) -> Vec<Atom> {
     for s in stucks {
         let f = s.fact();
         let by = match s.rule {
-            Some(i) if i < c.rule_leaf.len() => c.rule_leaf[i],
-            Some(i) => prov.rule(
-                format!("c{}", i - c.rules.len()),
-                &s.text,
-                c.constraints[i - c.rules.len()].span,
-            ),
+            Some(i) => c.rule_leaf[i],
             None => c.sigma,
         };
         prov.record(f.clone(), vec![by], vec![]);
@@ -841,7 +778,7 @@ fn record_stucks(c: &Compiled, prov: &mut Prov, stucks: &[Stuck]) -> Vec<Atom> {
 
 /// Derive `stuck/4` at stratum `s`, below which every body a stuck
 /// companion reads is complete (the partition graph's edges): the
-/// instances found so far, and those of every rule and constraint that
+/// instances found so far, and those of every rule that
 /// can stick and has not run yet, by evaluating its body now (its stuck
 /// companion; it finds the same instances again when it runs). Returns
 /// the instances derived.
@@ -882,29 +819,6 @@ fn derive_stuck(
             all,
         };
         eval_rule(r, &c.plans[i], &src, &rec)?;
-        found.extend(rec.found.into_inner());
-    }
-    for (k, con) in c.constraints.iter().enumerate() {
-        let rule = partition::constraint_rule(con);
-        if !stuck::can_stick(&rule.head, &con.body, &c.aggregates) {
-            continue;
-        }
-        let text = partition::fmt_rule(&rule);
-        let rec = Rec {
-            rule: c.rules.len() + k,
-            head: &rule.head,
-            text: &text,
-            known,
-            aggregates: &c.aggregates,
-            found: RefCell::new(Vec::new()),
-        };
-        let src = Src {
-            store: &prov.store,
-            body: &c.constraint_bodies[k],
-            win: vec![all; con.body.len()],
-            all,
-        };
-        eval_body(&con.body, &src, &rec)?;
         found.extend(rec.found.into_inner());
     }
     found.retain(|s| !s.head.pred.starts_with("__"));
@@ -970,7 +884,6 @@ pub fn query(body: &[Lit], facts: &BTreeSet<Atom>) -> Result<Vec<Answer>> {
 /// provider-injected predicate, a fact given to this run, or `decl p/N`.
 fn check_defined(
     rules: &[RuleStmt],
-    constraints: &[Constraint],
     facts: &[Atom],
     externs: &BTreeSet<crate::ast::Extern>,
 ) -> Result<()> {
@@ -983,14 +896,8 @@ fn check_defined(
             || matches!(p, "member" | "enumerate")
             || crate::loader::is_core_pred(p)
     };
-    let text = |k: usize| match rules.get(k) {
-        Some(r) => partition::fmt_rule(r),
-        None => partition::fmt_rule(&partition::constraint_rule(&constraints[k - rules.len()])),
-    };
-    let bodies = rules
-        .iter()
-        .map(|r| &r.body)
-        .chain(constraints.iter().map(|c| &c.body));
+    let text = |k: usize| partition::fmt_rule(&rules[k]);
+    let bodies = rules.iter().map(|r| &r.body);
     let mut errors = Vec::new();
     for (k, body) in bodies.enumerate() {
         for lit in body {
@@ -3049,28 +2956,28 @@ pub const REFERENCE: &[Reference] = &[
         Fun,
         "add(a: int, b: int) -> int",
         "The sum of two integers; `a + b` lowers to it.",
-        "n = add(replicas, 1)",
+        "let n = add(replicas, 1)",
     ),
     r(
         "sub",
         Fun,
         "sub(a: int, b: int) -> int",
         "The difference of two integers; `a - b` lowers to it.",
-        "spare = sub(max, used)",
+        "let spare = sub(max, used)",
     ),
     r(
         "mul",
         Fun,
         "mul(a: int, b: int) -> int",
         "The product of two integers; `a * b` lowers to it.",
-        "bytes = mul(gib, 1073741824)",
+        "let bytes = mul(gib, 1073741824)",
     ),
     r(
         "div",
         Fun,
         "div(a: int, b: int) -> int",
         "Integer division, no value when `b` is 0; `a / b` lowers to it.",
-        "half = div(n, 2)",
+        "let half = div(n, 2)",
     ),
     r(
         "mod",
@@ -3084,35 +2991,35 @@ pub const REFERENCE: &[Reference] = &[
         Fun,
         "ip(text: string) -> ip",
         "An IPv4 address from its dotted text.",
-        "gw = ip(\"10.0.0.1\")",
+        "let gw = ip(\"10.0.0.1\")",
     ),
     r(
         "ip_str",
         Fun,
         "ip_str(addr: ip) -> string",
         "An IPv4 address's dotted text (a string is itself).",
-        "text = ip_str(inet_host(net, 1))",
+        "let text = ip_str(inet_host(net, 1))",
     ),
     r(
         "inet",
         Fun,
         "inet(cidr: string) -> inet",
         "A network from its CIDR text.",
-        "vpc_net = inet(\"10.50.0.0/16\")",
+        "let vpc_net = inet(\"10.50.0.0/16\")",
     ),
     r(
         "inet_str",
         Fun,
         "inet_str(net: inet) -> string",
         "A network's CIDR text (a string is itself).",
-        "cidr = inet_str(inet_subnet(net, 8, 1))",
+        "let cidr = inet_str(inet_subnet(net, 8, 1))",
     ),
     r(
         "iprange",
         Fun,
         "iprange(a: ip, b: ip) -> iprange",
         "The range of addresses between two, in either order.",
-        "pool = iprange(ip(\"10.0.0.10\"), ip(\"10.0.0.99\"))",
+        "let pool = iprange(ip(\"10.0.0.10\"), ip(\"10.0.0.99\"))",
     ),
     r(
         "ip_unspecified",
@@ -3140,91 +3047,91 @@ pub const REFERENCE: &[Reference] = &[
         Fun,
         "inet_addr(net: inet, n: int) -> ip",
         "The network's address `n` places after its base address.",
-        "first = inet_addr(net, 0)",
+        "let first = inet_addr(net, 0)",
     ),
     r(
         "inet_host",
         Fun,
         "inet_host(net: inet, n: int) -> ip",
         "The network's `n`th usable host (network and broadcast excluded), no value past the last.",
-        "private_ip = inet_host(inet(cfg.vpc_net), 20)",
+        "let private_ip = inet_host(inet(cfg.vpc_net), 20)",
     ),
     r(
         "inet_subnet",
         Fun,
         "inet_subnet(net: inet, newbits: int, netnum: int) -> inet",
         "The `netnum`th subnet of `net` with `newbits` more prefix bits.",
-        "cidr = inet_subnet(vpc.cidr, 4, zone_index[z])",
+        "let cidr = inet_subnet(vpc.cidr, 4, zone_index[z])",
     ),
     r(
         "scoped",
         Fun,
         "scoped(scope: string, name: string) -> string",
         "A name inside a module instance, `scope::name`, as module lowering writes it.",
-        "n = scoped(\"network.main\", \"vpc\")",
+        "let n = scoped(\"network.main\", \"vpc\")",
     ),
     r(
         "format",
         Fun,
         "format(template: string, value: any, ...) -> string",
         "The template with each `%s` replaced by the next value's text; `\"a{e}\"` lowers to it.",
-        "name = format(\"%s-%s\", env, zone)",
+        "let name = format(\"%s-%s\", env, zone)",
     ),
     r(
         "concat",
         Fun,
         "concat(value: any, ...) -> string",
         "The values' texts, joined.",
-        "id = concat(prefix, \"-\", n)",
+        "let id = concat(prefix, \"-\", n)",
     ),
     r(
         "ref",
         Fun,
         "ref(type: string, name: string, path: string) -> ref",
         "A reference to an attribute of the program's own resource: an apply-order edge; `vpc.id` in a field lowers to it.",
-        "vpc_id = ref(\"net.vpc\", \"vpc\", \"id\")",
+        "let vpc_id = ref(\"net.vpc\", \"vpc\", \"id\")",
     ),
     r(
         "declassify",
         Fun,
         "declassify(value: any, reason: string) -> any",
         "The value, its secret label removed; `declassified/2` records why (E DR-19).",
-        "fingerprint = declassify(key.sha, \"a digest is public\")",
+        "let fingerprint = declassify(key.sha, \"a digest is public\")",
     ),
     r(
         "cloud_ref",
         Fun,
         "cloud_ref(type: string, name: string, path: string) -> ref",
         "A reference to an attribute of an object in the world, one the program does not manage.",
-        "adopted_id = cloud_ref(net.vpc, \"existing-vpc\", .id)",
+        "let adopted_id = cloud_ref(net.vpc, \"existing-vpc\", \"id\")",
     ),
     r(
         "gref",
         Fun,
         "gref(type: string, name: string, path: string) -> ref",
         "A reference by a resource's global name: `ref` without the module scope.",
-        "peer = gref(\"net.vpc\", \"network.peer::vpc\", \"id\")",
+        "let peer = gref(\"net.vpc\", \"network.peer::vpc\", \"id\")",
     ),
     r(
         "cidrsubnet",
         Fun,
         "cidrsubnet(cidr: string, newbits: int, netnum: int) -> string",
         "Terraform's cidrsubnet over CIDR text: the `netnum`th subnet with `newbits` more bits.",
-        "cidr_block = cidrsubnet(\"10.0.0.0/16\", 8, 2)",
+        "let cidr_block = cidrsubnet(\"10.0.0.0/16\", 8, 2)",
     ),
     r(
         "to_int",
         Fun,
         "to_int(value: string) -> int",
         "An integer from its text (an integer is itself); strings never coerce silently.",
-        "port = to_int(cfg.port)",
+        "let port = to_int(cfg.port)",
     ),
     r(
         "to_string",
         Fun,
         "to_string(value: any) -> string",
         "A scalar's text; lists, objects, references and nulls have none.",
-        "label = to_string(replicas)",
+        "let label = to_string(replicas)",
     ),
     r(
         "prefix_len",
@@ -3238,35 +3145,35 @@ pub const REFERENCE: &[Reference] = &[
         Fun,
         "len(value: list) -> int",
         "The number of elements of a list, keys of an object or characters of a string.",
-        "zones = len(subnet_ids)",
+        "let zones = len(subnet_ids)",
     ),
     r(
         "lower",
         Fun,
         "lower(text: string) -> string",
         "The text in lower case.",
-        "name = lower(team)",
+        "let name = lower(team)",
     ),
     r(
         "upper",
         Fun,
         "upper(text: string) -> string",
         "The text in upper case.",
-        "code = upper(region)",
+        "let code = upper(region)",
     ),
     r(
         "split",
         Fun,
         "split(text: string, sep: string) -> list(string)",
         "The text's parts between each `sep` (not empty).",
-        "parts = split(\"a,b\", \",\")",
+        "let parts = split(\"a,b\", \",\")",
     ),
     r(
         "join",
         Fun,
         "join(parts: list, sep: string) -> string",
         "The scalars' texts joined by `sep`.",
-        "hosts = join(names, \",\")",
+        "let hosts = join(names, \",\")",
     ),
     r(
         "collect",
@@ -3322,7 +3229,7 @@ pub const REFERENCE: &[Reference] = &[
         Ext,
         "env_var(name: string) -> secret(string)",
         "The environment variable of the process that plans: a builtin extern, a secret.",
-        "token = env_var(\"API_TOKEN\")",
+        "let token = env_var(\"API_TOKEN\")",
     ),
     r(
         "edition",
@@ -3330,6 +3237,13 @@ pub const REFERENCE: &[Reference] = &[
         "edition 2027",
         "The first line of every .df file: the grammar's edition.",
         "edition 2027",
+    ),
+    r(
+        "import",
+        Kw,
+        "import \"PATH\"",
+        "Include a file, once, where the import stands; paths are from the project's root.",
+        "import \"modules/network.df\"",
     ),
     r(
         "provider",
@@ -3346,30 +3260,58 @@ pub const REFERENCE: &[Reference] = &[
         "stack app[env] { unknowns = \"strict\" }",
     ),
     r(
-        "import",
+        "type",
         Kw,
-        "import \"PATH\"",
-        "Include a file, once, where the import stands; paths are from the project's root.",
-        "import \"modules/network.df\"",
+        "type NAME = TYPE | type TYPE { PATH: TYPE FLAG*, ... }",
+        "A type alias, or a resource type's attributes.",
+        "type environment = enum(\"dev\", \"prod\")",
+    ),
+    r(
+        "decl",
+        Kw,
+        "decl NAME(COLUMN [: TYPE], ...) mixed?",
+        "Declare a relation by its columns: one fed from outside, or one with both facts and rules (`mixed`); its columns name its arguments.",
+        "decl zone_index(zone, index) mixed",
+    ),
+    r(
+        "extern",
+        Kw,
+        "extern NAME(+IN: TYPE, -OUT: TYPE, ...) persist?",
+        "A relation asked of the provider on demand, its `+` columns bound; `persist` keeps its answers.",
+        "extern dns.lookup(+name, -addr: string)",
     ),
     r(
         "input",
         Kw,
-        "input NAME: TYPE (= DEFAULT)? (where BODY)?",
-        "A typed input of the stack or module; `input relation` reads a table or a fact file.",
+        "input NAME: TYPE (= DEFAULT)? (where BODY)? | input NAME(COLUMN: TYPE, ...) from SOURCE",
+        "A typed input of the stack or module; with columns, a relation read from a table or a fact file (`facts(PATH)`).",
         "input env: environment = \"staging\"",
     ),
     r(
         "output",
         Kw,
-        "output NAME: TYPE | output NAME = TERM",
-        "A module's or stack's output: declared with its type, defined by a term.",
-        "output vpc = vpc",
+        "output NAME (: TYPE)? = TERM (if BODY)?",
+        "A module's or stack's output, its type and its value in one statement.",
+        "output vpc: net.vpc = vpc",
+    ),
+    r(
+        "let",
+        Kw,
+        "let NAME = TERM (if BODY)?",
+        "A value, read by name; one that holds a reference (a settings row, a resource) is read through with a dot.",
+        "let cfg = settings[env]",
+    ),
+    r(
+        "set",
+        Kw,
+        "set REFERENCE.PATH (= | +=) TERM @RANK? (if BODY)?",
+        "A contribution to a block declared elsewhere, a settings leaf, or an input (in a scenario).",
+        "set r.tags.team = \"platform\" @default if r in resource",
     ),
     r(
         "export",
         Kw,
-        "export NAME/ARITY | export type NAME",
+        "export NAME | export type NAME",
         "Make a module's relation, or its type alias, visible to its importers.",
         "export type subnets",
     ),
@@ -3390,7 +3332,7 @@ pub const REFERENCE: &[Reference] = &[
     r(
         "instance",
         Kw,
-        "instance MODULE NAME { INPUT = TERM, ... }",
+        "instance MODULE NAME { (if BODY)? INPUT = TERM, ... }",
         "One instance of a module; each field is a contribution to one of its inputs.",
         "instance network main { vpc_net = inet(\"10.0.0.0/16\") }",
     ),
@@ -3402,60 +3344,46 @@ pub const REFERENCE: &[Reference] = &[
         "policy baseline { contributes _.tags }",
     ),
     r(
-        "apply",
+        "use",
         Kw,
-        "apply POLICY",
+        "use POLICY",
         "Apply a policy pack to the program.",
-        "apply baseline",
+        "use baseline",
+    ),
+    r(
+        "scenario",
+        Kw,
+        "scenario NAME { set KEY = VALUE, STATEMENTS }",
+        "Policy over hypothetical inputs: `dform test` runs every scenario.",
+        "scenario prod { set env = \"prod\" }",
     ),
     r(
         "resource",
         Kw,
-        "resource TYPE NAME @RANK? { for BODY, if BODY, PATH = TERM, ... }",
-        "A resource the program wants, its fields contributions; `x in resource` is any resource.",
+        "resource TYPE NAME @RANK? { (if BODY)? PATH = TERM, ... }",
+        "A resource the program wants, one per answer of its clause, its fields contributions; `x in resource` is any resource.",
         "resource net.vpc vpc { cidr = vpc_net }",
     ),
     r(
         "settings",
         Kw,
-        "settings NAME @RANK? { PATH = TERM, ... }",
+        "settings NAME @RANK? { (if BODY)? PATH = TERM, ... }",
         "A settings row: configuration by name, read as `settings[e].path`.",
         "settings prod { db.multi_az = true }",
     ),
     r(
-        "scenario",
+        "deny",
         Kw,
-        "scenario NAME { with KEY = VALUE, STATEMENTS }",
-        "Policy over hypothetical inputs: `dform test` runs every scenario.",
-        "scenario prod { with env = \"prod\" }",
+        "deny \"MESSAGE\" {FIELDS}? if BODY",
+        "A check: plan fails with the message when the body holds.",
+        "deny \"prod needs multi_az\" if env == \"prod\", pg in db.postgres, not pg.multi_az",
     ),
     r(
-        "extern",
+        "warn",
         Kw,
-        "extern NAME(+IN: TYPE, -OUT: TYPE, ...) persist?",
-        "A relation asked of the provider on demand, its `+` columns bound; `persist` keeps its answers.",
-        "extern dns.lookup(+name, -addr: string)",
-    ),
-    r(
-        "type",
-        Kw,
-        "type NAME = TYPE | type TYPE { PATH: TYPE FLAG*, ... }",
-        "A type alias, or a resource type's attributes.",
-        "type environment = enum(\"dev\", \"prod\")",
-    ),
-    r(
-        "decl",
-        Kw,
-        "decl NAME/ARITY mixed? | decl NAME(FIELD: TYPE, ...)",
-        "Declare a predicate: an extern, one with both facts and rules (`mixed`), or a record.",
-        "decl zone_index/2 mixed",
-    ),
-    r(
-        "when",
-        Kw,
-        "when BODY { STATEMENTS }",
-        "Guard every statement inside by the body.",
-        "when env == \"prod\" { audit(\"on\") }",
+        "warn \"MESSAGE\" {FIELDS}? if BODY",
+        "A check: plan warns with the message when the body holds.",
+        "warn \"no owner tag\" if r in net.vpc, not has r.tags.owner",
     ),
     r(
         "not",
@@ -3467,16 +3395,23 @@ pub const REFERENCE: &[Reference] = &[
     r(
         "in",
         Kw,
-        "TERM in TYPE | TERM in resource | TERM in LIST",
-        "Membership: a resource of a type, any resource, or an element of a list.",
+        "TERM in TYPE | TERM in resource | TERM in world.TYPE | TERM in LIST",
+        "Membership: a resource of a type, any resource, a live object, or an element of a list.",
         "vpc_peer(a, b) if a in net.vpc, b in net.vpc",
     ),
     r(
-        "exists",
+        "has",
         Kw,
-        "exists REFERENCE",
-        "The resource is wanted in this evaluation.",
-        "if exists database.main/db",
+        "has REFERENCE.PATH",
+        "The attribute has a value.",
+        "tagged(r) if r in net.vpc, has r.tags.owner",
+    ),
+    r(
+        "if",
+        Kw,
+        "HEAD if BODY | { if BODY ... }",
+        "The condition of a rule, check, `let`, `set` or output; first in a block, the query whose every answer is one block.",
+        "vpc_peer(a, b) if vpc_peer_pair(_, _, a, b)",
     ),
     r("true", Kw, "true", "The boolean true.", "multi_az = true"),
     r(
@@ -3485,90 +3420,6 @@ pub const REFERENCE: &[Reference] = &[
         "false",
         "The boolean false.",
         "private_api = false",
-    ),
-    r(
-        "null",
-        Kw,
-        "null",
-        "The null literal (not yet supported).",
-        "x = null",
-    ),
-    r(
-        "persist",
-        Kw,
-        "extern NAME(...) persist",
-        "An extern whose answers are kept in state and asked again only when its inputs change.",
-        "extern registry.digest(+image, -digest) persist",
-    ),
-    r(
-        "where",
-        Kw,
-        "... where BODY",
-        "A refinement: a check an input's or attribute's value must pass, naming it by its own name.",
-        "input replicas: int = 2 where replicas >= 1",
-    ),
-    r(
-        "if",
-        Kw,
-        "HEAD if BODY | { if BODY }",
-        "The condition of a rule, check or contribution; in a block, a guard on the whole block.",
-        "vpc_peer(a, b) if vpc_peer_pair(_, _, a, b)",
-    ),
-    r(
-        "for",
-        Kw,
-        "for BODY { STATEMENTS } | { for BODY }",
-        "Bind variables over a body: one statement, or one block, per match.",
-        "resource net.subnet \"private-{z}\" { for data(\"zone\", z) }",
-    ),
-    r(
-        "let",
-        Kw,
-        "let NAME = REFERENCE",
-        "Name a reference: each use of the name is the reference.",
-        "let cfg = settings[env]",
-    ),
-    r(
-        "has",
-        Kw,
-        "has REFERENCE.PATH",
-        "The attribute has a value.",
-        "tagged(r) if has r.tags.owner",
-    ),
-    r(
-        "some",
-        Kw,
-        "some INDEX, TERM in LIST",
-        "Membership with the element's index.",
-        "first(x) if some i, x in xs, i == 0",
-    ),
-    r(
-        "with",
-        Kw,
-        "with KEY = VALUE",
-        "In a scenario: the input's value.",
-        "with env = \"prod\"",
-    ),
-    r(
-        "deny",
-        Kw,
-        "deny \"MESSAGE\" {FIELDS}? if BODY",
-        "A check: plan fails with the message when the body holds.",
-        "deny \"prod needs multi_az\" if env == \"prod\", not db.multi_az",
-    ),
-    r(
-        "warn",
-        Kw,
-        "warn \"MESSAGE\" {FIELDS}? if BODY",
-        "A check: plan warns with the message when the body holds.",
-        "warn \"no owner tag\" if r in net.vpc, not has r.tags.owner",
-    ),
-    r(
-        "constraint",
-        Kw,
-        "constraint \"MESSAGE\" if BODY",
-        "An integrity constraint: the evaluation is refused when the body holds.",
-        "constraint \"one vpc\" if a in net.vpc, b in net.vpc, a != b",
     ),
 ];
 
@@ -4124,12 +3975,7 @@ mod tests {
     /// aggregate used to see every partial result mid-fixpoint.
     #[test]
     fn aggregate_consumer_sees_one_complete_result() {
-        let (r, _) = run("decl n/1 mixed
-             n(1)
-             n(2) if n(1)
-             n(3) if n(2)
-             all(collect_set(x)) if n(x)
-             snap(l) if all(l)")
+        let (r, _) = run("decl n(a) mixed\n             n(1)\n             n(2) if n(1)\n             n(3) if n(2)\n             all(collect_set(x)) if n(x)\n             snap(l) if all(l)")
         .unwrap();
         assert_eq!(facts_of(&r, "snap"), vec!["snap([1, 2, 3])".to_string()]);
     }
@@ -4225,7 +4071,7 @@ mod tests {
                 "`sum` aggregates ints, not a string",
             ),
             (
-                r#"s(sum("p-{x}")) if b(x)"#,
+                r#"s(sum("p-${x}")) if b(x)"#,
                 "`sum` aggregates ints, not a string",
             ),
             (
@@ -4240,7 +4086,7 @@ mod tests {
             let err = run(&format!("b(1)\n{src}")).unwrap_err();
             assert!(format!("{err:#}").contains(want), "{src}: {err:#}");
         }
-        run("b(1)\ns(sum(x)) if b(x)\nt(max(\"p-{x}\")) if b(x)").unwrap();
+        run("b(1)\ns(sum(x)) if b(x)\nt(max(\"p-${x}\")) if b(x)").unwrap();
     }
 
     /// Rule 2: the aggregated value of `sum`, `min` and `max` is a content
@@ -4266,11 +4112,7 @@ mod tests {
             fact("c", Value::Int(2)),
         ];
         let (r, violations) = run_with(
-            "decl size/2
-             total(g, sum(n)) if size(g, n)
-             lo(g, min(n)) if size(g, n)
-             hi(g, max(n)) if size(g, n)
-             all(sum(n)) if size(_, n)",
+            "decl size(a, b)\n             total(g, sum(n)) if size(g, n)\n             lo(g, min(n)) if size(g, n)\n             hi(g, max(n)) if size(g, n)\n             all(sum(n)) if size(_, n)",
             &extra,
         )
         .unwrap();
@@ -4300,12 +4142,7 @@ mod tests {
     /// first.
     #[test]
     fn a_wildcard_in_a_negation_matches_anything() {
-        let (r, _) = run("p(1, 2)
-             k(0) if p(9, 9)
-             none(1) if not k(_)
-             lonely(x) if x in [1, 3], not p(x, _)
-             active = \"x\" if p(9, 9)
-             next = \"blue\" if not has active")
+        let (r, _) = run("p(1, 2)\n             k(0) if p(9, 9)\n             none(1) if not k(_)\n             lonely(x) if x in [1, 3], not p(x, _)\n             let active = \"x\" if p(9, 9)\n             let next = \"blue\" if not has active")
         .unwrap();
         assert_eq!(facts_of(&r, "none"), vec!["none(1)".to_string()]);
         assert_eq!(facts_of(&r, "lonely"), vec!["lonely(3)".to_string()]);
@@ -4324,9 +4161,7 @@ mod tests {
         assert_eq!(facts_of(&r, "deep").len(), 1);
         assert_eq!(facts_of(&r, "open").len(), 1);
         assert!(facts_of(&r, "shallow").is_empty());
-        let (r, _) = run("p({a: {b: [1]}})
-             elem(e) if p(x), some e in x.a.b
-             none(e) if p(x), some e in x.a.c")
+        let (r, _) = run("p({a: {b: [1]}})\n             elem(e) if p(x), e in x.a.b\n             none(e) if p(x), e in x.a.c")
         .unwrap();
         assert_eq!(facts_of(&r, "elem"), vec!["elem(1)".to_string()]);
         assert!(facts_of(&r, "none").is_empty());
@@ -4417,8 +4252,7 @@ mod tests {
         let (r, violations) = run("type_lattice(\"settings\", \"sinks\", \"set\")
              settings prod { sinks += [\"cloudwatch\"], days = 14 }
              setting_add(\"prod\", \"sinks\", [\"s3\"])
-             module network { output ids: list(string)
-             output(\"ids\", [\"a\", \"b\"]) }
+             module network { output ids: list(string) = [\"a\", \"b\"] }
              instance network main {}
              got(s, d) if setting(\"prod\", \"sinks\", s), setting(\"prod\", \"days\", d)
              ids(l) if output(\"network.main\", \"ids\", l)
@@ -4535,25 +4369,7 @@ mod tests {
     /// `resource` or `settings` header for every leaf without its own.
     #[test]
     fn ranks_in_blocks() {
-        let (r, violations) = run("resource net.vpc main @default {
-               cidr = \"10.0.0.0/16\"
-               tags = { env: \"dev\", team: \"net\" }
-               public = true @override
-             }
-             resource net.vpc main {
-               cidr = \"10.1.0.0/16\"
-               tags = { team: \"platform\" }
-               public = false
-             }
-             env_name(\"dev\")
-             env_name(\"prod\")
-             settings e @default {
-               for env_name(e)
-               days = 3
-               zones = [\"a\"]
-             }
-             settings prod { days = 14 }
-             got(e, d, z) if setting(e, \"days\", d), setting(e, \"zones\", z)")
+        let (r, violations) = run("resource net.vpc main @default {\n               cidr = \"10.0.0.0/16\"\n               tags = { env: \"dev\", team: \"net\" }\n               public = true @override\n             }\n             resource net.vpc main {\n               cidr = \"10.1.0.0/16\"\n               tags = { team: \"platform\" }\n               public = false\n             }\n             env_name(\"dev\")\n             env_name(\"prod\")\n             settings e @default {\n               if env_name(e)\n               days = 3\n               zones = [\"a\"]\n             }\n             settings prod { days = 14 }\n             got(e, d, z) if setting(e, \"days\", d), setting(e, \"zones\", z)")
         .unwrap();
         assert!(violations.is_empty(), "{violations:?}");
         assert_eq!(
@@ -4623,7 +4439,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let old = dir.join("dform.df");
         let old_src = format!("{}{}{}", &src[..start], copied, &src[end..])
-            .replace(", config = yaml(\"config/dform/{env}.yaml\")", "")
+            .replace(", config = yaml(\"config/dform/${env}.yaml\")", "")
             .replace(
                 "import \"",
                 &format!("import \"{}/", root.join("examples/demo").display()),
@@ -4665,15 +4481,7 @@ mod tests {
     /// replaced wholesale by a normal one, and same-shelf sets union.
     #[test]
     fn a_default_set_is_replaced_not_unioned() {
-        let (r, violations) = run("type_lattice(net.vpc, \"sgs\", \"set\")
-             resource net.vpc a { sgs = [\"base\"] }
-             resource net.vpc b { }
-             policy p {
-               contributes _.sgs
-               arg(t, n, \"sgs\", [\"default_sg\", \"ssh\"], \"default\") if want(t, n)
-               arg(t, n, \"sgs\", [\"audit\"]) if want(t, n), n = \"a\"
-             }
-             apply p")
+        let (r, violations) = run("type_lattice(net.vpc, \"sgs\", \"set\")\n             resource net.vpc a { sgs = [\"base\"] }\n             resource net.vpc b { }\n             policy p {\n               contributes _.sgs\n               arg(t, n, \"sgs\", [\"default_sg\", \"ssh\"], \"default\") if want(t, n)\n               arg(t, n, \"sgs\", [\"audit\"]) if want(t, n), n = \"a\"\n             }\n             use p")
         .unwrap();
         assert!(violations.is_empty(), "{violations:?}");
         assert_eq!(
@@ -4689,11 +4497,7 @@ mod tests {
     /// predicate is a compile error naming it and the rule.
     #[test]
     fn undefined_predicate_is_an_error() {
-        let err = run("env(\"prod\")
-             resource net.vpc main {
-               for envv(\"prod\")
-               cidr = \"10.0.0.0/16\"
-             }")
+        let err = run("env(\"prod\")\n             resource net.vpc main {\n               if envv(\"prod\")\n               cidr = \"10.0.0.0/16\"\n             }")
         .unwrap_err()
         .to_string();
         assert!(err.contains("undefined predicate envv/1"), "{err}");
@@ -4707,9 +4511,7 @@ mod tests {
     /// predicates are defined with no rows.
     #[test]
     fn extern_and_provider_predicates_are_defined() {
-        let (r, _) = run("decl allowed/1
-             want(net.vpc, \"a\")
-             lonely(n) if want(net.vpc, n), not allowed(n), not cloud_exists(net.vpc, n)")
+        let (r, _) = run("decl allowed(a)\n             want(net.vpc, \"a\")\n             lonely(n) if want(net.vpc, n), not allowed(n), not cloud_exists(net.vpc, n)")
         .unwrap();
         assert_eq!(facts_of(&r, "lonely"), vec!["lonely(\"a\")".to_string()]);
     }
@@ -4775,10 +4577,7 @@ mod tests {
     /// deeper than the old 200-iteration cap converges.
     #[test]
     fn a_300_deep_chain_converges() {
-        let (r, _) = run("decl n/1 mixed
-             n(0)
-             n(y) if n(x), x < 300, y = x + 1
-             deepest(x) if n(x), x >= 300")
+        let (r, _) = run("decl n(a) mixed\n             n(0)\n             n(y) if n(x), x < 300, y = x + 1\n             deepest(x) if n(x), x >= 300")
         .unwrap();
         assert_eq!(facts_of(&r, "n").len(), 301);
         assert_eq!(facts_of(&r, "deepest"), vec!["deepest(300)".to_string()]);
@@ -4808,12 +4607,7 @@ mod tests {
     /// any other body, so the resource is derived (pngu.df's peerings).
     #[test]
     fn a_record_atom_in_a_resource_body_matches() {
-        let (r, _) = run("decl peering(env: symbol, name: symbol)
-             peering{ env: \"prod\", name: \"legacy\" }
-             resource net.peering name {
-               for peering{ env: env, name: name }
-               env = env
-             }")
+        let (r, _) = run("decl peering(env: symbol, name: symbol)\n             peering( env: \"prod\", name: \"legacy\" )\n             resource net.peering name {\n               if peering( env: env, name: name )\n               env = env\n             }")
         .unwrap();
         assert_eq!(
             facts_of(&r, "attr"),
@@ -5168,14 +4962,14 @@ mod tests {
         let (r, violations) = run_with(
             r#"resource db.postgres a {}
                resource db.postgres b {}
-               up(d) if attr(db.postgres, d, .endpoint, e), e != ""
+               up(d) if attr(db.postgres, d, "endpoint", e), e != ""
                ready(v) if up(v)
                resource net.subnet s {
-                 for up("a")
+                 if up("a")
                  cidr = "10.0.1.0/24"
                }
                resource net.subnet t {
-                 for ready("b")
+                 if ready("b")
                  cidr = "10.0.2.0/24"
                }"#,
             &crate::schema::fake().facts,
@@ -5435,9 +5229,9 @@ mod tests {
     #[test]
     fn a_resumed_evaluation_counts_a_constraints_stuck_instance() {
         let program = crate::parser::parse_program(
-            r#"decl later/1
+            r#"decl later(a)
                strict(r) if stuck(r, _, _, _)
-               constraint "later is positive" if later(x), x > 0"#,
+               deny "later is positive" if later(x), x > 0"#,
         )
         .unwrap();
         let (_, _, resumable) = eval_resumable(&program, &[], &["later"]).unwrap();

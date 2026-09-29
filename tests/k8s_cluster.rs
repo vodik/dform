@@ -453,7 +453,7 @@ fn an_empty_pod_selector_converges() {
     dform(&s, &kc, &["apply", "p.df"]).success();
     let r = dform(&s, &kc, &["plan", "p.df"]).success();
     assert_eq!(r.summary(), "stack p is undeformed", "{}", r.stdout);
-    s.write("p.df", &program("  spec.podSelector = {}\n"));
+    s.write("p.df", &program("  set spec.podSelector = {}\n"));
     let r = dform(&s, &kc, &["plan", "p.df"]).success();
     assert!(
         r.stdout.contains("~ k8s.network_policy[\"other\"]")

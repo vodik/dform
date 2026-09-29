@@ -1434,7 +1434,6 @@ pub fn named_outputs(program: &Program) -> (std::collections::BTreeSet<String>, 
     for s in &program.statements {
         let body = match s {
             Stmt::Rule(r) => &r.body[..],
-            Stmt::Constraint(c) => &c.body[..],
             _ => continue,
         };
         for l in body {

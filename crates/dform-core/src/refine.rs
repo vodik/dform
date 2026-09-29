@@ -513,10 +513,7 @@ pub fn lower_types(program: &Program) -> Result<Program> {
             out.push(s.clone());
             continue;
         };
-        let crate::ast::PendingKind::TypeDecl { name, attrs } = &p.kind else {
-            out.push(s.clone());
-            continue;
-        };
+        let crate::ast::PendingKind::TypeDecl { name, attrs } = &p.kind;
         let mut leaves = Vec::new();
         flatten(attrs, "", &mut leaves);
         let paths: BTreeSet<String> = leaves.iter().map(|(p, _)| p.clone()).collect();

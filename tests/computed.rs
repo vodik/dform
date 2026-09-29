@@ -93,7 +93,7 @@ fn secrets_are_labels_and_print_redacted() {
         plan.stdout
     );
     assert!(
-        plan.stdout.contains("master_password = (sensitive)"),
+        plan.stdout.contains("let master_password = (sensitive)"),
         "{}",
         plan.stdout
     );

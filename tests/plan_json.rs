@@ -179,7 +179,7 @@ fn query_json_redacts_like_the_plan() {
             "--world",
             "w.json",
             "query",
-            "attr(net.subnet, \"a\", .vpc_id, V)",
+            "attr(net.subnet, \"a\", \"vpc_id\", V)",
             "--json",
             "p.df",
         ])

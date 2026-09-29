@@ -602,7 +602,6 @@ pub fn expand_config(program: Program) -> Program {
         let (head, body): (Option<&Atom>, &[Lit]) = match s {
             Stmt::Fact(a) => (Some(a), &[]),
             Stmt::Rule(r) => (Some(&r.head), &r.body),
-            Stmt::Constraint(c) => (None, &c.body),
             _ => continue,
         };
         if let Some(h) = head {

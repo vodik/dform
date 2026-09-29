@@ -1,6 +1,4 @@
-use crate::ast::{
-    Atom, Constraint, Extern, Lit, Program, Rank, Resource, RuleStmt, Span, Stmt, Term, When,
-};
+use crate::ast::{Atom, Extern, Lit, Program, Rank, Resource, RuleStmt, Span, Stmt, Term};
 use crate::diag::{self, Diagnostic, Diagnostics};
 use crate::schema::Schema;
 use crate::value::{NullClass, Value};
@@ -57,7 +55,6 @@ pub fn lower(program: &Program) -> Result<Lowered> {
         inputs,
         secret_outputs,
     } = crate::modules::expand(&program)?;
-    let expanded = expand_when(&expanded)?;
     check_mixed(&expanded)?;
     let expanded = desugar_settings(&expanded)?;
     let (expanded, externs, extern_fns) = drop_metadata(&expanded);
@@ -124,7 +121,6 @@ fn reject_pending(stmts: &[Stmt]) -> Result<()> {
                 }
                 Stmt::Module(d) => walk(&d.body, At::Module, diags),
                 Stmt::PolicyPack(p) => walk(&p.body, At::Module, diags),
-                Stmt::When(w) => walk(&w.body, At::Nested, diags),
                 Stmt::Input(i) if at == At::Nested => diags.push(misplaced(
                     i.span,
                     "an input is declared at the top of a module",
@@ -301,10 +297,6 @@ fn lower_contributions(program: &Program) -> Result<Program> {
             Stmt::Rule(r) => Stmt::Rule(RuleStmt {
                 head: contribution_head(r.head)?,
                 body: attr_lits(r.body)?,
-            }),
-            Stmt::Constraint(c) => Stmt::Constraint(Constraint {
-                body: attr_lits(c.body)?,
-                ..c
             }),
             other => other,
         });
@@ -487,22 +479,6 @@ fn rewrite_stmt_records(stmt: Stmt, schemas: &BTreeMap<String, Vec<String>>) -> 
             let head = rewrite_atom_records(r.head, schemas, Ctx::Head)?;
             let body = rewrite_lits_records(r.body, schemas)?;
             Stmt::Rule(RuleStmt { head, body })
-        }
-        Stmt::Constraint(c) => {
-            let body = rewrite_lits_records(c.body, schemas)?;
-            Stmt::Constraint(Constraint { body, ..c })
-        }
-        Stmt::When(w) => {
-            let guard = rewrite_lit_records(w.guard, schemas)?;
-            let mut body = Vec::new();
-            for s in w.body {
-                body.push(rewrite_stmt_records(s, schemas)?);
-            }
-            Stmt::When(When {
-                guard,
-                body,
-                span: w.span,
-            })
         }
         Stmt::Module(mut c) => {
             c.body = c
@@ -702,14 +678,6 @@ fn desugar_comprehensions(program: &Program) -> Result<Program> {
                     helpers.extend(h);
                     next_stmts.push(Stmt::Rule(rr));
                 }
-                Stmt::Constraint(c) => {
-                    if has_listcomp_lits(&c.body) {
-                        changed = true;
-                    }
-                    let (h, cc) = rewrite_constraint_listcomps(c.clone(), &mut counter)?;
-                    helpers.extend(h);
-                    next_stmts.push(Stmt::Constraint(cc));
-                }
                 other => next_stmts.push(other.clone()),
             }
         }
@@ -728,17 +696,6 @@ fn desugar_comprehensions(program: &Program) -> Result<Program> {
         }
     }
     Ok(current)
-}
-
-fn rewrite_constraint_listcomps(
-    mut c: Constraint,
-    counter: &mut usize,
-) -> Result<(Vec<Stmt>, Constraint)> {
-    let counts_all = count_vars_in_lits(&c.body);
-    let mut helpers = Vec::new();
-    c.body = rewrite_lits_listcomps(&c.body, &counts_all, counter, &mut helpers)?;
-    locate(&mut helpers, c.span);
-    Ok((helpers, c))
 }
 
 fn rewrite_rule_listcomps(mut r: RuleStmt, counter: &mut usize) -> Result<(Vec<Stmt>, RuleStmt)> {
@@ -1113,71 +1070,6 @@ fn drop_metadata(program: &Program) -> (Program, BTreeSet<Extern>, Vec<crate::as
         }
     }
     (Program { statements }, externs, fns)
-}
-
-fn expand_when(program: &Program) -> Result<Program> {
-    let mut out = Vec::new();
-    for stmt in &program.statements {
-        expand_when_stmt(stmt.clone(), &mut out)?;
-    }
-    Ok(Program { statements: out })
-}
-
-fn expand_when_stmt(stmt: Stmt, out: &mut Vec<Stmt>) -> Result<()> {
-    match stmt {
-        Stmt::When(w) => {
-            for s in w.body {
-                for s2 in apply_guard(s, &w.guard)? {
-                    expand_when_stmt(s2, out)?;
-                }
-            }
-        }
-        _ => out.push(stmt),
-    }
-    Ok(())
-}
-
-fn apply_guard(stmt: Stmt, guard: &Lit) -> Result<Vec<Stmt>> {
-    Ok(match stmt {
-        Stmt::Fact(a) => vec![Stmt::Rule(RuleStmt {
-            head: a,
-            body: vec![guard.clone()],
-        })],
-        Stmt::Rule(r) => {
-            let mut body = r.body;
-            body.push(guard.clone());
-            vec![Stmt::Rule(RuleStmt { head: r.head, body })]
-        }
-        Stmt::Constraint(c) => {
-            let mut body = c.body;
-            body.push(guard.clone());
-            vec![Stmt::Constraint(Constraint { body, ..c })]
-        }
-        Stmt::Resource(mut r) => {
-            let mut body = r.body.unwrap_or_default();
-            body.push(guard.clone());
-            r.body = Some(body);
-            vec![Stmt::Resource(r)]
-        }
-        Stmt::Settings(mut s) => {
-            let mut body = s.body.unwrap_or_default();
-            body.push(guard.clone());
-            s.body = Some(body);
-            vec![Stmt::Settings(s)]
-        }
-        Stmt::When(w) => {
-            let mut body = Vec::new();
-            for s in w.body {
-                body.extend(apply_guard(s, guard)?);
-            }
-            vec![Stmt::When(When {
-                guard: w.guard,
-                body,
-                span: w.span,
-            })]
-        }
-        other => vec![other],
-    })
 }
 
 fn desugar_resources(program: &Program, strict: bool) -> Result<Program> {
@@ -1617,9 +1509,8 @@ pub const REF_DEP: &str = "__ref_dep";
 pub fn rewrite_computed_refs(
     rules: Vec<RuleStmt>,
     facts: Vec<Atom>,
-    constraints: Vec<Constraint>,
     schema: &Schema,
-) -> (Vec<RuleStmt>, Vec<Atom>, Vec<Constraint>) {
+) -> (Vec<RuleStmt>, Vec<Atom>) {
     let mut n = 0usize;
     let mut out_rules = Vec::new();
     let mut out_facts = Vec::new();
@@ -1669,14 +1560,7 @@ pub fn rewrite_computed_refs(
         out_rules.push(RuleStmt { head, body });
     }
     out_rules.extend(dangling);
-    let constraints = constraints
-        .into_iter()
-        .map(|c| Constraint {
-            body: rewrite_body_refs(c.body, schema, &mut n),
-            ..c
-        })
-        .collect();
-    (out_rules, out_facts, constraints)
+    (out_rules, out_facts)
 }
 
 /// `deny("ref to an address no rule wants", {type, addr, path, from, at})

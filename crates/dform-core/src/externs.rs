@@ -100,7 +100,6 @@ fn bodies(program: &Program) -> Vec<(Option<&Atom>, &[Lit], Span)> {
         .iter()
         .filter_map(|s| match s {
             Stmt::Rule(r) => Some((Some(&r.head), r.body.as_slice(), r.head.span)),
-            Stmt::Constraint(c) => Some((None, c.body.as_slice(), c.span)),
             _ => None,
         })
         .collect()

@@ -10,7 +10,7 @@ use inspection_common::{dform, golden};
 fn a_pattern_prints_one_column_per_variable() {
     let out = dform(
         "examples/demo/stacks/dform.df env=prod",
-        &["query", "attr(net.vpc, N, .cidr, C)"],
+        &["query", "attr(net.vpc, N, \"cidr\", C)"],
     );
     assert!(out.starts_with("N "), "{out}");
     assert!(

@@ -307,12 +307,22 @@ mod tests {
 
     #[test]
     fn clauses_and_bodies_indent() {
-        let src = "resource t n {\n  for a(x),\n    b(x)\n  f = x\n}\n\
-                   deny \"m\" { x } if {\n  a(x)\n  not b(x)\n}\n";
+        let src = "resource t n {\n\
+                     if {\n\
+                       a(x)\n\
+                       b(x)\n\
+                     }\n\
+                     f = x\n\
+                   }\n\
+                   deny \"m\" { x } if {\n\
+                     a(x)\n\
+                     not b(x)\n\
+                   }\n\
+                   ";
         assert_eq!(fmt(src), src);
         assert_eq!(
-            fmt("resource t n {\nfor a(x),\nb(x)\nf = x\n}\n"),
-            "resource t n {\n  for a(x),\n    b(x)\n  f = x\n}\n"
+            fmt("resource t n {\nif {\n  a(x)\n  b(x)\n}\nf = x\n}\n"),
+            "resource t n {\n  if {\n    a(x)\n    b(x)\n  }\n  f = x\n}\n"
         );
     }
 
@@ -323,7 +333,7 @@ mod tests {
             "resource t n {\n  a = 1\n  b = [1, 2]\n}\np(x) if {\n  q(x)\n  r(x)\n}\n"
         );
         // A line that ends with a comma continues the body: it stays.
-        let src = "p(x) if q(x),\n  r(x)\n";
+        let src = "p(x) if {\n  q(x)\n  r(x)\n}\n";
         assert_eq!(fmt(src), src);
     }
 
@@ -343,7 +353,7 @@ mod tests {
 
     #[test]
     fn idempotent() {
-        let src = "p(x)if\n q(x) ,\n\n r(x)\nresource t n { a=1, b=2\n c=3 }\n";
+        let src = "p(x)if {\n  q(x)\n  r(x)\n}\nresource t n { a=1, b=2\n c=3 }\n";
         let once = fmt(src);
         assert_eq!(fmt(&once), once);
     }

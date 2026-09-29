@@ -437,7 +437,7 @@ fn completion_lists_stacks_keys_and_deployments() {
     let r = s.run(&["__complete", "plan"]).success();
     assert_eq!(r.stdout, "app\nnet\n");
     let r = s.run(&["__complete", "plan", "app"]).success();
-    assert_eq!(r.stdout, "env=prod\nenv=staging\n");
+    assert_eq!(r.stdout, "let env=prod\nlet env=staging\n");
     s.run(&["apply", "app", "env=prod"]).success();
     let r = s.run(&["__complete", "plan"]).success();
     assert_eq!(r.stdout, "app\napp[env=prod]\nnet\n");

@@ -38,9 +38,9 @@ fn refused(body: &str, want: &str) {
 /// secret output; its own refinement may inspect it.
 #[test]
 fn a_secret_flows_to_sensitive_places() {
-    let r = run("resource leaky.vault v {\n  for pw(p)\n  password = p\n}\noutput token: secret(string)\noutput(\"token\", p) if pw(p)\nresource leaky.vault w {\n  for pw(p), q = format(\"pw:%s\", p)\n  backup = q\n}\n")
+    let r = run("resource leaky.vault v {\n  if pw(p)\n  password = p\n}\noutput token: secret(string)\noutput(\"token\", p) if pw(p)\nresource leaky.vault w {\n  if pw(p), q = format(\"pw:%s\", p)\n  backup = q\n}\n")
     .success();
-    assert!(r.stdout.contains("password = (sensitive)"), "{}", r.stdout);
+    assert!(r.stdout.contains("let password = (sensitive)"), "{}", r.stdout);
     assert!(!r.stdout.contains("hunter2"), "{}", r.stdout);
 }
 
@@ -73,7 +73,7 @@ fn e0303_a_count() {
 #[test]
 fn e0304_a_public_place() {
     refused(
-        "resource leaky.oops o {\n  for pw(p)\n  password = p\n}\n",
+        "resource leaky.oops o {\n  if pw(p)\n  password = p\n}\n",
         "p.df:6:3: E0304: a secret reaches leaky.oops .password, not marked sensitive in the schema",
     );
     refused(
@@ -86,7 +86,7 @@ fn e0304_a_public_place() {
     );
     // Through a derived relation and an extern's secret column.
     refused(
-        "copy(v) if vault.read(\"db\", v)\nresource leaky.oops o {\n  for copy(v)\n  password = v\n}\n",
+        "copy(v) if vault.read(\"db\", v)\nresource leaky.oops o {\n  if copy(v)\n  password = v\n}\n",
         "E0304: a secret reaches leaky.oops .password",
     );
 }
@@ -94,7 +94,7 @@ fn e0304_a_public_place() {
 #[test]
 fn e0305_a_name() {
     refused(
-        "resource leaky.vault n {\n  for pw(n)\n  password = \"x\"\n}\n",
+        "resource leaky.vault n {\n  if pw(n)\n  password = \"x\"\n}\n",
         "E0305: a secret reaches a resource address",
     );
 }

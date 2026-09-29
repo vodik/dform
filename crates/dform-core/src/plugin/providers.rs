@@ -606,10 +606,10 @@ impl Providers {
             .statements
             .iter()
             .filter_map(|s| match s {
-                Stmt::Pending(p) => match &p.kind {
-                    crate::ast::PendingKind::TypeDecl { name, .. } => Some(name.as_str()),
-                    _ => None,
-                },
+                Stmt::Pending(p) => {
+                    let crate::ast::PendingKind::TypeDecl { name, .. } = &p.kind;
+                    Some(name.as_str())
+                }
                 Stmt::Fact(a) if a.pred.starts_with("type_") => match a.args.first() {
                     Some(Term::Val(Value::Str(t))) => Some(t.as_str()),
                     _ => None,

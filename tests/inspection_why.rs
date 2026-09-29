@@ -62,7 +62,7 @@ fn why_and_query_take_an_address_as_plan_prints_it() {
 fn why_an_attribute_shows_every_contribution() {
     let out = dform(
         "examples/demo/stacks/dform.df env=prod",
-        &["why", r#"attr(net.vpc, "network.main::vpc", .tags, X)"#],
+        &["why", r#"attr(net.vpc, "network.main::vpc", "tags", X)"#],
     );
     assert!(out.contains("by Σattr: attribute aggregate"), "{out}");
     assert!(out.contains("over 2 contributions"), "{out}");

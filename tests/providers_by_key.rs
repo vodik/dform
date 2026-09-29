@@ -13,7 +13,7 @@ type environment = enum("dev", "prod")
 input env: environment = "dev"
 stack app[env] {}
 provider fake {
-  account = env_var("FAKE_ACCOUNT_${env}")
+  account = env_var("FAKE_ACCOUNT_$${env}")
   region = cfg.region
   expect_account = cfg.account
 }

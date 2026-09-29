@@ -427,12 +427,12 @@ impl Printer<'_> {
 impl fmt::Display for Program {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let pr = Printer { p: self };
-        writeln!(f, "edition 2027\n\ndecl b/1")?;
+        writeln!(f, "edition 2027\n\ndecl b(a)")?;
         let mut base: Vec<usize> = self.base.iter().map(|c| *c as usize % POOL.len()).collect();
         base.sort();
         base.dedup();
         for c in base {
-            writeln!(f, "b(\"{}\")", POOL[c])?;
+            writeln!(f, "b(\"${}\")", POOL[c])?;
         }
         for s in 0..self.srcs.max(1) {
             writeln!(f, "\nresource pt.src s{s} {{\n  label = \"s{s}\"\n}}")?;
@@ -498,7 +498,7 @@ impl fmt::Display for Program {
             if body.is_empty() {
                 body.push("b(x)".into());
             }
-            writeln!(f, "deny \"d{k}\" if {}", body.join(", "))?;
+            writeln!(f, "deny \"d${k}\" if {}", body.join(", "))?;
         }
         Ok(())
     }

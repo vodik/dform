@@ -502,7 +502,6 @@ fn lint_lowered(program: &Program, cli_keys: &[String]) -> Vec<String> {
                 produced.extend(input_key(&r.head));
                 read.extend(r.body.iter().filter_map(read_key));
             }
-            Stmt::Constraint(c) => read.extend(c.body.iter().filter_map(read_key)),
             _ => {}
         }
     }

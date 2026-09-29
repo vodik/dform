@@ -1,7 +1,6 @@
 //! The partition graph of proposal E §2.6 / DR-12 as revised by F, run over
 //! the program as evaluation runs it ([`compile`]: lowered, computed refs
-//! rewritten to `attr` reads, the computed prelude expanded, constraints as
-//! `deny` rules). This is the evaluator's stratifier: `engine::eval`
+//! rewritten to `attr` reads, the computed prelude expanded). This is the evaluator's stratifier: `engine::eval`
 //! evaluates strata in the order computed here and assigns every rule to
 //! the stratum of its head node, and `dform dev strata` prints the same graph.
 //!
@@ -31,7 +30,7 @@
 //! no spans (DESIGN.org "No source locations"), so a rule is identified by its
 //! index in the lowered program and its pretty-printed text.
 
-use crate::ast::{Atom, Constraint, Extern, Lit, Program, RuleStmt, Stmt, Term};
+use crate::ast::{Atom, Extern, Lit, Program, RuleStmt, Stmt, Term};
 use crate::schema::Schema;
 use crate::transform;
 use crate::value::Value;
@@ -255,11 +254,10 @@ pub struct Compiled {
     /// fact's statement index is its provenance until the AST has spans).
     pub statements: Vec<Stmt>,
     pub rules: Vec<RuleStmt>,
-    pub constraints: Vec<Constraint>,
     pub facts: Vec<Atom>,
     pub externs: BTreeSet<Extern>,
     pub schema: Schema,
-    /// `rules` then `constraints` as `deny` rules, in that order.
+    /// `rules`, in that order.
     pub graph: Graph,
 }
 
@@ -273,31 +271,25 @@ pub struct Compiled {
 pub fn compile(program: &Program, given: &[Atom]) -> Result<Compiled> {
     let lowered = transform::lower(program)?;
     let mut rules: Vec<RuleStmt> = Vec::new();
-    let mut constraints: Vec<Constraint> = Vec::new();
     let mut facts: Vec<Atom> = Vec::new();
     for s in &lowered.program.statements {
         match s {
             Stmt::Rule(r) => rules.push(r.clone()),
             Stmt::Fact(a) => facts.push(a.clone()),
-            Stmt::Constraint(c) => constraints.push(c.clone()),
             _ => {}
         }
     }
     let schema = schema_of(given, &facts)?;
     transform::check_computed_writes(&rules, &facts, &schema)?;
-    let (mut rules, facts, constraints) =
-        transform::rewrite_computed_refs(rules, facts, constraints, &schema);
+    let (mut rules, facts) = transform::rewrite_computed_refs(rules, facts, &schema);
     rules.extend(transform::computed_prelude(&schema));
     let opts = Options {
         externs: lowered.externs.iter().map(|e| e.pred.clone()).collect(),
     };
-    let mut graph_rules = rules.clone();
-    graph_rules.extend(constraints.iter().map(constraint_rule));
-    let graph = build_lowered(graph_rules, &facts, &schema, &opts);
+    let graph = build_lowered(rules.clone(), &facts, &schema, &opts);
     Ok(Compiled {
         statements: lowered.program.statements,
         rules,
-        constraints,
         facts,
         externs: lowered.externs,
         schema,
@@ -319,19 +311,6 @@ fn schema_of(given: &[Atom], program_facts: &[Atom]) -> Result<Schema> {
         .into_iter()
         .collect();
     Schema::from_facts(&rows)
-}
-
-/// A constraint is a `deny` rule with a message head.
-pub fn constraint_rule(c: &Constraint) -> RuleStmt {
-    RuleStmt {
-        head: Atom {
-            pred: "deny".into(),
-            args: vec![Term::Val(Value::Str(c.message.clone()))],
-            record: None,
-            span: Default::default(),
-        },
-        body: c.body.clone(),
-    }
 }
 
 /// Build the graph over lowered rules and facts plus the schema's prelude.

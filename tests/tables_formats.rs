@@ -79,7 +79,7 @@ fn every_format_reads_typed_rows() {
             r.stdout
         );
         assert!(
-            r.stdout.contains("  cidr = \"10.1.0.0/16\"\n  port = 443"),
+            r.stdout.contains("  let cidr = \"10.1.0.0/16\"\n  let port = 443"),
             "{format}: {}",
             r.stdout
         );

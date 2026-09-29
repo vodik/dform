@@ -682,7 +682,7 @@ fn definition_and_formatting() {
         vec![("modules/network.df".into(), 2)]
     );
     assert_eq!(
-        def(&mut c, "apply baseline", 7),
+        def(&mut c, "use baseline", 7),
         vec![("policies/baseline.df".into(), 2)]
     );
     let text = std::fs::read_to_string(&stack).unwrap();
@@ -874,7 +874,7 @@ fn quick_fix_grants_what_a_pack_writes() {
     let text = std::fs::read_to_string(&baseline).unwrap();
     let edited = text.replace(
         "  # Networking invariants",
-        "  r.cidr = \"10.0.0.0/8\" if r in net.vpc\n\n  # Networking invariants",
+        "  set r.cidr = \"10.0.0.0/8\" if r in net.vpc\n\n  # Networking invariants",
     );
     let texts = quick_fix(
         &root,
@@ -906,7 +906,7 @@ fn quick_fix_quotes_an_unknown_name() {
         "unknown name `bogus`",
         "quote it: \"bogus\"",
     );
-    assert!(texts[0].contains("  name = \"bogus\"\n"), "{}", texts[0]);
+    assert!(texts[0].contains("  let name = \"bogus\"\n"), "{}", texts[0]);
 }
 
 /// A predicate with both facts and rules: `decl p/N mixed` before them.
@@ -924,7 +924,7 @@ fn quick_fix_declares_a_predicate_mixed() {
         "declare it: `decl q/1 mixed`",
     );
     assert!(
-        texts[0].ends_with("\ndecl q/1 mixed\nq(1)\nq(x) if data(\"zone\", x)\n"),
+        texts[0].ends_with("\ndecl q(a) mixed\nq(1)\nq(x) if data(\"zone\", x)\n"),
         "{}",
         texts[0]
     );
@@ -954,7 +954,7 @@ fn quick_fix_derives_a_colliding_name_from_the_key_or_isolates_the_stack() {
         "derive the name from the key",
     );
     assert!(
-        texts[0].contains("  name = \"fixed-{env}\"\n"),
+        texts[0].contains("  let name = \"fixed-${env}\"\n"),
         "{}",
         texts[0]
     );
@@ -970,7 +970,7 @@ fn quick_fix_derives_a_colliding_name_from_the_key_or_isolates_the_stack() {
     );
     assert!(
         texts[0].contains(
-            "stack dform[env] { unknowns = \"strict\", config = yaml(\"config/dform/{env}.yaml\"), isolated = true }\n"
+            "stack dform[env] { unknowns = \"strict\", config = yaml(\"config/dform/${env}.yaml\"), isolated = true }\n"
         ),
         "{}",
         texts[0]
@@ -1144,7 +1144,7 @@ fn references_of_every_kind_of_name() {
         find(&stack, "instance database main", 18),
     );
     assert_eq!(found, at_places("stacks/dform.df", &[68, 107, 108, 123]));
-    let found = references(&mut c, &root, &stack, find(&stack, "apply baseline", 6));
+    let found = references(&mut c, &root, &stack, find(&stack, "use baseline", 6));
     assert_eq!(
         found,
         vec![

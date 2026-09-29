@@ -113,18 +113,17 @@ impl Hash for Term {
 pub enum Stmt {
     Fact(Atom),
     Rule(RuleStmt),
-    Constraint(Constraint),
     Module(Module),
     Instance(Instance),
     /// `input k: T [= default] [where refinement]`: a module's or the
     /// stack's typed input.
     Input(InputDecl),
-    /// `input relation p/N from file("path")`: `p/N` is fed from outside
+    /// `input p(cols) from facts("path")`: `p` is fed from outside
     /// the program and re-read when its source changes (`watch`).
     InputRelation(InputRelation),
-    /// `output k: T` (a declaration) or `output k = term` (its value).
+    /// An output's declaration (`k: T`) or its value (`k = term`).
     Output(OutputDecl),
-    /// `export p/N`: a module predicate readable as `m.i.p`.
+    /// `export p`: a module predicate readable as `m.i.p`, one per arity.
     Export(Export),
     /// `contributes T.path`, `contributes _.path` or `contributes p`.
     Contributes(Contributes),
@@ -137,7 +136,6 @@ pub enum Stmt {
     Scenario(Scenario),
     PolicyPack(PolicyPack),
     ApplyPolicy(ApplyPolicy),
-    When(When),
     Resource(Resource),
     Import(Import),
     Settings(Settings),
@@ -332,17 +330,10 @@ pub struct PolicyPack {
     pub span: Span,
 }
 
-/// `apply name`.
+/// `use name`: a policy pack applied to the program.
 #[derive(Debug, Clone)]
 pub struct ApplyPolicy {
     pub name: String,
-    pub span: Span,
-}
-
-#[derive(Debug, Clone)]
-pub struct When {
-    pub guard: Lit,
-    pub body: Vec<Stmt>,
     pub span: Span,
 }
 
@@ -403,7 +394,6 @@ pub struct Pending {
 #[derive(Debug, Clone)]
 pub enum PendingKind {
     TypeDecl { name: String, attrs: Vec<AttrDecl> },
-    DeclOpenType { name: String },
 }
 
 impl PendingKind {
@@ -412,10 +402,6 @@ impl PendingKind {
         match self {
             PendingKind::TypeDecl { .. } => (
                 "a type block",
-                "phase 6 \"Refinement types, doc annotations, L15 inet\"",
-            ),
-            PendingKind::DeclOpenType { .. } => (
-                "`decl type ... open`",
                 "phase 6 \"Refinement types, doc annotations, L15 inet\"",
             ),
         }
@@ -464,14 +450,6 @@ pub struct AttrDecl {
 pub struct RuleStmt {
     pub head: Atom,
     pub body: Vec<Lit>,
-}
-
-/// `constraint "message" if body`: a deny checked after evaluation.
-#[derive(Debug, Clone)]
-pub struct Constraint {
-    pub message: String,
-    pub body: Vec<Lit>,
-    pub span: Span,
 }
 
 /// A predicate applied to terms. `span` is where it was written (or the

@@ -244,7 +244,6 @@ fn rules(program: &Program) -> Vec<(Option<&Atom>, &[Lit], Span)> {
         .filter_map(|st| match st {
             Stmt::Rule(r) => Some((Some(&r.head), r.body.as_slice(), r.head.span)),
             Stmt::Fact(a) => Some((Some(a), &[][..], a.span)),
-            Stmt::Constraint(c) => Some((None, c.body.as_slice(), c.span)),
             _ => None,
         })
         .collect()

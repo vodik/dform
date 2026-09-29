@@ -153,7 +153,7 @@ fn offline_plan_validates_and_hides_secrets() {
     let r = dform(&s, None, &["plan", "p.df"]).success();
     assert!(!r.stdout.contains("hunter2"), "{}", r.stdout);
     assert!(
-        r.stdout.contains("stringData.password = (sensitive)"),
+        r.stdout.contains("set stringData.password = (sensitive)"),
         "{}",
         r.stdout
     );
@@ -1010,7 +1010,7 @@ fn a_type_built_at_runtime_gets_the_whole_schema() {
         None,
         &[
             "query",
-            "attr(k8s.batch.v1.job, \"batch\", .metadata, V)",
+            "attr(k8s.batch.v1.job, \"batch\", \"metadata\", V)",
             "k8s_demo.df",
         ],
     )
@@ -1320,7 +1320,7 @@ fn an_empty_pod_selector_is_present() {
     let path = "/apis/networking.k8s.io/v1/namespaces/default/networkpolicies/deny";
     assert!(api.get(path).unwrap()["spec"].get("podSelector").is_none());
 
-    s.write("p.df", &program("  spec.podSelector = {}\n"));
+    s.write("p.df", &program("  set spec.podSelector = {}\n"));
     let r = run(&["plan"]).success();
     assert!(
         r.stdout.contains("~ k8s.network_policy[\"deny\"]"),

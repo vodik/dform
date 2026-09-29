@@ -77,6 +77,7 @@ pub fn lower(
     let mut l = Lowerer::new(units, mode == Mode::Text);
     l.text = mode == Mode::Text;
     l.any_type = mode == Mode::Pattern;
+    l.core = !require_edition;
     let mut statements = Vec::new();
     if l.declare_env_var() {
         statements.push(provider::env_var_extern());
@@ -435,6 +436,9 @@ pub struct Lowerer<'u> {
     text: bool,
     /// Any dotted name may be a type (`Mode::Pattern`).
     any_type: bool,
+    /// The core relations are writable (H-15): text that is not a
+    /// program file, such as a provider schema or a test of the core.
+    core: bool,
     /// What a call in the term being lowered is.
     calls: Calls,
     /// Type aliases and where each is in scope.
@@ -471,6 +475,7 @@ impl<'u> Lowerer<'u> {
             binding: false,
             text: false,
             any_type: false,
+            core: false,
             calls: Calls::Function,
             aliases: alias::Aliases::default(),
         };
@@ -2185,7 +2190,7 @@ impl<'u> Lowerer<'u> {
     /// nothing else reaches: a variable type or path, a read of the
     /// contributions before they merge (`arg` in a body).
     fn core_head(&mut self, n: &SyntaxNode, head: &Atom, has_body: bool) -> L<()> {
-        if self.lenient || self.any_type || self.text {
+        if self.lenient || self.any_type || self.text || self.core {
             return Ok(());
         }
         let a = arg_texts(n);
@@ -2249,7 +2254,7 @@ impl<'u> Lowerer<'u> {
     /// A body's read of a core relation a surface form says (H-15), of
     /// `member` (H-9), or of `deny`/`warn` (H-8).
     fn core_read(&mut self, n: &SyntaxNode, atom: &Atom) -> L<()> {
-        if self.lenient || self.any_type || self.text {
+        if self.lenient || self.any_type || self.text || self.core {
             return Ok(());
         }
         let a = arg_texts(n);
@@ -4221,8 +4226,9 @@ mod tests {
              p(x) if q(x), env == \"a\"\n\
              r(env) if q(_)\n\
              s(x) if q(x), not env, has env\n\
-             serving = \"blue\" if q(1)\n\
-             t(serving)\n",
+             let serving = \"blue\" if q(1)\n\
+             t(serving)\n\
+             ",
         );
         assert_eq!(
             &got[..],
@@ -4241,15 +4247,7 @@ mod tests {
     #[test]
     fn a_resource_block_lowers_to_its_shared_body() {
         let got = lower(
-            "resource net.vpc vpc { cidr = \"10.0.0.0/16\" }\n\
-             zone_index(\"a\", 0)\n\
-             resource net.subnet \"private-{z}\" {\n\
-               for data(\"zone\", z)\n\
-               vpc_id     = vpc.id\n\
-               cidr       = inet_subnet(vpc.cidr, 4, zone_index[z])\n\
-               zone       = z\n\
-               visibility = \"private\"\n\
-             }\n",
+            "resource net.vpc vpc { cidr = \"10.0.0.0/16\" }\nzone_index(\"a\", 0)\nresource net.subnet \"private-${z}\" {\nif data(\"zone\", z)\nvpc_id     = vpc.id\ncidr       = inet_subnet(vpc.cidr, 4, zone_index[z])\nzone       = z\nvisibility = \"private\"\n}\n",
         );
         assert_eq!(
             got[2],
@@ -4283,8 +4281,9 @@ mod tests {
         let got = lower(
             "input env: string = \"dev\"\n\
              let cfg = settings[env]\n\
-             resource net.vpc v { cidr = cfg.net.cidr, name = \"{cfg.name}-vpc\" }\n\
-             constraint \"x\" if cfg.x.y != \"z\"\n",
+             resource net.vpc v { cidr = cfg.net.cidr, name = \"${cfg.name}-vpc\" }\n\
+             deny \"x\" if cfg.x.y != \"z\"\n\
+             ",
         );
         assert_eq!(
             &got[..],
@@ -4301,10 +4300,11 @@ mod tests {
         let got = lower(
             "resource db.postgres pg { public = false }\n\
              deny \"public\" { resource: p } if p in db.postgres, not p.public == false\n\
-             r.tags = { team: \"x\" } if r in resource\n\
-             q(x) if some i, x in [1, 2], i >= 0, x not in [3]\n\
+             set r.tags = { team: \"x\" } if r in resource\n\
+             q(x) if x = [1, 2][i], i >= 0, x not in [3]\n\
              ok(1) if exists pg, has pg.public, not exists db.postgres[\"other\"]\n\
-             big(n) if n in world.net.vpc, world.net.vpc[n].size > 3\n",
+             big(n) if n in world.net.vpc, world.net.vpc[n].size > 3\n\
+             ",
         );
         assert_eq!(
             &got[1..],
@@ -4444,7 +4444,7 @@ mod tests {
     #[test]
     fn a_block_name_is_a_variable_when_its_clause_binds_it() {
         let got = lower(
-            "t(\"a\")\nresource net.vpc t { for t(t)\n size = 1 }\nresource net.vpc shared { size = 2 }\n",
+            "t(\"a\")\nresource net.vpc t { if t(t)\n size = 1 }\nresource net.vpc shared { size = 2 }\n",
         );
         assert_eq!(
             &got[1..],

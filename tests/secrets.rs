@@ -62,7 +62,7 @@ fn plan_and_apply_redact_the_labeled_secret_but_not_the_mislabeled_one() {
         "vault's labeled secret leaked in plan output:\n{}",
         r.stdout
     );
-    assert!(r.stdout.contains("password = (sensitive)"), "{}", r.stdout);
+    assert!(r.stdout.contains("let password = (sensitive)"), "{}", r.stdout);
     // The mislabeled type has no way to know it should hide this: the
     // schema says it's public, so it prints like any other attribute.
     assert!(
@@ -262,7 +262,7 @@ resource leaky.vault copy {{
         assert!(!r.stderr.contains(VAULT_SECRET), "{cmd:?}: {}", r.stderr);
     }
     let r = s.run(&common::on("p.df", &mock, &["plan"])).success();
-    assert!(r.stdout.contains("backup = (sensitive)\n"), "{}", r.stdout);
+    assert!(r.stdout.contains("let backup = (sensitive)\n"), "{}", r.stdout);
 
     s.write(
         "p.df",
@@ -387,7 +387,7 @@ fn a_secret_reaches_a_public_output_only_through_declassify() {
         )
     };
     let mock = ["--world", "w.json", "--set", "pw=HUNTER-TWO"];
-    s.write("p.df", &prog("n = len(p)", ""));
+    s.write("p.df", &prog("let n = len(p)", ""));
     let r = s.run(&common::on("p.df", &mock, &["plan"])).failure();
     assert!(
         r.stderr
@@ -398,7 +398,7 @@ fn a_secret_reaches_a_public_output_only_through_declassify() {
 
     s.write(
         "p.df",
-        &prog("n = declassify(len(p), \"its length is public\")", ""),
+        &prog("let n = declassify(len(p), \"its length is public\")", ""),
     );
     let r = s
         .run(&common::on(
@@ -424,8 +424,8 @@ fn a_secret_reaches_a_public_output_only_through_declassify() {
     s.write(
         "p.df",
         &prog(
-            "n = declassify(len(p), \"its length is public\")",
-            "deny(m) if declassified(at, r), m = \"declassified at {at}: {r}\"\n",
+            "let n = declassify(len(p), \"its length is public\")",
+            "deny(m) if declassified(at, r), m = \"declassified at ${at}: ${r}\"\n",
         ),
     );
     let r = s.run(&common::on("p.df", &mock, &["plan"])).failure();

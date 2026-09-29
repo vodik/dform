@@ -20,8 +20,8 @@
 //! TypePat at PathPat` grants.
 
 use crate::ast::{
-    Atom, Constraint, FieldAssign, Grant, InputDecl, Lit, OutputDecl, Program, Resource, RuleStmt,
-    Settings, Span, Stmt, Term, TypeExpr, When,
+    Atom, FieldAssign, Grant, InputDecl, Lit, OutputDecl, Program, Resource, RuleStmt, Settings,
+    Span, Stmt, Term, TypeExpr,
 };
 use crate::diag::{self, Diagnostic, Diagnostics};
 use crate::inputs::Declared;
@@ -133,7 +133,6 @@ fn defined_preds(stmts: &[Stmt], out: &mut BTreeMap<String, (usize, Span)>) {
                 out.entry(r.head.pred.clone())
                     .or_insert((r.head.args.len(), r.head.span));
             }
-            Stmt::When(w) => defined_preds(&w.body, out),
             _ => {}
         }
     }
@@ -790,7 +789,6 @@ fn head_atoms(s: &Stmt, out: &mut Vec<Atom>) {
     match s {
         Stmt::Fact(a) => out.push(a.clone()),
         Stmt::Rule(r) => out.push(r.head.clone()),
-        Stmt::When(w) => w.body.iter().for_each(|s| head_atoms(s, out)),
         _ => {}
     }
 }
@@ -832,11 +830,6 @@ fn body_atoms(s: &Stmt, out: &mut Vec<Atom>) {
         Stmt::Rule(r) => {
             r.head.args.iter().for_each(|t| term(t, out));
             lits(&r.body, out);
-        }
-        Stmt::Constraint(c) => lits(&c.body, out),
-        Stmt::When(w) => {
-            lits(std::slice::from_ref(&w.guard), out);
-            w.body.iter().for_each(|s| body_atoms(s, out));
         }
         Stmt::Resource(r) => {
             r.fields.iter().for_each(|f| term(&f.value, out));
@@ -936,7 +929,6 @@ fn check_grants(
             match s {
                 Stmt::Fact(a) => head(a, check),
                 Stmt::Rule(r) => head(&r.head, check),
-                Stmt::When(w) => walk(&w.body, check),
                 Stmt::Resource(r) => {
                     for f in &r.fields {
                         check(&r.typ, &str_term(&f.key), f.span);
@@ -978,15 +970,6 @@ fn rename_stmt(stmt: Stmt, names: &Names) -> Stmt {
         Stmt::Rule(r) => Stmt::Rule(RuleStmt {
             head: rename_atom(r.head, names),
             body: lits(r.body),
-        }),
-        Stmt::Constraint(c) => Stmt::Constraint(Constraint {
-            body: lits(c.body),
-            ..c
-        }),
-        Stmt::When(w) => Stmt::When(When {
-            guard: rename_lit(w.guard, names),
-            body: w.body.into_iter().map(|s| rename_stmt(s, names)).collect(),
-            span: w.span,
         }),
         Stmt::Resource(r) => Stmt::Resource(Resource {
             fields: rename_fields(r.fields, names),
@@ -1077,15 +1060,6 @@ fn rewrite_stmt(stmt: Stmt, scope: &str) -> Stmt {
         Stmt::Rule(r) => Stmt::Rule(RuleStmt {
             head: rewrite_atom(r.head, scope),
             body: lits(r.body),
-        }),
-        Stmt::Constraint(c) => Stmt::Constraint(Constraint {
-            body: lits(c.body),
-            ..c
-        }),
-        Stmt::When(w) => Stmt::When(When {
-            guard: rewrite_lit(w.guard, scope),
-            body: w.body.into_iter().map(|s| rewrite_stmt(s, scope)).collect(),
-            span: w.span,
         }),
         Stmt::Resource(r) => Stmt::Resource(Resource {
             typ: rewrite_term(r.typ, scope),
@@ -1185,7 +1159,6 @@ pub fn set_origin(stmts: &mut [Stmt], origin: u32) {
         match s {
             Stmt::Fact(a) => a.span = a.span.within(origin),
             Stmt::Rule(r) => r.head.span = r.head.span.within(origin),
-            Stmt::Constraint(c) => c.span = c.span.within(origin),
             Stmt::Resource(r) => {
                 r.span = r.span.within(origin);
                 fields(&mut r.fields);
@@ -1193,10 +1166,6 @@ pub fn set_origin(stmts: &mut [Stmt], origin: u32) {
             Stmt::Settings(st) => {
                 st.span = st.span.within(origin);
                 fields(&mut st.fields);
-            }
-            Stmt::When(w) => {
-                w.span = w.span.within(origin);
-                set_origin(&mut w.body, origin);
             }
             _ => {}
         }

@@ -587,7 +587,6 @@ pub fn named_types(program: &crate::ast::Program, facts: &[Atom]) -> Option<BTre
                 atom(&r.head, &mut out)?;
                 r.body.iter().try_for_each(|l| lit(l, &mut out))?
             }
-            Stmt::Constraint(c) => c.body.iter().try_for_each(|l| lit(l, &mut out))?,
             _ => {}
         }
     }

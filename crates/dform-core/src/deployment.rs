@@ -970,19 +970,10 @@ pub fn of_error(e: &anyhow::Error) -> Vec<Problem> {
 impl Explained {
     /// What `dform plan` refuses and warns of, where it is: every `deny`
     /// and `warn` fact at the rule that derived it (the contributions it
-    /// reads as related), every violated constraint at the constraint, a
-    /// violation nothing accounts for (an input of the wrong type) at the
-    /// top, and why no plan could be made.
-    pub fn problems(&self, program: &Program) -> Vec<Problem> {
+    /// reads as related), a violation nothing accounts for (an input of the
+    /// wrong type) at the top, and why no plan could be made.
+    pub fn problems(&self, _program: &Program) -> Vec<Problem> {
         let mut out: Vec<Problem> = self.error.iter().flat_map(of_error).collect();
-        let constraints: BTreeSet<&str> = program
-            .statements
-            .iter()
-            .filter_map(|s| match s {
-                Stmt::Constraint(c) => Some(c.message.as_str()),
-                _ => None,
-            })
-            .collect();
         let denied: BTreeSet<String> = self
             .res
             .facts
@@ -991,21 +982,8 @@ impl Explained {
             .filter_map(policy_text)
             .collect();
         for v in &self.violations {
-            if !constraints.contains(v.as_str()) && !denied.contains(v) {
+            if !denied.contains(v) {
                 out.push(Problem::top(Severity::Error, self.redact.text(v)));
-            }
-        }
-        for s in &program.statements {
-            if let Stmt::Constraint(c) = s
-                && self.violations.contains(&c.message)
-            {
-                out.push(Problem {
-                    severity: Severity::Error,
-                    message: format!("constraint violated: {}", c.message),
-                    at: At::Span(c.span),
-                    related: Vec::new(),
-                    fixes: Vec::new(),
-                });
             }
         }
         for a in &self.res.facts {
@@ -1256,7 +1234,6 @@ fn world_types(lowered: Option<&transform::Lowered>) -> Option<BTreeSet<String>>
     for st in &lowered?.program.statements {
         let body = match st {
             Stmt::Rule(r) => &r.body,
-            Stmt::Constraint(c) => &c.body,
             _ => continue,
         };
         for l in body {
