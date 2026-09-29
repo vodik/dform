@@ -218,6 +218,29 @@ Terms are G's, less =PATH=, the =/NAME= step of a chain, record atoms and
 =some=. =args= admits named arguments (=a: x=) for a relation declared with
 named columns.
 
+** 5.1 =.= is static, =[ ]= is a key
+
+A postfix =.name= is a member the program text names: the resolver finds it
+at compile time (a resource declared in scope, an instance's output, an
+attribute path, a record field), and a name it cannot find is an error. A
+postfix =[term]= is a lookup by a key computed at run time: a join, which
+may give no row, one, or several, and never an error for a key that is not
+there.
+
+| Written         | Collection            | Keyed by                          | Lowers to                            |
+|-----------------+-----------------------+-----------------------------------+--------------------------------------|
+| =T[e]=          | resources of type =T= | address, relative to the scope    | =want(T, A)=, a dot reads =attr=     |
+| =m[e]=          | instances of module =m= | instance name                   | =output(format("m.%s", e), ..)=      |
+| =settings[e]=   | settings rows         | row                               | =setting(e, path, V)=                |
+| =world.T[e]=    | live objects of =T=   | the provider's name               | =cloud_attr(T, e, path, V)=          |
+| =p[a, b]=       | relation or extern =p= | every column but the last        | =p(a, b, V)=                         |
+| =e[i]=          | a list value          | index (a fresh =i= enumerates)    | =member(e, i, V)=                    |
+| =stack s[k]=    | deployments of =s=    | its key inputs (a declaration)    | where the state lives                |
+
+A bracket after a path in a block entry or an address (=subnet_ids[0]=) is
+the list index with a literal key. List literals and comprehensions
+(=[a, b]=, =[x | B]=) are not postfix and are not lookups.
+
 * 6. Decision records
 
 ** H-1 One spelling, enforced by =fmt= or by the compiler
@@ -342,14 +365,25 @@ right-hand sides, as in G; =fmt= and the LSP show which.
 longest type prefix), =T[e]=, and =m.i/n= (34 uses, almost all policies
 reaching inside a module instance). *Decision.* =n= for a resource
 declared in scope; =m.i.k= for what a module instance offers as an
-output; =T[e]= for anything by its address, =e= the full address as
-=plan= prints it (="network.main::vpc"=). =T.n= and =m.i/n= go. =T["n"]=
-naming a resource =n= in scope is an error that says to write =n=.
+output; =T[e]= for a resource of type =T= by a key computed at run time.
+The key is relative to the scope, as today: inside a module it is the
+name within the instance (=compute.vm[n]= is =scoped("m.i", n)=, and a
+module cannot reach outside itself); at the top level, in a pack, and in
+every CLI argument the scope is the program and the key is the full
+address =plan= prints (="network.main::vpc"=). =T.n= and =m.i/n= go.
+=T["n"]= with a literal naming a resource =n= in scope is an error that
+says to write =n=. A dotted name used as a type must be a known type: today
+=compute.vm.ghost.private_ip=, a typo for a declared =compute.vm.app=, falls
+through resolution step 8 and is the string ="compute.vm.ghost.private_ip"=,
+with no diagnostic (verified at =90a24f4=); under H it is =unknown type=.
 *Why:* =m.i/n= is the one reason =/= needs whitespace rules; =T.n= is the
-reason resolution needs the longest-prefix step. A policy that checks a
+reason resolution needs the longest-prefix step, and a dot that is
+sometimes a type segment, sometimes a resource name and sometimes an
+attribute is what lets a typo become a string. A policy that checks a
 module's resource is better written over the type (=pg in db.postgres=),
 which also covers every instance. *Consequences.* The 34 uses are
-rewritten, most as a generator over the type.
+rewritten, most as a generator over the type. The rule for =[ ]= and =.=
+is section 5.1's.
 
 ** H-11 Relations are declared by their columns
 
@@ -410,7 +444,9 @@ rewritten. =query= and =why= patterns may name any relation.
 =TYPE/NAME=; source writes =vpc=, =net.vpc.vpc=, =network.main/vpc= or
 =net.vpc["..."]=; =why= accepts none of them. *Decision.* An address is
 the source term =T["A"]=, =A= the full address string (a module
-instance's scope is =m.i::=, as today), and an attribute of it is =.path=
+instance's scope is =m.i::=, as today; this is the program-scope reading
+of H-10, so an address pastes unchanged into a top-level rule, a pack, a
+query or a command), and an attribute of it is =.path=
 after it (=.tags.team=, =.subnet_ids[0]=, =."a-b"= for a segment that is not a
 name). One printer (=Display= for =ir::Address=) renders every address the
 CLI prints: plan lines, the apply order, nulls
@@ -469,3 +505,57 @@ is never printed.
 3. *Gates*: every golden plan byte-identical except for address rendering
    (step 1's change, reviewed once); strata listings may differ only by
    H-6's value nodes.
+
+* 10. Room to grow
+
+H leaves the surface small on purpose, and the first-token rule (H-2)
+makes growth cheap: a construct is a new leading keyword and cannot change
+an old program. The test a new form has to pass, so that growth does not
+bring back the second spellings H removes:
+
+1. *It reaches what the program cannot say today, or it replaces several
+   spellings with one.* Reading better is not enough: that is how every
+   pair in section 3 began.
+2. *It lowers to the core relations,* or it names the core change it needs
+   as a separate decision.
+
+** 10.1 Worth adding
+
+- *Keyed instances*, =instance m[e] { if B ... }=: one instance per answer
+  of the clause, each named =m[e]= and read as =m[e].k= (the read exists
+  already). The one expressiveness gap in the corpus: =crud_api.df= writes
+  =instance app blue= and =instance app green= as two near-copies. G-26
+  deferred it because an instance is a static scope in the core; that is
+  the core change it needs. It completes 5.1's table: =stack s[k]= keys
+  deployments, =m[e]= would key instances the same way.
+- *Module needs and offers* (the board's parking-lot design): two statement
+  keywords, =needs= and =offers=, and wiring the language cannot express
+  today.
+- *Refinement flags, =type= blocks anywhere, =null=, ordered
+  comprehensions*: removed from the grammar by H only because the
+  evaluator rejects them; each returns with its evaluator support.
+
+** 10.2 Worth cutting next
+
+- *Aggregates in heads* (=zone_count(count(z)) if z in cluster.zones=, 5
+  uses) are a second spelling of a comprehension and a list function:
+  =let zone_count = len([z | z in cluster.zones])=. A comprehension already
+  lowers to a head aggregate (=collect_list= in a helper rule keyed by the
+  variables it shares with its rule, =transform.rs=), so the core keeps
+  the mechanism and the surface loses the spelling; grouping is the outer
+  rule's binding (=p(k, len([x | q(k, x)])) if k in keys=). To settle
+  first: =count(z)= counts distinct =z=; whether a comprehension over
+  bindings can repeat an item, and so whether =set(..)= and =sum=, =min=,
+  =max= over lists are needed to keep every current aggregate.
+
+** 10.3 Not taken, each a second spelling
+
+- inline =count(x | B)=: =len([x | B])=;
+- Rego's =every x in xs { B }=: =not { x in xs, not B }=;
+- =or=: a second rule;
+- user-defined functions: a relation read by key (=p[k]=) is one;
+- a term conditional (=c ? a : b=, =if c then a else b=): two =let= rows,
+  =let x = a if c= and =let x = b if not c=, or a =@default= row. =fmt= could
+  not rewrite one into the other, so section 1's rule keeps it out. It is
+  the one Terraform readers will ask for first; revisit if the two-row form
+  proves to be a real cost in practice, not before.
