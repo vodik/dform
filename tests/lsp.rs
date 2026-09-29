@@ -847,6 +847,8 @@ fn quick_fix_guards_a_dangling_ref() {
         "{}",
         texts[0]
     );
+}
+
 /// Locations as `(file relative to root, 1-based line)`, sorted.
 fn places(root: &Path, locs: &Value) -> Vec<(String, u64)> {
     let prefix = uri(root) + "/";
@@ -1212,4 +1214,81 @@ fn rename_of_a_resource_with_state_plans_as_a_move() {
         "{plan}"
     );
     assert!(plan.contains("stack dform is undeformed"), "{plan}");
+}
+
+/// A rename that would change what the program means is refused: the
+/// instance `main` is also the string `"main"` that `network[ia]` reads
+/// (prepareRename names where), and renaming it anyway would lose the
+/// peering (the checked evaluation says so).
+#[test]
+fn a_rename_that_changes_the_plan_is_refused() {
+    let (_s, root) = example("demo");
+    let stack = root.join("stacks/dform.df");
+    let mut c = Client::start(&root, json!({}));
+    c.open(&stack);
+    let at = find(&stack, "instance network main", 18);
+    let e = refused(
+        &mut c,
+        "textDocument/prepareRename",
+        json!({ "textDocument": { "uri": uri(&stack) }, "position": { "line": at.0, "character": at.1 } }),
+    );
+    assert!(
+        e.contains(
+            "instance main of module network is also the string \"main\" at stacks/dform.df:84:15"
+        ),
+        "{e}"
+    );
+    let e = refused(
+        &mut c,
+        "textDocument/rename",
+        json!({
+            "textDocument": { "uri": uri(&stack) },
+            "position": { "line": at.0, "character": at.1 },
+            "newName": "core",
+        }),
+    );
+    assert!(
+        e.contains("would no longer plan create net.vpc_peering.peer-main-peer"),
+        "{e}"
+    );
+    // Nothing was changed.
+    let text = std::fs::read_to_string(&stack).unwrap();
+    assert!(text.contains("instance network main {"));
+    c.shutdown();
+}
+
+/// Two modules' private relations of one name are two relations: a
+/// rename of one leaves the other.
+#[test]
+fn same_named_private_relations_rename_independently() {
+    let (_s, root) = example("demo");
+    let stack = root.join("stacks/dform.df");
+    let iam = root.join("modules/iam.df");
+    let k8s = root.join("modules/kubernetes.df");
+    let mut c = Client::start(&root, json!({}));
+    c.open(&stack);
+    for (file, value) in [(&iam, "iam"), (&k8s, "k8s")] {
+        let text = std::fs::read_to_string(file).unwrap();
+        let end = text.rfind('}').unwrap();
+        let text = format!(
+            "{}  helper(\"{value}\")\n  seen(x) if helper(x)\n{}",
+            &text[..end],
+            &text[end..]
+        );
+        std::fs::write(file, &text).unwrap();
+        c.open(file);
+    }
+    let at = find(&iam, "helper(\"iam\")", 2);
+    let found = references(&mut c, &root, &iam, at);
+    assert_eq!(found, at_places("modules/iam.df", &[19, 20]));
+    let edit = rename(&mut c, &iam, at, "iam_helper");
+    let changes = edit["changes"].as_object().unwrap();
+    assert_eq!(changes.len(), 1, "{edit}");
+    assert_eq!(changes[&uri(&iam)].as_array().unwrap().len(), 2, "{edit}");
+    apply_edit(&mut c, &root, &edit);
+    let text = std::fs::read_to_string(&k8s).unwrap();
+    assert!(text.contains("seen(x) if helper(x)"), "{text}");
+    let text = std::fs::read_to_string(&iam).unwrap();
+    assert!(text.contains("seen(x) if iam_helper(x)"), "{text}");
+    c.shutdown();
 }

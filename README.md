@@ -1861,7 +1861,8 @@ examples/demo an evaluation takes about 30 ms in a release build.
   alias, a module, an instance, a resource (by every spelling of its
   address: `n`, `T.n`, `m.i/n`), a settings row or a policy, across the
   project's files and unsaved buffers, read in the resolver's order
-  (docs/grammar.md "Names"). On an attribute path (a field of a
+  (docs/grammar.md "Names"); a relation a module or pack defines and does
+  not grant is its own (two modules' private `helper` are two). On an attribute path (a field of a
   resource block, `r.p` in a body, an `attr` literal): every rule
   contributing to that cell, across modules and policy packs, as the
   hover lists them.
@@ -1869,9 +1870,13 @@ examples/demo an evaluation takes about 30 ms in a release build.
   module whose addresses have state in the selected deployment adds, in
   the same edit, `moved("T", "old", "new")` per address just after the
   declaration's block, so the next plan is a move and not a destroy and a
-  create. `prepareRename` refuses keywords, builtins, schema types,
-  attribute paths, provider names and dform's own relations (`data`,
-  `attr`, ...).
+  create. A rename is checked: the selected deployment is evaluated with
+  the edit applied to the buffers, and the rename is refused, naming
+  what changed, if it adds a diagnostic or changes the plan in anything
+  but the renamed addresses. `prepareRename` refuses keywords, builtins,
+  schema types, attribute paths, provider names and dform's own
+  relations (`data`, `attr`, ...), and an instance whose name is also a
+  string a dynamic index `m[e]` may read (naming where the string is).
 - Formatting (`dform fmt`'s formatter) and go-to-definition of modules,
   policies and predicates.
 

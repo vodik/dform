@@ -5,6 +5,7 @@
 //! a move and not a destroy and a create. Keywords, builtins, schema types
 //! and what a provider owns (attribute paths, its relations) are refused.
 
+use crate::analysis::{Outcome, Severity};
 use crate::refs::{self, Decls, Parsed, Project, Symbol, What};
 use crate::text;
 use anyhow::{Result, anyhow, bail};
@@ -22,7 +23,29 @@ pub fn prepare(p: &Project, path: &Path, at: usize) -> Result<(Range, String)> {
     let files = p.parse();
     let d = Decls::of(files.iter().map(|f| &f.tree));
     let (f, t, what) = refs::at(&d, &files, path, at).ok_or_else(|| anyhow!("no name here"))?;
-    renameable(&what, &t)?;
+    // An instance whose name is also a string an `m[e]` reads: the
+    // rename would not change the string, and `m[e]` would no longer
+    // find the instance.
+    if let Symbol::Instance(m, i) = renameable(&what, &t)?
+        && refs::indexed(&files, &m)
+    {
+        let places: Vec<String> = refs::strings(&files, &i)
+            .into_iter()
+            .map(|(f, s)| {
+                let at = text::position(&f.text, s.text_range().start().into());
+                let name = f.path.strip_prefix(&p.dir).unwrap_or(&f.path);
+                format!("{}:{}:{}", name.display(), at.line + 1, at.character + 1)
+            })
+            .collect();
+        if !places.is_empty() {
+            bail!(
+                "instance {i} of module {m} is also the string \"{i}\" at {}, and \
+                 `{m}[..]` reads instances by such strings: a rename would not change the \
+                 string",
+                places.join(", ")
+            );
+        }
+    }
     let r = t.text_range();
     Ok((
         text::range(&f.text, r.start().into(), r.end().into()),
@@ -37,8 +60,8 @@ fn renameable(what: &What, t: &SyntaxToken) -> Result<Symbol> {
         bail!("`{name}` is a keyword");
     }
     match what {
-        What::Name(Symbol::Predicate(n), _) if builtin(n) => bail!("`{n}` is a builtin"),
-        What::Name(Symbol::Predicate(n), _) if dform_core::loader::is_core_pred(n) => {
+        What::Name(Symbol::Predicate(_, n), _) if builtin(n) => bail!("`{n}` is a builtin"),
+        What::Name(Symbol::Predicate(_, n), _) if dform_core::loader::is_core_pred(n) => {
             bail!("`{n}` is dform's own relation (the compiler's or a provider's)")
         }
         What::Name(s, _) => Ok(s.clone()),
@@ -61,7 +84,8 @@ fn builtin(n: &str) -> bool {
 
 fn describe(s: &Symbol) -> String {
     match s {
-        Symbol::Predicate(_) => "a relation".into(),
+        Symbol::Predicate(Some(scope), _) => format!("a relation of {scope}"),
+        Symbol::Predicate(None, _) => "a relation".into(),
         Symbol::Value(Some(scope), _) => format!("a value name in {scope}"),
         Symbol::Value(None, _) => "a value name".into(),
         Symbol::Let(Some(scope), _) => format!("a let in {scope}"),
@@ -76,9 +100,22 @@ fn describe(s: &Symbol) -> String {
     }
 }
 
-/// `textDocument/rename` of the name at `at` to `new`: a workspace edit
-/// of `changes`.
-pub fn rename(p: &Project, path: &Path, at: usize, new: &str) -> Result<Json> {
+/// Bytes `start..end` of a text replaced.
+type Splice = (usize, usize, String);
+
+/// A rename: the edit, per file its edits in bytes and its text after
+/// them, and how it renames addresses.
+pub struct Renaming {
+    sym: Symbol,
+    old: String,
+    new: String,
+    /// A renamed resource's type.
+    typ: Option<String>,
+    files: BTreeMap<PathBuf, (String, Vec<Splice>)>,
+}
+
+/// `textDocument/rename` of the name at `at` to `new`.
+pub fn rename(p: &Project, path: &Path, at: usize, new: &str) -> Result<Renaming> {
     let files = p.parse();
     let d = Decls::of(files.iter().map(|f| &f.tree));
     let (_, t, what) = refs::at(&d, &files, path, at).ok_or_else(|| anyhow!("no name here"))?;
@@ -92,25 +129,36 @@ pub fn rename(p: &Project, path: &Path, at: usize, new: &str) -> Result<Json> {
     {
         bail!("`{new}` is not a name (a keyword, or not one word)");
     }
-    let mut changes: BTreeMap<PathBuf, Vec<TextEdit>> = BTreeMap::new();
+    let typ = match &sym {
+        Symbol::Resource(m, n) => d.type_of(m, n).map(str::to_string),
+        _ => None,
+    };
+    let mut r = Renaming {
+        sym: sym.clone(),
+        old: old.clone(),
+        new: new.to_string(),
+        typ,
+        files: BTreeMap::new(),
+    };
     if new == old {
-        return Ok(json!({ "changes": {} }));
+        return Ok(r);
     }
     if d.taken(&sym, new) {
         bail!("`{new}` is already {}", describe(&sym));
     }
     let found = refs::occurrences(&d, &files, &sym);
-    for (f, t, _) in &found {
-        let r = t.text_range();
-        changes
+    let moves = moves(p, &r);
+    let mut edit = |f: &Parsed, s: usize, e: usize, t: String| {
+        r.files
             .entry(f.path.clone())
-            .or_default()
-            .push(TextEdit::new(
-                text::range(&f.text, r.start().into(), r.end().into()),
-                new.to_string(),
-            ));
+            .or_insert_with(|| (f.text.clone(), Vec::new()))
+            .1
+            .push((s, e, t));
+    };
+    for (f, t, _) in &found {
+        let range = t.text_range();
+        edit(f, range.start().into(), range.end().into(), new.to_string());
     }
-    let moves = moves(p, &d, &sym, &old, new);
     if let Some((f, at, indent)) = beside(&found)
         && !moves.is_empty()
     {
@@ -118,22 +166,151 @@ pub fn rename(p: &Project, path: &Path, at: usize, new: &str) -> Result<Json> {
             .iter()
             .map(|(typ, a, b)| format!("\n{indent}moved({typ:?}, {a:?}, {b:?})"))
             .collect();
-        let pos = text::range(&f.text, at, at);
-        changes
-            .entry(f.path.clone())
-            .or_default()
-            .push(TextEdit::new(pos, facts));
+        edit(f, at, at, facts);
     }
-    let by_uri: serde_json::Map<String, Json> = changes
-        .into_iter()
-        .map(|(f, edits)| {
-            Ok((
-                text::uri_of(&f).as_str().to_string(),
+    Ok(r)
+}
+
+impl Renaming {
+    /// The workspace edit, as `changes`.
+    pub fn edit(&self) -> Result<Json> {
+        let mut by_uri = serde_json::Map::new();
+        for (f, (text, edits)) in &self.files {
+            let edits: Vec<TextEdit> = edits
+                .iter()
+                .map(|(s, e, t)| TextEdit::new(text::range(text, *s, *e), t.clone()))
+                .collect();
+            by_uri.insert(
+                text::uri_of(f).as_str().to_string(),
                 serde_json::to_value(edits)?,
+            );
+        }
+        Ok(json!({ "changes": by_uri }))
+    }
+
+    /// Each file the edit changes, and its text after it.
+    pub fn texts(&self) -> BTreeMap<PathBuf, String> {
+        self.files
+            .iter()
+            .map(|(f, (text, edits))| {
+                let mut out = text.clone();
+                let mut edits = edits.clone();
+                edits.sort_by_key(|(s, _, _)| std::cmp::Reverse(*s));
+                for (s, e, t) in edits {
+                    out.replace_range(s..e, &t);
+                }
+                (f.clone(), out)
+            })
+            .collect()
+    }
+
+    /// The address `a` of type `typ` becomes, when the rename changes it.
+    fn address(&self, typ: &str, a: &str) -> Option<String> {
+        let (old, new) = (&self.old, &self.new);
+        match &self.sym {
+            Symbol::Resource(None, _) => {
+                (Some(typ) == self.typ.as_deref() && a == old).then(|| new.clone())
+            }
+            Symbol::Resource(Some(m), _) => {
+                let (inst, local) = a.split_once("::")?;
+                (Some(typ) == self.typ.as_deref() && local == old && inst.split_once('.')?.0 == m)
+                    .then(|| format!("{inst}::{new}"))
+            }
+            Symbol::Instance(m, _) => {
+                let rest = a.strip_prefix(&format!("{m}.{old}::"))?;
+                Some(format!("{m}.{new}::{rest}"))
+            }
+            Symbol::Module(_) => {
+                let (inst, rest) = a.split_once("::")?;
+                let i = inst.strip_prefix(&format!("{old}."))?;
+                Some(format!("{new}.{i}::{rest}"))
+            }
+            _ => None,
+        }
+    }
+
+    /// Refuse the rename unless the program means what it meant: each
+    /// stack evaluated `after` it has no diagnostic it had not `before`
+    /// (but for the new name in place of the old), and plans what it
+    /// planned, at the renamed addresses (the moves the edit adds keep a
+    /// renamed object undeformed).
+    pub fn verify(&self, before: &[&Outcome], after: &[Outcome]) -> Result<()> {
+        let mut changed = Vec::new();
+        for (b, a) in before.iter().zip(after) {
+            let known: BTreeSet<String> = b
+                .problems
+                .iter()
+                .flat_map(|p| [p.message.clone(), p.message.replace(&self.old, &self.new)])
+                .collect();
+            for p in &a.problems {
+                if !known.contains(&p.message) {
+                    changed.push(format!("a new {}: {}", severity(p.severity), p.message));
+                }
+            }
+            let deployment = a
+                .evaluated
+                .as_ref()
+                .or(b.evaluated.as_ref())
+                .map_or(String::new(), |e| e.deployment.clone());
+            let planned_before: BTreeSet<(String, String, String)> = deformations(b)
+                .into_iter()
+                .map(|(k, t, x)| {
+                    let x = self.address(&t, &x).unwrap_or(x);
+                    (k, t, x)
+                })
+                .collect();
+            let planned_after = deformations(a);
+            for (k, t, x) in planned_before.difference(&planned_after) {
+                changed.push(format!("{deployment} would no longer plan {k} {t}.{x}"));
+            }
+            for (k, t, x) in planned_after.difference(&planned_before) {
+                changed.push(format!("{deployment} would plan {k} {t}.{x}"));
+            }
+        }
+        if !changed.is_empty() {
+            bail!(
+                "renaming `{}` to `{}` would change what the program means:\n- {}",
+                self.old,
+                self.new,
+                changed.join("\n- ")
+            );
+        }
+        Ok(())
+    }
+}
+
+fn severity(s: Severity) -> &'static str {
+    match s {
+        Severity::Error => "error",
+        Severity::Warning => "warning",
+    }
+}
+
+/// The plan of an evaluation: its policy pass's `deformation(Kind, T, A,
+/// _)` facts.
+fn deformations(o: &Outcome) -> BTreeSet<(String, String, String)> {
+    let Some(e) = &o.evaluated else {
+        return BTreeSet::new();
+    };
+    e.res
+        .facts
+        .iter()
+        .filter(|a| a.pred == "deformation")
+        .filter_map(|a| {
+            Some((
+                str_of(a.args.first())?,
+                str_of(a.args.get(1))?,
+                str_of(a.args.get(2))?,
             ))
         })
-        .collect::<Result<_>>()?;
-    Ok(json!({ "changes": by_uri }))
+        .collect()
+}
+
+fn str_of(t: Option<&Term>) -> Option<String> {
+    match t {
+        Some(Term::Val(Value::Str(s))) => Some(s.clone()),
+        _ => None,
+    }
 }
 
 /// Where the `moved` facts go: just after the declaration's block, at its
@@ -156,44 +333,14 @@ fn beside<'p>(found: &[(&'p Parsed, SyntaxToken, bool)]) -> Option<(&'p Parsed, 
     Some((f, node.text_range().end().into(), indent))
 }
 
-/// The `(type, old, new)` addresses the rename of `sym` from `old` to
-/// `new` changes that have state in the selected deployment (and whose
-/// new address has none: `moved` applies only then).
-fn moves(
-    p: &Project,
-    d: &Decls,
-    sym: &Symbol,
-    old: &str,
-    new: &str,
-) -> Vec<(String, String, String)> {
+/// The `(type, old, new)` addresses the rename changes that have state in
+/// the selected deployment (and whose new address has none: `moved`
+/// applies only then).
+fn moves(p: &Project, r: &Renaming) -> Vec<(String, String, String)> {
     let held = identities(p);
-    let renamed = |typ: &str, a: &str| -> Option<String> {
-        match sym {
-            Symbol::Resource(None, _) => {
-                (Some(typ) == d.type_of(&None, old) && a == old).then(|| new.to_string())
-            }
-            Symbol::Resource(Some(m), _) => {
-                let (inst, local) = a.split_once("::")?;
-                (Some(typ) == d.type_of(&Some(m.clone()), old)
-                    && local == old
-                    && inst.split_once('.')?.0 == m)
-                    .then(|| format!("{inst}::{new}"))
-            }
-            Symbol::Instance(m, _) => {
-                let rest = a.strip_prefix(&format!("{m}.{old}::"))?;
-                Some(format!("{m}.{new}::{rest}"))
-            }
-            Symbol::Module(_) => {
-                let (inst, rest) = a.split_once("::")?;
-                let i = inst.strip_prefix(&format!("{old}."))?;
-                Some(format!("{new}.{i}::{rest}"))
-            }
-            _ => None,
-        }
-    };
     held.iter()
         .filter_map(|(typ, a)| {
-            let b = renamed(typ, a)?;
+            let b = r.address(typ, a)?;
             (!held.contains(&(typ.clone(), b.clone()))).then(|| (typ.clone(), a.clone(), b))
         })
         .collect()
@@ -202,14 +349,10 @@ fn moves(
 /// Every `(type, address)` the selected deployment's state maps to a live
 /// object: the evaluations' `identity` facts.
 fn identities(p: &Project) -> BTreeSet<(String, String)> {
-    let s = |t: Option<&Term>| match t {
-        Some(Term::Val(Value::Str(s))) => Some(s.clone()),
-        _ => None,
-    };
     p.evaluated
         .iter()
         .flat_map(|e| &e.res.facts)
         .filter(|a| a.pred == "identity")
-        .filter_map(|a| Some((s(a.args.first())?, s(a.args.get(1))?)))
+        .filter_map(|a| Some((str_of(a.args.first())?, str_of(a.args.get(1))?)))
         .collect()
 }

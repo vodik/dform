@@ -358,50 +358,7 @@ impl Server<'_> {
                 }
             }
             "textDocument/references" | "textDocument/prepareRename" | "textDocument/rename" => {
-                let p: lsp_types::TextDocumentPositionParams =
-                    serde_json::from_value(req.params.clone())?;
-                let path = self.path(&p.text_document.uri)?;
-                let root = self.root_of(&path);
-                self.fresh(&root);
-                let text = self.read(&path)?;
-                let at = text::offset(&text, p.position);
-                let files = self
-                    .files(&root)
-                    .into_iter()
-                    .filter_map(|f| Some((f.clone(), self.read(&f).ok()?)))
-                    .collect();
-                let project = crate::refs::Project {
-                    dir: if root.is_dir() {
-                        root.clone()
-                    } else {
-                        root.parent().unwrap_or(Path::new("/")).to_path_buf()
-                    },
-                    files,
-                    evaluated: self.workspaces.get(&root).map_or(Vec::new(), |w| {
-                        w.stacks
-                            .iter()
-                            .filter_map(|ev| ev.outcome.evaluated.as_ref())
-                            .collect()
-                    }),
-                };
-                match req.method.as_str() {
-                    "textDocument/references" => {
-                        let r: lsp_types::ReferenceParams = serde_json::from_value(req.params)?;
-                        let decl = r.context.include_declaration;
-                        Ok(serde_json::to_value(crate::refs::references(
-                            &project, &path, at, decl,
-                        ))?)
-                    }
-                    "textDocument/prepareRename" => {
-                        let (range, placeholder) = crate::rename::prepare(&project, &path, at)?;
-                        Ok(json!({ "range": range, "placeholder": placeholder }))
-                    }
-                    _ => {
-                        let r: lsp_types::RenameParams = serde_json::from_value(req.params)?;
-                        let edit = crate::rename::rename(&project, &path, at, &r.new_name)?;
-                        Ok(edit)
-                    }
-                }
+                self.names(&req.method, req.params)
             }
             "dform/stats" => {
                 let ms: Vec<f64> = self
@@ -928,5 +885,96 @@ impl Server<'_> {
             }));
         }
         Ok(Json::Array(out))
+    }
+
+    /// References, prepareRename and rename (`refs`, `rename`), over the
+    /// project's files as the editor has them and its evaluations.
+    fn names(&mut self, method: &str, params: Json) -> Result<Json> {
+        use crate::{refs, rename};
+        let p: lsp_types::TextDocumentPositionParams = serde_json::from_value(params.clone())?;
+        let path = self.path(&p.text_document.uri)?;
+        let root = self.root_of(&path);
+        self.fresh(&root);
+        let text = self.read(&path)?;
+        let at = text::offset(&text, p.position);
+        let files = self
+            .files(&root)
+            .into_iter()
+            .filter_map(|f| Some((f.clone(), self.read(&f).ok()?)))
+            .collect();
+        let ws = self.workspaces.get(&root);
+        let project = refs::Project {
+            dir: if root.is_dir() {
+                root.clone()
+            } else {
+                root.parent().unwrap_or(Path::new("/")).to_path_buf()
+            },
+            files,
+            evaluated: ws.map_or(Vec::new(), |w| {
+                w.stacks
+                    .iter()
+                    .filter_map(|ev| ev.outcome.evaluated.as_ref())
+                    .collect()
+            }),
+        };
+        match method {
+            "textDocument/references" => {
+                let r: lsp_types::ReferenceParams = serde_json::from_value(params)?;
+                let decl = r.context.include_declaration;
+                Ok(serde_json::to_value(refs::references(
+                    &project, &path, at, decl,
+                ))?)
+            }
+            "textDocument/prepareRename" => {
+                let (range, placeholder) = rename::prepare(&project, &path, at)?;
+                Ok(json!({ "range": range, "placeholder": placeholder }))
+            }
+            _ => {
+                let r: lsp_types::RenameParams = serde_json::from_value(params)?;
+                let renaming = rename::rename(&project, &path, at, &r.new_name)?;
+                // The edit is checked: the selected deployment evaluated
+                // with it applied to the buffers.
+                let before: Vec<&Outcome> = ws.map_or(Vec::new(), |w| {
+                    w.stacks.iter().map(|ev| &ev.outcome).collect()
+                });
+                let mut docs = self.docs.clone();
+                docs.extend(renaming.texts());
+                let after = self.evaluate_with(&root, docs);
+                renaming.verify(&before, &after)?;
+                renaming.edit()
+            }
+        }
+    }
+
+    /// Every stack of the workspace at `root` evaluated in the selected
+    /// environment with `docs` for the open buffers, as `evaluate` does,
+    /// keeping nothing.
+    fn evaluate_with(&self, root: &Path, docs: BTreeMap<PathBuf, String>) -> Vec<Outcome> {
+        if enter(root).is_err() {
+            return Vec::new();
+        }
+        let read = move |p: &Path| -> std::io::Result<String> {
+            match docs.get(p) {
+                Some(t) => Ok(t.clone()),
+                None => std::fs::read_to_string(p),
+            }
+        };
+        self.stacks(root)
+            .into_iter()
+            .map(|(file, _)| {
+                let target = Target {
+                    file,
+                    keys: match &self.env {
+                        Env::Keys(ks) => ks.clone(),
+                        _ => Vec::new(),
+                    },
+                    scenario: match &self.env {
+                        Env::Scenario(s) => Some(s.clone()),
+                        _ => None,
+                    },
+                };
+                analysis::evaluate(&target, self.launch, &read, self.opts.version)
+            })
+            .collect()
     }
 }
