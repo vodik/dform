@@ -60,6 +60,8 @@ fn apply_after_a_crash_finishes_on(backend: Backend) {
          plan: 1 deformation (1 create)\ndefinite:\n\
          + compute.vm.app\n  subnet_id = \"net.subnet:a\"\n\
          apply order: tick 1 [compute.vm.app]\n\
+         resumed from the apply interrupted at tick 1:\n  \
+         compute.vm.app  (retried with its idempotency key: nothing it made was found)\n\
          apply: complete\n"
     );
     let st = state(&s);

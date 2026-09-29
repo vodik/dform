@@ -560,6 +560,43 @@ pub fn resolve_uncertain(cloud: &Providers, state: &mut State) -> Result<Vec<Str
     Ok(out)
 }
 
+/// What `plan` carries over from an interrupted apply, for the plan shown
+/// before apply asks: the actions `resumed` (the in-flight record it took)
+/// still lists, and each Create or Replace that `resolve_uncertain` found
+/// made nothing, to be sent again with its idempotency key. Empty when
+/// there is none; else a header and a line per address, in plan order.
+pub fn carried_over(resumed: Option<&InFlight>, state: &State, plan: &Plan) -> String {
+    let mut out = String::new();
+    for a in plan
+        .actions
+        .iter()
+        .filter(|a| !matches!(a.kind, ActionKind::Noop))
+    {
+        let k = state::key(&a.addr);
+        let remaining = resumed.is_some_and(|f| f.remaining.contains_key(&k));
+        let retried = matches!(a.kind, ActionKind::Create | ActionKind::Replace { .. })
+            && state.uncertain.get(&k).is_some_and(|u| {
+                matches!(u.op, UncertainOp::Create | UncertainOp::Replace { .. })
+                    && !u.key.is_empty()
+            });
+        if !remaining && !retried {
+            continue;
+        }
+        if out.is_empty() {
+            out = match resumed {
+                Some(f) => format!("resumed from the apply interrupted at tick {}:\n", f.tick),
+                None => "carried over from an interrupted apply:\n".to_string(),
+            };
+        }
+        out.push_str(&format!("  {}.{}", a.addr.typ, a.addr.name));
+        if retried {
+            out.push_str("  (retried with its idempotency key: nothing it made was found)");
+        }
+        out.push('\n');
+    }
+    out
+}
+
 fn op_name(op: &UncertainOp) -> &'static str {
     match op {
         UncertainOp::Create => "create",

@@ -99,7 +99,10 @@ shop.app[env=prod]? [y/N]`; only `y` or `yes` proceeds. `--yes` (`-y`)
 applies without asking, as a script or CI does: with no terminal to ask on
 and no `--yes`, apply refuses at once, naming the flag. An undeformed plan
 asks nothing, nor does `apply plan.json` (the file was reviewed; approvals
-guard it) or the controller.
+guard it) or the controller. Nothing is written before the answer: an
+apply reads (refresh, the lookups that resolve uncertain calls), plans and
+asks, and only a `y` writes state (`moved` renames included) or calls
+Apply.
 
 | Commands | |
 |---|---|
@@ -782,7 +785,10 @@ An apply that fails or is killed can be resumed: before a tick's first Apply
 call its deformations are written to state as in flight, each with the world
 document it was planned against, and each answered call takes its action out.
 The next `apply` prints `resuming the apply interrupted at tick N; remaining:
-...`, refreshes, and finishes the remaining actions; if the world changed
+...`, refreshes, and finishes the remaining actions, listed after the plan
+under `resumed from the apply interrupted at tick N:`, each create its
+idempotency key found nothing for marked `(retried with its idempotency
+key: nothing it made was found)`, before it asks; if the world changed
 under one of them it prints the change and stops before any Apply call, on
 the deny the policy pass derives from `deformation(remaining, ...)` (run
 `apply` again to plan against the world as it now is).
@@ -970,7 +976,8 @@ The kinds:
 - `action`: the kind, the address, the result (and the error), the remote
   id, and a digest of the redacted diff;
 - `tick`: the world as the executor saw it, as an HMAC with the stack's key;
-- `apply_end`: `ok` or `failed` and the error;
+- `apply_end`: `ok`, `declined` (the confirmation was answered no), or
+  `failed` and the error;
 - `controller`: each event, holds for approval and the run's result; and
   `rekey` and `handover`.
 

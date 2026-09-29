@@ -916,6 +916,7 @@ fn run(cli: Cli, hook: Option<&mut controller::Hook>) -> Result<()> {
     if let Some(s) = session {
         let end = match &r {
             Ok(()) => serde_json::json!({ "result": "ok" }),
+            Err(e) if e.is::<Declined>() => serde_json::json!({ "result": "declined" }),
             Err(e) => serde_json::json!({ "result": "failed", "error": e.to_string() }),
         };
         let logged = s.log.append("apply_end", end);
@@ -2001,11 +2002,14 @@ fn run_with(
             let mut approved: Option<crate::approval::Verified> = None;
             persist_externs(&mut st, &externs);
             let persist = |st: &state::State| dep.save_state(st);
+            // Nothing is written, to state or the world, until the apply is
+            // confirmed: the moves, the resolution of uncertain calls and the
+            // in-flight record taken here are written with the tick's first.
             if !moves.is_empty() {
                 print_moves(&moves);
-                persist(&st)?;
             }
-            if let Some(f) = st.in_flight.take() {
+            let resumed = st.in_flight.take();
+            if let Some(f) = &resumed {
                 let names: Vec<String> = f
                     .remaining
                     .keys()
@@ -2021,7 +2025,7 @@ fn run_with(
                 // documents they were planned against, as the held ones do
                 // at a boundary: the evaluator derives the deny when the
                 // world moved under one (`zset::POLICY_RULES`).
-                let remaining = executor::remaining(&f);
+                let remaining = executor::remaining(f);
                 let observed = backend.observe(&st)?;
                 let changed = executor::changed_under(&backend, &remaining, &observed);
                 if !changed.is_empty() {
@@ -2190,6 +2194,10 @@ fn run_with(
                 }
                 // A batch apply asks before it changes anything, unless
                 // `--yes` or it applies a reviewed plan file.
+                // What it carries over from an interrupted apply is marked.
+                if tick == 1 && hook.is_none() {
+                    print!("{}", executor::carried_over(resumed.as_ref(), &st, &plan));
+                }
                 if tick == 1 && hook.is_none() && !yes && saved.is_none() {
                     let report = report_of(&plan, &res, &sections, tick, &[], &denies);
                     if !report.undeformed {
@@ -2555,9 +2563,22 @@ fn confirm(n: usize, deployment: &str) -> Result<()> {
     stdin.lock().read_line(&mut answer)?;
     match answer.trim().to_ascii_lowercase().as_str() {
         "y" | "yes" => Ok(()),
-        _ => bail!("apply {deployment}: not confirmed; nothing was applied"),
+        _ => Err(Declined(deployment.to_string()).into()),
     }
 }
+
+/// An apply its confirmation declined: the audit log's `apply_end` says
+/// `declined`.
+#[derive(Debug)]
+struct Declined(String);
+
+impl std::fmt::Display for Declined {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "apply {}: not confirmed; nothing was applied", self.0)
+    }
+}
+
+impl std::error::Error for Declined {}
 
 /// `stack rekey`: the deployment whose state moves, and where to.
 struct Rekey {
