@@ -1,12 +1,13 @@
 # tour
-Start here: one stack file, stacks/tour.df, read top to bottom as a tutorial.
-A dform program is facts and rules; the plan is their difference from the world, unknowns shown.
-Policy is more rules, checked in every plan, and `dform why` explains any value.
-Each section says the command to run and what it prints; on the fake provider, no credentials.
+Start here: stacks/tour.df is a tutorial, read top to bottom, each section one idea built on the last.
+It starts where Terraform does (resources, references, for_each, environments, modules) and goes on
+to what Terraform cannot say: policy as rules in the program, `why` for any value, recursive rules,
+and resources named by values only apply learns. On a fake cloud: no credentials.
 ```bash
-dform plan                                     # 11 creates, the unknowns marked ?
-dform apply                                    # asks, then one tick
-dform plan tour env=prod                       # prod is a deployment of its own
-dform plan --set public_db=true                # refused by a deny, on purpose
-dform why 'net.vpc["main"].tags.team'          # the tag's rule, file and line
+dform plan                                  # everything is a create; unknowns marked ?
+dform apply                                 # asks, then two ticks
+dform plan tour env=prod                    # prod is a deployment of its own
+dform plan --set public_db=true             # refused by a deny, on purpose
+dform why 'net.vpc["main"].tags.team'       # the tag's rule, file and line
+dform query 'reaches("blue", x)'            # a recursive rule, asked
 ```

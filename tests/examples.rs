@@ -127,9 +127,10 @@ const CASES: &[Case] = &[
             ),
         ],
     },
+    // The policy named for the database's endpoint waits for tick 2.
     Case {
         name: "tour",
-        stacks: &[one(&["apply"], Apply::Converges(1))],
+        stacks: &[one(&["apply"], Apply::Converges(2))],
     },
 ];
 

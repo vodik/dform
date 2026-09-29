@@ -9,7 +9,8 @@
 This repo currently uses a **fake backend** (no AWS/GCP/Azure) so we can iterate on language + semantics.
 
 New here? Start with the tour: `examples/tour/stacks/tour.df` is a tutorial
-read top to bottom, each section a command to run and what it prints.
+read top to bottom, from what Terraform does to what it cannot express,
+each section a command to run and what it prints.
 
 ```bash
 cd examples/tour && cargo run -- plan

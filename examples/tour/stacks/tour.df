@@ -1,17 +1,20 @@
 # A tour of dform, top to bottom.
 #
-# dform describes infrastructure the way Terraform does: you write what
-# should exist, dform plans the change, and apply makes it. The difference
-# is the language. A dform program is facts and rules, like a small
-# database query, and everything dform prints (a plan, a policy failure, a
-# reason) comes from the same rules.
+# dform does what Terraform does: you write what should exist, dform plans
+# the change, and apply makes it. The difference is the language. A dform
+# program is facts and rules, closer to a database query than to a
+# template, and dform evaluates all of it at once: every rule can read
+# everything the program says should exist, modules included. The first
+# sections are the parts you know from Terraform. The later ones build on
+# them to do what Terraform cannot express: policy that adds as well as
+# forbids, an answer to "why is this here", rules that recurse, and
+# resources whose names only apply learns.
 #
-# Each numbered section below adds one idea. It says what the idea is,
-# the command to run, and the line of output to look for. Run the commands
-# in order, from the directory holding dform.toml (examples/tour). In a
-# checkout of the dform repository, `dform` is `cargo run --`; lines
-# starting with `$` are commands, and the lines under one are part of what
-# it prints.
+# Each numbered section adds one idea: what it is, the command to run, and
+# what to look for in the output. Run the commands in order, from the
+# directory holding dform.toml (examples/tour). In a checkout of the dform
+# repository, `dform` is `cargo run --`. A line starting with `$` is a
+# command; the lines under it are part of what it prints.
 #
 # The resources are on a fake cloud built into dform: nothing to sign up
 # for, no credentials, and nothing real is made.
@@ -22,19 +25,19 @@ provider fake {}
 
 # 1. One resource
 #
-# A resource block says that something should exist, with these
-# attributes. This one is a network (a VPC) with an address range.
+# A resource block says something should exist, with these attributes.
+# This one is a network (a VPC) with an address range.
 #
 #   $ dform plan
-#   plan: 11 deformations (11 create)
+#   plan: 19 deformations (19 create), 1 pending
 #   + net.vpc["main"]
 #     cidr = "10.0.0.0/16"
 #
-# The plan lists everything in this file, so it is longer than one
-# resource; `net.vpc["main"]` is this one. `+` is a create: the fake cloud
-# is empty, so everything is new. The program is a set of facts about
-# what should exist; the plan is the difference between those facts and
-# the world. (Its first line, `deployment: tour[env=dev]`, is section 4.)
+# The plan lists everything in this file, so it is long; this section is
+# its `net.vpc["main"]` (section 10 is the pending one). `+` is a create: the fake cloud is empty, so
+# everything is new. As in Terraform, the program says what should exist
+# and the plan is the difference between that and the world. (The plan's
+# first line, `deployment: tour[env=dev]`, is section 4.)
 
 resource net.vpc main {
   cidr = inet("10.0.0.0/16")
@@ -42,22 +45,22 @@ resource net.vpc main {
 
 # 2. A resource that points at another
 #
-# A subnet lives in a network, so it needs the network's id. `main.id`
-# refers to the network above. The id does not exist until the network
-# is made, and the plan says so instead of hiding it:
+# A subnet lives in a network, so it needs the network's id: `main.id`.
+# The id does not exist until the network is made. Terraform prints
+# `(known after apply)`; dform prints which value it is waiting for:
 #
 #   + net.subnet["public"]
 #     vpc_id = ?net.vpc["main"].id
 #
-# `?` marks an unknown, and names the value it waits for: the id of
-# `net.vpc["main"]`. Because the subnet refers to the network, apply
+# `?` marks an unknown. Because the subnet refers to the network, apply
 # makes the network first. Apply prints the plan and asks before it
 # changes anything:
 #
 #   $ dform apply
 #   apply: complete
 #
-# The unknown is now the id the fake cloud gave the network:
+# (It ran in two ticks, two rounds of changes; section 10 is why.) The
+# unknown is now the id the fake cloud gave the network:
 #
 #   $ dform query 'net.subnet["public"].vpc_id'
 #   "net.vpc:main"
@@ -78,26 +81,22 @@ resource net.subnet public {
 # 3. Many resources from one rule
 #
 # A line like `zone("us-test-1a", 1)` is a fact: a row in a table named
-# `zone`. The block below has an `if`: it makes one subnet for every row
-# that matches, and the name `"private-${z}"` gives each its own name.
+# `zone`. The block below has an `if`, which makes it a rule: one subnet
+# for every row that matches, named by `"private-${z}"`. It is
+# Terraform's `for_each`, over a table instead of a map, and the
+# condition can join several tables, as later sections do.
 # `inet_subnet(main.cidr, 8, n)` cuts the network's range into /24s and
-# takes the n-th. Two zones, two subnets:
+# takes the n-th.
 #
-#   + net.subnet["private-us-test-1a"]
-#     cidr = "10.0.1.0/24"
-#   + net.subnet["private-us-test-1b"]
-#     cidr = "10.0.2.0/24"
-#
-# That was in the first plan; they exist now. To list them, ask for every
-# subnet's zone. `attr(type, name, attribute, value)` is the table dform
-# keeps every attribute in, and the lower-case names `s` and `z` are
-# blanks to fill in, one row per answer:
+# Every attribute is a row too, in a table named `attr`, and `dform query`
+# asks the tables anything. Lower-case names are blanks to fill in, one
+# row per answer:
 #
 #   $ dform query 'attr(net.subnet, s, "zone", z)'
 #   "private-us-test-1a"                 "us-test-1a"
 #   "private-us-test-1b"                 "us-test-1b"
 #
-# The `network.` rows are section 7's networks, which read `zone` too. A
+# The `network.` rows are section 7's networks, which read `zone` too: a
 # third zone is one more line here, and every rule that reads `zone`
 # follows it.
 
@@ -112,26 +111,27 @@ resource net.subnet "private-${z}" {
   visibility = "private"
 }
 
-# 4. Settings per environment, and a stack per environment
+# 4. Settings per environment, and a deployment per environment
 #
 # The stack is named `tour`, and keyed by `env`: each value of `env` is a
-# deployment of its own, with its own state. `dform plan` plans the
-# default, `dev`. A settings block is a row of named values, one per
-# environment, and `cfg` is the row of the environment being planned.
-# The database below takes its backups and redundancy from it.
+# deployment of its own, with its own state, where Terraform would use a
+# workspace or a directory per environment. `dform plan` plans the
+# default, `dev`. A settings block is one environment's values, and `cfg`
+# is the block of the environment being planned. The database takes its
+# backups and redundancy from it, and its subnets from a list of every
+# private subnet in the program.
 #
-# dev is applied already. prod has never been, so for prod the same
-# program is all creates, with prod's settings:
+# dev is applied. prod has never been, so for prod the same program is
+# all creates, with prod's settings:
 #
 #   $ dform plan tour env=prod
 #   deployment: tour[env=prod]
-#   plan: 11 deformations (11 create)
 #   + db.postgres["orders"]
 #     backup_days = 14
 #     multi_az = true
 #
-# The database also has an `input`, `public_db`: a value given on the
-# command line. It defaults to false; section 5 is why it should stay so.
+# The database also has an `input`, `public_db`: a value to give on the
+# command line. It defaults to false, and section 5 keeps it so.
 
 stack tour[env] {}
 
@@ -158,24 +158,25 @@ resource db.postgres orders {
   public = public_db
 }
 
-# 5. Policy
+# 5. Policy is more rules
 #
-# Policy is written in the same language: it is more rules. The first
-# rule below reads every resource (`r in resource`) and adds a tag to it,
-# so every create in the plans above had `tags.team = "shop"`. The second
-# is a `deny`: a rule whose matches stop the plan. Nothing matches now.
-# Ask for a public database, and it does:
+# Terraform's policy lives elsewhere: Sentinel or OPA, a second language
+# run over the plan's JSON as a separate step, able to forbid but not to
+# add. Here policy is two more rules in the program. The first reads every
+# resource (`r in resource`) and adds a tag to it, so every create in the
+# plans above has `tags.team = "shop"`. The second is a `deny`: a rule
+# whose matches stop the plan. Nothing matches now. Ask for a public
+# database, and it does:
 #
 #   $ dform plan --set public_db=true
 #   ~ db.postgres["orders"]
 #     public: false -> true
-#   constraint violations:
 #   - a database must not be public ctx={"database":"orders"}
 #   Error: blocked by constraints
 #
 # The plan shows the change it refuses (`~` is an update) and the rule
-# that refused it. There is no separate policy step to run: every plan and
-# every apply checks every deny.
+# that refused it. There is no separate step: every plan and every apply
+# checks every deny.
 
 set r.tags = { team: "shop" } if r in resource
 
@@ -184,51 +185,46 @@ deny "a database must not be public" { database: pg } if pg in db.postgres, pg.p
 # 6. Why
 #
 # Any value dform works out can be asked where it came from. The network
-# has a tag nobody wrote in its block:
+# has a tag its block does not write. The lines that matter:
 #
 #   $ dform why 'net.vpc["main"].tags.team'
-#   attr("net.vpc", "main", "tags", {team: "shop"})
-#     └─ arg("net.vpc", "main", "tags", {team: "shop"}, "normal")   [rank normal, owner r18 (stacks/tour.df:180:1)]
-#          by r18: arg(Type, R, "tags", {team: "shop"}, "normal") :- want(Type, R)
-#          └─ want("net.vpc", "main")   fact, stacks/tour.df:39:1 (want)
+#   └─ arg("net.vpc", "main", "tags", {team: "shop"}, "normal")   [rank normal, owner r18 (stacks/tour.df:181:1)]
+#        by r18: arg(Type, R, "tags", {team: "shop"}, "normal") :- want(Type, R)
+#        └─ want("net.vpc", "main")   fact, stacks/tour.df:42:1 (want)
 #
-# (Shortened.) Read it from the top: the network's tags have one
-# contribution, made by the rule at stacks/tour.df line 180, section 5's
-# tag rule, because the network exists, which line 39 says. The address
-# is the one the plan printed, pasted. The same works for a cidr, a
-# subnet's name or a deny: whatever the plan shows, `why` can explain.
+# Read it from the top: the tag was added by the rule at line 181 of this
+# file (section 5's), because the network exists, which line 42 says. The
+# address is the one the plan printed, pasted. The same works for a cidr,
+# a subnet's name or a deny: whatever the plan shows, `why` explains.
 
 # 7. A module, used twice
 #
-# Sections 1 to 3 wrote one network by hand. A module is the same shape
-# with its inputs named, so it can be made more than once. `instance`
-# makes one, giving its inputs; here there are two, blue and green.
+# A module is a block of resources with named inputs, made once per
+# `instance`, as in Terraform. Below, a network like sections 1 to 3's is
+# made twice, blue and green; a module's resources are named for their
+# instance (`net.vpc["network.blue::vpc"]`).
 #
-# They were in the first plan:
+# Two things differ from Terraform. A module's resources are not hidden
+# behind its outputs: section 5's tag rule reached them, and section 4's
+# database would take their subnets if they were private. And an
+# attribute can have several authors: the module's vpc writes one tag,
+# the policy another, and the vpc has both:
 #
-#   + net.vpc["network.blue::vpc"]
-#     cidr = "10.1.0.0/16"
-#     tags.team = "shop"
-#   + net.subnet["network.green::private-us-test-1b"]
-#     vpc_id = ?net.vpc["network.green::vpc"].id
+#   $ dform query 'net.vpc["network.blue::vpc"].tags'
+#   {component: "network", team: "shop"}
 #
-# and apply made them. Every network now, with its range:
-#
-#   $ dform query 'attr(net.vpc, v, "cidr", c)'
-#   "main"                10.0.0.0/16
-#   "network.blue::vpc"   10.1.0.0/16
-#   "network.green::vpc"  10.2.0.0/16
-#
-# A module's resources are named for their instance, and they are
-# resources like any other: section 5's tag rule reached them without
-# being told about modules. In a larger project a module has a file of its
-# own under modules/ (docs/layout.md), imported with `import`.
+# In Terraform an attribute has one author, and a policy's tag has to be
+# threaded into every module as a variable and merged by hand (the AWS
+# provider's `default_tags` covers tags alone). In a larger project a
+# module has a file of its own under modules/ (docs/layout.md), brought in
+# with `import`.
 
 module network {
   input cidr: inet
 
   resource net.vpc vpc {
     cidr = cidr
+    tags = { component: "network" }
   }
 
   resource net.subnet "private-${z}" {
@@ -237,6 +233,8 @@ module network {
     cidr = inet_subnet(cidr, 8, n)
     zone = z
   }
+
+  output vpc: net.vpc = vpc
 }
 
 instance network blue {
@@ -247,7 +245,94 @@ instance network green {
   cidr = inet("10.2.0.0/16")
 }
 
-# 8. Where to go next
+# 8. Rules over rules: a hub and its spokes
+#
+# `main` is the hub, and each module network is a spoke peered to it.
+# `spoke` lists them, and `network[t].vpc` reads instance `t`'s output,
+# its vpc's address. `network_of` names every network, the hub's and the
+# spokes'. The peering rule joins them: one peering per spoke, whose ids
+# are the unknowns of two networks:
+#
+#   $ dform plan tour env=prod
+#   + net.vpc_peering["main-blue"]
+#     accepter_vpc_id = ?net.vpc["network.blue::vpc"].id
+#     requester_vpc_id = ?net.vpc["main"].id
+#
+# A third spoke is an instance and a `spoke` line: its peering, and the
+# routes of section 9, follow.
+
+spoke("blue")
+spoke("green")
+
+hub("main")
+
+network_of(h, h) if hub(h)
+network_of(t, v) if spoke(t), v = network[t].vpc
+
+resource net.vpc_peering "main-${t}" {
+  if spoke(t), v = network[t].vpc
+  requester_vpc_id = main.id
+  accepter_vpc_id = net.vpc[v].id
+}
+
+# 9. Rules that recurse
+#
+# Traffic goes through the hub, so blue can reach green, and every
+# network that can reach another needs a route to it. Which pairs those
+# are is a question about paths: `link` is one hop, and `reaches` is the
+# rule that calls itself, a path of any length. Terraform has no
+# recursion, so it would have these routes written out by hand, and kept
+# in step by hand as networks come and go. Here the routes are a rule
+# over `reaches`, and the answer can be asked directly:
+#
+#   $ dform query 'reaches("blue", x)'
+#   "green"
+#   "main"
+#
+# (`"blue"` is in it too: blue to main and back.) The routes follow,
+# `blue-to-green` among them.
+
+link(h, t) if hub(h), spoke(t)
+link(t, h) if hub(h), spoke(t)
+
+reaches(a, b) if link(a, b)
+reaches(a, c) if reaches(a, b), link(b, c)
+
+resource net.route "${a}-to-${b}" {
+  if reaches(a, b), a != b, network_of(b, v), dest = net.vpc[v].cidr
+  from = a
+  to = b
+  destination = dest
+}
+
+# 10. A name only apply learns
+#
+# The database's endpoint is made by the cloud when the database is. The
+# policy below is named for it, one per database. In Terraform this is
+# the error "Invalid for_each argument ... cannot be determined until
+# apply", and the answer is `-target` and a second run by hand. dform
+# plans it, and says what it waits for:
+#
+#   $ dform plan tour env=prod
+#   ? iam.policy[?] x unknown, on ?db.postgres["orders"].endpoint, resolves after tick 1
+#
+# Apply runs in ticks: the first makes everything it can, then dform
+# plans again with what it learned, and the second makes the rest:
+#
+#   $ dform apply tour env=prod
+#   tick 2:
+#   + iam.policy["connect-orders.db.fake"]
+#   apply: complete
+#
+#   $ dform plan tour env=prod
+#   stack tour is undeformed
+
+resource iam.policy "connect-${host}" {
+  if pg in db.postgres, host = pg.endpoint
+  statements = [{ action: "db.connect", resource: host }]
+}
+
+# 11. Where to go next
 #
 # Each project under examples/ has a README that says what it shows and
 # the commands to run:
@@ -255,10 +340,10 @@ instance network green {
 #   demo       modules in their own files, a policy pack, settings from YAML
 #              files, scenarios (`dform test`)
 #   pngu       a table read from a CSV file
-#   advanced   recursive rules: reachability, routes, group membership
+#   advanced   more recursion: reachability, routes, group membership
 #   adopt      taking over a resource that already exists
 #   refine     types with conditions (`where`), checked when values are known
-#   gke        a plan in two ticks: values only the first one makes
+#   gke        a provider configured from values only apply learns
 #   k8s, aws   other fake providers, shaped like Kubernetes and AWS
 #   bootstrap  two stacks, one of them a controller's
 #   approvals  approving a signed plan
