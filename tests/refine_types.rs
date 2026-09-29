@@ -26,7 +26,7 @@ fn an_override_that_violates_a_refinement_is_a_deny() {
         &s,
         &format!(
             "{SETTINGS}days(40)\n\
-             settings.prod.db.backup_days = d @override if days(d)\n"
+             set settings[\"prod\"].db.backup_days = d @override if days(d)\n"
         ),
     )
     .failure();
@@ -57,7 +57,7 @@ fn an_override_that_violates_a_refinement_is_a_deny() {
         &s,
         &format!(
             "{SETTINGS}days(40)\n\
-             settings.prod.db.backup_days = d @default if days(d)\n"
+             set settings[\"prod\"].db.backup_days = d @default if days(d)\n"
         ),
     )
     .success();
@@ -267,7 +267,7 @@ type app.thing {{
   wide: string
 }}
 resource app.thing a {{
-  for n(x)
+  if n(x)
   name = x
   code = x
   net = \"10.0.0.0/24\"

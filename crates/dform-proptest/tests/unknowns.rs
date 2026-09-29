@@ -335,7 +335,7 @@ impl Printer<'_> {
             Guard::In(s, a) => format!("{} in {}.zones", self.arg(a, sc), self.src(s)),
             Guard::NotIn(s, a) => format!("{} not in {}.zones", self.arg(a, sc), self.src(s)),
             Guard::Fmt(s, c) => format!(
-                "\"p-{{{}.endpoint}}\" != \"p-{}\"",
+                "\"p-${{{}.endpoint}}\" != \"p-{}\"",
                 self.src(s),
                 POOL[c as usize % POOL.len()]
             ),
@@ -382,7 +382,7 @@ impl Printer<'_> {
         sc: Scope,
     ) -> fmt::Result {
         let header = match r.bind {
-            Some(_) => format!("\"{name}-{{x}}\""),
+            Some(_) => format!("\"{name}-${{x}}\""),
             None => name.to_string(),
         };
         writeln!(f, "resource {typ} {header} {{")?;
@@ -390,12 +390,10 @@ impl Printer<'_> {
             x: r.bind.is_some(),
             ..sc
         };
-        if let Some(g) = r.bind {
-            writeln!(f, "  for {}", self.bind(g, sc))?;
-        }
-        let guards = self.body(None, &r.guards, sc);
-        if !guards.is_empty() {
-            writeln!(f, "  if {}", guards.join(", "))?;
+        let mut clause: Vec<String> = r.bind.map(|g| self.bind(g, sc)).into_iter().collect();
+        clause.extend(self.body(None, &r.guards, sc));
+        if !clause.is_empty() {
+            writeln!(f, "  if {}", clause.join(", "))?;
         }
         let s = self.src(r.src);
         writeln!(f, "  src = {s}.id")?;
@@ -432,7 +430,7 @@ impl fmt::Display for Program {
         base.sort();
         base.dedup();
         for c in base {
-            writeln!(f, "b(\"${}\")", POOL[c])?;
+            writeln!(f, "b(\"{}\")", POOL[c])?;
         }
         for s in 0..self.srcs.max(1) {
             writeln!(f, "\nresource pt.src s{s} {{\n  label = \"s{s}\"\n}}")?;
@@ -498,7 +496,7 @@ impl fmt::Display for Program {
             if body.is_empty() {
                 body.push("b(x)".into());
             }
-            writeln!(f, "deny \"d${k}\" if {}", body.join(", "))?;
+            writeln!(f, "deny \"d{k}\" if {}", body.join(", "))?;
         }
         Ok(())
     }

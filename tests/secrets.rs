@@ -266,7 +266,7 @@ resource leaky.vault copy {{
 
     s.write(
         "p.df",
-        &format!("{PROGRAM}\nv.password = \"VAULT-SECRET-TWO\"\n"),
+        &format!("{PROGRAM}\nok(1)\nset v.password = \"VAULT-SECRET-TWO\" if ok(1)\n"),
     );
     let r = s.run(&common::on("p.df", &mock, &["plan"])).failure();
     assert!(
@@ -287,7 +287,7 @@ fn a_secret_input_never_prints_in_query_why_or_the_plan_file() {
     let s = Scratch::new("secrets-input");
     s.write(
         "p.df",
-        "edition 2026\ninput pw: secret(string)\noutput token: secret(string)\noutput(\"token\", p) if pw(p)\nresource leaky.vault v {\n  if pw(p)\n  password = p\n}\n",
+        "edition 2026\ninput pw: secret(string)\noutput token: secret(string) = p if pw(p)\nresource leaky.vault v {\n  if pw(p)\n  password = p\n}\n",
     );
     let schema = schema();
     let mock = ["--provider", schema.as_str(), "--world", "w.json"];

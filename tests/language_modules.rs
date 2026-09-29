@@ -166,7 +166,7 @@ resource net.vpc main { cidr = "10.0.0.0/16" }
 policy tags {
   contributes _.tags
   arg(t, a, "tags", { team: "x" }) if want(t, a)
-  arg(net.vpc, a, "cidr", "10.9.0.0/16") @override if want(net.vpc, a)
+  set a.cidr = "10.9.0.0/16" @override if a in net.vpc
 }
 use tags
 "#;

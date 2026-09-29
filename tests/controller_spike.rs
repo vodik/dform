@@ -346,8 +346,8 @@ fn a_git_source_is_read_at_its_ref() {
     s.write(
         "stacks/workload.df",
         &WORKLOAD.replace(
-            "input release(a) from facts(\"data/release.facts\")",
-            "input release(a) from facts(git(\"releases.git\", \"main\", \"web.facts\"))",
+            "input release(image) from facts(\"data/release.facts\")",
+            "input release(image) from facts(git(\"releases.git\", \"main\", \"web.facts\"))",
         ),
     );
     let got = once(&s, &[]);

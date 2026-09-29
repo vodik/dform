@@ -240,7 +240,7 @@ fn dangling_refs(e: &Evaluated, read: Reader) -> Vec<Action> {
     out
 }
 
-/// The collision lint: derive the name from the key (`"fixed-{env}"`, where
+/// The collision lint: derive the name from the key (`"fixed-${env}"`, where
 /// the name is a string written in the stack's own file, where the key is
 /// in scope), or say `isolated = true` on the stack.
 fn collisions(e: &Evaluated, stack_file: &Path, read: Reader) -> Vec<Action> {
@@ -268,7 +268,7 @@ fn collisions(e: &Evaluated, stack_file: &Path, read: Reader) -> Vec<Action> {
             let written = text.get(*start..*end).unwrap_or_default();
             if written.matches(&quoted).count() == 1 {
                 let i = start + written.find(&quoted).unwrap_or_default();
-                let with = format!("\"{name}-{{{}}}\"", keys[0]);
+                let with = format!("\"{name}-${{{}}}\"", keys[0]);
                 out.push(
                     Action::new(
                         format!("derive the name from the key: {with}"),

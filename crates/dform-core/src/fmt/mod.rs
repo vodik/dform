@@ -308,7 +308,7 @@ mod tests {
 
     #[test]
     fn a_formatted_file_prints_back_unchanged() {
-        let src = "edition 2026\n\n# c\np(a, \"b\") if\n  {\n    q(x)\n    x != 1\n  }\n";
+        let src = "edition 2026\n\n# c\np(a, \"b\") if q(a), a != 1\n";
         assert_eq!(fmt(src), src);
     }
 
@@ -319,45 +319,39 @@ mod tests {
             "p(a, b) if q(x), x > 1\nresource net.vpc main { cidr = \"x\", tags = { a: 1 } }\n"
         );
         assert_eq!(
-            fmt("module m {\np(x) if\nq(x)\n}\n"),
-            "module m {\n  p(x) if\n    q(x)\n}\n"
+            fmt("module m {\np(x) if q(x)\n}\n"),
+            "module m {\n  p(x) if q(x)\n}\n"
         );
-        assert_eq!(
-            fmt("p(m.i/n.x,a /b,t[e].p)\n"),
-            "p(m.i/n.x, a / b, t[e].p)\n"
-        );
+        assert_eq!(fmt("p(a /b,t[e].p)\n"), "p(a / b, t[e].p)\n");
     }
 
+    /// A body that fits the line is written on it (section 3's normal
+    /// form); one that does not keeps its braces, a literal per line.
     #[test]
-    fn clauses_and_bodies_indent() {
-        let src = "resource t n {\n\
-                     if {\n\
-                       a(x)\n\
-                       b(x)\n\
-                     }\n\
-                     f = x\n\
-                   }\n\
-                   deny \"m\" { x } if {\n\
-                     a(x)\n\
-                     not b(x)\n\
-                   }\n\
-                   ";
-        assert_eq!(fmt(src), src);
+    fn a_body_goes_on_one_line_when_it_fits() {
         assert_eq!(
-            fmt("resource t n {\nif {\n  a(x)\n  b(x)\n}\nf = x\n}\n"),
-            "resource t n {\n  if {\n    a(x)\n    b(x)\n  }\n  f = x\n}\n"
+            fmt(
+                "resource t n {\nif {\n  a(x)\n  b(x)\n}\nf = x\n}\ndeny \"m\" { x } if {\na(x)\nnot b(x)\n}\n"
+            ),
+            "resource t n {\n  if a(x), b(x)\n  f = x\n}\ndeny \"m\" { x } if a(x), not b(x)\n"
+        );
+        let long = "p(x) if {\n  q(x, \"a rather long string that fills the line\")\n  \
+                    r(x, \"and another one that runs past its end\")\n}\n";
+        assert_eq!(fmt(long), long);
+        assert_eq!(
+            fmt(
+                "p(x) if q(x, \"a rather long string that fills the line\"), r(x, \"and another one that runs past its end\")\n"
+            ),
+            long
         );
     }
 
     #[test]
     fn commas_a_newline_makes_redundant_are_dropped() {
         assert_eq!(
-            fmt("resource t n {\n  a = 1,\n  b = [1, 2,],\n}\np(x) if {\n  q(x),\n  r(x)\n}\n"),
-            "resource t n {\n  a = 1\n  b = [1, 2]\n}\np(x) if {\n  q(x)\n  r(x)\n}\n"
+            fmt("resource t n {\n  a = 1,\n  b = [1, 2,],\n}\n"),
+            "resource t n {\n  a = 1\n  b = [1, 2]\n}\n"
         );
-        // A line that ends with a comma continues the body: it stays.
-        let src = "p(x) if {\n  q(x)\n  r(x)\n}\n";
-        assert_eq!(fmt(src), src);
     }
 
     #[test]

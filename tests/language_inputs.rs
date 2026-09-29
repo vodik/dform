@@ -17,7 +17,7 @@ resource net.vpc main {
   owner = o
 }
 resource net.subnet s {
-  if nets(ns), member(ns, i, n), s = format("s%s", i)
+  if nets(ns), n = ns[i], s = format("s%s", i)
   cidr = n
 }
 "#;

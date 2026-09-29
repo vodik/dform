@@ -55,11 +55,7 @@ fn a_deny_reading_a_stuck_predicate_may_derive_after_the_tick() {
     s.write(
         "extra.df",
         r#"edition 2026
-deny "no nodepool in zone z" {pool: n} if
-  {
-    want("gke_nodepool", n)
-    arg("gke_nodepool", n, "zone", "us-east1-z")
-  }
+deny "no nodepool in zone z" {pool: n} if n in gke_nodepool, arg(gke_nodepool, n, "zone", "us-east1-z")
 "#,
     );
     let r = gke(&s, &["extra.df"], "plan").success();
@@ -164,10 +160,11 @@ fn shadowed_and_conflicts_are_sections() {
         r#"edition 2026
 
 resource net.vpc main { cidr = "10.0.0.0/16" }
-arg(net.vpc, "main", "cidr", "10.1.0.0/16")
+set main.cidr = "10.1.0.0/16" if ok(1)
 resource net.vpc two @default { cidr = "10.0.0.0/16" }
-arg(net.vpc, "two", "cidr", "10.9.0.0/16", "default")
-arg(net.vpc, "two", "cidr", "10.3.0.0/16")
+set two.cidr = "10.9.0.0/16" @default if ok(1)
+set two.cidr = "10.3.0.0/16" if ok(1)
+ok(1)
 "#,
     );
     let r = s
@@ -183,7 +180,7 @@ arg(net.vpc, "two", "cidr", "10.3.0.0/16")
     for want in [
         "shadowed:\n! net.vpc[\"two\"].cidr at rank default: two contributions disagree at cidr\n",
         "conflicts:\n! net.vpc[\"main\"].cidr: two contributions disagree\n    normal \"10.0.0.0/16\"  from arg(\"net.vpc\", \"main\", \"cidr\", \"10.0.0.0/16\", \"normal\") (at p.df:3:25)\n",
-        "    normal \"10.1.0.0/16\"  from arg(\"net.vpc\", \"main\", \"cidr\", \"10.1.0.0/16\", \"normal\") (at p.df:4:1)\n",
+        "    normal \"10.1.0.0/16\"  from arg(\"net.vpc\", \"main\", \"cidr\", \"10.1.0.0/16\", \"normal\") :- ok(1) (at p.df:4:1)\n",
     ] {
         assert!(r.stdout.contains(want), "{want}\n---\n{}", r.stdout);
     }
@@ -200,7 +197,8 @@ fn a_conflict_at_a_sensitive_path_is_redacted_in_the_plan() {
         r#"edition 2026
 
 resource leaky.vault v { password = "VAULT-SECRET-A" }
-arg(leaky.vault, "v", "password", "VAULT-SECRET-B")
+set v.password = "VAULT-SECRET-B" if ok(1)
+ok(1)
 "#,
     );
     let schema = repo().join("tests/fixtures/providers/leaky/schema.df");

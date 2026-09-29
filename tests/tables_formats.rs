@@ -11,10 +11,10 @@ fn program(format: &str) -> String {
     format!(
         r#"edition 2026
 
-input relation peering(env: enum("dev", "prod"), name: string, port: int, cidr: inet, on: bool) from {format}("data/p.{format}")
+input peering(env: enum("dev", "prod"), name: string, port: int, cidr: inet, on: bool) from {format}("data/p.{format}")
 
-resource net.vpc "v-{{name}}" {{
-  for peering{{ env: "dev", name: name, port: port, cidr: c, on: true }}
+resource net.vpc "v-${{name}}" {{
+  if peering(env: "dev", name: name, port: port, cidr: c, on: true)
   cidr = inet_str(c)
   port = port
 }}
@@ -79,8 +79,7 @@ fn every_format_reads_typed_rows() {
             r.stdout
         );
         assert!(
-            r.stdout
-                .contains("  let cidr = \"10.1.0.0/16\"\n  let port = 443"),
+            r.stdout.contains("  cidr = \"10.1.0.0/16\"\n  port = 443"),
             "{format}: {}",
             r.stdout
         );
@@ -207,7 +206,7 @@ fn a_table_whose_source_reads_its_rows_is_a_compile_error() {
     let r = s.run(&["plan", "p.df"]).failure();
     assert!(
         r.stderr
-            .contains("p.df:2:34: input relation t: its source reads its own rows"),
+            .contains("p.df:2:25: input relation t: its source reads its own rows"),
         "{}",
         r.stderr
     );

@@ -102,7 +102,7 @@ fn fresh_nulls_still_flow() {
 #[test]
 fn a_pending_group_is_refused_and_allow_stuck_relaxes_per_key() {
     let s = Scratch::project("lang-strict-allow");
-    let program = "edition 2026\nstack p { unknowns = \"strict\" }\nresource db.postgres a {}\nup(d) if attr(db.postgres, d, \"endpoint\", e), e != \"\"\nresource net.subnet s {\n  if up(\"a\")\n  cidr = \"10.0.1.0/24\"\n}\n";
+    let program = "edition 2026\nstack p { unknowns = \"strict\" }\nresource db.postgres a {}\nup(d) if e = db.postgres[d].endpoint, e != \"\"\nresource net.subnet s {\n  if up(\"a\")\n  cidr = \"10.0.1.0/24\"\n}\n";
     s.write("p.df", program);
     let r = s.run(&["plan", "p.df"]).failure();
     assert!(

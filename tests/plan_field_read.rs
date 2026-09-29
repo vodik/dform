@@ -29,7 +29,7 @@ resource net.subnet a {
     )
     .success();
     assert!(r.stderr.contains(MSG), "{}", r.stderr);
-    for want in [r#""resource":"net.subnet.a""#, r#""at":"p.df:5:14""#] {
+    for want in [r#""resource":"net.subnet.a""#, r#""at":"p.df:5:15""#] {
         assert!(r.stderr.contains(want), "{want}: {}", r.stderr);
     }
     assert!(!r.stdout.contains("net.subnet[\"a\"]"), "{}", r.stdout);
@@ -87,6 +87,6 @@ resource net.subnet a {
     .failure();
     assert!(r.stderr.contains("constraint violations"), "{}", r.stderr);
     assert!(r.stderr.contains(MSG), "{}", r.stderr);
-    assert!(r.stderr.contains(r#""at":"p.df:6:14""#), "{}", r.stderr);
+    assert!(r.stderr.contains(r#""at":"p.df:6:15""#), "{}", r.stderr);
     assert!(r.stderr.contains("blocked by constraints"), "{}", r.stderr);
 }

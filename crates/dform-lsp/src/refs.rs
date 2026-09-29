@@ -459,6 +459,14 @@ pub fn classify(d: &Decls, t: &SyntaxToken) -> What {
             }
         }
         SyntaxKind::CHAIN => chain(d, &parent, t, &scope),
+        // `{ env }`: the field's value is the name's.
+        SyntaxKind::OBJECT_FIELD
+            if !own_tokens(&parent)
+                .iter()
+                .any(|x| x.kind() == SyntaxKind::COLON) =>
+        {
+            used(d.let_(&scope, &name).or_else(|| d.value(&scope, &name)))
+        }
         _ => What::Other,
     }
 }
@@ -669,6 +677,85 @@ pub fn indexed(files: &[Parsed], m: &str) -> bool {
     })
 }
 
+/// Every address written as a string at the top of a program (H-16):
+/// the key of `T["a"]` and the left of `"a" in T`, with its type and value.
+/// Inside a module `T[e]` is relative to the instance, so those are left.
+pub fn addresses(files: &[Parsed]) -> Vec<(&Parsed, SyntaxToken, String, String)> {
+    let mut out = Vec::new();
+    let literal = |t: &SyntaxToken| {
+        (t.kind() == SyntaxKind::STRING && !t.text().contains("${"))
+            .then(|| dform_core::syntax::resolve::unescape(t.text()).ok())
+            .flatten()
+    };
+    let type_name = |c: &SyntaxNode| -> Option<String> {
+        let mut name = String::new();
+        for e in c.children_with_tokens() {
+            match e {
+                rowan::NodeOrToken::Token(t) if t.kind().is_trivia() => {}
+                rowan::NodeOrToken::Token(t)
+                    if matches!(t.kind(), SyntaxKind::IDENT | SyntaxKind::DOT) =>
+                {
+                    name.push_str(t.text())
+                }
+                _ => break,
+            }
+        }
+        (!name.is_empty()).then_some(name)
+    };
+    for f in files {
+        for n in f.tree.descendants() {
+            if n.ancestors().any(|a| a.kind() == SyntaxKind::MODULE) {
+                continue;
+            }
+            match n.kind() {
+                SyntaxKind::CHAIN => {
+                    let Some(ix) = n.children().find(|c| c.kind() == SyntaxKind::INDEX) else {
+                        continue;
+                    };
+                    let toks: Vec<SyntaxToken> = ix
+                        .descendants_with_tokens()
+                        .filter_map(|e| e.into_token())
+                        .filter(|t| {
+                            !t.kind().is_trivia()
+                                && !matches!(
+                                    t.kind(),
+                                    SyntaxKind::L_BRACKET | SyntaxKind::R_BRACKET
+                                )
+                        })
+                        .collect();
+                    if let ([t], Some(typ)) = (toks.as_slice(), type_name(&n))
+                        && let Some(v) = literal(t)
+                    {
+                        out.push((f, t.clone(), typ, v));
+                    }
+                }
+                SyntaxKind::LIT_IN | SyntaxKind::LIT_NOT_IN => {
+                    let mut kids = n.children();
+                    let (Some(lhs), Some(rhs)) = (kids.next(), kids.next()) else {
+                        continue;
+                    };
+                    let toks: Vec<SyntaxToken> = lhs
+                        .descendants_with_tokens()
+                        .filter_map(|e| e.into_token())
+                        .filter(|t| !t.kind().is_trivia())
+                        .collect();
+                    let rhs = rhs
+                        .descendants()
+                        .find(|c| c.kind() == SyntaxKind::CHAIN)
+                        .or_else(|| (rhs.kind() == SyntaxKind::CHAIN).then(|| rhs.clone()));
+                    if let ([t], Some(typ)) = (toks.as_slice(), rhs.as_ref().and_then(type_name))
+                        && let Some(v) = literal(t)
+                    {
+                        out.push((f, t.clone(), typ, v));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
 /// Every string literal that is exactly `value` (no holes), by file.
 pub fn strings<'p>(files: &'p [Parsed], value: &str) -> Vec<(&'p Parsed, SyntaxToken)> {
     let quoted = format!("{value:?}");
@@ -801,6 +888,7 @@ input env: string = "staging"
 let cfg = settings[env]
 module network {
   input vpc_net: inet
+  # its interface: an input, a resource and an output
   resource net.vpc vpc {
     cidr = vpc_net
     tags = { env: env }
@@ -810,7 +898,7 @@ module network {
 }
 instance network main { vpc_net = inet(cfg.a) }
 resource compute.vm bastion { private_ip = 1 }
-p(a) if a = network.main/vpc.id, b = network[a].vpc, compute.vm.bastion.id == 1, exists bastion
+p(a) if a = net.vpc["network.main::vpc"].id, c = network.main.vpc, b = network[a].vpc, bastion.id == 1, bastion in compute.vm
 zone_index("a", 0)
 "#;
 
@@ -833,10 +921,11 @@ zone_index("a", 0)
     }
 
     #[test]
-    fn a_resource_is_found_by_every_spelling_of_its_address() {
+    fn a_resource_is_found_by_its_name() {
+        // Its address from outside, `net.vpc["network.main::vpc"]`, is a string.
         assert_eq!(
             names(SRC, &Symbol::Resource(Some("network".into()), "vpc".into())),
-            vec![(6, true), (10, false), (11, false), (15, false)]
+            vec![(6, true), (10, false), (11, false)]
         );
         assert_eq!(
             names(SRC, &Symbol::Resource(None, "bastion".into())),

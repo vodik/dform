@@ -21,13 +21,13 @@ deny "size is small" if size(s), s > 5
 
 scenario prod {
   set env = "prod"
-  deny "prod has a database" if not want(db.postgres, "main")
+  deny "prod has a database" if not main in db.postgres
 }
 
 scenario dev_is_small {
   set env = "dev"
   set size = 9
-  deny "dev has no database" if want(db.postgres, _)
+  deny "dev has no database" if _ in db.postgres
 }
 "#;
 

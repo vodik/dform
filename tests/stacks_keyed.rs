@@ -383,7 +383,7 @@ fn a_fixed_bucket_in_a_block_that_reads_the_key_is_a_warning() {
         .success();
     assert!(
         r.stdout
-            .contains("  set net.vpc[\"main\"].name = \"main-staging\"\n"),
+            .contains("  net.vpc[\"main\"].name = \"main-staging\"\n"),
         "{}",
         r.stdout
     );

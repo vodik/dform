@@ -390,7 +390,7 @@ pub fn key_collisions(
             let text = format!(
                 "{at}{} does not depend on the stack's key ({}): every deployment of \
                  {stack} gives it this name, and they collide; derive it from the key \
-                 (\"...{{{}}}\"), or say `isolated = true` on the stack when each key value \
+                 (\"...${{{}}}\"), or say `isolated = true` on the stack when each key value \
                  deploys into its own account",
                 n.text(),
                 keys.join(", "),

@@ -12,7 +12,7 @@ stack app[env] {}
 input env: enum("staging", "prod") = "staging"
 resource net.vpc main {
   cidr = "10.0.0.0/16"
-  tags = { env: env }
+  tags = { env }
 }
 "#;
 
@@ -308,8 +308,8 @@ fn a_default_yields_to_the_stack_statement() {
     let two_phase = |stack: &str| {
         format!(
             "edition 2026\n{stack}\nresource db.postgres main {{ size = 1 }}\n\
-             resource compute.vm app {{\n  for want(\"db.postgres\", \"main\"), \
-             e = ref(db.postgres, \"main\", \"endpoint\"), e != \"\"\n  size = 1\n}}\n"
+             resource compute.vm app {{\n  if main in db.postgres, \
+             e = main.endpoint, e != \"\"\n  size = 1\n}}\n"
         )
     };
     s.write("stacks/p.df", &two_phase("stack p {}"));
@@ -552,7 +552,7 @@ stack paths {}
 provider cloud { source = "providers/cloud" }
 extern file.text(+path, -value)
 input peer(name: string) from csv("data/peers.csv")
-input relation tag/1 from file("data/tags.facts")
+input tag(t) from facts("data/tags.facts")
 note(v) if v = file.text["data/note.txt"]
 resource x.thing "${n}" {
   if peer(name: n), tag(g), note(v)

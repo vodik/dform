@@ -996,7 +996,7 @@ fn a_type_built_at_runtime_gets_the_whole_schema() {
     s.write(
         "k8s_demo.df",
         &format!(
-            "{}\nwant(t, \"batch\") if k = \"job\", t = \"k8s.batch.v1.{{k}}\"\n",
+            "{}\nwant(t, \"batch\") if k = \"job\", t = \"k8s.batch.v1.${{k}}\"\n",
             s.read("k8s_demo.df")
         ),
     );
@@ -1320,7 +1320,7 @@ fn an_empty_pod_selector_is_present() {
     let path = "/apis/networking.k8s.io/v1/namespaces/default/networkpolicies/deny";
     assert!(api.get(path).unwrap()["spec"].get("podSelector").is_none());
 
-    s.write("p.df", &program("  set spec.podSelector = {}\n"));
+    s.write("p.df", &program("  spec.podSelector = {}\n"));
     let r = run(&["plan"]).success();
     assert!(
         r.stdout.contains("~ k8s.network_policy[\"deny\"]"),

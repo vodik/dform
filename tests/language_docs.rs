@@ -74,7 +74,12 @@ fn doc_comments_lower_to_doc_facts() {
             row("module", "network", "since", "2026.1"),
             row("input", "network.cidr", "description", "Its range."),
             row("rule", "zone_of", "deprecated", "read zones/1"),
-            row("resource", "compute.vm.one", "description", "The first VM."),
+            row(
+                "resource",
+                "compute.vm[\"one\"]",
+                "description",
+                "The first VM."
+            ),
         ]
     );
 }
@@ -98,7 +103,7 @@ fn a_policy_can_require_docs() {
          \x20 deny \"a module has no owner\" { module: m } if doc(\"module\", m, \"description\", _), not doc(\"module\", m, \"owner\", _)\n\
          \x20 warn \"deprecated\" { item: n, why } if doc(_, n, \"deprecated\", why)\n\
          }\n\
-         apply docs\n",
+         use docs\n",
     );
     let r = s
         .run(&["dev", "--world", "w.json", "plan", "p.df"])

@@ -61,11 +61,7 @@ fn every_leaf_is_a_setting_of_the_deployment() {
             r.stdout
         );
         let r = s.run(&["plan", "p.df"]).success();
-        assert!(
-            r.stdout.contains("  let size = 1\n"),
-            "{format}: {}",
-            r.stdout
-        );
+        assert!(r.stdout.contains("  size = 1\n"), "{format}: {}", r.stdout);
     }
 }
 
@@ -122,5 +118,5 @@ resource db.postgres main {
     );
     s.write("config/dev-eu.yaml", "size: 5\n");
     let r = s.run(&["plan", "p.df"]).success();
-    assert!(r.stdout.contains("  let size = 5\n"), "{}", r.stdout);
+    assert!(r.stdout.contains("  size = 5\n"), "{}", r.stdout);
 }

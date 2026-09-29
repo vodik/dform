@@ -148,6 +148,11 @@ pub fn rename(p: &Project, path: &Path, at: usize, new: &str) -> Result<Renaming
     }
     let found = refs::occurrences(&d, &files, &sym);
     let moves = moves(p, &r);
+    // An address written as a string, `T["m.i::n"]` (H-16).
+    let strings: Vec<_> = refs::addresses(&files)
+        .into_iter()
+        .filter_map(|(f, t, typ, a)| Some((f, t, format!("{:?}", r.address(&typ, &a)?))))
+        .collect();
     let mut edit = |f: &Parsed, s: usize, e: usize, t: String| {
         r.files
             .entry(f.path.clone())
@@ -158,6 +163,10 @@ pub fn rename(p: &Project, path: &Path, at: usize, new: &str) -> Result<Renaming
     for (f, t, _) in &found {
         let range = t.text_range();
         edit(f, range.start().into(), range.end().into(), new.to_string());
+    }
+    for (f, t, to) in strings {
+        let range = t.text_range();
+        edit(f, range.start().into(), range.end().into(), to);
     }
     if let Some((f, at, indent)) = beside(&found)
         && !moves.is_empty()

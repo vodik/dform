@@ -1840,16 +1840,10 @@ impl<'u> Lowerer<'u> {
     fn clauses(&mut self, rc: &mut Rc, block: &SyntaxNode) -> L<Vec<Lit>> {
         let mut out = Vec::new();
         let mut failed = false;
-        for c in block.children() {
-            match c.kind() {
-                CLAUSE => match node(&c, BODY) {
-                    Some(b) => match self.body(rc, &b) {
-                        Ok(ls) => out.extend(ls),
-                        Err(Skip) => failed = true,
-                    },
-                    None => failed = true,
-                },
-                _ => {}
+        for c in block.children().filter(|c| c.kind() == CLAUSE) {
+            match node(&c, BODY).map(|b| self.body(rc, &b)) {
+                Some(Ok(ls)) => out.extend(ls),
+                _ => failed = true,
             }
         }
         if failed { Err(Skip) } else { Ok(out) }
@@ -2364,11 +2358,13 @@ impl<'u> Lowerer<'u> {
         let span = self.span(n);
         let kw = tokens(n).next().ok_or(Skip)?;
         let msg = tokens(n).find(|t| t.kind() == STRING).ok_or(Skip)?;
-        let message = self.string(&msg)?;
         let mut rc = self.rc(n, scope, outer);
         let mut body = self.opt_body(&mut rc, n)?;
         let has_body = node(n, BODY).is_some();
-        let mut args = vec![str_term(&message)];
+        // The message is a string like any other: `${e}` reads the body's
+        // variables (H-13).
+        let message = self.string_term(&mut rc, &msg, &mut body)?;
+        let mut args = vec![message];
         if let Some(o) = node(n, OBJECT) {
             args.push(self.term(&mut rc, &o, Pos::Whole, &mut body)?);
         }
@@ -2763,8 +2759,12 @@ impl<'u> Lowerer<'u> {
             // name is its address; a computed name is bound first.
             let lhs = match Chain::of(lhs_node) {
                 Some(c) if c.is_bare() && self.resource(rc.scope, &c.head).is_some() => {
-                    let (_, a) = self.reference(rc, &c, out, span)?;
-                    a
+                    // The type on the right picks among resources of one name.
+                    let named = self.resource(rc.scope, &c.head).unwrap_or_default();
+                    match &typ {
+                        Some(Term::Val(Value::Str(t))) if named.contains(t) => str_term(&c.head),
+                        _ => self.reference(rc, &c, out, span)?.1,
+                    }
                 }
                 _ => {
                     let t = self.term(rc, lhs_node, Pos::Content, out)?;
@@ -3396,6 +3396,10 @@ impl<'u> Lowerer<'u> {
 
     /// A bare name: a variable, unless it names something no variable may.
     fn bare(&mut self, rc: &mut Rc, h: &str, span: Span) -> L<Res> {
+        // A type named by one word (`gke_nodepool`) is that type.
+        if !rc.vars.contains_key(h) && self.decls.types.contains(h) {
+            return Ok(Res::Type(h.to_string()));
+        }
         if !rc.vars.contains_key(h) {
             let what = if self.resource(rc.scope, h).is_some() {
                 Some("the resource")
@@ -4342,6 +4346,19 @@ mod tests {
         assert!(
             e.contains("`let x` is a settings row in one row and a value in another"),
             "{e}"
+        );
+    }
+
+    #[test]
+    fn the_type_after_in_picks_among_resources_of_one_name() {
+        let got = lower(
+            "resource db.postgres main {}\n\
+             resource net.vpc main {}\n\
+             ok(1) if main in db.postgres\n",
+        );
+        assert_eq!(
+            got.last().unwrap(),
+            "ok(1) :- want(\"db.postgres\", \"main\")"
         );
     }
 
