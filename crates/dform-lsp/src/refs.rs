@@ -518,7 +518,7 @@ fn chain(d: &Decls, c: &SyntaxNode, t: &SyntaxToken, scope: &Scope) -> What {
     // 4: a resource in scope (bare, only where a bare name is an address).
     let addressed = context == Some(SyntaxKind::OUTPUT_DECL)
         || (context == Some(SyntaxKind::LIT_IN)
-        && c.parent().and_then(|p| p.first_child()).as_ref() == Some(c));
+            && c.parent().and_then(|p| p.first_child()).as_ref() == Some(c));
     if (!only || addressed)
         && !matches!(ps.get(1), Some(Part::Index))
         && let Some(s) = d.resource(scope, &name0, None)

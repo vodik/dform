@@ -10,7 +10,7 @@ module network {
 
   resource net.vpc vpc {
     cidr = vpc_net
-    tags = { env: env, component: "network" }
+    tags = { env, component: "network" }
   }
 
   zone_index("us-test-1a", 0)

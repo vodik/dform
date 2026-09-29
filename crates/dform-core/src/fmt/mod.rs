@@ -1,15 +1,18 @@
-//! `dform fmt`: print a file from its lossless tree with whitespace and
-//! commas normalised. Line breaks are the author's (gofmt's rule): a break
-//! between two tokens stays a break, at most one blank line in a row; the
-//! spaces within a line, the indentation, and the commas that a newline
-//! makes redundant are the formatter's. A file already in this form prints
-//! back byte for byte.
+//! `dform fmt`: print a file in its normal forms (proposal H section 3,
+//! [`normal`]) from its lossless tree, with whitespace and commas
+//! normalised. Line breaks are the author's (gofmt's rule) but for a body,
+//! which is on one line when it fits and in braces when it does not: a
+//! break between two tokens stays a break, at most one blank line in a
+//! row; the spaces within a line, the indentation, and the commas that a
+//! newline makes redundant are the formatter's. A file already in this form
+//! prints back byte for byte.
 //!
 //! Indentation: a line is one step deeper than the line that holds the
 //! innermost construct still open at its first token: a bracket, or a
-//! statement, block entry or clause that began on an earlier line (a
-//! continuation). A line that starts with a closer sits at the depth of
-//! the line that opened it.
+//! statement, block entry or clause that began on an earlier line. A line
+//! that starts with a closer sits at the depth of the line that opened it.
+
+mod normal;
 
 use crate::syntax::SyntaxKind::{self, *};
 use crate::syntax::{SyntaxNode, SyntaxToken};
@@ -189,8 +192,28 @@ pub fn format_source(name: &str, src: &str) -> anyhow::Result<String> {
     Ok(format(&parse.syntax()))
 }
 
-/// Format a parsed file. The tree must be free of syntax errors.
+/// Format a parsed file: its normal forms, then its layout. The tree must
+/// be free of syntax errors.
 pub fn format(root: &SyntaxNode) -> String {
+    let mut out = print(root);
+    // A normal form can make another one apply (a body joined onto its
+    // line compares what the line before it bound): to a fixpoint, bounded.
+    for _ in 0..4 {
+        let tree = crate::syntax::parser::parse(&out);
+        let Some(next) = normal::normalize(&tree.syntax(), &out) else {
+            break;
+        };
+        let again = crate::syntax::parser::parse(&next);
+        if !again.errors.is_empty() {
+            break;
+        }
+        out = print(&again.syntax());
+    }
+    out
+}
+
+/// Print a parsed file with its layout normalised.
+fn print(root: &SyntaxNode) -> String {
     let items = items(root);
     let mut out = String::new();
     let mut stack: Vec<Open> = Vec::new();

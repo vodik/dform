@@ -61,7 +61,11 @@ fn every_leaf_is_a_setting_of_the_deployment() {
             r.stdout
         );
         let r = s.run(&["plan", "p.df"]).success();
-        assert!(r.stdout.contains("  let size = 1\n"), "{format}: {}", r.stdout);
+        assert!(
+            r.stdout.contains("  let size = 1\n"),
+            "{format}: {}",
+            r.stdout
+        );
     }
 }
 

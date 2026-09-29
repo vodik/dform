@@ -214,17 +214,17 @@ module app {
   input db_secret: string
   input replicas: int
 
-  let labels = { app: "crud-api", color: color }
+  let labels = { app: "crud-api", color }
 
   resource k8s.deployment deploy {
     metadata.name = "crud-api-${color}"
     metadata.namespace = namespace
-    metadata.labels = { app: "crud-api", color: color, schema: "${schema}" }
+    metadata.labels = { app: "crud-api", color, schema: "${schema}" }
     spec.selector.matchLabels = labels
     spec.template.metadata.labels = labels
     spec.template.spec.containers = [{
       name: "api",
-      image: image,
+      image,
       ports: [{ containerPort: 8080, protocol: "TCP" }],
       envFrom: [{ secretRef: { name: db_secret } }],
       readinessProbe: { httpGet: { path: "/healthz", port: 8080 } },

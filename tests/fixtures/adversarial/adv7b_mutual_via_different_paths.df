@@ -9,10 +9,7 @@ resource net.vpc x {
   z = 1
 }
 
-set x.y = p if {
-    x in net.vpc
-    arg(net.subnet, "y", "x", p)
-  }
+set x.y = p if x in net.vpc, arg(net.subnet, "y", "x", p)
 
 resource net.subnet y {
   if arg(net.vpc, "x", "z", q)

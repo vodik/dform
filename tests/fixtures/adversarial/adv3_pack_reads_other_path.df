@@ -13,8 +13,8 @@ policy p {
   contributes iam.policy.statements
   type_lattice("iam.policy", "statements", "set")
   set p.statements = [{ action: "org.read", resource: "org" }] if {
-      p in iam.policy
-      arg("iam.policy", p, "name", "app")
-    }
+    p in iam.policy
+    arg("iam.policy", p, "name", "app")
+  }
 }
 use p

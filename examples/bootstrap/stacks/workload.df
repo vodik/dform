@@ -46,7 +46,7 @@ resource k8s.deployment web {
   spec.template.metadata.labels = { app: "web" }
   spec.template.spec.containers = [{
     name: "web",
-    image: image,
+    image,
     ports: [{ containerPort: 8080, protocol: "TCP" }]
   }]
 }

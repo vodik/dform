@@ -201,9 +201,10 @@ fn dangling_refs(e: &Evaluated, read: Reader) -> Vec<Action> {
         }
         let lit = format!("{quoted} in {typ}");
         // The block takes one clause (H-3): the guard joins it, or is it.
-        let (at_edit, insert) = match clause.as_ref().and_then(|c| {
-            c.children().find(|b| b.kind() == SyntaxKind::BODY)
-        }) {
+        let (at_edit, insert) = match clause
+            .as_ref()
+            .and_then(|c| c.children().find(|b| b.kind() == SyntaxKind::BODY))
+        {
             Some(body)
                 if body
                     .first_token()

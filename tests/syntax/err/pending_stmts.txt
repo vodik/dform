@@ -1,2 +1,2 @@
-tests/syntax/err/pending_stmts.df:5:1: `decl type ... open` is not yet supported
-  note: it parses; its semantics land with phase 6 "Refinement types, doc annotations, L15 inet"
+tests/syntax/err/pending_stmts.df:5:6: expected a relation name, found `type`
+  help: an open type is not supported: declare the type's attributes with a `type` block

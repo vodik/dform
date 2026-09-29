@@ -3,10 +3,8 @@ edition 2027
 provider fake { source = "providers/fake" }
 stack demo { unknowns = "strict" }
 
-resource net.vpc_peering "peer" {
+resource net.vpc_peering peer {
   requester_vpc_id = a.id
 }
 
-deny "prod db must be multi_az" if {
-  not database.main/db.multi_az
-}
+deny "prod db must be multi_az" if not db.postgres["database.main::db"].multi_az

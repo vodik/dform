@@ -10,6 +10,6 @@ resource net.vpc main {
 }
 
 arg_add(t, n, "tags", { team: "platform" }) if {
-    want(t, n)
-    not arg(t, n, "tags", { team: "platform" })
-  }
+  want(t, n)
+  not arg(t, n, "tags", { team: "platform" })
+}

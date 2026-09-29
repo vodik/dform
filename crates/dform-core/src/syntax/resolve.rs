@@ -164,15 +164,7 @@ fn node(n: &SyntaxNode, k: SyntaxKind) -> Option<SyntaxNode> {
 fn is_term(k: SyntaxKind) -> bool {
     matches!(
         k,
-        LITERAL
-            | CHAIN
-            | CALL
-            | LIST
-            | OBJECT
-            | COMPREHENSION
-            | PAREN
-            | BIN_EXPR
-            | UNARY_EXPR
+        LITERAL | CHAIN | CALL | LIST | OBJECT | COMPREHENSION | PAREN | BIN_EXPR | UNARY_EXPR
     )
 }
 
@@ -443,6 +435,8 @@ pub struct Lowerer<'u> {
     calls: Calls,
     /// Type aliases and where each is in scope.
     aliases: alias::Aliases,
+    /// The outputs declared so far, by scope.
+    outputs: BTreeSet<(usize, String)>,
 }
 
 /// What a call is where it is written.
@@ -478,6 +472,7 @@ impl<'u> Lowerer<'u> {
             core: false,
             calls: Calls::Function,
             aliases: alias::Aliases::default(),
+            outputs: BTreeSet::new(),
         };
         for u in units {
             let scope = l.new_scope(PROGRAM);
@@ -698,6 +693,16 @@ impl<'u> Lowerer<'u> {
 
     // --- scopes -------------------------------------------------------------
 
+    /// The scope a statement lowered in `scope` declares into: a file's top
+    /// level declares into the program.
+    fn decl_scope(&self, scope: usize) -> usize {
+        if self.decls.files.values().any(|s| *s == scope) {
+            PROGRAM
+        } else {
+            scope
+        }
+    }
+
     fn chain_of(&self, scope: usize) -> Vec<usize> {
         let mut out = vec![scope];
         let mut s = scope;
@@ -778,7 +783,10 @@ impl<'u> Lowerer<'u> {
         }
         if c.is_bare() {
             if self.is_value(scope, &c.head) {
-                return self.value_type_depth(scope, &c.head, depth + 1).ok().flatten();
+                return self
+                    .value_type_depth(scope, &c.head, depth + 1)
+                    .ok()
+                    .flatten();
             }
             return match self.resource(scope, &c.head) {
                 Some(types) if types.len() == 1 => Some(VType::Ref(types[0].clone())),
@@ -834,7 +842,6 @@ impl<'u> Lowerer<'u> {
         Err(Skip)
     }
 
-
     // --- files --------------------------------------------------------------
 
     fn unit(&mut self, i: usize, require_edition: bool) -> Vec<Stmt> {
@@ -846,6 +853,7 @@ impl<'u> Lowerer<'u> {
         let mut statements = Vec::new();
         let mut first = true;
         let edition = root.children().any(|n| n.kind() == EDITION);
+        self.quoted_keys(&root);
         let mut import_ix = 0;
         for n in root.children() {
             match n.kind() {
@@ -1115,12 +1123,12 @@ impl<'u> Lowerer<'u> {
                     .get(&pred)
                     .cloned()
                     .unwrap_or_default();
-                if arities.is_empty() {
-                    return self.error(
-                        span,
-                        format!("export {pred}: this module declares no relation {pred}"),
-                    );
-                }
+                // None: the module interface check says so.
+                let arities = if arities.is_empty() {
+                    BTreeSet::from([0])
+                } else {
+                    arities
+                };
                 Ok(arities
                     .into_iter()
                     .map(|arity| {
@@ -1421,14 +1429,29 @@ impl<'u> Lowerer<'u> {
         Ok(out)
     }
 
+    /// A quoted segment `."k"` is one key: `.`, `[` or `]` inside it would
+    /// read as a second segment wherever the path is printed.
+    fn quoted_keys(&mut self, root: &SyntaxNode) {
+        for c in root.descendants().filter(|n| n.kind() == CHAIN) {
+            let mut after_dot = false;
+            for t in c.children_with_tokens().filter_map(|e| e.into_token()) {
+                if t.kind().is_trivia() {
+                    continue;
+                }
+                if after_dot && t.kind() == STRING {
+                    let _ = self.segment(&t);
+                }
+                after_dot = t.kind() == DOT;
+            }
+        }
+    }
+
     fn segment(&mut self, t: &SyntaxToken) -> L<String> {
         let s = self.string(t)?;
         if s.contains(['.', '[', ']']) {
             return self.error(
                 self.span_of(t.text_range()),
-                format!(
-                    "the key {s:?} holds `.`, `[` or `]`, which today's dotted paths cannot carry"
-                ),
+                format!("the key {s:?} holds `.`, `[` or `]`, which a path segment cannot carry"),
             );
         }
         Ok(s)
@@ -1754,11 +1777,16 @@ impl<'u> Lowerer<'u> {
         let span = self.span(n);
         let name = word_text(n, 1);
         let mut out = Vec::new();
-        if let Some(t) = node(n, TYPE_EXPR) {
-            let ty = match self.resource_type(&t) {
+        // The declaration, once per scope (an output may have several rows);
+        // with no type written, any.
+        let ty = match node(n, TYPE_EXPR) {
+            Some(t) => match self.resource_type(&t) {
                 Some(_) => TypeExpr::Name("addr".to_string()),
                 None => self.type_expr(&t),
-            };
+            },
+            None => TypeExpr::Name("any".to_string()),
+        };
+        if self.outputs.insert((scope, name.clone())) {
             out.push(Stmt::Output(OutputDecl {
                 name: name.clone(),
                 ty: Some(ty),
@@ -1767,8 +1795,9 @@ impl<'u> Lowerer<'u> {
             }));
         }
         let Some(t) = terms(n).next() else {
-            let d = Diagnostic::error(span, format!("output {name} has no value"))
-                .with_help(format!("an output is one statement: `output {name}: T = term`"));
+            let d = Diagnostic::error(span, format!("output {name} has no value")).with_help(
+                format!("an output is one statement: `output {name}: T = term`"),
+            );
             self.diags.push(d);
             return Err(Skip);
         };
@@ -2095,7 +2124,9 @@ impl<'u> Lowerer<'u> {
                     lhs.text()
                 ),
             )
-            .with_help(format!("write `{path} = ...` in the block `{block} {{ .. }}`"));
+            .with_help(format!(
+                "write `{path} = ...` in the block `{block} {{ .. }}`"
+            ));
             self.diags.push(d);
             return Err(Skip);
         }
@@ -2121,17 +2152,10 @@ impl<'u> Lowerer<'u> {
     /// What a `set` sets: a cell `(T, A, path)` and, when the block that
     /// owns the cell is declared in the same scope, how that block is
     /// written; or a stack input.
-    fn set_target(
-        &mut self,
-        rc: &mut Rc,
-        c: &Chain,
-        body: &mut Vec<Lit>,
-        span: Span,
-    ) -> L<Target> {
+    fn set_target(&mut self, rc: &mut Rc, c: &Chain, body: &mut Vec<Lit>, span: Span) -> L<Target> {
         let scope = rc.scope;
         // A stack input, set by name.
-        if c.is_bare() && self.is_value(scope, &c.head) && self.find_let(scope, &c.head).is_none()
-        {
+        if c.is_bare() && self.is_value(scope, &c.head) && self.find_let(scope, &c.head).is_none() {
             return Ok(Target::Input(c.head.clone()));
         }
         // A module instance's input: `m.i.k`.
@@ -2143,7 +2167,7 @@ impl<'u> Lowerer<'u> {
                 .get(&c.head)
                 .is_some_and(|s| s.contains(i))
         {
-            let own = self.decls.scopes[scope]
+            let own = self.decls.scopes[self.decl_scope(scope)]
                 .instances
                 .contains(&(c.head.clone(), i.clone()));
             return Ok(Target::Cell(
@@ -2170,7 +2194,7 @@ impl<'u> Lowerer<'u> {
         let Some(path) = path_string(&path) else {
             return self.error(span, "a contribution's path is constant");
         };
-        let s = &self.decls.scopes[scope];
+        let s = &self.decls.scopes[self.decl_scope(scope)];
         let block = match (&typ, &addr) {
             (Term::Val(Value::Str(t)), Term::Val(Value::Str(a))) if t == "settings" => {
                 s.settings.contains(a).then(|| format!("settings {a}"))
@@ -2209,30 +2233,35 @@ impl<'u> Lowerer<'u> {
                 let op = if head.pred == "arg" { "=" } else { "+=" };
                 let (t, p) = (s(0).unwrap(), s(2).unwrap());
                 let target = match t.as_str() {
-                    "settings" => format!("settings[{}].{p}", a[1]),
+                    "settings" => format!("settings[{}]{}", a[1], crate::ir::path_suffix(&p)),
                     crate::modules::INPUT if s(1).as_deref() == Some("") => p.clone(),
                     crate::modules::INPUT => format!("{}.{p}", s(1).unwrap_or_default()),
-                    _ => format!("{t}[{}].{p}", a[1]),
+                    _ => format!("{t}[{}]{}", a[1], crate::ir::path_suffix(&p)),
                 };
                 Some(format!("`set {target} {op} {}{cond}`", a[3]))
             }
             ("setting", 3) if s(1).is_some() => Some(format!(
-                "`set settings[{}].{} = {}{cond}`",
+                "`set settings[{}]{} = {}{cond}`",
                 a[0],
-                s(1).unwrap(),
+                crate::ir::path_suffix(&s(1).unwrap()),
                 a[2]
             )),
             ("output", 2) if s(0).is_some() => {
                 Some(format!("`output {} = {}{cond}`", s(0).unwrap(), a[1]))
             }
-            ("input", 2) if s(0).is_some() => {
-                Some(format!("`set {} = {}{cond}` (in a scenario)", s(0).unwrap(), a[1]))
-            }
+            ("input", 2) if s(0).is_some() => Some(format!(
+                "`set {} = {}{cond}` (in a scenario)",
+                s(0).unwrap(),
+                a[1]
+            )),
             ("deny" | "warn", 1 | 2) if s(0).is_some() => Some(format!(
                 "`{} {}{}{cond}`",
                 head.pred,
                 a[0],
-                a.get(1).map(|o| format!(" {o}")).unwrap_or_default()
+                a.get(1)
+                    .filter(|o| !o.is_empty())
+                    .map(|o| format!(" {o}"))
+                    .unwrap_or_default()
             )),
             _ => None,
         };
@@ -2284,16 +2313,21 @@ impl<'u> Lowerer<'u> {
             ("attr", 4) if s(0).is_some() && s(2).is_some() => (
                 format!("`{}` is the core's spelling of a read", n.text()),
                 format!(
-                    "write `{} = {}[{}].{}` (H-15)",
+                    "write `{} = {}[{}]{}` (H-15)",
                     a[3],
                     s(0).unwrap(),
                     a[1],
-                    s(2).unwrap()
+                    crate::ir::path_suffix(&s(2).unwrap())
                 ),
             ),
             ("setting", 3) if s(1).is_some() => (
                 format!("`{}` is the core's spelling of a read", n.text()),
-                format!("write `{} = settings[{}].{}` (H-15)", a[2], a[0], s(1).unwrap()),
+                format!(
+                    "write `{} = settings[{}]{}` (H-15)",
+                    a[2],
+                    a[0],
+                    crate::ir::path_suffix(&s(1).unwrap())
+                ),
             ),
             ("output", 3) if s(0).is_some() && s(1).is_some() => (
                 format!("`{}` is the core's spelling of a read", n.text()),
@@ -2307,11 +2341,11 @@ impl<'u> Lowerer<'u> {
             ("cloud_attr", 4) if s(0).is_some() && s(2).is_some() => (
                 format!("`{}` is the core's spelling of a read", n.text()),
                 format!(
-                    "write `{} = world.{}[{}].{}` (H-15)",
+                    "write `{} = world.{}[{}]{}` (H-15)",
                     a[3],
                     s(0).unwrap(),
                     a[1],
-                    s(2).unwrap()
+                    crate::ir::path_suffix(&s(2).unwrap())
                 ),
             ),
             ("cloud_exists", 2) if s(0).is_some() => (
@@ -2817,10 +2851,7 @@ impl<'u> Lowerer<'u> {
             .collect();
         if !named.is_empty() {
             if list.iter().any(|l| terms(l).next().is_some()) {
-                return self.error(
-                    span,
-                    "an atom's arguments are all positional or all named",
-                );
+                return self.error(span, "an atom's arguments are all positional or all named");
             }
             let mut fields = BTreeMap::new();
             for f in named {
@@ -3507,9 +3538,7 @@ impl<'u> Lowerer<'u> {
                     path,
                 }))
             }
-            Some(_) => self
-                .error(span, "after an instance: `.output`")
-                .map(Some),
+            Some(_) => self.error(span, "after an instance: `.output`").map(Some),
         }
     }
 
@@ -3530,9 +3559,7 @@ impl<'u> Lowerer<'u> {
             let typ = fields[..i].join(".");
             if self.resource_of_type(rc.scope, &typ, &fields[i]) {
                 let n = &fields[i];
-                let unique = self
-                    .resource(rc.scope, n)
-                    .is_some_and(|ts| ts.len() == 1);
+                let unique = self.resource(rc.scope, n).is_some_and(|ts| ts.len() == 1);
                 let write = if unique {
                     n.clone()
                 } else {
@@ -3544,7 +3571,10 @@ impl<'u> Lowerer<'u> {
                 };
                 let d = Diagnostic::error(
                     span,
-                    format!("`{}` names a resource by a dot after its type", fields[..=i].join(".")),
+                    format!(
+                        "`{}` names a resource by a dot after its type",
+                        fields[..=i].join(".")
+                    ),
                 )
                 .with_help(format!(
                     "a resource in scope is named `{write}` (H-10); `.` is static, `[ ]` a key"
@@ -3848,7 +3878,6 @@ impl<'u> Lowerer<'u> {
     }
 }
 
-
 /// What a `set` sets.
 enum Target {
     /// `(T, A, path)`, and the block that owns the cell when it is
@@ -3868,19 +3897,6 @@ fn arg_texts(n: &SyntaxNode) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default();
-    // Unquote a type or a path the core writes as a string.
-    for s in &mut out {
-        if s.starts_with('"') && s.ends_with('"') && !s[1..s.len() - 1].contains(['"', '$']) {
-            let inner = &s[1..s.len() - 1];
-            if inner
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.'))
-                && !inner.is_empty()
-            {
-                *s = inner.to_string();
-            }
-        }
-    }
     out.resize(out.len().max(5), String::new());
     out
 }
@@ -4138,9 +4154,6 @@ mod tests {
                 Some(match s {
                     Stmt::Rule(r) => fmt_rule(r),
                     Stmt::Fact(a) => fmt_atom(a),
-                    Stmt::Constraint(c) => {
-                        format!("constraint {:?} :- {}", c.message, lits(&c.body))
-                    }
                     Stmt::Resource(r) => {
                         let fields = r
                             .fields
@@ -4178,9 +4191,6 @@ mod tests {
                     Stmt::Output(o) => {
                         format!("output {} = {:?}", o.name, o.value.as_ref().map(fmt_term))
                     }
-                    Stmt::When(w) => {
-                        format!("when {} {}", fmt_lit(&w.guard), show(&w.body).join("; "))
-                    }
                     Stmt::Module(m) => {
                         format!("module {} {{ {} }}", m.name, show(&m.body).join("; "))
                     }
@@ -4190,19 +4200,29 @@ mod tests {
             .collect()
     }
 
-    /// `src` as a file named `t.df` that needs no edition pragma.
-    fn parse(src: &str) -> anyhow::Result<crate::ast::Program> {
-        let file = crate::diag::add_source("t.df", src);
-        let parse = crate::syntax::parser::parse(src);
+    /// `src` lowered as text that is not a file (the core relations
+    /// writable), or, `file`, as a program file (`edition 2027` first).
+    fn parse_as(src: &str, file: bool) -> anyhow::Result<crate::ast::Program> {
+        let src = if file {
+            format!("edition 2027\n{src}")
+        } else {
+            src.to_string()
+        };
+        let file_id = crate::diag::add_source("t.df", &src);
+        let parse = crate::syntax::parser::parse(&src);
         assert!(parse.errors.is_empty(), "{:?}", parse.errors);
         let units = [super::Unit {
-            file,
+            file: file_id,
             root: parse.syntax(),
             imports: None,
             links: Vec::new(),
         }];
-        super::lower(&units, &[0], false, super::Mode::Program)
+        super::lower(&units, &[0], file, super::Mode::Program)
             .map_err(|d| crate::diag::Diagnostics(d).into())
+    }
+
+    fn parse(src: &str) -> anyhow::Result<crate::ast::Program> {
+        parse_as(src, false)
     }
 
     fn lower(src: &str) -> Vec<String> {
@@ -4219,6 +4239,14 @@ mod tests {
         }
     }
 
+    /// The errors of `src` as a program file.
+    fn file_error(src: &str) -> String {
+        match parse_as(src, true) {
+            Ok(p) => panic!("lowered: {:?}", show(&p.statements)),
+            Err(e) => format!("{e:#}"),
+        }
+    }
+
     #[test]
     fn value_names_are_read_by_name() {
         let got = lower(
@@ -4227,8 +4255,7 @@ mod tests {
              r(env) if q(_)\n\
              s(x) if q(x), not env, has env\n\
              let serving = \"blue\" if q(1)\n\
-             t(serving)\n\
-             ",
+             t(serving)\n",
         );
         assert_eq!(
             &got[..],
@@ -4243,11 +4270,19 @@ mod tests {
     }
 
     /// The worked example of the proposal (section 5.6): the block's reads
-    /// follow its `for` clause, the interpolated name comes last.
+    /// follow its clause, the interpolated name comes last.
     #[test]
     fn a_resource_block_lowers_to_its_shared_body() {
         let got = lower(
-            "resource net.vpc vpc { cidr = \"10.0.0.0/16\" }\nzone_index(\"a\", 0)\nresource net.subnet \"private-${z}\" {\nif data(\"zone\", z)\nvpc_id     = vpc.id\ncidr       = inet_subnet(vpc.cidr, 4, zone_index[z])\nzone       = z\nvisibility = \"private\"\n}\n",
+            "resource net.vpc vpc { cidr = \"10.0.0.0/16\" }\n\
+             zone_index(\"a\", 0)\n\
+             resource net.subnet \"private-${z}\" {\n\
+               if data(\"zone\", z)\n\
+               vpc_id     = vpc.id\n\
+               cidr       = inet_subnet(vpc.cidr, 4, zone_index[z])\n\
+               zone       = z\n\
+               visibility = \"private\"\n\
+             }\n",
         );
         assert_eq!(
             got[2],
@@ -4262,8 +4297,8 @@ mod tests {
     fn a_dot_is_a_reference_in_a_field_and_a_read_elsewhere() {
         let got = lower(
             "resource k8s.namespace web { name = \"web\" }\n\
-             resource k8s.deployment a { namespace = k8s.namespace.web.name }\n\
-             resource k8s.deployment b {\n  if ns = k8s.namespace.web.name\n  namespace = ns\n}\n\
+             resource k8s.deployment a { namespace = web.name }\n\
+             resource k8s.deployment b {\n  if ns = web.name\n  namespace = ns\n}\n\
              p(web.name, x) if x = web.name\n",
         );
         assert_eq!(
@@ -4276,44 +4311,60 @@ mod tests {
         );
     }
 
+    /// H-6: a `let` holding a reference is a value, its key, and a dot on
+    /// it reads through the reference.
     #[test]
-    fn a_let_names_a_settings_row() {
+    fn a_let_holding_a_reference_reads_through_it() {
         let got = lower(
             "input env: string = \"dev\"\n\
+             resource db.pg other { size = 1 }\n\
              let cfg = settings[env]\n\
              resource net.vpc v { cidr = cfg.net.cidr, name = \"${cfg.name}-vpc\" }\n\
-             deny \"x\" if cfg.x.y != \"z\"\n\
-             ",
+             let pg = db.pg[\"main\"]\n\
+             deny \"x\" if cfg.x.y != \"z\", pg.size > 3\n",
         );
         assert_eq!(
-            &got[..],
+            &got[1..],
             [
+                "cfg(Env) :- env(Env)",
                 "resource \"net.vpc\" \"v\" { cidr = Cidr, name = format(\"%s-vpc\", Name) } :- \
-                 env(Env), setting(Env, \"net.cidr\", Cidr), setting(Env, \"name\", Name)",
-                "constraint \"x\" :- env(Env), setting(Env, \"x.y\", Y), Y != \"z\"",
+                 cfg(Cfg), setting(Cfg, \"net.cidr\", Cidr), setting(Cfg, \"name\", Name)",
+                "pg(\"main\")",
+                "deny(\"x\") :- cfg(Cfg), setting(Cfg, \"x.y\", Y), Y != \"z\", pg(Pg), \
+                 attr(\"db.pg\", Pg, \"size\", Size), Size > 3",
             ]
+        );
+        let e = error("let x = settings[\"a\"]\nlet x = 1 if q(1)\np(x.y) if q(1)\n");
+        assert!(
+            e.contains("`let x` is a settings row in one row and a value in another"),
+            "{e}"
         );
     }
 
     #[test]
-    fn membership_existence_and_negation() {
+    fn membership_indexing_and_negation() {
         let got = lower(
             "resource db.postgres pg { public = false }\n\
              deny \"public\" { resource: p } if p in db.postgres, not p.public == false\n\
              set r.tags = { team: \"x\" } if r in resource\n\
-             q(x) if x = [1, 2][i], i >= 0, x not in [3]\n\
-             ok(1) if exists pg, has pg.public, not exists db.postgres[\"other\"]\n\
+             let xs = [1, 2]\n\
+             let ys = [{ name: \"a\", net: 1 }]\n\
+             q(x) if x = xs[i], i >= 0, x not in [3]\n\
+             ok(1) if pg in db.postgres, has pg.public, not \"other\" in db.postgres\n\
              big(n) if n in world.net.vpc, world.net.vpc[n].size > 3\n\
-             ",
+             pair(n, c) if ys[_] = { name: n, net: c }\n",
         );
         assert_eq!(
             &got[1..],
             [
                 "deny(\"public\", {resource: P}) :- want(\"db.postgres\", P), not attr(\"db.postgres\", P, \"public\", false)",
                 "arg(Type, R, \"tags\", {team: \"x\"}) :- want(Type, R)",
-                "q(X) :- member([1, 2], I, X), I >= 0, not member([3], X)",
+                "xs([1, 2])",
+                "ys([{name: \"a\", net: 1}])",
+                "q(X) :- xs(Xs), member(Xs, I, Item), X = Item, I >= 0, not member([3], X)",
                 "ok(1) :- want(\"db.postgres\", \"pg\"), attr(\"db.postgres\", \"pg\", \"public\", _), not want(\"db.postgres\", \"other\")",
                 "big(N) :- cloud_exists(\"net.vpc\", N), cloud_attr(\"net.vpc\", N, \"size\", Size), Size > 3",
+                "pair(N, C) :- ys(Ys), member(Ys, _, {name: N, net: C})",
             ]
         );
     }
@@ -4321,23 +4372,24 @@ mod tests {
     #[test]
     fn modules_instances_and_outputs() {
         let got = lower(
-            "module m {\n  input n: int\n  output vpc: net.vpc\n  output ids: list(string)\n  \
-             resource net.vpc vpc { size = n }\n  output vpc = vpc\n  output ids = [vpc.id]\n}\n\
+            "module m {\n  input n: int\n  resource net.vpc vpc { size = n }\n  \
+             output vpc: net.vpc = vpc\n  output ids: list(string) = [vpc.id]\n}\n\
              instance m a { n = 1 }\n\
              inst(\"a\")\n\
-             p(v, s) if inst(i), v = m[i].vpc, s = m.a/vpc.size\n\
-             q(x) if x = m.a.ids, exists m.a/vpc\n",
+             p(v, s) if inst(i), v = m[i].vpc, s = m.a.vpc.size\n\
+             q(x) if x = m.a.ids, \"m.a::vpc\" in net.vpc\n",
         );
         assert_eq!(
             got[0],
-            "module m { output vpc = None; output ids = None; resource \"net.vpc\" \"vpc\" { size = N } :- n(N); output vpc = Some(\"\\\"vpc\\\"\"); \
+            "module m { resource \"net.vpc\" \"vpc\" { size = N } :- n(N); output vpc = None; \
+             output vpc = Some(\"\\\"vpc\\\"\"); output ids = None; \
              output ids = Some(\"[ref(\\\"net.vpc\\\", \\\"vpc\\\", \\\"id\\\")]\") }"
         );
         assert_eq!(
             &got[3..],
             [
-                "p(V, S) :- inst(I), output(format(\"m.%s\", I), \"vpc\", V), attr(\"net.vpc\", scoped(\"m.a\", \"vpc\"), \"size\", S)",
-                "q(X) :- output(\"m.a\", \"ids\", X), want(\"net.vpc\", scoped(\"m.a\", \"vpc\"))",
+                "p(V, S) :- inst(I), output(format(\"m.%s\", I), \"vpc\", V), output(\"m.a\", \"vpc\", Vpc), attr(\"net.vpc\", Vpc, \"size\", S)",
+                "q(X) :- output(\"m.a\", \"ids\", X), want(\"net.vpc\", \"m.a::vpc\")",
             ]
         );
     }
@@ -4346,14 +4398,14 @@ mod tests {
     fn interpolation_and_lookups() {
         let got = lower(
             "extern file.json(+path, -value)\n\
-             p(\"{{x}} {x}%\") if q(x)\n\
+             p(\"{x} $${x} ${x}%\") if q(x)\n\
              r(v) if v = file.json[\"a.json\"]\n\
-             s(y) if q(x), y = \"n-{x}\", \"n-{x}\" in net.route\n",
+             s(y) if q(x), y = \"n-${x}\", \"n-${x}\" in net.route\n",
         );
         assert_eq!(
             &got[..],
             [
-                "p(format(\"{x} %s%\", X)) :- q(X)",
+                "p(format(\"{x} ${x} %s%\", X)) :- q(X)",
                 "r(V) :- file.json(\"a.json\", V)",
                 "s(Y) :- q(X), Y = format(\"n-%s\", X), Name = format(\"n-%s\", X), want(\"net.route\", Name)",
             ]
@@ -4394,16 +4446,14 @@ mod tests {
         );
     }
 
+    /// H-4: a statement's own `if` is its condition.
     #[test]
-    fn when_and_for_nest_their_guards() {
+    fn a_statement_takes_its_condition() {
         let got = lower(
-            "input env: string = \"dev\"\nwhen env == \"prod\" { a(1) }\n\
-             for e(x), f(x) { b(x) }\n",
+            "input env: string = \"dev\"\na(1) if env == \"prod\"\n\
+             b(x) if e(x), f(x)\n",
         );
-        assert_eq!(
-            &got[..],
-            ["when env(\"prod\") a(1)", "when e(X) when f(X) b(X)",]
-        );
+        assert_eq!(&got[..], ["a(1) :- env(\"prod\")", "b(X) :- e(X), f(X)"]);
     }
 
     #[test]
@@ -4430,14 +4480,21 @@ mod tests {
     }
 
     #[test]
-    fn a_name_used_twice_needs_its_type() {
+    fn a_name_used_twice_is_named_by_its_address() {
         let e = error(
             "resource k8s.namespace web { n = 1 }\nresource k8s.service web { n = 1 }\n\
              resource x.y z { a = web.n }\n",
         );
         assert!(
-            e.contains("`web` names 2 resources: write one of k8s.namespace.web, k8s.service.web"),
+            e.contains(
+                "`web` names 2 resources: write one of k8s.namespace[\"web\"], k8s.service[\"web\"]"
+            ),
             "{e}"
+        );
+        // Named by its address, the second resource `web` is not an error.
+        lower(
+            "resource k8s.namespace web { n = 1 }\nresource k8s.service web { n = 1 }\n\
+             resource x.y z { a = k8s.service[\"web\"].n }\n",
         );
     }
 
@@ -4463,5 +4520,68 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    /// The compiler errors that name the one spelling (H-5, H-7, H-8,
+    /// H-10, H-15).
+    #[test]
+    fn a_second_spelling_is_an_error_naming_the_first() {
+        for (src, want) in [
+            // H-5: an unconditional `set` on a block of the same scope.
+            (
+                "resource net.vpc main { cidr = \"x\" }\nset main.tags = {}\n",
+                "an entry of `resource net.vpc main`",
+            ),
+            (
+                "input env: string = \"dev\"\nset env = \"prod\"\n",
+                "sets the program's own input",
+            ),
+            // H-7: an output has a value.
+            ("output vpc: string\n", "output vpc has no value"),
+            // H-8: no rule reads deny/2.
+            (
+                "deny \"m\" if q(1)\np(m) if deny(m)\n",
+                "a rule reads `deny`",
+            ),
+            // H-10: a resource in scope by its key, or by a dot after its type.
+            (
+                "resource net.vpc main { cidr = \"x\" }\np(c) if c = net.vpc[\"main\"].cidr\n",
+                "write `main` (H-10)",
+            ),
+            (
+                "resource net.vpc main { cidr = \"x\" }\np(c) if c = net.vpc.main.cidr\n",
+                "names a resource by a dot after its type",
+            ),
+            (
+                "p(c) if c = net.vcp.main.cidr\n",
+                "unknown type `net.vcp.main.cidr`",
+            ),
+            // H-15: the core where a surface form says it.
+            ("p(x) if want(net.vpc, x)\n", "write `x in net.vpc` (H-15)"),
+            (
+                "p(v) if attr(net.vpc, \"main\", \"cidr\", v)\n",
+                "write `v = net.vpc[\"main\"].cidr` (H-15)",
+            ),
+            (
+                "arg(net.vpc, \"main\", \"cidr\", \"x\")\n",
+                "write `set net.vpc[\"main\"].cidr = \"x\"` (H-15)",
+            ),
+            ("output(\"k\", 1)\n", "write `output k = 1` (H-15)"),
+            ("deny(\"m\") if q(1)\n", "write `deny \"m\" if ..` (H-15)"),
+            ("p(x) if member([1], x)\n", "write `x in [1]` (H-9)"),
+        ] {
+            let e = file_error(src);
+            assert!(e.contains(want), "{src}: {e}");
+        }
+        // The core stays writable where nothing else reaches: a variable
+        // type or path, a read of the contributions before they merge.
+        parse_as(
+            "resource net.vpc main { cidr = \"x\" }\n\
+             arg(t, n, p, v) if override(t, n, p, v), want(t, n)\n\
+             override(net.vpc, \"main\", \"tags\", {})\n\
+             p(v) if arg(net.vpc, \"main\", \"cidr\", v)\n",
+            true,
+        )
+        .unwrap();
     }
 }

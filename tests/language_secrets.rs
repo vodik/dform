@@ -40,7 +40,11 @@ fn refused(body: &str, want: &str) {
 fn a_secret_flows_to_sensitive_places() {
     let r = run("resource leaky.vault v {\n  if pw(p)\n  password = p\n}\noutput token: secret(string)\noutput(\"token\", p) if pw(p)\nresource leaky.vault w {\n  if pw(p), q = format(\"pw:%s\", p)\n  backup = q\n}\n")
     .success();
-    assert!(r.stdout.contains("let password = (sensitive)"), "{}", r.stdout);
+    assert!(
+        r.stdout.contains("let password = (sensitive)"),
+        "{}",
+        r.stdout
+    );
     assert!(!r.stdout.contains("hunter2"), "{}", r.stdout);
 }
 

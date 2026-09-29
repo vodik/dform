@@ -1,1 +1,2 @@
-tests/syntax/err/input_relation_arity.df:4:24: expected `/` or `(`, found `from`
+tests/syntax/err/input_relation_arity.df:4:15: expected `:` or `(` after the input's name, found `from`
+  help: a relation input names its columns: `input p(a, b) from facts(..)`

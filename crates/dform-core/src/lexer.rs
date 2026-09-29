@@ -218,13 +218,27 @@ mod tests {
     fn keywords_are_kinds_but_longer_names_are_not() {
         assert_eq!(
             kinds("resource resources if iff not in inet when for some"),
-            vec![RESOURCE_KW, IDENT, IF_KW, IDENT, NOT_KW, IN_KW, IDENT, IDENT, IDENT, IDENT]
+            vec![
+                RESOURCE_KW,
+                IDENT,
+                IF_KW,
+                IDENT,
+                NOT_KW,
+                IN_KW,
+                IDENT,
+                IDENT,
+                IDENT,
+                IDENT
+            ]
         );
     }
 
     #[test]
     fn a_comment_is_a_hash() {
-        assert_eq!(kinds("a # b\nc // d"), vec![IDENT, IDENT, SLASH, SLASH, IDENT]);
+        assert_eq!(
+            kinds("a # b\nc // d"),
+            vec![IDENT, IDENT, SLASH, SLASH, IDENT]
+        );
     }
 
     #[test]

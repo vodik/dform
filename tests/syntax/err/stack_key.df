@@ -1,6 +1,5 @@
 edition 2027
 
-# A stack's key is glued to its name and closed.
+# A stack's key is closed.
 input env: string = "dev"
-stack app [env] {}
 stack web[env {}

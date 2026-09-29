@@ -32,7 +32,4 @@ requires_approval(d, "a replace in prod") if {
 }
 
 # Optional: who may approve what. Without it, any key in the trust root may.
-approver_allowed(who, d) if {
-  requires_approval(d, _)
-  who in ["alice", "bob"]
-}
+approver_allowed(who, d) if requires_approval(d, _), who in ["alice", "bob"]

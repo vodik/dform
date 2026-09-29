@@ -1,3 +1,5 @@
 edition 2027
 
-p(x) if setting("prod", "tags.a.b", x)
+# A path segment is one key: a quoted segment holding `.` cannot be one.
+q("prod")
+p(x) if q(e), x = settings[e].tags."a.b"

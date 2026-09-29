@@ -62,7 +62,11 @@ fn plan_and_apply_redact_the_labeled_secret_but_not_the_mislabeled_one() {
         "vault's labeled secret leaked in plan output:\n{}",
         r.stdout
     );
-    assert!(r.stdout.contains("let password = (sensitive)"), "{}", r.stdout);
+    assert!(
+        r.stdout.contains("let password = (sensitive)"),
+        "{}",
+        r.stdout
+    );
     // The mislabeled type has no way to know it should hide this: the
     // schema says it's public, so it prints like any other attribute.
     assert!(
@@ -262,7 +266,11 @@ resource leaky.vault copy {{
         assert!(!r.stderr.contains(VAULT_SECRET), "{cmd:?}: {}", r.stderr);
     }
     let r = s.run(&common::on("p.df", &mock, &["plan"])).success();
-    assert!(r.stdout.contains("let backup = (sensitive)\n"), "{}", r.stdout);
+    assert!(
+        r.stdout.contains("let backup = (sensitive)\n"),
+        "{}",
+        r.stdout
+    );
 
     s.write(
         "p.df",

@@ -1,19 +1,17 @@
-tests/syntax/err/module_errors.df:10:3: module network takes a `contributes TYPE.path` grant: a module writes only its own resources
+tests/syntax/err/module_errors.df:9:3: module network takes a `contributes TYPE.path` grant: a module writes only its own resources
   help: write other resources' attributes from a policy pack
-tests/syntax/err/module_errors.df:9:3: export subnet_of/2: module network defines no subnet_of/2
-tests/syntax/err/module_errors.df:14:3: module network has no output peers
-  help: declare it: `output peers: TYPE`
-tests/syntax/err/module_errors.df:17:25: module network has no input vpc_cidr
+tests/syntax/err/module_errors.df:8:3: export subnet_of: module network defines no relation subnet_of
+tests/syntax/err/module_errors.df:16:25: module network has no input vpc_cidr
   note: its inputs: vpc_net, zones
-tests/syntax/err/module_errors.df:17:1: instance network main does not set required input vpc_net
+tests/syntax/err/module_errors.df:16:1: instance network main does not set required input vpc_net
   tests/syntax/err/module_errors.df:6:3: vpc_net: inet declared here
   help: add `vpc_net = ...` to the instance block
-tests/syntax/err/module_errors.df:18:1: instance network peer does not set required input vpc_net
+tests/syntax/err/module_errors.df:17:1: instance network peer does not set required input vpc_net
   tests/syntax/err/module_errors.df:6:3: vpc_net: inet declared here
   help: add `vpc_net = ...` to the instance block
-tests/syntax/err/module_errors.df:25:3: policy tags writes .labels of any type outside its grants
+tests/syntax/err/module_errors.df:24:3: policy tags writes .labels of any type outside its grants
   help: grant it: `contributes _.labels`
-tests/syntax/err/module_errors.df:26:3: policy tags writes .cidr of net.vpc outside its grants
+tests/syntax/err/module_errors.df:25:3: policy tags writes .cidr of net.vpc outside its grants
   help: grant it: `contributes net.vpc.cidr`
-tests/syntax/err/module_errors.df:20:21: zone_index/2 is private to module network
-  help: `export zone_index/2` in module network makes it readable as network.INSTANCE.zone_index, or pass the value through an output
+tests/syntax/err/module_errors.df:19:21: zone_index/2 is private to module network
+  help: `export zone_index` in module network makes it readable as network.INSTANCE.zone_index, or pass the value through an output

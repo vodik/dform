@@ -89,11 +89,7 @@ vpc_peer(a, b) if vpc_peer_pair(_, _, a, b)
 #| A peering resource per declared peering edge.
 resource net.vpc_peering "peer-${ia}-${ib}" {
   # Both ends must exist in this environment.
-  if {
-    vpc_peer_pair(ia, ib, a, b)
-    a in net.vpc
-    b in net.vpc
-  }
+  if vpc_peer_pair(ia, ib, a, b), a in net.vpc, b in net.vpc
   requester_vpc_id = a.id
   accepter_vpc_id = b.id
 }
@@ -104,17 +100,9 @@ resource compute.vm bastion {
 }
 
 # Policy, over every resource of a type (a module's resources included).
-deny "prod db must be multi_az" if {
-  env == "prod"
-  pg in db.postgres
-  not pg.multi_az
-}
+deny "prod db must be multi_az" if env == "prod", pg in db.postgres, not pg.multi_az
 
-deny "prod k8s must have private api" if {
-  env == "prod"
-  c in k8s.cluster
-  not c.private_api
-}
+deny "prod k8s must have private api" if env == "prod", c in k8s.cluster, not c.private_api
 
 #| Policy over hypothetical inputs: `dform test` runs every scenario
 #| against an empty mock world; `dform plan --scenario prod` plans the stack

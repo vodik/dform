@@ -32,8 +32,8 @@ resource k8s.deployment name {
   spec.selector.matchLabels = { app: name }
   spec.template.metadata.labels = { app: name }
   spec.template.spec.containers = [{
-    name: name,
-    image: image,
+    name,
+    image,
     ports: [{ containerPort: 8080, protocol: "TCP" }],
     envFrom: [{ configMapRef: { name: web_config.metadata.name } }]
   }]

@@ -4,15 +4,15 @@ edition 2027
 import "../../../examples/demo/modules/stdlib_net.df"
 import "../../../examples/demo/modules/iam.df"
 
-decl provided/2
-input relation seen/2 from file("seen.facts")
+decl provided(a, b)
+input seen(a, b) from facts("seen.facts")
 input peers(env: enum("dev", "prod"), name: string) from csv("peers.csv")
 input pinned(name: string) from yaml(git("ops.git", "main", "pinned.yaml"))
 input relation: string = "an input named relation"
 decl project(id: int, network_name: string)
 
 project(1, "net-a")
-names(n) if project( network_name: n )
+names(n) if project(network_name: n)
 
 module m {
   input on: bool
@@ -20,7 +20,7 @@ module m {
   contributes iam_need
 
   resource net.vpc vpc @default {
-    if on(true)
+    if on == true
     cidr = "10.0.0.0/16"
     tags = { team: "x", "k-v": 1 }
     size = 2 @override
@@ -28,7 +28,7 @@ module m {
     audit.sinks += ["s3"]
   }
 
-  on_vpc("vpc") if on(true)
+  on_vpc("vpc") if on == true
   iam_need("app", "net.read", ref(net.vpc, "vpc", "id"))
   output vpc: addr = vpc
 }
@@ -42,9 +42,7 @@ policy p {
 
 use p
 
-when env("prod") {
-  q(1)
-}
+q(1) if env("prod")
 
 settings e @default {
   if env(e)
@@ -52,20 +50,20 @@ settings e @default {
 }
 
 env("prod")
-p(x_) if q(x_), x_ = 1 + 2 * 3 - -4 / (5 % 2), x_ != 0, x_ >= 1, x_ <= 9, x_ > 0, x_ < 10
-r(v) if setting("prod", "gke.static_ips.pngu-grpc.type", v)
+p(x_) if q(x_), x_ == 1 + 2 * 3 - -4 / (5 % 2), x_ != 0, x_ >= 1, x_ <= 9, x_ > 0, x_ < 10
+r(v) if v = settings["prod"].gke.static_ips."pngu-grpc".type
 s(v) if q(x_), o = { a: { b: x_ } }, v = o.a.b
 t(l) if l = [ x_ | q(x_) ], 1 in l, 2 not in l
-u(a_) if ref(net.vpc, m.main/vpc, "id") = a_
-adopt(net.vpc, m.main/vpc, "vpc-123")
-moved(net.vpc, m.old/vpc, m.main/vpc)
-lifecycle(net.vpc, m.main/vpc, "prevent_destroy")
-ignore_changes(net.vpc, m.main/vpc, "tags.owner")
+u(a_) if ref(net.vpc, "m.main::vpc", "id") = a_
+adopt(net.vpc, "m.main::vpc", "vpc-123")
+moved(net.vpc, "m.old::vpc", "m.main::vpc")
+lifecycle(net.vpc, "m.main::vpc", "prevent_destroy")
+ignore_changes(net.vpc, "m.main::vpc", "tags.owner")
 counts(count(x_)) if q(x_)
 deny "q must not be empty" if not q(1)
 v("input", "output", "settings", "type") if input("env", _), output("k", _)
-decl p/1 mixed
-decl q/1 mixed
+decl p(a) mixed
+decl q(a) mixed
 p("a")
 q("b")
 w(v) if m.main.on_vpc(v)

@@ -155,7 +155,7 @@ resource google_compute_subnetwork regional_proxy {
 
 # VPC peerings
 resource google_compute_network_peering "peering-${name}" {
-  if peering( env: env, name: name, peer_network: peer )
+  if peering(env: env, name: name, peer_network: peer)
   project = cfg.project_id
   name = name
   network = "projects/${cfg.project_id}/global/networks/${cfg.network_name}"

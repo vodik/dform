@@ -3,7 +3,7 @@
 //! An `instance m i { k = V } :- B` is module `m`'s body under the scope
 //! `m.i`:
 //!
-//! - resource names are scoped (`m.i::name`, written `m.i/name` outside);
+//! - resource names are scoped (`m.i::name`, its address `T["m.i::name"]`);
 //! - every predicate the module defines is private to the instance
 //!   (`m.i::p`, a name no source can spell) unless it is `export`ed, which
 //!   makes it readable as `m.i.p`, or granted with `contributes p`, which
@@ -298,7 +298,7 @@ pub fn expand(program: &Program) -> Result<Expanded> {
                 let names = module_names(&scope, iface, body);
                 for (p, _) in names.map.iter().filter(|(_, n)| n.contains("::")) {
                     let help = format!(
-                        "`export {p}/N` in module {} makes it readable as {}.INSTANCE.{p}, \
+                        "`export {p}` in module {} makes it readable as {}.INSTANCE.{p}, \
                          or pass the value through an output",
                         m.name, m.name
                     );
@@ -524,10 +524,7 @@ fn check_module(
             Some((a, _)) if a == arity => {}
             _ => diags.push(Diagnostic::error(
                 *span,
-                format!(
-                    "export {p}/{arity}: module {} defines no {p}/{arity}",
-                    m.name
-                ),
+                format!("export {p}: module {} defines no relation {p}", m.name),
             )),
         }
     }

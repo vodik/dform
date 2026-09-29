@@ -551,7 +551,11 @@ impl<'a> Parser<'a> {
                 }
                 p.block()
             }),
-            INPUT_KW if self.raw(1) == IDENT && self.nth_text(1) == "relation" => {
+            INPUT_KW
+                if self.raw(1) == IDENT
+                    && self.nth_text(1) == "relation"
+                    && self.raw(2) == IDENT =>
+            {
                 self.bump();
                 let msg = format!(
                     "expected `:` or `(` after the input's name, found `{}`",
@@ -578,7 +582,19 @@ impl<'a> Parser<'a> {
             }),
             INPUT_KW => self.simple(INPUT, |p| {
                 p.expect_word()?;
-                p.expect(COLON)?;
+                if !p.at(COLON) {
+                    let hint = p.at_contextual("from").then(|| {
+                        "a relation input names its columns: `input p(a, b) from facts(..)`"
+                            .to_string()
+                    });
+                    let msg = format!(
+                        "expected `:` or `(` after the input's name, found {}",
+                        p.found()
+                    );
+                    p.error_here(msg, hint);
+                    return Err(Bail);
+                }
+                p.bump();
                 p.type_expr()?;
                 if p.eat(EQ) {
                     p.term()?;
@@ -665,6 +681,13 @@ impl<'a> Parser<'a> {
                 p.attr_block()
             }),
             DECL_KW => self.simple(DECL, |p| {
+                if p.at(TYPE_KW) {
+                    let hint = "an open type is not supported: declare the type's attributes \
+                                with a `type` block"
+                        .to_string();
+                    p.error_here("expected a relation name, found `type`".into(), Some(hint));
+                    return Err(Bail);
+                }
                 p.dotted("a relation name")?;
                 if !p.at(L_PAREN) {
                     let hint = p.at(SLASH).then(|| {
@@ -715,8 +738,7 @@ impl<'a> Parser<'a> {
                     p.bump();
                 } else {
                     let hint = matches!(p.nth(0), DOT | L_BRACKET).then(|| {
-                        "a contribution to a settings row is `set settings[e].path = t`"
-                            .to_string()
+                        "a contribution to a settings row is `set settings[e].path = t`".to_string()
                     });
                     let msg = format!(
                         "expected a settings row's name (a name or a string), found {}",
@@ -746,9 +768,7 @@ impl<'a> Parser<'a> {
                 } else if term_name(k) && matches!(self.raw(1), EQ | PLUS_EQ) {
                     Some(format!("a value is `let {text} = t`"))
                 } else if term_name(k) && matches!(self.raw(1), DOT | L_BRACKET) {
-                    Some(
-                        "a contribution to another block's field is `set r.path = t`".to_string(),
-                    )
+                    Some("a contribution to another block's field is `set r.path = t`".to_string())
                 } else {
                     self.hint()
                 };
@@ -882,7 +902,10 @@ impl<'a> Parser<'a> {
                 }
                 if p.at_contextual("for") && !matches!(p.raw(1), EQ | PLUS_EQ | DOT | L_BRACKET) {
                     let msg = format!("expected an entry or `}}`, found {}", p.found());
-                    p.error_here(msg, Some("a block's clause is spelled `if` (H-3)".to_string()));
+                    p.error_here(
+                        msg,
+                        Some("a block's clause is spelled `if` (H-3)".to_string()),
+                    );
                     return Err(Bail);
                 }
                 if p.at(EOF) {

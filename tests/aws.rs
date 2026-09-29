@@ -38,7 +38,11 @@ fn optional_computed_is_a_constant_when_set_and_a_null_when_not() {
         "{}",
         r.stdout
     );
-    assert!(r.stdout.contains("let password = (sensitive)"), "{}", r.stdout);
+    assert!(
+        r.stdout.contains("let password = (sensitive)"),
+        "{}",
+        r.stdout
+    );
     assert!(!r.stdout.contains("correct-horse"), "{}", r.stdout);
 
     let a = run(&s, &args, "apply").success();

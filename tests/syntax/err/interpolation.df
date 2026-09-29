@@ -1,8 +1,8 @@
 edition 2027
 
-# A string's braces are interpolation: a literal brace is doubled.
+# `${e}` interpolates; `$${` is a literal `${`, a brace is itself.
 a("${}")
-b("x}")
-c("{ok} ${y}") if y = "fine"
+b("x ${y")
+c("{ok} $${no} ${y}") if y = "fine"
 q("a")
 d("n-${x.}") if q(x)

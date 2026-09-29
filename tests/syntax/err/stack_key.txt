@@ -1,2 +1,1 @@
-tests/syntax/err/stack_key.df:5:11: expected `{`, found `[`
-tests/syntax/err/stack_key.df:6:15: expected `]`, found `{`
+tests/syntax/err/stack_key.df:5:15: expected `]`, found `{`

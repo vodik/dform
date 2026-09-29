@@ -1,4 +1,4 @@
 edition 2027
 
-# The arity (or the columns, for a table) is part of the declaration.
-input relation release from file("release.facts")
+# The columns are part of the declaration.
+input release from facts("release.facts")

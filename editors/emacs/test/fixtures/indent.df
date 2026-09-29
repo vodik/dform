@@ -8,12 +8,9 @@ stack demo {
   unknowns = "strict"
 }
 
-resource net.vpc "main" {
+resource net.vpc main {
   if zone in zones, zone != "excluded"
   cidr = "10.0.0.0/16"
 }
 
-rule_name(x) if {
-  a = 1,
-  b = 2
-}
+rule_name(x) if a = 1, b = 2

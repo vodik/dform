@@ -73,11 +73,7 @@ reachable(a, c) if reachable(a, b), link(b, c)
 # `dest` is bound in the clause, so it is read now (an attr join);
 # `destination = net.vpc[b].cidr` would be a reference.
 resource net.route "rt-${a}-${b}" {
-  if {
-    reachable(a, b)
-    a != b
-    dest = net.vpc[b].cidr
-  }
+  if reachable(a, b), a != b, dest = net.vpc[b].cidr
   from = a
   to = b
   destination = dest
@@ -121,7 +117,7 @@ decl mesh_allow_direct_route(from, to)
 # We immediately explode it into row facts, then derive edges, then rely on
 # reachability closure to fill in the implied connectivity.
 
-mesh_vpc(name, cidr, i) if settings[env].mesh.vpcs[i] = { name: name, net: cidr }
+mesh_vpc(name, cidr, i) if settings[env].mesh.vpcs[i] = { name, net: cidr }
 
 resource net.vpc name {
   if mesh_vpc(name, cidr, _)
@@ -134,7 +130,7 @@ resource net.vpc name {
 mesh_peer(a, b) if {
   mesh_vpc(a, cidr_a, ia)
   mesh_vpc(b, cidr_b, ib)
-  ib = ia + 1
+  ib == ia + 1
   not inet_overlaps(cidr_a, cidr_b)
 }
 
@@ -149,7 +145,10 @@ resource net.vpc_peering "mesh-peer-${a}-${b}" {
 }
 
 # Policy 1: peered VPCs must not overlap.
-deny "peered vpcs must not overlap" { a, b } if peer(a, b), inet_overlaps(net.vpc[a].cidr, net.vpc[b].cidr)
+deny "peered vpcs must not overlap" { a, b } if {
+  peer(a, b)
+  inet_overlaps(net.vpc[a].cidr, net.vpc[b].cidr)
+}
 
 # Policy 2: tenant isolation.
 # Only enforced in prod, and depends on the reachability closure.

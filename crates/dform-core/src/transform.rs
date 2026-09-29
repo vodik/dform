@@ -305,7 +305,7 @@ fn lower_contributions(program: &Program) -> Result<Program> {
 }
 
 /// E §2.6: a predicate is extensional (ground facts) or intensional
-/// (rules), not both, unless declared `decl p/N mixed`. Checked after
+/// (rules), not both, unless declared `decl p(..) mixed`. Checked after
 /// modules and `when` are expanded (a guarded fact is a rule), over the
 /// program's own predicates: the compiler's (`want`, `arg`, ...) are
 /// written both ways by design.
@@ -335,6 +335,7 @@ fn check_mixed(program: &Program) -> Result<()> {
         .filter(|((p, _), _)| !crate::loader::is_core_pred(p) && !p.contains("__"))
         .filter_map(|(k @ (p, n), rule)| {
             let fact = facts.get(k)?;
+            let decl = format!("decl {p}({}) mixed", columns(*n));
             let d = Diagnostic::error(
                 *rule,
                 format!(
@@ -343,7 +344,7 @@ fn check_mixed(program: &Program) -> Result<()> {
             )
             .with_label(*fact, format!("a ground fact of {p}/{n}"))
             .with_help(format!(
-                "derive the facts with rules too, or declare it: `decl {p}/{n} mixed`"
+                "derive the facts with rules too, or declare it: `{decl}`"
             ));
             // The declaration goes before the first statement of `p/N`,
             // when both are the program's own (not a module's or a pack's,
@@ -357,8 +358,8 @@ fn check_mixed(program: &Program) -> Result<()> {
                 ..*first
             };
             Some(d.with_fix(
-                format!("declare it: `decl {p}/{n} mixed`"),
-                vec![(at, format!("decl {p}/{n} mixed\n"))],
+                format!("declare it: `{decl}`"),
+                vec![(at, format!("{decl}\n"))],
             ))
         })
         .collect();
@@ -1759,4 +1760,19 @@ fn rewrite_term_refs(
         ),
         other => other.clone(),
     }
+}
+
+/// Column names for a declaration the compiler writes: `a, b, c`.
+pub fn columns(n: usize) -> String {
+    (0..n)
+        .map(|i| {
+            let c = (b'a' + (i % 26) as u8) as char;
+            if i < 26 {
+                c.to_string()
+            } else {
+                format!("{c}{}", i / 26)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }

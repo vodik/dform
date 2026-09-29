@@ -82,13 +82,13 @@ peering("prod", "envoy-prod-legacy", "projects/coherentpath-prod/global/networks
 ########################################
 
 project(id, name, region, net_id) if {
-    env(e)
-    setting(e, "project_id", id)
-    setting(e, "project_name", name)
-    setting(e, "region", region)
-    setting(e, "network_name", net_name)
-    net_id = format("projects/%s/global/networks/%s", id, net_name)
-  }
+  e = env
+  setting(e, "project_id", id)
+  setting(e, "project_name", name)
+  setting(e, "region", region)
+  setting(e, "network_name", net_name)
+  net_id = format("projects/%s/global/networks/%s", id, net_name)
+}
 
 ########################################
 # Network
@@ -97,7 +97,7 @@ project(id, name, region, net_id) if {
 resource google.compute_subnetwork gke_subnet {
   if {
     project(id, name, region, net_id)
-    env(e)
+    e = env
     setting(e, "gke.subnet_cidr", subnet_cidr)
     setting(e, "gke.pods_cidr", pods_cidr)
     setting(e, "gke.services_cidr", svc_cidr)
@@ -115,11 +115,7 @@ resource google.compute_subnetwork gke_subnet {
 }
 
 resource google.compute_subnetwork regional_proxy {
-  if {
-    project(id, name, region, net_id)
-    env(e)
-    setting(e, "regional_proxy_cidr", proxy_cidr)
-  }
+  if project(id, name, region, net_id), e = env, setting(e, "regional_proxy_cidr", proxy_cidr)
   project = id
   region = region
   network = net_id
@@ -132,7 +128,7 @@ resource google.compute_subnetwork regional_proxy {
 resource google.compute_network_peering p {
   if {
     project(id, _, _, net_id)
-    env(e)
+    e = env
     peering(e, peer_name, peer_net)
     p = format("peering-%s", peer_name)
   }
@@ -144,17 +140,13 @@ resource google.compute_network_peering p {
 
 # One static address per declared static IP; the map explodes into rows.
 static_ip(ip_name, type_) if {
-    env(e)
-    setting(e, "gke.static_ips", ips)
-    member_kv(ips, ip_name, { type: type_ })
-  }
+  e = env
+  setting(e, "gke.static_ips", ips)
+  member_kv(ips, ip_name, { type: type_ })
+}
 
 resource google.compute_address s {
-  if {
-    project(id, _, region, _)
-    static_ip(ip_name, type_)
-    s = format("static-ip-%s", ip_name)
-  }
+  if project(id, _, region, _), static_ip(ip_name, type_), s = format("static-ip-%s", ip_name)
   project = id
   region = region
   name = ip_name
@@ -167,11 +159,7 @@ resource google.compute_address s {
 ########################################
 
 resource gke.cluster pngu {
-  if {
-    env(e)
-    project(id, name, _, net_id)
-    setting(e, "gke.control_plane_cidr", cp_cidr)
-  }
+  if e = env, project(id, name, _, net_id), setting(e, "gke.control_plane_cidr", cp_cidr)
   cluster_type = "autopilot-private"
   env = e
   project_id = id
@@ -188,11 +176,13 @@ resource gke.cluster pngu {
 
 # Prod: deletion protection on, at normal rank, over the block's @default.
 # Two ranks, one value each, no conflict. The lifecycle fact is policeable.
-arg("gke.cluster", "pngu", "deletion_protection", true) if env("prod")
-lifecycle("gke.cluster", "pngu", "prevent_destroy") if env("prod")
+arg("gke.cluster", "pngu", "deletion_protection", true) if env == "prod"
+lifecycle("gke.cluster", "pngu", "prevent_destroy") if env == "prod"
 
-deny("prod_deletion_protection", "prod cluster must have deletion protection", { cluster: "pngu" }) if
-  env("prod"), not attr("gke.cluster", "pngu", "deletion_protection", true)
+deny("prod_deletion_protection", "prod cluster must have deletion protection", { cluster: "pngu" }) if {
+  env == "prod"
+  not attr("gke.cluster", "pngu", "deletion_protection", true)
+}
 
 ########################################
 # Kubernetes: phase 2. The provider is configured from phase-1 nulls.
@@ -227,11 +217,7 @@ resource k8s.secret db_credentials {
 # rule is stuck on ?gke.cluster/pngu#zones and the plan prints one pending
 # group of unknown cardinality. After phase 1 it fires once per zone.
 resource gke.nodepool np {
-  if {
-    attr("gke.cluster", "pngu", "zones", zs)
-    member(zs, z)
-    np = format("np-%s", z)
-  }
+  if attr("gke.cluster", "pngu", "zones", zs), member(zs, z), np = format("np-%s", z)
   cluster = ref("gke.cluster", "pngu", "id")
   zone = z
   min = 1
@@ -243,8 +229,11 @@ resource gke.nodepool np {
 # undetermined until phase 1 resolves .zones.
 zone_count(count(z)) if attr("gke.cluster", "pngu", "zones", zs), member(zs, z)
 
-deny("two_zones", "cluster must be in at least two zones", { cluster: "pngu" }) if
-  want("gke.cluster", "pngu"), zone_count(n), n < 2
+deny("two_zones", "cluster must be in at least two zones", { cluster: "pngu" }) if {
+  want("gke.cluster", "pngu")
+  zone_count(n)
+  n < 2
+}
 
 ########################################
 # Monitoring: the dashboard JSON is a file extern, hashed, with provenance
@@ -258,5 +247,5 @@ resource google.monitoring_dashboard pngu {
   dashboard_json = dash
 }
 
-output("active_env", e) if env(e)
+output("active_env", e) if e = env
 output("project_id", id) if project(id, _, _, _)

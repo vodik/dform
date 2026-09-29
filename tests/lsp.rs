@@ -906,7 +906,11 @@ fn quick_fix_quotes_an_unknown_name() {
         "unknown name `bogus`",
         "quote it: \"bogus\"",
     );
-    assert!(texts[0].contains("  let name = \"bogus\"\n"), "{}", texts[0]);
+    assert!(
+        texts[0].contains("  let name = \"bogus\"\n"),
+        "{}",
+        texts[0]
+    );
 }
 
 /// A predicate with both facts and rules: `decl p/N mixed` before them.
