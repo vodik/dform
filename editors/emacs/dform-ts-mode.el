@@ -27,10 +27,9 @@
 ;;   (`C-M-a', `C-M-e', `C-M-h') over the same node types.
 ;; - An `eglot-server-programs' entry for `dform lsp' and two commands,
 ;;   `dform-select-environment' and `dform-why-at-point', wired to
-;;   `eglot-execute-command'.  The dform language server does not exist
-;;   yet, so the eglot half is configuration only: the two commands will
-;;   error with "no eglot server" until a `dform lsp' server ships and
-;;   implements the `dform.selectEnvironment' and `dform.why' commands.
+;;   `eglot-execute-command'.  Start the server with `M-x eglot' in a
+;;   .df buffer; it runs `dform lsp' from the project, and the commands
+;;   send `dform.selectEnvironment' and `dform.why' to it.
 ;;
 ;; Installation (straight.el, this repository checked out locally):
 ;;
@@ -339,22 +338,21 @@ policies) by its `name' field."
     ("Policy" "\\`policy\\'" nil nil))
   "`treesit-simple-imenu-settings' for `dform-ts-mode'.")
 
-;;; Eglot (configuration only: the `dform lsp' server does not exist yet)
+;;; Eglot (the `dform lsp' language server)
 
 (defun dform-ts-mode--eglot-server ()
   "Return the current buffer's eglot server, or signal a user error."
   (unless (fboundp 'eglot-current-server)
     (user-error "Eglot is not loaded"))
   (or (eglot-current-server)
-      (user-error "No active eglot server for this buffer; `dform lsp' does not exist yet")))
+      (user-error "No active eglot server for this buffer; start one with M-x eglot")))
 
 (defun dform-select-environment (environment)
   "Ask the dform language server to select ENVIRONMENT (or scenario).
 
 Sends the `dform.selectEnvironment' command via
-`eglot-execute-command'.  Works once a `dform lsp' server is
-running and implements that command; until then this errors with
-\"no active eglot server\"."
+`eglot-execute-command'.  Needs a running `dform lsp' server
+\(start it with `M-x eglot')."
   (interactive "sEnvironment or scenario: ")
   (eglot-execute-command (dform-ts-mode--eglot-server)
                           "dform.selectEnvironment" (vector environment)))
@@ -365,9 +363,8 @@ running and implements that command; until then this errors with
 Sends the `dform.why' command via `eglot-execute-command' with the
 current document and position (`eglot--TextDocumentIdentifier' and
 `eglot--pos-to-lsp-position', both eglot internals: there is no
-public equivalent for a caller-defined command's arguments).  Works
-once a `dform lsp' server is running and implements that command;
-until then this errors with \"no active eglot server\"."
+public equivalent for a caller-defined command's arguments).  Needs
+a running `dform lsp' server (start it with `M-x eglot')."
   (interactive)
   (eglot-execute-command (dform-ts-mode--eglot-server)
                           "dform.why"
