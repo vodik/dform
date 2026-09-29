@@ -5,7 +5,7 @@
 mod common;
 use common::{Scratch, repo};
 
-const P: &str = r#"edition 2027
+const P: &str = r#"edition 2026
 input env: enum("dev", "prod")
 input size: int = 1
 resource net.vpc main {

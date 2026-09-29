@@ -1,6 +1,6 @@
 # pngu.df, direction E. The renfry stack for one GCP project per environment.
 
-edition 2027
+edition 2026
 
 provider google { source = "registry.dform.dev/google", version = ">=6" }
 provider kubernetes { source = "registry.dform.dev/kubernetes", version = ">=3" }

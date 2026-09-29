@@ -5,7 +5,7 @@
 mod common;
 use common::Scratch;
 
-const PROG: &str = r#"edition 2027
+const PROG: &str = r#"edition 2026
 
 resource net.vpc main { cidr = "10.0.0.0/16" }
 resource net.subnet a { vpc_id = ref(net.vpc, "main", "id"), tier = "web" }
@@ -33,7 +33,7 @@ fn a_read_lag_within_the_retry_budget_is_not_drift() {
 fn type_retry_sets_the_budget_per_type() {
     let s = Scratch::new("retry-type");
     s.write("p.df", PROG);
-    s.write("retry.df", "edition 2027\ntype_retry(net.vpc, 6)\n");
+    s.write("retry.df", "edition 2026\ntype_retry(net.vpc, 6)\n");
     let args = ["--provider", "fake", "--provider", "retry.df"];
     dform(
         &s,
@@ -75,7 +75,7 @@ fn a_boundary_refresh_retries() {
     );
     s.write(
         "p.df",
-        "edition 2027\nresource db.postgres main { size = 1 }\nresource compute.vm app { db_host = ref(db.postgres, \"main\", \"endpoint\") }\n",
+        "edition 2026\nresource db.postgres main { size = 1 }\nresource compute.vm app { db_host = ref(db.postgres, \"main\", \"endpoint\") }\n",
     );
     let r = dform(
         &s,

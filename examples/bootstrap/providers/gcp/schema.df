@@ -2,7 +2,7 @@
 # whose endpoint, CA and zones are open until it exists, and node pools
 # whose instance group is open until they do.
 
-edition 2027
+edition 2026
 
 type_provider("google_compute_network", "google")
 type_provider("google_compute_subnetwork", "google")

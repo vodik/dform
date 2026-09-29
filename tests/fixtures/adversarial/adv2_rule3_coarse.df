@@ -3,7 +3,7 @@
 # UNRELATED aggregate over `want` must not become undetermined.
 # Run with --provider gke.
 
-edition 2027
+edition 2026
 
 resource gke_cluster pngu {
   name = "pngu-gke"

@@ -1,4 +1,4 @@
-edition 2027
+edition 2026
 
 # A block's clauses come first; a let names a reference; `+=` adds to a
 # field, not to a value.

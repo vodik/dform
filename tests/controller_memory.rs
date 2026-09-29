@@ -14,7 +14,7 @@ const EVENTS: usize = 200;
 fn release(s: &Scratch, image: &str) {
     s.write(
         "data/release.facts",
-        &format!("edition 2027\n\nrelease(\"{image}\")\n"),
+        &format!("edition 2026\n\nrelease(\"{image}\")\n"),
     );
 }
 
@@ -23,7 +23,7 @@ fn two_hundred_events_keep_the_source_registry_bounded() {
     let s = Scratch::project("ctl-memory");
     s.write("stacks/workload.df", WORKLOAD);
     release(&s, "gcr.io/renfry/web:0");
-    s.write("data/approvals.facts", "edition 2027\n");
+    s.write("data/approvals.facts", "edition 2026\n");
     let counts = s.path("sources.txt");
     let mut child = common::dform()
         .args([

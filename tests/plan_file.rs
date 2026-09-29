@@ -10,7 +10,7 @@ const WORLD: &str = r#"{"resources": {"compute.vm::app": {"typ": "compute.vm", "
 
 /// Two ticks: the database is created in tick 1; the vm's update waits on
 /// its endpoint and runs in tick 2.
-const TWO_TICKS: &str = "edition 2027\nresource db.postgres main { size = 1 }\nresource compute.vm app { db_host = ref(db.postgres, \"main\", \"endpoint\") }\n";
+const TWO_TICKS: &str = "edition 2026\nresource db.postgres main { size = 1 }\nresource compute.vm app { db_host = ref(db.postgres, \"main\", \"endpoint\") }\n";
 
 fn two_ticks(name: &str) -> Scratch {
     let s = Scratch::new(name);
@@ -157,7 +157,7 @@ fn the_file_never_carries_a_labeled_secret() {
     let s = Scratch::new("planfile-secret");
     s.write(
         "p.df",
-        "edition 2027\nresource leaky.vault v { password = \"VAULT-SECRET-DO-NOT-PRINT\" }\n",
+        "edition 2026\nresource leaky.vault v { password = \"VAULT-SECRET-DO-NOT-PRINT\" }\n",
     );
     let schema = repo().join("tests/fixtures/providers/leaky/schema.df");
     s.run(&[
@@ -207,7 +207,7 @@ fn a_two_phase_plan_file_applies_across_the_boundary() {
 #[test]
 fn a_create_before_destroy_plan_file_applies_in_two_ticks() {
     let s = Scratch::new("planfile-cbd");
-    let net = "edition 2027\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nresource net.subnet a { vpc_id = ref(net.vpc, \"main\", \"id\"), tier = \"web\" }\n";
+    let net = "edition 2026\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nresource net.subnet a { vpc_id = ref(net.vpc, \"main\", \"id\"), tier = \"web\" }\n";
     s.write("p.df", net);
     s.run(&common::on("p.df", &["--world", "w.json"], &["apply"]))
         .success();

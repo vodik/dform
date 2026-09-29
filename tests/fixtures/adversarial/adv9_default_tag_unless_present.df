@@ -2,7 +2,7 @@
 # written against the merged attr. Reads (attr, *, tags), writes
 # (arg, *, tags): a self-loop. E's answer is @default rank, not this.
 
-edition 2027
+edition 2026
 
 resource net.vpc main {
   cidr = inet("10.0.0.0/16")

@@ -1418,7 +1418,7 @@ mod tests {
     #[test]
     fn lossless_even_with_errors() {
         for src in [
-            "edition 2027\np(a) if q(x), x > 1 # c\n",
+            "edition 2026\np(a) if q(x), x > 1 # c\n",
             "p(a if\nq(b)\n}}\n",
             "resource net.vpc main { cidr = \"x\" }\nq(b)",
         ] {

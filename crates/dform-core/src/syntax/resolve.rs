@@ -37,7 +37,7 @@ mod provider;
 pub use provider::ENV_VAR;
 
 /// The one edition this compiler reads.
-pub const EDITION_YEAR: i64 = 2027;
+pub const EDITION_YEAR: i64 = 2026;
 
 /// One parsed file of a program.
 pub struct Unit {
@@ -4205,10 +4205,10 @@ mod tests {
     }
 
     /// `src` lowered as text that is not a file (the core relations
-    /// writable), or, `file`, as a program file (`edition 2027` first).
+    /// writable), or, `file`, as a program file (`edition 2026` first).
     fn parse_as(src: &str, file: bool) -> anyhow::Result<crate::ast::Program> {
         let src = if file {
-            format!("edition 2027\n{src}")
+            format!("edition 2026\n{src}")
         } else {
             src.to_string()
         };

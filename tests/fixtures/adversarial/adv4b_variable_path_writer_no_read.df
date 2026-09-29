@@ -1,7 +1,7 @@
 # adv4b: the variable-path writer that reads no attribute. Lands at
 # (arg, *, *), above every attr reader, and stratifies.
 
-edition 2027
+edition 2026
 
 override(net.vpc, "main", "tags", { team: "x" })
 

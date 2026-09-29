@@ -300,7 +300,7 @@ fn a_moved_git_commit_is_a_stale_plan() {
     git(&s.dir, &["init", "-q", "--bare", "ops.git"]);
     git(&s.dir, &["clone", "-q", "ops.git", "work"]);
     let commit = |text: &str| {
-        s.write("work/tags.facts", &format!("edition 2027\n\n{text}\n"));
+        s.write("work/tags.facts", &format!("edition 2026\n\n{text}\n"));
         let w = s.path("work");
         git(&w, &["add", "tags.facts"]);
         git(&w, &["commit", "-q", "-m", text]);
@@ -309,7 +309,7 @@ fn a_moved_git_commit_is_a_stale_plan() {
     commit("owner(\"a\")");
     s.write(
         "p.df",
-        "edition 2027\n\ninput owner(a) from facts(git(\"ops.git\", \"main\", \"tags.facts\"))\n\nresource net.vpc main {\ncidr = \"10.0.0.0/16\"\n}\n",
+        "edition 2026\n\ninput owner(a) from facts(git(\"ops.git\", \"main\", \"tags.facts\"))\n\nresource net.vpc main {\ncidr = \"10.0.0.0/16\"\n}\n",
     );
     s.run(&["plan", "--out", "plan.json", "p.df"]).success();
     let file: serde_json::Value = serde_json::from_str(&s.read("plan.json")).unwrap();

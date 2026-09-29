@@ -8,7 +8,7 @@
 #
 # To run it, from this directory: README.md.
 
-edition 2027
+edition 2026
 stack advanced {}
 input env: enum("staging", "prod") = "staging"
 

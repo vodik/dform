@@ -14,7 +14,7 @@
 # - The monitoring dashboard JSON is read with the file provider from a stub,
 #   files/dashboard-pngu.json (see terraform/modules/monitoring/dashboard-pngu.json).
 
-edition 2027
+edition 2026
 stack pngu[env] { isolated = true }
 ########################################
 # Schema declarations

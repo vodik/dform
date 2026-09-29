@@ -307,13 +307,13 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("dform-loader-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         let f = dir.join("p.df");
-        fs::write(&f, "edition 2027\np(1)\n").unwrap();
+        fs::write(&f, "edition 2026\np(1)\n").unwrap();
         let a = load_program(std::slice::from_ref(&f)).unwrap();
         let b = load_program(std::slice::from_ref(&f)).unwrap();
         assert_eq!(file_ids(&a), file_ids(&b));
         let old = *file_ids(&a).first().unwrap();
 
-        fs::write(&f, "edition 2027\np(2)\n").unwrap();
+        fs::write(&f, "edition 2026\np(2)\n").unwrap();
         let c = load_program(std::slice::from_ref(&f)).unwrap();
         assert_ne!(file_ids(&c), file_ids(&a));
         let span = |p: &Program| match &p.statements[0] {
@@ -341,11 +341,11 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("dform-loader-with-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         let (main, lib) = (dir.join("main.df"), dir.join("lib.df"));
-        fs::write(&main, "edition 2027\nimport \"lib.df\"\np(1)\n").unwrap();
-        fs::write(&lib, "edition 2027\nq(1)\n").unwrap();
+        fs::write(&main, "edition 2026\nimport \"lib.df\"\np(1)\n").unwrap();
+        fs::write(&lib, "edition 2026\nq(1)\n").unwrap();
         let buffer = |p: &Path| -> std::io::Result<String> {
             if p.ends_with("lib.df") {
-                Ok("edition 2027\nq(2)\n".into())
+                Ok("edition 2026\nq(2)\n".into())
             } else {
                 fs::read_to_string(p)
             }

@@ -2,7 +2,7 @@
 #
 # To run it, from this directory: README.md.
 
-edition 2027
+edition 2026
 
 # The provider (the mock's built-in fake schema), and the stack, keyed by env: dform[env=prod]'s state is dform.state/dform/env=prod/.
 # Strict: a plan needing a phase boundary is refused (fresh nulls still flow).

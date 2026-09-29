@@ -1,7 +1,7 @@
-edition 2027
+edition 2026
 
 # Spellings of earlier surfaces: each is one error with a hint that names
-# the spelling of edition 2027.
+# the spelling of edition 2026.
 component_def net { p("a") }
 policy_pack base { p("b") }
 apply_policy base

@@ -5,7 +5,7 @@
 mod common;
 use common::{Scratch, repo};
 
-const P: &str = r#"edition 2027
+const P: &str = r#"edition 2026
 extern file.json(+path, -value)
 extern file.text(+path, -value)
 extern random.password(+name, -value) persist
@@ -46,7 +46,7 @@ fn answers(s: &Scratch, v: &str) {
     s.write(
         "providers/fake/externs.df",
         &format!(
-            "edition 2027\nrandom.password(\"app\", \"pw-{v}\")\nrandom.password(\"other\", \"x\")\nrandom.token(\"app\", \"tk-{v}\")\n"
+            "edition 2026\nrandom.password(\"app\", \"pw-{v}\")\nrandom.password(\"other\", \"x\")\nrandom.token(\"app\", \"tk-{v}\")\n"
         ),
     );
 }

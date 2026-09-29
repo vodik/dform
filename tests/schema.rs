@@ -23,11 +23,11 @@ fn a_schema_file_in_the_working_directory_is_a_provider() {
     let s = Scratch::new("schema-local");
     s.write(
         "providers/ldap/schema.df",
-        "edition 2027\ntype_provider(ldap.group, \"ldap\")\ntype_attr(ldap.group, \"dn\", \"string\", [\"computed\", \"id\"])\n",
+        "edition 2026\ntype_provider(ldap.group, \"ldap\")\ntype_attr(ldap.group, \"dn\", \"string\", [\"computed\", \"id\"])\n",
     );
     s.write(
         "p.df",
-        "edition 2027\nresource ldap.group admins { cn = \"admins\" }\n",
+        "edition 2026\nresource ldap.group admins { cn = \"admins\" }\n",
     );
     let r = s
         .run(&[

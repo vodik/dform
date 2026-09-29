@@ -8,7 +8,7 @@ mod common;
 use common::Scratch;
 use expectrl::{Eof, Expect, Session};
 
-const PROG: &str = r#"edition 2027
+const PROG: &str = r#"edition 2026
 
 resource net.vpc main { cidr = "10.0.0.0/16" }
 resource net.vpc peer { cidr = "10.1.0.0/16" }
@@ -17,7 +17,7 @@ resource net.subnet a { vpc_id = ref(net.vpc, "main", "id"), cidr = "10.0.1.0/24
 
 /// The same stack with `net.vpc.main` renamed (`moved/3`): a resume that
 /// also rewrites state's identity.
-const RENAMED: &str = r#"edition 2027
+const RENAMED: &str = r#"edition 2026
 
 resource net.vpc core { cidr = "10.0.0.0/16" }
 resource net.vpc peer { cidr = "10.1.0.0/16" }

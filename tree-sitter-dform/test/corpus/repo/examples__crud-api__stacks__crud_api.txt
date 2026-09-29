@@ -13,7 +13,7 @@ examples/crud-api/stacks/crud_api.df
 #
 # To run it, from this directory: README.md.
 #
-# From proposals/G-corpus/crud_api.org (edition 2027 there; the compiler
+# From proposals/G-corpus/crud_api.org (edition 2026 there; the compiler
 # reads 2026). It plans against the mock (dform.toml: the built-in k8s
 # schema and this project's providers/google and providers/random), and
 # applies to a cluster with kubernetes = "providers/k8s" there. In

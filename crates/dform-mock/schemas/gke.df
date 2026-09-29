@@ -6,7 +6,7 @@
 # google.client_config and google.secret_manager_secret_version are data
 # sources: no type_provider.
 
-edition 2027
+edition 2026
 
 type_provider("google_compute_subnetwork", "google")
 type_provider("google_compute_network_peering", "google")

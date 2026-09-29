@@ -1,4 +1,4 @@
-edition 2027
+edition 2026
 
 # Proposal H: where two spellings of one meaning would survive, the
 # compiler rejects the one that is not the construct's and names the other.

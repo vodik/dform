@@ -699,7 +699,7 @@ fn definition_and_formatting() {
         "a module read by its instances"
     );
 
-    let messy = "edition 2027\nq(1)\np(x)   if q(x)\n";
+    let messy = "edition 2026\nq(1)\np(x)   if q(x)\n";
     let scratch = root.join("stacks/messy.df");
     std::fs::write(&scratch, messy).unwrap();
     c.open(&scratch);
@@ -708,7 +708,7 @@ fn definition_and_formatting() {
         json!({ "textDocument": { "uri": uri(&scratch) }, "options": { "tabSize": 2, "insertSpaces": true } }),
     );
     assert_eq!(
-        edits[0]["newText"], "edition 2027\nq(1)\np(x) if q(x)\n",
+        edits[0]["newText"], "edition 2026\nq(1)\np(x) if q(x)\n",
         "{edits}"
     );
     c.shutdown();
@@ -1481,7 +1481,7 @@ fn same_named_private_relations_rename_independently() {
 #[test]
 fn diagnostics_of_a_plan_with_a_replacement_are_the_plans() {
     let s = common::Scratch::project("lsp-replace");
-    let net = r#"edition 2027
+    let net = r#"edition 2026
 
 stack p {}
 
@@ -1555,7 +1555,7 @@ fn an_s3_deployment_is_read_with_credentials() {
         .unwrap();
     let vpc = "resource net.vpc main { cidr = \"10.0.0.0/16\" }\n";
     let net = format!(
-        "edition 2027\n\nstack p {{}}\n\n{vpc}lifecycle(net.vpc, \"main\", \"prevent_destroy\")\n"
+        "edition 2026\n\nstack p {{}}\n\n{vpc}lifecycle(net.vpc, \"main\", \"prevent_destroy\")\n"
     );
     let file = s.write("stacks/p.df", &net);
     let creds = [

@@ -3234,9 +3234,9 @@ pub const REFERENCE: &[Reference] = &[
     r(
         "edition",
         Kw,
-        "edition 2027",
+        "edition 2026",
         "The first line of every .df file: the grammar's edition.",
-        "edition 2027",
+        "edition 2026",
     ),
     r(
         "import",

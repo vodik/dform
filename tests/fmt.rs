@@ -91,10 +91,10 @@ fn formatting_keeps_every_token_but_redundant_commas() {
 #[test]
 fn check_lists_unformatted_files_and_fmt_rewrites_them() {
     let s = Scratch::new("fmt");
-    s.write("ok.df", "edition 2027\n\np(\"a\")\n");
+    s.write("ok.df", "edition 2026\n\np(\"a\")\n");
     s.write(
         "messy.df",
-        "edition 2027\nresource net.vpc main {\n    cidr = \"10.0.0.0/16\",\n    tags = {team:\"x\"},\n}\n",
+        "edition 2026\nresource net.vpc main {\n    cidr = \"10.0.0.0/16\",\n    tags = {team:\"x\"},\n}\n",
     );
     let r = s.run(&["fmt", "--check", "ok.df", "messy.df"]).failure();
     assert_eq!(r.stdout, "messy.df\n");
@@ -104,7 +104,7 @@ fn check_lists_unformatted_files_and_fmt_rewrites_them() {
     s.run(&["fmt", "ok.df", "messy.df"]).success();
     assert_eq!(
         s.read("messy.df"),
-        "edition 2027\nresource net.vpc main {\n  cidr = \"10.0.0.0/16\"\n  tags = { team: \"x\" }\n}\n"
+        "edition 2026\nresource net.vpc main {\n  cidr = \"10.0.0.0/16\"\n  tags = { team: \"x\" }\n}\n"
     );
     s.run(&["fmt", "--check", "ok.df", "messy.df"]).success();
 }
@@ -113,7 +113,7 @@ fn check_lists_unformatted_files_and_fmt_rewrites_them() {
 #[test]
 fn fmt_refuses_a_file_that_does_not_parse() {
     let s = Scratch::new("fmt-error");
-    let bad = "edition 2027\np(\"a\") if q(]\n";
+    let bad = "edition 2026\np(\"a\") if q(]\n";
     s.write("bad.df", bad);
     let r = s.run(&["fmt", "bad.df"]).failure();
     assert!(r.stderr.contains("bad.df:2:"), "{}", r.stderr);

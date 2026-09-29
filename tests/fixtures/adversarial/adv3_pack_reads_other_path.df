@@ -2,7 +2,7 @@
 # DIFFERENT path. E §4.3 says this compiles under (type, path) partitions.
 # Reads (attr, iam.policy, name); writes (arg, iam.policy, statements).
 
-edition 2027
+edition 2026
 
 resource iam.policy app_policy {
   name = "app"

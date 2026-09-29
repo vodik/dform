@@ -7,7 +7,7 @@
 mod common;
 use common::{Scratch, repo};
 
-const PROG: &str = r#"edition 2027
+const PROG: &str = r#"edition 2026
 
 resource net.vpc main { cidr = "10.0.0.0/16" }
 resource net.subnet a { vpc_id = ref(net.vpc, "main", "id"), cidr = "10.0.1.0/24" }
@@ -187,14 +187,14 @@ fn secrets_never_appear() {
     let s = Scratch::project("audit-secrets");
     s.write(
         "p.df",
-        "edition 2027\n\nresource leaky.vault v {\n  password = \"VAULT-SECRET-DO-NOT-LOG\"\n}\n",
+        "edition 2026\n\nresource leaky.vault v {\n  password = \"VAULT-SECRET-DO-NOT-LOG\"\n}\n",
     );
     let schema = repo().join("tests/fixtures/providers/leaky/schema.df");
     let args = ["--provider", schema.to_str().unwrap()];
     dform(&s, &[&args[..], &["apply"]].concat()).success();
     s.write(
         "p.df",
-        "edition 2027\n\nresource leaky.vault v {\n  password = \"ANOTHER-SECRET-DO-NOT-LOG\"\n}\n",
+        "edition 2026\n\nresource leaky.vault v {\n  password = \"ANOTHER-SECRET-DO-NOT-LOG\"\n}\n",
     );
     dform(&s, &[&args[..], &["apply"]].concat()).success();
     let log = s.read("w.state.audit.jsonl");
@@ -247,7 +247,7 @@ fn a_rekey_is_logged_where_the_state_goes() {
     let s = Scratch::project("audit-rekey");
     s.write(
         "k.df",
-        "edition 2027\n\
+        "edition 2026\n\
          \n\
          stack k[env] {\n\
            isolated = true\n\

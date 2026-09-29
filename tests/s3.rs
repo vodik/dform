@@ -689,7 +689,7 @@ fn handover_moves_an_s3_deployment_between_prefixes_and_to_local() {
     }
 }
 
-const PERSISTED: &str = r#"edition 2027
+const PERSISTED: &str = r#"edition 2026
 stack p {}
 extern random.password(+name, -value) persist
 resource db.user app {
@@ -714,7 +714,7 @@ fn taint_forgets_an_answer_in_the_bucket() {
             );
             s.write(
                 "providers/fake/externs.df",
-                "edition 2027\nrandom.password(\"app\", \"pw-first\")\n",
+                "edition 2026\nrandom.password(\"app\", \"pw-first\")\n",
             );
         });
         p.run(&["apply", "p"]).success();
@@ -734,14 +734,14 @@ fn taint_forgets_an_answer_in_the_bucket() {
     }
 }
 
-const NET: &str = r#"edition 2027
+const NET: &str = r#"edition 2026
 stack net.shared {}
 resource net.vpc main { cidr = "10.0.0.0/16" }
 output vpc_cidr = "10.0.0.0/16"
 output vpc_id = ref(net.vpc, "main", "id")
 "#;
 
-const APP: &str = r#"edition 2027
+const APP: &str = r#"edition 2026
 stack app {}
 resource net.subnet a {
   if {
@@ -877,7 +877,7 @@ fn a_server_that_ignores_conditions_is_refused() {
     let p = Project::of(&t, "lax-approval", |s| {
         s.write(
             "stacks/app.df",
-            "edition 2027\nstack app {}\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nrequires_approval(d, \"every change\") if {\ndeformation(_, t, a, _)\nd = \"${t}[\\\"${a}\\\"]\"\n}\n",
+            "edition 2026\nstack app {}\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nrequires_approval(d, \"every change\") if {\ndeformation(_, t, a, _)\nd = \"${t}[\\\"${a}\\\"]\"\n}\n",
         );
     });
     let r = p.run(&["plan", "app"]).failure();
@@ -904,7 +904,7 @@ fn a_project_reads_another_projects_outputs_through_its_s3_backend() {
         let p = Project::of(t, "remote", |s| {
             s.write(
                 "stacks/cluster.df",
-                "edition 2027\n\
+                "edition 2026\n\
                  input env: string = \"dev\"\n\
                  stack cluster[env] {}\n\
                  output endpoint = \"https://${env}.cluster.example\"\n\
@@ -922,7 +922,7 @@ fn a_project_reads_another_projects_outputs_through_its_s3_backend() {
         );
         app.write(
             "stacks/app.df",
-            "edition 2027\n\
+            "edition 2026\n\
              stack app {}\n\
              resource net.vpc edge {\n\
                if stack_output(\"platform.cluster[env=prod]\", \"endpoint\", e)\n\

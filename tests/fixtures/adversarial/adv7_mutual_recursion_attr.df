@@ -1,7 +1,7 @@
 # adv7: mutual recursion through attr between two types. A's field is read
 # from B's, B's from A's. A real cycle; must be rejected.
 
-edition 2027
+edition 2026
 
 resource net.vpc x {
   if arg(net.subnet, "y", "name", p)

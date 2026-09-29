@@ -39,14 +39,14 @@ fn doc_comments_lower_to_doc_facts() {
     let s = Scratch::new("docs-facts");
     s.write(
         "lib.df",
-        "edition 2027\n\
+        "edition 2026\n\
          #| Shared names.\n\
          type zone = enum(\"a\", \"b\")\n\
          ",
     );
     s.write(
         "p.df",
-        "edition 2027\n\
+        "edition 2026\n\
          import \"lib.df\"\n\
          #| A network.\n\
          #| owner: net-team\n\
@@ -86,7 +86,7 @@ fn a_policy_can_require_docs() {
     let s = Scratch::new("docs-policy");
     s.write(
         "p.df",
-        "edition 2027\n\
+        "edition 2026\n\
          #| Has an owner.\n\
          #| owner: a-team\n\
          module owned {}\n\

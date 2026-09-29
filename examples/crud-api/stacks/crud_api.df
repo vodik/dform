@@ -9,7 +9,7 @@
 #
 # To run it, from this directory: README.md.
 #
-# From proposals/G-corpus/crud_api.org (edition 2027 there; the compiler
+# From proposals/G-corpus/crud_api.org (edition 2026 there; the compiler
 # reads 2026). It plans against the mock (dform.toml: the built-in k8s
 # schema and this project's providers/google and providers/random), and
 # applies to a cluster with kubernetes = "providers/k8s" there. In
@@ -18,7 +18,7 @@
 # The live objects are read through the kubernetes provider's inventory
 # (`world.T[e].p`), named by remote id (`shop/crud-api`).
 
-edition 2027
+edition 2026
 
 stack shop.crud_api {}
 

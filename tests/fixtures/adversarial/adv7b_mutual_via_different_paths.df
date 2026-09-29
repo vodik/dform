@@ -3,7 +3,7 @@
 # (The resource-block sugar shares one body across every field, so putting
 # the read in the block would drag A.z above B.x and close the cycle.)
 
-edition 2027
+edition 2026
 
 resource net.vpc x {
   z = 1

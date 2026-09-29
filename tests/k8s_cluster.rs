@@ -82,7 +82,7 @@ fn dform(s: &Scratch, kubeconfig: &str, args: &[&str]) -> Run {
 
 fn program(ns: &str, image: &str) -> String {
     format!(
-        r#"edition 2027
+        r#"edition 2026
 
 provider k8s {{ source = "./providers/k8s" }}
 
@@ -406,7 +406,7 @@ fn a_secrets_string_data_reads_back() {
     let s = scratch("k8s-cluster-secret");
     let program = |pw: &str| {
         format!(
-            "edition 2027\nprovider k8s {{ source = \"./providers/k8s\" }}\n\
+            "edition 2026\nprovider k8s {{ source = \"./providers/k8s\" }}\n\
              resource k8s.namespace test {{\n  metadata.name = \"{}\"\n}}\n\
              resource k8s.secret token {{\n  metadata.name = \"token\"\n  \
              metadata.namespace = test.metadata.name\n  stringData = {{ password: \"{pw}\" }}\n}}\n",
@@ -438,7 +438,7 @@ fn an_empty_pod_selector_converges() {
     let s = scratch("k8s-cluster-pod-selector");
     let program = |selector: &str| {
         format!(
-            "edition 2027\nprovider k8s {{ source = \"./providers/k8s\" }}\n\
+            "edition 2026\nprovider k8s {{ source = \"./providers/k8s\" }}\n\
              resource k8s.namespace test {{\n  metadata.name = \"{}\"\n}}\n\
              resource k8s.network_policy all {{\n  metadata.name = \"all\"\n  \
              metadata.namespace = test.metadata.name\n  spec.podSelector = {{}}\n  \
@@ -488,7 +488,7 @@ fn a_kubeconfig_held_as_a_secret_configures_the_provider() {
     s.write(
         "p.df",
         &format!(
-            "edition 2027\nprovider k8s {{ source = \"./providers/k8s\" }}\n\
+            "edition 2026\nprovider k8s {{ source = \"./providers/k8s\" }}\n\
              input kubeconfig: secret(string)\n\
              provider_config(\"kubernetes\", {{ kubeconfig: k }}) if kubeconfig(k)\n\
              resource k8s.namespace test {{\n  metadata.name = \"{}\"\n}}\n",
@@ -567,7 +567,7 @@ fn a_world_read_answers_from_a_live_object() {
     s.write(
         "p.df",
         &format!(
-            "edition 2027\nprovider k8s {{ source = \"./providers/k8s\" }}\n\
+            "edition 2026\nprovider k8s {{ source = \"./providers/k8s\" }}\n\
              color = world.k8s.config_map[\"{0}/release\"].data.COLOR\n\
              resource k8s.config_map serving {{\n  metadata.name = \"serving\"\n  \
              metadata.namespace = \"{0}\"\n  data = {{ \"COLOR\": color }}\n}}\n",

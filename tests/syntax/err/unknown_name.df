@@ -1,4 +1,4 @@
-edition 2027
+edition 2026
 
 # Names are resolved: a constant is quoted, a variable is bound where it is
 # written, and no variable takes the name of a resource or a type namespace.

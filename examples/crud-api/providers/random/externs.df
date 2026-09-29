@@ -1,5 +1,5 @@
 # The mock's answers to random.password(+key, -value).
 
-edition 2027
+edition 2026
 
 random.password("crud-api-db", "mock-password-7f3c9a")

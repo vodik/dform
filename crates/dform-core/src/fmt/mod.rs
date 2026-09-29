@@ -308,7 +308,7 @@ mod tests {
 
     #[test]
     fn a_formatted_file_prints_back_unchanged() {
-        let src = "edition 2027\n\n# c\np(a, \"b\") if\n  {\n    q(x)\n    x != 1\n  }\n";
+        let src = "edition 2026\n\n# c\np(a, \"b\") if\n  {\n    q(x)\n    x != 1\n  }\n";
         assert_eq!(fmt(src), src);
     }
 

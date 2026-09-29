@@ -286,7 +286,7 @@ mod tests {
 
     #[test]
     fn doc_lines_directly_above_an_item_document_it() {
-        let src = "edition 2027\n\n#| The network.\n#| owner: platform\n#|\n#| Its subnets are private.\nmodule network {\n  #| The VPC's range.\n  #| since: 2026.1\n  input vpc_net: inet\n\n  #| not this: a blank line follows\n\n  output vpc: net.vpc\n  #| A subnet.\n  resource net.subnet \"private-${z}\" @default {\n    if data(\"zone\", z)\n  }\n}\nlet x = 1 #| a trailing comment\nlet y = 2\n# a plain comment\n#| deprecated: use q\np(a) if q(a)\n#| Checked.\ndeny \"no\" if p(1)\n#| Named.\ntype env = enum(\"a\")\n#| An extern.\nextern dns.lookup(+name, -addr)\n";
+        let src = "edition 2026\n\n#| The network.\n#| owner: platform\n#|\n#| Its subnets are private.\nmodule network {\n  #| The VPC's range.\n  #| since: 2026.1\n  input vpc_net: inet\n\n  #| not this: a blank line follows\n\n  output vpc: net.vpc\n  #| A subnet.\n  resource net.subnet \"private-${z}\" @default {\n    if data(\"zone\", z)\n  }\n}\nlet x = 1 #| a trailing comment\nlet y = 2\n# a plain comment\n#| deprecated: use q\np(a) if q(a)\n#| Checked.\ndeny \"no\" if p(1)\n#| Named.\ntype env = enum(\"a\")\n#| An extern.\nextern dns.lookup(+name, -addr)\n";
         assert_eq!(
             docs(src),
             vec![

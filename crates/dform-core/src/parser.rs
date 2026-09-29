@@ -53,7 +53,7 @@ fn program(name: &str, src: &str, require_edition: bool, mode: Mode) -> Result<P
     resolve::lower(&units, &[0], require_edition, mode).map_err(|d| Diagnostics(d).into())
 }
 
-/// A `.df` file on its own: it must start with `edition 2027`. `name` is
+/// A `.df` file on its own: it must start with `edition 2026`. `name` is
 /// how diagnostics name the file.
 pub fn parse_file(name: &str, src: &str) -> Result<Program> {
     program(name, src, true, Mode::Program)

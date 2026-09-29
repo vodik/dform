@@ -12,7 +12,7 @@
 # accepts any configured attribute) unless a change to one replaces the
 # object: a vpc's or a subnet's cidr is force_new.
 
-edition 2027
+edition 2026
 
 type_provider(net.vpc, "fakecloud")
 type_provider(net.subnet, "fakecloud")

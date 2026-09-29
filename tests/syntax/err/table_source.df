@@ -1,4 +1,4 @@
-edition 2027
+edition 2026
 
 # A table's columns are typed, and never secret; its source is FORMAT(SOURCE).
 input token(name: string, value: secret(string)) from csv("tokens.csv")

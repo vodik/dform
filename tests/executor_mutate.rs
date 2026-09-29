@@ -17,7 +17,7 @@ fn stack(name: &str) -> Scratch {
     );
     s.write(
         "p.df",
-        "edition 2027\nresource db.postgres main { size = 1 }\nresource compute.vm app { db_host = ref(db.postgres, \"main\", \"endpoint\") }\n",
+        "edition 2026\nresource db.postgres main { size = 1 }\nresource compute.vm app { db_host = ref(db.postgres, \"main\", \"endpoint\") }\n",
     );
     s
 }

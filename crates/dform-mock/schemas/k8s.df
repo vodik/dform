@@ -17,7 +17,7 @@
 #
 # type_mint gives the mock's answer for a server-picked value.
 
-edition 2027
+edition 2026
 
 # The real provider (dform-provider-k8s, src/k8s/) names a kind
 # k8s.<group>.<version>.<kind> (the core group as `core`, the kind in

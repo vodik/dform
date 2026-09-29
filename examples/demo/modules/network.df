@@ -1,4 +1,4 @@
-edition 2027
+edition 2026
 #| One VPC, and a private subnet in every zone.
 module network {
   #| A type alias, exported: every file that imports this one may write

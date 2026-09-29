@@ -796,7 +796,7 @@ fn locate(p: &Project, e: &Evaluated, w: Where) -> Option<Location> {
 mod tests {
     use super::*;
 
-    const SRC: &str = r#"edition 2027
+    const SRC: &str = r#"edition 2026
 input env: string = "staging"
 let cfg = settings[env]
 module network {
@@ -877,7 +877,7 @@ zone_index("a", 0)
         );
     }
 
-    const PRIVATE: &str = r#"edition 2027
+    const PRIVATE: &str = r#"edition 2026
 module a {
   helper(1)
   shared(1)

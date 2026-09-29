@@ -14,7 +14,7 @@ fn json(s: &Scratch, f: &str) -> serde_json::Value {
     serde_json::from_str(&s.read(f)).unwrap()
 }
 
-const NET: &str = r#"edition 2027
+const NET: &str = r#"edition 2026
 
 resource net.vpc main { cidr = "10.0.0.0/16" }
 resource net.subnet a { vpc_id = ref(net.vpc, "main", "id"), tier = "web" }
@@ -120,7 +120,7 @@ fn create_before_destroy_moves_dependents_before_the_deposed_delete() {
 #[test]
 fn a_deposed_object_is_held_while_a_dependent_is() {
     let s = Scratch::new("replace-deposed-held");
-    let net = r#"edition 2027
+    let net = r#"edition 2026
 
 resource net.vpc main { cidr = "10.0.0.0/16" }
 resource net.subnet a { vpc_id = ref(net.vpc, "main", "id"), note = "x" }

@@ -87,7 +87,7 @@ fn the_demo_plans_the_same_against_the_real_provider_offline() {
     // The long names are the same types.
     real.write(
         "long.df",
-        "edition 2027\nprovider k8s { source = \"./providers/k8s\" }\nresource k8s.apps.v1.deployment api {\n  metadata.name = \"api\"\n  spec.selector.matchLabels = {app: \"api\"}\n  spec.template.spec.containers = [{name: \"api\", image: \"api:1\"}]\n}\n",
+        "edition 2026\nprovider k8s { source = \"./providers/k8s\" }\nresource k8s.apps.v1.deployment api {\n  metadata.name = \"api\"\n  spec.selector.matchLabels = {app: \"api\"}\n  spec.template.spec.containers = [{name: \"api\", image: \"api:1\"}]\n}\n",
     );
     let r = dform(&real, None, &["plan", "long.df"]).success();
     assert!(
@@ -148,7 +148,7 @@ fn offline_plan_validates_and_hides_secrets() {
     real_demo(&s);
     s.write(
         "p.df",
-        "edition 2027\nprovider k8s { source = \"./providers/k8s\" }\nresource k8s.secret token {\n  metadata.name = \"token\"\n  stringData = {password: \"hunter2\"}\n}\n",
+        "edition 2026\nprovider k8s { source = \"./providers/k8s\" }\nresource k8s.secret token {\n  metadata.name = \"token\"\n  stringData = {password: \"hunter2\"}\n}\n",
     );
     let r = dform(&s, None, &["plan", "p.df"]).success();
     assert!(!r.stdout.contains("hunter2"), "{}", r.stdout);
@@ -160,7 +160,7 @@ fn offline_plan_validates_and_hides_secrets() {
 
     s.write(
         "p.df",
-        "edition 2027\nprovider k8s { source = \"./providers/k8s\" }\nresource k8s.deployment api {\n  metadata.name = \"api\"\n  spec.template.spec.containers = [{name: \"api\", image: \"api:1\"}]\n}\n",
+        "edition 2026\nprovider k8s { source = \"./providers/k8s\" }\nresource k8s.deployment api {\n  metadata.name = \"api\"\n  spec.template.spec.containers = [{name: \"api\", image: \"api:1\"}]\n}\n",
     );
     let r = dform(&s, None, &["plan", "p.df"]).failure();
     assert!(
@@ -1147,7 +1147,7 @@ fn a_kubeconfig_held_as_a_secret_configures_the_provider() {
     .to_string();
     let program = |settings: &str| {
         format!(
-            "edition 2027\nprovider k8s {{ source = \"./providers/k8s\" }}\n\
+            "edition 2026\nprovider k8s {{ source = \"./providers/k8s\" }}\n\
              input kubeconfig: secret(string)\n\
              provider_config(\"kubernetes\", {settings}) if kubeconfig(k)\n\
              resource k8s.config_map settings {{\n  metadata.name = \"settings\"\n  \
@@ -1236,7 +1236,7 @@ fn a_create_whose_answer_was_lost_is_found_by_its_label_and_key() {
     let s = Scratch::project("k8s-lost-create");
     std::fs::create_dir_all(s.path("providers/k8s")).unwrap();
     std::os::unix::fs::symlink(k8s(), s.path("providers/k8s/dform-provider-k8s")).unwrap();
-    let head = "edition 2027\nprovider k8s { source = \"./providers/k8s\" }\n";
+    let head = "edition 2026\nprovider k8s { source = \"./providers/k8s\" }\n";
     let cm = "resource k8s.config_map settings {\n  metadata.generateName = \"settings-\"\n  \
               data = { \"MODE\": \"test\" }\n}\n";
     s.write("p.df", &format!("{head}{cm}"));
@@ -1307,7 +1307,7 @@ fn an_empty_pod_selector_is_present() {
     std::os::unix::fs::symlink(k8s(), s.path("providers/k8s/dform-provider-k8s")).unwrap();
     let program = |selector: &str| {
         format!(
-            "edition 2027\nprovider k8s {{ source = \"./providers/k8s\" }}\n\
+            "edition 2026\nprovider k8s {{ source = \"./providers/k8s\" }}\n\
              resource k8s.network_policy deny {{\n  metadata.name = \"deny\"\n{selector}  \
              spec.policyTypes = [\"Ingress\"]\n}}\n"
         )
@@ -1348,7 +1348,7 @@ fn a_world_read_is_answered_from_the_live_object() {
     std::os::unix::fs::symlink(k8s(), s.path("providers/k8s/dform-provider-k8s")).unwrap();
     s.write(
         "p.df",
-        "edition 2027\n\
+        "edition 2026\n\
          provider k8s { source = \"./providers/k8s\" }\n\
          let active = world.k8s.service[\"shop/web\"].spec.selector.color\n\
          resource k8s.config_map serving {\n\
@@ -1445,7 +1445,7 @@ fn a_held_secret_is_read_from_the_cluster() {
     std::os::unix::fs::symlink(k8s(), s.path("providers/k8s/dform-provider-k8s")).unwrap();
     s.write(
         "a.df",
-        "edition 2027\n\
+        "edition 2026\n\
          stack a {}\n\
          provider k8s { source = \"./providers/k8s\" }\n\
          input pw: secret(string)\n\
@@ -1459,7 +1459,7 @@ fn a_held_secret_is_read_from_the_cluster() {
     );
     s.write(
         "b.df",
-        "edition 2027\n\
+        "edition 2026\n\
          stack b {}\n\
          provider k8s { source = \"./providers/k8s\" }\n\
          resource k8s.secret copy {\n\
