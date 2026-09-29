@@ -131,7 +131,7 @@ apply-order edge, not its content read now (`docs/grammar.md'
     (modify-syntax-entry ?|  "."      table)
     (modify-syntax-entry ?#  "<"      table)
     (modify-syntax-entry ?\n ">"      table)
-    (modify-syntax-entry ?/  ". 12"   table)
+    (modify-syntax-entry ?/  "."      table)
     table)
   "Syntax table for `dform-ts-mode'.")
 
@@ -149,13 +149,13 @@ apply-order edge, not its content read now (`docs/grammar.md'
 
    :language 'dform
    :feature 'string
-   '([(string) (keypath)] @font-lock-string-face)
+   '((string) @font-lock-string-face)
 
    :language 'dform
    :feature 'escape-sequence
    :override t
    '((escape_sequence) @font-lock-escape-face
-     (interpolation ["{" "}"] @font-lock-misc-punctuation-face))
+     (interpolation ["${" "}"] @font-lock-misc-punctuation-face))
 
    :language 'dform
    :feature 'number
@@ -163,12 +163,10 @@ apply-order edge, not its content read now (`docs/grammar.md'
 
    :language 'dform
    :feature 'constant
-   '([(true) (false) (null)] @font-lock-constant-face
-     (value_rule name: (identifier) @font-lock-constant-face)
+   '([(true) (false)] @font-lock-constant-face
      (input name: (identifier) @font-lock-constant-face)
      (output name: (identifier) @font-lock-constant-face)
-     (let name: (identifier) @font-lock-constant-face)
-     (with name: (identifier) @font-lock-constant-face))
+     (let name: (identifier) @font-lock-constant-face))
 
    :language 'dform
    :feature 'attribute
@@ -185,7 +183,7 @@ apply-order edge, not its content read now (`docs/grammar.md'
    '((module name: (identifier) @font-lock-function-name-face)
      (policy name: (identifier) @font-lock-function-name-face)
      (scenario name: (identifier) @font-lock-function-name-face)
-     (apply name: (identifier) @font-lock-function-name-face)
+     (use name: (identifier) @font-lock-function-name-face)
      (instance module: (identifier) @font-lock-function-name-face)
      (instance name: (identifier) @font-lock-function-name-face)
      (provider name: (identifier) @font-lock-function-name-face)
@@ -196,15 +194,12 @@ apply-order edge, not its content read now (`docs/grammar.md'
      (export name: (identifier) @font-lock-function-name-face)
      (input_relation name: (identifier) @font-lock-function-name-face)
      (fact head: (call function: (identifier) @font-lock-function-name-face))
-     (rule head: (call function: (identifier) @font-lock-function-name-face))
-     (fact head: (record name: (identifier) @font-lock-function-name-face))
-     (rule head: (record name: (identifier) @font-lock-function-name-face)))
+     (rule head: (call function: (identifier) @font-lock-function-name-face)))
 
    :language 'dform
    :feature 'function
    '((call function: (identifier) @font-lock-function-call-face)
-     (call function: (member_expression field: (identifier) @font-lock-function-call-face))
-     (record name: (identifier) @font-lock-function-call-face))
+     (call function: (member_expression field: (identifier) @font-lock-function-call-face)))
 
    :language 'dform
    :feature 'builtin
@@ -213,7 +208,7 @@ apply-order edge, not its content read now (`docs/grammar.md'
    "(call
       function: (identifier) @font-lock-builtin-face
       (#match? @font-lock-builtin-face
-        \"^\\(count\\|sum\\|min\\|max\\|collect_set\\|collect_list\\|format\\|ref\\|attr\\|want\\|arg\\|setting\\|output\\|input\\|member\\|inet\\|inet_subnet\\|inet_host\\|declassify\\|cloud_attr\\|cloud_exists\\)$\"))
+        \"^\\(count\\|sum\\|min\\|max\\|collect_set\\|collect_list\\|format\\|ref\\|attr\\|want\\|arg\\|setting\\|output\\|input\\|inet\\|inet_subnet\\|inet_host\\|declassify\\|cloud_attr\\|cloud_exists\\)$\"))
     ((identifier) @font-lock-builtin-face
       (#match? @font-lock-builtin-face \"^\\(settings\\|world\\)$\"))
     ((identifier) @font-lock-builtin-face
@@ -222,10 +217,9 @@ apply-order edge, not its content read now (`docs/grammar.md'
    :language 'dform
    :feature 'property
    '((member_expression field: (identifier) @font-lock-property-use-face)
-     (instance_expression name: (instance_name) @font-lock-property-use-face)
      (block_path (identifier) @font-lock-property-use-face)
      (object_field key: (identifier) @font-lock-property-name-face)
-     (record_field key: (identifier) @font-lock-property-name-face)
+     (named_argument name: (identifier) @font-lock-property-name-face)
      (bind_arg name: (identifier) @font-lock-variable-name-face)
      (field_declaration name: (identifier) @font-lock-variable-name-face))
 
@@ -240,28 +234,26 @@ apply-order edge, not its content read now (`docs/grammar.md'
    :language 'dform
    :feature 'reference
    :override t
-   '((field value: [(member_expression) (instance_expression)] @dform-reference-face)
-     (field value: (list [(member_expression) (instance_expression)] @dform-reference-face))
-     (field value: (object (object_field value: [(member_expression) (instance_expression)] @dform-reference-face)))
-     (output value: [(member_expression) (instance_expression)] @dform-reference-face)
-     (value_rule value: [(member_expression) (instance_expression)] @dform-reference-face)
-     (contribution value: [(member_expression) (instance_expression)] @dform-reference-face)
-     (fact head: (call arguments: (arguments [(member_expression) (instance_expression)] @dform-reference-face)))
-     (rule head: (call arguments: (arguments [(member_expression) (instance_expression)] @dform-reference-face)))
-     (comprehension item: [(member_expression) (instance_expression)] @dform-reference-face))
+   '((field value: (member_expression) @dform-reference-face)
+     (field value: (list (member_expression) @dform-reference-face))
+     (field value: (object (object_field value: (member_expression) @dform-reference-face)))
+     (output value: (member_expression) @dform-reference-face)
+     (let value: (member_expression) @dform-reference-face)
+     (set value: (member_expression) @dform-reference-face)
+     (fact head: (call arguments: (arguments (member_expression) @dform-reference-face)))
+     (rule head: (call arguments: (arguments (member_expression) @dform-reference-face)))
+     (comprehension item: (member_expression) @dform-reference-face))
 
    :language 'dform
    :feature 'keyword
    '([
-      "edition" "provider" "stack" "import" "as" "input" "relation" "from"
-      "output" "export" "contributes" "extern" "persist" "type" "decl" "mixed"
-      "open" "let" "module" "instance" "policy" "apply" "scenario" "with"
-      "resource" "settings"
+      "edition" "provider" "stack" "import" "input" "from" "output" "export"
+      "contributes" "extern" "persist" "type" "decl" "mixed" "let" "set"
+      "module" "instance" "policy" "use" "scenario" "resource" "settings"
       ] @font-lock-keyword-face
-     ["when" "if" "where"] @font-lock-keyword-face
-     ["for" "some" "ordered" "by"] @font-lock-keyword-face
-     ["deny" "warn" "constraint"] @font-lock-keyword-face
-     ["not" "in" "exists" "has"] @font-lock-keyword-face)
+     ["if" "where"] @font-lock-keyword-face
+     ["deny" "warn"] @font-lock-keyword-face
+     ["not" "in" "has"] @font-lock-keyword-face)
 
    :language 'dform
    :feature 'operator
@@ -295,12 +287,12 @@ apply-order edge, not its content read now (`docs/grammar.md'
      ((parent-is
        ,(regexp-opt
          '("block" "statement_block" "attribute_block" "body_block"
-           "object" "record" "record_type" "list" "comprehension"
+           "object" "record_type" "list" "comprehension"
            "arguments" "parenthesized" "index_expression")))
       parent-bol dform-ts-mode-indent-offset)
-     ;; A clause (`for'/`if') or a one-line body continued after a `,'.
+     ;; A clause (`if') or a one-line body.
      ((parent-is "clause") parent-bol dform-ts-mode-indent-offset)
-     ((parent-is ,(regexp-opt '("rule" "check" "value_rule" "contribution")))
+     ((parent-is ,(regexp-opt '("rule" "check" "let" "set" "output")))
       parent-bol dform-ts-mode-indent-offset)
      (no-node parent-bol 0)
      (catch-all parent-bol 0)))
@@ -394,7 +386,7 @@ a running `dform lsp' server (start it with `M-x eglot')."
   ;; Comments.
   (setq-local comment-start "# ")
   (setq-local comment-end "")
-  (setq-local comment-start-skip "\\(?:#+\\|//+\\)\\s-*")
+  (setq-local comment-start-skip "#+\\s-*")
 
   ;; Indentation.
   (setq-local indent-tabs-mode nil)
