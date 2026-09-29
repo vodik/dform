@@ -2025,10 +2025,15 @@ impl<'u> Lowerer<'u> {
                 continue;
             };
             failed = true;
-            let d = Diagnostic::error(span, format!("unknown name `{src}`")).with_help(format!(
-                "a variable is bound by a relation or an equality in the body; a string is \
-                 quoted: \"{src}\""
-            ));
+            let d = Diagnostic::error(span, format!("unknown name `{src}`"))
+                .with_help(format!(
+                    "a variable is bound by a relation or an equality in the body; a string is \
+                     quoted: \"{src}\""
+                ))
+                .with_fix(
+                    format!("quote it: \"{src}\""),
+                    vec![(span, format!("\"{src}\""))],
+                );
             self.diags.push(d);
         }
         if failed { Err(Skip) } else { Ok(()) }
@@ -2909,11 +2914,14 @@ impl<'u> Lowerer<'u> {
         {
             return Ok(Res::Type(c.fields().join(".")));
         }
-        let d = Diagnostic::error(span, format!("unknown name `{h}`")).with_help(format!(
+        let quoted = format!("\"{}\"", c.fields().join("."));
+        let mut d = Diagnostic::error(span, format!("unknown name `{h}`")).with_help(format!(
             "a resource, module, input, `let` or type is declared before it is read; a string \
-             is quoted: \"{}\"",
-            c.fields().join(".")
+             is quoted: {quoted}"
         ));
+        if c.ops.iter().all(|o| matches!(o, Op::Field(..))) {
+            d = d.with_fix(format!("quote it: {quoted}"), vec![(span, quoted)]);
+        }
         self.diags.push(d);
         Err(Skip)
     }

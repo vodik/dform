@@ -173,6 +173,17 @@ pub struct Diagnostic {
     pub labels: Vec<(Span, String)>,
     pub notes: Vec<String>,
     pub help: Option<String>,
+    /// What an editor may apply to fix it (the language server's quick
+    /// fixes).
+    pub fixes: Vec<Fix>,
+}
+
+/// A fix a diagnostic suggests: edits, each the text that replaces a
+/// span's bytes (an empty span inserts).
+#[derive(Debug, Clone)]
+pub struct Fix {
+    pub title: String,
+    pub edits: Vec<(Span, String)>,
 }
 
 impl Diagnostic {
@@ -183,6 +194,7 @@ impl Diagnostic {
             labels: Vec::new(),
             notes: Vec::new(),
             help: None,
+            fixes: Vec::new(),
         }
     }
 
@@ -198,6 +210,14 @@ impl Diagnostic {
 
     pub fn with_help(mut self, help: impl Into<String>) -> Self {
         self.help = Some(help.into());
+        self
+    }
+
+    pub fn with_fix(mut self, title: impl Into<String>, edits: Vec<(Span, String)>) -> Self {
+        self.fixes.push(Fix {
+            title: title.into(),
+            edits,
+        });
         self
     }
 

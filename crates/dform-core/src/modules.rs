@@ -360,7 +360,22 @@ pub fn expand(program: &Program) -> Result<Expanded> {
                 format!("{owner} declares an output: a policy pack has none"),
             ));
         }
-        check_grants(&owner, &body, &iface.grants, &mut diags);
+        // A grant goes on a line after the pack's last, else before its `}`.
+        let grant_at = match iface.grants.last() {
+            Some((_, g)) => (Span { start: g.end, ..*g }, true),
+            None => {
+                let end = p.span.end.saturating_sub(1);
+                (
+                    Span {
+                        start: end,
+                        end,
+                        ..p.span
+                    },
+                    false,
+                )
+            }
+        };
+        check_grants(&owner, &body, &iface.grants, grant_at, &mut diags);
         let names = pack_names(&p.name, &iface, &body, &mut diags);
         for (pr, _) in names.map.iter().filter(|(_, n)| n.contains("::")) {
             let help = format!("`contributes {pr}.` in {owner} makes it a global relation");
@@ -870,7 +885,15 @@ fn term_text(t: &Term) -> String {
 }
 
 /// Every `arg` a pack writes must be in one of its grants.
-fn check_grants(owner: &str, body: &[Stmt], grants: &[(Grant, Span)], diags: &mut Vec<Diagnostic>) {
+/// Each violation's fix inserts its grant at `at.0`, on a line of its own
+/// after it when `at.1`, else before it.
+fn check_grants(
+    owner: &str,
+    body: &[Stmt],
+    grants: &[(Grant, Span)],
+    at: (Span, bool),
+    diags: &mut Vec<Diagnostic>,
+) {
     let mut check = |typ: &Term, path: &Term, span: Span| {
         if granted(grants, typ, path) {
             return;
@@ -893,12 +916,19 @@ fn check_grants(owner: &str, body: &[Stmt], grants: &[(Grant, Span)], diags: &mu
         } else {
             "._".into()
         };
+        let grant = format!("contributes {pat_t}{pat_p}");
+        let insert = if at.1 {
+            format!("\n{grant}")
+        } else {
+            format!("{grant}\n")
+        };
         diags.push(
             Diagnostic::error(
                 span,
                 format!("{owner} writes {p} of {t} outside its grants"),
             )
-            .with_help(format!("grant it: `contributes {pat_t}{pat_p}`")),
+            .with_help(format!("grant it: `{grant}`"))
+            .with_fix(format!("grant it: `{grant}`"), vec![(at.0, insert)]),
         );
     };
     fn walk(stmts: &[Stmt], check: &mut dyn FnMut(&Term, &Term, Span)) {

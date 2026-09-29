@@ -73,7 +73,7 @@ pub fn take(program: &mut Program) -> Result<Vec<Relation>> {
                 source,
                 span: r.span,
             }),
-            Err(d) => diags.push(d),
+            Err(d) => diags.push(*d),
         }
         *s = Stmt::Extern(Extern {
             pred: r.pred.clone(),
@@ -108,17 +108,19 @@ fn nested(s: &Stmt, diags: &mut Vec<Diagnostic>) {
     }
 }
 
-fn source(r: &InputRelation) -> Result<Source, Diagnostic> {
+fn source(r: &InputRelation) -> Result<Source, Box<Diagnostic>> {
     // From the project root (`project::base_of`).
     let base = diag::location(r.span)
         .map(|(file, _, _)| crate::project::base_of(Path::new(&file)))
         .unwrap_or_default();
     let bad = || {
-        Diagnostic::error(
-            r.span,
-            format!("input relation {}/{}: unknown source", r.pred, r.arity),
+        Box::new(
+            Diagnostic::error(
+                r.span,
+                format!("input relation {}/{}: unknown source", r.pred, r.arity),
+            )
+            .with_help("the sources are `file(\"path\")` and `git(\"repo\", \"ref\", \"path\")`"),
         )
-        .with_help("the sources are `file(\"path\")` and `git(\"repo\", \"ref\", \"path\")`")
     };
     let Term::Func { name, args } = &r.source else {
         return Err(bad());

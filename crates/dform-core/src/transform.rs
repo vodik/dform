@@ -345,18 +345,31 @@ fn check_mixed(program: &Program) -> Result<()> {
         .filter(|((p, _), _)| !crate::loader::is_core_pred(p) && !p.contains("__"))
         .filter_map(|(k @ (p, n), rule)| {
             let fact = facts.get(k)?;
-            Some(
-                Diagnostic::error(
-                    *rule,
-                    format!(
-                        "{p}/{n} has both ground facts and rules: it is extensional and intensional"
-                    ),
-                )
-                .with_label(*fact, format!("a ground fact of {p}/{n}"))
-                .with_help(format!(
-                    "derive the facts with rules too, or declare it: `decl {p}/{n} mixed`"
-                )),
+            let d = Diagnostic::error(
+                *rule,
+                format!(
+                    "{p}/{n} has both ground facts and rules: it is extensional and intensional"
+                ),
             )
+            .with_label(*fact, format!("a ground fact of {p}/{n}"))
+            .with_help(format!(
+                "derive the facts with rules too, or declare it: `decl {p}/{n} mixed`"
+            ));
+            // The declaration goes before the first statement of `p/N`,
+            // when both are the program's own (not a module's or a pack's,
+            // whose names are renamed).
+            if fact.origin != 0 || rule.origin != 0 || fact.file != rule.file {
+                return Some(d);
+            }
+            let first = if fact.start < rule.start { fact } else { rule };
+            let at = Span {
+                end: first.start,
+                ..*first
+            };
+            Some(d.with_fix(
+                format!("declare it: `decl {p}/{n} mixed`"),
+                vec![(at, format!("decl {p}/{n} mixed\n"))],
+            ))
         })
         .collect();
     if diags.is_empty() {
