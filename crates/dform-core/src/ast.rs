@@ -141,7 +141,7 @@ pub enum Stmt {
     Settings(Settings),
     Decl(Decl),
     Extern(Extern),
-    /// `decl p/N mixed`: `p/N` may have both ground facts and rules (E
+    /// `decl p(..) mixed`: `p/N` may have both ground facts and rules (E
     /// §2.6); without it, a predicate that has both is a compile error.
     Mixed(Extern),
     /// `extern p(+in, -out, ...) [persist]`: a predicate a provider answers
@@ -218,7 +218,7 @@ impl std::fmt::Debug for Span {
     }
 }
 
-/// `decl p/N`: `p/N` is defined by a provider, not
+/// `decl p(..)` of a relation no rule defines: `p/N` is defined by a provider, not
 /// by the program.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Extern {
@@ -273,7 +273,7 @@ pub struct InputDecl {
     pub span: Span,
 }
 
-/// `input relation p/N from SOURCE`: the source is a call term,
+/// `input p(a, ..) from facts(SOURCE)`: the source is a call term,
 /// `file("path")` or `git("repo", "ref", "path")`, checked by `watch`.
 #[derive(Debug, Clone)]
 pub struct InputRelation {

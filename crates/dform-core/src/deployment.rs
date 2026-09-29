@@ -121,7 +121,7 @@ pub struct Loaded {
     pub lowered: Option<transform::Lowered>,
     /// The stack's and the instances' typed inputs.
     pub declared: Vec<Declared>,
-    /// The inputs a fact of the program gives (a scenario's `with k = v`,
+    /// The inputs a fact of the program gives (a scenario's `set k = v`,
     /// an input file's).
     pub given: BTreeSet<String>,
 }

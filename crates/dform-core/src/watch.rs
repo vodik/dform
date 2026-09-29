@@ -1,6 +1,6 @@
 //! Input relations (DESIGN.org "Reactive inputs and controller mode"):
-//! `input relation p/N from file("path")` or `from git("repo", "ref",
-//! "path")` declares that the facts of `p/N` come from outside the program.
+//! `input p(a, b) from facts("path")` or `from facts(git("repo", "ref",
+//! "path"))` declares that the facts of `p/2` come from outside the program.
 //! Every run reads them where they are now: `plan` and `apply` once, the
 //! controller whenever a source's stamp changes (`stamp`), by polling.
 //!

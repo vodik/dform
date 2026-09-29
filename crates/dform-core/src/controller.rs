@@ -97,7 +97,7 @@ pub struct Hook {
     /// The stack's input relations, from the last run, and the sources its
     /// tables read.
     pub relations: Vec<Relation>,
-    /// The `input relation p/N` declarations of this run.
+    /// The relation `input p(..) from ..` declarations of this run.
     declared: Vec<Relation>,
     /// The sources the last run's tables read (`tables::Tables::sources`).
     tables: Vec<Relation>,

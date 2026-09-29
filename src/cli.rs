@@ -2594,7 +2594,7 @@ fn run_tests(
     use std::io::IsTerminal;
     let names = crate::scenario::names(program)?;
     if names.is_empty() {
-        bail!("no scenarios: write `scenario NAME {{ with k = v; deny rules }}`");
+        bail!("no scenarios: write `scenario NAME {{ .. }}` holding `set k = v` and deny rules");
     }
     let backend = Providers::start(launch(), providers, &plugin::Config::default())?;
     let program_dir = crate::project::base_of(&files[0]);

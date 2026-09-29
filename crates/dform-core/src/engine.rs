@@ -881,7 +881,7 @@ pub fn query(body: &[Lit], facts: &BTreeSet<Atom>) -> Result<Vec<Answer>> {
 
 /// E §2.6: a body predicate with no definition is a compile error. Defined
 /// means: a fact or a rule head, a builtin, a compiler-owned or
-/// provider-injected predicate, a fact given to this run, or `decl p/N`.
+/// provider-injected predicate, a fact given to this run, or `decl p(..)`.
 fn check_defined(
     rules: &[RuleStmt],
     facts: &[Atom],
