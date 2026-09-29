@@ -5,9 +5,8 @@ examples/bootstrap/stacks/workload.df
 # The workload stack of the bootstrap demo (README "Controller mode"): a
 # namespace, a deployment and a service on the mock Kubernetes provider,
 # whose image comes from an input relation. After `dform stack handover`
-# the dform-controller Deployment that bootstrap.df installs runs it:
-#
-#   cargo run -- -C examples/bootstrap controller run renfry.workload
+# the dform-controller Deployment that bootstrap.df installs runs it.
+# To run it, from this directory: README.md.
 #
 # Edit data/release.facts and the controller deploys it; edit the world and
 # the replicas drift is corrected, the image drift is held for approval.
@@ -79,7 +78,6 @@ requires_approval(d, "a prod rollout") if {
 ---
 
 (source_file
-  (comment)
   (comment)
   (comment)
   (comment)

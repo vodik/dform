@@ -17,7 +17,7 @@ enum Apply {
     /// It converges in this many ticks: the next plan is undeformed.
     Converges(usize),
     /// It stops after tick 1 on a deny (on purpose: the example shows
-    /// one), with this in the error.
+    /// one), with this in the error. It runs in a copy of its own.
     Stops(&'static str),
 }
 
@@ -94,20 +94,15 @@ const CASES: &[Case] = &[
         name: "demo",
         stacks: &[one(&["apply", "dform", "env=staging"], Apply::Converges(1))],
     },
-    // gke_one_zone shows a deny at the boundary: its apply stops.
+    // Two zones by default; one shows the deny at the boundary.
     Case {
         name: "gke",
         stacks: &[
-            Stack {
-                plan: &["plan", "gke_two_phase"],
-                apply: &["apply", "gke_two_phase"],
-                ends: Apply::Converges(2),
-            },
-            Stack {
-                plan: &["plan", "gke_one_zone"],
-                apply: &["apply", "gke_one_zone"],
-                ends: Apply::Stops("cluster must be in at least two zones"),
-            },
+            one(&["apply"], Apply::Converges(2)),
+            one(
+                &["apply", "--set", "zones=1"],
+                Apply::Stops("cluster must be in at least two zones"),
+            ),
         ],
     },
     Case {
@@ -118,10 +113,16 @@ const CASES: &[Case] = &[
         name: "pngu",
         stacks: &[one(&["apply", "pngu", "env=dev"], Apply::Converges(1))],
     },
-    // Three zones by default; `--set zones=2` stops (refine_types.rs).
+    // Three zones by default; two break the refinement on them.
     Case {
         name: "refine",
-        stacks: &[one(&["apply"], Apply::Converges(2))],
+        stacks: &[
+            one(&["apply"], Apply::Converges(2)),
+            one(
+                &["apply", "--set", "zones=2"],
+                Apply::Stops("refinement violated"),
+            ),
+        ],
     },
 ];
 
@@ -187,15 +188,25 @@ fn check(name: &str) {
         .find(|c| c.name == name)
         .unwrap_or_else(|| panic!("add examples/{name} to tests/examples.rs"));
     let from = repo().join("examples").join(name);
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-        .join(format!("examples-{}-{name}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    copy_dir(&from, &dir);
-    let s = Scratch::adopt(dir);
+    let copy = |n: usize| {
+        let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+            .join(format!("examples-{}-{name}-{n}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        copy_dir(&from, &dir);
+        Scratch::adopt(dir)
+    };
+    let project = copy(0);
     let readme = std::fs::read_to_string(from.join("README.md"))
         .unwrap_or_else(|e| panic!("examples/{name}/README.md: {e}"));
     let listed = commands(&readme);
-    for st in case.stacks {
+    for (i, st) in case.stacks.iter().enumerate() {
+        let fresh;
+        let s = if matches!(st.ends, Apply::Stops(_)) {
+            fresh = copy(i + 1);
+            &fresh
+        } else {
+            &project
+        };
         // The README lists the commands this runs, from the project root.
         for args in [st.plan, st.apply] {
             let line = format!("dform {}", args.join(" "));

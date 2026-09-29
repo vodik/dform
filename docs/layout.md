@@ -67,7 +67,7 @@ Every example is a project under `examples/<name>/`, with its own
 | `examples/k8s`         | the mock Kubernetes provider                              |
 | `examples/aws`         | the Terraform-shaped mock AWS provider                    |
 | `examples/refine`      | refinement types                                          |
-| `examples/gke`         | two-phase GKE: `gke_two_phase` and `gke_one_zone`         |
+| `examples/gke`         | two-phase GKE: `gke_two_phase`, in two zones or one       |
 | `examples/bootstrap`   | two stacks: bootstrap and the controller's workload       |
 | `examples/approvals`   | approvals over a signed plan digest                       |
 | `examples/crud-api`    | a blue/green rollout (proposal G)                         |

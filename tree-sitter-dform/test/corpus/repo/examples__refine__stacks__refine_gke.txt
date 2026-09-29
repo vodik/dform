@@ -5,25 +5,31 @@ examples/refine/stacks/refine_gke.df
 # gke_two_phase.df with refinements (E §4.1 case 4, DR-13): the cluster's
 # zones are an open null until the cluster exists, so the refinement on
 # them is deferred at plan time ("refinement on ?gke_cluster/pngu#zones
-# deferred"). Tick 1 creates the cluster in the two zones its
-# node_locations name; the boundary resolves the zones, the refinement is
-# checked against them, fails (len_ge(3)), and apply stops before the
-# nodepools and the kubernetes objects:
-#   cargo run -- -C examples/refine apply
+# deferred"). Tick 1 creates the cluster in the zones its node_locations
+# name; the boundary resolves the zones and the refinement (len_ge(3)) is
+# checked against them. Three zones hold; two (`--set zones=2`) do not,
+# and apply stops after tick 1, before the nodepools and the kubernetes
+# objects. To run it, from this directory: README.md.
 #
 # The settings refinements are checked at compile time against the literal
 # CIDRs (they hold), and again in the cell.
 #
-# C's two-phase GKE / kubernetes stack (E §7.4), in the current syntax.
-# Run with the gke mock schema, which makes the cluster's zones, endpoint and
-# ca open nulls until the cluster exists:
-#   cargo run -- -C examples/refine plan
+# C's two-phase GKE / kubernetes stack (E §7.4), in the current syntax, with
+# the gke mock schema, which makes the cluster's zones, endpoint and ca open
+# nulls until the cluster exists.
 
 edition 2026
 stack refine_gke {}
 provider gke {}
 
 input env: enum("dev", "stg", "prod") = "dev"
+# How many zones the cluster is placed in: two is fewer than the
+# refinement on its zones allows.
+input zones: int = 3 where zones >= 1
+
+zone_at(1, "us-east1-b")
+zone_at(2, "us-east1-c")
+zone_at(3, "us-east1-d")
 
 settings dev {
   project_id = "renfry-dev-973682"
@@ -67,7 +73,7 @@ resource gke_cluster pngu {
   network_id = net_id
   subnetwork_id = gke_subnet.id
   master_control_plane_cidr = cfg.gke.control_plane_cidr
-  node_locations = ["us-east1-b", "us-east1-c"]
+  node_locations = [ z | zone_at(i, z), i <= zones ]
   deletion_protection = true
 }
 
@@ -118,7 +124,8 @@ deny "cluster must be in at least two zones" { cluster: "pngu" } if {
 # per key it is decided now, and holds.
 deny "cluster must not be deletable" { cluster: c } if c in gke_cluster, not c.deletion_protection
 
-# Refinements (E §7.4's settings type, and one the cluster cannot meet).
+# Refinements (E §7.4's settings type, and one the cluster meets only in
+# three zones).
 type settings {
   gke: {
     control_plane_cidr: inet where prefix_len(control_plane_cidr) == 28
@@ -133,7 +140,6 @@ type gke_cluster {
 ---
 
 (source_file
-  (comment)
   (comment)
   (comment)
   (comment)
@@ -171,6 +177,40 @@ type gke_cluster {
         (string_content)))
     (string
       (string_content)))
+  (comment)
+  (comment)
+  (input
+    (identifier)
+    (type
+      (dotted_name
+        (identifier)))
+    (integer)
+    (where_clause
+      (body
+        (comparison
+          (identifier)
+          (integer)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (integer)
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (integer)
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (integer)
+        (string
+          (string_content)))))
   (settings
     (identifier)
     (block
@@ -369,11 +409,18 @@ type gke_cluster {
       (field
         (block_path
           (identifier))
-        (list
-          (string
-            (string_content))
-          (string
-            (string_content))))
+        (comprehension
+          (identifier)
+          (body
+            (atom_literal
+              (call
+                (identifier)
+                (arguments
+                  (identifier)
+                  (identifier))))
+            (comparison
+              (identifier)
+              (identifier)))))
       (field
         (block_path
           (identifier))
@@ -581,6 +628,7 @@ type gke_cluster {
           (member_expression
             (identifier)
             (identifier))))))
+  (comment)
   (comment)
   (type_declaration
     (dotted_name

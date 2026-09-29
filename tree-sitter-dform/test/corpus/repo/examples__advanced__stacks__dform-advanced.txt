@@ -10,11 +10,7 @@ examples/advanced/stacks/dform-advanced.df
 # - enforce policies based on derived reachability (tenant isolation)
 # - demonstrate another closure: nested group membership
 #
-# Try:
-#   cargo run -- -C examples/advanced plan
-#   cargo run -- -C examples/advanced query reachable
-#   cargo run -- -C examples/advanced plan --set env=prod
-#   cargo run -- -C examples/advanced query in_group
+# To run it, from this directory: README.md.
 
 edition 2026
 stack advanced {}
@@ -184,10 +180,6 @@ warn "user is effectively admin (via group nesting)" { user: u } if in_group(u, 
 ---
 
 (source_file
-  (comment)
-  (comment)
-  (comment)
-  (comment)
   (comment)
   (comment)
   (comment)

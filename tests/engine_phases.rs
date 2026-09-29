@@ -146,13 +146,14 @@ fn gke_two_phase_applies_in_two_ticks() {
     );
 }
 
-/// The other branch of item 6: the cluster comes back with one zone, the
-/// policy derives at the boundary, and apply stops after tick 1 with the
-/// deny printed, before the nodepools and the kubernetes objects.
+/// The other branch of item 6: placed in one zone (`--set zones=1`), the
+/// cluster comes back with one, the policy derives at the boundary, and
+/// apply stops after tick 1 with the deny printed, before the nodepools and
+/// the kubernetes objects.
 #[test]
 fn gke_one_zone_stops_after_tick_one() {
     let s = Scratch::new("gke-one-zone");
-    let r = gke(&s, "gke_one_zone.df", &["apply"]).failure();
+    let r = gke(&s, "gke_two_phase.df", &["apply", "--set", "zones=1"]).failure();
     assert!(r.stdout.contains("tick 1:"), "{}", r.stdout);
     assert!(!r.stdout.contains("tick 2:"), "{}", r.stdout);
     assert!(

@@ -655,8 +655,8 @@ re-evaluated and policy is checked again; a deny there stops the run with the
 reason printed. `--max-ticks N` (default 8) bounds the loop:
 
 ```bash
-cargo run -- -C examples/gke apply gke_two_phase   # two ticks
-cargo run -- -C examples/gke apply gke_one_zone    # stops after tick 1
+cargo run -- -C examples/gke apply                  # two ticks
+cargo run -- -C examples/gke apply --set zones=1   # one zone: stops after tick 1
 ```
 
 At a boundary apply also compares the refreshed world with what it last saw

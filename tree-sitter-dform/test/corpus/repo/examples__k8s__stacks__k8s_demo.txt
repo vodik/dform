@@ -5,8 +5,7 @@ examples/k8s/stacks/k8s_demo.df
 # A Namespace, a Deployment and a Service planned against the mock Kubernetes
 # provider (crates/dform-mock/schemas/k8s.df). No cluster: the world is a JSON file.
 #
-#   cargo run -- -C examples/k8s plan
-#   cargo run -- -C examples/k8s apply
+# To run it, from this directory: README.md.
 #
 # The ConfigMap uses generateName, so its name is picked by the API server at
 # Apply: until then the Deployment's configMapRef carries the null
@@ -55,7 +54,6 @@ resource k8s.service name {
 ---
 
 (source_file
-  (comment)
   (comment)
   (comment)
   (comment)

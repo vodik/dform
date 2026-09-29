@@ -6,10 +6,7 @@ examples/pngu/stacks/pngu.df
 #
 # dform representation of ~/src/movableink/pngu/terraform.
 #
-# Usage:
-#   cargo run -- -C examples/pngu plan
-#   cargo run -- -C examples/pngu plan pngu env=stg
-#   cargo run -- -C examples/pngu plan pngu env=prod
+# To run it, from this directory: README.md.
 #
 # Each env value is its own deployment with its own state:
 # dform.state/pngu/env=prod/ never sees dev's resources. Each env is its own
@@ -102,14 +99,15 @@ let cfg = settings[env]
 # Provider (configured by the key)
 ########################################
 
-# The mock plays the google types. Each deployment configures it from its
+# The gke mock plays the google types (crates/dform-mock/schemas/gke.df:
+# every one mints its id at Apply). Each deployment configures it from its
 # own settings row, and refuses to plan when the account the provider
 # reports is not the one this env names: the same shell cannot point
 # prod's plan at dev's project. Against the real provider the credentials
 # would come from the environment, by key, as a secret:
 #   credentials = env_var("GOOGLE_CREDENTIALS_{env}")
 # and the account from the credentials; the mock reports its `account`.
-provider fake {
+provider gke {
   project = cfg.project_id
   region = cfg.region
   account = cfg.project_id
@@ -228,9 +226,6 @@ output project_id = cfg.project_id
 ---
 
 (source_file
-  (comment)
-  (comment)
-  (comment)
   (comment)
   (comment)
   (comment)
@@ -478,6 +473,7 @@ output project_id = cfg.project_id
     (index_expression
       (identifier)
       (identifier)))
+  (comment)
   (comment)
   (comment)
   (comment)

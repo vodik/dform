@@ -11,8 +11,7 @@ examples/crud-api/stacks/crud_api.df
 # every replica of it is ready) the Service's selector; the old color is
 # retired on the next tick, because the world now says the new one serves.
 #
-#   dform -C examples/crud-api plan crud_api
-#   dform controller run shop.crud_api
+# To run it, from this directory: README.md.
 #
 # From proposals/G-corpus/crud_api.org (edition 2027 there; the compiler
 # reads 2026). It plans against the mock (dform.toml: the built-in k8s
@@ -269,8 +268,10 @@ module app {
     }]
   }
 
-  output ready_replicas = deploy.status.readyReplicas
-  output total_replicas = deploy.status.replicas
+  # Only while the instance runs: a color with no run has no Deployment,
+  # and a ref to it would dangle.
+  output("ready_replicas", n) if has color, n = deploy.status.readyReplicas
+  output("total_replicas", n) if has color, n = deploy.status.replicas
 }
 
 ########################################
@@ -356,7 +357,6 @@ auto_reconcile(t, a, p) if drift(t, a, p, _, _), owned_label(l), p == "metadata.
 ---
 
 (source_file
-  (comment)
   (comment)
   (comment)
   (comment)
@@ -1548,20 +1548,42 @@ auto_reconcile(t, a, p) if drift(t, a, p, _, _), owned_label(l), p == "metadata.
                         (identifier)
                         (string
                           (string_content)))))))))))
-      (output
-        (identifier)
-        (member_expression
-          (member_expression
-            (identifier)
+      (comment)
+      (comment)
+      (rule
+        (call
+          (identifier)
+          (arguments
+            (string
+              (string_content))
+            (identifier)))
+        (body
+          (has_literal
             (identifier))
-          (identifier)))
-      (output
-        (identifier)
-        (member_expression
-          (member_expression
+          (comparison
             (identifier)
+            (member_expression
+              (member_expression
+                (identifier)
+                (identifier))
+              (identifier)))))
+      (rule
+        (call
+          (identifier)
+          (arguments
+            (string
+              (string_content))
+            (identifier)))
+        (body
+          (has_literal
             (identifier))
-          (identifier)))))
+          (comparison
+            (identifier)
+            (member_expression
+              (member_expression
+                (identifier)
+                (identifier))
+              (identifier)))))))
   (comment)
   (comment)
   (comment)

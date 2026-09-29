@@ -4,14 +4,24 @@ examples/gke/stacks/gke_two_phase.df
 
 # C's two-phase GKE / kubernetes stack (E §7.4), in the current syntax.
 # Run with the gke mock schema, which makes the cluster's zones, endpoint and
-# ca open nulls until the cluster exists:
-#   cargo run -- -C examples/gke plan gke_two_phase
+# ca open nulls until the cluster exists. Two ticks.
+#
+# E §2.7 worked example item 6, both branches: the cluster is placed in
+# `zones` zones, two by default. With one (`--set zones=1`) its zones come
+# back with one element, so at the boundary the two-zones deny derives and
+# apply stops after tick 1, before the nodepools and the kubernetes objects.
+# To run it, from this directory: README.md.
 
 edition 2026
 stack gke_two_phase {}
 provider gke {}
 
 input env: enum("dev", "stg", "prod") = "dev"
+# How many zones the cluster is placed in.
+input zones: int = 2 where zones >= 1
+
+zone_at(1, "us-east1-b")
+zone_at(2, "us-east1-c")
 
 settings dev {
   project_id = "renfry-dev-973682"
@@ -55,7 +65,7 @@ resource gke_cluster pngu {
   network_id = net_id
   subnetwork_id = gke_subnet.id
   master_control_plane_cidr = cfg.gke.control_plane_cidr
-  node_locations = ["us-east1-b", "us-east1-c"]
+  node_locations = [ z | zone_at(i, z), i <= zones ]
   deletion_protection = true
 }
 
@@ -113,6 +123,11 @@ deny "cluster must not be deletable" { cluster: c } if c in gke_cluster, not c.d
   (comment)
   (comment)
   (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
   (edition
     (integer))
   (stack
@@ -135,6 +150,32 @@ deny "cluster must not be deletable" { cluster: c } if c in gke_cluster, not c.d
         (string_content)))
     (string
       (string_content)))
+  (comment)
+  (input
+    (identifier)
+    (type
+      (dotted_name
+        (identifier)))
+    (integer)
+    (where_clause
+      (body
+        (comparison
+          (identifier)
+          (integer)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (integer)
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (integer)
+        (string
+          (string_content)))))
   (settings
     (identifier)
     (block
@@ -333,11 +374,18 @@ deny "cluster must not be deletable" { cluster: c } if c in gke_cluster, not c.d
       (field
         (block_path
           (identifier))
-        (list
-          (string
-            (string_content))
-          (string
-            (string_content))))
+        (comprehension
+          (identifier)
+          (body
+            (atom_literal
+              (call
+                (identifier)
+                (arguments
+                  (identifier)
+                  (identifier))))
+            (comparison
+              (identifier)
+              (identifier)))))
       (field
         (block_path
           (identifier))
