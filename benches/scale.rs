@@ -93,18 +93,13 @@ fn program(s: &Scale) -> String {
         .unwrap();
         if i > 0 {
             let p = i / 4;
-            writeln!(out, "  parent = {}.r{p}.id", ty(p % s.types)).unwrap();
+            writeln!(out, "  parent = r{p}.id").unwrap();
         }
         if i % 100 == 1 {
             // A format over an open endpoint: needs its content (Rule 2).
             let q = (i / 10) * 10;
             if has_endpoint(q % s.types) {
-                writeln!(
-                    out,
-                    "  label = format(\"%s-x\", ref({}, \"r{q}\", .endpoint))",
-                    ty(q % s.types)
-                )
-                .unwrap();
+                writeln!(out, "  label = format(\"%s-x\", r{q}.endpoint)").unwrap();
             }
         }
         out.push_str("}\n");
@@ -129,7 +124,7 @@ fn policy(s: &Scale) -> String {
     for k in 0..s.rules {
         let t = ty(k % s.types);
         let rule = match k % 5 {
-            0 => format!("n.tags += {{ p{k}: \"on\" }} if n in {t}"),
+            0 => format!("set n.tags += {{ p{k}: \"on\" }} if n in {t}"),
             1 => format!("warn \"big {t}\" {{ r: n }} if {t}[n].size > 14"),
             2 => format!("deny \"odd size on {t}\" {{ r: n }} if s = {t}[n].size, not size_ok(s)"),
             3 => format!("warn \"empty {t}\" {{ r: n }} if n in {t}, n.size == 0"),

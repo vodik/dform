@@ -139,6 +139,11 @@ struct Decls {
     types: BTreeSet<String>,
     /// First segments of the types: no variable may take one.
     namespaces: BTreeSet<String>,
+    /// The namespaces whose every type the compiler knows: the built-in
+    /// schemas' but `k8s` (a cluster's types, CRDs included, are its own).
+    /// Another namespace's type may be a provider schema's the compiler
+    /// does not read (`--provider`, a plugin's).
+    closed: BTreeSet<String>,
     /// Relations: rule and fact heads, `decl`s, input relations.
     relations: BTreeSet<String>,
     /// `extern` relations: their columns, `(input, name)`.
@@ -485,6 +490,11 @@ impl<'u> Lowerer<'u> {
             .types
             .iter()
             .map(|t| t.split('.').next().unwrap_or(t).to_string())
+            .collect();
+        l.decls.closed = schema_types()
+            .iter()
+            .filter_map(|t| t.split_once('.').map(|(n, _)| n.to_string()))
+            .filter(|n| n != "k8s")
             .collect();
         l.collect_aliases();
         l
@@ -1031,7 +1041,11 @@ impl<'u> Lowerer<'u> {
         let fields = c.fields();
         let resource = (1..fields.len())
             .any(|i| self.resource_of_type(rc.scope, &fields[..i].join("."), &fields[i]));
-        let namespace = self.decls.namespaces.contains(&c.head) || self.any_type;
+        // A namespace no declaration or builtin schema names is a provider
+        // schema's the compiler does not read (`--provider`, a plugin's).
+        let namespace = self.decls.namespaces.contains(&c.head)
+            || self.any_type
+            || !self.decls.relations.contains(&c.head);
         (!local && !resource && namespace && !c.ops.is_empty()).then_some(name)
     }
 
@@ -3322,7 +3336,10 @@ impl<'u> Lowerer<'u> {
             && (self.decls.namespaces.contains(h) || self.any_type)
         {
             let name = c.fields().join(".");
-            if self.any_type || self.decls.types.contains(&name) {
+            if self.any_type
+                || self.decls.types.contains(&name)
+                || (!c.ops.is_empty() && !self.decls.closed.contains(h))
+            {
                 return Ok(Res::Type(name));
             }
             return self.error(
@@ -3640,7 +3657,10 @@ impl<'u> Lowerer<'u> {
                 path,
             }));
         }
-        if self.decls.types.contains(&name) || (k > 1 && self.any_type) {
+        // `T[e]` in a namespace no declaration or builtin schema names: a
+        // provider schema's type the compiler does not read.
+        let foreign = !self.decls.closed.contains(&c.head);
+        if self.decls.types.contains(&name) || (k > 1 && (self.any_type || foreign)) {
             if ts.len() != 1 {
                 return self.error(span, "a resource is `T[key]`").map(Some);
             }
@@ -3670,7 +3690,7 @@ impl<'u> Lowerer<'u> {
                 path,
             }));
         }
-        if k > 1 && self.decls.namespaces.contains(&c.head) {
+        if k > 1 && self.decls.closed.contains(&c.head) {
             return self
                 .error(
                     span,
@@ -4346,6 +4366,18 @@ mod tests {
         assert!(
             e.contains("`let x` is a settings row in one row and a value in another"),
             "{e}"
+        );
+    }
+
+    #[test]
+    fn a_namespace_no_builtin_schema_knows_is_a_providers() {
+        let got = lower(
+            "resource acme.gadget g {}\n\
+             p(x) if x in acme.widget, acme.widget[x].size > 1\n",
+        );
+        assert_eq!(
+            got.last().unwrap(),
+            "p(X) :- want(\"acme.widget\", X), attr(\"acme.widget\", X, \"size\", Size), Size > 1"
         );
     }
 
