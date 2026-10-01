@@ -119,7 +119,7 @@ same). `examples/tour` is a tutorial you read top to bottom.
 ## It looks like Terraform, on purpose
 
 If you know Terraform, the program above is readable: a provider, a
-resource block with attributes, a reference to another resource's id, a
+resource block with attributes, a reference to another resource, a
 plan with `+` lines, and an apply that makes it so. The workflow is the
 same, and the pieces around it are too: state, modules with inputs and
 outputs, a lock, a plan file you can review and sign. dform keeps the
@@ -200,7 +200,7 @@ change set:
 ```dform
 deny "no deletes in prod" { resource: r } where env == "prod", deformation("delete", r, _)
 warn "replacing a database" { db } where deformation("replace", db, _), db in aws.db_instance
-requires_approval(sg, "a security group changed") where deformation(_, sg, _), sg in aws.security_group
+requires_approval(sg, "security group ${action}") where deformation(action, sg, _), sg in aws.security_group
 ```
 
 ```
@@ -342,14 +342,13 @@ that is only a name, `availability_zone`, takes the variable of that
 name.
 
 **References and reads.** `vpc = main` is a reference: the schema says
-`vpc` identifies a VPC, so the attribute takes the VPC itself,
-an edge in the apply order, and the provider gets its id once it exists.
-`main.id` is the id as a value, for an attribute that wants a different
-identity (`role_arn = role.arn`). `inet.subnet(main.cidr_block, 8, n)`
-reads the cidr now, because the function needs its bytes. A dot is a reference where it stands as a
-whole value and a read where its content is used, and the compiler says
-at the read when a read of a computed value makes a block wait for a
-later tick.
+`vpc` identifies a VPC, so the attribute takes the VPC itself, an edge
+in the apply order, and the provider gets its id once it exists.
+`inet.subnet(main.cidr_block, 8, n)` reads the cidr now, because the
+function needs its bytes. An attribute that is a value, `endpoint =
+db.endpoint`, is passed along and resolves at apply; the same dot inside
+a function or a clause reads it now, and the compiler says at the read
+when that makes a block wait for a later tick.
 
 **Types.** Values are typed, and strings stop at the edge. A provider's
 schema types every attribute (`cidr_block: inet required`,
