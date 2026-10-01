@@ -602,7 +602,7 @@ resource output is a documented limitation and a second root module.
 
 In dform a provider block is a rule like every other statement, and the
 evaluation engine that carries unknowns through a resource carries them
-through a provider too. `provider kubernetes { endpoint =
+through a provider too. `provider k8s { endpoint =
 cluster.endpoint }` is simply a rule that cannot fire until tick 1 has
 made the cluster; the engine knows that, plans the cluster first, learns
 the endpoint, configures the provider, and plans what runs on it in
@@ -623,7 +623,7 @@ resource aws.eks_cluster cluster {
 # The Kubernetes provider is bound to the cluster above: its endpoint and
 # CA are unknown until tick 1 has created it, so this provider, and
 # everything that uses it, waits for that tick.
-provider kubernetes {
+provider k8s {
   endpoint = cluster.endpoint
   ca = cluster.certificate_authority
 }
