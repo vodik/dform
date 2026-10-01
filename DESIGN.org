@@ -388,6 +388,61 @@ into reasons to switch. Each is a Phase 9 ticket of the same number.
   other tools cannot do, each paired with the Terraform workaround it
   replaces. The reference moves to docs/. Supersedes R-14's split.
 
+** R-24 A registry is a bucket: providers and function packages live where state does
+*Context.* Terraform's registry is a service because a provider is a
+native binary per OS and architecture. Under R-13 a provider is one
+component file, platform-independent, content-addressed. dform already
+has a store with conditional writes (=store.rs=: =local= and =s3=, ETags,
+=If-None-Match= for new objects), credentials for it, =[remotes]= in
+=dform.toml= naming other backends, and DSSE/JWKS verification
+(=approval.rs=). What is missing: a remote provider source, a lockfile
+and cache (DESIGN.org "Provider declaration, lockfile, and local cache",
+still open), signing, and the schema beside the artifact.
+*Decision.* A registry is a prefix in any backend state can live in,
+named in =dform.toml= with the same term as a backend:
+#+begin_example
+[registries]
+acme = { backend = 's3("acme-dform", "providers", {endpoint: "..", region: ".."})', keys = 'jwks_file("acme.jwks.json")' }
+dev  = { backend = 'local("../registry")' }
+
+[providers]
+aws = { source = "acme/aws", version = "2.1" }      # registry/name
+gcp = { source = "providers/gcp" }                   # a path, as today
+
+[functions]
+geo = { source = "acme/geo", version = "0.3" }
+#+end_example
+Layout under the prefix, immutable per version:
+=NAME/VERSION/provider.wasm= (or =package.wasm= for functions),
+=NAME/VERSION/manifest.json= (name, version, kind, protocol version,
+sha256 of the artifact, the schema's sha256, the signing key id),
+=NAME/VERSION/schema.df= (the provider's =Schema= answer as facts, so
+the resolver and the LSP know its types and externs without
+instantiating it, and offline), =NAME/VERSION/manifest.dsse= (the
+manifest signed, Ed25519 DSSE as approvals are), and =NAME/index.json=
+(the versions, written with =If-Match=). A version is written with
+=If-None-Match: *= and never overwritten; yanking is an index flag.
+Resolution: the version constraint (Cargo semver, as today) against the
+index, the artifact fetched into =dform.state/cache/providers/<sha256>=
+and verified against the manifest's digest and, when the registry has
+=keys=, the envelope against them; =dform.lock= records name, version,
+sha256 and key id, and a run with a lockfile never consults the index.
+A registry without =keys= accepts unsigned manifests (local
+development); one with them refuses an unsigned or unverifiable
+artifact naming the key. Publishing is a client operation, no service:
+=dform provider publish PATH --to acme [--key FILE]= runs =provider
+check= first, writes the four objects, updates the index. Mirroring is
+a copy. Air-gapped is =local=. Built-in providers (the mock) are
+publishable like any other, which is how the registry is tested.
+*Why it is easy.* IAM on the bucket is the access control, the same
+credentials reach state and providers, nothing runs, and the
+conditional-write store is the implementation. A public registry later
+is a public bucket and a well-known key, not a product.
+*Not taken.* OCI artifacts (a second store with its own auth; revisit
+if a user asks for GHCR), a registry protocol over HTTP (a service),
+per-platform native providers in the registry (the bridge's sidecars
+are deployed like any other binary, not through dform).
+
 * Vocabulary
 The name is Terraform minus terra plus Datalog, and it reads as "deform" aloud.
 Use the pun consistently in CLI output, docs, and diagnostics.
