@@ -46,7 +46,6 @@
 (rule head: (call function: (identifier) @function))
 (decl name: (dotted_name (identifier) @function))
 (extern name: (dotted_name (identifier) @function))
-(export name: (identifier) @function)
 (input_relation name: (identifier) @function)
 
 (input name: (identifier) @constant)
@@ -110,7 +109,7 @@
 
 [
   "edition" "provider" "stack" "import" "input" "from" "output" "export"
-  "contributes" "extern" "persist" "type" "decl" "mixed" "let" "set"
+  "extern" "persist" "type" "decl" "mixed" "let" "set"
   "module" "instance" "policy" "use" "scenario" "resource" "settings"
 ] @keyword
 

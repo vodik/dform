@@ -155,9 +155,6 @@ pub fn item(n: &SyntaxNode) -> Option<(&'static str, String)> {
         TYPE_ALIAS => ("alias", word(n, 1)?),
         DECL => ("predicate", dotted(n)?),
         EXTERN => ("predicate", dotted(n)?),
-        EXPORT if tokens(n).nth(1).is_none_or(|t| t.kind() != TYPE_KW) => {
-            ("predicate", word(n, 1)?)
-        }
         RULE | FACT => {
             let call = n.children().find(|c| c.kind() == CALL)?;
             let chain = call.children().find(|c| c.kind() == CHAIN)?;

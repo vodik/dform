@@ -111,15 +111,24 @@ instance m a {}
     )
     .failure();
     assert!(
-        r.stderr.contains(
-            "p.df:3:3: `export p` is gone: a module's relations are private to each instance"
-        ),
+        r.stderr.contains("p.df:3:10: expected `type`, found `size`"),
         "{}",
         r.stderr
     );
     assert!(
         r.stderr
-            .contains("p.df:4:3: `contributes` is gone: a write needs no grant"),
+            .contains("`export p` is gone: a module's relations are private to each instance"),
+        "{}",
+        r.stderr
+    );
+    assert!(
+        r.stderr
+            .contains("p.df:4:3: expected a statement, found `contributes`"),
+        "{}",
+        r.stderr
+    );
+    assert!(
+        r.stderr.contains("`contributes` is gone (R-5): a write needs no grant"),
         "{}",
         r.stderr
     );

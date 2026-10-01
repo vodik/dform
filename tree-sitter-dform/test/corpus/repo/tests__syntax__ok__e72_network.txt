@@ -7,7 +7,6 @@ module network {
   input zones: list(string) = ["us-test-1a", "us-test-1b"] # @default contribution
   output vpc: addr
   output private_subnet_ids: list(ref(net.subnet))
-  export subnet_of
 
   resource net.vpc vpc {
     cidr = net_
@@ -84,8 +83,6 @@ module network {
               (dotted_name
                 (identifier)
                 (identifier))))))
-      (export
-        (identifier))
       (resource
         (dotted_name
           (identifier)

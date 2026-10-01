@@ -46,10 +46,6 @@
         "named": true
       },
       {
-        "type": "contributes",
-        "named": true
-      },
-      {
         "type": "decl",
         "named": true
       },
@@ -676,30 +672,6 @@
     }
   },
   {
-    "type": "contributes",
-    "named": true,
-    "fields": {
-      "grant": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "identifier",
-            "named": true
-          },
-          {
-            "type": "index_expression",
-            "named": true
-          },
-          {
-            "type": "member_expression",
-            "named": true
-          }
-        ]
-      }
-    }
-  },
-  {
     "type": "decl",
     "named": true,
     "fields": {
@@ -760,19 +732,9 @@
     "type": "export",
     "named": true,
     "fields": {
-      "name": {
-        "multiple": false,
-        "required": false,
-        "types": [
-          {
-            "type": "identifier",
-            "named": true
-          }
-        ]
-      },
       "type": {
         "multiple": false,
-        "required": false,
+        "required": true,
         "types": [
           {
             "type": "identifier",
@@ -2211,10 +2173,6 @@
   },
   {
     "type": "computed",
-    "named": false
-  },
-  {
-    "type": "contributes",
     "named": false
   },
   {

@@ -25,9 +25,8 @@ const IDENT = /[A-Za-z_][A-Za-z0-9_]*/;
 // "Tokens"). Anywhere a plain name is expected a keyword is a name.
 const STATEMENT_KEYWORDS = [
   'edition', 'import', 'provider', 'stack', 'type', 'decl', 'extern',
-  'input', 'output', 'let', 'set', 'export', 'contributes', 'module',
-  'instance', 'policy', 'use', 'scenario', 'resource', 'settings', 'deny',
-  'warn',
+  'input', 'output', 'let', 'set', 'export', 'module', 'instance',
+  'policy', 'use', 'scenario', 'resource', 'settings', 'deny', 'warn',
 ];
 
 // The body words, the clause word, the reserved `if` and the literals:
@@ -114,7 +113,6 @@ export default grammar({
       $.let,
       $.set,
       $.export,
-      $.contributes,
       $.extern,
       $.type_declaration,
       $.type_alias,
@@ -198,15 +196,9 @@ export default grammar({
       optional(seq('where', field('condition', $._body))),
     ),
 
-    export: $ => seq(
-      'export',
-      choice(
-        field('name', $._word),
-        seq('type', field('type', $._word)),
-      ),
-    ),
-
-    contributes: $ => seq('contributes', field('grant', $._chain)),
+    // `export type NAME`: a module's alias, for its importers (a relation
+    // is not exported, R-5).
+    export: $ => seq('export', 'type', field('type', $._word)),
 
     extern: $ => seq(
       'extern',

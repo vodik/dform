@@ -3032,16 +3032,9 @@ const REFERENCE: &[Reference] = &[
     r(
         "export",
         Kw,
-        "export NAME | export type NAME",
-        "Make a module's relation, or its type alias, visible to its importers.",
+        "export type NAME",
+        "Make a module's type alias visible to its importers.",
         "export type subnets",
-    ),
-    r(
-        "contributes",
-        Kw,
-        "contributes TYPE.PATH | _.PATH | settings.PATH | PRED",
-        "A policy pack's grant: what it may write.",
-        "contributes t.tags",
     ),
     r(
         "module",
@@ -3061,8 +3054,8 @@ const REFERENCE: &[Reference] = &[
         "policy",
         Kw,
         "policy NAME { STATEMENTS }",
-        "A policy pack: checks and contributions, writing only what it `contributes`.",
-        "policy baseline { contributes t.tags }",
+        "A policy pack: checks and contributions, applied by `use`.",
+        "policy baseline { set r.tags.team = \"platform\" if r in resource }",
     ),
     r(
         "use",

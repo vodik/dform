@@ -1,11 +1,11 @@
 //! Quick fixes: the code actions of the diagnostics that carry a fix. The
-//! compiler's own (a grant a policy pack lacks, an unknown name to quote, a
-//! predicate with both facts and rules to declare `mixed`) come with the
-//! core's diagnostic; the evaluation's are made here from its facts: the
-//! collision lint (interpolate the key, or say `isolated = true`), a
-//! required attribute no contribution sets (a typed placeholder), and a
-//! ref to an address no rule wants (guard the block on it). Every edit is
-//! formatted by `dform fmt`'s formatter when the file was formatted.
+//! compiler's own (an unknown name to quote, a predicate with both facts
+//! and rules to declare `mixed`) come with the core's diagnostic; the
+//! evaluation's are made here from its facts: the collision lint
+//! (interpolate the key, or say `isolated = true`), a required attribute no
+//! contribution sets (a typed placeholder), and a ref to an address no rule
+//! wants (guard the block on it). Every edit is formatted by `dform fmt`'s
+//! formatter when the file was formatted.
 
 use crate::analysis::{self, Evaluated, Outcome, Reader, Where};
 use dform_core::ast::Term;

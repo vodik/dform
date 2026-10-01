@@ -1263,27 +1263,8 @@ impl<'u> Lowerer<'u> {
             OUTPUT_DECL => self.output(n, scope, outer),
             // An alias lowers to nothing: each use is its type.
             TYPE_ALIAS => Ok(Vec::new()),
-            EXPORT if tokens(n).nth(1).is_some_and(|t| t.kind() == TYPE_KW) => Ok(Vec::new()),
-            EXPORT => {
-                self.diags.push(
-                    Diagnostic::error(
-                        span,
-                        "`export p` is gone: a module's relations are private to each instance",
-                    )
-                    .with_help("pass the value through an output, `output p = ...`"),
-                );
-                Err(Skip)
-            }
-            CONTRIBUTES => {
-                self.diags.push(
-                    Diagnostic::error(span, "`contributes` is gone: a write needs no grant")
-                        .with_help(
-                            "delete the line; a module's relation reaches the stack \
-                             through an output",
-                        ),
-                );
-                Err(Skip)
-            }
+            // `export type NAME`: the alias pass reads it; it lowers to nothing.
+            EXPORT => Ok(Vec::new()),
             EXTERN => {
                 let name = dotted_text(n, 1);
                 self.check_extern(&name, span)?;

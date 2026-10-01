@@ -105,6 +105,10 @@ fn old_spelling(word: &str) -> Option<&'static str> {
         "policy_pack" => "`policy_pack` is spelled `policy`",
         "apply_policy" => "`apply_policy` is spelled `use`",
         "unique" => "`unique` is gone: one value per key is what the attribute aggregate enforces",
+        "contributes" => {
+            "`contributes` is gone (R-5): a write needs no grant, delete the line; a module's \
+             relation reaches the stack through an output"
+        }
         _ => return None,
     })
 }
@@ -641,29 +645,22 @@ impl<'a> Parser<'a> {
                 p.eat(RANK);
                 p.opt_where_body()
             }),
+            // `export type NAME`: a module's type alias, for its importers.
+            // A relation is not exported (R-5): it leaves through an output.
             EXPORT_KW => self.simple(EXPORT, |p| {
-                // `export type NAME`: a module's type alias, for its importers.
-                if p.eat(TYPE_KW) {
-                    return p.expect_word();
-                }
-                p.expect_word()?;
-                if p.at(SLASH) {
-                    let msg = format!("expected the end of the line, found {}", p.found());
+                if !p.eat(TYPE_KW) {
+                    let msg = format!("expected `type`, found {}", p.found());
                     p.error_here(
                         msg,
-                        Some("a relation is exported by its name: `export p`".to_string()),
+                        Some(
+                            "`export p` is gone: a module's relations are private to each \
+                             instance; pass the value through an output, `output p = ...`"
+                                .to_string(),
+                        ),
                     );
                     return Err(Bail);
                 }
-                Ok(())
-            }),
-            CONTRIBUTES_KW => self.simple(CONTRIBUTES, |p| {
-                if !term_name(p.nth(0)) {
-                    return p.err_expected(
-                        "a grant: a relation, or TYPE.path, `_.path`, `settings.path`",
-                    );
-                }
-                p.chain()
+                p.expect_word()
             }),
             EXTERN_KW => self.simple(EXTERN, |p| {
                 p.dotted("an extern name")?;
@@ -1590,7 +1587,8 @@ mod tests {
             ("k = 1\n", "`let k = t`"),
             ("r.tags = {}\n", "`set r.path = t`"),
             ("decl p/2\n", "`decl p(a, b)`"),
-            ("export p/2\n", "`export p`"),
+            ("module m {\n  export p\n}\n", "`export p` is gone"),
+            ("policy p {\n  contributes t.tags\n}\n", "`contributes` is gone"),
             (
                 "input relation p/2 from file(\"x\")\n",
                 "`input p(cols) from ..`",
@@ -1700,12 +1698,12 @@ mod tests {
 
     #[test]
     fn declarations_by_their_columns() {
-        let src = "decl p(a, b: int) mixed\ninput q(a: string) from csv(\"q.csv\")\nexport p\n\
+        let src = "decl p(a, b: int) mixed\ninput q(a: string) from csv(\"q.csv\")\n\
                    output k: int = 1 where p(1, 2)\n";
         assert!(errors(src).is_empty(), "{:?}", errors(src));
         assert_eq!(
-            kinds(src, &[DECL, INPUT_RELATION, EXPORT, OUTPUT_DECL]),
-            vec![DECL, INPUT_RELATION, EXPORT, OUTPUT_DECL]
+            kinds(src, &[DECL, INPUT_RELATION, OUTPUT_DECL]),
+            vec![DECL, INPUT_RELATION, OUTPUT_DECL]
         );
     }
 

@@ -3,12 +3,9 @@ tests/syntax/ok/e73_baseline.df
 ===============================
 
 policy baseline {
-  # Grants are partition patterns: this pack sits above readers of .tags,
-  # of iam.policy's .statements and of settings' .audit.sinks, and may read
-  # every other attribute path.
-  contributes t.tags
-  contributes iam.policy.statements
-  contributes settings.audit.sinks
+  # Each head's constant type and path is its partition: this pack sits
+  # above readers of .tags, of iam.policy's .statements and of settings'
+  # .audit.sinks, and may read every other attribute path.
 
   arg(t, a_, "tags", { team: "platform" }) where want(t, a_)
 
@@ -49,22 +46,6 @@ policy baseline {
       (comment)
       (comment)
       (comment)
-      (contributes
-        (member_expression
-          (identifier)
-          (identifier)))
-      (contributes
-        (member_expression
-          (member_expression
-            (identifier)
-            (identifier))
-          (identifier)))
-      (contributes
-        (member_expression
-          (member_expression
-            (identifier)
-            (identifier))
-          (identifier)))
       (rule
         (call
           (identifier)

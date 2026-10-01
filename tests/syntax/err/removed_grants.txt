@@ -1,0 +1,6 @@
+tests/syntax/err/removed_grants.df:6:10: expected `type`, found `subnet_of`
+  help: `export p` is gone: a module's relations are private to each instance; pass the value through an output, `output p = ...`
+tests/syntax/err/removed_grants.df:7:3: expected a statement, found `contributes`
+  help: `contributes` is gone (R-5): a write needs no grant, delete the line; a module's relation reaches the stack through an output
+tests/syntax/err/removed_grants.df:14:3: expected a statement, found `contributes`
+  help: `contributes` is gone (R-5): a write needs no grant, delete the line; a module's relation reaches the stack through an output

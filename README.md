@@ -1594,7 +1594,6 @@ A module groups rules behind an interface; an instance of it scopes them
 module network {
   input vpc_net: inet                        # set by each instance
   input zones: list(string) = ["a", "b"]     # a default: @default rank
-  export subnet_of                           # readable as network.main.subnet_of
 
   resource net.vpc vpc { cidr = vpc_net }
   zone_index(z, i) where z = zones[i]        # private
@@ -1614,9 +1613,10 @@ Inside an instance:
   `ref`; inside the module `T[e]` is relative to the instance;
 - every predicate the module defines is private to the instance: another
   instance's `zone_index` is a different relation, and reading it from
-  outside is an error naming the module. `export p` makes it readable as
-  `m.INSTANCE.p`; `contributes p` makes the module a contributor to the
-  global `p` (the demo's `iam_need`);
+  outside is an error naming the module. A value leaves the instance
+  through an output the stack wires: the demo's database and kubernetes
+  modules each give `output iam_need = {..} where ..`, and the stack writes
+  `iam_need("app", n.action, n.resource) where n = database.main.iam_need`;
 - `input k: T [= D] [check R]` is read by its name `k` inside the module.
   The instance's `k = v` (under its `where` clause) is a normal-rank contribution to the cell `(input, m.i, k)` of the
   attribute aggregate and `D` an `@default` one, so `why` shows both. An
@@ -1635,17 +1635,15 @@ outputs.
 ### Policies
 
 Policies are packaged as policy packs and used explicitly. A pack is a
-module applied once: its own relations are private, and every `arg` it
-writes must fall in one of its grants, the stratification partition spelled
-by the author (E §2.6). A write outside them is a compile error at the head.
+module applied once: its own relations are private, and it writes any
+attribute without a grant; ranks are the ownership model and `why` names
+each contribution's pack. The stratifier partitions a write by its head's
+constant type and path (`*` where the head has a variable).
 
 ```dform
 policy baseline {
-  contributes t.tags                  # any type, .tags and below
-  contributes settings.audit.sinks
-
   set r.tags = { team: "platform" } where r in resource
-  deny "db must be private" { resource: pg } where ...   # deny/warn need no grant
+  deny "db must be private" { resource: pg } where ...
   warn "prod should enable audit logging" { env: "prod" } where ...
 }
 
@@ -1964,11 +1962,9 @@ examples/demo an evaluation takes about 30 ms in a release build.
 - *Schema completion*: a resource block's paths (type, flags,
   refinements and description from the provider's schema facts) and an
   enum path's values; types after `resource`; an instance block's module inputs and
-  `module.instance.`'s outputs; `contributes` patterns, and in a policy
-  pack the paths its grants allow; elsewhere the builtins and keywords a
+  `module.instance.`'s outputs; elsewhere the builtins and keywords a
   word starts, each with its signature.
-- *Quick fixes* (`textDocument/codeAction`), each on its diagnostic: a
-  pack writing outside its grants (add the `contributes` line), an
+- *Quick fixes* (`textDocument/codeAction`), each on its diagnostic: an
   unknown name (quote it), a predicate with both facts and rules (`decl
   p(a, b) mixed`), the collision lint (interpolate the key into the name, or
   say `isolated = true` on the stack), a required attribute nothing sets
@@ -1979,8 +1975,8 @@ examples/demo an evaluation takes about 30 ms in a release build.
   included), a `let` or type alias, a module, an instance, a resource (by
   its name in scope), a settings row or a policy, across the
   project's files and unsaved buffers, read in the resolver's order
-  (docs/grammar.md "Names"); a relation a module or pack defines and does
-  not grant is its own (two modules' private `helper` are two). On an attribute path (a field of a
+  (docs/grammar.md "Names"); a relation a module or pack defines
+  is its own (two modules' private `helper` are two). On an attribute path (a field of a
   resource block, `r.p` in a body, an `attr` literal): every rule
   contributing to that cell, across modules and policy packs, as the
   hover lists them.

@@ -21,9 +21,7 @@ pub type Scope = Option<String>;
 pub enum Symbol {
     /// A relation, an extern or a builtin: `p(..)`, `p[..]`, `decl p/N`;
     /// the program's (`None`), or private to the module or policy pack
-    /// that defines it (unless it grants it with `contributes p`), as
-    /// `modules::module_names` scopes it. An exported one is still its
-    /// module's: `m.i.p` outside.
+    /// that defines it, as `modules::module_names` scopes it.
     Predicate(Scope, String),
     /// An input, a module input or a value rule `k = t`, in its scope.
     Value(Scope, String),
@@ -68,11 +66,8 @@ pub struct Decls {
     modules: BTreeSet<String>,
     /// Every relation's name, wherever it is defined.
     predicates: BTreeSet<String>,
-    /// The relations each module or pack defines, grants (`contributes
-    /// p`) and exports.
+    /// The relations each module or pack defines.
     defined: BTreeSet<(Scope, String)>,
-    granted: BTreeSet<(Scope, String)>,
-    exported: BTreeSet<(Scope, String)>,
     aliases: BTreeSet<String>,
     /// Resource headers' and `type` blocks' types.
     types: BTreeSet<String>,
@@ -140,24 +135,6 @@ impl Decls {
                                 .insert((private_scope(scope()), t.text().to_string()));
                         }
                     }
-                    SyntaxKind::CONTRIBUTES => {
-                        if let Some(c) = n.children().find(|c| c.kind() == SyntaxKind::CHAIN)
-                            && let [Part::Name(t)] = parts(&c).as_slice()
-                        {
-                            d.granted
-                                .insert((private_scope(scope()), t.text().to_string()));
-                        }
-                    }
-                    SyntaxKind::EXPORT => {
-                        if !own_tokens(&n)
-                            .iter()
-                            .any(|x| x.kind() == SyntaxKind::TYPE_KW)
-                            && let Some(t) = declared_name(&n)
-                        {
-                            d.exported
-                                .insert((private_scope(scope()), t.text().to_string()));
-                        }
-                    }
                     _ => {}
                 }
             }
@@ -198,14 +175,12 @@ impl Decls {
     }
 
     /// The relation `name` read or defined in `scope`: its module's or
-    /// pack's own when that defines it and does not grant it, else the
-    /// program's.
+    /// pack's own when that defines it, else the program's.
     fn predicate(&self, scope: &Scope, name: &str) -> Symbol {
         let s = private_scope(scope.clone());
         let key = (s.clone(), name.to_string());
         if s.is_some()
             && self.defined.contains(&key)
-            && !self.granted.contains(&key)
             && !dform_core::loader::is_core_pred(name)
         {
             Symbol::Predicate(s, name.to_string())
@@ -399,16 +374,7 @@ pub fn classify(d: &Decls, t: &SyntaxToken) -> What {
         {
             What::Name(d.predicate(&scope, &name), true)
         }
-        SyntaxKind::EXPORT => {
-            if own_tokens(&parent)
-                .iter()
-                .any(|x| x.kind() == SyntaxKind::TYPE_KW)
-            {
-                used(Some(Symbol::Alias(name)))
-            } else {
-                used(Some(d.predicate(&scope, &name)))
-            }
-        }
+        SyntaxKind::EXPORT => used(Some(Symbol::Alias(name))),
         SyntaxKind::INSTANCE => match idents(&parent).as_slice() {
             [m, i, ..] if i == t => decl(Symbol::Instance(m.text().to_string(), name)),
             [m, ..] if m == t => used(Some(Symbol::Module(name))),
@@ -475,20 +441,13 @@ fn chain(d: &Decls, c: &SyntaxNode, t: &SyntaxToken, scope: &Scope) -> What {
         _ => None,
     };
     let context = c.parent().map(|p| p.kind());
-    // A relation's name: `p(..)`, a head, `contributes p`.
-    if matches!(context, Some(SyntaxKind::CALL | SyntaxKind::CONTRIBUTES)) && ps.len() == 1 {
+    // A relation's name: `p(..)`, a head.
+    if context == Some(SyntaxKind::CALL) && ps.len() == 1 {
         let head = c
             .parent()
             .and_then(|call| call.parent())
-            .is_some_and(|h| matches!(h.kind(), SyntaxKind::RULE | SyntaxKind::FACT))
-            && context == Some(SyntaxKind::CALL);
-        // A grant names the program's relation.
-        let sym = if context == Some(SyntaxKind::CONTRIBUTES) {
-            Symbol::Predicate(None, t.text().to_string())
-        } else {
-            d.predicate(scope, t.text())
-        };
-        return What::Name(sym, head);
+            .is_some_and(|h| matches!(h.kind(), SyntaxKind::RULE | SyntaxKind::FACT));
+        return What::Name(d.predicate(scope, t.text()), head);
     }
     let path = |start: usize| if k >= start { What::Path } else { What::Other };
     let Some(first) = ps.first() else {
@@ -532,27 +491,9 @@ fn chain(d: &Decls, c: &SyntaxNode, t: &SyntaxToken, scope: &Scope) -> What {
         if k == 0 {
             return What::Name(Symbol::Module(name0), false);
         }
-        // `m.i.p`, `m[e].p`: the module's exported relation `p`, else an
-        // output.
-        let exported = |p: &str| {
-            let m = Some(format!("module {name0}"));
-            d.exported
-                .contains(&(m.clone(), p.to_string()))
-                .then(|| What::Name(Symbol::Predicate(m, p.to_string()), false))
-        };
+        // `m[e].k`: an output; after it, a path.
         if matches!(ps.get(1), Some(Part::Index)) {
-            if k == 3
-                && let Some(w) = exported(t.text())
-            {
-                return w;
-            }
             return path(4);
-        }
-        if k == 4
-            && matches!(ps.get(3), Some(Part::Dot))
-            && let Some(w) = exported(t.text())
-        {
-            return w;
         }
         if k == 2 {
             return What::Name(Symbol::Instance(name0, t.text().to_string()), false);
@@ -959,17 +900,15 @@ zone_index("a", 0)
     const PRIVATE: &str = r#"edition 2026
 module a {
   helper(1)
-  shared(1)
-  contributes shared
   q(x) where helper(x), shared(x)
 }
 module b {
-  export helper
   helper(2)
   r(x) where helper(x)
 }
 helper(3)
-s(x) where helper(x), b.one.helper(x), shared(x)
+shared(3)
+s(x) where helper(x), shared(x)
 "#;
 
     #[test]
@@ -978,21 +917,20 @@ s(x) where helper(x), b.one.helper(x), shared(x)
         let b = Some("module b".to_string());
         assert_eq!(
             names(PRIVATE, &Symbol::Predicate(a, "helper".into())),
-            vec![(2, true), (5, false)]
+            vec![(2, true), (3, false)]
         );
-        // Exported, it is still the module's: `b.one.helper` outside.
         assert_eq!(
             names(PRIVATE, &Symbol::Predicate(b, "helper".into())),
-            vec![(8, false), (9, true), (10, false), (13, false)]
+            vec![(6, true), (7, false)]
         );
         assert_eq!(
             names(PRIVATE, &Symbol::Predicate(None, "helper".into())),
-            vec![(12, true), (13, false)]
+            vec![(9, true), (11, false)]
         );
-        // Granted, the module contributes to the program's.
+        // A relation a module reads but does not define is the program's.
         assert_eq!(
             names(PRIVATE, &Symbol::Predicate(None, "shared".into())),
-            vec![(3, true), (4, false), (5, false), (13, false)]
+            vec![(3, false), (10, true), (11, false)]
         );
     }
 }

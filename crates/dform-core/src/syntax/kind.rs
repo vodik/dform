@@ -54,7 +54,6 @@ pub enum SyntaxKind {
     LET_KW,
     SET_KW,
     EXPORT_KW,
-    CONTRIBUTES_KW,
     MODULE_KW,
     INSTANCE_KW,
     POLICY_KW,
@@ -95,7 +94,6 @@ pub enum SyntaxKind {
     /// `output k [: T] = t [where B]`.
     OUTPUT_DECL,
     EXPORT,
-    CONTRIBUTES,
     EXTERN,
     /// An extern's `+name: T`, a column `name [: T]`.
     BIND_ARG,

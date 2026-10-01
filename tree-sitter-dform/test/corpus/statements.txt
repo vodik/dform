@@ -262,8 +262,7 @@ Modules, policies, scenarios
 
 module network {
   input vpc_net: inet
-  export subnet_of
-  contributes t.tags
+  export type subnets
   output vpc: net.vpc = vpc
   output n = 1 where q(1)
 }
@@ -290,10 +289,6 @@ scenario prod {
             (identifier))))
       (export
         (identifier))
-      (contributes
-        (member_expression
-          (identifier)
-          (identifier)))
       (output
         (identifier)
         (type

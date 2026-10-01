@@ -575,7 +575,7 @@ fn diagnostics_follow_the_selected_environment() {
 
 /// Schema completion: a resource block's paths with their type, flags and
 /// refinements; resource types; an instance's module inputs, and outputs
-/// after `module.instance.`; grant patterns.
+/// after `module.instance.`.
 #[test]
 fn completion_reads_the_schema_and_the_modules() {
     let (_s, root) = example("demo");
@@ -637,18 +637,15 @@ fn completion_reads_the_schema_and_the_modules() {
     let items = c.at("textDocument/completion", &stack, (at.0 + 1, 2));
     assert!(labels(&items).contains(&"vpc_net".to_string()), "{items}");
 
-    // `resource `, `contributes `, `network.main.`, as typed.
+    // `resource `, `network.main.`, as typed.
     let original = std::fs::read_to_string(&stack).unwrap();
-    let typed = format!("{original}\nresource \nx = network.main.\npolicy p {{ contributes \n}}\n");
+    let typed = format!("{original}\nresource \nx = network.main.\n");
     c.change(&stack, 2, &typed);
     let n = typed.lines().count() as u32;
-    let types = labels(&c.at("textDocument/completion", &stack, (n - 4, 9)));
+    let types = labels(&c.at("textDocument/completion", &stack, (n - 2, 9)));
     assert!(types.contains(&"net.vpc".to_string()), "{types:?}");
-    let outputs = labels(&c.at("textDocument/completion", &stack, (n - 3, 17)));
+    let outputs = labels(&c.at("textDocument/completion", &stack, (n - 1, 17)));
     assert_eq!(outputs, vec!["vpc", "private_subnet_ids"], "{outputs:?}");
-    let grants = labels(&c.at("textDocument/completion", &stack, (n - 2, 23)));
-    assert!(grants.contains(&"t.cidr".to_string()), "{grants:?}");
-    assert!(grants.contains(&"net.vpc.cidr".to_string()), "{grants:?}");
 
     // A plain word: the builtins it starts, their signatures.
     let typed = format!("{original}\ny = iprang");

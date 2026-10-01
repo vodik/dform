@@ -58,11 +58,11 @@ Punctuation: `( ) { } [ ] , . : = == += != < <= > >= + - * / % |`.
 `.` is always member access, and `/` always division. `-` is always an
 operator: a hyphenated name is a string, and the parser says so.
 
-Statement keywords, recognised only as the first token of a statement (22):
+Statement keywords, recognised only as the first token of a statement (21):
 
 ```
 edition  import  provider  stack  type  decl  extern
-input  output  let  set  export  contributes
+input  output  let  set  export
 module  instance  policy  use  scenario
 resource  settings  deny  warn
 ```
@@ -126,7 +126,7 @@ What a doc comment may document, and the `Kind` and `Name` of its facts:
 | `module m`, `policy p`, `scenario s`        | `module`, `policy`, `scenario` | `m`, `p`, `s` |
 | `input k`                                   | `input`     | `k`                   |
 | `output k`                                  | `output`    | `k`                   |
-| `decl p(..)`, `extern p(..)`, `input p(..) from ..`, `export p` | `predicate` | `p` |
+| `decl p(..)`, `extern p(..)`, `input p(..) from ..` | `predicate` | `p` |
 | `p(..) where ..`, a fact, `let k = t`, `deny "m"`, `warn "m"` | `rule` | `p`, `k`, `m` (the message) |
 | `type a = T`                                | `alias`     | `a`                   |
 | `resource T n`, `resource T "n-${e}"`       | `resource`  | `T["n"]`, `T["n-${e}"]` (as written) |
@@ -265,8 +265,7 @@ input      := "input" NAME ":" type ("=" term)? ("check" body1)?
 output     := "output" NAME (":" type)? ("=" term)? ("where" body)?
 let        := "let" NAME "=" term ("where" body)?
 set        := "set" chain ("=" | "+=") term RANK? ("where" body)?
-export     := "export" NAME | "export" "type" NAME
-contributes:= "contributes" chain                  ; `p`, `t.path` (every type), `settings.path`, `TYPE.path`
+export     := "export" "type" NAME
 module     := "module" NAME stmts
 instance   := "instance" NAME NAME block ("where" body)?
 policy     := "policy" NAME stmts
@@ -323,8 +322,9 @@ string like any other: `${e}` reads the body's variables. A deny is checked
 after evaluation; no rule may read `deny` or `warn`.
 
 A relation is declared by its columns (H-11): `decl p(a, b)`, a type on a
-column optional; `mixed` lets it have both facts and rules. `export p`
-exports every arity of `p`.
+column optional; `mixed` lets it have both facts and rules. A module's
+relations are private to each instance; a value leaves it through an
+`output` (DESIGN.org R-5).
 
 ### The core is written only where the surface cannot reach
 
@@ -628,7 +628,6 @@ as it is.
 | `deny "a ${x}" where B`                   | `deny(M, ..) :- B, M = format("a %s", X)`              |
 | `set R.p = t @r where B` (`+=`: `arg_add`) | `arg(T, A, "p", t', r) :- B, reads`                   |
 | `set settings[e].p = t`                   | `arg("settings", e', "p", t')`                         |
-| `contributes t.p`, `contributes T.p`      | a grant of `.p` on any type (a name no type starts with), on `T` |
 | `output k: T = t` (`T` a resource type)   | `output k: addr`, and its value                        |
 | `output k = t` (no reads)                 | `output k = t'`                                        |
 | `output k = t where B` (reads, or a body) | `output(k, t') :- B, reads`                            |
@@ -668,11 +667,11 @@ anything but `true`; it does not check that `R` exists (G-13). Write
 `R in T` beside it when that matters.
 
 The module, pack and scenario constructs keep their meaning: a module's
-predicates are private per instance unless exported or granted, an input
+predicates are private per instance (a value leaves through an output), an input
 `k` of module `m` is `m.i::k(V) :- attr(input, "m.i", k, V)` with its
 default at `@default`, a top-level input also takes `--set`, a pack's body
-is lowered once and its predicates are private unless granted, `use p`
-applies pack `p`, `import "f.df"` inlines the file once, `extern p(+a, -b)
+is lowered once, its predicates are private and its writes need no
+grant (ranks decide), `use p` applies pack `p`, `import "f.df"` inlines the file once, `extern p(+a, -b)
 persist` is asked on demand, and `declassify(v, "reason")` lowers a
 secret's label (E DR-19).
 

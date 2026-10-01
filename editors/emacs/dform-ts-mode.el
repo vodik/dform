@@ -191,7 +191,6 @@ apply-order edge, not its content read now (`docs/grammar.md'
      (settings name: (identifier) @font-lock-function-name-face)
      (decl name: (dotted_name (identifier) @font-lock-function-name-face))
      (extern name: (dotted_name (identifier) @font-lock-function-name-face))
-     (export name: (identifier) @font-lock-function-name-face)
      (input_relation name: (identifier) @font-lock-function-name-face)
      (fact head: (call function: (identifier) @font-lock-function-name-face))
      (rule head: (call function: (identifier) @font-lock-function-name-face)))
@@ -248,7 +247,7 @@ apply-order edge, not its content read now (`docs/grammar.md'
    :feature 'keyword
    '([
       "edition" "provider" "stack" "import" "input" "from" "output" "export"
-      "contributes" "extern" "persist" "type" "decl" "mixed" "let" "set"
+      "extern" "persist" "type" "decl" "mixed" "let" "set"
       "module" "instance" "policy" "use" "scenario" "resource" "settings"
       ] @font-lock-keyword-face
      ["where" "check"] @font-lock-keyword-face

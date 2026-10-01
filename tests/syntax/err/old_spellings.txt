@@ -20,8 +20,8 @@ tests/syntax/err/old_spellings.df:14:1: expected a statement, found `r`
   help: a contribution to another block's field is `set r.path = t`
 tests/syntax/err/old_spellings.df:15:7: expected `(`, found `/`
   help: a relation is declared by its columns: `decl p(a, b)`
-tests/syntax/err/old_spellings.df:16:9: expected the end of the line, found `/`
-  help: a relation is exported by its name: `export p`
+tests/syntax/err/old_spellings.df:16:8: expected `type`, found `p`
+  help: `export p` is gone: a module's relations are private to each instance; pass the value through an output, `output p = ...`
 tests/syntax/err/old_spellings.df:17:7: expected `:` or `(` after the input's name, found `p`
   help: `input relation p(cols) from ..` is spelled `input p(cols) from ..`, and `from file(..)` is `from facts(..)`
 tests/syntax/err/old_spellings.df:18:12: expected a literal, found `exists`

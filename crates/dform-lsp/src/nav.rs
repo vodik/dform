@@ -174,18 +174,3 @@ pub fn module_interface(root: &SyntaxNode, module: &str) -> Option<Interface> {
     Some(out)
 }
 
-/// The `contributes` patterns of the policy the node is in.
-pub fn grants(node: &SyntaxNode) -> Vec<String> {
-    let Some(policy) = node.ancestors().find(|n| n.kind() == SyntaxKind::POLICY) else {
-        return Vec::new();
-    };
-    policy
-        .descendants()
-        .filter(|n| n.kind() == SyntaxKind::CONTRIBUTES)
-        .filter_map(|n| {
-            n.children()
-                .find(|c| c.kind() == SyntaxKind::CHAIN)
-                .map(|c| c.text().to_string())
-        })
-        .collect()
-}

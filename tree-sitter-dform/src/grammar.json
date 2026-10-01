@@ -107,10 +107,6 @@
         },
         {
           "type": "SYMBOL",
-          "name": "contributes"
-        },
-        {
-          "type": "SYMBOL",
           "name": "extern"
         },
         {
@@ -665,50 +661,15 @@
           "value": "export"
         },
         {
-          "type": "CHOICE",
-          "members": [
-            {
-              "type": "FIELD",
-              "name": "name",
-              "content": {
-                "type": "SYMBOL",
-                "name": "_word"
-              }
-            },
-            {
-              "type": "SEQ",
-              "members": [
-                {
-                  "type": "STRING",
-                  "value": "type"
-                },
-                {
-                  "type": "FIELD",
-                  "name": "type",
-                  "content": {
-                    "type": "SYMBOL",
-                    "name": "_word"
-                  }
-                }
-              ]
-            }
-          ]
-        }
-      ]
-    },
-    "contributes": {
-      "type": "SEQ",
-      "members": [
-        {
           "type": "STRING",
-          "value": "contributes"
+          "value": "type"
         },
         {
           "type": "FIELD",
-          "name": "grant",
+          "name": "type",
           "content": {
             "type": "SYMBOL",
-            "name": "_chain"
+            "name": "_word"
           }
         }
       ]
@@ -2481,10 +2442,6 @@
               },
               {
                 "type": "STRING",
-                "value": "contributes"
-              },
-              {
-                "type": "STRING",
                 "value": "module"
               },
               {
@@ -3233,10 +3190,6 @@
                 {
                   "type": "STRING",
                   "value": "export"
-                },
-                {
-                  "type": "STRING",
-                  "value": "contributes"
                 },
                 {
                   "type": "STRING",

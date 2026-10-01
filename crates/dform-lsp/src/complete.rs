@@ -1,8 +1,7 @@
 //! Schema completion: a resource block's attribute paths (with their type,
 //! flags and refinements) and an enum attribute's values, from the
 //! provider's schema facts; resource types after `resource`; a module
-//! instance's inputs and, after `module.instance.`, its outputs; grant
-//! patterns in `contributes`, and in a policy the paths its grants allow.
+//! instance's inputs and, after `module.instance.`, its outputs.
 //! A type's or path's documentation is its `type_doc`. Elsewhere a word
 //! completes to the builtins and keywords it starts (`engine::references`).
 
@@ -139,37 +138,6 @@ pub fn complete(
     let docs = schema.docs();
     let doc_of = |t: &str, p: &str| docs.get(&(t, p)).map(|d| d.to_string());
 
-    // `contributes T.path`: every type's paths, and `_.path`.
-    if before_word.ends_with("contributes") {
-        let mut out = Vec::new();
-        let mut any: BTreeMap<String, Vec<String>> = BTreeMap::new();
-        for (t, ps) in &attrs {
-            out.push(item(
-                t.clone(),
-                CompletionItemKind::CLASS,
-                "every path of the type".into(),
-                doc_of(t, ""),
-            ));
-            for (p, a) in ps {
-                out.push(item(
-                    format!("{t}.{p}"),
-                    CompletionItemKind::FIELD,
-                    a.ty.clone(),
-                    doc_of(t, p),
-                ));
-                any.entry(p.clone()).or_default().push(t.clone());
-            }
-        }
-        for (p, ts) in any {
-            out.push(item(
-                format!("t.{p}"),
-                CompletionItemKind::FIELD,
-                format!("every type's .{p}"),
-                Some(format!("types with .{p}: {}", ts.join(", "))),
-            ));
-        }
-        return out;
-    }
     // `resource TYPE`: the schema's types.
     if before_word.ends_with("resource") {
         return attrs
@@ -297,37 +265,6 @@ pub fn complete(
                     ty,
                     Some(format!("input of module {}", m.text())),
                 )
-            })
-            .collect();
-    }
-    // `r.` in a policy: the paths its grants allow.
-    if segs.len() == 2 {
-        let grants = nav::grants(&parent);
-        return grants
-            .iter()
-            .filter_map(|g| {
-                // `t.tags`: a name no type starts with is every type.
-                let (h, rest) = g.split_once('.')?;
-                let typed = h == "settings"
-                    || attrs
-                        .keys()
-                        .any(|t| t == h || t.starts_with(&format!("{h}.")));
-                let (t, p) = if !typed {
-                    ("_", rest)
-                } else {
-                    // `net.vpc.cidr` by the schema's types; `settings.x`,
-                    // a type no schema declares, by its first name.
-                    match attrs.keys().find(|t| g.starts_with(&format!("{t}."))) {
-                        Some(t) => (t.as_str(), &g[t.len() + 1..]),
-                        None => (h, rest),
-                    }
-                };
-                Some(item(
-                    p.to_string(),
-                    CompletionItemKind::FIELD,
-                    format!("granted: contributes {g}"),
-                    (t != "_").then(|| format!("of {t}")),
-                ))
             })
             .collect();
     }

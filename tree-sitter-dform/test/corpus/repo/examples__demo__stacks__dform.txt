@@ -26,6 +26,9 @@ data("zone", "us-test-1b")
 
 # A fact with a condition: it holds in prod only.
 iam_need("app", "audit.write", "audit-log") where env == "prod"
+# A module's need is its output, wired here.
+iam_need("app", n.action, n.resource) where n = database.main.iam_need
+iam_need("app", n.action, n.resource) where n = kubernetes.main.iam_need
 
 # Settings (branch as data). One @default layer for every settings row that
 # exists; each environment's config/dform/{env}.yaml (the stack's config) wins
@@ -213,6 +216,47 @@ scenario dev {
         (identifier)
         (string
           (string_content)))))
+  (comment)
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (member_expression
+          (identifier)
+          (identifier))
+        (member_expression
+          (identifier)
+          (identifier))))
+    (body
+      (comparison
+        (identifier)
+        (member_expression
+          (member_expression
+            (identifier)
+            (identifier))
+          (identifier)))))
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (member_expression
+          (identifier)
+          (identifier))
+        (member_expression
+          (identifier)
+          (identifier))))
+    (body
+      (comparison
+        (identifier)
+        (member_expression
+          (member_expression
+            (identifier)
+            (identifier))
+          (identifier)))))
   (comment)
   (comment)
   (comment)

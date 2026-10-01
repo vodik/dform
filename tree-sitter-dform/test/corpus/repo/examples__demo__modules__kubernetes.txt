@@ -12,7 +12,6 @@ module kubernetes {
   input nodepool_min: int
   input nodepool_max: int
   input subnet_ids: subnets
-  contributes iam_need
 
   resource k8s.cluster cluster {
     version = "1.29"
@@ -27,7 +26,7 @@ module kubernetes {
   }
 
   #| Only when the cluster exists in this environment.
-  iam_need("app", "k8s.describe_cluster", cluster.id) where has private_api
+  output iam_need = { action: "k8s.describe_cluster", resource: cluster.id } where has private_api
 }
 
 ---
@@ -63,8 +62,6 @@ module kubernetes {
         (type
           (dotted_name
             (identifier))))
-      (contributes
-        (identifier))
       (resource
         (dotted_name
           (identifier)
@@ -105,14 +102,15 @@ module kubernetes {
               (identifier))
             (identifier))))
       (comment)
-      (rule
-        (call
-          (identifier)
-          (arguments
+      (output
+        (identifier)
+        (object
+          (object_field
+            (identifier)
             (string
-              (string_content))
-            (string
-              (string_content))
+              (string_content)))
+          (object_field
+            (identifier)
             (member_expression
               (identifier)
               (identifier))))
