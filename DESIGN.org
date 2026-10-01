@@ -455,6 +455,61 @@ schema is the author's source and needs no synthesis. The std signature
 files are extracted the same way so builtins have a definition. A type a
 provider declares only at run time (Kubernetes) has none.
 
+** R-25 Sketch: a Rust provider SDK (supporting artifact, out of scope)
+*Context.* Providers are the adoption bottleneck; the SDK is what a
+contributor touches. Terraform's SDK history (SDKv2 before the protocol,
+hand-written diffs) is the mistake to avoid: the protocol and
+schema-as-data are the contract, the SDK derives from them.
+*Sketch* (=dform-sdk=, with proc macros; the ticket of the same number
+holds it as a reference for whoever builds it):
+#+begin_src rust
+/// An object storage bucket.                       // `///` becomes the schema's `#|` doc
+#[derive(Resource)]
+#[dform(type = "acme.bucket", replace = "destroy_first", retry = "5xx:3")]
+struct Bucket {
+    #[dform(required, force_new)] name: String,     // a change replaces
+    #[dform(optional_computed)] region: Option<String>,
+    #[dform(lattice = "map")] tags: BTreeMap<String, String>,
+    #[dform(list_key = "name")] rules: Vec<Rule>,
+    #[dform(computed, id)] id: Computed<String>,    // fresh null until Apply
+    #[dform(computed)] endpoint: Computed<String>,  // open null
+    #[dform(computed, sensitive)] access_key: Secret<String>,  // SECRET null; bytes never leave
+}
+impl Lifecycle for Bucket {
+    type Client = Acme;
+    async fn read(c: &Acme, remote: &RemoteId) -> Result<Option<Bucket>>;
+    async fn create(c: &Acme, desired: Bucket, key: IdempotencyKey) -> Result<(RemoteId, Bucket)>;
+    async fn update(c: &Acme, remote: &RemoteId, prior: Bucket, desired: Bucket) -> Result<Bucket>;
+    async fn delete(c: &Acme, remote: &RemoteId) -> Result<()>;
+    // plan is derived from the schema (leaf diff; force_new => replace); import defaults to read;
+    // assertions run after create/update by the SDK.
+}
+#[derive(Extern)] #[dform(name = "acme.zones")]
+struct Zones { #[dform(input)] region: String, #[dform(output)] zone: String }
+impl Query for Zones { type Client = Acme; async fn query(c: &Acme, region: String) -> Result<Vec<Zones>>; }
+#[dform::provider(name = "acme", protocol = 1)]
+struct Acme { /* http client from Config */ }
+impl Configure for Acme { type Config = Config; async fn configure(cfg: Config) -> Result<(Acme, Option<Account>)>; }
+dform_sdk::export!(Acme, resources = [Bucket], externs = [Zones]);
+#+end_src
+- =derive(Resource)= emits the schema facts (=type_provider=, =type_attr=
+  with flags, =type_list_key=, =type_lattice=, =type_replace=,
+  =type_retry=, =type_mint=) as a const string, and the =Value=
+  conversions; =Computed<T>= and =Secret<T>= carry the null class.
+- =export!= generates the component world from =dform-wit=, the
+  handshake (capabilities from what is implemented), dispatch, assertion
+  evaluation, and the custom sections as =#[link_section =
+  "dform.schema"]= / ="dform.manifest"= statics, so the Rust build emits
+  the R-24 package with no post-processing.
+- =Error= has the protocol's three kinds; the SDK's wasi-http client
+  maps a timeout to =MaybeApplied=, everything else to =Refused=.
+- =dform_sdk::testing::conformance::<Acme>()= runs =provider check=
+  in-process under =cargo test=; =#[dform(example = ..)]= feeds the
+  schema's =Example= documents.
+- Build: =cargo component build --release=. Plan is derived, never
+  hand-written; an author never sees a null label or a secret's bytes.
+  A Go or Python SDK is the same conventions over the same WIT.
+
 * Vocabulary
 The name is Terraform minus terra plus Datalog, and it reads as "deform" aloud.
 Use the pun consistently in CLI output, docs, and diagnostics.
