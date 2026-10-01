@@ -28,42 +28,41 @@ resource aws.vpc main {
   cidr_block = "10.0.0.0/16"
 }
 
-#| The availability zones, and the subnet index each gets.
-decl az(name: string, index: int)        # optional: inferred from the rows otherwise
-az("us-east-1a", 1)
-az("us-east-1b", 2)
+#| The zones to build in: every available one in the region, in order.
+let zones = list.sort([ z | aws.availability_zone("available", z) ])
 
-resource aws.subnet "private-${availability_zone}" {
+resource aws.subnet "private-${zone}" {
   vpc_id = main.id
   cidr_block = inet.subnet(main.cidr_block, 8, n)
-  availability_zone
-} where az(availability_zone, n)
+  availability_zone = zone
+} where zone = zones[n]
 ```
 
 ```
 $ dform plan
-plan: 3 deformations (3 create)
+plan: 7 deformations (7 create)
 + aws.vpc["main"]
   cidr_block = "10.0.0.0/16"
 + aws.subnet["private-us-east-1a"]
   availability_zone = "us-east-1a"
-  cidr_block = "10.0.1.0/24"
+  cidr_block = "10.0.0.0/24"
   vpc_id = ?aws.vpc["main"].id
 + aws.subnet["private-us-east-1b"]
   availability_zone = "us-east-1b"
-  cidr_block = "10.0.2.0/24"
+  cidr_block = "10.0.1.0/24"
   vpc_id = ?aws.vpc["main"].id
+  ... four more
 ```
 
-The `az(..)` lines are facts: two rows in a table. The `decl` above them
-names and types the columns; without it the types are inferred from the
-rows. The `#|` line is a doc comment, which the editor shows and policy
-can read. The subnet block ends in a `where` clause, which makes it a
-rule: the clause is a query over the tables, and every answer is one
-subnet; an entry that is only a name, `availability_zone`, takes the
-variable of that name. `?` marks a value apply will learn, here the
-VPC's id. Add a third availability zone and a third subnet follows;
-nothing else changes.
+`aws.availability_zone` is a relation the provider answers, what
+Terraform calls a data source; `("available", z)` asks for the available
+ones and binds each name to `z`. The brackets collect them into a list,
+sorted. The subnet block ends in a `where` clause, which makes it a
+rule: `zone = zones[n]` walks the list, binding a zone and its position,
+and every answer is one subnet with the n-th /24. `?` marks a value
+apply will learn, here the VPC's id. The `#|` line is a doc comment,
+which the editor shows and policy can read. When the region gains a
+zone, the next plan has one more subnet; nothing in the file changes.
 
 ```bash
 dform -C examples/tour plan
