@@ -122,6 +122,11 @@ this one, and both live in the same pack.
 deny "prod databases are multi-AZ" where env == "prod", db in aws.db_instance, not db.multi_az
 ```
 
+`db in aws.db_instance` binds `db` to each database the program wants,
+in any module, whoever declared it; `db.multi_az` reads its attribute
+after every author's contribution has merged. A deny with answers
+refuses the plan and prints them; `warn` reports and goes on.
+
 **A value the cloud produces later is a value now.** A database's
 endpoint does not exist until the database does. dform carries it as a
 labeled unknown, `?aws.db_instance["orders"].endpoint`, plans around it,
