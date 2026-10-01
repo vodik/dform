@@ -17,20 +17,8 @@ join anything with anything, they can recurse, every derived row has a
 derivation, and the whole program is small enough to reason about.
 
 dform is that: infrastructure as facts and rules, with plan and apply,
-state, modules, policy, secrets and approvals built in. One model all
-the way through: what exists is a table, what you want is a table, the
-plan is the difference and is a table, and policy is rules over any of
-them:
-
-```dform
-deny "every database has backups" where db in aws.db_instance, db.backup_retention_period < 7
-deny "no deletes in prod" where env == "prod", deformation("delete", _, _, _)
-requires_approval(d, "security group changed") where deformation(_, aws.security_group, a, _), d = "aws.security_group[\"${a}\"]"
-```
-
-The first is about what will exist, the other two about the change
-itself, in the same file and the same language, checked before anything
-is applied. Here is a complete program, for an AWS provider.
+state, modules, policy, secrets and approvals built in. Here is a
+complete program, for an AWS provider.
 
 ```dform
 edition 2026
@@ -76,6 +64,19 @@ takes the variable of that name. `?` marks a value apply will learn,
 here the VPC's id. The `#|` line is a doc comment, which the editor
 shows and policy can read. When the region gains a
 zone, the next plan has one more subnet; nothing in the file changes.
+
+One model all the way through: what exists is a table, what you want
+is a table, the plan is the difference and is a table, and policy is
+rules over any of them. These three lines go in the same file:
+
+```dform
+deny "every database has backups" where db in aws.db_instance, db.backup_retention_period < 7
+deny "no deletes in prod" where env == "prod", deformation("delete", _, _, _)
+requires_approval(d, "security group changed") where deformation(_, aws.security_group, a, _), d = "aws.security_group[\"${a}\"]"
+```
+
+The first is about what will exist; the other two are about the change
+itself, which the program sees as rows before anything is applied.
 
 ```bash
 dform -C examples/tour plan
