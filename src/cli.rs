@@ -415,6 +415,20 @@ enum DevCommand {
         #[command(flatten)]
         target: Target,
     },
+    /// What each scope reads, writes and offers (R-11c): the stack, each
+    /// module instance, each pack in use, and, with `--scenario`, the
+    /// scenario's own body. From the lowered program and the partition
+    /// graph; no evaluation.
+    Effects {
+        #[command(flatten)]
+        target: Target,
+        /// Include the scenario's own scope too.
+        #[arg(long = "scenario")]
+        scenario: Option<String>,
+        /// Print as one JSON document instead of text.
+        #[arg(long)]
+        json: bool,
+    },
     /// Graphviz DOT: the resource dependency DAG, the partition graph
     /// (`--strata`), or a binary relation (`--relation PRED` or `PRED/2`).
     Graph {
@@ -504,6 +518,10 @@ enum Cmd {
         addr: String,
     },
     Strata,
+    Effects {
+        scenario: Option<String>,
+        json: bool,
+    },
     Fmt {
         paths: Vec<PathBuf>,
         check: bool,
@@ -635,6 +653,11 @@ fn resolve(args: Args) -> Result<Cli> {
             match cmd {
                 DevCommand::Run(r) => run_cmd(r),
                 DevCommand::Strata { target } => (Cmd::Strata, Some(target)),
+                DevCommand::Effects {
+                    target,
+                    scenario,
+                    json,
+                } => (Cmd::Effects { scenario, json }, Some(target)),
                 DevCommand::Graph {
                     target,
                     strata,
@@ -1095,6 +1118,14 @@ fn run_with(
     if let Cmd::Strata = cli.cmd {
         return print_strata(&files, &loaded.program, &load_schema(&providers)?);
     }
+    if let Cmd::Effects { scenario, json } = &cli.cmd {
+        return print_effects(
+            &loaded.program,
+            &load_schema(&providers)?,
+            scenario.as_deref(),
+            *json,
+        );
+    }
     if let Cmd::Graph { what: Some(w) } = &cli.cmd
         && w == "strata"
     {
@@ -1544,7 +1575,7 @@ fn run_with(
             let json = serde_json::to_string_pretty(&redact.json(&r.attrs))?;
             println!("{}", json);
         }
-        Cmd::Strata | Cmd::Test => unreachable!("handled before evaluation"),
+        Cmd::Strata | Cmd::Test | Cmd::Effects { .. } => unreachable!("handled before evaluation"),
         Cmd::Rekey { .. } => {
             let Some(r) = rekey else {
                 unreachable!("rekey_args ran for rekey");
@@ -2988,6 +3019,56 @@ fn format_strata(name: &str, g: &partition::Graph, v: &partition::Verdict) -> St
         }
         partition::Verdict::Rejected { .. } => partition::report(name, g, v),
     }
+}
+
+/// `dform dev effects`: what each scope (the stack, each module instance,
+/// each pack in use, the scenario if `--scenario` is given) reads, writes
+/// and offers (DESIGN.org R-11c), text or `--json`.
+fn print_effects(
+    program: &crate::ast::Program,
+    schema: &schema::Schema,
+    scenario: Option<&str>,
+    json: bool,
+) -> Result<()> {
+    let effects = crate::effects::compute(program, schema, scenario)?;
+    if json {
+        let doc: serde_json::Map<String, serde_json::Value> = effects
+            .iter()
+            .map(|(scope, e)| {
+                (
+                    scope.clone(),
+                    serde_json::json!({
+                        "reads": e.reads,
+                        "writes": e.writes,
+                        "offers": e.offers,
+                    }),
+                )
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&doc)?);
+        return Ok(());
+    }
+    let mut first = true;
+    for (scope, e) in &effects {
+        if !first {
+            println!();
+        }
+        first = false;
+        println!("{scope}:");
+        println!("  reads:");
+        for r in &e.reads {
+            println!("    {r}");
+        }
+        println!("  writes:");
+        for w in &e.writes {
+            println!("    {w}");
+        }
+        println!("  offers:");
+        for (k, t) in &e.offers {
+            println!("    {k}: {t}");
+        }
+    }
+    Ok(())
 }
 
 /// `query`'s output, redacted: every fact of a predicate, or a table with

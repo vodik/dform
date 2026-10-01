@@ -30,6 +30,7 @@ cargo run -- -C examples/demo apply dform env=staging
 cargo run -- -C examples/demo plan dform env=prod   # or 'dform[env=prod]'
 cargo run -- -C examples/demo test                  # run the program's scenarios
 cargo run -- -C examples/demo dev strata            # evaluation order: the partition graph's strata
+cargo run -- -C examples/demo dev effects           # per scope: what it reads, writes, offers
 cargo run -- -C examples/demo fmt                   # format the project's .df files in place
 cargo run -- fmt --check $(git ls-files '*.df' ':!tests/syntax/err' ':!editors')   # CI: list unformatted files, fail
 ```
@@ -119,7 +120,7 @@ Apply.
 | `state show`, `state taint`, `state mv` | a deployment's state |
 | `provider check`, `provider schema` | providers |
 | `controller run` | controller mode |
-| `dev strata`, `dev graph`, `dev --world W --inventory I --provider P --chaos C COMMAND` | the mock and the evaluator |
+| `dev strata`, `dev graph`, `dev effects`, `dev --world W --inventory I --provider P --chaos C COMMAND` | the mock and the evaluator |
 | `doc [TARGET]` | the doc comments as Markdown, on stdout |
 | `init [NAME]` | make the working directory a project |
 | `completions zsh\|bash\|fish` | a completion script |
@@ -1171,6 +1172,21 @@ cargo run -- -C examples/demo why 'attr(net.vpc, "network.main::vpc", "tags.team
 cargo run -- -C examples/demo dev graph | dot -Tsvg > resources.svg   # resource DAG: A -> B when A reads B (a ref, a null)
 cargo run -- -C examples/demo dev graph --strata                     # partition graph, a cluster per stratum, negative edges dashed
 cargo run -- -C examples/demo dev graph --relation vpc_peer/2        # any binary relation of the fact store
+```
+
+`dform dev effects` prints, per scope (the stack, each module instance, each
+pack in use, and the scenario if `--scenario NAME` is given), what it reads
+(inputs by name, settings leaves by path, world types, externs by name,
+another instance's outputs), writes (cells as `(type, path)` partitions,
+`*` for a variable type or path, settings leaves, another instance's input
+cells) and offers (its declared outputs, with their types). Read off the
+lowered program's rule heads and bodies and the partition graph; no
+evaluation.
+
+```bash
+cargo run -- -C examples/demo dev effects                  # every scope, text
+cargo run -- -C examples/demo dev effects --scenario prod  # the scenario's own scope too
+cargo run -- -C examples/demo dev effects --json           # one JSON document
 ```
 
 ## Chaos: failure and latency injection

@@ -259,6 +259,9 @@ pub struct Compiled {
     pub schema: Schema,
     /// `rules`, in that order.
     pub graph: Graph,
+    /// The stack's and every module instance's typed inputs (`dform dev
+    /// effects`'s reads, by name, per scope).
+    pub inputs: Vec<crate::inputs::Declared>,
 }
 
 /// Compile `program` as `engine::eval` runs it and build its partition
@@ -294,6 +297,7 @@ pub fn compile(program: &Program, given: &[Atom]) -> Result<Compiled> {
         externs: lowered.externs,
         schema,
         graph,
+        inputs: lowered.inputs,
     })
 }
 
