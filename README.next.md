@@ -78,9 +78,15 @@ requires_approval(sg, "security group changed") where deformation(_, sg, _), sg 
 ```
 
 The first is about what will exist. The other two are about the change
-itself: once the plan is computed, each change is a row,
-`deformation(kind, resource, before)`, the program's rules run over
-those rows, and only then is anything applied. A policy can refuse a
+itself: once the plan is computed, each change is a row of a relation
+dform declares for you,
+
+```dform
+decl deformation(kind: enum("create", "update", "replace", "delete"), resource: ref, before: digest)
+```
+
+the program's rules run over those rows, and only then is anything
+applied. A policy can refuse a
 change, warn about it, or demand a signature on the plan, and `why`
 explains any of those the way it explains a subnet.
 
