@@ -360,11 +360,12 @@ input db: { multi_az: bool, backup_days: int } = { multi_az: false, backup_days:
 
 A stack is the unit of state and apply, and a file under `stacks/` is
 one, named after itself: this is `stacks/shop.df`, so `dform plan shop`.
-A `key` is an input that selects the deployment: each value of `env` and
-`region` has its own state, `dform plan shop env=prod region=eu-west-1`.
 An `input` is what the outside supplies, with a type and maybe a
-default; one without a default must be given. Together they are the
-stack's interface, and they come before the first rule. A `provider`
+default; one without a default must be given. A `key` is an input with
+one more property: it selects the deployment, so each value of `env`
+and `region` has its own state, and it is given with the target, `dform
+plan shop env=prod region=eu-west-1`, never by `--set`. Together they
+are the stack's interface, and they come before the first rule. A `provider`
 statement is not a header line: it is a rule that configures a provider
 from whatever it reads (`provider aws { region }`, or `provider aws`
 alone), in scope for the whole program wherever it is written, so it
