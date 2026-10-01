@@ -1,0 +1,303 @@
+//! The WIT package (`wit/dform-provider.wit`) and the proto
+//! (`proto/dform/v1/provider.proto`) state one contract: the same calls,
+//! the same messages, the same fields with the same shapes. This walks
+//! both, so neither changes without the other (DESIGN.org R-13).
+//!
+//! The mapping, as the WIT's header records it: names kebab-cased; a
+//! message is a record of the same name, except `Value`, the variant
+//! `value`, whose `List`/`Obj` children are `node` indices; a `Value`
+//! field is a `tree`; `optional` is `option`, `repeated` is `list`, a map
+//! is a list of pairs; an enum loses its `*_UNSPECIFIED` case; a call
+//! answers `result<_, call-error>`, a server stream a list.
+
+use std::collections::BTreeSet;
+use std::path::Path;
+
+use prost::Message;
+use prost_types::field_descriptor_proto::{Label, Type as Pt};
+use prost_types::{DescriptorProto, FieldDescriptorProto, FileDescriptorProto, FileDescriptorSet};
+use wit_parser::{InterfaceId, Resolve, Type, TypeDefKind, TypeId};
+
+/// WIT types with no proto message: the encoding's own.
+const WIT_ONLY: &[&str] = &["tree", "node", "call-error"];
+
+struct Contract {
+    proto: FileDescriptorProto,
+    resolve: Resolve,
+    types: InterfaceId,
+    provider: InterfaceId,
+}
+
+fn contract() -> Contract {
+    let set =
+        FileDescriptorSet::decode(&include_bytes!(concat!(env!("OUT_DIR"), "/provider.fds"))[..])
+            .unwrap();
+    let proto = set
+        .file
+        .into_iter()
+        .find(|f| f.name() == "dform/v1/provider.proto")
+        .unwrap();
+    let mut resolve = Resolve::new();
+    let wit = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../wit");
+    let (pkg, _) = resolve.push_dir(&wit).unwrap();
+    let iface = |name: &str| resolve.packages[pkg].interfaces[name];
+    let (types, provider) = (iface("types"), iface("provider"));
+    Contract {
+        proto,
+        resolve,
+        types,
+        provider,
+    }
+}
+
+/// `HandshakeRequest` -> `handshake-request`, `protocol_version` ->
+/// `protocol-version`, `END_TICK` -> `end-tick`.
+fn kebab(s: &str) -> String {
+    let mut out = String::new();
+    for (i, c) in s.chars().enumerate() {
+        if c == '_' {
+            out.push('-');
+        } else if c.is_ascii_uppercase() && s.contains(|c: char| c.is_ascii_lowercase()) {
+            if i > 0 {
+                out.push('-');
+            }
+            out.push(c.to_ascii_lowercase());
+        } else {
+            out.push(c.to_ascii_lowercase());
+        }
+    }
+    out
+}
+
+/// `.dform.v1.HandshakeRequest` -> `HandshakeRequest`.
+fn short(type_name: &str) -> &str {
+    type_name.rsplit('.').next().unwrap()
+}
+
+impl Contract {
+    fn wit_type(&self, name: &str) -> TypeId {
+        *self.resolve.interfaces[self.types]
+            .types
+            .get(name)
+            .unwrap_or_else(|| panic!("the WIT has no type `{name}`"))
+    }
+
+    fn kind(&self, ty: &Type) -> Option<&TypeDefKind> {
+        match ty {
+            Type::Id(id) => Some(&self.resolve.types[*id].kind),
+            _ => None,
+        }
+    }
+
+    /// A WIT type's name, if it is a named one.
+    fn named(&self, ty: &Type) -> Option<&str> {
+        match ty {
+            Type::Id(id) => self.resolve.types[*id].name.as_deref(),
+            _ => None,
+        }
+    }
+
+    /// The WIT type a proto field's element (one item of a repeated
+    /// field) must be; `in_value` for `List` and `Obj`, whose values are
+    /// nodes of the tree they are in.
+    fn expect_scalar(&self, f: &FieldDescriptorProto, ty: &Type, in_value: bool, at: &str) {
+        let want = match f.r#type() {
+            Pt::String => Type::String,
+            Pt::Bool => Type::Bool,
+            Pt::Uint32 => Type::U32,
+            Pt::Int64 => Type::S64,
+            Pt::Uint64 => Type::U64,
+            Pt::Double => Type::F64,
+            Pt::Message | Pt::Enum => {
+                let want = match short(f.type_name()) {
+                    "Value" if in_value => "node".to_string(),
+                    "Value" => "tree".to_string(),
+                    other => kebab(other),
+                };
+                assert_eq!(self.named(ty), Some(&*want), "{at}: want `{want}`");
+                return;
+            }
+            other => panic!("{at}: the drift test does not map proto type {other:?}"),
+        };
+        assert_eq!(*ty, want, "{at}");
+    }
+
+    /// A proto field against a WIT record field or variant case type.
+    fn expect_field(&self, msg: &DescriptorProto, f: &FieldDescriptorProto, ty: &Type, at: &str) {
+        let in_value = matches!(msg.name(), "List" | "Obj");
+        if f.label() == Label::Repeated {
+            let Some(TypeDefKind::List(item)) = self.kind(ty) else {
+                panic!("{at}: repeated in the proto, not a list in the WIT");
+            };
+            let entry = msg
+                .nested_type
+                .iter()
+                .find(|n| n.options.as_ref().is_some_and(|o| o.map_entry()))
+                .filter(|n| short(f.type_name()) == n.name());
+            match entry {
+                // A map: a list of (key, value) pairs.
+                Some(entry) => {
+                    let Some(TypeDefKind::Tuple(t)) = self.kind(item) else {
+                        panic!("{at}: a map in the proto, not a list of pairs in the WIT");
+                    };
+                    assert_eq!(t.types.len(), 2, "{at}");
+                    self.expect_scalar(&entry.field[0], &t.types[0], in_value, at);
+                    self.expect_scalar(&entry.field[1], &t.types[1], in_value, at);
+                }
+                None => self.expect_scalar(f, item, in_value, at),
+            }
+        } else if f.proto3_optional() {
+            let Some(TypeDefKind::Option(inner)) = self.kind(ty) else {
+                panic!("{at}: optional in the proto, not an option in the WIT");
+            };
+            self.expect_scalar(f, inner, in_value, at);
+        } else {
+            assert!(
+                !matches!(self.kind(ty), Some(TypeDefKind::Option(_))),
+                "{at}: an option in the WIT, not optional in the proto"
+            );
+            self.expect_scalar(f, ty, in_value, at);
+        }
+    }
+}
+
+#[test]
+fn the_calls_match() {
+    let c = contract();
+    let service = &c.proto.service[0];
+    assert_eq!(service.name(), "Provider");
+    let funcs = &c.resolve.interfaces[c.provider].functions;
+    let rpcs: Vec<String> = service.method.iter().map(|m| kebab(m.name())).collect();
+    let wit: Vec<&String> = funcs.keys().collect();
+    assert_eq!(wit, rpcs.iter().collect::<Vec<_>>(), "the calls, in order");
+    for m in &service.method {
+        let at = format!("call {}", m.name());
+        let f = &funcs[&kebab(m.name())];
+        assert_eq!(f.params.len(), 1, "{at}");
+        assert_eq!(
+            c.named(&f.params[0].ty),
+            Some(&*kebab(short(m.input_type()))),
+            "{at}: its request"
+        );
+        let Some(TypeDefKind::Result(r)) = f.result.as_ref().and_then(|t| c.kind(t)) else {
+            panic!("{at}: not a result");
+        };
+        assert_eq!(c.named(r.err.as_ref().unwrap()), Some("call-error"), "{at}");
+        let ok = r.ok.as_ref().unwrap();
+        let ok = if m.server_streaming() {
+            let Some(TypeDefKind::List(item)) = c.kind(ok) else {
+                panic!("{at}: a stream in the proto, not a list in the WIT");
+            };
+            item
+        } else {
+            ok
+        };
+        assert_eq!(
+            c.named(ok),
+            Some(&*kebab(short(m.output_type()))),
+            "{at}: its response"
+        );
+    }
+}
+
+#[test]
+fn the_messages_match() {
+    let c = contract();
+    let mut proto_names = BTreeSet::new();
+    for msg in &c.proto.message_type {
+        let name = kebab(msg.name());
+        proto_names.insert(name.clone());
+        let ty = c.wit_type(&name);
+        match &c.resolve.types[ty].kind {
+            // Value: its oneof's arms are the variant's cases.
+            TypeDefKind::Variant(v) => {
+                assert_eq!(msg.name(), "Value");
+                assert_eq!(msg.oneof_decl.len(), 1);
+                let arms: Vec<String> = msg.field.iter().map(|f| kebab(f.name())).collect();
+                let cases: Vec<&String> = v.cases.iter().map(|c| &c.name).collect();
+                assert_eq!(cases, arms.iter().collect::<Vec<_>>(), "Value's arms");
+                for (f, case) in msg.field.iter().zip(&v.cases) {
+                    let at = format!("Value.{}", f.name());
+                    assert!(f.oneof_index.is_some(), "{at}");
+                    let ty = case.ty.as_ref().unwrap();
+                    c.expect_field(msg, f, ty, &at);
+                }
+            }
+            TypeDefKind::Record(r) => {
+                // Only `optional`'s synthetic oneofs: a real one is a variant.
+                assert!(
+                    msg.field
+                        .iter()
+                        .all(|f| f.oneof_index.is_none() || f.proto3_optional()),
+                    "{}: a oneof, not a variant in the WIT",
+                    msg.name()
+                );
+                let fields: Vec<String> = msg.field.iter().map(|f| kebab(f.name())).collect();
+                let wit: Vec<&String> = r.fields.iter().map(|f| &f.name).collect();
+                assert_eq!(
+                    wit,
+                    fields.iter().collect::<Vec<_>>(),
+                    "{}'s fields",
+                    msg.name()
+                );
+                for (f, wf) in msg.field.iter().zip(&r.fields) {
+                    c.expect_field(msg, f, &wf.ty, &format!("{}.{}", msg.name(), f.name()));
+                }
+            }
+            other => panic!("{}: a {other:?} in the WIT", msg.name()),
+        }
+    }
+    for e in &c.proto.enum_type {
+        let name = kebab(e.name());
+        proto_names.insert(name.clone());
+        let TypeDefKind::Enum(w) = &c.resolve.types[c.wit_type(&name)].kind else {
+            panic!("{}: not an enum in the WIT", e.name());
+        };
+        let values: Vec<String> = e
+            .value
+            .iter()
+            .filter(|v| !v.name().ends_with("_UNSPECIFIED"))
+            .map(|v| kebab(v.name()))
+            .collect();
+        let cases: Vec<&String> = w.cases.iter().map(|c| &c.name).collect();
+        assert_eq!(
+            cases,
+            values.iter().collect::<Vec<_>>(),
+            "{}'s values",
+            e.name()
+        );
+    }
+    // And the WIT has nothing the proto lacks but the encoding's own.
+    for name in c.resolve.interfaces[c.types].types.keys() {
+        assert!(
+            proto_names.contains(name) || WIT_ONLY.contains(&&**name),
+            "the WIT's `{name}` is not in the proto"
+        );
+    }
+}
+
+/// call-error's cases are dform-core's `CallError` variants.
+#[test]
+fn call_error_is_core_call_error() {
+    let c = contract();
+    let TypeDefKind::Variant(v) = &c.resolve.types[c.wit_type("call-error")].kind else {
+        panic!("call-error is not a variant");
+    };
+    let cases: Vec<&str> = v.cases.iter().map(|c| c.name.as_str()).collect();
+    let src = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../dform-core/src/plugin/backend.rs"),
+    )
+    .unwrap();
+    let body = src
+        .split("pub enum CallError {")
+        .nth(1)
+        .and_then(|s| s.split('}').next())
+        .expect("backend.rs has `pub enum CallError`");
+    let variants: Vec<String> = body
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.starts_with("//") && !l.is_empty())
+        .map(|l| kebab(l.split('(').next().unwrap()))
+        .collect();
+    assert_eq!(cases, variants);
+}

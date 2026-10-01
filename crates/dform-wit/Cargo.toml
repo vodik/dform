@@ -1,0 +1,30 @@
+[package]
+name = "dform-wit"
+version = "0.1.0"
+license = "Apache-2.0"
+edition = "2024"
+publish = false
+
+# The provider contract as WIT (`wit/`, DESIGN.org R-13): host-side
+# bindings (wasmtime) and guest-side bindings (wit-bindgen), each behind
+# its feature. Both are on by default so the workspace build checks the
+# package; a consumer takes the side it needs with
+# `default-features = false`.
+[features]
+default = ["host", "guest"]
+host = ["dep:wasmtime"]
+guest = ["dep:wit-bindgen"]
+
+[dependencies]
+wasmtime = { version = "49", default-features = false, features = ["component-model", "runtime", "std"], optional = true }
+wit-bindgen = { version = "0.57", optional = true }
+
+[build-dependencies]
+# The proto's descriptor set, for tests/drift.rs.
+prost-build = "0.13"
+
+[dev-dependencies]
+# tests/drift.rs: the proto's descriptor set and the WIT package, walked.
+prost = "0.13"
+prost-types = "0.13"
+wit-parser = "0.258"

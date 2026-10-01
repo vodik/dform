@@ -1,0 +1,29 @@
+// A function package's body as a component (DESIGN.org R-7, R-13): pure
+// functions a program calls in a term, cheap and in-process, on the same
+// host as providers.
+//
+// A package of its own, not an interface of dform:provider: it is sourced
+// and pinned apart from any provider (`[functions] geo = { source, version
+// }`), a function component imports nothing (no WASI: a function is
+// pure), and its contract is bytes, so it does not move when the provider
+// contract's records do. A provider package that ships functions ships a
+// component of this package beside its provider component.
+
+package dform:function@1.0.0;
+
+interface function {
+  // Call `name` (a function the package's signature file declares) with
+  // `args`, the prost encoding of one dform.v1.Value (the protocol's,
+  // proto/dform/v1/provider.proto) whose kind is a list of the arguments
+  // in order: one encoding for providers and functions, and a trivial C
+  // ABI for a shared-object host.
+  // The answer is the prost encoding of one dform.v1.Value, or none: the
+  // function has no value at these arguments (the term fails, as a
+  // built-in's does). The name, arity and properties come from the
+  // signature file, not from the component.
+  call: func(name: string, args: list<u8>) -> option<list<u8>>;
+}
+
+world functions {
+  export function;
+}

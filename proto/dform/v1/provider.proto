@@ -15,6 +15,11 @@
 // crash safety. A document is a Value (an Obj of the configured
 // attributes); a value the engine does not know yet travels as a Null, and
 // a sensitive computed value only ever as a Null of class SECRET, its label.
+//
+// The canonical contract is wit/dform-provider.wit (DESIGN.org R-13); this
+// file mirrors it for the gRPC bridge until the wasm bridge replaces it.
+// crates/dform-wit/tests/drift.rs fails when the two disagree on a call,
+// a message or a field: change both.
 
 syntax = "proto3";
 

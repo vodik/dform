@@ -1,0 +1,444 @@
+// The dform provider protocol, version 1 (DESIGN.org "Providers and fact
+// plugins", proposal E DR-18 with F's DR-18 addition; DESIGN.org R-13).
+//
+// This package is the canonical contract. A provider is a component that
+// exports `provider`; the host instantiates it once per run (SDK state,
+// credentials, connection reuse) and calls it. `--parallel` on 0.2 is a
+// pool of N identically configured instances.
+//
+// proto/dform/v1/provider.proto mirrors this file for the gRPC bridge
+// (crates/dform-grpc) until the wasm bridge passes `provider check`, then
+// goes. crates/dform-wit/tests/drift.rs checks that the two name the same
+// calls, the same messages and the same fields: neither changes alone.
+//
+// The protocol carries facts, schema and documents, never rules. Plan and
+// Apply are per resource: the engine owns ordering, parallelism, state and
+// crash safety. A document is a value (an obj of the configured
+// attributes); a value the engine does not know yet travels as a null, and
+// a sensitive computed value only ever as a null of class secret, its label.
+//
+// Where WIT and the proto differ in encoding (each recorded beside its
+// type):
+// - WIT types cannot be recursive, so a value travels as a `tree`: its
+//   nodes in a list, a `list` or `obj` naming its children by index.
+// - WIT's `map<K, V>` is behind the component model's cm-map feature,
+//   off by default in wasmtime 49 and unknown to wit-bindgen 0.57: an
+//   obj's fields are a list of (name, node) pairs.
+// - WIT enums have no zero value: the proto's *_UNSPECIFIED cases are
+//   not here; the bridge refuses them.
+// - A proto3 message field is always absent-able; here a field is an
+//   `option` only where the proto says `optional`. A bridge reads an
+//   absent document (attrs, computed, config) as the empty obj, as
+//   dform-core's `wire::from_doc_or_empty` does, and an absent value
+//   elsewhere, or a Value with no kind set, as a refusal.
+
+package dform:provider@1.0.0;
+
+interface types {
+  // A value, as src/value.rs has it, and a float, which it does not have:
+  // the engine reads a float as the string of its shortest round-trip
+  // decimal.
+  //
+  // The proto's `Value` oneof, one case per arm. `list` and `obj` hold
+  // indices into the `tree` the value is a node of, not values: see
+  // `tree`.
+  variant value {
+    str(string),
+    int(s64),
+    %bool(bool),
+    %list(%list),
+    obj(obj),
+    // An IPv4 address as a number.
+    ip(u32),
+    ip-net(ip-net),
+    ip-range(ip-range),
+    ref(ref),
+    cloud-ref(ref),
+    null(null),
+    float(f64),
+  }
+
+  // A value as it travels: WIT types cannot be recursive, so a value's
+  // nodes are flattened into `nodes`. `nodes[0]` is the root; a `list` or
+  // `obj` node names its children by their index in `nodes`. It is a
+  // tree: every node but the root is the child of exactly one node, and
+  // a child's index is greater than its parent's, so a reader builds it
+  // back to front. The proto's `Value` field becomes a `tree` field.
+  record tree {
+    nodes: list<value>,
+  }
+
+  // An index into a `tree`'s nodes.
+  type node = u32;
+
+  record %list {
+    items: list<node>,
+  }
+
+  // A map from name to value in the proto; here each name once, in any
+  // order.
+  record obj {
+    fields: list<tuple<string, node>>,
+  }
+
+  record ip-net {
+    addr: u32,
+    prefix: u32,
+  }
+
+  record ip-range {
+    start: u32,
+    end: u32,
+  }
+
+  record ref {
+    %type: string,
+    name: string,
+    attr: string,
+  }
+
+  // A labeled null (proposal E §2.2): a value nobody knows yet. `label` is
+  // `type/addr#path`; `ty` is the schema type the constant will have.
+  record null {
+    label: string,
+    class: null-class,
+    ty: string,
+    // A secret of another stack (a `stack_output`): where a provider holds
+    // it. The provider that receives it in an apply document reads the
+    // value there, inside the call; dform never has it.
+    held: option<held>,
+  }
+
+  // An object a provider manages for another deployment, and the path in it
+  // that holds a secret. A provider that is not `provider`, or cannot reach
+  // the object, refuses the apply naming the resource and the path.
+  record held {
+    provider: string,
+    // The deployment that manages the object, as the reading run names it.
+    deployment: string,
+    %type: string,
+    // The object's remote id.
+    remote: string,
+    path: string,
+    // The keyed digest of the value when that deployment knew it, else
+    // empty: it changes when the value does, so the reader's document does.
+    digest: string,
+  }
+
+  // The proto's NULL_CLASS_UNSPECIFIED has no case: WIT enums need no zero.
+  enum null-class {
+    // A computed identity: never equal to a constant.
+    fresh,
+    // A computed non-identity: equality unknown until resolved.
+    open,
+    // A sensitive computed value: its constant never leaves the provider.
+    secret,
+  }
+
+  // A fact: a predicate and ground arguments.
+  record fact {
+    pred: string,
+    args: list<tree>,
+  }
+
+  // Why a call has no answer: dform-core's `CallError`, the three kinds
+  // the engine tells apart. In the proto they are gRPC statuses: any
+  // failure but these two is `refused`, DEADLINE_EXCEEDED is
+  // `maybe-applied`, UNAVAILABLE (or a dead process) is `crashed`.
+  variant call-error {
+    // The provider refused the call: nothing changed.
+    refused(string),
+    // The call may have taken effect, but no answer came. The host reads
+    // a call that ran past its epoch deadline this way.
+    maybe-applied(string),
+    // The provider died during the call. The host reads a trap this way,
+    // and the engine treats a crashed apply as one that may have taken
+    // effect (idempotency keys, the `managed` capability).
+    crashed(string),
+  }
+
+  record handshake-request {
+    protocol-version: u32,
+  }
+
+  record handshake-response {
+    protocol-version: u32,
+    // The provider's name: what state records as each object's provider.
+    name: string,
+    // "resource" (read, plan, apply, import), "fact" (query), "inventory"
+    // (query answers cloud_exists/2, cloud_attr/4 and cloud_computed/4 with
+    // every argument free), "managed" (query answers
+    // provider.created(Type, Name, Key, Remote) with Type, Name and Key
+    // bound: the object an apply create or replace of address Name with
+    // idempotency key Key made, if it made one).
+    capabilities: list<string>,
+    // The provider's build: its crate version and the git commit it was
+    // built from (`0.1.0+1a2b3c4`). dform refuses one of its own built-in
+    // providers (`fakecloud`, `kubernetes`) whose build is not its own.
+    version: string,
+  }
+
+  record configure-request {
+    // An obj. The fake provider reads: `schemas` (a list of schema names or
+    // paths), `world` and `inventory` (file paths), `chaos` (a list of
+    // `apply --chaos` specs), `settings` (a program's `provider` block or
+    // `provider_config`, at a second configure; its `account` is reported).
+    config: tree,
+  }
+
+  record configure-response {
+    // The account (or project) the provider's credentials reach, when it can
+    // tell: a program's `expect_account` is checked against it, and a
+    // mismatch refuses to plan. The mock reports its `settings.account`.
+    account: option<string>,
+  }
+
+  record schema-request {
+    // When set, the per-type rows (type_attr, type_list_key, type_retry,
+    // type_replace, type_mint) of these types and of the types they alias
+    // (type_alias, closed), plus every type_provider and type_alias row: the
+    // types a run names. Absent: the whole schema. A provider may answer
+    // with more than asked; dform keeps what it needs.
+    types: option<type-filter>,
+  }
+
+  record type-filter {
+    names: list<string>,
+  }
+
+  record schema-response {
+    // type_attr/4, type_list_key/3, type_provider/2, type_mint/3,
+    // type_retry/2, type_replace/2.
+    facts: list<fact>,
+    // The externs query answers.
+    externs: list<extern-decl>,
+    // Apply evaluates `assertions` (F DR-13): a refinement on a secret path
+    // may be deferred to this provider.
+    checks-refinements: bool,
+    // Documents of the provider's own types. `dform provider check` runs its
+    // resource checks with them against a provider that serves its own
+    // schema (a real API's) instead of the synthetic one configure names.
+    examples: list<example>,
+  }
+
+  record example {
+    %type: string,
+    // A document apply create can make.
+    create: tree,
+    // The same object changed in place, for apply update.
+    update: tree,
+    // A dotted path `create` sets that plan refuses the document without;
+    // empty if there is none.
+    required: string,
+  }
+
+  record extern-decl {
+    pred: string,
+    arity: u32,
+    // Per column, whether it is an input (`+`). Empty: any binding pattern.
+    input: list<bool>,
+  }
+
+  record query-request {
+    pred: string,
+    // Per column, whether it is an input (`+`).
+    input: list<bool>,
+    // The `+` columns' values, in order.
+    inputs: list<tree>,
+    // Per column, whether it is declared `secret(T)`. A provider answers a
+    // secret column with a null of class secret whose `held` says where it
+    // keeps the value (its label is the engine's to choose), never the
+    // value: the engine refuses a value there.
+    secret: list<bool>,
+  }
+
+  // One answer: a full tuple of the predicate.
+  record row {
+    values: list<tree>,
+  }
+
+  record read-request {
+    %type: string,
+    remote: string,
+    // The address state maps to this object, for messages.
+    name: string,
+  }
+
+  record read-response {
+    // False: read returns nothing for this id (gone, or not visible yet).
+    found: bool,
+    // The configured attributes.
+    attrs: tree,
+    // The computed values; a sensitive one as its secret null.
+    computed: tree,
+  }
+
+  record plan-request {
+    %type: string,
+    // The address name, for messages.
+    name: string,
+    // The world's document; absent for a create.
+    prior: option<tree>,
+    // The desired document; absent for a delete. It may carry nulls.
+    desired: option<tree>,
+    // The object's remote id; empty for a create. The desired document
+    // leaves out what the provider picked (an Optional+Computed path the
+    // program does not set), a generated name among them.
+    remote: string,
+  }
+
+  record plan-response {
+    // Leaf by leaf, in the provider's canonical spelling of paths.
+    changes: list<change>,
+    // A change the provider cannot make in place.
+    requires-replace: bool,
+  }
+
+  record change {
+    path: string,
+    before: option<tree>,
+    after: option<tree>,
+    // Print neither side.
+    sensitive: bool,
+  }
+
+  // The proto's OP_UNSPECIFIED has no case: WIT enums need no zero.
+  enum op {
+    // A new object named after `name`.
+    create,
+    // Change `remote` in place.
+    update,
+    // Delete `remote`.
+    delete,
+    // Take over `remote`, an object that exists but is not managed yet, and
+    // configure it.
+    adopt,
+    // A new object in place of `remote`: `create-first` keeps the old one
+    // until a later delete, else it goes first.
+    replace,
+    // The tick's calls are done (a phase boundary). No object; `spans` is
+    // the tick's schedule. A provider with a clock advances it.
+    end-tick,
+  }
+
+  record apply-request {
+    op: op,
+    %type: string,
+    name: string,
+    remote: string,
+    // The desired document, nulls resolved except secret ones, which the
+    // provider materializes.
+    config: tree,
+    create-first: bool,
+    // Refinements on secret paths the engine cannot check (F DR-13): the
+    // provider checks each after materializing and fails the action if one
+    // does not hold.
+    assertions: list<assertion>,
+    spans: list<span>,
+    // Create and replace: a key unique to this intended creation. The same
+    // key twice must not create twice: a second call with a key a first one
+    // already made an object for answers with that object, whatever became
+    // of the first call's answer. A provider whose API takes a client token
+    // passes the key through. dform retries a call whose outcome it does not
+    // know (maybe-applied, crashed, dform killed with it in flight) with
+    // the same key, after asking for the object (the "managed" capability).
+    idempotency-key: string,
+  }
+
+  // `path` OP `value`: OP is one of eq, ne, len_ge, len_le, prefix, or a
+  // refinement's own name with its arguments as `value` (F DR-13 revised):
+  // range [lo, hi], prefix_len_le N, prefix_len_ge N, enum [v, ...],
+  // regex "S", type "int|string|bool|inet".
+  record assertion {
+    path: string,
+    op: string,
+    value: tree,
+    // What the failure says.
+    message: string,
+  }
+
+  // One apply call on the engine's clock.
+  record span {
+    addr: string,
+    start-ms: u64,
+    end-ms: u64,
+  }
+
+  record apply-response {
+    // The object's remote id; empty after a delete.
+    remote: string,
+    // The object's configured attributes as stored, and its computed values
+    // (a sensitive one as its secret null).
+    attrs: tree,
+    computed: tree,
+    // How long the call took on the provider's clock.
+    elapsed-ms: u64,
+    // What the provider wants the user to see.
+    notes: list<string>,
+  }
+
+  record import-request {
+    %type: string,
+    remote: string,
+  }
+
+  record import-response {
+    found: bool,
+    %type: string,
+    name: string,
+    attrs: tree,
+    computed: tree,
+  }
+}
+
+// The calls, dform-core's `Call`/`Reply` pairs. Each answers its response
+// or why it has none.
+interface provider {
+  use types.{
+    call-error, handshake-request, handshake-response, configure-request,
+    configure-response, schema-request, schema-response, query-request, row,
+    read-request, read-response, plan-request, plan-response, apply-request,
+    apply-response, import-request, import-response,
+  };
+
+  // Protocol version and capabilities. The first call.
+  handshake: func(request: handshake-request) -> result<handshake-response, call-error>;
+  // Credentials, region, endpoint: a provider-defined config object.
+  configure: func(request: configure-request) -> result<configure-response, call-error>;
+  // The schema as facts: the engine injects them as EDB.
+  schema: func(request: schema-request) -> result<schema-response, call-error>;
+  // An extern's answer: bound arguments in, rows out.
+  //
+  // On 0.3 (wasip3) the rows stream, as the proto's do:
+  //   query: async func(request: query-request) -> result<stream<row>, call-error>;
+  query: func(request: query-request) -> result<list<row>, call-error>;
+  // Refresh one object by its remote id.
+  read: func(request: read-request) -> result<read-response, call-error>;
+  // Prior and desired document in, the diff and whether it replaces out.
+  plan: func(request: plan-request) -> result<plan-response, call-error>;
+  // Execute one planned action; return the object as it now is. A call
+  // that fails with maybe-applied (or crashed) may have taken effect; a
+  // refused one changed nothing.
+  //
+  // On 0.2 it blocks the instance; the host runs concurrent applies on a
+  // pool of instances. On 0.3 (wasip3) one instance takes them all:
+  //   apply: async func(request: apply-request) -> future<result<apply-response, call-error>>;
+  apply: func(request: apply-request) -> result<apply-response, call-error>;
+  // An object the engine does not manage yet, by remote id.
+  %import: func(request: import-request) -> result<import-response, call-error>;
+}
+
+// What a provider component is (not `world provider`: a world and an
+// interface of one package cannot share a name): it serves `provider` and reaches its API
+// through WASI 0.2 (0.2.12, the version wasmtime 49 ships; a component
+// built against any 0.2.x links). wasi:cli/imports brings what Rust std on
+// wasm32-wasip2 links (environment, where credentials come from; stdio;
+// exit; clocks; random) together with wasi:filesystem (types, preopens)
+// and wasi:sockets (tcp, udp, ip-name-lookup); wasi:http/imports brings the
+// outgoing handler an HTTP SDK speaks through.
+world provider-component {
+  include wasi:cli/imports@0.2.12;
+  include wasi:http/imports@0.2.12;
+
+  export provider;
+}

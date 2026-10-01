@@ -12,6 +12,7 @@ members = [
     "crates/dform-proptest",
     "crates/dform-s3",
     "crates/dform-lsp",
+    "crates/dform-wit",
     "tree-sitter-dform",
 ]
 # `cargo build` and `cargo test` build the provider binaries the CLI spawns

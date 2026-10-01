@@ -340,6 +340,10 @@ process spawn; the host keeps that one privileged hook, Terraform's
 plugin-launch shape). It needs wasip3 and an HTTP/2 client over
 wasi-sockets, neither available today. Until it passes =provider check=,
 =dform-grpc= is the native bridge, frozen: nothing is added to it.
+*The file.* =wit/dform-provider.wit= (=dform:provider@1.0.0=, world
+=provider-component=) and =wit/function/dform-function.wit=
+(=dform:function@1.0.0=); bindings in =crates/dform-wit=, whose
+=tests/drift.rs= keeps the proto in step.
 *Spike (answered 2026-10-02, R-13c, dropped as a probe).* =dform-k8s=
 does not build for =wasm32-wasip2=: =kube= is hard-wired to tokio's =net=
 and =rustls-native-certs=, neither feature-switchable, so a component
