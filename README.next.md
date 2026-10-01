@@ -3,8 +3,9 @@
 Infrastructure is a database. An account is a table of VPCs, a table of
 subnets, a table of policies, each row with attributes, each row pointing
 at others by id. What you want to exist is also a set of tables. A plan
-is the difference between the two. A policy is a query that must return
-no rows. "Why is this subnet here" is a question about which rows
+is the difference between the two, and it is a table as well. A policy
+is a query that must return no rows, over what will exist or over the
+change itself. "Why is this subnet here" is a question about which rows
 produced it. Every infrastructure tool is, underneath, doing relational
 work on data it stores as text.
 
@@ -144,6 +145,31 @@ in any module, whoever declared it; `db.multi_az` reads its attribute
 after every author's contribution has merged. A deny with answers
 refuses the plan and prints them; `warn` reports and goes on.
 
+**The plan is a table too.** Once the difference between program and
+world is computed, it goes back into the program as rows,
+`deformation(kind, type, address, before)`, one per change, and the
+program's own rules run over them before anything is applied. A
+program polices its own change set:
+
+```dform
+deny "no deletes in prod" { resource: a } where env == "prod", deformation("delete", t, a, _)
+warn "replacing a database" { db: a } where deformation("replace", aws.db_instance, a, _)
+requires_approval(d, "a security group changed") where deformation(_, aws.security_group, a, _), d = "aws.security_group[\"${a}\"]"
+```
+
+```
+$ dform query 'deformation(k, t, a, _)'
+k         t                   a
+"create"  "aws.subnet"        "private-us-east-1c"
+"update"  "aws.security_group" "api"
+(2 rows)
+```
+
+Terraform teams build this out of plan JSON, a policy engine and a CI
+step; here it is three lines in the same file as the resources, with
+the same `why`. The lifecycle rules in the tool section are written
+this way, and so is "needs approval".
+
 **A value the cloud produces later is a value now.** A database's
 endpoint does not exist until the database does. Every tool has to live
 with that; Terraform's answer is the error everyone has met, "value
@@ -252,31 +278,6 @@ the statement with what it became: the interpolated name, each lookup,
 each read, a value still unknown as its `?` label. The same question works for an attribute
 (`why 'aws.vpc["main"].tags.team'` shows every author and which rank
 won) and for a refusal (`why 'deny(m)'`).
-
-**The plan is a table too.** Once the difference between program and
-world is computed, it goes back into the program as rows,
-`deformation(kind, type, address, before)`, one per change, and the
-program's own rules run over them before anything is applied. A
-program polices its own change set:
-
-```dform
-deny "no deletes in prod" { resource: a } where env == "prod", deformation("delete", t, a, _)
-warn "replacing a database" { db: a } where deformation("replace", aws.db_instance, a, _)
-requires_approval(d, "a security group changed") where deformation(_, aws.security_group, a, _), d = "aws.security_group[\"${a}\"]"
-```
-
-```
-$ dform query 'deformation(k, t, a, _)'
-k         t                   a
-"create"  "aws.subnet"        "private-us-east-1c"
-"update"  "aws.security_group" "api"
-(2 rows)
-```
-
-Terraform teams build this out of plan JSON, a policy engine and a CI
-step; here it is three lines in the same file as the resources, with
-the same `why`. The lifecycle rules in the tool section are written
-this way, and so is "needs approval".
 
 ## The language
 
