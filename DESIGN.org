@@ -353,7 +353,40 @@ group line in the warning colour (it is what R-12's question is about).
 golden tests on the uncoloured text. The README splits into a tutorial
 (the tour), a reference (grammar.md and a commands page) and design
 notes; the Status section, =arg/5= and =member= are corrected in the
-split.
+split. (Revised the same day by R-23: the README is the introduction.)
+
+** R-15 to R-23: what makes the core worth writing a provider for
+Added the same day at the user's request. The differentiator dform has
+is "the plan is a database with provenance"; these turn it from a demo
+into reasons to switch. Each is a Phase 9 ticket of the same number.
+- *R-15* =plan --why= prints the explanation under each deformation
+  (rule, base facts with file:line, table rows, inputs, extern answers),
+  and =diff --since REF= explains what changed between applies from the
+  audit log joined to provenance.
+- *R-16* Brownfield import writes the program: =import T= emits resource
+  blocks and =adopt= facts from the inventory; =import --match FILE=
+  runs the user's rules against the world and reports matched, differing
+  and unmatched objects until the sets agree. The view-update problem
+  done by hand with a good reporter.
+- *R-17* The solve stratum: =allocate= with persisted pins (E DR-15),
+  greedy and deterministic now, a solver hook later. CIDR allocation and
+  placement in one line; the one head aggregate that survives R-9.
+- *R-18* Property-tested policies: =test --generate= derives cases from
+  the inputs' types and refinements; =check --sarif= for CI.
+- *R-19* =std.net=: reachability over security groups and routes as a
+  query before apply, plain Datalog over =attr=; BDDs only if the scale
+  bench says so.
+- *R-20* The editor shows values: hover gives the collapsed value, rank
+  and owners for the selected deployment; plan actions as inlays;
+  =why= as a code action. Supersedes the abandoned inlay-hints branch.
+- *R-21* =verify PLAN= recomputes a plan from its file alone through a
+  replay provider; a signed plan is reproducible offline.
+- Incremental evaluation (DBSP shape) is already a ticket and is what
+  makes R-15 and R-20 feel instant; not re-filed.
+- *R-23* The README is the introduction, in the user's order: what this
+  is; why a language; a tour of the language; a tour of the tool; what
+  other tools cannot do, each paired with the Terraform workaround it
+  replaces. The reference moves to docs/. Supersedes R-14's split.
 
 * Vocabulary
 The name is Terraform minus terra plus Datalog, and it reads as "deform" aloud.
