@@ -179,18 +179,27 @@ value and a read where its content is used. When a read of a computed
 value makes a block wait for a later tick, the compiler says so at the
 read.
 
-**Stacks and deployments.** A stack is the unit of state and apply. A
-file is a stack, named after itself, until it says otherwise:
+**The header.** A file begins with what it is, what it talks to and what
+it takes, in that order, before any rule:
 
 ```dform
+edition 2026
 stack shop[env]
+provider aws { region = cfg.region }
+import "modules/network.df"
 input env: enum("dev", "staging", "prod") = "dev"
+input az(name, index) from csv("data/azs.csv")
 ```
 
-`[env]` keys the stack: each value of `env` is a deployment with its own
-state, `dform plan shop env=prod`. A stack's settings, where its state
-lives, whether unknowns at plan time are refused, who may approve a plan,
-go in a block after the name when there are any:
+A stack is the unit of state and apply. A file is a stack named after
+itself until it says otherwise; `[env]` keys it, so each value of `env`
+is a deployment with its own state, `dform plan shop env=prod`. A
+provider line brings a provider's types and externs into scope and
+configures it. Imports bring in modules and policies. Inputs are the
+stack's interface. None of these may appear below the first rule. A
+stack's settings, where its state lives, whether unknowns at plan time
+are refused, who may approve a plan, go in a block after the name when
+there are any:
 
 ```dform
 stack shop[env] {
@@ -253,9 +262,8 @@ scenario prod {
 `dform test` runs every scenario; `dform test --generate` derives cases
 from the inputs' types and checks.
 
-**Providers, externs, functions.** `provider aws { region = .. }` brings
-the provider's types and externs into scope. An extern is a relation the
-provider answers on demand, with binding modes: `aws.ami[filter]`,
+**Externs and functions.** An extern is a relation a provider answers
+on demand, with binding modes: `aws.ami[filter]`,
 `file.json[path]`, `random.password[key]` (a secret, generated once and
 kept). Functions are qualified by the type they are about,
 `inet.subnet`, `str.split`, `list.join`, and declared in signature files
