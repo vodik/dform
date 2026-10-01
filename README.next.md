@@ -288,7 +288,7 @@ rejected with the file and line. Inside the program a network is an
 
 ```dform
 input vpc_net: inet = "10.0.0.0/16"
-input az(name: string, index: int) from yaml("data/azs.yaml")
+az(name: string, index: int) from yaml("data/azs.yaml")
 
 resource aws.subnet "private-${availability_zone}" {
   cidr_block = inet.subnet(vpc_net, 4, n)          # the n-th /20 of the /16
@@ -352,21 +352,23 @@ any rule:
 
 ```dform
 edition 2026
-import "modules/network.df"
 key env: enum("dev", "staging", "prod") = "dev"
-input az(name: string, index: int) from yaml("data/azs.yaml")
+key region: enum("us-east-1", "eu-west-1") = "us-east-1"
+input owner: string
+input db: { multi_az: bool, backup_days: int } = { multi_az: false, backup_days: 3 }
 ```
 
 A stack is the unit of state and apply, and a file under `stacks/` is
 one, named after itself: this is `stacks/shop.df`, so `dform plan shop`.
-A `key` is an input that selects the deployment: each value of `env` has
-its own state, `dform plan shop env=prod`. Imports bring in modules and
-policies. Inputs are the stack's interface. None of these may appear
-below the first rule. A `provider` statement is not a header line: it is
-a rule that configures a provider from whatever it reads (`provider aws
-{ region = cfg.region }`, or `provider aws` alone), in scope for the
-whole program wherever it is written, so it goes next to what it depends
-on. Where a stack's state lives and who may
+A `key` is an input that selects the deployment: each value of `env` and
+`region` has its own state, `dform plan shop env=prod region=eu-west-1`.
+An `input` is what the outside supplies, with a type and maybe a
+default; one without a default must be given. Together they are the
+stack's interface, and they come before the first rule. A `provider`
+statement is not a header line: it is a rule that configures a provider
+from whatever it reads (`provider aws { region }`, or `provider aws`
+alone), in scope for the whole program wherever it is written, so it
+goes next to what it depends on. Where a stack's state lives and who may
 approve a plan are operational, so they live in `dform.toml`, where `[stacks.shop]` is
 `stacks/shop.df`:
 
@@ -379,44 +381,64 @@ approvals = 'jwks("https://sso.acme.example/keys")'
 A small project needs none of this: `dform.toml` beside one `.df` file is
 a project with one stack.
 
-**Inputs, settings and lets are cells.** `input env: ..` is a typed
-input; `--set env=prod` wins over its default because it is a
-higher-rank contribution to the same cell. `settings prod { db.multi_az
-= true }` is one environment's values; `let cfg = settings[env]` reads the
-selected row, and `cfg.db.multi_az` a leaf of it. Two `let` rows that
-disagree are a conflict, like any cell.
-
-**Tables.** Data that is not code comes in as a typed relation from a
-file, and rows are facts like any other, each with a line `why` can
-point at:
+**Settings.** Configuration is the inputs. The declaration gives the
+default; a `settings` block contributes values to them under a
+condition, usually on the key; `--set` on the command line wins over
+both. Any subset of a composite key, or anything else the program
+knows, can be the condition:
 
 ```dform
-input az(name: string, index: int) from yaml("data/azs.yaml")
-input pin(app: string, image: string) from toml(git("ops.git", "env/${env}", "pins.toml"))
+settings { db.multi_az = true, db.backup_days = 14 } where env == "prod"
+settings { db.backup_days = 30 } @override where env == "prod", region == "eu-west-1"
+settings from yaml("config/${env}.yaml")
 ```
 
-```yaml
-# data/azs.yaml: a list of objects, one per row
-- { name: us-east-1a, index: 1 }
-- { name: us-east-1b, index: 2 }
+The deployment's value is just the input's name, `db.backup_days`, and
+`why` shows which layer won. Two blocks that both apply and disagree at
+the same rank are a conflict naming both, so a broad block that should
+lose says `@default`; nothing is decided by how specific a condition
+looks. `settings from` takes a whole document, one leaf per input path,
+which is how a `config/prod.yaml` written by hand or by another tool
+feeds the program. A `let` is a cell too: two `let` rows that disagree
+are a conflict like any other.
+
+**Documents.** Data that is not code is loaded as a document and
+destructured into relations, and the rows are facts like any other,
+each with a line `why` can point at:
+
+```dform
+let network = toml("data/network.toml")
+az(name: string, index: int) from network          # the [[az]] tables
+peering(name: string, peer: string) from network.peerings
+pin(app: string, image: string) from toml(git("ops.git", "env/${env}", "pins.toml"))
 ```
 
 ```toml
-# pins.toml: an array of tables, one per row
-[[pin]]
-app = "api"
-image = "ghcr.io/acme/api@sha256:9f2c..."
+# data/network.toml
+[[az]]
+name = "us-east-1a"
+index = 1
+
+[[peerings]]
+name = "shared"
+peer = "vpc-0a1b2c"
 ```
 
-A cell is checked against its column's type, and a bad row is an error
-naming the file and line. A `git(..)` source is read at a commit the
-plan records, so apply reads what plan read even if the branch moved.
-CSV and JSON work the same way.
+`yaml`, `toml`, `json`, `csv` and `facts` are the loaders; a loaded
+document is a value, and `name(columns) from DOC` reads one row per
+object by column name, parsing each cell to its column's type or
+failing with the file and line. `from` is the third way to define a
+relation, beside writing its rows and deriving them with a rule. A
+`git(..)` source is read at a commit the plan records, so apply reads
+what plan read even if the branch moved.
 
-**Modules and instances.** A module declares its interface first, then
-its body. An instance is one copy, gated by a clause if you like. A
-module's resources are not hidden: policy sees them, and stacks wire
-modules together through outputs.
+**Modules.** A module declares its interface first, then its body;
+written inline, or as `module network` alone, which reads
+`modules/network.df`, and modules nest. An instance is one copy with
+inputs, gated by a clause if you like; `use` applies a module once, with
+no inputs, which is what a policy pack is. A module's resources are not
+hidden: policy sees them, and stacks wire modules together through
+outputs.
 
 ```dform
 module network {
@@ -443,10 +465,11 @@ in an object. `green` exists only in prod. The module's
 VPC is addressed as `aws.vpc["network.blue::vpc"]` everywhere else, and
 another block reads it as `network.blue.vpc`.
 
-**Policies.** `policy baseline { .. }` is a pack of `set`, `deny` and
-`warn` statements; `use baseline` applies it. There is no grant to
-declare: what a pack touches is visible in the pack and in `dform dev
-effects`, and ranks decide who wins.
+**Policies.** A policy is a module of `set`, `deny` and `warn`
+statements with no inputs, `module baseline { .. }` in `policies/`, and
+`use baseline` applies it. There is no grant to declare: what a pack
+touches is visible in the pack and in `dform dev effects`, and ranks
+decide who wins.
 
 **Tests.** A test is a named block of denies and the part of the input
 space they are about; the name is yours:
@@ -583,9 +606,9 @@ object is assembled the way kustomize assembles one, from a base and
 any number of overlays, except that the overlays are rules.
 
 ```dform
-provider aws { region = cfg.region }
+provider aws { region }
 
-resource aws.vpc main { cidr_block = cfg.vpc_net }
+resource aws.vpc main { cidr_block = vpc_net }
 resource aws.eks_cluster cluster {
   vpc_config.subnet_ids = [ s.id | s in aws.subnet ]
 }
