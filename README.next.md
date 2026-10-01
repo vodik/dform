@@ -28,8 +28,8 @@ resource aws.vpc main {
   cidr_block = "10.0.0.0/16"
 }
 
-#| The zones to build in: every available one in the region, in order.
-let zones = list.sort([ z | aws.availability_zone("available", z) ])
+#| The zones to build in: every available one in the region.
+let zones = aws.availability_zones["available"]
 
 resource aws.subnet "private-${zone}" {
   vpc_id = main.id
@@ -54,12 +54,12 @@ plan: 7 deformations (7 create)
   ... four more
 ```
 
-`aws.availability_zone` is a relation the provider answers, what
-Terraform calls a data source; `("available", z)` asks for the available
-ones and binds each name to `z`. The brackets collect them into a list,
-sorted. The subnet block ends in a `where` clause, which makes it a
-rule: `zone = zones[n]` walks the list, binding a zone and its position,
-and every answer is one subnet with the n-th /24. `?` marks a value
+`aws.availability_zones` is a question the provider answers, what
+Terraform calls a data source; `["available"]` is the argument and the
+answer is the zone names, in a stable order. The subnet block ends in a
+`where` clause, which makes it a rule: `zone = zones[n]` walks the list,
+binding a zone and its position, and every answer is one subnet with
+the n-th /24. `?` marks a value
 apply will learn, here the VPC's id. The `#|` line is a doc comment,
 which the editor shows and policy can read. When the region gains a
 zone, the next plan has one more subnet; nothing in the file changes.
