@@ -424,13 +424,19 @@ name = "shared"
 peer = "vpc-0a1b2c"
 ```
 
-`yaml`, `toml`, `json`, `csv` and `facts` are the loaders; a loaded
-document is a value, and `name(columns) from DOC` reads one row per
-object by column name, parsing each cell to its column's type or
-failing with the file and line. `from` is the third way to define a
-relation, beside writing its rows and deriving them with a rule. A
-`git(..)` source is read at a commit the plan records, so apply reads
-what plan read even if the branch moved.
+`yaml`, `toml`, `json` and `csv` are the loaders; a loaded document is
+a value, and `name(columns) from DOC` reads one row per object by column
+name, parsing each cell to its column's type or failing with the file
+and line. `from` is the third way to define a relation, beside writing
+its rows and deriving them with a rule, and the three mix: `az("local",
+9)` beside the `from` is one more row. A relation is owned by the file
+that defines it; a module reads the stack's `az` and cannot add to it.
+A relation is a set, so order lives in lists: `zone = network.azs[i]`
+walks a list with its index, and a relation is sorted first when a
+position is wanted. A `git(..)` source is read at a commit the plan
+records, so apply reads what plan read even if the branch moved. A file
+of plain facts is just a module: `module releases` reads
+`data/releases.df`.
 
 **Modules.** A module declares its interface first, then its body;
 written inline, or as `module network` alone, which reads
