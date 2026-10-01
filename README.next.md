@@ -25,7 +25,7 @@ edition 2026
 provider aws { region = "us-east-1" }
 
 resource aws.vpc main {
-  cidr_block = inet("10.0.0.0/16")
+  cidr_block = "10.0.0.0/16"
 }
 
 az("us-east-1a", 1)
@@ -348,7 +348,7 @@ rejected with the file and line. Inside the program a network is an
 `inet`, not a string that happens to contain dots:
 
 ```dform
-input vpc_net: inet = inet("10.0.0.0/16")
+input vpc_net: inet = "10.0.0.0/16"
 input az(name: string, index: int) from yaml("data/azs.yaml")
 
 resource aws.subnet "private-${z}" {
@@ -369,9 +369,13 @@ deny "database reachable from the internet" where {
 }
 ```
 
-`inet.subnet`, `inet.host`, `inet.contains`, `inet.overlaps` and
-`inet.prefix_len` are the network arithmetic; `ip`, `inet`, `int`,
-`string` are the constructors; `enum`, `list`, `set`, `ref(T)` and
+A literal takes the type its position expects, as in Postgres:
+`cidr_block = "10.0.0.0/16"` is an `inet` because the schema says the
+attribute is one, and a literal that does not parse is an error at that
+line. Where no type is expected a string stays a string, and a computed
+one is parsed on purpose: `inet(text)`. `inet.subnet`, `inet.host`,
+`inet.contains`, `inet.overlaps` and `inet.prefix_len` are the network
+arithmetic; `ip`, `inet`, `int`, `string` are the parsers; `enum`, `list`, `set`, `ref(T)` and
 `secret(T)` are the other types. `type environment = enum("dev",
 "staging", "prod")` names one. A `check` refines any of them: `input
 replicas: int = 2 check 1 <= replicas <= 10`,
@@ -399,8 +403,8 @@ module network {
   } where az(z, n)
 }
 
-instance network blue { cidr = inet("10.1.0.0/16") }
-instance network green { cidr = inet("10.2.0.0/16") } where env == "prod"
+instance network blue { cidr = "10.1.0.0/16" }
+instance network green { cidr = "10.2.0.0/16" } where env == "prod"
 ```
 
 The module takes one input and offers one output, its VPC. Inside, `vpc`
