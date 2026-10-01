@@ -567,13 +567,23 @@ or a function's definition, and the plan's action beside each resource.
 ## From the VPC to the running service, in one project
 
 Infrastructure tools stop at the cluster and hand over to a second tool
-chain for what runs on it. dform does not have to, for two reasons that
-are already on this page: a value only apply learns is a value, so the
-cluster's endpoint can configure the Kubernetes provider in the same
-program that creates the cluster; and an attribute can have several
-authors, so a Kubernetes object is assembled the way kustomize assembles
-one, from a base and any number of overlays, except that the overlays
-are rules.
+chain for what runs on it. The reason is specific: the cluster's
+endpoint does not exist until the cluster does, and a provider block is
+the one place those tools cannot wait for a value. Terraform's provider
+configuration is evaluated before the plan, so a provider fed by a
+resource output is a documented limitation and a second root module.
+
+In dform a provider block is a rule like every other statement, and the
+evaluation engine that carries unknowns through a resource carries them
+through a provider too. `provider kubernetes { endpoint =
+cluster.endpoint }` is simply a rule that cannot fire until tick 1 has
+made the cluster; the engine knows that, plans the cluster first, learns
+the endpoint, configures the provider, and plans what runs on it in
+tick 2. There is no second-class corner of the language where values
+have to be known in advance: not providers, not module instances, not
+names. And because an attribute can have several authors, a Kubernetes
+object is assembled the way kustomize assembles one, from a base and
+any number of overlays, except that the overlays are rules.
 
 ```dform
 provider aws { region = cfg.region }
@@ -589,9 +599,11 @@ resource k8s.deployment api {
 }
 ```
 
-Tick 1 makes the VPC and the cluster; the provider reads the endpoint;
-tick 2 makes the namespace and the deployment. One plan, one apply, one
-state, one `why`. The same policy pack that tags every VPC can set
+The plan says it in its own terms: the namespace and the deployment are
+`pending on ?aws.eks_cluster["cluster"].endpoint, resolves after tick
+1`. Tick 1 makes the VPC and the cluster; the provider is configured
+from the endpoint; tick 2 makes the namespace and the deployment. One
+plan, one apply, one state, one `why`. The same policy pack that tags every VPC can set
 resource limits on every container, in every module, and the list is
 merged by the container's name, not its position:
 
