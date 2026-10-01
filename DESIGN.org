@@ -510,6 +510,36 @@ dform_sdk::export!(Acme, resources = [Bucket], externs = [Zones]);
   hand-written; an author never sees a null label or a secret's bytes.
   A Go or Python SDK is the same conventions over the same WIT.
 
+** R-26 to R-29: the header, the stack, and what the tools print
+From writing README.next.md (2026-10-01): the page is the vibe check,
+and three things did not survive it.
+- *R-26 An empty block is omitted.* `provider aws`, `instance network
+  blue`; `{}` accepted and dropped by fmt. The fake-provider fallback
+  goes: a program with no `provider` statement starts nothing and the
+  run fails naming the fix; `dev --provider` is the experiment escape.
+- *R-27 A file has a header.* `stack` and `provider` are declarations
+  about the program, not facts or rules (`stack` lowers to nothing,
+  `provider` to a stratum-zero rule), so position is what gives them
+  meaning: `edition`, then `provider`, `import`, `key`, `input`, then the
+  body; a header statement after the first rule is an error; fmt places
+  them. Go's `package` and `import` are the precedent: nobody asks what
+  they mean mid-file because they cannot be there.
+- *R-28 why and query print the source.* The rule as written at its
+  span, bindings by the source's names, derived facts in surface
+  spelling (`aws.vpc["main"].cidr_block = ..`), the aggregate as "merged
+  from N contributions" with owners; `--core` for today's output.
+- *R-29 No stack statement.* `stack tour[env]` reads as a lookup, since
+  every other `name[..]` in the language is one, and was taken for a
+  dependency declaration. Its four effects move: discovery is
+  `stacks/*.df` (the layout already says so; any file runs by path); the
+  name is the file's; the key is `key env: environment = "dev"`, an
+  input that selects the deployment, given as the target and never by
+  `--set`; the settings (`backend`, `unknowns`, `role`, `approvals`,
+  `audit_sink`, `isolated`, `config`) are operational and live in
+  dform.toml `[stacks.NAME]` over `[defaults]`. Reading another stack is
+  R-11b's lookup; nothing declares the dependency. One keyword fewer,
+  and `[..]` means one thing.
+
 * Vocabulary
 The name is Terraform minus terra plus Datalog, and it reads as "deform" aloud.
 Use the pun consistently in CLI output, docs, and diagnostics.

@@ -198,29 +198,27 @@ it takes, in that order, before any rule:
 
 ```dform
 edition 2026
-stack shop[env]
 provider aws { region = cfg.region }
 import "modules/network.df"
-input env: enum("dev", "staging", "prod") = "dev"
+key env: enum("dev", "staging", "prod") = "dev"
 input az(name, index) from csv("data/azs.csv")
 ```
 
-A stack is the unit of state and apply. A file is a stack named after
-itself until it says otherwise; `[env]` keys it, so each value of `env`
-is a deployment with its own state, `dform plan shop env=prod`. A
-provider line brings a provider's types and externs into scope and
-configures it. Imports bring in modules and policies. Inputs are the
-stack's interface. None of these may appear below the first rule. A
-stack's settings, where its state lives, whether unknowns at plan time
-are refused, who may approve a plan, go in a block after the name when
-there are any:
+A stack is the unit of state and apply, and a file under `stacks/` is
+one, named after itself: this is `stacks/shop.df`, so `dform plan shop`.
+A `key` is an input that selects the deployment: each value of `env` has
+its own state, `dform plan shop env=prod`. A provider line brings a
+provider's types and externs into scope and configures it. Imports bring
+in modules and policies. Inputs are the stack's interface. None of these
+may appear below the first rule. Where a stack's state lives, whether
+unknowns at plan time are refused, and who may approve a plan are
+operational, so they live in `dform.toml`:
 
-```dform
-stack shop[env] {
-  backend = s3("acme-state", "shop/{env}")
-  unknowns = "strict"
-  approvals = jwks("https://sso.acme.example/keys")
-}
+```toml
+[stacks.shop]
+backend = 's3("acme-state", "shop/{env}")'
+unknowns = "strict"
+approvals = 'jwks("https://sso.acme.example/keys")'
 ```
 
 **Inputs, settings and lets are cells.** `input env: ..` is a typed
