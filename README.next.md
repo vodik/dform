@@ -74,7 +74,7 @@ three lines go in the same file as the resources:
 ```dform
 deny "every database has backups" where db in aws.db_instance, db.backup_retention_period < 7
 deny "no deletes in prod" where env == "prod", deformation("delete", _, _)
-requires_approval(sg, "security group changed") where deformation(_, sg, _), sg in aws.security_group
+requires_approval(sg, "security group ${action}") where deformation(action, sg, _), sg in aws.security_group
 ```
 
 The first is about what will exist. The other two are about the change
@@ -95,7 +95,7 @@ plan: 3 deformations (1 create, 1 update, 1 delete)
 denied:
   no deletes in prod                    aws.db_instance["reports"]
 needs approval:
-  aws.security_group["api"]             security group changed
+  aws.security_group["api"]             security group update
 plan digest: sha256:4f9c1e...
 ```
 
