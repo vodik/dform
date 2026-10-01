@@ -20,11 +20,17 @@ dform is that: infrastructure as facts and rules, with plan and apply,
 state, modules, policy, secrets and approvals built in. One model all
 the way through: what exists is a table, what you want is a table, the
 plan is the difference and is a table, and policy is rules over any of
-them. A rule can say "no database without backups" and, in the same
-breath, "no deletes in prod this week" and "a change to a security
-group needs a signature", because the change set is data the program
-sees before it is applied. Here is a complete program, for an AWS
-provider.
+them:
+
+```dform
+deny "every database has backups" where db in aws.db_instance, db.backup_retention_period < 7
+deny "no deletes in prod" where env == "prod", deformation("delete", _, _, _)
+requires_approval(d, "security group changed") where deformation(_, aws.security_group, a, _), d = "aws.security_group[\"${a}\"]"
+```
+
+The first is about what will exist, the other two about the change
+itself, in the same file and the same language, checked before anything
+is applied. Here is a complete program, for an AWS provider.
 
 ```dform
 edition 2026
