@@ -11,6 +11,7 @@ pub mod engine;
 pub mod executor;
 pub mod externs;
 pub mod fmt;
+pub mod functions;
 pub mod graph;
 #[cfg(feature = "test-hooks")]
 #[doc(hidden)]

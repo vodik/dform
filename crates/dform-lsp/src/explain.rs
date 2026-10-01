@@ -414,17 +414,18 @@ pub fn reference_md(r: &Reference) -> String {
     )
 }
 
-/// The builtin a call's name is (`inet_subnet(..)`, `env_var(..)`).
+/// The builtin a call's name is (`inet.subnet(..)`, `int(..)`), its
+/// whole dotted name.
 fn builtin(t: &SyntaxToken) -> Option<&'static Reference> {
     let chain = t.parent().filter(|c| c.kind() == SyntaxKind::CHAIN)?;
     chain.parent().filter(|c| c.kind() == SyntaxKind::CALL)?;
-    let only = chain
+    let name: String = chain
         .children_with_tokens()
         .filter_map(|e| e.into_token())
         .filter(|x| !x.kind().is_trivia())
-        .count()
-        == 1;
-    only.then(|| engine::reference(t.text(), true)).flatten()
+        .map(|x| x.text().to_string())
+        .collect();
+    engine::reference(&name, true)
 }
 
 /// The statement a declaration's name token stands in.

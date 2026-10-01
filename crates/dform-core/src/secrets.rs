@@ -37,28 +37,18 @@ use crate::value::Value;
 use anyhow::Result;
 use std::collections::BTreeSet;
 
-/// Functions a secret flows through without being inspected.
-const CARRY: &[&str] = &[
-    "format",
-    "concat",
-    "add",
-    "sub",
-    "mul",
-    "div",
-    "mod",
-    "to_string",
-    "__path",
-    "collect",
-    "collect_set",
-    "collect_list",
-];
+/// Whether a secret flows through `name` uninspected: a function declared
+/// `forwards` (`std/*.df`), or an aggregate that only collects.
+fn carries(name: &str) -> bool {
+    COLLECT.contains(&name) || crate::functions::get(name).is_some_and(|f| f.forwards)
+}
 
 /// `declassify(V, Reason)`: `V`, public (`transform` derives
 /// `declassified/2` beside the rule for policy).
 const DECLASSIFY: &str = "declassify";
 
 /// Aggregates that only collect: their result is secret, nothing leaks.
-const COLLECT: &[&str] = &["collect", "collect_set", "collect_list"];
+const COLLECT: &[&str] = &["collect_set", "collect_list"];
 
 fn s(t: &Term) -> Option<&str> {
     match t {
@@ -478,10 +468,7 @@ fn e0301(span: Span, what: &str) -> Diagnostic {
 }
 
 fn is_builtin_pred(p: &str) -> bool {
-    matches!(
-        p,
-        "member" | "enumerate" | "inet_overlaps" | "inet_contains" | "ip_unspecified"
-    )
+    matches!(p, "member" | "enumerate") || crate::functions::is_predicate(p)
 }
 
 /// The first function in `t` that inspects a secret argument.
@@ -490,10 +477,7 @@ fn inspecting(t: &Term, secret: &dyn Fn(&Term) -> bool) -> Option<String> {
         // What is declassified may be inspected: the rule says so.
         Term::Func { name, .. } if name == DECLASSIFY => None,
         Term::Func { name, args } => {
-            if !CARRY.contains(&name.as_str())
-                && !matches!(name.as_str(), "ref" | "scoped")
-                && args.iter().any(secret)
-            {
+            if !carries(name) && args.iter().any(secret) {
                 return Some(name.clone());
             }
             args.iter().find_map(|a| inspecting(a, secret))

@@ -59,6 +59,9 @@ fn renameable(what: &What, t: &SyntaxToken) -> Result<Symbol> {
     if t.kind().is_keyword() {
         bail!("`{name}` is a keyword");
     }
+    if let Some(f) = called_function(t) {
+        bail!("`{f}` is a builtin");
+    }
     match what {
         What::Name(Symbol::Predicate(_, n), _) if builtin(n) => bail!("`{n}` is a builtin"),
         What::Name(Symbol::Predicate(_, n), _) if dform_core::loader::is_core_pred(n) => {
@@ -74,11 +77,24 @@ fn renameable(what: &What, t: &SyntaxToken) -> Result<Symbol> {
     }
 }
 
-/// The builtins: functions, aggregates, `env_var`.
+/// The function a call names when `t` is a segment of its name
+/// (`inet` in `inet.host(..)`).
+fn called_function(t: &SyntaxToken) -> Option<String> {
+    let chain = t.parent().filter(|c| c.kind() == SyntaxKind::CHAIN)?;
+    chain.parent().filter(|c| c.kind() == SyntaxKind::CALL)?;
+    let name: String = chain
+        .children_with_tokens()
+        .filter_map(|e| e.into_token())
+        .filter(|x| !x.kind().is_trivia())
+        .map(|x| x.text().to_string())
+        .collect();
+    dform_core::functions::get(&name).map(|_| name)
+}
+
+/// The builtins: functions, aggregates, `env.var`.
 fn builtin(n: &str) -> bool {
-    dform_core::engine::FUNCTIONS.contains(&n)
-        || dform_core::ir::ops::is_builtin_pred(n)
-        || matches!(n, "count" | "collect" | "collect_set" | "collect_list")
+    dform_core::functions::get(n).is_some()
+        || matches!(n, "count" | "collect_set" | "collect_list")
         || n == dform_core::syntax::resolve::ENV_VAR
 }
 

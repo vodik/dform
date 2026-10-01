@@ -2,7 +2,7 @@
 //! a call of a builtin (`inet_subnet(`) or of an extern the project
 //! declares (`dns.lookup(`, or its lookup `dns.lookup[`), the call's
 //! signature and the argument the cursor is in. Builtins are
-//! `engine::REFERENCE`'s; an extern's parameters are its declaration's,
+//! `engine::references`'s; an extern's parameters are its declaration's,
 //! its documentation its doc comment. Read off the tokens, so a call being
 //! typed (no `)` yet) has one too.
 
@@ -175,8 +175,9 @@ mod tests {
 
     #[test]
     fn parameters_split_at_top_level_commas() {
+        let format = engine::reference("format", true).unwrap().signature;
         assert_eq!(
-            params("format(template: string, value: any, ...) -> string"),
+            params(format),
             vec!["template: string", "value: any", "..."]
         );
         assert_eq!(

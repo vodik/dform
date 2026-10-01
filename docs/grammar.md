@@ -535,6 +535,58 @@ The variables a read binds are named after what they read (`vpc.cidr` is
 is its name capitalised (`vpc_net` is `VpcNet`, `_c` is `_C`), which is how
 `strata`, `why` and diagnostics print it.
 
+## Functions
+
+A function is pure and deterministic: a call is a term, evaluated when its
+arguments are ground, and a call with no value (an argument of the wrong
+kind, a partial function off its domain) makes the literal that holds it
+fail. Impurity enters only through externs. Every function is declared in
+a signature file shipped with dform, `std/*.df`, which the compiler, the
+language server (hover, completion, signature help)
+and the secrets pass read; the engine's bodies are looked up by the
+declared name, and a test keeps the two in step. A call of a name no
+signature file declares is `unknown function`, with the name meant when
+one is a qualification away (`split` is `str.split`).
+
+```
+sigfile    := "package" NAME NL (DOC* fnsig NL)*
+fnsig      := "internal"? "fn" NAME "(" (param ("," param)* ("," "...")?)? ")" "->" type "?"? flags?
+param      := NAME ":" type
+flags      := flag ("," flag)*
+flag       := "forwards" | "forwards" "nulls"
+```
+
+`?` marks a partial function. `forwards`: a secret argument flows through
+to the result uninspected (otherwise a call over a secret is E0301).
+`forwards nulls`: a null argument is not a content position (Rule 2).
+`internal`: the lowering's own, not callable from a program. A `#|` doc
+comment above a signature is its summary, and its `example:` key the
+example hover shows.
+
+A function is named by its package, the type it is about; the prelude's
+are written bare.
+
+| package   | functions                                                                 |
+|-----------|---------------------------------------------------------------------------|
+| prelude   | the constructors `int(s)`, `string(x)`, `inet(s)`, `ip(s)`, `iprange(a, b)`; `format(t, v, ...)`, `len(x)`, `ref(T, n, p)`, `scoped(s, n)`, `cloud_ref(T, n, p)`, `declassify(v, why)` |
+| `inet`    | `inet.subnet(net, bits, n)`, `inet.host(net, n)`, `inet.addr(net, n)`, `inet.contains(net, a)`, `inet.overlaps(a, b)`, `inet.prefix_len(net)` |
+| `ip`      | `ip.unspecified(a)`                                                       |
+| `str`     | `str.split(s, sep)`, `str.lower(s)`, `str.upper(s)`                       |
+| `list`    | `list.len(l)` (`len` in the prelude), `list.join(l, sep)`                 |
+
+A function to `bool` is also a predicate: `inet.contains(n, a)` as a body
+literal holds when the call is true. Conversions are constructors named
+by their type; strings never coerce silently. Arithmetic (`a + b`) lowers
+to the prelude's internal `add`, `sub`, `mul`, `div`, `mod`, and an
+interpolation to `format`.
+
+A dotted name's first segment names one thing: a type namespace (`net`), a
+provider's externs (`file`), a function package (`inet`), a module
+(`network`), or a root (`settings`, `world`, `stacks`). Two declarations
+that claim one head are an error naming both. A constructor is the one
+function that may share a name with a type (`inet(s)`, the type `inet`,
+the package `inet`).
+
 ## What lowers to what
 
 Lowering produces the AST; `transform.rs` and everything after it take it

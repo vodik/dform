@@ -1759,22 +1759,11 @@ impl Rec<'_> {
 }
 
 /// Builtins that carry nulls instead of reading them: the aggregates (whose
-/// content positions `eval_rule_collect` decides) and the compiler's own.
+/// content positions `eval_rule_collect` decides) and the functions
+/// declared `forwards nulls`.
 fn forwards_nulls(name: &str) -> bool {
-    matches!(
-        name,
-        "collect"
-            | "collect_set"
-            | "collect_list"
-            | "count"
-            | "sum"
-            | "min"
-            | "max"
-            | "__null"
-            | "__label"
-            | "__path"
-            | "declassify"
-    )
+    partition::AGGREGATES.contains(&name)
+        || crate::functions::get(name).is_some_and(|f| f.forwards_nulls)
 }
 
 /// The innermost builtin application in `t` whose arguments are ground but
@@ -2689,9 +2678,6 @@ fn ground_atom(atom: &Atom, state: &HashMap<String, Value>) -> Result<Atom> {
 fn instantiate_atom(atom: &Atom, state: &HashMap<String, Value>) -> Result<Atom> {
     let mut args = Vec::with_capacity(atom.args.len());
     for t in &atom.args {
-        if matches!(t, Term::Func { name, .. } if name == "collect") {
-            bail!("internal: collect must be handled separately");
-        }
         let v = eval_term(t, state).ok_or_else(|| anyhow!("non-ground head"))?;
         args.push(Term::Val(v));
     }
@@ -2868,46 +2854,10 @@ fn eval_term(term: &Term, state: &HashMap<String, Value>) -> Option<Value> {
     }
 }
 
-/// The functions `eval_func` knows (a call to any other has no value).
-pub const FUNCTIONS: &[&str] = &[
-    "add",
-    "sub",
-    "mul",
-    "div",
-    "mod",
-    "ip",
-    "ip_str",
-    "inet",
-    "inet_str",
-    "iprange",
-    "ip_unspecified",
-    "inet_contains",
-    "inet_overlaps",
-    "inet_addr",
-    "inet_host",
-    "inet_subnet",
-    "scoped",
-    "format",
-    "concat",
-    "ref",
-    "declassify",
-    "cloud_ref",
-    "gref",
-    "cidrsubnet",
-    "to_int",
-    "to_string",
-    "prefix_len",
-    "len",
-    "lower",
-    "upper",
-    "split",
-    "join",
-];
-
 /// What a [`Reference`] entry documents.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RefKind {
-    /// A builtin function ([`FUNCTIONS`]).
+    /// A function a program may call, declared in `std/*.df` (`functions`).
     Function,
     /// An aggregate, written in a rule head (`partition::AGGREGATES`).
     Aggregate,
@@ -2917,10 +2867,10 @@ pub enum RefKind {
     Keyword,
 }
 
-/// One entry of the language's reference: a builtin, an aggregate, a
+/// One entry of the language's reference: a function, an aggregate, a
 /// builtin extern or a keyword. The language server's hover, completion
-/// detail and signature help read it; a builtin without an entry fails
-/// `tests::every_builtin_and_keyword_has_a_reference`.
+/// detail and signature help read it ([`references`]); a builtin without
+/// an entry fails `tests::every_builtin_and_keyword_has_a_reference`.
 #[derive(Debug, Clone, Copy)]
 pub struct Reference {
     pub name: &'static str,
@@ -2948,241 +2898,11 @@ const fn r(
     }
 }
 
-use RefKind::{Aggregate, Extern as Ext, Function as Fun, Keyword as Kw};
+use RefKind::{Aggregate, Extern as Ext, Keyword as Kw};
 
-/// The reference, builtins first, then the keywords.
-pub const REFERENCE: &[Reference] = &[
-    r(
-        "add",
-        Fun,
-        "add(a: int, b: int) -> int",
-        "The sum of two integers; `a + b` lowers to it.",
-        "let n = add(replicas, 1)",
-    ),
-    r(
-        "sub",
-        Fun,
-        "sub(a: int, b: int) -> int",
-        "The difference of two integers; `a - b` lowers to it.",
-        "let spare = sub(max, used)",
-    ),
-    r(
-        "mul",
-        Fun,
-        "mul(a: int, b: int) -> int",
-        "The product of two integers; `a * b` lowers to it.",
-        "let bytes = mul(gib, 1073741824)",
-    ),
-    r(
-        "div",
-        Fun,
-        "div(a: int, b: int) -> int",
-        "Integer division, no value when `b` is 0; `a / b` lowers to it.",
-        "let half = div(n, 2)",
-    ),
-    r(
-        "mod",
-        Fun,
-        "mod(a: int, b: int) -> int",
-        "The remainder of integer division, no value when `b` is 0; `a % b` lowers to it.",
-        "odd(n) where mod(n, 2) == 1",
-    ),
-    r(
-        "ip",
-        Fun,
-        "ip(text: string) -> ip",
-        "An IPv4 address from its dotted text.",
-        "let gw = ip(\"10.0.0.1\")",
-    ),
-    r(
-        "ip_str",
-        Fun,
-        "ip_str(addr: ip) -> string",
-        "An IPv4 address's dotted text (a string is itself).",
-        "let text = ip_str(inet_host(net, 1))",
-    ),
-    r(
-        "inet",
-        Fun,
-        "inet(cidr: string) -> inet",
-        "A network from its CIDR text.",
-        "let vpc_net = inet(\"10.50.0.0/16\")",
-    ),
-    r(
-        "inet_str",
-        Fun,
-        "inet_str(net: inet) -> string",
-        "A network's CIDR text (a string is itself).",
-        "let cidr = inet_str(inet_subnet(net, 8, 1))",
-    ),
-    r(
-        "iprange",
-        Fun,
-        "iprange(a: ip, b: ip) -> iprange",
-        "The range of addresses between two, in either order.",
-        "let pool = iprange(ip(\"10.0.0.10\"), ip(\"10.0.0.99\"))",
-    ),
-    r(
-        "ip_unspecified",
-        Fun,
-        "ip_unspecified(addr: ip) -> bool",
-        "Whether the address is 0.0.0.0; also a predicate.",
-        "deny \"no bind address\" where ip_unspecified(a)",
-    ),
-    r(
-        "inet_contains",
-        Fun,
-        "inet_contains(net: inet, addr: ip) -> bool",
-        "Whether the network holds the address; also a predicate.",
-        "inside(a) where inet_contains(inet(\"10.0.0.0/8\"), a)",
-    ),
-    r(
-        "inet_overlaps",
-        Fun,
-        "inet_overlaps(a: inet, b: inet) -> bool",
-        "Whether two networks share an address; also a predicate.",
-        "deny \"overlap\" where inet_overlaps(a.cidr, b.cidr), a != b",
-    ),
-    r(
-        "inet_addr",
-        Fun,
-        "inet_addr(net: inet, n: int) -> ip",
-        "The network's address `n` places after its base address.",
-        "let first = inet_addr(net, 0)",
-    ),
-    r(
-        "inet_host",
-        Fun,
-        "inet_host(net: inet, n: int) -> ip",
-        "The network's `n`th usable host (network and broadcast excluded), no value past the last.",
-        "let private_ip = inet_host(inet(cfg.vpc_net), 20)",
-    ),
-    r(
-        "inet_subnet",
-        Fun,
-        "inet_subnet(net: inet, newbits: int, netnum: int) -> inet",
-        "The `netnum`th subnet of `net` with `newbits` more prefix bits.",
-        "let cidr = inet_subnet(vpc.cidr, 4, zone_index[z])",
-    ),
-    r(
-        "scoped",
-        Fun,
-        "scoped(scope: string, name: string) -> string",
-        "A name inside a module instance, `scope::name`, as module lowering writes it.",
-        "let n = scoped(\"network.main\", \"vpc\")",
-    ),
-    r(
-        "format",
-        Fun,
-        "format(template: string, value: any, ...) -> string",
-        "The template with each `%s` replaced by the next value's text; `\"a{e}\"` lowers to it.",
-        "let name = format(\"%s-%s\", env, zone)",
-    ),
-    r(
-        "concat",
-        Fun,
-        "concat(value: any, ...) -> string",
-        "The values' texts, joined.",
-        "let id = concat(prefix, \"-\", n)",
-    ),
-    r(
-        "ref",
-        Fun,
-        "ref(type: string, name: string, path: string) -> ref",
-        "A reference to an attribute of the program's own resource: an apply-order edge; `vpc.id` in a field lowers to it.",
-        "let vpc_id = ref(\"net.vpc\", \"vpc\", \"id\")",
-    ),
-    r(
-        "declassify",
-        Fun,
-        "declassify(value: any, reason: string) -> any",
-        "The value, its secret label removed; `declassified/2` records why (E DR-19).",
-        "let fingerprint = declassify(key.sha, \"a digest is public\")",
-    ),
-    r(
-        "cloud_ref",
-        Fun,
-        "cloud_ref(type: string, name: string, path: string) -> ref",
-        "A reference to an attribute of an object in the world, one the program does not manage.",
-        "let adopted_id = cloud_ref(net.vpc, \"existing-vpc\", \"id\")",
-    ),
-    r(
-        "gref",
-        Fun,
-        "gref(type: string, name: string, path: string) -> ref",
-        "A reference by a resource's global name: `ref` without the module scope.",
-        "let peer = gref(\"net.vpc\", \"network.peer::vpc\", \"id\")",
-    ),
-    r(
-        "cidrsubnet",
-        Fun,
-        "cidrsubnet(cidr: string, newbits: int, netnum: int) -> string",
-        "Terraform's cidrsubnet over CIDR text: the `netnum`th subnet with `newbits` more bits.",
-        "let cidr_block = cidrsubnet(\"10.0.0.0/16\", 8, 2)",
-    ),
-    r(
-        "to_int",
-        Fun,
-        "to_int(value: string) -> int",
-        "An integer from its text (an integer is itself); strings never coerce silently.",
-        "let port = to_int(cfg.port)",
-    ),
-    r(
-        "to_string",
-        Fun,
-        "to_string(value: any) -> string",
-        "A scalar's text; lists, objects, references and nulls have none.",
-        "let label = to_string(replicas)",
-    ),
-    r(
-        "prefix_len",
-        Fun,
-        "prefix_len(net: inet) -> int",
-        "The network's prefix length.",
-        "deny \"too small\" where prefix_len(vpc.cidr) > 24",
-    ),
-    r(
-        "len",
-        Fun,
-        "len(value: list) -> int",
-        "The number of elements of a list, keys of an object or characters of a string.",
-        "let zones = len(subnet_ids)",
-    ),
-    r(
-        "lower",
-        Fun,
-        "lower(text: string) -> string",
-        "The text in lower case.",
-        "let name = lower(team)",
-    ),
-    r(
-        "upper",
-        Fun,
-        "upper(text: string) -> string",
-        "The text in upper case.",
-        "let code = upper(region)",
-    ),
-    r(
-        "split",
-        Fun,
-        "split(text: string, sep: string) -> list(string)",
-        "The text's parts between each `sep` (not empty).",
-        "let parts = split(\"a,b\", \",\")",
-    ),
-    r(
-        "join",
-        Fun,
-        "join(parts: list, sep: string) -> string",
-        "The scalars' texts joined by `sep`.",
-        "let hosts = join(names, \",\")",
-    ),
-    r(
-        "collect",
-        Aggregate,
-        "collect(x: any) -> set",
-        "The set of every `x` the body binds per group; the same as `collect_set`.",
-        "members(g, collect(u)) where member_of(u, g)",
-    ),
+/// The reference beside the functions (which `std/*.df` documents): the
+/// aggregates and builtin externs, then the keywords.
+const REFERENCE: &[Reference] = &[
     r(
         "collect_set",
         Aggregate,
@@ -3431,209 +3151,181 @@ pub const REFERENCE: &[Reference] = &[
     ),
 ];
 
+/// The language's reference: every function a program may call, from
+/// `std/*.df`, then [`REFERENCE`]'s aggregates, externs and keywords.
+pub fn references() -> &'static [Reference] {
+    static ALL: std::sync::LazyLock<Vec<Reference>> = std::sync::LazyLock::new(|| {
+        crate::functions::registry()
+            .functions()
+            .filter(|f| !f.internal)
+            .map(|f| Reference {
+                name: &f.name,
+                kind: RefKind::Function,
+                signature: &f.signature,
+                summary: &f.summary,
+                example: &f.example,
+            })
+            .chain(REFERENCE.iter().copied())
+            .collect()
+    });
+    &ALL
+}
+
 /// The reference entry of `name`: a call's (function, aggregate or
 /// extern) when `call`, else a keyword's before a builtin's.
 pub fn reference(name: &str, call: bool) -> Option<&'static Reference> {
+    let all = references();
     let is = |e: &&Reference| e.name == name;
     if call {
-        REFERENCE
-            .iter()
-            .filter(is)
-            .find(|e| e.kind != RefKind::Keyword)
+        all.iter().filter(is).find(|e| e.kind != RefKind::Keyword)
     } else {
-        REFERENCE
-            .iter()
+        all.iter()
             .filter(is)
             .find(|e| e.kind == RefKind::Keyword)
-            .or_else(|| REFERENCE.iter().find(is))
+            .or_else(|| all.iter().find(is))
     }
 }
 
 fn eval_func(name: &str, args: &[Term], state: &HashMap<String, Value>) -> Option<Value> {
+    let body = body(name)?;
+    let mut vals = Vec::with_capacity(args.len());
+    for a in args {
+        vals.push(eval_term(a, state)?);
+    }
     // Rule 2: every builtin argument is a content position. A builtin
     // over a null has no value; the literal that needs it is stuck.
-    if !forwards_nulls(name) {
-        for a in args {
-            if stuck::has_null(&eval_term(a, state)?) {
-                return None;
-            }
-        }
+    if !forwards_nulls(name) && vals.iter().any(stuck::has_null) {
+        return None;
     }
-    match name {
-        "add" => {
-            if args.len() != 2 {
-                return None;
-            }
-            let a = as_i64(&eval_term(&args[0], state)?)?;
-            let b = as_i64(&eval_term(&args[1], state)?)?;
-            Some(Value::Int(a + b))
-        }
-        "sub" => {
-            if args.len() != 2 {
-                return None;
-            }
-            let a = as_i64(&eval_term(&args[0], state)?)?;
-            let b = as_i64(&eval_term(&args[1], state)?)?;
-            Some(Value::Int(a - b))
-        }
-        "mul" => {
-            if args.len() != 2 {
-                return None;
-            }
-            let a = as_i64(&eval_term(&args[0], state)?)?;
-            let b = as_i64(&eval_term(&args[1], state)?)?;
-            Some(Value::Int(a * b))
-        }
-        "div" => {
-            if args.len() != 2 {
-                return None;
-            }
-            let a = as_i64(&eval_term(&args[0], state)?)?;
-            let b = as_i64(&eval_term(&args[1], state)?)?;
-            if b == 0 {
-                return None;
-            }
-            Some(Value::Int(a / b))
-        }
-        "mod" => {
-            if args.len() != 2 {
-                return None;
-            }
-            let a = as_i64(&eval_term(&args[0], state)?)?;
-            let b = as_i64(&eval_term(&args[1], state)?)?;
-            if b == 0 {
-                return None;
-            }
-            Some(Value::Int(a % b))
-        }
-        "ip" => {
-            if args.len() != 1 {
-                return None;
-            }
-            let s = eval_term(&args[0], state)?.as_str()?.to_string();
-            let n = crate::value::ipv4_to_u32(&s)?;
-            Some(Value::Ip(n))
-        }
-        "ip_str" => {
-            if args.len() != 1 {
-                return None;
-            }
-            match eval_term(&args[0], state)? {
-                Value::Ip(n) => Some(Value::Str(crate::value::u32_to_ipv4(n))),
-                Value::Str(s) => Some(Value::Str(s)),
-                _ => None,
-            }
-        }
-        "inet" => {
-            if args.len() != 1 {
-                return None;
-            }
-            let s = eval_term(&args[0], state)?.as_str()?.to_string();
-            let (addr, prefix) = crate::value::parse_ipnet(&s)?;
+    body(&vals)
+}
+
+/// A function's body: its arguments' values to its value, or none.
+pub type Body = fn(&[Value]) -> Option<Value>;
+
+/// The body of the function `name` declares in `std/*.df` (`functions`),
+/// by its qualified name.
+pub fn body(name: &str) -> Option<Body> {
+    BODIES.iter().find(|(n, _)| *n == name).map(|(_, b)| *b)
+}
+
+/// Every function's body, by its qualified name.
+pub const BODIES: &[(&str, Body)] = &[
+    ("add", |a| int2(a, |x, y| Some(x + y))),
+    ("sub", |a| int2(a, |x, y| Some(x - y))),
+    ("mul", |a| int2(a, |x, y| Some(x * y))),
+    ("div", |a| int2(a, |x, y| (y != 0).then(|| x / y))),
+    ("mod", |a| int2(a, |x, y| (y != 0).then(|| x % y))),
+    // Constructors (DESIGN.org "Silent string-to-int coercion"):
+    // conversions are explicit and named by their type.
+    ("int", |a| match a {
+        [Value::Int(i)] => Some(Value::Int(*i)),
+        [Value::Str(s)] => s.trim().parse().ok().map(Value::Int),
+        _ => None,
+    }),
+    ("string", |a| match a {
+        [v] => scalar_text(v).map(Value::Str),
+        _ => None,
+    }),
+    ("ip", |a| match a {
+        [Value::Str(s)] => crate::value::ipv4_to_u32(s).map(Value::Ip),
+        _ => None,
+    }),
+    ("inet", |a| match a {
+        [Value::Str(s)] => {
+            let (addr, prefix) = crate::value::parse_ipnet(s)?;
             Some(Value::IpNet { addr, prefix })
         }
-        "inet_str" => {
-            if args.len() != 1 {
-                return None;
-            }
-            match eval_term(&args[0], state)? {
-                Value::IpNet { addr, prefix } => {
-                    Some(Value::Str(crate::value::ipnet_to_string(addr, prefix)))
-                }
-                Value::Str(s) => Some(Value::Str(s)),
-                _ => None,
-            }
-        }
-        "iprange" => {
-            if args.len() != 2 {
-                return None;
-            }
-            let a = eval_term(&args[0], state)?;
-            let b = eval_term(&args[1], state)?;
-            let sa = as_ip_u32(&a)?;
-            let sb = as_ip_u32(&b)?;
+        _ => None,
+    }),
+    ("iprange", |a| match a {
+        [x, y] => {
+            let (sa, sb) = (as_ip_u32(x)?, as_ip_u32(y)?);
             let (start, end) = if sa <= sb { (sa, sb) } else { (sb, sa) };
             Some(Value::IpRange { start, end })
         }
-        "ip_unspecified" => {
-            if args.len() != 1 {
-                return None;
-            }
-            let v = eval_term(&args[0], state)?;
-            let n = as_ip_u32(&v)?;
-            Some(Value::Bool(n == 0))
+        _ => None,
+    }),
+    ("format", |a| {
+        let fmt = a.first()?.as_str()?;
+        let mut out = String::new();
+        let mut parts = fmt.split("%s");
+        out.push_str(parts.next().unwrap_or(""));
+        for (i, p) in parts.enumerate() {
+            out.push_str(&value_to_string(a.get(i + 1)?));
+            out.push_str(p);
         }
-        "inet_contains" => {
-            if args.len() != 2 {
-                return None;
+        Some(Value::Str(out))
+    }),
+    ("len", len_of),
+    ("list.len", len_of),
+    ("ref", |a| match a {
+        [Value::Str(t), Value::Str(n), Value::Str(p)] => Some(Value::Ref {
+            typ: t.clone(),
+            name: n.clone(),
+            attr: p.clone(),
+        }),
+        _ => None,
+    }),
+    ("cloud_ref", |a| match a {
+        [Value::Str(t), Value::Str(n), Value::Str(p)] => Some(Value::CloudRef {
+            typ: t.clone(),
+            name: n.clone(),
+            attr: p.clone(),
+        }),
+        _ => None,
+    }),
+    ("scoped", |a| match a {
+        [scope, name] => Some(Value::Str(format!(
+            "{}::{}",
+            value_to_string(scope),
+            value_to_string(name)
+        ))),
+        _ => None,
+    }),
+    // E DR-19: `declassify(V, Reason)` is `V`; the static pass reads it
+    // as public, and `declassified/2` records it (`transform`).
+    ("declassify", |a| match a {
+        [v, _] => Some(v.clone()),
+        _ => None,
+    }),
+    // The prelude's null for (T, A, P) (E §2.5): class and type come
+    // from the schema row the rule was expanded from.
+    ("__null", |a| match a {
+        [t, n, p, class, ty] => Some(Value::Null {
+            label: crate::value::null_label(t.as_str()?, &value_to_string(n), p.as_str()?),
+            class: crate::value::NullClass::parse(class.as_str()?)?,
+            ty: ty.as_str()?.to_string(),
+        }),
+        _ => None,
+    }),
+    ("__label", |a| match a {
+        [t, n, p] => Some(Value::Str(crate::value::null_label(
+            t.as_str()?,
+            &value_to_string(n),
+            p.as_str()?,
+        ))),
+        _ => None,
+    }),
+    // `ref(T, A, "a.b")` after the rewrite: walk the rest of the path
+    // inside the top-level attribute's value.
+    ("__path", |a| match a {
+        [v, path] => {
+            let mut v = v.clone();
+            for seg in path.as_str()?.split('.') {
+                let Value::Obj(mut m) = v else {
+                    return None;
+                };
+                v = m.remove(seg)?;
             }
-            let net = eval_term(&args[0], state)?;
-            let ip = eval_term(&args[1], state)?;
-            let (addr, prefix) = as_ipnet(&net)?;
-            let n = as_ip_u32(&ip)?;
-            let mask = if prefix == 0 {
-                0
-            } else {
-                u32::MAX << (32 - prefix as u32)
-            };
-            Some(Value::Bool((n & mask) == addr))
+            Some(v)
         }
-        "inet_overlaps" => {
-            if args.len() != 2 {
-                return None;
-            }
-            let a = eval_term(&args[0], state)?;
-            let b = eval_term(&args[1], state)?;
-            let (a0, a1) = ipnet_range(&a)?;
-            let (b0, b1) = ipnet_range(&b)?;
-            Some(Value::Bool(a0 <= b1 && b0 <= a1))
-        }
-        "inet_addr" => {
-            if args.len() != 2 {
-                return None;
-            }
-            let net = eval_term(&args[0], state)?;
-            let n = eval_term(&args[1], state)?;
-            let (addr, _prefix) = as_ipnet(&net)?;
-            let idx = as_i64(&n)?;
-            if idx < 0 {
-                return None;
-            }
-            Some(Value::Ip(addr.wrapping_add(idx as u32)))
-        }
-        "inet_host" => {
-            if args.len() != 2 {
-                return None;
-            }
-            let net = eval_term(&args[0], state)?;
-            let n = eval_term(&args[1], state)?;
-            let (start, end) = ipnet_range(&net)?;
-            // usable hosts exclude network + broadcast
-            if end <= start + 1 {
-                return None;
-            }
-            let first = start + 1;
-            let last = end - 1;
-            let idx = as_i64(&n)?;
-            if idx < 0 {
-                return None;
-            }
-            let ip = first + (idx as u32);
-            if ip > last {
-                return None;
-            }
-            Some(Value::Ip(ip))
-        }
-        "inet_subnet" => {
-            if args.len() != 3 {
-                return None;
-            }
-            let net = eval_term(&args[0], state)?;
-            let newbits = eval_term(&args[1], state)?;
-            let netnum = eval_term(&args[2], state)?;
-            let (addr, prefix) = as_ipnet(&net)?;
-            let nb = as_i64(&newbits)?;
-            let nn = as_i64(&netnum)?;
+        _ => None,
+    }),
+    ("inet.subnet", |a| match a {
+        [net, bits, n] => {
+            let (addr, prefix) = as_ipnet(net)?;
+            let (nb, nn) = (as_i64(bits)?, as_i64(n)?);
             if nb < 0 || nn < 0 {
                 return None;
             }
@@ -3642,209 +3334,112 @@ fn eval_func(name: &str, args: &[Term], state: &HashMap<String, Value>) -> Optio
                 return None;
             }
             let shift = 32 - (new_prefix as u32);
-            let subnet_addr = addr + ((nn as u32) << shift);
             Some(Value::IpNet {
-                addr: subnet_addr,
+                addr: addr + ((nn as u32) << shift),
                 prefix: new_prefix as u8,
             })
         }
-        "scoped" => {
-            if args.len() != 2 {
+        _ => None,
+    }),
+    ("inet.host", |a| match a {
+        [net, n] => {
+            let (start, end) = ipnet_range(net)?;
+            // usable hosts exclude network + broadcast
+            if end <= start + 1 {
                 return None;
             }
-            let scope = value_to_string(&eval_term(&args[0], state)?);
-            let name = value_to_string(&eval_term(&args[1], state)?);
-            Some(Value::Str(format!("{scope}::{name}")))
-        }
-        "format" => {
-            let mut ev = Vec::new();
-            for a in args {
-                ev.push(eval_term(a, state)?);
-            }
-            let fmt = ev.first()?.as_str()?.to_string();
-            let mut out = String::new();
-            let mut parts = fmt.split("%s");
-            out.push_str(parts.next().unwrap_or(""));
-            for (i, p) in parts.enumerate() {
-                let v = ev.get(i + 1)?;
-                out.push_str(&value_to_string(v));
-                out.push_str(p);
-            }
-            Some(Value::Str(out))
-        }
-        "concat" => {
-            let mut out = String::new();
-            for a in args {
-                out.push_str(&value_to_string(&eval_term(a, state)?));
-            }
-            Some(Value::Str(out))
-        }
-        "ref" => {
-            if args.len() != 3 {
+            let idx = as_i64(n)?;
+            if idx < 0 {
                 return None;
             }
-            let t = eval_term(&args[0], state)?.as_str()?.to_string();
-            let n = eval_term(&args[1], state)?.as_str()?.to_string();
-            let a = eval_term(&args[2], state)?.as_str()?.to_string();
-            Some(Value::Ref {
-                typ: t,
-                name: n,
-                attr: a,
-            })
+            let ip = (start + 1).checked_add(u32::try_from(idx).ok()?)?;
+            (ip < end).then_some(Value::Ip(ip))
         }
-        // The prelude's null for (T, A, P) (E §2.5): class and type come
-        // from the schema row the rule was expanded from.
-        "__null" if args.len() == 5 => {
-            let t = eval_term(&args[0], state)?;
-            let a = eval_term(&args[1], state)?;
-            let p = eval_term(&args[2], state)?;
-            let class = crate::value::NullClass::parse(eval_term(&args[3], state)?.as_str()?)?;
-            let ty = eval_term(&args[4], state)?.as_str()?.to_string();
-            Some(Value::Null {
-                label: crate::value::null_label(t.as_str()?, &value_to_string(&a), p.as_str()?),
-                class,
-                ty,
-            })
-        }
-        // E DR-19: `declassify(V, Reason)` is `V`; the static pass reads it
-        // as public, and `declassified/2` records it (`transform`).
-        "declassify" if args.len() == 2 => {
-            eval_term(&args[1], state)?;
-            eval_term(&args[0], state)
-        }
-        "__label" if args.len() == 3 => {
-            let t = eval_term(&args[0], state)?;
-            let a = eval_term(&args[1], state)?;
-            let p = eval_term(&args[2], state)?;
-            Some(Value::Str(crate::value::null_label(
-                t.as_str()?,
-                &value_to_string(&a),
-                p.as_str()?,
-            )))
-        }
-        // `ref(T, A, "a.b")` after the rewrite: walk the rest of the path
-        // inside the top-level attribute's value.
-        "__path" if args.len() == 2 => {
-            let mut v = eval_term(&args[0], state)?;
-            for seg in eval_term(&args[1], state)?.as_str()?.split('.') {
-                let Value::Obj(mut m) = v else {
-                    return None;
-                };
-                v = m.remove(seg)?;
-            }
-            Some(v)
-        }
-        "cloud_ref" => {
-            if args.len() != 3 {
+        _ => None,
+    }),
+    ("inet.addr", |a| match a {
+        [net, n] => {
+            let (addr, _) = as_ipnet(net)?;
+            let idx = as_i64(n)?;
+            if idx < 0 {
                 return None;
             }
-            let t = eval_term(&args[0], state)?.as_str()?.to_string();
-            let n = eval_term(&args[1], state)?.as_str()?.to_string();
-            let a = eval_term(&args[2], state)?.as_str()?.to_string();
-            Some(Value::CloudRef {
-                typ: t,
-                name: n,
-                attr: a,
-            })
+            Some(Value::Ip(addr.wrapping_add(idx as u32)))
         }
-        "gref" => {
-            if args.len() != 3 {
-                return None;
-            }
-            let t = eval_term(&args[0], state)?.as_str()?.to_string();
-            let n = eval_term(&args[1], state)?.as_str()?.to_string();
-            let a = eval_term(&args[2], state)?.as_str()?.to_string();
-            Some(Value::Ref {
-                typ: t,
-                name: n,
-                attr: a,
-            })
-        }
-        "cidrsubnet" => {
-            if args.len() != 3 {
-                return None;
-            }
-            let cidr = eval_term(&args[0], state)?.as_str()?.to_string();
-            let newbits = match eval_term(&args[1], state)? {
-                Value::Int(i) => i,
-                _ => return None,
+        _ => None,
+    }),
+    ("inet.contains", |a| match a {
+        [net, ip] => {
+            let (addr, prefix) = as_ipnet(net)?;
+            let n = as_ip_u32(ip)?;
+            let mask = if prefix == 0 {
+                0
+            } else {
+                u32::MAX << (32 - prefix as u32)
             };
-            let netnum = match eval_term(&args[2], state)? {
-                Value::Int(i) => i,
-                _ => return None,
-            };
-            Some(Value::Str(cidrsubnet(
-                &cidr,
-                newbits as u32,
-                netnum as u32,
-            )?))
+            Some(Value::Bool((n & mask) == addr))
         }
-        // Explicit conversions (DESIGN.org "Silent string-to-int coercion").
-        "to_int" => match (args, eval_term(args.first()?, state)?) {
-            ([_], Value::Int(i)) => Some(Value::Int(i)),
-            ([_], Value::Str(s)) => s.trim().parse().ok().map(Value::Int),
-            _ => None,
-        },
-        "to_string" => match args {
-            [a] => scalar_text(&eval_term(a, state)?).map(Value::Str),
-            _ => None,
-        },
-        "prefix_len" => match args {
-            [a] => as_ipnet(&eval_term(a, state)?).map(|(_, p)| Value::Int(p as i64)),
-            _ => None,
-        },
-        "len" => match args {
-            [a] => match eval_term(a, state)? {
-                Value::List(xs) => Some(Value::Int(xs.len() as i64)),
-                Value::Obj(m) => Some(Value::Int(m.len() as i64)),
-                Value::Str(s) => Some(Value::Int(s.chars().count() as i64)),
-                _ => None,
-            },
-            _ => None,
-        },
-        "lower" | "upper" => match args {
-            [a] => {
-                let s = eval_term(a, state)?.as_str()?.to_string();
-                Some(Value::Str(if name == "lower" {
-                    s.to_lowercase()
-                } else {
-                    s.to_uppercase()
-                }))
-            }
-            _ => None,
-        },
-        "split" => match args {
-            [a, sep] => {
-                let s = eval_term(a, state)?.as_str()?.to_string();
-                let sep = eval_term(sep, state)?.as_str()?.to_string();
-                if sep.is_empty() {
-                    return None;
-                }
-                Some(Value::List(
-                    s.split(sep.as_str())
-                        .map(|x| Value::Str(x.to_string()))
-                        .collect(),
-                ))
-            }
-            _ => None,
-        },
-        "join" => match args {
-            [l, sep] => {
-                let Value::List(xs) = eval_term(l, state)? else {
-                    return None;
-                };
-                let sep = eval_term(sep, state)?.as_str()?.to_string();
-                let parts: Option<Vec<String>> = xs.iter().map(scalar_text).collect();
-                Some(Value::Str(parts?.join(&sep)))
-            }
-            _ => None,
-        },
-        "collect" => None,
+        _ => None,
+    }),
+    ("inet.overlaps", |a| match a {
+        [x, y] => {
+            let (a0, a1) = ipnet_range(x)?;
+            let (b0, b1) = ipnet_range(y)?;
+            Some(Value::Bool(a0 <= b1 && b0 <= a1))
+        }
+        _ => None,
+    }),
+    ("inet.prefix_len", |a| match a {
+        [net] => as_ipnet(net).map(|(_, p)| Value::Int(p as i64)),
+        _ => None,
+    }),
+    ("ip.unspecified", |a| match a {
+        [ip] => Some(Value::Bool(as_ip_u32(ip)? == 0)),
+        _ => None,
+    }),
+    ("str.lower", |a| match a {
+        [Value::Str(s)] => Some(Value::Str(s.to_lowercase())),
+        _ => None,
+    }),
+    ("str.upper", |a| match a {
+        [Value::Str(s)] => Some(Value::Str(s.to_uppercase())),
+        _ => None,
+    }),
+    ("str.split", |a| match a {
+        [Value::Str(s), Value::Str(sep)] if !sep.is_empty() => Some(Value::List(
+            s.split(sep.as_str())
+                .map(|x| Value::Str(x.to_string()))
+                .collect(),
+        )),
+        _ => None,
+    }),
+    ("list.join", |a| match a {
+        [Value::List(xs), Value::Str(sep)] => {
+            let parts: Option<Vec<String>> = xs.iter().map(scalar_text).collect();
+            Some(Value::Str(parts?.join(sep)))
+        }
+        _ => None,
+    }),
+];
+
+fn len_of(a: &[Value]) -> Option<Value> {
+    match a {
+        [Value::List(xs)] => Some(Value::Int(xs.len() as i64)),
+        [Value::Obj(m)] => Some(Value::Int(m.len() as i64)),
+        [Value::Str(s)] => Some(Value::Int(s.chars().count() as i64)),
         _ => None,
     }
 }
 
-/// Arithmetic takes integers only; a string is converted with `to_int`.
+/// A function of two integers.
+fn int2(a: &[Value], f: fn(i64, i64) -> Option<i64>) -> Option<Value> {
+    match a {
+        [Value::Int(x), Value::Int(y)] => f(*x, *y).map(Value::Int),
+        _ => None,
+    }
+}
+
+/// Arithmetic takes integers only; a string is converted with `int`.
 fn as_i64(v: &Value) -> Option<i64> {
     match v {
         Value::Int(i) => Some(*i),
@@ -3852,7 +3447,7 @@ fn as_i64(v: &Value) -> Option<i64> {
     }
 }
 
-/// The text of a scalar, for `to_string` and `join`. Lists, objects,
+/// The text of a scalar, for `string` and `list.join`. Lists, objects,
 /// references and nulls have no text.
 fn scalar_text(v: &Value) -> Option<String> {
     match v {
@@ -3914,32 +3509,6 @@ fn value_to_string(v: &Value) -> String {
     }
 }
 
-fn cidrsubnet(cidr: &str, newbits: u32, netnum: u32) -> Option<String> {
-    // Supports only IPv4 CIDRs like "10.0.0.0/16".
-    let (ip, prefix) = cidr.split_once('/')?;
-    let prefix: u32 = prefix.parse().ok()?;
-    if prefix > 32 {
-        return None;
-    }
-    let new_prefix = prefix.checked_add(newbits)?;
-    if new_prefix > 32 {
-        return None;
-    }
-    let base = ipv4_to_u32(ip)?;
-    // netnum selects the subnet within the expanded prefix.
-    let shift = 32 - new_prefix;
-    let subnet_base = base + (netnum << shift);
-    Some(format!("{}/{}", u32_to_ipv4(subnet_base), new_prefix))
-}
-
-fn ipv4_to_u32(ip: &str) -> Option<u32> {
-    crate::value::ipv4_to_u32(ip)
-}
-
-fn u32_to_ipv4(v: u32) -> String {
-    crate::value::u32_to_ipv4(v)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3974,14 +3543,18 @@ mod tests {
         assert_eq!(rows, ["settings_row(\"prod\")", "settings_row(\"qa\")"]);
     }
 
-    /// Hover, completion and signature help read `REFERENCE`: every
-    /// builtin, aggregate and keyword has its entry.
+    /// Hover, completion and signature help read `references()`: every
+    /// function a program may call (from `std/*.df`), aggregate and
+    /// keyword has its entry.
     #[test]
     fn every_builtin_and_keyword_has_a_reference() {
-        let calls = FUNCTIONS
-            .iter()
-            .chain(partition::AGGREGATES)
-            .chain([&crate::syntax::resolve::ENV_VAR]);
+        let functions = crate::functions::registry()
+            .functions()
+            .filter(|f| !f.internal)
+            .map(|f| f.name.as_str());
+        let calls = functions
+            .chain(partition::AGGREGATES.iter().copied())
+            .chain([crate::syntax::resolve::ENV_VAR]);
         for name in calls {
             let e = reference(name, true).unwrap_or_else(|| panic!("no reference for {name}"));
             assert!(e.signature.starts_with(&format!("{name}(")), "{e:?}");
@@ -3990,8 +3563,30 @@ mod tests {
             let e = reference(name, false).unwrap_or_else(|| panic!("no reference for {name}"));
             assert_eq!(e.kind, RefKind::Keyword, "{e:?}");
         }
-        for e in REFERENCE {
+        for e in references() {
             assert!(!e.summary.is_empty() && !e.example.is_empty(), "{e:?}");
+        }
+    }
+
+    /// The engine has a body for every function `std/*.df` declares, and
+    /// declares every body it has (DESIGN.org R-6: one registry).
+    #[test]
+    fn every_declared_function_has_a_body_and_no_other() {
+        let r = crate::functions::registry();
+        for f in r.functions() {
+            assert!(
+                body(&f.name).is_some(),
+                "{} ({}:{}) has no body",
+                f.name,
+                f.file,
+                f.line
+            );
+        }
+        for (name, _) in BODIES {
+            assert!(
+                r.get(name).is_some(),
+                "the body {name} is declared in no std/*.df"
+            );
         }
     }
 
@@ -4076,7 +3671,8 @@ mod tests {
             has(r#"m("b", _): max() over true, which is neither an int nor a string"#),
             "{violations:?}"
         );
-        let (_, violations) = run(&format!("v({})\n v(1)\n s(sum(x)) where v(x)", i64::MAX)).unwrap();
+        let (_, violations) =
+            run(&format!("v({})\n v(1)\n s(sum(x)) where v(x)", i64::MAX)).unwrap();
         assert!(
             violations
                 .iter()
@@ -4548,17 +4144,17 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("add(\"10\", 1) is not defined"), "{err}");
-        let err = run("n(x) where x = to_int(\"abc\") + 1")
+        let err = run("n(x) where x = int(\"abc\") + 1")
             .unwrap_err()
             .to_string();
-        assert!(err.contains("to_int(\"abc\") is not defined"), "{err}");
+        assert!(err.contains("int(\"abc\") is not defined"), "{err}");
         let (r, _) = run("s(\"10\")
-             explicit(x) where s(s), x = to_int(s) + 1
-             text(t) where t = to_string(14)
-             sizes(a, b, c) where a = len([\"x\", \"y\"]), b = len(\"héllo\"), c = len({k: 1})
-             cases(l, u) where l = lower(\"AbC\"), u = upper(\"AbC\")
-             parts(p) where p = split(\"a,b,c\", \",\")
-             joined(j) where j = join([\"a\", 1, true], \"-\")")
+             explicit(x) where s(s), x = int(s) + 1
+             text(t) where t = string(14)
+             sizes(a, b, c) where a = len([\"x\", \"y\"]), b = len(\"héllo\"), c = list.len({k: 1})
+             cases(l, u) where l = str.lower(\"AbC\"), u = str.upper(\"AbC\")
+             parts(p) where p = str.split(\"a,b,c\", \",\")
+             joined(j) where j = list.join([\"a\", 1, true], \"-\")")
         .unwrap();
         assert_eq!(facts_of(&r, "explicit"), vec!["explicit(11)".to_string()]);
         assert_eq!(facts_of(&r, "text"), vec!["text(\"14\")".to_string()]);

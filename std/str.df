@@ -1,0 +1,14 @@
+# Text: functions about a `string` (docs/grammar.md "Functions").
+package str
+
+#| The text's parts between each `sep` (not empty).
+#| example: let parts = str.split("a,b", ",")
+fn split(text: string, sep: string) -> list(string)?
+
+#| The text in lower case.
+#| example: let name = str.lower(team)
+fn lower(text: string) -> string
+
+#| The text in upper case.
+#| example: let code = str.upper(region)
+fn upper(text: string) -> string

@@ -251,7 +251,7 @@ fn bind_vars(t: &Term, out: &mut BTreeSet<String>) {
 
 /// Builtin predicates: functions to Bool, never relations.
 pub fn is_builtin_pred(pred: &str) -> bool {
-    matches!(pred, "inet_overlaps" | "inet_contains" | "ip_unspecified")
+    crate::functions::is_predicate(pred)
 }
 
 /// The aggregate term of a head, if it has one.
@@ -265,7 +265,7 @@ pub fn find_agg(head: &Atom) -> Option<(usize, AggKind)> {
         }
         match name.as_str() {
             // Back-compat: `collect(X)` is set-like.
-            "collect" | "collect_set" => return Some((i, AggKind::Set)),
+            "collect_set" => return Some((i, AggKind::Set)),
             "collect_list" => return Some((i, AggKind::List)),
             "count" => return Some((i, AggKind::Count)),
             "sum" => return Some((i, AggKind::Sum)),

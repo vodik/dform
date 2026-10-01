@@ -57,7 +57,7 @@ fn an_unknown_function_names_its_call() {
         "{}",
         r.stderr
     );
-    assert!(r.stderr.contains("the functions are add,"), "{}", r.stderr);
+    assert!(r.stderr.contains("the functions are cloud_ref,"), "{}", r.stderr);
     let r = plan("edition 2026\nresource net.a x {\n  name = uper(\"x\")\n}\n").failure();
     assert!(
         r.stderr.contains("p.df:3:10: unknown function uper"),

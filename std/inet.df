@@ -1,0 +1,26 @@
+# Networks: functions about an `inet` (docs/grammar.md "Functions").
+package inet
+
+#| The `n`th subnet of `net` with `bits` more prefix bits; no value past a /32.
+#| example: let cidr = inet.subnet(vpc.cidr, 4, zone_index[z])
+fn subnet(net: inet, bits: int, n: int) -> inet?
+
+#| The network's `n`th usable host (network and broadcast excluded), no value past the last.
+#| example: let private_ip = inet.host(inet(cfg.vpc_net), 20)
+fn host(net: inet, n: int) -> ip?
+
+#| The network's address `n` places after its base address.
+#| example: let first = inet.addr(net, 0)
+fn addr(net: inet, n: int) -> ip?
+
+#| Whether the network holds the address; also a predicate.
+#| example: inside(a) where inet.contains(inet("10.0.0.0/8"), a)
+fn contains(net: inet, addr: ip) -> bool
+
+#| Whether two networks share an address; also a predicate.
+#| example: deny "overlap" where inet.overlaps(a.cidr, b.cidr), a != b
+fn overlaps(a: inet, b: inet) -> bool
+
+#| The network's prefix length.
+#| example: deny "too small" where inet.prefix_len(vpc.cidr) > 24
+fn prefix_len(net: inet) -> int

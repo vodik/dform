@@ -216,22 +216,11 @@ fn body_pattern(atom: &Atom) -> Node {
 }
 
 fn is_builtin_or_edb(pred: &str) -> bool {
-    matches!(
-        pred,
-        "member" | "enumerate" | "inet_overlaps" | "inet_contains" | "ip_unspecified"
-    )
+    matches!(pred, "member" | "enumerate") || crate::functions::is_predicate(pred)
 }
 
 /// The aggregates a rule head may apply.
-pub const AGGREGATES: &[&str] = &[
-    "collect",
-    "collect_set",
-    "collect_list",
-    "count",
-    "sum",
-    "min",
-    "max",
-];
+pub const AGGREGATES: &[&str] = &["collect_set", "collect_list", "count", "sum", "min", "max"];
 
 pub fn is_aggregate_head(head: &Atom) -> bool {
     head.args.iter().any(|t| match t {

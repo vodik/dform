@@ -1,0 +1,6 @@
+# Addresses: functions about an `ip` (docs/grammar.md "Functions").
+package ip
+
+#| Whether the address is 0.0.0.0; also a predicate.
+#| example: deny "no bind address" where ip.unspecified(a)
+fn unspecified(addr: ip) -> bool

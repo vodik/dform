@@ -434,7 +434,7 @@ fn signature_help_of_builtins_and_externs() {
         find(&stack, "vpc_net), 20)", 9),
     );
     assert_eq!(
-        help["signatures"][0]["label"], "inet_host(net: inet, n: int) -> ip",
+        help["signatures"][0]["label"], "inet_host(net: inet, n: int) -> ip?",
         "{help}"
     );
     assert_eq!(help["activeParameter"], 1, "{help}");
@@ -651,12 +651,12 @@ fn completion_reads_the_schema_and_the_modules() {
     assert!(grants.contains(&"net.vpc.cidr".to_string()), "{grants:?}");
 
     // A plain word: the builtins it starts, their signatures.
-    let typed = format!("{original}\ny = inet_h");
+    let typed = format!("{original}\ny = iprang");
     c.change(&stack, 3, &typed);
     let n = typed.lines().count() as u32;
     let items = c.at("textDocument/completion", &stack, (n - 1, 10));
-    assert_eq!(labels(&items), vec!["inet_host"], "{items}");
-    assert_eq!(items[0]["detail"], "inet_host(net: inet, n: int) -> ip");
+    assert_eq!(labels(&items), vec!["iprange"], "{items}");
+    assert_eq!(items[0]["detail"], "iprange(a: ip, b: ip) -> iprange");
 
     // In a policy pack, `r.`: the paths its grants allow.
     let baseline = root.join("policies/baseline.df");

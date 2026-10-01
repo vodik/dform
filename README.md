@@ -2121,10 +2121,7 @@ share: the time spent in the mock's calls.
 This is an MVP:
 
 - semi-naive evaluator with hash indexes (see Performance)
-- basic built-ins: `format`, `concat`, `ref`, `scoped`, `cidrsubnet`, `collect_*`
-- networking built-ins: `ip`, `inet`, `iprange`, `inet_host`, `inet_addr`, `inet_subnet`, `inet_contains`, `inet_overlaps`, `ip_unspecified`
-- math built-ins: `add`, `sub`
-- string/coercion built-ins: `to_int`, `to_string`, `len`, `lower`, `upper`, `split`, `join`
+- functions declared in `std/*.df` (docs/grammar.md "Functions"): the prelude's constructors `int`, `string`, `inet`, `ip`, `iprange` and `format`, `len`, `ref`, `scoped`, `cloud_ref`, `declassify`; `inet.subnet`, `inet.host`, `inet.addr`, `inet.contains`, `inet.overlaps`, `inet.prefix_len`, `ip.unspecified`, `str.split`, `str.lower`, `str.upper`, `list.len`, `list.join`; arithmetic `+ - * / %`; aggregates `collect_*`
 - list helper predicate: `member(List, Item)` and `member(List, Index, Item)` (Index starts at 0)
 - safe(ish) negation: `not` requires the atom be ground at evaluation time
 

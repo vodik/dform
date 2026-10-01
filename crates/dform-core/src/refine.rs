@@ -236,7 +236,7 @@ pub fn of_type(t: &TypeExpr) -> Option<Constraint> {
 /// checkable table and the rest (which lowers to a deny). A literal fits
 /// when it reads the value alone: `lo <= x <= hi` (both bounds: a range;
 /// one alone does not fit), `x == v`, `x in [..]`, `len(x) OP n`,
-/// `prefix_len(x) OP n`, `matches(x, "re")`. The split is sound because a
+/// `inet.prefix_len(x) OP n`, `matches(x, "re")`. The split is sound because a
 /// `check` is a conjunction: `not (A, B)` is `not A` or `not B`, and a
 /// literal that fits shares no variable with the rest.
 pub fn split(body: &[Lit], names: &[&str]) -> (Vec<Constraint>, Vec<Lit>) {
@@ -264,7 +264,12 @@ pub fn split(body: &[Lit], names: &[&str]) -> (Vec<Constraint>, Vec<Lit>) {
             Lit::Gt(a, b) => (a, Op::Gt, b),
             _ => return None,
         };
-        let mentions = |t: &Term| is_self(t) || of_self(t, "len") || of_self(t, "prefix_len");
+        let mentions = |t: &Term| {
+            is_self(t)
+                || of_self(t, "len")
+                || of_self(t, "list.len")
+                || of_self(t, "inet.prefix_len")
+        };
         if mentions(a) {
             Some((a.clone(), op, b.clone()))
         } else if mentions(b) {
@@ -327,7 +332,7 @@ pub fn split(body: &[Lit], names: &[&str]) -> (Vec<Constraint>, Vec<Lit>) {
             continue;
         };
         type Make = fn(i64) -> Option<Constraint>;
-        let (le, ge): (Make, Make) = if of_self(&subject, "len") {
+        let (le, ge): (Make, Make) = if of_self(&subject, "len") || of_self(&subject, "list.len") {
             (
                 |n| Some(Constraint::LenLe(n)),
                 |n| Some(Constraint::LenGe(n)),
@@ -447,14 +452,12 @@ pub fn check_rest(rest: &[Lit], span: Span) -> Vec<Diagnostic> {
             }
         }
         for f in names {
-            if !crate::engine::FUNCTIONS.contains(&f.as_str()) {
-                out.push(
-                    Diagnostic::error(span, format!("in a refinement: unknown function {f}"))
-                        .with_help(format!(
-                            "the functions are {}",
-                            crate::engine::FUNCTIONS.join(", ")
-                        )),
-                );
+            if !crate::functions::callable(&f) {
+                let d = crate::functions::unknown(span, &f);
+                out.push(Diagnostic {
+                    message: format!("in a refinement: {}", d.message),
+                    ..d
+                });
             }
         }
     }
@@ -1022,7 +1025,7 @@ mod tests {
         let (cs, rest) = split(&lits("1 <= days, days <= 35"), &["days"]);
         assert_eq!(cs, vec![Constraint::Range(1, 35)]);
         assert!(rest.is_empty());
-        let (cs, rest) = split(&lits("prefix_len(cidr) == 28"), &["cidr"]);
+        let (cs, rest) = split(&lits("inet.prefix_len(cidr) == 28"), &["cidr"]);
         assert_eq!(
             cs,
             vec![Constraint::PrefixLenLe(28), Constraint::PrefixLenGe(28)]

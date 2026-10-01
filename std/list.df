@@ -1,0 +1,10 @@
+# Lists: functions about a `list` (docs/grammar.md "Functions").
+package list
+
+#| The number of elements of a list, keys of an object or characters of a string; `len` in the prelude.
+#| example: let zones = list.len(subnet_ids)
+fn len(value: list) -> int?
+
+#| The scalars' texts joined by `sep`; no value when one has no text.
+#| example: let hosts = list.join(names, ",")
+fn join(parts: list, sep: string) -> string?

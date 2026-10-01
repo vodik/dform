@@ -1,0 +1,95 @@
+# The prelude: the functions written bare. Every other function is
+# qualified by its package, the type it is about (`inet.subnet`,
+# `str.split`). Signature files are read by the compiler, the language
+# server and `dform doc` (docs/grammar.md "Functions"); the bodies are the
+# engine's, looked up by qualified name.
+#
+#   fn NAME(PARAM: TYPE, ...) -> TYPE[?] [FLAG, ...]
+#
+# `?` after the result: partial, a call may have no value (the literal
+# does not hold). `forwards`: a secret argument flows through to the
+# result uninspected (the secrets pass, E0301). `forwards nulls`: a null
+# argument is not a content position (Rule 2). `internal`: the lowering's
+# own, not callable from a program.
+package prelude
+
+#| An integer from its text (an integer is itself); strings never coerce silently.
+#| example: let port = int(cfg.port)
+fn int(value: string) -> int?
+
+#| A scalar's text; lists, objects, references and nulls have none.
+#| example: let label = string(replicas)
+fn string(value: any) -> string? forwards
+
+#| A network from its CIDR text.
+#| example: let vpc_net = inet("10.50.0.0/16")
+fn inet(cidr: string) -> inet?
+
+#| An IPv4 address from its dotted text.
+#| example: let gw = ip("10.0.0.1")
+fn ip(text: string) -> ip?
+
+#| The range of addresses between two, in either order.
+#| example: let pool = iprange(ip("10.0.0.10"), ip("10.0.0.99"))
+fn iprange(a: ip, b: ip) -> iprange
+
+#| The template with each `%s` replaced by the next value's text; `"a${e}"` lowers to it.
+#| example: let name = format("%s-%s", env, zone)
+fn format(template: string, value: any, ...) -> string? forwards
+
+#| The number of elements of a list, keys of an object or characters of a string.
+#| example: let zones = len(subnet_ids)
+fn len(value: list) -> int?
+
+#| A reference to an attribute of the program's own resource: an apply-order edge; `vpc.id` in a field lowers to it.
+#| example: let vpc_id = ref(net.vpc, "vpc", "id")
+fn ref(type: string, name: string, path: string) -> ref forwards
+
+#| A name inside a module instance, `scope::name`, as module lowering writes it.
+#| example: let n = scoped("network.main", "vpc")
+fn scoped(scope: string, name: string) -> string forwards
+
+#| A reference to an attribute of an object in the world, one the program does not manage.
+#| example: let adopted_id = cloud_ref(net.vpc, "existing-vpc", "id")
+fn cloud_ref(type: string, name: string, path: string) -> ref
+
+#| The value, its secret label removed; `declassified/2` records why (E DR-19).
+#| example: let fingerprint = declassify(key.sha, "a digest is public")
+fn declassify(value: any, reason: string) -> any forwards nulls
+
+# Arithmetic: `a + b` lowers to `add(a, b)`, and so on.
+
+#| The sum of two integers; `a + b` lowers to it.
+#| example: let n = replicas + 1
+internal fn add(a: int, b: int) -> int forwards
+
+#| The difference of two integers; `a - b` lowers to it.
+#| example: let spare = max - used
+internal fn sub(a: int, b: int) -> int forwards
+
+#| The product of two integers; `a * b` lowers to it.
+#| example: let bytes = gib * 1073741824
+internal fn mul(a: int, b: int) -> int forwards
+
+#| Integer division, no value when `b` is 0; `a / b` lowers to it.
+#| example: let half = n / 2
+internal fn div(a: int, b: int) -> int? forwards
+
+#| The remainder of integer division, no value when `b` is 0; `a % b` lowers to it.
+#| example: odd(n) where n % 2 == 1
+internal fn mod(a: int, b: int) -> int? forwards
+
+# The lowering's own (E §2.5): a declared attribute's null, its label,
+# and a walk inside a value.
+
+#| The null of an attribute path, its class and type from the schema row.
+#| example: __null(T, A, P, "unknown", "string")
+internal fn __null(type: string, name: string, path: string, class: string, ty: string) -> any forwards nulls
+
+#| The label a null of an attribute path carries.
+#| example: __label(T, A, P)
+internal fn __label(type: string, name: string, path: string) -> string forwards nulls
+
+#| The value at a dotted path inside a value; `x.f` on a variable with no static type lowers to it.
+#| example: __path(X, "f")
+internal fn __path(value: any, path: string) -> any? forwards, forwards nulls

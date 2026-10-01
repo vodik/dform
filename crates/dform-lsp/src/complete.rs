@@ -4,7 +4,7 @@
 //! instance's inputs and, after `module.instance.`, its outputs; grant
 //! patterns in `contributes`, and in a policy the paths its grants allow.
 //! A type's or path's documentation is its `type_doc`. Elsewhere a word
-//! completes to the builtins and keywords it starts (`engine::REFERENCE`).
+//! completes to the builtins and keywords it starts (`engine::references`).
 
 use crate::nav;
 use dform_core::ast::{Atom, Term};
@@ -335,7 +335,7 @@ pub fn complete(
     if word.is_empty() || word.contains('.') {
         return Vec::new();
     }
-    engine::REFERENCE
+    engine::references()
         .iter()
         .filter(|r| r.name.starts_with(word.as_str()))
         .map(|r| {

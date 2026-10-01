@@ -33,6 +33,7 @@ use crate::value::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
 mod alias;
+mod heads;
 mod provider;
 pub use provider::ENV_VAR;
 
@@ -78,6 +79,9 @@ pub fn lower(
     l.text = mode == Mode::Text;
     l.any_type = mode == Mode::Pattern;
     l.core = !require_edition;
+    if mode == Mode::Program {
+        l.check_heads();
+    }
     let mut statements = Vec::new();
     if l.declare_env_var() {
         statements.push(provider::env_var_extern());
@@ -3127,10 +3131,7 @@ impl<'u> Lowerer<'u> {
             [Term::Val(Value::Int(_))] => "an int",
             [Term::Val(Value::Str(_))] => "a string",
             [Term::Func { name, .. }]
-                if matches!(
-                    name.as_str(),
-                    "format" | "concat" | "to_string" | "lower" | "upper" | "join"
-                ) =>
+                if crate::functions::get(name).is_some_and(|f| f.ret == "string") =>
             {
                 "a string"
             }
@@ -3163,7 +3164,7 @@ impl<'u> Lowerer<'u> {
     /// and fail its literal quietly: an error at the call. A refinement's
     /// calls are `refine::check_rest`'s, with the refinement's own message.
     fn check_function(&mut self, name: &str, span: Span) {
-        if self.lenient || self.calls == Calls::Data || crate::engine::FUNCTIONS.contains(&name) {
+        if self.lenient || self.calls == Calls::Data || crate::functions::callable(name) {
             return;
         }
         if crate::partition::AGGREGATES.contains(&name) {
@@ -3175,12 +3176,7 @@ impl<'u> Lowerer<'u> {
             }
             return;
         }
-        self.diags.push(
-            Diagnostic::error(span, format!("unknown function {name}")).with_help(format!(
-                "the functions are {}",
-                crate::engine::FUNCTIONS.join(", ")
-            )),
-        );
+        self.diags.push(crate::functions::unknown(span, name));
     }
 
     /// The name a call or record is applied by: its chain's dotted text.
