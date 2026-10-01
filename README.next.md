@@ -271,74 +271,6 @@ value and a read where its content is used. When a read of a computed
 value makes a block wait for a later tick, the compiler says so at the
 read.
 
-**The header.** A file begins with what it is, what it talks to and what
-it takes, in that order, before any rule:
-
-```dform
-edition 2026
-provider aws { region = cfg.region }
-import "modules/network.df"
-key env: enum("dev", "staging", "prod") = "dev"
-input az(name: string, index: int) from yaml("data/azs.yaml")
-```
-
-(`cfg` is a `let` further down the file, the selected environment's
-settings. Nothing in a program is ordered, so the header may read what
-the body defines.)
-
-A stack is the unit of state and apply, and a file under `stacks/` is
-one, named after itself: this is `stacks/shop.df`, so `dform plan shop`.
-A `key` is an input that selects the deployment: each value of `env` has
-its own state, `dform plan shop env=prod`. A provider line brings a
-provider's types and externs into scope and configures it. Imports bring
-in modules and policies. Inputs are the stack's interface. None of these
-may appear below the first rule. Where a stack's state lives and who may
-approve a plan are operational, so they live in `dform.toml`, where `[stacks.shop]` is
-`stacks/shop.df`:
-
-```toml
-[stacks.shop]
-backend = 's3("acme-state", "shop/{env}")'
-approvals = 'jwks("https://sso.acme.example/keys")'
-```
-
-A small project needs none of this: `dform.toml` beside one `.df` file is
-a project with one stack.
-
-**Tables.** Data that is not code comes in as a typed relation from a
-file, and rows are facts like any other, each with a line `why` can
-point at:
-
-```dform
-input az(name: string, index: int) from yaml("data/azs.yaml")
-input pin(app: string, image: string) from toml(git("ops.git", "env/${env}", "pins.toml"))
-```
-
-```yaml
-# data/azs.yaml: a list of objects, one per row
-- { name: us-east-1a, index: 1 }
-- { name: us-east-1b, index: 2 }
-```
-
-```toml
-# pins.toml: an array of tables, one per row
-[[pin]]
-app = "api"
-image = "ghcr.io/acme/api@sha256:9f2c..."
-```
-
-A cell is checked against its column's type, and a bad row is an error
-naming the file and line. A `git(..)` source is read at a commit the
-plan records, so apply reads what plan read even if the branch moved.
-CSV and JSON work the same way.
-
-**Inputs, settings and lets are cells.** `input env: ..` is a typed
-input; `--set env=prod` wins over its default because it is a
-higher-rank contribution to the same cell. `settings prod { db.multi_az
-= true }` is one environment's values; `let cfg = settings[env]` reads the
-selected row, and `cfg.db.multi_az` a leaf of it. Two `let` rows that
-disagree are a conflict, like any cell.
-
 **Types.** Values are typed, and strings stop at the edge. A provider's
 schema types every attribute (`cidr_block: inet required`,
 `multi_az: bool`, `endpoint: string computed`), an input or a table
@@ -378,12 +310,99 @@ one is parsed on purpose: `inet(text)`. `inet.subnet`, `inet.host`,
 arithmetic; `ip`, `inet`, `int`, `string` are the parsers; `enum`, `list`, `set`, `ref(T)` and
 `secret(T)` are the other types. `type environment = enum("dev",
 "staging", "prod")` names one. A `check` refines any of them: `input
-replicas: int = 2 check 1 <= replicas <= 10`,
-`cidr_block: inet check inet.prefix_len(cidr_block) <= 24` in a schema;
-a failed check is a deny, with provenance like any other. Because the
+replicas: int = 2 check 1 <= replicas <= 10` on an input,
+`cidr_block: inet check inet.prefix_len(cidr_block) <= 24` on a schema
+attribute, and a provider ships its own with its schema. A check is a
+policy in disguise: it lowers to a `deny` over the value, so it is
+checked at compile time when the value is a literal, at evaluation when
+it is computed, and after apply by the provider when the value is a
+secret the engine never sees; and `why` explains a failed one like any
+deny. Refinements also describe the input space, which is what
+`dform test --generate` draws its cases from. Because the
 comparisons are typed, the policy above is a real overlap test over
 address ranges, not a string match, and "can this range reach that
 one" is a question the program can answer before anything is created.
+
+**Externs and functions.** An extern is a relation a provider answers
+on demand, with binding modes: `aws.ami[filter]`,
+`file.json[path]`, `random.password[key]` (a secret, generated once and
+kept). Functions are qualified by the type they are about,
+`inet.subnet`, `str.split`, `list.join`, and declared in signature files
+you can jump to from the editor; constructors are named by their type,
+`int(s)`, `inet(s)`.
+
+**Secrets.** A sensitive value never leaves the provider as bytes. The
+compiler tracks where secrets flow and refuses a program that would
+print one, compare one, or put one in a public attribute, before
+anything runs.
+
+**The header.** A file begins with what it is, what it talks to and what
+it takes, in that order, before any rule:
+
+```dform
+edition 2026
+provider aws { region = cfg.region }
+import "modules/network.df"
+key env: enum("dev", "staging", "prod") = "dev"
+input az(name: string, index: int) from yaml("data/azs.yaml")
+```
+
+(`cfg` is a `let` further down the file, the selected environment's
+settings. Nothing in a program is ordered, so the header may read what
+the body defines.)
+
+A stack is the unit of state and apply, and a file under `stacks/` is
+one, named after itself: this is `stacks/shop.df`, so `dform plan shop`.
+A `key` is an input that selects the deployment: each value of `env` has
+its own state, `dform plan shop env=prod`. A provider line brings a
+provider's types and externs into scope and configures it. Imports bring
+in modules and policies. Inputs are the stack's interface. None of these
+may appear below the first rule. Where a stack's state lives and who may
+approve a plan are operational, so they live in `dform.toml`, where `[stacks.shop]` is
+`stacks/shop.df`:
+
+```toml
+[stacks.shop]
+backend = 's3("acme-state", "shop/{env}")'
+approvals = 'jwks("https://sso.acme.example/keys")'
+```
+
+A small project needs none of this: `dform.toml` beside one `.df` file is
+a project with one stack.
+
+**Inputs, settings and lets are cells.** `input env: ..` is a typed
+input; `--set env=prod` wins over its default because it is a
+higher-rank contribution to the same cell. `settings prod { db.multi_az
+= true }` is one environment's values; `let cfg = settings[env]` reads the
+selected row, and `cfg.db.multi_az` a leaf of it. Two `let` rows that
+disagree are a conflict, like any cell.
+
+**Tables.** Data that is not code comes in as a typed relation from a
+file, and rows are facts like any other, each with a line `why` can
+point at:
+
+```dform
+input az(name: string, index: int) from yaml("data/azs.yaml")
+input pin(app: string, image: string) from toml(git("ops.git", "env/${env}", "pins.toml"))
+```
+
+```yaml
+# data/azs.yaml: a list of objects, one per row
+- { name: us-east-1a, index: 1 }
+- { name: us-east-1b, index: 2 }
+```
+
+```toml
+# pins.toml: an array of tables, one per row
+[[pin]]
+app = "api"
+image = "ghcr.io/acme/api@sha256:9f2c..."
+```
+
+A cell is checked against its column's type, and a bad row is an error
+naming the file and line. A `git(..)` source is read at a commit the
+plan records, so apply reads what plan read even if the branch moved.
+CSV and JSON work the same way.
 
 **Modules and instances.** A module declares its interface first, then
 its body. An instance is one copy, gated by a clause if you like. A
@@ -418,10 +437,10 @@ another block reads it as `network.blue.vpc`.
 declare: what a pack touches is visible in the pack and in `dform dev
 effects`, and ranks decide who wins.
 
-**Scenarios.** A scenario is policy over hypothetical inputs:
+**Tests.** A test is policy over hypothetical inputs:
 
 ```dform
-scenario prod {
+test prod {
   set env = "prod"
   deny "prod peers the two VPCs" where not "blue-green" in aws.vpc_peering_connection
 }
@@ -431,21 +450,8 @@ scenario prod {
 name on the left of `in` asks whether a resource of that name is wanted;
 the deny holds when none is.
 
-`dform test` runs every scenario; `dform test --generate` derives cases
+`dform test` runs every test against an empty world; `dform test --generate` derives cases
 from the inputs' types and checks.
-
-**Externs and functions.** An extern is a relation a provider answers
-on demand, with binding modes: `aws.ami[filter]`,
-`file.json[path]`, `random.password[key]` (a secret, generated once and
-kept). Functions are qualified by the type they are about,
-`inet.subnet`, `str.split`, `list.join`, and declared in signature files
-you can jump to from the editor; constructors are named by their type,
-`int(s)`, `inet(s)`.
-
-**Secrets.** A sensitive value never leaves the provider as bytes. The
-compiler tracks where secrets flow and refuses a program that would
-print one, compare one, or put one in a public attribute, before
-anything runs.
 
 ## The tool
 
@@ -482,7 +488,7 @@ file alone, with no cloud access.
 "availability_zone", z)'` asks the fact store anything. `dform diff
 --since 2026-09-20` explains what changed between applies, and why.
 
-**test and check.** `dform test` runs the scenarios; `dform check --sarif`
+**test and check.** `dform test` runs the tests; `dform check --sarif`
 runs the policies for CI.
 
 **Stacks and deployments.** A project grows from one file to many
