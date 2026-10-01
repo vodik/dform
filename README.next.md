@@ -16,8 +16,7 @@ join anything with anything, they can recurse, every derived row has a
 derivation, and the whole program is small enough to reason about.
 
 dform is that: infrastructure as facts and rules, with plan and apply,
-state, modules, policy, secrets, approvals and a controller mode built
-in. Here is a complete program, for an AWS provider.
+state, modules, policy, secrets and approvals built in. Here is a complete program, for an AWS provider.
 
 ```dform
 edition 2026
@@ -52,6 +51,7 @@ plan: 7 deformations (7 create)
   ... four more
 ```
 
+A deformation is one change the plan would make; the word is dform's.
 The subnet block ends in a `where` clause, which makes it a rule: the
 clause is a query, and every answer is one subnet. `aws.availability_zone`
 is a table the provider answers, what Terraform calls a data source:
@@ -443,9 +443,10 @@ of plain facts is just a module: `module releases` reads
 written inline, or as `module network` alone, which reads
 `modules/network.df`, and modules nest. An instance is one copy with
 inputs, gated by a clause if you like; `use` applies a module once, with
-no inputs, which is what a policy pack is. A module's resources are not
-hidden: policy sees them, and stacks wire modules together through
-outputs.
+no inputs, which is what a policy pack is. A module's relations are
+private to it, and it hands values out through outputs; its resources
+are visible to policy because they are cloud resources, which were
+never private.
 
 ```dform
 module network {
@@ -474,9 +475,27 @@ another block reads it as `network.blue.vpc`.
 
 **Policies.** A policy is a module of `set`, `deny` and `warn`
 statements with no inputs, `module baseline { .. }` in `policies/`, and
-`use baseline` applies it. There is no grant to declare: what a pack
-touches is visible in the pack and in `dform dev effects`, and ranks
-decide who wins.
+`use baseline` applies it. A pack can write into your resources, and
+four things keep that from being spooky: nothing touches a stack's
+resources unless that stack says `use`; what a pack touches is listed
+by `dform dev effects`; ranks decide who wins, so a pack's `@default`
+never overrides what you wrote; and `why` names the author of every
+value.
+
+Policy also reads the plan itself. Once the plan is computed its
+changes go back into the program as facts, `deformation(kind, type,
+address, before)`, and a policy can refuse, warn, or demand a signature:
+
+```dform
+deny "no deletes in prod" { resource: a } where env == "prod", deformation("delete", t, a, _)
+
+requires_approval(d, "a replace in prod") where env == "prod", deformation("replace", t, a, _), d = "${t}[\"${a}\"]"
+```
+
+`requires_approval` rows make the plan print its digest and refuse a
+plain apply; an approver signs the digest and `apply --approval` carries
+the token. `prevent_destroy` below is the same mechanism with a
+shorter name.
 
 **Tests.** A test is a named block of denies and the part of the input
 space they are about; the name is yours:
@@ -521,6 +540,29 @@ would add more, to be run again. State is written after every
 provider call, so an interrupted apply resumes where it stopped.
 `--parallel N` overlaps independent calls.
 
+**Lifecycle.** The things that go wrong between two applies are facts,
+so policy can read them and `why` can explain them:
+
+```dform
+moved(aws.vpc, "network.main::vpc", "network.core::vpc")   # renamed: state follows, nothing is replaced
+adopt(aws.vpc, "legacy", "vpc-0a1b2c")                      # exists already: take it over, no create
+lifecycle(aws.db_instance, "orders", "prevent_destroy")     # a delete or replace is a deny
+lifecycle(aws.eks_node_group, "main", "create_before_destroy")  # a replace builds the new one first
+ignore_changes(aws.instance, "bastion", "tags.last_scan")   # set on create, then the world's value stands
+```
+
+A rename is a `moved` fact, kept or deleted later; the plan prints the
+move and applies nothing for it. Which way a replace goes is the
+schema's to say, with `create_before_destroy` where it allows either;
+the old object is deposed and deleted the tick after what depended on
+it has moved. Drift is detected on every plan, because a plan starts by
+refreshing what exists: a change made in the console shows as an
+update back, or as a deny if a policy says that path is the world's to
+own. An apply that dies halfway resumes: state is written after every
+provider call, each create carries an idempotency key, and the next
+`apply` says "resuming the apply interrupted at tick 2" and finishes it,
+after checking that the world did not move under the remaining actions.
+
 **Plan files and approvals.** `plan --out plan.json` records everything
 the plan depended on. `apply plan.json` refuses if the world or the
 inputs moved. Policy can say a change needs approval; an approver signs
@@ -563,14 +605,18 @@ let cluster_endpoint = stacks.platform[env=env].endpoint          # this project
 let registry = stacks.acme.platform[env="prod"].registry_url      # remote acme's
 ```
 
-`dform state show`, `state mv`, `stack rekey` (move a deployment to a
-new key value) and `stack handover` (move a stack's state into the
-cluster it bootstrapped, for the controller) are the state operations;
-nothing else edits state by hand.
+State is small on purpose: it maps each address to the object's remote
+id and records what the last apply saw; attribute values come from the
+provider on every plan, and no secret is ever written to it. A stack's
+state holds a lease while an apply runs, and a second apply of the same
+deployment is refused naming the holder. `dform state show`, `state mv`
+and `stack rekey` (move a deployment to a new key value) are the state
+operations; nothing else edits state by hand.
 
-**The controller.** `dform controller run` watches the inputs and the
-world and applies the same plan a batch run would, continuously. The same
-program bootstraps a cluster in batch mode and later runs inside it.
+A project's stacks depend on each other through the values they read,
+so `dform plan` and `dform apply` with no target take the whole project
+and run its stacks in dependency order, each with its own confirmation
+and its own state; `dform apply shop` is one stack.
 
 **Providers.** A provider is a wasm component: one file, any platform,
 sandboxed, carrying its own schema, so the editor can jump to a type's
@@ -670,9 +716,7 @@ let serving = rollout where ready(rollout)
 password as a secret the program never sees, the namespace with a
 default-deny network policy, the migration, the two colours, the
 cutover, and the invariants (no container without limits, no image
-without a digest, no public database) as denies. Run it in batch, or
-hand the stack over to the cluster it built and let `dform controller
-run` keep it true as releases land.
+without a digest, no public database) as denies.
 
 ## What you cannot do elsewhere
 
@@ -697,7 +741,7 @@ run` keep it true as releases land.
   its README says which.
 - `docs/grammar.md`: the language, for reference.
 - `docs/reference.md`: every command and flag, state backends, keyed
-  stacks, approvals, the audit log, the controller.
+  stacks, approvals, the audit log.
 - `docs/design.md`: the model: cells and ranks, unknowns and ticks, the
   plan as a Z-set, provenance. `proposals/` is the record of how it was
   decided.
