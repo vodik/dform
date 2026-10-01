@@ -442,6 +442,18 @@ is a public bucket and a well-known key, not a product.
 if a user asks for GHCR), a registry protocol over HTTP (a service),
 per-platform native providers in the registry (the bridge's sidecars
 are deployed like any other binary, not through dform).
+*Amended the same day: one file.* A package is a wasm component with
+custom sections =dform.manifest=, =dform.schema= (the schema as =.df=
+facts, docs included) and =dform.functions= (the R-6 signatures); the
+registry holds =package.wasm=, a detached =package.dsse= and the index.
+=publish= instantiates once, calls =Schema=, writes or checks the
+sections, signs. On resolve the sections are extracted beside the cached
+artifact (=cache/providers/<sha256>/schema.df=), derived and read-only:
+the jump-to-definition targets, as TypeScript's =.d.ts= and
+rust-analyzer's =rust-src= are, with the difference that the embedded
+schema is the author's source and needs no synthesis. The std signature
+files are extracted the same way so builtins have a definition. A type a
+provider declares only at run time (Kubernetes) has none.
 
 * Vocabulary
 The name is Terraform minus terra plus Datalog, and it reads as "deform" aloud.
