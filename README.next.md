@@ -347,29 +347,26 @@ compiler tracks where secrets flow and refuses a program that would
 print one, compare one, or put one in a public attribute, before
 anything runs.
 
-**The header.** A file begins with what it is, what it talks to and what
-it takes, in that order, before any rule:
+**The header.** A file begins with what it is and what it takes, before
+any rule:
 
 ```dform
 edition 2026
-provider aws { region = cfg.region }
 import "modules/network.df"
 key env: enum("dev", "staging", "prod") = "dev"
 input az(name: string, index: int) from yaml("data/azs.yaml")
 ```
 
-(`cfg` is a `let` further down the file, the selected environment's
-settings. Nothing in a program is ordered, so the header may read what
-the body defines.)
-
 A stack is the unit of state and apply, and a file under `stacks/` is
 one, named after itself: this is `stacks/shop.df`, so `dform plan shop`.
 A `key` is an input that selects the deployment: each value of `env` has
-its own state, `dform plan shop env=prod`. A provider line brings a
-provider's types and externs into scope and configures it (`provider
-aws` alone when it needs no settings). Imports bring
-in modules and policies. Inputs are the stack's interface. None of these
-may appear below the first rule. Where a stack's state lives and who may
+its own state, `dform plan shop env=prod`. Imports bring in modules and
+policies. Inputs are the stack's interface. None of these may appear
+below the first rule. A `provider` statement is not a header line: it is
+a rule that configures a provider from whatever it reads (`provider aws
+{ region = cfg.region }`, or `provider aws` alone), in scope for the
+whole program wherever it is written, so it goes next to what it depends
+on. Where a stack's state lives and who may
 approve a plan are operational, so they live in `dform.toml`, where `[stacks.shop]` is
 `stacks/shop.df`:
 
@@ -587,9 +584,19 @@ any number of overlays, except that the overlays are rules.
 
 ```dform
 provider aws { region = cfg.region }
-provider kubernetes { endpoint = cluster.endpoint, ca = cluster.ca_certificate }
 
-resource aws.eks_cluster cluster { .. }
+resource aws.vpc main { cidr_block = cfg.vpc_net }
+resource aws.eks_cluster cluster {
+  vpc_config.subnet_ids = [ s.id | s in aws.subnet ]
+}
+
+# The Kubernetes provider is bound to the cluster above: its endpoint and
+# CA are unknown until tick 1 has created it, so this provider, and
+# everything that uses it, waits for that tick.
+provider kubernetes {
+  endpoint = cluster.endpoint
+  ca = cluster.certificate_authority
+}
 
 resource k8s.namespace shop { metadata.name = "shop" }
 
