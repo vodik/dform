@@ -439,9 +439,12 @@ approvals = 'jwks("https://sso.acme.example/keys")'
 A small project needs none of this: `dform.toml` beside one `.df` file is
 a project with one stack.
 
-**Settings.** Configuration is the inputs. The declaration gives the
-default, a `settings` block contributes values under a condition, and
-`--set` on the command line wins over both:
+**Settings.** Every bare name you read is a cell: an `input` is one the
+outside supplies, a `key` one the target supplies, a `let` one the
+program computes, and `why` shows the layers of any of them.
+Configuration is the inputs. The declaration gives the default, a
+`settings` block contributes values under a condition, and `--set` on
+the command line wins over both:
 
 ```dform
 settings { db.multi_az = true, db.backup_days = 14 } where env == "prod"
