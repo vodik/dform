@@ -161,7 +161,7 @@ resource iam.policy "connect-${host}" {
 "#;
 
 /// Tick 2 names the group's member, which the first answer did not see:
-/// apply asks again, for it alone.
+/// apply prints tick 2's plan and asks again, counting the new ones.
 #[test]
 fn a_tick_that_adds_an_address_asks_again() {
     let s = Scratch::new("confirm-tick2");
@@ -174,10 +174,17 @@ fn a_tick_that_adds_an_address_asks_again() {
         said[0]
     );
     assert!(
-        said[1].ends_with(
-            "new at tick 2:\n  + iam.policy[\"connect-orders.db.fake\"]\n\
-             Apply these 1 new deformation to p? [y/N] "
-        ),
+        said[1].contains("tick 2:\nplan: 1 deformation (1 create)\n"),
+        "{}",
+        said[1]
+    );
+    assert!(
+        said[1].contains("+ iam.policy[\"connect-orders.db.fake\"]\n"),
+        "{}",
+        said[1]
+    );
+    assert!(
+        said[1].ends_with("Apply 1 new deformation to p? [y/N] "),
         "{}",
         said[1]
     );

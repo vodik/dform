@@ -2035,8 +2035,8 @@ fn run_with(
                 }
                 // A later tick whose plan holds an address no earlier one
                 // listed (a pending group's member, named only now) asks
-                // again, for those alone; a plan file bounds them by its
-                // groups instead (`check_saved`), and asks the same.
+                // again, its plan printed above, counting the new ones; with
+                // a plan file too, whose groups bound them (`check_saved`).
                 let addresses: BTreeSet<&ir::Address> = plan
                     .actions
                     .iter()
@@ -2044,44 +2044,16 @@ fn run_with(
                     .map(|a| &a.addr)
                     .collect();
                 if tick > 1 && hook.is_none() && !yes {
-                    let new: Vec<&crate::provider::Action> = plan
-                        .actions
-                        .iter()
-                        .filter(|a| {
-                            !matches!(a.kind, ActionKind::Noop) && !listed.contains(&a.addr)
-                        })
-                        .collect();
-                    if !new.is_empty() {
-                        print!("{}", plan_print::new_text(tick, &new, cli.style));
-                        confirm(new.len(), true, &deployment, tick, cli.style)?;
+                    let new = addresses.iter().filter(|a| !listed.contains(**a)).count();
+                    if new > 0 {
+                        confirm(new, true, &deployment, tick, cli.style)?;
                     }
                 }
                 listed.extend(addresses.into_iter().cloned());
                 if hook.is_none() {
-                    // The pending groups an approval would sign unbounded:
-                    // the file's (what was signed), else this plan's.
-                    let unbounded: Vec<String> = if tick == 1 && approval.is_some() {
-                        let allowed = crate::approval::unbounded_allowed(program, &res.facts)?;
-                        let groups = match &saved {
-                            Some((_, f)) => f.pending_groups.clone(),
-                            None => zset::file::groups(
-                                &res,
-                                &query::Redactor::new(&res.facts, schema),
-                                key,
-                            ),
-                        };
-                        groups
-                            .iter()
-                            .filter(|g| !allowed.contains(&g.head))
-                            .map(zset::file::Group::describe)
-                            .collect()
-                    } else {
-                        Vec::new()
-                    };
                     approve_entry(
                         tick,
                         &needs,
-                        &unbounded,
                         digest.as_deref(),
                         approval.as_deref(),
                         saved.is_some(),
@@ -2578,8 +2550,10 @@ fn confirm(
         );
     }
     let s = if n == 1 { "" } else { "s" };
-    let new = if new { "new " } else { "" };
-    let ask = format!("Apply these {n} {new}deformation{s} to {deployment}?");
+    let ask = match new {
+        true => format!("Apply {n} new deformation{s} to {deployment}?"),
+        false => format!("Apply these {n} deformation{s} to {deployment}?"),
+    };
     print!("{} [y/N] ", style.paint(plan_print::Paint::Bold, &ask));
     std::io::stdout().flush()?;
     let mut answer = String::new();
@@ -2914,16 +2888,13 @@ fn persist_externs(st: &mut state::State, externs: &crate::externs::Externs, bac
 
 /// A batch apply's approval, before its Apply calls: at tick 1 the token
 /// given (`--approval FILE`), verified (`verify`), or, with none, a
-/// refusal if anything needs one; a token is refused, too, for a plan with
-/// a pending group the program does not `allow_unbounded_approval`
-/// (`unbounded`, each named); at a later tick, a new deformation that
+/// refusal if anything needs one; at a later tick, a new deformation that
 /// needs one must be one the approver may approve (`allowed`). Each
 /// verdict at tick 1 goes to the audit log.
 #[allow(clippy::too_many_arguments)]
 fn approve_entry(
     tick: usize,
     needs: &[(String, String)],
-    unbounded: &[String],
     digest: Option<&str>,
     token: Option<&Path>,
     from_file: bool,
@@ -2985,19 +2956,6 @@ fn approve_entry(
         };
         bail!("apply refused: {error}; the plan's digest is {digest}: {how}");
     };
-    if !unbounded.is_empty() {
-        let error = format!(
-            "the plan has pending group{} {}: an approval cannot bound how many it \
-             creates; the program may state allow_unbounded_approval(HEAD) for one it accepts",
-            if unbounded.len() == 1 { "" } else { "s" },
-            unbounded.join("; ")
-        );
-        audit.append(
-            "approval",
-            serde_json::json!({ "result": "refused", "digest": digest, "error": error }),
-        )?;
-        bail!("apply refused: {error}");
-    }
     let text = std::fs::read_to_string(path)
         .map_err(|e| anyhow::anyhow!("read --approval {}: {e}", path.display()))?;
     match verify(&text, digest) {

@@ -158,44 +158,6 @@ pub fn restricts_approvers(program: &crate::ast::Program) -> bool {
     any(&program.statements)
 }
 
-/// `allow_unbounded_approval(HeadPattern)`: a fact that lets `--approval`
-/// approve a plan with the pending group of that head pattern (as
-/// `stuck/4` prints it, `allow_stuck`'s form). Without it such a plan is
-/// refused: a group's members are named only at a later tick, so the
-/// approver signed an unknown number of them.
-pub const ALLOW_UNBOUNDED: &str = "allow_unbounded_approval";
-
-/// The head patterns `allow_unbounded_approval` states in `facts`; an
-/// error when a rule of `program` derives it (it is a fact only).
-pub fn unbounded_allowed(
-    program: &crate::ast::Program,
-    facts: &std::collections::BTreeSet<crate::ast::Atom>,
-) -> anyhow::Result<std::collections::BTreeSet<String>> {
-    use crate::ast::{Stmt, Term};
-    use crate::value::Value;
-    fn rule(stmts: &[Stmt]) -> Option<&crate::ast::RuleStmt> {
-        stmts.iter().find_map(|s| match s {
-            Stmt::Rule(r) if r.head.pred == ALLOW_UNBOUNDED => Some(r),
-            Stmt::PolicyPack(p) => rule(&p.body),
-            _ => None,
-        })
-    }
-    if let Some(r) = rule(&program.statements) {
-        anyhow::bail!(
-            "{ALLOW_UNBOUNDED} must be a fact, not a rule: {}",
-            crate::partition::fmt_rule(r)
-        );
-    }
-    Ok(facts
-        .iter()
-        .filter(|a| a.pred == ALLOW_UNBOUNDED)
-        .filter_map(|a| match a.args.as_slice() {
-            [Term::Val(Value::Str(h))] => Some(h.clone()),
-            _ => None,
-        })
-        .collect())
-}
-
 /// Does `approver_allowed(who, d)` hold in `facts`?
 pub fn approver_allowed(
     facts: &std::collections::BTreeSet<crate::ast::Atom>,

@@ -113,11 +113,12 @@ apply reads (refresh, the lookups that resolve uncertain calls), plans and
 asks, and only a `y` writes state (`moved` renames included) or calls
 Apply. A later tick whose plan holds an address no earlier tick listed (a
 pending group's member: `iam.policy[?]` at tick 1, named once the endpoint
-it is built from exists) asks again, for those alone: `new at tick 2:`, one
-line each, then `Apply these N new deformations to D? [y/N]`. `apply
-plan.json` asks this too; `--yes` skips it. A `n` there stops the apply
-with what the earlier ticks did in state; the audit log's `apply_end` says
-`declined` and the `tick`, and the next apply resumes.
+it is built from exists) asks again: its plan is printed, `tick 2:` and
+the report, then `Apply N new deformations to D? [y/N]`, counting the
+addresses no earlier tick listed. `apply plan.json` asks this too; `--yes`
+skips it. A `n` there stops the apply with what the earlier ticks did in
+state; the audit log's `apply_end` says `declined` and the `tick`, and the
+next apply resumes.
 
 | Commands | |
 |---|---|
@@ -1054,12 +1055,9 @@ and every deformation that needs the approval. A missing or invalid token is
 a refusal naming what failed. The stale-plan check then guarantees that what
 is applied is what was approved. A plain `apply` of a plan that needs an
 approval is refused (plan with `--out`, have the digest approved, apply the
-file). An `--approval` for a plan with a pending group is refused, naming
-the group: its members are named only at a later tick, so the approver
-would sign an unknown number of them. The program accepts one with a
-fact, `allow_unbounded_approval("want(\"iam.policy\", _)")` (the group's
-head pattern, as `allow_stuck` takes it); the plan file still bounds what
-the group may create. Provider credentials stay the environment's: a provider inherits
+file). A plan file's pending group bounds what a later tick may create
+for it: the group's rule, with the bindings it was stuck with (see the
+plan file above). Provider credentials stay the environment's: a provider inherits
 dform's environment, and dform mints and exchanges no tokens.
 
 In controller mode a deformation that needs an approval is held (`tick N:

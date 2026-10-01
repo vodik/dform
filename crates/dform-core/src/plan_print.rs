@@ -859,21 +859,6 @@ fn element_of(typ: &str, path: &str, schema: &Schema) -> Option<(String, String,
     ))
 }
 
-/// The deformations a later tick's plan holds that no earlier one listed,
-/// before apply asks about them: `new at tick N:` and one line each.
-pub fn new_text(tick: usize, new: &[&Action], style: Style) -> String {
-    let mut out = style.paint(Paint::Bold, &format!("new at tick {tick}:"));
-    out.push('\n');
-    for a in new {
-        out.push_str(&format!(
-            "  {} {}\n",
-            style.marker(&a.kind),
-            style.paint(Paint::Bold, &a.addr.to_string())
-        ));
-    }
-    out
-}
-
 fn marker_of(k: &ActionKind) -> &'static str {
     match k {
         ActionKind::Create => "+",
