@@ -45,11 +45,11 @@ plan: 7 deformations (7 create)
 + aws.subnet["private-us-east-1a"]
   availability_zone = "us-east-1a"
   cidr_block = "10.0.0.0/24"
-  vpc = ?aws.vpc["main"].id
+  vpc = ?aws.vpc["main"]
 + aws.subnet["private-us-east-1b"]
   availability_zone = "us-east-1b"
   cidr_block = "10.0.1.0/24"
-  vpc = ?aws.vpc["main"].id
+  vpc = ?aws.vpc["main"]
   ... four more
 ```
 
@@ -60,8 +60,8 @@ is a table the provider answers, what Terraform calls a data source:
 `"available"` is the question, and each row binds a zone's name to
 `availability_zone` and its stable position to `n`, so the n-th zone
 gets the n-th /24. An entry that is only a name, `availability_zone`,
-takes the variable of that name. `?` marks a value apply will learn,
-here the VPC's id. The `#|` line is a doc comment, which the editor
+takes the variable of that name. `?` marks a value apply will learn:
+here the VPC itself, which does not exist yet. The `#|` line is a doc comment, which the editor
 shows and policy can read. When the region gains a
 zone, the next plan has one more subnet; nothing in the file changes.
 
