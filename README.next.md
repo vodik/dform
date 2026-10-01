@@ -198,6 +198,10 @@ $ dform why 'aws.route["blue-to-green"]'
 aws.route["blue-to-green"]
   stacks/network.df:58  resource aws.route "${a}-to-${b}" { .. } where reaches(a, b), a != b
   with a = "blue", b = "green"
+       "${a}-to-${b}" = "blue-to-green"
+       aws.route_table[a].id = ?aws.route_table["blue"].id
+       aws.vpc[b].cidr_block = 10.2.0.0/16
+       tgw.id = ?aws.ec2_transit_gateway["tgw"].id
   ├─ reaches("blue", "green")
   │    stacks/network.df:55  reaches(a, c) where reaches(a, b), link(b, c)
   │    with a = "blue", b = "core", c = "green"
@@ -216,8 +220,10 @@ aws.route["blue-to-green"]
        └─ stacks/network.df:23  module network, instance green
 ```
 
-The answer is the program's own text at the lines that fired, with the
-variables as they were bound. The same question works for an attribute
+The answer is the program's own text at the lines that fired, the
+variables as they were bound, and under them every computed term of
+the statement with what it became: the interpolated name, each lookup,
+each read, a value still unknown as its `?` label. The same question works for an attribute
 (`why 'aws.vpc["main"].tags.team'` shows every author and which rank
 won) and for a refusal (`why 'deny(m)'`).
 
