@@ -437,11 +437,11 @@ another block reads it as `network.blue.vpc`.
 declare: what a pack touches is visible in the pack and in `dform dev
 effects`, and ranks decide who wins.
 
-**Tests.** A test is a block of denies and the part of the input space
-they are about:
+**Tests.** A test is a named block of denies and the part of the input
+space they are about; the name is yours:
 
 ```dform
-test prod {
+test prod_network_and_backups {
   deny "prod peers the two VPCs" where not "blue-green" in aws.vpc_peering_connection
   deny "prod keeps two weeks of backups" where db in aws.db_instance, db.backup_retention_period < 14
 } where env == "prod"
