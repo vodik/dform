@@ -318,7 +318,7 @@ checked at compile time when the value is a literal, at evaluation when
 it is computed, and after apply by the provider when the value is a
 secret the engine never sees; and `why` explains a failed one like any
 deny. Refinements also describe the input space, which is what
-`dform test --generate` draws its cases from. Because the
+`dform test` enumerates. Because the
 comparisons are typed, the policy above is a real overlap test over
 address ranges, not a string match, and "can this range reach that
 one" is a question the program can answer before anything is created.
@@ -437,21 +437,24 @@ another block reads it as `network.blue.vpc`.
 declare: what a pack touches is visible in the pack and in `dform dev
 effects`, and ranks decide who wins.
 
-**Tests.** A test is policy over hypothetical inputs:
+**Tests.** A test is a block of denies and the part of the input space
+they are about:
 
 ```dform
 test prod {
-  set env = "prod"
   deny "prod peers the two VPCs" where not "blue-green" in aws.vpc_peering_connection
-}
+  deny "prod keeps two weeks of backups" where db in aws.db_instance, db.backup_retention_period < 14
+} where env == "prod"
 ```
 
-`set env = "prod"` is what `--set env=prod` is on the command line. A
-name on the left of `in` asks whether a resource of that name is wanted;
-the deny holds when none is.
-
-`dform test` runs every test against an empty world; `dform test --generate` derives cases
-from the inputs' types and checks.
+`dform test` evaluates the program once for every combination of inputs
+the clause admits, against an empty world, and the denies must hold in
+each: an equality pins an input, an enum left free is enumerated, an
+`int` with a `check` gets its boundaries and samples. A plain `deny` in
+the program is policy, enforced on every real plan; a test's denies run
+only under `dform test` and never block a plan. A failure prints the
+inputs that produced it as `--set` flags, so it reproduces in one
+command.
 
 ## The tool
 
@@ -488,7 +491,7 @@ file alone, with no cloud access.
 "availability_zone", z)'` asks the fact store anything. `dform diff
 --since 2026-09-20` explains what changed between applies, and why.
 
-**test and check.** `dform test` runs the tests; `dform check --sarif`
+**test and check.** `dform test` runs the tests over the input space; `dform check --sarif`
 runs the policies for CI.
 
 **Stacks and deployments.** A project grows from one file to many
