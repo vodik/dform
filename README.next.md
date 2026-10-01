@@ -28,14 +28,16 @@ resource aws.vpc main {
   cidr_block = "10.0.0.0/16"
 }
 
+#| The availability zones, and the subnet index each gets.
+decl az(name: string, index: int)        # optional: inferred from the rows otherwise
 az("us-east-1a", 1)
 az("us-east-1b", 2)
 
-resource aws.subnet "private-${z}" {
+resource aws.subnet "private-${availability_zone}" {
   vpc_id = main.id
   cidr_block = inet.subnet(main.cidr_block, 8, n)
-  availability_zone = z
-} where az(z, n)
+  availability_zone
+} where az(availability_zone, n)
 ```
 
 ```
@@ -53,11 +55,15 @@ plan: 3 deformations (3 create)
   vpc_id = ?aws.vpc["main"].id
 ```
 
-The `az(..)` lines are facts: two rows in a table. The subnet block ends
-in a `where` clause, which makes it a rule: the clause is a query over
-the tables, and every answer is one subnet. `?` marks a value apply will
-learn, here the VPC's id. Add a third availability zone and a third
-subnet follows; nothing else changes.
+The `az(..)` lines are facts: two rows in a table. The `decl` above them
+names and types the columns; without it the types are inferred from the
+rows. The `#|` line is a doc comment, which the editor shows and policy
+can read. The subnet block ends in a `where` clause, which makes it a
+rule: the clause is a query over the tables, and every answer is one
+subnet; an entry that is only a name, `availability_zone`, takes the
+variable of that name. `?` marks a value apply will learn, here the
+VPC's id. Add a third availability zone and a third subnet follows;
+nothing else changes.
 
 ```bash
 dform -C examples/tour plan
@@ -307,9 +313,12 @@ A literal takes the type its position expects, as in Postgres:
 `cidr_block = "10.0.0.0/16"` is an `inet` because the schema says the
 attribute is one, and a literal that does not parse is an error at that
 line. Where no type is expected a string stays a string, and a computed
-one is parsed on purpose: `inet(text)`. `inet.subnet`, `inet.host`,
-`inet.contains`, `inet.overlaps` and `inet.prefix_len` are the network
-arithmetic; `ip`, `inet`, `int`, `string` are the parsers; `enum`, `list`, `set`, `ref(T)` and
+one is parsed on purpose: `inet(text)`. Types are inferred where they are not
+declared: a relation's columns from its facts and rules, a `let` from
+its value, a module output from its term; `decl` and annotations are
+for the edge, the docs and the editor, not for the checker's sake.
+`inet.subnet`, `inet.host`, `inet.contains`, `inet.overlaps` and
+`inet.prefix_len` are the network arithmetic; `ip`, `inet`, `int`, `string` are the parsers; `enum`, `list`, `set`, `ref(T)` and
 `secret(T)` are the other types. `type environment = enum("dev",
 "staging", "prod")` names one. A `check` refines any of them: `input
 replicas: int = 2 check 1 <= replicas <= 10` on an input,
