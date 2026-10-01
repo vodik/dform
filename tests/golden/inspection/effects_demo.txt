@@ -21,6 +21,7 @@ database.main:
     (db.postgres, public)
     (db.postgres, subnet_ids)
   offers:
+    iam_need: any
 
 identity.main:
   reads:
@@ -50,6 +51,7 @@ kubernetes.main:
     (k8s.nodepool, max)
     (k8s.nodepool, min)
   offers:
+    iam_need: any
 
 network.main:
   reads:
@@ -89,6 +91,7 @@ network.peer:
 
 stack:
   reads:
+    db.postgres.id
     db.postgres.multi_az
     extern table.yaml.stack.config
     iam.policy.id
@@ -98,6 +101,8 @@ stack:
     k8s.cluster.private_api
     net.vpc.cidr
     net.vpc.id
+    output database.main.iam_need
+    output kubernetes.main.iam_need
     output network.main.private_subnet_ids
     settings.db.backup_days
     settings.db.multi_az

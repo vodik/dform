@@ -1,12 +1,6 @@
 edition 2026
 #| The baseline every stack applies: a team tag, audit sinks, no public database.
 policy baseline {
-  # Grants are partition patterns: this pack writes .tags of every type,
-  # iam.policy's .statements and settings' .audit.sinks, and nothing else.
-  contributes t.tags
-  contributes iam.policy.statements
-  contributes settings.audit.sinks
-
   # Lattices for paths several authors contribute to. Object paths such as
   # `tags` are maps by default; a list is one value unless declared a set.
   type_lattice(iam.policy, "statements", "set")

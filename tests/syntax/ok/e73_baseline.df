@@ -1,10 +1,7 @@
 policy baseline {
-  # Grants are partition patterns: this pack sits above readers of .tags,
-  # of iam.policy's .statements and of settings' .audit.sinks, and may read
-  # every other attribute path.
-  contributes t.tags
-  contributes iam.policy.statements
-  contributes settings.audit.sinks
+  # Each head's constant type and path is its partition: this pack sits
+  # above readers of .tags, of iam.policy's .statements and of settings'
+  # .audit.sinks, and may read every other attribute path.
 
   arg(t, a_, "tags", { team: "platform" }) where want(t, a_)
 

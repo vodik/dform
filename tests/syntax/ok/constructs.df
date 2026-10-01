@@ -16,8 +16,6 @@ names(n) where project(network_name: n)
 
 module m {
   input on: bool
-  export on_vpc
-  contributes iam_need
 
   resource net.vpc vpc @default {
     cidr = "10.0.0.0/16"
@@ -35,7 +33,6 @@ module m {
 instance m main { on = true }
 
 policy p {
-  contributes t.tags
   arg(t, a_, "tags", { owner: "ops" }) @override where want(t, a_)
 }
 

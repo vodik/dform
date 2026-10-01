@@ -1,7 +1,7 @@
 exit: ok
 -- stdout --
-== examples/demo/stacks/dform.df: 172 nodes, 862 edges (613 negative)
-   STRATIFIED, 19 strata
+== examples/demo/stacks/dform.df: 174 nodes, 876 edges (625 negative)
+   STRATIFIED, 21 strata
    stratum 0:
      (arg, iam.policy, name)
      (arg, iam.role, assume)
@@ -183,13 +183,17 @@ exit: ok
      (attr, net.vpc, tags)
    stratum 16:
      (arg, k8s.nodepool, cluster_id)
+     (arg, output, iam_need)
      __ref_dep
-     iam_need
    stratum 17:
-     (arg, iam.policy, statements)
      (attr, k8s.nodepool, cluster_id)
-     __lc_3
+     (attr, output, iam_need)
    stratum 18:
+     iam_need
+   stratum 19:
+     (arg, iam.policy, statements)
+     __lc_3
+   stratum 20:
      (attr, iam.policy, statements)
      deny
      stuck

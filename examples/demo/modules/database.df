@@ -7,7 +7,6 @@ module database {
   input backup_days: int
   input multi_az: bool
   input subnet_ids: subnets
-  contributes iam_need
 
   resource db.postgres db {
     public = false
@@ -17,5 +16,5 @@ module database {
   }
 
   #| Only when the database exists in this environment.
-  iam_need("app", "db.connect", db.id) where has backup_days
+  output iam_need = { action: "db.connect", resource: db.id } where has backup_days
 }

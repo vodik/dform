@@ -9,11 +9,10 @@ tests/syntax/err/placeholder.df:14:1: `_` in the head of `e`: column 1 has no fi
 tests/syntax/err/placeholder.df:15:18: a resource is written by its name: `_` names nothing; name it, or bind the name in the clause (`resource T n { .. } where p(n)`)
 tests/syntax/err/placeholder.df:16:1: an instance is written by its name: `instance m _` names nothing
 tests/syntax/err/placeholder.df:17:1: `compute.vm[_]` is every resource of `compute.vm`: write `set r.tags = .. where r in compute.vm`
-tests/syntax/err/placeholder.df:19:3: `_` is a placeholder and is never accessed: name the type, `contributes t.tags` grants `.tags` on every type
-tests/syntax/err/placeholder.df:21:25: `cidr` is given `_`, which has no value
+tests/syntax/err/placeholder.df:18:25: `cidr` is given `_`, which has no value
   help: `_` is a placeholder and is never accessed: name it (`env.p`, `x`)
-tests/syntax/err/placeholder.df:22:10: `env` is a value in scope, but a header name the clause does not bind is the settings row's literal name: this is the settings row "env"
+tests/syntax/err/placeholder.df:19:10: `env` is a value in scope, but a header name the clause does not bind is the settings row's literal name: this is the settings row "env"
   help: write `settings _` for every row, or `"env"` for a settings row named "env"
-tests/syntax/err/placeholder.df:23:18: `env` is a value in scope, but a header name the clause does not bind is the resource's literal name: this is the resource "env"
+tests/syntax/err/placeholder.df:20:18: `env` is a value in scope, but a header name the clause does not bind is the resource's literal name: this is the resource "env"
   help: write `"env"` for a resource named "env"
-tests/syntax/err/placeholder.df:24:1: `env` is a value in scope, but an instance's name is literal: this is the instance m.env; name it otherwise
+tests/syntax/err/placeholder.df:21:1: `env` is a value in scope, but an instance's name is literal: this is the instance m.env; name it otherwise
