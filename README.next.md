@@ -100,6 +100,11 @@ output private_subnet_ids: list(ref(aws.subnet)) =
   [ s.id | s in aws.subnet, s.map_public_ip_on_launch == false ]
 ```
 
+`s in aws.subnet` ranges over every subnet the program wants, wherever
+it was declared; the brackets collect one `s.id` per match into a list.
+A subnet added in another module tomorrow is in this list without this
+line changing.
+
 **An attribute can have several authors.** A module sets a tag, a policy
 sets another, the environment's settings set a third. They merge per
 leaf by rank, `@default` below normal below `@override`. Two authors who
@@ -110,10 +115,17 @@ statements never matters.
 set r.tags.team = "platform" @default where r in resource
 ```
 
+`set` contributes to an attribute of something declared elsewhere; `r in
+resource` is every resource of every type. `@default` means any explicit
+`team` tag wins over this one. Ask for the merged result:
+
 ```
 $ dform query 'aws.vpc["network.main::vpc"].tags'
 {component: "network", env: "prod", team: "platform"}
 ```
+
+Three authors: the module wrote `component`, the environment's settings
+wrote `env`, this policy wrote `team`.
 
 **Policy adds as well as forbids.** The line above is a policy. So is
 this one, and both live in the same pack.
@@ -141,6 +153,10 @@ resource aws.iam_policy "connect-${host}" {
 } where db in aws.db_instance, host = db.endpoint
 ```
 
+One policy per database, named after its endpoint. `host = db.endpoint`
+needs the endpoint's text, which only exists once the database does, so
+how many policies there will be is not known until the first tick runs:
+
 ```
 pending groups:
 ? aws.iam_policy[?] x unknown, on ?aws.db_instance["orders"].endpoint, resolves after tick 1
@@ -151,29 +167,59 @@ a path of any length. Routes for every pair are three lines, and they
 stay correct as spokes come and go.
 
 ```dform
+hub("core")
+spoke("blue")
+spoke("green")
+
+link(h, s) where hub(h), spoke(s)
+link(s, h) where hub(h), spoke(s)
+
 reaches(a, b) where link(a, b)
 reaches(a, c) where reaches(a, b), link(b, c)
 
 resource aws.route "${a}-to-${b}" {
   route_table_id = aws.route_table[a].id
   destination_cidr_block = aws.vpc[b].cidr_block
-  transit_gateway_id = hub.id
+  transit_gateway_id = tgw.id
 } where reaches(a, b), a != b
 ```
 
+`link` is one hop, in both directions. `reaches` is the rule that uses
+itself: a path of any length. The route block then makes one route per
+reachable pair; `aws.route_table[a]` looks a resource up by name at run
+time, and `tgw` is the transit gateway declared elsewhere in the file.
+Add `spoke("red")` and every route to and from red appears.
+
 **The plan is a database.** Every fact has a derivation and you can ask
-for it, down to the line of source or the row of a CSV.
+for it, down to the line of source or the row of a table.
 
 ```
 $ dform why 'aws.route["blue-to-green"]'
-want("aws.route", "blue-to-green")
-  by r49: want("aws.route", Addr) :- reaches(A, B), A != B, ...
-  with A = "blue", B = "green"
+aws.route["blue-to-green"]
+  stacks/network.df:58  resource aws.route "${a}-to-${b}" { .. } where reaches(a, b), a != b
+  with a = "blue", b = "green"
   ├─ reaches("blue", "green")
-  │    by r48: reaches(A, C) :- reaches(A, B), link(B, C)
-  │    ...
-  │         ├─ spoke("blue")   fact, stacks/network.df:41:1
+  │    stacks/network.df:55  reaches(a, c) where reaches(a, b), link(b, c)
+  │    with a = "blue", b = "core", c = "green"
+  │    ├─ reaches("blue", "core")
+  │    │    stacks/network.df:54  reaches(a, b) where link(a, b)
+  │    │    └─ link("blue", "core")
+  │    │         stacks/network.df:52  link(s, h) where hub(h), spoke(s)
+  │    │         ├─ hub("core")      stacks/network.df:47
+  │    │         └─ spoke("blue")    stacks/network.df:48
+  │    └─ link("core", "green")
+  │         stacks/network.df:51  link(h, s) where hub(h), spoke(s)
+  │         ├─ hub("core")      stacks/network.df:47
+  │         └─ spoke("green")   stacks/network.df:49
+  └─ aws.vpc["network.green::vpc"].cidr_block = 10.2.0.0/16
+       merged from 1 contribution
+       └─ stacks/network.df:23  module network, instance green
 ```
+
+The answer is the program's own text at the lines that fired, with the
+variables as they were bound. The same question works for an attribute
+(`why 'aws.vpc["main"].tags.team'` shows every author and which rank
+won) and for a refusal (`why 'deny(m)'`).
 
 ## The language
 
@@ -208,6 +254,10 @@ import "modules/network.df"
 key env: enum("dev", "staging", "prod") = "dev"
 input az(name: string, index: int) from yaml("data/azs.yaml")
 ```
+
+(`cfg` is a `let` further down the file, the selected environment's
+settings. Nothing in a program is ordered, so the header may read what
+the body defines.)
 
 A stack is the unit of state and apply, and a file under `stacks/` is
 one, named after itself: this is `stacks/shop.df`, so `dform plan shop`.
@@ -290,8 +340,11 @@ instance network blue { cidr = inet("10.1.0.0/16") }
 instance network green { cidr = inet("10.2.0.0/16") } where env == "prod"
 ```
 
-A module's resource is addressed as `aws.vpc["network.blue::vpc"]`, the
-spelling the plan prints and every command accepts.
+The module takes one input and offers one output, its VPC. Inside, `vpc`
+is the module's own resource; `az(z, n)` is the stack's table, which a
+module reads like any fact. `green` exists only in prod. The module's
+VPC is addressed as `aws.vpc["network.blue::vpc"]` everywhere else, and
+another block reads it as `network.blue.vpc`.
 
 **Policies.** `policy baseline { .. }` is a pack of `set`, `deny` and
 `warn` statements; `use baseline` applies it. There is no grant to
@@ -306,6 +359,10 @@ scenario prod {
   deny "prod peers the two VPCs" where not "blue-green" in aws.vpc_peering_connection
 }
 ```
+
+`set env = "prod"` is what `--set env=prod` is on the command line. A
+name on the left of `in` asks whether a resource of that name is wanted;
+the deny holds when none is.
 
 `dform test` runs every scenario; `dform test --generate` derives cases
 from the inputs' types and checks.
@@ -336,7 +393,7 @@ creates, updates, deletes and replaces grouped by resource, what is
 pending on an unknown, what cannot be decided yet, conflicts, and the
 apply order by tick. `--json` for machines. `--why` prints under each
 change the rule and the base facts that caused it: "because
-`data/azs.csv:4`".
+`data/azs.yaml:3`".
 
 **apply** prints the plan and asks. It applies in ticks; at any tick that
 adds a resource the first plan could not name, it asks again, showing
