@@ -590,6 +590,11 @@ Storage (the s3 backend with an endpoint, which works today).
   The one new protocol call of the phase.
 - *R-46* The example and the rewrite of docs/ovh.org without the bridge,
   the bootstrap role and the controller.
+- *R-47* The real workloads (a Matrix homeserver, a Forgejo forge) are
+  private infrastructure in a separate project of the user's, consuming
+  dform as a binary and the OVH provider from the registry bucket; in
+  tree only what they need (`ovh.domain_record`, CRD types from the
+  cluster's OpenAPI, volumes, host-network ingress), tested under mocks.
 Cost: the control plane is free, one d2-4 node is about EUR 12/month.
 
 * Vocabulary
