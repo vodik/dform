@@ -454,7 +454,8 @@ each: an equality pins an input, an enum left free is enumerated, an
 the program is policy, enforced on every real plan; a test's denies run
 only under `dform test` and never block a plan. A failure prints the
 inputs that produced it as `--set` flags, so it reproduces in one
-command.
+command. `dform test shop env=prod` takes a target like `plan` and
+`apply` and pins the key, so only prod worlds run.
 
 ## The tool
 
@@ -555,7 +556,7 @@ or a function's definition, and the plan's action beside each resource.
 | routes from reachability | write them out, keep them in sync | a recursive rule |
 | a policy that sees inside modules | export every value as an output | policy reads any resource |
 | a /20 per team that never moves | a spreadsheet | `allocate`, pinned in state |
-| policies tested over every environment | one test per case | `dform test --generate` |
+| policies tested over every environment | one test per case | `dform test`, over the input space |
 | "can A reach B?" before apply | a separate tool, after the incident | `std.net` reachability as a query |
 | adopt four hundred existing subnets | one import block each | `dform import --match` with one rule |
 | prove an approved plan is what runs | trust | `dform verify plan.json` |
