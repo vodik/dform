@@ -177,9 +177,11 @@ plan: 1 deformation (1 create)
 Apply 1 new deformation to shop[env=prod]? [y/N]
 ```
 
-You never approve a count of "unknown". Strict mode (`unknowns =
-"strict"` in `dform.toml`) refuses any plan that would need a second
-tick, for stacks where a plan must be complete before anyone says yes.
+You never approve a count of "unknown". An unattended apply (`--yes`,
+or a plan file in CI) goes further only through ticks the plan
+enumerated; at a tick that would add something nobody printed, it stops
+with the state consistent and says to run apply again, which plans the
+rest with the real values in front of a reviewer.
 
 **Rules recurse.** Which VPCs can reach which, through a transit hub, is
 a path of any length. Routes for every pair are three lines, and they
@@ -290,15 +292,13 @@ A `key` is an input that selects the deployment: each value of `env` has
 its own state, `dform plan shop env=prod`. A provider line brings a
 provider's types and externs into scope and configures it. Imports bring
 in modules and policies. Inputs are the stack's interface. None of these
-may appear below the first rule. Where a stack's state lives, whether
-unknowns at plan time are refused, and who may approve a plan are
-operational, so they live in `dform.toml`, where `[stacks.shop]` is
+may appear below the first rule. Where a stack's state lives and who may
+approve a plan are operational, so they live in `dform.toml`, where `[stacks.shop]` is
 `stacks/shop.df`:
 
 ```toml
 [stacks.shop]
 backend = 's3("acme-state", "shop/{env}")'
-unknowns = "strict"
 approvals = 'jwks("https://sso.acme.example/keys")'
 ```
 
@@ -460,7 +460,9 @@ change the rule and the base facts that caused it: "because
 
 **apply** prints the plan and asks. It applies in ticks; at any tick that
 adds a resource the first plan could not name, it prints that tick's
-plan and asks again before changing anything. `--yes` for scripts. State is written after every
+plan and asks again before changing anything. `--yes` for scripts, which
+applies only the ticks the plan enumerated and stops before one that
+would add more, to be run again. State is written after every
 provider call, so an interrupted apply resumes where it stopped.
 `--parallel N` overlaps independent calls.
 
