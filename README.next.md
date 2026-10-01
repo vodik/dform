@@ -564,6 +564,65 @@ term for the selected deployment and who contributed it, jump to a type's
 or a function's definition, and the plan's action beside each resource.
 `dform fmt` has one normal form per construct.
 
+## From the VPC to the running service, in one project
+
+Infrastructure tools stop at the cluster and hand over to a second tool
+chain for what runs on it. dform does not have to, for two reasons that
+are already on this page: a value only apply learns is a value, so the
+cluster's endpoint can configure the Kubernetes provider in the same
+program that creates the cluster; and an attribute can have several
+authors, so a Kubernetes object is assembled the way kustomize assembles
+one, from a base and any number of overlays, except that the overlays
+are rules.
+
+```dform
+provider aws { region = cfg.region }
+provider kubernetes { endpoint = cluster.endpoint, ca = cluster.ca_certificate }
+
+resource aws.eks_cluster cluster { .. }
+
+resource k8s.namespace shop { metadata.name = "shop" }
+
+resource k8s.deployment api {
+  metadata.namespace = shop.metadata.name
+  spec.template.spec.containers = [{ name: "api", image: released_image }]
+}
+```
+
+Tick 1 makes the VPC and the cluster; the provider reads the endpoint;
+tick 2 makes the namespace and the deployment. One plan, one apply, one
+state, one `why`. The same policy pack that tags every VPC can set
+resource limits on every container, in every module, and the list is
+merged by the container's name, not its position:
+
+```dform
+set w.spec.template.spec.containers[name].resources.limits = { cpu: "1", memory: "512Mi" } @default
+  where w in k8s.deployment, c in w.spec.template.spec.containers, name = c.name
+```
+
+Deployments are rules too. A blue/green rollout is the release (a fact
+from git), the colour the live Service points at (a world fact), and
+three rules: run the migration Job for the release's schema, bring up
+the other colour once the Job has succeeded, switch the Service once
+every replica of the new colour is ready. Each step waits on a status
+field the cluster fills in, which is an unknown until it does, so each
+is its own tick and the plan says which:
+
+```dform
+migrated(v) where k8s.job["migrate-v${v}"].status.succeeded == 1
+run(rollout, released_image, schema) where migrated(schema)
+ready(c) where run(c, _, _), app[c].ready_replicas == app[c].total_replicas
+let serving = rollout where ready(rollout)
+```
+
+`examples/crud-api` is the whole thing: a database, its generated
+password as a secret the program never sees, the namespace with a
+default-deny network policy, the migration, the two colours, the
+cutover, and the invariants (no container without limits, no image
+without a digest, no public database) as denies. Run it in batch, or
+hand the stack over to the cluster it built and let `dform controller
+run` keep it true as releases land.
+
 ## What you cannot do elsewhere
 
 | You want | The usual workaround | In dform |
@@ -582,8 +641,9 @@ or a function's definition, and the plan's action beside each resource.
 
 ## Where next
 
-- `examples/tour`: the tutorial. Each other example under `examples/`
-  shows one thing; its README says which.
+- `examples/tour`: the tutorial. `examples/crud-api`: the Kubernetes
+  rollout above. Each other example under `examples/` shows one thing;
+  its README says which.
 - `docs/grammar.md`: the language, for reference.
 - `docs/reference.md`: every command and flag, state backends, keyed
   stacks, approvals, the audit log, the controller.
