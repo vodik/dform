@@ -17,7 +17,14 @@ join anything with anything, they can recurse, every derived row has a
 derivation, and the whole program is small enough to reason about.
 
 dform is that: infrastructure as facts and rules, with plan and apply,
-state, modules, policy, secrets and approvals built in. Here is a complete program, for an AWS provider.
+state, modules, policy, secrets and approvals built in. One model all
+the way through: what exists is a table, what you want is a table, the
+plan is the difference and is a table, and policy is rules over any of
+them. A rule can say "no database without backups" and, in the same
+breath, "no deletes in prod this week" and "a change to a security
+group needs a signature", because the change set is data the program
+sees before it is applied. Here is a complete program, for an AWS
+provider.
 
 ```dform
 edition 2026
