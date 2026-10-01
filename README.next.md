@@ -640,9 +640,12 @@ let cluster_endpoint = stacks.platform[env=env].endpoint          # this project
 let registry = stacks.acme.platform[env="prod"].registry_url      # remote acme's
 ```
 
-`dform plan` and `dform apply` with no target take the whole project and
-run its stacks in dependency order, each with its own confirmation and
-its own state. State is small: it maps each address to the object's
+The stack is the unit of partial work: `dform apply shop` applies the
+stacks shop reads from first, then shop, each with its own confirmation
+and state, and nothing that depends on shop; `dform apply` with no
+target is the whole project in dependency order. A plan of shop before
+platform is applied shows platform's outputs as unknowns, pending on
+that apply, the same way it shows a value the cloud has not produced. State is small: it maps each address to the object's
 remote id and records what the last apply saw; attribute values come
 from the provider on every plan, and no secret is ever written to it.
 It lives in a directory or an S3 bucket with conditional writes and a
