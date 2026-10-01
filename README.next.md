@@ -568,25 +568,21 @@ plain apply; an approver signs the digest and `apply --approval` carries
 the token. `prevent_destroy` below is the same mechanism with a
 shorter name.
 
-**Tests.** A test is a block of denies, named like a deny is, and the
-part of the input space they are about:
+**Testing.** There is no test syntax: the denies are the tests. `dform
+test` evaluates the program once for every combination of inputs, each
+key and enum enumerated, each `check` supplying its boundaries and
+samples, against an empty world, and every deny must hold in each. A
+deny that is about one environment says so in its own clause:
 
 ```dform
-test "prod network and backups" {
-  deny "prod peers the two VPCs" where not "blue-green" in aws.vpc_peering_connection
-  deny "prod keeps two weeks of backups" where db in aws.db_instance, db.backup_retention_period < 14
-} where env == "prod"
+deny "prod peers the two VPCs" where env == "prod", not "blue-green" in aws.vpc_peering_connection
+deny "dev has no database" where env == "dev", _ in aws.db_instance
 ```
 
-`dform test` evaluates the program once for every combination of inputs
-the clause admits, against an empty world, and the denies must hold in
-each: an equality pins an input, an enum left free is enumerated, an
-`int` with a `check` gets its boundaries and samples. A plain `deny` in
-the program is policy, enforced on every real plan; a test's denies run
-only under `dform test` and never block a plan. A failure prints the
-inputs that produced it as `--set` flags, so it reproduces in one
-command. `dform test shop env=prod` takes a target like `plan` and
-`apply` and pins the key, so only prod worlds run.
+The same denies block a real plan when they fire there. A failure
+prints the inputs that produced it as `--set` flags, so it reproduces
+in one command, and `dform test shop env=prod` takes a target like
+`plan` and `apply` and pins the key, so only prod worlds run.
 
 ## The tool
 
