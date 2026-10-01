@@ -250,3 +250,70 @@ fn a_denied_replace_is_a_section() {
     );
     assert!(r.stderr.contains("blocked by constraints"), "{}", r.stderr);
 }
+
+/// `--color always` paints the plan by its semantics (a create's `+`
+/// green, its address bold, a null cyan, the pending group in the warning
+/// colour); `never`, `NO_COLOR` under `auto`, and `--json` print none.
+/// What `plan` prints uncoloured is the text every golden has.
+#[test]
+fn color_is_a_rendering_of_the_same_text() {
+    let s = Scratch::new("sections-color");
+    let plain = gke(&s, &[], "plan").success().stdout;
+    assert!(!plain.contains('\x1b'), "{plain}");
+    let colored = |flag: &str| {
+        s.run(&common::on(
+            repo()
+                .join("examples/gke/stacks/gke_two_phase.df")
+                .to_str()
+                .unwrap(),
+            &["--provider", "gke", "--world", "w.json"],
+            &["plan", "--color", flag],
+        ))
+        .success()
+        .stdout
+    };
+    let always = colored("always");
+    for want in [
+        "\x1b[32m+\x1b[0m \x1b[1mgoogle_compute_subnetwork[\"gke_subnet\"]\x1b[0m\n",
+        "\x1b[1mdefinite:\x1b[0m\n",
+        "\x1b[36m?gke_cluster[\"pngu\"].zones\x1b[0m",
+        "\x1b[1;33m? gke_nodepool[?] x unknown",
+    ] {
+        assert!(always.contains(want), "{want:?}\n---\n{always:?}");
+    }
+    let stripped = strip_sgr(&always);
+    assert_eq!(stripped, plain);
+    assert_eq!(colored("never"), plain);
+    // `auto` on a pipe is plain; `--json` is plain under `always`.
+    assert_eq!(colored("auto"), plain);
+    let json = s
+        .run(&common::on(
+            repo()
+                .join("examples/gke/stacks/gke_two_phase.df")
+                .to_str()
+                .unwrap(),
+            &["--provider", "gke", "--world", "w.json"],
+            &["plan", "--json", "--color", "always"],
+        ))
+        .success()
+        .stdout;
+    assert!(!json.contains('\x1b'), "{json}");
+}
+
+/// `s` without its ANSI SGR sequences.
+fn strip_sgr(s: &str) -> String {
+    let mut out = String::new();
+    let mut it = s.chars().peekable();
+    while let Some(c) = it.next() {
+        if c == '\x1b' && it.peek() == Some(&'[') {
+            for d in it.by_ref() {
+                if d == 'm' {
+                    break;
+                }
+            }
+            continue;
+        }
+        out.push(c);
+    }
+    out
+}

@@ -148,6 +148,83 @@ impl Shown {
     }
 }
 
+/// How the report's text is painted: plain (what `text` returns, every
+/// golden, `--json` and the plan file never see colour), or ANSI colour by
+/// the plan's own semantics (`--color`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Style {
+    pub color: bool,
+}
+
+/// What a piece of the plan is, for its colour.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Paint {
+    /// `+`: green.
+    Create,
+    /// `~`: yellow.
+    Update,
+    /// `-`: red.
+    Delete,
+    /// `-/+` and `+/-`: magenta.
+    Replace,
+    /// A `?` null: cyan.
+    Null,
+    /// `(sensitive)`: dim.
+    Sensitive,
+    /// Conflicts and denies: red.
+    Error,
+    /// The pending-group line: the warning colour, bold yellow.
+    Warn,
+    /// Addresses, section headers, witness names: bold.
+    Bold,
+    /// `apply: complete`: bold green.
+    Done,
+}
+
+impl Style {
+    pub const PLAIN: Style = Style { color: false };
+
+    /// `s` in `p`'s colour; unchanged when plain.
+    pub fn paint(&self, p: Paint, s: &str) -> String {
+        if !self.color || s.is_empty() {
+            return s.to_string();
+        }
+        let sgr = match p {
+            Paint::Create => "32",
+            Paint::Update => "33",
+            Paint::Delete | Paint::Error => "31",
+            Paint::Replace => "35",
+            Paint::Null => "36",
+            Paint::Sensitive => "2",
+            Paint::Warn => "1;33",
+            Paint::Bold => "1",
+            Paint::Done => "1;32",
+        };
+        format!("\x1b[{sgr}m{s}\x1b[0m")
+    }
+
+    /// An action's marker in its kind's colour.
+    fn marker(&self, k: &ActionKind) -> String {
+        let p = match k {
+            ActionKind::Create | ActionKind::Adopt => Paint::Create,
+            ActionKind::Update | ActionKind::Drift | ActionKind::Pending => Paint::Update,
+            ActionKind::Delete | ActionKind::DeleteDeposed => Paint::Delete,
+            ActionKind::Replace { .. } => Paint::Replace,
+            ActionKind::Noop => return marker_of(k).to_string(),
+        };
+        self.paint(p, marker_of(k))
+    }
+
+    /// One side of a change: a null cyan, a sensitive value dim.
+    fn shown(&self, v: &Shown) -> String {
+        match v {
+            Shown::Null { .. } => self.paint(Paint::Null, &v.text()),
+            Shown::Sensitive(_) => self.paint(Paint::Sensitive, &v.text()),
+            _ => v.text(),
+        }
+    }
+}
+
 /// What a deformation waits on: a boundary (the evaluator's sections), or
 /// a comparison against an open null (the Z-set's pending update). `None`
 /// when it is definite.
@@ -784,10 +861,15 @@ fn element_of(typ: &str, path: &str, schema: &Schema) -> Option<(String, String,
 
 /// The deformations a later tick's plan holds that no earlier one listed,
 /// before apply asks about them: `new at tick N:` and one line each.
-pub fn new_text(tick: usize, new: &[&Action]) -> String {
-    let mut out = format!("new at tick {tick}:\n");
+pub fn new_text(tick: usize, new: &[&Action], style: Style) -> String {
+    let mut out = style.paint(Paint::Bold, &format!("new at tick {tick}:"));
+    out.push('\n');
     for a in new {
-        out.push_str(&format!("  {} {}\n", marker_of(&a.kind), a.addr));
+        out.push_str(&format!(
+            "  {} {}\n",
+            style.marker(&a.kind),
+            style.paint(Paint::Bold, &a.addr.to_string())
+        ));
     }
     out
 }
@@ -819,9 +901,9 @@ fn kind_name(k: &ActionKind) -> &'static str {
     }
 }
 
-fn nulls_text(on: &[String]) -> String {
+fn nulls_text(on: &[String], style: Style) -> String {
     on.iter()
-        .map(|n| format!("?{}", crate::ir::label(n)))
+        .map(|n| style.paint(Paint::Null, &format!("?{}", crate::ir::label(n))))
         .collect::<Vec<_>>()
         .join(" ")
 }
@@ -882,7 +964,16 @@ impl Report {
         out
     }
 
+    /// The report as text, uncoloured: what `plan` prints with no colour,
+    /// every golden, and the controller's log line.
     pub fn text(&self) -> String {
+        self.render(Style::PLAIN)
+    }
+
+    /// The report as text, painted with `style`.
+    pub fn render(&self, style: Style) -> String {
+        let bold = |s: &str| style.paint(Paint::Bold, s);
+        let header = |s: &str| format!("{}\n", bold(s));
         let mut out = moved_text(&self.moved);
         if self.undeformed && !self.show_noop {
             out.push_str(&format!("stack {} is undeformed\n", self.stack));
@@ -891,9 +982,9 @@ impl Report {
         out.push_str(&self.summary());
         out.push('\n');
         if !self.definite.is_empty() {
-            out.push_str("definite:\n");
+            out.push_str(&header("definite:"));
             for d in &self.definite {
-                write_deformation(&mut out, d);
+                write_deformation(&mut out, d, style);
             }
         }
         for b in &self.pending {
@@ -901,28 +992,35 @@ impl Report {
                 .resolves_after
                 .map(|t| format!(" (resolves after tick {t})"))
                 .unwrap_or_default();
-            out.push_str(&format!("pending on {}{after}:\n", nulls_text(&b.on)));
+            out.push_str(&format!(
+                "{} {}{}\n",
+                bold("pending on"),
+                nulls_text(&b.on, style),
+                bold(&format!("{after}:"))
+            ));
             for d in &b.deformations {
-                write_deformation(&mut out, d);
+                write_deformation(&mut out, d, style);
             }
         }
         if !self.groups.is_empty() {
-            out.push_str("pending groups:\n");
+            out.push_str(&header("pending groups:"));
             for g in &self.groups {
                 let after = g
                     .resolves_after
                     .map(|t| format!(", resolves after tick {t}"))
                     .unwrap_or_default();
-                out.push_str(&format!(
-                    "? {} x unknown, on {}{after}  ({})\n",
+                let line = format!(
+                    "? {} x unknown, on {}{after}  ({})",
                     g.pattern,
-                    nulls_text(&g.on),
+                    nulls_text(&g.on, Style::PLAIN),
                     g.reason
-                ));
+                );
+                out.push_str(&style.paint(Paint::Warn, &line));
+                out.push('\n');
             }
         }
         if !self.policies.is_empty() {
-            out.push_str("undetermined:\n");
+            out.push_str(&header("undetermined:"));
             for p in &self.policies {
                 let when = match (p.may_derive, p.after) {
                     (false, Some(t)) => format!(", decided after tick {t}"),
@@ -933,7 +1031,7 @@ impl Report {
                 if p.refinement {
                     out.push_str(&format!(
                         "? refinement on {} deferred: {}{when}\n",
-                        nulls_text(&p.on),
+                        nulls_text(&p.on, style),
                         p.message
                     ));
                     continue;
@@ -941,7 +1039,7 @@ impl Report {
                 out.push_str(&format!(
                     "? deny \"{}\" on {}{when}  ({})\n",
                     p.message,
-                    nulls_text(&p.on),
+                    nulls_text(&p.on, style),
                     p.reason
                 ));
             }
@@ -950,33 +1048,45 @@ impl Report {
             if ds.is_empty() {
                 continue;
             }
-            out.push_str(&format!("{title}:\n"));
+            let conflict = title == "conflicts";
+            let error = |s: &str| match conflict {
+                true => style.paint(Paint::Error, s),
+                false => s.to_string(),
+            };
+            out.push_str(&header(&error(&format!("{title}:"))));
             for d in ds {
                 let rank = d
                     .rank
                     .as_ref()
                     .map(|r| format!(" at rank {r}"))
                     .unwrap_or_default();
-                out.push_str(&format!("! {}{rank}: {}\n", d.addr.attr(&d.path), d.reason));
+                out.push_str(&error(&format!(
+                    "! {}{rank}: {}",
+                    d.addr.attr(&d.path),
+                    d.reason
+                )));
+                out.push('\n');
                 for (r, v, from) in &d.witnesses {
                     let from = if from.is_empty() {
                         String::new()
                     } else {
-                        format!("  from {}", from.join("; "))
+                        let names: Vec<String> = from.iter().map(|f| bold(f)).collect();
+                        format!("  from {}", names.join("; "))
                     };
-                    out.push_str(&format!("    {r} {}{from}\n", v.text()));
+                    out.push_str(&format!("    {r} {}{from}\n", style.shown(v)));
                 }
             }
         }
         if !self.denies.is_empty() {
-            out.push_str("denied:\n");
+            out.push_str(&header(&style.paint(Paint::Error, "denied:")));
             for d in &self.denies {
-                out.push_str(&format!("! {d}\n"));
+                out.push_str(&style.paint(Paint::Error, &format!("! {d}")));
+                out.push('\n');
             }
         }
         if !self.ticks.is_empty() || !self.unscheduled.is_empty() {
             // One address per line, so each pastes into `why` or a program.
-            out.push_str("apply order:\n");
+            out.push_str(&header("apply order:"));
             let unscheduled = (!self.unscheduled.is_empty())
                 .then(|| ("unscheduled".to_string(), &self.unscheduled));
             let ticks = self.ticks.iter().map(|(t, xs)| (format!("tick {t}"), xs));
@@ -1134,7 +1244,7 @@ fn diag_json(d: &Diag) -> Json {
     })
 }
 
-fn write_deformation(out: &mut String, d: &Deformation) {
+fn write_deformation(out: &mut String, d: &Deformation, style: Style) {
     let note = match d.kind {
         ActionKind::Drift => {
             "  (drift: a fresh null where the world has a value; its identity is stale)"
@@ -1143,7 +1253,11 @@ fn write_deformation(out: &mut String, d: &Deformation) {
         ActionKind::Replace { .. } => "  (replace)",
         _ => "",
     };
-    out.push_str(&format!("{} {}{note}\n", marker_of(&d.kind), d.addr));
+    out.push_str(&format!(
+        "{} {}{note}\n",
+        style.marker(&d.kind),
+        style.paint(Paint::Bold, &d.addr.to_string())
+    ));
     // Keep plan output readable.
     let max = 40usize;
     for (i, l) in d.lines.iter().enumerate() {
@@ -1151,20 +1265,21 @@ fn write_deformation(out: &mut String, d: &Deformation) {
             out.push_str(&format!("  ... ({} more changes)\n", d.lines.len() - max));
             break;
         }
-        write_line(out, &d.kind, l, "  ");
+        write_line(out, &d.kind, l, "  ", style);
     }
 }
 
-fn write_line(out: &mut String, kind: &ActionKind, l: &Line, indent: &str) {
+fn write_line(out: &mut String, kind: &ActionKind, l: &Line, indent: &str, style: Style) {
+    let shown = |v: &Shown| style.shown(v);
     match l.op {
         Op::Add | Op::Remove => {
             let (sign, v) = if l.op == Op::Add {
-                ("+", &l.after)
+                (style.paint(Paint::Create, "+"), &l.after)
             } else {
-                ("-", &l.before)
+                (style.paint(Paint::Delete, "-"), &l.before)
             };
             if l.leaves.is_empty() {
-                out.push_str(&format!("{indent}{sign} {} = {}\n", l.path, v.text()));
+                out.push_str(&format!("{indent}{sign} {} = {}\n", l.path, shown(v)));
                 return;
             }
             out.push_str(&format!("{indent}{sign} {}\n", l.path));
@@ -1174,15 +1289,15 @@ fn write_line(out: &mut String, kind: &ActionKind, l: &Line, indent: &str) {
                 ActionKind::Delete
             };
             for x in &l.leaves {
-                write_line(out, &inner, x, &format!("{indent}    "));
+                write_line(out, &inner, x, &format!("{indent}    "), style);
             }
         }
         Op::Leaf => match kind {
             ActionKind::Create | ActionKind::Adopt => {
-                out.push_str(&format!("{indent}{} = {}\n", l.path, l.after.text()))
+                out.push_str(&format!("{indent}{} = {}\n", l.path, shown(&l.after)))
             }
             ActionKind::Delete | ActionKind::DeleteDeposed => {
-                out.push_str(&format!("{indent}{} was {}\n", l.path, l.before.text()))
+                out.push_str(&format!("{indent}{} was {}\n", l.path, shown(&l.before)))
             }
             ActionKind::Update
             | ActionKind::Drift
@@ -1190,8 +1305,8 @@ fn write_line(out: &mut String, kind: &ActionKind, l: &Line, indent: &str) {
             | ActionKind::Replace { .. } => out.push_str(&format!(
                 "{indent}{}: {} -> {}\n",
                 l.path,
-                l.before.text(),
-                l.after.text()
+                shown(&l.before),
+                shown(&l.after)
             )),
             ActionKind::Noop => {}
         },

@@ -768,6 +768,15 @@ production stacks (`dform.df` is strict); `permissive`, the default, is for
 controller mode and iterative development, where a two-phase plan applies
 tick by tick.
 
+Colour: `--color auto|always|never` (global; `auto`, the default, colours
+when stdout is a terminal and `NO_COLOR` is unset; errors on stderr
+likewise) paints the plan by its semantics: `+` green, `~` yellow, `-` red,
+`-/+` and `+/-` magenta, a `?` null cyan, `(sensitive)` dim, addresses and
+section headers bold, conflicts and denies red with the witnesses' names
+bold, a pending group's line in the warning colour (bold yellow); apply's
+question and `apply: complete` likewise. `--json` and the plan file are
+never coloured.
+
 `plan --json` prints the same report as one JSON document, the thing CI and
 editors consume: `stack`, `undeformed`, a `summary` of counts, then the
 sections as arrays in the order above (`definite`, `pending`,

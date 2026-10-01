@@ -85,6 +85,36 @@ struct Inputs {
     /// A sink that fails is a warning; the local log is authoritative.
     #[arg(long = "audit-sink", global = true)]
     audit_sink: Option<String>,
+
+    /// Colour the plan and errors: auto (when the output is a terminal and
+    /// NO_COLOR is unset), always, never. `--json` and the plan file are
+    /// never coloured.
+    #[arg(long = "color", global = true, value_enum, default_value_t = ColorWhen::Auto)]
+    color: ColorWhen,
+}
+
+/// `--color`.
+#[derive(clap::ValueEnum, Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum ColorWhen {
+    #[default]
+    Auto,
+    Always,
+    Never,
+}
+
+impl ColorWhen {
+    /// Colour output to a stream that is a terminal (`terminal`) or not:
+    /// `auto` colours a terminal unless NO_COLOR is set (non-empty).
+    fn style(self, terminal: bool) -> plan_print::Style {
+        let no_color = std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty());
+        plan_print::Style {
+            color: match self {
+                ColorWhen::Always => true,
+                ColorWhen::Never => false,
+                ColorWhen::Auto => terminal && !no_color,
+            },
+        }
+    }
 }
 
 /// The mock's flags: `dform dev [FLAGS] COMMAND`.
@@ -485,6 +515,8 @@ struct Cli {
     manifest: Option<crate::project::Manifest>,
     inventory: Option<PathBuf>,
     audit_sink: Option<String>,
+    /// How plan text is painted on stdout (`--color`).
+    style: plan_print::Style,
 }
 
 /// What a run does.
@@ -591,6 +623,7 @@ pub fn main(
         panic!("internal: cli::main runs once per process");
     }
     let args = Args::parse_from(args);
+    let color = args.inputs.color;
     let result = match &args.cmd {
         Command::ServeProvider { name } => serve_provider(name),
         Command::Lsp => dform_lsp::serve_stdio(dform_lsp::Options {
@@ -603,10 +636,8 @@ pub fn main(
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(e) => {
             use std::io::IsTerminal;
-            eprint!(
-                "{}",
-                crate::diag::report(&e, std::io::stderr().is_terminal())
-            );
+            let color = color.style(std::io::stderr().is_terminal()).color;
+            eprint!("{}", crate::diag::report(&e, color));
             std::process::ExitCode::FAILURE
         }
     }
@@ -726,6 +757,10 @@ fn resolve(args: Args) -> Result<Cli> {
         manifest: None,
         inventory: mock.inventory,
         audit_sink: inputs.audit_sink,
+        style: {
+            use std::io::IsTerminal;
+            inputs.color.style(std::io::stdout().is_terminal())
+        },
     };
     if let Cmd::Apply { chaos, .. } = &mut cli.cmd {
         *chaos = mock.chaos;
@@ -1446,7 +1481,7 @@ fn run_with(
                 denies: &[String]| {
         print!(
             "{}",
-            report_of(plan, res, sections, tick, moved, denies).text()
+            report_of(plan, res, sections, tick, moved, denies).render(cli.style)
         )
     };
     // `apply PLAN`: the delta re-evaluated at each tick must be the file's.
@@ -1697,7 +1732,7 @@ fn run_with(
                 }
                 println!("{}", serde_json::to_string_pretty(&j)?);
             } else {
-                print!("{}", report.text());
+                print!("{}", report.render(cli.style));
                 // What needs an approval, and the digest to approve; a
                 // plan file's digest is on stderr beside its path.
                 if let Some(f) = file.as_ref().filter(|f| !f.needs_approval.is_empty()) {
@@ -1995,7 +2030,7 @@ fn run_with(
                     let report = report_of(&plan, &res, &sections, tick, &[], &denies);
                     if !report.undeformed {
                         let n = report.deformations() + report.pending_count();
-                        confirm(n, false, &deployment, tick)?;
+                        confirm(n, false, &deployment, tick, cli.style)?;
                     }
                 }
                 // A later tick whose plan holds an address no earlier one
@@ -2017,8 +2052,8 @@ fn run_with(
                         })
                         .collect();
                     if !new.is_empty() {
-                        print!("{}", plan_print::new_text(tick, &new));
-                        confirm(new.len(), true, &deployment, tick)?;
+                        print!("{}", plan_print::new_text(tick, &new, cli.style));
+                        confirm(new.len(), true, &deployment, tick, cli.style)?;
                     }
                 }
                 listed.extend(addresses.into_iter().cloned());
@@ -2229,7 +2264,10 @@ fn run_with(
                             &backend.stored_world(&backend.observe(&st)?),
                         )?;
                     } else if changed || tick > 1 {
-                        println!("apply: complete");
+                        println!(
+                            "{}",
+                            cli.style.paint(plan_print::Paint::Done, "apply: complete")
+                        );
                     } else {
                         println!("apply: nothing to do");
                     }
@@ -2524,7 +2562,13 @@ fn run_controller(cli: Cli) -> Result<()> {
 /// Ask on the terminal whether to apply `n` deformations (`new` ones, at
 /// a later tick) to `deployment` at `tick`: only `y` or `yes` proceeds.
 /// With no terminal to ask on, a refusal naming `--yes`, never a wait.
-fn confirm(n: usize, new: bool, deployment: &str, tick: usize) -> Result<()> {
+fn confirm(
+    n: usize,
+    new: bool,
+    deployment: &str,
+    tick: usize,
+    style: plan_print::Style,
+) -> Result<()> {
     use std::io::{BufRead, IsTerminal, Write};
     let stdin = std::io::stdin();
     if !stdin.is_terminal() {
@@ -2535,7 +2579,8 @@ fn confirm(n: usize, new: bool, deployment: &str, tick: usize) -> Result<()> {
     }
     let s = if n == 1 { "" } else { "s" };
     let new = if new { "new " } else { "" };
-    print!("Apply these {n} {new}deformation{s} to {deployment}? [y/N] ");
+    let ask = format!("Apply these {n} {new}deformation{s} to {deployment}?");
+    print!("{} [y/N] ", style.paint(plan_print::Paint::Bold, &ask));
     std::io::stdout().flush()?;
     let mut answer = String::new();
     stdin.lock().read_line(&mut answer)?;
