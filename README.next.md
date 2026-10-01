@@ -94,7 +94,7 @@ running it, no policy you can prove.
 
 In dform a resource block is a rule. Its clause is a query; its
 attributes are contributions to cells that other rules may also write.
-That is the whole difference, and six things fall out of it.
+That is the whole difference, and seven things fall out of it.
 
 **Every rule sees every resource.** A rule can read any resource in the
 program, in any module, declared before or after it. That is what
@@ -252,6 +252,31 @@ the statement with what it became: the interpolated name, each lookup,
 each read, a value still unknown as its `?` label. The same question works for an attribute
 (`why 'aws.vpc["main"].tags.team'` shows every author and which rank
 won) and for a refusal (`why 'deny(m)'`).
+
+**The plan is a table too.** Once the difference between program and
+world is computed, it goes back into the program as rows,
+`deformation(kind, type, address, before)`, one per change, and the
+program's own rules run over them before anything is applied. A
+program polices its own change set:
+
+```dform
+deny "no deletes in prod" { resource: a } where env == "prod", deformation("delete", t, a, _)
+warn "replacing a database" { db: a } where deformation("replace", aws.db_instance, a, _)
+requires_approval(d, "a security group changed") where deformation(_, aws.security_group, a, _), d = "aws.security_group[\"${a}\"]"
+```
+
+```
+$ dform query 'deformation(k, t, a, _)'
+k         t                   a
+"create"  "aws.subnet"        "private-us-east-1c"
+"update"  "aws.security_group" "api"
+(2 rows)
+```
+
+Terraform teams build this out of plan JSON, a policy engine and a CI
+step; here it is three lines in the same file as the resources, with
+the same `why`. The lifecycle rules in the tool section are written
+this way, and so is "needs approval".
 
 ## The language
 
@@ -725,6 +750,7 @@ without a digest, no public database) as denies.
 | a resource per value only apply knows | `-target`, then a second run by hand | a pending group; apply runs a second tick |
 | a tag on everything, overridable per resource | a variable threaded through every module | `set r.tags.team = "platform" @default where r in resource` |
 | "why does this exist?" | read the source, guess | `dform why ADDR` |
+| rules about the change set itself | plan JSON through an external policy engine | `deformation(..)` rows the program's own denies read |
 | routes from reachability | write them out, keep them in sync | a recursive rule |
 | a policy that sees inside modules | export every value as an output | policy reads any resource |
 | a /20 per team that never moves | a spreadsheet | `allocate`, pinned in state |
