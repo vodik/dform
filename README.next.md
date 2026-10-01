@@ -60,12 +60,13 @@ learn, here the VPC's id. Add a third availability zone and a third
 subnet follows; nothing else changes.
 
 ```bash
-cargo run -- -C examples/tour plan
+dform -C examples/tour plan
 ```
 
 The examples in this repository run on a fake cloud built into dform, so
-they work from a clean clone with no credentials. `examples/tour` is a
-tutorial you read top to bottom.
+they work from a clean clone with no credentials (`cargo install --path
+.` puts `dform` on your path; in a checkout, `cargo run --` does the
+same). `examples/tour` is a tutorial you read top to bottom.
 
 ## It looks like Terraform, on purpose
 
