@@ -65,18 +65,24 @@ here the VPC's id. The `#|` line is a doc comment, which the editor
 shows and policy can read. When the region gains a
 zone, the next plan has one more subnet; nothing in the file changes.
 
-One model all the way through: what exists is a table, what you want
-is a table, the plan is the difference and is a table, and policy is
-rules over any of them. These three lines go in the same file:
+## One model
+
+What exists is a table, what you want is a table, the plan is the
+difference and is a table, and policy is rules over any of them. These
+three lines go in the same file as the resources:
 
 ```dform
 deny "every database has backups" where db in aws.db_instance, db.backup_retention_period < 7
-deny "no deletes in prod" where env == "prod", deformation("delete", _, _, _)
-requires_approval(d, "security group changed") where deformation(_, aws.security_group, a, _), d = "aws.security_group[\"${a}\"]"
+deny "no deletes in prod" where env == "prod", deformation("delete", _, _)
+requires_approval(sg, "security group changed") where deformation(_, sg, _), sg in aws.security_group
 ```
 
-The first is about what will exist; the other two are about the change
-itself, which the program sees as rows before anything is applied.
+The first is about what will exist. The other two are about the change
+itself: once the plan is computed, each change is a row,
+`deformation(kind, resource, before)`, the program's rules run over
+those rows, and only then is anything applied. A policy can refuse a
+change, warn about it, or demand a signature on the plan, and `why`
+explains any of those the way it explains a subnet.
 
 ```bash
 dform -C examples/tour plan
@@ -161,21 +167,22 @@ refuses the plan and prints them; `warn` reports and goes on.
 
 **The plan is a table too.** Once the difference between program and
 world is computed, it goes back into the program as rows,
-`deformation(kind, type, address, before)`, one per change, and the
-program's own rules run over them before anything is applied. A
-program polices its own change set:
+`deformation(kind, resource, before)`, one per change, with the
+resource as a reference like any other, and the program's own rules
+run over them before anything is applied. A program polices its own
+change set:
 
 ```dform
-deny "no deletes in prod" { resource: a } where env == "prod", deformation("delete", t, a, _)
-warn "replacing a database" { db: a } where deformation("replace", aws.db_instance, a, _)
-requires_approval(d, "a security group changed") where deformation(_, aws.security_group, a, _), d = "aws.security_group[\"${a}\"]"
+deny "no deletes in prod" { resource: r } where env == "prod", deformation("delete", r, _)
+warn "replacing a database" { db } where deformation("replace", db, _), db in aws.db_instance
+requires_approval(sg, "a security group changed") where deformation(_, sg, _), sg in aws.security_group
 ```
 
 ```
-$ dform query 'deformation(k, t, a, _)'
-k         t                   a
-"create"  "aws.subnet"        "private-us-east-1c"
-"update"  "aws.security_group" "api"
+$ dform query 'deformation(k, r, _)'
+k         r
+"create"  aws.subnet["private-us-east-1c"]
+"update"  aws.security_group["api"]
 (2 rows)
 ```
 
@@ -523,13 +530,14 @@ never overrides what you wrote; and `why` names the author of every
 value.
 
 Policy also reads the plan itself. Once the plan is computed its
-changes go back into the program as facts, `deformation(kind, type,
-address, before)`, and a policy can refuse, warn, or demand a signature:
+changes go back into the program as facts, `deformation(kind,
+resource, before)`, and a policy can refuse, warn, or demand a
+signature:
 
 ```dform
-deny "no deletes in prod" { resource: a } where env == "prod", deformation("delete", t, a, _)
+deny "no deletes in prod" { resource: r } where env == "prod", deformation("delete", r, _)
 
-requires_approval(d, "a replace in prod") where env == "prod", deformation("replace", t, a, _), d = "${t}[\"${a}\"]"
+requires_approval(r, "a replace in prod") where env == "prod", deformation("replace", r, _)
 ```
 
 `requires_approval` rows make the plan print its digest and refuse a
@@ -584,12 +592,17 @@ provider call, so an interrupted apply resumes where it stopped.
 so policy can read them and `why` can explain them:
 
 ```dform
-moved(aws.vpc, "network.main::vpc", "network.core::vpc")   # renamed: state follows, nothing is replaced
-adopt(aws.vpc, "legacy", "vpc-0a1b2c")                      # exists already: take it over, no create
-lifecycle(aws.db_instance, "orders", "prevent_destroy")     # a delete or replace is a deny
-lifecycle(aws.eks_node_group, "main", "create_before_destroy")  # a replace builds the new one first
-ignore_changes(aws.instance, "bastion", "tags.last_scan")   # set on create, then the world's value stands
+moved(aws.vpc, "network.main::vpc", core_vpc)       # renamed: state follows, nothing is replaced
+adopt(legacy, "vpc-0a1b2c")                          # exists already: take it over, no create
+lifecycle(orders, "prevent_destroy")                 # a delete or replace is a deny
+lifecycle(nodes, "create_before_destroy")            # a replace builds the new one first
+ignore_changes(bastion, "tags.last_scan")            # set on create, then the world's value stands
+lifecycle(db, "prevent_destroy") where env == "prod", db in aws.db_instance   # every prod database
 ```
+
+A resource in scope is named by its name, and a rule reaches many with
+`in`; only `moved` takes the old address as text, because that resource
+no longer exists.
 
 A rename is a `moved` fact, kept or deleted later; the plan prints the
 move and applies nothing for it. Which way a replace goes is the
