@@ -138,7 +138,13 @@ running it, no policy you can prove.
 
 In dform a resource block is a rule. Its clause is a query; its
 attributes are contributions to cells that other rules may also write.
-That is the whole difference, and seven things fall out of it.
+That is the whole difference, and seven things fall out of it. One more
+is worth saying up front: the same properties make dform easy for a
+model to draft. There is one way to spell each thing, every statement
+is right or wrong on its own with nothing to simulate, and the mistakes
+a draft makes, a variable bound once, two values for one cell, a
+literal of the wrong type, are compile errors rather than surprises at
+apply.
 
 **Every rule sees every resource.** A rule can read any resource in the
 program, in any module, declared before or after it. That is what
@@ -754,20 +760,20 @@ without a digest, no public database) as denies.
 
 ## What you cannot do elsewhere
 
-| You want | The usual workaround | In dform |
-|---|---|---|
-| a resource per value only apply knows | `-target`, then a second run by hand | a pending group; apply runs a second tick |
-| a tag on everything, overridable per resource | a variable threaded through every module | `set r.tags.team = "platform" @default where r in resource` |
-| "why does this exist?" | read the source, guess | `dform why ADDR` |
-| rules about the change set itself | plan JSON through an external policy engine | `deformation(..)` rows the program's own denies read |
-| routes from reachability | write them out, keep them in sync | a recursive rule |
-| a policy that sees inside modules | export every value as an output | policy reads any resource |
-| a /20 per team that never moves | a spreadsheet | `allocate`, pinned in state |
-| policies tested over every environment | one test per case | `dform test`, over the input space |
-| "can A reach B?" before apply | a separate tool, after the incident | `std.net` reachability as a query |
-| adopt four hundred existing subnets | one import block each | `dform import --match` with one rule |
-| prove an approved plan is what runs | trust | `dform verify plan.json` |
-| a secret that never hits disk | `sensitive = true`, and hope | a label the compiler tracks |
+|You want                                     |The usual workaround                       |In dform                                                   |
+|---------------------------------------------|-------------------------------------------|-----------------------------------------------------------|
+|a resource per value only apply knows        |`-target`, then a second run by hand       |a pending group; apply runs a second tick                  |
+|a tag on everything, overridable per resource|a variable threaded through every module   |`set r.tags.team = "platform" @default where r in resource`|
+|"why does this exist?"                       |read the source, guess                     |`dform why ADDR`                                           |
+|rules about the change set itself            |plan JSON through an external policy engine|`deformation(..)` rows the program's own denies read       |
+|routes from reachability                     |write them out, keep them in sync          |a recursive rule                                           |
+|a policy that sees inside modules            |export every value as an output            |policy reads any resource                                  |
+|a /20 per team that never moves              |a spreadsheet                              |`allocate`, pinned in state                                |
+|policies tested over every environment       |one test per case                          |`dform test`, over the input space                         |
+|"can A reach B?" before apply                |a separate tool, after the incident        |`std.net` reachability as a query                          |
+|adopt four hundred existing subnets          |one import block each                      |`dform import --match` with one rule                       |
+|prove an approved plan is what runs          |trust                                      |`dform verify plan.json`                                   |
+|a secret that never hits disk                |`sensitive = true`, and hope               |a label the compiler tracks                                |
 
 ## Where next
 
