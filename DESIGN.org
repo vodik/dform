@@ -128,6 +128,233 @@ fitness there before multi-cloud. D's =Database= CRD example is the seed.
 F F13: wrong param key. Also the motivating case for the undefined-predicate
 and unused-input checks.
 
+* Review of 2026-10-01: decisions
+A whole-project review after the fan-out that landed H (246 commits, 203 of
+them on 2026-09-28). Verified: the workspace builds, the suite passes, both
+gate plans run in 0.2s, the tour runs end to end (plan, apply, two-tick prod
+apply, why, query, strata). The core (E as revised by F, surface H) is
+sound and the code implements it. What follows are the decisions taken from
+the review's findings; the tickets are in WORK.org under "Phase 9". Each
+record is numbered R-N; tickets cite them.
+
+** R-1 The clause comes after the head, and the word is =where=
+*Context.* H-3 made =if= the one clause word and put it first inside a
+block. =if= reads as a boolean guard, so a generator (=if zone(z, n)=) reads
+wrong; =for= reads as a loop, so a rule (=p(x) for q(x)=) reads wrong; and
+the clause-first block is the one statement whose shape hides that the
+block is the head of a rule, while its header names variables the reader
+has not seen yet. =:-= is honest but is the token a Terraform reader
+closes the file on, and =where= loses nothing against it.
+*Decision.* Every statement is =head where body=; a block is a head:
+=resource T n { .. } where B=, =settings n { .. } where B=, =instance m i {
+.. } where B=, =p(x) where q(x)=, =deny "m" where B=, =let k = t where B=,
+=set R.p = t where B=, =output k: T = t where B=. A multi-line body is
+=} where { lit NL lit }=. =if= is gone. Refinements change word so that
+=where= has one meaning: =input replicas: int check 1 <= replicas <= 10=,
+=db.backup_days: int check ..=, and =type_refine= keeps its name.
+*Not taken.* =for= (a second word for blocks), =:-= (audience), keeping
+=if= with the trailing position (the position is the larger problem, but
+the word was free to fix in the same landing).
+*Consequences.* One landing rewrites lexer, parser, resolver, fmt,
+tree-sitter, the Emacs mode, the LSP, every =.df=, docs/grammar.md and the
+README; every golden plan is byte-identical. The tour's section 3 text
+("the block below has a where clause") is the one place the word is
+taught.
+
+** R-2 A variable bound once is an error
+*Context.* =reaches(a, c) if reaches(a, b), link(bb, c)= planned four VPCs
+instead of two with no diagnostic (verified). A typo in a variable is a
+cross product, and the output is cloud resources.
+*Decision.* A variable with exactly one occurrence in its rule (header,
+clause, entries and interpolations counted together) is an error naming
+it; =_x= opts out. An error, not a lint (H-1).
+
+** R-3 =let= is a cell of the attribute aggregate
+*Context.* H-6 made =let= a one-column relation; two rows silently
+produce two of everything that reads it (verified: two =let n= rows, two
+resources). Inputs and settings are already cells.
+*Decision.* =let k = t [@rank] [where B]= contributes to the cell
+=(let, "", k)= (scoped like an input in a module). Rows that agree merge;
+rows that disagree at the winning rank are a conflict naming both; a
+=@default= row is legal. A read of =k= reads the collapsed cell, so a
+=let= holding a reference still reads through it (H-6 stands). The tour
+teaches "inputs, settings and lets are cells; resources and facts are
+rows".
+
+** R-4 No explicit reference spelling
+*Context.* G-6 decides reference versus read by position. A =ref= prefix
+(=vpc_id = ref vpc.id=) was proposed as the one override.
+*Decision.* Not taken. The positional rule is total and is exactly Rule 2's
+content positions; there is no parse-level ambiguity. The surprise is
+one-directional (a content read of a computed path, usually an
+interpolation, makes the block wait a tick) and a prefix cannot help an
+interpolation, which needs the bytes. Instead: a compile-time note at a
+content read of a schema-computed path inside a block ("reads
+=db.endpoint= now: this block waits for tick 2; =host = db.endpoint= is an
+edge and applies at tick 1"), from the schema's computed flags.
+
+** R-5 =contributes= and relation =export= are deleted
+*Context.* A pack grants itself reach into every resource's cells; nobody
+on the receiving side opts in. The grant duplicates the pack's own =set=
+statements, =why= already names every contribution's owner, and the
+partition pattern it gave the stratifier (F DR-12) is the head's own
+constant type and path.
+*Decision.* =contributes= goes. =export p= goes: a module reaches a global
+relation only through an output the stack wires (=network_of(t, v) where
+spoke(t), v = network[t].vpc=, as the tour does). =export type= stays.
+=use= stays as a pack's activation (what =instance= is for a module).
+Ranks are the ownership model. Module-private relations stay private.
+
+** R-6 One function registry, in dform syntax; qualified names
+*Context.* The engine keeps two hand-written lists of function names, the
+LSP a third signature table, the secrets pass a fourth list of inspecting
+functions. =cidrsubnet= sits beside =inet_subnet=, =concat= beside
+interpolation, =gref= beside =ref=, =collect= beside =collect_set=; none of
+the four has a corpus use.
+*Decision.* Functions are declared in signature files shipped with dform,
+=std/inet.df=, =std/str.df=, =std/list.df=:
+#+begin_example
+package inet
+fn subnet(net: inet, bits: int, n: int) -> inet
+fn host(net: inet, n: int) -> ip
+fn overlaps(a: inet, b: inet) -> bool
+#+end_example
+A signature carries what the compiler needs beyond the body: partial
+(=-> T?=: no value, the rule does not fire), =inspects= (default) or
+=forwards= (the secrets pass, E0301), =forwards nulls= (Rule 2 treats a
+function argument as a content position unless the function says so;
+today only =collect=). Purity is not a flag: every function is pure and
+deterministic, impurity enters only through externs (E DR-7). The Rust
+bodies are looked up by qualified name. Engine, LSP, =dform doc=, the type
+checker and the secrets pass read the same files; the lists go. Names: the
+namespace is the type the function is about (=inet.subnet=, =str.split=,
+=list.join=); conversions are constructors named by their type (=int(s)=,
+=string(x)=, =inet(s)=, =ip(s)=), so =to_int= and =to_string= go. The
+prelude, bare, is the constructors, =format= and =len=; everything else is
+qualified. Deleted: =cidrsubnet=, =gref=, =concat=, the =collect= alias,
+E's =collapse= (the engine uses =collapse_shadow_aware=).
+A single first-segment registry decides what a dotted name's head is: a
+type namespace (=net=), a provider's externs (=file=), a function package
+(=inet=), a module with instances (=network=), =settings=, =world=,
+=stacks=. A collision is an error naming both.
+
+** R-7 Function packages: the declaration is the ABI
+*Context.* Someone should be able to ship functions as a =.wasm= (or, for
+trusted code, a =.so=) and have them importable. Out of scope to build;
+in scope to not preclude.
+*Decision.* A function package is a directory: one signature file (R-6)
+and a body a host loads. Hosts: the Rust table in the binary (today), a
+wasm component (R-13), a shared object (gated on =trusted = true= in its
+=dform.toml= entry). The host trait is name, arity, the R-6 properties, and
+=call(args) -> Option<Value>=. Across a boundary the calling convention is
+the protocol's =Value= (=dform-wire=), prost-encoded in and out: one
+encoding for providers and functions, and a trivial C ABI. A package is
+sourced and pinned like a provider: =[functions] geo = { source, version
+}= and the lockfile hash. A provider package may ship a function package
+under its namespace. Externs and functions never share a mechanism: an
+extern is a relation with binding modes, demand-driven, possibly
+persisted, answered by a provider; a function is pure, in a term, cheap,
+in-process.
+
+** R-8 Externs come from providers; =extern= leaves programs
+*Context.* =extern file.json(+path, -value)= in a program copies what the
+provider's =SchemaResponse.externs= already carries.
+*Decision.* =provider file {}= brings =file.json= and =file.text= into
+scope with their modes; a program never declares a provider's extern.
+=file=, =env= and =random= are built-in fact providers, started
+in-process, declared like any provider (a built-in needs no
+=dform.toml= source). =env_var(NAME)= becomes =env.var(NAME)= under the
+same rule. =extern= survives only in text that is not a program file
+(provider schemas, the compiler's tests), where H-15 already keeps the
+core.
+
+** R-9 Head aggregates are cut
+As H section 10.2, already a WIP ticket: =len([x | B])= and list functions
+replace =count=, =sum=, =min=, =max= in heads; =collect= stays internal
+behind the comprehension. This removes a category of callable from R-6.
+
+** R-10 Long bodies: fmt breaks by literal count; bindings first
+*Decision.* =fmt= puts a body one literal per line when it has more than
+three literals, whatever the width. =fmt= checks (does not rewrite) that a
+body's binding literals precede the literals that read them, and a body
+over five literals gets a lint suggesting a named relation (the tour's
+=network_of=).
+
+** R-11 Effects are legible: interface first, one shape for every remote read
+*Context.* A module reads cells, writes cells and offers outputs; the
+statements that say so are scattered through its body, and a remote
+stack's output is spelled =stack_output("platform.cluster[env=prod]",
+"endpoint", e)=, a raw core relation, while a module's is
+=network[t].vpc=.
+*Decision.* (a) In a module, policy or scenario the interface comes first
+and =fmt= enforces the order: =input=, =output=, =export type=, then the
+body. (b) A remote output is =stacks.platform.cluster[env="prod"].endpoint=
+(a remote named in =dform.toml=, its stack, its key), lowering to
+=stack_output= exactly as =m[e].k= lowers to =output=; H-15 then rejects a
+program that writes =stack_output=. (c) =dform dev effects TARGET= prints,
+per module instance, policy and stack: the cells it reads (inputs,
+settings leaves, world types, externs), the cells it writes, and the
+outputs it offers, from the partition graph. The needs/offers design
+(parking lot) is the static form of this view and waits for it.
+
+** R-12 Apply asks again when a tick adds an address; a signed plan bounds its groups
+*Context.* =apply= confirms once, at tick 1 (=src/cli.rs=, the
+=confirm= call), where a pending group reads =iam.policy[?] x unknown=; tick
+2 then creates any number of them without asking. =apply PLAN.json= admits
+any new address at a later tick wherever the file has a pending group of
+that type (=zset::file= staleness, the =grouped= clause), so an approver's
+signature does not bound what is created.
+*Decision.* A batch apply asks at any tick whose plan holds an address the
+tick-1 plan did not list, printing only the new ones; =--yes= skips, the
+controller never asks. The plan file records each pending group's head
+pattern and the bindings its stuck instance holds; an instance that
+appears at a later tick must unify with a recorded group or the apply is
+stale. Until that lands, an apply with =--approval= whose file holds a
+pending group is refused, naming the group.
+
+** R-13 The provider contract is WIT; the host is wasmtime; gRPC is a bridge
+*Context.* The =Provider= trait (=plugin/backend.rs=) is transport-free
+already: =submit= and =next_completed= over =Call=/=Reply=, with process
+(gRPC), direct and wire backends. The component model with wasip3 gives
+streams and futures, which removes the two host-side objections
+(concurrent Apply calls, =Query= as a stream). The toolchain here ships
+=wasm32-wasip2= only (rustc 1.99, 2026-09-28); wasmtime 49 is available.
+*Decision.* The canonical IDL is a WIT package, =wit/dform-provider.wit=,
+written for 0.2 now with the 0.3 async shape recorded beside each call
+(=query= returns =list<row>= now, =stream<row>= then; =apply= blocks now,
+returns a =future= then). The proto mirrors it until the bridge exists,
+then goes. A provider is a component instantiated once per run (SDK
+state, credentials, connection reuse), with wasmtime epoch deadlines per
+call for timeouts; a trap mid-call is =MaybeApplied= exactly as a dead
+process is, so idempotency keys and the =managed= capability stay.
+=--parallel= on 0.2 is an instance pool of N identically configured
+instances; on 0.3 one instance. A function package (R-7) is a component
+with no resources, on the same host. The mock is built as a component
+first (no SDK, the conformance reference) and =provider check= must pass
+on both hosts: that is the proof the contract is host-free. The direct
+and wire backends become "the mock instantiated in-process".
+*The bridge.* Go and Python SDKs do not run on WASI; they are reached by
+one component, =dform-bridge-grpc=, that speaks the WIT inward and gRPC
+outward over wasi-sockets to a sidecar the host spawns (WASI has no
+process spawn; the host keeps that one privileged hook, Terraform's
+plugin-launch shape). It needs wasip3 and an HTTP/2 client over
+wasi-sockets, neither available today. Until it passes =provider check=,
+=dform-grpc= is the native bridge, frozen: nothing is added to it.
+*Spike.* =dform-k8s= on =wasm32-wasip2= with wasi-http, reporting whether a
+Rust SDK provider builds and passes =provider check= unchanged. Its answer
+decides whether wasm is the default provider host or the exception.
+
+** R-14 Colour in the plan printer; the docs split
+Colour by the plan's own semantics through the one printer: =+= green,
+=~= yellow, =-= red, replaces magenta, =?= nulls cyan, =(sensitive)= dim,
+conflicts and denies red with witnesses bold, addresses bold, the pending
+group line in the warning colour (it is what R-12's question is about).
+=--color auto|always|never= global, =NO_COLOR= honoured, =--json= plain,
+golden tests on the uncoloured text. The README splits into a tutorial
+(the tour), a reference (grammar.md and a commands page) and design
+notes; the Status section, =arg/5= and =member= are corrected in the
+split.
+
 * Vocabulary
 The name is Terraform minus terra plus Datalog, and it reads as "deform" aloud.
 Use the pun consistently in CLI output, docs, and diagnostics.

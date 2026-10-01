@@ -15,3 +15,5 @@
 - Delete code the ticket says to delete; do not leave the old path behind a flag.
 - Rust 2024 edition, rustfmt defaults, no clippy warnings on files you touch.
 - Error messages name the resource address and attribute path; never just "conflict".
+- Nothing is added to crates/dform-grpc (DESIGN.org R-13): it is the frozen native bridge until the wasm bridge passes `provider check`.
+- Decisions of the 2026-10-01 review are DESIGN.org "Review of 2026-10-01: decisions" (R-1 to R-14); a ticket that cites one follows it.
