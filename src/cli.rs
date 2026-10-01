@@ -969,7 +969,9 @@ fn run(cli: Cli, hook: Option<&mut controller::Hook>) -> Result<()> {
     if let Some(s) = session {
         let end = match &r {
             Ok(()) => serde_json::json!({ "result": "ok" }),
-            Err(e) if e.is::<Declined>() => serde_json::json!({ "result": "declined" }),
+            Err(e) if let Some(d) = e.downcast_ref::<Declined>() => {
+                serde_json::json!({ "result": "declined", "tick": d.tick })
+            }
             Err(e) => serde_json::json!({ "result": "failed", "error": e.to_string() }),
         };
         let logged = s.log.append("apply_end", end);
@@ -1462,7 +1464,8 @@ fn run_with(
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("internal: no plan key"))?;
         let now = zset::file::delta(plan, sections, &report, schema, &redact, key);
-        let diff = saved.stale(&now, tick);
+        let firings = |t: &str, n: &str| zset::file::firings(res, t, n, &redact, key);
+        let diff = saved.stale(&now, tick, &firings);
         if diff.is_empty() {
             return Ok(());
         }
@@ -1525,14 +1528,7 @@ fn run_with(
             },
             world_digest: zset::file::world_digest(&backend.world_facts(st)?),
             deformations,
-            pending_groups: report
-                .groups
-                .iter()
-                .map(|g| zset::file::Group {
-                    pattern: g.pattern.clone(),
-                    on: g.on.clone(),
-                })
-                .collect(),
+            pending_groups: zset::file::groups(res, &redact, key),
             nulls: zset::file::Nulls {
                 resolved: zset::file::resolved(&res.facts, &redact, key),
                 unresolved: unresolved.into_iter().collect(),
@@ -1856,6 +1852,8 @@ fn run_with(
             let (mut res, mut violations, mut resources, mut adopts, mut lifecycle) =
                 (res, violations, resources, adopts, lifecycle);
             let mut tick = 1;
+            // Every address a tick's plan has listed so far.
+            let mut listed: BTreeSet<ir::Address> = BTreeSet::new();
             loop {
                 let Planned {
                     res: r,
@@ -1997,13 +1995,58 @@ fn run_with(
                     let report = report_of(&plan, &res, &sections, tick, &[], &denies);
                     if !report.undeformed {
                         let n = report.deformations() + report.pending_count();
-                        confirm(n, &deployment)?;
+                        confirm(n, false, &deployment, tick)?;
                     }
                 }
+                // A later tick whose plan holds an address no earlier one
+                // listed (a pending group's member, named only now) asks
+                // again, for those alone; a plan file bounds them by its
+                // groups instead (`check_saved`), and asks the same.
+                let addresses: BTreeSet<&ir::Address> = plan
+                    .actions
+                    .iter()
+                    .filter(|a| !matches!(a.kind, ActionKind::Noop))
+                    .map(|a| &a.addr)
+                    .collect();
+                if tick > 1 && hook.is_none() && !yes {
+                    let new: Vec<&crate::provider::Action> = plan
+                        .actions
+                        .iter()
+                        .filter(|a| {
+                            !matches!(a.kind, ActionKind::Noop) && !listed.contains(&a.addr)
+                        })
+                        .collect();
+                    if !new.is_empty() {
+                        print!("{}", plan_print::new_text(tick, &new));
+                        confirm(new.len(), true, &deployment, tick)?;
+                    }
+                }
+                listed.extend(addresses.into_iter().cloned());
                 if hook.is_none() {
+                    // The pending groups an approval would sign unbounded:
+                    // the file's (what was signed), else this plan's.
+                    let unbounded: Vec<String> = if tick == 1 && approval.is_some() {
+                        let allowed = crate::approval::unbounded_allowed(program, &res.facts)?;
+                        let groups = match &saved {
+                            Some((_, f)) => f.pending_groups.clone(),
+                            None => zset::file::groups(
+                                &res,
+                                &query::Redactor::new(&res.facts, schema),
+                                key,
+                            ),
+                        };
+                        groups
+                            .iter()
+                            .filter(|g| !allowed.contains(&g.head))
+                            .map(zset::file::Group::describe)
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
                     approve_entry(
                         tick,
                         &needs,
+                        &unbounded,
                         digest.as_deref(),
                         approval.as_deref(),
                         saved.is_some(),
@@ -2478,37 +2521,58 @@ fn run_controller(cli: Cli) -> Result<()> {
     }
 }
 
-/// Ask on the terminal whether to apply `n` deformations to `deployment`:
-/// only `y` or `yes` proceeds. With no terminal to ask on, a refusal naming
-/// `--yes`, never a wait.
-fn confirm(n: usize, deployment: &str) -> Result<()> {
+/// Ask on the terminal whether to apply `n` deformations (`new` ones, at
+/// a later tick) to `deployment` at `tick`: only `y` or `yes` proceeds.
+/// With no terminal to ask on, a refusal naming `--yes`, never a wait.
+fn confirm(n: usize, new: bool, deployment: &str, tick: usize) -> Result<()> {
     use std::io::{BufRead, IsTerminal, Write};
     let stdin = std::io::stdin();
     if !stdin.is_terminal() {
         bail!(
-            "apply {deployment}: nothing to ask on (stdin is not a terminal); \
+            "apply {deployment}: nothing to ask on at tick {tick} (stdin is not a terminal); \
              pass --yes to apply without asking"
         );
     }
     let s = if n == 1 { "" } else { "s" };
-    print!("Apply these {n} deformation{s} to {deployment}? [y/N] ");
+    let new = if new { "new " } else { "" };
+    print!("Apply these {n} {new}deformation{s} to {deployment}? [y/N] ");
     std::io::stdout().flush()?;
     let mut answer = String::new();
     stdin.lock().read_line(&mut answer)?;
     match answer.trim().to_ascii_lowercase().as_str() {
         "y" | "yes" => Ok(()),
-        _ => Err(Declined(deployment.to_string()).into()),
+        _ => Err(Declined {
+            deployment: deployment.to_string(),
+            tick,
+        }
+        .into()),
     }
 }
 
-/// An apply its confirmation declined: the audit log's `apply_end` says
-/// `declined`.
+/// An apply its confirmation declined at `tick`: the audit log's
+/// `apply_end` says `declined`, and at which tick.
 #[derive(Debug)]
-struct Declined(String);
+struct Declined {
+    deployment: String,
+    tick: usize,
+}
 
 impl std::fmt::Display for Declined {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "apply {}: not confirmed; nothing was applied", self.0)
+        match self.tick {
+            1 => write!(
+                f,
+                "apply {}: not confirmed; nothing was applied",
+                self.deployment
+            ),
+            t => write!(
+                f,
+                "apply {}: not confirmed at tick {t}; ticks 1 to {} were applied, \
+                 and the next apply resumes from there",
+                self.deployment,
+                t - 1
+            ),
+        }
     }
 }
 
@@ -2805,13 +2869,16 @@ fn persist_externs(st: &mut state::State, externs: &crate::externs::Externs, bac
 
 /// A batch apply's approval, before its Apply calls: at tick 1 the token
 /// given (`--approval FILE`), verified (`verify`), or, with none, a
-/// refusal if anything needs one; at a later tick, a new deformation that
+/// refusal if anything needs one; a token is refused, too, for a plan with
+/// a pending group the program does not `allow_unbounded_approval`
+/// (`unbounded`, each named); at a later tick, a new deformation that
 /// needs one must be one the approver may approve (`allowed`). Each
 /// verdict at tick 1 goes to the audit log.
 #[allow(clippy::too_many_arguments)]
 fn approve_entry(
     tick: usize,
     needs: &[(String, String)],
+    unbounded: &[String],
     digest: Option<&str>,
     token: Option<&Path>,
     from_file: bool,
@@ -2873,6 +2940,19 @@ fn approve_entry(
         };
         bail!("apply refused: {error}; the plan's digest is {digest}: {how}");
     };
+    if !unbounded.is_empty() {
+        let error = format!(
+            "the plan has pending group{} {}: an approval cannot bound how many it \
+             creates; the program may state allow_unbounded_approval(HEAD) for one it accepts",
+            if unbounded.len() == 1 { "" } else { "s" },
+            unbounded.join("; ")
+        );
+        audit.append(
+            "approval",
+            serde_json::json!({ "result": "refused", "digest": digest, "error": error }),
+        )?;
+        bail!("apply refused: {error}");
+    }
     let text = std::fs::read_to_string(path)
         .map_err(|e| anyhow::anyhow!("read --approval {}: {e}", path.display()))?;
     match verify(&text, digest) {

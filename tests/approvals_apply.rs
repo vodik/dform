@@ -328,3 +328,94 @@ fn a_moved_git_commit_is_a_stale_plan() {
         r.stderr
     );
 }
+
+/// A create in prod needs an approval, and the policy is named for the
+/// database's endpoint: a pending group, `iam.policy[?]`.
+const GROUPED: &str = r#"edition 2026
+
+stack gated[env] {
+  approvals = jwks_file("approvers.jwks.json")
+}
+
+input env: enum("staging", "prod") = "staging"
+
+resource db.postgres orders { size = 1 }
+
+resource iam.policy "connect-${host}" {
+  if pg in db.postgres, host = pg.endpoint
+  statements = [{ action: "db.connect", resource: host }]
+}
+
+requires_approval(d, "a create in prod") if {
+  env == "prod"
+  deformation("create", t, a, _)
+  d = "${t}[\"${a}\"]"
+}
+"#;
+
+/// `stacks/gated.df` (`GROUPED` and `extra`) planned in prod to
+/// `plan.json`, and a valid token for its digest in `ok.json`.
+fn grouped(name: &str, extra: &str) -> Scratch {
+    let s = Scratch::project(name);
+    s.write("stacks/gated.df", &format!("{GROUPED}{extra}"));
+    let jwks = signer(&s, &["keygen", "approver.key"]);
+    s.write("approvers.jwks.json", &jwks);
+    s.run(&["plan", "--out", "plan.json", "stacks/gated.df", "env=prod"])
+        .success();
+    let file: serde_json::Value = serde_json::from_str(&s.read("plan.json")).unwrap();
+    let t = signer(
+        &s,
+        &[
+            "sign",
+            "approver.key",
+            "--digest",
+            file["digest"].as_str().unwrap(),
+            "--stack",
+            "gated",
+            "--key",
+            "env=prod",
+            "--approver",
+            "alice",
+        ],
+    );
+    s.write("ok.json", &t);
+    s
+}
+
+/// An approval cannot bound how many a pending group creates: apply
+/// refuses it, naming the group, unless the program states
+/// `allow_unbounded_approval` for the group's head.
+#[test]
+fn an_approval_of_a_plan_with_a_pending_group_is_refused() {
+    let s = grouped("approvals-group", "");
+    let r = s
+        .run(&["apply", "plan.json", "--approval", "ok.json"])
+        .failure();
+    assert!(
+        r.stderr.contains(
+            "apply refused: the plan has pending group iam.policy[?] (want(\"iam.policy\", _) by r"
+        ) && r.stderr.contains("allow_unbounded_approval"),
+        "{}",
+        r.stderr
+    );
+    assert!(
+        !s.path("dform.state/gated/env=prod/remote.json").exists()
+            || !s
+                .read("dform.state/gated/env=prod/remote.json")
+                .contains("db.postgres"),
+        "applied anyway"
+    );
+
+    let s = grouped(
+        "approvals-group-allowed",
+        "\nallow_unbounded_approval(\"want(\\\"iam.policy\\\", _)\")\n",
+    );
+    let r = s
+        .run(&["apply", "plan.json", "--approval", "ok.json"])
+        .success();
+    assert!(r.stdout.ends_with("apply: complete\n"), "{}", r.stdout);
+    assert!(
+        s.read("dform.state/gated/env=prod/remote.json")
+            .contains("connect-orders.db.fake")
+    );
+}

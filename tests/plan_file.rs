@@ -33,7 +33,7 @@ fn two_ticks(name: &str) -> Scratch {
 fn the_file_records_inputs_delta_nulls_and_ticks() {
     let s = two_ticks("planfile-record");
     let f: serde_json::Value = serde_json::from_str(&s.read("plan.json")).unwrap();
-    assert_eq!(f["version"], 3);
+    assert_eq!(f["version"], 4);
     assert_eq!(f["inputs"]["files"][0]["path"], "p.df");
     assert_eq!(f["inputs"]["world"], "w.json");
     assert!(f["world_digest"].is_string());
@@ -229,4 +229,85 @@ fn a_create_before_destroy_plan_file_applies_in_two_ticks() {
     assert_eq!(f["deformations"][0]["dependents"][0], "net.subnet[\"a\"]");
     let r = s.run(&["apply", "plan.json"]).success();
     assert!(r.stdout.ends_with("apply: complete\n"), "{}", r.stdout);
+}
+
+/// A policy named for the database's endpoint: a pending group, its
+/// member named at tick 2.
+const GROUP: &str = r#"edition 2026
+
+resource db.postgres orders { size = 1 }
+
+resource iam.policy "connect-${host}" {
+  if pg in db.postgres, host = pg.endpoint
+  statements = [{ action: "db.connect", resource: host }]
+}
+"#;
+
+/// The file records the group's head, its rule and the stuck instance's
+/// bound variables; tick 2's policy is admitted only when a firing of that
+/// rule with those bindings derives it. A file whose group names another
+/// database is stale at tick 2, its type notwithstanding.
+#[test]
+fn a_tick_2_address_outside_the_recorded_group_is_stale() {
+    let s = Scratch::new("planfile-group");
+    s.write("p.df", GROUP);
+    s.run(&[
+        "dev",
+        "--world",
+        "w.json",
+        "plan",
+        "--out",
+        "plan.json",
+        "p.df",
+    ])
+    .success();
+    let mut f: serde_json::Value = serde_json::from_str(&s.read("plan.json")).unwrap();
+    let g = &f["pending_groups"][0];
+    assert_eq!(g["pattern"], "iam.policy[?]", "{f}");
+    assert_eq!(g["head"], "want(\"iam.policy\", _)", "{f}");
+    assert!(g["rule"].as_str().unwrap().starts_with('r'), "{f}");
+    let bound: Vec<&serde_json::Value> = g["bindings"].as_object().unwrap().values().collect();
+    assert_eq!(bound, [&serde_json::json!("orders")], "{f}");
+    // The group as recorded: tick 2's policy is its member.
+    let r = s.run(&["apply", "plan.json"]).success();
+    assert!(r.stdout.ends_with("apply: complete\n"), "{}", r.stdout);
+
+    let s = Scratch::new("planfile-group-other");
+    s.write("p.df", GROUP);
+    s.run(&[
+        "dev",
+        "--world",
+        "w.json",
+        "plan",
+        "--out",
+        "plan.json",
+        "p.df",
+    ])
+    .success();
+    for v in f["pending_groups"][0]["bindings"]
+        .as_object_mut()
+        .unwrap()
+        .values_mut()
+    {
+        *v = serde_json::json!("payments");
+    }
+    // Unsigned: the digest is what an approval checks, not this.
+    f.as_object_mut().unwrap().remove("digest");
+    let mut now: serde_json::Value = serde_json::from_str(&s.read("plan.json")).unwrap();
+    now["pending_groups"] = f["pending_groups"].clone();
+    now.as_object_mut().unwrap().remove("digest");
+    s.write("plan.json", &now.to_string());
+    let r = s.run(&["apply", "plan.json"]).failure();
+    assert!(
+        r.stderr.contains(
+            "create iam.policy[\"connect-orders.db.fake\"]: not in the plan file, and no pending \
+             group it records derives it"
+        ),
+        "{}",
+        r.stderr
+    );
+    assert!(r.stderr.contains("\"payments\""), "{}", r.stderr);
+    let world = s.read("w.json");
+    assert!(world.contains("db.postgres"), "{world}");
+    assert!(!world.contains("iam.policy"), "{world}");
 }

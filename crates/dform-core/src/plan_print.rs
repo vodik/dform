@@ -434,20 +434,8 @@ fn groups(
         .map(|m| (&m.head, m.nulls.iter().cloned().collect(), m.reason()));
     let mut out: Vec<Group> = Vec::new();
     for (head, on, reason) in stuck.chain(may) {
-        let pattern = match head.args.as_slice() {
-            // An address, or `T[?]`: an unknown number of `T`.
-            [Term::Val(Value::Str(t)), a] => match a {
-                Term::Val(v) => Address {
-                    typ: t.clone(),
-                    name: fmt_value(v).trim_matches('"').to_string(),
-                }
-                .to_string(),
-                _ => format!("{t}[?]"),
-            },
-            _ => fmt_atom(head),
-        };
         let g = Group {
-            pattern,
+            pattern: group_pattern(head),
             resolves_after: resolves(&on, tick_of),
             on,
             reason,
@@ -460,6 +448,22 @@ fn groups(
         }
     }
     out
+}
+
+/// A pending group's `want/2` head as the plan prints it: an address, or
+/// `T[?]`, an unknown number of `T`; any other head as itself.
+pub fn group_pattern(head: &Atom) -> String {
+    match head.args.as_slice() {
+        [Term::Val(Value::Str(t)), a] => match a {
+            Term::Val(v) => Address {
+                typ: t.clone(),
+                name: fmt_value(v).trim_matches('"').to_string(),
+            }
+            .to_string(),
+            _ => format!("{t}[?]"),
+        },
+        _ => fmt_atom(head),
+    }
 }
 
 fn deny_message(head: &Atom) -> String {
@@ -776,6 +780,16 @@ fn element_of(typ: &str, path: &str, schema: &Schema) -> Option<(String, String,
         path[open + 1..close].to_string(),
         path[close + 1..].trim_start_matches('.').to_string(),
     ))
+}
+
+/// The deformations a later tick's plan holds that no earlier one listed,
+/// before apply asks about them: `new at tick N:` and one line each.
+pub fn new_text(tick: usize, new: &[&Action]) -> String {
+    let mut out = format!("new at tick {tick}:\n");
+    for a in new {
+        out.push_str(&format!("  {} {}\n", marker_of(&a.kind), a.addr));
+    }
+    out
 }
 
 fn marker_of(k: &ActionKind) -> &'static str {

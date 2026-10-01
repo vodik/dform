@@ -52,22 +52,32 @@ fn interrupted() -> Scratch {
 /// `dform dev --world w.json apply p.df` on a pty, answering `answer`:
 /// what it printed up to the prompt and after it, and its exit code.
 fn answer(s: &Scratch, answer: &str) -> (String, String, i32) {
+    let (mut said, code) = answers(s, &[answer]);
+    let after = said.pop().unwrap();
+    (said.pop().unwrap(), after, code)
+}
+
+/// The same, answering each prompt in turn: what it printed up to each
+/// prompt and after the last, and its exit code.
+fn answers(s: &Scratch, answers: &[&str]) -> (Vec<String>, i32) {
     let mut cmd = common::dform();
     cmd.args(["dev", "--world", "w.json", "apply", "p.df"])
         .current_dir(s.path(""));
     let mut p = Session::spawn(cmd).unwrap();
     p.set_expect_timeout(Some(std::time::Duration::from_secs(60)));
     let text = |b: &[u8]| String::from_utf8_lossy(b).replace('\r', "");
-    let asked = p.expect("[y/N] ").unwrap();
     let all = |c: &expectrl::Captures| c.matches().fold(text(c.before()), |t, m| t + &text(m));
-    let before = all(&asked);
-    p.send_line(answer).unwrap();
-    let after = all(&p.expect(Eof).unwrap());
+    let mut said = Vec::new();
+    for a in answers {
+        said.push(all(&p.expect("[y/N] ").unwrap()));
+        p.send_line(a).unwrap();
+    }
+    said.push(all(&p.expect(Eof).unwrap()));
     let code = match p.get_process().wait().unwrap() {
         expectrl::process::unix::WaitStatus::Exited(_, code) => code,
         other => panic!("{other:?}"),
     };
-    (before, after, code)
+    (said, code)
 }
 
 fn audit_kinds(s: &Scratch) -> Vec<(String, String)> {
@@ -136,4 +146,67 @@ fn confirming_a_resumed_apply_finishes_it() {
         log.last().unwrap(),
         &("apply_end".to_string(), "ok".to_string())
     );
+}
+
+/// A policy named for the database's endpoint: tick 1 makes the database
+/// and lists the policy only as a pending group, `iam.policy[?]`.
+const GROUP: &str = r#"edition 2026
+
+resource db.postgres orders { size = 1 }
+
+resource iam.policy "connect-${host}" {
+  if pg in db.postgres, host = pg.endpoint
+  statements = [{ action: "db.connect", resource: host }]
+}
+"#;
+
+/// Tick 2 names the group's member, which the first answer did not see:
+/// apply asks again, for it alone.
+#[test]
+fn a_tick_that_adds_an_address_asks_again() {
+    let s = Scratch::new("confirm-tick2");
+    s.write("p.df", GROUP);
+    let (said, code) = answers(&s, &["y", "y"]);
+    assert_eq!(code, 0, "{said:?}");
+    assert!(
+        said[0].ends_with("Apply these 2 deformations to p? [y/N] "),
+        "{}",
+        said[0]
+    );
+    assert!(
+        said[1].ends_with(
+            "new at tick 2:\n  + iam.policy[\"connect-orders.db.fake\"]\n\
+             Apply these 1 new deformation to p? [y/N] "
+        ),
+        "{}",
+        said[1]
+    );
+    assert!(said[2].ends_with("apply: complete\n"), "{}", said[2]);
+    assert!(s.read("w.json").contains("connect-orders.db.fake"));
+}
+
+/// `n` at tick 2: tick 1's database stays made, the policy is not, and
+/// the audit log's apply ends `declined` at tick 2.
+#[test]
+fn declining_at_a_later_tick_keeps_what_ran() {
+    let s = Scratch::new("confirm-tick2-no");
+    s.write("p.df", GROUP);
+    let (said, code) = answers(&s, &["y", "n"]);
+    assert_ne!(code, 0);
+    assert!(
+        said[2].contains(
+            "apply p: not confirmed at tick 2; ticks 1 to 1 were applied, and the next apply \
+             resumes from there"
+        ),
+        "{}",
+        said[2]
+    );
+    let world = s.read("w.json");
+    assert!(world.contains("db.postgres"), "{world}");
+    assert!(!world.contains("iam.policy"), "{world}");
+    let end: serde_json::Value =
+        serde_json::from_str(s.read("w.state.audit.jsonl").lines().last().unwrap()).unwrap();
+    assert_eq!(end["kind"], "apply_end");
+    assert_eq!(end["result"], "declined");
+    assert_eq!(end["tick"], 2);
 }

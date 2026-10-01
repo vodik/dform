@@ -111,7 +111,13 @@ asks nothing, nor does `apply plan.json` (the file was reviewed; approvals
 guard it) or the controller. Nothing is written before the answer: an
 apply reads (refresh, the lookups that resolve uncertain calls), plans and
 asks, and only a `y` writes state (`moved` renames included) or calls
-Apply.
+Apply. A later tick whose plan holds an address no earlier tick listed (a
+pending group's member: `iam.policy[?]` at tick 1, named once the endpoint
+it is built from exists) asks again, for those alone: `new at tick 2:`, one
+line each, then `Apply these N new deformations to D? [y/N]`. `apply
+plan.json` asks this too; `--yes` skips it. A `n` there stops the apply
+with what the earlier ticks did in state; the audit log's `apply_end` says
+`declined` and the `tick`, and the next apply resumes.
 
 | Commands | |
 |---|---|
@@ -908,7 +914,9 @@ sensitive value's, since an input file may hold a secret, `--set`,
 refreshed world, and the deformation delta: each deformation's action,
 before and after values (redacted as the plan prints them; a sensitive one
 as `{"sensitive": label, "digest": HMAC}`), the nulls it
-waits on and the tick it runs in; the pending groups; the nulls round 0
+waits on and the tick it runs in; the pending groups, each with its head
+pattern, its rule and the null-free bindings of its stuck instance
+(redacted); the nulls round 0
 resolved and the ones the delta still carries; the tick schedule; the
 extern answers the plan read; the commit each `git` input relation's ref
 named; and the plan's digest, with what needs an approval (see
@@ -919,7 +927,9 @@ Terraform's stale-plan rule, stated for Z-sets. Every deformation must be in
 the file with the same action, the same before-state and the same desired
 values (a null the file carries matches what it has resolved to); every
 deformation the file has not run yet must still be one; a new address is
-allowed only where the file has a pending group of its type, and a deposed
+allowed only where a pending group the file records derives it (its
+`want` unifies with the group's head, and a firing of the group's rule
+holds every binding the group recorded), and a deposed
 object's delete the tick after its `+/-` replacement. It prints the difference
 and stops before applying anything of that tick. So with a plan file, drift
 anywhere stops the run at the boundary, where a plain `apply` reports it and
@@ -1035,7 +1045,12 @@ and every deformation that needs the approval. A missing or invalid token is
 a refusal naming what failed. The stale-plan check then guarantees that what
 is applied is what was approved. A plain `apply` of a plan that needs an
 approval is refused (plan with `--out`, have the digest approved, apply the
-file). Provider credentials stay the environment's: a provider inherits
+file). An `--approval` for a plan with a pending group is refused, naming
+the group: its members are named only at a later tick, so the approver
+would sign an unknown number of them. The program accepts one with a
+fact, `allow_unbounded_approval("want(\"iam.policy\", _)")` (the group's
+head pattern, as `allow_stuck` takes it); the plan file still bounds what
+the group may create. Provider credentials stay the environment's: a provider inherits
 dform's environment, and dform mints and exchanges no tokens.
 
 In controller mode a deformation that needs an approval is held (`tick N:
