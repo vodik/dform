@@ -1,18 +1,23 @@
 # dform
 
-dform describes infrastructure as facts and rules, and makes it so. You
-write what should exist. dform plans the difference between that and
-what exists, shows you the plan, and applies it. State, modules, policy,
-secrets, approvals and a controller mode are built in. Providers are
-sandboxed wasm components, and a provider registry is a bucket you own.
+Infrastructure is a database. An account is a table of VPCs, a table of
+subnets, a table of policies, each row with attributes, each row pointing
+at others by id. What you want to exist is also a set of tables. A plan
+is the difference between the two. A policy is a query that must return
+no rows. "Why is this subnet here" is a question about which rows
+produced it. Every infrastructure tool is, underneath, doing relational
+work on data it stores as text.
 
-The program is a small Datalog. That one choice is what the rest of this
-page is about: because a program is rules over facts, every rule can see
-every resource, several authors can set one attribute, policy can add
-things, rules can recurse, a value the cloud has not produced yet is
-still a value, and every line of a plan can explain itself.
+Datalog is the language for exactly that: tables of facts, rules that
+derive new tables from them, evaluated all at once to a fixpoint. It has
+been the query language of choice for program analysis, access control
+and network verification for the same reason it fits here. The rules can
+join anything with anything, they can recurse, every derived row has a
+derivation, and the whole program is small enough to reason about.
 
-Here is a complete program, for an AWS provider.
+dform is that: infrastructure as facts and rules, with plan and apply,
+state, modules, policy, secrets, approvals and a controller mode built
+in. Here is a complete program, for an AWS provider.
 
 ```dform
 edition 2026
@@ -48,10 +53,11 @@ plan: 3 deformations (3 create)
   vpc_id = ?aws.vpc["main"].id
 ```
 
-The `az(..)` lines are facts: rows in a table. The subnet block ends in a
-`where` clause, which makes it a rule: one subnet for every row that
-matches. `?` marks a value apply will learn, here the VPC's id. Add a
-third availability zone and a third subnet follows; nothing else changes.
+The `az(..)` lines are facts: two rows in a table. The subnet block ends
+in a `where` clause, which makes it a rule: the clause is a query over
+the tables, and every answer is one subnet. `?` marks a value apply will
+learn, here the VPC's id. Add a third availability zone and a third
+subnet follows; nothing else changes.
 
 ```bash
 cargo run -- -C examples/tour plan
@@ -61,21 +67,29 @@ The examples in this repository run on a fake cloud built into dform, so
 they work from a clean clone with no credentials. `examples/tour` is a
 tutorial you read top to bottom.
 
-## Why a language
+## It looks like Terraform, on purpose
 
-Every infrastructure tool eventually hits the same wall: the format
-cannot say what you need, so you reach around it. The workarounds are
-familiar. A `for_each` that fails because a value is "not known until
-apply", and a second run with `-target`. A tag that has to be threaded
-through every module as a variable. A `depends_on` for an edge the tool
-could not see. A routing table written out by hand because the tool
-cannot compute a path. Each is a patch over something the format cannot
-express. A general-purpose language removes the wall and with it the
-ability to reason about the program: no plan you can trust, no policy
-you can prove.
+If you know Terraform, the program above is readable: a provider, a
+resource block with attributes, a reference to another resource's id, a
+plan with `+` lines, and an apply that makes it so. The workflow is the
+same, and the pieces around it are too: state, modules with inputs and
+outputs, a lock, a plan file you can review and sign. dform keeps the
+shape because the shape is right.
 
-dform's bet is a language small enough to reason about and expressive
-enough not to need the patches. Six properties fall out of it.
+What changes is what a block is. In HCL a resource block is a value in a
+template, filled in from variables, and the tool evaluates the template
+top down with special cases for the parts that cannot be a template:
+`for_each` for repetition, `dynamic` blocks for repetition inside a
+block, `depends_on` for an edge it cannot see, `-target` and a second
+run for a value it cannot know yet, a provider feature for a tag that
+should be everywhere. Each is a patch over something a template cannot
+say. Pulumi removes the wall with a general-purpose language and loses
+the ability to reason about the program: no plan you can trust before
+running it, no policy you can prove.
+
+In dform a resource block is a rule. Its clause is a query; its
+attributes are contributions to cells that other rules may also write.
+That is the whole difference, and six things fall out of it.
 
 **Every rule sees every resource.** A rule can read any resource in the
 program, in any module, declared before or after it. That is what
