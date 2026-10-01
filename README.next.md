@@ -659,6 +659,15 @@ or a function's definition, and the plan's action beside each resource.
 
 ## From the VPC to the running service, in one project
 
+A Deployment and a VPC are the same kind of row to dform, so they get
+the same management model: one plan, one confirmation per tick, one
+signed approval, one `why`, the same denies and the same drift
+handling, in one project. Infrastructure tooling and Kubernetes tooling
+grew up apart, and most teams run two change processes because of it;
+here a policy that says "every resource carries a team tag" covers the
+VPC and the Deployment with the same line, and "no deletes in prod"
+means the namespace too.
+
 Infrastructure tools stop at the cluster and hand over to a second tool
 chain for what runs on it. The reason is specific: the cluster's
 endpoint does not exist until the cluster does, and a provider block is
