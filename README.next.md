@@ -140,11 +140,15 @@ after every author's contribution has merged. A deny with answers
 refuses the plan and prints them; `warn` reports and goes on.
 
 **A value the cloud produces later is a value now.** A database's
-endpoint does not exist until the database does. dform carries it as a
-labeled unknown, `?aws.db_instance["orders"].endpoint`, plans around it,
+endpoint does not exist until the database does. Every tool has to live
+with that; Terraform's answer is the error everyone has met, "value
+depends on resource attributes that cannot be determined until apply",
+followed by a `-target` run by hand and a second plan. dform carries the
+unknown as a value, `?aws.db_instance["orders"].endpoint`, plans with it,
 and applies in ticks: everything that can be made is made, the unknowns
-resolve, the rest is planned again and made. A resource whose *name*
-depends on an unknown is a pending group; the plan says so instead of
+resolve, what depended on them is planned again against the real values
+and made. A resource whose *name* depends on an unknown is a pending
+group; the plan says so, and says which tick resolves it, instead of
 refusing.
 
 ```dform
@@ -161,6 +165,21 @@ how many policies there will be is not known until the first tick runs:
 pending groups:
 ? aws.iam_policy[?] x unknown, on ?aws.db_instance["orders"].endpoint, resolves after tick 1
 ```
+
+Apply then runs tick 1, learns the endpoint, prints tick 2's plan with
+the policy's real name, and asks again before making it:
+
+```
+tick 2:
+plan: 1 deformation (1 create)
++ aws.iam_policy["connect-orders.cx3k.us-east-1.rds.amazonaws.com"]
+  policy.Statement[0].Resource = "orders.cx3k.us-east-1.rds.amazonaws.com"
+Apply 1 new deformation to shop[env=prod]? [y/N]
+```
+
+You never approve a count of "unknown". Strict mode (`unknowns =
+"strict"` in `dform.toml`) refuses any plan that would need a second
+tick, for stacks where a plan must be complete before anyone says yes.
 
 **Rules recurse.** Which VPCs can reach which, through a transit hub, is
 a path of any length. Routes for every pair are three lines, and they
@@ -402,8 +421,8 @@ change the rule and the base facts that caused it: "because
 `data/azs.yaml:3`".
 
 **apply** prints the plan and asks. It applies in ticks; at any tick that
-adds a resource the first plan could not name, it asks again, showing
-only what is new. `--yes` for scripts. State is written after every
+adds a resource the first plan could not name, it prints that tick's
+plan and asks again before changing anything. `--yes` for scripts. State is written after every
 provider call, so an interrupted apply resumes where it stopped.
 `--parallel N` overlaps independent calls.
 
