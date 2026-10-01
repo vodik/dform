@@ -53,7 +53,7 @@ plan: 7 deformations (7 create)
   ... four more
 ```
 
-A deformation is one change the plan would make; the word is dform's.
+A deformation is one change the plan would make.
 The subnet block ends in a `where` clause, which makes it a rule: the
 clause is a query, and every answer is one subnet. `aws.availability_zone`
 is a table the provider answers, what Terraform calls a data source:
@@ -331,28 +331,30 @@ command to run and what it prints; `docs/grammar.md` is the reference.
 **Facts and rules.** A fact is a row: `az("us-east-1a", 1)`. A rule
 derives rows: `link(h, t) where hub(h), spoke(t)`. Lower-case names are
 variables, bound where they first appear; constants are quoted. A
-variable used only once in a rule is an error: in a language whose
-output is cloud resources, a typo must not become a cross product.
+variable used only once in a rule is an error, so a typo cannot become
+a cross product of cloud resources.
 
 **Resources.** `resource TYPE name { attr = value ... }` says a resource
 should exist. With a `where` clause it is a rule, one resource per
-answer, and the header may interpolate the clause's variables.
+answer, and the header may interpolate the clause's variables. An entry
+that is only a name, `availability_zone`, takes the variable of that
+name.
 
 **References and reads.** `vpc_id = main.id` is a reference: an edge in
 the apply order, and an unknown until the VPC exists.
 `inet.subnet(main.cidr_block, 8, n)` reads the cidr now, because the
-function needs its bytes. A dot is a reference where it stands as a whole
-value and a read where its content is used. When a read of a computed
-value makes a block wait for a later tick, the compiler says so at the
-read.
+function needs its bytes. A dot is a reference where it stands as a
+whole value and a read where its content is used, and the compiler says
+at the read when a read of a computed value makes a block wait for a
+later tick.
 
 **Types.** Values are typed, and strings stop at the edge. A provider's
 schema types every attribute (`cidr_block: inet required`,
-`multi_az: bool`, `endpoint: string computed`), an input or a `from`
-statement declares its columns' types, and whatever arrives as text, a `--set`, a
-YAML cell, a CSV field, is parsed into the declared type there or
-rejected with the file and line. Inside the program a network is an
-`inet`, not a string that happens to contain dots:
+`multi_az: bool`, `endpoint: string computed`), inputs and document
+columns declare theirs, and whatever arrives as text, a `--set`, a YAML
+cell, a CSV field, is parsed into the declared type there or rejected
+with the file and line. Inside the program a network is an `inet`, and
+the arithmetic is on networks:
 
 ```dform
 input vpc_net: inet = "10.0.0.0/16"
@@ -378,37 +380,26 @@ deny "database reachable from the internet" where {
 ```
 
 A literal takes the type its position expects, as in Postgres:
-`cidr_block = "10.0.0.0/16"` is an `inet` because the schema says the
-attribute is one, and a literal that does not parse is an error at that
-line. Where no type is expected a string stays a string, and a computed
-one is parsed on purpose: `inet(text)`. Types are inferred where they are not
-declared: a relation's columns from its facts and rules, a `let` from
-its value, a module output from its term; `decl` and annotations are
-for the edge, the docs and the editor, not for the checker's sake.
-`inet.subnet`, `inet.host`, `inet.contains`, `inet.overlaps` and
-`inet.prefix_len` are the network arithmetic; `ip`, `inet`, `int`, `string` are the parsers; `enum`, `list`, `set`, `ref(T)` and
-`secret(T)` are the other types. `type environment = enum("dev",
-"staging", "prod")` names one. A `check` refines any of them: `input
-replicas: int = 2 check 1 <= replicas <= 10` on an input,
-`cidr_block: inet check inet.prefix_len(cidr_block) <= 24` on a schema
-attribute, and a provider ships its own with its schema. A check is a
-policy in disguise: it lowers to a `deny` over the value, so it is
-checked at compile time when the value is a literal, at evaluation when
-it is computed, and after apply by the provider when the value is a
-secret the engine never sees; and `why` explains a failed one like any
-deny. Refinements also describe the input space, which is what
-`dform test` enumerates. Because the
-comparisons are typed, the policy above is a real overlap test over
-address ranges, not a string match, and "can this range reach that
-one" is a question the program can answer before anything is created.
+`cidr_block = "10.0.0.0/16"` is an `inet` because the schema says so,
+and a literal that does not parse is an error at that line. Types are
+inferred where they are not declared. `inet.subnet`, `inet.host`,
+`inet.contains`, `inet.overlaps` and `inet.prefix_len` are the network
+arithmetic; `ip`, `inet`, `int` and `string` parse text on purpose;
+`enum`, `list`, `set`, `ref(T)` and `secret(T)` are the other types,
+and `type environment = enum("dev", "staging", "prod")` names one. A
+`check` refines any of them, `input replicas: int = 2 check 1 <=
+replicas <= 10`, `cidr_block: inet check inet.prefix_len(cidr_block) <=
+24` in a schema, and a check is a policy: it is a `deny` over the
+value, checked at compile time for a literal, at evaluation for a
+computed value, and by the provider after apply for a secret, with
+`why` explaining a failure like any deny.
 
 **Externs and functions.** An extern is a relation a provider answers
 on demand, with binding modes: `aws.availability_zone["available"]`,
 `aws.ami[filter]`, `random.password[key]` (a secret, generated once and
-kept); Terraform's `data` blocks are externs the provider declares. The
-document loaders, `yaml(path)` and the rest, are the file provider's
-externs. Functions are qualified by the type they are about,
-`inet.subnet`, `str.split`, `list.join`, and declared in signature files
+kept). The document loaders, `yaml(path)` and the rest, are the file
+provider's externs. Functions are qualified by the type they are about,
+`inet.subnet`, `str.split`, `list.join`, declared in signature files
 you can jump to from the editor; constructors are named by their type,
 `int(s)`, `inet(s)`.
 
@@ -417,8 +408,7 @@ compiler tracks where secrets flow and refuses a program that would
 print one, compare one, or put one in a public attribute, before
 anything runs.
 
-**The header.** A file begins with what it is and what it takes, before
-any rule:
+**The header.** A file begins with what it is and what it takes:
 
 ```dform
 edition 2026
@@ -431,17 +421,14 @@ input db: { multi_az: bool, backup_days: int } = { multi_az: false, backup_days:
 A stack is the unit of state and apply, and a file under `stacks/` is
 one, named after itself: this is `stacks/shop.df`, so `dform plan shop`.
 An `input` is what the outside supplies, with a type and maybe a
-default; one without a default must be given. A `key` is an input with
-one more property: it selects the deployment, so each value of `env`
-and `region` has its own state, and it is given with the target, `dform
-plan shop env=prod region=eu-west-1`, never by `--set`. Together they
-are the stack's interface, and they come before the first rule. A `provider`
-statement is not a header line: it is a rule that configures a provider
-from whatever it reads (`provider aws { region }`, or `provider aws`
-alone), in scope for the whole program wherever it is written, so it
-goes next to what it depends on. Where a stack's state lives and who may
-approve a plan are operational, so they live in `dform.toml`, where `[stacks.shop]` is
-`stacks/shop.df`:
+default. A `key` is an input with one more property: it selects the
+deployment, so each value of `env` and `region` has its own state, and
+it is given with the target, `dform plan shop env=prod region=eu-west-1`.
+A `provider` statement is a rule that configures a provider from
+whatever it reads (`provider aws { region }`, or `provider aws` alone),
+and goes wherever reads best, usually next to what it depends on. Where
+a stack's state lives and who may approve a plan are operational, so
+they live in `dform.toml`, where `[stacks.shop]` is `stacks/shop.df`:
 
 ```toml
 [stacks.shop]
@@ -453,10 +440,8 @@ A small project needs none of this: `dform.toml` beside one `.df` file is
 a project with one stack.
 
 **Settings.** Configuration is the inputs. The declaration gives the
-default; a `settings` block contributes values to them under a
-condition, usually on the key; `--set` on the command line wins over
-both. Any subset of a composite key, or anything else the program
-knows, can be the condition:
+default, a `settings` block contributes values under a condition, and
+`--set` on the command line wins over both:
 
 ```dform
 settings { db.multi_az = true, db.backup_days = 14 } where env == "prod"
@@ -464,14 +449,13 @@ settings { db.backup_days = 30 } @override where env == "prod", region == "eu-we
 settings from yaml("config/${env}.yaml")
 ```
 
-The deployment's value is just the input's name, `db.backup_days`, and
-`why` shows which layer won. Two blocks that both apply and disagree at
-the same rank are a conflict naming both, so a broad block that should
-lose says `@default`; nothing is decided by how specific a condition
-looks. `settings from` takes a whole document, one leaf per input path,
-which is how a `config/prod.yaml` written by hand or by another tool
-feeds the program. A `let` is a cell too: two `let` rows that disagree
-are a conflict like any other.
+The condition can be any subset of a composite key, or anything else the
+program knows. The deployment's value is just the input's name,
+`db.backup_days`, and `why` shows which layer won; two blocks that both
+apply and disagree are a conflict naming both, so a broad block says
+`@default`. `settings from` takes a whole document, one leaf per input
+path, which is how a `config/prod.yaml` written by another tool feeds
+the program.
 
 **Documents.** Data that is not code is loaded as a document and
 destructured into relations, and the rows are facts like any other,
@@ -495,28 +479,18 @@ name = "shared"
 peer = "vpc-0a1b2c"
 ```
 
-`yaml`, `toml`, `json` and `csv` are the loaders; a loaded document is
-a value, and `name(columns) from DOC` reads one row per object by column
-name, parsing each cell to its column's type or failing with the file
-and line. `from` is the third way to define a relation, beside writing
-its rows and deriving them with a rule, and the three mix: `az("local",
-9)` beside the `from` is one more row. A relation is owned by the file
-that defines it; a module reads the stack's `az` and cannot add to it.
-A relation is a set, so order lives in lists: `zone = network.azs[i]`
-walks a list with its index, and a relation is sorted first when a
-position is wanted. A `git(..)` source is read at a commit the plan
+`yaml`, `toml`, `json` and `csv` load; `name(columns) from DOC` reads one
+row per object by column name, parsing each cell to its type or failing
+with the file and line. A `git(..)` source is read at a commit the plan
 records, so apply reads what plan read even if the branch moved. A file
-of plain facts is just a module: `module releases` reads
-`data/releases.df`.
+of plain facts is a module: `module releases` reads `data/releases.df`.
 
-**Modules.** A module declares its interface first, then its body;
-written inline, or as `module network` alone, which reads
-`modules/network.df`, and modules nest. An instance is one copy with
-inputs, gated by a clause if you like; `use` applies a module once, with
-no inputs, which is what a policy pack is. A module's relations are
-private to it, and it hands values out through outputs; its resources
-are visible to policy because they are cloud resources, which were
-never private.
+**Modules.** A module declares its interface, then its body; inline, or
+as `module network` alone, which reads `modules/network.df`, and modules
+nest. An instance is one copy with inputs, gated by a clause if you
+like; `use` applies a module once. A module's relations are private and
+it hands values out through outputs; its resources are visible to
+policy, as cloud resources are.
 
 ```dform
 module network {
@@ -535,27 +509,19 @@ instance network blue { cidr = "10.1.0.0/16" }
 instance network green { cidr = "10.2.0.0/16" } where env == "prod"
 ```
 
-The module takes one input and offers one output, its VPC. Inside, `vpc`
-is the module's own resource; `az(availability_zone, n)` is the stack's
-table, which a module reads like any fact. An entry that is just a name
-sets the attribute from the variable of the same name, as `{ a }` does
-in an object. `green` exists only in prod. The module's
-VPC is addressed as `aws.vpc["network.blue::vpc"]` everywhere else, and
-another block reads it as `network.blue.vpc`.
+Inside, `vpc` is the module's own resource and `az(..)` is the stack's
+table, read like any fact. `green` exists only in prod. The module's VPC
+is `aws.vpc["network.blue::vpc"]` everywhere else, and another block
+reads it as `network.blue.vpc`.
 
 **Policies.** A policy is a module of `set`, `deny` and `warn`
-statements with no inputs, `module baseline { .. }` in `policies/`, and
-`use baseline` applies it. A pack can write into your resources, and
-four things keep that from being spooky: nothing touches a stack's
-resources unless that stack says `use`; what a pack touches is listed
-by `dform dev effects`; ranks decide who wins, so a pack's `@default`
-never overrides what you wrote; and `why` names the author of every
-value.
-
-Policy also reads the plan itself. Once the plan is computed its
-changes go back into the program as facts, `deformation(kind,
-resource, before)`, and a policy can refuse, warn, or demand a
-signature:
+statements, `module baseline { .. }` in `policies/`, applied with `use
+baseline`. A pack can write into your resources, and nothing about that
+is hidden: it touches a stack only when the stack says `use`, `dform dev
+effects` lists what it touches, ranks decide who wins, and `why` names
+the author of every value. Policy also reads the plan itself: each
+change is a `deformation(kind, resource, before)` row, and a policy can
+refuse it, warn, or demand a signature:
 
 ```dform
 deny "no deletes in prod" { resource: r } where env == "prod", deformation("delete", r, _)
@@ -565,24 +531,21 @@ requires_approval(r, "a replace in prod") where env == "prod", deformation("repl
 
 `requires_approval` rows make the plan print its digest and refuse a
 plain apply; an approver signs the digest and `apply --approval` carries
-the token. `prevent_destroy` below is the same mechanism with a
-shorter name.
+the token.
 
-**Testing.** There is no test syntax: the denies are the tests. `dform
-test` evaluates the program once for every combination of inputs, each
-key and enum enumerated, each `check` supplying its boundaries and
-samples, against an empty world, and every deny must hold in each. A
-deny that is about one environment says so in its own clause:
+**Testing.** The denies are the tests. `dform test` evaluates the program
+once for every combination of inputs, each key and enum enumerated,
+each `check` supplying its boundaries and samples, against an empty
+world, and every deny must hold in each:
 
 ```dform
 deny "prod peers the two VPCs" where env == "prod", not "blue-green" in aws.vpc_peering_connection
 deny "dev has no database" where env == "dev", _ in aws.db_instance
 ```
 
-The same denies block a real plan when they fire there. A failure
-prints the inputs that produced it as `--set` flags, so it reproduces
-in one command, and `dform test shop env=prod` takes a target like
-`plan` and `apply` and pins the key, so only prod worlds run.
+A failure prints the inputs that produced it as `--set` flags, so it
+reproduces in one command; `dform test shop env=prod` pins the key, so
+only prod worlds run.
 
 ## The tool
 
@@ -601,13 +564,13 @@ change the rule and the base facts that caused it: "because
 
 **apply** prints the plan and asks. It applies in ticks; at any tick that
 adds a resource the first plan could not name, it prints that tick's
-plan and asks again before changing anything. `--yes` for scripts, which
-applies only the ticks the plan enumerated and stops before one that
-would add more, to be run again. State is written after every
-provider call, so an interrupted apply resumes where it stopped.
-`--parallel N` overlaps independent calls.
+plan and asks again before changing anything. `--yes` for scripts
+applies the ticks the plan enumerated and stops before one that would
+add more, to be run again. State is written after every provider call,
+so an interrupted apply resumes where it stopped. `--parallel N`
+overlaps independent calls.
 
-**Lifecycle.** The things that go wrong between two applies are facts,
+**Lifecycle.** The things that happen between two applies are facts,
 so policy can read them and `why` can explain them:
 
 ```dform
@@ -619,42 +582,35 @@ ignore_changes(bastion, "tags.last_scan")            # set on create, then the w
 lifecycle(db, "prevent_destroy") where env == "prod", db in aws.db_instance   # every prod database
 ```
 
-A resource in scope is named by its name, and a rule reaches many with
-`in`; only `moved` takes the old address as text, because that resource
-no longer exists.
-
-A rename is a `moved` fact, kept or deleted later; the plan prints the
-move and applies nothing for it. Which way a replace goes is the
-schema's to say, with `create_before_destroy` where it allows either;
-the old object is deposed and deleted the tick after what depended on
-it has moved. Drift is detected on every plan, because a plan starts by
-refreshing what exists: a change made in the console shows as an
-update back, or as a deny if a policy says that path is the world's to
-own. An apply that dies halfway resumes: state is written after every
-provider call, each create carries an idempotency key, and the next
-`apply` says "resuming the apply interrupted at tick 2" and finishes it,
-after checking that the world did not move under the remaining actions.
+Which way a replace goes is the schema's to say, with
+`create_before_destroy` where it allows either; the old object is
+deposed and deleted the tick after what depended on it has moved. Drift
+is detected on every plan, because a plan starts by refreshing what
+exists: a change made in the console shows as an update back, or as a
+deny if a policy says so. An apply that dies halfway resumes: each
+create carries an idempotency key, and the next `apply` says "resuming
+the apply interrupted at tick 2" and finishes it, after checking that
+the world did not move under the remaining actions.
 
 **Plan files and approvals.** `plan --out plan.json` records everything
 the plan depended on. `apply plan.json` refuses if the world or the
-inputs moved. Policy can say a change needs approval; an approver signs
-the plan's digest; `apply --approval` verifies it offline against the
-stack's trust root. `dform verify plan.json` recomputes the plan from the
-file alone, with no cloud access.
+inputs moved. `apply --approval` verifies a signed digest offline
+against the stack's trust root. `dform verify plan.json` recomputes the
+plan from the file alone, with no cloud access.
 
 **why, query, diff.** `dform why ADDR` explains a resource; `dform why
 'deny(m)'` explains a refusal. `dform query 'attr(aws.subnet, s,
 "availability_zone", z)'` asks the fact store anything. `dform diff
 --since 2026-09-20` explains what changed between applies, and why.
 
-**test and check.** `dform test` runs the tests over the input space; `dform check --sarif`
-runs the policies for CI.
+**test and check.** `dform test` runs the denies over the input space;
+`dform check --sarif` runs them for CI.
 
 **Stacks and deployments.** A project grows from one file to many
 stacks without changing shape. Each `stacks/*.df` is a stack with its
-own state; a `key` input makes it one deployment per value, so one
-program is `shop[env=dev]`, `shop[env=staging]` and `shop[env=prod]`,
-each applied, locked and audited on its own:
+own state; a `key` makes it one deployment per value, so one program is
+`shop[env=dev]`, `shop[env=staging]` and `shop[env=prod]`, each applied,
+locked and audited on its own:
 
 ```
 $ dform stack list
@@ -664,31 +620,24 @@ shop[env]       stacks/shop.df
 platform[env]   stacks/platform.df
 ```
 
-Per-environment values are `settings` blocks in the program, or one
-document per deployment that `settings from yaml("config/shop/${env}.yaml")`
-reads, every leaf a contribution to an input. State lives in a
-directory or an S3 bucket with conditional writes and a lease, per
-stack, per deployment. Stacks read each other's outputs through the
-same lookup shape as everything else, and across projects when
-`dform.toml` names the other project's backend as a remote:
+Stacks read each other's outputs through the same lookup shape as
+everything else, and across projects when `dform.toml` names the other
+project's backend as a remote:
 
 ```dform
 let cluster_endpoint = stacks.platform[env=env].endpoint          # this project's platform stack
 let registry = stacks.acme.platform[env="prod"].registry_url      # remote acme's
 ```
 
-State is small on purpose: it maps each address to the object's remote
-id and records what the last apply saw; attribute values come from the
-provider on every plan, and no secret is ever written to it. A stack's
-state holds a lease while an apply runs, and a second apply of the same
-deployment is refused naming the holder. `dform state show`, `state mv`
-and `stack rekey` (move a deployment to a new key value) are the state
-operations; nothing else edits state by hand.
-
-A project's stacks depend on each other through the values they read,
-so `dform plan` and `dform apply` with no target take the whole project
-and run its stacks in dependency order, each with its own confirmation
-and its own state; `dform apply shop` is one stack.
+`dform plan` and `dform apply` with no target take the whole project and
+run its stacks in dependency order, each with its own confirmation and
+its own state. State is small: it maps each address to the object's
+remote id and records what the last apply saw; attribute values come
+from the provider on every plan, and no secret is ever written to it.
+It lives in a directory or an S3 bucket with conditional writes and a
+lease per deployment, so a second apply of the same deployment is
+refused naming the holder. `dform state show`, `state mv` and `stack
+rekey` are the state operations.
 
 **Providers.** A provider is a wasm component: one file, any platform,
 sandboxed, carrying its own schema, so the editor can jump to a type's
@@ -696,8 +645,7 @@ definition with nothing running. A registry is a bucket, the same kind
 you keep state in: `[registries] acme = { backend = 's3(..)', keys =
 'jwks_file(..)' }` in `dform.toml`, versions immutable, packages signed,
 resolved into `dform.lock`. `dform provider publish` runs the
-conformance suite and uploads; there is no registry service to run.
-Functions can be shipped the same way.
+conformance suite and uploads. Functions ship the same way.
 
 **The editor.** `dform lsp` gives diagnostics, hover with the value of any
 term for the selected deployment and who contributed it, jump to a type's
