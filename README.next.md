@@ -339,9 +339,47 @@ higher-rank contribution to the same cell. `settings prod { db.multi_az
 selected row, and `cfg.db.multi_az` a leaf of it. Two `let` rows that
 disagree are a conflict, like any cell.
 
-**Types and checks.** `type environment = enum("dev", "staging", "prod")`
-names a type. `input replicas: int = 2 check 1 <= replicas <= 10` refines
-one; a failed check is a deny, with provenance like any other.
+**Types.** Values are typed, and strings stop at the edge. A provider's
+schema types every attribute (`cidr_block: inet required`,
+`multi_az: bool`, `endpoint: string computed`), an input or a table
+column declares its type, and whatever arrives as text, a `--set`, a
+YAML cell, a CSV field, is parsed into the declared type there or
+rejected with the file and line. Inside the program a network is an
+`inet`, not a string that happens to contain dots:
+
+```dform
+input vpc_net: inet = inet("10.0.0.0/16")
+input az(name: string, index: int) from yaml("data/azs.yaml")
+
+resource aws.subnet "private-${z}" {
+  cidr_block = inet.subnet(vpc_net, 4, n)          # the n-th /20 of the /16
+} where az(z, n)
+
+deny "subnets overlap" { a: x, b: y } where {
+  x in aws.subnet
+  y in aws.subnet
+  x != y
+  inet.overlaps(x.cidr_block, y.cidr_block)
+}
+
+deny "database reachable from the internet" where {
+  rule in aws.security_group_rule
+  rule.to_port == 5432
+  inet.contains(rule.cidr_ipv4, ip("0.0.0.0"))
+}
+```
+
+`inet.subnet`, `inet.host`, `inet.contains`, `inet.overlaps` and
+`inet.prefix_len` are the network arithmetic; `ip`, `inet`, `int`,
+`string` are the constructors; `enum`, `list`, `set`, `ref(T)` and
+`secret(T)` are the other types. `type environment = enum("dev",
+"staging", "prod")` names one. A `check` refines any of them: `input
+replicas: int = 2 check 1 <= replicas <= 10`,
+`cidr_block: inet check inet.prefix_len(cidr_block) <= 24` in a schema;
+a failed check is a deny, with provenance like any other. Because the
+comparisons are typed, the policy above is a real overlap test over
+address ranges, not a string match, and "can this range reach that
+one" is a question the program can answer before anything is created.
 
 **Modules and instances.** A module declares its interface first, then
 its body. An instance is one copy, gated by a clause if you like. A
