@@ -571,6 +571,27 @@ and three things did not survive it.
   is a statement, never a value. Designed when a two-region example
   forces it; this is the parking lot's needs/offers.
 
+** R-44 to R-46: Phase 10, OVH (2026-10-01)
+The first real cloud, after Phase 9 and the wasm host. Shape: one
+project, two stacks keyed by env (`platform`: vRack network, subnet,
+Managed Kubernetes, node pool; `shop`: the workloads, reading
+`stacks.platform[env=env]`), state and the first registry in OVH Object
+Storage (the s3 backend with an endpoint, which works today).
+- *R-44* A native OVH provider, not a bridge: the API is REST with a
+  simple signature and everything needed is under `/cloud/project/`, so
+  a wasi-http client suffices and no SDK is involved; it is the first
+  provider written with the R-25 SDK and the easy answer to R-13c.
+- *R-45* A provider configured from a secret another provider holds.
+  MKS returns one sensitive kubeconfig; `provider k8s { kubeconfig =
+  cluster.kubeconfig }` needs a guarded `reveal`: inside the dependent
+  provider's Configure call only, the engine asks the holder for the
+  bytes and substitutes them, in memory for that call, never stored,
+  printed or digested; the audit log records that a reveal happened.
+  The one new protocol call of the phase.
+- *R-46* The example and the rewrite of docs/ovh.org without the bridge,
+  the bootstrap role and the controller.
+Cost: the control plane is free, one d2-4 node is about EUR 12/month.
+
 * Vocabulary
 The name is Terraform minus terra plus Datalog, and it reads as "deform" aloud.
 Use the pun consistently in CLI output, docs, and diagnostics.
