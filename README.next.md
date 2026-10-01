@@ -28,14 +28,12 @@ resource aws.vpc main {
   cidr_block = "10.0.0.0/16"
 }
 
-#| The zones to build in: every available one in the region.
-let zones = aws.availability_zones["available"]
-
-resource aws.subnet "private-${zone}" {
+#| One private subnet in every available zone of the region.
+resource aws.subnet "private-${availability_zone}" {
   vpc_id = main.id
   cidr_block = inet.subnet(main.cidr_block, 8, n)
-  availability_zone = zone
-} where zone = zones[n]
+  availability_zone
+} where aws.availability_zone("available", availability_zone, n)
 ```
 
 ```
@@ -54,14 +52,15 @@ plan: 7 deformations (7 create)
   ... four more
 ```
 
-`aws.availability_zones` is a question the provider answers, what
-Terraform calls a data source; `["available"]` is the argument and the
-answer is the zone names, in a stable order. The subnet block ends in a
-`where` clause, which makes it a rule: `zone = zones[n]` walks the list,
-binding a zone and its position, and every answer is one subnet with
-the n-th /24. `?` marks a value
-apply will learn, here the VPC's id. The `#|` line is a doc comment,
-which the editor shows and policy can read. When the region gains a
+The subnet block ends in a `where` clause, which makes it a rule: the
+clause is a query, and every answer is one subnet. `aws.availability_zone`
+is a table the provider answers, what Terraform calls a data source:
+`"available"` is the question, and each row binds a zone's name to
+`availability_zone` and its stable position to `n`, so the n-th zone
+gets the n-th /24. An entry that is only a name, `availability_zone`,
+takes the variable of that name. `?` marks a value apply will learn,
+here the VPC's id. The `#|` line is a doc comment, which the editor
+shows and policy can read. When the region gains a
 zone, the next plan has one more subnet; nothing in the file changes.
 
 ```bash
