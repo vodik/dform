@@ -113,7 +113,7 @@ A subnet added in another module tomorrow is in this list without this
 line changing.
 
 **An attribute can have several authors.** A module sets a tag, a policy
-sets another, the environment's settings set a third. They merge per
+sets another, the stack sets a third from its key. They merge per
 leaf by rank, `@default` below normal below `@override`. Two authors who
 disagree at the same rank are a conflict that names both. The order of
 statements never matters.
@@ -131,8 +131,8 @@ $ dform query 'aws.vpc["network.main::vpc"].tags'
 {component: "network", env: "prod", team: "platform"}
 ```
 
-Three authors: the module wrote `component`, the environment's settings
-wrote `env`, this policy wrote `team`.
+Three authors: the module wrote `component`, the stack wrote `env` from
+its key, this policy wrote `team`.
 
 **Policy adds as well as forbids.** The line above is a policy. So is
 this one, and both live in the same pack.
@@ -280,8 +280,8 @@ read.
 
 **Types.** Values are typed, and strings stop at the edge. A provider's
 schema types every attribute (`cidr_block: inet required`,
-`multi_az: bool`, `endpoint: string computed`), an input or a table
-column declares its type, and whatever arrives as text, a `--set`, a
+`multi_az: bool`, `endpoint: string computed`), an input or a `from`
+statement declares its columns' types, and whatever arrives as text, a `--set`, a
 YAML cell, a CSV field, is parsed into the declared type there or
 rejected with the file and line. Inside the program a network is an
 `inet`, not a string that happens to contain dots:
@@ -335,9 +335,11 @@ address ranges, not a string match, and "can this range reach that
 one" is a question the program can answer before anything is created.
 
 **Externs and functions.** An extern is a relation a provider answers
-on demand, with binding modes: `aws.ami[filter]`,
-`file.json[path]`, `random.password[key]` (a secret, generated once and
-kept). Functions are qualified by the type they are about,
+on demand, with binding modes: `aws.availability_zone["available"]`,
+`aws.ami[filter]`, `random.password[key]` (a secret, generated once and
+kept); Terraform's `data` blocks are externs the provider declares. The
+document loaders, `yaml(path)` and the rest, are the file provider's
+externs. Functions are qualified by the type they are about,
 `inet.subnet`, `str.split`, `list.join`, and declared in signature files
 you can jump to from the editor; constructors are named by their type,
 `int(s)`, `inet(s)`.
@@ -544,28 +546,23 @@ each applied, locked and audited on its own:
 
 ```
 $ dform stack list
-shop[env]    stacks/shop.df
-  env=dev      applied 2026-09-30 14:02 by simon at 1c83fe0
-  env=prod     applied 2026-09-28 09:40 by ci at 0cebc08, plan pending
-platform.cluster[env]   stacks/cluster.df
+shop[env]       stacks/shop.df
+  env=dev       applied 2026-09-30 14:02 by simon at 1c83fe0
+  env=prod      applied 2026-09-28 09:40 by ci at 0cebc08, plan pending
+platform[env]   stacks/platform.df
 ```
 
-Per-environment values are a settings table the stack's `config` names,
-one YAML file per deployment, every leaf a contribution that wins over
-the program's `@default` layer:
-
-```toml
-[stacks.shop]
-config = 'yaml("config/shop/{env}.yaml")'
-```
-
-State lives in a directory or an S3 bucket with conditional writes and a
-lease, per stack, per deployment. Stacks read each other's outputs
-through the same lookup shape as everything else, across projects too
-when `dform.toml` names the other project's backend as a remote:
+Per-environment values are `settings` blocks in the program, or one
+document per deployment that `settings from yaml("config/shop/${env}.yaml")`
+reads, every leaf a contribution to an input. State lives in a
+directory or an S3 bucket with conditional writes and a lease, per
+stack, per deployment. Stacks read each other's outputs through the
+same lookup shape as everything else, and across projects when
+`dform.toml` names the other project's backend as a remote:
 
 ```dform
-cluster_endpoint = stacks.platform.cluster[env=env].endpoint
+let cluster_endpoint = stacks.platform[env=env].endpoint          # this project's platform stack
+let registry = stacks.acme.platform[env="prod"].registry_url      # remote acme's
 ```
 
 `dform state show`, `state mv`, `stack rekey` (move a deployment to a
