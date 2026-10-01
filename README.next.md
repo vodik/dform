@@ -610,7 +610,14 @@ The plan says it in its own terms: the namespace and the deployment are
 `pending on ?aws.eks_cluster["cluster"].endpoint, resolves after tick
 1`. Tick 1 makes the VPC and the cluster; the provider is configured
 from the endpoint; tick 2 makes the namespace and the deployment. One
-plan, one apply, one state, one `why`. The same policy pack that tags every VPC can set
+plan, one apply, one state, one `why`.
+
+In a real project this is two stacks, `stacks/platform.df` owning the
+cluster and `stacks/shop.df` owning what runs on it, because they change
+at different speeds and are applied by different people. The second
+reads the first's outputs, `stacks.platform[env=env].endpoint`, and
+nothing else changes: the engine treats a value another stack published
+exactly as it treats one the cloud will produce. The same policy pack that tags every VPC can set
 resource limits on every container, in every module, and the list is
 merged by the container's name, not its position:
 
