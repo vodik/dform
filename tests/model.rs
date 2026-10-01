@@ -932,7 +932,11 @@ impl Runner<'_> {
         let stale_at_1 = match ran.result {
             Ok(()) => {
                 let now = PlanFile::load(&fresh).expect("plan --out wrote it");
-                Some(!saved.stale(&now.deformations, 1).is_empty())
+                Some(
+                    !saved
+                        .stale(&now.deformations, 1, &|_, _| Vec::new())
+                        .is_empty(),
+                )
             }
             Err(_) => None,
         };
