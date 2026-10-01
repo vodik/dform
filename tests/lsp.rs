@@ -890,30 +890,6 @@ fn quick_fix(root: &Path, file: &Path, edited: &str, needle: &str, title: &str) 
     texts
 }
 
-/// A pack writing outside its grants: the grant, after its others.
-#[test]
-fn quick_fix_grants_what_a_pack_writes() {
-    let (_s, root) = example("demo");
-    let baseline = root.join("policies/baseline.df");
-    let text = std::fs::read_to_string(&baseline).unwrap();
-    let edited = text.replace(
-        "  # Networking invariants",
-        "  set r.cidr = \"10.0.0.0/8\" where r in net.vpc\n\n  # Networking invariants",
-    );
-    let texts = quick_fix(
-        &root,
-        &baseline,
-        &edited,
-        "policy baseline writes .cidr of net.vpc outside its grants",
-        "grant it: `contributes net.vpc.cidr`",
-    );
-    assert!(
-        texts[0].contains("  contributes settings.audit.sinks\n  contributes net.vpc.cidr\n"),
-        "{}",
-        texts[0]
-    );
-}
-
 /// An unknown name: quoted.
 #[test]
 fn quick_fix_quotes_an_unknown_name() {

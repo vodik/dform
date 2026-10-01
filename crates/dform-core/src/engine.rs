@@ -4101,7 +4101,7 @@ mod tests {
     /// replaced wholesale by a normal one, and same-shelf sets union.
     #[test]
     fn a_default_set_is_replaced_not_unioned() {
-        let (r, violations) = run("type_lattice(net.vpc, \"sgs\", \"set\")\n             resource net.vpc a { sgs = [\"base\"] }\n             resource net.vpc b { }\n             policy p {\n               contributes t.sgs\n               arg(t, n, \"sgs\", [\"default_sg\", \"ssh\"], \"default\") where want(t, n)\n               arg(t, n, \"sgs\", [\"audit\"]) where want(t, n), n = \"a\"\n             }\n             use p")
+        let (r, violations) = run("type_lattice(net.vpc, \"sgs\", \"set\")\n             resource net.vpc a { sgs = [\"base\"] }\n             resource net.vpc b { }\n             policy p {\n               arg(t, n, \"sgs\", [\"default_sg\", \"ssh\"], \"default\") where want(t, n)\n               arg(t, n, \"sgs\", [\"audit\"]) where want(t, n), n = \"a\"\n             }\n             use p")
         .unwrap();
         assert!(violations.is_empty(), "{violations:?}");
         assert_eq!(

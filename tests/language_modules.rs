@@ -1,6 +1,6 @@
-//! Modules, instances, interfaces and grants (E DR-3): predicates are
-//! private per instance, inputs and outputs are the data boundary, and a
-//! policy pack writes only inside its grants.
+//! Modules, instances and interfaces (E DR-3, DESIGN.org R-5): predicates
+//! are private per instance, inputs and outputs are the data boundary, and
+//! a policy pack writes without a grant.
 
 mod common;
 use common::Scratch;
@@ -63,19 +63,19 @@ big(s) where size(s)
     );
 }
 
-/// `export p/N` is `m.i.p` outside; an `addr` output is the instance's
+/// An output is `m.i.k` outside; an `addr` output is the instance's
 /// resource address, read with a variable instance segment.
 #[test]
-fn exports_and_outputs_are_the_interface() {
+fn outputs_are_the_interface() {
     let r = plan(
         r#"edition 2026
 module m {
   input n: int
-  export size
   size(n_) where n(n_)
   resource net.vpc vpc {
     size = s_
   } where size(s_)
+  output size: int = s_ where size(s_)
   output vpc: addr = vpc
 }
 instance m a { n = 3 }
@@ -83,7 +83,7 @@ inst("a")
 resource net.subnet s {
   size = s_
   vpc = v
-} where m.a.size(s_), inst(i), output(m[i], "vpc", v)
+} where s_ = m.a.size, inst(i), output(m[i], "vpc", v)
 "#,
     )
     .success();
@@ -92,6 +92,36 @@ resource net.subnet s {
             .contains("+ net.subnet[\"s\"]\n  size = 3\n  vpc = \"m.a::vpc\"\n"),
         "{}",
         r.stdout
+    );
+}
+
+/// `export p` and `contributes` are gone (DESIGN.org R-5): each is an
+/// error naming what to write instead.
+#[test]
+fn export_of_a_relation_and_contributes_are_errors() {
+    let r = plan(
+        r#"edition 2026
+module m {
+  export size
+  contributes need
+  size(1)
+}
+instance m a {}
+"#,
+    )
+    .failure();
+    assert!(
+        r.stderr.contains(
+            "p.df:3:3: `export p` is gone: a module's relations are private to each instance"
+        ),
+        "{}",
+        r.stderr
+    );
+    assert!(
+        r.stderr
+            .contains("p.df:4:3: `contributes` is gone: a write needs no grant"),
+        "{}",
+        r.stderr
     );
 }
 
@@ -152,32 +182,29 @@ instance m a { n = 9 }
     );
 }
 
-/// A policy pack's `arg` must fall in a grant, and a pack's own relations
-/// are private unless granted.
+/// A policy pack writes any attribute without a grant (DESIGN.org R-5):
+/// ranks decide, and the stratifier partitions the write by its head. A
+/// pack's own relations stay private.
 #[test]
-fn a_pack_writes_only_inside_its_grants() {
+fn a_pack_writes_without_a_grant_and_its_relations_are_private() {
     let src = r#"edition 2026
 resource net.vpc main { cidr = "10.0.0.0/16" }
 policy tags {
-  contributes t.tags
-  arg(t, a, "tags", { team: "x" }) where want(t, a)
+  team("x")
+  arg(t, a, "tags", { team: v }) where want(t, a), team(v)
   set a.cidr = "10.9.0.0/16" @override where a in net.vpc
 }
 use tags
 "#;
-    let r = plan(src).failure();
+    let r = plan(src).success();
+    assert!(r.stdout.contains("cidr = \"10.9.0.0/16\""), "{}", r.stdout);
+    assert!(r.stdout.contains("team = \"x\""), "{}", r.stdout);
+    let r = plan(&format!("{src}seen(v) where team(v)\n")).failure();
     assert!(
-        r.stderr
-            .contains("p.df:6:3: policy tags writes .cidr of net.vpc outside its grants"),
+        r.stderr.contains("p.df:9:15: team/1 is private to policy tags"),
         "{}",
         r.stderr
     );
-    let r = plan(&src.replace(
-        "contributes t.tags",
-        "contributes t.tags\n  contributes net.vpc.cidr",
-    ))
-    .success();
-    assert!(r.stdout.contains("cidr = \"10.9.0.0/16\""), "{}", r.stdout);
 }
 
 /// A stack input passed to a module input of the same name: the

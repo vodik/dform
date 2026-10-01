@@ -100,7 +100,7 @@ fn spanned(span: Span, msg: impl Into<String>) -> anyhow::Error {
 }
 
 /// E §6 statements with no lowering yet are errors naming their ticket,
-/// and an interface statement (`input`, `output`, `export`, `contributes`)
+/// and an interface statement (`input`, `output`)
 /// where it has no meaning is an error naming where it belongs.
 fn reject_pending(stmts: &[Stmt]) -> Result<()> {
     #[derive(Clone, Copy, PartialEq)]
@@ -130,9 +130,6 @@ fn reject_pending(stmts: &[Stmt]) -> Result<()> {
                     o.span,
                     "an output is declared at the top of a module or the program",
                 )),
-                Stmt::Export(e) if at != At::Module => {
-                    diags.push(misplaced(e.span, "`export` belongs at the top of a module"))
-                }
                 Stmt::Scenario(sc) if at != At::Top => diags.push(misplaced(
                     sc.span,
                     "a scenario belongs at the top of the program",
@@ -145,10 +142,6 @@ fn reject_pending(stmts: &[Stmt]) -> Result<()> {
                 Stmt::Stack(c) | Stmt::Provider(c) if at != At::Top => diags.push(misplaced(
                     c.span,
                     "`stack` and `provider` belong at the top of the program",
-                )),
-                Stmt::Contributes(c) if at != At::Module => diags.push(misplaced(
-                    c.span,
-                    "`contributes` belongs at the top of a module or policy pack",
                 )),
                 _ => {}
             }

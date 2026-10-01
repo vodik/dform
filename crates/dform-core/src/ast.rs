@@ -123,10 +123,6 @@ pub enum Stmt {
     InputRelation(InputRelation),
     /// An output's declaration (`k: T`) or its value (`k = term`).
     Output(OutputDecl),
-    /// `export p`: a module predicate readable as `m.i.p`, one per arity.
-    Export(Export),
-    /// `contributes T.path`, `contributes t.path` (every type) or `contributes p`.
-    Contributes(Contributes),
     /// `stack name { ... }`: the stack this program owns (`stack`).
     Stack(Config),
     /// `provider name { ... }`: a provider the program uses (`stack`).
@@ -245,7 +241,7 @@ pub struct Decl {
 }
 
 /// `module name { ... }` (E DR-3): its predicates are private to each
-/// instance unless exported.
+/// instance; values leave it through outputs.
 #[derive(Debug, Clone)]
 pub struct Module {
     pub name: String,
@@ -292,13 +288,6 @@ pub struct OutputDecl {
 }
 
 #[derive(Debug, Clone)]
-pub struct Export {
-    pub pred: String,
-    pub arity: usize,
-    pub span: Span,
-}
-
-#[derive(Debug, Clone)]
 pub struct Scenario {
     pub name: String,
     pub body: Vec<Stmt>,
@@ -313,12 +302,6 @@ pub struct Config {
     /// its span. Empty for a provider and an unkeyed stack.
     pub keys: Vec<(String, Span)>,
     pub config: Vec<(String, Term, Span)>,
-    pub span: Span,
-}
-
-#[derive(Debug, Clone)]
-pub struct Contributes {
-    pub grant: Grant,
     pub span: Span,
 }
 
@@ -415,16 +398,6 @@ pub enum TypeExpr {
     Apply(String, Vec<TypeExpr>),
     Object(Vec<(String, TypeExpr)>),
     Str(String),
-}
-
-/// `contributes T.path` (`None` for `_`) or `contributes pred`.
-#[derive(Debug, Clone)]
-pub enum Grant {
-    Arg {
-        typ: Option<String>,
-        path: Option<String>,
-    },
-    Pred(String),
 }
 
 /// `+name: type` (input) or `-name: type` (output) of an extern.

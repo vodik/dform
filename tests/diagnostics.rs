@@ -104,7 +104,7 @@ fn why_names_the_pack_and_the_module_instance() {
     let s = Scratch::new("diag-why");
     s.write(
         "p.df",
-        "edition 2026\nmodule m {\n  resource net.vpc vpc { cidr = \"10.0.0.0/16\" }\n}\ninstance m main {}\npolicy tags {\n  contributes t.tags\n  arg(t, a, \"tags\", { team: \"x\" }) where want(t, a)\n}\nuse tags\n",
+        "edition 2026\nmodule m {\n  resource net.vpc vpc { cidr = \"10.0.0.0/16\" }\n}\ninstance m main {}\npolicy tags {\n  arg(t, a, \"tags\", { team: \"x\" }) where want(t, a)\n}\nuse tags\n",
     );
     let out = s
         .run(&[
@@ -122,5 +122,5 @@ fn why_names_the_pack_and_the_module_instance() {
         out.contains("owner p.df:3:26 (arg, module m instance main)"),
         "{out}"
     );
-    assert!(out.contains("(p.df:8:3, policy tags)]"), "{out}");
+    assert!(out.contains("(p.df:7:3, policy tags)]"), "{out}");
 }

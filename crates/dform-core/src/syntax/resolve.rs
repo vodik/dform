@@ -23,8 +23,8 @@ use super::SyntaxKind::{self, *};
 use super::parser as parse;
 use super::{SyntaxNode, SyntaxToken};
 use crate::ast::{
-    ApplyPolicy, Atom, AttrDecl, BindArg, Config, Contributes, Decl, Export, Extern, ExternFn,
-    FieldAssign, FieldOp, Grant, Import, InputDecl, InputRelation, Instance, Lit, Module,
+    ApplyPolicy, Atom, AttrDecl, BindArg, Config, Decl, Extern, ExternFn, FieldAssign,
+    FieldOp, Import, InputDecl, InputRelation, Instance, Lit, Module,
     OutputDecl, Pending, PendingKind, PolicyPack, Program, Rank, Resource, RuleStmt, Scenario,
     Settings, Span, Stmt, Term, TypeExpr,
 };
@@ -1265,34 +1265,24 @@ impl<'u> Lowerer<'u> {
             TYPE_ALIAS => Ok(Vec::new()),
             EXPORT if tokens(n).nth(1).is_some_and(|t| t.kind() == TYPE_KW) => Ok(Vec::new()),
             EXPORT => {
-                // `export p`: every arity the module gives `p`.
-                let pred = word_text(n, 1);
-                let arities = self.decls.scopes[scope]
-                    .arities
-                    .get(&pred)
-                    .cloned()
-                    .unwrap_or_default();
-                // None: the module interface check says so.
-                let arities = if arities.is_empty() {
-                    BTreeSet::from([0])
-                } else {
-                    arities
-                };
-                Ok(arities
-                    .into_iter()
-                    .map(|arity| {
-                        Stmt::Export(Export {
-                            pred: pred.clone(),
-                            arity,
-                            span,
-                        })
-                    })
-                    .collect())
+                self.diags.push(
+                    Diagnostic::error(
+                        span,
+                        "`export p` is gone: a module's relations are private to each instance",
+                    )
+                    .with_help("pass the value through an output, `output p = ...`"),
+                );
+                Err(Skip)
             }
             CONTRIBUTES => {
-                let c = n.children().find_map(|c| Chain::of(&c)).ok_or(Skip)?;
-                let grant = self.grant(&c, span)?;
-                one(Stmt::Contributes(Contributes { grant, span }))
+                self.diags.push(
+                    Diagnostic::error(span, "`contributes` is gone: a write needs no grant")
+                        .with_help(
+                            "delete the line; a module's relation reaches the stack \
+                             through an output",
+                        ),
+                );
+                Err(Skip)
             }
             EXTERN => {
                 let name = dotted_text(n, 1);
@@ -1437,50 +1427,6 @@ impl<'u> Lowerer<'u> {
                 format!("unknown rank `{other}`: a rank is `@default` or `@override`"),
             ),
         }
-    }
-
-    /// `contributes p`, `contributes t.path` (every type), `contributes settings.path`,
-    /// `contributes TYPE.path`.
-    fn grant(&mut self, c: &Chain, span: Span) -> L<Grant> {
-        if c.ops.iter().any(|o| !matches!(o, Op::Field(..))) {
-            return self.error(span, "a grant is a relation or TYPE.path");
-        }
-        let segs = c.fields();
-        if c.head == "_" {
-            let path = segs[1..].join(".");
-            return self.error(
-                span,
-                format!(
-                    "`_` is a placeholder and is never accessed: name the type, \
-                     `contributes t.{path}` grants `.{path}` on every type"
-                ),
-            );
-        }
-        if segs.len() == 1 {
-            return Ok(Grant::Pred(c.head.clone()));
-        }
-        // `t.path`: a name no type starts with stands for every type.
-        let any = c.head_kind != SETTINGS_KW
-            && !self.decls.namespaces.contains(&c.head)
-            && !self.decls.types.contains(&c.head);
-        let split = if c.head_kind == SETTINGS_KW || any {
-            1
-        } else if let Some(i) = (1..segs.len())
-            .rev()
-            .find(|i| self.decls.types.contains(&segs[..*i].join(".")))
-        {
-            i
-        } else if segs.len() >= 3 {
-            2
-        } else {
-            1
-        };
-        let typ = segs[..split].join(".");
-        let path = segs[split..].join(".");
-        Ok(Grant::Arg {
-            typ: (!any).then_some(typ),
-            path: (!path.is_empty() && path != "_").then_some(path),
-        })
     }
 
     fn attr_decls(&mut self, n: &SyntaxNode, scope: usize) -> L<Vec<AttrDecl>> {

@@ -1,13 +1,12 @@
-//! Modules, instances, interfaces and grants (E DR-3).
+//! Modules, instances and interfaces (E DR-3, DESIGN.org R-5).
 //!
 //! An `instance m i { k = V } :- B` is module `m`'s body under the scope
 //! `m.i`:
 //!
 //! - resource names are scoped (`m.i::name`, its address `T["m.i::name"]`);
 //! - every predicate the module defines is private to the instance
-//!   (`m.i::p`, a name no source can spell) unless it is `export`ed, which
-//!   makes it readable as `m.i.p`, or granted with `contributes p`, which
-//!   makes the module a contributor to the global `p`;
+//!   (`m.i::p`, a name no source can spell); a value leaves the instance
+//!   through an output the stack wires;
 //! - `input k: T [= D] [where R]` is read inside as `k(V)`: the collapsed
 //!   cell `(input, m.i, k)` of the attribute aggregate, where the instance's
 //!   `k = V :- B` contributes at the normal rank and `D` at `@default`;
@@ -16,11 +15,11 @@
 //!
 //! A module body reads every global relation. A policy pack is a module
 //! applied once, with no scope on resource names: its predicates are private
-//! too, and each `arg` it writes must fall in one of its `contributes TYPE.path
-//! TypePat at PathPat` grants.
+//! too. What it writes is not granted: ranks are the ownership model, and
+//! the stratifier partitions a write by its head's constant type and path.
 
 use crate::ast::{
-    Atom, FieldAssign, Grant, InputDecl, Lit, OutputDecl, Program, Resource, RuleStmt, Settings,
+    Atom, FieldAssign, InputDecl, Lit, OutputDecl, Program, Resource, RuleStmt, Settings,
     Span, Stmt, Term, TypeExpr,
 };
 use crate::diag::{self, Diagnostic, Diagnostics};
@@ -71,8 +70,6 @@ struct Interface {
     inputs: Vec<InputDecl>,
     outputs: BTreeMap<String, OutputDecl>,
     output_values: Vec<OutputDecl>,
-    exports: BTreeMap<String, (usize, Span)>,
-    grants: Vec<(Grant, Span)>,
 }
 
 /// Split a module or pack body into its interface and its statements.
@@ -99,10 +96,6 @@ fn interface(owner: &str, body: &[Stmt], diags: &mut Vec<Diagnostic>) -> (Interf
                 }
             }
             Stmt::Output(o) => i.output_values.push(o.clone()),
-            Stmt::Export(e) => {
-                i.exports.insert(e.pred.clone(), (e.arity, e.span));
-            }
-            Stmt::Contributes(c) => i.grants.push((c.grant.clone(), c.span)),
             Stmt::Module(m) => diags.push(Diagnostic::error(
                 m.span,
                 format!("module {} inside {owner}: modules do not nest", m.name),
@@ -146,7 +139,7 @@ fn is_shared(pred: &str) -> bool {
 
 /// How a module's predicate names are renamed in one instance.
 struct Names {
-    /// Predicate name -> its instance name (`m.i::p` or `m.i.p`).
+    /// Predicate name -> its private name (`m.i::p`, `pack::p`).
     map: BTreeMap<String, String>,
 }
 
@@ -157,8 +150,7 @@ impl Names {
 }
 
 /// Expand `module`/`instance` and `policy`/`apply`: the program with every
-/// instance's body scoped and renamed and every applied pack renamed and
-/// checked against its grants.
+/// instance's body scoped and renamed and every applied pack renamed.
 /// A program with its modules and packs expanded, and the interface the
 /// later passes check: every typed input, and every output declared
 /// `secret(T)` (scope, key).
@@ -196,21 +188,6 @@ pub fn expand(program: &Program) -> Result<Expanded> {
             Stmt::Module(m) => {
                 let owner = format!("module {}", m.name);
                 let (i, rest) = interface(&owner, &m.body, &mut diags);
-                for (g, span) in &i.grants {
-                    if let Grant::Arg { .. } = g {
-                        diags.push(
-                            Diagnostic::error(
-                                *span,
-                                format!(
-                                    "module {} takes a `contributes TYPE.path` grant: a module \
-                                     writes only its own resources",
-                                    m.name
-                                ),
-                            )
-                            .with_help("write other resources' attributes from a policy pack"),
-                        );
-                    }
-                }
                 check_module(m, &i, &rest, &mut diags);
                 check_types(&format!("module {}", m.name), &i.inputs, &mut diags);
                 if modules.insert(m.name.clone(), (m, i, rest)).is_some() {
@@ -229,7 +206,7 @@ pub fn expand(program: &Program) -> Result<Expanded> {
 
     let mut out = Vec::new();
     // Private names by plain name, for the error when the program reads one.
-    let mut private: BTreeMap<String, (String, String)> = BTreeMap::new();
+    let mut private: BTreeMap<String, (String, Option<String>)> = BTreeMap::new();
     let mut instances: BTreeSet<String> = BTreeSet::new();
     for s in &program.statements {
         match s {
@@ -296,13 +273,13 @@ pub fn expand(program: &Program) -> Result<Expanded> {
                 let origin = diag::origin_id(&format!("module {} instance {}", u.module, u.name));
                 instance_inputs(u, &scope, iface, &mut out, &mut diags);
                 let names = module_names(&scope, iface, body);
-                for (p, _) in names.map.iter().filter(|(_, n)| n.contains("::")) {
+                for p in names.map.keys() {
                     let help = format!(
-                        "`export {p}` in module {} makes it readable as {}.INSTANCE.{p}, \
-                         or pass the value through an output",
+                        "pass the value through an output of module {}, \
+                         `output {p} = ...`, and read it as {}.INSTANCE.{p}",
                         m.name, m.name
                     );
-                    private.insert(p.clone(), (format!("module {}", m.name), help));
+                    private.insert(p.clone(), (format!("module {}", m.name), Some(help)));
                 }
                 let mut stmts = module_stmts(&scope, iface, body);
                 set_origin(&mut stmts, origin);
@@ -359,26 +336,9 @@ pub fn expand(program: &Program) -> Result<Expanded> {
                 format!("{owner} declares an output: a policy pack has none"),
             ));
         }
-        // A grant goes on a line after the pack's last, else before its `}`.
-        let grant_at = match iface.grants.last() {
-            Some((_, g)) => (Span { start: g.end, ..*g }, true),
-            None => {
-                let end = p.span.end.saturating_sub(1);
-                (
-                    Span {
-                        start: end,
-                        end,
-                        ..p.span
-                    },
-                    false,
-                )
-            }
-        };
-        check_grants(&owner, &body, &iface.grants, grant_at, &mut diags);
-        let names = pack_names(&p.name, &iface, &body, &mut diags);
-        for (pr, _) in names.map.iter().filter(|(_, n)| n.contains("::")) {
-            let help = format!("`contributes {pr}.` in {owner} makes it a global relation");
-            private.insert(pr.clone(), (owner.clone(), help));
+        let names = pack_names(&p.name, &body);
+        for pr in names.map.keys() {
+            private.insert(pr.clone(), (owner.clone(), None));
         }
         let mut body = body;
         set_origin(&mut body, diag::origin_id(&owner));
@@ -404,13 +364,14 @@ pub fn expand(program: &Program) -> Result<Expanded> {
             && !defined.contains_key(&a.pred)
             && !externs.contains(a.pred.as_str())
         {
-            diags.push(
-                Diagnostic::error(
-                    a.span,
-                    format!("{}/{} is private to {owner}", a.pred, a.args.len()),
-                )
-                .with_help(help.replace("/N", &format!("/{}", a.args.len()))),
+            let d = Diagnostic::error(
+                a.span,
+                format!("{}/{} is private to {owner}", a.pred, a.args.len()),
             );
+            diags.push(match help {
+                Some(h) => d.with_help(h.clone()),
+                None => d,
+            });
         }
     }
 
@@ -497,8 +458,7 @@ fn module_defined(iface: &Interface, body: &[Stmt]) -> BTreeMap<String, (usize, 
 }
 
 /// The checks on a module's interface, once per module: an input is not
-/// also defined, an export names a predicate the module defines, and every
-/// output it gives a value is declared.
+/// also defined, and every output it gives a value is declared.
 fn check_module(
     m: &crate::ast::Module,
     iface: &Interface,
@@ -516,16 +476,6 @@ fn check_module(
                     m.name, i.name
                 ),
             ));
-        }
-    }
-    let defined = module_defined(iface, body);
-    for (p, (arity, span)) in &iface.exports {
-        match defined.get(p) {
-            Some((a, _)) if a == arity => {}
-            _ => diags.push(Diagnostic::error(
-                *span,
-                format!("export {p}: module {} defines no relation {p}", m.name),
-            )),
         }
     }
     let undeclared = |k: &str, span: Span| {
@@ -553,53 +503,26 @@ fn check_module(
     }
 }
 
-/// The instance names of a module's predicates: private unless exported or
-/// granted.
+/// The instance names of a module's predicates: every one private.
 fn module_names(scope: &str, iface: &Interface, body: &[Stmt]) -> Names {
-    let granted: BTreeSet<&str> = iface
-        .grants
-        .iter()
-        .filter_map(|(g, _)| match g {
-            Grant::Pred(p) => Some(p.as_str()),
-            _ => None,
-        })
-        .collect();
     let map = module_defined(iface, body)
         .into_keys()
-        .filter(|p| !is_shared(p) && !granted.contains(p.as_str()))
+        .filter(|p| !is_shared(p))
         .map(|p| {
-            let n = if iface.exports.contains_key(&p) {
-                format!("{scope}.{p}")
-            } else {
-                format!("{scope}::{p}")
-            };
+            let n = format!("{scope}::{p}");
             (p, n)
         })
         .collect();
     Names { map }
 }
 
-/// A pack's predicates: private unless granted.
-fn pack_names(name: &str, iface: &Interface, body: &[Stmt], diags: &mut Vec<Diagnostic>) -> Names {
-    let granted: BTreeSet<&str> = iface
-        .grants
-        .iter()
-        .filter_map(|(g, _)| match g {
-            Grant::Pred(p) => Some(p.as_str()),
-            _ => None,
-        })
-        .collect();
-    if let Some((p, (_, span))) = iface.exports.iter().next() {
-        diags.push(Diagnostic::error(
-            *span,
-            format!("policy {name} exports {p}: a policy pack has no instances; grant it with `contributes {p}`"),
-        ));
-    }
+/// A pack's predicates: every one private.
+fn pack_names(name: &str, body: &[Stmt]) -> Names {
     let mut defined = BTreeMap::new();
     defined_preds(body, &mut defined);
     let map = defined
         .into_keys()
-        .filter(|p| !is_shared(p) && !granted.contains(p.as_str()))
+        .filter(|p| !is_shared(p))
         .map(|p| {
             let n = format!("{name}::{p}");
             (p, n)
@@ -838,122 +761,6 @@ fn body_atoms(s: &Stmt, out: &mut Vec<Atom>) {
         }
         _ => {}
     }
-}
-
-/// Does `(typ, path)` fall in a grant? A grant's type matches the head's
-/// constant type (`_` matches any); its path matches the head's constant
-/// path or any path under it (`_` matches any).
-fn granted(grants: &[(Grant, Span)], typ: &Term, path: &Term) -> bool {
-    grants.iter().any(|(g, _)| {
-        let Grant::Arg { typ: gt, path: gp } = g else {
-            return false;
-        };
-        let typ_ok = match (gt, typ) {
-            (None, _) => true,
-            (Some(g), Term::Val(Value::Str(t))) => g == t,
-            _ => false,
-        };
-        let path_ok = match (gp, path) {
-            (None, _) => true,
-            (Some(g), Term::Val(Value::Str(p))) => {
-                let p = p.trim_start_matches('.');
-                p == g || p.starts_with(&format!("{g}."))
-            }
-            _ => false,
-        };
-        typ_ok && path_ok
-    })
-}
-
-fn term_text(t: &Term) -> String {
-    match t {
-        Term::Var(v) => v.clone(),
-        Term::Wildcard => "_".into(),
-        Term::Val(Value::Str(s)) => s.clone(),
-        other => crate::partition::fmt_term(other),
-    }
-}
-
-/// Every `arg` a pack writes must be in one of its grants.
-/// Each violation's fix inserts its grant at `at.0`, on a line of its own
-/// after it when `at.1`, else before it.
-fn check_grants(
-    owner: &str,
-    body: &[Stmt],
-    grants: &[(Grant, Span)],
-    at: (Span, bool),
-    diags: &mut Vec<Diagnostic>,
-) {
-    let mut check = |typ: &Term, path: &Term, span: Span| {
-        if granted(grants, typ, path) {
-            return;
-        }
-        let t = match typ {
-            Term::Val(_) => term_text(typ),
-            _ => "any type".into(),
-        };
-        let p = match path {
-            Term::Val(Value::Str(p)) => format!(".{}", p.trim_start_matches('.')),
-            other => term_text(other),
-        };
-        let pat_t = if matches!(typ, Term::Val(_)) {
-            term_text(typ)
-        } else {
-            "t".into()
-        };
-        let pat_p = if matches!(path, Term::Val(_)) {
-            p.clone()
-        } else {
-            "._".into()
-        };
-        let grant = format!("contributes {pat_t}{pat_p}");
-        let insert = if at.1 {
-            format!("\n{grant}")
-        } else {
-            format!("{grant}\n")
-        };
-        diags.push(
-            Diagnostic::error(
-                span,
-                format!("{owner} writes {p} of {t} outside its grants"),
-            )
-            .with_help(format!("grant it: `{grant}`"))
-            .with_fix(format!("grant it: `{grant}`"), vec![(at.0, insert)]),
-        );
-    };
-    fn walk(stmts: &[Stmt], check: &mut dyn FnMut(&Term, &Term, Span)) {
-        for s in stmts {
-            match s {
-                Stmt::Fact(a) => head(a, check),
-                Stmt::Rule(r) => head(&r.head, check),
-                Stmt::Resource(r) => {
-                    for f in &r.fields {
-                        check(&r.typ, &str_term(&f.key), f.span);
-                    }
-                }
-                Stmt::Settings(st) => {
-                    for f in &st.fields {
-                        check(
-                            &str_term(crate::transform::SETTINGS),
-                            &str_term(&f.key),
-                            f.span,
-                        );
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-    fn head(a: &Atom, check: &mut dyn FnMut(&Term, &Term, Span)) {
-        match (a.pred.as_str(), a.args.len()) {
-            ("arg" | "arg_add", 4 | 5) => check(&a.args[0], &a.args[2], a.span),
-            ("setting" | "setting_add", 3) => {
-                check(&str_term(crate::transform::SETTINGS), &a.args[1], a.span)
-            }
-            _ => {}
-        }
-    }
-    walk(body, &mut check);
 }
 
 // ---------------------------------------------------------------------------
