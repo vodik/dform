@@ -540,6 +540,37 @@ and three things did not survive it.
   R-11b's lookup; nothing declares the dependency. One keyword fewer,
   and `[..]` means one thing.
 
+** R-36 to R-40: the second design round (2026-10-01, evening)
+- *R-36* A provider's types are `provider.type` (`aws.vpc`); the mocks'
+  Terraform-style `aws_vpc` names go. Provider facts need nothing new:
+  Terraform's `data` block is an extern the provider declares
+  (`extern aws.availability_zone(+state, -name)`), in scope with
+  `provider aws`, read as `aws.availability_zone("available", name)`.
+- *R-37* `module` is Rust's `mod`: inline, or `module network` reading
+  `modules/network.df`; nesting allowed; activated by `instance` (a copy
+  with inputs) or `use` (once, no inputs). A policy is a module you
+  `use`, so `policy` and `import` go.
+- *R-38* Settings are guarded contributions to the program's own inputs:
+  `settings { .. } where env == "prod"`, any subset of a composite key
+  or any condition; ranks decide between overlapping blocks, never
+  specificity. `settings from DOC` maps a document's leaves to inputs.
+  Named rows, `settings[e]`, `settings _` and `let cfg` go; the
+  deployment's value is the input's name. Layers: default < settings <
+  `--set`.
+- *R-39* Documents: loaders are functions (`yaml(path)`, `toml`, `json`,
+  `csv`, `facts`, over `git(..)` too) returning a value with per-node
+  origin; `p(cols) from TERM` destructures a document into a relation,
+  the third relation-defining statement beside a fact and a rule.
+  `input .. from` goes: `input` is only what the outside supplies, `key`
+  what it selects.
+- *R-40 (direction, not a ticket)* Providers and modules: a module's
+  interface may say `needs aws` (a provider capability); the stack's
+  `provider aws` satisfies it by default; an instance may supply another
+  when there are several, and several are keyed provider instances
+  (`provider aws[region] { region } where region in regions`). `provider`
+  is a statement, never a value. Designed when a two-region example
+  forces it; this is the parking lot's needs/offers.
+
 * Vocabulary
 The name is Terraform minus terra plus Datalog, and it reads as "deform" aloud.
 Use the pun consistently in CLI output, docs, and diagnostics.
