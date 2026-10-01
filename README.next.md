@@ -594,3 +594,6 @@ or a function's definition, and the plan's action beside each resource.
 
 dform is pre-release. The language changes without compatibility until
 it ships; every `.df` in the repository is rewritten when it does.
+
+Apache-2.0. Contributions are accepted under the Developer Certificate
+of Origin (sign your commits with `-s`); there is no CLA.

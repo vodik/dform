@@ -2,6 +2,7 @@
 name = "tree-sitter-dform"
 description = "dform grammar for tree-sitter"
 version = "0.1.0"
+license = "Apache-2.0"
 authors = ["Simon Gomizelj"]
 keywords = ["incremental", "parsing", "tree-sitter", "dform"]
 categories = ["parser-implementations", "parsing", "text-editors"]
