@@ -568,11 +568,11 @@ plain apply; an approver signs the digest and `apply --approval` carries
 the token. `prevent_destroy` below is the same mechanism with a
 shorter name.
 
-**Tests.** A test is a named block of denies and the part of the input
-space they are about; the name is yours:
+**Tests.** A test is a block of denies, named like a deny is, and the
+part of the input space they are about:
 
 ```dform
-test prod_network_and_backups {
+test "prod network and backups" {
   deny "prod peers the two VPCs" where not "blue-green" in aws.vpc_peering_connection
   deny "prod keeps two weeks of backups" where db in aws.db_instance, db.backup_retention_period < 14
 } where env == "prod"
