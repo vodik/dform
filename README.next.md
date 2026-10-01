@@ -86,9 +86,26 @@ decl deformation(kind: enum("create", "update", "replace", "delete"), resource: 
 ```
 
 the program's rules run over those rows, and only then is anything
-applied. A policy can refuse a
-change, warn about it, or demand a signature on the plan, and `why`
-explains any of those the way it explains a subnet.
+applied. The plan says which rows matched and what follows:
+
+```
+$ dform plan shop env=prod
+plan: 3 deformations (1 create, 1 update, 1 delete)
+...
+denied:
+  no deletes in prod                    aws.db_instance["reports"]
+needs approval:
+  aws.security_group["api"]             security group changed
+plan digest: sha256:4f9c1e...
+```
+
+A deny refuses the plan, naming the row that matched. A
+`requires_approval` row prints the resource and the reason beside the
+plan's digest; a plain `apply` refuses, an approver signs the digest,
+and `apply --approval TOKEN` carries it. A message can name the
+resource itself, `deny "no deleting ${r} in prod" where
+deformation("delete", r, _)`, and `why 'deny(m)'` explains any of
+these the way it explains a subnet.
 
 ```bash
 dform -C examples/tour plan
