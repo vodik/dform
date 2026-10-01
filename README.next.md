@@ -31,7 +31,7 @@ resource aws.vpc main {
 
 #| One private subnet in every available zone of the region.
 resource aws.subnet "private-${availability_zone}" {
-  vpc_id = main.id
+  vpc_id = main
   cidr_block = inet.subnet(main.cidr_block, 8, n)
   availability_zone
 } where aws.availability_zone("available", availability_zone, n)
@@ -145,12 +145,14 @@ program, in any module, declared before or after it. That is what
 evaluating a Datalog program to a fixpoint means; nothing is ordered.
 
 ```dform
-output private_subnet_ids: list(ref(aws.subnet)) =
-  [ s.id | s in aws.subnet, s.map_public_ip_on_launch == false ]
+output private_subnets: list(aws.subnet) =
+  [ s | s in aws.subnet, s.map_public_ip_on_launch == false ]
 ```
 
 `s in aws.subnet` ranges over every subnet the program wants, wherever
-it was declared; the brackets collect one `s.id` per match into a list.
+it was declared; the brackets collect the matches into a list of
+subnets, and a database that takes `subnet_ids = network.main.private_subnets`
+gets their ids at apply.
 A subnet added in another module tomorrow is in this list without this
 line changing.
 
@@ -274,9 +276,9 @@ reaches(a, b) where link(a, b)
 reaches(a, c) where reaches(a, b), link(b, c)
 
 resource aws.route "${a}-to-${b}" {
-  route_table_id = aws.route_table[a].id
+  route_table_id = aws.route_table[a]
   destination_cidr_block = aws.vpc[b].cidr_block
-  transit_gateway_id = tgw.id
+  transit_gateway_id = tgw
 } where reaches(a, b), a != b
 ```
 
@@ -295,9 +297,8 @@ aws.route["blue-to-green"]
   stacks/network.df:58  resource aws.route "${a}-to-${b}" { .. } where reaches(a, b), a != b
   with a = "blue", b = "green"
        "${a}-to-${b}" = "blue-to-green"
-       aws.route_table[a].id = ?aws.route_table["blue"].id
+       aws.route_table[a] = aws.route_table["blue"]
        aws.vpc[b].cidr_block = 10.2.0.0/16
-       tgw.id = ?aws.ec2_transit_gateway["tgw"].id
   ├─ reaches("blue", "green")
   │    stacks/network.df:55  reaches(a, c) where reaches(a, b), link(b, c)
   │    with a = "blue", b = "core", c = "green"
@@ -340,10 +341,12 @@ answer, and the header may interpolate the clause's variables. An entry
 that is only a name, `availability_zone`, takes the variable of that
 name.
 
-**References and reads.** `vpc_id = main.id` is a reference: an edge in
-the apply order, and an unknown until the VPC exists.
-`inet.subnet(main.cidr_block, 8, n)` reads the cidr now, because the
-function needs its bytes. A dot is a reference where it stands as a
+**References and reads.** `vpc_id = main` is a reference: the schema
+says `vpc_id` identifies a VPC, so the attribute takes the VPC itself,
+an edge in the apply order, and the provider gets its id once it exists.
+`main.id` is the id as a value, for an attribute that wants a different
+identity (`role_arn = role.arn`). `inet.subnet(main.cidr_block, 8, n)`
+reads the cidr now, because the function needs its bytes. A dot is a reference where it stands as a
 whole value and a read where its content is used, and the compiler says
 at the read when a read of a computed value makes a block wait for a
 later tick.
@@ -502,7 +505,7 @@ module network {
 
   resource aws.vpc vpc { cidr_block = cidr }
   resource aws.subnet "private-${availability_zone}" {
-    vpc_id = vpc.id
+    vpc_id = vpc
     cidr_block = inet.subnet(cidr, 8, n)
     availability_zone
   } where az(availability_zone, n)
@@ -681,7 +684,7 @@ provider aws { region }
 
 resource aws.vpc main { cidr_block = vpc_net }
 resource aws.eks_cluster cluster {
-  vpc_config.subnet_ids = [ s.id | s in aws.subnet ]
+  vpc_config.subnet_ids = [ s | s in aws.subnet ]
 }
 
 # The Kubernetes provider is bound to the cluster above: its endpoint and
