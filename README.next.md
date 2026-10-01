@@ -201,7 +201,7 @@ edition 2026
 provider aws { region = cfg.region }
 import "modules/network.df"
 key env: enum("dev", "staging", "prod") = "dev"
-input az(name, index) from csv("data/azs.csv")
+input az(name: string, index: int) from yaml("data/azs.yaml")
 ```
 
 A stack is the unit of state and apply, and a file under `stacks/` is
@@ -212,7 +212,8 @@ provider's types and externs into scope and configures it. Imports bring
 in modules and policies. Inputs are the stack's interface. None of these
 may appear below the first rule. Where a stack's state lives, whether
 unknowns at plan time are refused, and who may approve a plan are
-operational, so they live in `dform.toml`:
+operational, so they live in `dform.toml`, where `[stacks.shop]` is
+`stacks/shop.df`:
 
 ```toml
 [stacks.shop]
@@ -220,6 +221,36 @@ backend = 's3("acme-state", "shop/{env}")'
 unknowns = "strict"
 approvals = 'jwks("https://sso.acme.example/keys")'
 ```
+
+A small project needs none of this: `dform.toml` beside one `.df` file is
+a project with one stack.
+
+**Tables.** Data that is not code comes in as a typed relation from a
+file, and rows are facts like any other, each with a line `why` can
+point at:
+
+```dform
+input az(name: string, index: int) from yaml("data/azs.yaml")
+input pin(app: string, image: string) from toml(git("ops.git", "env/${env}", "pins.toml"))
+```
+
+```yaml
+# data/azs.yaml: a list of objects, one per row
+- { name: us-east-1a, index: 1 }
+- { name: us-east-1b, index: 2 }
+```
+
+```toml
+# pins.toml: an array of tables, one per row
+[[pin]]
+app = "api"
+image = "ghcr.io/acme/api@sha256:9f2c..."
+```
+
+A cell is checked against its column's type, and a bad row is an error
+naming the file and line. A `git(..)` source is read at a commit the
+plan records, so apply reads what plan read even if the branch moved.
+CSV and JSON work the same way.
 
 **Inputs, settings and lets are cells.** `input env: ..` is a typed
 input; `--set env=prod` wins over its default because it is a
@@ -323,10 +354,42 @@ file alone, with no cloud access.
 **test and check.** `dform test` runs the scenarios; `dform check --sarif`
 runs the policies for CI.
 
-**State and stacks.** `dform stack list`, `dform state show`, `state mv`,
-`stack rekey`. State lives in a directory or an S3 bucket, with
-conditional writes and a lease. Another stack's outputs are read as
-`stacks.platform.cluster[env="prod"].endpoint`.
+**Stacks and deployments.** A project grows from one file to many
+stacks without changing shape. Each `stacks/*.df` is a stack with its
+own state; a `key` input makes it one deployment per value, so one
+program is `shop[env=dev]`, `shop[env=staging]` and `shop[env=prod]`,
+each applied, locked and audited on its own:
+
+```
+$ dform stack list
+shop[env]    stacks/shop.df
+  env=dev      applied 2026-09-30 14:02 by simon at 1c83fe0
+  env=prod     applied 2026-09-28 09:40 by ci at 0cebc08, plan pending
+platform.cluster[env]   stacks/cluster.df
+```
+
+Per-environment values are a settings table the stack's `config` names,
+one YAML file per deployment, every leaf a contribution that wins over
+the program's `@default` layer:
+
+```toml
+[stacks.shop]
+config = 'yaml("config/shop/{env}.yaml")'
+```
+
+State lives in a directory or an S3 bucket with conditional writes and a
+lease, per stack, per deployment. Stacks read each other's outputs
+through the same lookup shape as everything else, across projects too
+when `dform.toml` names the other project's backend as a remote:
+
+```dform
+cluster_endpoint = stacks.platform.cluster[env=env].endpoint
+```
+
+`dform state show`, `state mv`, `stack rekey` (move a deployment to a
+new key value) and `stack handover` (move a stack's state into the
+cluster it bootstrapped, for the controller) are the state operations;
+nothing else edits state by hand.
 
 **The controller.** `dform controller run` watches the inputs and the
 world and applies the same plan a batch run would, continuously. The same
