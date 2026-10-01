@@ -283,9 +283,10 @@ rejected with the file and line. Inside the program a network is an
 input vpc_net: inet = "10.0.0.0/16"
 input az(name: string, index: int) from yaml("data/azs.yaml")
 
-resource aws.subnet "private-${z}" {
+resource aws.subnet "private-${availability_zone}" {
   cidr_block = inet.subnet(vpc_net, 4, n)          # the n-th /20 of the /16
-} where az(z, n)
+  availability_zone
+} where az(availability_zone, n)
 
 deny "subnets overlap" { a: x, b: y } where {
   x in aws.subnet
@@ -355,7 +356,8 @@ A stack is the unit of state and apply, and a file under `stacks/` is
 one, named after itself: this is `stacks/shop.df`, so `dform plan shop`.
 A `key` is an input that selects the deployment: each value of `env` has
 its own state, `dform plan shop env=prod`. A provider line brings a
-provider's types and externs into scope and configures it. Imports bring
+provider's types and externs into scope and configures it (`provider
+aws` alone when it needs no settings). Imports bring
 in modules and policies. Inputs are the stack's interface. None of these
 may appear below the first rule. Where a stack's state lives and who may
 approve a plan are operational, so they live in `dform.toml`, where `[stacks.shop]` is
@@ -415,11 +417,11 @@ module network {
   output vpc: aws.vpc = vpc
 
   resource aws.vpc vpc { cidr_block = cidr }
-  resource aws.subnet "private-${z}" {
+  resource aws.subnet "private-${availability_zone}" {
     vpc_id = vpc.id
     cidr_block = inet.subnet(cidr, 8, n)
-    availability_zone = z
-  } where az(z, n)
+    availability_zone
+  } where az(availability_zone, n)
 }
 
 instance network blue { cidr = "10.1.0.0/16" }
@@ -427,8 +429,10 @@ instance network green { cidr = "10.2.0.0/16" } where env == "prod"
 ```
 
 The module takes one input and offers one output, its VPC. Inside, `vpc`
-is the module's own resource; `az(z, n)` is the stack's table, which a
-module reads like any fact. `green` exists only in prod. The module's
+is the module's own resource; `az(availability_zone, n)` is the stack's
+table, which a module reads like any fact. An entry that is just a name
+sets the attribute from the variable of the same name, as `{ a }` does
+in an object. `green` exists only in prod. The module's
 VPC is addressed as `aws.vpc["network.blue::vpc"]` everywhere else, and
 another block reads it as `network.blue.vpc`.
 
@@ -537,9 +541,13 @@ world and applies the same plan a batch run would, continuously. The same
 program bootstraps a cluster in batch mode and later runs inside it.
 
 **Providers.** A provider is a wasm component: one file, any platform,
-sandboxed. A registry is a bucket, the same kind you keep state in, with
-signed packages and a lockfile. `dform provider check` is the conformance
-suite a provider passes before it is published.
+sandboxed, carrying its own schema, so the editor can jump to a type's
+definition with nothing running. A registry is a bucket, the same kind
+you keep state in: `[registries] acme = { backend = 's3(..)', keys =
+'jwks_file(..)' }` in `dform.toml`, versions immutable, packages signed,
+resolved into `dform.lock`. `dform provider publish` runs the
+conformance suite and uploads; there is no registry service to run.
+Functions can be shipped the same way.
 
 **The editor.** `dform lsp` gives diagnostics, hover with the value of any
 term for the selected deployment and who contributed it, jump to a type's
