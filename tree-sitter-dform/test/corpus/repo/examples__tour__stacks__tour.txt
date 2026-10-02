@@ -89,7 +89,7 @@ resource net.subnet public {
 # subnet for every row that matches, named by `"private-${z}"`. It is
 # Terraform's `for_each`, over a table instead of a map, and the
 # condition can join several tables, as later sections do.
-# `inet_subnet(main.cidr, 8, n)` cuts the network's range into /24s and
+# `inet.subnet(main.cidr, 8, n)` cuts the network's range into /24s and
 # takes the n-th.
 #
 # Every attribute is a row too, in a table named `attr`, and `dform query`
@@ -109,7 +109,7 @@ zone("us-test-1b", 2)
 
 resource net.subnet "private-${z}" {
   vpc_id = main.id
-  cidr = inet_subnet(main.cidr, 8, n)
+  cidr = inet.subnet(main.cidr, 8, n)
   zone = z
   visibility = "private"
 } where zone(z, n)
@@ -232,7 +232,7 @@ module network {
 
   resource net.subnet "private-${z}" {
     vpc_id = vpc.id
-    cidr = inet_subnet(cidr, 8, n)
+    cidr = inet.subnet(cidr, 8, n)
     zone = z
   } where zone(z, n)
 
@@ -512,7 +512,9 @@ resource iam.policy "connect-${host}" {
         (block_path
           (identifier))
         (call
-          (identifier)
+          (member_expression
+            (identifier)
+            (identifier))
           (arguments
             (member_expression
               (identifier)
@@ -776,7 +778,9 @@ resource iam.policy "connect-${host}" {
             (block_path
               (identifier))
             (call
-              (identifier)
+              (member_expression
+                (identifier)
+                (identifier))
               (arguments
                 (identifier)
                 (integer)

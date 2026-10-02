@@ -24,10 +24,10 @@ type settings {
   network_name: string
   regional_proxy_cidr: inet
   gke: {
-    control_plane_cidr: inet check prefix_len(control_plane_cidr) == 28 # checkable: lives in the cell
-    subnet_cidr: inet check prefix_len(subnet_cidr) == 22
-    pods_cidr: inet check prefix_len(pods_cidr) == 21
-    services_cidr: inet check prefix_len(services_cidr) == 21
+    control_plane_cidr: inet check inet.prefix_len(control_plane_cidr) == 28 # checkable: lives in the cell
+    subnet_cidr: inet check inet.prefix_len(subnet_cidr) == 22
+    pods_cidr: inet check inet.prefix_len(pods_cidr) == 21
+    services_cidr: inet check inet.prefix_len(services_cidr) == 21
     static_ips: map({ type: enum("INTERNAL") }) # was a constraint rule
   }
 }
@@ -236,7 +236,7 @@ deny("two_zones", "cluster must be in at least two zones", { cluster: "pngu" }) 
 # Monitoring: the dashboard JSON is a file extern, hashed, with provenance
 ########################################
 
-extern file.json(+path: string, -value: any)
+provider file {}
 
 resource google.monitoring_dashboard pngu {
   project = id
@@ -365,7 +365,9 @@ output("project_id", id) where project(id, _, _, _)
               (body
                 (comparison
                   (call
-                    (identifier)
+                    (member_expression
+                      (identifier)
+                      (identifier))
                     (arguments
                       (identifier)))
                   (integer)))))
@@ -380,7 +382,9 @@ output("project_id", id) where project(id, _, _, _)
               (body
                 (comparison
                   (call
-                    (identifier)
+                    (member_expression
+                      (identifier)
+                      (identifier))
                     (arguments
                       (identifier)))
                   (integer)))))
@@ -394,7 +398,9 @@ output("project_id", id) where project(id, _, _, _)
               (body
                 (comparison
                   (call
-                    (identifier)
+                    (member_expression
+                      (identifier)
+                      (identifier))
                     (arguments
                       (identifier)))
                   (integer)))))
@@ -408,7 +414,9 @@ output("project_id", id) where project(id, _, _, _)
               (body
                 (comparison
                   (call
-                    (identifier)
+                    (member_expression
+                      (identifier)
+                      (identifier))
                     (arguments
                       (identifier)))
                   (integer)))))
@@ -1427,20 +1435,9 @@ output("project_id", id) where project(id, _, _, _)
   (comment)
   (comment)
   (comment)
-  (extern
-    (dotted_name
-      (identifier)
-      (identifier))
-    (bind_arg
-      (identifier)
-      (type
-        (dotted_name
-          (identifier))))
-    (bind_arg
-      (identifier)
-      (type
-        (dotted_name
-          (identifier)))))
+  (provider
+    (identifier)
+    (block))
   (resource
     (dotted_name
       (identifier)

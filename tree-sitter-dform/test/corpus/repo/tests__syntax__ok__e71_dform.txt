@@ -97,7 +97,7 @@ instance kubernetes main {
   output("network.main", "private_subnet_ids", ids)
 }
 
-instance iam main {}
+instance identity main {}
 
 # Peering between network instances. Each instance exports its vpc address.
 vpc_peer_inst("main", "peer")
@@ -118,7 +118,7 @@ resource net.vpc_peering peer {
 # A bastion with an address carved from the main VPC. The setting is a
 # constant, so inet_host is not stuck; only subnet_id carries a null.
 resource compute.vm bastion {
-  private_ip = inet_host(net_, 20)
+  private_ip = inet.host(net_, 20)
   subnet_id = ref(net.subnet, network.main / private_a, "id")
 } where e = env, setting(e, "network.main.vpc_net", net_)
 
@@ -678,7 +678,9 @@ deny("prod_k8s_private_api", "prod k8s must have private api", { cluster: c }) w
         (block_path
           (identifier))
         (call
-          (identifier)
+          (member_expression
+            (identifier)
+            (identifier))
           (arguments
             (identifier)
             (integer))))

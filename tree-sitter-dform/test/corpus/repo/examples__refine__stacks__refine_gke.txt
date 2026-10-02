@@ -125,8 +125,8 @@ deny "cluster must not be deletable" { cluster: c } where {
 # three zones).
 type settings {
   gke: {
-    control_plane_cidr: inet check prefix_len(control_plane_cidr) == 28
-    subnet_cidr: inet check prefix_len(subnet_cidr) == 22
+    control_plane_cidr: inet check inet.prefix_len(control_plane_cidr) == 28
+    subnet_cidr: inet check inet.prefix_len(subnet_cidr) == 22
   }
 }
 
@@ -652,7 +652,9 @@ type gke_cluster {
               (body
                 (comparison
                   (call
-                    (identifier)
+                    (member_expression
+                      (identifier)
+                      (identifier))
                     (arguments
                       (identifier)))
                   (integer)))))
@@ -666,7 +668,9 @@ type gke_cluster {
               (body
                 (comparison
                   (call
-                    (identifier)
+                    (member_expression
+                      (identifier)
+                      (identifier))
                     (arguments
                       (identifier)))
                   (integer)))))))))

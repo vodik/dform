@@ -10,7 +10,7 @@ edition 2026
 
 # The provider (the mock's built-in fake schema), and the stack, keyed by env: dform[env=prod]'s state is dform.state/dform/env=prod/.
 # Strict: a plan needing a phase boundary is refused (fresh nulls still flow).
-# Isolated: each env deploys into its own account, so iam's fixed names do not collide.
+# Isolated: each env deploys into its own account, so identity's fixed names do not collide.
 # Config: each env's settings are config/dform/{env}.yaml's, a leaf per contribution.
 provider fake {}
 stack dform[env] { unknowns = "strict", isolated = true, config = yaml("config/dform/${env}.yaml") }
@@ -77,7 +77,7 @@ instance kubernetes main {
   subnet_ids = network.main.private_subnet_ids
 } where env != "dev"
 
-instance iam main {}
+instance identity main {}
 
 #| VPC peering intent: define edges between network instances.
 vpc_peer_inst("main", "peer")
@@ -96,7 +96,7 @@ resource net.vpc_peering "peer-${ia}-${ib}" {
 
 #| Demo: allocate an IP from the main VPC.
 resource compute.vm bastion {
-  private_ip = inet_host(inet(cfg.network.main.vpc_net), 20)
+  private_ip = inet.host(inet(cfg.network.main.vpc_net), 20)
 }
 
 # Policy, over every resource of a type (a module's resources included).
@@ -530,7 +530,9 @@ scenario dev {
         (block_path
           (identifier))
         (call
-          (identifier)
+          (member_expression
+            (identifier)
+            (identifier))
           (arguments
             (call
               (identifier)

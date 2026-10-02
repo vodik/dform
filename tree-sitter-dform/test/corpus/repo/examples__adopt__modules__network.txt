@@ -17,7 +17,7 @@ module network {
 
   resource net.subnet "private-${z}" {
     vpc_id = vpc.id
-    cidr = inet_subnet(vpc.cidr, 4, zone_index[z])
+    cidr = inet.subnet(vpc.cidr, 4, zone_index[z])
     zone = z
     visibility = "private"
   } where data("zone", z)
@@ -92,7 +92,9 @@ module network {
             (block_path
               (identifier))
             (call
-              (identifier)
+              (member_expression
+                (identifier)
+                (identifier))
               (arguments
                 (member_expression
                   (identifier)

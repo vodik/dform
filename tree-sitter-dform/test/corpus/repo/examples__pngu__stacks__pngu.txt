@@ -25,7 +25,7 @@ stack pngu[env] { isolated = true }
 ########################################
 
 # The file provider answers file.json once its path is known.
-extern file.json(+path, -value)
+provider file {}
 
 ########################################
 # Environment selection
@@ -105,7 +105,7 @@ let cfg = settings[env]
 # reports is not the one this env names: the same shell cannot point
 # prod's plan at dev's project. Against the real provider the credentials
 # would come from the environment, by key, as a secret:
-#   credentials = env_var("GOOGLE_CREDENTIALS_{env}")
+#   credentials = env.var("GOOGLE_CREDENTIALS_{env}")
 # and the account from the credentials; the mock reports its `account`.
 provider gke {
   project = cfg.project_id
@@ -264,14 +264,9 @@ output project_id = cfg.project_id
   (comment)
   (comment)
   (comment)
-  (extern
-    (dotted_name
-      (identifier)
-      (identifier))
-    (bind_arg
-      (identifier))
-    (bind_arg
-      (identifier)))
+  (provider
+    (identifier)
+    (block))
   (comment)
   (comment)
   (comment)
