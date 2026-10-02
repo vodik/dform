@@ -1,7 +1,7 @@
 //! `provider NAME { .. }` (docs/grammar.md "Provider blocks"). `source` is
 //! a constant: the stack reads it to start the provider. Every other
 //! setting is configuration, read like any rule reads (inputs, settings
-//! rows, value names, tables, `env_var`), so a keyed deployment configures
+//! rows, value names, tables, `env.var`), so a keyed deployment configures
 //! its providers by its key:
 //!
 //! ```text
@@ -13,12 +13,17 @@
 //! (`Providers::configure_from`); `provider_expect_account` is what it
 //! checks the account the provider reports against
 //! (`Providers::check_accounts`).
+//!
+//! A `provider` block also brings the provider's externs into scope
+//! (DESIGN.org R-8): a built-in fact provider's (`file`, `env`, `random`,
+//! `externs::BUILTINS`) are declared here, and a program that writes
+//! `extern` for one is told to write the `provider` statement instead.
 
 use super::*;
 
-/// The builtin extern `env_var(+name, -value: secret(string))`: the
-/// process environment's variable, a secret, never persisted.
-pub const ENV_VAR: &str = "env_var";
+/// The `env` provider's extern `env.var(+name, -value: secret(string))`:
+/// the process environment's variable, a secret, never persisted.
+pub const ENV_VAR: &str = "env.var";
 
 /// A `provider` block's setting that is checked, not sent.
 const EXPECT_ACCOUNT: &str = "expect_account";
@@ -100,8 +105,10 @@ impl Lowerer<'_> {
         })
     }
 
-    /// `env_var(NAME)` as a term: the read `env_var(NAME', V)`, `V` its
-    /// value. `None`: the call is not one.
+    /// `env.var(NAME)` as a term: the read `env.var(NAME', V)`, `V` its
+    /// value. `None`: the call is not one. A call of another built-in
+    /// provider's extern, or of `env.var` with no `provider env {}`, is an
+    /// error naming the statement to write.
     pub(super) fn env_var_call(
         &mut self,
         rc: &mut Rc,
@@ -109,9 +116,26 @@ impl Lowerer<'_> {
         pos: Pos,
         pre: &mut Vec<Lit>,
     ) -> Option<L<Term>> {
-        let builtin = self.decls.externs.get(ENV_VAR) == Some(&env_var_columns());
-        (builtin && self.callee(n).as_deref() == Some(ENV_VAR))
-            .then(|| self.env_var_read(rc, n, pos, pre))
+        let name = self.callee(n)?;
+        let (head, _) = name.split_once('.')?;
+        let b = crate::externs::builtin(head)?;
+        if !b.externs().iter().any(|f| f.name == name) {
+            return None;
+        }
+        let span = self.span(n);
+        if name != ENV_VAR {
+            return Some(self.error(
+                span,
+                format!("{name} is a relation: read it as `{name}[..]` or in a body"),
+            ));
+        }
+        if !self.decls.externs.contains_key(ENV_VAR) {
+            return Some(self.error(
+                span,
+                format!("{name} is the {head} provider's: declare `provider {head} {{}}`"),
+            ));
+        }
+        Some(self.env_var_read(rc, n, pos, pre))
     }
 
     fn env_var_read(
@@ -124,7 +148,7 @@ impl Lowerer<'_> {
         let span = self.span(n);
         let args = self.bind(true, |l| l.args(rc, n, Pos::Content, pre))?;
         if args.len() != 1 {
-            return self.error(span, "env_var takes one argument: the variable's name");
+            return self.error(span, "env.var takes one argument: the variable's name");
         }
         let res = Res::Lookup {
             pred: ENV_VAR.to_string(),
@@ -135,50 +159,76 @@ impl Lowerer<'_> {
         self.realize(rc, res, pos, pre, span)
     }
 
-    /// Declare the builtin `env_var` when the program reads it and declares
-    /// no extern of that name itself: whether it did.
-    pub(super) fn declare_env_var(&mut self) -> bool {
-        if self.decls.externs.contains_key(ENV_VAR) {
-            return false;
+    /// The externs of the built-in fact providers the program's `provider`
+    /// blocks name, declared: their statements.
+    pub(super) fn declare_builtin_externs(&mut self) -> Vec<Stmt> {
+        let mut out = Vec::new();
+        for (name, span) in self.provider_blocks() {
+            let Some(b) = crate::externs::builtin(&name) else {
+                continue;
+            };
+            for mut f in b.externs() {
+                if self.decls.externs.contains_key(&f.name) {
+                    continue;
+                }
+                // Declared where the `provider` statement stands.
+                f.span = span;
+                let cols = f.args.iter().map(|b| (b.input, b.name.clone())).collect();
+                self.decls.externs.insert(f.name.clone(), cols);
+                out.push(Stmt::ExternFn(f));
+            }
         }
-        let used = self.units.iter().any(|u| {
-            u.root.descendants().any(|c| {
-                matches!(c.kind(), CALL | CHAIN)
-                    && tokens(&c).next().is_some_and(|t| t.text() == ENV_VAR)
-            })
-        });
-        if used {
-            self.decls
-                .externs
-                .insert(ENV_VAR.to_string(), env_var_columns());
-        }
-        used
+        out
     }
-}
 
-fn env_var_columns() -> Vec<(bool, String)> {
-    vec![(true, "name".to_string()), (false, "value".to_string())]
-}
+    /// The program's `provider` statements: name and span, the first of a
+    /// name.
+    fn provider_blocks(&self) -> Vec<(String, Span)> {
+        let mut out: Vec<(String, Span)> = Vec::new();
+        for u in self.units {
+            for c in u.root.children().filter(|c| c.kind() == PROVIDER) {
+                let name = word_text(&c, 1);
+                if out.iter().any(|(n, _)| *n == name) {
+                    continue;
+                }
+                let r = c.text_range();
+                let span = Span {
+                    file: u.file,
+                    start: u32::from(r.start()),
+                    end: u32::from(r.end()),
+                    origin: 0,
+                };
+                out.push((name, span));
+            }
+        }
+        out
+    }
 
-/// The declaration of the builtin `env_var`, for a program that reads it
-/// and does not declare an extern of that name itself.
-pub(super) fn env_var_extern() -> Stmt {
-    let string = || TypeExpr::Name("string".to_string());
-    Stmt::ExternFn(ExternFn {
-        name: ENV_VAR.to_string(),
-        args: vec![
-            BindArg {
-                input: true,
-                name: "name".to_string(),
-                ty: Some(string()),
-            },
-            BindArg {
-                input: false,
-                name: "value".to_string(),
-                ty: Some(TypeExpr::Apply("secret".to_string(), vec![string()])),
-            },
-        ],
-        persist: false,
-        span: Span::default(),
-    })
+    /// `extern NAME(..)` in a program, `NAME` a built-in fact provider's:
+    /// the provider declares it.
+    pub(super) fn check_extern(&mut self, name: &str, span: Span) -> L<()> {
+        if self.core || self.lenient {
+            return Ok(());
+        }
+        let Some(b) = name
+            .split_once('.')
+            .and_then(|(h, _)| crate::externs::builtin(h))
+        else {
+            return Ok(());
+        };
+        let head = b.name;
+        let provider = self.provider_blocks().into_iter().find(|(n, _)| n == head);
+        let d = Diagnostic::error(
+            span,
+            format!("{name} is the {head} provider's extern: a program does not declare it"),
+        );
+        let d = match provider {
+            Some((_, at)) => d
+                .with_label(at, format!("provider {head} declares it"))
+                .with_help("delete the `extern` statement"),
+            None => d.with_help(format!("write `provider {head} {{}}` instead")),
+        };
+        self.diags.push(d);
+        Err(Skip)
+    }
 }

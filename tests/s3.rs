@@ -691,10 +691,10 @@ fn handover_moves_an_s3_deployment_between_prefixes_and_to_local() {
 
 const PERSISTED: &str = r#"edition 2026
 stack p {}
-extern random.password(+name, -value) persist
+extern kv.password(+name, -value) persist
 resource db.user app {
   password = pw
-} where random.password("app", pw)
+} where kv.password("app", pw)
 "#;
 
 /// `state taint` finds an s3 stack's state through its program's backend.
@@ -713,7 +713,7 @@ fn taint_forgets_an_answer_in_the_bucket() {
             );
             s.write(
                 "providers/fake/externs.df",
-                "edition 2026\nrandom.password(\"app\", \"pw-first\")\n",
+                "edition 2026\nkv.password(\"app\", \"pw-first\")\n",
             );
         });
         p.run(&["apply", "p"]).success();
@@ -722,10 +722,10 @@ fn taint_forgets_an_answer_in_the_bucket() {
         };
         assert!(state(&p).contains("pw-first"), "{}", t.what);
         let r = p
-            .run(&["state", "taint", "p", "random.password", "app"])
+            .run(&["state", "taint", "p", "kv.password", "app"])
             .success();
         assert_eq!(
-            r.stdout, "tainted random.password(app) of stack p: the next plan asks again\n",
+            r.stdout, "tainted kv.password(app) of stack p: the next plan asks again\n",
             "{}",
             t.what
         );

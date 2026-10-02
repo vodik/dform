@@ -359,7 +359,7 @@ the deployment's settings (see "Tables"), and needs a key.
 
 `provider NAME { .. }`'s `source` is a constant (the stack reads it to
 start the provider). Every other setting is a term, read like a rule's
-(inputs, settings rows, value names, tables, `env_var`), and the block
+(inputs, settings rows, value names, tables, `env.var`), and the block
 lowers to one rule for them all, plus one for `expect_account`:
 
 ```
@@ -369,10 +369,25 @@ expect_account = t                 provider_expect_account("p", t') :- reads
 
 A setting is a content position: a dot in it reads now. A block takes no
 clause, no `+=` and no rank; a setting given twice is an error.
-`env_var(NAME)` is a builtin extern, `extern env_var(+name, -value:
-secret(string))`, declared for a program that reads it and does not
-declare `env_var` itself; `env_var(t)` as a term is the lookup
-`env_var[t]`.
+
+A `provider` statement also brings the provider's externs into scope, with
+their binding modes (DESIGN.org R-8): a program does not write `extern`
+for them. `file`, `env` and `random` are built-in fact providers, declared
+like any provider and needing no `dform.toml` source (`externs::BUILTINS`):
+
+```
+provider file {}      file.json(+path, -value: any), file.text(+path, -value: string)
+provider env {}       env.var(+name, -value: secret(string))
+provider random {}    random.password(+key, -value: secret(string)) persist
+```
+
+`extern file.json(..)` in a program is an error naming the `provider`
+statement to write instead. `env.var(t)` as a term is the lookup
+`env.var[t]`; without `provider env {}` it is an error that says to declare
+it. `extern` stays the schema's word: provider schemas and the compiler's
+tests declare externs with it, and so, until the compiler reads a
+provider's schema (DESIGN.org R-24), does a program for a provider that is
+not built in.
 
 ### Type aliases
 
@@ -602,7 +617,7 @@ as it is.
 | `type a = T`, `export type a`             | nothing: each use of `a` is `T`                        |
 | `#\| k: v` above an item (Doc comments)  | `doc(Kind, Name, "k", "v")`                            |
 | `provider p { k = t, expect_account = a }` | `provider_config("p", {k: t'}) :- reads`, `provider_expect_account("p", a') :- reads` ("Provider blocks") |
-| `env_var(t)`                              | `V`, reading `env_var(t', V)`                          |
+| `env.var(t)`                              | `V`, reading `env.var(t', V)`                          |
 | `resource T n { f = t } where B`          | `resource T n { f = t' } :- B, reads`                  |
 | `resource T "a-${e}" { .. }`              | name `Addr`, `Addr = format("a-%s", e')` last          |
 | `settings n @r { .. } where B`            | `settings n @r { .. } :- B, reads`                     |

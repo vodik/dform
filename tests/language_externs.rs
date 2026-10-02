@@ -6,10 +6,9 @@ mod common;
 use common::{Scratch, repo};
 
 const P: &str = r#"edition 2026
-extern file.json(+path, -value)
-extern file.text(+path, -value)
-extern random.password(+name, -value) persist
-extern random.token(+name, -value)
+provider file {}
+extern kv.password(+name, -value) persist
+extern kv.token(+name, -value)
 dash("dash.json")
 resource mon.dashboard main {
   json = d
@@ -19,8 +18,8 @@ resource db.user app {
   password = pw
   token = tk
 } where {
-    random.password("app", pw)
-    random.token("app", tk)
+    kv.password("app", pw)
+    kv.token("app", tk)
   }
 "#;
 
@@ -44,7 +43,7 @@ fn answers(s: &Scratch, v: &str) {
     s.write(
         "providers/fake/externs.df",
         &format!(
-            "edition 2026\nrandom.password(\"app\", \"pw-{v}\")\nrandom.password(\"other\", \"x\")\nrandom.token(\"app\", \"tk-{v}\")\n"
+            "edition 2026\nkv.password(\"app\", \"pw-{v}\")\nkv.password(\"other\", \"x\")\nkv.token(\"app\", \"tk-{v}\")\n"
         ),
     );
 }
@@ -62,7 +61,7 @@ fn externs_answer_on_demand() {
     ] {
         assert!(r.stdout.contains(line), "{line}\n{}", r.stdout);
     }
-    let q = s.run(&["query", "random.password", "p.df"]).success();
+    let q = s.run(&["query", "kv.password", "p.df"]).success();
     assert!(
         q.stdout.contains("matches: 1"),
         "only the demanded call: {}",
@@ -108,20 +107,20 @@ fn taint_forgets_a_persisted_answer() {
     s.run(&["apply", "p.df"]).success();
     answers(&s, "second");
     let r = s
-        .run(&["state", "taint", "p", "random.password", "other"])
+        .run(&["state", "taint", "p", "kv.password", "other"])
         .failure();
     assert!(
         r.stderr
-            .contains("taint random.password(other): stack p has no persisted answer for it"),
+            .contains("taint kv.password(other): stack p has no persisted answer for it"),
         "{}",
         r.stderr
     );
     let r = s
-        .run(&["state", "taint", "p", "random.password", "app"])
+        .run(&["state", "taint", "p", "kv.password", "app"])
         .success();
     assert_eq!(
         r.stdout,
-        "tainted random.password(app) of stack p: the next plan asks again\n"
+        "tainted kv.password(app) of stack p: the next plan asks again\n"
     );
     assert!(!s.read("dform.state/p/state.json").contains("pw-first"));
     let r = s.run(&["plan", "p.df"]).success();

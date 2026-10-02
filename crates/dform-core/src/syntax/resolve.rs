@@ -82,10 +82,7 @@ pub fn lower(
     if mode == Mode::Program {
         l.check_heads();
     }
-    let mut statements = Vec::new();
-    if l.declare_env_var() {
-        statements.push(provider::env_var_extern());
-    }
+    let mut statements = l.declare_builtin_externs();
     for &e in entries {
         statements.extend(l.unit(e, require_edition));
     }
@@ -1299,6 +1296,7 @@ impl<'u> Lowerer<'u> {
             }
             EXTERN => {
                 let name = dotted_text(n, 1);
+                self.check_extern(&name, span)?;
                 let args = n
                     .children()
                     .filter(|c| c.kind() == BIND_ARG)

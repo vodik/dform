@@ -3203,7 +3203,7 @@ fn print_query(
     Ok(())
 }
 
-/// The environment variables `env_var` reads, by label (`env_var/NAME`),
+/// The environment variables `env_var` reads, by label (`env.var/NAME`),
 /// as a plan file records them: the label and the value's digest keyed
 /// with the stack's plan key, as a secret input's. One not set now is
 /// left out.
@@ -3213,7 +3213,7 @@ fn env_inputs(
 ) -> Vec<serde_json::Value> {
     labels
         .filter_map(|label| {
-            let name = label.strip_prefix("env_var/")?;
+            let name = label.strip_prefix("env.var/")?;
             let v = std::env::var(name).ok()?;
             Some(serde_json::json!({ "sensitive": label, "digest": key.digest(v.as_bytes()) }))
         })

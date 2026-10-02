@@ -1,0 +1,7 @@
+edition 2026
+
+# A program declares the provider, not its extern (DESIGN.org R-8).
+provider file {}
+extern file.json(+path, -value)
+extern env.var(+name, -value)
+token(t) where t = env.var("TOKEN")

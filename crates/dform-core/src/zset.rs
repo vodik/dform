@@ -604,7 +604,7 @@ pub mod file {
         pub world: Option<String>,
         pub inventory: Option<String>,
         /// The environment variables the program read (`env_var`), each
-        /// `{"sensitive": "env_var/NAME", "digest"}` with its value's
+        /// `{"sensitive": "env.var/NAME", "digest"}` with its value's
         /// digest keyed with the plan key: never the value.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         pub env: Vec<Json>,

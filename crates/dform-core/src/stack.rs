@@ -196,6 +196,10 @@ pub fn config(program: &Program) -> Result<Stack> {
                 stack_config(c, &mut out, &mut diags);
             }
             Stmt::Provider(c) => {
+                // A built-in fact provider dform answers itself starts nothing.
+                if crate::externs::builtin(&c.name).is_some_and(|b| b.in_process) {
+                    continue;
+                }
                 let spec = provider(c, &mut diags);
                 out.provider_blocks.insert(spec.clone(), c.name.clone());
                 out.providers.push(spec);

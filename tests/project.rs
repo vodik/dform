@@ -550,7 +550,7 @@ fn program_paths_resolve_from_the_root() {
         r#"edition 2026
 stack paths {}
 provider cloud { source = "providers/cloud" }
-extern file.text(+path, -value)
+provider file {}
 input peer(name: string) from csv("data/peers.csv")
 input tag(t) from facts("data/tags.facts")
 note(v) where v = file.text["data/note.txt"]

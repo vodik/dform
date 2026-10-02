@@ -676,7 +676,7 @@ impl Located {
                     if let Some(r) = externs::file(f, inputs, &program_dir) {
                         return r;
                     }
-                    if let Some(r) = externs::env_var(f, inputs) {
+                    if let Some(r) = externs::env(f, inputs) {
                         return r;
                     }
                     backend.query_extern(f, inputs)

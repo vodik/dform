@@ -232,7 +232,7 @@ deny("two_zones", "cluster must be in at least two zones", { cluster: "pngu" }) 
 # Monitoring: the dashboard JSON is a file extern, hashed, with provenance
 ########################################
 
-extern file.json(+path: string, -value: any)
+provider file {}
 
 resource google.monitoring_dashboard pngu {
   project = id

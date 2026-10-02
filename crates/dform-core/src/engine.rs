@@ -2861,7 +2861,7 @@ pub enum RefKind {
     Function,
     /// An aggregate, written in a rule head (`partition::AGGREGATES`).
     Aggregate,
-    /// A builtin extern (`env_var`).
+    /// A built-in provider's extern (`env.var`).
     Extern,
     /// A keyword (`lexer::KEYWORDS`).
     Keyword,
@@ -2946,11 +2946,11 @@ const REFERENCE: &[Reference] = &[
         "last(max(n)) where size(_, n)",
     ),
     r(
-        "env_var",
+        "env.var",
         Ext,
-        "env_var(name: string) -> secret(string)",
-        "The environment variable of the process that plans: a builtin extern, a secret.",
-        "let token = env_var(\"API_TOKEN\")",
+        "env.var(name: string) -> secret(string)",
+        "The environment variable of the process that plans: the built-in `env` provider's extern, a secret.",
+        "let token = env.var(\"API_TOKEN\")",
     ),
     r(
         "edition",

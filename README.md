@@ -443,12 +443,14 @@ the mock's to play.
 
 A `provider` block's settings other than `source` configure the provider,
 and read like any rule reads: inputs, settings rows, value names, tables and
-`env_var`. A keyed deployment configures its providers by its key:
+`env.var`. A keyed deployment configures its providers by its key:
 
 ```dform
+provider env {}
+
 provider google {
   project = cfg.project_id                                # the env's settings row
-  credentials = env_var("GOOGLE_CREDENTIALS_${env}")      # a secret, per key
+  credentials = env.var("GOOGLE_CREDENTIALS_${env}")      # a secret, per key
   expect_account = cfg.project_id
 }
 ```
@@ -456,10 +458,11 @@ provider google {
 The block lowers to `provider_config("google", { project: .., credentials:
 .. })`, which reaches the provider at a second Configure as `settings` once
 the evaluation knows it (the provider serves nothing until then; see "The
-Kubernetes provider"). `env_var("NAME")` is a builtin extern answering the
+Kubernetes provider"). `env.var("NAME")` is the built-in `env` provider's
+extern (`provider env {}`), answering the
 process environment's variable as a `secret(string)`: never persisted, and
 recorded in the plan file only by its label and its value's digest keyed
-with the stack's plan key (`inputs.env`: `{"sensitive": "env_var/NAME",
+with the stack's plan key (`inputs.env`: `{"sensitive": "env.var/NAME",
 "digest": ..}`, as a secret `--set`), so `apply PLAN` with the variable
 changed or unset is a stale plan naming it; an unset one is an error
 naming it. A provider's
@@ -470,7 +473,7 @@ settings wait on its nulls. `expect_account = t` is checked, not sent:
 Configure answers with the account the provider's credentials reach, when
 it can tell (the mock reports its `account` setting), and a run whose
 provider reports another account, or none, refuses to plan, naming both
-(an expected account a secret reaches, an `env_var`'s, by its label,
+(an expected account a secret reaches, an `env.var`'s, by its label,
 `provider/NAME#expect_account`, never its value)
 (`deployment pngu[env=prod]: refusing to plan: provider google reports
 account renfry-dev, but the program expects renfry-prod`).
@@ -1333,12 +1336,14 @@ for byte, and a file with a syntax error is reported, not rewritten.
 
 ## Externs
 
-An extern is a predicate a provider answers on demand, declared with a
-binding pattern: `+` arguments are inputs, `-` arguments answers.
+An extern is a relation a provider answers on demand, with a binding
+pattern: `+` columns are inputs, `-` columns answers. A program does not
+declare one: `provider NAME {}` brings the provider's externs into scope,
+with their modes from its schema.
 
 ```dform
-extern file.json(+path, -value)
-extern random.password(+name, -value) persist
+provider file {}
+provider random {}
 
 resource google_monitoring_dashboard pngu {
   dashboard_json = file.json["files/dashboard-pngu.json"]
@@ -1353,10 +1358,22 @@ nothing before it binds is a compile error. Evaluation is by rounds: every
 call the rules demand is asked once, then the program is evaluated again,
 until no call is new.
 
-`file.json` and `file.text` are the first real provider: they read a path
-relative to the program's directory. Any other extern is asked of the mock,
-which answers from `providers/<name>/externs.df` beside the provider's
-schema: facts of the extern, the rows whose `+` columns are the inputs.
+`file`, `env` and `random` are built-in fact providers, declared like any
+provider and needing no `dform.toml` source:
+
+| provider | externs                                                   | answered by |
+|----------|-----------------------------------------------------------|-------------|
+| `file`   | `file.json(+path, -value)`, `file.text(+path, -value: string)`, a path from the program's directory | dform |
+| `env`    | `env.var(+name, -value: secret(string))`; `env.var(NAME)` as a term reads it | dform |
+| `random` | `random.password(+key, -value: secret(string)) persist`   | the provider the stack configures as `random` (the mock in examples/crud-api), which holds the secret |
+
+A program that writes `extern file.json(..)` is told to write `provider
+file {}` instead; `extern` is the schema's word (provider schemas, the
+compiler's tests). Another provider's externs are, for now, still declared
+in the program until its schema is read at compile time (DESIGN.org R-24),
+and the mock answers them from `providers/<name>/externs.df` beside the
+provider's schema: facts of the extern, the rows whose `+` columns are the
+inputs.
 
 The plan file records the answers the plan read (not a call with a
 `secret(...)` column), and `apply PLAN` asks none of them again. A
@@ -1369,8 +1386,7 @@ value), so the next plan asks the provider again:
 dform state taint p random.password app    # the next plan generates a new one
 ```
 
-A `secret(T)` column (`extern random.password(+key, -value: secret(string))
-persist`) never enters dform (E DR-19). The Query names the secret columns
+A `secret(T)` column (`random.password`'s value) never enters dform (E DR-19). The Query names the secret columns
 (`QueryRequest.secret`), and the provider answers each with where it holds
 the value: a SECRET null whose `held` names the provider, the deployment,
 the extern and its inputs, the column, and the value's keyed digest (with a

@@ -16,11 +16,15 @@
 //! plan already asked) and, for a `persist` extern, in state, where they
 //! win over asking again (a generated password stays the same).
 //!
-//! The first real provider is `file`: `file.json(+path, -value)` and
-//! `file.text(+path, -value)`, paths from the program's project root
-//! (`project::base_of`).
-//! Other externs are asked of the providers over the plugin protocol
-//! (Query; the mock answers from `providers/<name>/externs.df`).
+//! A program does not declare an extern: `provider NAME {}` brings the
+//! provider's into scope (DESIGN.org R-8). `file`, `env` and `random` are
+//! built-in fact providers ([`BUILTINS`]): their externs are the
+//! compiler's own, and dform answers `file.json(+path, -value)`,
+//! `file.text(+path, -value)` (paths from the program's project root,
+//! `project::base_of`) and `env.var(+name, -value)` itself, with no
+//! `dform.toml` source. Other externs are asked of the providers over the
+//! plugin protocol (Query; the mock answers from
+//! `providers/<name>/externs.df`).
 
 use crate::ast::{Atom, BindArg, ExternFn, Lit, Program, Span, Stmt, Term, TypeExpr};
 use crate::diag::{Diagnostic, Diagnostics};
@@ -473,8 +477,8 @@ impl<'a> Externs<'a> {
         self.answers(|f| !f.args.iter().any(is_secret))
     }
 
-    /// The environment variables the last evaluation read with `env_var`,
-    /// as their labels (`env_var/NAME`): what the plan file records of
+    /// The environment variables the last evaluation read with `env.var`,
+    /// as their labels (`env.var/NAME`): what the plan file records of
     /// them, never the value.
     pub fn env_labels(&self) -> Vec<String> {
         self.demanded
@@ -536,6 +540,96 @@ pub fn row(f: &ExternFn, inputs: &[Value], outs: Vec<Value>) -> Vec<Value> {
         .collect()
 }
 
+/// A built-in extern: `(name, [(input, column, type)], persist)`.
+type BuiltinExtern = (
+    &'static str,
+    &'static [(bool, &'static str, &'static str)],
+    bool,
+);
+
+/// A built-in fact provider (DESIGN.org R-8): `provider NAME {}` brings its
+/// externs into scope.
+pub struct Builtin {
+    pub name: &'static str,
+    externs: &'static [BuiltinExtern],
+    /// Whether dform answers them itself; else the provider the stack
+    /// configures by that name does (`random`: the secret it generates is
+    /// held by the provider, which hands it over inside Apply).
+    pub in_process: bool,
+}
+
+/// The built-in fact providers.
+pub const BUILTINS: &[Builtin] = &[
+    Builtin {
+        name: "file",
+        externs: &[
+            (
+                "file.json",
+                &[(true, "path", "string"), (false, "value", "any")],
+                false,
+            ),
+            (
+                "file.text",
+                &[(true, "path", "string"), (false, "value", "string")],
+                false,
+            ),
+        ],
+        in_process: true,
+    },
+    Builtin {
+        name: "env",
+        externs: &[(
+            "env.var",
+            &[(true, "name", "string"), (false, "value", "secret(string)")],
+            false,
+        )],
+        in_process: true,
+    },
+    Builtin {
+        name: "random",
+        externs: &[(
+            "random.password",
+            &[(true, "key", "string"), (false, "value", "secret(string)")],
+            true,
+        )],
+        in_process: false,
+    },
+];
+
+/// The built-in fact provider `name`.
+pub fn builtin(name: &str) -> Option<&'static Builtin> {
+    BUILTINS.iter().find(|b| b.name == name)
+}
+
+impl Builtin {
+    /// Its externs' declarations.
+    pub fn externs(&self) -> Vec<ExternFn> {
+        let ty = |t: &str| match t.strip_prefix("secret(") {
+            Some(inner) => TypeExpr::Apply(
+                "secret".into(),
+                vec![TypeExpr::Name(inner.trim_end_matches(')').into())],
+            ),
+            None => TypeExpr::Name(t.into()),
+        };
+        self.externs
+            .iter()
+            .map(|(name, cols, persist)| ExternFn {
+                name: name.to_string(),
+                args: cols
+                    .iter()
+                    .map(|(input, n, t)| BindArg {
+                        input: *input,
+                        name: n.to_string(),
+                        ty: Some(ty(t)),
+                    })
+                    .collect(),
+                persist: *persist,
+                span: Span::default(),
+            })
+            .collect()
+    }
+}
+
 /// The `file` fact provider: `file.json(+path, -value)`, `file.text(+path,
 /// -value)`, a relative path from `base` (the program's project root, `project::base_of`). `None`
 /// for an extern it does not answer.
@@ -569,14 +663,14 @@ pub fn file(
     })
 }
 
-/// The builtin `env_var(+name, -value: secret(string))`: the process
+/// The built-in `env.var(+name, -value: secret(string))`: the process
 /// environment's variable. Its column is a secret, so the plan file never
 /// records the answer ([`Externs::recorded`]), only its label
 /// ([`Externs::env_labels`]) and a keyed digest, and it is not `persist`:
 /// every run reads the
 /// environment again. An unset variable is an error naming it. `None` for
 /// another extern.
-pub fn env_var(f: &ExternFn, inputs: &[Value]) -> Option<Result<Vec<Vec<Value>>>> {
+pub fn env(f: &ExternFn, inputs: &[Value]) -> Option<Result<Vec<Vec<Value>>>> {
     if f.name != crate::syntax::resolve::ENV_VAR {
         return None;
     }
@@ -584,14 +678,14 @@ pub fn env_var(f: &ExternFn, inputs: &[Value]) -> Option<Result<Vec<Vec<Value>>>
         [Value::Str(name)] => match std::env::var(name) {
             Ok(v) => Ok(vec![row(f, inputs, vec![Value::Str(v)])]),
             Err(std::env::VarError::NotPresent) => Err(anyhow::anyhow!(
-                "env_var: {name} is not set in the environment"
+                "env.var: {name} is not set in the environment"
             )),
             Err(std::env::VarError::NotUnicode(_)) => {
-                Err(anyhow::anyhow!("env_var: {name} is not UTF-8"))
+                Err(anyhow::anyhow!("env.var: {name} is not UTF-8"))
             }
         },
         _ => Err(anyhow::anyhow!(
-            "env_var takes the variable's name, a string"
+            "env.var takes the variable's name, a string"
         )),
     })
 }

@@ -1,5 +1,5 @@
 //! Provider configuration chosen by the deployment key: a `provider` block
-//! reads the key, settings rows and `env_var`, the provider reports the
+//! reads the key, settings rows and `env.var`, the provider reports the
 //! account its credentials reach, and `expect_account` refuses a plan
 //! that would reach another deployment's.
 
@@ -12,8 +12,9 @@ const APP: &str = r#"edition 2026
 type environment = enum("dev", "prod")
 input env: environment = "dev"
 stack app[env] {}
+provider env {}
 provider fake {
-  account = env_var("FAKE_ACCOUNT_${env}")
+  account = env.var("FAKE_ACCOUNT_${env}")
   region = cfg.region
   expect_account = cfg.account
 }
@@ -137,14 +138,15 @@ fn a_provider_configured_from_what_it_serves_is_a_cycle() {
     );
 }
 
-/// `env_var` is a secret: the plan file names the variable by its label
+/// `env.var` is a secret: the plan file names the variable by its label
 /// and never holds its value, nor does state.
 #[test]
 fn an_env_var_is_in_the_plan_file_only_as_its_label() {
     let s = project(
         "bykey-label",
         "edition 2026\n\
-         provider fake { token = env_var(\"FAKE_TOKEN\") }\n\
+         provider env {}\n\
+         provider fake { token = env.var(\"FAKE_TOKEN\") }\n\
          resource net.vpc main {\n\
            cidr = \"10.0.0.0/16\"\n\
          }\n\
@@ -155,7 +157,7 @@ fn an_env_var_is_in_the_plan_file_only_as_its_label() {
     let f = s.read("plan.json");
     let j: serde_json::Value = serde_json::from_str(&f).unwrap();
     let env_in = &j["inputs"]["env"];
-    assert_eq!(env_in[0]["sensitive"], "env_var/FAKE_TOKEN", "{f}");
+    assert_eq!(env_in[0]["sensitive"], "env.var/FAKE_TOKEN", "{f}");
     assert!(env_in[0]["digest"].is_string(), "{f}");
     assert!(!f.contains("tok-5ecret"), "{f}");
     run_with_env(&s, &env, &["apply", "plan.json"]).success();
@@ -168,7 +170,7 @@ fn an_env_var_is_in_the_plan_file_only_as_its_label() {
     let r = s.run(&["plan", "stacks/app.df"]).failure();
     assert!(
         r.stderr
-            .contains("env_var: FAKE_TOKEN is not set in the environment"),
+            .contains("env.var: FAKE_TOKEN is not set in the environment"),
         "{}",
         r.stderr
     );
@@ -181,7 +183,8 @@ fn a_changed_env_var_makes_a_saved_plan_stale() {
     let s = project(
         "bykey-stale",
         "edition 2026\n\
-         provider fake { token = env_var(\"FAKE_TOKEN\") }\n\
+         provider env {}\n\
+         provider fake { token = env.var(\"FAKE_TOKEN\") }\n\
          resource net.vpc main {\n\
            cidr = \"10.0.0.0/16\"\n\
          }\n\
@@ -196,7 +199,7 @@ fn a_changed_env_var_makes_a_saved_plan_stale() {
     let r = run_with_env(&s, &[("FAKE_TOKEN", "tok-two")], &["apply", "plan.json"]).failure();
     assert!(
         r.stderr
-            .contains("env_var/FAKE_TOKEN: changed since the plan"),
+            .contains("env.var/FAKE_TOKEN: changed since the plan"),
         "{}",
         r.stderr
     );
@@ -204,7 +207,7 @@ fn a_changed_env_var_makes_a_saved_plan_stale() {
     let r = s.run(&["apply", "plan.json"]).failure();
     assert!(
         r.stderr
-            .contains("env_var/FAKE_TOKEN: in the plan file, not set now"),
+            .contains("env.var/FAKE_TOKEN: in the plan file, not set now"),
         "{}",
         r.stderr
     );
@@ -218,9 +221,10 @@ fn a_secret_expected_account_is_refused_by_its_label() {
     let s = project(
         "bykey-secret-account",
         "edition 2026\n\
+         provider env {}\n\
          provider fake {\n\
            account = \"acct-real\"\n\
-           expect_account = env_var(\"WANT_ACCOUNT\")\n\
+           expect_account = env.var(\"WANT_ACCOUNT\")\n\
          }\n\
          resource net.vpc main {\n\
            cidr = \"10.0.0.0/16\"\n\
