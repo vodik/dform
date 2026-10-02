@@ -770,7 +770,10 @@ pub fn load_answers(specs: &[String]) -> Result<Vec<Atom>> {
                 .with_context(|| format!("read {}", path.display()))?;
             (path.display().to_string(), src)
         } else if let Some(src) = crate::schema::builtin_answers(n) {
-            (format!("crates/dform-mock/schemas/{n}.externs.df"), src.to_string())
+            (
+                format!("crates/dform-mock/schemas/{n}.externs.df"),
+                src.to_string(),
+            )
         } else {
             continue;
         };

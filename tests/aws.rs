@@ -135,10 +135,18 @@ resource aws.subnet "private-${availability_zone}" {
 #[test]
 fn a_data_source_is_a_table_with_an_index() {
     let s = Scratch::project("aws-zones");
-    s.write("dform.toml", "[providers]\naws = { source = \"aws-mock\" }\n");
+    s.write(
+        "dform.toml",
+        "[providers]\naws = { source = \"aws-mock\" }\n",
+    );
     s.write("main.df", ZONES);
     let r = s.run(&["plan", "main.df"]).success();
-    assert_eq!(r.summary(), "plan: 4 deformations (4 create)", "{}", r.stdout);
+    assert_eq!(
+        r.summary(),
+        "plan: 4 deformations (4 create)",
+        "{}",
+        r.stdout
+    );
     for (zone, cidr) in [
         ("us-east-1a", "10.0.0.0/24"),
         ("us-east-1b", "10.0.1.0/24"),

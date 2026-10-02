@@ -747,7 +747,10 @@ mod tests {
             Some(NullClass::Secret)
         );
         assert_eq!(s.class_of("k8s.namespace", "uid"), Some(NullClass::Fresh));
-        assert_eq!(s.class_of("google.container_cluster", "zones"), Some(NullClass::Open));
+        assert_eq!(
+            s.class_of("google.container_cluster", "zones"),
+            Some(NullClass::Open)
+        );
         assert_eq!(
             s.provider_of.get("k8s.secret").map(String::as_str),
             Some("k8s")
