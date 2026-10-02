@@ -14,8 +14,8 @@ definite:
   name = "app"
   tags.team = "platform"
 + iam.role_policy_attachment["identity.main::attach"]
-  policy_id = ?iam.policy["identity.main::app_policy"].id
-  role_id = ?iam.role["identity.main::app_role"].id
+  policy = ?iam.policy["identity.main::app_policy"]
+  role = ?iam.role["identity.main::app_role"]
   tags.team = "platform"
 + net.vpc["network.main::vpc"]
   cidr = "10.90.0.0/16"
@@ -26,13 +26,13 @@ definite:
   cidr = "10.90.0.0/20"
   tags.team = "platform"
   visibility = "private"
-  vpc_id = ?net.vpc["network.main::vpc"].id
+  vpc = ?net.vpc["network.main::vpc"]
   zone = "us-test-1a"
 + net.subnet["network.main::private-us-test-1b"]
   cidr = "10.90.16.0/20"
   tags.team = "platform"
   visibility = "private"
-  vpc_id = ?net.vpc["network.main::vpc"].id
+  vpc = ?net.vpc["network.main::vpc"]
   zone = "us-test-1b"
 apply order:
   tick 1

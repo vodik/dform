@@ -13,7 +13,7 @@ module identity {
   }
 
   resource iam.role_policy_attachment attach {
-    role_id = app_role.id
-    policy_id = app_policy.id
+    role = app_role
+    policy = app_policy
   }
 }

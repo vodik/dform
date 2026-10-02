@@ -301,7 +301,7 @@ vpc_peer_inst("main", "third")
     );
     for (name, accepter) in [("peer-main-peer", "peer"), ("peer-main-third", "third")] {
         let want = format!(
-            "+ net.vpc_peering[\"{name}\"]\n  accepter_vpc_id = ?net.vpc[\"network.{accepter}::vpc\"].id\n  requester_vpc_id = ?net.vpc[\"network.main::vpc\"].id\n"
+            "+ net.vpc_peering[\"{name}\"]\n  accepter_vpc = ?net.vpc[\"network.{accepter}::vpc\"]\n  requester_vpc = ?net.vpc[\"network.main::vpc\"]\n"
         );
         assert!(r.stdout.contains(&want), "{want}\n---\n{}", r.stdout);
     }

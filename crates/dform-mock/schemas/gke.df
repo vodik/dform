@@ -25,6 +25,12 @@ type_attr("google_monitoring_dashboard", "id", "string", ["computed", "id"])
 type_attr("gke_cluster", "id", "string", ["computed", "id"])
 type_attr("gke_nodepool", "id", "string", ["computed", "id"])
 
+# What points at another resource takes it, and gets its id at Apply (R-43);
+# the bridged module keeps its Terraform names.
+type_attr("gke_cluster", "subnetwork_id", "ref(google_compute_subnetwork)", [])
+type_attr("google_compute_address", "subnetwork_id", "ref(google_compute_subnetwork)", [])
+type_attr("gke_nodepool", "cluster", "ref(gke_cluster)", [])
+
 type_attr(k8s.namespace, "id", "string", ["computed", "id"])
 type_attr(k8s.namespace, "uid", "string", ["computed", "id"])
 type_attr(k8s.deployment, "id", "string", ["computed", "id"])
@@ -56,7 +62,7 @@ type_doc("gke_cluster", "name", "The cluster's name, unique in the project and l
 type_doc("gke_cluster", "network", "The VPC network the cluster attaches to.")
 type_doc("gke_cluster", "network_id", "The VPC network's self link (projects/P/global/networks/N).")
 type_doc("gke_cluster", "subnetwork", "The subnetwork the cluster's nodes are in.")
-type_doc("gke_cluster", "subnetwork_id", "The id of the subnetwork the cluster's nodes are in.")
+type_doc("gke_cluster", "subnetwork_id", "The subnetwork the cluster's nodes are in.")
 type_doc("gke_cluster", "master_control_plane_cidr", "The /28 range of the private control plane's endpoints.")
 type_doc("gke_cluster", "ip_range_pods", "The name of the subnetwork's secondary range for pod addresses.")
 type_doc("gke_cluster", "ip_range_services", "The name of the subnetwork's secondary range for service addresses.")

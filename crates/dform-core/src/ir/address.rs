@@ -77,11 +77,16 @@ pub fn path_suffix(path: &str) -> String {
 
 /// A null's or a secret's label `T/A#P` as the attribute it stands for:
 /// `T["A"].P`, or `T.P` for a label with no address (an input's, an
-/// output's). Anything else is its own text. The label itself is internal
-/// (a Skolem name in the state) and never printed.
+/// output's). A resource's identity (`schema::IDENTITY`) is the resource
+/// itself, unknown until it exists: `T["A"]` (R-43). Anything else is its
+/// own text. The label itself is internal (a Skolem name in the state) and
+/// never printed.
 pub fn label(l: &str) -> String {
     match crate::value::null_parts(l) {
         Some((typ, name, path)) if name.is_empty() => format!("{typ}{}", path_suffix(&path)),
+        Some((typ, name, path)) if path == crate::schema::IDENTITY => {
+            Address { typ, name }.to_string()
+        }
         Some((typ, name, path)) => Address { typ, name }.attr(&path),
         None => l.to_string(),
     }
@@ -227,9 +232,14 @@ mod tests {
             a("t", "x").attr("labels.app-name"),
             r#"t["x"].labels."app-name""#
         );
+        // A resource's identity is the resource (R-43).
         assert_eq!(
             label("net.vpc/network.main::vpc#id"),
-            r#"net.vpc["network.main::vpc"].id"#
+            r#"net.vpc["network.main::vpc"]"#
+        );
+        assert_eq!(
+            label("db.postgres/main#endpoint"),
+            r#"db.postgres["main"].endpoint"#
         );
     }
 

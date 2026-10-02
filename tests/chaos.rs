@@ -6,7 +6,7 @@ use common::Scratch;
 const PROG: &str = r#"edition 2026
 
 resource net.vpc main { cidr = "10.0.0.0/16" }
-resource net.subnet a { vpc_id = ref(net.vpc, "main", "id"), cidr = "10.0.1.0/24" }
+resource net.subnet a { vpc = main, cidr = "10.0.1.0/24" }
 provider fake
 "#;
 
@@ -48,11 +48,7 @@ fn fail_stops_before_the_action_and_keeps_what_came_before() {
         "{}",
         r.stdout
     );
-    assert!(
-        r.stdout.contains("vpc_id = \"net.vpc:main\""),
-        "{}",
-        r.stdout
-    );
+    assert!(r.stdout.contains("vpc = net.vpc[\"main\"]"), "{}", r.stdout);
 }
 
 /// A timed-out Create may have taken effect (DEADLINE_EXCEEDED): it is
@@ -141,7 +137,7 @@ fn read_lag_past_the_retry_budget_is_gone() {
     // Within the apply the subnet gets the vpc's id from the Create response.
     dform(&s, &["apply", "--chaos", "read-lag=net.vpc[\"main\"]:3"]).success();
     assert_eq!(
-        world(&s)["resources"]["net.subnet::a"]["attrs"]["vpc_id"],
+        world(&s)["resources"]["net.subnet::a"]["attrs"]["vpc"],
         "net.vpc:main"
     );
     let r = dform(&s, &["plan"]).success();
@@ -156,7 +152,7 @@ fn read_lag_past_the_retry_budget_is_gone() {
     assert!(r.stdout.contains("+ net.vpc[\"main\"]"), "{}", r.stdout);
     assert!(
         r.stdout
-            .contains("vpc_id: \"net.vpc:main\" -> ?net.vpc[\"main\"].id"),
+            .contains("vpc: \"net.vpc:main\" -> ?net.vpc[\"main\"]"),
         "{}",
         r.stdout
     );

@@ -41,8 +41,8 @@ fn format(template: string, value: any, ...) -> string? forwards
 #| example: let zones = len(subnet_ids)
 fn len(value: list) -> int?
 
-#| A reference to an attribute of the program's own resource: an apply-order edge; `vpc.id` in a field lowers to it.
-#| example: let vpc_id = ref(net.vpc, "vpc", "id")
+#| A reference to an attribute of the program's own resource: an apply-order edge; `vpc.cidr` in a field lowers to it. `ref(r)`, one resource, is the reference written out where an attribute that is no `ref(T)` takes one (R-43).
+#| example: let vpc_cidr = ref(net.vpc, "vpc", "cidr")
 fn ref(type: string, name: string, path: string) -> ref forwards
 
 #| A name inside a module instance, `scope::name`, as module lowering writes it.

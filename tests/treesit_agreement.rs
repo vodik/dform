@@ -283,8 +283,9 @@ fn inside(n: Node, kinds: &[&str]) -> bool {
 }
 
 /// Proposal G, G-6: a dot in a field's value is a reference, in a rule body
-/// or a clause a read. dform.df has both: `requester_vpc_id = a.id` in a
-/// block, `a = network[ia].vpc` in a rule body.
+/// or a clause a read. dform.df has both: `subnets =
+/// network.main.private_subnets` in a block, `a = network[ia].vpc` in a
+/// rule body.
 #[test]
 fn the_reference_capture_is_on_field_values_and_not_on_reads() {
     let src = std::fs::read_to_string(repo().join("examples/demo/stacks/dform.df")).unwrap();
@@ -292,7 +293,7 @@ fn the_reference_capture_is_on_field_values_and_not_on_reads() {
     let refs = captures(&tree, &src, "variable.reference");
     let text = |n: &Node| src[n.byte_range()].to_string();
     let texts: Vec<String> = refs.iter().map(text).collect();
-    for want in ["a.id", "b.id"] {
+    for want in ["network.main.private_subnets"] {
         assert!(
             texts.iter().any(|t| t == want),
             "{want} not captured: {texts:?}"

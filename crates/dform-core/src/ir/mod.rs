@@ -152,7 +152,7 @@ pub fn compile_resources(
                     remove_path(&mut root, &p);
                 }
             }
-            let attrs = Value::Obj(root);
+            let attrs = identities(Value::Obj(root), schema, &resolved);
             let mut deps = BTreeSet::new();
             collect_deps(&attrs, &mut deps);
             deps.extend(extra_deps.remove(&addr).unwrap_or_default());
@@ -160,6 +160,42 @@ pub fn compile_resources(
             Resource { addr, attrs, deps }
         })
         .collect())
+}
+
+/// A reference in a document (`vpc = main`, R-43) is what the provider
+/// gets for it: the resource's identity, `schema::IDENTITY`, a fresh null
+/// the provider resolves once the resource exists (as `x.id` was), and an
+/// edge in the apply order. `ref(T, A, P)` with a path is a reference to
+/// an attribute and stays one.
+fn identities(v: Value, schema: &Schema, resolved: &BTreeMap<String, Value>) -> Value {
+    match v {
+        Value::Ref { typ, name, attr } if attr.is_empty() => {
+            let label = crate::value::null_label(&typ, &name, crate::schema::IDENTITY);
+            // Round 0 found it in the world (`computed_prelude`).
+            if let Some(id) = resolved.get(&label) {
+                return id.clone();
+            }
+            let ty = schema
+                .attr(&typ, crate::schema::IDENTITY)
+                .map_or_else(|| "string".to_string(), |a| a.ty.clone());
+            Value::Null {
+                label,
+                class: crate::value::NullClass::Fresh,
+                ty,
+            }
+        }
+        Value::List(xs) => Value::List(
+            xs.into_iter()
+                .map(|x| identities(x, schema, resolved))
+                .collect(),
+        ),
+        Value::Obj(m) => Value::Obj(
+            m.into_iter()
+                .map(|(k, x)| (k, identities(x, schema, resolved)))
+                .collect(),
+        ),
+        v => v,
+    }
 }
 
 /// One `arg(T, A, P, V, Rank)` contribution: its rank and its leaves as

@@ -76,7 +76,7 @@ fn moved_closes_rename_is_destroy() {
 
 module network {{
   resource net.vpc vpc {{ cidr = "10.0.0.0/16" }}
-  resource net.subnet a {{ vpc_id = vpc.id, tier = "web" }}
+  resource net.subnet a {{ vpc, tier = "web" }}
 }}
 instance network {inst} {{}}
 provider fake

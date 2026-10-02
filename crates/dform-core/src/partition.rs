@@ -934,8 +934,9 @@ mod tests {
     }
 
     /// The graph `dform dev strata` prints is the one evaluation runs with: a
-    /// contribution that holds `ref(net.vpc, A, id)` reads `(attr, net.vpc,
-    /// id)` after the ref rewrite, so it sits in a higher stratum. The
+    /// contribution that holds a reference, `ref(net.vpc, A, "")`, joins
+    /// `(attr, net.vpc, id)` after the ref rewrite, so it sits in a higher
+    /// stratum. The
     /// graph `dform dev strata` built from the program before the rewrite put
     /// the contribution in stratum 0 and the attribute in stratum 3.
     #[test]
@@ -951,7 +952,7 @@ mod tests {
             typ: Some(t.into()),
             path: Some(p.into()),
         };
-        let peering = strata[&node("arg", "net.vpc_peering", "requester_vpc_id")];
+        let peering = strata[&node("arg", "net.vpc_peering", "requester_vpc")];
         let vpc_id = strata[&node("attr", "net.vpc", "id")];
         assert!(peering > vpc_id, "{peering} <= {vpc_id}");
     }

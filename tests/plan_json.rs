@@ -93,7 +93,7 @@ fn plan_json_nulls_carry_their_class() {
         .unwrap();
     assert_eq!(
         sub["after"],
-        json!({"null": "google_compute_subnetwork[\"gke_subnet\"].id", "class": "fresh"})
+        json!({"null": "google_compute_subnetwork[\"gke_subnet\"]", "class": "fresh"})
     );
 }
 
@@ -187,7 +187,7 @@ fn query_json_redacts_like_the_plan() {
     let q: Value = serde_json::from_str(&r.stdout).unwrap();
     assert_eq!(
         q["rows"][0]["V"],
-        json!({"null": "net.vpc[\"main\"].id", "class": "fresh"})
+        json!({"null": "net.vpc[\"main\"]", "class": "fresh"})
     );
 }
 

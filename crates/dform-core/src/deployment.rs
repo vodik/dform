@@ -738,6 +738,7 @@ impl Located {
         if let Some(l) = lowered {
             crate::secrets::check(l, backend.schema(), &secret_outputs)?;
             crate::refine::check(&l.program, backend.schema())?;
+            crate::types::check(&l.program, backend.schema())?;
             for (at, n) in transform::computed_reads(&l.program.statements, backend.schema()) {
                 obs.note(Note::Computed(at, n));
             }

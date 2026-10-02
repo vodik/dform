@@ -410,6 +410,14 @@ pub fn classify(d: &Decls, t: &SyntaxToken) -> What {
                     None => What::Other,
                 },
                 Some(i) if i.kind() == SyntaxKind::INSTANCE => What::Other,
+                // An entry that is only a name is the pun `k = k` (R-33):
+                // the name is also its value, a `let`, an input or a
+                // resource (the reference, R-43).
+                _ if is_pun(&parent, t) => used(
+                    d.let_(&scope, &name)
+                        .or_else(|| d.value(&scope, &name))
+                        .or_else(|| d.resource(&scope, &name, None)),
+                ),
                 _ => What::Path,
             }
         }
@@ -424,6 +432,19 @@ pub fn classify(d: &Decls, t: &SyntaxToken) -> What {
         }
         _ => What::Other,
     }
+}
+
+/// Whether `t` is the whole of a block entry with no value (a pun).
+pub fn is_pun(path: &SyntaxNode, t: &SyntaxToken) -> bool {
+    path.kind() == SyntaxKind::BLOCK_PATH
+        && idents(path).len() == 1
+        && idents(path).first() == Some(t)
+        && path.parent().is_some_and(|a| {
+            a.kind() == SyntaxKind::ASSIGN
+                && !a
+                    .children()
+                    .any(|c| c.kind() != SyntaxKind::BLOCK_PATH && c.kind() != SyntaxKind::RANK)
+        })
 }
 
 /// A name in a chain, by the order of resolution.
@@ -468,8 +489,10 @@ fn chain(d: &Decls, c: &SyntaxNode, t: &SyntaxToken, scope: &Scope) -> What {
     if name0 == "world" {
         return What::Other;
     }
-    // 4: a resource in scope (bare, only where a bare name is an address).
+    // 4: a resource in scope (bare, only where a bare name is an address,
+    // or an entry's whole value, where it is the reference: R-43).
     let addressed = context == Some(SyntaxKind::OUTPUT_DECL)
+        || context == Some(SyntaxKind::ASSIGN)
         || (context == Some(SyntaxKind::LIT_IN)
             && c.parent().and_then(|p| p.first_child()).as_ref() == Some(c));
     if (!only || addressed)

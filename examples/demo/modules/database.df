@@ -6,15 +6,15 @@ import "modules/network.df"
 module database {
   input backup_days: int
   input multi_az: bool
-  input subnet_ids: subnets
+  input subnets: subnets
 
   resource db.postgres db {
     public = false
-    subnet_ids
+    subnets
     backup_days
     multi_az
   }
 
   #| Only when the database exists in this environment.
-  output iam_need = { action: "db.connect", resource: db.id } where has backup_days
+  output iam_need = { action: "db.connect", resource: db } where has backup_days
 }

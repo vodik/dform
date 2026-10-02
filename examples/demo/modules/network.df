@@ -17,12 +17,12 @@ module network {
   zone_index("us-test-1b", 1)
 
   resource net.subnet "private-${z}" {
-    vpc_id = vpc.id
+    vpc
     cidr = inet.subnet(vpc.cidr, 4, zone_index[z])
     zone = z
     visibility = "private"
   } where data("zone", z)
   #| The network's VPC, for peering.
   output vpc: net.vpc = vpc
-  output private_subnet_ids: subnets = [ s.id | s in net.subnet, s.visibility == "private" ]
+  output private_subnets: subnets = [ s | s in net.subnet, s.visibility == "private" ]
 }

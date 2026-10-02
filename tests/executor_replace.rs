@@ -56,8 +56,8 @@ fn a_replace_updates_its_dependents_after_the_create() {
     let r = dform(&s, &["plan"]).success();
     assert!(
         r.stdout.contains(
-            "pending on ?net.vpc[\"main\"].id (resolves after tick 1):\n\
-             ~ net.subnet[\"a\"]\n  vpc_id: \"net.vpc:main@1\" -> ?net.vpc[\"main\"].id\n"
+            "pending on ?net.vpc[\"main\"] (resolves after tick 1):\n\
+             ~ net.subnet[\"a\"]\n  vpc_id: \"net.vpc:main@1\" -> ?net.vpc[\"main\"]\n"
         ),
         "{}",
         r.stdout

@@ -327,7 +327,7 @@ pub fn flatten(
         }
         Json::Array(xs) => {
             let keys = schema.list_key(typ, norm);
-            let is_set = schema.attr(typ, norm).is_some_and(|a| a.ty == "set");
+            let is_set = schema.attr(typ, norm).is_some_and(|a| a.kind() == "set");
             let mut items: Vec<(String, &Json)> = Vec::new();
             for (i, vv) in xs.iter().enumerate() {
                 let by_key = keys.and_then(|ks| {

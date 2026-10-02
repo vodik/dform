@@ -66,14 +66,14 @@ instance network peer {
 instance database main {
   backup_days = cfg.db.backup_days
   multi_az = cfg.db.multi_az
-  subnet_ids = network.main.private_subnet_ids
+  subnets = network.main.private_subnets
 } where env != "dev"
 
 instance kubernetes main {
   private_api = cfg.k8s.private_api
   nodepool_min = cfg.k8s.nodepool.min
   nodepool_max = cfg.k8s.nodepool.max
-  subnet_ids = network.main.private_subnet_ids
+  subnets = network.main.private_subnets
 } where env != "dev"
 
 instance identity main
@@ -89,8 +89,8 @@ vpc_peer(a, b) where vpc_peer_pair(_, _, a, b)
 #| A peering resource per declared peering edge.
 resource net.vpc_peering "peer-${ia}-${ib}" {
   # Both ends must exist in this environment.
-  requester_vpc_id = a.id
-  accepter_vpc_id = b.id
+  requester_vpc = a
+  accepter_vpc = b
 } where vpc_peer_pair(ia, ib, a, b), a in net.vpc, b in net.vpc
 
 #| Demo: allocate an IP from the main VPC.

@@ -51,25 +51,25 @@ resource net.vpc main {
 
 # 2. A resource that points at another
 #
-# A subnet lives in a network, so it needs the network's id: `main.id`.
-# The id does not exist until the network is made. Terraform prints
-# `(known after apply)`; dform prints which value it is waiting for:
+# A subnet lives in a network, so it takes the network: `vpc = main`. The
+# network does not exist until it is made. Terraform prints `(known after
+# apply)`; dform prints which resource the subnet is waiting for:
 #
 #   + net.subnet["public"]
-#     vpc_id = ?net.vpc["main"].id
+#     vpc = ?net.vpc["main"]
 #
 # `?` marks an unknown. Because the subnet refers to the network, apply
-# makes the network first. Apply prints the plan and asks before it
-# changes anything:
+# makes the network first, and gives the cloud its id. Apply prints the
+# plan and asks before it changes anything:
 #
 #   $ dform apply
 #   apply: complete
 #
 # (It ran in two ticks, two rounds of changes, asking before each;
-# section 10 is why.) The unknown is now the id the fake cloud gave it:
+# section 10 is why.) The unknown is now the network, which exists:
 #
-#   $ dform query 'net.subnet["public"].vpc_id'
-#   "net.vpc:main"
+#   $ dform query 'net.subnet["public"].vpc'
+#   net.vpc["main"]
 #
 # Plan again, and there is nothing to do:
 #
@@ -79,7 +79,7 @@ resource net.vpc main {
 # Undeformed means the world matches the program.
 
 resource net.subnet public {
-  vpc_id = main.id
+  vpc = main
   cidr = "10.0.0.0/24"
   visibility = "public"
 }
@@ -110,7 +110,7 @@ zone("us-test-1a", 1)
 zone("us-test-1b", 2)
 
 resource net.subnet "private-${z}" {
-  vpc_id = main.id
+  vpc = main
   cidr = inet.subnet(main.cidr, 8, n)
   zone = z
   visibility = "private"
@@ -152,7 +152,7 @@ settings prod {
 let cfg = settings[env]
 
 resource db.postgres orders {
-  subnet_ids = [ s.id | s in net.subnet, s.visibility == "private" ]
+  subnets = [ s | s in net.subnet, s.visibility == "private" ]
   backup_days = cfg.backup_days
   multi_az = cfg.multi_az
   public = public_db
@@ -231,7 +231,7 @@ module network {
   }
 
   resource net.subnet "private-${z}" {
-    vpc_id = vpc.id
+    vpc
     cidr = inet.subnet(cidr, 8, n)
     zone = z
   } where zone(z, n)
@@ -252,13 +252,13 @@ instance network green {
 # `main` is the hub, and each module network is a spoke peered to it.
 # `spoke` lists them, and `network[t].vpc` reads instance `t`'s output,
 # its vpc's address. `network_of` names every network, the hub's and the
-# spokes'. The peering rule joins them: one peering per spoke, whose ids
-# are the unknowns of two networks:
+# spokes'. The peering rule joins them: one peering per spoke, between two
+# networks still unknown:
 #
 #   $ dform plan tour env=prod
 #   + net.vpc_peering["main-blue"]
-#     accepter_vpc_id = ?net.vpc["network.blue::vpc"].id
-#     requester_vpc_id = ?net.vpc["main"].id
+#     accepter_vpc = ?net.vpc["network.blue::vpc"]
+#     requester_vpc = ?net.vpc["main"]
 #
 # A third spoke is an instance and a `spoke` line: its peering, and the
 # routes of section 9, follow.
@@ -272,8 +272,8 @@ network_of(h, h) where hub(h)
 network_of(t, v) where spoke(t), v = network[t].vpc
 
 resource net.vpc_peering "main-${t}" {
-  requester_vpc_id = main.id
-  accepter_vpc_id = net.vpc[v].id
+  requester_vpc = main
+  accepter_vpc = net.vpc[v]
 } where spoke(t), v = network[t].vpc
 
 # 9. Rules that recurse

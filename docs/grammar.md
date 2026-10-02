@@ -216,14 +216,19 @@ Anything else is `unknown name`, with a hint to quote it.
 A bare name (no `.` or `[`) is a variable unless it is a value name. A
 variable may not take the name of a resource, a module or a type namespace
 in scope ("variable `net` shadows the type namespace `net`"). A bare
-resource name is its address in two places: the value of an `output`, and
-the left side of `in`, where the type on the right picks among resources
-of one name. It is a reference value (R-42), which prints as its address
-`T["A"]`, in two more: a column that takes a resource (the plan's
+resource name is its address in two places: the value of an `output`
+typed by a resource type, and the left side of `in`, where the type on the
+right picks among resources of one name. It is a reference value (R-42),
+which prints as its address `T["A"]`, everywhere else it stands for the
+resource: a whole value given to something (an entry, `vpc = main` or the
+pun `vpc`, also inside the module that declares it; a `set`, a `let`, an
+instance input, any other output, an element of a list or object there,
+a comprehension's item), a column that takes a resource (the plan's
 `deformation(kind, r, before)` and `world_digest(r, now)`,
 `requires_approval(r, reason)`, `lifecycle(r, what)`, `adopt(r, remote)`,
 `ignore_changes(r, path)`, the last of `moved(T, "old-address", r)`), and
-either side of `==` or `!=` with a resource on the other.
+either side of `==` or `!=` with a resource on the other (R-43). `T[e]`
+and a typed variable are references in the same places.
 
 A variable must have a binding occurrence somewhere in its rule: an
 argument of a relation (a pattern in it included), either side of `=`, the
@@ -267,7 +272,34 @@ the full address, which pastes unchanged from `plan` (H-16):
 name: `T["n"]` for a resource `n` in scope, and `T.n`, are errors naming
 `n`. A name declared twice in scope (three resources named `web`) is an
 error listing the candidates by address. A dot on a variable with no
-static type is field access on a value: `__path(X, "f")`.
+static type is field access on a value: `__path(X, "f")`. A variable a
+reference column binds with no `in` (`deformation(k, r, _)`) is a
+reference of no known type, and `r.p` on it is an error that says to bind
+it with `r in T` (R-43).
+
+A program never reads an id (R-43). A reference is the resource, and
+where an attribute identifies another resource the provider's schema
+types it `ref(T)` (`list(ref(T))`, `set(ref(T))`), so the attribute takes
+the resource itself: `vpc = main`, `subnets = [ s | s in net.subnet ]`.
+The provider gives its API whatever identifies the object (the schema's
+`id`, `schema::IDENTITY`) once it exists; until then the plan prints the
+resource unknown, `vpc = ?net.vpc["main"]`, and after it the resource,
+`vpc = net.vpc["main"]` (the id under `--json`). `x.id` is an error naming
+the reference. `ref(r)` writes the reference out where an attribute that
+is no `ref(T)` needs the id as text (a bridged provider's `string`). A
+module input or output typed `ref(T)`, `list(ref(T))` or by a resource
+type holds references.
+
+A literal in a position whose type is known is checked as that type at
+compile time (R-31, Postgres's unknown-literal rule): a schema attribute's
+type (`inet`, `int`, `bool`, `enum(..)`, `ref(T)`), an input's declared
+type for its default and an instance's value, a function's parameter.
+`cidr_block = "10.0.0/16"` in an `inet` attribute, `vpc = "main"` in a
+`ref(net.vpc)` one and `subnets = [main]` (a `ref(net.vpc)` where
+`ref(net.subnet)` is wanted) are errors at the entry, naming both types; a
+string literal where an `inet` is declared is read as one. Without a type
+a literal is a string. A reference and a string never compare: `r ==
+"main"` is an error that names `r == main` or `r == T["main"]`.
 
 ## Statements
 
@@ -590,8 +622,9 @@ A dot on a reference means one of two things, decided by position (G-6):
 
 - **a reference** where it is a whole value: a field's value, a head or
   output argument, an element of a list or object there, a comprehension's
-  item. `vpc_id = vpc.id` is `ref(net.vpc, "vpc", "id")`: an apply-order
-  edge, and a null until a computed path resolves.
+  item. `endpoint = db.endpoint` is `ref(db.postgres, "db", "endpoint")`:
+  an apply-order edge, and a null until a computed path resolves. The
+  resource alone, `vpc = vpc`, is `ref(net.vpc, "vpc", "")`.
 - **a read** anywhere its content is needed: a body literal, a clause, an
   argument of a builtin or operator, an interpolation hole, an index.
   `inet.subnet(vpc.cidr, 4, i)` reads `attr(net.vpc, "vpc", "cidr", V)`
@@ -708,6 +741,8 @@ as it is.
 | `pattern = e[i]`                          | `member(e', i, pattern)`                               |
 | `p[a, b]`, `ext[a]`                       | `V`, reading `p(a', b', V)`, `ext(a', V)`              |
 | `R.p` (whole value)                       | `ref(T, A, "p")`                                       |
+| `R` (a value given: an entry, an output, a `let`) | `ref(T, A, "")`; in a document, the provider's id of `T[A]` |
+| `ref(R)`                                  | `ref(ref(T, A, ""))`: the reference, written out       |
 | `R.p.q` (content)                         | `V`, reading `attr(T, A, "p", V)`; `__path(V, "q")`    |
 | `settings[e].a.b`                         | `V`, reading `setting(e', "a.b", V)`                   |
 | `m.i.k`, `m[e].k`                         | `V`, reading `output("m.i", "k", V)`, `output(format("m.%s", e'), "k", V)` |

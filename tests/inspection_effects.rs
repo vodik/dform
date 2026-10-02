@@ -34,24 +34,24 @@ fn a_module_instance_writes_its_resource_cells() {
         "{out}"
     );
     assert!(
-        out.contains("vpc: addr") && out.contains("private_subnet_ids: list(ref(net.subnet))"),
+        out.contains("vpc: addr") && out.contains("private_subnets: list(ref(net.subnet))"),
         "{out}"
     );
 }
 
-/// Cross-instance wiring (`instance database main { subnet_ids =
-/// network.main.private_subnet_ids }`) is written at the call site (the
+/// Cross-instance wiring (`instance database main { subnets =
+/// network.main.private_subnets }`) is written at the call site (the
 /// stack writes the instance's input cell) and read there too (the
 /// stack reads the other instance's output).
 #[test]
 fn cross_instance_wiring_is_the_callers_effect() {
     let out = dform("examples/demo/stacks/dform.df", &["effects"]);
     assert!(
-        out.contains("input database.main.subnet_ids"),
+        out.contains("input database.main.subnets"),
         "stack should write database.main's input cell: {out}"
     );
     assert!(
-        out.contains("output network.main.private_subnet_ids"),
+        out.contains("output network.main.private_subnets"),
         "stack should read network.main's output: {out}"
     );
 }

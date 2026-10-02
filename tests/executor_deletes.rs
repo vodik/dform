@@ -82,8 +82,8 @@ fn a_force_new_change_replaces_destroying_first() {
         r.stdout,
         "tick 1:\nplan: 1 deformation (1 replace), 1 pending\ndefinite:\n\
          -/+ net.vpc[\"main\"]  (replace)\n  cidr: \"10.0.0.0/16\" -> \"10.1.0.0/16\"\n\
-         pending on ?net.vpc[\"main\"].id (resolves after tick 1):\n\
-         ~ net.subnet[\"a\"]\n  vpc_id: \"net.vpc:main\" -> ?net.vpc[\"main\"].id\n\
+         pending on ?net.vpc[\"main\"] (resolves after tick 1):\n\
+         ~ net.subnet[\"a\"]\n  vpc_id: \"net.vpc:main\" -> ?net.vpc[\"main\"]\n\
          apply order:\n  tick 1\n    net.vpc[\"main\"]\n  tick 2\n    net.subnet[\"a\"]\n\
          tick 2:\nstack p is undeformed\n\
          apply: complete\n"

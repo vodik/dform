@@ -20,7 +20,7 @@
         "backup_days": 3,
         "multi_az": false,
         "public": false,
-        "subnet_ids": [
+        "subnets": [
           "net.subnet:network.main::private-us-test-1a",
           "net.subnet:network.main::private-us-test-1b"
         ],
@@ -78,8 +78,8 @@
       "typ": "iam.role_policy_attachment",
       "name": "identity.main::attach",
       "attrs": {
-        "policy_id": "iam.policy:identity.main::app_policy",
-        "role_id": "iam.role:identity.main::app_role",
+        "policy": "iam.policy:identity.main::app_policy",
+        "role": "iam.role:identity.main::app_role",
         "tags": {
           "team": "platform"
         }
@@ -93,7 +93,7 @@
       "name": "kubernetes.main::cluster",
       "attrs": {
         "private_api": false,
-        "subnet_ids": [
+        "subnets": [
           "net.subnet:network.main::private-us-test-1a",
           "net.subnet:network.main::private-us-test-1b"
         ],
@@ -112,7 +112,7 @@
       "typ": "k8s.nodepool",
       "name": "kubernetes.main::default",
       "attrs": {
-        "cluster_id": "k8s.cluster:kubernetes.main::cluster",
+        "cluster": "k8s.cluster:kubernetes.main::cluster",
         "max": 3,
         "min": 1,
         "tags": {
@@ -132,7 +132,7 @@
           "team": "platform"
         },
         "visibility": "private",
-        "vpc_id": "net.vpc:network.main::vpc",
+        "vpc": "net.vpc:network.main::vpc",
         "zone": "us-test-1a"
       },
       "computed": {
@@ -148,7 +148,7 @@
           "team": "platform"
         },
         "visibility": "private",
-        "vpc_id": "net.vpc:network.main::vpc",
+        "vpc": "net.vpc:network.main::vpc",
         "zone": "us-test-1b"
       },
       "computed": {
@@ -164,7 +164,7 @@
           "team": "platform"
         },
         "visibility": "private",
-        "vpc_id": "net.vpc:network.peer::vpc",
+        "vpc": "net.vpc:network.peer::vpc",
         "zone": "us-test-1a"
       },
       "computed": {
@@ -180,7 +180,7 @@
           "team": "platform"
         },
         "visibility": "private",
-        "vpc_id": "net.vpc:network.peer::vpc",
+        "vpc": "net.vpc:network.peer::vpc",
         "zone": "us-test-1b"
       },
       "computed": {
@@ -221,8 +221,8 @@
       "typ": "net.vpc_peering",
       "name": "peer-main-peer",
       "attrs": {
-        "accepter_vpc_id": "net.vpc:network.peer::vpc",
-        "requester_vpc_id": "net.vpc:network.main::vpc",
+        "accepter_vpc": "net.vpc:network.peer::vpc",
+        "requester_vpc": "net.vpc:network.main::vpc",
         "tags": {
           "team": "platform"
         }

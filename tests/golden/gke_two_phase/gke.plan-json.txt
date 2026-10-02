@@ -115,7 +115,7 @@ exit: ok
         {
           "after": {
             "class": "fresh",
-            "null": "google_compute_subnetwork[\"gke_subnet\"].id"
+            "null": "google_compute_subnetwork[\"gke_subnet\"]"
           },
           "before": null,
           "op": "set",
@@ -150,7 +150,7 @@ exit: ok
         {
           "after": {
             "class": "fresh",
-            "null": "google_compute_subnetwork[\"gke_subnet\"].id"
+            "null": "google_compute_subnetwork[\"gke_subnet\"]"
           },
           "before": null,
           "op": "set",

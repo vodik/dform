@@ -418,11 +418,13 @@ enum Res {
     },
     /// A settings row and a path (always read, by its full key).
     Settings { addr: Term, path: Vec<Seg> },
-    /// An instance output.
+    /// An instance output; `typ` when its declared type is a resource
+    /// type (it holds that resource's address).
     Output {
         inst: Term,
         key: String,
         path: Vec<Seg>,
+        typ: Option<Term>,
     },
     /// A live object: `world.T[e].path`.
     World {
@@ -447,10 +449,14 @@ enum Res {
 
 /// Where a term stands: a whole value (a field, a head argument, an
 /// element of a list or object there) makes a dot a reference; anywhere
-/// else it is a read.
+/// else it is a read. `Value` is a whole value a resource is given to (an
+/// entry, a `set`, an output, an instance input, a `let`): there a resource
+/// itself, by its name, `T[e]` or a typed variable, is the reference
+/// `ref(T, A, "")` (R-43), where a head argument keeps its address.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Pos {
     Whole,
+    Value,
     Content,
 }
 
@@ -479,6 +485,10 @@ struct Rc {
     binders: BTreeSet<String>,
     /// Source variable -> where it is written (`singleton`).
     uses: singleton::Uses,
+    /// Source variables a relation's reference column binds with no type
+    /// (`deformation(k, r, _)` and no `r in T`): a reference whose
+    /// attributes nothing can read (R-43).
+    untyped_refs: BTreeSet<String>,
 }
 
 /// An error already recorded in `diags`.
@@ -1975,6 +1985,7 @@ impl<'u> Lowerer<'u> {
             },
             None => TypeExpr::Name("any".to_string()),
         };
+        let addr_typed = matches!(&ty, TypeExpr::Name(n) if n == "addr");
         if self.outputs.insert((scope, name.clone())) {
             out.push(Stmt::Output(OutputDecl {
                 name: name.clone(),
@@ -1993,16 +2004,20 @@ impl<'u> Lowerer<'u> {
         let mut rc = self.rc(n, scope, outer);
         let mut pre = self.opt_body(&mut rc, n)?;
         let has_body = node(n, BODY).is_some();
-        // A bare resource name is its address.
+        // An output typed by a resource type holds its address (`scoped` by
+        // the module); any other output is a value, a resource in it the
+        // reference (R-43).
         let value = match Chain::of(&t) {
             Some(c)
-                if c.is_bare()
+                if addr_typed
+                    && c.is_bare()
                     && !rc.vars.contains_key(&c.head)
                     && self.resource(scope, &c.head).is_some() =>
             {
                 str_term(&c.head)
             }
-            _ => self.term(&mut rc, &t, Pos::Whole, &mut pre)?,
+            _ if addr_typed => self.term(&mut rc, &t, Pos::Whole, &mut pre)?,
+            _ => self.term(&mut rc, &t, Pos::Value, &mut pre)?,
         };
         if pre.is_empty() && !has_body {
             self.check_bound(&rc, &[], &[&value])?;
@@ -2055,7 +2070,7 @@ impl<'u> Lowerer<'u> {
                 } else {
                     FieldOp::Assign
                 };
-                let value = self.entry_value(rc, &a, Pos::Whole, reads)?;
+                let value = self.entry_value(rc, &a, Pos::Value, reads)?;
                 Ok(FieldAssign {
                     key,
                     op,
@@ -2306,7 +2321,7 @@ impl<'u> Lowerer<'u> {
                 }
             }
         }
-        self.term(rc, t, Pos::Whole, body)
+        self.term(rc, t, Pos::Value, body)
     }
 
     /// `set chain (=|+=) t [@rank] [where B]` (H-5): a contribution to a
@@ -2343,7 +2358,7 @@ impl<'u> Lowerer<'u> {
                 if add || rank.is_some() {
                     return self.error(span, "an input is set with `=` and no rank");
                 }
-                let value = self.term(&mut rc, &rhs, Pos::Whole, &mut body)?;
+                let value = self.term(&mut rc, &rhs, Pos::Value, &mut body)?;
                 let head = atom_at("input", vec![str_term(&k), value], span);
                 self.check_bound(&rc, &body, &atom_terms(&head))?;
                 return Ok(vec![if body.is_empty() && !has_body {
@@ -2370,7 +2385,7 @@ impl<'u> Lowerer<'u> {
             self.diags.push(d);
             return Err(Skip);
         }
-        let value = self.term(&mut rc, &rhs, Pos::Whole, &mut body)?;
+        let value = self.term(&mut rc, &rhs, Pos::Value, &mut body)?;
         let mut args = vec![typ, addr, str_term(&path), value];
         if let Some(rank) = rank {
             args.push(str_term(rank.name()));
@@ -3253,8 +3268,60 @@ impl<'u> Lowerer<'u> {
             Res::Ref { typ, addr, path } if path.is_empty() => {
                 Ok(func("ref", vec![typ, addr, str_term("")]))
             }
-            res => self.realize(rc, res, pos, pre, span),
+            res => {
+                if c.is_bare() && matches!(res, Res::Val(Term::Var(_))) {
+                    rc.untyped_refs.insert(c.head.clone());
+                }
+                self.realize(rc, res, pos, pre, span)
+            }
         }
+    }
+
+    /// `ref(r)`: the reference to the resource `r` (its name in scope,
+    /// `T[e]`, a typed variable), written out where an attribute that is no
+    /// `ref(T)` takes one: the provider gives it the resource's id (R-43).
+    /// It lowers to `ref(ref(T, A, ""))`, the reference marked as asked
+    /// for (`types` lets it into a `string` attribute); evaluated, it is
+    /// the reference.
+    fn ref_call(
+        &mut self,
+        rc: &mut Rc,
+        list: &SyntaxNode,
+        pre: &mut Vec<Lit>,
+        span: Span,
+    ) -> L<Term> {
+        let arg = terms(list).next().ok_or(Skip)?;
+        match self.ref_term(rc, &arg, Pos::Content, pre)? {
+            r @ Term::Func { .. } => Ok(func("ref", vec![r])),
+            _ => self.error(
+                span,
+                "`ref(r)` takes a resource: its name in scope, `T[\"a\"]`, or a variable `in T`",
+            ),
+        }
+    }
+
+    /// `x.id`: an error naming the reference (R-43). A program never reads
+    /// a resource's id; the provider resolves a reference to it.
+    fn identity_read<T>(&mut self, n: &SyntaxNode, span: Span) -> L<T> {
+        let text = n.text().to_string();
+        let r = text
+            .trim()
+            .strip_suffix(&format!(".{}", crate::schema::IDENTITY))
+            .unwrap_or("r")
+            .to_string();
+        let d = Diagnostic::error(
+            span,
+            format!(
+                "`{}`: a program does not read an id; a reference is the resource",
+                text.trim()
+            ),
+        )
+        .with_help(format!(
+            "write `{r}` itself where an attribute takes the resource, or `ref({r})` where an \
+             attribute that is not a `ref(T)` needs its id (R-43)"
+        ));
+        self.diags.push(d);
+        Err(Skip)
     }
 
     /// `sum` of a value known here not to be an int, `min`/`max` of one
@@ -3356,7 +3423,25 @@ impl<'u> Lowerer<'u> {
             }
             CHAIN => {
                 let c = Chain::of(n).ok_or(Skip)?;
+                // A resource by its bare name, given as a value: the
+                // reference, in its module or out of it (R-43).
+                if pos == Pos::Value
+                    && c.is_bare()
+                    && c.head != "_"
+                    && !rc.vars.contains_key(&c.head)
+                    && !rc.types.contains_key(&c.head)
+                    && !self.is_value(rc.scope, &c.head)
+                    && self.resource(rc.scope, &c.head).is_some()
+                {
+                    let (typ, addr) = self.reference(rc, &c, pre, span)?;
+                    return Ok(func("ref", vec![typ, addr, str_term("")]));
+                }
                 let res = self.resolve(rc, &c, pre)?;
+                if let Res::Ref { path, .. } = &res
+                    && matches!(path.first(), Some(Seg::F(f)) if f == crate::schema::IDENTITY)
+                {
+                    return self.identity_read(n, span);
+                }
                 self.realize(rc, res, pos, pre, span)
             }
             CALL => {
@@ -3367,6 +3452,12 @@ impl<'u> Lowerer<'u> {
                 let Some(name) = name else {
                     return self.error(span, "a function is named by a plain name");
                 };
+                if name == "ref"
+                    && let Some(list) = node(n, ARG_LIST)
+                    && terms(&list).count() == 1
+                {
+                    return self.ref_call(rc, &list, pre, span);
+                }
                 if node(n, ARG_LIST).is_some_and(|l| node(&l, NAMED_ARG).is_some()) {
                     return self.error(
                         span,
@@ -3424,7 +3515,13 @@ impl<'u> Lowerer<'u> {
                 );
                 let mut body = self.body(rc, &node(n, BODY).ok_or(Skip)?)?;
                 let item_node = terms(n).next().ok_or(Skip)?;
-                let item = self.bind(false, |l| l.term(rc, &item_node, Pos::Whole, &mut body))?;
+                // A resource collected into a value is its reference.
+                let item_pos = if pos == Pos::Value {
+                    Pos::Value
+                } else {
+                    Pos::Whole
+                };
+                let item = self.bind(false, |l| l.term(rc, &item_node, item_pos, &mut body))?;
                 (rc.reads, rc.values) = saved;
                 Ok(Term::ListComp {
                     item: Box::new(item),
@@ -3736,6 +3833,17 @@ impl<'u> Lowerer<'u> {
                 return Ok(r);
             }
         }
+        if rc.untyped_refs.contains(h) {
+            let d = Diagnostic::error(
+                span,
+                format!("`{h}` is a reference of no known type: `{h}.path` reads nothing"),
+            )
+            .with_help(format!(
+                "bind its type first, `{h} in T`, and `{h}.path` reads that resource (R-43)"
+            ));
+            self.diags.push(d);
+            return Err(Skip);
+        }
         // A variable's fields: `x.a.b`, `x[0]`.
         if rc.vars.contains_key(h)
             || (rc.candidates.contains(h) && !self.decls.namespaces.contains(h))
@@ -3952,7 +4060,7 @@ impl<'u> Lowerer<'u> {
                     .get(m)
                     .and_then(|s| self.decls.scopes[*s].outputs.get(k).cloned())
                     .flatten();
-                if let Some(t) = typed
+                if let Some(t) = &typed
                     && !path.is_empty()
                 {
                     // A typed output: the address it holds, then a reference.
@@ -3966,7 +4074,7 @@ impl<'u> Lowerer<'u> {
                         span,
                     );
                     return Ok(Some(Res::Ref {
-                        typ: str_term(&t),
+                        typ: str_term(t),
                         addr: v,
                         path,
                     }));
@@ -3975,6 +4083,7 @@ impl<'u> Lowerer<'u> {
                     inst,
                     key: k.clone(),
                     path,
+                    typ: typed.map(|t| str_term(&t)),
                 }))
             }
             Some(_) => self.error(span, "after an instance: `.output`").map(Some),
@@ -4156,8 +4265,11 @@ impl<'u> Lowerer<'u> {
             Res::Val(t) => Ok(t),
             Res::Type(t) => Ok(str_term(&t)),
             Res::Var { var: v, path } => self.path_of(rc, v, path, pre, span),
-            Res::Ref { addr, path, .. } if path.is_empty() => Ok(addr),
-            Res::Ref { typ, addr, path } if pos == Pos::Whole => {
+            Res::Ref { typ, addr, path } if path.is_empty() => Ok(match pos {
+                Pos::Value => func("ref", vec![typ, addr, str_term("")]),
+                _ => addr,
+            }),
+            Res::Ref { typ, addr, path } if pos != Pos::Content => {
                 let Some(p) = path_string(&path) else {
                     return self.error(span, "a reference's path is constant");
                 };
@@ -4195,9 +4307,21 @@ impl<'u> Lowerer<'u> {
                 );
                 self.path_of(rc, v, rest, pre, span)
             }
-            Res::Output { inst, key, path } => {
+            Res::Output {
+                inst,
+                key,
+                path,
+                typ,
+            } => {
                 let v = self.read_var(rc, "output", vec![inst, str_term(&key)], 2, &key, pre, span);
-                self.path_of(rc, v, path, pre, span)
+                match typ {
+                    // A typed output holds an address: given as a value, it
+                    // is the reference (R-43).
+                    Some(typ) if pos == Pos::Value && path.is_empty() => {
+                        Ok(func("ref", vec![typ, v, str_term("")]))
+                    }
+                    _ => self.path_of(rc, v, path, pre, span),
+                }
             }
             Res::World { typ, addr, path } => {
                 let last = path.rsplit('.').next().unwrap_or(&path).to_string();
@@ -4294,7 +4418,9 @@ impl<'u> Lowerer<'u> {
                 (!key.is_empty() && rest.is_empty())
                     .then(|| atom_at("setting", vec![addr.clone(), str_term(&key), value], span))
             }
-            Res::Output { inst, key, path } if path.is_empty() => Some(atom_at(
+            Res::Output {
+                inst, key, path, ..
+            } if path.is_empty() => Some(atom_at(
                 "output",
                 vec![inst.clone(), str_term(key), value],
                 span,
@@ -4727,7 +4853,7 @@ mod tests {
             "resource net.vpc vpc { cidr = \"10.0.0.0/16\" }\n\
              zone_index(\"a\", 0)\n\
              resource net.subnet \"private-${z}\" {\n\
-               vpc_id     = vpc.id\n\
+               vpc        = vpc\n\
                cidr       = inet.subnet(vpc.cidr, 4, zone_index[z])\n\
                zone       = z\n\
                visibility = \"private\"\n\
@@ -4735,7 +4861,7 @@ mod tests {
         );
         assert_eq!(
             got[2],
-            "resource \"net.subnet\" Addr { vpc_id = ref(\"net.vpc\", \"vpc\", \"id\"), \
+            "resource \"net.subnet\" Addr { vpc = ref(\"net.vpc\", \"vpc\", \"\"), \
              cidr = inet.subnet(Cidr, 4, ZoneIndex), zone = Z, visibility = \"private\" } :- \
              data(\"zone\", Z), attr(\"net.vpc\", \"vpc\", \"cidr\", Cidr), \
              zone_index(Z, ZoneIndex), Addr = format(\"private-%s\", Z)"
@@ -4888,7 +5014,7 @@ mod tests {
     fn modules_instances_and_outputs() {
         let got = lower(
             "module m {\n  input n: int\n  resource net.vpc vpc { size = n }\n  \
-             output vpc: net.vpc = vpc\n  output ids: list(string) = [vpc.id]\n}\n\
+             output vpc: net.vpc = vpc\n  output ids: list(ref(net.vpc)) = [vpc]\n}\n\
              instance m a { n = 1 }\n\
              inst(\"a\")\n\
              p(v, s) where inst(i), v = m[i].vpc, s = m.a.vpc.size\n\
@@ -4898,7 +5024,7 @@ mod tests {
             got[0],
             "module m { resource \"net.vpc\" \"vpc\" { size = N } :- n(N); output vpc = None; \
              output vpc = Some(\"\\\"vpc\\\"\"); output ids = None; \
-             output ids = Some(\"[ref(\\\"net.vpc\\\", \\\"vpc\\\", \\\"id\\\")]\") }"
+             output ids = Some(\"[ref(\\\"net.vpc\\\", \\\"vpc\\\", \\\"\\\")]\") }"
         );
         assert_eq!(
             &got[3..],

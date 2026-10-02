@@ -54,13 +54,13 @@ definite:
   network_id = "projects/renfry-stg/global/networks/renfry-stg-network"
   project_id = "renfry-stg"
   project_name = "renfry-stg"
-  subnetwork_id = ?google_compute_subnetwork["gke_subnet"].id
+  subnetwork_id = ?google_compute_subnetwork["gke_subnet"]
 + google_compute_address["static-ip-pngu-grpc"]
   address_type = "INTERNAL"
   name = "pngu-grpc"
   project = "renfry-stg"
   region = "us-east1"
-  subnetwork_id = ?google_compute_subnetwork["gke_subnet"].id
+  subnetwork_id = ?google_compute_subnetwork["gke_subnet"]
 apply order:
   tick 1
     alert_metrics_pack["pngu"]

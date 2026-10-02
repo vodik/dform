@@ -1736,11 +1736,30 @@ pub fn rewrite_computed_refs(
     for r in rules {
         let mut head_reads = Vec::new();
         let head = rewrite_atom_refs(&r.head, schema, &mut n, &mut head_reads);
-        if r.body.is_empty() && head_reads.is_empty() {
+        // A contribution that holds a reference (`vpc = main`, R-43) joins
+        // the resource's identity as a read of it would, so it holds once
+        // the resource is wanted and is pending while that may derive; the
+        // value stays the reference (`ir::compile_resources` gives the
+        // provider the id). To an address no rule wants it is the same deny.
+        let mut wants = Vec::new();
+        if head.pred == "arg" && head.args.len() == 5 {
+            let mut to = Vec::new();
+            references(&head.args[3], &mut to);
+            for (typ, addr) in to {
+                wants.push(atom(
+                    "attr",
+                    vec![typ, addr, str_term(crate::schema::IDENTITY), Term::Wildcard],
+                ));
+            }
+        }
+        if r.body.is_empty() && head_reads.is_empty() && wants.is_empty() {
             out_facts.push(head);
             continue;
         }
         let body_only = rewrite_body_refs(r.body, schema, &mut n);
+        for read in &wants {
+            dangling.push(dangling_ref_deny(&head, read, "", body_only.clone()));
+        }
         // A ref to an address no rule wants would make the attr join empty
         // and the field vanish: it is a deny instead.
         for (read, path) in &head_reads {
@@ -1748,6 +1767,7 @@ pub fn rewrite_computed_refs(
         }
         let mut body = body_only;
         body.extend(head_reads.iter().map(|(read, _)| Lit::Pos(read.clone())));
+        body.extend(wants.into_iter().map(Lit::Pos));
         // The value is read now, but the order of Apply still follows the
         // ref: a contribution that reads another resource's attribute
         // depends on it (`ir::compile_resources` reads `__ref_dep`).
@@ -1834,6 +1854,23 @@ fn dangling_ref_deny(head: &Atom, read: &Atom, path: &str, mut body: Vec<Lit>) -
             ..atom("deny", vec![str_term(DANGLING_REF), Term::Obj(ctx)])
         },
         body,
+    }
+}
+
+/// Each reference `ref(T, A, "")` of a constant type in `t`: its type and
+/// address.
+fn references(t: &Term, out: &mut Vec<(Term, Term)>) {
+    match t {
+        Term::Func { name, args } if name == "ref" && args.len() == 3 => {
+            if let (Term::Val(Value::Str(_)), Term::Val(Value::Str(p))) = (&args[0], &args[2])
+                && p.is_empty()
+            {
+                out.push((args[0].clone(), args[1].clone()));
+            }
+        }
+        Term::Func { args, .. } | Term::List(args) => args.iter().for_each(|x| references(x, out)),
+        Term::Obj(m) => m.values().for_each(|x| references(x, out)),
+        _ => {}
     }
 }
 

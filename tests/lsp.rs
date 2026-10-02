@@ -357,16 +357,16 @@ fn hover_shows_docs_builtins_keywords_and_nothing_elsewhere() {
         "{text}"
     );
     assert!(
-        text.contains("- `output private_subnet_ids: subnets = [ s.id | s in net.subnet,"),
+        text.contains("- `output private_subnets: subnets = [ s | s in net.subnet,"),
         "{text}"
     );
 
     // An output read through its instance.
-    let text = hover(&mut c, &stack, "network.main.private_subnet_ids", 15);
+    let text = hover(&mut c, &stack, "network.main.private_subnets", 15);
     assert!(
         text.as_str()
             .unwrap()
-            .contains("output private_subnet_ids: subnets"),
+            .contains("output private_subnets: subnets"),
         "{text}"
     );
 
@@ -632,7 +632,7 @@ fn completion_reads_the_schema_and_the_modules() {
     let types = labels(&c.at("textDocument/completion", &stack, (n - 2, 9)));
     assert!(types.contains(&"net.vpc".to_string()), "{types:?}");
     let outputs = labels(&c.at("textDocument/completion", &stack, (n - 1, 17)));
-    assert_eq!(outputs, vec!["vpc", "private_subnet_ids"], "{outputs:?}");
+    assert_eq!(outputs, vec!["vpc", "private_subnets"], "{outputs:?}");
 
     // A plain word: the builtins it starts, their signatures.
     let typed = format!("{original}\ny = iprang");

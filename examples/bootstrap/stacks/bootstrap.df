@@ -24,20 +24,20 @@ resource google_compute_network vpc {
 resource google_compute_subnetwork gke {
   name = "renfry-gke"
   region = "us-east1"
-  network = vpc.id
+  network = vpc
   ip_cidr_range = "10.141.76.0/22"
 }
 
 resource gke_cluster renfry {
   name = "renfry-gke"
-  network = vpc.id
-  subnetwork = gke.id
+  network = vpc
+  subnetwork = gke
   node_locations = ["us-east1-b", "us-east1-c"]
 }
 
 # One node pool per zone the cluster lands in.
 resource gke_nodepool "np-${z}" {
-  cluster = renfry.id
+  cluster = renfry
   zone = z
   node_count = 1
 } where z in renfry.zones

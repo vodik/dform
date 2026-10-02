@@ -56,6 +56,13 @@ pub const FLAGS: [&str; 8] = [
     "name_like",
 ];
 
+/// The identity attribute (R-43): the computed path a reference to an
+/// object resolves to at Apply, the id the provider's API takes where an
+/// attribute typed `ref(T)` points at a `T`. Programs never read it: a
+/// reference is the resource (`vpc = main`), and a null of this path
+/// prints as the resource, `?T["A"]`.
+pub const IDENTITY: &str = "id";
+
 /// The paths that name an object in the cloud for every type: two
 /// deployments that write the same value there collide. A schema adds a
 /// type's own with the flag `name_like`.
@@ -70,6 +77,12 @@ pub struct AttrSpec {
 impl AttrSpec {
     pub fn has(&self, flag: &str) -> bool {
         self.flags.contains(flag)
+    }
+
+    /// The type's kind, its name without arguments: `list` for
+    /// `list(ref(net.subnet))`, `ref` for `ref(net.vpc)`.
+    pub fn kind(&self) -> &str {
+        self.ty.split('(').next().unwrap_or(&self.ty).trim()
     }
 }
 
@@ -178,7 +191,7 @@ impl Schema {
         })
         .any(|p| {
             self.attr(typ, p)
-                .is_some_and(|a| a.ty == "list" || a.ty == "set")
+                .is_some_and(|a| a.kind() == "list" || a.kind() == "set")
         })
     }
 
@@ -401,7 +414,7 @@ impl Schema {
         }
         for (t, p) in s.list_keys.keys() {
             if let Some(a) = s.attr(t, p)
-                && a.ty != "list"
+                && a.kind() != "list"
             {
                 bail!(
                     "type_list_key({t}, {p}): attribute has type {}, not list",

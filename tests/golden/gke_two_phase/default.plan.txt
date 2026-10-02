@@ -17,12 +17,12 @@ definite:
   node_locations[0] = "us-east1-b"
   node_locations[1] = "us-east1-c"
   project_id = "renfry-dev-973682"
-  subnetwork_id = ?google_compute_subnetwork["gke_subnet"].id
+  subnetwork_id = ?google_compute_subnetwork["gke_subnet"]
 + google_compute_address["static_ip"]
   name = "pngu-grpc"
   project = "renfry-dev-973682"
   region = "us-east1"
-  subnetwork_id = ?google_compute_subnetwork["gke_subnet"].id
+  subnetwork_id = ?google_compute_subnetwork["gke_subnet"]
 pending on ?gke_cluster["pngu"].ca_certificate ?gke_cluster["pngu"].endpoint (resolves after tick 1):
 + k8s.deployment["api"]
   image = "gcr.io/renfry/api:1.42"

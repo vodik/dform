@@ -72,6 +72,7 @@ type_provider(pt.src, "fakecloud")
 type_provider(pt.mid, "fakecloud")
 type_provider(pt.dst, "fakecloud")
 type_attr(pt.src, "id", "string", ["computed", "id"])
+type_attr(pt.src, "uid", "string", ["computed", "id"])
 type_attr(pt.src, "endpoint", "string", ["computed"])
 type_attr(pt.src, "zones", "list", ["computed"])
 type_attr(pt.src, "size", "int", ["computed"])
@@ -131,9 +132,9 @@ enum Guard {
     EqEp(u8, Arg),
     /// `sS.endpoint != arg`
     NeEp(u8, Arg),
-    /// `sS.id == arg`: fresh, decided under UNA.
+    /// `sS.uid == arg`: fresh, decided under UNA.
     EqId(u8, Arg),
-    /// `sS.id != arg`
+    /// `sS.uid != arg`
     NeId(u8, Arg),
     /// `sS.size < n`, `sS.size >= n`
     Size(u8, Cmp, u8),
@@ -152,7 +153,7 @@ enum Guard {
 enum PredDef {
     /// `pI(x) where bind, guards`
     Rule(Gen, Vec<Guard>),
-    /// `pI(x) where x = sS.endpoint` / `sS.id`: facts that carry a null.
+    /// `pI(x) where x = sS.endpoint` / `sS.uid`: facts that carry a null.
     Carry(u8, bool),
 }
 
@@ -329,8 +330,8 @@ impl Printer<'_> {
             ),
             Guard::EqEp(s, a) => format!("{}.endpoint == {}", self.src(s), self.arg(a, sc)),
             Guard::NeEp(s, a) => format!("{}.endpoint != {}", self.src(s), self.arg(a, sc)),
-            Guard::EqId(s, a) => format!("{}.id == {}", self.src(s), self.arg(a, sc)),
-            Guard::NeId(s, a) => format!("{}.id != {}", self.src(s), self.arg(a, sc)),
+            Guard::EqId(s, a) => format!("{}.uid == {}", self.src(s), self.arg(a, sc)),
+            Guard::NeId(s, a) => format!("{}.uid != {}", self.src(s), self.arg(a, sc)),
             Guard::Size(s, c, n) => format!("{}.size {} {}", self.src(s), Self::cmp(c), n % 4),
             Guard::In(s, a) => format!("{} in {}.zones", self.arg(a, sc), self.src(s)),
             Guard::NotIn(s, a) => format!("{} not in {}.zones", self.arg(a, sc), self.src(s)),
@@ -393,7 +394,7 @@ impl Printer<'_> {
         let mut clause: Vec<String> = r.bind.map(|g| self.bind(g, sc)).into_iter().collect();
         clause.extend(self.body(None, &r.guards, sc));
         let s = self.src(r.src);
-        writeln!(f, "  src = {s}.id")?;
+        writeln!(f, "  src = {s}")?;
         if r.fields & 1 != 0 {
             writeln!(f, "  ep = {s}.endpoint")?;
         }
@@ -409,7 +410,7 @@ impl Printer<'_> {
                 .collect();
             if r.fields & 4 != 0 && !statics.is_empty() {
                 let k = statics[r.src as usize % statics.len()];
-                writeln!(f, "  mid = m{k}.id")?;
+                writeln!(f, "  mid = m{k}")?;
             }
         }
         if r.bind.is_some() && r.fields & 8 != 0 {
@@ -486,7 +487,7 @@ impl fmt::Display for Program {
                     )?;
                 }
                 Def::Pred(PredDef::Carry(s, id)) => {
-                    let path = if *id { "id" } else { "endpoint" };
+                    let path = if *id { "uid" } else { "endpoint" };
                     writeln!(f, "p{i}(x) where x = {}.{path}", pr.src(*s))?;
                 }
                 Def::Agg(a) => {
@@ -1249,11 +1250,11 @@ resource pt.src s0 {
 }
 
 resource pt.mid m0 {
-  src = s0.id
+  src = s0
 }
 
 resource pt.mid m1 {
-  src = s0.id
+  src = s0
 } where s0.size >= 0
 
 p0(x) where x in pt.mid
@@ -1281,12 +1282,12 @@ resource pt.src s1 {
 }
 
 resource pt.mid m0 {
-  src = s0.id
+  src = s0
 } where s0.size >= 0
 
 resource pt.dst d0 {
-  src = s1.id
-  mid = m0.id
+  src = s1
+  mid = m0
 }
 "#;
     holds(src, &ZEROS);

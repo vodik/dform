@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== examples/gke/stacks/gke_two_phase.df: 133 nodes, 253 edges (124 negative)
+== examples/gke/stacks/gke_two_phase.df: 132 nodes, 244 edges (119 negative)
    STRATIFIED, 8 strata
    stratum 0:
      (arg, google.client_config, access_token)
@@ -131,7 +131,6 @@ exit: ok
      (arg, gke_nodepool, zone)
      (arg, google_compute_address, subnetwork_id)
      (want, gke_nodepool)
-     __ref_dep
      deny
      provider_config
      zone_count

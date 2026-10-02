@@ -85,7 +85,7 @@ resource google_sql_database_instance db {
     tier: cfg.db.tier,
     availability_type: cfg.db.availability,
     backup_configuration: { enabled: true, point_in_time_recovery_enabled: true },
-    ip_configuration: { ipv4_enabled: false, private_network: vpc.id }
+    ip_configuration: { ipv4_enabled: false, private_network: vpc }
   }
 }
 

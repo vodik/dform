@@ -7,20 +7,20 @@ module kubernetes {
   input private_api: bool
   input nodepool_min: int
   input nodepool_max: int
-  input subnet_ids: subnets
+  input subnets: subnets
 
   resource k8s.cluster cluster {
     version = "1.29"
     private_api
-    subnet_ids
+    subnets
   }
 
   resource k8s.nodepool default {
-    cluster_id = cluster.id
+    cluster
     min = nodepool_min
     max = nodepool_max
   }
 
   #| Only when the cluster exists in this environment.
-  output iam_need = { action: "k8s.describe_cluster", resource: cluster.id } where has private_api
+  output iam_need = { action: "k8s.describe_cluster", resource: cluster } where has private_api
 }

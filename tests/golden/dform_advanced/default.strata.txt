@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== examples/advanced/stacks/dform-advanced.df: 83 nodes, 165 edges (55 negative)
+== examples/advanced/stacks/dform-advanced.df: 82 nodes, 161 edges (53 negative)
    STRATIFIED, 6 strata
    stratum 0:
      (arg, input, env)
@@ -78,10 +78,9 @@ exit: ok
      (arg, net.route, from)
      (arg, net.route, id)
      (arg, net.route, to)
-     (arg, net.vpc_peering, accepter_vpc_id)
-     (arg, net.vpc_peering, requester_vpc_id)
+     (arg, net.vpc_peering, accepter_vpc)
+     (arg, net.vpc_peering, requester_vpc)
      (want, net.route)
-     __ref_dep
      deny
      warn
    stratum 5:
@@ -89,6 +88,6 @@ exit: ok
      (attr, net.route, from)
      (attr, net.route, id)
      (attr, net.route, to)
-     (attr, net.vpc_peering, accepter_vpc_id)
-     (attr, net.vpc_peering, requester_vpc_id)
+     (attr, net.vpc_peering, accepter_vpc)
+     (attr, net.vpc_peering, requester_vpc)
 -- stderr --

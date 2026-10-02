@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== examples/demo/stacks/dform.df: 173 nodes, 464 edges (209 negative)
+== examples/demo/stacks/dform.df: 175 nodes, 819 edges (584 negative)
    STRATIFIED, 23 strata
    stratum 0:
      (arg, iam.policy, name)
@@ -13,10 +13,12 @@ exit: ok
      (want, iam.role_policy_attachment)
      (want, net.route)
      __config_path
+     allow_stuck
      data
      doc
      identity
      input
+     may_derive
      network.main::zone_index
      network.peer::zone_index
      resolve
@@ -47,8 +49,8 @@ exit: ok
      vpc_peer
      vpc_peer_pair
    stratum 3:
-     (arg, iam.role_policy_attachment, policy_id)
-     (arg, iam.role_policy_attachment, role_id)
+     (arg, iam.role_policy_attachment, policy)
+     (arg, iam.role_policy_attachment, role)
      (attr, let, cfg)
      (attr, settings, audit.enabled)
      (attr, settings, audit.sinks)
@@ -60,10 +62,11 @@ exit: ok
      (arg, settings, k8s.private_api)
      (arg, settings, network.main.vpc_net)
      (arg, settings, network.peer.vpc_net)
-     (attr, iam.role_policy_attachment, policy_id)
-     (attr, iam.role_policy_attachment, role_id)
+     (attr, iam.role_policy_attachment, policy)
+     (attr, iam.role_policy_attachment, role)
      cfg
      settings_row
+     warn
    stratum 5:
      (attr, settings, db.backup_days)
      (attr, settings, db.multi_az)
@@ -100,10 +103,10 @@ exit: ok
      (arg, net.subnet, cidr)
      (arg, net.subnet, id)
      (arg, net.subnet, visibility)
-     (arg, net.subnet, vpc_id)
+     (arg, net.subnet, vpc)
      (arg, net.subnet, zone)
-     (arg, net.vpc_peering, accepter_vpc_id)
-     (arg, net.vpc_peering, requester_vpc_id)
+     (arg, net.vpc_peering, accepter_vpc)
+     (arg, net.vpc_peering, requester_vpc)
      (want, net.subnet)
      __field_read_0
      __field_read_1
@@ -111,33 +114,32 @@ exit: ok
      (attr, net.subnet, cidr)
      (attr, net.subnet, id)
      (attr, net.subnet, visibility)
-     (attr, net.subnet, vpc_id)
+     (attr, net.subnet, vpc)
      (attr, net.subnet, zone)
-     (attr, net.vpc_peering, accepter_vpc_id)
-     (attr, net.vpc_peering, requester_vpc_id)
-     warn
+     (attr, net.vpc_peering, accepter_vpc)
+     (attr, net.vpc_peering, requester_vpc)
    stratum 12:
-     (arg, output, private_subnet_ids)
+     (arg, output, private_subnets)
      __lc_1
      __lc_2
    stratum 13:
-     (attr, output, private_subnet_ids)
+     (attr, output, private_subnets)
    stratum 14:
      (arg, input, database.main::backup_days)
      (arg, input, database.main::multi_az)
-     (arg, input, database.main::subnet_ids)
+     (arg, input, database.main::subnets)
      (arg, input, kubernetes.main::nodepool_max)
      (arg, input, kubernetes.main::nodepool_min)
      (arg, input, kubernetes.main::private_api)
-     (arg, input, kubernetes.main::subnet_ids)
+     (arg, input, kubernetes.main::subnets)
    stratum 15:
      (attr, input, database.main::backup_days)
      (attr, input, database.main::multi_az)
-     (attr, input, database.main::subnet_ids)
+     (attr, input, database.main::subnets)
      (attr, input, kubernetes.main::nodepool_max)
      (attr, input, kubernetes.main::nodepool_min)
      (attr, input, kubernetes.main::private_api)
-     (attr, input, kubernetes.main::subnet_ids)
+     (attr, input, kubernetes.main::subnets)
    stratum 16:
      (arg, *, tags)
      (arg, db.postgres, backup_days)
@@ -145,12 +147,12 @@ exit: ok
      (arg, db.postgres, id)
      (arg, db.postgres, multi_az)
      (arg, db.postgres, public)
-     (arg, db.postgres, subnet_ids)
+     (arg, db.postgres, subnets)
      (arg, k8s.cluster, api_endpoint)
      (arg, k8s.cluster, ca_cert)
      (arg, k8s.cluster, id)
      (arg, k8s.cluster, private_api)
-     (arg, k8s.cluster, subnet_ids)
+     (arg, k8s.cluster, subnets)
      (arg, k8s.cluster, version)
      (arg, k8s.nodepool, id)
      (arg, k8s.nodepool, max)
@@ -160,11 +162,11 @@ exit: ok
      (want, k8s.nodepool)
      database.main::backup_days
      database.main::multi_az
-     database.main::subnet_ids
+     database.main::subnets
      kubernetes.main::nodepool_max
      kubernetes.main::nodepool_min
      kubernetes.main::private_api
-     kubernetes.main::subnet_ids
+     kubernetes.main::subnets
    stratum 17:
      (attr, *, tags)
      (attr, db.postgres, backup_days)
@@ -172,24 +174,22 @@ exit: ok
      (attr, db.postgres, id)
      (attr, db.postgres, multi_az)
      (attr, db.postgres, public)
-     (attr, db.postgres, subnet_ids)
+     (attr, db.postgres, subnets)
      (attr, k8s.cluster, api_endpoint)
      (attr, k8s.cluster, ca_cert)
      (attr, k8s.cluster, id)
      (attr, k8s.cluster, private_api)
-     (attr, k8s.cluster, subnet_ids)
+     (attr, k8s.cluster, subnets)
      (attr, k8s.cluster, version)
      (attr, k8s.nodepool, id)
      (attr, k8s.nodepool, max)
      (attr, k8s.nodepool, min)
      (attr, net.vpc, tags)
    stratum 18:
-     (arg, k8s.nodepool, cluster_id)
+     (arg, k8s.nodepool, cluster)
      (arg, output, iam_need)
-     __ref_dep
-     deny
    stratum 19:
-     (attr, k8s.nodepool, cluster_id)
+     (attr, k8s.nodepool, cluster)
      (attr, output, iam_need)
    stratum 20:
      iam_need
@@ -198,4 +198,6 @@ exit: ok
      __lc_3
    stratum 22:
      (attr, iam.policy, statements)
+     deny
+     stuck
 -- stderr --

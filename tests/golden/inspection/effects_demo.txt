@@ -14,12 +14,12 @@ database.main:
     db.postgres.id
     input backup_days
     input multi_az
-    input subnet_ids
+    input subnets
   writes:
     (db.postgres, backup_days)
     (db.postgres, multi_az)
     (db.postgres, public)
-    (db.postgres, subnet_ids)
+    (db.postgres, subnets)
   offers:
     iam_need: any
 
@@ -32,8 +32,8 @@ identity.main:
     (iam.policy, statements)
     (iam.role, assume)
     (iam.role, name)
-    (iam.role_policy_attachment, policy_id)
-    (iam.role_policy_attachment, role_id)
+    (iam.role_policy_attachment, policy)
+    (iam.role_policy_attachment, role)
   offers:
 
 kubernetes.main:
@@ -41,13 +41,13 @@ kubernetes.main:
     input nodepool_max
     input nodepool_min
     input private_api
-    input subnet_ids
+    input subnets
     k8s.cluster.id
   writes:
     (k8s.cluster, private_api)
-    (k8s.cluster, subnet_ids)
+    (k8s.cluster, subnets)
     (k8s.cluster, version)
-    (k8s.nodepool, cluster_id)
+    (k8s.nodepool, cluster)
     (k8s.nodepool, max)
     (k8s.nodepool, min)
   offers:
@@ -56,56 +56,49 @@ kubernetes.main:
 network.main:
   reads:
     input vpc_net
-    net.subnet.id
     net.subnet.visibility
     net.vpc.cidr
     net.vpc.id
   writes:
     (net.subnet, cidr)
     (net.subnet, visibility)
-    (net.subnet, vpc_id)
+    (net.subnet, vpc)
     (net.subnet, zone)
     (net.vpc, cidr)
     (net.vpc, tags)
   offers:
-    private_subnet_ids: list(ref(net.subnet))
+    private_subnets: list(ref(net.subnet))
     vpc: addr
 
 network.peer:
   reads:
     input vpc_net
-    net.subnet.id
     net.subnet.visibility
     net.vpc.cidr
     net.vpc.id
   writes:
     (net.subnet, cidr)
     (net.subnet, visibility)
-    (net.subnet, vpc_id)
+    (net.subnet, vpc)
     (net.subnet, zone)
     (net.vpc, cidr)
     (net.vpc, tags)
   offers:
-    private_subnet_ids: list(ref(net.subnet))
+    private_subnets: list(ref(net.subnet))
     vpc: addr
 
 stack:
   reads:
-    db.postgres.backup_days
-    db.postgres.id
     db.postgres.multi_az
     extern table.yaml.stack.config
-    iam.policy.id
-    iam.role.id
     input env
-    k8s.cluster.id
     k8s.cluster.private_api
     let.cfg
     net.vpc.cidr
     net.vpc.id
     output database.main.iam_need
     output kubernetes.main.iam_need
-    output network.main.private_subnet_ids
+    output network.main.private_subnets
     settings.db.backup_days
     settings.db.multi_az
     settings.k8s.nodepool.max
@@ -129,16 +122,16 @@ stack:
     (net.route, id)
     (net.subnet, id)
     (net.vpc, id)
-    (net.vpc_peering, accepter_vpc_id)
+    (net.vpc_peering, accepter_vpc)
     (net.vpc_peering, id)
-    (net.vpc_peering, requester_vpc_id)
+    (net.vpc_peering, requester_vpc)
     input database.main.backup_days
     input database.main.multi_az
-    input database.main.subnet_ids
+    input database.main.subnets
     input kubernetes.main.nodepool_max
     input kubernetes.main.nodepool_min
     input kubernetes.main.private_api
-    input kubernetes.main.subnet_ids
+    input kubernetes.main.subnets
     input network.main.vpc_net
     input network.peer.vpc_net
     input stack.env

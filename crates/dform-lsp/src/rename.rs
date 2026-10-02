@@ -178,7 +178,12 @@ pub fn rename(p: &Project, path: &Path, at: usize, new: &str) -> Result<Renaming
     };
     for (f, t, _) in &found {
         let range = t.text_range();
-        edit(f, range.start().into(), range.end().into(), new.to_string());
+        // A pun keeps its key: `vpc` becomes `vpc = net0`.
+        let to = match t.parent() {
+            Some(p) if refs::is_pun(&p, t) => format!("{old} = {new}"),
+            _ => new.to_string(),
+        };
+        edit(f, range.start().into(), range.end().into(), to);
     }
     for (f, t, to) in strings {
         let range = t.text_range();

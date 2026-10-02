@@ -14,7 +14,7 @@ definite:
   settings.backup_configuration.enabled = true
   settings.backup_configuration.point_in_time_recovery_enabled = true
   settings.ip_configuration.ipv4_enabled = false
-  settings.ip_configuration.private_network = ?google_compute_network["vpc"].id
+  settings.ip_configuration.private_network = ?google_compute_network["vpc"]
   settings.tier = "db-f1-micro"
 + google_sql_user["crud_user"]
   instance = "crud-api-dev"

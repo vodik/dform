@@ -40,6 +40,12 @@ pub enum Shown {
     /// A secret (with its printed label) or a value at a sensitive path
     /// (none).
     Sensitive(Option<String>),
+    /// A reference whose resource exists: the resource's address, and the
+    /// id the provider resolved it to (`--json` shows the id; R-43).
+    Ref {
+        addr: String,
+        value: Json,
+    },
 }
 
 /// Redact one side of a provider change: a null or secret marker is its
@@ -136,6 +142,7 @@ impl Shown {
             Shown::Null { label, .. } => format!("?{label}"),
             Shown::Sensitive(Some(l)) => format!("(sensitive {l})"),
             Shown::Sensitive(None) => "(sensitive)".into(),
+            Shown::Ref { addr, .. } => addr.clone(),
         }
     }
 
@@ -145,6 +152,7 @@ impl Shown {
             Shown::Value(v) => v.clone(),
             Shown::Null { label, class } => json!({"null": label, "class": class}),
             Shown::Sensitive(l) => json!({ "sensitive": l }),
+            Shown::Ref { value, .. } => value.clone(),
         }
     }
 }
@@ -353,6 +361,7 @@ pub struct Input<'a> {
 
 pub fn report(i: &Input) -> Report {
     let r = Redactor::new(&i.res.facts, i.schema);
+    let refs = Refs::new(&i.res.facts);
     let mut conflicts = diags(i.res, &r, "deny", "conflicting attribute contributions");
     conflicts.extend(diags(i.res, &r, "deny", crate::refine::VIOLATED));
     let conflicted: BTreeSet<&Address> = conflicts.iter().map(|d| &d.addr).collect();
@@ -405,7 +414,7 @@ pub fn report(i: &Input) -> Report {
         by_nulls
             .entry(on)
             .or_default()
-            .push(deformation(a, i.schema, &r));
+            .push(deformation(a, i.schema, &r, &refs));
     }
     let pending: Vec<PendingBlock> = by_nulls
         .into_iter()
@@ -469,7 +478,7 @@ pub fn report(i: &Input) -> Report {
         definite: definite
             .iter()
             .filter(|a| i.show_noop || !matches!(a.kind, ActionKind::Noop))
-            .map(|a| deformation(a, i.schema, &r))
+            .map(|a| deformation(a, i.schema, &r, &refs))
             .collect(),
         noops,
         pending,
@@ -733,13 +742,21 @@ fn diags(res: &EvalResult, r: &Redactor, pred: &str, msg: &str) -> Vec<Diag> {
 /// `+`/`-` line with its leaves. A keyless set's element is labeled by a
 /// hash of its content (`[#k3j2d]`); it prints as `[]` in an update and
 /// by position everywhere else.
-fn deformation(a: &Action, schema: &Schema, r: &Redactor) -> Deformation {
+fn deformation(a: &Action, schema: &Schema, r: &Redactor, refs: &Refs) -> Deformation {
     let paths = relabel(a.changes.iter().map(|c| c.path.as_str()));
     let leaf = |c: &Change, path: String| Line {
         op: Op::Leaf,
         path,
-        before: shown(c.before.as_ref(), c.sensitive, schema, r),
-        after: shown(c.after.as_ref(), c.sensitive, schema, r),
+        before: refs.shown(
+            &a.addr,
+            &c.path,
+            shown(c.before.as_ref(), c.sensitive, schema, r),
+        ),
+        after: refs.shown(
+            &a.addr,
+            &c.path,
+            shown(c.after.as_ref(), c.sensitive, schema, r),
+        ),
         leaves: vec![],
     };
     let by_element = matches!(
@@ -816,6 +833,105 @@ fn deformation(a: &Action, schema: &Schema, r: &Redactor) -> Deformation {
     }
 }
 
+/// What prints a resolved reference as its resource (R-43): the world's
+/// ids, `identity(T, A, R)` joined with `world_attr(T, R, IDENTITY, V)`, by
+/// value, and the desired documents' attributes that hold a reference.
+struct Refs<'a> {
+    ids: BTreeMap<&'a str, Address>,
+    desired: BTreeMap<(&'a str, &'a str, &'a str), &'a Value>,
+}
+
+impl<'a> Refs<'a> {
+    fn new(facts: &'a BTreeSet<Atom>) -> Refs<'a> {
+        let s = |t: &'a Term| match t {
+            Term::Val(Value::Str(s)) => Some(s.as_str()),
+            _ => None,
+        };
+        let mut names: BTreeMap<(&str, &str), &str> = BTreeMap::new();
+        let mut ids: Vec<(&str, &str, &str)> = Vec::new();
+        let mut desired = BTreeMap::new();
+        for f in facts {
+            match (f.pred.as_str(), f.args.as_slice()) {
+                ("identity", [t, a, r]) => {
+                    if let (Some(t), Some(a), Some(r)) = (s(t), s(a), s(r)) {
+                        names.insert((t, r), a);
+                    }
+                }
+                ("world_attr", [t, r, p, v]) if s(p) == Some(crate::schema::IDENTITY) => {
+                    if let (Some(t), Some(r), Some(v)) = (s(t), s(r), s(v)) {
+                        ids.push((t, r, v));
+                    }
+                }
+                ("attr", [t, a, p, Term::Val(v)]) if holds_ref(v) => {
+                    if let (Some(t), Some(a), Some(p)) = (s(t), s(a), s(p)) {
+                        desired.insert((t, a, p), v);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let ids = ids
+            .into_iter()
+            .filter_map(|(t, r, v)| {
+                let name = names.get(&(t, r))?;
+                Some((
+                    v,
+                    Address {
+                        typ: t.to_string(),
+                        name: name.to_string(),
+                    },
+                ))
+            })
+            .collect();
+        Refs { ids, desired }
+    }
+
+    /// `v`, a side of the change at `path` of `addr`: an id where the
+    /// program's document holds a reference prints as that resource.
+    fn shown(&self, addr: &Address, path: &str, v: Shown) -> Shown {
+        let Shown::Value(Json::String(id)) = &v else {
+            return v;
+        };
+        let top = path.split(['.', '[']).next().unwrap_or(path);
+        let at = self
+            .desired
+            .get(&(addr.typ.as_str(), addr.name.as_str(), top))
+            .and_then(|d| walk(d, &path[top.len()..]));
+        match (at, self.ids.get(id.as_str())) {
+            (Some(Value::Ref { attr, .. }), Some(to)) if attr.is_empty() => Shown::Ref {
+                addr: to.to_string(),
+                value: Json::String(id.clone()),
+            },
+            _ => v,
+        }
+    }
+}
+
+fn holds_ref(v: &Value) -> bool {
+    match v {
+        Value::Ref { attr, .. } => attr.is_empty(),
+        Value::List(xs) => xs.iter().any(holds_ref),
+        Value::Obj(m) => m.values().any(holds_ref),
+        _ => false,
+    }
+}
+
+/// The value at `rest` (`.a.b`, `[2]`, as a change's path goes on) of `v`.
+fn walk<'v>(v: &'v Value, rest: &str) -> Option<&'v Value> {
+    if rest.is_empty() {
+        return Some(v);
+    }
+    if let Some(r) = rest.strip_prefix('[') {
+        let (i, r) = r.split_once(']')?;
+        let Value::List(xs) = v else { return None };
+        return walk(xs.get(i.parse::<usize>().ok()?)?, r);
+    }
+    let r = rest.strip_prefix('.')?;
+    let end = r.find(['.', '[']).unwrap_or(r.len());
+    let Value::Obj(m) = v else { return None };
+    walk(m.get(&r[..end])?, &r[end..])
+}
+
 /// An element's changes, each with its path relative to the element.
 type ElementChanges<'a> = Vec<(&'a Change, String)>;
 
@@ -855,7 +971,7 @@ fn element_of(typ: &str, path: &str, schema: &Schema) -> Option<(String, String,
     let close = open + path[open..].find(']')?;
     let list = &path[..open];
     let keyed = schema.list_key(typ, list).is_some();
-    let set = schema.attr(typ, list).is_some_and(|a| a.ty == "set");
+    let set = schema.attr(typ, list).is_some_and(|a| a.kind() == "set");
     if !keyed && !set {
         return None;
     }

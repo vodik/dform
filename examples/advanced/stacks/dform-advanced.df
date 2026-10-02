@@ -138,8 +138,8 @@ peer(a, b) where mesh_peer(a, b)
 
 # Optional: materialize the derived peerings as explicit peering resources.
 resource net.vpc_peering "mesh-peer-${a}-${b}" {
-  requester_vpc_id = net.vpc[a].id
-  accepter_vpc_id = net.vpc[b].id
+  requester_vpc = net.vpc[a]
+  accepter_vpc = net.vpc[b]
 } where mesh_peer(a, b)
 
 # Policy 1: peered VPCs must not overlap.

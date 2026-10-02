@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== examples/pngu/stacks/pngu.df: 163 nodes, 451 edges (299 negative)
+== examples/pngu/stacks/pngu.df: 162 nodes, 439 edges (290 negative)
    STRATIFIED, 8 strata
    stratum 0:
      (arg, google.client_config, access_token)
@@ -169,7 +169,6 @@ exit: ok
    stratum 6:
      (arg, gke_cluster, subnetwork_id)
      (arg, google_compute_address, subnetwork_id)
-     __ref_dep
    stratum 7:
      (attr, gke_cluster, subnetwork_id)
      (attr, google_compute_address, subnetwork_id)

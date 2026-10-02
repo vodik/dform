@@ -753,8 +753,17 @@ endpoints and secrets per the schema and fills the nulls in dependency order.
 ```bash
 cargo run -- -C examples/demo plan
 # + net.subnet["network.main::private-us-test-1a"]
-#   vpc_id = ?net.vpc["network.main::vpc"].id
+#   vpc = ?net.vpc["network.main::vpc"]
 ```
+
+A reference is the resource (R-43). Where an attribute points at another
+resource, the schema types it `ref(T)` and the program gives it the
+resource: `vpc = vpc`, `subnets = [ s | s in net.subnet ]`. The provider
+gives its API the object's id once it exists; the plan prints the
+resource, `?net.vpc["main"]` while it is unknown and `net.vpc["main"]`
+after (`--json` shows the id). A program never reads an id: `x.id` is an
+error naming `x`, and `ref(x)` writes the reference out where an attribute
+that is no `ref(T)` needs the id as text.
 
 Every address dform prints is the source term that names it, `T["A"]` (`A`
 the full address, a module instance's scope `m.i::` included), and an
@@ -899,7 +908,7 @@ the next one, once nothing that depends on it is still pending.
 
 Either way the replacement is a new object, so every null that named the old
 one (its id, its other computed values) is unresolved again: an existing
-object that reads one is `pending on ?T["A"].id (resolves after tick N)` and is
+object that reads one is `pending on ?T["A"] (resolves after tick N)` and is
 updated to the new value the tick after the replacement; a new object that
 reads one is created after it in the same tick. `dev --chaos fresh-ids` makes
 the mock mint a new id on every create, so the difference shows:
@@ -1407,7 +1416,8 @@ by its name (`env == "prod"`), and a resource in scope by its name
 (`net.vpc[b]`, `db.postgres["database.main::db"]`), the spelling `plan`
 prints and every command takes. `.` is static and `[ ]` a key computed at
 run time. A dot is a reference where it is a whole value (a field:
-`vpc_id = vpc.id`) and a read everywhere else. `-` and `/` are operators,
+`endpoint = db.endpoint`) and a read everywhere else; the resource alone,
+`vpc = vpc`, is the reference. `-` and `/` are operators,
 so hyphenated names are strings (`"us-east-1"`). A syntax error names
 `file:line:col` and what was expected, and parsing goes on to the next
 statement, so every error in a file is reported at once.
@@ -1736,11 +1746,11 @@ module network {
   zone_index(z, i) where z = zones[i]        # private
   ...
   output vpc: net.vpc = vpc                  # an address output
-  output private_subnet_ids: list(ref(net.subnet)) = [s.id | s in net.subnet]
+  output private_subnets: list(ref(net.subnet)) = [s | s in net.subnet]
 }
 
 instance network main { vpc_net = settings[env].network.main.vpc_net }
-instance database main { subnet_ids = network.main.private_subnet_ids }
+instance database main { subnets = network.main.private_subnets }
 ```
 
 Inside an instance:

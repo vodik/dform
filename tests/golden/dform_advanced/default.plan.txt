@@ -55,11 +55,11 @@ definite:
   tags.segment = "tenant"
   tags.tenant = "tenant_b"
 + net.vpc_peering["mesh-peer-core_a-core_b"]
-  accepter_vpc_id = ?net.vpc["core_b"].id
-  requester_vpc_id = ?net.vpc["core_a"].id
+  accepter_vpc = ?net.vpc["core_b"]
+  requester_vpc = ?net.vpc["core_a"]
 + net.vpc_peering["mesh-peer-core_b-core_c"]
-  accepter_vpc_id = ?net.vpc["core_c"].id
-  requester_vpc_id = ?net.vpc["core_b"].id
+  accepter_vpc = ?net.vpc["core_c"]
+  requester_vpc = ?net.vpc["core_b"]
 apply order:
   tick 1
     net.route["rt-core_a-core_b"]

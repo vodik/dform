@@ -1053,7 +1053,7 @@ impl FakeCloud {
         let ty = self
             .schema
             .attr(typ, attr)
-            .map(|a| a.ty.as_str())
+            .map(|a| a.kind())
             .unwrap_or("string");
         match (class, ty) {
             (NullClass::Secret, _) => json!(format!("fake-secret-{hash}")),

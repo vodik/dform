@@ -3279,6 +3279,8 @@ pub const BODIES: &[(&str, Body)] = &[
             name: n.clone(),
             attr: p.clone(),
         }),
+        // `ref(r)` written out (R-43): the reference itself.
+        [r @ Value::Ref { .. }] => Some(r.clone()),
         _ => None,
     }),
     ("cloud_ref", |a| match a {

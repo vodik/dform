@@ -10,8 +10,7 @@ fn a_fresh_stack_carries_nulls_until_apply() {
     let prog = prog.to_str().unwrap();
     let r = s.run(&["dev", "--world", "w.json", "plan", prog]).success();
     assert!(
-        r.stdout
-            .contains("vpc_id = ?net.vpc[\"network.main::vpc\"].id"),
+        r.stdout.contains("vpc = ?net.vpc[\"network.main::vpc\"]"),
         "{}",
         r.stdout
     );
@@ -68,7 +67,7 @@ type_attr(app.secret, "value", "string", ["sensitive"])   # E0304 unless it is
 const SECRET_PROG: &str = r#"edition 2026
 
 resource db.instance main { master_password = "hunter2", size = 10 }
-resource app.secret creds { value = ref(db.instance, "main", "password"), db = ref(db.instance, "main", "id") }
+resource app.secret creds { value = ref(db.instance, "main", "password"), db = main }
 "#;
 
 #[test]
@@ -98,7 +97,7 @@ fn secrets_are_labels_and_print_redacted() {
         plan.stdout
     );
     assert!(
-        plan.stdout.contains("db = ?db.instance[\"main\"].id"),
+        plan.stdout.contains("db = ?db.instance[\"main\"]"),
         "{}",
         plan.stdout
     );
