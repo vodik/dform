@@ -25,7 +25,7 @@ dform.state/                state: per deployment, audit logs, plan keys,
   versions the project takes), `[providers]` (each provider's source and
   version requirement, Cargo's semver syntax; a program's `provider NAME {}`
   takes its source from here), `[stacks.NAME]` (the stack `NAME.df`'s
-  operational settings, a closed list: `backend`, `unknowns`, `role`,
+  operational settings, a closed list: `backend`, `role`,
   `approvals`, `audit_sink`, `isolated`, `config`; a term is a string,
   `{stack}` the stack's name and `{k}` its key `k`'s value), `[defaults]`
   (the same settings for every stack whose table does not say, and an s3

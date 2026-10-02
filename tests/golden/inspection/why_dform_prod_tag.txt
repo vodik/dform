@@ -32,7 +32,7 @@ net.vpc["network.main::vpc"].tags = {component: "network", env: "prod", team: "p
   │         │              │         ... 7 more alternatives (--all)
   │         │              │         ... further alternatives dropped at 8
   │         │              └─ "10.20.0.0/16"
-  │         │                   examples/demo/dform.toml:11  config = 'yaml("config/dform/{env}.yaml")'
+  │         │                   examples/demo/dform.toml:10  config = 'yaml("config/dform/{env}.yaml")'
   │         │                   ├─ input env = "prod"   (see above)
   │         │                   └─ table.yaml.stack.config("config/dform/prod.yaml", "config/dform/prod.yaml:5", "network.main.vpc_net", "10.20.0.0/16")   config/dform/prod.yaml:5
   │         └─ input env = "prod"   (see above)

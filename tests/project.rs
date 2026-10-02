@@ -278,7 +278,7 @@ cloud = { source = "providers/cloud.df", version = "2.1" }
 
 [defaults]
 backend = 'local("state/{stack}")'
-unknowns = "strict"
+audit_sink = "true"
 "#,
     );
     s.write(
@@ -311,7 +311,7 @@ default(k, v) where project_default(k, v)
     let r = s.run(&["query", "pinned(N, C)", "p"]).success();
     assert!(r.stdout.contains(r#""cloud"  "^2.1""#), "{}", r.stdout);
     let r = s.run(&["query", "default(K, V)", "p"]).success();
-    assert!(r.stdout.contains(r#""unknowns"  "strict""#), "{}", r.stdout);
+    assert!(r.stdout.contains(r#""audit_sink"  "true""#), "{}", r.stdout);
 
     // A project for another dform is refused.
     s.write("dform.toml", "[project]\ndform = \">=9\"\n");
@@ -327,30 +327,32 @@ default(k, v) where project_default(k, v)
     assert!(r.stderr.contains("unknown field `inputs`"), "{}", r.stderr);
 }
 
-/// `[stacks.NAME]` overrides `[defaults]`: `unknowns` from the defaults
-/// makes a stack strict unless its own table says otherwise, and policy
-/// reads both.
+/// `[stacks.NAME]` overrides `[defaults]`: the defaults' backend holds
+/// a stack's state unless its own table says otherwise, and policy reads
+/// both.
 #[test]
 fn a_stack_table_overrides_the_defaults() {
-    let s = Scratch::new("manifest-unknowns");
-    s.write("dform.toml", "[defaults]\nunknowns = \"strict\"\n");
+    let s = Scratch::new("manifest-defaults");
+    s.write(
+        "dform.toml",
+        "[defaults]\nbackend = 'local(\"a/{stack}\")'\n",
+    );
     s.write(
         "stacks/p.df",
         "edition 2026\nprovider fake\nresource db.postgres main { size = 1 }\n\
-         resource compute.vm app {\n  size = 1\n} where main in db.postgres, \
-         e = main.endpoint, e != \"\"\n\
          stacked(n, k, v) where project_stack(n, k, v)\n",
     );
-    let strict = s.run(&["plan", "p"]).failure();
-    assert!(strict.stderr.contains("strict"), "{}", strict.stderr);
+    s.run(&["apply", "p", "--yes"]).success();
+    assert!(s.path("a/p/state.json").exists());
     s.write(
         "dform.toml",
-        "[defaults]\nunknowns = \"strict\"\n\n[stacks.p]\nunknowns = \"permissive\"\n",
+        "[defaults]\nbackend = 'local(\"a/{stack}\")'\n\n[stacks.p]\nbackend = 'local(\"b\")'\n",
     );
-    s.run(&["plan", "p"]).success();
+    s.run(&["apply", "p", "--yes"]).success();
+    assert!(s.path("b/state.json").exists());
     let r = s.run(&["query", "stacked(N, K, V)", "p"]).success();
     assert!(
-        r.stdout.contains(r#""p"  "unknowns"  "permissive""#),
+        r.stdout.contains(r#""p"  "backend"  "local(\"b\")""#),
         "{}",
         r.stdout
     );

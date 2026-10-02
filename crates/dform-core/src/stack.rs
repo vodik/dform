@@ -3,7 +3,7 @@
 //! operational settings are dform.toml's `[stacks.NAME]` over
 //! `[defaults]`: `backend = 'local("dir")'` is the directory its state,
 //! world and lock live in (or a bucket, `store`), and a lock there makes a
-//! second concurrent apply fail cleanly; `unknowns`, `role`, `approvals`,
+//! second concurrent apply fail cleanly; `role`, `approvals`,
 //! `audit_sink`, `isolated` and `config` are the rest (docs/grammar.md
 //! "Stack settings"). The loader lowers them to one `Stmt::Stack`.
 //!
@@ -42,19 +42,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// What an unknown may do at plan time (DESIGN.org "Strict mode is
-/// first-class").
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Unknowns {
-    /// Stuck derivations and pending groups are reported and wait for a
-    /// phase boundary.
-    #[default]
-    Permissive,
-    /// A stuck derivation or a pending group is a plan error; fresh nulls
-    /// still flow.
-    Strict,
-}
-
 /// The program's stack settings and `provider` statements.
 #[derive(Debug, Clone, Default)]
 pub struct Stack {
@@ -65,7 +52,6 @@ pub struct Stack {
     /// live; `s3(...)`: the state, plan key, audit log and lease in a
     /// bucket. `None`: `dform.state/<name>/`.
     pub backend: Option<Backend>,
-    pub unknowns: Unknowns,
     /// `role = bootstrap`: the stack creates what a controller runs in. It
     /// stays batch: `dform controller run` refuses it.
     pub bootstrap: bool,
@@ -398,14 +384,6 @@ fn stack_config(c: &Config, out: &mut Stack, diags: &mut Vec<Diagnostic>) {
                     ))
                 }
                 Err(e) => diags.push(Diagnostic::error(*span, e)),
-            },
-            "unknowns" => match string(v) {
-                Some("strict") => out.unknowns = Unknowns::Strict,
-                Some("permissive") => out.unknowns = Unknowns::Permissive,
-                _ => diags.push(Diagnostic::error(
-                    *span,
-                    "unknowns is \"strict\" or \"permissive\"",
-                )),
             },
             "role" => match string(v) {
                 Some("bootstrap") => out.bootstrap = true,
@@ -1413,6 +1391,58 @@ pub fn named_outputs(program: &Program) -> (std::collections::BTreeSet<String>, 
         }
     }
     (named, any)
+}
+
+/// The deployments of other stacks the deployment keyed by `key` reads
+/// (`stack_output(Name, ..)`): a name written out, or interpolated from
+/// the stack's own key inputs (`"platform[env=${env}]"`). A name built
+/// from anything else is not known before the program runs, and is left
+/// out. What `apply` applies first (R-30).
+pub fn reads(program: &Program, key: &[(String, String)]) -> BTreeSet<String> {
+    use crate::ast::Lit;
+    fn name(t: &Term, body: &[Lit], key: &[(String, String)]) -> Option<String> {
+        match t {
+            Term::Val(Value::Str(s)) => Some(s.clone()),
+            // A key input `k` is the relation `k(V)`.
+            Term::Var(x) => body.iter().find_map(|l| match l {
+                Lit::Pos(a) if matches!(a.args.as_slice(), [Term::Var(y)] if y == x) => key
+                    .iter()
+                    .find(|(k, _)| *k == a.pred)
+                    .map(|(_, v)| v.clone()),
+                _ => None,
+            }),
+            Term::Func { name: f, args } if f == "format" => {
+                let (Some(Term::Val(Value::Str(fmt))), rest) = (args.first(), &args[1..]) else {
+                    return None;
+                };
+                let mut parts = fmt.split("%s");
+                let mut out = parts.next()?.to_string();
+                for (part, arg) in parts.zip(rest) {
+                    out.push_str(&name(arg, body, key)?);
+                    out.push_str(part);
+                }
+                Some(out)
+            }
+            _ => None,
+        }
+    }
+    let mut out = BTreeSet::new();
+    for s in &program.statements {
+        let body: &[Lit] = match s {
+            Stmt::Rule(r) => &r.body,
+            Stmt::Resource(r) => r.body.as_deref().unwrap_or_default(),
+            _ => continue,
+        };
+        for l in body {
+            if let Lit::Pos(a) | Lit::Not(a) = l
+                && a.pred == "stack_output"
+                && let Some(n) = a.args.first().and_then(|t| name(t, body, key))
+            {
+                out.insert(n);
+            }
+        }
+    }
+    out
 }
 
 /// What a run reads of other stacks' outputs: each deployment the program

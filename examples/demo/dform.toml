@@ -3,9 +3,8 @@
 [project]
 name = "demo"
 
-# The stack stacks/dform.df: strict, each env in its own account, and each
-# env's settings from its own document.
+# The stack stacks/dform.df: each env in its own account, and each env's
+# settings from its own document.
 [stacks.dform]
-unknowns = "strict"
 isolated = true
 config = 'yaml("config/dform/{env}.yaml")'

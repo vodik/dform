@@ -400,7 +400,6 @@ any other key is an error naming it:
 | setting      | value                                                                 |
 |--------------|-----------------------------------------------------------------------|
 | `backend`    | where the state lives: `'local("DIR")'` or `'s3("BUCKET", "PREFIX", {endpoint, region})'` |
-| `unknowns`   | `"strict"` or `"permissive"` (the default)                            |
 | `role`       | `"bootstrap"`: it creates what a controller runs in, and stays batch  |
 | `approvals`  | who approves a plan: `'jwks("URL")'`, `'jwks_file("PATH")'`, or a list |
 | `audit_sink` | a command each audit log entry is piped to                            |

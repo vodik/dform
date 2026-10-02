@@ -179,9 +179,10 @@ fn the_file_never_carries_a_labeled_secret() {
 }
 
 /// Across a boundary: tick 2's nodepools come from a pending group the file
-/// records, and the kubernetes objects are the file's held deformations.
+/// could not name, so the file's apply stops after tick 1 (R-30), the state
+/// consistent; the next apply plans them as its tick 1.
 #[test]
-fn a_two_phase_plan_file_applies_across_the_boundary() {
+fn a_two_phase_plan_file_stops_before_the_tick_it_could_not_name() {
     let s = Scratch::new("planfile-gke");
     let prog = repo().join("examples/gke/stacks/gke_two_phase.df");
     s.run(&[
@@ -196,8 +197,33 @@ fn a_two_phase_plan_file_applies_across_the_boundary() {
         prog.to_str().unwrap(),
     ])
     .success();
-    let r = s.run(&["apply", "plan.json"]).success();
-    assert!(r.stdout.contains("tick 2:\n"), "{}", r.stdout);
+    let r = s.run(&["apply", "plan.json"]).failure();
+    assert!(
+        r.stderr
+            .contains("apply stopped after tick 1: tick 2 adds "),
+        "{}",
+        r.stderr
+    );
+    assert!(
+        r.stderr
+            .contains("run apply again to plan them against the world as it now is"),
+        "{}",
+        r.stderr
+    );
+    let st: serde_json::Value = serde_json::from_str(&s.read("w.state.json")).unwrap();
+    assert!(st["in_flight"].is_null(), "{st}");
+    let r = s
+        .run(&[
+            "dev",
+            "--provider",
+            "gke",
+            "--world",
+            "w.json",
+            "apply",
+            "--yes",
+            prog.to_str().unwrap(),
+        ])
+        .success();
     assert!(r.stdout.ends_with("apply: complete\n"), "{}", r.stdout);
 }
 
@@ -268,9 +294,21 @@ fn a_tick_2_address_outside_the_recorded_group_is_stale() {
     assert!(g["rule"].as_str().unwrap().starts_with('r'), "{f}");
     let bound: Vec<&serde_json::Value> = g["bindings"].as_object().unwrap().values().collect();
     assert_eq!(bound, [&serde_json::json!("orders")], "{f}");
-    // The group as recorded: tick 2's policy is its member.
-    let r = s.run(&["apply", "plan.json"]).success();
-    assert!(r.stdout.ends_with("apply: complete\n"), "{}", r.stdout);
+    // The group as recorded: tick 2's policy is its member, which the file
+    // could not name, so its apply stops before tick 2 (R-30).
+    let r = s.run(&["apply", "plan.json"]).failure();
+    assert!(
+        r.stderr.contains(
+            "apply stopped after tick 1: tick 2 adds 1 deformation the plan could not name \
+             (iam.policy[?] on ?db.postgres[\"orders\"].endpoint)"
+        ),
+        "{}",
+        r.stderr
+    );
+    let end: serde_json::Value =
+        serde_json::from_str(s.read("w.state.audit.jsonl").lines().last().unwrap()).unwrap();
+    assert_eq!(end["result"], "stopped", "{end}");
+    assert_eq!(end["tick"], 1, "{end}");
 
     let s = Scratch::new("planfile-group-other");
     s.write("p.df", GROUP);

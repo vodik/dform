@@ -51,15 +51,14 @@ pub enum Note {
     Warning(String),
     /// A `warn` fact of the program's own evaluation, redacted.
     Policy(String),
-    /// The collision lint of a keyed stack, when it is not strict (strict,
-    /// it is a violation and a `deny` fact).
+    /// The collision lint of a keyed stack.
     Collision(String),
     /// An Apply call whose answer was lost, resolved.
     Resolved(String),
     /// A git table whose ref names another commit than at the last apply.
     TableMoved(String),
     /// A content read of a computed path in a block, at the read: the
-    /// block waits a tick (DESIGN.org R-4). Not under strict mode.
+    /// block waits a tick (DESIGN.org R-4).
     Computed(crate::ast::Span, String),
 }
 
@@ -545,7 +544,7 @@ impl Evaluator {
         let sections = sections(&res, &resources, schema);
         executor::hold_deposed(&mut plan, &resources, &sections);
         // The resource rules that may derive after a boundary (pending
-        // groups), for strict mode.
+        // groups), for the plan's policy pass.
         let may_derive: Vec<Atom> = res
             .may_derive
             .iter()
@@ -612,14 +611,11 @@ pub struct Evaluation {
     pub st: State,
     /// The moves `moved/3` made.
     pub moves: Vec<(Address, Address)>,
-    /// The program's own evaluation (the collision lint's denies in it
-    /// under strict mode), and its violations.
+    /// The program's own evaluation, and its violations.
     pub res: EvalResult,
     pub violations: Vec<String>,
     /// The collision lint's findings.
     pub collisions: Vec<lint::Collision>,
-    /// The stack is `unknowns = strict`.
-    pub strict: bool,
     /// Prints `res`'s values redacted.
     pub redact: Redactor,
     /// The resources of `res`; not compiled when a violation blocks
@@ -760,11 +756,8 @@ impl Located {
         if let Some(l) = lowered {
             crate::secrets::check(l, backend.schema(), &secret_outputs)?;
             crate::refine::check(&l.program, backend.schema())?;
-            // Strict mode refuses the plan with the stuck instance named.
-            if self.loaded.cfg.unknowns != stack::Unknowns::Strict {
-                for (at, n) in transform::computed_reads(&l.program.statements, backend.schema()) {
-                    obs.note(Note::Computed(at, n));
-                }
+            for (at, n) in transform::computed_reads(&l.program.statements, backend.schema()) {
+                obs.note(Note::Computed(at, n));
             }
         }
         // An `expect_account` a secret reaches is named by its label.
@@ -800,22 +793,15 @@ impl Located {
             obs.note(Note::TableMoved(m));
         }
         // The collision lint of a keyed stack: a name every deployment
-        // writes the same. Under strict mode a `deny` fact, which `query`
-        // and `why` see too.
-        let strict = l.cfg.unknowns == stack::Unknowns::Strict;
+        // writes the same.
         let collisions = if opts.collisions && !l.cfg.keys.is_empty() && !l.cfg.isolated {
             let keys: Vec<String> = l.cfg.keys.iter().map(|(k, _)| k.clone()).collect();
             lint::key_collisions(&res, backend.schema(), &keys, &self.deployment)
         } else {
             Vec::new()
         };
-        if strict {
-            lint::deny_collisions(&mut res, &collisions);
-            violations.extend(collisions.iter().map(|c| c.text.clone()));
-        } else {
-            for c in &collisions {
-                obs.note(Note::Collision(c.text.clone()));
-            }
+        for c in &collisions {
+            obs.note(Note::Collision(c.text.clone()));
         }
         // Policy messages quote values and rule text: redacted.
         let redact = Redactor::new(&res.facts, backend.schema());
@@ -852,7 +838,6 @@ impl Located {
             res,
             violations,
             collisions,
-            strict,
             redact,
             compiled,
             policy,
@@ -893,11 +878,10 @@ impl Evaluation {
         self.evaluator.schema()
     }
 
-    /// The evaluation to explain: the policy pass's when there is one,
-    /// with the collision lint's denies under strict mode.
+    /// The evaluation to explain: the policy pass's when there is one.
     pub fn explained(&mut self) -> Explained {
         let mut violations = self.violations.clone();
-        let (mut res, error) = match self.policy.take() {
+        let (res, error) = match self.policy.take() {
             Some(Ok(p)) => {
                 violations.extend(p.denies);
                 (p.res, None)
@@ -905,9 +889,6 @@ impl Evaluation {
             Some(Err(e)) => (self.res.clone(), Some(e)),
             None => (self.res.clone(), None),
         };
-        if self.strict {
-            lint::deny_collisions(&mut res, &self.collisions);
-        }
         let redact = Redactor::new(&res.facts, self.schema());
         Explained {
             res,

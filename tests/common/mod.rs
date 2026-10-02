@@ -7,6 +7,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+/// What an unattended apply says when it stops before a tick that adds
+/// what its plan could not name (R-30).
+pub const STOPPED: &str = "run apply again to plan them against the world as it now is";
+
 pub struct Scratch {
     pub dir: PathBuf,
     // Private: a Scratch is only made here, so it only ever owns (and on
@@ -102,6 +106,25 @@ impl Scratch {
     /// Run `dform ARGS` with the scratch directory as the working directory.
     pub fn run<S: AsRef<std::ffi::OsStr>>(&self, args: &[S]) -> Run {
         self.run_in("", args)
+    }
+
+    /// Run the apply `ARGS` until it completes: an unattended apply stops
+    /// before a tick that adds what its plan could not name, and the next
+    /// one plans it (R-30). Each run's output, the last one's ok.
+    #[track_caller]
+    pub fn converge<S: AsRef<std::ffi::OsStr>>(&self, args: &[S]) -> Vec<Run> {
+        let mut runs = Vec::new();
+        loop {
+            let r = self.run(args);
+            let stopped = !r.ok && r.stderr.contains(STOPPED);
+            runs.push(r);
+            if !stopped || runs.len() == 8 {
+                break;
+            }
+        }
+        let last = runs.pop().unwrap().success();
+        runs.push(last);
+        runs
     }
 
     /// Run `dform ARGS` in the scratch directory's subdirectory `rel`.

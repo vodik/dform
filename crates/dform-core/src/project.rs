@@ -259,7 +259,6 @@ pub struct Defaults {
     /// `s3("BUCKET", "PREFIX", {endpoint: "URL", region: "R"})`; `{stack}`
     /// the stack's name.
     pub backend: Option<Spanned<String>>,
-    pub unknowns: Option<Spanned<String>>,
     pub role: Option<Spanned<String>>,
     pub approvals: Option<Spanned<String>>,
     pub audit_sink: Option<Spanned<String>>,
@@ -280,8 +279,6 @@ pub struct Defaults {
 pub struct StackTable {
     /// Where its state lives: `local("DIR")` or `s3(..)`.
     pub backend: Option<Spanned<String>>,
-    /// `strict` or `permissive`.
-    pub unknowns: Option<Spanned<String>>,
     /// `bootstrap`: it creates what a controller runs in.
     pub role: Option<Spanned<String>>,
     /// Whose signatures approve a plan: `jwks(..)`, `jwks_file(..)`, a
@@ -299,7 +296,6 @@ pub struct StackTable {
 /// `approvals`, `config`), else a plain value's.
 pub const STACK_SETTINGS: &[&str] = &[
     "backend",
-    "unknowns",
     "role",
     "approvals",
     "audit_sink",
@@ -320,7 +316,6 @@ impl StackTable {
         let s = |v: &Option<Spanned<String>>| v.clone().map(SettingText::Str);
         [
             ("backend", s(&self.backend)),
-            ("unknowns", s(&self.unknowns)),
             ("role", s(&self.role)),
             ("approvals", s(&self.approvals)),
             ("audit_sink", s(&self.audit_sink)),
@@ -337,7 +332,6 @@ impl Defaults {
     fn table(&self) -> StackTable {
         StackTable {
             backend: self.backend.clone(),
-            unknowns: self.unknowns.clone(),
             role: self.role.clone(),
             approvals: self.approvals.clone(),
             audit_sink: self.audit_sink.clone(),
@@ -404,16 +398,6 @@ impl Manifest {
                 .map(|(n, t)| (format!("[stacks.{n}]"), t.clone())),
         );
         for (table, t) in tables {
-            if let Some(u) = &t.unknowns
-                && u.get_ref() != "strict"
-                && u.get_ref() != "permissive"
-            {
-                bail!(
-                    "{} = {:?}: `strict` or `permissive`",
-                    at(&format!("{table} unknowns")),
-                    u.get_ref()
-                );
-            }
             if let Some(b) = &t.backend
                 && let Err(e) =
                     crate::stack::parse_backend(&b.get_ref().replace("{stack}", "stack"))
@@ -866,7 +850,7 @@ mod tests {
         let m = manifest(
             "[project]\nname = \"p\"\ndform = \">=0.1\"\n\
              [providers]\naws = { source = \"aws-mock\", version = \"2.1\" }\nk8s = \"k8s\"\n\
-             [defaults]\nbackend = 'local(\"state/{stack}\")'\nunknowns = \"strict\"\n",
+             [defaults]\nbackend = 'local(\"state/{stack}\")'\nrole = \"bootstrap\"\n",
         )
         .unwrap();
         assert_eq!(m.provider_source("aws").as_deref(), Some("aws-mock"));
@@ -881,7 +865,7 @@ mod tests {
                 "project_provider(\"aws\", \"^2.1\")",
                 "project_provider(\"k8s\", \"*\")",
                 "project_default(\"backend\", \"local(\\\"state/{stack}\\\")\")",
-                "project_default(\"unknowns\", \"strict\")",
+                "project_default(\"role\", \"bootstrap\")",
             ]
         );
         let e = manifest("[project]\ndform = \">=9\"\n").unwrap_err();
@@ -892,8 +876,8 @@ mod tests {
         );
         let e = manifest("[providers]\naws = { version = \"~>2.1\" }\n").unwrap_err();
         assert!(e.to_string().contains("[providers.aws] version"), "{e}");
-        let e = manifest("[defaults]\nunknowns = \"lax\"\n").unwrap_err();
-        assert!(e.to_string().contains("[defaults] unknowns"), "{e}");
+        let e = manifest("[defaults]\nunknowns = \"strict\"\n").unwrap_err();
+        assert!(e.to_string().contains("unknown field `unknowns`"), "{e}");
         let e = manifest("[inputs]\nenv = \"prod\"\n").unwrap_err();
         assert!(e.to_string().contains("unknown field `inputs`"), "{e}");
     }

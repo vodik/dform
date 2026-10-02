@@ -320,7 +320,6 @@ fn start(
         }
         if LATTICE_DECLS.contains(&r.head.pred.as_str())
             || REFINE_DECLS.contains(&r.head.pred.as_str())
-            || r.head.pred == stuck::ALLOW_STUCK
         {
             bail!(
                 "{} must be a fact, not a rule: {}{}",
@@ -4806,8 +4805,8 @@ mod tests {
         eval(&program, &crate::schema::gke().facts)
     }
 
-    /// stuck/4 is a relation a policy reads (strict mode is "deny if any
-    /// stuck"): it is derived above every rule that can stick, so the
+    /// stuck/4 is a relation a policy reads (to refuse a plan with any
+    /// stuck instance): it is derived above every rule that can stick, so the
     /// reader sees every instance, those of the rules above it included
     /// (the zone-count deny is stuck in the top stratum).
     #[test]

@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== examples/demo/stacks/dform.df: 176 nodes, 881 edges (630 negative)
+== examples/demo/stacks/dform.df: 173 nodes, 456 edges (207 negative)
    STRATIFIED, 23 strata
    stratum 0:
      (arg, iam.policy, name)
@@ -13,12 +13,10 @@ exit: ok
      (want, iam.role_policy_attachment)
      (want, net.route)
      __config_path
-     allow_stuck
      data
      doc
      identity
      input
-     may_derive
      network.main::zone_index
      network.peer::zone_index
      resolve
@@ -66,7 +64,6 @@ exit: ok
      (attr, iam.role_policy_attachment, role_id)
      cfg
      settings_row
-     warn
    stratum 5:
      (attr, settings, db.backup_days)
      (attr, settings, db.multi_az)
@@ -118,6 +115,7 @@ exit: ok
      (attr, net.subnet, zone)
      (attr, net.vpc_peering, accepter_vpc_id)
      (attr, net.vpc_peering, requester_vpc_id)
+     warn
    stratum 12:
      (arg, output, private_subnet_ids)
      __lc_1
@@ -189,6 +187,7 @@ exit: ok
      (arg, k8s.nodepool, cluster_id)
      (arg, output, iam_need)
      __ref_dep
+     deny
    stratum 19:
      (attr, k8s.nodepool, cluster_id)
      (attr, output, iam_need)
@@ -199,6 +198,4 @@ exit: ok
      __lc_3
    stratum 22:
      (attr, iam.policy, statements)
-     deny
-     stuck
 -- stderr --

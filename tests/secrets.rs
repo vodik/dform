@@ -576,7 +576,8 @@ fn a_secret_output_reaches_a_sensitive_field_in_another_stack() {
         w["resources"]["leaky.vault::copy"]["materialized"]["backup"].clone()
     };
 
-    let r = dev(&["apply", "app"]).success();
+    // `apply app` applies prod first, which takes its input from `--set`.
+    let r = dev(&["apply", "app", "--set", &set]).success();
     for out in [&r.stdout, &r.stderr] {
         assert!(!out.contains(PRODUCED), "{out}");
     }
@@ -591,9 +592,9 @@ fn a_secret_output_reaches_a_sensitive_field_in_another_stack() {
     let r = dev(&["plan", "app"]).success();
     assert_eq!(r.summary(), "stack app is undeformed", "{}", r.stdout);
 
-    // The producer's secret changes: the reader's field is updated.
-    dev(&["apply", "prod", "--set", "pw=ROTATED-SECRET"]).success();
-    let r = dev(&["apply", "app"]).success();
+    // The producer's secret changes: the reader's field is updated, in one
+    // apply of the reader that applies the producer first.
+    let r = dev(&["apply", "app", "--set", "pw=ROTATED-SECRET"]).success();
     assert!(r.stdout.contains("~ leaky.vault[\"copy\"]"), "{}", r.stdout);
     assert!(!r.stdout.contains("ROTATED"), "{}", r.stdout);
     assert_eq!(materialized(&s), "ROTATED-SECRET");
@@ -643,7 +644,7 @@ fn a_persisted_extern_secret_is_held_by_its_provider_never_stored() {
     let state = s.read("dform.state/crud_api/state.json");
     assert!(state.contains("\"in_flight\""), "{state}");
     assert!(!state.contains(PASSWORD), "{state}");
-    s.run(&["apply"]).success();
+    s.converge(&["apply"]);
     let r = s.run(&["plan", "--out", "plan.json"]).success();
     assert_eq!(r.summary(), "stack crud_api is undeformed", "{}", r.stdout);
     s.run(&["controller", "run", "crud_api", "--once"])

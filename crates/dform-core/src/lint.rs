@@ -401,39 +401,6 @@ pub fn key_collisions(
         .collect()
 }
 
-/// The rule id of a collision's deny in the circuit.
-const COLLISION_RULE: &str = "lint:collision";
-
-/// Under strict mode each collision is a `deny(Message)` fact, derived in
-/// the circuit from the attribute it names, so `why` and `query` see it.
-pub fn deny_collisions(res: &mut EvalResult, collisions: &[Collision]) {
-    if collisions.is_empty() {
-        return;
-    }
-    res.circuit.name_rule(
-        COLLISION_RULE,
-        "deny(Message) :- attr(T, A, P, V), P names the object, V does not depend on the \
-         stack's key (the collision lint of a keyed stack)",
-    );
-    let rule = res.circuit.leaf(Leaf::Rule {
-        id: COLLISION_RULE.to_string(),
-    });
-    for c in collisions {
-        let Some(attr) = res.circuit.fact_id(&c.fact) else {
-            continue;
-        };
-        let deny = Atom {
-            pred: "deny".to_string(),
-            args: vec![Term::Val(Value::Str(c.text.clone()))],
-            record: None,
-            span: Default::default(),
-        };
-        res.circuit
-            .derive(crate::engine::circuit_fact(&deny), vec![rule, attr]);
-        res.facts.insert(deny);
-    }
-}
-
 /// The name-like attributes that depend on a key input: what a new key
 /// value renames, usually a replace. One line per attribute.
 pub fn key_named(res: &EvalResult, schema: &Schema, keys: &[String]) -> Vec<String> {

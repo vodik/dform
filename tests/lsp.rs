@@ -920,7 +920,7 @@ fn quick_fix_declares_a_predicate_mixed() {
     );
 }
 
-/// The collision lint (a deny in the strict demo): the key interpolated
+/// The collision lint (a warning in the demo): the key interpolated
 /// into the name, or the stack said isolated.
 #[test]
 fn quick_fix_derives_a_colliding_name_from_the_key_or_isolates_the_stack() {
@@ -961,7 +961,7 @@ fn quick_fix_derives_a_colliding_name_from_the_key_or_isolates_the_stack() {
         "say `isolated = true` in dform.toml",
     );
     assert!(
-        texts[0].contains("[stacks.dform]\nisolated = true\nunknowns = \"strict\"\n"),
+        texts[0].contains("[stacks.dform]\nisolated = true\nconfig = "),
         "{}",
         texts[0]
     );

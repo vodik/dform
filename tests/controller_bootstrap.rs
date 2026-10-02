@@ -138,38 +138,47 @@ fn edit(s: &Scratch, rel: &str, from: &str, to: &str) {
     s.write(rel, &text.replace(from, to));
 }
 
-fn ticks(stdout: &str) -> Vec<&str> {
-    stdout.lines().filter(|l| l.starts_with("tick ")).collect()
-}
-
 /// The dform-controller Deployment reads the helper `node_pool_up`, whose
-/// instances are stuck until the pools have instance groups: at tick 2 the
-/// rule is a pending group (F DR-2 revised, last clause), so the apply
-/// runs a third tick instead of stopping complete a tick early.
+/// instances are stuck until the pools have instance groups: once the pools
+/// are planned the rule is a pending group (F DR-2 revised, last clause),
+/// so the apply that makes them stops before the tick that adds the
+/// Deployment (R-30) instead of stopping complete a tick early.
 #[test]
 fn a_resource_rule_reading_a_stuck_helper_is_a_pending_group() {
     let s = demo("bootstrap-helper");
-    let r = s.run(&["apply", "bootstrap"]).success();
-    let tick2 = r
-        .stdout
-        .split("tick 2:\n")
-        .nth(1)
-        .and_then(|t| t.split("tick 3:\n").next())
-        .unwrap_or_default();
+    let runs = s.converge(&["apply", "bootstrap"]);
+    assert_eq!(runs.len(), 3, "{:?}", runs.last().unwrap().stdout);
+    let second = &runs[1];
     assert!(
-        tick2.contains(
+        second.stdout.contains(
             "pending groups:\n? k8s.deployment[\"dform_controller\"] x unknown, on \
-             ?gke_nodepool[\"np-us-east1-b\"].instance_group, resolves after tick 2  \
+             ?gke_nodepool[\"np-us-east1-b\"].instance_group, resolves after tick 1  \
              (reads node_pool_up(\"np-us-east1-b\"), which is stuck)\n"
         ),
         "{}",
-        r.stdout
+        second.stdout
     );
     assert!(
-        tick2.contains("  tick 3\n    k8s.deployment[\"dform_controller\"]\n"),
-        "{tick2}"
+        second.stderr.contains(
+            "apply stopped after tick 1: tick 2 adds 1 deformation the plan could not name \
+             (k8s.deployment[\"dform_controller\"] on \
+             ?gke_nodepool[\"np-us-east1-b\"].instance_group)"
+        ),
+        "{}",
+        second.stderr
     );
-    assert!(r.stdout.ends_with("apply: complete\n"), "{}", r.stdout);
+    let last = runs.last().unwrap();
+    assert!(
+        last.stdout
+            .contains("+ k8s.deployment[\"dform_controller\"]\n"),
+        "{}",
+        last.stdout
+    );
+    assert!(
+        last.stdout.ends_with("apply: complete\n"),
+        "{}",
+        last.stdout
+    );
     let world = s.read("dform.state/bootstrap/remote.json");
     assert!(world.contains("\"dform-controller\""), "{world}");
 }
@@ -177,15 +186,11 @@ fn a_resource_rule_reading_a_stuck_helper_is_a_pending_group() {
 #[test]
 fn bootstrap_handover_and_the_controller_runs_the_workload() {
     let s = demo("bootstrap");
-    // Tick 1 the network and the cluster, tick 2 the node pools and the
-    // namespace, tick 3 dform itself.
-    let r = s.run(&["apply", "bootstrap"]).success();
-    assert_eq!(
-        ticks(&r.stdout),
-        ["tick 1:", "tick 2:", "tick 3:"],
-        "{}",
-        r.stdout
-    );
+    // The network and the cluster, then the node pools and the namespace,
+    // then dform itself: each apply stops before what its plan could not
+    // name (R-30).
+    let runs = s.converge(&["apply", "bootstrap"]);
+    assert_eq!(runs.len(), 3, "{:?}", runs.last().unwrap().stdout);
     let world = s.read("dform.state/bootstrap/remote.json");
     assert!(world.contains("\"dform-controller\""), "{world}");
     assert!(
@@ -321,7 +326,7 @@ fn handover_needs_one_bootstrap_stack_and_an_empty_target() {
         "{}",
         r.stderr
     );
-    s.run(&["apply", "bootstrap"]).success();
+    s.converge(&["apply", "bootstrap"]);
     let r = s
         .run(&["stack", "handover", "bootstrap", "--to", to])
         .failure();

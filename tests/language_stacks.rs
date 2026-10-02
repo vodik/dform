@@ -26,10 +26,7 @@ fn the_file_names_the_stack_and_scopes_the_state() {
 #[test]
 fn a_local_backend_holds_the_state() {
     let s = Scratch::project("lang-stack-backend");
-    s.write(
-        "dform.toml",
-        "[stacks.p]\nbackend = 'local(\"state/x\")'\nunknowns = \"permissive\"\n",
-    );
+    s.write("dform.toml", "[stacks.p]\nbackend = 'local(\"state/x\")'\n");
     s.write(
         "p.df",
         "edition 2026\nprovider fake\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\n",

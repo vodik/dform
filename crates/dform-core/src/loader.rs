@@ -344,7 +344,6 @@ pub fn is_core_pred(pred: &str) -> bool {
             | "ignore_changes"
             | "lifecycle"
             | "moved"
-            | "allow_stuck"
             | "doc"
     ) || is_engine_pred(pred)
         || is_provider_pred(pred)

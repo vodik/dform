@@ -1468,7 +1468,7 @@ fn a_held_secret_is_read_from_the_cluster() {
     let mut out = String::new();
     let r = dform(&s, Some(&kc), &["apply", "a.df", "--set", &set]).success();
     out += &(r.stdout + &r.stderr);
-    let r = dform(&s, Some(&kc), &["apply", "b.df"]).success();
+    let r = dform(&s, Some(&kc), &["apply", "b.df", "--set", &set]).success();
     out += &(r.stdout + &r.stderr);
     let copy = api
         .get("/api/v1/namespaces/default/secrets/copy")

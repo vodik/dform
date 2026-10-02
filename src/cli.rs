@@ -250,13 +250,14 @@ enum Run {
         why: bool,
     },
     /// Apply a deployment, every key value named (`apply app env=prod`),
-    /// or a plan file from `plan --out` (`apply PLAN.json`): refresh,
-    /// re-evaluate, and refuse unless the delta is the file's.
+    /// after the deployments it reads, or a plan file from `plan --out`
+    /// (`apply PLAN.json`): refresh, re-evaluate, and refuse unless the
+    /// delta is the file's.
     Apply {
         #[command(flatten)]
         target: Target,
-        /// Stop after this many ticks (phase boundaries) if the stack is
-        /// still deformed.
+        /// A safety valve: stop after this many ticks (phase boundaries)
+        /// if the stack is still deformed, a loop that never settles.
         #[arg(long = "max-ticks", default_value_t = 8)]
         max_ticks: usize,
         /// At most this many provider Apply calls in flight: a tick's
@@ -269,9 +270,11 @@ enum Run {
         /// `requires_approval` of a deformation.
         #[arg(long = "approval")]
         approval: Option<PathBuf>,
-        /// Apply without asking. Without it, apply prints the plan and asks
-        /// before changing anything, and refuses when there is no terminal
-        /// to ask on. `apply PLAN.json` never asks.
+        /// Apply without asking: the ticks the plan names, stopping before
+        /// one that adds what it could not name (run apply again). Without
+        /// it, apply prints the plan and asks before changing anything and
+        /// at each such tick, and refuses when there is no terminal to ask
+        /// on. `apply PLAN.json` never asks, and stops the same way.
         #[arg(long = "yes", short = 'y')]
         yes: bool,
     },
@@ -671,7 +674,7 @@ pub fn main(
             version: env!("CARGO_PKG_VERSION"),
             real: launch,
         }),
-        _ => resolve(args).and_then(|cli| run(cli, None)),
+        _ => resolve(args).and_then(run_command),
     };
     match result {
         Ok(()) => std::process::ExitCode::SUCCESS,
@@ -706,7 +709,209 @@ pub fn run_in_process(
     if !std::ptr::addr_eq(set, launch) {
         bail!("internal: this process reaches its providers through another backend");
     }
-    run(resolve(Args::try_parse_from(args)?)?, None)
+    run_command(resolve(Args::try_parse_from(args)?)?)
+}
+
+/// The command line's run: `apply X` applies the stacks X reads first
+/// ([`apply_order`]), each a run of its own.
+fn run_command(cli: Cli) -> Result<()> {
+    let order = apply_order(&cli)?;
+    if order.is_empty() {
+        return run(cli, None);
+    }
+    let named: Vec<String> = order.iter().map(|d| d.name.clone()).collect();
+    let target = named.last().cloned().unwrap_or_default();
+    let deps = &named[..named.len() - 1];
+    println!(
+        "apply {target}: {} first, each with its own plan and state: {target} reads {}",
+        deps.join(", then "),
+        if deps.len() == 1 {
+            "its outputs"
+        } else {
+            "their outputs"
+        }
+    );
+    // A `--set` goes to each stack of the run that declares the input; one
+    // none declares stays the target's, which names the error.
+    let named_input = |kv: &String| {
+        kv.split_once('=')
+            .map_or(kv.as_str(), |(k, _)| k)
+            .to_string()
+    };
+    let sets = |d: &Dependency| -> Vec<String> {
+        cli.user_set
+            .iter()
+            .filter(|kv| d.inputs.contains(&named_input(kv)))
+            .cloned()
+            .collect()
+    };
+    for d in &order[..order.len() - 1] {
+        println!(
+            "{}",
+            cli.style
+                .paint(plan_print::Paint::Bold, &format!("== {}", d.name))
+        );
+        let mut dep = cli.clone();
+        dep.user_set = sets(d);
+        dep.set = dep.user_set.clone();
+        dep.set
+            .extend(d.keys.iter().map(|(k, v)| format!("{k}={v}")));
+        dep.keys = d.keys.clone();
+        dep.input_files = Vec::new();
+        dep.files = vec![d.file.clone()];
+        run(dep, None)?;
+    }
+    println!(
+        "{}",
+        cli.style
+            .paint(plan_print::Paint::Bold, &format!("== {target}"))
+    );
+    let mut cli = cli;
+    let own = order.last().map(|d| &d.inputs);
+    cli.user_set.retain(|kv| {
+        let k = named_input(kv);
+        own.is_some_and(|i| i.contains(&k)) || !order.iter().any(|d| d.inputs.contains(&k))
+    });
+    cli.set = cli.user_set.clone();
+    cli.set
+        .extend(cli.keys.iter().map(|(k, v)| format!("{k}={v}")));
+    run(cli, None)
+}
+
+/// One deployment `apply` applies, of the stack in `file`, and the
+/// stack's inputs (not its key).
+struct Dependency {
+    name: String,
+    file: PathBuf,
+    keys: Vec<(String, String)>,
+    inputs: BTreeSet<String>,
+}
+
+/// `apply X` in a project: the deployments of the project's stacks X
+/// reads (`stack_output`), and theirs, each before its readers, then X;
+/// nothing that reads X (R-30: the stack is the unit of partial work).
+/// Empty when X reads none, and for a plan file, a world fixture or a
+/// program outside a project. A cycle is an error naming it.
+fn apply_order(cli: &Cli) -> Result<Vec<Dependency>> {
+    let Cmd::Apply {
+        plan_file: None, ..
+    } = &cli.cmd
+    else {
+        return Ok(Vec::new());
+    };
+    if !cli.in_project || cli.world.is_some() || cli.files.len() != 1 {
+        return Ok(Vec::new());
+    }
+    let Some(project) = crate::project::Project::find(Path::new("."), env!("CARGO_PKG_VERSION"))?
+    else {
+        return Ok(Vec::new());
+    };
+    let found = crate::project::discover(&project);
+    // The stack in `file` keyed by `keys`: its name and the deployments it
+    // reads that are this project's.
+    let reads = |file: &Path,
+                 keys: &[(String, String)]|
+     -> Result<(String, BTreeSet<String>, Vec<Dependency>)> {
+        let t = deployment::Target {
+            files: vec![file.to_path_buf()],
+            scenario: None,
+            scenario_optional: false,
+            input_files: Vec::new(),
+            providers: Vec::new(),
+        };
+        let loaded = deployment::load(
+            &t,
+            env!("CARGO_PKG_VERSION"),
+            &|p: &Path| std::fs::read_to_string(p),
+            &mut deployment::Notes::default(),
+        )?;
+        let instance = crate::stack::Instance {
+            stack: loaded.stack.clone(),
+            key: keys.to_vec(),
+            defaulted: Vec::new(),
+        };
+        let mut deps = Vec::new();
+        for name in crate::stack::reads(&loaded.program, keys) {
+            let (stack, key) = match name.strip_suffix(']').and_then(|n| n.split_once('[')) {
+                Some((s, k)) => (s.to_string(), k),
+                None => (name.clone(), ""),
+            };
+            // Another project's (`acme.platform`) is that project's to apply.
+            let [one] = found.named(&stack)[..] else {
+                continue;
+            };
+            let keys = key
+                .split(',')
+                .filter(|kv| !kv.is_empty())
+                .map(|kv| {
+                    kv.split_once('=')
+                        .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
+                        .ok_or_else(|| {
+                            anyhow::anyhow!("stack_output(\"{name}\"): expected K=V in the key")
+                        })
+                })
+                .collect::<Result<_>>()?;
+            deps.push(Dependency {
+                name,
+                file: one.file.clone(),
+                keys,
+                inputs: BTreeSet::new(),
+            });
+        }
+        let inputs = loaded
+            .program
+            .statements
+            .iter()
+            .filter_map(|s| match s {
+                crate::ast::Stmt::Input(i) if !i.key => Some(i.name.clone()),
+                _ => None,
+            })
+            .collect();
+        Ok((instance.name(), inputs, deps))
+    };
+    let mut order: Vec<Dependency> = Vec::new();
+    let mut path: Vec<String> = Vec::new();
+    type Reads<'a> = dyn Fn(&Path, &[(String, String)]) -> Result<(String, BTreeSet<String>, Vec<Dependency>)>
+        + 'a;
+    fn visit(
+        mut d: Dependency,
+        reads: &Reads,
+        order: &mut Vec<Dependency>,
+        path: &mut Vec<String>,
+    ) -> Result<()> {
+        if order.iter().any(|o| o.name == d.name) {
+            return Ok(());
+        }
+        if let Some(i) = path.iter().position(|p| *p == d.name) {
+            bail!(
+                "apply {}: the stacks read each other's outputs in a cycle: {} -> {}",
+                path[0],
+                path[i..].join(" -> "),
+                d.name
+            );
+        }
+        let (_, inputs, deps) = reads(&d.file, &d.keys)?;
+        d.inputs = inputs;
+        path.push(d.name.clone());
+        for dep in deps {
+            visit(dep, reads, order, path)?;
+        }
+        path.pop();
+        order.push(d);
+        Ok(())
+    }
+    let (name, inputs, _) = reads(&cli.files[0], &cli.keys)?;
+    let target = Dependency {
+        name,
+        file: cli.files[0].clone(),
+        keys: cli.keys.clone(),
+        inputs,
+    };
+    visit(target, &reads, &mut order, &mut path)?;
+    if order.len() == 1 {
+        order.clear();
+    }
+    Ok(order)
 }
 
 /// The run the command line asks for: `-C` taken, the working project
@@ -1057,6 +1262,9 @@ fn run(cli: Cli, hook: Option<&mut controller::Hook>) -> Result<()> {
             Ok(()) => serde_json::json!({ "result": "ok" }),
             Err(e) if let Some(d) = e.downcast_ref::<Declined>() => {
                 serde_json::json!({ "result": "declined", "tick": d.tick })
+            }
+            Err(e) if let Some(d) = e.downcast_ref::<Stopped>() => {
+                serde_json::json!({ "result": "stopped", "tick": d.tick })
             }
             Err(e) => serde_json::json!({ "result": "failed", "error": e.to_string() }),
         };
@@ -1995,8 +2203,13 @@ fn run_with(
             let (mut res, mut violations, mut resources, mut adopts, mut lifecycle) =
                 (res, violations, resources, adopts, lifecycle);
             let mut tick = 1;
-            // Every address a tick's plan has listed so far.
+            // Every address a tick's plan has listed so far, and the last
+            // one's pending groups: what it could not name.
             let mut listed: BTreeSet<ir::Address> = BTreeSet::new();
+            let mut unnamed: Vec<String> = Vec::new();
+            // An unattended apply (`--yes`, a plan file, an approval) applies
+            // only the ticks whose addresses a printed plan named.
+            let unattended = yes || saved.is_some() || approval.is_some();
             loop {
                 let Planned {
                     res: r,
@@ -2151,13 +2364,36 @@ fn run_with(
                     .filter(|a| !matches!(a.kind, ActionKind::Noop))
                     .map(|a| &a.addr)
                     .collect();
-                if tick > 1 && hook.is_none() && !yes {
+                // Unattended, it stops before such a tick instead, the state
+                // consistent: the next apply plans them as its tick 1.
+                if tick > 1 && hook.is_none() {
                     let new = addresses.iter().filter(|a| !listed.contains(**a)).count();
+                    if new > 0 && unattended {
+                        st.in_flight = None;
+                        persist(&st)?;
+                        return Err(Stopped {
+                            tick: tick - 1,
+                            new,
+                            unnamed,
+                        }
+                        .into());
+                    }
                     if new > 0 {
                         confirm(new, true, &deployment, tick, cli.style)?;
                     }
                 }
                 listed.extend(addresses.into_iter().cloned());
+                if hook.is_none() {
+                    unnamed = report_of(&plan, &res, &sections, tick, &[], &denies)
+                        .groups
+                        .iter()
+                        .map(|g| {
+                            let on: Vec<String> =
+                                g.on.iter().map(|n| format!("?{}", ir::label(n))).collect();
+                            format!("{} on {}", g.pattern, on.join(" "))
+                        })
+                        .collect();
+                }
                 if hook.is_none() {
                     approve_entry(
                         tick,
@@ -2760,6 +2996,36 @@ impl std::fmt::Display for Declined {
 }
 
 impl std::error::Error for Declined {}
+
+/// An unattended apply that stopped after `tick`: the next tick adds `new`
+/// deformations no printed plan named (`unnamed`, the groups the last plan
+/// held them as). The audit log's `apply_end` says `stopped`.
+#[derive(Debug)]
+struct Stopped {
+    tick: usize,
+    new: usize,
+    unnamed: Vec<String>,
+}
+
+impl std::fmt::Display for Stopped {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        let s = if self.new == 1 { "" } else { "s" };
+        let groups = match self.unnamed.as_slice() {
+            [] => String::new(),
+            gs => format!(" ({})", gs.join("; ")),
+        };
+        write!(
+            f,
+            "apply stopped after tick {}: tick {} adds {} deformation{s} the plan could not \
+             name{groups}; run apply again to plan them against the world as it now is",
+            self.tick,
+            self.tick + 1,
+            self.new,
+        )
+    }
+}
+
+impl std::error::Error for Stopped {}
 
 /// `stack rekey`: the deployment whose state moves, and where to.
 struct Rekey {

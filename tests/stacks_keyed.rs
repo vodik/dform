@@ -329,22 +329,6 @@ fn a_fixed_bucket_name_in_a_keyed_stack_is_a_warning() {
     assert!(!r.stderr.contains("does not depend"), "{}", r.stderr);
 }
 
-/// Under strict mode the collision is a deny.
-#[test]
-fn a_fixed_bucket_name_is_denied_under_strict() {
-    let s = Scratch::project("keyed-lint-strict");
-    s.write("dform.toml", "[stacks.app]\nunknowns = \"strict\"\n");
-    s.write("app.df", FIXED);
-    let r = s.run(&["plan", "app.df"]).failure();
-    assert!(
-        r.stderr
-            .contains("constraint violations:\n- app.df:5:3: net.vpc[\"logs\"].bucket"),
-        "{}",
-        r.stderr
-    );
-    assert!(r.stderr.contains("blocked by constraints"), "{}", r.stderr);
-}
-
 /// A block that reads the key only to gate itself, or for another field,
 /// still writes the same bucket in every deployment: the lint follows what
 /// flows into the value, not what the rule reads. A ref to a name that
@@ -392,35 +376,6 @@ fn a_fixed_bucket_in_a_block_that_reads_the_key_is_a_warning() {
         r.stdout
     );
     assert!(!r.stdout.contains("net.vpc[\"logs\"]"), "{}", r.stdout);
-}
-
-/// Under strict mode the collision is a `deny` fact: `why` explains it
-/// from the attribute it names.
-#[test]
-fn the_strict_collision_deny_is_a_fact_why_explains() {
-    let s = Scratch::project("keyed-lint-why");
-    s.write("dform.toml", "[stacks.app]\nunknowns = \"strict\"\n");
-    s.write("app.df", GATED);
-    let r = s.run(&["plan", "app.df"]).failure();
-    assert!(
-        r.stderr
-            .contains("constraint violations:\n- app.df:5:3: net.vpc[\"logs\"].bucket"),
-        "{}",
-        r.stderr
-    );
-    let r = s.run(&["why", "deny(M)", "app.df"]).success();
-    assert!(
-        r.stdout
-            .contains("deny \"app.df:5:3: net.vpc[\\\"logs\\\"].bucket"),
-        "{}",
-        r.stdout
-    );
-    assert!(
-        r.stdout
-            .contains("└─ net.vpc[\"logs\"].bucket = \"company-logs\"\n"),
-        "{}",
-        r.stdout
-    );
 }
 
 /// One controller per deployment: the target names the key value.

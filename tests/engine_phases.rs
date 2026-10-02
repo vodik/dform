@@ -119,11 +119,14 @@ fn world_resources(s: &Scratch) -> Vec<String> {
 
 /// E §2.7 item 6: tick 1 creates the subnet, the address and the cluster;
 /// the boundary resolves the cluster's zones, endpoint and ca; tick 2 creates
-/// a nodepool per zone and the kubernetes objects. Apply again: undeformed.
+/// a nodepool per zone and the kubernetes objects. The nodepools are a
+/// pending group tick 1's plan could not name, so `--yes` stops before tick
+/// 2 (R-30) and the next apply plans them, with the held kubernetes
+/// objects, as its tick 1. Apply again: undeformed.
 #[test]
 fn gke_two_phase_applies_in_two_ticks() {
     let s = Scratch::new("gke-ticks");
-    let r = gke(&s, "gke_two_phase.df", &["apply"]).success();
+    let r = gke(&s, "gke_two_phase.df", &["apply"]).failure();
     assert!(
         r.stdout
             .contains("tick 1:\nplan: 3 deformations (3 create), 4 pending, 1 undetermined\n"),
@@ -136,7 +139,29 @@ fn gke_two_phase_applies_in_two_ticks() {
         "{}",
         r.stdout
     );
-    assert!(!r.stdout.contains("tick 3:"), "{}", r.stdout);
+    assert!(
+        r.stderr.contains(
+            "apply stopped after tick 1: tick 2 adds 2 deformations the plan could not name \
+             (gke_nodepool[?] on ?gke_cluster[\"pngu\"].zones)"
+        ),
+        "{}",
+        r.stderr
+    );
+    assert_eq!(
+        world_resources(&s),
+        [
+            "gke_cluster::pngu",
+            "google_compute_address::static_ip",
+            "google_compute_subnetwork::gke_subnet",
+        ]
+    );
+    let r = gke(&s, "gke_two_phase.df", &["apply"]).success();
+    assert!(
+        r.stdout.starts_with("plan: 5 deformations (5 create)\n"),
+        "{}",
+        r.stdout
+    );
+    assert!(!r.stdout.contains("tick 2:"), "{}", r.stdout);
     assert!(r.stdout.ends_with("apply: complete\n"), "{}", r.stdout);
     assert_eq!(
         world_resources(&s),

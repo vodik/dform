@@ -8,7 +8,7 @@
 //! quote (`walkthrough`).
 
 mod common;
-use common::{Scratch, copy_dir, repo};
+use common::{STOPPED, Scratch, copy_dir, repo};
 use std::path::PathBuf;
 
 /// What the test adds to each README apply: apply asks for confirmation,
@@ -17,7 +17,9 @@ const APPLY_FLAGS: &[&str] = &["--yes"];
 
 /// How one stack's apply ends.
 enum Apply {
-    /// It converges in this many ticks: the next plan is undeformed.
+    /// It converges in this many `--yes` applies: each but the last stops
+    /// before a tick that adds what its plan could not name (R-30), and
+    /// the plan after the last is undeformed.
     Converges(usize),
     /// It stops after tick 1 on a deny (on purpose: the example shows
     /// one), with this in the error. It runs in a copy of its own.
@@ -67,7 +69,7 @@ const CASES: &[Case] = &[
         name: "aws",
         stacks: &[one(&["apply"], Apply::Converges(1))],
     },
-    // Two stacks: each named. The workload after the bootstrap's three ticks.
+    // Two stacks: each named. The workload after the bootstrap's.
     Case {
         name: "bootstrap",
         stacks: &[
@@ -91,7 +93,7 @@ const CASES: &[Case] = &[
     // No resources: nothing to do.
     Case {
         name: "decl",
-        stacks: &[one(&["apply"], Apply::Converges(0))],
+        stacks: &[one(&["apply"], Apply::Converges(1))],
     },
     Case {
         name: "demo",
@@ -127,7 +129,8 @@ const CASES: &[Case] = &[
             ),
         ],
     },
-    // The policy named for the database's endpoint waits for tick 2.
+    // The policy named for the database's endpoint: named only once the
+    // database is made, so by a second apply.
     Case {
         name: "tour",
         stacks: &[one(&["apply"], Apply::Converges(2))],
@@ -161,19 +164,6 @@ fn every_example_has_a_case() {
             c.name
         );
     }
-}
-
-/// The ticks an apply ran: none when it had nothing to do, else the last
-/// `tick N:` it printed (a run of one tick prints none).
-fn ticks(stdout: &str) -> usize {
-    if stdout.contains("apply: nothing to do") {
-        return 0;
-    }
-    stdout
-        .lines()
-        .filter_map(|l| l.strip_prefix("tick ")?.strip_suffix(':')?.parse().ok())
-        .max()
-        .unwrap_or(1)
 }
 
 /// The commands a README's code blocks list, their comments dropped.
@@ -226,9 +216,14 @@ fn check(name: &str) {
         let at = |what: &str| format!("examples/{name} {what}");
         let r = s.run(st.plan);
         assert!(r.ok, "{}\n{}{}", at(&st.plan.join(" ")), r.stdout, r.stderr);
-        let r = s.run(&[st.apply, APPLY_FLAGS].concat());
+        let mut r = s.run(&[st.apply, APPLY_FLAGS].concat());
         match st.ends {
             Apply::Converges(n) => {
+                let mut applies = 1;
+                while !r.ok && r.stderr.contains(STOPPED) && applies < 5 {
+                    r = s.run(&[st.apply, APPLY_FLAGS].concat());
+                    applies += 1;
+                }
                 assert!(
                     r.ok,
                     "{}\n{}{}",
@@ -236,7 +231,7 @@ fn check(name: &str) {
                     r.stdout,
                     r.stderr
                 );
-                assert_eq!(ticks(&r.stdout), n, "{}\n{}", at("ticks"), r.stdout);
+                assert_eq!(applies, n, "{}\n{}", at("applies"), r.stdout);
                 let r = s.run(st.plan).success();
                 assert!(
                     r.summary().ends_with(" is undeformed"),
@@ -408,12 +403,28 @@ fn walkthrough(name: &str, file: &str) {
     let s = Scratch::adopt(dir);
     for step in &steps {
         let mut args = step.args.clone();
-        if args[0] == "apply" {
+        // A reader answers each tick's question; with `--yes` each apply
+        // stops where the reader is asked again (R-30), so the step is
+        // the applies it takes, and their output together.
+        let (r, out) = if args[0] == "apply" {
             args.extend(APPLY_FLAGS.iter().map(|f| f.to_string()));
-        }
-        let r = s.run(&args);
+            let mut out = String::new();
+            let mut n = 0;
+            let r = loop {
+                let r = s.run(&args);
+                out.push_str(&format!("{}{}", r.stdout, r.stderr));
+                n += 1;
+                if r.ok || !r.stderr.contains(STOPPED) || n == 5 {
+                    break r;
+                }
+            };
+            (r, out)
+        } else {
+            let r = s.run(&args);
+            let out = format!("{}{}", r.stdout, r.stderr);
+            (r, out)
+        };
         let fails = step.quoted.iter().any(|q| q.starts_with("Error:"));
-        let out = format!("{}{}", r.stdout, r.stderr);
         assert_eq!(
             !r.ok, fails,
             "examples/{name}/{file}: `{}`\n{out}",

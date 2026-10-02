@@ -19,18 +19,6 @@ pub struct Lowered {
     pub secret_outputs: Vec<(String, String)>,
 }
 
-/// `unknowns = strict` (DESIGN.org "Strict mode is first-class"): a plan
-/// that needs a phase boundary is denied. A stuck instance (E §2.7 Rules 2
-/// and 3; a stuck resource rule is a pending group) and a resource rule
-/// that may derive after a boundary (F DR-2 revised; a pending group too,
-/// given to the plan's policy pass) each derive the deny, with the rule,
-/// its head pattern and the nulls as provenance. `allow_stuck(HeadPattern).`
-/// facts relax it per key.
-pub const STRICT_RULES: &str = r#"
-deny "strict: unresolved value at plan time" { rule: r, head: h, nulls: ns } where stuck(r, h, _, ns), not allow_stuck(h)
-deny "strict: a pending group at plan time" { rule: r, head: h, nulls: ns } where may_derive(r, h, ns), not allow_stuck(h)
-"#;
-
 /// `secret_cell(Type, Scope, Key)`: an input or output declared
 /// `secret(T)`. Every value of the cell prints as its label
 /// (`query::Redactor`).
@@ -40,14 +28,7 @@ pub fn lower(program: &Program) -> Result<Lowered> {
     // `type` blocks: their refinements (`crate::refine`).
     let program = &crate::refine::lower_types(program)?;
     reject_pending(&program.statements)?;
-    let strict =
-        crate::stack::config(program).is_ok_and(|s| s.unknowns == crate::stack::Unknowns::Strict);
-    let mut program = apply_decls(program)?;
-    if strict {
-        program
-            .statements
-            .extend(crate::parser::parse_program(STRICT_RULES)?.statements);
-    }
+    let program = apply_decls(program)?;
     // In the future, imports should be handled in a loader before parsing.
     // For now, keep Import statements in the AST but drop them before eval.
     let crate::modules::Expanded {
@@ -58,7 +39,7 @@ pub fn lower(program: &Program) -> Result<Lowered> {
     check_mixed(&expanded)?;
     let expanded = desugar_settings(&expanded)?;
     let (expanded, externs, extern_fns) = drop_metadata(&expanded);
-    let expanded = desugar_resources(&expanded, strict)?;
+    let expanded = desugar_resources(&expanded)?;
     let expanded = desugar_comprehensions(&expanded)?;
     let mut expanded = declassified(lower_contributions(&expanded)?);
     // A stack's config contributes per settings path the program knows.
@@ -1184,7 +1165,7 @@ fn drop_metadata(program: &Program) -> (Program, BTreeSet<Extern>, Vec<crate::as
     (Program { statements }, externs, fns)
 }
 
-fn desugar_resources(program: &Program, strict: bool) -> Result<Program> {
+fn desugar_resources(program: &Program) -> Result<Program> {
     let mut out = Vec::new();
     let mut n = 0;
     // After the program's own statements, so its rules keep their indices
@@ -1193,7 +1174,7 @@ fn desugar_resources(program: &Program, strict: bool) -> Result<Program> {
     for stmt in &program.statements {
         match stmt {
             Stmt::Resource(r) => {
-                reports.extend(unread_field_reports(r, strict, &mut n));
+                reports.extend(unread_field_reports(r, &mut n));
                 out.extend(resource_to_stmts(r.clone())?);
             }
             _ => out.push(stmt.clone()),
@@ -1254,12 +1235,12 @@ pub const UNREAD_FIELD: &str = "a field read found no value: the resource is not
 /// without this read, the field reads after it, and what only they bind:
 /// the block's clauses and guards, the reads before it (so the first read
 /// that fails is the one named). `Xs` are the read's variables `Rest`
-/// binds. Under strict mode the head is a `deny`.
+/// binds.
 ///
 /// A missing object, an instance input or output with no value, a settings
 /// key an environment does not set: those hold a block back on purpose
 /// (a module's resource exists where its inputs are given), and are quiet.
-fn unread_field_reports(r: &Resource, strict: bool, n: &mut usize) -> Vec<Stmt> {
+fn unread_field_reports(r: &Resource, n: &mut usize) -> Vec<Stmt> {
     let Some(body) = &r.body else {
         return Vec::new();
     };
@@ -1349,10 +1330,7 @@ fn unread_field_reports(r: &Resource, strict: bool, n: &mut usize) -> Vec<Stmt> 
         out.push(Stmt::Rule(RuleStmt {
             head: Atom {
                 span: read.span,
-                ..atom(
-                    if strict { "deny" } else { "warn" },
-                    vec![str_term(UNREAD_FIELD), Term::Obj(ctx)],
-                )
+                ..atom("warn", vec![str_term(UNREAD_FIELD), Term::Obj(ctx)])
             },
             body,
         }));

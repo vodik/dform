@@ -69,7 +69,7 @@ the project's name and the dform versions it takes, each provider's source
 and version (Cargo's semver syntax: `"2.1"` is `^2.1`), each stack's
 operational settings, `[stacks.NAME]` for `stacks/NAME.df` over
 `[defaults]`, and globs discovery skips. A stack's settings are a closed
-list: `backend`, `unknowns`, `role`, `approvals`, `audit_sink`,
+list: `backend`, `role`, `approvals`, `audit_sink`,
 `isolated` and `config`; a term is written as a string, `{stack}` the
 stack's name and `{k}` the value of its key `k` (in `backend` and
 `config`), and any other key is an error naming the list. A
@@ -89,7 +89,6 @@ gcp = { source = "providers/gcp" }               # a path under the root
 
 [defaults]
 backend = 'local("state/{stack}")'   # or 's3("bucket", "dform/{stack}", {...})'
-unknowns = "strict"
 lease_duration = "60s"               # an s3 backend's lease (the default)
 lease_renewal = "20s"                # how often its holder renews it (the default)
 
@@ -133,10 +132,34 @@ Apply. A later tick whose plan holds an address no earlier tick listed (a
 pending group's member: `iam.policy[?]` at tick 1, named once the endpoint
 it is built from exists) asks again: its plan is printed, `tick 2:` and
 the report, then `Apply N new deformations to D? [y/N]`, counting the
-addresses no earlier tick listed. `apply plan.json` asks this too; `--yes`
-skips it. A `n` there stops the apply with what the earlier ticks did in
-state; the audit log's `apply_end` says `declined` and the `tick`, and the
-next apply resumes.
+addresses no earlier tick listed. A `n` there stops the apply with what
+the earlier ticks did in state; the audit log's `apply_end` says
+`declined` and the `tick`, and the next apply resumes. An unattended
+apply (`--yes`, `apply plan.json`, `--approval`) has nobody to ask: it
+applies the ticks whose addresses the plan named and stops before the
+first tick that would add one, after writing state: `apply stopped after
+tick 1: tick 2 adds 1 deformation the plan could not name
+(iam.policy[?] on ?db.postgres["orders"].endpoint); run apply again to
+plan them against the world as it now is`. It exits non-zero, nothing
+applied that was not printed, and `apply_end` says `stopped`; the next
+apply plans them as its tick 1, by name. There is no strict mode and no
+resource-level target: a plan that needs a second tick applies tick by
+tick, and a program that wants to apply part of itself is two stacks.
+
+The stack is the unit of partial work. `apply X` in a project applies the
+deployments X reads (`stack_output("platform[env=prod]", ..)`, a name
+written out or built from X's own key, `"platform[env=${env}]"`) first,
+and theirs before them, each a run of its own with its own plan,
+confirmation and state, then X; nothing that reads X. The first line
+says so: `apply shop[env=prod]: platform[env=prod] first, each with its
+own plan and state: shop[env=prod] reads its outputs`, and each run is
+headed `== NAME`. A dependency whose apply fails or is declined stops the
+run before its reader; stacks that read each other are an error naming
+the cycle. A `--set` goes to each stack of the run that declares the
+input (one none declares is the target's error); `--input-file` is the
+target's. A plan file,
+a `--world` fixture and a program outside a project apply only
+themselves.
 
 | Commands | |
 |---|---|
@@ -176,7 +199,6 @@ file (`stacks/demo.df` is `demo`), and its operational settings are
 backend = 'local("state/demo")'   # where state, world and lock live, relative to the
                                   # project root; default dform.state/<name>; or
                                   # s3(...), see "State backends"
-unknowns = "strict"               # or "permissive" (the default); see "Strict mode"
 role = "bootstrap"                # optional: it stays batch; see "Bootstrap and handover"
 approvals = 'jwks("https://...")' # optional: who may approve a plan; see "Approvals"
 audit_sink = "logger -t dform"    # optional: each audit entry to a command; see "The audit log"
@@ -306,8 +328,7 @@ The collision lint: in a keyed stack, a resource whose name-like attribute
 (`name`, `metadata.name`, `bucket`, or a path a provider's schema flags
 `name_like`) has a value no key input flows into gets the same name in
 every deployment, and they collide in a shared account: a warning at the
-field, a deny under `unknowns = "strict"` (a `deny` fact, so `dform why
-'deny(M)'` explains it). The value flows through bindings, interpolation,
+field. The value flows through bindings, interpolation,
 calls, lookups (`settings[env].bucket`), module inputs and refs; a read
 that only gates the resource's block, or feeds another field, does not
 count, and neither does it for `rekey`'s list. `isolated = true` in the
@@ -804,29 +825,6 @@ $ dform plan net --why
   because data/zones.csv:4  zone("us-test-1c", 3)
 ```
 
-Strict mode. `unknowns = "strict"` in the stack's `[stacks.NAME]` refuses a plan that needs a
-phase boundary, exactly Terraform's refusal. It is two generated denies,
-so the refusal has provenance (`why`) and policy can relax it:
-
-```dform
-deny "strict: unresolved value at plan time" { rule: r, head: h, nulls: ns } where stuck(r, h, _, ns), not allow_stuck(h)
-deny "strict: a pending group at plan time" { rule: r, head: h, nulls: ns } where may_derive(r, h, ns), not allow_stuck(h)
-```
-
-The first covers every stuck derivation: a stuck resource rule (a pending
-group), an undetermined policy, and so every deformation held on a null;
-the second a resource rule that may derive after the boundary
-(`may_derive/3`, given to the plan's policy pass). The plan still prints,
-then the violations name each instance's head pattern and nulls, and it
-exits non-zero; `apply` refuses before its first Apply call.
-`allow_stuck("want(\"gke_nodepool\", _)")` (a fact; no rule may derive
-`allow_stuck`) allows one key's boundary. Fresh nulls still flow: a create
-whose document carries `?T["A"].id` of a resource created in the same tick is
-definite, so single-phase plans pass. Strict is the expected default for
-production stacks (`dform.df` is strict); `permissive`, the default, is for
-controller mode and iterative development, where a two-phase plan applies
-tick by tick.
-
 Colour: `--color auto|always|never` (global; `auto`, the default, colours
 when stdout is a terminal and `NO_COLOR` is unset; errors on stderr
 likewise) paints the plan by its semantics: `+` green, `~` yellow, `-` red,
@@ -849,9 +847,10 @@ true`, and with `--why` a `why` array of `{kind, at, text}` (`kind` is
 LABEL, "class": CLASS}` and a secret `{"sensitive": LABEL}`.
 
 `dform query stuck` lists the stuck rule instances. A rule can read
-them too, `stuck(RuleId, HeadPattern, Bindings, Nulls)`: a policy such as
-`deny "strict" { rule: r, on: n } where stuck(r, _, _, n)` refuses any plan
-with a stuck instance. `stuck/4` is derived above every rule that can stick,
+them too, `stuck(RuleId, HeadPattern, Bindings, Nulls)`, and
+`may_derive(RuleId, HeadPattern, Nulls)` (a resource rule that may derive
+after a boundary): a policy such as `deny "one tick" { rule: r, on: n }
+where stuck(r, _, _, n)` refuses any plan with a stuck instance. `stuck/4` is derived above every rule that can stick,
 so a reader must not itself be able to stick (read it into fresh variables
 only) and nothing it derives may feed such a rule; otherwise the program is
 rejected with the negative cycle.
@@ -860,10 +859,11 @@ rejected with the negative cycle.
 order and holds what is pending. At the boundary the results come back as
 world facts, round 0 resolves the nulls they answer, the program is
 re-evaluated and policy is checked again; a deny there stops the run with the
-reason printed. `--max-ticks N` (default 8) bounds the loop:
+reason printed. `--max-ticks N` (default 8) is a safety valve for a loop
+that never settles, not a way to stop early:
 
 ```bash
-cargo run -- -C examples/gke apply                  # two ticks
+cargo run -- -C examples/gke apply                  # asks again at tick 2
 cargo run -- -C examples/gke apply --set zones=1   # one zone: stops after tick 1
 ```
 
@@ -1011,7 +1011,8 @@ values (a null the file carries matches what it has resolved to); every
 deformation the file has not run yet must still be one; a new address is
 allowed only where a pending group the file records derives it (its
 `want` unifies with the group's head, and a firing of the group's rule
-holds every binding the group recorded), and a deposed
+holds every binding the group recorded), and even then the apply stops
+before that tick, as every unattended apply does; and a deposed
 object's delete the tick after its `+/-` replacement. It prints the difference
 and stops before applying anything of that tick. So with a plan file, drift
 anywhere stops the run at the boundary, where a plain `apply` reports it and
@@ -1023,8 +1024,8 @@ between plan and apply is refused and the file never carries the bytes:
 ```bash
 G=examples/gke/stacks/gke_two_phase.df
 cargo run -- dev --world w.json plan $G --out plan.json
-cargo run -- apply plan.json                          # the file's delta, two ticks
-# the world moves after tick 1: tick 2 refuses
+cargo run -- apply plan.json                          # tick 1; tick 2's nodepools it could not name
+# the world moves after tick 1: the file refuses
 cargo run -- dev --chaos 'mutate=gke_cluster["pngu"].name="other"' apply plan.json
 ```
 

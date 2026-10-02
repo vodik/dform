@@ -65,8 +65,8 @@ resource net.vpc main {
 #   $ dform apply
 #   apply: complete
 #
-# (It ran in two ticks, two rounds of changes; section 10 is why.) The
-# unknown is now the id the fake cloud gave the network:
+# (It ran in two ticks, two rounds of changes, asking before each;
+# section 10 is why.) The unknown is now the id the fake cloud gave it:
 #
 #   $ dform query 'net.subnet["public"].vpc_id'
 #   "net.vpc:main"
@@ -317,12 +317,17 @@ resource net.route "${a}-to-${b}" {
 #   ? iam.policy[?] x unknown, on ?db.postgres["orders"].endpoint, resolves after tick 1
 #
 # Apply runs in ticks: the first makes everything it can, then dform
-# plans again with what it learned, and the second makes the rest:
+# plans again with what it learned, prints the second tick's plan with
+# the policy's real name, and asks again before making it:
 #
 #   $ dform apply tour env=prod
 #   tick 2:
 #   + iam.policy["connect-orders.db.fake"]
 #   apply: complete
+#
+# Nobody approves a count of "unknown". With `--yes`, nobody reads the
+# second plan, so apply stops before it, and the next apply makes the
+# policy from a plan that names it.
 #
 #   $ dform plan tour env=prod
 #   stack tour is undeformed

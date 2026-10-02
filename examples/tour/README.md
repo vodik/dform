@@ -5,7 +5,7 @@ to what Terraform cannot say: policy as rules in the program, `why` for any valu
 and resources named by values only apply learns. On a fake cloud: no credentials.
 ```bash
 dform plan                                  # everything is a create; unknowns marked ?
-dform apply                                 # asks, then two ticks
+dform apply                                 # asks, then asks again at tick 2
 dform plan tour env=prod                    # prod is a deployment of its own
 dform plan --set public_db=true             # refused by a deny, on purpose
 dform why 'net.vpc["main"].tags.team'       # the tag's rule, file and line
