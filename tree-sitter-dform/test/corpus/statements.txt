@@ -945,3 +945,72 @@ names(name) where zone({ name })
             (object
               (object_field
                 (identifier)))))))))
+
+================================================================================
+A copy's block gives rows
+================================================================================
+
+instance network blue {
+  cidr = "10.0.0.0/16"
+  zone("a", 0)
+  zone(z, n) where az(z, n)
+  zone from csv("zones.csv") where env == "prod"
+}
+use zones { zone("b", 1) }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (instance
+    (dotted_name
+      (identifier))
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))
+      (fact
+        (call
+          (identifier)
+          (arguments
+            (string
+              (string_content))
+            (integer))))
+      (rule
+        (call
+          (identifier)
+          (arguments
+            (identifier)
+            (identifier)))
+        (body
+          (atom_literal
+            (call
+              (identifier)
+              (arguments
+                (identifier)
+                (identifier))))))
+      (input_relation
+        (identifier)
+        (call
+          (identifier)
+          (arguments
+            (string
+              (string_content))))
+        (body
+          (comparison
+            (identifier)
+            (string
+              (string_content)))))))
+  (use
+    (dotted_name
+      (identifier))
+    (block
+      (fact
+        (call
+          (identifier)
+          (arguments
+            (string
+              (string_content))
+            (integer)))))))

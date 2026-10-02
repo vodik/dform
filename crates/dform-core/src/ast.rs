@@ -266,6 +266,10 @@ pub struct Instance {
     pub module: String,
     pub name: String,
     pub inputs: Vec<(String, Term, Span)>,
+    /// The rows the block gives the module's relation inputs (R-55): its
+    /// `p(..) [where B]` and `p from TERM` entries, lowered in the user's
+    /// scope, each head the module's own name `p`.
+    pub rows: Vec<Stmt>,
     /// The clause and the block's reads: what each input's contribution
     /// is derived under.
     pub body: Option<Vec<Lit>>,

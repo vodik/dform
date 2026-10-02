@@ -429,7 +429,19 @@
       "required": false,
       "types": [
         {
+          "type": "fact",
+          "named": true
+        },
+        {
           "type": "field",
+          "named": true
+        },
+        {
+          "type": "input_relation",
+          "named": true
+        },
+        {
+          "type": "rule",
           "named": true
         }
       ]

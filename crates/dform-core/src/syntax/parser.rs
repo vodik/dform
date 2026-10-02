@@ -840,7 +840,7 @@ impl<'a> Parser<'a> {
                     p.bump();
                     p.expect_word()?;
                 }
-                p.opt_block()?;
+                p.opt_copy_block()?;
                 p.opt_clause()
             }),
             // `instance PATH NAME [{ .. }] [where B]`: a named copy (R-65).
@@ -860,7 +860,7 @@ impl<'a> Parser<'a> {
                     );
                     return Err(Bail);
                 }
-                p.opt_block()?;
+                p.opt_copy_block()?;
                 p.opt_clause()
             }),
             RESOURCE_KW => self.simple(RESOURCE, |p| {
@@ -1098,6 +1098,13 @@ impl<'a> Parser<'a> {
     /// `{ entry* }` of a resource, settings, instance or provider:
     /// entries separated by a newline or a comma. Its clause follows it.
     fn block(&mut self) -> P {
+        self.block_of(false)
+    }
+
+    /// A block, and for a `use` or an `instance` (`rows`) the rows of the
+    /// relations its module takes (R-55): `p(t, ..) [where B]`, or `p from
+    /// TERM [where B]`.
+    fn block_of(&mut self, rows: bool) -> P {
         self.start(BLOCK);
         let open = self.nth_index(0);
         self.expect(L_BRACE)?;
@@ -1123,7 +1130,22 @@ impl<'a> Parser<'a> {
                 if p.at(EOF) {
                     return p.err_expected("`}`");
                 }
-                p.assign()?;
+                if rows && p.at_head() {
+                    p.rule()?;
+                } else if rows
+                    && word(p.nth(0))
+                    && p.raw(1) == IDENT
+                    && p.nth_text(1) == "from"
+                {
+                    p.start(INPUT_RELATION);
+                    p.bump();
+                    p.bump();
+                    p.term()?;
+                    p.opt_where_body()?;
+                    p.finish();
+                } else {
+                    p.assign()?;
+                }
                 p.sep()?;
             }
             Ok(())
@@ -1138,6 +1160,15 @@ impl<'a> Parser<'a> {
     fn opt_block(&mut self) -> P {
         if self.at(L_BRACE) {
             self.block()
+        } else {
+            Ok(())
+        }
+    }
+
+    /// A `use` or `instance` block, which may hold rows (R-55).
+    fn opt_copy_block(&mut self) -> P {
+        if self.at(L_BRACE) {
+            self.block_of(true)
         } else {
             Ok(())
         }

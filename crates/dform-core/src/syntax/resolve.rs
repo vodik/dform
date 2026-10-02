@@ -2725,14 +2725,100 @@ impl<'u> Lowerer<'u> {
         }
         let values: Vec<&Term> = inputs.iter().map(|(_, v, _)| v).collect();
         self.check_bound(&rc, &body, &values)?;
+        let rows = match node(n, BLOCK) {
+            Some(block) => self.block_rows(&block, &module, scope, outer)?,
+            None => Vec::new(),
+        };
         Ok(Stmt::Instance(Instance {
             module,
             name,
             inputs,
+            rows,
             body: (!body.is_empty()).then_some(body),
             clause: (!clause.is_empty()).then_some(clause),
             span,
         }))
+    }
+
+    /// The rows a `use` or `instance` block gives the relations its
+    /// module takes, `input p` (R-55): `p(t, ..) [where B]`, a rule in
+    /// this scope, and `p from FORMAT(..) [where B]`, a table, its columns
+    /// the module's `decl p`. Each head is the module's own `p`, made the
+    /// copy's by `modules`.
+    fn block_rows(
+        &mut self,
+        block: &SyntaxNode,
+        module: &str,
+        scope: usize,
+        outer: &Rc,
+    ) -> L<Vec<Stmt>> {
+        let Some(inner) = self.decls.modules.get(module).map(|m| m.scope) else {
+            return Ok(Vec::new());
+        };
+        let takes = self.decls.scopes[inner].relation_inputs.clone();
+        let mut out = Vec::new();
+        let mut failed = false;
+        for n in block
+            .children()
+            .filter(|c| matches!(c.kind(), RULE | FACT | INPUT_RELATION))
+        {
+            let span = self.span(&n);
+            let pred = match n.kind() {
+                INPUT_RELATION => word_text(&n, 0),
+                _ => n
+                    .children()
+                    .find(|c| c.kind() == CALL)
+                    .and_then(|c| self.callee(&c))
+                    .unwrap_or_default(),
+            };
+            if !takes.contains(&pred) {
+                let mut d = Diagnostic::error(span, format!("{module} takes no relation {pred}"));
+                d = if takes.is_empty() {
+                    d.with_note(format!("{module} declares no relation input, `input p`"))
+                } else {
+                    d.with_note(format!(
+                        "the relations it takes: {}",
+                        takes.iter().cloned().collect::<Vec<_>>().join(", ")
+                    ))
+                };
+                self.diags.push(d);
+                failed = true;
+                continue;
+            }
+            let r = match n.kind() {
+                INPUT_RELATION => (|| {
+                    let source = terms(&n).next().ok_or(Skip)?;
+                    if source.kind() == CALL && self.callee(&source).as_deref() == Some("facts") {
+                        return self.error(
+                            span,
+                            format!(
+                                "`{pred} from facts(..)` in a block: a block gives rows, \
+                                 `{pred}(..)`, or a table, `{pred} from csv(..)`"
+                            ),
+                        );
+                    }
+                    let Some(decl) = self.decls.scopes[inner].decl_nodes.get(&pred).cloned() else {
+                        return self.error(
+                            span,
+                            format!(
+                                "{pred} from ..: {module} declares no columns for {pred}, \
+                                 `decl {pred}(a: T, ..)`"
+                            ),
+                        );
+                    };
+                    let cols = self.table_columns(&pred, &decl)?;
+                    let mut rc = self.rc(&n, scope, outer);
+                    let body = self.opt_body(&mut rc, &n)?;
+                    self.table(&mut rc, &pred, cols, &source, body, span)
+                })(),
+                _ => self.rule(&n, scope, outer),
+            };
+            match r {
+                Ok(stmts) => out.extend(stmts),
+                Err(Skip) => failed = true,
+            }
+        }
+        if failed { Err(Skip) } else { Ok(out) }
     }
 
     /// `resource T n { f = t ... } where B` and `settings e { ... } where B`.

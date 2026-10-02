@@ -523,6 +523,11 @@ impl Cx<'_> {
                 defined.insert(refine_pred(&l.name), (1, i.span));
             }
         }
+        // A relation the copy takes is its own, its rows its user's.
+        for e in &iface.relations {
+            defined.insert(e.pred.clone(), (e.arity, e.span));
+        }
+        out.extend(instance_rows(u, scope, &iface));
         let names = Names::private(scope, defined);
         for p in names.map.keys() {
             let help = match used {
@@ -789,6 +794,39 @@ fn instance_inputs(
             );
         }
     }
+}
+
+/// The rows a `use` or `instance` block gives the relations its module
+/// takes (R-55), written in the user's scope: each head is the copy's own
+/// relation, `scope::p`, and with a clause each row holds only while it
+/// does, as the copy does.
+fn instance_rows(u: &crate::ast::Instance, scope: &str, iface: &Interface) -> Vec<Stmt> {
+    let takes: BTreeSet<&str> = iface.relations.iter().map(|e| e.pred.as_str()).collect();
+    let clause = u.clause.clone().unwrap_or_default();
+    // Rows written as facts and as rules are one relation.
+    let mixed = iface.relations.iter().map(|e| {
+        Stmt::Mixed(crate::ast::Extern {
+            pred: private_name(scope, &e.pred),
+            ..e.clone()
+        })
+    });
+    u.rows
+        .iter()
+        .cloned()
+        .map(|st| match st {
+            Stmt::Fact(mut a) if takes.contains(a.pred.as_str()) => {
+                a.pred = private_name(scope, &a.pred);
+                fact_or_rule(a, clause.clone())
+            }
+            Stmt::Rule(mut r) if takes.contains(r.head.pred.as_str()) => {
+                r.head.pred = private_name(scope, &r.head.pred);
+                r.body.splice(0..0, clause.iter().cloned());
+                Stmt::Rule(r)
+            }
+            other => other,
+        })
+        .chain(mixed)
+        .collect()
 }
 
 /// The checks on a component's interface, once per component: an input

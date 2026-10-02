@@ -310,7 +310,7 @@ export default grammar({
       'instance',
       field('component', $.dotted_name),
       field('name', $._name),
-      optional(field('body', $.block)),
+      optional(field('body', alias($.copy_block, $.block))),
       optional($.clause),
     ),
 
@@ -321,8 +321,30 @@ export default grammar({
       'use',
       field('path', $.dotted_name),
       optional(seq('as', field('name', $._word))),
-      optional(field('body', $.block)),
+      optional(field('body', alias($.copy_block, $.block))),
       optional($.clause),
+    ),
+
+    // A `use` or `instance` block: its inputs, and the rows of the
+    // relations its module takes, `p(t, ..) [where B]` or `p from TERM
+    // [where B]` (R-55).
+    copy_block: $ => seq(
+      '{',
+      repeat($._newline),
+      optional(choice(
+        seq(repeat(seq($._copy_entry, $._separator)), $._copy_entry),
+        repeat1(seq($._copy_entry, $._separator)),
+      )),
+      '}',
+    ),
+
+    _copy_entry: $ => choice($.field, $.rule, $.fact, alias($.rows_from, $.input_relation)),
+
+    rows_from: $ => seq(
+      field('name', $._word),
+      'from',
+      field('source', $._term),
+      optional(seq('where', field('condition', $._body))),
     ),
 
     statement_block: $ => seq(
