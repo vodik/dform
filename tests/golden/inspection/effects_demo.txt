@@ -99,6 +99,7 @@ stack:
     input env
     k8s.cluster.id
     k8s.cluster.private_api
+    let.cfg
     net.vpc.cidr
     net.vpc.id
     output database.main.iam_need
@@ -123,6 +124,7 @@ stack:
     (k8s.cluster, ca_cert)
     (k8s.cluster, id)
     (k8s.nodepool, id)
+    (let, cfg)
     (net.route, id)
     (net.subnet, id)
     (net.vpc, id)

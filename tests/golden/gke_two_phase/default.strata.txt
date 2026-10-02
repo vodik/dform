@@ -1,7 +1,7 @@
 exit: ok
 -- stdout --
-== examples/gke/stacks/gke_two_phase.df: 131 nodes, 251 edges (122 negative)
-   STRATIFIED, 6 strata
+== examples/gke/stacks/gke_two_phase.df: 133 nodes, 253 edges (124 negative)
+   STRATIFIED, 8 strata
    stratum 0:
      (arg, google.client_config, access_token)
      (arg, google.secret_manager_secret_version, secret_data)
@@ -42,6 +42,38 @@ exit: ok
      (attr, settings, project_name)
      (attr, settings, region)
    stratum 2:
+     (arg, k8s.deployment, id)
+     (arg, k8s.deployment, image)
+     (arg, k8s.deployment, namespace)
+     (arg, k8s.deployment, replicas)
+     (arg, k8s.deployment, uid)
+     (arg, k8s.secret, data)
+     (arg, k8s.secret, id)
+     (arg, k8s.secret, namespace)
+     (arg, k8s.secret, uid)
+     (arg, let, cfg)
+     (attr, google_compute_network_peering, id)
+     (attr, google_monitoring_dashboard, id)
+     (attr, k8s.namespace, id)
+     (attr, k8s.namespace, uid)
+     (want, k8s.deployment)
+     (want, k8s.secret)
+     __refine_zones
+     env
+     zones
+   stratum 3:
+     (attr, k8s.deployment, id)
+     (attr, k8s.deployment, image)
+     (attr, k8s.deployment, namespace)
+     (attr, k8s.deployment, replicas)
+     (attr, k8s.deployment, uid)
+     (attr, k8s.secret, data)
+     (attr, k8s.secret, id)
+     (attr, k8s.secret, namespace)
+     (attr, k8s.secret, uid)
+     (attr, let, cfg)
+     __lc_1
+   stratum 4:
      (arg, gke_cluster, ca_certificate)
      (arg, gke_cluster, deletion_protection)
      (arg, gke_cluster, endpoint)
@@ -50,6 +82,7 @@ exit: ok
      (arg, gke_cluster, master_control_plane_cidr)
      (arg, gke_cluster, name)
      (arg, gke_cluster, network_id)
+     (arg, gke_cluster, node_locations)
      (arg, gke_cluster, project_id)
      (arg, gke_cluster, zones)
      (arg, google_compute_address, id)
@@ -62,31 +95,12 @@ exit: ok
      (arg, google_compute_subnetwork, network)
      (arg, google_compute_subnetwork, project)
      (arg, google_compute_subnetwork, region)
-     (arg, k8s.deployment, id)
-     (arg, k8s.deployment, image)
-     (arg, k8s.deployment, namespace)
-     (arg, k8s.deployment, replicas)
-     (arg, k8s.deployment, uid)
-     (arg, k8s.secret, data)
-     (arg, k8s.secret, id)
-     (arg, k8s.secret, namespace)
-     (arg, k8s.secret, uid)
-     (attr, google_compute_network_peering, id)
-     (attr, google_monitoring_dashboard, id)
-     (attr, k8s.namespace, id)
-     (attr, k8s.namespace, uid)
      (want, gke_cluster)
      (want, google_compute_address)
      (want, google_compute_subnetwork)
-     (want, k8s.deployment)
-     (want, k8s.secret)
-     __refine_zones
      cfg
-     env
      project
-     zones
-   stratum 3:
-     (arg, gke_cluster, node_locations)
+   stratum 5:
      (attr, gke_cluster, ca_certificate)
      (attr, gke_cluster, deletion_protection)
      (attr, gke_cluster, endpoint)
@@ -95,6 +109,7 @@ exit: ok
      (attr, gke_cluster, master_control_plane_cidr)
      (attr, gke_cluster, name)
      (attr, gke_cluster, network_id)
+     (attr, gke_cluster, node_locations)
      (attr, gke_cluster, project_id)
      (attr, gke_cluster, zones)
      (attr, google_compute_address, id)
@@ -107,17 +122,7 @@ exit: ok
      (attr, google_compute_subnetwork, network)
      (attr, google_compute_subnetwork, project)
      (attr, google_compute_subnetwork, region)
-     (attr, k8s.deployment, id)
-     (attr, k8s.deployment, image)
-     (attr, k8s.deployment, namespace)
-     (attr, k8s.deployment, replicas)
-     (attr, k8s.deployment, uid)
-     (attr, k8s.secret, data)
-     (attr, k8s.secret, id)
-     (attr, k8s.secret, namespace)
-     (attr, k8s.secret, uid)
-     __lc_1
-   stratum 4:
+   stratum 6:
      (arg, gke_cluster, subnetwork_id)
      (arg, gke_nodepool, cluster)
      (arg, gke_nodepool, id)
@@ -125,13 +130,12 @@ exit: ok
      (arg, gke_nodepool, min)
      (arg, gke_nodepool, zone)
      (arg, google_compute_address, subnetwork_id)
-     (attr, gke_cluster, node_locations)
      (want, gke_nodepool)
      __ref_dep
      deny
      provider_config
      zone_count
-   stratum 5:
+   stratum 7:
      (attr, gke_cluster, subnetwork_id)
      (attr, gke_nodepool, cluster)
      (attr, gke_nodepool, id)

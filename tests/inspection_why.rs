@@ -69,9 +69,9 @@ fn why_an_attribute_shows_every_contribution() {
     assert!(out.contains(r#"with Env = "prod""#), "{out}");
     assert!(out.contains("input --set env=prod"), "{out}");
     assert!(out.contains("(see above)"), "{out}");
-    // The pack's tag, the module's tags, the instance's input and the
-    // stack input --set gives.
-    assert_eq!(out.matches("[rank normal, owner").count(), 5, "{out}");
+    // The pack's tag, the module's tags, the instance's input, the stack
+    // input --set gives and `let cfg`'s row (R-3).
+    assert_eq!(out.matches("[rank normal, owner").count(), 6, "{out}");
 }
 
 #[test]

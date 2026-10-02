@@ -109,6 +109,29 @@ fn bodies(program: &Program) -> Vec<(Option<&Atom>, &[Lit], Span)> {
         .collect()
 }
 
+/// An atom's node in the predicate graph: its predicate, but for a cell of
+/// the aggregate that is not a resource's (a `let`, an input), whose
+/// contributions (`arg`) and read (`attr`) are one node per cell.
+fn node(a: &Atom) -> String {
+    fn s(t: &Term) -> Option<&str> {
+        match t {
+            Term::Val(crate::value::Value::Str(x)) => Some(x),
+            _ => None,
+        }
+    }
+    match (a.pred.as_str(), a.args.as_slice()) {
+        ("arg", [t, scope, k, _, _]) | ("attr", [t, scope, k, _])
+            if s(t).is_some_and(crate::transform::is_pseudo_type) =>
+        {
+            match (s(t), s(scope), s(k)) {
+                (Some(t), Some(scope), Some(k)) => format!("({t}, {scope}, {k})"),
+                _ => a.pred.clone(),
+            }
+        }
+        _ => a.pred.clone(),
+    }
+}
+
 /// The compile-time rules: an extern is not defined by a rule, not negated,
 /// not in a recursive rule, called with its arity, and its `+` arguments
 /// are bound by the literals before it.
@@ -119,24 +142,27 @@ pub fn check(program: &Program, fns: &[ExternFn]) -> Result<()> {
     let by: BTreeMap<&str, &ExternFn> = fns.iter().map(|f| (f.name.as_str(), f)).collect();
     let mut diags = Vec::new();
     // The predicate graph: body predicate -> heads of the rules reading it.
-    let mut edges: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+    let mut edges: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for (head, body, _) in bodies(program) {
         let Some(h) = head else { continue };
         for l in body {
             if let Lit::Pos(a) | Lit::Not(a) = l {
-                edges.entry(&a.pred).or_default().insert(&h.pred);
+                edges.entry(node(a)).or_default().insert(node(h));
             }
         }
     }
-    let reaches = |from: &str, to: &str| {
+    let reaches = |from: &Atom, to: &Atom| {
+        let to = node(to);
         let mut seen = BTreeSet::new();
-        let mut stack = vec![from];
+        let mut stack = vec![node(from)];
         while let Some(p) = stack.pop() {
             if p == to {
                 return true;
             }
-            if seen.insert(p) {
-                stack.extend(edges.get(p).into_iter().flatten().copied());
+            if let Some(next) = edges.get(&p)
+                && seen.insert(p)
+            {
+                stack.extend(next.iter().cloned());
             }
         }
         false
@@ -197,8 +223,7 @@ pub fn check(program: &Program, fns: &[ExternFn]) -> Result<()> {
                     if let Some(h) = head
                         && let Some(p) = body.iter().find_map(|l| match l {
                             Lit::Pos(b) | Lit::Not(b)
-                                if !by.contains_key(b.pred.as_str())
-                                    && reaches(&h.pred, &b.pred) =>
+                                if !by.contains_key(b.pred.as_str()) && reaches(h, b) =>
                             {
                                 Some(b.pred.as_str())
                             }

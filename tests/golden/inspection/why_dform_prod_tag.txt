@@ -25,9 +25,14 @@ attr("net.vpc", "network.main::vpc", "tags", {component: "network", env: "prod",
   │                        by r23: arg("input", "network.main", "vpc_net", inet(VpcNet), "normal") :- cfg(Cfg), attr("settings", Cfg, "network.main.vpc_net", VpcNet)
   │                        with Cfg = "prod", VpcNet = "10.20.0.0/16"
   │                        ├─ cfg("prod")
-  │                        │    by r16: cfg(Env) :- env(Env)
-  │                        │    with Env = "prod"
-  │                        │    └─ env("prod")   (see above)
+  │                        │    by r97: cfg(V) :- attr("let", "", "cfg", V)
+  │                        │    with V = "prod"
+  │                        │    └─ attr("let", "", "cfg", "prod")
+  │                        │         by Σattr: attribute aggregate (lub_ranked, E §2.5) over 1 contribution
+  │                        │         └─ arg("let", "", "cfg", "prod", "normal")   [rank normal, owner r16 (examples/demo/stacks/dform.df:42:1)]
+  │                        │              by r16: arg("let", "", "cfg", Env, "normal") :- env(Env)
+  │                        │              with Env = "prod"
+  │                        │              └─ env("prod")   (see above)
   │                        └─ attr("settings", "prod", "network.main.vpc_net", "10.20.0.0/16")
   │                             by Σattr: attribute aggregate (lub_ranked, E §2.5) over 2 contributions
   │                             ├─ arg("settings", "prod", "network.main.vpc_net", "10.50.0.0/16", "default")   [rank default, owner r9 (examples/demo/stacks/dform.df:34:3)]
@@ -37,8 +42,8 @@ attr("net.vpc", "network.main::vpc", "tags", {component: "network", env: "prod",
   │                             │         └─ fact, compiler (settings_row)
   │                             │         ... 7 more alternatives (--all)
   │                             │         ... further alternatives dropped at 8
-  │                             └─ arg("settings", "prod", "network.main.vpc_net", "10.20.0.0/16", "normal")   [rank normal, owner r111 (examples/demo/stacks/dform.df:12:58)]
-  │                                  by r111: arg("settings", Env, "network.main.vpc_net", Value, "normal") :- env(Env), Path1 = format("config/dform/%s.yaml", Env), table.yaml.stack.config(Path1, At, "network.main.vpc_net", Value)
+  │                             └─ arg("settings", "prod", "network.main.vpc_net", "10.20.0.0/16", "normal")   [rank normal, owner r112 (examples/demo/stacks/dform.df:12:58)]
+  │                                  by r112: arg("settings", Env, "network.main.vpc_net", Value, "normal") :- env(Env), Path1 = format("config/dform/%s.yaml", Env), table.yaml.stack.config(Path1, At, "network.main.vpc_net", Value)
   │                                  with At = "config/dform/prod.yaml:5", Env = "prod", Path1 = "config/dform/prod.yaml", Value = "10.20.0.0/16"
   │                                  ├─ table.yaml.stack.config("config/dform/prod.yaml", "config/dform/prod.yaml:5", "network.main.vpc_net", "10.20.0.0/16")   fact, config/dform/prod.yaml:5
   │                                  └─ env("prod")   (see above)

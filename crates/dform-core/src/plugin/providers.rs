@@ -518,6 +518,7 @@ impl Providers {
             // Depth first from the rule: the chain of predicates to the
             // first thing it reads that the provider serves.
             let mut seen = BTreeSet::new();
+            let mut cells = BTreeSet::new();
             let mut stack: Vec<(&Atom, &[Lit], Vec<String>)> = vec![(head, body, Vec::new())];
             let mut found = None;
             'search: while let Some((h, b, path)) = stack.pop() {
@@ -532,6 +533,24 @@ impl Providers {
                     if let Some(what) = served(a) {
                         found = Some((path.clone(), what));
                         break 'search;
+                    }
+                    // A cell that is not a resource's (a `let`, an input):
+                    // what contributes to it.
+                    if a.pred == "attr"
+                        && let [t, scope, k, _] = a.args.as_slice()
+                        && text(t).is_some_and(|t| crate::transform::is_pseudo_type(&t))
+                        && cells.insert((t, scope, k))
+                    {
+                        // The cell is named by the reader that reads it.
+                        for (h2, b2) in &rules {
+                            if h2.pred == "arg"
+                                && h2.args.len() == 5
+                                && (&h2.args[0], &h2.args[1], &h2.args[2]) == (t, scope, k)
+                            {
+                                stack.push((h2, b2, path.clone()));
+                            }
+                        }
+                        continue;
                     }
                     if seen.insert(a.pred.as_str()) {
                         let mut p = path.clone();

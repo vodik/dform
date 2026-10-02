@@ -1,7 +1,7 @@
 exit: ok
 -- stdout --
-== examples/pngu/stacks/pngu.df: 161 nodes, 449 edges (297 negative)
-   STRATIFIED, 6 strata
+== examples/pngu/stacks/pngu.df: 163 nodes, 451 edges (299 negative)
+   STRATIFIED, 8 strata
    stratum 0:
      (arg, google.client_config, access_token)
      (arg, google.secret_manager_secret_version, secret_data)
@@ -53,6 +53,20 @@ exit: ok
      (attr, settings, regional_proxy_cidr)
      peering
    stratum 2:
+     (arg, let, cfg)
+     (arg, output, active_env)
+     (attr, gke_nodepool, id)
+     (attr, k8s.deployment, id)
+     (attr, k8s.deployment, uid)
+     (attr, k8s.namespace, id)
+     (attr, k8s.namespace, uid)
+     (attr, k8s.secret, id)
+     (attr, k8s.secret, uid)
+     env
+   stratum 3:
+     (attr, let, cfg)
+     (attr, output, active_env)
+   stratum 4:
      (arg, alert_metrics_pack, enable_standard_gke_alerts)
      (arg, alert_metrics_pack, notification_channel_display_name)
      (arg, alert_metrics_pack, notification_channel_type)
@@ -96,15 +110,7 @@ exit: ok
      (arg, google_monitoring_dashboard, dashboard_json)
      (arg, google_monitoring_dashboard, id)
      (arg, google_monitoring_dashboard, project)
-     (arg, output, active_env)
      (arg, output, project_id)
-     (attr, gke_nodepool, id)
-     (attr, k8s.deployment, id)
-     (attr, k8s.deployment, uid)
-     (attr, k8s.namespace, id)
-     (attr, k8s.namespace, uid)
-     (attr, k8s.secret, id)
-     (attr, k8s.secret, uid)
      (want, alert_metrics_pack)
      (want, gke_cluster)
      (want, google_compute_address)
@@ -112,10 +118,9 @@ exit: ok
      (want, google_compute_subnetwork)
      (want, google_monitoring_dashboard)
      cfg
-     env
      provider_config
      provider_expect_account
-   stratum 3:
+   stratum 5:
      (attr, alert_metrics_pack, enable_standard_gke_alerts)
      (attr, alert_metrics_pack, notification_channel_display_name)
      (attr, alert_metrics_pack, notification_channel_type)
@@ -159,14 +164,13 @@ exit: ok
      (attr, google_monitoring_dashboard, dashboard_json)
      (attr, google_monitoring_dashboard, id)
      (attr, google_monitoring_dashboard, project)
-     (attr, output, active_env)
      (attr, output, project_id)
      deny
-   stratum 4:
+   stratum 6:
      (arg, gke_cluster, subnetwork_id)
      (arg, google_compute_address, subnetwork_id)
      __ref_dep
-   stratum 5:
+   stratum 7:
      (attr, gke_cluster, subnetwork_id)
      (attr, google_compute_address, subnetwork_id)
 -- stderr --

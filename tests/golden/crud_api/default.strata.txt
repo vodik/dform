@@ -1,13 +1,14 @@
 exit: ok
 -- stdout --
-== examples/crud-api/stacks/crud_api.df: 224 nodes, 1427 edges (366 negative)
-   STRATIFIED, 15 strata
+== examples/crud-api/stacks/crud_api.df: 252 nodes, 1455 edges (394 negative)
+   STRATIFIED, 24 strata
    stratum 0:
      (arg, google_sql_database, instance)
      (arg, google_sql_database, name)
      (arg, input, env)
      (arg, input, region)
      (arg, input, replicas)
+     (arg, let, active)
      (arg, settings, db.availability)
      (arg, settings, db.tier)
      (want, google_sql_database)
@@ -19,15 +20,11 @@ exit: ok
      (want, k8s.persistent_volume_claim)
      (want, k8s.service_account)
      (want, k8s.stateful_set)
-     active
      auto_reconcile
      cloud_attr
      drift
      identity
      input
-     live
-     live_image
-     live_schema
      other
      owned_label
      random.password
@@ -51,7 +48,6 @@ exit: ok
      (arg, k8s.ingress, metadata)
      (arg, k8s.ingress, spec)
      (arg, k8s.ingress, status)
-     (arg, k8s.job, status)
      (arg, k8s.namespace, metadata)
      (arg, k8s.namespace, spec)
      (arg, k8s.namespace, status)
@@ -63,31 +59,24 @@ exit: ok
      (arg, k8s.stateful_set, metadata)
      (arg, k8s.stateful_set, spec)
      (arg, k8s.stateful_set, status)
+     (arg, let, digest)
+     (arg, let, schema)
      (attr, google_sql_database, instance)
      (attr, google_sql_database, name)
      (attr, input, env)
      (attr, input, region)
      (attr, input, replicas)
+     (attr, let, active)
      (attr, settings, db.availability)
      (attr, settings, db.tier)
      (want, google_sql_user)
-     (want, k8s.job)
      (want, k8s.secret)
-     digest
-     next
-     released_image
-     rollout
-     schema
    stratum 2:
      (arg, google_compute_network, auto_create_subnetworks)
      (arg, google_compute_network, id)
      (arg, google_compute_network, name)
-     (arg, google_sql_database_instance, database_version)
-     (arg, google_sql_database_instance, deletion_protection)
-     (arg, google_sql_database_instance, id)
-     (arg, google_sql_database_instance, name)
-     (arg, google_sql_database_instance, private_ip_address)
-     (arg, google_sql_database_instance, region)
+     (arg, let, cfg)
+     (arg, let, live)
      (attr, google_sql_database, id)
      (attr, google_sql_user, id)
      (attr, google_sql_user, instance)
@@ -103,7 +92,6 @@ exit: ok
      (attr, k8s.ingress, metadata)
      (attr, k8s.ingress, spec)
      (attr, k8s.ingress, status)
-     (attr, k8s.job, status)
      (attr, k8s.namespace, metadata)
      (attr, k8s.namespace, spec)
      (attr, k8s.namespace, status)
@@ -115,130 +103,179 @@ exit: ok
      (attr, k8s.stateful_set, metadata)
      (attr, k8s.stateful_set, spec)
      (attr, k8s.stateful_set, status)
+     (attr, let, digest)
+     (attr, let, schema)
      (want, google_compute_network)
-     (want, google_sql_database_instance)
      __refine_replicas
-     cfg
+     active
      env
      region
      replicas
    stratum 3:
-     (arg, input, app.blue::color)
-     (arg, input, app.blue::image)
-     (arg, input, app.blue::namespace)
-     (arg, input, app.blue::replicas)
-     (arg, input, app.blue::schema)
-     (arg, input, app.green::color)
-     (arg, input, app.green::image)
-     (arg, input, app.green::namespace)
-     (arg, input, app.green::replicas)
-     (arg, input, app.green::schema)
-     (arg, k8s.job, metadata)
      (arg, k8s.secret, metadata)
+     (arg, let, next)
+     (arg, let, released_image)
      (attr, google_compute_network, auto_create_subnetworks)
      (attr, google_compute_network, id)
      (attr, google_compute_network, name)
+     (attr, let, cfg)
+     (attr, let, live)
+     digest
+     schema
+   stratum 4:
+     (arg, google_sql_database_instance, database_version)
+     (arg, google_sql_database_instance, deletion_protection)
+     (arg, google_sql_database_instance, id)
+     (arg, google_sql_database_instance, name)
+     (arg, google_sql_database_instance, private_ip_address)
+     (arg, google_sql_database_instance, region)
+     (arg, google_sql_database_instance, settings)
+     (arg, let, live_image)
+     (arg, let, live_schema)
+     (attr, k8s.secret, metadata)
+     (attr, let, next)
+     (attr, let, released_image)
+     (want, google_sql_database_instance)
+     cfg
+     live
+   stratum 5:
+     (arg, k8s.job, metadata)
+     (arg, k8s.job, spec)
+     (arg, k8s.job, status)
      (attr, google_sql_database_instance, database_version)
      (attr, google_sql_database_instance, deletion_protection)
      (attr, google_sql_database_instance, id)
      (attr, google_sql_database_instance, name)
      (attr, google_sql_database_instance, private_ip_address)
      (attr, google_sql_database_instance, region)
-     migrated
-     run
-   stratum 4:
-     (arg, google_sql_database_instance, settings)
+     (attr, google_sql_database_instance, settings)
+     (attr, let, live_image)
+     (attr, let, live_schema)
+     (want, k8s.job)
+     next
+     released_image
+   stratum 6:
      (arg, k8s.secret, stringData)
+     (arg, let, rollout)
+     (attr, k8s.job, metadata)
+     (attr, k8s.job, spec)
+     (attr, k8s.job, status)
+     __neg_1
+     __neg_2
+     live_image
+     live_schema
+   stratum 7:
+     (attr, k8s.secret, stringData)
+     (attr, let, rollout)
+     migrated
+   stratum 8:
+     (arg, input, app.blue::color)
+     (arg, input, app.blue::db_secret)
+     (arg, input, app.blue::image)
+     (arg, input, app.blue::namespace)
+     (arg, input, app.blue::replicas)
+     (arg, input, app.blue::schema)
+     (arg, input, app.green::color)
+     (arg, input, app.green::db_secret)
+     (arg, input, app.green::image)
+     (arg, input, app.green::namespace)
+     (arg, input, app.green::replicas)
+     (arg, input, app.green::schema)
+     rollout
+     run
+   stratum 9:
      (attr, input, app.blue::color)
+     (attr, input, app.blue::db_secret)
      (attr, input, app.blue::image)
      (attr, input, app.blue::namespace)
      (attr, input, app.blue::replicas)
      (attr, input, app.blue::schema)
      (attr, input, app.green::color)
+     (attr, input, app.green::db_secret)
      (attr, input, app.green::image)
      (attr, input, app.green::namespace)
      (attr, input, app.green::replicas)
      (attr, input, app.green::schema)
-     (attr, k8s.job, metadata)
-     (attr, k8s.secret, metadata)
-   stratum 5:
-     (arg, input, app.blue::db_secret)
-     (arg, input, app.green::db_secret)
+   stratum 10:
      (arg, k8s.horizontal_pod_autoscaler, metadata)
      (arg, k8s.horizontal_pod_autoscaler, status)
-     (arg, k8s.job, spec)
+     (arg, let, app.blue::labels)
+     (arg, let, app.green::labels)
+     (want, k8s.horizontal_pod_autoscaler)
+     app.blue::color
+     app.blue::db_secret
+     app.blue::image
+     app.blue::namespace
+     app.blue::replicas
+     app.blue::schema
+     app.green::color
+     app.green::db_secret
+     app.green::image
+     app.green::namespace
+     app.green::replicas
+     app.green::schema
+   stratum 11:
+     (attr, k8s.horizontal_pod_autoscaler, metadata)
+     (attr, k8s.horizontal_pod_autoscaler, status)
+     (attr, let, app.blue::labels)
+     (attr, let, app.green::labels)
+   stratum 12:
+     (arg, k8s.deployment, metadata)
+     (arg, k8s.deployment, spec)
+     (arg, k8s.deployment, status)
      (arg, k8s.network_policy, metadata)
      (arg, k8s.network_policy, spec)
      (arg, k8s.pod_disruption_budget, metadata)
      (arg, k8s.pod_disruption_budget, spec)
      (arg, k8s.pod_disruption_budget, status)
-     (attr, google_sql_database_instance, settings)
-     (attr, k8s.secret, stringData)
-     (want, k8s.horizontal_pod_autoscaler)
+     (want, k8s.deployment)
      (want, k8s.network_policy)
      (want, k8s.pod_disruption_budget)
-     app.blue::color
-     app.blue::image
      app.blue::labels
-     app.blue::namespace
-     app.blue::replicas
-     app.blue::schema
-     app.green::color
-     app.green::image
      app.green::labels
-     app.green::namespace
-     app.green::replicas
-     app.green::schema
-   stratum 6:
-     (attr, input, app.blue::db_secret)
-     (attr, input, app.green::db_secret)
-     (attr, k8s.horizontal_pod_autoscaler, metadata)
-     (attr, k8s.horizontal_pod_autoscaler, status)
-     (attr, k8s.job, spec)
+   stratum 13:
+     (attr, k8s.deployment, metadata)
+     (attr, k8s.deployment, spec)
+     (attr, k8s.deployment, status)
      (attr, k8s.network_policy, metadata)
      (attr, k8s.network_policy, spec)
      (attr, k8s.pod_disruption_budget, metadata)
      (attr, k8s.pod_disruption_budget, spec)
      (attr, k8s.pod_disruption_budget, status)
-     __neg_1
-     __neg_2
-   stratum 7:
-     (arg, k8s.deployment, metadata)
-     (arg, k8s.deployment, spec)
-     (arg, k8s.deployment, status)
-     (want, k8s.deployment)
-     __neg_3
-     app.blue::db_secret
-     app.green::db_secret
-   stratum 8:
-     (attr, k8s.deployment, metadata)
-     (attr, k8s.deployment, spec)
-     (attr, k8s.deployment, status)
-     default_deny
-   stratum 9:
+   stratum 14:
      (arg, k8s.horizontal_pod_autoscaler, spec)
      (arg, output, ready_replicas)
      (arg, output, total_replicas)
      __neg_0
+     __neg_3
      container
-   stratum 10:
+   stratum 15:
      (attr, k8s.horizontal_pod_autoscaler, spec)
      (attr, output, ready_replicas)
      (attr, output, total_replicas)
-   stratum 11:
-     cutover
+     default_deny
+   stratum 16:
+     (arg, let, cutover)
      ready
-   stratum 12:
+   stratum 17:
+     (attr, let, cutover)
+   stratum 18:
+     cutover
+   stratum 19:
+     (arg, let, serving)
+   stratum 20:
+     (attr, let, serving)
+   stratum 21:
      (arg, k8s.service, metadata)
      (arg, k8s.service, spec)
      (arg, k8s.service, status)
      (want, k8s.service)
      __ref_dep
      serving
-   stratum 13:
+   stratum 22:
      (attr, k8s.service, metadata)
      (attr, k8s.service, spec)
      (attr, k8s.service, status)
-   stratum 14:
+   stratum 23:
      deny
 -- stderr --
