@@ -291,4 +291,3 @@ exit: ok
   "unscheduled": []
 }
 -- stderr --
-note: examples/gke/stacks/gke_two_phase.df:94:14: reads `pngu.zones` now, a computed value: this block waits for the tick that creates `pngu`; a field written `= pngu.zones` would be an edge and apply with it

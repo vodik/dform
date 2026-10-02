@@ -17,7 +17,6 @@ apply order:
   tick 2
     gke_nodepool[?]
 -- stderr --
-note: tests/fixtures/adversarial/adv2_rule3_coarse.df:15:9: reads `pngu.zones` now, a computed value: this block waits for the tick that creates `pngu`; a field written `= pngu.zones` would be an edge and apply with it
 constraint violations:
 - namespace without deployment ctx={"ns":"pngu"}
 Error: blocked by constraints

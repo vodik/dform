@@ -1680,17 +1680,20 @@ pub fn computed_reads(statements: &[Stmt], schema: &Schema) -> Vec<(Span, String
 }
 
 /// The variables a block's address is built from: its header's holes
-/// (`Addr = format(..)`), followed back through equalities.
+/// (`Addr = format(..)`), followed back through every literal that joins
+/// them (`member(Zones, _, Z)`), but an `attr` read, whose value its key
+/// does not decide.
 fn name_vars(addr: &Term, body: &[Lit]) -> BTreeSet<String> {
     let mut vars: BTreeSet<String> = count_vars_in_term(addr).into_keys().collect();
     loop {
         let before = vars.len();
         for l in body {
-            if let Lit::Eq(x, y) = l {
-                let (xs, ys) = (count_vars_in_term(x), count_vars_in_term(y));
-                if xs.keys().chain(ys.keys()).any(|v| vars.contains(v)) {
-                    vars.extend(xs.into_keys().chain(ys.into_keys()));
-                }
+            if matches!(l, Lit::Pos(a) if a.pred == "attr") {
+                continue;
+            }
+            let ls = count_vars_in_lit(l);
+            if ls.keys().any(|v| vars.contains(v)) {
+                vars.extend(ls.into_keys());
             }
         }
         if vars.len() == before {
