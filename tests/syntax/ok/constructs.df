@@ -15,6 +15,15 @@ decl project(id: int, network_name: string)
 project(1, "net-a")
 names(n) where project(network_name: n)
 
+# Patterns (R-58): after `in`, on the left of `=`, as an argument.
+decl labels(l)
+decl images(i)
+label(k, v) where labels(l), (k, v) in l
+host_of(h) where labels(l), { host: h } = l
+tagged(repo, tag) where images(i), (repo, tag) = str.split(i, ":", 1)
+untagged(i) where images(i), not (_, _) = str.split(i, ":", 1)
+ids(i) where project({ id: i })
+
 # A module, checks.df beside this file, by its path; and a component.
 use checks where env("prod")
 

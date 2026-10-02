@@ -180,6 +180,10 @@
         "named": true
       },
       {
+        "type": "tuple",
+        "named": true
+      },
+      {
         "type": "unary_expression",
         "named": true
       }
@@ -1838,6 +1842,21 @@
         },
         {
           "type": "member_expression",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "tuple",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "_term",
           "named": true
         }
       ]

@@ -1,9 +1,9 @@
 # Text: functions about a `string` (docs/grammar.md "Functions").
 package str
 
-#| The text's parts between each `sep` (not empty).
+#| The text's parts between each `sep` (not empty); with `limit`, split at the first `limit` of them only, so at most `limit + 1` parts: `(repo, tag) = str.split(image, ":", 1)` matches an image with a tag.
 #| example: let parts = str.split("a,b", ",")
-fn split(text: string, sep: string) -> list(string)?
+fn split(text: string, sep: string, limit?: int) -> list(string)?
 
 #| The text in lower case.
 #| example: let name = str.lower(team)

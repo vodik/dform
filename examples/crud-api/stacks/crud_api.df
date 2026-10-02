@@ -302,6 +302,22 @@ deny "image not pinned by digest" { workload: w, image: c.image } where {
   len(str.split(c.image, "@sha256:")) != 2
 }
 
+# A secret's value belongs in a Secret (envFrom, valueFrom); a plain
+# `value` under a name that says it is one is a leak. `(_, e) in c.env`
+# takes each entry of the list, and `(_, _) = str.split(e.name, w, 1)`
+# matches when the name has `w` in it (the split has two parts).
+secret_word("SECRET")
+secret_word("PASSWORD")
+secret_word("TOKEN")
+
+deny "plaintext secret in env" { workload: w, container: c.name, env: e.name } where {
+  container(w, c)
+  (_, e) in c.env
+  has e.value
+  secret_word(s)
+  (_, _) = str.split(e.name, s, 1)
+}
+
 deny "prod database must be regional" { db: d } where {
   env == "prod"
   d in google.sql_database_instance

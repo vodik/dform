@@ -134,6 +134,9 @@ pub enum SyntaxKind {
     OBJECT_FIELD,
     COMPREHENSION,
     PAREN,
+    /// `(a, b, ..)`: a tuple pattern (R-58), after `in`, on the left of
+    /// `=` and as a relation's argument.
+    TUPLE,
     BIN_EXPR,
     UNARY_EXPR,
     /// `lo..hi` or `lo..=hi`: a range, enumerated by `in` (R-56).

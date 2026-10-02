@@ -1460,12 +1460,16 @@ for byte, and a file with a syntax error is reported, not rewritten.
   - `deny "msg" { key: v } where body`, `warn ...`; the message interpolates.
   - `x in net.vpc` ranges over the wanted resources of a type; `r in T`,
     `has r.p`, `not r.p` (not true, absent included); `x in list`, and
-    `x = list[i]` for the index too; `i in 0..n` (`0..=n` inclusive) once
+    `(i, x) in list` for the index too and `(k, v) in obj` for an
+    object's entries; `i in 0..n` (`0..=n` inclusive) once
     per integer.
   - `let cfg = settings[env]` is a value whose type is the row's
     reference; `cfg.gke.pods_cidr` reads through it.
   - settings blocks: `settings prod { db.backup_days = 14 }`.
   - `output k: T = t where body`: an output in one statement.
+  - patterns: `(a, b) = pair`, `{ host, port } = conn` (the named fields,
+    the rest ignored), `(repo, tag) = str.split(image, ":", 1)` (it fails
+    when there is no tag), `zone({ name })` for named columns.
   - literals: lists `[a, b]` and objects `{ k: v }` (`{ a, b }` is `{ a: a, b: b }`);
     a string may span lines, kept as written (`str.dedent(s)` removes the
     indentation its lines share).

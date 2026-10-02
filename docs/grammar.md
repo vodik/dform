@@ -695,12 +695,14 @@ lit1       := atom
             | "has" chain                        ; the attribute has a value
             | chain                              ; a truth test: == true
             | term cmpop term (cmpop term)*      ; a <= b <= c is a <= b, b <= c
+            | pattern "=" term                   ; a tuple or object pattern matches (R-58)
             | term "in" ("resource" | term | range)
+            | tuple "in" term                    ; `(k, v) in obj`, `(i, x) in list`
             | term "not" "in" (term | range)
 cmpop      := "=" | "==" | "!=" | "<" | "<=" | ">" | ">="
 atom       := chain "(" args ")"
 args       := (arg ("," arg)* ","?)?
-arg        := term | NAME ":" term               ; a named argument: its column's name
+arg        := term | tuple | NAME ":" term       ; a named argument: its column's name
 
 range      := add (".." | "..=") add          ; only after `in` (R-56)
 term       := add
@@ -729,7 +731,9 @@ lower to a record pattern.
 Membership (H-9): `x in e` for a list, `x in T` for a type, `x in
 resource` for any, `x in world.T` for a live object, `i in lo..hi` for
 the integers from `lo` up to `hi` (half-open) and `i in lo..=hi` up to
-and including it (R-56); `x = e[i]` gives the index and the value. A
+and including it (R-56); `(i, x) in e` gives each index and element of
+a list, `(k, v) in e` each key and value of an object (R-58,
+"Patterns"), and `x = e[i]` the element at an index. A
 range's ends are bound integers, and it is enumerated in order. A range
 is for "once per i", things that have a position and no identity: a
 replica, a shard, the n-th /24; anything with a name is a relation, a
@@ -784,6 +788,44 @@ a `let n = count(x) where B` with no match of `B` has no value, so "none"
 is `not { B }`, not `n == 0`. `why` of an aggregate's fact prints the
 statement and the rows of its group.
 
+### Patterns
+
+```
+pattern    := "_" | NAME | literal | tuple | "{" pfield ("," pfield)* ","? "}"
+tuple      := "(" pattern "," pattern ("," pattern)* ","? ")"
+pfield     := key (":" pattern)?                ; `{ a }` is `{ a: a }`
+```
+
+One production, in three places (R-58): on the left of `in`, on the left
+of `=` in a body (a rule's, a check's, a `let`'s clause), and as a
+relation's argument. A name binds, or compares when it is bound
+already; `_` matches anything; a literal compares. A tuple needs the
+exact arity: `(a, b) = pair` matches a list of two elements and fails
+the match otherwise. An object pattern binds the fields it names and
+ignores the rest: `{ host, port } = conn` matches `{host: "db", port:
+5432, user: "app"}`, and an object without `port` does not match.
+Patterns nest: `(i, (n, x)) in pairs`, `(env, { cidr: c }) in nets`.
+
+- After `in`, a tuple is `(key, value)` of an object or `(index,
+  element)` of a list: `(k, v) in labels` once per label, `(i, x) in xs`
+  once per element. `x in obj` is an error naming the pattern: an
+  object's entries are `(key, value)`. `not (k, _) in obj` holds when no
+  entry matches. An object on the left of `in` is a value, as before:
+  `{ a: 1 } in xs` looks for that object.
+- Against a function's result, a pattern is a test as well as a
+  binding: `(repo, tag) = str.split(image, ":", 1)` binds both when the
+  image has a tag and fails otherwise, so `not (_, _) = str.split(image,
+  ":", 1)` reads "no tag".
+- A relation of several named columns (`decl zone(name, index)`) takes
+  one object pattern, the record pattern of the columns it names:
+  `zone({ name })` reads the names, as `zone(name: name)` does; a tuple
+  argument matches a list column, `pair((2, s))`.
+
+A tuple is a pattern and never a value: in a field, a head or the right
+of `=` it is an error that says where a pattern goes, and a list is
+`[a, b]`; a list on the left of `=` is written as a tuple. `why` prints
+the statement with its patterns as written.
+
 ### Reference or read
 
 A dot on a reference means one of two things, decided by position (G-6):
@@ -832,7 +874,7 @@ one is a qualification away (`split` is `str.split`).
 ```
 sigfile    := "package" NAME NL (DOC* fnsig NL)*
 fnsig      := "internal"? "fn" NAME "(" (param ("," param)* ("," "...")?)? ")" "->" type "?"? flags?
-param      := NAME ":" type
+param      := NAME "?"? ":" type             ; `?`: a call may leave it out (the last ones only)
 flags      := flag ("," flag)*
 flag       := "forwards" | "forwards" "nulls"
 ```
@@ -853,7 +895,7 @@ are written bare.
 | `inet`    | `inet.subnet(net, bits, n)`, `inet.host(net, n)`, `inet.addr(net, n)`, `inet.contains(net, a)`, `inet.overlaps(a, b)`, `inet.prefix_len(net)` |
 | `int`     | `int.range(lo, hi, step)` (what `i in lo..hi` enumerates)                 |
 | `ip`      | `ip.unspecified(a)`                                                       |
-| `str`     | `str.split(s, sep)`, `str.lower(s)`, `str.upper(s)`, `str.dedent(s)`      |
+| `str`     | `str.split(s, sep[, limit])`, `str.lower(s)`, `str.upper(s)`, `str.dedent(s)` |
 | `list`    | `list.len(l)` (`len` in the prelude), `list.join(l, sep)`                 |
 
 A function to `bool` is also a predicate: `inet.contains(n, a)` as a body
@@ -932,6 +974,10 @@ as it is.
 | `"n-${e}" in T`                           | `Name = format(..), want(T, Name)`                     |
 | `x in world.T`                            | `cloud_exists(T, x)`                                   |
 | `x in e`                                  | `member(e', x)`                                        |
+| `(k, v) in e`                             | `member(e', K, V)`: an object's keys, a list's indexes |
+| `(a, b) = e`                              | `[A, B] = e'`: a list of exactly two                   |
+| `{ a, b: p } = e`                         | `O = e', A = __path(O, "a"), P = __path(O, "b")`       |
+| `zone({ name })` (columns `name, index`)  | `zone{name: Name}`, a record pattern                   |
 | `i in lo..hi`, `i in lo..=hi`             | `member(int.range(lo', hi', 1), i)`, `member(int.range(lo', add(hi', 1), 1), i)` |
 | `x not in e`, `not x in T`                | `not member(e', x)`, `not want(T, x)`                  |
 | `not { B }` (or a `not` of a nested path) | `not __neg_N(ȳ)`, `__neg_N(ȳ) :- P, B'`: ȳ the variables the body so far binds, `P` its positive literals |

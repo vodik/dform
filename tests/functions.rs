@@ -41,7 +41,10 @@ port(p) where p = int("8080") + 1
     assert_eq!(got, ["sub(10.50.2.0/24)"]);
     let one = |pred: &str, src: &str| facts(src, pred);
     assert_eq!(
-        one("inside", "net(inet(\"10.50.0.0/16\"))\ninside(a) where a = ip(\"10.50.3.4\"), net(n), inet.contains(n, a)\n"),
+        one(
+            "inside",
+            "net(inet(\"10.50.0.0/16\"))\ninside(a) where a = ip(\"10.50.3.4\"), net(n), inet.contains(n, a)\n"
+        ),
         ["inside(10.50.3.4)"]
     );
     assert_eq!(
@@ -49,7 +52,10 @@ port(p) where p = int("8080") + 1
         ["port(8081)"]
     );
     assert_eq!(
-        one("joined", "joined(j) where j = list.join(str.split(\"a,b\", \",\"), \"-\")\n"),
+        one(
+            "joined",
+            "joined(j) where j = list.join(str.split(\"a,b\", \",\"), \"-\")\n"
+        ),
         ["joined(\"a-b\")"]
     );
 }
@@ -59,7 +65,10 @@ port(p) where p = int("8080") + 1
 #[test]
 fn a_function_missing_from_std_does_not_resolve() {
     for (call, meant) in [
-        ("inet_subnet(inet(\"10.0.0.0/8\"), 8, 1)", Some("inet.subnet")),
+        (
+            "inet_subnet(inet(\"10.0.0.0/8\"), 8, 1)",
+            Some("inet.subnet"),
+        ),
         ("to_int(\"1\")", Some("int")),
         ("split(\"a,b\", \",\")", Some("str.split")),
         ("cidrsubnet(\"10.0.0.0/8\", 8, 1)", None),
@@ -80,7 +89,10 @@ fn a_function_missing_from_std_does_not_resolve() {
 #[test]
 fn internal_functions_are_not_callable() {
     let e = error("p(x) where x = add(1, 2)\n");
-    assert!(e.contains("add is the lowering's") && e.contains("a + b"), "{e}");
+    assert!(
+        e.contains("add is the lowering's") && e.contains("a + b"),
+        "{e}"
+    );
     assert_eq!(facts("p(x) where x = 1 + 2\n", "p"), ["p(3)"]);
 }
 
@@ -90,7 +102,9 @@ fn internal_functions_are_not_callable() {
 fn a_head_two_things_claim_is_an_error() {
     let e = error("component inet {\n  output k = 1\n}\ninstance inet main\n");
     assert!(
-        e.contains("`inet` is both the component `inet` and the function package `inet` (std/inet.df)"),
+        e.contains(
+            "`inet` is both the component `inet` and the function package `inet` (std/inet.df)"
+        ),
         "{e}"
     );
 }
@@ -99,7 +113,10 @@ fn a_head_two_things_claim_is_an_error() {
 #[test]
 fn the_reference_reads_std() {
     let r = engine::reference("inet.subnet", true).unwrap();
-    assert_eq!(r.signature, "inet.subnet(net: inet, bits: int, n: int) -> inet?");
+    assert_eq!(
+        r.signature,
+        "inet.subnet(net: inet, bits: int, n: int) -> inet?"
+    );
     assert!(r.example.contains("inet.subnet("), "{r:?}");
     assert!(engine::reference("add", true).is_none());
     assert!(engine::reference("to_int", true).is_none());
@@ -110,7 +127,10 @@ fn the_reference_reads_std() {
 #[test]
 fn dedent_strips_the_shared_indentation() {
     let src = "s(str.dedent(\"\n    #!/bin/sh\n      echo hi\n\n    done\n  \"))\n";
-    assert_eq!(facts(src, "s"), [r##"s("#!/bin/sh\n  echo hi\n\ndone\n")"##]);
+    assert_eq!(
+        facts(src, "s"),
+        [r##"s("#!/bin/sh\n  echo hi\n\ndone\n")"##]
+    );
     // Tabs and spaces share only what is the same.
     assert_eq!(
         facts("s(str.dedent(\"\\t a\\n\\t b\\n  c\"))\n", "s"),
@@ -125,7 +145,31 @@ fn a_string_spans_lines_as_written() {
     let src = "n(\"web\")\ns(t) where n(x), t = \"one\n  ${x} two\n\"\n";
     assert_eq!(facts(src, "s"), [r#"s("one\n  web two\n")"#]);
     assert_eq!(
-        facts("n(\"web\")\ns(str.dedent(\"\n    a ${x}\n      b\n  \")) where n(x)\n", "s"),
+        facts(
+            "n(\"web\")\ns(str.dedent(\"\n    a ${x}\n      b\n  \")) where n(x)\n",
+            "s"
+        ),
         [r#"s("a web\n  b\n")"#]
+    );
+}
+
+/// `str.split(s, sep, limit)` (R-58) splits at the first `limit`
+/// separators only: at most `limit + 1` parts, the rest kept whole. The
+/// limit may be left out.
+#[test]
+fn split_takes_an_optional_limit() {
+    let src = r#"s0(p) where p = str.split("a:b:c", ":", 0)
+s1(p) where p = str.split("a:b:c", ":", 1)
+s9(p) where p = str.split("a:b:c", ":", 9)
+all(p) where p = str.split("a:b:c", ":")
+"#;
+    assert_eq!(facts(src, "s0"), [r#"s0(["a:b:c"])"#]);
+    assert_eq!(facts(src, "s1"), [r#"s1(["a", "b:c"])"#]);
+    assert_eq!(facts(src, "s9"), [r#"s9(["a", "b", "c"])"#]);
+    assert_eq!(facts(src, "all"), [r#"all(["a", "b", "c"])"#]);
+    let r = engine::reference("str.split", true).unwrap();
+    assert_eq!(
+        r.signature,
+        "str.split(text: string, sep: string, limit?: int) -> list(string)?"
     );
 }

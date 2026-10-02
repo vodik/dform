@@ -436,9 +436,14 @@ export default grammar({
       $.comprehension,
       $.object,
       $.parenthesized,
+      $.tuple,
     ),
 
     parenthesized: $ => seq('(', $._term, ')'),
+
+    // `(a, b, ..)`: a tuple pattern (R-58), after `in`, on the left of `=`
+    // and as a relation's argument; the compiler refuses one as a value.
+    tuple: $ => seq('(', $._term, repeat1(seq(',', $._term)), optional(','), ')'),
 
     // `name (.seg | [terms])*`: `.` is static, `[ ]` a key (H 5.1).
     _chain: $ => choice(

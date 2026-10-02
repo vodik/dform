@@ -53,6 +53,8 @@ const TYPE_NAMES: &[&str] = &[
 pub struct Param {
     pub name: String,
     pub ty: String,
+    /// `name?: T`: a call may leave it out (the last parameters only).
+    pub optional: bool,
 }
 
 /// One declared function.
@@ -85,10 +87,11 @@ pub struct Function {
 impl Function {
     /// Whether `n` arguments fit its parameters.
     pub fn takes(&self, n: usize) -> bool {
+        let required = self.params.iter().filter(|p| !p.optional).count();
         if self.variadic {
             n >= self.params.len()
         } else {
-            n == self.params.len()
+            (required..=self.params.len()).contains(&n)
         }
     }
 
@@ -318,7 +321,10 @@ pub fn parse(file: &str, text: &str) -> Result<Vec<Function>, String> {
         let params: Vec<String> = f
             .params
             .iter()
-            .map(|p| format!("{}: {}", p.name, p.ty))
+            .map(|p| {
+                let q = if p.optional { "?" } else { "" };
+                format!("{}{q}: {}", p.name, p.ty)
+            })
             .chain(f.variadic.then(|| "...".to_string()))
             .collect();
         f.signature = format!(
@@ -368,12 +374,22 @@ fn function(sig: &str) -> Result<Function, String> {
             .split_once(':')
             .ok_or_else(|| format!("parameter `{p}` has no type"))?;
         let (n, t) = (n.trim(), t.trim());
+        let (n, optional) = match n.strip_suffix('?') {
+            Some(n) => (n, true),
+            None => (n, false),
+        };
         if !is_name(n) || t.is_empty() {
             return Err(format!("`{p}` is not `name: type`"));
+        }
+        if !optional && params.iter().any(|p: &Param| p.optional) {
+            return Err(format!(
+                "`{n}` follows an optional parameter: only the last ones may be left out"
+            ));
         }
         params.push(Param {
             name: n.to_string(),
             ty: t.to_string(),
+            optional,
         });
     }
     let rest = sig[close + 1..].trim();

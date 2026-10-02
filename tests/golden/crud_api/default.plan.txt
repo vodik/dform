@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-plan: 8 deformations (8 create), 9 pending, 7 undetermined
+plan: 8 deformations (8 create), 9 pending, 8 undetermined
 definite:
 + google.compute_network["vpc"]
   auto_create_subnetworks = false
@@ -74,6 +74,7 @@ undetermined:
 ? deny "a rollout runs a schema the migration has not reached" on ?k8s.job["migrate-v42"].status.succeeded, may derive after tick 1  (reads run(_, _, 42) with a stuck instance)
 ? deny "container without resource limits" on ?k8s.job["migrate-v42"].status.succeeded, may derive after tick 1  (reads container("blue::deploy", _), container("green::deploy", _) with a stuck instance)
 ? deny "image not pinned by digest" on ?k8s.job["migrate-v42"].status.succeeded, may derive after tick 1  (reads container("blue::deploy", _), container("green::deploy", _) with a stuck instance)
+? deny "plaintext secret in env" on ?k8s.job["migrate-v42"].status.succeeded, may derive after tick 1  (reads container("blue::deploy", _), container("green::deploy", _) with a stuck instance)
 apply order:
   tick 1
     google.compute_network["vpc"]

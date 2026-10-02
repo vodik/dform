@@ -19,6 +19,15 @@ decl project(id: int, network_name: string)
 project(1, "net-a")
 names(n) where project(network_name: n)
 
+# Patterns (R-58): after `in`, on the left of `=`, as an argument.
+decl labels(l)
+decl images(i)
+label(k, v) where labels(l), (k, v) in l
+host_of(h) where labels(l), { host: h } = l
+tagged(repo, tag) where images(i), (repo, tag) = str.split(i, ":", 1)
+untagged(i) where images(i), not (_, _) = str.split(i, ":", 1)
+ids(i) where project({ id: i })
+
 # A module, checks.df beside this file, by its path; and a component.
 use checks where env("prod")
 
@@ -197,6 +206,117 @@ x(i, a_) where vpc_inst(i), output(m[i], "vpc", a_)
             (named_argument
               (identifier)
               (identifier)))))))
+  (comment)
+  (decl
+    (dotted_name
+      (identifier))
+    (columns
+      (field_declaration
+        (identifier))))
+  (decl
+    (dotted_name
+      (identifier))
+    (columns
+      (field_declaration
+        (identifier))))
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)
+        (identifier)))
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier))))
+      (in_literal
+        (tuple
+          (identifier)
+          (identifier))
+        (identifier))))
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)))
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier))))
+      (comparison
+        (object
+          (object_field
+            (identifier)
+            (identifier)))
+        (identifier))))
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)
+        (identifier)))
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier))))
+      (comparison
+        (tuple
+          (identifier)
+          (identifier))
+        (call
+          (member_expression
+            (identifier)
+            (identifier))
+          (arguments
+            (identifier)
+            (string
+              (string_content))
+            (integer))))))
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)))
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier))))
+      (not_literal
+        (comparison
+          (tuple
+            (identifier)
+            (identifier))
+          (call
+            (member_expression
+              (identifier)
+              (identifier))
+            (arguments
+              (identifier)
+              (string
+                (string_content))
+              (integer)))))))
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)))
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (object
+              (object_field
+                (identifier)
+                (identifier))))))))
   (comment)
   (use
     (dotted_name

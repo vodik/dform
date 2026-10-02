@@ -38,6 +38,7 @@ use std::collections::{BTreeMap, BTreeSet};
 mod aggregate;
 mod alias;
 mod heads;
+mod pattern;
 mod provider;
 mod singleton;
 pub use provider::ENV_VAR;
@@ -296,6 +297,7 @@ fn is_term(k: SyntaxKind) -> bool {
             | OBJECT
             | COMPREHENSION
             | PAREN
+            | TUPLE
             | BIN_EXPR
             | UNARY_EXPR
             | RANGE
@@ -667,6 +669,9 @@ pub struct Lowerer<'u> {
     agg_rules: usize,
     /// How deep in `not { }` bodies and comprehensions the lowering is.
     nested: usize,
+    /// An object pattern's field reads, appended after the literal that
+    /// binds it (`pattern`).
+    after: Vec<Lit>,
 }
 
 /// What a call is where it is written.
@@ -704,6 +709,7 @@ impl<'u> Lowerer<'u> {
             aggs: Vec::new(),
             agg_rules: 0,
             nested: 0,
+            after: Vec::new(),
         };
         l.decls.deployed = deployed.to_vec();
         for (i, u) in units.iter().enumerate() {
@@ -1412,18 +1418,23 @@ impl<'u> Lowerer<'u> {
                 _ => false,
             }
         }
+        // A tuple pattern on the left of `=` may hold `_` (R-58).
+        fn side(t: &Term) -> bool {
+            match t {
+                Term::List(_) => in_func(t),
+                t => has(t),
+            }
+        }
         fn lits(body: &[Lit]) -> bool {
             body.iter().any(|l| match l {
                 Lit::Pos(a) | Lit::Not(a) => {
                     a.args.iter().any(in_func)
                         || a.record.as_ref().is_some_and(|r| r.values().any(in_func))
                 }
-                Lit::Eq(a, b)
-                | Lit::Neq(a, b)
-                | Lit::Gt(a, b)
-                | Lit::Ge(a, b)
-                | Lit::Lt(a, b)
-                | Lit::Le(a, b) => has(a) || has(b),
+                Lit::Eq(a, b) => side(a) || has(b),
+                Lit::Neq(a, b) | Lit::Gt(a, b) | Lit::Ge(a, b) | Lit::Lt(a, b) | Lit::Le(a, b) => {
+                    has(a) || has(b)
+                }
             })
         }
         let never = "`_` is a placeholder and is never accessed: name it (`env.p`, `x`)";
@@ -3199,7 +3210,11 @@ impl<'u> Lowerer<'u> {
 
     /// One literal, with the reads it hoists before it, into `out`.
     fn lit(&mut self, rc: &mut Rc, n: &SyntaxNode, out: &mut Vec<Lit>) -> L<()> {
-        self.bind(true, |l| l.lit1(rc, n, out))
+        let saved = std::mem::take(&mut self.after);
+        let r = self.bind(true, |l| l.lit1(rc, n, out));
+        out.append(&mut self.after);
+        self.after = saved;
+        r
     }
 
     fn lit1(&mut self, rc: &mut Rc, n: &SyntaxNode, out: &mut Vec<Lit>) -> L<()> {
@@ -3280,7 +3295,7 @@ impl<'u> Lowerer<'u> {
                 out.push(Lit::Not(atom));
                 return Ok(());
             }
-            LIT_IN => {
+            LIT_IN if !n.descendants().any(|d| d.kind() == TUPLE) => {
                 let lit = self.membership(rc, n, out)?;
                 out.push(negate(lit));
                 return Ok(());
@@ -3417,6 +3432,33 @@ impl<'u> Lowerer<'u> {
         let span = self.span(n);
         let ts: Vec<SyntaxNode> = terms(n).collect();
         let ops: Vec<SyntaxKind> = tokens(n).map(|t| t.kind()).collect();
+        // `P = e` with a tuple or object pattern on the left (R-58); an
+        // element `P = e[i]` (or `e[i] = P`) is `member(e, i, P)` (H-9).
+        let pattern = |t: &SyntaxNode| Self::is_pattern(t) || t.kind() == LIST;
+        if ts.len() == 2 && ops.as_slice() == [EQ] && (pattern(&ts[0]) || pattern(&ts[1])) {
+            let (p, c) = match pattern(&ts[0]) {
+                true => (&ts[0], &ts[1]),
+                false => (&ts[1], &ts[0]),
+            };
+            let element = Chain::of(c)
+                .filter(|ch| matches!(ch.ops.last(), Some(Op::Index(ix, _)) if ix.len() == 1));
+            if let Some(ch) = element
+                && let Some(Op::Index(ix, _)) = ch.ops.last()
+            {
+                let ix = ix[0].clone();
+                let mut list = ch.clone();
+                list.ops.pop();
+                let res = self.resolve(rc, &list, out)?;
+                let l = self.realize(rc, res, Pos::Content, out, span)?;
+                let i = self.bind(true, |x| x.term(rc, &ix, Pos::Content, out))?;
+                let pat = self.pattern(rc, p, out)?;
+                out.push(Lit::Pos(atom_at("member", vec![l, i, pat], span)));
+                return Ok(());
+            }
+            if pattern(&ts[0]) {
+                return self.pattern_eq(rc, p, c, out);
+            }
+        }
         if ts.len() == 2 && matches!(ops.as_slice(), [EQ | EQ2]) {
             for (r, v) in [(&ts[0], &ts[1]), (&ts[1], &ts[0])] {
                 let Some(c) = Chain::of(r) else { continue };
@@ -3494,32 +3536,6 @@ impl<'u> Lowerer<'u> {
             });
             return Ok(());
         }
-        // `pattern = e[i]` (or `e[i] = pattern`): an element matched by a
-        // pattern is `member(e, i, pattern)` (H-9).
-        if ts.len() == 2 && ops.as_slice() == [EQ] {
-            for (c, p) in [(&ts[1], &ts[0]), (&ts[0], &ts[1])] {
-                if !matches!(p.kind(), OBJECT | LIST) {
-                    continue;
-                }
-                let Some(ch) = Chain::of(c) else { continue };
-                let Some(Op::Index(ix, _)) = ch.ops.last() else {
-                    continue;
-                };
-                if ix.len() != 1 {
-                    continue;
-                }
-                let ix = ix[0].clone();
-                let mut list = ch.clone();
-                list.ops.pop();
-                let res = self.resolve(rc, &list, out)?;
-                let span = self.span(n);
-                let l = self.realize(rc, res, Pos::Content, out, span)?;
-                let i = self.bind(true, |x| x.term(rc, &ix, Pos::Content, out))?;
-                let pat = self.bind(true, |x| x.term(rc, p, Pos::Content, out))?;
-                out.push(Lit::Pos(atom_at("member", vec![l, i, pat], span)));
-                return Ok(());
-            }
-        }
         let mut lowered = Vec::new();
         for (i, t) in ts.iter().enumerate() {
             // `=` binds either side; `==`, `!=` and the orders test.
@@ -3593,6 +3609,16 @@ impl<'u> Lowerer<'u> {
         let world = rhs
             .as_ref()
             .filter(|c| c.head == "world" && !c.ops.is_empty());
+        if (typ.is_some() || world.is_some()) && lhs_node.kind() == TUPLE {
+            return self.error(
+                span,
+                format!(
+                    "`{}` is a pattern: a resource is enumerated by a name, `r in {}`",
+                    lhs_node.text(),
+                    ts.get(1).map(|t| t.text().to_string()).unwrap_or_default()
+                ),
+            );
+        }
         if typ.is_some() || world.is_some() {
             // The left side: an element, bound or checked; a bare resource
             // name is its address; a computed name is bound first.
@@ -3634,6 +3660,9 @@ impl<'u> Lowerer<'u> {
         } else {
             self.bind(false, |l| l.term(rc, rhs, Pos::Content, out))?
         };
+        if lhs_node.kind() == TUPLE {
+            return self.pattern_in(rc, lhs_node, list, out, span);
+        }
         let item = self.term(rc, lhs_node, Pos::Content, out)?;
         Ok(Lit::Pos(atom_at("member", vec![list, item], span)))
     }
@@ -3743,6 +3772,36 @@ impl<'u> Lowerer<'u> {
                 for (i, t) in list.iter().enumerate() {
                     args.push(if Some(i) == at {
                         self.ref_term(rc, t, pos, pre)?
+                    } else {
+                        self.term(rc, t, pos, pre)?
+                    });
+                }
+                args
+            }
+            // In a body an argument is a pattern (R-58): `pair((a, b))`;
+            // a relation of several named columns takes one object
+            // pattern, `zone({ name, index })`, its record pattern.
+            None if pos == Pos::Content => {
+                let list: Vec<SyntaxNode> = list
+                    .as_ref()
+                    .map(|l| terms(l).collect())
+                    .unwrap_or_default();
+                if let [o] = list.as_slice()
+                    && o.kind() == OBJECT
+                    && self.named_columns(rc.scope, &pred)
+                {
+                    let record = self.record_pattern(rc, o, pre)?;
+                    return Ok(Atom {
+                        pred,
+                        args: Vec::new(),
+                        record: Some(record),
+                        span,
+                    });
+                }
+                let mut args = Vec::new();
+                for t in &list {
+                    args.push(if t.kind() == TUPLE {
+                        self.pattern(rc, t, pre)?
                     } else {
                         self.term(rc, t, pos, pre)?
                     });
@@ -4125,6 +4184,7 @@ impl<'u> Lowerer<'u> {
                 let inner = terms(n).next().ok_or(Skip)?;
                 self.bind(false, |l| l.term(rc, &inner, Pos::Content, pre))
             }
+            TUPLE => self.tuple_value(n),
             BIN_EXPR => {
                 let ts: Vec<SyntaxNode> = terms(n).collect();
                 let op = tokens(n).next().ok_or(Skip)?;

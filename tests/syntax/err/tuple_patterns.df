@@ -1,0 +1,9 @@
+edition 2026
+
+# A tuple is a pattern (R-58): after `in` it has two parts, it is never a
+# value, and a pattern is not written as a list.
+pairs([1, 2])
+three(a) where pairs(ps), (a, b, c) in ps
+value(x) where pairs(ps), x = (ps, ps)
+listed(a) where pairs(ps), [a, b] = ps
+typed(a) where (a, b) in net.vpc

@@ -300,7 +300,7 @@ text: indenting them would change the string."
        ,(regexp-opt
          '("block" "statement_block" "attribute_block" "body_block"
            "object" "record_type" "list" "comprehension"
-           "arguments" "parenthesized" "index_expression")))
+           "arguments" "parenthesized" "tuple" "index_expression")))
       parent-bol dform-ts-mode-indent-offset)
      ;; A block's clause (`where', after the block) or a one-line body.
      ((parent-is "clause") parent-bol dform-ts-mode-indent-offset)

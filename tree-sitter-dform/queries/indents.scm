@@ -15,6 +15,7 @@
   (comprehension)
   (arguments)
   (parenthesized)
+  (tuple)
   (index_expression)
 ] @indent.begin
 

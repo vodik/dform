@@ -2494,9 +2494,6 @@ fn eval_member2(
     if missing_walk(&atom.args[0], state) {
         return Ok(());
     }
-    if missing_walk(&atom.args[0], state) {
-        return Ok(());
-    }
     let list_v = eval_term(&atom.args[0], state)
         .ok_or_else(|| anyhow!("unsafe member: list is not ground"))?;
     if let Value::Null { .. } = &list_v {
@@ -2504,8 +2501,15 @@ fn eval_member2(
         rec.stuck(state, nulls_in(&list_v), "member/2 over a null list");
         return Ok(());
     }
-    let Value::List(items) = list_v else {
-        bail!("member/2 first argument must be a list");
+    let items = match list_v {
+        Value::List(items) => items,
+        Value::Obj(_) => bail!(
+            "`x in e` over an object, {}, in `{}`: an object's entries are matched by a \
+             pattern, `(key, value) in e` (R-58)",
+            partition::fmt_value(&list_v),
+            rec.text
+        ),
+        _ => bail!("member/2 first argument must be a list"),
     };
     for item in &items {
         let mut s2 = state.clone();
@@ -2546,27 +2550,63 @@ fn eval_not_member2(atom: &Atom, state: &HashMap<String, Value>, rec: &Rec) -> R
     Ok(true)
 }
 
+/// `not (k, v) in e`: no entry matches; a `_` in either pattern matches
+/// anything.
 fn eval_not_member3(atom: &Atom, state: &HashMap<String, Value>) -> Result<bool> {
+    if missing_walk(&atom.args[0], state) {
+        return Ok(true);
+    }
     let list_v = eval_term(&atom.args[0], state)
         .ok_or_else(|| anyhow!("unsafe not member: list is not ground"))?;
-    let Value::List(items) = list_v else {
-        bail!("member/3 first argument must be a list");
-    };
-    let idx_v = eval_term(&atom.args[1], state)
-        .ok_or_else(|| anyhow!("unsafe not member: index is not ground"))?;
-    let Value::Int(i) = idx_v else {
-        bail!("member/3 index must be int");
-    };
-    if i < 0 {
-        return Ok(true);
+    let entries = entries(list_v)
+        .ok_or_else(|| anyhow!("member/3 first argument must be a list or an object"))?;
+    for (k, v) in &entries {
+        if matches_ground(&atom.args[1], k, state)? && matches_ground(&atom.args[2], v, state)? {
+            return Ok(false);
+        }
     }
-    let i = i as usize;
-    if i >= items.len() {
-        return Ok(true);
+    Ok(true)
+}
+
+/// A list's indexes and elements, or an object's keys and values in key
+/// order: what `(k, v) in e` enumerates.
+fn entries(v: Value) -> Option<Vec<(Value, Value)>> {
+    match v {
+        Value::List(items) => Some(
+            items
+                .into_iter()
+                .enumerate()
+                .map(|(i, x)| (Value::Int(i as i64), x))
+                .collect(),
+        ),
+        Value::Obj(m) => Some(m.into_iter().map(|(k, x)| (Value::Str(k), x)).collect()),
+        _ => None,
     }
-    let item_v = eval_term(&atom.args[2], state)
-        .ok_or_else(|| anyhow!("unsafe not member: item is not ground"))?;
-    Ok(items[i] != item_v)
+}
+
+/// Whether a negated pattern matches `v`: `_` anything, a tuple element by
+/// element, anything else by its value.
+fn matches_ground(t: &Term, v: &Value, state: &HashMap<String, Value>) -> Result<bool> {
+    match t {
+        Term::Wildcard => Ok(true),
+        Term::List(ts) => {
+            let Value::List(vs) = v else { return Ok(false) };
+            if ts.len() != vs.len() {
+                return Ok(false);
+            }
+            for (t, v) in ts.iter().zip(vs) {
+                if !matches_ground(t, v, state)? {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        }
+        t => {
+            let w = eval_term(t, state)
+                .ok_or_else(|| anyhow!("unsafe not member: pattern is not ground"))?;
+            Ok(&w == v)
+        }
+    }
 }
 
 fn eval_member3(
@@ -2575,18 +2615,21 @@ fn eval_member3(
     out: &mut Vec<HashMap<String, Value>>,
     rec: &Rec,
 ) -> Result<()> {
+    if missing_walk(&atom.args[0], state) {
+        return Ok(());
+    }
     let list_v = eval_term(&atom.args[0], state)
         .ok_or_else(|| anyhow!("unsafe member: list is not ground"))?;
     if let Value::Null { .. } = &list_v {
         rec.stuck(state, nulls_in(&list_v), "member/3 over a null list");
         return Ok(());
     }
-    let Value::List(items) = list_v else {
-        bail!("member/3 first argument must be a list");
-    };
-    for (i, item) in items.iter().enumerate() {
+    // An object's keys and values (R-58), a list's indexes and elements.
+    let entries = entries(list_v)
+        .ok_or_else(|| anyhow!("member/3 first argument must be a list or an object"))?;
+    for (k, item) in &entries {
         let mut s2 = state.clone();
-        if !unify_term(&atom.args[1], &Value::Int(i as i64), &mut s2, rec)? {
+        if !unify_term(&atom.args[1], k, &mut s2, rec)? {
             continue;
         }
         if !unify_term(&atom.args[2], item, &mut s2, rec)? {
@@ -2768,14 +2811,14 @@ fn eval_eq(
     match (eval_term(a, &out), eval_term(b, &out)) {
         (Some(av), Some(bv)) => Ok(rec.eq(&av, &bv, &out, "=").then_some(out)),
         (Some(av), None) => {
-            if bind_term(b, av, &mut out)? {
+            if bind_term(b, av, &mut out, rec)? {
                 Ok(Some(out))
             } else {
                 Ok(None)
             }
         }
         (None, Some(bv)) => {
-            if bind_term(a, bv, &mut out)? {
+            if bind_term(a, bv, &mut out, rec)? {
                 Ok(Some(out))
             } else {
                 Ok(None)
@@ -2882,8 +2925,11 @@ fn eval_cmp(
     })
 }
 
-fn bind_term(t: &Term, v: Value, out: &mut HashMap<String, Value>) -> Result<bool> {
+/// `t = v` with `t` unbound: a variable binds, a tuple pattern `[A, _]`
+/// unifies element by element with a list of its length (R-58).
+fn bind_term(t: &Term, v: Value, out: &mut HashMap<String, Value>, rec: &Rec) -> Result<bool> {
     match t {
+        Term::List(_) => unify_term(t, &v, out, rec),
         Term::Var(name) => {
             if let Some(bound) = out.get(name) {
                 Ok(bound == &v)
@@ -3484,6 +3530,15 @@ pub const BODIES: &[(&str, Body)] = &[
                 .map(|x| Value::Str(x.to_string()))
                 .collect(),
         )),
+        // At most `limit` splits, the first ones: `limit + 1` parts.
+        [Value::Str(s), Value::Str(sep), Value::Int(limit)] if !sep.is_empty() && *limit >= 0 => {
+            let parts = usize::try_from(*limit).ok()?.checked_add(1)?;
+            Some(Value::List(
+                s.splitn(parts, sep.as_str())
+                    .map(|x| Value::Str(x.to_string()))
+                    .collect(),
+            ))
+        }
         _ => None,
     }),
     ("list.join", |a| match a {

@@ -109,6 +109,21 @@ indenting leaves its lines as written."
     (should (equal (buffer-string)
                    "edition 2026\nresource t n {\n  a = \"x\n   y ${v}\n\"\n  b = 1\n}\n"))))
 
+(ert-deftest dform-ts-mode-test-patterns ()
+  "A tuple pattern (R-58) indents like a bracket, and the aggregate
+`any' (R-59) is coloured as `count' is."
+  (dform-ts-mode-test--ensure-grammar)
+  (with-temp-buffer
+    (insert "edition 2026\np(k, v) where labels(l), (\nk,\n v) in l\nq(b) where b = any(x), n = count(x), r(x)\n")
+    (let ((treesit-font-lock-level 4))
+      (dform-ts-mode))
+    (font-lock-ensure)
+    (should (eq (dform-ts-mode-test--face-at "any(")
+                (dform-ts-mode-test--face-at "count(")))
+    (indent-region (point-min) (point-max))
+    (should (equal (buffer-string)
+                   "edition 2026\np(k, v) where labels(l), (\n  k,\n  v) in l\nq(b) where b = any(x), n = count(x), r(x)\n"))))
+
 (ert-deftest dform-ts-mode-test-indent-round-trip ()
   "`indent-region' leaves a correctly indented file unchanged."
   (dform-ts-mode-test--ensure-grammar)

@@ -1479,14 +1479,30 @@ impl<'a> Parser<'a> {
         match k {
             INT | STRING | TRUE_KW | FALSE_KW => self.leaf(LITERAL),
             L_PAREN => {
-                self.start(PAREN);
+                // `(t)` groups; `(a, b, ..)` is a tuple pattern (R-58).
+                let cp = self.checkpoint();
                 self.bump();
-                self.with_nl(false, |p| {
+                let kind = self.with_nl(false, |p| {
                     p.term()?;
-                    p.expect(R_PAREN)
+                    if !p.at(COMMA) {
+                        p.start_at(cp, PAREN);
+                        p.expect(R_PAREN)?;
+                        return Ok(PAREN);
+                    }
+                    p.start_at(cp, TUPLE);
+                    p.bump();
+                    p.term()?;
+                    while p.eat(COMMA) {
+                        if p.at(R_PAREN) {
+                            break;
+                        }
+                        p.term()?;
+                    }
+                    p.expect(R_PAREN)?;
+                    Ok(TUPLE)
                 })?;
                 self.finish();
-                Ok(PAREN)
+                Ok(kind)
             }
             L_BRACKET => self.list(),
             L_BRACE => self.object(),

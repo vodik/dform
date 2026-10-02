@@ -790,3 +790,114 @@ p(i) where n(k), i in 0..k, j in 1..=k + 1
           (binary_expression
             (identifier)
             (integer)))))))
+
+================================================================================
+Patterns: tuples after in, on the left of =, as an argument
+================================================================================
+
+label(k, v) where labels(l), (k, v) in l
+tagged(r, t) where image(i), (r, t) = str.split(i, ":", 1)
+untagged(i) where image(i), not (_, _) = str.split(i, ":", 1)
+host(h) where conn(c), { host: h } = c
+names(name) where zone({ name })
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)
+        (identifier)))
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier))))
+      (in_literal
+        (tuple
+          (identifier)
+          (identifier))
+        (identifier))))
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)
+        (identifier)))
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier))))
+      (comparison
+        (tuple
+          (identifier)
+          (identifier))
+        (call
+          (member_expression
+            (identifier)
+            (identifier))
+          (arguments
+            (identifier)
+            (string
+              (string_content))
+            (integer))))))
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)))
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier))))
+      (not_literal
+        (comparison
+          (tuple
+            (identifier)
+            (identifier))
+          (call
+            (member_expression
+              (identifier)
+              (identifier))
+            (arguments
+              (identifier)
+              (string
+                (string_content))
+              (integer)))))))
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)))
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier))))
+      (comparison
+        (object
+          (object_field
+            (identifier)
+            (identifier)))
+        (identifier))))
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)))
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (object
+              (object_field
+                (identifier)))))))))

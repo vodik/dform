@@ -178,10 +178,11 @@ pub fn compile_body(body: &[Lit], externs: &BTreeSet<String>) -> Body {
                 rel: Rel::of(a),
             },
             Lit::Eq(a, b) => {
-                // `=` binds a variable side; the other side must be ground.
+                // `=` binds a variable or a tuple pattern's side; the other
+                // side must be ground.
                 for t in [a, b] {
-                    if let Term::Var(x) = t {
-                        bound.insert(x.clone());
+                    if matches!(t, Term::Var(_) | Term::List(_)) {
+                        bind_vars(t, &mut bound);
                     }
                 }
                 Op::Map { lit }
