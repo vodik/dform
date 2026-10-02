@@ -340,9 +340,20 @@ process spawn; the host keeps that one privileged hook, Terraform's
 plugin-launch shape). It needs wasip3 and an HTTP/2 client over
 wasi-sockets, neither available today. Until it passes =provider check=,
 =dform-grpc= is the native bridge, frozen: nothing is added to it.
-*Spike.* =dform-k8s= on =wasm32-wasip2= with wasi-http, reporting whether a
-Rust SDK provider builds and passes =provider check= unchanged. Its answer
-decides whether wasm is the default provider host or the exception.
+*Spike (answered 2026-10-02, R-13c, dropped as a probe).* =dform-k8s=
+does not build for =wasm32-wasip2=: =kube= is hard-wired to tokio's =net=
+and =rustls-native-certs=, neither feature-switchable, so a component
+needs a from-scratch transport over wasi-http (about 2.5 days), and
+wasi-http preview 2 has no client-certificate TLS, which is how most
+kubeconfigs authenticate (OVH's included). Expect the same for most Rust
+SDK crates. *Consequence.* The wasm host is the default for providers
+without an SDK (the mock, R-44's OVH provider, function packages); a
+provider built on an SDK stays a native process over the existing gRPC
+path, which is therefore kept as a first-class host, not only a bridge;
+=dform-grpc= stays frozen for features but is not deprecated. The
+Kubernetes provider is native until wasip3 and mutual TLS over
+wasi-http exist. R-45's reveal passes the kubeconfig to a native
+provider the same way.
 
 ** R-14 Colour in the plan printer; the docs split
 Colour by the plan's own semantics through the one printer: =+= green,
