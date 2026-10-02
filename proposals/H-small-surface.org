@@ -612,3 +612,21 @@ decisions above.
   adversarial fixtures were rewritten to the surface forms where the
   lowering is identical; what they keep in the core is what only the core
   can say.
+
+* Addendum (2026-10-01): R-1 revises H-3
+
+The 2026-10-01 review (DESIGN.org, R-1) revises H-3: the clause word is
+=where=, not =if=, and a block's clause follows its block instead of
+leading it. Every statement is =head where body=, and a block is a head:
+=resource T n { .. } where B=, =settings n { .. } where B=, =instance m i
+{ .. } where B=, =p(x) where q(x)=, =let k = t where B=, =set R.p = t where
+B=, =output k: T = t where B=, =deny "m" where B=; a body of several lines
+is =} where {=, one literal per line. =if= reads as a guard, so a generator
+clause read wrong, and a clause first in its block hid that the block is
+the head of a rule while its header named variables the reader had not
+yet met. =if= is reserved and an error wherever it stands, printing the
+=where= form. Refinements change word so that =where= keeps one meaning:
+=input replicas: int = 2 check replicas >= 1= and =db.backup_days: int
+check ..=. The rule that a header name the clause binds is that variable
+stands; it now reads forward, as a head's variables do. The lowering is
+unchanged, so every golden plan and strata listing is byte-identical.

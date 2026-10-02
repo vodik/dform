@@ -35,13 +35,13 @@ The first token decides what a statement is (H-2): a statement keyword
 starts its own statement, and a name followed by `(` is a fact or a rule.
 A newline outside every `( )`, `[ ]` and the braces of an object ends a
 statement; inside those, newlines are whitespace. Nothing continues a line:
-a body of several lines is `if { .. }`, one literal per line, and a long
+a body of several lines is `where { .. }`, one literal per line, and a long
 term wraps inside its brackets. There is no statement terminator: `p(a).`
 is an error that says so, and so is `:-`.
 
 Two statements on one line are an error ("expected the end of the line").
 A block (`{ }` of a resource, settings, instance, provider or stack) and a
-body block (`if { }`) separate their entries by a newline or a comma.
+body block (`where { }`) separate their entries by a newline or a comma.
 
 ## Tokens
 
@@ -67,12 +67,14 @@ module  instance  policy  use  scenario
 resource  settings  deny  warn
 ```
 
-Body words: `not in has`. Block clause: `if`. Literals: `true false`.
-These six are never a name in a term. Anywhere a plain name is expected (a
+Body words: `not in has`. The clause word: `where` (R-1). Literals: `true
+false`. These six, and the reserved `if`, are never a name in a term; `if`
+is an error wherever it stands, which prints the statement with its clause
+spelled `where`. Anywhere a plain name is expected (a
 key, a path segment, a declared name) any keyword is a name, and a keyword
 followed by `(` is an atom or a call (`input("env", v)`). A statement
 keyword may start a chain in a term (`settings[env]`). Contextual words in
-declarations, where the position is fixed: `from`, `where`, `persist`,
+declarations, where the position is fixed: `from`, `check`, `persist`,
 `mixed`, the attribute flags (`required computed id sensitive nullable`).
 Roots: `settings`, `world`.
 
@@ -125,7 +127,7 @@ What a doc comment may document, and the `Kind` and `Name` of its facts:
 | `input k`                                   | `input`     | `k`                   |
 | `output k`                                  | `output`    | `k`                   |
 | `decl p(..)`, `extern p(..)`, `input p(..) from ..`, `export p` | `predicate` | `p` |
-| `p(..) if ..`, a fact, `let k = t`, `deny "m"`, `warn "m"` | `rule` | `p`, `k`, `m` (the message) |
+| `p(..) where ..`, a fact, `let k = t`, `deny "m"`, `warn "m"` | `rule` | `p`, `k`, `m` (the message) |
 | `type a = T`                                | `alias`     | `a`                   |
 | `resource T n`, `resource T "n-${e}"`       | `resource`  | `T["n"]`, `T["n-${e}"]` (as written) |
 
@@ -133,7 +135,7 @@ Inside a module, policy or scenario the name is `BLOCK.NAME`
 (`network.vpc_net`). Each pair lowers to a fact of the compiler's own
 relation `doc/4`, spanned at the comment: `doc(Kind, Name, Key, Value)`,
 so a policy can read and require them (`deny "a module has no owner" {
-module: m } if doc("module", m, "description", _), not doc("module", m,
+module: m } where doc("module", m, "description", _), not doc("module", m,
 "owner", _)`). The language server shows them on hover, and `dform doc`
 renders a project's as Markdown. A doc comment above anything else
 documents nothing.
@@ -249,7 +251,7 @@ static type is field access on a value: `__path(X, "f")`.
 
 ```
 stmt       := KEYWORD ...                      ; one production per keyword, below
-            | NAME ("." NAME)* "(" args ")" RANK? ("if" body)?   ; a fact or a rule
+            | NAME ("." NAME)* "(" args ")" RANK? ("where" body)?   ; a fact or a rule
 
 provider   := "provider" NAME block
 stack      := "stack" DOTTED ("[" NAME ("," NAME)* "]")? block
@@ -258,27 +260,27 @@ type       := "type" NAME "=" type | "type" DOTTED attrs
 decl       := "decl" DOTTED columns "mixed"?
 extern     := "extern" DOTTED "(" bindarg ("," bindarg)* ")" "persist"?
 bindarg    := ("+" | "-") NAME (":" type)?
-input      := "input" NAME ":" type ("=" term)? ("where" body1)?
+input      := "input" NAME ":" type ("=" term)? ("check" body1)?
             | "input" NAME columns "from" term     ; facts(..) | FORMAT(..)
-output     := "output" NAME (":" type)? ("=" term)? ("if" body)?
-let        := "let" NAME "=" term ("if" body)?
-set        := "set" chain ("=" | "+=") term RANK? ("if" body)?
+output     := "output" NAME (":" type)? ("=" term)? ("where" body)?
+let        := "let" NAME "=" term ("where" body)?
+set        := "set" chain ("=" | "+=") term RANK? ("where" body)?
 export     := "export" NAME | "export" "type" NAME
 contributes:= "contributes" chain                  ; `p`, `t.path` (every type), `settings.path`, `TYPE.path`
 module     := "module" NAME stmts
-instance   := "instance" NAME NAME block
+instance   := "instance" NAME NAME block ("where" body)?
 policy     := "policy" NAME stmts
 use        := "use" NAME
 scenario   := "scenario" NAME stmts
-resource   := "resource" DOTTED hname RANK? block
-settings   := "settings" hname RANK? block
-deny, warn := ("deny" | "warn") STRING object? ("if" body)?
+resource   := "resource" DOTTED hname RANK? block ("where" body)?
+settings   := "settings" hname RANK? block ("where" body)?
+deny, warn := ("deny" | "warn") STRING object? ("where" body)?
 stmts      := "{" (stmt NL)* "}"
 
 attrs      := "{" (attrdecl SEP)* "}"
-attrdecl   := blockpath ":" (attrs | type flag* ("where" body1)?)
+attrdecl   := blockpath ":" (attrs | type flag* ("check" body1)?)
 flag       := "required" | "computed" | "id" | "sensitive" | "nullable"
-block      := "{" ("if" body SEP)? (entry SEP)* "}"
+block      := "{" (entry SEP)* "}"
 entry      := blockpath ("=" | "+=") term RANK?
 blockpath  := SEG ("." SEG | "[" INT "]")*
 SEG        := NAME | STRING
@@ -290,27 +292,33 @@ SEP        := "," | NL
 DOTTED     := NAME ("." NAME)*                     ; no spaces
 ```
 
-`if` is on the line of what it guards. A block takes at most one `if`
-clause, first (H-3): it is a query, and the block is one resource (or row,
-or instance) per match. `provider` and `stack` blocks take no clause.
+Every statement is `head where body` (R-1): the clause follows its head,
+on the head's line, and a block is a head. A resource, settings row or
+instance takes at most one clause, after its block's `}`: `resource T n {
+.. } where B`, and a body of several lines is `} where {`, one literal per
+line, closed by its own `}`. The clause is a query, and the block is one
+resource (or row, or instance) per match. `provider` and `stack` blocks
+take no clause. `if`, the clause word of an earlier surface (H-3), is an
+error wherever it stands, and the error prints the statement with its
+clause spelled `where`.
 
 `set` is the contribution statement (H-5): the chain is a resource's
 attribute, a settings row's leaf, or an input (a stack input, or a module
-instance's). A `set` with no `if` on a resource, settings row or instance
+instance's). A `set` with no `where` on a resource, settings row or instance
 declared in the same scope is an error that names the block to write the
 entry in; a top-level `set` of the program's own input is an error too
 (give it a default, or pass `--set`). In a scenario, `set env = "prod"` is
 what `--set env=prod` is on the command line.
 
-`let k = t [if B]` is a value (H-6); a `let` may have several rows. When
+`let k = t [where B]` is a value (H-6); a `let` may have several rows. When
 `t` is a reference (a settings row, a resource, a live object), `k`'s value
 is that reference and its static type is the reference's, so a dot on `k`
 reads through it: `let cfg = settings[env]`, then `cfg.db.size`.
 
-`output k: T = t [if B]` is one statement (H-7): the type is optional (an
+`output k: T = t [where B]` is one statement (H-7): the type is optional (an
 untyped output is `any`), the value is not.
 
-`deny "m" {ctx}? if B` and `warn` are the checks (H-8). The message is a
+`deny "m" {ctx}? where B` and `warn` are the checks (H-8). The message is a
 string like any other: `${e}` reads the body's variables. A deny is checked
 after evaluation; no rule may read `deny` or `warn`.
 
@@ -326,9 +334,9 @@ lowering's (H-15). In a program file, writing one where a surface form says
 the same is an error naming the form: a body `want(T, x)` with a static
 type is `x in T`; `attr(T, "n", "p", v)` is `v = T["n"].p`; a head
 `arg(T, "n", "p", t)` is `set T["n"].p = t`; `output("k", t)` is
-`output k = t`; `deny("m")` is `deny "m" if ..`; `member` is `in` or an
+`output k = t`; `deny("m")` is `deny "m" where ..`; `member` is `in` or an
 index. The core stays writable where no surface form reaches: a variable
-type or path (`arg(t, a, "tags", {..}) if want(t, a)`), a raw `arg` read in
+type or path (`arg(t, a, "tags", {..}) where want(t, a)`), a raw `arg` read in
 a body, and text that is not a program file (schemas, the compiler's own
 tests).
 
@@ -427,12 +435,15 @@ deny for a leaf at any other path.
 A resource's or settings row's header name is a string or a name. A string
 with holes (`"private-${z}"`) is the variable `Addr`, bound last in the
 body by `format`. A name the block's clause binds is that variable
-(`resource net.vpc t { if tenant(t, i) ... }`); any other name is the
+(`resource net.vpc t { .. } where tenant(t, i)`); any other name is the
 static name (`resource net.vpc shared`), and it may not be a value in
 scope (`settings env` with `input env` is an error: write `settings _`
 for every row, or `settings "env"` for the literal one). A block (header,
-clause, entries, interpolated names) is one rule; a header name's scope
-is its block.
+entries, clause, interpolated names) is one rule; a header name's scope
+is its block and its clause. The clause follows the block, so a header
+name it binds is read forward: the header names a variable the reader
+meets in the clause below, as a rule's head names variables its body
+binds (R-1 keeps the rule and moves only the clause).
 
 `settings _ @r { .. }` contributes to every settings row that exists: a
 row the program reads (`settings[e]`) or anything writes (a named block,
@@ -449,7 +460,7 @@ part of a pattern. `_.p`, `_[k]`, and `_` as a field's value, a
 function's argument, an interpolation or a comparison's side are errors
 that say to name it. `p(_)` in a head is an error naming the column (it
 has no finite set of values); `resource T _` and `instance m _` name
-nothing; `set T[_].p = t` is `set r.p = t if r in T`, and the error prints
+nothing; `set T[_].p = t` is `set r.p = t where r in T`, and the error prints
 it. A name that starts with `_` (`_x`) is an ordinary name.
 
 ## Literals and terms
@@ -504,8 +515,8 @@ A dot on a reference means one of two things, decided by position (G-6):
 - **a read** anywhere its content is needed: a body literal, a clause, an
   argument of a builtin or operator, an interpolation hole, an index.
   `inet_subnet(vpc.cidr, 4, i)` reads `attr(net.vpc, "vpc", "cidr", V)`
-  now. To read into a field, bind in the clause: `if ns = web.name` then
-  `namespace = ns`.
+  now. To read into a field, bind in the clause: `namespace = ns` in the
+  block and `where ns = web.name` after it.
 
 `settings[e].p`, an instance output `m.i.k`, a value name, `p[..]` and
 `world.T[e].p` are always reads.
@@ -531,29 +542,29 @@ as it is.
 
 | written                                   | lowers to                                              |
 |-------------------------------------------|--------------------------------------------------------|
-| `head if body`                            | `head :- body`                                         |
+| `head where body`                         | `head :- body`                                         |
 | `p(t)` with reads in `t`                  | `p(t') :- reads` (a rule)                              |
 | `p(a: x)` (columns `a, b`)                | `p{a: x}`, a record pattern                            |
-| `let k = t [if B]`                        | `k(t') :- B, reads`; with neither, the fact `k(t')`   |
+| `let k = t [where B]`                     | `k(t') :- B, reads`; with neither, the fact `k(t')`   |
 | `let k = R` (`R` a reference)             | `k(A) :- reads` for `R`'s key; `k.p` reads through it  |
 | `type a = T`, `export type a`             | nothing: each use of `a` is `T`                        |
 | `#\| k: v` above an item (Doc comments)  | `doc(Kind, Name, "k", "v")`                            |
 | `provider p { k = t, expect_account = a }` | `provider_config("p", {k: t'}) :- reads`, `provider_expect_account("p", a') :- reads` ("Provider blocks") |
 | `env_var(t)`                              | `V`, reading `env_var(t', V)`                          |
-| `resource T n { if B f = t }`             | `resource T n { f = t' } :- B, reads`                  |
+| `resource T n { f = t } where B`          | `resource T n { f = t' } :- B, reads`                  |
 | `resource T "a-${e}" { .. }`              | name `Addr`, `Addr = format("a-%s", e')` last          |
-| `settings n @r { if B .. }`               | `settings n @r { .. } :- B, reads`                     |
-| `instance m i { if B k = t }`             | `instance m i { k = t' } :- B, reads`                  |
+| `settings n @r { .. } where B`            | `settings n @r { .. } :- B, reads`                     |
+| `instance m i { k = t } where B`          | `instance m i { k = t' } :- B, reads`                  |
 | `set k = v` (in a scenario)               | `input("k", v)`                                        |
-| `set m.i.k = v [if B]`                    | the instance input `k`'s contribution                  |
-| `deny "m" {o} if B`                       | `deny("m", {o}) :- B` (`warn` the same)                |
-| `deny "a ${x}" if B`                      | `deny(M, ..) :- B, M = format("a %s", X)`              |
-| `set R.p = t @r if B` (`+=`: `arg_add`)   | `arg(T, A, "p", t', r) :- B, reads`                    |
+| `set m.i.k = v [where B]`                 | the instance input `k`'s contribution                  |
+| `deny "m" {o} where B`                    | `deny("m", {o}) :- B` (`warn` the same)                |
+| `deny "a ${x}" where B`                   | `deny(M, ..) :- B, M = format("a %s", X)`              |
+| `set R.p = t @r where B` (`+=`: `arg_add`) | `arg(T, A, "p", t', r) :- B, reads`                   |
 | `set settings[e].p = t`                   | `arg("settings", e', "p", t')`                         |
 | `contributes t.p`, `contributes T.p`      | a grant of `.p` on any type (a name no type starts with), on `T` |
 | `output k: T = t` (`T` a resource type)   | `output k: addr`, and its value                        |
 | `output k = t` (no reads)                 | `output k = t'`                                        |
-| `output k = t if B` (reads, or a body)    | `output(k, t') :- B, reads`                            |
+| `output k = t where B` (reads, or a body) | `output(k, t') :- B, reads`                            |
 | `decl p(a: t, b_c: t)`                    | record fields `a`, `b_c`                               |
 | `input p(a) from facts(S)`                | a relation read from `S`, re-read when it changes      |
 | `input p(c: t) from F(S)`                 | `p(C) :- reads, Path = S', table.F.p(Path, At, C)` ("Relation inputs and tables") |
@@ -598,9 +609,11 @@ applies pack `p`, `import "f.df"` inlines the file once, `extern p(+a, -b)
 persist` is asked on demand, and `declassify(v, "reason")` lowers a
 secret's label (E DR-19).
 
-A refinement (`where`) names the attribute or input by its own name, as
-text (G-24): `input replicas: int = 2 where replicas >= 1`,
-`db.backup_days: int where 1 <= db.backup_days <= 35`.
+A refinement (`check`, R-1) names the attribute or input by its own name,
+as text (G-24): `input replicas: int = 2 check replicas >= 1`,
+`db.backup_days: int check 1 <= db.backup_days <= 35`. `where` in a
+refinement's place is an error naming `check`: `where` has one meaning,
+the clause.
 
 Removed from the grammar until the evaluator supports them: an open type
 (`decl type T open`), the `null` literal and the ordered comprehension.
@@ -616,7 +629,7 @@ than the line that holds the innermost bracket, statement, block entry or
 clause still open at its first token, and a line that starts with a closer
 sits with the line that opened it. The normal forms:
 
-- a body goes on one line (`if a, b`) when the line fits in 100 columns,
+- a body goes on one line (`where a, b`) when the line fits in 100 columns,
   else into a `{ }` block, one literal per line;
 - `{ a: a }` is `{ a }`;
 - a header name is bare when it is a name, not a keyword, and not bound by

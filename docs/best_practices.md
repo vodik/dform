@@ -9,8 +9,8 @@ and predictable behavior.
 If you see lots of repeated guards like:
 
 ```dform
-set pg.backup_days = 14 if env == "prod", pg in db.postgres
-set pg.backup_days = 3 if env == "staging", pg in db.postgres
+set pg.backup_days = 14 where env == "prod", pg in db.postgres
+set pg.backup_days = 3 where env == "staging", pg in db.postgres
 ```
 
 Prefer a lookup table:
@@ -24,7 +24,7 @@ settings staging {
   db.backup_days = 3
 }
 
-set pg.backup_days = settings[env].db.backup_days if pg in db.postgres
+set pg.backup_days = settings[env].db.backup_days where pg in db.postgres
 ```
 
 Why it scales:
@@ -47,7 +47,7 @@ set net.subnet[sn].visibility = "private"
 Good:
 
 ```dform
-set sn.visibility = "private" if sn in net.subnet
+set sn.visibility = "private" where sn in net.subnet
 ```
 
 ## Prefer Sugar That Lowers to Core IR
@@ -60,7 +60,7 @@ For authoring, prefer:
 - named arguments (`peering(env: env, name: n)`) over positional arguments
 - object/list literals (`{k: v}`, `[a, b]`) over lots of `tags.foo` entries
 - list comprehensions (`[x | ...]`) over hand-written `collect(...)` rules
-- a module `instance` with an `if` clause to gate a group of resources on
+- a module `instance` with a `where` clause to gate a group of resources on
   one guard
 - declare a set lattice for list attributes several sources contribute to (`type_lattice(iam.policy, "statements", "set")`)
 
@@ -73,15 +73,14 @@ settings prod {
   vm.ips = ["10.0.0.10", "10.0.0.11"]
 }
 
-vm_ip(e, ip) if ip in settings[e].vm.ips
+vm_ip(e, ip) where ip in settings[e].vm.ips
 
 # If you need stable indices (order-sensitive), bind the index too:
-vm_ip_indexed(e, i, ip) if ip = settings[e].vm.ips[i]
+vm_ip_indexed(e, i, ip) where ip = settings[e].vm.ips[i]
 
 resource compute.vm "vm-${ip}" {
-  if vm_ip(env, ip)
   private_ip = ip
-}
+} where vm_ip(env, ip)
 ```
 
 This is the Pattern A win: derive one resource per row, not index-based `count`.
@@ -106,7 +105,7 @@ How a path merges is its lattice:
   are a conflict;
 - an object is a map, merged per key (nested objects too, so the dotted
   paths `spec.replicas` and `spec.template.spec.containers` both land in `spec`): `tags = { env: dev }` in a resource and
-  `set r.tags = { team: "platform" } if r in resource` in a policy pack give both tags;
+  `set r.tags = { team: "platform" } where r in resource` in a policy pack give both tags;
   two sources disagreeing on one key are a conflict;
 - a list declared a set is the union of every source at the highest rank
   present; a `@default` set is replaced wholesale by a normal one:
@@ -142,9 +141,8 @@ env_name("staging")
 env_name("prod")
 
 settings e @default {
-  if env_name(e)
   db = { backup_days: 3, multi_az: false }
-}
+} where env_name(e)
 
 settings prod {
   db = { backup_days: 14, multi_az: true }
@@ -152,7 +150,7 @@ settings prod {
 ```
 
 The same shape gives org-wide defaults from a policy pack without reading the
-attribute it defaults: `set r.tags = { team: "platform" } @default if r in resource`.
+attribute it defaults: `set r.tags = { team: "platform" } @default where r in resource`.
 
 Because the engine lowers these to the same small core, you keep composition and
 predictability without paying the verbosity tax.
@@ -190,9 +188,9 @@ Pattern:
 input region: string = "us-east1"      # a default, and --set region=... wins
 
 # or, over a relation that may have no row:
-has_region(true) if region_of(_)
-let region = r if region_of(r)
-let region = "us-east1" if not has_region(true)
+has_region(true) where region_of(_)
+let region = r where region_of(r)
+let region = "us-east1" where not has_region(true)
 ```
 
 Rules that rely on `not ...` should be:

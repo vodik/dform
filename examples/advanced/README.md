@@ -6,4 +6,4 @@ dform apply   # one tick
 dform query reachable
 dform query in_group
 ```
-Features: recursive rules, resources `if` a derived relation, `deny`, `warn`, `query`.
+Features: recursive rules, resources `where` a derived relation holds, `deny`, `warn`, `query`.

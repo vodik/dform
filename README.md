@@ -550,7 +550,7 @@ facts. The providers are asked for only those types' rows too (the
 Schema request's `types`). A `query` or `why` of a schema predicate, a
 rule reading one for a type it does not spell out (`type_attr(T, ...)`),
 or a rule wanting a resource whose type is built at runtime
-(`want(t, a) if t = "k8s.${k}"`), sees all of it. `type_doc` rows, the
+(`want(t, a) where t = "k8s.${k}"`), sees all of it. `type_doc` rows, the
 descriptions the language server shows, are never injected.
 
 ## The Kubernetes provider
@@ -751,8 +751,8 @@ phase boundary, exactly Terraform's refusal. It is two generated denies,
 so the refusal has provenance (`why`) and policy can relax it:
 
 ```dform
-deny "strict: unresolved value at plan time" { rule: r, head: h, nulls: ns } if stuck(r, h, _, ns), not allow_stuck(h)
-deny "strict: a pending group at plan time" { rule: r, head: h, nulls: ns } if may_derive(r, h, ns), not allow_stuck(h)
+deny "strict: unresolved value at plan time" { rule: r, head: h, nulls: ns } where stuck(r, h, _, ns), not allow_stuck(h)
+deny "strict: a pending group at plan time" { rule: r, head: h, nulls: ns } where may_derive(r, h, ns), not allow_stuck(h)
 ```
 
 The first covers every stuck derivation: a stuck resource rule (a pending
@@ -790,7 +790,7 @@ LABEL, "class": CLASS}` and a secret `{"sensitive": LABEL}`.
 
 `dform query stuck` lists the stuck rule instances. A rule can read
 them too, `stuck(RuleId, HeadPattern, Bindings, Nulls)`: a policy such as
-`deny "strict" { rule: r, on: n } if stuck(r, _, _, n)` refuses any plan
+`deny "strict" { rule: r, on: n } where stuck(r, _, _, n)` refuses any plan
 with a stuck instance. `stuck/4` is derived above every rule that can stick,
 so a reader must not itself be able to stick (read it into fresh variables
 only) and nothing it derives may feed such a rule; otherwise the program is
@@ -883,7 +883,7 @@ deformations of an interrupted apply, as `remaining`, when it resumes.
 N)` when given at an apply tick), and a policy can read the same facts:
 
 ```dform
-deny "no deletes here: ${t}[\"${a}\"]" if deformation("delete", t, a, _)
+deny "no deletes here: ${t}[\"${a}\"]" where deformation("delete", t, a, _)
 ```
 
 ```bash
@@ -979,7 +979,7 @@ is a compile error with a span, before anything is evaluated:
 | E0304 | a public place: a resource attribute the schema does not mark `sensitive`, a setting, an output or input not declared `secret(T)`, a `deny`/`warn` |
 | E0305 | a resource address (`want`, a resource name, `ref`, `scoped`) |
 
-An input's own refinement (`input pw: secret(string) where len(pw) >=
+An input's own refinement (`input pw: secret(string) check len(pw) >=
 12`) is where a secret may be checked; its deny does not print the value.
 `declassify(V, Reason)` is the one way a secret leaves on purpose: its
 value is `V`, public to the pass (what is inside it may be inspected), and
@@ -988,7 +988,7 @@ is written, for a policy to read or deny:
 
 ```dform
 output pw_len = declassify(len(pw), "its length is public")
-deny "declassified at ${at}: ${r}" if declassified(at, r)
+deny "declassified at ${at}: ${r}" where declassified(at, r)
 ```
 
 The value of an input or output declared `secret(T)` prints as its label,
@@ -1007,14 +1007,14 @@ needed:
 ```dform
 stack app[env] { approvals = jwks_file("approvers.jwks.json") }
 
-requires_approval(d, "a replace in prod") if {
+requires_approval(d, "a replace in prod") where {
   env == "prod"
   deformation("replace", t, a, _)
   d = "${t}[\"${a}\"]"
 }
 
 # Optional: who may approve what. Without it, any key of the trust root may.
-approver_allowed(who, d) if requires_approval(d, _), who in ["alice", "bob"]
+approver_allowed(who, d) where requires_approval(d, _), who in ["alice", "bob"]
 ```
 
 A plan with rows prints a `needs approval:` section, each deformation and
@@ -1282,7 +1282,7 @@ statement, so every error in a file is reported at once.
 
 `dform fmt [PATH...]` formats files in place (no PATH: the project's `.df` files):
 each construct in its normal form (a body on one line when it fits in 100
-columns, else `if { .. }`; `{ a }` for `{ a: a }`; `==` between bound
+columns, else `where { .. }`; `{ a }` for `{ a: a }`; `==` between bound
 sides; docs/grammar.md "Formatting"), two-space indentation per open
 bracket, block or body, one space around operators and after commas,
 `{ a: 1 }` inside braces, at most one blank line, and no comma where a
@@ -1301,20 +1301,22 @@ for byte, and a file with a syntax error is reported, not rewritten.
   - `deny("message", ctx)` and `warn(..)` are the checks, read after evaluation.
 
 - The surface:
-  - `resource Type name { if B  key = value ... }`: the one clause is a
-    query (a resource per match), a field's reads hoist into the block's
-    body; a name in quotes interpolates (`"private-${z}"`).
-  - `head if body`, `head if { lit NL lit }`; `let name = term if body` is a
-    value, read by name.
-  - `set r.tags = { team: "platform" } if r in resource`: a contribution.
-  - `deny "msg" { key: v } if body`, `warn ...`; the message interpolates.
+  - Every statement is `head where body`, and a block is a head:
+    `resource Type name { key = value ... } where B`: the one clause, after
+    the block, is a query (a resource per match), a field's reads hoist
+    into the block's body; a name in quotes interpolates
+    (`"private-${z}"`).
+  - `head where body`, `head where { lit NL lit }`; `let name = term where
+    body` is a value, read by name.
+  - `set r.tags = { team: "platform" } where r in resource`: a contribution.
+  - `deny "msg" { key: v } where body`, `warn ...`; the message interpolates.
   - `x in net.vpc` ranges over the wanted resources of a type; `r in T`,
     `has r.p`, `not r.p` (not true, absent included); `x in list`, and
     `x = list[i]` for the index too.
   - `let cfg = settings[env]` is a value whose type is the row's
     reference; `cfg.gke.pods_cidr` reads through it.
   - settings blocks: `settings prod { db.backup_days = 14 }`.
-  - `output k: T = t if body`: an output in one statement.
+  - `output k: T = t where body`: an output in one statement.
   - literals: lists `[a, b]` and objects `{ k: v }` (`{ a, b }` is `{ a: a, b: b }`).
   - list comprehensions: `[x | pred(x), pred2(x)]` (lowers to a `collect_list` rule).
   - expression terms: `ib = ia + 1` lowers to `IB = add(IA, 1)`.
@@ -1453,7 +1455,7 @@ are strings there, made inets by `inet(...)` where they are used.
 built-in `member(List, Item)`):
 
 ```dform
-host_ip(e, ip) if ip in settings[e].vm.ips
+host_ip(e, ip) where ip in settings[e].vm.ips
 ```
 
 ### Discovery facts
@@ -1482,9 +1484,9 @@ term. In the fake backend it resolves against `dform.state/inventory.json`.
 Planning will produce an `Adopt` action (`>` in plan output) instead of `Create`.
 
 ```dform
-adopt(net.vpc, "network.main::vpc", "existing-prod-vpc") if env == "prod", "existing-prod-vpc" in world.net.vpc
+adopt(net.vpc, "network.main::vpc", "existing-prod-vpc") where env == "prod", "existing-prod-vpc" in world.net.vpc
 
-set net.vpc["network.main::vpc"].adopted_id = cloud_ref(net.vpc, "existing-prod-vpc", "id") if env == "prod"
+set net.vpc["network.main::vpc"].adopted_id = cloud_ref(net.vpc, "existing-prod-vpc", "id") where env == "prod"
 ```
 
 `net.vpc["network.main::vpc"]` is an address: resource `vpc` of module
@@ -1499,7 +1501,7 @@ optional refinement:
 ```dform
 type environment = enum("dev", "staging", "prod")   # an alias: the enum wherever it is written
 input env: environment = "staging"
-input replicas: int = 2 where 1 <= replicas, replicas <= 10
+input replicas: int = 2 check 1 <= replicas, replicas <= 10
 input allowed_cidrs: list(inet) = []
 input owner: string                       # required: no default
 ```
@@ -1520,7 +1522,7 @@ a `string` takes the text) and checked before evaluation: `--set env=qa`
 is an error naming the input and its type, and so is `--set` of an input
 the program does not declare. A value the program computes (a module
 instance's input) is checked after evaluation and a wrong type blocks the
-plan. A required input with no value is an error at its declaration. `where
+plan. A required input with no value is an error at its declaration. `check
 R` refines the input (`R` names it by its name; see Refinement types).
 
 A program with no `input` declarations reads `--set k=v` as the fact
@@ -1528,18 +1530,18 @@ A program with no `input` declarations reads `--set k=v` as the fact
 
 ### Refinement types
 
-A `where` on an input, on an attribute of a `type` block, or a provider
+A `check` on an input, on an attribute of a `type` block, or a provider
 schema's `type_refine(T, Path, C)` fact refines a value:
 
 ```dform
 type settings {
-  db.backup_days: int where 1 <= db.backup_days <= 35
-  gke: { control_plane_cidr: inet where prefix_len(control_plane_cidr) == 28 }
+  db.backup_days: int check 1 <= db.backup_days <= 35
+  gke: { control_plane_cidr: inet check prefix_len(control_plane_cidr) == 28 }
 }
-type gke_cluster { zones: list(string) where len(zones) >= 3 }
+type gke_cluster { zones: list(string) check len(zones) >= 3 }
 ```
 
-A `where` over the value alone that fits the checkable table is a
+A `check` over the value alone that fits the checkable table is a
 constraint in the attribute's cell: `lo <= x <= hi` is `range(Lo, Hi)`,
 `prefix_len(x) <= N` (`>=`, `==`) is `prefix_len_le(N)` / `prefix_len_ge(N)`,
 `len(x) <= N` is `len_le(N)` / `len_ge(N)`, `x in [..]` or `x == v` is
@@ -1579,7 +1581,7 @@ module network {
   export subnet_of                           # readable as network.main.subnet_of
 
   resource net.vpc vpc { cidr = vpc_net }
-  zone_index(z, i) if z = zones[i]           # private
+  zone_index(z, i) where z = zones[i]        # private
   ...
   output vpc: net.vpc = vpc                  # an address output
   output private_subnet_ids: list(ref(net.subnet)) = [s.id | s in net.subnet]
@@ -1599,13 +1601,13 @@ Inside an instance:
   outside is an error naming the module. `export p` makes it readable as
   `m.INSTANCE.p`; `contributes p` makes the module a contributor to the
   global `p` (the demo's `iam_need`);
-- `input k: T [= D] [where R]` is read by its name `k` inside the module.
-  The instance's `k = v` (under its `if` clause) is a normal-rank contribution to the cell `(input, m.i, k)` of the
+- `input k: T [= D] [check R]` is read by its name `k` inside the module.
+  The instance's `k = v` (under its `where` clause) is a normal-rank contribution to the cell `(input, m.i, k)` of the
   attribute aggregate and `D` an `@default` one, so `why` shows both. An
   instance that sets an undeclared input, or leaves out one with no
-  default, is a compile error. `where R` refines the input (`R` names it
+  default, is a compile error. `check R` refines the input (`R` names it
   by its name; see Refinement types);
-- `output k: T = t [if B]` declares an output and gives it its value in
+- `output k: T = t [where B]` declares an output and gives it its value in
   one statement (the type is optional), read anywhere as `m.i.k`
   (`output(m.i, k, V)`); an output typed by a resource type (`output vpc:
   net.vpc = vpc`) is the scoped address of the instance's resource. `network[i].vpc` reads it with a
@@ -1626,9 +1628,9 @@ policy baseline {
   contributes t.tags                  # any type, .tags and below
   contributes settings.audit.sinks
 
-  set r.tags = { team: "platform" } if r in resource
-  deny "db must be private" { resource: pg } if ...   # deny/warn need no grant
-  warn "prod should enable audit logging" { env: "prod" } if ...
+  set r.tags = { team: "platform" } where r in resource
+  deny "db must be private" { resource: pg } where ...   # deny/warn need no grant
+  warn "prod should enable audit logging" { env: "prod" } where ...
 }
 
 use baseline
@@ -1660,7 +1662,7 @@ A scenario is a test: hypothetical facts plus ordinary deny rules, no
 ```dform
 scenario prod {
   set env = "prod"
-  deny "prod keeps 14 days of db backups" if not db.postgres["database.main::db"].backup_days == 14
+  deny "prod keeps 14 days of db backups" where not db.postgres["database.main::db"].backup_days == 14
 }
 ```
 
@@ -1955,7 +1957,7 @@ examples/demo an evaluation takes about 30 ms in a release build.
   p(a, b) mixed`), the collision lint (interpolate the key into the name, or
   say `isolated = true` on the stack), a required attribute nothing sets
   (a typed placeholder in the resource's block) and a ref to an address
-  no rule wants (guard the block on it: `if "other" in net.vpc`). An edit
+  no rule wants (guard the block on it: `} where "other" in net.vpc`). An edit
   to a formatted file leaves it formatted.
 - *References* of a predicate, an input or value name (a `{ k }` field
   included), a `let` or type alias, a module, an instance, a resource (by
