@@ -394,9 +394,9 @@ fn plan_why_explains_each_deformation() {
   visibility = \"private\"
   vpc_id = ?net.vpc[\"main\"].id
   zone = \"us-test-1a\"
-  by examples/tour/stacks/tour.df:106  resource net.subnet \"private-${z}\" { .. } where zone(z, n)
-  because examples/tour/stacks/tour.df:103  zone(\"us-test-1a\", 1)
-  because examples/tour/stacks/tour.df:43  net.vpc[\"main\"].cidr = 10.0.0.0/16
+  by examples/tour/stacks/tour.df:112  resource net.subnet \"private-${z}\" { .. } where zone(z, n)
+  because examples/tour/stacks/tour.df:109  zone(\"us-test-1a\", 1)
+  because examples/tour/stacks/tour.df:49  net.vpc[\"main\"].cidr = 10.0.0.0/16
 "
         ),
         "{out}"
