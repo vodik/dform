@@ -6,7 +6,7 @@ below say when a file is somewhere else.
 
 ```
 dform.toml                  the project root (`dform init` writes one)
-stacks/<stack>.df           one stack per file: the only files with `stack`
+stacks/<stack>.df           one stack per file, named after it
 modules/<module>.df         one module per file
 policies/<pack>.df          policy packs
 config/<stack>/<key>.yaml   per-deployment rows: a keyed stack's `config`
@@ -24,37 +24,45 @@ dform.state/                state: per deployment, audit logs, plan keys,
   or writes state refuses. It is small; programs stay in `.df` files. It holds `[project]` (a name, and the dform
   versions the project takes), `[providers]` (each provider's source and
   version requirement, Cargo's semver syntax; a program's `provider NAME {}`
-  takes its source from here), `[defaults]` (a `backend` template and
-  `unknowns`, which a stack statement overrides, and an s3 backend's
-  `lease_duration` and `lease_renewal`), `[discovery]`
+  takes its source from here), `[stacks.NAME]` (the stack `NAME.df`'s
+  operational settings, a closed list: `backend`, `unknowns`, `role`,
+  `approvals`, `audit_sink`, `isolated`, `config`; a term is a string,
+  `{stack}` the stack's name and `{k}` its key `k`'s value), `[defaults]`
+  (the same settings for every stack whose table does not say, and an s3
+  backend's `lease_duration` and `lease_renewal`), `[discovery]`
   (`exclude` globs) and `[remotes]` (other projects whose stacks' outputs
-  this one reads, each by its backend: `platform = { backend = "..." }`). Never inputs, keys, settings or anything per
-  deployment. Policy reads it as `project_provider(Name, Constraint)` and
-  `project_default(Key, Value)`.
-- Discovery walks the project for `.df` files: every file with a `stack`
-  statement is a stack, and a stack's name is unique in its project. A
-  directory holding its own `dform.toml` is another project, not walked.
-- A stack file is named for its stack (a program without a `stack`
-  statement is named for its file, so its name is the stack's).
+  this one reads, each by its backend: `platform = { backend = "..." }`).
+  Never inputs or key values: a deployment is named by its target. Policy
+  reads it as `project_provider(Name, Constraint)`, `project_default(Key,
+  Value)` and `project_stack(Name, Key, Value)`.
+- A stack is a file, named after itself: discovery takes `stacks/*.df`,
+  or, in a project with no `stacks/`, the root's `.df` files (a one-file
+  project is `dform.toml` beside `shop.df`). Any file runs by path, named
+  after itself. A `[stacks.NAME]` no file is is an error. A directory
+  holding its own `dform.toml` is another project, not walked.
+- A stack's keys are its `key` statements: `key env: environment` makes
+  each value of `env` a deployment, given by the target (`dform plan shop
+  env=prod`), never `--set`.
 - A module file is imported, never planned on its own; a stack file is
   planned, never imported.
 - A keyed stack's config is one file per deployment under
-  `config/<stack>/`, named by the key's value: `config/dform/prod.yaml` is
+  `config/<stack>/`, named by the key's value, `[stacks.dform] config =
+  'yaml("config/dform/{env}.yaml")'`: `config/dform/prod.yaml` is
   `dform[env=prod]`'s. A key the target leaves out is its input's default,
   for `plan` and `apply` alike (both print `deployment: dform[env=staging]
   (env from its default)` first); `controller run` names every key. A key
-  input defaulting to `"prod"` or `"production"` is a warning.
+  defaulting to `"prod"` or `"production"` is a warning.
 - Every path a program states resolves from the project root: imports
   (`import "modules/network.df"`), table and config sources
-  (`csv("data/peerings.csv")`, `config = yaml("config/dform/${env}.yaml")`),
+  (`csv("data/peerings.csv")`, `config = 'yaml("config/dform/{env}.yaml")'`),
   `file.*` externs, input relations from files, a provider's `source` and a
   trust root.
 - `dform.state/` is gitignored: each deployment's plan key (`state.key`,
   the HMAC key of its plan files and audit log) is a secret.
 
-The lints: a module or policy file with a
-`stack` statement is an error; importing a stack file is an error
-(anywhere); a `.df` outside the layout's directories is a warning.
+The lints: a module or policy file with a `key` is an error; importing a
+stack file is an error (anywhere); a `.df` outside the layout's
+directories (with `stacks/`, a `.df` at the root too) is a warning.
 
 ## This repository
 

@@ -40,7 +40,7 @@ term wraps inside its brackets. There is no statement terminator: `p(a).`
 is an error that says so, and so is `:-`.
 
 Two statements on one line are an error ("expected the end of the line").
-A block (`{ }` of a resource, settings, instance, provider or stack) and a
+A block (`{ }` of a resource, settings, instance or provider) and a
 body block (`where { }`) separate their entries by a newline or a comma.
 
 ## Tokens
@@ -61,7 +61,7 @@ operator: a hyphenated name is a string, and the parser says so.
 Statement keywords, recognised only as the first token of a statement (21):
 
 ```
-edition  import  provider  stack  type  decl  extern
+edition  import  provider  key  type  decl  extern
 input  output  let  set  export
 module  instance  policy  use  scenario
 resource  settings  deny  warn
@@ -116,7 +116,7 @@ to it. Keys are free-form; these are documented:
 ```dform
 #| The deployment's environment, the stack's key.
 #| owner: platform
-input env: environment = "staging"
+key env: environment = "staging"
 ```
 
 What a doc comment may document, and the `Kind` and `Name` of its facts:
@@ -124,7 +124,7 @@ What a doc comment may document, and the `Kind` and `Name` of its facts:
 | statement                                   | Kind        | Name                  |
 |---------------------------------------------|-------------|-----------------------|
 | `module m`, `policy p`, `scenario s`        | `module`, `policy`, `scenario` | `m`, `p`, `s` |
-| `input k`                                   | `input`     | `k`                   |
+| `input k`, `key k`                          | `input`     | `k`                   |
 | `output k`                                  | `output`    | `k`                   |
 | `decl p(..)`, `extern p(..)`, `input p(..) from ..` | `predicate` | `p` |
 | `p(..) where ..`, a fact, `let k = t`, `deny "m"`, `warn "m"` | `rule` | `p`, `k`, `m` (the message) |
@@ -259,13 +259,12 @@ stmt       := KEYWORD ...                      ; one production per keyword, bel
             | NAME ("." NAME)* "(" args ")" RANK? ("where" body)?   ; a fact or a rule
 
 provider   := "provider" NAME block
-stack      := "stack" DOTTED ("[" NAME ("," NAME)* "]")? block
 import     := "import" STRING
 type       := "type" NAME "=" type | "type" DOTTED attrs
 decl       := "decl" DOTTED columns "mixed"?
 extern     := "extern" DOTTED "(" bindarg ("," bindarg)* ")" "persist"?
 bindarg    := ("+" | "-") NAME (":" type)?
-input      := "input" NAME ":" type ("=" term)? ("check" body1)?
+input      := ("input" | "key") NAME ":" type ("=" term)? ("check" body1)?
             | "input" NAME columns "from" term     ; facts(..) | FORMAT(..)
 output     := "output" NAME (":" type)? ("=" term)? ("where" body)?
 let        := "let" NAME "=" term RANK? ("where" body)?
@@ -301,8 +300,8 @@ on the head's line, and a block is a head. A resource, settings row or
 instance takes at most one clause, after its block's `}`: `resource T n {
 .. } where B`, and a body of several lines is `} where {`, one literal per
 line, closed by its own `}`. The clause is a query, and the block is one
-resource (or row, or instance) per match. `provider` and `stack` blocks
-take no clause. `if`, the clause word of an earlier surface (H-3), is an
+resource (or row, or instance) per match. A `provider` block takes no
+clause. `if`, the clause word of an earlier surface (H-3), is an
 error wherever it stands, and the error prints the statement with its
 clause spelled `where`.
 
@@ -350,20 +349,41 @@ type or path (`arg(t, a, "tags", {..}) where want(t, a)`), a raw `arg` read in
 a body, and text that is not a program file (schemas, the compiler's own
 tests).
 
-### Stacks
+### Stacks and keys
 
-`stack app { .. }` names the program's stack; its block's settings are
-`backend = local("DIR")`, `unknowns = "strict" | "permissive"`,
-`role = "bootstrap"` and, on a keyed stack, `isolated = true`.
-`stack app[env]` and `stack app[env, region]` key it: each name in the
-brackets is one of the program's own inputs (a top-level `input`, not a
-secret; an error at the name otherwise), and each value of the key is a
-deployment of its own (`app[env=prod]`), with its own state. The key
-lowers to nothing: it is read by `stack::config` and decides where a run's
-state lives.
+A stack is a file, named after itself: `stacks/shop.df` is the stack
+`shop` (docs/layout.md), and a program says nothing about which stack it
+is. `key env: T` declares an input that selects the deployment: it is an
+input in every respect (typed, a cell, read as `env`, documented and
+hovered as an input) but that the target gives it (`dform plan shop
+env=prod`), never `--set` (an error naming the target form), it may not
+be `secret`, and its value names the deployment, with its own state.
+Several `key` lines make a composite key in source order
+(`shop[env=prod,region=eu]`). A key is declared at the top of the stack's
+file, never in a module, policy or scenario. `stack`, the statement of an
+earlier surface, is an error that says so.
 
-A stack's `config = FORMAT(SOURCE)` is not a constant: it is a table of
-the deployment's settings (see "Tables"), and needs a key.
+### Stack settings
+
+A stack's operational settings are not in the program: they are
+dform.toml's `[stacks.NAME]` for `stacks/NAME.df`, over `[defaults]`. A
+term is written as a string, `{stack}` in it the stack's name and `{k}`
+the value of its key `k` (in `backend` and `config`). The list is closed;
+any other key is an error naming it:
+
+| setting      | value                                                                 |
+|--------------|-----------------------------------------------------------------------|
+| `backend`    | where the state lives: `'local("DIR")'` or `'s3("BUCKET", "PREFIX", {endpoint, region})'` |
+| `unknowns`   | `"strict"` or `"permissive"` (the default)                            |
+| `role`       | `"bootstrap"`: it creates what a controller runs in, and stays batch  |
+| `approvals`  | who approves a plan: `'jwks("URL")'`, `'jwks_file("PATH")'`, or a list |
+| `audit_sink` | a command each audit log entry is piped to                            |
+| `isolated`   | `true`: each key value deploys into its own account (needs a key)     |
+| `config`     | `'FORMAT("config/NAME/{env}.yaml")'`: a table of the deployment's settings (needs a key) |
+
+The loader reads them into one `Stmt::Stack` of the program, at their
+place in dform.toml, so an error in one is reported there; `config` is
+lowered as a table (see "Relation inputs and tables").
 
 ### Provider blocks
 
@@ -449,9 +469,10 @@ p(Col, ...) :- reads, Repo = .., Ref = .., Path = .., table.git.p(Repo, Ref, Com
                table.FORMAT.p(Repo, Commit, Path, At, Col, ...)
 ```
 
-A stack's `config = FORMAT(SOURCE)` is the table `stack.config(path: string,
-value: any)`, read into `arg("settings", Row, Path, Value, normal)`, `Row`
-the key's value (several keys': `format("%s/%s", ..)`). `transform` expands
+A stack's `config = 'FORMAT(SOURCE)'` (dform.toml) is the table
+`stack.config(path: string, value: any)`, read into `arg("settings", Row,
+Path, Value, normal)`, `Row` the key's value (several keys':
+`format("%s/%s", ..)`), and `{k}` in SOURCE the hole `${k}`. `transform` expands
 that rule into one per settings path the program writes or reads, and a
 deny for a leaf at any other path.
 
@@ -647,7 +668,7 @@ as it is.
 | `decl p(a: t, b_c: t)`                    | record fields `a`, `b_c`                               |
 | `input p(a) from facts(S)`                | a relation read from `S`, re-read when it changes      |
 | `input p(c: t) from F(S)`                 | `p(C) :- reads, Path = S', table.F.p(Path, At, C)` ("Relation inputs and tables") |
-| `stack s[k] { config = F(S) }`            | `arg("settings", K, P, V, normal) :- .., table.F.stack.config(.., P, V)` |
+| `key k: T` (`[stacks.s] config = 'F(S)'`) | `arg("settings", K, P, V, normal) :- .., table.F.stack.config(.., P, V)` |
 | `enum("a", "b")` in a type                | `enum(a, b)`                                           |
 | `"a${e}b"`                                | `format("a%sb", e')`                                   |
 | `k` (value name)                          | `V`, reading `k(V)`                                    |

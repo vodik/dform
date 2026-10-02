@@ -6,5 +6,5 @@ dform apply dform env=staging   # keyed: apply names the deployment; one tick
 dform plan dform env=prod       # its own deployment: creates
 dform dev effects               # per scope: what it reads, writes, offers
 ```
-Features: `stack dform[env]`, `config = yaml(...)`, modules and instances, a policy pack with grants,
+Features: `key env`, dform.toml's `[stacks.dform]` (`config`, `isolated`, strict), modules and instances, a policy pack,
 a type alias, scenarios (`dform test`).

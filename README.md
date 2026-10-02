@@ -52,11 +52,12 @@ root: imports, table and config sources, `file.*` externs, input relations,
 provider sources and trust roots. Outside a project, `plan` and the `dev`
 views run on a program file with no state; `apply`, `controller`, `stack`,
 `state` and `log` refuse (a `dev --world` run keeps its state beside the
-world file, and runs anywhere). Discovery walks the project: every
-file with a `stack` statement is a stack, and a stack's name is unique in
-its project. A module or policy file with a `stack` statement is an error,
-importing a stack file is an error, and a `.df` outside the layout's
-directories is a warning. `docs/layout.md` has the convention; every
+world file, and runs anywhere). A stack is a file, named after itself:
+`stacks/shop.df` is the stack `shop`. With no `stacks/` directory the
+root's `.df` files are the stacks, so `dform.toml` beside `shop.df` is a
+project with one stack; any file runs by path, named after itself. A
+module or policy file with a `key` is an error, importing a stack file is
+an error, and a `.df` outside the layout's directories is a warning. `docs/layout.md` has the convention; every
 example under `examples/` follows it, and test-only programs are under
 `tests/fixtures/`.
 Each example's `README.md` says what it shows and lists the commands to
@@ -65,10 +66,17 @@ run from its directory (`dform` there is `cargo run --` in a checkout);
 
 `dform.toml` is small; programs stay in `.df` files. It holds
 the project's name and the dform versions it takes, each provider's source
-and version (Cargo's semver syntax: `"2.1"` is `^2.1`), defaults a stack
-statement overrides, and globs discovery skips. Policy reads it as facts,
-`project_provider(Name, Constraint)` and `project_default(Key, Value)`.
-Nothing per deployment lives there.
+and version (Cargo's semver syntax: `"2.1"` is `^2.1`), each stack's
+operational settings, `[stacks.NAME]` for `stacks/NAME.df` over
+`[defaults]`, and globs discovery skips. A stack's settings are a closed
+list: `backend`, `unknowns`, `role`, `approvals`, `audit_sink`,
+`isolated` and `config`; a term is written as a string, `{stack}` the
+stack's name and `{k}` the value of its key `k` (in `backend` and
+`config`), and any other key is an error naming the list. A
+`[stacks.NAME]` no file is is an error. Policy reads it as facts,
+`project_provider(Name, Constraint)`, `project_default(Key, Value)` and
+`project_stack(Name, Key, Value)`. No inputs and no key values: a
+deployment is named by its target.
 
 ```toml
 [project]
@@ -85,6 +93,12 @@ unknowns = "strict"
 lease_duration = "60s"               # an s3 backend's lease (the default)
 lease_renewal = "20s"                # how often its holder renews it (the default)
 
+[stacks.shop]                        # stacks/shop.df
+backend = 's3("acme-state", "shop/{env}")'
+approvals = 'jwks("https://sso.acme.example/keys")'
+config = 'yaml("config/shop/{env}.yaml")'
+isolated = true
+
 [discovery]
 exclude = ["scratch/**"]
 ```
@@ -93,18 +107,22 @@ exclude = ["scratch/**"]
 
 A command runs on a target: a stack's name (`dform plan infra`), its file
 (`dform plan stacks/infra.df`), or one deployment of a keyed stack with its
-key (`dform plan 'shop.app[env=prod]'`, or `dform plan shop.app env=prod`).
-Key values belong to the target; other inputs stay `--set`, and `--set` of a
-key input is an error. With no target it is the one stack under the working
-directory, else the stacks are listed and dform exits non-zero. A key the
+key (`dform plan 'shop[env=prod]'`, or `dform plan shop env=prod`). Key
+values belong to the target; other inputs stay `--set`, and `--set` of a
+key is an error. `--set k=@FILE` reads FILE (YAML, JSON or TOML by its
+extension, or a `.df` file of the one fact `k(value)`) as the input's
+value, parsed as its type the way a YAML cell is: how the outside gives an
+object or a list; a plan file records the file's digest. With no target it
+is the one stack under the working directory, else the stacks are listed
+and dform exits non-zero. A key the
 target does not name is its input's default, for `plan` and `apply` alike;
-both print the deployment first, `deployment: shop.app[env=dev] (env from its
+both print the deployment first, `deployment: shop[env=dev] (env from its
 default)` (`plan --json`: `deployment` and `key_defaults`). `controller run`,
-which runs unattended, names every key value (`dform controller run shop.app
+which runs unattended, names every key value (`dform controller run shop
 env=prod`). `apply` also takes a plan file (`dform apply plan.json`).
 
 `apply` prints the plan and asks `Apply these N deformations to
-shop.app[env=prod]? [y/N]`; only `y` or `yes` proceeds. `--yes` (`-y`)
+shop[env=prod]? [y/N]`; only `y` or `yes` proceeds. `--yes` (`-y`)
 applies without asking, as a script or CI does: with no terminal to ask on
 and no `--yes`, apply refuses at once, naming the flag. An undeformed plan
 asks nothing, nor does `apply plan.json` (the file was reviewed; approvals
@@ -149,33 +167,36 @@ it imports). `dform completions zsh > _dform` completes stack
 names, key values (from the key inputs' enum types) and deployments with
 state.
 
-State is scoped to a stack. One program owns one stack, named by its
-`stack` statement:
+State is scoped to a stack. One program is one stack, named after its
+file (`stacks/demo.df` is `demo`), and its operational settings are
+`dform.toml`'s `[stacks.demo]`, over `[defaults]`:
 
-```dform
-stack demo.main {
-  backend = local("state/demo")    # where state, world and lock live, relative to the
-                                   # project root; default dform.state/<name>; or
-                                   # s3(...), see "State backends"
-  unknowns = "strict"              # or "permissive" (the default); see "Strict mode"
-  role = "bootstrap"               # optional: it stays batch; see "Bootstrap and handover"
-  approvals = jwks("https://...")  # optional: who may approve a plan; see "Approvals"
-  audit_sink = "logger -t dform"   # optional: each audit entry to a command; see "The audit log"
-}
+```toml
+[stacks.demo]
+backend = 'local("state/demo")'   # where state, world and lock live, relative to the
+                                  # project root; default dform.state/<name>; or
+                                  # s3(...), see "State backends"
+unknowns = "strict"               # or "permissive" (the default); see "Strict mode"
+role = "bootstrap"                # optional: it stays batch; see "Bootstrap and handover"
+approvals = 'jwks("https://...")' # optional: who may approve a plan; see "Approvals"
+audit_sink = "logger -t dform"    # optional: each audit entry to a command; see "The audit log"
+isolated = true                   # a keyed stack's deployments do not share names
+config = 'yaml("config/demo/{env}.yaml")'   # a keyed stack's settings per deployment
 ```
 
-Without a `stack` statement the stack is the basename of the program file
-without its extension (discovery does not find it: name it by its file). Two programs never see each other's resources. `apply` holds the
+Two programs never see each other's resources. `apply` holds the
 stack's lock, `<state dir>/state.lock` (the holder's pid): a second apply
 of the same stack while one runs fails naming the holder; a lock whose
 holder is gone (a killed apply) is taken over with a note.
 
 ### State backends
 
-`backend = local("DIR")` (the default, `dform.state/<stack>`) keeps a
-deployment's files in a directory. `backend = s3("BUCKET", "PREFIX",
-{endpoint: "URL", region: "R"})` keeps them in an S3 bucket under PREFIX
-(a keyed stack's deployment under `PREFIX/<k>=<v>`): the state (identity,
+`backend = 'local("DIR")'` (the default, `dform.state/<stack>`) keeps a
+deployment's files in a directory. `backend = 's3("BUCKET", "PREFIX",
+{endpoint: "URL", region: "R"})'` keeps them in an S3 bucket under PREFIX
+(a keyed stack's deployment under `PREFIX/<k>=<v>`, unless the backend
+names the key, `s3("acme", "shop/{env}")`, and each deployment is where it
+says): the state (identity,
 in-flight and uncertain records, outputs), the plan key `state.key`, the
 audit log (in segments, `state.audit/000001.jsonl`, ...: see "The audit
 log"), the lease `state.lock`, the published outputs `outputs.json` and the
@@ -183,14 +204,15 @@ controller's memo `controller.json` (and its `approvals/` drop directory
 and `approval-pending.json`). The record is
 optional: without an endpoint it is AWS S3's regional endpoint
 (virtual-host style), with one the URL path-style (MinIO, OVH Object
-Storage, anything S3-compatible); the region defaults to `us-east-1`. The
-manifest's `[defaults] backend` takes the same term as a string, with
-`{stack}` the stack's name. The mock's world, the inventory and the cache
+Storage, anything S3-compatible); the region defaults to `us-east-1`. In
+`[defaults]` and `[stacks.NAME]`, `{stack}` is the stack's name and `{k}`
+the value of its key `k`. The mock's world, the inventory and the cache
 stay under `dform.state/`: they are the provider's and the machine's, not
 state.
 
-```dform
-stack net { backend = s3("acme-dform", "prod/net", {endpoint: "https://s3.gra.io.cloud.ovh.net", region: "gra"}) }
+```toml
+[stacks.net]
+backend = 's3("acme-dform", "prod/net", {endpoint: "https://s3.gra.io.cloud.ovh.net", region: "gra"})'
 ```
 
 Credentials come from `DFORM_S3_ACCESS_KEY_ID` and
@@ -247,21 +269,23 @@ stack's prefix), and other stacks read its outputs (the registry records
 
 ### Keyed stacks: one deployment per key value
 
-`stack app[env]` (or `stack app[env, region]`) names the inputs that are
-deployment identity. Each value of the key is its own deployment,
+`key env: T` (and `key region: T`, a composite key in source order)
+declares an input that is deployment identity: an input in every other
+respect (typed, a cell, read as `env`), given by the target, never
+`--set`, and never a secret. Each value of the key is its own deployment,
 `app[env=prod]`, with its own state directory (`dform.state/app/env=prod/`;
 several keys are joined, `env=prod,region=us-east1`, and a value is escaped
 for the file system: every byte but letters, digits, `-`, `_` and a `.`
 that does not lead is `%XX`), lock, registry entry and controller. Inputs
 outside the key are parameters of a deployment: they deform it in place.
 The key's value comes from the target, an `--input-file`, a scenario's
-`with`, else the input's default; a key input with none is an error naming
-it. `plan` and `apply` name the deployment on their first line, and say
-which key values are defaults. A key input whose default is `"prod"` or
-`"production"` is a lint warning: a run that forgets the key would be of
-production.
-Nothing about environments is built in: `dform.df` is `stack dform[env]`,
-so `plan dform env=prod` plans prod against prod's state, not staging's.
+`set`, else its default; a key with none is an error naming it. `plan`
+and `apply` name the deployment on their first line, and say which key
+values are defaults. A key whose default is `"prod"` or `"production"` is
+a lint warning: a run that forgets the key would be of production.
+Nothing about environments is built in: `dform.df` says `key env:
+environment`, so `plan dform env=prod` plans prod against prod's state,
+not staging's.
 
 ```bash
 cargo run -- -C examples/demo apply dform env=staging   # dform[env=staging]: dform.state/dform/env=staging/
@@ -286,9 +310,10 @@ field, a deny under `unknowns = "strict"` (a `deny` fact, so `dform why
 'deny(M)'` explains it). The value flows through bindings, interpolation,
 calls, lookups (`settings[env].bucket`), module inputs and refs; a read
 that only gates the resource's block, or feeds another field, does not
-count, and neither does it for `rekey`'s list. `stack app[env] { isolated = true }`
-says each key value deploys into its own account (or world), and turns
-the lint off; `dform.df` says so, since its iam module's names are fixed.
+count, and neither does it for `rekey`'s list. `isolated = true` in the
+stack's `[stacks.NAME]` says each key value deploys into its own account
+(or world), and turns the lint off; `dform.df`'s says so, since its iam
+module's names are fixed.
 
 `stack_output("app[env=prod]", k, V)` reads one deployment's outputs,
 `dform stack handover 'app[env=prod]' --to ...` hands one over, and
@@ -299,7 +324,7 @@ output. `apply` records the stack's outputs whose values are known in its
 state, publishes them beside it as their own object, `outputs.json`, and
 records where the deployment's objects are (an absolute directory, or
 `s3://...`) in `dform.state/stacks.json`; every other program reads them
-as facts, `stack_output("net.shared", vpc_id, V)`, from `outputs.json`
+as facts, `stack_output("net", vpc_id, V)`, from `outputs.json`
 only, never the state. An output of a configured attribute (`output c =
 net.vpc.main.cidr`, which the program keeps as a ref) is published as the
 program's value of it, else the world's; one whose value is not known yet
@@ -749,7 +774,7 @@ and the sections follow in this order; what cannot be decided yet is said so:
   already has: the identity mapping is stale.
 - `stack NAME is undeformed`: nothing to do, nothing stuck (the only line).
 
-Strict mode. `stack NAME { unknowns = "strict" }` refuses a plan that needs a
+Strict mode. `unknowns = "strict"` in the stack's `[stacks.NAME]` refuses a plan that needs a
 phase boundary, exactly Terraform's refusal. It is two generated denies,
 so the refusal has provenance (`why`) and policy can relax it:
 
@@ -1020,8 +1045,13 @@ pass; `r` is the resource, a reference, which the plan, the plan file and
 the approval check print as its address (`T["A"]`). No rows, no token
 needed:
 
+```toml
+[stacks.app]
+approvals = 'jwks_file("approvers.jwks.json")'
+```
+
 ```dform
-stack app[env] { approvals = jwks_file("approvers.jwks.json") }
+key env: enum("staging", "prod") = "staging"
 
 requires_approval(r, "a replace in prod") where env == "prod", deformation("replace", r, _)
 
@@ -1050,10 +1080,10 @@ its key, and an expiry. Two shapes are accepted, nothing vendor-specific:
   whose payload is `{stack, key, digest, approver, expires}` (`expires` RFC
   3339, UTC), signed with Ed25519; the envelope may also be given in base64.
 
-The trust root is a stack property: `approvals = jwks("https://...")`, a
+The trust root is a stack setting: `approvals = 'jwks("https://...")'`, a
 JWKS document fetched at apply time (with `curl`) only when the copy cached
 beside the state is older than an hour (a failed fetch falls back to a stale
-copy, with a warning), or `jwks_file("path")` (relative to the program) for
+copy, with a warning), or `jwks_file("path")` (relative to the project root) for
 offline use; a list of them is fine. A second argument, `jwks(URL, ISSUER)`,
 is the `iss` a JWT from it must name. A key is found by the token's `kid`
 (the envelope's `keyid`); a DSSE signature needs an Ed25519 (`OKP`) key.
@@ -1090,9 +1120,9 @@ The approval service is not dform's. `dform-approve` (built with dform,
 cd examples/approvals
 A="cargo run -q -p dform-direct --bin dform-approve --"
 $A keygen approver.key > approvers.jwks.json      # the trust root: jwks_file("approvers.jwks.json")
-cargo run -- apply approvals.demo env=prod
-cargo run -- plan approvals.demo env=prod --set cidr=10.1.0.0/16 --out plan.json
-$A sign approver.key --digest sha256:... --stack approvals.demo --key env=prod \
+cargo run -- apply approvals env=prod
+cargo run -- plan approvals env=prod --set cidr=10.1.0.0/16 --out plan.json
+$A sign approver.key --digest sha256:... --stack approvals --key env=prod \
   --approver alice --ttl 3600 > approval.json      # --format jwt; --format fact for approval/1
 cargo run -- apply plan.json --approval approval.json
 ```
@@ -1486,10 +1516,12 @@ The controller watches what the last run's tables read: a changed file,
 or a ref that names another commit, is an input event (`input pins changed
 (git ops.git env/prod:pins.yaml)`).
 
-A keyed stack's `config` is a table of its settings, per deployment:
+A keyed stack's `config` (dform.toml) is a table of its settings, per
+deployment, `{k}` the value of its key `k`:
 
-```dform
-stack dform[env] { config = yaml("config/${env}.yaml") }
+```toml
+[stacks.dform]
+config = 'yaml("config/dform/{env}.yaml")'
 ```
 
 Every leaf of the document (a mapping; a CSV with the columns `path` and
@@ -1498,7 +1530,7 @@ the key's value (several keys' joined by `/`), at the leaf's dotted path:
 `db: { backup_days: 14 }` in `config/prod.yaml` is `set settings["prod"].db.backup_days =
 14`, and wins over an `@default` layer per leaf. A leaf at a path the program
 neither writes nor reads is a deny naming the file and line (a typo).
-The demo's per-environment settings are `config/dform/${env}.yaml`; its CIDRs
+The demo's per-environment settings are `config/dform/{env}.yaml`; its CIDRs
 are strings there, made inets by `inet(...)` where they are used.
 
 ## Escape hatches
@@ -1553,16 +1585,19 @@ A program declares its inputs, typed, with an optional default and an
 optional refinement:
 
 ```dform
-type environment = enum("dev", "staging", "prod")   # an alias: the enum wherever it is written
-input env: environment = "staging"
+key env: environment = "staging"                    # the target gives it: `dform plan app env=prod`
 input replicas: int = 2 check 1 <= replicas, replicas <= 10
 input allowed_cidrs: list(inet) = []
 input owner: string                       # required: no default
+
+type environment = enum("dev", "staging", "prod")   # an alias: the enum wherever it is written
 ```
 
 Each is read as a relation, `env(E)`. An input is a cell of the attribute
-aggregate: the default is an `@default` contribution, `--set env=prod` a
-normal one that wins (and `why` shows both). `--input-file FILE.df`
+aggregate: the default is an `@default` contribution, `--set replicas=3`
+a normal one that wins (and `why` shows both). A `key` is an input the
+target gives instead (`dform plan app env=prod`), and its value names the
+deployment (see "Keyed stacks"); `--set` of one is an error. `--input-file FILE.df`
 (repeatable) gives inputs as facts, one per input, `env(prod).
 allowed_cidrs([inet("10.0.0.0/8")]).`, each a normal contribution stated
 where the file states it; the plan file records each input file's digest.
@@ -1572,8 +1607,8 @@ Types are `int`, `string`, `bool`, `inet`, `enum(a, b, ...)`, `list(T)`,
 unchecked). `type NAME = TYPE` names a type anywhere a type is written; an
 imported file's aliases are in scope, and a module's once it says `export
 type NAME` (docs/grammar.md "Type aliases"). A `--set` value is read as its input's type (an `inet` parses,
-a `string` takes the text) and checked before evaluation: `--set env=qa`
-is an error naming the input and its type, and so is `--set` of an input
+a `string` takes the text) and checked before evaluation: `--set
+replicas=two` is an error naming the input and its type, and so is `--set` of an input
 the program does not declare. A value the program computes (a module
 instance's input) is checked after evaluation and a wrong type blocks the
 plan. A required input with no value is an error at its declaration. `check
@@ -1744,21 +1779,21 @@ one line per event and per tick:
 ```
 04:22:01 event start
 04:22:01 tick 1: plan: 3 deformations (3 create)
-04:22:01 stack renfry.workload is undeformed
+04:22:01 stack workload is undeformed
 04:22:07 input release changed (file release.facts)
 04:22:07 event input release
 04:22:07 tick 1: plan: 1 deformation (1 update)
-04:22:07 stack renfry.workload is undeformed
-04:22:12 event world dform.state/renfry.workload/remote.json changed
+04:22:07 stack workload is undeformed
+04:22:12 event world dform.state/workload/remote.json changed
 04:22:12 drift k8s.deployment.web spec.replicas: 3 -> 5 (auto_reconcile)
 04:22:12 tick 1: plan: 1 deformation (1 update)
-04:22:12 stack renfry.workload is undeformed
+04:22:12 stack workload is undeformed
 ```
 
 ```bash
-cargo run -- -C examples/bootstrap controller run renfry.workload                   # poll every 500ms
-cargo run -- -C examples/bootstrap controller run renfry.workload --poll 100 --max-events 3   # stop after 3 events
-cargo run -- -C examples/bootstrap controller run renfry.workload --once            # what changed since the last run
+cargo run -- -C examples/bootstrap controller run workload                   # poll every 500ms
+cargo run -- -C examples/bootstrap controller run workload --poll 100 --max-events 3   # stop after 3 events
+cargo run -- -C examples/bootstrap controller run workload --once            # what changed since the last run
 ```
 
 The target names the stack, and of a keyed stack one deployment
@@ -1829,25 +1864,25 @@ there):
 
 ```bash
 eval "$(crates/dform-s3/minio.sh start)"
-cargo run -- -C examples/bootstrap apply renfry.bootstrap   # 3 ticks
-cargo run -- -C examples/bootstrap stack handover renfry.workload \
+cargo run -- -C examples/bootstrap apply bootstrap   # 3 ticks
+cargo run -- -C examples/bootstrap stack handover workload \
   --to 's3("dform-test", "renfry/workload", {endpoint: "http://127.0.0.1:9000"})'
-cargo run -- -C examples/bootstrap controller run renfry.workload
+cargo run -- -C examples/bootstrap controller run workload
 crates/dform-s3/minio.sh stop
 ```
 
 The bucket must exist (dform makes none; the test makes `dform-test`).
 
-`stacks/bootstrap.df` (stack `renfry.bootstrap`, mock GCP from `providers/gcp/schema.df` and
+`stacks/bootstrap.df` (stack `bootstrap`, mock GCP from `providers/gcp/schema.df` and
 mock Kubernetes) creates the network, the subnetwork and the cluster in
 tick 1; the node pools (one per zone, and the zones are the cluster's)
 and the `dform-system` namespace (its provider is configured from the
 cluster's endpoint and CA) in tick 2; and the `dform-controller`
 Deployment, whose args name the workload stack, in tick 3, once its node
-pool is up. `stacks/workload.df` (stack `renfry.workload`) is a namespace, a
+pool is up. `stacks/workload.df` (stack `workload`) is a namespace, a
 Deployment whose image is the `release` input relation, and a Service.
 
-`stack NAME { role = bootstrap }` marks the stack that creates what the
+`role = "bootstrap"` in a stack's `[stacks.NAME]` marks the stack that creates what the
 controller runs in: it stays batch. `dform controller run` refuses it (by its
 program or by the registry), and it is never handed over.
 
@@ -1858,10 +1893,10 @@ registry, `dform.state/stacks.json` (`{"state": ..., "backend": ...}`
 beside the plain state paths, absolute; the controller's `event world` line
 names it relative to the root). The mock's world goes with the state into
 a directory; for a bucket it stays in `dform.state/NAME/` (it is the
-provider's). Every later run of the stack uses it, whatever the program's
+provider's). Every later run of the stack uses it, whatever its
 `backend` says; a batch `apply` of a handed-over stack is refused (the
 controller runs it), `plan` is not. The stack's state is found in the
-registry, else where its program's backend says; the target must hold none
+registry, else where its backend says; the target must hold none
 of a deployment's objects, and the stack not be locked. Backends:
 
 - `local("DIR")`: a directory, relative to the project root, as a stack's
