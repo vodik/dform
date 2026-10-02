@@ -17,3 +17,4 @@
 - Error messages name the resource address and attribute path; never just "conflict".
 - Nothing is added to crates/dform-grpc (DESIGN.org R-13): it is the frozen native bridge until the wasm bridge passes `provider check`.
 - Decisions of the 2026-10-01 review are DESIGN.org "Review of 2026-10-01: decisions" (R-1 to R-14); a ticket that cites one follows it.
+- After each fan-out round lands, one consolidation pass (WORK.org "Consolidation pass after each round") runs before the next round starts: duplicated helpers, parallel implementations and copied test utilities are merged to one, with no behaviour change.
