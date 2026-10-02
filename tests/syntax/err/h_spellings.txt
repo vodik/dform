@@ -5,7 +5,7 @@ tests/syntax/err/h_spellings.df:12:5: `set settings["prod"].size` with no condit
 tests/syntax/err/h_spellings.df:13:1: `set env` at the top of the program sets the program's own input
   help: give `input env` a default, or pass `--set env=...` on the command line
 tests/syntax/err/h_spellings.df:16:1: output vpc has no value
-  help: an output is one statement: `output vpc: T = term`
+  help: an output is one statement, `output vpc: T = term`; `output vpc` alone exports the relation vpc, which is declared or defined here
 tests/syntax/err/h_spellings.df:20:17: a rule reads `deny`
   help: a deny or a warn is checked after evaluation: no rule may read deny/2 or warn/2 (H-8); read what the deny reads instead
 tests/syntax/err/h_spellings.df:23:16: `net.vpc["main"]` names the resource `main` in scope

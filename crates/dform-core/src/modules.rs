@@ -88,6 +88,8 @@ struct Interface {
     inputs: Vec<InputDecl>,
     /// `input p`: relations the user gives the rows of (R-55).
     relations: Vec<crate::ast::Extern>,
+    /// `output p`: relations the copy exports.
+    relation_outputs: Vec<OutputDecl>,
     outputs: BTreeMap<String, OutputDecl>,
     output_values: Vec<OutputDecl>,
 }
@@ -101,6 +103,7 @@ fn interface(body: &[Stmt]) -> (Interface, Vec<Stmt>) {
         match s {
             Stmt::Input(d) => i.inputs.push(d.clone()),
             Stmt::RelationInput(e) => i.relations.push(e.clone()),
+            Stmt::Output(o) if o.relation.is_some() => i.relation_outputs.push(o.clone()),
             Stmt::Output(o) if o.value.is_none() => {
                 i.outputs.entry(o.name.clone()).or_insert_with(|| o.clone());
             }
@@ -197,6 +200,10 @@ fn is_shared(pred: &str) -> bool {
 /// is the copy `n`.
 pub const INSTANCE_OF: &str = "instance_of";
 
+/// The rows a copy exports (R-55), `__rows(Scope, p, [x, ..])` for its
+/// `output p`: what `copy.p(x, ..)` and `c[t].p(x, ..)` read.
+pub const ROWS: &str = "__rows";
+
 /// A scope the resolver wrote as its user's, `__scope(t)`: a read inside a
 /// component of a copy the component does not make (`blue.vpc` of the
 /// stack's `blue`). Expansion puts no copy's scope in front of it, and
@@ -221,7 +228,7 @@ impl Names {
     fn private(scope: &str, defined: BTreeMap<String, (usize, Span)>) -> Names {
         let map = defined
             .into_keys()
-            .filter(|p| !is_shared(p) && p != INSTANCE_OF)
+            .filter(|p| !is_shared(p) && p != INSTANCE_OF && p != ROWS)
             .map(|p| {
                 let n = private_name(scope, &p);
                 (p, n)
@@ -333,6 +340,8 @@ pub fn expand(program: &Program) -> Result<Expanded> {
                     cx.declared.push(Declared::new("", leaf, address, false));
                 }
             }
+            // The stack's own relation, exported: published as its rows.
+            Stmt::Output(o) if o.relation.is_some() => out.push(published_rows(o)),
             // The stack's own output: `output(k, V)` in the root scope.
             Stmt::Output(o) if o.value.is_none() => {
                 if is_secret_type(&o.ty) {
@@ -913,7 +922,56 @@ fn module_stmts(scope: &str, iface: &Interface, body: Vec<Stmt>) -> Vec<Stmt> {
     for i in iface.inputs.iter().flat_map(crate::inputs::leaves) {
         out.extend(refinement(&i, scope));
     }
+    out.extend(iface.relation_outputs.iter().map(rows_of));
     out
+}
+
+/// `output p` of a copy: its rows `__rows(p, [X1, ..]) :- p(X1, ..)`, the
+/// copy's scope put in front by scoping; a column of the copy's resources
+/// is their addresses, `scoped("", X)`, as an `addr` output's is.
+fn rows_of(o: &OutputDecl) -> Stmt {
+    let refs = o.relation.clone().unwrap_or_default();
+    let vars: Vec<Term> = (0..refs.len())
+        .map(|i| Term::Var(format!("X{i}")))
+        .collect();
+    let row = vars
+        .iter()
+        .zip(&refs)
+        .map(|(v, r)| match r {
+            true => Term::Func {
+                name: "scoped".into(),
+                args: vec![str_term(""), v.clone()],
+            },
+            false => v.clone(),
+        })
+        .collect();
+    Stmt::Rule(RuleStmt {
+        head: atom(ROWS, vec![str_term(&o.name), Term::List(row)], o.span),
+        body: vec![Lit::Pos(atom(&o.name, vars, o.span))],
+    })
+}
+
+/// `output p` of a stack: the value it publishes, its rows as a list of
+/// rows, `output(p, [[X1, ..] | p(X1, ..)])`, which a reader's
+/// `stack[k=v].p(x, ..)` ranges over.
+fn published_rows(o: &OutputDecl) -> Stmt {
+    let vars: Vec<Term> = (0..o.relation.as_ref().map_or(0, Vec::len))
+        .map(|i| Term::Var(format!("X{i}")))
+        .collect();
+    fact_or_rule(
+        atom(
+            "output",
+            vec![
+                str_term(&o.name),
+                Term::ListComp {
+                    item: Box::new(Term::List(vars.clone())),
+                    body: vec![Lit::Pos(atom(&o.name, vars, o.span))],
+                },
+            ],
+            o.span,
+        ),
+        Vec::new(),
+    )
 }
 
 fn refine_pred(input: &str) -> String {
@@ -1364,7 +1422,7 @@ fn rewrite_atom(mut atom: Atom, sc: Sc) -> Atom {
                 })
                 .collect();
         }
-        ("output", 2) => {
+        ("output", 2) | (ROWS, 2) => {
             let mut args = atom.args.into_iter().map(t);
             let (k, v) = (args.next().unwrap(), args.next().unwrap());
             atom.args = vec![str_term(sc.name), k, v];
@@ -1375,8 +1433,8 @@ fn rewrite_atom(mut atom: Atom, sc: Sc) -> Atom {
             args[1] = prefix_scope(sc.name, args[1].clone());
             atom.args = args;
         }
-        // A copy inside this one's output.
-        ("output", 3) => {
+        // A copy inside this one's output, or its rows.
+        ("output", 3) | (ROWS, 3) => {
             let mut args: Vec<Term> = atom.args.into_iter().map(t).collect();
             args[0] = prefix_scope(sc.name, args[0].clone());
             atom.args = args;

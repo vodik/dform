@@ -6,12 +6,15 @@ edition 2026
 
 input backup_days: int
 input multi_az: bool
-input subnets: network.subnets
+#| The subnets the database is placed in, one row each.
+input subnet
+
+decl subnet(subnet: net.subnet)
 
 #| A PostgreSQL database in the network's private subnets.
 resource db.postgres db {
   public = false
-  subnets
+  subnets = [ s | subnet(s), s in net.subnet ]
   backup_days
   multi_az
 }
@@ -34,12 +37,19 @@ output iam_need = { action: "db.connect", resource: db } where has backup_days
     (type
       (dotted_name
         (identifier))))
-  (input
-    (identifier)
-    (type
-      (dotted_name
+  (comment)
+  (input_relation
+    (identifier))
+  (decl
+    (dotted_name
+      (identifier))
+    (columns
+      (field_declaration
         (identifier)
-        (identifier))))
+        (type
+          (dotted_name
+            (identifier)
+            (identifier))))))
   (comment)
   (resource
     (dotted_name
@@ -53,7 +63,20 @@ output iam_need = { action: "db.connect", resource: db } where has backup_days
         (false))
       (field
         (block_path
-          (identifier)))
+          (identifier))
+        (comprehension
+          (identifier)
+          (body
+            (atom_literal
+              (call
+                (identifier)
+                (arguments
+                  (identifier))))
+            (in_literal
+              (identifier)
+              (member_expression
+                (identifier)
+                (identifier))))))
       (field
         (block_path
           (identifier)))

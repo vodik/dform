@@ -930,7 +930,9 @@ mod tests {
         // 19; the modules' `iam_need` reaches the stack through an output
         // (R-5), a cell of the aggregate too, read in two more: 21; `let
         // cfg` is a cell too (R-3), its contribution and its aggregate two
-        // more: 23.
+        // more: 23. The database's and the cluster's subnets are a relation
+        // the network exports (R-55), not an output cell read through two
+        // more: 15.
         let (v, _) = run_file(
             "examples/demo/stacks/dform.df",
             &[root().join("examples/demo/stacks/dform.df")],
@@ -940,7 +942,7 @@ mod tests {
         let Verdict::Stratified { strata } = v else {
             panic!()
         };
-        assert_eq!(strata.values().max().copied().unwrap() + 1, 23);
+        assert_eq!(strata.values().max().copied().unwrap() + 1, 15);
     }
 
     /// The graph `dform dev strata` prints is the one evaluation runs with: a

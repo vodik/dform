@@ -59,19 +59,19 @@ instance network.vpc peer {
   vpc_net = inet(cfg.network.peer.vpc_net)
 } where env != "dev"
 
-# A module is imported once, its inputs bound by the block (database.df's
-# resources are `database::db`); values are wired through outputs.
+# A module is imported once, its inputs bound by its block, rows included
+# (database.df's resources are `database::db`): main's private subnets.
 use database {
   backup_days = cfg.db.backup_days
   multi_az = cfg.db.multi_az
-  subnets = main.private_subnets
+  subnet(s) where main.private_subnet(s)
 } where env != "dev"
 
 use kubernetes {
   private_api = cfg.k8s.private_api
   nodepool_min = cfg.k8s.nodepool.min
   nodepool_max = cfg.k8s.nodepool.max
-  subnets = main.private_subnets
+  subnet(s) where main.private_subnet(s)
 } where env != "dev"
 
 use identity

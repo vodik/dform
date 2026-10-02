@@ -147,3 +147,104 @@ fn a_used_modules_relation_input_is_its_blocks() {
         r.stderr
     );
 }
+
+const VNET: &str = r#"
+component vnet {
+  input cidr: inet
+  resource net.vpc vpc { cidr }
+  resource net.subnet "s-${z}" {
+    vpc
+    cidr = inet.subnet(cidr, 8, i)
+    zone = z
+  } where az(z, i)
+  #| The copy's subnets, by resource: their addresses leave it.
+  decl subnet(s: net.subnet, zone: string)
+  subnet(s, z) where s in net.subnet, z = s.zone
+  output subnet
+  output info { cidr = cidr, kind: string = "vpc" }
+}
+az("a", 0)
+az("b", 1)
+instance vnet blue { cidr = "10.0.0.0/16" }
+instance vnet green { cidr = "10.1.0.0/16" }
+"#;
+
+/// `output p` exports a copy's relation (R-55): read as `blue.p(..)`,
+/// one fact per row, a resource column as the copy's address; every
+/// copy's as `vnet[t].p(..)`. An object output is its fields.
+#[test]
+fn a_relation_output_is_read_from_a_copy_and_from_every_copy() {
+    let s = Scratch::project("rel-io-output");
+    s.write(
+        "p.df",
+        &format!(
+            "edition 2026\n{VNET}\
+             resource compute.vm \"vm-${{z}}\" {{\n  size = 1\n  subnet = s\n}} \
+             where blue.subnet(s, z), s in net.subnet\n\
+             seen(t, s) where vnet[t].subnet(s, _)\n\
+             resource net.vpc tally {{\n  cidr = \"10.9.0.0/16\"\n  n\n  info = green.info\n}} \
+             where n = list.len([ s | seen(_, s) ])\n\
+             provider fake\n"
+        ),
+    );
+    let r = plan(&s, "p.df").success();
+    for z in ["a", "b"] {
+        assert!(
+            r.stdout.contains(&format!(
+                "+ compute.vm[\"vm-{z}\"]\n  size = 1\n  subnet = ?net.subnet[\"blue::s-{z}\"]\n"
+            )),
+            "{z}: {}",
+            r.stdout
+        );
+    }
+    assert!(
+        r.stdout.contains(
+            "  cidr = \"10.9.0.0/16\"\n  info.cidr = \"10.1.0.0/16\"\n  info.kind = \"vpc\"\n  n = 4\n"
+        ),
+        "{}",
+        r.stdout
+    );
+    // A relation the component does not export is its own.
+    s.write(
+        "p.df",
+        &s.read("p.df")
+            .replace("blue.subnet(s, z)", "blue.az(z, _), s = z"),
+    );
+    let r = plan(&s, "p.df").failure();
+    assert!(
+        r.stderr.contains("vnet exports no relation az"),
+        "{}",
+        r.stderr
+    );
+}
+
+/// A stack's `output p` publishes its rows; another stack reads them as
+/// `zones[env=e].p(..)`, one fact per row (R-55).
+#[test]
+fn a_stacks_relation_output_is_read_across_stacks() {
+    let s = Scratch::project("rel-io-stacks");
+    s.write(
+        "stacks/zones.df",
+        "edition 2026\nkey env: string = \"dev\"\nprovider fake\n\
+         zone(\"${env}-a\", 0)\nzone(\"${env}-b\", 1)\noutput zone\n",
+    );
+    s.write(
+        "stacks/app.df",
+        "edition 2026\nprovider fake\nuse stacks.zones\n\
+         resource compute.vm \"vm-${z}\" {\n  size = n\n} where zones[env=\"prod\"].zone(z, n)\n",
+    );
+    s.run(&["apply", "zones", "env=prod"]).success();
+    let r = s.run(&["plan", "app"]).success();
+    assert!(
+        r.stdout
+            .contains("+ compute.vm[\"vm-prod-a\"]\n  size = 0\n"),
+        "{}",
+        r.stdout
+    );
+    assert!(
+        r.stdout
+            .contains("+ compute.vm[\"vm-prod-b\"]\n  size = 1\n"),
+        "{}",
+        r.stdout
+    );
+}

@@ -224,6 +224,16 @@ fn classify_read(
     }
 }
 
+/// An output's type as `effects` offers it; `relation/N` for `output p`
+/// of a relation (R-55).
+fn offered(o: &crate::ast::OutputDecl) -> String {
+    match (&o.ty, &o.relation) {
+        (Some(t), _) => crate::inputs::type_text(t),
+        (None, Some(cols)) => format!("relation/{}", cols.len()),
+        (None, None) => "?".into(),
+    }
+}
+
 /// Declared outputs, by scope: the stack root's own and, per `instance`
 /// or `use`, its component's or module's. Collected from the program before `modules::expand`
 /// (which drops the interface once it has scoped the body), so an output
@@ -246,10 +256,7 @@ fn collect_offers(program: &Program, out: &mut BTreeMap<String, ScopeEffects>) {
             if let Stmt::Output(o) = st
                 && o.value.is_none()
             {
-                let ty =
-                    o.ty.as_ref()
-                        .map(crate::inputs::type_text)
-                        .unwrap_or_else(|| "?".into());
+                let ty = offered(o);
                 outs.push((o.name.clone(), ty));
             }
         }
@@ -258,10 +265,7 @@ fn collect_offers(program: &Program, out: &mut BTreeMap<String, ScopeEffects>) {
     for s in &program.statements {
         match s {
             Stmt::Output(o) if o.value.is_none() => {
-                let ty =
-                    o.ty.as_ref()
-                        .map(crate::inputs::type_text)
-                        .unwrap_or_else(|| "?".into());
+                let ty = offered(o);
                 out.entry(STACK.to_string())
                     .or_default()
                     .offers

@@ -229,6 +229,8 @@ struct Scope {
     decl_nodes: BTreeMap<String, SyntaxNode>,
     /// `input p` with no `from`: the relations a module's user gives.
     relation_inputs: BTreeSet<String>,
+    /// `output p`: the relations a component exports (R-55).
+    relation_outputs: BTreeSet<String>,
 }
 
 #[derive(Default)]
@@ -864,6 +866,15 @@ impl<'u> Lowerer<'u> {
                     if terms(&n).next().is_none() {
                         self.decls.scopes[decl].relation_inputs.insert(name);
                     }
+                }
+                // `output p` alone: a relation exported (R-55).
+                OUTPUT_DECL
+                    if node(&n, TYPE_EXPR).is_none()
+                        && terms(&n).next().is_none()
+                        && node(&n, ATTR_DECL).is_none() =>
+                {
+                    let k = word_text(&n, 1);
+                    self.decls.scopes[decl].relation_outputs.insert(k);
                 }
                 OUTPUT_DECL => {
                     let ty = node(&n, TYPE_EXPR).and_then(|t| self.resource_type(&t));
@@ -2459,6 +2470,52 @@ impl<'u> Lowerer<'u> {
     fn output(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Vec<Stmt>> {
         let span = self.span(n);
         let name = word_text(n, 1);
+        if node(n, ATTR_DECL).is_some() {
+            return self.output_object(n, scope, outer);
+        }
+        // `output p`: the relation `p` exported (R-55), read as
+        // `copy.p(..)`, `c[t].p(..)`, `stack[k=v].p(..)`.
+        if node(n, TYPE_EXPR).is_none() && terms(n).next().is_none() {
+            let arities: BTreeSet<usize> = self
+                .chain_of(scope)
+                .into_iter()
+                .filter_map(|s| self.decls.scopes[s].arities.get(&name))
+                .flatten()
+                .copied()
+                .collect();
+            match arities.iter().collect::<Vec<_>>().as_slice() {
+                [n] => {
+                    // A column the `decl` types by a resource type holds
+                    // the copy's resource.
+                    let refs = match self.relation_decl(scope, &name) {
+                        Some(d) => d
+                            .children()
+                            .filter(|c| c.kind() == BIND_ARG)
+                            .map(|b| {
+                                node(&b, TYPE_EXPR).is_some_and(|t| {
+                                    self.resource_type(&t).is_some() || dotted_text(&t, 0) == "ref"
+                                })
+                            })
+                            .collect(),
+                        None => vec![false; **n],
+                    };
+                    return Ok(vec![Stmt::Output(OutputDecl {
+                        name,
+                        ty: None,
+                        value: None,
+                        relation: Some(refs),
+                        span,
+                    })]);
+                }
+                [] => {}
+                _ => {
+                    return self.error(
+                        span,
+                        format!("output {name}: the relation {name} has several arities"),
+                    );
+                }
+            }
+        }
         let mut out = Vec::new();
         // The declaration, once per scope (an output may have several rows);
         // with no type written, any.
@@ -2475,13 +2532,16 @@ impl<'u> Lowerer<'u> {
                 name: name.clone(),
                 ty: Some(ty),
                 value: None,
+                relation: None,
                 span,
             }));
         }
         let Some(t) = terms(n).next() else {
-            let d = Diagnostic::error(span, format!("output {name} has no value")).with_help(
-                format!("an output is one statement: `output {name}: T = term`"),
-            );
+            let d =
+                Diagnostic::error(span, format!("output {name} has no value")).with_help(format!(
+                    "an output is one statement, `output {name}: T = term`; `output {name}` \
+                     alone exports the relation {name}, which is declared or defined here"
+                ));
             self.diags.push(d);
             return Err(Skip);
         };
@@ -2509,6 +2569,7 @@ impl<'u> Lowerer<'u> {
                 name,
                 ty: None,
                 value: Some(value),
+                relation: None,
                 span,
             }));
             return Ok(out);
@@ -2522,6 +2583,77 @@ impl<'u> Lowerer<'u> {
         self.check_bound(&rc, &pre, &head.args.iter().collect::<Vec<_>>())?;
         out.push(Stmt::Rule(RuleStmt { head, body: pre }));
         Ok(out)
+    }
+
+    /// `output k { f [: T] = t, g: { .. } } [where B]` (R-55): an object
+    /// output by its fields, one value, typed by its fields' types (`any`
+    /// where a field gives none).
+    fn output_object(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Vec<Stmt>> {
+        let span = self.span(n);
+        let name = word_text(n, 1);
+        let mut rc = self.rc(n, scope, outer);
+        let mut pre = self.opt_body(&mut rc, n)?;
+        let (value, ty) = self.output_fields(&mut rc, n, &mut pre)?;
+        let mut out = Vec::new();
+        if self.outputs.insert((scope, name.clone())) {
+            out.push(Stmt::Output(OutputDecl {
+                name: name.clone(),
+                ty: Some(ty),
+                value: None,
+                relation: None,
+                span,
+            }));
+        }
+        let head = atom_at("output", vec![str_term(&name), value], span);
+        self.check_bound(&rc, &pre, &head.args.iter().collect::<Vec<_>>())?;
+        out.push(if pre.is_empty() {
+            Stmt::Output(OutputDecl {
+                name,
+                ty: None,
+                value: Some(head.args[1].clone()),
+                relation: None,
+                span,
+            })
+        } else {
+            Stmt::Rule(RuleStmt { head, body: pre })
+        });
+        Ok(out)
+    }
+
+    /// An object output's fields: the object term and its type.
+    fn output_fields(
+        &mut self,
+        rc: &mut Rc,
+        n: &SyntaxNode,
+        pre: &mut Vec<Lit>,
+    ) -> L<(Term, TypeExpr)> {
+        let mut value = BTreeMap::new();
+        let mut types = Vec::new();
+        for a in n.children().filter(|c| c.kind() == ATTR_DECL) {
+            let span = self.span(&a);
+            let field = self.block_path(&node(&a, BLOCK_PATH).ok_or(Skip)?)?;
+            if field.contains('.') || field.contains('[') || value.contains_key(&field) {
+                return self.error(
+                    span,
+                    format!("field {field}: a field is a name, given once"),
+                );
+            }
+            let (v, t) = if node(&a, ATTR_DECL).is_some() {
+                self.output_fields(rc, &a, pre)?
+            } else {
+                let Some(t) = terms(&a).next() else {
+                    return self.error(span, format!("field {field} has no value: `{field} = t`"));
+                };
+                let v = self.term(rc, &t, Pos::Value, pre)?;
+                let ty = node(&a, TYPE_EXPR)
+                    .map(|t| self.type_expr(&t))
+                    .unwrap_or_else(|| TypeExpr::Name("any".into()));
+                (v, ty)
+            };
+            types.push((field.clone(), t));
+            value.insert(field, v);
+        }
+        Ok((Term::Obj(value), TypeExpr::Object(types)))
     }
 
     /// The clause of a block statement: the `where` body after its block.
@@ -2936,6 +3068,21 @@ impl<'u> Lowerer<'u> {
             Some("type_refine") => Calls::Data,
             _ => Calls::Function,
         };
+        // Another copy's or deployment's relation is read, never written.
+        if let Some(c) = head_node.children().find_map(|c| Chain::of(&c))
+            && !c.ops.is_empty()
+            && (self.instance_in(scope, &c.head).is_some()
+                || self.stack_in(scope, &c.head).is_some()
+                || matches!(c.ops.first(), Some(Op::Index(..) | Op::Keyed(..))))
+        {
+            return self.error(
+                span,
+                format!(
+                    "`{}` is another copy's relation, read in a body; its rows are its own",
+                    c.fields().join(".")
+                ),
+            );
+        }
         let mut head = self.calls(calls, |l| {
             l.atom(&mut rc, &head_node, Pos::Whole, &mut body)
         })?;
@@ -3278,6 +3425,11 @@ impl<'u> Lowerer<'u> {
     /// `member` (H-9), or of `deny`/`warn` (H-8).
     fn core_read(&mut self, n: &SyntaxNode, atom: &Atom) -> L<()> {
         if self.lenient || self.any_type || self.text || self.core {
+            return Ok(());
+        }
+        // A relation read through a copy or a deployment (R-55) is the
+        // compiler's lowering, not a core relation written.
+        if self.callee(n).as_deref() != Some(atom.pred.as_str()) {
             return Ok(());
         }
         let a = arg_texts(n);
@@ -3944,6 +4096,9 @@ impl<'u> Lowerer<'u> {
     /// named by the relation's columns (`p(a: x)`, H-12).
     fn atom(&mut self, rc: &mut Rc, n: &SyntaxNode, pos: Pos, pre: &mut Vec<Lit>) -> L<Atom> {
         let span = self.span(n);
+        if let Some(a) = self.exported_relation(rc, n, pos, pre)? {
+            return Ok(a);
+        }
         let pred = self.callee(n).ok_or(Skip);
         let Ok(mut pred) = pred else {
             return self.error(span, "a relation is named by a plain name (`p` or `m.p`)");
@@ -4046,6 +4201,81 @@ impl<'u> Lowerer<'u> {
             record: None,
             span,
         })
+    }
+
+    /// A relation another copy or deployment exports, `output p` (R-55):
+    /// a copy's, `blue.p(x, y)`, the copy's rows `__rows(blue, "p", [x,
+    /// y])`; every copy's, `c[t].p(x, y)`, those of each copy `t` of `c`;
+    /// a deployment's, `platform[env=e].p(x, y)`, a row of what it
+    /// published, `stack_output("platform[env=e]", "p", Rows), member(Rows,
+    /// [x, y])`. `None` for any other call.
+    fn exported_relation(
+        &mut self,
+        rc: &mut Rc,
+        n: &SyntaxNode,
+        pos: Pos,
+        pre: &mut Vec<Lit>,
+    ) -> L<Option<Atom>> {
+        let span = self.span(n);
+        let Some(c) = n.children().find_map(|c| Chain::of(&c)) else {
+            return Ok(None);
+        };
+        let Some(Op::Field(p)) = c.ops.last() else {
+            return Ok(None);
+        };
+        let p = p.clone();
+        if rc.vars.contains_key(&c.head) {
+            return Ok(None);
+        }
+        if let Some(d) = self.stack_in(rc.scope, &c.head) {
+            let Res::Lookup {
+                pred, args, out, ..
+            } = self.deployed_path(rc, &c, &d, pre, span)?
+            else {
+                return Err(Skip);
+            };
+            let rows = self.read_var(rc, &pred, args, out, &p, pre, span);
+            let cols = self.args(rc, n, pos, pre)?;
+            return Ok(Some(atom_at("member", vec![rows, Term::List(cols)], span)));
+        }
+        let named = self
+            .instance_in(rc.scope, &c.head)
+            .filter(|_| c.ops.len() == 1);
+        let every = matches!(c.ops.first(), Some(Op::Index(..)));
+        if named.is_none() && !every {
+            return Ok(None);
+        }
+        if let Some((_, path)) = &named {
+            let exports = self
+                .decls
+                .modules
+                .get(path)
+                .is_some_and(|m| self.decls.scopes[m.scope].relation_outputs.contains(&p));
+            if !exports {
+                let d = Diagnostic::error(
+                    span,
+                    format!("{} exports no relation {p}", path),
+                )
+                .with_help(format!(
+                    "a copy's relations are its own; `output {p}` in {path} exports it, read as \
+                     `{}.{p}(..)`",
+                    c.head
+                ));
+                self.diags.push(d);
+                return Err(Skip);
+            }
+        }
+        let mut prefix = c.clone();
+        prefix.ops.pop();
+        let Some(Res::Val(inst)) = self.scope_path(rc, &prefix, pre, span)? else {
+            return Ok(None);
+        };
+        let cols = self.args(rc, n, pos, pre)?;
+        Ok(Some(atom_at(
+            crate::modules::ROWS,
+            vec![inst, str_term(&p), Term::List(cols)],
+            span,
+        )))
     }
 
     /// Is `n` a reference: a resource, a typed variable, or a variable a

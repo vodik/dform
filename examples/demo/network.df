@@ -1,11 +1,11 @@
 edition 2026
 
 # The demo's networking: a component, `vpc`, copied once per network
-# (`instance network.vpc main`), and the alias its users write
-# `network.subnets`.
-
-#| The subnets a database or a cluster is placed in.
-type subnets = list(ref(net.subnet))
+# (`instance network.vpc main`). A copy's private subnets are a relation
+# it exports, `output private_subnet`: a database or a cluster takes them
+# a row at a time, `subnet(s) where main.private_subnet(s)`, where a list
+# would be handed over whole (docs/grammar.md "Inputs and outputs": a list
+# is a value handled whole, anything iterated or joined is a relation).
 
 #| One VPC, and a private subnet in every zone.
 component vpc {
@@ -28,5 +28,10 @@ component vpc {
   } where data("zone", z)
   #| The network's VPC, for peering.
   output vpc: net.vpc = vpc
-  output private_subnets: subnets = [ s | s in net.subnet, s.visibility == "private" ]
+
+  decl private_subnet(subnet: net.subnet)
+  private_subnet(s) where s in net.subnet, s.visibility == "private"
+  #| The network's private subnets, one row each, for a database or a
+  #| cluster: `main.private_subnet(s)`.
+  output private_subnet
 }

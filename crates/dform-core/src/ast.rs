@@ -309,6 +309,10 @@ pub struct OutputDecl {
     pub name: String,
     pub ty: Option<TypeExpr>,
     pub value: Option<Term>,
+    /// `output p`: the relation `p` exported (R-55), one entry per column,
+    /// true for a column its `decl` types as a resource (`s: net.subnet`),
+    /// which holds the copy's resource and is exported as its address.
+    pub relation: Option<Vec<bool>>,
     pub span: Span,
 }
 

@@ -1,7 +1,7 @@
 exit: ok
 -- stdout --
-== examples/demo/stacks/dform.df: 176 nodes, 487 edges (192 negative)
-   STRATIFIED, 23 strata
+== examples/demo/stacks/dform.df: 173 nodes, 464 edges (177 negative)
+   STRATIFIED, 15 strata
    stratum 0:
      (arg, iam.policy, name)
      (arg, iam.role, assume)
@@ -79,28 +79,74 @@ exit: ok
    stratum 6:
      (arg, compute.vm, id)
      (arg, compute.vm, private_ip)
+     (arg, input, database::backup_days)
+     (arg, input, database::multi_az)
+     (arg, input, kubernetes::nodepool_max)
+     (arg, input, kubernetes::nodepool_min)
+     (arg, input, kubernetes::private_api)
      (arg, input, main::vpc_net)
      (arg, input, peer::vpc_net)
      (want, compute.vm)
    stratum 7:
      (attr, compute.vm, id)
      (attr, compute.vm, private_ip)
+     (attr, input, database::backup_days)
+     (attr, input, database::multi_az)
+     (attr, input, kubernetes::nodepool_max)
+     (attr, input, kubernetes::nodepool_min)
+     (attr, input, kubernetes::private_api)
      (attr, input, main::vpc_net)
      (attr, input, peer::vpc_net)
    stratum 8:
+     (arg, db.postgres, backup_days)
+     (arg, db.postgres, endpoint)
+     (arg, db.postgres, id)
+     (arg, db.postgres, multi_az)
+     (arg, db.postgres, public)
+     (arg, k8s.cluster, api_endpoint)
+     (arg, k8s.cluster, ca_cert)
+     (arg, k8s.cluster, id)
+     (arg, k8s.cluster, private_api)
+     (arg, k8s.cluster, version)
+     (arg, k8s.nodepool, id)
+     (arg, k8s.nodepool, max)
+     (arg, k8s.nodepool, min)
      (arg, net.vpc, cidr)
      (arg, net.vpc, id)
      (arg, net.vpc, tags)
      (arg, net.vpc_peering, id)
+     (want, db.postgres)
+     (want, k8s.cluster)
+     (want, k8s.nodepool)
      (want, net.vpc)
      (want, net.vpc_peering)
+     database::backup_days
+     database::multi_az
+     kubernetes::nodepool_max
+     kubernetes::nodepool_min
+     kubernetes::private_api
      main::vpc_net
      peer::vpc_net
    stratum 9:
+     (attr, db.postgres, backup_days)
+     (attr, db.postgres, endpoint)
+     (attr, db.postgres, id)
+     (attr, db.postgres, multi_az)
+     (attr, db.postgres, public)
+     (attr, k8s.cluster, api_endpoint)
+     (attr, k8s.cluster, ca_cert)
+     (attr, k8s.cluster, id)
+     (attr, k8s.cluster, private_api)
+     (attr, k8s.cluster, version)
+     (attr, k8s.nodepool, id)
+     (attr, k8s.nodepool, max)
+     (attr, k8s.nodepool, min)
      (attr, net.vpc, cidr)
      (attr, net.vpc, id)
      (attr, net.vpc_peering, id)
    stratum 10:
+     (arg, *, tags)
+     (arg, k8s.nodepool, cluster)
      (arg, net.subnet, cidr)
      (arg, net.subnet, id)
      (arg, net.subnet, visibility)
@@ -108,97 +154,40 @@ exit: ok
      (arg, net.subnet, zone)
      (arg, net.vpc_peering, accepter_vpc)
      (arg, net.vpc_peering, requester_vpc)
+     (arg, output, iam_need)
      (want, net.subnet)
      __field_read_0
      __field_read_1
+     deny
    stratum 11:
+     (attr, *, tags)
+     (attr, k8s.nodepool, cluster)
      (attr, net.subnet, cidr)
      (attr, net.subnet, id)
      (attr, net.subnet, visibility)
      (attr, net.subnet, vpc)
      (attr, net.subnet, zone)
+     (attr, net.vpc, tags)
      (attr, net.vpc_peering, accepter_vpc)
      (attr, net.vpc_peering, requester_vpc)
+     (attr, output, iam_need)
      warn
    stratum 12:
-     (arg, output, private_subnets)
+     __rows
+     database::subnet
+     iam_need
+     kubernetes::subnet
+     main::private_subnet
+     peer::private_subnet
+   stratum 13:
+     (arg, db.postgres, subnets)
+     (arg, iam.policy, statements)
+     (arg, k8s.cluster, subnets)
      __lc_1
      __lc_2
-   stratum 13:
-     (attr, output, private_subnets)
-   stratum 14:
-     (arg, input, database::backup_days)
-     (arg, input, database::multi_az)
-     (arg, input, database::subnets)
-     (arg, input, kubernetes::nodepool_max)
-     (arg, input, kubernetes::nodepool_min)
-     (arg, input, kubernetes::private_api)
-     (arg, input, kubernetes::subnets)
-   stratum 15:
-     (attr, input, database::backup_days)
-     (attr, input, database::multi_az)
-     (attr, input, database::subnets)
-     (attr, input, kubernetes::nodepool_max)
-     (attr, input, kubernetes::nodepool_min)
-     (attr, input, kubernetes::private_api)
-     (attr, input, kubernetes::subnets)
-   stratum 16:
-     (arg, *, tags)
-     (arg, db.postgres, backup_days)
-     (arg, db.postgres, endpoint)
-     (arg, db.postgres, id)
-     (arg, db.postgres, multi_az)
-     (arg, db.postgres, public)
-     (arg, db.postgres, subnets)
-     (arg, k8s.cluster, api_endpoint)
-     (arg, k8s.cluster, ca_cert)
-     (arg, k8s.cluster, id)
-     (arg, k8s.cluster, private_api)
-     (arg, k8s.cluster, subnets)
-     (arg, k8s.cluster, version)
-     (arg, k8s.nodepool, id)
-     (arg, k8s.nodepool, max)
-     (arg, k8s.nodepool, min)
-     (want, db.postgres)
-     (want, k8s.cluster)
-     (want, k8s.nodepool)
-     database::backup_days
-     database::multi_az
-     database::subnets
-     kubernetes::nodepool_max
-     kubernetes::nodepool_min
-     kubernetes::private_api
-     kubernetes::subnets
-   stratum 17:
-     (attr, *, tags)
-     (attr, db.postgres, backup_days)
-     (attr, db.postgres, endpoint)
-     (attr, db.postgres, id)
-     (attr, db.postgres, multi_az)
-     (attr, db.postgres, public)
-     (attr, db.postgres, subnets)
-     (attr, k8s.cluster, api_endpoint)
-     (attr, k8s.cluster, ca_cert)
-     (attr, k8s.cluster, id)
-     (attr, k8s.cluster, private_api)
-     (attr, k8s.cluster, subnets)
-     (attr, k8s.cluster, version)
-     (attr, k8s.nodepool, id)
-     (attr, k8s.nodepool, max)
-     (attr, k8s.nodepool, min)
-     (attr, net.vpc, tags)
-   stratum 18:
-     (arg, k8s.nodepool, cluster)
-     (arg, output, iam_need)
-     deny
-   stratum 19:
-     (attr, k8s.nodepool, cluster)
-     (attr, output, iam_need)
-   stratum 20:
-     iam_need
-   stratum 21:
-     (arg, iam.policy, statements)
      __lc_3
-   stratum 22:
+   stratum 14:
+     (attr, db.postgres, subnets)
      (attr, iam.policy, statements)
+     (attr, k8s.cluster, subnets)
 -- stderr --

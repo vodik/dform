@@ -7,14 +7,17 @@ edition 2026
 input private_api: bool
 input nodepool_min: int
 input nodepool_max: int
-input subnets: network.subnets
+#| The subnets the cluster is placed in, one row each.
+input subnet
+
+decl subnet(subnet: net.subnet)
 
 #| A Kubernetes cluster and one node pool in the network's private
 #| subnets.
 resource k8s.cluster cluster {
   version = "1.29"
   private_api
-  subnets
+  subnets = [ s | subnet(s), s in net.subnet ]
 }
 
 resource k8s.nodepool default {
@@ -46,12 +49,19 @@ output iam_need = { action: "k8s.describe_cluster", resource: cluster } where ha
     (type
       (dotted_name
         (identifier))))
-  (input
-    (identifier)
-    (type
-      (dotted_name
+  (comment)
+  (input_relation
+    (identifier))
+  (decl
+    (dotted_name
+      (identifier))
+    (columns
+      (field_declaration
         (identifier)
-        (identifier))))
+        (type
+          (dotted_name
+            (identifier)
+            (identifier))))))
   (comment)
   (comment)
   (resource
@@ -70,7 +80,20 @@ output iam_need = { action: "k8s.describe_cluster", resource: cluster } where ha
           (identifier)))
       (field
         (block_path
-          (identifier)))))
+          (identifier))
+        (comprehension
+          (identifier)
+          (body
+            (atom_literal
+              (call
+                (identifier)
+                (arguments
+                  (identifier))))
+            (in_literal
+              (identifier)
+              (member_expression
+                (identifier)
+                (identifier))))))))
   (resource
     (dotted_name
       (identifier)

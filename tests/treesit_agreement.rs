@@ -280,8 +280,8 @@ fn inside(n: Node, kinds: &[&str]) -> bool {
 }
 
 /// Proposal G, G-6: a dot in a field's value is a reference, in a rule body
-/// or a clause a read. dform.df has both: `subnets =
-/// main.private_subnets` in a block, `a = network[ia].vpc` in a
+/// or a clause a read. dform.df has both: `backup_days =
+/// cfg.db.backup_days` in a block, `a = network[ia].vpc` in a
 /// rule body.
 #[test]
 fn the_reference_capture_is_on_field_values_and_not_on_reads() {
@@ -290,7 +290,7 @@ fn the_reference_capture_is_on_field_values_and_not_on_reads() {
     let refs = captures(&tree, &src, "variable.reference");
     let text = |n: &Node| src[n.byte_range()].to_string();
     let texts: Vec<String> = refs.iter().map(text).collect();
-    for want in ["main.private_subnets"] {
+    for want in ["cfg.db.backup_days"] {
         assert!(
             texts.iter().any(|t| t == want),
             "{want} not captured: {texts:?}"

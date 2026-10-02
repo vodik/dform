@@ -14,7 +14,6 @@ database:
     db.postgres.id
     input backup_days
     input multi_az
-    input subnets
   writes:
     (db.postgres, backup_days)
     (db.postgres, multi_az)
@@ -41,7 +40,6 @@ kubernetes:
     input nodepool_max
     input nodepool_min
     input private_api
-    input subnets
     k8s.cluster.id
   writes:
     (k8s.cluster, private_api)
@@ -67,7 +65,7 @@ main:
     (net.vpc, cidr)
     (net.vpc, tags)
   offers:
-    private_subnets: list(ref(net.subnet))
+    private_subnet: relation/1
     vpc: addr
 
 peer:
@@ -84,7 +82,7 @@ peer:
     (net.vpc, cidr)
     (net.vpc, tags)
   offers:
-    private_subnets: list(ref(net.subnet))
+    private_subnet: relation/1
     vpc: addr
 
 stack:
@@ -99,7 +97,6 @@ stack:
     net.vpc.id
     output database.iam_need
     output kubernetes.iam_need
-    output main.private_subnets
     settings.db.backup_days
     settings.db.multi_az
     settings.k8s.nodepool.max
@@ -128,11 +125,9 @@ stack:
     (net.vpc_peering, requester_vpc)
     input database.backup_days
     input database.multi_az
-    input database.subnets
     input kubernetes.nodepool_max
     input kubernetes.nodepool_min
     input kubernetes.private_api
-    input kubernetes.subnets
     input main.vpc_net
     input peer.vpc_net
     input stack.env

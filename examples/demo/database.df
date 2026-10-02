@@ -2,12 +2,15 @@ edition 2026
 
 input backup_days: int
 input multi_az: bool
-input subnets: network.subnets
+#| The subnets the database is placed in, one row each.
+input subnet
+
+decl subnet(subnet: net.subnet)
 
 #| A PostgreSQL database in the network's private subnets.
 resource db.postgres db {
   public = false
-  subnets
+  subnets = [ s | subnet(s), s in net.subnet ]
   backup_days
   multi_az
 }

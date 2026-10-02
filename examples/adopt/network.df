@@ -18,4 +18,8 @@ resource net.subnet "private-${z}" {
 } where data("zone", z)
 
 output vpc: net.vpc = vpc
-output private_subnets: list(ref(net.subnet)) = [ s | s in net.subnet, s.visibility == "private" ]
+
+#| The private subnets, one row each.
+decl private_subnet(subnet: net.subnet)
+private_subnet(s) where s in net.subnet, s.visibility == "private"
+output private_subnet

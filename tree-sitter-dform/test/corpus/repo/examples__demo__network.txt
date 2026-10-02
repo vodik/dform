@@ -5,11 +5,11 @@ examples/demo/network.df
 edition 2026
 
 # The demo's networking: a component, `vpc`, copied once per network
-# (`instance network.vpc main`), and the alias its users write
-# `network.subnets`.
-
-#| The subnets a database or a cluster is placed in.
-type subnets = list(ref(net.subnet))
+# (`instance network.vpc main`). A copy's private subnets are a relation
+# it exports, `output private_subnet`: a database or a cluster takes them
+# a row at a time, `subnet(s) where main.private_subnet(s)`, where a list
+# would be handed over whole (docs/grammar.md "Inputs and outputs": a list
+# is a value handled whole, anything iterated or joined is a relation).
 
 #| One VPC, and a private subnet in every zone.
 component vpc {
@@ -32,7 +32,12 @@ component vpc {
   } where data("zone", z)
   #| The network's VPC, for peering.
   output vpc: net.vpc = vpc
-  output private_subnets: subnets = [ s | s in net.subnet, s.visibility == "private" ]
+
+  decl private_subnet(subnet: net.subnet)
+  private_subnet(s) where s in net.subnet, s.visibility == "private"
+  #| The network's private subnets, one row each, for a database or a
+  #| cluster: `main.private_subnet(s)`.
+  output private_subnet
 }
 
 ---
@@ -44,18 +49,8 @@ component vpc {
   (comment)
   (comment)
   (comment)
-  (type_alias
-    (identifier)
-    (type
-      (dotted_name
-        (identifier))
-      (type
-        (dotted_name
-          (identifier))
-        (type
-          (dotted_name
-            (identifier)
-            (identifier))))))
+  (comment)
+  (comment)
   (comment)
   (component
     (identifier)
@@ -153,22 +148,34 @@ component vpc {
             (identifier)
             (identifier)))
         (identifier))
-      (output
-        (identifier)
-        (type
-          (dotted_name
-            (identifier)))
-        (comprehension
+      (decl
+        (dotted_name
+          (identifier))
+        (columns
+          (field_declaration
+            (identifier)
+            (type
+              (dotted_name
+                (identifier)
+                (identifier))))))
+      (rule
+        (call
           (identifier)
-          (body
-            (in_literal
+          (arguments
+            (identifier)))
+        (body
+          (in_literal
+            (identifier)
+            (member_expression
               (identifier)
-              (member_expression
-                (identifier)
-                (identifier)))
-            (comparison
-              (member_expression
-                (identifier)
-                (identifier))
-              (string
-                (string_content)))))))))
+              (identifier)))
+          (comparison
+            (member_expression
+              (identifier)
+              (identifier))
+            (string
+              (string_content)))))
+      (comment)
+      (comment)
+      (output
+        (identifier)))))

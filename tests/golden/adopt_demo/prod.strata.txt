@@ -1,7 +1,7 @@
 exit: ok
 -- stdout --
-== examples/adopt/stacks/adopt_demo.df: 80 nodes, 145 edges (56 negative)
-   STRATIFIED, 10 strata
+== examples/adopt/stacks/adopt_demo.df: 80 nodes, 144 edges (54 negative)
+   STRATIFIED, 9 strata
    stratum 0:
      (arg, input, env)
      (arg, output, vpc)
@@ -17,6 +17,7 @@ exit: ok
      (want, net.vpc_peering)
      cloud_exists
      data
+     doc
      identity
      input
      network::zone_index
@@ -88,8 +89,6 @@ exit: ok
      (attr, net.subnet, zone)
      warn
    stratum 8:
-     (arg, output, private_subnets)
-     __lc_1
-   stratum 9:
-     (attr, output, private_subnets)
+     __rows
+     network::private_subnet
 -- stderr --
