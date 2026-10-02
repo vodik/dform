@@ -33,9 +33,9 @@
         "id": "db.postgres:database.main::db"
       }
     },
-    "iam.policy::iam.main::app_policy": {
+    "iam.policy::identity.main::app_policy": {
       "typ": "iam.policy",
-      "name": "iam.main::app_policy",
+      "name": "identity.main::app_policy",
       "attrs": {
         "name": "app",
         "statements": [
@@ -53,12 +53,12 @@
         }
       },
       "computed": {
-        "id": "iam.policy:iam.main::app_policy"
+        "id": "iam.policy:identity.main::app_policy"
       }
     },
-    "iam.role::iam.main::app_role": {
+    "iam.role::identity.main::app_role": {
       "typ": "iam.role",
-      "name": "iam.main::app_role",
+      "name": "identity.main::app_role",
       "attrs": {
         "assume": {
           "principals": [
@@ -71,21 +71,21 @@
         }
       },
       "computed": {
-        "id": "iam.role:iam.main::app_role"
+        "id": "iam.role:identity.main::app_role"
       }
     },
-    "iam.role_policy_attachment::iam.main::attach": {
+    "iam.role_policy_attachment::identity.main::attach": {
       "typ": "iam.role_policy_attachment",
-      "name": "iam.main::attach",
+      "name": "identity.main::attach",
       "attrs": {
-        "policy_id": "iam.policy:iam.main::app_policy",
-        "role_id": "iam.role:iam.main::app_role",
+        "policy_id": "iam.policy:identity.main::app_policy",
+        "role_id": "iam.role:identity.main::app_role",
         "tags": {
           "team": "platform"
         }
       },
       "computed": {
-        "id": "iam.role_policy_attachment:iam.main::attach"
+        "id": "iam.role_policy_attachment:identity.main::attach"
       }
     },
     "k8s.cluster::kubernetes.main::cluster": {

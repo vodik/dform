@@ -6,16 +6,16 @@ definite:
 + compute.vm["bastion"]
   private_ip = "10.90.0.21"
   tags.team = "platform"
-+ iam.policy["iam.main::app_policy"]
++ iam.policy["identity.main::app_policy"]
   name = "app"
   tags.team = "platform"
-+ iam.role["iam.main::app_role"]
++ iam.role["identity.main::app_role"]
   assume.principals[0] = "k8s.serviceaccount.app"
   name = "app"
   tags.team = "platform"
-+ iam.role_policy_attachment["iam.main::attach"]
-  policy_id = ?iam.policy["iam.main::app_policy"].id
-  role_id = ?iam.role["iam.main::app_role"].id
++ iam.role_policy_attachment["identity.main::attach"]
+  policy_id = ?iam.policy["identity.main::app_policy"].id
+  role_id = ?iam.role["identity.main::app_role"].id
   tags.team = "platform"
 + net.vpc["network.main::vpc"]
   cidr = "10.90.0.0/16"
@@ -37,9 +37,9 @@ definite:
 apply order:
   tick 1
     compute.vm["bastion"]
-    iam.policy["iam.main::app_policy"]
-    iam.role["iam.main::app_role"]
-    iam.role_policy_attachment["iam.main::attach"]
+    iam.policy["identity.main::app_policy"]
+    iam.role["identity.main::app_role"]
+    iam.role_policy_attachment["identity.main::attach"]
     net.vpc["network.main::vpc"]
     net.subnet["network.main::private-us-test-1a"]
     net.subnet["network.main::private-us-test-1b"]

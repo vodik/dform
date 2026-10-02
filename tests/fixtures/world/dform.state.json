@@ -9,17 +9,17 @@
       "provider": "fakecloud",
       "remote": "database.main::db"
     },
-    "iam.policy::iam.main::app_policy": {
+    "iam.policy::identity.main::app_policy": {
       "provider": "fakecloud",
-      "remote": "iam.main::app_policy"
+      "remote": "identity.main::app_policy"
     },
-    "iam.role::iam.main::app_role": {
+    "iam.role::identity.main::app_role": {
       "provider": "fakecloud",
-      "remote": "iam.main::app_role"
+      "remote": "identity.main::app_role"
     },
-    "iam.role_policy_attachment::iam.main::attach": {
+    "iam.role_policy_attachment::identity.main::attach": {
       "provider": "fakecloud",
-      "remote": "iam.main::attach"
+      "remote": "identity.main::attach"
     },
     "k8s.cluster::kubernetes.main::cluster": {
       "provider": "fakecloud",

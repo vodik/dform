@@ -22,7 +22,7 @@ database.main:
     (db.postgres, subnet_ids)
   offers:
 
-iam.main:
+identity.main:
   reads:
     iam.policy.id
     iam.role.id

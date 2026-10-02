@@ -93,7 +93,7 @@ instance kubernetes main {
   output("network.main", "private_subnet_ids", ids)
 }
 
-instance iam main {}
+instance identity main {}
 
 # Peering between network instances. Each instance exports its vpc address.
 vpc_peer_inst("main", "peer")

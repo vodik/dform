@@ -6,7 +6,7 @@ definite:
 + compute.vm["bastion"]
   private_ip = "10.20.0.21"
   tags.team = "platform"
-+ iam.role["iam.main::app_role"]
++ iam.role["identity.main::app_role"]
   assume.principals[0] = "k8s.serviceaccount.app"
   name = "app"
   tags.team = "platform"
@@ -66,7 +66,7 @@ definite:
   max = 10
   min = 3
   tags.team = "platform"
-+ iam.policy["iam.main::app_policy"]
++ iam.policy["identity.main::app_policy"]
   name = "app"
   statements[0].action = "audit.write"
   statements[0].resource = "audit-log"
@@ -77,14 +77,14 @@ definite:
   statements[3].action = "org.read"
   statements[3].resource = "org"
   tags.team = "platform"
-+ iam.role_policy_attachment["iam.main::attach"]
-  policy_id = ?iam.policy["iam.main::app_policy"].id
-  role_id = ?iam.role["iam.main::app_role"].id
++ iam.role_policy_attachment["identity.main::attach"]
+  policy_id = ?iam.policy["identity.main::app_policy"].id
+  role_id = ?iam.role["identity.main::app_role"].id
   tags.team = "platform"
 apply order:
   tick 1
     compute.vm["bastion"]
-    iam.role["iam.main::app_role"]
+    iam.role["identity.main::app_role"]
     net.vpc["network.main::vpc"]
     net.vpc["network.peer::vpc"]
     net.vpc_peering["peer-main-peer"]
@@ -95,7 +95,7 @@ apply order:
     db.postgres["database.main::db"]
     k8s.cluster["kubernetes.main::cluster"]
     k8s.nodepool["kubernetes.main::default"]
-    iam.policy["iam.main::app_policy"]
-    iam.role_policy_attachment["iam.main::attach"]
+    iam.policy["identity.main::app_policy"]
+    iam.role_policy_attachment["identity.main::attach"]
 -- stderr --
 warning: prod should enable audit logging ctx={"env":"prod"}

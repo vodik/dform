@@ -21,8 +21,10 @@
 //! qualified name; a test keeps the two in step.
 //!
 //! The format is self-contained text (DESIGN.org R-24: a function package
-//! embeds its signature file), read by this module rather than by the
-//! program parser.
+//! embeds its signature file), read for now by this module rather than by
+//! the program parser. When R-24 embeds these files in packages, the
+//! program parser takes the format over (a non-program mode) and this
+//! reader goes.
 
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
@@ -142,7 +144,10 @@ pub fn unknown(span: crate::ast::Span, name: &str) -> crate::diag::Diagnostic {
             "mod" => Some("%"),
             _ => None,
         };
-        let d = Diagnostic::error(span, format!("{name} is the lowering's, not a function a program calls"));
+        let d = Diagnostic::error(
+            span,
+            format!("{name} is the lowering's, not a function a program calls"),
+        );
         return match op {
             Some(op) => d.with_help(format!("write `a {op} b`")),
             None => d.with_help(f.summary.clone()),
@@ -242,7 +247,6 @@ impl Registry {
     pub fn is_package(&self, head: &str) -> bool {
         head != PRELUDE && self.by_name.values().any(|f| f.package == head)
     }
-
 }
 
 /// One signature file: `package NAME`, then `fn` lines, each with the
@@ -392,7 +396,11 @@ fn function(sig: &str) -> Result<Function, String> {
         match flag.split_whitespace().collect::<Vec<_>>().as_slice() {
             ["forwards"] => forwards = true,
             ["forwards", "nulls"] => forwards_nulls = true,
-            _ => return Err(format!("unknown flag `{flag}` (`forwards`, `forwards nulls`)")),
+            _ => {
+                return Err(format!(
+                    "unknown flag `{flag}` (`forwards`, `forwards nulls`)"
+                ));
+            }
         }
     }
     Ok(Function {
@@ -470,12 +478,18 @@ mod tests {
     fn the_shipped_files_load() {
         let r = registry();
         let f = r.get("inet.subnet").unwrap();
-        assert_eq!(f.signature, "inet.subnet(net: inet, bits: int, n: int) -> inet?");
+        assert_eq!(
+            f.signature,
+            "inet.subnet(net: inet, bits: int, n: int) -> inet?"
+        );
         assert_eq!(f.file, "std/inet.df");
         assert!(!f.summary.is_empty() && f.example.contains("inet.subnet("));
         let f = r.get("format").unwrap();
         assert!(f.variadic && f.forwards && f.takes(3) && !f.takes(0));
-        assert!(r.get("__path").is_some_and(|f| f.internal && f.forwards && f.forwards_nulls));
+        assert!(
+            r.get("__path")
+                .is_some_and(|f| f.internal && f.forwards && f.forwards_nulls)
+        );
         assert!(callable("int") && !callable("add") && !callable("to_int"));
         assert_eq!(r.packages(), ["inet", "ip", "list", "str"]);
     }

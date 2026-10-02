@@ -11,10 +11,9 @@
 //! | root                 | `settings`, `world`, `stacks`                  |
 //!
 //! A provider's types and its externs share its name (`dns.record`,
-//! `dns.lookup`): one owner, not a collision. A module named like a type
-//! namespace (examples/demo's `module iam` beside `iam.role`) is left to
-//! the resolver's order for now: the check is of the heads the compiler
-//! itself adds (function packages, roots) against the program's.
+//! `dns.lookup`): one owner, not a collision. Anything else two kinds
+//! claim is: a module may not take a type namespace's name (`iam.main.k`
+//! and `iam.role[..]` would read alike).
 
 use super::*;
 
@@ -51,7 +50,12 @@ impl Lowerer<'_> {
                 .find(|f| f.package == p)
                 .map(|f| f.file.clone())
                 .unwrap_or_default();
-            claim(p, Head::Package, None, format!("the function package `{p}` ({file})"));
+            claim(
+                p,
+                Head::Package,
+                None,
+                format!("the function package `{p}` ({file})"),
+            );
         }
         for u in self.units {
             let span = |n: &SyntaxNode| {
@@ -67,7 +71,12 @@ impl Lowerer<'_> {
                 match n.kind() {
                     MODULE => {
                         let m = word_text(&n, 1);
-                        claim(&m, Head::Module, Some(span(&n)), format!("the module `{m}`"));
+                        claim(
+                            &m,
+                            Head::Module,
+                            Some(span(&n)),
+                            format!("the module `{m}`"),
+                        );
                     }
                     EXTERN | RESOURCE | TYPE_DECL => {
                         let name = dotted_text(&n, 1);
@@ -91,14 +100,15 @@ impl Lowerer<'_> {
             .filter_map(|t| t.split_once('.').map(|(h, _)| h.to_string()))
             .collect();
         for ns in dotted {
-            claim(&ns, Head::Provider, None, format!("the type namespace `{ns}`"));
+            claim(
+                &ns,
+                Head::Provider,
+                None,
+                format!("the type namespace `{ns}`"),
+            );
         }
         for (head, mut cs) in claims {
-            let compilers = cs
-                .iter()
-                .filter(|(w, _, _)| matches!(w, Head::Package | Head::Root))
-                .count();
-            if cs.len() < 2 || compilers == 0 {
+            if cs.len() < 2 {
                 continue;
             }
             cs.sort_by_key(|(_, s, _)| s.is_none());
@@ -111,7 +121,11 @@ impl Lowerer<'_> {
                 )
                 .with_help(format!(
                     "the first segment of a dotted name names one thing: rename the {}",
-                    if cs[0].0 == Head::Module { "module" } else { "declaration" }
+                    if cs[0].0 == Head::Module {
+                        "module"
+                    } else {
+                        "declaration"
+                    }
                 )),
             );
         }
