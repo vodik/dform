@@ -262,7 +262,7 @@ impl Printer<'_> {
             .collect()
     }
 
-    /// The aggregate's head term.
+    /// The aggregate's call, bound in the body (R-59).
     fn agg(&self, a: &AggDef) -> String {
         let item = match (a.kind, a.item) {
             (AggKind::Count | AggKind::Set, _) => "x".to_string(),
@@ -492,7 +492,7 @@ impl fmt::Display for Program {
                 }
                 Def::Agg(a) => {
                     let rule = format!(
-                        "c{i}({}) where {}",
+                        "c{i}(total) where total = {}, {}",
                         pr.agg(a),
                         pr.body(Some(a.bind), &a.guards, sc).join(", ")
                     );
