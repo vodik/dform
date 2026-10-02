@@ -5956,7 +5956,7 @@ mod tests {
                 "q(X) :- xs(Xs), member(Xs, I, Item), X = Item, I >= 0, not member([3], X)",
                 "ok(1) :- want(\"db.postgres\", \"pg\"), attr(\"db.postgres\", \"pg\", \"public\", _), not want(\"db.postgres\", \"other\")",
                 "big(N) :- cloud_exists(\"net.vpc\", N), cloud_attr(\"net.vpc\", N, \"size\", Size), Size > 3",
-                "pair(N, C) :- ys(Ys), member(Ys, _, {name: N, net: C})",
+                "pair(N, C) :- ys(Ys), member(Ys, _, Obj), N = __path(Obj, \"name\"), C = __path(Obj, \"net\")",
             ]
         );
     }
