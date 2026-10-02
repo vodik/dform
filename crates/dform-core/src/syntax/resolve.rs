@@ -4532,7 +4532,7 @@ mod tests {
              zone_index(\"a\", 0)\n\
              resource net.subnet \"private-${z}\" {\n\
                vpc_id     = vpc.id\n\
-               cidr       = inet_subnet(vpc.cidr, 4, zone_index[z])\n\
+               cidr       = inet.subnet(vpc.cidr, 4, zone_index[z])\n\
                zone       = z\n\
                visibility = \"private\"\n\
              } where data(\"zone\", z)\n",
@@ -4540,7 +4540,7 @@ mod tests {
         assert_eq!(
             got[2],
             "resource \"net.subnet\" Addr { vpc_id = ref(\"net.vpc\", \"vpc\", \"id\"), \
-             cidr = inet_subnet(Cidr, 4, ZoneIndex), zone = Z, visibility = \"private\" } :- \
+             cidr = inet.subnet(Cidr, 4, ZoneIndex), zone = Z, visibility = \"private\" } :- \
              data(\"zone\", Z), attr(\"net.vpc\", \"vpc\", \"cidr\", Cidr), \
              zone_index(Z, ZoneIndex), Addr = format(\"private-%s\", Z)"
         );

@@ -2741,7 +2741,7 @@ fn missing_walk(t: &Term, state: &HashMap<String, Value>) -> bool {
 
 /// The innermost function application in `t` whose arguments are all ground
 /// but which has no value: a builtin applied to the wrong kind of value
-/// (`"10" + 1`, `to_int("abc")`). `None` when the term is merely unbound.
+/// (`"10" + 1`, `int("abc")`). `None` when the term is merely unbound.
 fn failed_builtin(t: &Term, state: &HashMap<String, Value>) -> Option<(String, Vec<Value>)> {
     let Term::Func { name, args } = t else {
         return None;

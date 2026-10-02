@@ -71,7 +71,7 @@ fn an_unknown_function_names_its_call() {
         "{}",
         r.stderr
     );
-    plan("edition 2026\nenv(\"prod\")\nq(count(x)) where env(x)\nr(y) where env(x), y = upper(x)\n")
+    plan("edition 2026\nenv(\"prod\")\nq(count(x)) where env(x)\nr(y) where env(x), y = str.upper(x)\n")
         .success();
 }
 

@@ -1,5 +1,5 @@
 module network {
-  input vpc_net: inet check prefix_len(vpc_net) <= 20
+  input vpc_net: inet check inet.prefix_len(vpc_net) <= 20
   input zones: list(string) = ["us-test-1a", "us-test-1b"] # @default contribution
   output vpc: addr
   output private_subnet_ids: list(ref(net.subnet))
@@ -17,7 +17,7 @@ module network {
   # vpc_id carries a fresh null; cidr is computed from a constant.
   resource net.subnet sn {
     vpc_id = ref(net.vpc, "vpc", "id")
-    cidr = inet_subnet(net_, 4, i)
+    cidr = inet.subnet(net_, 4, i)
     zone = z
     visibility = "private"
   } where zone_index(z, i), attr(net.vpc, "vpc", "cidr", net_), sn = format("private_%s", z)

@@ -529,7 +529,7 @@ A dot on a reference means one of two things, decided by position (G-6):
   edge, and a null until a computed path resolves.
 - **a read** anywhere its content is needed: a body literal, a clause, an
   argument of a builtin or operator, an interpolation hole, an index.
-  `inet_subnet(vpc.cidr, 4, i)` reads `attr(net.vpc, "vpc", "cidr", V)`
+  `inet.subnet(vpc.cidr, 4, i)` reads `attr(net.vpc, "vpc", "cidr", V)`
   now. To read into a field, bind in the clause: `namespace = ns` in the
   block and `where ns = web.name` after it.
 

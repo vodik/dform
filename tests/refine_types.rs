@@ -263,7 +263,7 @@ fn a_refinement_names_its_attribute_by_name() {
 type app.thing {{
   name: string check len(name) <= 3
   code: string check len(code) != 2
-  net: string check prefix_len(net) >= prefix_len(wide)
+  net: string check inet.prefix_len(net) >= inet.prefix_len(wide)
   wide: string
 }}
 resource app.thing a {{
@@ -294,7 +294,7 @@ n(\"{name}\")
     let r = plan(&s, &src("abc", "10.0.0.0/28")).failure();
     assert!(
         r.stdout.contains(
-            "! app.thing[\"a\"].net: 10.0.0.0/24 does not satisfy prefix_len(net) >= prefix_len(wide)\n"
+            "! app.thing[\"a\"].net: 10.0.0.0/24 does not satisfy inet.prefix_len(net) >= inet.prefix_len(wide)\n"
         ),
         "{}",
         r.stdout

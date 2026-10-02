@@ -8,7 +8,7 @@ module identity {
 
   resource iam.policy app_policy {
     name = "app"
-    # List comprehension sugar for collect(...)
+    # List comprehension sugar for collect_list(...)
     statements = [ { action: a, resource: r } | iam_need("app", a, r) ]
   }
 

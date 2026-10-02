@@ -1,5 +1,5 @@
 //! Signature help (`textDocument/signatureHelp`): inside the parentheses of
-//! a call of a builtin (`inet_subnet(`) or of an extern the project
+//! a call of a builtin (`inet.subnet(`) or of an extern the project
 //! declares (`dns.lookup(`, or its lookup `dns.lookup[`), the call's
 //! signature and the argument the cursor is in. Builtins are
 //! `engine::references`'s; an extern's parameters are its declaration's,
@@ -159,10 +159,10 @@ mod tests {
 
     #[test]
     fn the_open_call_and_its_argument() {
-        let text = "x = inet_subnet(vpc.cidr, f(a, b), ";
+        let text = "x = inet.subnet(vpc.cidr, f(a, b), ";
         assert_eq!(
             open_call(text, text.len()),
-            Some(("inet_subnet".into(), false, 2))
+            Some(("inet.subnet".into(), false, 2))
         );
         let text = "y = dns.lookup[\"a\"";
         assert_eq!(

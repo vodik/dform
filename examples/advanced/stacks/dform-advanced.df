@@ -45,7 +45,7 @@ resource net.vpc shared {
 
 # One VPC per tenant, with deterministic CIDRs derived from corp_net.
 resource net.vpc t {
-  cidr = inet_subnet(corp, 4, i)
+  cidr = inet.subnet(corp, 4, i)
   tags = { segment: "tenant", tenant: t }
 } where tenant(t, i), corp_net(corp)
 
@@ -128,7 +128,7 @@ mesh_peer(a, b) where {
   mesh_vpc(a, cidr_a, ia)
   mesh_vpc(b, cidr_b, ib)
   ib == ia + 1
-  not inet_overlaps(cidr_a, cidr_b)
+  not inet.overlaps(cidr_a, cidr_b)
 }
 
 # Feed the derived edges into the global peering/link graph.
@@ -143,7 +143,7 @@ resource net.vpc_peering "mesh-peer-${a}-${b}" {
 # Policy 1: peered VPCs must not overlap.
 deny "peered vpcs must not overlap" { a, b } where {
   peer(a, b)
-  inet_overlaps(net.vpc[a].cidr, net.vpc[b].cidr)
+  inet.overlaps(net.vpc[a].cidr, net.vpc[b].cidr)
 }
 
 # Policy 2: tenant isolation.

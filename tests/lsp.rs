@@ -371,10 +371,10 @@ fn hover_shows_docs_builtins_keywords_and_nothing_elsewhere() {
     );
 
     // A builtin, a keyword.
-    let text = hover(&mut c, &stack, "inet_host(", 2);
+    let text = hover(&mut c, &stack, "inet.host(", 2);
     let text = text.as_str().unwrap();
     assert!(
-        text.contains("inet_host(net: inet, n: int) -> ip"),
+        text.contains("inet.host(net: inet, n: int) -> ip"),
         "{text}"
     );
     assert!(text.contains("usable host"), "{text}");
@@ -434,7 +434,7 @@ fn signature_help_of_builtins_and_externs() {
         find(&stack, "vpc_net), 20)", 9),
     );
     assert_eq!(
-        help["signatures"][0]["label"], "inet_host(net: inet, n: int) -> ip?",
+        help["signatures"][0]["label"], "inet.host(net: inet, n: int) -> ip?",
         "{help}"
     );
     assert_eq!(help["activeParameter"], 1, "{help}");
@@ -556,7 +556,7 @@ fn diagnostics_follow_the_selected_environment() {
         .unwrap() as u64;
     let own = original
         .lines()
-        .position(|l| l.contains("private_ip = inet_host"))
+        .position(|l| l.contains("private_ip = inet.host"))
         .unwrap() as u64;
     assert!(lines.contains(&added) && lines.contains(&own), "{conflict}");
 
@@ -1296,7 +1296,7 @@ fn prepare_rename_refuses_what_is_not_the_programs() {
     assert_eq!(ok["placeholder"], "bastion", "{ok}");
     for (file, needle, ahead, why) in [
         (&stack, "resource compute.vm bastion", 2, "keyword"),
-        (&stack, "inet_host(", 2, "builtin"),
+        (&stack, "inet.host(", 2, "builtin"),
         (&stack, "compute.vm bastion", 9, "schema type"),
         (&network, "cidr = vpc_net", 1, "attribute path"),
         (

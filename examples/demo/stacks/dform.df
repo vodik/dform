@@ -92,7 +92,7 @@ resource net.vpc_peering "peer-${ia}-${ib}" {
 
 #| Demo: allocate an IP from the main VPC.
 resource compute.vm bastion {
-  private_ip = inet_host(inet(cfg.network.main.vpc_net), 20)
+  private_ip = inet.host(inet(cfg.network.main.vpc_net), 20)
 }
 
 # Policy, over every resource of a type (a module's resources included).

@@ -10,9 +10,9 @@ policy stdlib_net {
     vpc_peer(a, b)
     a in net.vpc
     b in net.vpc
-    inet_overlaps(a.cidr, b.cidr)
+    inet.overlaps(a.cidr, b.cidr)
   }
 
   #| Deny if any VM gets the unspecified IP.
-  deny "vm has unspecified ip" { vm } where vm in compute.vm, ip_unspecified(vm.private_ip)
+  deny "vm has unspecified ip" { vm } where vm in compute.vm, ip.unspecified(vm.private_ip)
 }

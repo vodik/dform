@@ -14,7 +14,7 @@ fn program(format: &str) -> String {
 input peering(env: enum("dev", "prod"), name: string, port: int, cidr: inet, on: bool) from {format}("data/p.{format}")
 
 resource net.vpc "v-${{name}}" {{
-  cidr = inet_str(c)
+  cidr = string(c)
   port = port
 }} where peering(env: "dev", name: name, port: port, cidr: c, on: true)
 "#

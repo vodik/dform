@@ -20,10 +20,10 @@ type settings {
   network_name: string
   regional_proxy_cidr: inet
   gke: {
-    control_plane_cidr: inet check prefix_len(control_plane_cidr) == 28 # checkable: lives in the cell
-    subnet_cidr: inet check prefix_len(subnet_cidr) == 22
-    pods_cidr: inet check prefix_len(pods_cidr) == 21
-    services_cidr: inet check prefix_len(services_cidr) == 21
+    control_plane_cidr: inet check inet.prefix_len(control_plane_cidr) == 28 # checkable: lives in the cell
+    subnet_cidr: inet check inet.prefix_len(subnet_cidr) == 22
+    pods_cidr: inet check inet.prefix_len(pods_cidr) == 21
+    services_cidr: inet check inet.prefix_len(services_cidr) == 21
     static_ips: map({ type: enum("INTERNAL") }) # was a constraint rule
   }
 }

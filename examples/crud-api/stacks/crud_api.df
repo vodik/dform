@@ -58,7 +58,7 @@ let released_image = "gcr.io/shop/crud-api@${digest}"
 let active = world.k8s.service["shop/crud-api"].spec.selector.color
 let live = world.k8s.deployment["shop/crud-api-${active}"]
 let live_image = live.spec.template.spec.containers[0].image
-let live_schema = to_int(live.metadata.labels.schema)
+let live_schema = int(live.metadata.labels.schema)
 
 other("blue", "green")
 other("green", "blue")
@@ -302,7 +302,7 @@ deny "container without resource limits" { workload: w, container: c.name } wher
 
 deny "image not pinned by digest" { workload: w, image: c.image } where {
   container(w, c)
-  len(split(c.image, "@sha256:")) != 2
+  len(str.split(c.image, "@sha256:")) != 2
 }
 
 deny "prod database must be regional" { db: d } where {

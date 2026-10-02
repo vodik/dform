@@ -1673,7 +1673,7 @@ mod tests {
     #[test]
     fn a_block_is_the_head_of_the_clause_after_it() {
         let src = "resource net.subnet \"s-${z}\" {\n  \
-                   cidr = inet_subnet(vpc.cidr, 4, zone_index[z])\n  zone = z\n} where {\n  \
+                   cidr = inet.subnet(vpc.cidr, 4, zone_index[z])\n  zone = z\n} where {\n  \
                    data(\"zone\", z)\n  z != \"x\"\n}\n";
         assert!(errors(src).is_empty(), "{:?}", errors(src));
         assert_eq!(kinds(src, &[CLAUSE, ASSIGN]), vec![ASSIGN, ASSIGN, CLAUSE]);

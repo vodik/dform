@@ -1552,14 +1552,14 @@ schema's `type_refine(T, Path, C)` fact refines a value:
 ```dform
 type settings {
   db.backup_days: int check 1 <= db.backup_days <= 35
-  gke: { control_plane_cidr: inet check prefix_len(control_plane_cidr) == 28 }
+  gke: { control_plane_cidr: inet check inet.prefix_len(control_plane_cidr) == 28 }
 }
 type gke_cluster { zones: list(string) check len(zones) >= 3 }
 ```
 
 A `check` over the value alone that fits the checkable table is a
 constraint in the attribute's cell: `lo <= x <= hi` is `range(Lo, Hi)`,
-`prefix_len(x) <= N` (`>=`, `==`) is `prefix_len_le(N)` / `prefix_len_ge(N)`,
+`inet.prefix_len(x) <= N` (`>=`, `==`) is `prefix_len_le(N)` / `prefix_len_ge(N)`,
 `len(x) <= N` is `len_le(N)` / `len_ge(N)`, `x in [..]` or `x == v` is
 `enum([..])`, `matches(x, "re")` is `regex("re")`; a `type` block's `int`,
 `string`, `bool`, `inet` or `enum(...)` is a type check. A schema writes
@@ -1579,7 +1579,7 @@ materialized, and a provider whose Schema does not declare
 `checks_refinements` makes it a compile error (E0306). Anything else (one
 bound alone, another attribute, a user predicate) lowers to a deny with the
 refinement's place, the attribute and the others it names read as their
-values (`prefix_len(net) >= prefix_len(wide)`); a call to a function the
+values (`inet.prefix_len(net) >= inet.prefix_len(wide)`); a call to a function the
 evaluator does not have, or a `matches` pattern that does not compile, is
 a compile error there; a secret input's refinement is always one, and it does
 not print the value. A `type` block's flags are not supported yet (they
@@ -1957,7 +1957,7 @@ examples/demo an evaluation takes about 30 ms in a release build.
   hover; the deployment is the `dform/environment` notification's, never
   a hover's.
 - *Signature help* (`textDocument/signatureHelp`) in a call of a builtin
-  (`inet_subnet(`) or of an extern the project declares (`dns.lookup(`,
+  (`inet.subnet(`) or of an extern the project declares (`dns.lookup(`,
   `dns.lookup[`): the signature, the argument point is in, and the
   builtin's summary or the extern's doc comment. A call being typed has
   one too.
