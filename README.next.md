@@ -541,8 +541,9 @@ table, read like any fact. `green` exists only in prod. The copy's VPC is
 `aws.vpc["blue::vpc"]` everywhere else, another block reads it as
 `blue.vpc`, and `network[t].vpc` ranges over every copy. `use` works on a
 component too: with nothing left to bind, importing it stamps it once,
-so `use synapse` is the homeserver, named `synapse`; with an input that
-has no default, `use` is an error that says to `instance` it. A
+so `use synapse` is the homeserver, named `synapse`, and `use traefik {
+acme_email }` gives an input on the way in. An input with no value is
+the same error wherever it is, in a stack or in a component. A
 component is used or instanced in a scope, never both.
 
 **Policies.** A policy is a module of `set`, `deny` and `warn`
