@@ -225,7 +225,7 @@ fn the_k8s_demo_applies_and_converges() {
     let src = std::fs::read_to_string(repo().join("examples/k8s/stacks/k8s_demo.df")).unwrap();
     let demo = src
         .replace(
-            "provider k8s {}",
+            "provider k8s",
             "provider k8s { source = \"./providers/k8s\" }",
         )
         .replace(

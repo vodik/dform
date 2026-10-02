@@ -18,6 +18,8 @@ arg_add(t, n, "tags", { team: "platform" }) where {
   not arg(t, n, "tags", { team: "platform" })
 }
 
+provider fake
+
 ---
 
 (source_file
@@ -81,4 +83,6 @@ arg_add(t, n, "tags", { team: "platform" }) where {
                 (object_field
                   (identifier)
                   (string
-                    (string_content)))))))))))
+                    (string_content))))))))))
+  (provider
+    (identifier)))

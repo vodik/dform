@@ -22,6 +22,8 @@ policy p {
 }
 use p
 
+provider fake
+
 ---
 
 (source_file
@@ -99,4 +101,6 @@ use p
                 (string
                   (string_content)))))))))
   (use
+    (identifier))
+  (provider
     (identifier)))

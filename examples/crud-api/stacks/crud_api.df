@@ -30,9 +30,9 @@ input release(app, key, value) from facts("data/releases.facts")
 input approve(type, address) from facts("data/approvals.facts")
 
 # Sources and versions are dform.toml's.
-provider google {}
-provider kubernetes {}
-provider random {}
+provider google
+provider kubernetes
+provider random
 
 # `provider random {}` brings random.password(+key, -value: secret(string))
 # persist: a generated password, a secret null until the first apply,

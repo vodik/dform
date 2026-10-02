@@ -21,6 +21,7 @@ ok(1)
 let n = "a"
 let n = "b" where ok(1)
 resource net.vpc v { cidr = n }
+provider fake
 "#,
     )
     .failure();
@@ -41,6 +42,7 @@ ok(1)
 let n = "a"
 let n = "a" where ok(1)
 resource net.vpc "v-${n}" { cidr = n }
+provider fake
 "#,
     )
     .success();
@@ -63,7 +65,7 @@ fn a_default_row_gives_way_to_a_conditional_one() {
              flag(\"{flag}\")\n\
              let size = \"small\" @default\n\
              let size = \"large\" where flag(\"on\")\n\
-             resource net.vpc v {{ size = size }}\n"
+             resource net.vpc v {{ size = size }}\nprovider fake\n"
         )
     };
     let r = plan(&src("on")).success();
@@ -86,6 +88,7 @@ module m {
 }
 instance m a { n = 1 }
 instance m b { n = 2 }
+provider fake
 "#,
     )
     .success();

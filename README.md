@@ -84,7 +84,7 @@ name = "shop"
 dform = ">=0.1"
 
 [providers]
-aws = { source = "aws-mock", version = "2.1" }   # `provider aws {}` in a program
+aws = { source = "aws-mock", version = "2.1" }   # `provider aws` in a program
 gcp = { source = "providers/gcp" }               # a path under the root
 
 [defaults]
@@ -445,11 +445,16 @@ was built from), and dform refuses one of its built-in providers (the mock,
 
 The mock can pretend to be any provider: a provider it plays is a schema file of
 plain facts, `providers/<name>/schema.df`, selected by the program's
-`provider` statements (`provider gke {}`, or `provider aws { source =
+`provider` statements (`provider gke`, or `provider aws { source =
 "providers/aws-mock" }` for a directory or `.df` file relative to the
 program's file), by the manifest's `[providers]` entry of the name, or,
-overriding them, with `dform dev --provider NAME` (repeatable; default
-`fake`). `--provider path/to/schema.df` loads a file directly. A
+overriding them, with `dform dev --provider NAME` (repeatable). There is
+no default: a program with no `provider` statement starts none, and
+`plan`, `apply`, `query`, `why` and `test` refuse it, "the program names no
+provider: add `provider NAME` (dform.toml names its source) or run under
+`dev --provider`". A `provider` or `instance` with no entries is written
+without braces (`provider fake`, `instance network blue`); `fmt` drops a
+`{}`. `--provider path/to/schema.df` loads a file directly. A
 `providers/<name>/schema.df` in the working directory wins over the schemas
 built into the binary (`crates/dform-mock/schemas/`: `fake`, `gke`, `k8s`,
 `aws-mock`). A `source` (or `--provider` path) that
@@ -471,7 +476,7 @@ and read like any rule reads: inputs, settings rows, value names, tables and
 `env.var`. A keyed deployment configures its providers by its key:
 
 ```dform
-provider env {}
+provider env
 
 provider google {
   project = cfg.project_id                                # the env's settings row
@@ -484,7 +489,7 @@ The block lowers to `provider_config("google", { project: .., credentials:
 .. })`, which reaches the provider at a second Configure as `settings` once
 the evaluation knows it (the provider serves nothing until then; see "The
 Kubernetes provider"). `env.var("NAME")` is the built-in `env` provider's
-extern (`provider env {}`), answering the
+extern (`provider env`), answering the
 process environment's variable as a `secret(string)`: never persisted, and
 recorded in the plan file only by its label and its value's digest keyed
 with the stack's plan key (`inputs.env`: `{"sensitive": "env.var/NAME",
@@ -1410,8 +1415,8 @@ declare one: `provider NAME {}` brings the provider's externs into scope,
 with their modes from its schema.
 
 ```dform
-provider file {}
-provider random {}
+provider file
+provider random
 
 resource google_monitoring_dashboard pngu {
   dashboard_json = file.json["files/dashboard-pngu.json"]

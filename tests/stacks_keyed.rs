@@ -10,7 +10,7 @@ use common::{Scratch, repo};
 const APP: &str = r#"edition 2026
 key env: enum("staging", "stg", "prod") = "staging"
 input size: int = 1
-provider fake {}
+provider fake
 net_of("staging", "10.1.0.0/16")
 net_of("stg", "10.1.0.0/16")
 net_of("prod", "10.2.0.0/16")
@@ -105,7 +105,7 @@ fn key_values_are_escaped_and_joined() {
         r#"edition 2026
 key team: string
 key region: string = "us-east1"
-provider fake {}
+provider fake
 resource net.vpc main {
   name = "main-${team}-${region}"
 }
@@ -139,7 +139,7 @@ fn a_key_needs_a_value_from_the_target() {
         "app.df",
         r#"edition 2026
 key env: string
-provider fake {}
+provider fake
 "#,
     );
     let r = s.run(&["plan", "app.df"]).failure();
@@ -168,14 +168,14 @@ fn a_key_is_the_stacks_and_not_a_secret() {
     let s = Scratch::new("keyed-secret");
     s.write(
         "app.df",
-        "edition 2026\nkey env: secret(string)\nprovider fake {}\n",
+        "edition 2026\nkey env: secret(string)\nprovider fake\n",
     );
     let r = s.run(&["plan", "app.df", "env=prod"]).failure();
     assert!(r.stderr.contains("key env is a secret"), "{}", r.stderr);
     assert!(r.stderr.contains("app.df:2:1"), "{}", r.stderr);
     s.write(
         "app.df",
-        "edition 2026\nmodule m {\n  key env: string\n}\nprovider fake {}\n",
+        "edition 2026\nmodule m {\n  key env: string\n}\nprovider fake\n",
     );
     let r = s.run(&["plan", "app.df"]).failure();
     assert!(r.stderr.contains("key env inside a block"), "{}", r.stderr);
@@ -189,14 +189,14 @@ fn stack_output_addresses_one_deployment() {
         "app.df",
         r#"edition 2026
 key env: string = "staging"
-provider fake {}
+provider fake
 output url = "https://${env}.example"
 "#,
     );
     s.write(
         "web.df",
         r#"edition 2026
-provider fake {}
+provider fake
 resource net.vpc edge {
   name = u
 } where stack_output("app[env=prod]", "url", u)
@@ -255,7 +255,7 @@ fn rekey_moves_state_and_the_next_plan_is_undeformed() {
         "app.df",
         r#"edition 2026
 key env: string = "staging"
-provider fake {}
+provider fake
 resource net.vpc main {
   name = "main"
 }
@@ -298,7 +298,7 @@ fn rekey_moves_the_state_from_before_the_stack_was_keyed() {
 
 const FIXED: &str = r#"edition 2026
 key env: string = "staging"
-provider fake {}
+provider fake
 resource net.vpc logs {
   bucket = "company-logs"
 }
@@ -351,7 +351,7 @@ fn a_fixed_bucket_name_is_denied_under_strict() {
 /// depends on the key does too.
 const GATED: &str = r#"edition 2026
 key env: string = "staging"
-provider fake {}
+provider fake
 resource net.vpc logs {
   bucket = "company-logs"
   tags = { env: env }
@@ -604,7 +604,7 @@ fn state_show_needs_the_key_not_the_other_inputs() {
         "edition 2026\n\
          key env: string\n\
          input pw: secret(string)\n\
-         provider fake {}\n\
+         provider fake\n\
          resource net.vpc main { cidr = \"10.0.0.0/16\" }\n\
          ",
     );

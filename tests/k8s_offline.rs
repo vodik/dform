@@ -37,13 +37,10 @@ fn dform<S: AsRef<std::ffi::OsStr>>(s: &Scratch, kubeconfig: Option<&str>, args:
 fn real_demo(s: &Scratch) {
     let src = std::fs::read_to_string(repo().join("examples/k8s/stacks/k8s_demo.df")).unwrap();
     let real = src.replace(
-        "provider k8s {}",
+        "provider k8s",
         "provider k8s { source = \"./providers/k8s\" }",
     );
-    assert_ne!(
-        src, real,
-        "the demo names its provider `provider k8s {{}}.`"
-    );
+    assert_ne!(src, real, "the demo names its provider `provider k8s.`");
     s.write("k8s_demo.df", &real);
     std::fs::create_dir_all(s.path("providers/k8s")).unwrap();
     std::os::unix::fs::symlink(k8s(), s.path("providers/k8s/dform-provider-k8s")).unwrap();

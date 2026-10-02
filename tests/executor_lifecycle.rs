@@ -17,6 +17,7 @@ const NET: &str = r#"edition 2026
 
 resource net.vpc main { cidr = "10.0.0.0/16" }
 lifecycle(main, "prevent_destroy")
+provider fake
 "#;
 
 /// prevent_destroy turns a delete, or a replace, into a deny: plan and
@@ -29,7 +30,7 @@ fn prevent_destroy_makes_a_delete_a_deny() {
     // The resource goes; the fact stays, naming it by its address.
     s.write(
         "p.df",
-        "edition 2026\nlifecycle(net.vpc[\"main\"], \"prevent_destroy\")\n",
+        "edition 2026\nlifecycle(net.vpc[\"main\"], \"prevent_destroy\")\nprovider fake\n",
     );
     let r = dform(&s, &["plan"]).failure();
     assert!(r.stdout.contains("- net.vpc[\"main\"]"), "{}", r.stdout);
@@ -78,6 +79,7 @@ module network {{
   resource net.subnet a {{ vpc_id = vpc.id, tier = "web" }}
 }}
 instance network {inst} {{}}
+provider fake
 "#
         )
     };
@@ -139,7 +141,7 @@ fn ignore_changes_drops_the_path_from_both_sides() {
     let prog = |team: &str| {
         format!(
             "edition 2026\nresource net.vpc main {{ cidr = \"10.0.0.0/16\", tags = {{ team: \"{team}\" }} }}\n\
-             ignore_changes(main, \"tags.owner\")\n"
+             ignore_changes(main, \"tags.owner\")\nprovider fake\n"
         )
     };
     s.write("p.df", &prog("a"));
@@ -186,6 +188,7 @@ deny "databases must be protected" {addr: a} where {
   a in db.postgres
   not lifecycle(a, "prevent_destroy")
 }
+provider fake
 "#,
     );
     let r = dform(&s, &["plan"]).failure();
@@ -214,7 +217,7 @@ fn ignore_changes_still_sets_the_path_on_create() {
     let prog = |owner: &str| {
         format!(
             "edition 2026\nresource net.vpc main {{ cidr = \"10.0.0.0/16\", tags = {{ owner: \"{owner}\" }} }}\n\
-             ignore_changes(main, \"tags.owner\")\n"
+             ignore_changes(main, \"tags.owner\")\nprovider fake\n"
         )
     };
     s.write("p.df", &prog("ops"));
@@ -241,12 +244,12 @@ fn ignore_changes_update_leaves_an_absent_path_absent() {
     let s = Scratch::new("ignore-changes-absent");
     s.write(
         "p.df",
-        "edition 2026\nresource net.vpc main { cidr = \"10.0.0.0/16\", size = 1 }\n",
+        "edition 2026\nresource net.vpc main { cidr = \"10.0.0.0/16\", size = 1 }\nprovider fake\n",
     );
     dform(&s, &["apply"]).success();
     s.write(
         "p.df",
-        "edition 2026\nresource net.vpc main { cidr = \"10.0.0.0/16\", size = 2, tags = { owner: \"ops\" } }\nignore_changes(main, \"tags.owner\")\n",
+        "edition 2026\nresource net.vpc main { cidr = \"10.0.0.0/16\", size = 2, tags = { owner: \"ops\" } }\nignore_changes(main, \"tags.owner\")\nprovider fake\n",
     );
     let r = dform(&s, &["apply"]).success();
     assert!(
@@ -273,7 +276,7 @@ fn why_explains_prevent_destroy() {
     dform(&s, &["apply"]).success();
     s.write(
         "p.df",
-        "edition 2026\nlifecycle(net.vpc[\"main\"], \"prevent_destroy\")\n",
+        "edition 2026\nlifecycle(net.vpc[\"main\"], \"prevent_destroy\")\nprovider fake\n",
     );
     let r = dform(&s, &["why", "deny(M)"]).success();
     assert!(
@@ -306,7 +309,7 @@ fn policy_reads_the_deformation() {
     dform(&s, &["apply"]).success();
     s.write(
         "p.df",
-        "edition 2026\nresource compute.vm keep { size = 1 }\ndeny(m) where deformation(\"delete\", r, _), m = \"no deletes here: ${r}\"\n",
+        "edition 2026\nresource compute.vm keep { size = 1 }\ndeny(m) where deformation(\"delete\", r, _), m = \"no deletes here: ${r}\"\nprovider fake\n",
     );
     let r = dform(&s, &["plan"]).failure();
     assert!(
@@ -330,7 +333,7 @@ fn a_resource_rule_over_the_deformation_is_an_error() {
     let s = Scratch::new("deformation-circular");
     s.write(
         "p.df",
-        "edition 2026\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nresource net.vpc shadow {\n  cidr = \"10.1.0.0/16\"\n} where deformation(\"create\", main, _)\n",
+        "edition 2026\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nresource net.vpc shadow {\n  cidr = \"10.1.0.0/16\"\n} where deformation(\"create\", main, _)\nprovider fake\n",
     );
     let r = dform(&s, &["plan"]).failure();
     assert!(

@@ -603,9 +603,10 @@ impl<'a> Parser<'a> {
         match k {
             EDITION_KW => self.simple(EDITION, |p| p.expect(INT)),
             IMPORT_KW => self.simple(IMPORT, |p| p.expect(STRING)),
+            // `provider aws`: a block with no entries is left out (R-26).
             PROVIDER_KW => self.simple(PROVIDER, |p| {
                 p.expect_word()?;
-                p.block()?;
+                p.opt_block()?;
                 p.opt_clause()
             }),
             INPUT_KW
@@ -783,7 +784,7 @@ impl<'a> Parser<'a> {
             INSTANCE_KW => self.simple(INSTANCE, |p| {
                 p.expect_word()?;
                 p.expect_word()?;
-                p.block()?;
+                p.opt_block()?;
                 p.opt_clause()
             }),
             RESOURCE_KW => self.simple(RESOURCE, |p| {
@@ -1054,6 +1055,16 @@ impl<'a> Parser<'a> {
         self.bump();
         self.finish();
         Ok(())
+    }
+
+    /// A block that may be left out when it has no entries: `provider
+    /// aws`, `instance network blue` (R-26).
+    fn opt_block(&mut self) -> P {
+        if self.at(L_BRACE) {
+            self.block()
+        } else {
+            Ok(())
+        }
     }
 
     fn assign(&mut self) -> P {

@@ -27,6 +27,7 @@ module m {
 }
 instance m a { n = 1 }
 instance m b { n = 2 }
+provider fake
 "#,
     )
     .success();
@@ -52,6 +53,7 @@ module m {
 }
 instance m a {}
 big(s) where size(s)
+provider fake
 "#,
     )
     .failure();
@@ -84,6 +86,7 @@ resource net.subnet s {
   size = s_
   vpc = v
 } where s_ = m.a.size, inst(i), output(m[i], "vpc", v)
+provider fake
 "#,
     )
     .success();
@@ -107,11 +110,13 @@ module m {
   size(1)
 }
 instance m a {}
+provider fake
 "#,
     )
     .failure();
     assert!(
-        r.stderr.contains("p.df:3:10: expected `type`, found `size`"),
+        r.stderr
+            .contains("p.df:3:10: expected `type`, found `size`"),
         "{}",
         r.stderr
     );
@@ -128,7 +133,8 @@ instance m a {}
         r.stderr
     );
     assert!(
-        r.stderr.contains("`contributes` is gone (R-5): a write needs no grant"),
+        r.stderr
+            .contains("`contributes` is gone (R-5): a write needs no grant"),
         "{}",
         r.stderr
     );
@@ -136,6 +142,7 @@ instance m a {}
 
 /// An input default is a `@default` contribution: the instance's value wins
 /// where it sets one; a required input it does not set is a compile error.
+/// An instance that sets nothing is written without a block (R-26).
 #[test]
 fn an_input_default_yields_to_the_instance() {
     let src = r#"edition 2026
@@ -145,8 +152,9 @@ module m {
     size = n_
   } where n(n_)
 }
-instance m a {}
+instance m a
 instance m b { n = 1 }
+provider fake
 "#;
     let r = plan(src).success();
     assert!(
@@ -180,6 +188,7 @@ module m {
   } where n(n_)
 }
 instance m a { n = 9 }
+provider fake
 "#,
     )
     .failure();
@@ -204,13 +213,15 @@ policy tags {
   set a.cidr = "10.9.0.0/16" @override where a in net.vpc
 }
 use tags
+provider fake
 "#;
     let r = plan(src).success();
     assert!(r.stdout.contains("cidr = \"10.9.0.0/16\""), "{}", r.stdout);
     assert!(r.stdout.contains("team = \"x\""), "{}", r.stdout);
     let r = plan(&format!("{src}seen(v) where team(v)\n")).failure();
     assert!(
-        r.stderr.contains("p.df:9:15: team/1 is private to policy tags"),
+        r.stderr
+            .contains("p.df:10:15: team/1 is private to policy tags"),
         "{}",
         r.stderr
     );
@@ -235,6 +246,7 @@ module app {
 }
 instance app blue { replicas = replicas }
 instance app green { replicas = 7 }
+provider fake
 "#,
     );
     let r = s

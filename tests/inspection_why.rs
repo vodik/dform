@@ -191,7 +191,7 @@ fn why_prints_one_alternative_unless_all() {
     let s = Scratch::new("why-alts");
     s.write(
         "p.df",
-        "edition 2026\np(1)\nq(1)\nr(x) where p(x)\nr(x) where q(x)\ns(x) where r(x), not t(x)\nt(2) where p(2)",
+        "edition 2026\np(1)\nq(1)\nr(x) where p(x)\nr(x) where q(x)\ns(x) where r(x), not t(x)\nt(2) where p(2)\nprovider fake\n",
     );
     let why = |extra: &[&str]| {
         let mut a = vec!["dev", "--world", "w.json", "why"];
@@ -226,7 +226,10 @@ fn why_prints_one_alternative_unless_all() {
 #[test]
 fn why_with_a_variable_prints_each_match() {
     let s = Scratch::new("why-vars");
-    s.write("p.df", "edition 2026\np(1)\np(2)\nq(x) where p(x)");
+    s.write(
+        "p.df",
+        "edition 2026\np(1)\np(2)\nq(x) where p(x)\nprovider fake\n",
+    );
     let out = s
         .run(&["dev", "--world", "w.json", "why", "q(N)", "p.df"])
         .success()
@@ -246,7 +249,9 @@ fn why_never_prints_a_labeled_secret() {
         "p.df",
         r#"edition 2026
 resource leaky.vault v { password = "VAULT-SECRET-DO-NOT-PRINT" }
-           copy(p) where p = v.password"#,
+           copy(p) where p = v.password
+provider fake
+"#,
     );
     let schema = repo().join("tests/fixtures/providers/leaky/schema.df");
     let out = s
@@ -277,13 +282,13 @@ fn why_labels_planner_facts_as_the_plan() {
     let s = Scratch::new("why-plan-leaf");
     s.write(
         "p.df",
-        "edition 2026\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\n",
+        "edition 2026\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nprovider fake\n",
     );
     s.run(&["dev", "--world", "w.json", "apply", "p.df"])
         .success();
     s.write(
         "p.df",
-        "edition 2026\nlifecycle(net.vpc[\"main\"], \"prevent_destroy\")\nseen(a) where identity(net.vpc, a, _)\n",
+        "edition 2026\nlifecycle(net.vpc[\"main\"], \"prevent_destroy\")\nseen(a) where identity(net.vpc, a, _)\nprovider fake\n",
     );
     let why = |q: &str| {
         s.run(&["dev", "--world", "w.json", "why", q, "p.df"])

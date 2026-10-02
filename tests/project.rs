@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 const APP: &str = r#"edition 2026
 key env: enum("staging", "prod") = "staging"
-provider fake {}
+provider fake
 resource net.vpc main {
   cidr = "10.0.0.0/16"
   tags = { env }
@@ -17,7 +17,7 @@ resource net.vpc main {
 "#;
 
 const NET: &str = r#"edition 2026
-provider fake {}
+provider fake
 resource net.vpc shared {
   cidr = "10.9.0.0/16"
 }
@@ -228,7 +228,7 @@ fn a_program_imports_modules_never_a_stack() {
     let s = project("target-import-stack");
     s.write(
         "stacks/both.df",
-        "edition 2026\nimport \"stacks/net.df\"\nprovider fake {}\n",
+        "edition 2026\nimport \"stacks/net.df\"\nprovider fake\n",
     );
     let r = s.run(&["plan", "both"]).failure();
     assert!(
@@ -246,7 +246,7 @@ fn a_program_imports_modules_never_a_stack() {
     );
     s.write(
         "stacks/both.df",
-        "edition 2026\nimport \"modules/tags.df\"\nprovider fake {}\n",
+        "edition 2026\nimport \"modules/tags.df\"\nprovider fake\n",
     );
     let r = s.run(&["plan", "both"]).success();
     assert!(r.stdout.contains("+ net.vpc[\"extra\"]"), "{}", r.stdout);
@@ -288,7 +288,7 @@ unknowns = "strict"
     s.write(
         "stacks/p.df",
         r#"edition 2026
-provider cloud {}
+provider cloud
 resource x.thing a { size = 1 }
 pinned(n, c) where project_provider(n, c)
 default(k, v) where project_default(k, v)
@@ -336,7 +336,7 @@ fn a_stack_table_overrides_the_defaults() {
     s.write("dform.toml", "[defaults]\nunknowns = \"strict\"\n");
     s.write(
         "stacks/p.df",
-        "edition 2026\nprovider fake {}\nresource db.postgres main { size = 1 }\n\
+        "edition 2026\nprovider fake\nresource db.postgres main { size = 1 }\n\
          resource compute.vm app {\n  size = 1\n} where main in db.postgres, \
          e = main.endpoint, e != \"\"\n\
          stacked(n, k, v) where project_stack(n, k, v)\n",
@@ -498,7 +498,7 @@ fn fmt_with_no_path_formats_the_project() {
     let s = project("fmt-project");
     s.write(
         "stacks/net.df",
-        "edition 2026\nprovider fake {}\nresource net.vpc shared {cidr=\"10.9.0.0/16\"}\n",
+        "edition 2026\nprovider fake\nresource net.vpc shared {cidr=\"10.9.0.0/16\"}\n",
     );
     let r = s.run(&["fmt", "--check"]).failure();
     assert_eq!(r.stdout, "stacks/net.df\n");
@@ -599,7 +599,7 @@ fn program_paths_resolve_from_the_root() {
 input peer(name: string) from csv("data/peers.csv")
 input tag(t) from facts("data/tags.facts")
 provider cloud { source = "providers/cloud" }
-provider file {}
+provider file
 note(v) where v = file.text["data/note.txt"]
 resource x.thing "${n}" {
   label = "${n}-${g}-${v}"

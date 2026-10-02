@@ -81,7 +81,7 @@ fn fresh_nulls_still_flow() {
     s.write("dform.toml", "[stacks.p]\nunknowns = \"strict\"\n");
     s.write(
         "p.df",
-        "edition 2026\nprovider fake {}\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nresource net.subnet a { vpc_id = ref(net.vpc, \"main\", \"id\"), cidr = \"10.0.1.0/24\" }\n",
+        "edition 2026\nprovider fake\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nresource net.subnet a { vpc_id = ref(net.vpc, \"main\", \"id\"), cidr = \"10.0.1.0/24\" }\n",
     );
     let r = s.run(&["plan", "p.df"]).success();
     assert!(
@@ -100,7 +100,7 @@ fn fresh_nulls_still_flow() {
 fn a_pending_group_is_refused_and_allow_stuck_relaxes_per_key() {
     let s = Scratch::project("lang-strict-allow");
     s.write("dform.toml", "[stacks.p]\nunknowns = \"strict\"\n");
-    let program = "edition 2026\nprovider fake {}\nresource db.postgres a {}\nup(d) where e = db.postgres[d].endpoint, e != \"\"\nresource net.subnet s {\n  cidr = \"10.0.1.0/24\"\n} where up(\"a\")\n";
+    let program = "edition 2026\nprovider fake\nresource db.postgres a {}\nup(d) where e = db.postgres[d].endpoint, e != \"\"\nresource net.subnet s {\n  cidr = \"10.0.1.0/24\"\n} where up(\"a\")\n";
     s.write("p.df", program);
     let r = s.run(&["plan", "p.df"]).failure();
     assert!(

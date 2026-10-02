@@ -19,6 +19,8 @@ resource net.subnet y {
   x = q
 } where arg(net.vpc, "x", "z", q)
 
+provider fake
+
 ---
 
 (source_file
@@ -84,4 +86,6 @@ resource net.subnet y {
                 (string_content))
               (string
                 (string_content))
-              (identifier))))))))
+              (identifier)))))))
+  (provider
+    (identifier)))

@@ -275,7 +275,7 @@ static type is field access on a value: `__path(X, "f")`.
 stmt       := KEYWORD ...                      ; one production per keyword, below
             | NAME ("." NAME)* "(" args ")" RANK? ("where" body)?   ; a fact or a rule
 
-provider   := "provider" NAME block
+provider   := "provider" NAME block?                ; no block when it has no entries
 import     := "import" STRING
 type       := "type" NAME "=" type | "type" DOTTED attrs
 decl       := "decl" DOTTED columns "mixed"?
@@ -288,7 +288,7 @@ let        := "let" NAME "=" term RANK? ("where" body)?
 set        := "set" chain ("=" | "+=") term RANK? ("where" body)?
 export     := "export" "type" NAME
 module     := "module" NAME stmts
-instance   := "instance" NAME NAME block ("where" body)?
+instance   := "instance" NAME NAME block? ("where" body)?
 policy     := "policy" NAME stmts
 use        := "use" NAME
 scenario   := "scenario" NAME stmts
@@ -404,8 +404,14 @@ lowered as a table (see "Relation inputs and tables").
 
 ### Provider blocks
 
-`provider NAME { .. }`'s `source` is a constant (the stack reads it to
-start the provider). Every other setting is a term, read like a rule's
+`provider NAME { .. }`, or `provider NAME` with no settings, names a
+provider the program uses; a program with no `provider` statement starts
+none, and what evaluates it against providers (`plan`, `apply`, `query`,
+`why`, `test`) refuses it, naming the fix (`dev --provider` runs it
+anyway). Its `source` is a constant (the stack reads it to start the
+provider; without one, dform.toml's `[providers]` entry of the name).
+Every other setting is the provider's own, which its schema may declare;
+one it does not is passed to Configure as written. Each is a term, read like a rule's
 (inputs, settings rows, value names, tables, `env.var`), and the block
 lowers to one rule for them all, plus one for `expect_account`:
 
@@ -423,14 +429,14 @@ for them. `file`, `env` and `random` are built-in fact providers, declared
 like any provider and needing no `dform.toml` source (`externs::BUILTINS`):
 
 ```
-provider file {}      file.json(+path, -value: any), file.text(+path, -value: string)
-provider env {}       env.var(+name, -value: secret(string))
-provider random {}    random.password(+key, -value: secret(string)) persist
+provider file         file.json(+path, -value: any), file.text(+path, -value: string)
+provider env          env.var(+name, -value: secret(string))
+provider random       random.password(+key, -value: secret(string)) persist
 ```
 
 `extern file.json(..)` in a program is an error naming the `provider`
 statement to write instead. `env.var(t)` as a term is the lookup
-`env.var[t]`; without `provider env {}` it is an error that says to declare
+`env.var[t]`; without `provider env` it is an error that says to declare
 it. `extern` stays the schema's word: provider schemas and the compiler's
 tests declare externs with it, and so, until the compiler reads a
 provider's schema (DESIGN.org R-24), does a program for a provider that is
@@ -751,6 +757,7 @@ sits with the line that opened it. The normal forms:
 - a body goes on one line (`where a, b`) when the line fits in 100 columns,
   else into a `{ }` block, one literal per line;
 - `{ a: a }` is `{ a }`;
+- a `provider` or `instance` with no entries has no block: `provider aws`;
 - a header name is bare when it is a name, not a keyword, and not bound by
   the clause; else it is quoted;
 - `not { lit }` of one literal whose names are all bound is `not lit`;

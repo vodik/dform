@@ -15,7 +15,7 @@ fn a_file_reached_by_two_paths_loads_once() {
     s.write("lib/more.df", "edition 2026\nimport \"../lib/net.df\"\n");
     s.write(
         "p.df",
-        "edition 2026\nimport \"lib/net.df\"\nimport \"lib/more.df\"\ninstance network main {}\n",
+        "edition 2026\nimport \"lib/net.df\"\nimport \"lib/more.df\"\ninstance network main {}\nprovider fake\n",
     );
     let r = s
         .run(&["dev", "--world", "w.json", "plan", "p.df"])

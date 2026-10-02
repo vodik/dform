@@ -15,6 +15,9 @@ examples/advanced/stacks/dform-advanced.df
 edition 2026
 input env: enum("staging", "prod") = "staging"
 
+# The mock's built-in fake schema.
+provider fake
+
 # List-valued settings (human-friendly)
 settings staging {
   tenants = ["tenant_a", "tenant_b"]
@@ -197,6 +200,9 @@ warn "user is effectively admin (via group nesting)" { user: u } where in_group(
         (string_content)))
     (string
       (string_content)))
+  (comment)
+  (provider
+    (identifier))
   (comment)
   (settings
     (identifier)

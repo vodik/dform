@@ -9,6 +9,7 @@ const PROG: &str = r#"edition 2026
 
 resource net.vpc main { cidr = "10.0.0.0/16" }
 resource net.subnet a { vpc_id = ref(net.vpc, "main", "id"), tier = "web" }
+provider fake
 "#;
 
 fn dform(s: &Scratch, args: &[&str]) -> common::Run {
@@ -75,7 +76,7 @@ fn a_boundary_refresh_retries() {
     );
     s.write(
         "p.df",
-        "edition 2026\nresource db.postgres main { size = 1 }\nresource compute.vm app { db_host = ref(db.postgres, \"main\", \"endpoint\") }\n",
+        "edition 2026\nresource db.postgres main { size = 1 }\nresource compute.vm app { db_host = ref(db.postgres, \"main\", \"endpoint\") }\nprovider fake\n",
     );
     let r = dform(
         &s,

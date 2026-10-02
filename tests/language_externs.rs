@@ -6,7 +6,7 @@ mod common;
 use common::{Scratch, repo};
 
 const P: &str = r#"edition 2026
-provider file {}
+provider file
 extern kv.password(+name, -value) persist
 extern kv.token(+name, -value)
 dash("dash.json")

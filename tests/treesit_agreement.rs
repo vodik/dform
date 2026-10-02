@@ -389,7 +389,7 @@ fn edge_cases_agree() {
         "let check = 1\n",
         "p(where)\n",
         "resource net.vpc \"a-${x}\" @default {\n\n  # c\n  tags.team = \"x\"\n  list[0].name = x\n  audit.sinks += [\"s3\"] @override\n} where q(x)\n",
-        "provider fake {}\n",
+        "provider fake\n",
         "settings e @default {\n} where env(e)\n",
         "set settings[\"prod\"].audit.sinks = [\"s3\"]\n",
         "set x.tags = {} @override where x in resource\n",

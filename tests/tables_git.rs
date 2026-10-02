@@ -15,6 +15,7 @@ input node(name: string) from csv(git("ops.git", "main", "nodes.csv"))
 resource compute.vm "${n}" {
   size = 1
 } where node(n)
+provider fake
 "#;
 
 fn setup(name: &str) -> (Scratch, String) {

@@ -8,6 +8,9 @@ edition 2026
 import "modules/network.df"
 input env: enum("staging", "prod") = "staging"
 
+# The mock's built-in fake schema.
+provider fake
+
 settings staging {
   network.vpc_cidr = inet("10.10.0.0/16")
 }

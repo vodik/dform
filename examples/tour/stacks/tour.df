@@ -27,7 +27,7 @@ edition 2026
 key env: enum("dev", "prod") = "dev"
 input public_db: bool = false
 
-provider fake {}
+provider fake
 
 # 1. One resource
 #

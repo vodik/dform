@@ -13,6 +13,7 @@ const PROG: &str = r#"edition 2026
 resource net.vpc main { cidr = "10.0.0.0/16" }
 resource net.vpc peer { cidr = "10.1.0.0/16" }
 resource net.subnet a { vpc_id = ref(net.vpc, "main", "id"), cidr = "10.0.1.0/24" }
+provider fake
 "#;
 
 /// The same stack with `net.vpc.main` renamed (`moved/3`): a resume that
@@ -23,6 +24,7 @@ resource net.vpc core { cidr = "10.0.0.0/16" }
 resource net.vpc peer { cidr = "10.1.0.0/16" }
 resource net.subnet a { vpc_id = ref(net.vpc, "core", "id"), cidr = "10.0.1.0/24" }
 moved(net.vpc, "main", core)
+provider fake
 "#;
 
 const MARKS: &str = "resumed from the apply interrupted at tick 1:\n  \
@@ -160,6 +162,7 @@ resource db.postgres orders { size = 1 }
 resource iam.policy "connect-${host}" {
   statements = [{ action: "db.connect", resource: host }]
 } where pg in db.postgres, host = pg.endpoint
+provider fake
 "#;
 
 /// Tick 2 names the group's member, which the first answer did not see:

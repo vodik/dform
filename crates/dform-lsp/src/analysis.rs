@@ -374,6 +374,7 @@ fn run_noted(
         ..Default::default()
     };
     let loaded = deployment::load(&target, version, read, notes)?;
+    loaded.require_provider()?;
     // The selected environment names keys of every stack in the project;
     // this stack takes its own.
     let set = t

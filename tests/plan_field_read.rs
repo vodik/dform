@@ -25,6 +25,7 @@ resource net.subnet a {
   cidr = "10.0.1.0/24"
   name = "a-${main.cidrr}"
 }
+provider fake
 "#,
     )
     .success();
@@ -61,6 +62,7 @@ resource net.subnet c {
   cidr = "10.0.3.0/24"
   name = "c-${gated.cidr}"
 }
+provider fake
 "#,
     )
     .success();
@@ -75,7 +77,7 @@ fn under_strict_mode_it_is_a_deny() {
     let r = plan(
         &s,
         r#"edition 2026
-provider fake {}
+provider fake
 resource net.vpc main { cidr = "10.0.0.0/16" }
 resource net.subnet a {
   cidr = "10.0.1.0/24"

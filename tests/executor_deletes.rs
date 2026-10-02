@@ -26,6 +26,7 @@ resource net.vpc main { cidr = "10.0.0.0/16" }
 resource net.vpc_peering p { vpc_id = ref(net.vpc, "main", "id") }
 resource net.route r { peering_id = ref(net.vpc_peering, "p", "id") }
 resource compute.vm keep { size = 1 }
+provider fake
 "#,
     );
     dform(&s, &["apply"]).success();
@@ -35,7 +36,7 @@ resource compute.vm keep { size = 1 }
     );
     s.write(
         "p.df",
-        "edition 2026\nresource compute.vm keep { size = 1 }\n",
+        "edition 2026\nresource compute.vm keep { size = 1 }\nprovider fake\n",
     );
     let r = dform(&s, &["apply"]).success();
     let order: Vec<&str> = r.stdout.lines().filter(|l| l.starts_with("- ")).collect();
@@ -64,6 +65,7 @@ const NET: &str = r#"edition 2026
 
 resource net.vpc main { cidr = "10.0.0.0/16" }
 resource net.subnet a { vpc_id = ref(net.vpc, "main", "id"), tier = "web" }
+provider fake
 "#;
 
 /// A force_new change is a replace; by default the old object goes first

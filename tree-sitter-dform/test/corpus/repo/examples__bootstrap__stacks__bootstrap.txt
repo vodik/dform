@@ -17,8 +17,8 @@ examples/bootstrap/stacks/bootstrap.df
 edition 2026
 
 # The mock GCP's schema is the project's own (dform.toml: providers/gcp).
-provider gcp {}
-provider k8s {}
+provider gcp
+provider k8s
 
 resource google_compute_network vpc {
   name = "renfry-vpc"
@@ -96,11 +96,9 @@ output endpoint = renfry.endpoint
     (integer))
   (comment)
   (provider
-    (identifier)
-    (block))
+    (identifier))
   (provider
-    (identifier)
-    (block))
+    (identifier))
   (resource
     (dotted_name
       (identifier))

@@ -2100,11 +2100,13 @@ impl<'u> Lowerer<'u> {
                 ),
             );
         }
-        let block = node(n, BLOCK).ok_or(Skip)?;
         let mut rc = self.rc(n, scope, outer);
         let mut body = self.clauses(&mut rc, n)?;
         let mut reads = Vec::new();
-        let fields = self.fields(&mut rc, &block, &mut reads)?;
+        let fields = match node(n, BLOCK) {
+            Some(block) => self.fields(&mut rc, &block, &mut reads)?,
+            None => Vec::new(),
+        };
         body.extend(reads);
         let mut inputs = Vec::new();
         for f in fields {

@@ -12,3 +12,5 @@ resource net.vpc main {
 }
 
 arg(t, n, p, v) where override(t, n, p, v), want(t, n), arg(t, n, "cidr", _c)
+
+provider fake

@@ -33,6 +33,8 @@ deny "need the pngu namespace" where ns_count(l), not "pngu" in l
 # Related negation (same type as the stuck head): correctly undetermined.
 deny "no nodepool in zone b" where "pngu" in gke_cluster, not "np-us-east1-b" in gke_nodepool
 
+provider fake
+
 ---
 
 (source_file
@@ -170,4 +172,6 @@ deny "no nodepool in zone b" where "pngu" in gke_cluster, not "np-us-east1-b" in
         (in_literal
           (string
             (string_content))
-          (identifier))))))
+          (identifier)))))
+  (provider
+    (identifier)))

@@ -197,6 +197,27 @@ pub fn load(t: &Target, version: &str, read: Reader, obs: &mut dyn Observer) -> 
     })
 }
 
+/// What a run that starts providers says of a program that names none
+/// (R-26): nothing is started in its place.
+pub const NO_PROVIDER: &str = "the program names no provider: add `provider NAME` \
+     (dform.toml names its source) or run under `dev --provider`";
+
+impl Loaded {
+    /// A run that starts providers needs one: a program with no
+    /// `provider` statement, run with no `--provider`, starts none (R-26).
+    pub fn require_provider(&self) -> Result<()> {
+        let named = self
+            .program
+            .statements
+            .iter()
+            .any(|s| matches!(s, Stmt::Provider(_)));
+        if self.providers.is_empty() && !named {
+            bail!(NO_PROVIDER);
+        }
+        Ok(())
+    }
+}
+
 /// Which deployment of a loaded program, and where its objects are.
 #[derive(Debug, Clone, Default)]
 pub struct Selection {

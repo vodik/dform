@@ -18,7 +18,7 @@ input env: enum("dev", "stg", "prod") = "dev"
 # How many zones the cluster is placed in.
 input zones: int = 2 check zones >= 1
 
-provider gke {}
+provider gke
 
 zone_at(1, "us-east1-b")
 zone_at(2, "us-east1-c")
@@ -153,8 +153,7 @@ deny "cluster must not be deletable" { cluster: c } where {
           (identifier)
           (integer)))))
   (provider
-    (identifier)
-    (block))
+    (identifier))
   (fact
     (call
       (identifier)

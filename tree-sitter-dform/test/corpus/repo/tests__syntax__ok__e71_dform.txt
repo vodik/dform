@@ -95,7 +95,7 @@ instance kubernetes main {
   output("network.main", "private_subnet_ids", ids)
 }
 
-instance identity main {}
+instance identity main
 
 # Peering between network instances. Each instance exports its vpc address.
 vpc_peer_inst("main", "peer")
@@ -552,8 +552,7 @@ deny("prod_k8s_private_api", "prod k8s must have private api", { cluster: c }) w
               (identifier)))))))
   (instance
     (identifier)
-    (identifier)
-    (block))
+    (identifier))
   (comment)
   (fact
     (call

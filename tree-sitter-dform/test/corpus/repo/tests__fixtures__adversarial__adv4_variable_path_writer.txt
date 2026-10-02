@@ -17,6 +17,8 @@ resource net.vpc main {
 
 arg(t, n, p, v) where override(t, n, p, v), want(t, n), arg(t, n, "cidr", _c)
 
+provider fake
+
 ---
 
 (source_file
@@ -94,4 +96,6 @@ arg(t, n, p, v) where override(t, n, p, v), want(t, n), arg(t, n, "cidr", _c)
             (identifier)
             (string
               (string_content))
-            (identifier)))))))
+            (identifier))))))
+  (provider
+    (identifier)))

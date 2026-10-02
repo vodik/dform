@@ -1462,7 +1462,7 @@ fn diagnostics_of_a_plan_with_a_replacement_are_the_plans() {
     let s = common::Scratch::project("lsp-replace");
     let net = r#"edition 2026
 
-provider fake {}
+provider fake
 
 resource net.vpc main { cidr = "10.0.0.0/16" }
 resource net.subnet a { vpc_id = ref(net.vpc, "main", "id"), tier = "web" }
@@ -1534,7 +1534,7 @@ fn an_s3_deployment_is_read_with_credentials() {
         .unwrap();
     let vpc = "resource net.vpc main { cidr = \"10.0.0.0/16\" }\n";
     let net =
-        format!("edition 2026\n\nprovider fake {{}}\n\n{vpc}lifecycle(main, \"prevent_destroy\")\n");
+        format!("edition 2026\n\nprovider fake\n\n{vpc}lifecycle(main, \"prevent_destroy\")\n");
     let file = s.write("stacks/p.df", &net);
     let creds = [
         ("DFORM_S3_ACCESS_KEY_ID", "fake"),

@@ -25,7 +25,7 @@ input approve(type, address) from facts("data/approvals.facts")
 # `approval(token)`: a signed approval of a plan's digest.
 input approval(token) from facts("data/approvals.facts")
 
-provider k8s {}
+provider k8s
 
 resource k8s.namespace web {
   metadata.name = "web"

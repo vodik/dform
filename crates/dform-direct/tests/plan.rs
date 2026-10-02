@@ -11,7 +11,7 @@ fn plans_with_the_mock_linked_in() {
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
         dir.join("p.df"),
-        "edition 2026\n\nresource net.vpc a { cidr = \"10.0.0.0/16\" }\n",
+        "edition 2026\n\nprovider fake\n\nresource net.vpc a { cidr = \"10.0.0.0/16\" }\n",
     )
     .unwrap();
     for backend in ["direct", "wire"] {

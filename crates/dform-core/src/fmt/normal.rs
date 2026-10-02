@@ -2,8 +2,9 @@
 //! survive (proposal H section 3): a body on one line when it fits and in
 //! braces when it does not, `{ a }` for `{ a: a }`, a header name quoted
 //! only when it needs it, `not lit` for `not { lit }`, `==` where both
-//! sides are bound, the atom `p(k, i)` for `i = p[k]` with `i` fresh, and
-//! `env == "prod"` for a value name's atom `env("prod")`.
+//! sides are bound, the atom `p(k, i)` for `i = p[k]` with `i` fresh,
+//! `env == "prod"` for a value name's atom `env("prod")`, and no `{}` on a
+//! `provider` or `instance` with no entries.
 //!
 //! Each is an edit of the source text, read from the tree; the caller
 //! parses the result again and prints it, until nothing changes.
@@ -385,6 +386,31 @@ impl Ctx<'_> {
     }
 
     /// `{ a: a }` as `{ a }`.
+    /// A `provider` or `instance` block with no entries is left out
+    /// (R-26): `provider aws {}` is `provider aws`.
+    fn empty_blocks(&mut self, root: &SyntaxNode) {
+        for b in root.descendants().filter(|n| n.kind() == BLOCK) {
+            if !b
+                .parent()
+                .is_some_and(|p| matches!(p.kind(), PROVIDER | INSTANCE))
+            {
+                continue;
+            }
+            let empty = b
+                .children_with_tokens()
+                .all(|e| matches!(e.kind(), L_BRACE | R_BRACE | WHITESPACE));
+            if !empty {
+                continue;
+            }
+            let start = match b.prev_sibling_or_token() {
+                Some(w) if w.kind() == WHITESPACE => w.text_range().start(),
+                _ => b.text_range().start(),
+            };
+            self.edits
+                .push((start.into(), b.text_range().end().into(), String::new()));
+        }
+    }
+
     fn objects(&mut self, root: &SyntaxNode) {
         for f in root.descendants().filter(|n| n.kind() == OBJECT_FIELD) {
             if f.parent().is_some_and(|p| p.kind() != OBJECT) {
@@ -412,6 +438,7 @@ pub fn normalize(root: &SyntaxNode, src: &str) -> Option<String> {
         c.stmt(&s);
     }
     c.objects(root);
+    c.empty_blocks(root);
     if c.edits.is_empty() {
         return None;
     }

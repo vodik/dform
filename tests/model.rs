@@ -117,7 +117,7 @@ struct Version {
 
 impl Version {
     fn text(&self) -> String {
-        let mut out = String::from("edition 2026\n\n");
+        let mut out = String::from("edition 2026\n\nprovider fake\n");
         for r in &self.res {
             let mut attrs = Vec::new();
             if let Some((typ, name, attr)) = &r.to {

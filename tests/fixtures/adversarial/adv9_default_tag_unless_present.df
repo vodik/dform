@@ -13,3 +13,5 @@ arg_add(t, n, "tags", { team: "platform" }) where {
   want(t, n)
   not arg(t, n, "tags", { team: "platform" })
 }
+
+provider fake

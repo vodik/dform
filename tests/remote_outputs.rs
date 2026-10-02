@@ -11,13 +11,13 @@ use common::Scratch;
 const CLUSTER: &str = r#"edition 2026
 key env: string = "dev"
 input token: secret(string)
-provider fake {}
+provider fake
 output endpoint = "https://${env}.cluster.example"
 output token: secret(string) = token
 "#;
 
 const APP: &str = r#"edition 2026
-provider fake {}
+provider fake
 resource net.vpc edge {
   name = e
 } where stack_output("platform.cluster[env=prod]", "endpoint", e)
@@ -178,7 +178,7 @@ fn a_remote_needs_a_backend_term() {
 fn an_output_of_a_configured_attribute_is_published_resolved_or_pending() {
     let s = Scratch::project("outputs-resolved");
     let net = "edition 2026\n\
-               provider fake {}\n\
+               provider fake\n\
                resource net.vpc main { cidr = \"10.0.0.0/16\" }\n\
                output c = main.cidr\n\
                output n = main.name\n\
@@ -187,7 +187,7 @@ fn an_output_of_a_configured_attribute_is_published_resolved_or_pending() {
     s.write(
         "stacks/app.df",
         "edition 2026\n\
-         provider fake {}\n\
+         provider fake\n\
          resource net.vpc edge {\n\
            cidr = c\n\
          } where stack_output(\"net\", \"c\", c)\n\

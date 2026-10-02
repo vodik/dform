@@ -1156,6 +1156,21 @@ fn run_with(
         _ => None,
     };
     let providers = loaded.providers.clone();
+    // What evaluates against providers starts the program's, and there is
+    // no default.
+    if matches!(
+        cli.cmd,
+        Cmd::Eval
+            | Cmd::Plan { .. }
+            | Cmd::Test
+            | Cmd::Apply { .. }
+            | Cmd::Query { .. }
+            | Cmd::Why { .. }
+            | Cmd::Show { .. }
+            | Cmd::Controller { .. }
+    ) {
+        loaded.require_provider()?;
+    }
     if let Cmd::Test = cli.cmd {
         return run_tests(&loaded.program, &providers, &cli, &files);
     }

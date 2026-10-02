@@ -10,3 +10,5 @@ resource net.vpc x {
 resource net.subnet y {
   name = q
 } where arg(net.vpc, "x", "peer", q)
+
+provider fake

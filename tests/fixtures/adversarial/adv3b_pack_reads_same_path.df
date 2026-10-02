@@ -17,3 +17,5 @@ policy p {
   }
 }
 use p
+
+provider fake

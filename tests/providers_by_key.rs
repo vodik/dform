@@ -11,7 +11,7 @@ use common::{Backend, Run, Scratch};
 const APP: &str = r#"edition 2026
 key env: environment = "dev"
 type environment = enum("dev", "prod")
-provider env {}
+provider env
 provider fake {
   account = env.var("FAKE_ACCOUNT_${env}")
   region = cfg.region
@@ -144,7 +144,7 @@ fn an_env_var_is_in_the_plan_file_only_as_its_label() {
     let s = project(
         "bykey-label",
         "edition 2026\n\
-         provider env {}\n\
+         provider env\n\
          provider fake { token = env.var(\"FAKE_TOKEN\") }\n\
          resource net.vpc main {\n\
            cidr = \"10.0.0.0/16\"\n\
@@ -182,7 +182,7 @@ fn a_changed_env_var_makes_a_saved_plan_stale() {
     let s = project(
         "bykey-stale",
         "edition 2026\n\
-         provider env {}\n\
+         provider env\n\
          provider fake { token = env.var(\"FAKE_TOKEN\") }\n\
          resource net.vpc main {\n\
            cidr = \"10.0.0.0/16\"\n\
@@ -220,7 +220,7 @@ fn a_secret_expected_account_is_refused_by_its_label() {
     let s = project(
         "bykey-secret-account",
         "edition 2026\n\
-         provider env {}\n\
+         provider env\n\
          provider fake {\n\
            account = \"acct-real\"\n\
            expect_account = env.var(\"WANT_ACCOUNT\")\n\

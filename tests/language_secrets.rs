@@ -12,7 +12,7 @@ fn run(body: &str) -> common::Run {
         "p.df",
         &format!(
             "edition 2026\ninput pw: secret(string) check len(pw) >= 3\n\
-             extern vault.read(+path, -value: secret(string))\n{body}"
+             extern vault.read(+path, -value: secret(string))\n{body}\nprovider fake\n"
         ),
     );
     s.run(&[
@@ -54,7 +54,10 @@ fn e0301_a_comparison_or_an_inspecting_function() {
         "deny \"short\" where pw(p), p != \"x\"\n",
         "E0301: a comparison over a secret",
     );
-    refused("n(l) where pw(p), l = len(p)\n", "E0301: len() over a secret");
+    refused(
+        "n(l) where pw(p), l = len(p)\n",
+        "E0301: len() over a secret",
+    );
 }
 
 #[test]
@@ -105,7 +108,7 @@ fn a_secret_input_refinement_does_not_print_it() {
     let s = Scratch::new("lang-secrets-refine");
     s.write(
         "p.df",
-        "edition 2026\ninput pw: secret(string) check len(pw) >= 12\n",
+        "edition 2026\ninput pw: secret(string) check len(pw) >= 12\nprovider fake\n",
     );
     let r = s
         .run(&[

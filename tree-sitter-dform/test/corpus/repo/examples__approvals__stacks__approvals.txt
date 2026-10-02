@@ -18,6 +18,9 @@ edition 2026
 key env: enum("staging", "prod") = "staging"
 input cidr: string = "10.0.0.0/16"
 
+# The mock's built-in fake schema.
+provider fake
+
 resource net.vpc main {
   cidr = cidr
 }
@@ -65,6 +68,9 @@ approver_allowed(who, d) where requires_approval(d, _), who in ["alice", "bob"]
         (identifier)))
     (string
       (string_content)))
+  (comment)
+  (provider
+    (identifier))
   (resource
     (dotted_name
       (identifier)

@@ -11,6 +11,9 @@
 edition 2026
 input env: enum("staging", "prod") = "staging"
 
+# The mock's built-in fake schema.
+provider fake
+
 # List-valued settings (human-friendly)
 settings staging {
   tenants = ["tenant_a", "tenant_b"]

@@ -18,6 +18,8 @@ resource compute.vm app {
 resource compute.vm "app-${db.endpoint}" { size = 1 }
 resource compute.vm plain { host = db.endpoint }
 
+provider fake
+
 ---
 
 (source_file
@@ -95,4 +97,6 @@ resource compute.vm plain { host = db.endpoint }
           (identifier))
         (member_expression
           (identifier)
-          (identifier))))))
+          (identifier)))))
+  (provider
+    (identifier)))

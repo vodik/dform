@@ -10,7 +10,7 @@ use tables_common::scratch;
 const PROGRAM: &str = r#"edition 2026
 
 key env: enum("dev", "prod") = "dev"
-provider fake {}
+provider fake
 
 settings dev @default {
   db = { size: 1, zone: "a" }
@@ -109,7 +109,7 @@ fn a_stack_keyed_twice_names_the_row_by_both() {
 
 key env: string = "dev"
 key region: string = "eu"
-provider fake {}
+provider fake
 
 settings "dev/eu" @default {
   size = 1
@@ -134,7 +134,7 @@ fn a_config_needs_a_key() {
         "dform.toml",
         "[stacks.p]\nconfig = 'yaml(\"config.yaml\")'\n",
     );
-    s.write("p.df", "edition 2026\nprovider fake {}\n");
+    s.write("p.df", "edition 2026\nprovider fake\n");
     let r = s.run(&["plan", "p.df"]).failure();
     assert!(
         r.stderr.contains(

@@ -106,7 +106,7 @@ impl Lowerer<'_> {
 
     /// `env.var(NAME)` as a term: the read `env.var(NAME', V)`, `V` its
     /// value. `None`: the call is not one. A call of another built-in
-    /// provider's extern, or of `env.var` with no `provider env {}`, is an
+    /// provider's extern, or of `env.var` with no `provider env`, is an
     /// error naming the statement to write.
     pub(super) fn env_var_call(
         &mut self,
@@ -131,7 +131,7 @@ impl Lowerer<'_> {
         if !self.decls.externs.contains_key(ENV_VAR) {
             return Some(self.error(
                 span,
-                format!("{name} is the {head} provider's: declare `provider {head} {{}}`"),
+                format!("{name} is the {head} provider's: declare `provider {head}`"),
             ));
         }
         Some(self.env_var_read(rc, n, pos, pre))
@@ -225,7 +225,7 @@ impl Lowerer<'_> {
             Some((_, at)) => d
                 .with_label(at, format!("provider {head} declares it"))
                 .with_help("delete the `extern` statement"),
-            None => d.with_help(format!("write `provider {head} {{}}` instead")),
+            None => d.with_help(format!("write `provider {head}` instead")),
         };
         self.diags.push(d);
         Err(Skip)

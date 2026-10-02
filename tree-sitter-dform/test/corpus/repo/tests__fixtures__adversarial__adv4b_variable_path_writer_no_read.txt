@@ -21,6 +21,8 @@ deny "vpc without cidr" { vpc: n } where {
   not arg(net.vpc, n, "cidr", inet("10.0.0.0/16"))
 }
 
+provider fake
+
 ---
 
 (source_file
@@ -117,4 +119,6 @@ deny "vpc without cidr" { vpc: n } where {
                 (identifier)
                 (arguments
                   (string
-                    (string_content)))))))))))
+                    (string_content))))))))))
+  (provider
+    (identifier)))

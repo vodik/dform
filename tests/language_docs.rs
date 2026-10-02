@@ -63,7 +63,7 @@ fn doc_comments_lower_to_doc_facts() {
          #| Not above anything: a blank line follows.\n\
          \n\
          #| The first VM.\n\
-         resource compute.vm one {}\n",
+         resource compute.vm one {}\nprovider fake\n",
     );
     assert_eq!(
         docs(&s, "p.df"),
@@ -103,7 +103,7 @@ fn a_policy_can_require_docs() {
          \x20 deny \"a module has no owner\" { module: m } where doc(\"module\", m, \"description\", _), not doc(\"module\", m, \"owner\", _)\n\
          \x20 warn \"deprecated\" { item: n, why } where doc(_, n, \"deprecated\", why)\n\
          }\n\
-         use docs\n",
+         use docs\nprovider fake\n",
     );
     let r = s
         .run(&["dev", "--world", "w.json", "plan", "p.df"])

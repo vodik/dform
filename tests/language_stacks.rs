@@ -7,7 +7,7 @@ use common::{Scratch, copy_dir, repo};
 use std::process::{Command, Stdio};
 
 const NET: &str = r#"edition 2026
-provider fake {}
+provider fake
 resource net.vpc main { cidr = "10.0.0.0/16" }
 output vpc_cidr = "10.0.0.0/16"
 output vpc_id = ref(net.vpc, "main", "id")
@@ -32,7 +32,7 @@ fn a_local_backend_holds_the_state() {
     );
     s.write(
         "p.df",
-        "edition 2026\nprovider fake {}\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\n",
+        "edition 2026\nprovider fake\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\n",
     );
     s.run(&["apply", "p.df"]).success();
     assert!(s.path("state/x/state.json").exists());
@@ -55,7 +55,7 @@ fn a_local_backend_is_relative_to_the_project_root() {
     );
     s.write(
         "infra/stacks/p.df",
-        "edition 2026\nprovider fake {}\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\n",
+        "edition 2026\nprovider fake\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\n",
     );
     s.run(&["-C", "infra", "apply", "p"]).success();
     assert!(s.path("infra/state/x/state.json").exists());
@@ -87,7 +87,7 @@ fn a_local_backend_is_relative_to_the_project_root() {
 #[test]
 fn a_backend_is_checked() {
     let s = Scratch::project("lang-stack-backend-check");
-    s.write("p.df", "edition 2026\nprovider fake {}\n");
+    s.write("p.df", "edition 2026\nprovider fake\n");
     for (backend, error) in [
         ("gcs(\"b\")", "unknown backend"),
         ("s3(\"b\")", "takes a bucket, a prefix"),
@@ -180,7 +180,7 @@ fn another_stack_reads_the_outputs() {
     s.write(
         "app.df",
         r#"edition 2026
-provider fake {}
+provider fake
 resource net.subnet a {
   cidr = c
   vpc_id = v
@@ -213,7 +213,7 @@ fn the_registry_is_the_projects() {
     s.write("infra/dform.toml", "");
     s.write("infra/stacks/net.df", NET);
     let app = r#"edition 2026
-provider fake {}
+provider fake
 resource net.subnet a {
   cidr = c
   vpc_id = v
@@ -323,4 +323,47 @@ fn a_type_the_provider_does_not_declare_is_a_plan_error() {
     s.run(&["apply", "pngu"]).success();
     let r = s.run(&["plan", "pngu"]).success();
     assert!(r.stdout.contains("is undeformed"), "{}", r.stdout);
+}
+
+/// A program that names no provider starts none: every command that
+/// evaluates against providers fails naming the fix, and `dev --provider`
+/// still runs it (R-26).
+#[test]
+fn a_program_with_no_provider_starts_none() {
+    let s = Scratch::project("lang-stack-no-provider");
+    s.write(
+        "p.df",
+        "edition 2026\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\n",
+    );
+    for args in [
+        &["plan", "p.df"][..],
+        &["apply", "p.df"],
+        &["query", "want(T, A)", "p.df"],
+        &["why", "want(T, A)", "p.df"],
+        &["test", "p.df"],
+    ] {
+        let r = s.run(args).failure();
+        assert!(
+            r.stderr.contains(
+                "the program names no provider: add `provider NAME` (dform.toml names its \
+                 source) or run under `dev --provider`"
+            ),
+            "{args:?}: {}",
+            r.stderr
+        );
+    }
+    let r = s
+        .run(&["dev", "--provider", "fake", "plan", "p.df"])
+        .success();
+    assert_eq!(
+        r.summary(),
+        "plan: 1 deformation (1 create)",
+        "{}",
+        r.stdout
+    );
+    s.write(
+        "p.df",
+        "edition 2026\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nprovider fake\n",
+    );
+    s.run(&["plan", "p.df"]).success();
 }

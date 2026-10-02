@@ -13,8 +13,8 @@
 edition 2026
 
 # The mock GCP's schema is the project's own (dform.toml: providers/gcp).
-provider gcp {}
-provider k8s {}
+provider gcp
+provider k8s
 
 resource google_compute_network vpc {
   name = "renfry-vpc"

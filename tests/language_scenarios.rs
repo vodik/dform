@@ -27,6 +27,7 @@ scenario dev_is_small {
   set size = 9
   deny "dev has no database" where _ in db.postgres
 }
+provider fake
 "#;
 
 #[test]

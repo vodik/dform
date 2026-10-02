@@ -91,10 +91,10 @@ fn formatting_keeps_every_token_but_redundant_commas() {
 #[test]
 fn check_lists_unformatted_files_and_fmt_rewrites_them() {
     let s = Scratch::new("fmt");
-    s.write("ok.df", "edition 2026\n\np(\"a\")\n");
+    s.write("ok.df", "edition 2026\n\np(\"a\")\nprovider fake\n");
     s.write(
         "messy.df",
-        "edition 2026\nresource net.vpc main {\n    cidr = \"10.0.0.0/16\",\n    tags = {team:\"x\"},\n}\n",
+        "edition 2026\nresource net.vpc main {\n    cidr = \"10.0.0.0/16\",\n    tags = {team:\"x\"},\n}\nprovider fake\n",
     );
     let r = s.run(&["fmt", "--check", "ok.df", "messy.df"]).failure();
     assert_eq!(r.stdout, "messy.df\n");
@@ -104,7 +104,7 @@ fn check_lists_unformatted_files_and_fmt_rewrites_them() {
     s.run(&["fmt", "ok.df", "messy.df"]).success();
     assert_eq!(
         s.read("messy.df"),
-        "edition 2026\nresource net.vpc main {\n  cidr = \"10.0.0.0/16\"\n  tags = { team: \"x\" }\n}\n"
+        "edition 2026\nresource net.vpc main {\n  cidr = \"10.0.0.0/16\"\n  tags = { team: \"x\" }\n}\nprovider fake\n"
     );
     s.run(&["fmt", "--check", "ok.df", "messy.df"]).success();
 }
@@ -113,7 +113,7 @@ fn check_lists_unformatted_files_and_fmt_rewrites_them() {
 #[test]
 fn fmt_refuses_a_file_that_does_not_parse() {
     let s = Scratch::new("fmt-error");
-    let bad = "edition 2026\np(\"a\") where q(]\n";
+    let bad = "edition 2026\np(\"a\") where q(]\nprovider fake\n";
     s.write("bad.df", bad);
     let r = s.run(&["fmt", "bad.df"]).failure();
     assert!(r.stderr.contains("bad.df:2:"), "{}", r.stderr);
@@ -128,15 +128,29 @@ fn fmt_refuses_a_file_that_does_not_parse() {
 #[test]
 fn fmt_puts_the_header_in_order() {
     let src = "# A program.\n\nedition 2026\n\ninput b: int\n# The key.\nkey env: string\n\n\
-               provider fake {}\n\n#| The relation.\ninput p(a) from facts(\"p.facts\")\n\
+               provider fake\n\n#| The relation.\ninput p(a) from facts(\"p.facts\")\n\
                p2(x) where p(x)\nimport \"m.df\" # its modules\ninput a: int\n";
     let want = "# A program.\n\nedition 2026\n\nimport \"m.df\" # its modules\n# The key.\n\
                 key env: string\ninput b: int\ninput a: int\n#| The relation.\n\
-                input p(a) from facts(\"p.facts\")\n\nprovider fake {}\n\np2(x) where p(x)\n";
+                input p(a) from facts(\"p.facts\")\n\nprovider fake\n\np2(x) where p(x)\n";
     let got = dform::fmt::format_source("p.df", src).unwrap();
     assert_eq!(got, want);
     assert_eq!(dform::fmt::format_source("p.df", &got).unwrap(), got);
     // Another error is not formatted.
     let e = dform::fmt::format_source("p.df", &format!("{src}p(\n")).unwrap_err();
     assert!(format!("{e:#}").contains("p.df:"), "{e:#}");
+}
+
+/// A `provider` or `instance` with no entries is written without braces
+/// (R-26): `{}` parses, and `fmt` drops it; a block with a comment stays.
+#[test]
+fn fmt_drops_an_empty_block() {
+    let src = "edition 2026\n\nprovider fake {}\nprovider env {\n}\nprovider k8s { # later\n}\n\
+               module m {\n  input n: int = 1\n}\ninstance m a {} where 1 == 1\ninstance m b {   }\n\
+               resource net.vpc v {}\n";
+    let want = "edition 2026\n\nprovider fake\nprovider env\nprovider k8s { # later\n}\n\
+                module m {\n  input n: int = 1\n}\ninstance m a where 1 == 1\ninstance m b\n\
+                resource net.vpc v {}\n";
+    assert_eq!(fmt(src), want);
+    assert_eq!(fmt(want), want);
 }

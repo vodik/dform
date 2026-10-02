@@ -48,7 +48,7 @@ let cfg = settings[env]
 # The provider (the mock's built-in fake schema). The stack's settings are dform.toml's [stacks.dform]:
 # strict, isolated (each env in its own account, so identity's fixed names do not collide) and config
 # (each env's settings are config/dform/{env}.yaml's, a leaf per contribution).
-provider fake {}
+provider fake
 #| The environments: an alias, the enum wherever it is written.
 type environment = enum("dev", "staging", "prod")
 
@@ -80,7 +80,7 @@ instance kubernetes main {
   subnet_ids = network.main.private_subnet_ids
 } where env != "dev"
 
-instance identity main {}
+instance identity main
 
 #| VPC peering intent: define edges between network instances.
 vpc_peer_inst("main", "peer")
@@ -291,8 +291,7 @@ scenario dev {
   (comment)
   (comment)
   (provider
-    (identifier)
-    (block))
+    (identifier))
   (comment)
   (type_alias
     (identifier)
@@ -435,8 +434,7 @@ scenario dev {
             (string_content))))))
   (instance
     (identifier)
-    (identifier)
-    (block))
+    (identifier))
   (comment)
   (fact
     (call

@@ -7,6 +7,7 @@ const PROG: &str = r#"edition 2026
 
 resource net.vpc main { cidr = "10.0.0.0/16" }
 resource net.subnet a { vpc_id = ref(net.vpc, "main", "id"), cidr = "10.0.1.0/24" }
+provider fake
 "#;
 
 fn stack(name: &str) -> Scratch {
@@ -97,7 +98,7 @@ fn a_timed_out_create_the_program_dropped_is_deleted() {
     dform(&s, &["apply", "--chaos", "timeout=net.subnet[\"a\"]"]).failure();
     s.write(
         "p.df",
-        "edition 2026\n\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\n",
+        "edition 2026\n\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nprovider fake\n",
     );
     let r = dform(&s, &["apply"]).success();
     assert!(r.stdout.contains("- net.subnet[\"a\"]"), "{}", r.stdout);

@@ -13,7 +13,7 @@ fn plan(s: &Scratch, src: &str) -> Run {
     s.run(&["dev", "--world", "w.json", "plan", "p.df"])
 }
 
-const SETTINGS: &str = "edition 2026\ntype settings {\n  db.backup_days: int check 1 <= db.backup_days <= 35\n}\nsettings prod @default { db = { backup_days: 3 } }\nsettings prod { db = { backup_days: 14 } }\n";
+const SETTINGS: &str = "edition 2026\ntype settings {\n  db.backup_days: int check 1 <= db.backup_days <= 35\n}\nsettings prod @default { db = { backup_days: 3 } }\nsettings prod { db = { backup_days: 14 } }\nprovider fake\n";
 
 /// A constraint is never out-ranked: an `@override` whose value violates
 /// it is a deny naming the refinement's place and both witnesses, and the
@@ -70,7 +70,7 @@ fn a_literal_that_violates_a_refinement_is_a_compile_error() {
     let s = Scratch::new("refine-literal");
     let r = plan(
         &s,
-        "edition 2026\ntype settings {\n  db.backup_days: int check 1 <= db.backup_days <= 35\n}\nsettings prod { db = { backup_days: 40 } }\n",
+        "edition 2026\ntype settings {\n  db.backup_days: int check 1 <= db.backup_days <= 35\n}\nsettings prod { db = { backup_days: 40 } }\nprovider fake\n",
     )
     .failure();
     assert!(
@@ -84,7 +84,7 @@ fn a_literal_that_violates_a_refinement_is_a_compile_error() {
     // crates/dform-mock/schemas/fake.df: type_refine(net.subnet, cidr, prefix_len_le(24)).
     let r = plan(
         &s,
-        "edition 2026\nresource net.subnet a { cidr = \"10.0.0.0/26\" }\n",
+        "edition 2026\nresource net.subnet a { cidr = \"10.0.0.0/26\" }\nprovider fake\n",
     )
     .failure();
     assert!(
@@ -98,7 +98,7 @@ fn a_literal_that_violates_a_refinement_is_a_compile_error() {
     );
     plan(
         &s,
-        "edition 2026\nresource net.subnet a { cidr = \"10.0.1.0/24\" }\n",
+        "edition 2026\nresource net.subnet a { cidr = \"10.0.1.0/24\" }\nprovider fake\n",
     )
     .success();
 }
@@ -116,7 +116,7 @@ type settings {{
   pool.max: int check pool.min <= pool.max
 }}
 settings prod {{ pool = {{ min: {min}, max: 3 }} }}
-"
+\nprovider fake\n"
         )
     };
     plan(&s, &src(2)).success();
@@ -191,7 +191,7 @@ fn a_refinement_on_a_secret_is_an_apply_assertion() {
         s.write("schema.df", &VAULT.replace("MINT", mint));
         s.write(
             "p.df",
-            "edition 2026\nresource vault.secret pw {}\nresource app.db main { password = ref(vault.secret, \"pw\", \"value\") }\n",
+            "edition 2026\nresource vault.secret pw {}\nresource app.db main { password = ref(vault.secret, \"pw\", \"value\") }\nprovider fake\n",
         );
         let _ = std::fs::remove_file(s.path("w.json"));
         let _ = std::fs::remove_dir_all(s.path("dform.state"));
@@ -273,7 +273,7 @@ resource app.thing a {{
   wide = \"{wide}\"
 }} where n(x)
 n(\"{name}\")
-"
+\nprovider fake\n"
         )
     };
     plan(&s, &src("abc", "10.0.0.0/16")).success();
@@ -309,7 +309,7 @@ fn an_unknown_function_or_a_bad_pattern_is_a_compile_error() {
     let s = Scratch::new("refine-unknown");
     let r = plan(
         &s,
-        "edition 2026\ntype app.thing {\n  name: string check frobnicate(name) == 3\n}\nresource app.thing a { name = \"x\" }\n",
+        "edition 2026\ntype app.thing {\n  name: string check frobnicate(name) == 3\n}\nresource app.thing a { name = \"x\" }\nprovider fake\n",
     )
     .failure();
     assert!(
@@ -320,7 +320,7 @@ fn an_unknown_function_or_a_bad_pattern_is_a_compile_error() {
     );
     let r = plan(
         &s,
-        "edition 2026\ntype app.thing {\n  name: string check matches(name, \"a(\")\n}\n",
+        "edition 2026\ntype app.thing {\n  name: string check matches(name, \"a(\")\n}\nprovider fake\n",
     )
     .failure();
     assert!(
@@ -329,7 +329,11 @@ fn an_unknown_function_or_a_bad_pattern_is_a_compile_error() {
         "{}",
         r.stderr
     );
-    let r = plan(&s, "edition 2026\ninput n: int = 1 check frob(n) == 1\n").failure();
+    let r = plan(
+        &s,
+        "edition 2026\ninput n: int = 1 check frob(n) == 1\nprovider fake\n",
+    )
+    .failure();
     assert!(
         r.stderr
             .contains("p.df:2:1: in a refinement: unknown function frob"),

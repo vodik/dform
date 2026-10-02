@@ -39,6 +39,7 @@ resource leaky.vault v {
 resource leaky.oops o {
   password = "OOPS-SECRET-DO-NOT-PRINT"
 }
+provider fake
 "#;
 
 fn schema() -> String {
@@ -223,7 +224,7 @@ resource leaky.oops copy {{
         .failure();
     assert!(
         r.stderr.contains(
-            "p.df:12:3: E0304: a secret reaches leaky.oops .password, not marked sensitive in the schema"
+            "p.df:13:3: E0304: a secret reaches leaky.oops .password, not marked sensitive in the schema"
         ),
         "{}",
         r.stderr
@@ -285,7 +286,7 @@ fn a_secret_input_never_prints_in_query_why_or_the_plan_file() {
     let s = Scratch::new("secrets-input");
     s.write(
         "p.df",
-        "edition 2026\ninput pw: secret(string)\noutput token: secret(string) = p where pw(p)\nresource leaky.vault v {\n  password = p\n} where pw(p)\n",
+        "edition 2026\ninput pw: secret(string)\noutput token: secret(string) = p where pw(p)\nresource leaky.vault v {\n  password = p\n} where pw(p)\nprovider fake\n",
     );
     let schema = schema();
     let mock = ["--provider", schema.as_str(), "--world", "w.json"];
@@ -380,7 +381,7 @@ fn a_secret_reaches_a_public_output_only_through_declassify() {
     let s = Scratch::new("secrets-declassify");
     let prog = |body: &str, policy: &str| {
         format!(
-            "edition 2026\ninput pw: secret(string)\noutput pw_len: int = n where pw(p), {body}\n{policy}"
+            "edition 2026\ninput pw: secret(string)\noutput pw_len: int = n where pw(p), {body}\n{policy}\nprovider fake\n"
         )
     };
     let mock = ["--world", "w.json", "--set", "pw=HUNTER-TWO"];
@@ -441,7 +442,7 @@ fn a_secret_reaches_a_public_output_only_through_declassify() {
 /// resource's sensitive attribute (`pass`, a ref to what the provider holds).
 const PRODUCER: &str = r#"edition 2026
 input pw: secret(string)
-provider fake {}
+provider fake
 resource leaky.vault v {
   password = p
 } where pw(p)
@@ -556,7 +557,7 @@ fn a_secret_output_reaches_a_sensitive_field_in_another_stack() {
     s.write(
         "stacks/app.df",
         "edition 2026\n\
-         provider fake {}\n\
+         provider fake\n\
          resource leaky.vault copy {\n\
            backup = p\n\
          } where stack_output(\"prod\", \"pass\", p)\n\
@@ -702,7 +703,7 @@ fn kept_world_documents_hold_a_sensitive_leaf_by_its_digest() {
         "stacks/s.df",
         "edition 2026\n\
          input pw: secret(string)\n\
-         provider fake {}\n\
+         provider fake\n\
          resource leaky.vault v {\n\
            password = p\n\
          } where pw(p)\n\

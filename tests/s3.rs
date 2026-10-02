@@ -690,7 +690,7 @@ fn handover_moves_an_s3_deployment_between_prefixes_and_to_local() {
 }
 
 const PERSISTED: &str = r#"edition 2026
-provider fake {}
+provider fake
 extern kv.password(+name, -value) persist
 resource db.user app {
   password = pw
@@ -734,14 +734,14 @@ fn taint_forgets_an_answer_in_the_bucket() {
 }
 
 const NET: &str = r#"edition 2026
-provider fake {}
+provider fake
 resource net.vpc main { cidr = "10.0.0.0/16" }
 output vpc_cidr = "10.0.0.0/16"
 output vpc_id = ref(net.vpc, "main", "id")
 "#;
 
 const APP: &str = r#"edition 2026
-provider fake {}
+provider fake
 resource net.subnet a {
   cidr = c
   vpc_id = v
@@ -871,7 +871,7 @@ fn a_server_that_ignores_conditions_is_refused() {
     let p = Project::of(&t, "lax-approval", |s| {
         s.write(
             "stacks/app.df",
-            "edition 2026\nprovider fake {}\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nrequires_approval(r, \"every change\") where deformation(_, r, _)\n",
+            "edition 2026\nprovider fake\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nrequires_approval(r, \"every change\") where deformation(_, r, _)\n",
         );
     });
     let r = p.run(&["plan", "app"]).failure();
@@ -900,7 +900,7 @@ fn a_project_reads_another_projects_outputs_through_its_s3_backend() {
                 "stacks/cluster.df",
                 "edition 2026\n\
                  key env: string = \"dev\"\n\
-                 provider fake {}\n\
+                 provider fake\n\
                  output endpoint = \"https://${env}.cluster.example\"\n\
                  ",
             );
@@ -917,7 +917,7 @@ fn a_project_reads_another_projects_outputs_through_its_s3_backend() {
         app.write(
             "stacks/app.df",
             "edition 2026\n\
-             provider fake {}\n\
+             provider fake\n\
              resource net.vpc edge {\n\
                name = e\n\
              } where stack_output(\"platform.cluster[env=prod]\", \"endpoint\", e)\n\

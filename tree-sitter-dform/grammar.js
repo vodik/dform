@@ -133,11 +133,12 @@ export default grammar({
     import: $ => seq('import', field('path', $.string)),
 
     // A provider's block takes no clause; the compiler's resolver says
-    // so, so the grammar takes one as the parser does.
+    // so, so the grammar takes one as the parser does. A block with no
+    // entries is left out: `provider aws`.
     provider: $ => seq(
       'provider',
       field('name', $._word),
-      field('body', $.block),
+      optional(field('body', $.block)),
       optional($.clause),
     ),
 
@@ -261,7 +262,7 @@ export default grammar({
       'instance',
       field('module', $._word),
       field('name', $._word),
-      field('body', $.block),
+      optional(field('body', $.block)),
       optional($.clause),
     ),
 

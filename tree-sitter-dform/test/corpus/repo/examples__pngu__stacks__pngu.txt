@@ -31,7 +31,7 @@ input peering(env: environment, name: string, peer_network: string) from csv("da
 ########################################
 
 # The file provider answers file.json once its path is known.
-provider file {}
+provider file
 
 ########################################
 # Environment selection
@@ -289,8 +289,7 @@ output project_id = cfg.project_id
   (comment)
   (comment)
   (provider
-    (identifier)
-    (block))
+    (identifier))
   (comment)
   (comment)
   (comment)
