@@ -158,9 +158,8 @@ const GROUP: &str = r#"edition 2026
 resource db.postgres orders { size = 1 }
 
 resource iam.policy "connect-${host}" {
-  if pg in db.postgres, host = pg.endpoint
   statements = [{ action: "db.connect", resource: host }]
-}
+} where pg in db.postgres, host = pg.endpoint
 "#;
 
 /// Tick 2 names the group's member, which the first answer did not see:

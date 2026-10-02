@@ -238,9 +238,8 @@ const GROUP: &str = r#"edition 2026
 resource db.postgres orders { size = 1 }
 
 resource iam.policy "connect-${host}" {
-  if pg in db.postgres, host = pg.endpoint
   statements = [{ action: "db.connect", resource: host }]
-}
+} where pg in db.postgres, host = pg.endpoint
 "#;
 
 /// The file records the group's head, its rule and the stuck instance's

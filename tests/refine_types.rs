@@ -261,18 +261,17 @@ fn a_refinement_names_its_attribute_by_name() {
         format!(
             "edition 2026
 type app.thing {{
-  name: string where len(name) <= 3
-  code: string where len(code) != 2
-  net: string where prefix_len(net) >= prefix_len(wide)
+  name: string check len(name) <= 3
+  code: string check len(code) != 2
+  net: string check prefix_len(net) >= prefix_len(wide)
   wide: string
 }}
 resource app.thing a {{
-  if n(x)
   name = x
   code = x
   net = \"10.0.0.0/24\"
   wide = \"{wide}\"
-}}
+}} where n(x)
 n(\"{name}\")
 "
         )
