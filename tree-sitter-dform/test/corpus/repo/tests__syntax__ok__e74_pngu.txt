@@ -24,19 +24,18 @@ type settings {
   network_name: string
   regional_proxy_cidr: inet
   gke: {
-    control_plane_cidr: inet where prefix_len(control_plane_cidr) == 28 # checkable: lives in the cell
-    subnet_cidr: inet where prefix_len(subnet_cidr) == 22
-    pods_cidr: inet where prefix_len(pods_cidr) == 21
-    services_cidr: inet where prefix_len(services_cidr) == 21
+    control_plane_cidr: inet check prefix_len(control_plane_cidr) == 28 # checkable: lives in the cell
+    subnet_cidr: inet check prefix_len(subnet_cidr) == 22
+    pods_cidr: inet check prefix_len(pods_cidr) == 21
+    services_cidr: inet check prefix_len(services_cidr) == 21
     static_ips: map({ type: enum("INTERNAL") }) # was a constraint rule
   }
 }
 
 settings e @default {
-  if env_name(e)
   region = "us-east1"
   gke.static_ips = { "pngu-grpc": { type: "INTERNAL" } }
-}
+} where env_name(e)
 
 env_name("dev")
 env_name("stg")
@@ -85,7 +84,7 @@ peering("prod", "envoy-prod-legacy", "projects/coherentpath-prod/global/networks
 # Derived project facts for the active env
 ########################################
 
-project(id, name, region, net_id) if {
+project(id, name, region, net_id) where {
   e = env
   setting(e, "project_id", id)
   setting(e, "project_name", name)
@@ -99,13 +98,6 @@ project(id, name, region, net_id) if {
 ########################################
 
 resource google.compute_subnetwork gke_subnet {
-  if {
-    project(id, name, region, net_id)
-    e = env
-    setting(e, "gke.subnet_cidr", subnet_cidr)
-    setting(e, "gke.pods_cidr", pods_cidr)
-    setting(e, "gke.services_cidr", svc_cidr)
-  }
   project = id
   region = region
   network = net_id
@@ -116,10 +108,15 @@ resource google.compute_subnetwork gke_subnet {
     { range_name: format("%s-gke-pods-range", name), ip_cidr_range: pods_cidr },
     { range_name: format("%s-gke-svc-range", name), ip_cidr_range: svc_cidr }
   ] # Keyed on .range_name per the google schema
+} where {
+  project(id, name, region, net_id)
+  e = env
+  setting(e, "gke.subnet_cidr", subnet_cidr)
+  setting(e, "gke.pods_cidr", pods_cidr)
+  setting(e, "gke.services_cidr", svc_cidr)
 }
 
 resource google.compute_subnetwork regional_proxy {
-  if project(id, name, region, net_id), e = env, setting(e, "regional_proxy_cidr", proxy_cidr)
   project = id
   region = region
   network = net_id
@@ -127,43 +124,40 @@ resource google.compute_subnetwork regional_proxy {
   purpose = "REGIONAL_MANAGED_PROXY"
   role = "ACTIVE"
   ip_cidr_range = proxy_cidr
-}
+} where project(id, name, region, net_id), e = env, setting(e, "regional_proxy_cidr", proxy_cidr)
 
 resource google.compute_network_peering p {
-  if {
-    project(id, _, _, net_id)
-    e = env
-    peering(e, peer_name, peer_net)
-    p = format("peering-%s", peer_name)
-  }
   project = id
   name = peer_name
   network = net_id
   peer_network = peer_net
+} where {
+  project(id, _, _, net_id)
+  e = env
+  peering(e, peer_name, peer_net)
+  p = format("peering-%s", peer_name)
 }
 
 # One static address per declared static IP; the map explodes into rows.
-static_ip(ip_name, type_) if {
+static_ip(ip_name, type_) where {
   e = env
   setting(e, "gke.static_ips", ips)
   member_kv(ips, ip_name, { type: type_ })
 }
 
 resource google.compute_address s {
-  if project(id, _, region, _), static_ip(ip_name, type_), s = format("static-ip-%s", ip_name)
   project = id
   region = region
   name = ip_name
   address_type = type_
   subnetwork_id = ref(google.compute_subnetwork, "gke_subnet", "id")
-}
+} where project(id, _, region, _), static_ip(ip_name, type_), s = format("static-ip-%s", ip_name)
 
 ########################################
 # GKE: phase 1
 ########################################
 
 resource gke.cluster pngu {
-  if e = env, project(id, name, _, net_id), setting(e, "gke.control_plane_cidr", cp_cidr)
   cluster_type = "autopilot-private"
   env = e
   project_id = id
@@ -176,14 +170,14 @@ resource gke.cluster pngu {
   ip_range_services = format("%s-gke-svc-range", name)
   enable_secret_manager_addon = true
   deletion_protection = false @default
-}
+} where e = env, project(id, name, _, net_id), setting(e, "gke.control_plane_cidr", cp_cidr)
 
 # Prod: deletion protection on, at normal rank, over the block's @default.
 # Two ranks, one value each, no conflict. The lifecycle fact is policeable.
-arg("gke.cluster", "pngu", "deletion_protection", true) if env == "prod"
-lifecycle("gke.cluster", "pngu", "prevent_destroy") if env == "prod"
+arg("gke.cluster", "pngu", "deletion_protection", true) where env == "prod"
+lifecycle("gke.cluster", "pngu", "prevent_destroy") where env == "prod"
 
-deny("prod_deletion_protection", "prod cluster must have deletion protection", { cluster: "pngu" }) if {
+deny("prod_deletion_protection", "prod cluster must have deletion protection", { cluster: "pngu" }) where {
   env == "prod"
   not attr("gke.cluster", "pngu", "deletion_protection", true)
 }
@@ -221,19 +215,18 @@ resource k8s.secret db_credentials {
 # rule is stuck on ?gke.cluster/pngu#zones and the plan prints one pending
 # group of unknown cardinality. After phase 1 it fires once per zone.
 resource gke.nodepool np {
-  if attr("gke.cluster", "pngu", "zones", zs), member(zs, z), np = format("np-%s", z)
   cluster = ref("gke.cluster", "pngu", "id")
   zone = z
   min = 1
   max = 3
-}
+} where attr("gke.cluster", "pngu", "zones", zs), member(zs, z), np = format("np-%s", z)
 
 # A policy that cannot be decided at plan time and says so: the aggregate
 # has a stuck instance, so it is undetermined, and the deny is reported as
 # undetermined until phase 1 resolves .zones.
-zone_count(count(z)) if attr("gke.cluster", "pngu", "zones", zs), member(zs, z)
+zone_count(count(z)) where attr("gke.cluster", "pngu", "zones", zs), member(zs, z)
 
-deny("two_zones", "cluster must be in at least two zones", { cluster: "pngu" }) if {
+deny("two_zones", "cluster must be in at least two zones", { cluster: "pngu" }) where {
   want("gke.cluster", "pngu")
   zone_count(n)
   n < 2
@@ -246,13 +239,12 @@ deny("two_zones", "cluster must be in at least two zones", { cluster: "pngu" }) 
 extern file.json(+path: string, -value: any)
 
 resource google.monitoring_dashboard pngu {
-  if project(id, _, _, _), file.json("modules/monitoring/dashboard-pngu.json", dash)
   project = id
   dashboard_json = dash
-}
+} where project(id, _, _, _), file.json("modules/monitoring/dashboard-pngu.json", dash)
 
-output("active_env", e) if e = env
-output("project_id", id) if project(id, _, _, _)
+output("active_env", e) where e = env
+output("project_id", id) where project(id, _, _, _)
 
 ---
 
@@ -369,7 +361,7 @@ output("project_id", id) if project(id, _, _, _)
             (type
               (dotted_name
                 (identifier)))
-            (where_clause
+            (refinement
               (body
                 (comparison
                   (call
@@ -384,7 +376,7 @@ output("project_id", id) if project(id, _, _, _)
             (type
               (dotted_name
                 (identifier)))
-            (where_clause
+            (refinement
               (body
                 (comparison
                   (call
@@ -398,7 +390,7 @@ output("project_id", id) if project(id, _, _, _)
             (type
               (dotted_name
                 (identifier)))
-            (where_clause
+            (refinement
               (body
                 (comparison
                   (call
@@ -412,7 +404,7 @@ output("project_id", id) if project(id, _, _, _)
             (type
               (dotted_name
                 (identifier)))
-            (where_clause
+            (refinement
               (body
                 (comparison
                   (call
@@ -439,13 +431,6 @@ output("project_id", id) if project(id, _, _, _)
     (identifier)
     (rank)
     (block
-      (clause
-        (body
-          (atom_literal
-            (call
-              (identifier)
-              (arguments
-                (identifier))))))
       (field
         (block_path
           (identifier))
@@ -463,7 +448,14 @@ output("project_id", id) if project(id, _, _, _)
               (object_field
                 (identifier)
                 (string
-                  (string_content)))))))))
+                  (string_content))))))))
+    (clause
+      (body
+        (atom_literal
+          (call
+            (identifier)
+            (arguments
+              (identifier)))))))
   (fact
     (call
       (identifier)
@@ -726,43 +718,6 @@ output("project_id", id) if project(id, _, _, _)
       (identifier))
     (identifier)
     (block
-      (clause
-        (body_block
-          (atom_literal
-            (call
-              (identifier)
-              (arguments
-                (identifier)
-                (identifier)
-                (identifier)
-                (identifier))))
-          (comparison
-            (identifier)
-            (identifier))
-          (atom_literal
-            (call
-              (identifier)
-              (arguments
-                (identifier)
-                (string
-                  (string_content))
-                (identifier))))
-          (atom_literal
-            (call
-              (identifier)
-              (arguments
-                (identifier)
-                (string
-                  (string_content))
-                (identifier))))
-          (atom_literal
-            (call
-              (identifier)
-              (arguments
-                (identifier)
-                (string
-                  (string_content))
-                (identifier))))))
       (field
         (block_path
           (identifier))
@@ -820,34 +775,50 @@ output("project_id", id) if project(id, _, _, _)
             (object_field
               (identifier)
               (identifier)))))
-      (comment)))
+      (comment))
+    (clause
+      (body_block
+        (atom_literal
+          (call
+            (identifier)
+            (arguments
+              (identifier)
+              (identifier)
+              (identifier)
+              (identifier))))
+        (comparison
+          (identifier)
+          (identifier))
+        (atom_literal
+          (call
+            (identifier)
+            (arguments
+              (identifier)
+              (string
+                (string_content))
+              (identifier))))
+        (atom_literal
+          (call
+            (identifier)
+            (arguments
+              (identifier)
+              (string
+                (string_content))
+              (identifier))))
+        (atom_literal
+          (call
+            (identifier)
+            (arguments
+              (identifier)
+              (string
+                (string_content))
+              (identifier)))))))
   (resource
     (dotted_name
       (identifier)
       (identifier))
     (identifier)
     (block
-      (clause
-        (body
-          (atom_literal
-            (call
-              (identifier)
-              (arguments
-                (identifier)
-                (identifier)
-                (identifier)
-                (identifier))))
-          (comparison
-            (identifier)
-            (identifier))
-          (atom_literal
-            (call
-              (identifier)
-              (arguments
-                (identifier)
-                (string
-                  (string_content))
-                (identifier))))))
       (field
         (block_path
           (identifier))
@@ -882,57 +853,78 @@ output("project_id", id) if project(id, _, _, _)
       (field
         (block_path
           (identifier))
-        (identifier))))
+        (identifier)))
+    (clause
+      (body
+        (atom_literal
+          (call
+            (identifier)
+            (arguments
+              (identifier)
+              (identifier)
+              (identifier)
+              (identifier))))
+        (comparison
+          (identifier)
+          (identifier))
+        (atom_literal
+          (call
+            (identifier)
+            (arguments
+              (identifier)
+              (string
+                (string_content))
+              (identifier)))))))
   (resource
     (dotted_name
       (identifier)
       (identifier))
     (identifier)
     (block
-      (clause
-        (body_block
-          (atom_literal
-            (call
-              (identifier)
-              (arguments
-                (identifier)
-                (identifier)
-                (identifier)
-                (identifier))))
-          (comparison
+      (field
+        (block_path
+          (identifier))
+        (identifier))
+      (field
+        (block_path
+          (identifier))
+        (identifier))
+      (field
+        (block_path
+          (identifier))
+        (identifier))
+      (field
+        (block_path
+          (identifier))
+        (identifier)))
+    (clause
+      (body_block
+        (atom_literal
+          (call
             (identifier)
-            (identifier))
-          (atom_literal
-            (call
+            (arguments
               (identifier)
-              (arguments
-                (identifier)
-                (identifier)
-                (identifier))))
-          (comparison
+              (identifier)
+              (identifier)
+              (identifier))))
+        (comparison
+          (identifier)
+          (identifier))
+        (atom_literal
+          (call
             (identifier)
-            (call
+            (arguments
               (identifier)
-              (arguments
-                (string
-                  (string_content))
-                (identifier))))))
-      (field
-        (block_path
-          (identifier))
-        (identifier))
-      (field
-        (block_path
-          (identifier))
-        (identifier))
-      (field
-        (block_path
-          (identifier))
-        (identifier))
-      (field
-        (block_path
-          (identifier))
-        (identifier))))
+              (identifier)
+              (identifier))))
+        (comparison
+          (identifier)
+          (call
+            (identifier)
+            (arguments
+              (string
+                (string_content))
+              (identifier)))))))
   (comment)
   (rule
     (call
@@ -968,30 +960,6 @@ output("project_id", id) if project(id, _, _, _)
       (identifier))
     (identifier)
     (block
-      (clause
-        (body
-          (atom_literal
-            (call
-              (identifier)
-              (arguments
-                (identifier)
-                (identifier)
-                (identifier)
-                (identifier))))
-          (atom_literal
-            (call
-              (identifier)
-              (arguments
-                (identifier)
-                (identifier))))
-          (comparison
-            (identifier)
-            (call
-              (identifier)
-              (arguments
-                (string
-                  (string_content))
-                (identifier))))))
       (field
         (block_path
           (identifier))
@@ -1020,7 +988,31 @@ output("project_id", id) if project(id, _, _, _)
             (string
               (string_content))
             (string
-              (string_content)))))))
+              (string_content))))))
+    (clause
+      (body
+        (atom_literal
+          (call
+            (identifier)
+            (arguments
+              (identifier)
+              (identifier)
+              (identifier)
+              (identifier))))
+        (atom_literal
+          (call
+            (identifier)
+            (arguments
+              (identifier)
+              (identifier))))
+        (comparison
+          (identifier)
+          (call
+            (identifier)
+            (arguments
+              (string
+                (string_content))
+              (identifier)))))))
   (comment)
   (comment)
   (comment)
@@ -1030,27 +1022,6 @@ output("project_id", id) if project(id, _, _, _)
       (identifier))
     (identifier)
     (block
-      (clause
-        (body
-          (comparison
-            (identifier)
-            (identifier))
-          (atom_literal
-            (call
-              (identifier)
-              (arguments
-                (identifier)
-                (identifier)
-                (identifier)
-                (identifier))))
-          (atom_literal
-            (call
-              (identifier)
-              (arguments
-                (identifier)
-                (string
-                  (string_content))
-                (identifier))))))
       (field
         (block_path
           (identifier))
@@ -1124,7 +1095,28 @@ output("project_id", id) if project(id, _, _, _)
         (block_path
           (identifier))
         (false)
-        (rank))))
+        (rank)))
+    (clause
+      (body
+        (comparison
+          (identifier)
+          (identifier))
+        (atom_literal
+          (call
+            (identifier)
+            (arguments
+              (identifier)
+              (identifier)
+              (identifier)
+              (identifier))))
+        (atom_literal
+          (call
+            (identifier)
+            (arguments
+              (identifier)
+              (string
+                (string_content))
+              (identifier)))))))
   (comment)
   (comment)
   (rule
@@ -1322,33 +1314,6 @@ output("project_id", id) if project(id, _, _, _)
       (identifier))
     (identifier)
     (block
-      (clause
-        (body
-          (atom_literal
-            (call
-              (identifier)
-              (arguments
-                (string
-                  (string_content))
-                (string
-                  (string_content))
-                (string
-                  (string_content))
-                (identifier))))
-          (atom_literal
-            (call
-              (identifier)
-              (arguments
-                (identifier)
-                (identifier))))
-          (comparison
-            (identifier)
-            (call
-              (identifier)
-              (arguments
-                (string
-                  (string_content))
-                (identifier))))))
       (field
         (block_path
           (identifier))
@@ -1372,7 +1337,34 @@ output("project_id", id) if project(id, _, _, _)
       (field
         (block_path
           (identifier))
-        (integer))))
+        (integer)))
+    (clause
+      (body
+        (atom_literal
+          (call
+            (identifier)
+            (arguments
+              (string
+                (string_content))
+              (string
+                (string_content))
+              (string
+                (string_content))
+              (identifier))))
+        (atom_literal
+          (call
+            (identifier)
+            (arguments
+              (identifier)
+              (identifier))))
+        (comparison
+          (identifier)
+          (call
+            (identifier)
+            (arguments
+              (string
+                (string_content))
+              (identifier)))))))
   (comment)
   (comment)
   (comment)
@@ -1455,25 +1447,6 @@ output("project_id", id) if project(id, _, _, _)
       (identifier))
     (identifier)
     (block
-      (clause
-        (body
-          (atom_literal
-            (call
-              (identifier)
-              (arguments
-                (identifier)
-                (identifier)
-                (identifier)
-                (identifier))))
-          (atom_literal
-            (call
-              (member_expression
-                (identifier)
-                (identifier))
-              (arguments
-                (string
-                  (string_content))
-                (identifier))))))
       (field
         (block_path
           (identifier))
@@ -1481,7 +1454,26 @@ output("project_id", id) if project(id, _, _, _)
       (field
         (block_path
           (identifier))
-        (identifier))))
+        (identifier)))
+    (clause
+      (body
+        (atom_literal
+          (call
+            (identifier)
+            (arguments
+              (identifier)
+              (identifier)
+              (identifier)
+              (identifier))))
+        (atom_literal
+          (call
+            (member_expression
+              (identifier)
+              (identifier))
+            (arguments
+              (string
+                (string_content))
+              (identifier)))))))
   (rule
     (call
       (identifier)

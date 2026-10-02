@@ -1,0 +1,29 @@
+edition 2026
+
+# The clause word is `where`, after the head (R-1): `if` anywhere is an
+# error that prints the statement with its clause spelled `where`.
+input env: string = "dev"
+zone("a")
+p(x) if zone(x)
+q(x) if {
+  zone(x)
+  x != "b"
+}
+let size = 1 if env == "prod"
+set r.tags = {} if r in resource
+output n: int = 1 if zone("a")
+deny "no zones" if not zone(_) # a comment is not the clause
+warn "m" { z } if zone(z)
+resource net.vpc "v-${z}" {
+  if zone(z)
+  cidr = "10.0.0.0/16"
+}
+settings s { if zone(s), a = 1 }
+instance m i {
+  if {
+    zone("a")
+  }
+}
+resource net.vpc w {
+  cidr = "10.0.0.0/16"
+} if zone("a")

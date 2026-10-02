@@ -251,7 +251,7 @@ apply-order edge, not its content read now (`docs/grammar.md'
       "contributes" "extern" "persist" "type" "decl" "mixed" "let" "set"
       "module" "instance" "policy" "use" "scenario" "resource" "settings"
       ] @font-lock-keyword-face
-     ["if" "where"] @font-lock-keyword-face
+     ["where" "check"] @font-lock-keyword-face
      ["deny" "warn"] @font-lock-keyword-face
      ["not" "in" "has"] @font-lock-keyword-face)
 
@@ -290,7 +290,7 @@ apply-order edge, not its content read now (`docs/grammar.md'
            "object" "record_type" "list" "comprehension"
            "arguments" "parenthesized" "index_expression")))
       parent-bol dform-ts-mode-indent-offset)
-     ;; A clause (`if') or a one-line body.
+     ;; A block's clause (`where', after the block) or a one-line body.
      ((parent-is "clause") parent-bol dform-ts-mode-indent-offset)
      ((parent-is ,(regexp-opt '("rule" "check" "let" "set" "output")))
       parent-bol dform-ts-mode-indent-offset)

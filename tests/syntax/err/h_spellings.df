@@ -16,18 +16,18 @@ set env = "prod"
 output vpc: net.vpc
 
 # H-8: no rule reads deny/2.
-deny "no" if env == "x"
-denied(m) if deny(m)
+deny "no" where env == "x"
+denied(m) where deny(m)
 
 # H-10: a resource in scope is named by its name; a type is a known type.
-a(c) if c = net.vpc["main"].cidr
-b(c) if c = net.vpc.main.cidr
-d(c) if c = net.vcp["x"].cidr
+a(c) where c = net.vpc["main"].cidr
+b(c) where c = net.vpc.main.cidr
+d(c) where c = net.vcp["x"].cidr
 
 # H-15: the core, where a surface form says the same.
-e(x) if want(net.vpc, x)
-f(v) if attr(net.vpc, "main", "cidr", v)
+e(x) where want(net.vpc, x)
+f(v) where attr(net.vpc, "main", "cidr", v)
 arg(net.vpc, "main", "size", 3)
 output("k", 1)
-deny("m") if env == "y"
-g(x) if member([1], x)
+deny("m") where env == "y"
+g(x) where member([1], x)

@@ -308,19 +308,19 @@ mod tests {
 
     #[test]
     fn a_formatted_file_prints_back_unchanged() {
-        let src = "edition 2026\n\n# c\np(a, \"b\") if q(a), a != 1\n";
+        let src = "edition 2026\n\n# c\np(a, \"b\") where q(a), a != 1\n";
         assert_eq!(fmt(src), src);
     }
 
     #[test]
     fn spaces_and_indentation_are_normalised() {
         assert_eq!(
-            fmt("p( a ,b )if q(x),x>1\nresource  net.vpc  main{cidr=\"x\",tags={a:1}}\n"),
-            "p(a, b) if q(x), x > 1\nresource net.vpc main { cidr = \"x\", tags = { a: 1 } }\n"
+            fmt("p( a ,b )where q(x),x>1\nresource  net.vpc  main{cidr=\"x\",tags={a:1}}\n"),
+            "p(a, b) where q(x), x > 1\nresource net.vpc main { cidr = \"x\", tags = { a: 1 } }\n"
         );
         assert_eq!(
-            fmt("module m {\np(x) if q(x)\n}\n"),
-            "module m {\n  p(x) if q(x)\n}\n"
+            fmt("module m {\np(x) where q(x)\n}\n"),
+            "module m {\n  p(x) where q(x)\n}\n"
         );
         assert_eq!(fmt("p(a /b,t[e].p)\n"), "p(a / b, t[e].p)\n");
     }
@@ -331,16 +331,16 @@ mod tests {
     fn a_body_goes_on_one_line_when_it_fits() {
         assert_eq!(
             fmt(
-                "resource t n {\nif {\n  a(x)\n  b(x)\n}\nf = x\n}\ndeny \"m\" { x } if {\na(x)\nnot b(x)\n}\n"
+                "resource t n {\nf = x\n} where {\n  a(x)\n  b(x)\n}\ndeny \"m\" { x } where {\na(x)\nnot b(x)\n}\n"
             ),
-            "resource t n {\n  if a(x), b(x)\n  f = x\n}\ndeny \"m\" { x } if a(x), not b(x)\n"
+            "resource t n {\n  f = x\n} where a(x), b(x)\ndeny \"m\" { x } where a(x), not b(x)\n"
         );
-        let long = "p(x) if {\n  q(x, \"a rather long string that fills the line\")\n  \
+        let long = "p(x) where {\n  q(x, \"a rather long string that fills the line\")\n  \
                     r(x, \"and another one that runs past its end\")\n}\n";
         assert_eq!(fmt(long), long);
         assert_eq!(
             fmt(
-                "p(x) if q(x, \"a rather long string that fills the line\"), r(x, \"and another one that runs past its end\")\n"
+                "p(x) where q(x, \"a rather long string that fills the line\"), r(x, \"and another one that runs past its end\")\n"
             ),
             long
         );
@@ -370,7 +370,7 @@ mod tests {
 
     #[test]
     fn idempotent() {
-        let src = "p(x)if {\n  q(x)\n  r(x)\n}\nresource t n { a=1, b=2\n c=3 }\n";
+        let src = "p(x)where {\n  q(x)\n  r(x)\n}\nresource t n { a=1, b=2\n c=3 }\n";
         let once = fmt(src);
         assert_eq!(fmt(&once), once);
     }

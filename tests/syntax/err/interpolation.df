@@ -3,6 +3,6 @@ edition 2026
 # `${e}` interpolates; `$${` is a literal `${`, a brace is itself.
 a("${}")
 b("x ${y")
-c("{ok} $${no} ${y}") if y = "fine"
+c("{ok} $${no} ${y}") where y = "fine"
 q("a")
-d("n-${x.}") if q(x)
+d("n-${x.}") where q(x)

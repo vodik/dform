@@ -136,34 +136,26 @@ fn tree(read: Reader, file: &Path) -> Option<(String, SyntaxNode)> {
     Some((text, root))
 }
 
-/// The resource block around byte `at`.
-fn resource_block(root: &SyntaxNode, at: usize) -> Option<SyntaxNode> {
+/// The resource statement around byte `at`.
+fn resource_stmt(root: &SyntaxNode, at: usize) -> Option<SyntaxNode> {
     let t = root
         .token_at_offset(TextSize::from(u32::try_from(at).ok()?))
         .right_biased()?;
-    let r = t
-        .parent_ancestors()
-        .find(|n| n.kind() == SyntaxKind::RESOURCE)?;
-    r.children().find(|n| n.kind() == SyntaxKind::BLOCK)
+    t.parent_ancestors()
+        .find(|n| n.kind() == SyntaxKind::RESOURCE)
 }
 
-/// An insertion of `line` after byte `at` of `text`, on a line of its own.
-fn line_after(text: &str, at: usize, line: &str) -> String {
-    let rest = &text[at..];
-    let next_on_new_line = rest
-        .find(|c: char| !c.is_whitespace())
-        .is_none_or(|i| rest[..i].contains('\n'));
-    if next_on_new_line {
-        format!("\n{line}")
-    } else {
-        format!("\n{line}\n")
-    }
+/// The block of the resource statement that holds byte `at`.
+fn resource_block(root: &SyntaxNode, at: usize) -> Option<SyntaxNode> {
+    resource_stmt(root, at)?
+        .children()
+        .find(|n| n.kind() == SyntaxKind::BLOCK)
 }
 
 /// A ref to an address no rule wants: guard the resource block that holds
-/// it on the address being wanted (`if "other" in net.vpc`), after its
-/// clauses. Offered where the address is written as it is (the block has
-/// no `for`, or names it quoted).
+/// it on the address being wanted (`} where "other" in net.vpc`), in its
+/// clause. Offered where the address is written as it is (the block has
+/// no clause, or names it quoted).
 fn dangling_refs(e: &Evaluated, read: Reader) -> Vec<Action> {
     let mut out = Vec::new();
     for a in &e.res.facts {
@@ -189,10 +181,10 @@ fn dangling_refs(e: &Evaluated, read: Reader) -> Vec<Action> {
         let Some((text, root)) = tree(read, &file) else {
             continue;
         };
-        let Some(block) = resource_block(&root, start) else {
+        let Some(stmt) = resource_stmt(&root, start) else {
             continue;
         };
-        let clause = block.children().find(|n| n.kind() == SyntaxKind::CLAUSE);
+        let clause = stmt.children().find(|n| n.kind() == SyntaxKind::CLAUSE);
         let quoted = format!("\"{addr}\"");
         // A clause that binds rows: the ref may name each row's own; guard
         // only a ref written as the address itself.
@@ -200,7 +192,8 @@ fn dangling_refs(e: &Evaluated, read: Reader) -> Vec<Action> {
             continue;
         }
         let lit = format!("{quoted} in {typ}");
-        // The block takes one clause (H-3): the guard joins it, or is it.
+        // The block takes one clause, after it (R-1): the guard joins it,
+        // or is it.
         let (at_edit, insert) = match clause
             .as_ref()
             .and_then(|c| c.children().find(|b| b.kind() == SyntaxKind::BODY))
@@ -217,14 +210,13 @@ fn dangling_refs(e: &Evaluated, read: Reader) -> Vec<Action> {
                 (at, format!("  {lit}\n"))
             }
             Some(body) => (usize::from(body.text_range().end()), format!(", {lit}")),
-            None => match block
-                .children_with_tokens()
-                .find(|t| t.kind() == SyntaxKind::L_BRACE)
+            None => match stmt
+                .children()
+                .find(|n| n.kind() == SyntaxKind::BLOCK)
+                .and_then(|b| b.last_token())
+                .filter(|t| t.kind() == SyntaxKind::R_BRACE)
             {
-                Some(b) => {
-                    let at = usize::from(b.text_range().end());
-                    (at, line_after(&text, at, &format!("if {lit}")))
-                }
+                Some(b) => (usize::from(b.text_range().end()), format!(" where {lit}")),
                 None => continue,
             },
         };

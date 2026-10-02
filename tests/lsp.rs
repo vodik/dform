@@ -323,7 +323,7 @@ fn hover_shows_docs_builtins_keywords_and_nothing_elsewhere() {
     assert_eq!(hover(&mut c, &stack, "\"us-test-1a\"", 3), Value::Null);
 
     // An input read by name: its declaration and doc comment.
-    let text = hover(&mut c, &stack, "if env ==", 4);
+    let text = hover(&mut c, &stack, "where env ==", 7);
     let text = text.as_str().unwrap();
     assert!(
         text.contains("input env: environment = \"staging\""),
@@ -378,6 +378,11 @@ fn hover_shows_docs_builtins_keywords_and_nothing_elsewhere() {
         "{text}"
     );
     assert!(text.contains("usable host"), "{text}");
+    let text = hover(&mut c, &stack, "} where env != \"dev\"", 4);
+    assert!(
+        text.as_str().unwrap().contains("HEAD where BODY | BLOCK where BODY"),
+        "{text}"
+    );
     let text = hover(&mut c, &stack, "scenario prod {", 2);
     assert!(
         text.as_str()
@@ -392,6 +397,25 @@ fn hover_shows_docs_builtins_keywords_and_nothing_elsewhere() {
         text.as_str().unwrap().contains("A virtual network"),
         "{text}"
     );
+    c.shutdown();
+}
+
+/// A refinement's `check` is a word only where it opens one: its hover is
+/// the reference entry; a `where` clause's word is the keyword's.
+#[test]
+fn hover_on_the_clause_and_refinement_words() {
+    let (_s, root) = example("refine");
+    let stack = root.join("stacks/refine_gke.df");
+    let mut c = Client::start(&root, json!({}));
+    c.open(&stack);
+    let hover = |c: &mut Client, needle: &str, ahead: u32| -> String {
+        let h = c.at("textDocument/hover", &stack, find(&stack, needle, ahead));
+        h["contents"]["value"].as_str().unwrap_or_default().to_string()
+    };
+    let text = hover(&mut c, "check zones >= 1", 2);
+    assert!(text.contains("A refinement"), "{text}");
+    let text = hover(&mut c, "} where ", 4);
+    assert!(text.contains("HEAD where BODY"), "{text}");
     c.shutdown();
 }
 
@@ -417,7 +441,7 @@ fn signature_help_of_builtins_and_externs() {
 
     let text = std::fs::read_to_string(&stack).unwrap();
     let typed = format!(
-        "{text}\n#| The address a name resolves to.\nextern dns.lookup(+name: string, -addr: string)\nx(a) if dns.lookup(\"db\", "
+        "{text}\n#| The address a name resolves to.\nextern dns.lookup(+name: string, -addr: string)\nx(a) where dns.lookup(\"db\", "
     );
     c.change(&stack, 2, &typed);
     let n = typed.lines().count() as u32;
@@ -475,7 +499,7 @@ fn diagnostics_follow_the_selected_environment() {
     }
 
     let original = std::fs::read_to_string(&stack).unwrap();
-    let edited = format!("{original}\ndeny \"prod is frozen\" if env == \"prod\"\n");
+    let edited = format!("{original}\ndeny \"prod is frozen\" where env == \"prod\"\n");
     c.change(&stack, 2, &edited);
     let ds = c.diagnostics(&stack);
     assert!(
@@ -699,7 +723,7 @@ fn definition_and_formatting() {
         "a module read by its instances"
     );
 
-    let messy = "edition 2026\nq(1)\np(x)   if q(x)\n";
+    let messy = "edition 2026\nq(1)\np(x)   where q(x)\n";
     let scratch = root.join("stacks/messy.df");
     std::fs::write(&scratch, messy).unwrap();
     c.open(&scratch);
@@ -708,7 +732,7 @@ fn definition_and_formatting() {
         json!({ "textDocument": { "uri": uri(&scratch) }, "options": { "tabSize": 2, "insertSpaces": true } }),
     );
     assert_eq!(
-        edits[0]["newText"], "edition 2026\nq(1)\np(x) if q(x)\n",
+        edits[0]["newText"], "edition 2026\nq(1)\np(x) where q(x)\n",
         "{edits}"
     );
     c.shutdown();
@@ -874,7 +898,7 @@ fn quick_fix_grants_what_a_pack_writes() {
     let text = std::fs::read_to_string(&baseline).unwrap();
     let edited = text.replace(
         "  # Networking invariants",
-        "  set r.cidr = \"10.0.0.0/8\" if r in net.vpc\n\n  # Networking invariants",
+        "  set r.cidr = \"10.0.0.0/8\" where r in net.vpc\n\n  # Networking invariants",
     );
     let texts = quick_fix(
         &root,
@@ -915,7 +939,7 @@ fn quick_fix_declares_a_predicate_mixed() {
     let (_s, root) = example("demo");
     let stack = root.join("stacks/dform.df");
     let text = std::fs::read_to_string(&stack).unwrap();
-    let edited = format!("{text}\nq(1)\nq(x) if data(\"zone\", x)\n");
+    let edited = format!("{text}\nq(1)\nq(x) where data(\"zone\", x)\n");
     let texts = quick_fix(
         &root,
         &stack,
@@ -924,7 +948,7 @@ fn quick_fix_declares_a_predicate_mixed() {
         "declare it: `decl q(a) mixed`",
     );
     assert!(
-        texts[0].ends_with("\ndecl q(a) mixed\nq(1)\nq(x) if data(\"zone\", x)\n"),
+        texts[0].ends_with("\ndecl q(a) mixed\nq(1)\nq(x) where data(\"zone\", x)\n"),
         "{}",
         texts[0]
     );
@@ -1020,7 +1044,9 @@ fn quick_fix_guards_a_dangling_ref() {
         "guard the block on net.vpc other existing",
     );
     assert!(
-        texts[0].contains("resource net.subnet extra {\n  if \"other\" in net.vpc\n  cidr"),
+        texts[0].contains(
+            "vpc_id = ref(net.vpc, \"other\", \"id\")\n} where \"other\" in net.vpc\n"
+        ),
         "{}",
         texts[0]
     );
@@ -1170,7 +1196,7 @@ fn references_of_every_kind_of_name() {
     c.change(
         &stack,
         2,
-        &format!("{original}\nextra(x) if vpc_peer_pair(x, _, _, _)\n"),
+        &format!("{original}\nextra(x) where vpc_peer_pair(x, _, _, _)\n"),
     );
     let found = references(&mut c, &root, &stack, find(&stack, "vpc_peer_pair(ia", 2));
     assert_eq!(found, at_places("stacks/dform.df", &[86, 87, 92, 122]));
@@ -1438,7 +1464,7 @@ fn same_named_private_relations_rename_independently() {
         let text = std::fs::read_to_string(file).unwrap();
         let end = text.rfind('}').unwrap();
         let text = format!(
-            "{}  helper(\"{value}\")\n  seen(x) if helper(x)\n{}",
+            "{}  helper(\"{value}\")\n  seen(x) where helper(x)\n{}",
             &text[..end],
             &text[end..]
         );
@@ -1454,9 +1480,9 @@ fn same_named_private_relations_rename_independently() {
     assert_eq!(changes[&uri(&iam)].as_array().unwrap().len(), 2, "{edit}");
     apply_edit(&mut c, &root, &edit);
     let text = std::fs::read_to_string(&k8s).unwrap();
-    assert!(text.contains("seen(x) if helper(x)"), "{text}");
+    assert!(text.contains("seen(x) where helper(x)"), "{text}");
     let text = std::fs::read_to_string(&iam).unwrap();
-    assert!(text.contains("seen(x) if iam_helper(x)"), "{text}");
+    assert!(text.contains("seen(x) where iam_helper(x)"), "{text}");
     c.shutdown();
 }
 
@@ -1474,7 +1500,7 @@ stack p {}
 resource net.vpc main { cidr = "10.0.0.0/16" }
 resource net.subnet a { vpc_id = ref(net.vpc, "main", "id"), tier = "web" }
 
-deny(m) if deformation("pending", t, n, _), m = format("%s.%s waits on a replacement", t, n)
+deny(m) where deformation("pending", t, n, _), m = format("%s.%s waits on a replacement", t, n)
 "#;
     let file = s.write("stacks/p.df", net);
     s.run(&["apply", "p"]).success();

@@ -1,10 +1,10 @@
 edition 2026
 
-# A block's clauses come first; a let names a reference; `+=` adds to a
+# A block's clause follows the block; a let names a reference; `+=` adds to a
 # field, not to a value.
 resource net.vpc a {
   cidr = "10.0.0.0/16"
-  if q(x)
+  where q(x)
 }
 let n = 3
 let k += 1

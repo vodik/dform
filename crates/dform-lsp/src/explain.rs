@@ -341,7 +341,11 @@ pub fn hover_at(p: &refs::Project, path: &Path, at: usize) -> Option<String> {
     let d = Decls::of(files.iter().map(|f| &f.tree));
     let f = files.iter().find(|f| f.path == path)?;
     let t = nav::token_at(&f.tree, at)?;
-    if t.kind().is_keyword() {
+    // `check` is a word only where it opens a refinement.
+    let refinement = t.kind() == SyntaxKind::IDENT
+        && t.parent()
+            .is_some_and(|n| n.kind() == SyntaxKind::REFINEMENT && n.first_token().as_ref() == Some(&t));
+    if t.kind().is_keyword() || refinement {
         // A keyword where a name is expected is that name.
         let as_name = t
             .parent()

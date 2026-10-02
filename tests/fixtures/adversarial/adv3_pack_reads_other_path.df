@@ -12,7 +12,7 @@ resource iam.policy app_policy {
 policy p {
   contributes iam.policy.statements
   type_lattice("iam.policy", "statements", "set")
-  set p.statements = [{ action: "org.read", resource: "org" }] if {
+  set p.statements = [{ action: "org.read", resource: "org" }] where {
     p in iam.policy
     arg("iam.policy", p, "name", "app")
   }

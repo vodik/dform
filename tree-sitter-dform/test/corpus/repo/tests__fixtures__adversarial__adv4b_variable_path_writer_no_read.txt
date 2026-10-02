@@ -14,9 +14,12 @@ resource net.vpc main {
   tags = { env: "dev" }
 }
 
-arg(t, n, p, v) if override(t, n, p, v), want(t, n)
+arg(t, n, p, v) where override(t, n, p, v), want(t, n)
 
-deny "vpc without cidr" { vpc: n } if n in net.vpc, not arg(net.vpc, n, "cidr", inet("10.0.0.0/16"))
+deny "vpc without cidr" { vpc: n } where {
+  n in net.vpc
+  not arg(net.vpc, n, "cidr", inet("10.0.0.0/16"))
+}
 
 ---
 
@@ -93,7 +96,7 @@ deny "vpc without cidr" { vpc: n } if n in net.vpc, not arg(net.vpc, n, "cidr", 
       (object_field
         (identifier)
         (identifier)))
-    (body
+    (body_block
       (in_literal
         (identifier)
         (member_expression

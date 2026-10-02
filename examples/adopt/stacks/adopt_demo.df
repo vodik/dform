@@ -22,16 +22,16 @@ instance network main {
 }
 
 # Adopt the VPC from inventory, but manage it under the local name `network.main::vpc`.
-adopt(net.vpc, "network.main::vpc", "existing-prod-vpc") if {
+adopt(net.vpc, "network.main::vpc", "existing-prod-vpc") where {
   env == "prod"
   "existing-prod-vpc" in world.net.vpc
 }
 
 # Example: use discovered inventory values directly in config.
-set net.vpc["network.main::vpc"].adopted_id = cloud_ref(net.vpc, "existing-prod-vpc", "id") if env == "prod"
+set net.vpc["network.main::vpc"].adopted_id = cloud_ref(net.vpc, "existing-prod-vpc", "id") where env == "prod"
 
 # Keep the existing owner tag stable (avoids a "remove tag" diff on adopt).
-set net.vpc["network.main::vpc"].tags.owner = cloud_ref(net.vpc, "existing-prod-vpc", "tags.owner") if env == "prod"
+set net.vpc["network.main::vpc"].tags.owner = cloud_ref(net.vpc, "existing-prod-vpc", "tags.owner") where env == "prod"
 
 # Also copy it into a separate attribute to demonstrate dotted path lookup.
-set net.vpc["network.main::vpc"].owner_tag = cloud_ref(net.vpc, "existing-prod-vpc", "tags.owner") if env == "prod"
+set net.vpc["network.main::vpc"].owner_tag = cloud_ref(net.vpc, "existing-prod-vpc", "tags.owner") where env == "prod"

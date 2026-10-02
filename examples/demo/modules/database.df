@@ -17,5 +17,5 @@ module database {
   }
 
   #| Only when the database exists in this environment.
-  iam_need("app", "db.connect", db.id) if has backup_days
+  iam_need("app", "db.connect", db.id) where has backup_days
 }

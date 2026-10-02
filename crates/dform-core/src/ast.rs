@@ -253,7 +253,7 @@ pub struct Module {
     pub span: Span,
 }
 
-/// `instance module name { [if body] k = v ... }`: each `k = v` is a
+/// `instance module name { k = v ... } [where body]`: each `k = v` is a
 /// contribution to input `k` of instance `module.name`.
 #[derive(Debug, Clone)]
 pub struct Instance {
@@ -435,7 +435,7 @@ pub struct BindArg {
     pub ty: Option<TypeExpr>,
 }
 
-/// `path: type flag* [where body]`, or a nested block of them.
+/// `path: type flag* [check body]`, or a nested block of them.
 #[derive(Debug, Clone)]
 pub struct AttrDecl {
     pub path: String,

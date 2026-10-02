@@ -25,7 +25,7 @@ data("zone", "us-test-1a")
 data("zone", "us-test-1b")
 
 # A fact with a condition: it holds in prod only.
-iam_need("app", "audit.write", "audit-log") if env == "prod"
+iam_need("app", "audit.write", "audit-log") where env == "prod"
 
 # Settings (branch as data). One @default layer for every settings row that
 # exists; each environment's config/dform/{env}.yaml (the stack's config) wins
@@ -60,25 +60,22 @@ instance network main {
 
 # Dev is small: one network, no database, no cluster.
 instance network peer {
-  if env != "dev"
   vpc_net = inet(cfg.network.peer.vpc_net)
-}
+} where env != "dev"
 
 # Cross-instance values are wired through outputs.
 instance database main {
-  if env != "dev"
   backup_days = cfg.db.backup_days
   multi_az = cfg.db.multi_az
   subnet_ids = network.main.private_subnet_ids
-}
+} where env != "dev"
 
 instance kubernetes main {
-  if env != "dev"
   private_api = cfg.k8s.private_api
   nodepool_min = cfg.k8s.nodepool.min
   nodepool_max = cfg.k8s.nodepool.max
   subnet_ids = network.main.private_subnet_ids
-}
+} where env != "dev"
 
 instance iam main {}
 
@@ -87,16 +84,15 @@ vpc_peer_inst("main", "peer")
 
 #| Each network instance outputs its vpc's address; an edge's pair is the
 #| two instances' vpcs, joined on the instance names.
-vpc_peer_pair(ia, ib, a, b) if vpc_peer_inst(ia, ib), a = network[ia].vpc, b = network[ib].vpc
-vpc_peer(a, b) if vpc_peer_pair(_, _, a, b)
+vpc_peer_pair(ia, ib, a, b) where vpc_peer_inst(ia, ib), a = network[ia].vpc, b = network[ib].vpc
+vpc_peer(a, b) where vpc_peer_pair(_, _, a, b)
 
 #| A peering resource per declared peering edge.
 resource net.vpc_peering "peer-${ia}-${ib}" {
   # Both ends must exist in this environment.
-  if vpc_peer_pair(ia, ib, a, b), a in net.vpc, b in net.vpc
   requester_vpc_id = a.id
   accepter_vpc_id = b.id
-}
+} where vpc_peer_pair(ia, ib, a, b), a in net.vpc, b in net.vpc
 
 #| Demo: allocate an IP from the main VPC.
 resource compute.vm bastion {
@@ -104,23 +100,23 @@ resource compute.vm bastion {
 }
 
 # Policy, over every resource of a type (a module's resources included).
-deny "prod db must be multi_az" if env == "prod", pg in db.postgres, not pg.multi_az
+deny "prod db must be multi_az" where env == "prod", pg in db.postgres, not pg.multi_az
 
-deny "prod k8s must have private api" if env == "prod", c in k8s.cluster, not c.private_api
+deny "prod k8s must have private api" where env == "prod", c in k8s.cluster, not c.private_api
 
 #| Policy over hypothetical inputs: `dform test` runs every scenario
 #| against an empty mock world; `dform plan --scenario prod` plans the stack
 #| as if env were prod.
 scenario prod {
   set env = "prod"
-  deny "prod peers the two vpcs" if not "peer-main-peer" in net.vpc_peering
-  deny "prod keeps 14 days of db backups" if not db.postgres["database.main::db"].backup_days == 14
+  deny "prod peers the two vpcs" where not "peer-main-peer" in net.vpc_peering
+  deny "prod keeps 14 days of db backups" where not db.postgres["database.main::db"].backup_days == 14
 }
 
 scenario dev {
   set env = "dev"
-  deny "dev has no database" if _ in db.postgres
-  deny "dev has no peer network" if "network.peer::vpc" in net.vpc
+  deny "dev has no database" where _ in db.postgres
+  deny "dev has no peer network" where "network.peer::vpc" in net.vpc
 }
 
 ---
@@ -318,12 +314,6 @@ scenario dev {
     (identifier)
     (identifier)
     (block
-      (clause
-        (body
-          (comparison
-            (identifier)
-            (string
-              (string_content)))))
       (field
         (block_path
           (identifier))
@@ -336,18 +326,18 @@ scenario dev {
                   (identifier)
                   (identifier))
                 (identifier))
-              (identifier)))))))
+              (identifier))))))
+    (clause
+      (body
+        (comparison
+          (identifier)
+          (string
+            (string_content))))))
   (comment)
   (instance
     (identifier)
     (identifier)
     (block
-      (clause
-        (body
-          (comparison
-            (identifier)
-            (string
-              (string_content)))))
       (field
         (block_path
           (identifier))
@@ -371,17 +361,17 @@ scenario dev {
           (member_expression
             (identifier)
             (identifier))
-          (identifier)))))
+          (identifier))))
+    (clause
+      (body
+        (comparison
+          (identifier)
+          (string
+            (string_content))))))
   (instance
     (identifier)
     (identifier)
     (block
-      (clause
-        (body
-          (comparison
-            (identifier)
-            (string
-              (string_content)))))
       (field
         (block_path
           (identifier))
@@ -417,7 +407,13 @@ scenario dev {
           (member_expression
             (identifier)
             (identifier))
-          (identifier)))))
+          (identifier))))
+    (clause
+      (body
+        (comparison
+          (identifier)
+          (string
+            (string_content))))))
   (instance
     (identifier)
     (identifier)
@@ -491,26 +487,6 @@ scenario dev {
         (identifier)))
     (block
       (comment)
-      (clause
-        (body
-          (atom_literal
-            (call
-              (identifier)
-              (arguments
-                (identifier)
-                (identifier)
-                (identifier)
-                (identifier))))
-          (in_literal
-            (identifier)
-            (member_expression
-              (identifier)
-              (identifier)))
-          (in_literal
-            (identifier)
-            (member_expression
-              (identifier)
-              (identifier)))))
       (field
         (block_path
           (identifier))
@@ -522,7 +498,27 @@ scenario dev {
           (identifier))
         (member_expression
           (identifier)
-          (identifier)))))
+          (identifier))))
+    (clause
+      (body
+        (atom_literal
+          (call
+            (identifier)
+            (arguments
+              (identifier)
+              (identifier)
+              (identifier)
+              (identifier))))
+        (in_literal
+          (identifier)
+          (member_expression
+            (identifier)
+            (identifier)))
+        (in_literal
+          (identifier)
+          (member_expression
+            (identifier)
+            (identifier))))))
   (comment)
   (resource
     (dotted_name

@@ -20,24 +20,23 @@ input env: enum("dev", "staging", "prod") = "staging"
 zone("us-test-1a")
 zone("us-test-1b")
 
-iam_need("app", "audit.write", "audit-log") if env == "prod"
+iam_need("app", "audit.write", "audit-log") where env == "prod"
 
 # Settings are a resource of type `settings`, addressed by environment.
 # A user schema for the open type gives typed, refined settings.
 type settings {
   audit.sinks: set(string)
-  db.backup_days: int where 1 <= db.backup_days <= 35
+  db.backup_days: int check 1 <= db.backup_days <= 35
 }
 
 # Base layer at rank @default: every environment. Overrides below are the
 # normal rank and win per leaf. This replaces three copies of the block.
 settings e @default {
-  if env_name(e)
   network.main.vpc_net = inet("10.90.0.0/16")
   network.peer.vpc_net = inet("10.91.0.0/16")
   db = { backup_days: 3, multi_az: false }
   k8s = { private_api: false, nodepool: { min: 1, max: 3 } }
-}
+} where env_name(e)
 
 env_name("dev")
 env_name("staging")
@@ -68,38 +67,34 @@ use stdlib_net
 
 # Module instances. Inputs are typed at the module; the body binds them.
 instance network main {
-  if e = env, setting(e, "network.main.vpc_net", v)
   vpc_net = v
-}
+} where e = env, setting(e, "network.main.vpc_net", v)
 instance network peer {
-  if e = env, setting(e, "network.peer.vpc_net", v)
   vpc_net = v
-}
+} where e = env, setting(e, "network.peer.vpc_net", v)
 
 instance database main {
-  if {
-    e = env
-    setting(e, "db.backup_days", days)
-    setting(e, "db.multi_az", m_a)
-    output("network.main", "private_subnet_ids", ids)
-  }
   backup_days = days
   multi_az = m_a
   subnet_ids = ids
+} where {
+  e = env
+  setting(e, "db.backup_days", days)
+  setting(e, "db.multi_az", m_a)
+  output("network.main", "private_subnet_ids", ids)
 }
 
 instance kubernetes main {
-  if {
-    e = env
-    setting(e, "k8s.private_api", api_)
-    setting(e, "k8s.nodepool.min", min)
-    setting(e, "k8s.nodepool.max", max)
-    output("network.main", "private_subnet_ids", ids)
-  }
   private_api = api_
   nodepool_min = min
   nodepool_max = max
   subnet_ids = ids
+} where {
+  e = env
+  setting(e, "k8s.private_api", api_)
+  setting(e, "k8s.nodepool.min", min)
+  setting(e, "k8s.nodepool.max", max)
+  output("network.main", "private_subnet_ids", ids)
 }
 
 instance iam main {}
@@ -107,7 +102,7 @@ instance iam main {}
 # Peering between network instances. Each instance exports its vpc address.
 vpc_peer_inst("main", "peer")
 
-vpc_peer(a_, b) if {
+vpc_peer(a_, b) where {
   vpc_peer_inst(i_a, i_b)
   output(network[i_a], "vpc", a_)
   output(network[i_b], "vpc", b)
@@ -116,27 +111,25 @@ vpc_peer(a_, b) if {
 # requester_vpc_id and accepter_vpc_id are fresh nulls at plan time. They are
 # forwarded, never inspected, so this resource is definite and single-phase.
 resource net.vpc_peering peer {
-  if vpc_peer_inst(i_a, i_b), vpc_peer(a_, b), peer = format("peer-%s-%s", i_a, i_b)
   requester_vpc_id = ref(net.vpc, a_, "id")
   accepter_vpc_id = ref(net.vpc, b, "id")
-}
+} where vpc_peer_inst(i_a, i_b), vpc_peer(a_, b), peer = format("peer-%s-%s", i_a, i_b)
 
 # A bastion with an address carved from the main VPC. The setting is a
 # constant, so inet_host is not stuck; only subnet_id carries a null.
 resource compute.vm bastion {
-  if e = env, setting(e, "network.main.vpc_net", net_)
   private_ip = inet_host(net_, 20)
   subnet_id = ref(net.subnet, network.main / private_a, "id")
-}
+} where e = env, setting(e, "network.main.vpc_net", net_)
 
 # Stack-level policy. Ids are stable; messages are free text.
-deny("prod_db_multi_az", "prod db must be multi_az", { db: db_ }) if {
+deny("prod_db_multi_az", "prod db must be multi_az", { db: db_ }) where {
   env == "prod"
   want("db.postgres", db_)
   not attr("db.postgres", db_, "multi_az", true)
 }
 
-deny("prod_k8s_private_api", "prod k8s must have private api", { cluster: c }) if {
+deny("prod_k8s_private_api", "prod k8s must have private api", { cluster: c }) where {
   env == "prod"
   want(k8s.cluster, c)
   not attr(k8s.cluster, c, "private_api", true)
@@ -238,7 +231,7 @@ deny("prod_k8s_private_api", "prod k8s must have private api", { cluster: c }) i
         (type
           (dotted_name
             (identifier)))
-        (where_clause
+        (refinement
           (body
             (comparison
               (integer)
@@ -252,13 +245,6 @@ deny("prod_k8s_private_api", "prod k8s must have private api", { cluster: c }) i
     (identifier)
     (rank)
     (block
-      (clause
-        (body
-          (atom_literal
-            (call
-              (identifier)
-              (arguments
-                (identifier))))))
       (field
         (block_path
           (identifier)
@@ -304,7 +290,14 @@ deny("prod_k8s_private_api", "prod k8s must have private api", { cluster: c }) i
                 (integer))
               (object_field
                 (identifier)
-                (integer))))))))
+                (integer)))))))
+    (clause
+      (body
+        (atom_literal
+          (call
+            (identifier)
+            (arguments
+              (identifier)))))))
   (fact
     (call
       (identifier)
@@ -430,148 +423,148 @@ deny("prod_k8s_private_api", "prod k8s must have private api", { cluster: c }) i
     (identifier)
     (identifier)
     (block
-      (clause
-        (body
-          (comparison
-            (identifier)
-            (identifier))
-          (atom_literal
-            (call
-              (identifier)
-              (arguments
-                (identifier)
-                (string
-                  (string_content))
-                (identifier))))))
       (field
         (block_path
           (identifier))
-        (identifier))))
+        (identifier)))
+    (clause
+      (body
+        (comparison
+          (identifier)
+          (identifier))
+        (atom_literal
+          (call
+            (identifier)
+            (arguments
+              (identifier)
+              (string
+                (string_content))
+              (identifier)))))))
   (instance
     (identifier)
     (identifier)
     (block
-      (clause
-        (body
-          (comparison
-            (identifier)
-            (identifier))
-          (atom_literal
-            (call
-              (identifier)
-              (arguments
-                (identifier)
-                (string
-                  (string_content))
-                (identifier))))))
       (field
         (block_path
           (identifier))
-        (identifier))))
+        (identifier)))
+    (clause
+      (body
+        (comparison
+          (identifier)
+          (identifier))
+        (atom_literal
+          (call
+            (identifier)
+            (arguments
+              (identifier)
+              (string
+                (string_content))
+              (identifier)))))))
   (instance
     (identifier)
     (identifier)
     (block
-      (clause
-        (body_block
-          (comparison
+      (field
+        (block_path
+          (identifier))
+        (identifier))
+      (field
+        (block_path
+          (identifier))
+        (identifier))
+      (field
+        (block_path
+          (identifier))
+        (identifier)))
+    (clause
+      (body_block
+        (comparison
+          (identifier)
+          (identifier))
+        (atom_literal
+          (call
             (identifier)
-            (identifier))
-          (atom_literal
-            (call
+            (arguments
               (identifier)
-              (arguments
-                (identifier)
-                (string
-                  (string_content))
-                (identifier))))
-          (atom_literal
-            (call
+              (string
+                (string_content))
+              (identifier))))
+        (atom_literal
+          (call
+            (identifier)
+            (arguments
               (identifier)
-              (arguments
-                (identifier)
-                (string
-                  (string_content))
-                (identifier))))
-          (atom_literal
-            (call
-              (identifier)
-              (arguments
-                (string
-                  (string_content))
-                (string
-                  (string_content))
-                (identifier))))))
-      (field
-        (block_path
-          (identifier))
-        (identifier))
-      (field
-        (block_path
-          (identifier))
-        (identifier))
-      (field
-        (block_path
-          (identifier))
-        (identifier))))
+              (string
+                (string_content))
+              (identifier))))
+        (atom_literal
+          (call
+            (identifier)
+            (arguments
+              (string
+                (string_content))
+              (string
+                (string_content))
+              (identifier)))))))
   (instance
     (identifier)
     (identifier)
     (block
-      (clause
-        (body_block
-          (comparison
+      (field
+        (block_path
+          (identifier))
+        (identifier))
+      (field
+        (block_path
+          (identifier))
+        (identifier))
+      (field
+        (block_path
+          (identifier))
+        (identifier))
+      (field
+        (block_path
+          (identifier))
+        (identifier)))
+    (clause
+      (body_block
+        (comparison
+          (identifier)
+          (identifier))
+        (atom_literal
+          (call
             (identifier)
-            (identifier))
-          (atom_literal
-            (call
+            (arguments
               (identifier)
-              (arguments
-                (identifier)
-                (string
-                  (string_content))
-                (identifier))))
-          (atom_literal
-            (call
+              (string
+                (string_content))
+              (identifier))))
+        (atom_literal
+          (call
+            (identifier)
+            (arguments
               (identifier)
-              (arguments
-                (identifier)
-                (string
-                  (string_content))
-                (identifier))))
-          (atom_literal
-            (call
+              (string
+                (string_content))
+              (identifier))))
+        (atom_literal
+          (call
+            (identifier)
+            (arguments
               (identifier)
-              (arguments
-                (identifier)
-                (string
-                  (string_content))
-                (identifier))))
-          (atom_literal
-            (call
-              (identifier)
-              (arguments
-                (string
-                  (string_content))
-                (string
-                  (string_content))
-                (identifier))))))
-      (field
-        (block_path
-          (identifier))
-        (identifier))
-      (field
-        (block_path
-          (identifier))
-        (identifier))
-      (field
-        (block_path
-          (identifier))
-        (identifier))
-      (field
-        (block_path
-          (identifier))
-        (identifier))))
+              (string
+                (string_content))
+              (identifier))))
+        (atom_literal
+          (call
+            (identifier)
+            (arguments
+              (string
+                (string_content))
+              (string
+                (string_content))
+              (identifier)))))))
   (instance
     (identifier)
     (identifier)
@@ -626,29 +619,6 @@ deny("prod_k8s_private_api", "prod k8s must have private api", { cluster: c }) i
       (identifier))
     (identifier)
     (block
-      (clause
-        (body
-          (atom_literal
-            (call
-              (identifier)
-              (arguments
-                (identifier)
-                (identifier))))
-          (atom_literal
-            (call
-              (identifier)
-              (arguments
-                (identifier)
-                (identifier))))
-          (comparison
-            (identifier)
-            (call
-              (identifier)
-              (arguments
-                (string
-                  (string_content))
-                (identifier)
-                (identifier))))))
       (field
         (block_path
           (identifier))
@@ -672,7 +642,30 @@ deny("prod_k8s_private_api", "prod k8s must have private api", { cluster: c }) i
               (identifier))
             (identifier)
             (string
-              (string_content)))))))
+              (string_content))))))
+    (clause
+      (body
+        (atom_literal
+          (call
+            (identifier)
+            (arguments
+              (identifier)
+              (identifier))))
+        (atom_literal
+          (call
+            (identifier)
+            (arguments
+              (identifier)
+              (identifier))))
+        (comparison
+          (identifier)
+          (call
+            (identifier)
+            (arguments
+              (string
+                (string_content))
+              (identifier)
+              (identifier)))))))
   (comment)
   (comment)
   (resource
@@ -681,19 +674,6 @@ deny("prod_k8s_private_api", "prod k8s must have private api", { cluster: c }) i
       (identifier))
     (identifier)
     (block
-      (clause
-        (body
-          (comparison
-            (identifier)
-            (identifier))
-          (atom_literal
-            (call
-              (identifier)
-              (arguments
-                (identifier)
-                (string
-                  (string_content))
-                (identifier))))))
       (field
         (block_path
           (identifier))
@@ -717,7 +697,20 @@ deny("prod_k8s_private_api", "prod k8s must have private api", { cluster: c }) i
                 (identifier))
               (identifier))
             (string
-              (string_content)))))))
+              (string_content))))))
+    (clause
+      (body
+        (comparison
+          (identifier)
+          (identifier))
+        (atom_literal
+          (call
+            (identifier)
+            (arguments
+              (identifier)
+              (string
+                (string_content))
+              (identifier)))))))
   (comment)
   (rule
     (call

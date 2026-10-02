@@ -13,9 +13,8 @@ const PROGRAM: &str = r#"edition 2026
 input node(name: string) from csv(git("ops.git", "main", "nodes.csv"))
 
 resource compute.vm "${n}" {
-  if node(n)
   size = 1
-}
+} where node(n)
 "#;
 
 fn setup(name: &str) -> (Scratch, String) {

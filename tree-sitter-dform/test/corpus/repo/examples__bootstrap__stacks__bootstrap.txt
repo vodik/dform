@@ -45,11 +45,10 @@ resource gke_cluster renfry {
 
 # One node pool per zone the cluster lands in.
 resource gke_nodepool "np-${z}" {
-  if z in renfry.zones
   cluster = renfry.id
   zone = z
   node_count = 1
-}
+} where z in renfry.zones
 
 provider_config("kubernetes", {
   host: renfry.endpoint,
@@ -62,13 +61,12 @@ resource k8s.namespace dform_system {
 
 # A node pool is up once it has an instance group. Apply gives it, so the
 # comparison is decided the tick after the pool is created.
-node_pool_up(np) if gke_nodepool[np].instance_group != ""
+node_pool_up(np) where gke_nodepool[np].instance_group != ""
 
 # dform in the cluster, running the workload stack: it lands on the first
 # zone's node pool once that pool is up. Until then the rule may derive
 # after the boundary, and the plan holds it as a pending group.
 resource k8s.deployment dform_controller {
-  if pool = "np-${renfry.zones[0]}", node_pool_up(pool)
   metadata.name = "dform-controller"
   metadata.namespace = dform_system.metadata.name
   metadata.annotations = { "dform.io/node-pool": gke_nodepool[pool].instance_group }
@@ -80,7 +78,7 @@ resource k8s.deployment dform_controller {
     image: "ghcr.io/renfry/dform:0.8",
     args: ["controller", "run", "renfry.workload"]
   }]
-}
+} where pool = "np-${renfry.zones[0]}", node_pool_up(pool)
 
 output endpoint = renfry.endpoint
 
@@ -196,13 +194,6 @@ output endpoint = renfry.endpoint
       (interpolation
         (identifier)))
     (block
-      (clause
-        (body
-          (in_literal
-            (identifier)
-            (member_expression
-              (identifier)
-              (identifier)))))
       (field
         (block_path
           (identifier))
@@ -216,7 +207,14 @@ output endpoint = renfry.endpoint
       (field
         (block_path
           (identifier))
-        (integer))))
+        (integer)))
+    (clause
+      (body
+        (in_literal
+          (identifier)
+          (member_expression
+            (identifier)
+            (identifier))))))
   (fact
     (call
       (identifier)
@@ -270,23 +268,6 @@ output endpoint = renfry.endpoint
       (identifier))
     (identifier)
     (block
-      (clause
-        (body
-          (comparison
-            (identifier)
-            (string
-              (string_content)
-              (interpolation
-                (index_expression
-                  (member_expression
-                    (identifier)
-                    (identifier))
-                  (integer)))))
-          (atom_literal
-            (call
-              (identifier)
-              (arguments
-                (identifier))))))
       (field
         (block_path
           (identifier)
@@ -365,7 +346,24 @@ output endpoint = renfry.endpoint
                 (string
                   (string_content))
                 (string
-                  (string_content)))))))))
+                  (string_content))))))))
+    (clause
+      (body
+        (comparison
+          (identifier)
+          (string
+            (string_content)
+            (interpolation
+              (index_expression
+                (member_expression
+                  (identifier)
+                  (identifier))
+                (integer)))))
+        (atom_literal
+          (call
+            (identifier)
+            (arguments
+              (identifier)))))))
   (output
     (identifier)
     (member_expression

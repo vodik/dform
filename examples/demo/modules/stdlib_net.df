@@ -6,7 +6,7 @@ policy stdlib_net {
   #| Deny if peered VPC CIDRs overlap.
   #|
   #| This is intentionally scoped to only VPCs connected by `vpc_peer/2`.
-  deny "peered vpc cidr overlaps" { a, b } if {
+  deny "peered vpc cidr overlaps" { a, b } where {
     vpc_peer(a, b)
     a in net.vpc
     b in net.vpc
@@ -14,5 +14,5 @@ policy stdlib_net {
   }
 
   #| Deny if any VM gets the unspecified IP.
-  deny "vm has unspecified ip" { vm } if vm in compute.vm, ip_unspecified(vm.private_ip)
+  deny "vm has unspecified ip" { vm } where vm in compute.vm, ip_unspecified(vm.private_ip)
 }

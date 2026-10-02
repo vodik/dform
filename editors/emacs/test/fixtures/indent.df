@@ -9,8 +9,18 @@ stack demo {
 }
 
 resource net.vpc main {
-  if zone in zones, zone != "excluded"
   cidr = "10.0.0.0/16"
-}
+} where zone in zones, zone != "excluded"
 
-rule_name(x) if a = 1, b = 2
+rule_name(x) where a = 1, b = 2
+
+resource net.subnet "s-${z}" {
+  cidr = inet_subnet(main.cidr, 8, n)
+  tags = {
+    zone: z
+  }
+} where {
+  zone(z, n)
+  z != "excluded"
+  z not in ["a zone list long enough", "that the body does not fit on its line"]
+}

@@ -55,7 +55,7 @@ fn a_deny_reading_a_stuck_predicate_may_derive_after_the_tick() {
     s.write(
         "extra.df",
         r#"edition 2026
-deny "no nodepool in zone z" {pool: n} if n in gke_nodepool, arg(gke_nodepool, n, "zone", "us-east1-z")
+deny "no nodepool in zone z" {pool: n} where n in gke_nodepool, arg(gke_nodepool, n, "zone", "us-east1-z")
 "#,
     );
     let r = gke(&s, &["extra.df"], "plan").success();
@@ -160,10 +160,10 @@ fn shadowed_and_conflicts_are_sections() {
         r#"edition 2026
 
 resource net.vpc main { cidr = "10.0.0.0/16" }
-set main.cidr = "10.1.0.0/16" if ok(1)
+set main.cidr = "10.1.0.0/16" where ok(1)
 resource net.vpc two @default { cidr = "10.0.0.0/16" }
-set two.cidr = "10.9.0.0/16" @default if ok(1)
-set two.cidr = "10.3.0.0/16" if ok(1)
+set two.cidr = "10.9.0.0/16" @default where ok(1)
+set two.cidr = "10.3.0.0/16" where ok(1)
 ok(1)
 "#,
     );
@@ -197,7 +197,7 @@ fn a_conflict_at_a_sensitive_path_is_redacted_in_the_plan() {
         r#"edition 2026
 
 resource leaky.vault v { password = "VAULT-SECRET-A" }
-set v.password = "VAULT-SECRET-B" if ok(1)
+set v.password = "VAULT-SECRET-B" where ok(1)
 ok(1)
 "#,
     );

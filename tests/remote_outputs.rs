@@ -19,9 +19,8 @@ output token: secret(string) = token
 const APP: &str = r#"edition 2026
 stack app {}
 resource net.vpc edge {
-  if stack_output("platform.cluster[env=prod]", "endpoint", e)
   name = e
-}
+} where stack_output("platform.cluster[env=prod]", "endpoint", e)
 "#;
 
 const SECRET: &str = "s3cr3t-token-value";
@@ -190,13 +189,11 @@ fn an_output_of_a_configured_attribute_is_published_resolved_or_pending() {
         "edition 2026\n\
          stack app {}\n\
          resource net.vpc edge {\n\
-           if stack_output(\"net\", \"c\", c)\n\
            cidr = c\n\
-         }\n\
+         } where stack_output(\"net\", \"c\", c)\n\
          resource net.vpc other {\n\
-           if stack_output(\"net\", \"n\", n)\n\
            name = n\n\
-         }\n\
+         } where stack_output(\"net\", \"n\", n)\n\
          ",
     );
     s.run(&["apply", "net"]).success();

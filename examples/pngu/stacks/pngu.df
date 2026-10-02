@@ -122,7 +122,7 @@ input peering(env: environment, name: string, peer_network: string) from csv("da
 # Validation
 ########################################
 
-deny "GKE static IPs must be INTERNAL" if cfg.gke.static_ips."pngu-grpc".type != "INTERNAL"
+deny "GKE static IPs must be INTERNAL" where cfg.gke.static_ips."pngu-grpc".type != "INTERNAL"
 
 ########################################
 # Resources (renfry module intent)
@@ -155,22 +155,20 @@ resource google_compute_subnetwork regional_proxy {
 
 # VPC peerings
 resource google_compute_network_peering "peering-${name}" {
-  if peering(env: env, name: name, peer_network: peer)
   project = cfg.project_id
   name = name
   network = "projects/${cfg.project_id}/global/networks/${cfg.network_name}"
   peer_network = peer
-}
+} where peering(env: env, name: name, peer_network: peer)
 
 # Static IPs for services
 resource google_compute_address "static-ip-${ip}" {
-  if ip = "pngu-grpc"
   project = cfg.project_id
   region = cfg.region
   name = ip
   address_type = cfg.gke.static_ips."pngu-grpc".type
   subnetwork_id = gke_subnet.id
-}
+} where ip = "pngu-grpc"
 
 ########################################
 # Resources (GKE module intent)

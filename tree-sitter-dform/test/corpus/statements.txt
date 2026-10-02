@@ -68,7 +68,7 @@ Declarations
 ================================================================================
 
 input env: enum("dev", "prod") = "dev"
-input replicas: int = 2 where replicas >= 1
+input replicas: int = 2 check replicas >= 1
 input seen(a, b) from facts("seen.facts")
 input peers(env: enum("dev", "prod"), name: string) from csv("peers.csv")
 input pinned(name: string) from yaml(git("ops.git", "main", "pinned.yaml"))
@@ -77,11 +77,11 @@ extern file.json(+path, -value: string) persist
 decl p(a, b) mixed
 decl project(id: int, name: string)
 type db.pg {
-  backup_days: int required where 1 <= backup_days <= 35
+  backup_days: int required check 1 <= backup_days <= 35
   net: { cidr: inet, id: string computed id }
 }
 let cfg = settings[env]
-let big = n if size(n), n > 3
+let big = n where size(n), n > 3
 
 --------------------------------------------------------------------------------
 
@@ -103,7 +103,7 @@ let big = n if size(n), n > 3
       (dotted_name
         (identifier)))
     (integer)
-    (where_clause
+    (refinement
       (body
         (comparison
           (identifier)
@@ -214,7 +214,7 @@ let big = n if size(n), n > 3
           (dotted_name
             (identifier)))
         (flag)
-        (where_clause
+        (refinement
           (body
             (comparison
               (integer)
@@ -265,16 +265,16 @@ module network {
   export subnet_of
   contributes t.tags
   output vpc: net.vpc = vpc
-  output n = 1 if q(1)
+  output n = 1 where q(1)
 }
 instance network main { vpc_net = cfg.network.main.vpc_net }
 policy tags {
-  set r.tags = { team: "x" } if r in resource
+  set r.tags = { team: "x" } where r in resource
 }
 use tags
 scenario prod {
   set env = "prod"
-  deny "no db" if _ in db.postgres
+  deny "no db" where _ in db.postgres
 }
 
 --------------------------------------------------------------------------------
@@ -364,14 +364,14 @@ Rules, facts, checks and contributions
 ================================================================================
 
 zone("a")
-names(n) if project(name: n)
-arg(t, a, "tags", { owner: "ops" }) @override if want(t, a)
+names(n) where project(name: n)
+arg(t, a, "tags", { owner: "ops" }) @override where want(t, a)
 set settings["prod"].audit.sinks += ["s3"]
-input("env", v) if q(v)
-deny("m", "t", { a: b }) if q(b)
-deny "m" { a } if q(a)
+input("env", v) where q(v)
+deny("m", "t", { a: b }) where q(b)
+deny "m" { a } where q(a)
 warn "w"
-deny "c ${x}" if not q(x)
+deny "c ${x}" where not q(x)
 
 --------------------------------------------------------------------------------
 
@@ -491,7 +491,7 @@ deny "c ${x}" if not q(x)
 Literals
 ================================================================================
 
-p(x) if q(x), x.a, x.b == 1, x in net.vpc, has x.c, not x.d, v = xs[i], x not in ys, not { r(x) }, e(a: x), y in resource, not "n" in net.vpc
+p(x) where q(x), x.a, x.b == 1, x in net.vpc, has x.c, not x.d, v = xs[i], x not in ys, not { r(x) }, e(a: x), y in resource, not "n" in net.vpc
 
 --------------------------------------------------------------------------------
 
@@ -567,7 +567,7 @@ p(x) if q(x), x.a, x.b == 1, x in net.vpc, has x.c, not x.d, v = xs[i], x not in
 Terms
 ================================================================================
 
-p(x) if y = 1 + 2 * 3 - -4 / (5 % 2), z = a / b, v = m.i.p, u = t[x].p, s = f[0].x, q("tags.a.b[0]", "id"), r = [x | q(x)], o = { a, "b-c": 1, type: 2 }, b = true
+p(x) where y = 1 + 2 * 3 - -4 / (5 % 2), z = a / b, v = m.i.p, u = t[x].p, s = f[0].x, q("tags.a.b[0]", "id"), r = [x | q(x)], o = { a, "b-c": 1, type: 2 }, b = true
 
 --------------------------------------------------------------------------------
 
@@ -719,3 +719,53 @@ module platform {
                 (identifier))))))
       (export
         (identifier)))))
+
+================================================================================
+A block's clause follows the block
+================================================================================
+
+resource net.subnet "s-${z}" {
+  zone = z
+} where {
+  zone(z)
+  z != "x"
+}
+instance network main {} where env == "prod"
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (string
+      (string_content)
+      (interpolation
+        (identifier)))
+    (block
+      (field
+        (block_path
+          (identifier))
+        (identifier)))
+    (clause
+      (body_block
+        (atom_literal
+          (call
+            (identifier)
+            (arguments
+              (identifier))))
+        (comparison
+          (identifier)
+          (string
+            (string_content))))))
+  (instance
+    (identifier)
+    (identifier)
+    (block)
+    (clause
+      (body
+        (comparison
+          (identifier)
+          (string
+            (string_content)))))))

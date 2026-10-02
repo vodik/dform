@@ -33,10 +33,10 @@ impl Lowerer<'_> {
         let mut settings = BTreeMap::new();
         let mut rc = self.rc(n, scope, outer);
         let mut body = Vec::new();
+        if let Some(c) = node(n, CLAUSE) {
+            return self.error(self.span(&c), "a provider or stack block takes no clause");
+        }
         if let Some(b) = &block {
-            if let Some(c) = node(b, CLAUSE) {
-                return self.error(self.span(&c), "a provider or stack block takes no clause");
-            }
             for a in b.children().filter(|c| c.kind() == ASSIGN) {
                 let at = self.span(&a);
                 let key = self.block_path(&node(&a, BLOCK_PATH).ok_or(Skip)?)?;

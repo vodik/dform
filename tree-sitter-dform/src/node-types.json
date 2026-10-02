@@ -302,7 +302,7 @@
           "named": true
         },
         {
-          "type": "where_clause",
+          "type": "refinement",
           "named": true
         }
       ]
@@ -416,10 +416,6 @@
       "multiple": true,
       "required": false,
       "types": [
-        {
-          "type": "clause",
-          "named": true
-        },
         {
           "type": "field",
           "named": true
@@ -1075,7 +1071,7 @@
       "required": false,
       "types": [
         {
-          "type": "where_clause",
+          "type": "refinement",
           "named": true
         }
       ]
@@ -1151,6 +1147,16 @@
           }
         ]
       }
+    },
+    "children": {
+      "multiple": false,
+      "required": false,
+      "types": [
+        {
+          "type": "clause",
+          "named": true
+        }
+      ]
     }
   },
   {
@@ -1558,6 +1564,16 @@
           }
         ]
       }
+    },
+    "children": {
+      "multiple": false,
+      "required": false,
+      "types": [
+        {
+          "type": "clause",
+          "named": true
+        }
+      ]
     }
   },
   {
@@ -1573,6 +1589,22 @@
           "named": true
         }
       ]
+    }
+  },
+  {
+    "type": "refinement",
+    "named": true,
+    "fields": {
+      "condition": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "body",
+            "named": true
+          }
+        ]
+      }
     }
   },
   {
@@ -1623,6 +1655,16 @@
           }
         ]
       }
+    },
+    "children": {
+      "multiple": false,
+      "required": false,
+      "types": [
+        {
+          "type": "clause",
+          "named": true
+        }
+      ]
     }
   },
   {
@@ -1801,6 +1843,16 @@
           }
         ]
       }
+    },
+    "children": {
+      "multiple": false,
+      "required": false,
+      "types": [
+        {
+          "type": "clause",
+          "named": true
+        }
+      ]
     }
   },
   {
@@ -1853,6 +1905,16 @@
           }
         ]
       }
+    },
+    "children": {
+      "multiple": false,
+      "required": false,
+      "types": [
+        {
+          "type": "clause",
+          "named": true
+        }
+      ]
     }
   },
   {
@@ -2047,22 +2109,6 @@
     }
   },
   {
-    "type": "where_clause",
-    "named": true,
-    "fields": {
-      "condition": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "body",
-            "named": true
-          }
-        ]
-      }
-    }
-  },
-  {
     "type": "!=",
     "named": false
   },
@@ -2155,6 +2201,10 @@
     "named": true
   },
   {
+    "type": "check",
+    "named": false
+  },
+  {
     "type": "comment",
     "named": true,
     "extra": true
@@ -2210,10 +2260,6 @@
   {
     "type": "identifier",
     "named": true
-  },
-  {
-    "type": "if",
-    "named": false
   },
   {
     "type": "import",

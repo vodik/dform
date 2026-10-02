@@ -109,7 +109,7 @@ fn program(s: &Scale) -> String {
         writeln!(out, "edge(\"r{i}\", \"r{}\")", i / 4).unwrap();
     }
     out.push_str(
-        "\nabove(a, b) if edge(a, b)\nabove(a, c) if above(a, b), edge(b, c)\ndepth(a, count(b)) if above(a, b)\n",
+        "\nabove(a, b) where edge(a, b)\nabove(a, c) where above(a, b), edge(b, c)\ndepth(a, count(b)) where above(a, b)\n",
     );
     for n in 0..16 {
         writeln!(out, "size_ok({n})").unwrap();
@@ -124,11 +124,11 @@ fn policy(s: &Scale) -> String {
     for k in 0..s.rules {
         let t = ty(k % s.types);
         let rule = match k % 5 {
-            0 => format!("set n.tags += {{ p{k}: \"on\" }} if n in {t}"),
-            1 => format!("warn \"big {t}\" {{ r: n }} if {t}[n].size > 14"),
-            2 => format!("deny \"odd size on {t}\" {{ r: n }} if s = {t}[n].size, not size_ok(s)"),
-            3 => format!("warn \"empty {t}\" {{ r: n }} if n in {t}, n.size == 0"),
-            _ => format!("per_type(\"{t}\", count(n)) if n in {t}"),
+            0 => format!("set n.tags += {{ p{k}: \"on\" }} where n in {t}"),
+            1 => format!("warn \"big {t}\" {{ r: n }} where {t}[n].size > 14"),
+            2 => format!("deny \"odd size on {t}\" {{ r: n }} where s = {t}[n].size, not size_ok(s)"),
+            3 => format!("warn \"empty {t}\" {{ r: n }} where n in {t}, n.size == 0"),
+            _ => format!("per_type(\"{t}\", count(n)) where n in {t}"),
         };
         writeln!(out, "  {rule}").unwrap();
     }

@@ -8,17 +8,17 @@ apply_policy base
 unique setting(2)
 when p(1) { q(1) }
 with env = "prod"
-constraint "m" if p(1)
+constraint "m" where p(1)
 apply base
 k = 1
 r.tags = {}
 decl p/2
 export p/2
 input relation p/2 from file("p.facts")
-s(x) if exists x
-t(x) if some x in [1]
-u(x) if q(x), x == .cidr
-v(x) if q{a: x}
+s(x) where exists x
+t(x) where some x in [1]
+u(x) where q(x), x == .cidr
+v(x) where q{a: x}
 resource t a {
   for q(x)
   b = x

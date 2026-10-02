@@ -24,7 +24,7 @@ pub enum SyntaxKind {
     COMMA,
     DOT,
     COLON,
-    /// `:-`: lexed only so an old rule is told it is spelled `if`.
+    /// `:-`: lexed only so an old rule is told it is spelled `where`.
     NECK,
     EQ,
     EQ2,
@@ -67,6 +67,10 @@ pub enum SyntaxKind {
     NOT_KW,
     IN_KW,
     HAS_KW,
+    /// `where`: the clause word, after the head (R-1).
+    WHERE_KW,
+    /// `if`: reserved, so that the clause word of an earlier surface is an
+    /// error that prints the `where` form.
     IF_KW,
     TRUE_KW,
     FALSE_KW,
@@ -84,11 +88,11 @@ pub enum SyntaxKind {
     IMPORT,
     PROVIDER,
     STACK,
-    /// `input k: T [= t] [where B]`.
+    /// `input k: T [= t] [check B]`.
     INPUT,
     /// `input p(cols) from FORMAT(SOURCE)`: a relation fed from outside.
     INPUT_RELATION,
-    /// `output k [: T] = t [if B]`.
+    /// `output k [: T] = t [where B]`.
     OUTPUT_DECL,
     EXPORT,
     CONTRIBUTES,
@@ -106,8 +110,7 @@ pub enum SyntaxKind {
     SCENARIO,
     RESOURCE,
     SETTINGS,
-    /// `{ [if body] entry* }` of a resource, settings, instance, provider
-    /// or stack.
+    /// `{ entry* }` of a resource, settings, instance, provider or stack.
     BLOCK,
     /// `path (=|+=) term [rank]` in a block.
     ASSIGN,
@@ -117,7 +120,9 @@ pub enum SyntaxKind {
     RULE,
     FACT,
     BODY,
-    WHERE_CLAUSE,
+    /// `check body` after an input's or a type attribute's type: a
+    /// refinement.
+    REFINEMENT,
     LIT_ATOM,
     LIT_NOT,
     LIT_CMP,
@@ -140,13 +145,13 @@ pub enum SyntaxKind {
     CHAIN,
     /// `[t, ...]` after a chain.
     INDEX,
-    /// `if body` at the top of a block.
+    /// `where body` after a block: its clause.
     CLAUSE,
-    /// `let k = t [if B]`.
+    /// `let k = t [where B]`.
     LET,
-    /// `set chain (=|+=) t [rank] [if B]`: a contribution.
+    /// `set chain (=|+=) t [rank] [where B]`: a contribution.
     SET,
-    /// `deny|warn "msg" [object] [if body]`.
+    /// `deny|warn "msg" [object] [where body]`.
     CHECK,
     /// A chain alone as a literal: a truth test.
     LIT_TRUTH,

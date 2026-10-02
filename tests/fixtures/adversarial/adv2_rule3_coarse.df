@@ -10,22 +10,21 @@ resource gke_cluster pngu {
 }
 
 resource gke_nodepool np {
-  if arg("gke_cluster", "pngu", "zones", zs), z in zs, np = format("np-%s", z)
   cluster = ref("gke_cluster", "pngu", "id")
   zone = z
-}
+} where arg("gke_cluster", "pngu", "zones", zs), z in zs, np = format("np-%s", z)
 
 resource k8s.namespace pngu {
   name = "pngu"
 }
 
 # Unrelated negation over want (different type): decidable now.
-deny "namespace without deployment" { ns: n } if n in k8s.namespace, not n in k8s.deployment
+deny "namespace without deployment" { ns: n } where n in k8s.namespace, not n in k8s.deployment
 
 # Unrelated aggregate over want (different type): decidable now.
-ns_count(collect_set(n)) if n in k8s.namespace
+ns_count(collect_set(n)) where n in k8s.namespace
 
-deny "need the pngu namespace" if ns_count(l), not "pngu" in l
+deny "need the pngu namespace" where ns_count(l), not "pngu" in l
 
 # Related negation (same type as the stuck head): correctly undetermined.
-deny "no nodepool in zone b" if "pngu" in gke_cluster, not "np-us-east1-b" in gke_nodepool
+deny "no nodepool in zone b" where "pngu" in gke_cluster, not "np-us-east1-b" in gke_nodepool

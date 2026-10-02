@@ -134,7 +134,7 @@ fn a_run_injects_the_schema_of_the_types_it_names() {
     let src = s.read("k8s_demo.df");
     s.write(
         "reads.df",
-        &format!("{src}\ncompletes(t) if type_attr(t, \"spec.completions\", _, _)\n"),
+        &format!("{src}\ncompletes(t) where type_attr(t, \"spec.completions\", _, _)\n"),
     );
     let r = dform(&s, None, &["query", "completes", "reads.df"]).success();
     assert!(r.stdout.contains("k8s.batch.v1.job"), "{}", r.stdout);
@@ -996,7 +996,7 @@ fn a_type_built_at_runtime_gets_the_whole_schema() {
     s.write(
         "k8s_demo.df",
         &format!(
-            "{}\nwant(t, \"batch\") if k = \"job\", t = \"k8s.batch.v1.${{k}}\"\n",
+            "{}\nwant(t, \"batch\") where k = \"job\", t = \"k8s.batch.v1.${{k}}\"\n",
             s.read("k8s_demo.df")
         ),
     );
@@ -1149,7 +1149,7 @@ fn a_kubeconfig_held_as_a_secret_configures_the_provider() {
         format!(
             "edition 2026\nprovider k8s {{ source = \"./providers/k8s\" }}\n\
              input kubeconfig: secret(string)\n\
-             provider_config(\"kubernetes\", {settings}) if kubeconfig(k)\n\
+             provider_config(\"kubernetes\", {settings}) where kubeconfig(k)\n\
              resource k8s.config_map settings {{\n  metadata.name = \"settings\"\n  \
              data = {{ \"MODE\": \"test\" }}\n}}\n"
         )
@@ -1450,10 +1450,9 @@ fn a_held_secret_is_read_from_the_cluster() {
          provider k8s { source = \"./providers/k8s\" }\n\
          input pw: secret(string)\n\
          resource k8s.secret creds {\n\
-           if pw(p)\n\
            metadata.name = \"creds\"\n\
            stringData = { pw: p }\n\
-         }\n\
+         } where pw(p)\n\
          output pw: secret(string) = creds.stringData.pw\n\
          ",
     );
@@ -1463,10 +1462,9 @@ fn a_held_secret_is_read_from_the_cluster() {
          stack b {}\n\
          provider k8s { source = \"./providers/k8s\" }\n\
          resource k8s.secret copy {\n\
-           if stack_output(\"a\", \"pw\", p)\n\
            metadata.name = \"copy\"\n\
            stringData = { pw: p }\n\
-         }\n\
+         } where stack_output(\"a\", \"pw\", p)\n\
          ",
     );
     let (api, url) = Api::start();

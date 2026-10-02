@@ -262,8 +262,8 @@ unknowns = "strict"
 stack p {}
 provider cloud {}
 resource x.thing a { size = 1 }
-pinned(n, c) if project_provider(n, c)
-default(k, v) if project_default(k, v)
+pinned(n, c) where project_provider(n, c)
+default(k, v) where project_default(k, v)
 "#,
     );
     // The provider is the manifest's source: its schema knows x.thing.
@@ -553,11 +553,10 @@ provider cloud { source = "providers/cloud" }
 extern file.text(+path, -value)
 input peer(name: string) from csv("data/peers.csv")
 input tag(t) from facts("data/tags.facts")
-note(v) if v = file.text["data/note.txt"]
+note(v) where v = file.text["data/note.txt"]
 resource x.thing "${n}" {
-  if peer(name: n), tag(g), note(v)
   label = "${n}-${g}-${v}"
-}
+} where peer(name: n), tag(g), note(v)
 "#,
     );
     let r = s.run(&["plan", "paths"]).success();

@@ -223,6 +223,18 @@
             "type": "SYMBOL",
             "name": "block"
           }
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "clause"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
         }
       ]
     },
@@ -302,6 +314,18 @@
             "type": "SYMBOL",
             "name": "block"
           }
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "clause"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
         }
       ]
     },
@@ -362,7 +386,7 @@
           "members": [
             {
               "type": "SYMBOL",
-              "name": "where_clause"
+              "name": "refinement"
             },
             {
               "type": "BLANK"
@@ -477,7 +501,7 @@
               "members": [
                 {
                   "type": "STRING",
-                  "value": "if"
+                  "value": "where"
                 },
                 {
                   "type": "FIELD",
@@ -531,7 +555,7 @@
               "members": [
                 {
                   "type": "STRING",
-                  "value": "if"
+                  "value": "where"
                 },
                 {
                   "type": "FIELD",
@@ -614,7 +638,7 @@
               "members": [
                 {
                   "type": "STRING",
-                  "value": "if"
+                  "value": "where"
                 },
                 {
                   "type": "FIELD",
@@ -966,7 +990,7 @@
                   "members": [
                     {
                       "type": "SYMBOL",
-                      "name": "where_clause"
+                      "name": "refinement"
                     },
                     {
                       "type": "BLANK"
@@ -1230,6 +1254,18 @@
             "type": "SYMBOL",
             "name": "block"
           }
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "clause"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
         }
       ]
     },
@@ -1356,6 +1392,18 @@
             "type": "SYMBOL",
             "name": "block"
           }
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "clause"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
         }
       ]
     },
@@ -1406,6 +1454,18 @@
             "type": "SYMBOL",
             "name": "block"
           }
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "clause"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
         }
       ]
     },
@@ -1427,51 +1487,8 @@
           "type": "CHOICE",
           "members": [
             {
-              "type": "CHOICE",
-              "members": [
-                {
-                  "type": "SEQ",
-                  "members": [
-                    {
-                      "type": "SYMBOL",
-                      "name": "clause"
-                    },
-                    {
-                      "type": "CHOICE",
-                      "members": [
-                        {
-                          "type": "SEQ",
-                          "members": [
-                            {
-                              "type": "SYMBOL",
-                              "name": "_separator"
-                            },
-                            {
-                              "type": "CHOICE",
-                              "members": [
-                                {
-                                  "type": "SYMBOL",
-                                  "name": "_fields"
-                                },
-                                {
-                                  "type": "BLANK"
-                                }
-                              ]
-                            }
-                          ]
-                        },
-                        {
-                          "type": "BLANK"
-                        }
-                      ]
-                    }
-                  ]
-                },
-                {
-                  "type": "SYMBOL",
-                  "name": "_fields"
-                }
-              ]
+              "type": "SYMBOL",
+              "name": "_fields"
             },
             {
               "type": "BLANK"
@@ -1563,7 +1580,7 @@
       "members": [
         {
           "type": "STRING",
-          "value": "if"
+          "value": "where"
         },
         {
           "type": "FIELD",
@@ -1752,7 +1769,7 @@
               "members": [
                 {
                   "type": "STRING",
-                  "value": "if"
+                  "value": "where"
                 },
                 {
                   "type": "FIELD",
@@ -1800,7 +1817,7 @@
         },
         {
           "type": "STRING",
-          "value": "if"
+          "value": "where"
         },
         {
           "type": "FIELD",
@@ -1841,12 +1858,12 @@
         }
       ]
     },
-    "where_clause": {
+    "refinement": {
       "type": "SEQ",
       "members": [
         {
           "type": "STRING",
-          "value": "where"
+          "value": "check"
         },
         {
           "type": "FIELD",
@@ -2516,7 +2533,7 @@
               },
               {
                 "type": "STRING",
-                "value": "where"
+                "value": "check"
               },
               {
                 "type": "STRING",
@@ -3271,6 +3288,10 @@
                 },
                 {
                   "type": "STRING",
+                  "value": "where"
+                },
+                {
+                  "type": "STRING",
                   "value": "if"
                 },
                 {
@@ -3295,7 +3316,7 @@
                 },
                 {
                   "type": "STRING",
-                  "value": "where"
+                  "value": "check"
                 },
                 {
                   "type": "STRING",
@@ -3477,6 +3498,10 @@
       {
         "type": "STRING",
         "value": "has"
+      },
+      {
+        "type": "STRING",
+        "value": "where"
       },
       {
         "type": "STRING",

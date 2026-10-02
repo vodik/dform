@@ -2,4 +2,4 @@ edition 2026
 
 # A path segment is one key: a quoted segment holding `.` cannot be one.
 q("prod")
-p(x) if q(e), x = settings[e].tags."a.b"
+p(x) where q(e), x = settings[e].tags."a.b"

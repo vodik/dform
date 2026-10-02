@@ -59,13 +59,11 @@ fn a_peering_between_unwanted_vpcs_is_blocked() {
 
 input_env("stg")
 resource net.vpc main {
-  if input_env("prod")
   cidr = "10.0.0.0/16"
-}
+} where input_env("prod")
 resource net.vpc peer {
-  if input_env("prod")
   cidr = "10.1.0.0/16"
-}
+} where input_env("prod")
 resource net.vpc_peering peer_main_peer {
   requester_vpc_id = ref(net.vpc, "main", "id")
   accepter_vpc_id = ref(net.vpc, "peer", "id")

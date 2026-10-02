@@ -18,7 +18,7 @@ provider gke {}
 
 input env: enum("dev", "stg", "prod") = "dev"
 # How many zones the cluster is placed in.
-input zones: int = 2 where zones >= 1
+input zones: int = 2 check zones >= 1
 
 zone_at(1, "us-east1-b")
 zone_at(2, "us-east1-c")
@@ -40,25 +40,22 @@ project(cfg.project_id, cfg.project_name, cfg.region,
   "projects/${cfg.project_id}/global/networks/${cfg.network_name}")
 
 resource google_compute_subnetwork gke_subnet {
-  if project(id, name, region, net_id)
   project = id
   region = region
   network = net_id
   name = "${name}-gke-subnet"
   ip_cidr_range = cfg.gke.subnet_cidr
-}
+} where project(id, name, region, net_id)
 
 # Carries a fresh null (subnetwork_id) and is still definite.
 resource google_compute_address static_ip {
-  if project(id, _, region, _)
   project = id
   region = region
   name = "pngu-grpc"
   subnetwork_id = gke_subnet.id
-}
+} where project(id, _, region, _)
 
 resource gke_cluster pngu {
-  if project(id, name, _, net_id)
   env = env
   project_id = id
   name = "${name}-gke"
@@ -67,7 +64,7 @@ resource gke_cluster pngu {
   master_control_plane_cidr = cfg.gke.control_plane_cidr
   node_locations = [ z | zone_at(i, z), i <= zones ]
   deletion_protection = true
-}
+} where project(id, name, _, net_id)
 
 # Provider configured from phase-1 nulls (two open, one secret).
 provider_config("kubernetes", {
@@ -82,30 +79,27 @@ resource k8s.namespace pngu {
 
 # A read in the clause is an attr join (the value now), not a reference.
 resource k8s.deployment api {
-  if ns = k8s.namespace["pngu"].name
   namespace = ns
   image = "gcr.io/renfry/api:1.42"
   replicas = 3
-}
+} where ns = k8s.namespace["pngu"].name
 
 resource k8s.secret db_credentials {
-  if ns = k8s.namespace["pngu"].name
   namespace = ns
   data = { password: google.secret_manager_secret_version["db_pw"].secret_data }
-}
+} where ns = k8s.namespace["pngu"].name
 
 # One nodepool per zone: member over an open null is a content position.
 resource gke_nodepool "np-${z}" {
-  if z in gke_cluster["pngu"].zones
   cluster = gke_cluster["pngu"].id
   zone = z
   min = 1
   max = 3
-}
+} where z in gke_cluster["pngu"].zones
 
-zone_count(count(z)) if z in gke_cluster["pngu"].zones
+zone_count(count(z)) where z in gke_cluster["pngu"].zones
 
-deny "cluster must be in at least two zones" { cluster: "pngu" } if {
+deny "cluster must be in at least two zones" { cluster: "pngu" } where {
   "pngu" in gke_cluster
   zone_count(n)
   n < 2
@@ -114,7 +108,10 @@ deny "cluster must be in at least two zones" { cluster: "pngu" } if {
 # A policy that has nothing to do with zones. Under coarse Rule 3 it would be
 # undetermined anyway (a `want` rule is stuck), which is the spurious case;
 # per key it is decided now, and holds.
-deny "cluster must not be deletable" { cluster: c } if c in gke_cluster, not c.deletion_protection
+deny "cluster must not be deletable" { cluster: c } where {
+  c in gke_cluster
+  not c.deletion_protection
+}
 
 ---
 
@@ -157,7 +154,7 @@ deny "cluster must not be deletable" { cluster: c } if c in gke_cluster, not c.d
       (dotted_name
         (identifier)))
     (integer)
-    (where_clause
+    (refinement
       (body
         (comparison
           (identifier)
@@ -251,16 +248,6 @@ deny "cluster must not be deletable" { cluster: c } if c in gke_cluster, not c.d
       (identifier))
     (identifier)
     (block
-      (clause
-        (body
-          (atom_literal
-            (call
-              (identifier)
-              (arguments
-                (identifier)
-                (identifier)
-                (identifier)
-                (identifier))))))
       (field
         (block_path
           (identifier))
@@ -287,23 +274,23 @@ deny "cluster must not be deletable" { cluster: c } if c in gke_cluster, not c.d
           (member_expression
             (identifier)
             (identifier))
-          (identifier)))))
+          (identifier))))
+    (clause
+      (body
+        (atom_literal
+          (call
+            (identifier)
+            (arguments
+              (identifier)
+              (identifier)
+              (identifier)
+              (identifier)))))))
   (comment)
   (resource
     (dotted_name
       (identifier))
     (identifier)
     (block
-      (clause
-        (body
-          (atom_literal
-            (call
-              (identifier)
-              (arguments
-                (identifier)
-                (identifier)
-                (identifier)
-                (identifier))))))
       (field
         (block_path
           (identifier))
@@ -322,22 +309,22 @@ deny "cluster must not be deletable" { cluster: c } if c in gke_cluster, not c.d
           (identifier))
         (member_expression
           (identifier)
-          (identifier)))))
+          (identifier))))
+    (clause
+      (body
+        (atom_literal
+          (call
+            (identifier)
+            (arguments
+              (identifier)
+              (identifier)
+              (identifier)
+              (identifier)))))))
   (resource
     (dotted_name
       (identifier))
     (identifier)
     (block
-      (clause
-        (body
-          (atom_literal
-            (call
-              (identifier)
-              (arguments
-                (identifier)
-                (identifier)
-                (identifier)
-                (identifier))))))
       (field
         (block_path
           (identifier))
@@ -389,7 +376,17 @@ deny "cluster must not be deletable" { cluster: c } if c in gke_cluster, not c.d
       (field
         (block_path
           (identifier))
-        (true))))
+        (true)))
+    (clause
+      (body
+        (atom_literal
+          (call
+            (identifier)
+            (arguments
+              (identifier)
+              (identifier)
+              (identifier)
+              (identifier)))))))
   (comment)
   (fact
     (call
@@ -442,18 +439,6 @@ deny "cluster must not be deletable" { cluster: c } if c in gke_cluster, not c.d
       (identifier))
     (identifier)
     (block
-      (clause
-        (body
-          (comparison
-            (identifier)
-            (member_expression
-              (index_expression
-                (member_expression
-                  (identifier)
-                  (identifier))
-                (string
-                  (string_content)))
-              (identifier)))))
       (field
         (block_path
           (identifier))
@@ -466,25 +451,25 @@ deny "cluster must not be deletable" { cluster: c } if c in gke_cluster, not c.d
       (field
         (block_path
           (identifier))
-        (integer))))
+        (integer)))
+    (clause
+      (body
+        (comparison
+          (identifier)
+          (member_expression
+            (index_expression
+              (member_expression
+                (identifier)
+                (identifier))
+              (string
+                (string_content)))
+            (identifier))))))
   (resource
     (dotted_name
       (identifier)
       (identifier))
     (identifier)
     (block
-      (clause
-        (body
-          (comparison
-            (identifier)
-            (member_expression
-              (index_expression
-                (member_expression
-                  (identifier)
-                  (identifier))
-                (string
-                  (string_content)))
-              (identifier)))))
       (field
         (block_path
           (identifier))
@@ -502,7 +487,19 @@ deny "cluster must not be deletable" { cluster: c } if c in gke_cluster, not c.d
                   (identifier))
                 (string
                   (string_content)))
-              (identifier)))))))
+              (identifier))))))
+    (clause
+      (body
+        (comparison
+          (identifier)
+          (member_expression
+            (index_expression
+              (member_expression
+                (identifier)
+                (identifier))
+              (string
+                (string_content)))
+            (identifier))))))
   (comment)
   (resource
     (dotted_name
@@ -512,16 +509,6 @@ deny "cluster must not be deletable" { cluster: c } if c in gke_cluster, not c.d
       (interpolation
         (identifier)))
     (block
-      (clause
-        (body
-          (in_literal
-            (identifier)
-            (member_expression
-              (index_expression
-                (identifier)
-                (string
-                  (string_content)))
-              (identifier)))))
       (field
         (block_path
           (identifier))
@@ -542,7 +529,17 @@ deny "cluster must not be deletable" { cluster: c } if c in gke_cluster, not c.d
       (field
         (block_path
           (identifier))
-        (integer))))
+        (integer)))
+    (clause
+      (body
+        (in_literal
+          (identifier)
+          (member_expression
+            (index_expression
+              (identifier)
+              (string
+                (string_content)))
+            (identifier))))))
   (rule
     (call
       (identifier)
@@ -591,7 +588,7 @@ deny "cluster must not be deletable" { cluster: c } if c in gke_cluster, not c.d
       (object_field
         (identifier)
         (identifier)))
-    (body
+    (body_block
       (in_literal
         (identifier)
         (identifier))

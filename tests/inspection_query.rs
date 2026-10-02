@@ -79,7 +79,7 @@ fn query_never_prints_a_labeled_secret() {
         "p.df",
         r#"edition 2026
 resource leaky.vault v { password = "VAULT-SECRET-DO-NOT-PRINT" }
-           note(n) if p = v.password, n = concat("pw is ", p)"#,
+           note(n) where p = v.password, n = concat("pw is ", p)"#,
     );
     let schema = repo().join("tests/fixtures/providers/leaky/schema.df");
     let q = |pattern: &str| {

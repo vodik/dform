@@ -1,1 +1,1 @@
-tests/syntax/err/pending_terms.df:5:16: expected `]`, found `ordered`
+tests/syntax/err/pending_terms.df:5:19: expected `]`, found `ordered`

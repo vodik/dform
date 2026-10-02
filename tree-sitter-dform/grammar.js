@@ -12,7 +12,7 @@
  *
  * One consequence: where a statement cannot end yet, a newline is
  * whitespace here but an end to the compiler, so a line broken after an
- * operator, a comma or `if`, or before a block's `{`, is an error only in
+ * operator, a comma or `where`, or before a block's `{`, is an error only in
  * the compiler's diagnostics.
  */
 
@@ -30,12 +30,13 @@ const STATEMENT_KEYWORDS = [
   'warn',
 ];
 
-// The body words and literals: never a name in a term.
-const TERM_WORDS = ['not', 'in', 'has', 'if', 'true', 'false'];
+// The body words, the clause word, the reserved `if` and the literals:
+// never a name in a term.
+const TERM_WORDS = ['not', 'in', 'has', 'where', 'if', 'true', 'false'];
 
 // Contextual words: plain names but where their construct is expected.
 const CONTEXTUAL = [
-  'from', 'mixed', 'persist', 'where',
+  'from', 'mixed', 'persist', 'check',
   'required', 'computed', 'id', 'sensitive', 'nullable',
 ];
 
@@ -134,13 +135,21 @@ export default grammar({
 
     import: $ => seq('import', field('path', $.string)),
 
-    provider: $ => seq('provider', field('name', $._word), field('body', $.block)),
+    // A provider's or stack's block takes no clause; the compiler's
+    // resolver says so, so the grammar takes one as the parser does.
+    provider: $ => seq(
+      'provider',
+      field('name', $._word),
+      field('body', $.block),
+      optional($.clause),
+    ),
 
     stack: $ => seq(
       'stack',
       field('name', $.dotted_name),
       optional(seq('[', commaSep1(field('key', $._word)), ']')),
       field('body', $.block),
+      optional($.clause),
     ),
 
     input: $ => seq(
@@ -149,7 +158,7 @@ export default grammar({
       ':',
       field('type', $._type),
       optional(seq('=', field('default', $._term))),
-      optional($.where_clause),
+      optional($.refinement),
     ),
 
     // `input p(cols) from SOURCE`: a relation the world gives.
@@ -161,32 +170,32 @@ export default grammar({
       field('source', $._term),
     ),
 
-    // `output k: T = t [if B]`: one statement.
+    // `output k: T = t [where B]`: one statement.
     output: $ => seq(
       'output',
       field('name', $._word),
       optional(seq(':', field('type', $._type))),
       optional(seq('=', field('value', $._term))),
-      optional(seq('if', field('condition', $._body))),
+      optional(seq('where', field('condition', $._body))),
     ),
 
-    // `let k = t [if B]`: a value.
+    // `let k = t [where B]`: a value.
     let: $ => seq(
       'let',
       field('name', $._word),
       '=',
       field('value', $._term),
-      optional(seq('if', field('condition', $._body))),
+      optional(seq('where', field('condition', $._body))),
     ),
 
-    // `set r.p = t [@rank] [if B]`: a contribution.
+    // `set r.p = t [@rank] [where B]`: a contribution.
     set: $ => seq(
       'set',
       field('target', $._chain),
       field('operator', choice('=', '+=')),
       field('value', $._term),
       optional(field('rank', $.rank)),
-      optional(seq('if', field('condition', $._body))),
+      optional(seq('where', field('condition', $._body))),
     ),
 
     export: $ => seq(
@@ -236,7 +245,7 @@ export default grammar({
           // A `{` here opens a nested attribute block, never a record type.
           field('type', choice($.type, $.string)),
           repeat($.flag),
-          optional($.where_clause),
+          optional($.refinement),
         ),
       ),
     ),
@@ -269,6 +278,7 @@ export default grammar({
       field('module', $._word),
       field('name', $._word),
       field('body', $.block),
+      optional($.clause),
     ),
 
     use: $ => seq('use', field('name', $._word)),
@@ -287,6 +297,7 @@ export default grammar({
       field('name', choice($._word, $.string)),
       optional(field('rank', $.rank)),
       field('body', $.block),
+      optional($.clause),
     ),
 
     settings: $ => seq(
@@ -294,18 +305,15 @@ export default grammar({
       field('name', choice($._word, $.string)),
       optional(field('rank', $.rank)),
       field('body', $.block),
+      optional($.clause),
     ),
 
     // A resource's, settings row's, instance's, provider's or stack's
-    // entries: one `if` clause first, then fields, separated by a newline
-    // or a comma.
+    // entries, separated by a newline or a comma. Its clause follows it.
     block: $ => seq(
       '{',
       repeat($._newline),
-      optional(choice(
-        seq($.clause, optional(seq($._separator, optional($._fields)))),
-        $._fields,
-      )),
+      optional($._fields),
       '}',
     ),
 
@@ -316,7 +324,8 @@ export default grammar({
 
     _separator: $ => choice(seq(',', repeat($._newline)), repeat1($._newline)),
 
-    clause: $ => seq('if', field('condition', $._body)),
+    // `where B` after a block: the block is the head (R-1).
+    clause: $ => seq('where', field('condition', $._body)),
 
     field: $ => seq(
       field('path', $.block_path),
@@ -338,13 +347,13 @@ export default grammar({
       field('kind', choice('deny', 'warn')),
       field('message', $.string),
       optional(field('details', $.object)),
-      optional(seq('if', field('condition', $._body))),
+      optional(seq('where', field('condition', $._body))),
     ),
 
     rule: $ => seq(
       field('head', $.call),
       optional(field('rank', $.rank)),
-      'if',
+      'where',
       field('body', $._body),
     ),
 
@@ -353,7 +362,8 @@ export default grammar({
       optional(field('rank', $.rank)),
     ),
 
-    where_clause: $ => seq('where', field('condition', $.body)),
+    // `check B` after an input's or an attribute's type: a refinement.
+    refinement: $ => seq('check', field('condition', $.body)),
 
     // --- bodies and literals -------------------------------------------------
 

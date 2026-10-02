@@ -30,7 +30,7 @@ fn the_partition_graph_dashes_negative_edges() {
     s.write("schema.df", "edition 2026\n");
     s.write(
         "p.df",
-        "edition 2026\np(1)\np(2)\nr(2)\nq(x) if p(x), not r(x)\ns(x) if q(x)",
+        "edition 2026\np(1)\np(2)\nr(2)\nq(x) where p(x), not r(x)\ns(x) where q(x)",
     );
     let run = |prog: &str| s.run(&["dev", "--provider", "schema.df", "graph", "--strata", prog]);
     let out = run("p.df").success().stdout;
@@ -43,7 +43,7 @@ fn the_partition_graph_dashes_negative_edges() {
     // the cycle.
     s.write(
         "bad.df",
-        "edition 2026\np(1)\na(x) if p(x), not b(x)\nb(x) if p(x), not a(x)",
+        "edition 2026\np(1)\na(x) where p(x), not b(x)\nb(x) where p(x), not a(x)",
     );
     let bad = run("bad.df").failure();
     assert!(

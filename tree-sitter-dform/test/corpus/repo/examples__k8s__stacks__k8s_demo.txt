@@ -29,7 +29,6 @@ resource k8s.config_map web_config {
 }
 
 resource k8s.deployment name {
-  if app(name, image, replicas)
   metadata.name = name
   metadata.namespace = shop.metadata.name
   spec.replicas = replicas
@@ -41,15 +40,14 @@ resource k8s.deployment name {
     ports: [{ containerPort: 8080, protocol: "TCP" }],
     envFrom: [{ configMapRef: { name: web_config.metadata.name } }]
   }]
-}
+} where app(name, image, replicas)
 
 resource k8s.service name {
-  if app(name, _, _)
   metadata.name = name
   metadata.namespace = shop.metadata.name
   spec.selector = { app: name }
   spec.ports = [{ port: 80, targetPort: 8080, protocol: "TCP" }]
-}
+} where app(name, _, _)
 
 ---
 
@@ -142,15 +140,6 @@ resource k8s.service name {
       (identifier))
     (identifier)
     (block
-      (clause
-        (body
-          (atom_literal
-            (call
-              (identifier)
-              (arguments
-                (identifier)
-                (identifier)
-                (identifier))))))
       (field
         (block_path
           (identifier)
@@ -225,22 +214,22 @@ resource k8s.service name {
                           (member_expression
                             (identifier)
                             (identifier))
-                          (identifier)))))))))))))
+                          (identifier))))))))))))
+    (clause
+      (body
+        (atom_literal
+          (call
+            (identifier)
+            (arguments
+              (identifier)
+              (identifier)
+              (identifier)))))))
   (resource
     (dotted_name
       (identifier)
       (identifier))
     (identifier)
     (block
-      (clause
-        (body
-          (atom_literal
-            (call
-              (identifier)
-              (arguments
-                (identifier)
-                (identifier)
-                (identifier))))))
       (field
         (block_path
           (identifier)
@@ -278,4 +267,13 @@ resource k8s.service name {
             (object_field
               (identifier)
               (string
-                (string_content)))))))))
+                (string_content)))))))
+    (clause
+      (body
+        (atom_literal
+          (call
+            (identifier)
+            (arguments
+              (identifier)
+              (identifier)
+              (identifier))))))))

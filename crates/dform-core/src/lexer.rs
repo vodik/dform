@@ -109,7 +109,8 @@ fn kind(t: Tok) -> SyntaxKind {
 }
 
 /// The keywords, each its token kind: the 22 a statement starts with,
-/// the body words, the block clause and the literals (H section 4).
+/// the body words, the clause word `where` (R-1) and the literals (H
+/// section 4).
 pub const KEYWORDS: &[(&str, SyntaxKind)] = &[
     ("edition", EDITION_KW),
     ("import", IMPORT_KW),
@@ -136,7 +137,7 @@ pub const KEYWORDS: &[(&str, SyntaxKind)] = &[
     ("not", NOT_KW),
     ("in", IN_KW),
     ("has", HAS_KW),
-    ("if", IF_KW),
+    ("where", WHERE_KW),
     ("true", TRUE_KW),
     ("false", FALSE_KW),
 ];
@@ -145,6 +146,11 @@ pub const KEYWORDS: &[(&str, SyntaxKind)] = &[
 /// as the keyword; the parser takes one as a plain name wherever a name is
 /// expected and the keyword's own construct is not.
 pub fn keyword(text: &str) -> Option<SyntaxKind> {
+    // `if` is no keyword but reserved: the clause word of an earlier
+    // surface, lexed so the parser can print the `where` form (R-1).
+    if text == "if" {
+        return Some(IF_KW);
+    }
     KEYWORDS.iter().find(|(w, _)| *w == text).map(|(_, k)| *k)
 }
 
@@ -217,9 +223,11 @@ mod tests {
     #[test]
     fn keywords_are_kinds_but_longer_names_are_not() {
         assert_eq!(
-            kinds("resource resources if iff not in inet when for some"),
+            kinds("resource resources where wheres if iff not in inet when for some"),
             vec![
                 RESOURCE_KW,
+                IDENT,
+                WHERE_KW,
                 IDENT,
                 IF_KW,
                 IDENT,
@@ -243,7 +251,7 @@ mod tests {
 
     #[test]
     fn lossless() {
-        let src = "p(a, \"b${x}\") if q(x), # c\n  x != 1\n\u{1F600}";
+        let src = "p(a, \"b${x}\") where q(x), # c\n  x != 1\n\u{1F600}";
         let toks = lex(src);
         let text: String = toks.iter().map(|t| &src[t.start..t.end]).collect();
         assert_eq!(text, src);

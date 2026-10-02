@@ -14,7 +14,7 @@ fn a_recursive_walk_reads_linearly() {
     for i in 0..n {
         src.push_str(&format!("edge({i}, {})\n", i + 1));
     }
-    src.push_str("reach(x) if start(x)\nreach(y) if reach(x), edge(x, y)\n");
+    src.push_str("reach(x) where start(x)\nreach(y) where reach(x), edge(x, y)\n");
     let r = run(&src);
     assert_eq!(r.facts.iter().filter(|a| a.pred == "reach").count(), n + 1);
     assert!(

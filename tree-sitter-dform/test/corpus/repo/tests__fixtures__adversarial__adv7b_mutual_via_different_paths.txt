@@ -13,12 +13,11 @@ resource net.vpc x {
   z = 1
 }
 
-set x.y = p if x in net.vpc, arg(net.subnet, "y", "x", p)
+set x.y = p where x in net.vpc, arg(net.subnet, "y", "x", p)
 
 resource net.subnet y {
-  if arg(net.vpc, "x", "z", q)
   x = q
-}
+} where arg(net.vpc, "x", "z", q)
 
 ---
 
@@ -68,21 +67,21 @@ resource net.subnet y {
       (identifier))
     (identifier)
     (block
-      (clause
-        (body
-          (atom_literal
-            (call
-              (identifier)
-              (arguments
-                (member_expression
-                  (identifier)
-                  (identifier))
-                (string
-                  (string_content))
-                (string
-                  (string_content))
-                (identifier))))))
       (field
         (block_path
           (identifier))
-        (identifier)))))
+        (identifier)))
+    (clause
+      (body
+        (atom_literal
+          (call
+            (identifier)
+            (arguments
+              (member_expression
+                (identifier)
+                (identifier))
+              (string
+                (string_content))
+              (string
+                (string_content))
+              (identifier))))))))

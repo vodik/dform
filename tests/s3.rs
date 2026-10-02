@@ -693,9 +693,8 @@ const PERSISTED: &str = r#"edition 2026
 stack p {}
 extern random.password(+name, -value) persist
 resource db.user app {
-  if random.password("app", pw)
   password = pw
-}
+} where random.password("app", pw)
 "#;
 
 /// `state taint` finds an s3 stack's state through its program's backend.
@@ -744,13 +743,12 @@ output vpc_id = ref(net.vpc, "main", "id")
 const APP: &str = r#"edition 2026
 stack app {}
 resource net.subnet a {
-  if {
+  cidr = c
+  vpc_id = v
+} where {
     stack_output("net.shared", "vpc_cidr", c)
     stack_output("net.shared", "vpc_id", v)
   }
-  cidr = c
-  vpc_id = v
-}
 "#;
 
 /// Another stack reads an s3 stack's outputs from the object it publishes
@@ -877,7 +875,7 @@ fn a_server_that_ignores_conditions_is_refused() {
     let p = Project::of(&t, "lax-approval", |s| {
         s.write(
             "stacks/app.df",
-            "edition 2026\nstack app {}\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nrequires_approval(d, \"every change\") if {\ndeformation(_, t, a, _)\nd = \"${t}[\\\"${a}\\\"]\"\n}\n",
+            "edition 2026\nstack app {}\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nrequires_approval(d, \"every change\") where {\ndeformation(_, t, a, _)\nd = \"${t}[\\\"${a}\\\"]\"\n}\n",
         );
     });
     let r = p.run(&["plan", "app"]).failure();
@@ -925,9 +923,8 @@ fn a_project_reads_another_projects_outputs_through_its_s3_backend() {
             "edition 2026\n\
              stack app {}\n\
              resource net.vpc edge {\n\
-               if stack_output(\"platform.cluster[env=prod]\", \"endpoint\", e)\n\
                name = e\n\
-             }\n\
+             } where stack_output(\"platform.cluster[env=prod]\", \"endpoint\", e)\n\
              ",
         );
         let mut c = p.command(&["plan", "app"], &[]);

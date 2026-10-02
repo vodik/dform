@@ -13,7 +13,7 @@ fn plan(s: &Scratch, src: &str) -> Run {
     s.run(&["dev", "--world", "w.json", "plan", "p.df"])
 }
 
-const SETTINGS: &str = "edition 2026\ntype settings {\n  db.backup_days: int where 1 <= db.backup_days <= 35\n}\nsettings prod @default { db = { backup_days: 3 } }\nsettings prod { db = { backup_days: 14 } }\n";
+const SETTINGS: &str = "edition 2026\ntype settings {\n  db.backup_days: int check 1 <= db.backup_days <= 35\n}\nsettings prod @default { db = { backup_days: 3 } }\nsettings prod { db = { backup_days: 14 } }\n";
 
 /// A constraint is never out-ranked: an `@override` whose value violates
 /// it is a deny naming the refinement's place and both witnesses, and the
@@ -26,7 +26,7 @@ fn an_override_that_violates_a_refinement_is_a_deny() {
         &s,
         &format!(
             "{SETTINGS}days(40)\n\
-             set settings[\"prod\"].db.backup_days = d @override if days(d)\n"
+             set settings[\"prod\"].db.backup_days = d @override where days(d)\n"
         ),
     )
     .failure();
@@ -57,7 +57,7 @@ fn an_override_that_violates_a_refinement_is_a_deny() {
         &s,
         &format!(
             "{SETTINGS}days(40)\n\
-             set settings[\"prod\"].db.backup_days = d @default if days(d)\n"
+             set settings[\"prod\"].db.backup_days = d @default where days(d)\n"
         ),
     )
     .success();
@@ -70,7 +70,7 @@ fn a_literal_that_violates_a_refinement_is_a_compile_error() {
     let s = Scratch::new("refine-literal");
     let r = plan(
         &s,
-        "edition 2026\ntype settings {\n  db.backup_days: int where 1 <= db.backup_days <= 35\n}\nsettings prod { db = { backup_days: 40 } }\n",
+        "edition 2026\ntype settings {\n  db.backup_days: int check 1 <= db.backup_days <= 35\n}\nsettings prod { db = { backup_days: 40 } }\n",
     )
     .failure();
     assert!(
@@ -231,7 +231,7 @@ fn e0306_a_refinement_on_a_sensitive_path_the_provider_cannot_check() {
     .unwrap();
     s.write(
         "p.df",
-        "edition 2026\nprovider k8s { source = \"./providers/k8s\" }\ntype k8s.secret {\n  data.password: string where len(data.password) >= 16\n}\nresource k8s.secret db { metadata.name = \"db\", data = { password: \"x\" } }\n",
+        "edition 2026\nprovider k8s { source = \"./providers/k8s\" }\ntype k8s.secret {\n  data.password: string check len(data.password) >= 16\n}\nresource k8s.secret db { metadata.name = \"db\", data = { password: \"x\" } }\n",
     );
     let out = common::dform()
         .args(["plan", "p.df"])
@@ -310,7 +310,7 @@ fn an_unknown_function_or_a_bad_pattern_is_a_compile_error() {
     let s = Scratch::new("refine-unknown");
     let r = plan(
         &s,
-        "edition 2026\ntype app.thing {\n  name: string where frobnicate(name) == 3\n}\nresource app.thing a { name = \"x\" }\n",
+        "edition 2026\ntype app.thing {\n  name: string check frobnicate(name) == 3\n}\nresource app.thing a { name = \"x\" }\n",
     )
     .failure();
     assert!(
@@ -321,7 +321,7 @@ fn an_unknown_function_or_a_bad_pattern_is_a_compile_error() {
     );
     let r = plan(
         &s,
-        "edition 2026\ntype app.thing {\n  name: string where matches(name, \"a(\")\n}\n",
+        "edition 2026\ntype app.thing {\n  name: string check matches(name, \"a(\")\n}\n",
     )
     .failure();
     assert!(
@@ -330,7 +330,7 @@ fn an_unknown_function_or_a_bad_pattern_is_a_compile_error() {
         "{}",
         r.stderr
     );
-    let r = plan(&s, "edition 2026\ninput n: int = 1 where frob(n) == 1\n").failure();
+    let r = plan(&s, "edition 2026\ninput n: int = 1 check frob(n) == 1\n").failure();
     assert!(
         r.stderr
             .contains("p.df:2:1: in a refinement: unknown function frob"),

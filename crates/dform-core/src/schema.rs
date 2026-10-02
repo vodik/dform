@@ -792,6 +792,6 @@ mod tests {
         )
         .unwrap_err();
         assert!(format!("{e:#}").contains("unknown flag 'computd'"), "{e:#}");
-        assert!(Schema::parse("type_attr(\"t\", x, \"string\", []) if foo(x)", "test").is_err());
+        assert!(Schema::parse("type_attr(\"t\", x, \"string\", []) where foo(x)", "test").is_err());
     }
 }

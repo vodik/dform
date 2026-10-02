@@ -335,14 +335,12 @@ pub fn header(n: &SyntaxNode) -> Option<Header> {
     }
     let type_tokens: Vec<SyntaxToken> = rest.iter().skip(1).cloned().collect();
     let typ = type_tokens.iter().map(|t| t.text()).collect::<String>();
-    let block = n.children().find(|c| c.kind() == SyntaxKind::BLOCK);
-    let bound = block.is_some_and(|b| {
-        b.children()
-            .filter(|c| c.kind() == SyntaxKind::CLAUSE)
-            .flat_map(|c| c.descendants_with_tokens())
-            .filter_map(|e| e.into_token())
-            .any(|t| t.kind() == SyntaxKind::IDENT && t.text() == name.text())
-    });
+    let bound = n
+        .children()
+        .filter(|c| c.kind() == SyntaxKind::CLAUSE)
+        .flat_map(|c| c.descendants_with_tokens())
+        .filter_map(|e| e.into_token())
+        .any(|t| t.kind() == SyntaxKind::IDENT && t.text() == name.text());
     Some(Header {
         typ,
         name: name.clone(),
@@ -886,11 +884,11 @@ module network {
     tags = { env: env }
   }
   output vpc: net.vpc = vpc
-  q(x) if zone_index[x] = 1, vpc.cidr == x
+  q(x) where zone_index[x] = 1, vpc.cidr == x
 }
 instance network main { vpc_net = inet(cfg.a) }
 resource compute.vm bastion { private_ip = 1 }
-p(a) if a = net.vpc["network.main::vpc"].id, c = network.main.vpc, b = network[a].vpc, bastion.id == 1, bastion in compute.vm
+p(a) where a = net.vpc["network.main::vpc"].id, c = network.main.vpc, b = network[a].vpc, bastion.id == 1, bastion in compute.vm
 zone_index("a", 0)
 "#;
 
@@ -963,15 +961,15 @@ module a {
   helper(1)
   shared(1)
   contributes shared
-  q(x) if helper(x), shared(x)
+  q(x) where helper(x), shared(x)
 }
 module b {
   export helper
   helper(2)
-  r(x) if helper(x)
+  r(x) where helper(x)
 }
 helper(3)
-s(x) if helper(x), b.one.helper(x), shared(x)
+s(x) where helper(x), b.one.helper(x), shared(x)
 "#;
 
     #[test]

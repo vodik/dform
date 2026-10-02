@@ -16,12 +16,11 @@ module network {
   zone_index("us-test-1b", 1)
 
   resource net.subnet "private-${z}" {
-    if data("zone", z)
     vpc_id = vpc.id
     cidr = inet_subnet(vpc.cidr, 4, zone_index[z])
     zone = z
     visibility = "private"
-  }
+  } where data("zone", z)
 
   output vpc: net.vpc = vpc
   output private_subnet_ids: list(ref(net.subnet)) = [ s.id | s in net.subnet, s.visibility == "private" ]
@@ -83,15 +82,6 @@ module network {
           (interpolation
             (identifier)))
         (block
-          (clause
-            (body
-              (atom_literal
-                (call
-                  (identifier)
-                  (arguments
-                    (string
-                      (string_content))
-                    (identifier))))))
           (field
             (block_path
               (identifier))
@@ -119,7 +109,16 @@ module network {
             (block_path
               (identifier))
             (string
-              (string_content)))))
+              (string_content))))
+        (clause
+          (body
+            (atom_literal
+              (call
+                (identifier)
+                (arguments
+                  (string
+                    (string_content))
+                  (identifier)))))))
       (output
         (identifier)
         (type

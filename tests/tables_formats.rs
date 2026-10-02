@@ -154,7 +154,7 @@ fn an_enum_a_missing_and_an_extra_column_are_errors() {
     let s = scratch("strict");
     s.write(
         "p.df",
-        "edition 2026\ninput t(name: string) from json(\"t.json\")\nwarn \"${n}\" if t(n)\n",
+        "edition 2026\ninput t(name: string) from json(\"t.json\")\nwarn \"${n}\" where t(n)\n",
     );
     s.write("t.json", "[{\"name\": 3}]");
     let r = s.run(&["plan", "p.df"]).failure();
@@ -177,9 +177,8 @@ input env: enum("dev", "prod") = "dev"
 input node(name: string) from csv("data/${env}.csv")
 
 resource compute.vm "${n}" {
-  if node(n)
   size = 1
-}
+} where node(n)
 "#,
     );
     s.write("data/dev.csv", "name\nd1\n");
@@ -201,7 +200,7 @@ fn a_table_whose_source_reads_its_rows_is_a_compile_error() {
     let s = scratch("cycle");
     s.write(
         "p.df",
-        "edition 2026\ninput t(p: string) from csv(\"${src}\")\nlet src = p if t(p)\n",
+        "edition 2026\ninput t(p: string) from csv(\"${src}\")\nlet src = p where t(p)\n",
     );
     let r = s.run(&["plan", "p.df"]).failure();
     assert!(

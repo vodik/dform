@@ -345,7 +345,7 @@ mod tests {
 
     #[test]
     fn a_join_is_keyed_on_the_columns_bound_before_it() {
-        let b = body("h(x, z) if p(x, y), q(y, \"k\", z), not r(z)");
+        let b = body("h(x, z) where p(x, y), q(y, \"k\", z), not r(z)");
         let reads: Vec<&Read> = b.reads().collect();
         assert_eq!(reads[0].key, Vec::<usize>::new());
         assert!(matches!(b.ops[0], Op::Scan(_)));
@@ -364,7 +364,7 @@ mod tests {
 
     #[test]
     fn an_equality_binds_and_a_repeated_variable_is_loose() {
-        let b = body("h(x) if y = 1, p(y, x, x)");
+        let b = body("h(x) where y = 1, p(y, x, x)");
         assert!(matches!(b.ops[0], Op::Map { .. }));
         let r = b.reads().next().unwrap();
         assert_eq!(r.key, vec![0]);

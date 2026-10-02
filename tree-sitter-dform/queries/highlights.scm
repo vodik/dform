@@ -114,7 +114,7 @@
   "module" "instance" "policy" "use" "scenario" "resource" "settings"
 ] @keyword
 
-["if" "where"] @keyword.conditional
+["where" "check"] @keyword.conditional
 ["deny" "warn"] @keyword.exception
 ["not" "in" "has"] @keyword.operator
 

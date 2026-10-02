@@ -29,7 +29,7 @@ provider random {}
 
 input env: enum("dev", "prod") = "dev"
 input region: string = "us-east1"
-input replicas: int = 2 where replicas >= 1
+input replicas: int = 2 check replicas >= 1
 
 # release("crud_api", "digest", "sha256:9f2c...")
 # release("crud_api", "schema", 42)
@@ -49,8 +49,8 @@ let cfg = settings[env]
 # The release, and what the world runs now
 ########################################
 
-let digest = d if release("crud_api", "digest", d)
-let schema = v if release("crud_api", "schema", v)
+let digest = d where release("crud_api", "digest", d)
+let schema = v where release("crud_api", "schema", v)
 let released_image = "gcr.io/shop/crud-api@${digest}"
 
 # The live Service's selector names the serving color; nothing serves yet
@@ -64,11 +64,11 @@ other("blue", "green")
 other("green", "blue")
 
 let next = other[active]
-let next = "blue" if not has active
+let next = "blue" where not has active
 
 # A rollout is needed when the serving Deployment does not run the release.
-let rollout = next if live_image != released_image
-let rollout = next if not has active
+let rollout = next where live_image != released_image
+let rollout = next where not has active
 
 ########################################
 # The database: private, regional in prod, password from an extern
@@ -160,7 +160,7 @@ resource k8s.job "migrate-v${schema}" {
 
 # status.succeeded is an open null until the Job finishes: until then
 # migrated/1 is undetermined and so is everything gated on it.
-migrated(schema) if k8s.job["migrate-v${schema}"].status.succeeded == 1
+migrated(schema) where k8s.job["migrate-v${schema}"].status.succeeded == 1
 
 ########################################
 # The app, one instance per running color
@@ -169,35 +169,33 @@ migrated(schema) if k8s.job["migrate-v${schema}"].status.succeeded == 1
 # The serving color keeps what it runs; the rollout color runs the release,
 # once the migration has reached the release's schema.
 run(active, live_image, live_schema)
-run(rollout, released_image, schema) if migrated(schema)
+run(rollout, released_image, schema) where migrated(schema)
 
 instance app blue {
-  if run("blue", image, version)
   color = "blue"
   image = image
   schema = version
   namespace = shop.metadata.name
   db_secret = db_conn.metadata.name
   replicas = replicas
-}
+} where run("blue", image, version)
 
 instance app green {
-  if run("green", image, version)
   color = "green"
   image = image
   schema = version
   namespace = shop.metadata.name
   db_secret = db_conn.metadata.name
   replicas = replicas
-}
+} where run("green", image, version)
 
 # A color is ready when every replica it wants is ready (open nulls until
 # the Deployment reports).
-ready(c) if run(c, _, _), app[c].ready_replicas == app[c].total_replicas
+ready(c) where run(c, _, _), app[c].ready_replicas == app[c].total_replicas
 
-let cutover = rollout if ready(rollout)
+let cutover = rollout where ready(rollout)
 let serving = cutover
-let serving = active if not has cutover
+let serving = active where not has cutover
 
 resource k8s.service api {
   metadata.name = "crud-api"
@@ -264,27 +262,27 @@ module app {
 
   # Only while the instance runs: a color with no run has no Deployment,
   # and a ref to it would dangle.
-  output ready_replicas: int = n if has color, n = deploy.status.readyReplicas
-  output total_replicas: int = n if has color, n = deploy.status.replicas
+  output ready_replicas: int = n where has color, n = deploy.status.readyReplicas
+  output total_replicas: int = n where has color, n = deploy.status.replicas
 }
 
 ########################################
 # Rollout invariants
 ########################################
 
-deny "migration failed; the rollout is held" { job: "migrate-v${schema}" } if {
+deny "migration failed; the rollout is held" { job: "migrate-v${schema}" } where {
   c in k8s.job["migrate-v${schema}"].status.conditions
   c.type == "Failed"
   c.status == "True"
 }
 
-deny "a rollout runs a schema the migration has not reached" { color: c, schema: v } if {
+deny "a rollout runs a schema the migration has not reached" { color: c, schema: v } where {
   run(c, _, v)
   c == rollout
   not migrated(v)
 }
 
-deny "cutover to a color with unready pods" { color: c } if {
+deny "cutover to a color with unready pods" { color: c } where {
   c = api.spec.selector.color
   c != active
   not ready(c)
@@ -294,44 +292,44 @@ deny "cutover to a color with unready pods" { color: c } if {
 # Best practice
 ########################################
 
-container(w, c) if w in k8s.deployment, c in w.spec.template.spec.containers
-container(w, c) if w in k8s.job, c in w.spec.template.spec.containers
+container(w, c) where w in k8s.deployment, c in w.spec.template.spec.containers
+container(w, c) where w in k8s.job, c in w.spec.template.spec.containers
 
-deny "container without resource limits" { workload: w, container: c.name } if {
+deny "container without resource limits" { workload: w, container: c.name } where {
   container(w, c)
   not has c.resources.limits
 }
 
-deny "image not pinned by digest" { workload: w, image: c.image } if {
+deny "image not pinned by digest" { workload: w, image: c.image } where {
   container(w, c)
   len(split(c.image, "@sha256:")) != 2
 }
 
-deny "prod database must be regional" { db: d } if {
+deny "prod database must be regional" { db: d } where {
   env == "prod"
   d in google_sql_database_instance
   not d.settings.availability_type == "REGIONAL"
 }
 
 # Absent is public: Cloud SQL's default for ipv4_enabled is true.
-deny "database has a public IP" { db: d } if {
+deny "database has a public IP" { db: d } where {
   d in google_sql_database_instance
   not d.settings.ip_configuration.ipv4_enabled == false
 }
 
-default_deny(ns) if {
+default_deny(ns) where {
   p in k8s.network_policy
   ns = p.metadata.namespace
   not has p.spec.podSelector.matchLabels
   "Ingress" in p.spec.policyTypes
 }
 
-deny "namespace without a default-deny network policy" { namespace: n } if {
+deny "namespace without a default-deny network policy" { namespace: n } where {
   n in k8s.namespace
   not default_deny(n.metadata.name)
 }
 
-deny "prod workload runs a single replica" { hpa: h } if {
+deny "prod workload runs a single replica" { hpa: h } where {
   env == "prod"
   h in k8s.horizontal_pod_autoscaler
   h.spec.minReplicas < 2
@@ -346,4 +344,4 @@ owned_label("app")
 owned_label("color")
 owned_label("schema")
 
-auto_reconcile(t, a, p) if drift(t, a, p, _, _), owned_label(l), p == "metadata.labels.${l}"
+auto_reconcile(t, a, p) where drift(t, a, p, _, _), owned_label(l), p == "metadata.labels.${l}"

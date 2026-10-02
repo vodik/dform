@@ -81,8 +81,8 @@ resource net.subnet public {
 # 3. Many resources from one rule
 #
 # A line like `zone("us-test-1a", 1)` is a fact: a row in a table named
-# `zone`. The block below has an `if`, which makes it a rule: one subnet
-# for every row that matches, named by `"private-${z}"`. It is
+# `zone`. The block below has a `where` clause, which makes it a rule: one
+# subnet for every row that matches, named by `"private-${z}"`. It is
 # Terraform's `for_each`, over a table instead of a map, and the
 # condition can join several tables, as later sections do.
 # `inet_subnet(main.cidr, 8, n)` cuts the network's range into /24s and
@@ -104,12 +104,11 @@ zone("us-test-1a", 1)
 zone("us-test-1b", 2)
 
 resource net.subnet "private-${z}" {
-  if zone(z, n)
   vpc_id = main.id
   cidr = inet_subnet(main.cidr, 8, n)
   zone = z
   visibility = "private"
-}
+} where zone(z, n)
 
 # 4. Settings per environment, and a deployment per environment
 #
@@ -178,9 +177,9 @@ resource db.postgres orders {
 # that refused it. There is no separate step: every plan and every apply
 # checks every deny.
 
-set r.tags = { team: "shop" } if r in resource
+set r.tags = { team: "shop" } where r in resource
 
-deny "a database must not be public" { database: pg } if pg in db.postgres, pg.public
+deny "a database must not be public" { database: pg } where pg in db.postgres, pg.public
 
 # 6. Why
 #
@@ -228,11 +227,10 @@ module network {
   }
 
   resource net.subnet "private-${z}" {
-    if zone(z, n)
     vpc_id = vpc.id
     cidr = inet_subnet(cidr, 8, n)
     zone = z
-  }
+  } where zone(z, n)
 
   output vpc: net.vpc = vpc
 }
@@ -266,14 +264,13 @@ spoke("green")
 
 hub("main")
 
-network_of(h, h) if hub(h)
-network_of(t, v) if spoke(t), v = network[t].vpc
+network_of(h, h) where hub(h)
+network_of(t, v) where spoke(t), v = network[t].vpc
 
 resource net.vpc_peering "main-${t}" {
-  if spoke(t), v = network[t].vpc
   requester_vpc_id = main.id
   accepter_vpc_id = net.vpc[v].id
-}
+} where spoke(t), v = network[t].vpc
 
 # 9. Rules that recurse
 #
@@ -292,18 +289,17 @@ resource net.vpc_peering "main-${t}" {
 # (`"blue"` is in it too: blue to main and back.) The routes follow,
 # `blue-to-green` among them.
 
-link(h, t) if hub(h), spoke(t)
-link(t, h) if hub(h), spoke(t)
+link(h, t) where hub(h), spoke(t)
+link(t, h) where hub(h), spoke(t)
 
-reaches(a, b) if link(a, b)
-reaches(a, c) if reaches(a, b), link(b, c)
+reaches(a, b) where link(a, b)
+reaches(a, c) where reaches(a, b), link(b, c)
 
 resource net.route "${a}-to-${b}" {
-  if reaches(a, b), a != b, network_of(b, v), dest = net.vpc[v].cidr
   from = a
   to = b
   destination = dest
-}
+} where reaches(a, b), a != b, network_of(b, v), dest = net.vpc[v].cidr
 
 # 10. A name only apply learns
 #
@@ -328,9 +324,8 @@ resource net.route "${a}-to-${b}" {
 #   stack tour is undeformed
 
 resource iam.policy "connect-${host}" {
-  if pg in db.postgres, host = pg.endpoint
   statements = [{ action: "db.connect", resource: host }]
-}
+} where pg in db.postgres, host = pg.endpoint
 
 # 11. Where to go next
 #
@@ -342,7 +337,7 @@ resource iam.policy "connect-${host}" {
 #   pngu       a table read from a CSV file
 #   advanced   more recursion: reachability, routes, group membership
 #   adopt      taking over a resource that already exists
-#   refine     types with conditions (`where`), checked when values are known
+#   refine     types with conditions (`check`), checked when values are known
 #   gke        a provider configured from values only apply learns
 #   k8s, aws   other fake providers, shaped like Kubernetes and AWS
 #   bootstrap  two stacks, one of them a controller's

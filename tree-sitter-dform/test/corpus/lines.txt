@@ -3,7 +3,7 @@ A newline ends a statement
 ================================================================================
 
 p(a)
-q(b) if p(b)
+q(b) where p(b)
 let k = 1
 
 --------------------------------------------------------------------------------
@@ -79,7 +79,7 @@ let o = { a: 1,
 A body block separates literals by newlines or commas
 ================================================================================
 
-deny "m" if {
+deny "m" where {
   env == "prod", vpc in net.vpc
   not vpc.private
 }
@@ -111,11 +111,10 @@ Blocks: one clause first, then fields, by newline or comma
 ================================================================================
 
 resource net.subnet "private-${z}" @default {
-  if data("zone", z), z != "x"
   vpc_id = vpc.id, zone = z
   tags.team += ["a"] @override
   list[0]."k-v" = 1
-}
+} where data("zone", z), z != "x"
 
 --------------------------------------------------------------------------------
 
@@ -130,19 +129,6 @@ resource net.subnet "private-${z}" @default {
         (identifier)))
     (rank)
     (block
-      (clause
-        (body
-          (atom_literal
-            (call
-              (identifier)
-              (arguments
-                (string
-                  (string_content))
-                (identifier))))
-          (comparison
-            (identifier)
-            (string
-              (string_content)))))
       (field
         (block_path
           (identifier))
@@ -167,7 +153,20 @@ resource net.subnet "private-${z}" @default {
           (integer)
           (string
             (string_content)))
-        (integer)))))
+        (integer)))
+    (clause
+      (body
+        (atom_literal
+          (call
+            (identifier)
+            (arguments
+              (string
+                (string_content))
+              (identifier))))
+        (comparison
+          (identifier)
+          (string
+            (string_content)))))))
 
 ================================================================================
 Two statements on one line
@@ -203,12 +202,12 @@ q(x) :- p(x)
 
 
 ================================================================================
-An if on the next line does not attach
+A where on the next line does not attach
 :error
 ================================================================================
 
 p(a)
-  if q(a)
+  where q(a)
 
 --------------------------------------------------------------------------------
 
@@ -219,7 +218,7 @@ A leading comma does not continue a line
 :error
 ================================================================================
 
-p(a) if q(a)
+p(a) where q(a)
   , r(a)
 
 --------------------------------------------------------------------------------
@@ -238,14 +237,36 @@ resource net.vpc a { cidr = "x" name = "a" }
 
 
 ================================================================================
-A clause after a field
+A clause inside a block
 :error
 ================================================================================
 
 resource net.vpc a {
   cidr = "x"
-  if q(x)
+  where q(x)
 }
+
+--------------------------------------------------------------------------------
+
+
+
+================================================================================
+The clause word is where
+:error
+================================================================================
+
+p(a) if q(a)
+
+--------------------------------------------------------------------------------
+
+
+
+================================================================================
+A refinement is check
+:error
+================================================================================
+
+input k: int = 1 where k > 0
 
 --------------------------------------------------------------------------------
 

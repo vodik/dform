@@ -1,0 +1,22 @@
+tests/syntax/err/if_is_gone.df:7:6: expected `where` or the end of the line, found keyword `if`
+  help: the clause word is `where` (R-1): `p(x) where zone(x)`
+tests/syntax/err/if_is_gone.df:8:6: expected `where` or the end of the line, found keyword `if`
+  help: the clause word is `where` (R-1): `q(x) where { .. }`
+tests/syntax/err/if_is_gone.df:12:14: expected `where` or the end of the line, found keyword `if`
+  help: the clause word is `where` (R-1): `let size = 1 where env == "prod"`
+tests/syntax/err/if_is_gone.df:13:17: expected `where` or the end of the line, found keyword `if`
+  help: the clause word is `where` (R-1): `set r.tags = {} where r in resource`
+tests/syntax/err/if_is_gone.df:14:19: expected `where` or the end of the line, found keyword `if`
+  help: the clause word is `where` (R-1): `output n: int = 1 where zone("a")`
+tests/syntax/err/if_is_gone.df:15:17: expected `where` or the end of the line, found keyword `if`
+  help: the clause word is `where` (R-1): `deny "no zones" where not zone(_)`
+tests/syntax/err/if_is_gone.df:16:16: expected `where` or the end of the line, found keyword `if`
+  help: the clause word is `where` (R-1): `warn "m" { z } where zone(z)`
+tests/syntax/err/if_is_gone.df:18:3: expected an entry or `}`, found keyword `if`
+  help: a block's clause follows the block (R-1): `resource net.vpc "v-${z}" { .. } where zone(z)`
+tests/syntax/err/if_is_gone.df:21:14: expected an entry or `}`, found keyword `if`
+  help: a block's clause follows the block (R-1): `settings s { .. } where ..`
+tests/syntax/err/if_is_gone.df:23:3: expected an entry or `}`, found keyword `if`
+  help: a block's clause follows the block (R-1): `instance m i { .. } where { .. }`
+tests/syntax/err/if_is_gone.df:29:3: expected `where` or the end of the line, found keyword `if`
+  help: the clause word is `where` (R-1): `resource net.vpc w { .. } where zone("a")`

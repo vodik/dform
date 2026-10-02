@@ -7,7 +7,7 @@ tests/syntax/err/old_spellings.df:7:1: expected a statement, found `apply_policy
 tests/syntax/err/old_spellings.df:8:1: expected a statement, found `unique`
   help: `unique` is gone: one value per key is what the attribute aggregate enforces
 tests/syntax/err/old_spellings.df:9:1: expected a statement, found `when`
-  help: statement groups are gone (H-4): put `if B` on each statement, or gate a group of resources by an `instance` with an `if` clause
+  help: statement groups are gone (H-4): put `where B` on each statement, or gate a group of resources by an `instance` with a `where` clause
 tests/syntax/err/old_spellings.df:10:1: expected a statement, found `with`
   help: `with k = v` is spelled `set k = v`
 tests/syntax/err/old_spellings.df:11:1: expected a statement, found `constraint`
@@ -24,15 +24,15 @@ tests/syntax/err/old_spellings.df:16:9: expected the end of the line, found `/`
   help: a relation is exported by its name: `export p`
 tests/syntax/err/old_spellings.df:17:7: expected `:` or `(` after the input's name, found `p`
   help: `input relation p(cols) from ..` is spelled `input p(cols) from ..`, and `from file(..)` is `from facts(..)`
-tests/syntax/err/old_spellings.df:18:9: expected a literal, found `exists`
+tests/syntax/err/old_spellings.df:18:12: expected a literal, found `exists`
   help: `exists R` is `R in T` (H-9): a resource named in scope is its address
-tests/syntax/err/old_spellings.df:19:9: expected a literal, found `some`
+tests/syntax/err/old_spellings.df:19:12: expected a literal, found `some`
   help: `some x in e` is `x in e`; `some i, x in e` is `x = e[i]` (H-9)
-tests/syntax/err/old_spellings.df:20:20: expected a term, found `.`
+tests/syntax/err/old_spellings.df:20:23: expected a term, found `.`
   help: a path that is data is a string (`"cidr"`, H-12); a `.` is member access
-tests/syntax/err/old_spellings.df:21:10: expected the end of the term, found `{`
+tests/syntax/err/old_spellings.df:21:13: expected the end of the term, found `{`
   help: a record atom `p{a: x}` is spelled with named arguments, `p(a: x)`
 tests/syntax/err/old_spellings.df:23:3: expected an entry or `}`, found `for`
-  help: a block's clause is spelled `if` (H-3)
+  help: a block's clause follows the block (R-1): `resource t a { .. } where q(x)`
 tests/syntax/err/old_spellings.df:26:1: expected a statement, found `/`
   help: a comment starts with `#`

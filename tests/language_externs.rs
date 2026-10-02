@@ -12,18 +12,16 @@ extern random.password(+name, -value) persist
 extern random.token(+name, -value)
 dash("dash.json")
 resource mon.dashboard main {
-  if dash(p), file.json(p, d), file.text("note.txt", t)
   json = d
   note = t
-}
+} where dash(p), file.json(p, d), file.text("note.txt", t)
 resource db.user app {
-  if {
+  password = pw
+  token = tk
+} where {
     random.password("app", pw)
     random.token("app", tk)
   }
-  password = pw
-  token = tk
-}
 "#;
 
 fn scratch() -> Scratch {

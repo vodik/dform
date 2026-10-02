@@ -13,21 +13,21 @@ policy baseline {
   type_lattice(settings, "audit.sinks", "set")
 
   # Example: add a shared tag to everything.
-  set r.tags = { team: "platform" } if r in resource
+  set r.tags = { team: "platform" } where r in resource
 
   # Example: policy pack can contribute directly to an IAM policy. Reads
   # .name of the type it writes .statements on: legal under (type, path)
   # partitions.
-  set p.statements = [{ action: "org.read", resource: "org" }] if {
+  set p.statements = [{ action: "org.read", resource: "org" }] where {
     env == "prod"
     p in iam.policy
     p.name == "app"
   }
 
-  deny "db must not be public" { resource: pg } if pg in db.postgres, not pg.public == false
+  deny "db must not be public" { resource: pg } where pg in db.postgres, not pg.public == false
 
   #| Prod should enable audit logging.
-  warn "prod should enable audit logging" { env: "prod" } if {
+  warn "prod should enable audit logging" { env: "prod" } where {
     env == "prod"
     not settings["prod"].audit.enabled
   }

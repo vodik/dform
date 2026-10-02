@@ -300,7 +300,7 @@ fn plan_reads_an_input_relation_and_rejects_a_stray_fact() {
     );
     s.write(
         "bad.df",
-        "edition 2026\n\ninput r(a) from facts(url(\"http://x\"))\nq(x) if r(x)\n",
+        "edition 2026\n\ninput r(a) from facts(url(\"http://x\"))\nq(x) where r(x)\n",
     );
     let r = s.run(&["plan", "bad.df"]).failure();
     assert!(

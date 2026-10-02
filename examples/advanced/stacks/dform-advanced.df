@@ -35,7 +35,7 @@ settings prod {
 corp_net(inet("10.100.0.0/12"))
 
 # Explode tenant list into a relation (Pattern A), with index.
-tenant(t, i) if t = settings[env].tenants[i]
+tenant(t, i) where t = settings[env].tenants[i]
 
 # Shared services VPC (always exists)
 resource net.vpc shared {
@@ -45,10 +45,9 @@ resource net.vpc shared {
 
 # One VPC per tenant, with deterministic CIDRs derived from corp_net.
 resource net.vpc t {
-  if tenant(t, i), corp_net(corp)
   cidr = inet_subnet(corp, 4, i)
   tags = { segment: "tenant", tenant: t }
-}
+} where tenant(t, i), corp_net(corp)
 
 # Peering intent.
 # In staging, only tenant_a peers with shared.
@@ -56,28 +55,27 @@ resource net.vpc t {
 # A fact and a guarded fact (a rule): declared mixed (E 2.6).
 decl peer_intent(tenant) mixed
 peer_intent("tenant_a")
-peer_intent("tenant_b") if env == "prod"
+peer_intent("tenant_b") where env == "prod"
 
-peer("shared", t) if peer_intent(t), tenant(t, _)
+peer("shared", t) where peer_intent(t), tenant(t, _)
 
 # Convert peer intent into directed graph edges.
 # (Peering is bidirectional in this demo.)
-link(a, b) if peer(a, b)
-link(b, a) if peer(a, b)
+link(a, b) where peer(a, b)
+link(b, a) where peer(a, b)
 
 # Fixpoint 1: transitive closure for reachability.
-reachable(a, b) if link(a, b)
-reachable(a, c) if reachable(a, b), link(b, c)
+reachable(a, b) where link(a, b)
+reachable(a, c) where reachable(a, b), link(b, c)
 
 # Derived infra: create a route for every reachable pair (excluding self).
 # `dest` is bound in the clause, so it is read now (an attr join);
 # `destination = net.vpc[b].cidr` would be a reference.
 resource net.route "rt-${a}-${b}" {
-  if reachable(a, b), a != b, dest = net.vpc[b].cidr
   from = a
   to = b
   destination = dest
-}
+} where reachable(a, b), a != b, dest = net.vpc[b].cidr
 
 # Policy: warn if we materialize *direct* routes between non-adjacent nodes in the mesh.
 #
@@ -87,12 +85,12 @@ resource net.route "rt-${a}-${b}" {
 #
 # In some orgs you may want transitive reachability without generating a direct
 # route for every transitive pair (or you may want to require explicit allows).
-mesh_node(n) if mesh_vpc(n, _, _)
+mesh_node(n) where mesh_vpc(n, _, _)
 
-mesh_adjacent(a, b) if mesh_peer(a, b)
-mesh_adjacent(b, a) if mesh_peer(a, b)
+mesh_adjacent(a, b) where mesh_peer(a, b)
+mesh_adjacent(b, a) where mesh_peer(a, b)
 
-mesh_non_adjacent_pair(a, b) if {
+mesh_non_adjacent_pair(a, b) where {
   mesh_node(a)
   mesh_node(b)
   a != b
@@ -100,7 +98,7 @@ mesh_non_adjacent_pair(a, b) if {
   not mesh_adjacent(a, b)
 }
 
-warn "mesh has direct route between non-adjacent nodes" { from: a, to: b } if {
+warn "mesh has direct route between non-adjacent nodes" { from: a, to: b } where {
   mesh_non_adjacent_pair(a, b)
   "rt-${a}-${b}" in net.route
   not mesh_allow_direct_route(a, b)
@@ -117,17 +115,16 @@ decl mesh_allow_direct_route(from, to)
 # We immediately explode it into row facts, then derive edges, then rely on
 # reachability closure to fill in the implied connectivity.
 
-mesh_vpc(name, cidr, i) if settings[env].mesh.vpcs[i] = { name, net: cidr }
+mesh_vpc(name, cidr, i) where settings[env].mesh.vpcs[i] = { name, net: cidr }
 
 resource net.vpc name {
-  if mesh_vpc(name, cidr, _)
   cidr = cidr
   tags = { segment: "mesh" }
-}
+} where mesh_vpc(name, cidr, _)
 
 # Derive a sparse base graph: connect consecutive VPCs in the list.
 # The reachability closure will infer core_a -> core_c via core_b.
-mesh_peer(a, b) if {
+mesh_peer(a, b) where {
   mesh_vpc(a, cidr_a, ia)
   mesh_vpc(b, cidr_b, ib)
   ib == ia + 1
@@ -135,24 +132,23 @@ mesh_peer(a, b) if {
 }
 
 # Feed the derived edges into the global peering/link graph.
-peer(a, b) if mesh_peer(a, b)
+peer(a, b) where mesh_peer(a, b)
 
 # Optional: materialize the derived peerings as explicit peering resources.
 resource net.vpc_peering "mesh-peer-${a}-${b}" {
-  if mesh_peer(a, b)
   requester_vpc_id = net.vpc[a].id
   accepter_vpc_id = net.vpc[b].id
-}
+} where mesh_peer(a, b)
 
 # Policy 1: peered VPCs must not overlap.
-deny "peered vpcs must not overlap" { a, b } if {
+deny "peered vpcs must not overlap" { a, b } where {
   peer(a, b)
   inet_overlaps(net.vpc[a].cidr, net.vpc[b].cidr)
 }
 
 # Policy 2: tenant isolation.
 # Only enforced in prod, and depends on the reachability closure.
-deny "tenant isolation violated" { a, b } if {
+deny "tenant isolation violated" { a, b } where {
   env == "prod"
   tenant(a, _)
   tenant(b, _)
@@ -168,7 +164,7 @@ group_edge("oncall", "sre")
 group_member("alice", "oncall")
 group_member("bob", "sre")
 
-in_group(u, g) if group_member(u, g)
-in_group(u, g2) if in_group(u, g1), group_edge(g1, g2)
+in_group(u, g) where group_member(u, g)
+in_group(u, g2) where in_group(u, g1), group_edge(g1, g2)
 
-warn "user is effectively admin (via group nesting)" { user: u } if in_group(u, "admins")
+warn "user is effectively admin (via group nesting)" { user: u } where in_group(u, "admins")

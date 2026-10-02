@@ -1,4 +1,4 @@
-//! Refinement types (E DR-13, F DR-13 revised): `where` on a `type` block
+//! Refinement types (E DR-13, F DR-13 revised): `check` on a `type` block
 //! attribute, on an input, and the provider schema fact
 //! `type_refine(T, Path, Constraint)`.
 //!
@@ -25,7 +25,7 @@
 //! lowers to a `deny` rule with the refinement's span. A literal value that
 //! violates a checkable refinement is a compile error.
 //!
-//! In a `where`, the attribute is written by its path (`db.backup_days`) or
+//! In a `check`, the attribute is written by its path (`db.backup_days`) or
 //! its name in its block (`backup_days`); an input by its name.
 
 use crate::ast::{Atom, AttrDecl, Lit, Program, RuleStmt, Span, Stmt, Term, TypeExpr};
@@ -232,12 +232,12 @@ pub fn of_type(t: &TypeExpr) -> Option<Constraint> {
     }
 }
 
-/// A `where` body over the value written `names`, split into what fits the
+/// A `check` body over the value written `names`, split into what fits the
 /// checkable table and the rest (which lowers to a deny). A literal fits
 /// when it reads the value alone: `lo <= x <= hi` (both bounds: a range;
 /// one alone does not fit), `x == v`, `x in [..]`, `len(x) OP n`,
 /// `prefix_len(x) OP n`, `matches(x, "re")`. The split is sound because a
-/// `where` is a conjunction: `not (A, B)` is `not A` or `not B`, and a
+/// `check` is a conjunction: `not (A, B)` is `not A` or `not B`, and a
 /// literal that fits shares no variable with the rest.
 pub fn split(body: &[Lit], names: &[&str]) -> (Vec<Constraint>, Vec<Lit>) {
     let is_self = |t: &Term| matches!(t, Term::Val(Value::Str(s)) if names.contains(&s.as_str()));
@@ -403,7 +403,7 @@ pub fn from_assertion(op: &str, v: &serde_json::Value) -> Option<Constraint> {
     .ok()
 }
 
-/// The part of a `where` that lowers to a deny, checked at compile time:
+/// The part of a `check` that lowers to a deny, checked at compile time:
 /// a call to a function the evaluator does not have would have no value
 /// and deny every value, and `matches(x, "re")` refines the value itself
 /// with a pattern that compiles.
@@ -461,7 +461,7 @@ pub fn check_rest(rest: &[Lit], span: Span) -> Vec<Diagnostic> {
     out
 }
 
-/// An input's `where`, split. A secret input's refinement is checked by its
+/// An input's `check`, split. A secret input's refinement is checked by its
 /// deny rule, whose message never prints the value (the static secret pass
 /// exempts it); it has no provider to defer to.
 pub fn split_input(i: &crate::ast::InputDecl) -> (Vec<Constraint>, Vec<Lit>) {
@@ -503,7 +503,7 @@ pub fn refine_fact(typ: &str, addr: Option<&str>, path: &str, c: &Constraint, sp
 
 /// Every top-level `type T { ... }` block as its refinements: a
 /// `type_refine` fact per checkable refinement and declared scalar type,
-/// and a deny rule per attribute whose `where` does not fit the table. A
+/// and a deny rule per attribute whose `check` does not fit the table. A
 /// type block elsewhere stays pending (and is rejected there).
 pub fn lower_types(program: &Program) -> Result<Program> {
     let mut out = Vec::new();
@@ -603,7 +603,7 @@ fn read_attr(typ: &str, addr: &Term, path: &str, v: &Term, n: usize, span: Span)
     ]
 }
 
-/// `where R` that does not fit the table, on `typ`'s `path`: the value and
+/// `check R` that does not fit the table, on `typ`'s `path`: the value and
 /// every other attribute of the block `R` names are read, and
 /// `deny("refinement violated", {...}) :- reads, not ok(A, V)` with
 /// `ok(A, V) :- reads, R`.
@@ -846,7 +846,7 @@ pub fn check(program: &Program, schema: &Schema) -> Result<()> {
         Some(at) => d.with_label(at, format!("refined here: {}", r.constraint)),
         None => d.with_note(format!("the provider schema states {}", r.describe())),
     };
-    // One E0306 per refinement written (a `where` and its declared type are
+    // One E0306 per refinement written (a `check` and its declared type are
     // one site).
     let mut e0306 = BTreeSet::new();
     for r in &refs {
@@ -952,8 +952,8 @@ mod tests {
     use super::*;
 
     fn lits(src: &str) -> Vec<Lit> {
-        // A `where` names the attribute by its text.
-        let p = crate::parser::parse_literal_text(&format!("x(1) if {src}")).unwrap();
+        // A `check` names the attribute by its text.
+        let p = crate::parser::parse_literal_text(&format!("x(1) where {src}")).unwrap();
         match p.statements.as_slice() {
             [Stmt::Rule(r)] => r.body.clone(),
             other => panic!("{other:?}"),

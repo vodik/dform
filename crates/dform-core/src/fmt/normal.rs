@@ -70,8 +70,7 @@ impl Names {
                         // A name the clause binds is the clause's variable.
                         let bound = d
                             .children()
-                            .filter(|b| b.kind() == BLOCK)
-                            .flat_map(|b| b.children().filter(|c| c.kind() == CLAUSE))
+                            .filter(|c| c.kind() == CLAUSE)
                             .flat_map(|c| c.descendants_with_tokens())
                             .filter_map(|e| e.into_token())
                             .any(|t| t.text() == name.text());
@@ -338,16 +337,13 @@ impl Ctx<'_> {
                 }
             }
             RESOURCE | SETTINGS | INSTANCE => {
-                let block = n.children().find(|c| c.kind() == BLOCK);
-                if let Some(c) = block
-                    .as_ref()
-                    .and_then(|b| b.children().find(|c| c.kind() == CLAUSE))
+                if let Some(c) = n.children().find(|c| c.kind() == CLAUSE)
                     && let Some(b) = c.children().find(|x| x.kind() == BODY)
                 {
                     self.body(&b, &BTreeSet::new());
                 }
                 if n.kind() != INSTANCE {
-                    self.header(n, block.as_ref());
+                    self.header(n);
                 }
             }
             MODULE | POLICY | SCENARIO => {
@@ -363,7 +359,7 @@ impl Ctx<'_> {
 
     /// A header name is quoted only when it needs it: not a name, a
     /// keyword, a hole, or a name the clause binds.
-    fn header(&mut self, n: &SyntaxNode, block: Option<&SyntaxNode>) {
+    fn header(&mut self, n: &SyntaxNode) {
         let Some(name) = toks(n).filter(|t| t.kind() != RANK).last() else {
             return;
         };
@@ -375,13 +371,12 @@ impl Ctx<'_> {
         if !is_name(inner) {
             return;
         }
-        let bound = block.is_some_and(|b| {
-            b.children()
-                .filter(|c| c.kind() == CLAUSE)
-                .flat_map(|c| c.descendants_with_tokens())
-                .filter_map(|e| e.into_token())
-                .any(|t| t.text() == inner)
-        });
+        let bound = n
+            .children()
+            .filter(|c| c.kind() == CLAUSE)
+            .flat_map(|c| c.descendants_with_tokens())
+            .filter_map(|e| e.into_token())
+            .any(|t| t.text() == inner);
         if !bound {
             let r = name.text_range();
             self.edits

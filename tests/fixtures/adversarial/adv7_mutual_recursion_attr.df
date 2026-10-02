@@ -4,11 +4,9 @@
 edition 2026
 
 resource net.vpc x {
-  if arg(net.subnet, "y", "name", p)
   peer = p
-}
+} where arg(net.subnet, "y", "name", p)
 
 resource net.subnet y {
-  if arg(net.vpc, "x", "peer", q)
   name = q
-}
+} where arg(net.vpc, "x", "peer", q)

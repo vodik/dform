@@ -1,30 +1,28 @@
 module network {
-  input vpc_net: inet where prefix_len(vpc_net) <= 20
+  input vpc_net: inet check prefix_len(vpc_net) <= 20
   input zones: list(string) = ["us-test-1a", "us-test-1b"] # @default contribution
   output vpc: addr
   output private_subnet_ids: list(ref(net.subnet))
   export subnet_of
 
   resource net.vpc vpc {
-    if env(e), net_ = vpc_net
     cidr = net_
     tags = { env: e, component: "network" }
-  }
+  } where env(e), net_ = vpc_net
 
-  zone_index(z, i) if zs = zones, member(zs, i, z)
+  zone_index(z, i) where zs = zones, member(zs, i, z)
 
   # Reads attr of net.vpc (partition (attr, net.vpc, .cidr)), writes arg of
   # net.subnet (partitions (arg, net.subnet, .vpc_id) etc.): no cycle.
   # vpc_id carries a fresh null; cidr is computed from a constant.
   resource net.subnet sn {
-    if zone_index(z, i), attr(net.vpc, "vpc", "cidr", net_), sn = format("private_%s", z)
     vpc_id = ref(net.vpc, "vpc", "id")
     cidr = inet_subnet(net_, 4, i)
     zone = z
     visibility = "private"
-  }
+  } where zone_index(z, i), attr(net.vpc, "vpc", "cidr", net_), sn = format("private_%s", z)
 
-  subnet_of(sn, "vpc") if want(net.subnet, sn)
+  subnet_of(sn, "vpc") where want(net.subnet, sn)
 
   output vpc = vpc
   output private_subnet_ids = [ ref(net.subnet, sn, "id") | want(net.subnet, sn), attr(net.subnet, sn, "visibility", "private") ]

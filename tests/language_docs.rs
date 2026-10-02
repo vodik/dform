@@ -100,8 +100,8 @@ fn a_policy_can_require_docs() {
          #| deprecated: use owned\n\
          module old {}\n\
          policy docs {\n\
-         \x20 deny \"a module has no owner\" { module: m } if doc(\"module\", m, \"description\", _), not doc(\"module\", m, \"owner\", _)\n\
-         \x20 warn \"deprecated\" { item: n, why } if doc(_, n, \"deprecated\", why)\n\
+         \x20 deny \"a module has no owner\" { module: m } where doc(\"module\", m, \"description\", _), not doc(\"module\", m, \"owner\", _)\n\
+         \x20 warn \"deprecated\" { item: n, why } where doc(_, n, \"deprecated\", why)\n\
          }\n\
          use docs\n",
     );

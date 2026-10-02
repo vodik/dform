@@ -7,19 +7,17 @@ use common::Scratch;
 
 const P: &str = r#"edition 2026
 input env: enum("dev", "staging", "prod") = "staging"
-input replicas: int = 2 where 1 <= replicas, replicas <= 5
+input replicas: int = 2 check 1 <= replicas, replicas <= 5
 input nets: list(inet) = []
 input owner: string
 resource net.vpc main {
-  if env(e), replicas(r), owner(o)
   env = e
   replicas = r
   owner = o
-}
+} where env(e), replicas(r), owner(o)
 resource net.subnet s {
-  if nets(ns), n = ns[i], s = format("s%s", i)
   cidr = n
-}
+} where nets(ns), n = ns[i], s = format("s%s", i)
 "#;
 
 fn scratch() -> Scratch {
@@ -136,7 +134,7 @@ fn a_module_input_of_the_wrong_type_is_a_violation() {
     let s = Scratch::project("lang-inputs-module");
     s.write(
         "p.df",
-        "edition 2026\nmodule m {\n  input n: int\n  resource net.vpc v {\n    if n(n_)\n    n = n_\n  }\n}\ninstance m a { n = \"three\" }\n",
+        "edition 2026\nmodule m {\n  input n: int\n  resource net.vpc v {\n    n = n_\n  } where n(n_)\n}\ninstance m a { n = \"three\" }\n",
     );
     let r = s
         .run(&["dev", "--world", "w.json", "plan", "p.df"])

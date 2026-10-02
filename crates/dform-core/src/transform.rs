@@ -27,8 +27,8 @@ pub struct Lowered {
 /// its head pattern and the nulls as provenance. `allow_stuck(HeadPattern).`
 /// facts relax it per key.
 pub const STRICT_RULES: &str = r#"
-deny "strict: unresolved value at plan time" { rule: r, head: h, nulls: ns } if stuck(r, h, _, ns), not allow_stuck(h)
-deny "strict: a pending group at plan time" { rule: r, head: h, nulls: ns } if may_derive(r, h, ns), not allow_stuck(h)
+deny "strict: unresolved value at plan time" { rule: r, head: h, nulls: ns } where stuck(r, h, _, ns), not allow_stuck(h)
+deny "strict: a pending group at plan time" { rule: r, head: h, nulls: ns } where may_derive(r, h, ns), not allow_stuck(h)
 "#;
 
 /// `secret_cell(Type, Scope, Key)`: an input or output declared

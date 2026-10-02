@@ -74,7 +74,11 @@ type P<T = ()> = Result<T, Bail>;
 /// that has no construct of its own in a term.
 fn term_name(k: SyntaxKind) -> bool {
     k == IDENT
-        || (k.is_keyword() && !matches!(k, NOT_KW | IN_KW | IF_KW | HAS_KW | TRUE_KW | FALSE_KW))
+        || (k.is_keyword()
+            && !matches!(
+                k,
+                NOT_KW | IN_KW | WHERE_KW | IF_KW | HAS_KW | TRUE_KW | FALSE_KW
+            ))
 }
 
 /// Any word: a key, a path segment, a declared name.
@@ -90,8 +94,8 @@ fn is_cmp(k: SyntaxKind) -> bool {
 fn old_spelling(word: &str) -> Option<&'static str> {
     Some(match word {
         "when" | "for" => {
-            "statement groups are gone (H-4): put `if B` on each statement, or gate a group of \
-             resources by an `instance` with an `if` clause"
+            "statement groups are gone (H-4): put `where B` on each statement, or gate a group \
+             of resources by an `instance` with a `where` clause"
         }
         "with" => "`with k = v` is spelled `set k = v`",
         "constraint" => "`constraint` is spelled `deny` (H-8)",
@@ -118,6 +122,8 @@ struct Parser<'a> {
     nl: Vec<bool>,
     /// The token whose preceding newline a separator has taken.
     nl_eaten: Option<usize>,
+    /// Byte offset of the statement being parsed, for a hint that prints it.
+    stmt_start: usize,
 }
 
 impl<'a> Parser<'a> {
@@ -131,6 +137,7 @@ impl<'a> Parser<'a> {
             errors: Vec::new(),
             nl: vec![true],
             nl_eaten: None,
+            stmt_start: 0,
         }
     }
 
@@ -335,12 +342,14 @@ impl<'a> Parser<'a> {
         match self.nth(0) {
             NEWLINE => {
                 return Some(
-                    "a newline ends a statement: a body of several lines is `if { .. }`, one \
+                    "a newline ends a statement: a body of several lines is `where { .. }`, one \
                      literal per line; a long term wraps inside brackets"
                         .to_string(),
                 );
             }
-            NECK => return Some("a rule is `head if body`: `:-` is spelled `if`".to_string()),
+            NECK => {
+                return Some("a rule is `head where body`: `:-` is spelled `where`".to_string());
+            }
             DOT if matches!(self.raw(1), EOF) || self.on_new_line_at(1) => {
                 return Some(
                     "a statement ends at the end of its line; there is no `.` terminator"
@@ -490,6 +499,7 @@ impl<'a> Parser<'a> {
             let nl = self.nl.len();
             self.flush_trivia();
             let start = self.pos;
+            self.stmt_start = self.toks.get(start).map_or(self.src.len(), |t| t.start);
             let ok = self.stmt().and_then(|()| self.stmt_end(in_block));
             if ok.is_err() {
                 self.close_to(depth);
@@ -535,7 +545,8 @@ impl<'a> Parser<'a> {
             IMPORT_KW => self.simple(IMPORT, |p| p.expect(STRING)),
             PROVIDER_KW => self.simple(PROVIDER, |p| {
                 p.expect_word()?;
-                p.block()
+                p.block()?;
+                p.opt_clause()
             }),
             STACK_KW => self.simple(STACK, |p| {
                 p.dotted("a stack name")?;
@@ -549,7 +560,8 @@ impl<'a> Parser<'a> {
                         p.expect(R_BRACKET)
                     })?;
                 }
-                p.block()
+                p.block()?;
+                p.opt_clause()
             }),
             INPUT_KW
                 if self.raw(1) == IDENT
@@ -599,7 +611,7 @@ impl<'a> Parser<'a> {
                 if p.eat(EQ) {
                     p.term()?;
                 }
-                p.where_clause(false)
+                p.refinement(false)
             }),
             OUTPUT_KW => self.simple(OUTPUT_DECL, |p| {
                 p.expect_word()?;
@@ -609,13 +621,13 @@ impl<'a> Parser<'a> {
                 if p.eat(EQ) {
                     p.term()?;
                 }
-                p.opt_if_body()
+                p.opt_where_body()
             }),
             LET_KW => self.simple(LET, |p| {
                 p.expect_word()?;
                 p.expect(EQ)?;
                 p.term()?;
-                p.opt_if_body()
+                p.opt_where_body()
             }),
             SET_KW => self.simple(SET, |p| {
                 if !term_name(p.nth(0)) {
@@ -627,7 +639,7 @@ impl<'a> Parser<'a> {
                 }
                 p.term()?;
                 p.eat(RANK);
-                p.opt_if_body()
+                p.opt_where_body()
             }),
             EXPORT_KW => self.simple(EXPORT, |p| {
                 // `export type NAME`: a module's type alias, for its importers.
@@ -718,7 +730,8 @@ impl<'a> Parser<'a> {
             INSTANCE_KW => self.simple(INSTANCE, |p| {
                 p.expect_word()?;
                 p.expect_word()?;
-                p.block()
+                p.block()?;
+                p.opt_clause()
             }),
             RESOURCE_KW => self.simple(RESOURCE, |p| {
                 if !word(p.nth(0)) {
@@ -731,7 +744,8 @@ impl<'a> Parser<'a> {
                     return p.err_expected("a resource name (a name or a string)");
                 }
                 p.eat(RANK);
-                p.block()
+                p.block()?;
+                p.opt_clause()
             }),
             SETTINGS_KW => self.simple(SETTINGS, |p| {
                 if word(p.nth(0)) || p.at(STRING) {
@@ -748,14 +762,15 @@ impl<'a> Parser<'a> {
                     return Err(Bail);
                 }
                 p.eat(RANK);
-                p.block()
+                p.block()?;
+                p.opt_clause()
             }),
             DENY_KW | WARN_KW => self.simple(CHECK, |p| {
                 p.expect(STRING)?;
                 if p.at(L_BRACE) {
                     p.with_nl(false, |p| p.object().map(drop))?;
                 }
-                p.opt_if_body()
+                p.opt_where_body()
             }),
             _ => {
                 let text = self.nth_text(0);
@@ -763,8 +778,8 @@ impl<'a> Parser<'a> {
                     && let Some(h) = old_spelling(text)
                 {
                     Some(h.to_string())
-                } else if k == IF_KW {
-                    Some("`if` goes on the line of the head it guards".to_string())
+                } else if matches!(k, IF_KW | WHERE_KW) {
+                    Some("`where` goes on the line of the head it guards, after it".to_string())
                 } else if term_name(k) && matches!(self.raw(1), EQ | PLUS_EQ) {
                     Some(format!("a value is `let {text} = t`"))
                 } else if term_name(k) && matches!(self.raw(1), DOT | L_BRACKET) {
@@ -788,27 +803,99 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    /// `p(args) [rank] [if body]`: a fact or a rule.
+    /// `p(args) [rank] [where body]`: a fact or a rule.
     fn rule(&mut self) -> P {
         let cp = self.checkpoint();
         self.chain_term()?;
         self.eat(RANK);
-        let has_body = self.at(IF_KW);
+        let has_body = self.at(WHERE_KW);
         self.start_at(cp, if has_body { RULE } else { FACT });
-        self.opt_if_body()?;
+        self.opt_where_body()?;
         self.finish();
         Ok(())
     }
 
-    /// `[if body]` on the line the statement is on.
-    fn opt_if_body(&mut self) -> P {
+    /// `[where body]` on the line the statement is on.
+    fn opt_where_body(&mut self) -> P {
         if self.at(NECK) {
-            return self.err_expected("`if` or the end of the line");
+            return self.err_expected("`where` or the end of the line");
         }
-        if self.eat(IF_KW) {
+        if self.at(IF_KW) {
+            return self.if_is_gone();
+        }
+        if self.at_contextual("check") {
+            let msg = format!("expected `where` or the end of the line, found {}", self.found());
+            self.error_here(
+                msg,
+                Some("`check` refines an input's or an attribute's type; a clause is `where`".into()),
+            );
+            return Err(Bail);
+        }
+        if self.eat(WHERE_KW) {
             self.body()?;
         }
         Ok(())
+    }
+
+    /// `[where body]` after a block: the block is the head (R-1).
+    fn opt_clause(&mut self) -> P {
+        if self.at(IF_KW) {
+            return self.if_is_gone();
+        }
+        if self.at(WHERE_KW) {
+            self.start(CLAUSE);
+            self.bump();
+            self.body()?;
+            self.finish();
+        }
+        Ok(())
+    }
+
+    /// `if` where a clause goes: the error prints the statement with its
+    /// clause spelled `where`.
+    fn if_is_gone(&mut self) -> P {
+        let i = self.nth_index(0).expect("at `if`");
+        let head = self.head_text(self.toks[i].start);
+        let body = self.rest_of_clause(i + 1);
+        let msg = "expected `where` or the end of the line, found keyword `if`".to_string();
+        let hint = format!("the clause word is `where` (R-1): `{head} where {body}`");
+        self.error_here(msg, Some(hint));
+        Err(Bail)
+    }
+
+    /// The statement's text up to byte `end`, for a hint: a block that
+    /// spans lines is `{ .. }`.
+    fn head_text(&self, end: usize) -> String {
+        let head = self.src[self.stmt_start..end].trim_end();
+        match head.find('{') {
+            Some(open) if head.contains('\n') => format!("{} {{ .. }}", head[..open].trim_end()),
+            _ => head.to_string(),
+        }
+    }
+
+    /// The text of a clause's body starting after token `from`, for a
+    /// hint: the rest of its line, or `{ .. }` for a body of several lines.
+    fn rest_of_clause(&self, from: usize) -> String {
+        let start = self.toks[from..]
+            .iter()
+            .find(|t| !t.kind.is_trivia())
+            .map_or(self.src.len(), |t| t.start);
+        let line = self.src[start..].split('\n').next().unwrap_or("");
+        // A comment on the line is not part of the body.
+        let line = match lexer::lex(line).iter().find(|t| t.kind == COMMENT) {
+            Some(c) => &line[..c.start],
+            None => line,
+        };
+        let line = line.trim();
+        // A clause inside a one-line block runs into its entries.
+        let closers = line.matches('}').count() > line.matches('{').count();
+        if line == "{" {
+            "{ .. }".to_string()
+        } else if closers {
+            "..".to_string()
+        } else {
+            line.to_string()
+        }
     }
 
     /// `(name [: type], ...)`: a declaration's columns, a table's.
@@ -873,38 +960,28 @@ impl<'a> Parser<'a> {
         self.err_expected("`,`, a new line or `}`")
     }
 
-    /// `{ [if body] entry* }` of a resource, settings, instance, provider or
-    /// stack: entries separated by a newline or a comma.
+    /// `{ entry* }` of a resource, settings, instance, provider or stack:
+    /// entries separated by a newline or a comma. Its clause follows it.
     fn block(&mut self) -> P {
         self.start(BLOCK);
+        let open = self.nth_index(0);
         self.expect(L_BRACE)?;
         self.with_nl(true, |p| {
             p.eat_nl();
-            if p.at(IF_KW) {
-                p.start(CLAUSE);
-                p.bump();
-                p.body()?;
-                p.finish();
-                p.sep()?;
-            }
             while !p.at(R_BRACE) {
-                if p.at(IF_KW) {
+                let clause_word = matches!(p.nth(0), IF_KW | WHERE_KW)
+                    || (p.at_contextual("for") && !matches!(p.raw(1), EQ | PLUS_EQ | DOT | L_BRACKET));
+                if clause_word {
+                    let i = p.nth_index(0).expect("a token");
+                    let head = p.src[p.stmt_start..open.map_or(p.stmt_start, |o| p.toks[o].start)]
+                        .trim_end();
+                    let body = p.rest_of_clause(i + 1);
                     let msg = format!("expected an entry or `}}`, found {}", p.found());
                     p.error_here(
                         msg,
-                        Some(
-                            "a block takes one `if` clause, before its entries: join the \
-                             literals, `if { .. }`"
-                                .to_string(),
-                        ),
-                    );
-                    return Err(Bail);
-                }
-                if p.at_contextual("for") && !matches!(p.raw(1), EQ | PLUS_EQ | DOT | L_BRACKET) {
-                    let msg = format!("expected an entry or `}}`, found {}", p.found());
-                    p.error_here(
-                        msg,
-                        Some("a block's clause is spelled `if` (H-3)".to_string()),
+                        Some(format!(
+                            "a block's clause follows the block (R-1): `{head} {{ .. }} where {body}`"
+                        )),
                     );
                     return Err(Bail);
                 }
@@ -961,7 +1038,7 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    /// `{ attrdecl* }` of a user type: `path: type flag* [where body]` or a
+    /// `{ attrdecl* }` of a user type: `path: type flag* [check body]` or a
     /// nested `path: { ... }`, separated by a newline or a comma.
     fn attr_block(&mut self) -> P {
         self.expect(L_BRACE)?;
@@ -987,7 +1064,7 @@ impl<'a> Parser<'a> {
                     {
                         p.bump();
                     }
-                    p.where_clause(true)?;
+                    p.refinement(true)?;
                 }
                 p.finish();
                 p.sep()?;
@@ -1003,11 +1080,32 @@ impl<'a> Parser<'a> {
         (word(self.nth(0)) || self.nth(0) == STRING) && self.raw(1) == COLON
     }
 
-    fn where_clause(&mut self, in_type: bool) -> P {
-        if !self.at_contextual("where") {
+    /// `[check body]`: a refinement of an input's or an attribute's type.
+    fn refinement(&mut self, in_type: bool) -> P {
+        if matches!(self.nth(0), WHERE_KW | IF_KW) {
+            let i = self.nth_index(0).expect("a token");
+            let at = self.toks[i].start;
+            // In a type block, the attribute's own line.
+            let from = if in_type {
+                self.src[..at].rfind('\n').map_or(0, |n| n + 1)
+            } else {
+                self.stmt_start
+            };
+            let head = self.src[from..at].trim();
+            let body = self.rest_of_clause(i + 1);
+            let msg = format!("expected `check` or the end of the line, found {}", self.found());
+            self.error_here(
+                msg,
+                Some(format!(
+                    "a refinement is spelled `check` (R-1): `{head} check {body}`"
+                )),
+            );
+            return Err(Bail);
+        }
+        if !self.at_contextual("check") {
             return Ok(());
         }
-        self.start(WHERE_CLAUSE);
+        self.start(REFINEMENT);
         self.bump();
         self.start(BODY);
         loop {
@@ -1418,7 +1516,7 @@ mod tests {
     #[test]
     fn lossless_even_with_errors() {
         for src in [
-            "edition 2026\np(a) if q(x), x > 1 # c\n",
+            "edition 2026\np(a) where q(x), x > 1 # c\n",
             "p(a if\nq(b)\n}}\n",
             "resource net.vpc main { cidr = \"x\" }\nq(b)",
         ] {
@@ -1428,13 +1526,13 @@ mod tests {
 
     #[test]
     fn three_errors_three_diagnostics() {
-        let src = "p(a) if q(]\nok(1)\nr(b) if ,\nok(2)\nresource x { }\nok(3)\n";
+        let src = "p(a) where q(]\nok(1)\nr(b) where ,\nok(2)\nresource x { }\nok(3)\n";
         assert_eq!(errors(src).len(), 3, "{:?}", errors(src));
     }
 
     #[test]
     fn a_newline_ends_a_statement_and_nothing_continues_it() {
-        assert!(errors("p(a)\nq(b)\nr(c) if {\n  q(c)\n  p(c)\n}\n").is_empty());
+        assert!(errors("p(a)\nq(b)\nr(c) where {\n  q(c)\n  p(c)\n}\n").is_empty());
         let e = parse("p(a) q(b)\n").errors;
         assert_eq!(e.len(), 1);
         assert!(
@@ -1442,8 +1540,8 @@ mod tests {
             "{e:?}"
         );
         for src in [
-            "r(c) if q(c),\n  p(c)\n",
-            "r(c) if\n  q(c)\n",
+            "r(c) where q(c),\n  p(c)\n",
+            "r(c) where\n  q(c)\n",
             "let x = 1 +\n  2\n",
             "resource t a {\n  b =\n    1\n}\n",
         ] {
@@ -1465,15 +1563,15 @@ mod tests {
         assert!(e[0].hint.as_deref().unwrap().contains("no `.` terminator"));
         let e = parse("p(a) :- q(a)\n").errors;
         assert!(
-            e[0].hint.as_deref().unwrap().contains("spelled `if`"),
+            e[0].hint.as_deref().unwrap().contains("spelled `where`"),
             "{e:?}"
         );
     }
 
     #[test]
     fn the_first_token_decides() {
-        let src = "let k = 1 if p(1)\nset r.tags = {} if r in resource\ndeny \"m\" { a } if p(a)\n\
-                   p(x) if { q(x)\n r(x) }\nlet cfg = settings[env]\ndeny(\"m\") if q(1)\n\
+        let src = "let k = 1 where p(1)\nset r.tags = {} where r in resource\ndeny \"m\" { a } where p(a)\n\
+                   p(x) where { q(x)\n r(x) }\nlet cfg = settings[env]\ndeny(\"m\") where q(1)\n\
                    input(\"a\", 1)\nfor(1)\n";
         assert!(errors(src).is_empty(), "{:?}", errors(src));
         assert_eq!(
@@ -1487,7 +1585,7 @@ mod tests {
         for (src, hint) in [
             ("when p(1) { q(1) }\n", "statement groups are gone"),
             ("with env = \"prod\"\n", "`set k = v`"),
-            ("constraint \"m\" if p(1)\n", "spelled `deny`"),
+            ("constraint \"m\" where p(1)\n", "spelled `deny`"),
             ("apply baseline\n", "`use pack`"),
             ("k = 1\n", "`let k = t`"),
             ("r.tags = {}\n", "`set r.path = t`"),
@@ -1497,15 +1595,27 @@ mod tests {
                 "input relation p/2 from file(\"x\")\n",
                 "`input p(cols) from ..`",
             ),
-            ("p(x) if exists x\n", "`R in T`"),
-            ("p(x) if some x in [1]\n", "`x in e`"),
-            ("p(x) if q(x), x == .cidr\n", "is a string"),
-            ("p(x) if q{a: x}\n", "`p(a: x)`"),
-            ("resource t a {\n  for q(x)\n  b = x\n}\n", "spelled `if`"),
+            ("p(x) where exists x\n", "`R in T`"),
+            ("p(x) where some x in [1]\n", "`x in e`"),
+            ("p(x) where q(x), x == .cidr\n", "is a string"),
+            ("p(x) where q{a: x}\n", "`p(a: x)`"),
             (
-                "resource t a {\n  if q(x)\n  if r(x)\n}\n",
-                "one `if` clause",
+                "resource t a {\n  for q(x)\n  b = x\n}\n",
+                "`resource t a { .. } where q(x)`",
             ),
+            (
+                "resource t a {\n  if q(x), r(x)\n  b = x\n}\n",
+                "`resource t a { .. } where q(x), r(x)`",
+            ),
+            ("p(x) if q(x) # c\n", "`p(x) where q(x)`"),
+            ("let k = 1 if {\n  q(1)\n}\n", "`let k = 1 where { .. }`"),
+            (
+                "instance m i {} if p(1)\n",
+                "`instance m i {} where p(1)`",
+            ),
+            ("input k: int = 1 where k > 0\n", "spelled `check`"),
+            ("type t.u { a: int where a > 0 }\n", "spelled `check`"),
+            ("let k = 1 check k > 0\n", "a clause is `where`"),
             ("// a comment\n", "`#`"),
         ] {
             let h = hints(src);
@@ -1525,7 +1635,7 @@ mod tests {
 
     #[test]
     fn literal_shapes() {
-        let src = "p(x) if q(x), x.a, x.b == 1, x in net.vpc, has x.c, \
+        let src = "p(x) where q(x), x.a, x.b == 1, x in net.vpc, has x.c, \
                    not x.d, v = xs[i], x not in ys, not { r(x) }, e(a: x)\n";
         assert!(errors(src).is_empty(), "{:?}", errors(src));
         assert_eq!(
@@ -1561,11 +1671,21 @@ mod tests {
     }
 
     #[test]
-    fn a_block_takes_one_clause_then_its_entries() {
-        let src = "resource net.subnet \"s-${z}\" {\n  if {\n    data(\"zone\", z)\n    z != \"x\"\n  }\n  \
-                   cidr = inet_subnet(vpc.cidr, 4, zone_index[z])\n  zone = z\n}\n";
+    fn a_block_is_the_head_of_the_clause_after_it() {
+        let src = "resource net.subnet \"s-${z}\" {\n  \
+                   cidr = inet_subnet(vpc.cidr, 4, zone_index[z])\n  zone = z\n} where {\n  \
+                   data(\"zone\", z)\n  z != \"x\"\n}\n";
         assert!(errors(src).is_empty(), "{:?}", errors(src));
-        assert_eq!(kinds(src, &[CLAUSE, ASSIGN]), vec![CLAUSE, ASSIGN, ASSIGN]);
+        assert_eq!(kinds(src, &[CLAUSE, ASSIGN]), vec![ASSIGN, ASSIGN, CLAUSE]);
+        let clause = parse(src)
+            .syntax()
+            .descendants()
+            .find(|n| n.kind() == CLAUSE)
+            .unwrap();
+        assert_eq!(clause.parent().unwrap().kind(), RESOURCE);
+        // A provider or stack block parses a clause too; the resolver
+        // refuses it.
+        assert!(errors("provider p { a = 1 } where q(1)\n").is_empty());
     }
 
     #[test]
@@ -1581,7 +1701,7 @@ mod tests {
     #[test]
     fn declarations_by_their_columns() {
         let src = "decl p(a, b: int) mixed\ninput q(a: string) from csv(\"q.csv\")\nexport p\n\
-                   output k: int = 1 if p(1, 2)\n";
+                   output k: int = 1 where p(1, 2)\n";
         assert!(errors(src).is_empty(), "{:?}", errors(src));
         assert_eq!(
             kinds(src, &[DECL, INPUT_RELATION, EXPORT, OUTPUT_DECL]),
@@ -1591,7 +1711,7 @@ mod tests {
 
     #[test]
     fn errors_inside_a_block_recover_at_the_brace() {
-        let src = "module m {\n  p(a) if ,\n  q(b)\n}\nr(c)\n";
+        let src = "module m {\n  p(a) where ,\n  q(b)\n}\nr(c)\n";
         assert_eq!(errors(src).len(), 1, "{:?}", errors(src));
     }
 }

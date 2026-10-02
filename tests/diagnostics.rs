@@ -15,7 +15,7 @@ fn plan(src: &str) -> common::Run {
 /// and what was expected; every error in the file, then a count.
 #[test]
 fn syntax_errors_print_with_their_source_line() {
-    let r = plan("edition 2026\np(\"a\") if q(]\nr(\"b\") if ,\n").failure();
+    let r = plan("edition 2026\np(\"a\") where q(]\nr(\"b\") where ,\n").failure();
     assert!(
         r.stderr.contains("p.df:2:13: expected a term, found `]`"),
         "{}",
@@ -26,13 +26,13 @@ fn syntax_errors_print_with_their_source_line() {
         "{}",
         r.stderr
     );
-    assert!(r.stderr.contains("p(\"a\") if q(]"), "{}", r.stderr);
+    assert!(r.stderr.contains("p(\"a\") where q(]"), "{}", r.stderr);
     assert!(r.stderr.ends_with("2 errors\n"), "{}", r.stderr);
 }
 
 #[test]
 fn an_undefined_predicate_names_its_literal() {
-    let r = plan("edition 2026\nenv(\"prod\")\nq(x) if envv(x)\n").failure();
+    let r = plan("edition 2026\nenv(\"prod\")\nq(x) where envv(x)\n").failure();
     assert!(
         r.stderr.contains("p.df:3:9: undefined predicate envv/1"),
         "{}",
@@ -51,7 +51,7 @@ fn an_undefined_predicate_names_its_literal() {
 /// rule head only.
 #[test]
 fn an_unknown_function_names_its_call() {
-    let r = plan("edition 2026\nenv(\"prod\")\nq(y) if env(x), y = lowr(x)\n").failure();
+    let r = plan("edition 2026\nenv(\"prod\")\nq(y) where env(x), y = lowr(x)\n").failure();
     assert!(
         r.stderr.contains("p.df:3:21: unknown function lowr"),
         "{}",
@@ -64,21 +64,21 @@ fn an_unknown_function_names_its_call() {
         "{}",
         r.stderr
     );
-    let r = plan("edition 2026\nenv(\"prod\")\nq(n) if env(x), n = count(x)\n").failure();
+    let r = plan("edition 2026\nenv(\"prod\")\nq(n) where env(x), n = count(x)\n").failure();
     assert!(
         r.stderr
             .contains("p.df:3:21: `count` is an aggregate: it is written in a rule head"),
         "{}",
         r.stderr
     );
-    plan("edition 2026\nenv(\"prod\")\nq(count(x)) if env(x)\nr(y) if env(x), y = upper(x)\n")
+    plan("edition 2026\nenv(\"prod\")\nq(count(x)) where env(x)\nr(y) where env(x), y = upper(x)\n")
         .success();
 }
 
 #[test]
 fn a_negative_cycle_names_each_rule() {
     let r = plan(
-        "edition 2026\nresource net.vpc x {\n  if p = y.name\n  peer = p\n}\nresource net.subnet y {\n  if q = x.peer\n  name = q\n}\n",
+        "edition 2026\nresource net.vpc x {\n  peer = p\n} where p = y.name\nresource net.subnet y {\n  name = q\n} where q = x.peer\n",
     )
     .failure();
     assert!(r.stderr.contains("not stratifiable"), "{}", r.stderr);
@@ -104,7 +104,7 @@ fn why_names_the_pack_and_the_module_instance() {
     let s = Scratch::new("diag-why");
     s.write(
         "p.df",
-        "edition 2026\nmodule m {\n  resource net.vpc vpc { cidr = \"10.0.0.0/16\" }\n}\ninstance m main {}\npolicy tags {\n  contributes t.tags\n  arg(t, a, \"tags\", { team: \"x\" }) if want(t, a)\n}\nuse tags\n",
+        "edition 2026\nmodule m {\n  resource net.vpc vpc { cidr = \"10.0.0.0/16\" }\n}\ninstance m main {}\npolicy tags {\n  contributes t.tags\n  arg(t, a, \"tags\", { team: \"x\" }) where want(t, a)\n}\nuse tags\n",
     );
     let out = s
         .run(&[

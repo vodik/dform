@@ -12,7 +12,7 @@ input relation: string = "an input named relation"
 decl project(id: int, network_name: string)
 
 project(1, "net-a")
-names(n) if project(network_name: n)
+names(n) where project(network_name: n)
 
 module m {
   input on: bool
@@ -20,15 +20,14 @@ module m {
   contributes iam_need
 
   resource net.vpc vpc @default {
-    if on == true
     cidr = "10.0.0.0/16"
     tags = { team: "x", "k-v": 1 }
     size = 2 @override
     list[0].name = "a"
     audit.sinks += ["s3"]
-  }
+  } where on == true
 
-  on_vpc("vpc") if on == true
+  on_vpc("vpc") where on == true
   iam_need("app", "net.read", ref(net.vpc, "vpc", "id"))
   output vpc: addr = vpc
 }
@@ -37,38 +36,37 @@ instance m main { on = true }
 
 policy p {
   contributes t.tags
-  arg(t, a_, "tags", { owner: "ops" }) @override if want(t, a_)
+  arg(t, a_, "tags", { owner: "ops" }) @override where want(t, a_)
 }
 
 use p
 
-q(1) if env("prod")
+q(1) where env("prod")
 
 settings e @default {
-  if env(e)
   db = { backup_days: 3 }
-}
+} where env(e)
 
 env("prod")
-p(x_) if q(x_), x_ == 1 + 2 * 3 - -4 / (5 % 2), x_ != 0, x_ >= 1, x_ <= 9, x_ > 0, x_ < 10
-r(v) if v = settings["prod"].gke.static_ips."pngu-grpc".type
-s(v) if q(x_), o = { a: { b: x_ } }, v = o.a.b
-t(l) if l = [ x_ | q(x_) ], 1 in l, 2 not in l
-u(a_) if ref(net.vpc, "m.main::vpc", "id") = a_
+p(x_) where q(x_), x_ == 1 + 2 * 3 - -4 / (5 % 2), x_ != 0, x_ >= 1, x_ <= 9, x_ > 0, x_ < 10
+r(v) where v = settings["prod"].gke.static_ips."pngu-grpc".type
+s(v) where q(x_), o = { a: { b: x_ } }, v = o.a.b
+t(l) where l = [ x_ | q(x_) ], 1 in l, 2 not in l
+u(a_) where ref(net.vpc, "m.main::vpc", "id") = a_
 adopt(net.vpc, "m.main::vpc", "vpc-123")
 moved(net.vpc, "m.old::vpc", "m.main::vpc")
 lifecycle(net.vpc, "m.main::vpc", "prevent_destroy")
 ignore_changes(net.vpc, "m.main::vpc", "tags.owner")
-counts(count(x_)) if q(x_)
-deny "q must not be empty" if not q(1)
-v("input", "output", "settings", "type") if input("env", _), output("k", _)
+counts(count(x_)) where q(x_)
+deny "q must not be empty" where not q(1)
+v("input", "output", "settings", "type") where input("env", _), output("k", _)
 decl p(a) mixed
 decl q(a) mixed
 p("a")
 q("b")
-w(v) if m.main.on_vpc(v)
+w(v) where m.main.on_vpc(v)
 vpc_inst("main")
-x(i, a_) if vpc_inst(i), output(m[i], "vpc", a_)
+x(i, a_) where vpc_inst(i), output(m[i], "vpc", a_)
 
 # A keyed stack: each value of its key is its own deployment.
 input tier: string = "dev"

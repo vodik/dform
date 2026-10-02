@@ -20,11 +20,10 @@ fn a_module_predicate_is_private_to_its_instance() {
         r#"edition 2026
 module m {
   input n: int
-  size(n_) if n(n_)
+  size(n_) where n(n_)
   resource net.vpc vpc {
-    if size(s)
     size = s
-  }
+  } where size(s)
 }
 instance m a { n = 1 }
 instance m b { n = 2 }
@@ -52,7 +51,7 @@ module m {
   size(1)
 }
 instance m a {}
-big(s) if size(s)
+big(s) where size(s)
 "#,
     )
     .failure();
@@ -73,20 +72,18 @@ fn exports_and_outputs_are_the_interface() {
 module m {
   input n: int
   export size
-  size(n_) if n(n_)
+  size(n_) where n(n_)
   resource net.vpc vpc {
-    if size(s_)
     size = s_
-  }
+  } where size(s_)
   output vpc: addr = vpc
 }
 instance m a { n = 3 }
 inst("a")
 resource net.subnet s {
-  if m.a.size(s_), inst(i), output(m[i], "vpc", v)
   size = s_
   vpc = v
-}
+} where m.a.size(s_), inst(i), output(m[i], "vpc", v)
 "#,
     )
     .success();
@@ -106,9 +103,8 @@ fn an_input_default_yields_to_the_instance() {
 module m {
   input n: int = 7
   resource net.vpc vpc {
-    if n(n_)
     size = n_
-  }
+  } where n(n_)
 }
 instance m a {}
 instance m b { n = 1 }
@@ -139,11 +135,10 @@ fn a_refinement_on_a_module_input_is_a_deny() {
     let r = plan(
         r#"edition 2026
 module m {
-  input n: int where n <= 5
+  input n: int check n <= 5
   resource net.vpc vpc {
-    if n(n_)
     size = n_
-  }
+  } where n(n_)
 }
 instance m a { n = 9 }
 "#,
@@ -165,8 +160,8 @@ fn a_pack_writes_only_inside_its_grants() {
 resource net.vpc main { cidr = "10.0.0.0/16" }
 policy tags {
   contributes t.tags
-  arg(t, a, "tags", { team: "x" }) if want(t, a)
-  set a.cidr = "10.9.0.0/16" @override if a in net.vpc
+  arg(t, a, "tags", { team: "x" }) where want(t, a)
+  set a.cidr = "10.9.0.0/16" @override where a in net.vpc
 }
 use tags
 "#;

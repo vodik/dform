@@ -6,11 +6,11 @@ policy baseline {
   contributes iam.policy.statements
   contributes settings.audit.sinks
 
-  arg(t, a_, "tags", { team: "platform" }) if want(t, a_)
+  arg(t, a_, "tags", { team: "platform" }) where want(t, a_)
 
   # Reads .name of the same type it writes .statements on: legal under
   # (type, path) partitions, a self-loop under type-only partitions.
-  arg("iam.policy", a_, "statements", [{ action: "org.read", resource: "org" }]) if {
+  arg("iam.policy", a_, "statements", [{ action: "org.read", resource: "org" }]) where {
     env("prod")
     want("iam.policy", a_)
     attr("iam.policy", a_, "name", "app")
@@ -20,17 +20,17 @@ policy baseline {
 
   # Prod forces deletion protection on for every database: an @override,
   # not a conflict with the module's default of false.
-  arg("db.postgres", db_, "deletion_protection", true) @override if {
+  arg("db.postgres", db_, "deletion_protection", true) @override where {
     env("prod")
     want("db.postgres", db_)
   }
 
-  deny("db_public", "db must not be public", { db: db_ }) if {
+  deny("db_public", "db must not be public", { db: db_ }) where {
     want("db.postgres", db_)
     not attr("db.postgres", db_, "public", false)
   }
 
-  warn("audit_logging", "prod should enable audit logging", {}) if {
+  warn("audit_logging", "prod should enable audit logging", {}) where {
     env("prod")
     not setting("prod", "audit.enabled", true)
   }

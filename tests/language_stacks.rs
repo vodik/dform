@@ -193,13 +193,12 @@ fn another_stack_reads_the_outputs() {
         r#"edition 2026
 stack app {}
 resource net.subnet a {
-  if {
+  cidr = c
+  vpc_id = v
+} where {
     stack_output("net.shared", "vpc_cidr", c)
     stack_output("net.shared", "vpc_id", v)
   }
-  cidr = c
-  vpc_id = v
-}
 "#,
     );
     let r = s.run(&["plan", "app.df"]).success();
@@ -227,13 +226,12 @@ fn the_registry_is_the_projects() {
     let app = r#"edition 2026
 stack app {}
 resource net.subnet a {
-  if {
+  cidr = c
+  vpc_id = v
+} where {
     stack_output("net.shared", "vpc_cidr", c)
     stack_output("net.shared", "vpc_id", v)
   }
-  cidr = c
-  vpc_id = v
-}
 "#;
     s.write("infra/stacks/app.df", app);
     s.run(&["-C", "infra", "apply", "net.shared"]).success();

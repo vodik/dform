@@ -13,5 +13,5 @@ tests/syntax/err/module_errors.df:24:3: policy tags writes .labels of any type o
   help: grant it: `contributes t.labels`
 tests/syntax/err/module_errors.df:25:3: policy tags writes .cidr of net.vpc outside its grants
   help: grant it: `contributes net.vpc.cidr`
-tests/syntax/err/module_errors.df:19:21: zone_index/2 is private to module network
+tests/syntax/err/module_errors.df:19:24: zone_index/2 is private to module network
   help: `export zone_index` in module network makes it readable as network.INSTANCE.zone_index, or pass the value through an output

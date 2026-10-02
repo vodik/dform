@@ -181,7 +181,7 @@ fn policy_reads_lifecycle_facts() {
         r#"edition 2026
 
 resource db.postgres main { size = 1 }
-deny "databases must be protected" {addr: a} if {
+deny "databases must be protected" {addr: a} where {
   a in db.postgres
   not lifecycle(db.postgres, a, "prevent_destroy")
 }
@@ -303,7 +303,7 @@ fn policy_reads_the_deformation() {
     dform(&s, &["apply"]).success();
     s.write(
         "p.df",
-        "edition 2026\nresource compute.vm keep { size = 1 }\ndeny(m) if deformation(\"delete\", t, a, _), m = format(\"no deletes here: %s.%s\", t, a)\n",
+        "edition 2026\nresource compute.vm keep { size = 1 }\ndeny(m) where deformation(\"delete\", t, a, _), m = format(\"no deletes here: %s.%s\", t, a)\n",
     );
     let r = dform(&s, &["plan"]).failure();
     assert!(
@@ -326,7 +326,7 @@ fn a_resource_rule_over_the_deformation_is_an_error() {
     let s = Scratch::new("deformation-circular");
     s.write(
         "p.df",
-        "edition 2026\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nresource net.vpc shadow {\n  if deformation(\"create\", \"net.vpc\", \"main\", _)\n  cidr = \"10.1.0.0/16\"\n}\n",
+        "edition 2026\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nresource net.vpc shadow {\n  cidr = \"10.1.0.0/16\"\n} where deformation(\"create\", \"net.vpc\", \"main\", _)\n",
     );
     let r = dform(&s, &["plan"]).failure();
     assert!(

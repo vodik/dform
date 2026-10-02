@@ -23,5 +23,5 @@ module kubernetes {
   }
 
   #| Only when the cluster exists in this environment.
-  iam_need("app", "k8s.describe_cluster", cluster.id) if has private_api
+  iam_need("app", "k8s.describe_cluster", cluster.id) where has private_api
 }

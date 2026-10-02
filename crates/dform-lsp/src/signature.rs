@@ -169,7 +169,7 @@ mod tests {
             open_call(text, text.len()),
             Some(("dns.lookup".into(), true, 0))
         );
-        assert_eq!(open_call("p(a) if q(b)", 12), None);
+        assert_eq!(open_call("p(a) where q(b)", 12), None);
         assert_eq!(open_call("r { a = ", 8), None);
     }
 

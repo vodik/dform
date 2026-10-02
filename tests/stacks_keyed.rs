@@ -185,9 +185,8 @@ output url = "https://${env}.example"
         r#"edition 2026
 stack web {}
 resource net.vpc edge {
-  if stack_output("app[env=prod]", "url", u)
   name = u
-}
+} where stack_output("app[env=prod]", "url", u)
 "#,
     );
     s.run(&["apply", "app.df", "env=staging"]).success();
@@ -348,10 +347,9 @@ const GATED: &str = r#"edition 2026
 input env: string = "staging"
 stack app[env] {}
 resource net.vpc logs {
-  if env != "dev"
   bucket = "company-logs"
   tags = { env: env }
-}
+} where env != "dev"
 resource net.vpc main {
   name = "main-${env}"
 }

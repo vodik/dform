@@ -2985,7 +2985,7 @@ pub const REFERENCE: &[Reference] = &[
         Fun,
         "mod(a: int, b: int) -> int",
         "The remainder of integer division, no value when `b` is 0; `a % b` lowers to it.",
-        "odd(n) if mod(n, 2) == 1",
+        "odd(n) where mod(n, 2) == 1",
     ),
     r(
         "ip",
@@ -3027,21 +3027,21 @@ pub const REFERENCE: &[Reference] = &[
         Fun,
         "ip_unspecified(addr: ip) -> bool",
         "Whether the address is 0.0.0.0; also a predicate.",
-        "deny \"no bind address\" if ip_unspecified(a)",
+        "deny \"no bind address\" where ip_unspecified(a)",
     ),
     r(
         "inet_contains",
         Fun,
         "inet_contains(net: inet, addr: ip) -> bool",
         "Whether the network holds the address; also a predicate.",
-        "inside(a) if inet_contains(inet(\"10.0.0.0/8\"), a)",
+        "inside(a) where inet_contains(inet(\"10.0.0.0/8\"), a)",
     ),
     r(
         "inet_overlaps",
         Fun,
         "inet_overlaps(a: inet, b: inet) -> bool",
         "Whether two networks share an address; also a predicate.",
-        "deny \"overlap\" if inet_overlaps(a.cidr, b.cidr), a != b",
+        "deny \"overlap\" where inet_overlaps(a.cidr, b.cidr), a != b",
     ),
     r(
         "inet_addr",
@@ -3139,7 +3139,7 @@ pub const REFERENCE: &[Reference] = &[
         Fun,
         "prefix_len(net: inet) -> int",
         "The network's prefix length.",
-        "deny \"too small\" if prefix_len(vpc.cidr) > 24",
+        "deny \"too small\" where prefix_len(vpc.cidr) > 24",
     ),
     r(
         "len",
@@ -3181,49 +3181,49 @@ pub const REFERENCE: &[Reference] = &[
         Aggregate,
         "collect(x: any) -> set",
         "The set of every `x` the body binds per group; the same as `collect_set`.",
-        "members(g, collect(u)) if member_of(u, g)",
+        "members(g, collect(u)) where member_of(u, g)",
     ),
     r(
         "collect_set",
         Aggregate,
         "collect_set(x: any) -> set",
         "The set of every `x` the body binds per group of the head's other arguments.",
-        "ids(collect_set(s.id)) if s in net.subnet",
+        "ids(collect_set(s.id)) where s in net.subnet",
     ),
     r(
         "collect_list",
         Aggregate,
         "collect_list(x: any) -> list",
         "The list of every `x` the body binds per group, in order; a comprehension lowers to it.",
-        "names(collect_list(n)) if host(n)",
+        "names(collect_list(n)) where host(n)",
     ),
     r(
         "count",
         Aggregate,
         "count(x: any) -> int",
         "The number of distinct `x` the body binds per group.",
-        "subnets(count(s)) if s in net.subnet",
+        "subnets(count(s)) where s in net.subnet",
     ),
     r(
         "sum",
         Aggregate,
         "sum(x: int) -> int",
         "The sum of `x` over every match of the body per group; a non-int is a deny.",
-        "total(sum(n)) if size(_, n)",
+        "total(sum(n)) where size(_, n)",
     ),
     r(
         "min",
         Aggregate,
         "min(x: int | string) -> int | string",
         "The least `x` per group, ints or strings (a mix is a deny).",
-        "first(min(n)) if size(_, n)",
+        "first(min(n)) where size(_, n)",
     ),
     r(
         "max",
         Aggregate,
         "max(x: int | string) -> int | string",
         "The greatest `x` per group, ints or strings (a mix is a deny).",
-        "last(max(n)) if size(_, n)",
+        "last(max(n)) where size(_, n)",
     ),
     r(
         "env_var",
@@ -3284,30 +3284,30 @@ pub const REFERENCE: &[Reference] = &[
     r(
         "input",
         Kw,
-        "input NAME: TYPE (= DEFAULT)? (where BODY)? | input NAME(COLUMN: TYPE, ...) from SOURCE",
+        "input NAME: TYPE (= DEFAULT)? (check BODY)? | input NAME(COLUMN: TYPE, ...) from SOURCE",
         "A typed input of the stack or module; with columns, a relation read from a table or a fact file (`facts(PATH)`).",
         "input env: environment = \"staging\"",
     ),
     r(
         "output",
         Kw,
-        "output NAME (: TYPE)? = TERM (if BODY)?",
+        "output NAME (: TYPE)? = TERM (where BODY)?",
         "A module's or stack's output, its type and its value in one statement.",
         "output vpc: net.vpc = vpc",
     ),
     r(
         "let",
         Kw,
-        "let NAME = TERM (if BODY)?",
+        "let NAME = TERM (where BODY)?",
         "A value, read by name; one that holds a reference (a settings row, a resource) is read through with a dot.",
         "let cfg = settings[env]",
     ),
     r(
         "set",
         Kw,
-        "set REFERENCE.PATH (= | +=) TERM @RANK? (if BODY)?",
+        "set REFERENCE.PATH (= | +=) TERM @RANK? (where BODY)?",
         "A contribution to a block declared elsewhere, a settings leaf, or an input (in a scenario).",
-        "set r.tags.team = \"platform\" @default if r in resource",
+        "set r.tags.team = \"platform\" @default where r in resource",
     ),
     r(
         "export",
@@ -3333,7 +3333,7 @@ pub const REFERENCE: &[Reference] = &[
     r(
         "instance",
         Kw,
-        "instance MODULE NAME { (if BODY)? INPUT = TERM, ... }",
+        "instance MODULE NAME { INPUT = TERM, ... } (where BODY)?",
         "One instance of a module; each field is a contribution to one of its inputs.",
         "instance network main { vpc_net = inet(\"10.0.0.0/16\") }",
     ),
@@ -3361,58 +3361,65 @@ pub const REFERENCE: &[Reference] = &[
     r(
         "resource",
         Kw,
-        "resource TYPE NAME @RANK? { (if BODY)? PATH = TERM, ... }",
+        "resource TYPE NAME @RANK? { PATH = TERM, ... } (where BODY)?",
         "A resource the program wants, one per answer of its clause, its fields contributions; `x in resource` is any resource.",
         "resource net.vpc vpc { cidr = vpc_net }",
     ),
     r(
         "settings",
         Kw,
-        "settings NAME @RANK? { (if BODY)? PATH = TERM, ... }",
+        "settings NAME @RANK? { PATH = TERM, ... } (where BODY)?",
         "A settings row: configuration by name, read as `settings[e].path`.",
         "settings prod { db.multi_az = true }",
     ),
     r(
         "deny",
         Kw,
-        "deny \"MESSAGE\" {FIELDS}? if BODY",
+        "deny \"MESSAGE\" {FIELDS}? where BODY",
         "A check: plan fails with the message when the body holds.",
-        "deny \"prod needs multi_az\" if env == \"prod\", pg in db.postgres, not pg.multi_az",
+        "deny \"prod needs multi_az\" where env == \"prod\", pg in db.postgres, not pg.multi_az",
     ),
     r(
         "warn",
         Kw,
-        "warn \"MESSAGE\" {FIELDS}? if BODY",
+        "warn \"MESSAGE\" {FIELDS}? where BODY",
         "A check: plan warns with the message when the body holds.",
-        "warn \"no owner tag\" if r in net.vpc, not has r.tags.owner",
+        "warn \"no owner tag\" where r in net.vpc, not has r.tags.owner",
     ),
     r(
         "not",
         Kw,
         "not LITERAL | not { BODY }",
         "Negation: holds when the literal, or the whole body, has no match.",
-        "unused(s) if s in net.subnet, not attached(s)",
+        "unused(s) where s in net.subnet, not attached(s)",
     ),
     r(
         "in",
         Kw,
         "TERM in TYPE | TERM in resource | TERM in world.TYPE | TERM in LIST",
         "Membership: a resource of a type, any resource, a live object, or an element of a list.",
-        "vpc_peer(a, b) if a in net.vpc, b in net.vpc",
+        "vpc_peer(a, b) where a in net.vpc, b in net.vpc",
     ),
     r(
         "has",
         Kw,
         "has REFERENCE.PATH",
         "The attribute has a value.",
-        "tagged(r) if r in net.vpc, has r.tags.owner",
+        "tagged(r) where r in net.vpc, has r.tags.owner",
     ),
     r(
-        "if",
+        "where",
         Kw,
-        "HEAD if BODY | { if BODY ... }",
-        "The condition of a rule, check, `let`, `set` or output; first in a block, the query whose every answer is one block.",
-        "vpc_peer(a, b) if vpc_peer_pair(_, _, a, b)",
+        "HEAD where BODY | BLOCK where BODY",
+        "The clause of a rule, check, `let`, `set`, output or block, after it: a query; a block is one resource (row, instance) per answer.",
+        "vpc_peer(a, b) where vpc_peer_pair(_, _, a, b)",
+    ),
+    r(
+        "check",
+        Kw,
+        "input NAME: TYPE (= DEFAULT)? check BODY | PATH: TYPE FLAG* check BODY",
+        "A refinement of an input's or a `type` block attribute's type, the value named by its own name.",
+        "input replicas: int = 2 check replicas >= 1",
     ),
     r("true", Kw, "true", "The boolean true.", "multi_az = true"),
     r(
@@ -3959,7 +3966,7 @@ mod tests {
              input env: string = \"qa\"\n\
              settings _ @default { x = 1 }\n\
              settings prod { y = 2 }\n\
-             v(n) if n = settings[env].x\n")
+             v(n) where n = settings[env].x\n")
         .unwrap();
         assert_eq!(facts_of(&r, "v"), ["v(1)"]);
         let mut rows = facts_of(&r, "settings_row");
@@ -3992,7 +3999,7 @@ mod tests {
     /// aggregate used to see every partial result mid-fixpoint.
     #[test]
     fn aggregate_consumer_sees_one_complete_result() {
-        let (r, _) = run("decl n(a) mixed\n             n(1)\n             n(2) if n(1)\n             n(3) if n(2)\n             all(collect_set(x)) if n(x)\n             snap(l) if all(l)")
+        let (r, _) = run("decl n(a) mixed\n             n(1)\n             n(2) where n(1)\n             n(3) where n(2)\n             all(collect_set(x)) where n(x)\n             snap(l) where all(l)")
         .unwrap();
         assert_eq!(facts_of(&r, "snap"), vec!["snap([1, 2, 3])".to_string()]);
     }
@@ -4005,11 +4012,11 @@ mod tests {
         let (r, violations) = run(r#"size("a", "x", 3)
              size("b", "x", 3)
              size("c", "y", 4)
-             total(g, sum(n)) if size(_, g, n)
-             all(sum(n)) if size(_, _, n)
-             sizes(count(n)) if size(_, _, n)
-             big(sum(n)) if size(_, _, n), n > 9
-             many(count(n)) if size(_, _, n), n > 9"#)
+             total(g, sum(n)) where size(_, g, n)
+             all(sum(n)) where size(_, _, n)
+             sizes(count(n)) where size(_, _, n)
+             big(sum(n)) where size(_, _, n), n > 9
+             many(count(n)) where size(_, _, n), n > 9"#)
         .unwrap();
         assert!(violations.is_empty(), "{violations:?}");
         assert_eq!(
@@ -4030,8 +4037,8 @@ mod tests {
              v("a", 12)
              v("b", "q")
              v("b", "p")
-             lo(g, min(x)) if v(g, x)
-             hi(g, max(x)) if v(g, x)"#)
+             lo(g, min(x)) where v(g, x)
+             hi(g, max(x)) where v(g, x)"#)
         .unwrap();
         assert!(violations.is_empty(), "{violations:?}");
         assert_eq!(facts_of(&r, "lo"), [r#"lo("a", 1)"#, r#"lo("b", "p")"#]);
@@ -4047,8 +4054,8 @@ mod tests {
              v("a", "p")
              v("b", true)
              v("c", 2)
-             s(g, sum(x)) if v(g, x)
-             m(g, max(x)) if v(g, x)"#)
+             s(g, sum(x)) where v(g, x)
+             m(g, max(x)) where v(g, x)"#)
         .unwrap();
         assert_eq!(facts_of(&r, "s"), [r#"s("c", 2)"#]);
         assert_eq!(facts_of(&r, "m"), [r#"m("c", 2)"#]);
@@ -4069,7 +4076,7 @@ mod tests {
             has(r#"m("b", _): max() over true, which is neither an int nor a string"#),
             "{violations:?}"
         );
-        let (_, violations) = run(&format!("v({})\n v(1)\n s(sum(x)) if v(x)", i64::MAX)).unwrap();
+        let (_, violations) = run(&format!("v({})\n v(1)\n s(sum(x)) where v(x)", i64::MAX)).unwrap();
         assert!(
             violations
                 .iter()
@@ -4084,26 +4091,26 @@ mod tests {
     fn a_statically_ill_kinded_aggregate_is_an_error() {
         for (src, want) in [
             (
-                r#"s(sum("a")) if b(x)"#,
+                r#"s(sum("a")) where b(x)"#,
                 "`sum` aggregates ints, not a string",
             ),
             (
-                r#"s(sum("p-${x}")) if b(x)"#,
+                r#"s(sum("p-${x}")) where b(x)"#,
                 "`sum` aggregates ints, not a string",
             ),
             (
-                r#"s(min([x])) if b(x)"#,
+                r#"s(min([x])) where b(x)"#,
                 "`min` aggregates ints or strings, not a list",
             ),
             (
-                r#"s(max(true)) if b(x)"#,
+                r#"s(max(true)) where b(x)"#,
                 "`max` aggregates ints or strings, not a bool",
             ),
         ] {
             let err = run(&format!("b(1)\n{src}")).unwrap_err();
             assert!(format!("{err:#}").contains(want), "{src}: {err:#}");
         }
-        run("b(1)\ns(sum(x)) if b(x)\nt(max(\"p-${x}\")) if b(x)").unwrap();
+        run("b(1)\ns(sum(x)) where b(x)\nt(max(\"p-${x}\")) where b(x)").unwrap();
     }
 
     /// Rule 2: the aggregated value of `sum`, `min` and `max` is a content
@@ -4129,7 +4136,7 @@ mod tests {
             fact("c", Value::Int(2)),
         ];
         let (r, violations) = run_with(
-            "decl size(a, b)\n             total(g, sum(n)) if size(g, n)\n             lo(g, min(n)) if size(g, n)\n             hi(g, max(n)) if size(g, n)\n             all(sum(n)) if size(_, n)",
+            "decl size(a, b)\n             total(g, sum(n)) where size(g, n)\n             lo(g, min(n)) where size(g, n)\n             hi(g, max(n)) where size(g, n)\n             all(sum(n)) where size(_, n)",
             &extra,
         )
         .unwrap();
@@ -4159,7 +4166,7 @@ mod tests {
     /// first.
     #[test]
     fn a_wildcard_in_a_negation_matches_anything() {
-        let (r, _) = run("p(1, 2)\n             k(0) if p(9, 9)\n             none(1) if not k(_)\n             lonely(x) if x in [1, 3], not p(x, _)\n             let active = \"x\" if p(9, 9)\n             let next = \"blue\" if not has active")
+        let (r, _) = run("p(1, 2)\n             k(0) where p(9, 9)\n             none(1) where not k(_)\n             lonely(x) where x in [1, 3], not p(x, _)\n             let active = \"x\" where p(9, 9)\n             let next = \"blue\" where not has active")
         .unwrap();
         assert_eq!(facts_of(&r, "none"), vec!["none(1)".to_string()]);
         assert_eq!(facts_of(&r, "lonely"), vec!["lonely(3)".to_string()]);
@@ -4171,14 +4178,14 @@ mod tests {
     #[test]
     fn a_walk_to_a_missing_path_is_no_value() {
         let (r, _) = run("p({a: {b: 1}})
-             deep(x) if p(x), has x.a.b
-             open(x) if p(x), not has x.a.c
-             shallow(x) if p(x), has x.c")
+             deep(x) where p(x), has x.a.b
+             open(x) where p(x), not has x.a.c
+             shallow(x) where p(x), has x.c")
         .unwrap();
         assert_eq!(facts_of(&r, "deep").len(), 1);
         assert_eq!(facts_of(&r, "open").len(), 1);
         assert!(facts_of(&r, "shallow").is_empty());
-        let (r, _) = run("p({a: {b: [1]}})\n             elem(e) if p(x), e in x.a.b\n             none(e) if p(x), e in x.a.c")
+        let (r, _) = run("p({a: {b: [1]}})\n             elem(e) where p(x), e in x.a.b\n             none(e) where p(x), e in x.a.c")
         .unwrap();
         assert_eq!(facts_of(&r, "elem"), vec!["elem(1)".to_string()]);
         assert!(facts_of(&r, "none").is_empty());
@@ -4189,8 +4196,8 @@ mod tests {
     #[test]
     fn negative_cycle_is_an_error_with_rule_text() {
         let err = run("q(1)
-             p(x) if q(x), not r(x)
-             r(x) if p(x)")
+             p(x) where q(x), not r(x)
+             r(x) where p(x)")
         .unwrap_err()
         .to_string();
         assert!(err.contains("negative cycle"), "{err}");
@@ -4203,8 +4210,8 @@ mod tests {
     fn want_is_partitioned_by_type() {
         let (r, _) = run("want(\"net.subnet\", \"a\")
              want(\"net.subnet\", \"b\")
-             subnets(collect_set(s)) if want(\"net.subnet\", s)
-             want(\"db.postgres\", \"db\") if subnets(l), member(l, \"a\"), not want(\"net.subnet\", \"c\")")
+             subnets(collect_set(s)) where want(\"net.subnet\", s)
+             want(\"db.postgres\", \"db\") where subnets(l), member(l, \"a\"), not want(\"net.subnet\", \"c\")")
         .unwrap();
         assert!(facts_of(&r, "want").contains(&"want(\"db.postgres\", \"db\")".to_string()));
     }
@@ -4224,7 +4231,7 @@ mod tests {
     #[test]
     fn conflicting_contributions_derive_a_deny_naming_every_witness() {
         let (r, violations) = run("resource net.vpc main { cidr = \"10.0.0.0/16\" }
-             arg(net.vpc, \"main\", \"cidr\", \"10.1.0.0/16\") if want(net.vpc, \"main\")")
+             arg(net.vpc, \"main\", \"cidr\", \"10.1.0.0/16\") where want(net.vpc, \"main\")")
         .unwrap();
         assert!(
             facts_of(&r, "attr").iter().all(|a| !a.contains("cidr")),
@@ -4271,9 +4278,9 @@ mod tests {
              setting_add(\"prod\", \"sinks\", [\"s3\"])
              module network { output ids: list(string) = [\"a\", \"b\"] }
              instance network main {}
-             got(s, d) if setting(\"prod\", \"sinks\", s), setting(\"prod\", \"days\", d)
-             ids(l) if output(\"network.main\", \"ids\", l)
-             deny \"no audit\" if not setting(\"prod\", \"audit\", true)")
+             got(s, d) where setting(\"prod\", \"sinks\", s), setting(\"prod\", \"days\", d)
+             ids(l) where output(\"network.main\", \"ids\", l)
+             deny \"no audit\" where not setting(\"prod\", \"audit\", true)")
         .unwrap();
         assert_eq!(
             facts_of(&r, "got"),
@@ -4288,7 +4295,7 @@ mod tests {
     #[test]
     fn dotted_path_contributes_to_its_top_level_attribute() {
         let (r, _) = run("resource net.vpc main { tags = { env: \"dev\" } }
-             arg(net.vpc, \"main\", \"tags.team\", \"platform\") if want(net.vpc, \"main\")")
+             arg(net.vpc, \"main\", \"tags.team\", \"platform\") where want(net.vpc, \"main\")")
         .unwrap();
         assert_eq!(
             facts_of(&r, "attr"),
@@ -4332,8 +4339,8 @@ mod tests {
         };
         let program = crate::parser::parse_program(
             "want(\"net.subnet\", \"a\")
-             arg(\"net.subnet\", \"a\", \"vpc_id\", v) if input(\"vpc\", v)
-             seen(v) if arg(\"net.subnet\", \"a\", \"vpc_id\", v)",
+             arg(\"net.subnet\", \"a\", \"vpc_id\", v) where input(\"vpc\", v)
+             seen(v) where arg(\"net.subnet\", \"a\", \"vpc_id\", v)",
         )
         .unwrap();
         let (r, violations) = eval(&program, &[input("vpc", null.clone())]).unwrap();
@@ -4386,7 +4393,7 @@ mod tests {
     /// `resource` or `settings` header for every leaf without its own.
     #[test]
     fn ranks_in_blocks() {
-        let (r, violations) = run("resource net.vpc main @default {\n               cidr = \"10.0.0.0/16\"\n               tags = { env: \"dev\", team: \"net\" }\n               public = true @override\n             }\n             resource net.vpc main {\n               cidr = \"10.1.0.0/16\"\n               tags = { team: \"platform\" }\n               public = false\n             }\n             env_name(\"dev\")\n             env_name(\"prod\")\n             settings e @default {\n               if env_name(e)\n               days = 3\n               zones = [\"a\"]\n             }\n             settings prod { days = 14 }\n             got(e, d, z) if setting(e, \"days\", d), setting(e, \"zones\", z)")
+        let (r, violations) = run("resource net.vpc main @default {\n               cidr = \"10.0.0.0/16\"\n               tags = { env: \"dev\", team: \"net\" }\n               public = true @override\n             }\n             resource net.vpc main {\n               cidr = \"10.1.0.0/16\"\n               tags = { team: \"platform\" }\n               public = false\n             }\n             env_name(\"dev\")\n             env_name(\"prod\")\n             settings e @default {\n               days = 3\n               zones = [\"a\"]\n             } where env_name(e)\n             settings prod { days = 14 }\n             got(e, d, z) where setting(e, \"days\", d), setting(e, \"zones\", z)")
         .unwrap();
         assert!(violations.is_empty(), "{violations:?}");
         assert_eq!(
@@ -4498,7 +4505,7 @@ mod tests {
     /// replaced wholesale by a normal one, and same-shelf sets union.
     #[test]
     fn a_default_set_is_replaced_not_unioned() {
-        let (r, violations) = run("type_lattice(net.vpc, \"sgs\", \"set\")\n             resource net.vpc a { sgs = [\"base\"] }\n             resource net.vpc b { }\n             policy p {\n               contributes t.sgs\n               arg(t, n, \"sgs\", [\"default_sg\", \"ssh\"], \"default\") if want(t, n)\n               arg(t, n, \"sgs\", [\"audit\"]) if want(t, n), n = \"a\"\n             }\n             use p")
+        let (r, violations) = run("type_lattice(net.vpc, \"sgs\", \"set\")\n             resource net.vpc a { sgs = [\"base\"] }\n             resource net.vpc b { }\n             policy p {\n               contributes t.sgs\n               arg(t, n, \"sgs\", [\"default_sg\", \"ssh\"], \"default\") where want(t, n)\n               arg(t, n, \"sgs\", [\"audit\"]) where want(t, n), n = \"a\"\n             }\n             use p")
         .unwrap();
         assert!(violations.is_empty(), "{violations:?}");
         assert_eq!(
@@ -4514,7 +4521,7 @@ mod tests {
     /// predicate is a compile error naming it and the rule.
     #[test]
     fn undefined_predicate_is_an_error() {
-        let err = run("env(\"prod\")\n             resource net.vpc main {\n               if envv(\"prod\")\n               cidr = \"10.0.0.0/16\"\n             }")
+        let err = run("env(\"prod\")\n             resource net.vpc main {\n               cidr = \"10.0.0.0/16\"\n             } where envv(\"prod\")")
         .unwrap_err()
         .to_string();
         assert!(err.contains("undefined predicate envv/1"), "{err}");
@@ -4528,7 +4535,7 @@ mod tests {
     /// predicates are defined with no rows.
     #[test]
     fn extern_and_provider_predicates_are_defined() {
-        let (r, _) = run("decl allowed(a)\n             want(net.vpc, \"a\")\n             lonely(n) if want(net.vpc, n), not allowed(n), not cloud_exists(net.vpc, n)")
+        let (r, _) = run("decl allowed(a)\n             want(net.vpc, \"a\")\n             lonely(n) where want(net.vpc, n), not allowed(n), not cloud_exists(net.vpc, n)")
         .unwrap();
         assert_eq!(facts_of(&r, "lonely"), vec!["lonely(\"a\")".to_string()]);
     }
@@ -4537,21 +4544,21 @@ mod tests {
     /// integers; conversions are explicit builtins.
     #[test]
     fn coercion_is_explicit() {
-        let err = run("s(\"10\")\nn(x) if s(s), x = s + 1")
+        let err = run("s(\"10\")\nn(x) where s(s), x = s + 1")
             .unwrap_err()
             .to_string();
         assert!(err.contains("add(\"10\", 1) is not defined"), "{err}");
-        let err = run("n(x) if x = to_int(\"abc\") + 1")
+        let err = run("n(x) where x = to_int(\"abc\") + 1")
             .unwrap_err()
             .to_string();
         assert!(err.contains("to_int(\"abc\") is not defined"), "{err}");
         let (r, _) = run("s(\"10\")
-             explicit(x) if s(s), x = to_int(s) + 1
-             text(t) if t = to_string(14)
-             sizes(a, b, c) if a = len([\"x\", \"y\"]), b = len(\"héllo\"), c = len({k: 1})
-             cases(l, u) if l = lower(\"AbC\"), u = upper(\"AbC\")
-             parts(p) if p = split(\"a,b,c\", \",\")
-             joined(j) if j = join([\"a\", 1, true], \"-\")")
+             explicit(x) where s(s), x = to_int(s) + 1
+             text(t) where t = to_string(14)
+             sizes(a, b, c) where a = len([\"x\", \"y\"]), b = len(\"héllo\"), c = len({k: 1})
+             cases(l, u) where l = lower(\"AbC\"), u = upper(\"AbC\")
+             parts(p) where p = split(\"a,b,c\", \",\")
+             joined(j) where j = join([\"a\", 1, true], \"-\")")
         .unwrap();
         assert_eq!(facts_of(&r, "explicit"), vec!["explicit(11)".to_string()]);
         assert_eq!(facts_of(&r, "text"), vec!["text(\"14\")".to_string()]);
@@ -4576,7 +4583,7 @@ mod tests {
     fn a_builtin_over_a_null_is_stuck() {
         let (r, _) = run_with(
             "want(net.vpc, \"a\")
-             id_len(n) if want(net.vpc, a), n = len(ref(net.vpc, a, \"id\"))",
+             id_len(n) where want(net.vpc, a), n = len(ref(net.vpc, a, \"id\"))",
             &crate::schema::fake().facts,
         )
         .unwrap();
@@ -4594,7 +4601,7 @@ mod tests {
     /// deeper than the old 200-iteration cap converges.
     #[test]
     fn a_300_deep_chain_converges() {
-        let (r, _) = run("decl n(a) mixed\n             n(0)\n             n(y) if n(x), x < 300, y = x + 1\n             deepest(x) if n(x), x >= 300")
+        let (r, _) = run("decl n(a) mixed\n             n(0)\n             n(y) where n(x), x < 300, y = x + 1\n             deepest(x) where n(x), x >= 300")
         .unwrap();
         assert_eq!(facts_of(&r, "n").len(), 301);
         assert_eq!(facts_of(&r, "deepest"), vec!["deepest(300)".to_string()]);
@@ -4624,7 +4631,7 @@ mod tests {
     /// any other body, so the resource is derived (pngu.df's peerings).
     #[test]
     fn a_record_atom_in_a_resource_body_matches() {
-        let (r, _) = run("decl peering(env: symbol, name: symbol)\n             peering( env: \"prod\", name: \"legacy\" )\n             resource net.peering name {\n               if peering( env: env, name: name )\n               env = env\n             }")
+        let (r, _) = run("decl peering(env: symbol, name: symbol)\n             peering( env: \"prod\", name: \"legacy\" )\n             resource net.peering name {\n               env = env\n             } where peering( env: env, name: name )")
         .unwrap();
         assert_eq!(
             facts_of(&r, "attr"),
@@ -4979,16 +4986,14 @@ mod tests {
         let (r, violations) = run_with(
             r#"resource db.postgres a {}
                resource db.postgres b {}
-               up(d) if attr(db.postgres, d, "endpoint", e), e != ""
-               ready(v) if up(v)
+               up(d) where attr(db.postgres, d, "endpoint", e), e != ""
+               ready(v) where up(v)
                resource net.subnet s {
-                 if up("a")
                  cidr = "10.0.1.0/24"
-               }
+               } where up("a")
                resource net.subnet t {
-                 if ready("b")
                  cidr = "10.0.2.0/24"
-               }"#,
+               } where ready("b")"#,
             &crate::schema::fake().facts,
         )
         .unwrap();
@@ -5108,7 +5113,7 @@ mod tests {
 
     #[test]
     fn a_firing_records_its_rule_body_facts_and_negations() {
-        let (r, _) = run("p(1)\np(2)\ns(2)\nq(x) if p(x), not s(x)").unwrap();
+        let (r, _) = run("p(1)\np(2)\ns(2)\nq(x) where p(x), not s(x)").unwrap();
         let why = why_leaves(&r, "q(1)");
         assert!(why.contains(&Leaf::Base {
             span: "<input>:1:1 (p)".into()
@@ -5141,7 +5146,7 @@ mod tests {
         let src = r#"
             want("t", "a")
             arg("t", "a", "tags", {x: 1}, "normal")
-            arg("t", "a", "tags", {y: 2}, "normal") if want("t", "a")
+            arg("t", "a", "tags", {y: 2}, "normal") where want("t", "a")
         "#;
         let (r, _) = run(src).unwrap();
         let why = why_leaves(&r, r#"attr("t", "a", "tags", {x: 1, y: 2})"#);
@@ -5158,7 +5163,7 @@ mod tests {
     #[test]
     fn a_given_fact_is_an_input_leaf() {
         let (r, _) = run_with(
-            "env(e) if input(\"env\", e)",
+            "env(e) where input(\"env\", e)",
             &[input("env", Value::Str("prod".into()))],
         )
         .unwrap();
@@ -5185,8 +5190,8 @@ mod tests {
     #[test]
     fn a_policy_denies_on_any_stuck_instance() {
         let (r, violations) = gke_with(
-            r#"deny "stuck" { rule: r, on: n } if stuck(r, _, _, n)
-               seen(r, h) if stuck(r, h, _, _)"#,
+            r#"deny "stuck" { rule: r, on: n } where stuck(r, _, _, n)
+               seen(r, h) where stuck(r, h, _, _)"#,
         )
         .unwrap();
         assert!(!r.stuck.is_empty());
@@ -5222,8 +5227,8 @@ mod tests {
     #[test]
     fn a_stuck_reader_on_a_cycle_is_an_error() {
         let err = gke_with(
-            r#"flag(r) if stuck(r, _, _, _)
-               deny "flagged" if flag(r), r > 3"#,
+            r#"flag(r) where stuck(r, _, _, _)
+               deny "flagged" where flag(r), r > 3"#,
         )
         .unwrap_err()
         .to_string();
@@ -5233,7 +5238,7 @@ mod tests {
 
     #[test]
     fn a_rule_cannot_define_stuck() {
-        let err = run("stuck(1, \"a\", \"b\", \"c\") if input(\"x\", \"y\")").unwrap_err();
+        let err = run("stuck(1, \"a\", \"b\", \"c\") where input(\"x\", \"y\")").unwrap_err();
         assert!(
             err.to_string()
                 .contains("stuck/4 is derived by the evaluator")
@@ -5247,8 +5252,8 @@ mod tests {
     fn a_resumed_evaluation_counts_a_constraints_stuck_instance() {
         let program = crate::parser::parse_program(
             r#"decl later(a)
-               strict(r) if stuck(r, _, _, _)
-               deny "later is positive" if later(x), x > 0"#,
+               strict(r) where stuck(r, _, _, _)
+               deny "later is positive" where later(x), x > 0"#,
         )
         .unwrap();
         let (_, _, resumable) = eval_resumable(&program, &[], &["later"]).unwrap();

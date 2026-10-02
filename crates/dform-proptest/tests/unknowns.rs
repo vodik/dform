@@ -150,9 +150,9 @@ enum Guard {
 
 #[derive(Clone, Debug, PartialEq)]
 enum PredDef {
-    /// `pI(x) if bind, guards`
+    /// `pI(x) where bind, guards`
     Rule(Gen, Vec<Guard>),
-    /// `pI(x) if x = sS.endpoint` / `sS.id`: facts that carry a null.
+    /// `pI(x) where x = sS.endpoint` / `sS.id`: facts that carry a null.
     Carry(u8, bool),
 }
 
@@ -392,9 +392,6 @@ impl Printer<'_> {
         };
         let mut clause: Vec<String> = r.bind.map(|g| self.bind(g, sc)).into_iter().collect();
         clause.extend(self.body(None, &r.guards, sc));
-        if !clause.is_empty() {
-            writeln!(f, "  if {}", clause.join(", "))?;
-        }
         let s = self.src(r.src);
         writeln!(f, "  src = {s}.id")?;
         if r.fields & 1 != 0 {
@@ -418,7 +415,11 @@ impl Printer<'_> {
         if r.bind.is_some() && r.fields & 8 != 0 {
             writeln!(f, "  v = x")?;
         }
-        writeln!(f, "}}")
+        if clause.is_empty() {
+            writeln!(f, "}}")
+        } else {
+            writeln!(f, "}} where {}", clause.join(", "))
+        }
     }
 }
 
@@ -460,16 +461,16 @@ impl fmt::Display for Program {
             };
             match d {
                 Def::Pred(PredDef::Rule(g, guards)) => {
-                    writeln!(f, "p{i}(x) if {}", pr.body(Some(*g), guards, sc).join(", "))?;
+                    writeln!(f, "p{i}(x) where {}", pr.body(Some(*g), guards, sc).join(", "))?;
                 }
                 Def::Pred(PredDef::Carry(s, id)) => {
                     let path = if *id { "id" } else { "endpoint" };
-                    writeln!(f, "p{i}(x) if x = {}.{path}", pr.src(*s))?;
+                    writeln!(f, "p{i}(x) where x = {}.{path}", pr.src(*s))?;
                 }
                 Def::Agg(a) => {
                     writeln!(
                         f,
-                        "c{i}({}) if {}",
+                        "c{i}({}) where {}",
                         pr.agg(a),
                         pr.body(Some(a.bind), &a.guards, sc).join(", ")
                     )?;
@@ -496,7 +497,7 @@ impl fmt::Display for Program {
             if body.is_empty() {
                 body.push("b(x)".into());
             }
-            writeln!(f, "deny \"d{k}\" if {}", body.join(", "))?;
+            writeln!(f, "deny \"d{k}\" where {}", body.join(", "))?;
         }
         Ok(())
     }
@@ -1202,9 +1203,9 @@ resource pt.src s0 {
   label = "s0"
 }
 
-p0(x) if b(x), s0.size >= 0
-p1(x) if p0(x)
-deny "d0" if b(x), not p1(x)
+p0(x) where b(x), s0.size >= 0
+p1(x) where p0(x)
+deny "d0" where b(x), not p1(x)
 "#,
         &ZEROS,
     );
@@ -1226,12 +1227,11 @@ resource pt.mid m0 {
 }
 
 resource pt.mid m1 {
-  if s0.size >= 0
   src = s0.id
-}
+} where s0.size >= 0
 
-p0(x) if x in pt.mid
-c1(count(x)) if p0(x)
+p0(x) where x in pt.mid
+c1(count(x)) where p0(x)
 "#,
         &ZEROS,
     );
@@ -1255,9 +1255,8 @@ resource pt.src s1 {
 }
 
 resource pt.mid m0 {
-  if s0.size >= 0
   src = s0.id
-}
+} where s0.size >= 0
 
 resource pt.dst d0 {
   src = s1.id

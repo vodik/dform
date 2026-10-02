@@ -11,4 +11,4 @@ resource net.vpc main {
   tags = { env: "dev" }
 }
 
-arg(t, n, p, v) if override(t, n, p, v), want(t, n), arg(t, n, "cidr", _c)
+arg(t, n, p, v) where override(t, n, p, v), want(t, n), arg(t, n, "cidr", _c)

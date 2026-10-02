@@ -1,0 +1,10 @@
+edition 2026
+
+# A refinement is spelled `check` (R-1): `where` is the clause word, after
+# a head, and in a refinement's place it is an error naming `check`.
+input replicas: int = 2 where replicas >= 1
+input zones: int where zones >= 1
+type db.postgres {
+  backup_days: int where 1 <= backup_days <= 35
+}
+let k = 1 check k > 0

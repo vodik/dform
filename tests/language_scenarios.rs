@@ -9,25 +9,23 @@ const P: &str = r#"edition 2026
 input env: enum("dev", "prod")
 input size: int = 1
 resource net.vpc main {
-  if size(s)
   cidr = "10.0.0.0/16"
   size = s
-}
+} where size(s)
 resource db.postgres main {
-  if env("prod")
   multi_az = true
-}
-deny "size is small" if size(s), s > 5
+} where env("prod")
+deny "size is small" where size(s), s > 5
 
 scenario prod {
   set env = "prod"
-  deny "prod has a database" if not main in db.postgres
+  deny "prod has a database" where not main in db.postgres
 }
 
 scenario dev_is_small {
   set env = "dev"
   set size = 9
-  deny "dev has no database" if _ in db.postgres
+  deny "dev has no database" where _ in db.postgres
 }
 "#;
 

@@ -71,7 +71,7 @@ pub fn parse(src: &str) -> Result<Query> {
     {
         return Ok(Query::Pred(src.to_string()));
     }
-    let program = crate::parser::parse_pattern(&format!("query__(0) if {src}"))
+    let program = crate::parser::parse_pattern(&format!("query__(0) where {src}"))
         .map_err(|e| anyhow::anyhow!("cannot parse query '{src}': {e:#}"))?;
     let [crate::ast::Stmt::Rule(r)] = program.statements.as_slice() else {
         bail!("cannot parse query '{src}': expected body literals");
@@ -417,7 +417,7 @@ mod tests {
         let f = facts(
             r#"want("v", "a")
 arg("v", "a", "pw", "hunter22", "normal")
-               leak(s) if attr("v", "a", "pw", p), s = concat("pw=", p)"#,
+               leak(s) where attr("v", "a", "pw", p), s = concat("pw=", p)"#,
         );
         let r = Redactor::new(&f, &schema);
         let Query::Body { body, vars } = parse("leak(S)").unwrap() else {

@@ -2,4 +2,4 @@ edition 2026
 
 # Removed from the grammar until the evaluator supports them.
 p(null)
-t(l) if l = [x ordered by x | r(x)]
+t(l) where l = [x ordered by x | r(x)]

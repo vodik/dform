@@ -38,7 +38,6 @@ resource k8s.namespace web {
 }
 
 resource k8s.deployment web {
-  if release(image)
   metadata.name = "web"
   metadata.namespace = k8s.namespace["web"].metadata.name
   spec.replicas = 3
@@ -49,7 +48,7 @@ resource k8s.deployment web {
     image,
     ports: [{ containerPort: 8080, protocol: "TCP" }]
   }]
-}
+} where release(image)
 
 resource k8s.service web {
   metadata.name = "web"
@@ -60,11 +59,11 @@ resource k8s.service web {
 
 # Replicas are the autoscaler's business on the way back: a drift there is
 # corrected without asking. Any other drift waits for `approve`.
-auto_reconcile(t, a, p) if drift(t, a, p, _, _), p == "spec.replicas"
+auto_reconcile(t, a, p) where drift(t, a, p, _, _), p == "spec.replicas"
 
 # In prod a rollout needs an approval: the controller holds it until a
 # token for the plan's digest arrives.
-requires_approval(d, "a prod rollout") if {
+requires_approval(d, "a prod rollout") where {
   env == "prod"
   deformation(k, k8s.deployment, a, _)
   k != "delete"

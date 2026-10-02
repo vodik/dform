@@ -16,13 +16,13 @@ module network {
 instance network main { vpc_cidr = "10.0.0.0/16" }
 instance network peer {}
 
-reads_private(z) if zone_index(z, _)
+reads_private(z) where zone_index(z, _)
 
 policy tags {
   contributes t.tags
-  set r.tags = { team: "x" } if r in resource
-  set r.labels = { team: "x" } if r in resource
-  set v.cidr = "10.0.0.0/8" if v in net.vpc
+  set r.tags = { team: "x" } where r in resource
+  set r.labels = { team: "x" } where r in resource
+  set v.cidr = "10.0.0.0/8" where v in net.vpc
 }
 
 use tags

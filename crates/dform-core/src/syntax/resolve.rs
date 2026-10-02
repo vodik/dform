@@ -661,8 +661,7 @@ impl<'u> Lowerer<'u> {
             return string_value(text).ok();
         }
         let name = t.text().to_string();
-        let block = node(n, BLOCK)?;
-        let bound = block
+        let bound = n
             .children()
             .filter(|c| c.kind() == CLAUSE)
             .flat_map(|c| c.descendants().collect::<Vec<_>>())
@@ -1244,7 +1243,7 @@ impl<'u> Lowerer<'u> {
                     Some(t) => Some(self.constant(&mut rc, &t)?),
                     None => None,
                 };
-                let refinement = self.where_clause(n, scope)?;
+                let refinement = self.refinement(n, scope)?;
                 one(Stmt::Input(InputDecl {
                     name,
                     ty,
@@ -1491,7 +1490,7 @@ impl<'u> Lowerer<'u> {
                 .filter(|t| t.kind() == IDENT)
                 .map(|t| t.text().to_string())
                 .collect();
-            let refinement = self.where_clause(&a, scope)?;
+            let refinement = self.refinement(&a, scope)?;
             let children = self.attr_decls(&a, scope)?;
             out.push(AttrDecl {
                 path,
@@ -1505,9 +1504,10 @@ impl<'u> Lowerer<'u> {
         Ok(out)
     }
 
-    /// A `where` body: names are their own text (the attribute, an input).
-    fn where_clause(&mut self, n: &SyntaxNode, scope: usize) -> L<Vec<Lit>> {
-        let Some(b) = node(n, WHERE_CLAUSE).and_then(|w| node(&w, BODY)) else {
+    /// A refinement's `check` body: names are their own text (the
+    /// attribute, an input).
+    fn refinement(&mut self, n: &SyntaxNode, scope: usize) -> L<Vec<Lit>> {
+        let Some(b) = node(n, REFINEMENT).and_then(|w| node(&w, BODY)) else {
             return Ok(Vec::new());
         };
         let saved = self.lenient;
@@ -1658,7 +1658,7 @@ impl<'u> Lowerer<'u> {
         let Some(block) = block else {
             return Ok(Vec::new());
         };
-        if let Some(c) = node(block, CLAUSE) {
+        if let Some(c) = block.parent().and_then(|stmt| node(&stmt, CLAUSE)) {
             return self.error(self.span(&c), "a provider or stack block takes no clause");
         }
         let mut out = Vec::new();
@@ -1933,7 +1933,7 @@ impl<'u> Lowerer<'u> {
         Ok(out)
     }
 
-    /// `output k [: T] = t [if B]` (H-7): the declaration, when typed, and
+    /// `output k [: T] = t [where B]` (H-7): the declaration, when typed, and
     /// its value; a value that reads, or one with a condition, is the rule
     /// `output(k, t') :- B, reads`.
     fn output(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Vec<Stmt>> {
@@ -1999,11 +1999,11 @@ impl<'u> Lowerer<'u> {
         Ok(out)
     }
 
-    /// The clause of a block: its `if` body.
-    fn clauses(&mut self, rc: &mut Rc, block: &SyntaxNode) -> L<Vec<Lit>> {
+    /// The clause of a block statement: the `where` body after its block.
+    fn clauses(&mut self, rc: &mut Rc, stmt: &SyntaxNode) -> L<Vec<Lit>> {
         let mut out = Vec::new();
         let mut failed = false;
-        for c in block.children().filter(|c| c.kind() == CLAUSE) {
+        for c in stmt.children().filter(|c| c.kind() == CLAUSE) {
             match node(&c, BODY).map(|b| self.body(rc, &b)) {
                 Some(Ok(ls)) => out.extend(ls),
                 _ => failed = true,
@@ -2067,7 +2067,7 @@ impl<'u> Lowerer<'u> {
         }
         let block = node(n, BLOCK).ok_or(Skip)?;
         let mut rc = self.rc(n, scope, outer);
-        let mut body = self.clauses(&mut rc, &block)?;
+        let mut body = self.clauses(&mut rc, n)?;
         let mut reads = Vec::new();
         let fields = self.fields(&mut rc, &block, &mut reads)?;
         body.extend(reads);
@@ -2092,13 +2092,13 @@ impl<'u> Lowerer<'u> {
         })])
     }
 
-    /// `resource T n { for B  if B  f = t ... }` and `settings e { ... }`.
+    /// `resource T n { f = t ... } where B` and `settings e { ... } where B`.
     fn block_stmt(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Vec<Stmt>> {
         let span = self.span(n);
         let block = node(n, BLOCK).ok_or(Skip)?;
         let header = self.header_token(n).ok_or(Skip)?;
         let mut rc = self.rc(n, scope, outer);
-        let mut body = self.clauses(&mut rc, &block)?;
+        let mut body = self.clauses(&mut rc, n)?;
         let mut reads = Vec::new();
         let fields = self.fields(&mut rc, &block, &mut reads)?;
         let reads_at = body.len()..body.len() + reads.len();
@@ -2133,7 +2133,7 @@ impl<'u> Lowerer<'u> {
                     return self.error(
                         self.span_of(header.text_range()),
                         "a resource is written by its name: `_` names nothing; name it, or \
-                         bind the name in the clause (`resource T n { if p(n) .. }`)",
+                         bind the name in the clause (`resource T n { .. } where p(n)`)",
                     );
                 }
                 _ if self.is_value(scope, text) => {
@@ -2225,7 +2225,7 @@ impl<'u> Lowerer<'u> {
         }])
     }
 
-    /// `let k = t [if B]` (H-6): the relation `k(t)`, read by name. When
+    /// `let k = t [where B]` (H-6): the relation `k(t)`, read by name. When
     /// `t` is a reference, `k`'s value is that reference and a dot on `k`
     /// reads through it.
     fn let_stmt(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Vec<Stmt>> {
@@ -2276,7 +2276,7 @@ impl<'u> Lowerer<'u> {
         self.term(rc, t, Pos::Whole, body)
     }
 
-    /// `set chain (=|+=) t [@rank] [if B]` (H-5): a contribution to a
+    /// `set chain (=|+=) t [@rank] [where B]` (H-5): a contribution to a
     /// resource's attribute (`arg(T, A, p, t)`), a settings row's leaf, or
     /// an input (a stack input's `input(k, t)`, a module instance's).
     fn set(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Vec<Stmt>> {
@@ -2406,7 +2406,7 @@ impl<'u> Lowerer<'u> {
             return self.error(
                 span,
                 format!(
-                    "`{typ}[_]` is every resource of `{typ}`: write `set r{path} = .. if r in {typ}`"
+                    "`{typ}[_]` is every resource of `{typ}`: write `set r{path} = .. where r in {typ}`"
                 ),
             );
         }
@@ -2455,7 +2455,7 @@ impl<'u> Lowerer<'u> {
             Some(Term::Val(Value::Str(s))) => Some(s.clone()),
             _ => None,
         };
-        let cond = if has_body { " if .." } else { "" };
+        let cond = if has_body { " where .." } else { "" };
         let surface = match (head.pred.as_str(), head.args.len()) {
             ("want", 2) if s(0).is_some() => Some(format!(
                 "a resource is declared by a block: `resource {} {} {{ .. }}`",
@@ -2592,7 +2592,7 @@ impl<'u> Lowerer<'u> {
         Err(Skip)
     }
 
-    /// `deny "m" {o} if B`, `warn ...`.
+    /// `deny "m" {o} where B`, `warn ...`.
     fn check(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Vec<Stmt>> {
         let span = self.span(n);
         let kw = tokens(n).next().ok_or(Skip)?;
@@ -4511,10 +4511,10 @@ mod tests {
     fn value_names_are_read_by_name() {
         let got = lower(
             "input env: enum(\"a\", \"b\") = \"a\"\n\
-             p(x) if q(x), env == \"a\"\n\
-             r(env) if q(_)\n\
-             s(x) if q(x), not env, has env\n\
-             let serving = \"blue\" if q(1)\n\
+             p(x) where q(x), env == \"a\"\n\
+             r(env) where q(_)\n\
+             s(x) where q(x), not env, has env\n\
+             let serving = \"blue\" where q(1)\n\
              t(serving)\n",
         );
         assert_eq!(
@@ -4537,12 +4537,11 @@ mod tests {
             "resource net.vpc vpc { cidr = \"10.0.0.0/16\" }\n\
              zone_index(\"a\", 0)\n\
              resource net.subnet \"private-${z}\" {\n\
-               if data(\"zone\", z)\n\
                vpc_id     = vpc.id\n\
                cidr       = inet_subnet(vpc.cidr, 4, zone_index[z])\n\
                zone       = z\n\
                visibility = \"private\"\n\
-             }\n",
+             } where data(\"zone\", z)\n",
         );
         assert_eq!(
             got[2],
@@ -4558,8 +4557,8 @@ mod tests {
         let got = lower(
             "resource k8s.namespace web { name = \"web\" }\n\
              resource k8s.deployment a { namespace = web.name }\n\
-             resource k8s.deployment b {\n  if ns = web.name\n  namespace = ns\n}\n\
-             p(web.name, x) if x = web.name\n",
+             resource k8s.deployment b {\n  namespace = ns\n} where ns = web.name\n\
+             p(web.name, x) where x = web.name\n",
         );
         assert_eq!(
             &got[1..],
@@ -4581,7 +4580,7 @@ mod tests {
              let cfg = settings[env]\n\
              resource net.vpc v { cidr = cfg.net.cidr, name = \"${cfg.name}-vpc\" }\n\
              let pg = db.pg[\"main\"]\n\
-             deny \"x\" if cfg.x.y != \"z\", pg.size > 3\n",
+             deny \"x\" where cfg.x.y != \"z\", pg.size > 3\n",
         );
         assert_eq!(
             &got[1..],
@@ -4594,7 +4593,7 @@ mod tests {
                  attr(\"db.pg\", Pg, \"size\", Size), Size > 3",
             ]
         );
-        let e = error("let x = settings[\"a\"]\nlet x = 1 if q(1)\np(x.y) if q(1)\n");
+        let e = error("let x = settings[\"a\"]\nlet x = 1 where q(1)\np(x.y) where q(1)\n");
         assert!(
             e.contains("`let x` is a settings row in one row and a value in another"),
             "{e}"
@@ -4605,7 +4604,7 @@ mod tests {
     fn a_namespace_no_builtin_schema_knows_is_a_providers() {
         let got = lower(
             "resource acme.gadget g {}\n\
-             p(x) if x in acme.widget, acme.widget[x].size > 1\n",
+             p(x) where x in acme.widget, acme.widget[x].size > 1\n",
         );
         assert_eq!(
             got.last().unwrap(),
@@ -4617,7 +4616,7 @@ mod tests {
     fn a_resource_named_settings_is_read_by_its_name() {
         let got = lower(
             "resource net.vpc settings { name = \"s\" }\n\
-             p(n) if n = settings.name\n",
+             p(n) where n = settings.name\n",
         );
         assert_eq!(
             got.last().unwrap(),
@@ -4630,7 +4629,7 @@ mod tests {
         let got = lower(
             "resource db.postgres main {}\n\
              resource net.vpc main {}\n\
-             ok(1) if main in db.postgres\n",
+             ok(1) where main in db.postgres\n",
         );
         assert_eq!(
             got.last().unwrap(),
@@ -4642,14 +4641,14 @@ mod tests {
     fn membership_indexing_and_negation() {
         let got = lower(
             "resource db.postgres pg { public = false }\n\
-             deny \"public\" { resource: p } if p in db.postgres, not p.public == false\n\
-             set r.tags = { team: \"x\" } if r in resource\n\
+             deny \"public\" { resource: p } where p in db.postgres, not p.public == false\n\
+             set r.tags = { team: \"x\" } where r in resource\n\
              let xs = [1, 2]\n\
              let ys = [{ name: \"a\", net: 1 }]\n\
-             q(x) if x = xs[i], i >= 0, x not in [3]\n\
-             ok(1) if pg in db.postgres, has pg.public, not \"other\" in db.postgres\n\
-             big(n) if n in world.net.vpc, world.net.vpc[n].size > 3\n\
-             pair(n, c) if ys[_] = { name: n, net: c }\n",
+             q(x) where x = xs[i], i >= 0, x not in [3]\n\
+             ok(1) where pg in db.postgres, has pg.public, not \"other\" in db.postgres\n\
+             big(n) where n in world.net.vpc, world.net.vpc[n].size > 3\n\
+             pair(n, c) where ys[_] = { name: n, net: c }\n",
         );
         assert_eq!(
             &got[1..],
@@ -4673,8 +4672,8 @@ mod tests {
              output vpc: net.vpc = vpc\n  output ids: list(string) = [vpc.id]\n}\n\
              instance m a { n = 1 }\n\
              inst(\"a\")\n\
-             p(v, s) if inst(i), v = m[i].vpc, s = m.a.vpc.size\n\
-             q(x) if x = m.a.ids, \"m.a::vpc\" in net.vpc\n",
+             p(v, s) where inst(i), v = m[i].vpc, s = m.a.vpc.size\n\
+             q(x) where x = m.a.ids, \"m.a::vpc\" in net.vpc\n",
         );
         assert_eq!(
             got[0],
@@ -4695,9 +4694,9 @@ mod tests {
     fn interpolation_and_lookups() {
         let got = lower(
             "extern file.json(+path, -value)\n\
-             p(\"{x} $${x} ${x}%\") if q(x)\n\
-             r(v) if v = file.json[\"a.json\"]\n\
-             s(y) if q(x), y = \"n-${x}\", \"n-${x}\" in net.route\n",
+             p(\"{x} $${x} ${x}%\") where q(x)\n\
+             r(v) where v = file.json[\"a.json\"]\n\
+             s(y) where q(x), y = \"n-${x}\", \"n-${x}\" in net.route\n",
         );
         assert_eq!(
             &got[..],
@@ -4711,7 +4710,7 @@ mod tests {
 
     #[test]
     fn a_negated_body_is_a_helper() {
-        let got = lower("p(x) if q(x), not { r(x, y), s(y) }\n");
+        let got = lower("p(x) where q(x), not { r(x, y), s(y) }\n");
         assert_eq!(
             &got[..],
             [
@@ -4727,9 +4726,9 @@ mod tests {
     fn a_nested_path_is_walked_and_its_negation_is_a_helper() {
         let got = lower(
             "resource db.pg d { s = { a: 1 } }\n\
-             c(x) if q(x), has x.limits\n\
-             n(x) if q(x), not has x.limits\n\
-             r(1) if not d.s.a == 2\n",
+             c(x) where q(x), has x.limits\n\
+             n(x) where q(x), not has x.limits\n\
+             r(1) where not d.s.a == 2\n",
         );
         assert_eq!(
             &got[1..],
@@ -4743,34 +4742,34 @@ mod tests {
         );
     }
 
-    /// H-4: a statement's own `if` is its condition.
+    /// H-4: a statement's own `where` is its condition.
     #[test]
     fn a_statement_takes_its_condition() {
         let got = lower(
-            "input env: string = \"dev\"\na(1) if env == \"prod\"\n\
-             b(x) if e(x), f(x)\n",
+            "input env: string = \"dev\"\na(1) where env == \"prod\"\n\
+             b(x) where e(x), f(x)\n",
         );
         assert_eq!(&got[..], ["a(1) :- env(\"prod\")", "b(X) :- e(X), f(X)"]);
     }
 
     #[test]
     fn a_variable_may_not_shadow_a_name() {
-        let e = error("resource net.vpc main { cidr = \"x\" }\np(net) if q(net)\n");
+        let e = error("resource net.vpc main { cidr = \"x\" }\np(net) where q(net)\n");
         assert!(
             e.contains("variable `net` shadows the type namespace `net`"),
             "{e}"
         );
-        let e = error("resource net.vpc main { cidr = \"x\" }\np(main) if q(main)\n");
+        let e = error("resource net.vpc main { cidr = \"x\" }\np(main) where q(main)\n");
         assert!(
-            e.contains("t.df:2:14: variable `main` shadows the resource `main`"),
+            e.contains("t.df:2:17: variable `main` shadows the resource `main`"),
             "{e}"
         );
     }
 
     #[test]
     fn an_unbound_name_is_meant_as_a_string() {
-        let e = error("input env: string = \"dev\"\np(1) if env == prod\n");
-        assert!(e.contains("t.df:2:16: unknown name `prod`"), "{e}");
+        let e = error("input env: string = \"dev\"\np(1) where env == prod\n");
+        assert!(e.contains("t.df:2:19: unknown name `prod`"), "{e}");
         assert!(e.contains("\"prod\""), "{e}");
         let e = error("resource net.vpc main { cidr = dev }\n");
         assert!(e.contains("unknown name `dev`"), "{e}");
@@ -4798,7 +4797,7 @@ mod tests {
     #[test]
     fn a_block_name_is_a_variable_when_its_clause_binds_it() {
         let got = lower(
-            "t(\"a\")\nresource net.vpc t { if t(t)\n size = 1 }\nresource net.vpc shared { size = 2 }\n",
+            "t(\"a\")\nresource net.vpc t {\n size = 1 } where t(t)\nresource net.vpc shared { size = 2 }\n",
         );
         assert_eq!(
             &got[1..],
@@ -4837,26 +4836,26 @@ mod tests {
             ("output vpc: string\n", "output vpc has no value"),
             // H-8: no rule reads deny/2.
             (
-                "deny \"m\" if q(1)\np(m) if deny(m)\n",
+                "deny \"m\" where q(1)\np(m) where deny(m)\n",
                 "a rule reads `deny`",
             ),
             // H-10: a resource in scope by its key, or by a dot after its type.
             (
-                "resource net.vpc main { cidr = \"x\" }\np(c) if c = net.vpc[\"main\"].cidr\n",
+                "resource net.vpc main { cidr = \"x\" }\np(c) where c = net.vpc[\"main\"].cidr\n",
                 "write `main` (H-10)",
             ),
             (
-                "resource net.vpc main { cidr = \"x\" }\np(c) if c = net.vpc.main.cidr\n",
+                "resource net.vpc main { cidr = \"x\" }\np(c) where c = net.vpc.main.cidr\n",
                 "names a resource by a dot after its type",
             ),
             (
-                "p(c) if c = net.vcp.main.cidr\n",
+                "p(c) where c = net.vcp.main.cidr\n",
                 "unknown type `net.vcp.main.cidr`",
             ),
             // H-15: the core where a surface form says it.
-            ("p(x) if want(net.vpc, x)\n", "write `x in net.vpc` (H-15)"),
+            ("p(x) where want(net.vpc, x)\n", "write `x in net.vpc` (H-15)"),
             (
-                "p(v) if attr(net.vpc, \"main\", \"cidr\", v)\n",
+                "p(v) where attr(net.vpc, \"main\", \"cidr\", v)\n",
                 "write `v = net.vpc[\"main\"].cidr` (H-15)",
             ),
             (
@@ -4864,8 +4863,8 @@ mod tests {
                 "write `set net.vpc[\"main\"].cidr = \"x\"` (H-15)",
             ),
             ("output(\"k\", 1)\n", "write `output k = 1` (H-15)"),
-            ("deny(\"m\") if q(1)\n", "write `deny \"m\" if ..` (H-15)"),
-            ("p(x) if member([1], x)\n", "write `x in [1]` (H-9)"),
+            ("deny(\"m\") where q(1)\n", "write `deny \"m\" where ..` (H-15)"),
+            ("p(x) where member([1], x)\n", "write `x in [1]` (H-9)"),
         ] {
             let e = file_error(src);
             assert!(e.contains(want), "{src}: {e}");
@@ -4874,9 +4873,9 @@ mod tests {
         // type or path, a read of the contributions before they merge.
         parse_as(
             "resource net.vpc main { cidr = \"x\" }\n\
-             arg(t, n, p, v) if override(t, n, p, v), want(t, n)\n\
+             arg(t, n, p, v) where override(t, n, p, v), want(t, n)\n\
              override(net.vpc, \"main\", \"tags\", {})\n\
-             p(v) if arg(net.vpc, \"main\", \"cidr\", v)\n",
+             p(v) where arg(net.vpc, \"main\", \"cidr\", v)\n",
             true,
         )
         .unwrap();

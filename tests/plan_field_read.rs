@@ -51,14 +51,12 @@ resource net.subnet a {
   name = "a-${main.cidr}"
 }
 resource net.subnet b {
-  if env == "staging"
   cidr = "10.0.2.0/24"
   name = "b-${main.cidrr}"
-}
+} where env == "staging"
 resource net.vpc gated {
-  if env == "staging"
   cidr = "10.1.0.0/16"
-}
+} where env == "staging"
 resource net.subnet c {
   cidr = "10.0.3.0/24"
   name = "c-${gated.cidr}"

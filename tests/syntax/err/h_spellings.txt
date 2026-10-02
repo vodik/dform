@@ -6,22 +6,22 @@ tests/syntax/err/h_spellings.df:13:1: `set env` at the top of the program sets t
   help: give `input env` a default, or pass `--set env=...` on the command line
 tests/syntax/err/h_spellings.df:16:1: output vpc has no value
   help: an output is one statement: `output vpc: T = term`
-tests/syntax/err/h_spellings.df:20:14: a rule reads `deny`
+tests/syntax/err/h_spellings.df:20:17: a rule reads `deny`
   help: a deny or a warn is checked after evaluation: no rule may read deny/2 or warn/2 (H-8); read what the deny reads instead
-tests/syntax/err/h_spellings.df:23:13: `net.vpc["main"]` names the resource `main` in scope
+tests/syntax/err/h_spellings.df:23:16: `net.vpc["main"]` names the resource `main` in scope
   help: write `main` (H-10)
-tests/syntax/err/h_spellings.df:24:13: `net.vpc.main` names a resource by a dot after its type
+tests/syntax/err/h_spellings.df:24:16: `net.vpc.main` names a resource by a dot after its type
   help: a resource in scope is named `main` (H-10); `.` is static, `[ ]` a key
-tests/syntax/err/h_spellings.df:25:13: unknown type `net.vcp`: no resource header, `type` block or provider schema declares it
-tests/syntax/err/h_spellings.df:28:9: `want(net.vpc, x)` is the core's spelling of `in`
+tests/syntax/err/h_spellings.df:25:16: unknown type `net.vcp`: no resource header, `type` block or provider schema declares it
+tests/syntax/err/h_spellings.df:28:12: `want(net.vpc, x)` is the core's spelling of `in`
   help: write `x in net.vpc` (H-15)
-tests/syntax/err/h_spellings.df:29:9: `attr(net.vpc, "main", "cidr", v)` is the core's spelling of a read
+tests/syntax/err/h_spellings.df:29:12: `attr(net.vpc, "main", "cidr", v)` is the core's spelling of a read
   help: write `v = net.vpc["main"].cidr` (H-15)
 tests/syntax/err/h_spellings.df:30:1: `arg(net.vpc, "main", "size", 3)` is the core's spelling of a surface form
   help: write `set net.vpc["main"].size = 3` (H-15)
 tests/syntax/err/h_spellings.df:31:1: `output("k", 1)` is the core's spelling of a surface form
   help: write `output k = 1` (H-15)
 tests/syntax/err/h_spellings.df:32:1: `deny("m")` is the core's spelling of a surface form
-  help: write `deny "m" if ..` (H-15)
-tests/syntax/err/h_spellings.df:33:9: `member` is what `in` lowers to
+  help: write `deny "m" where ..` (H-15)
+tests/syntax/err/h_spellings.df:33:12: `member` is what `in` lowers to
   help: write `x in [1]` (H-9)
