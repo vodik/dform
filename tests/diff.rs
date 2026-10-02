@@ -16,7 +16,7 @@ provider fake
 resource net.vpc main { cidr = "10.0.0.0/16" }
 
 resource net.subnet "private-${z}" {
-  vpc_id = main.id
+  vpc = main
   cidr = inet.subnet(main.cidr, 8, n)
   zone = z
 } where zone(z, n)

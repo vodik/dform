@@ -78,15 +78,15 @@ definite:
   by examples/tour/stacks/tour.df:228  resource net.vpc vpc { .. }   (module network instance green)
   because examples/tour/stacks/tour.df:247  input network.green.cidr = 10.2.0.0/16
 + net.vpc_peering["main-blue"]
-  accepter_vpc_id = ?net.vpc["network.blue::vpc"].id
-  requester_vpc_id = ?net.vpc["main"].id
+  accepter_vpc = ?net.vpc["network.blue::vpc"]
+  requester_vpc = ?net.vpc["main"]
   tags.team = "shop"
   by examples/tour/stacks/tour.df:274  resource net.vpc_peering "main-${t}" { .. } where spoke(t), v = network[t].vpc
   because examples/tour/stacks/tour.df:266  spoke("blue")
   because examples/tour/stacks/tour.df:239  output network.blue.vpc = "network.blue::vpc"   (module network instance blue)
 + net.vpc_peering["main-green"]
-  accepter_vpc_id = ?net.vpc["network.green::vpc"].id
-  requester_vpc_id = ?net.vpc["main"].id
+  accepter_vpc = ?net.vpc["network.green::vpc"]
+  requester_vpc = ?net.vpc["main"]
   tags.team = "shop"
   by examples/tour/stacks/tour.df:274  resource net.vpc_peering "main-${t}" { .. } where spoke(t), v = network[t].vpc
   because examples/tour/stacks/tour.df:267  spoke("green")
@@ -94,7 +94,7 @@ definite:
 + net.subnet["network.blue::private-us-test-1a"]
   cidr = "10.1.1.0/24"
   tags.team = "shop"
-  vpc_id = ?net.vpc["network.blue::vpc"].id
+  vpc = ?net.vpc["network.blue::vpc"]
   zone = "us-test-1a"
   by examples/tour/stacks/tour.df:233  resource net.subnet "private-${z}" { .. } where zone(z, n)   (module network instance blue)
   because examples/tour/stacks/tour.df:109  zone("us-test-1a", 1)
@@ -102,7 +102,7 @@ definite:
 + net.subnet["network.blue::private-us-test-1b"]
   cidr = "10.1.2.0/24"
   tags.team = "shop"
-  vpc_id = ?net.vpc["network.blue::vpc"].id
+  vpc = ?net.vpc["network.blue::vpc"]
   zone = "us-test-1b"
   by examples/tour/stacks/tour.df:233  resource net.subnet "private-${z}" { .. } where zone(z, n)   (module network instance blue)
   because examples/tour/stacks/tour.df:110  zone("us-test-1b", 2)
@@ -110,7 +110,7 @@ definite:
 + net.subnet["network.green::private-us-test-1a"]
   cidr = "10.2.1.0/24"
   tags.team = "shop"
-  vpc_id = ?net.vpc["network.green::vpc"].id
+  vpc = ?net.vpc["network.green::vpc"]
   zone = "us-test-1a"
   by examples/tour/stacks/tour.df:233  resource net.subnet "private-${z}" { .. } where zone(z, n)   (module network instance green)
   because examples/tour/stacks/tour.df:109  zone("us-test-1a", 1)
@@ -118,7 +118,7 @@ definite:
 + net.subnet["network.green::private-us-test-1b"]
   cidr = "10.2.2.0/24"
   tags.team = "shop"
-  vpc_id = ?net.vpc["network.green::vpc"].id
+  vpc = ?net.vpc["network.green::vpc"]
   zone = "us-test-1b"
   by examples/tour/stacks/tour.df:233  resource net.subnet "private-${z}" { .. } where zone(z, n)   (module network instance green)
   because examples/tour/stacks/tour.df:110  zone("us-test-1b", 2)
@@ -127,7 +127,7 @@ definite:
   cidr = "10.0.1.0/24"
   tags.team = "shop"
   visibility = "private"
-  vpc_id = ?net.vpc["main"].id
+  vpc = ?net.vpc["main"]
   zone = "us-test-1a"
   by examples/tour/stacks/tour.df:112  resource net.subnet "private-${z}" { .. } where zone(z, n)
   because examples/tour/stacks/tour.df:109  zone("us-test-1a", 1)
@@ -136,7 +136,7 @@ definite:
   cidr = "10.0.2.0/24"
   tags.team = "shop"
   visibility = "private"
-  vpc_id = ?net.vpc["main"].id
+  vpc = ?net.vpc["main"]
   zone = "us-test-1b"
   by examples/tour/stacks/tour.df:112  resource net.subnet "private-${z}" { .. } where zone(z, n)
   because examples/tour/stacks/tour.df:110  zone("us-test-1b", 2)
@@ -145,14 +145,14 @@ definite:
   cidr = "10.0.0.0/24"
   tags.team = "shop"
   visibility = "public"
-  vpc_id = ?net.vpc["main"].id
+  vpc = ?net.vpc["main"]
   because examples/tour/stacks/tour.df:81  net.subnet["public"]
 + db.postgres["orders"]
   backup_days = 14
   multi_az = true
   public = false
-  subnet_ids[0] = ?net.subnet["private-us-test-1a"].id
-  subnet_ids[1] = ?net.subnet["private-us-test-1b"].id
+  subnets[0] = ?net.subnet["private-us-test-1a"]
+  subnets[1] = ?net.subnet["private-us-test-1b"]
   tags.team = "shop"
   by examples/tour/stacks/tour.df:154  resource db.postgres orders { .. }
   because examples/tour/stacks/tour.df:148  settings["prod"].backup_days = 14
