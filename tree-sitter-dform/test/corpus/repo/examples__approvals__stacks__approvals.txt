@@ -26,14 +26,10 @@ resource net.vpc main {
 }
 
 # In prod, replacing anything needs an approval.
-requires_approval(d, "a replace in prod") where {
-  env == "prod"
-  deformation("replace", t, a, _)
-  d = "${t}[\"${a}\"]"
-}
+requires_approval(r, "a replace in prod") where env == "prod", deformation("replace", r, _)
 
 # Optional: who may approve what. Without it, any key in the trust root may.
-approver_allowed(who, d) where requires_approval(d, _), who in ["alice", "bob"]
+approver_allowed(who, r) where requires_approval(r, _), who in ["alice", "bob"]
 
 ---
 
@@ -88,7 +84,7 @@ approver_allowed(who, d) where requires_approval(d, _), who in ["alice", "bob"]
         (identifier)
         (string
           (string_content))))
-    (body_block
+    (body
       (comparison
         (identifier)
         (string
@@ -100,19 +96,7 @@ approver_allowed(who, d) where requires_approval(d, _), who in ["alice", "bob"]
             (string
               (string_content))
             (identifier)
-            (identifier)
-            (identifier))))
-      (comparison
-        (identifier)
-        (string
-          (interpolation
-            (identifier))
-          (string_content)
-          (escape_sequence)
-          (interpolation
-            (identifier))
-          (escape_sequence)
-          (string_content)))))
+            (identifier))))))
   (comment)
   (rule
     (call

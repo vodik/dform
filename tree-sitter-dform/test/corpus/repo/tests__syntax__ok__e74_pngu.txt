@@ -174,7 +174,7 @@ resource gke.cluster pngu {
 # Prod: deletion protection on, at normal rank, over the block's @default.
 # Two ranks, one value each, no conflict. The lifecycle fact is policeable.
 arg("gke.cluster", "pngu", "deletion_protection", true) where env == "prod"
-lifecycle("gke.cluster", "pngu", "prevent_destroy") where env == "prod"
+lifecycle(gke.cluster["pngu"], "prevent_destroy") where env == "prod"
 
 deny("prod_deletion_protection", "prod cluster must have deletion protection", { cluster: "pngu" }) where {
   env == "prod"
@@ -1128,10 +1128,12 @@ output("project_id", id) where project(id, _, _, _)
     (call
       (identifier)
       (arguments
-        (string
-          (string_content))
-        (string
-          (string_content))
+        (index_expression
+          (member_expression
+            (identifier)
+            (identifier))
+          (string
+            (string_content)))
         (string
           (string_content))))
     (body

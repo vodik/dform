@@ -189,15 +189,18 @@ deny "a database must not be public" { database: pg } where pg in db.postgres, p
 # 6. Why
 #
 # Any value dform works out can be asked where it came from. The network
-# has a tag its block does not write. The lines that matter:
+# has a tag its block does not write:
 #
 #   $ dform why 'net.vpc["main"].tags.team'
-#   └─ arg("net.vpc", "main", "tags", {team: "shop"}, "normal")   [rank normal, owner r18 (stacks/tour.df:181:1)]
-#        by r18: arg(Type, R, "tags", {team: "shop"}, "normal") :- want(Type, R)
-#        └─ want("net.vpc", "main")   fact, stacks/tour.df:48:1 (want)
+#   net.vpc["main"].tags = {team: "shop"}
+#     merged from 1 contribution
+#     └─ {team: "shop"}
+#          stacks/tour.df:181  set r.tags = { team: "shop" } where r in resource
+#          with r = net.vpc["main"]
+#          └─ net.vpc["main"]   stacks/tour.df:48
 #
-# Read it from the top: the tag was added by the rule at line 181 of this
-# file (section 5's), because the network exists, which line 42 says. The
+# Read it from the top: the tag was added by the statement at line 181 of
+# this file (section 5's), because the network exists, which line 48 says. The
 # address is the one the plan printed, pasted. The same works for a cidr,
 # a subnet's name or a deny: whatever the plan shows, `why` explains.
 
@@ -697,6 +700,9 @@ resource iam.policy "connect-${host}" {
         (member_expression
           (identifier)
           (identifier)))))
+  (comment)
+  (comment)
+  (comment)
   (comment)
   (comment)
   (comment)

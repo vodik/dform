@@ -63,9 +63,9 @@ auto_reconcile(t, a, p) where drift(t, a, p, _, _), p == "spec.replicas"
 # token for the plan's digest arrives.
 requires_approval(d, "a prod rollout") where {
   env == "prod"
-  deformation(k, k8s.deployment, a, _)
+  deformation(k, d, _)
   k != "delete"
-  d = "k8s.deployment[\"${a}\"]"
+  d in k8s.deployment
 }
 
 ---
@@ -325,21 +325,14 @@ requires_approval(d, "a prod rollout") where {
           (identifier)
           (arguments
             (identifier)
-            (member_expression
-              (identifier)
-              (identifier))
             (identifier)
             (identifier))))
       (comparison
         (identifier)
         (string
           (string_content)))
-      (comparison
+      (in_literal
         (identifier)
-        (string
-          (string_content)
-          (escape_sequence)
-          (interpolation
-            (identifier))
-          (escape_sequence)
-          (string_content))))))
+        (member_expression
+          (identifier)
+          (identifier))))))
