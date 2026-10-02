@@ -43,9 +43,17 @@ Declarations
 
 input env: enum("dev", "prod") = "dev"
 input replicas: int = 2 check replicas >= 1
-input seen(a, b) from facts("seen.facts")
-input peers(env: enum("dev", "prod"), name: string) from csv("peers.csv")
-input pinned(name: string) from yaml(git("ops.git", "main", "pinned.yaml"))
+input seen from facts("seen.facts")
+input peers from csv("peers.csv") where env == "prod"
+input pinned from yaml(git("ops.git", "main", "pinned.yaml"))
+input zone
+input nodes {
+  flavor: string = "b3-8"
+  count: int = 1 check 1 <= count <= 3
+  pool: { size: int }
+}
+output zone
+output conn { host = h, port: int = 5432 } where h = "db"
 input relation: string = "an input named relation"
 extern file.json(+path, -value: string) persist
 decl p(a, b) mixed
@@ -84,11 +92,6 @@ let big = n where size(n), n > 3
           (integer)))))
   (input_relation
     (identifier)
-    (columns
-      (field_declaration
-        (identifier))
-      (field_declaration
-        (identifier)))
     (call
       (identifier)
       (arguments
@@ -96,34 +99,18 @@ let big = n where size(n), n > 3
           (string_content)))))
   (input_relation
     (identifier)
-    (columns
-      (field_declaration
-        (identifier)
-        (type
-          (dotted_name
-            (identifier))
-          (string
-            (string_content))
-          (string
-            (string_content))))
-      (field_declaration
-        (identifier)
-        (type
-          (dotted_name
-            (identifier)))))
     (call
       (identifier)
       (arguments
         (string
+          (string_content))))
+    (body
+      (comparison
+        (identifier)
+        (string
           (string_content)))))
   (input_relation
     (identifier)
-    (columns
-      (field_declaration
-        (identifier)
-        (type
-          (dotted_name
-            (identifier)))))
     (call
       (identifier)
       (arguments
@@ -136,6 +123,63 @@ let big = n where size(n), n > 3
               (string_content))
             (string
               (string_content)))))))
+  (input_relation
+    (identifier))
+  (input
+    (identifier)
+    (input_fields
+      (attribute_declaration
+        (block_path
+          (identifier))
+        (type
+          (dotted_name
+            (identifier)))
+        (string
+          (string_content)))
+      (attribute_declaration
+        (block_path
+          (identifier))
+        (type
+          (dotted_name
+            (identifier)))
+        (integer)
+        (refinement
+          (body
+            (comparison
+              (integer)
+              (identifier)
+              (integer)))))
+      (attribute_declaration
+        (block_path
+          (identifier))
+        (input_fields
+          (attribute_declaration
+            (block_path
+              (identifier))
+            (type
+              (dotted_name
+                (identifier))))))))
+  (output
+    (identifier))
+  (output
+    (identifier)
+    (output_fields
+      (attribute_declaration
+        (block_path
+          (identifier))
+        (identifier))
+      (attribute_declaration
+        (block_path
+          (identifier))
+        (type
+          (dotted_name
+            (identifier)))
+        (integer)))
+    (body
+      (comparison
+        (identifier)
+        (string
+          (string_content)))))
   (input
     (identifier)
     (type

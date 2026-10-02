@@ -1,9 +1,9 @@
-tests/syntax/err/table_source.df:4:27: input relation token: column value is a secret
+tests/syntax/err/table_source.df:10:26: token: column value is a secret
   note: a table's rows are read in the clear and recorded in the plan file; a secret comes from a secret input or a `persist` extern
-tests/syntax/err/table_source.df:5:32: unknown format xml: a table's source is FORMAT(SOURCE)
+tests/syntax/err/table_source.df:5:18: unknown format xml: a table's source is FORMAT(SOURCE)
   help: FORMAT is one of csv, json, yaml, toml; SOURCE is a path, `"data/p.csv"`, or `git("repo", "ref", "path")`
-tests/syntax/err/table_source.df:6:31: git takes a repository, a ref and a path: a table's source is FORMAT(SOURCE)
+tests/syntax/err/table_source.df:6:17: git takes a repository, a ref and a path: a table's source is FORMAT(SOURCE)
   help: FORMAT is one of csv, json, yaml, toml; SOURCE is a path, `"data/p.csv"`, or `git("repo", "ref", "path")`
-tests/syntax/err/table_source.df:7:25: input relation dup: two columns are named name
-tests/syntax/err/table_source.df:8:12: input relation typo: column name: unknown type strng
-tests/syntax/err/table_source.df:11:3: an input relation belongs at the top of the program
+tests/syntax/err/table_source.df:13:24: dup: two columns are named name
+tests/syntax/err/table_source.df:14:11: typo: column name: unknown type strng
+tests/syntax/err/table_source.df:17:3: a module's relation is given by its user: declare `input inner`, and its user writes `inner from ..` in the `use` or `instance` block

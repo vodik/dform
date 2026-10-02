@@ -9,7 +9,9 @@ use serde_json::Value;
 
 const NET: &str = r#"edition 2026
 
-input zone(name: string, n: int) from csv("data/zones.csv")
+input zone from csv("data/zones.csv")
+
+decl zone(name: string, n: int)
 
 provider fake
 
@@ -90,8 +92,8 @@ fn diff_names_the_row_an_apply_added_and_explains_each_apply_by_its_commit() {
     );
     assert!(
         out.contains(
-            "+ net.subnet[\"private-us-test-1c\"]\n  by stacks/net.df:9  resource net.subnet \
-             \"private-${z}\" { .. } where zone(z, n)\n  because stacks/net.df:7  \
+            "+ net.subnet[\"private-us-test-1c\"]\n  by stacks/net.df:11  resource net.subnet \
+             \"private-${z}\" { .. } where zone(z, n)\n  because stacks/net.df:9  \
              net.vpc[\"main\"].cidr = \"10.9.0.0/16\"\n  because data/zones.csv:4  \
              zone(\"us-test-1c\", 3)\n"
         ),
@@ -100,7 +102,7 @@ fn diff_names_the_row_an_apply_added_and_explains_each_apply_by_its_commit() {
     // A replace is explained by the attribute that changed.
     assert!(
         out.contains(
-            "-/+ net.vpc[\"main\"]\n  because stacks/net.df:7  net.vpc[\"main\"].cidr = \
+            "-/+ net.vpc[\"main\"]\n  because stacks/net.df:9  net.vpc[\"main\"].cidr = \
              \"10.9.0.0/16\"\n"
         ),
         "{out}"
@@ -148,8 +150,8 @@ fn diff_names_the_row_an_apply_added_and_explains_each_apply_by_its_commit() {
     let first = r.stdout.split("\napply ").next().unwrap();
     assert!(
         first.contains(
-            "+ net.subnet[\"private-us-test-1a\"]\n  by stacks/net.df:9  resource net.subnet \
-             \"private-${z}\" { .. } where zone(z, n)\n  because stacks/net.df:7  \
+            "+ net.subnet[\"private-us-test-1a\"]\n  by stacks/net.df:11  resource net.subnet \
+             \"private-${z}\" { .. } where zone(z, n)\n  because stacks/net.df:9  \
              net.vpc[\"main\"].cidr = \"10.0.0.0/16\"\n  because data/zones.csv:2  \
              zone(\"us-test-1a\", 1)\n"
         ),

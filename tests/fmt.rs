@@ -129,11 +129,11 @@ fn fmt_refuses_a_file_that_does_not_parse() {
 #[test]
 fn fmt_puts_the_header_in_order() {
     let src = "# A program.\n\nedition 2026\n\ninput b: int\n# The key.\nkey env: string\n\n\
-               provider fake\n\n#| The relation.\ninput p(a) from facts(\"p.facts\")\n\
+               provider fake\n\n#| The relation.\ninput p from facts(\"p.facts\")\ndecl p(a)\n\
                p2(x) where p(x)\nuse m # its modules\ninput a: int\n";
     let want = "# A program.\n\nedition 2026\n\n# The key.\n\
                 key env: string\ninput b: int\ninput a: int\n#| The relation.\n\
-                input p(a) from facts(\"p.facts\")\n\nprovider fake\n\np2(x) where p(x)\n\
+                input p from facts(\"p.facts\")\n\nprovider fake\n\ndecl p(a)\np2(x) where p(x)\n\
                 use m # its modules\n";
     let got = dform::fmt::format_source("p.df", src).unwrap();
     assert_eq!(got, want);

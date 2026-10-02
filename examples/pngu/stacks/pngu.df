@@ -18,9 +18,11 @@ edition 2026
 
 # The stack's key, typed: `dform plan pngu env=qa` is an error naming it.
 key env: environment = "dev"
-# The rows are data/peerings.csv's, typed column by column: a row whose env
-# is not one of these is an error naming its line.
-input peering(env: environment, name: string, peer_network: string) from csv("data/peerings.csv")
+# The rows are data/peerings.csv's, typed column by column as `decl peering`
+# says: a row whose env is not one of these is an error naming its line.
+input peering from csv("data/peerings.csv")
+
+decl peering(env: environment, name: string, peer_network: string)
 
 ########################################
 # Schema declarations

@@ -407,7 +407,7 @@ fn edge_cases_agree() {
         "input relation: string = \"x\"\n",
         "key env: enum(\"a\", \"b\") = \"a\" check env != \"b\"\nkey(\"x\")\n",
         "stack app[env] {}\n",
-        "input seen(a, b) from facts(\"seen.facts\")\n",
+        "input seen from facts(\"seen.facts\")\n",
         "p(x) where x = { type: \"a\", input: 1 }\n",
         "p(x) where not { q(x) }, not r(x), x not in xs, not x in net.vpc\n",
         "p(x) where v = xs[i], has x.a, 1 <= x <= 3\n",

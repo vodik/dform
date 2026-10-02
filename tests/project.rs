@@ -593,8 +593,10 @@ fn program_paths_resolve_from_the_root() {
     s.write(
         "stacks/paths.df",
         r#"edition 2026
-input peer(name: string) from csv("data/peers.csv")
-input tag(t) from facts("data/tags.facts")
+input peer from csv("data/peers.csv")
+input tag from facts("data/tags.facts")
+decl peer(name: string)
+decl tag(t)
 provider cloud { source = "providers/cloud" }
 provider file
 note(v) where v = file.text["data/note.txt"]

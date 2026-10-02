@@ -1,4 +1,4 @@
 edition 2026
 
-# The columns are part of the declaration.
+# A relation's columns are its `decl`'s, written once (R-55).
 input release from facts("release.facts")

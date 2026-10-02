@@ -1,2 +1,2 @@
-tests/syntax/err/input_relation_arity.df:4:15: expected `:` or `(` after the input's name, found `from`
-  help: `from` gives rows and `=` gives a value: a relation input names its columns, `input p(a, b) from facts(..)`, and a value is `input x: T = d`
+tests/syntax/err/input_relation_arity.df:4:1: input release from ..: release has no columns
+  help: a relation is declared once, by its columns: `decl release(a: T, ..)`

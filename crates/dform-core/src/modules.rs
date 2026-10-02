@@ -86,6 +86,8 @@ fn is_ground(t: &Term) -> bool {
 #[derive(Default)]
 struct Interface {
     inputs: Vec<InputDecl>,
+    /// `input p`: relations the user gives the rows of (R-55).
+    relations: Vec<crate::ast::Extern>,
     outputs: BTreeMap<String, OutputDecl>,
     output_values: Vec<OutputDecl>,
 }
@@ -98,6 +100,7 @@ fn interface(body: &[Stmt]) -> (Interface, Vec<Stmt>) {
     for s in body {
         match s {
             Stmt::Input(d) => i.inputs.push(d.clone()),
+            Stmt::RelationInput(e) => i.relations.push(e.clone()),
             Stmt::Output(o) if o.value.is_none() => {
                 i.outputs.entry(o.name.clone()).or_insert_with(|| o.clone());
             }

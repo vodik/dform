@@ -303,7 +303,7 @@ fn plan_reads_an_input_relation_and_rejects_a_stray_fact() {
     );
     s.write(
         "bad.df",
-        "edition 2026\n\ninput r(a) from facts(url(\"http://x\"))\nq(x) where r(x)\n",
+        "edition 2026\n\ninput r from facts(url(\"http://x\"))\ndecl r(a)\nq(x) where r(x)\n",
     );
     let r = s.run(&["plan", "bad.df"]).failure();
     assert!(
@@ -349,8 +349,8 @@ fn a_git_source_is_read_at_its_ref() {
     s.write(
         "stacks/workload.df",
         &WORKLOAD.replace(
-            "input release(image) from facts(\"data/release.facts\")",
-            "input release(image) from facts(git(\"releases.git\", \"main\", \"web.facts\"))",
+            "input release from facts(\"data/release.facts\")",
+            "input release from facts(git(\"releases.git\", \"main\", \"web.facts\"))",
         ),
     );
     let got = once(&s, &[]);

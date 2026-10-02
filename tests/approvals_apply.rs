@@ -311,7 +311,7 @@ fn a_moved_git_commit_is_a_stale_plan() {
     commit("owner(\"a\")");
     s.write(
         "p.df",
-        "edition 2026\n\ninput owner(a) from facts(git(\"ops.git\", \"main\", \"tags.facts\"))\n\nresource net.vpc main {\ncidr = \"10.0.0.0/16\"\n}\nprovider fake\n",
+        "edition 2026\n\ninput owner from facts(git(\"ops.git\", \"main\", \"tags.facts\"))\n\ndecl owner(a)\n\nresource net.vpc main {\ncidr = \"10.0.0.0/16\"\n}\nprovider fake\n",
     );
     s.run(&["plan", "--out", "plan.json", "p.df"]).success();
     let file: serde_json::Value = serde_json::from_str(&s.read("plan.json")).unwrap();

@@ -137,32 +137,90 @@ export default grammar({
       optional($.clause),
     ),
 
-    // `input k: T`, or `key k: T`: an input the target gives (R-29).
-    input: $ => seq(
-      choice('input', 'key'),
-      field('name', $._word),
-      ':',
-      field('type', $._type),
-      optional(seq('=', field('default', $._term))),
-      optional($.refinement),
+    // `input k: T`, or `key k: T`: an input the target gives (R-29); or
+    // `input k { f: T = d .. }`, an object input by its fields (R-54).
+    input: $ => choice(
+      seq(
+        choice('input', 'key'),
+        field('name', $._word),
+        ':',
+        field('type', $._type),
+        optional(seq('=', field('default', $._term))),
+        optional($.refinement),
+      ),
+      seq('input', field('name', $._word), field('body', $.input_fields)),
     ),
 
-    // `input p(cols) from SOURCE`: a relation the world gives.
+    // An object input's fields: `name: T [= d] [check B]`, a nested
+    // object `name: { .. }`.
+    input_fields: $ => seq(
+      '{',
+      repeat($._newline),
+      repeat(seq(alias($.input_field, $.attribute_declaration), $._separator)),
+      optional(alias($.input_field, $.attribute_declaration)),
+      '}',
+    ),
+
+    input_field: $ => seq(
+      field('path', $.block_path),
+      ':',
+      choice(
+        field('body', $.input_fields),
+        seq(
+          field('type', choice($.type, $.string)),
+          optional(seq('=', field('default', $._term))),
+          optional($.refinement),
+        ),
+      ),
+    ),
+
+    // `input p from SOURCE [where B]`: rows of the relation `p`, its
+    // columns its `decl`'s; `input p` alone, in a module, a relation its
+    // user gives (R-55).
     input_relation: $ => seq(
       'input',
       field('name', $._word),
-      $.columns,
-      'from',
-      field('source', $._term),
+      optional(seq(
+        'from',
+        field('source', $._term),
+        optional(seq('where', field('condition', $._body))),
+      )),
     ),
 
-    // `output k: T = t [where B]`: one statement.
-    output: $ => seq(
-      'output',
-      field('name', $._word),
-      optional(seq(':', field('type', $._type))),
-      optional(seq('=', field('value', $._term))),
-      optional(seq('where', field('condition', $._body))),
+    // `output k: T = t [where B]`: one statement; `output p` marks the
+    // relation `p` as the copy's; `output k { f = t .. }` an object (R-55).
+    output: $ => choice(
+      seq(
+        'output',
+        field('name', $._word),
+        optional(seq(':', field('type', $._type))),
+        optional(seq('=', field('value', $._term))),
+        optional(seq('where', field('condition', $._body))),
+      ),
+      seq(
+        'output',
+        field('name', $._word),
+        field('body', $.output_fields),
+        optional(seq('where', field('condition', $._body))),
+      ),
+    ),
+
+    // An object output's fields: `name [: T] = t`, a nested `name: { .. }`.
+    output_fields: $ => seq(
+      '{',
+      repeat($._newline),
+      repeat(seq(alias($.output_field, $.attribute_declaration), $._separator)),
+      optional(alias($.output_field, $.attribute_declaration)),
+      '}',
+    ),
+
+    output_field: $ => seq(
+      field('path', $.block_path),
+      choice(
+        seq('=', field('value', $._term)),
+        seq(':', field('body', $.output_fields)),
+        seq(':', field('type', choice($.type, $.string)), '=', field('value', $._term)),
+      ),
     ),
 
     // `let k = t [where B]`: a value.

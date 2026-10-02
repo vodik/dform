@@ -43,7 +43,8 @@ fn an_alias_is_its_type() {
          input env: environment = \"dev\"\n\
          input all: envs = [\"dev\"]\n\
          input rec: { e: environment } = { e: \"dev\" }\n\
-         input peering(env: environment, name: string) from csv(\"p.csv\")\n\
+         input peering from csv(\"p.csv\")\n\
+         decl peering(env: environment, name: string)\n\
          type environment = enum(\"dev\", \"prod\")\n\
          type envs = list(environment)\n\
          ",

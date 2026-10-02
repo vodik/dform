@@ -10,4 +10,4 @@ resource net.vpc main {
   cidr = "10.0.0.0/16"
 }
 
-input seen(a) from facts("seen.facts")
+input seen from facts("seen.facts")

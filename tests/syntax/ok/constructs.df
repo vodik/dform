@@ -5,9 +5,13 @@ edition 2026
 key tier: string = "dev"
 key region: string = "us-east1"
 input relation: string = "an input named relation"
-input seen(a, b) from facts("seen.facts")
-input peers(env: enum("dev", "prod"), name: string) from csv("peers.csv")
-input pinned(name: string) from yaml(git("ops.git", "main", "pinned.yaml"))
+input seen from facts("seen.facts")
+input peers from csv("peers.csv")
+input pinned from yaml(git("ops.git", "main", "pinned.yaml"))
+
+decl seen(a, b)
+decl peers(env: enum("dev", "prod"), name: string)
+decl pinned(name: string)
 
 decl provided(a, b)
 decl project(id: int, network_name: string)

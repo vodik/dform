@@ -78,12 +78,13 @@ type P<T = ()> = Result<T, Bail>;
 /// The verb rule (R-57), for an `input` that gives rows with `=`: `=`
 /// gives a value, `from` gives rows.
 const VERB_RULE_ROWS: &str = "`=` gives a value and `from` gives rows: a value is `input p: T = d`, \
-                              and rows are facts, `p(\"a\", 1)`, or `input p(a, b) from facts(..)`";
+                              and rows are facts, `p(\"a\", 1)`, or `input p from facts(..)`";
 
 /// The verb rule (R-57), for an `input` that gives a value `from` a
 /// document.
-const VERB_RULE_FROM: &str = "`from` gives rows and `=` gives a value: a relation input names its \
-                              columns, `input p(a, b) from facts(..)`, and a value is `input x: T = d`";
+const VERB_RULE_FROM: &str = "`from` gives rows and `=` gives a value: a relation's rows are `input \
+                              p from facts(..)`, its columns its `decl p(a, b)`, and a value is \
+                              `input x: T = d`";
 
 fn term_name(k: SyntaxKind) -> bool {
     k == IDENT
@@ -650,27 +651,33 @@ impl<'a> Parser<'a> {
                 self.error_here(
                     msg,
                     Some(
-                        "`input relation p(cols) from ..` is spelled `input p(cols) from ..`, \
-                         and `from file(..)` is `from facts(..)`"
+                        "`input relation p(cols) from ..` is spelled `decl p(cols)` and `input \
+                         p from ..`, and `from file(..)` is `from facts(..)`"
                             .to_string(),
                     ),
                 );
                 Err(Bail)
             }
-            INPUT_KW if self.raw(2) == L_PAREN => self.simple(INPUT_RELATION, |p| {
-                p.expect_word()?;
-                p.columns(true)?;
-                if p.at(EQ) {
-                    let msg = format!("expected `from`, found {}", p.found());
-                    p.error_here(msg, Some(VERB_RULE_ROWS.to_string()));
-                    return Err(Bail);
-                }
-                if !p.at_contextual("from") {
-                    return p.err_expected("`from`");
-                }
-                p.bump();
-                p.term().map(drop)
-            }),
+            // `input p(cols) ..`: the columns are the relation's declaration's,
+            // written once (R-55).
+            INPUT_KW if self.raw(2) == L_PAREN => {
+                let name = self.nth_text(1).to_string();
+                self.bump();
+                self.bump();
+                let msg = format!(
+                    "expected `:`, `{{`, `from` or the end of the line after the input's name, \
+                     found {}",
+                    self.found()
+                );
+                self.error_here(
+                    msg,
+                    Some(format!(
+                        "a relation is declared once, `decl {name}(a: T, ..)`, and `input {name} \
+                         from ..` gives its rows"
+                    )),
+                );
+                Err(Bail)
+            }
             // `key k: T`: an input the target gives, which selects the
             // deployment (R-29). It has no relation form and no block.
             KEY_KW if matches!(self.raw(2), L_PAREN | L_BRACE) => {
@@ -693,20 +700,32 @@ impl<'a> Parser<'a> {
                 p.expect_word()?;
                 p.fields(true)
             }),
+            // `input p from TERM [where B]`: rows of the relation `p`; `input
+            // p` alone, in a module, a relation its user gives (R-55).
+            INPUT_KW if self.raw(2) != COLON => self.simple(INPUT_RELATION, |p| {
+                p.expect_word()?;
+                if p.at_contextual("from") {
+                    p.bump();
+                    p.term()?;
+                    return p.opt_where_body();
+                }
+                if matches!(p.nth(0), NEWLINE | EOF | R_BRACE) {
+                    return Ok(());
+                }
+                let hint = p.at(EQ).then(|| VERB_RULE_ROWS.to_string());
+                let msg = format!(
+                    "expected `:`, `{{`, `from` or the end of the line after the input's name, \
+                     found {}",
+                    p.found()
+                );
+                p.error_here(msg, hint);
+                Err(Bail)
+            }),
             INPUT_KW | KEY_KW => self.simple(INPUT, |p| {
                 p.expect_word()?;
                 if !p.at(COLON) {
-                    let hint = if p.at_contextual("from") {
-                        Some(VERB_RULE_FROM.to_string())
-                    } else if p.at(EQ) {
-                        Some(VERB_RULE_ROWS.to_string())
-                    } else {
-                        None
-                    };
-                    let msg = format!(
-                        "expected `:` or `(` after the input's name, found {}",
-                        p.found()
-                    );
+                    let hint = p.at(EQ).then(|| VERB_RULE_ROWS.to_string());
+                    let msg = format!("expected `:` after the key's name, found {}", p.found());
                     p.error_here(msg, hint);
                     return Err(Bail);
                 }
@@ -1815,10 +1834,7 @@ mod tests {
                 "key p(a) from csv(\"p.csv\")\n",
                 "a relation or an object is not a key",
             ),
-            (
-                "input relation p/2 from file(\"x\")\n",
-                "`input p(cols) from ..`",
-            ),
+            ("input relation p/2 from file(\"x\")\n", "`input p from ..`"),
             ("p(x) where exists x\n", "`R in T`"),
             ("p(x) where some x in [1]\n", "`x in e`"),
             ("p(x) where q(x), x == .cidr\n", "is a string"),
@@ -1920,7 +1936,7 @@ mod tests {
 
     #[test]
     fn declarations_by_their_columns() {
-        let src = "input q(a: string) from csv(\"q.csv\")\ndecl p(a, b: int) mixed\n\
+        let src = "input q from csv(\"q.csv\")\ndecl p(a, b: int) mixed\n\
                    output k: int = 1 where p(1, 2)\n";
         assert!(errors(src).is_empty(), "{:?}", errors(src));
         assert_eq!(
@@ -1962,11 +1978,11 @@ mod tests {
     #[test]
     fn the_header_comes_before_the_body() {
         let src = "edition 2026\nkey env: string\ninput n: int\n\
-                   input p(a) from facts(\"p.facts\")\nuse config\nprovider fake {}\np(1)\n\
+                   input p from facts(\"p.facts\")\nuse config\nprovider fake {}\np(1)\n\
                    component m {\n  r(1)\n  input k: int\n}\ninstance m a\n";
         assert!(errors(src).is_empty(), "{:?}", errors(src));
         let src =
-            "edition 2026\nprovider fake {}\nkey env: string\nq(1)\ninput p(a) from facts(\"p\")\n";
+            "edition 2026\nprovider fake {}\nkey env: string\nq(1)\ninput p from facts(\"p\")\n";
         let e = parse(src).errors;
         let got: Vec<(&str, bool)> = e
             .iter()
@@ -1981,7 +1997,7 @@ mod tests {
                     true
                 ),
                 (
-                    "`input p(..)` is a header statement: move it above the body's first \
+                    "`input p` is a header statement: move it above the body's first \
                      statement, line 2",
                     true
                 ),

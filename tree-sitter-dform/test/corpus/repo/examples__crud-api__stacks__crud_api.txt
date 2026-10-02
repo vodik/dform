@@ -18,7 +18,7 @@ examples/crud-api/stacks/crud_api.df
 # schema and this project's providers/google and providers/random), and
 # applies to a cluster with k8s = "providers/k8s" there. In
 # production the release and the approvals come from git:
-#   input release(app, key, value) from facts("data/releases.facts")
+#   input release from facts("data/releases.facts")
 # The live objects are read through the kubernetes provider's inventory
 # (`world.T[e].p`), named by remote id (`shop/crud-api`).
 
@@ -29,9 +29,12 @@ input region: string = "us-east1"
 input replicas: int = 2 check replicas >= 1
 # release("crud_api", "digest", "sha256:9f2c...")
 # release("crud_api", "schema", 42)
-input release(app, key, value) from facts("data/releases.facts")
+input release from facts("data/releases.facts")
 # approve(t, a): accept the drift of t.a
-input approve(type, address) from facts("data/approvals.facts")
+input approve from facts("data/approvals.facts")
+
+decl release(app, key, value)
+decl approve(type, address)
 
 # Sources and versions are dform.toml's.
 provider google
@@ -420,13 +423,6 @@ auto_reconcile(t, a, p) where drift(t, a, p, _, _), owned_label(l), p == "metada
   (comment)
   (input_relation
     (identifier)
-    (columns
-      (field_declaration
-        (identifier))
-      (field_declaration
-        (identifier))
-      (field_declaration
-        (identifier)))
     (call
       (identifier)
       (arguments
@@ -435,16 +431,29 @@ auto_reconcile(t, a, p) where drift(t, a, p, _, _), owned_label(l), p == "metada
   (comment)
   (input_relation
     (identifier)
-    (columns
-      (field_declaration
-        (identifier))
-      (field_declaration
-        (identifier)))
     (call
       (identifier)
       (arguments
         (string
           (string_content)))))
+  (decl
+    (dotted_name
+      (identifier))
+    (columns
+      (field_declaration
+        (identifier))
+      (field_declaration
+        (identifier))
+      (field_declaration
+        (identifier))))
+  (decl
+    (dotted_name
+      (identifier))
+    (columns
+      (field_declaration
+        (identifier))
+      (field_declaration
+        (identifier))))
   (comment)
   (provider
     (identifier))

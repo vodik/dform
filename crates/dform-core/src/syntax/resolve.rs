@@ -225,6 +225,10 @@ struct Scope {
     outputs: BTreeMap<String, Option<String>>,
     /// The arities each relation this scope's heads and `decl`s give it.
     arities: BTreeMap<String, BTreeSet<usize>>,
+    /// Each relation's `decl`: its columns (R-55).
+    decl_nodes: BTreeMap<String, SyntaxNode>,
+    /// `input p` with no `from`: the relations a module's user gives.
+    relation_inputs: BTreeSet<String>,
 }
 
 #[derive(Default)]
@@ -851,14 +855,15 @@ impl<'u> Lowerer<'u> {
                         s.lets.entry(name).or_default().push(t);
                     }
                 }
+                // `input p from ..` or `input p`: rows of `p`, which its
+                // `decl` declares (R-55).
                 INPUT_RELATION => {
                     let name = word_text(&n, 1);
                     self.decls.relations.insert(name.clone());
-                    self.decls.scopes[decl]
-                        .arities
-                        .entry(name)
-                        .or_default()
-                        .insert(arity(&n));
+                    self.decls.heads.insert(name.clone());
+                    if terms(&n).next().is_none() {
+                        self.decls.scopes[decl].relation_inputs.insert(name);
+                    }
                 }
                 OUTPUT_DECL => {
                     let ty = node(&n, TYPE_EXPR).and_then(|t| self.resource_type(&t));
@@ -881,6 +886,10 @@ impl<'u> Lowerer<'u> {
                 DECL => {
                     let name = dotted_text(&n, 1);
                     self.decls.relations.insert(name.clone());
+                    self.decls.scopes[decl]
+                        .decl_nodes
+                        .entry(name.clone())
+                        .or_insert(n.clone());
                     self.decls.scopes[decl]
                         .arities
                         .entry(name)
@@ -1671,13 +1680,7 @@ impl<'u> Lowerer<'u> {
                     span,
                 }))
             }
-            INPUT_RELATION => {
-                let source = terms(n).next().ok_or(Skip)?;
-                if source.kind() == CALL && self.callee(&source).as_deref() == Some("facts") {
-                    return self.facts_relation(n, &source, scope, outer);
-                }
-                self.table(n, scope, outer)
-            }
+            INPUT_RELATION => self.relation_input(n, scope, outer),
             OUTPUT_DECL => self.output(n, scope, outer),
             // An alias lowers to nothing: each use is its type.
             TYPE_ALIAS => Ok(Vec::new()),
@@ -1831,26 +1834,91 @@ impl<'u> Lowerer<'u> {
         out
     }
 
-    /// `input p(a: T, ..) from facts(PATH)`: a relation read from a dform
-    /// fact file (`facts(git(REPO, REF, PATH))` from git), re-read when it
-    /// changes.
+    /// `input p from TERM [where B]` (R-55): rows of the relation `p`, its
+    /// columns `decl p(..)`'s. Several lines are one relation, their rows
+    /// together, and facts the program states join them. `input p` alone,
+    /// in a module or a component, is a relation its user gives the rows
+    /// of, in the `use` or `instance` block.
+    fn relation_input(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Vec<Stmt>> {
+        let span = self.span(n);
+        let pred = word_text(n, 1);
+        let module = self.decls.paths.contains_key(&self.file)
+            || n.parent().is_some_and(|p| p.kind() != SOURCE_FILE);
+        let Some(source) = terms(n).next() else {
+            if !module {
+                return self.error(
+                    span,
+                    format!(
+                        "`input {pred}` with no `from` is a module's relation, which its user \
+                         gives: a stack gives a relation's rows, `input {pred} from ..`"
+                    ),
+                );
+            }
+            let arity = self
+                .relation_decl(scope, &pred)
+                .map_or(0, |d| d.children().filter(|c| c.kind() == BIND_ARG).count());
+            return Ok(vec![Stmt::RelationInput(Extern { pred, arity, span })]);
+        };
+        if module {
+            return self.error(
+                span,
+                format!(
+                    "a module's relation is given by its user: declare `input {pred}`, and its \
+                     user writes `{pred} from ..` in the `use` or `instance` block"
+                ),
+            );
+        }
+        let Some(decl) = self.relation_decl(scope, &pred) else {
+            let d = Diagnostic::error(span, format!("input {pred} from ..: {pred} has no columns"))
+                .with_help(format!(
+                    "a relation is declared once, by its columns: `decl {pred}(a: T, ..)`"
+                ));
+            self.diags.push(d);
+            return Err(Skip);
+        };
+        if source.kind() == CALL && self.callee(&source).as_deref() == Some("facts") {
+            if node(n, BODY).is_some() {
+                return self.error(
+                    span,
+                    format!(
+                        "input {pred} from facts(..) takes no `where`: its rows are the file's"
+                    ),
+                );
+            }
+            let arity = decl.children().filter(|c| c.kind() == BIND_ARG).count();
+            return self.facts_relation(n, &pred, arity, &source, scope, outer);
+        }
+        let cols = self.table_columns(&pred, &decl)?;
+        let mut rc = self.rc(n, scope, outer);
+        let body = self.opt_body(&mut rc, n)?;
+        let mut out = self.table(&mut rc, &pred, cols, &source, body, span)?;
+        out.push(Stmt::Mixed(Extern {
+            pred,
+            arity: decl.children().filter(|c| c.kind() == BIND_ARG).count(),
+            span,
+        }));
+        Ok(out)
+    }
+
+    /// The `decl` of the relation `pred` in scope.
+    fn relation_decl(&self, scope: usize, pred: &str) -> Option<SyntaxNode> {
+        self.chain_of(scope)
+            .into_iter()
+            .find_map(|s| self.decls.scopes[s].decl_nodes.get(pred).cloned())
+    }
+
+    /// `input p from facts(PATH)`: rows read from a dform fact file
+    /// (`facts(git(REPO, REF, PATH))` from git), re-read when it changes.
     fn facts_relation(
         &mut self,
         n: &SyntaxNode,
+        pred: &str,
+        arity: usize,
         source: &SyntaxNode,
         scope: usize,
         outer: &Rc,
     ) -> L<Vec<Stmt>> {
         let span = self.span(n);
-        let pred = word_text(n, 1);
-        if n.parent().is_some_and(|p| p.kind() != SOURCE_FILE) {
-            return self.error(span, "an input relation belongs at the top of the program");
-        }
-        let fields: Vec<String> = n
-            .children()
-            .filter(|c| c.kind() == BIND_ARG)
-            .map(|b| word_text(&b, 0))
-            .collect();
         let args: Vec<SyntaxNode> = node(source, ARG_LIST)
             .map(|l| terms(&l).collect())
             .unwrap_or_default();
@@ -1867,15 +1935,12 @@ impl<'u> Lowerer<'u> {
             s @ Term::Func { .. } => s,
             path => func("file", vec![path]),
         };
-        Ok(vec![
-            Stmt::InputRelation(InputRelation {
-                pred: pred.clone(),
-                arity: fields.len(),
-                source,
-                span,
-            }),
-            Stmt::Decl(Decl { pred, fields, span }),
-        ])
+        Ok(vec![Stmt::InputRelation(InputRelation {
+            pred: pred.to_string(),
+            arity,
+            source,
+            span,
+        })])
     }
 
     fn rank_tok(&mut self, n: &SyntaxNode) -> L<Option<Rank>> {
@@ -2059,46 +2124,58 @@ impl<'u> Lowerer<'u> {
         Ok(t)
     }
 
-    /// `input p(col: type, ...) from FORMAT(SOURCE)`: a table
-    /// (`crate::tables`). Its rows are the answers of the extern
-    /// `table.FORMAT.p`, asked once the source is known:
-    /// `p(Cols) :- reads, Path = SOURCE, table.FORMAT.p(Path, At, Cols)`.
-    /// `decl p(col, ...)` names the columns for the record form.
-    fn table(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Vec<Stmt>> {
-        let span = self.span(n);
-        let pred = word_text(n, 1);
-        if n.parent().is_some_and(|p| p.kind() != SOURCE_FILE) {
-            return self.error(span, "an input relation belongs at the top of the program");
-        }
+    /// `input p from FORMAT(SOURCE) [where B]`: a table (`crate::tables`),
+    /// its columns `cols`. Its rows are the answers of the extern
+    /// `table.FORMAT.p`, asked once the source is known: `p(Cols) :- B,
+    /// reads, Path = SOURCE, table.FORMAT.p(Path, At, Cols)`.
+    fn table(
+        &mut self,
+        rc: &mut Rc,
+        pred: &str,
+        cols: Vec<BindArg>,
+        src: &SyntaxNode,
+        mut body: Vec<Lit>,
+        span: Span,
+    ) -> L<Vec<Stmt>> {
+        let vars: Vec<Term> = cols
+            .iter()
+            .map(|c| var(&fresh(rc, &capitalise(&c.name))))
+            .collect();
+        let mut out = self.table_body(rc, src, pred, cols, vars.clone(), &mut body)?;
+        self.check_bound(rc, &body, &[])?;
+        out.push(Stmt::Rule(RuleStmt {
+            head: atom_at(pred, vars, span),
+            body,
+        }));
+        Ok(out)
+    }
+
+    /// A table's columns, its relation's `decl`'s: each typed, with an
+    /// input's types, never a secret.
+    fn table_columns(&mut self, pred: &str, decl: &SyntaxNode) -> L<Vec<BindArg>> {
         let mut cols: Vec<BindArg> = Vec::new();
-        for b in n.children().filter(|c| c.kind() == BIND_ARG) {
+        for b in decl.children().filter(|c| c.kind() == BIND_ARG) {
             let name = word_text(&b, 0);
             let ty = node(&b, TYPE_EXPR).map(|t| self.type_expr(&t));
             let at = self.span(&b);
             if ty.is_none() {
                 return self.error(
                     at,
-                    format!("input relation {pred}: a table's column {name} needs a type"),
+                    format!("{pred} is read from a table: its column {name} needs a type"),
                 );
             }
             if cols.iter().any(|c| c.name == name) {
-                return self.error(
-                    at,
-                    format!("input relation {pred}: two columns are named {name}"),
-                );
+                return self.error(at, format!("{pred}: two columns are named {name}"));
             }
             if let Some(Err(e)) = ty.as_ref().map(crate::inputs::check_type) {
-                return self.error(at, format!("input relation {pred}: column {name}: {e}"));
+                return self.error(at, format!("{pred}: column {name}: {e}"));
             }
             if matches!(&ty, Some(TypeExpr::Apply(t, _)) if t == "secret") {
-                let d = Diagnostic::error(
-                    at,
-                    format!("input relation {pred}: column {name} is a secret"),
-                )
-                .with_note(
-                    "a table's rows are read in the clear and recorded in the plan file; \
-                     a secret comes from a secret input or a `persist` extern",
-                );
+                let d = Diagnostic::error(at, format!("{pred}: column {name} is a secret"))
+                    .with_note(
+                        "a table's rows are read in the clear and recorded in the plan file; \
+                         a secret comes from a secret input or a `persist` extern",
+                    );
                 self.diags.push(d);
                 return Err(Skip);
             }
@@ -2108,26 +2185,7 @@ impl<'u> Lowerer<'u> {
                 ty,
             });
         }
-        let mut rc = self.rc(n, scope, outer);
-        let mut body = Vec::new();
-        let src = terms(n).next().ok_or(Skip)?;
-        let vars: Vec<Term> = cols
-            .iter()
-            .map(|c| var(&fresh(&mut rc, &capitalise(&c.name))))
-            .collect();
-        let mut out =
-            self.table_body(&mut rc, &src, &pred, cols.clone(), vars.clone(), &mut body)?;
-        self.check_bound(&rc, &body, &[])?;
-        out.push(Stmt::Decl(Decl {
-            pred: pred.clone(),
-            fields: cols.iter().map(|c| c.name.clone()).collect(),
-            span,
-        }));
-        out.push(Stmt::Rule(RuleStmt {
-            head: atom_at(&pred, vars, span),
-            body,
-        }));
-        Ok(out)
+        Ok(cols)
     }
 
     /// The stack's settings as dform.toml gives them (R-29): each a

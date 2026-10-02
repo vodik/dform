@@ -19,11 +19,15 @@ edition 2026
 input env: enum("dev", "prod") = "dev"
 
 # The release to run, `release(image)`; re-read whenever the file changes.
-input release(image) from facts("data/release.facts")
+input release from facts("data/release.facts")
 # `approve(t, a)`: accept the drift of t.a, correcting it.
-input approve(type, address) from facts("data/approvals.facts")
+input approve from facts("data/approvals.facts")
 # `approval(token)`: a signed approval of a plan's digest.
-input approval(token) from facts("data/approvals.facts")
+input approval from facts("data/approvals.facts")
+
+decl release(image)
+decl approve(type, address)
+decl approval(token)
 
 provider k8s
 

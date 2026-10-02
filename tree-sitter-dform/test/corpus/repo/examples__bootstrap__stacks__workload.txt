@@ -23,11 +23,15 @@ edition 2026
 input env: enum("dev", "prod") = "dev"
 
 # The release to run, `release(image)`; re-read whenever the file changes.
-input release(image) from facts("data/release.facts")
+input release from facts("data/release.facts")
 # `approve(t, a)`: accept the drift of t.a, correcting it.
-input approve(type, address) from facts("data/approvals.facts")
+input approve from facts("data/approvals.facts")
 # `approval(token)`: a signed approval of a plan's digest.
-input approval(token) from facts("data/approvals.facts")
+input approval from facts("data/approvals.facts")
+
+decl release(image)
+decl approve(type, address)
+decl approval(token)
 
 provider k8s
 
@@ -102,9 +106,6 @@ requires_approval(d, "a prod rollout") where {
   (comment)
   (input_relation
     (identifier)
-    (columns
-      (field_declaration
-        (identifier)))
     (call
       (identifier)
       (arguments
@@ -113,27 +114,39 @@ requires_approval(d, "a prod rollout") where {
   (comment)
   (input_relation
     (identifier)
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content)))))
+  (comment)
+  (input_relation
+    (identifier)
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content)))))
+  (decl
+    (dotted_name
+      (identifier))
+    (columns
+      (field_declaration
+        (identifier))))
+  (decl
+    (dotted_name
+      (identifier))
     (columns
       (field_declaration
         (identifier))
       (field_declaration
-        (identifier)))
-    (call
-      (identifier)
-      (arguments
-        (string
-          (string_content)))))
-  (comment)
-  (input_relation
-    (identifier)
+        (identifier))))
+  (decl
+    (dotted_name
+      (identifier))
     (columns
       (field_declaration
-        (identifier)))
-    (call
-      (identifier)
-      (arguments
-        (string
-          (string_content)))))
+        (identifier))))
   (provider
     (identifier))
   (resource

@@ -1,2 +1,2 @@
 tests/syntax/err/input_value_from.df:5:21: expected `=` or the end of the line, found `from`
-  help: `from` gives rows and `=` gives a value: a relation input names its columns, `input p(a, b) from facts(..)`, and a value is `input x: T = d`
+  help: `from` gives rows and `=` gives a value: a relation's rows are `input p from facts(..)`, its columns its `decl p(a, b)`, and a value is `input x: T = d`

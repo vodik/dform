@@ -121,6 +121,9 @@ pub enum Stmt {
     /// `input p(cols) from facts("path")`: `p` is fed from outside
     /// the program and re-read when its source changes (`watch`).
     InputRelation(InputRelation),
+    /// `input p` in a module or a component: the relation `p`'s rows are
+    /// its user's to give, in the `use` or `instance` block (R-55).
+    RelationInput(Extern),
     /// An output's declaration (`k: T`) or its value (`k = term`).
     Output(OutputDecl),
     /// The stack's settings, `[stacks.NAME]` over `[defaults]` in

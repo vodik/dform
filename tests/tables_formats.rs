@@ -1,6 +1,6 @@
-//! Tables (README "Tables"): `input relation p(col: type, ...) from
-//! FORMAT(SOURCE)` reads typed rows from CSV, JSON, YAML and TOML; a row
-//! that is not its columns' types is an error naming its line.
+//! Tables (README "Tables"): `input p from FORMAT(SOURCE)` reads rows of
+//! `decl p(col: type, ...)` from CSV, JSON, YAML and TOML; a row that is
+//! not its columns' types is an error naming its line.
 
 mod common;
 mod tables_common;
@@ -11,7 +11,9 @@ fn program(format: &str) -> String {
     format!(
         r#"edition 2026
 
-input peering(env: enum("dev", "prod"), name: string, port: int, cidr: inet, on: bool) from {format}("data/p.{format}")
+input peering from {format}("data/p.{format}")
+
+decl peering(env: enum("dev", "prod"), name: string, port: int, cidr: inet, on: bool)
 
 resource net.vpc "v-${{name}}" {{
   cidr = string(c)
@@ -154,7 +156,7 @@ fn an_enum_a_missing_and_an_extra_column_are_errors() {
     let s = scratch("strict");
     s.write(
         "p.df",
-        "edition 2026\ninput t(name: string) from json(\"t.json\")\nwarn \"${n}\" where t(n)\nprovider fake\n",
+        "edition 2026\ninput t from json(\"t.json\")\ndecl t(name: string)\nwarn \"${n}\" where t(n)\nprovider fake\n",
     );
     s.write("t.json", "[{\"name\": 3}]");
     let r = s.run(&["plan", "p.df"]).failure();
@@ -174,7 +176,9 @@ fn why_names_the_row_and_a_computed_source_follows_its_input() {
         r#"edition 2026
 
 input env: enum("dev", "prod") = "dev"
-input node(name: string) from csv("data/${env}.csv")
+input node from csv("data/${env}.csv")
+
+decl node(name: string)
 
 resource compute.vm "${n}" {
   size = 1
@@ -201,12 +205,12 @@ fn a_table_whose_source_reads_its_rows_is_a_compile_error() {
     let s = scratch("cycle");
     s.write(
         "p.df",
-        "edition 2026\ninput t(p: string) from csv(\"${src}\")\nlet src = p where t(p)\nprovider fake\n",
+        "edition 2026\ninput t from csv(\"${src}\")\ndecl t(p: string)\nlet src = p where t(p)\nprovider fake\n",
     );
     let r = s.run(&["plan", "p.df"]).failure();
     assert!(
         r.stderr
-            .contains("p.df:2:25: input relation t: its source reads its own rows"),
+            .contains("p.df:2:14: input relation t: its source reads its own rows"),
         "{}",
         r.stderr
     );
@@ -217,15 +221,31 @@ fn a_table_whose_source_reads_its_rows_is_a_compile_error() {
     );
 }
 
-/// A table's rows are facts the program may not also state.
+/// A relation's rows are every source's and the facts the program states
+/// (R-55): two tables and a fact are one relation.
 #[test]
-fn a_table_is_not_also_stated() {
+fn a_tables_rows_and_stated_facts_are_one_relation() {
     let s = scratch("mixed");
     s.write(
         "p.df",
-        "edition 2026\ninput t(p: string) from csv(\"t.csv\")\nt(\"x\")\nprovider fake\n",
+        "edition 2026\ninput t from csv(\"t.csv\")\ninput t from json(\"u.json\") where \"a\" != \"b\"\n\
+         decl t(p: string)\nt(\"x\")\nprovider fake\n",
     );
     s.write("t.csv", "p\ny\n");
+    s.write("u.json", "[{\"p\": \"z\"}]");
+    let r = s.run(&["query", "t(p)", "p.df"]).success();
+    for p in ["\"x\"", "\"y\"", "\"z\""] {
+        assert!(r.stdout.contains(p), "{p}: {}", r.stdout);
+    }
+    // With no `decl`, a table has no columns to read.
+    s.write(
+        "p.df",
+        "edition 2026\ninput t from csv(\"t.csv\")\nprovider fake\n",
+    );
     let r = s.run(&["plan", "p.df"]).failure();
-    assert!(r.stderr.contains("t/1"), "{}", r.stderr);
+    assert!(
+        r.stderr.contains("input t from ..: t has no columns"),
+        "{}",
+        r.stderr
+    );
 }
