@@ -65,7 +65,7 @@ fn a_plan_file_pins_the_commit_the_branch_named() {
     let r = s.run(&["why", r#"node("c")"#, "p.df"]).success();
     assert!(
         r.stdout
-            .contains(&format!("fact, ops.git@{}:nodes.csv:4", short(&third))),
+            .contains(&format!("   ops.git@{}:nodes.csv:4\n", short(&third))),
         "{}",
         r.stdout
     );

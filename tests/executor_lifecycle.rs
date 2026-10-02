@@ -276,7 +276,7 @@ fn why_explains_prevent_destroy() {
     let r = dform(&s, &["why", "deny(M)"]).success();
     assert!(
         r.stdout.starts_with(
-            "deny(\"lifecycle prevent_destroy: the plan would delete net.vpc[\\\"main\\\"]\")\n"
+            "deny \"lifecycle prevent_destroy: the plan would delete net.vpc[\\\"main\\\"]\"\n"
         ),
         "{}",
         r.stdout

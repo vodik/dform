@@ -152,7 +152,7 @@ impl Table {
         let cells: Vec<Vec<String>> = self
             .rows
             .iter()
-            .map(|row| row.iter().map(|v| r.fmt(v)).collect())
+            .map(|row| row.iter().map(|v| r.surface(v)).collect())
             .collect();
         let mut width: Vec<usize> = self.vars.iter().map(|v| v.chars().count()).collect();
         for row in &cells {
@@ -293,6 +293,16 @@ impl Redactor {
     /// `partition::fmt_value`, with secrets as `(sensitive T["A"].p)` and
     /// nulls as `?T["A"].p` (`ir::label`).
     pub fn fmt(&self, v: &Value) -> String {
+        self.spell(v, false)
+    }
+
+    /// A value as the program would write it: `fmt`, with a reference as
+    /// the address it names, `T["A"]` or `T["A"].p`.
+    pub fn surface(&self, v: &Value) -> String {
+        self.spell(v, true)
+    }
+
+    fn spell(&self, v: &Value, surface: bool) -> String {
         if let Some(l) = self.secret(v) {
             return format!("(sensitive {})", crate::ir::label(&l));
         }
@@ -300,18 +310,29 @@ impl Redactor {
             Value::List(xs) => format!(
                 "[{}]",
                 xs.iter()
-                    .map(|x| self.fmt(x))
+                    .map(|x| self.spell(x, surface))
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
             Value::Obj(m) => format!(
                 "{{{}}}",
                 m.iter()
-                    .map(|(k, x)| format!("{k}: {}", self.fmt(x)))
+                    .map(|(k, x)| format!("{k}: {}", self.spell(x, surface)))
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
             Value::Null { label, .. } => format!("?{}", crate::ir::label(label)),
+            Value::Ref { typ, name, attr } if surface => crate::ir::Address {
+                typ: typ.clone(),
+                name: name.clone(),
+            }
+            .attr(attr),
+            Value::CloudRef { typ, name, attr } if surface => format!(
+                "cloud_ref({}, {}, {})",
+                crate::ir::string_literal(typ),
+                crate::ir::string_literal(name),
+                crate::ir::string_literal(attr)
+            ),
             v => partition::fmt_value(v),
         }
     }
@@ -322,6 +343,19 @@ impl Redactor {
             .iter()
             .map(|t| match t {
                 Term::Val(v) => self.fmt(v),
+                t => partition::fmt_term(t),
+            })
+            .collect();
+        format!("{}({})", a.pred, args.join(", "))
+    }
+
+    /// `fmt_atom` with values as the program would write them (`surface`).
+    pub fn surface_atom(&self, a: &Atom) -> String {
+        let args: Vec<String> = a
+            .args
+            .iter()
+            .map(|t| match t {
+                Term::Val(v) => self.surface(v),
                 t => partition::fmt_term(t),
             })
             .collect();

@@ -279,6 +279,10 @@ enum Run {
         /// Show every alternative derivation, not only the first.
         #[arg(long)]
         all: bool,
+        /// Print the tree in the core's spelling: lowered rules (`r12:
+        /// head :- body`), core variables, facts as relations.
+        #[arg(long)]
+        core: bool,
     },
     /// Query the final fact store: a predicate name (every fact of it) or
     /// body literals with variables, printed as a table with one column per
@@ -545,6 +549,7 @@ enum Cmd {
     Why {
         pattern: String,
         all: bool,
+        core: bool,
     },
     Show {
         addr: String,
@@ -824,7 +829,8 @@ fn run_cmd(r: Run) -> (Cmd, Option<Target>) {
             pattern,
             target,
             all,
-        } => (Cmd::Why { pattern, all }, Some(target)),
+            core,
+        } => (Cmd::Why { pattern, all, core }, Some(target)),
         Run::Query {
             pattern,
             target,
@@ -1409,7 +1415,7 @@ fn run_with(
         let x = ev.explained();
         match &cli.cmd {
             Cmd::Query { pattern, json } => print_query(pattern, &x.res.facts, &x.redact, *json)?,
-            Cmd::Why { pattern, all } => why_tree(pattern, *all, &x.res, &x.redact)?,
+            Cmd::Why { pattern, all, core } => why_tree(pattern, *all, *core, &x.res, &x.redact)?,
             _ => unreachable!("explains is query or why"),
         }
         return Ok(());
@@ -2304,10 +2310,11 @@ fn run_with(
 }
 
 /// `dform why PATTERN`: the provenance tree of each fact of `res` that
-/// matches, redacted.
+/// matches, redacted, in the program's own terms (`--core`: the core's).
 fn why_tree(
     pattern: &str,
     all: bool,
+    core: bool,
     res: &engine::EvalResult,
     redact: &query::Redactor,
 ) -> Result<()> {
@@ -2340,7 +2347,11 @@ fn why_tree(
         if i > 0 {
             println!();
         }
-        print!("{}", printer.tree(id, focus.as_ref()));
+        if core {
+            print!("{}", printer.tree(id, focus.as_ref()));
+        } else {
+            print!("{}", printer.source_tree(&res.rules, id, focus.as_ref()));
+        }
     }
     Ok(())
 }
@@ -3183,7 +3194,7 @@ fn print_query(
                 return Ok(());
             }
             for a in &matches {
-                println!("{}", redact.fmt_atom(a));
+                println!("{}", redact.surface_atom(a));
             }
             println!("matches: {}", matches.len());
         }

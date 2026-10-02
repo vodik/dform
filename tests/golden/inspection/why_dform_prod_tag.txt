@@ -1,50 +1,40 @@
-attr("net.vpc", "network.main::vpc", "tags", {component: "network", env: "prod", team: "platform"})
-  by Σattr: attribute aggregate (lub_ranked, E §2.5) over 2 contributions
-  ├─ arg("net.vpc", "network.main::vpc", "tags", {team: "platform"}, "normal")   [rank normal, owner r17 (examples/demo/policies/baseline.df:10:3, policy baseline)]
-  │    by r17: arg(Type, R, "tags", {team: "platform"}, "normal") :- want(Type, R)
-  │    with R = "network.main::vpc", Type = "net.vpc"
-  │    └─ want("net.vpc", "network.main::vpc")
-  │         by r24: want("net.vpc", scoped("network.main", "vpc")) :- network.main::vpc_net(VpcNet), env(Env)
-  │         with Env = "prod", VpcNet = 10.20.0.0/16
-  │         ├─ env("prod")
-  │         │    by r4: env(V) :- attr("input", "", "env", V)
-  │         │    with V = "prod"
-  │         │    └─ attr("input", "", "env", "prod")
-  │         │         by Σattr: attribute aggregate (lub_ranked, E §2.5) over 2 contributions
-  │         │         ├─ arg("input", "", "env", "staging", "default")   fact, examples/demo/stacks/dform.df:18:1 (arg)   [rank default, owner examples/demo/stacks/dform.df:18:1 (arg)]
-  │         │         └─ arg("input", "", "env", "prod", "normal")   [rank normal, owner r5 (examples/demo/stacks/dform.df:18:1)]
-  │         │              by r5: arg("input", "", "env", V, "normal") :- input("env", V)
-  │         │              with V = "prod"
-  │         │              └─ input("env", "prod")   input --set env=prod
-  │         └─ network.main::vpc_net(10.20.0.0/16)
-  │              by r34: network.main::vpc_net(V) :- attr("input", "network.main", "vpc_net", V)
-  │              with V = 10.20.0.0/16
-  │              └─ attr("input", "network.main", "vpc_net", 10.20.0.0/16)
-  │                   by Σattr: attribute aggregate (lub_ranked, E §2.5) over 1 contribution
-  │                   └─ arg("input", "network.main", "vpc_net", 10.20.0.0/16, "normal")   [rank normal, owner r23 (examples/demo/stacks/dform.df:57:3)]
-  │                        by r23: arg("input", "network.main", "vpc_net", inet(VpcNet), "normal") :- cfg(Cfg), attr("settings", Cfg, "network.main.vpc_net", VpcNet)
-  │                        with Cfg = "prod", VpcNet = "10.20.0.0/16"
-  │                        ├─ cfg("prod")
-  │                        │    by r97: cfg(V) :- attr("let", "", "cfg", V)
-  │                        │    with V = "prod"
-  │                        │    └─ attr("let", "", "cfg", "prod")
-  │                        │         by Σattr: attribute aggregate (lub_ranked, E §2.5) over 1 contribution
-  │                        │         └─ arg("let", "", "cfg", "prod", "normal")   [rank normal, owner r16 (examples/demo/stacks/dform.df:42:1)]
-  │                        │              by r16: arg("let", "", "cfg", Env, "normal") :- env(Env)
-  │                        │              with Env = "prod"
-  │                        │              └─ env("prod")   (see above)
-  │                        └─ attr("settings", "prod", "network.main.vpc_net", "10.20.0.0/16")
-  │                             by Σattr: attribute aggregate (lub_ranked, E §2.5) over 2 contributions
-  │                             ├─ arg("settings", "prod", "network.main.vpc_net", "10.50.0.0/16", "default")   [rank default, owner r9 (examples/demo/stacks/dform.df:34:3)]
-  │                             │    by r9: arg("settings", Row, "network.main.vpc_net", "10.50.0.0/16", "default") :- settings_row(Row)
-  │                             │    with Row = "prod"
-  │                             │    └─ settings_row("prod")
-  │                             │         └─ fact, compiler (settings_row)
-  │                             │         ... 7 more alternatives (--all)
-  │                             │         ... further alternatives dropped at 8
-  │                             └─ arg("settings", "prod", "network.main.vpc_net", "10.20.0.0/16", "normal")   [rank normal, owner r112 (examples/demo/stacks/dform.df:12:58)]
-  │                                  by r112: arg("settings", Env, "network.main.vpc_net", Value, "normal") :- env(Env), Path1 = format("config/dform/%s.yaml", Env), table.yaml.stack.config(Path1, At, "network.main.vpc_net", Value)
-  │                                  with At = "config/dform/prod.yaml:5", Env = "prod", Path1 = "config/dform/prod.yaml", Value = "10.20.0.0/16"
-  │                                  ├─ table.yaml.stack.config("config/dform/prod.yaml", "config/dform/prod.yaml:5", "network.main.vpc_net", "10.20.0.0/16")   fact, config/dform/prod.yaml:5
-  │                                  └─ env("prod")   (see above)
+net.vpc["network.main::vpc"].tags = {component: "network", env: "prod", team: "platform"}
+  merged from 2 contributions
+  ├─ {team: "platform"}
+  │    examples/demo/policies/baseline.df:10  set r.tags = { team: "platform" } where r in resource   (policy baseline)
+  │    with r = net.vpc["network.main::vpc"]
+  │    └─ net.vpc["network.main::vpc"]
+  │         examples/demo/modules/network.df:11  resource net.vpc vpc { .. }   (module network instance main)
+  │         ├─ input network.main.vpc_net = 10.20.0.0/16
+  │         │    merged from 1 contribution
+  │         │    └─ 10.20.0.0/16
+  │         │         examples/demo/stacks/dform.df:57  instance network main { vpc_net = inet(cfg.network.main.vpc_net) }
+  │         │         with inet(cfg.network.main.vpc_net) = 10.20.0.0/16
+  │         │              cfg.network.main.vpc_net = "10.20.0.0/16"
+  │         │         ├─ let cfg = "prod"
+  │         │         │    merged from 1 contribution
+  │         │         │    └─ "prod"
+  │         │         │         examples/demo/stacks/dform.df:42  let cfg = settings[env]
+  │         │         │         with env = "prod"
+  │         │         │              settings[env] = settings["prod"]
+  │         │         │         └─ input env = "prod"
+  │         │         │              merged from 2 contributions
+  │         │         │              ├─ "staging" @default   examples/demo/stacks/dform.df:18
+  │         │         │              └─ "prod"
+  │         │         │                   examples/demo/stacks/dform.df:18  input env: environment = "staging"
+  │         │         │                   └─ --set env=prod
+  │         │         └─ settings["prod"].network.main.vpc_net = "10.20.0.0/16"
+  │         │              merged from 2 contributions
+  │         │              ├─ "10.50.0.0/16" @default
+  │         │              │    examples/demo/stacks/dform.df:34  settings _ @default { network.main.vpc_net = "10.50.0.0/16" .. }
+  │         │              │    └─ settings_row("prod")
+  │         │              │         └─ compiler
+  │         │              │         ... 7 more alternatives (--all)
+  │         │              │         ... further alternatives dropped at 8
+  │         │              └─ "10.20.0.0/16"
+  │         │                   examples/demo/stacks/dform.df:12  stack dform[env] { .. config = yaml("config/dform/${env}.yaml") }
+  │         │                   with "config/dform/${env}.yaml" = "config/dform/prod.yaml"
+  │         │                   ├─ input env = "prod"   (see above)
+  │         │                   └─ table.yaml.stack.config("config/dform/prod.yaml", "config/dform/prod.yaml:5", "network.main.vpc_net", "10.20.0.0/16")   config/dform/prod.yaml:5
+  │         └─ input env = "prod"   (see above)
   └─ ... 1 other contribution (--all)

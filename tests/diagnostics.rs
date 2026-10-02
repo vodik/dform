@@ -57,7 +57,11 @@ fn an_unknown_function_names_its_call() {
         "{}",
         r.stderr
     );
-    assert!(r.stderr.contains("the functions are cloud_ref,"), "{}", r.stderr);
+    assert!(
+        r.stderr.contains("the functions are cloud_ref,"),
+        "{}",
+        r.stderr
+    );
     let r = plan("edition 2026\nresource net.a x {\n  name = uper(\"x\")\n}\n").failure();
     assert!(
         r.stderr.contains("p.df:3:10: unknown function uper"),
@@ -97,8 +101,8 @@ fn a_lowering_error_names_its_statement() {
     );
 }
 
-/// `why` names each contribution's owner by rule id, where it is written,
-/// and the policy pack or module instance it was lowered out of.
+/// `why` names each contribution's statement, where it is written, and the
+/// policy pack or module instance it was lowered out of.
 #[test]
 fn why_names_the_pack_and_the_module_instance() {
     let s = Scratch::new("diag-why");
@@ -119,10 +123,15 @@ fn why_names_the_pack_and_the_module_instance() {
         .success()
         .stdout;
     assert!(
-        out.contains("owner p.df:3:26 (arg, module m instance main)"),
+        out.contains("└─ \"10.0.0.0/16\"   p.df:3   (module m instance main)\n"),
         "{out}"
     );
-    assert!(out.contains("(p.df:7:3, policy tags)]"), "{out}");
+    assert!(
+        out.contains(
+            "p.df:7  arg(t, a, \"tags\", { team: \"x\" }) where want(t, a)   (policy tags)\n"
+        ),
+        "{out}"
+    );
 }
 
 /// R-4: a content read of a computed path in a block is a note at the

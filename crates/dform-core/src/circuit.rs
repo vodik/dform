@@ -107,9 +107,25 @@ pub struct Circuit {
     rule_text: BTreeMap<String, String>,
     /// Rule id -> where the rule is written (`diag::place`).
     rule_at: BTreeMap<String, String>,
+    /// Rule id -> the source it was lowered from, for `why`.
+    rule_src: BTreeMap<String, RuleSource>,
     /// Firings already absorbed or truncated, so naive re-evaluation does
     /// not re-test (or re-store) them.
     rejected: FxHashSet<(NodeId, Vec<NodeId>)>,
+}
+
+/// The statement a rule was lowered from: its file's text and the byte
+/// range of the rule's span in it (the statement, or the block entry the
+/// rule was lowered out of), its line, and the pack or module instance it
+/// came from.
+#[derive(Debug, Clone)]
+pub struct RuleSource {
+    pub file: String,
+    pub text: std::sync::Arc<str>,
+    pub start: usize,
+    pub end: usize,
+    pub line: usize,
+    pub origin: Option<String>,
 }
 
 /// A read-only view of one node, for printers.
@@ -263,6 +279,15 @@ impl Circuit {
 
     pub fn rule_at(&self, id: &str) -> Option<&str> {
         self.rule_at.get(id).map(String::as_str)
+    }
+
+    /// Record the source rule `id` was lowered from, for printers.
+    pub fn source_rule(&mut self, id: &str, src: RuleSource) {
+        self.rule_src.insert(id.to_string(), src);
+    }
+
+    pub fn rule_source(&self, id: &str) -> Option<&RuleSource> {
+        self.rule_src.get(id)
     }
 
     pub fn view(&self, id: NodeId) -> View<'_> {

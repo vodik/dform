@@ -189,7 +189,7 @@ resource compute.vm "${n}" {
     let r = s
         .run(&["--set", "env=prod", "why", r#"node("p2")"#, "p.df"])
         .success();
-    assert!(r.stdout.contains("fact, data/prod.csv:3"), "{}", r.stdout);
+    assert!(r.stdout.contains("   data/prod.csv:3\n"), "{}", r.stdout);
 }
 
 /// The orchestrator's note: a table's source computed from its own rows

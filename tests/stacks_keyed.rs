@@ -410,13 +410,13 @@ fn the_strict_collision_deny_is_a_fact_why_explains() {
     let r = s.run(&["why", "deny(M)", "app.df"]).success();
     assert!(
         r.stdout
-            .contains("deny(\"app.df:5:3: net.vpc[\\\"logs\\\"].bucket"),
+            .contains("deny \"app.df:5:3: net.vpc[\\\"logs\\\"].bucket"),
         "{}",
         r.stdout
     );
     assert!(
         r.stdout
-            .contains("attr(\"net.vpc\", \"logs\", \"bucket\", \"company-logs\")"),
+            .contains("└─ net.vpc[\"logs\"].bucket = \"company-logs\"\n"),
         "{}",
         r.stdout
     );

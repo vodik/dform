@@ -1166,29 +1166,58 @@ Secrets print as their label, `(sensitive T["A"].p)`: a value at a
 `sensitive` path, and any value equal to it or string containing it, so a
 rule that forwards a secret does not leak it either.
 
+Rows print values as the program writes them: a reference is the address
+it names, `google_sql_database_instance["db"].name`, an unknown its
+`?T["A"].p` label.
+
 `dform why PATTERN` prints how a fact was derived, from the provenance
-circuit every evaluation records (proposal E §3, DR-10): the rule (its id
-and text), the rule's bindings, and the facts the firing read, recursively;
-a fact given to the run says where it came from (`fact, statement N` until
-the parser keeps spans, `input --set env=prod`, the provider schema, the
-world, the plan for the facts the planner hands to the policy pass). An attribute shows every contribution with its rank and owner.
-Variables are allowed and every match is printed. A fact derived more than
-one way shows its first derivation and `... N more alternatives`; `--all`
-shows them all. An address as plan prints it is a pattern too: `why
-'T["A"]'` explains the resource's `want`, `why 'T["A"].path'` the
-attribute's `attr`. An `attr`/`arg` pattern may name part of an object
-attribute, by dotted path or by object value, and then shows only the
-contributions that hold it:
+circuit every evaluation records (proposal E §3, DR-10), in the program's
+own terms: each statement that fired, as written, at its `file:line` (a
+block shows the entry that fired, the rest elided as `..`; a pack's or a
+module instance's statement names it), then `with` the statement's
+variables as they were bound, by their names in the source, and under them
+each computed term of the statement with its value: an interpolation, a
+function call, a read (`cfg.backup_days = 14`), a lookup
+(`settings[env] = settings["prod"]`), an unknown as its `?` label. Under
+that are the facts the firing read, recursively, each spelled as the
+program names it: `net.vpc["main"]` for a resource, `net.vpc["main"].cidr
+= 10.0.0.0/16` for an attribute, `input env = "prod"` and `let cfg =
+"prod"` for a cell, `settings["prod"].backup_days = 14` for a settings
+row, a relation as `zone("us-test-1a", 1)`. An attribute is `merged from N
+contributions`, each with its value, its rank when it is not normal
+(`@default`) and the statement that made it. A fact given to the run says
+where it came from: its `file:line`, `--set env=prod`, the provider
+schema, the world, the plan for the facts the planner hands to the policy
+pass. Variables are allowed and every match is printed. A fact derived
+more than one way shows its first derivation and `... N more
+alternatives`; `--all` shows them all. `--core` prints the same tree in
+the core's spelling: the lowered rules by id (`by r17: head :- body`),
+their variables, facts as relations, the aggregate as `Σattr`. An address
+as plan prints it is a pattern too: `why 'T["A"]'` explains the resource's
+`want`, `why 'T["A"].path'` the attribute's `attr`. An `attr`/`arg`
+pattern may name part of an object attribute, by dotted path or by object
+value, and then shows only the contributions that hold it:
 
 ```bash
 cargo run -- -C examples/demo why 'attr(net.vpc, "network.main::vpc", "tags.team", "platform")' dform env=prod
-# attr("net.vpc", "network.main::vpc", "tags", {component: "network", env: "prod", team: "platform"})
-#   by Σattr: attribute aggregate (lub_ranked, E §2.5) over 2 contributions
-#   ├─ arg("net.vpc", "network.main::vpc", "tags", {team: "platform"}, "normal")   [rank normal, owner r69]
-#   │    by r69: arg(Type, R, "tags", {team: "platform"}, "normal") :- want(Type, R)
-#   │    with R = "network.main::vpc", Type = "net.vpc"
+# net.vpc["network.main::vpc"].tags = {component: "network", env: "prod", team: "platform"}
+#   merged from 2 contributions
+#   ├─ {team: "platform"}
+#   │    policies/baseline.df:10  set r.tags = { team: "platform" } where r in resource   (policy baseline)
+#   │    with r = net.vpc["network.main::vpc"]
+#   │    └─ net.vpc["network.main::vpc"]
+#   │         modules/network.df:11  resource net.vpc vpc { .. }   (module network instance main)
 #   ...
 #   └─ ... 1 other contribution (--all)
+cargo run -- -C examples/tour why 'db.postgres["orders"].backup_days' tour env=prod
+# db.postgres["orders"].backup_days = 14
+#   merged from 2 contributions
+#   ├─ type_refine("db.postgres", "backup_days", "range(1, 35)")   provider schema
+#   └─ 14
+#        stacks/tour.df:155  resource db.postgres orders { .. backup_days = cfg.backup_days .. }
+#        with cfg.backup_days = 14
+#        ├─ let cfg = "prod"
+#   ...
 ```
 
 `dform dev graph` prints Graphviz DOT, nodes and edges sorted:
@@ -1293,7 +1322,7 @@ newline already separates block entries. A formatted file prints back byte
 for byte, and a file with a syntax error is reported, not rewritten.
 `--check` rewrites nothing and fails listing the files that would change.
 
-- Core intent IR (what the surface lowers to; `why` and `strata` print it):
+- Core intent IR (what the surface lowers to; `why --core` and `strata` print it):
   - `want(Type, Name)` declares a resource instance.
   - `arg(Type, Name, KeyPath, Value)` contributes attributes (KeyPath supports dots).
   - `ref(Type, Name, "attr")` expresses dependencies.
@@ -1430,8 +1459,8 @@ A table is an extern (see "Externs"): the source, `path` or `git(repo, ref,
 path)` with holes (`${env}`), is its bound input, so rules may compute it; a
 source that reads the table's own rows is the extern-in-a-recursive-rule
 compile error. The rows are its answers: the plan file records them, and
-`apply PLAN` reads none again. `why` names each row's line, `fact,
-data/peerings.csv:3` (`ops.git@a9d0f11:pins.yaml:12` from git).
+`apply PLAN` reads none again. `why` names each row's line,
+`data/peerings.csv:3` (`ops.git@a9d0f11:pins.yaml:12` from git).
 
 A git source's ref is resolved to a commit first (a ref that names none is
 an error naming the repository and the ref, never an empty table), and the
@@ -1944,7 +1973,7 @@ examples/demo an evaluation takes about 30 ms in a release build.
   attribute's collapsed value, the provider's description of its path
   (`type_doc`), the winning rank and every contribution with its rank and
   owner (rule, `file:line:col`, pack or module instance), then the
-  derivation as `dform why` prints it.
+  derivation as `dform why --core` prints it.
 - *Docs at point*: on a declared name, where it is declared or used, its
   declaration's first line and doc comment (docs/grammar.md "Doc
   comments"); an alias its definition; a module, or an instance, the

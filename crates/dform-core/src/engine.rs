@@ -96,6 +96,20 @@ impl Prov {
         if let Some(at) = diag::place(span) {
             self.circuit.locate_rule(&id, at);
         }
+        if let (Some((file, text)), Some((_, line, _))) =
+            (diag::source_of(span), diag::location(span))
+        {
+            let end = (span.end as usize).min(text.len());
+            let src = circuit::RuleSource {
+                file,
+                start: (span.start as usize).min(end),
+                end,
+                line,
+                origin: diag::origin(span),
+                text,
+            };
+            self.circuit.source_rule(&id, src);
+        }
         self.circuit.leaf(Leaf::Rule { id })
     }
 

@@ -5,9 +5,9 @@ mod inspection_common;
 use common::{Scratch, repo};
 use inspection_common::{dform, golden};
 
-/// The ticket's Play line: ask why a tag exists, see the rule that added it
-/// (the baseline policy pack's `arg_add ... tags`) and not the module's own
-/// tags.
+/// The ticket's Play line: ask why a tag exists, see the statement that
+/// added it (the baseline policy pack's `set r.tags`), as written, at its
+/// file and line, and not the module's own tags.
 #[test]
 fn why_a_tag_exists() {
     let out = dform(
@@ -18,12 +18,46 @@ fn why_a_tag_exists() {
         ],
     );
     assert!(
+        out.starts_with(
+            "net.vpc[\"network.main::vpc\"].tags = {component: \"network\", env: \"prod\", \
+             team: \"platform\"}\n  merged from 2 contributions\n  ├─ {team: \"platform\"}\n"
+        ),
+        "{out}"
+    );
+    assert!(
+        out.contains(
+            "examples/demo/policies/baseline.df:10  set r.tags = { team: \"platform\" } where r in \
+             resource   (policy baseline)\n"
+        ),
+        "{out}"
+    );
+    assert!(
+        out.contains("with r = net.vpc[\"network.main::vpc\"]\n"),
+        "{out}"
+    );
+    assert!(out.contains("... 1 other contribution (--all)"), "{out}");
+    assert!(!out.contains(":-") && !out.contains("Σattr"), "{out}");
+    golden("why_dform_prod_tag", &out);
+}
+
+/// `--core` prints the tree in the core's spelling: the lowered rule by
+/// its id, core variables, the aggregate by its marker.
+#[test]
+fn why_core_prints_the_lowered_rules() {
+    let out = dform(
+        "examples/demo/stacks/dform.df env=prod",
+        &[
+            "why",
+            "--core",
+            r#"attr(net.vpc, "network.main::vpc", "tags.team", "platform")"#,
+        ],
+    );
+    assert!(
         out.contains(r#"arg(Type, R, "tags", {team: "platform"}, "normal") :- want(Type, R)"#),
         "{out}"
     );
+    assert!(out.contains("by Σattr: attribute aggregate"), "{out}");
     assert!(out.contains("[rank normal, owner r"), "{out}");
-    assert!(out.contains("... 1 other contribution (--all)"), "{out}");
-    golden("why_dform_prod_tag", &out);
 }
 
 /// H-16: an address as plan prints it is a `why` and a `query` argument.
@@ -34,12 +68,15 @@ fn why_and_query_take_an_address_as_plan_prints_it() {
     let at = "examples/demo/stacks/dform.df env=prod";
     let want = dform(at, &["why", r#"net.vpc["network.main::vpc"]"#]);
     assert!(
-        want.starts_with("want(\"net.vpc\", \"network.main::vpc\")\n"),
+        want.starts_with(
+            "net.vpc[\"network.main::vpc\"]\n  examples/demo/modules/network.df:11  resource \
+             net.vpc vpc { .. }   (module network instance main)\n"
+        ),
         "{want}"
     );
     let tag = dform(at, &["why", r#"net.vpc["network.main::vpc"].tags.team"#]);
     assert!(
-        tag.contains(r#"arg(Type, R, "tags", {team: "platform"}, "normal") :- want(Type, R)"#),
+        tag.contains(r#"set r.tags = { team: "platform" } where r in resource"#),
         "{tag}"
     );
     let cidr = dform(at, &["query", r#"net.vpc["network.main::vpc"].cidr"#]);
@@ -57,21 +94,96 @@ fn why_and_query_take_an_address_as_plan_prints_it() {
     assert!(r.stderr.contains("cannot parse"), "{}", r.stderr);
 }
 
-/// Every contribution of an aggregate, and bindings, and a given input.
+/// Every contribution of an aggregate, with its rank and the statement
+/// that made it; bindings by the source's names; a value given on the
+/// command line as its flag.
 #[test]
 fn why_an_attribute_shows_every_contribution() {
     let out = dform(
         "examples/demo/stacks/dform.df env=prod",
         &["why", r#"attr(net.vpc, "network.main::vpc", "tags", X)"#],
     );
-    assert!(out.contains("by Σattr: attribute aggregate"), "{out}");
-    assert!(out.contains("over 2 contributions"), "{out}");
-    assert!(out.contains(r#"with Env = "prod""#), "{out}");
-    assert!(out.contains("input --set env=prod"), "{out}");
+    assert!(out.contains("  merged from 2 contributions\n"), "{out}");
+    assert!(
+        out.contains(
+            "examples/demo/modules/network.df:13  resource net.vpc vpc { .. tags = { env, \
+             component: \"network\" } }   (module network instance main)\n"
+        ),
+        "{out}"
+    );
+    assert!(out.contains("with env = \"prod\"\n"), "{out}");
+    // The input's default is a contribution at its rank, stated where the
+    // input is declared; --set's wins.
+    assert!(
+        out.contains("├─ \"staging\" @default   examples/demo/stacks/dform.df:18\n"),
+        "{out}"
+    );
+    assert!(out.contains("└─ --set env=prod\n"), "{out}");
     assert!(out.contains("(see above)"), "{out}");
-    // The pack's tag, the module's tags, the instance's input, the stack
-    // input --set gives and `let cfg`'s row (R-3).
-    assert_eq!(out.matches("[rank normal, owner").count(), 6, "{out}");
+    // The cells merged on the way: the tags, the stack input --set gives,
+    // the instance's input, `let cfg` (R-3) and the settings row it reads.
+    assert_eq!(out.matches("merged from").count(), 5, "{out}");
+}
+
+/// The tour's route: the resource statement as written, the clause's
+/// variables as bound, the interpolated name and the read it joins
+/// through, and under it the recursion that found the path.
+#[test]
+fn why_a_route_shows_the_statements_that_fired() {
+    let out = dform(
+        "examples/tour/stacks/tour.df",
+        &["why", r#"net.route["blue-to-green"]"#],
+    );
+    let start = "net.route[\"blue-to-green\"]
+  examples/tour/stacks/tour.df:298  resource net.route \"${a}-to-${b}\" { .. } where reaches(a, b), a != b, network_of(b, v), dest = net.vpc[v].cidr
+  with a = \"blue\", b = \"green\", v = \"network.green::vpc\", dest = 10.2.0.0/16
+       \"${a}-to-${b}\" = \"blue-to-green\"
+       net.vpc[v].cidr = 10.2.0.0/16
+  ├─ reaches(\"blue\", \"green\")
+       examples/tour/stacks/tour.df:296  reaches(a, c) where reaches(a, b), link(b, c)
+";
+    let got: String = out
+        .lines()
+        .take(7)
+        .map(|l| format!("{}\n", l.replace('│', " ")))
+        .collect();
+    assert_eq!(got.replace("  │ ", "    "), start, "{out}");
+    assert!(
+        out.contains("├─ spoke(\"green\")   examples/tour/stacks/tour.df:263\n"),
+        "{out}"
+    );
+    assert!(
+        out.contains("network[t].vpc = \"network.green::vpc\"\n"),
+        "{out}"
+    );
+    golden("why_tour_route", &out);
+}
+
+/// A settings read: the entry that reads `cfg.backup_days`, its value, and
+/// the settings row it came from, spelled as the program names it.
+#[test]
+fn why_a_settings_read_shows_the_read() {
+    let out = dform(
+        "examples/tour/stacks/tour.df env=prod",
+        &["why", r#"db.postgres["orders"].backup_days"#],
+    );
+    assert!(
+        out.contains(
+            "examples/tour/stacks/tour.df:155  resource db.postgres orders { .. backup_days = \
+             cfg.backup_days .. }\n"
+        ),
+        "{out}"
+    );
+    assert!(out.contains("with cfg.backup_days = 14\n"), "{out}");
+    assert!(
+        out.contains("settings[env] = settings[\"prod\"]\n"),
+        "{out}"
+    );
+    assert!(
+        out.contains("settings[\"prod\"].backup_days = 14\n"),
+        "{out}"
+    );
+    golden("why_tour_settings_read", &out);
 }
 
 #[test]
@@ -96,7 +208,7 @@ fn why_prints_one_alternative_unless_all() {
         "{all}"
     );
     assert!(
-        all.contains("fact, p.df:2:1 (p)") && all.contains("fact, p.df:3:1 (q)"),
+        all.contains("p(1)   p.df:2\n") && all.contains("q(1)   p.df:3\n"),
         "{all}"
     );
 
@@ -237,4 +349,26 @@ fn why_labels_facts_injected_at_a_tick() {
         .unwrap();
     let out = printer.tree(id, None);
     assert_eq!(out.matches("   plan (tick 3)\n").count(), 2, "{out}");
+}
+
+/// A clause in braces prints on the statement's line, its literals
+/// joined; a read in it shows the value the firing found.
+#[test]
+fn why_prints_a_braced_clause_on_one_line() {
+    let out = dform(
+        "examples/demo/stacks/dform.df env=prod",
+        &["why", r#"attr("iam.policy", P, "statements", S)"#],
+    );
+    assert!(
+        out.contains(
+            "examples/demo/policies/baseline.df:15  set p.statements = [{ action: \"org.read\", \
+             resource: \"org\" }] where env == \"prod\", p in iam.policy, p.name == \"app\"   \
+             (policy baseline)\n"
+        ),
+        "{out}"
+    );
+    assert!(
+        out.contains("│    with p = iam.policy[\"identity.main::app_policy\"]\n  │         p.name = \"app\"\n"),
+        "{out}"
+    );
 }

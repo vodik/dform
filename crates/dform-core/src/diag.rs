@@ -118,6 +118,11 @@ fn source_lines(id: u32) -> Option<(String, Arc<str>, Arc<[usize]>)> {
     Some((src.name.clone(), src.text.clone(), src.lines.clone()))
 }
 
+/// The source a span is into: its name and its whole text.
+pub fn source_of(span: Span) -> Option<(String, Arc<str>)> {
+    source(span.file)
+}
+
 /// `(file, line, col)` of a span's start, 1-based, columns in characters.
 pub fn location(span: Span) -> Option<(String, usize, usize)> {
     let (name, text, lines) = source_lines(span.file)?;

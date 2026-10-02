@@ -307,28 +307,36 @@ aws.route["blue-to-green"]
        aws.vpc[b].cidr_block = 10.2.0.0/16
   ├─ reaches("blue", "green")
   │    stacks/network.df:55  reaches(a, c) where reaches(a, b), link(b, c)
-  │    with a = "blue", b = "core", c = "green"
+  │    with a = "blue", c = "green", b = "core"
   │    ├─ reaches("blue", "core")
   │    │    stacks/network.df:54  reaches(a, b) where link(a, b)
+  │    │    with a = "blue", b = "core"
   │    │    └─ link("blue", "core")
   │    │         stacks/network.df:52  link(s, h) where hub(h), spoke(s)
-  │    │         ├─ hub("core")      stacks/network.df:47
-  │    │         └─ spoke("blue")    stacks/network.df:48
+  │    │         with s = "blue", h = "core"
+  │    │         ├─ hub("core")   stacks/network.df:47
+  │    │         └─ spoke("blue")   stacks/network.df:48
   │    └─ link("core", "green")
   │         stacks/network.df:51  link(h, s) where hub(h), spoke(s)
-  │         ├─ hub("core")      stacks/network.df:47
+  │         with h = "core", s = "green"
+  │         ├─ hub("core")   stacks/network.df:47
   │         └─ spoke("green")   stacks/network.df:49
-  └─ aws.vpc["network.green::vpc"].cidr_block = 10.2.0.0/16
+  └─ aws.vpc["green"].cidr_block = 10.2.0.0/16
        merged from 1 contribution
-       └─ stacks/network.df:23  module network, instance green
+       └─ 10.2.0.0/16   stacks/network.df:23
 ```
 
-The answer is the program's own text at the lines that fired, the
+The answer is the program's own text at the lines that fired (a
+block's entries elided as `..`, but for the entry that fired), the
 variables as they were bound, and under them every computed term of
 the statement with what it became: the interpolated name, each lookup,
-each read, a value still unknown as its `?` label. The same question works for an attribute
+each read, a value still unknown as its `?` label. An attribute is
+merged from its contributions, each with its value, its rank when it
+is not the normal one, and the statement or line that made it: a
+constant is its line. The same question works for an attribute
 (`why 'aws.vpc["main"].tags.team'` shows every author and which rank
-won) and for a refusal (`why 'deny(m)'`).
+won) and for a refusal (`why 'deny(m)'`). `why --core` prints the
+lowered rules instead.
 
 ## The language
 

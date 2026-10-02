@@ -88,11 +88,7 @@ fn a_leaf_the_program_does_not_know_is_a_deny() {
             "env=prod",
         ])
         .success();
-    assert!(
-        r.stdout.contains("fact, config/prod.yaml:2"),
-        "{}",
-        r.stdout
-    );
+    assert!(r.stdout.contains("   config/prod.yaml:2\n"), "{}", r.stdout);
 }
 
 /// Two keys name the row by both values.

@@ -11,12 +11,16 @@
 //! it matches the attribute that contains it, and the tree shows only the
 //! contributions that do.
 
-use crate::ast::{Atom, Lit, Term};
+use crate::ast::{Atom, Lit, RuleStmt, Term};
 use crate::circuit::{Circuit, Fact, Leaf, NodeId, View};
 use crate::engine;
+use crate::ir::Address;
 use crate::query::Redactor;
+use crate::syntax::resolve::capitalise;
+use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode};
 use crate::value::Value;
 use anyhow::Result;
+use rowan::NodeOrToken;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// The part of an object attribute a pattern named: the keys below the
@@ -355,4 +359,1040 @@ fn leaf_text(l: &Leaf) -> String {
         Leaf::Rule { id } => format!("by {id}"),
         Leaf::Absent { pattern } => format!("not {pattern}   (absent)"),
     }
+}
+
+// --- the tree in the program's own terms ---------------------------------
+
+impl Printer<'_> {
+    /// The derivation tree of fact node `root` as the program says it: a
+    /// fired rule as its statement at `file:line`, bindings by the source's
+    /// names with every computed term of the statement and its value under
+    /// them, a derived fact as its address (`T["A"]`, `T["A"].p = v`), an
+    /// aggregate as the contributions it merged. `rules` are the lowered
+    /// rules, by the index in their id (`EvalResult::rules`). [`tree`] is the
+    /// same tree in the core's spelling (`--core`).
+    ///
+    /// [`tree`]: Printer::tree
+    pub fn source_tree(&self, rules: &[RuleStmt], root: NodeId, focus: Option<&Focus>) -> String {
+        let mut s = Surface {
+            p: self,
+            rules,
+            w: Walk::default(),
+            files: BTreeMap::new(),
+        };
+        s.fact(root, "", "", false, focus);
+        s.w.out
+    }
+}
+
+struct Surface<'a, 'b> {
+    p: &'a Printer<'b>,
+    rules: &'a [RuleStmt],
+    w: Walk,
+    /// Each source file a printed rule is in, parsed once.
+    files: BTreeMap<String, SyntaxNode>,
+}
+
+impl Surface<'_, '_> {
+    fn push(&mut self, line: String) {
+        self.w.out.push_str(&line);
+        self.w.out.push('\n');
+    }
+
+    /// Print fact node `id`; `contribution`: as a contribution to the
+    /// aggregate above it, its value and rank.
+    fn fact(
+        &mut self,
+        id: NodeId,
+        lead: &str,
+        pad: &str,
+        contribution: bool,
+        focus: Option<&Focus>,
+    ) {
+        let circuit = self.p.circuit;
+        let id = if contribution {
+            id
+        } else {
+            self.cell_read(id).unwrap_or(id)
+        };
+        let View::Fact {
+            fact,
+            alts,
+            truncated,
+        } = circuit.view(id)
+        else {
+            self.push(format!("{lead}(retracted)"));
+            return;
+        };
+        let text = if contribution {
+            self.contribution_text(fact)
+        } else {
+            self.fact_text(fact)
+        };
+        if let [a] = alts
+            && let Some(src) = self.given(*a)
+        {
+            // A value given on the command line is the flag that gave it.
+            match src.strip_prefix("input ") {
+                Some(flag) if matches!(fact.pred.as_str(), "input" | "data") => {
+                    self.push(format!("{lead}{flag}"))
+                }
+                _ => self.push(format!("{lead}{text}   {src}")),
+            }
+            return;
+        }
+        if !self.w.seen.insert(id) {
+            self.push(format!("{lead}{text}   (see above)"));
+            return;
+        }
+        self.push(format!("{lead}{text}"));
+        let shown = if self.p.all { alts.len() } else { 1 };
+        for (k, a) in alts.iter().take(shown).enumerate() {
+            if alts.len() > 1 && self.p.all {
+                self.push(format!("{pad}  alternative {} of {}:", k + 1, alts.len()));
+            }
+            self.firing(*a, &format!("{pad}  "), focus);
+        }
+        if alts.len() > shown {
+            let more = alts.len() - shown;
+            self.push(format!(
+                "{pad}  ... {more} more alternative{} (--all)",
+                if more == 1 { "" } else { "s" }
+            ));
+        }
+        if truncated {
+            self.push(format!(
+                "{pad}  ... further alternatives dropped at {}",
+                crate::circuit::MAX_ALTS
+            ));
+        }
+    }
+
+    /// The cell fact node `id` only reads: `env("prod")` derived from
+    /// `input env = "prod"` by the rule that reads the input by its name.
+    /// The program writes `env`, so the tree shows the cell.
+    fn cell_read(&self, id: NodeId) -> Option<NodeId> {
+        let c = self.p.circuit;
+        let View::Fact {
+            fact, alts: [a], ..
+        } = c.view(id)
+        else {
+            return None;
+        };
+        if matches!(fact.pred.as_str(), "attr" | "arg" | "want") {
+            return None;
+        }
+        let View::Times { children, .. } = c.view(*a) else {
+            return None;
+        };
+        let mut rule = None;
+        let mut read = None;
+        for ch in children {
+            match c.view(*ch) {
+                View::Leaf(Leaf::Rule { id }) if rule.is_none() => rule = Some(id),
+                View::Fact { fact, .. } if read.is_none() => read = Some((*ch, fact)),
+                _ => return None,
+            }
+        }
+        let r = self
+            .rules
+            .get(rule?.strip_prefix('r')?.parse::<usize>().ok()?)?;
+        let (node, cell) = read?;
+        let kind = cell.args.first().and_then(Value::as_str);
+        (r.body.len() == 1
+            && cell.pred == "attr"
+            && matches!(kind, Some("input" | "let" | "output")))
+        .then_some(node)
+    }
+
+    /// A derived fact as the program would name it.
+    fn fact_text(&self, f: &Fact) -> String {
+        let r = self.p.redact;
+        match (f.pred.as_str(), f.args.as_slice()) {
+            ("want", [Value::Str(t), Value::Str(a)]) => Address {
+                typ: t.clone(),
+                name: a.clone(),
+            }
+            .to_string(),
+            ("attr", [Value::Str(t), Value::Str(a), Value::Str(p), v]) => {
+                format!("{} = {}", cell(t, a, p), r.surface(v))
+            }
+            ("arg", [Value::Str(t), Value::Str(a), Value::Str(p), v, rank]) => {
+                format!("{} = {}{}", cell(t, a, p), r.surface(v), rank_text(rank))
+            }
+            ("deny" | "warn", [msg @ Value::Str(_), ctx @ ..]) => {
+                let mut out = format!("{} {}", f.pred, r.surface(msg));
+                for c in ctx {
+                    out.push(' ');
+                    out.push_str(&r.surface(c));
+                }
+                out
+            }
+            _ => r.surface_atom(&atom_of(f)),
+        }
+    }
+
+    /// A contribution under its aggregate: the value it contributes and its
+    /// rank (the cell is the aggregate's, printed above).
+    fn contribution_text(&self, f: &Fact) -> String {
+        match f.args.as_slice() {
+            [_, _, _, v, rank] if f.pred == "arg" => {
+                format!("{}{}", self.p.redact.surface(v), rank_text(rank))
+            }
+            _ => self.fact_text(f),
+        }
+    }
+
+    /// A fact the firing found absent, spelled as the program would; its
+    /// core text when it does not read back as one ground fact.
+    fn absent(&self, pattern: &str) -> String {
+        let fact = match crate::query::parse(pattern) {
+            Ok(crate::query::Query::Body { body, vars }) if vars.is_empty() => {
+                match body.as_slice() {
+                    [Lit::Pos(a)] => a
+                        .args
+                        .iter()
+                        .map(|t| match t {
+                            Term::Val(v) => Some(v.clone()),
+                            _ => None,
+                        })
+                        .collect::<Option<Vec<_>>>()
+                        .map(|args| Fact::new(&a.pred, args)),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        match fact {
+            Some(f) if crate::partition::fmt_atom(&atom_of(&f)) == pattern => self.fact_text(&f),
+            _ => self.p.redact.text(pattern),
+        }
+    }
+
+    /// Where a given fact came from, when firing `a` is a single source leaf.
+    fn given(&self, a: NodeId) -> Option<String> {
+        let View::Times { children, .. } = self.p.circuit.view(a) else {
+            return None;
+        };
+        let [c] = children else { return None };
+        let View::Leaf(l) = self.p.circuit.view(*c) else {
+            return None;
+        };
+        Some(match l {
+            Leaf::Base { span } => base_place(span),
+            Leaf::Schema { .. } => "provider schema".into(),
+            Leaf::World { .. } => "world (refresh)".into(),
+            Leaf::Plan { tick, .. } => plan_text(*tick),
+            Leaf::Extern { .. } => "extern".into(),
+            l => self.p.redact.text(&leaf_text(l)),
+        })
+    }
+
+    fn firing(&mut self, a: NodeId, pad: &str, focus: Option<&Focus>) {
+        let circuit = self.p.circuit;
+        let View::Times { children, bindings } = circuit.view(a) else {
+            return;
+        };
+        let mut facts = Vec::new();
+        let mut others = Vec::new();
+        let mut rule = None;
+        for c in children {
+            match circuit.view(*c) {
+                View::Leaf(Leaf::Rule { id }) => rule = Some(id.as_str()),
+                View::Leaf(l) => others.push(l.clone()),
+                View::Fact { .. } => facts.push(*c),
+                View::Times { .. } | View::Dead => {}
+            }
+        }
+        let aggregate = rule.is_some_and(|id| id.starts_with('Σ'));
+        let mut hidden = 0;
+        if aggregate {
+            let n = facts.len();
+            self.push(format!(
+                "{pad}merged from {n} contribution{}",
+                if n == 1 { "" } else { "s" }
+            ));
+            if let Some(focus) = focus.filter(|_| !self.p.all) {
+                facts.retain(|f| match circuit.view(*f) {
+                    View::Fact { fact, .. } => fact.args.get(3).is_some_and(|v| focus.holds(v)),
+                    _ => true,
+                });
+                hidden = n - facts.len();
+            }
+        } else if let Some(id) = rule {
+            self.statement(id, bindings, pad);
+            // The facts in the order the statement reads them.
+            if let Some(r) = id
+                .strip_prefix('r')
+                .and_then(|i| i.parse::<usize>().ok())
+                .and_then(|i| self.rules.get(i))
+            {
+                let at = |f: &NodeId| match circuit.view(*f) {
+                    View::Fact { fact, .. } => r
+                        .body
+                        .iter()
+                        .position(|l| matches!(l, Lit::Pos(a) if a.pred == fact.pred))
+                        .unwrap_or(usize::MAX),
+                    _ => usize::MAX,
+                };
+                facts.sort_by_key(at);
+            }
+        }
+        let n = facts.len() + others.len() + usize::from(hidden > 0);
+        let mark = |i: usize| {
+            if i + 1 == n {
+                ("└─ ", "   ")
+            } else {
+                ("├─ ", "│  ")
+            }
+        };
+        for (i, f) in facts.iter().enumerate() {
+            let (b, p) = mark(i);
+            self.fact(
+                *f,
+                &format!("{pad}{b}"),
+                &format!("{pad}{p}"),
+                aggregate,
+                None,
+            );
+        }
+        for (j, l) in others.iter().enumerate() {
+            let (b, _) = mark(facts.len() + j);
+            let text = match l {
+                Leaf::Base { span } => base_place(span),
+                Leaf::Absent { pattern } => format!("not {}   (absent)", self.absent(pattern)),
+                l => self.p.redact.text(&leaf_text(l)),
+            };
+            self.push(format!("{pad}{b}{text}"));
+        }
+        if hidden > 0 {
+            self.push(format!(
+                "{pad}└─ ... {hidden} other contribution{} (--all)",
+                if hidden == 1 { "" } else { "s" }
+            ));
+        }
+    }
+
+    /// The fired rule `id`: its statement at `file:line`, then `with` its
+    /// bindings by the source's names and every computed term of the
+    /// statement with its value, aligned under them.
+    fn statement(&mut self, id: &str, bindings: &[(String, Value)], pad: &str) {
+        let redact = self.p.redact;
+        let Some(src) = self.p.circuit.rule_source(id) else {
+            // A rule the compiler wrote: there is no source to show.
+            let text = self.p.circuit.rule_text(id).unwrap_or(id);
+            self.push(format!("{pad}{}", redact.text(text)));
+            if !bindings.is_empty() {
+                let b: Vec<String> = bindings
+                    .iter()
+                    .map(|(k, v)| format!("{k} = {}", redact.surface(v)))
+                    .collect();
+                self.push(format!("{pad}with {}", b.join(", ")));
+            }
+            return;
+        };
+        let root = self
+            .files
+            .entry(src.file.clone())
+            .or_insert_with(|| crate::syntax::parser::parse(&src.text).syntax())
+            .clone();
+        let origin = src
+            .origin
+            .as_ref()
+            .map(|o| format!("   ({o})"))
+            .unwrap_or_default();
+        let place = format!("{}:{}", src.file, src.line);
+        let Some((stmt, entry)) = statement_at(&root, src.start, src.end) else {
+            let text = collapse(src.text.get(src.start..src.end).unwrap_or(""));
+            self.push(format!("{pad}{place}  {}{origin}", redact.text(&text)));
+            return;
+        };
+        let mut shown = Shown::default();
+        shown.render(&stmt, &stmt, entry.as_ref());
+        let text = collapse(&shown.text);
+        self.push(format!("{pad}{place}  {}{origin}", redact.text(&text)));
+
+        let rule = id
+            .strip_prefix('r')
+            .and_then(|i| i.parse::<usize>().ok())
+            .and_then(|i| self.rules.get(i));
+        let cx = Cx {
+            env: bindings.iter().cloned().collect(),
+            rule,
+        };
+        let mut lines = Vec::new();
+        let mut names = BTreeSet::new();
+        for name in shown.vars {
+            let var = capitalise(&name);
+            if !names.insert(name.clone()) {
+                continue;
+            }
+            if let Some(v) = cx.env.get(&var) {
+                lines.push(format!("{name} = {}", cx.show_var(&var, v, redact)));
+            }
+        }
+        let mut terms = Vec::new();
+        let mut seen = BTreeSet::new();
+        for t in &shown.terms {
+            let text = match t {
+                NodeOrToken::Node(n) => collapse(&n.text().to_string()),
+                NodeOrToken::Token(t) => t.text().to_string(),
+            };
+            if !seen.insert(text.clone()) {
+                continue;
+            }
+            if let Some(v) = cx.eval_el(t) {
+                terms.push(format!("{text} = {}", redact.surface(&v)));
+            }
+        }
+        let mut rest = terms.into_iter();
+        let first = if lines.is_empty() {
+            rest.next()
+        } else {
+            Some(lines.join(", "))
+        };
+        if let Some(first) = first {
+            self.push(format!("{pad}with {}", redact.text(&first)));
+            for t in rest {
+                self.push(format!("{pad}     {}", redact.text(&t)));
+            }
+        }
+    }
+}
+
+/// The cell an `attr` or `arg` names: `T["A"].p`, a settings row's
+/// `settings["row"].p`, or an input, `let` or output by its name.
+fn cell(t: &str, a: &str, p: &str) -> String {
+    match t {
+        "input" | "let" | "output" if a.is_empty() => format!("{t} {p}"),
+        "input" | "let" | "output" => format!("{t} {a}.{p}"),
+        _ => Address {
+            typ: t.to_string(),
+            name: a.to_string(),
+        }
+        .attr(p),
+    }
+}
+
+/// A contribution's rank as the program writes it: nothing for normal.
+fn rank_text(rank: &Value) -> String {
+    match rank.as_str() {
+        Some("normal") | None => String::new(),
+        Some(r) => format!(" @{r}"),
+    }
+}
+
+fn atom_of(f: &Fact) -> Atom {
+    Atom {
+        pred: f.pred.clone(),
+        args: f.args.iter().cloned().map(Term::Val).collect(),
+        record: None,
+        span: Default::default(),
+    }
+}
+
+/// A stated fact's place, `file:line:col (pred[, origin])` as the engine
+/// labels it, as `file:line`, and the pack or module instance it came from.
+fn base_place(span: &str) -> String {
+    let (at, rest) = span.split_once(" (").unwrap_or((span, ""));
+    let origin = rest
+        .strip_suffix(')')
+        .and_then(|r| r.split_once(", "))
+        .map(|(_, o)| o);
+    // Drop the column: the last of two numeric segments.
+    let at = match at.rsplit_once(':') {
+        Some((head, col))
+            if col.bytes().all(|b| b.is_ascii_digit())
+                && head.rsplit_once(':').is_some_and(|(_, l)| {
+                    !l.is_empty() && l.bytes().all(|b| b.is_ascii_digit())
+                }) =>
+        {
+            head
+        }
+        _ => at,
+    };
+    match origin {
+        Some(o) => format!("{at}   ({o})"),
+        None => at.to_string(),
+    }
+}
+
+/// Runs of whitespace as one space: a statement on one line.
+fn collapse(s: &str) -> String {
+    let mut out = String::new();
+    let mut in_str = false;
+    let mut esc = false;
+    let mut space = false;
+    for c in s.trim().chars() {
+        if in_str {
+            out.push(c);
+            match c {
+                _ if esc => esc = false,
+                '\\' => esc = true,
+                '"' => in_str = false,
+                _ => {}
+            }
+            continue;
+        }
+        if c.is_whitespace() {
+            space = true;
+            continue;
+        }
+        if space {
+            out.push(' ');
+            space = false;
+        }
+        if c == '"' {
+            in_str = true;
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// The statement the span `start..end` is in, and the block entry it is
+/// when it is one (a rule lowered out of a resource's or an instance's
+/// `k = v`).
+fn statement_at(
+    root: &SyntaxNode,
+    start: usize,
+    end: usize,
+) -> Option<(SyntaxNode, Option<SyntaxNode>)> {
+    let len: usize = root.text_range().end().into();
+    if start > len || end > len || start > end {
+        return None;
+    }
+    let range = rowan::TextRange::new((start as u32).into(), (end as u32).into());
+    let mut n = match root.covering_element(range) {
+        NodeOrToken::Node(n) => n,
+        NodeOrToken::Token(t) => t.parent()?,
+    };
+    loop {
+        let parent = n.parent()?;
+        match parent.kind() {
+            SyntaxKind::SOURCE_FILE | SyntaxKind::STMT_BLOCK => return Some((n, None)),
+            SyntaxKind::BLOCK if n.kind() == SyntaxKind::ASSIGN => {
+                return Some((parent.parent()?, Some(n)));
+            }
+            _ => n = parent,
+        }
+    }
+}
+
+/// What of a statement is printed: its text, with the block elided but
+/// for the entry that fired and a braced clause as one line, and, in
+/// source order, the variables and the computed terms in that text.
+#[derive(Default)]
+struct Shown {
+    text: String,
+    vars: Vec<String>,
+    terms: Vec<SyntaxElement>,
+}
+
+impl Shown {
+    fn render(&mut self, stmt: &SyntaxNode, n: &SyntaxNode, entry: Option<&SyntaxNode>) {
+        use SyntaxKind::*;
+        for el in n.children_with_tokens() {
+            match el {
+                NodeOrToken::Token(t) => match t.kind() {
+                    WHITESPACE | COMMENT => self.text.push(' '),
+                    STRING => {
+                        if has_hole(t.text()) && !negated(n, stmt) {
+                            self.terms.push(NodeOrToken::Token(t.clone()));
+                        }
+                        self.text.push_str(t.text());
+                    }
+                    _ => self.text.push_str(t.text()),
+                },
+                NodeOrToken::Node(c) => match c.kind() {
+                    BLOCK if c.parent().as_ref() == Some(stmt) => {
+                        let entries: Vec<SyntaxNode> =
+                            c.children().filter(|e| e.kind() == ASSIGN).collect();
+                        match entry.and_then(|e| entries.iter().position(|x| x == e)) {
+                            Some(i) => {
+                                self.text.push_str("{ ");
+                                if i > 0 {
+                                    self.text.push_str(".. ");
+                                }
+                                self.node(stmt, &entries[i], entry);
+                                if i + 1 < entries.len() {
+                                    self.text.push_str(" ..");
+                                }
+                                self.text.push_str(" }");
+                            }
+                            None if entries.is_empty() => self.text.push_str("{}"),
+                            None => {
+                                // Elided, but its terms are the statement's.
+                                for e in &entries {
+                                    let mut inner = Shown::default();
+                                    inner.node(stmt, e, entry);
+                                    self.terms.extend(inner.terms);
+                                }
+                                self.text.push_str("{ .. }");
+                            }
+                        }
+                    }
+                    BODY if c.first_token().is_some_and(|t| t.kind() == L_BRACE) => {
+                        let lits: Vec<SyntaxNode> = c.children().collect();
+                        for (i, l) in lits.iter().enumerate() {
+                            if i > 0 {
+                                self.text.push_str(", ");
+                            }
+                            self.node(stmt, l, entry);
+                        }
+                    }
+                    _ => self.node(stmt, &c, entry),
+                },
+            }
+        }
+    }
+
+    /// Node `c` of `stmt`: noted (a variable, a computed term), then printed.
+    fn node(&mut self, stmt: &SyntaxNode, c: &SyntaxNode, entry: Option<&SyntaxNode>) {
+        use SyntaxKind::*;
+        match c.kind() {
+            CHAIN if !is_type_or_target(c) => {
+                if let Some(name) = bare_name(c) {
+                    self.vars.push(name);
+                } else if !negated(c, stmt) {
+                    self.terms.push(NodeOrToken::Node(c.clone()));
+                }
+            }
+            CALL if !negated(c, stmt) => self.terms.push(NodeOrToken::Node(c.clone())),
+            // `{ env }` and an entry that is only a name take the variable.
+            OBJECT_FIELD | BLOCK_PATH if c.children().next().is_none() => {
+                let words: Vec<_> = c
+                    .children_with_tokens()
+                    .filter(|t| !t.kind().is_trivia())
+                    .collect();
+                let shorthand = c.kind() == OBJECT_FIELD
+                    || c.parent().is_some_and(|a| {
+                        a.children_with_tokens()
+                            .filter(|t| !t.kind().is_trivia())
+                            .count()
+                            == 1
+                    });
+                if let [NodeOrToken::Token(t)] = words.as_slice()
+                    && t.kind() == IDENT
+                    && shorthand
+                {
+                    self.vars.push(t.text().to_string());
+                }
+            }
+            _ => {}
+        }
+        // A chain prints as written; only its index terms are noted.
+        if c.kind() == CHAIN {
+            self.text.push_str(&c.text().to_string());
+            for ix in c.children().filter(|x| x.kind() == INDEX) {
+                for t in ix.children() {
+                    let mut inner = Shown::default();
+                    inner.node(stmt, &t, entry);
+                    self.vars.extend(inner.vars);
+                    self.terms.extend(inner.terms);
+                }
+            }
+            return;
+        }
+        self.render(stmt, c, entry);
+    }
+}
+
+/// A chain that is a type (`x in T`), a function's name, or the target of
+/// a `set`: not a value of the statement.
+fn is_type_or_target(c: &SyntaxNode) -> bool {
+    use SyntaxKind::*;
+    let Some(parent) = c.parent() else {
+        return false;
+    };
+    let first = parent.children().next().as_ref() == Some(c);
+    match parent.kind() {
+        CALL | SET => first,
+        LIT_IN | LIT_NOT_IN => !first,
+        _ => false,
+    }
+}
+
+/// The name of a chain that is one word: a variable (or a cell read by
+/// its name).
+fn bare_name(c: &SyntaxNode) -> Option<String> {
+    let mut words = c.children_with_tokens().filter(|t| !t.kind().is_trivia());
+    match (words.next(), words.next()) {
+        (Some(NodeOrToken::Token(t)), None) if t.kind() == SyntaxKind::IDENT => {
+            Some(t.text().to_string())
+        }
+        _ => None,
+    }
+}
+
+/// Under a `not` within `stmt`: what it names was not found, so it has no
+/// value to show.
+fn negated(n: &SyntaxNode, stmt: &SyntaxNode) -> bool {
+    use SyntaxKind::*;
+    n.ancestors()
+        .take_while(|a| a != stmt)
+        .any(|a| matches!(a.kind(), LIT_NOT | LIT_NOT_BLOCK | LIT_NOT_IN))
+}
+
+/// A string literal holds an interpolation `${..}` (`$${` is a literal
+/// `${`).
+fn has_hole(text: &str) -> bool {
+    holes(text).is_some_and(|parts| parts.iter().any(|p| matches!(p, Part::Hole(_))))
+}
+
+enum Part {
+    Lit(String),
+    Hole(String),
+}
+
+/// A string literal's text and holes, as `syntax::resolve` reads them.
+fn holes(text: &str) -> Option<Vec<Part>> {
+    let inner = text.get(1..text.len().checked_sub(1)?)?;
+    let bytes = inner.as_bytes();
+    let mut parts = Vec::new();
+    let mut lit = String::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\\' => {
+                let end = if bytes.get(i + 1) == Some(&b'u') {
+                    inner[i..].find('}').map_or(i + 2, |e| i + e + 1)
+                } else {
+                    i + 2
+                };
+                lit.push_str(inner.get(i..end.min(inner.len()))?);
+                i = end;
+            }
+            b'$' if bytes.get(i + 1) == Some(&b'$') && bytes.get(i + 2) == Some(&b'{') => {
+                lit.push_str("${");
+                i += 3;
+            }
+            b'$' if bytes.get(i + 1) == Some(&b'{') => {
+                let mut depth = 1;
+                let mut j = i + 2;
+                while j < bytes.len() && depth > 0 {
+                    match bytes[j] {
+                        b'{' => depth += 1,
+                        b'}' => depth -= 1,
+                        _ => {}
+                    }
+                    j += 1;
+                }
+                if depth > 0 {
+                    return None;
+                }
+                parts.push(Part::Lit(std::mem::take(&mut lit)));
+                parts.push(Part::Hole(inner[i + 2..j - 1].to_string()));
+                i = j;
+            }
+            _ => {
+                let c = inner[i..].chars().next()?;
+                lit.push(c);
+                i += c.len_utf8();
+            }
+        }
+    }
+    parts.push(Part::Lit(lit));
+    Some(parts)
+}
+
+/// One firing's bindings and its lowered rule: what a term of the
+/// statement evaluates against.
+struct Cx<'a> {
+    env: std::collections::HashMap<String, Value>,
+    rule: Option<&'a RuleStmt>,
+}
+
+impl Cx<'_> {
+    /// A variable's value; one that ranges over a type's resources
+    /// (`r in T`) as the resource's address.
+    fn show_var(&self, var: &str, v: &Value, redact: &Redactor) -> String {
+        let typ = self.rule.and_then(|r| {
+            r.body.iter().find_map(|l| match l {
+                Lit::Pos(a)
+                    if a.pred == "want"
+                        && matches!(a.args.get(1), Some(Term::Var(x)) if x == var) =>
+                {
+                    self.core(&a.args[0])
+                }
+                _ => None,
+            })
+        });
+        match (typ, v) {
+            (Some(Value::Str(t)), Value::Str(name)) if !redact.is_secret(v) => Address {
+                typ: t,
+                name: name.clone(),
+            }
+            .to_string(),
+            _ => redact.surface(v),
+        }
+    }
+
+    /// A lowered term's value under the bindings.
+    fn core(&self, t: &Term) -> Option<Value> {
+        match t {
+            Term::Val(v) => Some(v.clone()),
+            Term::Var(x) => self.env.get(x).cloned(),
+            Term::Func { name, args } => {
+                let args = args
+                    .iter()
+                    .map(|a| self.core(a))
+                    .collect::<Option<Vec<_>>>()?;
+                call(name, &args)
+            }
+            Term::List(xs) => xs
+                .iter()
+                .map(|x| self.core(x))
+                .collect::<Option<_>>()
+                .map(Value::List),
+            Term::Obj(m) => m
+                .iter()
+                .map(|(k, x)| Some((k.clone(), self.core(x)?)))
+                .collect::<Option<BTreeMap<_, _>>>()
+                .map(Value::Obj),
+            Term::Wildcard | Term::ListComp { .. } => None,
+        }
+    }
+
+    /// The rule's positive literals: what its firing found.
+    fn found(&self) -> impl Iterator<Item = &Atom> {
+        self.rule
+            .into_iter()
+            .flat_map(|r| &r.body)
+            .filter_map(|l| match l {
+                Lit::Pos(a) => Some(a),
+                _ => None,
+            })
+    }
+
+    fn eval_el(&self, el: &SyntaxElement) -> Option<Value> {
+        match el {
+            NodeOrToken::Node(n) => self.eval(n),
+            NodeOrToken::Token(t) if t.kind() == SyntaxKind::STRING => self.string(t.text()),
+            NodeOrToken::Token(_) => None,
+        }
+    }
+
+    /// A source term's value under the firing's bindings: literals,
+    /// variables, interpolations and calls computed again; a read or a
+    /// lookup is the value the firing found for it.
+    fn eval(&self, n: &SyntaxNode) -> Option<Value> {
+        use SyntaxKind::*;
+        match n.kind() {
+            LITERAL => {
+                let t = n
+                    .children_with_tokens()
+                    .filter_map(NodeOrToken::into_token)
+                    .find(|t| !t.kind().is_trivia())?;
+                match t.kind() {
+                    INT => t.text().parse().ok().map(Value::Int),
+                    STRING => self.string(t.text()),
+                    TRUE_KW => Some(Value::Bool(true)),
+                    FALSE_KW => Some(Value::Bool(false)),
+                    _ => None,
+                }
+            }
+            PAREN => self.eval(&n.children().next()?),
+            CHAIN => self.chain(n),
+            CALL => {
+                let mut kids = n.children();
+                let name: String = kids.next()?.text().to_string().split_whitespace().collect();
+                let args = kids.next().filter(|a| a.kind() == ARG_LIST)?;
+                let args = args
+                    .children()
+                    .map(|a| (a.kind() != NAMED_ARG).then(|| self.eval(&a)).flatten())
+                    .collect::<Option<Vec<_>>>()?;
+                call(&name, &args)
+            }
+            LIST => n
+                .children()
+                .map(|x| self.eval(&x))
+                .collect::<Option<_>>()
+                .map(Value::List),
+            OBJECT => n
+                .children()
+                .filter(|f| f.kind() == OBJECT_FIELD)
+                .map(|f| {
+                    let key = f
+                        .children_with_tokens()
+                        .filter_map(NodeOrToken::into_token)
+                        .find(|t| t.kind() == IDENT)?;
+                    let v = match f.children().next() {
+                        Some(v) => self.eval(&v)?,
+                        None => self.env.get(&capitalise(key.text()))?.clone(),
+                    };
+                    Some((key.text().to_string(), v))
+                })
+                .collect::<Option<BTreeMap<_, _>>>()
+                .map(Value::Obj),
+            _ => None,
+        }
+    }
+
+    /// A string literal's value, its holes filled.
+    fn string(&self, text: &str) -> Option<Value> {
+        let mut out = String::new();
+        for p in holes(text)? {
+            match p {
+                Part::Lit(l) => {
+                    out.push_str(&crate::syntax::resolve::unescape(&format!("\"{l}\"")).ok()?)
+                }
+                Part::Hole(h) => {
+                    let parse = crate::syntax::parser::parse_term(&h);
+                    let t = parse.syntax().children().next()?;
+                    match self.eval(&t)? {
+                        Value::Str(s) => out.push_str(&s),
+                        v if crate::stuck::has_null(&v) => return None,
+                        v => out.push_str(&crate::partition::fmt_value(&v)),
+                    }
+                }
+            }
+        }
+        Some(Value::Str(out))
+    }
+
+    /// A chain: a variable, a read (`x.p`, `cfg.db.size`, `T[k].p`), or a
+    /// lookup (`T[k]`, a relation's `rel[k]`).
+    fn chain(&self, c: &SyntaxNode) -> Option<Value> {
+        enum Seg {
+            Name(String),
+            Index(Vec<SyntaxNode>),
+        }
+        let mut segs = Vec::new();
+        for el in c.children_with_tokens() {
+            match el {
+                NodeOrToken::Node(ix) if ix.kind() == SyntaxKind::INDEX => {
+                    segs.push(Seg::Index(ix.children().collect()))
+                }
+                NodeOrToken::Token(t)
+                    if !t.kind().is_trivia()
+                        && !matches!(t.kind(), SyntaxKind::DOT | SyntaxKind::STRING) =>
+                {
+                    segs.push(Seg::Name(t.text().to_string()))
+                }
+                NodeOrToken::Token(t) if t.kind() == SyntaxKind::STRING => {
+                    segs.push(Seg::Name(self.string(t.text())?.as_str()?.to_string()))
+                }
+                _ => {}
+            }
+        }
+        let at = segs.iter().position(|s| matches!(s, Seg::Index(_)));
+        let names = |s: &[Seg]| -> Option<Vec<String>> {
+            s.iter()
+                .map(|x| match x {
+                    Seg::Name(n) => Some(n.clone()),
+                    Seg::Index(_) => None,
+                })
+                .collect()
+        };
+        let Some(at) = at else {
+            let names = names(&segs)?;
+            let head = names.first()?;
+            if names.len() == 1 {
+                return self.env.get(&capitalise(head)).cloned();
+            }
+            // A variable bound to an object: its field.
+            if let Some(mut v) = self
+                .env
+                .get(&capitalise(head))
+                .filter(|v| matches!(v, Value::Obj(_)))
+            {
+                for k in &names[1..] {
+                    let Value::Obj(m) = v else { return None };
+                    v = m.get(k)?;
+                }
+                return Some(v.clone());
+            }
+            for i in 1..names.len() {
+                let owner = names[..i].join(".");
+                let path = names[i..].join(".");
+                if let Some(v) = self.read(&path, |a| self.owns(a, &owner)) {
+                    return Some(v);
+                }
+            }
+            return None;
+        };
+        let base = names(&segs[..at])?.join(".");
+        let Seg::Index(keys) = &segs[at] else {
+            return None;
+        };
+        let keys = keys
+            .iter()
+            .map(|k| self.eval(k))
+            .collect::<Option<Vec<_>>>()?;
+        let rest = names(&segs[at + 1..])?;
+        if rest.is_empty() {
+            // A relation's row (`zone_index[z]`): its last column.
+            let row = self.found().find(|a| {
+                (a.pred == base || a.pred.ends_with(&format!("::{base}")))
+                    && a.args.len() == keys.len() + 1
+                    && a.args
+                        .iter()
+                        .zip(&keys)
+                        .all(|(t, k)| self.core(t).as_ref() == Some(k))
+            });
+            if let Some(a) = row {
+                return self.core(a.args.last()?);
+            }
+            let [Value::Str(name)] = keys.as_slice() else {
+                return None;
+            };
+            return Some(Value::Ref {
+                typ: base,
+                name: name.clone(),
+                attr: String::new(),
+            });
+        }
+        let [key] = keys.as_slice() else { return None };
+        let instance = key.as_str().map(|k| format!("{base}.{k}"));
+        let path = rest.join(".");
+        let read = self.read(&path, |a| match self.core(a) {
+            Some(v) if v == *key => true,
+            Some(Value::Str(s)) => Some(&s) == instance.as_ref(),
+            _ => false,
+        });
+        // Not read by the firing: a reference to the attribute, passed on.
+        read.or_else(|| {
+            Some(Value::Ref {
+                typ: base,
+                name: key.as_str()?.to_string(),
+                attr: path,
+            })
+        })
+    }
+
+    /// The value the firing read at `path` of an owner `owns` accepts.
+    fn read(&self, path: &str, owns: impl Fn(&Term) -> bool) -> Option<Value> {
+        self.found().find_map(|a| match a.args.as_slice() {
+            [_, owner, p, v]
+                if a.pred == "attr"
+                    && self.core(p).as_ref().and_then(Value::as_str) == Some(path)
+                    && owns(owner) =>
+            {
+                self.core(v)
+            }
+            _ => None,
+        })
+    }
+
+    /// The lowered owner `a` is what the source calls `name`: its variable,
+    /// or the resource, module instance or cell of that name.
+    fn owns(&self, a: &Term, name: &str) -> bool {
+        if matches!(a, Term::Var(x) if *x == capitalise(name)) {
+            return true;
+        }
+        match self.core(a) {
+            Some(Value::Str(s)) => s == name || s.ends_with(&format!("::{name}")),
+            _ => false,
+        }
+    }
+}
+
+/// A function's value at `args`, as the engine computes it; none over a
+/// null.
+fn call(name: &str, args: &[Value]) -> Option<Value> {
+    if args.iter().any(crate::stuck::has_null) {
+        return None;
+    }
+    engine::body(name)?(args)
 }
