@@ -147,3 +147,45 @@ fn the_demo_denies_hold_in_every_env() {
         r.stdout
     );
 }
+
+/// The input space is the stack's own inputs, each leaf of an object
+/// input, and every used module's input the `use` block leaves to the
+/// stack (R-54, R-55): each by the name `--set` gives it.
+#[test]
+fn the_space_is_every_input_the_stack_gives() {
+    let s = Scratch::project("test-union");
+    s.write(
+        "pg.df",
+        "edition 2026\ninput public: bool = false\ninput multi_az: bool = true\n\
+         resource db.postgres main {\n  public\n  multi_az\n}\n",
+    );
+    s.write(
+        "p.df",
+        "edition 2026\ninput cluster {\n  tier: enum(\"a\", \"b\") = \"a\"\n  size: int = 1\n}\n\
+         use pg { multi_az = true }\nprovider fake\n\
+         resource net.vpc main {\n  cidr = \"10.0.0.0/16\"\n  tier = cluster.tier\n}\n\
+         deny \"a database is never public\" where d in db.postgres, d.public\n",
+    );
+    let r = s.run(&["test", "p.df"]).failure();
+    assert!(
+        r.stdout.contains(
+            "test p: 4 combinations of cluster.tier, pg.public\n\
+             ok      dform plan p --set cluster.tier=a --set pg.public=false\n\
+             denied  dform plan p --set cluster.tier=a --set pg.public=true\n"
+        ),
+        "{}",
+        r.stdout
+    );
+    // Pinned by its address, or by its object's.
+    let r = s
+        .run(&[
+            "test",
+            "p.df",
+            "--set",
+            "pg.public=false",
+            "--set",
+            "cluster.tier=b",
+        ])
+        .success();
+    assert!(r.stdout.contains("test p: 1 combination"), "{}", r.stdout);
+}

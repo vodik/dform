@@ -1099,7 +1099,18 @@ impl AttrAggregate {
                 self.late.insert(key);
             } else {
                 if !self.pending.contains_key(&key) {
-                    let at = self.ready_at(&key.0, &key.2);
+                    // An input or `let` cell is partitioned by its scope too
+                    // (`partition::type_path_node`): a module's input `k` of
+                    // the copy `m` is the node `m::k`.
+                    let path = match (key.0.as_str(), key.1.as_str()) {
+                        (crate::modules::INPUT | crate::modules::LET, Some(scope))
+                            if !scope.is_empty() =>
+                        {
+                            format!("{scope}::{}", key.2)
+                        }
+                        _ => key.2.clone(),
+                    };
+                    let at = self.ready_at(&key.0, &path);
                     self.waiting.entry(at).or_default().insert(key.clone());
                 }
                 self.pending.entry(key).or_default().push((t, rank, value));
