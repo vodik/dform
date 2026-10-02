@@ -129,7 +129,7 @@ deny "GKE static IPs must be INTERNAL" where cfg.gke.static_ips."pngu-grpc".type
 ########################################
 
 # GKE subnet (terraform-google-modules/network/google//modules/subnets)
-resource google_compute_subnetwork gke_subnet {
+resource google.compute_subnetwork gke_subnet {
   project = cfg.project_id
   region = cfg.region
   network = "projects/${cfg.project_id}/global/networks/${cfg.network_name}"
@@ -143,7 +143,7 @@ resource google_compute_subnetwork gke_subnet {
 }
 
 # Regional managed proxy subnet
-resource google_compute_subnetwork regional_proxy {
+resource google.compute_subnetwork regional_proxy {
   project = cfg.project_id
   region = cfg.region
   network = "projects/${cfg.project_id}/global/networks/${cfg.network_name}"
@@ -154,7 +154,7 @@ resource google_compute_subnetwork regional_proxy {
 }
 
 # VPC peerings
-resource google_compute_network_peering "peering-${name}" {
+resource google.compute_network_peering "peering-${name}" {
   project = cfg.project_id
   name
   network = "projects/${cfg.project_id}/global/networks/${cfg.network_name}"
@@ -162,7 +162,7 @@ resource google_compute_network_peering "peering-${name}" {
 } where peering(env: env, name: name, peer_network: peer)
 
 # Static IPs for services
-resource google_compute_address "static-ip-${ip}" {
+resource google.compute_address "static-ip-${ip}" {
   project = cfg.project_id
   region = cfg.region
   name = ip
@@ -175,7 +175,7 @@ resource google_compute_address "static-ip-${ip}" {
 ########################################
 
 # Represents the external terraform-mi-gke module invocation.
-resource gke_cluster pngu {
+resource google.container_cluster pngu {
   cluster_type = "autopilot-private"
   env
   project_id = cfg.project_id
@@ -196,7 +196,7 @@ resource gke_cluster pngu {
 ########################################
 
 # The dashboard JSON is a file, read by the file provider.
-resource google_monitoring_dashboard pngu {
+resource google.monitoring_dashboard pngu {
   project = cfg.project_id
   dashboard_json = file.json["files/dashboard-pngu.json"]
 }

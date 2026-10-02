@@ -30,7 +30,7 @@ pub const BUILD: &str = concat!(env!("CARGO_PKG_VERSION"), "+", env!("DFORM_COMM
 /// The mock's name (`dform-mock`), as its handshake gives it.
 pub const FAKECLOUD: &str = "fakecloud";
 /// The Kubernetes provider's name (`dform-k8s`).
-pub const KUBERNETES: &str = "kubernetes";
+pub const KUBERNETES: &str = "k8s";
 /// The providers built with dform, by the names their handshakes give:
 /// one whose [`BUILD`] differs is stale.
 pub const BUILT_IN: [&str; 2] = [FAKECLOUD, KUBERNETES];

@@ -152,7 +152,7 @@ fn a_resource_rule_reading_a_stuck_helper_is_a_pending_group() {
     assert!(
         second.stdout.contains(
             "pending groups:\n? k8s.deployment[\"dform_controller\"] x unknown, on \
-             ?gke_nodepool[\"np-us-east1-b\"].instance_group, resolves after tick 1  \
+             ?google.container_node_pool[\"np-us-east1-b\"].instance_group, resolves after tick 1  \
              (reads node_pool_up(\"np-us-east1-b\"), which is stuck)\n"
         ),
         "{}",
@@ -162,7 +162,7 @@ fn a_resource_rule_reading_a_stuck_helper_is_a_pending_group() {
         second.stderr.contains(
             "apply stopped after tick 1: tick 2 adds 1 deformation the plan could not name \
              (k8s.deployment[\"dform_controller\"] on \
-             ?gke_nodepool[\"np-us-east1-b\"].instance_group)"
+             ?google.container_node_pool[\"np-us-east1-b\"].instance_group)"
         ),
         "{}",
         second.stderr

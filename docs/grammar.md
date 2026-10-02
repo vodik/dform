@@ -250,15 +250,27 @@ prod`. `==`, `!=` and the orders test; they do not bind.
 
 ### Types
 
-Types are names of the core (`net.vpc`, `gke_cluster`, `k8s.deployment`).
+Types are names of the core (`net.vpc`, `aws.vpc`, `k8s.deployment`).
+A provider's types are `provider.type` (R-36): the provider's name is
+their namespace, so `provider aws` serves `aws.vpc` and `aws.s3_bucket`,
+`provider k8s` serves `k8s.deployment`, and a bridged Terraform type
+drops its prefix's underscore (`google_compute_subnetwork` is
+`google.compute_subnetwork`) while its attributes keep their names. A
+type no provider of the stack serves is a plan error that names the
+provider and the statement to add (`provider aws`); `dform provider
+check` refuses a provider whose handshake name is not its types'
+namespace. The fake cloud of the examples is the exception: one mock
+playing several made-up namespaces (`net`, `compute`, `db`, `iam`).
+
 The known types are every resource header's type, every `type` block's, the
 first argument of a `type_*` fact (a schema's `type_provider`, `type_attr`
 rows), and the types the built-in provider schemas declare. A dotted name
 used as a type must be a known type, else `unknown type` (H-10): a typo is
 an error, never a string. The built-in schemas close their namespaces but
-`k8s` (a cluster's types are its own); a type in a namespace no built-in
-schema closes may be a provider schema's the compiler does not read, so
-`T[e]` and `x in T` there take `T` as written.
+`k8s` (a cluster's types are its own) and the mocks of part of a real
+provider (`aws`, `google`); a type in a namespace no built-in schema
+closes may be a provider schema's the compiler does not read, so `T[e]`
+and `x in T` there take `T` as written.
 
 `query` and `why` patterns are read without the program's declarations:
 there, any dotted name that names nothing else is a type.
@@ -539,7 +551,15 @@ like any provider and needing no `dform.toml` source (`externs::BUILTINS`):
 provider file         file.json(+path, -value: any), file.text(+path, -value: string)
 provider env          env.var(+name, -value: secret(string))
 provider random       random.password(+key, -value: secret(string)) persist
+provider aws          aws.availability_zone(+state, -name: string, -index: int)
 ```
+
+A data source (Terraform's `data` block) is such an extern, and a table:
+`aws.availability_zone("available", az, n)` binds each zone's name and its
+`index`, a stable ordinal the provider defines (the position among the
+names sorted, unless the API has an order of its own), so a program
+enumerates zones with a column and a plan never reshuffles. The aws mock
+answers it from `crates/dform-mock/schemas/aws-mock.externs.df`.
 
 `extern file.json(..)` in a program is an error naming the `provider`
 statement to write instead. `env.var(t)` as a term is the lookup

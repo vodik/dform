@@ -281,14 +281,14 @@ fn a_type_the_provider_does_not_declare_is_a_plan_error() {
     let r = s.run(&["plan", "pngu"]).failure();
     assert!(
         r.stderr
-            .contains("provider fake does not declare google_compute_subnetwork; declared by: gke"),
+            .contains("provider fake does not declare google.compute_subnetwork; declared by: gke"),
         "{}",
         r.stderr
     );
     // At the resource, and at the provider block.
     assert!(
         r.stderr
-            .contains("resource google_compute_subnetwork gke_subnet {"),
+            .contains("resource google.compute_subnetwork gke_subnet {"),
         "{}",
         r.stderr
     );

@@ -686,7 +686,7 @@ fn a_persisted_extern_secret_is_held_by_its_provider_never_stored() {
         "{world}"
     );
     assert_eq!(
-        r["google_sql_user::crud_user"]["materialized"]["password"], PASSWORD,
+        r["google.sql_user::crud_user"]["materialized"]["password"], PASSWORD,
         "{world}"
     );
 }

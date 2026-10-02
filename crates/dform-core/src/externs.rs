@@ -610,6 +610,22 @@ pub const BUILTINS: &[Builtin] = &[
         )],
         in_process: true,
     },
+    // The aws mock's data source (R-36): a table, its index a stable
+    // ordinal of the names the provider defines. Declared here until a
+    // provider's schema declares its externs to the compiler.
+    Builtin {
+        name: "aws",
+        externs: &[(
+            "aws.availability_zone",
+            &[
+                (true, "state", "string"),
+                (false, "name", "string"),
+                (false, "index", "int"),
+            ],
+            false,
+        )],
+        in_process: false,
+    },
     Builtin {
         name: "random",
         externs: &[(
@@ -734,7 +750,8 @@ pub fn from_json(j: &serde_json::Value) -> Value {
 }
 
 /// The mock's extern answers: `providers/<name>/externs.df` beside each
-/// provider's schema, facts of the extern predicates.
+/// provider's schema, else a built-in schema's
+/// (`crate::schema::builtin_answers`), facts of the extern predicates.
 pub fn load_answers(specs: &[String]) -> Result<Vec<Atom>> {
     let names: Vec<&str> = if specs.is_empty() {
         vec!["fake"]
@@ -748,18 +765,21 @@ pub fn load_answers(specs: &[String]) -> Result<Vec<Atom>> {
         } else {
             std::path::Path::new("providers").join(n).join("externs.df")
         };
-        if !path.exists() {
+        let (origin, src) = if path.exists() {
+            let src = std::fs::read_to_string(&path)
+                .with_context(|| format!("read {}", path.display()))?;
+            (path.display().to_string(), src)
+        } else if let Some(src) = crate::schema::builtin_answers(n) {
+            (format!("crates/dform-mock/schemas/{n}.externs.df"), src.to_string())
+        } else {
             continue;
-        }
-        let src =
-            std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
-        let program = crate::parser::parse_file(&path.display().to_string(), &src)?;
+        };
+        let program = crate::parser::parse_file(&origin, &src)?;
         for s in program.statements {
             match s {
                 Stmt::Fact(a) => out.push(a),
                 _ => bail!(
-                    "{}: an externs file holds the facts the mock answers with, nothing else",
-                    path.display()
+                    "{origin}: an externs file holds the facts the mock answers with, nothing else"
                 ),
             }
         }

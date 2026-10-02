@@ -247,9 +247,9 @@ struct Decls {
     /// First segments of the types: no variable may take one.
     namespaces: BTreeSet<String>,
     /// The namespaces whose every type the compiler knows: the built-in
-    /// schemas' but `k8s` (a cluster's types, CRDs included, are its own).
-    /// Another namespace's type may be a provider schema's the compiler
-    /// does not read (`--provider`, a plugin's).
+    /// schemas' but [`OPEN_NAMESPACES`]. Another namespace's type may be a
+    /// provider schema's the compiler does not read (`--provider`, a
+    /// plugin's).
     closed: BTreeSet<String>,
     /// Relations: rule and fact heads, `decl`s, input relations.
     relations: BTreeSet<String>,
@@ -260,6 +260,11 @@ struct Decls {
 }
 
 const PROGRAM: usize = 0;
+
+/// The built-in schemas' namespaces they do not close: a mock of part of a
+/// real provider's types (`aws`, `google`; R-36), and `k8s`, whose types
+/// are a cluster's own, CRDs included.
+const OPEN_NAMESPACES: &[&str] = &["aws", "google", "k8s"];
 
 /// A module or a component (R-65).
 #[derive(Clone)]
@@ -717,7 +722,7 @@ impl<'u> Lowerer<'u> {
         l.decls.closed = schema_types()
             .iter()
             .filter_map(|t| t.split_once('.').map(|(n, _)| n.to_string()))
-            .filter(|n| n != "k8s")
+            .filter(|n| !OPEN_NAMESPACES.contains(&n.as_str()))
             .collect();
         l.collect_aliases();
         l
@@ -4453,7 +4458,7 @@ impl<'u> Lowerer<'u> {
 
     /// A bare name: a variable, unless it names something no variable may.
     fn bare(&mut self, rc: &mut Rc, h: &str, span: Span) -> L<Res> {
-        // A type named by one word (`gke_nodepool`) is that type.
+        // A type named by one word (a program's own, `widget`) is that type.
         if !rc.vars.contains_key(h) && self.decls.types.contains(h) {
             return Ok(Res::Type(h.to_string()));
         }

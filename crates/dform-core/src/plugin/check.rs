@@ -175,6 +175,11 @@ fn suite(start: impl FnOnce() -> Result<Link>, dir: &Path) -> Result<(Vec<String
         match Fixture::examples(&schema, &resp.examples) {
             Ok(f) => {
                 r.check("Schema serves its own types, with examples", Ok(()));
+                let name = conn.borrow().name.clone();
+                r.check(
+                    &format!("Schema's types are named under the provider's name, {name}"),
+                    named_under(&name, &schema),
+                );
                 f
             }
             Err(e) => {
@@ -242,6 +247,31 @@ fn suite(start: impl FnOnce() -> Result<Link>, dir: &Path) -> Result<(Vec<String
     }
     resources(&conn, &mut r, &schema, &fixture);
     Ok((r.lines, r.failed))
+}
+
+/// A provider's name is its types' namespace (R-36): `provider k8s` serves
+/// `k8s.deployment`, and a handshake whose name is not the first segment
+/// of every type the schema declares deviates.
+fn named_under(name: &str, schema: &Schema) -> Result<()> {
+    let prefix = format!("{name}.");
+    let stray: Vec<String> = schema
+        .provider_of
+        .keys()
+        .chain(schema.attrs.keys().map(|(t, _)| t))
+        .filter(|t| !t.starts_with(&prefix))
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    ensure(stray.is_empty(), || {
+        format!(
+            "the handshake names {name}, and {} not under it",
+            match stray.as_slice() {
+                [one] => format!("the type {one} is"),
+                many => format!("the types {} are", many.join(", ")),
+            }
+        )
+    })
 }
 
 /// What the resource checks exercise: the synthetic type, or the examples
@@ -779,4 +809,25 @@ fn import(conn: &Conn, typ: &str, remote: &str) -> Result<Option<(Json, Json)>> 
         wire::from_doc_or_empty(resp.attrs.as_ref())?,
         wire::from_doc_or_empty(resp.computed.as_ref())?,
     )))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_providers_types_are_named_under_it() {
+        let s = Schema::parse(
+            "edition 2026\ntype_provider(k8s.secret, \"k8s\")\n\
+             type_attr(k8s.secret, \"id\", \"string\", [\"computed\", \"id\"])\n",
+            "t",
+        )
+        .unwrap();
+        assert!(named_under("k8s", &s).is_ok());
+        let e = named_under("kubernetes", &s).unwrap_err().to_string();
+        assert_eq!(
+            e,
+            "the handshake names kubernetes, and the type k8s.secret is not under it"
+        );
+    }
 }

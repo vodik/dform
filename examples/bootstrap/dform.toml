@@ -5,7 +5,7 @@ name = "bootstrap"
 
 # The mock GCP: the project's own schema.
 [providers]
-gcp = { source = "providers/gcp" }
+google = { source = "providers/gcp" }
 
 # The bootstrap stack creates what the controller runs in: it stays batch.
 [stacks.bootstrap]

@@ -35,11 +35,11 @@ fn gke_plan_has_the_summary_hints_and_apply_order() {
         "plan: 3 deformations (3 create), 4 pending, 1 undetermined"
     );
     for want in [
-        "definite:\n+ google_compute_subnetwork[\"gke_subnet\"]\n",
-        "pending on ?gke_cluster[\"pngu\"].ca_certificate ?gke_cluster[\"pngu\"].endpoint (resolves after tick 1):\n",
-        "? gke_nodepool[?] x unknown, on ?gke_cluster[\"pngu\"].zones, resolves after tick 1",
-        "? deny \"cluster must be in at least two zones\" on ?gke_cluster[\"pngu\"].zones, decided after tick 1",
-        "apply order:\n  tick 1\n    google_compute_subnetwork[\"gke_subnet\"]\n    gke_cluster[\"pngu\"]\n    google_compute_address[\"static_ip\"]\n  tick 2\n    k8s.deployment[\"api\"]\n    k8s.namespace[\"pngu\"]\n    k8s.secret[\"db_credentials\"]\n    gke_nodepool[?]\n",
+        "definite:\n+ google.compute_subnetwork[\"gke_subnet\"]\n",
+        "pending on ?google.container_cluster[\"pngu\"].ca_certificate ?google.container_cluster[\"pngu\"].endpoint (resolves after tick 1):\n",
+        "? google.container_node_pool[?] x unknown, on ?google.container_cluster[\"pngu\"].zones, resolves after tick 1",
+        "? deny \"cluster must be in at least two zones\" on ?google.container_cluster[\"pngu\"].zones, decided after tick 1",
+        "apply order:\n  tick 1\n    google.compute_subnetwork[\"gke_subnet\"]\n    google.container_cluster[\"pngu\"]\n    google.compute_address[\"static_ip\"]\n  tick 2\n    k8s.deployment[\"api\"]\n    k8s.namespace[\"pngu\"]\n    k8s.secret[\"db_credentials\"]\n    google.container_node_pool[?]\n",
     ] {
         assert!(r.stdout.contains(want), "{want}\n---\n{}", r.stdout);
     }
@@ -55,13 +55,13 @@ fn a_deny_reading_a_stuck_predicate_may_derive_after_the_tick() {
     s.write(
         "extra.df",
         r#"edition 2026
-deny "no nodepool in zone z" {pool: n} where n in gke_nodepool, arg(gke_nodepool, n, "zone", "us-east1-z")
+deny "no nodepool in zone z" {pool: n} where n in google.container_node_pool, arg(google.container_node_pool, n, "zone", "us-east1-z")
 "#,
     );
     let r = gke(&s, &["extra.df"], "plan").success();
     assert!(
         r.stdout.contains(
-            "? deny \"no nodepool in zone z\" on ?gke_cluster[\"pngu\"].zones, may derive after tick 1"
+            "? deny \"no nodepool in zone z\" on ?google.container_cluster[\"pngu\"].zones, may derive after tick 1"
         ),
         "{}",
         r.stdout
@@ -87,7 +87,7 @@ fn a_keyless_set_diffs_by_element() {
     let s = Scratch::new("sections-set");
     aws(&s, "apply").success();
     let mut w: serde_json::Value = serde_json::from_str(&s.read("w.json")).unwrap();
-    w["resources"]["aws_security_group::web"]["attrs"]["ingress"]
+    w["resources"]["aws.security_group::web"]["attrs"]["ingress"]
         .as_array_mut()
         .unwrap()
         .insert(
@@ -98,7 +98,7 @@ fn a_keyless_set_diffs_by_element() {
     let r = aws(&s, "plan").success();
     assert!(
         r.stdout.contains(
-            "~ aws_security_group[\"web\"]\n  - ingress[]\n      cidr_blocks[0] was \"0.0.0.0/0\"\n      from_port was 22\n      protocol was \"tcp\"\n      to_port was 22\napply order"
+            "~ aws.security_group[\"web\"]\n  - ingress[]\n      cidr_blocks[0] was \"0.0.0.0/0\"\n      from_port was 22\n      protocol was \"tcp\"\n      to_port was 22\napply order"
         ),
         "{}",
         r.stdout
@@ -277,10 +277,10 @@ fn color_is_a_rendering_of_the_same_text() {
     };
     let always = colored("always");
     for want in [
-        "\x1b[32m+\x1b[0m \x1b[1mgoogle_compute_subnetwork[\"gke_subnet\"]\x1b[0m\n",
+        "\x1b[32m+\x1b[0m \x1b[1mgoogle.compute_subnetwork[\"gke_subnet\"]\x1b[0m\n",
         "\x1b[1mdefinite:\x1b[0m\n",
-        "\x1b[36m?gke_cluster[\"pngu\"].zones\x1b[0m",
-        "\x1b[1;33m? gke_nodepool[?] x unknown",
+        "\x1b[36m?google.container_cluster[\"pngu\"].zones\x1b[0m",
+        "\x1b[1;33m? google.container_node_pool[?] x unknown",
     ] {
         assert!(always.contains(want), "{want:?}\n---\n{always:?}");
     }

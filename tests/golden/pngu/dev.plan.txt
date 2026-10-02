@@ -9,12 +9,12 @@ definite:
   notification_channel_type = "slack"
   project_id = "renfry-dev-973682"
   source = "git@github.com:coherentpath/terraform-gcp-alert-metrics.git?ref=v1.5.0"
-+ google_compute_network_peering["peering-envoy-dev"]
++ google.compute_network_peering["peering-envoy-dev"]
   name = "envoy-dev"
   network = "projects/renfry-dev-973682/global/networks/renfry-dev-network"
   peer_network = "projects/envoy-dev-426188/global/networks/envoy-dev-network"
   project = "renfry-dev-973682"
-+ google_compute_subnetwork["gke_subnet"]
++ google.compute_subnetwork["gke_subnet"]
   ip_cidr_range = "10.141.76.0/22"
   name = "renfry-dev-gke-subnet"
   network = "projects/renfry-dev-973682/global/networks/renfry-dev-network"
@@ -25,7 +25,7 @@ definite:
   secondary_ranges[1].ip_cidr_range = "10.141.88.0/21"
   secondary_ranges[1].range_name = "renfry-dev-gke-svc-range"
   subnet_private_access = true
-+ google_compute_subnetwork["regional_proxy"]
++ google.compute_subnetwork["regional_proxy"]
   ip_cidr_range = "10.193.0.0/24"
   name = "renfry-dev-proxy"
   network = "projects/renfry-dev-973682/global/networks/renfry-dev-network"
@@ -33,11 +33,7 @@ definite:
   purpose = "REGIONAL_MANAGED_PROXY"
   region = "us-east1"
   role = "ACTIVE"
-+ google_monitoring_dashboard["pngu"]
-  dashboard_json.displayName = "pngu"
-  dashboard_json.note = "stubbed; see terraform/modules/monitoring/dashboard-pngu.json"
-  project = "renfry-dev-973682"
-+ gke_cluster["pngu"]
++ google.container_cluster["pngu"]
   cluster_type = "autopilot-private"
   deletion_protection = false
   enable_secret_manager_addon = true
@@ -49,20 +45,24 @@ definite:
   network_id = "projects/renfry-dev-973682/global/networks/renfry-dev-network"
   project_id = "renfry-dev-973682"
   project_name = "renfry-dev"
-  subnetwork_id = ?google_compute_subnetwork["gke_subnet"]
-+ google_compute_address["static-ip-pngu-grpc"]
+  subnetwork_id = ?google.compute_subnetwork["gke_subnet"]
++ google.monitoring_dashboard["pngu"]
+  dashboard_json.displayName = "pngu"
+  dashboard_json.note = "stubbed; see terraform/modules/monitoring/dashboard-pngu.json"
+  project = "renfry-dev-973682"
++ google.compute_address["static-ip-pngu-grpc"]
   address_type = "INTERNAL"
   name = "pngu-grpc"
   project = "renfry-dev-973682"
   region = "us-east1"
-  subnetwork_id = ?google_compute_subnetwork["gke_subnet"]
+  subnetwork_id = ?google.compute_subnetwork["gke_subnet"]
 apply order:
   tick 1
     alert_metrics_pack["pngu"]
-    google_compute_network_peering["peering-envoy-dev"]
-    google_compute_subnetwork["gke_subnet"]
-    google_compute_subnetwork["regional_proxy"]
-    google_monitoring_dashboard["pngu"]
-    gke_cluster["pngu"]
-    google_compute_address["static-ip-pngu-grpc"]
+    google.compute_network_peering["peering-envoy-dev"]
+    google.compute_subnetwork["gke_subnet"]
+    google.compute_subnetwork["regional_proxy"]
+    google.container_cluster["pngu"]
+    google.monitoring_dashboard["pngu"]
+    google.compute_address["static-ip-pngu-grpc"]
 -- stderr --

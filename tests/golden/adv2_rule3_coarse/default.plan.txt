@@ -2,20 +2,20 @@ exit: error
 -- stdout --
 plan: 2 deformations (2 create), 1 pending, 1 undetermined
 definite:
-+ gke_cluster["pngu"]
++ google.container_cluster["pngu"]
   name = "pngu-gke"
 + k8s.namespace["pngu"]
   name = "pngu"
 pending groups:
-? gke_nodepool[?] x unknown, on ?gke_cluster["pngu"].zones, resolves after tick 1  (member/2 over a null list)
+? google.container_node_pool[?] x unknown, on ?google.container_cluster["pngu"].zones, resolves after tick 1  (member/2 over a null list)
 undetermined:
-? deny "no nodepool in zone b" on ?gke_cluster["pngu"].zones, decided after tick 1  (not want("gke_nodepool", "np-us-east1-b"): want has a stuck instance that may derive it)
+? deny "no nodepool in zone b" on ?google.container_cluster["pngu"].zones, decided after tick 1  (not want("google.container_node_pool", "np-us-east1-b"): want has a stuck instance that may derive it)
 apply order:
   tick 1
-    gke_cluster["pngu"]
+    google.container_cluster["pngu"]
     k8s.namespace["pngu"]
   tick 2
-    gke_nodepool[?]
+    google.container_node_pool[?]
 -- stderr --
 constraint violations:
 - namespace without deployment ctx={"ns":"pngu"}

@@ -1,0 +1,10 @@
+# The aws mock's answers to its data source,
+# aws.availability_zone(+state, -name, -index: int) (R-36): one row per
+# zone, its index the zone's position among the names sorted, so a plan
+# never reshuffles.
+
+edition 2026
+
+aws.availability_zone("available", "us-east-1a", 0)
+aws.availability_zone("available", "us-east-1b", 1)
+aws.availability_zone("available", "us-east-1c", 2)

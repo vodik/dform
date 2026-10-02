@@ -657,6 +657,7 @@ fn the_k8s_provider_conforms() {
     assert!(!r.stdout.contains("FAIL"), "{}", r.stdout);
     for line in [
         "ok    Schema serves its own types, with examples",
+        "ok    Schema's types are named under the provider's name, k8s",
         "ok    Plan refuses a document without a required attribute",
         "ok    Plan spells a keyed list by key",
         "ok    Plan marks a sensitive attribute sensitive",
@@ -1121,7 +1122,7 @@ fn files_under(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
     }
 }
 
-/// `provider_config("kubernetes", {kubeconfig: K})` with K a secret input:
+/// `provider_config("k8s", {kubeconfig: K})` with K a secret input:
 /// the provider is configured from the text, in memory, and talks to the
 /// cluster it names with its token; the environment's kubeconfig is not
 /// read. No byte of the token is in state, the plan file, the audit log,
@@ -1146,7 +1147,7 @@ fn a_kubeconfig_held_as_a_secret_configures_the_provider() {
         format!(
             "edition 2026\ninput kubeconfig: secret(string)\n\
              provider k8s {{ source = \"./providers/k8s\" }}\n\
-             provider_config(\"kubernetes\", {settings}) where kubeconfig(k)\n\
+             provider_config(\"k8s\", {settings}) where kubeconfig(k)\n\
              resource k8s.config_map settings {{\n  metadata.name = \"settings\"\n  \
              data = {{ \"MODE\": \"test\" }}\n}}\n"
         )

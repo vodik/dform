@@ -34,7 +34,7 @@ fn optional_computed_is_a_constant_when_set_and_a_null_when_not() {
     );
     assert!(
         r.stdout
-            .contains("tags.web_az = ?aws_instance[\"web\"].availability_zone"),
+            .contains("tags.web_az = ?aws.instance[\"web\"].availability_zone"),
         "{}",
         r.stdout
     );
@@ -46,30 +46,30 @@ fn optional_computed_is_a_constant_when_set_and_a_null_when_not() {
     let w: serde_json::Value = serde_json::from_str(&s.read("w.json")).unwrap();
     let res = &w["resources"];
     // AWS picked what the program left unset, and nothing it set.
-    let web_az = res["aws_instance::web"]["computed"]["availability_zone"]
+    let web_az = res["aws.instance::web"]["computed"]["availability_zone"]
         .as_str()
         .unwrap();
     assert_eq!(
-        res["aws_instance::bastion"]["attrs"]["tags"]["web_az"],
+        res["aws.instance::bastion"]["attrs"]["tags"]["web_az"],
         web_az
     );
     assert!(
-        res["aws_instance::bastion"]["computed"]["subnet_id"]
+        res["aws.instance::bastion"]["computed"]["subnet_id"]
             .as_str()
             .unwrap()
             .starts_with("subnet-")
     );
     assert!(
-        res["aws_instance::web"]["computed"]
+        res["aws.instance::web"]["computed"]
             .get("subnet_id")
             .is_none()
     );
     assert_eq!(
-        res["aws_instance::web"]["attrs"]["subnet_id"],
-        res["aws_subnet::a"]["computed"]["id"]
+        res["aws.instance::web"]["attrs"]["subnet_id"],
+        res["aws.subnet::a"]["computed"]["id"]
     );
     assert_eq!(
-        res["aws_db_instance::app"]["computed"]["address"],
+        res["aws.db_instance::app"]["computed"]["address"],
         "app.c123abc.us-east-1.rds.amazonaws.com"
     );
 
@@ -85,7 +85,7 @@ fn keyless_sets_ignore_order() {
 
     // AWS returns the rules in another order: not a change.
     let mut w: serde_json::Value = serde_json::from_str(&s.read("w.json")).unwrap();
-    let ingress = w["resources"]["aws_security_group::web"]["attrs"]["ingress"]
+    let ingress = w["resources"]["aws.security_group::web"]["attrs"]["ingress"]
         .as_array_mut()
         .unwrap();
     ingress.reverse();
@@ -95,7 +95,7 @@ fn keyless_sets_ignore_order() {
 
     // Someone opened port 22 by hand: an update of the set.
     let mut w: serde_json::Value = serde_json::from_str(&s.read("w.json")).unwrap();
-    w["resources"]["aws_security_group::web"]["attrs"]["ingress"]
+    w["resources"]["aws.security_group::web"]["attrs"]["ingress"]
         .as_array_mut()
         .unwrap()
         .push(serde_json::json!({"from_port": 22, "to_port": 22, "protocol": "tcp", "cidr_blocks": ["0.0.0.0/0"]}));
@@ -108,8 +108,69 @@ fn keyless_sets_ignore_order() {
         r.stdout
     );
     assert!(
-        r.stdout.contains("~ aws_security_group[\"web\"]"),
+        r.stdout.contains("~ aws.security_group[\"web\"]"),
         "{}",
         r.stdout
+    );
+}
+
+/// README's opening program on the mock: `aws.availability_zone` is a
+/// table the provider answers (R-36), one row per zone with a stable
+/// index, so the n-th zone gets the n-th /24.
+const ZONES: &str = r#"edition 2026
+
+provider aws { region = "us-east-1" }
+
+resource aws.vpc main {
+  cidr_block = "10.0.0.0/16"
+}
+
+resource aws.subnet "private-${availability_zone}" {
+  vpc_id = main
+  cidr_block = inet.subnet(inet(main.cidr_block), 8, n)
+  availability_zone
+} where aws.availability_zone("available", availability_zone, n)
+"#;
+
+#[test]
+fn a_data_source_is_a_table_with_an_index() {
+    let s = Scratch::project("aws-zones");
+    s.write("dform.toml", "[providers]\naws = { source = \"aws-mock\" }\n");
+    s.write("main.df", ZONES);
+    let r = s.run(&["plan", "main.df"]).success();
+    assert_eq!(r.summary(), "plan: 4 deformations (4 create)", "{}", r.stdout);
+    for (zone, cidr) in [
+        ("us-east-1a", "10.0.0.0/24"),
+        ("us-east-1b", "10.0.1.0/24"),
+        ("us-east-1c", "10.0.2.0/24"),
+    ] {
+        let want = format!(
+            "+ aws.subnet[\"private-{zone}\"]\n  availability_zone = \"{zone}\"\n  cidr_block = \"{cidr}\"\n"
+        );
+        assert!(r.stdout.contains(&want), "{want}\n{}", r.stdout);
+    }
+}
+
+/// A type is its provider's, by its namespace: without `provider aws` the
+/// plan names the statement to add.
+#[test]
+fn a_type_names_the_provider_to_declare() {
+    let s = Scratch::project("aws-undeclared");
+    s.write(
+        "main.df",
+        "edition 2026\nprovider fake\nresource aws.vpc main { cidr_block = \"10.0.0.0/16\" }\n",
+    );
+    let r = s.run(&["plan", "main.df"]).failure();
+    assert!(
+        r.stderr
+            .contains("provider fake does not declare aws.vpc; declared by: aws-mock"),
+        "{}",
+        r.stderr
+    );
+    assert!(
+        r.stderr
+            .contains("aws.vpc is provider aws's type: add `provider aws` to the stack"),
+        "{}",
+        r.stderr
     );
 }

@@ -7,7 +7,7 @@
 //! `DFORM_K8S_OFFLINE` set, the provider is offline: the schema is the
 //! checked-in snapshot's, Plan diffs locally, and Read, Apply and Import
 //! fail naming why. A program that names its cluster
-//! (`provider_config("kubernetes", ...)`) is configured `deferred` first
+//! (`provider_config("k8s", ...)`) is configured `deferred` first
 //! (the snapshot's schema, the environment ignored) and again with its
 //! `settings` once they are known (`Cluster::configured`).
 //!
@@ -100,7 +100,7 @@ impl K8s {
     }
 
     /// Configure for a program that names its cluster itself
-    /// (`provider_config("kubernetes", ...)`): the schema is the snapshot's
+    /// (`provider_config("k8s", ...)`): the schema is the snapshot's
     /// until then, and nothing in the environment is contacted.
     pub fn deferred(cache: Option<PathBuf>) -> Result<K8s> {
         Ok(K8s {

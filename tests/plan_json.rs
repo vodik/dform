@@ -37,9 +37,9 @@ fn plan_json_has_every_section() {
     assert_eq!(subnet["action"], "create");
     assert_eq!(
         subnet["address"],
-        "google_compute_subnetwork[\"gke_subnet\"]"
+        "google.compute_subnetwork[\"gke_subnet\"]"
     );
-    assert_eq!(subnet["type"], "google_compute_subnetwork");
+    assert_eq!(subnet["type"], "google.compute_subnetwork");
     assert_eq!(
         subnet["changes"][0],
         json!({"op": "set", "path": "ip_cidr_range", "before": null, "after": "10.141.76.0/22"})
@@ -47,7 +47,7 @@ fn plan_json_has_every_section() {
     let block = &p["pending"][0];
     assert_eq!(
         block["on"][0],
-        json!({"null": "gke_cluster[\"pngu\"].ca_certificate", "class": "open"})
+        json!({"null": "google.container_cluster[\"pngu\"].ca_certificate", "class": "open"})
     );
     assert_eq!(block["resolves_after"], 1);
     let secret = block["deformations"]
@@ -66,7 +66,7 @@ fn plan_json_has_every_section() {
         password["after"],
         json!({"sensitive": "google.secret_manager_secret_version[\"db_pw\"].secret_data"})
     );
-    assert_eq!(p["pending_groups"][0]["pattern"], "gke_nodepool[?]");
+    assert_eq!(p["pending_groups"][0]["pattern"], "google.container_node_pool[?]");
     assert_eq!(p["undetermined"][0]["kind"], "undetermined");
     assert_eq!(p["undetermined"][0]["after"], 1);
     assert_eq!(p["apply_order"][1]["tick"], 2);
@@ -93,7 +93,7 @@ fn plan_json_nulls_carry_their_class() {
         .unwrap();
     assert_eq!(
         sub["after"],
-        json!({"null": "google_compute_subnetwork[\"gke_subnet\"]", "class": "fresh"})
+        json!({"null": "google.compute_subnetwork[\"gke_subnet\"]", "class": "fresh"})
     );
 }
 
@@ -283,7 +283,7 @@ fn plan_json_why_explains_each_deformation() {
         why[0]["text"]
             .as_str()
             .unwrap()
-            .starts_with("resource google_compute_subnetwork gke_subnet"),
+            .starts_with("resource google.compute_subnetwork gke_subnet"),
         "{}",
         why[0]
     );

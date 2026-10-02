@@ -270,10 +270,13 @@ impl Providers {
             let mut config = base.clone();
             config["schemas"] = json!(mocks);
             // A mock schema the program configures by its block serves
-            // nothing until the settings arrive, as a plugin would.
-            if blocks
-                .iter()
-                .any(|(b, &j)| j == 0 && cfg.configured.contains(b))
+            // nothing until the settings arrive, as a plugin would. A mock
+            // playing several providers is configured by none of them
+            // ([`Providers::link_for`]).
+            if mocks.len() == 1
+                && blocks
+                    .iter()
+                    .any(|(b, &j)| j == 0 && cfg.configured.contains(b))
             {
                 awaiting.insert(0);
             }
@@ -413,8 +416,20 @@ impl Providers {
     }
 
     /// The link a program names: by the provider's own name, else by the
-    /// name of the `provider` block that selects it.
+    /// name of the `provider` block that selects it. A mock playing several
+    /// providers on one link (`provider google` and `provider k8s` on the
+    /// built-in schemas) is none of theirs: one's settings would
+    /// configure the others' types too, so it plays them unconfigured.
     fn link_for(&self, name: &str) -> Option<usize> {
+        let played = self
+            .bases
+            .first()
+            .and_then(|b| b.get("schemas"))
+            .and_then(Json::as_array)
+            .map_or(0, Vec::len);
+        if self.mock_blocks.contains_key(name) && played > 1 {
+            return self.link_named(name);
+        }
         self.link_named(name)
             .or_else(|| self.blocks.get(name).copied())
     }
@@ -654,10 +669,29 @@ impl Providers {
             for c in &blocks {
                 d = d.with_label(c.span, format!("provider {}", c.name));
             }
-            if let Some(first) = by.first() {
-                d = d.with_help(format!(
-                    "configure the provider that does: `provider {first} {{ }}`"
-                ));
+            // A provider's types are named under it (R-36): `aws.vpc` is
+            // provider aws's. The fake cloud's namespaces (`net`, `iam`)
+            // name no provider, so where a known schema gives the type to
+            // another provider, that schema is the one to configure.
+            let ns = typ.split_once('.').map(|(ns, _)| ns).filter(|ns| {
+                by.is_empty()
+                    || by.iter().any(|n| {
+                        crate::schema::load_provider(n)
+                            .is_ok_and(|s| s.provider_of.get(typ).is_some_and(|p| p == ns))
+                    })
+            });
+            match (ns, by.first()) {
+                (Some(ns), _) if !names.iter().any(|n| n == ns) => {
+                    d = d.with_help(format!(
+                        "{typ} is provider {ns}'s type: add `provider {ns}` to the stack"
+                    ));
+                }
+                (None, Some(first)) => {
+                    d = d.with_help(format!(
+                        "configure the provider that does: `provider {first} {{ }}`"
+                    ));
+                }
+                _ => {}
             }
             diags.push(d);
         }

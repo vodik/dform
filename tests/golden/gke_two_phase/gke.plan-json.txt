@@ -4,9 +4,9 @@ exit: ok
   "apply_order": [
     {
       "addresses": [
-        "google_compute_subnetwork[\"gke_subnet\"]",
-        "gke_cluster[\"pngu\"]",
-        "google_compute_address[\"static_ip\"]"
+        "google.compute_subnetwork[\"gke_subnet\"]",
+        "google.container_cluster[\"pngu\"]",
+        "google.compute_address[\"static_ip\"]"
       ],
       "tick": 1
     },
@@ -15,7 +15,7 @@ exit: ok
         "k8s.deployment[\"api\"]",
         "k8s.namespace[\"pngu\"]",
         "k8s.secret[\"db_credentials\"]",
-        "gke_nodepool[?]"
+        "google.container_node_pool[?]"
       ],
       "tick": 2
     }
@@ -24,7 +24,7 @@ exit: ok
   "definite": [
     {
       "action": "create",
-      "address": "google_compute_subnetwork[\"gke_subnet\"]",
+      "address": "google.compute_subnetwork[\"gke_subnet\"]",
       "changes": [
         {
           "after": "10.141.76.0/22",
@@ -58,11 +58,11 @@ exit: ok
         }
       ],
       "name": "gke_subnet",
-      "type": "google_compute_subnetwork"
+      "type": "google.compute_subnetwork"
     },
     {
       "action": "create",
-      "address": "gke_cluster[\"pngu\"]",
+      "address": "google.container_cluster[\"pngu\"]",
       "changes": [
         {
           "after": true,
@@ -115,7 +115,7 @@ exit: ok
         {
           "after": {
             "class": "fresh",
-            "null": "google_compute_subnetwork[\"gke_subnet\"]"
+            "null": "google.compute_subnetwork[\"gke_subnet\"]"
           },
           "before": null,
           "op": "set",
@@ -123,11 +123,11 @@ exit: ok
         }
       ],
       "name": "pngu",
-      "type": "gke_cluster"
+      "type": "google.container_cluster"
     },
     {
       "action": "create",
-      "address": "google_compute_address[\"static_ip\"]",
+      "address": "google.compute_address[\"static_ip\"]",
       "changes": [
         {
           "after": "pngu-grpc",
@@ -150,7 +150,7 @@ exit: ok
         {
           "after": {
             "class": "fresh",
-            "null": "google_compute_subnetwork[\"gke_subnet\"]"
+            "null": "google.compute_subnetwork[\"gke_subnet\"]"
           },
           "before": null,
           "op": "set",
@@ -158,7 +158,7 @@ exit: ok
         }
       ],
       "name": "static_ip",
-      "type": "google_compute_address"
+      "type": "google.compute_address"
     }
   ],
   "denied": [],
@@ -234,11 +234,11 @@ exit: ok
       "on": [
         {
           "class": "open",
-          "null": "gke_cluster[\"pngu\"].ca_certificate"
+          "null": "google.container_cluster[\"pngu\"].ca_certificate"
         },
         {
           "class": "open",
-          "null": "gke_cluster[\"pngu\"].endpoint"
+          "null": "google.container_cluster[\"pngu\"].endpoint"
         }
       ],
       "resolves_after": 1
@@ -249,10 +249,10 @@ exit: ok
       "on": [
         {
           "class": "open",
-          "null": "gke_cluster[\"pngu\"].zones"
+          "null": "google.container_cluster[\"pngu\"].zones"
         }
       ],
-      "pattern": "gke_nodepool[?]",
+      "pattern": "google.container_node_pool[?]",
       "reason": "member/2 over a null list",
       "resolves_after": 1
     }
@@ -281,7 +281,7 @@ exit: ok
       "on": [
         {
           "class": "open",
-          "null": "gke_cluster[\"pngu\"].zones"
+          "null": "google.container_cluster[\"pngu\"].zones"
         }
       ],
       "policy": "deny",

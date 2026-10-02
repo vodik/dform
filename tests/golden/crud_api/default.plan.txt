@@ -2,10 +2,10 @@ exit: ok
 -- stdout --
 plan: 8 deformations (8 create), 9 pending, 7 undetermined
 definite:
-+ google_compute_network["vpc"]
++ google.compute_network["vpc"]
   auto_create_subnetworks = false
   name = "shop-dev"
-+ google_sql_database_instance["db"]
++ google.sql_database_instance["db"]
   database_version = "POSTGRES_16"
   deletion_protection = true
   name = "crud-api-dev"
@@ -14,9 +14,9 @@ definite:
   settings.backup_configuration.enabled = true
   settings.backup_configuration.point_in_time_recovery_enabled = true
   settings.ip_configuration.ipv4_enabled = false
-  settings.ip_configuration.private_network = ?google_compute_network["vpc"]
+  settings.ip_configuration.private_network = ?google.compute_network["vpc"]
   settings.tier = "db-f1-micro"
-+ google_sql_user["crud_user"]
++ google.sql_user["crud_user"]
   instance = "crud-api-dev"
   name = "crud_api"
   password = (sensitive random.password["crud-api-db"]."2")
@@ -29,14 +29,14 @@ definite:
   spec.podSelector = {}
   spec.policyTypes[0] = "Ingress"
   spec.policyTypes[1] = "Egress"
-+ google_sql_database["crud_db"]
++ google.sql_database["crud_db"]
   instance = "crud-api-dev"
   name = "crud_api"
 + k8s.secret["db_conn"]
   metadata.name = "crud-api-db"
   metadata.namespace = "shop"
   stringData.PGDATABASE = (sensitive)
-  stringData.PGHOST = ?google_sql_database_instance["db"].private_ip_address
+  stringData.PGHOST = ?google.sql_database_instance["db"].private_ip_address
   stringData.PGPASSWORD = (sensitive random.password["crud-api-db"]."2")
   stringData.PGUSER = (sensitive)
 + k8s.job["migrate-v42"]
@@ -76,12 +76,12 @@ undetermined:
 ? deny "image not pinned by digest" on ?k8s.job["migrate-v42"].status.succeeded, may derive after tick 1  (reads container("blue::deploy", _), container("green::deploy", _) with a stuck instance)
 apply order:
   tick 1
-    google_compute_network["vpc"]
-    google_sql_database_instance["db"]
-    google_sql_user["crud_user"]
+    google.compute_network["vpc"]
+    google.sql_database_instance["db"]
+    google.sql_user["crud_user"]
     k8s.namespace["shop"]
     k8s.network_policy["default_deny"]
-    google_sql_database["crud_db"]
+    google.sql_database["crud_db"]
     k8s.secret["db_conn"]
     k8s.job["migrate-v42"]
   tick 2

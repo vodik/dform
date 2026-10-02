@@ -141,9 +141,9 @@ fn mock_schemas_declare_their_replace_order() {
         ReplaceOrder::DestroyFirst
     );
     let aws = load_provider("aws-mock").unwrap();
-    assert_eq!(aws.replace_order("aws_instance"), ReplaceOrder::CreateFirst);
+    assert_eq!(aws.replace_order("aws.instance"), ReplaceOrder::CreateFirst);
     assert_eq!(
-        aws.replace_order("aws_s3_bucket"),
+        aws.replace_order("aws.s3_bucket"),
         ReplaceOrder::DestroyFirst
     );
     assert_eq!(

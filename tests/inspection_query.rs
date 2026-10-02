@@ -112,16 +112,16 @@ fn a_row_prints_a_reference_as_its_address() {
         at,
         &[
             "query",
-            r#"attr("google_sql_database", "crud_db", "instance", V)"#,
+            r#"attr("google.sql_database", "crud_db", "instance", V)"#,
         ],
     );
     assert_eq!(
         out,
-        "V\ngoogle_sql_database_instance[\"db\"].name\n(1 row)\n"
+        "V\ngoogle.sql_database_instance[\"db\"].name\n(1 row)\n"
     );
     let facts = dform(at, &["query", "arg"]);
     assert!(
-        facts.contains(r#""instance", google_sql_database_instance["db"].name, "normal")"#),
+        facts.contains(r#""instance", google.sql_database_instance["db"].name, "normal")"#),
         "{facts}"
     );
     assert!(!facts.contains("ref("), "{facts}");

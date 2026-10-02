@@ -10,7 +10,7 @@ examples/aws/stacks/aws_demo.df
 # Two shapes to look at:
 #   - Optional+Computed: subnet `a` sets availability_zone, so a ref to it is
 #     the constant; instance `web` leaves its own unset, so a ref to it is the
-#     null ?aws_instance/web#availability_zone until Apply picks one. Instance
+#     null ?aws.instance/web#availability_zone until Apply picks one. Instance
 #     `bastion` leaves subnet_id unset: AWS puts it in a default subnet.
 #   - keyless sets: the security group's ingress rules have no key; the plan
 #     compares them as a set, so their order never matters.
@@ -18,18 +18,18 @@ examples/aws/stacks/aws_demo.df
 edition 2026
 provider aws
 
-resource aws_vpc main {
+resource aws.vpc main {
   cidr_block = "10.0.0.0/16"
   tags = { "Name": "main" }
 }
 
-resource aws_subnet a {
+resource aws.subnet a {
   vpc_id = main
   cidr_block = "10.0.1.0/24"
   availability_zone = "us-east-1a"
 }
 
-resource aws_security_group web {
+resource aws.security_group web {
   name = "web"
   vpc_id = main
   ingress = [
@@ -41,28 +41,28 @@ resource aws_security_group web {
   ]
 }
 
-resource aws_instance web {
+resource aws.instance web {
   ami = "ami-0abcdef1234567890"
   instance_type = "t3.small"
   subnet_id = a
-  vpc_security_group_ids = [aws_security_group["web"]]
+  vpc_security_group_ids = [aws.security_group["web"]]
 }
 
-resource aws_instance bastion {
+resource aws.instance bastion {
   instance_type = "t3.micro"
-  tags = { subnet_az: a.availability_zone, web_az: aws_instance["web"].availability_zone }
+  tags = { subnet_az: a.availability_zone, web_az: aws.instance["web"].availability_zone }
 }
 
-resource aws_eip web {
+resource aws.eip web {
   domain = "vpc"
-  instance = aws_instance["web"]
+  instance = aws.instance["web"]
 }
 
-resource aws_db_instance app {
+resource aws.db_instance app {
   identifier = "app"
   instance_class = "db.t3.micro"
   password = "correct-horse-battery-staple"
-  vpc_security_group_ids = [aws_security_group["web"]]
+  vpc_security_group_ids = [aws.security_group["web"]]
   skip_final_snapshot = true
 }
 
@@ -87,6 +87,7 @@ resource aws_db_instance app {
     (identifier))
   (resource
     (dotted_name
+      (identifier)
       (identifier))
     (identifier)
     (block
@@ -106,6 +107,7 @@ resource aws_db_instance app {
               (string_content)))))))
   (resource
     (dotted_name
+      (identifier)
       (identifier))
     (identifier)
     (block
@@ -125,6 +127,7 @@ resource aws_db_instance app {
           (string_content)))))
   (resource
     (dotted_name
+      (identifier)
       (identifier))
     (identifier)
     (block
@@ -195,6 +198,7 @@ resource aws_db_instance app {
                   (string_content)))))))))
   (resource
     (dotted_name
+      (identifier)
       (identifier))
     (identifier)
     (block
@@ -217,11 +221,14 @@ resource aws_db_instance app {
           (identifier))
         (list
           (index_expression
-            (identifier)
+            (member_expression
+              (identifier)
+              (identifier))
             (string
               (string_content)))))))
   (resource
     (dotted_name
+      (identifier)
       (identifier))
     (identifier)
     (block
@@ -243,12 +250,15 @@ resource aws_db_instance app {
             (identifier)
             (member_expression
               (index_expression
-                (identifier)
+                (member_expression
+                  (identifier)
+                  (identifier))
                 (string
                   (string_content)))
               (identifier)))))))
   (resource
     (dotted_name
+      (identifier)
       (identifier))
     (identifier)
     (block
@@ -261,11 +271,14 @@ resource aws_db_instance app {
         (block_path
           (identifier))
         (index_expression
-          (identifier)
+          (member_expression
+            (identifier)
+            (identifier))
           (string
             (string_content))))))
   (resource
     (dotted_name
+      (identifier)
       (identifier))
     (identifier)
     (block
@@ -289,7 +302,9 @@ resource aws_db_instance app {
           (identifier))
         (list
           (index_expression
-            (identifier)
+            (member_expression
+              (identifier)
+              (identifier))
             (string
               (string_content)))))
       (field

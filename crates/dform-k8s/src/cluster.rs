@@ -110,7 +110,7 @@ fn fields_kubeconfig(settings: &Json) -> Result<Kubeconfig> {
         match settings.get(k) {
             None => Ok(None),
             Some(Json::String(s)) => Ok(Some(s)),
-            Some(_) => bail!("provider_config kubernetes: {k} is a string"),
+            Some(_) => bail!("provider_config k8s: {k} is a string"),
         }
     };
     // PEM as it is, or base64 of it (as a kubeconfig carries it).
@@ -131,7 +131,7 @@ fn fields_kubeconfig(settings: &Json) -> Result<Kubeconfig> {
     let (cert, key) = (data("client_certificate")?, data("client_key")?);
     if token.is_none() && (cert.is_none() || key.is_none()) {
         bail!(
-            "provider_config kubernetes: host needs a token, or a client_certificate and a \
+            "provider_config k8s: host needs a token, or a client_certificate and a \
              client_key"
         );
     }
@@ -145,7 +145,7 @@ fn fields_kubeconfig(settings: &Json) -> Result<Kubeconfig> {
         "current-context": "dform",
     });
     serde_json::from_value(crate::object::strip_nulls(&kc))
-        .map_err(|_| anyhow!("provider_config kubernetes: the fields make no kubeconfig"))
+        .map_err(|_| anyhow!("provider_config k8s: the fields make no kubeconfig"))
 }
 
 /// A cluster's OpenAPI document and its hash (of the cache file's text,
@@ -190,7 +190,7 @@ impl Cluster {
         Cluster::connect(config)
     }
 
-    /// The cluster the program's `provider_config("kubernetes", ...)`
+    /// The cluster the program's `provider_config("k8s", ...)`
     /// names, if it names one: `kubeconfig` (the text of a kubeconfig, its
     /// current context), or `host` with `ca` and a `token` or a
     /// `client_certificate` and `client_key` (PEM, or base64 of it), and
@@ -199,9 +199,9 @@ impl Cluster {
     pub async fn configured(settings: &Json) -> Result<Option<Cluster>> {
         let kubeconfig = match settings.get("kubeconfig") {
             Some(Json::String(text)) => Kubeconfig::from_yaml(text).map_err(|_| {
-                anyhow!("provider_config kubernetes: kubeconfig is not a kubeconfig (YAML)")
+                anyhow!("provider_config k8s: kubeconfig is not a kubeconfig (YAML)")
             })?,
-            Some(_) => bail!("provider_config kubernetes: kubeconfig is a string"),
+            Some(_) => bail!("provider_config k8s: kubeconfig is a string"),
             None => match settings.get("host") {
                 Some(_) => fields_kubeconfig(settings)?,
                 None => return Ok(None),
@@ -209,7 +209,7 @@ impl Cluster {
         };
         let config = kube::Config::from_custom_kubeconfig(kubeconfig, &Default::default())
             .await
-            .map_err(|e| anyhow!("provider_config kubernetes: {e}"))?;
+            .map_err(|e| anyhow!("provider_config k8s: {e}"))?;
         Cluster::connect(config).map(Some)
     }
 

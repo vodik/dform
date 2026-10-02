@@ -8,32 +8,32 @@ examples/bootstrap/providers/gcp/schema.df
 
 edition 2026
 
-type_provider("google_compute_network", "google")
-type_provider("google_compute_subnetwork", "google")
-type_provider("gke_cluster", "google")
-type_provider("gke_nodepool", "google")
+type_provider("google.compute_network", "google")
+type_provider("google.compute_subnetwork", "google")
+type_provider("google.container_cluster", "google")
+type_provider("google.container_node_pool", "google")
 
-type_attr("google_compute_network", "id", "string", ["computed", "id"])
-type_attr("google_compute_subnetwork", "id", "string", ["computed", "id"])
-type_attr("gke_cluster", "id", "string", ["computed", "id"])
-type_attr("gke_nodepool", "id", "string", ["computed", "id"])
+type_attr("google.compute_network", "id", "string", ["computed", "id"])
+type_attr("google.compute_subnetwork", "id", "string", ["computed", "id"])
+type_attr("google.container_cluster", "id", "string", ["computed", "id"])
+type_attr("google.container_node_pool", "id", "string", ["computed", "id"])
 
 # What points at another resource takes it, and gets its id at Apply (R-43).
-type_attr("google_compute_subnetwork", "network", "ref(google_compute_network)", [])
-type_attr("gke_cluster", "network", "ref(google_compute_network)", [])
-type_attr("gke_cluster", "subnetwork", "ref(google_compute_subnetwork)", [])
-type_attr("gke_nodepool", "cluster", "ref(gke_cluster)", [])
+type_attr("google.compute_subnetwork", "network", "ref(google.compute_network)", [])
+type_attr("google.container_cluster", "network", "ref(google.compute_network)", [])
+type_attr("google.container_cluster", "subnetwork", "ref(google.compute_subnetwork)", [])
+type_attr("google.container_node_pool", "cluster", "ref(google.container_cluster)", [])
 
-type_attr("gke_cluster", "endpoint", "string", ["computed"])
-type_attr("gke_cluster", "ca_certificate", "string", ["computed"])
-type_attr("gke_cluster", "zones", "list", ["computed"])
-type_attr("gke_nodepool", "instance_group", "string", ["computed"])
+type_attr("google.container_cluster", "endpoint", "string", ["computed"])
+type_attr("google.container_cluster", "ca_certificate", "string", ["computed"])
+type_attr("google.container_cluster", "zones", "list", ["computed"])
+type_attr("google.container_node_pool", "instance_group", "string", ["computed"])
 
-type_mint("gke_cluster", "endpoint", "https://{name}.gke.fake")
-type_mint("gke_cluster", "ca_certificate", "ca-{name}-{hash}")
+type_mint("google.container_cluster", "endpoint", "https://{name}.gke.fake")
+type_mint("google.container_cluster", "ca_certificate", "ca-{name}-{hash}")
 # The zones a cluster lands in are the node locations it was configured with.
-type_mint("gke_cluster", "zones", "{doc:node_locations}")
-type_mint("gke_nodepool", "instance_group", "ig-{name}-{hash}")
+type_mint("google.container_cluster", "zones", "{doc:node_locations}")
+type_mint("google.container_node_pool", "instance_group", "ig-{name}-{hash}")
 
 ---
 

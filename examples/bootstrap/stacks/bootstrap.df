@@ -13,22 +13,22 @@
 edition 2026
 
 # The mock GCP's schema is the project's own (dform.toml: providers/gcp).
-provider gcp
+provider google
 provider k8s
 
-resource google_compute_network vpc {
+resource google.compute_network vpc {
   name = "renfry-vpc"
   auto_create_subnetworks = false
 }
 
-resource google_compute_subnetwork gke {
+resource google.compute_subnetwork gke {
   name = "renfry-gke"
   region = "us-east1"
   network = vpc
   ip_cidr_range = "10.141.76.0/22"
 }
 
-resource gke_cluster renfry {
+resource google.container_cluster renfry {
   name = "renfry-gke"
   network = vpc
   subnetwork = gke
@@ -36,13 +36,13 @@ resource gke_cluster renfry {
 }
 
 # One node pool per zone the cluster lands in.
-resource gke_nodepool "np-${z}" {
+resource google.container_node_pool "np-${z}" {
   cluster = renfry
   zone = z
   node_count = 1
 } where z in renfry.zones
 
-provider_config("kubernetes", {
+provider_config("k8s", {
   host: renfry.endpoint,
   ca: renfry.ca_certificate
 })
@@ -53,7 +53,7 @@ resource k8s.namespace dform_system {
 
 # A node pool is up once it has an instance group. Apply gives it, so the
 # comparison is decided the tick after the pool is created.
-node_pool_up(np) where gke_nodepool[np].instance_group != ""
+node_pool_up(np) where google.container_node_pool[np].instance_group != ""
 
 # dform in the cluster, running the workload stack: it lands on the first
 # zone's node pool once that pool is up. Until then the rule may derive
@@ -61,7 +61,7 @@ node_pool_up(np) where gke_nodepool[np].instance_group != ""
 resource k8s.deployment dform_controller {
   metadata.name = "dform-controller"
   metadata.namespace = dform_system.metadata.name
-  metadata.annotations = { "dform.io/node-pool": gke_nodepool[pool].instance_group }
+  metadata.annotations = { "dform.io/node-pool": google.container_node_pool[pool].instance_group }
   spec.replicas = 1
   spec.selector.matchLabels = { app: "dform-controller" }
   spec.template.metadata.labels = { app: "dform-controller" }

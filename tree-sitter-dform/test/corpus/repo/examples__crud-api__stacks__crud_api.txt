@@ -16,7 +16,7 @@ examples/crud-api/stacks/crud_api.df
 # From proposals/G-corpus/crud_api.org (edition 2026 there; the compiler
 # reads 2026). It plans against the mock (dform.toml: the built-in k8s
 # schema and this project's providers/google and providers/random), and
-# applies to a cluster with kubernetes = "providers/k8s" there. In
+# applies to a cluster with k8s = "providers/k8s" there. In
 # production the release and the approvals come from git:
 #   input release(app, key, value) from facts("data/releases.facts")
 # The live objects are read through the kubernetes provider's inventory
@@ -35,7 +35,7 @@ input approve(type, address) from facts("data/approvals.facts")
 
 # Sources and versions are dform.toml's.
 provider google
-provider kubernetes
+provider k8s
 provider random
 
 # `provider random {}` brings random.password(+key, -value: secret(string))
@@ -75,12 +75,12 @@ let rollout = next where not has active
 # The database: private, regional in prod, password from an extern
 ########################################
 
-resource google_compute_network vpc {
+resource google.compute_network vpc {
   name = "shop-${env}"
   auto_create_subnetworks = false
 }
 
-resource google_sql_database_instance db {
+resource google.sql_database_instance db {
   name = "crud-api-${env}"
   region
   database_version = "POSTGRES_16"
@@ -93,12 +93,12 @@ resource google_sql_database_instance db {
   }
 }
 
-resource google_sql_database crud_db {
+resource google.sql_database crud_db {
   instance = db.name
   name = "crud_api"
 }
 
-resource google_sql_user crud_user {
+resource google.sql_user crud_user {
   instance = db.name
   name = "crud_api"
   password = random.password["crud-api-db"]
@@ -308,13 +308,13 @@ deny "image not pinned by digest" { workload: w, image: c.image } where {
 
 deny "prod database must be regional" { db: d } where {
   env == "prod"
-  d in google_sql_database_instance
+  d in google.sql_database_instance
   not d.settings.availability_type == "REGIONAL"
 }
 
 # Absent is public: Cloud SQL's default for ipv4_enabled is true.
 deny "database has a public IP" { db: d } where {
-  d in google_sql_database_instance
+  d in google.sql_database_instance
   not d.settings.ip_configuration.ipv4_enabled == false
 }
 
@@ -615,6 +615,7 @@ auto_reconcile(t, a, p) where drift(t, a, p, _, _), owned_label(l), p == "metada
   (comment)
   (resource
     (dotted_name
+      (identifier)
       (identifier))
     (identifier)
     (block
@@ -631,6 +632,7 @@ auto_reconcile(t, a, p) where drift(t, a, p, _, _), owned_label(l), p == "metada
         (false))))
   (resource
     (dotted_name
+      (identifier)
       (identifier))
     (identifier)
     (block
@@ -691,6 +693,7 @@ auto_reconcile(t, a, p) where drift(t, a, p, _, _), owned_label(l), p == "metada
                 (identifier))))))))
   (resource
     (dotted_name
+      (identifier)
       (identifier))
     (identifier)
     (block
@@ -707,6 +710,7 @@ auto_reconcile(t, a, p) where drift(t, a, p, _, _), owned_label(l), p == "metada
           (string_content)))))
   (resource
     (dotted_name
+      (identifier)
       (identifier))
     (identifier)
     (block
@@ -1754,7 +1758,9 @@ auto_reconcile(t, a, p) where drift(t, a, p, _, _), owned_label(l), p == "metada
           (string_content)))
       (in_literal
         (identifier)
-        (identifier))
+        (member_expression
+          (identifier)
+          (identifier)))
       (not_literal
         (comparison
           (member_expression
@@ -1775,7 +1781,9 @@ auto_reconcile(t, a, p) where drift(t, a, p, _, _), owned_label(l), p == "metada
     (body_block
       (in_literal
         (identifier)
-        (identifier))
+        (member_expression
+          (identifier)
+          (identifier)))
       (not_literal
         (comparison
           (member_expression

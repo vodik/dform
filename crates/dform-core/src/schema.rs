@@ -677,6 +677,16 @@ pub fn builtin(name: &str) -> Option<&'static str> {
     })
 }
 
+/// The extern answers a built-in schema's mock gives
+/// (`crates/dform-mock/schemas/<name>.externs.df`), as
+/// `providers/<name>/externs.df` does for a project's own schema.
+pub fn builtin_answers(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "aws-mock" => include_str!("../../dform-mock/schemas/aws-mock.externs.df"),
+        _ => return None,
+    })
+}
+
 /// Resolve `--provider NAME`: a path to a `.df` file; else
 /// `providers/NAME/schema.df` under the working directory; else a built-in.
 pub fn load_provider(name: &str) -> Result<Schema> {
@@ -737,10 +747,10 @@ mod tests {
             Some(NullClass::Secret)
         );
         assert_eq!(s.class_of("k8s.namespace", "uid"), Some(NullClass::Fresh));
-        assert_eq!(s.class_of("gke_cluster", "zones"), Some(NullClass::Open));
+        assert_eq!(s.class_of("google.container_cluster", "zones"), Some(NullClass::Open));
         assert_eq!(
             s.provider_of.get("k8s.secret").map(String::as_str),
-            Some("kubernetes")
+            Some("k8s")
         );
         assert_eq!(s.provider_of.get("google.client_config"), None);
         assert_eq!(s.computed.len(), 17);

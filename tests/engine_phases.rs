@@ -6,13 +6,13 @@ use common::{Scratch, repo};
 
 const GKE_PLAN: &str = r#"plan: 3 deformations (3 create), 4 pending, 1 undetermined
 definite:
-+ google_compute_subnetwork["gke_subnet"]
++ google.compute_subnetwork["gke_subnet"]
   ip_cidr_range = "10.141.76.0/22"
   name = "renfry-dev-gke-subnet"
   network = "projects/renfry-dev-973682/global/networks/renfry-dev-network"
   project = "renfry-dev-973682"
   region = "us-east1"
-+ gke_cluster["pngu"]
++ google.container_cluster["pngu"]
   deletion_protection = true
   env = "dev"
   master_control_plane_cidr = "172.16.3.96/28"
@@ -21,13 +21,13 @@ definite:
   node_locations[0] = "us-east1-b"
   node_locations[1] = "us-east1-c"
   project_id = "renfry-dev-973682"
-  subnetwork_id = ?google_compute_subnetwork["gke_subnet"]
-+ google_compute_address["static_ip"]
+  subnetwork_id = ?google.compute_subnetwork["gke_subnet"]
++ google.compute_address["static_ip"]
   name = "pngu-grpc"
   project = "renfry-dev-973682"
   region = "us-east1"
-  subnetwork_id = ?google_compute_subnetwork["gke_subnet"]
-pending on ?gke_cluster["pngu"].ca_certificate ?gke_cluster["pngu"].endpoint (resolves after tick 1):
+  subnetwork_id = ?google.compute_subnetwork["gke_subnet"]
+pending on ?google.container_cluster["pngu"].ca_certificate ?google.container_cluster["pngu"].endpoint (resolves after tick 1):
 + k8s.deployment["api"]
   image = "gcr.io/renfry/api:1.42"
   namespace = "pngu"
@@ -38,19 +38,19 @@ pending on ?gke_cluster["pngu"].ca_certificate ?gke_cluster["pngu"].endpoint (re
   data.password = (sensitive google.secret_manager_secret_version["db_pw"].secret_data)
   namespace = "pngu"
 pending groups:
-? gke_nodepool[?] x unknown, on ?gke_cluster["pngu"].zones, resolves after tick 1  (member/2 over a null list)
+? google.container_node_pool[?] x unknown, on ?google.container_cluster["pngu"].zones, resolves after tick 1  (member/2 over a null list)
 undetermined:
-? deny "cluster must be in at least two zones" on ?gke_cluster["pngu"].zones, decided after tick 1  (reads undetermined aggregate zone_count)
+? deny "cluster must be in at least two zones" on ?google.container_cluster["pngu"].zones, decided after tick 1  (reads undetermined aggregate zone_count)
 apply order:
   tick 1
-    google_compute_subnetwork["gke_subnet"]
-    gke_cluster["pngu"]
-    google_compute_address["static_ip"]
+    google.compute_subnetwork["gke_subnet"]
+    google.container_cluster["pngu"]
+    google.compute_address["static_ip"]
   tick 2
     k8s.deployment["api"]
     k8s.namespace["pngu"]
     k8s.secret["db_credentials"]
-    gke_nodepool[?]
+    google.container_node_pool[?]
 "#;
 
 /// Three definite, three pending on the kubernetes provider's configuration,
@@ -142,7 +142,7 @@ fn gke_two_phase_applies_in_two_ticks() {
     assert!(
         r.stderr.contains(
             "apply stopped after tick 1: tick 2 adds 2 deformations the plan could not name \
-             (gke_nodepool[?] on ?gke_cluster[\"pngu\"].zones)"
+             (google.container_node_pool[?] on ?google.container_cluster[\"pngu\"].zones)"
         ),
         "{}",
         r.stderr
@@ -150,9 +150,9 @@ fn gke_two_phase_applies_in_two_ticks() {
     assert_eq!(
         world_resources(&s),
         [
-            "gke_cluster::pngu",
-            "google_compute_address::static_ip",
-            "google_compute_subnetwork::gke_subnet",
+            "google.compute_address::static_ip",
+            "google.compute_subnetwork::gke_subnet",
+            "google.container_cluster::pngu",
         ]
     );
     let r = gke(&s, "gke_two_phase.df", &["apply"]).success();
@@ -166,11 +166,11 @@ fn gke_two_phase_applies_in_two_ticks() {
     assert_eq!(
         world_resources(&s),
         [
-            "gke_cluster::pngu",
-            "gke_nodepool::np-us-east1-b",
-            "gke_nodepool::np-us-east1-c",
-            "google_compute_address::static_ip",
-            "google_compute_subnetwork::gke_subnet",
+            "google.compute_address::static_ip",
+            "google.compute_subnetwork::gke_subnet",
+            "google.container_cluster::pngu",
+            "google.container_node_pool::np-us-east1-b",
+            "google.container_node_pool::np-us-east1-c",
             "k8s.deployment::api",
             "k8s.namespace::pngu",
             "k8s.secret::db_credentials",
@@ -204,9 +204,9 @@ fn gke_one_zone_stops_after_tick_one() {
     assert_eq!(
         world_resources(&s),
         [
-            "gke_cluster::pngu",
-            "google_compute_address::static_ip",
-            "google_compute_subnetwork::gke_subnet",
+            "google.compute_address::static_ip",
+            "google.compute_subnetwork::gke_subnet",
+            "google.container_cluster::pngu",
         ]
     );
 }

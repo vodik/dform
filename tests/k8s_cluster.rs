@@ -490,7 +490,7 @@ fn a_kubeconfig_held_as_a_secret_configures_the_provider() {
         &format!(
             "edition 2026\ninput kubeconfig: secret(string)\n\
              provider k8s {{ source = \"./providers/k8s\" }}\n\
-             provider_config(\"kubernetes\", {{ kubeconfig: k }}) where kubeconfig(k)\n\
+             provider_config(\"k8s\", {{ kubeconfig: k }}) where kubeconfig(k)\n\
              resource k8s.namespace test {{\n  metadata.name = \"{}\"\n}}\n",
             ns.name
         ),

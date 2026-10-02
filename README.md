@@ -88,7 +88,7 @@ dform = ">=0.1"
 
 [providers]
 aws = { source = "aws-mock", version = "2.1" }   # `provider aws` in a program
-gcp = { source = "providers/gcp" }               # a path under the root
+google = { source = "providers/gcp" }            # a path under the root
 
 [defaults]
 backend = 'local("state/{stack}")'   # or 's3("bucket", "dform/{stack}", {...})'
@@ -463,7 +463,7 @@ executable to run instead; `dform-provider-fake` is the same mock as an
 executable of its own, for the conformance suite and use outside dform. A
 handshake carries the provider's build (`0.1.0+COMMIT`, the git commit it
 was built from), and dform refuses one of its built-in providers (the mock,
-`fakecloud`, and `dform-provider-k8s`, `kubernetes`) built otherwise:
+`fakecloud`, and `dform-provider-k8s`, `k8s`) built otherwise:
 `rebuild: cargo build --workspace`.
 
 The mock can pretend to be any provider: a provider it plays is a schema file of
@@ -493,9 +493,12 @@ Every resource's type is declared by the schema of the provider that applies
 it. One that none of the stack's providers declares is a plan (and apply)
 error before anything is planned, naming the resource, the `provider` blocks
 and the known schemas (the built-in ones and `providers/*/schema.df`) that do
-declare it: `provider fake does not declare google_compute_subnetwork;
-declared by: gke`. A type the program declares itself with a `type` block is
-the mock's to play.
+declare it: `provider fake does not declare google.compute_subnetwork;
+declared by: gke`. A provider's types are named under it (`aws.vpc` is
+provider aws's), so the error says which `provider` statement to add. A
+type the program declares itself with a `type` block is the mock's to
+play. A mock playing several providers on one link (`provider google`
+and `provider k8s` on mock schemas) takes no settings from any of them.
 
 A `provider` block's settings other than `source` configure the provider,
 and read like any rule reads: inputs, settings rows, value names, tables and
@@ -626,7 +629,7 @@ provider k8s { source = "bin/dform-provider-k8s" }        # an executable
 ```
 
 - A program may name the cluster itself, as a managed cluster's kubeconfig
-  arrives: `provider_config("kubernetes", { kubeconfig: K })` with `K` the
+  arrives: `provider_config("k8s", { kubeconfig: K })` with `K` the
   text of a kubeconfig (its current context), or `{ host: H, ca: C, token:
   T }` (`client_certificate` and `client_key` instead of `token`; `ca` and
   those as PEM or base64 of it; optionally `namespace`). The value may be a
@@ -793,8 +796,8 @@ and the sections follow in this order; what cannot be decided yet is said so:
   stuck on, or an update whose new value is an open null against the world's
   value. Their diffs are shown now. The hint appears when the nulls' owners
   are scheduled by this plan.
-- `pending groups:` resource rules stuck on a null (`gke_nodepool.? x
-  unknown, on ?gke_cluster/pngu#zones`): how many there will be is not known.
+- `pending groups:` resource rules stuck on a null (`google.container_node_pool.? x
+  unknown, on ?google.container_cluster/pngu#zones`): how many there will be is not known.
   A resource rule that reads a predicate with a stuck instance is one too
   (`(reads node_pool_up("np-a"), which is stuck)`): it may derive after the
   boundary, so `apply` runs another tick for it.
@@ -888,7 +891,7 @@ run goes on, the next tick deforming it back:
 
 ```bash
 cargo run -- -C examples/gke dev \
-  --chaos 'mutate=gke_cluster["pngu"].deletion_protection=false' apply gke_two_phase   # drift, tick 2 undoes it
+  --chaos 'mutate=google.container_cluster["pngu"].deletion_protection=false' apply gke_two_phase   # drift, tick 2 undoes it
 ```
 
 Deletes and replacement. Deletes run after every create and update, in
@@ -899,7 +902,7 @@ replacement goes is the schema's `type_replace(T, Order)`: `destroy_first`
 `-/+` unless `lifecycle(r, "create_before_destroy")` says `+/-`. That fact
 on a `destroy_first` type is an error naming the type; on a `create_first`
 type it is redundant. In the mocks a Kubernetes Deployment or Service and an
-`aws_instance` are `create_first`, a Namespace and an `aws_s3_bucket`
+`aws.instance` are `create_first`, a Namespace and an `aws.s3_bucket`
 `destroy_first`, the fake `net.vpc` `either`. A `-/+` replace deletes the old
 object, then creates the new one under the same name. A `+/-` one: the new object is
 created first under a free name (`main-2`), the old one is *deposed* (kept in
@@ -1037,7 +1040,7 @@ G=examples/gke/stacks/gke_two_phase.df
 cargo run -- dev --world w.json plan $G --out plan.json
 cargo run -- apply plan.json                          # tick 1; tick 2's nodepools it could not name
 # the world moves after tick 1: the file refuses
-cargo run -- dev --chaos 'mutate=gke_cluster["pngu"].name="other"' apply plan.json
+cargo run -- dev --chaos 'mutate=google.container_cluster["pngu"].name="other"' apply plan.json
 ```
 
 A `sensitive` computed value never leaves the provider: what dform sees, stores
@@ -1279,7 +1282,7 @@ Secrets print as their label, `(sensitive T["A"].p)`: a value at a
 rule that forwards a secret does not leak it either.
 
 Rows print values as the program writes them: a reference is the address
-it names, `google_sql_database_instance["db"].name`, an unknown its
+it names, `google.sql_database_instance["db"].name`, an unknown its
 `?T["A"].p` label.
 
 `dform why PATTERN` prints how a fact was derived, from the provenance
@@ -1488,7 +1491,7 @@ with their modes from its schema.
 provider file
 provider random
 
-resource google_monitoring_dashboard pngu {
+resource google.monitoring_dashboard pngu {
   dashboard_json = file.json["files/dashboard-pngu.json"]
 }
 ```
@@ -1705,7 +1708,7 @@ type settings {
   db.backup_days: int check 1 <= db.backup_days <= 35
   gke: { control_plane_cidr: inet check inet.prefix_len(control_plane_cidr) == 28 }
 }
-type gke_cluster { zones: list(string) check len(zones) >= 3 }
+type google.container_cluster { zones: list(string) check len(zones) >= 3 }
 ```
 
 A `check` over the value alone that fits the checkable table is a

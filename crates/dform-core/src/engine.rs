@@ -4360,8 +4360,8 @@ mod tests {
     fn aws_optional_computed_is_the_programs_when_set() {
         let schema = crate::schema::load_provider("aws-mock").unwrap().facts;
         let (r, violations) = run_with(
-            "resource aws_vpc main { cidr_block = \"10.0.0.0/16\" }
-             resource aws_security_group web { vpc_id = ref(\"aws_vpc\", \"main\", \"id\") }",
+            "resource aws.vpc main { cidr_block = \"10.0.0.0/16\" }
+             resource aws.security_group web { vpc_id = ref(\"aws.vpc\", \"main\", \"id\") }",
             &schema,
         )
         .unwrap();
@@ -4369,14 +4369,14 @@ mod tests {
         let attrs = facts_of(&r, "attr");
         assert!(
             attrs.contains(
-                &"attr(\"aws_vpc\", \"main\", \"cidr_block\", \"10.0.0.0/16\")".to_string()
+                &"attr(\"aws.vpc\", \"main\", \"cidr_block\", \"10.0.0.0/16\")".to_string()
             ),
             "{attrs:#?}"
         );
-        assert!(attrs.contains(&"attr(\"aws_security_group\", \"web\", \"name\", ?aws_security_group/web#name:Open)".to_string()), "{attrs:#?}");
+        assert!(attrs.contains(&"attr(\"aws.security_group\", \"web\", \"name\", ?aws.security_group/web#name:Open)".to_string()), "{attrs:#?}");
         assert!(
             attrs.contains(
-                &"attr(\"aws_security_group\", \"web\", \"vpc_id\", ?aws_vpc/main#id:Fresh)"
+                &"attr(\"aws.security_group\", \"web\", \"vpc_id\", ?aws.vpc/main#id:Fresh)"
                     .to_string()
             ),
             "{attrs:#?}"
@@ -4573,8 +4573,8 @@ mod tests {
             assert_eq!(
                 on.iter().cloned().collect::<Vec<_>>(),
                 [
-                    "gke_cluster/pngu#ca_certificate",
-                    "gke_cluster/pngu#endpoint"
+                    "google.container_cluster/pngu#ca_certificate",
+                    "google.container_cluster/pngu#endpoint"
                 ]
             );
         }
@@ -4582,7 +4582,7 @@ mod tests {
         assert_eq!(s.pending_groups.len(), 1, "{:?}", s.pending_groups);
         assert!(
             s.pending_groups[0].starts_with(
-                "want(\"gke_nodepool\", _) x unknown, on ?gke_cluster[\"pngu\"].zones"
+                "want(\"google.container_node_pool\", _) x unknown, on ?google.container_cluster[\"pngu\"].zones"
             )
         );
         assert_eq!(s.undetermined.len(), 1, "{:?}", s.undetermined);

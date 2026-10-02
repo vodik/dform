@@ -9,7 +9,7 @@ edition 2026
 input env: enum("dev", "stg", "prod") = "dev"
 
 provider google { source = "registry.dform.dev/google", version = ">=6" }
-provider kubernetes { source = "registry.dform.dev/kubernetes", version = ">=3" }
+provider k8s { source = "registry.dform.dev/k8s", version = ">=3" }
 provider file { source = "registry.dform.dev/file" }
 
 ########################################
@@ -188,7 +188,7 @@ deny("prod_deletion_protection", "prod cluster must have deletion protection", {
 # .endpoint and .ca_certificate are computed (open); .access_token is
 # computed and sensitive (secret). This fact is definite and carries three
 # nulls, so every kubernetes deformation is pending on them: phase 2.
-provider_config("kubernetes", {
+provider_config("k8s", {
   host: ref("gke.cluster", "pngu", "endpoint"),
   ca: ref("gke.cluster", "pngu", "ca_certificate"),
   token: ref(google.client_config, "current", "access_token")

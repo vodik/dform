@@ -150,7 +150,7 @@ fn a_refinement_on_a_null_is_deferred_and_fires_after_the_boundary() {
     let r = gke(&s, &["plan"]).success();
     assert!(
         r.stdout.contains(
-            "? refinement on ?gke_cluster[\"pngu\"].zones deferred: len_ge(3) of gke_cluster[\"pngu\"].zones, decided after tick 1\n"
+            "? refinement on ?google.container_cluster[\"pngu\"].zones deferred: len_ge(3) of google.container_cluster[\"pngu\"].zones, decided after tick 1\n"
         ),
         "{}",
         r.stdout
@@ -172,9 +172,9 @@ fn a_refinement_on_a_null_is_deferred_and_fires_after_the_boundary() {
     assert_eq!(
         made,
         [
-            "gke_cluster::pngu",
-            "google_compute_address::static_ip",
-            "google_compute_subnetwork::gke_subnet",
+            "google.compute_address::static_ip",
+            "google.compute_subnetwork::gke_subnet",
+            "google.container_cluster::pngu",
         ]
     );
 }
@@ -243,7 +243,7 @@ fn e0306_a_refinement_on_a_sensitive_path_the_provider_cannot_check() {
     let r = Run::from(out).failure();
     assert!(
         r.stderr.contains(
-            "p.df:4:3: E0306: a refinement on sensitive path k8s.secret .data.password cannot be checked by the engine, and provider kubernetes does not check refinements"
+            "p.df:4:3: E0306: a refinement on sensitive path k8s.secret .data.password cannot be checked by the engine, and provider k8s does not check refinements"
         ) && r.stderr.contains("1 error"),
         "{}",
         r.stderr
