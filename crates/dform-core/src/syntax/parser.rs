@@ -92,7 +92,7 @@ fn word(k: SyntaxKind) -> bool {
 /// A statement of a file's header (R-27): what the program takes, before
 /// its body.
 fn header_stmt(k: SyntaxKind) -> bool {
-    matches!(k, IMPORT_KW | KEY_KW | INPUT_KW)
+    matches!(k, KEY_KW | INPUT_KW)
 }
 
 fn is_cmp(k: SyntaxKind) -> bool {
@@ -109,10 +109,25 @@ fn old_spelling(word: &str) -> Option<&'static str> {
         "with" => "`with k = v` is spelled `set k = v`",
         "constraint" => "`constraint` is spelled `deny` (H-8)",
         "apply" => "`apply pack` is spelled `use pack`",
-        "component_def" => "`component_def` is spelled `module`",
-        "component" => "a component is a `module` and an `instance` of it",
-        "policy_pack" => "`policy_pack` is spelled `policy`",
+        "component_def" => "`component_def` is spelled `component`",
+        "module" => {
+            "`module` is gone (R-65): a module is a file, named by its path and brought in \
+             with `use PATH`; a thing copied with inputs is `component NAME { .. }`, made with \
+             `instance`"
+        }
+        "policy" | "policy_pack" => {
+            "`policy` is gone (R-65): a policy pack is a module, a file of `set`, `deny` and \
+             `warn` statements, applied with `use PATH`"
+        }
         "apply_policy" => "`apply_policy` is spelled `use`",
+        "import" => {
+            "`import` is gone (R-65): `use PATH` brings in a module by its path from the \
+             project root, `use modules.net` for modules/net.df"
+        }
+        "export" => {
+            "`export` is gone (R-65): a module's items are public, and a component's outputs \
+             are its public face"
+        }
         "unique" => "`unique` is gone: one value per key is what the attribute aggregate enforces",
         "contributes" => {
             "`contributes` is gone (R-5): a write needs no grant, delete the line; a module's \
@@ -565,8 +580,8 @@ impl<'a> Parser<'a> {
                  line {line}"
             ),
             hint: Some(
-                "a file is `edition`, then its header (`import`, `key`, `input`), then its \
-                 body; `dform fmt` moves it"
+                "a file is `edition`, then its header (`key`, `input`), then its body; \
+                 `dform fmt` moves it"
                     .to_string(),
             ),
             misplaced: true,
@@ -606,7 +621,6 @@ impl<'a> Parser<'a> {
         }
         match k {
             EDITION_KW => self.simple(EDITION, |p| p.expect(INT)),
-            IMPORT_KW => self.simple(IMPORT, |p| p.expect(STRING)),
             // `provider aws`: a block with no entries is left out (R-26).
             PROVIDER_KW => self.simple(PROVIDER, |p| {
                 p.expect_word()?;
@@ -706,23 +720,6 @@ impl<'a> Parser<'a> {
                 p.eat(RANK);
                 p.opt_where_body()
             }),
-            // `export type NAME`: a module's type alias, for its importers.
-            // A relation is not exported (R-5): it leaves through an output.
-            EXPORT_KW => self.simple(EXPORT, |p| {
-                if !p.eat(TYPE_KW) {
-                    let msg = format!("expected `type`, found {}", p.found());
-                    p.error_here(
-                        msg,
-                        Some(
-                            "`export p` is gone: a module's relations are private to each \
-                             instance; pass the value through an output, `output p = ...`"
-                                .to_string(),
-                        ),
-                    );
-                    return Err(Bail);
-                }
-                p.expect_word()
-            }),
             EXTERN_KW => self.simple(EXTERN, |p| {
                 p.dotted("an extern name")?;
                 p.expect(L_PAREN)?;
@@ -773,17 +770,39 @@ impl<'a> Parser<'a> {
                 }
                 Ok(())
             }),
-            MODULE_KW | POLICY_KW => {
-                let kind = if k == MODULE_KW { MODULE } else { POLICY };
-                self.simple(kind, |p| {
+            // `component NAME { .. }`: a component declared as an item.
+            COMPONENT_KW => self.simple(COMPONENT, |p| {
+                p.expect_word()?;
+                p.stmt_block()
+            }),
+            // `use PATH [as NAME] [{ .. }] [where B]` (R-65): a module
+            // imported once, or a stack's deployments.
+            USE_KW => self.simple(USE, |p| {
+                p.dotted("a module's path")?;
+                if p.at_contextual("as") {
+                    p.bump();
                     p.expect_word()?;
-                    p.stmt_block()
-                })
-            }
-            USE_KW => self.simple(USE, |p| p.expect_word()),
+                }
+                p.opt_block()?;
+                p.opt_clause()
+            }),
+            // `instance PATH NAME [{ .. }] [where B]`: a named copy (R-65).
             INSTANCE_KW => self.simple(INSTANCE, |p| {
-                p.expect_word()?;
-                p.expect_word()?;
+                p.dotted("a component's path")?;
+                if word(p.nth(0)) && !matches!(p.nth(0), WHERE_KW | IF_KW) {
+                    p.bump();
+                } else {
+                    let msg = format!("expected the instance's name, found {}", p.found());
+                    p.error_here(
+                        msg,
+                        Some(
+                            "a copy is named, `instance network blue`; a module is imported \
+                             once by `use`, under its name"
+                                .into(),
+                        ),
+                    );
+                    return Err(Bail);
+                }
                 p.opt_block()?;
                 p.opt_clause()
             }),
@@ -1487,7 +1506,17 @@ impl<'a> Parser<'a> {
                 self.bump();
                 self.with_nl(false, |p| {
                     loop {
-                        p.term()?;
+                        // `[k=v, ..]`: a stack's deployment by its keys
+                        // (R-65).
+                        if word(p.nth(0)) && p.raw(1) == EQ {
+                            p.start(NAMED_ARG);
+                            p.bump();
+                            p.bump();
+                            p.term()?;
+                            p.finish();
+                        } else {
+                            p.term()?;
+                        }
                         if !p.eat(COMMA) {
                             break;
                         }
@@ -1662,12 +1691,15 @@ mod tests {
             ("with env = \"prod\"\n", "`set k = v`"),
             ("constraint \"m\" where p(1)\n", "spelled `deny`"),
             ("apply baseline\n", "`use pack`"),
+            ("module network {}\n", "a module is a file"),
+            ("policy baseline {}\n", "a policy pack is a module"),
+            ("import \"modules/net.df\"\n", "`use modules.net`"),
+            ("export type t\n", "`export` is gone (R-65)"),
             ("k = 1\n", "`let k = t`"),
             ("r.tags = {}\n", "`set r.path = t`"),
             ("decl p/2\n", "`decl p(a, b)`"),
-            ("module m {\n  export p\n}\n", "`export p` is gone"),
             (
-                "policy p {\n  contributes t.tags\n}\n",
+                "component p {\n  contributes t.tags\n}\n",
                 "`contributes` is gone",
             ),
             ("stack shop[env] {}\n", "`key env: T` keys it"),
@@ -1707,10 +1739,10 @@ mod tests {
 
     #[test]
     fn an_alias_is_not_a_type_block() {
-        let src = "type env = enum(\"a\")\ntype net.vpc { cidr: string }\nmodule m {\n  export type env\n}\n";
+        let src = "type env = enum(\"a\")\ntype net.vpc { cidr: string }\ncomponent m {\n  type env = string\n}\n";
         assert_eq!(
-            kinds(src, &[TYPE_ALIAS, TYPE_DECL, EXPORT]),
-            vec![TYPE_ALIAS, TYPE_DECL, EXPORT]
+            kinds(src, &[TYPE_ALIAS, TYPE_DECL, COMPONENT]),
+            vec![TYPE_ALIAS, TYPE_DECL, COMPONENT, TYPE_ALIAS]
         );
         assert!(errors(src).is_empty(), "{:?}", errors(src));
     }
@@ -1795,8 +1827,9 @@ mod tests {
     /// a module's statements are its own.
     #[test]
     fn the_header_comes_before_the_body() {
-        let src = "edition 2026\nimport \"a.df\"\nkey env: string\ninput n: int\n\
-                   input p(a) from facts(\"p.facts\")\nprovider fake {}\np(1)\nmodule m {\n  r(1)\n  input k: int\n}\n";
+        let src = "edition 2026\nkey env: string\ninput n: int\n\
+                   input p(a) from facts(\"p.facts\")\nuse config\nprovider fake {}\np(1)\n\
+                   component m {\n  r(1)\n  input k: int\n}\ninstance m a\n";
         assert!(errors(src).is_empty(), "{:?}", errors(src));
         let src =
             "edition 2026\nprovider fake {}\nkey env: string\nq(1)\ninput p(a) from facts(\"p\")\n";
@@ -1831,7 +1864,7 @@ mod tests {
 
     #[test]
     fn errors_inside_a_block_recover_at_the_brace() {
-        let src = "module m {\n  p(a) where ,\n  q(b)\n}\nr(c)\n";
+        let src = "component m {\n  p(a) where ,\n  q(b)\n}\nr(c)\n";
         assert_eq!(errors(src).len(), 1, "{:?}", errors(src));
     }
 }

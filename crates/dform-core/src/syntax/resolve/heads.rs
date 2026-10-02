@@ -7,13 +7,14 @@
 //! | type namespace       | a dotted type (`net` of `net.vpc`)             |
 //! | provider             | its externs (`file` of `file.json`)            |
 //! | function package     | `std/*.df` (`inet` of `inet.subnet`)           |
-//! | module               | `module network { .. }` (`network.main.vpc`)   |
-//! | root                 | `settings`, `world`, `stacks`                  |
+//! | module               | `component network { .. }`, `use config`,      |
+//! |                      | `instance network blue` (`blue.vpc`)           |
+//! | root                 | `settings`, `world`                            |
 //!
 //! A provider's types and its externs share its name (`dns.record`,
 //! `dns.lookup`): one owner, not a collision. Anything else two kinds
-//! claim is: a module may not take a type namespace's name (`iam.main.k`
-//! and `iam.role[..]` would read alike).
+//! claim is: a module, component or instance may not take a type namespace's
+//! name (`iam.k` and `iam.role[..]` would read alike).
 
 use super::*;
 
@@ -27,7 +28,7 @@ enum Head {
     Root,
 }
 
-const ROOTS: &[&str] = &["settings", "world", "stacks"];
+const ROOTS: &[&str] = &["settings", "world"];
 
 impl Lowerer<'_> {
     /// Every head the program and `std/*.df` claim, checked for collisions.
@@ -69,13 +70,33 @@ impl Lowerer<'_> {
             };
             for n in u.root.descendants() {
                 match n.kind() {
-                    MODULE => {
+                    COMPONENT => {
                         let m = word_text(&n, 1);
                         claim(
                             &m,
                             Head::Module,
                             Some(span(&n)),
-                            format!("the module `{m}`"),
+                            format!("the component `{m}`"),
+                        );
+                    }
+                    USE => {
+                        let (path, m) = use_parts(&n);
+                        if path.split('.').next() != Some("std") {
+                            claim(
+                                &m,
+                                Head::Module,
+                                Some(span(&n)),
+                                format!("the module `{m}` (`use {path}`)"),
+                            );
+                        }
+                    }
+                    INSTANCE => {
+                        let (path, m) = instance_parts(&n);
+                        claim(
+                            &m,
+                            Head::Module,
+                            Some(span(&n)),
+                            format!("the instance `{m}` of `{path}`"),
                         );
                     }
                     EXTERN | RESOURCE | TYPE_DECL => {

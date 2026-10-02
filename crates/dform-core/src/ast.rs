@@ -129,10 +129,11 @@ pub enum Stmt {
     Stack(Config),
     /// `provider name { ... }`: a provider the program uses (`stack`).
     Provider(Config),
-    PolicyPack(PolicyPack),
-    ApplyPolicy(ApplyPolicy),
+    /// `use PATH [as NAME] [{ k = v }] [where B]`: a module imported into
+    /// the scope (R-65), its inputs the block's: one copy of the file, as
+    /// an `instance` is one of a component.
+    Use(Instance),
     Resource(Resource),
-    Import(Import),
     Settings(Settings),
     Decl(Decl),
     Extern(Extern),
@@ -239,23 +240,34 @@ pub struct Decl {
     pub span: Span,
 }
 
-/// `module name { ... }` (E DR-3): its predicates are private to each
-/// instance; values leave it through outputs.
+/// A module or a component (R-65): a module is a file, named by its path
+/// from the project root (`config`, `modules.net`), imported by `use`; a
+/// component is a `component NAME { .. }` item of one (`modules.net.vpc`;
+/// an entry file's is its own name), copied by `instance`. Either is
+/// stamped under a name: its predicates are that name's (`n::p`), its
+/// resources `n::x`, its values leaving it through outputs.
 #[derive(Debug, Clone)]
 pub struct Module {
     pub name: String,
+    pub component: bool,
     pub body: Vec<Stmt>,
     pub span: Span,
 }
 
-/// `instance module name { k = v ... } [where body]`: each `k = v` is a
-/// contribution to input `k` of instance `module.name`.
+/// `instance component name { k = v ... } [where body]`, or `use module
+/// [as name] { .. } [where body]`: each `k = v` is a contribution to input
+/// `k` of the copy `name` (R-65), `module` the component's or module's
+/// path.
 #[derive(Debug, Clone)]
 pub struct Instance {
     pub module: String,
     pub name: String,
     pub inputs: Vec<(String, Term, Span)>,
+    /// The clause and the block's reads: what each input's contribution
+    /// is derived under.
     pub body: Option<Vec<Lit>>,
+    /// The clause alone, `where B`: what the copy exists under.
+    pub clause: Option<Vec<Lit>>,
     pub span: Span,
 }
 
@@ -297,21 +309,6 @@ pub struct Config {
     pub span: Span,
 }
 
-/// `policy name { ... }`.
-#[derive(Debug, Clone)]
-pub struct PolicyPack {
-    pub name: String,
-    pub body: Vec<Stmt>,
-    pub span: Span,
-}
-
-/// `use name`: a policy pack applied to the program.
-#[derive(Debug, Clone)]
-pub struct ApplyPolicy {
-    pub name: String,
-    pub span: Span,
-}
-
 #[derive(Debug, Clone)]
 pub struct Resource {
     pub typ: Term,
@@ -339,12 +336,6 @@ pub struct FieldAssign {
     pub value: Term,
     /// `key = value @override`; `None` takes the block's rank.
     pub rank: Option<Rank>,
-    pub span: Span,
-}
-
-#[derive(Debug, Clone)]
-pub struct Import {
-    pub path: String,
     pub span: Span,
 }
 

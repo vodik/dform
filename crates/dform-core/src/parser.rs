@@ -47,8 +47,7 @@ fn program(name: &str, src: &str, require_edition: bool, mode: Mode) -> Result<P
     let units = [Unit {
         file,
         root: parse.syntax(),
-        imports: None,
-        links: Vec::new(),
+        path: None,
     }];
     resolve::lower(&units, &[0], require_edition, mode).map_err(|d| Diagnostics(d).into())
 }

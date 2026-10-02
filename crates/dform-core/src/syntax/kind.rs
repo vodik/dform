@@ -43,7 +43,6 @@ pub enum SyntaxKind {
     // Keywords: the statement keywords (a statement's first token), then
     // the body words, the clause word and the literals.
     EDITION_KW,
-    IMPORT_KW,
     PROVIDER_KW,
     KEY_KW,
     TYPE_KW,
@@ -53,10 +52,8 @@ pub enum SyntaxKind {
     OUTPUT_KW,
     LET_KW,
     SET_KW,
-    EXPORT_KW,
-    MODULE_KW,
+    COMPONENT_KW,
     INSTANCE_KW,
-    POLICY_KW,
     USE_KW,
     RESOURCE_KW,
     SETTINGS_KW,
@@ -83,7 +80,6 @@ pub enum SyntaxKind {
     /// Tokens skipped by error recovery.
     ERROR,
     EDITION,
-    IMPORT,
     PROVIDER,
     /// `input k: T [= t] [check B]`, or `key k: T [= t] [check B]`.
     INPUT,
@@ -91,7 +87,6 @@ pub enum SyntaxKind {
     INPUT_RELATION,
     /// `output k [: T] = t [where B]`.
     OUTPUT_DECL,
-    EXPORT,
     EXTERN,
     /// An extern's `+name: T`, a column `name [: T]`.
     BIND_ARG,
@@ -99,9 +94,11 @@ pub enum SyntaxKind {
     ATTR_DECL,
     TYPE_EXPR,
     DECL,
-    MODULE,
+    /// `component NAME { stmt* }`: a component declared as an item.
+    COMPONENT,
+    /// `instance PATH [NAME] [{ entry* }] [where B]`.
     INSTANCE,
-    POLICY,
+    /// `use PATH [as NAME] [where B]`.
     USE,
     RESOURCE,
     SETTINGS,
@@ -110,7 +107,7 @@ pub enum SyntaxKind {
     /// `path (=|+=) term [rank]` in a block.
     ASSIGN,
     BLOCK_PATH,
-    /// `{ stmt* }` of a module or policy.
+    /// `{ stmt* }` of a component.
     STMT_BLOCK,
     RULE,
     FACT,

@@ -12,31 +12,32 @@ use lsp_types::Location;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-/// The block a name is declared in, innermost: `module network`, `policy
-/// baseline`; `None` for the program's top.
+/// The block a name is declared in, innermost: `component network`;
+/// `None` for a file's top.
 pub type Scope = Option<String>;
 
 /// A name the program declares.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Symbol {
     /// A relation, an extern or a builtin: `p(..)`, `p[..]`, `decl p/N`;
-    /// the program's (`None`), or private to the module or policy pack
-    /// that defines it, as `modules::module_names` scopes it.
+    /// the program's (`None`), or private to the component that defines
+    /// it, as `modules::expand` scopes it.
     Predicate(Scope, String),
-    /// An input, a module input or a value rule `k = t`, in its scope.
+    /// An input, a component's input or a value rule `k = t`, in its
+    /// scope.
     Value(Scope, String),
     /// `let a = CHAIN`, in its scope.
     Let(Scope, String),
     /// `type NAME = TYPE`.
     Alias(String),
+    /// A component, or the name a `use` binds (R-65).
     Module(String),
-    /// `instance m i`: module and instance.
+    /// `instance c n`: the component's path and the instance's name.
     Instance(String, String),
-    /// `resource T n`: the module it is declared in, and its name.
+    /// `resource T n`: the component it is declared in, and its name.
     Resource(Option<String>, String),
     /// `settings n`.
     Settings(String),
-    Policy(String),
 }
 
 /// What a name token is.
@@ -61,17 +62,16 @@ pub enum What {
 pub struct Decls {
     lets: BTreeSet<(Scope, String)>,
     values: BTreeSet<(Scope, String)>,
-    /// By module and name: each static resource's type.
+    /// By component and name: each static resource's type.
     resources: BTreeMap<(Option<String>, String), String>,
     modules: BTreeSet<String>,
     /// Every relation's name, wherever it is defined.
     predicates: BTreeSet<String>,
-    /// The relations each module or pack defines.
+    /// The relations each component defines.
     defined: BTreeSet<(Scope, String)>,
     aliases: BTreeSet<String>,
     /// Resource headers' and `type` blocks' types.
     types: BTreeSet<String>,
-    policies: BTreeSet<String>,
     settings: BTreeSet<String>,
     instances: BTreeSet<(String, String)>,
 }
@@ -87,14 +87,17 @@ impl Decls {
                     SyntaxKind::LET => d.lets.extend(name().map(|x| (scope(), x))),
                     SyntaxKind::INPUT => d.values.extend(name().map(|x| (scope(), x))),
                     SyntaxKind::TYPE_ALIAS => d.aliases.extend(name()),
-                    SyntaxKind::MODULE => d.modules.extend(name()),
-                    SyntaxKind::POLICY => d.policies.extend(name()),
+                    SyntaxKind::COMPONENT => d.modules.extend(name()),
+                    SyntaxKind::USE => {
+                        d.modules
+                            .insert(dform_core::syntax::resolve::use_parts(&n).1);
+                    }
                     SyntaxKind::INSTANCE => {
-                        let ids = idents(&n);
-                        if let [m, i, ..] = ids.as_slice() {
-                            d.instances
-                                .insert((m.text().to_string(), i.text().to_string()));
+                        let (path, name) = dform_core::syntax::resolve::instance_parts(&n);
+                        if let Some(last) = path.rsplit('.').next() {
+                            d.modules.insert(last.to_string());
                         }
+                        d.instances.insert((path, name));
                     }
                     SyntaxKind::RESOURCE => {
                         if let Some(h) = header(&n) {
@@ -205,37 +208,31 @@ impl Decls {
             Symbol::Let(s, _) => self.lets.contains(&(s.clone(), n)),
             Symbol::Alias(_) => self.aliases.contains(name),
             Symbol::Module(_) => self.modules.contains(name),
-            Symbol::Instance(m, _) => self.instances.contains(&(m.clone(), n)),
+            Symbol::Instance(_, _) => self.instances.iter().any(|(_, i)| *i == n),
             Symbol::Resource(m, _) => self.resources.contains_key(&(m.clone(), n)),
             Symbol::Settings(_) => self.settings.contains(name),
-            Symbol::Policy(_) => self.policies.contains(name),
         }
     }
 }
 
-/// The innermost module or policy `node` is in (itself
-/// included).
+/// The innermost component `node` is in (itself included).
 pub fn scope_of(node: &SyntaxNode) -> Scope {
     node.ancestors().find_map(|a| {
-        let kw = match a.kind() {
-            SyntaxKind::MODULE => "module",
-            SyntaxKind::POLICY => "policy",
-            _ => return None,
-        };
-        Some(format!("{kw} {}", declared_name(&a)?.text()))
+        (a.kind() == SyntaxKind::COMPONENT)
+            .then(|| Some(format!("component {}", declared_name(&a)?.text())))?
     })
 }
 
-/// A scope that keeps relations private: a module's or a pack's.
+/// A scope that keeps relations private: a component's.
 fn private_scope(scope: Scope) -> Scope {
-    scope.filter(|s| s.starts_with("module ") || s.starts_with("policy "))
+    scope.filter(|s| s.starts_with("component "))
 }
 
-/// The module of a scope.
+/// The component of a scope.
 pub fn module_of(scope: &Scope) -> Option<String> {
     scope
         .as_deref()
-        .and_then(|s| s.strip_prefix("module "))
+        .and_then(|s| s.strip_prefix("component "))
         .map(str::to_string)
 }
 
@@ -361,21 +358,31 @@ pub fn classify(d: &Decls, t: &SyntaxToken) -> What {
         SyntaxKind::LET if is_declared() => decl(Symbol::Let(scope, name)),
         SyntaxKind::INPUT if is_declared() => decl(Symbol::Value(scope, name)),
         SyntaxKind::TYPE_ALIAS if is_declared() => decl(Symbol::Alias(name)),
-        SyntaxKind::MODULE if is_declared() => decl(Symbol::Module(name)),
-        SyntaxKind::POLICY if is_declared() => decl(Symbol::Policy(name)),
-        SyntaxKind::USE => used(Some(Symbol::Policy(name))),
+        SyntaxKind::COMPONENT if is_declared() => decl(Symbol::Module(name)),
+        // `use a.b [as n]`: the name it binds is declared here; the path is
+        // looked up (go-to-definition follows it).
+        SyntaxKind::USE => match dform_core::syntax::resolve::bound_token(&parent) {
+            Some(b) if &b == t => decl(Symbol::Module(name)),
+            _ => What::Other,
+        },
         SyntaxKind::PROVIDER => What::Provider,
         SyntaxKind::DECL | SyntaxKind::EXTERN | SyntaxKind::INPUT_RELATION
             if relation_name(&parent).as_ref() == Some(t) =>
         {
             What::Name(d.predicate(&scope, &name), true)
         }
-        SyntaxKind::EXPORT => used(Some(Symbol::Alias(name))),
-        SyntaxKind::INSTANCE => match idents(&parent).as_slice() {
-            [m, i, ..] if i == t => decl(Symbol::Instance(m.text().to_string(), name)),
-            [m, ..] if m == t => used(Some(Symbol::Module(name))),
-            _ => What::Other,
-        },
+        // `instance c n`: the path's segments name a module or a
+        // component in scope, `n` is the copy's.
+        SyntaxKind::INSTANCE => {
+            let (path, _) = dform_core::syntax::resolve::instance_parts(&parent);
+            let ids = idents(&parent);
+            let segs = path.split('.').count();
+            match ids.iter().position(|i| i == t) {
+                Some(k) if k >= segs => decl(Symbol::Instance(path, name)),
+                Some(_) => used(Some(Symbol::Module(name))),
+                None => What::Other,
+            }
+        }
         SyntaxKind::RESOURCE | SyntaxKind::SETTINGS => match header(&parent) {
             Some(h) if &h.name == t && h.is_static => {
                 if parent.kind() == SyntaxKind::RESOURCE {
@@ -387,11 +394,13 @@ pub fn classify(d: &Decls, t: &SyntaxToken) -> What {
             Some(h) if h.type_tokens.contains(t) => What::Type,
             _ => What::Other,
         },
+        // An alias, bare or read through its module (`network.subnets`,
+        // R-65).
         SyntaxKind::TYPE_EXPR => {
-            let dotted = own_tokens(&parent)
-                .iter()
-                .any(|x| x.kind() == SyntaxKind::DOT);
-            if !dotted && d.aliases.contains(&name) {
+            let toks = own_tokens(&parent);
+            let dotted = toks.iter().any(|x| x.kind() == SyntaxKind::DOT);
+            let last = toks.iter().rev().find(|x| x.kind() == SyntaxKind::IDENT);
+            if d.aliases.contains(&name) && (!dotted || last == Some(t)) {
                 used(Some(Symbol::Alias(name)))
             } else {
                 What::Type
@@ -402,13 +411,11 @@ pub fn classify(d: &Decls, t: &SyntaxToken) -> What {
             let block = parent.parent().and_then(|a| a.parent());
             let first = idents(&parent).first() == Some(t);
             match block.and_then(|b| b.parent()) {
-                Some(i) if i.kind() == SyntaxKind::INSTANCE && first => match idents(&i).first() {
-                    Some(m) => used(Some(Symbol::Value(
-                        Some(format!("module {}", m.text())),
-                        name,
-                    ))),
-                    None => What::Other,
-                },
+                Some(i) if i.kind() == SyntaxKind::INSTANCE && first => {
+                    let (path, _) = dform_core::syntax::resolve::instance_parts(&i);
+                    let m = path.rsplit('.').next().unwrap_or(&path).to_string();
+                    used(Some(Symbol::Value(Some(format!("component {m}")), name)))
+                }
                 Some(i) if i.kind() == SyntaxKind::INSTANCE => What::Other,
                 // An entry that is only a name is the pun `k = k` (R-33):
                 // the name is also its value, a `let`, an input or a
@@ -505,20 +512,21 @@ fn chain(d: &Decls, c: &SyntaxNode, t: &SyntaxToken, scope: &Scope) -> What {
             What::Path
         };
     }
-    // 5: a module's instance, `m.i`, `m[e]`, `m.i/n`.
+    // 5: an instance, `n.k`; a component's instances, `c[e].k`; a used
+    // module's value, `m.x` (R-65).
+    if let Some((c, _)) = d.instances.iter().find(|(_, i)| *i == name0)
+        && matches!(ps.get(1), Some(Part::Dot))
+    {
+        if k == 0 {
+            return What::Name(Symbol::Instance(c.clone(), name0), false);
+        }
+        return path(3);
+    }
     if d.modules.contains(&name0) && matches!(ps.get(1), Some(Part::Dot | Part::Index)) {
         if k == 0 {
             return What::Name(Symbol::Module(name0), false);
         }
-        // `m[e].k`: an output; after it, a path.
-        if matches!(ps.get(1), Some(Part::Index)) {
-            return path(4);
-        }
-        if k == 2 {
-            return What::Name(Symbol::Instance(name0, t.text().to_string()), false);
-        }
-        // `m.i.k`: an output; after it, a path.
-        return path(5);
+        return path(2);
     }
     // 6: a type followed by `.n` (the longest such type), a relation's
     // `p[..]`.
@@ -617,19 +625,25 @@ pub fn occurrences<'p>(
     out
 }
 
-/// Whether a chain reads module `m` by a dynamic index: `m[e]`.
+/// Whether a chain reads component `m` by a dynamic index: `m[e]`, or
+/// `net.m[e]` by its path.
 pub fn indexed(files: &[Parsed], m: &str) -> bool {
     files.iter().any(|f| {
         f.tree
             .descendants()
             .filter(|n| n.kind() == SyntaxKind::CHAIN)
-            .any(|c| matches!(parts(&c).as_slice(), [Part::Name(x), Part::Index, ..] if x.text() == m))
+            .any(|c| {
+                parts(&c)
+                    .windows(2)
+                    .any(|w| matches!(w, [Part::Name(x), Part::Index] if x.text() == m))
+            })
     })
 }
 
 /// Every address written as a string at the top of a program (H-16):
 /// the key of `T["a"]` and the left of `"a" in T`, with its type and value.
-/// Inside a module `T[e]` is relative to the instance, so those are left.
+/// Inside a component `T[e]` is relative to the instance, so those are
+/// left.
 pub fn addresses(files: &[Parsed]) -> Vec<(&Parsed, SyntaxToken, String, String)> {
     let mut out = Vec::new();
     let literal = |t: &SyntaxToken| {
@@ -654,7 +668,7 @@ pub fn addresses(files: &[Parsed]) -> Vec<(&Parsed, SyntaxToken, String, String)
     };
     for f in files {
         for n in f.tree.descendants() {
-            if n.ancestors().any(|a| a.kind() == SyntaxKind::MODULE) {
+            if n.ancestors().any(|a| a.kind() == SyntaxKind::COMPONENT) {
                 continue;
             }
             match n.kind() {
@@ -836,7 +850,7 @@ mod tests {
     const SRC: &str = r#"edition 2026
 input env: string = "staging"
 let cfg = settings[env]
-module network {
+component network {
   input vpc_net: inet
   # its interface: an input, a resource and an output
   resource net.vpc vpc {
@@ -848,7 +862,7 @@ module network {
 }
 instance network main { vpc_net = inet(cfg.a) }
 resource compute.vm bastion { private_ip = 1 }
-p(a) where a = net.vpc["network.main::vpc"].id, c = network.main.vpc, b = network[a].vpc, bastion.id == 1, bastion in compute.vm
+p(a) where a = net.vpc["main::vpc"].cidr, c = main.vpc, b = network[a].vpc, bastion.cidr == 1, bastion in compute.vm
 zone_index("a", 0)
 "#;
 
@@ -872,7 +886,7 @@ zone_index("a", 0)
 
     #[test]
     fn a_resource_is_found_by_its_name() {
-        // Its address from outside, `net.vpc["network.main::vpc"]`, is a string.
+        // Its address from outside, `net.vpc["main::vpc"]`, is a string.
         assert_eq!(
             names(SRC, &Symbol::Resource(Some("network".into()), "vpc".into())),
             vec![(6, true), (10, false), (11, false)]
@@ -889,7 +903,7 @@ zone_index("a", 0)
         assert_eq!(
             names(
                 SRC,
-                &Symbol::Value(Some("module network".into()), "vpc_net".into())
+                &Symbol::Value(Some("component network".into()), "vpc_net".into())
             ),
             vec![(4, true), (7, false), (13, false)]
         );
@@ -904,7 +918,7 @@ zone_index("a", 0)
         );
         assert_eq!(
             names(SRC, &Symbol::Module("network".into())),
-            vec![(3, true), (13, false), (15, false), (15, false)]
+            vec![(3, true), (13, false), (15, false)]
         );
         assert_eq!(
             names(SRC, &Symbol::Instance("network".into(), "main".into())),
@@ -917,11 +931,11 @@ zone_index("a", 0)
     }
 
     const PRIVATE: &str = r#"edition 2026
-module a {
+component a {
   helper(1)
   q(x) where helper(x), shared(x)
 }
-module b {
+component b {
   helper(2)
   r(x) where helper(x)
 }
@@ -932,8 +946,8 @@ s(x) where helper(x), shared(x)
 
     #[test]
     fn a_module_private_relation_is_its_modules_own() {
-        let a = Some("module a".to_string());
-        let b = Some("module b".to_string());
+        let a = Some("component a".to_string());
+        let b = Some("component b".to_string());
         assert_eq!(
             names(PRIVATE, &Symbol::Predicate(a, "helper".into())),
             vec![(2, true), (3, false)]

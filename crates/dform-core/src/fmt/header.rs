@@ -1,5 +1,5 @@
-//! A file's header (R-27): `edition`, then `import`, `key` and `input`
-//! lines (value inputs, then relation inputs), then the body. `fmt`
+//! A file's header (R-27): `edition`, then `key` and `input` lines (value
+//! inputs, then relation inputs), then the body. `fmt`
 //! places a header statement the author wrote out of that order, with the
 //! comments directly above it and on its line, keeping the author's order
 //! within a kind; the parser reports one written after the body began
@@ -11,7 +11,6 @@ use crate::syntax::{SyntaxElement, SyntaxNode};
 /// The rank of a top-level statement in the header, or `None` for the body.
 fn rank(n: &SyntaxNode) -> Option<u8> {
     match n.kind() {
-        IMPORT => Some(0),
         INPUT if crate::syntax::resolve::is_key(n) => Some(1),
         INPUT => Some(2),
         INPUT_RELATION => Some(3),

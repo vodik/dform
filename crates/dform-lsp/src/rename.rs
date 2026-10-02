@@ -26,7 +26,8 @@ pub fn prepare(p: &Project, path: &Path, at: usize) -> Result<(Range, String)> {
     // An instance whose name is also a string an `m[e]` reads: the
     // rename would not change the string, and `m[e]` would no longer
     // find the instance.
-    if let Symbol::Instance(m, i) = renameable(&what, &t)?
+    if let Symbol::Instance(path, i) = renameable(&what, &t)?
+        && let m = path.rsplit('.').next().unwrap_or(&path).to_string()
         && refs::indexed(&files, &m)
     {
         let places: Vec<String> = refs::strings(&files, &i)
@@ -39,7 +40,7 @@ pub fn prepare(p: &Project, path: &Path, at: usize) -> Result<(Range, String)> {
             .collect();
         if !places.is_empty() {
             bail!(
-                "instance {i} of module {m} is also the string \"{i}\" at {}, and \
+                "instance {i} of component {m} is also the string \"{i}\" at {}, and \
                  `{m}[..]` reads instances by such strings: a rename would not change the \
                  string",
                 places.join(", ")
@@ -107,12 +108,11 @@ fn describe(s: &Symbol) -> String {
         Symbol::Let(Some(scope), _) => format!("a let in {scope}"),
         Symbol::Let(None, _) => "a let".into(),
         Symbol::Alias(_) => "a type alias".into(),
-        Symbol::Module(_) => "a module".into(),
-        Symbol::Instance(m, _) => format!("an instance of module {m}"),
-        Symbol::Resource(Some(m), _) => format!("a resource in module {m}"),
+        Symbol::Module(_) => "a component or a used module".into(),
+        Symbol::Instance(m, _) => format!("an instance of component {m}"),
+        Symbol::Resource(Some(m), _) => format!("a resource in component {m}"),
         Symbol::Resource(None, _) => "a resource".into(),
         Symbol::Settings(_) => "a settings row".into(),
-        Symbol::Policy(_) => "a policy".into(),
     }
 }
 
@@ -241,19 +241,15 @@ impl Renaming {
             Symbol::Resource(None, _) => {
                 (Some(typ) == self.typ.as_deref() && a == old).then(|| new.clone())
             }
-            Symbol::Resource(Some(m), _) => {
+            // An address of a copy is `instance::name` (R-65): the copy
+            // does not say its component.
+            Symbol::Resource(Some(_), _) => {
                 let (inst, local) = a.split_once("::")?;
-                (Some(typ) == self.typ.as_deref() && local == old && inst.split_once('.')?.0 == m)
-                    .then(|| format!("{inst}::{new}"))
+                (Some(typ) == self.typ.as_deref() && local == old).then(|| format!("{inst}::{new}"))
             }
-            Symbol::Instance(m, _) => {
-                let rest = a.strip_prefix(&format!("{m}.{old}::"))?;
-                Some(format!("{m}.{new}::{rest}"))
-            }
-            Symbol::Module(_) => {
-                let (inst, rest) = a.split_once("::")?;
-                let i = inst.strip_prefix(&format!("{old}."))?;
-                Some(format!("{new}.{i}::{rest}"))
+            Symbol::Instance(_, _) => {
+                let rest = a.strip_prefix(&format!("{old}::"))?;
+                Some(format!("{new}::{rest}"))
             }
             _ => None,
         }
@@ -369,7 +365,7 @@ fn beside<'p>(found: &[(&'p Parsed, SyntaxToken, bool)]) -> Option<(&'p Parsed, 
     let node = t.parent()?;
     if !matches!(
         node.kind(),
-        SyntaxKind::RESOURCE | SyntaxKind::INSTANCE | SyntaxKind::MODULE
+        SyntaxKind::RESOURCE | SyntaxKind::INSTANCE | SyntaxKind::COMPONENT
     ) {
         return None;
     }

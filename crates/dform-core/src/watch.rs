@@ -92,7 +92,6 @@ pub fn take(program: &mut Program) -> Result<Vec<Relation>> {
 fn nested(s: &Stmt, diags: &mut Vec<Diagnostic>) {
     let body = match s {
         Stmt::Module(m) => &m.body,
-        Stmt::PolicyPack(p) => &p.body,
         _ => return,
     };
     for s in body {

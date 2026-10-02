@@ -795,11 +795,21 @@ impl Server<'_> {
             None => scoped.unwrap_or_default(),
         };
         let files = self.files(&root);
-        let modules = |name: &str| {
-            files.iter().find_map(|f| {
-                let (_, t) = self.tree(f)?;
-                nav::module_interface(&t, name)
-            })
+        // An instance's component: an item some file declares, else the
+        // file its path names (R-65).
+        let modules = |path: &str| {
+            let last = path.rsplit('.').next().unwrap_or(path);
+            files
+                .iter()
+                .find_map(|f| {
+                    let (_, t) = self.tree(f)?;
+                    nav::module_interface(&t, Some(last))
+                })
+                .or_else(|| {
+                    let (f, item) = nav::path_file(&root, path)?;
+                    let (_, t) = self.tree(&f)?;
+                    nav::module_interface(&t, item.as_deref())
+                })
         };
         Ok(complete::complete(&tree, &text, at, &schema, &modules))
     }
@@ -826,18 +836,39 @@ impl Server<'_> {
             }
             out
         };
-        let mut locs = find(&r);
-        // `zone_index[z]` and `network[ia]` read alike: a name that is no
-        // predicate may be a module's, and the other way round.
-        if locs.is_empty() {
-            let other = match &r {
-                nav::Ref::Predicate(n) => Some(nav::Ref::Module(n.clone())),
-                nav::Ref::Module(n) => Some(nav::Ref::Predicate(n.clone())),
-                nav::Ref::Policy(_) => None,
+        // A path is looked up from the root (R-65): its file, or the
+        // component it names in that file.
+        let by_path = |p: &str| -> Vec<Location> {
+            let Some((f, item)) = nav::path_file(&root, p) else {
+                return Vec::new();
             };
-            if let Some(o) = other {
-                locs = find(&o);
+            let Some((t, tree)) = self.tree(&f) else {
+                return Vec::new();
+            };
+            match item {
+                Some(i) => nav::definitions(&tree, &nav::Ref::Module(i))
+                    .into_iter()
+                    .map(|(s, e)| Location::new(text::uri_of(&f), text::range(&t, s, e)))
+                    .collect(),
+                None => vec![Location::new(text::uri_of(&f), text::range(&t, 0, 0))],
             }
+        };
+        let mut locs = match &r {
+            nav::Ref::Path(p) => by_path(p),
+            r => find(r),
+        };
+        // `zone_index[z]` and `network[ia]` read alike: a name that is no
+        // predicate may be a scope's, and the other way round; a component
+        // no file declares may be a file of its own.
+        if locs.is_empty() {
+            locs = match &r {
+                nav::Ref::Predicate(n) => find(&nav::Ref::Module(n.clone())),
+                nav::Ref::Module(n) => {
+                    let l = find(&nav::Ref::Predicate(n.clone()));
+                    if l.is_empty() { by_path(n) } else { l }
+                }
+                nav::Ref::Path(_) => Vec::new(),
+            };
         }
         Ok(locs)
     }

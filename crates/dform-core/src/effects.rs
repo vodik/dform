@@ -4,8 +4,7 @@
 //! (a non-constant type or path) prints `*` rather than guess what it
 //! would be once evaluated.
 //!
-//! A scope is the stack, a module instance (`module.instance`) or a policy
-//! pack `use`d. `modules::expand` already tags every statement it lowers
+//! A scope is the stack, an instance (by its name) or a module `use`d. `modules::expand` already tags every statement it lowers
 //! out of an instance or a pack with an origin (`diag::origin`); `compute`
 //! reads that tag back off each rule's head and each fact to recover the
 //! scope that wrote it. A rule's body literals carry no origin
@@ -94,20 +93,23 @@ fn canon_scope(s: &str) -> String {
     }
 }
 
-/// The scope a rule's head or a fact was lowered out of: `module M
-/// instance I` becomes `M.I`, `policy P` becomes `P`, untagged is the
-/// stack's own.
+/// The scope a rule's head or a fact was lowered out of: `instance C N`
+/// becomes `N`, `use M` the name it binds (`M`'s last segment, or its
+/// `as`), untagged is the stack's own.
 fn scope_of(span: Span) -> String {
     match diag::origin(span) {
         None => STACK.to_string(),
         Some(o) => {
-            if let Some(rest) = o.strip_prefix("module ") {
-                return match rest.split_once(" instance ") {
-                    Some((m, i)) => format!("{m}.{i}"),
-                    None => rest.to_string(),
-                };
+            if let Some(rest) = o.strip_prefix("instance ") {
+                return rest.rsplit(' ').next().unwrap_or(rest).to_string();
             }
-            o.strip_prefix("policy ").map(str::to_string).unwrap_or(o)
+            match o.strip_prefix("use ") {
+                Some(rest) => match rest.split_once(" as ") {
+                    Some((_, name)) => name.to_string(),
+                    None => rest.rsplit('.').next().unwrap_or(rest).to_string(),
+                },
+                None => o,
+            }
         }
     }
 }
@@ -222,14 +224,23 @@ fn classify_read(
     }
 }
 
-/// Declared outputs, by scope: the stack root's own and, per `instance`,
-/// its module's. Collected from the program before `modules::expand`
+/// Declared outputs, by scope: the stack root's own and, per `instance`
+/// or `use`, its component's or module's. Collected from the program before `modules::expand`
 /// (which drops the interface once it has scoped the body), so an output
 /// that is declared but never given a value is still offered.
 fn collect_offers(program: &Program, out: &mut BTreeMap<String, ScopeEffects>) {
     let mut module_outputs: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
-    for s in &program.statements {
-        let Stmt::Module(m) = s else { continue };
+    let mut defs = Vec::new();
+    fn definitions<'a>(stmts: &'a [Stmt], out: &mut Vec<&'a crate::ast::Module>) {
+        for s in stmts {
+            if let Stmt::Module(m) = s {
+                out.push(m);
+                definitions(&m.body, out);
+            }
+        }
+    }
+    definitions(&program.statements, &mut defs);
+    for m in defs {
         let mut outs = Vec::new();
         for st in &m.body {
             if let Stmt::Output(o) = st
@@ -256,8 +267,8 @@ fn collect_offers(program: &Program, out: &mut BTreeMap<String, ScopeEffects>) {
                     .offers
                     .insert(o.name.clone(), ty);
             }
-            Stmt::Instance(u) => {
-                let scope = format!("{}.{}", u.module, u.name);
+            Stmt::Instance(u) | Stmt::Use(u) => {
+                let scope = u.name.clone();
                 if let Some(outs) = module_outputs.get(&u.module) {
                     let entry = out.entry(scope).or_default();
                     for (k, t) in outs {

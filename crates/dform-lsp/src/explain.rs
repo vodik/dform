@@ -343,8 +343,9 @@ pub fn hover_at(p: &refs::Project, path: &Path, at: usize) -> Option<String> {
     let t = nav::token_at(&f.tree, at)?;
     // `check` is a word only where it opens a refinement.
     let refinement = t.kind() == SyntaxKind::IDENT
-        && t.parent()
-            .is_some_and(|n| n.kind() == SyntaxKind::REFINEMENT && n.first_token().as_ref() == Some(&t));
+        && t.parent().is_some_and(|n| {
+            n.kind() == SyntaxKind::REFINEMENT && n.first_token().as_ref() == Some(&t)
+        });
     if t.kind().is_keyword() || refinement {
         // A keyword where a name is expected is that name.
         let as_name = t
@@ -466,9 +467,11 @@ fn item_md(n: &SyntaxNode) -> String {
     out
 }
 
+/// The component `m` (a path's last segment) some file declares.
 fn module_node(files: &[refs::Parsed], m: &str) -> Option<SyntaxNode> {
+    let m = m.rsplit('.').next().unwrap_or(m);
     files.iter().flat_map(|f| f.tree.descendants()).find(|n| {
-        n.kind() == SyntaxKind::MODULE && nav::declared_name(n).is_some_and(|t| t.text() == m)
+        n.kind() == SyntaxKind::COMPONENT && nav::declared_name(n).is_some_and(|t| t.text() == m)
     })
 }
 
@@ -533,25 +536,37 @@ fn module_md(files: &[refs::Parsed], m: &str) -> Option<String> {
     Some(out)
 }
 
-/// An output read through its instance, `m.i.k` or `m[e].k`: the output's
+/// An output read through its instance, `n.k` or `c[e].k`: the output's
 /// declaration and doc comment.
 fn output_md(files: &[refs::Parsed], t: &SyntaxToken) -> Option<String> {
     let chain = t.parent().filter(|c| c.kind() == SyntaxKind::CHAIN)?;
     let text = chain.text().to_string();
     let segs: Vec<&str> = text.split('.').collect();
     let (m, k) = match segs.as_slice() {
-        [m, _, k, ..] if !m.contains('[') => (*m, *k),
-        [m, k, ..] => (m.split_once('[')?.0, *k),
+        [m, k, ..] => match m.split_once('[') {
+            Some((c, _)) => (c.to_string(), *k),
+            // The instance `n`'s component.
+            None => {
+                let path = files
+                    .iter()
+                    .flat_map(|f| f.tree.descendants())
+                    .filter(|n| n.kind() == SyntaxKind::INSTANCE)
+                    .map(|n| dform_core::syntax::resolve::instance_parts(&n))
+                    .find(|(_, name)| name == m)?
+                    .0;
+                (path, *k)
+            }
+        },
         _ => return None,
     };
     if k != t.text() {
         return None;
     }
-    let module = module_node(files, m)?;
+    let module = module_node(files, &m)?;
     let (_, header, description) = members(&module, SyntaxKind::OUTPUT_DECL)
         .into_iter()
         .find(|(n, _, _)| n == k)?;
-    let mut out = format!("```dform\n{header}\n```\n\noutput of module `{m}`\n");
+    let mut out = format!("```dform\n{header}\n```\n\noutput of component `{m}`\n");
     if let Some(d) = description {
         out.push_str(&format!("\n{d}\n"));
     }

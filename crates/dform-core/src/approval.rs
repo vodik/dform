@@ -163,7 +163,7 @@ pub fn restricts_approvers(program: &crate::ast::Program) -> bool {
         stmts.iter().any(|s| match s {
             Stmt::Fact(a) => a.pred == "approver_allowed",
             Stmt::Rule(r) => r.head.pred == "approver_allowed",
-            Stmt::PolicyPack(p) => any(&p.body),
+            Stmt::Module(m) => any(&m.body),
             _ => false,
         })
     }

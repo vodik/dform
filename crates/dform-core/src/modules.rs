@@ -1,22 +1,34 @@
-//! Modules, instances and interfaces (E DR-3, DESIGN.org R-5).
+//! Modules, components and instances (DESIGN.org R-65,
+//! proposals/I-modules.md).
 //!
-//! An `instance m i { k = V } :- B` is module `m`'s body under the scope
-//! `m.i`:
+//! A `use m [as n] { k = V } where B` imports module `m`, a file, and an
+//! `instance c n { k = V } where B` copies component `c`, an item of one:
+//! one mechanism, the body under the scope `n`:
 //!
-//! - resource names are scoped (`m.i::name`, its address `T["m.i::name"]`);
-//! - every predicate the module defines is private to the instance
-//!   (`m.i::p`, a name no source can spell); a value leaves the instance
-//!   through an output the stack wires;
+//! - resource names are scoped (`n::name`, its address `T["n::name"]`); in
+//!   a component a resource written as a variable is the copy's own, in a
+//!   module any its user sees (the module's rules merge into the user's
+//!   scope);
+//! - every predicate the body defines is `n`'s (`n::p`, a name no source
+//!   can spell): a module's read by its user as `n.p`, a component's
+//!   private to the copy, a value leaving it through an output;
 //! - `input k: T [= D] [where R]` is read inside as `k(V)`: the collapsed
-//!   cell `(input, m.i, k)` of the attribute aggregate, where the instance's
+//!   cell `(input, n, k)` of the attribute aggregate, where the block's
 //!   `k = V :- B` contributes at the normal rank and `D` at `@default`;
 //! - `output k: T` declares an output and `output k = t` (or a rule for
-//!   `output(k, V)`) defines it, readable anywhere as `output(m.i, k, V)`.
+//!   `output(k, V)`) defines it, readable anywhere as `output(n, k, V)`;
+//! - a name the body does not define reads outward, its user's;
+//! - for a copy, the fact `instance_of(c, user, n)`, which `c[t]`
+//!   enumerates; with a clause `B`, the body's own gate `n::__instance(c)
+//!   :- B` holds every rule and resource of it.
 //!
-//! A module body reads every global relation. A policy pack is a module
-//! applied once, with no scope on resource names: its predicates are private
-//! too. What it writes is not granted: ranks are the ownership model, and
-//! the stratifier partitions a write by its head's constant type and path.
+//! A body is expanded inside out: its own `use`s and `instance`s are
+//! expanded first, their names relative to it, and the body's scope is put
+//! in front of them (`n.inner::x`, `output("n.inner", k, V)`); a name the
+//! resolver wrote as its user's, `__scope(t)`, is left as it is. What a
+//! module or a copy writes is not granted: ranks are the ownership model,
+//! and the stratifier partitions a write by its head's constant type and
+//! path.
 
 use crate::ast::{
     Atom, FieldAssign, InputDecl, Lit, OutputDecl, Program, Resource, RuleStmt, Settings, Span,
@@ -33,8 +45,8 @@ use std::collections::{BTreeMap, BTreeSet};
 pub const INPUT: &str = "input";
 
 /// The attribute aggregate's pseudo-type for `let` (R-3): `(let, Scope,
-/// k)`, scope `""` for the program's own, `m.i` in an instance, the pack's
-/// name in a pack. The resolver writes a `let` as `let(k, t, rank)`, a
+/// k)`, scope `""` for the program's own, `n` in the instance `n`, `m` in
+/// the activation `use m`. The resolver writes a `let` as `let(k, t, rank)`, a
 /// head no source can spell, and `lets` makes it the cell's contribution.
 pub const LET: &str = "let";
 
@@ -70,7 +82,7 @@ fn is_ground(t: &Term) -> bool {
     }
 }
 
-/// A module's interface: what its top-level statements declare.
+/// A component's interface: what its top-level statements declare.
 #[derive(Default)]
 struct Interface {
     inputs: Vec<InputDecl>,
@@ -78,42 +90,19 @@ struct Interface {
     output_values: Vec<OutputDecl>,
 }
 
-/// Split a module or pack body into its interface and its statements.
-fn interface(owner: &str, body: &[Stmt], diags: &mut Vec<Diagnostic>) -> (Interface, Vec<Stmt>) {
+/// Split a module's or component's body into its interface and its
+/// statements; the definitions nested in it are left out.
+fn interface(body: &[Stmt]) -> (Interface, Vec<Stmt>) {
     let mut i = Interface::default();
     let mut rest = Vec::new();
     for s in body {
         match s {
-            Stmt::Input(d) => {
-                if i.inputs.iter().any(|x| x.name == d.name) {
-                    diags.push(Diagnostic::error(
-                        d.span,
-                        format!("{owner} declares input {} twice", d.name),
-                    ));
-                }
-                i.inputs.push(d.clone());
-            }
+            Stmt::Input(d) => i.inputs.push(d.clone()),
             Stmt::Output(o) if o.value.is_none() => {
-                if i.outputs.insert(o.name.clone(), o.clone()).is_some() {
-                    diags.push(Diagnostic::error(
-                        o.span,
-                        format!("{owner} declares output {} twice", o.name),
-                    ));
-                }
+                i.outputs.entry(o.name.clone()).or_insert_with(|| o.clone());
             }
             Stmt::Output(o) => i.output_values.push(o.clone()),
-            Stmt::Module(m) => diags.push(Diagnostic::error(
-                m.span,
-                format!("module {} inside {owner}: modules do not nest", m.name),
-            )),
-            Stmt::Instance(u) => diags.push(Diagnostic::error(
-                u.span,
-                format!(
-                    "instance {} {} inside {owner}: instantiate modules at the top level and \
-                     wire them through inputs and outputs",
-                    u.module, u.name
-                ),
-            )),
+            Stmt::Module(_) => {}
             other => rest.push(other.clone()),
         }
     }
@@ -148,8 +137,9 @@ fn let_key(a: &Atom) -> Option<&str> {
 /// Each `let(k, t, rank) :- B` of `stmts` as its contribution to the cell
 /// `(let, scope, k)`, `arg("let", scope, "k", t, rank) :- B`, and one
 /// reader per key, `k(V) :- attr("let", scope, "k", V)` (`k` renamed by
-/// `names` in an instance or a pack): a read of `k` is the collapsed cell,
-/// so two rows that agree are one value and two that disagree a conflict.
+/// `names` in an instance or an activation): a read of `k` is the
+/// collapsed cell, so two rows that agree are one value and two that
+/// disagree a conflict.
 fn lets(stmts: Vec<Stmt>, scope: &str, names: Option<&Names>) -> Vec<Stmt> {
     let mut out = Vec::with_capacity(stmts.len());
     let mut keys: BTreeMap<String, Span> = BTreeMap::new();
@@ -198,9 +188,22 @@ fn is_shared(pred: &str) -> bool {
     crate::loader::is_core_pred(pred)
 }
 
-/// How a module's predicate names are renamed in one instance.
+/// The relation a copy is recorded in (R-65): `instance_of(Path, User,
+/// Name)`, the component's path, the scope that made the copy (`""` the
+/// program) and the copy's name there, which `c[t]` enumerates: `c["n"]`
+/// is the copy `n`.
+pub const INSTANCE_OF: &str = "instance_of";
+
+/// A scope the resolver wrote as its user's, `__scope(t)`: a read inside a
+/// component of a copy the component does not make (`blue.vpc` of the
+/// stack's `blue`). Expansion puts no copy's scope in front of it, and
+/// takes the mark off once done.
+pub const ABSOLUTE: &str = "__scope";
+
+/// How predicate names are renamed in one copy or activation.
 struct Names {
-    /// Predicate name -> its private name (`m.i::p`, `pack::p`).
+    /// Predicate name -> its private name (`n::p`; `n.inner::p` for the
+    /// private `inner::p` of a copy inside it).
     map: BTreeMap<String, String>,
 }
 
@@ -208,12 +211,34 @@ impl Names {
     fn get(&self, pred: &str) -> Option<&String> {
         self.map.get(pred)
     }
+
+    /// Every predicate `defined` names but the shared ones, private to
+    /// `scope`. `instance_of` is the program's: a copy's copies are told
+    /// apart by their user's scope, its second column.
+    fn private(scope: &str, defined: BTreeMap<String, (usize, Span)>) -> Names {
+        let map = defined
+            .into_keys()
+            .filter(|p| !is_shared(p) && p != INSTANCE_OF)
+            .map(|p| {
+                let n = private_name(scope, &p);
+                (p, n)
+            })
+            .collect();
+        Names { map }
+    }
 }
 
-/// Expand `module`/`instance` and `policy`/`apply`: the program with every
-/// instance's body scoped and renamed and every applied pack renamed.
-/// A program with its modules and packs expanded, and the interface the
-/// later passes check: every typed input, and every output declared
+/// `p` private to `scope`: `scope::p`, or `scope.inner::p` for a name
+/// already private to a copy inside it.
+fn private_name(scope: &str, p: &str) -> String {
+    match p.contains("::") {
+        true => format!("{scope}.{p}"),
+        false => format!("{scope}::{p}"),
+    }
+}
+
+/// A program with its modules and components expanded, and the interface
+/// the later passes check: every typed input, and every output declared
 /// `secret(T)` (scope, key).
 pub struct Expanded {
     pub program: Program,
@@ -225,57 +250,73 @@ fn is_secret_type(t: &Option<TypeExpr>) -> bool {
     matches!(t, Some(TypeExpr::Apply(n, _)) if n == "secret")
 }
 
-pub fn expand(program: &Program) -> Result<Expanded> {
-    let mut diags = Vec::new();
-    let mut declared = Vec::new();
-    let mut secret_outputs = Vec::new();
-    let check_types = |who: &str, inputs: &[InputDecl], diags: &mut Vec<Diagnostic>| {
-        for i in inputs {
-            if let Err(e) = crate::inputs::check_type(&i.ty) {
-                diags.push(Diagnostic::error(
-                    i.span,
-                    format!("{who} input {}: {e}", i.name),
-                ));
-            }
-            let (_, rest) = crate::refine::split_input(i);
-            diags.extend(crate::refine::check_rest(&rest, i.span));
-        }
-    };
-    let mut modules: BTreeMap<String, (&crate::ast::Module, Interface, Vec<Stmt>)> =
-        BTreeMap::new();
-    let mut packs: BTreeMap<String, &crate::ast::PolicyPack> = BTreeMap::new();
-    for s in &program.statements {
-        match s {
-            Stmt::Module(m) => {
-                let owner = format!("module {}", m.name);
-                let (i, rest) = interface(&owner, &m.body, &mut diags);
-                check_module(m, &i, &rest, &mut diags);
-                check_types(&format!("module {}", m.name), &i.inputs, &mut diags);
-                if modules.insert(m.name.clone(), (m, i, rest)).is_some() {
-                    diags.push(Diagnostic::error(
-                        m.span,
-                        format!("module {} is defined twice", m.name),
-                    ));
-                }
-            }
-            Stmt::PolicyPack(p) => {
-                packs.insert(p.name.clone(), p);
-            }
-            _ => {}
+/// Every definition of the program, by path, wherever it stands.
+fn definitions<'a>(stmts: &'a [Stmt], out: &mut BTreeMap<String, &'a crate::ast::Module>) {
+    for s in stmts {
+        if let Stmt::Module(m) = s {
+            out.insert(m.name.clone(), m);
+            definitions(&m.body, out);
         }
     }
+}
 
+/// The expansion's state.
+struct Cx<'a> {
+    defs: BTreeMap<String, &'a crate::ast::Module>,
+    diags: Vec<Diagnostic>,
+    declared: Vec<Declared>,
+    secret_outputs: Vec<(String, String)>,
+    /// Private names by plain name, for the error when the program reads
+    /// one.
+    private: BTreeMap<String, (String, Option<String>)>,
+    /// The definitions being expanded, outermost first: a component that
+    /// reaches itself is an error, not a loop.
+    expanding: Vec<String>,
+    /// The definitions whose interface was checked.
+    checked: BTreeSet<String>,
+}
+
+fn check_types(who: &str, inputs: &[InputDecl], diags: &mut Vec<Diagnostic>) {
+    for i in inputs {
+        if let Err(e) = crate::inputs::check_type(&i.ty) {
+            diags.push(Diagnostic::error(
+                i.span,
+                format!("{who} input {}: {e}", i.name),
+            ));
+        }
+        let (_, rest) = crate::refine::split_input(i);
+        diags.extend(crate::refine::check_rest(&rest, i.span));
+    }
+}
+
+/// `scope.rest`, the scope `""` being the program's.
+fn join_scope(scope: &str, rest: &str) -> String {
+    match (scope.is_empty(), rest.is_empty()) {
+        (true, _) => rest.to_string(),
+        (_, true) => scope.to_string(),
+        _ => format!("{scope}.{rest}"),
+    }
+}
+
+pub fn expand(program: &Program) -> Result<Expanded> {
+    let mut defs = BTreeMap::new();
+    definitions(&program.statements, &mut defs);
+    let mut cx = Cx {
+        defs,
+        diags: Vec::new(),
+        declared: Vec::new(),
+        secret_outputs: Vec::new(),
+        private: BTreeMap::new(),
+        expanding: Vec::new(),
+        checked: BTreeSet::new(),
+    };
     let mut out = Vec::new();
-    // Private names by plain name, for the error when the program reads one.
-    let mut private: BTreeMap<String, (String, Option<String>)> = BTreeMap::new();
-    let mut instances: BTreeSet<String> = BTreeSet::new();
     for s in &program.statements {
         match s {
-            Stmt::Module(_) | Stmt::PolicyPack(_) => {}
             // The stack's own input: read as `k(V)`, given by `--set` (an
             // `input(k, V)` fact) at the normal rank.
             Stmt::Input(i) => {
-                check_types("stack", std::slice::from_ref(i), &mut diags);
+                check_types("stack", std::slice::from_ref(i), &mut cx.diags);
                 out.extend(input_reader("", i, &i.name));
                 let v = Term::Var("V".into());
                 out.push(Stmt::Rule(RuleStmt {
@@ -293,7 +334,7 @@ pub fn expand(program: &Program) -> Result<Expanded> {
                     body: vec![Lit::Pos(atom("input", vec![str_term(&i.name), v], i.span))],
                 }));
                 out.extend(refinement(i, ""));
-                declared.push(Declared {
+                cx.declared.push(Declared {
                     scope: String::new(),
                     decl: i.clone(),
                 });
@@ -301,7 +342,7 @@ pub fn expand(program: &Program) -> Result<Expanded> {
             // The stack's own output: `output(k, V)` in the root scope.
             Stmt::Output(o) if o.value.is_none() => {
                 if is_secret_type(&o.ty) {
-                    secret_outputs.push((String::new(), o.name.clone()));
+                    cx.secret_outputs.push((String::new(), o.name.clone()));
                 }
             }
             Stmt::Output(o) => out.push(fact_or_rule(
@@ -312,105 +353,34 @@ pub fn expand(program: &Program) -> Result<Expanded> {
                 ),
                 Vec::new(),
             )),
-            Stmt::Instance(u) => {
-                let scope = format!("{}.{}", u.module, u.name);
-                if !instances.insert(scope.clone()) {
-                    diags.push(Diagnostic::error(
-                        u.span,
-                        format!("instance {} {} is declared twice", u.module, u.name),
-                    ));
-                    continue;
-                }
-                let Some((m, iface, body)) = modules.get(&u.module) else {
-                    diags.push(Diagnostic::error(
-                        u.span,
-                        format!(
-                            "instance {} {} names an unknown module '{}'",
-                            u.module, u.name, u.module
-                        ),
-                    ));
-                    continue;
-                };
-                let origin = diag::origin_id(&format!("module {} instance {}", u.module, u.name));
-                instance_inputs(u, &scope, iface, &mut out, &mut diags);
-                let names = module_names(&scope, iface, body);
-                for p in names.map.keys() {
-                    let help = format!(
-                        "pass the value through an output of module {}, \
-                         `output {p} = ...`, and read it as {}.INSTANCE.{p}",
-                        m.name, m.name
-                    );
-                    private.insert(p.clone(), (format!("module {}", m.name), Some(help)));
-                }
-                let mut stmts = module_stmts(&scope, iface, body);
-                set_origin(&mut stmts, origin);
-                let stmts = stmts
-                    .into_iter()
-                    .map(|st| rewrite_stmt(rename_stmt(st, &names), &scope))
-                    .collect();
-                out.extend(lets(stmts, &scope, Some(&names)));
-                out.extend(input_readers(&scope, &iface.inputs, &names));
-                secret_outputs.extend(
-                    iface
-                        .outputs
-                        .values()
-                        .filter(|o| is_secret_type(&o.ty))
-                        .map(|o| (scope.clone(), o.name.clone())),
-                );
-                declared.extend(iface.inputs.iter().map(|i| Declared {
-                    scope: scope.clone(),
-                    decl: i.clone(),
-                }));
-            }
+            Stmt::Use(u) => out.extend(cx.instance(u, "", true)),
+            Stmt::Instance(u) => out.extend(cx.instance(u, "", false)),
+            Stmt::Module(_) => {}
             other => out.push(other.clone()),
         }
     }
-
-    // Packs: applied where `apply` is, in `apply` order.
-    let mut applied = BTreeSet::new();
-    let mut expanded = Vec::new();
-    for s in out {
-        let Stmt::ApplyPolicy(a) = &s else {
-            expanded.push(s);
-            continue;
-        };
-        let Some(p) = packs.get(&a.name) else {
-            diags.push(Diagnostic::error(
-                a.span,
-                format!("apply {} names an unknown policy '{}'", a.name, a.name),
-            ));
-            continue;
-        };
-        if !applied.insert(a.name.clone()) {
-            continue;
-        }
-        let owner = format!("policy {}", p.name);
-        let (iface, body) = interface(&owner, &p.body, &mut diags);
-        if let Some(i) = iface.inputs.first() {
-            diags.push(Diagnostic::error(
-                i.span,
-                format!("{owner} declares an input: a policy pack has none"),
-            ));
-        }
-        if let Some(o) = iface.outputs.values().chain(&iface.output_values).next() {
-            diags.push(Diagnostic::error(
-                o.span,
-                format!("{owner} declares an output: a policy pack has none"),
-            ));
-        }
-        let names = pack_names(&p.name, &body);
-        for pr in names.map.keys() {
-            private.insert(pr.clone(), (owner.clone(), None));
-        }
-        let mut body = body;
-        set_origin(&mut body, diag::origin_id(&owner));
-        let body = body.into_iter().map(|s| rename_stmt(s, &names)).collect();
-        expanded.extend(lets(body, &p.name, Some(&names)));
-    }
     // The program's own `let`s.
-    let expanded = lets(expanded, "", None);
+    let mut expanded = lets(out, "", None);
+    // `instance_of` (and a copy's private one) is a fact for a copy with
+    // no clause and a rule for one with: both, by design.
+    let mut mixed = BTreeMap::new();
+    for s in &expanded {
+        if let Stmt::Fact(a) | Stmt::Rule(RuleStmt { head: a, .. }) = s
+            && a.pred == INSTANCE_OF
+        {
+            mixed.entry(a.pred.clone()).or_insert(a.span);
+        }
+    }
+    expanded.extend(mixed.into_iter().map(|(pred, span)| {
+        Stmt::Mixed(crate::ast::Extern {
+            pred,
+            arity: 3,
+            span,
+        })
+    }));
 
-    // A read of a name only a module defines: say it is private.
+    // A read of a name only a module or a component defines: say it is
+    // private.
     let mut defined = BTreeMap::new();
     defined_preds(&expanded, &mut defined);
     let externs: BTreeSet<&str> = expanded
@@ -425,7 +395,7 @@ pub fn expand(program: &Program) -> Result<Expanded> {
         body_atoms(s, &mut reads);
     }
     for a in reads {
-        if let Some((owner, help)) = private.get(&a.pred)
+        if let Some((owner, help)) = cx.private.get(&a.pred)
             && !defined.contains_key(&a.pred)
             && !externs.contains(a.pred.as_str())
         {
@@ -433,29 +403,214 @@ pub fn expand(program: &Program) -> Result<Expanded> {
                 a.span,
                 format!("{}/{} is private to {owner}", a.pred, a.args.len()),
             );
-            diags.push(match help {
+            cx.diags.push(match help {
                 Some(h) => d.with_help(h.clone()),
                 None => d,
             });
         }
     }
 
-    if diags.is_empty() {
+    let expanded = expanded.into_iter().map(unmark_stmt).collect::<Vec<_>>();
+    if cx.diags.is_empty() {
         Ok(Expanded {
             program: Program {
                 statements: expanded,
             },
-            inputs: declared,
-            secret_outputs,
+            inputs: cx.declared,
+            secret_outputs: cx.secret_outputs,
         })
     } else {
-        Err(Diagnostics(diags).into())
+        Err(Diagnostics(cx.diags).into())
     }
 }
 
+impl Cx<'_> {
+    /// The `use`s and `instance`s of a body expanded, every name relative
+    /// to the body's scope; `at` is that scope's absolute name.
+    fn body(&mut self, stmts: &[Stmt], at: &str) -> Vec<Stmt> {
+        let mut out = Vec::new();
+        for s in stmts {
+            match s {
+                Stmt::Use(u) => out.extend(self.instance(u, at, true)),
+                Stmt::Instance(u) => out.extend(self.instance(u, at, false)),
+                other => out.push(other.clone()),
+            }
+        }
+        out
+    }
+
+    /// `def`, or `None` (reported) when it is being expanded already.
+    fn enter(&mut self, path: &str, span: Span) -> Option<&crate::ast::Module> {
+        let def = *self.defs.get(path)?;
+        if self.expanding.iter().any(|p| p == path) {
+            let mut cycle = self.expanding.clone();
+            cycle.push(path.to_string());
+            self.diags.push(Diagnostic::error(
+                span,
+                format!("{path} reaches itself: {}", cycle.join(" -> ")),
+            ));
+            return None;
+        }
+        self.expanding.push(path.to_string());
+        Some(def)
+    }
+
+    /// `instance c n { k = V } where B`, a component's body under the
+    /// scope `n`, recorded in `instance_of`; or `use m [as n] { k = V }
+    /// where B`, a module's (`used`): one mechanism (R-65).
+    fn instance(&mut self, u: &crate::ast::Instance, at: &str, used: bool) -> Vec<Stmt> {
+        let Some(def) = self.enter(&u.module, u.span) else {
+            return Vec::new();
+        };
+        let kind = if used { "module" } else { "component" };
+        let (iface, body) = interface(&def.body);
+        if self.checked.insert(u.module.clone()) {
+            check_component(kind, &u.module, &iface, &body, &mut self.diags);
+            check_types(
+                &format!("{kind} {}", u.module),
+                &iface.inputs,
+                &mut self.diags,
+            );
+        }
+        let scope = u.name.as_str();
+        let abs = join_scope(at, scope);
+        let mut out = Vec::new();
+        instance_inputs(kind, u, scope, &iface, &mut out, &mut self.diags);
+        let body = self.body(&body, &abs);
+        self.expanding.pop();
+        let stmts = module_stmts(scope, &iface, body);
+        let mut defined = BTreeMap::new();
+        defined_preds(&stmts, &mut defined);
+        for i in &iface.inputs {
+            defined.insert(i.name.clone(), (1, i.span));
+            defined.insert(refine_pred(&i.name), (1, i.span));
+        }
+        let names = Names::private(scope, defined);
+        for p in names.map.keys() {
+            let help = match used {
+                true => format!("read it as {scope}.{p}, after `use {}`", u.module),
+                false => format!(
+                    "pass the value through an output of component {}, `output {p} = ...`, \
+                     and read it as INSTANCE.{p}",
+                    u.module
+                ),
+            };
+            self.private
+                .insert(p.clone(), (format!("{kind} {}", u.module), Some(help)));
+        }
+        let mut stmts = stmts;
+        let origin = match used {
+            true if u.module.rsplit('.').next() == Some(scope) => format!("use {}", u.module),
+            true => format!("use {} as {scope}", u.module),
+            false => format!("instance {} {}", u.module, u.name),
+        };
+        set_origin(&mut stmts, diag::origin_id(&origin));
+        let stmts = stmts
+            .into_iter()
+            .map(|st| {
+                let sc = Sc {
+                    name: scope,
+                    vars: !used,
+                };
+                rewrite_stmt(rename_stmt(st, &names), sc)
+            })
+            .collect();
+        let mut copy = lets(stmts, scope, Some(&names));
+        copy.extend(input_readers(scope, &iface.inputs, &names));
+        self.secret_outputs.extend(
+            iface
+                .outputs
+                .values()
+                .filter(|o| is_secret_type(&o.ty))
+                .map(|o| (abs.clone(), o.name.clone())),
+        );
+        self.declared.extend(iface.inputs.iter().map(|i| Declared {
+            scope: abs.clone(),
+            decl: i.clone(),
+        }));
+        out.extend(gate(
+            copy,
+            &u.module,
+            scope,
+            u.clause.as_deref(),
+            !used,
+            u.span,
+        ));
+        out
+    }
+}
+
+/// The statements of the copy or activation `scope`, and for a copy
+/// (`record`) the fact `instance_of(path, scope)`. With a clause `B` they
+/// exist only while it holds: the copy's own `scope::__instance(path) :-
+/// B` gates each of its rules and resources, and `instance_of(path,
+/// scope)` is derived from it. The gate is the copy's own relation, so
+/// that one copy's clause reading another's outputs is no cycle through
+/// every copy.
+fn gate(
+    stmts: Vec<Stmt>,
+    path: &str,
+    scope: &str,
+    clause: Option<&[Lit]>,
+    record: bool,
+    span: Span,
+) -> Vec<Stmt> {
+    let fact = atom(
+        INSTANCE_OF,
+        vec![str_term(path), str_term(""), str_term(scope)],
+        span,
+    );
+    let Some(b) = clause.filter(|b| !b.is_empty()) else {
+        let mut out = stmts;
+        if record {
+            out.push(Stmt::Fact(fact));
+        }
+        return out;
+    };
+    let own = atom(&format!("{scope}::{GATE}"), vec![str_term(path)], span);
+    let on = Lit::Pos(own.clone());
+    let mut out: Vec<Stmt> = stmts
+        .into_iter()
+        .map(|s| match s {
+            Stmt::Fact(a) => Stmt::Rule(RuleStmt {
+                head: a,
+                body: vec![on.clone()],
+            }),
+            Stmt::Rule(mut r) => {
+                r.body.insert(0, on.clone());
+                Stmt::Rule(r)
+            }
+            Stmt::Resource(mut r) => {
+                r.body.get_or_insert_with(Vec::new).insert(0, on.clone());
+                Stmt::Resource(r)
+            }
+            Stmt::Settings(mut st) => {
+                st.body.get_or_insert_with(Vec::new).insert(0, on.clone());
+                Stmt::Settings(st)
+            }
+            other => other,
+        })
+        .collect();
+    out.push(Stmt::Rule(RuleStmt {
+        head: own,
+        body: b.to_vec(),
+    }));
+    if record {
+        out.push(Stmt::Rule(RuleStmt {
+            head: fact,
+            body: vec![on],
+        }));
+    }
+    out
+}
+
+/// A gated copy's own relation (`gate`).
+const GATE: &str = "__instance";
+
 /// The instance's `k = V :- B`, each a normal-rank contribution to its
-/// input cell, with the checks against the module's declared inputs.
+/// input cell, with the checks against the component's declared inputs.
 fn instance_inputs(
+    kind: &str,
     u: &crate::ast::Instance,
     scope: &str,
     iface: &Interface,
@@ -465,9 +620,9 @@ fn instance_inputs(
     let declared: Vec<&str> = iface.inputs.iter().map(|i| i.name.as_str()).collect();
     for (k, v, span) in &u.inputs {
         if !declared.contains(&k.as_str()) {
-            let d = Diagnostic::error(*span, format!("module {} has no input {k}", u.module));
+            let d = Diagnostic::error(*span, format!("{kind} {} has no input {k}", u.module));
             diags.push(if declared.is_empty() {
-                d.with_note(format!("module {} declares no inputs", u.module))
+                d.with_note(format!("{kind} {} declares no inputs", u.module))
             } else {
                 d.with_note(format!("its inputs: {}", declared.join(", ")))
             });
@@ -480,7 +635,7 @@ fn instance_inputs(
             Some(Err(why)) => {
                 diags.push(Diagnostic::error(
                     *span,
-                    format!("input {k} of module {} {why}", u.module),
+                    format!("input {k} of {kind} {} {why}", u.module),
                 ));
                 continue;
             }
@@ -499,14 +654,16 @@ fn instance_inputs(
         );
         out.push(fact_or_rule(head, u.body.clone().unwrap_or_default()));
     }
+    // An input nothing gives a value is a stack input's error (R-65),
+    // fixed the same ways: a default, or a value given.
     for i in &iface.inputs {
         if i.default.is_none() && !u.inputs.iter().any(|(k, _, _)| *k == i.name) {
             diags.push(
                 Diagnostic::error(
                     u.span,
                     format!(
-                        "instance {} {} does not set required input {}",
-                        u.module, u.name, i.name
+                        "input {} is required and has no value",
+                        join_scope(scope, &i.name)
                     ),
                 )
                 .with_label(
@@ -517,32 +674,34 @@ fn instance_inputs(
                         crate::inputs::type_text(&i.ty)
                     ),
                 )
-                .with_help(format!("add `{} = ...` to the instance block", i.name)),
+                .with_help(format!(
+                    "give it in the block, `{{ {} = ... }}`, or give it a default",
+                    i.name
+                )),
             );
         }
     }
 }
 
-/// Every predicate a module defines, its inputs (and their refinement
-/// helpers) included.
-fn module_defined(iface: &Interface, body: &[Stmt]) -> BTreeMap<String, (usize, Span)> {
-    let mut defined = BTreeMap::new();
-    defined_preds(body, &mut defined);
-    for i in &iface.inputs {
-        defined.insert(i.name.clone(), (1, i.span));
-        defined.insert(refine_pred(&i.name), (1, i.span));
-    }
-    defined
-}
-
-/// The checks on a module's interface, once per module: an input is not
-/// also defined, and every output it gives a value is declared.
-fn check_module(
-    m: &crate::ast::Module,
+/// The checks on a component's interface, once per component: an input
+/// or an output is declared once, an input is not also defined, and every
+/// output it gives a value is declared.
+fn check_component(
+    kind: &str,
+    path: &str,
     iface: &Interface,
     body: &[Stmt],
     diags: &mut Vec<Diagnostic>,
 ) {
+    let mut seen = BTreeSet::new();
+    for i in &iface.inputs {
+        if !seen.insert(&i.name) {
+            diags.push(Diagnostic::error(
+                i.span,
+                format!("{kind} {path} declares input {} twice", i.name),
+            ));
+        }
+    }
     let mut own = BTreeMap::new();
     defined_preds(body, &mut own);
     for i in &iface.inputs {
@@ -550,14 +709,15 @@ fn check_module(
             diags.push(Diagnostic::error(
                 *span,
                 format!(
-                    "module {} defines {}, which is its input: an input is set by the instance",
-                    m.name, i.name
+                    "{kind} {path} defines {}, which is its input: an input is set where it \
+                     is used",
+                    i.name
                 ),
             ));
         }
     }
     let undeclared = |k: &str, span: Span| {
-        Diagnostic::error(span, format!("module {} has no output {k}", m.name))
+        Diagnostic::error(span, format!("{kind} {path} has no output {k}"))
             .with_help(format!("declare it: `output {k}: TYPE`"))
     };
     for o in &iface.output_values {
@@ -581,49 +741,22 @@ fn check_module(
     }
 }
 
-/// The instance names of a module's predicates: every one private.
-fn module_names(scope: &str, iface: &Interface, body: &[Stmt]) -> Names {
-    let map = module_defined(iface, body)
-        .into_keys()
-        .filter(|p| !is_shared(p))
-        .map(|p| {
-            let n = format!("{scope}::{p}");
-            (p, n)
-        })
-        .collect();
-    Names { map }
-}
-
-/// A pack's predicates: every one private.
-fn pack_names(name: &str, body: &[Stmt]) -> Names {
-    let mut defined = BTreeMap::new();
-    defined_preds(body, &mut defined);
-    let map = defined
-        .into_keys()
-        .filter(|p| !is_shared(p))
-        .map(|p| {
-            let n = format!("{name}::{p}");
-            (p, n)
-        })
-        .collect();
-    Names { map }
-}
-
-/// The module's statements for one instance, before scoping: its body, the
-/// output values and each input's refinement.
-fn module_stmts(scope: &str, iface: &Interface, body: &[Stmt]) -> Vec<Stmt> {
-    let mut out: Vec<Stmt> = body.to_vec();
+/// The component's statements for one copy, before scoping: its body,
+/// the output values and each input's refinement.
+fn module_stmts(scope: &str, iface: &Interface, body: Vec<Stmt>) -> Vec<Stmt> {
+    let mut out = body;
     for o in &iface.output_values {
-        // An undeclared output is reported once, by `check_module`.
+        // An undeclared output is reported once, by `check_component`.
         let Some(decl) = iface.outputs.get(&o.name) else {
             continue;
         };
         let mut value = o.value.clone().expect("an output value");
-        // An `addr` output names one of this instance's resources.
+        // An `addr` output names one of this copy's resources: scoped by
+        // the copy itself (`""`), which scoping makes its own name.
         if matches!(&decl.ty, Some(TypeExpr::Name(t)) if t == "addr") {
             value = Term::Func {
                 name: "scoped".into(),
-                args: vec![str_term(scope), value],
+                args: vec![str_term(""), value],
             };
         }
         out.push(fact_or_rule(
@@ -924,28 +1057,37 @@ fn rename_term(t: Term, names: &Names) -> Term {
     }
 }
 
+/// How a copy's statements are scoped: its name, and whether a resource
+/// written as a variable is its own (a component's copy) or any its user
+/// sees (a module's, whose rules merge into the user's scope).
+#[derive(Clone, Copy)]
+struct Sc<'a> {
+    name: &'a str,
+    vars: bool,
+}
+
 /// Scope one statement of an instance: resource names in `want`, `arg`,
 /// `attr`, `adopt` and `ref` become `scoped(Scope, Name)`, and `output(k, V)` is
 /// `output(Scope, k, V)`.
-fn rewrite_stmt(stmt: Stmt, scope: &str) -> Stmt {
-    let lits = |ls: Vec<Lit>| ls.into_iter().map(|l| rewrite_lit(l, scope)).collect();
+fn rewrite_stmt(stmt: Stmt, sc: Sc) -> Stmt {
+    let lits = |ls: Vec<Lit>| ls.into_iter().map(|l| rewrite_lit(l, sc)).collect();
     let fields = |fs: Vec<FieldAssign>| {
         fs.into_iter()
             .map(|f| FieldAssign {
-                value: rewrite_term(f.value, scope),
+                value: rewrite_term(f.value, sc),
                 ..f
             })
             .collect()
     };
     match stmt {
-        Stmt::Fact(a) => Stmt::Fact(rewrite_atom(a, scope)),
+        Stmt::Fact(a) => Stmt::Fact(rewrite_atom(a, sc)),
         Stmt::Rule(r) => Stmt::Rule(RuleStmt {
-            head: rewrite_atom(r.head, scope),
+            head: rewrite_atom(r.head, sc),
             body: lits(r.body),
         }),
         Stmt::Resource(r) => Stmt::Resource(Resource {
-            typ: rewrite_term(r.typ, scope),
-            name: scoped_term(scope, rewrite_term(r.name, scope)),
+            typ: rewrite_term(r.typ, sc),
+            name: scoped_term(Sc { vars: true, ..sc }, r.name),
             fields: fields(r.fields),
             body: r.body.map(lits),
             ..r
@@ -961,11 +1103,11 @@ fn rewrite_stmt(stmt: Stmt, scope: &str) -> Stmt {
     }
 }
 
-fn rewrite_lit(lit: Lit, scope: &str) -> Lit {
-    let t = |x| rewrite_term(x, scope);
+fn rewrite_lit(lit: Lit, sc: Sc) -> Lit {
+    let t = |x| rewrite_term(x, sc);
     match lit {
-        Lit::Pos(a) => Lit::Pos(rewrite_atom(a, scope)),
-        Lit::Not(a) => Lit::Not(rewrite_atom(a, scope)),
+        Lit::Pos(a) => Lit::Pos(rewrite_atom(a, sc)),
+        Lit::Not(a) => Lit::Not(rewrite_atom(a, sc)),
         Lit::Eq(a, b) => Lit::Eq(t(a), t(b)),
         Lit::Neq(a, b) => Lit::Neq(t(a), t(b)),
         Lit::Gt(a, b) => Lit::Gt(t(a), t(b)),
@@ -975,58 +1117,188 @@ fn rewrite_lit(lit: Lit, scope: &str) -> Lit {
     }
 }
 
-fn rewrite_atom(mut atom: Atom, scope: &str) -> Atom {
-    let t = |x: Term| rewrite_term(x, scope);
+fn rewrite_atom(mut atom: Atom, sc: Sc) -> Atom {
+    let t = |x: Term| rewrite_term(x, sc);
+    let pseudo =
+        |a: &Term| matches!(a, Term::Val(Value::Str(s)) if s == INPUT || s == LET || s == "output");
     match (atom.pred.as_str(), atom.args.len()) {
-        ("want", 2) | ("arg" | "attr", 4) | ("arg", 5) | ("arg_add", 4) => {
+        // A cell of a copy inside this one, `(input, inner, k)`, or a read
+        // of its output: its scope is relative.
+        ("arg" | "attr", 4 | 5) | (crate::refine::ATTR_REFINE, 4) if pseudo(&atom.args[0]) => {
             let mut args: Vec<Term> = atom.args.into_iter().map(t).collect();
-            args[1] = scoped_term(scope, args[1].clone());
+            args[1] = prefix_scope(sc.name, args[1].clone());
             atom.args = args;
+        }
+        // A settings row is addressed by its environment, never a scope.
+        ("arg" | "attr", 4) | ("arg", 5) | ("arg_add", 4) if matches!(&atom.args[0], Term::Val(Value::Str(s)) if s == crate::transform::SETTINGS) =>
+        {
+            atom.args = atom.args.into_iter().map(t).collect();
+        }
+        ("want", 2) | ("arg" | "attr", 4) | ("arg", 5) | ("arg_add", 4) => {
+            atom.args = atom
+                .args
+                .into_iter()
+                .enumerate()
+                .map(|(i, a)| match i {
+                    1 => scoped_term(sc, a),
+                    _ => t(a),
+                })
+                .collect();
         }
         ("output", 2) => {
             let mut args = atom.args.into_iter().map(t);
             let (k, v) = (args.next().unwrap(), args.next().unwrap());
-            atom.args = vec![str_term(scope), k, v];
+            atom.args = vec![str_term(sc.name), k, v];
+        }
+        // A copy inside this one's record: its user's scope is relative.
+        (INSTANCE_OF, 3) => {
+            let mut args: Vec<Term> = atom.args.into_iter().map(t).collect();
+            args[1] = prefix_scope(sc.name, args[1].clone());
+            atom.args = args;
+        }
+        // A copy inside this one's output.
+        ("output", 3) => {
+            let mut args: Vec<Term> = atom.args.into_iter().map(t).collect();
+            args[0] = prefix_scope(sc.name, args[0].clone());
+            atom.args = args;
         }
         _ => atom.args = atom.args.into_iter().map(t).collect(),
     }
     atom
 }
 
-fn rewrite_term(term: Term, scope: &str) -> Term {
+/// A scope relative to this copy, made absolute: `n.inner`, `n` for the
+/// copy's own `""`.
+fn prefix_scope(scope: &str, inner: Term) -> Term {
+    match inner {
+        Term::Val(Value::Str(s)) => str_term(&join_scope(scope, &s)),
+        Term::Func { ref name, .. } if name == ABSOLUTE => inner,
+        t => Term::Func {
+            name: "format".into(),
+            args: vec![str_term(&format!("{scope}.%s")), t],
+        },
+    }
+}
+
+fn rewrite_term(term: Term, sc: Sc) -> Term {
     match term {
-        Term::List(xs) => Term::List(xs.into_iter().map(|t| rewrite_term(t, scope)).collect()),
+        Term::Func { ref name, .. } if name == ABSOLUTE => term,
+        Term::List(xs) => Term::List(xs.into_iter().map(|t| rewrite_term(t, sc)).collect()),
         Term::Obj(m) => Term::Obj(
             m.into_iter()
-                .map(|(k, v)| (k, rewrite_term(v, scope)))
+                .map(|(k, v)| (k, rewrite_term(v, sc)))
                 .collect::<BTreeMap<_, _>>(),
         ),
         Term::ListComp { item, body } => Term::ListComp {
-            item: Box::new(rewrite_term(*item, scope)),
-            body: body.into_iter().map(|l| rewrite_lit(l, scope)).collect(),
+            item: Box::new(rewrite_term(*item, sc)),
+            body: body.into_iter().map(|l| rewrite_lit(l, sc)).collect(),
         },
+        // A name a copy inside this one scoped: its scope is relative.
+        Term::Func { name, mut args } if name == "scoped" && args.len() == 2 => {
+            args[0] = prefix_scope(sc.name, args[0].clone());
+            args[1] = rewrite_term(args[1].clone(), sc);
+            Term::Func { name, args }
+        }
         Term::Func { name, args } => {
-            let mut args: Vec<Term> = args.into_iter().map(|t| rewrite_term(t, scope)).collect();
-            if name == "ref" && args.len() == 3 {
-                args[1] = scoped_term(scope, args[1].clone());
-            }
+            let is_ref = name == "ref" && args.len() == 3;
+            let args = args
+                .into_iter()
+                .enumerate()
+                .map(|(i, a)| match i {
+                    1 if is_ref => scoped_term(sc, a),
+                    _ => rewrite_term(a, sc),
+                })
+                .collect();
             Term::Func { name, args }
         }
         other => other,
     }
 }
 
-/// `scoped(Scope, Name)`, unless `Name` is already an address
-/// (`"network.main::vpc"` names another instance's resource).
-fn scoped_term(scope: &str, name: Term) -> Term {
-    if matches!(&name, Term::Func { name, .. } if name == "scoped")
-        || matches!(&name, Term::Val(Value::Str(s)) if s.contains("::"))
-    {
-        return name;
+/// `scoped(Scope, Name)`; a name a copy inside this one scoped,
+/// `scoped(inner, Name)`, is `scoped(Scope.inner, Name)`; and a name that
+/// is already an address (`"blue::vpc"` names another copy's resource) is
+/// itself. In a module's (`!sc.vars`), only a name the module writes out is
+/// its own: a variable ranges over every resource its user sees.
+fn scoped_term(sc: Sc, name: Term) -> Term {
+    match name {
+        Term::Func { name: ref f, .. } if f == "scoped" => rewrite_term(name, sc),
+        Term::Func { name: ref f, .. } if f == ABSOLUTE => name,
+        Term::Val(Value::Str(s)) if s.contains("::") => Term::Val(Value::Str(s)),
+        name if !sc.vars && !matches!(name, Term::Val(_)) => rewrite_term(name, sc),
+        name => Term::Func {
+            name: "scoped".to_string(),
+            args: vec![str_term(sc.name), rewrite_term(name, sc)],
+        },
     }
-    Term::Func {
-        name: "scoped".to_string(),
-        args: vec![str_term(scope), name],
+}
+
+/// A statement with the marks of `ABSOLUTE` taken off: `__scope(t)` is
+/// `t`.
+fn unmark_stmt(s: Stmt) -> Stmt {
+    fn term(t: Term) -> Term {
+        match t {
+            Term::Func { name, args } if name == ABSOLUTE && args.len() == 1 => {
+                term(args.into_iter().next().unwrap())
+            }
+            Term::Func { name, args } => Term::Func {
+                name,
+                args: args.into_iter().map(term).collect(),
+            },
+            Term::List(xs) => Term::List(xs.into_iter().map(term).collect()),
+            Term::Obj(m) => Term::Obj(m.into_iter().map(|(k, v)| (k, term(v))).collect()),
+            Term::ListComp { item, body } => Term::ListComp {
+                item: Box::new(term(*item)),
+                body: lits(body),
+            },
+            t => t,
+        }
+    }
+    fn atom(mut a: Atom) -> Atom {
+        a.args = a.args.into_iter().map(term).collect();
+        a
+    }
+    fn lits(ls: Vec<Lit>) -> Vec<Lit> {
+        ls.into_iter()
+            .map(|l| match l {
+                Lit::Pos(a) => Lit::Pos(atom(a)),
+                Lit::Not(a) => Lit::Not(atom(a)),
+                Lit::Eq(a, b) => Lit::Eq(term(a), term(b)),
+                Lit::Neq(a, b) => Lit::Neq(term(a), term(b)),
+                Lit::Gt(a, b) => Lit::Gt(term(a), term(b)),
+                Lit::Ge(a, b) => Lit::Ge(term(a), term(b)),
+                Lit::Lt(a, b) => Lit::Lt(term(a), term(b)),
+                Lit::Le(a, b) => Lit::Le(term(a), term(b)),
+            })
+            .collect()
+    }
+    let fields = |fs: Vec<FieldAssign>| {
+        fs.into_iter()
+            .map(|f| FieldAssign {
+                value: term(f.value),
+                ..f
+            })
+            .collect()
+    };
+    match s {
+        Stmt::Fact(a) => Stmt::Fact(atom(a)),
+        Stmt::Rule(r) => Stmt::Rule(RuleStmt {
+            head: atom(r.head),
+            body: lits(r.body),
+        }),
+        Stmt::Resource(r) => Stmt::Resource(Resource {
+            typ: term(r.typ),
+            name: term(r.name),
+            fields: fields(r.fields),
+            body: r.body.map(lits),
+            ..r
+        }),
+        Stmt::Settings(st) => Stmt::Settings(Settings {
+            fields: fields(st.fields),
+            body: st.body.map(lits),
+            ..st
+        }),
+        other => other,
     }
 }
 

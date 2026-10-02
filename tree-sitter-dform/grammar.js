@@ -24,9 +24,9 @@ const IDENT = /[A-Za-z_][A-Za-z0-9_]*/;
 // The statement keywords: a statement's first token (docs/grammar.md
 // "Tokens"). Anywhere a plain name is expected a keyword is a name.
 const STATEMENT_KEYWORDS = [
-  'edition', 'import', 'provider', 'key', 'type', 'decl', 'extern',
-  'input', 'output', 'let', 'set', 'export', 'module', 'instance',
-  'policy', 'use', 'resource', 'settings', 'deny', 'warn',
+  'edition', 'provider', 'key', 'type', 'decl', 'extern', 'input',
+  'output', 'let', 'set', 'component', 'instance', 'use', 'resource',
+  'settings', 'deny', 'warn',
 ];
 
 // The body words, the clause word, the reserved `if` and the literals:
@@ -35,7 +35,7 @@ const TERM_WORDS = ['not', 'in', 'has', 'where', 'if', 'true', 'false'];
 
 // Contextual words: plain names but where their construct is expected.
 const CONTEXTUAL = [
-  'from', 'mixed', 'persist', 'check',
+  'from', 'mixed', 'persist', 'check', 'as',
   'required', 'computed', 'id', 'sensitive', 'nullable',
 ];
 
@@ -104,21 +104,18 @@ export default grammar({
 
     _statement: $ => choice(
       $.edition,
-      $.import,
       $.provider,
       $.input,
       $.input_relation,
       $.output,
       $.let,
       $.set,
-      $.export,
       $.extern,
       $.type_declaration,
       $.type_alias,
       $.decl,
-      $.module,
+      $.component,
       $.instance,
-      $.policy,
       $.use,
       $.resource,
       $.settings,
@@ -128,8 +125,6 @@ export default grammar({
     ),
 
     edition: $ => seq('edition', field('version', $.integer)),
-
-    import: $ => seq('import', field('path', $.string)),
 
     // A provider's block takes no clause; the compiler's resolver says
     // so, so the grammar takes one as the parser does. A block with no
@@ -187,10 +182,6 @@ export default grammar({
       optional(field('rank', $.rank)),
       optional(seq('where', field('condition', $._body))),
     ),
-
-    // `export type NAME`: a module's alias, for its importers (a relation
-    // is not exported, R-5).
-    export: $ => seq('export', 'type', field('type', $._word)),
 
     extern: $ => seq(
       'extern',
@@ -251,19 +242,29 @@ export default grammar({
       optional(seq(':', field('type', $._type))),
     ),
 
-    module: $ => seq('module', field('name', $._word), field('body', $.statement_block)),
+    // `component NAME { .. }`: a component declared as an item (R-65).
+    component: $ => seq('component', field('name', $._word), field('body', $.statement_block)),
 
-    policy: $ => seq('policy', field('name', $._word), field('body', $.statement_block)),
-
+    // `instance PATH NAME [{ .. }] [where B]`: a named copy of a
+    // component.
     instance: $ => seq(
       'instance',
-      field('module', $._word),
-      field('name', $._word),
+      field('component', $.dotted_name),
+      field('name', $._name),
       optional(field('body', $.block)),
       optional($.clause),
     ),
 
-    use: $ => seq('use', field('name', $._word)),
+    // `use PATH [as NAME] [{ .. }] [where B]`: a module by its path from
+    // the project root, a component stamped once (its inputs the block),
+    // or a stack's deployments.
+    use: $ => seq(
+      'use',
+      field('path', $.dotted_name),
+      optional(seq('as', field('name', $._word))),
+      optional(field('body', $.block)),
+      optional($.clause),
+    ),
 
     statement_block: $ => seq(
       '{',
@@ -450,9 +451,12 @@ export default grammar({
     index_expression: $ => seq(
       field('object', $._chain),
       token.immediate('['),
-      commaSep1(field('index', $._term)),
+      commaSep1(field('index', choice($._term, alias($._keyed, $.named_argument)))),
       ']',
     ),
+
+    // `[k=v]`: a stack's deployment by its keys (R-65).
+    _keyed: $ => seq(field('name', $._word), '=', field('value', $._term)),
 
     call: $ => seq(
       field('function', $._chain),
@@ -506,6 +510,12 @@ export default grammar({
       $.identifier,
       alias(choice(...STATEMENT_KEYWORDS, ...TERM_WORDS, ...CONTEXTUAL), $.identifier),
     )),
+
+    // A name that is not a body word: where a clause may follow it.
+    _name: $ => choice(
+      $.identifier,
+      alias(choice(...STATEMENT_KEYWORDS, ...CONTEXTUAL), $.identifier),
+    ),
 
     identifier: _ => IDENT,
 

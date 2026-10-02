@@ -322,8 +322,8 @@ mod tests {
             "p(a, b) where q(x), x > 1\nresource net.vpc main { cidr = \"x\", tags = { a: 1 } }\n"
         );
         assert_eq!(
-            fmt("module m {\np(x) where q(x)\n}\n"),
-            "module m {\n  p(x) where q(x)\n}\n"
+            fmt("component m {\np(x) where q(x)\n}\n"),
+            "component m {\n  p(x) where q(x)\n}\n"
         );
         assert_eq!(fmt("p(a /b,t[e].p)\n"), "p(a / b, t[e].p)\n");
     }

@@ -101,7 +101,6 @@ fn reject_pending(stmts: &[Stmt]) -> Result<()> {
                     );
                 }
                 Stmt::Module(d) => walk(&d.body, At::Module, diags),
-                Stmt::PolicyPack(p) => walk(&p.body, At::Module, diags),
                 Stmt::ExternFn(e) if at != At::Top => diags.push(misplaced(
                     e.span,
                     "`extern` belongs at the top of the program",
@@ -460,15 +459,19 @@ fn rewrite_stmt_records(stmt: Stmt, schemas: &BTreeMap<String, Vec<String>>) -> 
             if let Some(b) = u.body {
                 u.body = Some(rewrite_lits_records(b, schemas)?);
             }
+            if let Some(b) = u.clause {
+                u.clause = Some(rewrite_lits_records(b, schemas)?);
+            }
             Stmt::Instance(u)
         }
-        Stmt::PolicyPack(mut p) => {
-            p.body = p
-                .body
-                .into_iter()
-                .map(|s| rewrite_stmt_records(s, schemas))
-                .collect::<Result<Vec<_>>>()?;
-            Stmt::PolicyPack(p)
+        Stmt::Use(mut u) => {
+            if let Some(b) = u.body {
+                u.body = Some(rewrite_lits_records(b, schemas)?);
+            }
+            if let Some(b) = u.clause {
+                u.clause = Some(rewrite_lits_records(b, schemas)?);
+            }
+            Stmt::Use(u)
         }
         Stmt::Settings(mut s) => {
             if let Some(b) = s.body {
@@ -1127,16 +1130,13 @@ fn drop_metadata(program: &Program) -> (Program, BTreeSet<Extern>, Vec<crate::as
                 });
                 fns.push(f.clone());
             }
-            Stmt::Import(_) => {
-                // Loader-level feature, ignored in evaluator for now.
-            }
             Stmt::Mixed(_) => {
                 // checked by check_mixed
             }
             Stmt::Settings(_) => {
                 // lowered away by desugar_settings
             }
-            Stmt::Instance(_) | Stmt::Module(_) | Stmt::PolicyPack(_) | Stmt::ApplyPolicy(_) => {
+            Stmt::Instance(_) | Stmt::Module(_) | Stmt::Use(_) => {
                 // lowered away earlier
             }
             Stmt::Decl(_) => {

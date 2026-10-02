@@ -1,6 +1,6 @@
 //! Doc comments (docs/grammar.md "Doc comments"): `#|` lines directly
-//! above a module, input, output, predicate, rule, type alias, policy
-//! or resource. `#| key: value` is a pair, any other `#|` line is
+//! above a component, input, output, predicate, rule, type alias or
+//! resource. `#| key: value` is a pair, any other `#|` line is
 //! part of the item's `description`. They lower to `doc(Kind, Name, Key,
 //! Value)` facts; the language server shows them and `dform doc` renders
 //! them.
@@ -15,10 +15,10 @@ pub const KEYS: &[&str] = &["description", "owner", "since", "deprecated"];
 /// One documented item.
 #[derive(Debug, Clone)]
 pub struct Doc {
-    /// `module`, `input`, `output`, `predicate`, `rule`, `alias`,
-    /// `policy` or `resource`.
+    /// `component`, `input`, `output`, `predicate`, `rule`, `alias` or
+    /// `resource`.
     pub kind: &'static str,
-    /// Its name; inside a module or policy `BLOCK.NAME`.
+    /// Its name; inside a component `COMPONENT.NAME`.
     pub name: String,
     /// The pairs in order, the description (bare lines joined) first.
     pub pairs: Vec<(String, String)>,
@@ -146,8 +146,7 @@ fn unquote(t: &SyntaxToken) -> String {
 /// document; `None` for anything else.
 pub fn item(n: &SyntaxNode) -> Option<(&'static str, String)> {
     Some(match n.kind() {
-        MODULE => ("module", word(n, 1)?),
-        POLICY => ("policy", word(n, 1)?),
+        COMPONENT => ("component", word(n, 1)?),
         INPUT => ("input", word(n, 1)?),
         INPUT_RELATION => ("predicate", word(n, 1)?),
         OUTPUT_DECL => ("output", word(n, 1)?),
@@ -179,11 +178,11 @@ pub fn item(n: &SyntaxNode) -> Option<(&'static str, String)> {
     })
 }
 
-/// The module or policy a statement is in.
+/// The component a statement is in.
 pub fn enclosing(n: &SyntaxNode) -> Option<String> {
     n.ancestors()
         .skip(1)
-        .find(|a| matches!(a.kind(), MODULE | POLICY))
+        .find(|a| a.kind() == COMPONENT)
         .and_then(|a| word(&a, 1))
 }
 
@@ -282,12 +281,12 @@ mod tests {
 
     #[test]
     fn doc_lines_directly_above_an_item_document_it() {
-        let src = "edition 2026\n\n#| The network.\n#| owner: platform\n#|\n#| Its subnets are private.\nmodule network {\n  #| The VPC's range.\n  #| since: 2026.1\n  input vpc_net: inet\n\n  #| not this: a blank line follows\n\n  output vpc: net.vpc\n  #| A subnet.\n  resource net.subnet \"private-${z}\" @default {\n  } where data(\"zone\", z)\n}\nlet x = 1 #| a trailing comment\nlet y = 2\n# a plain comment\n#| deprecated: use q\np(a) where q(a)\n#| Checked.\ndeny \"no\" where p(1)\n#| Named.\ntype env = enum(\"a\")\n#| An extern.\nextern dns.lookup(+name, -addr)\n";
+        let src = "edition 2026\n\n#| The network.\n#| owner: platform\n#|\n#| Its subnets are private.\ncomponent network {\n  #| The VPC's range.\n  #| since: 2026.1\n  input vpc_net: inet\n\n  #| not this: a blank line follows\n\n  output vpc: net.vpc\n  #| A subnet.\n  resource net.subnet \"private-${z}\" @default {\n  } where data(\"zone\", z)\n}\nlet x = 1 #| a trailing comment\nlet y = 2\n# a plain comment\n#| deprecated: use q\np(a) where q(a)\n#| Checked.\ndeny \"no\" where p(1)\n#| Named.\ntype env = enum(\"a\")\n#| An extern.\nextern dns.lookup(+name, -addr)\n";
         assert_eq!(
             docs(src),
             vec![
                 (
-                    "module".into(),
+                    "component".into(),
                     "network".into(),
                     kv(&[
                         ("description", "The network.\n\nIts subnets are private."),

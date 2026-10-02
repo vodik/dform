@@ -37,7 +37,6 @@
 (dotted_name (identifier) @type)
 (type name: (dotted_name (identifier) @type.builtin))
 (type_alias name: (identifier) @type.definition)
-(export type: (identifier) @type)
 
 (call function: (identifier) @function.call)
 (call function: (member_expression field: (identifier) @function.call))
@@ -54,10 +53,10 @@
 (bind_arg name: (identifier) @variable.parameter)
 (field_declaration name: (identifier) @variable.parameter)
 
-(module name: (identifier) @module)
-(policy name: (identifier) @module)
+(component name: (identifier) @module)
+(use path: (dotted_name (identifier) @module))
 (use name: (identifier) @module)
-(instance module: (identifier) @module)
+(instance component: (dotted_name (identifier) @module))
 (instance name: (identifier) @label)
 (provider name: (identifier) @module)
 (resource name: (identifier) @label)
@@ -107,9 +106,9 @@
 ; --- keywords ---------------------------------------------------------------
 
 [
-  "edition" "provider" "key" "import" "input" "from" "output" "export"
+  "edition" "provider" "key" "input" "from" "output"
   "extern" "persist" "type" "decl" "mixed" "let" "set"
-  "module" "instance" "policy" "use" "resource" "settings"
+  "component" "instance" "use" "as" "resource" "settings"
 ] @keyword
 
 ["where" "check"] @keyword.conditional

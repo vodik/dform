@@ -22,7 +22,8 @@
 ;;   reference, not a read, and is fontified with `dform-reference-face'.
 ;; - Indentation, translated from tree-sitter-dform/queries/indents.scm,
 ;;   matching `dform fmt' (docs/grammar.md "Formatting").
-;; - Imenu for rules (by head predicate), modules, instances, resources
+;; - Imenu for rules (by head predicate), components, uses, instances,
+;;   resources
 ;;   (by type and name) and policies, and defun navigation
 ;;   (`C-M-a', `C-M-e', `C-M-h') over the same node types.
 ;; - An `eglot-server-programs' entry for `dform lsp' and two commands,
@@ -180,10 +181,10 @@ apply-order edge, not its content read now (`docs/grammar.md'
 
    :language 'dform
    :feature 'definition
-   '((module name: (identifier) @font-lock-function-name-face)
-     (policy name: (identifier) @font-lock-function-name-face)
+   '((component name: (identifier) @font-lock-function-name-face)
+     (use path: (dotted_name (identifier) @font-lock-function-name-face))
      (use name: (identifier) @font-lock-function-name-face)
-     (instance module: (identifier) @font-lock-function-name-face)
+     (instance component: (dotted_name (identifier) @font-lock-function-name-face))
      (instance name: (identifier) @font-lock-function-name-face)
      (provider name: (identifier) @font-lock-function-name-face)
      (resource name: (identifier) @font-lock-function-name-face)
@@ -245,9 +246,9 @@ apply-order edge, not its content read now (`docs/grammar.md'
    :language 'dform
    :feature 'keyword
    '([
-      "edition" "provider" "key" "import" "input" "from" "output" "export"
+      "edition" "provider" "key" "input" "from" "output"
       "extern" "persist" "type" "decl" "mixed" "let" "set"
-      "module" "instance" "policy" "use" "resource" "settings"
+      "component" "instance" "use" "as" "resource" "settings"
       ] @font-lock-keyword-face
      ["where" "check"] @font-lock-keyword-face
      ["deny" "warn"] @font-lock-keyword-face
@@ -299,15 +300,15 @@ apply-order edge, not its content read now (`docs/grammar.md'
 ;;; Navigation and imenu
 
 (defvar dform-ts-mode--defun-type-regexp
-  (regexp-opt '("rule" "fact" "module" "instance" "resource" "policy"))
+  (regexp-opt '("rule" "fact" "component" "use" "instance" "resource"))
   "Regexp matching node types treated as defuns in `dform-ts-mode'.")
 
 (defun dform-ts-mode--defun-name (node)
   "Return a name for NODE, a dform defun node, or nil.
 
 Rules and facts are named by their head predicate; resources by
-type and name; everything else (modules, instances, policies) by
-its `name' field."
+type and name; a `use' by its path; everything else (components,
+instances) by its `name' field."
   (pcase (treesit-node-type node)
     ((or "rule" "fact")
      (when-let* ((head (treesit-node-child-by-field-name node "head")))
@@ -315,6 +316,9 @@ its `name' field."
         (or (treesit-node-child-by-field-name head "function")
             (treesit-node-child-by-field-name head "name"))
         t)))
+    ("use"
+     (when-let* ((path (treesit-node-child-by-field-name node "path")))
+       (treesit-node-text path t)))
     ("resource"
      (when-let* ((type (treesit-node-child-by-field-name node "type"))
                  (name (treesit-node-child-by-field-name node "name")))
@@ -325,10 +329,10 @@ its `name' field."
 
 (defvar dform-ts-mode--imenu-settings
   '(("Rule" "\\`\\(?:rule\\|fact\\)\\'" nil nil)
-    ("Module" "\\`module\\'" nil nil)
+    ("Component" "\\`component\\'" nil nil)
+    ("Use" "\\`use\\'" nil nil)
     ("Instance" "\\`instance\\'" nil nil)
-    ("Resource" "\\`resource\\'" nil nil)
-    ("Policy" "\\`policy\\'" nil nil))
+    ("Resource" "\\`resource\\'" nil nil))
   "`treesit-simple-imenu-settings' for `dform-ts-mode'.")
 
 ;;; Eglot (the `dform lsp' language server)

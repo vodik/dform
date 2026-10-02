@@ -1,7 +1,7 @@
 //! Schema completion: a resource block's attribute paths (with their type,
 //! flags and refinements) and an enum attribute's values, from the
 //! provider's schema facts; resource types after `resource`; a module
-//! instance's inputs and, after `module.instance.`, its outputs.
+//! instance's inputs and, after `copy.`, its outputs.
 //! A type's or path's documentation is its `type_doc`. Elsewhere a word
 //! completes to the builtins and keywords it starts (`engine::references`).
 
@@ -152,10 +152,17 @@ pub fn complete(
             })
             .collect();
     }
-    // `module.instance.`: the module's outputs.
+    // `copy.`: the outputs of the copy's component (R-65), the copy an
+    // `instance` of the file names.
     let segs: Vec<&str> = word.split('.').collect();
-    if segs.len() == 3
-        && let Some(m) = modules(segs[0])
+    if let [copy, ""] = segs.as_slice()
+        && let Some(path) = root
+            .descendants()
+            .filter(|n| n.kind() == SyntaxKind::INSTANCE)
+            .map(|n| dform_core::syntax::resolve::instance_parts(&n))
+            .find(|(_, name)| name == copy)
+            .map(|(path, _)| path)
+        && let Some(m) = modules(&path)
     {
         return m
             .outputs
@@ -165,7 +172,7 @@ pub fn complete(
                     n,
                     CompletionItemKind::PROPERTY,
                     ty,
-                    Some(format!("output of module {}", segs[0])),
+                    Some(format!("output of {copy}, a copy of {path}")),
                 )
             })
             .collect();
@@ -247,12 +254,10 @@ pub fn complete(
             })
             .collect();
     }
-    // An instance block: its module's inputs.
+    // An instance block: its component's inputs.
     if let Some(i) = in_block(SyntaxKind::INSTANCE) {
-        let Some(m) = nav::declared_name(&i) else {
-            return Vec::new();
-        };
-        let Some(interface) = modules(m.text()) else {
+        let (m, _) = dform_core::syntax::resolve::instance_parts(&i);
+        let Some(interface) = modules(&m) else {
             return Vec::new();
         };
         return interface
@@ -263,7 +268,7 @@ pub fn complete(
                     n,
                     CompletionItemKind::FIELD,
                     ty,
-                    Some(format!("input of module {}", m.text())),
+                    Some(format!("input of component {m}")),
                 )
             })
             .collect();

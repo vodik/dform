@@ -1,7 +1,8 @@
 ; dform scopes. A variable's scope is its rule (docs/grammar.md "Names"):
 ; a rule, a fact, a `let`, a `set`, an output, a check or a block, and
 ; every occurrence in it is the same variable. Declared names (inputs,
-; `let`s, outputs, resources, modules) are definitions of the enclosing
+; `let`s, outputs, resources, components, instances, the names a `use`
+; binds) are definitions of the enclosing
 ; statement list.
 
 [
@@ -22,8 +23,9 @@
 (output name: (identifier) @local.definition.var)
 (let name: (identifier) @local.definition.var)
 (resource name: (identifier) @local.definition.var)
-(module name: (identifier) @local.definition.namespace)
+(component name: (identifier) @local.definition.namespace)
 (instance name: (identifier) @local.definition.namespace)
+(use name: (identifier) @local.definition.namespace)
 (decl name: (dotted_name) @local.definition.function)
 (extern name: (dotted_name) @local.definition.function)
 

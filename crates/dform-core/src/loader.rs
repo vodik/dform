@@ -1,7 +1,7 @@
 use crate::ast::Program;
 use crate::diag;
 use anyhow::{Context, Result};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -21,10 +21,14 @@ struct Parsed {
 
 static PARSED: Mutex<BTreeMap<PathBuf, Parsed>> = Mutex::new(BTreeMap::new());
 
-/// Every file of the program is parsed (imports followed, a file reached
-/// twice loaded once), then the whole program is resolved at once: a name
-/// declared in one file is used in another. Each import is inlined where
-/// it stands.
+/// Every file of the program is parsed, then the whole program is resolved
+/// at once (R-65): the entry files, and every module and component a `use`
+/// or an `instance` names by its path, and theirs in turn, each loaded once
+/// however often it is named. A path is looked up, never searched:
+/// `modules.net` is `modules/net.df` under the project root (outside every
+/// project, beside the entry), a first segment `[packages]` names is that
+/// project's root, `std.x` is the standard library, and a stack's file is
+/// not loaded at all: what is read of it is its deployments' outputs.
 pub fn load_program(entry_files: &[PathBuf]) -> Result<Program> {
     load_program_with(entry_files, &|p| fs::read_to_string(p))
 }
@@ -36,27 +40,327 @@ pub fn load_program_with(
     entry_files: &[PathBuf],
     read: &dyn Fn(&Path) -> std::io::Result<String>,
 ) -> Result<Program> {
-    let mut units = Vec::new();
-    let mut index: BTreeMap<PathBuf, usize> = BTreeMap::new();
-    let mut entries = Vec::new();
-    for f in entry_files {
-        let abs = absolutize(f)?;
-        if let Some(i) = load_unit(&abs, read, &mut units, &mut index)? {
-            entries.push(i);
-        }
-    }
+    let loaded = load_units(entry_files, read)?;
     let stack = match entry_files.first() {
         Some(f) => stack_source(f, read)?,
         None => None,
     };
     crate::syntax::resolve::lower_stack(
-        &units,
-        &entries,
+        &loaded.units,
+        &loaded.entries,
         true,
         crate::syntax::resolve::Mode::Program,
         stack.as_ref(),
+        &loaded.deployed,
     )
     .map_err(|d| diag::Diagnostics(d).into())
+}
+
+/// The units of a program: its entry files first, then the modules their
+/// paths reach.
+struct Loaded {
+    units: Vec<crate::syntax::resolve::Unit>,
+    entries: Vec<usize>,
+    /// Each unit's file, canonical.
+    files: Vec<PathBuf>,
+    /// The stacks a `use` names (R-65).
+    deployed: Vec<crate::syntax::resolve::Deployed>,
+}
+
+/// Where paths are looked up: the project root (or, outside every
+/// project, the entry's directory) and the packages mounted in it.
+struct Mounts {
+    root: PathBuf,
+    project: bool,
+    packages: BTreeMap<String, PathBuf>,
+}
+
+/// What a path names.
+enum Target {
+    /// A module's file: its module path, its canonical file.
+    File(String, PathBuf),
+    /// A stack, deployed by the tool.
+    Stack(crate::syntax::resolve::Deployed),
+    /// The standard library.
+    Std,
+    /// Nothing: the files it could have been.
+    Missing(Vec<PathBuf>),
+}
+
+impl Mounts {
+    fn of(entry: &Path, read: &dyn Fn(&Path) -> std::io::Result<String>) -> Result<Mounts> {
+        let Some(root) = crate::project::manifest_root(entry) else {
+            return Ok(Mounts {
+                root: entry.parent().unwrap_or(Path::new(".")).to_path_buf(),
+                project: false,
+                packages: BTreeMap::new(),
+            });
+        };
+        let path = root.join(crate::project::MANIFEST);
+        let text = read(&path).with_context(|| format!("read {}", path.display()))?;
+        let manifest = crate::project::Manifest::parse(&path, &text)?;
+        Ok(Mounts {
+            packages: manifest.package_roots(),
+            root,
+            project: true,
+        })
+    }
+
+    /// The file a path names: `a.b.c` is `a/b/c.df`, or the item `c` of
+    /// `a/b.df`.
+    fn lookup(&self, path: &str) -> Target {
+        let segs: Vec<&str> = path.split('.').collect();
+        if segs[0] == "std" {
+            return Target::Std;
+        }
+        let (base, rest, prefix, project) = match self.packages.get(segs[0]) {
+            Some(root) if segs.len() > 1 => (root.clone(), &segs[1..], Some(segs[0]), true),
+            _ => (self.root.clone(), &segs[..], None, self.project),
+        };
+        let file = |segs: &[&str]| {
+            let mut f = base.clone();
+            for s in segs {
+                f.push(s);
+            }
+            f.set_extension("df");
+            f
+        };
+        let mut tried = vec![file(rest)];
+        let (found, module) = if tried[0].is_file() {
+            (tried[0].clone(), path.to_string())
+        } else if rest.len() > 1 && file(&rest[..rest.len() - 1]).is_file() {
+            let m = segs[..segs.len() - 1].join(".");
+            (file(&rest[..rest.len() - 1]), m)
+        } else {
+            if rest.len() > 1 {
+                tried.push(file(&rest[..rest.len() - 1]));
+            }
+            return Target::Missing(tried);
+        };
+        let found = fs::canonicalize(&found).unwrap_or(found);
+        let base = fs::canonicalize(&base).unwrap_or(base);
+        // A stack is a file under stacks/ (R-65), or one dform.toml's
+        // `[stacks.NAME]` names.
+        let under_stacks = found
+            .parent()
+            .is_some_and(|d| d == base.join(crate::project::STACKS_DIR));
+        let named = || {
+            let stem = crate::state::stack_name(&found);
+            found.parent() == Some(base.as_path())
+                && std::fs::read_to_string(base.join(crate::project::MANIFEST))
+                    .ok()
+                    .and_then(|t| {
+                        crate::project::Manifest::parse(&base.join(crate::project::MANIFEST), &t)
+                            .ok()
+                    })
+                    .is_some_and(|m| m.stacks.contains_key(&stem))
+        };
+        if project && (under_stacks || named()) {
+            let keys = fs::read_to_string(&found)
+                .ok()
+                .map(|text| crate::syntax::parser::parse(&text))
+                .filter(|p| p.errors.is_empty())
+                .map(|p| crate::syntax::resolve::key_names(&p.syntax()))
+                .unwrap_or_default();
+            let stem = crate::state::stack_name(&found);
+            return Target::Stack(crate::syntax::resolve::Deployed {
+                path: module,
+                name: match prefix {
+                    Some(p) => format!("{p}.{stem}"),
+                    None => stem,
+                },
+                keys,
+            });
+        }
+        Target::File(module, found)
+    }
+}
+
+fn load_units(
+    entry_files: &[PathBuf],
+    read: &dyn Fn(&Path) -> std::io::Result<String>,
+) -> Result<Loaded> {
+    use crate::syntax::SyntaxKind::{COMPONENT, INSTANCE, USE};
+    let mut loaded = Loaded {
+        units: Vec::new(),
+        entries: Vec::new(),
+        files: Vec::new(),
+        deployed: Vec::new(),
+    };
+    let Some(first) = entry_files.first() else {
+        return Ok(loaded);
+    };
+    let mounts = Mounts::of(&absolutize(first)?, read)?;
+    let std = crate::functions::registry().packages();
+    for f in entry_files {
+        let abs = absolutize(f)?;
+        let abs = fs::canonicalize(&abs).unwrap_or(abs);
+        if loaded.files.contains(&abs) {
+            continue;
+        }
+        let i = load_unit(&abs, None, read, &mut loaded)?;
+        loaded.entries.push(i);
+    }
+    // The edges between files, for the cycle check: (from, to, where).
+    let mut edges: Vec<(usize, usize, crate::ast::Span)> = Vec::new();
+    let mut errors = Vec::new();
+    let mut done = 0;
+    while done < loaded.units.len() {
+        let i = done;
+        done += 1;
+        let (file, root) = (loaded.units[i].file, loaded.units[i].root.clone());
+        // Names the file binds itself: its components, and what its
+        // `use`s bind. An `instance` path starting with one is the file's
+        // own, resolved where it is lowered.
+        let mut local = BTreeSet::new();
+        let mut components = BTreeSet::new();
+        for n in root.descendants() {
+            match n.kind() {
+                COMPONENT => {
+                    components.insert(crate::syntax::resolve::component_name(&n));
+                    local.insert(crate::syntax::resolve::component_name(&n));
+                }
+                USE => {
+                    local.insert(crate::syntax::resolve::use_parts(&n).1);
+                }
+                _ => {}
+            }
+        }
+        for n in root.descendants() {
+            let path = match n.kind() {
+                USE => crate::syntax::resolve::use_parts(&n).0,
+                INSTANCE => crate::syntax::resolve::instance_parts(&n).0,
+                _ => continue,
+            };
+            // A path whose first segment the file binds itself is its own,
+            // resolved where it is lowered: a component it declares, or a
+            // module one of its `use`s brings.
+            let head = path.split('.').next().unwrap_or_default();
+            if components.contains(head) || (n.kind() == INSTANCE && local.contains(head)) {
+                continue;
+            }
+            if path.is_empty() {
+                continue;
+            }
+            let span = span_at(file, n.text_range());
+            match mounts.lookup(&path) {
+                Target::Std => {}
+                Target::Stack(d) => {
+                    if !loaded.deployed.iter().any(|x| x.path == d.path) {
+                        loaded.deployed.push(d);
+                    }
+                }
+                Target::Missing(tried) => {
+                    let tried: Vec<String> = tried.iter().map(|f| display_name(f)).collect();
+                    let what = if n.kind() == USE {
+                        "module"
+                    } else {
+                        "component"
+                    };
+                    let mut d = diag::Diagnostic::error(
+                        span,
+                        format!("no {what} `{path}`: there is no {}", tried.join(" and no ")),
+                    )
+                    .with_help(
+                        "a path is the file's from the project root, its `/` a `.`: \
+                         `modules.net` is modules/net.df, and `modules.net.vpc` its \
+                         `component vpc`",
+                    );
+                    if n.kind() == INSTANCE {
+                        d = d.with_note(
+                            "a component this file declares or a `use` names is \
+                                         written by its own name",
+                        );
+                    }
+                    errors.push(d);
+                }
+                Target::File(module, f) => {
+                    let stem = crate::state::stack_name(&f);
+                    if std.contains(&stem.as_str()) {
+                        errors.push(
+                            diag::Diagnostic::error(
+                                span,
+                                format!(
+                                    "the module {} is named like the standard library's \
+                                     `{stem}`",
+                                    display_name(&f)
+                                ),
+                            )
+                            .with_help(format!("rename it: std.{stem} is always in scope")),
+                        );
+                        continue;
+                    }
+                    let j = match loaded.files.iter().position(|x| *x == f) {
+                        Some(j) => j,
+                        None => load_unit(&f, Some(module), read, &mut loaded)?,
+                    };
+                    edges.push((i, j, span));
+                }
+            }
+        }
+    }
+    if errors.is_empty() {
+        errors.extend(cycle(&loaded, &edges));
+    }
+    if !errors.is_empty() {
+        return Err(diag::Diagnostics(errors).into());
+    }
+    Ok(loaded)
+}
+
+/// A `use` or `instance` cycle among the program's files: an error naming
+/// it, at the statement that closes it.
+fn cycle(loaded: &Loaded, edges: &[(usize, usize, crate::ast::Span)]) -> Option<diag::Diagnostic> {
+    fn visit(
+        i: usize,
+        edges: &[(usize, usize, crate::ast::Span)],
+        path: &mut Vec<(usize, Option<crate::ast::Span>)>,
+        done: &mut BTreeSet<usize>,
+    ) -> Option<Vec<(usize, Option<crate::ast::Span>)>> {
+        if let Some(at) = path.iter().position(|(x, _)| *x == i) {
+            return Some(path[at..].to_vec());
+        }
+        if !done.insert(i) {
+            return None;
+        }
+        for (from, to, span) in edges {
+            if *from == i {
+                path.push((i, Some(*span)));
+                if let Some(c) = visit(*to, edges, path, done) {
+                    return Some(c);
+                }
+                path.pop();
+            }
+        }
+        None
+    }
+    let mut done = BTreeSet::new();
+    for &e in &loaded.entries {
+        let mut path = Vec::new();
+        if let Some(c) = visit(e, edges, &mut path, &mut done) {
+            let name = |i: usize| match &loaded.units[i].path {
+                Some(p) => p.clone(),
+                None => display_name(&loaded.files[i]),
+            };
+            let mut names: Vec<String> = c.iter().map(|(i, _)| name(*i)).collect();
+            names.push(name(c[0].0));
+            let at = c.last().and_then(|(_, s)| *s).unwrap_or_default();
+            return Some(
+                diag::Diagnostic::error(at, format!("use cycle: {}", names.join(" -> ")))
+                    .with_note("a module is loaded before what uses it, so none may use itself"),
+            );
+        }
+    }
+    None
+}
+
+fn span_at(file: u32, r: rowan::TextRange) -> crate::ast::Span {
+    crate::ast::Span {
+        file,
+        start: r.start().into(),
+        end: r.end().into(),
+        origin: 0,
+    }
 }
 
 /// The manifests as last registered, by path: their name, their text and
@@ -148,39 +452,24 @@ fn stack_source(
 }
 
 /// The files of the program `entry_files` name, in the order they load:
-/// each entry file, and every file its imports reach.
+/// each entry file, and every module file its paths reach.
 pub fn program_files(entry_files: &[PathBuf]) -> Result<Vec<PathBuf>> {
-    let mut units = Vec::new();
-    let mut index: BTreeMap<PathBuf, usize> = BTreeMap::new();
-    for f in entry_files {
-        load_unit(
-            &absolutize(f)?,
-            &|p| fs::read_to_string(p),
-            &mut units,
-            &mut index,
-        )?;
-    }
-    let mut files: Vec<(usize, PathBuf)> = index.into_iter().map(|(p, i)| (i, p)).collect();
-    files.sort();
-    Ok(files.into_iter().map(|(_, p)| p).collect())
+    Ok(load_units(entry_files, &|p| fs::read_to_string(p))?.files)
 }
 
+/// Parse `abs` (canonical) into a unit: an entry file, or with `module`
+/// the module that path names.
 fn load_unit(
-    path: &Path,
+    abs: &Path,
+    module: Option<String>,
     read: &dyn Fn(&Path) -> std::io::Result<String>,
-    units: &mut Vec<crate::syntax::resolve::Unit>,
-    index: &mut BTreeMap<PathBuf, usize>,
-) -> Result<Option<usize>> {
-    let abs = absolutize(path)?;
-    let abs = fs::canonicalize(&abs).unwrap_or(abs);
-    if index.contains_key(&abs) {
-        return Ok(None);
-    }
-    let text = read(&abs).with_context(|| format!("read {}", abs.display()))?;
-    let name = display_name(&abs);
+    loaded: &mut Loaded,
+) -> Result<usize> {
+    let text = read(abs).with_context(|| format!("read {}", abs.display()))?;
+    let name = display_name(abs);
     let (green, file) = {
         let mut cache = PARSED.lock().unwrap_or_else(|e| e.into_inner());
-        match cache.get(&abs) {
+        match cache.get(abs) {
             Some(p) if p.name == name && p.text == text => (p.green.clone(), p.file),
             _ => {
                 let parse = crate::syntax::parser::parse(&text);
@@ -191,7 +480,7 @@ fn load_unit(
                 let file = diag::add_source(&name, &text);
                 let sources = diag::pin_since(mark);
                 if let Some(old) = cache.insert(
-                    abs.clone(),
+                    abs.to_path_buf(),
                     Parsed {
                         name: name.clone(),
                         text: text.clone(),
@@ -206,70 +495,14 @@ fn load_unit(
             }
         }
     };
-    let root = crate::syntax::SyntaxNode::new_root(green);
-    let i = units.len();
-    index.insert(abs.clone(), i);
-    units.push(crate::syntax::resolve::Unit {
+    let i = loaded.units.len();
+    loaded.files.push(abs.to_path_buf());
+    loaded.units.push(crate::syntax::resolve::Unit {
         file,
-        root: root.clone(),
-        imports: None,
-        links: Vec::new(),
+        root: crate::syntax::SyntaxNode::new_root(green),
+        path: module,
     });
-    let base_dir = abs.parent().unwrap_or(Path::new(".")).to_path_buf();
-    // A project's imports resolve from its root (docs/layout.md); outside
-    // every project, from the importing file.
-    let project = crate::project::manifest_root(&abs);
-    let mut imports = Vec::new();
-    let mut links = Vec::new();
-    for n in root
-        .children()
-        .filter(|n| n.kind() == crate::syntax::SyntaxKind::IMPORT)
-    {
-        let Some(t) = n
-            .children_with_tokens()
-            .filter_map(|e| e.into_token())
-            .find(|t| t.kind() == crate::syntax::SyntaxKind::STRING)
-        else {
-            continue;
-        };
-        let rel = crate::syntax::resolve::unescape(t.text()).unwrap_or_default();
-        let target = match &project {
-            Some(root) => root.join(&rel),
-            _ => base_dir.join(&rel),
-        };
-        let unit = load_unit(&target, read, units, index)?;
-        // One program is one stack: what it imports is a module.
-        let imported = index.get(&fs::canonicalize(&target).unwrap_or(target.clone()));
-        if let Some(root) = &project
-            && imported.is_some()
-            && target.parent() == Some(root.join(crate::project::STACKS_DIR).as_path())
-        {
-            let r = n.text_range();
-            let span = crate::ast::Span {
-                file,
-                start: r.start().into(),
-                end: r.end().into(),
-                origin: 0,
-            };
-            return Err(diag::Diagnostics(vec![
-                diag::Diagnostic::error(
-                    span,
-                    format!(
-                        "import \"{rel}\": {} is a stack (a file under stacks/); a program \
-                         imports modules, never another stack",
-                        display_name(&target)
-                    ),
-                )
-                .with_help("read another stack's outputs with stack_output(Stack, Key, Value)"),
-            ])
-            .into());
-        }
-        imports.push(unit);
-        links.extend(imported.copied());
-    }
-    units[i].imports = Some(imports);
-    units[i].links = links;
-    Ok(Some(i))
+    Ok(i)
 }
 
 /// Predicates the provider or the CLI injects as facts (discovery, world,
@@ -429,13 +662,13 @@ mod tests {
     }
 
     /// `load_program_with` reads each file through its reader: an open
-    /// buffer's text, not the file's on disk, and an import of it too.
+    /// buffer's text, not the file's on disk, and a module it uses too.
     #[test]
     fn a_reader_stands_in_for_the_disk() {
         let dir = std::env::temp_dir().join(format!("dform-loader-with-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         let (main, lib) = (dir.join("main.df"), dir.join("lib.df"));
-        fs::write(&main, "edition 2026\nimport \"lib.df\"\np(1)\n").unwrap();
+        fs::write(&main, "edition 2026\nuse lib\np(1)\n").unwrap();
         fs::write(&lib, "edition 2026\nq(1)\n").unwrap();
         let buffer = |p: &Path| -> std::io::Result<String> {
             if p.ends_with("lib.df") {
@@ -448,8 +681,12 @@ mod tests {
         let facts: Vec<String> = p
             .statements
             .iter()
+            .flat_map(|s| match s {
+                Stmt::Module(m) => m.body.clone(),
+                s => vec![s.clone()],
+            })
             .filter_map(|s| match s {
-                Stmt::Fact(a) => Some(crate::partition::fmt_atom(a)),
+                Stmt::Fact(a) => Some(crate::partition::fmt_atom(&a)),
                 _ => None,
             })
             .collect();

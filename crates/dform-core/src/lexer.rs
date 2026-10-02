@@ -108,12 +108,11 @@ fn kind(t: Tok) -> SyntaxKind {
     }
 }
 
-/// The keywords, each its token kind: the 21 a statement starts with,
+/// The keywords, each its token kind: the 18 a statement starts with,
 /// the body words, the clause word `where` (R-1) and the literals (H
 /// section 4).
 pub const KEYWORDS: &[(&str, SyntaxKind)] = &[
     ("edition", EDITION_KW),
-    ("import", IMPORT_KW),
     ("provider", PROVIDER_KW),
     ("key", KEY_KW),
     ("type", TYPE_KW),
@@ -123,10 +122,8 @@ pub const KEYWORDS: &[(&str, SyntaxKind)] = &[
     ("output", OUTPUT_KW),
     ("let", LET_KW),
     ("set", SET_KW),
-    ("export", EXPORT_KW),
-    ("module", MODULE_KW),
+    ("component", COMPONENT_KW),
     ("instance", INSTANCE_KW),
-    ("policy", POLICY_KW),
     ("use", USE_KW),
     ("resource", RESOURCE_KW),
     ("settings", SETTINGS_KW),

@@ -20,8 +20,8 @@
 //! `.df` at the root is outside the layout; without one, the root's `.df`
 //! files are. A stack's keys are its `key` statements. A directory
 //! holding its own `dform.toml` is another project and is not walked.
-//! The layout is linted: a module or policy file with a `key` is an
-//! error, and a `.df` outside the layout's directories is a warning.
+//! Every other `.df` file is a module, named by its path from the root
+//! (R-65); one with a `key` is an error.
 
 use crate::ast::{Atom, Term};
 use crate::value::Value;
@@ -37,9 +37,6 @@ pub const MANIFEST: &str = "dform.toml";
 /// The local backend's directory at the project root: per-deployment
 /// state, audit logs, the plan key, the registry, and `cache/`.
 pub const STATE_DIR: &str = "dform.state";
-
-/// Where `.df` files belong in a project.
-pub const LAYOUT_DIRS: &[&str] = &["stacks", "modules", "policies", "providers"];
 
 /// A project: its root and its manifest.
 #[derive(Debug, Clone)]
@@ -184,8 +181,9 @@ pub struct Manifest {
     pub stacks: BTreeMap<String, StackTable>,
     #[serde(default)]
     pub discovery: DiscoveryConfig,
+    /// `[packages.NAME]`: another project mounted at `NAME` (R-65).
     #[serde(default)]
-    pub remotes: BTreeMap<String, RemoteEntry>,
+    pub packages: BTreeMap<String, PackageEntry>,
     /// The project root (the manifest's directory).
     #[serde(skip)]
     pub root: PathBuf,
@@ -194,15 +192,16 @@ pub struct Manifest {
     pub text: String,
 }
 
-/// `[remotes] NAME = { backend = "TERM" }`: another project whose stacks'
-/// outputs this one reads, `stack_output("NAME.STACK[k=v]", ..)`, through
-/// its backend (`stack::remote_location`).
+/// `[packages.NAME] path = "../infra"`: another project, mounted at
+/// `NAME` (R-65). Its files are modules under the name, `use
+/// infra.config`, and its stacks are deployed, `use infra.stacks.platform`
+/// reads them through the backend that project's dform.toml names
+/// (`stack::remote_location`).
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct RemoteEntry {
-    /// A backend term as `[defaults] backend` writes it, `{stack}` the
-    /// stack's name; without `{stack}`, the stacks are under it by name.
-    pub backend: String,
+pub struct PackageEntry {
+    /// The project's root, relative to this one's.
+    pub path: String,
 }
 
 /// `[project]`.
@@ -435,20 +434,12 @@ impl Manifest {
                 t.duration
             );
         }
-        for (name, r) in &m.remotes {
+        for name in m.packages.keys() {
             if name.is_empty() || name.contains(['.', '[', ']']) {
                 bail!(
-                    "{}: a remote's name is read as the first part of a dotted stack name;                      it has no `.`, `[` or `]`",
-                    at(&format!("[remotes] {name:?}"))
-                );
-            }
-            if crate::stack::parse_backend(&r.backend.replace("{stack}", "stack")).is_err() {
-                bail!(
-                    "{} = {:?}: the backends are `local(\"DIR\")`, DIR relative to the \
-                     project root, and `s3(\"BUCKET\", \"PREFIX\", {{endpoint: \"URL\", \
-                     region: \"R\"}})`; `{{stack}}` is the stack's name",
-                    at(&format!("[remotes] {name} backend")),
-                    r.backend
+                    "{}: a package's name is the first segment of the paths under it; it \
+                     has no `.`, `[` or `]`",
+                    at(&format!("[packages.{name:?}]"))
                 );
             }
         }
@@ -549,12 +540,42 @@ impl Manifest {
         crate::stack::parse_backend(&text).ok()
     }
 
-    /// `[remotes]`: each remote's backend term.
-    pub fn remotes(&self) -> BTreeMap<String, String> {
-        self.remotes
+    /// `[packages]`: each package's root, absolute.
+    pub fn package_roots(&self) -> BTreeMap<String, PathBuf> {
+        self.packages
             .iter()
-            .map(|(k, r)| (k.clone(), r.backend.clone()))
+            .map(|(k, p)| {
+                let dir = self.root.join(&p.path);
+                (k.clone(), std::fs::canonicalize(&dir).unwrap_or(dir))
+            })
             .collect()
+    }
+
+    /// Where each package's deployments are: the backend term its
+    /// `dform.toml` gives in `[defaults]` (a `local` directory made
+    /// relative to this project's root), else its `dform.state/`.
+    /// `stack::remote_location` reads a deployment `NAME.STACK[k=v]`
+    /// through it.
+    pub fn remotes(&self) -> BTreeMap<String, String> {
+        let mut out = BTreeMap::new();
+        for (name, p) in &self.packages {
+            let dir = Path::new(&p.path);
+            let path = self.root.join(dir).join(MANIFEST);
+            let theirs = std::fs::read_to_string(&path)
+                .ok()
+                .and_then(|text| Manifest::parse(&path, &text).ok())
+                .and_then(|m| m.defaults.backend.map(|b| b.into_inner()));
+            let local = |d: &Path| format!("local({:?})", dir.join(d).display().to_string());
+            let term = match theirs {
+                Some(t) => match crate::stack::parse_backend(&t) {
+                    Ok(crate::stack::Backend::Local(d)) => local(&d),
+                    _ => t,
+                },
+                None => local(Path::new(STATE_DIR)),
+            };
+            out.insert(name.clone(), term);
+        }
+        out
     }
 
     /// The lease's duration and renewal interval (an `s3` backend's).
@@ -612,6 +633,19 @@ impl Discovered {
 /// The directory a project's stacks are in (docs/layout.md).
 pub const STACKS_DIR: &str = "stacks";
 
+/// Is `file` a stack of the project rooted at `root` (R-29, R-65): a
+/// `.df` directly under `stacks/`, or, with no `stacks/`, at the root.
+pub fn is_stack_file(root: &Path, file: &Path) -> bool {
+    let Ok(rel) = file.strip_prefix(root) else {
+        return false;
+    };
+    let parts: Vec<_> = rel.components().collect();
+    match root.join(STACKS_DIR).is_dir() {
+        true => parts.len() == 2 && parts[0].as_os_str() == STACKS_DIR,
+        false => parts.len() == 1,
+    }
+}
+
 /// Walk `project` for its stacks: `stacks/*.df`, or, with no `stacks/`,
 /// the root's `.df` files, each named after itself. Files are named
 /// relative to the working directory when under it (as diagnostics name
@@ -624,41 +658,19 @@ pub fn discover(project: &Project) -> Discovered {
     let in_dir = project.root.join(STACKS_DIR).is_dir();
     let mut out = Discovered::default();
     for f in files {
-        let rel = f.strip_prefix(&project.root).unwrap_or(&f).to_path_buf();
-        let first = rel
-            .components()
-            .next()
-            .and_then(|c| c.as_os_str().to_str())
-            .unwrap_or_default()
-            .to_string();
-        let depth = rel.components().count();
-        let stack = match in_dir {
-            true => depth == 2 && first == STACKS_DIR,
-            false => depth == 1,
-        };
+        let stack = is_stack_file(&project.root, &f);
         let keys = std::fs::read_to_string(&f)
             .ok()
             .map(|text| crate::syntax::parser::parse(&text))
             .filter(|p| p.errors.is_empty())
             .map(|p| crate::syntax::resolve::key_names(&p.syntax()))
             .unwrap_or_default();
-        if !keys.is_empty() && depth > 1 && (first == "modules" || first == "policies") {
+        if !keys.is_empty() && !stack {
             out.errors.push(format!(
-                "{}: a {} file has a `key`; a key selects a stack's deployment, so it is \
-                 declared in the stack's own file, stacks/<name>.df (docs/layout.md)",
+                "{}: a file that is not a stack has a `key`; a key selects a stack's \
+                 deployment, so it is declared in the stack's own file, stacks/<name>.df \
+                 (docs/layout.md)",
                 display(&f),
-                if first == "modules" {
-                    "module"
-                } else {
-                    "policy"
-                }
-            ));
-        }
-        if !stack && (depth == 1 || !LAYOUT_DIRS.contains(&first.as_str())) {
-            out.warnings.push(format!(
-                "{} is outside the project layout ({}/ under the root; docs/layout.md)",
-                display(&f),
-                LAYOUT_DIRS.join("/, ")
             ));
         }
         if stack {

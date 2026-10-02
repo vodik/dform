@@ -2648,10 +2648,19 @@ fn unify_term(pat: &Term, fv: &Value, out: &mut HashMap<String, Value>, rec: &Re
                     return Ok(false);
                 };
                 let prefix = format!("{scope}::");
-                let Some(suffix) = full.strip_prefix(&prefix) else {
-                    return Ok(false);
-                };
-                return unify_term(&args[1], &Value::Str(suffix.to_string()), out, rec);
+                if let Some(suffix) = full.strip_prefix(&prefix) {
+                    let mut tmp = out.clone();
+                    if unify_term(&args[1], &Value::Str(suffix.to_string()), &mut tmp, rec)? {
+                        *out = tmp;
+                        return Ok(true);
+                    }
+                }
+                // As the function: a bound name that is already an address
+                // is itself (R-65), another copy's resource read through
+                // its output. An unbound one ranges over the scope's own.
+                return Ok(
+                    full.contains("::") && eval_term(&args[1], out).is_some_and(|v| v == *fv)
+                );
             }
             // `ref(T, A, P)` as a pattern takes a reference apart (R-42):
             // `deformation(k, ref("aws.vpc", A, ""), _)` binds `A`.
@@ -3033,14 +3042,14 @@ const REFERENCE: &[Reference] = &[
         "input",
         Kw,
         "input NAME: TYPE (= DEFAULT)? (check BODY)? | input NAME(COLUMN: TYPE, ...) from SOURCE",
-        "A typed input of the stack or module; with columns, a relation read from a table or a fact file (`facts(PATH)`).",
+        "A typed input of the stack or a component; with columns, a relation read from a table or a fact file (`facts(PATH)`).",
         "input env: environment = \"staging\"",
     ),
     r(
         "output",
         Kw,
         "output NAME (: TYPE)? = TERM (where BODY)?",
-        "A module's or stack's output, its type and its value in one statement.",
+        "A component's or stack's output, its type and its value in one statement.",
         "output vpc: net.vpc = vpc",
     ),
     r(
@@ -3058,38 +3067,24 @@ const REFERENCE: &[Reference] = &[
         "set r.tags.team = \"platform\" @default where r in resource",
     ),
     r(
-        "export",
+        "component",
         Kw,
-        "export type NAME",
-        "Make a module's type alias visible to its importers.",
-        "export type subnets",
-    ),
-    r(
-        "module",
-        Kw,
-        "module NAME { STATEMENTS }",
-        "A reusable block of statements, instantiated by `instance`; its predicates are private per instance.",
-        "module network { input vpc_net: inet }",
+        "component NAME { STATEMENTS }",
+        "A component, an item of a module: a block of resources with inputs, copied many times by `instance`; its predicates are private per copy, its outputs its public face.",
+        "component network { input vpc_net: inet }",
     ),
     r(
         "instance",
         Kw,
-        "instance MODULE NAME { INPUT = TERM, ... } (where BODY)?",
-        "One instance of a module; each field is a contribution to one of its inputs.",
+        "instance PATH NAME? { INPUT = TERM, ... } (where BODY)?",
+        "One copy of a component, by its path or a name in scope, named NAME or after the component; each field is a contribution to one of its inputs, and the clause gates the copy.",
         "instance network main { vpc_net = inet(\"10.0.0.0/16\") }",
-    ),
-    r(
-        "policy",
-        Kw,
-        "policy NAME { STATEMENTS }",
-        "A policy pack: checks and contributions, applied by `use`.",
-        "policy baseline { set r.tags.team = \"platform\" if r in resource }",
     ),
     r(
         "use",
         Kw,
-        "use POLICY",
-        "Apply a policy pack to the program.",
+        "use PATH (as NAME)? { INPUT = TERM, ... }? (where BODY)?",
+        "Import a module, a file by its path from the project root, once under NAME: its items read as `NAME.x`, its rules and denies run over what this scope sees, its inputs bound by the block or their defaults, its resources stamped once as `NAME::x`. `use stacks.NAME` binds a stack's deployments, read as `NAME[k=v].output`.",
         "use baseline",
     ),
     r(
@@ -3291,7 +3286,10 @@ pub const BODIES: &[(&str, Body)] = &[
         }),
         _ => None,
     }),
+    // A name that is already an address (another copy's resource, read
+    // through its output) is itself (R-65).
     ("scoped", |a| match a {
+        [_, Value::Str(name)] if name.contains("::") => Some(Value::Str(name.clone())),
         [scope, name] => Some(Value::Str(format!(
             "{}::{}",
             value_to_string(scope),
@@ -3893,10 +3891,10 @@ mod tests {
         let (r, violations) = run("type_lattice(\"settings\", \"sinks\", \"set\")
              settings prod { sinks += [\"cloudwatch\"], days = 14 }
              setting_add(\"prod\", \"sinks\", [\"s3\"])
-             module network { output ids: list(string) = [\"a\", \"b\"] }
-             instance network main {}
+             component network {\n output ids: list(string) = [\"a\", \"b\"]\n }
+             instance network main
              got(s, d) where setting(\"prod\", \"sinks\", s), setting(\"prod\", \"days\", d)
-             ids(l) where output(\"network.main\", \"ids\", l)
+             ids(l) where output(\"main\", \"ids\", l)
              deny \"no audit\" where not setting(\"prod\", \"audit\", true)")
         .unwrap();
         assert_eq!(
@@ -3981,7 +3979,6 @@ mod tests {
             for s in stmts.iter_mut() {
                 match s {
                     Stmt::Module(c) => shuffle(&mut c.body, seed),
-                    Stmt::PolicyPack(p) => shuffle(&mut p.body, seed),
                     _ => {}
                 }
             }
@@ -4080,12 +4077,15 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let old = dir.join("dform.df");
         let old_src = format!("{}{}{}", &src[..start], copied, &src[end..])
-            .replace(", config = yaml(\"config/dform/${env}.yaml\")", "")
-            .replace(
-                "import \"",
-                &format!("import \"{}/", root.join("examples/demo").display()),
-            );
+            .replace(", config = yaml(\"config/dform/${env}.yaml\")", "");
         std::fs::write(&old, old_src).unwrap();
+        // The modules and components it names by path, beside it.
+        for f in std::fs::read_dir(root.join("examples/demo")).unwrap() {
+            let f = f.unwrap().path();
+            if f.extension().is_some_and(|e| e == "df") {
+                std::fs::copy(&f, dir.join(f.file_name().unwrap())).unwrap();
+            }
+        }
         let resources = |path: &std::path::Path, env: Option<&str>| {
             let program = crate::loader::load_program(&[path.to_path_buf()]).unwrap();
             let extra: Vec<Atom> = env
@@ -4122,7 +4122,7 @@ mod tests {
     /// replaced wholesale by a normal one, and same-shelf sets union.
     #[test]
     fn a_default_set_is_replaced_not_unioned() {
-        let (r, violations) = run("type_lattice(net.vpc, \"sgs\", \"set\")\n             resource net.vpc a { sgs = [\"base\"] }\n             resource net.vpc b { }\n             policy p {\n               arg(t, n, \"sgs\", [\"default_sg\", \"ssh\"], \"default\") where want(t, n)\n               arg(t, n, \"sgs\", [\"audit\"]) where want(t, n), n = \"a\"\n             }\n             use p")
+        let (r, violations) = run("type_lattice(net.vpc, \"sgs\", \"set\")\n             resource net.vpc a { sgs = [\"base\"] }\n             resource net.vpc b { }\n             arg(t, n, \"sgs\", [\"default_sg\", \"ssh\"], \"default\") where want(t, n)\n             arg(t, n, \"sgs\", [\"audit\"]) where want(t, n), n = \"a\"")
         .unwrap();
         assert!(violations.is_empty(), "{violations:?}");
         assert_eq!(

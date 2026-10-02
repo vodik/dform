@@ -83,10 +83,15 @@ impl Names {
                         }
                     }
                 }
-                MODULE | INSTANCE => {
+                // A component's name, the first segment of an instance's
+                // path, and the name a `use` binds.
+                COMPONENT | INSTANCE => {
                     if let Some(t) = first_word() {
                         n.declared.insert(t.text().to_string());
                     }
+                }
+                USE => {
+                    n.declared.insert(crate::syntax::resolve::use_parts(&d).1);
                 }
                 _ => {}
             }
@@ -337,17 +342,17 @@ impl Ctx<'_> {
                     self.body(&b, &BTreeSet::new());
                 }
             }
-            RESOURCE | SETTINGS | INSTANCE => {
+            RESOURCE | SETTINGS | INSTANCE | USE => {
                 if let Some(c) = n.children().find(|c| c.kind() == CLAUSE)
                     && let Some(b) = c.children().find(|x| x.kind() == BODY)
                 {
                     self.body(&b, &BTreeSet::new());
                 }
-                if n.kind() != INSTANCE {
+                if !matches!(n.kind(), INSTANCE | USE) {
                     self.header(n);
                 }
             }
-            MODULE | POLICY => {
+            COMPONENT => {
                 if let Some(b) = n.children().find(|c| c.kind() == STMT_BLOCK) {
                     for s in b.children() {
                         self.stmt(&s);
@@ -392,7 +397,7 @@ impl Ctx<'_> {
         for b in root.descendants().filter(|n| n.kind() == BLOCK) {
             if !b
                 .parent()
-                .is_some_and(|p| matches!(p.kind(), PROVIDER | INSTANCE))
+                .is_some_and(|p| matches!(p.kind(), PROVIDER | INSTANCE | USE))
             {
                 continue;
             }
