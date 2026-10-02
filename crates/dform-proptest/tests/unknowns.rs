@@ -423,6 +423,24 @@ impl Printer<'_> {
     }
 }
 
+/// A rule whose generator binds `x` and nothing reads it: `_x`, since a
+/// variable written once is an error (R-2).
+fn lone_x(rule: String) -> String {
+    let b = rule.as_bytes();
+    let word = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    let at: Vec<usize> = (0..b.len())
+        .filter(|&i| {
+            b[i] == b'x'
+                && (i == 0 || !(word(b[i - 1]) || b[i - 1] == b'.'))
+                && b.get(i + 1).is_none_or(|&c| !word(c))
+        })
+        .collect();
+    match at.as_slice() {
+        [i] => format!("{}_{}", &rule[..*i], &rule[*i..]),
+        _ => rule,
+    }
+}
+
 impl fmt::Display for Program {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let pr = Printer { p: self };
@@ -468,12 +486,12 @@ impl fmt::Display for Program {
                     writeln!(f, "p{i}(x) where x = {}.{path}", pr.src(*s))?;
                 }
                 Def::Agg(a) => {
-                    writeln!(
-                        f,
+                    let rule = format!(
                         "c{i}({}) where {}",
                         pr.agg(a),
                         pr.body(Some(a.bind), &a.guards, sc).join(", ")
-                    )?;
+                    );
+                    writeln!(f, "{}", lone_x(rule))?;
                 }
             }
         }
@@ -497,7 +515,7 @@ impl fmt::Display for Program {
             if body.is_empty() {
                 body.push("b(x)".into());
             }
-            writeln!(f, "deny \"d{k}\" where {}", body.join(", "))?;
+            writeln!(f, "{}", lone_x(format!("deny \"d{k}\" where {}", body.join(", "))))?;
         }
         Ok(())
     }
