@@ -1,14 +1,14 @@
 # Project layout
 
-A dform project is a directory tree with a convention for where things go.
-It is a convention, not a hard rule: discovery expects it, and the lints
-below say when a file is somewhere else.
+A dform project is a directory tree whose root holds `dform.toml`. One
+directory has a meaning, `stacks/`; every other `.df` file is a module,
+named by its path from the root (R-65).
 
 ```
 dform.toml                  the project root (`dform init` writes one)
 stacks/<stack>.df           one stack per file, named after it
-modules/<module>.df         one module per file
-policies/<pack>.df          policy packs
+<name>.df, <dir>/<name>.df  modules: `config.df` is the module
+                            `config`, `modules/net.df` is `modules.net`
 config/<stack>/<key>.yaml   per-deployment rows: a keyed stack's `config`
 data/<table>.csv            tables (`input p(...) from csv(...)`)
 providers/<name>/           a local provider: a plugin executable, or a
@@ -29,8 +29,10 @@ dform.state/                state: per deployment, audit logs, plan keys,
   `{stack}` the stack's name and `{k}` its key `k`'s value), `[defaults]`
   (the same settings for every stack whose table does not say, and an s3
   backend's `lease_duration` and `lease_renewal`), `[discovery]`
-  (`exclude` globs) and `[remotes]` (other projects whose stacks' outputs
-  this one reads, each by its backend: `platform = { backend = "..." }`).
+  (`exclude` globs) and `[packages.NAME]` (another project mounted at
+  `NAME`, `path = "../infra"`: its modules are `infra.config`, its stacks
+  `infra.stacks.platform`, read through the backend its `dform.toml`
+  names).
   Never inputs or key values: a deployment is named by its target. Policy
   reads it as `project_provider(Name, Constraint)`, `project_default(Key,
   Value)` and `project_stack(Name, Key, Value)`.
@@ -42,8 +44,18 @@ dform.state/                state: per deployment, audit logs, plan keys,
 - A stack's keys are its `key` statements: `key env: environment` makes
   each value of `env` a deployment, given by the target (`dform plan shop
   env=prod`), never `--set`.
-- A module file is imported, never planned on its own; a stack file is
-  planned, never imported.
+- Every file is a module, named by its path with dots: `config.df` is
+  `config`, `modules/net.df` is `modules.net`. A module is imported by
+  `use` (`use config`, then `config.region`), once under its name, its
+  inputs bound by a block on the `use` (`use traefik { acme_email }`) or by
+  their defaults, its resources stamped once under its name
+  (`traefik::x`). `component NAME { .. }`, an item of a module, is what is
+  copied many times, by `instance` (`instance modules.net.vpc blue`). A
+  path is looked up, never searched: `modules.net` is `modules/net.df`,
+  and `modules.net.vpc` its `component vpc`. A stack is a module the tool
+  uses: `use stacks.platform` binds to its deployments, and no program
+  instances it. A module named like the standard library's (`str.df`,
+  `list.df`) is an error: `std` is in every scope already.
 - A keyed stack's config is one file per deployment under
   `config/<stack>/`, named by the key's value, `[stacks.dform] config =
   'yaml("config/dform/{env}.yaml")'`: `config/dform/prod.yaml` is
@@ -51,17 +63,16 @@ dform.state/                state: per deployment, audit logs, plan keys,
   for `plan` and `apply` alike (both print `deployment: dform[env=staging]
   (env from its default)` first); `controller run` names every key. A key
   defaulting to `"prod"` or `"production"` is a warning.
-- Every path a program states resolves from the project root: imports
-  (`import "modules/network.df"`), table and config sources
+- Every path a program states resolves from the project root: module
+  paths (`use modules.net`), table and config sources
   (`csv("data/peerings.csv")`, `config = 'yaml("config/dform/{env}.yaml")'`),
   `file.*` externs, input relations from files, a provider's `source` and a
   trust root.
 - `dform.state/` is gitignored: each deployment's plan key (`state.key`,
   the HMAC key of its plan files and audit log) is a secret.
 
-The lints: a module or policy file with a `key` is an error; importing a
-stack file is an error (anywhere); a `.df` outside the layout's
-directories (with `stacks/`, a `.df` at the root too) is a warning.
+The lints: a file that is not a stack with a `key` is an error, and so is
+an `instance` of a stack.
 
 ## This repository
 
@@ -71,7 +82,7 @@ Every example is a project under `examples/<name>/`, with its own
 | project                | what it shows                                             |
 |------------------------|-----------------------------------------------------------|
 | `examples/tour`        | start here: a tutorial, read top to bottom                |
-| `examples/demo`        | the demo: modules, a policy pack, per-env config          |
+| `examples/demo`        | the demo: modules, a component, per-env config            |
 | `examples/pngu`        | a GKE stack, its peerings a CSV table                     |
 | `examples/advanced`    | transitive closure: reachability, routes, group membership|
 | `examples/adopt`       | adopting an existing resource from inventory              |

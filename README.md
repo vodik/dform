@@ -22,7 +22,8 @@ Authoring guidance: `docs/best_practices.md`.
 
 Every example is a project under `examples/<name>/` (see "Project layout"
 below). The demo, `examples/demo/`, is the stack `stacks/dform.df`, which
-imports reusable chunks from its `modules/*.df` and `policies/`.
+uses the modules beside it (`baseline.df`, `database.df`, ...) by their
+paths from the project root.
 
 ```bash
 cargo run -- -C examples/demo plan                  # its one stack, dform, in env's default
@@ -43,12 +44,14 @@ stack when the project has several.
 ### Project layout
 
 A project is a directory with a `dform.toml` at its root: `stacks/` (one
-stack per file), `modules/`, `policies/`, `config/<stack>/<key>.yaml`,
-`data/`, `providers/<name>/` and a gitignored `dform.state/`.
+stack per file), modules (every other `.df`, named by its path:
+`config.df` is `config`, `modules/net.df` is `modules.net`),
+`config/<stack>/<key>.yaml`, `data/`, `providers/<name>/` and a
+gitignored `dform.state/`.
 The root is the nearest directory up from the working directory holding a
 `dform.toml`; `dform init [NAME]` makes one (and puts `dform.state/` in the
 nearest `.gitignore`). Every path a program states resolves from the project
-root: imports, table and config sources, `file.*` externs, input relations,
+root: module paths, table and config sources, `file.*` externs, input relations,
 provider sources and trust roots. Outside a project, `plan` and the `dev`
 views run on a program file with no state; `apply`, `controller`, `stack`,
 `state` and `log` refuse (a `dev --world` run keeps its state beside the
@@ -56,8 +59,8 @@ world file, and runs anywhere). A stack is a file, named after itself:
 `stacks/shop.df` is the stack `shop`. With no `stacks/` directory the
 root's `.df` files are the stacks, so `dform.toml` beside `shop.df` is a
 project with one stack; any file runs by path, named after itself. A
-module or policy file with a `key` is an error, importing a stack file is
-an error, and a `.df` outside the layout's directories is a warning. `docs/layout.md` has the convention; every
+file that is not a stack with a `key` is an error, and so is an
+`instance` of a stack. `docs/layout.md` has the convention; every
 example under `examples/` follows it, and test-only programs are under
 `tests/fixtures/`.
 Each example's `README.md` says what it shows and lists the commands to
@@ -147,8 +150,8 @@ resource-level target: a plan that needs a second tick applies tick by
 tick, and a program that wants to apply part of itself is two stacks.
 
 The stack is the unit of partial work. `apply X` in a project applies the
-deployments X reads (`stack_output("platform[env=prod]", ..)`, a name
-written out or built from X's own key, `"platform[env=${env}]"`) first,
+deployments X reads (`use stacks.platform`, then `platform[env="prod"].x`,
+a key written out or X's own, `platform[env=env].x`) first,
 and theirs before them, each a run of its own with its own plan,
 confirmation and state, then X; nothing that reads X. The first line
 says so: `apply shop[env=prod]: platform[env=prod] first, each with its
@@ -333,10 +336,11 @@ calls, lookups (`settings[env].bucket`), module inputs and refs; a read
 that only gates the resource's block, or feeds another field, does not
 count, and neither does it for `rekey`'s list. `isolated = true` in the
 stack's `[stacks.NAME]` says each key value deploys into its own account
-(or world), and turns the lint off; `dform.df`'s says so, since its iam
-module's names are fixed.
+(or world), and turns the lint off; `dform.df`'s says so, since its
+identity module's names are fixed.
 
-`stack_output("app[env=prod]", k, V)` reads one deployment's outputs,
+`use stacks.app` then `app[env="prod"].k` reads one deployment's outputs
+(the core's `stack_output("app[env=prod]", k, V)`),
 `dform stack handover 'app[env=prod]' --to ...` hands one over, and
 `dform controller run 'app[env=prod]'` runs one.
 
@@ -345,7 +349,8 @@ output. `apply` records the stack's outputs whose values are known in its
 state, publishes them beside it as their own object, `outputs.json`, and
 records where the deployment's objects are (an absolute directory, or
 `s3://...`) in `dform.state/stacks.json`; every other program reads them
-as facts, `stack_output("net", vpc_id, V)`, from `outputs.json`
+after `use stacks.net`, as `net.vpc_id` (the fact `stack_output("net",
+"vpc_id", V)`), from `outputs.json`
 only, never the state. An output of a configured attribute (`output c =
 net.vpc.main.cidr`, which the program keeps as a ref) is published as the
 program's value of it, else the world's; one whose value is not known yet
@@ -379,25 +384,22 @@ the plan").
 
 #### Remote outputs
 
-A project reads the outputs of another project's stacks through that
-project's backend, named in its `dform.toml`:
+A project reads the outputs of another project's stacks by mounting that
+project as a package in its `dform.toml` (R-65):
 
 ```toml
-[remotes]
-platform = { backend = 's3("acme-dform", "prod/{stack}", {endpoint: "https://s3.gra.io.cloud.ovh.net", region: "gra"})' }
-network = { backend = 'local("../network/dform.state")' }
+[packages.platform]
+path = "../platform"
 ```
 
-`stack_output("platform.cluster[env=prod]", "endpoint", E)` names the
-remote, then the stack and its key: when this project has no stack of that
-name, it is read from `platform`'s backend, `{stack}` the stack's name
-(without `{stack}`, the stacks are under the backend by name, as under a
-state root), a keyed deployment under its key's segment, and the object is
-that deployment's `outputs.json`. A reader needs read access to that object
-only. A `local` directory is relative to the project root. A deployment the
-remote has not applied has no outputs. The program names the deployment as
-a string: which remote deployments are read comes from its
-`stack_output` literals.
+`use platform.stacks.cluster` then `cluster[env="prod"].endpoint` reads
+the deployment through the backend that project's own `dform.toml` names
+in `[defaults] backend` (`{stack}` the stack's name; without one, its
+`dform.state/`), a keyed deployment under its key's segment, and the
+object is that deployment's `outputs.json`. A reader needs read access to
+that object only. A deployment the package has not applied has no
+outputs. The package's other files are modules like this project's:
+`use platform.config`.
 
 `dform.state/` (every path below, and the registry) is at the project
 root, so the project's stacks share it wherever in the project dform runs
@@ -752,8 +754,8 @@ endpoints and secrets per the schema and fills the nulls in dependency order.
 
 ```bash
 cargo run -- -C examples/demo plan
-# + net.subnet["network.main::private-us-test-1a"]
-#   vpc = ?net.vpc["network.main::vpc"]
+# + net.subnet["main::private-us-test-1a"]
+#   vpc = ?net.vpc["main::vpc"]
 ```
 
 A reference is the resource (R-43). Where an attribute points at another
@@ -766,13 +768,13 @@ error naming `x`, and `ref(x)` writes the reference out where an attribute
 that is no `ref(T)` needs the id as text.
 
 Every address dform prints is the source term that names it, `T["A"]` (`A`
-the full address, a module instance's scope `m.i::` included), and an
+the full address, a copy's scope `n::` included), and an
 attribute of it is `.path` after it: plan lines, the apply order, nulls,
 secret labels, `state show`, `dev graph` and diagnostics. Every address the
 command line takes is read the same way (`why`, `query`, `state show`,
 `state mv`, `dev show`, `--chaos`), so an address copied from a plan pastes
 into a program, a query or a command; quote it for the shell
-(`why 'net.vpc["network.main::vpc"].cidr'`).
+(`why 'net.vpc["main::vpc"].cidr'`).
 
 The plan is the Z-set `desired - world` (proposal E §2.8): per address a
 create, a delete, an update, or nothing. The first line counts it in those
@@ -920,13 +922,13 @@ cargo run -- -C examples/demo dev --chaos fresh-ids apply dform env=prod   # tic
 
 Lifecycle is plain facts the planner reads (and policy can read too). Each
 takes the resource as a reference: a resource in scope by its name, one of
-a module instance or one no longer in the program by its address, and many
+a copy's or one no longer in the program by its address, and many
 at once by a rule that binds them with `in`:
 
 ```dform
 lifecycle(main, "prevent_destroy")                   # a delete or replace of it is a deny
 lifecycle(main, "create_before_destroy")             # replace creates first (type_replace either)
-moved(net.vpc, "network.main::vpc", net.vpc["network.core::vpc"])  # rename without destroy
+moved(net.vpc, "main::vpc", net.vpc["core::vpc"])  # rename without destroy
 ignore_changes(main, "tags.owner")                   # set on create, then ignored
 lifecycle(pg, "prevent_destroy") where env == "prod", pg in db.postgres   # every prod database
 ```
@@ -982,8 +984,8 @@ clock from the time its provider says it took; on the mock (chaos `latency`)
 the difference shows there:
 
 ```bash
-cargo run -- -C examples/demo dev --chaos 'latency=net.vpc["network.main::vpc"]:100' \
-  --chaos 'latency=net.vpc["network.peer::vpc"]:100' apply dform env=staging --parallel 4   # the two vpcs overlap: 100ms, not 200ms
+cargo run -- -C examples/demo dev --chaos 'latency=net.vpc["main::vpc"]:100' \
+  --chaos 'latency=net.vpc["peer::vpc"]:100' apply dform env=staging --parallel 4   # the two vpcs overlap: 100ms, not 200ms
 ```
 
 An apply that fails or is killed can be resumed: before a tick's first Apply
@@ -1258,14 +1260,14 @@ the final fact store and prints a table with one column per variable:
 ```bash
 cargo run -- -C examples/demo query 'attr(net.vpc, n, "cidr", c)' dform env=prod
 # N                    C
-# "network.main::vpc"  10.20.0.0/16
-# "network.peer::vpc"  10.21.0.0/16
+# "main::vpc"  10.20.0.0/16
+# "peer::vpc"  10.21.0.0/16
 # (2 rows)
 cargo run -- -C examples/demo query 'attr(t, a, "cidr", c), want(t, a), t != net.subnet'
-cargo run -- -C examples/demo query 'want(net.vpc, "network.main::vpc")'    # yes / no
+cargo run -- -C examples/demo query 'want(net.vpc, "main::vpc")'    # yes / no
 cargo run -- -C examples/demo query want                                    # every want fact
-cargo run -- -C examples/demo query 'net.vpc["network.main::vpc"]'          # its attributes: path, value
-cargo run -- -C examples/demo query 'net.vpc["network.main::vpc"].cidr'     # one attribute's value
+cargo run -- -C examples/demo query 'net.vpc["main::vpc"]'          # its attributes: path, value
+cargo run -- -C examples/demo query 'net.vpc["main::vpc"].cidr'     # one attribute's value
 ```
 
 `query --json` prints one document: `{query, count, facts}` for a predicate
@@ -1283,8 +1285,8 @@ it names, `google_sql_database_instance["db"].name`, an unknown its
 `dform why PATTERN` prints how a fact was derived, from the provenance
 circuit every evaluation records (proposal E §3, DR-10), in the program's
 own terms: each statement that fired, as written, at its `file:line` (a
-block shows the entry that fired, the rest elided as `..`; a pack's or a
-module instance's statement names it), then `with` the statement's
+block shows the entry that fired, the rest elided as `..`; a used
+module's statement names its `use`, a copy's its `instance`), then `with` the statement's
 variables as they were bound, by their names in the source, and under them
 each computed term of the statement with its value: an interpolation, a
 function call, a read (`cfg.backup_days = 14`), a lookup
@@ -1309,14 +1311,14 @@ pattern may name part of an object attribute, by dotted path or by object
 value, and then shows only the contributions that hold it:
 
 ```bash
-cargo run -- -C examples/demo why 'attr(net.vpc, "network.main::vpc", "tags.team", "platform")' dform env=prod
-# net.vpc["network.main::vpc"].tags = {component: "network", env: "prod", team: "platform"}
+cargo run -- -C examples/demo why 'attr(net.vpc, "main::vpc", "tags.team", "platform")' dform env=prod
+# net.vpc["main::vpc"].tags = {component: "network", env: "prod", team: "platform"}
 #   merged from 2 contributions
 #   ├─ {team: "platform"}
-#   │    policies/baseline.df:10  set r.tags = { team: "platform" } where r in resource   (policy baseline)
-#   │    with r = net.vpc["network.main::vpc"]
-#   │    └─ net.vpc["network.main::vpc"]
-#   │         modules/network.df:11  resource net.vpc vpc { .. }   (module network instance main)
+#   │    baseline.df:12  set r.tags = { team: "platform" } where r in resource   (use baseline)
+#   │    with r = net.vpc["main::vpc"]
+#   │    └─ net.vpc["main::vpc"]
+#   │         network.df:15  resource net.vpc vpc { .. }   (instance network.vpc main)
 #   ...
 #   └─ ... 1 other contribution (--all)
 cargo run -- -C examples/tour why 'db.postgres["orders"].backup_days' tour env=prod
@@ -1338,11 +1340,11 @@ cargo run -- -C examples/demo dev graph --strata                     # partition
 cargo run -- -C examples/demo dev graph --relation vpc_peer/2        # any binary relation of the fact store
 ```
 
-`dform dev effects` prints, per scope (the stack, each module instance, each
-pack in use), what it reads
+`dform dev effects` prints, per scope (the stack, each copy of a
+component, each module used), what it reads
 (inputs by name, settings leaves by path, world types, externs by name,
-another instance's outputs), writes (cells as `(type, path)` partitions,
-`*` for a variable type or path, settings leaves, another instance's input
+another copy's outputs), writes (cells as `(type, path)` partitions,
+`*` for a variable type or path, settings leaves, another copy's input
 cells) and offers (its declared outputs, with their types). Read off the
 lowered program's rule heads and bodies and the partition graph; no
 evaluation.
@@ -1370,8 +1372,8 @@ file keeps a `tick` counter; every `apply` is one tick.
 | `fresh-ids` | every Create mints new ids (the world keeps a `serial`), as a real cloud does; without it a destroy-first replacement under the same name gets its predecessor's id |
 
 ```bash
-cargo run -- -C examples/demo dev --chaos 'fail=net.subnet["network.main::private-us-test-1a"]' apply dform env=staging
-cargo run -- -C examples/demo dev --chaos 'mutate=net.vpc["network.main::vpc"].cidr="10.9.0.0/16"' apply dform env=staging
+cargo run -- -C examples/demo dev --chaos 'fail=net.subnet["main::private-us-test-1a"]' apply dform env=staging
+cargo run -- -C examples/demo dev --chaos 'mutate=net.vpc["main::vpc"].cidr="10.9.0.0/16"' apply dform env=staging
 ```
 
 Refresh reads every object state maps; a Read that returns nothing is retried
@@ -1462,7 +1464,9 @@ for byte, and a file with a syntax error is reported, not rewritten.
   - literals: lists `[a, b]` and objects `{ k: v }` (`{ a, b }` is `{ a: a, b: b }`).
   - list comprehensions: `[x | pred(x), pred2(x)]` (lowers to a `collect_list` rule).
   - expression terms: `ib = ia + 1` lowers to `IB = add(IA, 1)`.
-  - `import "path"` includes another file, once.
+  - `use PATH [as N] [{ k = v }] [where B]` imports a module, a file by
+    its path from the project root, once under `N`; `instance PATH N {
+    k = v }` copies a component (see "Modules").
 
 - Schemas and wildcards:
   - `decl pred(field_one: type, field_two)` declares a relation by its
@@ -1641,13 +1645,13 @@ term. In the fake backend it resolves against `dform.state/inventory.json`.
 Planning will produce an `Adopt` action (`>` in plan output) instead of `Create`.
 
 ```dform
-adopt(net.vpc["network.main::vpc"], "existing-prod-vpc") where env == "prod", "existing-prod-vpc" in world.net.vpc
+adopt(net.vpc["network::vpc"], "existing-prod-vpc") where env == "prod", "existing-prod-vpc" in world.net.vpc
 
-set net.vpc["network.main::vpc"].adopted_id = cloud_ref(net.vpc, "existing-prod-vpc", "id") where env == "prod"
+set net.vpc["network::vpc"].adopted_id = cloud_ref(net.vpc, "existing-prod-vpc", "id") where env == "prod"
 ```
 
-`net.vpc["network.main::vpc"]` is an address: resource `vpc` of module
-instance `network.main`, spelled as `plan` prints it.
+`net.vpc["network::vpc"]` is an address: resource `vpc` of the module
+`network` the stack uses, spelled as `plan` prints it.
 ```
 
 ### Stack inputs
@@ -1664,8 +1668,8 @@ input owner: string                       # required: no default
 type environment = enum("dev", "staging", "prod")   # an alias: the enum wherever it is written
 ```
 
-Inputs, keys and imports are the file's header: after `edition`, before
-the body (`import`, then `key`, then `input`), so a file says what it
+Inputs and keys are the file's header: after `edition`, before
+the body (`key`, then `input`), so a file says what it
 takes first; one written below the body is an error, and `dform fmt`
 moves it. Each is read as a relation, `env(E)`. An input is a cell of the attribute
 aggregate: the default is an `@default` contribution, `--set replicas=3`
@@ -1678,13 +1682,13 @@ where the file states it; the plan file records each input file's digest.
 
 Types are `int`, `string`, `bool`, `inet`, `enum(a, b, ...)`, `list(T)`,
 `set(T)` and objects `{ k: T }` (`addr`, `ref(...)` and `any` are
-unchecked). `type NAME = TYPE` names a type anywhere a type is written; an
-imported file's aliases are in scope, and a module's once it says `export
-type NAME` (docs/grammar.md "Type aliases"). A `--set` value is read as its input's type (an `inet` parses,
+unchecked). `type NAME = TYPE` names a type anywhere a type is written;
+another module's alias is read through its name, `network.subnets`
+(docs/grammar.md "Type aliases"). A `--set` value is read as its input's type (an `inet` parses,
 a `string` takes the text) and checked before evaluation: `--set
 replicas=two` is an error naming the input and its type, and so is `--set` of an input
-the program does not declare. A value the program computes (a module
-instance's input) is checked after evaluation and a wrong type blocks the
+the program does not declare. A value the program computes (an input of
+a used module or a copy) is checked after evaluation and a wrong type blocks the
 plan. A required input with no value is an error at its declaration. `check
 R` refines the input (`R` names it by its name; see Refinement types).
 
@@ -1734,66 +1738,89 @@ come from the provider's schema).
 
 ### Modules
 
-A module groups rules behind an interface; an instance of it scopes them
-(E DR-3, Terraform-module-like):
+Every `.df` file is a module, named by its path from the project root
+(R-65): `config.df` is `config`, `modules/net.df` is `modules.net`,
+`stacks/platform.df` is `stacks.platform`. A path is looked up, never
+searched; `[packages.NAME] path = "../infra"` in `dform.toml` mounts
+another project at `NAME`; `std` is in every scope. `use` imports a
+module once under its name (or `as` one), its inputs bound by a block on
+the `use` or by their defaults; `component NAME { .. }`, an item of a
+module, is the thing copied many times, by `instance PATH NAME { .. }`:
 
 ```dform
-module network {
+# database.df: a module with an input and a resource.
+input subnets: network.subnets
+resource db.postgres db { subnets }
+output iam_need = { action: "db.connect", resource: db }
+
+# network.df: a component, copied once per network.
+type subnets = list(ref(net.subnet))
+component vpc {
   input vpc_net: inet                        # set by each instance
   input zones: list(string) = ["a", "b"]     # a default: @default rank
-
   resource net.vpc vpc { cidr = vpc_net }
-  zone_index(z, i) where z = zones[i]        # private
-  ...
+  zone_index(z, i) where z = zones[i]        # private to each copy
   output vpc: net.vpc = vpc                  # an address output
-  output private_subnets: list(ref(net.subnet)) = [s | s in net.subnet]
+  output private_subnets: subnets = [s | s in net.subnet]
 }
 
-instance network main { vpc_net = settings[env].network.main.vpc_net }
-instance database main { subnets = network.main.private_subnets }
+# stacks/dform.df
+use baseline
+instance network.vpc main { vpc_net = settings[env].network.main.vpc_net }
+use database { subnets = main.private_subnets } where env != "dev"
 ```
 
-Inside an instance:
+A module's import and a component's copy are one mechanism, stamped under
+a name (`database`, `main`):
 
-- resource names are scoped, `network.main::vpc` (its address from outside
-  `net.vpc["network.main::vpc"]`), in `want`, `arg`, `attr`, `adopt` and
-  `ref`; inside the module `T[e]` is relative to the instance;
-- every predicate the module defines is private to the instance: another
-  instance's `zone_index` is a different relation, and reading it from
-  outside is an error naming the module. A value leaves the instance
-  through an output the stack wires: the demo's database and kubernetes
-  modules each give `output iam_need = {..} where ..`, and the stack writes
-  `iam_need("app", n.action, n.resource) where n = database.main.iam_need`;
-- `input k: T [= D] [check R]` is read by its name `k` inside the module.
-  The instance's `k = v` (under its `where` clause) is a normal-rank contribution to the cell `(input, m.i, k)` of the
-  attribute aggregate and `D` an `@default` one, so `why` shows both. An
-  instance that sets an undeclared input, or leaves out one with no
-  default, is a compile error. `check R` refines the input (`R` names it
-  by its name; see Refinement types);
+- resource names are scoped, `main::vpc` (its address from outside
+  `net.vpc["main::vpc"]`), in `want`, `arg`, `attr`, `adopt` and `ref`;
+  inside a component `T[e]` is relative to the copy, in a module a name
+  it writes out is its own and a variable any resource its user sees;
+- every predicate a component defines is private to the copy: another
+  copy's `zone_index` is a different relation, and reading it from
+  outside is an error naming the component. A module's are its import's,
+  read as `database.p(..)`, its `let`s and inputs as `database.k`, its
+  resources as `database.db`. A value leaves a copy through an output:
+  the demo's database and kubernetes modules each give `output iam_need =
+  {..} where ..`, and the stack writes `iam_need("app", n.action,
+  n.resource) where n = database.iam_need`;
+- `input k: T [= D] [check R]` is read by its name `k` inside. The
+  block's `k = v` (under its `where` clause) is a normal-rank contribution
+  to the cell `(input, n, k)` of the attribute aggregate and `D` an
+  `@default` one, so `why` shows both. A block that sets an undeclared
+  input is a compile error, and an input with no value is the error a
+  stack input's is (`input database.subnets is required and has no
+  value`). `check R` refines the input (`R` names it by its name; see
+  Refinement types);
 - `output k: T = t [where B]` declares an output and gives it its value in
-  one statement (the type is optional), read anywhere as `m.i.k`
-  (`output(m.i, k, V)`); an output typed by a resource type (`output vpc:
-  net.vpc = vpc`) is the scoped address of the instance's resource. `network[i].vpc` reads it with a
-  variable instance.
+  one statement (the type is optional), read anywhere as `n.k`
+  (`output(n, k, V)`); an output typed by a resource type (`output vpc:
+  net.vpc = vpc`) is the scoped address of the copy's resource.
+  `network.vpc[t].vpc` reads every copy's, `t` the copy's name;
+- with a clause, the copy or the import exists only while it holds.
 
-The module reads every global relation; cross-instance values go through
-outputs.
+A name a module does not define reads outward, its user's: `env` in a
+policy pack is the stack's. A module used from two stacks runs in both,
+each in its own state. `instance` of a module, `use` of a component, a
+copy with no name and `instance` of a stack are errors naming what to
+write.
 
 ### Policies
 
-Policies are packaged as policy packs and used explicitly. A pack is a
-module applied once: its own relations are private, and it writes any
-attribute without a grant; ranks are the ownership model and `why` names
-each contribution's pack. The stratifier partitions a write by its head's
-constant type and path (`*` where the head has a variable).
+A policy pack is a module of `set`, `deny` and `warn` statements, used
+explicitly. It writes any attribute without a grant; ranks are the
+ownership model and `why` names each contribution's module. The
+stratifier partitions a write by its head's constant type and path (`*`
+where the head has a variable).
 
 ```dform
-policy baseline {
-  set r.tags = { team: "platform" } where r in resource
-  deny "db must be private" { resource: pg } where ...
-  warn "prod should enable audit logging" { env: "prod" } where ...
-}
+# baseline.df
+set r.tags = { team: "platform" } where r in resource
+deny "db must be private" { resource: pg } where ...
+warn "prod should enable audit logging" { env: "prod" } where ...
 
+# stacks/dform.df
 use baseline
 ```
 
@@ -2038,8 +2065,8 @@ is not on the PATH.)
 files (Emacs 29.1+; developed against Emacs 30/32): font-lock from
 `highlights.scm` (the reference capture gets `dform-reference-face`,
 underlined by default, a doc comment `font-lock-doc-face`), indentation from `indents.scm`, and imenu and
-defun navigation for rules (by head predicate), modules, instances,
-resources (by type and name), stacks and policies.
+defun navigation for rules (by head predicate), components, `use`s (by
+path), instances and resources (by type and name).
 
 With straight.el, from a local checkout of this repository:
 
@@ -2102,13 +2129,13 @@ examples/demo an evaluation takes about 30 ms in a release build.
   fact's name, or an attribute read in a rule's body (`a.cidr`): each
   attribute's collapsed value, the provider's description of its path
   (`type_doc`), the winning rank and every contribution with its rank and
-  owner (rule, `file:line:col`, pack or module instance), then the
+  owner (rule, `file:line:col`, the module used or the copy), then the
   derivation as `dform why --core` prints it.
 - *Docs at point*: on a declared name, where it is declared or used, its
   declaration's first line and doc comment (docs/grammar.md "Doc
-  comments"); an alias its definition; a module, or an instance, the
-  module's docs and its inputs and outputs with theirs; `m.i.k` the
-  output's; a schema type its description; a builtin or a keyword its
+  comments"); an alias its definition; a component, in its declaration or
+  an instance's path, its docs and its inputs and outputs with theirs;
+  `n.k` the output's; a schema type its description; a builtin or a keyword its
   signature, summary and an example (`engine::REFERENCE`). Point on
   anything else (whitespace, a comment, a literal, a variable) has no
   hover; the deployment is the `dform/environment` notification's, never
@@ -2120,8 +2147,8 @@ examples/demo an evaluation takes about 30 ms in a release build.
   one too.
 - *Schema completion*: a resource block's paths (type, flags,
   refinements and description from the provider's schema facts) and an
-  enum path's values; types after `resource`; an instance block's module inputs and
-  `module.instance.`'s outputs; elsewhere the builtins and keywords a
+  enum path's values; types after `resource`; an instance block's
+  component inputs and a copy's outputs after `n.`; elsewhere the builtins and keywords a
   word starts, each with its signature.
 - *Quick fixes* (`textDocument/codeAction`), each on its diagnostic: an
   unknown name (quote it), a predicate with both facts and rules (`decl
@@ -2131,29 +2158,30 @@ examples/demo an evaluation takes about 30 ms in a release build.
   no rule wants (guard the block on it: `} where "other" in net.vpc`). An edit
   to a formatted file leaves it formatted.
 - *References* of a predicate, an input or value name (a `{ k }` field
-  included), a `let` or type alias, a module, an instance, a resource (by
-  its name in scope), a settings row or a policy, across the
-  project's files and unsaved buffers, read in the resolver's order
-  (docs/grammar.md "Names"); a relation a module or pack defines
-  is its own (two modules' private `helper` are two). On an attribute path (a field of a
-  resource block, `r.p` in a body, an `attr` literal): every rule
-  contributing to that cell, across modules and policy packs, as the
-  hover lists them.
-- *Rename* of the same names. Renaming a resource, an instance or a
-  module whose addresses have state in the selected deployment adds, in
+  included), a `let` or type alias (bare or read through its module), a
+  component, a module a `use` names, an instance, a resource (by its name
+  in scope) or a settings row, across the project's files and unsaved
+  buffers, read in the resolver's order (docs/grammar.md "Names"); a
+  relation a component defines is its own (two components' private
+  `helper` are two). On an attribute path (a field of a resource block,
+  `r.p` in a body, an `attr` literal): every rule contributing to that
+  cell, across components and modules, as the hover lists them.
+- *Rename* of the same names. Renaming a resource or an instance whose
+  addresses have state in the selected deployment adds, in
   the same edit, `moved(T, "old", new)` per address just after the
   declaration's block, so the next plan is a move and not a destroy and a
   create; an address written as a string at the top of a program
-  (`net.vpc["network.main::vpc"]`, `"network.main::vpc" in net.vpc`) is
+  (`net.vpc["main::vpc"]`, `"main::vpc" in net.vpc`) is
   renamed with it. A rename is checked: the selected deployment is evaluated with
   the edit applied to the buffers, and the rename is refused, naming
   what changed, if it adds a diagnostic or changes the plan in anything
   but the renamed addresses. `prepareRename` refuses keywords, builtins,
   schema types, attribute paths, provider names and dform's own
   relations (`data`, `attr`, ...), and an instance whose name is also a
-  string a dynamic index `m[e]` may read (naming where the string is).
-- Formatting (`dform fmt`'s formatter) and go-to-definition of modules,
-  policies and predicates.
+  string a dynamic index `c[e]` may read (naming where the string is).
+- Formatting (`dform fmt`'s formatter) and go-to-definition of components,
+  instances, `use`s and predicates; on a `use` or `instance` path, the
+  file (or the component in it) the path names (R-65).
 
 Two commands (`workspace/executeCommand`), which the Emacs mode binds:
 
