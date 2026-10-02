@@ -1,0 +1,11 @@
+edition 2026
+
+# A literal in a position whose type is declared is read as that type (R-31).
+input net: inet = "10.0.0/16"
+input n: int = "3"
+input tier: enum("a", "b") = "c"
+resource net.vpc main { cidr = "10.0.0.0/16" }
+p(x) where x = inet.subnet("10.0.0.0/33", 8, 1)
+# A reference and a string never compare.
+d(k) where deformation(k, r, _), r == "main"
+e(1) where r in net.vpc, r != "main"

@@ -15,7 +15,7 @@
 //! A term the compiler cannot see the value of (a variable, a call) is
 //! checked when it has one, at evaluation.
 
-use crate::ast::{Program, Stmt, Term};
+use crate::ast::{Program, Stmt, Term, TypeExpr};
 use crate::diag::{Diagnostic, Diagnostics};
 use crate::ir::Address;
 use crate::schema::Schema;
@@ -47,7 +47,7 @@ impl Ty {
         let s = s.trim();
         let Some((head, rest)) = s.split_once('(') else {
             return match s {
-                "string" | "int" | "bool" | "inet" => Ty::Scalar(s.to_string()),
+                "string" | "int" | "bool" | "inet" | "ip" => Ty::Scalar(s.to_string()),
                 _ => Ty::Any,
             };
         };
@@ -187,6 +187,8 @@ pub fn mismatch(ty: &Ty, t: &Term) -> Option<String> {
                 ("bool", Value::Bool(_)) => true,
                 ("inet", Value::IpNet { .. }) => true,
                 ("inet", Value::Str(x)) => crate::value::parse_ipnet(x).is_some(),
+                ("ip", Value::Ip(_)) => true,
+                ("ip", Value::Str(x)) => crate::value::ipv4_to_u32(x).is_some(),
                 // A null is not known yet; a computed value fits its type.
                 (_, Value::Null { .. }) => true,
                 _ => false,
@@ -195,11 +197,68 @@ pub fn mismatch(ty: &Ty, t: &Term) -> Option<String> {
                 ("inet", Value::Str(x)) => {
                     format!("is an inet: {x:?} is not a network (`a.b.c.d/n`)")
                 }
+                ("ip", Value::Str(x)) => format!("is an ip: {x:?} is not an address (`a.b.c.d`)"),
                 _ => format!("is {s}, not {}", shown_literal(v)),
             })
         }
         (Ty::Enum(_), Term::Val(v)) => Some(format!("is {ty}, not {}", shown_literal(v))),
         _ => None,
+    }
+}
+
+/// A declared type (an input's, a module input's) as the check reads it:
+/// a resource type is a reference to one; an alias is already expanded.
+pub fn of_expr(t: &TypeExpr) -> Ty {
+    match t {
+        TypeExpr::Name(n) if n.contains('.') => Ty::Ref(n.clone()),
+        TypeExpr::Name(n) => Ty::parse(n),
+        TypeExpr::Apply(n, args) => match (n.as_str(), args.as_slice()) {
+            ("ref", [TypeExpr::Name(t) | TypeExpr::Str(t)]) => Ty::Ref(t.clone()),
+            ("list" | "set", [x]) => Ty::List(Box::new(of_expr(x))),
+            ("secret", [x]) => Ty::Secret(Box::new(of_expr(x))),
+            ("enum", xs) => Ty::Enum(
+                xs.iter()
+                    .filter_map(|x| match x {
+                        TypeExpr::Name(a) | TypeExpr::Str(a) => Some(a.clone()),
+                        _ => None,
+                    })
+                    .collect(),
+            ),
+            _ => Ty::Any,
+        },
+        TypeExpr::Object(_) | TypeExpr::Str(_) => Ty::Any,
+    }
+}
+
+/// A literal where `ty` is expected (R-31): read as that type (a string
+/// is an `inet` or an `ip` where one is expected), or why it cannot be.
+/// What is not a literal is left as it is.
+pub fn literal(ty: &Ty, t: Term) -> Result<Term, String> {
+    if let Some(why) = mismatch(ty, &t) {
+        return Err(why);
+    }
+    Ok(read(ty, t))
+}
+
+fn read(ty: &Ty, t: Term) -> Term {
+    match (ty, t) {
+        (Ty::Scalar(s), Term::Val(Value::Str(x))) if s == "inet" => {
+            match crate::value::parse_ipnet(&x) {
+                Some((addr, prefix)) => Term::Val(Value::IpNet { addr, prefix }),
+                None => Term::Val(Value::Str(x)),
+            }
+        }
+        (Ty::Scalar(s), Term::Val(Value::Str(x))) if s == "ip" => {
+            match crate::value::ipv4_to_u32(&x) {
+                Some(n) => Term::Val(Value::Ip(n)),
+                None => Term::Val(Value::Str(x)),
+            }
+        }
+        (Ty::Secret(inner), t) => read(inner, t),
+        (Ty::List(inner), Term::List(xs)) => {
+            Term::List(xs.into_iter().map(|x| read(inner, x)).collect())
+        }
+        (_, t) => t,
     }
 }
 

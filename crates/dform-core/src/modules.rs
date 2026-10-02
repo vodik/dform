@@ -473,13 +473,26 @@ fn instance_inputs(
             });
             continue;
         }
+        // A literal is read as the input's declared type (R-31).
+        let ty = iface.inputs.iter().find(|i| i.name == *k).map(|i| &i.ty);
+        let v = match ty.map(|t| crate::types::literal(&crate::types::of_expr(t), v.clone())) {
+            Some(Ok(v)) => v,
+            Some(Err(why)) => {
+                diags.push(Diagnostic::error(
+                    *span,
+                    format!("input {k} of module {} {why}", u.module),
+                ));
+                continue;
+            }
+            None => v.clone(),
+        };
         let head = atom(
             "arg",
             vec![
                 str_term(INPUT),
                 str_term(scope),
                 str_term(k),
-                v.clone(),
+                v,
                 str_term(crate::transform::NORMAL),
             ],
             *span,

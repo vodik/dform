@@ -1297,7 +1297,16 @@ impl<'u> Lowerer<'u> {
                 }
                 let mut rc = self.rc(n, scope, outer);
                 let default = match terms(n).next() {
-                    Some(t) => Some(self.constant(&mut rc, &t)?),
+                    // A literal default is read as the declared type (R-31).
+                    Some(t) => match crate::types::literal(
+                        &crate::types::of_expr(&ty),
+                        self.constant(&mut rc, &t)?,
+                    ) {
+                        Ok(d) => Some(d),
+                        Err(why) => {
+                            return self.error(self.span(&t), format!("input {name} {why}"));
+                        }
+                    },
                     None => None,
                 };
                 let refinement = self.refinement(n, scope)?;
@@ -2937,6 +2946,11 @@ impl<'u> Lowerer<'u> {
                 if matches!(res, Res::Val(_) | Res::Var { .. } | Res::Type(_)) {
                     continue;
                 }
+                if let Res::Ref { path, .. } = &res
+                    && matches!(path.first(), Some(Seg::F(f)) if f == crate::schema::IDENTITY)
+                {
+                    return self.identity_read(r, self.span(r));
+                }
                 let mut vpre = Vec::new();
                 let binding = ops[0] == EQ;
                 let Ok(value) = self
@@ -2952,6 +2966,30 @@ impl<'u> Lowerer<'u> {
                     out.extend(pre);
                     out.push(Lit::Pos(a));
                     return Ok(());
+                }
+            }
+        }
+        // `r == "main"`: a reference is never a string (R-31).
+        if ts.len() == 2 && matches!(ops.as_slice(), [EQ2 | NEQ]) {
+            for (r, s) in [(&ts[0], &ts[1]), (&ts[1], &ts[0])] {
+                if s.kind() == LITERAL
+                    && tokens(s).any(|t| t.kind() == STRING)
+                    && self.is_reference(rc, r)
+                {
+                    let text = r.text().to_string();
+                    let lit = s.text().to_string();
+                    let d = Diagnostic::error(
+                        span,
+                        format!("`{text}` is a reference and {lit} a string: they are never equal"),
+                    )
+                    .with_help(format!(
+                        "compare with the resource: `{text} {op} {}`, or `{text} {op} T[{lit}]` \
+                         (R-31)",
+                        lit.trim_matches('"'),
+                        op = if ops[0] == NEQ { "!=" } else { "==" },
+                    ));
+                    self.diags.push(d);
+                    return Err(Skip);
                 }
             }
         }
@@ -3220,6 +3258,18 @@ impl<'u> Lowerer<'u> {
         })
     }
 
+    /// Is `n` a reference: a resource, a typed variable, or a variable a
+    /// reference column binds?
+    fn is_reference(&mut self, rc: &Rc, n: &SyntaxNode) -> bool {
+        if let Some(c) = Chain::of(n)
+            && c.is_bare()
+            && (rc.types.contains_key(&c.head) || rc.untyped_refs.contains(&c.head))
+        {
+            return true;
+        }
+        self.names_resource(rc, n)
+    }
+
     /// Does `n` name one resource, by its name in scope or `T[e]`?
     fn names_resource(&mut self, rc: &Rc, n: &SyntaxNode) -> bool {
         let Some(c) = Chain::of(n) else {
@@ -3275,6 +3325,39 @@ impl<'u> Lowerer<'u> {
                 self.realize(rc, res, pos, pre, span)
             }
         }
+    }
+
+    /// A function's literal arguments read as its parameters' types (R-31):
+    /// `inet.subnet("10.0.0.0/16", 8, 1)` takes an `inet`; a literal that
+    /// cannot be one is an error at the call. Only the scalar types a
+    /// literal can be checked against are; a `string` or `any` parameter
+    /// takes what it is given.
+    fn typed_args(&mut self, name: &str, args: Vec<Term>, span: Span) -> L<Vec<Term>> {
+        let Some(f) = crate::functions::get(name) else {
+            return Ok(args);
+        };
+        let mut out = Vec::with_capacity(args.len());
+        for (i, a) in args.into_iter().enumerate() {
+            let p = f
+                .params
+                .get(i)
+                .or(if f.variadic { f.params.last() } else { None });
+            let ty = match p.map(|p| crate::types::Ty::parse(&p.ty)) {
+                Some(t @ crate::types::Ty::Scalar(_)) if p.is_some_and(|p| p.ty != "string") => t,
+                _ => {
+                    out.push(a);
+                    continue;
+                }
+            };
+            match crate::types::literal(&ty, a) {
+                Ok(a) => out.push(a),
+                Err(why) => {
+                    let p = p.map(|p| p.name.as_str()).unwrap_or("");
+                    return self.error(span, format!("`{name}`'s argument `{p}` {why}"));
+                }
+            }
+        }
+        Ok(out)
     }
 
     /// `ref(r)`: the reference to the resource `r` (its name in scope,
@@ -3470,6 +3553,7 @@ impl<'u> Lowerer<'u> {
                 self.check_function(&name, span);
                 let args = self.bind(false, |l| l.args(rc, n, Pos::Content, pre))?;
                 self.check_aggregated(&name, &args, span);
+                let args = self.typed_args(&name, args, span)?;
                 Ok(Term::Func { name, args })
             }
             LIST => {

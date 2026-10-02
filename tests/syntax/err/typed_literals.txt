@@ -1,0 +1,8 @@
+tests/syntax/err/typed_literals.df:4:19: input net is an inet: "10.0.0/16" is not a network (`a.b.c.d/n`)
+tests/syntax/err/typed_literals.df:5:16: input n is int, not the string "3"
+tests/syntax/err/typed_literals.df:6:30: input tier is enum("a", "b"): "c" is not one of its members
+tests/syntax/err/typed_literals.df:8:16: `inet.subnet`'s argument `net` is an inet: "10.0.0.0/33" is not a network (`a.b.c.d/n`)
+tests/syntax/err/typed_literals.df:10:34: `r` is a reference and "main" a string: they are never equal
+  help: compare with the resource: `r == main`, or `r == T["main"]` (R-31)
+tests/syntax/err/typed_literals.df:11:26: `r` is a reference and "main" a string: they are never equal
+  help: compare with the resource: `r != main`, or `r != T["main"]` (R-31)

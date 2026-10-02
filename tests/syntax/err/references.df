@@ -1,0 +1,10 @@
+edition 2026
+
+# A program never reads an id: a reference is the resource (R-43).
+resource net.vpc main { cidr = "10.0.0.0/16" }
+resource net.subnet a { vpc_id = main.id }
+p(x) where v in net.vpc, x = v.id
+# A reference a deformation row binds has no type until `in` gives it one.
+q(k) where deformation(k, r, _), r.cidr == "10.0.0.0/16"
+# `ref(r)` takes a resource.
+resource net.subnet b { note = ref("main") }
