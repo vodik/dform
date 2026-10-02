@@ -543,7 +543,7 @@ fn apply_asks_unless_yes() {
     let r = apply(&["apply", "app.df", "env=prod"]).failure();
     assert!(
         r.stderr.contains(
-            "apply app[env=prod]: nothing to ask on (stdin is not a terminal); \
+            "apply app[env=prod]: nothing to ask on at tick 1 (stdin is not a terminal); \
              pass --yes to apply without asking"
         ),
         "{}",
