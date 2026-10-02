@@ -19,8 +19,8 @@
 //! the stratifier partitions a write by its head's constant type and path.
 
 use crate::ast::{
-    Atom, FieldAssign, InputDecl, Lit, OutputDecl, Program, Resource, RuleStmt, Settings,
-    Span, Stmt, Term, TypeExpr,
+    Atom, FieldAssign, InputDecl, Lit, OutputDecl, Program, Resource, RuleStmt, Settings, Span,
+    Stmt, Term, TypeExpr,
 };
 use crate::diag::{self, Diagnostic, Diagnostics};
 use crate::inputs::Declared;
@@ -175,7 +175,10 @@ fn lets(stmts: Vec<Stmt>, scope: &str, names: Option<&Names>) -> Vec<Stmt> {
         out.push(fact_or_rule(arg, body));
     }
     for (k, span) in keys {
-        let pred = names.and_then(|n| n.get(&k)).cloned().unwrap_or_else(|| k.clone());
+        let pred = names
+            .and_then(|n| n.get(&k))
+            .cloned()
+            .unwrap_or_else(|| k.clone());
         let v = Term::Var("V".into());
         out.push(Stmt::Rule(RuleStmt {
             head: atom(&pred, vec![v.clone()], span),

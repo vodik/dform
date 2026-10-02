@@ -302,8 +302,11 @@ fn fixpoint<'a>(
                 && pass.term_secret(v, &vars)
                 && let (Some(scope), Some(k)) = (s(scope), s(k))
             {
-                pass.cells
-                    .insert((crate::modules::LET.to_string(), scope.to_string(), k.to_string()));
+                pass.cells.insert((
+                    crate::modules::LET.to_string(),
+                    scope.to_string(),
+                    k.to_string(),
+                ));
             }
         }
         if (pass.secret.len(), pass.cells.len()) == before {

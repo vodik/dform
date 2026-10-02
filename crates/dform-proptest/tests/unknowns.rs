@@ -479,7 +479,11 @@ impl fmt::Display for Program {
             };
             match d {
                 Def::Pred(PredDef::Rule(g, guards)) => {
-                    writeln!(f, "p{i}(x) where {}", pr.body(Some(*g), guards, sc).join(", "))?;
+                    writeln!(
+                        f,
+                        "p{i}(x) where {}",
+                        pr.body(Some(*g), guards, sc).join(", ")
+                    )?;
                 }
                 Def::Pred(PredDef::Carry(s, id)) => {
                     let path = if *id { "id" } else { "endpoint" };
@@ -515,7 +519,11 @@ impl fmt::Display for Program {
             if body.is_empty() {
                 body.push("b(x)".into());
             }
-            writeln!(f, "{}", lone_x(format!("deny \"d{k}\" where {}", body.join(", "))))?;
+            writeln!(
+                f,
+                "{}",
+                lone_x(format!("deny \"d{k}\" where {}", body.join(", ")))
+            )?;
         }
         Ok(())
     }

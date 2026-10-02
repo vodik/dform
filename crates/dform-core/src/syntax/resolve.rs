@@ -23,10 +23,9 @@ use super::SyntaxKind::{self, *};
 use super::parser as parse;
 use super::{SyntaxNode, SyntaxToken};
 use crate::ast::{
-    ApplyPolicy, Atom, AttrDecl, BindArg, Config, Decl, Extern, ExternFn, FieldAssign,
-    FieldOp, Import, InputDecl, InputRelation, Instance, Lit, Module,
-    OutputDecl, Pending, PendingKind, PolicyPack, Program, Rank, Resource, RuleStmt, Scenario,
-    Settings, Span, Stmt, Term, TypeExpr,
+    ApplyPolicy, Atom, AttrDecl, BindArg, Config, Decl, Extern, ExternFn, FieldAssign, FieldOp,
+    Import, InputDecl, InputRelation, Instance, Lit, Module, OutputDecl, Pending, PendingKind,
+    PolicyPack, Program, Rank, Resource, RuleStmt, Scenario, Settings, Span, Stmt, Term, TypeExpr,
 };
 use crate::diag::Diagnostic;
 use crate::value::Value;
@@ -2590,7 +2589,11 @@ impl<'u> Lowerer<'u> {
                 );
             self.diags.push(d);
         }
-        if failed { Err(Skip) } else { self.singletons(rc) }
+        if failed {
+            Err(Skip)
+        } else {
+            self.singletons(rc)
+        }
     }
 
     // --- bodies -------------------------------------------------------------
@@ -4811,7 +4814,10 @@ mod tests {
                 "unknown type `net.vcp.main.cidr`",
             ),
             // H-15: the core where a surface form says it.
-            ("p(x) where want(net.vpc, x)\n", "write `x in net.vpc` (H-15)"),
+            (
+                "p(x) where want(net.vpc, x)\n",
+                "write `x in net.vpc` (H-15)",
+            ),
             (
                 "p(v) where attr(net.vpc, \"main\", \"cidr\", v)\n",
                 "write `v = net.vpc[\"main\"].cidr` (H-15)",
@@ -4821,7 +4827,10 @@ mod tests {
                 "write `set net.vpc[\"main\"].cidr = \"x\"` (H-15)",
             ),
             ("output(\"k\", 1)\n", "write `output k = 1` (H-15)"),
-            ("deny(\"m\") where q(1)\n", "write `deny \"m\" where ..` (H-15)"),
+            (
+                "deny(\"m\") where q(1)\n",
+                "write `deny \"m\" where ..` (H-15)",
+            ),
             ("p(x) where member([1], x)\n", "write `x in [1]` (H-9)"),
         ] {
             let e = file_error(src);

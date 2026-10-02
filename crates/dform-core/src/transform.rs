@@ -1657,7 +1657,9 @@ pub fn computed_reads(statements: &[Stmt], schema: &Schema) -> Vec<(Span, String
             }
             let mut paths = vec![p.clone()];
             walks(v, &r.body, p, &mut paths);
-            let path = paths.into_iter().find(|q| schema.class_of(t, q).is_some())?;
+            let path = paths
+                .into_iter()
+                .find(|q| schema.class_of(t, q).is_some())?;
             let at = match addr {
                 Term::Val(Value::Str(a)) => a.rsplit("::").next().unwrap_or(a).to_string(),
                 other => format!("{t}[{}]", crate::partition::fmt_term(other)),
@@ -1665,7 +1667,9 @@ pub fn computed_reads(statements: &[Stmt], schema: &Schema) -> Vec<(Span, String
             Some((a.span, at, path))
         });
         if let Some((span, at, path)) = first {
-            let place = diag::place(span).map(|p| format!("{p}: ")).unwrap_or_default();
+            let place = diag::place(span)
+                .map(|p| format!("{p}: "))
+                .unwrap_or_default();
             out.push((
                 span,
                 format!(

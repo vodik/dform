@@ -44,7 +44,12 @@ resource net.vpc "v-${n}" { cidr = n }
 "#,
     )
     .success();
-    assert_eq!(r.summary(), "plan: 1 deformation (1 create)", "{}", r.stdout);
+    assert_eq!(
+        r.summary(),
+        "plan: 1 deformation (1 create)",
+        "{}",
+        r.stdout
+    );
     assert!(r.stdout.contains("cidr = \"a\""), "{}", r.stdout);
 }
 

@@ -52,7 +52,10 @@ impl Lowerer<'_> {
             .with_help(
                 "a variable joins where it is written twice; written once it matches anything",
             )
-            .with_fix(format!("rename it `_{src}`"), vec![(span, format!("_{src}"))]);
+            .with_fix(
+                format!("rename it `_{src}`"),
+                vec![(span, format!("_{src}"))],
+            );
             self.diags.push(d);
         }
         if failed { Err(Skip) } else { Ok(()) }
