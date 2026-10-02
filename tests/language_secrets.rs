@@ -70,7 +70,10 @@ fn e0302_a_negation() {
 
 #[test]
 fn e0303_a_count() {
-    refused("n(count(p)) where pw(p)\n", "E0303: count() over a secret");
+    refused(
+        "n(c) where c = count(p), pw(p)\n",
+        "E0303: count() over a secret",
+    );
 }
 
 #[test]

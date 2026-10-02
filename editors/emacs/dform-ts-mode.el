@@ -207,7 +207,7 @@ apply-order edge, not its content read now (`docs/grammar.md'
    "(call
       function: (identifier) @font-lock-builtin-face
       (#match? @font-lock-builtin-face
-        \"^\\(count\\|sum\\|min\\|max\\|collect_set\\|collect_list\\|format\\|ref\\|attr\\|want\\|arg\\|setting\\|output\\|input\\|inet\\|inet_subnet\\|inet_host\\|declassify\\|cloud_attr\\|cloud_exists\\)$\"))
+        \"^\\(count\\|sum\\|min\\|max\\|any\\|all\\|collect_set\\|collect_list\\|format\\|ref\\|attr\\|want\\|arg\\|setting\\|output\\|input\\|inet\\|inet_subnet\\|inet_host\\|declassify\\|cloud_attr\\|cloud_exists\\)$\"))
     ((identifier) @font-lock-builtin-face
       (#match? @font-lock-builtin-face \"^\\(settings\\|world\\)$\"))
     ((identifier) @font-lock-builtin-face

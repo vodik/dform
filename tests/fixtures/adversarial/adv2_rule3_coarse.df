@@ -22,7 +22,7 @@ resource k8s.namespace pngu {
 deny "namespace without deployment" { ns: n } where n in k8s.namespace, not n in k8s.deployment
 
 # Unrelated aggregate over want (different type): decidable now.
-ns_count(collect_set(n)) where n in k8s.namespace
+ns_count(l) where l = collect_set(n), n in k8s.namespace
 
 deny "need the pngu namespace" where ns_count(l), not "pngu" in l
 

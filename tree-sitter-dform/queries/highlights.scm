@@ -65,7 +65,7 @@
 (call
   function: (identifier) @function.builtin
   (#any-of? @function.builtin
-    "count" "sum" "min" "max" "collect_set" "collect_list" "format" "ref"
+    "count" "sum" "min" "max" "any" "all" "collect_set" "collect_list" "format" "ref"
     "attr" "want" "arg" "setting" "output" "input" "inet"
     "inet_subnet" "inet_host" "declassify" "cloud_attr" "cloud_exists"))
 

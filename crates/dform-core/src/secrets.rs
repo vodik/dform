@@ -402,7 +402,10 @@ pub fn check(
         // E0303: an aggregate that is not a collect.
         for t in &h.args {
             if let Term::Func { name, args } = t
-                && matches!(name.as_str(), "count" | "sum" | "min" | "max")
+                && matches!(
+                    name.as_str(),
+                    "count" | "sum" | "min" | "max" | "any" | "all"
+                )
                 && args.iter().any(&secret)
             {
                 diags.push(Diagnostic::error(

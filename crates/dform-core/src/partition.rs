@@ -229,8 +229,18 @@ fn is_builtin_or_edb(pred: &str) -> bool {
     matches!(pred, "member" | "enumerate") || crate::functions::is_predicate(pred)
 }
 
-/// The aggregates a rule head may apply.
-pub const AGGREGATES: &[&str] = &["collect_set", "collect_list", "count", "sum", "min", "max"];
+/// The aggregates (docs/grammar.md "Aggregates"): written `n = count(x)` in
+/// a body, lowered to a rule head that applies one.
+pub const AGGREGATES: &[&str] = &[
+    "collect_set",
+    "collect_list",
+    "count",
+    "sum",
+    "min",
+    "max",
+    "any",
+    "all",
+];
 
 pub fn is_aggregate_head(head: &Atom) -> bool {
     head.args.iter().any(|t| match t {

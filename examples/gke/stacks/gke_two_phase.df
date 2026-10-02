@@ -93,7 +93,7 @@ resource google.container_node_pool "np-${z}" {
   max = 3
 } where z in google.container_cluster["pngu"].zones
 
-zone_count(count(z)) where z in google.container_cluster["pngu"].zones
+zone_count(n) where n = count(z), z in google.container_cluster["pngu"].zones
 
 deny "cluster must be in at least two zones" { cluster: "pngu" } where {
   "pngu" in google.container_cluster

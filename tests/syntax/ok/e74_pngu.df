@@ -219,7 +219,7 @@ resource gke.nodepool np {
 # A policy that cannot be decided at plan time and says so: the aggregate
 # has a stuck instance, so it is undetermined, and the deny is reported as
 # undetermined until phase 1 resolves .zones.
-zone_count(count(z)) where attr("gke.cluster", "pngu", "zones", zs), member(zs, z)
+zone_count(n) where n = count(z), attr("gke.cluster", "pngu", "zones", zs), member(zs, z)
 
 deny("two_zones", "cluster must be in at least two zones", { cluster: "pngu" }) where {
   want("gke.cluster", "pngu")

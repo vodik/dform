@@ -47,8 +47,8 @@ fn an_undefined_predicate_names_its_literal() {
 
 /// A call to a function the evaluator does not have would have no value
 /// and fail its literal quietly; it is a compile error at the call, in a
-/// rule body and in a resource field alike. An aggregate is known in a
-/// rule head only.
+/// rule body and in a resource field alike. An aggregate is bound in a
+/// body (`n = count(x)`, R-59) and nowhere else.
 #[test]
 fn an_unknown_function_names_its_call() {
     let r = plan("edition 2026\nenv(\"prod\")\nq(y) where env(x), y = lowr(x)\nprovider fake\n")
@@ -63,21 +63,22 @@ fn an_unknown_function_names_its_call() {
         "{}",
         r.stderr
     );
-    let r = plan("edition 2026\nresource net.a x {\n  name = uper(\"x\")\n}\nprovider fake\n").failure();
+    let r = plan("edition 2026\nresource net.a x {\n  name = uper(\"x\")\n}\nprovider fake\n")
+        .failure();
     assert!(
         r.stderr.contains("p.df:3:10: unknown function uper"),
         "{}",
         r.stderr
     );
-    let r = plan("edition 2026\nenv(\"prod\")\nq(n) where env(x), n = count(x)\nprovider fake\n")
-        .failure();
+    let r =
+        plan("edition 2026\nenv(\"prod\")\nq(count(x)) where env(x)\nprovider fake\n").failure();
     assert!(
         r.stderr
-            .contains("p.df:3:24: `count` is an aggregate: it is written in a rule head"),
+            .contains("p.df:3:3: `count` is an aggregate: it is bound in a body, `n = count(x)`"),
         "{}",
         r.stderr
     );
-    plan("edition 2026\nenv(\"prod\")\nq(count(x)) where env(x)\nr(y) where env(x), y = str.upper(x)\nprovider fake\n")
+    plan("edition 2026\nenv(\"prod\")\nq(n) where env(x), n = count(x)\nr(y) where env(x), y = str.upper(x)\nprovider fake\n")
         .success();
 }
 

@@ -1442,9 +1442,10 @@ for byte, and a file with a syntax error is reported, not rewritten.
   - `arg(Type, Name, KeyPath, Value)` contributes attributes (KeyPath supports dots).
   - `ref(Type, Name, "attr")` expresses dependencies.
   - `collect_set(x)` / `collect_list(x)`, `count(x)`, `sum(x)`, `min(x)`,
-    `max(x)` aggregate in a head, per group of the head's other arguments.
-    `sum` folds ints, `min`/`max` ints or strings; a group with a value of
-    another kind derives a deny, and one whose value is a null is stuck.
+    `max(x)`, `any(x)`, `all(x)` aggregate in a head, per group of the
+    head's other arguments. `sum` folds ints, `min`/`max` ints or strings,
+    `any`/`all` bools; a group with a value of another kind derives a deny,
+    and one whose value is a null is stuck.
   - `deny("message", ctx)` and `warn(..)` are the checks, read after evaluation.
 
 - The surface:
@@ -1469,6 +1470,10 @@ for byte, and a file with a syntax error is reported, not rewritten.
     a string may span lines, kept as written (`str.dedent(s)` removes the
     indentation its lines share).
   - list comprehensions: `[x | pred(x), pred2(x)]` (lowers to a `collect_list` rule).
+  - aggregates are bound in a body: `subnets(v, n) where n = count(s), s in
+    aws.subnet, s.vpc_id == v` counts per group of the head's other
+    variables (`v`); `let n = count(s) where s in aws.subnet` is one group
+    (docs/grammar.md "Aggregates").
   - expression terms: `ib = ia + 1` lowers to `IB = add(IA, 1)`.
   - `use PATH [as N] [{ k = v }] [where B]` imports a module, a file by
     its path from the project root, once under `N`; `instance PATH N {
@@ -2335,7 +2340,7 @@ share: the time spent in the mock's calls.
 This is an MVP:
 
 - semi-naive evaluator with hash indexes (see Performance)
-- functions declared in `std/*.df` (docs/grammar.md "Functions"): the prelude's constructors `int`, `string`, `inet`, `ip`, `iprange` and `format`, `len`, `ref`, `scoped`, `cloud_ref`, `declassify`; `inet.subnet`, `inet.host`, `inet.addr`, `inet.contains`, `inet.overlaps`, `inet.prefix_len`, `ip.unspecified`, `str.split`, `str.lower`, `str.upper`, `list.len`, `list.join`; arithmetic `+ - * / %`; aggregates `collect_*`
+- functions declared in `std/*.df` (docs/grammar.md "Functions"): the prelude's constructors `int`, `string`, `inet`, `ip`, `iprange` and `format`, `len`, `ref`, `scoped`, `cloud_ref`, `declassify`; `inet.subnet`, `inet.host`, `inet.addr`, `inet.contains`, `inet.overlaps`, `inet.prefix_len`, `ip.unspecified`, `str.split`, `str.lower`, `str.upper`, `list.len`, `list.join`; arithmetic `+ - * / %`; aggregates `collect_*`, `count`, `sum`, `min`, `max`, `any`, `all`, bound in a body (`n = count(x)`)
 - list helper predicate: `member(List, Item)` and `member(List, Index, Item)` (Index starts at 0)
 - safe(ish) negation: `not` requires the atom be ground at evaluation time
 

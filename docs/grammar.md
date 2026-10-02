@@ -720,8 +720,9 @@ type       := DOTTED ("(" type ("," type)* ")")? | "{" NAME ":" type ("," NAME "
 
 In a literal position a chain applied to arguments is an atom, unless an
 operator follows it (`f(x) == 3` compares a call). Precedence, loosest
-first: `+ -` (left), `* / %` (left), unary `-`. Aggregates (`count(x)`,
-`sum(x)`, `collect_set(x)`, ...) are calls in a head. Named arguments
+first: `+ -` (left), `* / %` (left), unary `-`. An aggregate (`count(x)`,
+`sum(x)`, `collect_set(x)`, ...) is bound in a body, `n = count(x)`
+("Aggregates"). Named arguments
 (`project(id: i)`) are for a relation declared with named columns; they
 lower to a record pattern.
 
@@ -736,6 +737,52 @@ row per thing (R-55). A range anywhere but after `in` is an error, "a
 range is enumerated with `in`; `[lo..hi]` is not a list", so it never
 becomes a list by accident: `int.range(lo, hi, step)` is the function
 that gives one.
+
+### Aggregates
+
+```
+lit1      := NAME "=" aggregate | ...
+let       := "let" NAME "=" aggregate ("where" body)?
+aggregate := ("count" | "sum" | "min" | "max" | "any" | "all"
+            | "collect_set" | "collect_list") "(" term ")"
+```
+
+`n = count(x)` in a body binds `n` to the fold of `x` over the body's
+matches (R-59). The groups are the head's other variables: in
+`subnets(v, n) where n = count(s), s in aws.subnet, s.vpc_id == v` there
+is a count per `v`. A head with no other variable is one group, and so is
+a `let`: `let n = count(s) where s in aws.subnet`. The literal may stand
+anywhere in the body; a literal that reads `n` (`n > 3`) is applied after
+the fold, and what it reads of the body is part of the group too
+(`over(v) where n = count(s), subnet(s, v), limit(v, m), n > m` groups by
+`v` and `m`). Two aggregates in one body fold over the same body, group
+by group. What an aggregate folds is bound by the rest of the body:
+`n = count(x)` with no literal binding `x` is an error, "`count(x)`
+aggregates `x`, which the body does not bind". An aggregate anywhere else
+(a head, a field, an argument, inside `not { }` or a comprehension) is an
+error naming the body form.
+
+| aggregate         | of        | gives                                                    |
+|-------------------|-----------|----------------------------------------------------------|
+| `count(x)`        | anything  | the number of the body's matches                         |
+| `sum(x)`          | ints      | their sum                                                |
+| `min(x)`, `max(x)` | ints or strings | the least, the greatest                         |
+| `any(x)`, `all(x)` | bools    | whether some, whether every, is true                    |
+| `collect_set(x)`  | anything  | the distinct values, as a list in sorted order           |
+| `collect_list(x)` | anything  | every value, in the order of the body's rows             |
+
+The order of the body's rows: the first relation the body reads, in its
+order (a relation's rows sorted, a list's elements as the list has them,
+`i in lo..hi` counting up), then within each of its rows the next
+relation's, and so on; so `collect_list(z)` over `zs(l), z in l` is `l`
+itself. A comprehension `[t | B]` is a `collect_list` over `B` and keeps
+the same order. A value of the wrong kind in a group (`sum` of a string)
+derives a deny naming the group instead of its fact, and a group with a
+null in a folded value is undetermined (`count`, `sum`, `min`, `max`,
+`any`, `all`; the collects keep the null). An empty group derives nothing:
+a `let n = count(x) where B` with no match of `B` has no value, so "none"
+is `not { B }`, not `n == 0`. `why` of an aggregate's fact prints the
+statement and the rows of its group.
 
 ### Reference or read
 
@@ -890,6 +937,9 @@ as it is.
 | `not { B }` (or a `not` of a nested path) | `not __neg_N(ȳ)`, `__neg_N(ȳ) :- P, B'`: ȳ the variables the body so far binds, `P` its positive literals |
 | `a + b` (and `- * / %`)                   | `add(a, b)` (`sub mul div mod`)                        |
 | `[t \| B]`                                | a `collect_list` helper rule over `B`                  |
+| `p(k, n) where n = count(x), B`           | `p(K, count(X)) :- B` (an aggregate head; "Aggregates") |
+| `p(k) where n = count(x), B, n > 2`       | `__agg_N(K, count(X)) :- B`, `p(K) :- __agg_N(K, N), N > 2` |
+| `let n = count(x) where B`                | `arg("let", S, "n", count(X), r) :- B`: one group      |
 
 `not R.p` holds when the attribute is absent, false, the API `null`, or
 anything but `true`; it does not check that `R` exists (G-13). Write

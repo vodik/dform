@@ -88,7 +88,8 @@ This is the Pattern A win: derive one resource per row, not index-based `count`.
 Note: Datalog has no intrinsic ordering, so dform's aggregates are deterministic:
 
 - `collect_set(x)` returns a sorted list of unique values
-- `collect_list(x)` returns a sorted list that may include duplicates
+- `collect_list(x)` returns a list that may include duplicates, in the
+  order of the body's rows (docs/grammar.md "Aggregates")
 
 ## One Merge Law for Shared Attributes
 

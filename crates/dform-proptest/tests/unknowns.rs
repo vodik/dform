@@ -1258,7 +1258,7 @@ resource pt.mid m1 {
 } where s0.size >= 0
 
 p0(x) where x in pt.mid
-c1(count(x)) where p0(x)
+c1(n) where n = count(x), p0(x)
 "#,
         &ZEROS,
     );

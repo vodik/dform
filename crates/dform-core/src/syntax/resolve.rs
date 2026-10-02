@@ -35,6 +35,7 @@ use crate::diag::Diagnostic;
 use crate::value::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
+mod aggregate;
 mod alias;
 mod heads;
 mod provider;
@@ -660,6 +661,12 @@ pub struct Lowerer<'u> {
     aliases: alias::Aliases,
     /// The outputs declared so far, by scope.
     outputs: BTreeSet<(usize, String)>,
+    /// The aggregate bindings of the statement being lowered.
+    aggs: Vec<aggregate::Agg>,
+    /// `__agg_N` helpers generated so far.
+    agg_rules: usize,
+    /// How deep in `not { }` bodies and comprehensions the lowering is.
+    nested: usize,
 }
 
 /// What a call is where it is written.
@@ -667,8 +674,6 @@ pub struct Lowerer<'u> {
 enum Calls {
     /// A function the evaluator applies.
     Function,
-    /// In a rule's head: a function, or an aggregate.
-    Head,
     /// A constructor the compiler reads as data: a provider's or stack's
     /// setting (`local("DIR")`, `jwks(...)`), an input relation's source,
     /// a `type_refine` constraint. Each reader checks its own names.
@@ -696,6 +701,9 @@ impl<'u> Lowerer<'u> {
             calls: Calls::Function,
             aliases: alias::Aliases::default(),
             outputs: BTreeSet::new(),
+            aggs: Vec::new(),
+            agg_rules: 0,
+            nested: 0,
         };
         l.decls.deployed = deployed.to_vec();
         for (i, u) in units.iter().enumerate() {
@@ -1362,7 +1370,13 @@ impl<'u> Lowerer<'u> {
     /// `outer` carries the variables an enclosing `for`/`when` binds.
     fn stmt(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> Vec<Stmt> {
         let saved = std::mem::take(&mut self.helpers);
+        let aggs = std::mem::take(&mut self.aggs);
         let mut out = self.stmt1(n, scope, outer).unwrap_or_default();
+        if !self.aggs.is_empty() {
+            let span = self.span(n);
+            out = self.fold_aggregates(out, span).unwrap_or_default();
+        }
+        self.aggs = aggs;
         out.append(&mut self.helpers);
         self.helpers = saved;
         if !(self.core || self.lenient || self.text || self.any_type) {
@@ -2696,7 +2710,7 @@ impl<'u> Lowerer<'u> {
         let has_body = node(n, BODY).is_some();
         let calls = match self.callee(&head_node).as_deref() {
             Some("type_refine") => Calls::Data,
-            _ => Calls::Head,
+            _ => Calls::Function,
         };
         let mut head = self.calls(calls, |l| {
             l.atom(&mut rc, &head_node, Pos::Whole, &mut body)
@@ -2733,7 +2747,20 @@ impl<'u> Lowerer<'u> {
         let mut body = self.opt_body(&mut rc, n)?;
         let has_body = node(n, BODY).is_some();
         let t = terms(n).next().ok_or(Skip)?;
-        let value = self.let_value(&mut rc, &t, &mut body)?;
+        let value = if t.kind() == CALL && self.aggregate_name(&t).is_some() {
+            // `let n = count(x) where B`: one group (R-59).
+            let call = self.aggregate_call(&mut rc, &t, &mut body)?;
+            let v = fresh(&mut rc, &capitalise(&name));
+            self.aggs.push(aggregate::Agg {
+                var: v.clone(),
+                text: t.text().to_string(),
+                span: self.span(&t),
+            });
+            body.push(Lit::Eq(var(&v), call));
+            var(&v)
+        } else {
+            self.let_value(&mut rc, &t, &mut body)?
+        };
         let rank = self.rank_tok(n)?.unwrap_or(Rank::Normal);
         let head = Atom {
             pred: crate::modules::LET.to_string(),
@@ -3118,6 +3145,8 @@ impl<'u> Lowerer<'u> {
     /// read, an equality, or an enclosing `for`/`when`. A name that is none
     /// of these was meant as a string.
     fn check_bound(&mut self, rc: &Rc, body: &[Lit], heads: &[&Term]) -> L<()> {
+        let unbound = self.unbound_aggregates(rc, body);
+        let mut failed = !unbound.is_empty();
         let mut bound = bound_vars(body);
         // A comprehension binds its own variables, wherever it stands.
         let holder: Vec<Lit> = heads
@@ -3126,9 +3155,11 @@ impl<'u> Lowerer<'u> {
             .collect();
         bound.extend(bound_vars(&holder));
         bound.extend(rc.outer.iter().cloned());
-        let mut failed = false;
         for (src, low) in &rc.vars {
-            if rc.outer.contains(low) || (bound.contains(low) && rc.binders.contains(src)) {
+            if rc.outer.contains(low)
+                || (bound.contains(low) && rc.binders.contains(src))
+                || unbound.contains(low)
+            {
                 continue;
             }
             let Some(span) = rc.first.get(src).copied() else {
@@ -3315,11 +3346,14 @@ impl<'u> Lowerer<'u> {
         let mut rc2 = rc.clone();
         rc2.reads.clear();
         rc2.values.clear();
-        if n.kind() == BODY {
-            inner = self.body(&mut rc2, n)?;
+        self.nested += 1;
+        let lowered = if n.kind() == BODY {
+            self.body(&mut rc2, n).map(|b| inner = b)
         } else {
-            self.lit(&mut rc2, n, &mut inner)?;
-        }
+            self.lit(&mut rc2, n, &mut inner)
+        };
+        self.nested -= 1;
+        lowered?;
         // Keep the variable table: names the helper introduced are its own.
         for (k, v) in &rc2.vars {
             rc.vars.entry(k.clone()).or_insert_with(|| v.clone());
@@ -3343,9 +3377,22 @@ impl<'u> Lowerer<'u> {
         let pred = format!("__neg_{}", self.negs);
         self.negs += 1;
         let head = atom_at(&pred, shared.iter().map(|v| var(v)).collect(), span);
+        // An aggregate's value is not the helper's: it is folded after.
+        let results: BTreeSet<&String> = self.aggs.iter().map(|a| &a.var).collect();
+        let reads_result = |l: &Lit| {
+            let mut vs = BTreeSet::new();
+            lit_vars(l, &mut vs);
+            vs.iter().any(|v| results.contains(v))
+        };
+        if inner.iter().any(reads_result) {
+            return self.error(
+                span,
+                "an aggregate's value is compared after the fold, not inside `not { }`",
+            );
+        }
         let mut body: Vec<Lit> = out
             .iter()
-            .filter(|l| !matches!(l, Lit::Not(_)))
+            .filter(|l| !matches!(l, Lit::Not(_)) && !reads_result(l))
             .cloned()
             .collect();
         body.extend(inner);
@@ -3364,6 +3411,9 @@ impl<'u> Lowerer<'u> {
     /// `a op b [op c]`, with the direct forms: `x = R.p` and `R.p == c`
     /// are the read itself.
     fn cmp(&mut self, rc: &mut Rc, n: &SyntaxNode, out: &mut Vec<Lit>) -> L<()> {
+        if let Some(r) = self.aggregate_binding(rc, n, out) {
+            return r;
+        }
         let span = self.span(n);
         let ts: Vec<SyntaxNode> = terms(n).collect();
         let ops: Vec<SyntaxKind> = tokens(n).map(|t| t.kind()).collect();
@@ -3863,7 +3913,7 @@ impl<'u> Lowerer<'u> {
     /// neither an int nor a string: an error at the call rather than a
     /// deny of every group.
     fn check_aggregated(&mut self, name: &str, args: &[Term], span: Span) {
-        if self.lenient || self.calls != Calls::Head {
+        if self.lenient {
             return;
         }
         let kind = match args {
@@ -3907,12 +3957,16 @@ impl<'u> Lowerer<'u> {
             return;
         }
         if crate::partition::AGGREGATES.contains(&name) {
-            if self.calls != Calls::Head {
-                self.diags.push(Diagnostic::error(
+            self.diags.push(
+                Diagnostic::error(
                     span,
-                    format!("`{name}` is an aggregate: it is written in a rule head"),
-                ));
-            }
+                    format!("`{name}` is an aggregate: it is bound in a body, `n = {name}(x)`"),
+                )
+                .with_help(format!(
+                    "`p(k, n) where n = {name}(x), B` folds per group of the head's other \
+                     variables; `let n = {name}(x) where B` over one group"
+                )),
+            );
             return;
         }
         self.diags.push(crate::functions::unknown(span, name));
@@ -4049,7 +4103,10 @@ impl<'u> Lowerer<'u> {
                     std::mem::take(&mut rc.reads),
                     std::mem::take(&mut rc.values),
                 );
-                let mut body = self.body(rc, &node(n, BODY).ok_or(Skip)?)?;
+                self.nested += 1;
+                let body = self.body(rc, &node(n, BODY).ok_or(Skip)?);
+                self.nested -= 1;
+                let mut body = body?;
                 let item_node = terms(n).next().ok_or(Skip)?;
                 // A resource collected into a value is its reference.
                 let item_pos = if pos == Pos::Value {

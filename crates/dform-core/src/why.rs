@@ -600,6 +600,22 @@ impl Surface<'_, '_> {
             match circuit.view(*c) {
                 View::Leaf(Leaf::Rule { id }) => rule = Some(id.as_str()),
                 View::Leaf(l) => others.push(l.clone()),
+                // An aggregate's group (R-59), which the compiler folded in
+                // a rule of its own: the group's rows, under the statement
+                // that folds them.
+                View::Fact { fact, alts, .. } if fact.pred.starts_with("__agg_") => {
+                    let rows = alts.first().map(|a| circuit.view(*a));
+                    if let Some(View::Times { children, .. }) = rows {
+                        for r in children {
+                            match circuit.view(*r) {
+                                View::Fact { .. } => facts.push(*r),
+                                View::Leaf(Leaf::Rule { .. }) => {}
+                                View::Leaf(l) => others.push(l.clone()),
+                                View::Times { .. } | View::Dead => {}
+                            }
+                        }
+                    }
+                }
                 View::Fact { .. } => facts.push(*c),
                 View::Times { .. } | View::Dead => {}
             }

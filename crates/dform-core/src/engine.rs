@@ -1914,17 +1914,19 @@ fn eval_rule(rule: &RuleStmt, plan: &ops::Rule, src: &Src, rec: &Rec) -> Result<
 }
 
 /// An aggregate rule. Rule 2: the group key is a content position, and so
-/// is the aggregated value of `count`, `sum`, `min` and `max` (a fresh null
-/// too: its order and its sum are content); `collect_set`/`collect_list`
-/// forward nulls. Rule 3: a group is undetermined, and not derived, when
+/// is the aggregated value of `count`, `sum`, `min`, `max`, `any` and `all`
+/// (a fresh null too: its order and its sum are content);
+/// `collect_set`/`collect_list` forward nulls. Rule 3: a group is undetermined, and not derived, when
 /// its key unifies with a stuck instance of this rule or with a stuck head
 /// of a predicate the body reads.
 ///
 /// `count` and `sum` fold every body match of the group, `min` and `max`
-/// their least and greatest; a group has at least one match, so an empty
-/// group derives nothing. A group `sum` has a non-int in, or `min`/`max`
-/// one that is neither an int nor a string or a mix of the two, derives a
-/// deny naming the group and the value instead of its head.
+/// their least and greatest, `any` and `all` their bools; `collect_list`
+/// keeps the rows' order. A group has at least one match, so an empty
+/// group derives nothing. A group `sum` has a non-int in, `min`/`max` one
+/// that is neither an int nor a string or a mix of the two, or `any`/`all`
+/// a non-bool, derives a deny naming the group and the value instead of
+/// its head.
 fn eval_rule_collect(
     rule: &RuleStmt,
     src: &Src,
@@ -1942,11 +1944,15 @@ fn eval_rule_collect(
 
     let rows = eval_body(&rule.body, src, rec)?;
     let mut groups_set: BTreeMap<Vec<Value>, BTreeSet<Value>> = BTreeMap::new();
-    let mut groups_list: BTreeMap<Vec<Value>, Vec<Value>> = BTreeMap::new();
+    // `collect_list` keeps each item's row order (`cmp_order`).
+    let mut groups_list: BTreeMap<Vec<Value>, Vec<(Vec<Choice>, Value)>> = BTreeMap::new();
     // Σ over the group: every body fact and negation of every member.
     let mut group_prov: BTreeMap<Vec<Value>, (BTreeSet<TupleId>, BTreeSet<Atom>)> = BTreeMap::new();
     for Row {
-        s: b, used, absent, ..
+        s: b,
+        used,
+        absent,
+        order,
     } in rows
     {
         if rec.any_blocked(&rule.head.args, &b) {
@@ -1978,8 +1984,8 @@ fn eval_rule_collect(
             AggKind::Set => {
                 groups_set.entry(key).or_default().insert(item);
             }
-            AggKind::List | AggKind::Count | AggKind::Sum | AggKind::Min | AggKind::Max => {
-                groups_list.entry(key).or_default().push(item);
+            _ => {
+                groups_list.entry(key).or_default().push((order, item));
             }
         }
     }
@@ -2009,10 +2015,8 @@ fn eval_rule_collect(
     let undetermined: Vec<Atom> = rec.found.borrow().iter().map(|s| s.head.clone()).collect();
 
     let mut out = Vec::new();
-    let mut emit_group = |key: Vec<Value>, mut items: Vec<Value>| {
+    let mut emit_group = |key: Vec<Value>, items: Vec<Value>| {
         let (used, absent) = group_prov.remove(&key).unwrap_or_default();
-        // Deterministic output: Datalog doesn't define an order, so we sort.
-        items.sort();
 
         let mut key_pat = Atom {
             pred: rule.head.pred.clone(),
@@ -2071,8 +2075,16 @@ fn eval_rule_collect(
     for (key, items) in groups_set {
         emit_group(key, items.into_iter().collect());
     }
-    for (key, items) in groups_list {
-        emit_group(key, items);
+    for (key, mut items) in groups_list {
+        // `collect_list` is in the order of the body's rows: the first
+        // relation's rows in order (a list's elements in its order), then
+        // the next's. The other folds see their items sorted.
+        if kind == AggKind::List {
+            items.sort_by(|(a, x), (b, y)| cmp_order(src.store, a, b).then_with(|| x.cmp(y)));
+        } else {
+            items.sort_by(|(_, x), (_, y)| x.cmp(y));
+        }
+        emit_group(key, items.into_iter().map(|(_, v)| v).collect());
     }
 
     Ok(out)
@@ -2122,6 +2134,23 @@ fn fold(name: &str, kind: AggKind, items: Vec<Value>) -> std::result::Result<Val
             }
             let v = if kind == AggKind::Min { first } else { last };
             Ok(v.clone())
+        }
+        AggKind::Any | AggKind::All => {
+            let mut bools = Vec::with_capacity(items.len());
+            for v in &items {
+                let Value::Bool(b) = v else {
+                    return Err(format!(
+                        "{name}() over {}, which is not a bool",
+                        partition::fmt_value(v)
+                    ));
+                };
+                bools.push(*b);
+            }
+            Ok(Value::Bool(if kind == AggKind::Any {
+                bools.contains(&true)
+            } else {
+                !bools.contains(&false)
+            }))
         }
     }
 }
@@ -2896,7 +2925,7 @@ fn eval_term(term: &Term, state: &HashMap<String, Value>) -> Option<Value> {
 pub enum RefKind {
     /// A function a program may call, declared in `std/*.df` (`functions`).
     Function,
-    /// An aggregate, written in a rule head (`partition::AGGREGATES`).
+    /// An aggregate, bound in a body: `n = count(x)` (`partition::AGGREGATES`).
     Aggregate,
     /// A built-in provider's extern (`env.var`).
     Extern,
@@ -2944,43 +2973,57 @@ const REFERENCE: &[Reference] = &[
         "collect_set",
         Aggregate,
         "collect_set(x: any) -> set",
-        "The set of every `x` the body binds per group of the head's other arguments.",
-        "ids(collect_set(s.id)) where s in net.subnet",
+        "The set of every `x` the body binds, per group of the head's other variables.",
+        "ids(l) where l = collect_set(s.id), s in net.subnet",
     ),
     r(
         "collect_list",
         Aggregate,
         "collect_list(x: any) -> list",
-        "The list of every `x` the body binds per group, in order; a comprehension lowers to it.",
-        "names(collect_list(n)) where host(n)",
+        "The list of every `x` the body binds per group, in the order of the body's rows; a comprehension lowers to it.",
+        "names(l) where l = collect_list(n), host(n)",
     ),
     r(
         "count",
         Aggregate,
         "count(x: any) -> int",
-        "The number of distinct `x` the body binds per group.",
-        "subnets(count(s)) where s in net.subnet",
+        "The number of the body's matches per group of the head's other variables.",
+        "subnets(v, n) where n = count(s), s in net.subnet, s.vpc_id == v",
     ),
     r(
         "sum",
         Aggregate,
         "sum(x: int) -> int",
         "The sum of `x` over every match of the body per group; a non-int is a deny.",
-        "total(sum(n)) where size(_, n)",
+        "total(n) where n = sum(x), size(_, x)",
     ),
     r(
         "min",
         Aggregate,
         "min(x: int | string) -> int | string",
         "The least `x` per group, ints or strings (a mix is a deny).",
-        "first(min(n)) where size(_, n)",
+        "first(n) where n = min(x), size(_, x)",
     ),
     r(
         "max",
         Aggregate,
         "max(x: int | string) -> int | string",
         "The greatest `x` per group, ints or strings (a mix is a deny).",
-        "last(max(n)) where size(_, n)",
+        "last(n) where n = max(x), size(_, x)",
+    ),
+    r(
+        "any",
+        Aggregate,
+        "any(x: bool) -> bool",
+        "Whether `x` is true for some match of the body per group (a non-bool is a deny).",
+        "exposed(v, p) where p = any(public), subnet(v, public)",
+    ),
+    r(
+        "all",
+        Aggregate,
+        "all(x: bool) -> bool",
+        "Whether `x` is true for every match of the body per group (a non-bool is a deny).",
+        "let healthy = all(ok) where check(_, ok)",
     ),
     r(
         "env.var",
@@ -3464,7 +3507,11 @@ fn dedent(s: &str) -> String {
     let mut lines = s.split('\n').filter(|l| !blank(l));
     let first = lines.next().map(indent).unwrap_or("");
     let margin = lines.fold(first, |m, l| {
-        let n = m.bytes().zip(indent(l).bytes()).take_while(|(a, b)| a == b).count();
+        let n = m
+            .bytes()
+            .zip(indent(l).bytes())
+            .take_while(|(a, b)| a == b)
+            .count();
         &m[..n]
     });
     s.split('\n')
@@ -3650,7 +3697,7 @@ mod tests {
     /// aggregate used to see every partial result mid-fixpoint.
     #[test]
     fn aggregate_consumer_sees_one_complete_result() {
-        let (r, _) = run("decl n(a) mixed\n             n(1)\n             n(2) where n(1)\n             n(3) where n(2)\n             all(collect_set(x)) where n(x)\n             snap(l) where all(l)")
+        let (r, _) = run("decl n(a) mixed\n             n(1)\n             n(2) where n(1)\n             n(3) where n(2)\n             all(r) where r = collect_set(x), n(x)\n             snap(l) where all(l)")
         .unwrap();
         assert_eq!(facts_of(&r, "snap"), vec!["snap([1, 2, 3])".to_string()]);
     }
@@ -3663,11 +3710,11 @@ mod tests {
         let (r, violations) = run(r#"size("a", "x", 3)
              size("b", "x", 3)
              size("c", "y", 4)
-             total(g, sum(n)) where size(_, g, n)
-             all(sum(n)) where size(_, _, n)
-             sizes(count(n)) where size(_, _, n)
-             big(sum(n)) where size(_, _, n), n > 9
-             many(count(n)) where size(_, _, n), n > 9"#)
+             total(g, r) where r = sum(n), size(_, g, n)
+             all(r) where r = sum(n), size(_, _, n)
+             sizes(r) where r = count(n), size(_, _, n)
+             big(r) where r = sum(n), size(_, _, n), n > 9
+             many(r) where r = count(n), size(_, _, n), n > 9"#)
         .unwrap();
         assert!(violations.is_empty(), "{violations:?}");
         assert_eq!(
@@ -3688,8 +3735,8 @@ mod tests {
              v("a", 12)
              v("b", "q")
              v("b", "p")
-             lo(g, min(x)) where v(g, x)
-             hi(g, max(x)) where v(g, x)"#)
+             lo(g, r) where r = min(x), v(g, x)
+             hi(g, r) where r = max(x), v(g, x)"#)
         .unwrap();
         assert!(violations.is_empty(), "{violations:?}");
         assert_eq!(facts_of(&r, "lo"), [r#"lo("a", 1)"#, r#"lo("b", "p")"#]);
@@ -3705,8 +3752,8 @@ mod tests {
              v("a", "p")
              v("b", true)
              v("c", 2)
-             s(g, sum(x)) where v(g, x)
-             m(g, max(x)) where v(g, x)"#)
+             s(g, r) where r = sum(x), v(g, x)
+             m(g, r) where r = max(x), v(g, x)"#)
         .unwrap();
         assert_eq!(facts_of(&r, "s"), [r#"s("c", 2)"#]);
         assert_eq!(facts_of(&r, "m"), [r#"m("c", 2)"#]);
@@ -3727,8 +3774,11 @@ mod tests {
             has(r#"m("b", _): max() over true, which is neither an int nor a string"#),
             "{violations:?}"
         );
-        let (_, violations) =
-            run(&format!("v({})\n v(1)\n s(sum(x)) where v(x)", i64::MAX)).unwrap();
+        let (_, violations) = run(&format!(
+            "v({})\n v(1)\n s(r) where r = sum(x), v(x)",
+            i64::MAX
+        ))
+        .unwrap();
         assert!(
             violations
                 .iter()
@@ -3743,26 +3793,26 @@ mod tests {
     fn a_statically_ill_kinded_aggregate_is_an_error() {
         for (src, want) in [
             (
-                r#"s(sum("a")) where b(x)"#,
+                r#"s(r) where r = sum("a"), b(x)"#,
                 "`sum` aggregates ints, not a string",
             ),
             (
-                r#"s(sum("p-${x}")) where b(x)"#,
+                r#"s(r) where r = sum("p-${x}"), b(x)"#,
                 "`sum` aggregates ints, not a string",
             ),
             (
-                r#"s(min([x])) where b(x)"#,
+                r#"s(r) where r = min([x]), b(x)"#,
                 "`min` aggregates ints or strings, not a list",
             ),
             (
-                r#"s(max(true)) where b(x)"#,
+                r#"s(r) where r = max(true), b(x)"#,
                 "`max` aggregates ints or strings, not a bool",
             ),
         ] {
             let err = run(&format!("b(1)\n{src}")).unwrap_err();
             assert!(format!("{err:#}").contains(want), "{src}: {err:#}");
         }
-        run("b(1)\ns(sum(x)) where b(x)\nt(max(\"p-${x}\")) where b(x)").unwrap();
+        run("b(1)\ns(r) where r = sum(x), b(x)\nt(r) where r = max(\"p-${x}\"), b(x)").unwrap();
     }
 
     /// Rule 2: the aggregated value of `sum`, `min` and `max` is a content
@@ -3788,7 +3838,7 @@ mod tests {
             fact("c", Value::Int(2)),
         ];
         let (r, violations) = run_with(
-            "decl size(a, b)\n             total(g, sum(n)) where size(g, n)\n             lo(g, min(n)) where size(g, n)\n             hi(g, max(n)) where size(g, n)\n             all(sum(n)) where size(_, n)",
+            "decl size(a, b)\n             total(g, r) where r = sum(n), size(g, n)\n             lo(g, r) where r = min(n), size(g, n)\n             hi(g, r) where r = max(n), size(g, n)\n             all(r) where r = sum(n), size(_, n)",
             &extra,
         )
         .unwrap();
@@ -3862,7 +3912,7 @@ mod tests {
     fn want_is_partitioned_by_type() {
         let (r, _) = run("want(\"net.subnet\", \"a\")
              want(\"net.subnet\", \"b\")
-             subnets(collect_set(s)) where want(\"net.subnet\", s)
+             subnets(r) where r = collect_set(s), want(\"net.subnet\", s)
              want(\"db.postgres\", \"db\") where subnets(l), member(l, \"a\"), not want(\"net.subnet\", \"c\")")
         .unwrap();
         assert!(facts_of(&r, "want").contains(&"want(\"db.postgres\", \"db\")".to_string()));

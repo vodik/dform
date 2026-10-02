@@ -58,7 +58,7 @@ adopt(net.vpc["main::vpc"], "vpc-123")
 moved(net.vpc, "old::vpc", net.vpc["main::vpc"])
 lifecycle(net.vpc["main::vpc"], "prevent_destroy")
 ignore_changes(net.vpc["main::vpc"], "tags.owner")
-counts(count(x_)) where q(x_)
+counts(n_) where n_ = count(x_), q(x_)
 deny "q must not be empty" where not q(1)
 v("input", "output", "settings", "type") where input("env", _), output("k", _)
 decl p(a) mixed
