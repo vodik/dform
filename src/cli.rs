@@ -300,6 +300,29 @@ enum Run {
         #[arg(long)]
         json: bool,
     },
+    /// What the applies since REF did, each deformation with why it was
+    /// planned (as `plan --why`, by the program as it was at that apply),
+    /// and which inputs and stated rows changed since the apply before.
+    Diff {
+        #[command(flatten)]
+        target: Target,
+        /// The first apply: a sequence number of the audit log, a time
+        /// (RFC 3339, or a prefix of one: `2026-09-28`), or a git commit an
+        /// apply recorded.
+        #[arg(long, value_name = "REF")]
+        since: String,
+        /// Print the diff as one JSON document.
+        #[arg(long)]
+        json: bool,
+    },
+    /// `diff`'s helper: what the program says about ADDRESSes, as JSON.
+    #[command(name = "__explain", hide = true)]
+    Explain {
+        #[command(flatten)]
+        target: Target,
+        #[arg(long = "address")]
+        addresses: Vec<String>,
+    },
     /// Run every scenario against an empty mock world: each passes when
     /// nothing is denied. Fails if any scenario is denied.
     Test {
@@ -556,6 +579,13 @@ enum Cmd {
         pattern: String,
         all: bool,
         core: bool,
+    },
+    Diff {
+        since: String,
+        json: bool,
+    },
+    Explain {
+        addresses: Vec<String>,
     },
     Show {
         addr: String,
@@ -844,6 +874,12 @@ fn run_cmd(r: Run) -> (Cmd, Option<Target>) {
             target,
             json,
         } => (Cmd::Query { pattern, json }, Some(target)),
+        Run::Diff {
+            target,
+            since,
+            json,
+        } => (Cmd::Diff { since, json }, Some(target)),
+        Run::Explain { target, addresses } => (Cmd::Explain { addresses }, Some(target)),
         Run::Test { target } => (Cmd::Test, Some(target)),
         Run::Log {
             cmd,
@@ -1381,7 +1417,10 @@ fn run_with(
     // asked for and explained; a plan prints what it would do, conflicts
     // included (E §2.8: a conflict is a fact, not an abort), and then
     // refuses. Any other run is blocked by a violation.
-    let explains = matches!(cli.cmd, Cmd::Query { .. } | Cmd::Why { .. });
+    let explains = matches!(
+        cli.cmd,
+        Cmd::Query { .. } | Cmd::Why { .. } | Cmd::Diff { .. } | Cmd::Explain { .. }
+    );
     let opts = deployment::Options {
         launch: launch(),
         data: build_extra_facts(&cli.data)?,
@@ -1440,7 +1479,36 @@ fn run_with(
         match &cli.cmd {
             Cmd::Query { pattern, json } => print_query(pattern, &x.res.facts, &x.redact, *json)?,
             Cmd::Why { pattern, all, core } => why_tree(pattern, *all, *core, &x.res, &x.redact)?,
-            _ => unreachable!("explains is query or why"),
+            Cmd::Explain { addresses } => {
+                let addresses = addresses
+                    .iter()
+                    .map(|a| ir::parse_resource_address(a))
+                    .collect::<Result<Vec<_>>>()?;
+                let s = crate::diff::snapshot(&x.res, &x.redact, &addresses);
+                println!("{}", serde_json::to_string(&s)?);
+            }
+            Cmd::Diff { since, json } => {
+                let keys: Vec<String> = ev
+                    .located
+                    .loaded
+                    .cfg
+                    .keys
+                    .iter()
+                    .map(|(k, _)| k.clone())
+                    .collect();
+                let rerun = rerun_of(&cli, &ev.located.instance.key, keys)?;
+                let d = crate::diff::diff(&audit.entries()?, since, &cli.files, &rerun, &|a| {
+                    crate::diff::snapshot(&x.res, &x.redact, a)
+                })?;
+                if *json {
+                    let mut j = d.json();
+                    j["deployment"] = serde_json::json!(deployment);
+                    println!("{}", serde_json::to_string_pretty(&j)?);
+                } else {
+                    print!("{}", d.text());
+                }
+            }
+            _ => unreachable!("explains is query, why, diff or __explain"),
         }
         return Ok(());
     }
@@ -1627,7 +1695,9 @@ fn run_with(
                 println!("- {}", r.addr);
             }
         }
-        Cmd::Query { .. } | Cmd::Why { .. } => unreachable!("explained before"),
+        Cmd::Query { .. } | Cmd::Why { .. } | Cmd::Diff { .. } | Cmd::Explain { .. } => {
+            unreachable!("explained before")
+        }
         Cmd::Show { addr } => {
             let addr = ir::parse_resource_address(&addr)?;
             let Some(r) = resources.iter().find(|r| r.addr == addr) else {
@@ -2386,6 +2456,55 @@ fn why_tree(
         }
     }
     Ok(())
+}
+
+/// How `diff` evaluates the program at an earlier commit: this executable,
+/// on the same program file (relative to the project root) and key
+/// values `key`, with this run's mock flags.
+fn rerun_of(cli: &Cli, key: &[(String, String)], keys: Vec<String>) -> Result<crate::diff::Rerun> {
+    let file = std::path::absolute(&cli.files[0])?;
+    let top = crate::project::manifest_root(&file)
+        .or_else(|| file.parent().map(Path::to_path_buf))
+        .unwrap_or_default();
+    let mut target = vec![
+        file.strip_prefix(&top)
+            .unwrap_or(&file)
+            .display()
+            .to_string(),
+    ];
+    target.extend(key.iter().map(|(k, v)| format!("{k}={v}")));
+    // A path given relative to here is absolute there.
+    let path = |p: &Path| -> String {
+        std::path::absolute(p)
+            .unwrap_or_else(|_| p.to_path_buf())
+            .display()
+            .to_string()
+    };
+    let mut dev = Vec::new();
+    if let Some(w) = &cli.world {
+        dev.extend(["--world".to_string(), path(w)]);
+    }
+    if let Some(i) = &cli.inventory {
+        dev.extend(["--inventory".to_string(), path(i)]);
+    }
+    for p in &cli.providers {
+        let p = if Path::new(p).exists() {
+            path(Path::new(p))
+        } else {
+            p.clone()
+        };
+        dev.extend(["--provider".to_string(), p]);
+    }
+    if !dev.is_empty() {
+        dev.insert(0, "dev".into());
+    }
+    Ok(crate::diff::Rerun {
+        exe: std::env::current_exe()?,
+        top,
+        dev,
+        target,
+        keys,
+    })
 }
 
 /// A `query` or `why` pattern reads the schema's predicates: the whole
@@ -3695,6 +3814,7 @@ const COMMANDS: &[&str] = &[
     "apply",
     "why",
     "query",
+    "diff",
     "test",
     "fmt",
     "doc",
@@ -3722,6 +3842,7 @@ fn subcommands(noun: &str) -> &'static [&'static str] {
             "apply",
             "why",
             "query",
+            "diff",
             "test",
             "log",
             "controller",

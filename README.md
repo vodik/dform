@@ -140,7 +140,7 @@ next apply resumes.
 
 | Commands | |
 |---|---|
-| `plan`, `apply`, `why`, `query`, `test`, `fmt`, `log` | on a target |
+| `plan`, `apply`, `why`, `query`, `diff`, `test`, `fmt`, `log` | on a target |
 | `stack list`, `stack rekey`, `stack handover`, `stack unlock` | the project's stacks |
 | `state show`, `state taint`, `state mv` | a deployment's state |
 | `provider check`, `provider schema` | providers |
@@ -1205,6 +1205,35 @@ cargo run -- -C examples/demo log verify dform env=staging              # the ch
 `prev` is the entry before's hash and that `seq` counts from 1, and fails
 naming the first entry that breaks the chain: an edited entry by its own
 hash, a removed or reordered one by the next entry's `prev`.
+
+`dform diff --since REF TARGET` explains what changed between applies:
+each apply since REF (a sequence number, a time or a prefix of one, or a
+git commit an apply recorded), each deformation it applied with why it was
+planned, as `plan --why` prints it, and then the inputs and the stated
+rows (a table's, the program's facts) that differ between the apply
+before REF and now. The log holds no value, so the explanations are
+computed again: each apply by the program as it was then, read at the
+commit its `apply_start` recorded (the project copied out of git and
+evaluated with the inputs its `plan` entry recorded; a secret one is
+recorded only as a digest, so it is left out), or by the program now
+when it is the program then by the digests the `plan` entry recorded.
+Outside a repository the program now explains every apply, and a `note:`
+says where it changed since. An update is explained by the attributes
+whose values differ from the apply before's, a delete by what derived it
+at the apply before. `--json` prints one document: `applies`, each with
+its `deformations` and their `why`, and `changed` (`added` and `removed`
+rows, `inputs` with `before` and `after`). Secrets print as their label.
+
+```
+$ dform diff --since 9 net
+apply 11 2026-10-02T15:34:17Z by simon@host at 7e11a8c78679: ok
++ net.subnet["private-us-test-1c"]
+  by stacks/net.df:9  resource net.subnet "private-${z}" { .. } where zone(z, n)
+  because stacks/net.df:7  net.vpc["main"].cidr = "10.0.0.0/16"
+  because data/zones.csv:4  zone("us-test-1c", 3)
+changed since apply 3 2026-10-01T09:12:40Z:
+  + data/zones.csv:4  zone("us-test-1c", 3)
+```
 
 `--audit-sink CMD` (or the stack's `audit_sink = "CMD"`) also pipes each
 entry, a JSON line, to `sh -c CMD`, once per entry: a SIEM forwarder, say.

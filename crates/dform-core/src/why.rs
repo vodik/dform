@@ -869,6 +869,49 @@ impl Printer<'_> {
     }
 }
 
+impl Printer<'_> {
+    /// Every fact the program or a table states, as the program names it,
+    /// with its place: the rows `diff` compares between two evaluations.
+    /// Resources, attributes and contributions are the plan's, not rows.
+    pub fn stated(&self, rules: &[RuleStmt]) -> Vec<Because> {
+        let s = Surface {
+            p: self,
+            rules,
+            w: Walk::default(),
+            files: BTreeMap::new(),
+        };
+        let c = self.circuit;
+        let mut out = Vec::new();
+        for f in c.facts() {
+            if matches!(f.pred.as_str(), "want" | "attr" | "arg") || f.pred.starts_with("table.") {
+                continue;
+            }
+            let Some(View::Fact { fact, alts, .. }) = c.fact_id(&f).map(|id| c.view(id)) else {
+                continue;
+            };
+            let at = match alts {
+                [a] => match c.view(*a) {
+                    View::Times { children: [l], .. } => match c.view(*l) {
+                        View::Leaf(Leaf::Base { span }) => Some(base_parts(span).0.to_string()),
+                        _ => None,
+                    },
+                    _ => table_row(c, alts),
+                },
+                _ => None,
+            };
+            // A fact the compiler states has no place.
+            let placed = |at: &str| {
+                at.rsplit_once(':')
+                    .is_some_and(|(_, l)| !l.is_empty() && l.bytes().all(|b| b.is_ascii_digit()))
+            };
+            if let Some(at) = at.filter(|at| placed(at)) {
+                out.push(Because::new("fact", Some(at), s.fact_text(fact)));
+            }
+        }
+        out
+    }
+}
+
 /// The compressed walk: the lines so far, and each fact node's size (the
 /// leaves of its shortest derivation).
 struct Compress {
@@ -983,16 +1026,9 @@ impl Compress {
             }
             return;
         }
-        if head && let Some(r) = rule {
-            let b = match s.source_line(r) {
-                Some((place, text, _)) => Because::new("rule", Some(place), text),
-                None => Because::new(
-                    "rule",
-                    None,
-                    s.p.redact.text(circuit.rule_text(r).unwrap_or(r)),
-                ),
-            };
-            self.push(b);
+        // A rule the compiler wrote has no statement to show.
+        if head && let Some((place, text, _)) = rule.and_then(|r| s.source_line(r)) {
+            self.push(Because::new("rule", Some(place), text));
         }
         for f in facts {
             self.fact(s, f, None, false, None);

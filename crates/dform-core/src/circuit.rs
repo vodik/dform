@@ -167,6 +167,11 @@ impl Circuit {
         id
     }
 
+    /// Every leaf, in leaf order.
+    pub fn leaves(&self) -> impl Iterator<Item = &Leaf> {
+        self.leaves.keys()
+    }
+
     pub fn fact_id(&self, f: &Fact) -> Option<NodeId> {
         self.by_fact.get(f).copied()
     }

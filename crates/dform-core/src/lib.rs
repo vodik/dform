@@ -6,6 +6,7 @@ pub mod circuit;
 pub mod controller;
 pub mod deployment;
 pub mod diag;
+pub mod diff;
 pub mod effects;
 pub mod engine;
 pub mod executor;
