@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-plan: 8 deformations (8 create), 10 pending, 7 undetermined
+plan: 8 deformations (8 create), 9 pending, 7 undetermined
 definite:
 + google_compute_network["vpc"]
   auto_create_subnetworks = false
@@ -65,7 +65,6 @@ pending groups:
 ? k8s.horizontal_pod_autoscaler["app.green::hpa"] x unknown, on ?k8s.job["migrate-v42"].status.succeeded, resolves after tick 1  (reads app.green::color(_), which is stuck)
 ? k8s.pod_disruption_budget["app.green::pdb"] x unknown, on ?k8s.job["migrate-v42"].status.succeeded, resolves after tick 1  (reads app.green::color(_), which is stuck)
 ? k8s.network_policy["app.green::allow_http"] x unknown, on ?k8s.job["migrate-v42"].status.succeeded, resolves after tick 1  (reads app.green::color(_), which is stuck)
-? k8s.service["api"] x unknown, on ?k8s.job["migrate-v42"].status.succeeded, resolves after tick 1  (reads serving("blue"), which may derive after a boundary)
 ? k8s.service["api"] x unknown, on ?k8s.job["migrate-v42"].status.succeeded, resolves after tick 1  (reads serving(_), which is stuck)
 undetermined:
 ? deny "cutover to a color with unready pods" on ?k8s.job["migrate-v42"].status.succeeded, decided after tick 1  (reads undetermined aggregate attr)
@@ -94,6 +93,5 @@ apply order:
     k8s.horizontal_pod_autoscaler["app.green::hpa"]
     k8s.pod_disruption_budget["app.green::pdb"]
     k8s.network_policy["app.green::allow_http"]
-    k8s.service["api"]
     k8s.service["api"]
 -- stderr --
