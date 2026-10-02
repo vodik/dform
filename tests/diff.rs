@@ -9,9 +9,9 @@ use serde_json::Value;
 
 const NET: &str = r#"edition 2026
 
-stack net {}
-
 input zone(name: string, n: int) from csv("data/zones.csv")
+
+provider fake
 
 resource net.vpc main { cidr = "10.0.0.0/16" }
 
