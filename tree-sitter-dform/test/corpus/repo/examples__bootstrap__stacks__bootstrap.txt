@@ -16,10 +16,6 @@ examples/bootstrap/stacks/bootstrap.df
 
 edition 2026
 
-stack renfry.bootstrap {
-  role = "bootstrap"
-}
-
 # The mock GCP's schema is the project's own (dform.toml: providers/gcp).
 provider gcp {}
 provider k8s {}
@@ -76,7 +72,7 @@ resource k8s.deployment dform_controller {
   spec.template.spec.containers = [{
     name: "dform",
     image: "ghcr.io/renfry/dform:0.8",
-    args: ["controller", "run", "renfry.workload"]
+    args: ["controller", "run", "workload"]
   }]
 } where pool = "np-${renfry.zones[0]}", node_pool_up(pool)
 
@@ -98,16 +94,6 @@ output endpoint = renfry.endpoint
   (comment)
   (edition
     (integer))
-  (stack
-    (dotted_name
-      (identifier)
-      (identifier))
-    (block
-      (field
-        (block_path
-          (identifier))
-        (string
-          (string_content)))))
   (comment)
   (provider
     (identifier)

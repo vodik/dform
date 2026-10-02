@@ -156,7 +156,7 @@ fn dform_doc_renders_every_documented_item() {
         assert!(md.contains(&format!("\n## {f}\n")), "{f} in\n{md}");
     }
     assert!(documented >= 20, "{documented} documented items");
-    assert!(md.contains("### input `env`\n\n```dform\ninput env: environment = \"staging\"\n```\n\nThe deployment's environment"), "{md}");
+    assert!(md.contains("### input `env`\n\n```dform\nkey env: environment = \"staging\"\n```\n\nThe deployment's environment"), "{md}");
     assert!(md.contains("- **owner**: platform\n"), "{md}");
 
     let out = common::dform()

@@ -5,7 +5,6 @@ edition 2026
 provider google { source = "registry.dform.dev/google", version = ">=6" }
 provider kubernetes { source = "registry.dform.dev/kubernetes", version = ">=3" }
 provider file { source = "registry.dform.dev/file" }
-stack renfry.pngu { backend = gcs("renfry-state", "pngu") }
 
 input env: enum("dev", "stg", "prod") = "dev"
 

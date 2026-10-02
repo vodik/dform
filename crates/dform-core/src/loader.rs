@@ -45,13 +45,106 @@ pub fn load_program_with(
             entries.push(i);
         }
     }
-    crate::syntax::resolve::lower(
+    let stack = match entry_files.first() {
+        Some(f) => stack_source(f, read)?,
+        None => None,
+    };
+    crate::syntax::resolve::lower_stack(
         &units,
         &entries,
         true,
         crate::syntax::resolve::Mode::Program,
+        stack.as_ref(),
     )
     .map_err(|d| diag::Diagnostics(d).into())
+}
+
+/// The manifests as last registered, by path: their name, their text and
+/// the sources they registered (pinned while the entry lives), as
+/// [`PARSED`] keeps the files.
+type Registered = (String, String, u32, Vec<u32>);
+static MANIFESTS: Mutex<BTreeMap<PathBuf, Registered>> = Mutex::new(BTreeMap::new());
+
+/// The stack `entry` is (R-29): named after the file, with the settings
+/// its project's dform.toml gives it, `[stacks.NAME]` over `[defaults]`.
+/// `None` outside a project, or when the manifest gives it none.
+fn stack_source(
+    entry: &Path,
+    read: &dyn Fn(&Path) -> std::io::Result<String>,
+) -> Result<Option<crate::syntax::resolve::StackSource>> {
+    use crate::project::SettingText;
+    use crate::syntax::resolve::{Setting, SettingValue, StackSource};
+    let abs = absolutize(entry)?;
+    let Some(root) = crate::project::manifest_root(&abs) else {
+        return Ok(None);
+    };
+    let path = root.join(crate::project::MANIFEST);
+    let text = read(&path).with_context(|| format!("read {}", path.display()))?;
+    let name = display_name(&path);
+    let manifest = crate::project::Manifest::parse(Path::new(&name), &text)?;
+    let stack = crate::state::stack_name(entry);
+    let settings = manifest.stack_settings(&stack);
+    if settings.is_empty() {
+        return Ok(None);
+    }
+    let file = {
+        let mut cache = MANIFESTS.lock().unwrap_or_else(|e| e.into_inner());
+        match cache.get(&path) {
+            Some((n, t, file, _)) if *n == name && *t == text => *file,
+            _ => {
+                let mark = diag::mark();
+                let file = diag::add_source(&name, &text);
+                let sources = diag::pin_since(mark);
+                if let Some((_, _, _, old)) =
+                    cache.insert(path.clone(), (name.clone(), text.clone(), file, sources))
+                {
+                    diag::remove(&old);
+                }
+                file
+            }
+        }
+    };
+    let span = |r: std::ops::Range<usize>| crate::ast::Span {
+        file,
+        start: r.start as u32,
+        end: r.end as u32,
+        origin: 0,
+    };
+    let plain = |v: crate::value::Value| SettingValue::Plain(crate::ast::Term::Val(v));
+    let settings = settings
+        .into_iter()
+        .map(|(key, v)| {
+            let (value, at) = match v {
+                SettingText::Bool(b) => (plain(crate::value::Value::Bool(*b.get_ref())), b.span()),
+                SettingText::Str(v) if matches!(key, "backend" | "approvals" | "config") => {
+                    // The term starts after the string's opening quote.
+                    let raw = &text[v.span()];
+                    let quote = if raw.starts_with("'''") || raw.starts_with(r#"""""#) {
+                        3
+                    } else {
+                        1
+                    };
+                    let offset = (v.span().start + quote) as u32;
+                    let text = v.get_ref().clone();
+                    (SettingValue::Term { text, offset }, v.span())
+                }
+                SettingText::Str(v) => (
+                    plain(crate::value::Value::Str(v.get_ref().clone())),
+                    v.span(),
+                ),
+            };
+            Setting {
+                key: key.to_string(),
+                value,
+                span: span(at),
+            }
+        })
+        .collect();
+    Ok(Some(StackSource {
+        name: stack,
+        settings,
+        span: span(0..0),
+    }))
 }
 
 /// The files of the program `entry_files` name, in the order they load:
@@ -145,10 +238,11 @@ fn load_unit(
             _ => base_dir.join(&rel),
         };
         let unit = load_unit(&target, read, units, index)?;
-        // One program owns one stack: what it imports is a module.
+        // One program is one stack: what it imports is a module.
         let imported = index.get(&fs::canonicalize(&target).unwrap_or(target.clone()));
-        if let Some(&u) = imported
-            && crate::syntax::resolve::stack_header(&units[u].root).is_some()
+        if let Some(root) = &project
+            && imported.is_some()
+            && target.parent() == Some(root.join(crate::project::STACKS_DIR).as_path())
         {
             let r = n.text_range();
             let span = crate::ast::Span {
@@ -161,12 +255,12 @@ fn load_unit(
                 diag::Diagnostic::error(
                     span,
                     format!(
-                        "import \"{rel}\": {} is a stack (it has a `stack` statement); \
-                         a program imports modules, never another stack",
+                        "import \"{rel}\": {} is a stack (a file under stacks/); a program \
+                         imports modules, never another stack",
                         display_name(&target)
                     ),
                 )
-                .with_help("read another stack's values with stack_output(Stack, Key, Value)"),
+                .with_help("read another stack's outputs with stack_output(Stack, Key, Value)"),
             ])
             .into());
         }
@@ -203,6 +297,7 @@ pub const PROVIDER_PREDS: &[&str] = &[
     "tag_path",
     "project_provider",
     "project_default",
+    "project_stack",
 ];
 
 pub fn is_provider_pred(pred: &str) -> bool {

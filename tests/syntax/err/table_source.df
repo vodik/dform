@@ -10,6 +10,3 @@ input typo(name: strng) from csv("typo.csv")
 module m {
   input inner(name: string) from csv("inner.csv")
 }
-
-# A stack's config is per deployment: the stack needs a key.
-stack app { config = yaml("config.yaml") }

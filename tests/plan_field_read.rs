@@ -71,10 +71,11 @@ resource net.subnet c {
 #[test]
 fn under_strict_mode_it_is_a_deny() {
     let s = Scratch::new("field-read-strict");
+    s.write("dform.toml", "[stacks.p]\nunknowns = \"strict\"\n");
     let r = plan(
         &s,
         r#"edition 2026
-stack s { unknowns = "strict" }
+provider fake {}
 resource net.vpc main { cidr = "10.0.0.0/16" }
 resource net.subnet a {
   cidr = "10.0.1.0/24"

@@ -690,7 +690,7 @@ fn handover_moves_an_s3_deployment_between_prefixes_and_to_local() {
 }
 
 const PERSISTED: &str = r#"edition 2026
-stack p {}
+provider fake {}
 extern kv.password(+name, -value) persist
 resource db.user app {
   password = pw
@@ -734,20 +734,20 @@ fn taint_forgets_an_answer_in_the_bucket() {
 }
 
 const NET: &str = r#"edition 2026
-stack net.shared {}
+provider fake {}
 resource net.vpc main { cidr = "10.0.0.0/16" }
 output vpc_cidr = "10.0.0.0/16"
 output vpc_id = ref(net.vpc, "main", "id")
 "#;
 
 const APP: &str = r#"edition 2026
-stack app {}
+provider fake {}
 resource net.subnet a {
   cidr = c
   vpc_id = v
 } where {
-    stack_output("net.shared", "vpc_cidr", c)
-    stack_output("net.shared", "vpc_id", v)
+    stack_output("net", "vpc_cidr", c)
+    stack_output("net", "vpc_id", v)
   }
 "#;
 
@@ -760,20 +760,16 @@ fn another_stack_reads_an_s3_stacks_outputs() {
             s.write("stacks/net.df", NET);
             s.write("stacks/app.df", APP);
         });
-        p.run(&["apply", "net.shared"]).success();
+        p.run(&["apply", "net"]).success();
         let published: serde_json::Value = serde_json::from_slice(
-            &p.bucket("net.shared")
+            &p.bucket("net")
                 .get("outputs.json")
                 .unwrap()
                 .expect("published outputs")
                 .bytes,
         )
         .unwrap();
-        assert_eq!(
-            published["deployment"], "net.shared",
-            "{}: {published}",
-            t.what
-        );
+        assert_eq!(published["deployment"], "net", "{}: {published}", t.what);
         let r = p.run(&["plan", "app"]).success();
         assert!(
             r.stdout.contains(
@@ -875,7 +871,7 @@ fn a_server_that_ignores_conditions_is_refused() {
     let p = Project::of(&t, "lax-approval", |s| {
         s.write(
             "stacks/app.df",
-            "edition 2026\nstack app {}\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nrequires_approval(r, \"every change\") where deformation(_, r, _)\n",
+            "edition 2026\nprovider fake {}\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nrequires_approval(r, \"every change\") where deformation(_, r, _)\n",
         );
     });
     let r = p.run(&["plan", "app"]).failure();
@@ -903,8 +899,8 @@ fn a_project_reads_another_projects_outputs_through_its_s3_backend() {
             s.write(
                 "stacks/cluster.df",
                 "edition 2026\n\
-                 input env: string = \"dev\"\n\
-                 stack cluster[env] {}\n\
+                 key env: string = \"dev\"\n\
+                 provider fake {}\n\
                  output endpoint = \"https://${env}.cluster.example\"\n\
                  ",
             );
@@ -921,7 +917,7 @@ fn a_project_reads_another_projects_outputs_through_its_s3_backend() {
         app.write(
             "stacks/app.df",
             "edition 2026\n\
-             stack app {}\n\
+             provider fake {}\n\
              resource net.vpc edge {\n\
                name = e\n\
              } where stack_output(\"platform.cluster[env=prod]\", \"endpoint\", e)\n\

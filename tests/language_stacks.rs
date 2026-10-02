@@ -1,40 +1,38 @@
-//! `stack` and `provider` statements: the stack's name scopes its state,
-//! its backend holds the state and a lock, other stacks read its outputs,
-//! and `provider` picks the mock's schema.
+//! Stacks and `provider` statements: a stack is named after its file, which
+//! scopes its state; its backend (dform.toml) holds the state and a lock,
+//! other stacks read its outputs, and `provider` picks the mock's schema.
 
 mod common;
 use common::{Scratch, copy_dir, repo};
 use std::process::{Command, Stdio};
 
 const NET: &str = r#"edition 2026
-stack net.shared {}
+provider fake {}
 resource net.vpc main { cidr = "10.0.0.0/16" }
 output vpc_cidr = "10.0.0.0/16"
 output vpc_id = ref(net.vpc, "main", "id")
 "#;
 
 #[test]
-fn the_stack_name_scopes_the_state() {
+fn the_file_names_the_stack_and_scopes_the_state() {
     let s = Scratch::project("lang-stack-name");
-    s.write("net.df", NET);
-    s.run(&["apply", "net.df"]).success();
-    assert!(s.path("dform.state/net.shared/state.json").exists());
-    assert!(!s.path("dform.state/net").exists());
-    let r = s.run(&["plan", "net.df"]).success();
-    assert_eq!(
-        r.summary(),
-        "stack net.shared is undeformed",
-        "{}",
-        r.stdout
-    );
+    s.write("edge.df", NET);
+    s.run(&["apply", "edge.df"]).success();
+    assert!(s.path("dform.state/edge/state.json").exists());
+    let r = s.run(&["plan", "edge.df"]).success();
+    assert_eq!(r.summary(), "stack edge is undeformed", "{}", r.stdout);
 }
 
 #[test]
 fn a_local_backend_holds_the_state() {
     let s = Scratch::project("lang-stack-backend");
     s.write(
+        "dform.toml",
+        "[stacks.p]\nbackend = 'local(\"state/x\")'\nunknowns = \"permissive\"\n",
+    );
+    s.write(
         "p.df",
-        "edition 2026\nstack x { backend = local(\"state/x\"), unknowns = \"permissive\" }\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\n",
+        "edition 2026\nprovider fake {}\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\n",
     );
     s.run(&["apply", "p.df"]).success();
     assert!(s.path("state/x/state.json").exists());
@@ -51,73 +49,64 @@ fn a_local_backend_holds_the_state() {
 #[test]
 fn a_local_backend_is_relative_to_the_project_root() {
     let s = Scratch::project("lang-stack-backend-root");
-    s.write("infra/dform.toml", "");
+    s.write(
+        "infra/dform.toml",
+        "[stacks.p]\nbackend = 'local(\"state/x\")'\n",
+    );
     s.write(
         "infra/stacks/p.df",
-        "edition 2026\nstack x { backend = local(\"state/x\") }\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\n",
+        "edition 2026\nprovider fake {}\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\n",
     );
-    s.run(&["-C", "infra", "apply", "x"]).success();
+    s.run(&["-C", "infra", "apply", "p"]).success();
     assert!(s.path("infra/state/x/state.json").exists());
     assert!(!s.path("state").exists());
     // From a subdirectory of the project: the same root.
     let r = s.run_in("infra/stacks", &["plan", "p.df"]).success();
-    assert_eq!(r.summary(), "stack x is undeformed", "{}", r.stdout);
+    assert_eq!(r.summary(), "stack p is undeformed", "{}", r.stdout);
     assert!(!s.path("infra/stacks/state").exists());
 
     s.write("infra/stacks/net.df", NET);
-    s.run(&["-C", "infra", "apply", "net.shared"]).success();
+    s.run(&["-C", "infra", "apply", "net"]).success();
     s.run(&[
         "-C",
         "infra",
         "stack",
         "handover",
-        "net.shared",
+        "net",
         "--to",
         "local(\"moved\")",
     ])
     .success();
     assert!(s.path("infra/moved/state.json").exists());
     assert!(!s.path("moved").exists());
-    let r = s.run(&["-C", "infra", "plan", "net.shared"]).success();
-    assert_eq!(
-        r.summary(),
-        "stack net.shared is undeformed",
-        "{}",
-        r.stdout
-    );
+    let r = s.run(&["-C", "infra", "plan", "net"]).success();
+    assert_eq!(r.summary(), "stack net is undeformed", "{}", r.stdout);
 }
 
+/// A backend dform.toml names is checked where it names it.
 #[test]
-fn one_program_owns_one_stack() {
-    let s = Scratch::project("lang-stack-two");
-    s.write("p.df", "edition 2026\nstack a {}\nstack b {}\n");
-    let r = s.run(&["plan", "p.df"]).failure();
-    assert!(
-        r.stderr
-            .contains("p.df:3:1: a second stack statement: one program owns one stack"),
-        "{}",
-        r.stderr
-    );
-    s.write("p.df", "edition 2026\nstack a { backend = gcs(\"b\") }\n");
-    let r = s.run(&["plan", "p.df"]).failure();
-    assert!(r.stderr.contains("unknown backend"), "{}", r.stderr);
-    s.write("p.df", "edition 2026\nstack a { backend = s3(\"b\") }\n");
-    let r = s.run(&["plan", "p.df"]).failure();
-    assert!(
-        r.stderr.contains("takes a bucket, a prefix"),
-        "{}",
-        r.stderr
-    );
-    s.write(
-        "p.df",
-        "edition 2026\nstack a { backend = s3(\"b\", \"p\", {endpont: \"http://x\"}) }\n",
-    );
-    let r = s.run(&["plan", "p.df"]).failure();
-    assert!(
-        r.stderr.contains("backend s3 has no option endpont"),
-        "{}",
-        r.stderr
-    );
+fn a_backend_is_checked() {
+    let s = Scratch::project("lang-stack-backend-check");
+    s.write("p.df", "edition 2026\nprovider fake {}\n");
+    for (backend, error) in [
+        ("gcs(\"b\")", "unknown backend"),
+        ("s3(\"b\")", "takes a bucket, a prefix"),
+        (
+            "s3(\"b\", \"p\", {endpont: \"http://x\"})",
+            "backend s3 has no option endpont",
+        ),
+    ] {
+        s.write(
+            "dform.toml",
+            &format!("[stacks.p]\nbackend = '{backend}'\n"),
+        );
+        let r = s.run(&["plan", "p.df"]).failure();
+        assert!(
+            r.stderr.contains("dform.toml: [stacks.p] backend") && r.stderr.contains(error),
+            "{backend}: {}",
+            r.stderr
+        );
+    }
 }
 
 /// Two processes: the first apply holds the stack's lock (a test hook
@@ -135,7 +124,7 @@ fn a_second_concurrent_apply_fails_cleanly() {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    let lock = s.path("dform.state/net.shared/state.lock");
+    let lock = s.path("dform.state/net/state.lock");
     for _ in 0..1000 {
         if lock.exists() {
             break;
@@ -146,7 +135,7 @@ fn a_second_concurrent_apply_fails_cleanly() {
     let r = s.run(&["apply", "net.df"]).failure();
     assert!(
         r.stderr.contains(&format!(
-            "stack net.shared is locked by another apply (pid {})",
+            "stack net is locked by another apply (pid {})",
             first.id()
         )),
         "{}",
@@ -172,7 +161,7 @@ fn a_stale_lock_is_taken_over() {
     let mut dead = Command::new("true").spawn().unwrap();
     let pid = dead.id();
     dead.wait().unwrap();
-    s.write("dform.state/net.shared/state.lock", &format!("{pid}\n"));
+    s.write("dform.state/net/state.lock", &format!("{pid}\n"));
     let r = s.run(&["apply", "net.df"]).success();
     assert!(
         r.stderr
@@ -191,13 +180,13 @@ fn another_stack_reads_the_outputs() {
     s.write(
         "app.df",
         r#"edition 2026
-stack app {}
+provider fake {}
 resource net.subnet a {
   cidr = c
   vpc_id = v
 } where {
-    stack_output("net.shared", "vpc_cidr", c)
-    stack_output("net.shared", "vpc_id", v)
+    stack_output("net", "vpc_cidr", c)
+    stack_output("net", "vpc_id", v)
   }
 "#,
     );
@@ -224,22 +213,22 @@ fn the_registry_is_the_projects() {
     s.write("infra/dform.toml", "");
     s.write("infra/stacks/net.df", NET);
     let app = r#"edition 2026
-stack app {}
+provider fake {}
 resource net.subnet a {
   cidr = c
   vpc_id = v
 } where {
-    stack_output("net.shared", "vpc_cidr", c)
-    stack_output("net.shared", "vpc_id", v)
+    stack_output("net", "vpc_cidr", c)
+    stack_output("net", "vpc_id", v)
   }
 "#;
     s.write("infra/stacks/app.df", app);
-    s.run(&["-C", "infra", "apply", "net.shared"]).success();
+    s.run(&["-C", "infra", "apply", "net"]).success();
     assert!(s.path("infra/dform.state/stacks.json").exists());
     assert!(!s.path("dform.state").exists());
     let registry: serde_json::Value =
         serde_json::from_str(&s.read("infra/dform.state/stacks.json")).unwrap();
-    let state = registry["net.shared"].as_str().unwrap();
+    let state = registry["net"].as_str().unwrap();
     assert!(std::path::Path::new(state).is_absolute(), "{registry}");
 
     let want = "+ net.subnet[\"a\"]\n  cidr = \"10.0.0.0/16\"\n";

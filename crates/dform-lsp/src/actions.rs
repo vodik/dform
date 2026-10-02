@@ -2,10 +2,11 @@
 //! compiler's own (an unknown name to quote, a predicate with both facts
 //! and rules to declare `mixed`) come with the core's diagnostic; the
 //! evaluation's are made here from its facts: the collision lint
-//! (interpolate the key, or say `isolated = true`), a required attribute no
-//! contribution sets (a typed placeholder), and a ref to an address no rule
-//! wants (guard the block on it). Every edit is formatted by `dform fmt`'s
-//! formatter when the file was formatted.
+//! (interpolate the key, or say `isolated = true` in dform.toml), a
+//! required attribute no contribution sets (a typed placeholder), and a ref
+//! to an address no rule wants (guard the block on it). Every edit of a
+//! program is formatted by `dform fmt`'s formatter when the file was
+//! formatted.
 
 use crate::analysis::{self, Evaluated, Outcome, Reader, Where};
 use dform_core::ast::Term;
@@ -271,10 +272,10 @@ fn collisions(e: &Evaluated, stack_file: &Path, read: Reader) -> Vec<Action> {
                 );
             }
         }
-        if let Some((start, end, text)) = &isolated {
+        if let Some((manifest, start, end, text)) = &isolated {
             out.push(
-                Action::new("say `isolated = true` on the stack".into(), message, None).edit(
-                    stack_file,
+                Action::new("say `isolated = true` in dform.toml".into(), message, None).edit(
+                    manifest,
                     *start,
                     *end,
                     text.clone(),
@@ -285,33 +286,46 @@ fn collisions(e: &Evaluated, stack_file: &Path, read: Reader) -> Vec<Action> {
     out
 }
 
-/// The edit that says `isolated = true` in the `stack` statement of
-/// `file`: an entry of its block.
-fn isolate(file: &Path, read: Reader) -> Option<(usize, usize, String)> {
-    let (_, root) = tree(read, file)?;
-    let block = root
-        .descendants()
-        .find(|n| n.kind() == SyntaxKind::STACK)?
-        .children()
-        .find(|n| n.kind() == SyntaxKind::BLOCK)?;
-    let entries: Vec<SyntaxNode> = block
-        .children()
-        .filter(|n| n.kind() == SyntaxKind::ASSIGN)
-        .collect();
-    let named = |n: &SyntaxNode| n.first_token().is_some_and(|t| t.text() == "isolated");
-    if let Some(e) = entries.iter().find(|e| named(e)) {
-        let r = e.text_range();
-        return Some((r.start().into(), r.end().into(), "isolated = true".into()));
+/// The edit that says `isolated = true` in dform.toml's table of the stack
+/// `file` is, `[stacks.NAME]` (R-29): the manifest's path, and the edit.
+fn isolate(file: &Path, read: Reader) -> Option<(PathBuf, usize, usize, String)> {
+    let manifest = dform_core::project::manifest_root(file)?.join(dform_core::project::MANIFEST);
+    let text = read(&manifest).ok()?;
+    let header = format!("[stacks.{}]", dform_core::state::stack_name(file));
+    let mut at = 0;
+    let mut table = None;
+    for line in text.split_inclusive('\n') {
+        let t = line.trim();
+        if table.is_some() && t.starts_with('[') {
+            break;
+        }
+        if t == header {
+            table = Some(at + line.len());
+        } else if table.is_some() && t.split('=').next().map(str::trim) == Some("isolated") {
+            let end = at + line.trim_end_matches(['\n', '\r']).len();
+            return Some((manifest, at, end, "isolated = true".into()));
+        }
+        at += line.len();
     }
-    if let Some(last) = entries.last() {
-        let end = usize::from(last.text_range().end());
-        return Some((end, end, ", isolated = true".into()));
+    match table {
+        Some(after) => Some((manifest, after, after, "isolated = true\n".into())),
+        None => {
+            let lead = if text.is_empty() || text.ends_with("\n\n") {
+                ""
+            } else if text.ends_with('\n') {
+                "\n"
+            } else {
+                "\n\n"
+            };
+            let end = text.len();
+            Some((
+                manifest,
+                end,
+                end,
+                format!("{lead}{header}\nisolated = true\n"),
+            ))
+        }
     }
-    let close = block
-        .children_with_tokens()
-        .find(|t| t.kind() == SyntaxKind::R_BRACE)?;
-    let at = usize::from(close.text_range().start());
-    Some((at, at, " isolated = true ".into()))
 }
 
 /// A placeholder of a schema type.

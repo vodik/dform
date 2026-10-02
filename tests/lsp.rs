@@ -326,14 +326,14 @@ fn hover_shows_docs_builtins_keywords_and_nothing_elsewhere() {
     let text = hover(&mut c, &stack, "where env ==", 7);
     let text = text.as_str().unwrap();
     assert!(
-        text.contains("input env: environment = \"staging\""),
+        text.contains("key env: environment = \"staging\""),
         "{text}"
     );
     assert!(text.contains("The deployment's environment"), "{text}");
     assert!(text.contains("- **owner**: platform"), "{text}");
 
     // An alias: its definition.
-    let text = hover(&mut c, &stack, "input env: environment", 12);
+    let text = hover(&mut c, &stack, "key env: environment", 10);
     let text = text.as_str().unwrap();
     assert!(
         text.contains("type environment = enum(\"dev\", \"staging\", \"prod\")"),
@@ -380,7 +380,9 @@ fn hover_shows_docs_builtins_keywords_and_nothing_elsewhere() {
     assert!(text.contains("usable host"), "{text}");
     let text = hover(&mut c, &stack, "} where env != \"dev\"", 4);
     assert!(
-        text.as_str().unwrap().contains("HEAD where BODY | BLOCK where BODY"),
+        text.as_str()
+            .unwrap()
+            .contains("HEAD where BODY | BLOCK where BODY"),
         "{text}"
     );
     let text = hover(&mut c, &stack, "scenario prod {", 2);
@@ -410,7 +412,10 @@ fn hover_on_the_clause_and_refinement_words() {
     c.open(&stack);
     let hover = |c: &mut Client, needle: &str, ahead: u32| -> String {
         let h = c.at("textDocument/hover", &stack, find(&stack, needle, ahead));
-        h["contents"]["value"].as_str().unwrap_or_default().to_string()
+        h["contents"]["value"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string()
     };
     let text = hover(&mut c, "check zones >= 1", 2);
     assert!(text.contains("A refinement"), "{text}");
@@ -462,7 +467,7 @@ fn signature_help_of_builtins_and_externs() {
     let help = c.at(
         "textDocument/signatureHelp",
         &stack,
-        find(&stack, "input env", 3),
+        find(&stack, "key env", 3),
     );
     assert_eq!(help, Value::Null);
     c.shutdown();
@@ -845,18 +850,21 @@ fn quick_fix(root: &Path, file: &Path, edited: &str, needle: &str, title: &str) 
         if path == file {
             c.change(file, 2, &text);
         }
-        let fmt = Command::new(env!("CARGO_BIN_EXE_dform"))
-            .args(["fmt", "--check"])
-            .arg(&path)
-            .current_dir(root)
-            .output()
-            .unwrap();
-        assert!(
-            fmt.status.success(),
-            "fmt --check {}: {}\n{text}",
-            path.display(),
-            String::from_utf8_lossy(&fmt.stderr)
-        );
+        // A program stays formatted; dform.toml is not a program.
+        if path.extension().is_some_and(|e| e == "df") {
+            let fmt = Command::new(env!("CARGO_BIN_EXE_dform"))
+                .args(["fmt", "--check"])
+                .arg(&path)
+                .current_dir(root)
+                .output()
+                .unwrap();
+            assert!(
+                fmt.status.success(),
+                "fmt --check {}: {}\n{text}",
+                path.display(),
+                String::from_utf8_lossy(&fmt.stderr)
+            );
+        }
         texts.push(text);
     }
     c.notify(
@@ -917,9 +925,11 @@ fn quick_fix_declares_a_predicate_mixed() {
 #[test]
 fn quick_fix_derives_a_colliding_name_from_the_key_or_isolates_the_stack() {
     let collides = |root: &Path| {
+        let manifest = root.join("dform.toml");
+        let toml = std::fs::read_to_string(&manifest).unwrap();
+        std::fs::write(&manifest, toml.replace("isolated = true\n", "")).unwrap();
         let stack = root.join("stacks/dform.df");
         let text = std::fs::read_to_string(&stack).unwrap();
-        let text = text.replace(", isolated = true", "");
         let edited = format!(
             "{text}\nresource net.vpc fixed {{\n  cidr = \"10.1.0.0/16\"\n  name = \"fixed\"\n}}\n"
         );
@@ -948,12 +958,10 @@ fn quick_fix_derives_a_colliding_name_from_the_key_or_isolates_the_stack() {
         &stack,
         &edited,
         needle,
-        "say `isolated = true` on the stack",
+        "say `isolated = true` in dform.toml",
     );
     assert!(
-        texts[0].contains(
-            "stack dform[env] { unknowns = \"strict\", config = yaml(\"config/dform/${env}.yaml\"), isolated = true }\n"
-        ),
+        texts[0].contains("[stacks.dform]\nisolated = true\nunknowns = \"strict\"\n"),
         "{}",
         texts[0]
     );
@@ -1002,9 +1010,8 @@ fn quick_fix_guards_a_dangling_ref() {
         "guard the block on net.vpc other existing",
     );
     assert!(
-        texts[0].contains(
-            "vpc_id = ref(net.vpc, \"other\", \"id\")\n} where \"other\" in net.vpc\n"
-        ),
+        texts[0]
+            .contains("vpc_id = ref(net.vpc, \"other\", \"id\")\n} where \"other\" in net.vpc\n"),
         "{}",
         texts[0]
     );
@@ -1062,7 +1069,7 @@ fn references_of_every_kind_of_name() {
 
     // An input: the stack's own reads, a module's and a pack's, the
     // scenarios' `set`.
-    let found = references(&mut c, &root, &stack, find(&stack, "input env:", 6));
+    let found = references(&mut c, &root, &stack, find(&stack, "key env:", 4));
     for want in [
         ("stacks/dform.df".to_string(), 18),
         ("stacks/dform.df".into(), 24),
@@ -1455,7 +1462,7 @@ fn diagnostics_of_a_plan_with_a_replacement_are_the_plans() {
     let s = common::Scratch::project("lsp-replace");
     let net = r#"edition 2026
 
-stack p {}
+provider fake {}
 
 resource net.vpc main { cidr = "10.0.0.0/16" }
 resource net.subnet a { vpc_id = ref(net.vpc, "main", "id"), tier = "web" }
@@ -1527,7 +1534,7 @@ fn an_s3_deployment_is_read_with_credentials() {
         .unwrap();
     let vpc = "resource net.vpc main { cidr = \"10.0.0.0/16\" }\n";
     let net =
-        format!("edition 2026\n\nstack p {{}}\n\n{vpc}lifecycle(main, \"prevent_destroy\")\n");
+        format!("edition 2026\n\nprovider fake {{}}\n\n{vpc}lifecycle(main, \"prevent_destroy\")\n");
     let file = s.write("stacks/p.df", &net);
     let creds = [
         ("DFORM_S3_ACCESS_KEY_ID", "fake"),

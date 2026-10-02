@@ -959,8 +959,9 @@ fn target_of(
             match here.as_slice() {
                 [one] => one.file.clone(),
                 [] => bail!(
-                    "no stack under {}: a stack is a .df file with a `stack` statement; name \
-                     a program file (`dform plan path/to/file.df`){}",
+                    "no stack under {}: a stack is a file under stacks/ (or at the root, in \
+                     a project with no stacks/); name a program file \
+                     (`dform plan path/to/file.df`){}",
                     std::env::current_dir()
                         .map(|d| d.display().to_string())
                         .unwrap_or_default(),
@@ -1636,7 +1637,12 @@ fn run_with(
                 }
             }
             let place = |i: &crate::stack::Instance| {
-                let location = located.base.child(i.segment().as_deref());
+                let location = deployment::deployment_location(
+                    &root,
+                    stack,
+                    stack_cfg.backend.as_ref(),
+                    i.segment().as_deref(),
+                );
                 crate::stack::Place {
                     world: crate::stack::world_file(&location, &i.dir(&root.join(stack))),
                     location,
@@ -1809,7 +1815,7 @@ fn run_with(
                 if stack_cfg.approvals.is_empty() {
                     bail!(
                         "stack {deployment} has no approvals trust root \
-                         (`stack ... {{ approvals = jwks(\"https://...\") }}`)"
+                         (dform.toml: `[stacks.{stack}] approvals = 'jwks(\"https://...\")'`)"
                     );
                 }
                 let roots = match roots.get() {
@@ -2647,7 +2653,7 @@ fn rekey_args(
     let keys: Vec<&str> = cfg.keys.iter().map(|(k, _)| k.as_str()).collect();
     if keys.is_empty() {
         bail!(
-            "stack rekey {stack}: the stack has no key; key it first (`stack {stack}[env] {{ .. }}`)"
+            "stack rekey {stack}: the stack has no key; key it first (`key env: ..` in its file)"
         );
     }
     let side = |pairs: &[String]| -> Result<Vec<(String, String)>> {
@@ -2835,17 +2841,11 @@ fn open_s3(root: &Path, writes: bool) -> impl Fn(&store::S3Spec) -> Result<Arc<d
     }
 }
 
-/// The backend of the project's stack `stack`, as its program (over the
-/// manifest's default) says; `None` when it says none, or there is no
-/// such stack.
-fn stack_backend(
-    project: &crate::project::Project,
-    found: &crate::project::Found,
-) -> Option<crate::stack::Backend> {
+/// The backend of the project's stack `found`, as the manifest says;
+/// `None` when it says none.
+fn stack_backend(found: &crate::project::Found) -> Option<crate::stack::Backend> {
     let program = loader::load_program(std::slice::from_ref(&found.file)).ok()?;
-    let mut cfg = crate::stack::config(&program).ok()?;
-    deployment::with_manifest(&mut cfg, &project.manifest, &found.file);
-    cfg.backend
+    crate::stack::config(&program).ok()?.backend
 }
 
 /// Where the deployment `name` (`app`, `app[env=prod]`) is, for a command
@@ -2871,11 +2871,11 @@ fn place_of(cli: &Cli, name: &str) -> Result<(crate::stack::Place, PathBuf, stor
             let backend = project.as_ref().and_then(|p| {
                 let d = crate::project::discover(p);
                 match d.named(stack).as_slice() {
-                    [one] => stack_backend(p, one),
+                    [one] => stack_backend(one),
                     _ => None,
                 }
             });
-            deployment::stack_location(root, stack, backend.as_ref()).child(seg)
+            deployment::deployment_location(root, stack, backend.as_ref(), seg)
         }
     };
     let place = crate::stack::Place {
@@ -3268,14 +3268,26 @@ fn plan_inputs(
         set: cli
             .set
             .iter()
-            .map(|kv| match kv.split_once('=') {
-                Some((k, v)) if secret.contains(k) => {
-                    let label = crate::value::null_label(crate::modules::INPUT, "", k);
-                    serde_json::json!({ "sensitive": label, "digest": key.digest(v.as_bytes()) })
-                }
-                _ => serde_json::Value::String(kv.clone()),
+            .map(|kv| {
+                Ok(match kv.split_once('=') {
+                    Some((k, v)) if secret.contains(k) => {
+                        let label = crate::value::null_label(crate::modules::INPUT, "", k);
+                        let bytes = match v.strip_prefix('@') {
+                            Some(f) => read(&PathBuf::from(f))?,
+                            None => v.as_bytes().to_vec(),
+                        };
+                        serde_json::json!({ "sensitive": label, "digest": key.digest(&bytes) })
+                    }
+                    // `k=@FILE`: the file's digest, keyed, as an
+                    // `--input-file`'s.
+                    Some((_, v)) if v.starts_with('@') => {
+                        let bytes = read(&PathBuf::from(&v[1..]))?;
+                        serde_json::json!({ "set": kv, "digest": key.digest(&bytes) })
+                    }
+                    _ => serde_json::Value::String(kv.clone()),
+                })
             })
-            .collect(),
+            .collect::<Result<_>>()?,
         data: cli.data.clone(),
         providers: cli.providers.clone(),
         world: show(&cli.world),
@@ -3297,6 +3309,9 @@ fn with_plan_inputs(cli: &mut Cli, path: &Path) -> Result<zset::file::PlanFile> 
         for s in &i.set {
             match s {
                 serde_json::Value::String(kv) => cli.set.push(kv.clone()),
+                file if file["set"].is_string() => cli
+                    .set
+                    .push(file["set"].as_str().unwrap_or_default().to_string()),
                 secret => {
                     let label = secret["sensitive"].as_str().unwrap_or_default();
                     let k = label.rsplit_once('#').map_or(label, |(_, k)| k);
@@ -3470,8 +3485,7 @@ fn stack_list(cli: &Cli) -> Result<()> {
         println!("{}{key}  {}", s.name, s.file.display());
         // Where the stack's deployments are: its backend's, else the state
         // root's.
-        let base =
-            deployment::stack_location(&cli.root, &s.name, stack_backend(&project, s).as_ref());
+        let base = deployment::stack_location(&cli.root, &s.name, stack_backend(s).as_ref());
         if let store::Location::S3(spec) = &base {
             println!("  state in {spec}");
         }
@@ -3793,7 +3807,7 @@ fn key_values(s: &crate::project::Found) -> Vec<String> {
         let crate::ast::Stmt::Input(i) = st else {
             continue;
         };
-        if !s.keys.contains(&i.name) {
+        if !i.key {
             continue;
         }
         if let crate::ast::TypeExpr::Apply(n, args) = &i.ty
@@ -3822,7 +3836,40 @@ fn split_kv(s: &str) -> Result<(&str, Value)> {
     let (k, raw) = s
         .split_once('=')
         .ok_or_else(|| anyhow::anyhow!("expected key=value, got '{s}'"))?;
-    Ok((k, deployment::value_of(raw)))
+    match raw.strip_prefix('@') {
+        Some(path) => Ok((k, set_file(k, Path::new(path))?)),
+        None => Ok((k, deployment::value_of(raw))),
+    }
+}
+
+/// `--set k=@FILE`: the value the document FILE holds, read as the input's
+/// type later as any `--set` is: YAML, JSON or TOML by its extension, or
+/// a `.df` file of the one fact `k(value)`.
+fn set_file(k: &str, path: &Path) -> Result<Value> {
+    let at = || format!("--set {k}=@{}", path.display());
+    let ext = path.extension().and_then(|e| e.to_str());
+    if !matches!(ext, Some("df" | "yaml" | "yml" | "json" | "toml")) {
+        bail!("{}: a .yaml, .json, .toml or .df file", at());
+    }
+    let text = std::fs::read_to_string(path).map_err(|e| anyhow::anyhow!("{}: {e}", at()))?;
+    match ext {
+        Some("df") => {
+            let program = crate::parser::parse_program(&text).with_context(at)?;
+            match program.statements.as_slice() {
+                [crate::ast::Stmt::Fact(a)] if a.pred == k => match a.args.as_slice() {
+                    [t] => inputs::ground(t),
+                    _ => None,
+                }
+                .ok_or_else(|| anyhow::anyhow!("{}: the fact {k}(..) holds one value", at())),
+                _ => bail!("{}: a .df file of one fact, `{k}(value)`", at()),
+            }
+        }
+        Some(ext @ ("yaml" | "yml" | "json" | "toml")) => {
+            let format = if ext == "yml" { "yaml" } else { ext };
+            crate::tables::document(format, &text).with_context(at)
+        }
+        _ => bail!("{}: a .yaml, .json, .toml or .df file", at()),
+    }
 }
 
 fn atom_kv(pred: &str, k: &str, v: Value) -> Atom {

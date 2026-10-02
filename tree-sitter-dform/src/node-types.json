@@ -122,10 +122,6 @@
         "named": true
       },
       {
-        "type": "stack",
-        "named": true
-      },
-      {
         "type": "type_alias",
         "named": true
       },
@@ -1834,52 +1830,6 @@
     }
   },
   {
-    "type": "stack",
-    "named": true,
-    "fields": {
-      "body": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "block",
-            "named": true
-          }
-        ]
-      },
-      "key": {
-        "multiple": true,
-        "required": false,
-        "types": [
-          {
-            "type": "identifier",
-            "named": true
-          }
-        ]
-      },
-      "name": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "dotted_name",
-            "named": true
-          }
-        ]
-      }
-    },
-    "children": {
-      "multiple": false,
-      "required": false,
-      "types": [
-        {
-          "type": "clause",
-          "named": true
-        }
-      ]
-    }
-  },
-  {
     "type": "statement_block",
     "named": true,
     "fields": {},
@@ -2240,6 +2190,10 @@
     "named": true
   },
   {
+    "type": "key",
+    "named": false
+  },
+  {
     "type": "let",
     "named": false
   },
@@ -2301,10 +2255,6 @@
   },
   {
     "type": "settings",
-    "named": false
-  },
-  {
-    "type": "stack",
     "named": false
   },
   {

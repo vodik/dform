@@ -2,3 +2,8 @@
 
 [project]
 name = "approvals"
+
+# Whose signatures approve a plan: a JWKS document (`jwks("https://...")`
+# is fetched at apply time and cached beside the state).
+[stacks.approvals]
+approvals = 'jwks_file("approvers.jwks.json")'

@@ -1,6 +1,6 @@
-//! `stack x { unknowns = strict }`: a plan that needs a phase boundary (a
-//! stuck derivation, a pending group, a deformation held on a null) is
-//! refused, saying why; fresh nulls still flow.
+//! `unknowns = "strict"` (dform.toml's `[stacks.NAME]`): a plan that needs
+//! a phase boundary (a stuck derivation, a pending group, a deformation
+//! held on a null) is refused, saying why; fresh nulls still flow.
 
 mod common;
 use common::{Scratch, repo};
@@ -8,12 +8,10 @@ use common::{Scratch, repo};
 fn gke(strict: bool) -> Scratch {
     let s = Scratch::project("lang-strict-gke");
     let src = std::fs::read_to_string(repo().join("examples/gke/stacks/gke_two_phase.df")).unwrap();
-    let stack = if strict {
-        "stack gke { unknowns = \"strict\" }"
-    } else {
-        "stack gke {}"
-    };
-    s.write("g.df", &src.replacen("stack gke_two_phase {}", stack, 1));
+    if strict {
+        s.write("dform.toml", "[stacks.g]\nunknowns = \"strict\"\n");
+    }
+    s.write("g.df", &src);
     s
 }
 
@@ -66,10 +64,8 @@ fn a_two_phase_plan_is_refused_saying_why() {
         r.stderr
     );
     assert!(
-        !s.path("dform.state/gke/remote.json").exists()
-            || !s
-                .read("dform.state/gke/remote.json")
-                .contains("gke_cluster")
+        !s.path("dform.state/g/remote.json").exists()
+            || !s.read("dform.state/g/remote.json").contains("gke_cluster")
     );
 
     // Permissive, the same program plans its two phases.
@@ -82,9 +78,10 @@ fn a_two_phase_plan_is_refused_saying_why() {
 #[test]
 fn fresh_nulls_still_flow() {
     let s = Scratch::project("lang-strict-fresh");
+    s.write("dform.toml", "[stacks.p]\nunknowns = \"strict\"\n");
     s.write(
         "p.df",
-        "edition 2026\nstack p { unknowns = \"strict\" }\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nresource net.subnet a { vpc_id = ref(net.vpc, \"main\", \"id\"), cidr = \"10.0.1.0/24\" }\n",
+        "edition 2026\nprovider fake {}\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nresource net.subnet a { vpc_id = ref(net.vpc, \"main\", \"id\"), cidr = \"10.0.1.0/24\" }\n",
     );
     let r = s.run(&["plan", "p.df"]).success();
     assert!(
@@ -102,7 +99,8 @@ fn fresh_nulls_still_flow() {
 #[test]
 fn a_pending_group_is_refused_and_allow_stuck_relaxes_per_key() {
     let s = Scratch::project("lang-strict-allow");
-    let program = "edition 2026\nstack p { unknowns = \"strict\" }\nresource db.postgres a {}\nup(d) where e = db.postgres[d].endpoint, e != \"\"\nresource net.subnet s {\n  cidr = \"10.0.1.0/24\"\n} where up(\"a\")\n";
+    s.write("dform.toml", "[stacks.p]\nunknowns = \"strict\"\n");
+    let program = "edition 2026\nprovider fake {}\nresource db.postgres a {}\nup(d) where e = db.postgres[d].endpoint, e != \"\"\nresource net.subnet s {\n  cidr = \"10.0.1.0/24\"\n} where up(\"a\")\n";
     s.write("p.df", program);
     let r = s.run(&["plan", "p.df"]).failure();
     assert!(

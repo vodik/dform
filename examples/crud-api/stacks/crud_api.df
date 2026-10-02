@@ -20,8 +20,6 @@
 
 edition 2026
 
-stack shop.crud_api {}
-
 # Sources and versions are dform.toml's.
 provider google {}
 provider kubernetes {}

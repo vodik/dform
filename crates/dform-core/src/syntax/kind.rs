@@ -45,7 +45,7 @@ pub enum SyntaxKind {
     EDITION_KW,
     IMPORT_KW,
     PROVIDER_KW,
-    STACK_KW,
+    KEY_KW,
     TYPE_KW,
     DECL_KW,
     EXTERN_KW,
@@ -86,8 +86,7 @@ pub enum SyntaxKind {
     EDITION,
     IMPORT,
     PROVIDER,
-    STACK,
-    /// `input k: T [= t] [check B]`.
+    /// `input k: T [= t] [check B]`, or `key k: T [= t] [check B]`.
     INPUT,
     /// `input p(cols) from FORMAT(SOURCE)`: a relation fed from outside.
     INPUT_RELATION,
@@ -108,7 +107,7 @@ pub enum SyntaxKind {
     SCENARIO,
     RESOURCE,
     SETTINGS,
-    /// `{ entry* }` of a resource, settings, instance, provider or stack.
+    /// `{ entry* }` of a resource, settings, instance or provider.
     BLOCK,
     /// `path (=|+=) term [rank]` in a block.
     ASSIGN,

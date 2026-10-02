@@ -1446,7 +1446,6 @@ fn a_held_secret_is_read_from_the_cluster() {
     s.write(
         "a.df",
         "edition 2026\n\
-         stack a {}\n\
          provider k8s { source = \"./providers/k8s\" }\n\
          input pw: secret(string)\n\
          resource k8s.secret creds {\n\
@@ -1459,7 +1458,6 @@ fn a_held_secret_is_read_from_the_cluster() {
     s.write(
         "b.df",
         "edition 2026\n\
-         stack b {}\n\
          provider k8s { source = \"./providers/k8s\" }\n\
          resource k8s.secret copy {\n\
            metadata.name = \"copy\"\n\

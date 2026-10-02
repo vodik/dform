@@ -6,7 +6,6 @@ examples/decl/stacks/decl_demo.df
 # To run it, from this directory: README.md.
 
 edition 2026
-stack decl_demo {}
 # The names are the record's fields: `project{ network_name: n }`.
 decl project(id: int, name: string, region: string, network_name: string, proxy_cidr: string)
 
@@ -26,10 +25,6 @@ proj_ids(id) where project(id, _, _, _, _)
   (comment)
   (edition
     (integer))
-  (stack
-    (dotted_name
-      (identifier))
-    (block))
   (comment)
   (decl
     (dotted_name

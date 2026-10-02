@@ -462,12 +462,6 @@ pub fn lint(program: &Program, cli_keys: &[String]) -> Vec<String> {
 /// A key input whose default is `"prod"` or `"production"`: a plan or
 /// apply that names no value of the key is of the production deployment.
 fn production_defaults(program: &Program) -> Vec<String> {
-    let Some((stack, keys)) = program.statements.iter().find_map(|s| match s {
-        Stmt::Stack(c) => Some((c.name.as_str(), &c.keys)),
-        _ => None,
-    }) else {
-        return Vec::new();
-    };
     let mut out = Vec::new();
     for s in &program.statements {
         let Stmt::Input(i) = s else { continue };
@@ -477,15 +471,19 @@ fn production_defaults(program: &Program) -> Vec<String> {
         let production = ["prod", "production"]
             .iter()
             .any(|p| v.eq_ignore_ascii_case(p));
-        if !production || !keys.iter().any(|(k, _)| k == &i.name) {
+        if !production || !i.key {
             continue;
         }
         let at = crate::diag::at(i.span)
             .map(|a| format!("{a}: "))
             .unwrap_or_default();
+        // A stack is named after its file.
+        let stack = crate::diag::location(i.span)
+            .map(|(f, _, _)| crate::state::stack_name(std::path::Path::new(&f)))
+            .unwrap_or_else(|| "the stack".into());
         out.push(format!(
-            "{at}input {k} keys stack {stack} and defaults to \"{v}\": a plan or apply that \
-             names no {k} is of {stack}[{k}={v}]; default to another value, or give none",
+            "{at}key {k} of stack {stack} defaults to \"{v}\": a plan or apply that names no \
+             {k} is of {stack}[{k}={v}]; default to another value, or give none",
             k = i.name
         ));
     }

@@ -7,7 +7,9 @@ use common::Scratch;
 use std::process::Command;
 
 const WORKLOAD: &str = include_str!("../examples/bootstrap/stacks/workload.df");
-const WORLD: &str = "dform.state/renfry.workload/remote.json";
+/// The workload's table of examples/bootstrap/dform.toml.
+const MANIFEST: &str = "[stacks.workload]\napprovals = 'jwks_file(\"approvers.jwks.json\")'\n";
+const WORLD: &str = "dform.state/workload/remote.json";
 
 fn release(s: &Scratch, image: &str) {
     s.write(
@@ -18,6 +20,7 @@ fn release(s: &Scratch, image: &str) {
 
 fn setup(name: &str) -> Scratch {
     let s = Scratch::project(name);
+    s.write("dform.toml", MANIFEST);
     s.write("stacks/workload.df", WORKLOAD);
     release(&s, "gcr.io/renfry/web:1.0");
     s.write("data/approvals.facts", "edition 2026\n");
@@ -60,13 +63,13 @@ fn input_changes_deploy_and_world_drift_is_gated_by_policy() {
         [
             "event start",
             "tick 1: plan: 3 deformations (3 create)",
-            "stack renfry.workload is undeformed",
+            "stack workload is undeformed",
         ]
     );
     // Nothing changed: a resync that finds nothing to do.
     assert_eq!(
         once(&s, &[]),
-        ["event resync", "stack renfry.workload is undeformed"]
+        ["event resync", "stack workload is undeformed"]
     );
 
     // A release is an input change: it deploys.
@@ -77,7 +80,7 @@ fn input_changes_deploy_and_world_drift_is_gated_by_policy() {
             "input release changed (file data/release.facts)",
             "event input release",
             "tick 1: plan: 1 deformation (1 update)",
-            "stack renfry.workload is undeformed",
+            "stack workload is undeformed",
         ]
     );
     assert!(s.read(WORLD).contains("web:1.1"));
@@ -90,7 +93,7 @@ fn input_changes_deploy_and_world_drift_is_gated_by_policy() {
             &format!("event world {WORLD} changed"),
             "drift k8s.deployment[\"web\"].spec.replicas: 3 -> 5 (auto_reconcile)",
             "tick 1: plan: 1 deformation (1 update)",
-            "stack renfry.workload is undeformed",
+            "stack workload is undeformed",
         ]
     );
     assert!(s.read(WORLD).contains("\"replicas\": 3"));
@@ -104,7 +107,7 @@ fn input_changes_deploy_and_world_drift_is_gated_by_policy() {
         "tick 1: plan: 1 deformation (1 update)",
         "tick 1: proceed: held, drift at spec.template.spec.containers[0].image needs approval: \
          k8s.deployment[\"web\"]",
-        "stack renfry.workload is deformed: k8s.deployment[\"web\"] held",
+        "stack workload is deformed: k8s.deployment[\"web\"] held",
     ];
     let mut want = vec![format!("event world {WORLD} changed")];
     want.extend(held.iter().map(|l| l.to_string()));
@@ -130,7 +133,7 @@ fn approve_lets_a_world_event_correct_drift() {
         [
             "input approve approval changed (file data/approvals.facts)",
             "event input approve approval",
-            "stack renfry.workload is undeformed",
+            "stack workload is undeformed",
         ]
     );
     edit_world(&s, "gcr.io/renfry/web:1.0", "evil:latest");
@@ -141,7 +144,7 @@ fn approve_lets_a_world_event_correct_drift() {
             "drift k8s.deployment[\"web\"].spec.template.spec.containers[0].image: \
              \"gcr.io/renfry/web:1.0\" -> \"evil:latest\" (approved)",
             "tick 1: plan: 1 deformation (1 update)",
-            "stack renfry.workload is undeformed",
+            "stack workload is undeformed",
         ]
     );
     assert!(s.read(WORLD).contains("web:1.0"));
@@ -154,7 +157,7 @@ fn an_input_change_reconciles_held_drift() {
     edit_world(&s, "gcr.io/renfry/web:1.0", "evil:latest");
     assert_eq!(
         once(&s, &[]).last().unwrap(),
-        "stack renfry.workload is deformed: k8s.deployment[\"web\"] held"
+        "stack workload is deformed: k8s.deployment[\"web\"] held"
     );
     release(&s, "gcr.io/renfry/web:1.2");
     let got = once(&s, &[]);
@@ -166,14 +169,14 @@ fn an_input_change_reconciles_held_drift() {
         ),
         "{got:#?}"
     );
-    assert_eq!(got.last().unwrap(), "stack renfry.workload is undeformed");
+    assert_eq!(got.last().unwrap(), "stack workload is undeformed");
     assert!(s.read(WORLD).contains("web:1.2"));
 }
 
 /// The published digest of a held approval.
 fn pending_digest(s: &Scratch) -> String {
     let doc: serde_json::Value =
-        serde_json::from_str(&s.read("dform.state/renfry.workload/approval-pending.json")).unwrap();
+        serde_json::from_str(&s.read("dform.state/workload/approval-pending.json")).unwrap();
     doc["digest"].as_str().unwrap().to_string()
 }
 
@@ -182,7 +185,7 @@ fn pending_digest(s: &Scratch) -> String {
 fn approval_fact(s: &Scratch, digest: &str) -> String {
     let out = Command::new(common::exe("dform-approve"))
         .args(["sign", "approver.key", "--digest", digest])
-        .args(["--stack", "renfry.workload", "--approver", "alice"])
+        .args(["--stack", "workload", "--approver", "alice"])
         .args(["--format", "fact"])
         .current_dir(&s.dir)
         .output()
@@ -225,7 +228,7 @@ fn a_prod_rollout_is_held_until_its_plan_is_approved() {
             "tick 2: proceed: held, needs approval (a prod rollout): k8s.deployment[\"web\"]"
                 .to_string(),
             format!("tick 2: approval needed: plan digest {digest} (approval-pending.json)"),
-            "stack renfry.workload is deformed: k8s.deployment[\"web\"] held".to_string(),
+            "stack workload is deformed: k8s.deployment[\"web\"] held".to_string(),
         ]
     );
     assert!(!s.read(WORLD).contains("k8s.deployment"));
@@ -241,12 +244,12 @@ fn a_prod_rollout_is_held_until_its_plan_is_approved() {
             "event input approve approval".to_string(),
             "tick 1: plan: 1 deformation (1 create)".to_string(),
             format!("tick 1: approved by alice: plan digest {digest}"),
-            "stack renfry.workload is undeformed".to_string(),
+            "stack workload is undeformed".to_string(),
         ]
     );
     assert!(s.read(WORLD).contains("k8s.deployment"));
     assert!(
-        !s.path("dform.state/renfry.workload/approval-pending.json")
+        !s.path("dform.state/workload/approval-pending.json")
             .exists()
     );
     // The next release is another plan: held again, the old token is for
@@ -264,16 +267,16 @@ fn a_prod_rollout_is_held_until_its_plan_is_approved() {
         .trim()
         .trim_start_matches("approval(\"")
         .trim_end_matches("\")");
-    s.write("dform.state/renfry.workload/approvals/alice.token", token);
+    s.write("dform.state/workload/approvals/alice.token", token);
     let got = once(&s, &prod);
     assert_eq!(
         got[..2],
         [
-            "event approval (dform.state/renfry.workload/approvals changed)".to_string(),
+            "event approval (dform.state/workload/approvals changed)".to_string(),
             "tick 1: plan: 1 deformation (1 update)".to_string(),
         ]
     );
-    assert_eq!(got.last().unwrap(), "stack renfry.workload is undeformed");
+    assert_eq!(got.last().unwrap(), "stack workload is undeformed");
     assert!(s.read(WORLD).contains("web:1.1"));
 }
 
@@ -351,7 +354,7 @@ fn a_git_source_is_read_at_its_ref() {
         ),
     );
     let got = once(&s, &[]);
-    assert_eq!(got.last().unwrap(), "stack renfry.workload is undeformed");
+    assert_eq!(got.last().unwrap(), "stack workload is undeformed");
     assert!(s.read(WORLD).contains("web:2.0"));
     commit("gcr.io/renfry/web:2.1");
     let got = once(&s, &[]);
@@ -416,11 +419,11 @@ fn the_polling_loop_runs_an_event_per_change() {
         [
             "event start",
             "tick 1: plan: 3 deformations (3 create)",
-            "stack renfry.workload is undeformed",
+            "stack workload is undeformed",
             "input release changed (file data/release.facts)",
             "event input release",
             "tick 1: plan: 1 deformation (1 update)",
-            "stack renfry.workload is undeformed",
+            "stack workload is undeformed",
         ]
     );
     assert!(s.read(WORLD).contains("web:3.0"));
@@ -432,7 +435,7 @@ fn the_controller_runs_a_stack_of_the_project() {
     let r = s.run(&["controller", "run", "other", "--once"]).failure();
     assert!(
         r.stderr.contains("no stack other in the project")
-            && r.stderr.contains("renfry.workload  stacks/workload.df"),
+            && r.stderr.contains("workload  stacks/workload.df"),
         "{}",
         r.stderr
     );

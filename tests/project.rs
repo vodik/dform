@@ -8,8 +8,8 @@ use common::Scratch;
 use std::path::PathBuf;
 
 const APP: &str = r#"edition 2026
-stack app[env] {}
-input env: enum("staging", "prod") = "staging"
+provider fake {}
+key env: enum("staging", "prod") = "staging"
 resource net.vpc main {
   cidr = "10.0.0.0/16"
   tags = { env }
@@ -17,7 +17,7 @@ resource net.vpc main {
 "#;
 
 const NET: &str = r#"edition 2026
-stack net {}
+provider fake {}
 resource net.vpc shared {
   cidr = "10.9.0.0/16"
 }
@@ -111,7 +111,7 @@ fn no_target_is_the_one_stack_here_else_a_listing() {
     empty.write("dform.toml", "");
     let r = empty.run(&["plan"]).failure();
     assert!(
-        r.stderr.contains("no stack under") && r.stderr.contains("`stack` statement"),
+        r.stderr.contains("no stack under") && r.stderr.contains("a file under stacks/"),
         "{}",
         r.stderr
     );
@@ -140,23 +140,53 @@ fn a_key_value_is_the_targets_never_set() {
     assert!(r.stderr.contains("stack net has no key"), "{}", r.stderr);
 }
 
+/// A stack is named after its file; with no stacks/ directory the root's
+/// files are the stacks, and a `[stacks.NAME]` no file is is an error.
 #[test]
-fn stack_names_are_unique_in_a_project() {
-    let s = project("target-dup");
-    s.write("stacks/net2.df", NET);
-    let r = s.run(&["plan", "net"]).failure();
+fn a_stack_is_a_file_named_after_itself() {
+    let s = Scratch::new("target-files");
+    s.write("dform.toml", "");
+    s.write("shop.df", NET);
+    s.write("modules/m.df", "edition 2026\n");
+    let r = s.run(&["plan", "shop"]).success();
+    assert_eq!(r.summary(), "plan: 1 deformation (1 create)");
+    let r = s.run(&["stack", "list"]).success();
+    assert_eq!(
+        r.stdout.lines().next(),
+        Some("shop  shop.df"),
+        "{}",
+        r.stdout
+    );
+    // With a stacks/ directory, only its files are stacks.
+    s.write("stacks/net.df", NET);
+    let r = s.run(&["plan", "shop"]).failure();
     assert!(
-        r.stderr.contains(
-            "stack net is stated by 2 files; a stack name is unique in its project: \
-             stacks/net.df, stacks/net2.df"
-        ),
+        r.stderr.contains("no stack shop in the project"),
         "{}",
         r.stderr
     );
-    // A path still names one file, but the project's layout is checked.
-    let r = s.run(&["plan", "stacks/app.df"]).failure();
     assert!(
-        r.stderr.contains("stack net is stated by 2 files"),
+        r.stderr
+            .contains("warning: shop.df is outside the project layout"),
+        "{}",
+        r.stderr
+    );
+    s.run(&["plan", "net"]).success();
+    // A table for a stack no file is.
+    s.write("dform.toml", "[stacks.nope]\nisolated = true\n");
+    let r = s.run(&["plan", "net"]).failure();
+    assert!(
+        r.stderr
+            .contains("dform.toml: [stacks.nope] names no stack: there is no stacks/nope.df"),
+        "{}",
+        r.stderr
+    );
+    // The table's settings are a closed list.
+    s.write("dform.toml", "[stacks.net]\nbackends = 'local(\"x\")'\n");
+    let r = s.run(&["plan", "net"]).failure();
+    assert!(
+        r.stderr
+            .contains("unknown field `backends`, expected one of `backend`"),
         "{}",
         r.stderr
     );
@@ -165,12 +195,11 @@ fn stack_names_are_unique_in_a_project() {
 #[test]
 fn the_layout_lints() {
     let s = project("target-lints");
-    // A module with a stack statement is an error.
-    s.write("modules/m.df", "edition 2026\nstack m {}\n");
+    // A module with a key is an error: a key is its stack's.
+    s.write("modules/m.df", "edition 2026\nkey env: string\n");
     let r = s.run(&["plan", "net"]).failure();
     assert!(
-        r.stderr
-            .contains("modules/m.df: a module file has a `stack` statement"),
+        r.stderr.contains("modules/m.df: a module file has a `key`"),
         "{}",
         r.stderr
     );
@@ -199,13 +228,13 @@ fn a_program_imports_modules_never_a_stack() {
     let s = project("target-import-stack");
     s.write(
         "stacks/both.df",
-        "edition 2026\nstack both {}\nimport \"stacks/net.df\"\n",
+        "edition 2026\nprovider fake {}\nimport \"stacks/net.df\"\n",
     );
     let r = s.run(&["plan", "both"]).failure();
     assert!(
         r.stderr.contains(
-            "import \"stacks/net.df\": stacks/net.df is a stack (it has a `stack` statement); \
-             a program imports modules, never another stack"
+            "import \"stacks/net.df\": stacks/net.df is a stack (a file under stacks/); a \
+             program imports modules, never another stack"
         ),
         "{}",
         r.stderr
@@ -217,7 +246,7 @@ fn a_program_imports_modules_never_a_stack() {
     );
     s.write(
         "stacks/both.df",
-        "edition 2026\nstack both {}\nimport \"modules/tags.df\"\n",
+        "edition 2026\nprovider fake {}\nimport \"modules/tags.df\"\n",
     );
     let r = s.run(&["plan", "both"]).success();
     assert!(r.stdout.contains("+ net.vpc[\"extra\"]"), "{}", r.stdout);
@@ -259,7 +288,6 @@ unknowns = "strict"
     s.write(
         "stacks/p.df",
         r#"edition 2026
-stack p {}
 provider cloud {}
 resource x.thing a { size = 1 }
 pinned(n, c) where project_provider(n, c)
@@ -299,27 +327,47 @@ default(k, v) where project_default(k, v)
     assert!(r.stderr.contains("unknown field `inputs`"), "{}", r.stderr);
 }
 
-/// `unknowns` from the manifest makes a stack strict unless the stack
-/// statement says otherwise.
+/// `[stacks.NAME]` overrides `[defaults]`: `unknowns` from the defaults
+/// makes a stack strict unless its own table says otherwise, and policy
+/// reads both.
 #[test]
-fn a_default_yields_to_the_stack_statement() {
+fn a_stack_table_overrides_the_defaults() {
     let s = Scratch::new("manifest-unknowns");
     s.write("dform.toml", "[defaults]\nunknowns = \"strict\"\n");
-    let two_phase = |stack: &str| {
-        format!(
-            "edition 2026\n{stack}\nresource db.postgres main {{ size = 1 }}\n\
-             resource compute.vm app {{\n  size = 1\n}} where main in db.postgres, \
-             e = main.endpoint, e != \"\"\n"
-        )
-    };
-    s.write("stacks/p.df", &two_phase("stack p {}"));
+    s.write(
+        "stacks/p.df",
+        "edition 2026\nprovider fake {}\nresource db.postgres main { size = 1 }\n\
+         resource compute.vm app {\n  size = 1\n} where main in db.postgres, \
+         e = main.endpoint, e != \"\"\n\
+         stacked(n, k, v) where project_stack(n, k, v)\n",
+    );
     let strict = s.run(&["plan", "p"]).failure();
     assert!(strict.stderr.contains("strict"), "{}", strict.stderr);
     s.write(
-        "stacks/p.df",
-        &two_phase("stack p { unknowns = \"permissive\" }"),
+        "dform.toml",
+        "[defaults]\nunknowns = \"strict\"\n\n[stacks.p]\nunknowns = \"permissive\"\n",
     );
     s.run(&["plan", "p"]).success();
+    let r = s.run(&["query", "stacked(N, K, V)", "p"]).success();
+    assert!(
+        r.stdout.contains(r#""p"  "unknowns"  "permissive""#),
+        "{}",
+        r.stdout
+    );
+}
+
+/// A backend may name the key: each deployment's state is where it says.
+#[test]
+fn a_backend_names_the_key() {
+    let s = project("backend-key");
+    s.write(
+        "dform.toml",
+        "[stacks.app]\nbackend = 'local(\"state/{stack}-{env}\")'\n",
+    );
+    s.run(&["apply", "app", "env=prod"]).success();
+    assert!(s.path("state/app-prod/state.json").exists());
+    let r = s.run(&["plan", "app", "env=prod"]).success();
+    assert_eq!(r.summary(), "stack app is undeformed", "{}", r.stdout);
 }
 
 #[test]
@@ -450,7 +498,7 @@ fn fmt_with_no_path_formats_the_project() {
     let s = project("fmt-project");
     s.write(
         "stacks/net.df",
-        "edition 2026\nstack net {}\nresource net.vpc shared {cidr=\"10.9.0.0/16\"}\n",
+        "edition 2026\nprovider fake {}\nresource net.vpc shared {cidr=\"10.9.0.0/16\"}\n",
     );
     let r = s.run(&["fmt", "--check"]).failure();
     assert_eq!(r.stdout, "stacks/net.df\n");
@@ -548,7 +596,6 @@ fn program_paths_resolve_from_the_root() {
     s.write(
         "stacks/paths.df",
         r#"edition 2026
-stack paths {}
 provider cloud { source = "providers/cloud" }
 provider file {}
 input peer(name: string) from csv("data/peers.csv")

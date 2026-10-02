@@ -88,7 +88,6 @@ impl Lowerer<'_> {
             0,
             Stmt::Provider(Config {
                 name,
-                keys: Vec::new(),
                 config: source,
                 span,
             }),

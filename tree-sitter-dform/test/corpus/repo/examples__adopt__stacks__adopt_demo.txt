@@ -8,7 +8,6 @@ examples/adopt/stacks/adopt_demo.df
 # To run it, from this directory: README.md.
 
 edition 2026
-stack adopt_demo {}
 input env: enum("staging", "prod") = "staging"
 
 settings staging {
@@ -49,10 +48,6 @@ set net.vpc["network.main::vpc"].owner_tag = cloud_ref(net.vpc, "existing-prod-v
   (comment)
   (edition
     (integer))
-  (stack
-    (dotted_name
-      (identifier))
-    (block))
   (input
     (identifier)
     (type

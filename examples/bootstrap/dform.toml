@@ -6,3 +6,12 @@ name = "bootstrap"
 # The mock GCP: the project's own schema.
 [providers]
 gcp = { source = "providers/gcp" }
+
+# The bootstrap stack creates what the controller runs in: it stays batch.
+[stacks.bootstrap]
+role = "bootstrap"
+
+# Whose signatures approve a plan: `dform-approve keygen approver.key`
+# prints this JWKS.
+[stacks.workload]
+approvals = 'jwks_file("approvers.jwks.json")'

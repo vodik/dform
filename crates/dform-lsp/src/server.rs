@@ -436,8 +436,8 @@ impl Server<'_> {
         }
     }
 
-    /// The stacks of the workspace at `root`: discovery's, or the loose file
-    /// when it is a stack.
+    /// The stacks of the workspace at `root`: discovery's, or the loose
+    /// file.
     fn stacks(&self, root: &Path) -> Vec<(PathBuf, Vec<String>)> {
         if enter(root).is_err() {
             return Vec::new();
@@ -455,11 +455,10 @@ impl Server<'_> {
         let Ok(text) = self.read(root) else {
             return Vec::new();
         };
+        // A file is a stack named after itself (R-29).
         let parse = dform_core::syntax::parser::parse(&text);
-        match dform_core::syntax::resolve::stack_header(&parse.syntax()) {
-            Some((_, keys)) => vec![(root.to_path_buf(), keys)],
-            None => Vec::new(),
-        }
+        let keys = dform_core::syntax::resolve::key_names(&parse.syntax());
+        vec![(root.to_path_buf(), keys)]
     }
 
     fn evaluate(&mut self, root: &Path) {

@@ -109,6 +109,10 @@ fn old_spelling(word: &str) -> Option<&'static str> {
             "`contributes` is gone (R-5): a write needs no grant, delete the line; a module's \
              relation reaches the stack through an output"
         }
+        "stack" => {
+            "the `stack` statement is gone (R-29): a file under stacks/ is a stack named after \
+             itself, `key env: T` keys it, and dform.toml's `[stacks.NAME]` holds its settings"
+        }
         _ => return None,
     })
 }
@@ -440,7 +444,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// `name (.name)*`: a type, a stack, an extern, a relation.
+    /// `name (.name)*`: a type, an extern, a relation.
     fn dotted(&mut self, what: &str) -> P {
         if !word(self.nth(0)) {
             return self.err_expected(what);
@@ -552,21 +556,6 @@ impl<'a> Parser<'a> {
                 p.block()?;
                 p.opt_clause()
             }),
-            STACK_KW => self.simple(STACK, |p| {
-                p.dotted("a stack name")?;
-                // `stack app[env, region]`: the inputs that key it.
-                if p.eat(L_BRACKET) {
-                    p.with_nl(false, |p| {
-                        p.expect_word()?;
-                        while p.eat(COMMA) {
-                            p.expect_word()?;
-                        }
-                        p.expect(R_BRACKET)
-                    })?;
-                }
-                p.block()?;
-                p.opt_clause()
-            }),
             INPUT_KW
                 if self.raw(1) == IDENT
                     && self.nth_text(1) == "relation"
@@ -596,7 +585,21 @@ impl<'a> Parser<'a> {
                 p.bump();
                 p.term().map(drop)
             }),
-            INPUT_KW => self.simple(INPUT, |p| {
+            // `key k: T`: an input the target gives, which selects the
+            // deployment (R-29). It has no relation form.
+            KEY_KW if self.raw(2) == L_PAREN => {
+                self.bump();
+                self.bump();
+                let msg = format!("expected `:` after the key's name, found {}", self.found());
+                self.error_here(
+                    msg,
+                    Some(
+                        "a key is a value, `key env: environment`; a relation is not a key".into(),
+                    ),
+                );
+                Err(Bail)
+            }
+            INPUT_KW | KEY_KW => self.simple(INPUT, |p| {
                 p.expect_word()?;
                 if !p.at(COLON) {
                     let hint = p.at_contextual("from").then(|| {
@@ -822,10 +825,15 @@ impl<'a> Parser<'a> {
             return self.if_is_gone();
         }
         if self.at_contextual("check") {
-            let msg = format!("expected `where` or the end of the line, found {}", self.found());
+            let msg = format!(
+                "expected `where` or the end of the line, found {}",
+                self.found()
+            );
             self.error_here(
                 msg,
-                Some("`check` refines an input's or an attribute's type; a clause is `where`".into()),
+                Some(
+                    "`check` refines an input's or an attribute's type; a clause is `where`".into(),
+                ),
             );
             return Err(Bail);
         }
@@ -958,7 +966,7 @@ impl<'a> Parser<'a> {
         self.err_expected("`,`, a new line or `}`")
     }
 
-    /// `{ entry* }` of a resource, settings, instance, provider or stack:
+    /// `{ entry* }` of a resource, settings, instance or provider:
     /// entries separated by a newline or a comma. Its clause follows it.
     fn block(&mut self) -> P {
         self.start(BLOCK);
@@ -1091,7 +1099,10 @@ impl<'a> Parser<'a> {
             };
             let head = self.src[from..at].trim();
             let body = self.rest_of_clause(i + 1);
-            let msg = format!("expected `check` or the end of the line, found {}", self.found());
+            let msg = format!(
+                "expected `check` or the end of the line, found {}",
+                self.found()
+            );
             self.error_here(
                 msg,
                 Some(format!(
@@ -1589,7 +1600,12 @@ mod tests {
             ("r.tags = {}\n", "`set r.path = t`"),
             ("decl p/2\n", "`decl p(a, b)`"),
             ("module m {\n  export p\n}\n", "`export p` is gone"),
-            ("policy p {\n  contributes t.tags\n}\n", "`contributes` is gone"),
+            (
+                "policy p {\n  contributes t.tags\n}\n",
+                "`contributes` is gone",
+            ),
+            ("stack shop[env] {}\n", "`key env: T` keys it"),
+            ("key p(a) from csv(\"p.csv\")\n", "a relation is not a key"),
             (
                 "input relation p/2 from file(\"x\")\n",
                 "`input p(cols) from ..`",
@@ -1608,10 +1624,7 @@ mod tests {
             ),
             ("p(x) if q(x) # c\n", "`p(x) where q(x)`"),
             ("let k = 1 if {\n  q(1)\n}\n", "`let k = 1 where { .. }`"),
-            (
-                "instance m i {} if p(1)\n",
-                "`instance m i {} where p(1)`",
-            ),
+            ("instance m i {} if p(1)\n", "`instance m i {} where p(1)`"),
             ("input k: int = 1 where k > 0\n", "spelled `check`"),
             ("type t.u { a: int where a > 0 }\n", "spelled `check`"),
             ("let k = 1 check k > 0\n", "a clause is `where`"),
@@ -1682,8 +1695,7 @@ mod tests {
             .find(|n| n.kind() == CLAUSE)
             .unwrap();
         assert_eq!(clause.parent().unwrap().kind(), RESOURCE);
-        // A provider or stack block parses a clause too; the resolver
-        // refuses it.
+        // A provider block parses a clause too; the resolver refuses it.
         assert!(errors("provider p { a = 1 } where q(1)\n").is_empty());
     }
 
@@ -1706,6 +1718,13 @@ mod tests {
             kinds(src, &[DECL, INPUT_RELATION, OUTPUT_DECL]),
             vec![DECL, INPUT_RELATION, OUTPUT_DECL]
         );
+    }
+
+    #[test]
+    fn a_key_is_an_input() {
+        let src = "key env: enum(\"dev\", \"prod\") = \"dev\"\ninput n: int = 1\nkey(\"a\")\n";
+        assert!(errors(src).is_empty(), "{:?}", errors(src));
+        assert_eq!(kinds(src, &[INPUT, FACT]), vec![INPUT, INPUT, FACT]);
     }
 
     #[test]

@@ -249,11 +249,9 @@ fn a_rekey_is_logged_where_the_state_goes() {
         "k.df",
         "edition 2026\n\
          \n\
-         stack k[env] {\n\
-           isolated = true\n\
-         }\n\
+         provider fake {}\n\
          \n\
-         input env: string = \"a\"\n\
+         key env: string = \"a\"\n\
          \n\
          resource net.vpc main {\n\
            cidr = \"10.0.0.0/16\"\n\

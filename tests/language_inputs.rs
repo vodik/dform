@@ -222,3 +222,62 @@ fn the_plan_file_digests_input_files_with_the_stack_key() {
     assert_eq!(a.len(), 64, "{a}");
     assert_ne!(a, b, "another stack key, another digest");
 }
+
+/// `--set k=@FILE` reads a document as the input's value, parsed as its
+/// type the way a YAML cell is (`net` an inet); a `.df` file of one fact
+/// is the facts form. A plan file records the file's digest, so an edited
+/// file makes it stale.
+#[test]
+fn set_reads_a_file_as_the_inputs_type() {
+    let s = Scratch::project("lang-inputs-file");
+    s.write(
+        "p.df",
+        r#"edition 2026
+provider fake {}
+input db: { size: int, net: inet, zones: list(string) }
+resource net.vpc main {
+  cidr = inet.subnet(db.net, 8, db.size)
+  zones = db.zones
+}
+"#,
+    );
+    s.write("db.yaml", "size: 2\nnet: 10.0.0.0/16\nzones: [a, b]\n");
+    s.write(
+        "db.json",
+        r#"{"size": 3, "net": "10.1.0.0/16", "zones": ["c"]}"#,
+    );
+    s.write("db.toml", "size = 4\nnet = \"10.2.0.0/16\"\nzones = []\n");
+    s.write(
+        "db.df",
+        "db({ size: 5, net: \"10.3.0.0/16\", zones: [\"d\"] })\n",
+    );
+    for (file, cidr) in [
+        ("db.yaml", "10.0.2.0/24"),
+        ("db.json", "10.1.3.0/24"),
+        ("db.toml", "10.2.4.0/24"),
+        ("db.df", "10.3.5.0/24"),
+    ] {
+        let set = format!("db=@{file}");
+        let r = s.run(&["plan", "p.df", "--set", &set]).success();
+        assert!(
+            r.stdout.contains(&format!("cidr = \"{cidr}\"")),
+            "{file}: {}",
+            r.stdout
+        );
+    }
+    let r = s.run(&["plan", "p.df", "--set", "db=@db.txt"]).failure();
+    assert!(
+        r.stderr
+            .contains("--set db=@db.txt: a .yaml, .json, .toml or .df file"),
+        "{}",
+        r.stderr
+    );
+    // The plan file records the document's digest.
+    s.run(&["plan", "p.df", "--set", "db=@db.yaml", "--out", "plan.json"])
+        .success();
+    let plan = s.read("plan.json");
+    assert!(plan.contains(r#""set": "db=@db.yaml""#), "{plan}");
+    s.write("db.yaml", "size: 9\nnet: 10.0.0.0/16\nzones: [a, b]\n");
+    let r = s.run(&["apply", "plan.json"]).failure();
+    assert!(r.stderr.contains("is stale"), "{}", r.stderr);
+}

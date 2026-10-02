@@ -1,5 +1,9 @@
 edition 2026
 
-# A stack's key is closed.
-input env: string = "dev"
-stack web[env {}
+# The `stack` statement is gone: the file names the stack, `key` keys it,
+# and dform.toml holds its settings.
+key env: string = "dev"
+stack web[env] {}
+
+# A key is a value the target gives, not a relation.
+key peers(name: string) from csv("peers.csv")

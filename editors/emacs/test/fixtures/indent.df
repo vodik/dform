@@ -4,10 +4,6 @@ provider fake {
   source = "providers/fake"
 }
 
-stack demo {
-  unknowns = "strict"
-}
-
 resource net.vpc main {
   cidr = "10.0.0.0/16"
 } where zone in zones, zone != "excluded"

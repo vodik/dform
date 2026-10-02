@@ -10,8 +10,7 @@ use common::{Backend, Run, Scratch};
 /// environment, the account each env expects from its settings row.
 const APP: &str = r#"edition 2026
 type environment = enum("dev", "prod")
-input env: environment = "dev"
-stack app[env] {}
+key env: environment = "dev"
 provider env {}
 provider fake {
   account = env.var("FAKE_ACCOUNT_${env}")

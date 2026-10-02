@@ -9,7 +9,6 @@ edition 2026
 provider google { source = "registry.dform.dev/google", version = ">=6" }
 provider kubernetes { source = "registry.dform.dev/kubernetes", version = ">=3" }
 provider file { source = "registry.dform.dev/file" }
-stack renfry.pngu { backend = gcs("renfry-state", "pngu") }
 
 input env: enum("dev", "stg", "prod") = "dev"
 
@@ -286,21 +285,6 @@ output("project_id", id) where project(id, _, _, _)
           (identifier))
         (string
           (string_content)))))
-  (stack
-    (dotted_name
-      (identifier)
-      (identifier))
-    (block
-      (field
-        (block_path
-          (identifier))
-        (call
-          (identifier)
-          (arguments
-            (string
-              (string_content))
-            (string
-              (string_content)))))))
   (input
     (identifier)
     (type

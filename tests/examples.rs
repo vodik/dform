@@ -59,7 +59,7 @@ const CASES: &[Case] = &[
     Case {
         name: "approvals",
         stacks: &[one(
-            &["apply", "approvals.demo", "env=staging"],
+            &["apply", "approvals", "env=staging"],
             Apply::Converges(1),
         )],
     },
@@ -72,13 +72,13 @@ const CASES: &[Case] = &[
         name: "bootstrap",
         stacks: &[
             Stack {
-                plan: &["plan", "renfry.bootstrap"],
-                apply: &["apply", "renfry.bootstrap"],
+                plan: &["plan", "bootstrap"],
+                apply: &["apply", "bootstrap"],
                 ends: Apply::Converges(3),
             },
             Stack {
-                plan: &["plan", "renfry.workload"],
-                apply: &["apply", "renfry.workload"],
+                plan: &["plan", "workload"],
+                apply: &["apply", "workload"],
                 ends: Apply::Converges(1),
             },
         ],

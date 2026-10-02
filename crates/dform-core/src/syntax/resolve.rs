@@ -67,6 +67,36 @@ pub enum Mode {
     Pattern,
 }
 
+/// The stack a program is (R-29): its name, its file's stem, and its
+/// settings as dform.toml gives them, `[stacks.NAME]` over `[defaults]`
+/// (`project::Manifest::stack_settings`).
+#[derive(Debug, Clone)]
+pub struct StackSource {
+    pub name: String,
+    pub settings: Vec<Setting>,
+    /// Where the manifest says them.
+    pub span: Span,
+}
+
+/// One stack setting: its key, its value, and the value's place in
+/// dform.toml.
+#[derive(Debug, Clone)]
+pub struct Setting {
+    pub key: String,
+    pub value: SettingValue,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub enum SettingValue {
+    /// A string or a bool, as it is.
+    Plain(Term),
+    /// A term's text (`backend`, `approvals`, `config`) at byte `offset`
+    /// of the manifest's source; `{stack}` is the stack's name, and in
+    /// `config` `{k}` is the key k's value.
+    Term { text: String, offset: u32 },
+}
+
 /// Lower `entries` (and, through their imports, the rest of `units`).
 /// `require_edition`: every file must start with the edition pragma.
 pub fn lower(
@@ -74,6 +104,18 @@ pub fn lower(
     entries: &[usize],
     require_edition: bool,
     mode: Mode,
+) -> Result<Program, Vec<Diagnostic>> {
+    lower_stack(units, entries, require_edition, mode, None)
+}
+
+/// [`lower`], the program being the stack `stack`: its settings lower to
+/// one `Stmt::Stack` and its `config`'s rules.
+pub fn lower_stack(
+    units: &[Unit],
+    entries: &[usize],
+    require_edition: bool,
+    mode: Mode,
+    stack: Option<&StackSource>,
 ) -> Result<Program, Vec<Diagnostic>> {
     let mut l = Lowerer::new(units, mode == Mode::Text);
     l.text = mode == Mode::Text;
@@ -86,11 +128,37 @@ pub fn lower(
     for &e in entries {
         statements.extend(l.unit(e, require_edition));
     }
+    if let Some(st) = stack {
+        statements.extend(l.stack_settings(st, entries));
+    }
     if l.diags.is_empty() {
         Ok(Program { statements })
     } else {
         Err(l.diags)
     }
+}
+
+/// A term the compiler reads as data, on its own: a backend as dform.toml
+/// writes it (`local("DIR")`, `s3(..)`). The error is the first
+/// diagnostic's message.
+pub fn data_term(src: &str) -> Result<Term, String> {
+    let parse = parse::parse_term(src);
+    if let Some(e) = parse.errors.first() {
+        return Err(e.message.clone());
+    }
+    let root = parse.syntax();
+    let t = terms(&root)
+        .next()
+        .ok_or_else(|| "not a term".to_string())?;
+    let mut l = Lowerer::new(&[], false);
+    let mut rc = l.rc(&t, PROGRAM, &Rc::default());
+    l.calls(Calls::Data, |l| l.constant(&mut rc, &t))
+        .map_err(|_| {
+            l.diags
+                .first()
+                .map(|d| d.message.clone())
+                .unwrap_or_default()
+        })
 }
 
 // --- declarations ---------------------------------------------------------
@@ -216,17 +284,18 @@ fn dotted_text(n: &SyntaxNode, skip_words: usize) -> String {
     out
 }
 
-/// A file's `stack` header, read from its tree without resolving it: the
-/// stack's name and the inputs that key it (discovery, `project`).
-pub fn stack_header(root: &SyntaxNode) -> Option<(String, Vec<String>)> {
-    let n = root.children().find(|n| n.kind() == STACK)?;
-    let keys = tokens(&n)
-        .skip_while(|t| t.kind() != L_BRACKET)
-        .take_while(|t| t.kind() != R_BRACKET)
-        .filter(|t| is_word(t.kind()))
-        .map(|t| t.text().to_string())
-        .collect();
-    Some((dotted_text(&n, 1), keys))
+/// Is an `INPUT` node a `key` (R-29)?
+pub fn is_key(n: &SyntaxNode) -> bool {
+    tokens(n).next().is_some_and(|t| t.kind() == KEY_KW)
+}
+
+/// A file's keys, read from its tree without resolving it: the names of
+/// its top-level `key` statements, in order (discovery, `project`).
+pub fn key_names(root: &SyntaxNode) -> Vec<String> {
+    root.children()
+        .filter(|n| n.kind() == INPUT && is_key(n))
+        .map(|n| word_text(&n, 1))
+        .collect()
 }
 
 fn str_term(s: &str) -> Term {
@@ -1203,44 +1272,27 @@ impl<'u> Lowerer<'u> {
                 one(Stmt::Import(Import { path, span }))
             }
             PROVIDER => self.provider(n, scope, outer),
-            STACK => {
-                let name = dotted_text(n, 1);
-                let block = node(n, BLOCK);
-                let mut rc = self.rc(n, scope, outer);
-                // A stack's `config = FORMAT(SOURCE)` is a table, not a
-                // constant.
-                let table = block.as_ref().and_then(|b| {
-                    b.children()
-                        .filter(|a| a.kind() == ASSIGN)
-                        .find(|a| node(a, BLOCK_PATH).is_some_and(|p| p.text() == "config"))
-                });
-                let config = self.constant_assigns(&mut rc, block.as_ref(), table.as_ref())?;
-                // The words between the header's `[` and `]`.
-                let key_tokens: Vec<SyntaxToken> = tokens(n)
-                    .skip_while(|t| t.kind() != L_BRACKET)
-                    .take_while(|t| t.kind() != R_BRACKET)
-                    .filter(|t| is_word(t.kind()))
-                    .collect();
-                let keys = key_tokens
-                    .iter()
-                    .map(|t| (t.text().to_string(), self.span_of(t.text_range())))
-                    .collect();
-                let mut out = match &table {
-                    Some(a) => self.stack_config(a, &name, &key_tokens, scope, outer)?,
-                    None => Vec::new(),
-                };
-                let c = Config {
-                    name,
-                    keys,
-                    config,
-                    span,
-                };
-                out.insert(0, Stmt::Stack(c));
-                Ok(out)
-            }
             INPUT => {
                 let name = word_text(n, 1);
                 let ty = self.type_expr(&node(n, TYPE_EXPR).ok_or(Skip)?);
+                let key = is_key(n);
+                if key && n.parent().is_some_and(|p| p.kind() != SOURCE_FILE) {
+                    return self.error(
+                        span,
+                        format!(
+                            "key {name} inside a block: a key selects the stack's deployment, \
+                             so it is declared at the top of the stack's file"
+                        ),
+                    );
+                }
+                if key && matches!(&ty, TypeExpr::Apply(t, _) if t == "secret") {
+                    let d = Diagnostic::error(span, format!("key {name} is a secret")).with_note(
+                        "a key's value names the deployment: its state's directory and \
+                             its registry entry",
+                    );
+                    self.diags.push(d);
+                    return Err(Skip);
+                }
                 let mut rc = self.rc(n, scope, outer);
                 let default = match terms(n).next() {
                     Some(t) => Some(self.constant(&mut rc, &t)?),
@@ -1252,6 +1304,7 @@ impl<'u> Lowerer<'u> {
                     ty,
                     default,
                     refinement,
+                    key,
                     span,
                 }))
             }
@@ -1579,32 +1632,6 @@ impl<'u> Lowerer<'u> {
         Ok(t)
     }
 
-    /// A provider's or stack's `k = constant` settings, but `skip`.
-    fn constant_assigns(
-        &mut self,
-        rc: &mut Rc,
-        block: Option<&SyntaxNode>,
-        skip: Option<&SyntaxNode>,
-    ) -> L<Vec<(String, Term, Span)>> {
-        let Some(block) = block else {
-            return Ok(Vec::new());
-        };
-        if let Some(c) = block.parent().and_then(|stmt| node(&stmt, CLAUSE)) {
-            return self.error(self.span(&c), "a provider or stack block takes no clause");
-        }
-        let mut out = Vec::new();
-        for a in block
-            .children()
-            .filter(|c| c.kind() == ASSIGN && Some(c) != skip)
-        {
-            let key = self.block_path(&node(&a, BLOCK_PATH).ok_or(Skip)?)?;
-            let value = terms(&a).next().ok_or(Skip)?;
-            let value = self.calls(Calls::Data, |l| l.constant(rc, &value))?;
-            out.push((key, value, self.span(&a)));
-        }
-        Ok(out)
-    }
-
     /// `input p(col: type, ...) from FORMAT(SOURCE)`: a table
     /// (`crate::tables`). Its rows are the answers of the extern
     /// `table.FORMAT.p`, asked once the source is known:
@@ -1676,37 +1703,115 @@ impl<'u> Lowerer<'u> {
         Ok(out)
     }
 
-    /// `stack app[k, ...] { config = FORMAT(SOURCE) }`: every leaf of the
-    /// document is a contribution to the settings row of the deployment
-    /// (named by the key's value, several keys' joined by `/`):
+    /// The stack's settings as dform.toml gives them (R-29): each a
+    /// constant but `config`, lowered where the manifest writes it. One
+    /// `Stmt::Stack` holds the constants; `config` is rules.
+    fn stack_settings(&mut self, st: &StackSource, entries: &[usize]) -> Vec<Stmt> {
+        let Some(&first) = entries.first() else {
+            return Vec::new();
+        };
+        let scope = self.decls.files[&self.units[first].file];
+        let keys: Vec<String> = entries
+            .iter()
+            .flat_map(|&e| key_names(&self.units[e].root))
+            .collect();
+        let (saved_file, saved_offset) = (self.file, self.offset);
+        let mut config = Vec::new();
+        let mut out = Vec::new();
+        for s in &st.settings {
+            let text = match &s.value {
+                SettingValue::Plain(t) => {
+                    config.push((s.key.clone(), t.clone(), s.span));
+                    continue;
+                }
+                SettingValue::Term { text, .. } => text.replace("{stack}", &st.name),
+            };
+            let SettingValue::Term { offset, .. } = &s.value else {
+                continue;
+            };
+            self.file = s.span.file;
+            self.offset = *offset;
+            let r = if s.key == "config" {
+                // `{k}` is the key k's value: an interpolation hole.
+                let text = keys.iter().fold(text, |t, k| {
+                    t.replace(&format!("{{{k}}}"), &format!("${{{k}}}"))
+                });
+                self.setting_term(&text, s.span).and_then(|src| {
+                    self.stack_config(&src, s.span, &st.name, &keys, scope, &Rc::default())
+                })
+            } else {
+                self.setting_term(&text, s.span).and_then(|src| {
+                    let mut rc = self.rc(&src, scope, &Rc::default());
+                    self.calls(Calls::Data, |l| l.constant(&mut rc, &src))
+                        .map(|t| config.push((s.key.clone(), t, s.span)))
+                        .map(|()| Vec::new())
+                })
+            };
+            if let Ok(stmts) = r {
+                out.extend(stmts);
+            }
+        }
+        (self.file, self.offset) = (saved_file, saved_offset);
+        out.insert(
+            0,
+            Stmt::Stack(Config {
+                name: st.name.clone(),
+                config,
+                span: st.span,
+            }),
+        );
+        out
+    }
+
+    /// A setting's value, parsed as a term.
+    fn setting_term(&mut self, text: &str, at: Span) -> L<SyntaxNode> {
+        let parse = parse::parse_term(text);
+        if let Some(e) = parse.errors.first() {
+            let span = Span {
+                start: self.offset + e.start as u32,
+                end: self.offset + e.end as u32,
+                ..at
+            };
+            return self.error(
+                span,
+                e.message
+                    .replace("the end of the file", "the end of the value"),
+            );
+        }
+        terms(&parse.syntax()).next().ok_or(Skip)
+    }
+
+    /// A stack's `config = FORMAT(SOURCE)` (dform.toml's `[stacks.NAME]`):
+    /// every leaf of the document is a contribution to the settings row of
+    /// the deployment (named by the key's value, several keys' joined by
+    /// `/`):
     /// `arg("settings", Row, P, V, normal) :- reads, table.FORMAT.stack.config(Path, At, P, V)`.
     fn stack_config(
         &mut self,
-        a: &SyntaxNode,
+        src: &SyntaxNode,
+        span: Span,
         stack: &str,
-        keys: &[SyntaxToken],
+        keys: &[String],
         scope: usize,
         outer: &Rc,
     ) -> L<Vec<Stmt>> {
-        let span = self.span(a);
         if keys.is_empty() {
             let d = Diagnostic::error(
                 span,
                 format!("stack {stack} has no key: its config would be every deployment's"),
             )
-            .with_help(format!(
-                "key it by the inputs that name a deployment, `stack {stack}[env]`, \
-                 or state the settings in the program"
-            ));
+            .with_help(
+                "key it by the inputs that name a deployment, `key env: T` in its file, \
+                 or state the settings in the program",
+            );
             self.diags.push(d);
             return Err(Skip);
         }
-        let mut rc = self.rc(a, scope, outer);
+        let mut rc = self.rc(src, scope, outer);
         let mut body = Vec::new();
         let mut row = Vec::new();
         for k in keys {
-            let at: u32 = k.text_range().start().into();
-            row.push(self.hole(&mut rc, k.text(), at, &mut body)?);
+            row.push(self.hole(&mut rc, k, 0, &mut body)?);
         }
         let row = match row.len() {
             1 => row.remove(0),
@@ -1724,10 +1829,9 @@ impl<'u> Lowerer<'u> {
                 ty: Some(TypeExpr::Name(ty.into())),
             })
             .to_vec();
-        let src = terms(a).next().ok_or(Skip)?;
         let mut out = self.table_body(
             &mut rc,
-            &src,
+            src,
             crate::tables::STACK_CONFIG,
             cols,
             vec![path.clone(), value.clone()],

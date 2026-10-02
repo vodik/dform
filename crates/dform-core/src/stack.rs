@@ -1,20 +1,23 @@
-//! Stacks (DESIGN.org L6, E §7.1): `stack name { backend = local("dir"),
-//! unknowns = strict | permissive, role = bootstrap }.` One program owns
-//! one stack. The name scopes the state (the entry file's basename when
-//! there is no `stack` statement), the backend is the directory it lives in
-//! (or a bucket, `store`), and a lock there makes a second concurrent apply
-//! fail cleanly.
+//! Stacks (DESIGN.org L6, R-29): a stack is a file, named after itself
+//! (`stacks/shop.df` is `shop`), and one program is one stack. Its
+//! operational settings are dform.toml's `[stacks.NAME]` over
+//! `[defaults]`: `backend = 'local("dir")'` is the directory its state,
+//! world and lock live in (or a bucket, `store`), and a lock there makes a
+//! second concurrent apply fail cleanly; `unknowns`, `role`, `approvals`,
+//! `audit_sink`, `isolated` and `config` are the rest (docs/grammar.md
+//! "Stack settings"). The loader lowers them to one `Stmt::Stack`.
 //!
-//! Keyed stacks: `stack app[env, region] { .. }` names the inputs that are
-//! deployment identity. Each value of the key is its own deployment
-//! ([`Instance`]), `app[env=prod,region=us-east1]`, with its own state
-//! directory under the stack's (`dform.state/app/env=prod,region=us-east1/`),
-//! lock, registry entry and controller; the other inputs are parameters of
-//! a deployment and change it in place. `rekey` moves one deployment's
-//! state to another key value. `provider name {
-//! source = "path" }.` selects a provider: a plugin executable, or a schema
-//! the mock provider plays; the block's other settings configure it
-//! (`provider_config`, lowered by the resolver).
+//! Keyed stacks: `key env: T` declares an input the target gives (`shop
+//! env=prod`), never `--set`. Each value of the key, several keys' in
+//! their order, is its own deployment ([`Instance`]),
+//! `app[env=prod,region=us-east1]`, with its own state directory under the
+//! stack's (`dform.state/app/env=prod,region=us-east1/`), lock, registry
+//! entry and controller; the other inputs are parameters of a deployment
+//! and change it in place. `rekey` moves one deployment's state to another
+//! key value. `provider name { source = "path" }` selects a provider: a
+//! plugin executable, or a schema the mock provider plays; the block's
+//! other settings configure it (`provider_config`, lowered by the
+//! resolver).
 //!
 //! Cross-stack values: an apply records the stack's outputs in its state
 //! and publishes them beside it, apart ([`Published`], `outputs.json`), and
@@ -24,7 +27,7 @@
 //! project reads another's through that one's backend (`[remotes]`,
 //! [`remote_location`]): the same read of the same object.
 //!
-//! `role = bootstrap` marks the stack that creates what a controller runs
+//! `role = "bootstrap"` marks the stack that creates what a controller runs
 //! in: the controller refuses it. `handover` moves another stack's objects
 //! to a new backend and records it in the registry, where every later run
 //! finds it; `rekey` moves them to another key value. Both go through the
@@ -52,9 +55,11 @@ pub enum Unknowns {
     Strict,
 }
 
-/// The program's `stack` and `provider` statements.
+/// The program's stack settings and `provider` statements.
 #[derive(Debug, Clone, Default)]
 pub struct Stack {
+    /// The stack's name, when the manifest gave it settings (else the
+    /// entry file's stem, `state::stack_name`).
     pub name: Option<String>,
     /// `backend = local("dir")`: where the state, the world and the lock
     /// live; `s3(...)`: the state, plan key, audit log and lease in a
@@ -69,8 +74,8 @@ pub struct Stack {
     /// Each `provider NAME { .. }` block's spec (as in `providers`) ->
     /// NAME: the block's settings configure the provider it selects.
     pub provider_blocks: BTreeMap<String, String>,
-    /// `stack app[env, region]`: the inputs that key the stack, in order,
-    /// each a stack input (checked here).
+    /// `key env: T`, `key region: T`: the inputs that key the stack, in
+    /// order.
     pub keys: Vec<(String, Span)>,
     /// `isolated = true`: every key value deploys into its own account (or
     /// world), so a name that does not vary by key does not collide; the
@@ -147,20 +152,39 @@ fn backend(v: &Term) -> Result<Backend, String> {
     }
 }
 
-/// A backend as the manifest's `[defaults] backend` writes it, a term of
-/// the language in a string.
+/// A backend as the manifest writes it, a term of the language in a
+/// string.
 pub fn parse_backend(text: &str) -> Result<Backend> {
-    let program = crate::parser::parse_program(&format!("stack _ {{ backend = {text} }}"))
-        .map_err(|_| anyhow::anyhow!("not a backend term"))?;
-    program
-        .statements
-        .iter()
-        .find_map(|s| match s {
-            Stmt::Stack(c) => c.config.iter().find(|(k, _, _)| k == "backend"),
-            _ => None,
-        })
-        .ok_or_else(|| anyhow::anyhow!("not a backend term"))
-        .and_then(|(_, v, _)| backend(v).map_err(|e| anyhow::anyhow!(e)))
+    let t = crate::syntax::resolve::data_term(text)
+        .map_err(|e| anyhow::anyhow!("not a backend term: {e}"))?;
+    backend(&t).map_err(|e| anyhow::anyhow!(e))
+}
+
+/// The backend with each key's `{k}` its value in `key` (escaped, as
+/// [`Instance::segment`] prints it), and whether it named any: a backend
+/// that names the key is the deployment's own place, not its stack's
+/// (`s3("acme", "shop/{env}")`).
+pub fn keyed_backend(b: &Backend, key: &[(String, String)]) -> (Backend, bool) {
+    let mut named = false;
+    let mut sub = |s: &str| {
+        let mut out = s.to_string();
+        for (k, v) in key {
+            let hole = format!("{{{k}}}");
+            if out.contains(&hole) {
+                named = true;
+                out = out.replace(&hole, v);
+            }
+        }
+        out
+    };
+    let b = match b {
+        Backend::Local(dir) => Backend::Local(PathBuf::from(sub(&dir.to_string_lossy()))),
+        Backend::S3(spec) => Backend::S3(S3Spec {
+            prefix: sub(&spec.prefix),
+            ..spec.clone()
+        }),
+    };
+    (b, named)
 }
 
 fn string(t: &Term) -> Option<&str> {
@@ -170,31 +194,16 @@ fn string(t: &Term) -> Option<&str> {
     }
 }
 
-/// Read the `stack` and `provider` statements of a loaded program.
+/// Read the stack's settings, keys and `provider` statements of a loaded
+/// program.
 pub fn config(program: &Program) -> Result<Stack> {
     let mut out = Stack::default();
     let mut diags = Vec::new();
-    let mut first: Option<Span> = None;
-    let mut inputs: Vec<&crate::ast::InputDecl> = Vec::new();
+    let mut settings = None;
     for s in &program.statements {
         match s {
-            Stmt::Input(i) => inputs.push(i),
-            Stmt::Stack(c) => {
-                if let Some(at) = first {
-                    diags.push(
-                        Diagnostic::error(
-                            c.span,
-                            "a second stack statement: one program owns one stack",
-                        )
-                        .with_label(at, "the program's stack"),
-                    );
-                    continue;
-                }
-                first = Some(c.span);
-                out.name = Some(c.name.clone());
-                out.keys = c.keys.clone();
-                stack_config(c, &mut out, &mut diags);
-            }
+            Stmt::Input(i) if i.key => out.keys.push((i.name.clone(), i.span)),
+            Stmt::Stack(c) => settings = settings.or(Some(c)),
             Stmt::Provider(c) => {
                 // A built-in fact provider dform answers itself starts nothing.
                 if crate::externs::builtin(&c.name).is_some_and(|b| b.in_process) {
@@ -207,51 +216,14 @@ pub fn config(program: &Program) -> Result<Stack> {
             _ => {}
         }
     }
-    check_keys(&out, &inputs, &mut diags);
+    if let Some(c) = settings {
+        out.name = Some(c.name.clone());
+        stack_config(c, &mut out, &mut diags);
+    }
     if diags.is_empty() {
         Ok(out)
     } else {
         Err(Diagnostics(diags).into())
-    }
-}
-
-/// Each key of a keyed stack is one of its own inputs, named once, and not
-/// a secret (its value names a directory and a registry entry).
-fn check_keys(out: &Stack, inputs: &[&crate::ast::InputDecl], diags: &mut Vec<Diagnostic>) {
-    let name = out.name.as_deref().unwrap_or_default();
-    for (i, (k, span)) in out.keys.iter().enumerate() {
-        if let Some((_, at)) = out.keys[..i].iter().find(|(x, _)| x == k) {
-            diags.push(
-                Diagnostic::error(*span, format!("stack {name} is keyed by {k} twice"))
-                    .with_label(*at, "first here"),
-            );
-            continue;
-        }
-        let Some(decl) = inputs.iter().find(|d| &d.name == k) else {
-            let names: Vec<&str> = inputs.iter().map(|d| d.name.as_str()).collect();
-            let d = Diagnostic::error(
-                *span,
-                format!("stack {name} is keyed by {k}, which is not an input of the stack"),
-            );
-            diags.push(if names.is_empty() {
-                d.with_help(format!("declare it: `input {k}: string`"))
-            } else {
-                d.with_note(format!("its inputs: {}", names.join(", ")))
-            });
-            continue;
-        };
-        if matches!(&decl.ty, crate::ast::TypeExpr::Apply(n, _) if n == "secret") {
-            diags.push(
-                Diagnostic::error(
-                    *span,
-                    format!(
-                        "stack {name} is keyed by {k}, a secret input: a key's value names \
-                         the deployment's state directory and registry entry"
-                    ),
-                )
-                .with_label(decl.span, "declared secret here"),
-            );
-        }
     }
 }
 
@@ -346,8 +318,8 @@ pub fn key_text(v: &Value) -> String {
     }
 }
 
-/// The deployment a run is of: the stack, and each key input's value as
-/// this run gives it: `--set` (`set`, the `input(k, v)` facts), else an
+/// The deployment a run is of: the stack, and each key's value as this
+/// run gives it: the target (`set`, the `input(k, v)` facts), else an
 /// input fact or an `--input-file` contribution of the program, else the
 /// input's default (named in [`Instance::defaulted`]). A key with none is
 /// an error naming the input.
@@ -395,11 +367,11 @@ pub fn instance(cfg: &Stack, stack: &str, program: &Program, set: &[Atom]) -> Re
             None => diags.push(
                 Diagnostic::error(
                     *span,
-                    format!("stack {stack} is keyed by input {k}, which has no value"),
+                    format!("stack {stack} is keyed by {k}, which has no value"),
                 )
                 .with_help(format!(
-                    "give it with `--set {k}=...`: each value of the key is its own \
-                     deployment, with its own state"
+                    "give it with the target, `{stack} {k}=...`: each value of the key is \
+                     its own deployment, with its own state"
                 )),
             ),
         }
@@ -432,15 +404,15 @@ fn stack_config(c: &Config, out: &mut Stack, diags: &mut Vec<Diagnostic>) {
                 Some("permissive") => out.unknowns = Unknowns::Permissive,
                 _ => diags.push(Diagnostic::error(
                     *span,
-                    "unknowns is `strict` or `permissive`",
+                    "unknowns is \"strict\" or \"permissive\"",
                 )),
             },
             "role" => match string(v) {
                 Some("bootstrap") => out.bootstrap = true,
-                _ => diags.push(Diagnostic::error(*span, "role is `bootstrap`")),
+                _ => diags.push(Diagnostic::error(*span, "role is \"bootstrap\"")),
             },
             "isolated" => match v {
-                Term::Val(Value::Bool(b)) if !c.keys.is_empty() => out.isolated = *b,
+                Term::Val(Value::Bool(b)) if !out.keys.is_empty() => out.isolated = *b,
                 Term::Val(Value::Bool(_)) => diags.push(Diagnostic::error(
                     *span,
                     format!(
@@ -477,16 +449,17 @@ fn stack_config(c: &Config, out: &mut Stack, diags: &mut Vec<Diagnostic>) {
             },
             other => diags.push(
                 Diagnostic::error(*span, format!("stack {} has no setting {other}", c.name))
-                    .with_note(
-                        "its settings: backend, unknowns, role, isolated, approvals, audit_sink",
-                    ),
+                    .with_note(format!(
+                        "its settings: {}",
+                        crate::project::STACK_SETTINGS.join(", ")
+                    )),
             ),
         }
     }
 }
 
 /// `jwks("url")` or `jwks_file("path")` (from the project root of the
-/// file the stack statement is in), each with an optional issuer.
+/// manifest that says it), each with an optional issuer.
 fn trust_root(at: Span, t: &Term) -> Option<crate::approval::TrustRoot> {
     use crate::approval::{Jwks, TrustRoot};
     let Term::Func { name, args } = t else {
@@ -989,15 +962,8 @@ fn parse_target(to: &str) -> Result<Target> {
 
 /// What a backend term that parses says is wrong with it, if anything.
 fn backend_term(text: &str) -> Option<String> {
-    let program = crate::parser::parse_program(&format!("stack _ {{ backend = {text} }}")).ok()?;
-    program.statements.iter().find_map(|s| match s {
-        Stmt::Stack(c) => c
-            .config
-            .iter()
-            .find(|(k, _, _)| k == "backend")
-            .and_then(|(_, v, _)| backend(v).err()),
-        _ => None,
-    })
+    let t = crate::syntax::resolve::data_term(text).ok()?;
+    backend(&t).err()
 }
 
 /// A deployment's published outputs (`store::OUTPUTS`, beside its state and

@@ -12,15 +12,9 @@
 # example signer, releases it:
 #
 #   cargo run -q -p dform-direct --bin dform-approve -- sign approver.key \
-#     --digest sha256:... --stack renfry.workload --approver alice --format fact >> data/approvals.facts
+#     --digest sha256:... --stack workload --approver alice --format fact >> data/approvals.facts
 
 edition 2026
-
-stack renfry.workload {
-  # Whose signatures approve a plan: `dform-approve keygen approver.key`
-  # prints this JWKS.
-  approvals = jwks_file("approvers.jwks.json")
-}
 
 provider k8s {}
 

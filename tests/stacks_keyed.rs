@@ -1,4 +1,4 @@
-//! Keyed stacks: `stack app[env]` makes each value of the key its own
+//! Keyed stacks: `key env: T` makes each value of the key its own
 //! deployment, with its own state, lock, registry entry and controller.
 //! Inputs outside the key are parameters of a deployment.
 
@@ -8,9 +8,9 @@ use common::{Scratch, repo};
 /// A vpc whose cidr (force_new) and name depend on the key, and whose
 /// size is a parameter.
 const APP: &str = r#"edition 2026
-input env: enum("staging", "stg", "prod") = "staging"
+key env: enum("staging", "stg", "prod") = "staging"
 input size: int = 1
-stack app[env] {}
+provider fake {}
 net_of("staging", "10.1.0.0/16")
 net_of("stg", "10.1.0.0/16")
 net_of("prod", "10.2.0.0/16")
@@ -103,9 +103,9 @@ fn key_values_are_escaped_and_joined() {
     s.write(
         "app.df",
         r#"edition 2026
-input team: string
-input region: string = "us-east1"
-stack app[team, region] {}
+key team: string
+key region: string = "us-east1"
+provider fake {}
 resource net.vpc main {
   name = "main-${team}-${region}"
 }
@@ -130,42 +130,55 @@ resource net.vpc main {
     );
 }
 
-/// A key input with no value is an error that names it; a key that is not
-/// an input is an error at the header.
+/// A key with no value is an error that names it and says to give it with
+/// the target; a key is never `--set`.
 #[test]
-fn a_key_needs_an_input_and_a_value() {
+fn a_key_needs_a_value_from_the_target() {
     let s = Scratch::new("keyed-errors");
     s.write(
         "app.df",
         r#"edition 2026
-input env: string
-stack app[env] {}
+key env: string
+provider fake {}
 "#,
     );
     let r = s.run(&["plan", "app.df"]).failure();
     assert!(
         r.stderr
-            .contains("stack app is keyed by input env, which has no value"),
+            .contains("stack app is keyed by env, which has no value"),
         "{}",
         r.stderr
     );
-    assert!(r.stderr.contains("--set env="), "{}", r.stderr);
-
-    s.write(
-        "bad.df",
-        r#"edition 2026
-input env: string = "dev"
-stack app[region] {}
-"#,
-    );
-    let r = s.run(&["plan", "bad.df"]).failure();
+    assert!(r.stderr.contains("`app env=...`"), "{}", r.stderr);
+    let r = s.run(&["plan", "app.df", "--set", "env=prod"]).failure();
     assert!(
-        r.stderr
-            .contains("stack app is keyed by region, which is not an input of the stack"),
+        r.stderr.contains(
+            "--set env=prod: env is stack app's key; name the deployment in the target: \
+             `dform plan app env=prod`"
+        ),
         "{}",
         r.stderr
     );
-    assert!(r.stderr.contains("bad.df:3:11"), "{}", r.stderr);
+    s.run(&["plan", "app.df", "env=prod"]).success();
+}
+
+/// A key is a value: not a secret, and not inside a module.
+#[test]
+fn a_key_is_the_stacks_and_not_a_secret() {
+    let s = Scratch::new("keyed-secret");
+    s.write(
+        "app.df",
+        "edition 2026\nkey env: secret(string)\nprovider fake {}\n",
+    );
+    let r = s.run(&["plan", "app.df", "env=prod"]).failure();
+    assert!(r.stderr.contains("key env is a secret"), "{}", r.stderr);
+    assert!(r.stderr.contains("app.df:2:1"), "{}", r.stderr);
+    s.write(
+        "app.df",
+        "edition 2026\nmodule m {\n  key env: string\n}\nprovider fake {}\n",
+    );
+    let r = s.run(&["plan", "app.df"]).failure();
+    assert!(r.stderr.contains("key env inside a block"), "{}", r.stderr);
 }
 
 /// `stack_output("app[env=prod]", k, v)` reads one deployment's outputs.
@@ -175,15 +188,15 @@ fn stack_output_addresses_one_deployment() {
     s.write(
         "app.df",
         r#"edition 2026
-input env: string = "staging"
-stack app[env] {}
+key env: string = "staging"
+provider fake {}
 output url = "https://${env}.example"
 "#,
     );
     s.write(
         "web.df",
         r#"edition 2026
-stack web {}
+provider fake {}
 resource net.vpc edge {
   name = u
 } where stack_output("app[env=prod]", "url", u)
@@ -237,11 +250,12 @@ fn rekey_lists_what_the_key_renames_and_moves_the_state() {
 #[test]
 fn rekey_moves_state_and_the_next_plan_is_undeformed() {
     let s = Scratch::project("keyed-rekey-same");
+    s.write("dform.toml", "[stacks.app]\nisolated = true\n");
     s.write(
         "app.df",
         r#"edition 2026
-input env: string = "staging"
-stack app[env] { isolated = true }
+key env: string = "staging"
+provider fake {}
 resource net.vpc main {
   name = "main"
 }
@@ -272,7 +286,7 @@ resource net.vpc main {
 #[test]
 fn rekey_moves_the_state_from_before_the_stack_was_keyed() {
     let s = Scratch::project("keyed-legacy");
-    let unkeyed = APP.replace("stack app[env] {}", "stack app {}");
+    let unkeyed = APP.replace("key env:", "input env:");
     s.write("app.df", &unkeyed);
     s.run(&["apply", "app.df"]).success();
     s.write("app.df", APP);
@@ -283,8 +297,8 @@ fn rekey_moves_the_state_from_before_the_stack_was_keyed() {
 }
 
 const FIXED: &str = r#"edition 2026
-input env: string = "staging"
-stack app[env] {}
+key env: string = "staging"
+provider fake {}
 resource net.vpc logs {
   bucket = "company-logs"
 }
@@ -310,10 +324,7 @@ fn a_fixed_bucket_name_in_a_keyed_stack_is_a_warning() {
     );
     assert!(!r.stderr.contains("net.vpc[\"main\"]"), "{}", r.stderr);
     // Isolated deployments do not share names.
-    s.write(
-        "app.df",
-        &FIXED.replace("stack app[env] {}", "stack app[env] { isolated = true }"),
-    );
+    s.write("dform.toml", "[stacks.app]\nisolated = true\n");
     let r = s.run(&["plan", "app.df"]).success();
     assert!(!r.stderr.contains("does not depend"), "{}", r.stderr);
 }
@@ -322,13 +333,8 @@ fn a_fixed_bucket_name_in_a_keyed_stack_is_a_warning() {
 #[test]
 fn a_fixed_bucket_name_is_denied_under_strict() {
     let s = Scratch::project("keyed-lint-strict");
-    s.write(
-        "app.df",
-        &FIXED.replace(
-            "stack app[env] {}",
-            "stack app[env] { unknowns = \"strict\" }",
-        ),
-    );
+    s.write("dform.toml", "[stacks.app]\nunknowns = \"strict\"\n");
+    s.write("app.df", FIXED);
     let r = s.run(&["plan", "app.df"]).failure();
     assert!(
         r.stderr
@@ -344,8 +350,8 @@ fn a_fixed_bucket_name_is_denied_under_strict() {
 /// flows into the value, not what the rule reads. A ref to a name that
 /// depends on the key does too.
 const GATED: &str = r#"edition 2026
-input env: string = "staging"
-stack app[env] {}
+key env: string = "staging"
+provider fake {}
 resource net.vpc logs {
   bucket = "company-logs"
   tags = { env: env }
@@ -393,13 +399,8 @@ fn a_fixed_bucket_in_a_block_that_reads_the_key_is_a_warning() {
 #[test]
 fn the_strict_collision_deny_is_a_fact_why_explains() {
     let s = Scratch::project("keyed-lint-why");
-    s.write(
-        "app.df",
-        &GATED.replace(
-            "stack app[env] {}",
-            "stack app[env] { unknowns = \"strict\" }",
-        ),
-    );
+    s.write("dform.toml", "[stacks.app]\nunknowns = \"strict\"\n");
+    s.write("app.df", GATED);
     let r = s.run(&["plan", "app.df"]).failure();
     assert!(
         r.stderr
@@ -573,14 +574,14 @@ fn a_key_defaulting_to_production_is_warned() {
     s.write(
         "app.df",
         &APP.replace(
-            r#"input env: enum("staging", "stg", "prod") = "staging""#,
-            r#"input env: enum("staging", "stg", "prod") = "prod""#,
+            r#"key env: enum("staging", "stg", "prod") = "staging""#,
+            r#"key env: enum("staging", "stg", "prod") = "prod""#,
         ),
     );
     let r = s.run(&["plan", "app.df"]).success();
     assert!(
         r.stderr.contains(
-            "warning: app.df:2:1: input env keys stack app and defaults to \"prod\": a plan \
+            "warning: app.df:2:1: key env of stack app defaults to \"prod\": a plan \
              or apply that names no env is of app[env=prod]; default to another value, or give none"
         ),
         "{}",
@@ -601,9 +602,9 @@ fn state_show_needs_the_key_not_the_other_inputs() {
     s.write(
         "stacks/app.df",
         "edition 2026\n\
-         input env: string\n\
+         key env: string\n\
          input pw: secret(string)\n\
-         stack app[env] {}\n\
+         provider fake {}\n\
          resource net.vpc main { cidr = \"10.0.0.0/16\" }\n\
          ",
     );
@@ -619,7 +620,7 @@ fn state_show_needs_the_key_not_the_other_inputs() {
     let r = s.run(&["state", "show", "app"]).failure();
     assert!(
         r.stderr
-            .contains("stack app is keyed by input env, which has no value"),
+            .contains("stack app is keyed by env, which has no value"),
         "{}",
         r.stderr
     );

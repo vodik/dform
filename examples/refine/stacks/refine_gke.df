@@ -15,7 +15,6 @@
 # nulls until the cluster exists.
 
 edition 2026
-stack refine_gke {}
 provider gke {}
 
 input env: enum("dev", "stg", "prod") = "dev"

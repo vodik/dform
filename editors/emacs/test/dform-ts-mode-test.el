@@ -65,6 +65,15 @@ in a condition does not."
     (should-not (eq (dform-ts-mode-test--face-at "db.postgres[")
                      'dform-reference-face))))
 
+(ert-deftest dform-ts-mode-test-key-face ()
+  "`key' starts a statement: a keyword."
+  (dform-ts-mode-test--ensure-grammar)
+  (with-temp-buffer
+    (insert-file-contents (dform-ts-mode-test--fixture "font-lock.df"))
+    (dform-ts-mode)
+    (font-lock-ensure)
+    (should (eq (dform-ts-mode-test--face-at "key env") 'font-lock-keyword-face))))
+
 (ert-deftest dform-ts-mode-test-doc-comment-face ()
   "A `#|' doc comment gets `font-lock-doc-face'; a plain comment does not."
   (dform-ts-mode-test--ensure-grammar)

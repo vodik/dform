@@ -108,7 +108,7 @@
 ; --- keywords ---------------------------------------------------------------
 
 [
-  "edition" "provider" "stack" "import" "input" "from" "output" "export"
+  "edition" "provider" "key" "import" "input" "from" "output" "export"
   "extern" "persist" "type" "decl" "mixed" "let" "set"
   "module" "instance" "policy" "use" "scenario" "resource" "settings"
 ] @keyword

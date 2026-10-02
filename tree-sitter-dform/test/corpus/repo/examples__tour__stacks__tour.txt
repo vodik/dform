@@ -116,9 +116,9 @@ resource net.subnet "private-${z}" {
 
 # 4. Settings per environment, and a deployment per environment
 #
-# The stack is named `tour`, and keyed by `env`: each value of `env` is a
-# deployment of its own, with its own state, where Terraform would use a
-# workspace or a directory per environment. `dform plan` plans the
+# The stack is named `tour`, after its file, and keyed by `env`: each
+# value of `env` is a deployment of its own, with its own state, where
+# Terraform would use a workspace or a directory per environment. `dform plan` plans the
 # default, `dev`. A settings block is one environment's values, and `cfg`
 # is the block of the environment being planned. The database takes its
 # backups and redundancy from it, and its subnets from a list of every
@@ -136,9 +136,7 @@ resource net.subnet "private-${z}" {
 # The database also has an `input`, `public_db`: a value to give on the
 # command line. It defaults to false, and section 5 keeps it so.
 
-stack tour[env] {}
-
-input env: enum("dev", "prod") = "dev"
+key env: enum("dev", "prod") = "dev"
 
 settings dev {
   backup_days = 1
@@ -191,7 +189,7 @@ deny "a database must not be public" { database: pg } where pg in db.postgres, p
 # has a tag its block does not write. The lines that matter:
 #
 #   $ dform why 'net.vpc["main"].tags.team'
-#   └─ arg("net.vpc", "main", "tags", {team: "shop"}, "normal")   [rank normal, owner r18 (stacks/tour.df:180:1)]
+#   └─ arg("net.vpc", "main", "tags", {team: "shop"}, "normal")   [rank normal, owner r18 (stacks/tour.df:178:1)]
 #        by r18: arg(Type, R, "tags", {team: "shop"}, "normal") :- want(Type, R)
 #        └─ want("net.vpc", "main")   fact, stacks/tour.df:42:1 (want)
 #
@@ -559,11 +557,6 @@ resource iam.policy "connect-${host}" {
   (comment)
   (comment)
   (comment)
-  (stack
-    (dotted_name
-      (identifier))
-    (identifier)
-    (block))
   (input
     (identifier)
     (type

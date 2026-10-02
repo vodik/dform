@@ -407,6 +407,17 @@ fn rows(format: &str, table: &str, text: &str) -> Result<Vec<Row>> {
     }
 }
 
+/// A whole document as one value (`--set k=@FILE`): `yaml`, `json` or
+/// `toml`.
+pub fn document(format: &str, text: &str) -> Result<Value> {
+    match format {
+        "json" => json(&serde_json::from_str(text)?),
+        "yaml" => yaml(serde_yaml::from_str(text)?),
+        "toml" => Ok(toml_value(toml::from_str(text)?)),
+        f => bail!("unknown format {f}"),
+    }
+}
+
 /// A stack config's leaves: (line, dotted path, value). A mapping's nested
 /// mappings are walked to their leaves, as a settings block's objects are;
 /// a CSV one has the columns `path` and `value`.

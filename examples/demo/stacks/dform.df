@@ -4,18 +4,18 @@
 
 edition 2026
 
-# The provider (the mock's built-in fake schema), and the stack, keyed by env: dform[env=prod]'s state is dform.state/dform/env=prod/.
-# Strict: a plan needing a phase boundary is refused (fresh nulls still flow).
-# Isolated: each env deploys into its own account, so identity's fixed names do not collide.
-# Config: each env's settings are config/dform/{env}.yaml's, a leaf per contribution.
+# The provider (the mock's built-in fake schema). The stack is this file, dform, keyed by env:
+# dform[env=prod]'s state is dform.state/dform/env=prod/. Its settings are dform.toml's [stacks.dform]:
+# strict (a plan needing a phase boundary is refused; fresh nulls still flow), isolated (each env
+# deploys into its own account, so identity's fixed names do not collide), and config (each env's
+# settings are config/dform/{env}.yaml's, a leaf per contribution).
 provider fake {}
-stack dform[env] { unknowns = "strict", isolated = true, config = yaml("config/dform/${env}.yaml") }
 #| The environments: an alias, the enum wherever it is written.
 type environment = enum("dev", "staging", "prod")
-#| The deployment's environment, the stack's key. The default is a @default
-#| contribution; --set env=prod is a normal contribution and wins.
+#| The deployment's environment, the stack's key: `dform plan dform env=prod`
+#| names the deployment, and without one the default is the deployment.
 #| owner: platform
-input env: environment = "staging"
+key env: environment = "staging"
 
 data("zone", "us-test-1a")
 data("zone", "us-test-1b")

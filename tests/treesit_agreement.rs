@@ -93,7 +93,6 @@ const SAME: &[(SyntaxKind, &[&str])] = &[
     (EDITION, &["edition"]),
     (IMPORT, &["import"]),
     (PROVIDER, &["provider"]),
-    (STACK, &["stack"]),
     (INPUT, &["input"]),
     (INPUT_RELATION, &["input_relation"]),
     (OUTPUT_DECL, &["output"]),
@@ -407,6 +406,8 @@ fn edge_cases_agree() {
         "deny \"m\" { a } where q(a)\n",
         "deny \"m\"\n{ a }\n",
         "input relation: string = \"x\"\n",
+        "key env: enum(\"a\", \"b\") = \"a\" check env != \"b\"\nkey(\"x\")\n",
+        "stack app[env] {}\n",
         "input seen(a, b) from facts(\"seen.facts\")\n",
         "p(x) where x = { type: \"a\", input: 1 }\n",
         "p(x) where not { q(x) }, not r(x), x not in xs, not x in net.vpc\n",
@@ -427,20 +428,8 @@ fn edge_cases_agree() {
         "p(\"a\nb\")\n",
         "p(\"$ and $$ and ${x}\") where q(x)\n",
     ];
-    // The `stack NAME[keys]` header the keyed-stacks ticket brings to the
-    // compiler: tree-sitter reads it already, and agrees once the
-    // compiler does.
-    let ahead = [
-        "stack app[env] {}\n",
-        "stack renfry.app[env, region] { backend = \"x\" }\n",
-    ];
-    for src in ahead {
-        let errors = ts_errors(&ts_parse(src));
-        assert!(errors.is_empty(), "{src:?}: {errors:?}");
-    }
-    let compiled = ahead.into_iter().filter(|s| parse(s).errors.is_empty());
     let mut bad = Vec::new();
-    for src in snippets.into_iter().chain(compiled) {
+    for src in snippets {
         let tree = ts_parse(src);
         let compiler = parse(src).errors;
         let ts = ts_errors(&tree);

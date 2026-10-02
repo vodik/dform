@@ -2,3 +2,8 @@
 
 [project]
 name = "pngu"
+
+# Each env deploys into its own project, so a name that does not vary by
+# env does not collide.
+[stacks.pngu]
+isolated = true

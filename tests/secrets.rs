@@ -441,7 +441,7 @@ fn a_secret_reaches_a_public_output_only_through_declassify() {
 /// resource's sensitive attribute (`pass`, a ref to what the provider holds).
 const PRODUCER: &str = r#"edition 2026
 input pw: secret(string)
-stack prod {}
+provider fake {}
 resource leaky.vault v {
   password = p
 } where pw(p)
@@ -556,7 +556,7 @@ fn a_secret_output_reaches_a_sensitive_field_in_another_stack() {
     s.write(
         "stacks/app.df",
         "edition 2026\n\
-         stack app {}\n\
+         provider fake {}\n\
          resource leaky.vault copy {\n\
            backup = p\n\
          } where stack_output(\"prod\", \"pass\", p)\n\
@@ -639,18 +639,13 @@ fn a_persisted_extern_secret_is_held_by_its_provider_never_stored() {
         "fail=k8s.job[\"migrate-v42\"]",
     ])
     .failure();
-    let state = s.read("dform.state/shop.crud_api/state.json");
+    let state = s.read("dform.state/crud_api/state.json");
     assert!(state.contains("\"in_flight\""), "{state}");
     assert!(!state.contains(PASSWORD), "{state}");
     s.run(&["apply"]).success();
     let r = s.run(&["plan", "--out", "plan.json"]).success();
-    assert_eq!(
-        r.summary(),
-        "stack shop.crud_api is undeformed",
-        "{}",
-        r.stdout
-    );
-    s.run(&["controller", "run", "shop.crud_api", "--once"])
+    assert_eq!(r.summary(), "stack crud_api is undeformed", "{}", r.stdout);
+    s.run(&["controller", "run", "crud_api", "--once"])
         .success();
     let mut files = Vec::new();
     stored_files(&s.path("dform.state"), &mut files);
@@ -664,7 +659,7 @@ fn a_persisted_extern_secret_is_held_by_its_provider_never_stored() {
         assert!(!text.contains(PASSWORD), "{path}:\n{text}");
     }
     let state: serde_json::Value =
-        serde_json::from_str(&s.read("dform.state/shop.crud_api/state.json")).unwrap();
+        serde_json::from_str(&s.read("dform.state/crud_api/state.json")).unwrap();
     let answer = &state["externs"][0];
     assert_eq!(
         answer["rows"][0][1]["v"]["label"], "random.password/crud-api-db#2",
@@ -682,7 +677,7 @@ fn a_persisted_extern_secret_is_held_by_its_provider_never_stored() {
     // The provider's world: it keeps the value, and the objects that read
     // it have it.
     let world: serde_json::Value =
-        serde_json::from_str(&s.read("dform.state/shop.crud_api/remote.json")).unwrap();
+        serde_json::from_str(&s.read("dform.state/crud_api/remote.json")).unwrap();
     let r = &world["resources"];
     assert_eq!(
         r["k8s.secret::db_conn"]["materialized"]["stringData.PGPASSWORD"], PASSWORD,
@@ -707,7 +702,7 @@ fn kept_world_documents_hold_a_sensitive_leaf_by_its_digest() {
         "stacks/s.df",
         "edition 2026\n\
          input pw: secret(string)\n\
-         stack s {}\n\
+         provider fake {}\n\
          resource leaky.vault v {\n\
            password = p\n\
          } where pw(p)\n\

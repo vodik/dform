@@ -1,6 +1,8 @@
 //! Typed inputs (DESIGN.org "Typed stack inputs", E §7.1): `input k: T [=
-//! D] [where R]` at the top of a program is the stack's interface, in a
-//! module the instance's (`modules`).
+//! D] [check R]` at the top of a program is the stack's interface, in a
+//! module the instance's (`modules`). `key k: T` is an input the target
+//! gives and whose value names the deployment (R-29, `stack`); an input in
+//! every other respect.
 //!
 //! An input is a cell `(input, Scope, k)` of the attribute aggregate. The
 //! declared default contributes at `@default`; `--set k=v` (an `input(k, v)`
@@ -114,8 +116,9 @@ pub fn has_type(t: &TypeExpr, v: &Value) -> bool {
 }
 
 /// A command-line value read as the input's type: `--set` gives a string,
-/// an int or a bool; an `inet` input parses its string, a `string` input
-/// takes the text of an int or a bool.
+/// an int or a bool, `--set k=@FILE` a document; an `inet` input parses its
+/// string, a `string` input takes the text of an int or a bool, and an
+/// object's fields and a list's elements are read as theirs.
 pub fn coerce(t: &TypeExpr, v: Value) -> Value {
     match (t, v) {
         (TypeExpr::Name(n), Value::Str(s)) if n == "inet" => match crate::value::parse_ipnet(&s) {
@@ -125,7 +128,42 @@ pub fn coerce(t: &TypeExpr, v: Value) -> Value {
         (TypeExpr::Name(n), Value::Int(i)) if n == "string" => Value::Str(i.to_string()),
         (TypeExpr::Name(n), Value::Bool(b)) if n == "string" => Value::Str(b.to_string()),
         (TypeExpr::Apply(n, xs), v) if n == "secret" && xs.len() == 1 => coerce(&xs[0], v),
+        (TypeExpr::Apply(n, xs), Value::List(vs))
+            if (n == "list" || n == "set") && xs.len() == 1 =>
+        {
+            Value::List(vs.into_iter().map(|v| coerce(&xs[0], v)).collect())
+        }
+        (TypeExpr::Object(fs), Value::Obj(m)) => Value::Obj(
+            m.into_iter()
+                .map(|(k, v)| match fs.iter().find(|(f, _)| *f == k) {
+                    Some((_, t)) => {
+                        let v = coerce(t, v);
+                        (k, v)
+                    }
+                    None => (k, v),
+                })
+                .collect(),
+        ),
         (_, v) => v,
+    }
+}
+
+/// A constant term's value: a fact's argument, as `--set k=@FILE.df` and
+/// an `--input-file` give it.
+pub fn ground(t: &Term) -> Option<Value> {
+    match t {
+        Term::Val(v) => Some(v.clone()),
+        Term::List(xs) => xs
+            .iter()
+            .map(ground)
+            .collect::<Option<_>>()
+            .map(Value::List),
+        Term::Obj(m) => m
+            .iter()
+            .map(|(k, x)| Some((k.clone(), ground(x)?)))
+            .collect::<Option<_>>()
+            .map(Value::Obj),
+        _ => None,
     }
 }
 
@@ -270,14 +308,17 @@ pub fn check_required(declared: &[Declared], given: &BTreeSet<String>) -> Result
         .filter(|d| d.scope.is_empty() && d.decl.default.is_none())
         .filter(|d| !given.contains(&d.decl.name))
         .map(|d| {
+            let k = &d.decl.name;
+            let what = if d.decl.key { "key" } else { "input" };
+            let help = match d.decl.key {
+                true => format!("give it with the target, `STACK {k}=...`"),
+                false => format!("give it with `--set {k}=...` or in an `--input-file`"),
+            };
             Diagnostic::error(
                 d.decl.span,
-                format!("input {} is required and has no value", d.decl.name),
+                format!("{what} {k} is required and has no value"),
             )
-            .with_help(format!(
-                "give it with `--set {}=...` or in an `--input-file`",
-                d.decl.name
-            ))
+            .with_help(help)
         })
         .collect();
     if diags.is_empty() {

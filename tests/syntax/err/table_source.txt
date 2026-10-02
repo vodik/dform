@@ -7,5 +7,3 @@ tests/syntax/err/table_source.df:6:31: git takes a repository, a ref and a path:
 tests/syntax/err/table_source.df:7:25: input relation dup: two columns are named name
 tests/syntax/err/table_source.df:8:12: input relation typo: column name: unknown type strng
 tests/syntax/err/table_source.df:11:3: an input relation belongs at the top of the program
-tests/syntax/err/table_source.df:15:13: stack app has no key: its config would be every deployment's
-  help: key it by the inputs that name a deployment, `stack app[env]`, or state the settings in the program

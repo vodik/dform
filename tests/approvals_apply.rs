@@ -9,6 +9,7 @@ use common::Scratch;
 use std::process::Command;
 
 const PROGRAM: &str = include_str!("../examples/approvals/stacks/approvals.df");
+const MANIFEST: &str = include_str!("../examples/approvals/dform.toml");
 const PROD: [&str; 1] = ["env=prod"];
 const NEW_CIDR: [&str; 2] = ["--set", "cidr=10.1.0.0/16"];
 
@@ -31,6 +32,7 @@ fn signer(s: &Scratch, args: &[&str]) -> String {
 /// root, and a plan file of a replace (`plan.json`); returns its digest.
 fn setup(name: &str) -> (Scratch, String) {
     let s = Scratch::project(name);
+    s.write("dform.toml", MANIFEST);
     s.write("stacks/approvals.df", PROGRAM);
     let jwks = signer(&s, &["keygen", "approver.key"]);
     s.write("approvers.jwks.json", &jwks);
@@ -64,7 +66,7 @@ fn token(s: &Scratch, name: &str, digest: &str, extra: &[&str]) {
         "--digest",
         digest,
         "--stack",
-        "approvals.demo",
+        "approvals",
         "--key",
         "env=prod",
     ];
@@ -77,7 +79,7 @@ fn token(s: &Scratch, name: &str, digest: &str, extra: &[&str]) {
 }
 
 fn world(s: &Scratch) -> String {
-    s.read("dform.state/approvals.demo/env=prod/remote.json")
+    s.read("dform.state/approvals/env=prod/remote.json")
 }
 
 #[test]
@@ -203,7 +205,7 @@ fn a_token_for_another_deployment_signer_or_approver_is_refused() {
             "--digest",
             &digest,
             "--stack",
-            "approvals.demo",
+            "approvals",
             "--key",
             "env=staging",
             "--approver",
@@ -214,8 +216,8 @@ fn a_token_for_another_deployment_signer_or_approver_is_refused() {
     let e = refused("staging.json");
     assert!(
         e.contains(
-            "approval by alice: it is for stack approvals.demo[env=staging], and this is \
-             approvals.demo[env=prod]"
+            "approval by alice: it is for stack approvals[env=staging], and this is \
+             approvals[env=prod]"
         ),
         "{e}"
     );
@@ -229,7 +231,7 @@ fn a_token_for_another_deployment_signer_or_approver_is_refused() {
             "--digest",
             &digest,
             "--stack",
-            "approvals.demo",
+            "approvals",
             "--key",
             "env=prod",
             "--approver",

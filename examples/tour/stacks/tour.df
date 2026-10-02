@@ -112,9 +112,9 @@ resource net.subnet "private-${z}" {
 
 # 4. Settings per environment, and a deployment per environment
 #
-# The stack is named `tour`, and keyed by `env`: each value of `env` is a
-# deployment of its own, with its own state, where Terraform would use a
-# workspace or a directory per environment. `dform plan` plans the
+# The stack is named `tour`, after its file, and keyed by `env`: each
+# value of `env` is a deployment of its own, with its own state, where
+# Terraform would use a workspace or a directory per environment. `dform plan` plans the
 # default, `dev`. A settings block is one environment's values, and `cfg`
 # is the block of the environment being planned. The database takes its
 # backups and redundancy from it, and its subnets from a list of every
@@ -132,9 +132,7 @@ resource net.subnet "private-${z}" {
 # The database also has an `input`, `public_db`: a value to give on the
 # command line. It defaults to false, and section 5 keeps it so.
 
-stack tour[env] {}
-
-input env: enum("dev", "prod") = "dev"
+key env: enum("dev", "prod") = "dev"
 
 settings dev {
   backup_days = 1
@@ -190,11 +188,11 @@ deny "a database must not be public" { database: pg } where pg in db.postgres, p
 #   net.vpc["main"].tags = {team: "shop"}
 #     merged from 1 contribution
 #     └─ {team: "shop"}
-#          stacks/tour.df:180  set r.tags = { team: "shop" } where r in resource
+#          stacks/tour.df:178  set r.tags = { team: "shop" } where r in resource
 #          with r = net.vpc["main"]
 #          └─ net.vpc["main"]   stacks/tour.df:42
 #
-# Read it from the top: the tag was added by the statement at line 180 of
+# Read it from the top: the tag was added by the statement at line 178 of
 # this file (section 5's), because the network exists, which line 42 says. The
 # address is the one the plan printed, pasted. The same works for a cidr,
 # a subnet's name or a deny: whatever the plan shows, `why` explains.

@@ -9,7 +9,6 @@
 # To run it, from this directory: README.md.
 
 edition 2026
-stack gke_two_phase {}
 provider gke {}
 
 input env: enum("dev", "stg", "prod") = "dev"

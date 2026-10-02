@@ -24,7 +24,7 @@ const IDENT = /[A-Za-z_][A-Za-z0-9_]*/;
 // The statement keywords: a statement's first token (docs/grammar.md
 // "Tokens"). Anywhere a plain name is expected a keyword is a name.
 const STATEMENT_KEYWORDS = [
-  'edition', 'import', 'provider', 'stack', 'type', 'decl', 'extern',
+  'edition', 'import', 'provider', 'key', 'type', 'decl', 'extern',
   'input', 'output', 'let', 'set', 'export', 'module', 'instance',
   'policy', 'use', 'scenario', 'resource', 'settings', 'deny', 'warn',
 ];
@@ -106,7 +106,6 @@ export default grammar({
       $.edition,
       $.import,
       $.provider,
-      $.stack,
       $.input,
       $.input_relation,
       $.output,
@@ -133,8 +132,8 @@ export default grammar({
 
     import: $ => seq('import', field('path', $.string)),
 
-    // A provider's or stack's block takes no clause; the compiler's
-    // resolver says so, so the grammar takes one as the parser does.
+    // A provider's block takes no clause; the compiler's resolver says
+    // so, so the grammar takes one as the parser does.
     provider: $ => seq(
       'provider',
       field('name', $._word),
@@ -142,16 +141,9 @@ export default grammar({
       optional($.clause),
     ),
 
-    stack: $ => seq(
-      'stack',
-      field('name', $.dotted_name),
-      optional(seq('[', commaSep1(field('key', $._word)), ']')),
-      field('body', $.block),
-      optional($.clause),
-    ),
-
+    // `input k: T`, or `key k: T`: an input the target gives (R-29).
     input: $ => seq(
-      'input',
+      choice('input', 'key'),
       field('name', $._word),
       ':',
       field('type', $._type),
@@ -300,8 +292,8 @@ export default grammar({
       optional($.clause),
     ),
 
-    // A resource's, settings row's, instance's, provider's or stack's
-    // entries, separated by a newline or a comma. Its clause follows it.
+    // A resource's, settings row's, instance's or provider's entries,
+    // separated by a newline or a comma. Its clause follows it.
     block: $ => seq(
       '{',
       repeat($._newline),
@@ -503,7 +495,7 @@ export default grammar({
 
     // --- tokens --------------------------------------------------------------
 
-    // `name(.name)*` with no spaces: a type, a stack, an extern.
+    // `name(.name)*` with no spaces: a type, an extern.
     dotted_name: $ => seq(
       $._word,
       repeat(seq(token.immediate('.'), alias(token.immediate(IDENT), $.identifier))),

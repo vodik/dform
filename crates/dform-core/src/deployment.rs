@@ -114,7 +114,7 @@ pub struct Loaded {
     pub program: Program,
     /// The input relations, as declared.
     pub relations: Vec<Relation>,
-    /// The `stack` and `provider` statements over the manifest's defaults.
+    /// The stack's settings (dform.toml's) and its `provider` statements.
     pub cfg: stack::Stack,
     /// The stack's name.
     pub stack: String,
@@ -154,13 +154,11 @@ pub fn load(t: &Target, version: &str, read: Reader, obs: &mut dyn Observer) -> 
             )));
         }
     }
-    // `stack` and `provider` statements, over the manifest's defaults.
-    if let Some(m) = &manifest {
-        with_default_unknowns(&mut program, m);
-    }
+    // The stack's settings (the loader's, from the manifest) and its
+    // `provider` statements, their sources the manifest's.
     let mut cfg = stack::config(&program)?;
     if let Some(m) = &manifest {
-        with_manifest(&mut cfg, m, first);
+        with_manifest(&mut cfg, m);
     }
     let stack = cfg.name.clone().unwrap_or_else(|| state::stack_name(first));
     let providers = if t.providers.is_empty() {
@@ -268,6 +266,12 @@ impl Loaded {
         }
         let root = sel.root.clone();
         let base = stack_location(&root, &self.stack, self.cfg.backend.as_ref());
+        let keyed = deployment_location(
+            &root,
+            &self.stack,
+            self.cfg.backend.as_ref(),
+            instance.segment().as_deref(),
+        );
         // The deployment's own directory under the state root: its world's
         // when its state is in a bucket (the world is the provider's).
         let home = instance.dir(&root.join(&self.stack));
@@ -277,7 +281,7 @@ impl Loaded {
         };
         let location = match &handed {
             Some((_, loc)) => loc.clone(),
-            None => base.child(instance.segment().as_deref()),
+            None => keyed,
         };
         let mut paths = match &sel.world {
             Some(w) => state::world_paths(&root, w),
@@ -1152,37 +1156,15 @@ pub fn value_of(raw: &str) -> Value {
     }
 }
 
-/// The manifest's `unknowns` default, said in the program's stack
-/// statement when it does not say its own: strict mode is the program's
-/// (`transform::STRICT_RULES`).
-fn with_default_unknowns(program: &mut Program, m: &Manifest) {
-    let Some(u) = &m.defaults.unknowns else {
-        return;
-    };
-    for s in &mut program.statements {
-        if let Stmt::Stack(c) = s
-            && !c.config.iter().any(|(k, _, _)| k == "unknowns")
-        {
-            c.config
-                .push(("unknowns".into(), Term::Val(Value::Str(u.clone())), c.span));
-        }
-    }
-}
-
 /// The manifest under the program's own statements: a provider named
-/// without a `source` takes the manifest's entry of that name, and a stack
-/// statement that does not say its backend takes the manifest's default.
-pub fn with_manifest(cfg: &mut stack::Stack, m: &Manifest, file: &Path) {
+/// without a `source` takes the manifest's entry of that name.
+pub fn with_manifest(cfg: &mut stack::Stack, m: &Manifest) {
     for p in &mut cfg.providers {
         if !p.contains('/')
             && let Some(src) = m.provider_source(p)
         {
             *p = src;
         }
-    }
-    let name = cfg.name.clone().unwrap_or_else(|| state::stack_name(file));
-    if cfg.backend.is_none() {
-        cfg.backend = m.backend(&name);
     }
 }
 
@@ -1285,6 +1267,29 @@ fn catalog_scope(
             .filter_map(|k| state::parse_key(k).map(|a| a.typ)),
     );
     Some(named)
+}
+
+/// Where the deployment of `stack` whose key is `seg` (`env=prod`, as
+/// [`Instance::segment`] prints it) is: under its stack's location, or,
+/// when the backend names the key (`s3("acme", "shop/{env}")`), where it
+/// says.
+pub fn deployment_location(
+    root: &Path,
+    stack: &str,
+    backend: Option<&stack::Backend>,
+    seg: Option<&str>,
+) -> Location {
+    let key: Vec<(String, String)> = seg
+        .into_iter()
+        .flat_map(|s| s.split(','))
+        .filter_map(|kv| kv.split_once('='))
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+    match backend.map(|b| stack::keyed_backend(b, &key)) {
+        Some((b, true)) => stack_location(root, stack, Some(&b)),
+        Some((b, false)) => stack_location(root, stack, Some(&b)).child(seg),
+        None => stack_location(root, stack, None).child(seg),
+    }
 }
 
 /// Where a stack's deployments are: its backend's location, else its

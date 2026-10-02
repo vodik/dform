@@ -5,21 +5,23 @@
 //!
 //! The manifest is per project and small: `[project]` (a name, and the
 //! dform versions it takes), `[providers]` (each provider's source and
-//! version constraint, Cargo's semver syntax), `[defaults]` (a backend
-//! template and `unknowns`, which a stack statement overrides) and
+//! version constraint, Cargo's semver syntax), `[stacks.NAME]` (the
+//! stack's operational settings: where its state lives, who approves),
+//! `[defaults]` (what a stack's table does not say, and the lease) and
 //! `[discovery]` (globs discovery skips). Programs stay in `.df` files: a
 //! `provider NAME { ... }` block keeps its configuration and takes its
-//! source from the manifest's entry of that name. Nothing per deployment
-//! lives here: no inputs, keys or settings. Policy reads the manifest as
-//! facts, `project_provider(Name, Constraint)` and
-//! `project_default(Key, Value)`.
+//! source from the manifest's entry of that name. No inputs, and no key
+//! values: a deployment is named by its target. Policy reads the manifest
+//! as facts, `project_provider(Name, Constraint)`,
+//! `project_default(Key, Value)` and `project_stack(Name, Key, Value)`.
 //!
-//! Discovery walks the project for `.df` files: every file with a `stack`
-//! statement is a stack, and stack names are unique per project. A
-//! directory holding its own `dform.toml` is another project and is not
-//! walked. The layout is linted: a module or policy file with a `stack`
-//! statement is an error, and a `.df` outside the layout's directories is a
-//! warning.
+//! Discovery (R-29): a stack is a file, named after itself. With a
+//! `stacks/` directory at the root, its `.df` files are the stacks and a
+//! `.df` at the root is outside the layout; without one, the root's `.df`
+//! files are. A stack's keys are its `key` statements. A directory
+//! holding its own `dform.toml` is another project and is not walked.
+//! The layout is linted: a module or policy file with a `key` is an
+//! error, and a `.df` outside the layout's directories is a warning.
 
 use crate::ast::{Atom, Term};
 use crate::value::Value;
@@ -27,6 +29,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use toml::Spanned;
 
 /// The manifest's file name; its directory is the project root.
 pub const MANIFEST: &str = "dform.toml";
@@ -176,6 +179,9 @@ pub struct Manifest {
     pub providers: BTreeMap<String, ProviderEntry>,
     #[serde(default)]
     pub defaults: Defaults,
+    /// `[stacks.NAME]`: the stack `NAME.df`'s settings.
+    #[serde(default)]
+    pub stacks: BTreeMap<String, StackTable>,
     #[serde(default)]
     pub discovery: DiscoveryConfig,
     #[serde(default)]
@@ -183,6 +189,9 @@ pub struct Manifest {
     /// The project root (the manifest's directory).
     #[serde(skip)]
     pub root: PathBuf,
+    /// The manifest's text, which the spans of its values index.
+    #[serde(skip)]
+    pub text: String,
 }
 
 /// `[remotes] NAME = { backend = "TERM" }`: another project whose stacks'
@@ -241,20 +250,101 @@ impl ProviderEntry {
     }
 }
 
-/// `[defaults]`: what a stack statement that does not say takes.
+/// `[defaults]`: what a stack's `[stacks.NAME]` does not say, and the
+/// lease. Its settings are a stack table's.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Defaults {
     /// `local("DIR")`, DIR relative to the project root, or
     /// `s3("BUCKET", "PREFIX", {endpoint: "URL", region: "R"})`; `{stack}`
     /// the stack's name.
-    pub backend: Option<String>,
-    /// `strict` or `permissive`.
-    pub unknowns: Option<String>,
+    pub backend: Option<Spanned<String>>,
+    pub unknowns: Option<Spanned<String>>,
+    pub role: Option<Spanned<String>>,
+    pub approvals: Option<Spanned<String>>,
+    pub audit_sink: Option<Spanned<String>>,
+    pub isolated: Option<Spanned<bool>>,
+    pub config: Option<Spanned<String>>,
     /// How long an `s3` backend's lease lasts (`60s`; `500ms`, `2m`).
     pub lease_duration: Option<String>,
     /// How often its holder renews it (`20s`), less than the duration.
     pub lease_renewal: Option<String>,
+}
+
+/// `[stacks.NAME]`: a stack's operational settings (docs/grammar.md
+/// "Stack settings"), a closed list. A term is written as a string:
+/// `backend = 's3("acme", "shop/{env}")'`, `{stack}` the stack's name and
+/// `{k}` the value of its key `k`.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StackTable {
+    /// Where its state lives: `local("DIR")` or `s3(..)`.
+    pub backend: Option<Spanned<String>>,
+    /// `strict` or `permissive`.
+    pub unknowns: Option<Spanned<String>>,
+    /// `bootstrap`: it creates what a controller runs in.
+    pub role: Option<Spanned<String>>,
+    /// Whose signatures approve a plan: `jwks(..)`, `jwks_file(..)`, a
+    /// list of them.
+    pub approvals: Option<Spanned<String>>,
+    /// A command each audit log entry is also piped to.
+    pub audit_sink: Option<Spanned<String>>,
+    /// Each key value deploys into its own account.
+    pub isolated: Option<Spanned<bool>>,
+    /// A document of the deployment's settings: `yaml("config/{env}.yaml")`.
+    pub config: Option<Spanned<String>>,
+}
+
+/// The settings a stack table holds, as text: a term's (`backend`,
+/// `approvals`, `config`), else a plain value's.
+pub const STACK_SETTINGS: &[&str] = &[
+    "backend",
+    "unknowns",
+    "role",
+    "approvals",
+    "audit_sink",
+    "isolated",
+    "config",
+];
+
+/// A stack setting's value as the manifest writes it.
+#[derive(Debug, Clone)]
+pub enum SettingText {
+    Str(Spanned<String>),
+    Bool(Spanned<bool>),
+}
+
+impl StackTable {
+    /// Its settings, each by name, in [`STACK_SETTINGS`]' order.
+    fn settings(&self) -> Vec<(&'static str, SettingText)> {
+        let s = |v: &Option<Spanned<String>>| v.clone().map(SettingText::Str);
+        [
+            ("backend", s(&self.backend)),
+            ("unknowns", s(&self.unknowns)),
+            ("role", s(&self.role)),
+            ("approvals", s(&self.approvals)),
+            ("audit_sink", s(&self.audit_sink)),
+            ("isolated", self.isolated.clone().map(SettingText::Bool)),
+            ("config", s(&self.config)),
+        ]
+        .into_iter()
+        .filter_map(|(k, v)| Some((k, v?)))
+        .collect()
+    }
+}
+
+impl Defaults {
+    fn table(&self) -> StackTable {
+        StackTable {
+            backend: self.backend.clone(),
+            unknowns: self.unknowns.clone(),
+            role: self.role.clone(),
+            approvals: self.approvals.clone(),
+            audit_sink: self.audit_sink.clone(),
+            isolated: self.isolated.clone(),
+            config: self.config.clone(),
+        }
+    }
 }
 
 /// `[discovery]`.
@@ -269,18 +359,15 @@ pub struct DiscoveryConfig {
 
 impl Manifest {
     /// Read and check `path`: every version requirement parses, the
-    /// running dform (`version`) meets the project's, and the defaults are
-    /// ones a stack statement could say.
+    /// running dform (`version`) meets the project's, and the settings are
+    /// ones a stack could have.
     pub fn load(path: &Path, version: &str) -> Result<Manifest> {
         let text =
             std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-        let mut m: Manifest =
-            toml::from_str(&text).map_err(|e| anyhow!("{}: {}", path.display(), e.message()))?;
-        m.root = path.parent().unwrap_or(Path::new("")).to_path_buf();
-        let at = |key: &str| format!("{}: {key}", path.display());
+        let m = Manifest::parse(path, &text)?;
         if let Some(req) = &m.project.dform {
-            let r = semver::VersionReq::parse(req)
-                .map_err(|e| anyhow!("{} = {req:?}: {e}", at("[project] dform")))?;
+            let at = format!("{}: [project] dform", path.display());
+            let r = semver::VersionReq::parse(req).map_err(|e| anyhow!("{at} = {req:?}: {e}"))?;
             let v = semver::Version::parse(version)
                 .map_err(|e| anyhow!("internal: dform's version {version}: {e}"))?;
             if !r.matches(&v) {
@@ -290,6 +377,17 @@ impl Manifest {
                 );
             }
         }
+        Ok(m)
+    }
+
+    /// The manifest `text` of `path`, checked but for the dform version it
+    /// requires.
+    pub fn parse(path: &Path, text: &str) -> Result<Manifest> {
+        let mut m: Manifest =
+            toml::from_str(text).map_err(|e| anyhow!("{}: {}", path.display(), e.message()))?;
+        m.root = path.parent().unwrap_or(Path::new("")).to_path_buf();
+        m.text = text.to_string();
+        let at = |key: &str| format!("{}: {key}", path.display());
         for (name, p) in &m.providers {
             if let Some(req) = p.version() {
                 semver::VersionReq::parse(req).map_err(|e| {
@@ -300,24 +398,35 @@ impl Manifest {
                 })?;
             }
         }
-        if let Some(u) = &m.defaults.unknowns
-            && u != "strict"
-            && u != "permissive"
-        {
-            bail!(
-                "{} = {u:?}: `strict` or `permissive`",
-                at("[defaults] unknowns")
-            );
-        }
-        if let Some(b) = &m.defaults.backend
-            && crate::stack::parse_backend(&b.replace("{stack}", "stack")).is_err()
-        {
-            bail!(
-                "{} = {b:?}: the backends are `local(\"DIR\")`, DIR relative to the \
-                 project root, and `s3(\"BUCKET\", \"PREFIX\", {{endpoint: \"URL\", \
-                 region: \"R\"}})`; `{{stack}}` is the stack's name",
-                at("[defaults] backend")
-            );
+        let tables = std::iter::once(("[defaults]".to_string(), m.defaults.table())).chain(
+            m.stacks
+                .iter()
+                .map(|(n, t)| (format!("[stacks.{n}]"), t.clone())),
+        );
+        for (table, t) in tables {
+            if let Some(u) = &t.unknowns
+                && u.get_ref() != "strict"
+                && u.get_ref() != "permissive"
+            {
+                bail!(
+                    "{} = {:?}: `strict` or `permissive`",
+                    at(&format!("{table} unknowns")),
+                    u.get_ref()
+                );
+            }
+            if let Some(b) = &t.backend
+                && let Err(e) =
+                    crate::stack::parse_backend(&b.get_ref().replace("{stack}", "stack"))
+            {
+                bail!(
+                    "{} = {:?}: {e}; the backends are `local(\"DIR\")`, DIR relative to \
+                     the project root, and `s3(\"BUCKET\", \"PREFIX\", {{endpoint: \"URL\", \
+                     region: \"R\"}})`; `{{stack}}` is the stack's name, `{{k}}` its key k's \
+                     value",
+                    at(&format!("{table} backend")),
+                    b.get_ref()
+                );
+            }
         }
         for (key, v) in [
             ("lease_duration", &m.defaults.lease_duration),
@@ -383,9 +492,16 @@ impl Manifest {
                 .map_or("*".to_string(), |r| r.to_string());
             out.push(atom("project_provider", vec![s(name), s(&req)]));
         }
+        let text = |v: &SettingText| match v {
+            SettingText::Str(v) => Value::Str(v.get_ref().clone()),
+            SettingText::Bool(v) => Value::Bool(*v.get_ref()),
+        };
+        for (k, v) in self.defaults.table().settings() {
+            if let Value::Str(v) = text(&v) {
+                out.push(atom("project_default", vec![s(k), s(&v)]));
+            }
+        }
         for (k, v) in [
-            ("backend", &self.defaults.backend),
-            ("unknowns", &self.defaults.unknowns),
             ("lease_duration", &self.defaults.lease_duration),
             ("lease_renewal", &self.defaults.lease_renewal),
         ] {
@@ -393,7 +509,30 @@ impl Manifest {
                 out.push(atom("project_default", vec![s(k), s(v)]));
             }
         }
+        for (name, t) in &self.stacks {
+            for (k, v) in t.settings() {
+                out.push(atom(
+                    "project_stack",
+                    vec![s(name), s(k), Term::Val(text(&v))],
+                ));
+            }
+        }
         out
+    }
+
+    /// The settings of the stack `name`: `[stacks.NAME]`'s, else
+    /// `[defaults]`'.
+    pub fn stack_settings(&self, name: &str) -> Vec<(&'static str, SettingText)> {
+        let own = self
+            .stacks
+            .get(name)
+            .map(StackTable::settings)
+            .unwrap_or_default();
+        let defaults = self.defaults.table().settings();
+        STACK_SETTINGS
+            .iter()
+            .filter_map(|k| own.iter().chain(&defaults).find(|(x, _)| x == k).cloned())
+            .collect()
     }
 
     /// The provider `name`'s source as `--provider` takes it, when the
@@ -417,7 +556,12 @@ impl Manifest {
     /// The default backend of `stack` (a `local` directory relative to
     /// the project root).
     pub fn backend(&self, stack: &str) -> Option<crate::stack::Backend> {
-        let text = self.defaults.backend.as_deref()?.replace("{stack}", stack);
+        let text = self
+            .defaults
+            .backend
+            .as_ref()?
+            .get_ref()
+            .replace("{stack}", stack);
         crate::stack::parse_backend(&text).ok()
     }
 
@@ -471,8 +615,8 @@ impl Discovered {
         self.stacks.iter().filter(|s| s.name == name).collect()
     }
 
-    /// Fails listing the errors (two stacks of one name, a module file
-    /// with a `stack` statement), if there are any.
+    /// Fails listing the errors (a module file with a `key`, a
+    /// `[stacks.NAME]` no file is), if there are any.
     pub fn check(&self) -> Result<()> {
         if self.errors.is_empty() {
             return Ok(());
@@ -481,35 +625,43 @@ impl Discovered {
     }
 }
 
-/// Walk `project` for its stacks. Files are named relative to the working
-/// directory when under it (as diagnostics name them).
+/// The directory a project's stacks are in (docs/layout.md).
+pub const STACKS_DIR: &str = "stacks";
+
+/// Walk `project` for its stacks: `stacks/*.df`, or, with no `stacks/`,
+/// the root's `.df` files, each named after itself. Files are named
+/// relative to the working directory when under it (as diagnostics name
+/// them).
 pub fn discover(project: &Project) -> Discovered {
     let mut files = Vec::new();
     let exclude = project.manifest.discovery.exclude.as_slice();
     walk(&project.root, &project.root, exclude, &mut files);
     files.sort();
+    let in_dir = project.root.join(STACKS_DIR).is_dir();
     let mut out = Discovered::default();
     for f in files {
         let rel = f.strip_prefix(&project.root).unwrap_or(&f).to_path_buf();
-        let Ok(text) = std::fs::read_to_string(&f) else {
-            continue;
-        };
-        let parse = crate::syntax::parser::parse(&text);
-        if !parse.errors.is_empty() {
-            continue;
-        }
-        let header = crate::syntax::resolve::stack_header(&parse.syntax());
         let first = rel
             .components()
             .next()
             .and_then(|c| c.as_os_str().to_str())
             .unwrap_or_default()
             .to_string();
-        let top = rel.components().count() > 1;
-        if header.is_some() && top && (first == "modules" || first == "policies") {
+        let depth = rel.components().count();
+        let stack = match in_dir {
+            true => depth == 2 && first == STACKS_DIR,
+            false => depth == 1,
+        };
+        let keys = std::fs::read_to_string(&f)
+            .ok()
+            .map(|text| crate::syntax::parser::parse(&text))
+            .filter(|p| p.errors.is_empty())
+            .map(|p| crate::syntax::resolve::key_names(&p.syntax()))
+            .unwrap_or_default();
+        if !keys.is_empty() && depth > 1 && (first == "modules" || first == "policies") {
             out.errors.push(format!(
-                "{}: a {} file has a `stack` statement; a stack is its own file, \
-                 stacks/<name>.df (docs/layout.md)",
+                "{}: a {} file has a `key`; a key selects a stack's deployment, so it is \
+                 declared in the stack's own file, stacks/<name>.df (docs/layout.md)",
                 display(&f),
                 if first == "modules" {
                     "module"
@@ -518,34 +670,32 @@ pub fn discover(project: &Project) -> Discovered {
                 }
             ));
         }
-        if !top || !LAYOUT_DIRS.contains(&first.as_str()) {
+        if !stack && (depth == 1 || !LAYOUT_DIRS.contains(&first.as_str())) {
             out.warnings.push(format!(
                 "{} is outside the project layout ({}/ under the root; docs/layout.md)",
                 display(&f),
                 LAYOUT_DIRS.join("/, ")
             ));
         }
-        if let Some((name, keys)) = header {
+        if stack {
             out.stacks.push(Found {
-                name,
+                name: crate::state::stack_name(&f),
                 keys,
                 file: PathBuf::from(display(&f)),
             });
         }
     }
-    let mut by: BTreeMap<&str, Vec<&Found>> = BTreeMap::new();
-    for s in &out.stacks {
-        by.entry(&s.name).or_default().push(s);
-    }
-    for (name, fs) in by.iter().filter(|(_, fs)| fs.len() > 1) {
-        out.errors.push(format!(
-            "stack {name} is stated by {} files; a stack name is unique in its project: {}",
-            fs.len(),
-            fs.iter()
-                .map(|f| f.file.display().to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        ));
+    for name in project.manifest.stacks.keys() {
+        if out.named(name).is_empty() {
+            let file = match in_dir {
+                true => format!("{STACKS_DIR}/{name}.df"),
+                false => format!("{name}.df"),
+            };
+            out.errors.push(format!(
+                "{}: [stacks.{name}] names no stack: there is no {file}",
+                display(&project.root.join(MANIFEST)),
+            ));
+        }
     }
     out
 }

@@ -23,7 +23,7 @@
 ;; - Indentation, translated from tree-sitter-dform/queries/indents.scm,
 ;;   matching `dform fmt' (docs/grammar.md "Formatting").
 ;; - Imenu for rules (by head predicate), modules, instances, resources
-;;   (by type and name), stacks and policies, and defun navigation
+;;   (by type and name) and policies, and defun navigation
 ;;   (`C-M-a', `C-M-e', `C-M-h') over the same node types.
 ;; - An `eglot-server-programs' entry for `dform lsp' and two commands,
 ;;   `dform-select-environment' and `dform-why-at-point', wired to
@@ -246,7 +246,7 @@ apply-order edge, not its content read now (`docs/grammar.md'
    :language 'dform
    :feature 'keyword
    '([
-      "edition" "provider" "stack" "import" "input" "from" "output" "export"
+      "edition" "provider" "key" "import" "input" "from" "output" "export"
       "extern" "persist" "type" "decl" "mixed" "let" "set"
       "module" "instance" "policy" "use" "scenario" "resource" "settings"
       ] @font-lock-keyword-face
@@ -300,15 +300,15 @@ apply-order edge, not its content read now (`docs/grammar.md'
 ;;; Navigation and imenu
 
 (defvar dform-ts-mode--defun-type-regexp
-  (regexp-opt '("rule" "fact" "module" "instance" "resource" "stack" "policy"))
+  (regexp-opt '("rule" "fact" "module" "instance" "resource" "policy"))
   "Regexp matching node types treated as defuns in `dform-ts-mode'.")
 
 (defun dform-ts-mode--defun-name (node)
   "Return a name for NODE, a dform defun node, or nil.
 
 Rules and facts are named by their head predicate; resources by
-type and name; everything else (modules, instances, stacks,
-policies) by its `name' field."
+type and name; everything else (modules, instances, policies) by
+its `name' field."
   (pcase (treesit-node-type node)
     ((or "rule" "fact")
      (when-let* ((head (treesit-node-child-by-field-name node "head")))
@@ -329,7 +329,6 @@ policies) by its `name' field."
     ("Module" "\\`module\\'" nil nil)
     ("Instance" "\\`instance\\'" nil nil)
     ("Resource" "\\`resource\\'" nil nil)
-    ("Stack" "\\`stack\\'" nil nil)
     ("Policy" "\\`policy\\'" nil nil))
   "`treesit-simple-imenu-settings' for `dform-ts-mode'.")
 

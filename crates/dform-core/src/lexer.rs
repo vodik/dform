@@ -115,7 +115,7 @@ pub const KEYWORDS: &[(&str, SyntaxKind)] = &[
     ("edition", EDITION_KW),
     ("import", IMPORT_KW),
     ("provider", PROVIDER_KW),
-    ("stack", STACK_KW),
+    ("key", KEY_KW),
     ("type", TYPE_KW),
     ("decl", DECL_KW),
     ("extern", EXTERN_KW),

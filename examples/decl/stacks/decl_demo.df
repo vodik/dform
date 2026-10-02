@@ -2,7 +2,6 @@
 # To run it, from this directory: README.md.
 
 edition 2026
-stack decl_demo {}
 # The names are the record's fields: `project{ network_name: n }`.
 decl project(id: int, name: string, region: string, network_name: string, proxy_cidr: string)
 

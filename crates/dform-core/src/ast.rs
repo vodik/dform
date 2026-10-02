@@ -123,7 +123,9 @@ pub enum Stmt {
     InputRelation(InputRelation),
     /// An output's declaration (`k: T`) or its value (`k = term`).
     Output(OutputDecl),
-    /// `stack name { ... }`: the stack this program owns (`stack`).
+    /// The stack's settings, `[stacks.NAME]` over `[defaults]` in
+    /// dform.toml, as the loader reads them: never written in a program
+    /// (`stack`).
     Stack(Config),
     /// `provider name { ... }`: a provider the program uses (`stack`).
     Provider(Config),
@@ -266,6 +268,9 @@ pub struct InputDecl {
     pub ty: TypeExpr,
     pub default: Option<Term>,
     pub refinement: Vec<Lit>,
+    /// `key k: T`: the target gives it, never `--set`, and its value names
+    /// the deployment (R-29). An input in every other respect.
+    pub key: bool,
     pub span: Span,
 }
 
@@ -298,9 +303,6 @@ pub struct Scenario {
 #[derive(Debug, Clone)]
 pub struct Config {
     pub name: String,
-    /// `stack app[env, region]`: the inputs that key the stack, each with
-    /// its span. Empty for a provider and an unkeyed stack.
-    pub keys: Vec<(String, Span)>,
     pub config: Vec<(String, Term, Span)>,
     pub span: Span,
 }

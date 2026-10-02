@@ -9,7 +9,7 @@ use common::{Run, Scratch};
 use dform_core::store::{S3Spec, Store};
 use dform_s3::S3Store;
 
-const HANDED: &str = "dform.state/renfry.bootstrap/k8s/dform-system/workload";
+const HANDED: &str = "dform.state/bootstrap/k8s/dform-system/workload";
 
 /// A copy of the project in a scratch directory.
 fn demo(name: &str) -> Scratch {
@@ -29,7 +29,7 @@ fn log(stdout: &str) -> Vec<String> {
 
 fn controller(s: &Scratch) -> Vec<String> {
     let r = s
-        .run(&["controller", "run", "--once", "renfry.workload"])
+        .run(&["controller", "run", "--once", "workload"])
         .success();
     log(&r.stdout)
 }
@@ -117,7 +117,7 @@ impl Bucket {
 
     fn controller(&self, s: &Scratch) -> Vec<String> {
         let r = self
-            .run(s, &["controller", "run", "--once", "renfry.workload"])
+            .run(s, &["controller", "run", "--once", "workload"])
             .success();
         log(&r.stdout)
     }
@@ -149,7 +149,7 @@ fn ticks(stdout: &str) -> Vec<&str> {
 #[test]
 fn a_resource_rule_reading_a_stuck_helper_is_a_pending_group() {
     let s = demo("bootstrap-helper");
-    let r = s.run(&["apply", "renfry.bootstrap"]).success();
+    let r = s.run(&["apply", "bootstrap"]).success();
     let tick2 = r
         .stdout
         .split("tick 2:\n")
@@ -170,7 +170,7 @@ fn a_resource_rule_reading_a_stuck_helper_is_a_pending_group() {
         "{tick2}"
     );
     assert!(r.stdout.ends_with("apply: complete\n"), "{}", r.stdout);
-    let world = s.read("dform.state/renfry.bootstrap/remote.json");
+    let world = s.read("dform.state/bootstrap/remote.json");
     assert!(world.contains("\"dform-controller\""), "{world}");
 }
 
@@ -179,29 +179,29 @@ fn bootstrap_handover_and_the_controller_runs_the_workload() {
     let s = demo("bootstrap");
     // Tick 1 the network and the cluster, tick 2 the node pools and the
     // namespace, tick 3 dform itself.
-    let r = s.run(&["apply", "renfry.bootstrap"]).success();
+    let r = s.run(&["apply", "bootstrap"]).success();
     assert_eq!(
         ticks(&r.stdout),
         ["tick 1:", "tick 2:", "tick 3:"],
         "{}",
         r.stdout
     );
-    let world = s.read("dform.state/renfry.bootstrap/remote.json");
+    let world = s.read("dform.state/bootstrap/remote.json");
     assert!(world.contains("\"dform-controller\""), "{world}");
     assert!(
-        world.contains("\"run\",\n") && world.contains("\"renfry.workload\""),
+        world.contains("\"run\",\n") && world.contains("\"workload\""),
         "{world}"
     );
-    let r = s.run(&["plan", "renfry.bootstrap"]).success();
-    assert_eq!(r.summary(), "stack renfry.bootstrap is undeformed");
+    let r = s.run(&["plan", "bootstrap"]).success();
+    assert_eq!(r.summary(), "stack bootstrap is undeformed");
 
     // The bootstrap stack stays batch.
     let r = s
-        .run(&["controller", "run", "--once", "renfry.bootstrap"])
+        .run(&["controller", "run", "--once", "bootstrap"])
         .failure();
     assert!(
         r.stderr.contains(
-            "stack renfry.bootstrap is role = bootstrap: it stays batch, and the controller never runs it"
+            "stack bootstrap is role = bootstrap: it stays batch, and the controller never runs it"
         ),
         "{}",
         r.stderr
@@ -212,11 +212,11 @@ fn bootstrap_handover_and_the_controller_runs_the_workload() {
     let b = Bucket::new("bootstrap");
     let to = b.term("workload");
     let r = b
-        .run(&s, &["stack", "handover", "renfry.workload", "--to", &to])
+        .run(&s, &["stack", "handover", "workload", "--to", &to])
         .success();
     assert!(
         r.stdout
-            .starts_with(&format!("stack renfry.workload handed over to {to}: s3://")),
+            .starts_with(&format!("stack workload handed over to {to}: s3://")),
         "{}",
         r.stdout
     );
@@ -236,27 +236,27 @@ fn bootstrap_handover_and_the_controller_runs_the_workload() {
         [
             "event start",
             "tick 1: plan: 3 deformations (3 create)",
-            "stack renfry.workload is undeformed",
+            "stack workload is undeformed",
         ]
     );
     let keys = b.store("workload").list("").unwrap();
     for k in ["state.json", "state.key", "controller.json"] {
         assert!(keys.iter().any(|x| x == k), "{k} in {keys:?}");
     }
-    let world = "dform.state/renfry.workload/remote.json";
+    let world = "dform.state/workload/remote.json";
     assert!(s.read(world).contains("gcr.io/renfry/web:1.0"));
-    assert!(!s.path("dform.state/renfry.workload/state.json").exists());
+    assert!(!s.path("dform.state/workload/state.json").exists());
     // A batch apply of a handed-over stack is refused; plan still reads it.
-    let r = b.run(&s, &["apply", "renfry.workload"]).failure();
+    let r = b.run(&s, &["apply", "workload"]).failure();
     assert!(
         r.stderr.contains(&format!(
-            "stack renfry.workload was handed over to {to}: the controller runs it"
+            "stack workload was handed over to {to}: the controller runs it"
         )),
         "{}",
         r.stderr
     );
-    let r = b.run(&s, &["plan", "renfry.workload"]).success();
-    assert_eq!(r.summary(), "stack renfry.workload is undeformed");
+    let r = b.run(&s, &["plan", "workload"]).success();
+    assert_eq!(r.summary(), "stack workload is undeformed");
 
     // A release: deployed.
     edit(&s, "data/release.facts", "web:1.0", "web:1.1");
@@ -266,7 +266,7 @@ fn bootstrap_handover_and_the_controller_runs_the_workload() {
             "input release changed (file data/release.facts)",
             "event input release",
             "tick 1: plan: 1 deformation (1 update)",
-            "stack renfry.workload is undeformed",
+            "stack workload is undeformed",
         ]
     );
     assert!(s.read(world).contains("gcr.io/renfry/web:1.1"));
@@ -279,7 +279,7 @@ fn bootstrap_handover_and_the_controller_runs_the_workload() {
             &format!("event world {world} changed"),
             "drift k8s.deployment[\"web\"].spec.replicas: 3 -> 5 (auto_reconcile)",
             "tick 1: plan: 1 deformation (1 update)",
-            "stack renfry.workload is undeformed",
+            "stack workload is undeformed",
         ]
     );
     edit(
@@ -298,7 +298,7 @@ fn bootstrap_handover_and_the_controller_runs_the_workload() {
             "tick 1: plan: 1 deformation (1 update)",
             "tick 1: proceed: held, drift at spec.template.spec.containers[0].image needs \
              approval: k8s.deployment[\"web\"]",
-            "stack renfry.workload is deformed: k8s.deployment[\"web\"] held",
+            "stack workload is deformed: k8s.deployment[\"web\"] held",
         ]
     );
     let w = s.read(world);
@@ -313,7 +313,7 @@ fn handover_needs_one_bootstrap_stack_and_an_empty_target() {
     let s = demo("handover-errors");
     let to = "k8s(\"dform-system/workload\")";
     let r = s
-        .run(&["stack", "handover", "renfry.workload", "--to", to])
+        .run(&["stack", "handover", "workload", "--to", to])
         .failure();
     assert!(
         r.stderr
@@ -321,9 +321,9 @@ fn handover_needs_one_bootstrap_stack_and_an_empty_target() {
         "{}",
         r.stderr
     );
-    s.run(&["apply", "renfry.bootstrap"]).success();
+    s.run(&["apply", "bootstrap"]).success();
     let r = s
-        .run(&["stack", "handover", "renfry.bootstrap", "--to", to])
+        .run(&["stack", "handover", "bootstrap", "--to", to])
         .failure();
     assert!(
         r.stderr
@@ -332,7 +332,7 @@ fn handover_needs_one_bootstrap_stack_and_an_empty_target() {
         r.stderr
     );
     let r = s
-        .run(&["stack", "handover", "renfry.workload", "--to", "s3(\"x\")"])
+        .run(&["stack", "handover", "workload", "--to", "s3(\"x\")"])
         .failure();
     assert!(
         r.stderr
@@ -341,7 +341,7 @@ fn handover_needs_one_bootstrap_stack_and_an_empty_target() {
         r.stderr
     );
     let r = s
-        .run(&["stack", "handover", "renfry.workload", "--to", "gcs(\"x\")"])
+        .run(&["stack", "handover", "workload", "--to", "gcs(\"x\")"])
         .failure();
     assert!(
         r.stderr.contains("unknown backend gcs(\"x\")"),
@@ -350,7 +350,7 @@ fn handover_needs_one_bootstrap_stack_and_an_empty_target() {
     );
     s.write(&format!("{HANDED}/state.json"), "{}");
     let r = s
-        .run(&["stack", "handover", "renfry.workload", "--to", to])
+        .run(&["stack", "handover", "workload", "--to", to])
         .failure();
     assert!(
         r.stderr.contains("is not empty: it holds state.json"),
@@ -360,11 +360,11 @@ fn handover_needs_one_bootstrap_stack_and_an_empty_target() {
     // Emptied, the in-cluster stand-in takes it, and the controller runs
     // it there.
     std::fs::remove_file(s.path(&format!("{HANDED}/state.json"))).unwrap();
-    s.run(&["stack", "handover", "renfry.workload", "--to", to])
+    s.run(&["stack", "handover", "workload", "--to", to])
         .success();
     assert_eq!(
         controller(&s).last().unwrap(),
-        "stack renfry.workload is undeformed"
+        "stack workload is undeformed"
     );
     assert!(s.path(&format!("{HANDED}/state.json")).exists());
     assert!(s.path(&format!("{HANDED}/remote.json")).exists());
@@ -376,22 +376,16 @@ fn handover_moves_applied_state_to_a_local_backend() {
     // The workload, run by a controller where it is, then moved.
     assert_eq!(
         controller(&s).last().unwrap(),
-        "stack renfry.workload is undeformed"
+        "stack workload is undeformed"
     );
-    assert!(s.path("dform.state/renfry.workload/state.json").exists());
-    s.run(&[
-        "stack",
-        "handover",
-        "renfry.workload",
-        "--to",
-        "local(\"moved\")",
-    ])
-    .success();
-    assert!(!s.path("dform.state/renfry.workload").exists());
+    assert!(s.path("dform.state/workload/state.json").exists());
+    s.run(&["stack", "handover", "workload", "--to", "local(\"moved\")"])
+        .success();
+    assert!(!s.path("dform.state/workload").exists());
     assert!(s.path("moved/state.json").exists());
     // Nothing to do from the new place: the state and the memo moved too.
     assert_eq!(
         controller(&s),
-        ["event resync", "stack renfry.workload is undeformed"]
+        ["event resync", "stack workload is undeformed"]
     );
 }

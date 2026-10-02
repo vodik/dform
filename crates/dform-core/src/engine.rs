@@ -3003,11 +3003,11 @@ const REFERENCE: &[Reference] = &[
         "provider aws { region = \"us-east-1\" }",
     ),
     r(
-        "stack",
+        "key",
         Kw,
-        "stack NAME[KEY, ...] { SETTING = VALUE, ... }",
-        "The program's stack, keyed by inputs: each key value is a deployment with its own state.",
-        "stack app[env] { unknowns = \"strict\" }",
+        "key NAME: TYPE (= DEFAULT)? (check BODY)?",
+        "An input the target gives (`dform plan shop env=prod`), never `--set`: each value is a deployment of the stack, with its own state.",
+        "key env: enum(\"dev\", \"prod\") = \"dev\"",
     ),
     r(
         "type",

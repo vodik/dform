@@ -69,10 +69,9 @@ w(v) where m.main.on_vpc(v)
 vpc_inst("main")
 x(i, a_) where vpc_inst(i), output(m[i], "vpc", a_)
 
-# A keyed stack: each value of its key is its own deployment.
-input tier: string = "dev"
-input region: string = "us-east1"
-stack app[tier, region] { unknowns = "permissive" }
+# A keyed stack: each value of its keys is its own deployment.
+key tier: string = "dev"
+key region: string = "us-east1"
 
 ---
 
@@ -654,15 +653,4 @@ stack app[tier, region] { unknowns = "permissive" }
       (dotted_name
         (identifier)))
     (string
-      (string_content)))
-  (stack
-    (dotted_name
-      (identifier))
-    (identifier)
-    (identifier)
-    (block
-      (field
-        (block_path
-          (identifier))
-        (string
-          (string_content))))))
+      (string_content))))

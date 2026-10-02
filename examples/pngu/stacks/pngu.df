@@ -15,7 +15,6 @@
 #   files/dashboard-pngu.json (see terraform/modules/monitoring/dashboard-pngu.json).
 
 edition 2026
-stack pngu[env] { isolated = true }
 ########################################
 # Schema declarations
 ########################################
@@ -30,8 +29,8 @@ provider file {}
 # The environments, one type for the key and the peering table's column.
 type environment = enum("dev", "stg", "prod")
 
-# A typed stack input: --set env=qa is an error naming the input.
-input env: environment = "dev"
+# The stack's key, typed: `dform plan pngu env=qa` is an error naming it.
+key env: environment = "dev"
 
 ########################################
 # Settings (branch-as-data)
