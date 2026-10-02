@@ -356,6 +356,9 @@ pub fn hover_at(p: &refs::Project, path: &Path, at: usize) -> Option<String> {
             .flatten()
             .map(reference_md);
     }
+    if t.kind() == SyntaxKind::QUANTITY {
+        return Some(quantity_md(t.text()));
+    }
     if t.kind() != SyntaxKind::IDENT {
         return None;
     }
@@ -405,6 +408,26 @@ pub fn hover_at(p: &refs::Project, path: &Path, at: usize) -> Option<String> {
             .map(reference_md)
             .or_else(|| output_md(&files, &t)),
     }
+}
+
+/// A quantity literal (R-66): its type, canonical form and base value;
+/// `500m` both of its readings.
+fn quantity_md(text: &str) -> String {
+    use dform_core::quantity::{self, Dim, Literal, Quantity};
+    let line = |q: &Quantity| format!("`{}`: {q} = {}", q.dim().name(), q.base());
+    let body = match quantity::literal(text) {
+        Ok(Literal::Known(q)) => line(&q),
+        Ok(Literal::Ambiguous) => {
+            let readings: Vec<String> = [Dim::Cpu, Dim::Duration]
+                .into_iter()
+                .filter_map(|d| quantity::read(d, text).ok())
+                .map(|q| format!("- in a {} position, {}", q.dim().name(), line(&q)))
+                .collect();
+            format!("read by its position's type:\n\n{}", readings.join("\n"))
+        }
+        Err(e) => e,
+    };
+    format!("```dform\n{text}\n```\n\n{body}\n")
 }
 
 /// A reference entry: its signature, summary and example.

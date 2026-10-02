@@ -330,8 +330,9 @@ fn isolate(file: &Path, read: Reader) -> Option<(PathBuf, usize, usize, String)>
 
 /// A placeholder of a schema type.
 fn placeholder(ty: &str) -> &'static str {
-    match ty {
-        "int" | "number" | "float" => "0",
+    match ty.split('(').next().unwrap_or(ty) {
+        "int" | "number" | "float" | "bytes" | "cpu" => "0",
+        "duration" => "0s",
         "bool" => "false",
         "list" | "set" => "[]",
         "map" | "object" => "{}",

@@ -4,7 +4,15 @@
 //! built-in ones are `crates/dform-mock/schemas/<name>.df`, a project's own
 //! `providers/<name>/schema.df`:
 //!
-//!   type_attr(T, Path, Ty, Flags).    % Flags drawn from required, computed,
+//!   type_attr(T, Path, Ty, Flags).    % Ty a type's text: string, int, bool,
+//!                                     % inet, ref(T), list(..), map, object,
+//!                                     % enum(..), or a quantity or time with
+//!                                     % how the provider takes it (R-66):
+//!                                     % bytes(quantity|gib|mib|bytes),
+//!                                     % cpu(quantity|millicores),
+//!                                     % duration(friendly|iso|seconds),
+//!                                     % time(rfc3339); `Render`
+//!                                     % Flags drawn from required, computed,
 //!                                     % id, sensitive, nullable, optional_computed,
 //!                                     % force_new (a change replaces the object),
 //!                                     % name_like (the value names the object in
@@ -83,6 +91,147 @@ impl AttrSpec {
     /// `list(ref(net.subnet))`, `ref` for `ref(net.vpc)`.
     pub fn kind(&self) -> &str {
         self.ty.split('(').next().unwrap_or(&self.ty).trim()
+    }
+
+    /// How the provider takes a quantity or time attribute (R-66); `None`
+    /// for any other type.
+    pub fn render(&self) -> Option<Render> {
+        let arg = self
+            .ty
+            .split_once('(')
+            .and_then(|(_, r)| r.strip_suffix(')'))
+            .map(|a| a.trim().trim_matches('"'));
+        Render::parse(self.kind(), arg)
+    }
+}
+
+/// How a provider takes a quantity or a time (R-66): the schema says, per
+/// attribute, so `storage = 20Gi` is one spelling for every provider.
+/// The program's value is the same whatever the form; only what the
+/// provider is sent (and what the plan shows of it) differs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Render {
+    /// The canonical text, Kubernetes's quantity string for bytes and cpu
+    /// (`1536Mi`, `500m`), the friendly form for a duration (`1h30m`).
+    Text(crate::quantity::Dim),
+    /// Bytes as a whole number of GiB, MiB or bytes: `bytes(gib)`.
+    Bytes(&'static str),
+    /// A cpu as a whole number of millicores: `cpu(millicores)`.
+    Millicores,
+    /// A duration in ISO 8601 (`PT1H30M`): `duration(iso)`.
+    Iso,
+    /// A duration as whole seconds: `duration(seconds)`.
+    Seconds,
+    /// A time in RFC 3339 with its offset (`2026-10-02T09:00:00+02:00`).
+    Rfc3339,
+}
+
+impl Render {
+    /// The form `kind(arg)` names, `arg` defaulted per kind.
+    pub fn parse(kind: &str, arg: Option<&str>) -> Option<Render> {
+        use crate::quantity::Dim;
+        Some(match (kind, arg) {
+            ("bytes", None | Some("quantity")) => Render::Text(Dim::Bytes),
+            ("bytes", Some("gib")) => Render::Bytes("Gi"),
+            ("bytes", Some("mib")) => Render::Bytes("Mi"),
+            ("bytes", Some("bytes")) => Render::Bytes(""),
+            ("cpu", None | Some("quantity")) => Render::Text(Dim::Cpu),
+            ("cpu", Some("millicores")) => Render::Millicores,
+            ("duration", None | Some("friendly")) => Render::Text(Dim::Duration),
+            ("duration", Some("iso")) => Render::Iso,
+            ("duration", Some("seconds")) => Render::Seconds,
+            ("time", None | Some("rfc3339")) => Render::Rfc3339,
+            _ => return None,
+        })
+    }
+
+    /// What a provider holds at the attribute, read as the program's value
+    /// (parsed at the edge): `20` in a `bytes(gib)` is `20Gi`, `"512Mi"` in
+    /// a `bytes(quantity)` is `512Mi`. A value the form does not hold is
+    /// left as it is.
+    pub fn read_back(self, v: Value) -> Value {
+        use crate::quantity::{self as q, Dim, Quantity};
+        let read = match (self, &v) {
+            (Render::Text(d), Value::Str(s)) => q::read(d, s).ok().map(Value::Quantity),
+            (Render::Bytes(u), Value::Int(n)) => q::read(Dim::Bytes, &format!("{n}{u}"))
+                .ok()
+                .map(Value::Quantity),
+            (Render::Millicores, Value::Int(n)) => Some(Value::Quantity(Quantity::Cpu(*n))),
+            (Render::Seconds, Value::Int(n)) => q::read(Dim::Duration, &format!("{n}s"))
+                .ok()
+                .map(Value::Quantity),
+            (Render::Iso, Value::Str(s)) => q::read(Dim::Duration, s).ok().map(Value::Quantity),
+            (Render::Rfc3339, Value::Str(s)) => crate::time::Time::parse(s).ok().map(Value::Time),
+            _ => None,
+        };
+        read.unwrap_or(v)
+    }
+
+    /// `v` as the provider takes it, or why it cannot be: a value of
+    /// another type, or not a whole number of the unit.
+    pub fn apply(self, v: &Value) -> std::result::Result<Value, String> {
+        use crate::quantity::{self as q, Dim, Quantity};
+        let dim = match self {
+            Render::Text(d) => Some(d),
+            Render::Bytes(_) => Some(Dim::Bytes),
+            Render::Millicores => Some(Dim::Cpu),
+            Render::Iso | Render::Seconds => Some(Dim::Duration),
+            Render::Rfc3339 => None,
+        };
+        // A value that is not yet typed (a string or an int a variable
+        // carried here) is read as the attribute's type first.
+        let v = match (dim, v) {
+            (_, Value::Null { .. }) => return Ok(v.clone()),
+            (Some(d), Value::Str(s)) => Value::Quantity(q::read(d, s)?),
+            (Some(Dim::Bytes), Value::Int(n)) => Value::Quantity(Quantity::Bytes(*n)),
+            (Some(Dim::Cpu), Value::Int(n)) => {
+                Value::Quantity(Quantity::Cpu(n.checked_mul(1000).ok_or("out of range")?))
+            }
+            (None, Value::Str(s)) => Value::Time(crate::time::Time::parse(s)?),
+            (_, v) => v.clone(),
+        };
+        let wrong = |v: &Value| {
+            format!(
+                "is {}, not {}",
+                dim.map_or("time", Dim::name),
+                crate::partition::fmt_value(v)
+            )
+        };
+        let whole = |n: Option<i64>, unit: &str, v: &Value| {
+            n.map(Value::Int).ok_or_else(|| {
+                format!(
+                    "is sent to the provider in whole {unit}, and {} is not",
+                    crate::partition::fmt_value(v)
+                )
+            })
+        };
+        match (self, &v) {
+            (Render::Text(d), Value::Quantity(x)) if x.dim() == d => Ok(Value::Str(x.to_string())),
+            (Render::Bytes(u), Value::Quantity(x @ Quantity::Bytes(_))) => whole(
+                q::to_unit(x, u),
+                match u {
+                    "Gi" => "GiB",
+                    "Mi" => "MiB",
+                    _ => "bytes",
+                },
+                &v,
+            ),
+            (Render::Millicores, Value::Quantity(x @ Quantity::Cpu(_))) => {
+                whole(q::to_unit(x, "m"), "millicores", &v)
+            }
+            (Render::Seconds, Value::Quantity(x @ Quantity::Duration(_))) => {
+                whole(q::to_unit(x, "seconds"), "seconds", &v)
+            }
+            (Render::Iso, Value::Quantity(Quantity::Duration(s))) => s
+                .to_jiff()
+                .map(|j| Value::Str(j.to_string()))
+                .ok_or_else(|| format!("{s} is out of range")),
+            (Render::Rfc3339, Value::Time(t)) => t
+                .zoned()
+                .map(|z| Value::Str(z.timestamp().display_with_offset(z.offset()).to_string()))
+                .ok_or_else(|| format!("{t} is out of range")),
+            (_, v) => Err(wrong(v)),
+        }
     }
 }
 
@@ -176,6 +325,46 @@ impl Schema {
     }
     pub fn attr(&self, typ: &str, attr: &str) -> Option<&AttrSpec> {
         self.attrs.get(&(typ.to_string(), attr.to_string()))
+    }
+
+    /// A `typ`'s attributes as its provider takes them (R-66): every
+    /// quantity or time at a path the schema gives a render form, at its
+    /// own path or nested in an object or list, in that form; any other
+    /// quantity or time as its canonical text. `Err((path, why))` at the
+    /// first value its form cannot hold.
+    pub fn render(&self, typ: &str, attrs: &Value) -> std::result::Result<Value, (String, String)> {
+        self.render_at(typ, "", attrs)
+    }
+
+    fn render_at(
+        &self,
+        typ: &str,
+        path: &str,
+        v: &Value,
+    ) -> std::result::Result<Value, (String, String)> {
+        if let Some(r) = self.attr(typ, path).and_then(AttrSpec::render) {
+            return r.apply(v).map_err(|why| (path.to_string(), why));
+        }
+        let join = |k: &str| match path {
+            "" => k.to_string(),
+            p => format!("{p}.{k}"),
+        };
+        Ok(match v {
+            Value::Obj(m) => Value::Obj(
+                m.iter()
+                    .map(|(k, x)| {
+                        Ok::<_, (String, String)>((k.clone(), self.render_at(typ, &join(k), x)?))
+                    })
+                    .collect::<std::result::Result<_, _>>()?,
+            ),
+            Value::List(xs) => Value::List(
+                xs.iter()
+                    .map(|x| self.render_at(typ, path, x))
+                    .collect::<std::result::Result<_, _>>()?,
+            ),
+            Value::Quantity(_) | Value::Time(_) => Value::Str(v.typed_text().unwrap_or_default()),
+            v => v.clone(),
+        })
     }
     pub fn list_key(&self, typ: &str, attr: &str) -> Option<&[String]> {
         self.list_keys

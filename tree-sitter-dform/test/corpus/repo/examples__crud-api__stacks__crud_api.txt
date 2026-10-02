@@ -156,8 +156,8 @@ resource k8s.job "migrate-v${schema}" {
     args: ["migrate", "--to", "${schema}"],
     envFrom: [{ secretRef: { name: db_conn.metadata.name } }],
     resources: {
-      requests: { cpu: "100m", memory: "128Mi" },
-      limits: { cpu: "500m", memory: "256Mi" }
+      requests: { cpu: 100m, memory: 128Mi },
+      limits: { cpu: 500m, memory: 256Mi }
     }
   }]
 }
@@ -231,8 +231,8 @@ component app {
       envFrom: [{ secretRef: { name: db_secret } }],
       readinessProbe: { httpGet: { path: "/healthz", port: 8080 } },
       resources: {
-        requests: { cpu: "250m", memory: "256Mi" },
-        limits: { cpu: "1", memory: "512Mi" }
+        requests: { cpu: 250m, memory: 256Mi },
+        limits: { cpu: 1, memory: 512Mi }
       }
     }]
   }
@@ -302,6 +302,20 @@ container(w, c) where w in k8s.job, c in w.spec.template.spec.containers
 deny "container without resource limits" { workload: w, container: c.name } where {
   container(w, c)
   not has c.resources.limits
+}
+
+# Resource limits: the schema types a container's memory `bytes` and its
+# cpu `cpu` (R-66), so `512Mi` above is a quantity and these compare in
+# bytes whatever unit each side is written in (`500m` is millicores there
+# because the attribute is a cpu).
+deny "container memory limit above 2Gi" { workload: w, container: c.name } where {
+  container(w, c)
+  c.resources.limits.memory > 2Gi
+}
+
+deny "container requests more memory than its limit" { workload: w, container: c.name } where {
+  container(w, c)
+  c.resources.requests.memory > c.resources.limits.memory
 }
 
 deny "image not pinned by digest" { workload: w, image: c.image } where {
@@ -976,23 +990,19 @@ auto_reconcile(t, a, p) where drift(t, a, p, _, _), owned_label(l), p == "metada
                   (object
                     (object_field
                       (identifier)
-                      (string
-                        (string_content)))
+                      (quantity))
                     (object_field
                       (identifier)
-                      (string
-                        (string_content)))))
+                      (quantity))))
                 (object_field
                   (identifier)
                   (object
                     (object_field
                       (identifier)
-                      (string
-                        (string_content)))
+                      (quantity))
                     (object_field
                       (identifier)
-                      (string
-                        (string_content))))))))))))
+                      (quantity)))))))))))
   (comment)
   (comment)
   (rule
@@ -1374,23 +1384,19 @@ auto_reconcile(t, a, p) where drift(t, a, p, _, _), owned_label(l), p == "metada
                       (object
                         (object_field
                           (identifier)
-                          (string
-                            (string_content)))
+                          (quantity))
                         (object_field
                           (identifier)
-                          (string
-                            (string_content)))))
+                          (quantity))))
                     (object_field
                       (identifier)
                       (object
                         (object_field
                           (identifier)
-                          (string
-                            (string_content)))
+                          (integer))
                         (object_field
                           (identifier)
-                          (string
-                            (string_content))))))))))))
+                          (quantity)))))))))))
       (comment)
       (resource
         (dotted_name
@@ -1735,6 +1741,72 @@ auto_reconcile(t, a, p) where drift(t, a, p, _, _), owned_label(l), p == "metada
               (identifier)
               (identifier))
             (identifier))))))
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (check
+    (string
+      (string_content))
+    (object
+      (object_field
+        (identifier)
+        (identifier))
+      (object_field
+        (identifier)
+        (member_expression
+          (identifier)
+          (identifier))))
+    (body_block
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier)
+            (identifier))))
+      (comparison
+        (member_expression
+          (member_expression
+            (member_expression
+              (identifier)
+              (identifier))
+            (identifier))
+          (identifier))
+        (quantity))))
+  (check
+    (string
+      (string_content))
+    (object
+      (object_field
+        (identifier)
+        (identifier))
+      (object_field
+        (identifier)
+        (member_expression
+          (identifier)
+          (identifier))))
+    (body_block
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier)
+            (identifier))))
+      (comparison
+        (member_expression
+          (member_expression
+            (member_expression
+              (identifier)
+              (identifier))
+            (identifier))
+          (identifier))
+        (member_expression
+          (member_expression
+            (member_expression
+              (identifier)
+              (identifier))
+            (identifier))
+          (identifier)))))
   (check
     (string
       (string_content))

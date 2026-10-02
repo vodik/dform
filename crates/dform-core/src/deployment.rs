@@ -750,11 +750,15 @@ impl Located {
         base_extra.extend(backend.catalog(scope.as_ref())?);
         base_extra.extend(discovered);
         base_extra.extend(obs.facts(&backend, &st)?);
+        // Quantity and time literals read as their attributes' types
+        // (R-66, R-62), now the schema is known.
+        let mut program = self.program.clone();
+        crate::types::read(&mut program, backend.schema())?;
         let evaluator = Evaluator {
             backend: backend.clone(),
             externs,
             tables: tables.clone(),
-            program: self.program.clone(),
+            program,
             base_extra,
             declared: l.declared.clone(),
             secret_accounts,

@@ -1226,14 +1226,18 @@ impl Providers {
                 if let Some(v) = get_path(&o.computed, &path)
                     && provider::marker(v).is_none()
                 {
+                    // A quantity or a time is read at the edge (R-66).
+                    let mut v = provider::json_to_value(v);
+                    if let Some(r) = self
+                        .schema()
+                        .attr(&addr.typ, &path)
+                        .and_then(|a| a.render())
+                    {
+                        v = r.read_back(v);
+                    }
                     out.push(Atom {
                         pred: "world_attr".into(),
-                        args: vec![
-                            s(&addr.typ),
-                            s(&e.remote),
-                            s(&path),
-                            Term::Val(provider::json_to_value(v)),
-                        ],
+                        args: vec![s(&addr.typ), s(&e.remote), s(&path), Term::Val(v)],
                         record: None,
                         span: Default::default(),
                     });
@@ -1426,6 +1430,17 @@ impl Providers {
         }
     }
 
+    /// A desired resource's document as its provider takes it: quantities
+    /// and times in the schema's render form (R-66), references and nulls
+    /// resolved.
+    fn desired_doc(&self, ctx: &Ctx, r: &Resource) -> Result<Json> {
+        let attrs = self
+            .schema()
+            .render(&r.addr.typ, &r.attrs)
+            .map_err(|(path, why)| anyhow!("{} {why}", r.addr.attr(&path)))?;
+        self.resolve_value(ctx, &attrs)
+    }
+
     fn resolve_value(&self, ctx: &Ctx, v: &Value) -> Result<Json> {
         Ok(match v {
             Value::Str(s) => json!(s),
@@ -1516,7 +1531,7 @@ impl Providers {
                 retracted,
             };
             self.check_held("plan", &r.addr, "", &r.attrs)?;
-            let doc = self.resolve_value(&ctx, &r.attrs)?;
+            let doc = self.desired_doc(&ctx, &r)?;
             order.push(r.addr.clone());
             resolved.insert(r.addr.clone(), doc);
         }
@@ -1834,7 +1849,7 @@ impl Tick<'_> {
                     strict: Some(addr),
                     retracted: &BTreeSet::new(),
                 };
-                let doc = cloud.resolve_value(&ctx, &r.attrs)?;
+                let doc = cloud.desired_doc(&ctx, r)?;
                 self.resolved.insert(addr.clone(), doc.clone());
                 doc
             }

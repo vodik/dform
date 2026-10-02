@@ -655,6 +655,28 @@ impl<'a> Walk<'a> {
                 self.docs.push((p.to_string(), d.to_string()));
             }
         }
+        // A map of quantities (`resources.limits`, a claim's
+        // `resources.requests`): its usual keys are typed (R-66), so a
+        // policy compares `limits.memory > 2Gi` in bytes; each is sent as
+        // the quantity string the API takes.
+        if ty == "map"
+            && self
+                .get(node, "additionalProperties")
+                .and_then(|a| a.get("$ref"))
+                .and_then(Json::as_str)
+                .is_some_and(|r| r.ends_with("api.resource.Quantity"))
+        {
+            for (k, t) in [
+                ("cpu", "cpu(quantity)"),
+                ("memory", "bytes(quantity)"),
+                ("storage", "bytes(quantity)"),
+                ("ephemeral-storage", "bytes(quantity)"),
+            ] {
+                let q = format!("{p}.{k}");
+                let flags = self.flags(&q, ctx, false, false);
+                self.attrs.push((q, t, flags));
+            }
+        }
         match ty {
             "object" => self.object(node, p, ctx, stack),
             "list" | "set" => {

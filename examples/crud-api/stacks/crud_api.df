@@ -152,8 +152,8 @@ resource k8s.job "migrate-v${schema}" {
     args: ["migrate", "--to", "${schema}"],
     envFrom: [{ secretRef: { name: db_conn.metadata.name } }],
     resources: {
-      requests: { cpu: "100m", memory: "128Mi" },
-      limits: { cpu: "500m", memory: "256Mi" }
+      requests: { cpu: 100m, memory: 128Mi },
+      limits: { cpu: 500m, memory: 256Mi }
     }
   }]
 }
@@ -227,8 +227,8 @@ component app {
       envFrom: [{ secretRef: { name: db_secret } }],
       readinessProbe: { httpGet: { path: "/healthz", port: 8080 } },
       resources: {
-        requests: { cpu: "250m", memory: "256Mi" },
-        limits: { cpu: "1", memory: "512Mi" }
+        requests: { cpu: 250m, memory: 256Mi },
+        limits: { cpu: 1, memory: 512Mi }
       }
     }]
   }
@@ -298,6 +298,20 @@ container(w, c) where w in k8s.job, c in w.spec.template.spec.containers
 deny "container without resource limits" { workload: w, container: c.name } where {
   container(w, c)
   not has c.resources.limits
+}
+
+# Resource limits: the schema types a container's memory `bytes` and its
+# cpu `cpu` (R-66), so `512Mi` above is a quantity and these compare in
+# bytes whatever unit each side is written in (`500m` is millicores there
+# because the attribute is a cpu).
+deny "container memory limit above 2Gi" { workload: w, container: c.name } where {
+  container(w, c)
+  c.resources.limits.memory > 2Gi
+}
+
+deny "container requests more memory than its limit" { workload: w, container: c.name } where {
+  container(w, c)
+  c.resources.requests.memory > c.resources.limits.memory
 }
 
 deny "image not pinned by digest" { workload: w, image: c.image } where {

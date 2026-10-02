@@ -20,6 +20,11 @@ crates/dform-mock/schemas/k8s.df
 #   - Secret.data and Secret.stringData are sensitive.
 #
 # type_mint gives the mock's answer for a server-picked value.
+#
+# Quantities (R-66): a container's resources.{requests,limits}.{cpu,memory}
+# and a claim's storage are typed `cpu` and `bytes`, sent as Kubernetes's
+# quantity string (`500m`, `512Mi`), so a policy compares them
+# (`c.resources.limits.memory > 2Gi`).
 
 edition 2026
 
@@ -186,7 +191,7 @@ type_mint(k8s.persistent_volume_claim, "metadata.resourceVersion", "{n}")
 type_mint(k8s.persistent_volume_claim, "metadata.generation", 1)
 type_mint(k8s.persistent_volume_claim, "metadata.creationTimestamp", "2026-01-01T00:00:00Z")
 type_attr(k8s.persistent_volume_claim, "spec.accessModes", "list", ["required"])
-type_attr(k8s.persistent_volume_claim, "spec.resources.requests.storage", "string", ["required"])
+type_attr(k8s.persistent_volume_claim, "spec.resources.requests.storage", "bytes(quantity)", ["required"])
 type_attr(k8s.persistent_volume_claim, "spec.storageClassName", "string", ["optional_computed"])
 type_mint(k8s.persistent_volume_claim, "spec.storageClassName", "standard")
 type_attr(k8s.persistent_volume_claim, "spec.volumeName", "string", ["optional_computed"])
@@ -222,6 +227,10 @@ type_attr(k8s.deployment, "spec.selector.matchLabels", "map", ["required"])
 type_attr(k8s.deployment, "spec.template.metadata.labels", "map", [])
 type_attr(k8s.deployment, "spec.template.spec.containers", "list", ["required"])
 type_list_key(k8s.deployment, "spec.template.spec.containers", ["name"])
+type_attr(k8s.deployment, "spec.template.spec.containers.resources.requests.cpu", "cpu(quantity)", [])
+type_attr(k8s.deployment, "spec.template.spec.containers.resources.requests.memory", "bytes(quantity)", [])
+type_attr(k8s.deployment, "spec.template.spec.containers.resources.limits.cpu", "cpu(quantity)", [])
+type_attr(k8s.deployment, "spec.template.spec.containers.resources.limits.memory", "bytes(quantity)", [])
 type_attr(k8s.deployment, "spec.template.spec.containers.image", "string", ["required"])
 type_attr(k8s.deployment, "spec.template.spec.containers.ports", "list", [])
 type_list_key(k8s.deployment, "spec.template.spec.containers.ports", ["containerPort", "protocol"])
@@ -287,6 +296,10 @@ type_attr(k8s.stateful_set, "spec.selector.matchLabels", "map", ["required"])
 type_attr(k8s.stateful_set, "spec.template.metadata.labels", "map", [])
 type_attr(k8s.stateful_set, "spec.template.spec.containers", "list", ["required"])
 type_list_key(k8s.stateful_set, "spec.template.spec.containers", ["name"])
+type_attr(k8s.stateful_set, "spec.template.spec.containers.resources.requests.cpu", "cpu(quantity)", [])
+type_attr(k8s.stateful_set, "spec.template.spec.containers.resources.requests.memory", "bytes(quantity)", [])
+type_attr(k8s.stateful_set, "spec.template.spec.containers.resources.limits.cpu", "cpu(quantity)", [])
+type_attr(k8s.stateful_set, "spec.template.spec.containers.resources.limits.memory", "bytes(quantity)", [])
 type_attr(k8s.stateful_set, "spec.template.spec.containers.image", "string", ["required"])
 type_attr(k8s.stateful_set, "spec.template.spec.containers.ports", "list", [])
 type_list_key(k8s.stateful_set, "spec.template.spec.containers.ports", ["containerPort", "protocol"])
@@ -345,6 +358,10 @@ type_attr(k8s.daemon_set, "spec.selector.matchLabels", "map", ["required"])
 type_attr(k8s.daemon_set, "spec.template.metadata.labels", "map", [])
 type_attr(k8s.daemon_set, "spec.template.spec.containers", "list", ["required"])
 type_list_key(k8s.daemon_set, "spec.template.spec.containers", ["name"])
+type_attr(k8s.daemon_set, "spec.template.spec.containers.resources.requests.cpu", "cpu(quantity)", [])
+type_attr(k8s.daemon_set, "spec.template.spec.containers.resources.requests.memory", "bytes(quantity)", [])
+type_attr(k8s.daemon_set, "spec.template.spec.containers.resources.limits.cpu", "cpu(quantity)", [])
+type_attr(k8s.daemon_set, "spec.template.spec.containers.resources.limits.memory", "bytes(quantity)", [])
 type_attr(k8s.daemon_set, "spec.template.spec.containers.image", "string", ["required"])
 type_attr(k8s.daemon_set, "spec.template.spec.containers.ports", "list", [])
 type_list_key(k8s.daemon_set, "spec.template.spec.containers.ports", ["containerPort", "protocol"])
@@ -399,6 +416,10 @@ type_mint(k8s.job, "metadata.creationTimestamp", "2026-01-01T00:00:00Z")
 type_attr(k8s.job, "spec.template.metadata.labels", "map", [])
 type_attr(k8s.job, "spec.template.spec.containers", "list", ["required"])
 type_list_key(k8s.job, "spec.template.spec.containers", ["name"])
+type_attr(k8s.job, "spec.template.spec.containers.resources.requests.cpu", "cpu(quantity)", [])
+type_attr(k8s.job, "spec.template.spec.containers.resources.requests.memory", "bytes(quantity)", [])
+type_attr(k8s.job, "spec.template.spec.containers.resources.limits.cpu", "cpu(quantity)", [])
+type_attr(k8s.job, "spec.template.spec.containers.resources.limits.memory", "bytes(quantity)", [])
 type_attr(k8s.job, "spec.template.spec.containers.image", "string", ["required"])
 type_attr(k8s.job, "spec.template.spec.containers.ports", "list", [])
 type_list_key(k8s.job, "spec.template.spec.containers.ports", ["containerPort", "protocol"])
@@ -463,6 +484,10 @@ type_attr(k8s.cron_job, "spec.timeZone", "string", [])
 type_attr(k8s.cron_job, "spec.jobTemplate.spec.template.metadata.labels", "map", [])
 type_attr(k8s.cron_job, "spec.jobTemplate.spec.template.spec.containers", "list", ["required"])
 type_list_key(k8s.cron_job, "spec.jobTemplate.spec.template.spec.containers", ["name"])
+type_attr(k8s.cron_job, "spec.jobTemplate.spec.template.spec.containers.resources.requests.cpu", "cpu(quantity)", [])
+type_attr(k8s.cron_job, "spec.jobTemplate.spec.template.spec.containers.resources.requests.memory", "bytes(quantity)", [])
+type_attr(k8s.cron_job, "spec.jobTemplate.spec.template.spec.containers.resources.limits.cpu", "cpu(quantity)", [])
+type_attr(k8s.cron_job, "spec.jobTemplate.spec.template.spec.containers.resources.limits.memory", "bytes(quantity)", [])
 type_attr(k8s.cron_job, "spec.jobTemplate.spec.template.spec.containers.image", "string", ["required"])
 type_attr(k8s.cron_job, "spec.jobTemplate.spec.template.spec.containers.ports", "list", [])
 type_list_key(k8s.cron_job, "spec.jobTemplate.spec.template.spec.containers.ports", ["containerPort", "protocol"])
@@ -666,6 +691,11 @@ type_doc(k8s.service, "spec.selector", "Route service traffic to pods with label
 ---
 
 (source_file
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
   (comment)
   (comment)
   (comment)
@@ -2876,6 +2906,54 @@ type_doc(k8s.service, "spec.selector", "Route service traffic to pods with label
           (string_content))
         (string
           (string_content))
+        (list))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (string
+          (string_content))
         (list
           (string
             (string_content))))))
@@ -3654,6 +3732,54 @@ type_doc(k8s.service, "spec.selector", "Route service traffic to pods with label
           (string_content))
         (string
           (string_content))
+        (list))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (string
+          (string_content))
         (list
           (string
             (string_content))))))
@@ -4347,6 +4473,54 @@ type_doc(k8s.service, "spec.selector", "Route service traffic to pods with label
           (string_content))
         (string
           (string_content))
+        (list))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (string
+          (string_content))
         (list
           (string
             (string_content))))))
@@ -4978,6 +5152,54 @@ type_doc(k8s.service, "spec.selector", "Route service traffic to pods with label
         (list
           (string
             (string_content))))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list))))
   (fact
     (call
       (identifier)
@@ -5754,6 +5976,54 @@ type_doc(k8s.service, "spec.selector", "Route service traffic to pods with label
         (list
           (string
             (string_content))))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list))))
   (fact
     (call
       (identifier)

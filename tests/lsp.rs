@@ -962,7 +962,7 @@ fn quick_fix_sets_a_required_attribute() {
     );
     assert!(
         texts[0].ends_with(
-            "  metadata.name = \"data\"\n  spec.accessModes = []\n  spec.resources.requests.storage = \"\"\n}\n"
+            "  metadata.name = \"data\"\n  spec.accessModes = []\n  spec.resources.requests.storage = 0\n}\n"
         ),
         "{}",
         texts[0]
@@ -1546,6 +1546,35 @@ fn an_s3_deployment_is_read_with_credentials() {
             .any(|m| m.contains("evaluated as if nothing were deployed there")),
         "{}",
         json!(ds)
+    );
+    c.shutdown();
+}
+
+/// A quantity literal's hover is its type, canonical form and base value
+/// (R-66); `500m` shows both readings, the position deciding.
+#[test]
+fn hover_on_a_quantity_shows_its_base_value() {
+    let (_s, root) = example("crud-api");
+    let stack = root.join("stacks/crud_api.df");
+    let mut c = Client::start(&root, json!({}));
+    c.open(&stack);
+    let text = |c: &mut Client, needle: &str| {
+        let hover = c.at("textDocument/hover", &stack, find(&stack, needle, 1));
+        hover["contents"]["value"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string()
+    };
+    let mem = text(&mut c, "512Mi");
+    assert!(mem.contains("`bytes`: 512Mi = 536870912 bytes"), "{mem}");
+    let cpu = text(&mut c, "500m");
+    assert!(
+        cpu.contains("in a cpu position, `cpu`: 500m = 500 millicores"),
+        "{cpu}"
+    );
+    assert!(
+        cpu.contains("in a duration position, `duration`: 8h20m"),
+        "{cpu}"
     );
     c.shutdown();
 }
