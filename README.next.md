@@ -401,6 +401,13 @@ and a literal that does not parse is an error at that line. Types are
 inferred where they are not declared. `inet.subnet`, `inet.host`,
 `inet.contains`, `inet.overlaps` and `inet.prefix_len` are the network
 arithmetic; `ip`, `inet`, `int` and `string` parse text on purpose;
+quantities are values too, a number and its unit in one token: `memory
+= 512Mi` is `bytes`, `cpu = 500m` a `cpu` (millicores, because the
+schema says cpu; `m` is minutes where it says duration), compared in
+base units (`limits.memory > 2Gi`) and sent to each provider in its
+schema's form (`20Gi` is `"20Gi"` to Kubernetes and `20` to RDS); a
+`time` is a zoned instant and a `duration` a span, added in the time's
+zone, a month a month and a day a day across DST;
 `enum`, `list`, `set`, `ref(T)` and `secret(T)` are the other types,
 and `type environment = enum("dev", "staging", "prod")` names one. A
 `check` refines any of them, `input replicas: int = 2 check 1 <=

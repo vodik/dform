@@ -68,6 +68,8 @@ body block (`where { }`) separate their entries by a newline or a comma.
 IDENT    := [A-Za-z_][A-Za-z0-9_]*       ; case decides nothing; "_" alone is the placeholder
 STRING   := "\"" ... "\""                ; may span lines; escapes \" \\ \n \t \u{hex}; ${e} interpolates
 INT      := [0-9]+                       ; -1 is unary minus applied to 1
+QUANTITY := [0-9]+ ("." [0-9]+)? [A-Za-z][A-Za-z0-9]*   ; 1Gi 500m 1h30m 1.5Gi (R-66)
+          | [0-9]+ "." [0-9]+                           ; 0.5: cores, in a cpu position
 RANK     := "@default" | "@override"
 COMMENT  := "#" to end of line
 ```
@@ -75,8 +77,11 @@ COMMENT  := "#" to end of line
 Punctuation: `( ) { } [ ] , . .. ..= : = == += != < <= > >= + - * / % |`.
 
 `.` is always member access, `..` and `..=` a range's (R-56), and `/`
-always division. `-` is always an
-operator: a hyphenated name is a string, and the parser says so.
+always division. A number with a letter adjacent is one QUANTITY token
+(`1Gi`, `us-test-1a`'s `1a`), so it never splits into a number and a
+name; what its unit means is the literal's ("Quantities and times").
+`-` is always an operator: a hyphenated name is a string, and the parser
+says so.
 
 Statement keywords, recognised only as the first token of a statement (18):
 
@@ -337,6 +342,70 @@ is no `ref(T)` needs the id as text (a bridged provider's `string`). An
 input or output of a module or component typed `ref(T)`, `list(ref(T))`
 or by a resource type holds references.
 
+### Quantities and times
+
+A quantity is a number with its unit, held in the dimension's base unit
+(R-66): `bytes` (bytes), `cpu` (millicores) and `duration` (R-62). A
+quantity literal is one token, its unit adjacent:
+
+| type       | written                                             | base       | prints          |
+|------------|-----------------------------------------------------|------------|-----------------|
+| `bytes`    | `512Mi`, `1.5Gi`, `2Ti`, `4096` (`Ki Mi Gi Ti Pi`)  | bytes      | `1536Mi`, `512` |
+| `cpu`      | `2`, `500m`, `2000m`, `0.5`                         | millicores | `2`, `500m`     |
+| `duration` | `30d`, `6h`, `1h30m`, `1y6mo` (`y mo w d h m s ms us ns`), `"PT6H"` | months, days, ns | `1h30m` |
+
+One spelling per unit: bytes take binary units only, and `20GB`, `1kB`,
+`512MiB` are errors naming the unit to write (`20Gi`, or the byte count
+`20000000000`); any magnitude in a unit is fine (`2000m` is `2`, `1.5Gi`
+is `1536Mi`), a fraction that is not a whole base unit is an error
+(`1.3Gi`). A duration's numbers are whole with one unit each, largest
+first (`1.5h` is an error naming `1h30m`); in a string a duration may be
+ISO 8601 (`"P1M"`). A bare integer is bytes in a `bytes` position and
+cores in a `cpu` one; in a `duration` position it is an error (`30s`).
+Every quantity prints canonically, in the largest unit that divides
+exactly, so equal values print alike; `string(q)` and `"${q}"` give
+that.
+
+`m` is millicores in a `cpu` position and minutes in a `duration` one, so
+`500m` (and a bare fraction, `0.5`) is read by its position: an
+attribute, an input, a function's parameter, or the other side of an
+operator (`1h + 30m`, `cpu(1) > 500m`). Where nothing gives it a type
+the literal is an error naming both readings; `cpu(500m)` and
+`duration(30m)` say which.
+
+The algebra (R-66 amendments 3, 4): a quantity scales by a number
+(`512Mi * 2`, `max_size / 2`, whole base units as integer division),
+adds, subtracts and compares only within its dimension, `sum`, `min` and
+`max` aggregate within one, and a quantity over one of its own dimension
+is a plain number (`limits.cpu / requests.cpu <= 4`). Nothing changes a
+dimension: `1Gi + 500m`, `1Gi + 2`, `512Mi * 2Gi` are compile errors where
+the operands are literals; at evaluation a mix has no value. Two
+durations compare with a day taken as 24 hours; months compare only with
+months (`1mo` and `30d` do not, a month's length depends on the date).
+
+A `time` (R-62) is a zoned instant, the Temporal model: written as a
+string in a `time` position or to `time(..)`, RFC 3339 with an offset
+(`"2026-10-02T09:00:00Z"`, `Z` is UTC) or a date and time with a zone
+(`"2026-10-02T09:00[Europe/Paris]"`). It carries its zone, prints as
+`2026-10-02T09:00:00+02:00[Europe/Paris]`, and orders by its instant
+whatever the zones (`<`, `time.before`, `min`); `==` is the same instant
+in the same zone, as a value is equal only to itself. `t + d`, `t - d` and `time.add(t, d)` are
+calendar-aware in the time's zone: a month is a calendar month (the 31st
+plus a month is the next month's last day), a day a calendar day across
+a DST change (23 or 25 hours). Zones are the tzdb built into dform
+(`dform version` prints its release), never the host's. There is no
+time literal, and no `now` function: the current time is an extern's
+answer (R-60).
+
+A provider takes a quantity or a time in the form its schema gives the
+attribute's type: `bytes(quantity)` (Kubernetes's string, the default),
+`bytes(gib)`, `bytes(mib)`, `bytes(bytes)` (whole numbers),
+`cpu(quantity)`, `cpu(millicores)`, `duration(friendly)`,
+`duration(iso)`, `duration(seconds)`, `time(rfc3339)`. `storage = 20Gi`
+is then one spelling for every provider; a value its form cannot hold
+(`1536Mi` as whole GiB) is a plan error naming the attribute, and what a
+provider sends back at such an attribute is read the same way.
+
 A literal in a position whose type is known is checked as that type at
 compile time (R-31, Postgres's unknown-literal rule): a schema attribute's
 type (`inet`, `int`, `bool`, `enum(..)`, `ref(T)`), an input's declared
@@ -344,8 +413,9 @@ type for its default and a copy's value, a function's parameter.
 `cidr_block = "10.0.0/16"` in an `inet` attribute, `vpc = "main"` in a
 `ref(net.vpc)` one and `subnets = [main]` (a `ref(net.vpc)` where
 `ref(net.subnet)` is wanted) are errors at the entry, naming both types; a
-string literal where an `inet` is declared is read as one. Without a type
-a literal is a string. A reference and a string never compare: `r ==
+string literal where an `inet` is declared is read as one, and so is one
+where a quantity or a `time` is (`memory = "512Mi"`). Without a type
+a literal is a string; a quantity literal is its unit's. A reference and a string never compare: `r ==
 "main"` is an error that names `r == main` or `r == T["main"]`.
 
 ## Statements
@@ -795,7 +865,7 @@ term       := add
 add        := mul (("+" | "-") mul)*
 mul        := unary (("*" | "/" | "%") unary)*
 unary      := "-" unary | primary
-primary    := INT | STRING | "true" | "false"
+primary    := INT | QUANTITY | STRING | "true" | "false"
             | chain | call | list | object | comprehension | "(" term ")"
 chain      := NAME ("." SEG | "[" term ("," term)* "]")*
 call       := chain "(" args ")"
@@ -977,12 +1047,16 @@ are written bare.
 
 | package   | functions                                                                 |
 |-----------|---------------------------------------------------------------------------|
-| prelude   | the constructors `int(s)`, `string(x)`, `inet(s)`, `ip(s)`, `iprange(a, b)`; `format(t, v, ...)`, `len(x)`, `ref(T, n, p)`, `scoped(s, n)`, `cloud_ref(T, n, p)`, `declassify(v, why)` |
+| prelude   | the constructors `int(s)`, `string(x)`, `inet(s)`, `ip(s)`, `iprange(a, b)`, `bytes(x)`, `cpu(x)`, `duration(x)`, `time(s)` (a literal argument read at compile time); `format(t, v, ...)`, `len(x)`, `ref(T, n, p)`, `scoped(s, n)`, `cloud_ref(T, n, p)`, `declassify(v, why)` |
 | `inet`    | `inet.subnet(net, bits, n)`, `inet.host(net, n)`, `inet.addr(net, n)`, `inet.contains(net, a)`, `inet.overlaps(a, b)`, `inet.prefix_len(net)` |
 | `int`     | `int.range(lo, hi, step)` (what `i in lo..hi` enumerates)                 |
 | `ip`      | `ip.unspecified(a)`                                                       |
 | `str`     | `str.split(s, sep[, limit])`, `str.lower(s)`, `str.upper(s)`, `str.dedent(s)` |
 | `list`    | `list.len(l)` (`len` in the prelude), `list.join(l, sep)`                 |
+| `time`    | `time.parse(s)`, `time.format(t, layout)`, `time.in_zone(t, zone)`, `time.add(t, d)`, `time.until(a, b)`, `time.before(a, b)` |
+| `duration`| `duration.parse(s)`, `duration.total(d, unit)`                            |
+| `bytes`   | `bytes.to(q, unit)` (`"Mi"`: a whole number of them, else no value)      |
+| `cpu`     | `cpu.to(q, unit)` (`"m"` or `""` for cores)                               |
 
 A function to `bool` is also a predicate: `inet.contains(n, a)` as a body
 literal holds when the call is true. Conversions are constructors named
