@@ -24,7 +24,7 @@ parsing resumes after it. One bad statement is one diagnostic.
 
 ```
 file   := "edition" INT NL (header NL)* (stmt NL)*
-header := key | input                 ; in that order: key, input, input p(..) from
+header := key | input                 ; in that order: key, input, input p from
 ```
 
 Every `.df` file starts with `edition 2026` (comments may come first). A
@@ -38,7 +38,7 @@ Every file is a module (see "Modules"); a file under `stacks/` is a
 stack, a module the tool uses, named after itself, and `key` makes one
 deployment per value. What a file takes is its header, after `edition`
 and before its body: `key` lines, then `input` lines (value inputs, then
-relation inputs, `input p(..) from ..`). `use` and `instance` are body
+relation inputs, `input p from ..`). `use` and `instance` are body
 statements. Everything
 else is the body, `provider` included: a provider block is a rule that
 may read values, in scope for the whole program wherever it is written.
@@ -169,7 +169,7 @@ What a doc comment may document, and the `Kind` and `Name` of its facts:
 | `component c`                               | `component` | `c`                   |
 | `input k`, `key k`                          | `input`     | `k`                   |
 | `output k`                                  | `output`    | `k`                   |
-| `decl p(..)`, `extern p(..)`, `input p(..) from ..` | `predicate` | `p` |
+| `decl p(..)`, `extern p(..)`, `input p from ..` | `predicate` | `p` |
 | `p(..) where ..`, a fact, `let k = t`, `deny "m"`, `warn "m"` | `rule` | `p`, `k`, `m` (the message) |
 | `type a = T`                                | `alias`     | `a`                   |
 | `resource T n`, `resource T "n-${e}"`       | `resource`  | `T["n"]`, `T["n-${e}"]` (as written) |
@@ -361,14 +361,18 @@ extern     := "extern" DOTTED "(" bindarg ("," bindarg)* ")" "persist"?
 bindarg    := ("+" | "-") NAME (":" type)?
 input      := ("input" | "key") NAME ":" type ("=" term)? ("check" body1)?
             | "input" NAME fields                  ; an object input (R-54)
-            | "input" NAME columns "from" term     ; facts(..) | FORMAT(..)
+            | "input" NAME ("from" term ("where" body)?)?   ; rows of a relation (R-55)
 fields     := "{" (field SEP)* "}"
 field      := NAME ":" (fields | type ("=" term)? ("check" body1)?)
 output     := "output" NAME (":" type)? ("=" term)? ("where" body)?
+            | "output" NAME ofields ("where" body)?         ; an object output
+            | "output" NAME                        ; a relation exported (R-55)
+ofields    := "{" (ofield SEP)* "}"
+ofield     := NAME (":" type)? "=" term | NAME ":" ofields
 let        := "let" NAME "=" term RANK? ("where" body)?
 set        := "set" chain ("=" | "+=") term RANK? ("where" body)?
-use        := "use" path ("as" NAME)? block? ("where" body)?
-instance   := "instance" path NAME block? ("where" body)?
+use        := "use" path ("as" NAME)? cblock? ("where" body)?
+instance   := "instance" path NAME cblock? ("where" body)?
 component  := "component" NAME stmts             ; an item of a module
 path       := NAME ("." NAME)*                    ; a/b.df from the root; std.x; a package mount
 resource   := "resource" DOTTED hname RANK? block ("where" body)?
@@ -381,6 +385,9 @@ attrdecl   := blockpath ":" (attrs | type flag* ("check" body1)?)
 flag       := "required" | "computed" | "id" | "sensitive" | "nullable"
 block      := "{" (entry SEP)* "}"
 entry      := blockpath (("=" | "+=") term)? RANK?   ; `zone` alone is `zone = zone`
+cblock     := "{" ((entry | row) SEP)* "}"          ; a `use` or `instance` block
+row        := NAME "(" args ")" ("where" body)?     ; a row of a relation it takes
+            | NAME "from" term ("where" body)?
 blockpath  := SEG ("." SEG | "[" INT "]")*
 SEG        := NAME | STRING
 hname      := NAME | STRING                        ; see "Block names"
@@ -403,8 +410,8 @@ clause spelled `where`.
 
 The verb says what a statement gives (R-57): `=` gives a value, `from`
 gives rows. `input x: T = d`, `let x = t` and `output x = t` are values;
-`input p(a, b) from DOC`, `settings from DOC` and a copy's `p from TERM`
-are relations, a row per element. A value written with `from`, or rows
+`input p from DOC`, `settings from DOC` and a copy's `p from TERM` are
+relations, a row per element. A value written with `from`, or rows
 with `=` (`input p = [..]`), is an error that says so; rows written in
 the program are facts, `p("a", 1)`.
 
@@ -438,7 +445,7 @@ type is the reference's, so a dot on `k` reads through it: `let cfg =
 settings[env]`, then `cfg.db.size`.
 
 `output k: T = t [where B]` is one statement (H-7): the type is optional (an
-untyped output is `any`), the value is not.
+untyped output is `any`), the value is not ("Inputs and outputs").
 
 `deny "m" {ctx}? where B` and `warn` are the checks (H-8). The message is a
 string like any other: `${e}` reads the body's variables. A deny is checked
@@ -447,8 +454,9 @@ after evaluation; no rule may read `deny` or `warn`.
 A relation is declared by its columns (H-11): `decl p(a, b)`, a type on a
 column optional; `mixed` lets it have both facts and rules. A copy's
 relations are its own (`n::p`, which no source spells); a value leaves it
-through an `output` (DESIGN.org R-5). A module's are its import's,
-`m::p`, read as `m.p(..)`.
+through an `output` (DESIGN.org R-5), a relation through `output p`
+("Inputs and outputs"). A module's are its import's, `m::p`, read as
+`m.p(..)`.
 
 ### The core is written only where the surface cannot reach
 
@@ -466,6 +474,17 @@ tests).
 
 ### Inputs and outputs
 
+Inputs and outputs are one grammar in both directions and in every scope
+(R-55): a declaration is a value, `input|output k: T [= t]`, an object
+by its fields, or a relation.
+
+**Values.** `input k: T [= d] [check B]` is a cell of the attribute
+aggregate the outside gives: the default contributes `@default`, `--set
+k=v`, an `--input-file`'s `k(v)` and `set k = t where B` at the normal
+rank. `output k [: T] = t [where B]` hands a value out (H-7): read as
+`n.k` from a copy or a used module, `c[t].k` from every copy, and
+`stack[k=v].k` from another stack's deployment.
+
 An object input is declared by its fields (R-54): `input nodes { flavor:
 string = "b3-8", count: int = 1 check 1 <= count <= 3, pool: { size: int }
 }`, a nested object in braces, each field's default and check its own (the
@@ -482,6 +501,50 @@ where env == "prod"`, an instance block's `nodes.count = 2` or `nodes = {
 .. }`, an input file's `nodes({ count: 2 })`. A field with no default is
 required like an input, by its path. `why nodes.count` shows the leaf's
 layers. A `key` is a scalar and takes no block.
+
+**Relations.** A relation is declared once, by `decl p(a: T, ..)`; `input`
+and `output` name it and never re-spell its columns:
+
+- `input p from TERM [where B]`, in a stack, gives `p` rows from outside:
+  `facts(PATH)` (a `.df` file of facts, re-read when it changes) or a
+  table, `FORMAT(PATH)` ("Relation inputs and tables"), read with the
+  decl's columns and checked against their types. Several lines are one
+  relation, their rows together, and facts the program states join
+  them; a source with no `decl` is an error that names it.
+- `input p`, in a module or a component, is a relation its user gives.
+  The `use` or `instance` block gives its rows beside the values:
+  `zone("a", 0)`, a rule over the user's relations `zone(z, n) where
+  az(z, n)` (a row with a clause ends its line), or a table `zone from
+  csv("zones.csv") [where B]` with the module's columns. The rows are the
+  copy's own relation, written in the user's scope, and exist while the
+  copy does. A relation the module does not take is an error naming
+  those it does.
+- `output p` exports the relation `p` the scope declares or defines: a
+  copy's rows are read `blue.p(x, y)` and every copy's `network[t].p(x,
+  y)`, one fact per row, and a stack's `output p` publishes its rows,
+  read `platform[env=e].p(x, y)`. A column the `decl` types by a
+  resource type (`decl subnet(s: net.subnet)`) holds the copy's
+  resource and leaves it as its address. A copy's relation it does not
+  export is its own: reading it is an error that names `output p`, and
+  another copy's relation is never a head. A used module's relations are
+  public, `m.p(..)`.
+- `output k { f = t, g: T = u } [where B]` is an object output by its
+  fields, typed by them (`any` where a field gives no type).
+
+A stack's inputs are flat (R-55): its own and every used module's, by
+the module's name, `--set traefik.acme_email=..`, `why traefik.acme_email`,
+and `dform test` enumerates them all. A used module's input nothing gives
+is the stack input's error, at the `use`. Only a component's inputs nest:
+its instance block gives them.
+
+**A list or a relation.** A list is a small ordered value handled whole:
+`verbs = ["get", "list"]`, an attribute's value, a document's array. What
+is iterated, joined or keyed is a relation: a row per thing, read a row
+at a time, given by rows (`--set`, settings and `why` address a relation
+by its rows, never its position). An output that is a list of every
+subnet is a table, `output private_subnet`; an attribute that takes a
+list builds it where it is set, `subnets = [ s | subnet(s), s in
+net.subnet ]`.
 
 ### Modules
 
@@ -622,8 +685,8 @@ not built in.
 ### Type aliases
 
 `type NAME = TYPE` names a type: `type environment = enum("dev", "stg",
-"prod")`, then `input env: environment` and `input peering(env:
-environment, ...) from csv(..)`. An alias is usable anywhere a type is (an
+"prod")`, then `input env: environment` and `decl peering(env:
+environment, ...)`. An alias is usable anywhere a type is (an
 input, a component's input, a table's column, an output, an extern's column, a
 `decl` column, a `type` block's attribute) and is transparent: the
 resolver writes its type in its place, so nothing after it sees an alias.
@@ -635,27 +698,28 @@ not take a built-in type's name (`int`, `string`, `bool`, `inet`,
 
 Where an alias is in scope: in its file, an alias in a component in the
 component. Another module's aliases are public, read through the name
-its `use` binds or its path (`config.environment`, `network.subnets`).
+its `use` binds or its path (`config.environment`, `network.node_pool`).
 Two aliases of one name in one scope are an error listing both.
 
 ### Relation inputs and tables
 
-`input p(a, b) from facts(SOURCE)` is a relation the world gives: its facts
-are a `.df` fact file's (`facts("data/release.facts")`, or
-`facts(git(REPO, REF, PATH))`), read from outside and re-read when they
-change. `input p(col: type, ...) from FORMAT(SOURCE)` is a table: its rows
-are a data file's. FORMAT is `csv`, `json`, `yaml` or `toml`; SOURCE is a
+`input p from facts(SOURCE)` gives `p` the rows of a `.df` fact file
+(`facts("data/release.facts")`, or `facts(git(REPO, REF, PATH))`), read
+from outside and re-read when they change; `decl p(a, b)` declares its
+columns. `input p from FORMAT(SOURCE) [where B]` is a table: its rows are a
+data file's, read with `decl p(col: type, ..)`'s columns. FORMAT is `csv`, `json`, `yaml` or `toml`; SOURCE is a
 term for the path (a string, holes allowed: a hole is a content position,
 so it reads now) or `git(REPO, REF, PATH)`, each a term. A table's columns
 are typed, with an input's types (`inputs::check_type`), never `secret`.
-Relation inputs are the last of the file's header (see "The header").
+Relation inputs are the last of the file's header (see "The header"); a
+copy's tables are its user's block's, `p from FORMAT(SOURCE)`.
 
 A table lowers to externs (`src/tables.rs`), the source its bound inputs:
 
 ```
-decl p(col, ...)
 extern table.FORMAT.p(+path, -at, -col: type, ...)
-p(Col, ...) :- reads, Path = PATH', table.FORMAT.p(Path, At, Col, ...)
+p(Col, ...) :- B, reads, Path = PATH', table.FORMAT.p(Path, At, Col, ...)
+decl p(..) mixed
 ```
 
 and from git, the ref resolved to a commit first:
@@ -955,7 +1019,7 @@ as it is.
 | `settings n @r { .. } where B`            | `settings n @r { .. } :- B, reads`                     |
 | `instance c n { k = t } where B`          | `instance c n { k = t' } :- B, reads`; the copy exists while `B` holds |
 | `use m { k = t } where B`                 | the same, of the module `m`, under `m`                 |
-| `set k = v where B`                       | `input("k", v) :- B`                                   |
+| `set k = v where B`                       | `arg("input", "", "k", v, normal) :- B` (`k` a leaf's path too) |
 | `set n.k = v [where B]`                   | the copy `n`'s input `k`'s contribution                |
 | `deny "m" {o} where B`                    | `deny("m", {o}) :- B` (`warn` the same)                |
 | `deny "a ${x}" where B`                   | `deny(M, ..) :- B, M = format("a %s", X)`              |
@@ -964,9 +1028,14 @@ as it is.
 | `output k: T = t` (`T` a resource type)   | `output k: addr`, and its value                        |
 | `output k = t` (no reads)                 | `output k = t'`                                        |
 | `output k = t where B` (reads, or a body) | `output(k, t') :- B, reads`                            |
+| `output k { f = t }`                      | `output k = { f: t }`, typed by its fields             |
+| `output p` (a copy's relation)            | `__rows(Scope, "p", [X, ..]) :- p(X, ..)`, read by `n.p(x, ..)` and `c[t].p(x, ..)` |
+| `output p` (a stack's relation)           | `output p = [ [X, ..] \| p(X, ..) ]`, read by `s[k=v].p(x, ..)` as `member(Rows, [x, ..])` |
+| `input k { f: T = d }` (R-54)             | the leaf `k.f`'s `arg("input", S, "k.f", d, default)`, its check `k.f`'s refinement |
 | `decl p(a: t, b_c: t)`                    | record fields `a`, `b_c`                               |
-| `input p(a) from facts(S)`                | a relation read from `S`, re-read when it changes      |
-| `input p(c: t) from F(S)`                 | `p(C) :- reads, Path = S', table.F.p(Path, At, C)` ("Relation inputs and tables") |
+| `input p from facts(S)`                   | a relation read from `S`, re-read when it changes      |
+| `input p from F(S) where B`               | `p(C) :- B, reads, Path = S', table.F.p(Path, At, C)` ("Relation inputs and tables") |
+| `instance c n { p(t) where B }`           | `n::p(t') :- B, reads`, the copy's relation `p`        |
 | `key k: T` (`[stacks.s] config = 'F(S)'`) | `arg("settings", K, P, V, normal) :- .., table.F.stack.config(.., P, V)` |
 | `enum("a", "b")` in a type                | `enum(a, b)`                                           |
 | `"a${e}b"`                                | `format("a%sb", e')`                                   |
@@ -1053,7 +1122,7 @@ sits with the line that opened it. The normal forms:
 - `=` between two bound sides is `==`;
 - `i = p[k]` with `i` fresh is `p(k, i)`;
 - `env("prod")` for a value name is `env == "prod"`;
-- the header is `key`, `input`, `input p(..) from`, before the
+- the header is `key`, `input`, `input p from`, before the
   body, each statement with the comments directly above it and on its line
   (see "The header").
 

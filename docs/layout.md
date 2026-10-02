@@ -10,7 +10,7 @@ stacks/<stack>.df           one stack per file, named after it
 <name>.df, <dir>/<name>.df  modules: `config.df` is the module
                             `config`, `modules/net.df` is `modules.net`
 config/<stack>/<key>.yaml   per-deployment rows: a keyed stack's `config`
-data/<table>.csv            tables (`input p(...) from csv(...)`)
+data/<table>.csv            tables (`input p from csv(...)`)
 providers/<name>/           a local provider: a plugin executable, or a
                             schema (and externs) the mock plays
 dform.state/                state: per deployment, audit logs, plan keys,

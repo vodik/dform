@@ -1154,7 +1154,8 @@ proceed: held, needs approval (Reason): T["A"]`) and the plan's digest is
 published: a log line, `tick N: approval needed: plan digest sha256:...`,
 and `approval-pending.json` beside the state. A token for that digest
 releases it when it arrives through the input relation `approval/1` (the
-token's text; `input approval(token) from facts("approvals.facts")`) or
+token's text; `input approval from facts("approvals.facts")` and `decl
+approval(token)`) or
 as a file in the drop directory `approvals/` beside the state (`event
 approval`); `tick N: approved by WHO: plan digest ...`. A token for another
 plan is ignored, one that fails otherwise is logged (`approval refused:
@@ -1309,7 +1310,10 @@ alternatives`; `--all` shows them all. `--core` prints the same tree in
 the core's spelling: the lowered rules by id (`by r17: head :- body`),
 their variables, facts as relations, the aggregate as `Σattr`. An address
 as plan prints it is a pattern too: `why 'T["A"]'` explains the resource's
-`want`, `why 'T["A"].path'` the attribute's `attr`. An `attr`/`arg`
+`want`, `why 'T["A"].path'` the attribute's `attr`. An input or a `let`
+is named as the stack reads it: `why replicas`, `why nodes.count` (a leaf
+of an object input, the contributions that give it), `why
+traefik.acme_email` (a used module's). An `attr`/`arg`
 pattern may name part of an object attribute, by dotted path or by object
 value, and then shows only the contributions that hold it:
 
@@ -1566,12 +1570,24 @@ the resume and the controller compare the world with it the same way.
 ## Tables
 
 A table is an input relation whose rows are a data file's, typed column by
-column:
+column as the relation's `decl` declares them (written once; `input p
+from ..` never re-spells the columns):
 
 ```dform
-input peering(env: enum("dev", "stg", "prod"), name: string, peer_network: string) from csv("data/peerings.csv")
-input pins(app: string, image: string) from yaml(git("ops.git", "env/${env}", "pins.yaml"))
+input peering from csv("data/peerings.csv")
+input pins from yaml(git("ops.git", "env/${env}", "pins.yaml")) where env != "dev"
+
+decl peering(env: enum("dev", "stg", "prod"), name: string, peer_network: string)
+decl pins(app: string, image: string)
 ```
+
+Several `input p from ..` lines are one relation, their rows together,
+and facts the program states join them. A module takes a relation from
+its user with `input p` alone, and the user's `use` or `instance` block
+gives its rows (`zone("a", 0)`, `zone(z, n) where az(z, n)`, or `zone
+from csv("zones.csv")`); `output p` hands a relation out, read
+`copy.p(x, ..)`, `c[t].p(x, ..)` or `stack[k=v].p(x, ..)`, one fact per
+row (docs/grammar.md "Inputs and outputs").
 
 The formats are `csv` (a header naming the columns), `json` and `yaml` (a
 list of objects), and `toml` (the rows as `[[peering]]` entries). A row has
@@ -1790,26 +1806,32 @@ the `use` or by their defaults; `component NAME { .. }`, an item of a
 module, is the thing copied many times, by `instance PATH NAME { .. }`:
 
 ```dform
-# database.df: a module with an input and a resource.
-input subnets: network.subnets
-resource db.postgres db { subnets }
+# database.df: a module with inputs and a resource.
+input backup_days: int
+input subnet                                 # a relation its user gives
+decl subnet(s: net.subnet)
+resource db.postgres db { backup_days, subnets = [s | subnet(s), s in net.subnet] }
 output iam_need = { action: "db.connect", resource: db }
 
 # network.df: a component, copied once per network.
-type subnets = list(ref(net.subnet))
 component vpc {
   input vpc_net: inet                        # set by each instance
   input zones: list(string) = ["a", "b"]     # a default: @default rank
   resource net.vpc vpc { cidr = vpc_net }
   zone_index(z, i) where z = zones[i]        # private to each copy
   output vpc: net.vpc = vpc                  # an address output
-  output private_subnets: subnets = [s | s in net.subnet]
+  decl private_subnet(subnet: net.subnet)
+  private_subnet(s) where s in net.subnet
+  output private_subnet                      # a relation, read a row at a time
 }
 
 # stacks/dform.df
 use baseline
 instance network.vpc main { vpc_net = settings[env].network.main.vpc_net }
-use database { subnets = main.private_subnets } where env != "dev"
+use database {
+  backup_days = 14
+  subnet(s) where main.private_subnet(s)     # rows of its relation
+} where env != "dev"
 ```
 
 A module's import and a component's copy are one mechanism, stamped under
@@ -1832,14 +1854,20 @@ a name (`database`, `main`):
   to the cell `(input, n, k)` of the attribute aggregate and `D` an
   `@default` one, so `why` shows both. A block that sets an undeclared
   input is a compile error, and an input with no value is the error a
-  stack input's is (`input database.subnets is required and has no
-  value`). `check R` refines the input (`R` names it by its name; see
-  Refinement types);
+  stack input's is (`input database.backup_days is required and has no
+  value`). A used module's inputs are the stack's too: `--set
+  database.backup_days=14` gives one, `why database.backup_days` shows its
+  layers, and `dform test` enumerates them. `check R` refines the input
+  (`R` names it by its name; see Refinement types). `input p` alone is a
+  relation the block gives the rows of, by rows or `p from FORMAT(..)`;
 - `output k: T = t [where B]` declares an output and gives it its value in
   one statement (the type is optional), read anywhere as `n.k`
   (`output(n, k, V)`); an output typed by a resource type (`output vpc:
   net.vpc = vpc`) is the scoped address of the copy's resource.
-  `network.vpc[t].vpc` reads every copy's, `t` the copy's name;
+  `network.vpc[t].vpc` reads every copy's, `t` the copy's name. `output
+  p` exports a relation: `main.private_subnet(s)` reads the copy's rows,
+  `network.vpc[t].private_subnet(s)` every copy's; `output k { f = t }`
+  is an object;
 - with a clause, the copy or the import exists only while it holds.
 
 A name a module does not define reads outward, its user's: `env` in a
@@ -1890,7 +1918,9 @@ The denies are the tests; there is no test or scenario syntax (R-32).
 `dform test [TARGET] [K=V..]` evaluates the program once for every
 combination of its inputs against an empty mock world (the provider's
 schema, no world, no state, nothing written), and every deny must hold in
-each. The input space: an input the target pins (a key's `K=V`) or
+each. The input space is the stack's inputs, each leaf of an object input,
+and every used module's input its `use` block leaves to the stack
+(`--set pg.public=true`): an input the target pins (a key's `K=V`) or
 `--set` pins is that value; an `enum` input takes each of its values, a
 `bool` both; a key whose type is not an enum takes each value a
 deployment of the stack was applied with; any other input takes its
@@ -1965,8 +1995,11 @@ their source changes (a table's too, see "Tables"); `plan` and `apply`
 read them too:
 
 ```dform
-input release(image) from facts("release.facts")
-input approve(t, a) from facts(git("ops.git", "main", "approvals.df"))
+input release from facts("release.facts")
+input approve from facts(git("ops.git", "main", "approvals.df"))
+
+decl release(image)
+decl approve(t, a)
 ```
 
 A source is a `.df` file of facts (`edition 2026` first) of the
