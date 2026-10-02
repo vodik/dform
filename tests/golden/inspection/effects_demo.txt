@@ -89,6 +89,7 @@ network.peer:
 
 stack:
   reads:
+    db.postgres.backup_days
     db.postgres.multi_az
     extern table.yaml.stack.config
     input env
