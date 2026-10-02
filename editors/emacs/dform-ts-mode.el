@@ -276,8 +276,21 @@ apply-order edge, not its content read now (`docs/grammar.md'
 
 ;;; Indentation
 
+(defun dform-ts-mode--in-string-p (node parent bol)
+  "Whether BOL is inside a string literal that began on an earlier line.
+NODE and PARENT are the node at BOL and its parent.  A string may span
+lines (R-61), and the spaces at the start of its later lines are its
+text: indenting them would change the string."
+  (when-let* ((s (treesit-parent-until
+                  (or node parent)
+                  (lambda (n) (equal (treesit-node-type n) "string"))
+                  t)))
+    (< (treesit-node-start s) bol)))
+
 (defvar dform-ts-mode--indent-rules
   `((dform
+     ;; A line inside a string is the string's: left as it is.
+     (dform-ts-mode--in-string-p no-indent 0)
      ;; A closer sits with the line that opened it.
      ((node-is ,(regexp-opt '("}" "]" ")"))) parent-bol 0)
      ;; A line is one step deeper than the innermost bracket, block or

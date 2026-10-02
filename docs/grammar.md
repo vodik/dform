@@ -66,7 +66,7 @@ body block (`where { }`) separate their entries by a newline or a comma.
 
 ```
 IDENT    := [A-Za-z_][A-Za-z0-9_]*       ; case decides nothing; "_" alone is the placeholder
-STRING   := "\"" ... "\""                ; escapes \" \\ \n \t \u{hex}; ${e} interpolates
+STRING   := "\"" ... "\""                ; may span lines; escapes \" \\ \n \t \u{hex}; ${e} interpolates
 INT      := [0-9]+                       ; -1 is unary minus applied to 1
 RANK     := "@default" | "@override"
 COMMENT  := "#" to end of line
@@ -112,6 +112,26 @@ A string is a string constant: every constant is quoted (`"prod"`,
 itself. A hole may not hold a string (bind it first). A hole is a content
 position: a dot in it reads now (see "Reference or read"). A literal part
 may not contain `%s`.
+
+A string may span lines (R-61), as in Lisp: its text is everything
+between the quotes, newlines and leading spaces included, and nothing is
+stripped, so what is written is what the provider gets. A hole works on
+any line. For a script or a config file indented with the program,
+`str.dedent(s)` removes the indentation its non-blank lines share and the
+line break right after the opening quote:
+
+```
+resource compute.vm web {
+  user_data = str.dedent("
+    #!/bin/sh
+    echo ${name}
+  ")
+}
+```
+
+`user_data` is `"#!/bin/sh\necho web\n"`. `dform fmt` and the editor
+never re-indent the lines inside a string and never break a line inside
+one.
 
 A quoted path segment (`x."a-b"`) is one key: it may not hold `.`, `[` or
 `]`.
@@ -779,7 +799,7 @@ are written bare.
 | `inet`    | `inet.subnet(net, bits, n)`, `inet.host(net, n)`, `inet.addr(net, n)`, `inet.contains(net, a)`, `inet.overlaps(a, b)`, `inet.prefix_len(net)` |
 | `int`     | `int.range(lo, hi, step)` (what `i in lo..hi` enumerates)                 |
 | `ip`      | `ip.unspecified(a)`                                                       |
-| `str`     | `str.split(s, sep)`, `str.lower(s)`, `str.upper(s)`                       |
+| `str`     | `str.split(s, sep)`, `str.lower(s)`, `str.upper(s)`, `str.dedent(s)`      |
 | `list`    | `list.len(l)` (`len` in the prelude), `list.join(l, sep)`                 |
 
 A function to `bool` is also a predicate: `inet.contains(n, a)` as a body
@@ -913,7 +933,9 @@ sits with the line that opened it. The normal forms:
   (see "The header").
 
 It drops the commas a newline makes redundant (in blocks and `{ }` bodies)
-and the trailing comma of a list or object. A formatted file prints back
+and the trailing comma of a list or object. A string is printed as
+written: the lines inside one that spans lines keep their indentation,
+and no line is broken inside a string. A formatted file prints back
 byte for byte.
 
 ## Decisions the proposal left open

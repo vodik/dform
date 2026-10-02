@@ -1459,12 +1459,15 @@ for byte, and a file with a syntax error is reported, not rewritten.
   - `deny "msg" { key: v } where body`, `warn ...`; the message interpolates.
   - `x in net.vpc` ranges over the wanted resources of a type; `r in T`,
     `has r.p`, `not r.p` (not true, absent included); `x in list`, and
-    `x = list[i]` for the index too.
+    `x = list[i]` for the index too; `i in 0..n` (`0..=n` inclusive) once
+    per integer.
   - `let cfg = settings[env]` is a value whose type is the row's
     reference; `cfg.gke.pods_cidr` reads through it.
   - settings blocks: `settings prod { db.backup_days = 14 }`.
   - `output k: T = t where body`: an output in one statement.
-  - literals: lists `[a, b]` and objects `{ k: v }` (`{ a, b }` is `{ a: a, b: b }`).
+  - literals: lists `[a, b]` and objects `{ k: v }` (`{ a, b }` is `{ a: a, b: b }`);
+    a string may span lines, kept as written (`str.dedent(s)` removes the
+    indentation its lines share).
   - list comprehensions: `[x | pred(x), pred2(x)]` (lowers to a `collect_list` rule).
   - expression terms: `ib = ia + 1` lowers to `IB = add(IA, 1)`.
   - `use PATH [as N] [{ k = v }] [where B]` imports a module, a file by

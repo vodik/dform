@@ -96,6 +96,19 @@ in a condition does not."
     (should (eq (dform-ts-mode-test--face-at "..k") 'font-lock-operator-face))
     (should (eq (dform-ts-mode-test--face-at "..=") 'font-lock-operator-face))))
 
+(ert-deftest dform-ts-mode-test-multiline-string ()
+  "A string that spans lines (R-61) is a string on every line, and
+indenting leaves its lines as written."
+  (dform-ts-mode-test--ensure-grammar)
+  (with-temp-buffer
+    (insert "edition 2026\nresource t n {\n      a = \"x\n   y ${v}\n\"\n b = 1\n}\n")
+    (dform-ts-mode)
+    (font-lock-ensure)
+    (should (eq (dform-ts-mode-test--face-at "   y") 'font-lock-string-face))
+    (indent-region (point-min) (point-max))
+    (should (equal (buffer-string)
+                   "edition 2026\nresource t n {\n  a = \"x\n   y ${v}\n\"\n  b = 1\n}\n"))))
+
 (ert-deftest dform-ts-mode-test-indent-round-trip ()
   "`indent-region' leaves a correctly indented file unchanged."
   (dform-ts-mode-test--ensure-grammar)

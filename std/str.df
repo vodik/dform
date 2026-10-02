@@ -12,3 +12,7 @@ fn lower(text: string) -> string
 #| The text in upper case.
 #| example: let code = str.upper(region)
 fn upper(text: string) -> string
+
+#| The text with the leading indentation its non-blank lines share removed, a blank line emptied, and the line break right after the opening quote dropped: for a string literal that spans lines, indented with the program.
+#| example: let script = str.dedent("\n    #!/bin/sh\n    echo ${name}\n  ")
+fn dedent(text: string) -> string

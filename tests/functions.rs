@@ -104,3 +104,28 @@ fn the_reference_reads_std() {
     assert!(engine::reference("add", true).is_none());
     assert!(engine::reference("to_int", true).is_none());
 }
+
+/// `str.dedent` (R-61): a string literal that spans lines keeps what is
+/// written; dedent removes the indentation its lines share.
+#[test]
+fn dedent_strips_the_shared_indentation() {
+    let src = "s(str.dedent(\"\n    #!/bin/sh\n      echo hi\n\n    done\n  \"))\n";
+    assert_eq!(facts(src, "s"), [r##"s("#!/bin/sh\n  echo hi\n\ndone\n")"##]);
+    // Tabs and spaces share only what is the same.
+    assert_eq!(
+        facts("s(str.dedent(\"\\t a\\n\\t b\\n  c\"))\n", "s"),
+        [r#"s("\t a\n\t b\n  c")"#]
+    );
+}
+
+/// A string literal may span lines (R-61): nothing is stripped, and a hole
+/// on a later line interpolates.
+#[test]
+fn a_string_spans_lines_as_written() {
+    let src = "n(\"web\")\ns(t) where n(x), t = \"one\n  ${x} two\n\"\n";
+    assert_eq!(facts(src, "s"), [r#"s("one\n  web two\n")"#]);
+    assert_eq!(
+        facts("n(\"web\")\ns(str.dedent(\"\n    a ${x}\n      b\n  \")) where n(x)\n", "s"),
+        [r#"s("a web\n  b\n")"#]
+    );
+}

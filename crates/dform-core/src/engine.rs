@@ -3431,6 +3431,10 @@ pub const BODIES: &[(&str, Body)] = &[
         [Value::Str(s)] => Some(Value::Str(s.to_uppercase())),
         _ => None,
     }),
+    ("str.dedent", |a| match a {
+        [Value::Str(s)] => Some(Value::Str(dedent(s))),
+        _ => None,
+    }),
     ("str.split", |a| match a {
         [Value::Str(s), Value::Str(sep)] if !sep.is_empty() => Some(Value::List(
             s.split(sep.as_str())
@@ -3447,6 +3451,27 @@ pub const BODIES: &[(&str, Body)] = &[
         _ => None,
     }),
 ];
+
+/// `str.dedent`: the indentation every non-blank line shares (the same
+/// spaces and tabs) removed, blank lines emptied, and a line break at the
+/// very start dropped (the one after a literal's opening quote).
+fn dedent(s: &str) -> String {
+    fn indent(l: &str) -> &str {
+        &l[..l.len() - l.trim_start_matches([' ', '\t']).len()]
+    }
+    let s = s.strip_prefix('\n').unwrap_or(s);
+    let blank = |l: &str| indent(l).len() == l.len();
+    let mut lines = s.split('\n').filter(|l| !blank(l));
+    let first = lines.next().map(indent).unwrap_or("");
+    let margin = lines.fold(first, |m, l| {
+        let n = m.bytes().zip(indent(l).bytes()).take_while(|(a, b)| a == b).count();
+        &m[..n]
+    });
+    s.split('\n')
+        .map(|l| if blank(l) { "" } else { &l[margin.len()..] })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
 
 fn len_of(a: &[Value]) -> Option<Value> {
     match a {

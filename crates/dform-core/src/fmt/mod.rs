@@ -332,6 +332,18 @@ mod tests {
         );
     }
 
+    /// A string may span lines (R-61): its text is the program's, so fmt
+    /// re-indents the lines around it and never the lines inside it.
+    #[test]
+    fn a_string_that_spans_lines_is_kept_as_written() {
+        assert_eq!(
+            fmt("resource t n {\n      a = \"x\n   y ${v}\n\"\n b = 1\n}\n"),
+            "resource t n {\n  a = \"x\n   y ${v}\n\"\n  b = 1\n}\n"
+        );
+        let src = "p(s) where q(v), s = \"one\n  ${v}\ntwo\"\n";
+        assert_eq!(fmt(src), src);
+    }
+
     /// A body that fits the line is written on it (section 3's normal
     /// form); one that does not keeps its braces, a literal per line.
     #[test]
