@@ -565,6 +565,24 @@ and three things did not survive it.
   `modules/network.df`; nesting allowed; activated by `instance` (a copy
   with inputs) or `use` (once, no inputs). A policy is a module you
   `use`, so `policy` and `import` go.
+- *R-65* (2026-10-02, supersedes R-37 and R-64) Modules, components,
+  stacks: the design in proposals/I-modules.md. A module is a `.df` file
+  named by its path from the project root (`config`, `modules.net`,
+  `stacks.platform`), a namespace of items (types, relations, rules,
+  denies, `let` values, components), brought in by `use M`; a module holds
+  no resources. A component is the thing that is copied: `component NAME
+  { input ..; body }` as an item, or a whole file whose top level declares
+  an `input`; `instance M.NAME name { inputs }` makes a named copy
+  (anonymous, named after the component, when used once); `M.NAME[t].x`
+  ranges over copies. A stack is a component the tool instances, one
+  deployment per `key`, under stacks/ or named in dform.toml; `use
+  stacks.platform` binds to its deployments and `platform[env=env].x`
+  reads one. `use` is a reference, `instance` a copy; `instance config`,
+  `use postgres`, `network.network` cannot be written. Paths are looked
+  up from the root, never searched; packages mount in dform.toml; `std`
+  is always in scope. `module`, `policy`, `import`, `export` go;
+  `component` arrives. One instance mechanism in the engine, no stack
+  carrier; `key`, state, approvals, confirmation stay the tool's.
 - *R-38* Settings are guarded contributions to the program's own inputs:
   `settings { .. } where env == "prod"`, any subset of a composite key
   or any condition; ranks decide between overlapping blocks, never
