@@ -539,10 +539,11 @@ instance network green { cidr = "10.2.0.0/16" } where env == "prod"
 Inside, `vpc` is the copy's own resource and `az(..)` is the stack's
 table, read like any fact. `green` exists only in prod. The copy's VPC is
 `aws.vpc["blue::vpc"]` everywhere else, another block reads it as
-`blue.vpc`, and `network[t].vpc` ranges over every copy. A component used
-once needs no name: `instance traefik { acme_email }` is the copy named
-`traefik`. `use` of a component and `instance` of a module are errors
-that name the other word.
+`blue.vpc`, and `network[t].vpc` ranges over every copy. `use` works on a
+component too: with nothing left to bind, importing it stamps it once,
+so `use synapse` is the homeserver, named `synapse`; with an input that
+has no default, `use` is an error that says to `instance` it. A
+component is used or instanced in a scope, never both.
 
 **Policies.** A policy is a module of `set`, `deny` and `warn`
 statements, `policies/baseline.df` say, applied with `use baseline`. A
