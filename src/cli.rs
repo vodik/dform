@@ -3215,7 +3215,9 @@ fn run_tests(
                 }
                 backend.query_extern(f, ins)
             });
-        let p = zset::with_policy_rules(program.clone())?;
+        let mut p = zset::with_policy_rules(program.clone())?;
+        // Quantity and time literals read as their attributes' types (R-66).
+        crate::types::read(&mut p, backend.schema())?;
         let (res, mut violations) = externs.eval(&p, &extra)?;
         violations.extend(inputs::violations(&res.facts, &lowered.inputs));
         let redact = query::Redactor::new(&res.facts, backend.schema());

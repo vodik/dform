@@ -233,3 +233,29 @@ fn a_quantity_attribute_reads_a_string_and_refuses_another_dimension() {
         r.stderr
     );
 }
+
+/// `dform test` reads the literals as `plan` does: `500m` in a cpu
+/// attribute is millicores, and a deny over memory fires.
+#[test]
+fn dform_test_reads_quantities_as_plan_does() {
+    let s = Scratch::project("q-test");
+    s.write("dform.toml", "[providers]\nk8s = \"k8s\"\n");
+    s.write(
+        "main.df",
+        "edition 2026\n\nprovider k8s\n\n\
+         resource k8s.deployment web {\n  metadata.name = \"web\"\n  \
+         spec.selector.matchLabels = { app: \"web\" }\n  \
+         spec.template.spec.containers = [{\n    name: \"web\",\n    image: \"web:1\",\n    \
+         resources: { limits: { cpu: 500m, memory: 3Gi } }\n  }]\n}\n\n\
+         deny \"memory limit above 2Gi\" { container: c.name } where {\n  \
+         d in k8s.deployment\n  c in d.spec.template.spec.containers\n  \
+         c.resources.limits.memory > 2Gi\n}\n",
+    );
+    let r = s.run(&["test", "main"]).failure();
+    assert!(
+        r.stdout.contains("memory limit above 2Gi") || r.stderr.contains("memory limit above 2Gi"),
+        "{}\n{}",
+        r.stdout,
+        r.stderr
+    );
+}
