@@ -201,7 +201,12 @@ variable may not take the name of a resource, a module or a type namespace
 in scope ("variable `net` shadows the type namespace `net`"). A bare
 resource name is its address in two places: the value of an `output`, and
 the left side of `in`, where the type on the right picks among resources
-of one name.
+of one name. It is a reference value (R-42), which prints as its address
+`T["A"]`, in two more: a column that takes a resource (the plan's
+`deformation(kind, r, before)` and `world_digest(r, now)`,
+`requires_approval(r, reason)`, `lifecycle(r, what)`, `adopt(r, remote)`,
+`ignore_changes(r, path)`, the last of `moved(T, "old-address", r)`), and
+either side of `==` or `!=` with a resource on the other.
 
 A variable must have a binding occurrence somewhere in its rule: an
 argument of a relation (a pattern in it included), either side of `=`, the
@@ -661,6 +666,8 @@ as it is.
 | `has R.p`, `not has R.p`                  | `attr(T, A, "p", _)`, `not attr(T, A, "p", _)`        |
 | `has x.f`, `has R.p.q` (a walk)           | `Has = __path(X, "f")` after the read; `not` of it through a helper |
 | `k == c`, `k`, `has k`                    | `k(c)`, `k(true)`, `k(_)`                              |
+| `lifecycle(r, "f")`, `deformation(k, r, _)` (a column that takes a resource) | `r` as `ref(T, A, "")`: a value in a fact or head, taken apart in a body; `r` with no static type is the reference itself |
+| `r == n`, `r != T[e]` (a resource on either side) | `R = ref(T, "n", "")`, `R != ref(T, e', "")`; a typed `r` is `ref(T, R, "")` |
 | `x in T`, `x in resource`, `R in T`       | `want(T, x)`, `want(Type, x)`, `want(T, A)`            |
 | `"n-${e}" in T`                           | `Name = format(..), want(T, Name)`                     |
 | `x in world.T`                            | `cloud_exists(T, x)`                                   |

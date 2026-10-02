@@ -828,7 +828,7 @@ reverse dependency order (a delete has no desired document left, so state
 records each object's dependencies when it is applied). Which way a
 replacement goes is the schema's `type_replace(T, Order)`: `destroy_first`
 (`-/+`), `create_first` (`+/-`), or `either` (the default), where it is
-`-/+` unless `lifecycle(T, A, create_before_destroy).` says `+/-`. That fact
+`-/+` unless `lifecycle(r, "create_before_destroy")` says `+/-`. That fact
 on a `destroy_first` type is an error naming the type; on a `create_first`
 type it is redundant. In the mocks a Kubernetes Deployment or Service and an
 `aws_instance` are `create_first`, a Namespace and an `aws_s3_bucket`
@@ -852,19 +852,26 @@ cargo run -- -C examples/demo dev --chaos fresh-ids apply dform env=staging
 cargo run -- -C examples/demo dev --chaos fresh-ids apply dform env=prod   # tick 1 replaces vpcs and subnets; tick 2 updates their readers
 ```
 
-Lifecycle is plain facts the planner reads (and policy can read too):
+Lifecycle is plain facts the planner reads (and policy can read too). Each
+takes the resource as a reference: a resource in scope by its name, one of
+a module instance or one no longer in the program by its address, and many
+at once by a rule that binds them with `in`:
 
 ```dform
-lifecycle(net.vpc, "main", "prevent_destroy")        # a delete or replace of it is a deny
-lifecycle(net.vpc, "main", "create_before_destroy")  # replace creates first (type_replace either)
-moved(net.vpc, "network.main::vpc", "network.core::vpc")  # rename without destroy
-ignore_changes(net.vpc, "main", "tags.owner")        # set on create, then ignored
+lifecycle(main, "prevent_destroy")                   # a delete or replace of it is a deny
+lifecycle(main, "create_before_destroy")             # replace creates first (type_replace either)
+moved(net.vpc, "network.main::vpc", net.vpc["network.core::vpc"])  # rename without destroy
+ignore_changes(main, "tags.owner")                   # set on create, then ignored
+lifecycle(pg, "prevent_destroy") where env == "prod", pg in db.postgres   # every prod database
 ```
 
-`moved(T, Old, New)` rewrites state's identity from `Old` to `New` before the
+`moved(T, Old, new)` rewrites state's identity from `Old` to `new` before the
 diff, so renaming a component instance with a `moved` fact per resource plans
-undeformed (`moved T.Old -> T.New` is printed; `apply` persists it). It applies
-only while state maps `Old` and not `New`, so the facts can stay.
+undeformed (`moved T["Old"] -> T["new"]` is printed; `apply` persists it). The
+old side is text, since it names a resource that no longer exists; the new
+side is a reference. It applies only while state maps `Old` and not `new`, so
+the facts can stay (once `new` is renamed in turn, write it as its address,
+`T["new"]`).
 `ignore_changes` leaves the path in a create; once the object exists it
 drops the path from the desired document and from the world's, and an
 update keeps the world's value there (or its absence). `prevent_destroy`
@@ -873,20 +880,25 @@ delete T["A"]`.
 
 Policy over the plan. Once the plan is computed its deformations go back to
 the evaluator as facts and the program is evaluated once more (the policy
-pass): `deformation(Kind, T, A, Before)` per deformation (`Kind` is
+pass): `deformation(Kind, r, Before)` per deformation, `r` the resource as a
+reference that prints as its address, `T["A"]` (`Kind` is
 `create`, `adopt`, `update`, `drift`, `pending`, `replace`, `delete`,
 `delete_deposed` or `remaining`; `Before` a digest of the world document it was planned
-against, `absent` for none) and `world_digest(T, A, Now)`. The lifecycle
+against, `absent` for none) and `world_digest(r, Now)`. The lifecycle
 denies are rules over them (`zset::POLICY_RULES`): `prevent_destroy` reads
-`lifecycle/3` and a `delete` or `replace`, and at a phase boundary the held
+`lifecycle/2` and a `delete` or `replace`, and at a phase boundary the held
 deformations come back as `pending` with the digest they were planned
 against, so the world moving under one is a deny too; so do the remaining
 deformations of an interrupted apply, as `remaining`, when it resumes.
 `why` explains them (the injected facts print as `plan`, or `plan (tick
-N)` when given at an apply tick), and a policy can read the same facts:
+N)` when given at an apply tick), and a policy can read the same facts,
+binding the resource with `in` to read its attributes and comparing it with
+a resource by `==`:
 
 ```dform
-deny "no deletes here: ${t}[\"${a}\"]" where deformation("delete", t, a, _)
+deny "no deletes here: ${r}" where deformation("delete", r, _)
+warn "replacing a database" { pg } where deformation("replace", pg, _), pg in db.postgres
+deny "the core network stays" where deformation(_, r, _), r == main, env == "prod"
 ```
 
 ```bash
@@ -1002,22 +1014,19 @@ value.
 
 ## Approvals
 
-Policy decides what needs an approval. `requires_approval(D, Reason)` is an
-ordinary relation a program derives over `deformation/4` in the policy
-pass; `D` is the address as the plan prints it (`T["A"]`). No rows, no token
+Policy decides what needs an approval. `requires_approval(r, Reason)` is an
+ordinary relation a program derives over `deformation/3` in the policy
+pass; `r` is the resource, a reference, which the plan, the plan file and
+the approval check print as its address (`T["A"]`). No rows, no token
 needed:
 
 ```dform
 stack app[env] { approvals = jwks_file("approvers.jwks.json") }
 
-requires_approval(d, "a replace in prod") where {
-  env == "prod"
-  deformation("replace", t, a, _)
-  d = "${t}[\"${a}\"]"
-}
+requires_approval(r, "a replace in prod") where env == "prod", deformation("replace", r, _)
 
 # Optional: who may approve what. Without it, any key of the trust root may.
-approver_allowed(who, d) where requires_approval(d, _), who in ["alice", "bob"]
+approver_allowed(who, r) where requires_approval(r, _), who in ["alice", "bob"]
 ```
 
 A plan with rows prints a `needs approval:` section, each deformation and
@@ -1525,11 +1534,11 @@ term. In the fake backend it resolves against `dform.state/inventory.json`.
 
 ### Adopt existing resources
 
-`adopt(Type, LocalName, RemoteName)` marks a desired resource as existing already.
+`adopt(r, RemoteName)` marks a desired resource `r`, a reference, as existing already.
 Planning will produce an `Adopt` action (`>` in plan output) instead of `Create`.
 
 ```dform
-adopt(net.vpc, "network.main::vpc", "existing-prod-vpc") where env == "prod", "existing-prod-vpc" in world.net.vpc
+adopt(net.vpc["network.main::vpc"], "existing-prod-vpc") where env == "prod", "existing-prod-vpc" in world.net.vpc
 
 set net.vpc["network.main::vpc"].adopted_id = cloud_ref(net.vpc, "existing-prod-vpc", "id") where env == "prod"
 ```
@@ -1789,7 +1798,7 @@ controller gates every tick on the policy pass:
 
 - `hold(T, A, Reason)` holds `T["A"]`'s deformation: `tick N: proceed: held,
   Reason: T["A"]`, for as long as the policy derives it.
-- `requires_approval(D, Reason)` holds a deformation until a signed
+- `requires_approval(r, Reason)` holds a deformation until a signed
   approval of the plan's digest arrives (see "Approvals").
 - Drift of `T["A"]` is corrected when every drifted path is
   `auto_reconcile(T, A, Path)` or `approve(T, A)` holds, or the event is an
@@ -2011,7 +2020,7 @@ examples/demo an evaluation takes about 30 ms in a release build.
   hover lists them.
 - *Rename* of the same names. Renaming a resource, an instance or a
   module whose addresses have state in the selected deployment adds, in
-  the same edit, `moved("T", "old", "new")` per address just after the
+  the same edit, `moved(T, "old", new)` per address just after the
   declaration's block, so the next plan is a move and not a destroy and a
   create; an address written as a string at the top of a program
   (`net.vpc["network.main::vpc"]`, `"network.main::vpc" in net.vpc`) is
