@@ -57,7 +57,7 @@ big(s) where size(s)
     .failure();
     assert!(
         r.stderr
-            .contains("p.df:6:11: size/1 is private to module m"),
+            .contains("p.df:6:14: size/1 is private to module m"),
         "{}",
         r.stderr
     );
@@ -124,7 +124,7 @@ instance m b { n = 1 }
     let r = plan(&src.replace("input n: int = 7", "input n: int")).failure();
     assert!(
         r.stderr
-            .contains("p.df:9:1: instance m a does not set required input n"),
+            .contains("p.df:8:1: instance m a does not set required input n"),
         "{}",
         r.stderr
     );

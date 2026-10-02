@@ -74,7 +74,7 @@ fn e0303_a_count() {
 fn e0304_a_public_place() {
     refused(
         "resource leaky.oops o {\n  password = p\n} where pw(p)\n",
-        "p.df:6:3: E0304: a secret reaches leaky.oops .password, not marked sensitive in the schema",
+        "p.df:5:3: E0304: a secret reaches leaky.oops .password, not marked sensitive in the schema",
     );
     refused(
         "warn \"pw\" { p: p } where pw(p)\n",

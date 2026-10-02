@@ -1100,7 +1100,7 @@ fn references_of_every_kind_of_name() {
 
     // A predicate: its rule's head and the bodies that read it.
     let found = references(&mut c, &root, &stack, find(&stack, "vpc_peer_pair(ia", 2));
-    assert_eq!(found, at_places("stacks/dform.df", &[86, 87, 92]));
+    assert_eq!(found, at_places("stacks/dform.df", &[83, 84, 91]));
 
     // An input: the stack's own reads, a module's and a pack's, the
     // scenarios' `set`.
@@ -1109,7 +1109,7 @@ fn references_of_every_kind_of_name() {
         ("stacks/dform.df".to_string(), 18),
         ("stacks/dform.df".into(), 24),
         ("stacks/dform.df".into(), 39),
-        ("stacks/dform.df".into(), 111),
+        ("stacks/dform.df".into(), 107),
         ("modules/network.df".into(), 13),
         ("policies/baseline.df".into(), 22),
     ] {
@@ -1125,7 +1125,7 @@ fn references_of_every_kind_of_name() {
             ("modules/network.df".into(), 9),
             ("modules/network.df".into(), 12),
             ("stacks/dform.df".into(), 54),
-            ("stacks/dform.df".into(), 60),
+            ("stacks/dform.df".into(), 59),
         ]
     );
 
@@ -1133,7 +1133,7 @@ fn references_of_every_kind_of_name() {
     let found = references(&mut c, &root, &stack, find(&stack, "let cfg", 4));
     assert_eq!(
         found,
-        at_places("stacks/dform.df", &[39, 54, 60, 66, 67, 73, 74, 75, 99])
+        at_places("stacks/dform.df", &[39, 54, 59, 64, 65, 70, 71, 72, 95])
     );
     let found = references(&mut c, &root, &network, find(&network, "type subnets", 5));
     assert_eq!(
@@ -1143,7 +1143,7 @@ fn references_of_every_kind_of_name() {
             ("modules/kubernetes.df".into(), 10),
             ("modules/network.df".into(), 6),
             ("modules/network.df".into(), 7),
-            ("modules/network.df".into(), 28),
+            ("modules/network.df".into(), 27),
         ]
     );
 
@@ -1155,10 +1155,10 @@ fn references_of_every_kind_of_name() {
             ("modules/network.df".into(), 3),
             ("stacks/dform.df".into(), 53),
             ("stacks/dform.df".into(), 58),
-            ("stacks/dform.df".into(), 68),
-            ("stacks/dform.df".into(), 76),
-            ("stacks/dform.df".into(), 86),
-            ("stacks/dform.df".into(), 86),
+            ("stacks/dform.df".into(), 66),
+            ("stacks/dform.df".into(), 73),
+            ("stacks/dform.df".into(), 83),
+            ("stacks/dform.df".into(), 83),
         ]
     );
     let found = references(
@@ -1168,7 +1168,7 @@ fn references_of_every_kind_of_name() {
         find(&stack, "instance database main", 18),
     );
     // Its resources' addresses from outside are strings (H-16).
-    assert_eq!(found, at_places("stacks/dform.df", &[64]));
+    assert_eq!(found, at_places("stacks/dform.df", &[63]));
     let found = references(&mut c, &root, &stack, find(&stack, "use baseline", 6));
     assert_eq!(
         found,
@@ -1185,9 +1185,9 @@ fn references_of_every_kind_of_name() {
         found,
         vec![
             ("modules/network.df".into(), 11),
+            ("modules/network.df".into(), 20),
             ("modules/network.df".into(), 21),
-            ("modules/network.df".into(), 22),
-            ("modules/network.df".into(), 27),
+            ("modules/network.df".into(), 26),
         ]
     );
 
@@ -1199,7 +1199,7 @@ fn references_of_every_kind_of_name() {
         &format!("{original}\nextra(x) where vpc_peer_pair(x, _, _, _)\n"),
     );
     let found = references(&mut c, &root, &stack, find(&stack, "vpc_peer_pair(ia", 2));
-    assert_eq!(found, at_places("stacks/dform.df", &[86, 87, 92, 122]));
+    assert_eq!(found, at_places("stacks/dform.df", &[83, 84, 91, 118]));
 
     // An attribute path: every rule contributing to the cell, the
     // module's field and the pack's.
@@ -1427,7 +1427,7 @@ fn a_rename_that_changes_the_plan_is_refused() {
     );
     assert!(
         e.contains(
-            "instance main of module network is also the string \"main\" at stacks/dform.df:82:15"
+            "instance main of module network is also the string \"main\" at stacks/dform.df:79:15"
         ),
         "{e}"
     );

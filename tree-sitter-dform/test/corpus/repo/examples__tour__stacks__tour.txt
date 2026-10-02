@@ -191,7 +191,7 @@ deny "a database must not be public" { database: pg } where pg in db.postgres, p
 # has a tag its block does not write. The lines that matter:
 #
 #   $ dform why 'net.vpc["main"].tags.team'
-#   └─ arg("net.vpc", "main", "tags", {team: "shop"}, "normal")   [rank normal, owner r18 (stacks/tour.df:181:1)]
+#   └─ arg("net.vpc", "main", "tags", {team: "shop"}, "normal")   [rank normal, owner r18 (stacks/tour.df:180:1)]
 #        by r18: arg(Type, R, "tags", {team: "shop"}, "normal") :- want(Type, R)
 #        └─ want("net.vpc", "main")   fact, stacks/tour.df:42:1 (want)
 #

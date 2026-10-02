@@ -365,7 +365,7 @@ fn a_fixed_bucket_in_a_block_that_reads_the_key_is_a_warning() {
     let r = s.run(&["plan", "app.df"]).success();
     assert!(
         r.stderr.contains(
-            "warning: app.df:6:3: net.vpc[\"logs\"].bucket = \"company-logs\" does not depend on \
+            "warning: app.df:5:3: net.vpc[\"logs\"].bucket = \"company-logs\" does not depend on \
              the stack's key (env)"
         ),
         "{}",
@@ -403,14 +403,14 @@ fn the_strict_collision_deny_is_a_fact_why_explains() {
     let r = s.run(&["plan", "app.df"]).failure();
     assert!(
         r.stderr
-            .contains("constraint violations:\n- app.df:6:3: net.vpc[\"logs\"].bucket"),
+            .contains("constraint violations:\n- app.df:5:3: net.vpc[\"logs\"].bucket"),
         "{}",
         r.stderr
     );
     let r = s.run(&["why", "deny(M)", "app.df"]).success();
     assert!(
         r.stdout
-            .contains("deny(\"app.df:6:3: net.vpc[\\\"logs\\\"].bucket"),
+            .contains("deny(\"app.df:5:3: net.vpc[\\\"logs\\\"].bucket"),
         "{}",
         r.stdout
     );

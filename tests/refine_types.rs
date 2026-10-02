@@ -77,7 +77,7 @@ fn a_literal_that_violates_a_refinement_is_a_compile_error() {
         r.stderr.contains(
             "p.df:5:17: 40 violates the refinement range(1, 35) of settings .db.backup_days"
         ) && r.stderr.contains("refined here: range(1, 35)")
-            && r.stderr.contains(" 3 │   db.backup_days: int where"),
+            && r.stderr.contains(" 3 │   db.backup_days: int check"),
         "{}",
         r.stderr
     );
@@ -113,7 +113,7 @@ fn a_cross_attribute_refinement_lowers_to_a_deny() {
             "edition 2026
 type settings {{
   pool.min: int
-  pool.max: int where pool.min <= pool.max
+  pool.max: int check pool.min <= pool.max
 }}
 settings prod {{ pool = {{ min: {min}, max: 3 }} }}
 "
@@ -161,7 +161,7 @@ fn a_refinement_on_a_null_is_deferred_and_fires_after_the_boundary() {
     assert!(
         r.stderr
             .contains("constraint violations after tick 1:\n- refinement violated ctx={\"addr\":\"pngu\",\"at\":\"")
-            && r.stderr.contains("examples/refine/stacks/refine_gke.df:133:3\",\"constraint\":\"len_ge(3)\",\"path\":\"zones\"")
+            && r.stderr.contains("examples/refine/stacks/refine_gke.df:130:3\",\"constraint\":\"len_ge(3)\",\"path\":\"zones\"")
             && r.stderr
                 .contains("apply stopped after tick 1: blocked by constraints"),
         "{}",

@@ -308,8 +308,8 @@ fn a_default_yields_to_the_stack_statement() {
     let two_phase = |stack: &str| {
         format!(
             "edition 2026\n{stack}\nresource db.postgres main {{ size = 1 }}\n\
-             resource compute.vm app {{\n  if main in db.postgres, \
-             e = main.endpoint, e != \"\"\n  size = 1\n}}\n"
+             resource compute.vm app {{\n  size = 1\n}} where main in db.postgres, \
+             e = main.endpoint, e != \"\"\n"
         )
     };
     s.write("stacks/p.df", &two_phase("stack p {}"));

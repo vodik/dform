@@ -204,9 +204,8 @@ fn a_secret_into_a_public_attribute_is_a_compile_error() {
         &format!(
             "{PROGRAM}
 resource leaky.oops copy {{
-  if p = v.password
   password = p
-}}
+}} where p = v.password
 "
         ),
     );
@@ -224,7 +223,7 @@ resource leaky.oops copy {{
         .failure();
     assert!(
         r.stderr.contains(
-            "p.df:13:3: E0304: a secret reaches leaky.oops .password, not marked sensitive in the schema"
+            "p.df:12:3: E0304: a secret reaches leaky.oops .password, not marked sensitive in the schema"
         ),
         "{}",
         r.stderr
@@ -244,9 +243,8 @@ fn a_forwarded_secret_and_a_conflict_never_print() {
         &format!(
             "{PROGRAM}
 resource leaky.vault copy {{
-  if p = v.password
   backup = p
-}}
+}} where p = v.password
 "
         ),
     );

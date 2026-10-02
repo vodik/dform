@@ -4,5 +4,5 @@ exit: error
 Error: program is not stratifiable: negative cycle through (arg, net.subnet, name), (arg, net.vpc, peer), (attr, net.subnet, name), (attr, net.vpc, peer)
   (arg, net.subnet, name) -> (attr, net.subnet, name) [attribute aggregate (lub_ranked)]: (compiler-generated)
   (arg, net.vpc, peer) -> (attr, net.vpc, peer) [attribute aggregate (lub_ranked)]: (compiler-generated)
-  (attr, net.subnet, name) -> (arg, net.vpc, peer) [reads attr (aggregate)]: arg("net.vpc", "x", "peer", P, "normal") :- attr("net.subnet", "y", "name", P) (at tests/fixtures/adversarial/adv7_mutual_recursion_attr.df:8:3)
-  (attr, net.vpc, peer) -> (arg, net.subnet, name) [reads attr (aggregate)]: arg("net.subnet", "y", "name", Q, "normal") :- attr("net.vpc", "x", "peer", Q) (at tests/fixtures/adversarial/adv7_mutual_recursion_attr.df:13:3)
+  (attr, net.subnet, name) -> (arg, net.vpc, peer) [reads attr (aggregate)]: arg("net.vpc", "x", "peer", P, "normal") :- attr("net.subnet", "y", "name", P) (at tests/fixtures/adversarial/adv7_mutual_recursion_attr.df:7:3)
+  (attr, net.vpc, peer) -> (arg, net.subnet, name) [reads attr (aggregate)]: arg("net.subnet", "y", "name", Q, "normal") :- attr("net.vpc", "x", "peer", Q) (at tests/fixtures/adversarial/adv7_mutual_recursion_attr.df:11:3)

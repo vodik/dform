@@ -17,12 +17,12 @@ fn plan(src: &str) -> common::Run {
 fn syntax_errors_print_with_their_source_line() {
     let r = plan("edition 2026\np(\"a\") where q(]\nr(\"b\") where ,\n").failure();
     assert!(
-        r.stderr.contains("p.df:2:13: expected a term, found `]`"),
+        r.stderr.contains("p.df:2:16: expected a term, found `]`"),
         "{}",
         r.stderr
     );
     assert!(
-        r.stderr.contains("p.df:3:11: expected a term, found `,`"),
+        r.stderr.contains("p.df:3:14: expected a term, found `,`"),
         "{}",
         r.stderr
     );
@@ -34,7 +34,7 @@ fn syntax_errors_print_with_their_source_line() {
 fn an_undefined_predicate_names_its_literal() {
     let r = plan("edition 2026\nenv(\"prod\")\nq(x) where envv(x)\n").failure();
     assert!(
-        r.stderr.contains("p.df:3:9: undefined predicate envv/1"),
+        r.stderr.contains("p.df:3:12: undefined predicate envv/1"),
         "{}",
         r.stderr
     );
@@ -53,7 +53,7 @@ fn an_undefined_predicate_names_its_literal() {
 fn an_unknown_function_names_its_call() {
     let r = plan("edition 2026\nenv(\"prod\")\nq(y) where env(x), y = lowr(x)\n").failure();
     assert!(
-        r.stderr.contains("p.df:3:21: unknown function lowr"),
+        r.stderr.contains("p.df:3:24: unknown function lowr"),
         "{}",
         r.stderr
     );
@@ -67,7 +67,7 @@ fn an_unknown_function_names_its_call() {
     let r = plan("edition 2026\nenv(\"prod\")\nq(n) where env(x), n = count(x)\n").failure();
     assert!(
         r.stderr
-            .contains("p.df:3:21: `count` is an aggregate: it is written in a rule head"),
+            .contains("p.df:3:24: `count` is an aggregate: it is written in a rule head"),
         "{}",
         r.stderr
     );
@@ -82,8 +82,8 @@ fn a_negative_cycle_names_each_rule() {
     )
     .failure();
     assert!(r.stderr.contains("not stratifiable"), "{}", r.stderr);
-    assert!(r.stderr.contains("(at p.df:4:3)"), "{}", r.stderr);
-    assert!(r.stderr.contains("(at p.df:8:3)"), "{}", r.stderr);
+    assert!(r.stderr.contains("(at p.df:3:3)"), "{}", r.stderr);
+    assert!(r.stderr.contains("(at p.df:6:3)"), "{}", r.stderr);
 }
 
 #[test]
