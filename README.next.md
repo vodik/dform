@@ -506,18 +506,20 @@ of plain facts is a module like any other: `use data.releases`, then
 `releases.release(app, key, value)`.
 
 **Modules.** Every `.df` file is a module, named by its path from the
-project root: `config`, `modules.net`, `stacks.platform`. A module is a
-namespace of items: types, relations, rules, denies, `let` values, and
-components. `use config` brings one into scope: its items read as
-`config.x`, and its rules and denies run over what you can see. A module
-holds no resources, so using it twice from two stacks is the same module
-twice. `std` is used everywhere already; `str.split` needs no `use`.
+project root: `config`, `modules.net`, `stacks.platform`. `use config`
+imports it: its rules and denies run over what you can see, its items
+read as `config.x`, its inputs are bound by a block on the `use` or by
+their defaults, and its resources, if it has any, are stamped once under
+its name, so `use synapse` is the homeserver and `use traefik {
+acme_email }` is the ingress with its one input given. A module used
+from two stacks runs in both. `std` is used everywhere already;
+`str.split` needs no `use`.
 
-A **component** is the thing that is copied: `component NAME { .. }` as an
-item, or a whole file whose top level declares an `input`. `instance`
-makes one copy with its inputs bound, gated by a clause if you like. A
-copy's relations are private and it hands values out through outputs;
-its resources are visible to policy, as cloud resources are.
+A **component** is the thing that is copied many times: `component NAME
+{ .. }`, an item of a module, with inputs. `instance` makes one copy
+with its inputs bound, gated by a clause if you like. A copy's relations
+are private and it hands values out through outputs; its resources are
+visible to policy, as cloud resources are.
 
 ```dform
 component network {
@@ -539,20 +541,17 @@ instance network green { cidr = "10.2.0.0/16" } where env == "prod"
 Inside, `vpc` is the copy's own resource and `az(..)` is the stack's
 table, read like any fact. `green` exists only in prod. The copy's VPC is
 `aws.vpc["blue::vpc"]` everywhere else, another block reads it as
-`blue.vpc`, and `network[t].vpc` ranges over every copy. `use` works on a
-component too: with nothing left to bind, importing it stamps it once,
-so `use synapse` is the homeserver, named `synapse`, and `use traefik {
-acme_email }` gives an input on the way in. An input with no value is
-the same error wherever it is, in a stack or in a component. A
-component is used or instanced in a scope, never both.
+`blue.vpc`, and `network[t].vpc` ranges over every copy. An input with no
+value is the same error wherever it is: in a stack, a module, or a
+component.
 
 **Policies.** A policy is a module of `set`, `deny` and `warn`
 statements, `policies/baseline.df` say, applied with `use baseline`. A
 pack can write into your resources, and nothing about that is hidden:
 it touches a stack only when the stack says `use`, `dform dev effects`
 lists what it touches, ranks decide who wins, and `why` names the author
-of every value. A pack that takes inputs is a component of denies,
-instanced once. Policy also reads the plan itself: each change is a
+of every value. A pack with inputs takes them on the `use`. Policy also
+reads the plan itself: each change is a
 `deformation(kind, resource, before)` row, and a policy can refuse it,
 warn, or demand a signature:
 
@@ -653,10 +652,10 @@ shop[env]       stacks/shop.df
 platform[env]   stacks/platform.df
 ```
 
-A stack is a component the tool instances: one deployment per `key`.
-`use stacks.platform` binds to those deployments, and reading one is the
-same keyed read as reading a copy; another project's stacks mount under
-a name in `dform.toml`:
+A stack is a module the tool uses, one deployment per `key`. `use
+stacks.platform` binds to those deployments, and reading one is the same
+keyed read as reading a copy; another project's stacks mount under a
+name in `dform.toml`:
 
 ```dform
 use stacks.platform
