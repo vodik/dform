@@ -1622,6 +1622,15 @@ built-in `member(List, Item)`):
 host_ip(e, ip) where ip in settings[e].vm.ips
 ```
 
+`i in lo..hi` enumerates the integers from `lo` up to `hi`, and `i in
+lo..=hi` up to and including it, for "once per i": a replica, a shard,
+the n-th /24. Both ends are bound integers; a range anywhere but after
+`in` is an error, and `int.range(lo, hi, step)` is the list.
+
+```dform
+resource compute.vm "${p}-${i}" { size = "small" } where pool(p, n), i in 0..n
+```
+
 ### Discovery facts
 
 The fake backend can inject facts from `dform.state/inventory.json`:

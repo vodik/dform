@@ -256,7 +256,7 @@ apply-order edge, not its content read now (`docs/grammar.md'
 
    :language 'dform
    :feature 'operator
-   '(["=" "+=" "==" "!=" "<" "<=" ">" ">=" "+" "-" "*" "/" "%" "|"] @font-lock-operator-face)
+   '(["=" "+=" "==" "!=" "<" "<=" ">" ">=" "+" "-" "*" "/" "%" "|" ".." "..="] @font-lock-operator-face)
 
    :language 'dform
    :feature 'bracket

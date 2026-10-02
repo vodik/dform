@@ -40,6 +40,9 @@ pub enum SyntaxKind {
     SLASH,
     PERCENT,
     PIPE,
+    /// `..` and `..=`: a range's ends (R-56).
+    DOT2,
+    DOT2_EQ,
     // Keywords: the statement keywords (a statement's first token), then
     // the body words, the clause word and the literals.
     EDITION_KW,
@@ -133,6 +136,8 @@ pub enum SyntaxKind {
     PAREN,
     BIN_EXPR,
     UNARY_EXPR,
+    /// `lo..hi` or `lo..=hi`: a range, enumerated by `in` (R-56).
+    RANGE,
     /// `name (.seg | [terms])*`, parsed unresolved.
     CHAIN,
     /// `[t, ...]` after a chain.
@@ -204,6 +209,8 @@ impl SyntaxKind {
             SLASH => "`/`",
             PERCENT => "`%`",
             PIPE => "`|`",
+            DOT2 => "`..`",
+            DOT2_EQ => "`..=`",
             ERROR_TOKEN => "an unknown character",
             NEWLINE => "the end of the line",
             k if k.is_keyword() => "a keyword",

@@ -1406,9 +1406,20 @@ impl<'a> Parser<'a> {
 
     // --- terms ------------------------------------------------------------
 
-    /// A term; returns the kind of its outermost node.
+    /// A term; returns the kind of its outermost node. `lo..hi` and
+    /// `lo..=hi` bind loosest (R-56); the resolver takes a range only
+    /// after `in`.
     fn term(&mut self) -> P<SyntaxKind> {
-        self.expr(0)
+        let cp = self.checkpoint();
+        let kind = self.expr(0)?;
+        if !matches!(self.nth(0), DOT2 | DOT2_EQ) {
+            return Ok(kind);
+        }
+        self.start_at(cp, RANGE);
+        self.bump();
+        self.expr(0)?;
+        self.finish();
+        Ok(RANGE)
     }
 
     fn expr(&mut self, min_bp: u8) -> P<SyntaxKind> {

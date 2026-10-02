@@ -88,8 +88,8 @@ fn space(prev: &SyntaxToken, cur: &SyntaxToken) -> &'static str {
     if p == COMMENT || c == COMMENT {
         return " ";
     }
-    // Chains, dotted names and paths: `a.b[e].c`.
-    if p == DOT || c == DOT {
+    // Chains, dotted names and paths: `a.b[e].c`; ranges: `0..n`.
+    if matches!(p, DOT | DOT2 | DOT2_EQ) || matches!(c, DOT | DOT2 | DOT2_EQ) {
         return "";
     }
     if c == L_BRACKET && matches!(cp, Some(INDEX | BLOCK_PATH)) {
@@ -326,6 +326,10 @@ mod tests {
             "component m {\n  p(x) where q(x)\n}\n"
         );
         assert_eq!(fmt("p(a /b,t[e].p)\n"), "p(a / b, t[e].p)\n");
+        assert_eq!(
+            fmt("p(i) where i in 0 .. 3, j in 1 ..= n + 1\n"),
+            "p(i) where i in 0..3, j in 1..=n + 1\n"
+        );
     }
 
     /// A body that fits the line is written on it (section 3's normal

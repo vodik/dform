@@ -757,3 +757,36 @@ instance network main {} where env == "prod"
           (identifier)
           (string
             (string_content)))))))
+
+================================================================================
+A range after in
+================================================================================
+
+p(i) where n(k), i in 0..k, j in 1..=k + 1
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)))
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier))))
+      (in_literal
+        (identifier)
+        (range
+          (integer)
+          (identifier)))
+      (in_literal
+        (identifier)
+        (range
+          (integer)
+          (binary_expression
+            (identifier)
+            (integer)))))))

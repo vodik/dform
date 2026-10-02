@@ -84,6 +84,18 @@ in a condition does not."
     (should (eq (dform-ts-mode-test--face-at "#| The") 'font-lock-doc-face))
     (should (eq (dform-ts-mode-test--face-at "# plain") 'font-lock-comment-face))))
 
+(ert-deftest dform-ts-mode-test-range-face ()
+  "A range's `..' and `..=' are operators (R-56)."
+  (dform-ts-mode-test--ensure-grammar)
+  (with-temp-buffer
+    (insert "edition 2026\np(i) where n(k), i in 0..k, j in 1..=k\n")
+    ;; Operators are a level 4 feature.
+    (let ((treesit-font-lock-level 4))
+      (dform-ts-mode))
+    (font-lock-ensure)
+    (should (eq (dform-ts-mode-test--face-at "..k") 'font-lock-operator-face))
+    (should (eq (dform-ts-mode-test--face-at "..=") 'font-lock-operator-face))))
+
 (ert-deftest dform-ts-mode-test-indent-round-trip ()
   "`indent-region' leaves a correctly indented file unchanged."
   (dform-ts-mode-test--ensure-grammar)

@@ -72,9 +72,10 @@ RANK     := "@default" | "@override"
 COMMENT  := "#" to end of line
 ```
 
-Punctuation: `( ) { } [ ] , . : = == += != < <= > >= + - * / % |`.
+Punctuation: `( ) { } [ ] , . .. ..= : = == += != < <= > >= + - * / % |`.
 
-`.` is always member access, and `/` always division. `-` is always an
+`.` is always member access, `..` and `..=` a range's (R-56), and `/`
+always division. `-` is always an
 operator: a hyphenated name is a string, and the parser says so.
 
 Statement keywords, recognised only as the first token of a statement (18):
@@ -667,13 +668,14 @@ lit1       := atom
             | "has" chain                        ; the attribute has a value
             | chain                              ; a truth test: == true
             | term cmpop term (cmpop term)*      ; a <= b <= c is a <= b, b <= c
-            | term "in" ("resource" | term)
-            | term "not" "in" term
+            | term "in" ("resource" | term | range)
+            | term "not" "in" (term | range)
 cmpop      := "=" | "==" | "!=" | "<" | "<=" | ">" | ">="
 atom       := chain "(" args ")"
 args       := (arg ("," arg)* ","?)?
 arg        := term | NAME ":" term               ; a named argument: its column's name
 
+range      := add (".." | "..=") add          ; only after `in` (R-56)
 term       := add
 add        := mul (("+" | "-") mul)*
 mul        := unary (("*" | "/" | "%") unary)*
@@ -697,8 +699,16 @@ first: `+ -` (left), `* / %` (left), unary `-`. Aggregates (`count(x)`,
 lower to a record pattern.
 
 Membership (H-9): `x in e` for a list, `x in T` for a type, `x in
-resource` for any, `x in world.T` for a live object; `x = e[i]` gives the
-index and the value.
+resource` for any, `x in world.T` for a live object, `i in lo..hi` for
+the integers from `lo` up to `hi` (half-open) and `i in lo..=hi` up to
+and including it (R-56); `x = e[i]` gives the index and the value. A
+range's ends are bound integers, and it is enumerated in order. A range
+is for "once per i", things that have a position and no identity: a
+replica, a shard, the n-th /24; anything with a name is a relation, a
+row per thing (R-55). A range anywhere but after `in` is an error, "a
+range is enumerated with `in`; `[lo..hi]` is not a list", so it never
+becomes a list by accident: `int.range(lo, hi, step)` is the function
+that gives one.
 
 ### Reference or read
 
@@ -767,6 +777,7 @@ are written bare.
 |-----------|---------------------------------------------------------------------------|
 | prelude   | the constructors `int(s)`, `string(x)`, `inet(s)`, `ip(s)`, `iprange(a, b)`; `format(t, v, ...)`, `len(x)`, `ref(T, n, p)`, `scoped(s, n)`, `cloud_ref(T, n, p)`, `declassify(v, why)` |
 | `inet`    | `inet.subnet(net, bits, n)`, `inet.host(net, n)`, `inet.addr(net, n)`, `inet.contains(net, a)`, `inet.overlaps(a, b)`, `inet.prefix_len(net)` |
+| `int`     | `int.range(lo, hi, step)` (what `i in lo..hi` enumerates)                 |
 | `ip`      | `ip.unspecified(a)`                                                       |
 | `str`     | `str.split(s, sep)`, `str.lower(s)`, `str.upper(s)`                       |
 | `list`    | `list.len(l)` (`len` in the prelude), `list.join(l, sep)`                 |
@@ -847,6 +858,7 @@ as it is.
 | `"n-${e}" in T`                           | `Name = format(..), want(T, Name)`                     |
 | `x in world.T`                            | `cloud_exists(T, x)`                                   |
 | `x in e`                                  | `member(e', x)`                                        |
+| `i in lo..hi`, `i in lo..=hi`             | `member(int.range(lo', hi', 1), i)`, `member(int.range(lo', add(hi', 1), 1), i)` |
 | `x not in e`, `not x in T`                | `not member(e', x)`, `not want(T, x)`                  |
 | `not { B }` (or a `not` of a nested path) | `not __neg_N(ȳ)`, `__neg_N(ȳ) :- P, B'`: ȳ the variables the body so far binds, `P` its positive literals |
 | `a + b` (and `- * / %`)                   | `add(a, b)` (`sub mul div mod`)                        |

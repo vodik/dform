@@ -2,7 +2,7 @@
 //! are tokens too, so the concatenated token texts are the file. Newlines
 //! are in whitespace tokens; the parser decides where one ends a statement.
 //! No token depends on the whitespace around it (H section 1, rule 3): `.`
-//! is always a dot, `/` always a slash.
+//! is always a dot, `..` a range's (R-56), `/` always a slash.
 
 use crate::syntax::SyntaxKind::{self, *};
 use logos::Logos;
@@ -39,6 +39,10 @@ enum Tok {
     Comma,
     #[token(".")]
     Dot,
+    #[token("..")]
+    Dot2,
+    #[token("..=")]
+    Dot2Eq,
     #[token(":")]
     Colon,
     #[token(":-")]
@@ -89,6 +93,8 @@ fn kind(t: Tok) -> SyntaxKind {
         Tok::RBracket => R_BRACKET,
         Tok::Comma => COMMA,
         Tok::Dot => DOT,
+        Tok::Dot2 => DOT2,
+        Tok::Dot2Eq => DOT2_EQ,
         Tok::Colon => COLON,
         Tok::Neck => NECK,
         Tok::Eq => EQ,
@@ -233,6 +239,14 @@ mod tests {
                 IDENT,
                 IDENT
             ]
+        );
+    }
+
+    #[test]
+    fn a_range_is_two_dots() {
+        assert_eq!(
+            kinds("0..3 0..=n a.b"),
+            vec![INT, DOT2, INT, INT, DOT2_EQ, IDENT, IDENT, DOT, IDENT]
         );
     }
 

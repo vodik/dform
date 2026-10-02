@@ -43,6 +43,7 @@ const CONTEXTUAL = [
 const TERM_NAMES = [...STATEMENT_KEYWORDS, ...CONTEXTUAL];
 
 const PREC = {
+  range: 0,
   add: 1,
   mul: 2,
   unary: 3,
@@ -403,10 +404,19 @@ export default grammar({
     // --- terms ---------------------------------------------------------------
 
     _term: $ => choice(
+      $.range,
       $.binary_expression,
       $.unary_expression,
       $._primary,
     ),
+
+    // `lo..hi`, `lo..=hi` (R-56): enumerated by `in`; the compiler refuses
+    // one anywhere else.
+    range: $ => prec.left(PREC.range, seq(
+      field('low', $._term),
+      field('operator', choice('..', '..=')),
+      field('high', $._term),
+    )),
 
     binary_expression: $ => choice(
       prec.left(PREC.add, seq(field('left', $._term), field('operator', choice('+', '-')), field('right', $._term))),

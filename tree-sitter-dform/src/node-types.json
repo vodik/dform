@@ -168,6 +168,10 @@
         "named": true
       },
       {
+        "type": "range",
+        "named": true
+      },
+      {
         "type": "string",
         "named": true
       },
@@ -1465,6 +1469,46 @@
     }
   },
   {
+    "type": "range",
+    "named": true,
+    "fields": {
+      "high": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "_term",
+            "named": true
+          }
+        ]
+      },
+      "low": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "_term",
+            "named": true
+          }
+        ]
+      },
+      "operator": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "..",
+            "named": false
+          },
+          {
+            "type": "..=",
+            "named": false
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "record_type",
     "named": true,
     "fields": {},
@@ -2000,6 +2044,14 @@
   },
   {
     "type": ".",
+    "named": false
+  },
+  {
+    "type": "..",
+    "named": false
+  },
+  {
+    "type": "..=",
     "named": false
   },
   {

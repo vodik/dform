@@ -3411,6 +3411,18 @@ pub const BODIES: &[(&str, Body)] = &[
         [ip] => Some(Value::Bool(as_ip_u32(ip)? == 0)),
         _ => None,
     }),
+    ("int.range", |a| match a {
+        [Value::Int(lo), Value::Int(hi), Value::Int(step)] if *step != 0 => {
+            let mut out = Vec::new();
+            let mut i = *lo;
+            while (*step > 0 && i < *hi) || (*step < 0 && i > *hi) {
+                out.push(Value::Int(i));
+                i = i.checked_add(*step)?;
+            }
+            Some(Value::List(out))
+        }
+        _ => None,
+    }),
     ("str.lower", |a| match a {
         [Value::Str(s)] => Some(Value::Str(s.to_lowercase())),
         _ => None,

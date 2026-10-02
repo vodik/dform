@@ -33,6 +33,7 @@ use std::sync::LazyLock;
 pub const SOURCES: &[(&str, &str)] = &[
     ("std/prelude.df", include_str!("../../../std/prelude.df")),
     ("std/inet.df", include_str!("../../../std/inet.df")),
+    ("std/int.df", include_str!("../../../std/int.df")),
     ("std/ip.df", include_str!("../../../std/ip.df")),
     ("std/str.df", include_str!("../../../std/str.df")),
     ("std/list.df", include_str!("../../../std/list.df")),
@@ -491,7 +492,7 @@ mod tests {
                 .is_some_and(|f| f.internal && f.forwards && f.forwards_nulls)
         );
         assert!(callable("int") && !callable("add") && !callable("to_int"));
-        assert_eq!(r.packages(), ["inet", "ip", "list", "str"]);
+        assert_eq!(r.packages(), ["inet", "int", "ip", "list", "str"]);
     }
 
     #[test]
