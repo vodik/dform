@@ -11,8 +11,8 @@ module kubernetes {
 
   resource k8s.cluster cluster {
     version = "1.29"
-    private_api = private_api
-    subnet_ids = subnet_ids
+    private_api
+    subnet_ids
   }
 
   resource k8s.nodepool default {

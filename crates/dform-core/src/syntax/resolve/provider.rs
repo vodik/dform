@@ -53,13 +53,18 @@ impl Lowerer<'_> {
                         ),
                     );
                 }
-                let t = terms(&a).next().ok_or(Skip)?;
                 match key.as_str() {
-                    "source" => source.push((key, self.constant(&mut rc, &t)?, at)),
+                    "source" => {
+                        let Some(t) = terms(&a).next() else {
+                            return self
+                                .error(at, format!("provider {name}: source is a path string"));
+                        };
+                        source.push((key, self.constant(&mut rc, &t)?, at))
+                    }
                     EXPECT_ACCOUNT => {
                         let mut rc = self.rc(&a, scope, outer);
                         let mut body = Vec::new();
-                        let v = self.term(&mut rc, &t, Pos::Content, &mut body)?;
+                        let v = self.entry_value(&mut rc, &a, Pos::Content, &mut body)?;
                         let head = atom_at(
                             crate::plugin::providers::EXPECT_ACCOUNT,
                             vec![str_term(&name), v],
@@ -68,7 +73,7 @@ impl Lowerer<'_> {
                         out.push(self.rule_or_fact(&rc, head, body)?);
                     }
                     _ => {
-                        let v = self.term(&mut rc, &t, Pos::Content, &mut body)?;
+                        let v = self.entry_value(&mut rc, &a, Pos::Content, &mut body)?;
                         if settings.insert(key.clone(), v).is_some() {
                             return self.error(at, format!("provider {name}: {key} is set twice"));
                         }

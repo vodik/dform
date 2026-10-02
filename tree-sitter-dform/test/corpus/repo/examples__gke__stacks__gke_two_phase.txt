@@ -41,7 +41,7 @@ project(cfg.project_id, cfg.project_name, cfg.region,
 
 resource google_compute_subnetwork gke_subnet {
   project = id
-  region = region
+  region
   network = net_id
   name = "${name}-gke-subnet"
   ip_cidr_range = cfg.gke.subnet_cidr
@@ -50,13 +50,13 @@ resource google_compute_subnetwork gke_subnet {
 # Carries a fresh null (subnetwork_id) and is still definite.
 resource google_compute_address static_ip {
   project = id
-  region = region
+  region
   name = "pngu-grpc"
   subnetwork_id = gke_subnet.id
 } where project(id, _, region, _)
 
 resource gke_cluster pngu {
-  env = env
+  env
   project_id = id
   name = "${name}-gke"
   network_id = net_id
@@ -249,8 +249,7 @@ deny "cluster must not be deletable" { cluster: c } where {
         (identifier))
       (field
         (block_path
-          (identifier))
-        (identifier))
+          (identifier)))
       (field
         (block_path
           (identifier))
@@ -292,8 +291,7 @@ deny "cluster must not be deletable" { cluster: c } where {
         (identifier))
       (field
         (block_path
-          (identifier))
-        (identifier))
+          (identifier)))
       (field
         (block_path
           (identifier))
@@ -322,8 +320,7 @@ deny "cluster must not be deletable" { cluster: c } where {
     (block
       (field
         (block_path
-          (identifier))
-        (identifier))
+          (identifier)))
       (field
         (block_path
           (identifier))

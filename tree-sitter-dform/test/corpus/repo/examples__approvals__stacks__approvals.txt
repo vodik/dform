@@ -22,7 +22,7 @@ input cidr: string = "10.0.0.0/16"
 provider fake
 
 resource net.vpc main {
-  cidr = cidr
+  cidr
 }
 
 # In prod, replacing anything needs an approval.
@@ -79,8 +79,7 @@ approver_allowed(who, d) where requires_approval(d, _), who in ["alice", "bob"]
     (block
       (field
         (block_path
-          (identifier))
-        (identifier))))
+          (identifier)))))
   (comment)
   (rule
     (call

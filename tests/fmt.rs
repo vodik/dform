@@ -154,3 +154,18 @@ fn fmt_drops_an_empty_block() {
     assert_eq!(fmt(src), want);
     assert_eq!(fmt(want), want);
 }
+
+/// An entry that is only a path is `path = SEG`, SEG its last segment
+/// (R-33): `fmt` prints `k` for `k = k` and leaves `k = v`, `k += k` and a
+/// provider's `source` as written; both forms print back.
+#[test]
+fn fmt_puns_an_entry_whose_value_is_its_name() {
+    let src = "edition 2026\n\nprovider aws { region = region, source = source }\n\
+               resource net.subnet s {\n  zone = zone\n  spec.selector.color = color @default\n  \
+               cidr = zone\n  tags += tags\n}\n";
+    let want = "edition 2026\n\nprovider aws { region, source = source }\n\
+                resource net.subnet s {\n  zone\n  spec.selector.color @default\n  \
+                cidr = zone\n  tags += tags\n}\n";
+    assert_eq!(fmt(src), want);
+    assert_eq!(fmt(want), want);
+}

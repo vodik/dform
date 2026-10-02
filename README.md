@@ -454,7 +454,10 @@ no default: a program with no `provider` statement starts none, and
 provider: add `provider NAME` (dform.toml names its source) or run under
 `dev --provider`". A `provider` or `instance` with no entries is written
 without braces (`provider fake`, `instance network blue`); `fmt` drops a
-`{}`. `--provider path/to/schema.df` loads a file directly. A
+`{}`. In any block an entry that is only a path takes the value of its
+last segment's name, `region` for `region = region` and
+`spec.selector.color` for `spec.selector.color = color`, as `{ a }` is
+`{ a: a }`; `fmt` prints that form. `--provider path/to/schema.df` loads a file directly. A
 `providers/<name>/schema.df` in the working directory wins over the schemas
 built into the binary (`crates/dform-mock/schemas/`: `fake`, `gke`, `k8s`,
 `aws-mock`). A `source` (or `--provider` path) that

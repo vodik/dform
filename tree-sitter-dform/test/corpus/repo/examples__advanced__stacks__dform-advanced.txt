@@ -124,7 +124,7 @@ decl mesh_allow_direct_route(from, to)
 mesh_vpc(name, cidr, i) where settings[env].mesh.vpcs[i] = { name, net: cidr }
 
 resource net.vpc name {
-  cidr = cidr
+  cidr
   tags = { segment: "mesh" }
 } where mesh_vpc(name, cidr, _)
 
@@ -717,8 +717,7 @@ warn "user is effectively admin (via group nesting)" { user: u } where in_group(
     (block
       (field
         (block_path
-          (identifier))
-        (identifier))
+          (identifier)))
       (field
         (block_path
           (identifier))

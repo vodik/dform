@@ -3,8 +3,8 @@
 //! braces when it does not, `{ a }` for `{ a: a }`, a header name quoted
 //! only when it needs it, `not lit` for `not { lit }`, `==` where both
 //! sides are bound, the atom `p(k, i)` for `i = p[k]` with `i` fresh,
-//! `env == "prod"` for a value name's atom `env("prod")`, and no `{}` on a
-//! `provider` or `instance` with no entries.
+//! `env == "prod"` for a value name's atom `env("prod")`, no `{}` on a
+//! `provider` or `instance` with no entries, and `k` for the entry `k = k`.
 //!
 //! Each is an edit of the source text, read from the tree; the caller
 //! parses the result again and prints it, until nothing changes.
@@ -411,6 +411,38 @@ impl Ctx<'_> {
         }
     }
 
+    /// A block entry whose value is its path's last segment is the pun
+    /// (R-33): `zone = zone` is `zone`, `spec.selector.color = color` is
+    /// `spec.selector.color`. A provider's `source` is a constant, never a
+    /// pun.
+    fn entry_puns(&mut self, root: &SyntaxNode) {
+        for a in root.descendants().filter(|n| n.kind() == ASSIGN) {
+            let (Some(path), Some(value)) = (
+                a.children().find(|c| c.kind() == BLOCK_PATH),
+                a.children().find(|c| c.kind() == CHAIN),
+            ) else {
+                continue;
+            };
+            let Some(seg) = toks(&path).last() else {
+                continue;
+            };
+            let named = is_word(seg.kind())
+                && !matches!(
+                    seg.kind(),
+                    NOT_KW | IN_KW | HAS_KW | WHERE_KW | IF_KW | TRUE_KW | FALSE_KW
+                );
+            let assign = toks(&a).any(|t| t.kind() == EQ);
+            let source = path.text() == "source"
+                && a.parent()
+                    .and_then(|b| b.parent())
+                    .is_some_and(|s| s.kind() == PROVIDER);
+            if named && assign && !source && self.text(&value) == seg.text() {
+                let (start, end) = (path.text_range().end(), value.text_range().end());
+                self.edits.push((start.into(), end.into(), String::new()));
+            }
+        }
+    }
+
     fn objects(&mut self, root: &SyntaxNode) {
         for f in root.descendants().filter(|n| n.kind() == OBJECT_FIELD) {
             if f.parent().is_some_and(|p| p.kind() != OBJECT) {
@@ -439,6 +471,7 @@ pub fn normalize(root: &SyntaxNode, src: &str) -> Option<String> {
     }
     c.objects(root);
     c.empty_blocks(root);
+    c.entry_puns(root);
     if c.edits.is_empty() {
         return None;
     }

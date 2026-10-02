@@ -2064,7 +2064,7 @@ impl<'u> Lowerer<'u> {
                 } else {
                     FieldOp::Assign
                 };
-                let value = self.term(rc, &terms(&a).next().ok_or(Skip)?, Pos::Whole, reads)?;
+                let value = self.entry_value(rc, &a, Pos::Whole, reads)?;
                 Ok(FieldAssign {
                     key,
                     op,
@@ -3576,6 +3576,54 @@ impl<'u> Lowerer<'u> {
 
     /// An interpolation hole: a term, read now (a content position).
     fn hole(&mut self, rc: &mut Rc, src: &str, at: u32, pre: &mut Vec<Lit>) -> L<Term> {
+        self.text_term(rc, src, at, Pos::Content, pre)
+    }
+
+    /// A block entry's value: its term, or, for an entry that is only a
+    /// path, the pun: the path's last segment as a term, resolved where the
+    /// value would be (R-33), `color` for `spec.selector.color`.
+    fn entry_value(
+        &mut self,
+        rc: &mut Rc,
+        a: &SyntaxNode,
+        pos: Pos,
+        reads: &mut Vec<Lit>,
+    ) -> L<Term> {
+        if let Some(t) = terms(a).next() {
+            return self.term(rc, &t, pos, reads);
+        }
+        let path = node(a, BLOCK_PATH).ok_or(Skip)?;
+        let seg = tokens(&path).last().ok_or(Skip)?;
+        if !is_word(seg.kind())
+            || matches!(
+                seg.kind(),
+                NOT_KW | IN_KW | HAS_KW | WHERE_KW | IF_KW | TRUE_KW | FALSE_KW
+            )
+        {
+            let d = Diagnostic::error(
+                self.span(a),
+                format!(
+                    "`{}` names no value: an entry is `path = term`",
+                    path.text()
+                ),
+            )
+            .with_help("an entry that is only a path takes the value its last segment names");
+            self.diags.push(d);
+            return Err(Skip);
+        }
+        let at: u32 = seg.text_range().start().into();
+        self.text_term(rc, seg.text(), at, pos, reads)
+    }
+
+    /// The term `src`, written at byte `at`, lowered as a term in `pos`.
+    fn text_term(
+        &mut self,
+        rc: &mut Rc,
+        src: &str,
+        at: u32,
+        pos: Pos,
+        pre: &mut Vec<Lit>,
+    ) -> L<Term> {
         let parse = parse::parse_term(src);
         let saved = self.offset;
         self.offset += at;
@@ -3594,7 +3642,7 @@ impl<'u> Lowerer<'u> {
             }
             let root = parse.syntax();
             let t = terms(&root).next().ok_or(Skip)?;
-            self.term(rc, &t, Pos::Content, pre)
+            self.term(rc, &t, pos, pre)
         })();
         self.offset = saved;
         r
@@ -4697,6 +4745,35 @@ mod tests {
              data(\"zone\", Z), attr(\"net.vpc\", \"vpc\", \"cidr\", Cidr), \
              zone_index(Z, ZoneIndex), Addr = format(\"private-%s\", Z)"
         );
+    }
+
+    /// An entry that is only a path is the pun of its last segment (R-33),
+    /// resolved as the value would be: a clause variable, a `let` (read
+    /// through its cell), with a rank.
+    #[test]
+    fn a_bare_entry_is_its_last_segment() {
+        let got = lower(
+            "let tags = { team: \"x\" }\n\
+             resource net.vpc vpc { cidr = \"10.0.0.0/16\" }\n\
+             resource net.subnet \"s-${zone}\" {\n\
+               zone\n\
+               meta.zone\n\
+               tags @default\n\
+             } where data(\"zone\", zone)\n",
+        );
+        assert_eq!(
+            got[got.len() - 1],
+            "resource \"net.subnet\" Addr { zone = Zone, meta.zone = Zone, tags = Tags } \
+             :- data(\"zone\", Zone), tags(Tags), Addr = format(\"s-%s\", Zone)"
+        );
+        let ranked = parse("let tags = {}\nresource net.vpc v {\n  tags @default\n}\n")
+            .unwrap()
+            .statements
+            .into_iter()
+            .any(|s| matches!(s, Stmt::Resource(r) if r.fields.iter().any(|f| f.rank.is_some())));
+        assert!(ranked);
+        let e = error("resource net.vpc v {\n  a[0]\n}\n");
+        assert!(e.contains("`a[0]` names no value"), "{e}");
     }
 
     #[test]

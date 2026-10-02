@@ -312,10 +312,13 @@ export default grammar({
     // `where B` after a block: the block is the head (R-1).
     clause: $ => seq('where', field('condition', $._body)),
 
+    // `path = t`, or the path alone: `zone` is `zone = zone` (R-33).
     field: $ => seq(
       field('path', $.block_path),
-      field('operator', choice('=', '+=')),
-      field('value', $._term),
+      optional(seq(
+        field('operator', choice('=', '+=')),
+        field('value', $._term),
+      )),
       optional(field('rank', $.rank)),
     ),
 

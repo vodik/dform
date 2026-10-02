@@ -1067,13 +1067,16 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// `path = term [rank]`, `path += term [rank]`, or `path [rank]`
+    /// alone: the pun `path = SEG`, SEG its last segment (R-33).
     fn assign(&mut self) -> P {
         self.start(ASSIGN);
         self.block_path()?;
-        if !(self.eat(EQ) || self.eat(PLUS_EQ)) {
-            return self.err_expected("`=` or `+=`");
+        if self.eat(EQ) || self.eat(PLUS_EQ) {
+            self.term()?;
+        } else if !matches!(self.nth(0), RANK | COMMA | R_BRACE | NEWLINE) {
+            return self.err_expected("`=`, `+=` or the end of the entry");
         }
-        self.term()?;
         self.eat(RANK);
         self.finish();
         Ok(())

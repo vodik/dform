@@ -78,7 +78,7 @@ resource google_compute_network vpc {
 
 resource google_sql_database_instance db {
   name = "crud-api-${env}"
-  region = region
+  region
   database_version = "POSTGRES_16"
   deletion_protection = true
   settings = {
@@ -170,20 +170,20 @@ run(rollout, released_image, schema) where migrated(schema)
 
 instance app blue {
   color = "blue"
-  image = image
+  image
   schema = version
   namespace = shop.metadata.name
   db_secret = db_conn.metadata.name
-  replicas = replicas
+  replicas
 } where run("blue", image, version)
 
 instance app green {
   color = "green"
-  image = image
+  image
   schema = version
   namespace = shop.metadata.name
   db_secret = db_conn.metadata.name
-  replicas = replicas
+  replicas
 } where run("green", image, version)
 
 # A color is ready when every replica it wants is ready (open nulls until
@@ -213,10 +213,10 @@ module app {
 
   resource k8s.deployment deploy {
     metadata.name = "crud-api-${color}"
-    metadata.namespace = namespace
+    metadata.namespace
     metadata.labels = { app: "crud-api", color, schema: "${schema}" }
     spec.selector.matchLabels = labels
-    spec.template.metadata.labels = labels
+    spec.template.metadata.labels
     spec.template.spec.containers = [{
       name: "api",
       image,
@@ -233,7 +233,7 @@ module app {
   # The autoscaler owns spec.replicas; the Deployment does not set it.
   resource k8s.horizontal_pod_autoscaler hpa {
     metadata.name = "crud-api-${color}"
-    metadata.namespace = namespace
+    metadata.namespace
     spec.scaleTargetRef = { apiVersion: "apps/v1", kind: "Deployment", name: deploy.metadata.name }
     spec.minReplicas = replicas
     spec.maxReplicas = 10
@@ -241,14 +241,14 @@ module app {
 
   resource k8s.pod_disruption_budget pdb {
     metadata.name = "crud-api-${color}"
-    metadata.namespace = namespace
+    metadata.namespace
     spec.minAvailable = 1
     spec.selector.matchLabels = labels
   }
 
   resource k8s.network_policy allow_http {
     metadata.name = "crud-api-${color}-http"
-    metadata.namespace = namespace
+    metadata.namespace
     spec.podSelector.matchLabels = labels
     spec.policyTypes = ["Ingress"]
     spec.ingress = [{

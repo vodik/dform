@@ -24,9 +24,9 @@ resource k8s.config_map web_config {
 }
 
 resource k8s.deployment name {
-  metadata.name = name
+  metadata.name
   metadata.namespace = shop.metadata.name
-  spec.replicas = replicas
+  spec.replicas
   spec.selector.matchLabels = { app: name }
   spec.template.metadata.labels = { app: name }
   spec.template.spec.containers = [{
@@ -38,7 +38,7 @@ resource k8s.deployment name {
 } where app(name, image, replicas)
 
 resource k8s.service name {
-  metadata.name = name
+  metadata.name
   metadata.namespace = shop.metadata.name
   spec.selector = { app: name }
   spec.ports = [{ port: 80, targetPort: 8080, protocol: "TCP" }]

@@ -10,9 +10,9 @@ module database {
 
   resource db.postgres db {
     public = false
-    subnet_ids = subnet_ids
-    backup_days = backup_days
-    multi_az = multi_az
+    subnet_ids
+    backup_days
+    multi_az
   }
 
   #| Only when the database exists in this environment.

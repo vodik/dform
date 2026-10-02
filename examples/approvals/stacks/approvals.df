@@ -18,7 +18,7 @@ input cidr: string = "10.0.0.0/16"
 provider fake
 
 resource net.vpc main {
-  cidr = cidr
+  cidr
 }
 
 # In prod, replacing anything needs an approval.

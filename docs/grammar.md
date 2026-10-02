@@ -301,7 +301,7 @@ attrs      := "{" (attrdecl SEP)* "}"
 attrdecl   := blockpath ":" (attrs | type flag* ("check" body1)?)
 flag       := "required" | "computed" | "id" | "sensitive" | "nullable"
 block      := "{" (entry SEP)* "}"
-entry      := blockpath ("=" | "+=") term RANK?
+entry      := blockpath (("=" | "+=") term)? RANK?   ; `zone` alone is `zone = zone`
 blockpath  := SEG ("." SEG | "[" INT "]")*
 SEG        := NAME | STRING
 hname      := NAME | STRING                        ; see "Block names"
@@ -321,6 +321,15 @@ resource (or row, or instance) per match. A `provider` block takes no
 clause. `if`, the clause word of an earlier surface (H-3), is an
 error wherever it stands, and the error prints the statement with its
 clause spelled `where`.
+
+An entry that is only a path is the pun of its last segment (R-33), as
+`{ a }` is `{ a: a }` in an object: `availability_zone` alone is
+`availability_zone = availability_zone`, `spec.selector.color` is
+`spec.selector.color = color`, and a rank may follow (`tags @default`).
+The segment is resolved where the value would be, as a clause variable, a
+value name or anything else a bare name can be; a path whose last segment
+is not a name (`a[0]`, `"a-b"`) is an error. A provider's `source` is a
+constant, never a pun.
 
 `set` is the contribution statement (H-5): the chain is a resource's
 attribute, a settings row's leaf, or an input (a stack input, or a module
@@ -756,7 +765,7 @@ sits with the line that opened it. The normal forms:
 
 - a body goes on one line (`where a, b`) when the line fits in 100 columns,
   else into a `{ }` block, one literal per line;
-- `{ a: a }` is `{ a }`;
+- `{ a: a }` is `{ a }`, and a block's entry `k = k` is `k`;
 - a `provider` or `instance` with no entries has no block: `provider aws`;
 - a header name is bare when it is a name, not a keyword, and not bound by
   the clause; else it is quoted;

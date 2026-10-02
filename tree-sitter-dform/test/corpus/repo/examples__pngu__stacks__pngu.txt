@@ -160,7 +160,7 @@ resource google_compute_subnetwork regional_proxy {
 # VPC peerings
 resource google_compute_network_peering "peering-${name}" {
   project = cfg.project_id
-  name = name
+  name
   network = "projects/${cfg.project_id}/global/networks/${cfg.network_name}"
   peer_network = peer
 } where peering(env: env, name: name, peer_network: peer)
@@ -181,7 +181,7 @@ resource google_compute_address "static-ip-${ip}" {
 # Represents the external terraform-mi-gke module invocation.
 resource gke_cluster pngu {
   cluster_type = "autopilot-private"
-  env = env
+  env
   project_id = cfg.project_id
   project_name = cfg.project_name
   name = "${cfg.project_name}-gke"
@@ -719,8 +719,7 @@ output project_id = cfg.project_id
           (identifier)))
       (field
         (block_path
-          (identifier))
-        (identifier))
+          (identifier)))
       (field
         (block_path
           (identifier))
@@ -820,8 +819,7 @@ output project_id = cfg.project_id
           (string_content)))
       (field
         (block_path
-          (identifier))
-        (identifier))
+          (identifier)))
       (field
         (block_path
           (identifier))

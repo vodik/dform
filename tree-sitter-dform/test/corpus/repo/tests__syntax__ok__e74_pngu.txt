@@ -98,7 +98,7 @@ project(id, name, region, net_id) where {
 
 resource google.compute_subnetwork gke_subnet {
   project = id
-  region = region
+  region
   network = net_id
   name = format("%s-gke-subnet", name)
   ip_cidr_range = subnet_cidr
@@ -117,7 +117,7 @@ resource google.compute_subnetwork gke_subnet {
 
 resource google.compute_subnetwork regional_proxy {
   project = id
-  region = region
+  region
   network = net_id
   name = format("%s-proxy", name)
   purpose = "REGIONAL_MANAGED_PROXY"
@@ -146,7 +146,7 @@ static_ip(ip_name, type_) where {
 
 resource google.compute_address s {
   project = id
-  region = region
+  region
   name = ip_name
   address_type = type_
   subnetwork_id = ref(google.compute_subnetwork, "gke_subnet", "id")
@@ -716,8 +716,7 @@ output("project_id", id) where project(id, _, _, _)
         (identifier))
       (field
         (block_path
-          (identifier))
-        (identifier))
+          (identifier)))
       (field
         (block_path
           (identifier))
@@ -817,8 +816,7 @@ output("project_id", id) where project(id, _, _, _)
         (identifier))
       (field
         (block_path
-          (identifier))
-        (identifier))
+          (identifier)))
       (field
         (block_path
           (identifier))
@@ -958,8 +956,7 @@ output("project_id", id) where project(id, _, _, _)
         (identifier))
       (field
         (block_path
-          (identifier))
-        (identifier))
+          (identifier)))
       (field
         (block_path
           (identifier))

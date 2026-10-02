@@ -227,7 +227,7 @@ module network {
   input cidr: inet
 
   resource net.vpc vpc {
-    cidr = cidr
+    cidr
     tags = { component: "network" }
   }
 
@@ -748,8 +748,7 @@ resource iam.policy "connect-${host}" {
         (block
           (field
             (block_path
-              (identifier))
-            (identifier))
+              (identifier)))
           (field
             (block_path
               (identifier))
