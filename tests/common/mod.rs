@@ -221,16 +221,30 @@ const SIBLINGS: &[(&str, &str)] = &[
 ];
 
 /// A binary cargo builds beside `dform` from a package of its own
-/// (`crates/dform-provider-*`, `crates/dform-direct`). `cargo test --test X`
-/// builds only this package's binaries, so a test would run a sibling as
-/// stale as the last workspace build: the first ask for one in a test
-/// process builds its package into the same target directory and profile.
+/// (`crates/dform-provider-*`, `crates/dform-direct`). `cargo test` and
+/// `cargo test --workspace` build every default member's binaries before
+/// any test runs, so the binary is there; a test never runs cargo itself
+/// (a nested build doubled the suite's build load and took the workspace
+/// lock twice). `cargo test --test X` builds only this package's
+/// binaries: a missing sibling fails naming the command that builds it,
+/// and one from another commit fails the provider handshake
+/// (`plugin::link::check_build`).
 pub fn exe(name: &str) -> String {
     let dform = Path::new(env!("CARGO_BIN_EXE_dform"));
-    if let Some(&(_, package)) = SIBLINGS.iter().find(|(bin, _)| *bin == name) {
-        build(dform, package);
+    let path = dform.with_file_name(name);
+    if !path.exists() {
+        let package = SIBLINGS
+            .iter()
+            .find(|(bin, _)| *bin == name)
+            .map_or(name, |&(_, package)| package);
+        panic!(
+            "{} is not built: tests run the binary cargo built beside dform; \
+             build it with `cargo build --package {package}` (or run \
+             `cargo test --workspace`)",
+            path.display()
+        );
     }
-    dform.with_file_name(name).to_str().unwrap().to_string()
+    path.to_str().unwrap().to_string()
 }
 
 /// `ARGS` with `--yes` after `apply` (once): a test applies with no
@@ -254,55 +268,6 @@ pub fn yes<S: AsRef<std::ffi::OsStr>>(args: &[S]) -> Vec<std::ffi::OsString> {
 /// fake`).
 pub fn dform() -> Command {
     Command::new(env!("CARGO_BIN_EXE_dform"))
-}
-
-/// Build `package` once per test process, beside `dform`.
-fn build(dform: &Path, package: &str) {
-    static BUILT: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
-    let mut built = BUILT.lock().unwrap_or_else(|e| e.into_inner());
-    if built.iter().any(|p| p == package) {
-        return;
-    }
-    let profile_dir = dform.parent().unwrap();
-    let profile = match profile_dir.file_name().unwrap().to_str().unwrap() {
-        "debug" => "dev",
-        p => p,
-    };
-    let mut c = Command::new(std::env::var_os("CARGO").unwrap_or("cargo".into()));
-    c.args([
-        "build",
-        "--quiet",
-        "--package",
-        package,
-        "--profile",
-        profile,
-    ])
-    .arg("--target-dir")
-    .arg(profile_dir.parent().unwrap())
-    .current_dir(env!("CARGO_MANIFEST_DIR"));
-    // What cargo set for this test run, not for the build.
-    for (k, _) in std::env::vars_os() {
-        let k = k.to_string_lossy();
-        if k.starts_with("CARGO_PKG_")
-            || matches!(
-                &*k,
-                "CARGO_MANIFEST_DIR"
-                    | "CARGO_MANIFEST_PATH"
-                    | "CARGO_CRATE_NAME"
-                    | "CARGO_PRIMARY_PACKAGE"
-                    | "CARGO_TARGET_TMPDIR"
-            )
-        {
-            c.env_remove(&*k);
-        }
-    }
-    let out = c.output().unwrap();
-    assert!(
-        out.status.success(),
-        "cargo build --package {package}: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    built.push(package.to_string());
 }
 
 /// Copy the directory `from` (a project) to `to`, recursively, but for its
