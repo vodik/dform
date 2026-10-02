@@ -1,0 +1,9 @@
+edition 2026
+
+# An aggregate is bound in a body (R-59), and what it folds is bound by
+# the rest of the body.
+subnet("a", "vpc-1")
+in_head(v, count(s)) where subnet(s, v)
+unbound(v, n) where n = count(x), subnet(_, v)
+let nothing = sum(y) where subnet(_, _)
+nested(v) where subnet(_, v), not { n = count(s), subnet(s, v) }
