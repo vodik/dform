@@ -32,6 +32,12 @@ use std::collections::{BTreeMap, BTreeSet};
 /// scope `""` for the stack's own.
 pub const INPUT: &str = "input";
 
+/// The attribute aggregate's pseudo-type for `let` (R-3): `(let, Scope,
+/// k)`, scope `""` for the program's own, `m.i` in an instance, the pack's
+/// name in a pack. The resolver writes a `let` as `let(k, t, rank)`, a
+/// head no source can spell, and `lets` makes it the cell's contribution.
+pub const LET: &str = "let";
+
 fn str_term(s: &str) -> Term {
     Term::Val(Value::Str(s.to_string()))
 }
@@ -119,16 +125,68 @@ fn interface(owner: &str, body: &[Stmt], diags: &mut Vec<Diagnostic>) -> (Interf
 fn defined_preds(stmts: &[Stmt], out: &mut BTreeMap<String, (usize, Span)>) {
     for s in stmts {
         match s {
-            Stmt::Fact(a) => {
-                out.entry(a.pred.clone()).or_insert((a.args.len(), a.span));
-            }
-            Stmt::Rule(r) => {
-                out.entry(r.head.pred.clone())
-                    .or_insert((r.head.args.len(), r.head.span));
+            Stmt::Fact(a) | Stmt::Rule(RuleStmt { head: a, .. }) => {
+                let (pred, arity) = match let_key(a) {
+                    Some(k) => (k.to_string(), 1),
+                    None => (a.pred.clone(), a.args.len()),
+                };
+                out.entry(pred).or_insert((arity, a.span));
             }
             _ => {}
         }
     }
+}
+
+/// The key `k` of a `let(k, t, rank)` head.
+fn let_key(a: &Atom) -> Option<&str> {
+    match (a.pred.as_str(), a.args.as_slice()) {
+        (LET, [Term::Val(Value::Str(k)), _, _]) => Some(k),
+        _ => None,
+    }
+}
+
+/// Each `let(k, t, rank) :- B` of `stmts` as its contribution to the cell
+/// `(let, scope, k)`, `arg("let", scope, "k", t, rank) :- B`, and one
+/// reader per key, `k(V) :- attr("let", scope, "k", V)` (`k` renamed by
+/// `names` in an instance or a pack): a read of `k` is the collapsed cell,
+/// so two rows that agree are one value and two that disagree a conflict.
+fn lets(stmts: Vec<Stmt>, scope: &str, names: Option<&Names>) -> Vec<Stmt> {
+    let mut out = Vec::with_capacity(stmts.len());
+    let mut keys: BTreeMap<String, Span> = BTreeMap::new();
+    for s in stmts {
+        let (head, body) = match s {
+            Stmt::Fact(a) if let_key(&a).is_some() => (a, Vec::new()),
+            Stmt::Rule(r) if let_key(&r.head).is_some() => (r.head, r.body),
+            other => {
+                out.push(other);
+                continue;
+            }
+        };
+        let [k, v, rank]: [Term; 3] = head.args.try_into().expect("let(k, t, rank)");
+        let Term::Val(Value::Str(key)) = &k else {
+            unreachable!("let_key")
+        };
+        keys.entry(key.clone()).or_insert(head.span);
+        let arg = Atom {
+            pred: "arg".into(),
+            args: vec![str_term(LET), str_term(scope), k, v, rank],
+            ..head
+        };
+        out.push(fact_or_rule(arg, body));
+    }
+    for (k, span) in keys {
+        let pred = names.and_then(|n| n.get(&k)).cloned().unwrap_or_else(|| k.clone());
+        let v = Term::Var("V".into());
+        out.push(Stmt::Rule(RuleStmt {
+            head: atom(&pred, vec![v.clone()], span),
+            body: vec![Lit::Pos(atom(
+                "attr",
+                vec![str_term(LET), str_term(scope), str_term(&k), v],
+                span,
+            ))],
+        }));
+    }
+    out
 }
 
 /// Predicates a module may never make private: the compiler's, the
@@ -283,10 +341,11 @@ pub fn expand(program: &Program) -> Result<Expanded> {
                 }
                 let mut stmts = module_stmts(&scope, iface, body);
                 set_origin(&mut stmts, origin);
-                for st in stmts {
-                    let st = rename_stmt(st, &names);
-                    out.push(rewrite_stmt(st, &scope));
-                }
+                let stmts = stmts
+                    .into_iter()
+                    .map(|st| rewrite_stmt(rename_stmt(st, &names), &scope))
+                    .collect();
+                out.extend(lets(stmts, &scope, Some(&names)));
                 out.extend(input_readers(&scope, &iface.inputs, &names));
                 secret_outputs.extend(
                     iface
@@ -342,8 +401,11 @@ pub fn expand(program: &Program) -> Result<Expanded> {
         }
         let mut body = body;
         set_origin(&mut body, diag::origin_id(&owner));
-        expanded.extend(body.into_iter().map(|s| rename_stmt(s, &names)));
+        let body = body.into_iter().map(|s| rename_stmt(s, &names)).collect();
+        expanded.extend(lets(body, &p.name, Some(&names)));
     }
+    // The program's own `let`s (a scenario's joined it).
+    let expanded = lets(expanded, "", None);
 
     // A read of a name only a module defines: say it is private.
     let mut defined = BTreeMap::new();

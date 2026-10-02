@@ -309,10 +309,15 @@ entry in; a top-level `set` of the program's own input is an error too
 (give it a default, or pass `--set`). In a scenario, `set env = "prod"` is
 what `--set env=prod` is on the command line.
 
-`let k = t [where B]` is a value (H-6); a `let` may have several rows. When
-`t` is a reference (a settings row, a resource, a live object), `k`'s value
-is that reference and its static type is the reference's, so a dot on `k`
-reads through it: `let cfg = settings[env]`, then `cfg.db.size`.
+`let k = t [@rank] [where B]` is a value (H-6), a cell of the attribute
+aggregate like an input (R-3): each row contributes to the cell `(let,
+SCOPE, k)` (scope `""` for the program's, `m.i` in an instance), and a read
+of `k` reads the collapsed cell. Rows that agree are one value; two that
+disagree at the winning rank are a conflict naming both; a `@default` row
+gives way to any other. When `t` is a reference (a settings row, a
+resource, a live object), `k`'s value is that reference and its static
+type is the reference's, so a dot on `k` reads through it: `let cfg =
+settings[env]`, then `cfg.db.size`.
 
 `output k: T = t [where B]` is one statement (H-7): the type is optional (an
 untyped output is `any`), the value is not.

@@ -631,6 +631,7 @@ impl<'a> Parser<'a> {
                 p.expect_word()?;
                 p.expect(EQ)?;
                 p.term()?;
+                p.eat(RANK);
                 p.opt_where_body()
             }),
             SET_KW => self.simple(SET, |p| {

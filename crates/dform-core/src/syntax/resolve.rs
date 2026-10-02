@@ -2160,9 +2160,10 @@ impl<'u> Lowerer<'u> {
         }])
     }
 
-    /// `let k = t [where B]` (H-6): the relation `k(t)`, read by name. When
-    /// `t` is a reference, `k`'s value is that reference and a dot on `k`
-    /// reads through it.
+    /// `let k = t [@rank] [where B]` (H-6, R-3): a contribution to the cell
+    /// `k`, written `let(k, t, rank)` for `modules` to scope (the cell is
+    /// `(let, SCOPE, k)`, read by name as `k(V)`). When `t` is a reference,
+    /// `k`'s value is that reference and a dot on `k` reads through it.
     fn let_stmt(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Vec<Stmt>> {
         let span = self.span(n);
         let name = word_text(n, 1);
@@ -2174,9 +2175,10 @@ impl<'u> Lowerer<'u> {
         let has_body = node(n, BODY).is_some();
         let t = terms(n).next().ok_or(Skip)?;
         let value = self.let_value(&mut rc, &t, &mut body)?;
+        let rank = self.rank_tok(n)?.unwrap_or(Rank::Normal);
         let head = Atom {
-            pred: name,
-            args: vec![value],
+            pred: crate::modules::LET.to_string(),
+            args: vec![str_term(&name), value, str_term(rank.name())],
             record: None,
             span,
         };
@@ -4456,7 +4458,7 @@ mod tests {
                 "p(X) :- q(X), env(\"a\")",
                 "r(Env) :- q(_), env(Env)",
                 "s(X) :- q(X), not env(true), env(_)",
-                "serving(\"blue\") :- q(1)",
+                "let(\"serving\", \"blue\", \"normal\") :- q(1)",
                 "t(Serving) :- serving(Serving)",
             ]
         );
@@ -4518,10 +4520,10 @@ mod tests {
         assert_eq!(
             &got[1..],
             [
-                "cfg(Env) :- env(Env)",
+                "let(\"cfg\", Env, \"normal\") :- env(Env)",
                 "resource \"net.vpc\" \"v\" { cidr = Cidr, name = format(\"%s-vpc\", Name) } :- \
                  cfg(Cfg), setting(Cfg, \"net.cidr\", Cidr), setting(Cfg, \"name\", Name)",
-                "pg(\"main\")",
+                "let(\"pg\", \"main\", \"normal\")",
                 "deny(\"x\") :- cfg(Cfg), setting(Cfg, \"x.y\", Y), Y != \"z\", pg(Pg), \
                  attr(\"db.pg\", Pg, \"size\", Size), Size > 3",
             ]
@@ -4588,8 +4590,8 @@ mod tests {
             [
                 "deny(\"public\", {resource: P}) :- want(\"db.postgres\", P), not attr(\"db.postgres\", P, \"public\", false)",
                 "arg(Type, R, \"tags\", {team: \"x\"}) :- want(Type, R)",
-                "xs([1, 2])",
-                "ys([{name: \"a\", net: 1}])",
+                "let(\"xs\", [1, 2], \"normal\")",
+                "let(\"ys\", [{name: \"a\", net: 1}], \"normal\")",
                 "q(X) :- xs(Xs), member(Xs, I, Item), X = Item, I >= 0, not member([3], X)",
                 "ok(1) :- want(\"db.postgres\", \"pg\"), attr(\"db.postgres\", \"pg\", \"public\", _), not want(\"db.postgres\", \"other\")",
                 "big(N) :- cloud_exists(\"net.vpc\", N), cloud_attr(\"net.vpc\", N, \"size\", Size), Size > 3",

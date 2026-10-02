@@ -287,7 +287,7 @@ fn fixpoint<'a>(
     let rs = rules(&lowered.program);
     // The fixpoint over predicate signatures.
     loop {
-        let before = pass.secret.len();
+        let before = (pass.secret.len(), pass.cells.len());
         for (head, body, _) in &rs {
             let Some(h) = head else { continue };
             let vars = pass.body_vars(body);
@@ -296,8 +296,17 @@ fn fixpoint<'a>(
                     pass.secret.insert((h.pred.clone(), i));
                 }
             }
+            // A `let` holding a secret is a secret cell (R-3).
+            if let ("arg", [t, scope, k, v, _]) = (h.pred.as_str(), h.args.as_slice())
+                && s(t) == Some(crate::modules::LET)
+                && pass.term_secret(v, &vars)
+                && let (Some(scope), Some(k)) = (s(scope), s(k))
+            {
+                pass.cells
+                    .insert((crate::modules::LET.to_string(), scope.to_string(), k.to_string()));
+            }
         }
-        if pass.secret.len() == before {
+        if (pass.secret.len(), pass.cells.len()) == before {
             break;
         }
     }

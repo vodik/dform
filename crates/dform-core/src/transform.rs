@@ -168,9 +168,12 @@ pub const SETTINGS_ROW: &str = "settings_row";
 pub const OUTPUT: &str = "output";
 
 /// Pseudo-types of the attribute aggregate that are not resources:
-/// settings, outputs and inputs (`modules::INPUT`).
+/// settings, outputs, inputs and lets (`modules::INPUT`, `modules::LET`).
 pub fn is_pseudo_type(typ: &str) -> bool {
-    matches!(typ, SETTINGS | OUTPUT | crate::modules::INPUT)
+    matches!(
+        typ,
+        SETTINGS | OUTPUT | crate::modules::INPUT | crate::modules::LET
+    )
 }
 
 fn str_term(s: &str) -> Term {

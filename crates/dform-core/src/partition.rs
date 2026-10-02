@@ -136,16 +136,16 @@ pub fn normalize_path(typ: &Option<String>, path: &str) -> String {
 }
 
 /// The `(pred, T, P)` node of an atom whose type is column 0 and path is
-/// column 2. An input cell is partitioned by its scope too (column 1): a
-/// module instance's input `k` is the path `m.i::k`, distinct from the
-/// stack's own input `k` (scope `""`), so `instance m i { k = k }` passes
-/// one cell to another instead of reading its own aggregate. A scope that
-/// is not constant is any scope (`*`).
+/// column 2. An input or `let` cell is partitioned by its scope too
+/// (column 1): a module instance's input `k` is the path `m.i::k`, distinct
+/// from the stack's own input `k` (scope `""`), so `instance m i { k = k }`
+/// passes one cell to another instead of reading its own aggregate. A scope
+/// that is not constant is any scope (`*`).
 fn type_path_node(pred: &str, atom: &Atom) -> Node {
     let typ = const_str(&atom.args[0]);
     let path = const_str(&atom.args[2]).map(|p| normalize_path(&typ, &p));
     let path = match typ.as_deref() {
-        Some(crate::modules::INPUT) => match const_str(&atom.args[1]) {
+        Some(crate::modules::INPUT | crate::modules::LET) => match const_str(&atom.args[1]) {
             Some(scope) if scope.is_empty() => path,
             Some(scope) => path.map(|p| format!("{scope}::{p}")),
             None => None,
@@ -908,7 +908,9 @@ mod tests {
         // below), and module inputs are cells of the aggregate too (phase 6):
         // 17; the settings are the stack config's table, read in two more:
         // 19; the modules' `iam_need` reaches the stack through an output
-        // (R-5), a cell of the aggregate too, read in two more: 21.
+        // (R-5), a cell of the aggregate too, read in two more: 21; `let
+        // cfg` is a cell too (R-3), its contribution and its aggregate two
+        // more: 23.
         let (v, _) = run_file(
             "examples/demo/stacks/dform.df",
             &[root().join("examples/demo/stacks/dform.df")],
@@ -918,7 +920,7 @@ mod tests {
         let Verdict::Stratified { strata } = v else {
             panic!()
         };
-        assert_eq!(strata.values().max().copied().unwrap() + 1, 21);
+        assert_eq!(strata.values().max().copied().unwrap() + 1, 23);
     }
 
     /// The graph `dform dev strata` prints is the one evaluation runs with: a
