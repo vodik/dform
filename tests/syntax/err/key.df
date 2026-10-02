@@ -1,9 +1,9 @@
 edition 2026
 
 # A key is a value the target gives: not a secret, and the stack's, so not
-# a module's.
+# a component's.
 key token: secret(string)
 
-module m {
+component m {
   key env: string
 }

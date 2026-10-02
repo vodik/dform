@@ -2,12 +2,12 @@ exit: ok
 -- stdout --
 plan: 1 deformation (1 adopt)
 definite:
-> net.vpc["network.main::vpc"]
+> net.vpc["network::vpc"]
   adopted_id = "net.vpc:existing-prod-vpc"
   cidr = "10.20.0.0/16"
   owner_tag = "team-a"
   tags.component = "network"
 apply order:
   tick 1
-    net.vpc["network.main::vpc"]
+    net.vpc["network::vpc"]
 -- stderr --

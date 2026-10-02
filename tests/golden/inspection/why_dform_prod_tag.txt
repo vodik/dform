@@ -1,32 +1,32 @@
-net.vpc["network.main::vpc"].tags = {component: "network", env: "prod", team: "platform"}
+net.vpc["main::vpc"].tags = {component: "network", env: "prod", team: "platform"}
   merged from 2 contributions
   ├─ {team: "platform"}
-  │    examples/demo/policies/baseline.df:10  set r.tags = { team: "platform" } where r in resource   (policy baseline)
-  │    with r = net.vpc["network.main::vpc"]
-  │    └─ net.vpc["network.main::vpc"]
-  │         examples/demo/modules/network.df:11  resource net.vpc vpc { .. }   (module network instance main)
-  │         ├─ input network.main.vpc_net = 10.20.0.0/16
+  │    examples/demo/baseline.df:12  set r.tags = { team: "platform" } where r in resource   (use baseline)
+  │    with r = net.vpc["main::vpc"]
+  │    └─ net.vpc["main::vpc"]
+  │         examples/demo/network.df:15  resource net.vpc vpc { .. }   (instance network.vpc main)
+  │         ├─ input main.vpc_net = 10.20.0.0/16
   │         │    merged from 1 contribution
   │         │    └─ 10.20.0.0/16
-  │         │         examples/demo/stacks/dform.df:57  instance network main { vpc_net = inet(cfg.network.main.vpc_net) }
+  │         │         examples/demo/stacks/dform.df:54  instance network.vpc main { vpc_net = inet(cfg.network.main.vpc_net) }
   │         │         with inet(cfg.network.main.vpc_net) = 10.20.0.0/16
   │         │              cfg.network.main.vpc_net = "10.20.0.0/16"
   │         │         ├─ let cfg = "prod"
   │         │         │    merged from 1 contribution
   │         │         │    └─ "prod"
-  │         │         │         examples/demo/stacks/dform.df:42  let cfg = settings[env]
+  │         │         │         examples/demo/stacks/dform.df:35  let cfg = settings[env]
   │         │         │         with env = "prod"
   │         │         │              settings[env] = settings["prod"]
   │         │         │         └─ input env = "prod"
   │         │         │              merged from 2 contributions
-  │         │         │              ├─ "staging" @default   examples/demo/stacks/dform.df:18
+  │         │         │              ├─ "staging" @default   examples/demo/stacks/dform.df:11
   │         │         │              └─ "prod"
-  │         │         │                   examples/demo/stacks/dform.df:18  key env: environment = "staging"
+  │         │         │                   examples/demo/stacks/dform.df:11  key env: environment = "staging"
   │         │         │                   └─ --set env=prod
   │         │         └─ settings["prod"].network.main.vpc_net = "10.20.0.0/16"
   │         │              merged from 2 contributions
   │         │              ├─ "10.50.0.0/16" @default
-  │         │              │    examples/demo/stacks/dform.df:34  settings _ @default { network.main.vpc_net = "10.50.0.0/16" .. }
+  │         │              │    examples/demo/stacks/dform.df:27  settings _ @default { network.main.vpc_net = "10.50.0.0/16" .. }
   │         │              │    └─ settings_row("prod")
   │         │              │         └─ compiler
   │         │              │         ... 7 more alternatives (--all)

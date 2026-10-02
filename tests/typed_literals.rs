@@ -90,23 +90,22 @@ fn a_resource_name_is_the_reference_inside_its_module() {
         s.write(
             "p.df",
             &program(&format!(
-                "module network {{\n  input cidr: inet\n  output vpc: net.vpc = vpc\n  \
+                "component network {{\n  input cidr: inet\n  output vpc: net.vpc = vpc\n  \
                  resource net.vpc vpc {{ cidr }}\n  \
                  resource net.subnet a {{ {entry}, cidr = inet.subnet(cidr, 8, 1) }}\n}}\n\
                  instance network blue {{ cidr = \"10.1.0.0/16\" }}\n\
-                 resource net.vpc_peering p {{ requester_vpc = network.blue.vpc, accepter_vpc = network.blue.vpc }}\n"
+                 resource net.vpc_peering p {{ requester_vpc = blue.vpc, accepter_vpc = blue.vpc }}\n"
             )),
         );
         let r = plan(&s).success();
         assert!(
-            r.stdout
-                .contains("  vpc = ?net.vpc[\"network.blue::vpc\"]\n"),
+            r.stdout.contains("  vpc = ?net.vpc[\"blue::vpc\"]\n"),
             "{entry}: {}",
             r.stdout
         );
         assert!(
             r.stdout
-                .contains("  requester_vpc = ?net.vpc[\"network.blue::vpc\"]\n"),
+                .contains("  requester_vpc = ?net.vpc[\"blue::vpc\"]\n"),
             "{entry}: {}",
             r.stdout
         );
@@ -216,14 +215,14 @@ fn an_instance_input_literal_is_checked() {
     s.write(
         "p.df",
         &program(
-            "module m {\n  input cidr: inet\n  resource net.vpc v { cidr }\n}\n\
+            "component m {\n  input cidr: inet\n  resource net.vpc v { cidr }\n}\n\
              instance m one { cidr = \"nope\" }\n",
         ),
     );
     let r = plan(&s).failure();
     assert!(
         r.stderr
-            .contains("p.df:7:18: input cidr of module m is an inet: \"nope\" is not a network"),
+            .contains("p.df:7:18: input cidr of component m is an inet: \"nope\" is not a network"),
         "{}",
         r.stderr
     );

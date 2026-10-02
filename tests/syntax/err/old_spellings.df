@@ -14,6 +14,11 @@ k = 1
 r.tags = {}
 decl p/2
 export p/2
+module network {
+  input cidr: inet
+}
+import "modules/network.df"
+policy baseline {}
 input relation p/2 from file("p.facts")
 s(x) where exists x
 t(x) where some x in [1]

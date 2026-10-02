@@ -8,4 +8,4 @@ exit: error
 -- stderr --
 Error: program is not stratifiable: negative cycle through (arg, iam.policy, statements), (attr, iam.policy, statements)
   (arg, iam.policy, statements) -> (attr, iam.policy, statements) [attribute aggregate (lub_ranked)]: (compiler-generated)
-  (attr, iam.policy, statements) -> (arg, iam.policy, statements) [reads attr (aggregate)]: arg("iam.policy", P, "statements", [{action: "org.read", resource: "org"}], "normal") :- want("iam.policy", P), attr("iam.policy", P, "statements", S), not member(S, {action: "org.read", resource: "org"}) (at tests/fixtures/adversarial/adv3b_pack_reads_same_path.df:13:3, policy p)
+  (attr, iam.policy, statements) -> (arg, iam.policy, statements) [reads attr (aggregate)]: arg("iam.policy", P, "statements", [{action: "org.read", resource: "org"}], "normal") :- want("iam.policy", P), attr("iam.policy", P, "statements", S), not member(S, {action: "org.read", resource: "org"}) (at tests/fixtures/adversarial/packs/same_path.df:5:1, use packs.same_path)

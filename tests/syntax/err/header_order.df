@@ -1,10 +1,10 @@
 edition 2026
 
-# A file is `edition`, its header (`import`, `key`, `input`), then its body:
+# A file is `edition`, its header (`key`, `input`), then its body:
 # a header statement below the body's first statement is out of place.
 provider fake {}
 key env: string = "dev"
-import "modules/network.df"
+input zones: int = 2
 
 resource net.vpc main {
   cidr = "10.0.0.0/16"

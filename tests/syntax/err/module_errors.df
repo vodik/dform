@@ -1,7 +1,8 @@
 edition 2026
 
-# E DR-3: the module interface is checked and predicates are private.
-module network {
+# E DR-3, R-65: a component's interface is checked and its predicates are
+# private.
+component network {
   input vpc_net: inet
   input zones: list(string) = ["a"]
 
@@ -15,10 +16,10 @@ instance network peer {}
 
 reads_private(z) where zone_index(z, _)
 
-policy tags {
+component tags {
   set r.tags = { team: "x" } where r in resource
   set r.labels = { team: "x" } where r in resource
   set v.cidr = "10.0.0.0/8" where v in net.vpc
 }
 
-use tags
+instance tags all

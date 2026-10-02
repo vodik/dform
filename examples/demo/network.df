@@ -1,0 +1,32 @@
+edition 2026
+
+# The demo's networking: a component, `vpc`, copied once per network
+# (`instance network.vpc main`), and the alias its users write
+# `network.subnets`.
+
+#| The subnets a database or a cluster is placed in.
+type subnets = list(ref(net.subnet))
+
+#| One VPC, and a private subnet in every zone.
+component vpc {
+  #| The VPC's IPv4 range; each zone's subnet is a /20 of it.
+  input vpc_net: inet
+
+  resource net.vpc vpc {
+    cidr = vpc_net
+    tags = { env, component: "network" }
+  }
+
+  zone_index("us-test-1a", 0)
+  zone_index("us-test-1b", 1)
+
+  resource net.subnet "private-${z}" {
+    vpc
+    cidr = inet.subnet(vpc.cidr, 4, zone_index[z])
+    zone = z
+    visibility = "private"
+  } where data("zone", z)
+  #| The network's VPC, for peering.
+  output vpc: net.vpc = vpc
+  output private_subnets: subnets = [ s | s in net.subnet, s.visibility == "private" ]
+}

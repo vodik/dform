@@ -64,7 +64,7 @@ fn prevent_destroy_makes_a_delete_a_deny() {
     );
 }
 
-/// Renaming a component instance renames every address under it. With a
+/// Renaming a copy of a component renames every address under it. With a
 /// moved fact per resource the plan is undeformed: state's identity moves,
 /// nothing is destroyed or created, and a second apply has nothing to move.
 #[test]
@@ -74,11 +74,11 @@ fn moved_closes_rename_is_destroy() {
         format!(
             r#"edition 2026
 
-module network {{
+component network {{
   resource net.vpc vpc {{ cidr = "10.0.0.0/16" }}
   resource net.subnet a {{ vpc, tier = "web" }}
 }}
-instance network {inst} {{}}
+instance network {inst}
 provider fake
 "#
         )
@@ -100,16 +100,16 @@ provider fake
     s.write(
         "p.df",
         &format!(
-            "{}moved(net.vpc, \"network.main::vpc\", net.vpc[\"network.core::vpc\"])\n\
-             moved(net.subnet, \"network.main::a\", net.subnet[\"network.core::a\"])\n",
+            "{}moved(net.vpc, \"main::vpc\", net.vpc[\"core::vpc\"])\n\
+             moved(net.subnet, \"main::a\", net.subnet[\"core::a\"])\n",
             prog("core")
         ),
     );
     let r = dform(&s, &["plan"]).success();
     assert_eq!(
         r.stdout,
-        "moved net.subnet[\"network.main::a\"] -> net.subnet[\"network.core::a\"]\n\
-         moved net.vpc[\"network.main::vpc\"] -> net.vpc[\"network.core::vpc\"]\n\
+        "moved net.subnet[\"main::a\"] -> net.subnet[\"core::a\"]\n\
+         moved net.vpc[\"main::vpc\"] -> net.vpc[\"core::vpc\"]\n\
          stack p is undeformed\n"
     );
     // plan does not write state; apply does.
@@ -122,12 +122,9 @@ provider fake
             .unwrap()
             .keys()
             .collect::<Vec<_>>(),
-        ["net.subnet::network.core::a", "net.vpc::network.core::vpc"]
+        ["net.subnet::core::a", "net.vpc::core::vpc"]
     );
-    assert_eq!(
-        st["resources"]["net.vpc::network.core::vpc"]["remote"],
-        "network.main::vpc"
-    );
+    assert_eq!(st["resources"]["net.vpc::core::vpc"]["remote"], "main::vpc");
     assert_eq!(world(&s)["resources"], before["resources"]);
     let r = dform(&s, &["plan"]).success();
     assert_eq!(r.stdout, "stack p is undeformed\n");
@@ -174,8 +171,8 @@ fn ignore_changes_drops_the_path_from_both_sides() {
     );
 }
 
-/// The facts are ordinary: a policy reads them, also through `import as`,
-/// which does not namespace them.
+/// The facts are ordinary: a policy reads them, also from a module the
+/// program uses (they are the compiler's relation, never the module's).
 #[test]
 fn policy_reads_lifecycle_facts() {
     let s = Scratch::new("lifecycle-policy");
@@ -204,7 +201,7 @@ provider fake
     s.write(
         "p.df",
         &s.read("p.df")
-            .replacen("edition 2026\n", "edition 2026\nimport \"lib.df\"\n", 1),
+            .replacen("provider fake\n", "provider fake\nuse lib\n", 1),
     );
     dform(&s, &["plan"]).success();
 }

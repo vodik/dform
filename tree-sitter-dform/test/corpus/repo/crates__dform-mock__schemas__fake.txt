@@ -45,6 +45,18 @@ type_attr("iam.role_policy_attachment", "id", "string", ["computed", "id"])
 type_attr(net.vpc, "cidr", "string", ["force_new"])
 type_attr(net.subnet, "cidr", "string", ["force_new"])
 
+# What an attribute that points at another resource takes: the resource
+# itself (`vpc = main`), resolved to its id at Apply (R-43). Each is named
+# for the thing it points at.
+type_attr(net.subnet, "vpc", "ref(net.vpc)", [])
+type_attr(net.vpc_peering, "requester_vpc", "ref(net.vpc)", [])
+type_attr(net.vpc_peering, "accepter_vpc", "ref(net.vpc)", [])
+type_attr("db.postgres", "subnets", "list(ref(net.subnet))", [])
+type_attr(k8s.cluster, "subnets", "list(ref(net.subnet))", [])
+type_attr(k8s.nodepool, "cluster", "ref(k8s.cluster)", [])
+type_attr("iam.role_policy_attachment", "role", "ref(iam.role)", [])
+type_attr("iam.role_policy_attachment", "policy", "ref(iam.policy)", [])
+
 # How a replacement is ordered: a vpc may be replaced either way (destroy
 # first unless lifecycle create_before_destroy says otherwise).
 type_replace(net.vpc, "either")
@@ -72,12 +84,12 @@ type_doc(net.vpc, "cidr", "The network's IPv4 range in CIDR notation. Changing i
 type_doc(net.vpc, "tags", "Key-value labels on the network.")
 type_doc(net.subnet, "", "A range of a network's addresses in one zone.")
 type_doc(net.subnet, "cidr", "The subnet's IPv4 range, inside its network's; a /24 or larger. Changing it replaces the subnet.")
-type_doc(net.subnet, "vpc_id", "The id of the network the subnet is in.")
+type_doc(net.subnet, "vpc", "The network the subnet is in.")
 type_doc(net.subnet, "zone", "The zone the subnet's addresses are served in.")
 type_doc(net.subnet, "visibility", "\"private\" or \"public\": whether the subnet routes to the internet.")
 type_doc(net.vpc_peering, "", "A peering connection between two networks.")
-type_doc(net.vpc_peering, "requester_vpc_id", "The id of the network that requests the peering.")
-type_doc(net.vpc_peering, "accepter_vpc_id", "The id of the network that accepts the peering.")
+type_doc(net.vpc_peering, "requester_vpc", "The network that requests the peering.")
+type_doc(net.vpc_peering, "accepter_vpc", "The network that accepts the peering.")
 type_doc(net.route, "", "A route between two networks.")
 type_doc(net.route, "from", "The network the route leaves from.")
 type_doc(net.route, "to", "The network the route reaches.")
@@ -88,15 +100,15 @@ type_doc("db.postgres", "", "A managed PostgreSQL database.")
 type_doc("db.postgres", "backup_days", "How many days of automated backups are kept, from 1 to 35.")
 type_doc("db.postgres", "multi_az", "Whether a standby replica runs in a second zone.")
 type_doc("db.postgres", "public", "Whether the database has an address outside its network.")
-type_doc("db.postgres", "subnet_ids", "The subnets the database may be placed in.")
+type_doc("db.postgres", "subnets", "The subnets the database may be placed in.")
 type_doc("db.postgres", "endpoint", "The address clients connect to, known once the database exists.")
 type_doc(k8s.cluster, "", "A managed Kubernetes control plane.")
 type_doc(k8s.cluster, "private_api", "Whether the API server is reachable only from inside the network.")
-type_doc(k8s.cluster, "subnet_ids", "The subnets the cluster's nodes and endpoints use.")
+type_doc(k8s.cluster, "subnets", "The subnets the cluster's nodes and endpoints use.")
 type_doc(k8s.cluster, "version", "The Kubernetes version of the control plane.")
 type_doc(k8s.cluster, "api_endpoint", "The API server's URL, known once the cluster exists.")
 type_doc(k8s.nodepool, "", "A group of worker nodes of one cluster.")
-type_doc(k8s.nodepool, "cluster_id", "The id of the cluster the nodes join.")
+type_doc(k8s.nodepool, "cluster", "The cluster the nodes join.")
 type_doc(k8s.nodepool, "min", "The fewest nodes the pool scales down to.")
 type_doc(k8s.nodepool, "max", "The most nodes the pool scales up to.")
 type_doc("iam.role", "", "An identity workloads assume.")
@@ -106,8 +118,8 @@ type_doc("iam.policy", "", "A set of permissions.")
 type_doc("iam.policy", "name", "The policy's name, unique in the account.")
 type_doc("iam.policy", "statements", "The policy's statements: each an effect, actions and resources.")
 type_doc("iam.role_policy_attachment", "", "Grants a policy's permissions to a role.")
-type_doc("iam.role_policy_attachment", "role_id", "The id of the role.")
-type_doc("iam.role_policy_attachment", "policy_id", "The id of the policy.")
+type_doc("iam.role_policy_attachment", "role", "The role.")
+type_doc("iam.role_policy_attachment", "policy", "The policy.")
 
 ---
 
@@ -422,6 +434,102 @@ type_doc("iam.role_policy_attachment", "policy_id", "The id of the policy.")
         (list
           (string
             (string_content))))))
+  (comment)
+  (comment)
+  (comment)
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list))))
   (comment)
   (comment)
   (fact

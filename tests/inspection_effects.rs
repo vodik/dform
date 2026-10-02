@@ -47,12 +47,12 @@ fn a_module_instance_writes_its_resource_cells() {
 fn cross_instance_wiring_is_the_callers_effect() {
     let out = dform("examples/demo/stacks/dform.df", &["effects"]);
     assert!(
-        out.contains("input database.main.subnets"),
-        "stack should write database.main's input cell: {out}"
+        out.contains("input database.subnets"),
+        "stack should write database's input cell: {out}"
     );
     assert!(
-        out.contains("output network.main.private_subnets"),
-        "stack should read network.main's output: {out}"
+        out.contains("output main.private_subnets"),
+        "stack should read main's output: {out}"
     );
 }
 

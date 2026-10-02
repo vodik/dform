@@ -1,0 +1,7 @@
+edition 2026
+
+input database: string
+
+resource db.postgres db {
+  public = false
+}

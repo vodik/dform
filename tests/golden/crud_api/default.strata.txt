@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== examples/crud-api/stacks/crud_api.df: 252 nodes, 1449 edges (391 negative)
+== examples/crud-api/stacks/crud_api.df: 255 nodes, 1527 edges (391 negative)
    STRATIFIED, 24 strata
    stratum 0:
      (arg, google_sql_database, instance)
@@ -169,56 +169,59 @@ exit: ok
      (attr, let, rollout)
      migrated
    stratum 8:
-     (arg, input, app.blue::color)
-     (arg, input, app.blue::db_secret)
-     (arg, input, app.blue::image)
-     (arg, input, app.blue::namespace)
-     (arg, input, app.blue::replicas)
-     (arg, input, app.blue::schema)
-     (arg, input, app.green::color)
-     (arg, input, app.green::db_secret)
-     (arg, input, app.green::image)
-     (arg, input, app.green::namespace)
-     (arg, input, app.green::replicas)
-     (arg, input, app.green::schema)
+     (arg, input, blue::color)
+     (arg, input, blue::db_secret)
+     (arg, input, blue::image)
+     (arg, input, blue::namespace)
+     (arg, input, blue::replicas)
+     (arg, input, blue::schema)
+     (arg, input, green::color)
+     (arg, input, green::db_secret)
+     (arg, input, green::image)
+     (arg, input, green::namespace)
+     (arg, input, green::replicas)
+     (arg, input, green::schema)
+     blue::__instance
+     green::__instance
+     instance_of
      rollout
      run
    stratum 9:
-     (attr, input, app.blue::color)
-     (attr, input, app.blue::db_secret)
-     (attr, input, app.blue::image)
-     (attr, input, app.blue::namespace)
-     (attr, input, app.blue::replicas)
-     (attr, input, app.blue::schema)
-     (attr, input, app.green::color)
-     (attr, input, app.green::db_secret)
-     (attr, input, app.green::image)
-     (attr, input, app.green::namespace)
-     (attr, input, app.green::replicas)
-     (attr, input, app.green::schema)
+     (attr, input, blue::color)
+     (attr, input, blue::db_secret)
+     (attr, input, blue::image)
+     (attr, input, blue::namespace)
+     (attr, input, blue::replicas)
+     (attr, input, blue::schema)
+     (attr, input, green::color)
+     (attr, input, green::db_secret)
+     (attr, input, green::image)
+     (attr, input, green::namespace)
+     (attr, input, green::replicas)
+     (attr, input, green::schema)
    stratum 10:
      (arg, k8s.horizontal_pod_autoscaler, metadata)
      (arg, k8s.horizontal_pod_autoscaler, status)
-     (arg, let, app.blue::labels)
-     (arg, let, app.green::labels)
+     (arg, let, blue::labels)
+     (arg, let, green::labels)
      (want, k8s.horizontal_pod_autoscaler)
-     app.blue::color
-     app.blue::db_secret
-     app.blue::image
-     app.blue::namespace
-     app.blue::replicas
-     app.blue::schema
-     app.green::color
-     app.green::db_secret
-     app.green::image
-     app.green::namespace
-     app.green::replicas
-     app.green::schema
+     blue::color
+     blue::db_secret
+     blue::image
+     blue::namespace
+     blue::replicas
+     blue::schema
+     green::color
+     green::db_secret
+     green::image
+     green::namespace
+     green::replicas
+     green::schema
    stratum 11:
      (attr, k8s.horizontal_pod_autoscaler, metadata)
      (attr, k8s.horizontal_pod_autoscaler, status)
-     (attr, let, app.blue::labels)
-     (attr, let, app.green::labels)
+     (attr, let, blue::labels)
+     (attr, let, green::labels)
    stratum 12:
      (arg, k8s.deployment, metadata)
      (arg, k8s.deployment, spec)
@@ -231,8 +234,8 @@ exit: ok
      (want, k8s.deployment)
      (want, k8s.network_policy)
      (want, k8s.pod_disruption_budget)
-     app.blue::labels
-     app.green::labels
+     blue::labels
+     green::labels
    stratum 13:
      (attr, k8s.deployment, metadata)
      (attr, k8s.deployment, spec)

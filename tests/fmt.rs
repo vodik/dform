@@ -120,8 +120,9 @@ fn fmt_refuses_a_file_that_does_not_parse() {
     assert_eq!(s.read("bad.df"), bad);
 }
 
-/// A file's header is `edition`, then `import`, `key` and `input` lines
-/// (value inputs, then relation inputs), then the body (R-27): `fmt`
+/// A file's header is `edition`, then `key` and `input` lines (value
+/// inputs, then relation inputs), then the body (R-27); `use` is a body
+/// statement (R-65): `fmt`
 /// moves a header statement written below the body, or out of its kind's
 /// order, with the comments above it and on its line, and keeps the
 /// author's order within a kind.
@@ -129,10 +130,11 @@ fn fmt_refuses_a_file_that_does_not_parse() {
 fn fmt_puts_the_header_in_order() {
     let src = "# A program.\n\nedition 2026\n\ninput b: int\n# The key.\nkey env: string\n\n\
                provider fake\n\n#| The relation.\ninput p(a) from facts(\"p.facts\")\n\
-               p2(x) where p(x)\nimport \"m.df\" # its modules\ninput a: int\n";
-    let want = "# A program.\n\nedition 2026\n\nimport \"m.df\" # its modules\n# The key.\n\
+               p2(x) where p(x)\nuse m # its modules\ninput a: int\n";
+    let want = "# A program.\n\nedition 2026\n\n# The key.\n\
                 key env: string\ninput b: int\ninput a: int\n#| The relation.\n\
-                input p(a) from facts(\"p.facts\")\n\nprovider fake\n\np2(x) where p(x)\n";
+                input p(a) from facts(\"p.facts\")\n\nprovider fake\n\np2(x) where p(x)\n\
+                use m # its modules\n";
     let got = dform::fmt::format_source("p.df", src).unwrap();
     assert_eq!(got, want);
     assert_eq!(dform::fmt::format_source("p.df", &got).unwrap(), got);
@@ -146,10 +148,10 @@ fn fmt_puts_the_header_in_order() {
 #[test]
 fn fmt_drops_an_empty_block() {
     let src = "edition 2026\n\nprovider fake {}\nprovider env {\n}\nprovider k8s { # later\n}\n\
-               module m {\n  input n: int = 1\n}\ninstance m a {} where 1 == 1\ninstance m b {   }\n\
+               component m {\n  input n: int = 1\n}\ninstance m a {} where 1 == 1\ninstance m b {   }\n\
                resource net.vpc v {}\n";
     let want = "edition 2026\n\nprovider fake\nprovider env\nprovider k8s { # later\n}\n\
-                module m {\n  input n: int = 1\n}\ninstance m a where 1 == 1\ninstance m b\n\
+                component m {\n  input n: int = 1\n}\ninstance m a where 1 == 1\ninstance m b\n\
                 resource net.vpc v {}\n";
     assert_eq!(fmt(src), want);
     assert_eq!(fmt(want), want);

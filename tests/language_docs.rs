@@ -47,11 +47,11 @@ fn doc_comments_lower_to_doc_facts() {
     s.write(
         "p.df",
         "edition 2026\n\
-         import \"lib.df\"\n\
+         use lib\n\
          #| A network.\n\
          #| owner: net-team\n\
          #| since: 2026.1\n\
-         module network {\n\
+         component network {\n\
          \x20 #| Its range.\n\
          \x20 input cidr: string\n\
          \x20 # a plain comment is no doc\n\
@@ -68,10 +68,9 @@ fn doc_comments_lower_to_doc_facts() {
     assert_eq!(
         docs(&s, "p.df"),
         vec![
-            row("alias", "zone", "description", "Shared names."),
-            row("module", "network", "description", "A network."),
-            row("module", "network", "owner", "net-team"),
-            row("module", "network", "since", "2026.1"),
+            row("component", "network", "description", "A network."),
+            row("component", "network", "owner", "net-team"),
+            row("component", "network", "since", "2026.1"),
             row("input", "network.cidr", "description", "Its range."),
             row("rule", "zone_of", "deprecated", "read zones/1"),
             row(
@@ -80,12 +79,13 @@ fn doc_comments_lower_to_doc_facts() {
                 "description",
                 "The first VM."
             ),
+            row("alias", "zone", "description", "Shared names."),
         ]
     );
 }
 
 /// A policy reads `doc/4`: here it requires an owner of every documented
-/// module, and warns of a deprecated item.
+/// component, and warns of a deprecated item.
 #[test]
 fn a_policy_can_require_docs() {
     let s = Scratch::new("docs-policy");
@@ -94,23 +94,21 @@ fn a_policy_can_require_docs() {
         "edition 2026\n\
          #| Has an owner.\n\
          #| owner: a-team\n\
-         module owned {}\n\
+         component owned {}\n\
          #| Has none.\n\
-         module orphan {}\n\
+         component orphan {}\n\
          #| deprecated: use owned\n\
-         module old {}\n\
-         policy docs {\n\
-         \x20 deny \"a module has no owner\" { module: m } where doc(\"module\", m, \"description\", _), not doc(\"module\", m, \"owner\", _)\n\
-         \x20 warn \"deprecated\" { item: n, why } where doc(_, n, \"deprecated\", why)\n\
-         }\n\
-         use docs\nprovider fake\n",
+         component old {}\n\
+         deny \"a component has no owner\" { component: m } where doc(\"component\", m, \"description\", _), not doc(\"component\", m, \"owner\", _)\n\
+         warn \"deprecated\" { item: n, why } where doc(_, n, \"deprecated\", why)\n\
+         provider fake\n",
     );
     let r = s
         .run(&["dev", "--world", "w.json", "plan", "p.df"])
         .failure();
     let out = format!("{}{}", r.stdout, r.stderr);
     assert!(
-        out.contains("- a module has no owner ctx={\"module\":\"orphan\"}"),
+        out.contains("- a component has no owner ctx={\"component\":\"orphan\"}"),
         "{out}"
     );
     assert!(!out.contains("\"owned\""), "{out}");
@@ -139,12 +137,12 @@ fn dform_doc_renders_every_documented_item() {
     let mut documented = 0;
     for f in [
         "stacks/dform.df",
-        "modules/network.df",
-        "modules/database.df",
-        "modules/kubernetes.df",
-        "modules/iam.df",
-        "modules/stdlib_net.df",
-        "policies/baseline.df",
+        "network.df",
+        "database.df",
+        "kubernetes.df",
+        "identity.df",
+        "stdlib_net.df",
+        "baseline.df",
     ] {
         let text = std::fs::read_to_string(demo.join(f)).unwrap();
         let tree = dform::syntax::parser::parse(&text).syntax();
@@ -155,7 +153,7 @@ fn dform_doc_renders_every_documented_item() {
         }
         assert!(md.contains(&format!("\n## {f}\n")), "{f} in\n{md}");
     }
-    assert!(documented >= 20, "{documented} documented items");
+    assert!(documented >= 18, "{documented} documented items");
     assert!(md.contains("### input `env`\n\n```dform\nkey env: environment = \"staging\"\n```\n\nThe deployment's environment"), "{md}");
     assert!(md.contains("- **owner**: platform\n"), "{md}");
 
@@ -169,6 +167,6 @@ fn dform_doc_renders_every_documented_item() {
         String::from_utf8_lossy(&out.stderr)
     );
     let md = String::from_utf8(out.stdout).unwrap();
-    assert!(md.contains("\n## modules/network.df\n"), "{md}");
-    assert!(md.contains("### module `network`"), "{md}");
+    assert!(md.contains("\n## network.df\n"), "{md}");
+    assert!(md.contains("### input `vpc.vpc_net`"), "{md}");
 }

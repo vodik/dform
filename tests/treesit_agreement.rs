@@ -91,20 +91,17 @@ fn ts_errors(tree: &Tree) -> Vec<String> {
 /// cut them differently (tree-sitter nests `a.b[c]`, rowan lists it).
 const SAME: &[(SyntaxKind, &[&str])] = &[
     (EDITION, &["edition"]),
-    (IMPORT, &["import"]),
     (PROVIDER, &["provider"]),
     (INPUT, &["input"]),
     (INPUT_RELATION, &["input_relation"]),
     (OUTPUT_DECL, &["output"]),
-    (EXPORT, &["export"]),
     (EXTERN, &["extern"]),
     (TYPE_DECL, &["type_declaration"]),
     (TYPE_ALIAS, &["type_alias"]),
     (ATTR_DECL, &["attribute_declaration"]),
     (DECL, &["decl"]),
-    (MODULE, &["module"]),
+    (COMPONENT, &["component"]),
     (INSTANCE, &["instance"]),
-    (POLICY, &["policy"]),
     (USE, &["use"]),
     (LET, &["let"]),
     (SET, &["set"]),
@@ -284,7 +281,7 @@ fn inside(n: Node, kinds: &[&str]) -> bool {
 
 /// Proposal G, G-6: a dot in a field's value is a reference, in a rule body
 /// or a clause a read. dform.df has both: `subnets =
-/// network.main.private_subnets` in a block, `a = network[ia].vpc` in a
+/// main.private_subnets` in a block, `a = network[ia].vpc` in a
 /// rule body.
 #[test]
 fn the_reference_capture_is_on_field_values_and_not_on_reads() {
@@ -293,7 +290,7 @@ fn the_reference_capture_is_on_field_values_and_not_on_reads() {
     let refs = captures(&tree, &src, "variable.reference");
     let text = |n: &Node| src[n.byte_range()].to_string();
     let texts: Vec<String> = refs.iter().map(text).collect();
-    for want in ["network.main.private_subnets"] {
+    for want in ["main.private_subnets"] {
         assert!(
             texts.iter().any(|t| t == want),
             "{want} not captured: {texts:?}"
@@ -416,7 +413,9 @@ fn edge_cases_agree() {
         "p(x) where v = xs[i], has x.a, 1 <= x <= 3\n",
         "p(x) where exists x\n",
         "when env == \"prod\" {\n  q(1)\n}\n",
-        "module m {\n  input on: bool = true check on\n  output v: net.vpc = vpc\n  export type t\n}\n",
+        "component m {\n  input on: bool = true check on\n  output v: net.vpc = vpc\n  type t = int\n}\n",
+        "module m {\n  input on: bool\n}\n",
+        "export type t\n",
         "output k: int = n where q(n)\n",
         "extern file.json(+path, -value: string) persist\n",
         "decl p(a, b) mixed\ndecl q(a: int, b: list(string))\n",
@@ -424,6 +423,13 @@ fn edge_cases_agree() {
         "type zone = enum(\"a\", \"b\")\n",
         "import \"a.df\"\n",
         "use p\nlet cfg = settings[env]\n",
+        // Paths (R-65).
+        "use modules.net as net where env == \"prod\"\nuse stacks.platform\n",
+        "instance network blue\ninstance modules.net.vpc main { cidr }\n",
+        "instance network\n",
+        "instance network where q(1)\n",
+        "instance traefik edge {\n  acme_email = config.admin_email\n} where env == \"prod\"\n",
+        "let e = platform[env=env].endpoint\nlet r = acme[env=\"prod\", region=r].x\n",
         // Strings.
         "p(\"a ${x} $${b} {c} \\\"c\\\" \\u{41}\") where q(x)\n",
         "p(\"# not a comment\")\n",

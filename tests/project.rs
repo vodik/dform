@@ -165,12 +165,6 @@ fn a_stack_is_a_file_named_after_itself() {
         "{}",
         r.stderr
     );
-    assert!(
-        r.stderr
-            .contains("warning: shop.df is outside the project layout"),
-        "{}",
-        r.stderr
-    );
     s.run(&["plan", "net"]).success();
     // A table for a stack no file is.
     s.write("dform.toml", "[stacks.nope]\nisolated = true\n");
@@ -195,24 +189,21 @@ fn a_stack_is_a_file_named_after_itself() {
 #[test]
 fn the_layout_lints() {
     let s = project("target-lints");
-    // A module with a key is an error: a key is its stack's.
+    // A module that is not a stack with a key is an error: a key is its
+    // stack's.
     s.write("modules/m.df", "edition 2026\nkey env: string\n");
     let r = s.run(&["plan", "net"]).failure();
     assert!(
-        r.stderr.contains("modules/m.df: a module file has a `key`"),
+        r.stderr
+            .contains("modules/m.df: a file that is not a stack has a `key`"),
         "{}",
         r.stderr
     );
     std::fs::remove_file(s.path("modules/m.df")).unwrap();
-    // A .df outside the layout is a warning.
+    // Every other .df is a module, wherever it is (R-65).
     s.write("loose.df", "edition 2026\n");
     let r = s.run(&["plan", "net"]).success();
-    assert!(
-        r.stderr
-            .contains("warning: loose.df is outside the project layout"),
-        "{}",
-        r.stderr
-    );
+    assert!(!r.stderr.contains("warning"), "{}", r.stderr);
     // [discovery] exclude: not walked, not linted.
     s.write(
         "dform.toml",
@@ -223,33 +214,37 @@ fn the_layout_lints() {
     assert!(!r.stderr.contains("warning"), "{}", r.stderr);
 }
 
+/// A stack is a module the tool uses: a program `use`s it to read its
+/// deployments and never instances it; any other module, by its path from
+/// the root, whatever file names it (R-65).
 #[test]
-fn a_program_imports_modules_never_a_stack() {
-    let s = project("target-import-stack");
+fn a_program_uses_a_stack_and_never_instances_it() {
+    let s = project("target-use-stack");
     s.write(
         "stacks/both.df",
-        "edition 2026\nimport \"stacks/net.df\"\nprovider fake\n",
+        "edition 2026\ncomponent c {\n  input n: int\n}\ninstance stacks.net x\nprovider fake\n",
     );
     let r = s.run(&["plan", "both"]).failure();
     assert!(
-        r.stderr.contains(
-            "import \"stacks/net.df\": stacks/net.df is a stack (a file under stacks/); a \
-             program imports modules, never another stack"
-        ),
+        r.stderr
+            .contains("stacks.net is deployed by the tool; `use` it"),
         "{}",
         r.stderr
     );
-    // Imports resolve from the project root, whatever file imports.
     s.write(
         "modules/tags.df",
         "edition 2026\nresource net.vpc extra { cidr = \"10.1.0.0/16\" }\n",
     );
     s.write(
         "stacks/both.df",
-        "edition 2026\nimport \"modules/tags.df\"\nprovider fake\n",
+        "edition 2026\nuse modules.tags\nprovider fake\n",
     );
     let r = s.run(&["plan", "both"]).success();
-    assert!(r.stdout.contains("+ net.vpc[\"extra\"]"), "{}", r.stdout);
+    assert!(
+        r.stdout.contains("+ net.vpc[\"tags::extra\"]"),
+        "{}",
+        r.stdout
+    );
 }
 
 #[test]

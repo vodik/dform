@@ -89,7 +89,7 @@ resource google_sql_database_instance db {
     tier: cfg.db.tier,
     availability_type: cfg.db.availability,
     backup_configuration: { enabled: true, point_in_time_recovery_enabled: true },
-    ip_configuration: { ipv4_enabled: false, private_network: vpc.id }
+    ip_configuration: { ipv4_enabled: false, private_network: vpc }
   }
 }
 
@@ -205,7 +205,7 @@ resource k8s.service api {
   spec.ports = [{ port: 80, targetPort: 8080, protocol: "TCP" }]
 }
 
-module app {
+component app {
   input color: enum("blue", "green")
   input image: string
   input schema: int
@@ -688,9 +688,7 @@ auto_reconcile(t, a, p) where drift(t, a, p, _, _), owned_label(l), p == "metada
                 (false))
               (object_field
                 (identifier)
-                (member_expression
-                  (identifier)
-                  (identifier)))))))))
+                (identifier))))))))
   (resource
     (dotted_name
       (identifier))
@@ -1014,7 +1012,8 @@ auto_reconcile(t, a, p) where drift(t, a, p, _, _), owned_label(l), p == "metada
           (arguments
             (identifier))))))
   (instance
-    (identifier)
+    (dotted_name
+      (identifier))
     (identifier)
     (block
       (field
@@ -1059,7 +1058,8 @@ auto_reconcile(t, a, p) where drift(t, a, p, _, _), owned_label(l), p == "metada
               (identifier)
               (identifier)))))))
   (instance
-    (identifier)
+    (dotted_name
+      (identifier))
     (identifier)
     (block
       (field
@@ -1197,7 +1197,7 @@ auto_reconcile(t, a, p) where drift(t, a, p, _, _), owned_label(l), p == "metada
               (identifier)
               (string
                 (string_content))))))))
-  (module
+  (component
     (identifier)
     (statement_block
       (input

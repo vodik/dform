@@ -7,6 +7,6 @@ input pins(name: string) from yaml(git("ops.git", "pins.yaml"))
 input dup(name: string, name: int) from csv("dup.csv")
 input typo(name: strng) from csv("typo.csv")
 
-module m {
+component m {
   input inner(name: string) from csv("inner.csv")
 }

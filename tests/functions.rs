@@ -84,13 +84,13 @@ fn internal_functions_are_not_callable() {
     assert_eq!(facts("p(x) where x = 1 + 2\n", "p"), ["p(3)"]);
 }
 
-/// A dotted name's head names one thing: a module named like a function
-/// package is an error naming both.
+/// A dotted name's head names one thing: a component named like a
+/// function package is an error naming both.
 #[test]
 fn a_head_two_things_claim_is_an_error() {
-    let e = error("module inet {\n  output k = 1\n}\ninstance inet main {}\n");
+    let e = error("component inet {\n  output k = 1\n}\ninstance inet main\n");
     assert!(
-        e.contains("`inet` is both the module `inet` and the function package `inet` (std/inet.df)"),
+        e.contains("`inet` is both the component `inet` and the function package `inet` (std/inet.df)"),
         "{e}"
     );
 }

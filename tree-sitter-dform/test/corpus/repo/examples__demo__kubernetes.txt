@@ -1,0 +1,104 @@
+===========================
+examples/demo/kubernetes.df
+===========================
+
+edition 2026
+
+input private_api: bool
+input nodepool_min: int
+input nodepool_max: int
+input subnets: network.subnets
+
+#| A Kubernetes cluster and one node pool in the network's private
+#| subnets.
+resource k8s.cluster cluster {
+  version = "1.29"
+  private_api
+  subnets
+}
+
+resource k8s.nodepool default {
+  cluster
+  min = nodepool_min
+  max = nodepool_max
+}
+
+#| Only when the cluster exists in this environment.
+output iam_need = { action: "k8s.describe_cluster", resource: cluster } where has private_api
+
+---
+
+(source_file
+  (edition
+    (integer))
+  (input
+    (identifier)
+    (type
+      (dotted_name
+        (identifier))))
+  (input
+    (identifier)
+    (type
+      (dotted_name
+        (identifier))))
+  (input
+    (identifier)
+    (type
+      (dotted_name
+        (identifier))))
+  (input
+    (identifier)
+    (type
+      (dotted_name
+        (identifier)
+        (identifier))))
+  (comment)
+  (comment)
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))
+      (field
+        (block_path
+          (identifier)))
+      (field
+        (block_path
+          (identifier)))))
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier)))
+      (field
+        (block_path
+          (identifier))
+        (identifier))
+      (field
+        (block_path
+          (identifier))
+        (identifier))))
+  (comment)
+  (output
+    (identifier)
+    (object
+      (object_field
+        (identifier)
+        (string
+          (string_content)))
+      (object_field
+        (identifier)
+        (identifier)))
+    (body
+      (has_literal
+        (identifier)))))

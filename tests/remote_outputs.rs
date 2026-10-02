@@ -1,6 +1,6 @@
 //! Remote outputs: a project reads another project's stack outputs through
-//! that project's backend (`[remotes]` in dform.toml, README "Remote
-//! outputs"): the object a deployment publishes beside its state,
+//! that project's backend, the project mounted as a package (`[packages]`
+//! in dform.toml, R-65) and its stack used, `use platform.stacks.cluster`: the object a deployment publishes beside its state,
 //! `outputs.json`, never the state. A plan records the digests of what it
 //! read and `apply PLAN` refuses once one moved; a secret output crosses as
 //! its label only.
@@ -18,28 +18,32 @@ output token: secret(string) = token
 
 const APP: &str = r#"edition 2026
 provider fake
+use platform.stacks.cluster
 resource net.vpc edge {
   name = e
-} where stack_output("platform.cluster[env=prod]", "endpoint", e)
+} where e = cluster[env="prod"].endpoint
 "#;
 
 const SECRET: &str = "s3cr3t-token-value";
 
-/// The upstream project, its `cluster[env=prod]` applied; and the reader,
-/// whose `[remotes]` names it (`remotes` is the manifest's table, with
-/// `PLATFORM` the upstream's state root).
-fn projects(name: &str, remotes: &str) -> (Scratch, Scratch) {
+/// The upstream project, its `cluster[env=prod]` applied (`manifest` its
+/// dform.toml); and the reader, which mounts it as the package
+/// `platform`.
+fn projects(name: &str, manifest: &str) -> (Scratch, Scratch) {
     let platform = Scratch::project(&format!("{name}-platform"));
+    platform.write("dform.toml", manifest);
     platform.write("stacks/cluster.df", CLUSTER);
     let set = format!("token={SECRET}");
     platform
         .run(&["apply", "cluster", "env=prod", "--set", &set])
         .success();
     let app = Scratch::project(&format!("{name}-app"));
-    let root = platform.path("dform.state").display().to_string();
     app.write(
         "dform.toml",
-        &format!("[remotes]\n{}", remotes.replace("PLATFORM", &root)),
+        &format!(
+            "[packages.platform]\npath = {:?}\n",
+            platform.dir.display().to_string()
+        ),
     );
     app.write("stacks/app.df", APP);
     (platform, app)
@@ -47,10 +51,7 @@ fn projects(name: &str, remotes: &str) -> (Scratch, Scratch) {
 
 #[test]
 fn a_project_reads_another_projects_outputs_through_a_local_remote() {
-    let (platform, app) = projects(
-        "remote-local",
-        "platform = { backend = 'local(\"PLATFORM\")' }\n",
-    );
+    let (platform, app) = projects("remote-local", "");
     // What crosses: the outputs object, a secret by its label only.
     let published = platform.read("dform.state/cluster/env=prod/outputs.json");
     assert!(
@@ -114,13 +115,13 @@ fn a_project_reads_another_projects_outputs_through_a_local_remote() {
     );
 }
 
-/// A remote's backend may name each stack's place with `{stack}`; a
-/// deployment the remote has not applied has no outputs.
+/// A package's backend may name each stack's place with `{stack}`; a
+/// deployment the package has not applied has no outputs.
 #[test]
 fn a_remote_backend_takes_the_stack_name() {
     let (_platform, app) = projects(
         "remote-template",
-        "platform = { backend = 'local(\"PLATFORM/{stack}\")' }\n",
+        "[defaults]\nbackend = 'local(\"state/{stack}\")'\n",
     );
     let r = app.run(&["plan", "app"]).success();
     assert!(
@@ -128,7 +129,10 @@ fn a_remote_backend_takes_the_stack_name() {
         "{}",
         r.stdout
     );
-    app.write("stacks/app.df", &APP.replace("env=prod", "env=staging"));
+    app.write(
+        "stacks/app.df",
+        &APP.replace("env=\"prod\"", "env=\"staging\""),
+    );
     let r = app.run(&["plan", "app"]).success();
     assert_eq!(r.summary(), "stack app is undeformed", "{}", r.stdout);
 }
@@ -137,11 +141,8 @@ fn a_remote_backend_takes_the_stack_name() {
 /// is the static secret error, and its bytes never cross.
 #[test]
 fn a_secret_output_cannot_be_read_into_a_public_field() {
-    let (_platform, app) = projects(
-        "remote-secret",
-        "platform = { backend = 'local(\"PLATFORM\")' }\n",
-    );
-    app.write("stacks/app.df", &APP.replace("\"endpoint\"", "\"token\""));
+    let (_platform, app) = projects("remote-secret", "");
+    app.write("stacks/app.df", &APP.replace(".endpoint", ".token"));
     let r = app.run(&["plan", "app"]).failure();
     assert!(
         r.stderr
@@ -152,19 +153,22 @@ fn a_secret_output_cannot_be_read_into_a_public_field() {
     assert!(!r.stderr.contains(SECRET), "{}", r.stderr);
 }
 
-/// A remote named in the manifest is checked there.
+/// A package is a project: a path to none names no module.
 #[test]
-fn a_remote_needs_a_backend_term() {
+fn a_package_is_a_path_to_a_project() {
     let s = Scratch::project("remote-bad");
-    s.write(
-        "dform.toml",
-        "[remotes]\nplatform = { backend = 'gcs(\"x\")' }\n",
-    );
+    s.write("dform.toml", "[packages.platform]\npath = \"../nowhere\"\n");
     s.write("stacks/app.df", APP);
     let r = s.run(&["plan", "app"]).failure();
     assert!(
+        r.stderr.contains("no module `platform.stacks.cluster`"),
+        "{}",
         r.stderr
-            .contains("[remotes] platform backend = \"gcs(\\\"x\\\")\""),
+    );
+    s.write("dform.toml", "[packages.\"a.b\"]\npath = \"..\"\n");
+    let r = s.run(&["plan", "app"]).failure();
+    assert!(
+        r.stderr.contains("a package's name is the first segment"),
         "{}",
         r.stderr
     );

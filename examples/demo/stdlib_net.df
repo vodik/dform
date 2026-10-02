@@ -1,0 +1,17 @@
+# Minimal networking stdlib demo rules/policies: a module of denies.
+
+edition 2026
+
+#| Deny if peered VPC CIDRs overlap.
+#|
+#| This is intentionally scoped to only VPCs connected by `vpc_peer/2`,
+#| the stack's relation: a name the module does not define is its user's.
+deny "peered vpc cidr overlaps" { a, b } where {
+  vpc_peer(a, b)
+  a in net.vpc
+  b in net.vpc
+  inet.overlaps(a.cidr, b.cidr)
+}
+
+#| Deny if any VM gets the unspecified IP.
+deny "vm has unspecified ip" { vm } where vm in compute.vm, ip.unspecified(vm.private_ip)

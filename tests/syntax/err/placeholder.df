@@ -2,7 +2,7 @@ edition 2026
 
 # `_` stands where a variable could and is never accessed.
 input env: string = "dev"
-module m {
+component m {
   input k: int = 1
 }
 resource net.vpc main { cidr = "10.0.0.0/16" }

@@ -201,7 +201,7 @@ resource k8s.service api {
   spec.ports = [{ port: 80, targetPort: 8080, protocol: "TCP" }]
 }
 
-module app {
+component app {
   input color: enum("blue", "green")
   input image: string
   input schema: int

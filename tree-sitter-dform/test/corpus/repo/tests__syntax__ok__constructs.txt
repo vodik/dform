@@ -5,8 +5,6 @@ tests/syntax/ok/constructs.df
 edition 2026
 
 # One of everything the grammar lowers today.
-import "../../../examples/demo/modules/stdlib_net.df"
-import "../../../examples/demo/modules/iam.df"
 # A keyed stack: each value of its keys is its own deployment.
 key tier: string = "dev"
 key region: string = "us-east1"
@@ -21,7 +19,10 @@ decl project(id: int, network_name: string)
 project(1, "net-a")
 names(n) where project(network_name: n)
 
-module m {
+# A module, checks.df beside this file, by its path; and a component.
+use checks where env("prod")
+
+component m {
   input on: bool
 
   resource net.vpc vpc @default {
@@ -39,11 +40,11 @@ module m {
 
 instance m main { on = true }
 
-policy p {
+component tagging {
   arg(t, a_, "tags", { owner: "ops" }) @override where want(t, a_)
 }
 
-use p
+instance tagging tags
 
 q(1) where env("prod")
 
@@ -56,11 +57,11 @@ p(x_) where q(x_), x_ == 1 + 2 * 3 - -4 / (5 % 2), x_ != 0, x_ >= 1, x_ <= 9, x_
 r(v) where v = settings["prod"].gke.static_ips."pngu-grpc".type
 s(v) where q(x_), o = { a: { b: x_ } }, v = o.a.b
 t(l) where l = [ x_ | q(x_) ], 1 in l, 2 not in l
-u(a_) where ref(net.vpc, "m.main::vpc", "id") = a_
-adopt(net.vpc["m.main::vpc"], "vpc-123")
-moved(net.vpc, "m.old::vpc", net.vpc["m.main::vpc"])
-lifecycle(net.vpc["m.main::vpc"], "prevent_destroy")
-ignore_changes(net.vpc["m.main::vpc"], "tags.owner")
+u(a_) where ref(net.vpc, "main::vpc", "id") = a_
+adopt(net.vpc["main::vpc"], "vpc-123")
+moved(net.vpc, "old::vpc", net.vpc["main::vpc"])
+lifecycle(net.vpc["main::vpc"], "prevent_destroy")
+ignore_changes(net.vpc["main::vpc"], "tags.owner")
 counts(count(x_)) where q(x_)
 deny "q must not be empty" where not q(1)
 v("input", "output", "settings", "type") where input("env", _), output("k", _)
@@ -68,7 +69,7 @@ decl p(a) mixed
 decl q(a) mixed
 p("a")
 q("b")
-w(v) where m.main.on_vpc(v)
+w(v) where v = main.vpc, checks.listed("main")
 vpc_inst("main")
 x(i, a_) where vpc_inst(i), output(m[i], "vpc", a_)
 
@@ -78,12 +79,6 @@ x(i, a_) where vpc_inst(i), output(m[i], "vpc", a_)
   (edition
     (integer))
   (comment)
-  (import
-    (string
-      (string_content)))
-  (import
-    (string
-      (string_content)))
   (comment)
   (input
     (identifier)
@@ -202,7 +197,19 @@ x(i, a_) where vpc_inst(i), output(m[i], "vpc", a_)
             (named_argument
               (identifier)
               (identifier)))))))
-  (module
+  (comment)
+  (use
+    (dotted_name
+      (identifier))
+    (clause
+      (body
+        (atom_literal
+          (call
+            (identifier)
+            (arguments
+              (string
+                (string_content))))))))
+  (component
     (identifier)
     (statement_block
       (input
@@ -293,14 +300,15 @@ x(i, a_) where vpc_inst(i), output(m[i], "vpc", a_)
             (identifier)))
         (identifier))))
   (instance
-    (identifier)
+    (dotted_name
+      (identifier))
     (identifier)
     (block
       (field
         (block_path
           (identifier))
         (true))))
-  (policy
+  (component
     (identifier)
     (statement_block
       (rule
@@ -324,7 +332,9 @@ x(i, a_) where vpc_inst(i), output(m[i], "vpc", a_)
               (arguments
                 (identifier)
                 (identifier))))))))
-  (use
+  (instance
+    (dotted_name
+      (identifier))
     (identifier))
   (rule
     (call
@@ -623,15 +633,19 @@ x(i, a_) where vpc_inst(i), output(m[i], "vpc", a_)
       (arguments
         (identifier)))
     (body
+      (comparison
+        (identifier)
+        (member_expression
+          (identifier)
+          (identifier)))
       (atom_literal
         (call
           (member_expression
-            (member_expression
-              (identifier)
-              (identifier))
+            (identifier)
             (identifier))
           (arguments
-            (identifier))))))
+            (string
+              (string_content)))))))
   (fact
     (call
       (identifier)

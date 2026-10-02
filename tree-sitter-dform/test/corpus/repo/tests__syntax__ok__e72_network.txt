@@ -2,227 +2,241 @@
 tests/syntax/ok/e72_network.df
 ==============================
 
-module network {
-  input vpc_net: inet check inet.prefix_len(vpc_net) <= 20
-  input zones: list(string) = ["us-test-1a", "us-test-1b"] # @default contribution
-  output vpc: addr
-  output private_subnet_ids: list(ref(net.subnet))
+input vpc_net: inet check inet.prefix_len(vpc_net) <= 20
+input zones: list(string) = ["us-test-1a", "us-test-1b"] # @default contribution
+output vpc: addr
+output private_subnet_ids: list(ref(net.subnet))
 
-  resource net.vpc vpc {
-    cidr = net_
-    tags = { env: e, component: "network" }
-  } where env(e), net_ = vpc_net
+resource net.vpc vpc {
+  cidr = net_
+  tags = { env: e, component: "network" }
+} where env(e), net_ = vpc_net
 
-  zone_index(z, i) where zs = zones, member(zs, i, z)
+zone_index(z, i) where zs = zones, member(zs, i, z)
 
-  # Reads attr of net.vpc (partition (attr, net.vpc, .cidr)), writes arg of
-  # net.subnet (partitions (arg, net.subnet, .vpc_id) etc.): no cycle.
-  # vpc_id carries a fresh null; cidr is computed from a constant.
-  resource net.subnet sn {
-    vpc_id = ref(net.vpc, "vpc", "id")
-    cidr = inet.subnet(net_, 4, i)
-    zone = z
-    visibility = "private"
-  } where zone_index(z, i), attr(net.vpc, "vpc", "cidr", net_), sn = format("private_%s", z)
+# Reads attr of net.vpc (partition (attr, net.vpc, .cidr)), writes arg of
+# net.subnet (partitions (arg, net.subnet, .vpc_id) etc.): no cycle.
+# vpc_id carries a fresh null; cidr is computed from a constant.
+resource net.subnet sn {
+  vpc_id = ref(net.vpc, "vpc", "id")
+  cidr = inet.subnet(net_, 4, i)
+  zone = z
+  visibility = "private"
+} where zone_index(z, i), attr(net.vpc, "vpc", "cidr", net_), sn = format("private_%s", z)
 
-  subnet_of(sn, "vpc") where want(net.subnet, sn)
+subnet_of(sn, "vpc") where want(net.subnet, sn)
 
-  output vpc = vpc
-  output private_subnet_ids = [ ref(net.subnet, sn, "id") | want(net.subnet, sn), attr(net.subnet, sn, "visibility", "private") ]
-}
+output vpc = vpc
+output private_subnet_ids = [ ref(net.subnet, sn, "id") | want(net.subnet, sn), attr(net.subnet, sn, "visibility", "private") ]
 
 ---
 
 (source_file
-  (module
+  (input
     (identifier)
-    (statement_block
-      (input
-        (identifier)
-        (type
-          (dotted_name
-            (identifier)))
-        (refinement
-          (body
-            (comparison
-              (call
-                (member_expression
-                  (identifier)
-                  (identifier))
-                (arguments
-                  (identifier)))
-              (integer)))))
-      (input
-        (identifier)
-        (type
-          (dotted_name
-            (identifier))
-          (type
-            (dotted_name
-              (identifier))))
-        (list
-          (string
-            (string_content))
-          (string
-            (string_content))))
-      (comment)
-      (output
-        (identifier)
-        (type
-          (dotted_name
-            (identifier))))
-      (output
-        (identifier)
-        (type
-          (dotted_name
-            (identifier))
-          (type
-            (dotted_name
-              (identifier))
-            (type
-              (dotted_name
-                (identifier)
-                (identifier))))))
-      (resource
-        (dotted_name
-          (identifier)
-          (identifier))
-        (identifier)
-        (block
-          (field
-            (block_path
-              (identifier))
-            (identifier))
-          (field
-            (block_path
-              (identifier))
-            (object
-              (object_field
-                (identifier)
-                (identifier))
-              (object_field
-                (identifier)
-                (string
-                  (string_content))))))
-        (clause
-          (body
-            (atom_literal
-              (call
-                (identifier)
-                (arguments
-                  (identifier))))
-            (comparison
+    (type
+      (dotted_name
+        (identifier)))
+    (refinement
+      (body
+        (comparison
+          (call
+            (member_expression
               (identifier)
-              (identifier)))))
-      (rule
+              (identifier))
+            (arguments
+              (identifier)))
+          (integer)))))
+  (input
+    (identifier)
+    (type
+      (dotted_name
+        (identifier))
+      (type
+        (dotted_name
+          (identifier))))
+    (list
+      (string
+        (string_content))
+      (string
+        (string_content))))
+  (comment)
+  (output
+    (identifier)
+    (type
+      (dotted_name
+        (identifier))))
+  (output
+    (identifier)
+    (type
+      (dotted_name
+        (identifier))
+      (type
+        (dotted_name
+          (identifier))
+        (type
+          (dotted_name
+            (identifier)
+            (identifier))))))
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (identifier))
+      (field
+        (block_path
+          (identifier))
+        (object
+          (object_field
+            (identifier)
+            (identifier))
+          (object_field
+            (identifier)
+            (string
+              (string_content))))))
+    (clause
+      (body
+        (atom_literal
+          (call
+            (identifier)
+            (arguments
+              (identifier))))
+        (comparison
+          (identifier)
+          (identifier)))))
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)
+        (identifier)))
+    (body
+      (comparison
+        (identifier)
+        (identifier))
+      (atom_literal
         (call
           (identifier)
           (arguments
             (identifier)
-            (identifier)))
-        (body
-          (comparison
+            (identifier)
+            (identifier))))))
+  (comment)
+  (comment)
+  (comment)
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (call
+          (identifier)
+          (arguments
+            (member_expression
+              (identifier)
+              (identifier))
+            (string
+              (string_content))
+            (string
+              (string_content)))))
+      (field
+        (block_path
+          (identifier))
+        (call
+          (member_expression
             (identifier)
             (identifier))
-          (atom_literal
-            (call
-              (identifier)
-              (arguments
-                (identifier)
-                (identifier)
-                (identifier))))))
-      (comment)
-      (comment)
-      (comment)
-      (resource
-        (dotted_name
-          (identifier)
+          (arguments
+            (identifier)
+            (integer)
+            (identifier))))
+      (field
+        (block_path
           (identifier))
-        (identifier)
-        (block
-          (field
-            (block_path
-              (identifier))
-            (call
+        (identifier))
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content))))
+    (clause
+      (body
+        (atom_literal
+          (call
+            (identifier)
+            (arguments
               (identifier)
-              (arguments
-                (member_expression
-                  (identifier)
-                  (identifier))
-                (string
-                  (string_content))
-                (string
-                  (string_content)))))
-          (field
-            (block_path
-              (identifier))
-            (call
+              (identifier))))
+        (atom_literal
+          (call
+            (identifier)
+            (arguments
               (member_expression
                 (identifier)
                 (identifier))
-              (arguments
-                (identifier)
-                (integer)
-                (identifier))))
-          (field
-            (block_path
-              (identifier))
-            (identifier))
-          (field
-            (block_path
-              (identifier))
-            (string
-              (string_content))))
-        (clause
-          (body
-            (atom_literal
-              (call
-                (identifier)
-                (arguments
-                  (identifier)
-                  (identifier))))
-            (atom_literal
-              (call
-                (identifier)
-                (arguments
-                  (member_expression
-                    (identifier)
-                    (identifier))
-                  (string
-                    (string_content))
-                  (string
-                    (string_content))
-                  (identifier))))
-            (comparison
-              (identifier)
-              (call
-                (identifier)
-                (arguments
-                  (string
-                    (string_content))
-                  (identifier)))))))
-      (rule
+              (string
+                (string_content))
+              (string
+                (string_content))
+              (identifier))))
+        (comparison
+          (identifier)
+          (call
+            (identifier)
+            (arguments
+              (string
+                (string_content))
+              (identifier)))))))
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)
+        (string
+          (string_content))))
+    (body
+      (atom_literal
         (call
           (identifier)
           (arguments
-            (identifier)
-            (string
-              (string_content))))
-        (body
-          (atom_literal
-            (call
+            (member_expression
               (identifier)
-              (arguments
-                (member_expression
-                  (identifier)
-                  (identifier))
-                (identifier))))))
-      (output
+              (identifier))
+            (identifier))))))
+  (output
+    (identifier)
+    (identifier))
+  (output
+    (identifier)
+    (comprehension
+      (call
         (identifier)
-        (identifier))
-      (output
-        (identifier)
-        (comprehension
+        (arguments
+          (member_expression
+            (identifier)
+            (identifier))
+          (identifier)
+          (string
+            (string_content))))
+      (body
+        (atom_literal
+          (call
+            (identifier)
+            (arguments
+              (member_expression
+                (identifier)
+                (identifier))
+              (identifier))))
+        (atom_literal
           (call
             (identifier)
             (arguments
@@ -231,25 +245,6 @@ module network {
                 (identifier))
               (identifier)
               (string
-                (string_content))))
-          (body
-            (atom_literal
-              (call
-                (identifier)
-                (arguments
-                  (member_expression
-                    (identifier)
-                    (identifier))
-                  (identifier))))
-            (atom_literal
-              (call
-                (identifier)
-                (arguments
-                  (member_expression
-                    (identifier)
-                    (identifier))
-                  (identifier)
-                  (string
-                    (string_content))
-                  (string
-                    (string_content)))))))))))
+                (string_content))
+              (string
+                (string_content)))))))))

@@ -142,8 +142,8 @@ fn fixture_prod_is_eleven_updates() {
     assert_eq!(
         noop,
         BTreeSet::from([
-            "iam.role[\"identity.main::app_role\"]",
-            "iam.role_policy_attachment[\"identity.main::attach\"]",
+            "iam.role[\"identity::app_role\"]",
+            "iam.role_policy_attachment[\"identity::attach\"]",
             "net.vpc_peering[\"peer-main-peer\"]",
         ])
     );

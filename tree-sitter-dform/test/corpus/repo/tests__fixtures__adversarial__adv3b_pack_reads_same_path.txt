@@ -12,15 +12,7 @@ resource iam.policy app_policy {
   statements = [{ action: "db.connect", resource: "db" }]
 }
 
-policy p {
-  type_lattice("iam.policy", "statements", "set")
-  set p.statements = [{ action: "org.read", resource: "org" }] where {
-    p in iam.policy
-    arg("iam.policy", p, "statements", s)
-    { action: "org.read", resource: "org" } not in s
-  }
-}
-use p
+use packs.same_path
 
 provider fake
 
@@ -55,61 +47,9 @@ provider fake
               (identifier)
               (string
                 (string_content))))))))
-  (policy
-    (identifier)
-    (statement_block
-      (fact
-        (call
-          (identifier)
-          (arguments
-            (string
-              (string_content))
-            (string
-              (string_content))
-            (string
-              (string_content)))))
-      (set
-        (member_expression
-          (identifier)
-          (identifier))
-        (list
-          (object
-            (object_field
-              (identifier)
-              (string
-                (string_content)))
-            (object_field
-              (identifier)
-              (string
-                (string_content)))))
-        (body_block
-          (in_literal
-            (identifier)
-            (member_expression
-              (identifier)
-              (identifier)))
-          (atom_literal
-            (call
-              (identifier)
-              (arguments
-                (string
-                  (string_content))
-                (identifier)
-                (string
-                  (string_content))
-                (identifier))))
-          (not_in_literal
-            (object
-              (object_field
-                (identifier)
-                (string
-                  (string_content)))
-              (object_field
-                (identifier)
-                (string
-                  (string_content))))
-            (identifier))))))
   (use
-    (identifier))
+    (dotted_name
+      (identifier)
+      (identifier)))
   (provider
     (identifier)))

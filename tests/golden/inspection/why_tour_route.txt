@@ -1,6 +1,6 @@
 net.route["blue-to-green"]
   examples/tour/stacks/tour.df:302  resource net.route "${a}-to-${b}" { .. } where reaches(a, b), a != b, network_of(b, v), dest = net.vpc[v].cidr
-  with a = "blue", b = "green", v = "network.green::vpc", dest = 10.2.0.0/16
+  with a = "blue", b = "green", v = "green::vpc", dest = 10.2.0.0/16
        "${a}-to-${b}" = "blue-to-green"
        net.vpc[v].cidr = 10.2.0.0/16
   ├─ reaches("blue", "green")
@@ -19,19 +19,20 @@ net.route["blue-to-green"]
   │         with h = "main", t = "green"
   │         ├─ hub("main")   examples/tour/stacks/tour.df:269
   │         └─ spoke("green")   examples/tour/stacks/tour.df:267
-  ├─ network_of("green", "network.green::vpc")
+  ├─ network_of("green", "green::vpc")
   │    examples/tour/stacks/tour.df:272  network_of(t, v) where spoke(t), v = network[t].vpc
-  │    with t = "green", v = "network.green::vpc"
-  │         network[t].vpc = "network.green::vpc"
+  │    with t = "green", v = "green::vpc"
+  │         network[t].vpc = "green::vpc"
   │    ├─ spoke("green")   examples/tour/stacks/tour.df:267
-  │    └─ output network.green.vpc = "network.green::vpc"
+  │    ├─ instance_of("network", "", "green")   examples/tour/stacks/tour.df:246
+  │    └─ output green.vpc = "green::vpc"
   │         merged from 1 contribution
-  │         └─ "network.green::vpc"   examples/tour/stacks/tour.df:239   (module network instance green)
-  └─ net.vpc["network.green::vpc"].cidr = 10.2.0.0/16
+  │         └─ "green::vpc"   examples/tour/stacks/tour.df:239   (instance network green)
+  └─ net.vpc["green::vpc"].cidr = 10.2.0.0/16
        merged from 1 contribution
        └─ 10.2.0.0/16
-            examples/tour/stacks/tour.df:229  resource net.vpc vpc { cidr .. }   (module network instance green)
+            examples/tour/stacks/tour.df:229  resource net.vpc vpc { cidr .. }   (instance network green)
             with cidr = 10.2.0.0/16
-            └─ input network.green.cidr = 10.2.0.0/16
+            └─ input green.cidr = 10.2.0.0/16
                  merged from 1 contribution
                  └─ 10.2.0.0/16   examples/tour/stacks/tour.df:247

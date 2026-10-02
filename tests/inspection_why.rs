@@ -14,27 +14,24 @@ fn why_a_tag_exists() {
         "examples/demo/stacks/dform.df env=prod",
         &[
             "why",
-            r#"attr(net.vpc, "network.main::vpc", "tags.team", "platform")"#,
+            r#"attr(net.vpc, "main::vpc", "tags.team", "platform")"#,
         ],
     );
     assert!(
         out.starts_with(
-            "net.vpc[\"network.main::vpc\"].tags = {component: \"network\", env: \"prod\", \
+            "net.vpc[\"main::vpc\"].tags = {component: \"network\", env: \"prod\", \
              team: \"platform\"}\n  merged from 2 contributions\n  ├─ {team: \"platform\"}\n"
         ),
         "{out}"
     );
     assert!(
         out.contains(
-            "examples/demo/policies/baseline.df:10  set r.tags = { team: \"platform\" } where r in \
-             resource   (policy baseline)\n"
+            "examples/demo/baseline.df:12  set r.tags = { team: \"platform\" } where r in \
+             resource   (use baseline)\n"
         ),
         "{out}"
     );
-    assert!(
-        out.contains("with r = net.vpc[\"network.main::vpc\"]\n"),
-        "{out}"
-    );
+    assert!(out.contains("with r = net.vpc[\"main::vpc\"]\n"), "{out}");
     assert!(out.contains("... 1 other contribution (--all)"), "{out}");
     assert!(!out.contains(":-") && !out.contains("Σattr"), "{out}");
     golden("why_dform_prod_tag", &out);
@@ -49,7 +46,7 @@ fn why_core_prints_the_lowered_rules() {
         &[
             "why",
             "--core",
-            r#"attr(net.vpc, "network.main::vpc", "tags.team", "platform")"#,
+            r#"attr(net.vpc, "main::vpc", "tags.team", "platform")"#,
         ],
     );
     assert!(
@@ -66,22 +63,22 @@ fn why_core_prints_the_lowered_rules() {
 #[test]
 fn why_and_query_take_an_address_as_plan_prints_it() {
     let at = "examples/demo/stacks/dform.df env=prod";
-    let want = dform(at, &["why", r#"net.vpc["network.main::vpc"]"#]);
+    let want = dform(at, &["why", r#"net.vpc["main::vpc"]"#]);
     assert!(
         want.starts_with(
-            "net.vpc[\"network.main::vpc\"]\n  examples/demo/modules/network.df:11  resource \
-             net.vpc vpc { .. }   (module network instance main)\n"
+            "net.vpc[\"main::vpc\"]\n  examples/demo/network.df:15  resource \
+             net.vpc vpc { .. }   (instance network.vpc main)\n"
         ),
         "{want}"
     );
-    let tag = dform(at, &["why", r#"net.vpc["network.main::vpc"].tags.team"#]);
+    let tag = dform(at, &["why", r#"net.vpc["main::vpc"].tags.team"#]);
     assert!(
         tag.contains(r#"set r.tags = { team: "platform" } where r in resource"#),
         "{tag}"
     );
-    let cidr = dform(at, &["query", r#"net.vpc["network.main::vpc"].cidr"#]);
+    let cidr = dform(at, &["query", r#"net.vpc["main::vpc"].cidr"#]);
     assert!(cidr.contains("10.20.0.0/16"), "{cidr}");
-    let all = dform(at, &["query", r#"net.vpc["network.main::vpc"]"#]);
+    let all = dform(at, &["query", r#"net.vpc["main::vpc"]"#]);
     assert!(
         all.contains("\"tags\"") && all.contains("\"cidr\""),
         "{all}"
@@ -89,7 +86,7 @@ fn why_and_query_take_an_address_as_plan_prints_it() {
     let s = Scratch::new("why-old-address");
     common::copy_dir(&repo().join("examples/demo"), &s.dir);
     let r = s
-        .run(&["why", "net.vpc/network.main::vpc", "dform", "env=prod"])
+        .run(&["why", "net.vpc/main::vpc", "dform", "env=prod"])
         .failure();
     assert!(r.stderr.contains("cannot parse"), "{}", r.stderr);
 }
@@ -101,13 +98,13 @@ fn why_and_query_take_an_address_as_plan_prints_it() {
 fn why_an_attribute_shows_every_contribution() {
     let out = dform(
         "examples/demo/stacks/dform.df env=prod",
-        &["why", r#"attr(net.vpc, "network.main::vpc", "tags", X)"#],
+        &["why", r#"attr(net.vpc, "main::vpc", "tags", X)"#],
     );
     assert!(out.contains("  merged from 2 contributions\n"), "{out}");
     assert!(
         out.contains(
-            "examples/demo/modules/network.df:13  resource net.vpc vpc { .. tags = { env, \
-             component: \"network\" } }   (module network instance main)\n"
+            "examples/demo/network.df:17  resource net.vpc vpc { .. tags = { env, \
+             component: \"network\" } }   (instance network.vpc main)\n"
         ),
         "{out}"
     );
@@ -115,7 +112,7 @@ fn why_an_attribute_shows_every_contribution() {
     // The input's default is a contribution at its rank, stated where the
     // input is declared; --set's wins.
     assert!(
-        out.contains("├─ \"staging\" @default   examples/demo/stacks/dform.df:18\n"),
+        out.contains("├─ \"staging\" @default   examples/demo/stacks/dform.df:11\n"),
         "{out}"
     );
     assert!(out.contains("└─ --set env=prod\n"), "{out}");
@@ -136,7 +133,7 @@ fn why_a_route_shows_the_statements_that_fired() {
     );
     let start = "net.route[\"blue-to-green\"]
   examples/tour/stacks/tour.df:302  resource net.route \"${a}-to-${b}\" { .. } where reaches(a, b), a != b, network_of(b, v), dest = net.vpc[v].cidr
-  with a = \"blue\", b = \"green\", v = \"network.green::vpc\", dest = 10.2.0.0/16
+  with a = \"blue\", b = \"green\", v = \"green::vpc\", dest = 10.2.0.0/16
        \"${a}-to-${b}\" = \"blue-to-green\"
        net.vpc[v].cidr = 10.2.0.0/16
   ├─ reaches(\"blue\", \"green\")
@@ -152,10 +149,7 @@ fn why_a_route_shows_the_statements_that_fired() {
         out.contains("├─ spoke(\"green\")   examples/tour/stacks/tour.df:267\n"),
         "{out}"
     );
-    assert!(
-        out.contains("network[t].vpc = \"network.green::vpc\"\n"),
-        "{out}"
-    );
+    assert!(out.contains("network[t].vpc = \"green::vpc\"\n"), "{out}");
     golden("why_tour_route", &out);
 }
 
@@ -368,14 +362,16 @@ fn why_prints_a_braced_clause_on_one_line() {
     );
     assert!(
         out.contains(
-            "examples/demo/policies/baseline.df:15  set p.statements = [{ action: \"org.read\", \
+            "examples/demo/baseline.df:17  set p.statements = [{ action: \"org.read\", \
              resource: \"org\" }] where env == \"prod\", p in iam.policy, p.name == \"app\"   \
-             (policy baseline)\n"
+             (use baseline)\n"
         ),
         "{out}"
     );
     assert!(
-        out.contains("│    with p = iam.policy[\"identity.main::app_policy\"]\n  │         p.name = \"app\"\n"),
+        out.contains(
+            "│    with p = iam.policy[\"identity::app_policy\"]\n  │         p.name = \"app\"\n"
+        ),
         "{out}"
     );
 }

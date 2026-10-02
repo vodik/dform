@@ -1,4 +1,4 @@
-N                    C
-"network.main::vpc"  10.20.0.0/16
-"network.peer::vpc"  10.21.0.0/16
+N            C
+"main::vpc"  10.20.0.0/16
+"peer::vpc"  10.21.0.0/16
 (2 rows)

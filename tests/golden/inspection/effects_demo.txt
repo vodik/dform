@@ -9,7 +9,7 @@ baseline:
     settings.audit.sinks
   offers:
 
-database.main:
+database:
   reads:
     db.postgres.id
     input backup_days
@@ -23,7 +23,7 @@ database.main:
   offers:
     iam_need: any
 
-identity.main:
+identity:
   reads:
     iam.policy.id
     iam.role.id
@@ -36,7 +36,7 @@ identity.main:
     (iam.role_policy_attachment, role)
   offers:
 
-kubernetes.main:
+kubernetes:
   reads:
     input nodepool_max
     input nodepool_min
@@ -53,7 +53,7 @@ kubernetes.main:
   offers:
     iam_need: any
 
-network.main:
+main:
   reads:
     input vpc_net
     net.subnet.visibility
@@ -70,7 +70,7 @@ network.main:
     private_subnets: list(ref(net.subnet))
     vpc: addr
 
-network.peer:
+peer:
   reads:
     input vpc_net
     net.subnet.visibility
@@ -97,9 +97,9 @@ stack:
     let.cfg
     net.vpc.cidr
     net.vpc.id
-    output database.main.iam_need
-    output kubernetes.main.iam_need
-    output network.main.private_subnets
+    output database.iam_need
+    output kubernetes.iam_need
+    output main.private_subnets
     settings.db.backup_days
     settings.db.multi_az
     settings.k8s.nodepool.max
@@ -126,15 +126,15 @@ stack:
     (net.vpc_peering, accepter_vpc)
     (net.vpc_peering, id)
     (net.vpc_peering, requester_vpc)
-    input database.main.backup_days
-    input database.main.multi_az
-    input database.main.subnets
-    input kubernetes.main.nodepool_max
-    input kubernetes.main.nodepool_min
-    input kubernetes.main.private_api
-    input kubernetes.main.subnets
-    input network.main.vpc_net
-    input network.peer.vpc_net
+    input database.backup_days
+    input database.multi_az
+    input database.subnets
+    input kubernetes.nodepool_max
+    input kubernetes.nodepool_min
+    input kubernetes.private_api
+    input kubernetes.subnets
+    input main.vpc_net
+    input peer.vpc_net
     input stack.env
     settings.audit.enabled
     settings.audit.sinks

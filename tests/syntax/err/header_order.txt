@@ -1,6 +1,6 @@
 tests/syntax/err/header_order.df:6:1: `key env` is a header statement: move it above the body's first statement, line 5
-  help: a file is `edition`, then its header (`import`, `key`, `input`), then its body; `dform fmt` moves it
-tests/syntax/err/header_order.df:7:1: `import "modules/network.df"` is a header statement: move it above the body's first statement, line 5
-  help: a file is `edition`, then its header (`import`, `key`, `input`), then its body; `dform fmt` moves it
+  help: a file is `edition`, then its header (`key`, `input`), then its body; `dform fmt` moves it
+tests/syntax/err/header_order.df:7:1: `input zones` is a header statement: move it above the body's first statement, line 5
+  help: a file is `edition`, then its header (`key`, `input`), then its body; `dform fmt` moves it
 tests/syntax/err/header_order.df:13:1: `input seen(..)` is a header statement: move it above the body's first statement, line 5
-  help: a file is `edition`, then its header (`import`, `key`, `input`), then its body; `dform fmt` moves it
+  help: a file is `edition`, then its header (`key`, `input`), then its body; `dform fmt` moves it

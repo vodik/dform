@@ -1,0 +1,60 @@
+==============================================
+tests/fixtures/adversarial/packs/other_path.df
+==============================================
+
+edition 2026
+
+# The pack adv3_pack_reads_other_path.df uses: a module, `use packs.other_path`.
+type_lattice("iam.policy", "statements", "set")
+set p.statements = [{ action: "org.read", resource: "org" }] where {
+  p in iam.policy
+  arg("iam.policy", p, "name", "app")
+}
+
+---
+
+(source_file
+  (edition
+    (integer))
+  (comment)
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (set
+    (member_expression
+      (identifier)
+      (identifier))
+    (list
+      (object
+        (object_field
+          (identifier)
+          (string
+            (string_content)))
+        (object_field
+          (identifier)
+          (string
+            (string_content)))))
+    (body_block
+      (in_literal
+        (identifier)
+        (member_expression
+          (identifier)
+          (identifier)))
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (string
+              (string_content))
+            (identifier)
+            (string
+              (string_content))
+            (string
+              (string_content))))))))

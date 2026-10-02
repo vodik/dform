@@ -1,10 +1,10 @@
-tests/syntax/err/module_errors.df:13:25: module network has no input vpc_cidr
+tests/syntax/err/module_errors.df:14:25: component network has no input vpc_cidr
   note: its inputs: vpc_net, zones
-tests/syntax/err/module_errors.df:13:1: instance network main does not set required input vpc_net
-  tests/syntax/err/module_errors.df:5:3: vpc_net: inet declared here
-  help: add `vpc_net = ...` to the instance block
-tests/syntax/err/module_errors.df:14:1: instance network peer does not set required input vpc_net
-  tests/syntax/err/module_errors.df:5:3: vpc_net: inet declared here
-  help: add `vpc_net = ...` to the instance block
-tests/syntax/err/module_errors.df:16:24: zone_index/2 is private to module network
-  help: pass the value through an output of module network, `output zone_index = ...`, and read it as network.INSTANCE.zone_index
+tests/syntax/err/module_errors.df:14:1: input main.vpc_net is required and has no value
+  tests/syntax/err/module_errors.df:6:3: vpc_net: inet declared here
+  help: give it in the block, `{ vpc_net = ... }`, or give it a default
+tests/syntax/err/module_errors.df:15:1: input peer.vpc_net is required and has no value
+  tests/syntax/err/module_errors.df:6:3: vpc_net: inet declared here
+  help: give it in the block, `{ vpc_net = ... }`, or give it a default
+tests/syntax/err/module_errors.df:17:24: zone_index/2 is private to component network
+  help: pass the value through an output of component network, `output zone_index = ...`, and read it as INSTANCE.zone_index

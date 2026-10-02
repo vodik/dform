@@ -10,16 +10,12 @@ fn a_fresh_stack_carries_nulls_until_apply() {
     let prog = prog.to_str().unwrap();
     let r = s.run(&["dev", "--world", "w.json", "plan", prog]).success();
     assert!(
-        r.stdout.contains("vpc = ?net.vpc[\"network.main::vpc\"]"),
+        r.stdout.contains("vpc = ?net.vpc[\"main::vpc\"]"),
         "{}",
         r.stdout
     );
     // Plan never synthesizes an id.
-    assert!(
-        !r.stdout.contains("net.vpc:network.main::vpc"),
-        "{}",
-        r.stdout
-    );
+    assert!(!r.stdout.contains("net.vpc:main::vpc"), "{}", r.stdout);
 
     // Apply mints them per the schema, and a fresh apply is the fixture world.
     s.run(&["dev", "--world", "w.json", "apply", prog, "env=staging"])

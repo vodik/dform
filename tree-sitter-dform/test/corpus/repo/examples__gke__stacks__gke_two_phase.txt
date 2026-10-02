@@ -52,7 +52,7 @@ resource google_compute_address static_ip {
   project = id
   region
   name = "pngu-grpc"
-  subnetwork_id = gke_subnet.id
+  subnetwork_id = gke_subnet
 } where project(id, _, region, _)
 
 resource gke_cluster pngu {
@@ -60,7 +60,7 @@ resource gke_cluster pngu {
   project_id = id
   name = "${name}-gke"
   network_id = net_id
-  subnetwork_id = gke_subnet.id
+  subnetwork_id = gke_subnet
   master_control_plane_cidr = cfg.gke.control_plane_cidr
   node_locations = [ z | zone_at(i, z), i <= zones ]
   deletion_protection = true
@@ -91,7 +91,7 @@ resource k8s.secret db_credentials {
 
 # One nodepool per zone: member over an open null is a content position.
 resource gke_nodepool "np-${z}" {
-  cluster = gke_cluster["pngu"].id
+  cluster = gke_cluster["pngu"]
   zone = z
   min = 1
   max = 3
@@ -300,9 +300,7 @@ deny "cluster must not be deletable" { cluster: c } where {
       (field
         (block_path
           (identifier))
-        (member_expression
-          (identifier)
-          (identifier))))
+        (identifier)))
     (clause
       (body
         (atom_literal
@@ -339,9 +337,7 @@ deny "cluster must not be deletable" { cluster: c } where {
       (field
         (block_path
           (identifier))
-        (member_expression
-          (identifier)
-          (identifier)))
+        (identifier))
       (field
         (block_path
           (identifier))
@@ -504,12 +500,10 @@ deny "cluster must not be deletable" { cluster: c } where {
       (field
         (block_path
           (identifier))
-        (member_expression
-          (index_expression
-            (identifier)
-            (string
-              (string_content)))
-          (identifier)))
+        (index_expression
+          (identifier)
+          (string
+            (string_content))))
       (field
         (block_path
           (identifier))

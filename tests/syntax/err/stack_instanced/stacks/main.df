@@ -1,0 +1,5 @@
+edition 2026
+
+# R-65: a stack is deployed by the tool; a program uses it, and reads one
+# deployment's outputs.
+instance stacks.platform prod

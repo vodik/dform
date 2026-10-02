@@ -27,7 +27,7 @@ type_attr("google_sql_database_instance", "settings.backup_configuration.enabled
 type_attr("google_sql_database_instance", "settings.backup_configuration.point_in_time_recovery_enabled", "bool", [])
 type_attr("google_sql_database_instance", "settings.ip_configuration", "object", [])
 type_attr("google_sql_database_instance", "settings.ip_configuration.ipv4_enabled", "bool", [])
-type_attr("google_sql_database_instance", "settings.ip_configuration.private_network", "string", [])
+type_attr("google_sql_database_instance", "settings.ip_configuration.private_network", "ref(google_compute_network)", [])
 type_attr("google_sql_database_instance", "private_ip_address", "string", ["computed"])
 type_mint("google_sql_database_instance", "private_ip_address", "10.20.0.3")
 

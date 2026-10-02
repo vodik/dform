@@ -75,13 +75,13 @@ fn a_default_row_gives_way_to_a_conditional_one() {
     assert!(r.stdout.contains("size = \"small\""), "{}", r.stdout);
 }
 
-/// A module's `let` is a cell per instance: two instances that compute two
+/// A component's `let` is a cell per copy: two copies that compute two
 /// values do not conflict.
 #[test]
-fn a_module_let_is_scoped_to_its_instance() {
+fn a_component_let_is_scoped_to_its_copy() {
     let r = plan(
         r#"edition 2026
-module m {
+component m {
   input n: int
   let size = n
   resource net.vpc vpc { size = size }
@@ -93,12 +93,12 @@ provider fake
     )
     .success();
     assert!(
-        r.stdout.contains("+ net.vpc[\"m.a::vpc\"]\n  size = 1\n"),
+        r.stdout.contains("+ net.vpc[\"a::vpc\"]\n  size = 1\n"),
         "{}",
         r.stdout
     );
     assert!(
-        r.stdout.contains("+ net.vpc[\"m.b::vpc\"]\n  size = 2\n"),
+        r.stdout.contains("+ net.vpc[\"b::vpc\"]\n  size = 2\n"),
         "{}",
         r.stdout
     );

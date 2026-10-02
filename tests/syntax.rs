@@ -1,6 +1,8 @@
 //! The parser's test suite (docs/grammar.md): every `.df` file in the
 //! repository and `tests/syntax/ok/` parses and prints back byte for byte;
-//! each `tests/syntax/err/*.df` fails with the diagnostics in its `.txt`.
+//! each `tests/syntax/err/*.df` fails with the diagnostics in its `.txt`,
+//! and so does each `tests/syntax/err/NAME/`, a project whose
+//! `stacks/main.df` is loaded with the modules its paths name.
 //! Accept a changed `.txt` with `UPDATE_GOLDEN=1 cargo test --test syntax`.
 
 use dform::syntax::parser::parse;
@@ -64,26 +66,36 @@ fn every_file_parses_and_prints_back() {
     }
 }
 
-/// The files another file of the corpus imports: libraries (modules and
-/// policy packs) that read the program's inputs by name, so they lower
-/// inside the programs that import them, not on their own.
+/// The corpus's modules and components (R-65): a project's `.df` that is
+/// not a stack (nor a provider's schema), and outside every project a
+/// file another one beside it names by a `use` or an `instance`. Each
+/// reads its user's names, so it lowers inside the programs that name it,
+/// not on its own.
 fn libraries(files: &[PathBuf]) -> Vec<PathBuf> {
     let mut out = Vec::new();
     for f in files {
-        let src = std::fs::read_to_string(f).unwrap();
-        for line in src.lines() {
-            if let Some(rest) = line.trim().strip_prefix("import \"")
-                && let Some(path) = rest.strip_suffix('"')
-            {
-                // A project's imports resolve from its root (`loader`).
-                let lib = match dform::project::manifest_root(f) {
-                    Some(root) if !path.starts_with("./") && !path.starts_with("../") => {
-                        root.join(path)
-                    }
-                    _ => f.parent().unwrap().join(path),
-                };
-                out.push(std::fs::canonicalize(&lib).unwrap_or(lib));
+        let named = |g: &PathBuf| {
+            let stem = f.file_stem().unwrap().to_string_lossy().to_string();
+            g != f
+                && g.parent() == f.parent()
+                && std::fs::read_to_string(g).unwrap().lines().any(|l| {
+                    let l = l.trim();
+                    ["use ", "instance "].iter().any(|kw| {
+                        l.strip_prefix(kw)
+                            .and_then(|r| r.split_whitespace().next())
+                            .is_some_and(|p| p == stem)
+                    })
+                })
+        };
+        let library = match dform::project::manifest_root(f) {
+            Some(root) => {
+                !dform::project::is_stack_file(&root, &std::fs::canonicalize(f).unwrap())
+                    && !rel(f).contains("providers/")
             }
+            None => files.iter().any(named),
+        };
+        if library {
+            out.push(f.clone());
         }
     }
     out
@@ -91,7 +103,7 @@ fn libraries(files: &[PathBuf]) -> Vec<PathBuf> {
 
 /// The repository's programs lower to today's AST: the edition pragma is
 /// there and nothing they use is pending (E §7's programs are parse-only).
-/// A library is lowered through the programs that import it.
+/// A module is lowered through the programs that name it.
 #[test]
 fn every_program_lowers() {
     let files = corpus();
@@ -121,17 +133,43 @@ fn check(name: &str, src: &str) -> String {
     format!("{err:#}\n")
 }
 
+/// What loading a project's stack prints (an error case that is a
+/// directory, `tests/syntax/err/NAME/`, a project): the program of its
+/// `stacks/main.df`, with the modules its paths name.
+fn check_project(dir: &Path) -> String {
+    let err = match dform::loader::load_program(&[dir.join("stacks/main.df")]) {
+        Ok(program) => match dform::transform::lower(&program) {
+            Ok(_) => return "ok\n".to_string(),
+            Err(e) => e,
+        },
+        Err(e) => e,
+    };
+    format!("{err:#}\n")
+}
+
 #[test]
 fn every_error_file_reports_its_diagnostics() {
     let mut files = Vec::new();
     df_files(&repo().join("tests/syntax/err"), false, &mut files);
+    let mut projects: Vec<PathBuf> = std::fs::read_dir(repo().join("tests/syntax/err"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.is_dir())
+        .collect();
+    projects.sort();
+    files.extend(projects);
     assert!(!files.is_empty());
     let update = std::env::var_os("UPDATE_GOLDEN").is_some();
     let mut failed = Vec::new();
     for f in files {
-        let src = std::fs::read_to_string(&f).unwrap();
-        let got = check(&rel(&f), &src);
-        let want_path = f.with_extension("txt");
+        let got = match f.is_dir() {
+            true => check_project(&f),
+            false => check(&rel(&f), &std::fs::read_to_string(&f).unwrap()),
+        };
+        let want_path = match f.is_dir() {
+            true => f.with_file_name(format!("{}.txt", f.file_name().unwrap().to_string_lossy())),
+            false => f.with_extension("txt"),
+        };
         if update {
             std::fs::write(&want_path, &got).unwrap();
             continue;

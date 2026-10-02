@@ -10,9 +10,7 @@ use inspection_common::{dform, golden};
 fn the_resource_dag_follows_refs() {
     let out = dform("examples/demo/stacks/dform.df env=prod", &["graph"]);
     assert!(
-        out.contains(
-            r#""net.subnet[\"network.main::private-us-test-1a\"]" -> "net.vpc[\"network.main::vpc\"]";"#
-        ),
+        out.contains(r#""net.subnet[\"main::private-us-test-1a\"]" -> "net.vpc[\"main::vpc\"]";"#),
         "{out}"
     );
     assert_eq!(

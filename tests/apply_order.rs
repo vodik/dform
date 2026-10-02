@@ -1,5 +1,6 @@
 //! The stack is the unit of partial work (R-30): `apply X` applies the
-//! deployments X reads (`stack_output`) first, each its own run with its
+//! deployments X reads (`use stacks.net as network`, then
+//! `network[env=env].cidr`) first, each its own run with its
 //! own plan, confirmation and state, then X, and nothing that reads X.
 
 mod common;
@@ -15,17 +16,19 @@ output cidr = main.cidr
 const APP: &str = r#"edition 2026
 key env: string = "dev"
 provider fake
+use stacks.net as network
 resource net.subnet a {
   cidr = c
-} where stack_output("net[env=${env}]", "cidr", c)
+} where c = network[env=env].cidr
 output subnet = a.cidr
 "#;
 
 const WEB: &str = r#"edition 2026
 provider fake
+use stacks.app
 resource net.subnet w {
   cidr = c
-} where stack_output("app[env=prod]", "subnet", c)
+} where c = app[env="prod"].subnet
 "#;
 
 fn project(name: &str) -> Scratch {

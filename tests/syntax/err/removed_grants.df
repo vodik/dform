@@ -1,8 +1,9 @@
 edition 2026
 
-# R-5: `contributes` and `export p` are gone. A pack writes without a
-# grant; a module's relation leaves it through an output.
-module network {
+# R-5: `contributes` is gone, and R-65 `export`: a write needs no grant,
+# a component's relation leaves it through an output, a module's items are
+# public.
+component network {
   export subnet_of
   contributes iam_need
   export type subnets
@@ -10,7 +11,7 @@ module network {
   subnet_of("a", "vpc")
 }
 
-policy tags {
+component tags {
   contributes t.tags
   set r.tags = { team: "x" } where r in resource
 }

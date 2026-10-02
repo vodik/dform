@@ -3,7 +3,6 @@ Headers
 ================================================================================
 
 edition 2026
-import "modules/network.df"
 key env: enum("dev", "prod") = "dev"
 key region: string
 provider fake { source = "providers/fake" }
@@ -13,9 +12,6 @@ provider fake { source = "providers/fake" }
 (source_file
   (edition
     (integer))
-  (import
-    (string
-      (string_content)))
   (input
     (identifier)
     (type
@@ -235,25 +231,26 @@ let big = n where size(n), n > 3
         (integer)))))
 
 ================================================================================
-Modules and policies
+Modules, components and instances
 ================================================================================
 
-module network {
+component network {
   input vpc_net: inet
-  export type subnets
   output vpc: net.vpc = vpc
   output n = 1 where q(1)
 }
 instance network main { vpc_net = cfg.network.main.vpc_net }
-policy tags {
-  set r.tags = { team: "x" } where r in resource
-}
-use tags
+instance modules.net.vpc blue where env == "prod"
+use baseline
+use modules.net as net where env == "prod"
+use traefik { acme_email }
+use stacks.platform
+let e = platform[env=env].endpoint
 
 --------------------------------------------------------------------------------
 
 (source_file
-  (module
+  (component
     (identifier)
     (statement_block
       (input
@@ -261,8 +258,6 @@ use tags
         (type
           (dotted_name
             (identifier))))
-      (export
-        (identifier))
       (output
         (identifier)
         (type
@@ -280,7 +275,8 @@ use tags
               (arguments
                 (integer))))))))
   (instance
-    (identifier)
+    (dotted_name
+      (identifier))
     (identifier)
     (block
       (field
@@ -293,24 +289,52 @@ use tags
               (identifier))
             (identifier))
           (identifier)))))
-  (policy
+  (instance
+    (dotted_name
+      (identifier)
+      (identifier)
+      (identifier))
     (identifier)
-    (statement_block
-      (set
-        (member_expression
+    (clause
+      (body
+        (comparison
           (identifier)
-          (identifier))
-        (object
-          (object_field
-            (identifier)
-            (string
-              (string_content))))
-        (body
-          (in_literal
-            (identifier)
-            (any_resource))))))
+          (string
+            (string_content))))))
   (use
-    (identifier)))
+    (dotted_name
+      (identifier)))
+  (use
+    (dotted_name
+      (identifier)
+      (identifier))
+    (identifier)
+    (clause
+      (body
+        (comparison
+          (identifier)
+          (string
+            (string_content))))))
+  (use
+    (dotted_name
+      (identifier))
+    (block
+      (field
+        (block_path
+          (identifier)))))
+  (use
+    (dotted_name
+      (identifier)
+      (identifier)))
+  (let
+    (identifier)
+    (member_expression
+      (index_expression
+        (identifier)
+        (named_argument
+          (identifier)
+          (identifier)))
+      (identifier))))
 
 ================================================================================
 Rules, facts, checks and contributions
@@ -634,10 +658,11 @@ Type aliases
 
 type environment = enum("dev", "prod")
 type envs = list(environment)
-module platform {
+component platform {
   type tier = { name: string }
-  export type tier
+  input t: tier
 }
+input c: postgres.conn
 
 --------------------------------------------------------------------------------
 
@@ -659,7 +684,7 @@ module platform {
       (type
         (dotted_name
           (identifier)))))
-  (module
+  (component
     (identifier)
     (statement_block
       (type_alias
@@ -670,7 +695,16 @@ module platform {
             (type
               (dotted_name
                 (identifier))))))
-      (export
+      (input
+        (identifier)
+        (type
+          (dotted_name
+            (identifier))))))
+  (input
+    (identifier)
+    (type
+      (dotted_name
+        (identifier)
         (identifier)))))
 
 ================================================================================
@@ -713,7 +747,8 @@ instance network main {} where env == "prod"
           (string
             (string_content))))))
   (instance
-    (identifier)
+    (dotted_name
+      (identifier))
     (identifier)
     (block)
     (clause

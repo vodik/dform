@@ -232,7 +232,7 @@ fn messages(ds: &[Value]) -> Vec<String> {
 #[test]
 fn hover_shows_every_contribution_and_why_prints_the_derivation() {
     let (_s, root) = example("demo");
-    let network = root.join("modules/network.df");
+    let network = root.join("network.df");
     let mut c = Client::start(&root, json!({}));
     c.open(&network);
     let at = find(&network, "tags = { env", 1);
@@ -243,24 +243,15 @@ fn hover_shows_every_contribution_and_why_prints_the_derivation() {
     assert!(!text.contains("dform[env=staging]"), "{text}");
     // The schema's description of the path.
     assert!(text.contains("Key-value labels on the network."), "{text}");
-    assert!(
-        text.contains("**net.vpc[\"network.main::vpc\"].tags**"),
-        "{text}"
-    );
-    assert!(
-        text.contains("**net.vpc[\"network.peer::vpc\"].tags**"),
-        "{text}"
-    );
+    assert!(text.contains("**net.vpc[\"main::vpc\"].tags**"), "{text}");
+    assert!(text.contains("**net.vpc[\"peer::vpc\"].tags**"), "{text}");
     assert!(text.contains("winning rank: normal"), "{text}");
     // Every contribution: the module's, and the policy pack's.
     assert!(
-        text.contains("modules/network.df:13:5, module network instance main"),
+        text.contains("network.df:17:5, instance network.vpc main"),
         "{text}"
     );
-    assert!(
-        text.contains("policies/baseline.df:10:3, policy baseline"),
-        "{text}"
-    );
+    assert!(text.contains("baseline.df:12:1, use baseline"), "{text}");
     assert!(text.contains("by Σattr"), "{text}");
 
     let why = c.command(
@@ -270,7 +261,7 @@ fn hover_shows_every_contribution_and_why_prints_the_derivation() {
     let why = why.as_str().unwrap();
     assert!(
         why.starts_with(
-            "attr(\"net.vpc\", \"network.main::vpc\", \"tags\", {component: \"network\", env: \"staging\", team: \"platform\"})\n  by Σattr"
+            "attr(\"net.vpc\", \"main::vpc\", \"tags\", {component: \"network\", env: \"staging\", team: \"platform\"})\n  by Σattr"
         ),
         "{why}"
     );
@@ -280,16 +271,16 @@ fn hover_shows_every_contribution_and_why_prints_the_derivation() {
 
     // An attr read in a rule's body (`a.cidr`, of a deny that does not
     // fire): the attributes it matches.
-    let stdlib = root.join("modules/stdlib_net.df");
+    let stdlib = root.join("stdlib_net.df");
     c.open(&stdlib);
     let hover = c.at("textDocument/hover", &stdlib, find(&stdlib, "a.cidr", 3));
     let text = hover["contents"]["value"].as_str().unwrap_or_default();
     assert!(
-        text.contains("**net.vpc[\"network.main::vpc\"].cidr** = `10.50.0.0/16`"),
+        text.contains("**net.vpc[\"main::vpc\"].cidr** = `10.50.0.0/16`"),
         "{hover}"
     );
     assert!(
-        text.contains("modules/network.df:12:5, module network instance peer"),
+        text.contains("network.df:16:5, instance network.vpc peer"),
         "{hover}"
     );
     c.shutdown();
@@ -304,7 +295,7 @@ fn hover_shows_every_contribution_and_why_prints_the_derivation() {
 fn hover_shows_docs_builtins_keywords_and_nothing_elsewhere() {
     let (_s, root) = example("demo");
     let stack = root.join("stacks/dform.df");
-    let network = root.join("modules/network.df");
+    let network = root.join("network.df");
     let mut c = Client::start(&root, json!({}));
     c.open(&stack);
     c.open(&network);
@@ -341,8 +332,8 @@ fn hover_shows_docs_builtins_keywords_and_nothing_elsewhere() {
     );
     assert!(text.contains("The environments: an alias"), "{text}");
 
-    // A module instance: the module's docs, its inputs and outputs.
-    let text = hover(&mut c, &stack, "instance network main", 10);
+    // A component in an instance's path: its docs, its inputs and outputs.
+    let text = hover(&mut c, &stack, "instance network.vpc main", 18);
     let text = text.as_str().unwrap();
     assert!(
         text.contains("One VPC, and a private subnet in every zone."),
@@ -362,7 +353,7 @@ fn hover_shows_docs_builtins_keywords_and_nothing_elsewhere() {
     );
 
     // An output read through its instance.
-    let text = hover(&mut c, &stack, "network.main.private_subnets", 15);
+    let text = hover(&mut c, &stack, "main.private_subnets", 7);
     assert!(
         text.as_str()
             .unwrap()
@@ -561,18 +552,18 @@ fn diagnostics_follow_the_selected_environment() {
 }
 
 /// Schema completion: a resource block's paths with their type, flags and
-/// refinements; resource types; an instance's module inputs, and outputs
-/// after `module.instance.`.
+/// refinements; resource types; an instance's component inputs, and outputs
+/// after `copy.`.
 #[test]
 fn completion_reads_the_schema_and_the_modules() {
     let (_s, root) = example("demo");
     let stack = root.join("stacks/dform.df");
-    let database = root.join("modules/database.df");
+    let database = root.join("database.df");
     let mut c = Client::start(&root, json!({}));
     c.open(&stack);
     c.open(&database);
 
-    let network = root.join("modules/network.df");
+    let network = root.join("network.df");
     c.open(&network);
     let items = c.at(
         "textDocument/completion",
@@ -619,19 +610,19 @@ fn completion_reads_the_schema_and_the_modules() {
         "{backup}"
     );
 
-    // An instance block: its module's inputs.
-    let at = find(&stack, "instance network main {", 0);
+    // An instance block: its component's inputs.
+    let at = find(&stack, "instance network.vpc main {", 0);
     let items = c.at("textDocument/completion", &stack, (at.0 + 1, 2));
     assert!(labels(&items).contains(&"vpc_net".to_string()), "{items}");
 
-    // `resource `, `network.main.`, as typed.
+    // `resource `, `main.`, as typed.
     let original = std::fs::read_to_string(&stack).unwrap();
-    let typed = format!("{original}\nresource \nx = network.main.\n");
+    let typed = format!("{original}\nresource \nx = main.\n");
     c.change(&stack, 2, &typed);
     let n = typed.lines().count() as u32;
     let types = labels(&c.at("textDocument/completion", &stack, (n - 2, 9)));
     assert!(types.contains(&"net.vpc".to_string()), "{types:?}");
-    let outputs = labels(&c.at("textDocument/completion", &stack, (n - 1, 17)));
+    let outputs = labels(&c.at("textDocument/completion", &stack, (n - 1, 9)));
     assert_eq!(outputs, vec!["vpc", "private_subnets"], "{outputs:?}");
 
     // A plain word: the builtins it starts, their signatures.
@@ -645,8 +636,8 @@ fn completion_reads_the_schema_and_the_modules() {
     c.shutdown();
 }
 
-/// Go-to-definition of a module, a policy and a predicate; formatting by
-/// `dform fmt`'s formatter.
+/// Go-to-definition of a component, a module by its path (R-65) and a
+/// predicate; formatting by `dform fmt`'s formatter.
 #[test]
 fn definition_and_formatting() {
     let (_s, root) = example("demo");
@@ -670,13 +661,18 @@ fn definition_and_formatting() {
             })
             .collect()
     };
+    let component = std::fs::read_to_string(root.join("network.df"))
+        .unwrap()
+        .lines()
+        .position(|l| l.starts_with("component vpc"))
+        .unwrap() as u64;
     assert_eq!(
-        def(&mut c, "instance network main", 10),
-        vec![("modules/network.df".into(), 2)]
+        def(&mut c, "instance network.vpc main", 18),
+        vec![("demo/network.df".into(), component)]
     );
     assert_eq!(
         def(&mut c, "use baseline", 7),
-        vec![("policies/baseline.df".into(), 2)]
+        vec![("demo/baseline.df".into(), 0)]
     );
     let text = std::fs::read_to_string(&stack).unwrap();
     let head = text
@@ -688,8 +684,8 @@ fn definition_and_formatting() {
         vec![("stacks/dform.df".into(), head)]
     );
     assert!(
-        def(&mut c, "network[ia].vpc", 1).contains(&("modules/network.df".into(), 2)),
-        "a module read by its instances"
+        def(&mut c, "network.vpc[ia].vpc", 1).contains(&("demo/network.df".into(), 0)),
+        "a module read by the path of its component"
     );
 
     let messy = "edition 2026\nq(1)\np(x)   where q(x)\n";
@@ -730,7 +726,7 @@ fn pngu_by_environment_and_latency_per_keystroke() {
 
     let (_s, root) = example("demo");
     let stack = root.join("stacks/dform.df");
-    let network = root.join("modules/network.df");
+    let network = root.join("network.df");
     let mut c = Client::start(&root, json!({}));
     c.open(&stack);
     c.open(&network);
@@ -1040,101 +1036,85 @@ fn at_places(file: &str, lines: &[u64]) -> Vec<(String, u64)> {
 fn references_of_every_kind_of_name() {
     let (_s, root) = example("demo");
     let stack = root.join("stacks/dform.df");
-    let network = root.join("modules/network.df");
+    let network = root.join("network.df");
     let mut c = Client::start(&root, json!({}));
     c.open(&stack);
     c.open(&network);
 
     // A predicate: its rule's head and the bodies that read it.
     let found = references(&mut c, &root, &stack, find(&stack, "vpc_peer_pair(ia", 2));
-    assert_eq!(found, at_places("stacks/dform.df", &[86, 87, 94]));
+    assert_eq!(found, at_places("stacks/dform.df", &[84, 89, 96]));
 
-    // An input: the stack's own reads, a module's and a pack's.
+    // An input: the stack's own reads, a component's and a module's.
     let found = references(&mut c, &root, &stack, find(&stack, "key env:", 4));
     for want in [
-        ("stacks/dform.df".to_string(), 18),
-        ("stacks/dform.df".into(), 24),
-        ("stacks/dform.df".into(), 42),
-        ("stacks/dform.df".into(), 109),
-        ("modules/network.df".into(), 13),
-        ("policies/baseline.df".into(), 16),
+        ("stacks/dform.df".to_string(), 11),
+        ("stacks/dform.df".into(), 17),
+        ("stacks/dform.df".into(), 35),
+        ("stacks/dform.df".into(), 104),
+        ("network.df".into(), 17),
+        ("baseline.df".into(), 18),
     ] {
         assert!(found.contains(&want), "{want:?} in {found:?}");
     }
 
-    // A module's input: declared in the module, read there, given by
-    // each instance block.
+    // A component's input: declared in the component, read there, given
+    // by each instance block.
     let found = references(&mut c, &root, &network, find(&network, "input vpc_net", 6));
     assert_eq!(
         found,
         vec![
-            ("modules/network.df".into(), 9),
-            ("modules/network.df".into(), 12),
-            ("stacks/dform.df".into(), 57),
-            ("stacks/dform.df".into(), 62),
+            ("network.df".into(), 13),
+            ("network.df".into(), 16),
+            ("stacks/dform.df".into(), 54),
+            ("stacks/dform.df".into(), 59),
         ]
     );
 
-    // A let alias and a type alias.
+    // A let alias and a type alias, bare and read through its module.
     let found = references(&mut c, &root, &stack, find(&stack, "let cfg", 4));
     assert_eq!(
         found,
-        at_places("stacks/dform.df", &[42, 57, 62, 67, 68, 73, 74, 75, 98])
+        at_places("stacks/dform.df", &[35, 54, 59, 65, 66, 71, 72, 73, 100])
     );
     let found = references(&mut c, &root, &network, find(&network, "type subnets", 5));
     assert_eq!(
         found,
         vec![
-            ("modules/database.df".into(), 9),
-            ("modules/kubernetes.df".into(), 10),
-            ("modules/network.df".into(), 6),
-            ("modules/network.df".into(), 7),
-            ("modules/network.df".into(), 27),
+            ("database.df".into(), 5),
+            ("kubernetes.df".into(), 6),
+            ("network.df".into(), 8),
+            ("network.df".into(), 31),
         ]
     );
 
-    // A module, an instance, a policy.
-    let found = references(&mut c, &root, &network, find(&network, "module network", 7));
+    // A component, a module used, a module the stack uses.
+    let found = references(&mut c, &root, &network, find(&network, "component vpc", 10));
     assert_eq!(
         found,
         vec![
-            ("modules/network.df".into(), 3),
-            ("stacks/dform.df".into(), 56),
-            ("stacks/dform.df".into(), 61),
-            ("stacks/dform.df".into(), 69),
-            ("stacks/dform.df".into(), 76),
-            ("stacks/dform.df".into(), 86),
-            ("stacks/dform.df".into(), 86),
+            ("network.df".into(), 11),
+            ("stacks/dform.df".into(), 53),
+            ("stacks/dform.df".into(), 58),
         ]
-    );
-    let found = references(
-        &mut c,
-        &root,
-        &stack,
-        find(&stack, "instance database main", 18),
     );
     // Its output read in the stack; its resources' addresses from outside
     // are strings (H-16).
-    assert_eq!(found, at_places("stacks/dform.df", &[26, 66]));
+    let found = references(&mut c, &root, &stack, find(&stack, "use database", 4));
+    assert_eq!(found, at_places("stacks/dform.df", &[19, 64]));
     let found = references(&mut c, &root, &stack, find(&stack, "use baseline", 6));
-    assert_eq!(
-        found,
-        vec![
-            ("policies/baseline.df".into(), 3),
-            ("stacks/dform.df".into(), 51),
-        ]
-    );
+    assert_eq!(found, at_places("stacks/dform.df", &[47]));
 
-    // A resource by its name in its module (from outside its address is
-    // a string, `net.vpc["network.peer::vpc"]`).
+    // A resource by its name in its component (from outside its address
+    // is a string, `net.vpc["peer::vpc"]`).
     let found = references(&mut c, &root, &network, find(&network, "net.vpc vpc", 8));
     assert_eq!(
         found,
         vec![
-            ("modules/network.df".into(), 11),
-            ("modules/network.df".into(), 20),
-            ("modules/network.df".into(), 21),
-            ("modules/network.df".into(), 26),
+            ("network.df".into(), 15),
+            ("network.df".into(), 24),
+            ("network.df".into(), 25),
+            ("network.df".into(), 30),
         ]
     );
 
@@ -1146,17 +1126,14 @@ fn references_of_every_kind_of_name() {
         &format!("{original}\nextra(x) where vpc_peer_pair(x, _, _, _)\n"),
     );
     let found = references(&mut c, &root, &stack, find(&stack, "vpc_peer_pair(ia", 2));
-    assert_eq!(found, at_places("stacks/dform.df", &[86, 87, 94, 117]));
+    assert_eq!(found, at_places("stacks/dform.df", &[84, 89, 96, 119]));
 
     // An attribute path: every rule contributing to the cell, the
-    // module's field and the pack's.
+    // component's field and the module's.
     let found = references(&mut c, &root, &network, find(&network, "tags = { env", 1));
     assert_eq!(
         found,
-        vec![
-            ("modules/network.df".into(), 13),
-            ("policies/baseline.df".into(), 10),
-        ]
+        vec![("baseline.df".into(), 12), ("network.df".into(), 17),]
     );
     c.shutdown();
 }
@@ -1232,7 +1209,7 @@ fn refused(c: &mut Client, method: &str, params: Value) -> String {
 fn prepare_rename_refuses_what_is_not_the_programs() {
     let (_s, root) = example("demo");
     let stack = root.join("stacks/dform.df");
-    let network = root.join("modules/network.df");
+    let network = root.join("network.df");
     let mut c = Client::start(&root, json!({}));
     c.open(&stack);
     let prepare = |file: &Path, at: (u32, u32)| json!({ "textDocument": { "uri": uri(file) }, "position": { "line": at.0, "character": at.1 } });
@@ -1314,7 +1291,7 @@ fn rename_of_a_resource_with_state_plans_as_a_move() {
     };
     run(&["apply", "--yes", "dform", "env=staging"]);
     let stack = root.join("stacks/dform.df");
-    let network = root.join("modules/network.df");
+    let network = root.join("network.df");
     let mut c = Client::start(&root, json!({}));
     c.open(&stack);
 
@@ -1332,8 +1309,7 @@ fn rename_of_a_resource_with_state_plans_as_a_move() {
     apply_edit(&mut c, &root, &edit);
     let edit = rename(&mut c, &network, find(&network, "net.vpc vpc", 8), "net0");
     for i in ["main", "peer"] {
-        let fact =
-            format!(r#"moved(net.vpc, \"network.{i}::vpc\", net.vpc[\"network.{i}::net0\"])"#);
+        let fact = format!(r#"moved(net.vpc, \"{i}::vpc\", net.vpc[\"{i}::net0\"])"#);
         assert!(edit.to_string().contains(&fact), "{fact} in {edit}");
     }
     apply_edit(&mut c, &root, &edit);
@@ -1342,7 +1318,7 @@ fn rename_of_a_resource_with_state_plans_as_a_move() {
     let written = std::fs::read_to_string(&stack).unwrap();
     assert!(
         written.contains("resource compute.vm jump {")
-            && written.contains("\"network.peer::net0\" in net.vpc"),
+            && written.contains("\"peer::net0\" in net.vpc"),
         "{written}"
     );
     let plan = run(&["plan", "dform", "env=staging"]);
@@ -1351,14 +1327,14 @@ fn rename_of_a_resource_with_state_plans_as_a_move() {
         "{plan}"
     );
     assert!(
-        plan.contains("moved net.vpc[\"network.main::vpc\"] -> net.vpc[\"network.main::net0\"]"),
+        plan.contains("moved net.vpc[\"main::vpc\"] -> net.vpc[\"main::net0\"]"),
         "{plan}"
     );
     assert!(plan.contains("stack dform is undeformed"), "{plan}");
 }
 
 /// A rename that would change what the program means is refused: the
-/// instance `main` is also the string `"main"` that `network[ia]` reads
+/// instance `main` is also the string `"main"` that `network.vpc[ia]` reads
 /// (prepareRename names where), and renaming it anyway would lose the
 /// peering (the checked evaluation says so).
 #[test]
@@ -1367,7 +1343,7 @@ fn a_rename_that_changes_the_plan_is_refused() {
     let stack = root.join("stacks/dform.df");
     let mut c = Client::start(&root, json!({}));
     c.open(&stack);
-    let at = find(&stack, "instance network main", 18);
+    let at = find(&stack, "instance network.vpc main", 22);
     let e = refused(
         &mut c,
         "textDocument/prepareRename",
@@ -1375,7 +1351,7 @@ fn a_rename_that_changes_the_plan_is_refused() {
     );
     assert!(
         e.contains(
-            "instance main of module network is also the string \"main\" at stacks/dform.df:82:15"
+            "instance main of component vpc is also the string \"main\" at stacks/dform.df:80:15"
         ),
         "{e}"
     );
@@ -1394,34 +1370,32 @@ fn a_rename_that_changes_the_plan_is_refused() {
     );
     // Nothing was changed.
     let text = std::fs::read_to_string(&stack).unwrap();
-    assert!(text.contains("instance network main {"));
+    assert!(text.contains("instance network.vpc main {"));
     c.shutdown();
 }
 
-/// Two modules' private relations of one name are two relations: a
+/// Two components' private relations of one name are two relations: a
 /// rename of one leaves the other.
 #[test]
 fn same_named_private_relations_rename_independently() {
     let (_s, root) = example("demo");
     let stack = root.join("stacks/dform.df");
-    let iam = root.join("modules/iam.df");
-    let k8s = root.join("modules/kubernetes.df");
+    let iam = root.join("identity.df");
+    let k8s = root.join("kubernetes.df");
     let mut c = Client::start(&root, json!({}));
     c.open(&stack);
     for (file, value) in [(&iam, "iam"), (&k8s, "k8s")] {
         let text = std::fs::read_to_string(file).unwrap();
-        let end = text.rfind('}').unwrap();
         let text = format!(
-            "{}  helper(\"{value}\")\n  seen(x) where helper(x)\n{}",
-            &text[..end],
-            &text[end..]
+            "{text}\ncomponent {value}_part {{\n  helper(\"{value}\")\n  seen(x) where helper(x)\n}}\n"
         );
         std::fs::write(file, &text).unwrap();
         c.open(file);
     }
     let at = find(&iam, "helper(\"iam\")", 2);
+    let line = find(&iam, "helper(\"iam\")", 0).0 as u64 + 1;
     let found = references(&mut c, &root, &iam, at);
-    assert_eq!(found, at_places("modules/iam.df", &[19, 20]));
+    assert_eq!(found, at_places("identity.df", &[line, line + 1]));
     let edit = rename(&mut c, &iam, at, "iam_helper");
     let changes = edit["changes"].as_object().unwrap();
     assert_eq!(changes.len(), 1, "{edit}");

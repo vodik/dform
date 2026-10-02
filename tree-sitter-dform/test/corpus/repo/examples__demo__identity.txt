@@ -1,0 +1,102 @@
+=========================
+examples/demo/identity.df
+=========================
+
+edition 2026
+
+# A component with no inputs: its file declares resources. `iam_need` is
+# the stack's relation, read outward.
+
+#| The app's role, and one policy of every permission the stack's other
+#| components need.
+resource iam.role app_role {
+  name = "app"
+  assume = { principals: ["k8s.serviceaccount.app"] }
+}
+
+resource iam.policy app_policy {
+  name = "app"
+  # List comprehension sugar for collect_list(...)
+  statements = [ { action: a, resource: r } | iam_need("app", a, r) ]
+}
+
+resource iam.role_policy_attachment attach {
+  role = app_role
+  policy = app_policy
+}
+
+---
+
+(source_file
+  (edition
+    (integer))
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))
+      (field
+        (block_path
+          (identifier))
+        (object
+          (object_field
+            (identifier)
+            (list
+              (string
+                (string_content))))))))
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))
+      (comment)
+      (field
+        (block_path
+          (identifier))
+        (comprehension
+          (object
+            (object_field
+              (identifier)
+              (identifier))
+            (object_field
+              (identifier)
+              (identifier)))
+          (body
+            (atom_literal
+              (call
+                (identifier)
+                (arguments
+                  (string
+                    (string_content))
+                  (identifier)
+                  (identifier)))))))))
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (identifier))
+      (field
+        (block_path
+          (identifier))
+        (identifier)))))

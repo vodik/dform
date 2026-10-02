@@ -94,23 +94,27 @@ fn a_negative_cycle_names_each_rule() {
 
 #[test]
 fn a_lowering_error_names_its_statement() {
-    let r = plan("edition 2026\ninstance nope main {}\nprovider fake\n").failure();
+    let r = plan("edition 2026\ninstance nope main\nprovider fake\n").failure();
     assert!(
         r.stderr
-            .contains("p.df:2:1: instance nope main names an unknown module 'nope'"),
+            .contains("p.df:2:1: no component `nope`: there is no"),
         "{}",
         r.stderr
     );
 }
 
 /// `why` names each contribution's statement, where it is written, and the
-/// policy pack or module instance it was lowered out of.
+/// module activation or copy it was lowered out of: the same frame for both.
 #[test]
-fn why_names_the_pack_and_the_module_instance() {
+fn why_names_the_activation_and_the_copy() {
     let s = Scratch::new("diag-why");
     s.write(
+        "tags.df",
+        "edition 2026\n\n\n\n\n\narg(t, a, \"tags\", { team: \"x\" }) where want(t, a)\n",
+    );
+    s.write(
         "p.df",
-        "edition 2026\nmodule m {\n  resource net.vpc vpc { cidr = \"10.0.0.0/16\" }\n}\ninstance m main {}\npolicy tags {\n  arg(t, a, \"tags\", { team: \"x\" }) where want(t, a)\n}\nuse tags\nprovider fake\n",
+        "edition 2026\ncomponent m {\n  resource net.vpc vpc { cidr = \"10.0.0.0/16\" }\n}\ninstance m main\nuse tags\nprovider fake\n",
     );
     let out = s
         .run(&[
@@ -125,12 +129,12 @@ fn why_names_the_pack_and_the_module_instance() {
         .success()
         .stdout;
     assert!(
-        out.contains("└─ \"10.0.0.0/16\"   p.df:3   (module m instance main)\n"),
+        out.contains("└─ \"10.0.0.0/16\"   p.df:3   (instance m main)\n"),
         "{out}"
     );
     assert!(
         out.contains(
-            "p.df:7  arg(t, a, \"tags\", { team: \"x\" }) where want(t, a)   (policy tags)\n"
+            "tags.df:7  arg(t, a, \"tags\", { team: \"x\" }) where want(t, a)   (use tags)\n"
         ),
         "{out}"
     );

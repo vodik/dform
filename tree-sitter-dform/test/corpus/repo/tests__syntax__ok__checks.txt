@@ -1,0 +1,44 @@
+=========================
+tests/syntax/ok/checks.df
+=========================
+
+edition 2026
+
+# A module of checks, `use checks` in constructs.df: a relation the user
+# reads as `checks.listed(i)`, and a deny over the user's relations.
+listed(i) where vpc_inst(i)
+deny "a listed vpc has its query row" where listed(_), not q(1)
+
+---
+
+(source_file
+  (edition
+    (integer))
+  (comment)
+  (comment)
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)))
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier))))))
+  (check
+    (string
+      (string_content))
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier))))
+      (not_literal
+        (atom_literal
+          (call
+            (identifier)
+            (arguments
+              (integer))))))))

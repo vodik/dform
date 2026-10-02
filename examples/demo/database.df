@@ -1,0 +1,16 @@
+edition 2026
+
+input backup_days: int
+input multi_az: bool
+input subnets: network.subnets
+
+#| A PostgreSQL database in the network's private subnets.
+resource db.postgres db {
+  public = false
+  subnets
+  backup_days
+  multi_az
+}
+
+#| Only when the database exists in this environment.
+output iam_need = { action: "db.connect", resource: db } where has backup_days

@@ -6,96 +6,96 @@ definite:
 + compute.vm["bastion"]
   private_ip = "10.20.0.21"
   tags.team = "platform"
-+ iam.role["identity.main::app_role"]
++ iam.role["identity::app_role"]
   assume.principals[0] = "k8s.serviceaccount.app"
   name = "app"
   tags.team = "platform"
-+ net.vpc["network.main::vpc"]
++ net.vpc["main::vpc"]
   cidr = "10.20.0.0/16"
   tags.component = "network"
   tags.env = "prod"
   tags.team = "platform"
-+ net.vpc["network.peer::vpc"]
++ net.vpc["peer::vpc"]
   cidr = "10.21.0.0/16"
   tags.component = "network"
   tags.env = "prod"
   tags.team = "platform"
 + net.vpc_peering["peer-main-peer"]
-  accepter_vpc = ?net.vpc["network.peer::vpc"]
-  requester_vpc = ?net.vpc["network.main::vpc"]
+  accepter_vpc = ?net.vpc["peer::vpc"]
+  requester_vpc = ?net.vpc["main::vpc"]
   tags.team = "platform"
-+ net.subnet["network.main::private-us-test-1a"]
++ net.subnet["main::private-us-test-1a"]
   cidr = "10.20.0.0/20"
   tags.team = "platform"
   visibility = "private"
-  vpc = ?net.vpc["network.main::vpc"]
+  vpc = ?net.vpc["main::vpc"]
   zone = "us-test-1a"
-+ net.subnet["network.main::private-us-test-1b"]
++ net.subnet["main::private-us-test-1b"]
   cidr = "10.20.16.0/20"
   tags.team = "platform"
   visibility = "private"
-  vpc = ?net.vpc["network.main::vpc"]
+  vpc = ?net.vpc["main::vpc"]
   zone = "us-test-1b"
-+ net.subnet["network.peer::private-us-test-1a"]
++ net.subnet["peer::private-us-test-1a"]
   cidr = "10.21.0.0/20"
   tags.team = "platform"
   visibility = "private"
-  vpc = ?net.vpc["network.peer::vpc"]
+  vpc = ?net.vpc["peer::vpc"]
   zone = "us-test-1a"
-+ net.subnet["network.peer::private-us-test-1b"]
++ net.subnet["peer::private-us-test-1b"]
   cidr = "10.21.16.0/20"
   tags.team = "platform"
   visibility = "private"
-  vpc = ?net.vpc["network.peer::vpc"]
+  vpc = ?net.vpc["peer::vpc"]
   zone = "us-test-1b"
-+ db.postgres["database.main::db"]
++ db.postgres["database::db"]
   backup_days = 14
   multi_az = true
   public = false
-  subnets[0] = ?net.subnet["network.main::private-us-test-1a"]
-  subnets[1] = ?net.subnet["network.main::private-us-test-1b"]
+  subnets[0] = ?net.subnet["main::private-us-test-1a"]
+  subnets[1] = ?net.subnet["main::private-us-test-1b"]
   tags.team = "platform"
-+ k8s.cluster["kubernetes.main::cluster"]
++ k8s.cluster["kubernetes::cluster"]
   private_api = true
-  subnets[0] = ?net.subnet["network.main::private-us-test-1a"]
-  subnets[1] = ?net.subnet["network.main::private-us-test-1b"]
+  subnets[0] = ?net.subnet["main::private-us-test-1a"]
+  subnets[1] = ?net.subnet["main::private-us-test-1b"]
   tags.team = "platform"
   version = "1.29"
-+ k8s.nodepool["kubernetes.main::default"]
-  cluster = ?k8s.cluster["kubernetes.main::cluster"]
++ k8s.nodepool["kubernetes::default"]
+  cluster = ?k8s.cluster["kubernetes::cluster"]
   max = 10
   min = 3
   tags.team = "platform"
-+ iam.policy["identity.main::app_policy"]
++ iam.policy["identity::app_policy"]
   name = "app"
   statements[0].action = "audit.write"
   statements[0].resource = "audit-log"
   statements[1].action = "db.connect"
-  statements[1].resource = ?db.postgres["database.main::db"]
+  statements[1].resource = ?db.postgres["database::db"]
   statements[2].action = "k8s.describe_cluster"
-  statements[2].resource = ?k8s.cluster["kubernetes.main::cluster"]
+  statements[2].resource = ?k8s.cluster["kubernetes::cluster"]
   statements[3].action = "org.read"
   statements[3].resource = "org"
   tags.team = "platform"
-+ iam.role_policy_attachment["identity.main::attach"]
-  policy = ?iam.policy["identity.main::app_policy"]
-  role = ?iam.role["identity.main::app_role"]
++ iam.role_policy_attachment["identity::attach"]
+  policy = ?iam.policy["identity::app_policy"]
+  role = ?iam.role["identity::app_role"]
   tags.team = "platform"
 apply order:
   tick 1
     compute.vm["bastion"]
-    iam.role["identity.main::app_role"]
-    net.vpc["network.main::vpc"]
-    net.vpc["network.peer::vpc"]
+    iam.role["identity::app_role"]
+    net.vpc["main::vpc"]
+    net.vpc["peer::vpc"]
     net.vpc_peering["peer-main-peer"]
-    net.subnet["network.main::private-us-test-1a"]
-    net.subnet["network.main::private-us-test-1b"]
-    net.subnet["network.peer::private-us-test-1a"]
-    net.subnet["network.peer::private-us-test-1b"]
-    db.postgres["database.main::db"]
-    k8s.cluster["kubernetes.main::cluster"]
-    k8s.nodepool["kubernetes.main::default"]
-    iam.policy["identity.main::app_policy"]
-    iam.role_policy_attachment["identity.main::attach"]
+    net.subnet["main::private-us-test-1a"]
+    net.subnet["main::private-us-test-1b"]
+    net.subnet["peer::private-us-test-1a"]
+    net.subnet["peer::private-us-test-1b"]
+    db.postgres["database::db"]
+    k8s.cluster["kubernetes::cluster"]
+    k8s.nodepool["kubernetes::default"]
+    iam.policy["identity::app_policy"]
+    iam.role_policy_attachment["identity::attach"]
 -- stderr --
 warning: prod should enable audit logging ctx={"env":"prod"}

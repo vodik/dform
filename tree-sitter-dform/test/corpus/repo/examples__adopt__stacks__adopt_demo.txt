@@ -9,7 +9,6 @@ examples/adopt/stacks/adopt_demo.df
 
 edition 2026
 
-import "modules/network.df"
 input env: enum("staging", "prod") = "staging"
 
 # The mock's built-in fake schema.
@@ -23,24 +22,26 @@ settings prod {
   network.vpc_cidr = inet("10.20.0.0/16")
 }
 
-instance network main {
+# network.df, imported once with its input bound: its VPC is
+# `network::vpc`.
+use network {
   vpc_net = settings[env].network.vpc_cidr
 }
 
-# Adopt the VPC from inventory, but manage it under the local name `network.main::vpc`.
-adopt(net.vpc["network.main::vpc"], "existing-prod-vpc") where {
+# Adopt the VPC from inventory, but manage it under the local name `network::vpc`.
+adopt(net.vpc["network::vpc"], "existing-prod-vpc") where {
   env == "prod"
   "existing-prod-vpc" in world.net.vpc
 }
 
 # Example: use discovered inventory values directly in config.
-set net.vpc["network.main::vpc"].adopted_id = cloud_ref(net.vpc, "existing-prod-vpc", "id") where env == "prod"
+set net.vpc["network::vpc"].adopted_id = cloud_ref(net.vpc, "existing-prod-vpc", "id") where env == "prod"
 
 # Keep the existing owner tag stable (avoids a "remove tag" diff on adopt).
-set net.vpc["network.main::vpc"].tags.owner = cloud_ref(net.vpc, "existing-prod-vpc", "tags.owner") where env == "prod"
+set net.vpc["network::vpc"].tags.owner = cloud_ref(net.vpc, "existing-prod-vpc", "tags.owner") where env == "prod"
 
 # Also copy it into a separate attribute to demonstrate dotted path lookup.
-set net.vpc["network.main::vpc"].owner_tag = cloud_ref(net.vpc, "existing-prod-vpc", "tags.owner") where env == "prod"
+set net.vpc["network::vpc"].owner_tag = cloud_ref(net.vpc, "existing-prod-vpc", "tags.owner") where env == "prod"
 
 ---
 
@@ -51,9 +52,6 @@ set net.vpc["network.main::vpc"].owner_tag = cloud_ref(net.vpc, "existing-prod-v
   (comment)
   (edition
     (integer))
-  (import
-    (string
-      (string_content)))
   (input
     (identifier)
     (type
@@ -92,9 +90,11 @@ set net.vpc["network.main::vpc"].owner_tag = cloud_ref(net.vpc, "existing-prod-v
           (arguments
             (string
               (string_content)))))))
-  (instance
-    (identifier)
-    (identifier)
+  (comment)
+  (comment)
+  (use
+    (dotted_name
+      (identifier))
     (block
       (field
         (block_path

@@ -1,0 +1,2 @@
+tests/syntax/err/use_component/stacks/main.df:5:1: net.vpc is a component; `instance` it
+  note: `use` imports a module, a file, once under its name; a component, an item `component NAME { .. }`, is copied by `instance PATH NAME`

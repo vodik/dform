@@ -1,0 +1,5 @@
+edition 2026
+
+# R-65: a component is copied by name with `instance`; `use` imports a
+# module, a file.
+use net.vpc

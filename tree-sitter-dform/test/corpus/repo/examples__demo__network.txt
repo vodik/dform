@@ -1,0 +1,174 @@
+========================
+examples/demo/network.df
+========================
+
+edition 2026
+
+# The demo's networking: a component, `vpc`, copied once per network
+# (`instance network.vpc main`), and the alias its users write
+# `network.subnets`.
+
+#| The subnets a database or a cluster is placed in.
+type subnets = list(ref(net.subnet))
+
+#| One VPC, and a private subnet in every zone.
+component vpc {
+  #| The VPC's IPv4 range; each zone's subnet is a /20 of it.
+  input vpc_net: inet
+
+  resource net.vpc vpc {
+    cidr = vpc_net
+    tags = { env, component: "network" }
+  }
+
+  zone_index("us-test-1a", 0)
+  zone_index("us-test-1b", 1)
+
+  resource net.subnet "private-${z}" {
+    vpc
+    cidr = inet.subnet(vpc.cidr, 4, zone_index[z])
+    zone = z
+    visibility = "private"
+  } where data("zone", z)
+  #| The network's VPC, for peering.
+  output vpc: net.vpc = vpc
+  output private_subnets: subnets = [ s | s in net.subnet, s.visibility == "private" ]
+}
+
+---
+
+(source_file
+  (edition
+    (integer))
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (type_alias
+    (identifier)
+    (type
+      (dotted_name
+        (identifier))
+      (type
+        (dotted_name
+          (identifier))
+        (type
+          (dotted_name
+            (identifier)
+            (identifier))))))
+  (comment)
+  (component
+    (identifier)
+    (statement_block
+      (comment)
+      (input
+        (identifier)
+        (type
+          (dotted_name
+            (identifier))))
+      (resource
+        (dotted_name
+          (identifier)
+          (identifier))
+        (identifier)
+        (block
+          (field
+            (block_path
+              (identifier))
+            (identifier))
+          (field
+            (block_path
+              (identifier))
+            (object
+              (object_field
+                (identifier))
+              (object_field
+                (identifier)
+                (string
+                  (string_content)))))))
+      (fact
+        (call
+          (identifier)
+          (arguments
+            (string
+              (string_content))
+            (integer))))
+      (fact
+        (call
+          (identifier)
+          (arguments
+            (string
+              (string_content))
+            (integer))))
+      (resource
+        (dotted_name
+          (identifier)
+          (identifier))
+        (string
+          (string_content)
+          (interpolation
+            (identifier)))
+        (block
+          (field
+            (block_path
+              (identifier)))
+          (field
+            (block_path
+              (identifier))
+            (call
+              (member_expression
+                (identifier)
+                (identifier))
+              (arguments
+                (member_expression
+                  (identifier)
+                  (identifier))
+                (integer)
+                (index_expression
+                  (identifier)
+                  (identifier)))))
+          (field
+            (block_path
+              (identifier))
+            (identifier))
+          (field
+            (block_path
+              (identifier))
+            (string
+              (string_content))))
+        (clause
+          (body
+            (atom_literal
+              (call
+                (identifier)
+                (arguments
+                  (string
+                    (string_content))
+                  (identifier)))))))
+      (comment)
+      (output
+        (identifier)
+        (type
+          (dotted_name
+            (identifier)
+            (identifier)))
+        (identifier))
+      (output
+        (identifier)
+        (type
+          (dotted_name
+            (identifier)))
+        (comprehension
+          (identifier)
+          (body
+            (in_literal
+              (identifier)
+              (member_expression
+                (identifier)
+                (identifier)))
+            (comparison
+              (member_expression
+                (identifier)
+                (identifier))
+              (string
+                (string_content)))))))))

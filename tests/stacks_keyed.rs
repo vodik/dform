@@ -162,7 +162,7 @@ provider fake
     s.run(&["plan", "app.df", "env=prod"]).success();
 }
 
-/// A key is a value: not a secret, and not inside a module.
+/// A key is a value: not a secret, and not inside a component.
 #[test]
 fn a_key_is_the_stacks_and_not_a_secret() {
     let s = Scratch::new("keyed-secret");
@@ -175,7 +175,7 @@ fn a_key_is_the_stacks_and_not_a_secret() {
     assert!(r.stderr.contains("app.df:2:1"), "{}", r.stderr);
     s.write(
         "app.df",
-        "edition 2026\nmodule m {\n  key env: string\n}\nprovider fake\n",
+        "edition 2026\ncomponent m {\n  key env: string\n}\nprovider fake\n",
     );
     let r = s.run(&["plan", "app.df"]).failure();
     assert!(r.stderr.contains("key env inside a block"), "{}", r.stderr);
@@ -210,6 +210,48 @@ resource net.vpc edge {
             .contains("+ net.vpc[\"edge\"]\n  name = \"https://prod.example\"\n"),
         "{}",
         r.stdout
+    );
+}
+
+/// `use stacks.app` binds a stack's deployments (R-65): `app[env=e].url`
+/// reads one, each key given once by name; a keyed stack is never read
+/// without its key, and never instanced.
+#[test]
+fn use_of_a_stack_reads_one_deployment() {
+    let s = Scratch::project("keyed-use");
+    s.write(
+        "stacks/app.df",
+        "edition 2026\nkey env: string = \"staging\"\nprovider fake\noutput url = \"https://${env}.example\"\n",
+    );
+    let web = |read: &str| {
+        format!(
+            "edition 2026\nprovider fake\nuse stacks.app\nresource net.vpc edge {{\n  name = u\n}} where u = {read}\n"
+        )
+    };
+    s.write("stacks/web.df", &web("app[env=\"prod\"].url"));
+    s.run(&["apply", "app", "env=prod"]).success();
+    let r = s.run(&["plan", "web"]).success();
+    assert!(
+        r.stdout
+            .contains("+ net.vpc[\"edge\"]\n  name = \"https://prod.example\"\n"),
+        "{}",
+        r.stdout
+    );
+    s.write("stacks/web.df", &web("app.url"));
+    let r = s.run(&["plan", "web"]).failure();
+    assert!(
+        r.stderr
+            .contains("stacks.app is deployed, keyed by env: read an output of one deployment, `app[env=..].OUTPUT`"),
+        "{}",
+        r.stderr
+    );
+    s.write("stacks/web.df", &web("app[region=\"eu\"].url"));
+    let r = s.run(&["plan", "web"]).failure();
+    assert!(
+        r.stderr
+            .contains("a deployment of stacks.app is named by each of its keys once"),
+        "{}",
+        r.stderr
     );
 }
 

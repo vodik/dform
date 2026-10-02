@@ -19,7 +19,7 @@ exit: ok
      data
      identity
      input
-     network.main::zone_index
+     network::zone_index
      resolve
      resolved
      world_attr
@@ -41,7 +41,7 @@ exit: ok
      (attr, settings, network.vpc_cidr)
    stratum 2:
      (adopt, net.vpc)
-     (arg, input, network.main::vpc_net)
+     (arg, input, network::vpc_net)
      (arg, net.vpc, adopted_id)
      (arg, net.vpc, owner_tag)
      (attr, compute.vm, id)
@@ -58,7 +58,7 @@ exit: ok
      (attr, net.vpc_peering, id)
      env
    stratum 3:
-     (attr, input, network.main::vpc_net)
+     (attr, input, network::vpc_net)
      (attr, net.vpc, adopted_id)
      (attr, net.vpc, owner_tag)
    stratum 4:
@@ -66,7 +66,7 @@ exit: ok
      (arg, net.vpc, id)
      (arg, net.vpc, tags)
      (want, net.vpc)
-     network.main::vpc_net
+     network::vpc_net
    stratum 5:
      (attr, net.vpc, cidr)
      (attr, net.vpc, id)

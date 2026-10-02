@@ -213,7 +213,7 @@ fn plan_and_apply_of_the_demo_keep_state_in_the_bucket() {
         let p = Project::new(t, "apply");
         let plan = p.run(PLAN).success();
         assert!(
-            plan.stdout.contains("+ net.vpc[\"network.main::vpc\"]"),
+            plan.stdout.contains("+ net.vpc[\"main::vpc\"]"),
             "{}: {}",
             t.what,
             plan.stdout
@@ -890,8 +890,9 @@ fn a_server_that_ignores_conditions_is_refused() {
     assert_eq!(cached, 1);
 }
 
-/// A project reads another's outputs through its s3 backend: `[remotes]`
-/// names the bucket, and only the published outputs object is read.
+/// A project reads another's outputs through its s3 backend: the project
+/// mounted as a package names the bucket in its own dform.toml, and only
+/// the published outputs object is read.
 #[test]
 fn a_project_reads_another_projects_outputs_through_its_s3_backend() {
     for t in &targets("a_project_reads_another_projects_outputs_through_its_s3_backend") {
@@ -910,17 +911,18 @@ fn a_project_reads_another_projects_outputs_through_its_s3_backend() {
         app.write(
             "dform.toml",
             &format!(
-                "[remotes]\nplatform = {{ backend = '{}' }}\n",
-                p.term("{stack}")
+                "[packages.platform]\npath = {:?}\n",
+                p.s.dir.display().to_string()
             ),
         );
         app.write(
             "stacks/app.df",
             "edition 2026\n\
              provider fake\n\
+             use platform.stacks.cluster\n\
              resource net.vpc edge {\n\
                name = e\n\
-             } where stack_output(\"platform.cluster[env=prod]\", \"endpoint\", e)\n\
+             } where e = cluster[env=\"prod\"].endpoint\n\
              ",
         );
         let mut c = p.command(&["plan", "app"], &[]);

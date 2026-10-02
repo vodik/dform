@@ -18,6 +18,12 @@ type_attr("google_compute_subnetwork", "id", "string", ["computed", "id"])
 type_attr("gke_cluster", "id", "string", ["computed", "id"])
 type_attr("gke_nodepool", "id", "string", ["computed", "id"])
 
+# What points at another resource takes it, and gets its id at Apply (R-43).
+type_attr("google_compute_subnetwork", "network", "ref(google_compute_network)", [])
+type_attr("gke_cluster", "network", "ref(google_compute_network)", [])
+type_attr("gke_cluster", "subnetwork", "ref(google_compute_subnetwork)", [])
+type_attr("gke_nodepool", "cluster", "ref(gke_cluster)", [])
+
 type_attr("gke_cluster", "endpoint", "string", ["computed"])
 type_attr("gke_cluster", "ca_certificate", "string", ["computed"])
 type_attr("gke_cluster", "zones", "list", ["computed"])
@@ -129,6 +135,51 @@ type_mint("gke_nodepool", "instance_group", "ig-{name}-{hash}")
             (string_content))
           (string
             (string_content))))))
+  (comment)
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list))))
   (fact
     (call
       (identifier)

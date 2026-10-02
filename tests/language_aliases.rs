@@ -1,6 +1,6 @@
 //! Type aliases (docs/grammar.md "Type aliases"): `type NAME = TYPE` is
-//! transparent, in scope in its file and wherever the file is imported, a
-//! module's once it says `export type NAME`.
+//! transparent, in scope in its file or component, and public: another
+//! module reads it through the module's name, `types.environment` (R-65).
 
 mod common;
 use common::Scratch;
@@ -100,107 +100,72 @@ fn an_alias_may_not_take_a_builtin_name() {
     );
 }
 
+/// Another module's alias is its own, read by the name a `use` or an
+/// `instance` gives the module (R-65): `types.environment`, never bare.
 #[test]
-fn an_import_brings_a_files_aliases() {
-    let s = Scratch::new("alias-import");
+fn another_modules_alias_is_read_through_its_name() {
+    let s = Scratch::new("alias-paths");
     s.write(
         "types.df",
         "edition 2026\ntype environment = enum(\"dev\", \"prod\")\n",
     );
-    // Through a file that imports it, too: an import inlines the file.
-    s.write("more.df", "edition 2026\nimport \"types.df\"\n");
     s.write(
         "p.df",
-        "edition 2026\nimport \"more.df\"\ninput env: environment = \"dev\"\n",
-    );
-    assert_eq!(input_types(&s, "p.df"), vec!["env: enum(dev, prod)"]);
-    // A file that does not import it does not see it.
-    s.write(
-        "q.df",
-        "edition 2026\nimport \"lib.df\"\ninput env: string = \"dev\"\n",
-    );
-    s.write(
-        "lib.df",
-        "edition 2026\nimport \"types.df\"\nmodule m {\n  input e: environment\n}\n",
-    );
-    s.write(
-        "r.df",
-        "edition 2026\nimport \"q.df\"\ninput x: environment\n",
+        "edition 2026\ninput env: types.environment = \"dev\"\ninput bare: environment\nuse types\n",
     );
     assert_eq!(
-        input_types(&s, "r.df"),
-        vec!["e: enum(dev, prod)", "env: string", "x: enum(dev, prod)"]
+        input_types(&s, "p.df"),
+        vec!["env: enum(dev, prod)", "bare: environment"]
     );
-    s.write("alone.df", "edition 2026\ninput x: environment\n");
-    assert_eq!(input_types(&s, "alone.df"), vec!["x: environment"]);
+    // `use .. as` names it otherwise.
+    s.write(
+        "q.df",
+        "edition 2026\ninput env: t.environment = \"dev\"\nuse types as t\n",
+    );
+    assert_eq!(input_types(&s, "q.df"), vec!["env: enum(dev, prod)"]);
 }
 
+/// A used module's aliases are public: `lib.tier` where it is used, its
+/// own inputs typed by them inside.
 #[test]
-fn a_module_exports_an_alias() {
-    let s = Scratch::new("alias-export");
+fn a_used_modules_alias_is_public() {
+    let s = Scratch::new("alias-component");
     s.write(
         "lib.df",
         "edition 2026\n\
-         module platform {\n\
-           type tier = enum(\"gold\", \"silver\")\n\
-           type hidden = int\n\
-           export type tier\n\
-           input t: tier\n\
-           input h: hidden\n\
-         }\n\
+         input t: tier\n\
+         type tier = enum(\"gold\", \"silver\")\n\
          ",
     );
     s.write(
         "p.df",
-        "edition 2026\nimport \"lib.df\"\ninput t: tier\ninput h: hidden\n",
+        "edition 2026\ninput t: lib.tier = \"gold\"\nuse lib { t }\n",
     );
     assert_eq!(
         input_types(&s, "p.df"),
-        vec![
-            "t: enum(gold, silver)",
-            "h: int",
-            "t: enum(gold, silver)",
-            "h: hidden"
-        ]
+        vec!["t: enum(gold, silver)", "t: enum(gold, silver)"]
     );
-    s.write(
-        "bad.df",
-        "edition 2026\nmodule m {\n  export type nope\n}\nexport type top\n",
-    );
-    let e = load_error(&s, "bad.df");
-    assert!(
-        e.contains("`export type nope`: the module declares no alias nope"),
-        "{e}"
-    );
-    assert!(e.contains("`export type` is a module's"), "{e}");
 }
 
 #[test]
 fn two_aliases_of_one_name_are_an_error_listing_both() {
+    // Two modules' aliases of one name are two names: each is read
+    // through its module.
     let s = Scratch::new("alias-twice");
     s.write("a.df", "edition 2026\ntype environment = enum(\"dev\")\n");
     s.write("b.df", "edition 2026\ntype environment = enum(\"prod\")\n");
     s.write(
         "p.df",
-        "edition 2026\nimport \"a.df\"\nimport \"b.df\"\ninput env: environment\n",
+        "edition 2026\ninput x: a.environment\ninput y: b.environment\nuse a\nuse b\n",
     );
-    let e = load_error(&s, "p.df");
-    assert!(
-        e.contains("2 type aliases named `environment` are in scope"),
-        "{e}"
+    assert_eq!(
+        input_types(&s, "p.df"),
+        vec!["x: enum(dev)", "y: enum(prod)"]
     );
-    assert!(e.contains("a.df:2") && e.contains("b.df:2"), "{e}");
-    // The same file reached twice is one alias.
-    s.write("c.df", "edition 2026\nimport \"a.df\"\n");
-    s.write(
-        "q.df",
-        "edition 2026\nimport \"a.df\"\nimport \"c.df\"\ninput env: environment\n",
-    );
-    assert_eq!(input_types(&s, "q.df"), vec!["env: enum(dev)"]);
-    // A module's alias and its file's, of one name, are two in its scope.
+    // A component's alias and its file's, of one name, are two in its scope.
     s.write(
         "m.df",
-        "edition 2026\ntype k = int\nmodule m {\n  type k = string\n  input x: k\n}\n",
+        "edition 2026\ntype k = int\ncomponent m {\n  type k = string\n  input x: k\n}\n",
     );
     let e = load_error(&s, "m.df");
     assert!(e.contains("2 type aliases named `k` are in scope"), "{e}");
