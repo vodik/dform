@@ -1657,6 +1657,8 @@ pub fn value_to_json(v: &Value) -> serde_json::Value {
             serde_json::Value::String(format!("cloud_ref({typ},{name},{attr})"))
         }
         Value::Null { label, .. } => serde_json::Value::String(format!("?{label}")),
+        Value::Quantity(q) => serde_json::Value::String(q.to_string()),
+        Value::Time(t) => serde_json::Value::String(t.to_string()),
     }
 }
 
@@ -2107,6 +2109,43 @@ fn fold(name: &str, kind: AggKind, items: Vec<Value>) -> std::result::Result<Val
     match kind {
         AggKind::Set | AggKind::List => Ok(Value::List(items)),
         AggKind::Count => Ok(Value::Int(items.len() as i64)),
+        // A sum of quantities is of their dimension (R-66).
+        AggKind::Sum if matches!(items.first(), Some(Value::Quantity(_))) => {
+            let mut total: Option<crate::quantity::Quantity> = None;
+            for v in &items {
+                let Value::Quantity(q) = v else {
+                    return Err(format!(
+                        "{name}() over {}, which is not a quantity",
+                        partition::fmt_value(v)
+                    ));
+                };
+                total = Some(match total {
+                    None => *q,
+                    Some(t) => crate::quantity::add(&t, q, false).ok_or_else(|| {
+                        format!(
+                            "{name}() over {t} and {q}, which do not add: {} and {}",
+                            t.dim().name(),
+                            q.dim().name()
+                        )
+                    })?,
+                });
+            }
+            Ok(Value::Quantity(total.expect("a group has a row")))
+        }
+        // The least and greatest quantity or time (R-66, R-62), in its
+        // dimension's order.
+        AggKind::Min | AggKind::Max
+            if matches!(items.first(), Some(Value::Quantity(_) | Value::Time(_))) =>
+        {
+            let mut best = items[0].clone();
+            for v in &items[1..] {
+                let o = order(v, &best).map_err(|e| format!("{name}() over {e}"))?;
+                if (kind == AggKind::Min && o.is_lt()) || (kind == AggKind::Max && o.is_gt()) {
+                    best = v.clone();
+                }
+            }
+            Ok(best)
+        }
         AggKind::Sum => {
             let mut total = 0i64;
             for v in &items {
@@ -2923,15 +2962,12 @@ fn eval_cmp(
         rec.stuck(state, nulls, "ordering comparison over a null");
         return Ok(false);
     }
-    let (ai, bi) = match (&av, &bv) {
-        (Value::Int(x), Value::Int(y)) => (*x, *y),
-        _ => bail!("comparison only supports ints"),
-    };
+    let o = order(&av, &bv).map_err(|e| anyhow::anyhow!(e))?;
     Ok(match op_lit {
-        Lit::Gt(_, _) => ai > bi,
-        Lit::Ge(_, _) => ai >= bi,
-        Lit::Lt(_, _) => ai < bi,
-        Lit::Le(_, _) => ai <= bi,
+        Lit::Gt(_, _) => o.is_gt(),
+        Lit::Ge(_, _) => o.is_ge(),
+        Lit::Lt(_, _) => o.is_lt(),
+        Lit::Le(_, _) => o.is_le(),
         _ => unreachable!(),
     })
 }
@@ -3320,10 +3356,31 @@ pub fn body(name: &str) -> Option<Body> {
 
 /// Every function's body, by its qualified name.
 pub const BODIES: &[(&str, Body)] = &[
-    ("add", |a| int2(a, |x, y| Some(x + y))),
-    ("sub", |a| int2(a, |x, y| Some(x - y))),
-    ("mul", |a| int2(a, |x, y| Some(x * y))),
-    ("div", |a| int2(a, |x, y| (y != 0).then(|| x / y))),
+    ("add", |a| {
+        int2(a, |x, y| Some(x + y)).or_else(|| measured(a, false))
+    }),
+    ("sub", |a| {
+        int2(a, |x, y| Some(x - y)).or_else(|| measured(a, true))
+    }),
+    ("mul", |a| {
+        int2(a, |x, y| Some(x * y)).or_else(|| match a {
+            [Value::Quantity(q), Value::Int(n)] | [Value::Int(n), Value::Quantity(q)] => {
+                crate::quantity::scale(q, *n).map(Value::Quantity)
+            }
+            _ => None,
+        })
+    }),
+    ("div", |a| {
+        int2(a, |x, y| (y != 0).then(|| x / y)).or_else(|| match a {
+            [Value::Quantity(q), Value::Int(n)] => {
+                crate::quantity::divide(q, *n).map(Value::Quantity)
+            }
+            [Value::Quantity(p), Value::Quantity(q)] => {
+                crate::quantity::ratio(p, q).map(Value::Int)
+            }
+            _ => None,
+        })
+    }),
     ("mod", |a| int2(a, |x, y| (y != 0).then(|| x % y))),
     // Constructors (DESIGN.org "Silent string-to-int coercion"):
     // conversions are explicit and named by their type.
@@ -3347,6 +3404,59 @@ pub const BODIES: &[(&str, Body)] = &[
         }
         _ => None,
     }),
+    // Quantities and times (R-66, R-62): a value of the type is itself,
+    // its text is read, an integer is bytes or cores.
+    ("bytes", |a| quantity_of(a, crate::quantity::Dim::Bytes)),
+    ("cpu", |a| quantity_of(a, crate::quantity::Dim::Cpu)),
+    ("duration", |a| {
+        quantity_of(a, crate::quantity::Dim::Duration)
+    }),
+    ("time", |a| match a {
+        [t @ Value::Time(_)] => Some(t.clone()),
+        [Value::Str(s)] => crate::time::Time::parse(s).ok().map(Value::Time),
+        _ => None,
+    }),
+    // An ambiguous quantity no position read has no value; the compiler
+    // says so where the schema is known (`types::read`).
+    (crate::types::AMBIGUOUS, |_| None),
+    ("time.parse", |a| match a {
+        [Value::Str(s)] => crate::time::Time::parse(s).ok().map(Value::Time),
+        _ => None,
+    }),
+    ("time.format", |a| match a {
+        [Value::Time(t), Value::Str(layout)] => t.format(layout).map(Value::Str),
+        _ => None,
+    }),
+    ("time.in_zone", |a| match a {
+        [Value::Time(t), Value::Str(zone)] => t.in_zone(zone).map(Value::Time),
+        _ => None,
+    }),
+    ("time.add", |a| match a {
+        [
+            Value::Time(t),
+            Value::Quantity(crate::quantity::Quantity::Duration(d)),
+        ] => t.add(*d).map(Value::Time),
+        _ => None,
+    }),
+    ("time.until", |a| match a {
+        [Value::Time(x), Value::Time(y)] => x
+            .until(y)
+            .map(|d| Value::Quantity(crate::quantity::Quantity::Duration(d))),
+        _ => None,
+    }),
+    ("time.before", |a| match a {
+        [Value::Time(x), Value::Time(y)] => Some(Value::Bool(x.instant() < y.instant())),
+        _ => None,
+    }),
+    ("duration.parse", |a| match a {
+        [Value::Str(s)] => crate::quantity::read_duration(s)
+            .ok()
+            .map(|d| Value::Quantity(crate::quantity::Quantity::Duration(d))),
+        _ => None,
+    }),
+    ("duration.total", unit_of),
+    ("bytes.to", unit_of),
+    ("cpu.to", unit_of),
     ("iprange", |a| match a {
         [x, y] => {
             let (sa, sb) = (as_ip_u32(x)?, as_ip_u32(y)?);
@@ -3595,6 +3705,72 @@ fn len_of(a: &[Value]) -> Option<Value> {
     }
 }
 
+/// A constructor's quantity: one of its dimension is itself, a string is
+/// read, an integer is bytes or cores.
+fn quantity_of(a: &[Value], dim: crate::quantity::Dim) -> Option<Value> {
+    use crate::quantity::{Dim, Quantity, read};
+    match (a, dim) {
+        ([Value::Quantity(q)], d) if q.dim() == d => Some(Value::Quantity(*q)),
+        ([Value::Str(s)], d) => read(d, s).ok().map(Value::Quantity),
+        ([Value::Int(n)], Dim::Bytes) => Some(Value::Quantity(Quantity::Bytes(*n))),
+        ([Value::Int(n)], Dim::Cpu) => n
+            .checked_mul(1000)
+            .map(|m| Value::Quantity(Quantity::Cpu(m))),
+        _ => None,
+    }
+}
+
+/// A quantity as a whole number of a unit (`bytes.to`, `cpu.to`,
+/// `duration.total`), of its own dimension only.
+fn unit_of(a: &[Value]) -> Option<Value> {
+    match a {
+        [Value::Quantity(q), Value::Str(unit)] => crate::quantity::to_unit(q, unit).map(Value::Int),
+        _ => None,
+    }
+}
+
+/// `a + b` (`a - b`) of quantities of one dimension, or of a time and a
+/// duration (R-66, R-62); none across dimensions.
+fn measured(a: &[Value], sub: bool) -> Option<Value> {
+    use crate::quantity::{Quantity, add};
+    match a {
+        [Value::Quantity(x), Value::Quantity(y)] => add(x, y, sub).map(Value::Quantity),
+        [Value::Time(t), Value::Quantity(Quantity::Duration(d))] => {
+            t.add(if sub { d.negate() } else { *d }).map(Value::Time)
+        }
+        [Value::Quantity(Quantity::Duration(d)), Value::Time(t)] if !sub => {
+            t.add(*d).map(Value::Time)
+        }
+        _ => None,
+    }
+}
+
+/// How two values order: integers, quantities of one dimension, times by
+/// their instant; `Err` with why they do not.
+fn order(a: &Value, b: &Value) -> std::result::Result<Ordering, String> {
+    match (a, b) {
+        (Value::Int(x), Value::Int(y)) => Ok(x.cmp(y)),
+        (Value::Time(x), Value::Time(y)) => Ok(x.instant().cmp(&y.instant())),
+        (Value::Quantity(x), Value::Quantity(y)) => {
+            crate::quantity::compare(x, y).ok_or_else(|| {
+                if x.dim() == y.dim() {
+                    format!(
+                        "{x} and {y} do not compare: a month's length depends on the date \
+                     (add both to a time with `time.add`)"
+                    )
+                } else {
+                    format!(
+                        "{x} is {} and {y} {}: a quantity compares only within its dimension",
+                        x.dim().name(),
+                        y.dim().name()
+                    )
+                }
+            })
+        }
+        _ => Err("comparison only supports ints, quantities and times".to_string()),
+    }
+}
+
 /// A function of two integers.
 fn int2(a: &[Value], f: fn(i64, i64) -> Option<i64>) -> Option<Value> {
     match a {
@@ -3620,7 +3796,9 @@ fn scalar_text(v: &Value) -> Option<String> {
         | Value::Bool(_)
         | Value::Ip(_)
         | Value::IpNet { .. }
-        | Value::IpRange { .. } => Some(value_to_string(v)),
+        | Value::IpRange { .. }
+        | Value::Quantity(_)
+        | Value::Time(_) => Some(value_to_string(v)),
         _ => None,
     }
 }
@@ -3675,6 +3853,8 @@ fn value_to_string(v: &Value) -> String {
         .attr(attr),
         Value::CloudRef { typ, name, attr } => format!("cloud_ref({typ},{name},{attr})"),
         Value::Null { label, .. } => format!("?{label}"),
+        Value::Quantity(q) => q.to_string(),
+        Value::Time(t) => t.to_string(),
     }
 }
 

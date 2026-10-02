@@ -1,0 +1,19 @@
+edition 2026
+
+# A literal in a typed position is read as its type (R-31).
+input limit: cpu = 1Gi
+input grace: duration = 30
+input size: bytes = 500m
+
+# A quantity is one spelling per unit (R-66): bytes take binary units.
+a(20GB)
+b(512MiB)
+c(1.3Gi)
+# No operation mixes dimensions or changes one (R-66 amendment 3).
+d(x) where x = 1Gi + 500m
+e(x) where x = 1Gi + 2
+f(x) where x = 512Mi * 2Gi
+g(x) where x = 2 / 1Gi
+h() where 1Gi > 30s
+# A unit nothing reads.
+k(3x)

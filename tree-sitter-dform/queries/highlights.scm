@@ -16,6 +16,7 @@
   "${" @punctuation.special
   "}" @punctuation.special)
 (integer) @number
+(quantity) @number
 [(true) (false)] @boolean
 (rank) @attribute
 (flag) @attribute

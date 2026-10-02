@@ -168,6 +168,10 @@
         "named": true
       },
       {
+        "type": "quantity",
+        "named": true
+      },
+      {
         "type": "range",
         "named": true
       },
@@ -2319,6 +2323,10 @@
   {
     "type": "provider",
     "named": false
+  },
+  {
+    "type": "quantity",
+    "named": true
   },
   {
     "type": "rank",

@@ -349,7 +349,7 @@ impl<'a> Parser<'a> {
             ERROR_TOKEN => format!("unknown character `{}`", self.nth_text(0)),
             k if k.is_keyword() => format!("keyword `{}`", self.nth_text(0)),
             IDENT => format!("`{}`", self.nth_text(0)),
-            STRING | INT | RANK => {
+            STRING | INT | QUANTITY | RANK => {
                 format!("{} `{}`", self.nth(0).describe(), self.nth_text(0))
             }
             k => k.describe().to_string(),
@@ -432,7 +432,7 @@ impl<'a> Parser<'a> {
     /// spaces (`us-test-1a`): that was meant as one string.
     fn hyphen_hint(&self) -> Option<String> {
         let i = self.nth_index(0)?;
-        let word = |k: SyntaxKind| matches!(k, IDENT | INT | MINUS) || k.is_keyword();
+        let word = |k: SyntaxKind| matches!(k, IDENT | INT | QUANTITY | MINUS) || k.is_keyword();
         let mut start = i;
         while start > 0
             && word(self.toks[start - 1].kind)
@@ -1581,7 +1581,7 @@ impl<'a> Parser<'a> {
     fn primary(&mut self) -> P<SyntaxKind> {
         let k = self.nth(0);
         match k {
-            INT | STRING | TRUE_KW | FALSE_KW => self.leaf(LITERAL),
+            INT | QUANTITY | STRING | TRUE_KW | FALSE_KW => self.leaf(LITERAL),
             L_PAREN => {
                 // `(t)` groups; `(a, b, ..)` is a tuple pattern (R-58).
                 let cp = self.checkpoint();

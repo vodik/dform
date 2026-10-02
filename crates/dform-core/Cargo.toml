@@ -36,3 +36,8 @@ serde_yaml = "0.9"
 toml = "1"
 # dform.toml's version requirements (src/project.rs), Cargo's syntax.
 semver = "1"
+# `time` and `duration` (R-62): the Temporal model. Zone data is the
+# bundled tzdb (jiff-tzdb), never the host's, so a plan is the same on
+# every machine; `dform version` prints its version.
+jiff = { version = "0.2", default-features = false, features = ["std", "tzdb-bundle-always"] }
+jiff-tzdb = "0.1"

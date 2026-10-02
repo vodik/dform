@@ -507,6 +507,7 @@ export default grammar({
 
     _primary: $ => choice(
       $.integer,
+      $.quantity,
       $.string,
       $.true,
       $.false,
@@ -615,6 +616,13 @@ export default grammar({
     identifier: _ => IDENT,
 
     integer: _ => /[0-9]+/,
+
+    // A number with a unit adjacent, or with a fraction (R-66, R-62):
+    // `1Gi`, `500m`, `1h30m`, `1.5Gi`, `0.5`.
+    quantity: _ => token(choice(
+      /[0-9]+(\.[0-9]+)?[A-Za-z][A-Za-z0-9]*/,
+      /[0-9]+\.[0-9]+/,
+    )),
 
     true: _ => 'true',
     false: _ => 'false',

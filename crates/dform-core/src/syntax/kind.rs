@@ -13,6 +13,8 @@ pub enum SyntaxKind {
     IDENT,
     STRING,
     INT,
+    /// A number with a unit, or with a fraction (R-66): `1Gi`, `500m`, `0.5`.
+    QUANTITY,
     RANK,
     // Punctuation.
     L_PAREN,
@@ -187,6 +189,7 @@ impl SyntaxKind {
             IDENT => "a name",
             STRING => "a string",
             INT => "an integer",
+            QUANTITY => "a quantity",
             RANK => "a rank",
             L_PAREN => "`(`",
             R_PAREN => "`)`",

@@ -18,6 +18,12 @@ pub enum Value {
         start: u32,
         end: u32,
     },
+    /// A quantity (R-66): bytes, cpu or a duration, in its base unit;
+    /// printed canonically (`1536Mi`, `500m`, `1h30m`).
+    Quantity(crate::quantity::Quantity),
+    /// A zoned instant (R-62), printed canonically
+    /// (`2026-10-02T09:00:00+02:00[Europe/Paris]`).
+    Time(crate::time::Time),
     Ref {
         typ: String,
         name: String,
@@ -94,6 +100,17 @@ impl Value {
     pub fn as_str(&self) -> Option<&str> {
         match self {
             Value::Str(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// The canonical text of a quantity or a time (`1536Mi`,
+    /// `2026-10-02T09:00:00+02:00[Europe/Paris]`): what `str()`,
+    /// interpolation and the plan print where no schema renders it.
+    pub fn typed_text(&self) -> Option<String> {
+        match self {
+            Value::Quantity(q) => Some(q.to_string()),
+            Value::Time(t) => Some(t.to_string()),
             _ => None,
         }
     }

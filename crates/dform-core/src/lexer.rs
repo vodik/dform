@@ -20,6 +20,11 @@ enum Tok {
     String,
     #[regex(r"[0-9]+")]
     Int,
+    /// A quantity (R-66, R-62): a number with a unit adjacent (`1Gi`,
+    /// `500m`, `1h30m`, `1.5Gi`), or a number with a fraction (`0.5`).
+    #[regex(r"[0-9]+(\.[0-9]+)?[A-Za-z][A-Za-z0-9]*")]
+    #[regex(r"[0-9]+\.[0-9]+")]
+    Quantity,
     #[regex(r"@[a-z_]+")]
     Rank,
 
@@ -84,6 +89,7 @@ fn kind(t: Tok) -> SyntaxKind {
         Tok::Ident => IDENT,
         Tok::String => STRING,
         Tok::Int => INT,
+        Tok::Quantity => QUANTITY,
         Tok::Rank => RANK,
         Tok::LParen => L_PAREN,
         Tok::RParen => R_PAREN,
@@ -247,6 +253,17 @@ mod tests {
         assert_eq!(
             kinds("0..3 0..=n a.b"),
             vec![INT, DOT2, INT, INT, DOT2_EQ, IDENT, IDENT, DOT, IDENT]
+        );
+    }
+
+    #[test]
+    fn a_number_with_a_unit_is_one_quantity() {
+        assert_eq!(
+            kinds("1Gi 500m 1h30m 1.5Gi 0.5 2 0..3 x.y 20GB"),
+            vec![
+                QUANTITY, QUANTITY, QUANTITY, QUANTITY, QUANTITY, INT, INT, DOT2, INT, IDENT, DOT,
+                IDENT, QUANTITY
+            ]
         );
     }
 

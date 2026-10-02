@@ -37,6 +37,10 @@ pub const SOURCES: &[(&str, &str)] = &[
     ("std/ip.df", include_str!("../../../std/ip.df")),
     ("std/str.df", include_str!("../../../std/str.df")),
     ("std/list.df", include_str!("../../../std/list.df")),
+    ("std/time.df", include_str!("../../../std/time.df")),
+    ("std/duration.df", include_str!("../../../std/duration.df")),
+    ("std/bytes.df", include_str!("../../../std/bytes.df")),
+    ("std/cpu.df", include_str!("../../../std/cpu.df")),
 ];
 
 /// The package whose functions are written bare.
@@ -46,7 +50,7 @@ pub const PRELUDE: &str = "prelude";
 /// constructor (`inet(s) -> inet`).
 const TYPE_NAMES: &[&str] = &[
     "int", "string", "bool", "inet", "ip", "iprange", "list", "any", "ref", "secret", "symbol",
-    "addr",
+    "addr", "bytes", "cpu", "duration", "time",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -508,7 +512,12 @@ mod tests {
                 .is_some_and(|f| f.internal && f.forwards && f.forwards_nulls)
         );
         assert!(callable("int") && !callable("add") && !callable("to_int"));
-        assert_eq!(r.packages(), ["inet", "int", "ip", "list", "str"]);
+        assert_eq!(
+            r.packages(),
+            [
+                "bytes", "cpu", "duration", "inet", "int", "ip", "list", "str", "time"
+            ]
+        );
     }
 
     #[test]

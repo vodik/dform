@@ -1,0 +1,29 @@
+# Times: functions about a `time`, a zoned instant (R-62; docs/grammar.md
+# "Functions"). Zones are the tzdb bundled into dform, never the host's:
+# `dform version` prints its release. The current time is no function
+# (a function is pure); it is an extern.
+package time
+
+#| A time from RFC 3339 with an offset (`Z` is UTC) or a date and time with a zone, `2026-10-02T09:00[Europe/Paris]`; no value for any other text. `time(s)` is the same, checked at compile time for a literal.
+#| example: let expiry = time.parse(cert.not_after)
+fn parse(text: string) -> time?
+
+#| The time in a strftime layout, in its own zone; no value for a layout that does not format.
+#| example: let stamp = time.format(t, "%Y-%m-%d %H:%M %Z")
+fn format(t: time, layout: string) -> string?
+
+#| The same instant read in another zone (an IANA name, `UTC`, or an offset `+02:00`); no value for a zone the tzdb does not have.
+#| example: let local = time.in_zone(t, "America/New_York")
+fn in_zone(t: time, zone: string) -> time?
+
+#| The time a duration later, in the time's zone: a month is a calendar month (the 31st plus a month is the next month's last day), a day a calendar day across a DST change; `t + d` lowers to it.
+#| example: let rotate_at = time.add(issued, 90d)
+fn add(t: time, d: duration) -> time?
+
+#| The exact duration from `a` to `b`, in hours and smaller units (negative when `b` is earlier).
+#| example: let age = time.until(issued, now)
+fn until(a: time, b: time) -> duration?
+
+#| Whether `a` is an earlier instant than `b`, whatever their zones; also a predicate.
+#| example: deny "expired" where time.before(cert.not_after, now)
+fn before(a: time, b: time) -> bool

@@ -737,6 +737,8 @@ pub fn fmt_value(v: &Value) -> String {
         Value::Ref { typ, name, attr } => format!("ref({typ}, {name}, {attr})"),
         Value::CloudRef { typ, name, attr } => format!("cloud_ref({typ}, {name}, {attr})"),
         Value::Null { label, class, .. } => format!("?{label}:{class:?}"),
+        Value::Quantity(q) => q.to_string(),
+        Value::Time(t) => t.to_string(),
     }
 }
 

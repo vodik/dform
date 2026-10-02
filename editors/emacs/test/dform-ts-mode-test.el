@@ -96,6 +96,18 @@ in a condition does not."
     (should (eq (dform-ts-mode-test--face-at "..k") 'font-lock-operator-face))
     (should (eq (dform-ts-mode-test--face-at "..=") 'font-lock-operator-face))))
 
+(ert-deftest dform-ts-mode-test-quantity-face ()
+  "A quantity (`512Mi', `1h30m', `0.5') is a number (R-66)."
+  (dform-ts-mode-test--ensure-grammar)
+  (with-temp-buffer
+    (insert "edition 2026\np(x) where x = 512Mi * 2, d = 1h30m, c = 0.5\n")
+    (let ((treesit-font-lock-level 4))
+      (dform-ts-mode))
+    (font-lock-ensure)
+    (should (eq (dform-ts-mode-test--face-at "512Mi") 'font-lock-number-face))
+    (should (eq (dform-ts-mode-test--face-at "1h30m") 'font-lock-number-face))
+    (should (eq (dform-ts-mode-test--face-at "0.5") 'font-lock-number-face))))
+
 (ert-deftest dform-ts-mode-test-multiline-string ()
   "A string that spans lines (R-61) is a string on every line, and
 indenting leaves its lines as written."

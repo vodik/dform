@@ -147,7 +147,8 @@ pub fn type_text(t: &TypeExpr) -> String {
 pub fn check_type(t: &TypeExpr) -> Result<(), String> {
     match t {
         TypeExpr::Name(n) => match n.as_str() {
-            "int" | "string" | "bool" | "inet" | "symbol" | "addr" | "any" => Ok(()),
+            "int" | "string" | "bool" | "inet" | "symbol" | "addr" | "any" | "bytes" | "cpu"
+            | "duration" | "time" => Ok(()),
             _ => Err(format!("unknown type {n}")),
         },
         TypeExpr::Apply(n, args) => match (n.as_str(), args.as_slice()) {
@@ -179,6 +180,10 @@ pub fn has_type(t: &TypeExpr, v: &Value) -> bool {
             "string" | "symbol" | "addr" => matches!(v, Value::Str(_)),
             "bool" => matches!(v, Value::Bool(_)),
             "inet" => matches!(v, Value::IpNet { .. }),
+            "bytes" | "cpu" | "duration" => {
+                matches!(v, Value::Quantity(q) if q.dim().name() == n.as_str())
+            }
+            "time" => matches!(v, Value::Time(_)),
             _ => true,
         },
         TypeExpr::Apply(n, args) => match (n.as_str(), args.as_slice()) {
@@ -213,6 +218,18 @@ pub fn coerce(t: &TypeExpr, v: Value) -> Value {
             Some((addr, prefix)) => Value::IpNet { addr, prefix },
             None => Value::Str(s),
         },
+        // A quantity or a time from its text, as a literal reads (R-66).
+        (TypeExpr::Name(n), v @ (Value::Str(_) | Value::Int(_)))
+            if matches!(n.as_str(), "bytes" | "cpu" | "duration" | "time") =>
+        {
+            match crate::types::literal(
+                &crate::types::Ty::parse(n),
+                crate::ast::Term::Val(v.clone()),
+            ) {
+                Ok(crate::ast::Term::Val(r)) => r,
+                _ => v,
+            }
+        }
         (TypeExpr::Name(n), Value::Int(i)) if n == "string" => Value::Str(i.to_string()),
         (TypeExpr::Name(n), Value::Bool(b)) if n == "string" => Value::Str(b.to_string()),
         (TypeExpr::Apply(n, xs), v) if n == "secret" && xs.len() == 1 => coerce(&xs[0], v),

@@ -1,0 +1,12 @@
+edition 2026
+
+# A duration's numbers are whole, its units once each, largest first
+# (R-62, R-66 amendment 1).
+a(1.5h)
+b(30m1h)
+c(1h1h)
+# A time's literal is checked where it is written (R-62).
+d(t) where t = time("2026-13-01T00:00:00Z")
+e(t) where t = time("2026-10-02T09:00")
+f(t) where t = time("2026-10-02T09:00[Mars/Olympus]")
+g(d) where d = duration("P1Q")

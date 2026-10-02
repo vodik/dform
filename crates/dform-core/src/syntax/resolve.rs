@@ -3927,6 +3927,19 @@ impl<'u> Lowerer<'u> {
         }
         for (i, op) in ops.iter().enumerate() {
             let (a, b) = (lowered[i].clone(), lowered[i + 1].clone());
+            let sign = match op {
+                EQ => "=",
+                EQ2 => "==",
+                NEQ => "!=",
+                LT => "<",
+                LE => "<=",
+                GT => ">",
+                _ => ">=",
+            };
+            let (a, b) = match crate::types::operands(sign, a, b) {
+                Ok(ab) => ab,
+                Err(why) => return self.error(span, why),
+            };
             out.push(match op {
                 EQ | EQ2 => Lit::Eq(a, b),
                 NEQ => Lit::Neq(a, b),
@@ -4364,6 +4377,12 @@ impl<'u> Lowerer<'u> {
                 .get(i)
                 .or(if f.variadic { f.params.last() } else { None });
             let ty = match p.map(|p| crate::types::Ty::parse(&p.ty)) {
+                // A quantity's or time's constructor reads a literal as its
+                // type, at compile time (R-66, R-62): `cpu(500m)`,
+                // `time("2026-13-01")` is an error here.
+                _ if i == 0 && matches!(name, "bytes" | "cpu" | "duration" | "time") => {
+                    crate::types::Ty::Scalar(name.to_string())
+                }
                 Some(t @ crate::types::Ty::Scalar(_)) if p.is_some_and(|p| p.ty != "string") => t,
                 _ => {
                     out.push(a);
@@ -4372,6 +4391,11 @@ impl<'u> Lowerer<'u> {
             };
             match crate::types::literal(&ty, a) {
                 Ok(a) => out.push(a),
+                // A constructor's literal: what is wrong with its text.
+                Err(why) if i == 0 && matches!(name, "bytes" | "cpu" | "duration" | "time") => {
+                    let why = why.strip_prefix(&format!("is {name}: ")).unwrap_or(&why);
+                    return self.error(span, format!("not a {name}: {why}"));
+                }
                 Err(why) => {
                     let p = p.map(|p| p.name.as_str()).unwrap_or("");
                     return self.error(span, format!("`{name}`'s argument `{p}` {why}"));
@@ -4524,6 +4548,16 @@ impl<'u> Lowerer<'u> {
                         Ok(i) => Ok(Term::Val(Value::Int(i))),
                         Err(_) => self.error(span, "integer out of range"),
                     },
+                    // A quantity (R-66): `500m` and `0.5` wait for the
+                    // type of their position (`types::literal`, the
+                    // schema's in `types::read`).
+                    QUANTITY => match crate::quantity::literal(t.text()) {
+                        Ok(crate::quantity::Literal::Known(q)) => Ok(Term::Val(Value::Quantity(q))),
+                        Ok(crate::quantity::Literal::Ambiguous) => {
+                            Ok(crate::types::ambiguous_literal(t.text(), span))
+                        }
+                        Err(why) => self.error(span, why),
+                    },
                     STRING => self.string_term(rc, &t, pre),
                     TRUE_KW => Ok(Term::Val(Value::Bool(true))),
                     _ => Ok(Term::Val(Value::Bool(false))),
@@ -4648,6 +4682,30 @@ impl<'u> Lowerer<'u> {
             BIN_EXPR => {
                 let ts: Vec<SyntaxNode> = terms(n).collect();
                 let op = tokens(n).next().ok_or(Skip)?;
+                // `us-test-1a`, names and a quantity with no spaces (R-66
+                // lexes `1a` as one token): meant as a string.
+                let word =
+                    |k: SyntaxKind| matches!(k, IDENT | QUANTITY | INT | MINUS) || k.is_keyword();
+                let toks: Vec<_> = n
+                    .descendants_with_tokens()
+                    .filter_map(|e| e.into_token())
+                    .collect();
+                if op.kind() == MINUS
+                    && toks.iter().all(|t| word(t.kind()))
+                    && toks.iter().any(|t| t.kind() == QUANTITY)
+                    && toks.iter().any(|t| t.kind() == IDENT)
+                {
+                    let d = Diagnostic::error(
+                        span,
+                        format!("`{}` is arithmetic, not a name", n.text()),
+                    )
+                    .with_help(format!(
+                        "`-` is always an operator; a name with one is a string: \"{}\"",
+                        n.text()
+                    ));
+                    self.diags.push(d);
+                    return Err(Skip);
+                }
                 // `us-east` with no spaces: meant as a string.
                 if op.kind() == MINUS
                     && ts.iter().all(|t| t.kind() == CHAIN)
@@ -4674,7 +4732,10 @@ impl<'u> Lowerer<'u> {
                 };
                 let a = self.bind(false, |l| l.term(rc, &ts[0], Pos::Content, pre))?;
                 let b = self.bind(false, |l| l.term(rc, &ts[1], Pos::Content, pre))?;
-                Ok(func(name, vec![a, b]))
+                match crate::types::operands(op.text(), a, b) {
+                    Ok((a, b)) => Ok(func(name, vec![a, b])),
+                    Err(why) => self.error(span, why),
+                }
             }
             UNARY_EXPR => {
                 let inner = terms(n).next().ok_or(Skip)?;
@@ -4682,6 +4743,12 @@ impl<'u> Lowerer<'u> {
                     match self.bind(false, |l| l.term(rc, &inner, Pos::Content, pre))? {
                         Term::Val(Value::Int(i)) if inner.kind() == LITERAL => {
                             Term::Val(Value::Int(-i))
+                        }
+                        Term::Val(Value::Quantity(q)) if inner.kind() == LITERAL => {
+                            match crate::quantity::scale(&q, -1) {
+                                Some(q) => Term::Val(Value::Quantity(q)),
+                                None => return self.error(span, "quantity out of range"),
+                            }
                         }
                         t => func("sub", vec![Term::Val(Value::Int(0)), t]),
                     },

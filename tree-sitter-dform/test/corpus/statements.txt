@@ -686,15 +686,23 @@ let x = in
 
 
 ================================================================================
-A hyphenated name is a string
-:error
+A hyphenated name is arithmetic (the compiler says to quote it)
 ================================================================================
 
 zone(us-test-1a)
 
 --------------------------------------------------------------------------------
 
-
+(source_file
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (binary_expression
+          (binary_expression
+            (identifier)
+            (identifier))
+          (quantity))))))
 
 ================================================================================
 Type aliases
@@ -1014,3 +1022,37 @@ use zones { zone("b", 1) }
             (string
               (string_content))
             (integer)))))))
+
+================================================================================
+Quantities: a number with a unit, or a fraction
+================================================================================
+
+limits(x) where x = 512Mi * 2 + 1.5Gi, d = 1h30m, c = 0.5, i in 0..3
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)))
+    (body
+      (comparison
+        (identifier)
+        (binary_expression
+          (binary_expression
+            (quantity)
+            (integer))
+          (quantity)))
+      (comparison
+        (identifier)
+        (quantity))
+      (comparison
+        (identifier)
+        (quantity))
+      (in_literal
+        (identifier)
+        (range
+          (integer)
+          (integer))))))

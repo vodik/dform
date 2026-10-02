@@ -12,15 +12,29 @@
 //!   rule); a reference is an error that says to read an attribute, unless
 //!   it is written out as `ref(r)` (the id, where the API takes one as text).
 //!
+//! - A quantity attribute (`bytes`, `cpu`, `duration`, R-66) or a `time`
+//!   (R-62) takes a value of its type, a literal read as one: `512Mi`,
+//!   `500m` (millicores in a cpu position, minutes in a duration one), a
+//!   bare integer (bytes, cores), a string that parses (`"P1M"`, a time's
+//!   RFC 3339 text). [`read`] reads them against the schema before the
+//!   program is evaluated, into the nested paths of an object or list
+//!   value (`containers.resources.limits.memory`); a `500m` no type reads
+//!   is an error naming both readings.
+//!
 //! A term the compiler cannot see the value of (a variable, a call) is
 //! checked when it has one, at evaluation.
 
-use crate::ast::{Program, Stmt, Term, TypeExpr};
+use crate::ast::{Lit, Program, Stmt, Term, TypeExpr};
 use crate::diag::{Diagnostic, Diagnostics};
 use crate::ir::Address;
+use crate::quantity::{self, Dim};
 use crate::schema::Schema;
 use crate::value::Value;
 use anyhow::Result;
+
+/// The internal function a quantity literal with no reading of its own
+/// lowers to (`500m`, `0.5`): the position's type reads it.
+pub const AMBIGUOUS: &str = "__quantity";
 
 /// A schema attribute's type, as `type_attr` writes it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,7 +47,8 @@ pub enum Ty {
     Secret(Box<Ty>),
     /// `enum(a, b, ..)`.
     Enum(Vec<String>),
-    /// `string`, `int`, `bool`, `inet`.
+    /// `string`, `int`, `bool`, `inet`, `ip`, the quantities `bytes`,
+    /// `cpu`, `duration`, and `time`.
     Scalar(String),
     /// Anything the check does not judge (`map`, `object`, `any`, an
     /// untyped `list`).
@@ -42,12 +57,14 @@ pub enum Ty {
 
 impl Ty {
     /// Read a type's text: `ref(net.vpc)`, `list(ref(net.subnet))`,
-    /// `enum("a", "b")`, `inet`.
+    /// `enum("a", "b")`, `inet`, `bytes(gib)` (a quantity and how the
+    /// provider takes it, `schema::Render`).
     pub fn parse(s: &str) -> Ty {
         let s = s.trim();
         let Some((head, rest)) = s.split_once('(') else {
             return match s {
-                "string" | "int" | "bool" | "inet" | "ip" => Ty::Scalar(s.to_string()),
+                "string" | "int" | "bool" | "inet" | "ip" | "bytes" | "cpu" | "duration"
+                | "time" => Ty::Scalar(s.to_string()),
                 _ => Ty::Any,
             };
         };
@@ -64,7 +81,17 @@ impl Ty {
                     .map(|m| m.trim().trim_matches('"').to_string())
                     .collect(),
             ),
+            h @ ("bytes" | "cpu" | "duration" | "time") => Ty::Scalar(h.to_string()),
             _ => Ty::Any,
+        }
+    }
+
+    /// A quantity's or a time's type: what [`read`] reads.
+    fn measured(&self) -> bool {
+        match self {
+            Ty::Scalar(s) => matches!(s.as_str(), "bytes" | "cpu" | "duration" | "time"),
+            Ty::Secret(t) | Ty::List(t) => t.measured(),
+            _ => false,
         }
     }
 }
@@ -129,8 +156,80 @@ fn shown_literal(v: &Value) -> String {
         Value::Str(s) => format!("the string {s:?}"),
         Value::Int(i) => format!("the int {i}"),
         Value::Bool(b) => format!("the bool {b}"),
+        Value::Quantity(q) => format!("the {} {q}", q.dim().name()),
+        Value::Time(t) => format!("the time {t}"),
         v => crate::partition::fmt_value(v),
     }
+}
+
+/// An ambiguous quantity literal as it lowers: `__quantity("500m", file,
+/// start, end)`, its span kept for the error when no position reads it.
+pub fn ambiguous_literal(text: &str, span: crate::ast::Span) -> Term {
+    let n = |x: u32| Term::Val(Value::Int(i64::from(x)));
+    Term::Func {
+        name: AMBIGUOUS.to_string(),
+        args: vec![
+            Term::Val(Value::Str(text.to_string())),
+            n(span.file),
+            n(span.start),
+            n(span.end),
+        ],
+    }
+}
+
+/// The text of an ambiguous quantity literal, `__quantity("500m", ..)`.
+pub fn ambiguous(t: &Term) -> Option<&str> {
+    match t {
+        Term::Func { name, args } if name == AMBIGUOUS => match args.first() {
+            Some(Term::Val(Value::Str(s))) => Some(s),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Where an ambiguous quantity literal was written.
+fn ambiguous_span(t: &Term) -> Option<crate::ast::Span> {
+    let Term::Func { args, .. } = t else {
+        return None;
+    };
+    let n = |i: usize| match args.get(i) {
+        Some(Term::Val(Value::Int(x))) => u32::try_from(*x).ok(),
+        _ => None,
+    };
+    Some(crate::ast::Span {
+        file: n(1)?,
+        start: n(2)?,
+        end: n(3)?,
+        origin: 0,
+    })
+}
+
+/// A literal read as the quantity or time `s` names: the value, or why it
+/// is not one. `None`: not a literal this reads.
+fn measure(s: &str, t: &Term) -> Option<Result<Value, String>> {
+    let text = |v: &str| -> Result<Value, String> {
+        match Dim::parse(s) {
+            Some(d) => quantity::read(d, v).map(Value::Quantity),
+            None => crate::time::Time::parse(v).map(Value::Time),
+        }
+    };
+    Some(match (s, t) {
+        (_, Term::Val(Value::Quantity(q))) if q.dim().name() == s => Ok(Value::Quantity(*q)),
+        ("time", Term::Val(v @ Value::Time(_))) => Ok(v.clone()),
+        ("bytes", Term::Val(Value::Int(n))) => Ok(Value::Quantity(quantity::Quantity::Bytes(*n))),
+        ("cpu", Term::Val(Value::Int(n))) => n
+            .checked_mul(1000)
+            .map(|m| Value::Quantity(quantity::Quantity::Cpu(m)))
+            .ok_or_else(|| format!("`{n}` cores is out of range")),
+        ("duration", Term::Val(Value::Int(n))) => Err(format!(
+            "is a duration: the int {n} has no unit (`{n}s`, `{n}m`, `{n}h`, `{n}d`)"
+        )),
+        (_, Term::Val(Value::Str(x))) => text(x).map_err(|e| format!("is {s}: {e}")),
+        (_, Term::Val(Value::Null { .. })) => return None,
+        (_, Term::Val(v)) => Err(format!("is {s}, not {}", shown_literal(v))),
+        (_, t) => text(ambiguous(t)?).map_err(|e| format!("is {s}: {e}")),
+    })
 }
 
 /// Why `t` is not a `ty`, when the compiler can tell; `None` when it fits
@@ -180,6 +279,11 @@ pub fn mismatch(ty: &Ty, t: &Term) -> Option<String> {
             Some(format!("is {ty}: {s:?} is not one of its members"))
         }
         (Ty::Enum(_), Term::Val(Value::Str(_))) => None,
+        (Ty::Scalar(s), t) if ty.measured() => measure(s, t)?.err(),
+        (Ty::Scalar(s), t) if ambiguous(t).is_some() => Some(format!(
+            "is {s}, not the quantity `{}`",
+            ambiguous(t).unwrap_or_default()
+        )),
         (Ty::Scalar(s), Term::Val(v)) => {
             let fits = match (s.as_str(), v) {
                 ("string", Value::Str(_)) => true,
@@ -237,11 +341,15 @@ pub fn literal(ty: &Ty, t: Term) -> Result<Term, String> {
     if let Some(why) = mismatch(ty, &t) {
         return Err(why);
     }
-    Ok(read(ty, t))
+    Ok(read_as(ty, t))
 }
 
-fn read(ty: &Ty, t: Term) -> Term {
+fn read_as(ty: &Ty, t: Term) -> Term {
     match (ty, t) {
+        (Ty::Scalar(s), t) if ty.measured() => match measure(s, &t) {
+            Some(Ok(v)) => Term::Val(v),
+            _ => t,
+        },
         (Ty::Scalar(s), Term::Val(Value::Str(x))) if s == "inet" => {
             match crate::value::parse_ipnet(&x) {
                 Some((addr, prefix)) => Term::Val(Value::IpNet { addr, prefix }),
@@ -254,9 +362,9 @@ fn read(ty: &Ty, t: Term) -> Term {
                 None => Term::Val(Value::Str(x)),
             }
         }
-        (Ty::Secret(inner), t) => read(inner, t),
+        (Ty::Secret(inner), t) => read_as(inner, t),
         (Ty::List(inner), Term::List(xs)) => {
-            Term::List(xs.into_iter().map(|x| read(inner, x)).collect())
+            Term::List(xs.into_iter().map(|x| read_as(inner, x)).collect())
         }
         (_, t) => t,
     }
@@ -299,6 +407,320 @@ pub fn check(program: &Program, schema: &Schema) -> Result<()> {
         Ok(())
     } else {
         Err(Diagnostics(diags).into())
+    }
+}
+
+/// Read every literal in a quantity's or a time's position as its type
+/// (R-66, R-62): an attribute the schema types `bytes`, `cpu`, `duration`
+/// or `time`, at its own path or nested in an object or list value
+/// (`containers.resources.limits.memory`). Then a quantity literal that no
+/// position read (`500m` where nothing gives a type) is an error naming
+/// both readings. Runs on the program before it is evaluated, once the
+/// providers' schemas are known.
+pub fn read(program: &mut Program, schema: &Schema) -> Result<()> {
+    let mut diags = Vec::new();
+    for s in &mut program.statements {
+        read_stmt(s, schema, &mut diags);
+    }
+    for s in &program.statements {
+        stmt_terms(s, &mut |t, span| {
+            visit(t, &mut |t| {
+                if let Some(x) = ambiguous(t) {
+                    let at = ambiguous_span(t).filter(|s| !s.is_none()).unwrap_or(span);
+                    diags.push(Diagnostic::error(at, quantity::ambiguous(x)));
+                }
+            })
+        });
+    }
+    if diags.is_empty() {
+        Ok(())
+    } else {
+        Err(Diagnostics(diags).into())
+    }
+}
+
+fn read_stmt(s: &mut Stmt, schema: &Schema, diags: &mut Vec<Diagnostic>) {
+    let at = |typ: &str, name: &Term, path: &str| match name {
+        Term::Val(Value::Str(a)) => Address {
+            typ: typ.to_string(),
+            name: a.clone(),
+        }
+        .attr(path),
+        _ => format!("{typ}.{path}"),
+    };
+    match s {
+        Stmt::Resource(r) => {
+            let Term::Val(Value::Str(typ)) = &r.typ else {
+                return;
+            };
+            for f in &mut r.fields {
+                if let Err((path, why)) = read_at(schema, typ, &f.key, &mut f.value) {
+                    diags.push(Diagnostic::error(
+                        f.span,
+                        format!("{} {why}", at(typ, &r.name, &path)),
+                    ));
+                }
+            }
+        }
+        Stmt::Module(m) => {
+            for s in &mut m.body {
+                read_stmt(s, schema, diags);
+            }
+        }
+        Stmt::Fact(head) | Stmt::Rule(crate::ast::RuleStmt { head, .. })
+            if head.pred == "arg" && head.args.len() == 5 =>
+        {
+            let (Term::Val(Value::Str(typ)), Term::Val(Value::Str(path))) =
+                (&head.args[0], &head.args[2])
+            else {
+                return;
+            };
+            let (typ, path, name) = (typ.clone(), path.clone(), head.args[1].clone());
+            if let Err((path, why)) = read_at(schema, &typ, &path, &mut head.args[3]) {
+                diags.push(Diagnostic::error(
+                    head.span,
+                    format!("{} {why}", at(&typ, &name, &path)),
+                ));
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Read the value at `path` of a `typ`, and what it holds at nested
+/// paths; `Err((path, why))` at the first that cannot be its type.
+fn read_at(schema: &Schema, typ: &str, path: &str, t: &mut Term) -> Result<(), (String, String)> {
+    if let Some(spec) = schema.attr(typ, path) {
+        let ty = Ty::parse(&spec.ty);
+        if ty.measured() {
+            if let Some(why) = mismatch(&ty, t) {
+                return Err((path.to_string(), why));
+            }
+            let v = std::mem::replace(t, Term::Wildcard);
+            *t = read_as(&ty, v);
+            return Ok(());
+        }
+    }
+    match t {
+        Term::Obj(m) => {
+            for (k, v) in m {
+                read_at(schema, typ, &format!("{path}.{k}"), v)?;
+            }
+        }
+        Term::List(xs) => {
+            for x in xs {
+                read_at(schema, typ, path, x)?;
+            }
+        }
+        Term::Val(v @ (Value::Obj(_) | Value::List(_))) => {
+            let mut held = Term::Val(std::mem::replace(v, Value::Bool(false)));
+            // A constant object or list: its elements as terms, read, and
+            // folded back.
+            let r = match &mut held {
+                Term::Val(Value::Obj(m)) => {
+                    let mut terms: std::collections::BTreeMap<String, Term> = std::mem::take(m)
+                        .into_iter()
+                        .map(|(k, v)| (k, Term::Val(v)))
+                        .collect();
+                    let r = terms
+                        .iter_mut()
+                        .try_for_each(|(k, v)| read_at(schema, typ, &format!("{path}.{k}"), v));
+                    *m = terms.into_iter().map(|(k, t)| (k, constant(t))).collect();
+                    r
+                }
+                Term::Val(Value::List(xs)) => {
+                    let mut terms: Vec<Term> =
+                        std::mem::take(xs).into_iter().map(Term::Val).collect();
+                    let r = terms
+                        .iter_mut()
+                        .try_for_each(|v| read_at(schema, typ, path, v));
+                    *xs = terms.into_iter().map(constant).collect();
+                    r
+                }
+                _ => Ok(()),
+            };
+            if let Term::Val(x) = held {
+                *v = x;
+            }
+            r?;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// A term read from a constant: still one.
+fn constant(t: Term) -> Value {
+    match t {
+        Term::Val(v) => v,
+        // `read_term` keeps a constant a constant.
+        _ => unreachable!("a constant read is a constant"),
+    }
+}
+
+/// What an operand is, as far as the compiler sees it.
+#[derive(Clone, Copy, PartialEq)]
+enum Operand {
+    Q(Dim),
+    Time,
+    Int,
+    /// `500m`, `0.5`: the other side says which.
+    Ambiguous,
+}
+
+fn operand(t: &Term) -> Option<Operand> {
+    Some(match t {
+        Term::Val(Value::Quantity(q)) => Operand::Q(q.dim()),
+        Term::Val(Value::Time(_)) => Operand::Time,
+        Term::Val(Value::Int(_)) => Operand::Int,
+        t if ambiguous(t).is_some() => Operand::Ambiguous,
+        _ => return None,
+    })
+}
+
+fn operand_name(o: Operand) -> &'static str {
+    match o {
+        Operand::Q(d) => d.name(),
+        Operand::Time => "a time",
+        Operand::Int => "a number",
+        Operand::Ambiguous => "a quantity",
+    }
+}
+
+/// The operands of `op` as written (`+ - * / %`, or a comparison) as the
+/// compiler reads them (R-66): an ambiguous literal
+/// takes the other side's quantity (`1h + 30m`, `c > 500m` where `c` is
+/// a cpu literal), and an operation that mixes dimensions or changes one
+/// is an error: a quantity scales by a number, adds, subtracts and
+/// compares within its dimension, and over its own dimension is a number;
+/// a time adds or subtracts a duration and compares with a time. Operands
+/// the compiler cannot see are checked at evaluation, where a mix has no
+/// value.
+pub fn operands(op: &str, a: Term, b: Term) -> Result<(Term, Term), String> {
+    let (Some(x), Some(y)) = (operand(&a), operand(&b)) else {
+        return Ok((a, b));
+    };
+    let read = |t: Term, d: Dim| -> Result<(Term, Operand), String> {
+        let text = ambiguous(&t).unwrap_or_default().to_string();
+        quantity::read(d, &text)
+            .map(|q| (Term::Val(Value::Quantity(q)), Operand::Q(d)))
+            .map_err(|e| format!("{e}, where the other side is {}", d.name()))
+    };
+    let ((a, x), (b, y)) = match (x, y) {
+        (Operand::Ambiguous, Operand::Q(d)) => (read(a, d)?, (b, y)),
+        (Operand::Q(d), Operand::Ambiguous) => ((a, x), read(b, d)?),
+        _ => ((a, x), (b, y)),
+    };
+    let shown = |t: &Term| match ambiguous(t) {
+        Some(s) => s.to_string(),
+        None => crate::partition::fmt_term(t),
+    };
+    let written = format!("`{} {op} {}`", shown(&a), shown(&b));
+    let op = match op {
+        "+" => "add",
+        "-" => "sub",
+        "*" => "mul",
+        "/" => "div",
+        "%" => "mod",
+        _ => "cmp",
+    };
+    let mix = || {
+        Err(format!(
+            "{written} mixes {} and {}: a quantity adds, subtracts and compares only with its \
+             own dimension",
+            operand_name(x),
+            operand_name(y)
+        ))
+    };
+    use Operand::*;
+    let dur = Q(Dim::Duration);
+    match (op, x, y) {
+        (_, Ambiguous, _) | (_, _, Ambiguous) => return Ok((a, b)),
+        (_, Int, Int) => {}
+        ("add" | "sub" | "cmp", Q(p), Q(q)) if p == q => {}
+        ("add" | "sub", Time, d) if d == dur => {}
+        ("add", d, Time) if d == dur => {}
+        ("cmp", Time, Time) => {}
+        ("add" | "sub" | "cmp", _, _) => return mix(),
+        ("mul", Q(_), Int) | ("mul", Int, Q(_)) => {}
+        ("mul", _, _) => {
+            return Err(format!(
+                "{written}: a quantity scales by a number; no operation changes its dimension"
+            ));
+        }
+        ("div", Q(_), Int) => {}
+        ("div", Q(p), Q(q)) if p == q => {}
+        ("div", Q(_), Q(_)) => return mix(),
+        ("div", _, _) => {
+            return Err(format!(
+                "{written}: a quantity is divided by a number, or by its own dimension for a ratio"
+            ));
+        }
+        _ => return Err(format!("{written}: `%` is for numbers")),
+    }
+    Ok((a, b))
+}
+
+/// Every term a statement holds, with the span an error about it points at.
+fn stmt_terms(s: &Stmt, f: &mut dyn FnMut(&Term, crate::ast::Span)) {
+    let lits = |body: &[Lit], span, f: &mut dyn FnMut(&Term, crate::ast::Span)| {
+        for l in body {
+            lit_terms(l, &mut |t| f(t, span));
+        }
+    };
+    match s {
+        Stmt::Fact(a) => a.args.iter().for_each(|t| f(t, a.span)),
+        Stmt::Rule(r) => {
+            r.head.args.iter().for_each(|t| f(t, r.head.span));
+            lits(&r.body, r.head.span, f);
+        }
+        Stmt::Resource(r) => {
+            for x in &r.fields {
+                f(&x.value, x.span);
+            }
+            lits(r.body.as_deref().unwrap_or_default(), r.span, f);
+        }
+        Stmt::Settings(x) => {
+            for x in &x.fields {
+                f(&x.value, x.span);
+            }
+        }
+        Stmt::Module(m) => m.body.iter().for_each(|s| stmt_terms(s, f)),
+        Stmt::Instance(i) | Stmt::Use(i) => i.inputs.iter().for_each(|(_, t, span)| f(t, *span)),
+        Stmt::Output(o) => o.value.iter().for_each(|t| f(t, o.span)),
+        Stmt::Input(i) => i.default.iter().for_each(|t| f(t, i.span)),
+        _ => {}
+    }
+}
+
+fn lit_terms(l: &Lit, f: &mut dyn FnMut(&Term)) {
+    match l {
+        Lit::Pos(a) | Lit::Not(a) => a.args.iter().for_each(f),
+        Lit::Eq(a, b)
+        | Lit::Neq(a, b)
+        | Lit::Gt(a, b)
+        | Lit::Ge(a, b)
+        | Lit::Lt(a, b)
+        | Lit::Le(a, b) => {
+            f(a);
+            f(b);
+        }
+    }
+}
+
+/// `t` and every term inside it.
+fn visit(t: &Term, f: &mut dyn FnMut(&Term)) {
+    f(t);
+    match t {
+        Term::Func { args, .. } | Term::List(args) => args.iter().for_each(|x| visit(x, f)),
+        Term::Obj(m) => m.values().for_each(|x| visit(x, f)),
+        Term::ListComp { item, body } => {
+            visit(item, f);
+            for l in body {
+                lit_terms(l, &mut |t| visit(t, f));
+            }
+        }
+        _ => {}
     }
 }
 

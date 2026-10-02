@@ -191,7 +191,9 @@ description and its other keys (`owner`, `since`, `deprecated`, ...);
 `dform doc TARGET` only its program's files (the stack's and every file
 it imports). `dform completions zsh > _dform` completes stack
 names, key values (from the key inputs' enum types) and deployments with
-state.
+state. `dform version` prints dform's version and the release of the time
+zone database built into it (`tzdb 2025b`): a `time`'s zone is read from
+that, never from the host, so a plan is the same on every machine.
 
 State is scoped to a stack. One program is one stack, named after its
 file (`stacks/demo.df` is `demo`), and its operational settings are
@@ -1720,9 +1722,27 @@ deployment (see "Keyed stacks"); `--set` of one is an error. `--input-file FILE.
 allowed_cidrs([inet("10.0.0.0/8")]).`, each a normal contribution stated
 where the file states it; the plan file records each input file's digest.
 
-Types are `int`, `string`, `bool`, `inet`, `enum(a, b, ...)`, `list(T)`,
-`set(T)` and objects `{ k: T }` (`addr`, `ref(...)` and `any` are
-unchecked). `type NAME = TYPE` names a type anywhere a type is written;
+Types are `int`, `string`, `bool`, `inet`, the quantities `bytes`, `cpu`
+and `duration`, `time`, `enum(a, b, ...)`, `list(T)`, `set(T)` and objects
+`{ k: T }` (`addr`, `ref(...)` and `any` are unchecked). A quantity is a
+number with its unit, one token (`512Mi`, `1.5Gi`, `500m`, `2`, `1h30m`,
+`30d`): bytes take binary units only (`20GB` is an error naming `20Gi`),
+a cpu is cores or millicores, `m` is millicores in a cpu position and
+minutes in a duration one (`500m` where nothing gives a type is an error
+naming both; `cpu(500m)`, `duration(30m)` say which). It compares, sums
+and takes a `min`/`max` in its base unit (`limits.memory > 2Gi`),
+scales by a number (`512Mi * 2`), adds only within its dimension, over
+its own dimension is a number (`limits.cpu / requests.cpu <= 4`), and
+prints canonically (`1536Mi`, `2`, `1h30m`), which is also what `"${q}"`
+and `string(q)` give. A provider takes it in the form its schema gives
+the attribute (`bytes(quantity)` Kubernetes's string, `bytes(gib)` whole
+GiB), so `storage = 20Gi` is one spelling for every provider. A `time`
+is a zoned instant, `time("2026-10-02T09:00[Europe/Paris]")` or RFC 3339
+with an offset, compared by its instant; adding a duration is
+calendar-aware in its zone (`time.add(t, 1mo)`, `t + 1d` across a DST
+change is a calendar day). The rotation idiom: `deny "rotate the key" {
+key: k } where k in tls.key, time.before(time.add(k.issued, 90d), now)`,
+`now` an extern's answer, never a function's. `type NAME = TYPE` names a type anywhere a type is written;
 another module's alias is read through its name, `network.subnets`
 (docs/grammar.md "Type aliases"). A `--set` value is read as its input's type (an `inet` parses,
 a `string` takes the text) and checked before evaluation: `--set
@@ -2395,7 +2415,7 @@ share: the time spent in the mock's calls.
 This is an MVP:
 
 - semi-naive evaluator with hash indexes (see Performance)
-- functions declared in `std/*.df` (docs/grammar.md "Functions"): the prelude's constructors `int`, `string`, `inet`, `ip`, `iprange` and `format`, `len`, `ref`, `scoped`, `cloud_ref`, `declassify`; `inet.subnet`, `inet.host`, `inet.addr`, `inet.contains`, `inet.overlaps`, `inet.prefix_len`, `ip.unspecified`, `str.split`, `str.lower`, `str.upper`, `list.len`, `list.join`; arithmetic `+ - * / %`; aggregates `collect_*`, `count`, `sum`, `min`, `max`, `any`, `all`, bound in a body (`n = count(x)`)
+- functions declared in `std/*.df` (docs/grammar.md "Functions"): the prelude's constructors `int`, `string`, `inet`, `ip`, `iprange`, `bytes`, `cpu`, `duration`, `time` and `format`, `len`, `ref`, `scoped`, `cloud_ref`, `declassify`; `inet.subnet`, `inet.host`, `inet.addr`, `inet.contains`, `inet.overlaps`, `inet.prefix_len`, `ip.unspecified`, `str.split`, `str.lower`, `str.upper`, `list.len`, `list.join`, `time.parse`, `time.format`, `time.in_zone`, `time.add`, `time.until`, `time.before`, `duration.parse`, `duration.total`, `bytes.to`, `cpu.to`; arithmetic `+ - * / %`; aggregates `collect_*`, `count`, `sum`, `min`, `max`, `any`, `all`, bound in a body (`n = count(x)`)
 - list helper predicate: `member(List, Item)` and `member(List, Index, Item)` (Index starts at 0)
 - safe(ish) negation: `not` requires the atom be ground at evaluation time
 

@@ -607,7 +607,9 @@ fn value_bytes(v: &Value) -> usize {
             typ.len() + name.len() + attr.len()
         }
         Value::Null { label, ty, .. } => label.len() + ty.len(),
-        Value::Int(_)
+        Value::Time(t) => t.zone.len(),
+        Value::Quantity(_)
+        | Value::Int(_)
         | Value::Bool(_)
         | Value::Ip(_)
         | Value::IpNet { .. }

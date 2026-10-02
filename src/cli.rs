@@ -198,6 +198,9 @@ enum Command {
     /// Make the working directory a project: a minimal dform.toml, and
     /// dform.state/ in the nearest .gitignore.
     Init { name: Option<String> },
+    /// Print dform's version and the release of the time zone database
+    /// built into it (R-62: zones never come from the host).
+    Version,
     /// Print a shell completion script: `dform completions zsh > _dform`.
     /// It completes stack names, key values and deployments by asking
     /// dform.
@@ -667,6 +670,11 @@ pub fn main(
             version: env!("CARGO_PKG_VERSION"),
             real: launch,
         }),
+        Command::Version => {
+            println!("dform {}", env!("CARGO_PKG_VERSION"));
+            println!("tzdb {}", crate::time::tzdb_version());
+            Ok(())
+        }
         _ => resolve(args).and_then(run_command),
     };
     match result {
@@ -968,6 +976,7 @@ fn resolve(args: Args) -> Result<Cli> {
         Command::Complete { words } => (Cmd::Complete { words }, None),
         Command::ServeProvider { .. } => bail!("internal: `__provider` serves before a project"),
         Command::Lsp => bail!("internal: `lsp` serves before a project"),
+        Command::Version => bail!("internal: `version` prints before a project"),
     };
     let inputs = args.inputs;
     let mut cli = Cli {

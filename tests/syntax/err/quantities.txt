@@ -1,0 +1,12 @@
+tests/syntax/err/quantities.df:4:20: input limit is cpu, not the bytes 1Gi
+tests/syntax/err/quantities.df:5:25: input grace is a duration: the int 30 has no unit (`30s`, `30m`, `30h`, `30d`)
+tests/syntax/err/quantities.df:6:21: input size is bytes: `500m` is not bytes: the units are `Ki Mi Gi Ti Pi`, or none for bytes
+tests/syntax/err/quantities.df:9:3: `20GB` is a decimal unit; bytes take binary units: write `20Gi`, or the byte count `20000000000`
+tests/syntax/err/quantities.df:10:3: `512MiB`: bytes have no `B`; write `512Mi`
+tests/syntax/err/quantities.df:11:3: `1.3Gi` is not a whole number of bytes
+tests/syntax/err/quantities.df:13:16: `500m` is not bytes: the units are `Ki Mi Gi Ti Pi`, or none for bytes, where the other side is bytes
+tests/syntax/err/quantities.df:14:16: `1Gi + 2` mixes bytes and a number: a quantity adds, subtracts and compares only with its own dimension
+tests/syntax/err/quantities.df:15:16: `512Mi * 2Gi`: a quantity scales by a number; no operation changes its dimension
+tests/syntax/err/quantities.df:16:16: `2 / 1Gi`: a quantity is divided by a number, or by its own dimension for a ratio
+tests/syntax/err/quantities.df:17:11: `1Gi > 30s` mixes bytes and duration: a quantity adds, subtracts and compares only with its own dimension
+tests/syntax/err/quantities.df:19:3: `3x`: no quantity has the unit `x`; bytes are `Ki Mi Gi Ti Pi`, cpu is cores or `m`, a duration `y mo w d h m s ms us ns`
