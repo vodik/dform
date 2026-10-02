@@ -263,7 +263,7 @@ bindarg    := ("+" | "-") NAME (":" type)?
 input      := "input" NAME ":" type ("=" term)? ("check" body1)?
             | "input" NAME columns "from" term     ; facts(..) | FORMAT(..)
 output     := "output" NAME (":" type)? ("=" term)? ("where" body)?
-let        := "let" NAME "=" term ("where" body)?
+let        := "let" NAME "=" term RANK? ("where" body)?
 set        := "set" chain ("=" | "+=") term RANK? ("where" body)?
 export     := "export" "type" NAME
 module     := "module" NAME stmts
@@ -620,8 +620,8 @@ as it is.
 | `head where body`                         | `head :- body`                                         |
 | `p(t)` with reads in `t`                  | `p(t') :- reads` (a rule)                              |
 | `p(a: x)` (columns `a, b`)                | `p{a: x}`, a record pattern                            |
-| `let k = t [where B]`                     | `k(t') :- B, reads`; with neither, the fact `k(t')`   |
-| `let k = R` (`R` a reference)             | `k(A) :- reads` for `R`'s key; `k.p` reads through it  |
+| `let k = t [@r] [where B]`                | `arg("let", S, "k", t', r) :- B, reads` (`r` normal by default, `S` the scope); `k(V) :- attr("let", S, "k", V)` once per `k` |
+| `let k = R` (`R` a reference)             | the cell holds `R`'s key; `k.p` reads through it       |
 | `type a = T`, `export type a`             | nothing: each use of `a` is `T`                        |
 | `#\| k: v` above an item (Doc comments)  | `doc(Kind, Name, "k", "v")`                            |
 | `provider p { k = t, expect_account = a }` | `provider_config("p", {k: t'}) :- reads`, `provider_expect_account("p", a') :- reads` ("Provider blocks") |
@@ -729,7 +729,6 @@ byte for byte.
   type it does not see (see "Types").
 - `=` binds either side; `==` binds neither (G-28 is about how `fmt` prints
   them; here it decides which one may introduce a variable).
-- A `let` may have several rows; nothing checks it is functional.
 - An `output` with a body, or whose value reads, is the rule
   `output(k, t') :- B, reads`, in a module too.
 - A library (a module or pack file another file imports) reads the
