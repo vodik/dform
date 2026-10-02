@@ -228,7 +228,9 @@ fn syntax_errors_agree() {
     for f in errs() {
         let file = f.file_name().unwrap().to_str().unwrap();
         let src = std::fs::read_to_string(&f).unwrap();
-        let compiler = !parse(&src).errors.is_empty();
+        // A header statement out of place (R-27) parses: tree-sitter reads
+        // the file as the compiler's tree has it, and `fmt` moves it.
+        let compiler = parse(&src).errors.iter().any(|e| !e.misplaced);
         let in_string = STRING_ERRORS.contains(&file);
         assert!(
             !(compiler && in_string),

@@ -15,12 +15,13 @@
 # nulls until the cluster exists.
 
 edition 2026
-provider gke {}
 
 input env: enum("dev", "stg", "prod") = "dev"
 # How many zones the cluster is placed in: two is fewer than the
 # refinement on its zones allows.
 input zones: int = 3 check zones >= 1
+
+provider gke {}
 
 zone_at(1, "us-east1-b")
 zone_at(2, "us-east1-c")

@@ -1,0 +1,13 @@
+edition 2026
+
+# A file is `edition`, its header (`import`, `key`, `input`), then its body:
+# a header statement below the body's first statement is out of place.
+provider fake {}
+key env: string = "dev"
+import "modules/network.df"
+
+resource net.vpc main {
+  cidr = "10.0.0.0/16"
+}
+
+input seen(a) from facts("seen.facts")

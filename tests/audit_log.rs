@@ -249,9 +249,9 @@ fn a_rekey_is_logged_where_the_state_goes() {
         "k.df",
         "edition 2026\n\
          \n\
-         provider fake {}\n\
-         \n\
          key env: string = \"a\"\n\
+         \n\
+         provider fake {}\n\
          \n\
          resource net.vpc main {\n\
            cidr = \"10.0.0.0/16\"\n\

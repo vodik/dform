@@ -6,11 +6,11 @@ tests/syntax/ok/e74_pngu.df
 
 edition 2026
 
+input env: enum("dev", "stg", "prod") = "dev"
+
 provider google { source = "registry.dform.dev/google", version = ">=6" }
 provider kubernetes { source = "registry.dform.dev/kubernetes", version = ">=3" }
 provider file { source = "registry.dform.dev/file" }
-
-input env: enum("dev", "stg", "prod") = "dev"
 
 ########################################
 # Settings: base layer plus per-environment overrides
@@ -251,40 +251,6 @@ output("project_id", id) where project(id, _, _, _)
   (comment)
   (edition
     (integer))
-  (provider
-    (identifier)
-    (block
-      (field
-        (block_path
-          (identifier))
-        (string
-          (string_content)))
-      (field
-        (block_path
-          (identifier))
-        (string
-          (string_content)))))
-  (provider
-    (identifier)
-    (block
-      (field
-        (block_path
-          (identifier))
-        (string
-          (string_content)))
-      (field
-        (block_path
-          (identifier))
-        (string
-          (string_content)))))
-  (provider
-    (identifier)
-    (block
-      (field
-        (block_path
-          (identifier))
-        (string
-          (string_content)))))
   (input
     (identifier)
     (type
@@ -298,6 +264,40 @@ output("project_id", id) where project(id, _, _, _)
         (string_content)))
     (string
       (string_content)))
+  (provider
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))))
+  (provider
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))))
+  (provider
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))))
   (comment)
   (comment)
   (comment)

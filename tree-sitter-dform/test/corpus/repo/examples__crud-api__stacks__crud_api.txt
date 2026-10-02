@@ -24,20 +24,19 @@ examples/crud-api/stacks/crud_api.df
 
 edition 2026
 
-# Sources and versions are dform.toml's.
-provider google {}
-provider kubernetes {}
-provider random {}
-
 input env: enum("dev", "prod") = "dev"
 input region: string = "us-east1"
 input replicas: int = 2 check replicas >= 1
-
 # release("crud_api", "digest", "sha256:9f2c...")
 # release("crud_api", "schema", 42)
 input release(app, key, value) from facts("data/releases.facts")
 # approve(t, a): accept the drift of t.a
 input approve(type, address) from facts("data/approvals.facts")
+
+# Sources and versions are dform.toml's.
+provider google {}
+provider kubernetes {}
+provider random {}
 
 # `provider random {}` brings random.password(+key, -value: secret(string))
 # persist: a generated password, a secret null until the first apply,
@@ -372,16 +371,6 @@ auto_reconcile(t, a, p) where drift(t, a, p, _, _), owned_label(l), p == "metada
   (comment)
   (edition
     (integer))
-  (comment)
-  (provider
-    (identifier)
-    (block))
-  (provider
-    (identifier)
-    (block))
-  (provider
-    (identifier)
-    (block))
   (input
     (identifier)
     (type
@@ -440,6 +429,16 @@ auto_reconcile(t, a, p) where drift(t, a, p, _, _), owned_label(l), p == "metada
       (arguments
         (string
           (string_content)))))
+  (comment)
+  (provider
+    (identifier)
+    (block))
+  (provider
+    (identifier)
+    (block))
+  (provider
+    (identifier)
+    (block))
   (comment)
   (comment)
   (comment)

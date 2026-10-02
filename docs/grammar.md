@@ -23,13 +23,30 @@ parsing resumes after it. One bad statement is one diagnostic.
 ## Files and lines
 
 ```
-file := "edition" INT NL (stmt NL)*
+file   := "edition" INT NL (header NL)* (stmt NL)*
+header := import | key | input        ; in that order: import, key, input, input p(..) from
 ```
 
 Every `.df` file starts with `edition 2026` (comments may come first). A
 file without it is an error that names the pragma; any other year is an
 error too. Text that is not a file (provider schemas, `dform query`
 patterns, tests) may leave the pragma out.
+
+### The header
+
+A file under `stacks/` is a stack named after itself; `key` makes one
+deployment per value. What a file takes is its header, after `edition`
+and before its body: `import` lines, then `key` lines, then `input` lines
+(value inputs, then relation inputs, `input p(..) from ..`). Everything
+else is the body, `provider` included: a provider block is a rule that
+may read values, in scope for the whole program wherever it is written.
+A header statement after the body's first statement is an error that says
+to move it ("`key env` is a header statement: move it above the body's
+first statement, line 5"); `dform fmt` moves it, and puts the header's
+kinds in order, keeping the author's order within a kind. The header
+reads names the body declares: `input env: environment` above `type
+environment = ..` resolves, as every name does, program-wide. A module,
+policy or scenario's statements are its own (R-11a orders them).
 
 The first token decides what a statement is (H-2): a statement keyword
 starts its own statement, and a name followed by `(` is a fact or a rule.
@@ -451,7 +468,7 @@ are a data file's. FORMAT is `csv`, `json`, `yaml` or `toml`; SOURCE is a
 term for the path (a string, holes allowed: a hole is a content position,
 so it reads now) or `git(REPO, REF, PATH)`, each a term. A table's columns
 are typed, with an input's types (`inputs::check_type`), never `secret`.
-Relation inputs are at the top of the program.
+Relation inputs are the last of the file's header (see "The header").
 
 A table lowers to externs (`src/tables.rs`), the source its bound inputs:
 
@@ -739,7 +756,10 @@ sits with the line that opened it. The normal forms:
 - `not { lit }` of one literal whose names are all bound is `not lit`;
 - `=` between two bound sides is `==`;
 - `i = p[k]` with `i` fresh is `p(k, i)`;
-- `env("prod")` for a value name is `env == "prod"`.
+- `env("prod")` for a value name is `env == "prod"`;
+- the header is `import`, `key`, `input`, `input p(..) from`, before the
+  body, each statement with the comments directly above it and on its line
+  (see "The header").
 
 It drops the commas a newline makes redundant (in blocks and `{ }` bodies)
 and the trailing comma of a list or object. A formatted file prints back

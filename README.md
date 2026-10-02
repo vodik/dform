@@ -1593,7 +1593,10 @@ input owner: string                       # required: no default
 type environment = enum("dev", "staging", "prod")   # an alias: the enum wherever it is written
 ```
 
-Each is read as a relation, `env(E)`. An input is a cell of the attribute
+Inputs, keys and imports are the file's header: after `edition`, before
+the body (`import`, then `key`, then `input`), so a file says what it
+takes first; one written below the body is an error, and `dform fmt`
+moves it. Each is read as a relation, `env(E)`. An input is a cell of the attribute
 aggregate: the default is an `@default` contribution, `--set replicas=3`
 a normal one that wins (and `why` shows both). A `key` is an input the
 target gives instead (`dform plan app env=prod`), and its value names the

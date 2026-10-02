@@ -19,6 +19,13 @@ examples/pngu/stacks/pngu.df
 #   files/dashboard-pngu.json (see terraform/modules/monitoring/dashboard-pngu.json).
 
 edition 2026
+
+# The stack's key, typed: `dform plan pngu env=qa` is an error naming it.
+key env: environment = "dev"
+# The rows are data/peerings.csv's, typed column by column: a row whose env
+# is not one of these is an error naming its line.
+input peering(env: environment, name: string, peer_network: string) from csv("data/peerings.csv")
+
 ########################################
 # Schema declarations
 ########################################
@@ -32,9 +39,6 @@ provider file {}
 
 # The environments, one type for the key and the peering table's column.
 type environment = enum("dev", "stg", "prod")
-
-# The stack's key, typed: `dform plan pngu env=qa` is an error naming it.
-key env: environment = "dev"
 
 ########################################
 # Settings (branch-as-data)
@@ -114,12 +118,9 @@ provider gke {
 }
 
 ########################################
-# Peerings (a table: one row per peering, every env's)
+# Peerings: the table `input peering` at the top, one row per peering,
+# every env's
 ########################################
-
-# The rows are data/peerings.csv's, typed column by column: a row whose env
-# is not one of these is an error naming its line.
-input peering(env: environment, name: string, peer_network: string) from csv("data/peerings.csv")
 
 ########################################
 # Validation
@@ -251,6 +252,39 @@ output project_id = cfg.project_id
   (edition
     (integer))
   (comment)
+  (input
+    (identifier)
+    (type
+      (dotted_name
+        (identifier)))
+    (string
+      (string_content)))
+  (comment)
+  (comment)
+  (input_relation
+    (identifier)
+    (columns
+      (field_declaration
+        (identifier)
+        (type
+          (dotted_name
+            (identifier))))
+      (field_declaration
+        (identifier)
+        (type
+          (dotted_name
+            (identifier))))
+      (field_declaration
+        (identifier)
+        (type
+          (dotted_name
+            (identifier)))))
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content)))))
+  (comment)
   (comment)
   (comment)
   (comment)
@@ -272,14 +306,6 @@ output project_id = cfg.project_id
         (string_content))
       (string
         (string_content))))
-  (comment)
-  (input
-    (identifier)
-    (type
-      (dotted_name
-        (identifier)))
-    (string
-      (string_content)))
   (comment)
   (comment)
   (comment)
@@ -508,30 +534,6 @@ output project_id = cfg.project_id
   (comment)
   (comment)
   (comment)
-  (comment)
-  (input_relation
-    (identifier)
-    (columns
-      (field_declaration
-        (identifier)
-        (type
-          (dotted_name
-            (identifier))))
-      (field_declaration
-        (identifier)
-        (type
-          (dotted_name
-            (identifier))))
-      (field_declaration
-        (identifier)
-        (type
-          (dotted_name
-            (identifier)))))
-    (call
-      (identifier)
-      (arguments
-        (string
-          (string_content)))))
   (comment)
   (comment)
   (comment)

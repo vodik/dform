@@ -25,6 +25,12 @@ examples/tour/stacks/tour.df
 
 edition 2026
 
+# A file begins with what it takes, its header (section 4 says more): the
+# stack is this file, `tour`, and the `key` makes one deployment per value
+# of `env`; an `input` is a value given on the command line.
+key env: enum("dev", "prod") = "dev"
+input public_db: bool = false
+
 provider fake {}
 
 # 1. One resource
@@ -116,9 +122,10 @@ resource net.subnet "private-${z}" {
 
 # 4. Settings per environment, and a deployment per environment
 #
-# The stack is named `tour`, after its file, and keyed by `env`: each
-# value of `env` is a deployment of its own, with its own state, where
-# Terraform would use a workspace or a directory per environment. `dform plan` plans the
+# The stack is named `tour`, after its file, and keyed by `env`, the `key`
+# at the top of the file: each value of `env` is a deployment of its own,
+# with its own state, where Terraform would use a workspace or a directory
+# per environment, and the command names it. `dform plan` plans the
 # default, `dev`. A settings block is one environment's values, and `cfg`
 # is the block of the environment being planned. The database takes its
 # backups and redundancy from it, and its subnets from a list of every
@@ -133,10 +140,8 @@ resource net.subnet "private-${z}" {
 #     backup_days = 14
 #     multi_az = true
 #
-# The database also has an `input`, `public_db`: a value to give on the
-# command line. It defaults to false, and section 5 keeps it so.
-
-key env: enum("dev", "prod") = "dev"
+# The database also reads `public_db`, the `input` at the top: a value to
+# give on the command line. It defaults to false, and section 5 keeps it so.
 
 settings dev {
   backup_days = 1
@@ -149,8 +154,6 @@ settings prod {
 }
 
 let cfg = settings[env]
-
-input public_db: bool = false
 
 resource db.postgres orders {
   subnet_ids = [ s.id | s in net.subnet, s.visibility == "private" ]
@@ -189,9 +192,9 @@ deny "a database must not be public" { database: pg } where pg in db.postgres, p
 # has a tag its block does not write. The lines that matter:
 #
 #   $ dform why 'net.vpc["main"].tags.team'
-#   └─ arg("net.vpc", "main", "tags", {team: "shop"}, "normal")   [rank normal, owner r18 (stacks/tour.df:178:1)]
+#   └─ arg("net.vpc", "main", "tags", {team: "shop"}, "normal")   [rank normal, owner r18 (stacks/tour.df:181:1)]
 #        by r18: arg(Type, R, "tags", {team: "shop"}, "normal") :- want(Type, R)
-#        └─ want("net.vpc", "main")   fact, stacks/tour.df:42:1 (want)
+#        └─ want("net.vpc", "main")   fact, stacks/tour.df:48:1 (want)
 #
 # Read it from the top: the tag was added by the rule at line 181 of this
 # file (section 5's), because the network exists, which line 42 says. The
@@ -374,6 +377,26 @@ resource iam.policy "connect-${host}" {
   (comment)
   (edition
     (integer))
+  (comment)
+  (comment)
+  (comment)
+  (input
+    (identifier)
+    (type
+      (dotted_name
+        (identifier))
+      (string
+        (string_content))
+      (string
+        (string_content)))
+    (string
+      (string_content)))
+  (input
+    (identifier)
+    (type
+      (dotted_name
+        (identifier)))
+    (false))
   (provider
     (identifier)
     (block))
@@ -557,17 +580,7 @@ resource iam.policy "connect-${host}" {
   (comment)
   (comment)
   (comment)
-  (input
-    (identifier)
-    (type
-      (dotted_name
-        (identifier))
-      (string
-        (string_content))
-      (string
-        (string_content)))
-    (string
-      (string_content)))
+  (comment)
   (settings
     (identifier)
     (block
@@ -595,12 +608,6 @@ resource iam.policy "connect-${host}" {
     (index_expression
       (identifier)
       (identifier)))
-  (input
-    (identifier)
-    (type
-      (dotted_name
-        (identifier)))
-    (false))
   (resource
     (dotted_name
       (identifier)

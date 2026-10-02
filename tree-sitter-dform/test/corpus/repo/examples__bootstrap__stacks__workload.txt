@@ -20,7 +20,7 @@ examples/bootstrap/stacks/workload.df
 
 edition 2026
 
-provider k8s {}
+input env: enum("dev", "prod") = "dev"
 
 # The release to run, `release(image)`; re-read whenever the file changes.
 input release(image) from facts("data/release.facts")
@@ -29,7 +29,7 @@ input approve(type, address) from facts("data/approvals.facts")
 # `approval(token)`: a signed approval of a plan's digest.
 input approval(token) from facts("data/approvals.facts")
 
-input env: enum("dev", "prod") = "dev"
+provider k8s {}
 
 resource k8s.namespace web {
   metadata.name = "web"
@@ -88,44 +88,6 @@ requires_approval(d, "a prod rollout") where {
   (comment)
   (edition
     (integer))
-  (provider
-    (identifier)
-    (block))
-  (comment)
-  (input_relation
-    (identifier)
-    (columns
-      (field_declaration
-        (identifier)))
-    (call
-      (identifier)
-      (arguments
-        (string
-          (string_content)))))
-  (comment)
-  (input_relation
-    (identifier)
-    (columns
-      (field_declaration
-        (identifier))
-      (field_declaration
-        (identifier)))
-    (call
-      (identifier)
-      (arguments
-        (string
-          (string_content)))))
-  (comment)
-  (input_relation
-    (identifier)
-    (columns
-      (field_declaration
-        (identifier)))
-    (call
-      (identifier)
-      (arguments
-        (string
-          (string_content)))))
   (input
     (identifier)
     (type
@@ -137,6 +99,44 @@ requires_approval(d, "a prod rollout") where {
         (string_content)))
     (string
       (string_content)))
+  (comment)
+  (input_relation
+    (identifier)
+    (columns
+      (field_declaration
+        (identifier)))
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content)))))
+  (comment)
+  (input_relation
+    (identifier)
+    (columns
+      (field_declaration
+        (identifier))
+      (field_declaration
+        (identifier)))
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content)))))
+  (comment)
+  (input_relation
+    (identifier)
+    (columns
+      (field_declaration
+        (identifier)))
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content)))))
+  (provider
+    (identifier)
+    (block))
   (resource
     (dotted_name
       (identifier)

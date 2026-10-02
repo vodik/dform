@@ -4,6 +4,8 @@
 # To run it, from this directory: README.md.
 
 edition 2026
+
+import "modules/network.df"
 input env: enum("staging", "prod") = "staging"
 
 settings staging {
@@ -13,8 +15,6 @@ settings staging {
 settings prod {
   network.vpc_cidr = inet("10.20.0.0/16")
 }
-
-import "modules/network.df"
 
 instance network main {
   vpc_net = settings[env].network.vpc_cidr

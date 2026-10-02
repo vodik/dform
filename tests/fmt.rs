@@ -119,3 +119,24 @@ fn fmt_refuses_a_file_that_does_not_parse() {
     assert!(r.stderr.contains("bad.df:2:"), "{}", r.stderr);
     assert_eq!(s.read("bad.df"), bad);
 }
+
+/// A file's header is `edition`, then `import`, `key` and `input` lines
+/// (value inputs, then relation inputs), then the body (R-27): `fmt`
+/// moves a header statement written below the body, or out of its kind's
+/// order, with the comments above it and on its line, and keeps the
+/// author's order within a kind.
+#[test]
+fn fmt_puts_the_header_in_order() {
+    let src = "# A program.\n\nedition 2026\n\ninput b: int\n# The key.\nkey env: string\n\n\
+               provider fake {}\n\n#| The relation.\ninput p(a) from facts(\"p.facts\")\n\
+               p2(x) where p(x)\nimport \"m.df\" # its modules\ninput a: int\n";
+    let want = "# A program.\n\nedition 2026\n\nimport \"m.df\" # its modules\n# The key.\n\
+                key env: string\ninput b: int\ninput a: int\n#| The relation.\n\
+                input p(a) from facts(\"p.facts\")\n\nprovider fake {}\n\np2(x) where p(x)\n";
+    let got = dform::fmt::format_source("p.df", src).unwrap();
+    assert_eq!(got, want);
+    assert_eq!(dform::fmt::format_source("p.df", &got).unwrap(), got);
+    // Another error is not formatted.
+    let e = dform::fmt::format_source("p.df", &format!("{src}p(\n")).unwrap_err();
+    assert!(format!("{e:#}").contains("p.df:"), "{e:#}");
+}

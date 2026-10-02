@@ -12,6 +12,7 @@
 //! statement, block entry or clause that began on an earlier line. A line
 //! that starts with a closer sits at the depth of the line that opened it.
 
+mod header;
 mod normal;
 
 use crate::syntax::SyntaxKind::{self, *};
@@ -179,19 +180,25 @@ struct Open {
     line: usize,
 }
 
-/// Format a file's source; a file with syntax errors is not formatted.
+/// Format a file's source; a file with syntax errors is not formatted, but
+/// for a header statement after the body began, which is moved (R-27).
 pub fn format_source(name: &str, src: &str) -> anyhow::Result<String> {
     let parse = crate::syntax::parser::parse(src);
-    if !parse.errors.is_empty() {
+    if parse.errors.iter().any(|e| !e.misplaced) {
         return Err(crate::parser::syntax_diagnostics(name, src, &parse).into());
     }
     Ok(format(&parse.syntax()))
 }
 
-/// Format a parsed file: its normal forms, then its layout. The tree must
-/// be free of syntax errors.
+/// Format a parsed file: its header in order (R-27), its normal forms,
+/// then its layout. The tree must be free of syntax errors but for a
+/// header statement out of place.
 pub fn format(root: &SyntaxNode) -> String {
-    let mut out = print(root);
+    let placed = header::reorder(root, &root.to_string())
+        .map(|src| crate::syntax::parser::parse(&src))
+        .filter(|p| p.errors.is_empty());
+    let root = placed.as_ref().map_or(root.clone(), |p| p.syntax());
+    let mut out = print(&root);
     // A normal form can make another one apply (a body joined onto its
     // line compares what the line before it bound): to a fixpoint, bounded.
     for _ in 0..4 {

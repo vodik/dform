@@ -13,11 +13,12 @@ examples/gke/stacks/gke_two_phase.df
 # To run it, from this directory: README.md.
 
 edition 2026
-provider gke {}
 
 input env: enum("dev", "stg", "prod") = "dev"
 # How many zones the cluster is placed in.
 input zones: int = 2 check zones >= 1
+
+provider gke {}
 
 zone_at(1, "us-east1-b")
 zone_at(2, "us-east1-c")
@@ -126,9 +127,6 @@ deny "cluster must not be deletable" { cluster: c } where {
   (comment)
   (edition
     (integer))
-  (provider
-    (identifier)
-    (block))
   (input
     (identifier)
     (type
@@ -154,6 +152,9 @@ deny "cluster must not be deletable" { cluster: c } where {
         (comparison
           (identifier)
           (integer)))))
+  (provider
+    (identifier)
+    (block))
   (fact
     (call
       (identifier)

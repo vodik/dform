@@ -1147,8 +1147,8 @@ fn a_kubeconfig_held_as_a_secret_configures_the_provider() {
     .to_string();
     let program = |settings: &str| {
         format!(
-            "edition 2026\nprovider k8s {{ source = \"./providers/k8s\" }}\n\
-             input kubeconfig: secret(string)\n\
+            "edition 2026\ninput kubeconfig: secret(string)\n\
+             provider k8s {{ source = \"./providers/k8s\" }}\n\
              provider_config(\"kubernetes\", {settings}) where kubeconfig(k)\n\
              resource k8s.config_map settings {{\n  metadata.name = \"settings\"\n  \
              data = {{ \"MODE\": \"test\" }}\n}}\n"
@@ -1446,8 +1446,8 @@ fn a_held_secret_is_read_from_the_cluster() {
     s.write(
         "a.df",
         "edition 2026\n\
-         provider k8s { source = \"./providers/k8s\" }\n\
          input pw: secret(string)\n\
+         provider k8s { source = \"./providers/k8s\" }\n\
          resource k8s.secret creds {\n\
            metadata.name = \"creds\"\n\
            stringData = { pw: p }\n\

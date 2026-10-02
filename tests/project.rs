@@ -8,8 +8,8 @@ use common::Scratch;
 use std::path::PathBuf;
 
 const APP: &str = r#"edition 2026
-provider fake {}
 key env: enum("staging", "prod") = "staging"
+provider fake {}
 resource net.vpc main {
   cidr = "10.0.0.0/16"
   tags = { env }
@@ -228,7 +228,7 @@ fn a_program_imports_modules_never_a_stack() {
     let s = project("target-import-stack");
     s.write(
         "stacks/both.df",
-        "edition 2026\nprovider fake {}\nimport \"stacks/net.df\"\n",
+        "edition 2026\nimport \"stacks/net.df\"\nprovider fake {}\n",
     );
     let r = s.run(&["plan", "both"]).failure();
     assert!(
@@ -246,7 +246,7 @@ fn a_program_imports_modules_never_a_stack() {
     );
     s.write(
         "stacks/both.df",
-        "edition 2026\nprovider fake {}\nimport \"modules/tags.df\"\n",
+        "edition 2026\nimport \"modules/tags.df\"\nprovider fake {}\n",
     );
     let r = s.run(&["plan", "both"]).success();
     assert!(r.stdout.contains("+ net.vpc[\"extra\"]"), "{}", r.stdout);
@@ -596,10 +596,10 @@ fn program_paths_resolve_from_the_root() {
     s.write(
         "stacks/paths.df",
         r#"edition 2026
-provider cloud { source = "providers/cloud" }
-provider file {}
 input peer(name: string) from csv("data/peers.csv")
 input tag(t) from facts("data/tags.facts")
+provider cloud { source = "providers/cloud" }
+provider file {}
 note(v) where v = file.text["data/note.txt"]
 resource x.thing "${n}" {
   label = "${n}-${g}-${v}"

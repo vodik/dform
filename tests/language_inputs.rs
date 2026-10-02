@@ -233,8 +233,8 @@ fn set_reads_a_file_as_the_inputs_type() {
     s.write(
         "p.df",
         r#"edition 2026
-provider fake {}
 input db: { size: int, net: inet, zones: list(string) }
+provider fake {}
 resource net.vpc main {
   cidr = inet.subnet(db.net, 8, db.size)
   zones = db.zones

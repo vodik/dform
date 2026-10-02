@@ -6,11 +6,17 @@
 
 edition 2026
 
-provider fake { source = "./providers/fake" }
-
+import "modules/network.df"
+import "modules/database.df"
+import "modules/kubernetes.df"
+import "modules/iam.df"
+import "modules/stdlib_net.df"
+import "policies/baseline.df"
 # Typed stack input with a default. The default is a @default contribution
 # to input env; --set env=prod is a normal contribution and wins.
 input env: enum("dev", "staging", "prod") = "staging"
+
+provider fake { source = "./providers/fake" }
 
 zone("us-test-1a")
 zone("us-test-1b")
@@ -49,13 +55,6 @@ settings prod {
   k8s = { private_api: true, nodepool: { min: 3, max: 10 } }
   audit.sinks += ["cloudwatch"] # Set path: unions with the policy pack's ["s3"]
 }
-
-import "modules/network.df"
-import "modules/database.df"
-import "modules/kubernetes.df"
-import "modules/iam.df"
-import "modules/stdlib_net.df"
-import "policies/baseline.df"
 
 use baseline
 use stdlib_net

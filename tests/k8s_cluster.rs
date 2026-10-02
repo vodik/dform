@@ -488,8 +488,8 @@ fn a_kubeconfig_held_as_a_secret_configures_the_provider() {
     s.write(
         "p.df",
         &format!(
-            "edition 2026\nprovider k8s {{ source = \"./providers/k8s\" }}\n\
-             input kubeconfig: secret(string)\n\
+            "edition 2026\ninput kubeconfig: secret(string)\n\
+             provider k8s {{ source = \"./providers/k8s\" }}\n\
              provider_config(\"kubernetes\", {{ kubeconfig: k }}) where kubeconfig(k)\n\
              resource k8s.namespace test {{\n  metadata.name = \"{}\"\n}}\n",
             ns.name

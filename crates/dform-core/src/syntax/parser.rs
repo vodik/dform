@@ -22,6 +22,9 @@ pub struct ParseError {
     pub end: usize,
     pub message: String,
     pub hint: Option<String>,
+    /// A header statement written after the body began (R-27): the
+    /// statement parsed, and `fmt` moves it.
+    pub misplaced: bool,
 }
 
 pub struct Parse {
@@ -84,6 +87,12 @@ fn term_name(k: SyntaxKind) -> bool {
 /// Any word: a key, a path segment, a declared name.
 fn word(k: SyntaxKind) -> bool {
     k == IDENT || k.is_keyword()
+}
+
+/// A statement of a file's header (R-27): what the program takes, before
+/// its body.
+fn header_stmt(k: SyntaxKind) -> bool {
+    matches!(k, IMPORT_KW | KEY_KW | INPUT_KW)
 }
 
 fn is_cmp(k: SyntaxKind) -> bool {
@@ -335,6 +344,7 @@ impl<'a> Parser<'a> {
             end,
             message,
             hint,
+            misplaced: false,
         });
     }
 
@@ -496,6 +506,9 @@ impl<'a> Parser<'a> {
     /// Statements, one per line, up to the end of the file or of a
     /// `{ ... }` block.
     fn stmts(&mut self, in_block: bool) {
+        // A file's header, `import`, `key` and `input` lines, comes before
+        // its body (R-27): the byte offset of the body's first statement.
+        let mut body: Option<usize> = None;
         loop {
             self.eat_nl();
             match self.nth(0) {
@@ -508,12 +521,51 @@ impl<'a> Parser<'a> {
             self.flush_trivia();
             let start = self.pos;
             self.stmt_start = self.toks.get(start).map_or(self.src.len(), |t| t.start);
+            let header = header_stmt(self.nth(0)) && !self.at_head();
+            if !in_block && !header && self.nth(0) != EDITION_KW {
+                body.get_or_insert(self.stmt_start);
+            }
+            let misplaced = body
+                .filter(|_| !in_block && header)
+                .map(|b| self.misplaced(b));
             let ok = self.stmt().and_then(|()| self.stmt_end(in_block));
+            // Only a statement that parsed is out of place.
+            if ok.is_ok()
+                && let Some(e) = misplaced
+            {
+                self.errors.push(e);
+            }
             if ok.is_err() {
                 self.close_to(depth);
                 self.nl.truncate(nl);
                 self.recover(start, in_block);
             }
+        }
+    }
+
+    /// A header statement after the body's first statement (at byte
+    /// `body`): an error that says to move it.
+    fn misplaced(&self, body: usize) -> ParseError {
+        let i = self.nth_index(0).expect("a statement");
+        let name = self.nth_text(1);
+        let what = match self.raw(2) {
+            L_PAREN => format!("{} {name}(..)", self.nth_text(0)),
+            _ => format!("{} {name}", self.nth_text(0)),
+        };
+        let line = self.src[..body].matches('\n').count() + 1;
+        ParseError {
+            start: self.toks[i].start,
+            end: self.toks[i].end,
+            message: format!(
+                "`{what}` is a header statement: move it above the body's first statement, \
+                 line {line}"
+            ),
+            hint: Some(
+                "a file is `edition`, then its header (`import`, `key`, `input`), then its \
+                 body; `dform fmt` moves it"
+                    .to_string(),
+            ),
+            misplaced: true,
         }
     }
 
@@ -1711,12 +1763,44 @@ mod tests {
 
     #[test]
     fn declarations_by_their_columns() {
-        let src = "decl p(a, b: int) mixed\ninput q(a: string) from csv(\"q.csv\")\n\
+        let src = "input q(a: string) from csv(\"q.csv\")\ndecl p(a, b: int) mixed\n\
                    output k: int = 1 where p(1, 2)\n";
         assert!(errors(src).is_empty(), "{:?}", errors(src));
         assert_eq!(
             kinds(src, &[DECL, INPUT_RELATION, OUTPUT_DECL]),
-            vec![DECL, INPUT_RELATION, OUTPUT_DECL]
+            vec![INPUT_RELATION, DECL, OUTPUT_DECL]
+        );
+    }
+
+    /// A file is `edition`, its header, then its body (R-27): a header
+    /// statement after the body began is an error that says to move it;
+    /// a module's statements are its own.
+    #[test]
+    fn the_header_comes_before_the_body() {
+        let src = "edition 2026\nimport \"a.df\"\nkey env: string\ninput n: int\n\
+                   input p(a) from facts(\"p.facts\")\nprovider fake {}\np(1)\nmodule m {\n  r(1)\n  input k: int\n}\n";
+        assert!(errors(src).is_empty(), "{:?}", errors(src));
+        let src =
+            "edition 2026\nprovider fake {}\nkey env: string\nq(1)\ninput p(a) from facts(\"p\")\n";
+        let e = parse(src).errors;
+        let got: Vec<(&str, bool)> = e
+            .iter()
+            .map(|e| (e.message.as_str(), e.misplaced))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                (
+                    "`key env` is a header statement: move it above the body's first statement, \
+                     line 2",
+                    true
+                ),
+                (
+                    "`input p(..)` is a header statement: move it above the body's first \
+                     statement, line 2",
+                    true
+                ),
+            ]
         );
     }
 

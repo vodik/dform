@@ -9,8 +9,8 @@ use common::{Backend, Run, Scratch};
 /// The mock (`fake`) configured per env: its account from the
 /// environment, the account each env expects from its settings row.
 const APP: &str = r#"edition 2026
-type environment = enum("dev", "prod")
 key env: environment = "dev"
+type environment = enum("dev", "prod")
 provider env {}
 provider fake {
   account = env.var("FAKE_ACCOUNT_${env}")

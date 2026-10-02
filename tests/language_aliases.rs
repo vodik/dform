@@ -32,18 +32,20 @@ fn load_error(s: &Scratch, entry: &str) -> String {
     }
 }
 
+/// An input in the header reads an alias the body declares below it:
+/// resolution is program-wide (R-27).
 #[test]
 fn an_alias_is_its_type() {
     let s = Scratch::new("alias-transparent");
     s.write(
         "p.df",
         "edition 2026\n\
-         type environment = enum(\"dev\", \"prod\")\n\
-         type envs = list(environment)\n\
          input env: environment = \"dev\"\n\
          input all: envs = [\"dev\"]\n\
          input rec: { e: environment } = { e: \"dev\" }\n\
          input peering(env: environment, name: string) from csv(\"p.csv\")\n\
+         type environment = enum(\"dev\", \"prod\")\n\
+         type envs = list(environment)\n\
          ",
     );
     assert_eq!(
@@ -66,7 +68,7 @@ fn an_enum_member_is_a_value_not_an_alias() {
     let s = Scratch::new("alias-enum");
     s.write(
         "p.df",
-        "edition 2026\ntype dev = enum(\"a\")\ninput env: enum(dev, prod) = \"dev\"\n",
+        "edition 2026\ninput env: enum(dev, prod) = \"dev\"\ntype dev = enum(\"a\")\n",
     );
     assert_eq!(input_types(&s, "p.df"), vec!["env: enum(dev, prod)"]);
 }
@@ -76,13 +78,13 @@ fn a_cycle_is_an_error_naming_both() {
     let s = Scratch::new("alias-cycle");
     s.write(
         "p.df",
-        "edition 2026\ntype a = list(b)\ntype b = set(a)\ninput x: a\n",
+        "edition 2026\ninput x: a\ntype a = list(b)\ntype b = set(a)\n",
     );
     let e = load_error(&s, "p.df");
     assert!(e.contains("type alias cycle: a -> b -> a"), "{e}");
-    assert!(e.contains("p.df:2") && e.contains("p.df:3"), "{e}");
+    assert!(e.contains("p.df:3") && e.contains("p.df:4"), "{e}");
     let s = Scratch::new("alias-self");
-    s.write("p.df", "edition 2026\ntype a = list(a)\ninput x: a\n");
+    s.write("p.df", "edition 2026\ninput x: a\ntype a = list(a)\n");
     let e = load_error(&s, "p.df");
     assert!(e.contains("type alias cycle: a -> a"), "{e}");
 }
@@ -90,7 +92,7 @@ fn a_cycle_is_an_error_naming_both() {
 #[test]
 fn an_alias_may_not_take_a_builtin_name() {
     let s = Scratch::new("alias-builtin");
-    s.write("p.df", "edition 2026\ntype int = string\ninput x: int\n");
+    s.write("p.df", "edition 2026\ninput x: int\ntype int = string\n");
     let e = load_error(&s, "p.df");
     assert!(
         e.contains("type alias `int` takes the name of a built-in type"),
