@@ -1,5 +1,5 @@
 //! Type aliases (docs/grammar.md "Type aliases"): `type NAME = TYPE` at a
-//! file's top level or in a module, policy or scenario. An alias is
+//! file's top level or in a module or policy. An alias is
 //! transparent: each use is its type, expanded while lowering, so nothing
 //! after the resolver sees one.
 //!
@@ -120,7 +120,7 @@ impl Lowerer<'_> {
                     }
                     exports.push((word_text(&n, 2), span));
                 }
-                MODULE | POLICY | SCENARIO => {
+                MODULE | POLICY => {
                     let start: u32 = n.text_range().start().into();
                     let inner = self.decls.blocks[&(file, start)];
                     if let Some(b) = node(&n, STMT_BLOCK) {
@@ -196,11 +196,11 @@ impl Lowerer<'_> {
         }
     }
 
-    /// The scope a node of the current file is in: its module's, policy's
-    /// or scenario's, else the file's.
+    /// The scope a node of the current file is in: its module's or
+    /// policy's, else the file's.
     fn scope_of_node(&self, n: &SyntaxNode) -> usize {
         n.ancestors()
-            .find(|a| matches!(a.kind(), MODULE | POLICY | SCENARIO))
+            .find(|a| matches!(a.kind(), MODULE | POLICY))
             .and_then(|a| {
                 let start: u32 = a.text_range().start().into();
                 self.decls.blocks.get(&(self.file, start)).copied()

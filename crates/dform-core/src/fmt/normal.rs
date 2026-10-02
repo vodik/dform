@@ -347,7 +347,7 @@ impl Ctx<'_> {
                     self.header(n);
                 }
             }
-            MODULE | POLICY | SCENARIO => {
+            MODULE | POLICY => {
                 if let Some(b) = n.children().find(|c| c.kind() == STMT_BLOCK) {
                     for s in b.children() {
                         self.stmt(&s);

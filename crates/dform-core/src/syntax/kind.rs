@@ -58,7 +58,6 @@ pub enum SyntaxKind {
     INSTANCE_KW,
     POLICY_KW,
     USE_KW,
-    SCENARIO_KW,
     RESOURCE_KW,
     SETTINGS_KW,
     DENY_KW,
@@ -104,7 +103,6 @@ pub enum SyntaxKind {
     INSTANCE,
     POLICY,
     USE,
-    SCENARIO,
     RESOURCE,
     SETTINGS,
     /// `{ entry* }` of a resource, settings, instance or provider.
@@ -112,7 +110,7 @@ pub enum SyntaxKind {
     /// `path (=|+=) term [rank]` in a block.
     ASSIGN,
     BLOCK_PATH,
-    /// `{ stmt* }` of a module, policy or scenario.
+    /// `{ stmt* }` of a module or policy.
     STMT_BLOCK,
     RULE,
     FACT,

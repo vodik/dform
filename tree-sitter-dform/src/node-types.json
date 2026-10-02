@@ -110,10 +110,6 @@
         "named": true
       },
       {
-        "type": "scenario",
-        "named": true
-      },
-      {
         "type": "set",
         "named": true
       },
@@ -1666,32 +1662,6 @@
     }
   },
   {
-    "type": "scenario",
-    "named": true,
-    "fields": {
-      "body": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "statement_block",
-            "named": true
-          }
-        ]
-      },
-      "name": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "identifier",
-            "named": true
-          }
-        ]
-      }
-    }
-  },
-  {
     "type": "set",
     "named": true,
     "fields": {
@@ -2239,10 +2209,6 @@
   },
   {
     "type": "resource",
-    "named": false
-  },
-  {
-    "type": "scenario",
     "named": false
   },
   {

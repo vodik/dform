@@ -118,6 +118,10 @@ fn old_spelling(word: &str) -> Option<&'static str> {
             "`contributes` is gone (R-5): a write needs no grant, delete the line; a module's \
              relation reaches the stack through an output"
         }
+        "scenario" => {
+            "`scenario` is gone (R-32): the program's denies are its tests, and `dform test` \
+             runs them over the inputs' values; a what-if plan is `plan --set k=v`"
+        }
         "stack" => {
             "the `stack` statement is gone (R-29): a file under stacks/ is a stack named after \
              itself, `key env: T` keys it, and dform.toml's `[stacks.NAME]` holds its settings"
@@ -769,12 +773,8 @@ impl<'a> Parser<'a> {
                 }
                 Ok(())
             }),
-            MODULE_KW | POLICY_KW | SCENARIO_KW => {
-                let kind = match k {
-                    MODULE_KW => MODULE,
-                    POLICY_KW => POLICY,
-                    _ => SCENARIO,
-                };
+            MODULE_KW | POLICY_KW => {
+                let kind = if k == MODULE_KW { MODULE } else { POLICY };
                 self.simple(kind, |p| {
                     p.expect_word()?;
                     p.stmt_block()
@@ -1671,6 +1671,10 @@ mod tests {
                 "`contributes` is gone",
             ),
             ("stack shop[env] {}\n", "`key env: T` keys it"),
+            (
+                "scenario prod {\n  set env = \"prod\"\n}\n",
+                "`scenario` is gone (R-32)",
+            ),
             ("key p(a) from csv(\"p.csv\")\n", "a relation is not a key"),
             (
                 "input relation p/2 from file(\"x\")\n",

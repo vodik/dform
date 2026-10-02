@@ -88,7 +88,6 @@ fn reject_pending(stmts: &[Stmt]) -> Result<()> {
     enum At {
         Top,
         Module,
-        Nested,
     }
     fn walk(stmts: &[Stmt], at: At, diags: &mut Vec<Diagnostic>) {
         for s in stmts {
@@ -103,19 +102,6 @@ fn reject_pending(stmts: &[Stmt]) -> Result<()> {
                 }
                 Stmt::Module(d) => walk(&d.body, At::Module, diags),
                 Stmt::PolicyPack(p) => walk(&p.body, At::Module, diags),
-                Stmt::Input(i) if at == At::Nested => diags.push(misplaced(
-                    i.span,
-                    "an input is declared at the top of a module",
-                )),
-                Stmt::Output(o) if at == At::Nested => diags.push(misplaced(
-                    o.span,
-                    "an output is declared at the top of a module or the program",
-                )),
-                Stmt::Scenario(sc) if at != At::Top => diags.push(misplaced(
-                    sc.span,
-                    "a scenario belongs at the top of the program",
-                )),
-                Stmt::Scenario(sc) => walk(&sc.body, At::Nested, diags),
                 Stmt::ExternFn(e) if at != At::Top => diags.push(misplaced(
                     e.span,
                     "`extern` belongs at the top of the program",
@@ -1156,7 +1142,7 @@ fn drop_metadata(program: &Program) -> (Program, BTreeSet<Extern>, Vec<crate::as
             Stmt::Decl(_) => {
                 // lowered away by apply_decls
             }
-            Stmt::Output(_) | Stmt::Stack(_) | Stmt::Provider(_) | Stmt::Scenario(_) => {
+            Stmt::Output(_) | Stmt::Stack(_) | Stmt::Provider(_) => {
                 // declarations: the interface and the stack, not rules
             }
             _ => statements.push(s.clone()),

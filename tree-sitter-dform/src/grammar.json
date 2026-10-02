@@ -135,10 +135,6 @@
         },
         {
           "type": "SYMBOL",
-          "name": "scenario"
-        },
-        {
-          "type": "SYMBOL",
           "name": "resource"
         },
         {
@@ -1063,31 +1059,6 @@
         {
           "type": "STRING",
           "value": "policy"
-        },
-        {
-          "type": "FIELD",
-          "name": "name",
-          "content": {
-            "type": "SYMBOL",
-            "name": "_word"
-          }
-        },
-        {
-          "type": "FIELD",
-          "name": "body",
-          "content": {
-            "type": "SYMBOL",
-            "name": "statement_block"
-          }
-        }
-      ]
-    },
-    "scenario": {
-      "type": "SEQ",
-      "members": [
-        {
-          "type": "STRING",
-          "value": "scenario"
         },
         {
           "type": "FIELD",
@@ -2401,10 +2372,6 @@
               },
               {
                 "type": "STRING",
-                "value": "scenario"
-              },
-              {
-                "type": "STRING",
                 "value": "resource"
               },
               {
@@ -3149,10 +3116,6 @@
                 {
                   "type": "STRING",
                   "value": "use"
-                },
-                {
-                  "type": "STRING",
-                  "value": "scenario"
                 },
                 {
                   "type": "STRING",

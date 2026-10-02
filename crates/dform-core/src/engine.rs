@@ -3054,7 +3054,7 @@ const REFERENCE: &[Reference] = &[
         "set",
         Kw,
         "set REFERENCE.PATH (= | +=) TERM @RANK? (where BODY)?",
-        "A contribution to a block declared elsewhere, a settings leaf, or an input (in a scenario).",
+        "A contribution to a block declared elsewhere, a settings leaf, or an input (under a `where`).",
         "set r.tags.team = \"platform\" @default where r in resource",
     ),
     r(
@@ -3091,13 +3091,6 @@ const REFERENCE: &[Reference] = &[
         "use POLICY",
         "Apply a policy pack to the program.",
         "use baseline",
-    ),
-    r(
-        "scenario",
-        Kw,
-        "scenario NAME { set KEY = VALUE, STATEMENTS }",
-        "Policy over hypothetical inputs: `dform test` runs every scenario.",
-        "scenario prod { set env = \"prod\" }",
     ),
     r(
         "resource",

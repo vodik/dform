@@ -45,8 +45,8 @@ to move it ("`key env` is a header statement: move it above the body's
 first statement, line 5"); `dform fmt` moves it, and puts the header's
 kinds in order, keeping the author's order within a kind. The header
 reads names the body declares: `input env: environment` above `type
-environment = ..` resolves, as every name does, program-wide. A module,
-policy or scenario's statements are its own (R-11a orders them).
+environment = ..` resolves, as every name does, program-wide. A module's
+or policy's statements are its own (R-11a orders them).
 
 The first token decides what a statement is (H-2): a statement keyword
 starts its own statement, and a name followed by `(` is a fact or a rule.
@@ -80,7 +80,7 @@ Statement keywords, recognised only as the first token of a statement (21):
 ```
 edition  import  provider  key  type  decl  extern
 input  output  let  set  export
-module  instance  policy  use  scenario
+module  instance  policy  use
 resource  settings  deny  warn
 ```
 
@@ -140,7 +140,7 @@ What a doc comment may document, and the `Kind` and `Name` of its facts:
 
 | statement                                   | Kind        | Name                  |
 |---------------------------------------------|-------------|-----------------------|
-| `module m`, `policy p`, `scenario s`        | `module`, `policy`, `scenario` | `m`, `p`, `s` |
+| `module m`, `policy p`                      | `module`, `policy` | `m`, `p`      |
 | `input k`, `key k`                          | `input`     | `k`                   |
 | `output k`                                  | `output`    | `k`                   |
 | `decl p(..)`, `extern p(..)`, `input p(..) from ..` | `predicate` | `p` |
@@ -148,7 +148,7 @@ What a doc comment may document, and the `Kind` and `Name` of its facts:
 | `type a = T`                                | `alias`     | `a`                   |
 | `resource T n`, `resource T "n-${e}"`       | `resource`  | `T["n"]`, `T["n-${e}"]` (as written) |
 
-Inside a module, policy or scenario the name is `BLOCK.NAME`
+Inside a module or policy the name is `BLOCK.NAME`
 (`network.vpc_net`). Each pair lowers to a fact of the compiler's own
 relation `doc/4`, spanned at the comment: `doc(Kind, Name, Key, Value)`,
 so a policy can read and require them (`deny "a module has no owner" {
@@ -196,7 +196,7 @@ several, and never an error for a key that is not there.
 
 A name followed by `(` is a relation, a builtin or an extern. Any other
 chain `name (.seg | [terms])*` is resolved from its first name, innermost
-scope first (rule, then module, pack or scenario, then file, then
+scope first (rule, then module or pack, then file, then
 program):
 
 1. a typed variable (`x` after `x in T`): a reference;
@@ -291,7 +291,6 @@ module     := "module" NAME stmts
 instance   := "instance" NAME NAME block? ("where" body)?
 policy     := "policy" NAME stmts
 use        := "use" NAME
-scenario   := "scenario" NAME stmts
 resource   := "resource" DOTTED hname RANK? block ("where" body)?
 settings   := "settings" hname RANK? block ("where" body)?
 deny, warn := ("deny" | "warn") STRING object? ("where" body)?
@@ -336,8 +335,9 @@ attribute, a settings row's leaf, or an input (a stack input, or a module
 instance's). A `set` with no `where` on a resource, settings row or instance
 declared in the same scope is an error that names the block to write the
 entry in; a top-level `set` of the program's own input is an error too
-(give it a default, or pass `--set`). In a scenario, `set env = "prod"` is
-what `--set env=prod` is on the command line.
+(give it a default, or pass `--set`). `scenario` is gone (R-32): the
+program's denies are its tests, and `dform test` runs them over the
+inputs' values; a what-if plan is `plan --set k=v`.
 
 `let k = t [@rank] [where B]` is a value (H-6), a cell of the attribute
 aggregate like an input (R-3): each row contributes to the cell `(let,
@@ -386,7 +386,7 @@ env=prod`), never `--set` (an error naming the target form), it may not
 be `secret`, and its value names the deployment, with its own state.
 Several `key` lines make a composite key in source order
 (`shop[env=prod,region=eu]`). A key is declared at the top of the stack's
-file, never in a module, policy or scenario. `stack`, the statement of an
+file, never in a module or policy. `stack`, the statement of an
 earlier surface, is an error that says so.
 
 ### Stack settings
@@ -465,7 +465,7 @@ not take a built-in type's name (`int`, `string`, `bool`, `inet`,
 `symbol`, `addr`, `any`, `enum`, `list`, `set`, `secret`, `ref`).
 
 Where an alias is in scope: in its file, and in every file that imports
-that file, however indirectly; an alias in a module, policy or scenario is
+that file, however indirectly; an alias in a module or policy is
 that block's, until the module says `export type NAME`, which puts it in
 its file's scope too. `export type` outside a module is an error, and so
 is exporting a name the module does not declare. Two aliases of one name
@@ -687,7 +687,7 @@ as it is.
 | `resource T "a-${e}" { .. }`              | name `Addr`, `Addr = format("a-%s", e')` last          |
 | `settings n @r { .. } where B`            | `settings n @r { .. } :- B, reads`                     |
 | `instance m i { k = t } where B`          | `instance m i { k = t' } :- B, reads`                  |
-| `set k = v` (in a scenario)               | `input("k", v)`                                        |
+| `set k = v where B`                       | `input("k", v) :- B`                                   |
 | `set m.i.k = v [where B]`                 | the instance input `k`'s contribution                  |
 | `deny "m" {o} where B`                    | `deny("m", {o}) :- B` (`warn` the same)                |
 | `deny "a ${x}" where B`                   | `deny(M, ..) :- B, M = format("a %s", X)`              |
@@ -733,7 +733,7 @@ as it is.
 anything but `true`; it does not check that `R` exists (G-13). Write
 `R in T` beside it when that matters.
 
-The module, pack and scenario constructs keep their meaning: a module's
+The module and pack constructs keep their meaning: a module's
 predicates are private per instance (a value leaves through an output), an input
 `k` of module `m` is `m.i::k(V) :- attr(input, "m.i", k, V)` with its
 default at `@default`, a top-level input also takes `--set`, a pack's body

@@ -26,7 +26,7 @@ const IDENT = /[A-Za-z_][A-Za-z0-9_]*/;
 const STATEMENT_KEYWORDS = [
   'edition', 'import', 'provider', 'key', 'type', 'decl', 'extern',
   'input', 'output', 'let', 'set', 'export', 'module', 'instance',
-  'policy', 'use', 'scenario', 'resource', 'settings', 'deny', 'warn',
+  'policy', 'use', 'resource', 'settings', 'deny', 'warn',
 ];
 
 // The body words, the clause word, the reserved `if` and the literals:
@@ -120,7 +120,6 @@ export default grammar({
       $.instance,
       $.policy,
       $.use,
-      $.scenario,
       $.resource,
       $.settings,
       $.check,
@@ -255,8 +254,6 @@ export default grammar({
     module: $ => seq('module', field('name', $._word), field('body', $.statement_block)),
 
     policy: $ => seq('policy', field('name', $._word), field('body', $.statement_block)),
-
-    scenario: $ => seq('scenario', field('name', $._word), field('body', $.statement_block)),
 
     instance: $ => seq(
       'instance',

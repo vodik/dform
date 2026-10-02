@@ -106,7 +106,6 @@ const SAME: &[(SyntaxKind, &[&str])] = &[
     (INSTANCE, &["instance"]),
     (POLICY, &["policy"]),
     (USE, &["use"]),
-    (SCENARIO, &["scenario"]),
     (LET, &["let"]),
     (SET, &["set"]),
     (RESOURCE, &["resource"]),
@@ -423,7 +422,7 @@ fn edge_cases_agree() {
         "type db.pg {\n  backup_days: int required check 1 <= backup_days\n  net: { cidr: inet, id: string computed id }\n}\n",
         "type zone = enum(\"a\", \"b\")\n",
         "import \"a.df\"\n",
-        "use p\nlet cfg = settings[env]\nscenario s {\n  set env = \"prod\"\n}\n",
+        "use p\nlet cfg = settings[env]\n",
         // Strings.
         "p(\"a ${x} $${b} {c} \\\"c\\\" \\u{41}\") where q(x)\n",
         "p(\"# not a comment\")\n",

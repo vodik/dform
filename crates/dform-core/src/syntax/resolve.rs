@@ -25,7 +25,7 @@ use super::{SyntaxNode, SyntaxToken};
 use crate::ast::{
     ApplyPolicy, Atom, AttrDecl, BindArg, Config, Decl, Extern, ExternFn, FieldAssign, FieldOp,
     Import, InputDecl, InputRelation, Instance, Lit, Module, OutputDecl, Pending, PendingKind,
-    PolicyPack, Program, Rank, Resource, RuleStmt, Scenario, Settings, Span, Stmt, Term, TypeExpr,
+    PolicyPack, Program, Rank, Resource, RuleStmt, Settings, Span, Stmt, Term, TypeExpr,
 };
 use crate::diag::Diagnostic;
 use crate::value::Value;
@@ -199,7 +199,7 @@ struct Decls {
     scopes: Vec<Scope>,
     /// The scope of each file's top level, by source id.
     files: BTreeMap<u32, usize>,
-    /// The scope of a module, policy or scenario block, by (file, offset).
+    /// The scope of a module or policy block, by (file, offset).
     blocks: BTreeMap<(u32, u32), usize>,
     modules: BTreeMap<String, usize>,
     instances: BTreeMap<String, BTreeSet<String>>,
@@ -217,8 +217,6 @@ struct Decls {
     relations: BTreeSet<String>,
     /// `extern` relations: their columns, `(input, name)`.
     externs: BTreeMap<String, Vec<(bool, String)>>,
-    /// Scenario scopes: a `set` of a stack input is theirs.
-    scenarios: BTreeSet<usize>,
     /// Relations the program's own facts and rules define.
     heads: BTreeSet<String>,
 }
@@ -579,8 +577,8 @@ impl<'u> Lowerer<'u> {
         });
         self.decls.scopes.len() - 1
     }
-    /// Record the declarations of a statement list in `decl`; a module,
-    /// policy or scenario block nests in `outer`.
+    /// Record the declarations of a statement list in `decl`; a module
+    /// or policy block nests in `outer`.
     /// Record the declarations of a statement list in `decl`.
     fn collect(&mut self, file: u32, parent: &SyntaxNode, decl: usize, outer: usize) {
         let arity = |n: &SyntaxNode| n.children().filter(|c| c.kind() == BIND_ARG).count();
@@ -664,18 +662,12 @@ impl<'u> Lowerer<'u> {
                         .insert(i.clone());
                     self.decls.scopes[decl].instances.insert((m, i));
                 }
-                MODULE | POLICY | SCENARIO => {
+                MODULE | POLICY => {
                     let scope = self.new_scope(outer);
                     let start: u32 = n.text_range().start().into();
                     self.decls.blocks.insert((file, start), scope);
-                    match n.kind() {
-                        MODULE => {
-                            self.decls.modules.insert(word_text(&n, 1), scope);
-                        }
-                        SCENARIO => {
-                            self.decls.scenarios.insert(scope);
-                        }
-                        _ => {}
+                    if n.kind() == MODULE {
+                        self.decls.modules.insert(word_text(&n, 1), scope);
                     }
                     if let Some(b) = node(&n, STMT_BLOCK) {
                         self.collect(file, &b, scope, scope);
@@ -1349,15 +1341,14 @@ impl<'u> Lowerer<'u> {
                 }))
             }
             DECL => Ok(self.decl(n, span)),
-            MODULE | POLICY | SCENARIO => {
+            MODULE | POLICY => {
                 let name = word_text(n, 1);
                 let start: u32 = n.text_range().start().into();
                 let inner = self.decls.blocks[&(self.file, start)];
                 let body = self.stmts(node(n, STMT_BLOCK), inner, outer);
                 one(match n.kind() {
                     MODULE => Stmt::Module(Module { name, body, span }),
-                    POLICY => Stmt::PolicyPack(PolicyPack { name, body, span }),
-                    _ => Stmt::Scenario(Scenario { name, body, span }),
+                    _ => Stmt::PolicyPack(PolicyPack { name, body, span }),
                 })
             }
             USE => one(Stmt::ApplyPolicy(ApplyPolicy {
@@ -2338,7 +2329,7 @@ impl<'u> Lowerer<'u> {
             Target::Cell(typ, addr, path, block) => (typ, addr, path, block),
             Target::Input(k) => {
                 // A stack input: `input(k, t)`, as `--set k=t` gives it.
-                if !self.decls.scenarios.contains(&scope) && !has_body {
+                if !has_body {
                     let d = Diagnostic::error(
                         span,
                         format!("`set {k}` at the top of the program sets the program's own input"),
@@ -2524,10 +2515,14 @@ impl<'u> Lowerer<'u> {
             ("output", 2) if s(0).is_some() => {
                 Some(format!("`output {} = {}{cond}`", s(0).unwrap(), a[1]))
             }
+            ("input", 2) if s(0).is_some() && has_body => {
+                Some(format!("`set {} = {}{cond}`", s(0).unwrap(), a[1]))
+            }
             ("input", 2) if s(0).is_some() => Some(format!(
-                "`set {} = {}{cond}` (in a scenario)",
+                "a default, `input {} .. = {}`, or `--set {}=..`",
                 s(0).unwrap(),
-                a[1]
+                a[1],
+                s(0).unwrap()
             )),
             ("deny" | "warn", 1 | 2) if s(0).is_some() => Some(format!(
                 "`{} {}{}{cond}`",

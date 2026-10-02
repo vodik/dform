@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 /// The block a name is declared in, innermost: `module network`, `policy
-/// baseline`, `scenario dev`; `None` for the program's top.
+/// baseline`; `None` for the program's top.
 pub type Scope = Option<String>;
 
 /// A name the program declares.
@@ -179,10 +179,7 @@ impl Decls {
     fn predicate(&self, scope: &Scope, name: &str) -> Symbol {
         let s = private_scope(scope.clone());
         let key = (s.clone(), name.to_string());
-        if s.is_some()
-            && self.defined.contains(&key)
-            && !dform_core::loader::is_core_pred(name)
-        {
+        if s.is_some() && self.defined.contains(&key) && !dform_core::loader::is_core_pred(name) {
             Symbol::Predicate(s, name.to_string())
         } else {
             Symbol::Predicate(None, name.to_string())
@@ -216,14 +213,13 @@ impl Decls {
     }
 }
 
-/// The innermost module, policy or scenario `node` is in (itself
+/// The innermost module or policy `node` is in (itself
 /// included).
 pub fn scope_of(node: &SyntaxNode) -> Scope {
     node.ancestors().find_map(|a| {
         let kw = match a.kind() {
             SyntaxKind::MODULE => "module",
             SyntaxKind::POLICY => "policy",
-            SyntaxKind::SCENARIO => "scenario",
             _ => return None,
         };
         Some(format!("{kw} {}", declared_name(&a)?.text()))

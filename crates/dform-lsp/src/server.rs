@@ -38,14 +38,13 @@ pub struct Options {
     pub real: &'static (dyn Launch + Sync),
 }
 
-/// The environment evaluations are of: the stacks' default key values, the
-/// named ones, or a scenario.
+/// The environment evaluations are of: the stacks' default key values, or
+/// the named ones.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 enum Env {
     #[default]
     Default,
     Keys(Vec<(String, String)>),
-    Scenario(String),
 }
 
 impl Env {
@@ -57,12 +56,11 @@ impl Env {
                 .map(|(k, v)| format!("{k}={v}"))
                 .collect::<Vec<_>>()
                 .join(","),
-            Env::Scenario(s) => format!("scenario {s}"),
         }
     }
 
-    /// `dform.selectEnvironment`'s argument: a map of key values, a
-    /// scenario's name, `k=v[,k=v]` typed as a string, or `default`.
+    /// `dform.selectEnvironment`'s argument: a map of key values,
+    /// `k=v[,k=v]` typed as a string, or `default`.
     fn parse(arg: &Json) -> Result<Env> {
         match arg {
             Json::Null => Ok(Env::Default),
@@ -70,7 +68,7 @@ impl Env {
                 let s = s.trim();
                 if s.is_empty() || s == "default" {
                     Ok(Env::Default)
-                } else if s.contains('=') {
+                } else {
                     let mut keys = Vec::new();
                     for kv in s.split([',', ' ']).filter(|x| !x.is_empty()) {
                         let (k, v) = kv
@@ -79,16 +77,9 @@ impl Env {
                         keys.push((k.to_string(), v.to_string()));
                     }
                     Ok(Env::Keys(keys))
-                } else {
-                    Ok(Env::Scenario(
-                        s.strip_prefix("scenario ").unwrap_or(s).trim().to_string(),
-                    ))
                 }
             }
             Json::Object(m) => {
-                if let Some(Json::String(s)) = m.get("scenario") {
-                    return Ok(Env::Scenario(s.clone()));
-                }
                 let m = match m.get("keys") {
                     Some(Json::Object(k)) => k,
                     _ => m,
@@ -107,9 +98,7 @@ impl Env {
                     Env::Keys(keys)
                 })
             }
-            other => Err(anyhow!(
-                "expected a map of key values or a scenario name, got {other}"
-            )),
+            other => Err(anyhow!("expected a map of key values, got {other}")),
         }
     }
 }
@@ -482,10 +471,6 @@ impl Server<'_> {
                     Env::Keys(ks) => ks.clone(),
                     _ => Vec::new(),
                 },
-                scenario: match &self.env {
-                    Env::Scenario(s) => Some(s.clone()),
-                    _ => None,
-                },
             };
             let start = Instant::now();
             let outcome = analysis::evaluate(&target, self.launch, &read, self.opts.version);
@@ -687,7 +672,7 @@ impl Server<'_> {
         }
     }
 
-    /// Every stack's key values and scenarios, for a picker.
+    /// Every stack's key values, for a picker.
     fn choices(&self) -> Vec<Json> {
         let mut out = vec![json!({ "label": "default" })];
         let mut seen = BTreeSet::new();
@@ -705,19 +690,13 @@ impl Server<'_> {
                         None => std::fs::read_to_string(p),
                     }
                 };
-                let Ok((values, scenarios)) = analysis::choices(&file, &keys, &read) else {
+                let Ok(values) = analysis::choices(&file, &keys, &read) else {
                     continue;
                 };
                 for kv in values {
                     if seen.insert(kv.clone()) {
                         let (k, v) = kv.split_once('=').unwrap_or((&kv, ""));
                         out.push(json!({ "label": kv, "keys": { k: v } }));
-                    }
-                }
-                for s in scenarios {
-                    let label = format!("scenario {s}");
-                    if seen.insert(label.clone()) {
-                        out.push(json!({ "label": label, "scenario": s }));
                     }
                 }
             }
@@ -1003,10 +982,6 @@ impl Server<'_> {
                     keys: match &self.env {
                         Env::Keys(ks) => ks.clone(),
                         _ => Vec::new(),
-                    },
-                    scenario: match &self.env {
-                        Env::Scenario(s) => Some(s.clone()),
-                        _ => None,
                     },
                 };
                 analysis::evaluate(&target, self.launch, &read, self.opts.version)

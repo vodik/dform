@@ -1,6 +1,6 @@
 //! Doc comments (docs/grammar.md "Doc comments"): `#|` lines directly
-//! above a module, input, output, predicate, rule, type alias, policy,
-//! scenario or resource. `#| key: value` is a pair, any other `#|` line is
+//! above a module, input, output, predicate, rule, type alias, policy
+//! or resource. `#| key: value` is a pair, any other `#|` line is
 //! part of the item's `description`. They lower to `doc(Kind, Name, Key,
 //! Value)` facts; the language server shows them and `dform doc` renders
 //! them.
@@ -16,9 +16,9 @@ pub const KEYS: &[&str] = &["description", "owner", "since", "deprecated"];
 #[derive(Debug, Clone)]
 pub struct Doc {
     /// `module`, `input`, `output`, `predicate`, `rule`, `alias`,
-    /// `policy`, `scenario` or `resource`.
+    /// `policy` or `resource`.
     pub kind: &'static str,
-    /// Its name; inside a module, policy or scenario `BLOCK.NAME`.
+    /// Its name; inside a module or policy `BLOCK.NAME`.
     pub name: String,
     /// The pairs in order, the description (bare lines joined) first.
     pub pairs: Vec<(String, String)>,
@@ -148,7 +148,6 @@ pub fn item(n: &SyntaxNode) -> Option<(&'static str, String)> {
     Some(match n.kind() {
         MODULE => ("module", word(n, 1)?),
         POLICY => ("policy", word(n, 1)?),
-        SCENARIO => ("scenario", word(n, 1)?),
         INPUT => ("input", word(n, 1)?),
         INPUT_RELATION => ("predicate", word(n, 1)?),
         OUTPUT_DECL => ("output", word(n, 1)?),
@@ -180,11 +179,11 @@ pub fn item(n: &SyntaxNode) -> Option<(&'static str, String)> {
     })
 }
 
-/// The module, policy or scenario a statement is in.
+/// The module or policy a statement is in.
 pub fn enclosing(n: &SyntaxNode) -> Option<String> {
     n.ancestors()
         .skip(1)
-        .find(|a| matches!(a.kind(), MODULE | POLICY | SCENARIO))
+        .find(|a| matches!(a.kind(), MODULE | POLICY))
         .and_then(|a| word(&a, 1))
 }
 

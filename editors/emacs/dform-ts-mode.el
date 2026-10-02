@@ -182,7 +182,6 @@ apply-order edge, not its content read now (`docs/grammar.md'
    :feature 'definition
    '((module name: (identifier) @font-lock-function-name-face)
      (policy name: (identifier) @font-lock-function-name-face)
-     (scenario name: (identifier) @font-lock-function-name-face)
      (use name: (identifier) @font-lock-function-name-face)
      (instance module: (identifier) @font-lock-function-name-face)
      (instance name: (identifier) @font-lock-function-name-face)
@@ -248,7 +247,7 @@ apply-order edge, not its content read now (`docs/grammar.md'
    '([
       "edition" "provider" "key" "import" "input" "from" "output" "export"
       "extern" "persist" "type" "decl" "mixed" "let" "set"
-      "module" "instance" "policy" "use" "scenario" "resource" "settings"
+      "module" "instance" "policy" "use" "resource" "settings"
       ] @font-lock-keyword-face
      ["where" "check"] @font-lock-keyword-face
      ["deny" "warn"] @font-lock-keyword-face
@@ -342,12 +341,12 @@ its `name' field."
       (user-error "No active eglot server for this buffer; start one with M-x eglot")))
 
 (defun dform-select-environment (environment)
-  "Ask the dform language server to select ENVIRONMENT (or scenario).
+  "Ask the dform language server to select ENVIRONMENT, key values.
 
 Sends the `dform.selectEnvironment' command via
 `eglot-execute-command'.  Needs a running `dform lsp' server
 \(start it with `M-x eglot')."
-  (interactive "sEnvironment or scenario: ")
+  (interactive "sEnvironment (k=v): ")
   (eglot-execute-command (dform-ts-mode--eglot-server)
                           "dform.selectEnvironment" (vector environment)))
 

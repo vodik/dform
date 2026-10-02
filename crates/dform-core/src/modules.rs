@@ -407,7 +407,7 @@ pub fn expand(program: &Program) -> Result<Expanded> {
         let body = body.into_iter().map(|s| rename_stmt(s, &names)).collect();
         expanded.extend(lets(body, &p.name, Some(&names)));
     }
-    // The program's own `let`s (a scenario's joined it).
+    // The program's own `let`s.
     let expanded = lets(expanded, "", None);
 
     // A read of a name only a module defines: say it is private.

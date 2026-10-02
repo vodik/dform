@@ -93,7 +93,6 @@ fn nested(s: &Stmt, diags: &mut Vec<Diagnostic>) {
     let body = match s {
         Stmt::Module(m) => &m.body,
         Stmt::PolicyPack(p) => &p.body,
-        Stmt::Scenario(sc) => &sc.body,
         _ => return,
     };
     for s in body {

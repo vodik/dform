@@ -39,7 +39,7 @@ pub const MANIFEST: &str = "dform.toml";
 pub const STATE_DIR: &str = "dform.state";
 
 /// Where `.df` files belong in a project.
-pub const LAYOUT_DIRS: &[&str] = &["stacks", "modules", "policies", "scenarios", "providers"];
+pub const LAYOUT_DIRS: &[&str] = &["stacks", "modules", "policies", "providers"];
 
 /// A project: its root and its manifest.
 #[derive(Debug, Clone)]

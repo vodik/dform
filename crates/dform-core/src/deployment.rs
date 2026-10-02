@@ -30,9 +30,7 @@ use crate::state::{self, State};
 use crate::store::{self, Location, OpenS3};
 use crate::value::Value;
 use crate::watch::Relation;
-use crate::{
-    executor, lint, loader, plan_print, provider, scenario, stuck, tables, transform, zset,
-};
+use crate::{executor, lint, loader, plan_print, provider, stuck, tables, transform, zset};
 use anyhow::{Context, Result, bail};
 use std::cell::RefCell;
 use std::collections::BTreeSet;
@@ -47,7 +45,7 @@ pub type Reader<'a> = &'a dyn Fn(&Path) -> std::io::Result<String>;
 /// line prints each where it prints it, the editor publishes some.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Note {
-    /// A warning: the lint's, a scenario that is not the stack's.
+    /// A warning: the lint's.
     Warning(String),
     /// A `warn` fact of the program's own evaluation, redacted.
     Policy(String),
@@ -90,12 +88,6 @@ impl Observer for Notes {
 #[derive(Debug, Clone, Default)]
 pub struct Target {
     pub files: Vec<PathBuf>,
-    /// A scenario to evaluate the program under.
-    pub scenario: Option<String>,
-    /// A scenario the program does not have is a warning, and the program
-    /// is evaluated without it (the editor's selection is the project's);
-    /// otherwise an error.
-    pub scenario_optional: bool,
     /// Stack inputs from `.df` files of facts (`--input-file`).
     pub input_files: Vec<PathBuf>,
     /// The providers, over the program's `provider` statements
@@ -108,8 +100,8 @@ pub struct Loaded {
     pub files: Vec<PathBuf>,
     /// The program's project's manifest.
     pub manifest: Option<Manifest>,
-    /// The program, its input relations read, a scenario selected, the
-    /// input files' facts added.
+    /// The program, its input relations read, the input files' facts
+    /// added.
     pub program: Program,
     /// The input relations, as declared.
     pub relations: Vec<Relation>,
@@ -123,8 +115,7 @@ pub struct Loaded {
     pub lowered: Option<transform::Lowered>,
     /// The stack's and the instances' typed inputs.
     pub declared: Vec<Declared>,
-    /// The inputs a fact of the program gives (a scenario's `set k = v`,
-    /// an input file's).
+    /// The inputs a fact of the program gives (an input file's).
     pub given: BTreeSet<String>,
 }
 
@@ -144,15 +135,6 @@ pub fn load(t: &Target, version: &str, read: Reader, obs: &mut dyn Observer) -> 
     let relations = crate::watch::take(&mut program)?;
     obs.relations(&relations);
     program.statements.extend(crate::watch::read(&relations)?);
-    if let Some(name) = &t.scenario {
-        if !t.scenario_optional || scenario::names(&program)?.contains(name) {
-            program = scenario::select(&program, name)?;
-        } else {
-            obs.note(Note::Warning(format!(
-                "the selected scenario {name} is not this stack's: evaluated without it"
-            )));
-        }
-    }
     // The stack's settings (the loader's, from the manifest) and its
     // `provider` statements, their sources the manifest's.
     let mut cfg = stack::config(&program)?;

@@ -56,7 +56,6 @@
 
 (module name: (identifier) @module)
 (policy name: (identifier) @module)
-(scenario name: (identifier) @module)
 (use name: (identifier) @module)
 (instance module: (identifier) @module)
 (instance name: (identifier) @label)
@@ -110,7 +109,7 @@
 [
   "edition" "provider" "key" "import" "input" "from" "output" "export"
   "extern" "persist" "type" "decl" "mixed" "let" "set"
-  "module" "instance" "policy" "use" "scenario" "resource" "settings"
+  "module" "instance" "policy" "use" "resource" "settings"
 ] @keyword
 
 ["where" "check"] @keyword.conditional

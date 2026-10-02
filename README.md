@@ -28,7 +28,7 @@ imports reusable chunks from its `modules/*.df` and `policies/`.
 cargo run -- -C examples/demo plan                  # its one stack, dform, in env's default
 cargo run -- -C examples/demo apply dform env=staging
 cargo run -- -C examples/demo plan dform env=prod   # or 'dform[env=prod]'
-cargo run -- -C examples/demo test                  # run the program's scenarios
+cargo run -- -C examples/demo test                  # the program's denies, over every env
 cargo run -- -C examples/demo dev strata            # evaluation order: the partition graph's strata
 cargo run -- -C examples/demo dev effects           # per scope: what it reads, writes, offers
 cargo run -- -C examples/demo fmt                   # format the project's .df files in place
@@ -44,7 +44,7 @@ stack when the project has several.
 
 A project is a directory with a `dform.toml` at its root: `stacks/` (one
 stack per file), `modules/`, `policies/`, `config/<stack>/<key>.yaml`,
-`data/`, `scenarios/`, `providers/<name>/` and a gitignored `dform.state/`.
+`data/`, `providers/<name>/` and a gitignored `dform.state/`.
 The root is the nearest directory up from the working directory holding a
 `dform.toml`; `dform init [NAME]` makes one (and puts `dform.state/` in the
 nearest `.gitignore`). Every path a program states resolves from the project
@@ -300,8 +300,8 @@ several keys are joined, `env=prod,region=us-east1`, and a value is escaped
 for the file system: every byte but letters, digits, `-`, `_` and a `.`
 that does not lead is `%XX`), lock, registry entry and controller. Inputs
 outside the key are parameters of a deployment: they deform it in place.
-The key's value comes from the target, an `--input-file`, a scenario's
-`set`, else its default; a key with none is an error naming it. `plan`
+The key's value comes from the target, an `--input-file`, else its
+default; a key with none is an error naming it. `plan`
 and `apply` name the deployment on their first line, and say which key
 values are defaults. A key whose default is `"prod"` or `"production"` is
 a lint warning: a run that forgets the key would be of production.
@@ -1330,7 +1330,7 @@ cargo run -- -C examples/demo dev graph --relation vpc_peer/2        # any binar
 ```
 
 `dform dev effects` prints, per scope (the stack, each module instance, each
-pack in use, and the scenario if `--scenario NAME` is given), what it reads
+pack in use), what it reads
 (inputs by name, settings leaves by path, world types, externs by name,
 another instance's outputs), writes (cells as `(type, path)` partitions,
 `*` for a variable type or path, settings leaves, another instance's input
@@ -1340,7 +1340,6 @@ evaluation.
 
 ```bash
 cargo run -- -C examples/demo dev effects                  # every scope, text
-cargo run -- -C examples/demo dev effects --scenario prod  # the scenario's own scope too
 cargo run -- -C examples/demo dev effects --json           # one JSON document
 ```
 
@@ -1806,30 +1805,42 @@ settings prod {
 }
 ```
 
-## Scenarios
+## Testing
 
-A scenario is a test: hypothetical facts plus ordinary deny rules, no
-`expect` syntax (DESIGN L12).
+The denies are the tests; there is no test or scenario syntax (R-32).
+`dform test [TARGET] [K=V..]` evaluates the program once for every
+combination of its inputs against an empty mock world (the provider's
+schema, no world, no state, nothing written), and every deny must hold in
+each. The input space: an input the target pins (a key's `K=V`) or
+`--set` pins is that value; an `enum` input takes each of its values, a
+`bool` both; a key whose type is not an enum takes each value a
+deployment of the stack was applied with; any other input takes its
+default, and one with none is an error naming it (pin it, or give it an
+enum type). More than 4096 combinations is an error asking to pin some.
 
 ```dform
-scenario prod {
-  set env = "prod"
-  deny "prod keeps 14 days of db backups" where not db.postgres["database.main::db"].backup_days == 14
-}
+deny "prod keeps 14 days of db backups" where env == "prod", not db.postgres["database.main::db"].backup_days == 14
+deny "dev has no database" where env == "dev", _ in db.postgres
 ```
 
-A scenario is part of the program only when it is run. `dform test` runs
-every scenario against an empty mock world (the provider's schema, no
-world, no state, nothing written): the scenario's statements join the
-program, and a scenario passes when nothing is denied, the program's own
-denies included. It prints `scenario NAME: ok` or `denied` with each
-deny, and exits non-zero if any scenario failed.
-`dform plan --scenario NAME` is the same program as a what-if plan of the
-stack, against its world.
+It prints one line per combination, `ok` or `denied` (or `error`, for
+one that does not compile), and the command that plans it, then each
+deny under a denied one; it exits non-zero if any failed:
+
+```
+test dform: 3 combinations of env
+ok      dform plan dform env=dev
+ok      dform plan dform env=staging
+ok      dform plan dform env=prod
+test dform: 3 combinations, 0 failed
+```
+
+`dform test shop env=prod` pins the key, so only prod's combinations
+run. A what-if plan is `plan --set k=v`.
 
 ```bash
-cargo run -- -C examples/demo test
-cargo run -- -C examples/demo plan --scenario dev
+cargo run -- -C examples/demo test dform
+cargo run -- -C examples/demo test dform env=prod
 ```
 
 ## Controller mode
@@ -2138,11 +2149,11 @@ Two commands (`workspace/executeCommand`), which the Emacs mode binds:
 
 | Command | Argument | |
 |---|---|---|
-| `dform.selectEnvironment` | a map of key values (`{"env": "prod"}`), `"env=prod"`, a scenario's name, `"default"`; none: the choices | evaluate every stack of the workspace as that deployment or scenario; a key a stack does not have is ignored |
+| `dform.selectEnvironment` | a map of key values (`{"env": "prod"}`), `"env=prod"`, `"default"`; none: the choices | evaluate every stack of the workspace as that deployment; a key a stack does not have is ignored |
 | `dform.why` | `{textDocument, position}` | the derivation text `dform why` prints for the attribute under the cursor (also shown as a message) |
 
 With no argument `dform.selectEnvironment` returns `{current, choices}`,
-each choice a `label` and its `keys` or `scenario` (key values from the
+each choice a `label` and its `keys` (key values from the
 key inputs' enum types). After a selection the server sends the
 notification `dform/environment` with `{label, deployments}`
 (`deployments`: `dform[env=prod]`), for a mode line.

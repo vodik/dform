@@ -239,10 +239,6 @@ enum Run {
         /// Print the plan as one JSON document instead of text.
         #[arg(long)]
         json: bool,
-        /// A what-if plan: the program with this scenario's facts and
-        /// policy, against the stack's world.
-        #[arg(long = "scenario")]
-        scenario: Option<String>,
         /// Under each deformation, why: the statement that derived it and
         /// the facts, table rows, inputs and extern answers it rests on,
         /// one line each (`why ADDR`, compressed).
@@ -326,8 +322,11 @@ enum Run {
         #[arg(long = "address")]
         addresses: Vec<String>,
     },
-    /// Run every scenario against an empty mock world: each passes when
-    /// nothing is denied. Fails if any scenario is denied.
+    /// Run the program's denies over its input space (each enum input's
+    /// values, a bool both ways, a key's enum or applied values; the rest
+    /// their defaults), once per combination against an empty mock world.
+    /// `K=V` and `--set` pin inputs. Fails if any combination is denied,
+    /// printing the command that plans it.
     Test {
         #[command(flatten)]
         target: Target,
@@ -481,15 +480,11 @@ enum DevCommand {
         target: Target,
     },
     /// What each scope reads, writes and offers (R-11c): the stack, each
-    /// module instance, each pack in use, and, with `--scenario`, the
-    /// scenario's own body. From the lowered program and the partition
-    /// graph; no evaluation.
+    /// module instance and each pack in use. From the lowered program and
+    /// the partition graph; no evaluation.
     Effects {
         #[command(flatten)]
         target: Target,
-        /// Include the scenario's own scope too.
-        #[arg(long = "scenario")]
-        scenario: Option<String>,
         /// Print as one JSON document instead of text.
         #[arg(long)]
         json: bool,
@@ -561,7 +556,6 @@ enum Cmd {
     Plan {
         out: Option<PathBuf>,
         json: bool,
-        scenario: Option<String>,
         why: bool,
     },
     Test,
@@ -595,7 +589,6 @@ enum Cmd {
     },
     Strata,
     Effects {
-        scenario: Option<String>,
         json: bool,
     },
     Fmt {
@@ -814,8 +807,6 @@ fn apply_order(cli: &Cli) -> Result<Vec<Dependency>> {
      -> Result<(String, BTreeSet<String>, Vec<Dependency>)> {
         let t = deployment::Target {
             files: vec![file.to_path_buf()],
-            scenario: None,
-            scenario_optional: false,
             input_files: Vec::new(),
             providers: Vec::new(),
         };
@@ -930,11 +921,7 @@ fn resolve(args: Args) -> Result<Cli> {
             match cmd {
                 DevCommand::Run(r) => run_cmd(r),
                 DevCommand::Strata { target } => (Cmd::Strata, Some(target)),
-                DevCommand::Effects {
-                    target,
-                    scenario,
-                    json,
-                } => (Cmd::Effects { scenario, json }, Some(target)),
+                DevCommand::Effects { target, json } => (Cmd::Effects { json }, Some(target)),
                 DevCommand::Graph {
                     target,
                     strata,
@@ -1040,17 +1027,8 @@ fn run_cmd(r: Run) -> (Cmd, Option<Target>) {
             target,
             out,
             json,
-            scenario,
             why,
-        } => (
-            Cmd::Plan {
-                out,
-                json,
-                scenario,
-                why,
-            },
-            Some(target),
-        ),
+        } => (Cmd::Plan { out, json, why }, Some(target)),
         Run::Apply {
             target,
             max_ticks,
@@ -1375,16 +1353,11 @@ fn run_with(
         bail!("internal: a run with no program");
     }
     // The program, as `deployment::load` reads it: its input relations
-    // read, the scenario selected, the input files' facts added; `stack`
-    // and `provider` statements over the manifest's defaults, `--provider`
-    // over the latter.
+    // read, the input files' facts added; `stack` and `provider`
+    // statements over the manifest's defaults, `--provider` over the
+    // latter.
     let target = deployment::Target {
         files: files.clone(),
-        scenario: match &cli.cmd {
-            Cmd::Plan { scenario, .. } => scenario.clone(),
-            _ => None,
-        },
-        scenario_optional: false,
         input_files: cli.input_files.clone(),
         providers: cli.providers.clone(),
     };
@@ -1424,18 +1397,13 @@ fn run_with(
         loaded.require_provider()?;
     }
     if let Cmd::Test = cli.cmd {
-        return run_tests(&loaded.program, &providers, &cli, &files);
+        return run_tests(&loaded.program, &loaded.stack, &providers, &cli, &files);
     }
     if let Cmd::Strata = cli.cmd {
         return print_strata(&files, &loaded.program, &load_schema(&providers)?);
     }
-    if let Cmd::Effects { scenario, json } = &cli.cmd {
-        return print_effects(
-            &loaded.program,
-            &load_schema(&providers)?,
-            scenario.as_deref(),
-            *json,
-        );
+    if let Cmd::Effects { json } = &cli.cmd {
+        return print_effects(&loaded.program, &load_schema(&providers)?, *json);
     }
     if let Cmd::Graph { what: Some(w) } = &cli.cmd
         && w == "strata"
@@ -3125,71 +3093,116 @@ fn rekey_args(
     })
 }
 
-/// `dform test`: every scenario evaluated against an empty mock world (the
-/// provider's schema, no world, no state); a scenario fails when anything
-/// is denied or it does not compile.
+/// `dform test` (R-32): the program's denies over its input space
+/// (`testing::space`), each combination evaluated against an empty mock
+/// world (the provider's schema, no world, no state). A combination fails
+/// when anything is denied or it does not compile, printed as the command
+/// that plans it.
 fn run_tests(
     program: &crate::ast::Program,
+    stack: &str,
     providers: &[String],
     cli: &Cli,
     files: &[PathBuf],
 ) -> Result<()> {
-    let (set, data) = (&cli.set, &cli.data);
     use std::io::IsTerminal;
-    let names = crate::scenario::names(program)?;
-    if names.is_empty() {
-        bail!("no scenarios: write `scenario NAME {{ .. }}` holding `set k = v` and deny rules");
-    }
     let backend = Providers::start(launch(), providers, &plugin::Config::default())?;
     let program_dir = crate::project::base_of(&files[0]);
+    let lowered = crate::transform::lower(program)?;
+    crate::secrets::check(&lowered, backend.schema(), &Default::default())?;
+    crate::refine::check(&lowered.program, backend.schema())?;
+    // What the target and `--set` pin, as given.
+    let mut pinned: Vec<(String, Value)> = Vec::new();
+    for kv in &cli.set {
+        let (k, v) = split_kv(kv)?;
+        pinned.push((k.to_string(), v));
+    }
+    let names: Vec<String> = pinned.iter().map(|(k, _)| k.clone()).collect();
+    let applied = |key: &str| -> Vec<String> {
+        let mut out: Vec<String> = crate::stack::registry(&cli.root)
+            .unwrap_or_default()
+            .into_keys()
+            .filter_map(|n| {
+                let (s, seg) = n.strip_suffix(']')?.split_once('[')?;
+                (s == stack).then_some(())?;
+                seg.split(',')
+                    .find_map(|kv| kv.split_once('=').filter(|(k, _)| *k == key))
+                    .map(|(_, v)| v.to_string())
+            })
+            .collect();
+        out.sort();
+        out.dedup();
+        out
+    };
+    let axes = crate::testing::space(&lowered.inputs, &names, &applied)?;
+    let combinations = crate::testing::combinations(&axes);
+    let keys: BTreeSet<&str> = lowered
+        .inputs
+        .iter()
+        .filter(|d| d.scope.is_empty() && d.decl.key)
+        .map(|d| d.decl.name.as_str())
+        .collect();
+    let run = |pairs: &[(String, Value)]| -> Result<Vec<String>> {
+        let mut given = deployment::input_fact_keys(program);
+        given.extend(pairs.iter().map(|(k, _)| k.clone()));
+        inputs::check_required(&lowered.inputs, &given)?;
+        let mut extra = inputs::set_facts(&lowered.inputs, pairs)?;
+        extra.extend(cli.manifest.iter().flat_map(|m| m.facts()));
+        extra.extend(build_extra_facts(&cli.data)?);
+        extra.extend(backend.catalog(schema::named_types(&lowered.program, &extra).as_ref())?);
+        let tables = crate::tables::Tables::default();
+        let externs =
+            crate::externs::Externs::new(&lowered.program, &lowered.extern_fns, |f, ins| {
+                if let Some(r) = tables.answer(f, ins) {
+                    return r;
+                }
+                if let Some(r) = crate::externs::file(f, ins, &program_dir) {
+                    return r;
+                }
+                backend.query_extern(f, ins)
+            });
+        let p = zset::with_policy_rules(program.clone())?;
+        let (res, mut violations) = externs.eval(&p, &extra)?;
+        violations.extend(inputs::violations(&res.facts, &lowered.inputs));
+        let redact = query::Redactor::new(&res.facts, backend.schema());
+        Ok(violations.iter().map(|v| redact.text(v)).collect())
+    };
+    let n = combinations.len();
+    let s = if n == 1 { "" } else { "s" };
+    let over = if axes.is_empty() {
+        String::new()
+    } else {
+        let names: Vec<&str> = axes.iter().map(|a| a.input.as_str()).collect();
+        format!(" of {}", names.join(", "))
+    };
+    println!("test {stack}: {n} combination{s}{over}");
     let mut failed = 0;
-    for name in &names {
-        let run = || -> Result<Vec<String>> {
-            let p = crate::scenario::select(program, name)?;
-            let lowered = crate::transform::lower(&p)?;
-            crate::secrets::check(&lowered, backend.schema(), &Default::default())?;
-            crate::refine::check(&lowered.program, backend.schema())?;
-            let mut given = deployment::input_fact_keys(&p);
-            let mut pairs = Vec::new();
-            for kv in set {
-                let (k, v) = split_kv(kv)?;
-                given.insert(k.to_string());
-                pairs.push((k.to_string(), v));
-            }
-            inputs::check_required(&lowered.inputs, &given)?;
-            let mut extra = inputs::set_facts(&lowered.inputs, &pairs)?;
-            extra.extend(cli.manifest.iter().flat_map(|m| m.facts()));
-            extra.extend(build_extra_facts(data)?);
-            extra.extend(backend.catalog(schema::named_types(&lowered.program, &extra).as_ref())?);
-            let tables = crate::tables::Tables::default();
-            let externs =
-                crate::externs::Externs::new(&lowered.program, &lowered.extern_fns, |f, ins| {
-                    if let Some(r) = tables.answer(f, ins) {
-                        return r;
-                    }
-                    if let Some(r) = crate::externs::file(f, ins, &program_dir) {
-                        return r;
-                    }
-                    backend.query_extern(f, ins)
-                });
-            let p = zset::with_policy_rules(p)?;
-            let (res, mut violations) = externs.eval(&p, &extra)?;
-            violations.extend(inputs::violations(&res.facts, &lowered.inputs));
-            let redact = query::Redactor::new(&res.facts, backend.schema());
-            Ok(violations.iter().map(|v| redact.text(v)).collect())
+    for combination in &combinations {
+        let mut pairs = pinned.clone();
+        pairs.extend(combination.iter().cloned());
+        let text = |(k, v): &(String, Value)| (k.clone(), crate::stack::key_text(v));
+        let (on_target, set): (Vec<_>, Vec<_>) = pairs
+            .iter()
+            .map(text)
+            .partition(|(k, _)| keys.contains(k.as_str()));
+        let target = if cli.in_project {
+            stack.to_string()
+        } else {
+            files[0].display().to_string()
         };
-        match run() {
-            Ok(denied) if denied.is_empty() => println!("scenario {name}: ok"),
+        let command = crate::testing::reproduce(&target, &on_target, &set);
+        match run(&pairs) {
+            Ok(denied) if denied.is_empty() => println!("ok      {command}"),
             Ok(denied) => {
                 failed += 1;
-                println!("scenario {name}: denied");
+                println!("denied  {command}");
                 for d in denied {
                     println!("  - {d}");
                 }
             }
             Err(e) => {
                 failed += 1;
-                println!("scenario {name}: error");
+                println!("error   {command}");
                 let text = crate::diag::report(&e, std::io::stdout().is_terminal());
                 for line in text.lines() {
                     println!("  {line}");
@@ -3197,9 +3210,9 @@ fn run_tests(
             }
         }
     }
-    println!("test: {} scenarios, {failed} failed", names.len());
+    println!("test {stack}: {n} combination{s}, {failed} failed");
     if failed > 0 {
-        bail!("{failed} of {} scenarios failed", names.len());
+        bail!("{failed} of {n} combination{s} failed");
     }
     Ok(())
 }
@@ -3529,15 +3542,10 @@ fn format_strata(name: &str, g: &partition::Graph, v: &partition::Verdict) -> St
 }
 
 /// `dform dev effects`: what each scope (the stack, each module instance,
-/// each pack in use, the scenario if `--scenario` is given) reads, writes
-/// and offers (DESIGN.org R-11c), text or `--json`.
-fn print_effects(
-    program: &crate::ast::Program,
-    schema: &schema::Schema,
-    scenario: Option<&str>,
-    json: bool,
-) -> Result<()> {
-    let effects = crate::effects::compute(program, schema, scenario)?;
+/// each pack in use) reads, writes and offers (DESIGN.org R-11c), text or
+/// `--json`.
+fn print_effects(program: &crate::ast::Program, schema: &schema::Schema, json: bool) -> Result<()> {
+    let effects = crate::effects::compute(program, schema)?;
     if json {
         let doc: serde_json::Map<String, serde_json::Value> = effects
             .iter()

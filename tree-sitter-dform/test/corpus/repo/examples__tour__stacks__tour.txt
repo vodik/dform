@@ -346,7 +346,7 @@ resource iam.policy "connect-${host}" {
 # the commands to run:
 #
 #   demo       modules in their own files, a policy pack, settings from YAML
-#              files, scenarios (`dform test`)
+#              files, denies `dform test` runs over every env
 #   pngu       a table read from a CSV file
 #   advanced   more recursion: reachability, routes, group membership
 #   adopt      taking over a resource that already exists

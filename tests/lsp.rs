@@ -385,13 +385,6 @@ fn hover_shows_docs_builtins_keywords_and_nothing_elsewhere() {
             .contains("HEAD where BODY | BLOCK where BODY"),
         "{text}"
     );
-    let text = hover(&mut c, &stack, "scenario prod {", 2);
-    assert!(
-        text.as_str()
-            .unwrap()
-            .contains("scenario NAME { set KEY = VALUE"),
-        "{text}"
-    );
 
     // A schema type: its description.
     let text = hover(&mut c, &network, "resource net.vpc vpc", 11);
@@ -492,14 +485,7 @@ fn diagnostics_follow_the_selected_environment() {
     // The environments a picker offers.
     let choices = c.command("dform.selectEnvironment", json!([]));
     let offered = labels(&choices["choices"]);
-    for want in [
-        "default",
-        "env=dev",
-        "env=staging",
-        "env=prod",
-        "scenario prod",
-        "scenario dev",
-    ] {
+    for want in ["default", "env=dev", "env=staging", "env=prod"] {
         assert!(offered.contains(&want.to_string()), "{want} in {offered:?}");
     }
 
@@ -564,10 +550,6 @@ fn diagnostics_follow_the_selected_environment() {
         .position(|l| l.contains("private_ip = inet.host"))
         .unwrap() as u64;
     assert!(lines.contains(&added) && lines.contains(&own), "{conflict}");
-
-    // A scenario: its facts and denies.
-    let status = c.command("dform.selectEnvironment", json!(["dev"]));
-    assert_eq!(status["label"], "scenario dev");
 
     // A syntax error, as typed.
     c.change(&stack, 4, &format!("{original}\nresource compute.vm {{\n"));
@@ -1067,14 +1049,13 @@ fn references_of_every_kind_of_name() {
     let found = references(&mut c, &root, &stack, find(&stack, "vpc_peer_pair(ia", 2));
     assert_eq!(found, at_places("stacks/dform.df", &[86, 87, 94]));
 
-    // An input: the stack's own reads, a module's and a pack's, the
-    // scenarios' `set`.
+    // An input: the stack's own reads, a module's and a pack's.
     let found = references(&mut c, &root, &stack, find(&stack, "key env:", 4));
     for want in [
         ("stacks/dform.df".to_string(), 18),
         ("stacks/dform.df".into(), 24),
         ("stacks/dform.df".into(), 42),
-        ("stacks/dform.df".into(), 110),
+        ("stacks/dform.df".into(), 109),
         ("modules/network.df".into(), 13),
         ("policies/baseline.df".into(), 16),
     ] {
@@ -1165,7 +1146,7 @@ fn references_of_every_kind_of_name() {
         &format!("{original}\nextra(x) where vpc_peer_pair(x, _, _, _)\n"),
     );
     let found = references(&mut c, &root, &stack, find(&stack, "vpc_peer_pair(ia", 2));
-    assert_eq!(found, at_places("stacks/dform.df", &[86, 87, 94, 121]));
+    assert_eq!(found, at_places("stacks/dform.df", &[86, 87, 94, 117]));
 
     // An attribute path: every rule contributing to the cell, the
     // module's field and the pack's.

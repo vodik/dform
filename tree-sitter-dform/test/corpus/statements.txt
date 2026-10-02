@@ -235,7 +235,7 @@ let big = n where size(n), n > 3
         (integer)))))
 
 ================================================================================
-Modules, policies, scenarios
+Modules and policies
 ================================================================================
 
 module network {
@@ -249,10 +249,6 @@ policy tags {
   set r.tags = { team: "x" } where r in resource
 }
 use tags
-scenario prod {
-  set env = "prod"
-  deny "no db" where _ in db.postgres
-}
 
 --------------------------------------------------------------------------------
 
@@ -314,23 +310,7 @@ scenario prod {
             (identifier)
             (any_resource))))))
   (use
-    (identifier))
-  (scenario
-    (identifier)
-    (statement_block
-      (set
-        (identifier)
-        (string
-          (string_content)))
-      (check
-        (string
-          (string_content))
-        (body
-          (in_literal
-            (identifier)
-            (member_expression
-              (identifier)
-              (identifier))))))))
+    (identifier)))
 
 ================================================================================
 Rules, facts, checks and contributions

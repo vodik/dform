@@ -18,7 +18,7 @@ use dform_core::project;
 use dform_core::query::Redactor;
 use dform_core::schema::Schema;
 use dform_core::store::{self, S3Spec};
-use dform_core::{loader, scenario, transform};
+use dform_core::{loader, transform};
 use std::cell::{OnceCell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -26,14 +26,12 @@ use std::sync::Arc;
 
 pub use dform_core::deployment::{Reader, Severity};
 
-/// The deployment to evaluate: a stack's file, the key values the
-/// selected environment names (the rest take their defaults), and a
-/// scenario.
+/// The deployment to evaluate: a stack's file and the key values the
+/// selected environment names (the rest take their defaults).
 #[derive(Debug, Clone)]
 pub struct Target {
     pub file: PathBuf,
     pub keys: Vec<(String, String)>,
-    pub scenario: Option<String>,
 }
 
 /// Where a problem or a contributor is.
@@ -337,7 +335,7 @@ fn run(
     let unread = RefCell::new(Vec::new());
     let r = run_noted(t, launch, read, version, &mut notes, &unread, problems);
     // What the evaluation said as it went: the lint's warnings, the
-    // collision lint's, a scenario not the stack's, a bucket not read; a
+    // collision lint's, a bucket not read; a
     // `warn` fact is published at its rule.
     for w in unread.into_inner() {
         problems.push(Problem::top(Severity::Warning, w));
@@ -368,9 +366,6 @@ fn run_noted(
     };
     let target = deployment::Target {
         files: vec![t.file.clone()],
-        scenario: t.scenario.clone(),
-        // The selected scenario is one stack's; another is evaluated as is.
-        scenario_optional: true,
         ..Default::default()
     };
     let loaded = deployment::load(&target, version, read, notes)?;
@@ -459,9 +454,8 @@ pub fn written(e: &Evaluated, id: NodeId) -> Option<Where> {
     deployment::written(&e.res, id).map(Where::from)
 }
 
-/// The key values and scenarios a stack offers: each enum value of each
-/// key input, and each scenario's name.
-pub fn choices(file: &Path, keys: &[String], read: Reader) -> Result<(Vec<String>, Vec<String>)> {
+/// The key values a stack offers: each enum value of each key input.
+pub fn choices(file: &Path, keys: &[String], read: Reader) -> Result<Vec<String>> {
     let program = loader::load_program_with(&[file.to_path_buf()], read)?;
     let mut values = Vec::new();
     for st in &program.statements {
@@ -479,6 +473,5 @@ pub fn choices(file: &Path, keys: &[String], read: Reader) -> Result<(Vec<String
             }
         }
     }
-    let scenarios = scenario::names(&program)?;
-    Ok((values, scenarios))
+    Ok(values)
 }

@@ -107,20 +107,13 @@ deny "prod db must be multi_az" where env == "prod", pg in db.postgres, not pg.m
 
 deny "prod k8s must have private api" where env == "prod", c in k8s.cluster, not c.private_api
 
-#| Policy over hypothetical inputs: `dform test` runs every scenario
-#| against an empty mock world; `dform plan --scenario prod` plans the stack
-#| as if env were prod.
-scenario prod {
-  set env = "prod"
-  deny "prod peers the two vpcs" where not "peer-main-peer" in net.vpc_peering
-  deny "prod keeps 14 days of db backups" where not db.postgres["database.main::db"].backup_days == 14
-}
-
-scenario dev {
-  set env = "dev"
-  deny "dev has no database" where _ in db.postgres
-  deny "dev has no peer network" where "network.peer::vpc" in net.vpc
-}
+# The denies are the tests: `dform test dform` evaluates the program for
+# each env against an empty mock world, and each deny must hold in every
+# one.
+deny "prod peers the two vpcs" where env == "prod", not "peer-main-peer" in net.vpc_peering
+deny "prod keeps 14 days of db backups" where env == "prod", not db.postgres["database.main::db"].backup_days == 14
+deny "dev has no database" where env == "dev", _ in db.postgres
+deny "dev has no peer network" where env == "dev", "network.peer::vpc" in net.vpc
 
 ---
 
@@ -602,62 +595,64 @@ scenario dev {
   (comment)
   (comment)
   (comment)
-  (scenario
-    (identifier)
-    (statement_block
-      (set
+  (check
+    (string
+      (string_content))
+    (body
+      (comparison
         (identifier)
         (string
           (string_content)))
-      (check
+      (not_literal
+        (in_literal
+          (string
+            (string_content))
+          (member_expression
+            (identifier)
+            (identifier))))))
+  (check
+    (string
+      (string_content))
+    (body
+      (comparison
+        (identifier)
         (string
-          (string_content))
-        (body
-          (not_literal
-            (in_literal
-              (string
-                (string_content))
+          (string_content)))
+      (not_literal
+        (comparison
+          (member_expression
+            (index_expression
               (member_expression
                 (identifier)
-                (identifier))))))
-      (check
-        (string
-          (string_content))
-        (body
-          (not_literal
-            (comparison
-              (member_expression
-                (index_expression
-                  (member_expression
-                    (identifier)
-                    (identifier))
-                  (string
-                    (string_content)))
                 (identifier))
-              (integer)))))))
-  (scenario
-    (identifier)
-    (statement_block
-      (set
+              (string
+                (string_content)))
+            (identifier))
+          (integer)))))
+  (check
+    (string
+      (string_content))
+    (body
+      (comparison
         (identifier)
         (string
           (string_content)))
-      (check
+      (in_literal
+        (identifier)
+        (member_expression
+          (identifier)
+          (identifier)))))
+  (check
+    (string
+      (string_content))
+    (body
+      (comparison
+        (identifier)
+        (string
+          (string_content)))
+      (in_literal
         (string
           (string_content))
-        (body
-          (in_literal
-            (identifier)
-            (member_expression
-              (identifier)
-              (identifier)))))
-      (check
-        (string
-          (string_content))
-        (body
-          (in_literal
-            (string
-              (string_content))
-            (member_expression
-              (identifier)
-              (identifier))))))))
+        (member_expression
+          (identifier)
+          (identifier))))))

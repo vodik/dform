@@ -4,13 +4,11 @@
 //! (a non-constant type or path) prints `*` rather than guess what it
 //! would be once evaluated.
 //!
-//! A scope is the stack, a module instance (`module.instance`), a policy
-//! pack `use`d, or, when `--scenario NAME` is given, the scenario's own
-//! body. `modules::expand` already tags every statement it lowers out of
-//! an instance or a pack with an origin (`diag::origin`); `compute` reads
-//! that tag back off each rule's head and each fact to recover the scope
-//! that wrote it, and tags a selected scenario's body with one of its own
-//! before compiling, the same way. A rule's body literals carry no origin
+//! A scope is the stack, a module instance (`module.instance`) or a policy
+//! pack `use`d. `modules::expand` already tags every statement it lowers
+//! out of an instance or a pack with an origin (`diag::origin`); `compute`
+//! reads that tag back off each rule's head and each fact to recover the
+//! scope that wrote it. A rule's body literals carry no origin
 //! of their own (`modules::set_origin` only marks heads and facts), so
 //! they are read structurally instead: a literal of `attr(input, ...)`,
 //! `attr(settings, ...)`, `attr(output, ...)` or `world(...)`, a call to
@@ -40,27 +38,14 @@ pub struct ScopeEffects {
     pub offers: BTreeMap<String, String>,
 }
 
-/// Every scope's effects of `program`: the stack, each module instance,
-/// each pack `use`d, and, when `scenario` is given, that scenario's own
-/// body as its own scope.
-pub fn compute(
-    program: &Program,
-    schema: &Schema,
-    scenario: Option<&str>,
-) -> Result<BTreeMap<String, ScopeEffects>> {
-    let mut program = program.clone();
-    if let Some(name) = scenario {
-        let base = program.statements.len();
-        program = crate::scenario::select(&program, name)?;
-        let origin = diag::origin_id(&format!("scenario {name}"));
-        modules::set_origin(&mut program.statements[base..], origin);
-    }
-
+/// Every scope's effects of `program`: the stack, each module instance
+/// and each pack `use`d.
+pub fn compute(program: &Program, schema: &Schema) -> Result<BTreeMap<String, ScopeEffects>> {
     let mut out: BTreeMap<String, ScopeEffects> = BTreeMap::new();
     out.entry(STACK.to_string()).or_default();
-    collect_offers(&program, &mut out);
+    collect_offers(program, &mut out);
 
-    let compiled = partition::compile(&program, &schema.facts)?;
+    let compiled = partition::compile(program, &schema.facts)?;
     let inputs_by_scope = input_names(&compiled.inputs);
     let externs: BTreeSet<&str> = compiled.externs.iter().map(|e| e.pred.as_str()).collect();
 
@@ -122,9 +107,7 @@ fn scope_of(span: Span) -> String {
                     None => rest.to_string(),
                 };
             }
-            o.strip_prefix("policy ")
-                .map(str::to_string)
-                .unwrap_or(o)
+            o.strip_prefix("policy ").map(str::to_string).unwrap_or(o)
         }
     }
 }
@@ -169,7 +152,7 @@ fn classify_write(a: &crate::ast::Atom) -> Option<String> {
             }
         }
         // The stack's own input, before it collapses into arg(input, ...):
-        // `input(K, V)` (a `--set` fact, a default, or a scenario's `set`).
+        // `input(K, V)` (a `--set` fact, a default, or a `set`).
         ("input", 2) => {
             let key = const_str(&a.args[0])?;
             Some(format!("input {STACK}.{key}"))
@@ -252,11 +235,10 @@ fn collect_offers(program: &Program, out: &mut BTreeMap<String, ScopeEffects>) {
             if let Stmt::Output(o) = st
                 && o.value.is_none()
             {
-                let ty = o
-                    .ty
-                    .as_ref()
-                    .map(crate::inputs::type_text)
-                    .unwrap_or_else(|| "?".into());
+                let ty =
+                    o.ty.as_ref()
+                        .map(crate::inputs::type_text)
+                        .unwrap_or_else(|| "?".into());
                 outs.push((o.name.clone(), ty));
             }
         }
@@ -265,11 +247,10 @@ fn collect_offers(program: &Program, out: &mut BTreeMap<String, ScopeEffects>) {
     for s in &program.statements {
         match s {
             Stmt::Output(o) if o.value.is_none() => {
-                let ty = o
-                    .ty
-                    .as_ref()
-                    .map(crate::inputs::type_text)
-                    .unwrap_or_else(|| "?".into());
+                let ty =
+                    o.ty.as_ref()
+                        .map(crate::inputs::type_text)
+                        .unwrap_or_else(|| "?".into());
                 out.entry(STACK.to_string())
                     .or_default()
                     .offers

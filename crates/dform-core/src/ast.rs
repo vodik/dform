@@ -129,9 +129,6 @@ pub enum Stmt {
     Stack(Config),
     /// `provider name { ... }`: a provider the program uses (`stack`).
     Provider(Config),
-    /// `scenario name { ... }`: hypothetical facts and policy, run by
-    /// `dform test` and `plan --scenario` (`scenario`).
-    Scenario(Scenario),
     PolicyPack(PolicyPack),
     ApplyPolicy(ApplyPolicy),
     Resource(Resource),
@@ -289,13 +286,6 @@ pub struct OutputDecl {
     pub name: String,
     pub ty: Option<TypeExpr>,
     pub value: Option<Term>,
-    pub span: Span,
-}
-
-#[derive(Debug, Clone)]
-pub struct Scenario {
-    pub name: String,
-    pub body: Vec<Stmt>,
     pub span: Span,
 }
 

@@ -11,7 +11,6 @@ modules/<module>.df         one module per file
 policies/<pack>.df          policy packs
 config/<stack>/<key>.yaml   per-deployment rows: a keyed stack's `config`
 data/<table>.csv            tables (`input p(...) from csv(...)`)
-scenarios/<name>.df         what-if programs
 providers/<name>/           a local provider: a plugin executable, or a
                             schema (and externs) the mock plays
 dform.state/                state: per deployment, audit logs, plan keys,

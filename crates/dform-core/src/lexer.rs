@@ -128,7 +128,6 @@ pub const KEYWORDS: &[(&str, SyntaxKind)] = &[
     ("instance", INSTANCE_KW),
     ("policy", POLICY_KW),
     ("use", USE_KW),
-    ("scenario", SCENARIO_KW),
     ("resource", RESOURCE_KW),
     ("settings", SETTINGS_KW),
     ("deny", DENY_KW),
