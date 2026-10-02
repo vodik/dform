@@ -21,7 +21,7 @@ net.vpc["network.main::vpc"].tags = {component: "network", env: "prod", team: "p
   │         │         │              merged from 2 contributions
   │         │         │              ├─ "staging" @default   examples/demo/stacks/dform.df:18
   │         │         │              └─ "prod"
-  │         │         │                   examples/demo/stacks/dform.df:18  input env: environment = "staging"
+  │         │         │                   examples/demo/stacks/dform.df:18  key env: environment = "staging"
   │         │         │                   └─ --set env=prod
   │         │         └─ settings["prod"].network.main.vpc_net = "10.20.0.0/16"
   │         │              merged from 2 contributions
@@ -32,8 +32,7 @@ net.vpc["network.main::vpc"].tags = {component: "network", env: "prod", team: "p
   │         │              │         ... 7 more alternatives (--all)
   │         │              │         ... further alternatives dropped at 8
   │         │              └─ "10.20.0.0/16"
-  │         │                   examples/demo/stacks/dform.df:12  stack dform[env] { .. config = yaml("config/dform/${env}.yaml") }
-  │         │                   with "config/dform/${env}.yaml" = "config/dform/prod.yaml"
+  │         │                   examples/demo/dform.toml:11  config = 'yaml("config/dform/{env}.yaml")'
   │         │                   ├─ input env = "prod"   (see above)
   │         │                   └─ table.yaml.stack.config("config/dform/prod.yaml", "config/dform/prod.yaml:5", "network.main.vpc_net", "10.20.0.0/16")   config/dform/prod.yaml:5
   │         └─ input env = "prod"   (see above)

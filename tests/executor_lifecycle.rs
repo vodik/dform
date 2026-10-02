@@ -361,6 +361,7 @@ resource compute.vm vm { size = 1 }
 deny "a wide vpc: ${v}" where deformation(_, v, _), v in net.vpc, v.cidr == "10.1.0.0/16"
 deny "main changes: ${r}" where deformation("create", r, _), r == main
 deny "not main: ${r}" where deformation(_, r, _), r != main, r != net.vpc["gone"]
+provider fake
 "#,
     );
     let r = dform(&s, &["plan"]).failure();

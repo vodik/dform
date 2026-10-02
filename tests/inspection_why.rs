@@ -135,12 +135,12 @@ fn why_a_route_shows_the_statements_that_fired() {
         &["why", r#"net.route["blue-to-green"]"#],
     );
     let start = "net.route[\"blue-to-green\"]
-  examples/tour/stacks/tour.df:301  resource net.route \"${a}-to-${b}\" { .. } where reaches(a, b), a != b, network_of(b, v), dest = net.vpc[v].cidr
+  examples/tour/stacks/tour.df:302  resource net.route \"${a}-to-${b}\" { .. } where reaches(a, b), a != b, network_of(b, v), dest = net.vpc[v].cidr
   with a = \"blue\", b = \"green\", v = \"network.green::vpc\", dest = 10.2.0.0/16
        \"${a}-to-${b}\" = \"blue-to-green\"
        net.vpc[v].cidr = 10.2.0.0/16
   ├─ reaches(\"blue\", \"green\")
-       examples/tour/stacks/tour.df:299  reaches(a, c) where reaches(a, b), link(b, c)
+       examples/tour/stacks/tour.df:300  reaches(a, c) where reaches(a, b), link(b, c)
 ";
     let got: String = out
         .lines()
@@ -149,7 +149,7 @@ fn why_a_route_shows_the_statements_that_fired() {
         .collect();
     assert_eq!(got.replace("  │ ", "    "), start, "{out}");
     assert!(
-        out.contains("├─ spoke(\"green\")   examples/tour/stacks/tour.df:266\n"),
+        out.contains("├─ spoke(\"green\")   examples/tour/stacks/tour.df:267\n"),
         "{out}"
     );
     assert!(
@@ -169,7 +169,7 @@ fn why_a_settings_read_shows_the_read() {
     );
     assert!(
         out.contains(
-            "examples/tour/stacks/tour.df:155  resource db.postgres orders { .. backup_days = \
+            "examples/tour/stacks/tour.df:156  resource db.postgres orders { .. backup_days = \
              cfg.backup_days .. }\n"
         ),
         "{out}"
