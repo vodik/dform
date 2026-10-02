@@ -502,17 +502,25 @@ peer = "vpc-0a1b2c"
 row per object by column name, parsing each cell to its type or failing
 with the file and line. A `git(..)` source is read at a commit the plan
 records, so apply reads what plan read even if the branch moved. A file
-of plain facts is a module: `module releases` reads `data/releases.df`.
+of plain facts is a module like any other: `use data.releases`, then
+`releases.release(app, key, value)`.
 
-**Modules.** A module declares its interface, then its body; inline, or
-as `module network` alone, which reads `modules/network.df`, and modules
-nest. An instance is one copy with inputs, gated by a clause if you
-like; `use` applies a module once. A module's relations are private and
-it hands values out through outputs; its resources are visible to
-policy, as cloud resources are.
+**Modules.** Every `.df` file is a module, named by its path from the
+project root: `config`, `modules.net`, `stacks.platform`. A module is a
+namespace of items: types, relations, rules, denies, `let` values, and
+components. `use config` brings one into scope: its items read as
+`config.x`, and its rules and denies run over what you can see. A module
+holds no resources, so using it twice from two stacks is the same module
+twice. `std` is used everywhere already; `str.split` needs no `use`.
+
+A **component** is the thing that is copied: `component NAME { .. }` as an
+item, or a whole file whose top level declares an `input`. `instance`
+makes one copy with its inputs bound, gated by a clause if you like. A
+copy's relations are private and it hands values out through outputs;
+its resources are visible to policy, as cloud resources are.
 
 ```dform
-module network {
+component network {
   input cidr: inet
   output vpc: aws.vpc = vpc
 
@@ -528,19 +536,23 @@ instance network blue { cidr = "10.1.0.0/16" }
 instance network green { cidr = "10.2.0.0/16" } where env == "prod"
 ```
 
-Inside, `vpc` is the module's own resource and `az(..)` is the stack's
-table, read like any fact. `green` exists only in prod. The module's VPC
-is `aws.vpc["network.blue::vpc"]` everywhere else, and another block
-reads it as `network.blue.vpc`.
+Inside, `vpc` is the copy's own resource and `az(..)` is the stack's
+table, read like any fact. `green` exists only in prod. The copy's VPC is
+`aws.vpc["blue::vpc"]` everywhere else, another block reads it as
+`blue.vpc`, and `network[t].vpc` ranges over every copy. A component used
+once needs no name: `instance traefik { acme_email }` is the copy named
+`traefik`. `use` of a component and `instance` of a module are errors
+that name the other word.
 
 **Policies.** A policy is a module of `set`, `deny` and `warn`
-statements, `module baseline { .. }` in `policies/`, applied with `use
-baseline`. A pack can write into your resources, and nothing about that
-is hidden: it touches a stack only when the stack says `use`, `dform dev
-effects` lists what it touches, ranks decide who wins, and `why` names
-the author of every value. Policy also reads the plan itself: each
-change is a `deformation(kind, resource, before)` row, and a policy can
-refuse it, warn, or demand a signature:
+statements, `policies/baseline.df` say, applied with `use baseline`. A
+pack can write into your resources, and nothing about that is hidden:
+it touches a stack only when the stack says `use`, `dform dev effects`
+lists what it touches, ranks decide who wins, and `why` names the author
+of every value. A pack that takes inputs is a component of denies,
+instanced once. Policy also reads the plan itself: each change is a
+`deformation(kind, resource, before)` row, and a policy can refuse it,
+warn, or demand a signature:
 
 ```dform
 deny "no deletes in prod" { resource: r } where env == "prod", deformation("delete", r, _)
@@ -639,13 +651,17 @@ shop[env]       stacks/shop.df
 platform[env]   stacks/platform.df
 ```
 
-Stacks read each other's outputs through the same lookup shape as
-everything else, and across projects when `dform.toml` names the other
-project's backend as a remote:
+A stack is a component the tool instances: one deployment per `key`.
+`use stacks.platform` binds to those deployments, and reading one is the
+same keyed read as reading a copy; another project's stacks mount under
+a name in `dform.toml`:
 
 ```dform
-let cluster_endpoint = stacks.platform[env=env].endpoint          # this project's platform stack
-let registry = stacks.acme.platform[env="prod"].registry_url      # remote acme's
+use stacks.platform
+use acme.stacks.platform as acme_platform
+
+let cluster_endpoint = platform[env=env].endpoint
+let registry = acme_platform[env="prod"].registry_url
 ```
 
 The stack is the unit of partial work: `dform apply shop` applies the
@@ -737,7 +753,7 @@ plan, one apply, one state, one `why`.
 In a real project this is two stacks, `stacks/platform.df` owning the
 cluster and `stacks/shop.df` owning what runs on it, because they change
 at different speeds and are applied by different people. The second
-reads the first's outputs, `stacks.platform[env=env].endpoint`, and
+says `use stacks.platform` and reads `platform[env=env].endpoint`, and
 nothing else changes: the engine treats a value another stack published
 exactly as it treats one the cloud will produce. The same policy pack that tags every VPC can set
 resource limits on every container, in every module, and the list is
