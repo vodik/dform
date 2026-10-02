@@ -283,7 +283,7 @@ fn why_labels_planner_facts_as_the_plan() {
         .success();
     s.write(
         "p.df",
-        "edition 2026\nlifecycle(net.vpc, \"main\", \"prevent_destroy\")\nseen(a) where identity(net.vpc, a, _)\n",
+        "edition 2026\nlifecycle(net.vpc[\"main\"], \"prevent_destroy\")\nseen(a) where identity(net.vpc, a, _)\n",
     );
     let why = |q: &str| {
         s.run(&["dev", "--world", "w.json", "why", q, "p.df"])
@@ -311,6 +311,11 @@ fn why_labels_facts_injected_at_a_tick() {
         dform::zset::with_policy_rules(dform::parser::parse_program("edition 2026\n").unwrap())
             .unwrap();
     let s = |x: &str| Term::Val(Value::Str(x.into()));
+    let a = Term::Val(Value::Ref {
+        typ: "net.subnet".into(),
+        name: "a".into(),
+        attr: String::new(),
+    });
     let fact = |pred: &str, args: Vec<Term>| Atom {
         pred: pred.into(),
         args,
@@ -318,11 +323,8 @@ fn why_labels_facts_injected_at_a_tick() {
         span: Default::default(),
     };
     let facts = [
-        fact(
-            "deformation",
-            vec![s("remaining"), s("net.subnet"), s("a"), s("d1")],
-        ),
-        fact("world_digest", vec![s("net.subnet"), s("a"), s("d2")]),
+        fact("deformation", vec![s("remaining"), a.clone(), s("d1")]),
+        fact("world_digest", vec![a, s("d2")]),
     ];
     let (res, denies) = dform::engine::eval_at(&program, &facts, Some(3)).unwrap();
     assert_eq!(

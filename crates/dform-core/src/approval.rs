@@ -2,9 +2,10 @@
 //! an approver signs the plan's digest, and apply verifies the signature
 //! offline before its first Apply call.
 //!
-//! * `requires_approval(D, Reason)` is an ordinary relation the program
-//!   derives over `deformation/4` in the policy pass; `D` is the address
-//!   as plan prints it, `T["A"]`. No rows, no token needed.
+//! * `requires_approval(r, Reason)` is an ordinary relation the program
+//!   derives over `deformation/3` in the policy pass; `r` is a resource
+//!   reference (R-42), which plan, the plan file and the approver's check
+//!   print as its address, `T["A"]` (H-16). No rows, no token needed.
 //! * The plan digest is sha256 over the canonical JSON (sorted keys, no
 //!   whitespace) of the plan file without its `digest` field: the delta,
 //!   the inputs, the pinned git commits of the input relations and the
@@ -124,14 +125,25 @@ impl std::fmt::Display for OtherDigest {
 
 impl std::error::Error for OtherDigest {}
 
-/// The policy pass's `requires_approval(D, Reason)` rows, `D` as the plan
-/// prints an address (`T["A"]`), sorted.
-pub fn needs(facts: &std::collections::BTreeSet<crate::ast::Atom>) -> Vec<(String, String)> {
-    let text = |t: &crate::ast::Term| match t {
-        crate::ast::Term::Val(crate::value::Value::Str(s)) => s.clone(),
+/// A column of `requires_approval` or `approver_allowed` as text: a string
+/// as itself, a reference as the plan prints its address (`T["A"]`).
+fn text(t: &crate::ast::Term) -> String {
+    use crate::value::Value;
+    match t {
+        crate::ast::Term::Val(Value::Str(s)) => s.clone(),
+        crate::ast::Term::Val(Value::Ref { typ, name, attr }) => crate::ir::Address {
+            typ: typ.clone(),
+            name: name.clone(),
+        }
+        .attr(attr),
         crate::ast::Term::Val(v) => crate::partition::fmt_value(v),
         t => format!("{t:?}"),
-    };
+    }
+}
+
+/// The policy pass's `requires_approval(r, Reason)` rows, `r` as the plan
+/// prints an address (`T["A"]`), sorted.
+pub fn needs(facts: &std::collections::BTreeSet<crate::ast::Atom>) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = facts
         .iter()
         .filter(|a| a.pred == "requires_approval" && a.args.len() == 2)
@@ -142,8 +154,8 @@ pub fn needs(facts: &std::collections::BTreeSet<crate::ast::Atom>) -> Vec<(Strin
     out
 }
 
-/// Does the program state `approver_allowed(Who, D)` anywhere (a rule or a
-/// fact)? When it does, an approver must satisfy it for every deformation
+/// Does the program state `approver_allowed(Who, r)` anywhere (a rule or a
+/// fact)? When it does, an approver must satisfy it for every resource
 /// that needs the approval.
 pub fn restricts_approvers(program: &crate::ast::Program) -> bool {
     fn any(stmts: &[crate::ast::Stmt]) -> bool {
@@ -158,7 +170,8 @@ pub fn restricts_approvers(program: &crate::ast::Program) -> bool {
     any(&program.statements)
 }
 
-/// Does `approver_allowed(who, d)` hold in `facts`?
+/// Does `approver_allowed(who, d)` hold in `facts`? `d` is the address as
+/// `needs` prints it; the row's resource is a reference or that text.
 pub fn approver_allowed(
     facts: &std::collections::BTreeSet<crate::ast::Atom>,
     who: &str,
@@ -169,7 +182,7 @@ pub fn approver_allowed(
     facts.iter().any(|a| {
         a.pred == "approver_allowed"
             && matches!(a.args.as_slice(),
-                [Term::Val(Value::Str(w)), Term::Val(Value::Str(x))] if w == who && x == d)
+                [Term::Val(Value::Str(w)), x] if w == who && text(x) == d)
     })
 }
 

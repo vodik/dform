@@ -20,7 +20,7 @@ pub enum ActionKind {
     Pending,
     /// An update that changes a `force_new` path: the provider cannot
     /// update in place. The old object is deleted before the new one is
-    /// created, or after under `lifecycle(T, A, create_before_destroy)`
+    /// created, or after under `lifecycle(r, create_before_destroy)`
     /// (`create_first`), when it stays deposed in state until then.
     Replace {
         create_first: bool,

@@ -48,7 +48,7 @@ pub struct Adopt {
 /// provider picked (round 0). Either way the provider owns it, so it is never
 /// sent back: an update would otherwise make dform the owner of a value the
 /// server defaulted (server-side apply's field managers). An
-/// `ignore_changes(T, A, P)` path stays: a create sets it; the planner drops
+/// `ignore_changes(r, P)` path stays: a create sets it; the planner drops
 /// it from both sides of an object that exists.
 pub fn compile_resources(
     facts: impl IntoIterator<Item = Atom>,
@@ -230,16 +230,14 @@ fn remove_path(root: &mut BTreeMap<String, Value>, path: &str) {
 pub fn compile_adopts<'a>(facts: impl Iterator<Item = &'a Atom>) -> Result<Vec<Adopt>> {
     let mut out = Vec::new();
     for a in facts.filter(|a| a.pred == "adopt") {
-        if a.args.len() != 3 {
-            bail!("adopt/3 expected");
-        }
-        let typ = as_str_val(&a.args[0])?.to_string();
-        let name = as_str_val(&a.args[1])?.to_string();
-        let remote = as_str_val(&a.args[2])?.to_string();
-        out.push(Adopt {
-            addr: Address { typ, name },
-            remote,
-        });
+        let [r, remote] = a.args.as_slice() else {
+            bail!("adopt expects a resource and the remote name: adopt(r, \"name\")");
+        };
+        let Some(addr) = crate::zset::referenced(r) else {
+            bail!("adopt expects a resource reference first, got {r:?}");
+        };
+        let remote = as_str_val(remote)?.to_string();
+        out.push(Adopt { addr, remote });
     }
     Ok(out)
 }

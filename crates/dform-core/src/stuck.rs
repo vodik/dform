@@ -158,7 +158,7 @@ pub fn can_stick(head: &Atom, body: &[Lit], aggregates: &BTreeSet<String>) -> bo
             _ => false,
         }
     }
-    if matches!(head.pred.as_str(), "want" | "arg" | "adopt") && head.args.len() >= 2 {
+    if crate::zset::address_arg(head).is_some() {
         return true;
     }
     if head.args.iter().any(has_func) {

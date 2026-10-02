@@ -42,13 +42,17 @@ fn check(file: &str, provider: &str, env: Option<&str>, append: &str) {
     let mut more = vec![];
     for (k, w) in first.facts.iter().filter(|a| a.pred == "want").enumerate() {
         let kind = ["delete", "replace", "pending", "create"][k % 4];
-        let (t, n) = (w.args[0].clone(), w.args[1].clone());
-        more.push(atom(
-            "deformation",
-            vec![s(kind), t.clone(), n.clone(), s("before")],
-        ));
-        more.push(atom("world_digest", vec![t.clone(), n.clone(), s("now")]));
-        more.push(atom("lifecycle", vec![t, n, s("prevent_destroy")]));
+        let [Term::Val(Value::Str(t)), Term::Val(Value::Str(n))] = w.args.as_slice() else {
+            panic!("{w:?}");
+        };
+        let r = Term::Val(Value::Ref {
+            typ: t.clone(),
+            name: n.clone(),
+            attr: String::new(),
+        });
+        more.push(atom("deformation", vec![s(kind), r.clone(), s("before")]));
+        more.push(atom("world_digest", vec![r.clone(), s("now")]));
+        more.push(atom("lifecycle", vec![r, s("prevent_destroy")]));
     }
     assert!(!more.is_empty(), "{file}: no resources");
     let (resumed, v1) = resumable.with(&more).unwrap();
@@ -82,6 +86,6 @@ fn the_policy_pass_resumed_is_the_policy_pass() {
         "examples/gke/stacks/gke_two_phase.df",
         "gke",
         None,
-        "deny \"strict\" { rule: r } where stuck(r, _, _, _)\n         deny \"zone\" { z: z } where {\n           deformation(_, \"gke_cluster\", _, _)\n           arg(\"gke_cluster\", \"pngu\", \"zones\", zs)\n           member(zs, z)\n         }",
+        "deny \"strict\" { rule: r } where stuck(r, _, _, _)\n         deny \"zone\" { z: z } where {\n           deformation(_, gke_cluster[_], _)\n           arg(\"gke_cluster\", \"pngu\", \"zones\", zs)\n           member(zs, z)\n         }",
     );
 }

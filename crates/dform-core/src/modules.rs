@@ -965,7 +965,7 @@ fn rewrite_lit(lit: Lit, scope: &str) -> Lit {
 fn rewrite_atom(mut atom: Atom, scope: &str) -> Atom {
     let t = |x: Term| rewrite_term(x, scope);
     match (atom.pred.as_str(), atom.args.len()) {
-        ("want", 2) | ("arg" | "attr", 4) | ("arg", 5) | ("arg_add", 4) | ("adopt", 3) => {
+        ("want", 2) | ("arg" | "attr", 4) | ("arg", 5) | ("arg_add", 4) => {
             let mut args: Vec<Term> = atom.args.into_iter().map(t).collect();
             args[1] = scoped_term(scope, args[1].clone());
             atom.args = args;
@@ -1004,9 +1004,11 @@ fn rewrite_term(term: Term, scope: &str) -> Term {
 }
 
 /// `scoped(Scope, Name)`, unless `Name` is already an address
-/// (`network.main/vpc` names another instance's resource).
+/// (`"network.main::vpc"` names another instance's resource).
 fn scoped_term(scope: &str, name: Term) -> Term {
-    if matches!(&name, Term::Func { name, .. } if name == "scoped") {
+    if matches!(&name, Term::Func { name, .. } if name == "scoped")
+        || matches!(&name, Term::Val(Value::Str(s)) if s.contains("::"))
+    {
         return name;
     }
     Term::Func {

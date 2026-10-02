@@ -111,7 +111,7 @@ struct Res {
 #[derive(Debug, Clone, Default)]
 struct Version {
     res: Vec<Res>,
-    /// `moved(T, Old, New)`, for the renames since the last version.
+    /// `moved(T, Old, new)`, for the renames since the last version.
     moved: Vec<(&'static str, String, String)>,
 }
 
@@ -146,15 +146,18 @@ impl Version {
                 (r.create_before_destroy, "create_before_destroy"),
             ] {
                 if on {
-                    out.push_str(&format!(
-                        "lifecycle(\"{}\", \"{}\", \"{what}\")\n",
-                        r.typ, r.name
-                    ));
+                    out.push_str(&format!("lifecycle({}, \"{what}\")\n", r.name));
                 }
             }
         }
         for (typ, old, new) in &self.moved {
-            out.push_str(&format!("moved(\"{typ}\", \"{old}\", \"{new}\")\n"));
+            // The new side is a reference: by its name while the resource
+            // is in the program, by its address once renamed again.
+            if self.res.iter().any(|r| r.name == *new) {
+                out.push_str(&format!("moved({typ}, \"{old}\", {new})\n"));
+            } else {
+                out.push_str(&format!("moved({typ}, \"{old}\", {typ}[\"{new}\"])\n"));
+            }
         }
         out
     }

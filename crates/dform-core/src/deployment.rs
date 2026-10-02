@@ -398,7 +398,7 @@ pub struct Planned {
     pub sections: stuck::Sections,
     /// Denies over the plan: what the policy pass derives beyond the plan's
     /// own evaluation (`lifecycle prevent_destroy`, a policy on
-    /// `deformation/4`).
+    /// `deformation/3`).
     pub denies: Vec<String>,
 }
 
@@ -551,7 +551,7 @@ impl Evaluator {
                 .any(|(a, b)| a.addr != b.addr || a.attrs != b.attrs)
         {
             bail!(
-                "a resource rule reads deformation/4 or world_digest/3: the plan would \
+                "a resource rule reads deformation/3 or world_digest/2: the plan would \
                  depend on itself (only policy may read the deformation)"
             );
         }

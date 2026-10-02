@@ -35,16 +35,20 @@ use anyhow::{Result, bail};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// The lifecycle facts, plain facts the planner reads (E §2.8: filters and
-/// policy over the deformation; §3.4 for `moved`):
+/// policy over the deformation; §3.4 for `moved`). `r` is a resource
+/// reference (R-42): a resource in scope by its name, `T["A"]`, or a
+/// variable a rule binds with `in`:
 ///
-///   lifecycle(T, A, prevent_destroy).        a delete or replace of T/A is a deny
-///                                            (derived by `POLICY_RULES`)
-///   lifecycle(T, A, create_before_destroy).  a replacement is created first
-///                                            (where the schema's type_replace
-///                                            allows either order)
-///   moved(T, Old, New).                      state's identity for Old is New's
-///   ignore_changes(T, A, Path).              Path is dropped from both sides
-///                                            once T/A exists; a create sets it
+///   lifecycle(r, prevent_destroy).        a delete or replace of r is a deny
+///                                         (derived by `POLICY_RULES`)
+///   lifecycle(r, create_before_destroy).  a replacement is created first
+///                                         (where the schema's type_replace
+///                                         allows either order)
+///   moved(T, Old, r).                     state's identity for the address
+///                                         Old (text: it no longer exists)
+///                                         is r's
+///   ignore_changes(r, Path).              Path is dropped from both sides
+///                                         once r exists; a create sets it
 ///
 /// And the refinements the engine does not check (F DR-13 revised): a
 /// `type_refine(T, Path, C)` on a path the schema marks `sensitive`, for
@@ -60,6 +64,67 @@ pub struct Lifecycle {
     pub assertions: BTreeMap<Address, Vec<(String, crate::lattice::Constraint)>>,
 }
 
+/// The column of a plan or lifecycle relation that holds a resource
+/// reference (R-42), by its arity: the resolver lowers a resource there
+/// as a reference value, never its address text.
+pub fn ref_column(pred: &str, arity: usize) -> Option<usize> {
+    match (pred, arity) {
+        ("deformation", 3) => Some(1),
+        ("moved", 3) => Some(2),
+        ("world_digest" | "requires_approval" | "lifecycle" | "adopt" | "ignore_changes", 2) => {
+            Some(0)
+        }
+        _ => None,
+    }
+}
+
+/// The arity of each relation `ref_column` knows, with its shape for the
+/// error a wrong arity gets.
+pub const REF_RELATIONS: &[(&str, usize, &str)] = &[
+    ("deformation", 3, "deformation(kind, resource, before)"),
+    ("world_digest", 2, "world_digest(resource, now)"),
+    (
+        "requires_approval",
+        2,
+        "requires_approval(resource, reason)",
+    ),
+    ("lifecycle", 2, "lifecycle(resource, \"prevent_destroy\")"),
+    ("adopt", 2, "adopt(resource, \"remote-name\")"),
+    ("ignore_changes", 2, "ignore_changes(resource, \"path\")"),
+    ("moved", 3, "moved(T, \"old-address\", resource)"),
+];
+
+/// A head's term that names a resource's address, a content position
+/// (Rule 2): `want(T, A)`'s and `arg(T, A, ..)`'s `A`, `adopt(r, _)`'s
+/// reference.
+pub fn address_arg(head: &Atom) -> Option<&Term> {
+    match head.pred.as_str() {
+        "want" | "arg" if head.args.len() >= 2 => Some(&head.args[1]),
+        "adopt" => head.args.first(),
+        _ => None,
+    }
+}
+
+/// A reference value's address: `T["A"]` with no attribute path.
+pub fn referenced(t: &Term) -> Option<Address> {
+    match t {
+        Term::Val(Value::Ref { typ, name, attr }) if attr.is_empty() => Some(Address {
+            typ: typ.clone(),
+            name: name.clone(),
+        }),
+        _ => None,
+    }
+}
+
+/// A reference value for `addr`.
+pub fn reference(addr: &Address) -> Value {
+    Value::Ref {
+        typ: addr.typ.clone(),
+        name: addr.name.clone(),
+        attr: String::new(),
+    }
+}
+
 impl Lifecycle {
     /// The lifecycle facts, checked against the schema: a
     /// `create_before_destroy` on a `type_replace(T, destroy_first)` type is
@@ -73,48 +138,53 @@ impl Lifecycle {
             assertions: provider_assertions(&facts, schema)?,
             ..Lifecycle::default()
         };
+        let text = |t: &Term| match t {
+            Term::Val(Value::Str(s)) => Some(s.clone()),
+            _ => None,
+        };
         for f in facts {
-            if !matches!(f.pred.as_str(), "lifecycle" | "moved" | "ignore_changes") {
-                continue;
-            }
-            let strs: Option<Vec<&str>> = f
-                .args
-                .iter()
-                .map(|t| match t {
-                    Term::Val(Value::Str(s)) => Some(s.as_str()),
-                    _ => None,
-                })
-                .collect();
-            let Some([typ, a, b]) = strs.as_deref() else {
-                bail!("{}/3 expects three symbols or strings, got {f:?}", f.pred);
-            };
-            let addr = |name: &str| Address {
-                typ: typ.to_string(),
-                name: name.to_string(),
-            };
-            match (f.pred.as_str(), *b) {
-                // A deny the evaluator derives (`POLICY_RULES`).
-                ("lifecycle", "prevent_destroy") => {}
-                ("lifecycle", "create_before_destroy") => {
-                    if schema.replace_order(typ) == ReplaceOrder::DestroyFirst {
-                        bail!(
-                            "lifecycle({typ}, {a}, create_before_destroy): type {typ} is \
-                             type_replace destroy_first; its old object must be deleted \
-                             before the replacement is created"
-                        );
+            match (f.pred.as_str(), f.args.as_slice()) {
+                ("lifecycle", [r, what]) => {
+                    let (Some(addr), Some(what)) = (referenced(r), text(what)) else {
+                        bail!("lifecycle expects a resource and a flag, got {f:?}");
+                    };
+                    match what.as_str() {
+                        // A deny the evaluator derives (`POLICY_RULES`).
+                        "prevent_destroy" => {}
+                        "create_before_destroy" => {
+                            if schema.replace_order(&addr.typ) == ReplaceOrder::DestroyFirst {
+                                bail!(
+                                    "lifecycle({addr}, create_before_destroy): type {} is \
+                                     type_replace destroy_first; its old object must be \
+                                     deleted before the replacement is created",
+                                    addr.typ
+                                );
+                            }
+                            out.create_before_destroy.insert(addr);
+                        }
+                        other => bail!(
+                            "lifecycle({addr}, {other}): unknown flag \
+                             (expected prevent_destroy or create_before_destroy)"
+                        ),
                     }
-                    out.create_before_destroy.insert(addr(a));
                 }
-                ("lifecycle", other) => bail!(
-                    "lifecycle({typ}, {a}, {other}): unknown flag \
-                     (expected prevent_destroy or create_before_destroy)"
-                ),
-                ("moved", _) => out.moved.push((addr(a), addr(b))),
-                _ => out
-                    .ignore_changes
-                    .entry(addr(a))
-                    .or_default()
-                    .push(b.to_string()),
+                ("moved", [typ, old, new]) => {
+                    let (Some(typ), Some(old), Some(new)) = (text(typ), text(old), referenced(new))
+                    else {
+                        bail!("moved expects a type, the old address and a resource, got {f:?}");
+                    };
+                    if new.typ != typ {
+                        bail!("moved({typ}, {old:?}, {new}): {new} is not a {typ}");
+                    }
+                    out.moved.push((Address { typ, name: old }, new));
+                }
+                ("ignore_changes", [r, path]) => {
+                    let (Some(addr), Some(path)) = (referenced(r), text(path)) else {
+                        bail!("ignore_changes expects a resource and a path, got {f:?}");
+                    };
+                    out.ignore_changes.entry(addr).or_default().push(path);
+                }
+                _ => {}
             }
         }
         Ok(out)
@@ -189,15 +259,15 @@ fn provider_assertions(
 
 /// Policy over the plan (E §2.8: policy reads the deformation). The planner
 /// hands the deformation back to the evaluator as facts for a second pass
-/// (`deformation_facts`):
+/// (`deformation_facts`), the resource as a reference (R-42):
 ///
-///   deformation(Kind, T, A, Before)  one per deformation: Kind is create,
-///                                    adopt, update, drift, pending, replace,
-///                                    delete, delete_deposed or remaining;
-///                                    Before the digest of the world
-///                                    document it was planned against
-///                                    (`absent` for none)
-///   world_digest(T, A, Now)          the world document's digest now
+///   deformation(Kind, r, Before)  one per deformation: Kind is create,
+///                                 adopt, update, drift, pending, replace,
+///                                 delete, delete_deposed or remaining;
+///                                 Before the digest of the world document
+///                                 it was planned against (`absent` for
+///                                 none)
+///   world_digest(r, Now)          the world document's digest now
 ///
 /// and these rules, appended to the program, derive the lifecycle denies
 /// from them, so `why` explains them and a policy can read the same facts.
@@ -207,20 +277,20 @@ fn provider_assertions(
 /// `remaining`.
 pub const POLICY_RULES: &str = r#"
 deny(m) where {
-  lifecycle(t, a, "prevent_destroy"), deformation("delete", t, a, _)
-  m = format("lifecycle prevent_destroy: the plan would delete %s[\"%s\"]", t, a)
+  lifecycle(r, "prevent_destroy"), deformation("delete", r, _)
+  m = "lifecycle prevent_destroy: the plan would delete ${r}"
 }
 deny(m) where {
-  lifecycle(t, a, "prevent_destroy"), deformation("replace", t, a, _)
-  m = format("lifecycle prevent_destroy: the plan would replace %s[\"%s\"]", t, a)
+  lifecycle(r, "prevent_destroy"), deformation("replace", r, _)
+  m = "lifecycle prevent_destroy: the plan would replace ${r}"
 }
 deny(m) where {
-  deformation("pending", t, a, before), world_digest(t, a, now), before != now
-  m = format("the world changed under a pending deformation: %s[\"%s\"]", t, a)
+  deformation("pending", r, before), world_digest(r, now), before != now
+  m = "the world changed under a pending deformation: ${r}"
 }
 deny(m) where {
-  deformation("remaining", t, a, before), world_digest(t, a, now), before != now
-  m = format("the world changed under a remaining action: %s[\"%s\"]", t, a)
+  deformation("remaining", r, before), world_digest(r, now), before != now
+  m = "the world changed under a remaining action: ${r}"
 }
 "#;
 
@@ -234,7 +304,7 @@ pub fn with_policy_rules(mut program: crate::ast::Program) -> Result<crate::ast:
     Ok(program)
 }
 
-/// A world document's digest for `deformation/4` and `world_digest/3`.
+/// A world document's digest for `deformation/3` and `world_digest/2`.
 pub fn doc_digest(doc: Option<&serde_json::Value>) -> String {
     match doc {
         Some(d) => file::fnv64(&serde_json::to_vec(d).unwrap_or_default()),
@@ -242,7 +312,7 @@ pub fn doc_digest(doc: Option<&serde_json::Value>) -> String {
     }
 }
 
-/// `deformation/4`'s kind for an action; `held` when it waits on a
+/// `deformation/3`'s kind for an action; `held` when it waits on a
 /// boundary.
 pub fn deformation_kind(k: &crate::provider::ActionKind, held: bool) -> Option<&'static str> {
     use crate::provider::ActionKind;
@@ -260,8 +330,8 @@ pub fn deformation_kind(k: &crate::provider::ActionKind, held: bool) -> Option<&
     })
 }
 
-/// `deformation(Kind, T, A, Before)` for each deformation, with its
-/// `world_digest(T, A, Now)`. `before` is the document each was planned
+/// `deformation(Kind, r, Before)` for each deformation, with its
+/// `world_digest(r, Now)`. `before` is the document each was planned
 /// against, `now` the world as it is (at plan time the same).
 pub fn deformation_facts<'a>(
     deformations: impl IntoIterator<Item = (&'static str, &'a Address)>,
@@ -269,6 +339,7 @@ pub fn deformation_facts<'a>(
     now: &BTreeMap<Address, serde_json::Value>,
 ) -> Vec<Atom> {
     let s = |x: &str| Term::Val(Value::Str(x.to_string()));
+    let r = |a: &Address| Term::Val(reference(a));
     let mut out = Vec::new();
     let mut seen = BTreeSet::new();
     for (kind, addr) in deformations {
@@ -276,8 +347,7 @@ pub fn deformation_facts<'a>(
             pred: "deformation".into(),
             args: vec![
                 s(kind),
-                s(&addr.typ),
-                s(&addr.name),
+                r(addr),
                 s(&doc_digest(before.get(addr).and_then(Option::as_ref))),
             ],
             record: None,
@@ -286,7 +356,7 @@ pub fn deformation_facts<'a>(
         if seen.insert(addr) {
             out.push(Atom {
                 pred: "world_digest".into(),
-                args: vec![s(&addr.typ), s(&addr.name), s(&doc_digest(now.get(addr)))],
+                args: vec![r(addr), s(&doc_digest(now.get(addr)))],
                 record: None,
                 span: Default::default(),
             });
@@ -856,7 +926,7 @@ pub mod file {
                 head: crate::partition::fmt_atom(head),
                 rule: format!("r{rule}"),
                 bindings: bindings
-                    .map(|b| redacted(b.iter().map(|(k, v)| (k, v)), r, key))
+                    .map(|b| redacted(b.iter(), r, key))
                     .unwrap_or_default(),
             };
             if !out.contains(&g) {

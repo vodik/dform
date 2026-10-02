@@ -1,5 +1,5 @@
 //! Replacement order is the schema's: `type_replace(T, create_first |
-//! destroy_first | either)`. `lifecycle(T, A, create_before_destroy)` picks
+//! destroy_first | either)`. `lifecycle(r, create_before_destroy)` picks
 //! the order only where the schema allows either, and is an error on a
 //! destroy_first type.
 
@@ -57,7 +57,7 @@ fn either_destroys_first_unless_lifecycle_says_otherwise() {
     let (_s, r) = replan(
         "order-either-cbd",
         "type_replace(\"net.subnet\", \"either\")\n",
-        "lifecycle(\"net.subnet\", \"a\", \"create_before_destroy\")\n",
+        "lifecycle(a, \"create_before_destroy\")\n",
     );
     let r = r.success();
     assert!(
@@ -85,7 +85,7 @@ fn create_first_needs_no_lifecycle_fact() {
     let (_s, r) = replan(
         "order-create-first-cbd",
         "type_replace(\"net.subnet\", \"create_first\")\n",
-        "lifecycle(\"net.subnet\", \"a\", \"create_before_destroy\")\n",
+        "lifecycle(a, \"create_before_destroy\")\n",
     );
     assert!(
         r.success()
@@ -102,12 +102,12 @@ fn create_before_destroy_on_a_destroy_first_type_is_an_error() {
     let (_s, r) = replan(
         "order-destroy-first",
         "type_replace(\"net.subnet\", \"destroy_first\")\n",
-        "lifecycle(\"net.subnet\", \"a\", \"create_before_destroy\")\n",
+        "lifecycle(a, \"create_before_destroy\")\n",
     );
     let r = r.failure();
     assert!(
         r.stderr.contains(
-            "lifecycle(net.subnet, a, create_before_destroy): type net.subnet is \
+            "lifecycle(net.subnet[\"a\"], create_before_destroy): type net.subnet is \
              type_replace destroy_first"
         ),
         "{}",

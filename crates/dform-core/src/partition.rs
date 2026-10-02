@@ -180,7 +180,8 @@ fn aggregate_read(atom: &Atom) -> Option<Node> {
 }
 
 /// Compiler-owned predicates whose first column is a resource type (F's
-/// DR-12 revised). Each is one node per constant type.
+/// DR-12 revised), or a reference to a resource of it (R-42). Each is one
+/// node per constant type.
 fn type_keyed(pred: &str) -> bool {
     matches!(
         pred,
@@ -195,6 +196,15 @@ fn type_keyed(pred: &str) -> bool {
     )
 }
 
+/// The constant type of a type-keyed column: a type, or a reference's.
+fn key_type(t: &Term) -> Option<String> {
+    match t {
+        Term::Val(Value::Ref { typ, .. }) => Some(typ.clone()),
+        Term::Func { name, args } if name == "ref" && args.len() == 3 => const_str(&args[0]),
+        t => const_str(t),
+    }
+}
+
 /// The node a rule with this head defines.
 pub fn head_node(atom: &Atom) -> Node {
     if let Some((arg, _)) = contrib_node(atom) {
@@ -203,7 +213,7 @@ pub fn head_node(atom: &Atom) -> Node {
     if type_keyed(&atom.pred) && !atom.args.is_empty() {
         return Node {
             pred: atom.pred.clone(),
-            typ: const_str(&atom.args[0]),
+            typ: key_type(&atom.args[0]),
             path: None,
         };
     }

@@ -234,7 +234,7 @@ fn a_denied_replace_is_a_section() {
     s.write(
         "p.df",
         &format!(
-            "{}lifecycle(net.vpc, \"main\", \"prevent_destroy\")\n",
+            "{}lifecycle(main, \"prevent_destroy\")\n",
             net.replace("10.0.0.0/16", "10.1.0.0/16")
         ),
     );

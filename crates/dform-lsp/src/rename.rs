@@ -1,7 +1,7 @@
 //! Rename: every place that denotes a name (`refs`), rewritten. A
 //! resource, an instance or a module whose addresses have state in the
 //! selected deployment also gets, in the same edit, a `moved(T, "old",
-//! "new")` fact per address beside its declaration, so the rename plans as
+//! new)` fact per address beside its declaration, so the rename plans as
 //! a move and not a destroy and a create. Keywords, builtins, schema types
 //! and what a provider owns (attribute paths, its relations) are refused.
 
@@ -189,7 +189,7 @@ pub fn rename(p: &Project, path: &Path, at: usize, new: &str) -> Result<Renaming
     {
         let facts: String = moves
             .iter()
-            .map(|(typ, a, b)| format!("\n{indent}moved({typ:?}, {a:?}, {b:?})"))
+            .map(|(typ, a, b)| format!("\n{indent}moved({typ}, {a:?}, {})", reference(typ, b)))
             .collect();
         edit(f, at, at, facts);
     }
@@ -318,8 +318,23 @@ fn severity(s: Severity) -> &'static str {
     }
 }
 
-/// The plan of an evaluation: its policy pass's `deformation(Kind, T, A,
-/// _)` facts.
+/// The new side of a `moved` fact (R-42): a resource of the stack by its
+/// name, one of a module instance by its address, which a module body
+/// does not scope again.
+fn reference(typ: &str, b: &str) -> String {
+    if b.contains("::") {
+        dform_core::ir::Address {
+            typ: typ.to_string(),
+            name: b.to_string(),
+        }
+        .to_string()
+    } else {
+        b.to_string()
+    }
+}
+
+/// The plan of an evaluation: its policy pass's `deformation(Kind, r, _)`
+/// facts, as (Kind, T, A).
 fn deformations(o: &Outcome) -> BTreeSet<(String, String, String)> {
     let Some(e) = &o.evaluated else {
         return BTreeSet::new();
@@ -329,11 +344,8 @@ fn deformations(o: &Outcome) -> BTreeSet<(String, String, String)> {
         .iter()
         .filter(|a| a.pred == "deformation")
         .filter_map(|a| {
-            Some((
-                str_of(a.args.first())?,
-                str_of(a.args.get(1))?,
-                str_of(a.args.get(2))?,
-            ))
+            let r = dform_core::zset::referenced(a.args.get(1)?)?;
+            Some((str_of(a.args.first())?, r.typ, r.name))
         })
         .collect()
 }

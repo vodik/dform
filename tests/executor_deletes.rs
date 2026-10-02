@@ -105,7 +105,7 @@ fn create_before_destroy_deposes_the_old_object_until_dependents_move() {
     s.write("p.df", NET);
     dform(&s, &["apply"]).success();
     let cbd = format!(
-        "{}lifecycle(net.vpc, \"main\", \"create_before_destroy\")\n",
+        "{}lifecycle(main, \"create_before_destroy\")\n",
         NET.replace("10.0.0.0/16", "10.1.0.0/16")
     );
     s.write("p.df", &cbd);
@@ -161,7 +161,7 @@ fn create_before_destroy_in_one_apply_takes_two_ticks() {
     s.write(
         "p.df",
         &format!(
-            "{}lifecycle(net.vpc, \"main\", \"create_before_destroy\")\n",
+            "{}lifecycle(main, \"create_before_destroy\")\n",
             NET.replace("10.0.0.0/16", "10.1.0.0/16")
         ),
     );

@@ -203,7 +203,7 @@ fn replace_denied_and_moved_are_in_the_document() {
     s.write(
         "p.df",
         &format!(
-            "{}lifecycle(net.vpc, \"main\", \"prevent_destroy\")\n",
+            "{}lifecycle(main, \"prevent_destroy\")\n",
             net.replace("10.0.0.0/16", "10.1.0.0/16")
         ),
     );
@@ -225,7 +225,7 @@ fn replace_denied_and_moved_are_in_the_document() {
 
     s.write(
         "p.df",
-        "edition 2026\nresource net.vpc core { cidr = \"10.0.0.0/16\" }\nmoved(net.vpc, \"main\", \"core\")\n",
+        "edition 2026\nresource net.vpc core { cidr = \"10.0.0.0/16\" }\nmoved(net.vpc, \"main\", core)\n",
     );
     let r = s
         .run(&common::on(

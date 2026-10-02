@@ -107,7 +107,7 @@ pub const DEFAULT_READ_ATTEMPTS: u32 = 3;
 /// new object of a type at once. `CreateFirst`: the replacement is created
 /// before the old object is deleted (a Deployment rolls). `DestroyFirst`:
 /// the old object must go first (a name that must be unique, a Namespace).
-/// `Either`: destroy first, unless `lifecycle(T, A, create_before_destroy)`.
+/// `Either`: destroy first, unless `lifecycle(r, create_before_destroy)`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReplaceOrder {
     CreateFirst,

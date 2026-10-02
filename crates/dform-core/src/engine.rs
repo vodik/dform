@@ -1884,9 +1884,8 @@ fn eval_rule(rule: &RuleStmt, plan: &ops::Rule, src: &Src, rec: &Rec) -> Result<
     {
         // Rule 2: an address argument is a content position. A head whose
         // address carries a null is stuck, not derived.
-        if matches!(rule.head.pred.as_str(), "want" | "arg" | "adopt")
-            && rule.head.args.len() >= 2
-            && let Some(v) = eval_term(&rule.head.args[1], &b)
+        if let Some(t) = crate::zset::address_arg(&rule.head)
+            && let Some(v) = eval_term(t, &b)
         {
             let nulls = nulls_in(&v);
             if !nulls.is_empty() {
@@ -2654,6 +2653,22 @@ fn unify_term(pat: &Term, fv: &Value, out: &mut HashMap<String, Value>, rec: &Re
                     return Ok(false);
                 };
                 return unify_term(&args[1], &Value::Str(suffix.to_string()), out, rec);
+            }
+            // `ref(T, A, P)` as a pattern takes a reference apart (R-42):
+            // `deformation(k, ref("aws.vpc", A, ""), _)` binds `A`.
+            if name == "ref"
+                && args.len() == 3
+                && let Value::Ref { typ, name, attr } = fv
+                && eval_term(pat, out).is_none()
+            {
+                let mut tmp = out.clone();
+                for (t, v) in args.iter().zip([typ, name, attr]) {
+                    if !unify_term(t, &Value::Str(v.clone()), &mut tmp, rec)? {
+                        return Ok(false);
+                    }
+                }
+                *out = tmp;
+                return Ok(true);
             }
 
             let pv = match eval_term(pat, out) {
@@ -3510,7 +3525,12 @@ fn value_to_string(v: &Value) -> String {
             crate::value::u32_to_ipv4(*start),
             crate::value::u32_to_ipv4(*end)
         ),
-        Value::Ref { typ, name, attr } => format!("ref({typ},{name},{attr})"),
+        // H-16: a reference reads as the source names it, `T["A"].path`.
+        Value::Ref { typ, name, attr } => crate::ir::Address {
+            typ: typ.clone(),
+            name: name.clone(),
+        }
+        .attr(attr),
         Value::CloudRef { typ, name, attr } => format!("cloud_ref({typ},{name},{attr})"),
         Value::Null { label, .. } => format!("?{label}"),
     }

@@ -1,4 +1,4 @@
-//! Approvals (README "Approvals"): `requires_approval(D, Reason)` in the
+//! Approvals (README "Approvals"): `requires_approval(r, Reason)` in the
 //! policy pass makes the plan print a "needs approval" section and its
 //! digest, and `apply PLAN --approval FILE` verifies a signed statement
 //! over that digest offline before any Apply call. The tokens come from

@@ -418,10 +418,7 @@ pub fn check(
         }
         // E0305: a name.
         let named = |t: &Term| secret(t) || names_secret(t, &|t| secret(t));
-        let addr = match (h.pred.as_str(), h.args.len()) {
-            ("want", 2) | ("arg", 4 | 5) | ("adopt", 3) => Some(&h.args[1]),
-            _ => None,
-        };
+        let addr = crate::zset::address_arg(h);
         if addr.is_some_and(named) || h.args.iter().any(|t| names_secret(t, &|t| secret(t))) {
             diags.push(Diagnostic::error(
                 h.span,

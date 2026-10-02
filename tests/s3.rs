@@ -875,7 +875,7 @@ fn a_server_that_ignores_conditions_is_refused() {
     let p = Project::of(&t, "lax-approval", |s| {
         s.write(
             "stacks/app.df",
-            "edition 2026\nstack app {}\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nrequires_approval(d, \"every change\") where {\ndeformation(_, t, a, _)\nd = \"${t}[\\\"${a}\\\"]\"\n}\n",
+            "edition 2026\nstack app {}\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nrequires_approval(r, \"every change\") where deformation(_, r, _)\n",
         );
     });
     let r = p.run(&["plan", "app"]).failure();

@@ -24,7 +24,7 @@
 //!   Held drift stays in the baseline, so it is held again at every world
 //!   event until an input change or an approval releases it.
 //! * Approvals (README "Approvals"): a deformation the policy pass says
-//!   `requires_approval(D, Reason)` is held until a token for the plan's
+//!   `requires_approval(r, Reason)` is held until a token for the plan's
 //!   digest arrives, through the input relation `approval/1` (the token's
 //!   text) or as an object in the drop directory `approvals/` beside the
 //!   state. While it is held the digest is published: a log line and

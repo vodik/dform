@@ -2839,6 +2839,25 @@ impl<'u> Lowerer<'u> {
                 }
             }
         }
+        // `r == main`, `r != T[e]`: a resource compares as a reference, and
+        // so does the other side (R-42).
+        if ts.len() == 2
+            && matches!(ops.as_slice(), [EQ | EQ2 | NEQ])
+            && ts.iter().any(|t| self.names_resource(rc, t))
+        {
+            let mut lowered = Vec::new();
+            for (i, t) in ts.iter().enumerate() {
+                let binding = i == 0 && ops[0] == EQ;
+                lowered.push(self.bind(binding, |l| l.ref_term(rc, t, Pos::Content, out))?);
+            }
+            let (a, b) = (lowered[0].clone(), lowered[1].clone());
+            out.push(if ops[0] == NEQ {
+                Lit::Neq(a, b)
+            } else {
+                Lit::Eq(a, b)
+            });
+            return Ok(());
+        }
         // `pattern = e[i]` (or `e[i] = pattern`): an element matched by a
         // pattern is `member(e, i, pattern)` (H-9).
         if ts.len() == 2 && ops.as_slice() == [EQ] {
@@ -3052,13 +3071,89 @@ impl<'u> Lowerer<'u> {
                 span,
             });
         }
-        let args = self.args(rc, n, pos, pre)?;
+        let args = match crate::zset::REF_RELATIONS.iter().find(|(p, ..)| *p == pred) {
+            Some((_, arity, shape)) => {
+                let list: Vec<SyntaxNode> = list
+                    .as_ref()
+                    .map(|l| terms(l).collect())
+                    .unwrap_or_default();
+                if list.len() != *arity {
+                    return self.error(
+                        span,
+                        format!("`{pred}` takes {arity} arguments: `{shape}` (R-42)"),
+                    );
+                }
+                let at = crate::zset::ref_column(&pred, *arity);
+                let mut args = Vec::new();
+                for (i, t) in list.iter().enumerate() {
+                    args.push(if Some(i) == at {
+                        self.ref_term(rc, t, pos, pre)?
+                    } else {
+                        self.term(rc, t, pos, pre)?
+                    });
+                }
+                args
+            }
+            None => self.args(rc, n, pos, pre)?,
+        };
         Ok(Atom {
             pred,
             args,
             record: None,
             span,
         })
+    }
+
+    /// Does `n` name one resource, by its name in scope or `T[e]`?
+    fn names_resource(&mut self, rc: &Rc, n: &SyntaxNode) -> bool {
+        let Some(c) = Chain::of(n) else {
+            return false;
+        };
+        if c.is_bare() {
+            return !rc.vars.contains_key(&c.head)
+                && !rc.types.contains_key(&c.head)
+                && self.resource(rc.scope, &c.head).is_some();
+        }
+        if rc.types.contains_key(&c.head) {
+            return false;
+        }
+        let mut rc2 = rc.clone();
+        let mut pre = Vec::new();
+        matches!(
+            self.probe(|l| l.resolve(&mut rc2, &c, &mut pre)),
+            Ok(Res::Ref { ref path, .. }) if path.is_empty()
+        )
+    }
+
+    /// A resource where a relation takes one (R-42): by its name in scope,
+    /// `T[e]`, or a variable, as a reference value. A variable `in T` binds
+    /// is `ref(T, A, "")`: the reference taken apart, its address `A` what
+    /// `r in T` and `r.path` read.
+    fn ref_term(&mut self, rc: &mut Rc, n: &SyntaxNode, pos: Pos, pre: &mut Vec<Lit>) -> L<Term> {
+        let span = self.span(n);
+        if n.kind() == LITERAL {
+            return self.error(
+                span,
+                "a resource here, not a value: its name in scope, `T[\"a\"]`, or a variable \
+                 (R-42)",
+            );
+        }
+        let Some(c) = Chain::of(n) else {
+            return self.term(rc, n, pos, pre);
+        };
+        if c.is_bare()
+            && !rc.vars.contains_key(&c.head)
+            && self.resource(rc.scope, &c.head).is_some()
+        {
+            let (typ, addr) = self.reference(rc, &c, pre, span)?;
+            return Ok(func("ref", vec![typ, addr, str_term("")]));
+        }
+        match self.resolve(rc, &c, pre)? {
+            Res::Ref { typ, addr, path } if path.is_empty() => {
+                Ok(func("ref", vec![typ, addr, str_term("")]))
+            }
+            res => self.realize(rc, res, pos, pre, span),
+        }
     }
 
     /// `sum` of a value known here not to be an int, `min`/`max` of one
@@ -4249,6 +4344,14 @@ fn bound_vars(body: &[Lit]) -> BTreeSet<String> {
         match l {
             Lit::Pos(a) => {
                 a.args.iter().for_each(|t| pattern(t, &mut out));
+                // A relation's column takes a reference apart (R-42).
+                for t in &a.args {
+                    if let Term::Func { name, args } = t
+                        && name == "ref"
+                    {
+                        args.iter().for_each(|t| pattern(t, &mut out));
+                    }
+                }
                 if let Some(r) = &a.record {
                     r.values().for_each(|t| pattern(t, &mut out));
                 }

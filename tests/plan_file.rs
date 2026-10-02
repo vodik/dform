@@ -214,7 +214,7 @@ fn a_create_before_destroy_plan_file_applies_in_two_ticks() {
     s.write(
         "p.df",
         &format!(
-            "{}lifecycle(net.vpc, \"main\", \"create_before_destroy\")\n",
+            "{}lifecycle(main, \"create_before_destroy\")\n",
             net.replace("10.0.0.0/16", "10.1.0.0/16")
         ),
     );

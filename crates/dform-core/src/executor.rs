@@ -260,7 +260,8 @@ fn created(cloud: &Providers, addr: &Address, key: &str) -> Result<Option<String
     cloud.created(addr, key)
 }
 
-/// `approver_allowed(Who, D)`: may `Who` approve the deformation `D`?
+/// `approver_allowed(Who, D)`: may `Who` approve the deformation of `D`, an
+/// address as plan prints it?
 pub type Allowed<'a> = &'a dyn Fn(&str, &str) -> bool;
 
 /// Tell the audit hook how `a` ended.
@@ -650,8 +651,8 @@ pub fn remaining(f: &InFlight) -> Seen {
 /// saw. A change anywhere but under a held deformation is drift: it is
 /// reported and the run goes on; the next tick's plan deforms it back. The
 /// held deformations come back as facts for the boundary's evaluation,
-/// `deformation(pending, T, A, Before)` with the document each was planned
-/// against and `world_digest(T, A, Now)`, and the evaluator derives the deny
+/// `deformation(pending, r, Before)` with the document each was planned
+/// against and `world_digest(r, Now)`, and the evaluator derives the deny
 /// when the world moved under one (`zset::POLICY_RULES`): the pending diff
 /// was computed against a document that no longer exists. That change is
 /// printed here, the deny stops the run.

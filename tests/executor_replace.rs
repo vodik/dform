@@ -89,7 +89,7 @@ fn create_before_destroy_moves_dependents_before_the_deposed_delete() {
     s.write(
         "p.df",
         &format!(
-            "{}lifecycle(net.vpc, \"main\", \"create_before_destroy\")\n",
+            "{}lifecycle(main, \"create_before_destroy\")\n",
             NET.replace("10.0.0.0/16", "10.1.0.0/16")
         ),
     );
@@ -128,7 +128,7 @@ resource net.subnet a { vpc_id = ref(net.vpc, "main", "id"), note = "x" }
     s.write("p.df", net);
     dform(&s, &["apply"]).success();
     let cbd = format!(
-        "{}lifecycle(net.vpc, \"main\", \"create_before_destroy\")\n",
+        "{}lifecycle(main, \"create_before_destroy\")\n",
         net.replace("10.0.0.0/16", "10.1.0.0/16")
     );
     s.write("p.df", &cbd);

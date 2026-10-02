@@ -245,6 +245,10 @@ fn bind_vars(t: &Term, out: &mut BTreeSet<String>) {
         Term::Func { name, args } if name == "scoped" && args.len() == 2 => {
             bind_vars(&args[1], out)
         }
+        // `ref(T, A, P)` as a pattern binds its parts (R-42).
+        Term::Func { name, args } if name == "ref" && args.len() == 3 => {
+            args.iter().for_each(|x| bind_vars(x, out))
+        }
         _ => {}
     }
 }

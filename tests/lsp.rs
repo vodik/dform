@@ -1338,13 +1338,14 @@ fn rename_of_a_resource_with_state_plans_as_a_move() {
     );
     let text = edit.to_string();
     assert!(
-        text.contains(r#"moved(\"compute.vm\", \"bastion\", \"jump\")"#),
+        text.contains(r#"moved(compute.vm, \"bastion\", jump)"#),
         "{edit}"
     );
     apply_edit(&mut c, &root, &edit);
     let edit = rename(&mut c, &network, find(&network, "net.vpc vpc", 8), "net0");
     for i in ["main", "peer"] {
-        let fact = format!(r#"moved(\"net.vpc\", \"network.{i}::vpc\", \"network.{i}::net0\")"#);
+        let fact =
+            format!(r#"moved(net.vpc, \"network.{i}::vpc\", net.vpc[\"network.{i}::net0\"])"#);
         assert!(edit.to_string().contains(&fact), "{fact} in {edit}");
     }
     apply_edit(&mut c, &root, &edit);
@@ -1459,7 +1460,7 @@ stack p {}
 resource net.vpc main { cidr = "10.0.0.0/16" }
 resource net.subnet a { vpc_id = ref(net.vpc, "main", "id"), tier = "web" }
 
-deny(m) where deformation("pending", t, n, _), m = format("%s.%s waits on a replacement", t, n)
+deny(m) where deformation("pending", r, _), m = "${r} waits on a replacement"
 "#;
     let file = s.write("stacks/p.df", net);
     s.run(&["apply", "p"]).success();
@@ -1476,7 +1477,7 @@ deny(m) where deformation("pending", t, n, _), m = format("%s.%s waits on a repl
         .collect();
     assert_eq!(
         refused,
-        ["net.subnet.a waits on a replacement"],
+        ["net.subnet[\"a\"] waits on a replacement"],
         "{}{}",
         plan.stdout,
         plan.stderr
@@ -1525,9 +1526,8 @@ fn an_s3_deployment_is_read_with_credentials() {
         .create_bucket()
         .unwrap();
     let vpc = "resource net.vpc main { cidr = \"10.0.0.0/16\" }\n";
-    let net = format!(
-        "edition 2026\n\nstack p {{}}\n\n{vpc}lifecycle(net.vpc, \"main\", \"prevent_destroy\")\n"
-    );
+    let net =
+        format!("edition 2026\n\nstack p {{}}\n\n{vpc}lifecycle(main, \"prevent_destroy\")\n");
     let file = s.write("stacks/p.df", &net);
     let creds = [
         ("DFORM_S3_ACCESS_KEY_ID", "fake"),
@@ -1550,7 +1550,11 @@ fn an_s3_deployment_is_read_with_credentials() {
     let (ok, text) = dform(&["apply", "--yes", "p"]);
     assert!(ok, "{text}");
     assert!(!s.path("dform.state/p/state.json").exists(), "{text}");
-    std::fs::write(&file, net.replace(vpc, "")).unwrap();
+    // The resource goes; the fact names it by its address.
+    let gone = net
+        .replace(vpc, "")
+        .replace("lifecycle(main", "lifecycle(net.vpc[\"main\"]");
+    std::fs::write(&file, gone).unwrap();
     let deny = "lifecycle prevent_destroy: the plan would delete net.vpc[\"main\"]";
     let (ok, text) = dform(&["plan", "p"]);
     assert!(!ok && text.contains(&format!("- {deny}")), "{text}");
