@@ -1,0 +1,153 @@
+baseline:
+  reads:
+    db.postgres.public
+    iam.policy.name
+    settings.audit.enabled
+  writes:
+    (*, tags)
+    (iam.policy, statements)
+    settings.audit.sinks
+  offers:
+
+database.main:
+  reads:
+    db.postgres.id
+    input backup_days
+    input multi_az
+    input subnet_ids
+  writes:
+    (db.postgres, backup_days)
+    (db.postgres, multi_az)
+    (db.postgres, public)
+    (db.postgres, subnet_ids)
+  offers:
+
+iam.main:
+  reads:
+    iam.policy.id
+    iam.role.id
+  writes:
+    (iam.policy, name)
+    (iam.policy, statements)
+    (iam.role, assume)
+    (iam.role, name)
+    (iam.role_policy_attachment, policy_id)
+    (iam.role_policy_attachment, role_id)
+  offers:
+
+kubernetes.main:
+  reads:
+    input nodepool_max
+    input nodepool_min
+    input private_api
+    input subnet_ids
+    k8s.cluster.id
+  writes:
+    (k8s.cluster, private_api)
+    (k8s.cluster, subnet_ids)
+    (k8s.cluster, version)
+    (k8s.nodepool, cluster_id)
+    (k8s.nodepool, max)
+    (k8s.nodepool, min)
+  offers:
+
+network.main:
+  reads:
+    input vpc_net
+    net.subnet.id
+    net.subnet.visibility
+    net.vpc.cidr
+    net.vpc.id
+  writes:
+    (net.subnet, cidr)
+    (net.subnet, visibility)
+    (net.subnet, vpc_id)
+    (net.subnet, zone)
+    (net.vpc, cidr)
+    (net.vpc, tags)
+  offers:
+    private_subnet_ids: list(ref(net.subnet))
+    vpc: addr
+
+network.peer:
+  reads:
+    input vpc_net
+    net.subnet.id
+    net.subnet.visibility
+    net.vpc.cidr
+    net.vpc.id
+  writes:
+    (net.subnet, cidr)
+    (net.subnet, visibility)
+    (net.subnet, vpc_id)
+    (net.subnet, zone)
+    (net.vpc, cidr)
+    (net.vpc, tags)
+  offers:
+    private_subnet_ids: list(ref(net.subnet))
+    vpc: addr
+
+stack:
+  reads:
+    db.postgres.multi_az
+    extern table.yaml.stack.config
+    iam.policy.id
+    iam.role.id
+    input env
+    k8s.cluster.id
+    k8s.cluster.private_api
+    net.vpc.cidr
+    net.vpc.id
+    output network.main.private_subnet_ids
+    settings.db.backup_days
+    settings.db.multi_az
+    settings.k8s.nodepool.max
+    settings.k8s.nodepool.min
+    settings.k8s.private_api
+    settings.network.main.vpc_net
+    settings.network.peer.vpc_net
+  writes:
+    (compute.vm, id)
+    (compute.vm, private_ip)
+    (db.postgres, endpoint)
+    (db.postgres, id)
+    (iam.policy, id)
+    (iam.role, id)
+    (iam.role_policy_attachment, id)
+    (k8s.cluster, api_endpoint)
+    (k8s.cluster, ca_cert)
+    (k8s.cluster, id)
+    (k8s.nodepool, id)
+    (net.route, id)
+    (net.subnet, id)
+    (net.vpc, id)
+    (net.vpc_peering, accepter_vpc_id)
+    (net.vpc_peering, id)
+    (net.vpc_peering, requester_vpc_id)
+    input database.main.backup_days
+    input database.main.multi_az
+    input database.main.subnet_ids
+    input kubernetes.main.nodepool_max
+    input kubernetes.main.nodepool_min
+    input kubernetes.main.private_api
+    input kubernetes.main.subnet_ids
+    input network.main.vpc_net
+    input network.peer.vpc_net
+    input stack.env
+    settings.audit.enabled
+    settings.audit.sinks
+    settings.db.backup_days
+    settings.db.multi_az
+    settings.k8s.nodepool.max
+    settings.k8s.nodepool.min
+    settings.k8s.private_api
+    settings.network.main.vpc_net
+    settings.network.peer.vpc_net
+  offers:
+
+stdlib_net:
+  reads:
+    compute.vm.private_ip
+    net.vpc.cidr
+  writes:
+  offers:
