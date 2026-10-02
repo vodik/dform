@@ -476,7 +476,10 @@ function's argument, an interpolation or a comparison's side are errors
 that say to name it. `p(_)` in a head is an error naming the column (it
 has no finite set of values); `resource T _` and `instance m _` name
 nothing; `set T[_].p = t` is `set r.p = t where r in T`, and the error prints
-it. A name that starts with `_` (`_x`) is an ordinary name.
+it. A name that starts with `_` (`_x`) is an ordinary name, but for one
+thing: any other variable written once in its rule (header, clause,
+entries and interpolated names together, a `not { }` body once) is an
+error, a typo or a placeholder that should say so (R-2); `_x` opts out.
 
 ## Literals and terms
 

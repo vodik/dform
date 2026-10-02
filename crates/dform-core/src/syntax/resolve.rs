@@ -35,6 +35,7 @@ use std::collections::{BTreeMap, BTreeSet};
 mod alias;
 mod heads;
 mod provider;
+mod singleton;
 pub use provider::ENV_VAR;
 
 /// The one edition this compiler reads.
@@ -410,6 +411,8 @@ struct Rc {
     /// Source names written in a binding position somewhere: an argument
     /// of a relation, the left of `=` or `in`, a `some` binder, a pattern.
     binders: BTreeSet<String>,
+    /// Source variable -> where it is written (`singleton`).
+    uses: singleton::Uses,
 }
 
 /// An error already recorded in `diags`.
@@ -2047,7 +2050,10 @@ impl<'u> Lowerer<'u> {
             let text = header.text();
             let bound = bound_vars(&body);
             match rc.vars.get(text) {
-                Some(v) if bound.contains(v) || rc.outer.contains(v) => var(v),
+                Some(v) if bound.contains(v) || rc.outer.contains(v) => {
+                    rc.uses.add(text, self.span_of(header.text_range()));
+                    var(v)
+                }
                 _ if text == "_" && n.kind() == SETTINGS => {
                     // `settings _`: every settings row that exists.
                     let v = fresh(&mut rc, "Row");
@@ -2582,7 +2588,7 @@ impl<'u> Lowerer<'u> {
                 );
             self.diags.push(d);
         }
-        if failed { Err(Skip) } else { Ok(()) }
+        if failed { Err(Skip) } else { self.singletons(rc) }
     }
 
     // --- bodies -------------------------------------------------------------
@@ -2757,6 +2763,11 @@ impl<'u> Lowerer<'u> {
             rc.vars.entry(k.clone()).or_insert_with(|| v.clone());
         }
         rc.reserved.extend(rc2.reserved.iter().cloned());
+        // The body is written once in the rule: its names count there.
+        rc.uses = rc2.uses;
+        for (k, at) in rc2.first {
+            rc.first.entry(k).or_insert(at);
+        }
         let outer_bound = {
             let mut b = bound_vars(out);
             b.extend(rc.outer.iter().cloned());
@@ -3390,6 +3401,7 @@ impl<'u> Lowerer<'u> {
         if self.binding {
             rc.binders.insert(name.to_string());
         }
+        rc.uses.add(name, span);
         if let Some(v) = rc.vars.get(name) {
             return v.clone();
         }
@@ -4685,6 +4697,29 @@ mod tests {
             e.contains("t.df:2:17: variable `main` shadows the resource `main`"),
             "{e}"
         );
+    }
+
+    /// R-2: a variable written once joins nothing.
+    #[test]
+    fn a_variable_written_once_is_an_error() {
+        let e = error("reaches(a, c) where reaches(a, b), link(bb, c)\n");
+        assert!(
+            e.contains("variable `b` is used once; a typo, or `_b`")
+                && e.contains("variable `bb` is used once"),
+            "{e}"
+        );
+        // The header, the clause, the entries and the holes count together;
+        // a `not { }` body counts once; `_x` opts out.
+        lower(
+            "tenant(\"t\", 1)\n\
+             resource net.vpc t { cidr = \"${n}\" } where tenant(t, n)\n\
+             resource net.vpc \"v-${t}\" {} where tenant(t, _n)\n\
+             lonely(a) where tenant(a, _), not { tenant(a, z), z > 1 }\n",
+        );
+        let e = error("tenant(\"t\", 1)\nresource net.vpc t {} where tenant(t, n)\n");
+        assert!(e.contains("variable `n` is used once"), "{e}");
+        let e = error("tenant(\"t\", 1)\nlonely(a) where tenant(a, _), not { tenant(a, z) }\n");
+        assert!(e.contains("variable `z` is used once"), "{e}");
     }
 
     #[test]
