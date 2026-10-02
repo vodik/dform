@@ -282,3 +282,270 @@ resource net.vpc main {
     let r = s.run(&["apply", "plan.json"]).failure();
     assert!(r.stderr.contains("is stale"), "{}", r.stderr);
 }
+
+const OBJECT: &str = r#"edition 2026
+input nodes {
+  flavor: string = "b3-8"
+  count: int = 1 check 1 <= count, count <= 3
+  pool: {
+    size: int = 4
+  }
+}
+provider fake
+resource net.vpc main {
+  flavor = nodes.flavor
+  count = nodes.count
+  size = nodes.pool.size
+}
+"#;
+
+fn object_plan(s: &Scratch, extra: &[&str]) -> common::Run {
+    let mut a = vec!["dev", "--world", "w.json", "plan", "p.df"];
+    a.extend(extra);
+    s.run(&a)
+}
+
+/// `input k { f: T = d check B .. }` (R-54): an object input by its
+/// fields, nested ones in braces, each field's default and check its own
+/// leaf's; `--set` gives a leaf by its path and is read as its type.
+#[test]
+fn an_object_input_is_a_block_of_fields() {
+    let s = Scratch::project("lang-inputs-object");
+    s.write("p.df", OBJECT);
+    let r = object_plan(&s, &[]).success();
+    assert!(
+        r.stdout
+            .contains("  count = 1\n  flavor = \"b3-8\"\n  size = 4\n"),
+        "{}",
+        r.stdout
+    );
+    let r = object_plan(
+        &s,
+        &["--set", "nodes.count=2", "--set", "nodes.pool.size=8"],
+    )
+    .success();
+    assert!(
+        r.stdout
+            .contains("  count = 2\n  flavor = \"b3-8\"\n  size = 8\n"),
+        "{}",
+        r.stdout
+    );
+    // The field's check is the leaf's refinement.
+    let r = object_plan(&s, &["--set", "nodes.count=9"]).failure();
+    assert!(
+        r.stderr
+            .contains("\"path\":\"nodes.count\",\"reason\":\"9 violates range(1, 3)\""),
+        "{}",
+        r.stderr
+    );
+    // `why` shows the leaf's layers: the default and the `--set`.
+    let r = s
+        .run(&[
+            "dev",
+            "--world",
+            "w.json",
+            "why",
+            "nodes.count",
+            "p.df",
+            "--set",
+            "nodes.count=2",
+        ])
+        .success();
+    assert!(
+        r.stdout
+            .starts_with("input nodes = {count: 2, flavor: \"b3-8\", pool: {size: 4}}\n"),
+        "{}",
+        r.stdout
+    );
+    assert!(
+        r.stdout.contains("{count: 1} @default   p.df:4"),
+        "{}",
+        r.stdout
+    );
+    assert!(r.stdout.contains("└─ --set nodes.count=2"), "{}", r.stdout);
+    // A leaf is read as its type.
+    let r = object_plan(&s, &["--set", "nodes.count=two"]).failure();
+    assert!(
+        r.stderr
+            .contains("--set nodes.count=two: input nodes.count is int"),
+        "{}",
+        r.stderr
+    );
+}
+
+/// A path that names no field is an error naming the object's fields.
+#[test]
+fn set_of_a_field_the_object_has_not_names_its_fields() {
+    let s = Scratch::project("lang-inputs-object-path");
+    s.write("p.df", OBJECT);
+    let r = object_plan(&s, &["--set", "nodes.cnt=2"]).failure();
+    assert!(
+        r.stderr.contains(
+            "--set nodes.cnt: input nodes has no field cnt (its fields: flavor, count, pool)"
+        ),
+        "{}",
+        r.stderr
+    );
+    let r = object_plan(&s, &["--set", "nodes.pool.sz=2"]).failure();
+    assert!(
+        r.stderr
+            .contains("--set nodes.pool.sz: input nodes.pool has no field sz (its fields: size)"),
+        "{}",
+        r.stderr
+    );
+    // An object is given a document, not a scalar.
+    let r = object_plan(&s, &["--set", "nodes=3"]).failure();
+    assert!(
+        r.stderr.contains(
+            "--set nodes=3: input nodes is an object of flavor, count, pool.size: give a field"
+        ),
+        "{}",
+        r.stderr
+    );
+}
+
+/// `--set k=@FILE` gives the object a document: each field it has wins
+/// over that leaf's default, a field it leaves out keeps the default, and
+/// a field the object has not is an error.
+#[test]
+fn set_of_an_object_from_a_document_gives_its_fields() {
+    let s = Scratch::project("lang-inputs-object-file");
+    s.write("p.df", OBJECT);
+    s.write("n.yaml", "flavor: c3-4\npool:\n  size: 6\n");
+    let r = object_plan(&s, &["--set", "nodes=@n.yaml"]).success();
+    assert!(
+        r.stdout
+            .contains("  count = 1\n  flavor = \"c3-4\"\n  size = 6\n"),
+        "{}",
+        r.stdout
+    );
+    s.write("bad.yaml", "flavour: c3-4\n");
+    let r = object_plan(&s, &["--set", "nodes=@bad.yaml"]).failure();
+    assert!(
+        r.stderr.contains(
+            "--set nodes: input nodes has no field flavour (its fields: flavor, count, pool)"
+        ),
+        "{}",
+        r.stderr
+    );
+}
+
+/// `set k.f = t where B` is the same contribution from inside the
+/// program, to the leaf (R-38's settings block is its sugar).
+#[test]
+fn set_of_a_field_where_a_condition_holds() {
+    let s = Scratch::project("lang-inputs-object-set");
+    s.write(
+        "p.df",
+        &format!(
+            "{}set nodes.count = 3 where env == \"prod\"\n",
+            OBJECT.replacen(
+                "edition 2026\n",
+                "edition 2026\nkey env: enum(\"dev\", \"prod\") = \"dev\"\n",
+                1
+            )
+        ),
+    );
+    let r = object_plan(&s, &[]).success();
+    assert!(r.stdout.contains("  count = 1\n"), "{}", r.stdout);
+    let r = s
+        .run(&["dev", "--world", "w.json", "plan", "p.df", "env=prod"])
+        .success();
+    assert!(r.stdout.contains("  count = 3\n"), "{}", r.stdout);
+    s.write(
+        "p.df",
+        &s.read("p.df")
+            .replace("set nodes.count = 3", "set nodes.cnt = 3"),
+    );
+    let r = object_plan(&s, &[]).failure();
+    assert!(
+        r.stderr
+            .contains("`set nodes.cnt`: input nodes has no field cnt"),
+        "{}",
+        r.stderr
+    );
+}
+
+/// The alias form, `input k: T = { .. }` with an object type, is the same
+/// input as the block form: the same leaves, the same plan.
+#[test]
+fn the_alias_form_and_the_block_form_plan_identically() {
+    let s = Scratch::project("lang-inputs-object-alias");
+    s.write("p.df", OBJECT);
+    let block = object_plan(&s, &["--set", "nodes.count=2"])
+        .success()
+        .stdout;
+    s.write(
+        "p.df",
+        &(OBJECT.replace(
+            "input nodes {\n  flavor: string = \"b3-8\"\n  count: int = 1 check 1 <= count, count <= 3\n  pool: {\n    size: int = 4\n  }\n}\n",
+            "input nodes: node_pool = { flavor: \"b3-8\", count: 1, pool: { size: 4 } }\n",
+        ) + "type node_pool = { flavor: string, count: int, pool: { size: int } }\n"),
+    );
+    let alias = object_plan(&s, &["--set", "nodes.count=2"])
+        .success()
+        .stdout;
+    assert_eq!(block, alias);
+}
+
+/// A field with no default is required like an input, named by its path;
+/// a component's object input is given a leaf or the whole object in its
+/// instance block; a key is a scalar.
+#[test]
+fn a_field_with_no_default_is_required() {
+    let s = Scratch::project("lang-inputs-object-required");
+    s.write(
+        "p.df",
+        "edition 2026\ninput db {\n  size: int\n  zone: string = \"a\"\n}\nprovider fake\n\
+         resource net.vpc main {\n  size = db.size\n  zone = db.zone\n}\n",
+    );
+    let r = object_plan(&s, &[]).failure();
+    assert!(
+        r.stderr
+            .contains("p.df:3:3: input db.size is required and has no value"),
+        "{}",
+        r.stderr
+    );
+    let r = object_plan(&s, &["--set", "db.size=3"]).success();
+    assert!(
+        r.stdout.contains("  size = 3\n  zone = \"a\"\n"),
+        "{}",
+        r.stdout
+    );
+
+    s.write(
+        "p.df",
+        "edition 2026\ncomponent m {\n  input db {\n    size: int\n    zone: string = \"a\"\n  }\n\
+         resource net.vpc v {\n    size = db.size\n    zone = db.zone\n  }\n}\n\
+         instance m a { db.size = 2 }\ninstance m b { db = { size: 5, zone: \"b\" } }\n\
+         provider fake\n",
+    );
+    let r = object_plan(&s, &[]).success();
+    assert!(
+        r.stdout
+            .contains("+ net.vpc[\"a::v\"]\n  size = 2\n  zone = \"a\"\n"),
+        "{}",
+        r.stdout
+    );
+    assert!(
+        r.stdout
+            .contains("+ net.vpc[\"b::v\"]\n  size = 5\n  zone = \"b\"\n"),
+        "{}",
+        r.stdout
+    );
+    s.write("p.df", &s.read("p.df").replace("db.size = 2", "db.sz = 2"));
+    let r = object_plan(&s, &[]).failure();
+    assert!(
+        r.stderr.contains("input db of component m has no field sz"),
+        "{}",
+        r.stderr
+    );
+
+    s.write("p.df", "edition 2026\nkey env {\n  a: int\n}\n");
+    let r = object_plan(&s, &[]).failure();
+    assert!(
+        r.stderr.contains("a relation or an object is not a key"),
+        "{}",
+        r.stderr
+    );
+}

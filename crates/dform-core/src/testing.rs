@@ -48,19 +48,27 @@ pub fn space(
 ) -> Result<Vec<Axis>> {
     let mut axes = Vec::new();
     let mut unbounded = Vec::new();
-    for d in declared.iter().filter(|d| d.scope.is_empty()) {
+    // The stack's own inputs and every used module's (R-55), each leaf of
+    // an object its own axis (R-54); one a `use` block gives is that.
+    for d in declared.iter().filter(|d| !d.bound) {
+        let Some(name) = &d.address else { continue };
         let i = &d.decl;
-        if pinned.contains(&i.name) {
+        if pinned.iter().any(|p| {
+            p == name
+                || name
+                    .strip_prefix(p.as_str())
+                    .is_some_and(|r| r.starts_with('.'))
+        }) {
             continue;
         }
         let values = match bounded(&i.ty) {
             Some(vs) => vs,
-            None if i.key => applied(&i.name).into_iter().map(Value::Str).collect(),
+            None if i.key => applied(name).into_iter().map(Value::Str).collect(),
             None => Vec::new(),
         };
         if !values.is_empty() {
             axes.push(Axis {
-                input: i.name.clone(),
+                input: name.clone(),
                 key: i.key,
                 values,
             });
@@ -68,7 +76,7 @@ pub fn space(
             unbounded.push(format!(
                 "{} {}: {}",
                 if i.key { "key" } else { "input" },
-                i.name,
+                name,
                 crate::inputs::type_text(&i.ty)
             ));
         }
@@ -145,17 +153,20 @@ mod tests {
     use crate::ast::{InputDecl, Span, Term};
 
     fn input(name: &str, ty: TypeExpr, default: Option<Value>, key: bool) -> Declared {
-        Declared {
-            scope: String::new(),
-            decl: InputDecl {
+        Declared::new(
+            "",
+            InputDecl {
                 name: name.into(),
                 ty,
                 default: default.map(Term::Val),
                 refinement: Vec::new(),
                 key,
+                fields: Vec::new(),
                 span: Span::default(),
             },
-        }
+            Some(name.into()),
+            false,
+        )
     }
 
     fn env() -> TypeExpr {

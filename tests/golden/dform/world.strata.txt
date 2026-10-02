@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== examples/demo/stacks/dform.df: 176 nodes, 480 edges (192 negative)
+== examples/demo/stacks/dform.df: 176 nodes, 487 edges (192 negative)
    STRATIFIED, 23 strata
    stratum 0:
      (arg, iam.policy, name)

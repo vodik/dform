@@ -280,6 +280,10 @@ pub struct InputDecl {
     /// `key k: T`: the target gives it, never `--set`, and its value names
     /// the deployment (R-29). An input in every other respect.
     pub key: bool,
+    /// The object form's fields, `input k { f: T [= d] [check B] .. }`
+    /// (R-54), each a declaration named by its field, a nested object's
+    /// with fields of its own; empty for every other input.
+    pub fields: Vec<InputDecl>,
     pub span: Span,
 }
 

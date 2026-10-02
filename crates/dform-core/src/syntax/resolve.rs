@@ -1612,7 +1612,12 @@ impl<'u> Lowerer<'u> {
             PROVIDER => self.provider(n, scope, outer),
             INPUT => {
                 let name = word_text(n, 1);
-                let ty = self.type_expr(&node(n, TYPE_EXPR).ok_or(Skip)?);
+                // `input k { f: T [= d] [check B] .. }` (R-54).
+                let fields = self.input_fields(n, scope, outer)?;
+                let ty = match node(n, TYPE_EXPR) {
+                    Some(t) => self.type_expr(&t),
+                    None => crate::inputs::fields_type(&fields),
+                };
                 let key = is_key(n);
                 if key && let Some(path) = self.decls.paths.get(&self.file) {
                     return self.error(
@@ -1662,6 +1667,7 @@ impl<'u> Lowerer<'u> {
                     default,
                     refinement,
                     key,
+                    fields,
                     span,
                 }))
             }
@@ -1730,6 +1736,69 @@ impl<'u> Lowerer<'u> {
             CHECK => self.check(n, scope, outer),
             k => self.error(span, format!("unexpected {k:?}")),
         }
+    }
+
+    /// The fields of an object input's block form (R-54), each a
+    /// declaration named by its field: `f: T [= d] [check B]`, a nested
+    /// object `f: { .. }`. A field's default is read as its type (R-31).
+    fn input_fields(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Vec<InputDecl>> {
+        let mut out: Vec<InputDecl> = Vec::new();
+        let mut failed = false;
+        for a in n.children().filter(|c| c.kind() == ATTR_DECL) {
+            let r = (|| {
+                let span = self.span(&a);
+                let path = node(&a, BLOCK_PATH).ok_or(Skip)?;
+                let name = self.block_path(&path)?;
+                if name.contains('.') || name.contains('[') {
+                    return self.error(
+                        span,
+                        format!(
+                            "a field is a name: a nested object is `{}: {{ .. }}`",
+                            name.split('.').next().unwrap_or(&name)
+                        ),
+                    );
+                }
+                if let Some(first) = out.iter().find(|f| f.name == name) {
+                    let d = Diagnostic::error(span, format!("field {name} is declared twice"))
+                        .with_label(first.span, "first here");
+                    self.diags.push(d);
+                    return Err(Skip);
+                }
+                let fields = self.input_fields(&a, scope, outer)?;
+                let ty = match node(&a, TYPE_EXPR) {
+                    Some(t) => self.type_expr(&t),
+                    None => crate::inputs::fields_type(&fields),
+                };
+                let mut rc = self.rc(&a, scope, outer);
+                let default = match terms(&a).next() {
+                    Some(t) => match crate::types::literal(
+                        &crate::types::of_expr(&ty),
+                        self.constant(&mut rc, &t)?,
+                    ) {
+                        Ok(d) => Some(d),
+                        Err(why) => {
+                            return self.error(self.span(&t), format!("field {name} {why}"));
+                        }
+                    },
+                    None => None,
+                };
+                let refinement = self.refinement(&a, scope)?;
+                Ok(InputDecl {
+                    name,
+                    ty,
+                    default,
+                    refinement,
+                    key: false,
+                    fields,
+                    span,
+                })
+            })();
+            match r {
+                Ok(f) => out.push(f),
+                Err(Skip) => failed = true,
+            }
+        }
+        if failed { Err(Skip) } else { Ok(out) }
     }
 
     // --- declarations that lower to themselves ----------------------------
@@ -2844,8 +2913,21 @@ impl<'u> Lowerer<'u> {
                 if add || rank.is_some() {
                     return self.error(span, "an input is set with `=` and no rank");
                 }
+                // A normal-rank contribution to the input's cell, as `--set`
+                // gives; written to the cell itself, so that its condition
+                // may read another input.
                 let value = self.term(&mut rc, &rhs, Pos::Value, &mut body)?;
-                let head = atom_at("input", vec![str_term(&k), value], span);
+                let head = atom_at(
+                    "arg",
+                    vec![
+                        str_term(crate::modules::INPUT),
+                        str_term(""),
+                        str_term(&k),
+                        value,
+                        str_term(crate::transform::NORMAL),
+                    ],
+                    span,
+                );
                 self.check_bound(&rc, &body, &atom_terms(&head))?;
                 return Ok(vec![if body.is_empty() && !has_body {
                     Stmt::Fact(head)
@@ -2895,9 +2977,13 @@ impl<'u> Lowerer<'u> {
     /// written; or a stack input.
     fn set_target(&mut self, rc: &mut Rc, c: &Chain, body: &mut Vec<Lit>, span: Span) -> L<Target> {
         let scope = rc.scope;
-        // A stack input, set by name.
-        if c.is_bare() && self.is_value(scope, &c.head) && self.find_let(scope, &c.head).is_none() {
-            return Ok(Target::Input(c.head.clone()));
+        // A stack input, set by name, or a field of an object input by its
+        // path (R-54).
+        if c.ops.iter().all(|o| matches!(o, Op::Field(_)))
+            && self.is_value(scope, &c.head)
+            && self.find_let(scope, &c.head).is_none()
+        {
+            return Ok(Target::Input(c.fields().join(".")));
         }
         // An instance's input: `n.k`.
         if let [Op::Field(k)] = c.ops.as_slice()

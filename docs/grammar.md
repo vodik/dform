@@ -360,7 +360,10 @@ decl       := "decl" DOTTED columns "mixed"?
 extern     := "extern" DOTTED "(" bindarg ("," bindarg)* ")" "persist"?
 bindarg    := ("+" | "-") NAME (":" type)?
 input      := ("input" | "key") NAME ":" type ("=" term)? ("check" body1)?
+            | "input" NAME fields                  ; an object input (R-54)
             | "input" NAME columns "from" term     ; facts(..) | FORMAT(..)
+fields     := "{" (field SEP)* "}"
+field      := NAME ":" (fields | type ("=" term)? ("check" body1)?)
 output     := "output" NAME (":" type)? ("=" term)? ("where" body)?
 let        := "let" NAME "=" term RANK? ("where" body)?
 set        := "set" chain ("=" | "+=") term RANK? ("where" body)?
@@ -460,6 +463,25 @@ index. The core stays writable where no surface form reaches: a variable
 type or path (`arg(t, a, "tags", {..}) where want(t, a)`), a raw `arg` read in
 a body, and text that is not a program file (schemas, the compiler's own
 tests).
+
+### Inputs and outputs
+
+An object input is declared by its fields (R-54): `input nodes { flavor:
+string = "b3-8", count: int = 1 check 1 <= count <= 3, pool: { size: int }
+}`, a nested object in braces, each field's default and check its own (the
+check names the field or its path). It is one cell per leaf: the field's
+default contributes `@default` to `nodes.count`, the aggregate merges the
+leaves into the object `nodes`, read whole (`nodes`) or by a path
+(`nodes.count`). `input nodes: node_pool = { .. }`, an alias of an object
+type and an object default, is the same input with the same leaves. Every
+way of giving it addresses a leaf or an object by its path: `--set
+nodes.count=2` (read as the leaf's type; a path that names no field is an
+error listing the object's fields), `--set nodes=@nodes.yaml` (each field
+the document has; one the object has not is an error), `set nodes.count = 2
+where env == "prod"`, an instance block's `nodes.count = 2` or `nodes = {
+.. }`, an input file's `nodes({ count: 2 })`. A field with no default is
+required like an input, by its path. `why nodes.count` shows the leaf's
+layers. A `key` is a scalar and takes no block.
 
 ### Modules
 

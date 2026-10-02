@@ -672,19 +672,27 @@ impl<'a> Parser<'a> {
                 p.term().map(drop)
             }),
             // `key k: T`: an input the target gives, which selects the
-            // deployment (R-29). It has no relation form.
-            KEY_KW if self.raw(2) == L_PAREN => {
+            // deployment (R-29). It has no relation form and no block.
+            KEY_KW if matches!(self.raw(2), L_PAREN | L_BRACE) => {
                 self.bump();
                 self.bump();
                 let msg = format!("expected `:` after the key's name, found {}", self.found());
                 self.error_here(
                     msg,
                     Some(
-                        "a key is a value, `key env: environment`; a relation is not a key".into(),
+                        "a key is a scalar value, `key env: environment`; a relation or an \
+                         object is not a key"
+                            .into(),
                     ),
                 );
                 Err(Bail)
             }
+            // `input NAME { field: T [= d] [check B] .. }`: an object input
+            // declared by its fields (R-54).
+            INPUT_KW if self.raw(2) == L_BRACE => self.simple(INPUT, |p| {
+                p.expect_word()?;
+                p.fields(true)
+            }),
             INPUT_KW | KEY_KW => self.simple(INPUT, |p| {
                 p.expect_word()?;
                 if !p.at(COLON) {
@@ -713,6 +721,13 @@ impl<'a> Parser<'a> {
                     p.term()?;
                 }
                 p.refinement(false)
+            }),
+            // `output NAME { field[: T] = t .. }`: an object output by its
+            // fields (R-55).
+            OUTPUT_KW if self.raw(2) == L_BRACE => self.simple(OUTPUT_DECL, |p| {
+                p.expect_word()?;
+                p.fields(false)?;
+                p.opt_where_body()
             }),
             OUTPUT_KW => self.simple(OUTPUT_DECL, |p| {
                 p.expect_word()?;
@@ -1179,6 +1194,45 @@ impl<'a> Parser<'a> {
                         p.bump();
                     }
                     p.refinement(true)?;
+                }
+                p.finish();
+                p.sep()?;
+            }
+            Ok(())
+        })?;
+        self.bump();
+        Ok(())
+    }
+
+    /// `{ field* }` of an object input or output (R-54, R-55): `name: type
+    /// [= term] [check body]` (an output's type optional, its `= term`
+    /// not), or a nested `name: { .. }`, separated by a newline or a comma.
+    fn fields(&mut self, input: bool) -> P {
+        self.expect(L_BRACE)?;
+        self.with_nl(true, |p| {
+            p.eat_nl();
+            while !p.at(R_BRACE) {
+                if p.at(EOF) {
+                    return p.err_expected("`}`");
+                }
+                p.start(ATTR_DECL);
+                p.block_path()?;
+                if !input && p.at(EQ) {
+                    p.bump();
+                    p.term()?;
+                } else {
+                    p.expect(COLON)?;
+                    if p.at(L_BRACE) {
+                        p.fields(input)?;
+                    } else {
+                        p.type_expr()?;
+                        if p.eat(EQ) {
+                            p.term()?;
+                        }
+                        if input {
+                            p.refinement(true)?;
+                        }
+                    }
                 }
                 p.finish();
                 p.sep()?;
@@ -1757,7 +1811,10 @@ mod tests {
                 "scenario prod {\n  set env = \"prod\"\n}\n",
                 "`scenario` is gone (R-32)",
             ),
-            ("key p(a) from csv(\"p.csv\")\n", "a relation is not a key"),
+            (
+                "key p(a) from csv(\"p.csv\")\n",
+                "a relation or an object is not a key",
+            ),
             (
                 "input relation p/2 from file(\"x\")\n",
                 "`input p(cols) from ..`",
@@ -1869,6 +1926,33 @@ mod tests {
         assert_eq!(
             kinds(src, &[DECL, INPUT_RELATION, OUTPUT_DECL]),
             vec![INPUT_RELATION, DECL, OUTPUT_DECL]
+        );
+    }
+
+    /// An object input is a block of fields (R-54), nested ones in braces,
+    /// each `name: T [= d] [check B]`; an object output's fields take `=
+    /// t` (R-55); a key takes no block.
+    #[test]
+    fn an_object_input_is_a_block_of_fields() {
+        let src = "input nodes {\n  flavor: string = \"b3-8\"\n  count: int = 1 check count >= 1, \
+                   count <= 3\n  pool: { size: int = 4, zone: string }\n}\n\
+                   output conn { host = h, port: int = 5432 } where h = \"db\"\n";
+        assert!(errors(src).is_empty(), "{:?}", errors(src));
+        assert_eq!(
+            kinds(src, &[INPUT, OUTPUT_DECL, REFINEMENT]),
+            vec![INPUT, REFINEMENT, OUTPUT_DECL]
+        );
+        let fields = parse(src)
+            .syntax()
+            .descendants()
+            .filter(|n| n.kind() == ATTR_DECL)
+            .count();
+        assert_eq!(fields, 7);
+        assert_eq!(
+            hints("key env {\n  a: int\n}\n"),
+            [
+                "a key is a scalar value, `key env: environment`; a relation or an object is not a key"
+            ]
         );
     }
 

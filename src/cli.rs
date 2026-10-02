@@ -2624,20 +2624,26 @@ fn why_tree(
     res: &engine::EvalResult,
     redact: &query::Redactor,
 ) -> Result<()> {
-    let parsed = match query::address(pattern, true) {
-        Some(q) => q,
-        None => query::parse(pattern)?,
+    let matched = match input_cell(pattern, &res.facts)? {
+        Some(m) => m,
+        None => {
+            let parsed = match query::address(pattern, true) {
+                Some(q) => q,
+                None => query::parse(pattern)?,
+            };
+            let query::Query::Body { body, .. } = parsed else {
+                bail!(
+                    "why: expected an address such as 'net.vpc[\"main\"]' or \
+                     'net.vpc[\"main\"].cidr', an input such as 'nodes.count', or a fact \
+                     pattern such as 'want(net.vpc, N)', got '{pattern}'"
+                );
+            };
+            let [crate::ast::Lit::Pos(pat)] = body.as_slice() else {
+                bail!("why: expected one fact pattern, got '{pattern}'");
+            };
+            why::find(pat, &res.facts)?
+        }
     };
-    let query::Query::Body { body, .. } = parsed else {
-        bail!(
-            "why: expected an address such as 'net.vpc[\"main\"]' or 'net.vpc[\"main\"].cidr', \
-             or a fact pattern such as 'want(net.vpc, N)', got '{pattern}'"
-        );
-    };
-    let [crate::ast::Lit::Pos(pat)] = body.as_slice() else {
-        bail!("why: expected one fact pattern, got '{pattern}'");
-    };
-    let matched = why::find(pat, &res.facts)?;
     if matched.is_empty() {
         bail!("why: no fact matches {pattern}");
     }
@@ -2660,6 +2666,45 @@ fn why_tree(
         }
     }
     Ok(())
+}
+
+/// A fact `why` explains, and the part of it the pattern named.
+type Matched = (Atom, Option<why::Focus>);
+
+/// `why NAME`: the cell of an input or a `let` by the name the stack reads
+/// it by (R-54, R-55): `replicas`, a leaf of an object input
+/// `nodes.count`, a used module's `synapse.replicas`. The stack's own
+/// name first, then a used module's, its scope the name's first segments.
+fn input_cell(pattern: &str, facts: &BTreeSet<Atom>) -> Result<Option<Vec<Matched>>> {
+    let plain = !pattern.is_empty()
+        && pattern
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.');
+    if !plain {
+        return Ok(None);
+    }
+    let s = |x: &str| Term::Val(Value::Str(x.to_string()));
+    let mut splits = vec![("", pattern)];
+    splits.extend(
+        pattern
+            .match_indices('.')
+            .map(|(i, _)| (&pattern[..i], &pattern[i + 1..])),
+    );
+    for kind in [crate::modules::INPUT, crate::modules::LET] {
+        for (scope, path) in &splits {
+            let pat = Atom {
+                pred: "attr".into(),
+                args: vec![s(kind), s(scope), s(path), Term::Var("value".into())],
+                record: None,
+                span: Default::default(),
+            };
+            let found = why::find(&pat, facts)?;
+            if !found.is_empty() {
+                return Ok(Some(found));
+            }
+        }
+    }
+    Ok(None)
 }
 
 /// How `diff` evaluates the program at an earlier commit: this executable,

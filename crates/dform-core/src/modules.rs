@@ -274,10 +274,14 @@ struct Cx<'a> {
     expanding: Vec<String>,
     /// The definitions whose interface was checked.
     checked: BTreeSet<String>,
+    /// The scopes the stack reaches by `use` alone, `""` first: their
+    /// inputs are the stack's to give (R-55).
+    flat: BTreeSet<String>,
 }
 
 fn check_types(who: &str, inputs: &[InputDecl], diags: &mut Vec<Diagnostic>) {
-    for i in inputs {
+    for i in inputs.iter().flat_map(crate::inputs::leaves) {
+        let i = &i;
         if let Err(e) = crate::inputs::check_type(&i.ty) {
             diags.push(Diagnostic::error(
                 i.span,
@@ -309,6 +313,7 @@ pub fn expand(program: &Program) -> Result<Expanded> {
         private: BTreeMap::new(),
         expanding: Vec::new(),
         checked: BTreeSet::new(),
+        flat: BTreeSet::from([String::new()]),
     };
     let mut out = Vec::new();
     for s in &program.statements {
@@ -317,27 +322,13 @@ pub fn expand(program: &Program) -> Result<Expanded> {
             // `input(k, V)` fact) at the normal rank.
             Stmt::Input(i) => {
                 check_types("stack", std::slice::from_ref(i), &mut cx.diags);
-                out.extend(input_reader("", i, &i.name));
-                let v = Term::Var("V".into());
-                out.push(Stmt::Rule(RuleStmt {
-                    head: atom(
-                        "arg",
-                        vec![
-                            str_term(INPUT),
-                            str_term(""),
-                            str_term(&i.name),
-                            v.clone(),
-                            str_term(crate::transform::NORMAL),
-                        ],
-                        i.span,
-                    ),
-                    body: vec![Lit::Pos(atom("input", vec![str_term(&i.name), v], i.span))],
-                }));
-                out.extend(refinement(i, ""));
-                cx.declared.push(Declared {
-                    scope: String::new(),
-                    decl: i.clone(),
-                });
+                out.extend(input_reader("", i, &|p: &str| p.to_string()));
+                out.extend(given_rules("", "", i));
+                for leaf in crate::inputs::leaves(i) {
+                    out.extend(refinement(&leaf, ""));
+                    let address = Some(leaf.name.clone());
+                    cx.declared.push(Declared::new("", leaf, address, false));
+                }
             }
             // The stack's own output: `output(k, V)` in the root scope.
             Stmt::Output(o) if o.value.is_none() => {
@@ -410,6 +401,42 @@ pub fn expand(program: &Program) -> Result<Expanded> {
         }
     }
 
+    // `set k = t where B` gives an input the stack addresses (R-54): its
+    // own, a field of an object one, a used module's.
+    let mut paths = BTreeSet::new();
+    for d in &cx.declared {
+        let Some(a) = &d.address else { continue };
+        let base = &a[..a.len() - d.decl.name.len()];
+        paths.insert(a.clone());
+        for (i, _) in d.decl.name.match_indices('.') {
+            paths.insert(format!("{base}{}", &d.decl.name[..i]));
+        }
+    }
+    let mut heads = Vec::new();
+    for s in &expanded {
+        head_atoms(s, &mut heads);
+    }
+    for h in heads {
+        if let [
+            Term::Val(Value::Str(t)),
+            Term::Val(Value::Str(scope)),
+            Term::Val(Value::Str(k)),
+            ..,
+        ] = h.args.as_slice()
+            && h.pred == "arg"
+            && t == INPUT
+            && scope.is_empty()
+            && !paths.is_empty()
+            && !paths.contains(k)
+        {
+            let msg = match k.rsplit_once('.').filter(|(o, _)| paths.contains(*o)) {
+                Some((o, f)) => format!("`set {k}`: input {o} has no field {f}"),
+                None => format!("`set {k}`: the program declares no input {k}"),
+            };
+            cx.diags.push(Diagnostic::error(h.span, msg));
+        }
+    }
+
     let expanded = expanded.into_iter().map(unmark_stmt).collect::<Vec<_>>();
     if cx.diags.is_empty() {
         Ok(Expanded {
@@ -475,7 +502,13 @@ impl Cx<'_> {
         let scope = u.name.as_str();
         let abs = join_scope(at, scope);
         let mut out = Vec::new();
-        instance_inputs(kind, u, scope, &iface, &mut out, &mut self.diags);
+        // A used module's inputs are the stack's to give, `m.k` (R-55); a
+        // copy's are its instance block's.
+        let flat = used && self.flat.contains(at);
+        if flat {
+            self.flat.insert(abs.clone());
+        }
+        instance_inputs(kind, u, scope, &iface, flat, &mut out, &mut self.diags);
         let body = self.body(&body, &abs);
         self.expanding.pop();
         let stmts = module_stmts(scope, &iface, body);
@@ -483,7 +516,9 @@ impl Cx<'_> {
         defined_preds(&stmts, &mut defined);
         for i in &iface.inputs {
             defined.insert(i.name.clone(), (1, i.span));
-            defined.insert(refine_pred(&i.name), (1, i.span));
+            for l in crate::inputs::leaves(i) {
+                defined.insert(refine_pred(&l.name), (1, i.span));
+            }
         }
         let names = Names::private(scope, defined);
         for p in names.map.keys() {
@@ -524,10 +559,26 @@ impl Cx<'_> {
                 .filter(|o| is_secret_type(&o.ty))
                 .map(|o| (abs.clone(), o.name.clone())),
         );
-        self.declared.extend(iface.inputs.iter().map(|i| Declared {
-            scope: abs.clone(),
-            decl: i.clone(),
-        }));
+        if flat {
+            for i in &iface.inputs {
+                out.extend(given_rules(scope, &abs, i));
+            }
+        }
+        for i in &iface.inputs {
+            for leaf in crate::inputs::leaves(i) {
+                let address = flat.then(|| join_scope(&abs, &leaf.name));
+                let bound = u.inputs.iter().any(|(k, _, _)| {
+                    *k == leaf.name
+                        || leaf
+                            .name
+                            .strip_prefix(k.as_str())
+                            .is_some_and(|r| r.starts_with('.'))
+                });
+                let mut d = Declared::new(&abs, leaf, address, bound);
+                d.used_at = flat.then_some(u.span);
+                self.declared.push(d);
+            }
+        }
         out.extend(gate(
             copy,
             &u.module,
@@ -609,27 +660,78 @@ const GATE: &str = "__instance";
 
 /// The instance's `k = V :- B`, each a normal-rank contribution to its
 /// input cell, with the checks against the component's declared inputs.
+/// An entry may give an object input's leaf (`nodes.count = 2`) or a whole
+/// object, which gives each leaf the field it has (R-54). An input nothing
+/// gives is an error here, but a used module's (`flat`): the stack may
+/// give that one with `--set m.k=v` (`inputs::check_required`).
 fn instance_inputs(
     kind: &str,
     u: &crate::ast::Instance,
     scope: &str,
     iface: &Interface,
+    flat: bool,
     out: &mut Vec<Stmt>,
     diags: &mut Vec<Diagnostic>,
 ) {
-    let declared: Vec<&str> = iface.inputs.iter().map(|i| i.name.as_str()).collect();
+    let leaves: Vec<InputDecl> = iface
+        .inputs
+        .iter()
+        .flat_map(crate::inputs::leaves)
+        .collect();
+    let covers =
+        |k: &str, leaf: &str| leaf == k || leaf.strip_prefix(k).is_some_and(|r| r.starts_with('.'));
+    let body = u.body.clone().unwrap_or_default();
     for (k, v, span) in &u.inputs {
-        if !declared.contains(&k.as_str()) {
-            let d = Diagnostic::error(*span, format!("{kind} {} has no input {k}", u.module));
-            diags.push(if declared.is_empty() {
-                d.with_note(format!("{kind} {} declares no inputs", u.module))
-            } else {
-                d.with_note(format!("its inputs: {}", declared.join(", ")))
-            });
+        if !leaves.iter().any(|l| covers(k, &l.name)) {
+            let declared: Vec<&str> = iface.inputs.iter().map(|i| i.name.as_str()).collect();
+            let object = k
+                .match_indices('.')
+                .map(|(n, _)| &k[..n])
+                .rfind(|o| leaves.iter().any(|l| l.name.starts_with(&format!("{o}."))));
+            let d = match object {
+                Some(o) => {
+                    let fields: Vec<&str> = leaves
+                        .iter()
+                        .filter_map(|l| l.name.strip_prefix(o)?.strip_prefix('.'))
+                        .collect();
+                    Diagnostic::error(
+                        *span,
+                        format!(
+                            "input {o} of {kind} {} has no field {}",
+                            u.module,
+                            &k[o.len() + 1..]
+                        ),
+                    )
+                    .with_note(format!("its fields: {}", fields.join(", ")))
+                }
+                None => {
+                    let d =
+                        Diagnostic::error(*span, format!("{kind} {} has no input {k}", u.module));
+                    if declared.is_empty() {
+                        d.with_note(format!("{kind} {} declares no inputs", u.module))
+                    } else {
+                        d.with_note(format!("its inputs: {}", declared.join(", ")))
+                    }
+                }
+            };
+            diags.push(d);
             continue;
         }
+        // The entry's type: the leaf's, or the object's it names.
+        let ty = iface
+            .inputs
+            .iter()
+            .find(|i| covers(&i.name, k))
+            .and_then(|i| {
+                k[i.name.len()..]
+                    .split('.')
+                    .skip(1)
+                    .try_fold(&i.ty, |t, seg| match t {
+                        TypeExpr::Object(fs) => fs.iter().find(|(f, _)| f == seg).map(|(_, t)| t),
+                        _ => None,
+                    })
+            });
         // A literal is read as the input's declared type (R-31).
-        let ty = iface.inputs.iter().find(|i| i.name == *k).map(|i| &i.ty);
         let v = match ty.map(|t| crate::types::literal(&crate::types::of_expr(t), v.clone())) {
             Some(Ok(v)) => v,
             Some(Err(why)) => {
@@ -652,12 +754,15 @@ fn instance_inputs(
             ],
             *span,
         );
-        out.push(fact_or_rule(head, u.body.clone().unwrap_or_default()));
+        out.push(fact_or_rule(head, body.clone()));
     }
     // An input nothing gives a value is a stack input's error (R-65),
     // fixed the same ways: a default, or a value given.
-    for i in &iface.inputs {
-        if i.default.is_none() && !u.inputs.iter().any(|(k, _, _)| *k == i.name) {
+    if flat {
+        return;
+    }
+    for i in &leaves {
+        if i.default.is_none() && !u.inputs.iter().any(|(k, _, _)| covers(k, &i.name)) {
             diags.push(
                 Diagnostic::error(
                     u.span,
@@ -764,8 +869,8 @@ fn module_stmts(scope: &str, iface: &Interface, body: Vec<Stmt>) -> Vec<Stmt> {
             Vec::new(),
         ));
     }
-    for i in &iface.inputs {
-        out.extend(refinement(i, scope));
+    for i in iface.inputs.iter().flat_map(crate::inputs::leaves) {
+        out.extend(refinement(&i, scope));
     }
     out
 }
@@ -785,8 +890,24 @@ pub fn refinement(i: &InputDecl, scope: &str) -> Vec<Stmt> {
         return Vec::new();
     }
     let v = Term::Var("__Input".into());
-    let read = Lit::Pos(atom(&i.name, vec![v.clone()], i.span));
-    let mut body = vec![read.clone()];
+    // A leaf of an object input is read in its object (R-54).
+    let read = match i.name.split_once('.') {
+        None => vec![Lit::Pos(atom(&i.name, vec![v.clone()], i.span))],
+        Some((top, rest)) => {
+            let o = Term::Var("__Object".into());
+            vec![
+                Lit::Pos(atom(top, vec![o.clone()], i.span)),
+                Lit::Eq(
+                    v.clone(),
+                    Term::Func {
+                        name: "__path".into(),
+                        args: vec![o, str_term(rest)],
+                    },
+                ),
+            ]
+        }
+    };
+    let mut body = read.clone();
     body.extend(rest.iter().map(|l| subst_lit(l, &i.name, &v)));
     let ok = atom(&refine_pred(&i.name), vec![v.clone()], i.span);
     let named = Term::Var(i.name.clone());
@@ -821,12 +942,13 @@ pub fn refinement(i: &InputDecl, scope: &str) -> Vec<Stmt> {
         }),
         Stmt::Rule(RuleStmt {
             head: deny,
-            body: vec![read, Lit::Not(ok)],
+            body: read.into_iter().chain([Lit::Not(ok)]).collect(),
         }),
     ]
 }
 
-fn subst_lit(l: &Lit, name: &str, v: &Term) -> Lit {
+/// `l` with the name `name` (a refinement's text) read as `v`.
+pub(crate) fn subst_lit(l: &Lit, name: &str, v: &Term) -> Lit {
     let t = |x: &Term| subst_term(x, name, v);
     let a = |x: &Atom| Atom {
         args: x.args.iter().map(t).collect(),
@@ -864,55 +986,111 @@ fn subst_term(t: &Term, name: &str, v: &Term) -> Term {
 /// `k(V) :- attr(input, Scope, k, V)` per input, and its `@default`
 /// contribution. Written after scoping: the scope is already in the terms.
 fn input_readers(scope: &str, inputs: &[InputDecl], names: &Names) -> Vec<Stmt> {
-    let mut out = Vec::new();
-    for i in inputs {
-        let pred = names
-            .get(&i.name)
-            .cloned()
-            .unwrap_or_else(|| i.name.clone());
-        out.extend(input_reader(scope, i, &pred));
-    }
-    out
+    let pred = |p: &str| names.get(p).cloned().unwrap_or_else(|| p.to_string());
+    inputs
+        .iter()
+        .flat_map(|i| input_reader(scope, i, &pred))
+        .collect()
 }
 
-/// One input's reader rule and its default, with the reader named `pred`.
-pub fn input_reader(scope: &str, i: &InputDecl, pred: &str) -> Vec<Stmt> {
+/// One input's reader, named by `pred` of its name, `k(V) :- attr(input,
+/// Scope, k, V)`, and its `@default` contributions and checkable
+/// refinements. An object input (R-54) is one cell per leaf: each leaf's
+/// default and check is the leaf's (`arg(input, Scope, "nodes.count", 1,
+/// @default)`, which the aggregate merges into the object `nodes` leaf by
+/// leaf), and the object is read whole.
+pub fn input_reader(scope: &str, i: &InputDecl, pred: &dyn Fn(&str) -> String) -> Vec<Stmt> {
     let v = Term::Var("V".into());
     let mut out = vec![Stmt::Rule(RuleStmt {
-        head: atom(pred, vec![v.clone()], i.span),
+        head: atom(&pred(&i.name), vec![v.clone()], i.span),
         body: vec![Lit::Pos(atom(
             "attr",
             vec![str_term(INPUT), str_term(scope), str_term(&i.name), v],
             i.span,
         ))],
     })];
-    let (checkable, _) = crate::refine::split_input(i);
-    for c in checkable {
-        out.push(crate::refine::refine_fact(
-            INPUT,
-            Some(scope),
-            &i.name,
-            &c,
-            i.span,
-        ));
-    }
-    if let Some(d) = &i.default {
-        out.push(fact_or_rule(
-            atom(
-                "arg",
-                vec![
-                    str_term(INPUT),
-                    str_term(scope),
-                    str_term(&i.name),
-                    d.clone(),
-                    str_term(crate::ast::Rank::Default.name()),
-                ],
-                i.span,
-            ),
-            Vec::new(),
-        ));
+    for l in crate::inputs::leaves(i) {
+        let (checkable, _) = crate::refine::split_input(&l);
+        for c in checkable {
+            out.push(crate::refine::refine_fact(
+                INPUT,
+                Some(scope),
+                &l.name,
+                &c,
+                l.span,
+            ));
+        }
+        if let Some(d) = &l.default {
+            out.push(fact_or_rule(
+                atom(
+                    "arg",
+                    vec![
+                        str_term(INPUT),
+                        str_term(scope),
+                        str_term(&l.name),
+                        d.clone(),
+                        str_term(crate::ast::Rank::Default.name()),
+                    ],
+                    l.span,
+                ),
+                Vec::new(),
+            ));
+        }
     }
     out
+}
+
+/// The paths an input is given by: the input, each object an object
+/// input holds and each leaf (`nodes`, `nodes.pool`, `nodes.pool.size`).
+pub fn input_paths(i: &InputDecl) -> Vec<String> {
+    let mut out = vec![i.name.clone()];
+    for l in crate::inputs::leaves(i) {
+        let mut at = i.name.clone();
+        for seg in l.name[i.name.len()..].split('.').skip(1) {
+            at = format!("{at}.{seg}");
+            if !out.contains(&at) {
+                out.push(at.clone());
+            }
+        }
+    }
+    out
+}
+
+/// The values the outside gives an input the stack addresses as
+/// `address` (R-54, R-55): `--set k=v`, `set k = t where B`, an
+/// `input(k, V)` fact, is a normal-rank contribution to `k`, or to the
+/// object or leaf inside it the fact names (`input("nodes.count", 2)`).
+fn given_rules(scope: &str, address: &str, i: &InputDecl) -> Vec<Stmt> {
+    let leaves = crate::inputs::leaves(i);
+    input_paths(i)
+        .into_iter()
+        .map(|p| {
+            // A leaf's at its field, an object's at the input.
+            let span = leaves
+                .iter()
+                .find(|l| l.name == p)
+                .map_or(i.span, |l| l.span);
+            let v = Term::Var("V".into());
+            Stmt::Rule(RuleStmt {
+                head: atom(
+                    "arg",
+                    vec![
+                        str_term(INPUT),
+                        str_term(scope),
+                        str_term(&p),
+                        v.clone(),
+                        str_term(crate::transform::NORMAL),
+                    ],
+                    span,
+                ),
+                body: vec![Lit::Pos(atom(
+                    "input",
+                    vec![str_term(&join_scope(address, &p)), v],
+                    span,
+                ))],
+            })
+        })
+        .collect()
 }
 
 /// Every head atom of a statement (a resource's are its `want` and `arg`).

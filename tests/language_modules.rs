@@ -711,6 +711,35 @@ fn an_unbound_input_of_a_used_module_is_a_stack_inputs_error() {
     );
     s.run(&["dev", "--world", "w.json", "plan", "p.df"])
         .success();
+    // The stack gives a used module's input by its name there (R-55).
+    s.write("p.df", "edition 2026\nuse postgres\nprovider fake\n");
+    s.run(&[
+        "dev",
+        "--world",
+        "w.json",
+        "plan",
+        "p.df",
+        "--set",
+        "postgres.database=y",
+    ])
+    .success();
+    let r = s
+        .run(&[
+            "dev",
+            "--world",
+            "w.json",
+            "why",
+            "postgres.database",
+            "p.df",
+            "--set",
+            "postgres.database=y",
+        ])
+        .success();
+    assert!(
+        r.stdout.contains("input postgres.database = \"y\""),
+        "{}",
+        r.stdout
+    );
     s.write(
         "p.df",
         "edition 2026\ncomponent vm {\n  resource compute.vm vm {\n    size = 1\n  }\n}\n\

@@ -1,6 +1,0 @@
-edition 2026
-
-# R-65: a module's input nothing gives a value is a stack input's error,
-# fixed the same ways: a default, or a value in the `use` block.
-use synapse
-use postgres

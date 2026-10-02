@@ -1716,6 +1716,24 @@ a used module or a copy) is checked after evaluation and a wrong type blocks the
 plan. A required input with no value is an error at its declaration. `check
 R` refines the input (`R` names it by its name; see Refinement types).
 
+An object input is declared by its fields, each with its own default and
+check, and is one cell per leaf (docs/grammar.md "Inputs and outputs"):
+
+```dform
+input nodes {
+  flavor: string = "b3-8"
+  count: int = 1 check 1 <= count <= 3
+}
+```
+
+`--set nodes.count=2` gives one leaf, read as its type (a path that names
+no field is an error listing the fields); `--set nodes=@nodes.yaml` gives
+each field the document has; `set nodes.count = 3 where env == "prod"`
+is the same contribution from inside; `why nodes.count` shows the leaf's
+layers. `input nodes: node_pool = { .. }`, an alias and an object
+default, is the same input. A used module's inputs are the stack's too,
+by the module's name: `--set traefik.acme_email=ops@example.com`.
+
 A program with no `input` declarations reads `--set k=v` as the fact
 `input("k", v)`.
 
