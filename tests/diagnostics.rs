@@ -130,23 +130,19 @@ fn why_names_the_pack_and_the_module_instance() {
 /// wait, and has none; a whole value is a reference and waits for nothing.
 #[test]
 fn a_content_read_of_a_computed_path_is_a_note() {
-    let r = plan(
-        "edition 2026\n\
-         resource net.vpc vpc { cidr = \"10.0.0.0/16\" }\n\
-         resource net.subnet a { cidr = \"10.0.1.0/24\", name = \"in-${vpc.id}\", tag = \"${vpc.id}\" }\n\
-         resource net.subnet \"b-${vpc.id}\" { cidr = \"10.0.2.0/24\" }\n\
-         resource net.subnet c { cidr = \"10.0.3.0/24\", vpc_id = vpc.id }\n",
-    )
-    .success();
-    let note = "note: p.df:3:";
-    assert_eq!(r.stderr.matches(note).count(), 1, "{}", r.stderr);
+    let s = Scratch::new("diag-computed-read");
+    let f = common::repo().join("tests/fixtures/notes/computed_read.df");
+    let r = s
+        .run(&["dev", "--world", "w.json", "plan", f.to_str().unwrap()])
+        .success();
+    assert_eq!(r.stderr.matches("note: ").count(), 1, "{}", r.stderr);
     assert!(
         r.stderr.contains(
-            "reads `vpc.id` now, a computed value: this block waits for the tick that creates \
-             `vpc`; a field written `= vpc.id` would be an edge and apply with it"
+            "computed_read.df:10:17: reads `db.endpoint` now, a computed value: this block waits \
+             for the tick that creates `db`; a field written `= db.endpoint` would be an edge and \
+             apply with it"
         ),
         "{}",
         r.stderr
     );
-    assert_eq!(r.stderr.matches("note: ").count(), 1, "{}", r.stderr);
 }
