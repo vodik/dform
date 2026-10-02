@@ -61,7 +61,10 @@ fn answer(s: &Scratch, answer: &str) -> (String, String, i32) {
 /// prompt and after the last, and its exit code.
 fn answers(s: &Scratch, answers: &[&str]) -> (Vec<String>, i32) {
     let mut cmd = common::dform();
+    // A pty is a terminal, so `--color auto` would paint the plan; the
+    // assertions read it as text.
     cmd.args(["dev", "--world", "w.json", "apply", "p.df"])
+        .env("NO_COLOR", "1")
         .current_dir(s.path(""));
     let mut p = Session::spawn(cmd).unwrap();
     p.set_expect_timeout(Some(std::time::Duration::from_secs(60)));
