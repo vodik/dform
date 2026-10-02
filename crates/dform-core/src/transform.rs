@@ -1607,6 +1607,133 @@ fn leaf_paths(t: &Term, prefix: &str, out: &mut Vec<String>) {
     }
 }
 
+/// A content read of a computed path inside a block (DESIGN.org R-4): the
+/// block's shared body reads `attr(T, A, P, V)` where the schema computes
+/// `P` (or the path the body walks from it), so the whole block waits for
+/// the tick that creates `A`, where a reference (`f = a.p`, a whole value)
+/// would be an edge and apply with it. One note per block, at its first
+/// such read (`file:line:col` first), in the order of the program. A read
+/// the block's name needs (an interpolated header) is the point of the
+/// wait, and has none.
+pub fn computed_reads(statements: &[Stmt], schema: &Schema) -> Vec<(Span, String)> {
+    // A block's rules (its `want` and each field's `arg`) share one body:
+    // the block is known by its reads' places.
+    let mut blocks = BTreeSet::new();
+    let mut out = Vec::new();
+    for s in statements {
+        let Stmt::Rule(r) = s else { continue };
+        let block = matches!(
+            (r.head.pred.as_str(), r.head.args.len()),
+            ("want", 2) | ("arg", 5)
+        ) && matches!(&r.head.args[0], Term::Val(Value::Str(t)) if !is_pseudo_type(t));
+        if !block {
+            continue;
+        }
+        let named = name_vars(&r.head.args[1], &r.body);
+        let reads: Vec<&Atom> = r
+            .body
+            .iter()
+            .filter_map(|l| match l {
+                Lit::Pos(a) if a.pred == "attr" && a.args.len() == 4 && !a.span.is_none() => {
+                    Some(a)
+                }
+                _ => None,
+            })
+            .collect();
+        let key: Vec<(u32, u32, u32)> = reads
+            .iter()
+            .map(|a| (a.span.file, a.span.start, a.span.end))
+            .collect();
+        if !blocks.insert(key) {
+            continue;
+        }
+        let first = reads.iter().find_map(|a| {
+            let [Term::Val(Value::Str(t)), addr, Term::Val(Value::Str(p)), v] = a.args.as_slice()
+            else {
+                return None;
+            };
+            if matches!(v, Term::Var(x) if named.contains(x)) {
+                return None;
+            }
+            let mut paths = vec![p.clone()];
+            walks(v, &r.body, p, &mut paths);
+            let path = paths.into_iter().find(|q| schema.class_of(t, q).is_some())?;
+            let at = match addr {
+                Term::Val(Value::Str(a)) => a.rsplit("::").next().unwrap_or(a).to_string(),
+                other => format!("{t}[{}]", crate::partition::fmt_term(other)),
+            };
+            Some((a.span, at, path))
+        });
+        if let Some((span, at, path)) = first {
+            let place = diag::place(span).map(|p| format!("{p}: ")).unwrap_or_default();
+            out.push((
+                span,
+                format!(
+                    "{place}reads `{at}.{path}` now, a computed value: this block waits for \
+                     the tick that creates `{at}`; a field written `= {at}.{path}` would be an \
+                     edge and apply with it"
+                ),
+            ));
+        }
+    }
+    out
+}
+
+/// The variables a block's address is built from: its header's holes
+/// (`Addr = format(..)`), followed back through equalities.
+fn name_vars(addr: &Term, body: &[Lit]) -> BTreeSet<String> {
+    let mut vars: BTreeSet<String> = count_vars_in_term(addr).into_keys().collect();
+    loop {
+        let before = vars.len();
+        for l in body {
+            if let Lit::Eq(x, y) = l {
+                let (xs, ys) = (count_vars_in_term(x), count_vars_in_term(y));
+                if xs.keys().chain(ys.keys()).any(|v| vars.contains(v)) {
+                    vars.extend(xs.into_keys().chain(ys.into_keys()));
+                }
+            }
+        }
+        if vars.len() == before {
+            return vars;
+        }
+    }
+}
+
+/// Each path `p.q` the body walks from the read's value `v`
+/// (`__path(v, "q")`, anywhere in a term).
+fn walks(v: &Term, body: &[Lit], p: &str, out: &mut Vec<String>) {
+    fn term(t: &Term, v: &Term, p: &str, out: &mut Vec<String>) {
+        match t {
+            Term::Func { name, args } => {
+                if name == "__path"
+                    && args.first() == Some(v)
+                    && let Some(Term::Val(Value::Str(q))) = args.get(1)
+                {
+                    out.push(format!("{p}.{q}"));
+                }
+                args.iter().for_each(|a| term(a, v, p, out));
+            }
+            Term::List(xs) => xs.iter().for_each(|a| term(a, v, p, out)),
+            Term::Obj(m) => m.values().for_each(|a| term(a, v, p, out)),
+            _ => {}
+        }
+    }
+    for l in body {
+        match l {
+            Lit::Pos(a) | Lit::Not(a) => a.args.iter().for_each(|t| term(t, v, p, out)),
+            Lit::Eq(x, y)
+            | Lit::Neq(x, y)
+            | Lit::Gt(x, y)
+            | Lit::Ge(x, y)
+            | Lit::Lt(x, y)
+            | Lit::Le(x, y) => {
+                term(x, v, p, out);
+                term(y, v, p, out);
+            }
+        }
+    }
+}
+
 /// `__ref_dep(T, A, T2, A2)`: a contribution to `(T, A)` holds a ref to
 /// `(T2, A2)`, so `(T2, A2)` is applied first.
 pub const REF_DEP: &str = "__ref_dep";

@@ -58,6 +58,9 @@ pub enum Note {
     Resolved(String),
     /// A git table whose ref names another commit than at the last apply.
     TableMoved(String),
+    /// A content read of a computed path in a block, at the read: the
+    /// block waits a tick (DESIGN.org R-4). Not under strict mode.
+    Computed(crate::ast::Span, String),
 }
 
 /// What a caller does at an evaluation's steps. Each defaults to nothing.
@@ -732,6 +735,12 @@ impl Located {
         if let Some(l) = lowered {
             crate::secrets::check(l, backend.schema(), &secret_outputs)?;
             crate::refine::check(&l.program, backend.schema())?;
+            // Strict mode refuses the plan with the stuck instance named.
+            if self.loaded.cfg.unknowns != stack::Unknowns::Strict {
+                for (at, n) in transform::computed_reads(&l.program.statements, backend.schema()) {
+                    obs.note(Note::Computed(at, n));
+                }
+            }
         }
         // An `expect_account` a secret reaches is named by its label.
         let secret_accounts = lowered

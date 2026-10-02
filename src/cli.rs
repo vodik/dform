@@ -2389,6 +2389,8 @@ impl deployment::Observer for Watch<'_> {
                 None => println!("{m}"),
             },
             Note::TableMoved(_) => {}
+            Note::Computed(_, n) if self.plans() => eprintln!("note: {n}"),
+            Note::Computed(..) => {}
         }
     }
 

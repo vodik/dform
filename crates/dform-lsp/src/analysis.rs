@@ -347,7 +347,7 @@ fn run(
             Note::Warning(w) | Note::Collision(w) => {
                 problems.push(Problem::top(Severity::Warning, w.clone()))
             }
-            Note::Policy(_) | Note::Resolved(_) | Note::TableMoved(_) => {}
+            Note::Policy(_) | Note::Resolved(_) | Note::TableMoved(_) | Note::Computed(..) => {}
         }
     }
     r
