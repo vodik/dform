@@ -677,7 +677,7 @@ lease per deployment, so a second apply of the same deployment is
 refused naming the holder. `dform state show`, `state mv` and `stack
 rekey` are the state operations.
 
-**Providers.** A provider is a wasm component: one file, any platform,
+**Providers.** A provider is one wasm file (the component model under WASI): any platform,
 sandboxed, carrying its own schema, so the editor can jump to a type's
 definition with nothing running. A registry is a bucket, the same kind
 you keep state in: `[registries] acme = { backend = 's3(..)', keys =
