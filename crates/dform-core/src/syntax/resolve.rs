@@ -3333,7 +3333,8 @@ impl<'u> Lowerer<'u> {
     /// literal can be checked against are; a `string` or `any` parameter
     /// takes what it is given.
     fn typed_args(&mut self, name: &str, args: Vec<Term>, span: Span) -> L<Vec<Term>> {
-        let Some(f) = crate::functions::get(name) else {
+        // Read leniently (a refinement's text), a name is its own string.
+        let Some(f) = crate::functions::get(name).filter(|_| !self.lenient && !self.text) else {
             return Ok(args);
         };
         let mut out = Vec::with_capacity(args.len());

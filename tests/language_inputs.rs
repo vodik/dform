@@ -135,7 +135,7 @@ fn a_module_input_of_the_wrong_type_is_a_violation() {
     let s = Scratch::project("lang-inputs-module");
     s.write(
         "p.df",
-        "edition 2026\nmodule m {\n  input n: int\n  resource net.vpc v {\n    n = n_\n  } where n(n_)\n}\ninstance m a { n = \"three\" }\nprovider fake\n",
+        "edition 2026\nmodule m {\n  input n: int\n  resource net.vpc v {\n    n = n_\n  } where n(n_)\n}\ninstance m a { n = format(\"%s\", \"three\") }\nprovider fake\n",
     );
     let r = s
         .run(&["dev", "--world", "w.json", "plan", "p.df"])
