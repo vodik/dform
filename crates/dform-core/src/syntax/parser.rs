@@ -75,6 +75,16 @@ type P<T = ()> = Result<T, Bail>;
 
 /// A name that can start a chain in a term: an identifier, or a keyword
 /// that has no construct of its own in a term.
+/// The verb rule (R-57), for an `input` that gives rows with `=`: `=`
+/// gives a value, `from` gives rows.
+const VERB_RULE_ROWS: &str = "`=` gives a value and `from` gives rows: a value is `input p: T = d`, \
+                              and rows are facts, `p(\"a\", 1)`, or `input p(a, b) from facts(..)`";
+
+/// The verb rule (R-57), for an `input` that gives a value `from` a
+/// document.
+const VERB_RULE_FROM: &str = "`from` gives rows and `=` gives a value: a relation input names its \
+                              columns, `input p(a, b) from facts(..)`, and a value is `input x: T = d`";
+
 fn term_name(k: SyntaxKind) -> bool {
     k == IDENT
         || (k.is_keyword()
@@ -650,6 +660,11 @@ impl<'a> Parser<'a> {
             INPUT_KW if self.raw(2) == L_PAREN => self.simple(INPUT_RELATION, |p| {
                 p.expect_word()?;
                 p.columns(true)?;
+                if p.at(EQ) {
+                    let msg = format!("expected `from`, found {}", p.found());
+                    p.error_here(msg, Some(VERB_RULE_ROWS.to_string()));
+                    return Err(Bail);
+                }
                 if !p.at_contextual("from") {
                     return p.err_expected("`from`");
                 }
@@ -673,10 +688,13 @@ impl<'a> Parser<'a> {
             INPUT_KW | KEY_KW => self.simple(INPUT, |p| {
                 p.expect_word()?;
                 if !p.at(COLON) {
-                    let hint = p.at_contextual("from").then(|| {
-                        "a relation input names its columns: `input p(a, b) from facts(..)`"
-                            .to_string()
-                    });
+                    let hint = if p.at_contextual("from") {
+                        Some(VERB_RULE_FROM.to_string())
+                    } else if p.at(EQ) {
+                        Some(VERB_RULE_ROWS.to_string())
+                    } else {
+                        None
+                    };
                     let msg = format!(
                         "expected `:` or `(` after the input's name, found {}",
                         p.found()
@@ -686,6 +704,11 @@ impl<'a> Parser<'a> {
                 }
                 p.bump();
                 p.type_expr()?;
+                if p.at_contextual("from") {
+                    let msg = format!("expected `=` or the end of the line, found {}", p.found());
+                    p.error_here(msg, Some(VERB_RULE_FROM.to_string()));
+                    return Err(Bail);
+                }
                 if p.eat(EQ) {
                     p.term()?;
                 }

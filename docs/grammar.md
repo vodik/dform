@@ -398,6 +398,13 @@ clause. `if`, the clause word of an earlier surface (H-3), is an
 error wherever it stands, and the error prints the statement with its
 clause spelled `where`.
 
+The verb says what a statement gives (R-57): `=` gives a value, `from`
+gives rows. `input x: T = d`, `let x = t` and `output x = t` are values;
+`input p(a, b) from DOC`, `settings from DOC` and a copy's `p from TERM`
+are relations, a row per element. A value written with `from`, or rows
+with `=` (`input p = [..]`), is an error that says so; rows written in
+the program are facts, `p("a", 1)`.
+
 An entry that is only a path is the pun of its last segment (R-33), as
 `{ a }` is `{ a: a }` in an object: `availability_zone` alone is
 `availability_zone = availability_zone`, `spec.selector.color` is

@@ -1,0 +1,4 @@
+edition 2026
+
+# `=` gives a value, `from` gives rows (R-57): rows written with `=`.
+input zones = [["us-east-1a", 0], ["us-east-1b", 1]]

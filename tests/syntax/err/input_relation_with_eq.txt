@@ -1,0 +1,2 @@
+tests/syntax/err/input_relation_with_eq.df:5:25: expected `from`, found `=`
+  help: `=` gives a value and `from` gives rows: a value is `input p: T = d`, and rows are facts, `p("a", 1)`, or `input p(a, b) from facts(..)`

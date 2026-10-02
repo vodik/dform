@@ -1,0 +1,5 @@
+edition 2026
+
+# `from` gives rows, `=` gives a value (R-57): a value read from a
+# document.
+input replicas: int from facts("replicas.facts")
