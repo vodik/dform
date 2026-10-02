@@ -243,6 +243,11 @@ enum Run {
         /// policy, against the stack's world.
         #[arg(long = "scenario")]
         scenario: Option<String>,
+        /// Under each deformation, why: the statement that derived it and
+        /// the facts, table rows, inputs and extern answers it rests on,
+        /// one line each (`why ADDR`, compressed).
+        #[arg(long)]
+        why: bool,
     },
     /// Apply a deployment, every key value named (`apply app env=prod`),
     /// or a plan file from `plan --out` (`apply PLAN.json`): refresh,
@@ -531,6 +536,7 @@ enum Cmd {
         out: Option<PathBuf>,
         json: bool,
         scenario: Option<String>,
+        why: bool,
     },
     Test,
     Apply {
@@ -800,11 +806,13 @@ fn run_cmd(r: Run) -> (Cmd, Option<Target>) {
             out,
             json,
             scenario,
+            why,
         } => (
             Cmd::Plan {
                 out,
                 json,
                 scenario,
+                why,
             },
             Some(target),
         ),
@@ -1711,7 +1719,7 @@ fn run_with(
             let redact = query::Redactor::new(&res.facts, backend.schema());
             print!("{}", graph::relation(&spec, &res.facts, &redact)?);
         }
-        Cmd::Plan { out, json, .. } => {
+        Cmd::Plan { out, json, why, .. } => {
             let Planned {
                 res,
                 resources,
@@ -1721,7 +1729,10 @@ fn run_with(
             } = policy
                 .take()
                 .ok_or_else(|| anyhow::anyhow!("internal: a plan without its policy pass"))??;
-            let report = report_of(&plan, &res, &sections, 1, &moves, &denies);
+            let mut report = report_of(&plan, &res, &sections, 1, &moves, &denies);
+            if why {
+                report.explain(&res, &query::Redactor::new(&res.facts, schema));
+            }
             // The plan file, when one is written or the plan needs an
             // approval: its digest is what an approver signs.
             let needs = crate::approval::needs(&res.facts);

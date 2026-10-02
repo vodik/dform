@@ -379,3 +379,35 @@ fn why_prints_a_braced_clause_on_one_line() {
         "{out}"
     );
 }
+
+/// R-15: `plan --why` prints under each deformation the statement that
+/// derived it and one line per leaf of that derivation: the facts, the
+/// table rows, the inputs it rests on.
+#[test]
+fn plan_why_explains_each_deformation() {
+    let out = dform("examples/tour/stacks/tour.df env=prod", &["plan", "--why"]);
+    assert!(
+        out.contains(
+            "+ net.subnet[\"private-us-test-1a\"]
+  cidr = \"10.0.1.0/24\"
+  tags.team = \"shop\"
+  visibility = \"private\"
+  vpc_id = ?net.vpc[\"main\"].id
+  zone = \"us-test-1a\"
+  by examples/tour/stacks/tour.df:106  resource net.subnet \"private-${z}\" { .. } where zone(z, n)
+  because examples/tour/stacks/tour.df:103  zone(\"us-test-1a\", 1)
+  because examples/tour/stacks/tour.df:43  net.vpc[\"main\"].cidr = 10.0.0.0/16
+"
+        ),
+        "{out}"
+    );
+    // A value given on the command line is its flag.
+    assert!(out.contains("  because --set env=prod\n"), "{out}");
+    // Without --why the plan is as it was.
+    let plain = dform("examples/tour/stacks/tour.df env=prod", &["plan"]);
+    assert!(
+        !plain.contains("because") && !plain.contains("  by "),
+        "{plain}"
+    );
+    golden("why_tour_prod_plan", &out);
+}

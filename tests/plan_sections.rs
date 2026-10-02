@@ -320,3 +320,48 @@ fn strip_sgr(s: &str) -> String {
     }
     out
 }
+
+/// R-15: an update is explained by the winning contribution to the
+/// attribute it changes, a delete by state alone; a secret input in an
+/// explanation prints as its label.
+#[test]
+fn plan_why_explains_an_update_and_a_delete_and_redacts_a_secret() {
+    let s = Scratch::new("sections-why");
+    let schema = repo().join("tests/fixtures/providers/leaky/schema.df");
+    let mock = ["--provider", schema.to_str().unwrap(), "--world", "w.json"];
+    let run = |pw: &str, args: &[&str]| {
+        let mut all = vec!["--set".to_string(), format!("pw={pw}")];
+        all.extend(common::on("p.df", &mock, args));
+        s.run(&all)
+    };
+    s.write(
+        "p.df",
+        "edition 2026\ninput pw: secret(string)\nresource leaky.vault v {\n  password = pw\n}\nresource leaky.oops o {\n  password = \"plain\"\n}\n",
+    );
+    run("FIRST-SECRET-123", &["apply"]).success();
+    s.write(
+        "p.df",
+        "edition 2026\ninput pw: secret(string)\nresource leaky.vault v {\n  password = pw\n}\n",
+    );
+    let r = run("SECOND-SECRET-456", &["plan", "--why"]).success();
+    assert!(
+        r.stdout.contains(
+            "~ leaky.vault[\"v\"]\n  password: (sensitive) -> (sensitive)\n  by p.df:4  resource \
+             leaky.vault v { password = pw }\n  because --set pw=(sensitive input.pw)\n"
+        ),
+        "{}",
+        r.stdout
+    );
+    assert!(
+        r.stdout.contains(
+            "- leaky.oops[\"o\"]\n  password was \"plain\"\n  because no statement derives it now; \
+             state has it\n"
+        ),
+        "{}",
+        r.stdout
+    );
+    let j = run("SECOND-SECRET-456", &["plan", "--why", "--json"]).success();
+    for out in [&r.stdout, &r.stderr, &j.stdout] {
+        assert!(!out.contains("SECRET-"), "{out}");
+    }
+}

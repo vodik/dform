@@ -782,6 +782,28 @@ and the sections follow in this order; what cannot be decided yet is said so:
   already has: the identity mapping is stale.
 - `stack NAME is undeformed`: nothing to do, nothing stuck (the only line).
 
+`plan --why` prints under each deformation why it is planned: `why`'s
+tree compressed to one line per leaf. `by FILE:LINE` is the statement
+that derived it, as `why` prints it; each `because` line is a leaf of that
+derivation, the facts in between dropped: a fact the program states at its
+`file:line`, a table's row at its `path:line` (`because data/zones.csv:4
+zone("us-test-1c", 3)`), a `--set` or `--data` as its flag, an extern's
+answer, a world fact, a fact found absent. A create is explained by its
+`want`, an update (a drift, a replace) by the winning contributions to each
+attribute it changes, a delete by state alone (`because no statement derives
+it now; state has it`). Of several derivations the one with the fewest
+leaves is shown. Secrets print as their label, as everywhere:
+
+```
+$ dform plan net --why
++ net.subnet["private-us-test-1c"]
+  cidr = "10.0.3.0/24"
+  ...
+  by stacks/net.df:9  resource net.subnet "private-${z}" { .. } where zone(z, n)
+  because stacks/net.df:7  net.vpc["main"].cidr = "10.0.0.0/16"
+  because data/zones.csv:4  zone("us-test-1c", 3)
+```
+
 Strict mode. `unknowns = "strict"` in the stack's `[stacks.NAME]` refuses a plan that needs a
 phase boundary, exactly Terraform's refusal. It is two generated denies,
 so the refusal has provenance (`why`) and policy can relax it:
@@ -820,7 +842,9 @@ sections as arrays in the order above (`definite`, `pending`,
 `pending_groups`, `undetermined`, `shadowed`, `conflicts`, `apply_order`,
 `unscheduled`, `moved`, `denied`). A deformation is `{action, address,
 type, name, changes}` (`address` as the text prints it), a replace with `create_first`, a deposed delete with `deposed:
-true`. A change is `{op, path, before, after}` (`op` is `set`, or
+true`, and with `--why` a `why` array of `{kind, at, text}` (`kind` is
+`rule` for the `by` line, else `fact`, `input`, `extern`, `world`, `plan`,
+`absent` or `state`; `at` the `file:line` when there is one). A change is `{op, path, before, after}` (`op` is `set`, or
 `add`/`remove` for a set element, with its `leaves`); a null is `{"null":
 LABEL, "class": CLASS}` and a secret `{"sensitive": LABEL}`.
 

@@ -244,3 +244,66 @@ fn replace_denied_and_moved_are_in_the_document() {
     );
     assert_eq!(p["undeformed"], true);
 }
+
+/// R-15: `plan --why --json` carries each deformation's explanation as a
+/// `why` array of `{kind, at, text}`; without `--why` there is none.
+#[test]
+fn plan_json_why_explains_each_deformation() {
+    let s = Scratch::new("json-why");
+    let prog = repo().join("examples/gke/stacks/gke_two_phase.df");
+    let run = |extra: &[&str]| -> Value {
+        let mut args = vec![
+            "dev",
+            "--provider",
+            "gke",
+            "--world",
+            "w.json",
+            "plan",
+            "--json",
+        ];
+        args.extend_from_slice(extra);
+        args.push(prog.to_str().unwrap());
+        let r = s.run(&args).success();
+        serde_json::from_str(&r.stdout).unwrap_or_else(|e| panic!("{e}: {}", r.stdout))
+    };
+    let p = run(&["--why"]);
+    let subnet = &p["definite"][0];
+    assert_eq!(subnet["name"], "gke_subnet");
+    let why = subnet["why"].as_array().unwrap();
+    assert_eq!(why[0]["kind"], "rule");
+    assert!(
+        why[0]["at"]
+            .as_str()
+            .unwrap()
+            .ends_with("examples/gke/stacks/gke_two_phase.df:38"),
+        "{}",
+        why[0]
+    );
+    assert!(
+        why[0]["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("resource google_compute_subnetwork gke_subnet"),
+        "{}",
+        why[0]
+    );
+    assert!(
+        why.iter().any(|b| b["kind"] == "fact"
+            && b["text"] == "settings[\"dev\"].gke.subnet_cidr = 10.141.76.0/22"),
+        "{subnet}"
+    );
+    // A pending deformation is explained too.
+    let pending = p["pending"][0]["deformations"].as_array().unwrap();
+    assert!(
+        pending
+            .iter()
+            .all(|d| !d["why"].as_array().unwrap().is_empty()),
+        "{pending:?}"
+    );
+    let p = run(&[]);
+    assert!(
+        p["definite"][0].get("why").is_none(),
+        "{}",
+        p["definite"][0]
+    );
+}

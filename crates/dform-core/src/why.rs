@@ -676,21 +676,12 @@ impl Surface<'_, '_> {
     /// The fired rule `id`: its statement at `file:line`, then `with` its
     /// bindings by the source's names and every computed term of the
     /// statement with its value, aligned under them.
-    fn statement(&mut self, id: &str, bindings: &[(String, Value)], pad: &str) {
+    /// The fired rule `id` as its statement: `file:line`, its text on one
+    /// line (redacted, with the pack or module instance it came from), and
+    /// what of it is shown. `None` for a rule the compiler wrote.
+    fn source_line(&mut self, id: &str) -> Option<(String, String, Option<Shown>)> {
         let redact = self.p.redact;
-        let Some(src) = self.p.circuit.rule_source(id) else {
-            // A rule the compiler wrote: there is no source to show.
-            let text = self.p.circuit.rule_text(id).unwrap_or(id);
-            self.push(format!("{pad}{}", redact.text(text)));
-            if !bindings.is_empty() {
-                let b: Vec<String> = bindings
-                    .iter()
-                    .map(|(k, v)| format!("{k} = {}", redact.surface(v)))
-                    .collect();
-                self.push(format!("{pad}with {}", b.join(", ")));
-            }
-            return;
-        };
+        let src = self.p.circuit.rule_source(id)?;
         let root = self
             .files
             .entry(src.file.clone())
@@ -704,13 +695,35 @@ impl Surface<'_, '_> {
         let place = format!("{}:{}", src.file, src.line);
         let Some((stmt, entry)) = statement_at(&root, src.start, src.end) else {
             let text = collapse(src.text.get(src.start..src.end).unwrap_or(""));
-            self.push(format!("{pad}{place}  {}{origin}", redact.text(&text)));
-            return;
+            return Some((place, format!("{}{origin}", redact.text(&text)), None));
         };
         let mut shown = Shown::default();
         shown.render(&stmt, &stmt, entry.as_ref());
         let text = collapse(&shown.text);
-        self.push(format!("{pad}{place}  {}{origin}", redact.text(&text)));
+        Some((
+            place,
+            format!("{}{origin}", redact.text(&text)),
+            Some(shown),
+        ))
+    }
+
+    fn statement(&mut self, id: &str, bindings: &[(String, Value)], pad: &str) {
+        let redact = self.p.redact;
+        let Some((place, text, shown)) = self.source_line(id) else {
+            // A rule the compiler wrote: there is no source to show.
+            let text = self.p.circuit.rule_text(id).unwrap_or(id);
+            self.push(format!("{pad}{}", redact.text(text)));
+            if !bindings.is_empty() {
+                let b: Vec<String> = bindings
+                    .iter()
+                    .map(|(k, v)| format!("{k} = {}", redact.surface(v)))
+                    .collect();
+                self.push(format!("{pad}with {}", b.join(", ")));
+            }
+            return;
+        };
+        self.push(format!("{pad}{place}  {text}"));
+        let Some(shown) = shown else { return };
 
         let rule = id
             .strip_prefix('r')
@@ -760,6 +773,290 @@ impl Surface<'_, '_> {
     }
 }
 
+// --- the tree compressed to its leaves (`plan --why`, `diff`) -------------
+
+/// One line of a deformation's explanation: the statement that derived it
+/// (`kind` "rule"), or one leaf under it: a fact the program or a table
+/// states ("fact"), a `--set` or `--data` ("input"), an extern's answer
+/// ("extern"), a world fact ("world"), a fact of the plan ("plan"), a
+/// fact found absent ("absent"), or what state alone says ("state").
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Because {
+    pub kind: String,
+    /// `file:line` (a table's row, `path:line`), when it has a place.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<String>,
+    pub text: String,
+}
+
+impl Because {
+    fn new(kind: &str, at: Option<String>, text: String) -> Because {
+        Because {
+            kind: kind.into(),
+            at,
+            text,
+        }
+    }
+
+    /// `by FILE:LINE  STATEMENT`, or `because [PLACE  ]FACT`.
+    pub fn line(&self) -> String {
+        let word = if self.kind == "rule" { "by" } else { "because" };
+        match &self.at {
+            Some(at) => format!("{word} {at}  {}", self.text),
+            None => format!("{word} {}", self.text),
+        }
+    }
+}
+
+impl Printer<'_> {
+    /// Why fact node `root` holds, compressed: the statement that derived
+    /// it, then one line per leaf of its shortest derivation (the facts in
+    /// between are dropped). An attribute (`attr`) is explained by its
+    /// winning contributions, each its statement and leaves; with a focus,
+    /// only the contributions that hold the focused part.
+    pub fn because(&self, rules: &[RuleStmt], root: NodeId, focus: Option<&Focus>) -> Vec<Because> {
+        let mut s = Surface {
+            p: self,
+            rules,
+            w: Walk::default(),
+            files: BTreeMap::new(),
+        };
+        let mut c = Compress {
+            out: Vec::new(),
+            sizes: BTreeMap::new(),
+        };
+        c.fact(&mut s, root, None, true, focus);
+        c.out
+    }
+
+    /// Why resource `addr` is wanted ([`because`] of its `want`); `None`
+    /// when the program does not want it.
+    ///
+    /// [`because`]: Printer::because
+    pub fn want(&self, rules: &[RuleStmt], addr: &Address) -> Option<Vec<Because>> {
+        let f = Fact::new(
+            "want",
+            vec![Value::Str(addr.typ.clone()), Value::Str(addr.name.clone())],
+        );
+        let id = self.circuit.fact_id(&f)?;
+        Some(self.because(rules, id, None))
+    }
+
+    /// Why attribute `path` of `addr` has its value: its winning
+    /// contributions; a dotted path below an object attribute
+    /// (`tags.team`) only the contributions that set that part, and a
+    /// list element (`rules[0]`) the list's. `None` when the program sets
+    /// no such attribute.
+    pub fn attr(
+        &self,
+        rules: &[RuleStmt],
+        facts: &BTreeSet<Atom>,
+        addr: &Address,
+        path: &str,
+    ) -> Option<Vec<Because>> {
+        let path = path.split('[').next().unwrap_or(path);
+        let s = |x: &str| Term::Val(Value::Str(x.to_string()));
+        let pattern = Atom {
+            pred: "attr".into(),
+            args: vec![s(&addr.typ), s(&addr.name), s(path), Term::Wildcard],
+            record: None,
+            span: Default::default(),
+        };
+        let found = find(&pattern, facts).ok()?;
+        let (a, focus) = found.first()?;
+        let id = self.circuit.fact_id(&engine::circuit_fact(a))?;
+        Some(self.because(rules, id, focus.as_ref()))
+    }
+}
+
+/// The compressed walk: the lines so far, and each fact node's size (the
+/// leaves of its shortest derivation).
+struct Compress {
+    out: Vec<Because>,
+    sizes: BTreeMap<NodeId, usize>,
+}
+
+impl Compress {
+    fn push(&mut self, b: Because) {
+        if !self.out.contains(&b) {
+            self.out.push(b);
+        }
+    }
+
+    /// How many leaves node `id`'s shortest derivation has.
+    fn size(&mut self, c: &Circuit, id: NodeId) -> usize {
+        if let Some(n) = self.sizes.get(&id) {
+            return *n;
+        }
+        // A node on the current path counts as large: no cycle is taken.
+        self.sizes.insert(id, usize::MAX / 4);
+        let n = match c.view(id) {
+            View::Leaf(_) => 1,
+            View::Fact { alts, .. } => alts
+                .iter()
+                .map(|a| self.size(c, *a))
+                .min()
+                .unwrap_or(usize::MAX / 4),
+            View::Times { children, .. } => children
+                .iter()
+                .map(|ch| self.size(c, *ch))
+                .fold(0usize, |a, b| a.saturating_add(b)),
+            View::Dead => usize::MAX / 4,
+        };
+        self.sizes.insert(id, n);
+        n
+    }
+
+    /// Fact node `id`'s lines. `subject`: the attribute a contribution is
+    /// to, which a stated contribution is named by; `head`: its statement
+    /// is printed (the explained fact's, and each winning contribution's).
+    fn fact(
+        &mut self,
+        s: &mut Surface,
+        id: NodeId,
+        subject: Option<&str>,
+        head: bool,
+        focus: Option<&Focus>,
+    ) {
+        let circuit = s.p.circuit;
+        let View::Fact { fact, alts, .. } = circuit.view(id) else {
+            return;
+        };
+        let text = subject
+            .map(str::to_string)
+            .unwrap_or_else(|| s.fact_text(fact));
+        if let [a] = alts
+            && let View::Times { children: [l], .. } = circuit.view(*a)
+            && let View::Leaf(l) = circuit.view(*l)
+        {
+            if let Some(b) = self.leaf(s, l, &text) {
+                self.push(b);
+            }
+            return;
+        }
+        // A relation read from a table's row: the row, by the relation.
+        if let Some(at) = table_row(circuit, alts) {
+            self.push(Because::new("fact", Some(at), text));
+            return;
+        }
+        if !s.w.seen.insert(id) {
+            return;
+        }
+        let Some(&alt) = alts.iter().min_by_key(|a| self.size(circuit, **a)) else {
+            return;
+        };
+        let View::Times { children, .. } = circuit.view(alt) else {
+            return;
+        };
+        let mut rule = None;
+        let mut facts = Vec::new();
+        let mut others = Vec::new();
+        for c in children {
+            match circuit.view(*c) {
+                View::Leaf(Leaf::Rule { id }) => rule = Some(id.as_str()),
+                View::Leaf(l) => others.push(l),
+                View::Fact { .. } => facts.push(*c),
+                View::Times { .. } | View::Dead => {}
+            }
+        }
+        if rule.is_some_and(|r| r.starts_with('Σ')) {
+            // The winners: the contributions at the highest rank, of those
+            // that hold the focused part.
+            let rank = |f: &NodeId| match circuit.view(*f) {
+                View::Fact { fact, .. } => match fact.args.get(4).and_then(Value::as_str) {
+                    Some("override") => 2,
+                    Some("default") => 0,
+                    _ => 1,
+                },
+                _ => 0,
+            };
+            facts.retain(|f| match (focus, circuit.view(*f)) {
+                (Some(focus), View::Fact { fact, .. }) => {
+                    fact.args.get(3).is_some_and(|v| focus.holds(v))
+                }
+                _ => true,
+            });
+            let top = facts.iter().map(rank).max();
+            let cell = s.fact_text(fact);
+            for f in facts.into_iter().filter(|f| Some(rank(f)) == top) {
+                self.fact(s, f, Some(&cell), head, None);
+            }
+            return;
+        }
+        if head && let Some(r) = rule {
+            let b = match s.source_line(r) {
+                Some((place, text, _)) => Because::new("rule", Some(place), text),
+                None => Because::new(
+                    "rule",
+                    None,
+                    s.p.redact.text(circuit.rule_text(r).unwrap_or(r)),
+                ),
+            };
+            self.push(b);
+        }
+        for f in facts {
+            self.fact(s, f, None, false, None);
+        }
+        for l in others {
+            if let Some(b) = self.leaf(s, l, &text) {
+                self.push(b);
+            }
+        }
+    }
+
+    /// Leaf `l` of a firing of the fact printed as `text`.
+    fn leaf(&self, s: &Surface, l: &Leaf, text: &str) -> Option<Because> {
+        let r = s.p.redact;
+        Some(match l {
+            Leaf::Base { span } => {
+                let (at, origin) = base_parts(span);
+                let origin = origin.map(|o| format!("   ({o})")).unwrap_or_default();
+                Because::new("fact", Some(at.to_string()), format!("{text}{origin}"))
+            }
+            Leaf::Input { source } => Because::new("input", None, r.text(source)),
+            Leaf::Extern { .. } => Because::new("extern", None, text.to_string()),
+            Leaf::World { .. } => Because::new("world", None, text.to_string()),
+            Leaf::Plan { tick, .. } => {
+                Because::new("plan", None, format!("{text}   ({})", plan_text(*tick)))
+            }
+            // A read of a computed attribute, as the compiler lowers it:
+            // not the program's to explain.
+            Leaf::Absent { pattern } if pattern.starts_with("resolved(") => return None,
+            Leaf::Absent { pattern } => {
+                Because::new("absent", None, format!("not {}", s.absent(pattern)))
+            }
+            Leaf::Schema { .. } | Leaf::Rule { .. } => return None,
+        })
+    }
+}
+
+/// Where the one table row a fact is read from is (`input p(..) from
+/// csv(..)`: one firing over the row the table states), as `path:line`.
+fn table_row(c: &Circuit, alts: &[NodeId]) -> Option<String> {
+    let [a] = alts else { return None };
+    let View::Times { children, .. } = c.view(*a) else {
+        return None;
+    };
+    let mut row = None;
+    for ch in children {
+        match c.view(*ch) {
+            View::Leaf(Leaf::Rule { .. }) => {}
+            View::Fact { fact, alts, .. } if row.is_none() && fact.pred.starts_with("table.") => {
+                row = Some(alts)
+            }
+            _ => return None,
+        }
+    }
+    let [a] = row? else { return None };
+    let View::Times { children: [l], .. } = c.view(*a) else {
+        return None;
+    };
+    match c.view(*l) {
+        View::Leaf(Leaf::Base { span }) => Some(base_parts(span).0.to_string()),
+        _ => None,
+    }
+}
+
 /// The cell an `attr` or `arg` names: `T["A"].p`, a settings row's
 /// `settings["row"].p`, or an input, `let` or output by its name.
 fn cell(t: &str, a: &str, p: &str) -> String {
@@ -794,6 +1091,15 @@ fn atom_of(f: &Fact) -> Atom {
 /// A stated fact's place, `file:line:col (pred[, origin])` as the engine
 /// labels it, as `file:line`, and the pack or module instance it came from.
 fn base_place(span: &str) -> String {
+    match base_parts(span) {
+        (at, Some(o)) => format!("{at}   ({o})"),
+        (at, None) => at.to_string(),
+    }
+}
+
+/// A stated fact's `file:line`, and the pack or module instance it came
+/// from.
+fn base_parts(span: &str) -> (&str, Option<&str>) {
     let (at, rest) = span.split_once(" (").unwrap_or((span, ""));
     let origin = rest
         .strip_suffix(')')
@@ -811,10 +1117,7 @@ fn base_place(span: &str) -> String {
         }
         _ => at,
     };
-    match origin {
-        Some(o) => format!("{at}   ({o})"),
-        None => at.to_string(),
-    }
+    (at, origin)
 }
 
 /// Runs of whitespace as one space: a statement on one line.

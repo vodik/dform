@@ -23,6 +23,7 @@ use crate::query::Redactor;
 use crate::schema::Schema;
 use crate::stuck::{Sections, Stuck};
 use crate::value::{Value, null_owner};
+use crate::why::{self, Because};
 use serde_json::{Value as Json, json};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -265,6 +266,8 @@ pub struct Deformation {
     pub kind: ActionKind,
     pub addr: Address,
     pub lines: Vec<Line>,
+    /// Why it is planned (`plan --why`, [`Report::explain`]).
+    pub why: Vec<Because>,
 }
 
 #[derive(Debug, Clone)]
@@ -327,6 +330,8 @@ pub struct Report {
     pub denies: Vec<String>,
     /// Every null the sections name, with its class, for `--json`.
     pub classes: BTreeMap<String, String>,
+    /// Each deformation carries why it is planned ([`Report::explain`]).
+    pub explained: bool,
 }
 
 /// What the report is built from.
@@ -483,6 +488,7 @@ pub fn report(i: &Input) -> Report {
         moved: i.moved.to_vec(),
         denies: i.denies.to_vec(),
         classes,
+        explained: false,
     }
 }
 
@@ -806,6 +812,7 @@ fn deformation(a: &Action, schema: &Schema, r: &Redactor) -> Deformation {
         kind: a.kind.clone(),
         addr: a.addr.clone(),
         lines,
+        why: Vec::new(),
     }
 }
 
@@ -894,6 +901,28 @@ fn nulls_text(on: &[String], style: Style) -> String {
 }
 
 impl Report {
+    /// Say under each deformation why it is planned (`plan --why`), from
+    /// the provenance of `res`, the evaluation the plan was made from: a
+    /// create (or an adoption) by its `want`, an update, a drift or a
+    /// replace by the winning contributions to each attribute it changes
+    /// (its `want` when the program sets none of them), a delete by state
+    /// alone. Every line passes through `r`.
+    pub fn explain(&mut self, res: &EvalResult, r: &Redactor) {
+        let p = why::Printer {
+            circuit: &res.circuit,
+            redact: r,
+            all: false,
+        };
+        let pending = self
+            .pending
+            .iter_mut()
+            .flat_map(|b| b.deformations.iter_mut());
+        for d in self.definite.iter_mut().chain(pending) {
+            d.why = explanation(&p, res, d);
+        }
+        self.explained = true;
+    }
+
     pub fn pending_count(&self) -> usize {
         self.pending
             .iter()
@@ -1114,8 +1143,11 @@ impl Report {
                 })
                 .collect()
         };
-        let deformations =
-            |ds: &[Deformation]| -> Json { ds.iter().map(deformation_json).collect() };
+        let deformations = |ds: &[Deformation]| -> Json {
+            ds.iter()
+                .map(|d| deformation_json(d, self.explained))
+                .collect()
+        };
         let mut summary = serde_json::Map::new();
         summary.insert("deformations".into(), json!(self.deformations()));
         for (k, n) in self.kinds() {
@@ -1171,7 +1203,45 @@ impl Report {
     }
 }
 
-fn deformation_json(d: &Deformation) -> Json {
+/// Why deformation `d` is planned ([`Report::explain`]).
+fn explanation(p: &why::Printer, res: &EvalResult, d: &Deformation) -> Vec<Because> {
+    let state = |text: &str| {
+        vec![Because {
+            kind: "state".into(),
+            at: None,
+            text: text.into(),
+        }]
+    };
+    match d.kind {
+        ActionKind::Delete => state("no statement derives it now; state has it"),
+        ActionKind::DeleteDeposed => state("deposed by its replacement"),
+        ActionKind::Noop | ActionKind::Create | ActionKind::Adopt => {
+            p.want(&res.rules, &d.addr).unwrap_or_default()
+        }
+        ActionKind::Update
+        | ActionKind::Drift
+        | ActionKind::Pending
+        | ActionKind::Replace { .. } => {
+            let mut out: Vec<Because> = Vec::new();
+            for l in &d.lines {
+                for b in p
+                    .attr(&res.rules, &res.facts, &d.addr, &l.path)
+                    .unwrap_or_default()
+                {
+                    if !out.contains(&b) {
+                        out.push(b);
+                    }
+                }
+            }
+            if out.is_empty() {
+                out = p.want(&res.rules, &d.addr).unwrap_or_default();
+            }
+            out
+        }
+    }
+}
+
+fn deformation_json(d: &Deformation, explained: bool) -> Json {
     let mut m = serde_json::Map::new();
     m.insert("action".into(), json!(kind_name(&d.kind)));
     m.insert("address".into(), json!(d.addr.to_string()));
@@ -1190,6 +1260,9 @@ fn deformation_json(d: &Deformation) -> Json {
         "changes".into(),
         d.lines.iter().map(line_json).collect::<Vec<_>>().into(),
     );
+    if explained {
+        m.insert("why".into(), json!(d.why));
+    }
     Json::Object(m)
 }
 
@@ -1251,6 +1324,9 @@ fn write_deformation(out: &mut String, d: &Deformation, style: Style) {
             break;
         }
         write_line(out, &d.kind, l, "  ", style);
+    }
+    for b in &d.why {
+        out.push_str(&format!("  {}\n", b.line()));
     }
 }
 
