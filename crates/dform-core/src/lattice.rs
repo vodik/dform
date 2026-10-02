@@ -608,33 +608,6 @@ impl Default for Ranked {
     }
 }
 
-/// The result of the one non-monotone read.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Collapsed {
-    Bottom,
-    /// A value. `deferred` is non-empty only when the value carries a null: the
-    /// listed constraints are re-checked at resolution (or, for a secret,
-    /// inside the provider).
-    Val {
-        value: Value,
-        rank: Rank,
-        witnesses: Witnesses,
-        deferred: Vec<Constraint>,
-    },
-    /// Some rank holds a same-rank disagreement that a null resolution will
-    /// decide. Readers are stuck on `nulls`.
-    Stuck {
-        rank: Rank,
-        nulls: BTreeSet<String>,
-    },
-    Conflict {
-        rank: Option<Rank>,
-        a: (Value, Witnesses),
-        b: (Value, Witnesses),
-        reason: String,
-    },
-}
-
 impl Ranked {
     pub fn at(rank: Rank, w: Witness, v: Value) -> Ranked {
         let mut r = Ranked::default();
@@ -670,62 +643,6 @@ impl Ranked {
             w = union(&w, cw);
         }
         w
-    }
-
-    /// Collapse: the highest rank with a witness wins under the conjunction of
-    /// all constraints. A conflict or a stuck disagreement at *any* rank
-    /// propagates (a shadowed disagreement is still a disagreement). A lone
-    /// null at a losing rank does not block: rank decides, then class.
-    pub fn collapse(&self) -> Collapsed {
-        for (i, e) in self.ranks.iter().enumerate() {
-            if let Elem::Conflict { a, b, reason, .. } = e {
-                return Collapsed::Conflict {
-                    rank: Some(rank_of(i)),
-                    a: a.clone(),
-                    b: b.clone(),
-                    reason: reason.clone(),
-                };
-            }
-        }
-        for (i, e) in self.ranks.iter().enumerate().rev() {
-            if let Elem::Stuck { nulls, .. } = e {
-                return Collapsed::Stuck {
-                    rank: rank_of(i),
-                    nulls: nulls.clone(),
-                };
-            }
-        }
-        let Some((i, Elem::Val(v, w))) = self
-            .ranks
-            .iter()
-            .enumerate()
-            .rev()
-            .find(|(_, e)| !matches!(e, Elem::Bottom))
-        else {
-            return Collapsed::Bottom;
-        };
-        let rank = rank_of(i);
-        let mut deferred = Vec::new();
-        for (c, cw) in &self.constraints {
-            match c.check(v) {
-                Truth::True => {}
-                Truth::Unknown => deferred.push(c.clone()),
-                Truth::False => {
-                    return Collapsed::Conflict {
-                        rank: None,
-                        a: (v.clone(), w.clone()),
-                        b: (Value::Str(format!("{c:?}")), cw.clone()),
-                        reason: format!("{v:?} violates schema refinement {c}"),
-                    };
-                }
-            }
-        }
-        Collapsed::Val {
-            value: v.clone(),
-            rank,
-            witnesses: w.clone(),
-            deferred,
-        }
     }
 
     /// A phase boundary: substitute a resolved null and re-normalize every
@@ -842,21 +759,17 @@ mod tests {
     }
 
     /// `ranked_all_orders` for any lattice, with F's shadow-aware collapse.
-    fn ranked_all_orders_in(lat: &Lattice, parts: &[Ranked]) -> (Ranked, Collapsed2) {
+    fn ranked_all_orders_in(lat: &Lattice, parts: &[Ranked]) -> (Ranked, Collapsed) {
         let fold = |ps: &[Ranked]| {
             ps.iter()
                 .fold(Ranked::default(), |acc, p| acc.join_in(lat, p, ".x"))
         };
         let base = fold(parts);
-        let basec = base.collapse_shadow_aware();
+        let basec = base.collapse();
         for p in permutations(parts) {
             let r = fold(&p);
             assert_eq!(r, base, "ranked join is order dependent");
-            assert_eq!(
-                r.collapse_shadow_aware(),
-                basec,
-                "collapse is order dependent"
-            );
+            assert_eq!(r.collapse(), basec, "collapse is order dependent");
         }
         let doubled: Vec<Ranked> = parts.iter().chain(parts.iter()).cloned().collect();
         assert_eq!(fold(&doubled), base, "ranked join is not idempotent");
@@ -881,7 +794,7 @@ mod tests {
                 Ranked::at(Rank::Normal, 3, list(&[s("c"), s("d")])),
             ],
         );
-        let Collapsed2::Val {
+        let Collapsed::Val {
             value,
             rank: Rank::Normal,
             witnesses,
@@ -905,7 +818,7 @@ mod tests {
             ],
         );
         assert!(
-            matches!(&c, Collapsed2::Val { value, rank: Rank::Override, .. } if *value == list(&[s("z")]))
+            matches!(&c, Collapsed::Val { value, rank: Rank::Override, .. } if *value == list(&[s("z")]))
         );
 
         // Only defaults: they are the value, unioned and normalized.
@@ -917,7 +830,7 @@ mod tests {
             ],
         );
         assert!(
-            matches!(&c, Collapsed2::Val { value, rank: Rank::Default, .. } if *value == list(&[s("a"), s("b"), s("c")]))
+            matches!(&c, Collapsed::Val { value, rank: Rank::Default, .. } if *value == list(&[s("a"), s("b"), s("c")]))
         );
 
         // An empty set at a higher shelf is non-empty as a contribution: it
@@ -930,7 +843,7 @@ mod tests {
             ],
         );
         assert!(
-            matches!(&c, Collapsed2::Val { value, rank: Rank::Normal, .. } if *value == list(&[]))
+            matches!(&c, Collapsed::Val { value, rank: Rank::Normal, .. } if *value == list(&[]))
         );
     }
 
@@ -949,7 +862,7 @@ mod tests {
                 Ranked::at(Rank::Normal, 3, list(&[row(80, "tcp"), row(443, "tcp")])),
             ],
         );
-        let Collapsed2::Val {
+        let Collapsed::Val {
             value,
             rank: Rank::Normal,
             ..
@@ -971,7 +884,7 @@ mod tests {
         assert!(
             matches!(
                 c,
-                Collapsed2::Conflict {
+                Collapsed::Conflict {
                     rank: Some(Rank::Normal),
                     ..
                 }
@@ -986,7 +899,7 @@ mod tests {
                 Ranked::at(Rank::Override, 3, list(&[row(80, "tcp")])),
             ],
         );
-        let Collapsed2::Val {
+        let Collapsed::Val {
             value, shadowed, ..
         } = c
         else {
@@ -1011,7 +924,7 @@ mod tests {
             &Lattice::Set,
             &[Ranked::at(Rank::Normal, 1, fresh("sg/a#ids"))],
         );
-        assert!(matches!(&c, Collapsed2::Val { value, .. } if *value == fresh("sg/a#ids")));
+        assert!(matches!(&c, Collapsed::Val { value, .. } if *value == fresh("sg/a#ids")));
         let (_, c) = ranked_all_orders_in(
             &Lattice::Set,
             &[
@@ -1020,7 +933,7 @@ mod tests {
             ],
         );
         assert!(
-            matches!(&c, Collapsed2::Stuck { nulls, .. } if nulls.contains("sg/a#ids")),
+            matches!(&c, Collapsed::Stuck { nulls, .. } if nulls.contains("sg/a#ids")),
             "{c:?}"
         );
         let (_, c) = ranked_all_orders_in(
@@ -1030,7 +943,7 @@ mod tests {
                 Ranked::at(Rank::Normal, 2, list(&[s("x")])),
             ],
         );
-        assert!(matches!(&c, Collapsed2::Val { value, .. } if *value == list(&[s("x")])));
+        assert!(matches!(&c, Collapsed::Val { value, .. } if *value == list(&[s("x")])));
     }
 
     /// F8 and the laws for Set, now that a lone contribution is normalized.
@@ -1177,7 +1090,7 @@ mod tests {
         ];
         let (cell, c) = ranked_all_orders(&parts);
         assert!(
-            matches!(&c, Collapsed::Stuck { rank: Rank::Normal, nulls } if nulls.contains("gke/pngu#endpoint"))
+            matches!(&c, Collapsed::Stuck { rank: Rank::Normal, nulls, .. } if nulls.contains("gke/pngu#endpoint"))
         );
 
         // Resolution decides: equal -> the value with both witnesses; unequal -> conflict naming both.
@@ -1241,7 +1154,7 @@ mod tests {
             Ranked::constraint(Constraint::IsStr, 9),
         ]);
         assert!(
-            matches!(&c, Collapsed::Val { value, deferred, .. } if has_secret(value) && deferred == &vec![Constraint::IsStr])
+            matches!(&c, Collapsed::Val { value, deferred, .. } if has_secret(value) && deferred.iter().map(|d| &d.constraint).eq([&Constraint::IsStr]))
         );
 
         // Secret vs concrete at the same rank: the engine can never decide
@@ -1276,19 +1189,26 @@ mod tests {
         let (cell, c) = ranked_all_orders(&parts);
         // Plan time: the value is the null; the check is deferred, not violated.
         assert!(
-            matches!(&c, Collapsed::Val { value, deferred, .. } if *value == open("alloc/cp#cidr") && deferred == &vec![Constraint::PrefixLenGe(28)])
+            matches!(&c, Collapsed::Val { value, deferred, .. } if *value == open("alloc/cp#cidr") && deferred.iter().map(|d| &d.constraint).eq([&Constraint::PrefixLenGe(28)]))
         );
 
-        // Phase boundary, violating value: conflict naming the schema (100) and the contributor (1).
+        // Phase boundary, violating value: a violation naming the contributor
+        // (1) and the schema (100).
         let bad = cell
             .resolve("alloc/cp#cidr", &net("10.0.0.0", 24))
             .collapse();
-        let Collapsed::Conflict { a, b, reason, .. } = bad else {
-            panic!("expected conflict")
+        let Collapsed::Violated {
+            witnesses,
+            refinement,
+            constraint,
+            ..
+        } = bad
+        else {
+            panic!("expected a violation")
         };
-        assert_eq!(a.1, Witnesses::from([1]));
-        assert_eq!(b.1, Witnesses::from([100]));
-        assert!(reason.contains("prefix_len_ge(28)"));
+        assert_eq!(witnesses, Witnesses::from([1]));
+        assert_eq!(refinement, Witnesses::from([100]));
+        assert_eq!(constraint, Constraint::PrefixLenGe(28));
 
         // Phase boundary, satisfying value: a plain value with nothing deferred.
         let ok = cell
@@ -1296,19 +1216,19 @@ mod tests {
             .collapse();
         assert!(matches!(&ok, Collapsed::Val { deferred, .. } if deferred.is_empty()));
 
-        // A constraint is never out-ranked: an @override that violates it is a conflict.
+        // A constraint is never out-ranked: an @override that violates it is a violation.
         let (_, c) = ranked_all_orders(&[
             Ranked::constraint(Constraint::Range(0, 20), 100),
             Ranked::at(Rank::Default, 1, i(3)),
             Ranked::at(Rank::Override, 2, i(30)),
         ]);
-        assert!(matches!(c, Collapsed::Conflict { .. }));
+        assert!(matches!(c, Collapsed::Violated { .. }));
     }
 
     // ---- plain ranked behaviour (B's graft, restricted) --------------------
 
     #[test]
-    fn three_ranks_highest_wins_same_rank_disagreement_is_top() {
+    fn three_ranks_highest_wins_same_rank_disagreement_is_shadowed() {
         let (_, c) = ranked_all_orders(&[
             Ranked::at(Rank::Default, 1, i(3)),
             Ranked::at(Rank::Normal, 2, i(14)),
@@ -1318,23 +1238,34 @@ mod tests {
             matches!(&c, Collapsed::Val { value, rank: Rank::Override, witnesses, .. } if *value == i(30) && *witnesses == Witnesses::from([3]))
         );
 
-        // Same rank, different values: top naming both, even when a higher rank
-        // would have shadowed the disagreement.
+        // Same rank, different values under a higher rank: the higher rank
+        // wins and the disagreement is shadowed, naming both (F DR-9).
         let (_, c) = ranked_all_orders(&[
             Ranked::at(Rank::Normal, 1, i(14)),
             Ranked::at(Rank::Normal, 2, i(20)),
             Ranked::at(Rank::Override, 3, i(30)),
         ]);
-        let Collapsed::Conflict {
-            rank: Some(Rank::Normal),
-            a,
-            b,
+        let Collapsed::Val {
+            value,
+            rank: Rank::Override,
+            shadowed,
             ..
         } = c
         else {
             panic!("{c:?}")
         };
-        assert_eq!(union(&a.1, &b.1), Witnesses::from([1, 2]));
+        assert_eq!(value, i(30));
+        let [
+            Shadowed::Conflict {
+                rank: Rank::Normal,
+                witnesses,
+                ..
+            },
+        ] = shadowed.as_slice()
+        else {
+            panic!("{shadowed:?}")
+        };
+        assert_eq!(*witnesses, Witnesses::from([1, 2]));
 
         // @default replaces arg_default: a default plus one normal value.
         let (_, c) = ranked_all_orders(&[
@@ -1582,8 +1513,9 @@ pub struct Deferred {
     pub witnesses: Witnesses,
 }
 
+/// The result of the one non-monotone read.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Collapsed2 {
+pub enum Collapsed {
     Bottom,
     Val {
         value: Value,
@@ -1621,19 +1553,19 @@ pub enum Collapsed2 {
 }
 
 impl Ranked {
-    /// F's revised collapse (DR-9 / §4.1 rule 2): the highest non-empty rank
-    /// decides. A Stuck or Conflict at a LOSING rank is shadowed, reported as
+    /// Collapse, F's revision (DR-9 / §4.1 rule 2) of E §2.4: the highest
+    /// non-empty rank decides. A Stuck or Conflict at a LOSING rank is shadowed, reported as
     /// a warning, and never blocks. Only the winning rank's element can make
     /// the cell Stuck or Conflict.
-    pub fn collapse_shadow_aware(&self) -> Collapsed2 {
+    pub fn collapse(&self) -> Collapsed {
         self.collapse_at("")
     }
 
-    /// `collapse_shadow_aware` of the cell at `path`, which names the path
+    /// `collapse` of the cell at `path`, which names the path
     /// of a deferred or violated refinement.
-    pub fn collapse_at(&self, path: &str) -> Collapsed2 {
+    pub fn collapse_at(&self, path: &str) -> Collapsed {
         let Some(top) = self.ranks.iter().rposition(|e| !matches!(e, Elem::Bottom)) else {
-            return Collapsed2::Bottom;
+            return Collapsed::Bottom;
         };
         let mut shadowed = Vec::new();
         for (i, e) in self.ranks.iter().enumerate().take(top) {
@@ -1655,7 +1587,7 @@ impl Ranked {
         let rank = rank_of(top);
         match &self.ranks[top] {
             Elem::Bottom => unreachable!(),
-            e @ Elem::Conflict { a, b, reason, .. } => Collapsed2::Conflict {
+            e @ Elem::Conflict { a, b, reason, .. } => Collapsed::Conflict {
                 rank: Some(rank),
                 a: a.clone(),
                 b: b.clone(),
@@ -1663,7 +1595,7 @@ impl Ranked {
                 witnesses: e.witnesses(),
                 shadowed,
             },
-            Elem::Stuck { nulls, .. } => Collapsed2::Stuck {
+            Elem::Stuck { nulls, .. } => Collapsed::Stuck {
                 rank,
                 nulls: nulls.clone(),
                 shadowed,
@@ -1680,7 +1612,7 @@ impl Ranked {
                             witnesses: cw.clone(),
                         }),
                         Truth::False => {
-                            return Collapsed2::Violated {
+                            return Collapsed::Violated {
                                 path: path.to_string(),
                                 constraint: c.clone(),
                                 value: v.clone(),
@@ -1691,7 +1623,7 @@ impl Ranked {
                         }
                     }
                 }
-                Collapsed2::Val {
+                Collapsed::Val {
                     value: v.clone(),
                     rank,
                     witnesses: w.clone(),
@@ -1723,7 +1655,7 @@ fn max_rank(contribs: &[RankedContribution]) -> Rank {
 /// Map, so nested objects merge recursively. A Map path with a contribution that is not an object is
 /// assembled as one Flat value (which conflicts, or is stuck, on the
 /// non-object).
-pub fn lub_ranked(lat: &Lattice, path: &str, contribs: &[RankedContribution]) -> Collapsed2 {
+pub fn lub_ranked(lat: &Lattice, path: &str, contribs: &[RankedContribution]) -> Collapsed {
     lub_ranked_refined(lat, path, contribs, &[])
 }
 
@@ -1738,7 +1670,7 @@ pub fn lub_ranked_refined(
     path: &str,
     contribs: &[RankedContribution],
     refinements: &[Refinement],
-) -> Collapsed2 {
+) -> Collapsed {
     let (here, below): (Vec<&Refinement>, Vec<&Refinement>) =
         refinements.iter().partition(|r| r.path == path);
     let collapsed = match lat {
@@ -1771,8 +1703,8 @@ pub fn lub_ranked_refined(
 
 /// Check refinements at or below `path` against a collapsed value's
 /// content there.
-fn check_below(c: Collapsed2, path: &str, refinements: &[&Refinement]) -> Collapsed2 {
-    let Collapsed2::Val {
+fn check_below(c: Collapsed, path: &str, refinements: &[&Refinement]) -> Collapsed {
+    let Collapsed::Val {
         value,
         rank,
         witnesses,
@@ -1805,7 +1737,7 @@ fn check_below(c: Collapsed2, path: &str, refinements: &[&Refinement]) -> Collap
                 witnesses: Witnesses::from([r.witness]),
             }),
             Truth::False => {
-                return Collapsed2::Violated {
+                return Collapsed::Violated {
                     path: r.path.clone(),
                     constraint: r.constraint.clone(),
                     value: v.clone(),
@@ -1816,7 +1748,7 @@ fn check_below(c: Collapsed2, path: &str, refinements: &[&Refinement]) -> Collap
             }
         }
     }
-    Collapsed2::Val {
+    Collapsed::Val {
         value,
         rank,
         witnesses,
@@ -1841,7 +1773,7 @@ fn lub_ranked_map(
     path: &str,
     contribs: &[RankedContribution],
     refinements: &[Refinement],
-) -> Collapsed2 {
+) -> Collapsed {
     let mut per_key: BTreeMap<String, Vec<RankedContribution>> = BTreeMap::new();
     for (w, r, v) in contribs {
         let Value::Obj(m) = v else {
@@ -1881,8 +1813,8 @@ fn lub_ranked_map(
             .cloned()
             .collect();
         match lub_ranked_refined(lat, &key_path, &cs, &refs) {
-            Collapsed2::Bottom => {}
-            Collapsed2::Val {
+            Collapsed::Bottom => {}
+            Collapsed::Val {
                 value,
                 witnesses: w,
                 deferred: d,
@@ -1894,7 +1826,7 @@ fn lub_ranked_map(
                 deferred.extend(d);
                 shadowed.extend(sh);
             }
-            Collapsed2::Stuck {
+            Collapsed::Stuck {
                 rank,
                 nulls,
                 shadowed: sh,
@@ -1904,7 +1836,7 @@ fn lub_ranked_map(
                 st.0 = st.0.max(rank);
                 st.1.extend(nulls);
             }
-            Collapsed2::Conflict {
+            Collapsed::Conflict {
                 rank,
                 a,
                 b,
@@ -1913,7 +1845,7 @@ fn lub_ranked_map(
                 shadowed: sh,
             } => {
                 shadowed.extend(sh);
-                return Collapsed2::Conflict {
+                return Collapsed::Conflict {
                     rank,
                     a,
                     b,
@@ -1922,7 +1854,7 @@ fn lub_ranked_map(
                     shadowed,
                 };
             }
-            Collapsed2::Violated {
+            Collapsed::Violated {
                 path,
                 constraint,
                 value,
@@ -1931,7 +1863,7 @@ fn lub_ranked_map(
                 shadowed: sh,
             } => {
                 shadowed.extend(sh);
-                return Collapsed2::Violated {
+                return Collapsed::Violated {
                     path,
                     constraint,
                     value,
@@ -1943,7 +1875,7 @@ fn lub_ranked_map(
         }
     }
     if let Some((rank, nulls)) = stuck {
-        return Collapsed2::Stuck {
+        return Collapsed::Stuck {
             rank,
             nulls,
             shadowed,
@@ -1953,7 +1885,7 @@ fn lub_ranked_map(
         // Only empty objects: the value is `{}`, from every contributor.
         witnesses = contribs.iter().map(|(w, _, _)| *w).collect();
     }
-    Collapsed2::Val {
+    Collapsed::Val {
         value: Value::Obj(out),
         rank: max_rank(contribs),
         witnesses,
@@ -1994,30 +1926,19 @@ mod f_tests {
     /// that might disagree (an allocator's open null and a hard-coded
     /// placeholder), overridden by a normal value.
     #[test]
-    fn adv1_losing_rank_stuck_blocks_under_e_and_not_under_f() {
+    fn adv1_losing_rank_stuck_does_not_block() {
         let cell = joined(&[
             Ranked::at(Rank::Default, 1, open("alloc/cp#cidr")),
             Ranked::at(Rank::Default, 2, s("10.0.0.0/28")),
             Ranked::at(Rank::Normal, 3, s("172.16.3.96/28")),
         ]);
-        // E §2.4 step 2: "if any rank is Stuck: Stuck on that rank's nulls".
-        let e = cell.collapse();
-        println!("E collapse: {e:?}");
-        assert!(
-            matches!(
-                e,
-                Collapsed::Stuck {
-                    rank: Rank::Default,
-                    ..
-                }
-            ),
-            "E waits on a null the winning value does not need"
-        );
-        // F: the normal value wins; the shadowed disagreement is a warning.
-        let f = cell.collapse_shadow_aware();
+        // E §2.4 step 2 waited on a null the winning value does not need
+        // ("if any rank is Stuck"). F: the normal value wins; the shadowed
+        // disagreement is a warning.
+        let f = cell.collapse();
         println!("F collapse: {f:?}");
         assert!(
-            matches!(&f, Collapsed2::Val { value, rank: Rank::Normal, shadowed, .. }
+            matches!(&f, Collapsed::Val { value, rank: Rank::Normal, shadowed, .. }
             if *value == s("172.16.3.96/28") && matches!(shadowed[0], Shadowed::Stuck { rank: Rank::Default, .. }))
         );
         // Same for a shadowed CONFLICT at the losing rank.
@@ -2026,9 +1947,8 @@ mod f_tests {
             Ranked::at(Rank::Default, 2, s("b")),
             Ranked::at(Rank::Override, 3, s("c")),
         ]);
-        assert!(matches!(cell.collapse(), Collapsed::Conflict { .. }));
         assert!(
-            matches!(cell.collapse_shadow_aware(), Collapsed2::Val { value, shadowed, .. } if value == s("c") && shadowed.len() == 1)
+            matches!(cell.collapse(), Collapsed::Val { value, shadowed, .. } if value == s("c") && shadowed.len() == 1)
         );
         // And the winning rank still blocks when IT is stuck: nothing lost.
         let cell = joined(&[
@@ -2036,8 +1956,8 @@ mod f_tests {
             Ranked::at(Rank::Normal, 2, s("10.0.0.0/28")),
         ]);
         assert!(matches!(
-            cell.collapse_shadow_aware(),
-            Collapsed2::Stuck {
+            cell.collapse(),
+            Collapsed::Stuck {
                 rank: Rank::Normal,
                 ..
             }
@@ -2061,7 +1981,12 @@ mod f_tests {
         let Collapsed::Val { deferred, .. } = &c else {
             panic!()
         };
-        assert_eq!(deferred, &vec![Constraint::IsStr]);
+        assert!(
+            deferred
+                .iter()
+                .map(|d| &d.constraint)
+                .eq([&Constraint::IsStr])
+        );
         // No resolution is ever applied to a secret (E Rule 4), so a second
         // collapse after any number of boundaries is identical.
         let again = cell.resolve("sm/db_pw#secret_data", &s("hunter2"));
@@ -2173,7 +2098,7 @@ mod f_tests {
             Ranked::at(Rank::Normal, 3, s("172.16.3.96/28")),
             Ranked::constraint(Constraint::IsStr, 9),
         ];
-        let base = joined(&cells).collapse_shadow_aware();
+        let base = joined(&cells).collapse();
         let n = cells.len();
         let mut perm = cells.clone();
         let mut c = vec![0usize; n];
@@ -2185,7 +2110,7 @@ mod f_tests {
                 } else {
                     perm.swap(c[i], i)
                 }
-                assert_eq!(joined(&perm).collapse_shadow_aware(), base);
+                assert_eq!(joined(&perm).collapse(), base);
                 c[i] += 1;
                 i = 0;
             } else {

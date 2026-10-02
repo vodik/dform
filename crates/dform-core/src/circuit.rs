@@ -873,8 +873,13 @@ mod tests {
             ],
         );
         assert!(c.has(&resolved_attr));
-        let Collapsed::Conflict { a, b, .. } = cell.resolve(nu, &bad).collapse() else {
-            panic!("expected conflict")
+        let Collapsed::Violated {
+            witnesses: a,
+            refinement: b,
+            ..
+        } = cell.resolve(nu, &bad).collapse()
+        else {
+            panic!("expected a violation")
         };
 
         // The engine's reaction: retract the attr row and its cone, derive attr_conflict.
@@ -914,8 +919,8 @@ mod tests {
                 s("gke.cluster"),
                 s("pngu"),
                 s(".master_control_plane_cidr"),
-                Value::Int(a.1.iter().next().copied().unwrap() as i64),
-                Value::Int(b.1.iter().next().copied().unwrap() as i64),
+                Value::Int(a.iter().next().copied().unwrap() as i64),
+                Value::Int(b.iter().next().copied().unwrap() as i64),
             ],
         );
         let resolved_arg_id = c.fact_id(&resolved_arg).unwrap();

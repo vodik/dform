@@ -3,7 +3,7 @@ use crate::circuit::{self, Circuit, Leaf, NodeId};
 use crate::diag;
 use crate::ir::ops::{self, AggKind};
 use crate::ir::store::{Store, TupleId, Window};
-use crate::lattice::{self, Collapsed2, Lattice, Rank, RankedContribution, Shadowed, Witnesses};
+use crate::lattice::{self, Collapsed, Lattice, Rank, RankedContribution, Shadowed, Witnesses};
 use crate::lattice::{Truth, nulls_in};
 use crate::partition::{self, Node};
 use crate::stuck::{self, Stuck};
@@ -1440,8 +1440,8 @@ fn collapse_group(
     };
     let mut out = Vec::new();
     let shadowed = match lattice::lub_ranked_refined(lat, path, &cells, &refinements) {
-        Collapsed2::Bottom => vec![],
-        Collapsed2::Val {
+        Collapsed::Bottom => vec![],
+        Collapsed::Val {
             value,
             shadowed,
             deferred,
@@ -1468,7 +1468,7 @@ fn collapse_group(
             }
             shadowed
         }
-        Collapsed2::Violated {
+        Collapsed::Violated {
             path: at,
             constraint,
             value,
@@ -1512,7 +1512,7 @@ fn collapse_group(
             out.push(policy("deny", crate::refine::VIOLATED, obj(kv)));
             shadowed
         }
-        Collapsed2::Stuck {
+        Collapsed::Stuck {
             nulls, shadowed, ..
         } => {
             out.push(head(
@@ -1521,7 +1521,7 @@ fn collapse_group(
             ));
             shadowed
         }
-        Collapsed2::Conflict {
+        Collapsed::Conflict {
             a,
             b,
             reason,
