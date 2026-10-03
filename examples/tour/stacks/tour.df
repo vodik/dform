@@ -45,9 +45,7 @@ provider fake
 # and the plan is the difference between that and the world. (The plan's
 # first line, `deployment: tour[env=dev]`, is section 4.)
 
-resource net.vpc main {
-  cidr = inet("10.0.0.0/16")
-}
+resource net.vpc main { cidr = inet("10.0.0.0/16") }
 
 # 2. A resource that points at another
 #
@@ -78,11 +76,7 @@ resource net.vpc main {
 #
 # Undeformed means the world matches the program.
 
-resource net.subnet public {
-  vpc = main
-  cidr = "10.0.0.0/24"
-  visibility = "public"
-}
+resource net.subnet public { vpc = main, cidr = "10.0.0.0/24", visibility = "public" }
 
 # 3. Many resources from one rule
 #
@@ -144,10 +138,7 @@ resource net.subnet "private-${z}" {
 # Two blocks that both hold and disagree are a conflict naming both, so
 # a block meant as a fallback says `@default`.
 
-set {
-  database.backup_days = 14
-  database.multi_az = true
-} where env == "prod"
+set { database.backup_days = 14, database.multi_az = true } where env == "prod"
 
 # The database reads each by its name; `why database.backup_days` shows
 # which layer gave it.
@@ -191,7 +182,7 @@ deny "a database must not be public" { database: pg } where pg in db.postgres, p
 #   net.vpc["main"].tags = {team: "shop"}
 #     merged from 1 contribution
 #     └─ {team: "shop"}
-#          stacks/tour.df:181  set r.tags = { team: "shop" } where r in resource
+#          stacks/tour.df:172  set r.tags = { team: "shop" } where r in resource
 #          with r = net.vpc["main"]
 #          └─ net.vpc["main"]   stacks/tour.df:48
 #
@@ -225,10 +216,7 @@ deny "a database must not be public" { database: pg } where pg in db.postgres, p
 component network {
   input cidr: inet
 
-  resource net.vpc vpc {
-    cidr
-    tags = { component: "network" }
-  }
+  resource net.vpc vpc { cidr, tags = { component: "network" } }
 
   resource net.subnet "private-${z}" {
     vpc
@@ -239,13 +227,9 @@ component network {
   output vpc: net.vpc = vpc
 }
 
-instance network blue {
-  cidr = inet("10.1.0.0/16")
-}
+instance network blue { cidr = "10.1.0.0/16" }
 
-instance network green {
-  cidr = inet("10.2.0.0/16")
-}
+instance network green { cidr = "10.2.0.0/16" }
 
 # 8. Rules over rules: a hub and its spokes
 #
@@ -299,11 +283,12 @@ link(t, h) where hub(h), spoke(t)
 reaches(a, b) where link(a, b)
 reaches(a, c) where reaches(a, b), link(b, c)
 
-resource net.route "${a}-to-${b}" {
-  from = a
-  to = b
-  destination = dest
-} where reaches(a, b), a != b, network_of(b, v), dest = net.vpc[v].cidr
+resource net.route "${a}-to-${b}" { from = a, to = b, destination = dest } where {
+  reaches(a, b)
+  a != b
+  network_of(b, v)
+  dest = net.vpc[v].cidr
+}
 
 # 10. A name only apply learns
 #

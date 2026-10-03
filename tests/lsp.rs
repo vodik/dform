@@ -248,7 +248,7 @@ fn hover_shows_every_contribution_and_why_prints_the_derivation() {
     assert!(text.contains("winning rank: normal"), "{text}");
     // Every contribution: the module's, and the policy pack's.
     assert!(
-        text.contains("network.df:17:5, instance network.vpc main"),
+        text.contains("network.df:15:42, instance network.vpc main"),
         "{text}"
     );
     assert!(text.contains("baseline.df:12:1, use baseline"), "{text}");
@@ -280,7 +280,7 @@ fn hover_shows_every_contribution_and_why_prints_the_derivation() {
         "{hover}"
     );
     assert!(
-        text.contains("network.df:16:5, instance network.vpc peer"),
+        text.contains("network.df:15:26, instance network.vpc peer"),
         "{hover}"
     );
     c.shutdown();
@@ -307,7 +307,7 @@ fn hover_shows_docs_builtins_keywords_and_nothing_elsewhere() {
     // Nothing: whitespace, a comment, a string literal, even inside a
     // block or a fact that derives something.
     assert_eq!(
-        hover(&mut c, &network, "    cidr = vpc_net", 1),
+        hover(&mut c, &network, "{ cidr = vpc_net", 1),
         Value::Null
     );
     assert_eq!(hover(&mut c, &stack, "# Both ends", 4), Value::Null);
@@ -625,8 +625,8 @@ fn completion_reads_the_schema_and_the_modules() {
     );
 
     // An instance block: its component's inputs.
-    let at = find(&stack, "instance network.vpc main {", 0);
-    let items = c.at("textDocument/completion", &stack, (at.0 + 1, 2));
+    let at = find(&stack, "instance network.vpc main { ", 28);
+    let items = c.at("textDocument/completion", &stack, at);
     assert!(labels(&items).contains(&"vpc_net".to_string()), "{items}");
 
     // `resource `, `main.`, as typed.
@@ -879,7 +879,7 @@ fn quick_fix_quotes_an_unknown_name() {
     let stack = root.join("stacks/dform.df");
     let text = std::fs::read_to_string(&stack).unwrap();
     let edited = format!(
-        "{text}\nresource net.vpc extra {{\n  cidr = \"10.1.0.0/16\"\n  name = bogus\n}}\n"
+        "{text}\nresource net.vpc extra {{ cidr = \"10.1.0.0/16\", name = bogus }}\n"
     );
     let texts = quick_fix(
         &root,
@@ -888,7 +888,7 @@ fn quick_fix_quotes_an_unknown_name() {
         "unknown name `bogus`",
         "quote it: \"bogus\"",
     );
-    assert!(texts[0].contains("  name = \"bogus\"\n"), "{}", texts[0]);
+    assert!(texts[0].contains(" name = \"bogus\" }\n"), "{}", texts[0]);
 }
 
 /// A predicate with both facts and rules: `decl p(..) mixed` before them.
@@ -923,7 +923,7 @@ fn quick_fix_derives_a_colliding_name_from_the_key_or_isolates_the_stack() {
         let stack = root.join("stacks/dform.df");
         let text = std::fs::read_to_string(&stack).unwrap();
         let edited = format!(
-            "{text}\nresource net.vpc fixed {{\n  cidr = \"10.1.0.0/16\"\n  name = \"fixed\"\n}}\n"
+            "{text}\nresource net.vpc fixed {{ cidr = \"10.1.0.0/16\", name = \"fixed\" }}\n"
         );
         (stack, edited)
     };
@@ -938,7 +938,7 @@ fn quick_fix_derives_a_colliding_name_from_the_key_or_isolates_the_stack() {
         "derive the name from the key",
     );
     assert!(
-        texts[0].contains("  name = \"fixed-${env}\"\n"),
+        texts[0].contains(" name = \"fixed-${env}\" }\n"),
         "{}",
         texts[0]
     );
@@ -967,7 +967,7 @@ fn quick_fix_sets_a_required_attribute() {
     let stack = root.join("stacks/k8s_demo.df");
     let text = std::fs::read_to_string(&stack).unwrap();
     let edited = format!(
-        "{text}\nresource k8s.persistent_volume_claim data {{\n  metadata.name = \"data\"\n}}\n"
+        "{text}\nresource k8s.persistent_volume_claim data {{ metadata.name = \"data\" }}\n"
     );
     let texts = quick_fix(
         &root,
@@ -1057,16 +1057,16 @@ fn references_of_every_kind_of_name() {
 
     // A predicate: its rule's head and the bodies that read it.
     let found = references(&mut c, &root, &stack, find(&stack, "vpc_peer_pair(ia", 2));
-    assert_eq!(found, at_places("stacks/dform.df", &[84, 89, 96]));
+    assert_eq!(found, at_places("stacks/dform.df", &[80, 85, 92]));
 
     // An input: the stack's own reads, a component's and a module's.
     let found = references(&mut c, &root, &stack, find(&stack, "key env:", 4));
     for want in [
         ("stacks/dform.df".to_string(), 11),
         ("stacks/dform.df".into(), 17),
-        ("stacks/dform.df".into(), 60),
-        ("stacks/dform.df".into(), 104),
-        ("network.df".into(), 17),
+        ("stacks/dform.df".into(), 56),
+        ("stacks/dform.df".into(), 98),
+        ("network.df".into(), 15),
         ("baseline.df".into(), 18),
     ] {
         assert!(found.contains(&want), "{want:?} in {found:?}");
@@ -1079,15 +1079,15 @@ fn references_of_every_kind_of_name() {
         found,
         vec![
             ("network.df".into(), 13),
-            ("network.df".into(), 16),
-            ("stacks/dform.df".into(), 54),
-            ("stacks/dform.df".into(), 59),
+            ("network.df".into(), 15),
+            ("stacks/dform.df".into(), 53),
+            ("stacks/dform.df".into(), 56),
         ]
     );
 
     // An object input read by its fields (R-38), and a type alias.
     let found = references(&mut c, &root, &stack, find(&stack, "input cidrs", 6));
-    assert_eq!(found, at_places("stacks/dform.df", &[12, 54, 59, 100]));
+    assert_eq!(found, at_places("stacks/dform.df", &[12, 53, 56, 95]));
     let found = references(&mut c, &root, &stack, find(&stack, "type environment", 5));
     assert_eq!(found, at_places("stacks/dform.df", &[11, 42]));
 
@@ -1098,14 +1098,14 @@ fn references_of_every_kind_of_name() {
         vec![
             ("network.df".into(), 11),
             ("stacks/dform.df".into(), 53),
-            ("stacks/dform.df".into(), 58),
+            ("stacks/dform.df".into(), 56),
         ]
     );
     // Its output read in the stack; its resources' addresses from outside
     // are strings (H-16).
     let found = references(&mut c, &root, &stack, find(&stack, "use database", 4));
     // Its inputs given by the stack's `set` block are its too (R-38).
-    assert_eq!(found, at_places("stacks/dform.df", &[19, 29, 30, 66]));
+    assert_eq!(found, at_places("stacks/dform.df", &[19, 29, 30, 62]));
     let found = references(&mut c, &root, &stack, find(&stack, "use baseline", 6));
     assert_eq!(found, at_places("stacks/dform.df", &[47]));
 
@@ -1116,9 +1116,9 @@ fn references_of_every_kind_of_name() {
         found,
         vec![
             ("network.df".into(), 15),
-            ("network.df".into(), 24),
-            ("network.df".into(), 25),
-            ("network.df".into(), 30),
+            ("network.df".into(), 21),
+            ("network.df".into(), 22),
+            ("network.df".into(), 27),
         ]
     );
 
@@ -1130,14 +1130,14 @@ fn references_of_every_kind_of_name() {
         &format!("{original}\nextra(x) where vpc_peer_pair(x, _, _, _)\n"),
     );
     let found = references(&mut c, &root, &stack, find(&stack, "vpc_peer_pair(ia", 2));
-    assert_eq!(found, at_places("stacks/dform.df", &[84, 89, 96, 119]));
+    assert_eq!(found, at_places("stacks/dform.df", &[80, 85, 92, 113]));
 
     // An attribute path: every rule contributing to the cell, the
     // component's field and the module's.
     let found = references(&mut c, &root, &network, find(&network, "tags = { env", 1));
     assert_eq!(
         found,
-        vec![("baseline.df".into(), 12), ("network.df".into(), 17),]
+        vec![("baseline.df".into(), 12), ("network.df".into(), 15),]
     );
     c.shutdown();
 }
@@ -1261,7 +1261,7 @@ fn prepare_rename_refuses_what_is_not_the_programs() {
     assert!(text.contains("input cidr_block: inet") && text.contains("cidr = cidr_block"));
     let text = std::fs::read_to_string(&stack).unwrap();
     assert_eq!(
-        text.matches("  cidr_block = inet(cidrs").count(),
+        text.matches("{ cidr_block = inet(cidrs").count(),
         2,
         "{text}"
     );
@@ -1359,7 +1359,7 @@ fn a_rename_that_changes_the_plan_is_refused() {
     );
     assert!(
         e.contains(
-            "instance main of component vpc is also the string \"main\" at stacks/dform.df:80:15"
+            "instance main of component vpc is also the string \"main\" at stacks/dform.df:76:15"
         ),
         "{e}"
     );

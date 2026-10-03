@@ -25,10 +25,20 @@ adopt(net.vpc["network::vpc"], "existing-prod-vpc") where {
 }
 
 # Example: use discovered inventory values directly in config.
-set net.vpc["network::vpc"].adopted_id = cloud_ref(net.vpc, "existing-prod-vpc", "id") where env == "prod"
+set net.vpc["network::vpc"].adopted_id = cloud_ref(net.vpc, "existing-prod-vpc", "id") where {
+  env == "prod"
+}
 
 # Keep the existing owner tag stable (avoids a "remove tag" diff on adopt).
-set net.vpc["network::vpc"].tags.owner = cloud_ref(net.vpc, "existing-prod-vpc", "tags.owner") where env == "prod"
+set net.vpc["network::vpc"].tags.owner = cloud_ref(
+  net.vpc,
+  "existing-prod-vpc",
+  "tags.owner",
+) where env == "prod"
 
 # Also copy it into a separate attribute to demonstrate dotted path lookup.
-set net.vpc["network::vpc"].owner_tag = cloud_ref(net.vpc, "existing-prod-vpc", "tags.owner") where env == "prod"
+set net.vpc["network::vpc"].owner_tag = cloud_ref(
+  net.vpc,
+  "existing-prod-vpc",
+  "tags.owner",
+) where env == "prod"

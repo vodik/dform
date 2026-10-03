@@ -4,5 +4,5 @@ exit: error
 Error: program is not stratifiable: negative cycle through arg, attr, (attr, net.vpc, cidr)
   arg -> attr [attribute aggregate (lub_ranked)]: (compiler-generated)
   arg -> (attr, net.vpc, cidr) [attribute aggregate (lub_ranked)]: (compiler-generated)
-  attr -> arg [reads attr (aggregate)]: arg(T, N, P, V, "normal") :- override(T, N, P, V), want(T, N), attr(T, N, "cidr", _C) (at tests/fixtures/adversarial/adv4_variable_path_writer.df:14:1)
-  (attr, net.vpc, cidr) -> arg [reads attr (aggregate)]: arg(T, N, P, V, "normal") :- override(T, N, P, V), want(T, N), attr(T, N, "cidr", _C) (at tests/fixtures/adversarial/adv4_variable_path_writer.df:14:1)
+  attr -> arg [reads attr (aggregate)]: arg(T, N, P, V, "normal") :- override(T, N, P, V), want(T, N), attr(T, N, "cidr", _C) (at tests/fixtures/adversarial/adv4_variable_path_writer.df:11:1)
+  (attr, net.vpc, cidr) -> arg [reads attr (aggregate)]: arg(T, N, P, V, "normal") :- override(T, N, P, V), want(T, N), attr(T, N, "cidr", _C) (at tests/fixtures/adversarial/adv4_variable_path_writer.df:11:1)

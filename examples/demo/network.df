@@ -12,10 +12,7 @@ component vpc {
   #| The VPC's IPv4 range; each zone's subnet is a /20 of it.
   input vpc_net: inet
 
-  resource net.vpc vpc {
-    cidr = vpc_net
-    tags = { env, component: "network" }
-  }
+  resource net.vpc vpc { cidr = vpc_net, tags = { env, component: "network" } }
 
   zone_index("us-test-1a", 0)
   zone_index("us-test-1b", 1)

@@ -16,11 +16,7 @@ resource k8s.cluster cluster {
   subnets = [ s | subnet(s), s in net.subnet ]
 }
 
-resource k8s.nodepool default {
-  cluster
-  min = nodepool_min
-  max = nodepool_max
-}
+resource k8s.nodepool default { cluster, min = nodepool_min, max = nodepool_max }
 
 #| Only when the cluster exists in this environment.
 output iam_need = { action: "k8s.describe_cluster", resource: cluster } where has private_api

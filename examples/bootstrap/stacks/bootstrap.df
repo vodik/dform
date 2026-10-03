@@ -16,10 +16,7 @@ edition 2026
 provider google
 provider k8s
 
-resource google.compute_network vpc {
-  name = "renfry-vpc"
-  auto_create_subnetworks = false
-}
+resource google.compute_network vpc { name = "renfry-vpc", auto_create_subnetworks = false }
 
 resource google.compute_subnetwork gke {
   name = "renfry-gke"
@@ -42,14 +39,9 @@ resource google.container_node_pool "np-${z}" {
   node_count = 1
 } where z in renfry.zones
 
-provider_config("k8s", {
-  host: renfry.endpoint,
-  ca: renfry.ca_certificate
-})
+provider_config("k8s", { host: renfry.endpoint, ca: renfry.ca_certificate })
 
-resource k8s.namespace dform_system {
-  metadata.name = "dform-system"
-}
+resource k8s.namespace dform_system { metadata.name = "dform-system" }
 
 # A node pool is up once it has an instance group. Apply gives it, so the
 # comparison is decided the tick after the pool is created.
@@ -68,7 +60,7 @@ resource k8s.deployment dform_controller {
   spec.template.spec.containers = [{
     name: "dform",
     image: "ghcr.io/renfry/dform:0.8",
-    args: ["controller", "run", "workload"]
+    args: ["controller", "run", "workload"],
   }]
 } where pool = "np-${renfry.zones[0]}", node_pool_up(pool)
 

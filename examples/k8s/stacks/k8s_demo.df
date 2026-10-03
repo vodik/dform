@@ -12,20 +12,15 @@ provider k8s
 
 app("web", "nginx:1.27", 3)
 
-resource k8s.namespace shop {
-  metadata.name = "shop"
-  metadata.labels = { team: "storefront" }
-}
+resource k8s.namespace shop { metadata.name = "shop", metadata.labels = { team: "storefront" } }
 
 resource k8s.config_map web_config {
-  metadata.generateName = "web-config-"
-  metadata.namespace = shop.metadata.name
+  metadata = { generateName: "web-config-", namespace: shop.metadata.name }
   data = { "MODE": "production", "LOG_LEVEL": "info" }
 }
 
 resource k8s.deployment name {
-  metadata.name
-  metadata.namespace = shop.metadata.name
+  metadata = { name, namespace: shop.metadata.name }
   spec.replicas
   spec.selector.matchLabels = { app: name }
   spec.template.metadata.labels = { app: name }
@@ -33,13 +28,12 @@ resource k8s.deployment name {
     name,
     image,
     ports: [{ containerPort: 8080, protocol: "TCP" }],
-    envFrom: [{ configMapRef: { name: web_config.metadata.name } }]
+    envFrom: [{ configMapRef: { name: web_config.metadata.name } }],
   }]
 } where app(name, image, replicas)
 
 resource k8s.service name {
-  metadata.name
-  metadata.namespace = shop.metadata.name
+  metadata = { name, namespace: shop.metadata.name }
   spec.selector = { app: name }
   spec.ports = [{ port: 80, targetPort: 8080, protocol: "TCP" }]
 } where app(name, _, _)

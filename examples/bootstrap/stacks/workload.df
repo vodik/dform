@@ -32,26 +32,22 @@ approval(t) where approvals.approval(t)
 
 provider k8s
 
-resource k8s.namespace web {
-  metadata.name = "web"
-}
+resource k8s.namespace web { metadata.name = "web" }
 
 resource k8s.deployment web {
-  metadata.name = "web"
-  metadata.namespace = k8s.namespace["web"].metadata.name
+  metadata = { name: "web", namespace: k8s.namespace["web"].metadata.name }
   spec.replicas = 3
   spec.selector.matchLabels = { app: "web" }
   spec.template.metadata.labels = { app: "web" }
   spec.template.spec.containers = [{
     name: "web",
     image,
-    ports: [{ containerPort: 8080, protocol: "TCP" }]
+    ports: [{ containerPort: 8080, protocol: "TCP" }],
   }]
 } where releases.release(image)
 
 resource k8s.service web {
-  metadata.name = "web"
-  metadata.namespace = k8s.namespace["web"].metadata.name
+  metadata = { name: "web", namespace: k8s.namespace["web"].metadata.name }
   spec.selector = { app: "web" }
   spec.ports = [{ port: 80, targetPort: 8080, protocol: "TCP" }]
 }

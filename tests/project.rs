@@ -10,17 +10,12 @@ use std::path::PathBuf;
 const APP: &str = r#"edition 2026
 key env: enum("staging", "prod") = "staging"
 provider fake
-resource net.vpc main {
-  cidr = "10.0.0.0/16"
-  tags = { env }
-}
+resource net.vpc main { cidr = "10.0.0.0/16", tags = { env } }
 "#;
 
 const NET: &str = r#"edition 2026
 provider fake
-resource net.vpc shared {
-  cidr = "10.9.0.0/16"
-}
+resource net.vpc shared { cidr = "10.9.0.0/16" }
 "#;
 
 /// A project with two stacks: `app[env]` and `net`.

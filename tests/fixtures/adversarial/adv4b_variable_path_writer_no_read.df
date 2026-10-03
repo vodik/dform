@@ -5,10 +5,7 @@ edition 2026
 
 override(net.vpc, "main", "tags", { team: "x" })
 
-resource net.vpc main {
-  cidr = inet("10.0.0.0/16")
-  tags = { env: "dev" }
-}
+resource net.vpc main { cidr = inet("10.0.0.0/16"), tags = { env: "dev" } }
 
 arg(t, n, p, v) where override(t, n, p, v), want(t, n)
 

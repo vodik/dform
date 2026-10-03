@@ -187,7 +187,12 @@ type_mint(k8s.persistent_volume_claim, "metadata.resourceVersion", "{n}")
 type_mint(k8s.persistent_volume_claim, "metadata.generation", 1)
 type_mint(k8s.persistent_volume_claim, "metadata.creationTimestamp", "2026-01-01T00:00:00Z")
 type_attr(k8s.persistent_volume_claim, "spec.accessModes", "list", ["required"])
-type_attr(k8s.persistent_volume_claim, "spec.resources.requests.storage", "bytes(quantity)", ["required"])
+type_attr(
+  k8s.persistent_volume_claim,
+  "spec.resources.requests.storage",
+  "bytes(quantity)",
+  ["required"],
+)
 type_attr(k8s.persistent_volume_claim, "spec.storageClassName", "string", ["optional_computed"])
 type_mint(k8s.persistent_volume_claim, "spec.storageClassName", "standard")
 type_attr(k8s.persistent_volume_claim, "spec.volumeName", "string", ["optional_computed"])
@@ -223,10 +228,25 @@ type_attr(k8s.deployment, "spec.selector.matchLabels", "map", ["required"])
 type_attr(k8s.deployment, "spec.template.metadata.labels", "map", [])
 type_attr(k8s.deployment, "spec.template.spec.containers", "list", ["required"])
 type_list_key(k8s.deployment, "spec.template.spec.containers", ["name"])
-type_attr(k8s.deployment, "spec.template.spec.containers.resources.requests.cpu", "cpu(quantity)", [])
-type_attr(k8s.deployment, "spec.template.spec.containers.resources.requests.memory", "bytes(quantity)", [])
+type_attr(
+  k8s.deployment,
+  "spec.template.spec.containers.resources.requests.cpu",
+  "cpu(quantity)",
+  [],
+)
+type_attr(
+  k8s.deployment,
+  "spec.template.spec.containers.resources.requests.memory",
+  "bytes(quantity)",
+  [],
+)
 type_attr(k8s.deployment, "spec.template.spec.containers.resources.limits.cpu", "cpu(quantity)", [])
-type_attr(k8s.deployment, "spec.template.spec.containers.resources.limits.memory", "bytes(quantity)", [])
+type_attr(
+  k8s.deployment,
+  "spec.template.spec.containers.resources.limits.memory",
+  "bytes(quantity)",
+  [],
+)
 type_attr(k8s.deployment, "spec.template.spec.containers.image", "string", ["required"])
 type_attr(k8s.deployment, "spec.template.spec.containers.ports", "list", [])
 type_list_key(k8s.deployment, "spec.template.spec.containers.ports", ["containerPort", "protocol"])
@@ -234,7 +254,12 @@ type_attr(k8s.deployment, "spec.template.spec.containers.env", "list", [])
 type_list_key(k8s.deployment, "spec.template.spec.containers.env", ["name"])
 type_attr(k8s.deployment, "spec.template.spec.containers.volumeMounts", "list", [])
 type_list_key(k8s.deployment, "spec.template.spec.containers.volumeMounts", ["mountPath"])
-type_attr(k8s.deployment, "spec.template.spec.containers.imagePullPolicy", "string", ["optional_computed"])
+type_attr(
+  k8s.deployment,
+  "spec.template.spec.containers.imagePullPolicy",
+  "string",
+  ["optional_computed"],
+)
 type_mint(k8s.deployment, "spec.template.spec.containers.imagePullPolicy", "IfNotPresent")
 type_attr(k8s.deployment, "spec.template.spec.initContainers", "list", [])
 type_list_key(k8s.deployment, "spec.template.spec.initContainers", ["name"])
@@ -244,7 +269,12 @@ type_attr(k8s.deployment, "spec.template.spec.serviceAccountName", "string", ["o
 type_mint(k8s.deployment, "spec.template.spec.serviceAccountName", "default")
 type_attr(k8s.deployment, "spec.template.spec.restartPolicy", "string", ["optional_computed"])
 type_mint(k8s.deployment, "spec.template.spec.restartPolicy", "Always")
-type_attr(k8s.deployment, "spec.template.spec.terminationGracePeriodSeconds", "int", ["optional_computed"])
+type_attr(
+  k8s.deployment,
+  "spec.template.spec.terminationGracePeriodSeconds",
+  "int",
+  ["optional_computed"],
+)
 type_mint(k8s.deployment, "spec.template.spec.terminationGracePeriodSeconds", 30)
 type_attr(k8s.deployment, "spec.template.spec.dnsPolicy", "string", ["optional_computed"])
 type_mint(k8s.deployment, "spec.template.spec.dnsPolicy", "ClusterFirst")
@@ -292,28 +322,67 @@ type_attr(k8s.stateful_set, "spec.selector.matchLabels", "map", ["required"])
 type_attr(k8s.stateful_set, "spec.template.metadata.labels", "map", [])
 type_attr(k8s.stateful_set, "spec.template.spec.containers", "list", ["required"])
 type_list_key(k8s.stateful_set, "spec.template.spec.containers", ["name"])
-type_attr(k8s.stateful_set, "spec.template.spec.containers.resources.requests.cpu", "cpu(quantity)", [])
-type_attr(k8s.stateful_set, "spec.template.spec.containers.resources.requests.memory", "bytes(quantity)", [])
-type_attr(k8s.stateful_set, "spec.template.spec.containers.resources.limits.cpu", "cpu(quantity)", [])
-type_attr(k8s.stateful_set, "spec.template.spec.containers.resources.limits.memory", "bytes(quantity)", [])
+type_attr(
+  k8s.stateful_set,
+  "spec.template.spec.containers.resources.requests.cpu",
+  "cpu(quantity)",
+  [],
+)
+type_attr(
+  k8s.stateful_set,
+  "spec.template.spec.containers.resources.requests.memory",
+  "bytes(quantity)",
+  [],
+)
+type_attr(
+  k8s.stateful_set,
+  "spec.template.spec.containers.resources.limits.cpu",
+  "cpu(quantity)",
+  [],
+)
+type_attr(
+  k8s.stateful_set,
+  "spec.template.spec.containers.resources.limits.memory",
+  "bytes(quantity)",
+  [],
+)
 type_attr(k8s.stateful_set, "spec.template.spec.containers.image", "string", ["required"])
 type_attr(k8s.stateful_set, "spec.template.spec.containers.ports", "list", [])
-type_list_key(k8s.stateful_set, "spec.template.spec.containers.ports", ["containerPort", "protocol"])
+type_list_key(
+  k8s.stateful_set,
+  "spec.template.spec.containers.ports",
+  ["containerPort", "protocol"],
+)
 type_attr(k8s.stateful_set, "spec.template.spec.containers.env", "list", [])
 type_list_key(k8s.stateful_set, "spec.template.spec.containers.env", ["name"])
 type_attr(k8s.stateful_set, "spec.template.spec.containers.volumeMounts", "list", [])
 type_list_key(k8s.stateful_set, "spec.template.spec.containers.volumeMounts", ["mountPath"])
-type_attr(k8s.stateful_set, "spec.template.spec.containers.imagePullPolicy", "string", ["optional_computed"])
+type_attr(
+  k8s.stateful_set,
+  "spec.template.spec.containers.imagePullPolicy",
+  "string",
+  ["optional_computed"],
+)
 type_mint(k8s.stateful_set, "spec.template.spec.containers.imagePullPolicy", "IfNotPresent")
 type_attr(k8s.stateful_set, "spec.template.spec.initContainers", "list", [])
 type_list_key(k8s.stateful_set, "spec.template.spec.initContainers", ["name"])
 type_attr(k8s.stateful_set, "spec.template.spec.volumes", "list", [])
 type_list_key(k8s.stateful_set, "spec.template.spec.volumes", ["name"])
-type_attr(k8s.stateful_set, "spec.template.spec.serviceAccountName", "string", ["optional_computed"])
+type_attr(
+  k8s.stateful_set,
+  "spec.template.spec.serviceAccountName",
+  "string",
+  ["optional_computed"],
+)
 type_mint(k8s.stateful_set, "spec.template.spec.serviceAccountName", "default")
 type_attr(k8s.stateful_set, "spec.template.spec.restartPolicy", "string", ["optional_computed"])
 type_mint(k8s.stateful_set, "spec.template.spec.restartPolicy", "Always")
-type_attr(k8s.stateful_set, "spec.template.spec.terminationGracePeriodSeconds", "int", ["optional_computed"])
+type_attr(
+  k8s.stateful_set,
+  "spec.template.spec.terminationGracePeriodSeconds",
+  "int",
+  ["optional_computed"],
+)
 type_mint(k8s.stateful_set, "spec.template.spec.terminationGracePeriodSeconds", 30)
 type_attr(k8s.stateful_set, "spec.template.spec.dnsPolicy", "string", ["optional_computed"])
 type_mint(k8s.stateful_set, "spec.template.spec.dnsPolicy", "ClusterFirst")
@@ -354,10 +423,25 @@ type_attr(k8s.daemon_set, "spec.selector.matchLabels", "map", ["required"])
 type_attr(k8s.daemon_set, "spec.template.metadata.labels", "map", [])
 type_attr(k8s.daemon_set, "spec.template.spec.containers", "list", ["required"])
 type_list_key(k8s.daemon_set, "spec.template.spec.containers", ["name"])
-type_attr(k8s.daemon_set, "spec.template.spec.containers.resources.requests.cpu", "cpu(quantity)", [])
-type_attr(k8s.daemon_set, "spec.template.spec.containers.resources.requests.memory", "bytes(quantity)", [])
+type_attr(
+  k8s.daemon_set,
+  "spec.template.spec.containers.resources.requests.cpu",
+  "cpu(quantity)",
+  [],
+)
+type_attr(
+  k8s.daemon_set,
+  "spec.template.spec.containers.resources.requests.memory",
+  "bytes(quantity)",
+  [],
+)
 type_attr(k8s.daemon_set, "spec.template.spec.containers.resources.limits.cpu", "cpu(quantity)", [])
-type_attr(k8s.daemon_set, "spec.template.spec.containers.resources.limits.memory", "bytes(quantity)", [])
+type_attr(
+  k8s.daemon_set,
+  "spec.template.spec.containers.resources.limits.memory",
+  "bytes(quantity)",
+  [],
+)
 type_attr(k8s.daemon_set, "spec.template.spec.containers.image", "string", ["required"])
 type_attr(k8s.daemon_set, "spec.template.spec.containers.ports", "list", [])
 type_list_key(k8s.daemon_set, "spec.template.spec.containers.ports", ["containerPort", "protocol"])
@@ -365,7 +449,12 @@ type_attr(k8s.daemon_set, "spec.template.spec.containers.env", "list", [])
 type_list_key(k8s.daemon_set, "spec.template.spec.containers.env", ["name"])
 type_attr(k8s.daemon_set, "spec.template.spec.containers.volumeMounts", "list", [])
 type_list_key(k8s.daemon_set, "spec.template.spec.containers.volumeMounts", ["mountPath"])
-type_attr(k8s.daemon_set, "spec.template.spec.containers.imagePullPolicy", "string", ["optional_computed"])
+type_attr(
+  k8s.daemon_set,
+  "spec.template.spec.containers.imagePullPolicy",
+  "string",
+  ["optional_computed"],
+)
 type_mint(k8s.daemon_set, "spec.template.spec.containers.imagePullPolicy", "IfNotPresent")
 type_attr(k8s.daemon_set, "spec.template.spec.initContainers", "list", [])
 type_list_key(k8s.daemon_set, "spec.template.spec.initContainers", ["name"])
@@ -375,7 +464,12 @@ type_attr(k8s.daemon_set, "spec.template.spec.serviceAccountName", "string", ["o
 type_mint(k8s.daemon_set, "spec.template.spec.serviceAccountName", "default")
 type_attr(k8s.daemon_set, "spec.template.spec.restartPolicy", "string", ["optional_computed"])
 type_mint(k8s.daemon_set, "spec.template.spec.restartPolicy", "Always")
-type_attr(k8s.daemon_set, "spec.template.spec.terminationGracePeriodSeconds", "int", ["optional_computed"])
+type_attr(
+  k8s.daemon_set,
+  "spec.template.spec.terminationGracePeriodSeconds",
+  "int",
+  ["optional_computed"],
+)
 type_mint(k8s.daemon_set, "spec.template.spec.terminationGracePeriodSeconds", 30)
 type_attr(k8s.daemon_set, "spec.template.spec.dnsPolicy", "string", ["optional_computed"])
 type_mint(k8s.daemon_set, "spec.template.spec.dnsPolicy", "ClusterFirst")
@@ -480,30 +574,92 @@ type_attr(k8s.cron_job, "spec.timeZone", "string", [])
 type_attr(k8s.cron_job, "spec.jobTemplate.spec.template.metadata.labels", "map", [])
 type_attr(k8s.cron_job, "spec.jobTemplate.spec.template.spec.containers", "list", ["required"])
 type_list_key(k8s.cron_job, "spec.jobTemplate.spec.template.spec.containers", ["name"])
-type_attr(k8s.cron_job, "spec.jobTemplate.spec.template.spec.containers.resources.requests.cpu", "cpu(quantity)", [])
-type_attr(k8s.cron_job, "spec.jobTemplate.spec.template.spec.containers.resources.requests.memory", "bytes(quantity)", [])
-type_attr(k8s.cron_job, "spec.jobTemplate.spec.template.spec.containers.resources.limits.cpu", "cpu(quantity)", [])
-type_attr(k8s.cron_job, "spec.jobTemplate.spec.template.spec.containers.resources.limits.memory", "bytes(quantity)", [])
-type_attr(k8s.cron_job, "spec.jobTemplate.spec.template.spec.containers.image", "string", ["required"])
+type_attr(
+  k8s.cron_job,
+  "spec.jobTemplate.spec.template.spec.containers.resources.requests.cpu",
+  "cpu(quantity)",
+  [],
+)
+type_attr(
+  k8s.cron_job,
+  "spec.jobTemplate.spec.template.spec.containers.resources.requests.memory",
+  "bytes(quantity)",
+  [],
+)
+type_attr(
+  k8s.cron_job,
+  "spec.jobTemplate.spec.template.spec.containers.resources.limits.cpu",
+  "cpu(quantity)",
+  [],
+)
+type_attr(
+  k8s.cron_job,
+  "spec.jobTemplate.spec.template.spec.containers.resources.limits.memory",
+  "bytes(quantity)",
+  [],
+)
+type_attr(
+  k8s.cron_job,
+  "spec.jobTemplate.spec.template.spec.containers.image",
+  "string",
+  ["required"],
+)
 type_attr(k8s.cron_job, "spec.jobTemplate.spec.template.spec.containers.ports", "list", [])
-type_list_key(k8s.cron_job, "spec.jobTemplate.spec.template.spec.containers.ports", ["containerPort", "protocol"])
+type_list_key(
+  k8s.cron_job,
+  "spec.jobTemplate.spec.template.spec.containers.ports",
+  ["containerPort", "protocol"],
+)
 type_attr(k8s.cron_job, "spec.jobTemplate.spec.template.spec.containers.env", "list", [])
 type_list_key(k8s.cron_job, "spec.jobTemplate.spec.template.spec.containers.env", ["name"])
 type_attr(k8s.cron_job, "spec.jobTemplate.spec.template.spec.containers.volumeMounts", "list", [])
-type_list_key(k8s.cron_job, "spec.jobTemplate.spec.template.spec.containers.volumeMounts", ["mountPath"])
-type_attr(k8s.cron_job, "spec.jobTemplate.spec.template.spec.containers.imagePullPolicy", "string", ["optional_computed"])
-type_mint(k8s.cron_job, "spec.jobTemplate.spec.template.spec.containers.imagePullPolicy", "IfNotPresent")
+type_list_key(
+  k8s.cron_job,
+  "spec.jobTemplate.spec.template.spec.containers.volumeMounts",
+  ["mountPath"],
+)
+type_attr(
+  k8s.cron_job,
+  "spec.jobTemplate.spec.template.spec.containers.imagePullPolicy",
+  "string",
+  ["optional_computed"],
+)
+type_mint(
+  k8s.cron_job,
+  "spec.jobTemplate.spec.template.spec.containers.imagePullPolicy",
+  "IfNotPresent",
+)
 type_attr(k8s.cron_job, "spec.jobTemplate.spec.template.spec.initContainers", "list", [])
 type_list_key(k8s.cron_job, "spec.jobTemplate.spec.template.spec.initContainers", ["name"])
 type_attr(k8s.cron_job, "spec.jobTemplate.spec.template.spec.volumes", "list", [])
 type_list_key(k8s.cron_job, "spec.jobTemplate.spec.template.spec.volumes", ["name"])
-type_attr(k8s.cron_job, "spec.jobTemplate.spec.template.spec.serviceAccountName", "string", ["optional_computed"])
+type_attr(
+  k8s.cron_job,
+  "spec.jobTemplate.spec.template.spec.serviceAccountName",
+  "string",
+  ["optional_computed"],
+)
 type_mint(k8s.cron_job, "spec.jobTemplate.spec.template.spec.serviceAccountName", "default")
-type_attr(k8s.cron_job, "spec.jobTemplate.spec.template.spec.restartPolicy", "string", ["optional_computed"])
+type_attr(
+  k8s.cron_job,
+  "spec.jobTemplate.spec.template.spec.restartPolicy",
+  "string",
+  ["optional_computed"],
+)
 type_mint(k8s.cron_job, "spec.jobTemplate.spec.template.spec.restartPolicy", "Never")
-type_attr(k8s.cron_job, "spec.jobTemplate.spec.template.spec.terminationGracePeriodSeconds", "int", ["optional_computed"])
+type_attr(
+  k8s.cron_job,
+  "spec.jobTemplate.spec.template.spec.terminationGracePeriodSeconds",
+  "int",
+  ["optional_computed"],
+)
 type_mint(k8s.cron_job, "spec.jobTemplate.spec.template.spec.terminationGracePeriodSeconds", 30)
-type_attr(k8s.cron_job, "spec.jobTemplate.spec.template.spec.dnsPolicy", "string", ["optional_computed"])
+type_attr(
+  k8s.cron_job,
+  "spec.jobTemplate.spec.template.spec.dnsPolicy",
+  "string",
+  ["optional_computed"],
+)
 type_mint(k8s.cron_job, "spec.jobTemplate.spec.template.spec.dnsPolicy", "ClusterFirst")
 type_attr(k8s.cron_job, "spec.jobTemplate.spec.template.spec.nodeSelector", "map", [])
 type_attr(k8s.cron_job, "spec.jobTemplate.spec.template.spec.tolerations", "list", [])
@@ -634,52 +790,180 @@ type_mint(k8s.ingress, "status.loadBalancer.ingress", [{ ip: "203.0.113.10" }])
 # document.
 type_doc(k8s.config_map, "", "ConfigMap holds configuration data for pods to consume.")
 type_doc(k8s.config_map, "data", "Data contains the configuration data.")
-type_doc(k8s.config_map, "metadata.generateName", "GenerateName is an optional prefix, used by the server, to generate a unique name ONLY IF the Name field has not been provided.")
-type_doc(k8s.config_map, "metadata.namespace", "Namespace defines the space within which each name must be unique.")
+type_doc(
+  k8s.config_map,
+  "metadata.generateName",
+  "GenerateName is an optional prefix, used by the server, to generate a unique name ONLY IF the Name field has not been provided.",
+)
+type_doc(
+  k8s.config_map,
+  "metadata.namespace",
+  "Namespace defines the space within which each name must be unique.",
+)
 type_doc(k8s.deployment, "", "Deployment enables declarative updates for Pods and ReplicaSets.")
-type_doc(k8s.deployment, "metadata.annotations", "Annotations is an unstructured key value map stored with a resource that may be set by external tools to store and retrieve arbitrary metadata.")
-type_doc(k8s.deployment, "metadata.labels", "Map of string keys and values that can be used to organize and categorize (scope and select) objects.")
+type_doc(
+  k8s.deployment,
+  "metadata.annotations",
+  "Annotations is an unstructured key value map stored with a resource that may be set by external tools to store and retrieve arbitrary metadata.",
+)
+type_doc(
+  k8s.deployment,
+  "metadata.labels",
+  "Map of string keys and values that can be used to organize and categorize (scope and select) objects.",
+)
 type_doc(k8s.deployment, "metadata.name", "Name must be unique within a namespace.")
-type_doc(k8s.deployment, "metadata.namespace", "Namespace defines the space within which each name must be unique.")
+type_doc(
+  k8s.deployment,
+  "metadata.namespace",
+  "Namespace defines the space within which each name must be unique.",
+)
 type_doc(k8s.deployment, "spec.replicas", "Number of desired pods.")
 type_doc(k8s.deployment, "spec.selector.matchLabels", "matchLabels is a map of {key,value} pairs.")
-type_doc(k8s.deployment, "spec.template.metadata.labels", "Map of string keys and values that can be used to organize and categorize (scope and select) objects.")
-type_doc(k8s.deployment, "spec.template.spec.containers", "List of containers belonging to the pod.")
-type_doc(k8s.horizontal_pod_autoscaler, "", "HorizontalPodAutoscaler is the configuration for a horizontal pod autoscaler, which automatically manages the replica count of any resource implementing the scale subresource based on the metrics specified.")
+type_doc(
+  k8s.deployment,
+  "spec.template.metadata.labels",
+  "Map of string keys and values that can be used to organize and categorize (scope and select) objects.",
+)
+type_doc(
+  k8s.deployment,
+  "spec.template.spec.containers",
+  "List of containers belonging to the pod.",
+)
+type_doc(
+  k8s.horizontal_pod_autoscaler,
+  "",
+  "HorizontalPodAutoscaler is the configuration for a horizontal pod autoscaler, which automatically manages the replica count of any resource implementing the scale subresource based on the metrics specified.",
+)
 type_doc(k8s.horizontal_pod_autoscaler, "metadata.name", "Name must be unique within a namespace.")
-type_doc(k8s.horizontal_pod_autoscaler, "metadata.namespace", "Namespace defines the space within which each name must be unique.")
-type_doc(k8s.horizontal_pod_autoscaler, "spec.maxReplicas", "maxReplicas is the upper limit for the number of replicas to which the autoscaler can scale up.")
-type_doc(k8s.horizontal_pod_autoscaler, "spec.minReplicas", "minReplicas is the lower limit for the number of replicas to which the autoscaler can scale down.")
-type_doc(k8s.horizontal_pod_autoscaler, "spec.scaleTargetRef", "scaleTargetRef points to the target resource to scale, and is used to the pods for which metrics should be collected, as well as to actually change the replica count.")
+type_doc(
+  k8s.horizontal_pod_autoscaler,
+  "metadata.namespace",
+  "Namespace defines the space within which each name must be unique.",
+)
+type_doc(
+  k8s.horizontal_pod_autoscaler,
+  "spec.maxReplicas",
+  "maxReplicas is the upper limit for the number of replicas to which the autoscaler can scale up.",
+)
+type_doc(
+  k8s.horizontal_pod_autoscaler,
+  "spec.minReplicas",
+  "minReplicas is the lower limit for the number of replicas to which the autoscaler can scale down.",
+)
+type_doc(
+  k8s.horizontal_pod_autoscaler,
+  "spec.scaleTargetRef",
+  "scaleTargetRef points to the target resource to scale, and is used to the pods for which metrics should be collected, as well as to actually change the replica count.",
+)
 type_doc(k8s.job, "", "Job represents the configuration of a single job.")
-type_doc(k8s.job, "metadata.labels", "Map of string keys and values that can be used to organize and categorize (scope and select) objects.")
+type_doc(
+  k8s.job,
+  "metadata.labels",
+  "Map of string keys and values that can be used to organize and categorize (scope and select) objects.",
+)
 type_doc(k8s.job, "metadata.name", "Name must be unique within a namespace.")
-type_doc(k8s.job, "metadata.namespace", "Namespace defines the space within which each name must be unique.")
-type_doc(k8s.job, "spec.backoffLimit", "Specifies the number of retries before marking this job failed.")
+type_doc(
+  k8s.job,
+  "metadata.namespace",
+  "Namespace defines the space within which each name must be unique.",
+)
+type_doc(
+  k8s.job,
+  "spec.backoffLimit",
+  "Specifies the number of retries before marking this job failed.",
+)
 type_doc(k8s.job, "spec.template.spec.containers", "List of containers belonging to the pod.")
-type_doc(k8s.job, "spec.template.spec.restartPolicy", "Restart policy for all containers within the pod.")
+type_doc(
+  k8s.job,
+  "spec.template.spec.restartPolicy",
+  "Restart policy for all containers within the pod.",
+)
 type_doc(k8s.namespace, "", "Namespace provides a scope for Names.")
-type_doc(k8s.namespace, "metadata.labels", "Map of string keys and values that can be used to organize and categorize (scope and select) objects.")
+type_doc(
+  k8s.namespace,
+  "metadata.labels",
+  "Map of string keys and values that can be used to organize and categorize (scope and select) objects.",
+)
 type_doc(k8s.namespace, "metadata.name", "Name must be unique within a namespace.")
-type_doc(k8s.network_policy, "", "NetworkPolicy describes what network traffic is allowed for a set of Pods")
+type_doc(
+  k8s.network_policy,
+  "",
+  "NetworkPolicy describes what network traffic is allowed for a set of Pods",
+)
 type_doc(k8s.network_policy, "metadata.name", "Name must be unique within a namespace.")
-type_doc(k8s.network_policy, "metadata.namespace", "Namespace defines the space within which each name must be unique.")
-type_doc(k8s.network_policy, "spec.ingress", "ingress is a list of ingress rules to be applied to the selected pods.")
-type_doc(k8s.network_policy, "spec.podSelector", "podSelector selects the pods to which this NetworkPolicy object applies.")
-type_doc(k8s.network_policy, "spec.podSelector.matchLabels", "matchLabels is a map of {key,value} pairs.")
-type_doc(k8s.network_policy, "spec.policyTypes", "policyTypes is a list of rule types that the NetworkPolicy relates to.")
-type_doc(k8s.pod_disruption_budget, "", "PodDisruptionBudget is an object to define the max disruption that can be caused to a collection of pods")
+type_doc(
+  k8s.network_policy,
+  "metadata.namespace",
+  "Namespace defines the space within which each name must be unique.",
+)
+type_doc(
+  k8s.network_policy,
+  "spec.ingress",
+  "ingress is a list of ingress rules to be applied to the selected pods.",
+)
+type_doc(
+  k8s.network_policy,
+  "spec.podSelector",
+  "podSelector selects the pods to which this NetworkPolicy object applies.",
+)
+type_doc(
+  k8s.network_policy,
+  "spec.podSelector.matchLabels",
+  "matchLabels is a map of {key,value} pairs.",
+)
+type_doc(
+  k8s.network_policy,
+  "spec.policyTypes",
+  "policyTypes is a list of rule types that the NetworkPolicy relates to.",
+)
+type_doc(
+  k8s.pod_disruption_budget,
+  "",
+  "PodDisruptionBudget is an object to define the max disruption that can be caused to a collection of pods",
+)
 type_doc(k8s.pod_disruption_budget, "metadata.name", "Name must be unique within a namespace.")
-type_doc(k8s.pod_disruption_budget, "metadata.namespace", "Namespace defines the space within which each name must be unique.")
-type_doc(k8s.pod_disruption_budget, "spec.minAvailable", "An eviction is allowed if at least \"minAvailable\" pods selected by \"selector\" will still be available after the eviction, i.e.")
-type_doc(k8s.pod_disruption_budget, "spec.selector.matchLabels", "matchLabels is a map of {key,value} pairs.")
+type_doc(
+  k8s.pod_disruption_budget,
+  "metadata.namespace",
+  "Namespace defines the space within which each name must be unique.",
+)
+type_doc(
+  k8s.pod_disruption_budget,
+  "spec.minAvailable",
+  "An eviction is allowed if at least \"minAvailable\" pods selected by \"selector\" will still be available after the eviction, i.e.",
+)
+type_doc(
+  k8s.pod_disruption_budget,
+  "spec.selector.matchLabels",
+  "matchLabels is a map of {key,value} pairs.",
+)
 type_doc(k8s.secret, "", "Secret holds secret data of a certain type.")
 type_doc(k8s.secret, "data", "Data contains the secret data.")
 type_doc(k8s.secret, "metadata.name", "Name must be unique within a namespace.")
-type_doc(k8s.secret, "metadata.namespace", "Namespace defines the space within which each name must be unique.")
-type_doc(k8s.secret, "stringData", "stringData allows specifying non-binary secret data in string form.")
-type_doc(k8s.service, "", "Service is a named abstraction of software service (for example, mysql) consisting of local port (for example 3306) that the proxy listens on, and the selector that determines which pods will answer requests sent through the proxy.")
+type_doc(
+  k8s.secret,
+  "metadata.namespace",
+  "Namespace defines the space within which each name must be unique.",
+)
+type_doc(
+  k8s.secret,
+  "stringData",
+  "stringData allows specifying non-binary secret data in string form.",
+)
+type_doc(
+  k8s.service,
+  "",
+  "Service is a named abstraction of software service (for example, mysql) consisting of local port (for example 3306) that the proxy listens on, and the selector that determines which pods will answer requests sent through the proxy.",
+)
 type_doc(k8s.service, "metadata.name", "Name must be unique within a namespace.")
-type_doc(k8s.service, "metadata.namespace", "Namespace defines the space within which each name must be unique.")
+type_doc(
+  k8s.service,
+  "metadata.namespace",
+  "Namespace defines the space within which each name must be unique.",
+)
 type_doc(k8s.service, "spec.ports", "The list of ports that are exposed by this service.")
-type_doc(k8s.service, "spec.selector", "Route service traffic to pods with label keys and values matching this selector.")
+type_doc(
+  k8s.service,
+  "spec.selector",
+  "Route service traffic to pods with label keys and values matching this selector.",
+)

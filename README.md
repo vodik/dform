@@ -1334,7 +1334,7 @@ program names it: `net.vpc["main"]` for a resource, `net.vpc["main"].cidr
 for a cell, a relation as `zone("us-test-1a", 1)`. An attribute or an
 input is `merged from N contributions`, each with its value, its rank when
 it is not normal (`@default`) and the statement that made it: an input's
-default, each `set` that gives it (`stacks/tour.df:148  set {
+default, each `set` that gives it (`stacks/tour.df:141  set {
 database.backup_days = 14 .. } where env == "prod"`, a
 document's leaf by its `file:line`), `--set`. A fact given to the run says
 where it came from: its `file:line`, `--set env=prod`, the provider
@@ -1368,14 +1368,14 @@ cargo run -- -C examples/tour why 'db.postgres["orders"].backup_days' tour env=p
 #   merged from 2 contributions
 #   ├─ type_refine("db.postgres", "backup_days", "range(1, 35)")   provider schema
 #   └─ 14
-#        stacks/tour.df:156  resource db.postgres orders { .. backup_days = database.backup_days .. }
+#        stacks/tour.df:147  resource db.postgres orders { .. backup_days = database.backup_days .. }
 #        with database.backup_days = 14
 #        ├─ input database = {backup_days: 14, multi_az: true}
 #        │    merged from 4 contributions
 #        │    ├─ {backup_days: 1} @default   stacks/tour.df:29
 #        │    ├─ {multi_az: false} @default   stacks/tour.df:29
 #        │    ├─ {backup_days: 14}
-#        │    │    stacks/tour.df:148  set { database.backup_days = 14 .. } where env == "prod"
+#        │    │    stacks/tour.df:141  set { database.backup_days = 14 .. } where env == "prod"
 #   ...
 ```
 

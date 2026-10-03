@@ -4,10 +4,7 @@
 
 edition 2026
 
-resource net.vpc main {
-  cidr = inet("10.0.0.0/16")
-  tags = { env: "dev" }
-}
+resource net.vpc main { cidr = inet("10.0.0.0/16"), tags = { env: "dev" } }
 
 arg_add(t, n, "tags", { team: "platform" }) where {
   want(t, n)

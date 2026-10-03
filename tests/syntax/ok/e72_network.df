@@ -23,4 +23,7 @@ resource net.subnet sn {
 subnet_of(sn, "vpc") where want(net.subnet, sn)
 
 output vpc = vpc
-output private_subnet_ids = [ ref(net.subnet, sn, "id") | want(net.subnet, sn), attr(net.subnet, sn, "visibility", "private") ]
+output private_subnet_ids = [ ref(net.subnet, sn, "id") |
+  want(net.subnet, sn),
+  attr(net.subnet, sn, "visibility", "private")
+]

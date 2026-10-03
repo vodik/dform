@@ -273,7 +273,7 @@ fn plan_json_why_explains_each_deformation() {
         why[0]["at"]
             .as_str()
             .unwrap()
-            .ends_with("examples/gke/stacks/gke_two_phase.df:39"),
+            .ends_with("examples/gke/stacks/gke_two_phase.df:40"),
         "{}",
         why[0]
     );

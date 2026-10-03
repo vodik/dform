@@ -103,7 +103,7 @@ fn why_an_attribute_shows_every_contribution() {
     assert!(out.contains("  merged from 2 contributions\n"), "{out}");
     assert!(
         out.contains(
-            "examples/demo/network.df:17  resource net.vpc vpc { .. tags = { env, \
+            "examples/demo/network.df:15  resource net.vpc vpc { .. tags = { env, \
              component: \"network\" } }   (instance network.vpc main)\n"
         ),
         "{out}"
@@ -132,12 +132,12 @@ fn why_a_route_shows_the_statements_that_fired() {
         &["why", r#"net.route["blue-to-green"]"#],
     );
     let start = "net.route[\"blue-to-green\"]
-  examples/tour/stacks/tour.df:302  resource net.route \"${a}-to-${b}\" { .. } where reaches(a, b), a != b, network_of(b, v), dest = net.vpc[v].cidr
+  examples/tour/stacks/tour.df:286  resource net.route \"${a}-to-${b}\" { .. } where reaches(a, b), a != b, network_of(b, v), dest = net.vpc[v].cidr
   with a = \"blue\", b = \"green\", v = \"green::vpc\", dest = 10.2.0.0/16
        \"${a}-to-${b}\" = \"blue-to-green\"
        net.vpc[v].cidr = 10.2.0.0/16
   ├─ reaches(\"blue\", \"green\")
-       examples/tour/stacks/tour.df:300  reaches(a, c) where reaches(a, b), link(b, c)
+       examples/tour/stacks/tour.df:284  reaches(a, c) where reaches(a, b), link(b, c)
 ";
     let got: String = out
         .lines()
@@ -146,7 +146,7 @@ fn why_a_route_shows_the_statements_that_fired() {
         .collect();
     assert_eq!(got.replace("  │ ", "    "), start, "{out}");
     assert!(
-        out.contains("├─ spoke(\"green\")   examples/tour/stacks/tour.df:267\n"),
+        out.contains("├─ spoke(\"green\")   examples/tour/stacks/tour.df:251\n"),
         "{out}"
     );
     assert!(out.contains("network[t].vpc = \"green::vpc\"\n"), "{out}");
@@ -163,7 +163,7 @@ fn why_a_settings_read_shows_the_read() {
     );
     assert!(
         out.contains(
-            "examples/tour/stacks/tour.df:156  resource db.postgres orders { .. backup_days = \
+            "examples/tour/stacks/tour.df:147  resource db.postgres orders { .. backup_days = \
              database.backup_days .. }\n"
         ),
         "{out}"
@@ -177,7 +177,7 @@ fn why_a_settings_read_shows_the_read() {
     );
     assert!(
         out.contains(
-            "examples/tour/stacks/tour.df:148  set { database.backup_days = 14 .. } where \
+            "examples/tour/stacks/tour.df:141  set { database.backup_days = 14 .. } where \
              env == \"prod\"\n"
         ),
         "{out}"
@@ -395,9 +395,9 @@ fn plan_why_explains_each_deformation() {
   visibility = \"private\"
   vpc = ?net.vpc[\"main\"]
   zone = \"us-test-1a\"
-  by examples/tour/stacks/tour.df:112  resource net.subnet \"private-${z}\" { .. } where zone(z, n)
-  because examples/tour/stacks/tour.df:109  zone(\"us-test-1a\", 1)
-  because examples/tour/stacks/tour.df:49  net.vpc[\"main\"].cidr = 10.0.0.0/16
+  by examples/tour/stacks/tour.df:106  resource net.subnet \"private-${z}\" { .. } where zone(z, n)
+  because examples/tour/stacks/tour.df:103  zone(\"us-test-1a\", 1)
+  because examples/tour/stacks/tour.df:48  net.vpc[\"main\"].cidr = 10.0.0.0/16
 "
         ),
         "{out}"

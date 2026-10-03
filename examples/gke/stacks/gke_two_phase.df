@@ -27,14 +27,15 @@ set {
   gcp.project_name = "renfry-dev"
   gcp.region = "us-east1"
   gcp.network_name = "renfry-dev-network"
-  gke = {
-    control_plane_cidr: inet("172.16.3.96/28"),
-    subnet_cidr: inet("10.141.76.0/22")
-  }
+  gke = { control_plane_cidr: inet("172.16.3.96/28"), subnet_cidr: inet("10.141.76.0/22") }
 } where env == "dev"
 
-project(gcp.project_id, gcp.project_name, gcp.region,
-  "projects/${gcp.project_id}/global/networks/${gcp.network_name}")
+project(
+  gcp.project_id,
+  gcp.project_name,
+  gcp.region,
+  "projects/${gcp.project_id}/global/networks/${gcp.network_name}",
+)
 
 resource google.compute_subnetwork gke_subnet {
   project = id
@@ -64,15 +65,16 @@ resource google.container_cluster pngu {
 } where project(id, name, _, net_id)
 
 # Provider configured from phase-1 nulls (two open, one secret).
-provider_config("k8s", {
-  host: google.container_cluster["pngu"].endpoint,
-  ca: google.container_cluster["pngu"].ca_certificate,
-  token: google.client_config["current"].access_token
-})
+provider_config(
+  "k8s",
+  {
+    host: google.container_cluster["pngu"].endpoint,
+    ca: google.container_cluster["pngu"].ca_certificate,
+    token: google.client_config["current"].access_token,
+  },
+)
 
-resource k8s.namespace pngu {
-  name = "pngu"
-}
+resource k8s.namespace pngu { name = "pngu" }
 
 # A read in the clause is an attr join (the value now), not a reference.
 resource k8s.deployment api {

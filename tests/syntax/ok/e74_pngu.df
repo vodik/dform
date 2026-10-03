@@ -27,10 +27,7 @@ type settings {
   }
 }
 
-set {
-  region = "us-east1"
-  gke.static_ips = { "pngu-grpc": { type: "INTERNAL" } }
-} @default
+set { region = "us-east1", gke.static_ips = { "pngu-grpc": { type: "INTERNAL" } } } @default
 
 env_name("dev")
 env_name("stg")
@@ -45,7 +42,7 @@ set {
     control_plane_cidr: inet("172.16.3.96/28"),
     subnet_cidr: inet("10.141.76.0/22"),
     pods_cidr: inet("10.141.80.0/21"),
-    services_cidr: inet("10.141.88.0/21")
+    services_cidr: inet("10.141.88.0/21"),
   }
 } where env == "dev"
 
@@ -58,7 +55,7 @@ set {
     control_plane_cidr: inet("172.16.3.112/28"),
     subnet_cidr: inet("10.141.100.0/22"),
     pods_cidr: inet("10.141.104.0/21"),
-    services_cidr: inet("10.141.112.0/21")
+    services_cidr: inet("10.141.112.0/21"),
   }
 } where env == "stg"
 
@@ -101,7 +98,7 @@ resource google.compute_subnetwork gke_subnet {
   subnet_private_access = true
   secondary_ranges = [
     { range_name: format("%s-gke-pods-range", name), ip_cidr_range: pods_cidr },
-    { range_name: format("%s-gke-svc-range", name), ip_cidr_range: svc_cidr }
+    { range_name: format("%s-gke-svc-range", name), ip_cidr_range: svc_cidr },
   ] # Keyed on .range_name per the google schema
 } where {
   project(id, name, region, net_id)
@@ -172,10 +169,11 @@ resource gke.cluster pngu {
 arg("gke.cluster", "pngu", "deletion_protection", true) where env == "prod"
 lifecycle(gke.cluster["pngu"], "prevent_destroy") where env == "prod"
 
-deny("prod_deletion_protection", "prod cluster must have deletion protection", { cluster: "pngu" }) where {
-  env == "prod"
-  not attr("gke.cluster", "pngu", "deletion_protection", true)
-}
+deny(
+  "prod_deletion_protection",
+  "prod cluster must have deletion protection",
+  { cluster: "pngu" },
+) where env == "prod", not attr("gke.cluster", "pngu", "deletion_protection", true)
 
 ########################################
 # Kubernetes: phase 2. The provider is configured from phase-1 nulls.
@@ -184,11 +182,14 @@ deny("prod_deletion_protection", "prod cluster must have deletion protection", {
 # .endpoint and .ca_certificate are computed (open); .access_token is
 # computed and sensitive (secret). This fact is definite and carries three
 # nulls, so every kubernetes deformation is pending on them: phase 2.
-provider_config("k8s", {
-  host: ref("gke.cluster", "pngu", "endpoint"),
-  ca: ref("gke.cluster", "pngu", "ca_certificate"),
-  token: ref(google.client_config, "current", "access_token")
-})
+provider_config(
+  "k8s",
+  {
+    host: ref("gke.cluster", "pngu", "endpoint"),
+    ca: ref("gke.cluster", "pngu", "ca_certificate"),
+    token: ref(google.client_config, "current", "access_token"),
+  },
+)
 
 resource k8s.namespace pngu { name = "pngu" }
 

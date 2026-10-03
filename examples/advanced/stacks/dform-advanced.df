@@ -16,7 +16,7 @@ input mesh {
   vpcs: list(any) = [
     { name: "core_a", net: inet("10.210.0.0/16") },
     { name: "core_b", net: inet("10.220.0.0/16") },
-    { name: "core_c", net: inet("10.230.0.0/16") }
+    { name: "core_c", net: inet("10.230.0.0/16") },
   ]
 }
 
@@ -30,10 +30,7 @@ corp_net(inet("10.100.0.0/12"))
 tenant(t, i) where t = tenants[i]
 
 # Shared services VPC (always exists)
-resource net.vpc shared {
-  cidr = inet("10.200.0.0/16")
-  tags = { segment: "shared" }
-}
+resource net.vpc shared { cidr = inet("10.200.0.0/16"), tags = { segment: "shared" } }
 
 # One VPC per tenant, with deterministic CIDRs derived from corp_net.
 resource net.vpc t {
@@ -109,10 +106,7 @@ decl mesh_allow_direct_route(from, to)
 
 mesh_vpc(name, cidr, i) where mesh.vpcs[i] = { name, net: cidr }
 
-resource net.vpc name {
-  cidr
-  tags = { segment: "mesh" }
-} where mesh_vpc(name, cidr, _)
+resource net.vpc name { cidr, tags = { segment: "mesh" } } where mesh_vpc(name, cidr, _)
 
 # Derive a sparse base graph: connect consecutive VPCs in the list.
 # The reachability closure will infer core_a -> core_c via core_b.

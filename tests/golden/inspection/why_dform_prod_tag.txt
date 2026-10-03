@@ -8,7 +8,7 @@ net.vpc["main::vpc"].tags = {component: "network", env: "prod", team: "platform"
   │         ├─ input main.vpc_net = 10.20.0.0/16
   │         │    merged from 1 contribution
   │         │    └─ 10.20.0.0/16
-  │         │         examples/demo/stacks/dform.df:54  instance network.vpc main { vpc_net = inet(cidrs.main) }
+  │         │         examples/demo/stacks/dform.df:53  instance network.vpc main { vpc_net = inet(cidrs.main) }
   │         │         with inet(cidrs.main) = 10.20.0.0/16
   │         │              cidrs.main = "10.20.0.0/16"
   │         │         └─ input cidrs = {main: "10.20.0.0/16", peer: "10.21.0.0/16"}

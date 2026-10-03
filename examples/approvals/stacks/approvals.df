@@ -17,9 +17,7 @@ input cidr: string = "10.0.0.0/16"
 # The mock's built-in fake schema.
 provider fake
 
-resource net.vpc main {
-  cidr
-}
+resource net.vpc main { cidr }
 
 # In prod, replacing anything needs an approval.
 requires_approval(r, "a replace in prod") where env == "prod", deformation("replace", r, _)

@@ -19,10 +19,7 @@ iam_need("app", "audit.write", "audit-log") where env == "prod"
 
 # Settings are a resource of type `settings`, addressed by environment.
 # A user schema for the open type gives typed, refined settings.
-type settings {
-  audit.sinks: set(string)
-  db.backup_days: int check 1 <= db.backup_days <= 35
-}
+type settings { audit.sinks: set(string), db.backup_days: int check 1 <= db.backup_days <= 35 }
 
 # Base layer at rank @default: every environment. Overrides below are the
 # normal rank and win per leaf. This replaces three copies of the block.
@@ -54,18 +51,10 @@ use baseline
 use stdlib_net
 
 # Copies of components. Inputs are typed at the component; the body binds them.
-instance network main {
-  vpc_net = v
-} where e = env, setting(e, "network.main.vpc_net", v)
-instance network peer {
-  vpc_net = v
-} where e = env, setting(e, "network.peer.vpc_net", v)
+instance network main { vpc_net = v } where e = env, setting(e, "network.main.vpc_net", v)
+instance network peer { vpc_net = v } where e = env, setting(e, "network.peer.vpc_net", v)
 
-instance database primary {
-  backup_days = days
-  multi_az = m_a
-  subnet_ids = ids
-} where {
+instance database primary { backup_days = days, multi_az = m_a, subnet_ids = ids } where {
   e = env
   setting(e, "db.backup_days", days)
   setting(e, "db.multi_az", m_a)
