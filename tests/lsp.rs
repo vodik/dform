@@ -207,9 +207,8 @@ fn find(file: &Path, needle: &str, ahead: u32) -> (u32, u32) {
     let at = text
         .find(needle)
         .unwrap_or_else(|| panic!("{needle} in {}", file.display()));
-    let line = text[..at].matches('\n').count() as u32;
-    let col = (at - text[..at].rfind('\n').map_or(0, |i| i + 1)) as u32;
-    (line, col + ahead)
+    let p = dform_lsp::text::position(&text, at);
+    (p.line, p.character + ahead)
 }
 
 fn labels(items: &Value) -> Vec<String> {
@@ -787,17 +786,7 @@ fn pngu_by_environment_and_latency_per_keystroke() {
 
 /// Byte offset of an LSP position (UTF-16 columns) in `text`.
 fn offset_of(text: &str, pos: &Value) -> usize {
-    let line = pos["line"].as_u64().unwrap() as usize;
-    let col = pos["character"].as_u64().unwrap() as usize;
-    let start: usize = text.split_inclusive('\n').take(line).map(str::len).sum();
-    let mut units = 0;
-    for (i, ch) in text[start..].char_indices() {
-        if units >= col || ch == '\n' {
-            return start + i;
-        }
-        units += ch.len_utf16();
-    }
-    text.len()
+    dform_lsp::text::offset(text, serde_json::from_value(pos.clone()).unwrap())
 }
 
 /// A quick fix end to end: with `edited` as `file`'s text, a diagnostic
