@@ -15,7 +15,9 @@
 //! - an input's default, an object input's field's;
 //! - an `instance`'s or a `use`'s entry for its component's or module's
 //!   input;
-//! - a function's typed parameter (std's signatures).
+//! - a function's typed parameter (std's signatures);
+//! - a declared relation's typed column (R-34), where an ambiguous
+//!   quantity (`500m`) is not read, so a string that would be one stays.
 //!
 //! Only inside a project, whose providers' schemas fmt reads from their
 //! schema files (the mock's, built in or the project's own), starting none.
@@ -134,9 +136,11 @@ fn plain_string(n: &SyntaxNode) -> Option<String> {
 }
 
 /// Whether the quantity text `t` reads the same unquoted, as a `dim`: it
-/// is one quantity token, and its reading as written (or, ambiguous, the
-/// position's) is the string's.
-fn unquotes(dim: &str, t: &str) -> bool {
+/// is one quantity token, and its reading as written (or, ambiguous and
+/// `ambiguous` allowed, the position's) is the string's. A relation's
+/// column reads a string as its type but not an ambiguous quantity
+/// (`infer`'s reading is of constants).
+fn unquotes(dim: &str, t: &str, ambiguous: bool) -> bool {
     use crate::quantity::{self, Dim, Literal};
     let toks = crate::lexer::lex(t);
     let [tok] = toks.as_slice() else {
@@ -153,7 +157,7 @@ fn unquotes(dim: &str, t: &str) -> bool {
     };
     match quantity::literal(t) {
         Ok(Literal::Known(q)) => q == as_string,
-        Ok(Literal::Ambiguous) => true,
+        Ok(Literal::Ambiguous) => ambiguous,
         Err(_) => false,
     }
 }
@@ -173,6 +177,9 @@ fn canonical(ty: &str, s: &str) -> bool {
 struct Ctx<'a> {
     typing: &'a Typing,
     edits: Vec<(usize, usize, String)>,
+    /// The file's declared relations' typed columns (R-34 reads a literal
+    /// in one as its type), by name; one declared twice apart is left out.
+    columns: BTreeMap<String, Option<Vec<(String, Ty)>>>,
     /// Every file's tree read for a module's inputs, by path.
     modules: BTreeMap<PathBuf, Option<SyntaxNode>>,
 }
@@ -186,16 +193,22 @@ impl Ctx<'_> {
     /// The literal `term` in a position of type `ty`, in its shortest
     /// spelling.
     fn literal(&mut self, term: &SyntaxNode, ty: &Ty) {
+        self.literal_in(term, ty, true);
+    }
+
+    /// [`Ctx::literal`]; `ambiguous`: the position reads an ambiguous
+    /// quantity (`500m`) as its type.
+    fn literal_in(&mut self, term: &SyntaxNode, ty: &Ty, ambiguous: bool) {
         match ty {
-            Ty::Secret(t) => self.literal(term, t),
+            Ty::Secret(t) => self.literal_in(term, t, ambiguous),
             Ty::List(t) if term.kind() == LIST => {
                 for el in term.children() {
-                    self.literal(&el, t);
+                    self.literal_in(&el, t, ambiguous);
                 }
             }
             Ty::Scalar(s) if matches!(s.as_str(), "bytes" | "cpu" | "duration") => {
                 if let Some(t) = plain_string(term)
-                    && unquotes(s, &t)
+                    && unquotes(s, &t, ambiguous)
                 {
                     self.put(term, t);
                 }
@@ -480,7 +493,8 @@ impl Ctx<'_> {
     }
 
     /// A function's typed parameters: what the resolver reads a literal
-    /// argument as (`resolve::args`: a scalar parameter not a string).
+    /// argument as (`resolve::args`: a scalar parameter not a string); a
+    /// declared relation's typed columns.
     fn call(&mut self, c: &SyntaxNode) {
         if c.ancestors().any(|a| a.kind() == REFINEMENT) {
             return;
@@ -490,6 +504,7 @@ impl Ctx<'_> {
         };
         let name = dotted(&callee);
         let Some(f) = functions::get(&name) else {
+            self.atom(c, &name);
             return;
         };
         if matches!(
@@ -518,6 +533,70 @@ impl Ctx<'_> {
             }
         }
     }
+}
+
+impl Ctx<'_> {
+    /// An atom of a declared relation: its literals by their columns'
+    /// types, by position or by name (`p(a: x)`).
+    fn atom(&mut self, c: &SyntaxNode, name: &str) {
+        let Some(Some(cols)) = self.columns.get(name).cloned() else {
+            return;
+        };
+        let Some(args) = c.children().find(|x| x.kind() == ARG_LIST) else {
+            return;
+        };
+        for (i, a) in args.children().enumerate() {
+            let (ty, term) = if a.kind() == NAMED_ARG {
+                let Some(k) = a.first_token() else { continue };
+                let Some(t) = a.children().next() else {
+                    continue;
+                };
+                let Some((_, ty)) = cols.iter().find(|(n, _)| n == k.text()) else {
+                    continue;
+                };
+                (ty.clone(), t)
+            } else {
+                let Some((_, ty)) = cols.get(i) else { continue };
+                (ty.clone(), a)
+            };
+            self.literal_in(&term, &ty, false);
+        }
+    }
+}
+
+/// The typed columns of the file's `decl`s, by relation.
+fn columns(root: &SyntaxNode) -> BTreeMap<String, Option<Vec<(String, Ty)>>> {
+    let mut out: BTreeMap<String, Option<Vec<(String, Ty)>>> = BTreeMap::new();
+    for d in root.descendants().filter(|n| n.kind() == DECL) {
+        let name: String = d
+            .children_with_tokens()
+            .filter_map(|e| e.into_token())
+            .filter(|t| !t.kind().is_trivia())
+            .skip(1)
+            .take_while(|t| t.kind() != L_PAREN)
+            .map(|t| t.text().to_string())
+            .collect();
+        let cols: Vec<(String, Ty)> = d
+            .children()
+            .filter(|c| c.kind() == BIND_ARG)
+            .map(|b| {
+                let n = b
+                    .first_token()
+                    .map(|t| t.text().to_string())
+                    .unwrap_or_default();
+                let ty = b
+                    .children()
+                    .find(|c| c.kind() == TYPE_EXPR)
+                    .map_or(Ty::Any, |t| Ty::parse(&dotted(&t)));
+                (n, ty)
+            })
+            .collect();
+        let seen = out.entry(name).or_insert_with(|| Some(cols.clone()));
+        if seen.as_ref().is_some_and(|s| *s != cols) {
+            *seen = None;
+        }
+    }
+    out
 }
 
 /// A resource statement's header tokens: `resource T.y.p.e NAME [@rank]`.
@@ -569,6 +648,7 @@ pub fn normalize(root: &SyntaxNode, src: &str, typing: &Typing) -> Option<String
     let mut c = Ctx {
         typing,
         edits: Vec::new(),
+        columns: columns(root),
         modules: BTreeMap::new(),
     };
     // The file's resources by name: `set main.tags = ..`.
@@ -662,6 +742,20 @@ mod tests {
                     instance c a { cidr = \"10.1.0.0/16\" }\n\
                     let s = inet.subnet(\"10.0.0.0/16\", 8, 1)\n\
                     let t = inet.subnet(inet(net), 8, 1)\n";
+        assert_eq!(fmt(src), want);
+    }
+
+    /// A declared relation's typed columns read a string as their type
+    /// (R-34), by position or name; not an ambiguous quantity, which stays
+    /// a string.
+    #[test]
+    fn a_typed_column_takes_the_short_spelling() {
+        let src = "decl r(net: inet, size: bytes, n: cpu, s: string)\n\
+                   r(inet(\"10.0.0.0/16\"), \"2Gi\", \"500m\", \"2Gi\")\n\
+                   r(size: \"1Gi\", net: inet(\"10.1.0.0/16\"), n: \"2\", s: \"x\")\n";
+        let want = "decl r(net: inet, size: bytes, n: cpu, s: string)\n\
+                    r(\"10.0.0.0/16\", 2Gi, \"500m\", \"2Gi\")\n\
+                    r(size: 1Gi, net: \"10.1.0.0/16\", n: \"2\", s: \"x\")\n";
         assert_eq!(fmt(src), want);
     }
 }

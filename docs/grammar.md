@@ -1496,7 +1496,9 @@ The normal forms:
   is dropped (`inet("10.0.0.0/16")` is `"10.0.0.0/16"`). The positions are
   a schema attribute (in a block, or a `set`, through a variable over a
   keyed list's elements too), an input's default, an `instance`'s or a
-  `use`'s entry for an input, and a function's typed parameter. A literal
+  `use`'s entry for an input, a function's typed parameter, and a
+  `decl`'s typed column (where `"500m"`, which unquoted waits for a type
+  the column does not give it, stays a string). A literal
   that does not read as its type is left for the compiler to report. The
   providers' schemas are read from their schema files (the mock's built-in
   ones, a project's `providers/NAME/schema.df`), no provider started; a
