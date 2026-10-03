@@ -10,44 +10,46 @@ definite:
   assume.principals[0] = "k8s.serviceaccount.app"
   name = "app"
   tags.team = "platform"
-+ net.vpc["main/vpc"]
-  cidr = "10.50.0.0/16"
-  tags.component = "network"
-  tags.env = "staging"
-  tags.team = "platform"
-+ net.vpc["peer/vpc"]
-  cidr = "10.60.0.0/16"
-  tags.component = "network"
-  tags.env = "staging"
-  tags.team = "platform"
++ network.vpc["main"]
+  + net.vpc["main/vpc"]
+    cidr = "10.50.0.0/16"
+    tags.component = "network"
+    tags.env = "staging"
+    tags.team = "platform"
+  + net.subnet["main/private-us-test-1a"]
+    cidr = "10.50.0.0/20"
+    tags.team = "platform"
+    visibility = "private"
+    vpc = ?net.vpc["main/vpc"]
+    zone = "us-test-1a"
+  + net.subnet["main/private-us-test-1b"]
+    cidr = "10.50.16.0/20"
+    tags.team = "platform"
+    visibility = "private"
+    vpc = ?net.vpc["main/vpc"]
+    zone = "us-test-1b"
++ network.vpc["peer"]
+  + net.vpc["peer/vpc"]
+    cidr = "10.60.0.0/16"
+    tags.component = "network"
+    tags.env = "staging"
+    tags.team = "platform"
+  + net.subnet["peer/private-us-test-1a"]
+    cidr = "10.60.0.0/20"
+    tags.team = "platform"
+    visibility = "private"
+    vpc = ?net.vpc["peer/vpc"]
+    zone = "us-test-1a"
+  + net.subnet["peer/private-us-test-1b"]
+    cidr = "10.60.16.0/20"
+    tags.team = "platform"
+    visibility = "private"
+    vpc = ?net.vpc["peer/vpc"]
+    zone = "us-test-1b"
 + net.vpc_peering["peer-main-peer"]
   accepter_vpc = ?net.vpc["peer/vpc"]
   requester_vpc = ?net.vpc["main/vpc"]
   tags.team = "platform"
-+ net.subnet["main/private-us-test-1a"]
-  cidr = "10.50.0.0/20"
-  tags.team = "platform"
-  visibility = "private"
-  vpc = ?net.vpc["main/vpc"]
-  zone = "us-test-1a"
-+ net.subnet["main/private-us-test-1b"]
-  cidr = "10.50.16.0/20"
-  tags.team = "platform"
-  visibility = "private"
-  vpc = ?net.vpc["main/vpc"]
-  zone = "us-test-1b"
-+ net.subnet["peer/private-us-test-1a"]
-  cidr = "10.60.0.0/20"
-  tags.team = "platform"
-  visibility = "private"
-  vpc = ?net.vpc["peer/vpc"]
-  zone = "us-test-1a"
-+ net.subnet["peer/private-us-test-1b"]
-  cidr = "10.60.16.0/20"
-  tags.team = "platform"
-  visibility = "private"
-  vpc = ?net.vpc["peer/vpc"]
-  zone = "us-test-1b"
 + db.postgres["database/db"]
   backup_days = 3
   multi_az = false

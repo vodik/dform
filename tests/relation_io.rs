@@ -69,8 +69,9 @@ fn a_components_relation_input_is_given_by_rows_and_by_from() {
         ("blue/s-c", "10.0.2.0/24"),
     ] {
         assert!(
-            r.stdout
-                .contains(&format!("+ net.subnet[\"{addr}\"]\n  cidr = \"{cidr}\"\n")),
+            r.stdout.contains(&format!(
+                "  + net.subnet[\"{addr}\"]\n    cidr = \"{cidr}\"\n"
+            )),
             "{addr}: {}",
             r.stdout
         );
@@ -81,7 +82,7 @@ fn a_components_relation_input_is_given_by_rows_and_by_from() {
         .success();
     assert!(
         r.stdout
-            .contains("+ net.subnet[\"green/s-x\"]\n  cidr = \"10.1.9.0/24\"\n"),
+            .contains("  + net.subnet[\"green/s-x\"]\n    cidr = \"10.1.9.0/24\"\n"),
         "{}",
         r.stdout
     );

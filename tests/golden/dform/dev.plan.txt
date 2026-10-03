@@ -17,23 +17,24 @@ definite:
   policy = ?iam.policy["identity/app_policy"]
   role = ?iam.role["identity/app_role"]
   tags.team = "platform"
-+ net.vpc["main/vpc"]
-  cidr = "10.90.0.0/16"
-  tags.component = "network"
-  tags.env = "dev"
-  tags.team = "platform"
-+ net.subnet["main/private-us-test-1a"]
-  cidr = "10.90.0.0/20"
-  tags.team = "platform"
-  visibility = "private"
-  vpc = ?net.vpc["main/vpc"]
-  zone = "us-test-1a"
-+ net.subnet["main/private-us-test-1b"]
-  cidr = "10.90.16.0/20"
-  tags.team = "platform"
-  visibility = "private"
-  vpc = ?net.vpc["main/vpc"]
-  zone = "us-test-1b"
++ network.vpc["main"]
+  + net.vpc["main/vpc"]
+    cidr = "10.90.0.0/16"
+    tags.component = "network"
+    tags.env = "dev"
+    tags.team = "platform"
+  + net.subnet["main/private-us-test-1a"]
+    cidr = "10.90.0.0/20"
+    tags.team = "platform"
+    visibility = "private"
+    vpc = ?net.vpc["main/vpc"]
+    zone = "us-test-1a"
+  + net.subnet["main/private-us-test-1b"]
+    cidr = "10.90.16.0/20"
+    tags.team = "platform"
+    visibility = "private"
+    vpc = ?net.vpc["main/vpc"]
+    zone = "us-test-1b"
 apply order:
   tick 1
     compute.vm["bastion"]

@@ -654,6 +654,9 @@ struct Rc {
     /// Source variable -> the provider namespace `x in NS` ranges it over
     /// (R-49); its type in `types` is a variable.
     namespaces: BTreeMap<String, String>,
+    /// Source variable -> the component `x in network` ranges it over
+    /// (R-67): `x` is a copy's name, `x.k` its output.
+    instances: BTreeMap<String, String>,
     /// Names that stand alone somewhere in the statement: variables.
     candidates: BTreeSet<String>,
     /// Value name -> the variable its read binds (one read per rule).
@@ -1552,6 +1555,7 @@ impl<'u> Lowerer<'u> {
             scope,
             vars: outer.vars.clone(),
             types: outer.types.clone(),
+            instances: outer.instances.clone(),
             outer: outer.vars.values().cloned().collect(),
             ..Rc::default()
         };
@@ -1586,6 +1590,8 @@ impl<'u> Lowerer<'u> {
             } else if let Some(rhs) = ts.next().and_then(|t| Chain::of(&t)) {
                 if let Some(t) = self.chain_type(&rc, &rhs) {
                     rc.types.insert(lhs.head, str_term(&t));
+                } else if let Some(path) = self.component_of(&rc, &rhs) {
+                    rc.instances.insert(lhs.head, path);
                 } else if let Some(ns) = self.namespace_of(&rc, &rhs) {
                     let tv = fresh(&mut rc, "Type");
                     rc.types.insert(lhs.head.clone(), var(&tv));
@@ -4378,6 +4384,16 @@ impl<'u> Lowerer<'u> {
             if let Some(ns) = self.namespace_of(rc, c) {
                 return self.namespace_member(rc, lhs_node, &ns, out, span);
             }
+            // `x in network`, a component (R-67): each of its copies.
+            if let Some(path) = self.component_of(rc, c) {
+                let x = self.term(rc, lhs_node, Pos::Content, out)?;
+                let parent = self.copies_scope(rc, &path);
+                return Ok(Lit::Pos(atom_at(
+                    crate::modules::INSTANCE_OF,
+                    vec![str_term(&path), parent, x],
+                    span,
+                )));
+            }
         }
         let typ = if any_type {
             let lhs = Chain::of(lhs_node).map(|c| c.head).unwrap_or_default();
@@ -4764,6 +4780,57 @@ impl<'u> Lowerer<'u> {
     /// `T[e]`, or a variable, as a reference value. A variable `in T` binds
     /// is `ref(T, A, "")`: the reference taken apart, its address `A` what
     /// `r in T` and `r.path` read.
+    /// The component a membership's right side names (`x in network`,
+    /// `x in net.vpc`): its path.
+    fn component_of(&self, rc: &Rc, c: &Chain) -> Option<String> {
+        if rc.vars.contains_key(&c.head) || !c.ops.iter().all(|o| matches!(o, Op::Field(..))) {
+            return None;
+        }
+        let fields = c.fields();
+        let mut at = self
+            .component_in(rc.scope, &c.head)
+            .or_else(|| self.use_in(rc.scope, &c.head))?;
+        for f in &fields[1..] {
+            at = format!("{at}.{f}");
+        }
+        self.decls
+            .modules
+            .get(&at)
+            .is_some_and(|m| m.component)
+            .then_some(at)
+    }
+
+    /// The scope whose copies of the component `path` a read in this body
+    /// sees: the body's own when it makes one, else its user's (the
+    /// `instance_of` user column, as `c[t]` reads it).
+    fn copies_scope(&self, rc: &Rc, path: &str) -> Term {
+        let own = self
+            .own_scopes(rc.scope)
+            .iter()
+            .find(|s| self.decls.scopes[**s].instances.values().any(|p| p == path))
+            .copied();
+        self.scope_term(rc.scope, own.unwrap_or(PROGRAM), str_term(""))
+    }
+
+    /// A copy where a resource is taken (R-67): its name in scope (`blue`)
+    /// or a variable `x in network` binds, as a reference `ref(PATH, name,
+    /// "")`, the copy's address `network["blue"]`.
+    fn instance_ref(&mut self, rc: &mut Rc, c: &Chain, span: Span) -> Option<Term> {
+        if !c.is_bare() {
+            return None;
+        }
+        if let Some(path) = rc.instances.get(&c.head).cloned() {
+            let v = self.var_named(rc, &c.head, span);
+            return Some(func("ref", vec![str_term(&path), var(&v), str_term("")]));
+        }
+        if rc.vars.contains_key(&c.head) || self.resource(rc.scope, &c.head).is_some() {
+            return None;
+        }
+        let (at, path) = self.instance_in(rc.scope, &c.head)?;
+        let name = self.scope_term(rc.scope, at, str_term(&c.head));
+        Some(func("ref", vec![str_term(&path), name, str_term("")]))
+    }
+
     fn ref_term(&mut self, rc: &mut Rc, n: &SyntaxNode, pos: Pos, pre: &mut Vec<Lit>) -> L<Term> {
         let span = self.span(n);
         if n.kind() == LITERAL {
@@ -4776,6 +4843,9 @@ impl<'u> Lowerer<'u> {
         let Some(c) = Chain::of(n) else {
             return self.term(rc, n, pos, pre);
         };
+        if let Some(r) = self.instance_ref(rc, &c, span) {
+            return Ok(r);
+        }
         if c.is_bare()
             && !rc.vars.contains_key(&c.head)
             && self.resource(rc.scope, &c.head).is_some()
@@ -5430,6 +5500,11 @@ impl<'u> Lowerer<'u> {
                 "`_` is a placeholder and is never accessed: `_.p` and `_[k]` read nothing; \
                  name it (`env.p`)",
             );
+        }
+        // A copy `x in network` binds (R-67): its name, `x.k` its output.
+        if let Some(path) = rc.instances.get(h).cloned() {
+            let v = self.var_named(rc, h, span);
+            return self.output_of(rc, var(&v), &path, &c.ops, pre, span);
         }
         // A typed variable: a reference.
         if let Some(t) = rc.types.get(h).cloned() {

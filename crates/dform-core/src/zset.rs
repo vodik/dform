@@ -109,6 +109,181 @@ pub fn check_names<'a>(
     Ok(())
 }
 
+/// The program's copies (R-67): a component is a resource type the
+/// program defines, and a copy an instance of it, addressed as a resource
+/// is, `PATH["scope"]` (`network.vpc["blue"]`, `network.vpc["edge/left"]`
+/// for a copy inside another). Each by its scope as an address writes it,
+/// with its component's path: the `instance_of` facts of an evaluation,
+/// and what state remembers of copies whose resources it still holds
+/// (`state::State::instances`), so a removed copy's deletes are its own.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Instances {
+    pub by_scope: BTreeMap<String, String>,
+    /// The scopes the program still wants a resource in.
+    live: BTreeSet<String>,
+}
+
+impl Instances {
+    pub fn from_facts<'a>(facts: impl IntoIterator<Item = &'a Atom>) -> Instances {
+        let mut by_scope = BTreeMap::new();
+        let mut live = BTreeSet::new();
+        for a in facts {
+            if let ("want", [_, Term::Val(Value::Str(name))]) = (a.pred.as_str(), a.args.as_slice())
+            {
+                let mut name = name.as_str();
+                while let Some((scope, _)) = name.rsplit_once(crate::ir::SCOPE) {
+                    live.insert(scope.to_string());
+                    name = scope;
+                }
+            }
+            if a.pred != crate::modules::INSTANCE_OF {
+                continue;
+            }
+            let [
+                Term::Val(Value::Str(path)),
+                Term::Val(Value::Str(user)),
+                Term::Val(Value::Str(name)),
+            ] = a.args.as_slice()
+            else {
+                continue;
+            };
+            let scope = match user.is_empty() {
+                true => name.clone(),
+                false => format!("{user}.{name}"),
+            };
+            by_scope.insert(
+                scope.replace('.', &crate::ir::SCOPE.to_string()),
+                path.clone(),
+            );
+        }
+        Instances { by_scope, live }
+    }
+
+    /// The kind of the copy `inst`'s own row, from its resources'
+    /// deformations (`deformation_kind`'s names): `delete` when the program
+    /// wants none of its resources any more, `create` when one is created
+    /// (or adopted), else `update`.
+    pub fn row_kind(&self, inst: &Address, kinds: &[&str]) -> &'static str {
+        if !self.live.contains(&inst.name) {
+            "delete"
+        } else if kinds.iter().any(|k| matches!(*k, "create" | "adopt")) {
+            "create"
+        } else {
+            "update"
+        }
+    }
+
+    /// These, and the copies `kept` remembers that these do not name.
+    pub fn with(mut self, kept: &BTreeMap<String, String>) -> Instances {
+        for (scope, path) in kept {
+            self.by_scope
+                .entry(scope.clone())
+                .or_insert_with(|| path.clone());
+        }
+        self
+    }
+
+    /// The copy `scope` as an address, `PATH["scope"]`.
+    pub fn address(&self, scope: &str) -> Option<Address> {
+        Some(Address {
+            typ: self.by_scope.get(scope)?.clone(),
+            name: scope.to_string(),
+        })
+    }
+
+    /// Is `addr` a copy's address?
+    pub fn is_instance(&self, addr: &Address) -> bool {
+        self.by_scope.get(&addr.name) == Some(&addr.typ)
+    }
+
+    /// The copies a resource is in, innermost first: `edge/left/vpc` is in
+    /// `edge/left` and `edge`.
+    pub fn enclosing(&self, addr: &Address) -> Vec<Address> {
+        let mut out = Vec::new();
+        let mut name = addr.name.as_str();
+        while let Some((scope, _)) = name.rsplit_once(crate::ir::SCOPE) {
+            out.extend(self.address(scope));
+            name = scope;
+        }
+        out
+    }
+
+    /// The resources of `wants` in the copy `inst`, its copies' included.
+    pub fn members<'a>(
+        &self,
+        inst: &Address,
+        wants: impl IntoIterator<Item = &'a Address>,
+    ) -> Vec<Address> {
+        wants
+            .into_iter()
+            .filter(|a| self.enclosing(a).contains(inst))
+            .cloned()
+            .collect()
+    }
+
+    /// What state keeps after an apply: the copies of these with a
+    /// resource in `resources` (state's addresses).
+    pub fn kept<'a>(
+        &self,
+        resources: impl IntoIterator<Item = &'a Address>,
+    ) -> BTreeMap<String, String> {
+        let mut out = BTreeMap::new();
+        for a in resources {
+            for i in self.enclosing(a) {
+                out.insert(i.name, i.typ);
+            }
+        }
+        out
+    }
+}
+
+/// A copy's deformation rows and its resources' membership, for the policy
+/// pass (R-67): `deformation(Kind, i, "absent")` for each copy `i` a
+/// deformation of one of its resources is in, of `Instances::row_kind`;
+/// and `in_instance(r, i)` for each such resource `r`, which
+/// carries a copy's `lifecycle` to its resources (`POLICY_RULES`). Held
+/// and remaining deformations make no row: they came back from a plan.
+pub fn instance_facts<'a>(
+    deformations: impl IntoIterator<Item = (&'static str, &'a Address)>,
+    instances: &Instances,
+) -> Vec<Atom> {
+    let s = |x: &str| Term::Val(Value::Str(x.to_string()));
+    let r = |a: &Address| Term::Val(reference(a));
+    let mut kinds: BTreeMap<Address, Vec<&str>> = BTreeMap::new();
+    let mut out = Vec::new();
+    for (kind, addr) in deformations {
+        if !matches!(
+            kind,
+            "create" | "adopt" | "update" | "drift" | "replace" | "delete"
+        ) {
+            continue;
+        }
+        for i in instances.enclosing(addr) {
+            out.push(Atom {
+                pred: IN_INSTANCE.into(),
+                args: vec![r(addr), r(&i)],
+                record: None,
+                span: Default::default(),
+            });
+            kinds.entry(i).or_default().push(kind);
+        }
+    }
+    for (i, ks) in kinds {
+        let kind = instances.row_kind(&i, &ks);
+        out.push(Atom {
+            pred: "deformation".into(),
+            args: vec![s(kind), r(&i), s("absent")],
+            record: None,
+            span: Default::default(),
+        });
+    }
+    out
+}
+
+/// `in_instance(r, i)`: the resource `r` a deformation is of is in the
+/// copy `i` (`instance_facts`).
+pub const IN_INSTANCE: &str = "in_instance";
+
 /// The column of a plan or lifecycle relation that holds a resource
 /// reference (R-42), by its arity: the resolver lowers a resource there
 /// as a reference value, never its address text.
@@ -173,7 +348,8 @@ pub fn reference(addr: &Address) -> Value {
 impl Lifecycle {
     /// The lifecycle facts, checked against the schema: a
     /// `create_before_destroy` on a `type_replace(T, destroy_first)` type is
-    /// an error naming the type.
+    /// an error naming the type. A flag on a copy (R-67) is on each of its
+    /// resources.
     pub fn from_facts<'a>(
         facts: impl IntoIterator<Item = &'a Atom>,
         schema: &Schema,
@@ -187,6 +363,22 @@ impl Lifecycle {
             Term::Val(Value::Str(s)) => Some(s.clone()),
             _ => None,
         };
+        let instances = Instances::from_facts(facts.iter().copied());
+        let wants: Vec<Address> = facts
+            .iter()
+            .filter_map(|f| match (f.pred.as_str(), f.args.as_slice()) {
+                ("want", [t, a]) => Some(Address {
+                    typ: text(t)?,
+                    name: text(a)?,
+                }),
+                _ => None,
+            })
+            .collect();
+        // A copy's resources, or the resource itself.
+        let each = |addr: Address| match instances.is_instance(&addr) {
+            true => instances.members(&addr, &wants),
+            false => vec![addr],
+        };
         for f in facts {
             match (f.pred.as_str(), f.args.as_slice()) {
                 ("lifecycle", [r, what]) => {
@@ -197,15 +389,24 @@ impl Lifecycle {
                         // A deny the evaluator derives (`POLICY_RULES`).
                         "prevent_destroy" => {}
                         "create_before_destroy" => {
-                            if schema.replace_order(&addr.typ) == ReplaceOrder::DestroyFirst {
-                                bail!(
-                                    "lifecycle({addr}, create_before_destroy): type {} is \
-                                     type_replace destroy_first; its old object must be \
-                                     deleted before the replacement is created",
-                                    addr.typ
-                                );
+                            // On a copy: each of its resources whose type
+                            // allows it.
+                            let copy = instances.is_instance(&addr);
+                            for addr in each(addr) {
+                                let first = schema.replace_order(&addr.typ);
+                                if copy && first == ReplaceOrder::DestroyFirst {
+                                    continue;
+                                }
+                                if first == ReplaceOrder::DestroyFirst {
+                                    bail!(
+                                        "lifecycle({addr}, create_before_destroy): type {} is \
+                                         type_replace destroy_first; its old object must be \
+                                         deleted before the replacement is created",
+                                        addr.typ
+                                    );
+                                }
+                                out.create_before_destroy.insert(addr);
                             }
-                            out.create_before_destroy.insert(addr);
                         }
                         other => bail!(
                             "lifecycle({addr}, {other}): unknown flag \
@@ -227,7 +428,12 @@ impl Lifecycle {
                     let (Some(addr), Some(path)) = (referenced(r), text(path)) else {
                         bail!("ignore_changes expects a resource and a path, got {f:?}");
                     };
-                    out.ignore_changes.entry(addr).or_default().push(path);
+                    for addr in each(addr) {
+                        out.ignore_changes
+                            .entry(addr)
+                            .or_default()
+                            .push(path.clone());
+                    }
                 }
                 _ => {}
             }
@@ -313,6 +519,9 @@ fn provider_assertions(
 ///                                 it was planned against (`absent` for
 ///                                 none)
 ///   world_digest(r, Now)          the world document's digest now
+///   in_instance(r, i)             r is a resource of the copy i, which
+///                                 has a deformation row of its own
+///                                 (`instance_facts`, R-67)
 ///
 /// and these rules, appended to the program, derive the lifecycle denies
 /// from them, so `why` explains them and a policy can read the same facts.
@@ -331,6 +540,16 @@ deny(m) where {
   lifecycle(r, "prevent_destroy"), deformation("replace", r, _)
   m = "lifecycle prevent_destroy: the plan would replace ${r}"
 }
+#| the lifecycle rule prevent_destroy on a copy, against a delete of one of its resources
+deny(m) where {
+  lifecycle(i, "prevent_destroy"), in_instance(r, i), deformation("delete", r, _)
+  m = "lifecycle prevent_destroy on ${i}: the plan would delete ${r}"
+}
+#| the lifecycle rule prevent_destroy on a copy, against a replace of one of its resources
+deny(m) where {
+  lifecycle(i, "prevent_destroy"), in_instance(r, i), deformation("replace", r, _)
+  m = "lifecycle prevent_destroy on ${i}: the plan would replace ${r}"
+}
 #| the world rule: a held deformation's resource moved since its plan
 deny(m) where {
   deformation("pending", r, before), world_digest(r, now), before != now
@@ -344,7 +563,12 @@ deny(m) where {
 "#;
 
 /// The predicates a policy pass gives the program (`deformation_facts`).
-pub const POLICY_INPUTS: &[&str] = &["deformation", "world_digest", crate::stuck::MAY_DERIVE];
+pub const POLICY_INPUTS: &[&str] = &[
+    "deformation",
+    "world_digest",
+    IN_INSTANCE,
+    crate::stuck::MAY_DERIVE,
+];
 
 /// The program with `POLICY_RULES` appended: what every evaluation runs.
 /// Their doc comments name them where `why` prints them; they are not the

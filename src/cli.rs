@@ -1949,6 +1949,9 @@ fn run_with(
                     st: &state::State| {
         evaluator.plan(res, violations, resources, adopts, lifecycle, st)
     };
+    // The copies state remembers as the run starts: a removed copy's
+    // deletes print under it (R-67).
+    let kept = st.instances.clone();
     let report_of = |plan: &crate::provider::Plan,
                      res: &engine::EvalResult,
                      sections: &stuck::Sections,
@@ -1966,6 +1969,7 @@ fn run_with(
             tick,
             moved,
             denies,
+            kept: &kept,
         })
     };
     let show = |plan: &crate::provider::Plan,
@@ -2730,6 +2734,15 @@ fn run_with(
                     // registered: everything stays beside the world file.
                     keep_memos(&mut st, externs, key)?;
                     crate::tables::record(&mut st.externs, &externs.recorded());
+                    // The copies state still holds resources of (R-67).
+                    let held: Vec<ir::Address> = st
+                        .resources
+                        .keys()
+                        .filter_map(|k| state::parse_key(k))
+                        .collect();
+                    st.instances = crate::zset::Instances::from_facts(&res.facts)
+                        .with(&st.instances)
+                        .kept(&held);
                     // A secret one by its label and digest, never its
                     // value (E DR-19); a ref resolved, as the world is.
                     let secret_types = crate::stack::secret_output_types(program);

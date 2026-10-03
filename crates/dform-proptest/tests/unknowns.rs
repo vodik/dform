@@ -737,6 +737,7 @@ fn plan(program: &dform_core::ast::Program, world: &Path, state: &State) -> Resu
         tick: 1,
         moved: &[],
         denies: &[],
+        kept: &Default::default(),
     });
     Ok(Planned {
         res,

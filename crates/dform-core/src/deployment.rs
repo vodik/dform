@@ -559,6 +559,7 @@ impl Evaluator {
             .filter(|m| m.head.pred == "want")
             .map(|m| m.fact())
             .collect();
+        let instances = zset::Instances::from_facts(&res.facts).with(&st.instances);
         drop(res);
         let observed = backend.observe(st)?;
         let before = observed
@@ -573,6 +574,13 @@ impl Evaluator {
             &before,
             &observed,
         );
+        facts.extend(zset::instance_facts(
+            plan.actions.iter().filter_map(|a| {
+                let held = report::waits_on(a, &sections).is_some();
+                Some((zset::deformation_kind(&a.kind, held)?, &a.addr))
+            }),
+            &instances,
+        ));
         facts.extend(may_derive);
         let (res, all) = self.evaluate_with(st, &replaced, &facts, None)?;
         let again = ir::compile_resources(res.facts.iter().cloned(), schema)?;

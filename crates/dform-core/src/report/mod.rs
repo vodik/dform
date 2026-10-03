@@ -337,6 +337,9 @@ pub struct Report {
     pub classes: BTreeMap<String, String>,
     /// Each deformation carries why it is planned ([`Report::explain`]).
     pub explained: bool,
+    /// The program's copies: a copy's deformations print under it, a
+    /// composite resource (R-67).
+    pub instances: crate::zset::Instances,
 }
 
 /// What the report is built from.
@@ -354,6 +357,9 @@ pub struct Input<'a> {
     pub moved: &'a [(Address, Address)],
     /// Denies over the plan itself (`lifecycle prevent_destroy`).
     pub denies: &'a [String],
+    /// The copies state remembers (`state::State::instances`): a removed
+    /// copy's deletes print under it.
+    pub kept: &'a BTreeMap<String, String>,
 }
 
 /// The deny that names an attribute whose contributions conflict.
@@ -509,6 +515,7 @@ pub fn report(i: &Input) -> Report {
         denies: i.denies.to_vec(),
         classes,
         explained: false,
+        instances: crate::zset::Instances::from_facts(&i.res.facts).with(i.kept),
     }
 }
 
@@ -1121,9 +1128,7 @@ impl Report {
         out.push('\n');
         if !self.definite.is_empty() {
             out.push_str(&header("definite:"));
-            for d in &self.definite {
-                write_deformation(&mut out, d, style);
-            }
+            self.write_deformations(&mut out, &self.definite, style);
         }
         for b in &self.pending {
             let after = b
@@ -1136,9 +1141,7 @@ impl Report {
                 nulls_text(&b.on, style),
                 bold(&format!("{after}:"))
             ));
-            for d in &b.deformations {
-                write_deformation(&mut out, d, style);
-            }
+            self.write_deformations(&mut out, &b.deformations, style);
         }
         if !self.groups.is_empty() {
             out.push_str(&header("pending groups:"));
@@ -1269,7 +1272,14 @@ impl Report {
         };
         let deformations = |ds: &[Deformation]| -> Json {
             ds.iter()
-                .map(|d| deformation_json(d, self.explained))
+                .map(|d| {
+                    let mut j = deformation_json(d, self.explained);
+                    // The copy it is a resource of, innermost (R-67).
+                    if let Some(i) = self.instances.enclosing(&d.addr).first() {
+                        j["instance"] = json!(i.to_string());
+                    }
+                    j
+                })
                 .collect()
         };
         let mut summary = serde_json::Map::new();
@@ -1426,7 +1436,70 @@ fn diag_json(d: &Diag) -> Json {
     })
 }
 
-fn write_deformation(out: &mut String, d: &Deformation, style: Style) {
+impl Report {
+    /// Deformations in order, a copy's under it (R-67): `+ network["blue"]`
+    /// at the place of its first resource, the resources indented beneath,
+    /// a copy inside it nested again. The copy's marker is its
+    /// `deformation` row's kind (`zset::Instances::row_kind`): `-` when the
+    /// program wants none of its resources, `+` when one is created, else
+    /// `~`.
+    fn write_deformations(&self, out: &mut String, ds: &[Deformation], style: Style) {
+        let all: Vec<&Deformation> = ds.iter().collect();
+        self.write_level(out, &all, None, "", style);
+    }
+
+    fn write_level(
+        &self,
+        out: &mut String,
+        ds: &[&Deformation],
+        outer: Option<&Address>,
+        indent: &str,
+        style: Style,
+    ) {
+        // The copy directly under `outer` a deformation is in, if any.
+        let under = |d: &Deformation| -> Option<Address> {
+            let chain = self.instances.enclosing(&d.addr);
+            let at = match outer {
+                None => chain.len(),
+                Some(o) => chain.iter().position(|a| a == o)?,
+            };
+            at.checked_sub(1).map(|i| chain[i].clone())
+        };
+        let mut done: BTreeSet<Address> = BTreeSet::new();
+        for d in ds {
+            let Some(copy) = under(d) else {
+                write_deformation(out, d, indent, style);
+                continue;
+            };
+            if !done.insert(copy.clone()) {
+                continue;
+            }
+            let members: Vec<&Deformation> = ds
+                .iter()
+                .filter(|m| self.instances.enclosing(&m.addr).contains(&copy))
+                .copied()
+                .collect();
+            let kinds: Vec<&str> = members
+                .iter()
+                .filter_map(|m| crate::zset::deformation_kind(&m.kind, false))
+                .collect();
+            let kind = match self.instances.row_kind(&copy, &kinds) {
+                "delete" => ActionKind::Delete,
+                "create" => ActionKind::Create,
+                _ => ActionKind::Update,
+            };
+            let addr = Redactor::default().cell(&crate::zset::reference(&copy));
+            out.push_str(&format!(
+                "{indent}{} {}\n",
+                style.marker(&kind),
+                style.paint(Paint::Bold, &addr)
+            ));
+            self.write_level(out, &members, Some(&copy), &format!("{indent}  "), style);
+        }
+    }
+}
+
+fn write_deformation(out: &mut String, d: &Deformation, indent: &str, style: Style) {
     let note = match d.kind {
         ActionKind::Drift => {
             "  (drift: a fresh null where the world has a value; its identity is stale)"
@@ -1438,21 +1511,25 @@ fn write_deformation(out: &mut String, d: &Deformation, style: Style) {
     // The resource as `dform query deformation`'s row spells it (R-63).
     let addr = Redactor::default().cell(&crate::zset::reference(&d.addr));
     out.push_str(&format!(
-        "{} {}{note}\n",
+        "{indent}{} {}{note}\n",
         style.marker(&d.kind),
         style.paint(Paint::Bold, &addr)
     ));
     // Keep plan output readable.
     let max = 40usize;
+    let inner = format!("{indent}  ");
     for (i, l) in d.lines.iter().enumerate() {
         if i == max {
-            out.push_str(&format!("  ... ({} more changes)\n", d.lines.len() - max));
+            out.push_str(&format!(
+                "{inner}... ({} more changes)\n",
+                d.lines.len() - max
+            ));
             break;
         }
-        write_line(out, &d.kind, l, "  ", style);
+        write_line(out, &d.kind, l, &inner, style);
     }
     for b in &d.why {
-        out.push_str(&format!("  {}\n", b.line()));
+        out.push_str(&format!("{inner}{}\n", b.line()));
     }
 }
 

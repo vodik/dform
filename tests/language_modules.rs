@@ -34,12 +34,12 @@ provider fake
     )
     .success();
     assert!(
-        r.stdout.contains("+ net.vpc[\"a/vpc\"]\n  size = 1\n"),
+        r.stdout.contains("  + net.vpc[\"a/vpc\"]\n    size = 1\n"),
         "{}",
         r.stdout
     );
     assert!(
-        r.stdout.contains("+ net.vpc[\"b/vpc\"]\n  size = 2\n"),
+        r.stdout.contains("  + net.vpc[\"b/vpc\"]\n    size = 2\n"),
         "{}",
         r.stdout
     );
@@ -160,12 +160,12 @@ provider fake
 "#;
     let r = plan(src).success();
     assert!(
-        r.stdout.contains("+ net.vpc[\"a/vpc\"]\n  size = 7\n"),
+        r.stdout.contains("  + net.vpc[\"a/vpc\"]\n    size = 7\n"),
         "{}",
         r.stdout
     );
     assert!(
-        r.stdout.contains("+ net.vpc[\"b/vpc\"]\n  size = 1\n"),
+        r.stdout.contains("  + net.vpc[\"b/vpc\"]\n    size = 1\n"),
         "{}",
         r.stdout
     );
@@ -279,13 +279,13 @@ provider fake
         .success();
     assert!(
         r.stdout
-            .contains("+ compute.vm[\"blue/vm\"]\n  count = 3\n"),
+            .contains("  + compute.vm[\"blue/vm\"]\n    count = 3\n"),
         "{}",
         r.stdout
     );
     assert!(
         r.stdout
-            .contains("+ compute.vm[\"green/vm\"]\n  count = 7\n"),
+            .contains("  + compute.vm[\"green/vm\"]\n    count = 7\n"),
         "{}",
         r.stdout
     );
@@ -390,8 +390,8 @@ fn a_module_is_used_and_a_component_instanced_by_its_path() {
     let s = modules_project();
     let r = s.run(&["plan", "app"]).success();
     for want in [
-        "+ net.vpc[\"main/vpc\"]\n  cidr = \"10.1.0.0/16\"\n  tags.region = \"us-1\"\n",
-        "+ net.vpc[\"spare/vpc\"]\n  cidr = \"10.2.0.0/16\"\n  tags.region = \"us-1\"\n",
+        "  + net.vpc[\"main/vpc\"]\n    cidr = \"10.1.0.0/16\"\n    tags.region = \"us-1\"\n",
+        "  + net.vpc[\"spare/vpc\"]\n    cidr = \"10.2.0.0/16\"\n    tags.region = \"us-1\"\n",
         "+ db.postgres[\"postgres/db\"]\n  backup_days = 1\n",
         "+ compute.vm[\"bastion\"]\n  tags.region = \"us-1\"\n  tags.tier = \"gold\"\n",
     ] {
@@ -547,9 +547,9 @@ provider fake
     )
     .success();
     for want in [
-        "+ net.vpc[\"edge/left/vpc\"]\n  cidr = \"10.1.0.0/16\"\n",
-        "+ net.vpc[\"edge/right/vpc\"]\n  cidr = \"10.2.0.0/16\"\n",
-        "+ net.vpc_peering[\"edge/p\"]\n  accepter_vpc = ?net.vpc[\"edge/right/vpc\"]\n  requester_vpc = ?net.vpc[\"edge/left/vpc\"]\n",
+        "    + net.vpc[\"edge/left/vpc\"]\n      cidr = \"10.1.0.0/16\"\n",
+        "    + net.vpc[\"edge/right/vpc\"]\n      cidr = \"10.2.0.0/16\"\n",
+        "  + net.vpc_peering[\"edge/p\"]\n    accepter_vpc = ?net.vpc[\"edge/right/vpc\"]\n    requester_vpc = ?net.vpc[\"edge/left/vpc\"]\n",
     ] {
         assert!(r.stdout.contains(want), "{want}\n---\n{}", r.stdout);
     }

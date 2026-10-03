@@ -30,7 +30,7 @@ pub struct State {
     #[serde(default, skip_serializing_if = "is_zero")]
     pub keys: u64,
     /// The stack's outputs as of its last apply: what other stacks read as
-    /// `stack_output(Stack, Key, Value)` (`stack`).
+    /// the deployment's, `output(Deployment, Key, Value)` (`stack`).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub outputs: BTreeMap<String, crate::value::Value>,
     /// The outputs declared `secret(T)`: each by its label and the keyed
@@ -46,6 +46,12 @@ pub struct State {
     /// a secret one sealed with the stack's key (`memo::Kept`).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub memo: BTreeMap<String, crate::memo::Kept>,
+    /// The copies whose resources this state holds, by scope (`blue`,
+    /// `edge/left`), each with its component's path, as of the last apply:
+    /// a plan names a removed copy's deletes as its own (R-67,
+    /// `zset::Instances`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub instances: BTreeMap<String, String>,
 }
 
 /// The deformations of the current tick that have not been applied yet, each

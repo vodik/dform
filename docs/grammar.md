@@ -1196,6 +1196,21 @@ deleted resource passes: `requires_approval(sg, "..") where
 deformation(action, sg, _), sg in aws.security_group` holds for a delete
 too.
 
+`x in c`, `c` a component (`x in network`, `x in net.vpc`), binds `x` to
+each copy of it the scope sees, `instance_of("c", User, X)` as `c[t]`
+reads it (R-67): `x` is the copy's name and `x.k` its output, `route(x,
+c) where x in network, c = x.cidr`. A component is a resource type the
+program defines, and a copy is addressed as a resource is, `network["blue"]`:
+in a reference column (`lifecycle`, `requires_approval`, `deformation`)
+a copy's name or such an `x` is the copy. `lifecycle(blue,
+"prevent_destroy")` and `ignore_changes` or `create_before_destroy` on a
+copy are on each of its resources; the plan gives a copy a `deformation`
+row of its own (`delete` once the program wants none of its resources,
+`create` when one is created, else `update`) and says which resources are
+in it, `in_instance(r, i)`, so a policy over the plan reads a copy as a
+resource, `requires_approval(x, "..") where deformation(_, x, _), x in
+network`.
+
 ### Aggregates
 
 ```
