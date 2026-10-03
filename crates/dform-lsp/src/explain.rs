@@ -230,7 +230,7 @@ pub fn hover(e: &Evaluated, facts: &[NodeId]) -> String {
             continue;
         };
         if fact.pred != "attr" || fact.args.len() < 4 {
-            out.push_str(&format!("`{}`\n\n", e.redact.fmt_atom(&atom_of(fact))));
+            out.push_str(&format!("`{}`\n\n", e.redact.fmt_atom(&fact.atom())));
             continue;
         }
         let s = |v: &Value| match v {
@@ -323,15 +323,6 @@ fn owner(e: &Evaluated, n: NodeId) -> String {
         "?".into()
     } else {
         owners.join(", ")
-    }
-}
-
-fn atom_of(f: &dform_core::circuit::Fact) -> Atom {
-    Atom {
-        pred: f.pred.clone(),
-        args: f.args.iter().cloned().map(Term::Val).collect(),
-        record: None,
-        span: Default::default(),
     }
 }
 

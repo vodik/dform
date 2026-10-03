@@ -15,6 +15,7 @@
 //! The evaluator records every fact it inserts here (E DR-10: provenance is
 //! always on). A firing also keeps the rule's variable bindings, for `why`.
 
+use crate::ast::{Atom, Term};
 use crate::ir::fx::{FxHashMap, FxHashSet};
 use crate::lattice::{nulls_in, subst};
 use crate::value::Value;
@@ -74,6 +75,16 @@ impl Fact {
         Fact {
             pred: pred.into(),
             args,
+        }
+    }
+    /// The fact as a ground atom (no record, no span): what the printers
+    /// format.
+    pub fn atom(&self) -> Atom {
+        Atom {
+            pred: self.pred.clone(),
+            args: self.args.iter().cloned().map(Term::Val).collect(),
+            record: None,
+            span: Default::default(),
         }
     }
     fn nulls(&self) -> BTreeSet<String> {
@@ -1012,5 +1023,11 @@ mod tests {
         };
         assert_eq!(alts.len(), MAX_ALTS);
         assert!(truncated);
+    }
+
+    #[test]
+    fn a_fact_prints_as_its_ground_atom() {
+        let f = Fact::new("p", vec![s("a"), Value::Int(1)]);
+        assert_eq!(crate::partition::fmt_atom(&f.atom()), "p(\"a\", 1)");
     }
 }

@@ -124,12 +124,7 @@ impl Printer<'_> {
     }
 
     fn fact_text(&self, f: &Fact) -> String {
-        self.redact.fmt_atom(&Atom {
-            pred: f.pred.clone(),
-            args: f.args.iter().cloned().map(Term::Val).collect(),
-            record: None,
-            span: Default::default(),
-        })
+        self.redact.fmt_atom(&f.atom())
     }
 
     /// Print fact node `id`: its line after `lead`, the rest after `pad`.
@@ -529,7 +524,7 @@ impl Surface<'_, '_> {
                 }
                 out
             }
-            _ => r.surface_atom(&atom_of(f)),
+            _ => r.surface_atom(&f.atom()),
         }
     }
 
@@ -614,7 +609,7 @@ impl Surface<'_, '_> {
             _ => None,
         };
         match fact {
-            Some(f) if crate::partition::fmt_atom(&atom_of(&f)) == pattern => self.fact_text(&f),
+            Some(f) if crate::partition::fmt_atom(&f.atom()) == pattern => self.fact_text(&f),
             _ => self.p.redact.text(pattern),
         }
     }
@@ -1221,15 +1216,6 @@ fn rank_text(rank: &Value) -> String {
     match rank.as_str() {
         Some("normal") | None => String::new(),
         Some(r) => format!(" @{r}"),
-    }
-}
-
-fn atom_of(f: &Fact) -> Atom {
-    Atom {
-        pred: f.pred.clone(),
-        args: f.args.iter().cloned().map(Term::Val).collect(),
-        record: None,
-        span: Default::default(),
     }
 }
 
