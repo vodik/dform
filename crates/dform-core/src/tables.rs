@@ -26,7 +26,7 @@
 //! value)`: every leaf of a mapping (a `path,value` CSV) is a contribution
 //! to the input at its path ([`expand_set_from`]).
 
-use crate::ast::{Atom, ExternFn, Lit, Program, RuleStmt, Span, Stmt, Term, TypeExpr};
+use crate::ast::{Atom, ExternFn, Lit, Program, RuleStmt, Span, Stmt, Term, TypeExpr, atom};
 use crate::externs::{self, Answer};
 use crate::inputs::{has_type, type_text};
 use crate::partition::fmt_value;
@@ -973,15 +973,6 @@ pub fn expand_set_from(program: Program, declared: &mut [crate::inputs::Declared
     Program {
         statements: out,
         stack,
-    }
-}
-
-fn atom(pred: &str, args: Vec<Term>, span: Span) -> Atom {
-    Atom {
-        pred: pred.into(),
-        args,
-        record: None,
-        span,
     }
 }
 

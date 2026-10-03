@@ -28,7 +28,9 @@
 //! In a `check`, the attribute is written by its path (`db.backup_days`) or
 //! its name in its block (`backup_days`); an input by its name.
 
-use crate::ast::{Atom, AttrDecl, Lit, Program, RuleStmt, Span, Stmt, Term, TypeExpr};
+use crate::ast::{
+    Atom, AttrDecl, Lit, Program, RuleStmt, Span, Stmt, Term, TypeExpr, atom, str_term,
+};
 use crate::diag::{Diagnostic, Diagnostics};
 use crate::lattice::{Constraint, Truth};
 use crate::schema::Schema;
@@ -459,19 +461,6 @@ pub fn split_input(i: &crate::ast::InputDecl) -> (Vec<Constraint>, Vec<Lit>) {
 
 fn nulls_free(v: &Value) -> bool {
     crate::lattice::nulls_in(v).is_empty()
-}
-
-fn str_term(s: &str) -> Term {
-    Term::Val(Value::Str(s.to_string()))
-}
-
-fn atom(pred: &str, args: Vec<Term>, span: Span) -> Atom {
-    Atom {
-        pred: pred.into(),
-        args,
-        record: None,
-        span,
-    }
 }
 
 /// `type_refine(T, P, C)` / `attr_refine(T, A, P, C)` as a fact.

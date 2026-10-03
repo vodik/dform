@@ -32,7 +32,7 @@
 
 use crate::ast::{
     Atom, FieldAssign, InputDecl, Lit, OutputDecl, Program, Resource, RuleStmt, Span, Stmt, Term,
-    TypeExpr,
+    TypeExpr, atom, str_term,
 };
 use crate::diag::{self, Diagnostic, Diagnostics};
 use crate::inputs::Declared;
@@ -49,19 +49,6 @@ pub const INPUT: &str = "input";
 /// the activation `use m`. The resolver writes a `let` as `let(k, t, rank)`, a
 /// head no source can spell, and `lets` makes it the cell's contribution.
 pub const LET: &str = "let";
-
-fn str_term(s: &str) -> Term {
-    Term::Val(Value::Str(s.to_string()))
-}
-
-fn atom(pred: &str, args: Vec<Term>, span: Span) -> Atom {
-    Atom {
-        pred: pred.into(),
-        args,
-        record: None,
-        span,
-    }
-}
 
 /// A head with no body and no variables is a fact; anything else a rule.
 fn fact_or_rule(head: Atom, body: Vec<Lit>) -> Stmt {

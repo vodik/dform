@@ -1,4 +1,6 @@
-use crate::ast::{Atom, Extern, Lit, Program, Rank, Resource, RuleStmt, Span, Stmt, Term};
+use crate::ast::{
+    Atom, Extern, Lit, Program, Rank, Resource, RuleStmt, Span, Stmt, Term, str_term, var,
+};
 use crate::diag::{self, Diagnostic, Diagnostics};
 use crate::schema::Schema;
 use crate::value::{NullClass, Value};
@@ -162,10 +164,6 @@ pub const OUTPUT: &str = "output";
 /// outputs, inputs and lets (`modules::INPUT`, `modules::LET`).
 pub fn is_pseudo_type(typ: &str) -> bool {
     matches!(typ, OUTPUT | crate::modules::INPUT | crate::modules::LET)
-}
-
-fn str_term(s: &str) -> Term {
-    Term::Val(Value::Str(s.to_string()))
 }
 
 /// Contribution heads in the source forms, as `(type, addr, path, value)`.
@@ -1338,10 +1336,6 @@ fn is_ground_term(t: &Term) -> bool {
 // (want(T, A), computed P), and `ref` to a computed path as an attr read.
 // These run after lowering, against the provider schema.
 // ---------------------------------------------------------------------------
-
-fn var(s: &str) -> Term {
-    Term::Var(s.to_string())
-}
 
 fn atom(pred: &str, args: Vec<Term>) -> Atom {
     Atom {

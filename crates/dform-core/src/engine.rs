@@ -1,4 +1,4 @@
-use crate::ast::{Atom, Lit, Program, RuleStmt, Span, Term};
+use crate::ast::{Atom, Lit, Program, RuleStmt, Span, Term, str_term};
 use crate::circuit::{self, Circuit, Leaf, NodeId};
 use crate::diag;
 use crate::ir::ops::{self, AggKind};
@@ -1244,9 +1244,9 @@ impl AttrAggregate {
             let read = Atom {
                 pred: pred.into(),
                 args: vec![
-                    str_val(typ),
+                    str_term(typ),
                     Term::Val(addr.clone()),
-                    str_val(path),
+                    str_term(path),
                     Term::Wildcard,
                 ],
                 record: None,
@@ -1524,10 +1524,6 @@ fn infer_lattice(contribs: &[Contribution]) -> Lattice {
     }
 }
 
-fn str_val(s: &str) -> Term {
-    Term::Val(Value::Str(s.to_string()))
-}
-
 fn obj(kv: Vec<(&str, Value)>) -> Value {
     Value::Obj(kv.into_iter().map(|(k, v)| (k.to_string(), v)).collect())
 }
@@ -1578,7 +1574,7 @@ fn collapse_group(
     let refinement_of = |w: u32| refs.get((w as usize).checked_sub(first_ref)?);
     let head = |pred: &str, rest: Vec<Value>| Atom {
         pred: pred.into(),
-        args: [str_val(typ), Term::Val(addr.clone()), str_val(path)]
+        args: [str_term(typ), Term::Val(addr.clone()), str_term(path)]
             .into_iter()
             .chain(rest.into_iter().map(Term::Val))
             .collect(),
@@ -1631,7 +1627,7 @@ fn collapse_group(
     };
     let policy = |pred: &str, msg: &str, ctx: Value| Atom {
         pred: pred.into(),
-        args: vec![str_val(msg), Term::Val(ctx)],
+        args: vec![str_term(msg), Term::Val(ctx)],
         record: None,
         span: Default::default(),
     };
@@ -4248,7 +4244,7 @@ mod tests {
         };
         let fact = |g: &str, v: Value| Atom {
             pred: "size".into(),
-            args: vec![str_val(g), Term::Val(v)],
+            args: vec![str_term(g), Term::Val(v)],
             record: None,
             span: Default::default(),
         };
@@ -4342,7 +4338,7 @@ mod tests {
     fn input(k: &str, v: Value) -> Atom {
         Atom {
             pred: "input".into(),
-            args: vec![str_val(k), Term::Val(v)],
+            args: vec![str_term(k), Term::Val(v)],
             record: None,
             span: Default::default(),
         }

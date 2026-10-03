@@ -29,7 +29,7 @@ use super::{SyntaxNode, SyntaxToken};
 use crate::ast::{
     Atom, AttrDecl, BindArg, Config, Decl, Extern, ExternFn, FieldAssign, FieldOp, InputDecl,
     Instance, Lit, Module, OutputDecl, Pending, PendingKind, Program, Rank, Resource, RuleStmt,
-    Span, Stmt, Term, TypeExpr,
+    Span, Stmt, Term, TypeExpr, str_term, var,
 };
 use crate::diag::Diagnostic;
 use crate::value::Value;
@@ -444,14 +444,6 @@ pub fn key_names(root: &SyntaxNode) -> Vec<String> {
         .filter(|n| n.kind() == INPUT && is_key(n))
         .map(|n| word_text(&n, 1))
         .collect()
-}
-
-fn str_term(s: &str) -> Term {
-    Term::Val(Value::Str(s.to_string()))
-}
-
-fn var(s: &str) -> Term {
-    Term::Var(s.to_string())
 }
 
 fn func(name: &str, args: Vec<Term>) -> Term {

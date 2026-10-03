@@ -26,6 +26,26 @@ pub enum Term {
     ListComp { item: Box<Term>, body: Vec<Lit> },
 }
 
+/// A string literal term, `"s"`.
+pub fn str_term(s: &str) -> Term {
+    Term::Val(Value::Str(s.to_string()))
+}
+
+/// A variable term, `S`.
+pub fn var(s: &str) -> Term {
+    Term::Var(s.to_string())
+}
+
+/// The atom `pred(args..)` written at `span`, of no record.
+pub fn atom(pred: &str, args: Vec<Term>, span: Span) -> Atom {
+    Atom {
+        pred: pred.into(),
+        args,
+        record: None,
+        span,
+    }
+}
+
 impl Term {
     pub fn is_var(&self) -> bool {
         matches!(self, Term::Var(_))
