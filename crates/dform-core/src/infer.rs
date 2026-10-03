@@ -657,6 +657,7 @@ fn kind(v: &Value) -> Option<Ty> {
         Value::Ip(_) => s("ip"),
         Value::Quantity(q) => s(q.dim().name()),
         Value::Time(_) => s("time"),
+        Value::Url(_) => s("url"),
         _ => None,
     }
 }

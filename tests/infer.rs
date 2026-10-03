@@ -256,3 +256,15 @@ fn outputs_and_lets_type_the_columns_they_reach() {
     assert!(sigs.contains(&"p(c: inet, k: int)".to_string()), "{sigs:?}");
     assert!(sigs.contains(&"q(w: int)".to_string()), "{sigs:?}");
 }
+
+/// A url is its own column type: a url literal types its column, and an
+/// input typed `url` takes one (its default is a url, not a string).
+#[test]
+fn a_url_types_its_column() {
+    let sigs = signatures(
+        "input home: url = \"https://a.example/x\"\n\
+         p(u) where u = url(\"https://b.example\")\nq(h) where h = home\n",
+    );
+    assert!(sigs.contains(&"p(u: url)".to_string()), "{sigs:?}");
+    assert!(sigs.contains(&"q(h: url)".to_string()), "{sigs:?}");
+}

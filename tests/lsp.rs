@@ -1757,3 +1757,30 @@ fn completion_offers_a_packages_functions() {
         "{got:?}"
     );
 }
+
+/// The formatting request formats with the project's schemas, as `dform
+/// fmt` does: a quantity in a typed position loses its quotes (R-52).
+#[test]
+fn formatting_reads_the_projects_schemas() {
+    let s = Scratch::project("lsp-fmt-typed");
+    s.write(
+        "dform.toml",
+        "[project]\nedition = \"2026\"\n\n[providers]\nk8s = \"k8s\"\n",
+    );
+    let file = s.write(
+        "stacks/app.df",
+        "provider k8s\n\nresource k8s.deployment d {\n  spec.template.spec.containers = \
+         [{ name: \"a\", resources: { limits: { memory: \"2Gi\" } } }]\n}\n",
+    );
+    let root = std::fs::canonicalize(&s.dir).unwrap();
+    let file = std::fs::canonicalize(&file).unwrap();
+    let mut c = Client::start(&root, json!({}));
+    c.open(&file);
+    let edits = c.request(
+        "textDocument/formatting",
+        json!({ "textDocument": { "uri": uri(&file) }, "options": { "tabSize": 2, "insertSpaces": true } }),
+    );
+    let text = edits[0]["newText"].as_str().unwrap_or_default();
+    assert!(text.contains("memory: 2Gi"), "{edits}");
+    c.shutdown();
+}

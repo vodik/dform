@@ -336,9 +336,9 @@ impl Server<'_> {
                 let p: DocumentFormattingParams = serde_json::from_value(req.params)?;
                 let path = self.path(&p.text_document.uri)?;
                 let text = self.read(&path)?;
-                let name = path.display().to_string();
-                let formatted =
-                    dform_core::fmt::format_source(&name, &text).map_err(|e| anyhow!("{e:#}"))?;
+                // With the project's schemas, as `dform fmt` formats it.
+                let formatted = dform_core::project::format_file(&path, &text, self.opts.version)
+                    .map_err(|e| anyhow!("{e:#}"))?;
                 if formatted == text {
                     return Ok(json!([]));
                 }

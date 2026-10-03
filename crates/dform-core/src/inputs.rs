@@ -154,7 +154,7 @@ pub fn check_type(t: &TypeExpr) -> Result<(), String> {
     match t {
         TypeExpr::Name(n) => match n.as_str() {
             "int" | "string" | "bool" | "inet" | "symbol" | "addr" | "any" | "bytes" | "cpu"
-            | "duration" | "time" => Ok(()),
+            | "duration" | "time" | "url" => Ok(()),
             _ => Err(format!("unknown type {n}")),
         },
         TypeExpr::Apply(n, args) => match (n.as_str(), args.as_slice()) {
@@ -190,6 +190,7 @@ pub fn has_type(t: &TypeExpr, v: &Value) -> bool {
                 matches!(v, Value::Quantity(q) if q.dim().name() == n.as_str())
             }
             "time" => matches!(v, Value::Time(_)),
+            "url" => matches!(v, Value::Url(_)),
             _ => true,
         },
         TypeExpr::Apply(n, args) => match (n.as_str(), args.as_slice()) {
