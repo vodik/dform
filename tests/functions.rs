@@ -175,7 +175,10 @@ r(s) where s = regex.replace("a_b_c", "_", "-")
 #[test]
 fn a_bad_regex_literal_is_a_compile_error() {
     let e = error("p(x) where x = regex.match(\"a\", \"[\")\n");
-    assert!(e.contains("is a regex") && e.contains("not a valid pattern"), "{e}");
+    assert!(
+        e.contains("is a regex") && e.contains("not a valid pattern"),
+        "{e}"
+    );
 }
 
 /// `semver.parse`, `semver.satisfies`, `semver.compare`.
@@ -205,10 +208,7 @@ w(ref) where ref = oci.with_digest("org/app:1.2.3", "{digest}")
     assert_eq!(facts(&src, "r"), [r#"r("org/app")"#]);
     assert_eq!(facts(&src, "p0"), ["p0(false)"]);
     assert_eq!(facts(&src, "p1"), ["p1(true)"]);
-    assert_eq!(
-        facts(&src, "w"),
-        [format!("w(\"org/app:1.2.3@{digest}\")")]
-    );
+    assert_eq!(facts(&src, "w"), [format!("w(\"org/app:1.2.3@{digest}\")")]);
 }
 
 /// `str.trim`, `replace`, `starts_with`, `ends_with`, `contains`,
@@ -266,10 +266,7 @@ la(n) where n = list.last([1, 2, 3])
     assert_eq!(facts(src, "fi"), ["fi(1)"]);
     assert_eq!(facts(src, "la"), ["la(3)"]);
     let src2 = "so(l) where l = list.sort_by([{name: \"b\"}, {name: \"a\"}], \"name\")\n";
-    assert_eq!(
-        facts(src2, "so"),
-        [r#"so([{name: "a"}, {name: "b"}])"#]
-    );
+    assert_eq!(facts(src2, "so"), [r#"so([{name: "a"}, {name: "b"}])"#]);
 }
 
 /// `hash.sha256`, `hash.short`.
@@ -298,7 +295,8 @@ d(s) where s = base64.decode("aGVsbG8=")
     let program = parse_program("p(x) where x = base64.decode(\"not base64!\")\n").unwrap();
     let err = engine::eval(&program, &[]).unwrap_err();
     assert!(
-        err.to_string().contains("is not defined for these arguments"),
+        err.to_string()
+            .contains("is not defined for these arguments"),
         "{err}"
     );
 }
@@ -358,7 +356,11 @@ fn a_url_typed_attribute_checks_its_literal() {
         ))
     };
     let r = run("resource app.thing t { link = \"https://example.com/a\" }\n").success();
-    assert!(r.stdout.contains("link = \"https://example.com/a\""), "{}", r.stdout);
+    assert!(
+        r.stdout.contains("link = \"https://example.com/a\""),
+        "{}",
+        r.stdout
+    );
     let r = run("resource app.thing t { link = \"nope\" }\n").failure();
     assert!(r.stderr.contains("is a url"), "{}", r.stderr);
 }

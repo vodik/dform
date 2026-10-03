@@ -268,7 +268,11 @@ fn a_dirty_apply_is_recorded_and_named() {
     let es: Vec<Value> = serde_json::from_str(&r.stdout).unwrap();
     let start = es.iter().find(|e| e["kind"] == "apply_start").unwrap();
     assert_eq!(start["dirty"], true, "{start}");
-    assert_eq!(start["modified"], serde_json::json!(["stacks/net.df"]), "{start}");
+    assert_eq!(
+        start["modified"],
+        serde_json::json!(["stacks/net.df"]),
+        "{start}"
+    );
     // The program changes again: the apply is explained at its commit, and
     // the note names the dirty file.
     s.write("stacks/net.df", NET);

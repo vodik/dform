@@ -236,9 +236,7 @@ pub fn module_interface(root: &SyntaxNode, module: Option<&str>) -> Option<Inter
             // `output p` exports the relation `p` (R-55).
             SyntaxKind::OUTPUT_DECL
                 if n.children().any(|c| c.kind() == SyntaxKind::TYPE_EXPR)
-                    || !n
-                        .children_with_tokens()
-                        .any(|e| e.kind() == SyntaxKind::EQ) =>
+                    || !n.children_with_tokens().any(|e| e.kind() == SyntaxKind::EQ) =>
             {
                 &mut out.outputs
             }

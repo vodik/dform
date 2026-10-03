@@ -37,9 +37,7 @@ fn stack_list_finds_the_deployments_a_keyed_backend_holds() {
     let r = s.run(&["stack", "list"]).success();
     for d in ["app[env=prod]", "app[env=staging]"] {
         assert!(
-            r.stdout
-                .lines()
-                .any(|l| l.contains(d) && l.contains(" ok")),
+            r.stdout.lines().any(|l| l.contains(d) && l.contains(" ok")),
             "{d}: {}",
             r.stdout
         );

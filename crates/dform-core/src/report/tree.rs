@@ -508,15 +508,19 @@ impl Surface<'_, '_> {
             // `x in T` over an enum type (R-70): the type, as declared.
             ("__enum", [Value::Str(t), Value::List(vs)]) => format!(
                 "type {t} = enum({})",
-                vs.iter().map(|v| r.surface(v)).collect::<Vec<_>>().join(", ")
+                vs.iter()
+                    .map(|v| r.surface(v))
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ),
             // A copy (R-65), as the statement that makes it.
-            (crate::modules::INSTANCE_OF, [Value::Str(path), Value::Str(user), Value::Str(name)]) => {
-                match user.is_empty() {
-                    true => format!("instance {path} {name}"),
-                    false => format!("instance {path} {name}   (in {user})"),
-                }
-            }
+            (
+                crate::modules::INSTANCE_OF,
+                [Value::Str(path), Value::Str(user), Value::Str(name)],
+            ) => match user.is_empty() {
+                true => format!("instance {path} {name}"),
+                false => format!("instance {path} {name}   (in {user})"),
+            },
             ("deny" | "warn", [msg @ Value::Str(_), ctx @ ..]) => {
                 let mut out = format!("{} {}", f.pred, r.surface(msg));
                 for c in ctx {
@@ -674,7 +678,9 @@ impl Surface<'_, '_> {
         if aggregate {
             // The refinements the value is checked against print below
             // its contributions, and do not count among them.
-            facts.sort_by_key(|f| matches!(circuit.view(*f), View::Fact { fact, .. } if is_check(fact)));
+            facts.sort_by_key(
+                |f| matches!(circuit.view(*f), View::Fact { fact, .. } if is_check(fact)),
+            );
             let n = facts
                 .iter()
                 .filter(|f| !matches!(circuit.view(**f), View::Fact { fact, .. } if is_check(fact)))
@@ -1203,7 +1209,6 @@ fn cell(t: &str, a: &str, p: &str) -> String {
         .attr(p),
     }
 }
-
 
 /// A contribution's rank as the program writes it: nothing for normal.
 fn rank_text(rank: &Value) -> String {

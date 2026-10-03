@@ -382,7 +382,9 @@ pub fn hover_at(p: &refs::Project, path: &Path, at: usize) -> Option<String> {
                 .find(|n| doc::comment(n).is_some())
                 .or(decls.first());
             let own = match &sym {
-                Symbol::Predicate(_, name) => joined(signature_md(p, name), documented.map(item_md)),
+                Symbol::Predicate(_, name) => {
+                    joined(signature_md(p, name), documented.map(item_md))
+                }
                 Symbol::Module(m) => module_md(&files, m),
                 Symbol::Instance(m, _) => joined(documented.map(item_md), module_md(&files, m)),
                 _ => documented.map(item_md),

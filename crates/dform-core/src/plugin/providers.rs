@@ -1085,9 +1085,7 @@ impl Providers {
 
     /// The provider that owns `typ`, by name, as state records it.
     pub fn provider_of(&self, typ: &str) -> &str {
-        self.names
-            .get(self.route(typ))
-            .map_or("", String::as_str)
+        self.names.get(self.route(typ)).map_or("", String::as_str)
     }
 
     /// The providers started, by name, in link order.

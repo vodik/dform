@@ -380,7 +380,11 @@ fn a_multi_line_string_prints_as_its_literal_in_plan_and_query() {
     let r = s
         .run(&["dev", "--world", "w.json", "plan", "p.df"])
         .success();
-    assert!(r.stdout.contains(&format!("  note = {lit}\n")), "{}", r.stdout);
+    assert!(
+        r.stdout.contains(&format!("  note = {lit}\n")),
+        "{}",
+        r.stdout
+    );
     let q = s
         .run(&[
             "dev",
@@ -391,5 +395,9 @@ fn a_multi_line_string_prints_as_its_literal_in_plan_and_query() {
             "p.df",
         ])
         .success();
-    assert!(q.stdout.contains(&format!("\"main\"  {lit}\n")), "{}", q.stdout);
+    assert!(
+        q.stdout.contains(&format!("\"main\"  {lit}\n")),
+        "{}",
+        q.stdout
+    );
 }

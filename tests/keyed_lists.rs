@@ -160,8 +160,9 @@ fn a_same_rank_disagreement_names_the_element() {
         .run(&["dev", "--world", "w.json", "query", "deny(M, C)", "main"])
         .success();
     assert!(
-        r.stdout
-            .contains("two contributions disagree at spec.template.spec.containers[name=api].image"),
+        r.stdout.contains(
+            "two contributions disagree at spec.template.spec.containers[name=api].image"
+        ),
         "{}{}",
         r.stdout,
         r.stderr

@@ -123,7 +123,9 @@ fn policy(s: &Scale) -> String {
         let rule = match k % 5 {
             0 => format!("set n.tags += {{ p{k}: \"on\" }} where n in {t}"),
             1 => format!("warn \"big {t}\" {{ r: n }} where {t}[n].size > 14"),
-            2 => format!("deny \"odd size on {t}\" {{ r: n }} where s = {t}[n].size, not size_ok(s)"),
+            2 => {
+                format!("deny \"odd size on {t}\" {{ r: n }} where s = {t}[n].size, not size_ok(s)")
+            }
             3 => format!("warn \"empty {t}\" {{ r: n }} where n in {t}, n.size == 0"),
             _ => format!("per_type(\"{t}\", count(n)) where n in {t}"),
         };

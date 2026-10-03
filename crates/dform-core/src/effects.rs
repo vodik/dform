@@ -59,7 +59,8 @@ pub fn compute(program: &Program, schema: &Schema) -> Result<BTreeMap<String, Sc
         let scope = scope_of(r.head.span);
         {
             let entry = out.entry(scope.clone()).or_default();
-            if let Some(w) = classify_write(&r.head).or_else(|| relations.write(&scope, &r.head.pred))
+            if let Some(w) =
+                classify_write(&r.head).or_else(|| relations.write(&scope, &r.head.pred))
             {
                 entry.writes.insert(w);
             }

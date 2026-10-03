@@ -107,9 +107,7 @@ impl Decls {
             .iter()
             .filter_map(|f| {
                 let stem = f.path.file_stem()?.to_str()?.to_string();
-                named
-                    .contains(&stem)
-                    .then(|| (f.tree.clone(), stem))
+                named.contains(&stem).then(|| (f.tree.clone(), stem))
             })
             .collect();
         let mut d = Decls::of_trees(files.iter().map(|f| &f.tree), module_files);

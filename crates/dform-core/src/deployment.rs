@@ -537,7 +537,8 @@ impl Evaluator {
         } else {
             let (again, violations) = self.evaluate_with(st, &replaced, &[], None)?;
             let docs = ir::compile_resources(again.facts.iter().cloned(), schema)?;
-            plan = backend.plan_retracting(&asked(&again, &docs), adopts, lifecycle, st, &replaced)?;
+            plan =
+                backend.plan_retracting(&asked(&again, &docs), adopts, lifecycle, st, &replaced)?;
             executor::hold_dependents(&mut plan, &docs, &replaced);
             (again, violations, docs)
         };
@@ -667,25 +668,25 @@ impl Located {
             Providers::none()
         } else {
             Providers::start_deferred(
-            opts.launch,
-            &l.providers,
-            &plugin::Config {
-                world: self.paths.world.clone(),
-                inventory: self.paths.inventory.clone(),
-                chaos: opts.chaos.clone(),
-                cache: opts.cache.clone(),
-                configured: provider_configs(&self.program),
-                stack: self.deployment.clone(),
-                blocks: l.cfg.provider_blocks.clone(),
-                digest_key: opts.digest_key.clone(),
-                held: held.clone(),
-                worlds: outputs
-                    .iter()
-                    .filter(|r| held.values().any(|h| h.deployment == r.name))
-                    .filter_map(|r| Some((r.name.clone(), r.world.clone()?)))
-                    .collect(),
-            },
-        )?
+                opts.launch,
+                &l.providers,
+                &plugin::Config {
+                    world: self.paths.world.clone(),
+                    inventory: self.paths.inventory.clone(),
+                    chaos: opts.chaos.clone(),
+                    cache: opts.cache.clone(),
+                    configured: provider_configs(&self.program),
+                    stack: self.deployment.clone(),
+                    blocks: l.cfg.provider_blocks.clone(),
+                    digest_key: opts.digest_key.clone(),
+                    held: held.clone(),
+                    worlds: outputs
+                        .iter()
+                        .filter(|r| held.values().any(|h| h.deployment == r.name))
+                        .filter_map(|r| Some((r.name.clone(), r.world.clone()?)))
+                        .collect(),
+                },
+            )?
         });
         // Externs are asked on demand: a table's of its file, else of the
         // file provider, else of the providers.

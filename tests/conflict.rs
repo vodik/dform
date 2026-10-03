@@ -58,8 +58,9 @@ fn a_conflict_names_its_leaf() {
     )
     .failure();
     assert!(
-        r.stdout
-            .contains("! k8s.namespace[\"n\"].metadata: two contributions disagree at metadata.name\n"),
+        r.stdout.contains(
+            "! k8s.namespace[\"n\"].metadata: two contributions disagree at metadata.name\n"
+        ),
         "{}{}",
         r.stdout,
         r.stderr

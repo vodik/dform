@@ -100,7 +100,10 @@ impl Lowerer<'_> {
             if !c.is_bare() {
                 return Ok(None);
             }
-            let Some(t) = self.input_node(rc.scope, head).and_then(|n| node(&n, TYPE_EXPR)) else {
+            let Some(t) = self
+                .input_node(rc.scope, head)
+                .and_then(|n| node(&n, TYPE_EXPR))
+            else {
                 return Ok(None);
             };
             let first = tokens(&t).next().map(|t| t.text().to_string());
@@ -109,9 +112,7 @@ impl Lowerer<'_> {
                 Some(_) => Some(t.text().to_string().trim().to_string()),
             };
             let members = match &named {
-                Some(n) => self
-                    .alias(&t, n)
-                    .and_then(|x| crate::types::members(&x)),
+                Some(n) => self.alias(&t, n).and_then(|x| crate::types::members(&x)),
                 None if first.as_deref() == Some("enum") => Some(Vec::new()),
                 None => None,
             };
@@ -166,9 +167,17 @@ impl Lowerer<'_> {
         span: Span,
     ) -> L<Lit> {
         let values = Term::Val(Value::List(members.into_iter().map(Value::Str).collect()));
-        self.helpers.push(Stmt::Fact(atom_at(ENUM, vec![str_term(&name), values], def)));
+        self.helpers.push(Stmt::Fact(atom_at(
+            ENUM,
+            vec![str_term(&name), values],
+            def,
+        )));
         let list = var(&fresh(rc, "Values"));
-        out.push(Lit::Pos(atom_at(ENUM, vec![str_term(&name), list.clone()], span)));
+        out.push(Lit::Pos(atom_at(
+            ENUM,
+            vec![str_term(&name), list.clone()],
+            span,
+        )));
         if lhs.kind() == TUPLE {
             return self.pattern_in(rc, lhs, list, out, span);
         }
@@ -195,7 +204,9 @@ impl Lowerer<'_> {
             || self.decls.relations.contains(h)
             || self.chain_of(rc.scope).into_iter().any(|s| {
                 let s = &self.decls.scopes[s];
-                s.uses.contains_key(h) || s.instances.contains_key(h) || s.components.contains_key(h)
+                s.uses.contains_key(h)
+                    || s.instances.contains_key(h)
+                    || s.components.contains_key(h)
             });
         (c.is_bare() && !shadowed && self.decls.namespaces.contains(h)).then(|| h.clone())
     }

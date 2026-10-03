@@ -872,7 +872,11 @@ fn apply_order(cli: &Cli) -> Result<Vec<Dependency>> {
     // The project (`apply` with no target): every stack, each with its
     // default key; else the target.
     let roots: Vec<(PathBuf, Vec<(String, String)>)> = match cli.files.as_slice() {
-        [] => cli.every_stack.iter().map(|f| (f.clone(), Vec::new())).collect(),
+        [] => cli
+            .every_stack
+            .iter()
+            .map(|f| (f.clone(), Vec::new()))
+            .collect(),
         [one] => vec![(one.clone(), cli.keys.clone())],
         _ => return Ok(Vec::new()),
     };
@@ -1540,7 +1544,14 @@ fn run_with(
         false => load_schema(providers),
     };
     if let Cmd::Test = cli.cmd {
-        return run_tests(&loaded.program, &loaded.stack, &providers, none, &cli, &files);
+        return run_tests(
+            &loaded.program,
+            &loaded.stack,
+            &providers,
+            none,
+            &cli,
+            &files,
+        );
     }
     if let Cmd::Strata = cli.cmd {
         return print_strata(

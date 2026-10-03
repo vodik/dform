@@ -375,8 +375,9 @@ fn a_tick_2_address_the_file_does_not_list_stops_the_apply() {
     s.write("plan.json", &now.to_string());
     let r = s.run(&["apply", "plan.json"]).failure();
     assert!(
-        r.stderr
-            .contains("apply stopped after tick 1: tick 2 adds 1 deformation the plan could not name"),
+        r.stderr.contains(
+            "apply stopped after tick 1: tick 2 adds 1 deformation the plan could not name"
+        ),
         "{}",
         r.stderr
     );

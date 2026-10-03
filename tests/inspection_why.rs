@@ -357,7 +357,9 @@ fn why_labels_facts_injected_at_a_tick() {
     let [Lit::Pos(pat)] = body.as_slice() else {
         unreachable!()
     };
-    let (deny, _) = dform::report::tree::find(pat, &res.facts).unwrap().remove(0);
+    let (deny, _) = dform::report::tree::find(pat, &res.facts)
+        .unwrap()
+        .remove(0);
     let id = res
         .circuit
         .fact_id(&dform::engine::circuit_fact(&deny))
@@ -443,7 +445,8 @@ fn why_names_a_rule_the_compiler_wrote() {
         )
     };
     s.write("p.df", &p("10.0.0.0/16"));
-    s.run(&["dev", "--world", "w.json", "apply", "p.df"]).success();
+    s.run(&["dev", "--world", "w.json", "apply", "p.df"])
+        .success();
     s.write("p.df", &p("10.1.0.0/16"));
     let out = why_in(&s, "p.df", &["deny(M)"]);
     assert!(
@@ -454,7 +457,10 @@ fn why_names_a_rule_the_compiler_wrote() {
         ),
         "{out}"
     );
-    assert!(!out.contains("<input>") && !out.contains("deny(m)"), "{out}");
+    assert!(
+        !out.contains("<input>") && !out.contains("deny(m)"),
+        "{out}"
+    );
 }
 
 /// A schema refinement is a check on the value, not one of the
@@ -481,7 +487,10 @@ fn why_prints_the_statement_of_a_rule_that_reads_nothing() {
     let s = Scratch::new("why-no-reads");
     s.write("p.df", "\nprovider fake\nys(n) where n = 1 + 2\n");
     let out = why_in(&s, "p.df", &["ys(N)"]);
-    assert_eq!(out, "ys(3)\n  p.df:3  ys(n) where n = 1 + 2\n  with n = 3\n");
+    assert_eq!(
+        out,
+        "ys(3)\n  p.df:3  ys(n) where n = 1 + 2\n  with n = 3\n"
+    );
 }
 
 /// `plan --why` prints a copy's frame as its statement, `instance network.vpc
@@ -489,10 +498,7 @@ fn why_prints_the_statement_of_a_rule_that_reads_nothing() {
 #[test]
 fn plan_why_prints_a_copy_as_its_instance_statement() {
     let out = dform("examples/demo/stacks/dform.df", &["plan", "--why"]);
-    assert!(
-        out.contains("  instance network.vpc main\n"),
-        "{out}"
-    );
+    assert!(out.contains("  instance network.vpc main\n"), "{out}");
     assert!(!out.contains("instance_of("), "{out}");
 }
 

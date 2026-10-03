@@ -182,5 +182,10 @@ fn a_keyed_read_takes_the_pun() {
     );
     s.write("stacks/app.df", &app("network[env]"));
     let r = s.run(&["apply", "app", "env=dev"]).success();
-    assert!(r.stdout.starts_with("apply app[env=dev]: net[env=dev] first"), "{}", r.stdout);
+    assert!(
+        r.stdout
+            .starts_with("apply app[env=dev]: net[env=dev] first"),
+        "{}",
+        r.stdout
+    );
 }

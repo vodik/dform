@@ -452,12 +452,8 @@ impl Pass<'_> {
             let ty = Ty::parse(&p.ty);
             if matches!(ty, Ty::Scalar(_)) {
                 let n = self.var(rule, v);
-                self.s.hard(
-                    n,
-                    ty,
-                    span,
-                    format!("`{name}`'s argument `{}`", p.name),
-                );
+                self.s
+                    .hard(n, ty, span, format!("`{name}`'s argument `{}`", p.name));
             }
         }
     }
@@ -501,7 +497,15 @@ impl Pass<'_> {
                 }
                 return;
             }
-            ("attr", [Term::Val(Value::Str(typ)), scope, Term::Val(Value::Str(p)), Term::Var(v)]) => {
+            (
+                "attr",
+                [
+                    Term::Val(Value::Str(typ)),
+                    scope,
+                    Term::Val(Value::Str(p)),
+                    Term::Var(v),
+                ],
+            ) => {
                 let found = if typ == crate::modules::INPUT {
                     match scope {
                         Term::Val(Value::Str(s)) => self
@@ -749,7 +753,10 @@ pub fn infer(
     for s in &program.statements {
         match s {
             Stmt::Fact(a) => {
-                arities.entry(a.pred.clone()).or_default().insert(a.args.len());
+                arities
+                    .entry(a.pred.clone())
+                    .or_default()
+                    .insert(a.args.len());
             }
             Stmt::Rule(r) => {
                 arities
@@ -758,7 +765,10 @@ pub fn infer(
                     .insert(r.head.args.len());
                 for l in &r.body {
                     if let Lit::Pos(a) | Lit::Not(a) = l {
-                        arities.entry(a.pred.clone()).or_default().insert(a.args.len());
+                        arities
+                            .entry(a.pred.clone())
+                            .or_default()
+                            .insert(a.args.len());
                     }
                 }
             }
@@ -860,7 +870,10 @@ fn shown_var(v: &str) -> String {
 }
 
 impl Pass<'_> {
-    fn solve(mut self, arities: &BTreeMap<String, std::collections::BTreeSet<usize>>) -> Result<Inferred> {
+    fn solve(
+        mut self,
+        arities: &BTreeMap<String, std::collections::BTreeSet<usize>>,
+    ) -> Result<Inferred> {
         let mut diags = Vec::new();
         let mut settled: BTreeMap<usize, Option<Ty>> = BTreeMap::new();
         let n = self.s.parent.len();
@@ -1201,7 +1214,9 @@ pub fn document_columns(
     let first = match format {
         "csv" => {
             let mut r = csv::Reader::from_reader(text.as_bytes());
-            let header = r.headers().context("a CSV table's first line names its columns")?;
+            let header = r
+                .headers()
+                .context("a CSV table's first line names its columns")?;
             return Ok(header.iter().map(|h| (h.to_string(), None)).collect());
         }
         "json" => serde_json::from_str::<Vec<Row>>(text)

@@ -253,7 +253,9 @@ fn hover_shows_every_contribution_and_why_prints_the_derivation() {
     assert!(text.contains("baseline.df:10:1, use baseline"), "{text}");
     // The derivation in the source form, as `dform why` prints it.
     assert!(
-        text.contains("  merged from 2 contributions\n  ├─ {component: \"network\", env: \"staging\"}\n"),
+        text.contains(
+            "  merged from 2 contributions\n  ├─ {component: \"network\", env: \"staging\"}\n"
+        ),
         "{text}"
     );
     assert!(!text.contains("Σattr"), "{text}");
@@ -310,10 +312,7 @@ fn hover_shows_docs_builtins_keywords_and_nothing_elsewhere() {
 
     // Nothing: whitespace, a comment, a string literal, even inside a
     // block or a fact that derives something.
-    assert_eq!(
-        hover(&mut c, &network, "{ cidr = vpc_net", 1),
-        Value::Null
-    );
+    assert_eq!(hover(&mut c, &network, "{ cidr = vpc_net", 1), Value::Null);
     assert_eq!(hover(&mut c, &stack, "# Both ends", 4), Value::Null);
     assert_eq!(hover(&mut c, &stack, "\"us-test-1a\"", 3), Value::Null);
 
@@ -389,9 +388,7 @@ fn hover_shows_docs_builtins_keywords_and_nothing_elsewhere() {
     );
     let text = hover(&mut c, &network, "zone_index(\"us-test-1a\"", 2);
     assert!(
-        text.as_str()
-            .unwrap()
-            .contains("zone_index(string, int)"),
+        text.as_str().unwrap().contains("zone_index(string, int)"),
         "{text}"
     );
 
@@ -870,9 +867,8 @@ fn quick_fix_quotes_an_unknown_name() {
     let (_s, root) = example("demo");
     let stack = root.join("stacks/dform.df");
     let text = std::fs::read_to_string(&stack).unwrap();
-    let edited = format!(
-        "{text}\nresource net.vpc extra {{ cidr = \"10.1.0.0/16\", name = bogus }}\n"
-    );
+    let edited =
+        format!("{text}\nresource net.vpc extra {{ cidr = \"10.1.0.0/16\", name = bogus }}\n");
     let texts = quick_fix(
         &root,
         &stack,

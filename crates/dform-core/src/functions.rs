@@ -910,7 +910,9 @@ pub const BODIES: &[(&str, Body)] = &[
                 })
                 .collect::<Option<Vec<_>>>()?;
             keyed.sort_by_key(|(a, _)| *a);
-            Some(Value::List(keyed.into_iter().map(|(_, x)| x.clone()).collect()))
+            Some(Value::List(
+                keyed.into_iter().map(|(_, x)| x.clone()).collect(),
+            ))
         }
         _ => None,
     }),
@@ -918,7 +920,10 @@ pub const BODIES: &[(&str, Body)] = &[
         [Value::List(xs)] => {
             let mut seen = std::collections::HashSet::new();
             Some(Value::List(
-                xs.iter().filter(|x| seen.insert((*x).clone())).cloned().collect(),
+                xs.iter()
+                    .filter(|x| seen.insert((*x).clone()))
+                    .cloned()
+                    .collect(),
             ))
         }
         _ => None,
@@ -991,7 +996,10 @@ pub const BODIES: &[(&str, Body)] = &[
     }),
     ("regex.replace", |a| match a {
         [Value::Str(s), Value::Str(re), Value::Str(with)] => Some(Value::Str(
-            regex::Regex::new(re).ok()?.replace_all(s, with.as_str()).into_owned(),
+            regex::Regex::new(re)
+                .ok()?
+                .replace_all(s, with.as_str())
+                .into_owned(),
         )),
         _ => None,
     }),
@@ -1525,11 +1533,7 @@ fn clean_path(p: &str) -> String {
         }
     }
     let joined = stack.join("/");
-    let out = if abs {
-        format!("/{joined}")
-    } else {
-        joined
-    };
+    let out = if abs { format!("/{joined}") } else { joined };
     if out.is_empty() { ".".to_string() } else { out }
 }
 
@@ -1608,7 +1612,8 @@ fn is_digest(s: &str) -> bool {
 fn is_tag(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 128
-        && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
 }
 
 fn is_registry(s: &str) -> bool {

@@ -45,7 +45,11 @@ fn apply_with_no_target_applies_every_stack_in_dependency_order() {
         "{}",
         r.stdout
     );
-    for (stack, at) in [("net", "== net\n"), ("app", "== app\n"), ("solo", "== solo\n")] {
+    for (stack, at) in [
+        ("net", "== net\n"),
+        ("app", "== app\n"),
+        ("solo", "== solo\n"),
+    ] {
         assert!(r.stdout.contains(at), "{stack}: {}", r.stdout);
         assert!(
             s.path(&format!("dform.state/{stack}/state.json")).exists(),
