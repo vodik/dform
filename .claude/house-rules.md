@@ -6,6 +6,8 @@
 - Keep `cargo run -q -- -C examples/demo plan` and
   `cargo run -q -- -C examples/pngu plan pngu env=prod` working at every commit.
   They are gates.
+- `cargo fmt --all --check` is a gate: the tree stays in rustfmt's form, so no
+  branch carries another's formatting hunks.
 - Programs follow docs/layout.md: one project per directory with a dform.toml.
 - Every behaviour change ships with a test that fails with the change reverted, and
   the report says you checked.
