@@ -184,26 +184,7 @@ fn golden_path(program: &str, case: &str, ext: &str) -> PathBuf {
 /// Compare `got` against the golden file, or write it when `UPDATE_GOLDEN=1`.
 #[track_caller]
 fn check(program: &str, case: &str, ext: &str, got: &str) {
-    let path = golden_path(program, case, ext);
-    if std::env::var("UPDATE_GOLDEN").as_deref() == Ok("1") {
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, got).unwrap();
-        return;
-    }
-    let want = std::fs::read_to_string(&path).unwrap_or_else(|e| {
-        panic!(
-            "missing golden file {}: {e}\nrun `UPDATE_GOLDEN=1 cargo test --test golden` to accept it\n---\n{got}",
-            path.display()
-        )
-    });
-    assert_eq!(
-        want,
-        got,
-        "\n{}/{} ({ext}) does not match the golden file ({})\nrun `UPDATE_GOLDEN=1 cargo test --test golden` to accept it if this is the intended change",
-        program,
-        case,
-        path.display()
-    );
+    common::golden_file(&golden_path(program, case, ext), got, "golden");
 }
 
 fn run(s: &Scratch, args: &[&str]) -> (bool, String, String) {

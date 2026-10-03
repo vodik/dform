@@ -407,6 +407,30 @@ pub fn rel(p: &Path) -> String {
     p.strip_prefix(repo()).unwrap().display().to_string()
 }
 
+/// Compare `got` against the golden file `path`, or write it when
+/// `UPDATE_GOLDEN=1`; `test` names the test target that accepts it.
+#[track_caller]
+pub fn golden_file(path: &Path, got: &str, test: &str) {
+    if std::env::var("UPDATE_GOLDEN").as_deref() == Ok("1") {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, got).unwrap();
+        return;
+    }
+    let accept = format!("run `UPDATE_GOLDEN=1 cargo test --test {test}` to accept it");
+    let want = std::fs::read_to_string(path).unwrap_or_else(|e| {
+        panic!(
+            "missing golden file {}: {e}\n{accept}\n---\n{got}",
+            path.display()
+        )
+    });
+    assert_eq!(
+        want,
+        got,
+        "\n{} does not match its golden file\n{accept} if this is the intended change",
+        path.display()
+    );
+}
+
 /// The repository root, for programs and fixtures the tests read.
 pub fn repo() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
