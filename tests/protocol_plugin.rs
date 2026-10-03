@@ -125,6 +125,7 @@ fn the_mock_conforms() {
         let r = s.run_on(backend, &["provider", "check", path]).success();
         assert!(!r.stdout.contains("FAIL"), "{backend:?}: {}", r.stdout);
         for line in [
+            "ok    Schema's types are named under the providers that serve them",
             "ok    Apply refuses an action whose assertion fails",
             "ok    Apply CREATE again with the same idempotency key answers the object it made",
             "ok    Query provider.created answers what an idempotency key made",

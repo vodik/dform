@@ -582,7 +582,10 @@ against the provider at PATH with a synthetic schema and prints one line per
 check, failing if any deviates. A provider that serves its own schema (a real
 API's) instead of the one it is given is checked with the `examples` its
 Schema returns: documents of its own types to plan, create, update, replace
-and delete. The mock passes it:
+and delete. Every provider's Schema is checked to name each type under
+the provider its `type_provider` row gives it (`k8s.secret` is provider
+`k8s`'s), and one that serves its own schema to name its types under its
+handshake's name. The mock passes it:
 
 ```bash
 cargo run -- provider check crates/dform-mock/schemas/fake.df   # the mock

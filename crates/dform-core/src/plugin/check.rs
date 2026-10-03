@@ -163,6 +163,12 @@ fn suite(start: impl FnOnce() -> Result<Link>, dir: &Path) -> Result<(Vec<String
             return Ok((r.lines, r.failed));
         }
     };
+    // Every provider, whatever schema it serves (R-36): a type is named
+    // under the provider its `type_provider` row gives it.
+    r.check(
+        "Schema's types are named under the providers that serve them",
+        served_under(&schema),
+    );
     let served = schema.class_of(TYPE, "id") == Some(NullClass::Fresh)
         && schema.class_of(TYPE, "token") == Some(NullClass::Secret)
         && schema.list_key(TYPE, "ports").is_some()
@@ -269,6 +275,29 @@ fn named_under(name: &str, schema: &Schema) -> Result<()> {
                 [one] => format!("the type {one} is"),
                 many => format!("the types {} are", many.join(", ")),
             }
+        )
+    })
+}
+
+/// Each type a schema gives a provider (`type_provider(T, P)`) is named
+/// under it: `T` is `P.name`. What `named_under` asks of a provider's own
+/// schema, asked of every schema a provider serves, the synthetic one
+/// included.
+fn served_under(schema: &Schema) -> Result<()> {
+    let stray: Vec<String> = schema
+        .provider_of
+        .iter()
+        .filter(|(t, p)| !t.starts_with(&format!("{p}.")))
+        .map(|(t, p)| format!("{t} (provider {p})"))
+        .collect();
+    ensure(stray.is_empty(), || {
+        format!(
+            "{} not named under {}",
+            match stray.as_slice() {
+                [one] => format!("the type {one} is"),
+                many => format!("the types {} are", many.join(", ")),
+            },
+            if stray.len() == 1 { "it" } else { "theirs" }
         )
     })
 }
@@ -823,6 +852,16 @@ mod tests {
         )
         .unwrap();
         assert!(named_under("k8s", &s).is_ok());
+        assert!(served_under(&s).is_ok());
+        let gke = Schema::parse(
+            "\ntype_provider(k8s.secret, \"gke\")\ntype_provider(google.network, \"google\")\n",
+            "t",
+        )
+        .unwrap();
+        assert_eq!(
+            served_under(&gke).unwrap_err().to_string(),
+            "the type k8s.secret (provider gke) is not named under it"
+        );
         let e = named_under("kubernetes", &s).unwrap_err().to_string();
         assert_eq!(
             e,
