@@ -5,27 +5,9 @@
 //! names and ignores the rest, `_` matches anything.
 
 mod common;
-use common::Scratch;
+use common::{Scratch, error, facts};
 use dform_core::engine;
 use dform_core::parser::{parse_file, parse_program};
-use dform_core::partition::fmt_atom;
-
-fn facts(src: &str, pred: &str) -> Vec<String> {
-    let program = parse_program(src).unwrap_or_else(|e| panic!("{e}"));
-    let (r, _) = engine::eval(&program, &[]).unwrap();
-    r.facts
-        .iter()
-        .filter(|a| a.pred == pred)
-        .map(fmt_atom)
-        .collect()
-}
-
-fn error(src: &str) -> String {
-    parse_file("t.df", &format!("\n{src}"))
-        .map(|_| ())
-        .unwrap_err()
-        .to_string()
-}
 
 #[test]
 fn a_tuple_in_an_object_binds_each_key_and_value() {

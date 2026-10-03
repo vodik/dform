@@ -3,27 +3,7 @@
 //! becomes a list by accident.
 
 mod common;
-use common::Scratch;
-use dform_core::engine;
-use dform_core::parser::{parse_file, parse_program};
-use dform_core::partition::fmt_atom;
-
-fn facts(src: &str, pred: &str) -> Vec<String> {
-    let program = parse_program(src).unwrap_or_else(|e| panic!("{e}"));
-    let (r, _) = engine::eval(&program, &[]).unwrap();
-    r.facts
-        .iter()
-        .filter(|a| a.pred == pred)
-        .map(fmt_atom)
-        .collect()
-}
-
-fn error(src: &str) -> String {
-    parse_file("t.df", &format!("\n{src}"))
-        .map(|_| ())
-        .unwrap_err()
-        .to_string()
-}
+use common::{Scratch, error, facts};
 
 #[test]
 fn a_half_open_range_stops_before_its_end() {

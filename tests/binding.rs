@@ -5,6 +5,7 @@
 //! bound is an error that says to write `==`.
 
 mod common;
+use common::error;
 use dform_core::engine;
 use dform_core::parser::parse_file;
 use dform_core::partition::fmt_atom;
@@ -19,13 +20,6 @@ fn facts(src: &str, pred: &str) -> Vec<String> {
         .filter(|a| a.pred == pred)
         .map(fmt_atom)
         .collect()
-}
-
-fn error(src: &str) -> String {
-    parse_file("t.df", &format!("\n{src}"))
-        .map(|_| ())
-        .unwrap_err()
-        .to_string()
 }
 
 /// The order of the literals is irrelevant to what binds.

@@ -345,6 +345,27 @@ pub fn mock(s: &Scratch, args: &[&str]) -> Run {
     s.run(&on("p.df", &["--world", "w.json"], args))
 }
 
+/// The facts of `pred` the core-text program `src` derives, as
+/// `fmt_atom` prints them.
+pub fn facts(src: &str, pred: &str) -> Vec<String> {
+    let program = dform_core::parser::parse_program(src).unwrap_or_else(|e| panic!("{e}"));
+    let (r, _) = dform_core::engine::eval(&program, &[]).unwrap();
+    r.facts
+        .iter()
+        .filter(|a| a.pred == pred)
+        .map(dform_core::partition::fmt_atom)
+        .collect()
+}
+
+/// The compile error of the program file `src` (after a blank first
+/// line, so its lines number from 2).
+pub fn error(src: &str) -> String {
+    dform_core::parser::parse_file("t.df", &format!("\n{src}"))
+        .map(|_| ())
+        .unwrap_err()
+        .to_string()
+}
+
 /// The repository root, for programs and fixtures the tests read.
 pub fn repo() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
