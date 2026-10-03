@@ -259,7 +259,7 @@ fn fmt_orders_a_components_interface_first() {
                 #| the answer\n  output r = p(a)\n\n  p(x) where q(x)\n  use helper\n  \
                 instance other o\n}\n";
     assert_eq!(fmt(src), want);
-    assert_eq!(fmt(&want), want);
+    assert_eq!(fmt(want), want);
 }
 
 /// A `provider` or `instance` with no entries is written without braces
