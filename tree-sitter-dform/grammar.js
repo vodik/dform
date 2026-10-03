@@ -462,6 +462,9 @@ export default grammar({
 
     body: $ => prec.right(commaSep1($._literal)),
 
+    // A comprehension's literals: a comma after the last too (R-52).
+    comprehension_body: $ => seq(commaSep1($._literal), optional(',')),
+
     body_block: $ => seq(
       '{',
       repeat($._newline),
@@ -624,7 +627,7 @@ export default grammar({
       '[',
       field('item', $._term),
       '|',
-      field('condition', $.body),
+      field('condition', alias($.comprehension_body, $.body)),
       ']',
     ),
 

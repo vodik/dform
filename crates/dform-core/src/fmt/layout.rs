@@ -10,7 +10,8 @@
 //!   declaration's columns: one element per line when broken, each with a
 //!   trailing comma; a list whose only element is an object (or an object
 //!   whose only field is a list) hugs it, `[{` .. `}]`;
-//! - a comprehension: `[ item |`, a literal per line, `]`;
+//! - a comprehension: `[ item |`, a literal per line with a trailing
+//!   comma, `]`;
 //! - a block (a resource's, a `set`'s, a type's, an object input's
 //!   fields), and a `not { }` body: one entry per line when broken, and no
 //!   commas then, the newline separates;
@@ -630,7 +631,7 @@ impl Layout {
             items,
             close.as_ref(),
             |s| close.as_ref().map_or(nil(), |t| s.tok(t)),
-            Shape::term(" ", Commas::Between),
+            Shape::term(" ", Commas::Trailing),
         )
     }
 

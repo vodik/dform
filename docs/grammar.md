@@ -1114,7 +1114,7 @@ read       := chain | call ("." SEG | "[" term "]")+   ; a call's result, read (
 list       := "[" (term ("," term)* ","?)? "]"
 object     := "{" (key (":" term)? ("," key (":" term)?)* ","?)? "}"  ; `{ a }` is `{ a: a }`
 key        := NAME | STRING
-comprehension := "[" term "|" body1 "]"
+comprehension := "[" term "|" body1 ","? "]"
 type       := DOTTED ("(" type ("," type)* ")")? | "{" NAME ":" type ("," NAME ":" type)* "}" | STRING
 ```
 
@@ -1548,7 +1548,7 @@ The groups, and how each breaks:
   outer lines, and an object whose only field is a list hugs that
   (`{ k: [` .. `] }`): the only closers not on their own line;
 - a comprehension: `[ item |` on the first line, a body literal per line
-  with a comma between, `]` on its own line;
+  with a trailing comma, the last's too, `]` on its own line;
 - a block (a resource's, a `use`'s or an `instance`'s, a `set`'s, a
   provider's, a type's, an object input's or output's fields) and a
   `not { }` body: one entry per line and no commas, the newline separates;

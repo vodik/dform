@@ -5,7 +5,7 @@ output private_subnet_ids: list(ref(net.subnet))
 output vpc = vpc
 output private_subnet_ids = [ ref(net.subnet, sn, "id") |
   want(net.subnet, sn),
-  attr(net.subnet, sn, "visibility", "private")
+  attr(net.subnet, sn, "visibility", "private"),
 ]
 
 resource net.vpc vpc {

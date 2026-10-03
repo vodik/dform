@@ -1132,3 +1132,31 @@ limits(x) where x = 512Mi * 2 + 1.5Gi, d = 1h30m, c = 0.5, i in 0..3
         (range
           (integer)
           (integer))))))
+
+================================================================================
+A broken comprehension's trailing comma
+================================================================================
+
+let l = [ x |
+  q(x),
+  r(x),
+]
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (let
+    (identifier)
+    (comprehension
+      (identifier)
+      (body
+        (atom_literal
+          (call
+            (identifier)
+            (arguments
+              (identifier))))
+        (atom_literal
+          (call
+            (identifier)
+            (arguments
+              (identifier))))))))

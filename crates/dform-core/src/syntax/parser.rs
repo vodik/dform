@@ -1495,6 +1495,20 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
+    /// A comprehension's literals: `body1`, and a comma after the last,
+    /// as a broken one prints (R-52).
+    fn comprehension_body(&mut self) -> P {
+        self.start(BODY);
+        loop {
+            self.lit()?;
+            if !self.eat(COMMA) || self.at(R_BRACKET) {
+                break;
+            }
+        }
+        self.finish();
+        Ok(())
+    }
+
     fn body_block(&mut self) -> P {
         self.start(BODY);
         self.bump();
@@ -1855,7 +1869,7 @@ impl<'a> Parser<'a> {
             if p.at(PIPE) {
                 p.start_at(cp, COMPREHENSION);
                 p.bump();
-                p.body1()?;
+                p.comprehension_body()?;
                 p.expect(R_BRACKET)?;
                 p.finish();
                 return Ok(COMPREHENSION);

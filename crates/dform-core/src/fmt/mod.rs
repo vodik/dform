@@ -333,12 +333,14 @@ mod tests {
             fmt(&src),
             format!("f(\n  \"{wide}\",\n  \"{wide}\",\n  [1, 2],\n)\n")
         );
-        // A comprehension: `[ item |`, a literal per line, `]`.
+        // A comprehension: `[ item |`, a literal per line, a trailing comma,
+        // `]`; the comma is read back.
         let src = format!("let l = [ x | q(x, \"{wide}\"), r(x, \"{wide}\") ]\n");
         assert_eq!(
             fmt(&src),
-            format!("let l = [ x |\n  q(x, \"{wide}\"),\n  r(x, \"{wide}\")\n]\n")
+            format!("let l = [ x |\n  q(x, \"{wide}\"),\n  r(x, \"{wide}\"),\n]\n")
         );
+        assert_eq!(fmt(&fmt(&src)), fmt(&src));
         // A long chain or string has nowhere to break: left as is.
         let chain = format!("let l = a.{}\n", ["segment"; 14].join("."));
         assert_eq!(fmt(&chain), chain);
