@@ -3952,10 +3952,24 @@ fn doc(files: &[PathBuf]) -> Result<()> {
 
 fn fmt_files(paths: &[PathBuf], check: bool) -> Result<()> {
     let mut unformatted = Vec::new();
+    // Each project's typing (its providers' schemas, read offline), by root;
+    // a file in no project has none.
+    let mut typings: std::collections::BTreeMap<PathBuf, crate::fmt::Typing> =
+        std::collections::BTreeMap::new();
     for p in paths {
         let src =
             std::fs::read_to_string(p).map_err(|e| anyhow::anyhow!("read {}: {e}", p.display()))?;
-        let out = crate::fmt::format_source(&p.display().to_string(), &src)?;
+        let dir = p.parent().filter(|d| !d.as_os_str().is_empty());
+        let project =
+            crate::project::Project::find(dir.unwrap_or(Path::new(".")), env!("CARGO_PKG_VERSION"))
+                .ok()
+                .flatten();
+        let typing = project.map(|pr| {
+            &*typings
+                .entry(pr.root.clone())
+                .or_insert_with(|| crate::fmt::Typing::of_project(&pr))
+        });
+        let out = crate::fmt::format_source_in(&p.display().to_string(), &src, typing)?;
         if out == src {
             continue;
         }

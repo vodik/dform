@@ -267,3 +267,25 @@ fn fmt_puns_an_entry_whose_value_is_its_name() {
     assert_eq!(fmt(src), want);
     assert_eq!(fmt(want), want);
 }
+
+/// In a project, a literal in a typed position is in its shortest
+/// spelling, the providers' schemas read from their schema files with no
+/// provider started (R-52, amended): a quantity's string loses its quotes,
+/// an `inet` constructor of its own text goes. Outside a project, with no
+/// schema, no literal changes.
+#[test]
+fn fmt_writes_a_typed_literal_in_its_shortest_spelling() {
+    let src = "provider k8s\n\nresource k8s.deployment d {\n  spec.replicas = 1\n  \
+               spec.template.spec.containers = [{ name: \"a\", resources: { limits: { memory: \"2Gi\" } } }]\n}\n\
+               component c {\n  input cidr: inet\n}\ninstance c a { cidr = inet(\"10.1.0.0/16\") }\n";
+    let want = "provider k8s\n\nresource k8s.deployment d {\n  spec.replicas = 1\n  \
+                spec.template.spec.containers = [{ name: \"a\", resources: { limits: { memory: 2Gi } } }]\n}\n\
+                component c {\n  input cidr: inet\n}\ninstance c a { cidr = \"10.1.0.0/16\" }\n";
+    let p = Scratch::project("fmt-typed");
+    p.write("stacks/app.df", src);
+    p.run(&["fmt", "stacks/app.df"]).success();
+    assert_eq!(p.read("stacks/app.df"), want);
+    let s = Scratch::new("fmt-untyped");
+    s.write("app.df", src);
+    s.run(&["fmt", "--check", "app.df"]).success();
+}

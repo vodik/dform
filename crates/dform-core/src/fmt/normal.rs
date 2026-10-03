@@ -431,14 +431,16 @@ pub fn normalize(root: &SyntaxNode, src: &str) -> Option<String> {
     c.objects(root);
     c.empty_blocks(root);
     c.entry_puns(root);
-    if c.edits.is_empty() {
-        return None;
-    }
-    // Outer edits win.
-    c.edits.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
+    apply(src, c.edits)
+}
+
+/// `src` with `edits` (byte ranges and their text) made, the outer of two
+/// that overlap winning; `None` when that changes nothing.
+pub(super) fn apply(src: &str, mut edits: Vec<(usize, usize, String)>) -> Option<String> {
+    edits.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
     let mut out = String::new();
     let mut at = 0;
-    for (s, e, t) in c.edits {
+    for (s, e, t) in edits {
         if s < at {
             continue;
         }

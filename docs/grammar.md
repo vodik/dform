@@ -1481,7 +1481,20 @@ The normal forms:
 - `env("prod")` for a value name is `env == "prod"`;
 - the header is `key`, `input`, `input p from`, before the
   body, each statement with the comments directly above it and on its line
-  (see "The header").
+  (see "The header");
+- in a project, a literal in a typed position is in its shortest
+  spelling: a string in a `bytes`, `cpu` or `duration` position that reads
+  as one loses its quotes (`"2Gi"` is `2Gi`, `"500m"` is `500m`), and an
+  `inet`, `ip` or `time` constructor of a string in a position of its type
+  is dropped (`inet("10.0.0.0/16")` is `"10.0.0.0/16"`). The positions are
+  a schema attribute (in a block, or a `set`, through a variable over a
+  keyed list's elements too), an input's default, an `instance`'s or a
+  `use`'s entry for an input, and a function's typed parameter. A literal
+  that does not read as its type is left for the compiler to report. The
+  providers' schemas are read from their schema files (the mock's built-in
+  ones, a project's `providers/NAME/schema.df`), no provider started; a
+  provider that is an executable types nothing, and outside a project no
+  literal changes.
 
 A formatted file prints back byte for byte.
 

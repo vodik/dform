@@ -2,21 +2,34 @@
 //! [`normal`]) from its lossless tree, in its layout ([`layout`], R-52):
 //! what fits in [`WIDTH`] columns on one line, what does not broken from
 //! the outside in. The author's line breaks are not kept, their blank
-//! lines (at most one in a row) and comments are. A file already in this
-//! form prints back byte for byte.
+//! lines (at most one in a row) and comments are. In a project, a literal
+//! in a typed position is in its shortest spelling ([`typed`]). A file
+//! already in this form prints back byte for byte.
 
 mod doc;
 mod header;
 mod layout;
 mod normal;
+mod typed;
 
 pub use layout::{INLINE_LITERALS, WIDTH};
+pub use typed::Typing;
 
 use crate::syntax::SyntaxNode;
 
 /// Format a file's source; a file with syntax errors is not formatted, but
 /// for a header statement after the body began, which is moved (R-27).
 pub fn format_source(name: &str, src: &str) -> anyhow::Result<String> {
+    format_source_in(name, src, None)
+}
+
+/// [`format_source`] for a file of a project, whose typed positions
+/// `typing` knows.
+pub fn format_source_in(
+    name: &str,
+    src: &str,
+    typing: Option<&Typing>,
+) -> anyhow::Result<String> {
     if is_signature_file(src) {
         return Ok(format_signature_file(src));
     }
@@ -24,7 +37,7 @@ pub fn format_source(name: &str, src: &str) -> anyhow::Result<String> {
     if parse.errors.iter().any(|e| !e.misplaced) {
         return Err(crate::parser::syntax_diagnostics(name, src, &parse).into());
     }
-    Ok(format(&parse.syntax()))
+    Ok(format_in(&parse.syntax(), typing))
 }
 
 /// Whether `src` is a signature file (R-6, R-24: `std/*.df`), read by
@@ -107,6 +120,11 @@ fn print_signature(f: &crate::functions::Function) -> String {
 /// then its layout. The tree must be free of syntax errors but for a
 /// header statement out of place.
 pub fn format(root: &SyntaxNode) -> String {
+    format_in(root, None)
+}
+
+/// [`format`], with a project's `typing`.
+pub fn format_in(root: &SyntaxNode, typing: Option<&Typing>) -> String {
     let placed = header::reorder(root, &root.to_string())
         .map(|src| crate::syntax::parser::parse(&src))
         .filter(|p| p.errors.is_empty());
@@ -115,8 +133,10 @@ pub fn format(root: &SyntaxNode) -> String {
     // A normal form can make another one apply (a body joined onto its
     // line compares what the line before it bound): to a fixpoint, bounded.
     for _ in 0..4 {
-        let tree = crate::syntax::parser::parse(&out);
-        let Some(next) = normal::normalize(&tree.syntax(), &out) else {
+        let tree = crate::syntax::parser::parse(&out).syntax();
+        let next = normal::normalize(&tree, &out)
+            .or_else(|| typing.and_then(|t| typed::normalize(&tree, &out, t)));
+        let Some(next) = next else {
             break;
         };
         let again = crate::syntax::parser::parse(&next);
