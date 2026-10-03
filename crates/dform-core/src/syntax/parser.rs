@@ -171,6 +171,9 @@ struct Parser<'a> {
     nl_eaten: Option<usize>,
     /// Byte offset of the statement being parsed, for a hint that prints it.
     stmt_start: usize,
+    /// The term being parsed follows `from`: a path after its call is a
+    /// selector, not a read of the call (`source_term`).
+    selector: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -185,6 +188,7 @@ impl<'a> Parser<'a> {
             nl: vec![true],
             nl_eaten: None,
             stmt_start: 0,
+            selector: false,
         }
     }
 
@@ -1552,7 +1556,7 @@ impl<'a> Parser<'a> {
                 self.term()?;
             }
             _ if kind == CALL => self.start_at(cp, LIT_ATOM),
-            _ if kind == CHAIN => self.start_at(cp, LIT_TRUTH),
+            _ if matches!(kind, CHAIN | CALL_CHAIN) => self.start_at(cp, LIT_TRUTH),
             _ => return self.err_expected("a comparison, `in` or `not in` after the term"),
         }
         self.finish();
@@ -1675,15 +1679,42 @@ impl<'a> Parser<'a> {
         Ok(kind)
     }
 
-    /// A chain, then a `(` makes it a call.
+    /// A chain, then a `(` makes it a call; a `.seg` or `[t]` after a
+    /// call reads its result (R-71), `f(x).p[0]`.
     fn chain_term(&mut self) -> P<SyntaxKind> {
         let cp = self.checkpoint();
+        // After `from`, a path after the call is the document's (R-39).
+        let selector = std::mem::take(&mut self.selector);
         self.chain()?;
-        if self.at(L_PAREN) {
-            self.start_at(cp, CALL);
-            self.arg_list()?;
-            self.finish();
-            return Ok(CALL);
+        let mut kind = CHAIN;
+        loop {
+            if self.at(L_PAREN) && kind != CHAIN {
+                let msg = format!("expected the end of the term, found {}", self.found());
+                self.error_here(
+                    msg,
+                    Some(
+                        "a function is named by a plain name: `f(x).p` reads the call's result,                          and nothing calls it"
+                            .into(),
+                    ),
+                );
+                return Err(Bail);
+            }
+            if self.at(L_PAREN) {
+                self.start_at(cp, CALL);
+                self.arg_list()?;
+                self.finish();
+                kind = CALL;
+            } else if kind != CHAIN && !selector && self.at_chain_tail() {
+                self.start_at(cp, CALL_CHAIN);
+                self.chain_tail()?;
+                self.finish();
+                kind = CALL_CHAIN;
+            } else {
+                break;
+            }
+        }
+        if kind != CHAIN {
+            return Ok(kind);
         }
         if self.at(L_BRACE) && word(self.raw(1)) && self.raw(2) == COLON {
             let msg = format!("expected the end of the term, found {}", self.found());
@@ -1699,7 +1730,10 @@ impl<'a> Parser<'a> {
     /// The term after `from`, and a path into the document it is (R-39):
     /// `toml("x").peerings`, `yaml("x")[*].items`, `d.teams[*].services`.
     fn source_term(&mut self) -> P {
-        self.term()?;
+        self.selector = true;
+        let t = self.term();
+        self.selector = false;
+        t?;
         if !(self.at(DOT) || (self.at(L_BRACKET) && self.raw(1) == STAR)) {
             return Ok(());
         }
@@ -1727,6 +1761,20 @@ impl<'a> Parser<'a> {
     fn chain(&mut self) -> P {
         self.start(CHAIN);
         self.bump();
+        self.chain_tail()?;
+        self.finish();
+        Ok(())
+    }
+
+    /// A `.name` or `[t]` that reads a call's result. A `.` at the end of
+    /// a line is the old terminator (`p(x).`), not a read.
+    fn at_chain_tail(&self) -> bool {
+        (self.at(DOT) && (word(self.raw(1)) || self.raw(1) == STRING) && !self.on_new_line_at(1))
+            || (self.at(L_BRACKET) && self.raw(1) != STAR)
+    }
+
+    /// `(.seg | [t, ...])*`.
+    fn chain_tail(&mut self) -> P {
         loop {
             if self.at(DOT) {
                 self.bump();
@@ -1762,7 +1810,6 @@ impl<'a> Parser<'a> {
                 break;
             }
         }
-        self.finish();
         Ok(())
     }
 
@@ -2043,6 +2090,20 @@ mod tests {
             kinds(src, &[INDEX, BIN_EXPR]),
             vec![BIN_EXPR, BIN_EXPR, INDEX]
         );
+    }
+
+    #[test]
+    fn a_chain_continues_after_a_call() {
+        let src = "input r from toml(\"x\").peerings\n\
+                   p(x) where q(y), x = f(y).a[0].b, has g(y).c, h(y)[1]\n";
+        assert!(errors(src).is_empty(), "{:?}", errors(src));
+        assert_eq!(
+            kinds(src, &[CALL_CHAIN, LIT_TRUTH, SELECTOR]),
+            vec![SELECTOR, CALL_CHAIN, CALL_CHAIN, LIT_TRUTH, CALL_CHAIN]
+        );
+        // The old terminator is not a read.
+        assert!(!errors("p(x).\n").is_empty());
+        assert!(kinds("p(x).\n", &[CALL_CHAIN]).is_empty());
     }
 
     #[test]

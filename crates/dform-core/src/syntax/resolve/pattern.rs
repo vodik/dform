@@ -159,6 +159,7 @@ impl Lowerer<'_> {
         let c = Chain {
             head: k.text().to_string(),
             head_kind: k.kind(),
+            call: None,
             range: k.text_range(),
             ops: Vec::new(),
         };

@@ -94,6 +94,7 @@ export default grammar({
     [$._chain_head, $._word],
     [$._primary, $.member_expression],
     [$._primary, $.index_expression],
+    [$._primary, $._call_access],
   ],
 
   rules: {
@@ -505,7 +506,11 @@ export default grammar({
 
     atom_literal: $ => $.call,
 
-    truth_literal: $ => $._chain,
+    truth_literal: $ => choice(
+      $._chain,
+      alias($._call_member, $.member_expression),
+      alias($._call_index, $.index_expression),
+    ),
 
     // --- terms ---------------------------------------------------------------
 
@@ -539,6 +544,8 @@ export default grammar({
       $.false,
       $._chain,
       $.call,
+      alias($._call_member, $.member_expression),
+      alias($._call_index, $.index_expression),
       $.list,
       $.comprehension,
       $.object,
@@ -576,6 +583,28 @@ export default grammar({
       commaSep1(field('index', choice($._term, alias($._keyed, $.named_argument)))),
       ']',
     ),
+
+    // A `.seg` or `[t]` after a call reads its result (R-71):
+    // `oci.parse(image).digest`, `str.split(s, ":")[0]`; after `from` it is
+    // the document's selector instead. Never a target or a function.
+    _call_access: $ => choice(
+      $.call,
+      alias($._call_member, $.member_expression),
+      alias($._call_index, $.index_expression),
+    ),
+
+    _call_member: $ => prec.dynamic(-1, seq(
+      field('object', $._call_access),
+      token.immediate('.'),
+      field('field', choice($._word, $.string)),
+    )),
+
+    _call_index: $ => prec.dynamic(-1, seq(
+      field('object', $._call_access),
+      token.immediate('['),
+      commaSep1(field('index', $._term)),
+      ']',
+    )),
 
     // `[k=v]`: a stack's deployment by its keys (R-65).
     _keyed: $ => seq(field('name', $._word), '=', field('value', $._term)),

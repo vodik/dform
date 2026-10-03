@@ -144,6 +144,9 @@ pub enum SyntaxKind {
     RANGE,
     /// `name (.seg | [terms])*`, parsed unresolved.
     CHAIN,
+    /// A call and the `.seg` and `[t]` after it: `f(x).p[0]` (R-71). The
+    /// call is its first child; the rest is a chain's tail.
+    CALL_CHAIN,
     /// `[t, ...]` after a chain.
     INDEX,
     /// `(.name | [*])+` after a `from` term: a path into a document (R-39).

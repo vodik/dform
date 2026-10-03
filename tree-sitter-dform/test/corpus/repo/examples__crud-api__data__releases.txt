@@ -7,6 +7,9 @@ examples/crud-api/data/releases.df
 
 edition 2026
 
+# A value is a digest or a schema number: the column takes both (R-34).
+decl release(app, key, value: any)
+
 release("crud_api", "digest", "sha256:9f2c4d0e8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d")
 release("crud_api", "schema", 42)
 
@@ -17,6 +20,20 @@ release("crud_api", "schema", 42)
   (comment)
   (edition
     (integer))
+  (comment)
+  (decl
+    (dotted_name
+      (identifier))
+    (columns
+      (field_declaration
+        (identifier))
+      (field_declaration
+        (identifier))
+      (field_declaration
+        (identifier)
+        (type
+          (dotted_name
+            (identifier))))))
   (fact
     (call
       (identifier)

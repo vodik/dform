@@ -298,6 +298,7 @@ fn is_term(k: SyntaxKind) -> bool {
         k,
         LITERAL
             | CHAIN
+            | CALL_CHAIN
             | CALL
             | LIST
             | OBJECT
@@ -476,19 +477,33 @@ enum Op {
 struct Chain {
     head: String,
     head_kind: SyntaxKind,
+    /// The call a `CALL_CHAIN` reads the result of (R-71), `f(x).p`; its
+    /// `head` is then empty.
+    call: Option<SyntaxNode>,
     range: rowan::TextRange,
     ops: Vec<Op>,
 }
 
 impl Chain {
+    /// A chain that starts with a name.
     fn of(n: &SyntaxNode) -> Option<Chain> {
-        if n.kind() != CHAIN {
+        Chain::read(n).filter(|c| c.call.is_none())
+    }
+
+    /// A chain, or a read of a call's result (R-71): what `has`, a truth
+    /// test and a term resolve.
+    fn read(n: &SyntaxNode) -> Option<Chain> {
+        if !matches!(n.kind(), CHAIN | CALL_CHAIN) {
             return None;
         }
         let mut it = n
             .children_with_tokens()
             .filter(|e| e.as_token().is_none_or(|t| !t.kind().is_trivia()));
-        let head = it.next()?.into_token()?;
+        let (head, head_kind, call) = match it.next()? {
+            rowan::NodeOrToken::Node(c) if c.kind() == CALL => (String::new(), CALL, Some(c)),
+            rowan::NodeOrToken::Node(_) => return None,
+            rowan::NodeOrToken::Token(t) => (t.text().to_string(), t.kind(), None),
+        };
         let mut ops = Vec::new();
         let mut pending: Option<SyntaxKind> = None;
         for e in it {
@@ -521,8 +536,9 @@ impl Chain {
             }
         }
         Some(Chain {
-            head: head.text().to_string(),
-            head_kind: head.kind(),
+            head,
+            head_kind,
+            call,
             range: n.text_range(),
             ops,
         })
@@ -3840,7 +3856,7 @@ impl<'u> Lowerer<'u> {
                 out.push(Lit::Pos(atom));
             }
             LIT_TRUTH => {
-                let c = terms(n).next().and_then(|t| Chain::of(&t)).ok_or(Skip)?;
+                let c = terms(n).next().and_then(|t| Chain::read(&t)).ok_or(Skip)?;
                 let res = self.resolve(rc, &c, out)?;
                 match self.read_atom(rc, &res, Term::Val(Value::Bool(true)), span) {
                     Some(a) => out.push(Lit::Pos(a)),
@@ -3856,7 +3872,7 @@ impl<'u> Lowerer<'u> {
                 out.push(if n.kind() == LIT_IN { lit } else { negate(lit) });
             }
             LIT_HAS => {
-                let c = terms(n).next().and_then(|t| Chain::of(&t)).ok_or(Skip)?;
+                let c = terms(n).next().and_then(|t| Chain::read(&t)).ok_or(Skip)?;
                 let res = self.resolve(rc, &c, out)?;
                 match self.read_atom(rc, &res, Term::Wildcard, span) {
                     Some(a) => out.push(Lit::Pos(a)),
@@ -3911,7 +3927,7 @@ impl<'u> Lowerer<'u> {
                 return Ok(());
             }
             LIT_TRUTH | LIT_HAS => {
-                let c = terms(n).next().and_then(|t| Chain::of(&t)).ok_or(Skip)?;
+                let c = terms(n).next().and_then(|t| Chain::read(&t)).ok_or(Skip)?;
                 let value = if n.kind() == LIT_HAS {
                     Term::Wildcard
                 } else {
@@ -4835,8 +4851,8 @@ impl<'u> Lowerer<'u> {
                     _ => Ok(Term::Val(Value::Bool(false))),
                 }
             }
-            CHAIN => {
-                let c = Chain::of(n).ok_or(Skip)?;
+            CHAIN | CALL_CHAIN => {
+                let c = Chain::read(n).ok_or(Skip)?;
                 // A resource by its bare name, given as a value: the
                 // reference, in its module or out of it (R-43).
                 if pos == Pos::Value
@@ -4913,6 +4929,7 @@ impl<'u> Lowerer<'u> {
                             let c = Chain {
                                 head: key.clone(),
                                 head_kind: k.kind(),
+                                call: None,
                                 range: k.text_range(),
                                 ops: Vec::new(),
                             };
@@ -5273,6 +5290,9 @@ impl<'u> Lowerer<'u> {
     /// terms are lowered in `rc`, their reads into `pre`.
     fn resolve(&mut self, rc: &mut Rc, c: &Chain, pre: &mut Vec<Lit>) -> L<Res> {
         let span = self.span_of(c.range);
+        if let Some(call) = &c.call {
+            return self.call_read(rc, call, &c.ops, pre);
+        }
         let h = c.head.as_str();
         if self.lenient && !rc.vars.contains_key(h) {
             if c.ops.iter().any(|o| !matches!(o, Op::Field(..))) {
@@ -5392,6 +5412,32 @@ impl<'u> Lowerer<'u> {
         }
         self.diags.push(d);
         Err(Skip)
+    }
+
+    /// `f(x).p[i]` (R-71): the call bound to a variable, once per rule, as
+    /// `v = f(x)` would, and the path read from it.
+    fn call_read(
+        &mut self,
+        rc: &mut Rc,
+        call: &SyntaxNode,
+        ops: &[Op],
+        pre: &mut Vec<Lit>,
+    ) -> L<Res> {
+        let t = self.bind(false, |l| l.term(rc, call, Pos::Content, pre))?;
+        let key = format!("call {t:?}");
+        let v = match rc.reads.get(&key) {
+            Some(v) => v.clone(),
+            None => {
+                let name = self.callee(call).unwrap_or_default();
+                let base = capitalise(name.rsplit('.').next().unwrap_or_default());
+                let v = var(&fresh(rc, &base));
+                pre.push(Lit::Eq(v.clone(), t));
+                rc.reads.insert(key, v.clone());
+                v
+            }
+        };
+        let path = self.segs(rc, ops, pre)?;
+        Ok(Res::Var { var: v, path })
     }
 
     /// A value name: `k(V)`, read once per rule. A `let` holding a

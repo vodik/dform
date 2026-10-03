@@ -675,6 +675,73 @@ p(x) where y = 1 + 2 * 3 - -4 / (5 % 2), z = a / b, v = m.i.p, u = t[x].p, s = f
         (true)))))
 
 ================================================================================
+A chain after a call reads its result (R-71)
+================================================================================
+
+p(x) where q(y), x = str.split(y, ":")[0], not has oci.parse(y).digest, json.decode(y).a["b"].c
+input p from toml("x").peerings
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)))
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier))))
+      (comparison
+        (identifier)
+        (index_expression
+          (call
+            (member_expression
+              (identifier)
+              (identifier))
+            (arguments
+              (identifier)
+              (string
+                (string_content))))
+          (integer)))
+      (not_literal
+        (has_literal
+          (member_expression
+            (call
+              (member_expression
+                (identifier)
+                (identifier))
+              (arguments
+                (identifier)))
+            (identifier))))
+      (truth_literal
+        (member_expression
+          (index_expression
+            (member_expression
+              (call
+                (member_expression
+                  (identifier)
+                  (identifier))
+                (arguments
+                  (identifier)))
+              (identifier))
+            (string
+              (string_content)))
+          (identifier)))))
+  (input_relation
+    (identifier)
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))))
+    (selector
+      (identifier))))
+
+================================================================================
 A body word is not a name
 :error
 ================================================================================

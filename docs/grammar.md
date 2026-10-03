@@ -1042,8 +1042,8 @@ error, a typo or a placeholder that should say so (R-2); `_x` opts out.
 ```
 lit        := "not" lit1 | "not" "{" body "}" | lit1
 lit1       := atom
-            | "has" chain                        ; the attribute has a value
-            | chain                              ; a truth test: == true
+            | "has" read                         ; the attribute has a value
+            | read                               ; a truth test: == true
             | term cmpop term (cmpop term)*      ; a <= b <= c is a <= b, b <= c
             | pattern "=" term                   ; a tuple or object pattern matches (R-58)
             | term "in" ("resource" | term | range)
@@ -1060,9 +1060,10 @@ add        := mul (("+" | "-") mul)*
 mul        := unary (("*" | "/" | "%") unary)*
 unary      := "-" unary | primary
 primary    := INT | QUANTITY | STRING | "true" | "false"
-            | chain | call | list | object | comprehension | "(" term ")"
+            | read | call | list | object | comprehension | "(" term ")"
 chain      := NAME ("." SEG | "[" term ("," term)* "]")*
 call       := chain "(" args ")"
+read       := chain | call ("." SEG | "[" term "]")+   ; a call's result, read (R-71)
 list       := "[" (term ("," term)* ","?)? "]"
 object     := "{" (key (":" term)? ("," key (":" term)?)* ","?)? "}"  ; `{ a }` is `{ a: a }`
 key        := NAME | STRING
@@ -1071,7 +1072,19 @@ type       := DOTTED ("(" type ("," type)* ")")? | "{" NAME ":" type ("," NAME "
 ```
 
 In a literal position a chain applied to arguments is an atom, unless an
-operator follows it (`f(x) == 3` compares a call). Precedence, loosest
+operator follows it (`f(x) == 3` compares a call).
+
+A `.p` or `[i]` after a call reads the call's result (R-71):
+`oci.parse(image).digest`, `str.split(s, ":")[0]`, `json.decode(t).a[0].b`,
+anywhere a chain stands, `has` and `not` included, so `not has
+oci.parse(c.image).digest` reads "no digest". It is the call bound to a
+variable and the path read from it, `p = oci.parse(image), p.digest`; a
+call with no value fails the literal as the binding would, and under `not`
+the binding is inside what is negated (`not has oci.parse("?").digest`
+holds). A call's result
+is never called (`f(x).g(y)` is an error: a function is named by a plain
+name), and after `from` a path after the call is the document's
+(`toml("x").peerings`, R-39). Precedence, loosest
 first: `+ -` (left), `* / %` (left), unary `-`. An aggregate (`count(x)`,
 `sum(x)`, `collect_set(x)`, ...) is bound in a body, `n = count(x)`
 ("Aggregates"). Named arguments
