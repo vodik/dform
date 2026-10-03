@@ -57,26 +57,26 @@ definite:
   spec.template.spec.containers[name=migrate].resources.requests.memory = "128Mi"
   spec.template.spec.restartPolicy = "Never"
 pending groups:
-? k8s.deployment["blue::deploy"] x unknown, on ?k8s.job["migrate-v42"].status.succeeded, resolves after tick 1  (reads blue::__instance("app"), which may derive after a boundary)
-? k8s.horizontal_pod_autoscaler["blue::hpa"] x unknown, on ?k8s.job["migrate-v42"].status.succeeded, resolves after tick 1  (reads blue::__instance("app"), which may derive after a boundary)
-? k8s.pod_disruption_budget["blue::pdb"] x unknown, on ?k8s.job["migrate-v42"].status.succeeded, resolves after tick 1  (reads blue::__instance("app"), which may derive after a boundary)
-? k8s.network_policy["blue::allow_http"] x unknown, on ?k8s.job["migrate-v42"].status.succeeded, resolves after tick 1  (reads blue::__instance("app"), which may derive after a boundary)
-? k8s.deployment["green::deploy"] x unknown, on ?k8s.job["migrate-v42"].status.succeeded, resolves after tick 1  (reads green::__instance("app"), which may derive after a boundary)
-? k8s.horizontal_pod_autoscaler["green::hpa"] x unknown, on ?k8s.job["migrate-v42"].status.succeeded, resolves after tick 1  (reads green::__instance("app"), which may derive after a boundary)
-? k8s.pod_disruption_budget["green::pdb"] x unknown, on ?k8s.job["migrate-v42"].status.succeeded, resolves after tick 1  (reads green::__instance("app"), which may derive after a boundary)
-? k8s.network_policy["green::allow_http"] x unknown, on ?k8s.job["migrate-v42"].status.succeeded, resolves after tick 1  (reads green::__instance("app"), which may derive after a boundary)
+? k8s.deployment["blue/deploy"] x unknown, on ?k8s.job["migrate-v42"].status.succeeded, resolves after tick 1  (reads blue::__instance("app"), which may derive after a boundary)
+? k8s.horizontal_pod_autoscaler["blue/hpa"] x unknown, on ?k8s.job["migrate-v42"].status.succeeded, resolves after tick 1  (reads blue::__instance("app"), which may derive after a boundary)
+? k8s.pod_disruption_budget["blue/pdb"] x unknown, on ?k8s.job["migrate-v42"].status.succeeded, resolves after tick 1  (reads blue::__instance("app"), which may derive after a boundary)
+? k8s.network_policy["blue/allow_http"] x unknown, on ?k8s.job["migrate-v42"].status.succeeded, resolves after tick 1  (reads blue::__instance("app"), which may derive after a boundary)
+? k8s.deployment["green/deploy"] x unknown, on ?k8s.job["migrate-v42"].status.succeeded, resolves after tick 1  (reads green::__instance("app"), which may derive after a boundary)
+? k8s.horizontal_pod_autoscaler["green/hpa"] x unknown, on ?k8s.job["migrate-v42"].status.succeeded, resolves after tick 1  (reads green::__instance("app"), which may derive after a boundary)
+? k8s.pod_disruption_budget["green/pdb"] x unknown, on ?k8s.job["migrate-v42"].status.succeeded, resolves after tick 1  (reads green::__instance("app"), which may derive after a boundary)
+? k8s.network_policy["green/allow_http"] x unknown, on ?k8s.job["migrate-v42"].status.succeeded, resolves after tick 1  (reads green::__instance("app"), which may derive after a boundary)
 ? k8s.service["api"] x unknown, on ?k8s.job["migrate-v42"].status.succeeded, resolves after tick 1  (reads serving(_), which is stuck)
 undetermined:
 ? deny "cutover to a color with unready pods" on ?k8s.job["migrate-v42"].status.succeeded, decided after tick 1  (reads undetermined aggregate attr)
 ? deny "migration failed; the rollout is held" on ?k8s.job["migrate-v42"].status.conditions, decided after tick 1  (member/2 over a null list)
-? deny "ref to an address no rule wants" on ?k8s.job["migrate-v42"].status.succeeded, decided after tick 1  (not want("k8s.deployment", "blue::deploy"): want has a stuck instance that may derive it)
-? deny "ref to an address no rule wants" on ?k8s.job["migrate-v42"].status.succeeded, decided after tick 1  (not want("k8s.deployment", "green::deploy"): want has a stuck instance that may derive it)
+? deny "ref to an address no rule wants" on ?k8s.job["migrate-v42"].status.succeeded, decided after tick 1  (not want("k8s.deployment", "blue/deploy"): want has a stuck instance that may derive it)
+? deny "ref to an address no rule wants" on ?k8s.job["migrate-v42"].status.succeeded, decided after tick 1  (not want("k8s.deployment", "green/deploy"): want has a stuck instance that may derive it)
 ? deny "a rollout runs a schema the migration has not reached" on ?k8s.job["migrate-v42"].status.succeeded, may derive after tick 1  (reads run(_, _, 42) with a stuck instance)
-? deny "container memory limit above 2Gi" on ?k8s.job["migrate-v42"].status.succeeded, may derive after tick 1  (reads container("blue::deploy", _), container("green::deploy", _) with a stuck instance)
-? deny "container requests more memory than its limit" on ?k8s.job["migrate-v42"].status.succeeded, may derive after tick 1  (reads container("blue::deploy", _), container("green::deploy", _) with a stuck instance)
-? deny "container without resource limits" on ?k8s.job["migrate-v42"].status.succeeded, may derive after tick 1  (reads container("blue::deploy", _), container("green::deploy", _) with a stuck instance)
-? deny "image not pinned by digest" on ?k8s.job["migrate-v42"].status.succeeded, may derive after tick 1  (reads container("blue::deploy", _), container("green::deploy", _) with a stuck instance)
-? deny "plaintext secret in env" on ?k8s.job["migrate-v42"].status.succeeded, may derive after tick 1  (reads container("blue::deploy", _), container("green::deploy", _) with a stuck instance)
+? deny "container memory limit above 2Gi" on ?k8s.job["migrate-v42"].status.succeeded, may derive after tick 1  (reads container("blue/deploy", _), container("green/deploy", _) with a stuck instance)
+? deny "container requests more memory than its limit" on ?k8s.job["migrate-v42"].status.succeeded, may derive after tick 1  (reads container("blue/deploy", _), container("green/deploy", _) with a stuck instance)
+? deny "container without resource limits" on ?k8s.job["migrate-v42"].status.succeeded, may derive after tick 1  (reads container("blue/deploy", _), container("green/deploy", _) with a stuck instance)
+? deny "image not pinned by digest" on ?k8s.job["migrate-v42"].status.succeeded, may derive after tick 1  (reads container("blue/deploy", _), container("green/deploy", _) with a stuck instance)
+? deny "plaintext secret in env" on ?k8s.job["migrate-v42"].status.succeeded, may derive after tick 1  (reads container("blue/deploy", _), container("green/deploy", _) with a stuck instance)
 apply order:
   tick 1
     google.compute_network["vpc"]
@@ -88,13 +88,13 @@ apply order:
     k8s.secret["db_conn"]
     k8s.job["migrate-v42"]
   tick 2
-    k8s.deployment["blue::deploy"]
-    k8s.horizontal_pod_autoscaler["blue::hpa"]
-    k8s.pod_disruption_budget["blue::pdb"]
-    k8s.network_policy["blue::allow_http"]
-    k8s.deployment["green::deploy"]
-    k8s.horizontal_pod_autoscaler["green::hpa"]
-    k8s.pod_disruption_budget["green::pdb"]
-    k8s.network_policy["green::allow_http"]
+    k8s.deployment["blue/deploy"]
+    k8s.horizontal_pod_autoscaler["blue/hpa"]
+    k8s.pod_disruption_budget["blue/pdb"]
+    k8s.network_policy["blue/allow_http"]
+    k8s.deployment["green/deploy"]
+    k8s.horizontal_pod_autoscaler["green/hpa"]
+    k8s.pod_disruption_budget["green/pdb"]
+    k8s.network_policy["green/allow_http"]
     k8s.service["api"]
 -- stderr --

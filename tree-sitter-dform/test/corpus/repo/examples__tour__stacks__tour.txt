@@ -95,10 +95,10 @@ resource net.subnet public { vpc = main, cidr = "10.0.0.0/24", visibility = "pub
 # row per answer:
 #
 #   $ dform query 'attr(net.subnet, s, "zone", z)'
-#   "private-us-test-1a"         "us-test-1a"
-#   "private-us-test-1b"         "us-test-1b"
+#   "private-us-test-1a"        "us-test-1a"
+#   "private-us-test-1b"        "us-test-1b"
 #
-# The `blue::` and `green::` rows are section 7's networks, which read
+# The `blue/` and `green/` rows are section 7's networks, which read
 # `zone` too: a third zone is one more line here, and every rule that
 # reads `zone` follows it.
 
@@ -184,9 +184,9 @@ deny "a database must not be public" { database: pg } where pg in db.postgres, p
 #   net.vpc["main"].tags = {team: "shop"}
 #     merged from 1 contribution
 #     └─ {team: "shop"}
-#          stacks/tour.df:172  set r.tags = { team: "shop" } where r in resource
+#          stacks/tour.df:170  set r.tags = { team: "shop" } where r in resource
 #          with r = net.vpc["main"]
-#          └─ net.vpc["main"]   stacks/tour.df:48
+#          └─ net.vpc["main"]   stacks/tour.df:46
 #
 # Read it from the top: the tag was added by the statement at line 181 of
 # this file (section 5's), because the network exists, which line 48 says. The
@@ -198,7 +198,7 @@ deny "a database must not be public" { database: pg } where pg in db.postgres, p
 # A component is a block of resources with named inputs, made once per
 # `instance`, as Terraform's modules are. Below, a network like sections 1
 # to 3's is made twice, blue and green; a copy's resources are named for
-# their instance (`net.vpc["blue::vpc"]`).
+# their instance (`net.vpc["blue/vpc"]`).
 #
 # Two things differ from Terraform. A copy's resources are not hidden
 # behind its outputs: section 5's tag rule reached them, and section 4's
@@ -206,7 +206,7 @@ deny "a database must not be public" { database: pg } where pg in db.postgres, p
 # attribute can have several authors: the component's vpc writes one tag,
 # the policy another, and the vpc has both:
 #
-#   $ dform query 'net.vpc["blue::vpc"].tags'
+#   $ dform query 'net.vpc["blue/vpc"].tags'
 #   {component: "network", team: "shop"}
 #
 # In Terraform an attribute has one author, and a policy's tag has to be
@@ -242,7 +242,7 @@ instance network green { cidr = "10.2.0.0/16" }
 #
 #   $ dform plan tour env=prod
 #   + net.vpc_peering["main-blue"]
-#     accepter_vpc = ?net.vpc["blue::vpc"]
+#     accepter_vpc = ?net.vpc["blue/vpc"]
 #     requester_vpc = ?net.vpc["main"]
 #
 # A third spoke is an instance and a `spoke` line: its peering, and the

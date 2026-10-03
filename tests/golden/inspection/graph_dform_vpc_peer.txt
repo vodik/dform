@@ -1,6 +1,6 @@
 digraph "vpc_peer" {
   rankdir=LR;
-  "main::vpc";
-  "peer::vpc";
-  "main::vpc" -> "peer::vpc";
+  "main/vpc";
+  "peer/vpc";
+  "main/vpc" -> "peer/vpc";
 }
