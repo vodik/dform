@@ -1720,6 +1720,11 @@ read as an `int`, a `bool` or an `inet` when the column is one, a string as
 an `inet` in any format), and a row that is not is an error naming the file
 and line: `data/peerings.csv:3: column env: "qa" is not enum(dev, stg,
 prod)`. A `secret` column is a compile error: rows are read in the clear.
+A document's values read one way here, in a loader call and in
+`json.decode`, `yaml.decode` and `toml.decode`: a number is an int (`2.0`
+is `2`; a fraction is an error, a value's numbers are whole), a `null`
+member of an object is absent (a null elsewhere is an error), a YAML tag
+is an error naming its line, and a TOML datetime is a `time`.
 The loader never reshapes: transforms belong in rules. Paths are relative
 to the declaring file; `peering(env: e, name: n)` reads a row by its
 columns' names.

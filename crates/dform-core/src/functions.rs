@@ -1239,9 +1239,7 @@ pub const BODIES: &[(&str, Body)] = &[
         _ => None,
     }),
     ("json.decode", |a| match a {
-        [Value::Str(s)] => serde_json::from_str::<serde_json::Value>(s)
-            .ok()
-            .and_then(|j| json_to_value(&j)),
+        [Value::Str(s)] => crate::tables::document("json", s).ok(),
         _ => None,
     }),
     ("json.encode", |a| match a {
@@ -1251,9 +1249,7 @@ pub const BODIES: &[(&str, Body)] = &[
         _ => None,
     }),
     ("yaml.decode", |a| match a {
-        [Value::Str(s)] => serde_yaml::from_str::<serde_json::Value>(s)
-            .ok()
-            .and_then(|j| json_to_value(&j)),
+        [Value::Str(s)] => crate::tables::document("yaml", s).ok(),
         _ => None,
     }),
     ("yaml.encode", |a| match a {
@@ -1263,9 +1259,7 @@ pub const BODIES: &[(&str, Body)] = &[
         _ => None,
     }),
     ("toml.decode", |a| match a {
-        [Value::Str(s)] => toml::from_str::<serde_json::Value>(s)
-            .ok()
-            .and_then(|j| json_to_value(&j)),
+        [Value::Str(s)] => crate::tables::document("toml", s).ok(),
         _ => None,
     }),
     ("toml.encode", |a| match a {
@@ -1614,26 +1608,6 @@ fn is_tag(s: &str) -> bool {
 
 fn is_registry(s: &str) -> bool {
     !s.is_empty() && (s.contains('.') || s.contains(':') || s == "localhost")
-}
-
-/// A JSON value read into a dform one (`json.decode`, `yaml.decode`,
-/// `toml.decode`, all through `serde_json::Value` as their common
-/// model); none for a JSON `null` (dform has no scalar for it) or a
-/// number that is not whole.
-fn json_to_value(j: &serde_json::Value) -> Option<Value> {
-    use serde_json::Value as J;
-    Some(match j {
-        J::Null => return None,
-        J::Bool(b) => Value::Bool(*b),
-        J::Number(n) => Value::Int(n.as_i64()?),
-        J::String(s) => Value::Str(s.clone()),
-        J::Array(xs) => Value::List(xs.iter().map(json_to_value).collect::<Option<Vec<_>>>()?),
-        J::Object(m) => Value::Obj(
-            m.iter()
-                .map(|(k, v)| json_to_value(v).map(|v| (k.clone(), v)))
-                .collect::<Option<BTreeMap<_, _>>>()?,
-        ),
-    })
 }
 
 /// Whether `v` has no reference and no null anywhere inside it

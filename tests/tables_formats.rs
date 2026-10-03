@@ -252,3 +252,44 @@ fn a_tables_rows_and_stated_facts_are_one_relation() {
     let r = s.run(&["query", "t(p)", "p.df"]).failure();
     assert!(r.stderr.contains("no column p"), "{}", r.stderr);
 }
+
+/// A document's values read one way in a table and in `json.decode` (the
+/// url ticket's decisions): a whole float is an int, a fraction is an
+/// error, a null member is absent (so the row lacks the column), a YAML
+/// tag is an error naming its line, a TOML datetime is a time.
+#[test]
+fn a_documents_corners_read_as_json_decode_reads_them() {
+    let s = scratch("corners");
+    let table = |format: &str, decl: &str| {
+        format!(
+            "\ninput t from {format}(\"t.{format}\")\ndecl t({decl})\n\
+             warn \"${{n}}\" where t(n)\nprovider fake\n"
+        )
+    };
+    s.write("p.df", &table("json", "n: int"));
+    s.write("t.json", "[{\"n\": 2.0}]");
+    let r = s.run(&["query", "t(n)", "p.df"]).success();
+    assert!(r.stdout.contains('2'), "{}", r.stdout);
+    s.write("t.json", "[{\"n\": 1.5}]");
+    let r = s.run(&["plan", "p.df"]).failure();
+    assert!(
+        r.stderr.contains("1.5 is a number with a fraction"),
+        "{}",
+        r.stderr
+    );
+    s.write("t.json", "[{\"n\": null}]");
+    let r = s.run(&["plan", "p.df"]).failure();
+    assert!(r.stderr.contains("t.json:1: no column n"), "{}", r.stderr);
+    s.write("p.df", &table("yaml", "n: string"));
+    s.write("t.yaml", "- n: a\n- n: !secret b\n");
+    let r = s.run(&["plan", "p.df"]).failure();
+    assert!(
+        r.stderr.contains("line 2: a tag (!secret) is not a value"),
+        "{}",
+        r.stderr
+    );
+    s.write("p.df", &table("toml", "n: time"));
+    s.write("t.toml", "[[t]]\nn = 2026-10-02T09:00:00Z\n");
+    let r = s.run(&["query", "t(n)", "p.df"]).success();
+    assert!(r.stdout.contains("2026-10-02T09:00:00"), "{}", r.stdout);
+}

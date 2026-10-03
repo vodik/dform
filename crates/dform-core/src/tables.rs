@@ -554,7 +554,11 @@ fn rows(format: &str, table: &str, text: &str) -> Result<Vec<Row>> {
                     };
                     let cells = m
                         .iter()
-                        .map(|(k, v)| Ok((k.clone(), Cell::Value(json(v)?))))
+                        .filter_map(|(k, v)| {
+                            json(v)
+                                .map(|v| v.map(|v| (k.clone(), Cell::Value(v))))
+                                .transpose()
+                        })
                         .collect::<Result<_>>()
                         .with_context(|| format!("line {line}"))?;
                     Ok(Row {
@@ -586,11 +590,12 @@ fn rows(format: &str, table: &str, text: &str) -> Result<Vec<Row>> {
                     let serde_yaml::Value::Mapping(m) = item else {
                         bail!("row {}: a row is a mapping", i + 1);
                     };
-                    let cells = m
-                        .into_iter()
-                        .map(|(k, v)| Ok((yaml_key(&k)?, Cell::Value(yaml(v)?))))
-                        .collect::<Result<_>>()
+                    let row = yaml(serde_yaml::Value::Mapping(m), text)
                         .with_context(|| format!("row {}", i + 1))?;
+                    let Some(Value::Obj(row)) = row else {
+                        unreachable!("a mapping reads as an object")
+                    };
+                    let cells = row.into_iter().map(|(k, v)| (k, Cell::Value(v))).collect();
                     Ok(Row {
                         line,
                         cells,
@@ -625,8 +630,9 @@ fn rows(format: &str, table: &str, text: &str) -> Result<Vec<Row>> {
                     };
                     let cells = t
                         .into_iter()
-                        .map(|(k, v)| (k, Cell::Value(toml_value(v))))
-                        .collect();
+                        .map(|(k, v)| Ok((k, Cell::Value(toml_value(v)?))))
+                        .collect::<Result<_>>()
+                        .with_context(|| format!("row {}", i + 1))?;
                     Ok(Row {
                         line: lines.as_ref().map(|ls| ls[i]),
                         cells,
@@ -639,13 +645,13 @@ fn rows(format: &str, table: &str, text: &str) -> Result<Vec<Row>> {
     }
 }
 
-/// A whole document as one value (`--set k=@FILE`): `yaml`, `json` or
-/// `toml`.
+/// A whole document as one value (`--set k=@FILE`, `json.decode`):
+/// `yaml`, `json` or `toml`.
 pub fn document(format: &str, text: &str) -> Result<Value> {
     match format {
-        "json" => json(&serde_json::from_str(text)?),
-        "yaml" => yaml(serde_yaml::from_str(text)?),
-        "toml" => Ok(toml_value(toml::from_str(text)?)),
+        "json" => present(json(&serde_json::from_str(text)?)?),
+        "yaml" => present(yaml(serde_yaml::from_str(text)?, text)?),
+        "toml" => toml_value(toml::from_str(text)?),
         f => bail!("unknown format {f}"),
     }
 }
@@ -675,8 +681,9 @@ fn leaves(format: &str, text: &str) -> Result<Vec<(Option<usize>, String, Value)
             for (k, raw) in m {
                 let line = line_of(text, raw.get().as_ptr() as usize - text.as_ptr() as usize);
                 let v: serde_json::Value = serde_json::from_str(raw.get())?;
-                let v = json(&v).with_context(|| format!("line {line}"))?;
-                flatten(&mut out, Some(line), k, v);
+                if let Some(v) = json(&v).with_context(|| format!("line {line}"))? {
+                    flatten(&mut out, Some(line), k, v);
+                }
             }
         }
         "yaml" => {
@@ -686,7 +693,9 @@ fn leaves(format: &str, text: &str) -> Result<Vec<(Option<usize>, String, Value)
             let lines = yaml_key_lines(text);
             for (k, v) in m {
                 let k = yaml_key(&k)?;
-                let v = yaml(v).with_context(|| k.clone())?;
+                let Some(v) = yaml(v, text).with_context(|| k.clone())? else {
+                    continue;
+                };
                 let mut leaves = Vec::new();
                 flatten(&mut leaves, None, k, v);
                 for (_, path, v) in leaves {
@@ -709,7 +718,8 @@ fn leaves(format: &str, text: &str) -> Result<Vec<(Option<usize>, String, Value)
             let m: BTreeMap<String, toml::Spanned<toml::Value>> = toml::from_str(text)?;
             for (k, v) in m {
                 let line = line_of(text, v.span().start);
-                flatten(&mut out, Some(line), k, toml_value(v.into_inner()));
+                let v = toml_value(v.into_inner()).with_context(|| format!("line {line}"))?;
+                flatten(&mut out, Some(line), k, v);
             }
         }
         f => bail!("unknown format {f}"),
@@ -760,19 +770,54 @@ fn yaml_key_lines(text: &str) -> BTreeMap<String, usize> {
     out
 }
 
-/// A JSON value: an integer or not (a float is its text); `null` is not a
-/// value.
-fn json(j: &serde_json::Value) -> Result<Value> {
-    Ok(match j {
-        serde_json::Value::Null => bail!("null is not a value"),
-        serde_json::Value::Array(xs) => Value::List(xs.iter().map(json).collect::<Result<_>>()?),
-        serde_json::Value::Object(m) => Value::Obj(
-            m.iter()
-                .map(|(k, v)| Ok((k.clone(), json(v)?)))
+// One reading of a document's values, for a table's rows, `set from`,
+// a loader call and `json.decode`, `yaml.decode`, `toml.decode` alike
+// (the url ticket's decisions): a number is an int (a float with no
+// fraction is one; one with a fraction is an error: the value model's
+// numbers are whole, a fraction is a quantity's); `null` is no value,
+// so an object's member that is null is absent and a null anywhere else
+// is an error; a YAML tag is an error naming its line; a TOML datetime is
+// a `time` (one with an offset: a local one is an error); a YAML key that
+// is a number or a bool is its text.
+
+/// A number as a value: an integer, or a float that is one.
+fn number(text: String, int: Option<i64>, float: Option<f64>) -> Result<Value> {
+    if let Some(i) = int {
+        return Ok(Value::Int(i));
+    }
+    match float {
+        Some(f) if f.fract() == 0.0 && f.abs() < 9.0e15 => Ok(Value::Int(f as i64)),
+        _ => bail!(
+            "{text} is a number with a fraction: a value's numbers are whole \
+             (write a quantity, `500m`, or a string)"
+        ),
+    }
+}
+
+/// A null where a value must be (a list's element, the document itself).
+fn present(v: Option<Value>) -> Result<Value> {
+    v.ok_or_else(|| anyhow!("null is not a value (a null member of an object is absent)"))
+}
+
+/// A JSON value; `None` for `null`.
+fn json(j: &serde_json::Value) -> Result<Option<Value>> {
+    use serde_json::Value as J;
+    Ok(Some(match j {
+        J::Null => return Ok(None),
+        J::Bool(b) => Value::Bool(*b),
+        J::Number(n) => number(n.to_string(), n.as_i64(), n.as_f64())?,
+        J::String(s) => Value::Str(s.clone()),
+        J::Array(xs) => Value::List(
+            xs.iter()
+                .map(|x| present(json(x)?))
                 .collect::<Result<_>>()?,
         ),
-        j => crate::provider::json_to_value(j),
-    })
+        J::Object(m) => Value::Obj(
+            m.iter()
+                .filter_map(|(k, v)| json(v).map(|v| v.map(|v| (k.clone(), v))).transpose())
+                .collect::<Result<_>>()?,
+        ),
+    }))
 }
 
 fn yaml_key(k: &serde_yaml::Value) -> Result<String> {
@@ -784,37 +829,62 @@ fn yaml_key(k: &serde_yaml::Value) -> Result<String> {
     }
 }
 
-fn yaml(v: serde_yaml::Value) -> Result<Value> {
+/// A YAML value; `None` for `null`. `text` is the document, for the line
+/// of a tag.
+fn yaml(v: serde_yaml::Value, text: &str) -> Result<Option<Value>> {
     use serde_yaml::Value as Y;
-    Ok(match v {
-        Y::Null => bail!("null is not a value"),
+    Ok(Some(match v {
+        Y::Null => return Ok(None),
         Y::Bool(b) => Value::Bool(b),
-        Y::Number(n) => match n.as_i64() {
-            Some(i) => Value::Int(i),
-            None => Value::Str(n.to_string()),
-        },
+        Y::Number(n) => number(n.to_string(), n.as_i64(), n.as_f64())?,
         Y::String(s) => Value::Str(s),
-        Y::Sequence(xs) => Value::List(xs.into_iter().map(yaml).collect::<Result<_>>()?),
-        Y::Mapping(m) => Value::Obj(
-            m.into_iter()
-                .map(|(k, v)| Ok((yaml_key(&k)?, yaml(v)?)))
+        Y::Sequence(xs) => Value::List(
+            xs.into_iter()
+                .map(|x| present(yaml(x, text)?))
                 .collect::<Result<_>>()?,
         ),
-        Y::Tagged(t) => bail!("a tag ({}) is not a value; convert in a rule", t.tag),
-    })
+        Y::Mapping(m) => Value::Obj(
+            m.into_iter()
+                .filter_map(|(k, v)| match (yaml_key(&k), yaml(v, text)) {
+                    (Ok(k), Ok(Some(v))) => Some(Ok((k, v))),
+                    (_, Ok(None)) => None,
+                    (Err(e), _) | (_, Err(e)) => Some(Err(e)),
+                })
+                .collect::<Result<_>>()?,
+        ),
+        Y::Tagged(t) => {
+            let tag = t.tag.to_string();
+            match text.find(&tag) {
+                Some(at) => bail!(
+                    "line {}: a tag ({tag}) is not a value; convert in a rule",
+                    line_of(text, at)
+                ),
+                None => bail!("a tag ({tag}) is not a value; convert in a rule"),
+            }
+        }
+    }))
 }
 
-fn toml_value(v: toml::Value) -> Value {
+/// A TOML value (TOML has no null).
+fn toml_value(v: toml::Value) -> Result<Value> {
     use toml::Value as T;
-    match v {
+    Ok(match v {
         T::String(s) => Value::Str(s),
         T::Integer(i) => Value::Int(i),
-        T::Float(f) => Value::Str(f.to_string()),
+        T::Float(f) => number(f.to_string(), None, Some(f))?,
         T::Boolean(b) => Value::Bool(b),
-        T::Datetime(d) => Value::Str(d.to_string()),
-        T::Array(xs) => Value::List(xs.into_iter().map(toml_value).collect()),
-        T::Table(m) => Value::Obj(m.into_iter().map(|(k, v)| (k, toml_value(v))).collect()),
-    }
+        T::Datetime(d) => {
+            Value::Time(crate::time::Time::parse(&d.to_string()).map_err(|_| {
+                anyhow!("{d} is not a time: a time has an offset (`{d}Z`) or a zone")
+            })?)
+        }
+        T::Array(xs) => Value::List(xs.into_iter().map(toml_value).collect::<Result<_>>()?),
+        T::Table(m) => Value::Obj(
+            m.into_iter()
+                .map(|(k, v)| Ok((k, toml_value(v)?)))
+                .collect::<Result<_>>()?,
+        ),
+    })
 }
 
 /// `set from DOC`, lowered (`transform::lower`): the rule the
