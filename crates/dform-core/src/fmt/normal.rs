@@ -218,17 +218,9 @@ impl Ctx<'_> {
                         }
                     }
                 }
-                // `=` where both sides are bound tests: `==`. A pattern on
-                // the left of `=` matches, whatever it names (R-58).
-                if op.kind() == EQ
-                    && !matches!(sides[0].kind(), TUPLE | OBJECT)
-                    && self.bound(&sides[0], bound)
-                    && self.bound(&sides[1], bound)
-                {
-                    let r = op.text_range();
-                    self.edits
-                        .push((r.start().into(), r.end().into(), "==".to_string()));
-                }
+                // `=` binds and `==` compares; fmt never trades one for the
+                // other. A `=` with both sides bound is the resolver's
+                // error (R-10), not a spelling fmt corrects.
             }
             LIT_ATOM => {
                 // `env("prod")` for a value name: the comparison.
