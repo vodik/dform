@@ -27,7 +27,7 @@ struct Client {
 
 impl Client {
     fn start(root: &Path, options: Value) -> Client {
-        Client::start_with(root, options, Command::new(env!("CARGO_BIN_EXE_dform")))
+        Client::start_with(root, options, common::dform())
     }
 
     /// A server run as `command` (its environment) says.
@@ -836,7 +836,7 @@ fn quick_fix(root: &Path, file: &Path, edited: &str, needle: &str, title: &str) 
         }
         // A program stays formatted; dform.toml is not a program.
         if path.extension().is_some_and(|e| e == "df") {
-            let fmt = Command::new(env!("CARGO_BIN_EXE_dform"))
+            let fmt = common::dform()
                 .args(["fmt", "--check"])
                 .arg(&path)
                 .current_dir(root)
@@ -1538,7 +1538,7 @@ fn an_s3_deployment_is_read_with_credentials() {
             .map(|d| d["message"].as_str().unwrap().to_string())
             .collect()
     };
-    let mut with = Command::new(env!("CARGO_BIN_EXE_dform"));
+    let mut with = common::dform();
     with.envs(creds);
     let mut c = Client::start_with(&root, json!({}), with);
     c.open(&file);
@@ -1546,7 +1546,7 @@ fn an_s3_deployment_is_read_with_credentials() {
     assert_eq!(errors(&ds), [deny], "{}", json!(ds));
     c.shutdown();
 
-    let mut without = Command::new(env!("CARGO_BIN_EXE_dform"));
+    let mut without = common::dform();
     for k in [
         "DFORM_S3_ACCESS_KEY_ID",
         "DFORM_S3_SECRET_ACCESS_KEY",

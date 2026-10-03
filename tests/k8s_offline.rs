@@ -10,7 +10,6 @@ use serde_json::{Value as Json, json};
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::process::Command;
 use std::sync::{Arc, Mutex};
 
 fn k8s() -> String {
@@ -20,7 +19,7 @@ fn k8s() -> String {
 /// `dform ARGS` in the scratch directory with no cluster in reach but the
 /// one `kubeconfig` names (none: offline).
 fn dform<S: AsRef<std::ffi::OsStr>>(s: &Scratch, kubeconfig: Option<&str>, args: &[S]) -> Run {
-    let mut c = Command::new(env!("CARGO_BIN_EXE_dform"));
+    let mut c = common::dform();
     c.args(common::yes(args))
         .current_dir(&s.dir)
         .env_remove("KUBERNETES_SERVICE_HOST")

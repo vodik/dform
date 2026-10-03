@@ -9,7 +9,6 @@
 mod common;
 use common::{Run, Scratch, repo};
 use serde_json::{Value as Json, json};
-use std::process::Command;
 
 fn k8s() -> String {
     common::exe("dform-provider-k8s")
@@ -70,7 +69,7 @@ impl Drop for Namespace {
 }
 
 fn dform(s: &Scratch, kubeconfig: &str, args: &[&str]) -> Run {
-    let out = Command::new(env!("CARGO_BIN_EXE_dform"))
+    let out = common::dform()
         .args(common::yes(args))
         .current_dir(&s.dir)
         .env("KUBECONFIG", kubeconfig)
@@ -497,7 +496,7 @@ fn a_kubeconfig_held_as_a_secret_configures_the_provider() {
     );
     let set = format!("kubeconfig={text}");
     let run = |args: &[&str]| {
-        let out = Command::new(env!("CARGO_BIN_EXE_dform"))
+        let out = common::dform()
             .args(args)
             .args(["--set", &set])
             .current_dir(&s.dir)
