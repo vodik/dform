@@ -554,7 +554,7 @@ instance network green { cidr = "10.2.0.0/16" } where env == "prod"
 
 Inside, `vpc` is the copy's own resource and `az(..)` is the stack's
 table, read like any fact. `green` exists only in prod. The copy's VPC is
-`aws.vpc["blue::vpc"]` everywhere else, another block reads it as
+`aws.vpc["blue/vpc"]` everywhere else, another block reads it as
 `blue.vpc`, and `network[t].vpc` ranges over every copy. An input with no
 value is the same error wherever it is: in a stack, a module, or a
 component.
