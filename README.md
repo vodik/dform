@@ -586,7 +586,8 @@ provider with a `provider` statement.
 A `required` attribute the program does not set is a plan error. Lists with
 `type_list_key` are diffed by key (`spec.template.spec.containers[name=web].image`),
 lists of type `set` as sets. A program writes a keyed list by element too:
-`set w.spec.template.spec.containers[c.name].resources.limits = { .. } @default`
+`set c.resources.limits = { .. } @default where w in k8s.deployment, c in
+w.spec.template.spec.containers` (or `containers[c.name].resources.limits`)
 gives every container that does not set its own (docs/grammar.md, `set`),
 and two authors' lists merge by key. A `type_mint` string may use `{type}`, `{name}`,
 `{attr}`, `{hash}`, `{n}` and `{doc:PATH}` (the program's value at PATH, e.g.

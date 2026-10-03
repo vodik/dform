@@ -296,6 +296,18 @@ deny "cutover to a color with unready pods" { color: c } where {
 # Best practice
 ########################################
 
+# Every container has limits: these unless it sets its own. A container
+# is written by its key, `name`, so the write lands in the one the block
+# wrote (R-35, R-69); `@default` gives way to the container's own.
+set c.resources.limits = { cpu: 500m, memory: 256Mi } @default where {
+  w in k8s.deployment
+  c in w.spec.template.spec.containers
+}
+set c.resources.limits = { cpu: 500m, memory: 256Mi } @default where {
+  w in k8s.job
+  c in w.spec.template.spec.containers
+}
+
 container(w, c) where w in k8s.deployment, c in w.spec.template.spec.containers
 container(w, c) where w in k8s.job, c in w.spec.template.spec.containers
 
@@ -1687,6 +1699,71 @@ auto_reconcile(t, a, p) where drift(t, a, p, _, _), owned_label(l), p == "metada
   (comment)
   (comment)
   (comment)
+  (comment)
+  (comment)
+  (comment)
+  (set
+    (member_expression
+      (member_expression
+        (identifier)
+        (identifier))
+      (identifier))
+    (object
+      (object_field
+        (identifier)
+        (quantity))
+      (object_field
+        (identifier)
+        (quantity)))
+    (rank)
+    (body_block
+      (in_literal
+        (identifier)
+        (member_expression
+          (identifier)
+          (identifier)))
+      (in_literal
+        (identifier)
+        (member_expression
+          (member_expression
+            (member_expression
+              (member_expression
+                (identifier)
+                (identifier))
+              (identifier))
+            (identifier))
+          (identifier)))))
+  (set
+    (member_expression
+      (member_expression
+        (identifier)
+        (identifier))
+      (identifier))
+    (object
+      (object_field
+        (identifier)
+        (quantity))
+      (object_field
+        (identifier)
+        (quantity)))
+    (rank)
+    (body_block
+      (in_literal
+        (identifier)
+        (member_expression
+          (identifier)
+          (identifier)))
+      (in_literal
+        (identifier)
+        (member_expression
+          (member_expression
+            (member_expression
+              (member_expression
+                (identifier)
+                (identifier))
+              (identifier))
+            (identifier))
+          (identifier)))))
   (rule
     (call
       (identifier)

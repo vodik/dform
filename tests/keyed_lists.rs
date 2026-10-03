@@ -75,6 +75,30 @@ fn an_indexed_default_writes_every_element_and_yields_to_its_own() {
     }
 }
 
+/// R-69: `set c.p` with `c` an element of a keyed list writes that element;
+/// the same plan as the indexed form.
+#[test]
+fn set_writes_through_a_bound_element() {
+    let s = project(
+        "kl-bound",
+        "set c.resources.limits = { cpu: 500m, memory: 256Mi } @default \
+         where w in k8s.deployment, c in w.spec.template.spec.containers\n\
+         set c.env = [{ name: \"POS\", value: \"${i}\" }] \
+         where w in k8s.deployment, (i, c) in w.spec.template.spec.containers",
+    );
+    let r = plan(&s).success();
+    has(
+        &r,
+        &[
+            "containers[name=api].resources.limits.cpu = \"500m\"",
+            "containers[name=side].resources.limits.cpu = \"2\"",
+            "containers[name=side].resources.limits.memory = \"1Gi\"",
+            "containers[name=api].env[name=POS].value = \"0\"",
+            "containers[name=side].env[name=POS].value = \"1\"",
+        ],
+    );
+}
+
 /// The element write's rule reads the list as the blocks and whole-list
 /// writes give it (the base), so it may test what it writes.
 #[test]
@@ -156,6 +180,23 @@ fn an_unkeyed_list_is_one_value() {
         ) && r.stderr.contains(
             "type_list_key(k8s.deployment, \"spec.template.spec.tolerations\", [\"FIELD\"])"
         ),
+        "{}",
+        r.stderr
+    );
+}
+
+/// `set c.p` over an unkeyed list is the same error.
+#[test]
+fn a_bound_element_of_an_unkeyed_list_is_an_error() {
+    let s = project(
+        "kl-bound-unkeyed",
+        "set t.effect = \"NoSchedule\" \
+         where w in k8s.deployment, t in w.spec.template.spec.tolerations",
+    );
+    let r = plan(&s).failure();
+    assert!(
+        r.stderr
+            .contains("spec.template.spec.tolerations is not a keyed list"),
         "{}",
         r.stderr
     );

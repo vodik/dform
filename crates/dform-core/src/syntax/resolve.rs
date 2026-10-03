@@ -631,6 +631,9 @@ struct Rc {
     /// (`deformation(k, r, _)` and no `r in T`): a reference whose
     /// attributes nothing can read (R-43).
     untyped_refs: BTreeSet<String>,
+    /// Source variable -> the resource list its `in` ranges over, `(T, A,
+    /// path)`: `set c.p` writes that element (R-69).
+    elems: BTreeMap<String, (Term, Term, String)>,
 }
 
 /// An error already recorded in `diags`.
@@ -3240,7 +3243,7 @@ impl<'u> Lowerer<'u> {
                     self.diags.push(d);
                     return Err(Skip);
                 }
-                let value = self.term(&mut rc, &rhs, Pos::Value, &mut body)?;
+                let value = self.term(rc, rhs, Pos::Value, &mut body)?;
                 let head = atom_at(
                     "arg",
                     vec![
@@ -3252,12 +3255,12 @@ impl<'u> Lowerer<'u> {
                     ],
                     span,
                 );
-                self.check_bound(&rc, &body, &atom_terms(&head))?;
-                return Ok(vec![if body.is_empty() && !has_body {
+                self.check_bound(rc, &body, &atom_terms(&head))?;
+                return Ok(if body.is_empty() && !has_body {
                     Stmt::Fact(head)
                 } else {
                     Stmt::Rule(RuleStmt { head, body })
-                }]);
+                });
             }
             Target::Input(k) => {
                 // A stack input: `input(k, t)`, as `--set k=t` gives it.
@@ -3363,6 +3366,31 @@ impl<'u> Lowerer<'u> {
                 c.fields()[1..].join("."),
                 own.then(|| format!("use {}", c.head)),
             ));
+        }
+        // An element of a keyed list a variable ranges over: `set c.p = v
+        // where c in w.containers` writes `w.containers[c].p` (R-69).
+        if let Some((typ, addr, list)) = rc.elems.get(&c.head).cloned()
+            && !c.ops.is_empty()
+        {
+            let mut rest = Vec::new();
+            for op in &c.ops {
+                match op {
+                    Op::Field(f) => rest.push(f.clone()),
+                    Op::Index(_, r) | Op::Keyed(_, r) => {
+                        return self.error(
+                            self.span_of(*r),
+                            format!(
+                                "`{}` is an element of `{list}`: what `set` writes in it is a \
+                                 path of fields, `{}.p.q`",
+                                c.head, c.head
+                            ),
+                        );
+                    }
+                }
+            }
+            let key = var(&self.var_named(rc, &c.head, span));
+            let block = self.owning_block(scope, &typ, &addr);
+            return Ok(Target::Element(typ, addr, list, key, rest, block));
         }
         // An instance's input: `n.k`.
         if let [Op::Field(k)] = c.ops.as_slice()
@@ -4152,16 +4180,46 @@ impl<'u> Lowerer<'u> {
             return Ok(Lit::Pos(atom_at("want", vec![typ.unwrap(), lhs], span)));
         }
         let rhs = ts.get(1).ok_or(Skip)?;
+        let of = self.resource_list(rc, rhs);
         let list = if rhs.kind() == RANGE {
             self.range(rc, rhs, out)?
         } else {
             self.bind(false, |l| l.term(rc, rhs, Pos::Content, out))?
         };
+        // The element's name, for `set c.p` (R-69): `c in L`, `(i, c) in L`.
+        let elem = match lhs_node.kind() {
+            TUPLE => terms(lhs_node).nth(1),
+            _ => Some(lhs_node.clone()),
+        };
+        if let (Some(of), Some(c)) = (of, elem.as_ref().and_then(Chain::of))
+            && c.is_bare()
+        {
+            rc.elems.insert(c.head, of);
+        }
         if lhs_node.kind() == TUPLE {
             return self.pattern_in(rc, lhs_node, list, out, span);
         }
         let item = self.term(rc, lhs_node, Pos::Content, out)?;
         Ok(Lit::Pos(atom_at("member", vec![list, item], span)))
+    }
+
+    /// The resource attribute `t` names, `(T, A, path)`, when it is one
+    /// at a constant path (`w.spec.template.spec.containers`). Resolved on
+    /// the side: the caller lowers `t` itself.
+    fn resource_list(&mut self, rc: &Rc, t: &SyntaxNode) -> Option<(Term, Term, String)> {
+        let c = Chain::of(t).filter(|c| !c.is_bare())?;
+        let (diags, helpers, negs) = (self.diags.len(), self.helpers.len(), self.negs);
+        let mut rc = rc.clone();
+        let res = self.probe(|l| l.resolve(&mut rc, &c, &mut Vec::new()));
+        self.diags.truncate(diags);
+        self.helpers.truncate(helpers);
+        self.negs = negs;
+        match res {
+            Ok(Res::Ref { typ, addr, path }) => path_string(&path)
+                .filter(|p| !p.is_empty())
+                .map(|p| (typ, addr, p)),
+            _ => None,
+        }
     }
 
     /// A chain that must name one resource: its type and address.

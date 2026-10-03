@@ -531,7 +531,13 @@ a key no list has makes the element. Whole lists from several authors
 merge by key too, the highest rank's lists winning as a set's do. A list
 with no key is one value: writing an element of it is an error naming the
 `type_list_key` to declare. One index per written path: below the element
-the path is fields. The rule that writes elements reads its resource's
+the path is fields. A variable an `in` binds to an element of a
+resource's list (`c in w.spec.template.spec.containers`, or `(i, c) in`)
+is that element (R-69): `set c.resources.limits = { cpu: 500m, memory:
+256Mi } @default where w in k8s.deployment, c in
+w.spec.template.spec.containers` writes `w`'s container `c` by its key,
+as `containers[c.name]` would; over a list with no key it is the error
+above. The rule that writes elements reads its resource's
 attribute without element writes (its base: the blocks' and whole-list
 writes), so it may read the list it writes (`not has c.resources.limits`)
 without a cycle; it does not see another rule's element writes.
@@ -1284,6 +1290,7 @@ as it is.
 | `deny "a ${x}" where B`                   | `deny(M, ..) :- B, M = format("a %s", X)`              |
 | `set R.p = t @r where B` (`+=`: `arg_add`) | `arg(T, A, "p", t', r) :- B, reads`                   |
 | `set R.l[k].p = t @r where B` (`l` keyed) | `arg(T, A, "l[]", [k', {p: t'}], r) :- B, reads`, the body's reads of `R`'s attribute `attr_base(..)` |
+| `set c.p = t where .., c in R.l`          | `set R.l[c].p = t`: the key is `c`'s key fields        |
 | `output k: T = t` (`T` a resource type)   | `output k: addr`, and its value                        |
 | `output k = t` (no reads)                 | `output k = t'`                                        |
 | `output k = t where B` (reads, or a body) | `output(k, t') :- B, reads`                            |

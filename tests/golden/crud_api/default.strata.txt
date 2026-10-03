@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== examples/crud-api/stacks/crud_api.df: 254 nodes, 1512 edges (363 negative)
+== examples/crud-api/stacks/crud_api.df: 258 nodes, 1520 edges (369 negative)
    STRATIFIED, 24 strata
    stratum 0:
      (arg, google.sql_database, instance)
@@ -157,13 +157,14 @@ exit: ok
    stratum 6:
      (arg, k8s.secret, stringData)
      (arg, let, rollout)
-     (attr, k8s.job, spec)
+     (attr_base, k8s.job, spec)
      __neg_2
      __neg_3
      live_image
      live_schema
      migrated
    stratum 7:
+     (arg, k8s.job, spec[])
      (attr, k8s.secret, stringData)
      (attr, let, rollout)
    stratum 8:
@@ -179,6 +180,7 @@ exit: ok
      (arg, input, green::namespace)
      (arg, input, green::replicas)
      (arg, input, green::schema)
+     (attr, k8s.job, spec)
      blue::__instance
      green::__instance
      instance_of
@@ -236,28 +238,30 @@ exit: ok
      green::labels
    stratum 13:
      (attr, k8s.deployment, metadata)
-     (attr, k8s.deployment, spec)
      (attr, k8s.deployment, status)
      (attr, k8s.network_policy, metadata)
      (attr, k8s.network_policy, spec)
      (attr, k8s.pod_disruption_budget, metadata)
      (attr, k8s.pod_disruption_budget, spec)
      (attr, k8s.pod_disruption_budget, status)
+     (attr_base, k8s.deployment, spec)
    stratum 14:
+     (arg, k8s.deployment, spec[])
      (arg, k8s.horizontal_pod_autoscaler, spec)
      (arg, output, ready_replicas)
      (arg, output, total_replicas)
-     __neg_0
-     __neg_1
      __neg_4
-     container
    stratum 15:
+     (attr, k8s.deployment, spec)
      (attr, k8s.horizontal_pod_autoscaler, spec)
      (attr, output, ready_replicas)
      (attr, output, total_replicas)
      default_deny
    stratum 16:
      (arg, let, cutover)
+     __neg_0
+     __neg_1
+     container
      ready
    stratum 17:
      (attr, let, cutover)
