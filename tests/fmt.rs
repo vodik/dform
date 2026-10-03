@@ -85,17 +85,12 @@ fn the_repository_is_formatted() {
 /// Formatting is idempotent and moves only whitespace and commas (a
 /// broken list's trailing comma, a broken block's separators, R-52), but
 /// for a header statement out of order (R-27, R-11a), which it reorders
-/// instead: every other file's is already in order, so this still holds
-/// for it. E §7's programs are not (`the_repository_is_formatted`'s
-/// exception): its two-phase `output k: T` then `output k = t` is the
-/// style R-11a reorders, so it is excepted here too.
+/// instead: every file of the corpus is already in order, so this still
+/// holds for all of them, E §7's included (their `decl`/`output` already
+/// sit in R-11a's order).
 #[test]
 fn formatting_keeps_every_token_but_commas() {
     for f in corpus() {
-        let name = f.strip_prefix(repo()).unwrap().display().to_string();
-        if name.starts_with("tests/syntax/ok/e7") {
-            continue;
-        }
         let src = std::fs::read_to_string(&f).unwrap();
         let once = fmt(&src);
         assert_eq!(fmt(&once), once, "{} is not idempotent", f.display());

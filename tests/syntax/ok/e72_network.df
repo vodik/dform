@@ -2,6 +2,11 @@ input vpc_net: inet check inet.prefix_len(vpc_net) <= 20
 input zones: list(string) = ["us-test-1a", "us-test-1b"] # @default contribution
 output vpc: addr
 output private_subnet_ids: list(ref(net.subnet))
+output vpc = vpc
+output private_subnet_ids = [ ref(net.subnet, sn, "id") |
+  want(net.subnet, sn),
+  attr(net.subnet, sn, "visibility", "private")
+]
 
 resource net.vpc vpc {
   cidr = net_
@@ -21,9 +26,3 @@ resource net.subnet sn {
 } where zone_index(z, i), attr(net.vpc, "vpc", "cidr", net_), sn = format("private_%s", z)
 
 subnet_of(sn, "vpc") where want(net.subnet, sn)
-
-output vpc = vpc
-output private_subnet_ids = [ ref(net.subnet, sn, "id") |
-  want(net.subnet, sn),
-  attr(net.subnet, sn, "visibility", "private")
-]

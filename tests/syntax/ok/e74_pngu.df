@@ -3,6 +3,7 @@
 edition 2026
 
 input env: enum("dev", "stg", "prod") = "dev"
+decl peering(env: symbol, name: string, peer_network: string)
 
 provider google { source = "registry.dform.dev/google", version = ">=6" }
 provider k8s { source = "registry.dform.dev/k8s", version = ">=3" }
@@ -64,8 +65,6 @@ set {
 ########################################
 # Peerings, an env-keyed table
 ########################################
-
-decl peering(env: symbol, name: string, peer_network: string)
 
 peering("dev", "envoy-dev", "projects/envoy-dev-426188/global/networks/envoy-dev-network")
 peering("stg", "envoy-stg", "projects/envoy-stg-597462/global/networks/envoy-stg-network")
