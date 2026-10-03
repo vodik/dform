@@ -462,26 +462,26 @@ approvals = 'jwks("https://sso.acme.example/keys")'
 A small project needs none of this: `dform.toml` beside one `.df` file is
 a project with one stack.
 
-**Settings.** Every bare name you read is a cell: an `input` is one the
-outside supplies, a `key` one the target supplies, a `let` one the
+**Configuration.** Every bare name you read is a cell: an `input` is one
+the outside supplies, a `key` one the target supplies, a `let` one the
 program computes, and `why` shows the layers of any of them.
-Configuration is the inputs. The declaration gives the default, a
-`settings` block contributes values under a condition, and `--set` on
-the command line wins over both:
+Configuration is the inputs, and `set` writes them like any other cell:
+the declaration gives the default, a `set` contributes a value under a
+condition, and `--set` on the command line wins over both:
 
 ```dform
-settings { db.multi_az = true, db.backup_days = 14 } where env == "prod"
-settings { db.backup_days = 30 } @override where env == "prod", region == "eu-west-1"
-settings from yaml("config/${env}.yaml")
+set { db.multi_az = true, db.backup_days = 14 } where env == "prod"
+set db.backup_days = 30 @override where env == "prod", region == "eu-west-1"
+set from yaml("config/${env}.yaml")
 ```
 
 The condition can be any subset of a composite key, or anything else the
 program knows. The deployment's value is just the input's name,
-`db.backup_days`, and `why` shows which layer won; two blocks that both
-apply and disagree are a conflict naming both, so a broad block says
-`@default`. `settings from` takes a whole document, one leaf per input
-path, which is how a `config/prod.yaml` written by another tool feeds
-the program.
+`db.backup_days`, and `why` shows which layer won; two sets that both
+apply and disagree are a conflict naming both, so a broad one says
+`@default`. `set from` takes a whole document, one leaf per input path,
+which is how a `config/prod.yaml` written by another tool feeds the
+program.
 
 **Documents.** Data that is not code is loaded as a document and
 destructured into relations, and the rows are facts like any other,
