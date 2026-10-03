@@ -509,8 +509,10 @@ fn read_stmt(s: &mut Stmt, schema: &Schema, diags: &mut Vec<Diagnostic>) {
                 read_stmt(s, schema, diags);
             }
         }
+        // `arg(T, A, P, V, R)`, or `arg(T, A, P, V)` of a `set` with no
+        // rank until the transform gives it one.
         Stmt::Fact(head) | Stmt::Rule(crate::ast::RuleStmt { head, .. })
-            if head.pred == "arg" && head.args.len() == 5 =>
+            if head.pred == "arg" && matches!(head.args.len(), 4 | 5) =>
         {
             let (Term::Val(Value::Str(typ)), Term::Val(Value::Str(path))) =
                 (&head.args[0], &head.args[2])

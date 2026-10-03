@@ -206,3 +206,31 @@ fn a_bound_element_of_an_unkeyed_list_is_an_error() {
         r.stderr
     );
 }
+
+/// A quantity in a `set` with no rank is read by its attribute's type as
+/// one with a rank is (`types::read` reads the 4-ary `arg` of an unranked
+/// `set`): `500m` in a container's cpu limit is millicores.
+#[test]
+fn a_quantity_in_an_unranked_set_is_read_by_its_attribute() {
+    let s = Scratch::project("keyed-unranked-set");
+    s.write(
+        "dform.toml",
+        "[project]\nedition = \"2026\"\n\n[providers]\nk8s = \"k8s\"\n",
+    );
+    s.write(
+        "main.df",
+        "\ninput on: bool = true\n\nprovider k8s\n\n\
+         resource k8s.deployment job {\n  metadata.name = \"job\"\n  \
+         spec.selector.matchLabels = { app: \"job\" }\n}\n\n\
+         set job.spec.template.spec.containers = [\n  \
+         { name: \"x\", image: \"x:1\", resources: { limits: { cpu: 500m } } }\n] where on\n",
+    );
+    let r = s
+        .run(&["dev", "--world", "w.json", "plan", "main"])
+        .success();
+    assert!(
+        r.stdout.contains("resources.limits.cpu = \"500m\""),
+        "{}",
+        r.stdout
+    );
+}
