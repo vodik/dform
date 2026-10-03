@@ -406,9 +406,17 @@ is then one spelling for every provider; a value its form cannot hold
 (`1536Mi` as whole GiB) is a plan error naming the attribute, and what a
 provider sends back at such an attribute is read the same way.
 
+A `url` is parsed at the edge, like `inet`: written as a string in a
+`url` position or to `url(..)`, and printed canonically (its scheme
+lower-case, its path and query percent-encoded consistently) so equal
+URLs print alike. `url.join`, `url.with_scheme`, `url.with_host`,
+`url.with_port`, `url.with_path` and `url.with_query` change one part
+and reprint the rest; `url.parse` breaks every part out as a plain
+object instead, for reading rather than rebuilding.
+
 A literal in a position whose type is known is checked as that type at
 compile time (R-31, Postgres's unknown-literal rule): a schema attribute's
-type (`inet`, `int`, `bool`, `enum(..)`, `ref(T)`), an input's declared
+type (`inet`, `int`, `bool`, `url`, `enum(..)`, `ref(T)`), an input's declared
 type for its default and a copy's value, a function's parameter.
 `cidr_block = "10.0.0/16"` in an `inet` attribute, `vpc = "main"` in a
 `ref(net.vpc)` one and `subnets = [main]` (a `ref(net.vpc)` where
@@ -1093,17 +1101,25 @@ are written bare.
 
 | package   | functions                                                                 |
 |-----------|---------------------------------------------------------------------------|
-| prelude   | the constructors `int(s)`, `string(x)`, `inet(s)`, `ip(s)`, `iprange(a, b)`, `bytes(x)`, `cpu(x)`, `duration(x)`, `time(s)` (a literal argument read at compile time); `format(t, v, ...)`, `len(x)`, `ref(T, n, p)`, `scoped(s, n)`, `cloud_ref(T, n, p)`, `declassify(v, why)` |
+| prelude   | the constructors `int(s)`, `string(x)`, `inet(s)`, `ip(s)`, `iprange(a, b)`, `bytes(x)`, `cpu(x)`, `duration(x)`, `time(s)`, `url(s)` (a literal argument read at compile time); `format(t, v, ...)`, `len(x)`, `ref(T, n, p)`, `scoped(s, n)`, `cloud_ref(T, n, p)`, `declassify(v, why)` |
 | `inet`    | `inet.subnet(net, bits, n)`, `inet.host(net, n)`, `inet.addr(net, n)`, `inet.contains(net, a)`, `inet.overlaps(a, b)`, `inet.prefix_len(net)` |
 | `int`     | `int.range(lo, hi, step)` (what `i in lo..hi` enumerates)                 |
 | `ip`      | `ip.unspecified(a)`                                                       |
-| `str`     | `str.split(s, sep[, limit])`, `str.lower(s)`, `str.upper(s)`, `str.dedent(s)` |
-| `list`    | `list.len(l)` (`len` in the prelude), `list.join(l, sep)`                 |
+| `str`     | `str.split(s, sep[, limit])`, `str.lower(s)`, `str.upper(s)`, `str.dedent(s)`, `str.trim(s)`, `str.replace(s, from, to)`, `str.starts_with(s, p)`, `str.ends_with(s, p)`, `str.contains(s, n)`, `str.format(fmt, args)`, `str.pad_left(s, w, pad)`, `str.pad_right(s, w, pad)`, `str.len(s)`, `str.slice(s, start[, end])` |
+| `list`    | `list.len(l)` (`len` in the prelude), `list.join(l, sep)`, `list.sort(l)`, `list.sort_by(l, field)`, `list.unique(l)`, `list.flatten(l)`, `list.zip(a, b)`, `list.min(l)`, `list.max(l)`, `list.sum(l)`, `list.contains(l, v)`, `list.first(l)`, `list.last(l)` |
 | `time`    | `time.parse(s)`, `time.format(t, layout)`, `time.in_zone(t, zone)`, `time.add(t, d)`, `time.until(a, b)`, `time.before(a, b)` |
 | `duration`| `duration.parse(s)`, `duration.total(d, unit)`                            |
 | `bytes`   | `bytes.to(q, unit)` (`"Mi"`: a whole number of them, else no value)      |
 | `cpu`     | `cpu.to(q, unit)` (`"m"` or `""` for cores)                               |
 | `random`  | `random.password(key[, length[, alphabet]])`, `random.bytes(key, length)`, `random.signing_key(key)` (secrets); `random.id(key[, length])`, `random.uuid(key)` |
+| `regex`   | `regex.match(s, re)`, `regex.capture(s, re, n)`, `regex.replace(s, re, with)` (`re` a `regex`-typed pattern, checked at compile time, R-31) |
+| `semver`  | `semver.parse(s)`, `semver.satisfies(v, range)`, `semver.compare(a, b)`   |
+| `oci`     | `oci.parse(ref)`, `oci.pinned(ref)`, `oci.with_digest(ref, d)` (the OCI distribution reference grammar, `[registry/]repository[:tag][@digest]`) |
+| `hash`    | `hash.sha256(s)`, `hash.short(s, n)`                                      |
+| `base64`  | `base64.encode(s)`, `base64.decode(s)`                                    |
+| `url`     | `url.parse(s)`, `url.join(base, segment)`, `url.with_scheme(u, s)`, `url.with_host(u, h)`, `url.with_port(u, p)`, `url.with_path(u, p)`, `url.with_query(u, q)`, `url.encode(s)` |
+| `path`    | `path.join(a, b, ...)`, `path.dir(p)`, `path.base(p)`, `path.ext(p)`, `path.rel(from, to)`, `path.clean(p)` (POSIX slashes, independent of the host) |
+| `json`, `yaml`, `toml` | `.decode(text)`, `.encode(value)`, on a document's text already in hand; the loader (`yaml(path)`, docs/layout.md) stays for reading one |
 
 `random.*` are derived, not drawn: each value is HKDF-SHA256 of the
 deployment's master secret (`RANDOM_MASTER` in the environment, else a

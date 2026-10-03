@@ -2,6 +2,7 @@
 //! is declared in `std/*.df`, named by its package, and the engine's
 //! bodies, the resolver and the reference read the same declarations.
 
+mod common;
 use dform_core::engine;
 use dform_core::parser::{parse_file, parse_program};
 use dform_core::partition::fmt_atom;
@@ -172,4 +173,247 @@ all(p) where p = str.split("a:b:c", ":")
         r.signature,
         "str.split(text: string, sep: string, limit?: int) -> list(string)?"
     );
+}
+
+/// `regex.match`, `regex.capture`, `regex.replace`; a bad pattern
+/// literal is a compile error (R-31), not a quiet no-value.
+#[test]
+fn regex_functions_evaluate() {
+    let src = r#"m(b) where b = regex.match("web-1", "^[a-z]+-[0-9]+$")
+c(g) where g = regex.capture("app:1.2.3", "^(.+):(.+)$", 2)
+r(s) where s = regex.replace("a_b_c", "_", "-")
+"#;
+    assert_eq!(facts(src, "m"), ["m(true)"]);
+    assert_eq!(facts(src, "c"), [r#"c("1.2.3")"#]);
+    assert_eq!(facts(src, "r"), [r#"r("a-b-c")"#]);
+}
+
+/// A bad regex pattern literal fails at the call, not at evaluation.
+#[test]
+fn a_bad_regex_literal_is_a_compile_error() {
+    let e = error("p(x) where x = regex.match(\"a\", \"[\")\n");
+    assert!(e.contains("is a regex") && e.contains("not a valid pattern"), "{e}");
+}
+
+/// `semver.parse`, `semver.satisfies`, `semver.compare`.
+#[test]
+fn semver_functions_evaluate() {
+    let src = r#"p(maj) where v = semver.parse("1.2.3-rc.1"), maj = v.major
+s(ok) where ok = semver.satisfies("1.5.0", "^1.0")
+c(n) where n = semver.compare("2.0.0", "1.9.9")
+"#;
+    assert_eq!(facts(src, "p"), ["p(1)"]);
+    assert_eq!(facts(src, "s"), ["s(true)"]);
+    assert_eq!(facts(src, "c"), ["c(1)"]);
+}
+
+/// `oci.parse`, `oci.pinned`, `oci.with_digest` (the OCI distribution
+/// reference grammar, the std ticket's amendment).
+#[test]
+fn oci_functions_evaluate() {
+    let digest = format!("sha256:{}", "0".repeat(64));
+    let src = format!(
+        r#"r(repo) where r = oci.parse("registry.example.com/org/app:1.2.3"), repo = r.repository
+p0(x) where x = oci.pinned("app:1.2.3")
+p1(x) where x = oci.pinned("app@{digest}")
+w(ref) where ref = oci.with_digest("org/app:1.2.3", "{digest}")
+"#
+    );
+    assert_eq!(facts(&src, "r"), [r#"r("org/app")"#]);
+    assert_eq!(facts(&src, "p0"), ["p0(false)"]);
+    assert_eq!(facts(&src, "p1"), ["p1(true)"]);
+    assert_eq!(
+        facts(&src, "w"),
+        [format!("w(\"org/app:1.2.3@{digest}\")")]
+    );
+}
+
+/// `str.trim`, `replace`, `starts_with`, `ends_with`, `contains`,
+/// `format`, `pad_left`, `pad_right`, `len`, `slice`.
+#[test]
+fn str_additions_evaluate() {
+    let src = r#"t(s) where s = str.trim("  web  ")
+r(s) where s = str.replace("a_b_c", "_", "-")
+sw(b) where b = str.starts_with("web-1", "web-")
+ew(b) where b = str.ends_with("image:latest", ":latest")
+co(b) where b = str.contains("team=platform", "team=")
+fo(s) where s = str.format("%s-%s", ["a", "b"])
+pl(s) where s = str.pad_left("7", 3, "0")
+pr(s) where s = str.pad_right("ab", 4, "-")
+ln(n) where n = str.len("hello")
+sl(s) where s = str.slice("hello world", 6)
+sl2(s) where s = str.slice("hello world", 0, 5)
+"#;
+    assert_eq!(facts(src, "t"), [r#"t("web")"#]);
+    assert_eq!(facts(src, "r"), [r#"r("a-b-c")"#]);
+    assert_eq!(facts(src, "sw"), ["sw(true)"]);
+    assert_eq!(facts(src, "ew"), ["ew(true)"]);
+    assert_eq!(facts(src, "co"), ["co(true)"]);
+    assert_eq!(facts(src, "fo"), [r#"fo("a-b")"#]);
+    assert_eq!(facts(src, "pl"), [r#"pl("007")"#]);
+    assert_eq!(facts(src, "pr"), [r#"pr("ab--")"#]);
+    assert_eq!(facts(src, "ln"), ["ln(5)"]);
+    assert_eq!(facts(src, "sl"), [r#"sl("world")"#]);
+    assert_eq!(facts(src, "sl2"), [r#"sl2("hello")"#]);
+}
+
+/// `list.sort`, `sort_by`, `unique`, `flatten`, `zip`, `min`, `max`,
+/// `sum`, `contains`, `first`, `last`.
+#[test]
+fn list_additions_evaluate() {
+    let src = r#"so(l) where l = list.sort([3, 1, 2])
+un(l) where l = list.unique([1, 2, 1, 3, 2])
+fl(l) where l = list.flatten([[1, 2], [3]])
+zi(l) where l = list.zip([1, 2], ["a", "b", "c"])
+mn(n) where n = list.min([3, 1, 2])
+mx(n) where n = list.max([3, 1, 2])
+su(n) where n = list.sum([1, 2, 3])
+co(b) where b = list.contains([1, 2, 3], 2)
+fi(n) where n = list.first([1, 2, 3])
+la(n) where n = list.last([1, 2, 3])
+"#;
+    assert_eq!(facts(src, "so"), ["so([1, 2, 3])"]);
+    assert_eq!(facts(src, "un"), ["un([1, 2, 3])"]);
+    assert_eq!(facts(src, "fl"), ["fl([1, 2, 3])"]);
+    assert_eq!(facts(src, "zi"), [r#"zi([[1, "a"], [2, "b"]])"#]);
+    assert_eq!(facts(src, "mn"), ["mn(1)"]);
+    assert_eq!(facts(src, "mx"), ["mx(3)"]);
+    assert_eq!(facts(src, "su"), ["su(6)"]);
+    assert_eq!(facts(src, "co"), ["co(true)"]);
+    assert_eq!(facts(src, "fi"), ["fi(1)"]);
+    assert_eq!(facts(src, "la"), ["la(3)"]);
+    let src2 = "so(l) where l = list.sort_by([{name: \"b\"}, {name: \"a\"}], \"name\")\n";
+    assert_eq!(
+        facts(src2, "so"),
+        [r#"so([{name: "a"}, {name: "b"}])"#]
+    );
+}
+
+/// `hash.sha256`, `hash.short`.
+#[test]
+fn hash_functions_evaluate() {
+    let src = r#"h(d) where d = hash.sha256("hello")
+s(d) where d = hash.short("hello", 8)
+"#;
+    assert_eq!(
+        facts(src, "h"),
+        [r#"h("2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824")"#]
+    );
+    assert_eq!(facts(src, "s"), [r#"s("2cf24dba")"#]);
+}
+
+/// `base64.encode`, `base64.decode` round-trip, and bad text is no value.
+#[test]
+fn base64_functions_evaluate() {
+    let src = r#"e(s) where s = base64.encode("hello")
+d(s) where s = base64.decode("aGVsbG8=")
+"#;
+    assert_eq!(facts(src, "e"), [r#"e("aGVsbG8=")"#]);
+    assert_eq!(facts(src, "d"), [r#"d("hello")"#]);
+    // Bad base64 has no value: `x = ..` with nothing else to bind `x`
+    // from is an error naming the call (engine.rs's `failed_builtin`).
+    let program = parse_program("p(x) where x = base64.decode(\"not base64!\")\n").unwrap();
+    let err = engine::eval(&program, &[]).unwrap_err();
+    assert!(
+        err.to_string().contains("is not defined for these arguments"),
+        "{err}"
+    );
+}
+
+/// A `url` literal is canonicalized and checked at compile time (R-31);
+/// `url.join`, `with_scheme`, `with_host`, `with_port`, `with_path`,
+/// `with_query`, `url.encode`.
+#[test]
+fn url_functions_evaluate() {
+    let src = r#"u(x) where x = url("https://example.com/a")
+j(x) where x = url.join("https://example.com/a", "b")
+sc(x) where x = url.with_scheme(url("http://h/p"), "https")
+ho(x) where x = url.with_host(url("http://h/p"), "other")
+po(x) where x = url.with_port(url("http://h/p"), 8080)
+pa(x) where x = url.with_path(url("http://h/p"), "/q")
+qu(x) where x = url.with_query(url("http://h/p"), { a: "1" })
+en(x) where x = url.encode("a b/c")
+pr(h) where p = url.parse("https://h.example.com:8080/x?a=1"), h = p.host
+"#;
+    assert_eq!(facts(src, "u"), [r#"u("https://example.com/a")"#]);
+    assert_eq!(facts(src, "j"), [r#"j("https://example.com/a/b")"#]);
+    assert_eq!(facts(src, "sc"), [r#"sc("https://h/p")"#]);
+    assert_eq!(facts(src, "ho"), [r#"ho("http://other/p")"#]);
+    assert_eq!(facts(src, "po"), [r#"po("http://h:8080/p")"#]);
+    assert_eq!(facts(src, "pa"), [r#"pa("http://h/q")"#]);
+    assert_eq!(facts(src, "qu"), [r#"qu("http://h/p?a=1")"#]);
+    assert_eq!(facts(src, "en"), [r#"en("a%20b%2Fc")"#]);
+    assert_eq!(facts(src, "pr"), [r#"pr("h.example.com")"#]);
+}
+
+/// A bad url literal in a `url`-typed position is a compile error.
+/// `url(text: string)`'s own literal, like `inet`'s and `ip`'s, is a
+/// string argument: checked where its position's type is `url`
+/// (`with_scheme`'s `u`), not at the bare constructor's own call.
+#[test]
+fn a_bad_url_literal_is_a_compile_error() {
+    let e = error("p(x) where x = url.with_scheme(\"not a url\", \"https\")\n");
+    assert!(e.contains("is a url"), "{e}");
+}
+
+/// A schema attribute typed `url` (R-31; the url ticket's "Done when"):
+/// a good literal plans, a bad one is a compile error at the resource.
+#[test]
+fn a_url_typed_attribute_checks_its_literal() {
+    let s = common::Scratch::new("url-attr");
+    s.write(
+        "schema.df",
+        "edition 2026\ntype_provider(app.thing, \"mock\")\n\
+         type_attr(app.thing, \"link\", \"url\", [])\n",
+    );
+    let run = |body: &str| {
+        s.write("p.df", &format!("edition 2026\n{body}"));
+        s.run(&common::on(
+            "p.df",
+            &["--provider", "schema.df", "--world", "w.json"],
+            &["plan"],
+        ))
+    };
+    let r = run("resource app.thing t { link = \"https://example.com/a\" }\n").success();
+    assert!(r.stdout.contains("link = \"https://example.com/a\""), "{}", r.stdout);
+    let r = run("resource app.thing t { link = \"nope\" }\n").failure();
+    assert!(r.stderr.contains("is a url"), "{}", r.stderr);
+}
+
+/// `path.join`, `dir`, `base`, `ext`, `rel`, `clean`.
+#[test]
+fn path_functions_evaluate() {
+    let src = r#"j(s) where s = path.join("a", "b", "c.yaml")
+d(s) where s = path.dir("a/b/c.yaml")
+b(s) where s = path.base("a/b/c.yaml")
+e(s) where s = path.ext("c.yaml")
+r(s) where s = path.rel("a/b", "a/b/c/d.yaml")
+cl(s) where s = path.clean("a/../a/./b.yaml")
+"#;
+    assert_eq!(facts(src, "j"), [r#"j("a/b/c.yaml")"#]);
+    assert_eq!(facts(src, "d"), [r#"d("a/b")"#]);
+    assert_eq!(facts(src, "b"), [r#"b("c.yaml")"#]);
+    assert_eq!(facts(src, "e"), [r#"e(".yaml")"#]);
+    assert_eq!(facts(src, "r"), [r#"r("c/d.yaml")"#]);
+    assert_eq!(facts(src, "cl"), [r#"cl("a/b.yaml")"#]);
+}
+
+/// `json.decode`/`encode`, `yaml.decode`/`encode`, `toml.decode`/`encode`.
+#[test]
+fn document_decode_and_encode_evaluate() {
+    let src = r#"j(n) where v = json.decode("{\"a\": 1}"), n = v.a
+je(s) where s = json.encode({ a: 1 })
+y(n) where v = yaml.decode("a: 1\n"), n = v.a
+ye(s) where s = yaml.encode({ a: 1 })
+t(n) where v = toml.decode("a = 1\n"), n = v.a
+te(s) where s = toml.encode({ a: 1 })
+"#;
+    assert_eq!(facts(src, "j"), ["j(1)"]);
+    assert_eq!(facts(src, "je"), [r#"je("{\"a\":1}")"#]);
+    assert_eq!(facts(src, "y"), ["y(1)"]);
+    assert_eq!(facts(src, "t"), ["t(1)"]);
+    assert_eq!(facts(src, "te"), [r#"te("a = 1\n")"#]);
+    let ye = facts(src, "ye");
+    assert_eq!(ye.len(), 1);
+    assert!(ye[0].contains("a: 1"), "{ye:?}");
 }

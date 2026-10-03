@@ -3359,7 +3359,14 @@ pub type Body = fn(&[Value]) -> Option<Value>;
 /// The body of the function `name` declares in `std/*.df` (`functions`),
 /// by its qualified name.
 pub fn body(name: &str) -> Option<Body> {
-    BODIES.iter().find(|(n, _)| *n == name).map(|(_, b)| *b)
+    BODIES
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, b)| *b)
+        // The std ticket's newer packages declare their bodies beside
+        // their signatures in `functions.rs` (R-6); this table stays the
+        // older ones'.
+        .or_else(|| crate::functions::body(name))
 }
 
 /// Every function's body, by its qualified name.

@@ -1,0 +1,12 @@
+# YAML: functions on a `string`'s YAML text and a value's (docs/grammar.md
+# "Functions"). `yaml(path)` (the loader) stays for a document; these
+# read and write the text of one already in hand.
+package yaml
+
+#| The value the text decodes to; no value for text that is not YAML, or whose numbers are not whole.
+#| example: let cfg = yaml.decode(body)
+fn decode(text: string) -> any?
+
+#| The value as YAML text; no value for a reference or a null.
+#| example: let body = yaml.encode(cfg)
+fn encode(value: any) -> string?

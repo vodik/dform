@@ -1,0 +1,16 @@
+# Container image references: functions about the OCI distribution
+# reference grammar, `[registry/]repository[:tag][@digest]`
+# (docs/grammar.md "Functions").
+package oci
+
+#| The reference's registry (absent: the default registry), repository, tag and digest; no value for text that is not a reference.
+#| example: let r = oci.parse(image)
+fn parse(reference: string) -> { registry: string?, repository: string, tag: string?, digest: string? }?
+
+#| Whether the reference carries a digest; also a predicate.
+#| example: deny "image not pinned by digest" where not oci.pinned(image)
+fn pinned(reference: string) -> bool
+
+#| The reference with its digest set to `digest` (its tag, if any, kept); no value for text that is not a reference.
+#| example: let exact = oci.with_digest(image, "sha256:${sha}")
+fn with_digest(reference: string, digest: string) -> string?

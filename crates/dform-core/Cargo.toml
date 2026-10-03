@@ -20,11 +20,13 @@ rowan = "0.16"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["raw_value"] }
 prost = "0.13"
-# `regex(S)` refinements (src/refine.rs).
+# `regex(S)` refinements (src/refine.rs); `regex.*` (std/regex.df).
 regex = "1"
+# `hash.*` (std/hash.df).
 sha2 = "0.10"
 # Approvals (src/approval.rs): DSSE envelopes signed with ed25519, and JWTs
-# (RS256, ES256, EdDSA) verified against a JWKS; pure Rust crypto.
+# (RS256, ES256, EdDSA) verified against a JWKS; pure Rust crypto. Also
+# `base64.*` (std/base64.df).
 base64 = "0.22"
 ed25519-dalek = "2"
 jsonwebtoken = { version = "11", default-features = false, features = ["rust_crypto"] }
@@ -34,8 +36,14 @@ dform-wire = { path = "../dform-wire" }
 csv = "1"
 serde_yaml = "0.9"
 toml = "1"
-# dform.toml's version requirements (src/project.rs), Cargo's syntax.
+# dform.toml's version requirements (src/project.rs), Cargo's syntax;
+# `semver.*` (std/semver.df).
 semver = "1"
+# `url.*` (std/url.df): a url value is parsed and printed through it.
+url = "2"
+# `url.encode` (std/url.df): percent-encoding, `url`'s own dependency,
+# depended on directly for its `AsciiSet`.
+percent-encoding = "2"
 # `time` and `duration` (R-62): the Temporal model. Zone data is the
 # bundled tzdb (jiff-tzdb), never the host's, so a plan is the same on
 # every machine; `dform version` prints its version.

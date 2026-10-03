@@ -16,3 +16,43 @@ fn upper(text: string) -> string
 #| The text with the leading indentation its non-blank lines share removed, a blank line emptied, and the line break right after the opening quote dropped: for a string literal that spans lines, indented with the program.
 #| example: let script = str.dedent("\n    #!/bin/sh\n    echo ${name}\n  ")
 fn dedent(text: string) -> string
+
+#| The text with leading and trailing whitespace removed.
+#| example: let name = str.trim(" web ")
+fn trim(text: string) -> string
+
+#| The text with every `from` replaced by `to`.
+#| example: let host = str.replace(name, "_", "-")
+fn replace(text: string, from: string, to: string) -> string
+
+#| Whether the text starts with `prefix`; also a predicate.
+#| example: deny "bad prefix" where not str.starts_with(name, "web-")
+fn starts_with(text: string, prefix: string) -> bool
+
+#| Whether the text ends with `suffix`; also a predicate.
+#| example: deny "bad suffix" where not str.ends_with(image, ":latest")
+fn ends_with(text: string, suffix: string) -> bool
+
+#| Whether the text holds `needle`; also a predicate.
+#| example: deny "no team tag" where not str.contains(tags, "team=")
+fn contains(text: string, needle: string) -> bool
+
+#| The template with each `%s` replaced by the next of `args`, in order; no value when there are too few.
+#| example: let name = str.format("%s-%s", [env, zone])
+fn format(template: string, args: list) -> string?
+
+#| The text padded on the left with `pad` to at least `width` characters; no value when `pad` is empty.
+#| example: let n = str.pad_left(string(i), 3, "0")
+fn pad_left(text: string, width: int, pad: string) -> string?
+
+#| The text padded on the right with `pad` to at least `width` characters; no value when `pad` is empty.
+#| example: let row = str.pad_right(name, 20, " ")
+fn pad_right(text: string, width: int, pad: string) -> string?
+
+#| The number of characters of the text; `len` in the prelude.
+#| example: let n = str.len(name)
+fn len(text: string) -> int
+
+#| The characters from `start` up to but not including `end` (to the end when left out); no value past the text's length or for an end before its start.
+#| example: let (repo, tag) = (str.slice(image, 0, i), str.slice(image, i + 1))
+fn slice(text: string, start: int, end?: int) -> string?

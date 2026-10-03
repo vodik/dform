@@ -22,6 +22,16 @@ set p.statements = [{ action: "org.read", resource: "org" }] where {
 
 deny "db must not be public" { resource: pg } where pg in db.postgres, not pg.public == false
 
+# Example: images are pinned to a digest, not a floating tag (std's
+# oci.parse, R-6 amendment). No resource here carries an image yet; this
+# is a fixture relation standing in for one, already pinned.
+decl image(name: string, ref: string)
+image(
+  "app",
+  "registry.example.com/org/app@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+)
+deny "image not pinned by digest" { image: name } where image(name, ref), r = oci.parse(ref), not has r.digest
+
 #| Prod should enable audit logging.
 warn "prod should enable audit logging" { env: "prod" } where {
   env == "prod"

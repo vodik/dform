@@ -8,3 +8,47 @@ fn len(value: list) -> int?
 #| The scalars' texts joined by `sep`; no value when one has no text.
 #| example: let hosts = list.join(names, ",")
 fn join(parts: list, sep: string) -> string?
+
+#| The list in its natural order (R-59: a comprehension's own order is its body's first relation's; `sort` is how a program asks for another).
+#| example: let ordered = list.sort(zones)
+fn sort(xs: list) -> list
+
+#| The list of objects, ordered by `field`'s value; no value when one element lacks it.
+#| example: let by_name = list.sort_by(subnets, "name")
+fn sort_by(xs: list, field: string) -> list?
+
+#| The list with every value after its first occurrence dropped, in its original order.
+#| example: let azs = list.unique(zones)
+fn unique(xs: list) -> list
+
+#| The elements of the list's lists, concatenated; no value when one element is not itself a list.
+#| example: let all_subnets = list.flatten([public, private])
+fn flatten(xs: list) -> list?
+
+#| The two lists paired up, `[a_i, b_i]` for `i` up to the shorter one's length.
+#| example: let pairs = list.zip(names, ids)
+fn zip(a: list, b: list) -> list
+
+#| The least element, by its natural order; no value for an empty list.
+#| example: let earliest = list.min(launch_dates)
+fn min(xs: list) -> any?
+
+#| The greatest element, by its natural order; no value for an empty list.
+#| example: let busiest = list.max(replica_counts)
+fn max(xs: list) -> any?
+
+#| The sum of the list's integers; no value when one is not an integer.
+#| example: let total = list.sum(replica_counts)
+fn sum(xs: list) -> int?
+
+#| Whether the list holds the value; also a predicate.
+#| example: deny "unknown zone" where not list.contains(allowed_zones, z)
+fn contains(xs: list, value: any) -> bool
+
+#| The first element; no value for an empty list.
+#| example: let primary = list.first(subnets)
+fn first(xs: list) -> any?
+
+#| The last element; no value for an empty list.
+#| example: let latest = list.last(releases)
+fn last(xs: list) -> any?

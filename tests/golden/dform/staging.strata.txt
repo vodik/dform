@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== examples/demo/stacks/dform.df: 173 nodes, 464 edges (177 negative)
+== examples/demo/stacks/dform.df: 175 nodes, 467 edges (178 negative)
    STRATIFIED, 15 strata
    stratum 0:
      (arg, iam.policy, name)
@@ -12,6 +12,8 @@ exit: ok
      (want, iam.role_policy_attachment)
      (want, net.route)
      __config_path
+     baseline::__neg_0
+     baseline::image
      data
      doc
      identity

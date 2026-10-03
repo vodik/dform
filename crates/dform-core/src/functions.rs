@@ -29,6 +29,8 @@
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
+use crate::value::Value;
+
 /// The signature files, by the path they are shipped at.
 pub const SOURCES: &[(&str, &str)] = &[
     ("std/prelude.df", include_str!("../../../std/prelude.df")),
@@ -42,6 +44,16 @@ pub const SOURCES: &[(&str, &str)] = &[
     ("std/bytes.df", include_str!("../../../std/bytes.df")),
     ("std/cpu.df", include_str!("../../../std/cpu.df")),
     ("std/random.df", include_str!("../../../std/random.df")),
+    ("std/regex.df", include_str!("../../../std/regex.df")),
+    ("std/semver.df", include_str!("../../../std/semver.df")),
+    ("std/oci.df", include_str!("../../../std/oci.df")),
+    ("std/hash.df", include_str!("../../../std/hash.df")),
+    ("std/base64.df", include_str!("../../../std/base64.df")),
+    ("std/url.df", include_str!("../../../std/url.df")),
+    ("std/path.df", include_str!("../../../std/path.df")),
+    ("std/json.df", include_str!("../../../std/json.df")),
+    ("std/yaml.df", include_str!("../../../std/yaml.df")),
+    ("std/toml.df", include_str!("../../../std/toml.df")),
 ];
 
 /// The package whose functions are written bare.
@@ -51,7 +63,7 @@ pub const PRELUDE: &str = "prelude";
 /// constructor (`inet(s) -> inet`).
 const TYPE_NAMES: &[&str] = &[
     "int", "string", "bool", "inet", "ip", "iprange", "list", "any", "ref", "secret", "symbol",
-    "addr", "bytes", "cpu", "duration", "time",
+    "addr", "bytes", "cpu", "duration", "time", "url",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -354,8 +366,9 @@ fn is_name(s: &str) -> bool {
         && cs.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-/// `name(p: T, ...) -> T[?] [flag, ...]`, the part after `fn `.
-fn function(sig: &str) -> Result<Function, String> {
+/// `name(p: T, ...) -> T[?] [flag, ...]`, the part after `fn `. Shared
+/// with `fmt` (R-24: a signature file's own normal form).
+pub(crate) fn function(sig: &str) -> Result<Function, String> {
     let open = sig.find('(').ok_or("expected `(` after the name")?;
     let name = sig[..open].trim();
     if !is_name(name) {
@@ -444,17 +457,21 @@ fn function(sig: &str) -> Result<Function, String> {
 }
 
 fn matching(s: &str, open: usize) -> Option<usize> {
+    matching_pair(s, open, '(', ')')
+}
+
+/// The index of the `close` that matches the `open` at `at` (nesting
+/// counted), or none if `s` is not balanced from there.
+fn matching_pair(s: &str, at: usize, open: char, close: char) -> Option<usize> {
     let mut depth = 0;
-    for (i, c) in s.char_indices().skip_while(|(i, _)| *i < open) {
-        match c {
-            '(' => depth += 1,
-            ')' => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(i);
-                }
+    for (i, c) in s.char_indices().skip_while(|(i, _)| *i < at) {
+        if c == open {
+            depth += 1;
+        } else if c == close {
+            depth -= 1;
+            if depth == 0 {
+                return Some(i);
             }
-            _ => {}
         }
     }
     None
@@ -480,8 +497,13 @@ fn split_top(s: &str) -> Vec<&str> {
     out
 }
 
-/// Where a type at the start of `s` ends: a name, then `( .. )` if any.
+/// Where a type at the start of `s` ends: a name, then `( .. )` if any
+/// (`list(string)`), or an object type written out in full
+/// (`{ a: string, b: int? }`, a function's return shape, R-6).
 fn type_end(s: &str) -> usize {
+    if s.starts_with('{') {
+        return matching_pair(s, 0, '{', '}').map_or(s.len(), |c| c + 1);
+    }
     let name = s
         .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '.'))
         .unwrap_or(s.len());
@@ -489,6 +511,694 @@ fn type_end(s: &str) -> usize {
         matching(s, name).map_or(s.len(), |c| c + 1)
     } else {
         name
+    }
+}
+
+/// A function's body: its arguments' values to its value, or none. The
+/// same shape as `engine::Body`; `engine::body` falls back to this table
+/// for a name it does not itself have, so the std ticket's bodies live
+/// here, beside the signatures they implement (R-6).
+pub type Body = fn(&[Value]) -> Option<Value>;
+
+/// The body of every function this module declares that `engine.rs`'s
+/// own table does not (the std ticket's new packages); a test keeps
+/// every declared function's body, here or there, in step.
+pub fn body(name: &str) -> Option<Body> {
+    BODIES.iter().find(|(n, _)| *n == name).map(|(_, b)| *b)
+}
+
+pub const BODIES: &[(&str, Body)] = &[
+    ("str.trim", |a| match a {
+        [Value::Str(s)] => Some(Value::Str(s.trim().to_string())),
+        _ => None,
+    }),
+    ("str.replace", |a| match a {
+        [Value::Str(s), Value::Str(from), Value::Str(to)] if !from.is_empty() => {
+            Some(Value::Str(s.replace(from.as_str(), to)))
+        }
+        _ => None,
+    }),
+    ("str.starts_with", |a| match a {
+        [Value::Str(s), Value::Str(p)] => Some(Value::Bool(s.starts_with(p.as_str()))),
+        _ => None,
+    }),
+    ("str.ends_with", |a| match a {
+        [Value::Str(s), Value::Str(p)] => Some(Value::Bool(s.ends_with(p.as_str()))),
+        _ => None,
+    }),
+    ("str.contains", |a| match a {
+        [Value::Str(s), Value::Str(n)] => Some(Value::Bool(s.contains(n.as_str()))),
+        _ => None,
+    }),
+    ("str.format", |a| match a {
+        [Value::Str(fmt), Value::List(args)] => {
+            let mut out = String::new();
+            let mut parts = fmt.split("%s");
+            out.push_str(parts.next().unwrap_or(""));
+            let mut args = args.iter();
+            for p in parts {
+                out.push_str(&scalar_text(args.next()?)?);
+                out.push_str(p);
+            }
+            Some(Value::Str(out))
+        }
+        _ => None,
+    }),
+    ("str.pad_left", |a| match a {
+        [Value::Str(s), Value::Int(width), Value::Str(pad)] if !pad.is_empty() => {
+            Some(Value::Str(pad_to(s, *width, pad, true)?))
+        }
+        _ => None,
+    }),
+    ("str.pad_right", |a| match a {
+        [Value::Str(s), Value::Int(width), Value::Str(pad)] if !pad.is_empty() => {
+            Some(Value::Str(pad_to(s, *width, pad, false)?))
+        }
+        _ => None,
+    }),
+    ("str.len", |a| match a {
+        [Value::Str(s)] => Some(Value::Int(s.chars().count() as i64)),
+        _ => None,
+    }),
+    ("str.slice", |a| match a {
+        [Value::Str(s), Value::Int(start)] => str_slice(s, *start, None),
+        [Value::Str(s), Value::Int(start), Value::Int(end)] => str_slice(s, *start, Some(*end)),
+        _ => None,
+    }),
+    ("list.sort", |a| match a {
+        [Value::List(xs)] => {
+            let mut xs = xs.clone();
+            xs.sort();
+            Some(Value::List(xs))
+        }
+        _ => None,
+    }),
+    ("list.sort_by", |a| match a {
+        [Value::List(xs), Value::Str(field)] => {
+            let mut keyed: Vec<(&Value, &Value)> = xs
+                .iter()
+                .map(|x| match x {
+                    Value::Obj(m) => m.get(field.as_str()).map(|v| (v, x)),
+                    _ => None,
+                })
+                .collect::<Option<Vec<_>>>()?;
+            keyed.sort_by(|(a, _), (b, _)| a.cmp(b));
+            Some(Value::List(keyed.into_iter().map(|(_, x)| x.clone()).collect()))
+        }
+        _ => None,
+    }),
+    ("list.unique", |a| match a {
+        [Value::List(xs)] => {
+            let mut seen = std::collections::HashSet::new();
+            Some(Value::List(
+                xs.iter().filter(|x| seen.insert((*x).clone())).cloned().collect(),
+            ))
+        }
+        _ => None,
+    }),
+    ("list.flatten", |a| match a {
+        [Value::List(xs)] => {
+            let mut out = Vec::new();
+            for x in xs {
+                let Value::List(inner) = x else { return None };
+                out.extend(inner.iter().cloned());
+            }
+            Some(Value::List(out))
+        }
+        _ => None,
+    }),
+    ("list.zip", |a| match a {
+        [Value::List(x), Value::List(y)] => Some(Value::List(
+            x.iter()
+                .zip(y.iter())
+                .map(|(a, b)| Value::List(vec![a.clone(), b.clone()]))
+                .collect(),
+        )),
+        _ => None,
+    }),
+    ("list.min", |a| match a {
+        [Value::List(xs)] => xs.iter().min().cloned(),
+        _ => None,
+    }),
+    ("list.max", |a| match a {
+        [Value::List(xs)] => xs.iter().max().cloned(),
+        _ => None,
+    }),
+    ("list.sum", |a| match a {
+        [Value::List(xs)] => {
+            let mut total = 0i64;
+            for x in xs {
+                let Value::Int(n) = x else { return None };
+                total = total.checked_add(*n)?;
+            }
+            Some(Value::Int(total))
+        }
+        _ => None,
+    }),
+    ("list.contains", |a| match a {
+        [Value::List(xs), v] => Some(Value::Bool(xs.contains(v))),
+        _ => None,
+    }),
+    ("list.first", |a| match a {
+        [Value::List(xs)] => xs.first().cloned(),
+        _ => None,
+    }),
+    ("list.last", |a| match a {
+        [Value::List(xs)] => xs.last().cloned(),
+        _ => None,
+    }),
+    ("regex.match", |a| match a {
+        [Value::Str(s), Value::Str(re)] => {
+            Some(Value::Bool(regex::Regex::new(re).ok()?.is_match(s)))
+        }
+        _ => None,
+    }),
+    ("regex.capture", |a| match a {
+        [Value::Str(s), Value::Str(re), Value::Int(n)] => {
+            let re = regex::Regex::new(re).ok()?;
+            let caps = re.captures(s)?;
+            caps.get(usize::try_from(*n).ok()?)
+                .map(|m| Value::Str(m.as_str().to_string()))
+        }
+        _ => None,
+    }),
+    ("regex.replace", |a| match a {
+        [Value::Str(s), Value::Str(re), Value::Str(with)] => Some(Value::Str(
+            regex::Regex::new(re).ok()?.replace_all(s, with.as_str()).into_owned(),
+        )),
+        _ => None,
+    }),
+    ("semver.parse", |a| match a {
+        [Value::Str(s)] => {
+            let v = semver::Version::parse(s).ok()?;
+            let mut m = BTreeMap::new();
+            m.insert("major".to_string(), Value::Int(v.major as i64));
+            m.insert("minor".to_string(), Value::Int(v.minor as i64));
+            m.insert("patch".to_string(), Value::Int(v.patch as i64));
+            if !v.pre.is_empty() {
+                m.insert("pre".to_string(), Value::Str(v.pre.to_string()));
+            }
+            Some(Value::Obj(m))
+        }
+        _ => None,
+    }),
+    ("semver.satisfies", |a| match a {
+        [Value::Str(v), Value::Str(range)] => {
+            let v = semver::Version::parse(v).ok()?;
+            let req = semver::VersionReq::parse(range).ok()?;
+            Some(Value::Bool(req.matches(&v)))
+        }
+        _ => None,
+    }),
+    ("semver.compare", |a| match a {
+        [Value::Str(x), Value::Str(y)] => {
+            let x = semver::Version::parse(x).ok()?;
+            let y = semver::Version::parse(y).ok()?;
+            Some(Value::Int(match x.cmp(&y) {
+                std::cmp::Ordering::Less => -1,
+                std::cmp::Ordering::Equal => 0,
+                std::cmp::Ordering::Greater => 1,
+            }))
+        }
+        _ => None,
+    }),
+    ("oci.parse", |a| match a {
+        [Value::Str(s)] => {
+            let r = oci_split(s)?;
+            let mut m = BTreeMap::new();
+            if let Some(reg) = r.registry {
+                m.insert("registry".to_string(), Value::Str(reg));
+            }
+            m.insert("repository".to_string(), Value::Str(r.repository));
+            if let Some(t) = r.tag {
+                m.insert("tag".to_string(), Value::Str(t));
+            }
+            if let Some(d) = r.digest {
+                m.insert("digest".to_string(), Value::Str(d));
+            }
+            Some(Value::Obj(m))
+        }
+        _ => None,
+    }),
+    ("oci.pinned", |a| match a {
+        [Value::Str(s)] => Some(Value::Bool(
+            oci_split(s).is_some_and(|r| r.digest.is_some()),
+        )),
+        _ => None,
+    }),
+    ("oci.with_digest", |a| match a {
+        [Value::Str(s), Value::Str(d)] => {
+            let r = oci_split(s)?;
+            if !is_digest(d) {
+                return None;
+            }
+            let mut out = String::new();
+            if let Some(reg) = &r.registry {
+                out.push_str(reg);
+                out.push('/');
+            }
+            out.push_str(&r.repository);
+            if let Some(t) = &r.tag {
+                out.push(':');
+                out.push_str(t);
+            }
+            out.push('@');
+            out.push_str(d);
+            Some(Value::Str(out))
+        }
+        _ => None,
+    }),
+    ("hash.sha256", |a| match a {
+        [Value::Str(s)] => Some(Value::Str(sha256_hex(s))),
+        _ => None,
+    }),
+    ("hash.short", |a| match a {
+        [Value::Str(s), Value::Int(n)] => {
+            let full = sha256_hex(s);
+            let n = usize::try_from(*n).ok()?;
+            (n <= full.len()).then(|| Value::Str(full[..n].to_string()))
+        }
+        _ => None,
+    }),
+    ("base64.encode", |a| match a {
+        [Value::Str(s)] => {
+            use base64::Engine;
+            Some(Value::Str(
+                base64::engine::general_purpose::STANDARD.encode(s.as_bytes()),
+            ))
+        }
+        _ => None,
+    }),
+    ("base64.decode", |a| match a {
+        [Value::Str(s)] => {
+            use base64::Engine;
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(s.as_bytes())
+                .ok()?;
+            String::from_utf8(bytes).ok().map(Value::Str)
+        }
+        _ => None,
+    }),
+    ("url", |a| match a {
+        [Value::Str(s)] => url::Url::parse(s).ok().map(|u| Value::Str(u.to_string())),
+        _ => None,
+    }),
+    ("url.parse", |a| match a {
+        [Value::Str(s)] => {
+            let u = url::Url::parse(s).ok()?;
+            let mut m = BTreeMap::new();
+            m.insert("scheme".to_string(), Value::Str(u.scheme().to_string()));
+            m.insert("host".to_string(), Value::Str(u.host_str()?.to_string()));
+            if let Some(port) = u.port() {
+                m.insert("port".to_string(), Value::Int(i64::from(port)));
+            }
+            m.insert("path".to_string(), Value::Str(u.path().to_string()));
+            let mut q = BTreeMap::new();
+            for (k, v) in u.query_pairs() {
+                q.insert(k.into_owned(), Value::Str(v.into_owned()));
+            }
+            m.insert("query".to_string(), Value::Obj(q));
+            if let Some(f) = u.fragment() {
+                m.insert("fragment".to_string(), Value::Str(f.to_string()));
+            }
+            Some(Value::Obj(m))
+        }
+        _ => None,
+    }),
+    ("url.join", |a| match a {
+        [Value::Str(x), Value::Str(y)] => Some(Value::Str(join_slash(x, y))),
+        _ => None,
+    }),
+    ("url.with_scheme", |a| match a {
+        [Value::Str(s), Value::Str(scheme)] => {
+            let mut u = url::Url::parse(s).ok()?;
+            u.set_scheme(scheme).ok()?;
+            Some(Value::Str(u.to_string()))
+        }
+        _ => None,
+    }),
+    ("url.with_host", |a| match a {
+        [Value::Str(s), Value::Str(host)] => {
+            let mut u = url::Url::parse(s).ok()?;
+            u.set_host(Some(host)).ok()?;
+            Some(Value::Str(u.to_string()))
+        }
+        _ => None,
+    }),
+    ("url.with_port", |a| match a {
+        [Value::Str(s), Value::Int(port)] => {
+            let mut u = url::Url::parse(s).ok()?;
+            let p = u16::try_from(*port).ok()?;
+            u.set_port(Some(p)).ok()?;
+            Some(Value::Str(u.to_string()))
+        }
+        _ => None,
+    }),
+    ("url.with_path", |a| match a {
+        [Value::Str(s), Value::Str(path)] => {
+            let mut u = url::Url::parse(s).ok()?;
+            u.set_path(path);
+            Some(Value::Str(u.to_string()))
+        }
+        _ => None,
+    }),
+    ("url.with_query", |a| match a {
+        [Value::Str(s), Value::Obj(q)] => {
+            let mut u = url::Url::parse(s).ok()?;
+            let pairs: Option<Vec<(&String, &String)>> = q
+                .iter()
+                .map(|(k, v)| match v {
+                    Value::Str(s) => Some((k, s)),
+                    _ => None,
+                })
+                .collect();
+            let pairs = pairs?;
+            if pairs.is_empty() {
+                u.set_query(None);
+            } else {
+                let mut qs = url::form_urlencoded::Serializer::new(String::new());
+                for (k, v) in pairs {
+                    qs.append_pair(k, v);
+                }
+                u.set_query(Some(&qs.finish()));
+            }
+            Some(Value::Str(u.to_string()))
+        }
+        _ => None,
+    }),
+    ("url.encode", |a| match a {
+        [Value::Str(s)] => Some(Value::Str(
+            percent_encoding::utf8_percent_encode(s, URL_COMPONENT).to_string(),
+        )),
+        _ => None,
+    }),
+    ("path.join", |a| {
+        let mut parts = a.iter();
+        let Value::Str(first) = parts.next()? else {
+            return None;
+        };
+        let mut out = first.clone();
+        for v in parts {
+            let Value::Str(s) = v else { return None };
+            out = join_slash(&out, s);
+        }
+        Some(Value::Str(out))
+    }),
+    ("path.dir", |a| match a {
+        [Value::Str(p)] => Some(Value::Str(
+            match p.rfind('/') {
+                Some(0) => "/",
+                Some(i) => &p[..i],
+                None => ".",
+            }
+            .to_string(),
+        )),
+        _ => None,
+    }),
+    ("path.base", |a| match a {
+        [Value::Str(p)] => Some(Value::Str(
+            match p.rfind('/') {
+                Some(i) => &p[i + 1..],
+                None => p.as_str(),
+            }
+            .to_string(),
+        )),
+        _ => None,
+    }),
+    ("path.ext", |a| match a {
+        [Value::Str(p)] => {
+            let base = match p.rfind('/') {
+                Some(i) => &p[i + 1..],
+                None => p.as_str(),
+            };
+            Some(Value::Str(match base.rfind('.') {
+                Some(0) | None => String::new(),
+                Some(i) => base[i..].to_string(),
+            }))
+        }
+        _ => None,
+    }),
+    ("path.rel", |a| match a {
+        [Value::Str(from), Value::Str(to)] => rel_path(from, to).map(Value::Str),
+        _ => None,
+    }),
+    ("path.clean", |a| match a {
+        [Value::Str(p)] => Some(Value::Str(clean_path(p))),
+        _ => None,
+    }),
+    ("json.decode", |a| match a {
+        [Value::Str(s)] => serde_json::from_str::<serde_json::Value>(s)
+            .ok()
+            .and_then(|j| json_to_value(&j)),
+        _ => None,
+    }),
+    ("json.encode", |a| match a {
+        [v] if encodable(v) => serde_json::to_string(&crate::engine::value_to_json(v))
+            .ok()
+            .map(Value::Str),
+        _ => None,
+    }),
+    ("yaml.decode", |a| match a {
+        [Value::Str(s)] => serde_yaml::from_str::<serde_json::Value>(s)
+            .ok()
+            .and_then(|j| json_to_value(&j)),
+        _ => None,
+    }),
+    ("yaml.encode", |a| match a {
+        [v] if encodable(v) => serde_yaml::to_string(&crate::engine::value_to_json(v))
+            .ok()
+            .map(Value::Str),
+        _ => None,
+    }),
+    ("toml.decode", |a| match a {
+        [Value::Str(s)] => toml::from_str::<serde_json::Value>(s)
+            .ok()
+            .and_then(|j| json_to_value(&j)),
+        _ => None,
+    }),
+    ("toml.encode", |a| match a {
+        [v] if encodable(v) => toml::to_string(&crate::engine::value_to_json(v))
+            .ok()
+            .map(Value::Str),
+        _ => None,
+    }),
+];
+
+/// A scalar's text (`str.format`'s args): a list, an object, a
+/// reference and a null have none.
+fn scalar_text(v: &Value) -> Option<String> {
+    match v {
+        Value::Str(s) => Some(s.clone()),
+        Value::Int(i) => Some(i.to_string()),
+        Value::Bool(b) => Some(b.to_string()),
+        Value::Quantity(_) | Value::Time(_) => v.typed_text(),
+        Value::Ip(_) | Value::IpNet { .. } | Value::IpRange { .. } => {
+            Some(crate::partition::fmt_value(v))
+        }
+        _ => None,
+    }
+}
+
+/// `s` padded with `pad` (repeated, truncated to fit) to at least
+/// `width` characters, on the left or the right (`str.pad_left`,
+/// `str.pad_right`).
+fn pad_to(s: &str, width: i64, pad: &str, left: bool) -> Option<String> {
+    let width = usize::try_from(width).ok()?;
+    let have = s.chars().count();
+    if have >= width {
+        return Some(s.to_string());
+    }
+    let need = width - have;
+    let filler: String = pad.chars().cycle().take(need).collect();
+    Some(if left {
+        format!("{filler}{s}")
+    } else {
+        format!("{s}{filler}")
+    })
+}
+
+/// `s`'s characters from `start` up to `end` (to the end when left
+/// out); none past its length or for an end before its start
+/// (`str.slice`).
+fn str_slice(s: &str, start: i64, end: Option<i64>) -> Option<Value> {
+    let chars: Vec<char> = s.chars().collect();
+    let start = usize::try_from(start).ok()?;
+    let end = match end {
+        Some(e) => usize::try_from(e).ok()?,
+        None => chars.len(),
+    };
+    if start > end || end > chars.len() {
+        return None;
+    }
+    Some(Value::Str(chars[start..end].iter().collect()))
+}
+
+/// A URL path or query component's safe characters: alphanumerics and
+/// the unreserved punctuation (RFC 3986), everything else percent-encoded.
+static URL_COMPONENT: &percent_encoding::AsciiSet = &percent_encoding::NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'_')
+    .remove(b'.')
+    .remove(b'~');
+
+/// `a` and `b` joined by exactly one `/`, whatever either side already has.
+fn join_slash(a: &str, b: &str) -> String {
+    if a.is_empty() {
+        return b.to_string();
+    }
+    if b.is_empty() {
+        return a.to_string();
+    }
+    format!(
+        "{}/{}",
+        a.strip_suffix('/').unwrap_or(a),
+        b.strip_prefix('/').unwrap_or(b)
+    )
+}
+
+/// `p`'s `.` and `..` segments resolved and its repeated slashes
+/// collapsed (`path.clean`), without touching a filesystem.
+fn clean_path(p: &str) -> String {
+    let abs = p.starts_with('/');
+    let mut stack: Vec<&str> = Vec::new();
+    for seg in p.split('/') {
+        match seg {
+            "" | "." => {}
+            ".." if stack.last().is_some_and(|s| *s != "..") => {
+                stack.pop();
+            }
+            ".." if abs => {}
+            seg => stack.push(seg),
+        }
+    }
+    let joined = stack.join("/");
+    let out = if abs {
+        format!("/{joined}")
+    } else {
+        joined
+    };
+    if out.is_empty() { ".".to_string() } else { out }
+}
+
+/// `to` relative to the directory `from` (`path.rel`); none when one is
+/// absolute and the other is not.
+fn rel_path(from: &str, to: &str) -> Option<String> {
+    let (from_c, to_c) = (clean_path(from), clean_path(to));
+    if from_c.starts_with('/') != to_c.starts_with('/') {
+        return None;
+    }
+    let fs: Vec<&str> = from_c.split('/').filter(|s| !s.is_empty()).collect();
+    let ts: Vec<&str> = to_c.split('/').filter(|s| !s.is_empty()).collect();
+    let common = fs.iter().zip(ts.iter()).take_while(|(a, b)| a == b).count();
+    let mut parts: Vec<String> = (common..fs.len()).map(|_| "..".to_string()).collect();
+    parts.extend(ts[common..].iter().map(|s| s.to_string()));
+    Some(if parts.is_empty() {
+        ".".to_string()
+    } else {
+        parts.join("/")
+    })
+}
+
+/// A parsed OCI distribution reference, `[registry/]repository[:tag][@digest]`.
+struct OciRef {
+    registry: Option<String>,
+    repository: String,
+    tag: Option<String>,
+    digest: Option<String>,
+}
+
+fn oci_split(reference: &str) -> Option<OciRef> {
+    let (rest, digest) = match reference.split_once('@') {
+        Some((a, b)) if is_digest(b) => (a, Some(b.to_string())),
+        Some(_) => return None,
+        None => (reference, None),
+    };
+    if rest.is_empty() {
+        return None;
+    }
+    let last_slash = rest.rfind('/');
+    let (name, tag) = match rest.rfind(':') {
+        Some(ci) if last_slash.is_none_or(|si| ci > si) => {
+            let tag = &rest[ci + 1..];
+            if !is_tag(tag) {
+                return None;
+            }
+            (&rest[..ci], Some(tag.to_string()))
+        }
+        _ => (rest, None),
+    };
+    if name.is_empty() {
+        return None;
+    }
+    let (registry, repository) = match name.split_once('/') {
+        Some((head, tail)) if is_registry(head) && !tail.is_empty() => {
+            (Some(head.to_string()), tail.to_string())
+        }
+        _ => (None, name.to_string()),
+    };
+    if repository.is_empty() {
+        return None;
+    }
+    Some(OciRef {
+        registry,
+        repository,
+        tag,
+        digest,
+    })
+}
+
+fn is_digest(s: &str) -> bool {
+    matches!(s.split_once(':'), Some((algo, hex)) if !algo.is_empty() && !hex.is_empty()
+        && hex.chars().all(|c| c.is_ascii_hexdigit()))
+}
+
+fn is_tag(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 128
+        && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
+}
+
+fn is_registry(s: &str) -> bool {
+    !s.is_empty() && (s.contains('.') || s.contains(':') || s == "localhost")
+}
+
+/// The text's SHA-256, lower-case hex (`hash.sha256`, `hash.short`).
+fn sha256_hex(s: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(s.as_bytes());
+    h.finalize().iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// A JSON value read into a dform one (`json.decode`, `yaml.decode`,
+/// `toml.decode`, all through `serde_json::Value` as their common
+/// model); none for a JSON `null` (dform has no scalar for it) or a
+/// number that is not whole.
+fn json_to_value(j: &serde_json::Value) -> Option<Value> {
+    use serde_json::Value as J;
+    Some(match j {
+        J::Null => return None,
+        J::Bool(b) => Value::Bool(*b),
+        J::Number(n) => Value::Int(n.as_i64()?),
+        J::String(s) => Value::Str(s.clone()),
+        J::Array(xs) => Value::List(xs.iter().map(json_to_value).collect::<Option<Vec<_>>>()?),
+        J::Object(m) => Value::Obj(
+            m.iter()
+                .map(|(k, v)| json_to_value(v).map(|v| (k.clone(), v)))
+                .collect::<Option<BTreeMap<_, _>>>()?,
+        ),
+    })
+}
+
+/// Whether `v` has no reference and no null anywhere inside it
+/// (`json.encode`, `yaml.encode`, `toml.encode`): what a document format
+/// can write.
+fn encodable(v: &Value) -> bool {
+    match v {
+        Value::Ref { .. } | Value::CloudRef { .. } | Value::Null { .. } => false,
+        Value::List(xs) => xs.iter().all(encodable),
+        Value::Obj(m) => m.values().all(encodable),
+        _ => true,
     }
 }
 
@@ -516,9 +1226,22 @@ mod tests {
         assert_eq!(
             r.packages(),
             [
-                "bytes", "cpu", "duration", "inet", "int", "ip", "list", "random", "str", "time"
+                "base64", "bytes", "cpu", "duration", "hash", "inet", "int", "ip", "json", "list",
+                "oci", "path", "random", "regex", "semver", "str", "time", "toml", "url", "yaml"
             ]
         );
+    }
+
+    /// An object return type (R-6): a function's return shape written
+    /// out in full, found past its balanced braces.
+    #[test]
+    fn an_object_return_type_is_one_type() {
+        let f = registry().get("oci.parse").unwrap();
+        assert_eq!(
+            f.ret,
+            "{ registry: string?, repository: string, tag: string?, digest: string? }"
+        );
+        assert!(f.partial);
     }
 
     #[test]
@@ -535,6 +1258,34 @@ mod tests {
             ("b.df", "package geo\nfn distance(a: int, b: int) -> int"),
         ]);
         assert!(two.unwrap_err().contains("only a constructor"));
+    }
+
+    /// Every function `std/*.df` declares has a body, here or in
+    /// `engine::BODIES` (R-6: `engine::body` falls back to this
+    /// module's own table).
+    #[test]
+    fn every_declared_function_has_a_body() {
+        for f in registry().functions() {
+            assert!(
+                crate::engine::body(&f.name).is_some(),
+                "{} ({}:{}) has no body",
+                f.name,
+                f.file,
+                f.line
+            );
+        }
+    }
+
+    /// The reverse: a body here is declared somewhere (no orphan).
+    #[test]
+    fn every_body_here_is_declared() {
+        let r = registry();
+        for (name, _) in BODIES {
+            assert!(
+                r.get(name).is_some(),
+                "the body {name} is declared in no std/*.df"
+            );
+        }
     }
 }
 
