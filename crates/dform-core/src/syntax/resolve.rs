@@ -4328,6 +4328,17 @@ impl<'u> Lowerer<'u> {
                     }
                 }
             };
+            // `r in T` with `r` a reference column's (`deformation(k, r,
+            // _)`): the column's `ref(T, R, "")` tests the type, so a row
+            // of a deleted resource passes (R-42).
+            if let (Some(t), Some(c)) = (&typ, Chain::of(lhs_node))
+                && world.is_none()
+                && c.is_bare()
+                && Self::ref_bound(n, &c.head)
+            {
+                let have = rc.types.get(&c.head).cloned().unwrap_or_else(|| t.clone());
+                return Ok(Lit::Eq(have, t.clone()));
+            }
             if let Some(w) = world {
                 let typ = w.fields()[1..].join(".");
                 return Ok(Lit::Pos(atom_at(
@@ -5224,7 +5235,15 @@ impl<'u> Lowerer<'u> {
 
     /// An interpolation hole: a term, read now (a content position).
     fn hole(&mut self, rc: &mut Rc, src: &str, at: u32, pre: &mut Vec<Lit>) -> L<Term> {
-        self.text_term(rc, src, at, Pos::Content, pre)
+        // A variable `in T` types is a reference: it interpolates as its
+        // address, `T["A"]`, as an untyped one does (R-42).
+        let parse = parse::parse_term(src.trim());
+        let typed = terms(&parse.syntax())
+            .next()
+            .and_then(|t| Chain::of(&t))
+            .is_some_and(|c| c.is_bare() && rc.types.contains_key(&c.head));
+        let pos = if typed { Pos::Value } else { Pos::Content };
+        self.text_term(rc, src, at, pos, pre)
     }
 
     /// A block entry's value: its term, or, for an entry that is only a

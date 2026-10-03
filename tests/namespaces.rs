@@ -74,7 +74,8 @@ fn a_deformation_row_binds_through_the_namespace() {
     );
     let r = dform(&s, &["plan"]).failure();
     assert!(
-        r.stdout.contains("denied:\n! a k8s delete: ns\n"),
+        r.stdout
+            .contains("denied:\n! a k8s delete: k8s.namespace[\"ns\"]\n"),
         "{}",
         r.stdout
     );

@@ -118,8 +118,11 @@ A string is a string constant: every constant is quoted (`"prod"`,
 `"a${e}b"` interpolates the term `e` (H-13): it lowers to
 `format("a%sb", e)`. `$${` is a literal `${`; a lone `{`, `}` or `$` is
 itself. A hole may not hold a string (bind it first). A hole is a content
-position: a dot in it reads now (see "Reference or read"). A literal part
-may not contain `%s`.
+position: a dot in it reads now (see "Reference or read"). A reference in
+a hole is its address, `T["A"]`, whether `in` types its variable or a
+reference column binds it untyped: `deny "${r}" where deformation(k, r,
+_), r in k8s` prints `k8s.namespace["ns"]`. A literal part may not contain
+`%s`.
 
 A string may span lines (R-61), as in Lisp: its text is everything
 between the quotes, newlines and leading spaces included, and nothing is
@@ -1129,6 +1132,13 @@ that the compiler knows the attributes of; otherwise it is an error
 naming the types that lack it. With `r` already bound by a reference
 column (`deformation(k, r, _)`, a plan row), `r in k8s` tests its type,
 so a deleted object binds the same way.
+
+`x in T` with `x` free enumerates the wanted resources of `T`; with `x` a
+reference column's anywhere in the body (`deformation(k, x, _)`, written
+before or after it), it tests the reference's type, so a plan row of a
+deleted resource passes: `requires_approval(sg, "..") where
+deformation(action, sg, _), sg in aws.security_group` holds for a delete
+too.
 
 ### Aggregates
 

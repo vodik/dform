@@ -344,7 +344,7 @@ fn a_resource_rule_over_the_deformation_is_an_error() {
 /// The plan's rows and the lifecycle facts take a resource reference
 /// (R-42): a rule binds it with `in`, which also reads its attributes, and
 /// compares it with a resource by `==`; a message prints it as its
-/// address.
+/// address, typed by `in` or not.
 #[test]
 fn a_deformation_row_is_a_reference() {
     let s = Scratch::new("deformation-reference");
@@ -365,7 +365,7 @@ provider fake
     assert!(
         r.stderr.contains(
             "constraint violations:\n\
-             - a wide vpc: other\n\
+             - a wide vpc: net.vpc[\"other\"]\n\
              - main changes: net.vpc[\"main\"]\n\
              - not main: compute.vm[\"vm\"]\n\
              - not main: net.vpc[\"other\"]\n"

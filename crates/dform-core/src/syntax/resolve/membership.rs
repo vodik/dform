@@ -16,6 +16,11 @@
 //!   (`deformation(k, r, _)`), it is a type test. `r.p` reads an attribute
 //!   every type of the namespace the compiler knows the attributes of has;
 //!   otherwise an error names the types that lack it.
+//! - `r in T`, `T` a resource type, with `r` a reference column's
+//!   anywhere in the body (`deformation(k, r, _)`, written before or
+//!   after), is a type test as well, so a plan row of a deleted resource
+//!   binds: the column takes the reference apart as `ref("T", R, "")`,
+//!   which is the test.
 
 use super::*;
 
@@ -214,6 +219,43 @@ impl Lowerer<'_> {
             .collect()
     }
 
+    /// Is `name` the reference column of a plan row or lifecycle relation
+    /// (`deformation(k, name, _)`) the body of `n`'s statement reads, in
+    /// any order (R-10)? `name in T` is then a type test.
+    pub(super) fn ref_bound(n: &SyntaxNode, name: &str) -> bool {
+        let lit = |k: SyntaxKind| {
+            matches!(
+                k,
+                LIT_ATOM | LIT_TRUTH | LIT_HAS | LIT_CMP | LIT_IN | LIT_NOT_IN
+            )
+        };
+        let Some(stmt) = n
+            .ancestors()
+            .find(|a| !matches!(a.kind(), BODY | CLAUSE) && !lit(a.kind()))
+        else {
+            return false;
+        };
+        let negated = |a: &SyntaxNode| {
+            a.ancestors()
+                .take_while(|x| x != &stmt)
+                .any(|x| matches!(x.kind(), LIT_NOT | LIT_NOT_BLOCK | COMPREHENSION))
+        };
+        stmt.descendants()
+            .filter(|a| a.kind() == LIT_ATOM && !negated(a))
+            .filter_map(|a| terms(&a).next())
+            .any(|call| {
+                let Some(pred) = call.children().find_map(|c| Chain::of(&c)) else {
+                    return false;
+                };
+                let args: Vec<SyntaxNode> = node(&call, ARG_LIST)
+                    .map(|l| terms(&l).collect())
+                    .unwrap_or_default();
+                crate::zset::ref_column(&pred.fields().join("."), args.len())
+                    .and_then(|i| args.get(i).and_then(Chain::of))
+                    .is_some_and(|c| c.is_bare() && c.head == name)
+            })
+    }
+
     /// `r in NS`: the facts of the namespace's types, and the literal.
     pub(super) fn namespace_member(
         &mut self,
@@ -229,7 +271,7 @@ impl Lowerer<'_> {
                 format!("a namespace's resources are enumerated by a name: `r in {ns}`"),
             );
         };
-        let bound = rc.vars.contains_key(&c.head);
+        let bound = rc.vars.contains_key(&c.head) || Self::ref_bound(lhs, &c.head);
         let typ = match rc.types.get(&c.head) {
             Some(t) => t.clone(),
             None => var(&fresh(rc, "Type")),
