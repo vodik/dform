@@ -179,6 +179,10 @@ key) in dependency order, each run headed and confirmed on its own; a
 | `completions zsh\|bash\|fish` | a completion script |
 | `lsp` | the language server, on stdin and stdout (see "Language server") |
 
+Controller mode (`controller run`, `stack handover`) is experimental:
+`DFORM_EXPERIMENTAL=1` lists it in `--help` and the completions, and
+docs/experimental/controller.md describes it.
+
 `dform output TARGET` lists a deployment's outputs as of its last apply
 (what other stacks read): the scalars as a key/value table, each relation
 (`output p`) as its own table headed by its name, its columns its
