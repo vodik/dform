@@ -668,6 +668,22 @@ impl Located {
         // Externs are asked on demand: a table's of its file, else of the
         // file provider, else of the providers.
         let tables = Rc::new(tables::Tables::default());
+        let mut st = self.dep.load_state()?;
+        // `random.*` derive from the deployment's master (R-60): made on
+        // first use when it is the stack's key.
+        if lowered.is_some_and(|l| crate::functions::random::called(&l.program)) {
+            let ikm = crate::functions::random::master(|| self.dep.plan_key())?;
+            crate::functions::random::set_master(ikm, &self.deployment);
+        }
+        // `memo.first`: what state keeps, a sealed one opened with the
+        // stack's key.
+        let memos = Rc::new(crate::memo::Memos::new(
+            &st,
+            match st.memo.values().any(|m| m.value.is_none()) {
+                true => self.dep.existing_plan_key()?,
+                false => None,
+            },
+        ));
         let externs = {
             let (no_program, no_fns) = (Program { statements: vec![] }, vec![]);
             let program_dir = project::base_of(&l.files[0]);
@@ -685,18 +701,18 @@ impl Located {
                     if let Some(r) = externs::env(f, inputs) {
                         return r;
                     }
+                    if let Some(r) = externs::time(f) {
+                        return r;
+                    }
+                    if let Some(r) = memos.answer(f, inputs) {
+                        return r;
+                    }
                     backend.query_extern(f, inputs)
                 },
             )
         };
-        let mut st = self.dep.load_state()?;
-        // What the plan file read, then what state persisted, before asking.
+        // What the plan file read, before asking.
         externs.preload(opts.recorded.clone());
-        externs.preload_persisted(st.externs.clone());
-        // A persisted secret is replayed by where it is held, never its value.
-        for a in &st.externs {
-            backend.hold(&a.held);
-        }
         let mut base_extra = self.set_facts.clone();
         base_extra.extend(opts.data.iter().cloned());
         base_extra.extend(stack::output_facts(&outputs));
@@ -723,9 +739,7 @@ impl Located {
         // A provider configured from what it serves itself is a cycle.
         if let Some(l) = lowered {
             backend.check_configuration(&l.program, &l.extern_fns, |p| {
-                p == crate::syntax::resolve::ENV_VAR
-                    || p.starts_with("file.")
-                    || tables::describe(p).is_some()
+                externs::in_process(p) || tables::describe(p).is_some()
             })?;
         }
         // Apply calls whose answer was lost, resolved before anything is
@@ -737,6 +751,12 @@ impl Located {
         // violates one, E0306), against the provider's schema.
         if let Some(l) = lowered {
             crate::secrets::check(l, backend.schema(), &secret_outputs)?;
+            // A memo of a secret is kept sealed and recorded nowhere.
+            externs.mark_secret(&crate::secrets::secret_memos(
+                l,
+                backend.schema(),
+                &secret_outputs,
+            ));
             crate::refine::check(&l.program, backend.schema())?;
             crate::types::check(&l.program, backend.schema())?;
             for (at, n) in transform::computed_reads(&l.program.statements, backend.schema()) {

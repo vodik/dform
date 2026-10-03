@@ -1,0 +1,179 @@
+//! `memo.first(+key: string, +candidate, -value)` (R-60): the one way a
+//! value is kept across runs. The first candidate ever given for a key is
+//! kept in the deployment's state and is the value on every later run,
+//! whatever the candidate then; `dform state taint memo KEY` forgets it.
+//!
+//! ```text
+//! memo.first("db-created", time.now(), created)      # a creation time
+//! let pw = memo.first("db-pw", random.bytes("db-pw", 32))
+//! ```
+//!
+//! It is a built-in extern, answered by dform ([`Memos::answer`]) and in
+//! scope with no `provider` statement. Within a run the first call of a key
+//! answers every later one, so two sites agree. What a run answered is kept
+//! when an apply completes a tick ([`keep`]); a plan keeps nothing.
+//!
+//! A secret candidate (the secrets pass says which sites:
+//! `secrets::secret_memos`) is kept sealed with a key derived from the
+//! stack's key (`state.key`, `secrets::seal`): state holds the seal, never
+//! the value, and the run that reads it opens it in memory.
+
+use crate::ast::ExternFn;
+use crate::state::State;
+use crate::value::Value;
+use anyhow::{Context, Result, anyhow};
+use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
+use std::collections::BTreeMap;
+
+/// The relation.
+pub const FIRST: &str = "memo.first";
+
+/// A kept value, in state under its key.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Kept {
+    /// When it was kept: RFC 3339, UTC.
+    pub kept: String,
+    /// A plain value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<Value>,
+    /// A secret: its seal (`secrets::seal`, bound to the key).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub sealed: String,
+}
+
+thread_local! {
+    /// When each key the run reads was kept, for `why` (`engine`'s leaf of
+    /// a `memo.first` fact): the last [`Memos`] made on this thread.
+    static KEPT: RefCell<BTreeMap<String, String>> = const { RefCell::new(BTreeMap::new()) };
+}
+
+/// What `why` says of the `memo.first` answer for `key`: kept when, or
+/// given by this run.
+pub fn provenance(key: &str) -> String {
+    KEPT.with(|k| match k.borrow().get(key) {
+        Some(when) => format!("{FIRST}(\"{key}\"): memo, first kept {when}"),
+        None => format!("{FIRST}(\"{key}\"): memo, first given by this run"),
+    })
+}
+
+/// How `why` names where an extern's fact came from (its leaf's `call`):
+/// a memo's provenance, else "extern".
+pub fn source(call: &str) -> String {
+    match call.split_once("): memo, ") {
+        Some((head, rest)) if head.starts_with(FIRST) => format!("memo, {rest}"),
+        _ => "extern".into(),
+    }
+}
+
+/// The answers of `memo.first` for one run, from the state it starts with.
+pub struct Memos {
+    kept: BTreeMap<String, Kept>,
+    /// The stack's key, which opens a sealed one; `None` when the
+    /// deployment has none yet (then nothing sealed is kept).
+    key: Option<crate::zset::file::Key>,
+    /// The first candidate of each key not kept, as this run answered it.
+    given: RefCell<BTreeMap<String, Value>>,
+}
+
+impl Memos {
+    pub fn new(st: &State, key: Option<crate::zset::file::Key>) -> Memos {
+        let when = st
+            .memo
+            .iter()
+            .map(|(k, m)| (k.clone(), m.kept.clone()))
+            .collect();
+        KEPT.with(|k| *k.borrow_mut() = when);
+        Memos {
+            kept: st.memo.clone(),
+            key,
+            given: RefCell::new(BTreeMap::new()),
+        }
+    }
+
+    /// The answer to `memo.first(key, candidate, -value)`: the kept value,
+    /// else the first candidate this run was given for the key. `None`
+    /// for another extern.
+    pub fn answer(&self, f: &ExternFn, inputs: &[Value]) -> Option<Result<Vec<Vec<Value>>>> {
+        if f.name != FIRST {
+            return None;
+        }
+        let [Value::Str(k), candidate] = inputs else {
+            return Some(Err(anyhow!(
+                "memo.first takes a key, a string, and a candidate"
+            )));
+        };
+        let value = match self.kept.get(k) {
+            Some(m) => match self.value(k, m) {
+                Ok(v) => v,
+                Err(e) => return Some(Err(e)),
+            },
+            None => self
+                .given
+                .borrow_mut()
+                .entry(k.clone())
+                .or_insert_with(|| candidate.clone())
+                .clone(),
+        };
+        Some(Ok(vec![vec![
+            Value::Str(k.clone()),
+            candidate.clone(),
+            value,
+        ]]))
+    }
+
+    fn value(&self, k: &str, m: &Kept) -> Result<Value> {
+        if let Some(v) = &m.value {
+            return Ok(v.clone());
+        }
+        let Some(key) = &self.key else {
+            anyhow::bail!(
+                "memo {k} is sealed with the stack's key (state.key), which this run does not have"
+            );
+        };
+        let plain = crate::secrets::open(key, k, &m.sealed)?;
+        serde_json::from_slice(&plain).with_context(|| format!("memo {k}: the opened value"))
+    }
+}
+
+/// Keep in `st` each memo the run answered that it does not have yet:
+/// `(key, value, secret)` ([`crate::externs::Externs::memos`]), a secret
+/// one sealed with the stack's key `key`. `now`: when, RFC 3339.
+pub fn keep(
+    st: &mut State,
+    memos: Vec<(String, Value, bool)>,
+    key: &crate::zset::file::Key,
+    now: &str,
+) -> Result<()> {
+    for (k, v, secret) in memos {
+        if st.memo.contains_key(&k) {
+            continue;
+        }
+        let kept = match secret {
+            true => Kept {
+                kept: now.to_string(),
+                value: None,
+                sealed: crate::secrets::seal(key, &k, &serde_json::to_vec(&v)?)?,
+            },
+            false => Kept {
+                kept: now.to_string(),
+                value: Some(v),
+                sealed: String::new(),
+            },
+        };
+        st.memo.insert(k, kept);
+    }
+    Ok(())
+}
+
+/// The time a memo is kept at: `DFORM_TEST_NOW` in tests, else the clock,
+/// to the second.
+pub fn now() -> String {
+    match std::env::var("DFORM_TEST_NOW") {
+        Ok(t) => t,
+        Err(_) => jiff::Timestamp::now()
+            .round(jiff::Unit::Second)
+            .map(|t| t.to_string())
+            .unwrap_or_default(),
+    }
+}

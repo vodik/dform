@@ -5,10 +5,9 @@ name = "crud-api"
 dform = ">=0.1"
 
 # The mock plays each: the built-in Kubernetes schema, and this project's
-# own schemas for the Cloud SQL types and the random provider's extern
-# (providers/<name>/schema.df, externs.df). Against a cluster,
+# own schema for the Cloud SQL types (providers/google/schema.df). Against
+# a cluster,
 # k8s = "providers/k8s" (a directory holding dform-provider-k8s).
 [providers]
 k8s = "k8s"
 google = "providers/google"
-random = "providers/random"

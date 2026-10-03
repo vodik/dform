@@ -3,8 +3,11 @@
 //!
 //! Sources: a schema attribute marked `sensitive` (an `attr` read of it, a
 //! `ref` to it), an input declared `secret(T)`, an extern column declared
-//! `-v: secret(T)`, another stack's output published as secret (the value
-//! of a `stack_output` of it: `stack::Published`). A head position is secret when a secret value reaches
+//! `-v: secret(T)`, a function declared `-> secret(T)` (`random.password`),
+//! another stack's output published as secret (the value
+//! of a `stack_output` of it: `stack::Published`). A `memo.first` keeps a
+//! secret when its candidate is one: that literal's value is secret, and
+//! not another's (`secret_memos`). A head position is secret when a secret value reaches
 //! it through its rule: a variable bound at a secret position, or built
 //! from one (`format`, arithmetic, lists, objects, field access).
 //!
@@ -111,6 +114,8 @@ impl Pass<'_> {
             Term::Var(v) => vars.contains(v),
             // Its label lowered to public.
             Term::Func { name, .. } if name == DECLASSIFY => false,
+            // A function whose value is a secret (`-> secret(T)`).
+            Term::Func { name, .. } if returns_secret(name) => true,
             Term::Func { name, args } if name == "ref" && args.len() == 3 => {
                 self.attr_secret(&args[0], &args[1], &args[2])
                     || args.iter().any(|a| self.term_secret(a, vars))
@@ -131,6 +136,12 @@ impl Pass<'_> {
             let before = vars.len();
             for l in body {
                 match l {
+                    // A memo's value is as secret as its candidate.
+                    Lit::Pos(a) if a.pred == crate::memo::FIRST && a.args.len() == 3 => {
+                        if self.term_secret(&a.args[1], &vars) {
+                            collect_vars(&a.args[2], &mut vars);
+                        }
+                    }
                     Lit::Pos(a) => {
                         for (i, t) in a.args.iter().enumerate() {
                             if self.position_secret(a, i) || self.term_secret(t, &vars) {
@@ -247,6 +258,11 @@ fn is_refinement(head: Option<&Atom>) -> bool {
     })
 }
 
+/// Whether `name` is a function declared `-> secret(T)`.
+fn returns_secret(name: &str) -> bool {
+    crate::functions::get(name).is_some_and(|f| f.ret.starts_with("secret("))
+}
+
 fn is_secret_ty(t: &TypeExpr) -> bool {
     matches!(t, TypeExpr::Apply(n, _) if n == "secret")
 }
@@ -337,6 +353,30 @@ pub fn secret_expected_accounts(
             }
         })
         .collect()
+}
+
+/// The `memo.first` literals whose candidate is a secret: their value is
+/// kept sealed (`memo`), and the plan file records none of their calls.
+pub fn secret_memos(
+    lowered: &Lowered,
+    schema: &Schema,
+    outputs: &BTreeSet<(String, String)>,
+) -> Vec<Atom> {
+    let pass = fixpoint(lowered, schema, outputs);
+    let mut out = Vec::new();
+    for (_, body, _) in rules(&lowered.program) {
+        let vars = pass.body_vars(body);
+        for l in body {
+            if let Lit::Pos(a) = l
+                && a.pred == crate::memo::FIRST
+                && a.args.len() == 3
+                && pass.term_secret(&a.args[1], &vars)
+            {
+                out.push(a.clone());
+            }
+        }
+    }
+    out
 }
 
 /// The pass over a lowered program against the provider schema; `outputs`
@@ -513,5 +553,174 @@ fn names_secret(t: &Term, secret: &dyn Fn(&Term) -> bool) -> bool {
         Term::List(xs) => xs.iter().any(|a| names_secret(a, secret)),
         Term::Obj(m) => m.values().any(|a| names_secret(a, secret)),
         _ => false,
+    }
+}
+
+// The held store (R-60): what dform itself keeps of a secret. A
+// `memo.first` of a secret candidate is sealed with a key derived from the
+// stack's key (`state.key`) before it goes into state, and opened in
+// memory by the run that reads it; `random.*` derives from a master
+// secret by HKDF. HMAC-SHA256 is the one primitive: the seal is
+// encrypt-then-MAC with HMAC in counter mode as the stream (a PRF keyed
+// apart from the MAC key), so no cipher crate is needed.
+
+/// HMAC-SHA256 (RFC 2104) of the concatenation of `parts` under `key`.
+pub fn hmac(key: &[u8], parts: &[&[u8]]) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    let mut k = [0u8; 64];
+    if key.len() > 64 {
+        k[..32].copy_from_slice(&Sha256::digest(key));
+    } else {
+        k[..key.len()].copy_from_slice(key);
+    }
+    let mut inner = Sha256::new().chain_update(k.map(|x| x ^ 0x36));
+    for p in parts {
+        inner.update(p);
+    }
+    Sha256::new()
+        .chain_update(k.map(|x| x ^ 0x5c))
+        .chain_update(inner.finalize())
+        .finalize()
+        .into()
+}
+
+/// HKDF-SHA256 (RFC 5869): `len` bytes (at most 255 blocks) of key
+/// material for `info` from the input key material `ikm`.
+pub fn hkdf(salt: &[u8], ikm: &[u8], info: &[u8], len: usize) -> Vec<u8> {
+    let prk = hmac(salt, &[ikm]);
+    let mut out = Vec::with_capacity(len);
+    let mut t: Vec<u8> = Vec::new();
+    let mut i = 1u8;
+    while out.len() < len {
+        t = hmac(&prk, &[&t, info, &[i]]).to_vec();
+        out.extend_from_slice(&t);
+        i = i.checked_add(1).expect("hkdf: at most 255 blocks");
+    }
+    out.truncate(len);
+    out
+}
+
+/// A key's 32 bytes, from its hex.
+fn key_bytes(k: &crate::zset::file::Key) -> [u8; 32] {
+    let hex = k.to_hex();
+    let mut out = [0u8; 32];
+    for (i, b) in out.iter_mut().enumerate() {
+        *b = u8::from_str_radix(&hex[2 * i..2 * i + 2], 16).expect("a key is hex");
+    }
+    out
+}
+
+/// The bytes the stack's key derives for `what` (`Key::derive`): a key
+/// that says nothing of the stack's, for one use.
+pub fn derived(k: &crate::zset::file::Key, what: &str) -> [u8; 32] {
+    key_bytes(&k.derive(what))
+}
+
+/// `bytes` XOR the HMAC-CTR stream of `key` and `nonce`.
+fn stream(key: &[u8], nonce: &[u8], bytes: &[u8]) -> Vec<u8> {
+    bytes
+        .chunks(32)
+        .enumerate()
+        .flat_map(|(i, c)| {
+            let ks = hmac(key, &[nonce, &(i as u64).to_be_bytes()]);
+            c.iter().zip(ks).map(|(b, k)| b ^ k).collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+/// `plain` sealed under the stack key `k` for `label` (what it is bound
+/// to: another label's seal does not open as this one): base64 of a
+/// random nonce, the ciphertext and its tag.
+pub fn seal(k: &crate::zset::file::Key, label: &str, plain: &[u8]) -> Result<String> {
+    use base64::Engine;
+    use std::io::Read;
+    let mut nonce = [0u8; 16];
+    std::fs::File::open("/dev/urandom")
+        .and_then(|mut f| f.read_exact(&mut nonce))
+        .map_err(|e| anyhow::anyhow!("read /dev/urandom for a seal's nonce: {e}"))?;
+    let ct = stream(&derived(k, "held store: stream"), &nonce, plain);
+    let tag = hmac(
+        &derived(k, "held store: mac"),
+        &[label.as_bytes(), &[0], &nonce, &ct],
+    );
+    let mut out = nonce.to_vec();
+    out.extend_from_slice(&ct);
+    out.extend_from_slice(&tag);
+    Ok(base64::engine::general_purpose::STANDARD.encode(out))
+}
+
+/// What [`seal`] sealed for `label` under `k`; an error when the seal is
+/// not one (another key, another label, altered).
+pub fn open(k: &crate::zset::file::Key, label: &str, sealed: &str) -> Result<Vec<u8>> {
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(sealed)
+        .map_err(|e| anyhow::anyhow!("{label}: the held value is not base64: {e}"))?;
+    if bytes.len() < 48 {
+        anyhow::bail!("{label}: the held value is too short to be a seal");
+    }
+    let (nonce, rest) = bytes.split_at(16);
+    let (ct, tag) = rest.split_at(rest.len() - 32);
+    let want = hmac(
+        &derived(k, "held store: mac"),
+        &[label.as_bytes(), &[0], nonce, ct],
+    );
+    // Compared in constant time.
+    if want.iter().zip(tag).fold(0u8, |d, (a, b)| d | (a ^ b)) != 0 {
+        anyhow::bail!(
+            "{label}: the held value does not open with this stack's key (state.key): \
+             another stack's key, or altered"
+        );
+    }
+    Ok(stream(&derived(k, "held store: stream"), nonce, ct))
+}
+
+#[cfg(test)]
+mod held_tests {
+    use super::*;
+
+    /// RFC 4231 test case 2 and RFC 5869 test case 1.
+    #[test]
+    fn hmac_and_hkdf_match_their_rfcs() {
+        let hex = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
+        assert_eq!(
+            hex(&hmac(b"Jefe", &[b"what do ya want ", b"for nothing?"])),
+            "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
+        );
+        let ikm = [0x0bu8; 22];
+        let salt: Vec<u8> = (0u8..=0x0c).collect();
+        let info: Vec<u8> = (0xf0u8..=0xf9).collect();
+        assert_eq!(
+            hex(&hkdf(&salt, &ikm, &info, 42)),
+            "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865"
+        );
+    }
+
+    #[test]
+    fn a_seal_opens_with_its_key_and_label_only() {
+        let k = crate::zset::file::Key::from_hex(&"11".repeat(32)).unwrap();
+        let other = crate::zset::file::Key::from_hex(&"22".repeat(32)).unwrap();
+        let s = seal(
+            &k,
+            "db-pw",
+            b"hunter2-but-longer-than-one-block-of-32-bytes",
+        )
+        .unwrap();
+        assert!(!s.contains("hunter2"));
+        assert_eq!(
+            open(&k, "db-pw", &s).unwrap(),
+            b"hunter2-but-longer-than-one-block-of-32-bytes"
+        );
+        assert!(open(&other, "db-pw", &s).is_err());
+        assert!(open(&k, "other", &s).is_err());
+        assert_ne!(
+            s,
+            seal(
+                &k,
+                "db-pw",
+                b"hunter2-but-longer-than-one-block-of-32-bytes"
+            )
+            .unwrap()
+        );
     }
 }

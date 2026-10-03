@@ -224,7 +224,7 @@ impl Printer<'_> {
             Leaf::Schema { .. } => "provider schema".into(),
             Leaf::World { .. } => "world (refresh)".into(),
             Leaf::Plan { tick, .. } => plan_text(*tick),
-            Leaf::Extern { .. } => "extern".into(),
+            Leaf::Extern { call } => crate::memo::source(call),
             l => self.redact.text(&leaf_text(l)),
         })
     }
@@ -583,7 +583,7 @@ impl Surface<'_, '_> {
             Leaf::Schema { .. } => "provider schema".into(),
             Leaf::World { .. } => "world (refresh)".into(),
             Leaf::Plan { tick, .. } => plan_text(*tick),
-            Leaf::Extern { .. } => "extern".into(),
+            Leaf::Extern { call } => crate::memo::source(call),
             l => self.p.redact.text(&leaf_text(l)),
         })
     }

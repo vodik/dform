@@ -38,10 +38,14 @@ pub struct State {
     /// holds it when one does (`stack::SecretOutput`).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub secret_outputs: BTreeMap<String, crate::stack::SecretOutput>,
-    /// The answers of `persist` externs (E DR-7): kept, and never asked
-    /// again, so a generated value stays the same.
+    /// The commits the last apply's `git` tables read (`tables::record`),
+    /// to say when a ref has moved since; never replayed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub externs: Vec<crate::externs::Answer>,
+    /// The values `memo.first` keeps (R-60), by key: a plain one as it is,
+    /// a secret one sealed with the stack's key (`memo::Kept`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub memo: BTreeMap<String, crate::memo::Kept>,
 }
 
 /// The deformations of the current tick that have not been applied yet, each
@@ -113,20 +117,11 @@ impl State {
         Ok(())
     }
 
-    /// `dform state taint`: forget the persisted answer of extern `pred` for the
-    /// inputs `args` (each as `--set` would print it: a string bare), so
-    /// the next plan asks again. Returns the answer removed.
-    pub fn taint(&mut self, pred: &str, args: &[String]) -> Option<crate::externs::Answer> {
-        let raw = |v: &crate::value::Value| match v {
-            crate::value::Value::Str(s) => s.clone(),
-            v => crate::partition::fmt_value(v),
-        };
-        let i = self.externs.iter().position(|a| {
-            a.pred == pred
-                && a.inputs.len() == args.len()
-                && a.inputs.iter().zip(args).all(|(v, x)| raw(v) == *x)
-        })?;
-        Some(self.externs.remove(i))
+    /// `dform state taint memo KEY`: forget the value `memo.first` keeps
+    /// for `key`, so the next run keeps its candidate. Returns what it
+    /// kept.
+    pub fn taint_memo(&mut self, key: &str) -> Option<crate::memo::Kept> {
+        self.memo.remove(key)
     }
 
     /// A new idempotency key for `action` of `addr` in the deployment

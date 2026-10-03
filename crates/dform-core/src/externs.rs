@@ -1,5 +1,5 @@
 //! Externs with binding patterns (DESIGN.org "Demand-driven extern
-//! predicates", E §2.6, DR-7): `extern p(+in, -out, ...) [persist].`
+//! predicates", E §2.6, DR-7): `extern p(+in, -out, ...)`.
 //!
 //! An extern is a predicate its provider answers on demand: a body literal
 //! `p(t1, ..., tn)` asks once its `+` arguments are ground, and the
@@ -13,16 +13,18 @@
 //! extern is not in a cycle and not negated, so an answer never retracts
 //! another round's demand: the last round is the fixpoint with every answer
 //! it reads. Answers are recorded in the plan file (apply asks nothing the
-//! plan already asked) and, for a `persist` extern, in state, where they
-//! win over asking again (a generated password stays the same).
+//! plan already asked); nothing else keeps them. What must stay the same
+//! across runs is kept by `memo.first` (R-60, [`crate::memo`]), which the
+//! program writes where the value is read.
 //!
 //! A program does not declare an extern: `provider NAME {}` brings the
-//! provider's into scope (DESIGN.org R-8). `file`, `env` and `random` are
+//! provider's into scope (DESIGN.org R-8). `file`, `env` and `time` are
 //! built-in fact providers ([`BUILTINS`]): their externs are the
 //! compiler's own, and dform answers `file.json(+path, -value)`,
 //! `file.text(+path, -value)` (paths from the program's project root,
-//! `project::base_of`) and `env.var(+name, -value)` itself, with no
-//! `dform.toml` source. Other externs are asked of the providers over the
+//! `project::base_of`), `env.var(+name, -value)` and `time.now(-t)`
+//! itself, with no `dform.toml` source. `memo.first` is in scope with no
+//! `provider` statement. Other externs are asked of the providers over the
 //! plugin protocol (Query; the mock answers from
 //! `providers/<name>/externs.df`).
 
@@ -283,8 +285,8 @@ pub fn is_secret(b: &BindArg) -> bool {
 /// How a call is asked of its provider: the extern and its inputs, to rows.
 type Ask<'a> = dyn Fn(&ExternFn, &[Value]) -> Result<Vec<Vec<Value>>> + 'a;
 
-/// Where the answers of one run come from, in order: the plan file's, the
-/// state's persisted ones, then the provider.
+/// Where the answers of one run come from, in order: the plan file's, then
+/// the provider (or dform, for a built-in in-process extern).
 pub struct Externs<'a> {
     fns: BTreeMap<String, ExternFn>,
     /// The extern literal of each rule or constraint: the body before it,
@@ -294,6 +296,11 @@ pub struct Externs<'a> {
     ask: Box<Ask<'a>>,
     /// The calls the last evaluation demanded.
     demanded: RefCell<BTreeSet<Call>>,
+    /// The sites whose call carries a secret (`memo.first` of a secret
+    /// candidate, `secrets::secret_memos`), by index into `sites`.
+    secret_sites: RefCell<BTreeSet<usize>>,
+    /// The calls a secret site demanded: never recorded in the clear.
+    secret_calls: RefCell<BTreeSet<Call>>,
 }
 
 impl<'a> Externs<'a> {
@@ -319,6 +326,20 @@ impl<'a> Externs<'a> {
             known: RefCell::new(BTreeMap::new()),
             ask: Box::new(ask),
             demanded: RefCell::new(BTreeSet::new()),
+            secret_sites: RefCell::new(BTreeSet::new()),
+            secret_calls: RefCell::new(BTreeSet::new()),
+        }
+    }
+
+    /// The extern literals `secret` (`secrets::secret_memos`): their calls
+    /// carry a secret, so the plan file never records them and a
+    /// `memo.first` keeps its value sealed ([`Externs::memos`]).
+    pub fn mark_secret(&self, secret: &[Atom]) {
+        let mut marked = self.secret_sites.borrow_mut();
+        for (i, (_, a)) in self.sites.iter().enumerate() {
+            if secret.contains(a) {
+                marked.insert(i);
+            }
         }
     }
 
@@ -341,13 +362,6 @@ impl<'a> Externs<'a> {
         }
     }
 
-    /// The answers state persisted: those of the `persist` externs (state
-    /// may hold others, a table's commit, that are never replayed).
-    pub fn preload_persisted(&self, answers: impl IntoIterator<Item = Answer>) {
-        let persist = |a: &Answer| self.fns.get(&a.pred).is_some_and(|f| f.persist);
-        self.preload(answers.into_iter().filter(persist));
-    }
-
     fn facts(&self) -> Vec<Atom> {
         self.known
             .borrow()
@@ -368,7 +382,8 @@ impl<'a> Externs<'a> {
     /// is a null is not ground yet: no call.
     fn demand(&self, facts: &BTreeSet<Atom>) -> Result<BTreeSet<Call>> {
         let mut out = BTreeSet::new();
-        for (prefix, a) in &self.sites {
+        let secret_sites = self.secret_sites.borrow();
+        for (site, (prefix, a)) in self.sites.iter().enumerate() {
             let f = &self.fns[&a.pred];
             let mut body = prefix.clone();
             let mut inputs = Vec::new();
@@ -386,10 +401,14 @@ impl<'a> Externs<'a> {
                 if vals.iter().any(|v| matches!(v, Value::Null { .. })) {
                     continue;
                 }
-                out.insert(Call {
+                let call = Call {
                     pred: a.pred.clone(),
                     inputs: vals,
-                });
+                };
+                if secret_sites.contains(&site) {
+                    self.secret_calls.borrow_mut().insert(call.clone());
+                }
+                out.insert(call);
             }
         }
         Ok(out)
@@ -496,10 +515,19 @@ impl<'a> Externs<'a> {
     }
 
     /// The answers the last evaluation read, for the plan file: every call
-    /// it demanded, except a call with a secret column (a secret is never
-    /// written in the clear).
+    /// it demanded, except a call with a secret column or one that carries
+    /// a secret (a secret is never written in the clear).
     pub fn recorded(&self) -> Vec<Answer> {
+        let secret = self.secret_calls.borrow();
         self.answers(|f| !f.args.iter().any(is_secret))
+            .into_iter()
+            .filter(|a| {
+                !secret.contains(&Call {
+                    pred: a.pred.clone(),
+                    inputs: a.inputs.clone(),
+                })
+            })
+            .collect()
     }
 
     /// The environment variables the last evaluation read with `env.var`,
@@ -517,9 +545,27 @@ impl<'a> Externs<'a> {
             .collect()
     }
 
-    /// The answers of `persist` externs the last evaluation read, for state.
-    pub fn persisted(&self) -> Vec<Answer> {
-        self.answers(|f| f.persist)
+    /// The `memo.first` calls the last evaluation read: each key, the value
+    /// it answered, and whether it is a secret (a secret site demanded
+    /// it), for state to keep ([`crate::memo::keep`]).
+    pub fn memos(&self) -> Vec<(String, Value, bool)> {
+        let secret = self.secret_calls.borrow();
+        let mut out: Vec<(String, Value, bool)> = Vec::new();
+        for a in self.answers(|f| f.name == crate::memo::FIRST) {
+            let is_secret = secret.contains(&Call {
+                pred: a.pred.clone(),
+                inputs: a.inputs.clone(),
+            });
+            for r in &a.rows {
+                if let [Value::Str(k), _, v] = r.as_slice() {
+                    match out.iter_mut().find(|(x, _, _)| x == k) {
+                        Some(m) => m.2 |= is_secret,
+                        None => out.push((k.clone(), v.clone(), is_secret)),
+                    }
+                }
+            }
+        }
+        out
     }
 
     fn answers(&self, keep: impl Fn(&ExternFn) -> bool) -> Vec<Answer> {
@@ -565,12 +611,8 @@ pub fn row(f: &ExternFn, inputs: &[Value], outs: Vec<Value>) -> Vec<Value> {
         .collect()
 }
 
-/// A built-in extern: `(name, [(input, column, type)], persist)`.
-type BuiltinExtern = (
-    &'static str,
-    &'static [(bool, &'static str, &'static str)],
-    bool,
-);
+/// A built-in extern: `(name, [(input, column, type)])`.
+type BuiltinExtern = (&'static str, &'static [(bool, &'static str, &'static str)]);
 
 /// A built-in fact provider (DESIGN.org R-8): `provider NAME {}` brings its
 /// externs into scope.
@@ -578,9 +620,11 @@ pub struct Builtin {
     pub name: &'static str,
     externs: &'static [BuiltinExtern],
     /// Whether dform answers them itself; else the provider the stack
-    /// configures by that name does (`random`: the secret it generates is
-    /// held by the provider, which hands it over inside Apply).
+    /// configures by that name does.
     pub in_process: bool,
+    /// Whether its externs are in scope with no `provider` statement
+    /// (`memo`: a relation of the language, not a provider's).
+    pub always: bool,
 }
 
 /// The built-in fact providers.
@@ -591,24 +635,44 @@ pub const BUILTINS: &[Builtin] = &[
             (
                 "file.json",
                 &[(true, "path", "string"), (false, "value", "any")],
-                false,
             ),
             (
                 "file.text",
                 &[(true, "path", "string"), (false, "value", "string")],
-                false,
             ),
         ],
         in_process: true,
+        always: false,
     },
     Builtin {
         name: "env",
         externs: &[(
             "env.var",
             &[(true, "name", "string"), (false, "value", "secret(string)")],
-            false,
         )],
         in_process: true,
+        always: false,
+    },
+    // The current time: a fact read again every run, never a function
+    // (R-60, R-62). Kept once, it is `memo.first(KEY, time.now(), T)`.
+    Builtin {
+        name: "time",
+        externs: &[(TIME_NOW, &[(false, "t", "time")])],
+        in_process: true,
+        always: false,
+    },
+    Builtin {
+        name: "memo",
+        externs: &[(
+            crate::memo::FIRST,
+            &[
+                (true, "key", "string"),
+                (true, "candidate", "any"),
+                (false, "value", "any"),
+            ],
+        )],
+        in_process: true,
+        always: true,
     },
     // The aws mock's data source (R-36): a table, its index a stable
     // ordinal of the names the provider defines. Declared here until a
@@ -622,20 +686,22 @@ pub const BUILTINS: &[Builtin] = &[
                 (false, "name", "string"),
                 (false, "index", "int"),
             ],
-            false,
         )],
         in_process: false,
-    },
-    Builtin {
-        name: "random",
-        externs: &[(
-            "random.password",
-            &[(true, "key", "string"), (false, "value", "secret(string)")],
-            true,
-        )],
-        in_process: false,
+        always: false,
     },
 ];
+
+/// The `time` provider's extern `time.now(-t: time)`.
+pub const TIME_NOW: &str = "time.now";
+
+/// Whether dform answers `pred` itself: an extern of an in-process
+/// built-in provider.
+pub fn in_process(pred: &str) -> bool {
+    pred.split_once('.')
+        .and_then(|(h, _)| builtin(h))
+        .is_some_and(|b| b.in_process && b.externs.iter().any(|(n, _)| *n == pred))
+}
 
 /// The built-in fact provider `name`.
 pub fn builtin(name: &str) -> Option<&'static Builtin> {
@@ -654,7 +720,7 @@ impl Builtin {
         };
         self.externs
             .iter()
-            .map(|(name, cols, persist)| ExternFn {
+            .map(|(name, cols)| ExternFn {
                 name: name.to_string(),
                 args: cols
                     .iter()
@@ -664,7 +730,6 @@ impl Builtin {
                         ty: Some(ty(t)),
                     })
                     .collect(),
-                persist: *persist,
                 span: Span::default(),
             })
             .collect()
@@ -707,9 +772,8 @@ pub fn file(
 /// The built-in `env.var(+name, -value: secret(string))`: the process
 /// environment's variable. Its column is a secret, so the plan file never
 /// records the answer ([`Externs::recorded`]), only its label
-/// ([`Externs::env_labels`]) and a keyed digest, and it is not `persist`:
-/// every run reads the
-/// environment again. An unset variable is an error naming it. `None` for
+/// ([`Externs::env_labels`]) and a keyed digest, and nothing keeps it:
+/// every run reads the environment again. An unset variable is an error naming it. `None` for
 /// another extern.
 pub fn env(f: &ExternFn, inputs: &[Value]) -> Option<Result<Vec<Vec<Value>>>> {
     if f.name != crate::syntax::resolve::ENV_VAR {
@@ -729,6 +793,25 @@ pub fn env(f: &ExternFn, inputs: &[Value]) -> Option<Result<Vec<Vec<Value>>>> {
             "env.var takes the variable's name, a string"
         )),
     })
+}
+
+/// The built-in `time.now(-t: time)`: the current time, UTC, read again
+/// every run (a plan file records it, so its apply reads the plan's).
+/// `DFORM_TEST_NOW` (RFC 3339) stands in for the clock in tests. `None`
+/// for another extern.
+pub fn time(f: &ExternFn) -> Option<Result<Vec<Vec<Value>>>> {
+    if f.name != TIME_NOW {
+        return None;
+    }
+    let now = match std::env::var("DFORM_TEST_NOW") {
+        Ok(t) => t,
+        Err(_) => jiff::Timestamp::now().to_string(),
+    };
+    Some(
+        crate::time::Time::parse(&now)
+            .map(|t| vec![vec![Value::Time(t)]])
+            .map_err(|e| anyhow::anyhow!("time.now: {e}")),
+    )
 }
 
 /// A JSON document as a value: numbers that are not integers and `null`

@@ -615,38 +615,73 @@ fn a_secret_output_reaches_a_sensitive_field_in_another_stack() {
     );
 }
 
-/// examples/crud-api's generated password (`extern random.password(+key,
-/// -value: secret(string)) persist`): the random provider holds it, and
-/// nothing dform keeps carries it (E DR-19): not state (its persisted
-/// answer is the label, digest and where it is held), the in-flight record,
-/// the audit log, the controller's memo, nor a plan file. The Secret and
-/// the database user still get it: the mock reads it where it is held,
-/// inside Apply.
+/// examples/crud-api's password, `random.password("crud-api-db")` (R-60):
+/// derived from the deployment's master (here the stack's key file), the
+/// same on every run and stored nowhere. Nothing dform keeps or prints
+/// carries it: not state, the in-flight record, the audit log, the
+/// controller's memo, a plan file, nor any command's output. The Secret
+/// and the database user get it, and a second apply changes nothing.
 #[test]
-fn a_persisted_extern_secret_is_held_by_its_provider_never_stored() {
-    const PASSWORD: &str = "mock-password-7f3c9a";
-    let s = Scratch::new("secrets-extern");
+fn a_derived_password_is_stable_and_never_stored() {
+    let s = Scratch::new("secrets-derived");
     common::copy_dir(&repo().join("examples/crud-api"), &s.dir);
     let _ = std::fs::remove_dir_all(s.path("dform.state"));
+    let mut outputs = Vec::new();
     // A plan file taken before anything exists, applied; an apply that
     // fails midway keeps its in-flight record; the next one resumes it.
-    s.run(&["plan", "--out", "first.json"]).success();
-    let first = s.read("first.json");
-    assert!(!first.contains(PASSWORD), "{first}");
-    s.run(&[
-        "dev",
-        "apply",
-        "first.json",
-        "--chaos",
-        "fail=k8s.job[\"migrate-v42\"]",
-    ])
-    .failure();
+    let r = s.run(&["plan", "--out", "first.json"]).success();
+    outputs.extend([r.stdout, r.stderr, s.read("first.json")]);
+    let r = s
+        .run(&[
+            "dev",
+            "apply",
+            "first.json",
+            "--chaos",
+            "fail=k8s.job[\"migrate-v42\"]",
+        ])
+        .failure();
+    outputs.extend([r.stdout, r.stderr]);
     let state = s.read("dform.state/crud_api/state.json");
     assert!(state.contains("\"in_flight\""), "{state}");
-    assert!(!state.contains(PASSWORD), "{state}");
-    s.converge(&["apply"]);
+    outputs.push(state);
+    for r in s.converge(&["apply"]) {
+        outputs.extend([r.stdout, r.stderr]);
+    }
+    let world = |s: &Scratch| -> serde_json::Value {
+        serde_json::from_str(&s.read("dform.state/crud_api/remote.json")).unwrap()
+    };
+    let w = world(&s);
+    let r = &w["resources"];
+    let pw = r["google.sql_user::crud_user"]["attrs"]["password"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{w}"))
+        .to_string();
+    assert!(
+        pw.len() == 32 && pw.chars().all(|c| c.is_ascii_alphanumeric()),
+        "{pw}"
+    );
+    assert_eq!(
+        r["k8s.secret::db_conn"]["attrs"]["stringData"]["PGPASSWORD"], pw,
+        "{w}"
+    );
+
+    // Stable: a second apply and a plan change nothing.
+    let r = s.run(&["apply"]).success();
+    outputs.extend([r.stdout, r.stderr]);
     let r = s.run(&["plan", "--out", "plan.json"]).success();
     assert_eq!(r.summary(), "stack crud_api is undeformed", "{}", r.stdout);
+    outputs.extend([r.stdout, r.stderr]);
+    assert_eq!(
+        world(&s)["resources"]["google.sql_user::crud_user"]["attrs"]["password"],
+        pw
+    );
+    for args in [
+        &["why", "google.sql_user[\"crud_user\"].password"][..],
+        &["query", "attr(T, A, P, V)"][..],
+    ] {
+        let r = s.run(args).success();
+        outputs.extend([r.stdout, r.stderr]);
+    }
     s.run(&["controller", "run", "crud_api", "--once"])
         .success();
     let mut files = Vec::new();
@@ -658,36 +693,17 @@ fn a_persisted_extern_secret_is_held_by_its_provider_never_stored() {
         files.iter().map(|(p, _)| p).collect::<Vec<_>>()
     );
     for (path, text) in &files {
-        assert!(!text.contains(PASSWORD), "{path}:\n{text}");
+        assert!(!text.contains(&pw), "{path}:\n{text}");
     }
+    for o in &outputs {
+        assert!(!o.contains(&pw), "{o}");
+    }
+    // Nothing is kept of it: state has no memo and no extern answer.
     let state: serde_json::Value =
         serde_json::from_str(&s.read("dform.state/crud_api/state.json")).unwrap();
-    let answer = &state["externs"][0];
-    assert_eq!(
-        answer["rows"][0][1]["v"]["label"], "random.password/crud-api-db#2",
-        "{answer}"
-    );
-    let held = &answer["held"]["random.password/crud-api-db#2"];
-    assert_eq!(held["type"], "random.password", "{answer}");
     assert!(
-        held["digest"]
-            .as_str()
-            .is_some_and(|d| d.starts_with("hmac-sha256:")),
-        "{answer}"
-    );
-
-    // The provider's world: it keeps the value, and the objects that read
-    // it have it.
-    let world: serde_json::Value =
-        serde_json::from_str(&s.read("dform.state/crud_api/remote.json")).unwrap();
-    let r = &world["resources"];
-    assert_eq!(
-        r["k8s.secret::db_conn"]["materialized"]["stringData.PGPASSWORD"], PASSWORD,
-        "{world}"
-    );
-    assert_eq!(
-        r["google.sql_user::crud_user"]["materialized"]["password"], PASSWORD,
-        "{world}"
+        state["memo"].is_null() && state["externs"].is_null(),
+        "{state}"
     );
 }
 

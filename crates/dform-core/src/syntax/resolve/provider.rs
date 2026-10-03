@@ -15,15 +15,21 @@
 //! (`Providers::check_accounts`).
 //!
 //! A `provider` block also brings the provider's externs into scope
-//! (DESIGN.org R-8): a built-in fact provider's (`file`, `env`, `random`,
+//! (DESIGN.org R-8): a built-in fact provider's (`file`, `env`, `time`,
 //! `externs::BUILTINS`) are declared here, and a program that writes
 //! `extern` for one is told to write the `provider` statement instead.
+//! `memo.first` (R-60) is in scope with no `provider` statement. `random`
+//! is no provider: its functions are std's (`std/random.df`).
 
 use super::*;
 
 /// The `env` provider's extern `env.var(+name, -value: secret(string))`:
 /// the process environment's variable, a secret, never persisted.
 pub const ENV_VAR: &str = "env.var";
+
+/// The term calls of a built-in extern, its last column read: `env.var(N)`,
+/// `time.now()`, `memo.first(K, C)`.
+const TERM_CALLS: [&str; 3] = [ENV_VAR, crate::externs::TIME_NOW, crate::memo::FIRST];
 
 /// A `provider` block's setting that is checked, not sent.
 const EXPECT_ACCOUNT: &str = "expect_account";
@@ -32,6 +38,15 @@ impl Lowerer<'_> {
     pub(super) fn provider(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Vec<Stmt>> {
         let span = self.span(n);
         let name = word_text(n, 1);
+        if name == "random" {
+            let d = Diagnostic::error(span, "random is not a provider").with_help(
+                "random.password, random.bytes, random.id, random.uuid and \
+                     random.signing_key are std functions (std/random.df): delete the \
+                     `provider random` statement and call them",
+            );
+            self.diags.push(d);
+            return Err(Skip);
+        }
         let block = node(n, BLOCK);
         let mut out = Vec::new();
         let mut source = Vec::new();
@@ -109,10 +124,11 @@ impl Lowerer<'_> {
         })
     }
 
-    /// `env.var(NAME)` as a term: the read `env.var(NAME', V)`, `V` its
-    /// value. `None`: the call is not one. A call of another built-in
-    /// provider's extern, or of `env.var` with no `provider env`, is an
-    /// error naming the statement to write.
+    /// `env.var(NAME)`, `time.now()`, `memo.first(KEY, CANDIDATE)` as a
+    /// term: the read of the extern with those inputs, its last column
+    /// the value. `None`: the call is not one. A call of another built-in
+    /// provider's extern, or of one with no `provider` statement for it,
+    /// is an error naming the statement to write.
     pub(super) fn env_var_call(
         &mut self,
         rc: &mut Rc,
@@ -127,37 +143,44 @@ impl Lowerer<'_> {
             return None;
         }
         let span = self.span(n);
-        if name != ENV_VAR {
+        if !TERM_CALLS.contains(&name.as_str()) {
             return Some(self.error(
                 span,
                 format!("{name} is a relation: read it as `{name}[..]` or in a body"),
             ));
         }
-        if !self.decls.externs.contains_key(ENV_VAR) {
+        if !self.decls.externs.contains_key(&name) {
             return Some(self.error(
                 span,
                 format!("{name} is the {head} provider's: declare `provider {head}`"),
             ));
         }
-        Some(self.env_var_read(rc, n, pos, pre))
+        Some(self.extern_read(rc, n, pos, pre, &name))
     }
 
-    fn env_var_read(
+    fn extern_read(
         &mut self,
         rc: &mut Rc,
         n: &SyntaxNode,
         pos: Pos,
         pre: &mut Vec<Lit>,
+        name: &str,
     ) -> L<Term> {
         let span = self.span(n);
         let args = self.bind(true, |l| l.args(rc, n, Pos::Content, pre))?;
-        if args.len() != 1 {
-            return self.error(span, "env.var takes one argument: the variable's name");
+        let want = match name {
+            ENV_VAR => "one argument: the variable's name",
+            crate::externs::TIME_NOW => "no argument",
+            _ => "two arguments: the key and the candidate",
+        };
+        let ins = self.decls.externs[name].len() - 1;
+        if args.len() != ins {
+            return self.error(span, format!("{name} takes {want}"));
         }
         let res = Res::Lookup {
-            pred: ENV_VAR.to_string(),
+            pred: name.to_string(),
             args,
-            out: 1,
+            out: ins,
             path: Vec::new(),
         };
         self.realize(rc, res, pos, pre, span)
@@ -167,7 +190,20 @@ impl Lowerer<'_> {
     /// blocks name, declared: their statements.
     pub(super) fn declare_builtin_externs(&mut self) -> Vec<Stmt> {
         let mut out = Vec::new();
-        for (name, span) in self.provider_blocks() {
+        // Declared where a program names it, so a file that does not
+        // (a facts file) has no extern.
+        let always = crate::externs::BUILTINS
+            .iter()
+            .filter(|b| b.always)
+            .filter(|b| {
+                let call = format!("{}.", b.name);
+                self.units
+                    .iter()
+                    .any(|u| u.root.text().to_string().contains(&call))
+            })
+            .map(|b| (b.name.to_string(), Span::default()));
+        let blocks: Vec<(String, Span)> = always.chain(self.provider_blocks()).collect();
+        for (name, span) in blocks {
             let Some(b) = crate::externs::builtin(&name) else {
                 continue;
             };

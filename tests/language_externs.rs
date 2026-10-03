@@ -1,13 +1,13 @@
 //! Externs with binding patterns: asked on demand once their `+` arguments
 //! are ground, of the `file` provider or the mock (`externs.df`), recorded
-//! in the plan file, and with `persist` kept in state.
+//! in the plan file; nothing keeps them (`memo.first` does: tests/memo.rs).
 
 mod common;
 use common::{Scratch, repo};
 
 const P: &str = r#"edition 2026
 provider file
-extern kv.password(+name, -value) persist
+extern kv.password(+name, -value)
 extern kv.token(+name, -value)
 dash("dash.json")
 resource mon.dashboard main {
@@ -81,53 +81,38 @@ fn a_missing_file_is_an_error_naming_the_call() {
     );
 }
 
-/// A `persist` extern's answer is kept in state and not asked again; a
-/// plain extern is asked every run.
+/// An extern is asked every run: nothing keeps its answer.
 #[test]
-fn a_persisted_answer_stays() {
+fn an_answer_is_asked_again() {
     let s = scratch();
     s.run(&["apply", "p.df"]).success();
-    assert!(s.read("dform.state/p/state.json").contains("pw-first"));
-    assert!(!s.read("dform.state/p/state.json").contains("tk-first"));
-    answers(&s, "second");
-    let r = s.run(&["plan", "p.df"]).success();
-    assert!(
-        r.stdout.contains("token: \"tk-first\" -> \"tk-second\""),
-        "{}",
-        r.stdout
-    );
-    assert!(!r.stdout.contains("pw-second"), "{}", r.stdout);
-}
-
-/// `dform state taint` forgets one persisted answer: the next plan asks the
-/// provider again, and only for that call.
-#[test]
-fn taint_forgets_a_persisted_answer() {
-    let s = scratch();
-    s.run(&["apply", "p.df"]).success();
-    answers(&s, "second");
-    let r = s
-        .run(&["state", "taint", "p", "kv.password", "other"])
-        .failure();
-    assert!(
-        r.stderr
-            .contains("taint kv.password(other): stack p has no persisted answer for it"),
-        "{}",
-        r.stderr
-    );
-    let r = s
-        .run(&["state", "taint", "p", "kv.password", "app"])
-        .success();
-    assert_eq!(
-        r.stdout,
-        "tainted kv.password(app) of stack p: the next plan asks again\n"
-    );
     assert!(!s.read("dform.state/p/state.json").contains("pw-first"));
+    answers(&s, "second");
     let r = s.run(&["plan", "p.df"]).success();
     assert!(
         r.stdout.contains("password: \"pw-first\" -> \"pw-second\""),
         "{}",
         r.stdout
+    );
+}
+
+/// `persist` is gone (R-60): the error names `memo.first`.
+#[test]
+fn persist_is_an_error_naming_memo_first() {
+    let s = scratch();
+    s.write(
+        "p.df",
+        &P.replace(
+            "extern kv.password(+name, -value)",
+            "extern kv.password(+name, -value) persist",
+        ),
+    );
+    let r = s.run(&["plan", "p.df"]).failure();
+    assert!(
+        r.stderr.contains("extern kv.password: `persist` is gone")
+            && r.stderr.contains("memo.first(KEY, CANDIDATE, VALUE)"),
+        "{}",
+        r.stderr
     );
 }
 

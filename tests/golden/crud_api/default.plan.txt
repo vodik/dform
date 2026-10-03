@@ -19,7 +19,7 @@ definite:
 + google.sql_user["crud_user"]
   instance = "crud-api-dev"
   name = "crud_api"
-  password = (sensitive random.password["crud-api-db"]."2")
+  password = (sensitive)
 + k8s.namespace["shop"]
   metadata.labels.pod-security.kubernetes.io/enforce = "restricted"
   metadata.name = "shop"
@@ -37,7 +37,7 @@ definite:
   metadata.namespace = "shop"
   stringData.PGDATABASE = (sensitive)
   stringData.PGHOST = ?google.sql_database_instance["db"].private_ip_address
-  stringData.PGPASSWORD = (sensitive random.password["crud-api-db"]."2")
+  stringData.PGPASSWORD = (sensitive)
   stringData.PGUSER = (sensitive)
 + k8s.job["migrate-v42"]
   metadata.labels.app = "crud-api"

@@ -1707,13 +1707,24 @@ impl<'u> Lowerer<'u> {
                         ty: node(&b, TYPE_EXPR).map(|t| self.type_expr(&t)),
                     })
                     .collect();
-                let persist = tokens(n).any(|t| t.text() == "persist");
-                one(Stmt::ExternFn(ExternFn {
-                    name,
-                    args,
-                    persist,
-                    span,
-                }))
+                // R-60: one persistence concept, `memo.first`, said by the
+                // program where a value is kept, not by the extern.
+                if let Some(t) = tokens(n).find(|t| t.text() == "persist") {
+                    let r = t.text_range();
+                    let at = Span {
+                        start: u32::from(r.start()),
+                        end: u32::from(r.end()),
+                        ..span
+                    };
+                    let d = Diagnostic::error(at, format!("extern {name}: `persist` is gone"))
+                        .with_help(
+                            "keep an answer where it is read: `memo.first(KEY, CANDIDATE, VALUE)` \
+                             keeps the first candidate given for KEY",
+                        );
+                    self.diags.push(d);
+                    return Err(Skip);
+                }
+                one(Stmt::ExternFn(ExternFn { name, args, span }))
             }
             TYPE_DECL => {
                 let name = dotted_text(n, 1);
@@ -2185,7 +2196,7 @@ impl<'u> Lowerer<'u> {
                 let d = Diagnostic::error(at, format!("{pred}: column {name} is a secret"))
                     .with_note(
                         "a table's rows are read in the clear and recorded in the plan file; \
-                         a secret comes from a secret input or a `persist` extern",
+                         a secret comes from a secret input, an extern's secret column or a std function such as `random.password`",
                     );
                 self.diags.push(d);
                 return Err(Skip);
@@ -2435,7 +2446,6 @@ impl<'u> Lowerer<'u> {
                         ty: None,
                     },
                 ],
-                persist: false,
                 span,
             }));
             ins.extend([plus("repo"), plus("commit"), plus("path")]);
@@ -2458,7 +2468,6 @@ impl<'u> Lowerer<'u> {
         out.push(Stmt::ExternFn(ExternFn {
             name,
             args: ins,
-            persist: false,
             span,
         }));
         Ok(out)

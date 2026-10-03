@@ -11,7 +11,7 @@
 #
 # From proposals/G-corpus/crud_api.org (edition 2026 there; the compiler
 # reads 2026). It plans against the mock (dform.toml: the built-in k8s
-# schema and this project's providers/google and providers/random), and
+# schema and this project's providers/google), and
 # applies to a cluster with k8s = "providers/k8s" there. In
 # production the release and the approvals come from git:
 #   input release from facts("data/releases.facts")
@@ -35,11 +35,10 @@ decl approve(type, address)
 # Sources and versions are dform.toml's.
 provider google
 provider k8s
-provider random
 
-# `provider random {}` brings random.password(+key, -value: secret(string))
-# persist: a generated password, a secret null until the first apply,
-# the same value on every later run (persisted in state, E DR-7).
+# The database password is random.password("crud-api-db") (std/random.df):
+# derived from the deployment's master secret, a secret, the same value on
+# every run and nowhere stored.
 
 settings dev { db = { tier: "db-f1-micro", availability: "ZONAL" } }
 settings prod { db = { tier: "db-custom-2-7680", availability: "REGIONAL" } }
@@ -100,7 +99,7 @@ resource google.sql_database crud_db {
 resource google.sql_user crud_user {
   instance = db.name
   name = "crud_api"
-  password = random.password["crud-api-db"]
+  password = random.password("crud-api-db")
 }
 
 ########################################
@@ -122,7 +121,7 @@ resource k8s.network_policy default_deny {
 }
 
 # host is a reference to an open null (the private IP exists once the
-# instance does); the password is a secret null. Neither is interpolated:
+# instance does); the password is a secret. Neither is interpolated:
 # "postgres://...@{db.private_ip_address}" would need the content, and a
 # read in any field holds the whole Secret until the instance exists.
 resource k8s.secret db_conn {
@@ -132,7 +131,7 @@ resource k8s.secret db_conn {
     PGHOST: db.private_ip_address,
     PGUSER: crud_user.name,
     PGDATABASE: crud_db.name,
-    PGPASSWORD: random.password["crud-api-db"]
+    PGPASSWORD: random.password("crud-api-db")
   }
 }
 

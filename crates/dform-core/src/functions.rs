@@ -41,6 +41,7 @@ pub const SOURCES: &[(&str, &str)] = &[
     ("std/duration.df", include_str!("../../../std/duration.df")),
     ("std/bytes.df", include_str!("../../../std/bytes.df")),
     ("std/cpu.df", include_str!("../../../std/cpu.df")),
+    ("std/random.df", include_str!("../../../std/random.df")),
 ];
 
 /// The package whose functions are written bare.
@@ -515,7 +516,7 @@ mod tests {
         assert_eq!(
             r.packages(),
             [
-                "bytes", "cpu", "duration", "inet", "int", "ip", "list", "str", "time"
+                "bytes", "cpu", "duration", "inet", "int", "ip", "list", "random", "str", "time"
             ]
         );
     }
@@ -534,5 +535,253 @@ mod tests {
             ("b.df", "package geo\nfn distance(a: int, b: int) -> int"),
         ]);
         assert!(two.unwrap_err().contains("only a constructor"));
+    }
+}
+
+// random
+
+/// `random.*` (std/random.df, R-60): derived, not drawn. Each value is
+/// HKDF-SHA256 of the deployment's master secret, its info the function,
+/// the deployment, the key and every knob, so it is the same on every run
+/// and a changed knob or master is a new value. The master is the run's
+/// ([`random::master`]): a deployment's evaluation sets it on its thread; with
+/// none (an editor, a bare evaluation) the functions have no value.
+pub mod random {
+    use crate::value::Value;
+    use std::cell::RefCell;
+
+    thread_local! {
+        static MASTER: RefCell<Option<(Vec<u8>, String)>> = const { RefCell::new(None) };
+    }
+
+    /// Derive this thread's `random.*` from `ikm` for `deployment` until
+    /// the next call.
+    pub fn set_master(ikm: Vec<u8>, deployment: &str) {
+        MASTER.with(|m| *m.borrow_mut() = Some((ikm, deployment.to_string())));
+    }
+
+    /// The master's input key material: `RANDOM_MASTER` from the
+    /// environment, else what the stack's key derives for it (`key`).
+    pub fn master(
+        key: impl FnOnce() -> anyhow::Result<crate::zset::file::Key>,
+    ) -> anyhow::Result<Vec<u8>> {
+        match std::env::var("RANDOM_MASTER") {
+            Ok(m) if !m.is_empty() => Ok(m.into_bytes()),
+            _ => Ok(crate::secrets::derived(&key()?, "random master").to_vec()),
+        }
+    }
+
+    /// Whether `program` calls a `random.*` function: its run needs a master.
+    pub fn called(program: &crate::ast::Program) -> bool {
+        fn term(t: &crate::ast::Term) -> bool {
+            use crate::ast::Term;
+            match t {
+                Term::Func { name, args } => name.starts_with("random.") || args.iter().any(term),
+                Term::List(xs) => xs.iter().any(term),
+                Term::Obj(m) => m.values().any(term),
+                _ => false,
+            }
+        }
+        fn atom(a: &crate::ast::Atom) -> bool {
+            a.args.iter().any(term)
+        }
+        use crate::ast::{Lit, Stmt};
+        program.statements.iter().any(|s| match s {
+            Stmt::Fact(a) => atom(a),
+            Stmt::Rule(r) => {
+                atom(&r.head)
+                    || r.body.iter().any(|l| match l {
+                        Lit::Pos(a) | Lit::Not(a) => atom(a),
+                        Lit::Eq(x, y)
+                        | Lit::Neq(x, y)
+                        | Lit::Gt(x, y)
+                        | Lit::Ge(x, y)
+                        | Lit::Lt(x, y)
+                        | Lit::Le(x, y) => term(x) || term(y),
+                    })
+            }
+            _ => false,
+        })
+    }
+
+    /// `len` bytes for the call `what` of `key` with `knobs`.
+    fn derive(what: &str, key: &str, knobs: &[&str], len: usize) -> Option<Vec<u8>> {
+        MASTER.with(|m| {
+            let m = m.borrow();
+            let (ikm, deployment) = m.as_ref()?;
+            let mut info = Vec::new();
+            for part in [what, deployment.as_str(), key].iter().chain(knobs) {
+                info.extend_from_slice(part.as_bytes());
+                info.push(0);
+            }
+            Some(crate::secrets::hkdf(b"dform random", ikm, &info, len))
+        })
+    }
+
+    /// `n` characters of `alphabet`, uniform: bytes past the largest
+    /// multiple of its size are skipped.
+    fn chars(what: &str, key: &str, knobs: &[&str], n: usize, alphabet: &[u8]) -> Option<String> {
+        let limit = 256 - 256 % alphabet.len();
+        let mut out = String::with_capacity(n);
+        // Twice what is needed, and more rounds in the very unlikely case
+        // that is not enough.
+        for round in 0.. {
+            let r = round.to_string();
+            let mut ks: Vec<&str> = knobs.to_vec();
+            ks.push(&r);
+            let bytes = derive(what, key, &ks, (2 * n + 32).min(255 * 32))?;
+            for b in bytes {
+                if (b as usize) < limit {
+                    out.push(alphabet[b as usize % alphabet.len()] as char);
+                    if out.len() == n {
+                        return Some(out);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    const ALNUM: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    const BASE64: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+    fn alphabet(name: &str) -> Option<Vec<u8>> {
+        Some(match name {
+            "alnum" => ALNUM.to_vec(),
+            "ascii" => (b'!'..=b'~').collect(),
+            "hex" => b"0123456789abcdef".to_vec(),
+            "base64" => BASE64.to_vec(),
+            _ => return None,
+        })
+    }
+
+    pub fn password(a: &[Value]) -> Option<Value> {
+        let (key, length, name) = match a {
+            [Value::Str(k)] => (k, 32, "alnum"),
+            [Value::Str(k), Value::Int(n)] => (k, *n, "alnum"),
+            [Value::Str(k), Value::Int(n), Value::Str(al)] => (k, *n, al.as_str()),
+            _ => return None,
+        };
+        if !(1..=1024).contains(&length) {
+            return None;
+        }
+        let set = alphabet(name)?;
+        let n = length.to_string();
+        chars("password", key, &[&n, name], length as usize, &set).map(Value::Str)
+    }
+
+    pub fn bytes(a: &[Value]) -> Option<Value> {
+        use base64::Engine;
+        let [Value::Str(key), Value::Int(n)] = a else {
+            return None;
+        };
+        if !(1..=4096).contains(n) {
+            return None;
+        }
+        let b = derive("bytes", key, &[&n.to_string()], *n as usize)?;
+        Some(Value::Str(
+            base64::engine::general_purpose::STANDARD.encode(b),
+        ))
+    }
+
+    pub fn id(a: &[Value]) -> Option<Value> {
+        let (key, n) = match a {
+            [Value::Str(k)] => (k, 8),
+            [Value::Str(k), Value::Int(n)] => (k, *n),
+            _ => return None,
+        };
+        if !(1..=64).contains(&n) {
+            return None;
+        }
+        let b = derive("id", key, &[&n.to_string()], n as usize)?;
+        Some(Value::Str(b.iter().map(|x| format!("{x:02x}")).collect()))
+    }
+
+    pub fn uuid(a: &[Value]) -> Option<Value> {
+        let [Value::Str(key)] = a else { return None };
+        let mut b = derive("uuid", key, &[], 16)?;
+        b[6] = (b[6] & 0x0f) | 0x40;
+        b[8] = (b[8] & 0x3f) | 0x80;
+        let h: String = b.iter().map(|x| format!("{x:02x}")).collect();
+        Some(Value::Str(format!(
+            "{}-{}-{}-{}-{}",
+            &h[..8],
+            &h[8..12],
+            &h[12..16],
+            &h[16..20],
+            &h[20..]
+        )))
+    }
+
+    /// Synapse's signing key file: `ed25519 a_XXXX SEED`, the version four
+    /// letters and the 32-byte seed unpadded base64 (what
+    /// `generate_signing_key` writes).
+    pub fn signing_key(a: &[Value]) -> Option<Value> {
+        use base64::Engine;
+        let [Value::Str(key)] = a else { return None };
+        let version = chars("signing_key version", key, &[], 4, &ALNUM[..52])?;
+        let seed = derive("signing_key ed25519", key, &[], 32)?;
+        Some(Value::Str(format!(
+            "ed25519 a_{version} {}",
+            base64::engine::general_purpose::STANDARD_NO_PAD.encode(seed)
+        )))
+    }
+}
+
+#[cfg(test)]
+mod random_tests {
+    use super::random::*;
+    use crate::value::Value;
+
+    fn s(v: Option<Value>) -> String {
+        match v {
+            Some(Value::Str(s)) => s,
+            v => panic!("{v:?}"),
+        }
+    }
+
+    /// Derived: the same for the same master, deployment, key and knobs;
+    /// another for any of them changed; none without a master.
+    #[test]
+    fn a_value_is_derived_from_the_master_and_every_knob() {
+        let k = |x: &str| Value::Str(x.into());
+        set_master(b"m1".to_vec(), "app");
+        let pw = s(password(&[k("db")]));
+        assert!(pw.len() == 32 && pw.chars().all(|c| c.is_ascii_alphanumeric()));
+        assert_eq!(pw, s(password(&[k("db")])));
+        assert_eq!(pw, s(password(&[k("db"), Value::Int(32), k("alnum")])));
+        assert_ne!(pw, s(password(&[k("other")])));
+        let long = s(password(&[k("db"), Value::Int(40)]));
+        assert_eq!(long.len(), 40);
+        assert!(!long.starts_with(&pw), "a length is in the derivation");
+        let hex = s(password(&[k("db"), Value::Int(16), k("hex")]));
+        assert!(hex.len() == 16 && hex.chars().all(|c| c.is_ascii_hexdigit()));
+        assert!(password(&[k("db"), Value::Int(16), k("emoji")]).is_none());
+        assert!(password(&[k("db"), Value::Int(0)]).is_none());
+        let b = s(bytes(&[k("cookie"), Value::Int(32)]));
+        assert_eq!(b.len(), 44);
+        let id = s(id(&[k("logs")]));
+        assert_eq!(id.len(), 16);
+        let u = s(uuid(&[k("tenant")]));
+        assert!(u.len() == 36 && u.as_bytes()[14] == b'4', "{u}");
+        let sk = s(signing_key(&[k("synapse")]));
+        let parts: Vec<&str> = sk.split(' ').collect();
+        assert!(
+            parts.len() == 3
+                && parts[0] == "ed25519"
+                && parts[1].len() == 6
+                && parts[1].starts_with("a_")
+                && parts[2].len() == 43,
+            "{sk}"
+        );
+        set_master(b"m1".to_vec(), "app[env=prod]");
+        assert_ne!(pw, s(password(&[k("db")])), "the deployment is in it");
+        set_master(b"m2".to_vec(), "app");
+        assert_ne!(pw, s(password(&[k("db")])), "the master is in it");
+    }
+
+    #[test]
+    fn with_no_master_there_is_no_value() {
+        assert!(password(&[Value::Str("db".into())]).is_none());
     }
 }

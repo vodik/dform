@@ -441,14 +441,14 @@ enum StateCommand {
         #[command(flatten)]
         target: Target,
     },
-    /// Forget one persisted extern answer (`extern ... persist`) of STACK:
-    /// the answer for EXTERN with the input values ARGS, each written as
-    /// `--set` takes a value. The next plan asks the provider again.
+    /// Forget the value `memo.first` keeps for KEY (`taint memo KEY`): the
+    /// next run keeps its candidate instead.
     Taint {
-        stack: String,
-        #[arg(value_name = "EXTERN")]
-        pred: String,
-        args: Vec<String>,
+        #[arg(value_parser = ["memo"])]
+        kind: String,
+        key: String,
+        #[command(flatten)]
+        target: Target,
     },
     /// Give the object at FROM the address TO (each `T["N"]`, as plan
     /// prints it): nothing in the cloud changes, and the next plan sees the
@@ -608,10 +608,8 @@ enum Cmd {
         max_events: Option<usize>,
         max_ticks: usize,
     },
-    Taint {
-        stack: String,
-        pred: String,
-        args: Vec<String>,
+    TaintMemo {
+        key: String,
     },
     Log {
         verify: bool,
@@ -964,7 +962,7 @@ fn resolve(args: Args) -> Result<Cli> {
         },
         Command::State { cmd } => match cmd {
             StateCommand::Show { addr, target } => (Cmd::StateShow { addr }, Some(target)),
-            StateCommand::Taint { stack, pred, args } => (Cmd::Taint { stack, pred, args }, None),
+            StateCommand::Taint { key, target, .. } => (Cmd::TaintMemo { key }, Some(target)),
             StateCommand::Mv { from, to, target } => (Cmd::StateMv { from, to }, Some(target)),
         },
         Command::Provider { cmd } => match cmd {
@@ -1294,7 +1292,6 @@ fn run_with(
             println!("stack {stack} handed over to {to}: {moved}");
             return Ok(());
         }
-        Cmd::Taint { stack, pred, args } => return taint(&cli, stack, pred, args),
         Cmd::StackList => return stack_list(&cli),
         Cmd::Init { name } => {
             for line in crate::project::init(Path::new("."), name.as_deref())? {
@@ -1498,6 +1495,7 @@ fn run_with(
             return Ok(());
         }
         Cmd::StateShow { addr } => return state_show(&dep, addr.as_deref()),
+        Cmd::TaintMemo { key } => return taint_memo(&dep, key, &audit),
         Cmd::StateMv { from, to } => {
             return state_mv(&dep, from, to, &audit);
         }
@@ -1966,7 +1964,7 @@ fn run_with(
         | Cmd::Init { .. }
         | Cmd::Completions { .. }
         | Cmd::Complete { .. }
-        | Cmd::Taint { .. } => {
+        | Cmd::TaintMemo { .. } => {
             unreachable!("handled before evaluation")
         }
         Cmd::Graph { what: None } => print!("{}", graph::resources(&resources)),
@@ -2118,7 +2116,7 @@ fn run_with(
                 executor::approve(token, needs, roots, &expect, allowed)
             };
             let mut approved: Option<crate::approval::Verified> = None;
-            persist_externs(&mut st, externs, backend);
+            keep_memos(&mut st, externs, key)?;
             let persist = |st: &state::State| dep.save_state(st);
             // Nothing is written, to state or the world, until the apply is
             // confirmed: the moves, the resolution of uncertain calls and the
@@ -2510,7 +2508,7 @@ fn run_with(
                     // stacks to read (evaluated again only when it has any:
                     // the evaluation refreshes). A --world fixture is not
                     // registered: everything stays beside the world file.
-                    persist_externs(&mut st, externs, backend);
+                    keep_memos(&mut st, externs, key)?;
                     crate::tables::record(&mut st.externs, &externs.recorded());
                     // A secret one by its label and digest, never its
                     // value (E DR-19); a ref resolved, as the world is.
@@ -3205,12 +3203,22 @@ fn run_tests(
         extra.extend(build_extra_facts(&cli.data)?);
         extra.extend(backend.catalog(schema::named_types(&lowered.program, &extra).as_ref())?);
         let tables = crate::tables::Tables::default();
+        // Nothing is kept and nothing applied: a memo answers its
+        // candidate, `random.*` derive from a master of the test's own.
+        let memos = crate::memo::Memos::new(&state::State::default(), None);
+        crate::functions::random::set_master(b"dform test".to_vec(), stack);
         let externs =
             crate::externs::Externs::new(&lowered.program, &lowered.extern_fns, |f, ins| {
                 if let Some(r) = tables.answer(f, ins) {
                     return r;
                 }
                 if let Some(r) = crate::externs::file(f, ins, &program_dir) {
+                    return r;
+                }
+                if let Some(r) = crate::externs::time(f) {
+                    return r;
+                }
+                if let Some(r) = memos.answer(f, ins) {
                     return r;
                 }
                 backend.query_extern(f, ins)
@@ -3273,36 +3281,27 @@ fn run_tests(
     Ok(())
 }
 
-/// Keep the answers of `persist` externs in state: never asked again.
-/// `dform state taint STACK EXTERN ARGS...`: remove the answer from the stack's
-/// state (beside `--world`, else where the registry has it, else where its
-/// program's backend says), under the stack's lock.
-fn taint(cli: &Cli, stack: &str, pred: &str, args: &[String]) -> Result<()> {
-    let dep = match &cli.world {
-        Some(w) => store::Deployment::local(&state::world_paths(&cli.root, w).state, stack),
-        None => {
-            let (place, _, times) = place_of(cli, stack)?;
-            store::Deployment::new(
-                place.location.open(&open_s3(&cli.root, true))?,
-                stack,
-                times,
-            )
-        }
-    };
-    let call = format!("{pred}({})", args.join(", "));
+/// `dform state taint memo KEY`: forget what `memo.first` keeps for KEY in
+/// the deployment's state, under its lock.
+fn taint_memo(dep: &crate::store::Deployment, key: &str, audit: &crate::audit::Log) -> Result<()> {
+    let deployment = dep.name();
     if !dep.has_state()? {
         bail!(
-            "taint {call}: stack {stack} has no state at {}",
+            "taint memo {key}: stack {deployment} has no state at {}",
             dep.locate(store::STATE)
         );
     }
     let _lock = dep.lock()?;
     let mut st = dep.load_state()?;
-    if st.taint(pred, args).is_none() {
-        bail!("taint {call}: stack {stack} has no persisted answer for it");
+    if st.taint_memo(key).is_none() {
+        bail!("taint memo {key}: stack {deployment} keeps no memo {key}");
     }
     dep.save_state(&st)?;
-    println!("tainted {call} of stack {stack}: the next plan asks again");
+    audit.append(
+        "state_taint",
+        serde_json::json!({ "memo": key, "who": crate::audit::who() }),
+    )?;
+    println!("tainted memo {key} of stack {deployment}: the next apply keeps a new value");
     Ok(())
 }
 
@@ -3365,18 +3364,14 @@ fn place_of(cli: &Cli, name: &str) -> Result<(crate::stack::Place, PathBuf, stor
     Ok((place, home, times))
 }
 
-fn persist_externs(st: &mut state::State, externs: &crate::externs::Externs, backend: &Providers) {
-    for mut a in externs.persisted() {
-        // A secret column by its label, and where its provider holds it.
-        a.held = backend.held_of(&a.secret_labels());
-        if !st
-            .externs
-            .iter()
-            .any(|b| b.pred == a.pred && b.inputs == a.inputs)
-        {
-            st.externs.push(a);
-        }
-    }
+/// Keep in state each `memo.first` value the apply read that state does
+/// not keep yet (R-60), a secret one sealed with the stack's key.
+fn keep_memos(
+    st: &mut state::State,
+    externs: &crate::externs::Externs,
+    key: &crate::zset::file::Key,
+) -> Result<()> {
+    crate::memo::keep(st, externs.memos(), key, &crate::memo::now())
 }
 
 /// A batch apply's approval, before its Apply calls: at tick 1 the token
@@ -3902,7 +3897,7 @@ fn needs_project(cli: &Cli) -> bool {
         | Cmd::Unlock
         | Cmd::StateShow { .. }
         | Cmd::StateMv { .. }
-        | Cmd::Taint { .. } => true,
+        | Cmd::TaintMemo { .. } => true,
         _ => false,
     }
 }

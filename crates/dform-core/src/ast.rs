@@ -143,7 +143,7 @@ pub enum Stmt {
     /// `decl p(..) mixed`: `p/N` may have both ground facts and rules (E
     /// §2.6); without it, a predicate that has both is a compile error.
     Mixed(Extern),
-    /// `extern p(+in, -out, ...) [persist]`: a predicate a provider answers
+    /// `extern p(+in, -out, ...)`: a predicate a provider answers
     /// on demand, once its `+` arguments are ground (`externs`).
     ExternFn(ExternFn),
     /// A statement the grammar has and the evaluator does not yet: lowering
@@ -230,7 +230,6 @@ pub struct Extern {
 pub struct ExternFn {
     pub name: String,
     pub args: Vec<BindArg>,
-    pub persist: bool,
     pub span: Span,
 }
 

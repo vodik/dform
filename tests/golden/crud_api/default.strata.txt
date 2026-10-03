@@ -1,10 +1,13 @@
 exit: ok
 -- stdout --
-== examples/crud-api/stacks/crud_api.df: 256 nodes, 1531 edges (391 negative)
+== examples/crud-api/stacks/crud_api.df: 255 nodes, 1519 edges (379 negative)
    STRATIFIED, 24 strata
    stratum 0:
      (arg, google.sql_database, instance)
      (arg, google.sql_database, name)
+     (arg, google.sql_user, instance)
+     (arg, google.sql_user, name)
+     (arg, google.sql_user, password)
      (arg, input, env)
      (arg, input, region)
      (arg, input, replicas)
@@ -12,12 +15,14 @@ exit: ok
      (arg, settings, db.availability)
      (arg, settings, db.tier)
      (want, google.sql_database)
+     (want, google.sql_user)
      (want, k8s.config_map)
      (want, k8s.cron_job)
      (want, k8s.daemon_set)
      (want, k8s.ingress)
      (want, k8s.namespace)
      (want, k8s.persistent_volume_claim)
+     (want, k8s.secret)
      (want, k8s.service_account)
      (want, k8s.stateful_set)
      auto_reconcile
@@ -27,7 +32,6 @@ exit: ok
      input
      other
      owned_label
-     random.password
      release
      resolve
      resolved
@@ -36,9 +40,6 @@ exit: ok
    stratum 1:
      (arg, google.sql_database, id)
      (arg, google.sql_user, id)
-     (arg, google.sql_user, instance)
-     (arg, google.sql_user, name)
-     (arg, google.sql_user, password)
      (arg, k8s.config_map, metadata)
      (arg, k8s.cron_job, metadata)
      (arg, k8s.cron_job, spec)
@@ -64,14 +65,15 @@ exit: ok
      (arg, let, schema)
      (attr, google.sql_database, instance)
      (attr, google.sql_database, name)
+     (attr, google.sql_user, instance)
+     (attr, google.sql_user, name)
+     (attr, google.sql_user, password)
      (attr, input, env)
      (attr, input, region)
      (attr, input, replicas)
      (attr, let, active)
      (attr, settings, db.availability)
      (attr, settings, db.tier)
-     (want, google.sql_user)
-     (want, k8s.secret)
    stratum 2:
      (arg, google.compute_network, auto_create_subnetworks)
      (arg, google.compute_network, id)
@@ -80,9 +82,6 @@ exit: ok
      (arg, let, live)
      (attr, google.sql_database, id)
      (attr, google.sql_user, id)
-     (attr, google.sql_user, instance)
-     (attr, google.sql_user, name)
-     (attr, google.sql_user, password)
      (attr, k8s.config_map, metadata)
      (attr, k8s.cron_job, metadata)
      (attr, k8s.cron_job, spec)

@@ -691,13 +691,13 @@ fn handover_moves_an_s3_deployment_between_prefixes_and_to_local() {
 
 const PERSISTED: &str = r#"edition 2026
 provider fake
-extern kv.password(+name, -value) persist
+extern kv.password(+name, -value)
 resource db.user app {
   password = pw
-} where kv.password("app", pw)
+} where kv.password("app", candidate), memo.first("app-pw", candidate, pw)
 "#;
 
-/// `state taint` finds an s3 stack's state through its program's backend.
+/// `state taint memo` finds an s3 stack's state through its program's backend.
 #[test]
 fn taint_forgets_an_answer_in_the_bucket() {
     for t in &targets("taint_forgets_an_answer_in_the_bucket") {
@@ -721,11 +721,9 @@ fn taint_forgets_an_answer_in_the_bucket() {
             String::from_utf8(p.bucket("p").get(STATE).unwrap().unwrap().bytes).unwrap()
         };
         assert!(state(&p).contains("pw-first"), "{}", t.what);
-        let r = p
-            .run(&["state", "taint", "p", "kv.password", "app"])
-            .success();
+        let r = p.run(&["state", "taint", "memo", "app-pw", "p"]).success();
         assert_eq!(
-            r.stdout, "tainted kv.password(app) of stack p: the next plan asks again\n",
+            r.stdout, "tainted memo app-pw of stack p: the next apply keeps a new value\n",
             "{}",
             t.what
         );

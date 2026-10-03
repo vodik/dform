@@ -249,6 +249,15 @@ impl Redactor {
                 r.add(v, &crate::value::null_label(t, &addr, p));
             }
         }
+        // A memo that keeps a secret: its candidate is one too, of the
+        // same label (a new master's password, say, not kept).
+        for a in facts.iter().filter(|a| a.pred == crate::memo::FIRST) {
+            if let [_, Term::Val(c), Term::Val(v)] = a.args.as_slice()
+                && let Some(l) = r.secret(v)
+            {
+                r.add(c, &l);
+            }
+        }
         r
     }
 

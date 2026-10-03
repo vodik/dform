@@ -148,6 +148,14 @@ fn given_leaf(a: &Atom, externs: &BTreeSet<crate::ast::Extern>, tick: Option<usi
             }
         }
         p if p.starts_with("type_") => Leaf::Schema { span: text },
+        // A kept value says when it was kept, never the value or the
+        // candidate (either may be a secret).
+        crate::memo::FIRST => match a.args.first() {
+            Some(Term::Val(Value::Str(k))) => Leaf::Extern {
+                call: crate::memo::provenance(k),
+            },
+            _ => Leaf::Extern { call: text },
+        },
         // A table's row: stated where its file states it.
         p if externs.iter().any(|e| e.pred == p) => match crate::tables::at(a) {
             Some(span) => Leaf::Base { span },
@@ -3170,8 +3178,8 @@ const REFERENCE: &[Reference] = &[
     r(
         "extern",
         Kw,
-        "extern NAME(+IN: TYPE, -OUT: TYPE, ...) persist?",
-        "A relation asked of the provider on demand, its `+` columns bound; `persist` keeps its answers.",
+        "extern NAME(+IN: TYPE, -OUT: TYPE, ...)",
+        "A relation asked of the provider on demand, its `+` columns bound; nothing keeps its answers (`memo.first` does).",
         "extern dns.lookup(+name, -addr: string)",
     ),
     r(
@@ -3669,6 +3677,11 @@ pub const BODIES: &[(&str, Body)] = &[
         }
         _ => None,
     }),
+    ("random.password", crate::functions::random::password),
+    ("random.bytes", crate::functions::random::bytes),
+    ("random.id", crate::functions::random::id),
+    ("random.uuid", crate::functions::random::uuid),
+    ("random.signing_key", crate::functions::random::signing_key),
 ];
 
 /// `str.dedent`: the indentation every non-blank line shares (the same

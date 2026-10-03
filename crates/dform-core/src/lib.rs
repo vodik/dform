@@ -23,6 +23,7 @@ pub mod lattice;
 pub mod lexer;
 pub mod lint;
 pub mod loader;
+pub mod memo;
 pub mod modules;
 pub mod parser;
 pub mod partition;

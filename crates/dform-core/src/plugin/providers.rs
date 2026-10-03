@@ -164,7 +164,7 @@ pub struct Providers {
     accounts: RefCell<BTreeMap<usize, String>>,
     /// Where each secret the run knows of is held, by its label:
     /// [`Config::held`], an extern's secret column as its provider answered
-    /// it ([`Providers::query_extern`]), a persisted answer's ([`Providers::hold`]).
+    /// it ([`Providers::query_extern`]).
     held: RefCell<BTreeMap<String, provider::Held>>,
     /// [`Config::digest_key`]: what a sensitive leaf of a world document
     /// dform keeps is digested with ([`Providers::stored`]).
@@ -1017,25 +1017,6 @@ impl Providers {
         docs.iter()
             .map(|(a, d)| (a.clone(), self.stored(&a.typ, d)))
             .collect()
-    }
-
-    /// Where each of `labels` is held, of the secrets the run knows.
-    pub fn held_of<'a>(
-        &self,
-        labels: impl IntoIterator<Item = &'a String>,
-    ) -> BTreeMap<String, provider::Held> {
-        let held = self.held.borrow();
-        labels
-            .into_iter()
-            .filter_map(|l| Some((l.clone(), held.get(l)?.clone())))
-            .collect()
-    }
-
-    /// Secrets held where `held` says (a persisted extern answer's).
-    pub fn hold(&self, held: &BTreeMap<String, provider::Held>) {
-        self.held
-            .borrow_mut()
-            .extend(held.iter().map(|(l, h)| (l.clone(), h.clone())));
     }
 
     fn query_at(
