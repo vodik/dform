@@ -1293,6 +1293,13 @@ The variables a read binds are named after what they read (`vpc.cidr` is
 is its name capitalised (`vpc_net` is `VpcNet`, `_c` is `_C`), which is how
 `strata`, `why` and diagnostics print it.
 
+Some rules the compiler writes itself: the policy rules every evaluation
+runs (`lifecycle(r, "prevent_destroy")` against a planned delete or
+replace, the world moved under a held or interrupted deformation). They
+have no source; `why` prints each at `dform` by its name and one-line
+description (`dform  the lifecycle rule prevent_destroy, against a
+replace`), with its bindings, never its core text.
+
 ## Functions
 
 A function is pure and deterministic: a call is a term, evaluated when its

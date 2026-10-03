@@ -252,7 +252,12 @@ fn hover_shows_every_contribution_and_why_prints_the_derivation() {
         "{text}"
     );
     assert!(text.contains("baseline.df:12:1, use baseline"), "{text}");
-    assert!(text.contains("by Σattr"), "{text}");
+    // The derivation in the source form, as `dform why` prints it.
+    assert!(
+        text.contains("  merged from 2 contributions\n  ├─ {component: \"network\", env: \"staging\"}\n"),
+        "{text}"
+    );
+    assert!(!text.contains("Σattr"), "{text}");
 
     let why = c.command(
         "dform.why",
@@ -261,7 +266,7 @@ fn hover_shows_every_contribution_and_why_prints_the_derivation() {
     let why = why.as_str().unwrap();
     assert!(
         why.starts_with(
-            "attr(\"net.vpc\", \"main::vpc\", \"tags\", {component: \"network\", env: \"staging\", team: \"platform\"})\n  by Σattr"
+            "net.vpc[\"main::vpc\"].tags = {component: \"network\", env: \"staging\", team: \"platform\"}\n  merged from 2 contributions\n"
         ),
         "{why}"
     );

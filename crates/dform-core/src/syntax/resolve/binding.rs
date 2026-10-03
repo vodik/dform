@@ -671,33 +671,14 @@ fn fixpoint(
 }
 
 /// The `${..}` holes of a string token's text, with the byte offset of
-/// each hole's text in the token.
+/// each hole's text in the token (`resolve::pieces`).
 fn holes(text: &str) -> Vec<(&str, usize)> {
-    let b = text.as_bytes();
-    let mut out = Vec::new();
-    let mut i = 0;
-    while i < b.len() {
-        match b[i] {
-            b'\\' => i += 2,
-            b'$' if b.get(i + 1) == Some(&b'$') => i += 2,
-            b'$' if b.get(i + 1) == Some(&b'{') => {
-                let mut depth = 1;
-                let mut j = i + 2;
-                while j < b.len() && depth > 0 {
-                    match b[j] {
-                        b'{' => depth += 1,
-                        b'}' => depth -= 1,
-                        _ => {}
-                    }
-                    j += 1;
-                }
-                if depth == 0 {
-                    out.push((&text[i + 2..j - 1], i + 2));
-                }
-                i = j;
-            }
-            _ => i += 1,
-        }
-    }
-    out
+    super::pieces(text)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|p| match p {
+            super::Piece::Hole(h, at) => Some((h, at)),
+            super::Piece::Text(_) => None,
+        })
+        .collect()
 }

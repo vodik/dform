@@ -17,7 +17,7 @@ use crate::circuit::{Circuit, Fact, Leaf, NodeId, View};
 use crate::engine;
 use crate::ir::Address;
 use crate::query::Redactor;
-use crate::syntax::resolve::capitalise;
+use crate::syntax::resolve::{Piece, capitalise, pieces};
 use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode};
 use crate::value::Value;
 use anyhow::Result;
@@ -557,6 +557,8 @@ impl Surface<'_, '_> {
             [_, _, _, v, rank] if f.pred == "arg" => {
                 format!("{}{}", self.p.redact.surface(v), rank_text(rank))
             }
+            // A refinement is a check on the value, not a contribution.
+            [.., Value::Str(c)] if is_check(f) => format!("check {c}"),
             _ => self.fact_text(f),
         }
     }
@@ -682,7 +684,13 @@ impl Surface<'_, '_> {
         let aggregate = rule.is_some_and(|id| id.starts_with('Σ'));
         let mut hidden = 0;
         if aggregate {
-            let n = facts.len();
+            // The refinements the value is checked against print below
+            // its contributions, and do not count among them.
+            facts.sort_by_key(|f| matches!(circuit.view(*f), View::Fact { fact, .. } if is_check(fact)));
+            let n = facts
+                .iter()
+                .filter(|f| !matches!(circuit.view(**f), View::Fact { fact, .. } if is_check(fact)))
+                .count();
             self.push(format!(
                 "{pad}merged from {n} contribution{}",
                 if n == 1 { "" } else { "s" }
@@ -774,6 +782,19 @@ impl Surface<'_, '_> {
         };
         let mut shown = Shown::default();
         shown.render(&stmt, &stmt, entry.as_ref());
+        // A rule the compiler wrote (`zset::POLICY_RULES`): its doc
+        // comment names it, at `dform`, not its text at `<input>:N`.
+        if src.file.starts_with('<')
+            && let Some(name) = crate::syntax::doc::comment(&stmt).and_then(|(_, pairs)| {
+                pairs
+                    .into_iter()
+                    .find(|(k, _)| k == "description")
+                    .map(|(_, v)| v)
+            })
+        {
+            shown.terms.clear();
+            return Some(("dform".into(), name, Some(shown)));
+        }
         let text = collapse(&shown.text);
         Some((
             place,
@@ -1469,66 +1490,20 @@ fn negated(n: &SyntaxNode, stmt: &SyntaxNode) -> bool {
         .any(|a| matches!(a.kind(), LIT_NOT | LIT_NOT_BLOCK | LIT_NOT_IN))
 }
 
+/// A refinement an aggregate's value is checked against
+/// (`type_refine(T, P, C)`, `attr_refine(T, A, P, C)`): not a
+/// contribution.
+fn is_check(f: &Fact) -> bool {
+    matches!(
+        (f.pred.as_str(), f.args.len()),
+        (crate::refine::TYPE_REFINE, 3) | (crate::refine::ATTR_REFINE, 4)
+    )
+}
+
 /// A string literal holds an interpolation `${..}` (`$${` is a literal
 /// `${`).
 fn has_hole(text: &str) -> bool {
-    holes(text).is_some_and(|parts| parts.iter().any(|p| matches!(p, Part::Hole(_))))
-}
-
-enum Part {
-    Lit(String),
-    Hole(String),
-}
-
-/// A string literal's text and holes, as `syntax::resolve` reads them.
-fn holes(text: &str) -> Option<Vec<Part>> {
-    let inner = text.get(1..text.len().checked_sub(1)?)?;
-    let bytes = inner.as_bytes();
-    let mut parts = Vec::new();
-    let mut lit = String::new();
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'\\' => {
-                let end = if bytes.get(i + 1) == Some(&b'u') {
-                    inner[i..].find('}').map_or(i + 2, |e| i + e + 1)
-                } else {
-                    i + 2
-                };
-                lit.push_str(inner.get(i..end.min(inner.len()))?);
-                i = end;
-            }
-            b'$' if bytes.get(i + 1) == Some(&b'$') && bytes.get(i + 2) == Some(&b'{') => {
-                lit.push_str("${");
-                i += 3;
-            }
-            b'$' if bytes.get(i + 1) == Some(&b'{') => {
-                let mut depth = 1;
-                let mut j = i + 2;
-                while j < bytes.len() && depth > 0 {
-                    match bytes[j] {
-                        b'{' => depth += 1,
-                        b'}' => depth -= 1,
-                        _ => {}
-                    }
-                    j += 1;
-                }
-                if depth > 0 {
-                    return None;
-                }
-                parts.push(Part::Lit(std::mem::take(&mut lit)));
-                parts.push(Part::Hole(inner[i + 2..j - 1].to_string()));
-                i = j;
-            }
-            _ => {
-                let c = inner[i..].chars().next()?;
-                lit.push(c);
-                i += c.len_utf8();
-            }
-        }
-    }
-    parts.push(Part::Lit(lit));
-    Some(parts)
+    pieces(text).is_some_and(|ps| ps.iter().any(|p| matches!(p, Piece::Hole(..))))
 }
 
 /// One firing's bindings and its lowered rule: what a term of the
@@ -1667,13 +1642,13 @@ impl Cx<'_> {
     /// A string literal's value, its holes filled.
     fn string(&self, text: &str) -> Option<Value> {
         let mut out = String::new();
-        for p in holes(text)? {
+        for p in pieces(text)? {
             match p {
-                Part::Lit(l) => {
+                Piece::Text(l) => {
                     out.push_str(&crate::syntax::resolve::unescape(&format!("\"{l}\"")).ok()?)
                 }
-                Part::Hole(h) => {
-                    let parse = crate::syntax::parser::parse_term(&h);
+                Piece::Hole(h, _) => {
+                    let parse = crate::syntax::parser::parse_term(h);
                     let t = parse.syntax().children().next()?;
                     match self.eval(&t)? {
                         Value::Str(s) => out.push_str(&s),

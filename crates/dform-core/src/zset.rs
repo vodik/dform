@@ -276,18 +276,22 @@ fn provider_assertions(
 /// resuming an interrupted apply, its remaining ones come back as
 /// `remaining`.
 pub const POLICY_RULES: &str = r#"
+#| the lifecycle rule prevent_destroy, against a delete
 deny(m) where {
   lifecycle(r, "prevent_destroy"), deformation("delete", r, _)
   m = "lifecycle prevent_destroy: the plan would delete ${r}"
 }
+#| the lifecycle rule prevent_destroy, against a replace
 deny(m) where {
   lifecycle(r, "prevent_destroy"), deformation("replace", r, _)
   m = "lifecycle prevent_destroy: the plan would replace ${r}"
 }
+#| the world rule: a held deformation's resource moved since its plan
 deny(m) where {
   deformation("pending", r, before), world_digest(r, now), before != now
   m = "the world changed under a pending deformation: ${r}"
 }
+#| the world rule: an interrupted apply's resource moved since its plan
 deny(m) where {
   deformation("remaining", r, before), world_digest(r, now), before != now
   m = "the world changed under a remaining action: ${r}"
@@ -298,9 +302,16 @@ deny(m) where {
 pub const POLICY_INPUTS: &[&str] = &["deformation", "world_digest", crate::stuck::MAY_DERIVE];
 
 /// The program with `POLICY_RULES` appended: what every evaluation runs.
+/// Their doc comments name them where `why` prints them; they are not the
+/// program's docs.
 pub fn with_policy_rules(mut program: crate::ast::Program) -> Result<crate::ast::Program> {
     let rules = crate::parser::parse_program(POLICY_RULES)?;
-    program.statements.extend(rules.statements);
+    program.statements.extend(
+        rules
+            .statements
+            .into_iter()
+            .filter(|s| !matches!(s, crate::ast::Stmt::Fact(a) if a.pred == "doc")),
+    );
     Ok(program)
 }
 

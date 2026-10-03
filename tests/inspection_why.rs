@@ -412,3 +412,55 @@ fn plan_why_explains_each_deformation() {
     );
     golden("why_tour_prod_plan", &out);
 }
+
+/// `dform why ARGS` over a world fixture in `s`.
+fn why_in(s: &Scratch, file: &str, args: &[&str]) -> String {
+    let mut all = vec!["dev", "--world", "w.json", "why"];
+    all.extend_from_slice(args);
+    all.push(file);
+    s.run(&all).success().stdout
+}
+
+/// A rule the compiler wrote (the lifecycle rule) prints by its name and
+/// description at `dform`, with its bindings, not its core text at
+/// `<input>:N`.
+#[test]
+fn why_names_a_rule_the_compiler_wrote() {
+    let s = Scratch::new("why-policy-rule");
+    let p = |cidr: &str| {
+        format!(
+            "edition 2026\nprovider fake\nresource net.vpc main {{\n  cidr = \"{cidr}\"\n}}\n\
+             lifecycle(main, \"prevent_destroy\") where main in net.vpc\n"
+        )
+    };
+    s.write("p.df", &p("10.0.0.0/16"));
+    s.run(&["dev", "--world", "w.json", "apply", "p.df"]).success();
+    s.write("p.df", &p("10.1.0.0/16"));
+    let out = why_in(&s, "p.df", &["deny(M)"]);
+    assert!(
+        out.contains(
+            "\n  dform  the lifecycle rule prevent_destroy, against a replace\n  with m = \
+             \"lifecycle prevent_destroy: the plan would replace net.vpc[\\\"main\\\"]\", r = \
+             net.vpc[\"main\"]\n"
+        ),
+        "{out}"
+    );
+    assert!(!out.contains("<input>") && !out.contains("deny(m)"), "{out}");
+}
+
+/// A schema refinement is a check on the value, not one of the
+/// contributions it is merged from.
+#[test]
+fn why_prints_a_refinement_as_a_check() {
+    let s = Scratch::new("why-refine");
+    s.write(
+        "p.df",
+        "edition 2026\nprovider fake\nresource db.postgres main {\n  size = 1\n  backup_days = 7\n}\n",
+    );
+    let out = why_in(&s, "p.df", &["db.postgres[\"main\"].backup_days"]);
+    assert_eq!(
+        out,
+        "db.postgres[\"main\"].backup_days = 7\n  merged from 1 contribution\n  ├─ 7   p.df:5\n  \
+         └─ check range(1, 35)   provider schema\n"
+    );
+}

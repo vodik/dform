@@ -5153,13 +5153,9 @@ impl<'u> Lowerer<'u> {
         }
         let span = self.span_of(t.text_range());
         let base: u32 = t.text_range().start().into();
-        let inner = &text[1..text.len() - 1];
-        let bytes = inner.as_bytes();
         let mut fmt = String::new();
-        let mut lit = String::new();
         let mut args = Vec::new();
-        let mut i = 0;
-        let flush = |lit: &mut String, fmt: &mut String, l: &mut Self| -> L<()> {
+        let flush = |lit: &str, fmt: &mut String, l: &mut Self| -> L<()> {
             let s = unescape(&format!("\"{lit}\"")).map_err(|e| {
                 l.diags.push(Diagnostic::error(span, e));
                 Skip
@@ -5172,58 +5168,24 @@ impl<'u> Lowerer<'u> {
                 return Err(Skip);
             }
             fmt.push_str(&s);
-            lit.clear();
             Ok(())
         };
-        while i < bytes.len() {
-            match bytes[i] {
-                b'\\' => {
-                    // `\u{...}` keeps its braces.
-                    let end = if bytes.get(i + 1) == Some(&b'u') {
-                        inner[i..].find('}').map_or(i + 2, |e| i + e + 1)
-                    } else {
-                        i + 2
-                    };
-                    lit.push_str(&inner[i..end.min(inner.len())]);
-                    i = end;
-                }
-                b'$' if bytes.get(i + 1) == Some(&b'$') && bytes.get(i + 2) == Some(&b'{') => {
-                    lit.push_str("${");
-                    i += 3;
-                }
-                b'$' if bytes.get(i + 1) == Some(&b'{') => {
-                    let mut depth = 1;
-                    let mut j = i + 2;
-                    while j < bytes.len() && depth > 0 {
-                        match bytes[j] {
-                            b'{' => depth += 1,
-                            b'}' => depth -= 1,
-                            _ => {}
-                        }
-                        j += 1;
-                    }
-                    if depth > 0 {
-                        return self.error(
-                            span,
-                            "an interpolation `${` is never closed; a literal `${` is `$${`",
-                        );
-                    }
-                    flush(&mut lit, &mut fmt, self)?;
+        let Some(ps) = pieces(text) else {
+            return self.error(
+                span,
+                "an interpolation `${` is never closed; a literal `${` is `$${`",
+            );
+        };
+        for p in ps {
+            match p {
+                Piece::Text(lit) => flush(&lit, &mut fmt, self)?,
+                Piece::Hole(hole, at) => {
                     fmt.push_str("%s");
-                    let hole = &inner[i + 2..j - 1];
-                    // +1: the opening quote.
-                    let at = base + 1 + i as u32 + 2;
+                    let at = base + at as u32;
                     args.push(self.bind(false, |l| l.hole(rc, hole, at, pre))?);
-                    i = j;
-                }
-                _ => {
-                    let c = inner[i..].chars().next().unwrap();
-                    lit.push(c);
-                    i += c.len_utf8();
                 }
             }
         }
-        flush(&mut lit, &mut fmt, self)?;
         if args.is_empty() {
             return Ok(str_term(&fmt));
         }
@@ -6302,19 +6264,9 @@ fn arg_texts(n: &SyntaxNode) -> Vec<String> {
 }
 
 /// A string literal holds an interpolation `${..}` (`$${` is a literal
-/// `${`).
+/// `${`); an unclosed one is one, for the lowering to report.
 fn has_hole(text: &str) -> bool {
-    let b = text.as_bytes();
-    let mut i = 0;
-    while i + 1 < b.len() {
-        match b[i] {
-            b'\\' => i += 2,
-            b'$' if b[i + 1] == b'$' && b.get(i + 2) == Some(&b'{') => i += 3,
-            b'$' if b[i + 1] == b'{' => return true,
-            _ => i += 1,
-        }
-    }
-    false
+    pieces(text).is_none_or(|ps| ps.iter().any(|p| matches!(p, Piece::Hole(..))))
 }
 
 /// A string literal with no holes as its value: escapes, and `$${` as
@@ -6527,6 +6479,71 @@ fn lit_vars(l: &Lit, out: &mut BTreeSet<String>) {
             term(b, out);
         }
     }
+}
+
+/// A piece of a string literal (H-13): the text between holes as written
+/// (escapes kept, `$${` read as `${`), or a `${..}` hole's text with its
+/// byte offset in the token.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Piece<'a> {
+    Text(String),
+    Hole(&'a str, usize),
+}
+
+/// The pieces of a string token's text, quotes included: a text before
+/// each hole and one after the last. `None` when a hole is never closed.
+/// The one interpolation scanner: the lowering, the binding check and
+/// `why`'s printer read a string through it.
+pub fn pieces(text: &str) -> Option<Vec<Piece<'_>>> {
+    let inner = text.get(1..text.len().checked_sub(1)?)?;
+    let bytes = inner.as_bytes();
+    let mut out = Vec::new();
+    let mut lit = String::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\\' => {
+                // `\u{...}` keeps its braces.
+                let end = if bytes.get(i + 1) == Some(&b'u') {
+                    inner[i..].find('}').map_or(i + 2, |e| i + e + 1)
+                } else {
+                    i + 2
+                };
+                lit.push_str(inner.get(i..end.min(inner.len()))?);
+                i = end;
+            }
+            b'$' if bytes.get(i + 1) == Some(&b'$') && bytes.get(i + 2) == Some(&b'{') => {
+                lit.push_str("${");
+                i += 3;
+            }
+            b'$' if bytes.get(i + 1) == Some(&b'{') => {
+                let mut depth = 1;
+                let mut j = i + 2;
+                while j < bytes.len() && depth > 0 {
+                    match bytes[j] {
+                        b'{' => depth += 1,
+                        b'}' => depth -= 1,
+                        _ => {}
+                    }
+                    j += 1;
+                }
+                if depth > 0 {
+                    return None;
+                }
+                out.push(Piece::Text(std::mem::take(&mut lit)));
+                // +1: the opening quote.
+                out.push(Piece::Hole(&inner[i + 2..j - 1], i + 2 + 1));
+                i = j;
+            }
+            _ => {
+                let c = inner[i..].chars().next()?;
+                lit.push(c);
+                i += c.len_utf8();
+            }
+        }
+    }
+    out.push(Piece::Text(lit));
+    Some(out)
 }
 
 /// A string literal's value: escapes `\"` `\\` `\n` `\t` `\u{...}`.
