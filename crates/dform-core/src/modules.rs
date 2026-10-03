@@ -246,6 +246,9 @@ pub struct Expanded {
     pub program: Program,
     pub inputs: Vec<Declared>,
     pub secret_outputs: Vec<(String, String)>,
+    /// Every copy's and activation's scope, as an address writes it
+    /// (`blue`, `edge/left`): what a resource name's `/` may separate.
+    pub scopes: BTreeSet<String>,
 }
 
 fn is_secret_type(t: &Option<TypeExpr>) -> bool {
@@ -268,6 +271,7 @@ struct Cx<'a> {
     diags: Vec<Diagnostic>,
     declared: Vec<Declared>,
     secret_outputs: Vec<(String, String)>,
+    scopes: BTreeSet<String>,
     /// Private names by plain name, for the error when the program reads
     /// one.
     private: BTreeMap<String, (String, Option<String>)>,
@@ -312,6 +316,7 @@ pub fn expand(program: &Program) -> Result<Expanded> {
         diags: Vec::new(),
         declared: Vec::new(),
         secret_outputs: Vec::new(),
+        scopes: BTreeSet::new(),
         private: BTreeMap::new(),
         expanding: Vec::new(),
         checked: BTreeSet::new(),
@@ -487,6 +492,7 @@ pub fn expand(program: &Program) -> Result<Expanded> {
             },
             inputs: cx.declared,
             secret_outputs: cx.secret_outputs,
+            scopes: cx.scopes,
         })
     } else {
         Err(Diagnostics(cx.diags).into())
@@ -543,6 +549,8 @@ impl Cx<'_> {
         }
         let scope = u.name.as_str();
         let abs = join_scope(at, scope);
+        self.scopes
+            .insert(abs.replace('.', &crate::ir::SCOPE.to_string()));
         let mut out = Vec::new();
         // A used module's inputs are the stack's to give, `m.k` (R-55); a
         // copy's are its instance block's.

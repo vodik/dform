@@ -48,3 +48,24 @@ fn why_prints_a_copys_relations_in_its_frame() {
     );
     assert!(!r.stdout.contains("::"), "{}", r.stdout);
 }
+
+/// A name whose `/` comes from a value at run time is refused where the
+/// plan assembles addresses (R-73 item 5): `/` separates a copy's scope.
+#[test]
+fn a_name_with_a_slash_from_a_value_is_an_error() {
+    let s = project(
+        "instances-slash",
+        "part(\"a/b\")\nresource net.vpc \"${p}\" { cidr = \"10.9.0.0/16\" } where part(p)\n",
+    );
+    let r = s.run(&["plan", "main.df"]).failure();
+    assert!(
+        r.stderr.contains(
+            "net.vpc[\"a/b\"]: its name holds `/` from a value the program computed (\"a/b\")"
+        ),
+        "{}",
+        r.stderr
+    );
+    // A copy's own resources are scoped, and pass.
+    let s = project("instances-slash-ok", "");
+    s.run(&["plan", "main.df"]).success();
+}

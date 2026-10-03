@@ -19,6 +19,9 @@ pub struct Lowered {
     /// Outputs declared `secret(T)`: (scope, key), scope `""` for the
     /// stack's own.
     pub secret_outputs: Vec<(String, String)>,
+    /// Every copy's and activation's scope as an address writes it
+    /// (`modules::Expanded::scopes`).
+    pub scopes: BTreeSet<String>,
     /// Every relation's columns, declared or inferred (R-34).
     pub signatures: crate::infer::Signatures,
     /// The source program's `decl`s, for the pass with a schema.
@@ -61,6 +64,7 @@ pub fn lower(program: &Program) -> Result<Lowered> {
         program: expanded,
         mut inputs,
         secret_outputs,
+        scopes,
     } = crate::modules::expand(&program)?;
     check_mixed(&expanded)?;
     let (expanded, externs, extern_fns) = drop_metadata(&expanded);
@@ -101,6 +105,7 @@ pub fn lower(program: &Program) -> Result<Lowered> {
         inputs,
         extern_fns,
         secret_outputs,
+        scopes,
         signatures: inferred.signatures,
         declared,
     })

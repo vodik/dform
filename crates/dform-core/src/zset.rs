@@ -64,6 +64,51 @@ pub struct Lifecycle {
     pub assertions: BTreeMap<Address, Vec<(String, crate::lattice::Constraint)>>,
 }
 
+/// Every resource's name is its own or a copy's scoped one (R-72, R-73
+/// item 5): a `/` in it separates a copy's or an activation's scope
+/// (`blue/vpc`, `edge/left/vpc`; `scopes`, the expansion's), and one a
+/// value brought in at run time (`"${x}"` with `x = "a/b"`) is an error
+/// naming the resource and the value. The literal text is checked where
+/// it is written.
+pub fn check_names<'a>(
+    facts: impl IntoIterator<Item = &'a Atom>,
+    scopes: &BTreeSet<String>,
+) -> Result<()> {
+    fn s(t: &Term) -> Option<&str> {
+        match t {
+            Term::Val(Value::Str(x)) => Some(x),
+            _ => None,
+        }
+    }
+    let mut bad = Vec::new();
+    for a in facts {
+        let ("want", [t, n]) = (a.pred.as_str(), a.args.as_slice()) else {
+            continue;
+        };
+        let (Some(t), Some(n)) = (s(t), s(n)) else {
+            continue;
+        };
+        match n.rsplit_once(crate::ir::SCOPE) {
+            Some((scope, _)) if !scopes.contains(scope) => {
+                let addr = Address {
+                    typ: t.to_string(),
+                    name: n.to_string(),
+                };
+                bad.push(format!(
+                    "{addr}: its name holds `/` from a value the program computed ({}); `/` \
+                     separates a copy's scope (R-72), and a name may not contain it",
+                    crate::partition::quote(n)
+                ));
+            }
+            _ => {}
+        }
+    }
+    if !bad.is_empty() {
+        bail!("{}", bad.join("\n"));
+    }
+    Ok(())
+}
+
 /// The column of a plan or lifecycle relation that holds a resource
 /// reference (R-42), by its arity: the resolver lowers a resource there
 /// as a reference value, never its address text.
