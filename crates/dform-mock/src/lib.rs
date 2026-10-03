@@ -1047,7 +1047,7 @@ impl FakeCloud {
                     .replace("{n}", &(n % 254 + 1).to_string());
                 return json!(fill_doc_refs(&s, doc, minted));
             }
-            Some(v) => return value_to_json(v),
+            Some(v) => return dform_core::engine::value_to_json(v),
             None => {}
         }
         let ty = self
@@ -1445,20 +1445,4 @@ fn fill_doc_refs(tpl: &str, doc: &Json, minted: &Json) -> String {
     }
     out.push_str(rest);
     out
-}
-
-/// A schema fact's ground value as JSON.
-fn value_to_json(v: &Value) -> Json {
-    match v {
-        Value::Str(s) => json!(s),
-        Value::Int(i) => json!(i),
-        Value::Bool(b) => json!(b),
-        Value::List(xs) => Json::Array(xs.iter().map(value_to_json).collect()),
-        Value::Obj(m) => Json::Object(
-            m.iter()
-                .map(|(k, x)| (k.clone(), value_to_json(x)))
-                .collect(),
-        ),
-        other => json!(format!("{other:?}")),
-    }
 }
