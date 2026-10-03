@@ -1491,9 +1491,9 @@ pub fn named_outputs(
 /// keyed read of one of the stacks `deployed`): a name written out, or
 /// interpolated from the stack's own key inputs (`platform[env=env]`); `key`
 /// holds every key, a defaulted one at its default. A name built from
-/// anything else is not known before the program runs: `Err` with the
-/// stack's name, every deployment of which the program may read. What
-/// `apply` applies first (R-30).
+/// anything else is not known before the program runs: the second set
+/// holds its stack's name, any deployment of which the program may read.
+/// What `apply` applies first (R-30).
 pub fn reads(
     program: &Program,
     deployed: &[Deployed],

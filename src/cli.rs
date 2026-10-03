@@ -909,12 +909,35 @@ fn apply_order(cli: &Cli) -> Result<Vec<Dependency>> {
             &|p: &Path| std::fs::read_to_string(p),
             &mut deployment::Notes::default(),
         )?;
-        let instance = crate::stack::Instance {
-            stack: loaded.stack.clone(),
-            key: keys.to_vec(),
-            defaulted: Vec::new(),
-        };
-        let (names, _) = crate::stack::reads(&loaded.program, &loaded.deployed, keys);
+        // The key the target gives, a key it does not at its default.
+        let given: Vec<crate::ast::Atom> = keys
+            .iter()
+            .map(|(k, v)| {
+                crate::ast::atom(
+                    "input",
+                    vec![crate::ast::str_term(k), crate::ast::str_term(v)],
+                    Default::default(),
+                )
+            })
+            .collect();
+        let instance = crate::stack::instance(&loaded.cfg, &loaded.stack, &loaded.program, &given)
+            .unwrap_or_else(|_| crate::stack::Instance {
+                stack: loaded.stack.clone(),
+                key: keys.to_vec(),
+                defaulted: Vec::new(),
+            });
+        let (mut names, any) =
+            crate::stack::reads(&loaded.program, &loaded.deployed, &instance.key);
+        // A deployment named by what the program computes: any of the
+        // stack's may be read, so every one there is goes first.
+        if !any.is_empty() {
+            for name in crate::stack::registry(&project.state_root())?.into_keys() {
+                let stack = name.split_once('[').map_or(name.as_str(), |(s, _)| s);
+                if any.contains(stack) {
+                    names.insert(name);
+                }
+            }
+        }
         let mut deps = Vec::new();
         for name in names {
             let (stack, key) = match name.strip_suffix(']').and_then(|n| n.split_once('[')) {

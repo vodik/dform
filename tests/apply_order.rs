@@ -189,3 +189,40 @@ fn a_keyed_read_takes_the_pun() {
         r.stdout
     );
 }
+
+/// A key the target does not give is at its default (R-73 item 4): `apply
+/// app` reads net[env=dev] and applies it first.
+#[test]
+fn a_defaulted_key_orders_the_deployment_it_names() {
+    let s = project("order-default");
+    let r = s.run(&["apply", "app"]).success();
+    assert!(
+        r.stdout
+            .starts_with("apply app[env=dev]: net[env=dev] first"),
+        "{}",
+        r.stdout
+    );
+    assert!(s.path("dform.state/net/env=dev/state.json").exists());
+}
+
+/// A deployment named by a key the program computes (from a relation, not
+/// the target) may be any of its stack's: every one there is goes first.
+#[test]
+fn a_computed_key_orders_every_deployment_of_the_stack() {
+    let s = project("order-computed");
+    s.run(&["apply", "net", "env=stg"]).success();
+    s.write(
+        "stacks/app.df",
+        &APP.replace(
+            "} where c = network[env=env].cidr",
+            "} where envs(e), c = network[env=e].cidr\nenvs(\"stg\")",
+        ),
+    );
+    let r = s.run(&["apply", "app", "env=prod"]).success();
+    assert!(
+        r.stdout
+            .starts_with("apply app[env=prod]: net[env=stg] first"),
+        "{}",
+        r.stdout
+    );
+}

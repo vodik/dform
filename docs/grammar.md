@@ -863,7 +863,9 @@ stack named by its key, `instance_of("stacks.platform", "",
 "platform[env=e]"), output("platform[env=e]", "out", V)`, those facts
 served from what the deployment published rather than evaluated (R-73).
 An output not published yet is `?platform[env=e].out`. Such a read is what
-`apply X` applies first (R-30). A program never instances a stack
+`apply X` applies first (R-30), a key the target does not give at its
+default; a deployment named by a key the program computes may be any of
+the stack's, and every one there is is applied first. A program never instances a stack
 ("stacks.platform is deployed by the tool; `use` it"), and its `use`
 takes no block and no clause.
 
