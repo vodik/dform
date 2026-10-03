@@ -148,6 +148,15 @@ pub const KEYWORDS: &[(&str, SyntaxKind)] = &[
     ("false", FALSE_KW),
 ];
 
+/// Whether `s` lexes as one word: an identifier or a keyword (ASCII
+/// letters, digits and `_`, not starting with a digit).
+pub fn is_word(s: &str) -> bool {
+    let mut cs = s.chars();
+    cs.next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && cs.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
 /// Keywords are token kinds. An identifier whose text is one of these lexes
 /// as the keyword; the parser takes one as a plain name wherever a name is
 /// expected and the keyword's own construct is not.
@@ -281,5 +290,11 @@ mod tests {
         let text: String = toks.iter().map(|t| &src[t.start..t.end]).collect();
         assert_eq!(text, src);
         assert_eq!(toks.last().unwrap().kind, ERROR_TOKEN);
+    }
+
+    #[test]
+    fn a_word_is_an_identifier_or_a_keyword() {
+        assert!(is_word("vpc_1") && is_word("_x") && is_word("resource"));
+        assert!(!is_word("") && !is_word("1a") && !is_word("a-b") && !is_word("é"));
     }
 }

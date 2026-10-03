@@ -23,11 +23,7 @@ fn is_word(k: SyntaxKind) -> bool {
 }
 
 fn is_name(s: &str) -> bool {
-    let mut cs = s.chars();
-    cs.next()
-        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-        && cs.all(|c| c.is_ascii_alphanumeric() || c == '_')
-        && crate::lexer::keyword(s).is_none()
+    crate::lexer::is_word(s) && crate::lexer::keyword(s).is_none()
 }
 
 /// What the file declares by name: value names (inputs and `let`s),
@@ -532,19 +528,11 @@ impl Entry {
 /// An object key or a path segment as written: bare when it is a name,
 /// else quoted.
 fn key_text(k: &str) -> String {
-    if is_word_text(k) {
+    if crate::lexer::is_word(k) {
         k.to_string()
     } else {
         format!("{k:?}")
     }
-}
-
-/// A word a key may be written as bare: a name or a keyword.
-fn is_word_text(s: &str) -> bool {
-    let mut cs = s.chars();
-    cs.next()
-        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-        && cs.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 /// The source with its normal forms, or `None` when it is in them.

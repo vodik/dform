@@ -294,7 +294,7 @@ pub fn parse(file: &str, text: &str) -> Result<Vec<Function>, String> {
                 return Err(err("one package per file".into()));
             }
             let name = rest.trim();
-            if !is_name(name) {
+            if !crate::lexer::is_word(name) {
                 return Err(err(format!("`{name}` is not a package name")));
             }
             package = Some(name.to_string());
@@ -359,19 +359,12 @@ pub fn parse(file: &str, text: &str) -> Result<Vec<Function>, String> {
     Ok(out)
 }
 
-fn is_name(s: &str) -> bool {
-    let mut cs = s.chars();
-    cs.next()
-        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-        && cs.all(|c| c.is_ascii_alphanumeric() || c == '_')
-}
-
 /// `name(p: T, ...) -> T[?] [flag, ...]`, the part after `fn `. Shared
 /// with `fmt` (R-24: a signature file's own normal form).
 pub(crate) fn function(sig: &str) -> Result<Function, String> {
     let open = sig.find('(').ok_or("expected `(` after the name")?;
     let name = sig[..open].trim();
-    if !is_name(name) {
+    if !crate::lexer::is_word(name) {
         return Err(format!("`{name}` is not a function name"));
     }
     let close = matching(sig, open).ok_or("unclosed `(`")?;
@@ -396,7 +389,7 @@ pub(crate) fn function(sig: &str) -> Result<Function, String> {
             Some(n) => (n, true),
             None => (n, false),
         };
-        if !is_name(n) || t.is_empty() {
+        if !crate::lexer::is_word(n) || t.is_empty() {
             return Err(format!("`{p}` is not `name: type`"));
         }
         if !optional && params.iter().any(|p: &Param| p.optional) {

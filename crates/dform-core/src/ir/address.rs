@@ -92,13 +92,6 @@ pub fn string_literal(s: &str) -> String {
     out
 }
 
-fn is_name(s: &str) -> bool {
-    let mut cs = s.chars();
-    cs.next()
-        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-        && cs.all(|c| c.is_ascii_alphanumeric() || c == '_')
-}
-
 /// A stored path (`tags.team`, `subnet_ids[0]`) as member access after an
 /// address: `.tags.team`, `.subnet_ids[0]`, `."a-b"` for a segment that is
 /// not a name.
@@ -116,7 +109,7 @@ pub fn path_suffix(path: &str) -> String {
                 && x[1..x.len() - 1].bytes().all(|b| b.is_ascii_digit())
         });
         out.push('.');
-        if is_name(base) && (index.is_empty() || indexes) {
+        if crate::lexer::is_word(base) && (index.is_empty() || indexes) {
             out.push_str(seg);
         } else {
             out.push_str(&string_literal(seg));
