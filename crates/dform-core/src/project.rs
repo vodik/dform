@@ -800,6 +800,27 @@ pub fn git_head(dir: &Path) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
+/// The tracked files under `dir` modified since the commit (`git status`):
+/// empty when the tree is clean or not a repository.
+pub fn git_modified(dir: &Path) -> Vec<String> {
+    let Ok(out) = std::process::Command::new("git")
+        .args(["status", "--porcelain", "--untracked-files=no", "--", "."])
+        .current_dir(dir)
+        .stderr(std::process::Stdio::null())
+        .output()
+    else {
+        return Vec::new();
+    };
+    if !out.status.success() {
+        return Vec::new();
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|l| l.get(3..))
+        .map(str::to_string)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

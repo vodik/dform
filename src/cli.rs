@@ -2128,6 +2128,7 @@ fn run_with(
                     "plan",
                     serde_json::json!({
                         "digest": file.digest,
+                        "documents": crate::diff::documents(&evaluator.tables.sources()),
                         "file": out.display().to_string(),
                         "inputs": file.inputs,
                         "needs_approval": file.needs_approval,
@@ -2316,6 +2317,7 @@ fn run_with(
                         "plan",
                         serde_json::json!({
                             "digest": digest,
+                            "documents": crate::diff::documents(&evaluator.tables.sources()),
                             "file": saved.as_ref().map(|(p, _)| p.display().to_string()),
                             "inputs": inputs,
                             "needs_approval": needs
@@ -2468,22 +2470,33 @@ fn run_with(
                     )?;
                 }
                 if tick == 1 {
-                    audit.append(
-                        "apply_start",
-                        serde_json::json!({
-                            "who": crate::audit::who(),
-                            "dform": env!("CARGO_PKG_VERSION"),
-                            "commit": crate::project::git_head(
-                                files[0].parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new(".")),
-                            ),
-                            "providers": if providers.is_empty() {
-                                vec!["fake".to_string()]
-                            } else {
-                                providers.clone()
-                            },
-                            "protocol": crate::plugin::backend::VERSION,
-                        }),
-                    )?;
+                    let dir = files[0]
+                        .parent()
+                        .filter(|d| !d.as_os_str().is_empty())
+                        .unwrap_or(Path::new("."));
+                    let commit = crate::project::git_head(dir);
+                    let mut e = serde_json::json!({
+                        "who": crate::audit::who(),
+                        "dform": env!("CARGO_PKG_VERSION"),
+                        "commit": commit,
+                        "providers": if providers.is_empty() {
+                            vec!["fake".to_string()]
+                        } else {
+                            providers.clone()
+                        },
+                        "protocol": crate::plugin::backend::VERSION,
+                    });
+                    // A dirty tree: the commit is not the program; which
+                    // tracked files it had modified.
+                    let modified = match commit {
+                        Some(_) => crate::project::git_modified(dir),
+                        None => Vec::new(),
+                    };
+                    if !modified.is_empty() {
+                        e["dirty"] = true.into();
+                        e["modified"] = modified.into();
+                    }
+                    audit.append("apply_start", e)?;
                 }
                 // Kept in state: a sensitive leaf by its digest.
                 let observed = backend.stored_world(&backend.observe(&st)?);

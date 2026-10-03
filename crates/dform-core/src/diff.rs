@@ -5,12 +5,14 @@
 //!
 //! The audit log holds no value (E DR-16), so it holds no explanation
 //! either: each apply's program is evaluated again. Its `apply_start` entry
-//! records the project's commit and its `plan` entry the digests of the
-//! program files; the program is read at that commit (`git archive` into a
-//! scratch directory, evaluated there by `dform __explain`) unless the
-//! program now is the program then. Outside a repository the program now
-//! explains every apply, and the report says so where its digest moved
-//! since.
+//! records the project's commit (and, when the tree was dirty, the tracked
+//! files it had modified) and its `plan` entry the digests of the program
+//! files and of the documents the run's tables read ([`documents`]); the
+//! program is read at that commit (`git archive` into a scratch directory,
+//! evaluated there by `dform __explain`) unless the program now is the
+//! program then. Outside a repository the program now explains every
+//! apply, and the report says so where a program file's or a document's
+//! digest moved since.
 
 use crate::ast::Term;
 use crate::circuit::Leaf;
@@ -104,6 +106,9 @@ pub struct Apply {
     pub time: String,
     pub who: String,
     pub commit: Option<String>,
+    /// The tracked files modified at the commit when the apply ran: the
+    /// tree was dirty.
+    pub dirty: Vec<String>,
     pub plan: Option<Json>,
     pub actions: Vec<Action>,
     /// `ok`, `failed`, `declined`, or empty while it runs (or was killed).
@@ -133,6 +138,14 @@ pub fn applies(entries: &[Json]) -> Vec<Apply> {
                     time: s(e, "time"),
                     who: s(e, "who"),
                     commit: e["commit"].as_str().map(str::to_string),
+                    dirty: e["modified"]
+                        .as_array()
+                        .map(|fs| {
+                            fs.iter()
+                                .filter_map(|f| f.as_str().map(str::to_string))
+                                .collect()
+                        })
+                        .unwrap_or_default(),
                     plan: plan.take(),
                     actions: Vec::new(),
                     result: String::new(),
@@ -216,6 +229,45 @@ pub struct Rerun {
     pub keys: Vec<String>,
 }
 
+/// The documents a run's tables read from files (`Tables::sources`), each
+/// `{"path", "fnv64"}` of its bytes now, as the plan entry records them.
+pub fn documents(read: &[(crate::watch::Relation, String)]) -> Vec<Json> {
+    let paths: BTreeSet<&Path> = read
+        .iter()
+        .filter_map(|(r, _)| match &r.source {
+            crate::watch::Source::File(p) => Some(p.as_path()),
+            _ => None,
+        })
+        .collect();
+    paths
+        .into_iter()
+        .map(|p| json!({ "path": p.display().to_string(), "fnv64": fnv64_of(p) }))
+        .collect()
+}
+
+/// A file's digest as the plan entry records it; `missing` when it cannot
+/// be read.
+fn fnv64_of(p: &Path) -> String {
+    std::fs::read(p)
+        .map(|b| crate::zset::file::fnv64(&b))
+        .unwrap_or_else(|_| "missing".into())
+}
+
+/// The documents `apply`'s plan entry recorded whose digest is not their
+/// digest now.
+fn documents_moved(apply: &Apply) -> Vec<String> {
+    let Some(ds) = apply.plan.as_ref().and_then(|p| p["documents"].as_array()) else {
+        return Vec::new();
+    };
+    ds.iter()
+        .filter_map(|d| {
+            let path = d["path"].as_str()?;
+            (d["fnv64"].as_str() != Some(fnv64_of(Path::new(path)).as_str()))
+                .then(|| path.to_string())
+        })
+        .collect()
+}
+
 /// The program that explains `apply`, and a note when it is not exactly
 /// the program then. `files`: the program files now.
 pub fn program_of(apply: &Apply, files: &[PathBuf], top: &Path) -> (Program, Option<String>) {
@@ -232,15 +284,24 @@ pub fn program_of(apply: &Apply, files: &[PathBuf], top: &Path) -> (Program, Opt
         .collect();
     let same_now = then.is_some() && then == now;
     let Some(commit) = &apply.commit else {
-        return match same_now {
-            true => (Program::Now, None),
-            false => (
+        let moved = documents_moved(apply);
+        return match (same_now, moved.is_empty()) {
+            (true, true) => (Program::Now, None),
+            (false, _) => (
                 Program::Now,
                 Some(
                     "not in a repository, and the program changed since this apply: explained \
                      by the program now"
                         .into(),
                 ),
+            ),
+            (true, false) => (
+                Program::Now,
+                Some(format!(
+                    "not in a repository, and {} changed since this apply: explained by the \
+                     documents now",
+                    moved.join(", ")
+                )),
             ),
         };
     };
@@ -258,6 +319,19 @@ pub fn program_of(apply: &Apply, files: &[PathBuf], top: &Path) -> (Program, Opt
         })
         .collect();
     let short = &commit[..commit.len().min(12)];
+    // The apply recorded its tree dirty: say so, by the files.
+    if !apply.dirty.is_empty() {
+        if same_now {
+            return (Program::Now, None);
+        }
+        return (
+            Program::Commit(commit.clone()),
+            Some(format!(
+                "the tree was dirty at this apply ({} modified): explained as committed at {short}",
+                apply.dirty.join(", ")
+            )),
+        );
+    }
     if then.is_none() || at_commit == then {
         // The commit is the program now when nothing under the project
         // moved since.

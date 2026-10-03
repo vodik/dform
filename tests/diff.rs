@@ -215,3 +215,71 @@ fn diff_outside_a_repository_explains_by_the_program_now_and_redacts_secrets() {
         bad.stderr
     );
 }
+
+/// Outside a repository the plan entry records each document the run read
+/// with its digest: a CSV changed since an apply is named, though the
+/// program files are the same.
+#[test]
+fn diff_outside_a_repository_names_a_changed_document() {
+    let s = Scratch::project("diff-doc");
+    s.write("data/zones.csv", "name,n\nus-test-1a,1\n");
+    s.write("stacks/net.df", NET);
+    s.run(&["apply", "net"]).success();
+    let r = s.run(&["log", "--json", "net"]).success();
+    let es: Vec<Value> = serde_json::from_str(&r.stdout).unwrap();
+    let plan = es.iter().find(|e| e["kind"] == "plan").unwrap();
+    assert_eq!(
+        plan["documents"][0]["path"]
+            .as_str()
+            .map(|p| p.ends_with("data/zones.csv")),
+        Some(true),
+        "{plan}"
+    );
+    s.write("data/zones.csv", "name,n\nus-test-1a,1\nus-test-1b,2\n");
+    s.run(&["apply", "net"]).success();
+    let r = s.run(&["diff", "--since", "1", "net"]).success();
+    let first = r.stdout.split("\napply ").next().unwrap();
+    assert!(
+        first.contains("  note: not in a repository, and ")
+            && first.contains(
+                "data/zones.csv changed since this apply: explained by the documents now\n"
+            ),
+        "{}",
+        r.stdout
+    );
+    // The second apply read the CSV as it is now: no note.
+    let second = r.stdout.split("\napply ").nth(1).unwrap();
+    assert!(!second.contains("note:"), "{}", r.stdout);
+}
+
+/// An apply from a dirty tree records the tracked files it had modified,
+/// and `diff` says so directly.
+#[test]
+fn a_dirty_apply_is_recorded_and_named() {
+    let s = Scratch::project("diff-dirty");
+    s.write(".gitignore", "dform.state/\n");
+    s.write("data/zones.csv", "name,n\nus-test-1a,1\n");
+    s.write("stacks/net.df", NET);
+    git(&s, &["init", "-q", "."]);
+    git(&s, &["add", "-A"]);
+    git(&s, &["commit", "-qm", "one"]);
+    s.write("stacks/net.df", &NET.replace("10.0.0.0/16", "10.9.0.0/16"));
+    s.run(&["apply", "net"]).success();
+    let r = s.run(&["log", "--json", "net"]).success();
+    let es: Vec<Value> = serde_json::from_str(&r.stdout).unwrap();
+    let start = es.iter().find(|e| e["kind"] == "apply_start").unwrap();
+    assert_eq!(start["dirty"], true, "{start}");
+    assert_eq!(start["modified"], serde_json::json!(["stacks/net.df"]), "{start}");
+    // The program changes again: the apply is explained at its commit, and
+    // the note names the dirty file.
+    s.write("stacks/net.df", NET);
+    let r = s.run(&["diff", "--since", "1", "net"]).success();
+    assert!(
+        r.stdout.contains(
+            "  note: the tree was dirty at this apply (stacks/net.df modified): explained as \
+             committed at "
+        ),
+        "{}",
+        r.stdout
+    );
+}

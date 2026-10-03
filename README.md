@@ -1216,12 +1216,14 @@ of canonical JSON: `seq`, `time` (UTC), `kind`, `prev` (the previous entry's
 The kinds:
 
 - `plan`: the digest, the plan file (if any), the inputs, the pinned git
-  commits, the rows that need an approval, and who (`plan --out`, and every
-  apply of the plan it applies);
+  commits, the documents the tables read (each path with its digest), the
+  rows that need an approval, and who (`plan --out`, and every apply of the
+  plan it applies);
 - `approval`: the verified statement and the token, or `not required`, or
   why it was refused;
-- `apply_start`: who, dform's version, the providers and the protocol
-  version;
+- `apply_start`: who, dform's version, the git commit, the providers and
+  the protocol version; from a dirty tree also `dirty: true` and the
+  tracked files it had `modified`;
 - `action`: the kind, the address, the result (and the error), the remote
   id, and a digest of the redacted diff;
 - `tick`: the world as the executor saw it, as an HMAC with the stack's key;
@@ -1258,7 +1260,9 @@ evaluated with the inputs its `plan` entry recorded; a secret one is
 recorded only as a digest, so it is left out), or by the program now
 when it is the program then by the digests the `plan` entry recorded.
 Outside a repository the program now explains every apply, and a `note:`
-says where it changed since. An update is explained by the attributes
+says where it changed since: a program file, or a document the plan entry
+recorded. An apply from a dirty tree is explained at its commit with a
+`note:` naming the files it had modified. An update is explained by the attributes
 whose values differ from the apply before's, a delete by what derived it
 at the apply before. `--json` prints one document: `applies`, each with
 its `deformations` and their `why`, and `changed` (`added` and `removed`
