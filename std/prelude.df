@@ -45,6 +45,10 @@ fn duration(value: any) -> duration?
 #| example: let launch = time("2026-10-02T09:00[Europe/Paris]")
 fn time(text: string) -> time?
 
+#| A url from its text, parsed and printed canonically; a literal is checked at compile time.
+#| example: let base = url(cfg.public_baseurl)
+fn url(text: string) -> url?
+
 #| The range of addresses between two, in either order.
 #| example: let pool = iprange(ip("10.0.0.10"), ip("10.0.0.99"))
 fn iprange(a: ip, b: ip) -> iprange

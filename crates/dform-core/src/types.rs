@@ -47,8 +47,9 @@ pub enum Ty {
     Secret(Box<Ty>),
     /// `enum(a, b, ..)`.
     Enum(Vec<String>),
-    /// `string`, `int`, `bool`, `inet`, `ip`, the quantities `bytes`,
-    /// `cpu`, `duration`, and `time`.
+    /// `string`, `int`, `bool`, `inet`, `ip`, `url`, `regex` (a pattern,
+    /// not a schema type: a function parameter only), the quantities
+    /// `bytes`, `cpu`, `duration`, and `time`.
     Scalar(String),
     /// Anything the check does not judge (`map`, `object`, `any`, an
     /// untyped `list`).
@@ -64,7 +65,7 @@ impl Ty {
         let Some((head, rest)) = s.split_once('(') else {
             return match s {
                 "string" | "int" | "bool" | "inet" | "ip" | "bytes" | "cpu" | "duration"
-                | "time" => Ty::Scalar(s.to_string()),
+                | "time" | "url" | "regex" => Ty::Scalar(s.to_string()),
                 _ => Ty::Any,
             };
         };
@@ -293,6 +294,10 @@ pub fn mismatch(ty: &Ty, t: &Term) -> Option<String> {
                 ("inet", Value::Str(x)) => crate::value::parse_ipnet(x).is_some(),
                 ("ip", Value::Ip(_)) => true,
                 ("ip", Value::Str(x)) => crate::value::ipv4_to_u32(x).is_some(),
+                // A url (and a regex pattern, R-31) stays a plain string;
+                // only its text is checked.
+                ("url", Value::Str(x)) => url::Url::parse(x).is_ok(),
+                ("regex", Value::Str(x)) => regex::Regex::new(x).is_ok(),
                 // A null is not known yet; a computed value fits its type.
                 (_, Value::Null { .. }) => true,
                 _ => false,
@@ -302,6 +307,14 @@ pub fn mismatch(ty: &Ty, t: &Term) -> Option<String> {
                     format!("is an inet: {x:?} is not a network (`a.b.c.d/n`)")
                 }
                 ("ip", Value::Str(x)) => format!("is an ip: {x:?} is not an address (`a.b.c.d`)"),
+                ("url", Value::Str(x)) => format!(
+                    "is a url: {x:?} is not one ({})",
+                    url::Url::parse(x).unwrap_err()
+                ),
+                ("regex", Value::Str(x)) => format!(
+                    "is a regex: {x:?} is not a valid pattern ({})",
+                    regex::Regex::new(x).unwrap_err()
+                ),
                 _ => format!("is {s}, not {}", shown_literal(v)),
             })
         }
@@ -362,6 +375,12 @@ fn read_as(ty: &Ty, t: Term) -> Term {
                 None => Term::Val(Value::Str(x)),
             }
         }
+        // A url literal is canonicalized at compile time, the same text
+        // the constructor and `url.parse` would print (R-31).
+        (Ty::Scalar(s), Term::Val(Value::Str(x))) if s == "url" => match url::Url::parse(&x) {
+            Ok(u) => Term::Val(Value::Str(u.to_string())),
+            Err(_) => Term::Val(Value::Str(x)),
+        },
         (Ty::Secret(inner), t) => read_as(inner, t),
         (Ty::List(inner), Term::List(xs)) => {
             Term::List(xs.into_iter().map(|x| read_as(inner, x)).collect())

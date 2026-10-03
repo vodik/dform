@@ -1,0 +1,10 @@
+edition 2026
+
+# A regex pattern literal (R-31) is checked where its position is
+# typed `regex` (`regex.match`'s `re`).
+a(x) where x = regex.match("text", "[")
+
+# A url literal (R-31) is checked where its position is typed `url`
+# (`with_scheme`'s `u`); the bare constructor's own string argument is
+# not (it is a plain `string` parameter, read at evaluation).
+b(x) where x = url.with_scheme("not a url", "https")

@@ -1,0 +1,36 @@
+# URLs: functions about a `url` (docs/grammar.md "Functions"). A `url`
+# value is parsed at the edge and prints canonically; a literal in a
+# `url`-typed position is checked at compile time (R-31).
+package url
+
+#| The url's scheme, host, port (absent: the scheme's default), path, query and fragment, broken out; no value for text that is not a url.
+#| example: let host = url.parse(cfg.public_baseurl).host
+fn parse(text: string) -> { scheme: string, host: string, port: int?, path: string, query: object, fragment: string? }?
+
+#| `base` with `segment` appended as a path component, one `/` between them whatever either side has.
+#| example: let endpoint = url.join(base_url, "v1/status")
+fn join(base: string, segment: string) -> string
+
+#| The url with its scheme set.
+#| example: let secure = url.with_scheme(u, "https")
+fn with_scheme(u: url, scheme: string) -> url?
+
+#| The url with its host set.
+#| example: let canary = url.with_host(u, "canary.${domain}")
+fn with_host(u: url, host: string) -> url?
+
+#| The url with its port set.
+#| example: let direct = url.with_port(u, 8443)
+fn with_port(u: url, port: int) -> url?
+
+#| The url with its path set.
+#| example: let health = url.with_path(u, "/healthz")
+fn with_path(u: url, path: string) -> url?
+
+#| The url with its query set, replacing any it had.
+#| example: let paged = url.with_query(u, { page: "2" })
+fn with_query(u: url, query: object) -> url?
+
+#| The text, percent-encoded for a URL path or query component.
+#| example: let safe = url.encode(team_name)
+fn encode(text: string) -> string
