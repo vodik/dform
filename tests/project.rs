@@ -7,13 +7,12 @@ mod common;
 use common::Scratch;
 use std::path::PathBuf;
 
-const APP: &str = r#"edition 2026
-key env: enum("staging", "prod") = "staging"
+const APP: &str = r#"key env: enum("staging", "prod") = "staging"
 provider fake
 resource net.vpc main { cidr = "10.0.0.0/16", tags = { env } }
 "#;
 
-const NET: &str = r#"edition 2026
+const NET: &str = r#"
 provider fake
 resource net.vpc shared { cidr = "10.9.0.0/16" }
 "#;
@@ -21,7 +20,10 @@ resource net.vpc shared { cidr = "10.9.0.0/16" }
 /// A project with two stacks: `app[env]` and `net`.
 fn project(name: &str) -> Scratch {
     let s = Scratch::new(name);
-    s.write("dform.toml", "[project]\nname = \"t\"\n");
+    s.write(
+        "dform.toml",
+        "[project]\nedition = \"2026\"\nname = \"t\"\n",
+    );
     s.write("stacks/app.df", APP);
     s.write("stacks/net.df", NET);
     s
@@ -86,7 +88,7 @@ fn no_target_is_the_one_stack_here_else_a_listing() {
         "{}",
         r.stderr
     );
-    s.write("net-only/dform.toml", "");
+    s.write("net-only/dform.toml", "[project]\nedition = \"2026\"\n");
     s.write("net-only/stacks/net.df", NET);
     let r = s.run_in("net-only", &["plan"]).success();
     assert_eq!(r.summary(), "plan: 1 deformation (1 create)");
@@ -103,7 +105,7 @@ fn no_target_is_the_one_stack_here_else_a_listing() {
         r.stderr
     );
     let empty = Scratch::new("target-empty");
-    empty.write("dform.toml", "");
+    empty.write("dform.toml", "[project]\nedition = \"2026\"\n");
     let r = empty.run(&["plan"]).failure();
     assert!(
         r.stderr.contains("no stack under") && r.stderr.contains("a file under stacks/"),
@@ -140,9 +142,9 @@ fn a_key_value_is_the_targets_never_set() {
 #[test]
 fn a_stack_is_a_file_named_after_itself() {
     let s = Scratch::new("target-files");
-    s.write("dform.toml", "");
+    s.write("dform.toml", "[project]\nedition = \"2026\"\n");
     s.write("shop.df", NET);
-    s.write("modules/m.df", "edition 2026\n");
+    s.write("modules/m.df", "\n");
     let r = s.run(&["plan", "shop"]).success();
     assert_eq!(r.summary(), "plan: 1 deformation (1 create)");
     let r = s.run(&["stack", "list"]).success();
@@ -160,7 +162,10 @@ fn a_stack_is_a_file_named_after_itself() {
     );
     s.run(&["plan", "net"]).success();
     // A table for a stack no file is.
-    s.write("dform.toml", "[stacks.nope]\nisolated = true\n");
+    s.write(
+        "dform.toml",
+        "[project]\nedition = \"2026\"\n\n[stacks.nope]\nisolated = true\n",
+    );
     let r = s.run(&["plan", "net"]).failure();
     assert!(
         r.stderr
@@ -169,7 +174,10 @@ fn a_stack_is_a_file_named_after_itself() {
         r.stderr
     );
     // The table's settings are a closed list.
-    s.write("dform.toml", "[stacks.net]\nbackends = 'local(\"x\")'\n");
+    s.write(
+        "dform.toml",
+        "[project]\nedition = \"2026\"\n\n[stacks.net]\nbackends = 'local(\"x\")'\n",
+    );
     let r = s.run(&["plan", "net"]).failure();
     assert!(
         r.stderr
@@ -184,7 +192,7 @@ fn the_layout_lints() {
     let s = project("target-lints");
     // A module that is not a stack with a key is an error: a key is its
     // stack's.
-    s.write("modules/m.df", "edition 2026\nkey env: string\n");
+    s.write("modules/m.df", "\nkey env: string\n");
     let r = s.run(&["plan", "net"]).failure();
     assert!(
         r.stderr
@@ -194,13 +202,13 @@ fn the_layout_lints() {
     );
     std::fs::remove_file(s.path("modules/m.df")).unwrap();
     // Every other .df is a module, wherever it is (R-65).
-    s.write("loose.df", "edition 2026\n");
+    s.write("loose.df", "\n");
     let r = s.run(&["plan", "net"]).success();
     assert!(!r.stderr.contains("warning"), "{}", r.stderr);
     // [discovery] exclude: not walked, not linted.
     s.write(
         "dform.toml",
-        "[project]\nname = \"t\"\n[discovery]\nexclude = [\"loose.df\", \"scratch/**\"]\n",
+        "[project]\nedition = \"2026\"\nname = \"t\"\n[discovery]\nexclude = [\"loose.df\", \"scratch/**\"]\n",
     );
     s.write("scratch/net.df", NET);
     let r = s.run(&["plan", "net"]).success();
@@ -215,7 +223,7 @@ fn a_program_uses_a_stack_and_never_instances_it() {
     let s = project("target-use-stack");
     s.write(
         "stacks/both.df",
-        "edition 2026\ncomponent c {\n  input n: int\n}\ninstance stacks.net x\nprovider fake\n",
+        "\ncomponent c {\n  input n: int\n}\ninstance stacks.net x\nprovider fake\n",
     );
     let r = s.run(&["plan", "both"]).failure();
     assert!(
@@ -226,12 +234,9 @@ fn a_program_uses_a_stack_and_never_instances_it() {
     );
     s.write(
         "modules/tags.df",
-        "edition 2026\nresource net.vpc extra { cidr = \"10.1.0.0/16\" }\n",
+        "\nresource net.vpc extra { cidr = \"10.1.0.0/16\" }\n",
     );
-    s.write(
-        "stacks/both.df",
-        "edition 2026\nuse modules.tags\nprovider fake\n",
-    );
+    s.write("stacks/both.df", "\nuse modules.tags\nprovider fake\n");
     let r = s.run(&["plan", "both"]).success();
     assert!(
         r.stdout.contains("+ net.vpc[\"tags::extra\"]"),
@@ -259,6 +264,7 @@ fn the_manifest_names_providers_and_defaults() {
         "dform.toml",
         r#"[project]
 name = "m"
+edition = "2026"
 dform = ">=0.1"
 
 [providers]
@@ -275,7 +281,7 @@ audit_sink = "true"
     );
     s.write(
         "stacks/p.df",
-        r#"edition 2026
+        r#"
 provider cloud
 resource x.thing a { size = 1 }
 pinned(n, c) where project_provider(n, c)
@@ -302,7 +308,10 @@ default(k, v) where project_default(k, v)
     assert!(r.stdout.contains(r#""audit_sink"  "true""#), "{}", r.stdout);
 
     // A project for another dform is refused.
-    s.write("dform.toml", "[project]\ndform = \">=9\"\n");
+    s.write(
+        "dform.toml",
+        "[project]\nedition = \"2026\"\ndform = \">=9\"\n",
+    );
     let r = s.run(&["plan", "p"]).failure();
     assert!(
         r.stderr.contains("requires dform >=9; this is dform 0.1.0"),
@@ -310,9 +319,65 @@ default(k, v) where project_default(k, v)
         r.stderr
     );
     // Nothing per deployment.
-    s.write("dform.toml", "[inputs]\nenv = \"prod\"\n");
+    s.write(
+        "dform.toml",
+        "[project]\nedition = \"2026\"\n\n[inputs]\nenv = \"prod\"\n",
+    );
     let r = s.run(&["plan", "p"]).failure();
     assert!(r.stderr.contains("unknown field `inputs`"), "{}", r.stderr);
+}
+
+/// The edition is the project's (R-68): dform.toml names it, and must; a
+/// program in no project is read in dform's, silently; an `edition`
+/// line in a file is an error naming dform.toml.
+#[test]
+fn the_edition_is_the_projects() {
+    let s = Scratch::new("edition");
+    s.write(
+        "stacks/p.df",
+        "provider fake\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\n",
+    );
+    s.write("dform.toml", "[project]\nname = \"e\"\n");
+    let r = s.run(&["plan", "p"]).failure();
+    assert!(
+        r.stderr.contains(
+            "dform.toml: the project's language edition is not named: add `edition = \"2026\"` \
+             under [project]"
+        ),
+        "{}",
+        r.stderr
+    );
+    s.write("dform.toml", "[project]\nedition = \"2027\"\n");
+    let r = s.run(&["plan", "p"]).failure();
+    assert!(
+        r.stderr
+            .contains("[project] edition = \"2027\": this dform reads edition \"2026\""),
+        "{}",
+        r.stderr
+    );
+    s.write("dform.toml", "[project]\nedition = \"2026\"\n");
+    s.run(&["plan", "p"]).success();
+
+    // A file with the old first line.
+    s.write("stacks/p.df", "edition 2026\nprovider fake\n");
+    let r = s.run(&["plan", "p"]).failure();
+    assert!(
+        r.stderr.contains(
+            "`edition` is gone: a project's edition is its dform.toml's, `[project] edition = \
+             \"2026\"`"
+        ),
+        "{}",
+        r.stderr
+    );
+
+    // No project: the current edition, said nothing about.
+    let lone = Scratch::new("edition-lone");
+    lone.write(
+        "p.df",
+        "provider fake\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\n",
+    );
+    let r = lone.run(&["plan", "p.df"]).success();
+    assert_eq!(r.stderr, "");
 }
 
 /// `[stacks.NAME]` overrides `[defaults]`: the defaults' backend holds
@@ -323,18 +388,18 @@ fn a_stack_table_overrides_the_defaults() {
     let s = Scratch::new("manifest-defaults");
     s.write(
         "dform.toml",
-        "[defaults]\nbackend = 'local(\"a/{stack}\")'\n",
+        "[project]\nedition = \"2026\"\n\n[defaults]\nbackend = 'local(\"a/{stack}\")'\n",
     );
     s.write(
         "stacks/p.df",
-        "edition 2026\nprovider fake\nresource db.postgres main { size = 1 }\n\
+        "\nprovider fake\nresource db.postgres main { size = 1 }\n\
          stacked(n, k, v) where project_stack(n, k, v)\n",
     );
     s.run(&["apply", "p", "--yes"]).success();
     assert!(s.path("a/p/state.json").exists());
     s.write(
         "dform.toml",
-        "[defaults]\nbackend = 'local(\"a/{stack}\")'\n\n[stacks.p]\nbackend = 'local(\"b\")'\n",
+        "[project]\nedition = \"2026\"\n\n[defaults]\nbackend = 'local(\"a/{stack}\")'\n\n[stacks.p]\nbackend = 'local(\"b\")'\n",
     );
     s.run(&["apply", "p", "--yes"]).success();
     assert!(s.path("b/state.json").exists());
@@ -352,7 +417,7 @@ fn a_backend_names_the_key() {
     let s = project("backend-key");
     s.write(
         "dform.toml",
-        "[stacks.app]\nbackend = 'local(\"state/{stack}-{env}\")'\n",
+        "[project]\nedition = \"2026\"\n\n[stacks.app]\nbackend = 'local(\"state/{stack}-{env}\")'\n",
     );
     s.run(&["apply", "app", "env=prod"]).success();
     assert!(s.path("state/app-prod/state.json").exists());
@@ -520,7 +585,7 @@ fn fmt_with_no_path_formats_the_project() {
     let s = project("fmt-project");
     s.write(
         "stacks/net.df",
-        "edition 2026\nprovider fake\nresource net.vpc shared {cidr=\"10.9.0.0/16\"}\n",
+        "\nprovider fake\nresource net.vpc shared {cidr=\"10.9.0.0/16\"}\n",
     );
     let r = s.run(&["fmt", "--check"]).failure();
     assert_eq!(r.stdout, "stacks/net.df\n");
@@ -610,14 +675,14 @@ fn program_paths_resolve_from_the_root() {
     let s = project("root-paths");
     s.write("data/peers.csv", "name\na\nb\n");
     s.write("data/note.txt", "hello");
-    s.write("data/tags.df", "edition 2026\n\ntag(\"x\")\n");
+    s.write("data/tags.df", "\n\ntag(\"x\")\n");
     s.write(
         "providers/cloud/schema.df",
         "type_provider(x.thing, \"fakecloud\")\n",
     );
     s.write(
         "stacks/paths.df",
-        r#"edition 2026
+        r#"
 input peer from csv("data/peers.csv")
 use data.tags
 decl peer(name: string)

@@ -19,7 +19,7 @@ fn plan(src: &str) -> common::Run {
 #[test]
 fn a_component_predicate_is_private_to_its_copy() {
     let r = plan(
-        r#"edition 2026
+        r#"
 component m {
   input n: int
   size(n_) where n(n_)
@@ -49,7 +49,7 @@ provider fake
 #[test]
 fn reading_a_private_predicate_is_an_error_naming_the_component() {
     let r = plan(
-        r#"edition 2026
+        r#"
 component m {
   size(1)
 }
@@ -72,7 +72,7 @@ provider fake
 #[test]
 fn outputs_are_the_interface() {
     let r = plan(
-        r#"edition 2026
+        r#"
 component m {
   input n: int
   size(n_) where n(n_)
@@ -105,7 +105,7 @@ provider fake
 #[test]
 fn export_and_contributes_are_errors() {
     let r = plan(
-        r#"edition 2026
+        r#"
 component m {
   export size
   contributes need
@@ -147,7 +147,7 @@ provider fake
 /// An instance that sets nothing is written without a block (R-26).
 #[test]
 fn an_input_default_yields_to_the_instance() {
-    let src = r#"edition 2026
+    let src = r#"
 component m {
   input n: int = 7
   resource net.vpc vpc {
@@ -182,7 +182,7 @@ provider fake
 #[test]
 fn a_refinement_on_a_component_input_is_a_deny() {
     let r = plan(
-        r#"edition 2026
+        r#"
 component m {
   input n: int check n <= 5
   resource net.vpc vpc {
@@ -210,14 +210,14 @@ fn a_module_writes_without_a_grant_and_its_relations_are_its_own() {
     let s = Scratch::new("lang-modules-pack");
     s.write(
         "tags.df",
-        r#"edition 2026
+        r#"
 
 team("x")
 arg(t, a, "tags", { team: v }) where want(t, a), team(v)
 set a.cidr = "10.9.0.0/16" @override where a in net.vpc
 "#,
     );
-    let src = r#"edition 2026
+    let src = r#"
 resource net.vpc main { cidr = "10.0.0.0/16" }
 use tags
 provider fake
@@ -253,7 +253,7 @@ fn a_stack_input_passed_to_a_component_input_of_the_same_name_stratifies() {
     let s = Scratch::new("lang-modules");
     s.write(
         "p.df",
-        r#"edition 2026
+        r#"
 input replicas: int = 2
 component app {
   input replicas: int
@@ -332,13 +332,10 @@ vpc_peer_inst("main", "third")
 /// default) is stamped once by `use`, under its name.
 fn modules_project() -> Scratch {
     let s = Scratch::project("lang-modules-paths");
-    s.write(
-        "config.df",
-        "edition 2026\n\nlet region = \"us-1\"\ntier(\"gold\")\n",
-    );
+    s.write("config.df", "\n\nlet region = \"us-1\"\ntier(\"gold\")\n");
     s.write(
         "modules/lan.df",
-        r#"edition 2026
+        r#"
 
 type cidr = inet
 
@@ -354,7 +351,7 @@ component vpc {
     );
     s.write(
         "postgres.df",
-        r#"edition 2026
+        r#"
 
 input size: int = 1
 
@@ -367,7 +364,7 @@ resource db.postgres db {
     );
     s.write(
         "stacks/app.df",
-        r#"edition 2026
+        r#"
 
 provider fake
 
@@ -420,7 +417,7 @@ fn a_module_value_is_read_through_its_use() {
     let s = modules_project();
     s.write(
         "stacks/app.df",
-        "edition 2026\n\nprovider fake\n\nuse config\n\nwhere_(r) where r = region\n",
+        "\n\nprovider fake\n\nuse config\n\nwhere_(r) where r = region\n",
     );
     let r = s.run(&["plan", "app"]).failure();
     assert!(
@@ -430,7 +427,7 @@ fn a_module_value_is_read_through_its_use() {
     );
     s.write(
         "stacks/app.df",
-        "edition 2026\n\nprovider fake\n\nuse config as c\n\nr(x) where x = c.region\nq(x) where x = c.nothing\n",
+        "\n\nprovider fake\n\nuse config as c\n\nr(x) where x = c.region\nq(x) where x = c.nothing\n",
     );
     let r = s.run(&["plan", "app"]).failure();
     assert!(
@@ -447,10 +444,10 @@ fn a_module_value_is_read_through_its_use() {
 #[test]
 fn a_used_module_reads_its_users_names() {
     let s = Scratch::new("lang-modules-outward");
-    s.write("naming.df", "edition 2026\n\nlabel(x) where name(x)\n");
+    s.write("naming.df", "\n\nlabel(x) where name(x)\n");
     s.write(
         "p.df",
-        r#"edition 2026
+        r#"
 use naming
 name("stack")
 component c {
@@ -485,11 +482,11 @@ fn a_clause_gates_a_copy_and_an_activation() {
     let s = Scratch::new("lang-modules-gates");
     s.write(
         "tagged.df",
-        "edition 2026\n\nset r.tags = { audited: true } where r in resource\n",
+        "\n\nset r.tags = { audited: true } where r in resource\n",
     );
     s.write(
         "p.df",
-        r#"edition 2026
+        r#"
 input env: enum("dev", "prod") = "dev"
 component bastion {
   resource compute.vm vm {
@@ -526,7 +523,7 @@ provider fake
 #[test]
 fn a_copy_holds_copies_of_its_own() {
     let r = plan(
-        r#"edition 2026
+        r#"
 component spoke {
   input range: string
   resource net.vpc vpc {
@@ -570,16 +567,16 @@ fn a_module_used_from_two_stacks_fires_in_both() {
     let s = Scratch::project("lang-modules-two-stacks");
     s.write(
         "baseline.df",
-        "edition 2026\n\nset r.tags = { team: \"platform\" } where r in resource\n\
+        "\n\nset r.tags = { team: \"platform\" } where r in resource\n\
          deny \"no public vm\" where v in compute.vm, v.public == true\n",
     );
     s.write(
         "stacks/web.df",
-        "edition 2026\n\nprovider fake\n\nuse baseline\n\nresource compute.vm web {\n  size = 2\n}\n",
+        "\n\nprovider fake\n\nuse baseline\n\nresource compute.vm web {\n  size = 2\n}\n",
     );
     s.write(
         "stacks/db.df",
-        "edition 2026\n\nprovider fake\n\nuse baseline\n\nresource db.postgres db {\n  public = false\n}\n",
+        "\n\nprovider fake\n\nuse baseline\n\nresource db.postgres db {\n  public = false\n}\n",
     );
     let web = s.run(&["plan", "web"]).success();
     assert!(
@@ -612,12 +609,9 @@ fn a_module_used_from_two_stacks_fires_in_both() {
     // A module with a resource stamps it once in each stack that uses it.
     s.write(
         "shared.df",
-        "edition 2026\n\nresource net.vpc vpc {\n  cidr = \"10.0.0.0/16\"\n}\n",
+        "\n\nresource net.vpc vpc {\n  cidr = \"10.0.0.0/16\"\n}\n",
     );
-    s.write(
-        "stacks/web.df",
-        "edition 2026\n\nprovider fake\n\nuse shared\n",
-    );
+    s.write("stacks/web.df", "\n\nprovider fake\n\nuse shared\n");
     let r = s.run(&["plan", "web"]).success();
     assert_eq!(
         r.stdout.matches("+ net.vpc[\"shared::vpc\"]").count(),
@@ -634,21 +628,21 @@ fn use_stamps_a_module_once() {
     let s = Scratch::new("lang-modules-stamp");
     s.write(
         "synapse.df",
-        "edition 2026\n\nresource compute.vm homeserver {\n  size = 2\n}\n\
+        "\n\nresource compute.vm homeserver {\n  size = 2\n}\n\
          output host = \"matrix\"\n",
     );
     s.write(
         "forgejo.df",
-        "edition 2026\n\ninput size: int = 3\n\nresource compute.vm forge {\n  size\n}\n",
+        "\n\ninput size: int = 3\n\nresource compute.vm forge {\n  size\n}\n",
     );
     s.write(
         "postgres.df",
-        "edition 2026\n\ninput database: string\n\nresource db.postgres db {\n  public = false\n  \
+        "\n\ninput database: string\n\nresource db.postgres db {\n  public = false\n  \
          name = database\n}\n",
     );
     s.write(
         "p.df",
-        "edition 2026\nuse synapse\nuse forgejo as git\nuse postgres { database = \"matrix\" }\n\
+        "\nuse synapse\nuse forgejo as git\nuse postgres { database = \"matrix\" }\n\
          h(x) where x = synapse.host\nprovider fake\n",
     );
     let r = s
@@ -693,9 +687,9 @@ fn an_unbound_input_of_a_used_module_is_a_stack_inputs_error() {
     let s = Scratch::new("lang-modules-unbound");
     s.write(
         "postgres.df",
-        "edition 2026\n\ninput database: string\n\nresource db.postgres db {\n  public = false\n}\n",
+        "\n\ninput database: string\n\nresource db.postgres db {\n  public = false\n}\n",
     );
-    s.write("p.df", "edition 2026\nuse postgres\nprovider fake\n");
+    s.write("p.df", "\nuse postgres\nprovider fake\n");
     let r = s
         .run(&["dev", "--world", "w.json", "plan", "p.df"])
         .failure();
@@ -707,12 +701,12 @@ fn an_unbound_input_of_a_used_module_is_a_stack_inputs_error() {
     );
     s.write(
         "p.df",
-        "edition 2026\nuse postgres { database = \"x\" }\nprovider fake\n",
+        "\nuse postgres { database = \"x\" }\nprovider fake\n",
     );
     s.run(&["dev", "--world", "w.json", "plan", "p.df"])
         .success();
     // The stack gives a used module's input by its name there (R-55).
-    s.write("p.df", "edition 2026\nuse postgres\nprovider fake\n");
+    s.write("p.df", "\nuse postgres\nprovider fake\n");
     s.run(&[
         "dev",
         "--world",
@@ -742,7 +736,7 @@ fn an_unbound_input_of_a_used_module_is_a_stack_inputs_error() {
     );
     s.write(
         "p.df",
-        "edition 2026\ncomponent vm {\n  resource compute.vm vm {\n    size = 1\n  }\n}\n\
+        "\ncomponent vm {\n  resource compute.vm vm {\n    size = 1\n  }\n}\n\
          instance vm\nprovider fake\n",
     );
     let r = s

@@ -3310,13 +3310,6 @@ const REFERENCE: &[Reference] = &[
         "let token = env.var(\"API_TOKEN\")",
     ),
     r(
-        "edition",
-        Kw,
-        "edition 2026",
-        "The first line of every .df file: the grammar's edition.",
-        "edition 2026",
-    ),
-    r(
         "import",
         Kw,
         "import \"PATH\"",

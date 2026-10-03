@@ -15,10 +15,12 @@ mod typed;
 pub use layout::{INLINE_LITERALS, WIDTH};
 pub use typed::Typing;
 
+use crate::syntax::SyntaxKind::EDITION;
 use crate::syntax::SyntaxNode;
 
 /// Format a file's source; a file with syntax errors is not formatted, but
-/// for a header statement after the body began, which is moved (R-27).
+/// for a header statement after the body began, which is moved (R-27),
+/// and an `edition` line, which is dropped (R-68).
 pub fn format_source(name: &str, src: &str) -> anyhow::Result<String> {
     format_source_in(name, src, None)
 }
@@ -30,8 +32,26 @@ pub fn format_source_in(name: &str, src: &str, typing: Option<&Typing>) -> anyho
         return Ok(format_signature_file(src));
     }
     let parse = crate::syntax::parser::parse(src);
-    if parse.errors.iter().any(|e| !e.misplaced) {
+    let editions: Vec<rowan::TextRange> = parse
+        .syntax()
+        .children()
+        .filter(|n| n.kind() == EDITION)
+        .map(|n| n.text_range())
+        .collect();
+    let in_edition = |at: usize| {
+        editions
+            .iter()
+            .any(|r| usize::from(r.start()) <= at && at < usize::from(r.end()))
+    };
+    if parse
+        .errors
+        .iter()
+        .any(|e| !e.misplaced && !in_edition(e.start))
+    {
         return Err(crate::parser::syntax_diagnostics(name, src, &parse).into());
+    }
+    if !editions.is_empty() {
+        return format_source_in(name, &without_editions(src, &editions), typing);
     }
     Ok(format_in(&parse.syntax(), typing))
 }
@@ -112,6 +132,25 @@ fn print_signature(f: &crate::functions::Function) -> String {
     s
 }
 
+/// `src` without its `edition` lines, and the blank line after each.
+fn without_editions(src: &str, editions: &[rowan::TextRange]) -> String {
+    let mut out = String::new();
+    let mut at = 0;
+    for r in editions {
+        let start = usize::from(r.start());
+        let line = src[..start].rfind('\n').map_or(0, |i| i + 1);
+        out.push_str(&src[at..line]);
+        let mut end = usize::from(r.end());
+        end += src[end..].find('\n').map_or(src.len() - end, |i| i + 1);
+        if src[end..].starts_with('\n') {
+            end += 1;
+        }
+        at = end;
+    }
+    out.push_str(&src[at..]);
+    out
+}
+
 /// Format a parsed file: its header in order (R-27), a component's block in
 /// the same order (R-11a), its normal forms, then its layout. The tree must
 /// be free of syntax errors but for a header statement out of place.
@@ -168,8 +207,22 @@ mod tests {
 
     #[test]
     fn a_formatted_file_prints_back_unchanged() {
-        let src = "edition 2026\n\n# c\np(a, \"b\") where q(a), a != 1\n";
+        let src = "# c\np(a, \"b\") where q(a), a != 1\n";
         assert_eq!(fmt(src), src);
+    }
+
+    /// `edition` is gone (R-68): fmt drops the line, and the blank after it.
+    #[test]
+    fn a_stray_edition_is_dropped() {
+        assert_eq!(
+            format_source("p.df", "# c\n\nedition 2026\n\np(1)\n").unwrap(),
+            "# c\n\np(1)\n"
+        );
+        assert_eq!(
+            format_source("p.df", "edition 2026\np(1)\n").unwrap(),
+            "p(1)\n"
+        );
+        assert!(format_source("p.df", "edition 2026\np(\n").is_err());
     }
 
     #[test]
@@ -411,7 +464,7 @@ mod tests {
     #[test]
     fn a_signature_file_is_formatted_by_its_own_normal_form() {
         assert!(is_signature_file("package str\nfn len(s: string) -> int\n"));
-        assert!(!is_signature_file("edition 2026\np(x) where q(x)\n"));
+        assert!(!is_signature_file("p(x) where q(x)\n"));
         let src = "package p\n\n#| A doc.\n#| example: f(1)\nfn f(a:int,b?:string,...)->int? forwards,forwards nulls\n";
         let want = "package p\n\n#| A doc.\n#| example: f(1)\nfn f(a: int, b?: string, ...) -> int? forwards, forwards nulls\n";
         assert_eq!(format_signature_file(src), want);

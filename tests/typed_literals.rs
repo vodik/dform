@@ -11,7 +11,7 @@ fn plan(s: &Scratch) -> common::Run {
 }
 
 fn program(body: &str) -> String {
-    format!("edition 2026\n\n{body}provider fake\n")
+    format!("\n\n{body}provider fake\n")
 }
 
 /// `vpc = main` gives the subnet the vpc; the plan prints the resource,
@@ -153,7 +153,7 @@ fn a_string_attribute_takes_a_reference_only_written_out() {
     let s = Scratch::new("r43-string");
     s.write(
         "schema.df",
-        "edition 2026\n\
+        "\n\
          type_provider(app.thing, \"mock\")\n\
          type_attr(app.thing, \"id\", \"string\", [\"computed\", \"id\"])\n\
          type_attr(app.thing, \"owner\", \"string\", [])\n\
@@ -161,7 +161,7 @@ fn a_string_attribute_takes_a_reference_only_written_out() {
          type_attr(app.thing, \"net\", \"inet\", [])\n",
     );
     let run = |body: &str| {
-        s.write("p.df", &format!("edition 2026\n{body}"));
+        s.write("p.df", &format!("\n{body}"));
         s.run(&common::on(
             "p.df",
             &["--provider", "schema.df", "--world", "w.json"],

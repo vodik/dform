@@ -3,8 +3,6 @@
 # UNRELATED aggregate over `want` must not become undetermined.
 # Run with --provider gke.
 
-edition 2026
-
 resource google.container_cluster pngu { name = "pngu-gke" }
 
 resource google.container_node_pool np {

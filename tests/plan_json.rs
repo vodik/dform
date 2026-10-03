@@ -105,7 +105,7 @@ fn an_undeformed_stack_is_a_document_too() {
     let s = Scratch::new("json-undeformed");
     s.write(
         "p.df",
-        "edition 2026\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nprovider fake\n",
+        "\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nprovider fake\n",
     );
     s.run(&common::on("p.df", &["--world", "w.json"], &["apply"]))
         .success();
@@ -126,7 +126,7 @@ fn query_json_lists_the_facts() {
     let s = Scratch::new("json-query");
     s.write(
         "p.df",
-        "edition 2026\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nprovider fake\n",
+        "\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nprovider fake\n",
     );
     let r = s
         .run(&[
@@ -143,7 +143,7 @@ fn query_json_redacts_like_the_plan() {
     let s = Scratch::new("json-query-secret");
     s.write(
         "p.df",
-        "edition 2026\nresource leaky.vault v { password = \"VAULT-SECRET-DO-NOT-PRINT\" }\nresource net.subnet a { vpc_id = ref(net.vpc, \"main\", \"id\") }\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nprovider fake\n",
+        "\nresource leaky.vault v { password = \"VAULT-SECRET-DO-NOT-PRINT\" }\nresource net.subnet a { vpc_id = ref(net.vpc, \"main\", \"id\") }\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nprovider fake\n",
     );
     let leaky = repo().join("tests/fixtures/providers/leaky/schema.df");
     let r = s
@@ -194,7 +194,7 @@ fn query_json_redacts_like_the_plan() {
 #[test]
 fn replace_denied_and_moved_are_in_the_document() {
     let s = Scratch::new("json-replace");
-    let net = "edition 2026\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nprovider fake\n";
+    let net = "\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nprovider fake\n";
     s.write("p.df", net);
     s.run(&common::on("p.df", &["--world", "w.json"], &["apply"]))
         .success();
@@ -223,7 +223,7 @@ fn replace_denied_and_moved_are_in_the_document() {
 
     s.write(
         "p.df",
-        "edition 2026\nresource net.vpc core { cidr = \"10.0.0.0/16\" }\nmoved(net.vpc, \"main\", core)\nprovider fake\n",
+        "\nresource net.vpc core { cidr = \"10.0.0.0/16\" }\nmoved(net.vpc, \"main\", core)\nprovider fake\n",
     );
     let r = s
         .run(&common::on(
@@ -273,7 +273,7 @@ fn plan_json_why_explains_each_deformation() {
         why[0]["at"]
             .as_str()
             .unwrap()
-            .ends_with("examples/gke/stacks/gke_two_phase.df:40"),
+            .ends_with("examples/gke/stacks/gke_two_phase.df:38"),
         "{}",
         why[0]
     );
@@ -289,7 +289,7 @@ fn plan_json_why_explains_each_deformation() {
     // written (R-38).
     assert!(
         why.iter().any(|b| b["kind"] == "fact"
-            && b["at"].as_str().unwrap().ends_with("gke_two_phase.df:30")
+            && b["at"].as_str().unwrap().ends_with("gke_two_phase.df:28")
             && b["text"]
                 == "input gke = {control_plane_cidr: 172.16.3.96/28, subnet_cidr: 10.141.76.0/22}"),
         "{subnet}"

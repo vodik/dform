@@ -37,7 +37,7 @@ pub fn syntax_diagnostics(name: &str, src: &str, parse: &Parse) -> Diagnostics {
     Diagnostics(syntax_errors(diag::add_source(name, src), parse))
 }
 
-fn program(name: &str, src: &str, require_edition: bool, mode: Mode) -> Result<Program> {
+fn program(name: &str, src: &str, program_file: bool, mode: Mode) -> Result<Program> {
     let file = diag::add_source(name, src);
     let parse = p::parse(src);
     let errors = syntax_errors(file, &parse);
@@ -49,17 +49,16 @@ fn program(name: &str, src: &str, require_edition: bool, mode: Mode) -> Result<P
         root: parse.syntax(),
         path: None,
     }];
-    resolve::lower(&units, &[0], require_edition, mode).map_err(|d| Diagnostics(d).into())
+    resolve::lower(&units, &[0], program_file, mode).map_err(|d| Diagnostics(d).into())
 }
 
-/// A `.df` file on its own: it must start with `edition 2026`. `name` is
-/// how diagnostics name the file.
+/// A `.df` file on its own. `name` is how diagnostics name the file.
 pub fn parse_file(name: &str, src: &str) -> Result<Program> {
     program(name, src, true, Mode::Program)
 }
 
-/// Program text that is not a file (tests, provider schemas, snippets): the
-/// edition pragma is optional.
+/// Program text that is not a file (tests, provider schemas, snippets):
+/// the core is written freely.
 pub fn parse_program(src: &str) -> Result<Program> {
     program("<input>", src, false, Mode::Program)
 }

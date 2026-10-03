@@ -18,7 +18,7 @@ fn facts(src: &str, pred: &str) -> Vec<String> {
 }
 
 fn error(src: &str) -> String {
-    parse_file("t.df", &format!("edition 2026\n{src}"))
+    parse_file("t.df", &format!("\n{src}"))
         .map(|_| ())
         .unwrap_err()
         .to_string()
@@ -363,11 +363,11 @@ fn a_url_typed_attribute_checks_its_literal() {
     let s = common::Scratch::new("url-attr");
     s.write(
         "schema.df",
-        "edition 2026\ntype_provider(app.thing, \"mock\")\n\
+        "\ntype_provider(app.thing, \"mock\")\n\
          type_attr(app.thing, \"link\", \"url\", [])\n",
     );
     let run = |body: &str| {
-        s.write("p.df", &format!("edition 2026\n{body}"));
+        s.write("p.df", &format!("\n{body}"));
         s.run(&common::on(
             "p.df",
             &["--provider", "schema.df", "--world", "w.json"],

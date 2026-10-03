@@ -8,7 +8,7 @@ use common::{Backend, Run, Scratch};
 
 /// The mock (`fake`) configured per env: its account from the
 /// environment, the account each env expects from its `set`.
-const APP: &str = r#"edition 2026
+const APP: &str = r#"
 key env: environment = "dev"
 input cloud { account: string, region: string }
 type environment = enum("dev", "prod")
@@ -89,7 +89,7 @@ fn a_mismatched_account_refuses_to_plan() {
 fn an_expected_account_the_provider_does_not_report_is_refused() {
     let s = project(
         "bykey-silent",
-        "edition 2026\n\
+        "\n\
          provider fake { expect_account = \"acct\" }\n\
          resource net.vpc main {\n\
            cidr = \"10.0.0.0/16\"\n\
@@ -111,7 +111,7 @@ fn an_expected_account_the_provider_does_not_report_is_refused() {
 fn a_provider_configured_from_what_it_serves_is_a_cycle() {
     let s = project(
         "bykey-cycle",
-        "edition 2026\n\
+        "\n\
          provider fake { zone = z }\n\
          let z = main.cidr\n\
          resource net.vpc main {\n\
@@ -143,7 +143,7 @@ fn a_provider_configured_from_what_it_serves_is_a_cycle() {
 fn an_env_var_is_in_the_plan_file_only_as_its_label() {
     let s = project(
         "bykey-label",
-        "edition 2026\n\
+        "\n\
          provider env\n\
          provider fake { token = env.var(\"FAKE_TOKEN\") }\n\
          resource net.vpc main {\n\
@@ -181,7 +181,7 @@ fn an_env_var_is_in_the_plan_file_only_as_its_label() {
 fn a_changed_env_var_makes_a_saved_plan_stale() {
     let s = project(
         "bykey-stale",
-        "edition 2026\n\
+        "\n\
          provider env\n\
          provider fake { token = env.var(\"FAKE_TOKEN\") }\n\
          resource net.vpc main {\n\
@@ -219,7 +219,7 @@ fn a_changed_env_var_makes_a_saved_plan_stale() {
 fn a_secret_expected_account_is_refused_by_its_label() {
     let s = project(
         "bykey-secret-account",
-        "edition 2026\n\
+        "\n\
          provider env\n\
          provider fake {\n\
            account = \"acct-real\"\n\

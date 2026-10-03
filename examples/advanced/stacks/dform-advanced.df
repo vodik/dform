@@ -8,8 +8,6 @@
 #
 # To run it, from this directory: README.md.
 
-edition 2026
-
 input env: enum("staging", "prod") = "staging"
 # List-valued inputs (human-friendly), the same in every environment.
 input tenants: list(string) = ["tenant_a", "tenant_b"]

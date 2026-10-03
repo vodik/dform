@@ -253,7 +253,7 @@ apply-order edge, not its content read now (`docs/grammar.md'
    :language 'dform
    :feature 'keyword
    '([
-      "edition" "provider" "key" "input" "from" "output"
+      "provider" "key" "input" "from" "output"
       "extern" "type" "decl" "mixed" "let" "set"
       "component" "instance" "use" "as" "resource"
       ] @font-lock-keyword-face

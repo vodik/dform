@@ -631,7 +631,7 @@ mod tests {
                 .join("\n  ")
         };
         let src = format!(
-            "edition 2026\n\ndecl q(a, b)\nq(1, 2)\np(x) where {{\n  {}\n}}\nr(x) where {{\n  {}\n}}\n",
+            "\n\ndecl q(a, b)\nq(1, 2)\np(x) where {{\n  {}\n}}\nr(x) where {{\n  {}\n}}\n",
             lits(6),
             lits(5)
         );

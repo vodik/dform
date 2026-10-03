@@ -5,7 +5,7 @@
 mod common;
 use common::Scratch;
 
-const APP: &str = r#"edition 2026
+const APP: &str = r#"
 key env: enum("staging", "prod") = "staging"
 provider fake
 resource net.vpc main { cidr = "10.0.0.0/16", tags = { env } }
@@ -13,7 +13,10 @@ resource net.vpc main { cidr = "10.0.0.0/16", tags = { env } }
 
 fn project(name: &str) -> Scratch {
     let s = Scratch::new(name);
-    s.write("dform.toml", "[project]\nname = \"t\"\n");
+    s.write(
+        "dform.toml",
+        "[project]\nedition = \"2026\"\nname = \"t\"\n",
+    );
     s.write("stacks/app.df", APP);
     s
 }
@@ -25,7 +28,7 @@ fn stack_list_finds_the_deployments_a_keyed_backend_holds() {
     let s = project("stack-list-keyed");
     s.write(
         "dform.toml",
-        "[stacks.app]\nbackend = 'local(\"state/{stack}-{env}\")'\n",
+        "[project]\nedition = \"2026\"\n\n[stacks.app]\nbackend = 'local(\"state/{stack}-{env}\")'\n",
     );
     s.run(&["apply", "app", "env=prod"]).success();
     s.run(&["apply", "app", "env=staging"]).success();

@@ -248,10 +248,10 @@ fn hover_shows_every_contribution_and_why_prints_the_derivation() {
     assert!(text.contains("winning rank: normal"), "{text}");
     // Every contribution: the module's, and the policy pack's.
     assert!(
-        text.contains("network.df:21:42, instance network.vpc main"),
+        text.contains("network.df:19:42, instance network.vpc main"),
         "{text}"
     );
-    assert!(text.contains("baseline.df:12:1, use baseline"), "{text}");
+    assert!(text.contains("baseline.df:10:1, use baseline"), "{text}");
     // The derivation in the source form, as `dform why` prints it.
     assert!(
         text.contains("  merged from 2 contributions\n  ├─ {component: \"network\", env: \"staging\"}\n"),
@@ -285,7 +285,7 @@ fn hover_shows_every_contribution_and_why_prints_the_derivation() {
         "{hover}"
     );
     assert!(
-        text.contains("network.df:21:26, instance network.vpc peer"),
+        text.contains("network.df:19:26, instance network.vpc peer"),
         "{hover}"
     );
     c.shutdown();
@@ -708,7 +708,7 @@ fn definition_and_formatting() {
         "a module read by the path of its component"
     );
 
-    let messy = "edition 2026\nq(1)\np(x)   where q(x)\n";
+    let messy = "q(1)\np(x)   where q(x)\n";
     let scratch = root.join("stacks/messy.df");
     std::fs::write(&scratch, messy).unwrap();
     c.open(&scratch);
@@ -716,10 +716,7 @@ fn definition_and_formatting() {
         "textDocument/formatting",
         json!({ "textDocument": { "uri": uri(&scratch) }, "options": { "tabSize": 2, "insertSpaces": true } }),
     );
-    assert_eq!(
-        edits[0]["newText"], "edition 2026\nq(1)\np(x) where q(x)\n",
-        "{edits}"
-    );
+    assert_eq!(edits[0]["newText"], "q(1)\np(x) where q(x)\n", "{edits}");
     c.shutdown();
 }
 
@@ -1073,17 +1070,17 @@ fn references_of_every_kind_of_name() {
 
     // A predicate: its rule's head and the bodies that read it.
     let found = references(&mut c, &root, &stack, find(&stack, "vpc_peer_pair(ia", 2));
-    assert_eq!(found, at_places("stacks/dform.df", &[80, 85, 92]));
+    assert_eq!(found, at_places("stacks/dform.df", &[78, 83, 90]));
 
     // An input: the stack's own reads, a component's and a module's.
     let found = references(&mut c, &root, &stack, find(&stack, "key env:", 4));
     for want in [
-        ("stacks/dform.df".to_string(), 11),
-        ("stacks/dform.df".into(), 17),
-        ("stacks/dform.df".into(), 56),
-        ("stacks/dform.df".into(), 98),
-        ("network.df".into(), 21),
-        ("baseline.df".into(), 18),
+        ("stacks/dform.df".to_string(), 9),
+        ("stacks/dform.df".into(), 15),
+        ("stacks/dform.df".into(), 54),
+        ("stacks/dform.df".into(), 96),
+        ("network.df".into(), 19),
+        ("baseline.df".into(), 16),
     ] {
         assert!(found.contains(&want), "{want:?} in {found:?}");
     }
@@ -1094,36 +1091,36 @@ fn references_of_every_kind_of_name() {
     assert_eq!(
         found,
         vec![
-            ("network.df".into(), 13),
-            ("network.df".into(), 21),
-            ("stacks/dform.df".into(), 53),
-            ("stacks/dform.df".into(), 56),
+            ("network.df".into(), 11),
+            ("network.df".into(), 19),
+            ("stacks/dform.df".into(), 51),
+            ("stacks/dform.df".into(), 54),
         ]
     );
 
     // An object input read by its fields (R-38), and a type alias.
     let found = references(&mut c, &root, &stack, find(&stack, "input cidrs", 6));
-    assert_eq!(found, at_places("stacks/dform.df", &[12, 53, 56, 95]));
+    assert_eq!(found, at_places("stacks/dform.df", &[10, 51, 54, 93]));
     let found = references(&mut c, &root, &stack, find(&stack, "type environment", 5));
-    assert_eq!(found, at_places("stacks/dform.df", &[11, 42]));
+    assert_eq!(found, at_places("stacks/dform.df", &[9, 40]));
 
     // A component, a module used, a module the stack uses.
     let found = references(&mut c, &root, &network, find(&network, "component vpc", 10));
     assert_eq!(
         found,
         vec![
-            ("network.df".into(), 11),
-            ("stacks/dform.df".into(), 53),
-            ("stacks/dform.df".into(), 56),
+            ("network.df".into(), 9),
+            ("stacks/dform.df".into(), 51),
+            ("stacks/dform.df".into(), 54),
         ]
     );
     // Its output read in the stack; its resources' addresses from outside
     // are strings (H-16).
     let found = references(&mut c, &root, &stack, find(&stack, "use database", 4));
     // Its inputs given by the stack's `set` block are its too (R-38).
-    assert_eq!(found, at_places("stacks/dform.df", &[19, 29, 30, 62]));
+    assert_eq!(found, at_places("stacks/dform.df", &[17, 27, 28, 60]));
     let found = references(&mut c, &root, &stack, find(&stack, "use baseline", 6));
-    assert_eq!(found, at_places("stacks/dform.df", &[47]));
+    assert_eq!(found, at_places("stacks/dform.df", &[45]));
 
     // A resource by its name in its component (from outside its address
     // is a string, `net.vpc["peer::vpc"]`).
@@ -1131,10 +1128,10 @@ fn references_of_every_kind_of_name() {
     assert_eq!(
         found,
         vec![
-            ("network.df".into(), 16),
-            ("network.df".into(), 21),
-            ("network.df".into(), 27),
-            ("network.df".into(), 28),
+            ("network.df".into(), 14),
+            ("network.df".into(), 19),
+            ("network.df".into(), 25),
+            ("network.df".into(), 26),
         ]
     );
 
@@ -1146,14 +1143,14 @@ fn references_of_every_kind_of_name() {
         &format!("{original}\nextra(x) where vpc_peer_pair(x, _, _, _)\n"),
     );
     let found = references(&mut c, &root, &stack, find(&stack, "vpc_peer_pair(ia", 2));
-    assert_eq!(found, at_places("stacks/dform.df", &[80, 85, 92, 113]));
+    assert_eq!(found, at_places("stacks/dform.df", &[78, 83, 90, 111]));
 
     // An attribute path: every rule contributing to the cell, the
     // component's field and the module's.
     let found = references(&mut c, &root, &network, find(&network, "tags = { env", 1));
     assert_eq!(
         found,
-        vec![("baseline.df".into(), 12), ("network.df".into(), 21),]
+        vec![("baseline.df".into(), 10), ("network.df".into(), 19),]
     );
     c.shutdown();
 }
@@ -1375,7 +1372,7 @@ fn a_rename_that_changes_the_plan_is_refused() {
     );
     assert!(
         e.contains(
-            "instance main of component vpc is also the string \"main\" at stacks/dform.df:76:15"
+            "instance main of component vpc is also the string \"main\" at stacks/dform.df:74:15"
         ),
         "{e}"
     );
@@ -1439,7 +1436,7 @@ fn same_named_private_relations_rename_independently() {
 #[test]
 fn diagnostics_of_a_plan_with_a_replacement_are_the_plans() {
     let s = common::Scratch::project("lsp-replace");
-    let net = r#"edition 2026
+    let net = r#"
 
 provider fake
 
@@ -1496,7 +1493,7 @@ fn an_s3_deployment_is_read_with_credentials() {
     s.write(
         "dform.toml",
         &format!(
-            "[defaults]\nbackend = 's3(\"dform-test\", \"lsp/{{stack}}\", \
+            "[project]\nedition = \"2026\"\n\n[defaults]\nbackend = 's3(\"dform-test\", \"lsp/{{stack}}\", \
              {{endpoint: \"{}\", region: \"us-east-1\"}})'\n",
             server.endpoint
         ),
@@ -1512,8 +1509,7 @@ fn an_s3_deployment_is_read_with_credentials() {
         .create_bucket()
         .unwrap();
     let vpc = "resource net.vpc main { cidr = \"10.0.0.0/16\" }\n";
-    let net =
-        format!("edition 2026\n\nprovider fake\n\n{vpc}lifecycle(main, \"prevent_destroy\")\n");
+    let net = format!("\n\nprovider fake\n\n{vpc}lifecycle(main, \"prevent_destroy\")\n");
     let file = s.write("stacks/p.df", &net);
     let creds = [
         ("DFORM_S3_ACCESS_KEY_ID", "fake"),
@@ -1620,11 +1616,11 @@ fn completion_offers_input_fields_and_relation_outputs() {
     let s = common::Scratch::project("lsp-fields");
     s.write(
         "stacks/zones.df",
-        "edition 2026\nprovider fake\ndecl zone(name: string)\nzone(\"a\")\noutput zone\n",
+        "\nprovider fake\ndecl zone(name: string)\nzone(\"a\")\noutput zone\n",
     );
     let file = s.write(
         "stacks/app.df",
-        "edition 2026\ninput nodes { flavor: string = \"b2\", count: int = 1, pool: { min: int = 1 } }\n\
+        "\ninput nodes { flavor: string = \"b2\", count: int = 1, pool: { min: int = 1 } }\n\
          provider fake\nuse stacks.zones\nset { nodes.count = 2 }\n",
     );
     let root = std::fs::canonicalize(&s.dir).unwrap();

@@ -10,7 +10,7 @@ use common::{BACKENDS, Backend, Scratch};
 use dform::plugin::link::Link;
 use dform::plugin::{Config, Launch, Providers};
 
-const PROG: &str = r#"edition 2026
+const PROG: &str = r#"
 
 resource net.vpc main { cidr = "10.0.0.0/16" }
 resource net.subnet a { vpc_id = ref(net.vpc, "main", "id"), cidr = "10.0.1.0/24" }
@@ -80,7 +80,7 @@ fn the_mock_is_dform_itself_not_the_executable_beside_it() {
     // written just before its exec (ETXTBSY).
     std::fs::hard_link(env!("CARGO_BIN_EXE_dform"), s.path("dform")).unwrap();
     std::os::unix::fs::symlink("/bin/false", s.path("dform-provider-fake")).unwrap();
-    s.write("dform.toml", "");
+    s.write("dform.toml", "[project]\nedition = \"2026\"\n");
     s.write("p.df", PROG);
     let run = |fake: Option<&str>| {
         let mut c = std::process::Command::new(s.path("dform"));
@@ -120,7 +120,7 @@ fn a_source_directory_holding_an_executable_is_that_plugin() {
     std::os::unix::fs::symlink(fake(), s.path("prov/dform-provider-fake")).unwrap();
     s.write(
         "p.df",
-        "edition 2026\n\nprovider fake { source = \"prov\" }\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\n",
+        "\n\nprovider fake { source = \"prov\" }\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\n",
     );
     let r = dform(&s, &["plan"]).success();
     assert!(r.stdout.contains("+ net.vpc[\"main\"]"), "{}", r.stdout);

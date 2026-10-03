@@ -692,7 +692,7 @@ fn handover_moves_an_s3_deployment_between_prefixes_and_to_local() {
     }
 }
 
-const PERSISTED: &str = r#"edition 2026
+const PERSISTED: &str = r#"
 provider fake
 extern kv.password(+name, -value)
 resource db.user app {
@@ -716,7 +716,7 @@ fn taint_forgets_an_answer_in_the_bucket() {
             );
             s.write(
                 "providers/fake/externs.df",
-                "edition 2026\nkv.password(\"app\", \"pw-first\")\n",
+                "\nkv.password(\"app\", \"pw-first\")\n",
             );
         });
         p.run(&["apply", "p"]).success();
@@ -734,14 +734,14 @@ fn taint_forgets_an_answer_in_the_bucket() {
     }
 }
 
-const NET: &str = r#"edition 2026
+const NET: &str = r#"
 provider fake
 resource net.vpc main { cidr = "10.0.0.0/16" }
 output vpc_cidr = "10.0.0.0/16"
 output vpc_id = ref(net.vpc, "main", "id")
 "#;
 
-const APP: &str = r#"edition 2026
+const APP: &str = r#"
 provider fake
 resource net.subnet a {
   cidr = c
@@ -872,7 +872,7 @@ fn a_server_that_ignores_conditions_is_refused() {
     let p = Project::of(&t, "lax-approval", |s| {
         s.write(
             "stacks/app.df",
-            "edition 2026\nprovider fake\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nrequires_approval(r, \"every change\") where deformation(_, r, _)\n",
+            "\nprovider fake\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nrequires_approval(r, \"every change\") where deformation(_, r, _)\n",
         );
     });
     let r = p.run(&["plan", "app"]).failure();
@@ -900,7 +900,7 @@ fn a_project_reads_another_projects_outputs_through_its_s3_backend() {
         let p = Project::of(t, "remote", |s| {
             s.write(
                 "stacks/cluster.df",
-                "edition 2026\n\
+                "\n\
                  key env: string = \"dev\"\n\
                  provider fake\n\
                  output endpoint = \"https://${env}.cluster.example\"\n\
@@ -912,13 +912,13 @@ fn a_project_reads_another_projects_outputs_through_its_s3_backend() {
         app.write(
             "dform.toml",
             &format!(
-                "[packages.platform]\npath = {:?}\n",
+                "[project]\nedition = \"2026\"\n\n[packages.platform]\npath = {:?}\n",
                 p.s.dir.display().to_string()
             ),
         );
         app.write(
             "stacks/app.df",
-            "edition 2026\n\
+            "\n\
              provider fake\n\
              use platform.stacks.cluster\n\
              resource net.vpc edge {\n\

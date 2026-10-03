@@ -2,3 +2,4 @@
 
 [project]
 name = "decl"
+edition = "2026"

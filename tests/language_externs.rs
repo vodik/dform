@@ -6,7 +6,7 @@
 mod common;
 use common::{Scratch, repo};
 
-const P: &str = r#"edition 2026
+const P: &str = r#"
 provider file
 provider fake
 extern kv.password(+name, -value)
@@ -45,7 +45,7 @@ fn answers(s: &Scratch, v: &str) {
     s.write(
         "providers/fake/externs.df",
         &format!(
-            "edition 2026\nkv.password(\"app\", \"pw-{v}\")\nkv.password(\"other\", \"x\")\nkv.token(\"app\", \"tk-{v}\")\n"
+            "\nkv.password(\"app\", \"pw-{v}\")\nkv.password(\"other\", \"x\")\nkv.token(\"app\", \"tk-{v}\")\n"
         ),
     );
 }

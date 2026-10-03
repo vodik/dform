@@ -2,3 +2,4 @@
 
 [project]
 name = "gke"
+edition = "2026"

@@ -12,8 +12,7 @@ use dform_core::partition::fmt_atom;
 /// A program file's (`parse_program` reads core text, which the check
 /// leaves alone).
 fn facts(src: &str, pred: &str) -> Vec<String> {
-    let program =
-        parse_file("t.df", &format!("edition 2026\n{src}")).unwrap_or_else(|e| panic!("{e}"));
+    let program = parse_file("t.df", &format!("\n{src}")).unwrap_or_else(|e| panic!("{e}"));
     let (r, _) = engine::eval(&program, &[]).unwrap();
     r.facts
         .iter()
@@ -23,7 +22,7 @@ fn facts(src: &str, pred: &str) -> Vec<String> {
 }
 
 fn error(src: &str) -> String {
-    parse_file("t.df", &format!("edition 2026\n{src}"))
+    parse_file("t.df", &format!("\n{src}"))
         .map(|_| ())
         .unwrap_err()
         .to_string()

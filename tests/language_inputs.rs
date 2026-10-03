@@ -5,7 +5,7 @@
 mod common;
 use common::Scratch;
 
-const P: &str = r#"edition 2026
+const P: &str = r#"
 input env: enum("dev", "staging", "prod") = "staging"
 input replicas: int = 2 check 1 <= replicas, replicas <= 5
 input nets: list(inet) = []
@@ -100,7 +100,7 @@ fn an_input_file_gives_inputs_as_facts() {
     let s = scratch();
     s.write(
         "prod.df",
-        "edition 2026\nenv(\"prod\")\nowner(\"ops\")\nnets([inet(\"10.0.0.0/24\"), inet(\"10.0.1.0/24\")])\n",
+        "\nenv(\"prod\")\nowner(\"ops\")\nnets([inet(\"10.0.0.0/24\"), inet(\"10.0.1.0/24\")])\n",
     );
     let r = plan(&s, &["--input-file", "prod.df"]).success();
     assert!(r.stdout.contains("env = \"prod\""), "{}", r.stdout);
@@ -111,7 +111,7 @@ fn an_input_file_gives_inputs_as_facts() {
         r.stdout
     );
 
-    s.write("bad.df", "edition 2026\nowner(\"ops\")\nnets([\"x\"])\n");
+    s.write("bad.df", "\nowner(\"ops\")\nnets([\"x\"])\n");
     let r = plan(&s, &["--input-file", "bad.df"]).failure();
     assert!(
         r.stderr.contains("input nets: [\"x\"] is not list(inet)"),
@@ -119,7 +119,7 @@ fn an_input_file_gives_inputs_as_facts() {
         r.stderr
     );
 
-    s.write("stray.df", "edition 2026\nowner(\"ops\")\nregion(\"x\")\n");
+    s.write("stray.df", "\nowner(\"ops\")\nregion(\"x\")\n");
     let r = plan(&s, &["--input-file", "stray.df"]).failure();
     assert!(
         r.stderr
@@ -135,7 +135,7 @@ fn a_component_input_of_the_wrong_type_is_a_violation() {
     let s = Scratch::project("lang-inputs-module");
     s.write(
         "p.df",
-        "edition 2026\ncomponent m {\n  input n: int\n  resource net.vpc v {\n    n = n_\n  } where n(n_)\n}\ninstance m a { n = format(\"%s\", \"three\") }\nprovider fake\n",
+        "\ncomponent m {\n  input n: int\n  resource net.vpc v {\n    n = n_\n  } where n(n_)\n}\ninstance m a { n = format(\"%s\", \"three\") }\nprovider fake\n",
     );
     let r = s
         .run(&["dev", "--world", "w.json", "plan", "p.df"])
@@ -152,7 +152,7 @@ fn a_component_input_of_the_wrong_type_is_a_violation() {
 #[test]
 fn the_plan_file_records_input_files() {
     let s = scratch();
-    s.write("prod.df", "edition 2026\nenv(\"prod\")\nowner(\"ops\")\n");
+    s.write("prod.df", "\nenv(\"prod\")\nowner(\"ops\")\n");
     s.run(&[
         "dev",
         "--world",
@@ -167,7 +167,7 @@ fn the_plan_file_records_input_files() {
     .success();
     assert!(s.read("plan.json").contains("\"input_files\""));
     s.run(&["apply", "plan.json"]).success();
-    s.write("prod.df", "edition 2026\nenv(\"dev\")\nowner(\"ops\")\n");
+    s.write("prod.df", "\nenv(\"dev\")\nowner(\"ops\")\n");
     let r = s.run(&["apply", "plan.json"]).failure();
     assert!(
         r.stderr
@@ -182,7 +182,7 @@ fn the_plan_file_records_input_files() {
 /// unkeyed hash of its bytes that could be brute-forced.
 #[test]
 fn the_plan_file_digests_input_files_with_the_stack_key() {
-    let text = "edition 2026\nenv(\"prod\")\nowner(\"hunter2\")\n";
+    let text = "\nenv(\"prod\")\nowner(\"hunter2\")\n";
     let fnv = {
         let mut h: u64 = 0xcbf29ce484222325;
         for b in text.bytes() {
@@ -233,7 +233,7 @@ fn set_reads_a_file_as_the_inputs_type() {
     let s = Scratch::project("lang-inputs-file");
     s.write(
         "p.df",
-        r#"edition 2026
+        r#"
 input db: { size: int, net: inet, zones: list(string) }
 provider fake
 resource net.vpc main {
@@ -283,7 +283,7 @@ resource net.vpc main {
     assert!(r.stderr.contains("is stale"), "{}", r.stderr);
 }
 
-const OBJECT: &str = r#"edition 2026
+const OBJECT: &str = r#"
 input nodes {
   flavor: string = "b3-8"
   count: int = 1 check 1 <= count, count <= 3
@@ -439,11 +439,7 @@ fn set_of_a_field_where_a_condition_holds() {
         "p.df",
         &format!(
             "{}set nodes.count = 3 where env == \"prod\"\n",
-            OBJECT.replacen(
-                "edition 2026\n",
-                "edition 2026\nkey env: enum(\"dev\", \"prod\") = \"dev\"\n",
-                1
-            )
+            OBJECT.replacen("\n", "\nkey env: enum(\"dev\", \"prod\") = \"dev\"\n", 1)
         ),
     );
     let r = object_plan(&s, &[]).success();
@@ -496,7 +492,7 @@ fn a_field_with_no_default_is_required() {
     let s = Scratch::project("lang-inputs-object-required");
     s.write(
         "p.df",
-        "edition 2026\ninput db {\n  size: int\n  zone: string = \"a\"\n}\nprovider fake\n\
+        "\ninput db {\n  size: int\n  zone: string = \"a\"\n}\nprovider fake\n\
          resource net.vpc main {\n  size = db.size\n  zone = db.zone\n}\n",
     );
     let r = object_plan(&s, &[]).failure();
@@ -515,7 +511,7 @@ fn a_field_with_no_default_is_required() {
 
     s.write(
         "p.df",
-        "edition 2026\ncomponent m {\n  input db {\n    size: int\n    zone: string = \"a\"\n  }\n\
+        "\ncomponent m {\n  input db {\n    size: int\n    zone: string = \"a\"\n  }\n\
          resource net.vpc v {\n    size = db.size\n    zone = db.zone\n  }\n}\n\
          instance m a { db.size = 2 }\ninstance m b { db = { size: 5, zone: \"b\" } }\n\
          provider fake\n",
@@ -541,7 +537,7 @@ fn a_field_with_no_default_is_required() {
         r.stderr
     );
 
-    s.write("p.df", "edition 2026\nkey env {\n  a: int\n}\n");
+    s.write("p.df", "\nkey env {\n  a: int\n}\n");
     let r = object_plan(&s, &[]).failure();
     assert!(
         r.stderr.contains("a relation or an object is not a key"),

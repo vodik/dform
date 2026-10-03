@@ -20,8 +20,9 @@ dform.state/                state: per deployment, audit logs, plan keys,
 - `dform.toml` marks the root: the nearest directory up from the working
   directory holding one. There is no project without one: outside, `plan`
   and the `dev` views run on a program file with no state, and what reads
-  or writes state refuses. It is small; programs stay in `.df` files. It holds `[project]` (a name, and the dform
-  versions the project takes), `[providers]` (each provider's source and
+  or writes state refuses. It is small; programs stay in `.df` files. It holds `[project]` (a name, the
+  language edition its files are written in, `edition = "2026"`, which is
+  required, and the dform versions the project takes), `[providers]` (each provider's source and
   version requirement, Cargo's semver syntax; a program's `provider NAME {}`
   takes its source from here), `[stacks.NAME]` (the stack `NAME.df`'s
   operational settings, a closed list: `backend`, `role`,

@@ -456,6 +456,9 @@ a stack's state lives and who may approve a plan are operational, so
 they live in `dform.toml`, where `[stacks.shop]` is `stacks/shop.df`:
 
 ```toml
+[project]
+edition = "2026"
+
 [stacks.shop]
 backend = 's3("acme-state", "shop/{env}")'
 approvals = 'jwks("https://sso.acme.example/keys")'

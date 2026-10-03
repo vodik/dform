@@ -8,7 +8,7 @@
 mod common;
 use common::Scratch;
 
-const CLUSTER: &str = r#"edition 2026
+const CLUSTER: &str = r#"
 key env: string = "dev"
 input token: secret(string)
 provider fake
@@ -16,7 +16,7 @@ output endpoint = "https://${env}.cluster.example"
 output token: secret(string) = token
 "#;
 
-const APP: &str = r#"edition 2026
+const APP: &str = r#"
 provider fake
 use platform.stacks.cluster
 resource net.vpc edge {
@@ -41,7 +41,7 @@ fn projects(name: &str, manifest: &str) -> (Scratch, Scratch) {
     app.write(
         "dform.toml",
         &format!(
-            "[packages.platform]\npath = {:?}\n",
+            "[project]\nedition = \"2026\"\n\n[packages.platform]\npath = {:?}\n",
             platform.dir.display().to_string()
         ),
     );
@@ -51,7 +51,7 @@ fn projects(name: &str, manifest: &str) -> (Scratch, Scratch) {
 
 #[test]
 fn a_project_reads_another_projects_outputs_through_a_local_remote() {
-    let (platform, app) = projects("remote-local", "");
+    let (platform, app) = projects("remote-local", "[project]\nedition = \"2026\"\n");
     // What crosses: the outputs object, a secret by its label only.
     let published = platform.read("dform.state/cluster/env=prod/outputs.json");
     assert!(
@@ -121,7 +121,7 @@ fn a_project_reads_another_projects_outputs_through_a_local_remote() {
 fn a_remote_backend_takes_the_stack_name() {
     let (_platform, app) = projects(
         "remote-template",
-        "[defaults]\nbackend = 'local(\"state/{stack}\")'\n",
+        "[project]\nedition = \"2026\"\n\n[defaults]\nbackend = 'local(\"state/{stack}\")'\n",
     );
     let r = app.run(&["plan", "app"]).success();
     assert!(
@@ -141,7 +141,7 @@ fn a_remote_backend_takes_the_stack_name() {
 /// is the static secret error, and its bytes never cross.
 #[test]
 fn a_secret_output_cannot_be_read_into_a_public_field() {
-    let (_platform, app) = projects("remote-secret", "");
+    let (_platform, app) = projects("remote-secret", "[project]\nedition = \"2026\"\n");
     app.write("stacks/app.df", &APP.replace(".endpoint", ".token"));
     let r = app.run(&["plan", "app"]).failure();
     assert!(
@@ -157,7 +157,10 @@ fn a_secret_output_cannot_be_read_into_a_public_field() {
 #[test]
 fn a_package_is_a_path_to_a_project() {
     let s = Scratch::project("remote-bad");
-    s.write("dform.toml", "[packages.platform]\npath = \"../nowhere\"\n");
+    s.write(
+        "dform.toml",
+        "[project]\nedition = \"2026\"\n\n[packages.platform]\npath = \"../nowhere\"\n",
+    );
     s.write("stacks/app.df", APP);
     let r = s.run(&["plan", "app"]).failure();
     assert!(
@@ -165,7 +168,10 @@ fn a_package_is_a_path_to_a_project() {
         "{}",
         r.stderr
     );
-    s.write("dform.toml", "[packages.\"a.b\"]\npath = \"..\"\n");
+    s.write(
+        "dform.toml",
+        "[project]\nedition = \"2026\"\n\n[packages.\"a.b\"]\npath = \"..\"\n",
+    );
     let r = s.run(&["plan", "app"]).failure();
     assert!(
         r.stderr.contains("a package's name is the first segment"),
@@ -181,7 +187,7 @@ fn a_package_is_a_path_to_a_project() {
 #[test]
 fn an_output_of_a_configured_attribute_is_published_resolved_or_pending() {
     let s = Scratch::project("outputs-resolved");
-    let net = "edition 2026\n\
+    let net = "\n\
                provider fake\n\
                resource net.vpc main { cidr = \"10.0.0.0/16\" }\n\
                output c = main.cidr\n\
@@ -190,7 +196,7 @@ fn an_output_of_a_configured_attribute_is_published_resolved_or_pending() {
     s.write("stacks/net.df", net);
     s.write(
         "stacks/app.df",
-        "edition 2026\n\
+        "\n\
          provider fake\n\
          resource net.vpc edge {\n\
            cidr = c\n\

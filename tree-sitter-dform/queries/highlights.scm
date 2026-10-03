@@ -106,7 +106,7 @@
 ; --- keywords ---------------------------------------------------------------
 
 [
-  "edition" "provider" "key" "input" "from" "output"
+  "provider" "key" "input" "from" "output"
   "extern" "type" "decl" "mixed" "let" "set"
   "component" "instance" "use" "as" "resource"
 ] @keyword

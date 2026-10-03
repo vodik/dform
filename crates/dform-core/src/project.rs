@@ -3,8 +3,9 @@
 //! kind (`dform init` makes one). Its state is `dform.state/` at the root,
 //! and every path a program states resolves from the root.
 //!
-//! The manifest is per project and small: `[project]` (a name, and the
-//! dform versions it takes), `[providers]` (each provider's source and
+//! The manifest is per project and small: `[project]` (a name, the
+//! language edition its files are written in, and the dform versions it
+//! takes), `[providers]` (each provider's source and
 //! version constraint, Cargo's semver syntax), `[stacks.NAME]` (the
 //! stack's operational settings: where its state lives, who approves),
 //! `[defaults]` (what a stack's table does not say, and the lease) and
@@ -33,6 +34,10 @@ use toml::Spanned;
 
 /// The manifest's file name; its directory is the project root.
 pub const MANIFEST: &str = "dform.toml";
+
+/// The one language edition this dform reads (R-68): a project names it,
+/// `[project] edition = "2026"`; a program in no project is read in it.
+pub const EDITION: &str = "2026";
 
 /// The local backend's directory at the project root: per-deployment
 /// state, audit logs, the plan key, the registry, and `cache/`.
@@ -103,7 +108,10 @@ pub fn init(dir: &Path, name: Option<&str>) -> Result<Vec<String>> {
     };
     std::fs::write(
         &manifest,
-        format!("# The project's root (docs/layout.md).\n\n[project]\nname = {name:?}\n"),
+        format!(
+            "# The project's root (docs/layout.md).\n\n[project]\nname = {name:?}\nedition = \
+             {EDITION:?}\n"
+        ),
     )
     .with_context(|| format!("write {}", manifest.display()))?;
     let mut out = vec![format!("wrote {}", manifest.display())];
@@ -209,6 +217,9 @@ pub struct PackageEntry {
 #[serde(deny_unknown_fields)]
 pub struct Meta {
     pub name: Option<String>,
+    /// The language edition the project's files are written in (R-68):
+    /// required, and `EDITION`.
+    pub edition: Option<String>,
     /// The dform versions the project takes, as a semver requirement.
     pub dform: Option<String>,
 }
@@ -375,6 +386,18 @@ impl Manifest {
         m.root = path.parent().unwrap_or(Path::new("")).to_path_buf();
         m.text = text.to_string();
         let at = |key: &str| format!("{}: {key}", path.display());
+        match m.project.edition.as_deref() {
+            Some(EDITION) => {}
+            Some(e) => bail!(
+                "{} = {e:?}: this dform reads edition {EDITION:?}",
+                at("[project] edition")
+            ),
+            None => bail!(
+                "{}: the project's language edition is not named: add `edition = {EDITION:?}` \
+                 under [project]",
+                path.display()
+            ),
+        }
         for (name, p) in &m.providers {
             if let Some(req) = p.version() {
                 semver::VersionReq::parse(req).map_err(|e| {
@@ -843,6 +866,10 @@ mod tests {
             text.len()
         ));
         std::fs::create_dir_all(&dir).unwrap();
+        let text = match text.strip_prefix("[project]\n") {
+            Some(rest) => format!("[project]\nedition = \"2026\"\n{rest}"),
+            None => format!("[project]\nedition = \"2026\"\n\n{text}"),
+        };
         std::fs::write(dir.join(MANIFEST), text).unwrap();
         let m = Manifest::load(&dir.join(MANIFEST), "0.1.0");
         std::fs::remove_dir_all(&dir).unwrap();

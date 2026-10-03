@@ -9,21 +9,18 @@ use std::process::Command;
 
 const WORKLOAD: &str = include_str!("../examples/bootstrap/stacks/workload.df");
 /// The workload's table of examples/bootstrap/dform.toml.
-const MANIFEST: &str = "[stacks.workload]\napprovals = 'jwks_file(\"approvers.jwks.json\")'\n";
+const MANIFEST: &str = "[project]\nedition = \"2026\"\n\n[stacks.workload]\napprovals = 'jwks_file(\"approvers.jwks.json\")'\n";
 const WORLD: &str = "dform.state/workload/remote.json";
 
 fn release(s: &Scratch, image: &str) {
-    s.write(
-        "data/releases.df",
-        &format!("edition 2026\n\nrelease(\"{image}\")\n"),
-    );
+    s.write("data/releases.df", &format!("\n\nrelease(\"{image}\")\n"));
 }
 
 /// data/approvals.df, a module of facts (R-39), holding `facts`.
 fn approvals(s: &Scratch, facts: &str) {
     s.write(
         "data/approvals.df",
-        &format!("edition 2026\n\ndecl approve(type, address)\ndecl approval(token)\n{facts}"),
+        &format!("\n\ndecl approve(type, address)\ndecl approval(token)\n{facts}"),
     );
 }
 
@@ -298,7 +295,7 @@ fn plan_reads_a_module_of_facts() {
     );
     s.write(
         "bad.df",
-        "edition 2026\n\ninput r from facts(\"r.facts\")\ndecl r(a)\nq(x) where r(x)\n",
+        "\n\ninput r from facts(\"r.facts\")\ndecl r(a)\nq(x) where r(x)\n",
     );
     let r = s.run(&["plan", "bad.df"]).failure();
     assert!(

@@ -85,6 +85,7 @@ deployment is named by its target.
 ```toml
 [project]
 name = "shop"
+edition = "2026"                                 # the language edition: required
 dform = ">=0.1"
 
 [providers]
@@ -1343,7 +1344,7 @@ signature, `decl zone(name: string, index: int)`, the columns as declared
 or inferred, when any has a type). An attribute or an
 input is `merged from N contributions`, each with its value, its rank when
 it is not normal (`@default`) and the statement that made it: an input's
-default, each `set` that gives it (`stacks/tour.df:141  set {
+default, each `set` that gives it (`stacks/tour.df:139  set {
 database.backup_days = 14 .. } where env == "prod"`, a
 document's leaf by its `file:line`), `--set`. A fact given to the run says
 where it came from: its `file:line`, `--set env=prod`, the provider
@@ -1366,7 +1367,7 @@ cargo run -- -C examples/demo why 'attr(net.vpc, "main::vpc", "tags.team", "plat
 # net.vpc["main::vpc"].tags = {component: "network", env: "prod", team: "platform"}
 #   merged from 2 contributions
 #   ├─ {team: "platform"}
-#   │    baseline.df:12  set r.tags = { team: "platform" } where r in resource   (use baseline)
+#   │    baseline.df:10  set r.tags = { team: "platform" } where r in resource   (use baseline)
 #   │    with r = net.vpc["main::vpc"]
 #   │    └─ net.vpc["main::vpc"]
 #   │         network.df:15  resource net.vpc vpc { .. }   (instance network.vpc main)
@@ -1377,14 +1378,14 @@ cargo run -- -C examples/tour why 'db.postgres["orders"].backup_days' tour env=p
 #   merged from 2 contributions
 #   ├─ type_refine("db.postgres", "backup_days", "range(1, 35)")   provider schema
 #   └─ 14
-#        stacks/tour.df:147  resource db.postgres orders { .. backup_days = database.backup_days .. }
+#        stacks/tour.df:145  resource db.postgres orders { .. backup_days = database.backup_days .. }
 #        with database.backup_days = 14
 #        ├─ input database = {backup_days: 14, multi_az: true}
 #        │    merged from 4 contributions
-#        │    ├─ {backup_days: 1} @default   stacks/tour.df:29
-#        │    ├─ {multi_az: false} @default   stacks/tour.df:29
+#        │    ├─ {backup_days: 1} @default   stacks/tour.df:27
+#        │    ├─ {multi_az: false} @default   stacks/tour.df:27
 #        │    ├─ {backup_days: 14}
-#        │    │    stacks/tour.df:141  set { database.backup_days = 14 .. } where env == "prod"
+#        │    │    stacks/tour.df:139  set { database.backup_days = 14 .. } where env == "prod"
 #   ...
 ```
 
@@ -1465,8 +1466,9 @@ name's suffix comes from the key, so the name is the same too).
 ## dform model (current)
 
 The grammar is `docs/grammar.md` (edition 2026; proposal H's surface, one
-spelling per construct, `proposals/H-small-surface.org`). Every `.df` file
-starts with `edition 2026`; the first token decides what a statement is,
+spelling per construct, `proposals/H-small-surface.org`). The edition is the
+project's, `[project] edition = "2026"` in dform.toml, never a file's (a
+program in no project is read in it); the first token decides what a statement is,
 and a newline ends it. Case decides nothing: names are resolved. A constant
 is quoted (`"prod"`), a path that is data too (`"tags.team"`), a variable
 is a lowercase name bound where it is written, an input or a `let` is read
@@ -1816,7 +1818,7 @@ input owner: string                       # required: no default
 type environment = enum("dev", "staging", "prod")   # an alias: the enum wherever it is written
 ```
 
-Inputs and keys are the file's header: after `edition`, before
+Inputs and keys are the file's header: before
 the body (`key`, then `input`), so a file says what it
 takes first; one written below the body is an error, and `dform fmt`
 moves it. Each is read as a relation, `env(E)`. An input is a cell of the attribute

@@ -193,13 +193,13 @@ fn three_independent_errors_are_three_diagnostics() {
     assert_eq!(d.0.len(), 3, "{err}");
     let lines: Vec<String> = d.0.iter().map(|d| d.to_string()).collect();
     for (l, want) in lines.iter().zip([
-        "three_errors.df:5:16: expected",
-        "three_errors.df:7:14: expected",
-        "three_errors.df:9:18: expected",
+        "three_errors.df:3:16: expected",
+        "three_errors.df:5:14: expected",
+        "three_errors.df:7:18: expected",
     ]) {
         assert!(l.contains(want), "{l}");
     }
     let rendered = d.render(false);
-    assert!(rendered.contains("three_errors.df:5:16"), "{rendered}");
+    assert!(rendered.contains("three_errors.df:3:16"), "{rendered}");
     assert!(rendered.ends_with("3 errors\n"), "{rendered}");
 }

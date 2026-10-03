@@ -1,4 +1,4 @@
-//! A file's header (R-27): `edition`, then `key` and `input` lines (value
+//! A file's header (R-27): `key` and `input` lines (value
 //! inputs, then relation inputs), then `decl` and `output` (R-11a), then
 //! the body. `fmt` places a header statement the author wrote out of that
 //! order, with the comments directly above it and on its line, keeping the
@@ -32,7 +32,6 @@ struct Unit {
     start: usize,
     end: usize,
     rank: Option<u8>,
-    edition: bool,
 }
 
 fn units(root: &SyntaxNode) -> Vec<Unit> {
@@ -81,7 +80,6 @@ fn units(root: &SyntaxNode) -> Vec<Unit> {
             start,
             end,
             rank: rank(n),
-            edition: n.kind() == EDITION,
         });
     }
     out
@@ -95,7 +93,7 @@ fn units(root: &SyntaxNode) -> Vec<Unit> {
 fn reordered_span(units: &[Unit], src: &str, prefix_end: usize, end: usize) -> Option<String> {
     let mut seen_body = false;
     let mut last = 0u8;
-    let ordered = units.iter().filter(|u| !u.edition).all(|u| match u.rank {
+    let ordered = units.iter().all(|u| match u.rank {
         None => {
             seen_body = true;
             true
@@ -139,11 +137,9 @@ fn reordered_span(units: &[Unit], src: &str, prefix_end: usize, end: usize) -> O
 /// `None` when it is already.
 fn reorder(root: &SyntaxNode, src: &str) -> Option<String> {
     let units = units(root);
-    // Everything up to the edition's line stays where it is.
-    let prefix_end = units
-        .iter()
-        .find(|u| u.edition)
-        .map_or(0, |u| line_end(src, u.end));
+    // What is above the first statement and not its own (the file's
+    // leading comments) stays where it is.
+    let prefix_end = units.first().map_or(0, |u| u.start);
     let span = reordered_span(&units, src, prefix_end, src.len())?;
     let mut out = src[..prefix_end].trim_end().to_string();
     if !out.is_empty() {

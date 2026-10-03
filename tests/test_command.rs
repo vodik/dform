@@ -9,7 +9,7 @@
 mod common;
 use common::{Scratch, repo};
 
-const P: &str = r#"edition 2026
+const P: &str = r#"
 input env: enum("dev", "prod")
 input public: bool = false
 input size: int = 1
@@ -163,12 +163,12 @@ fn the_space_is_every_input_the_stack_gives() {
     let s = Scratch::project("test-union");
     s.write(
         "pg.df",
-        "edition 2026\ninput public: bool = false\ninput multi_az: bool = true\n\
+        "\ninput public: bool = false\ninput multi_az: bool = true\n\
          resource db.postgres main {\n  public\n  multi_az\n}\n",
     );
     s.write(
         "p.df",
-        "edition 2026\ninput cluster {\n  tier: enum(\"a\", \"b\") = \"a\"\n  size: int = 1\n}\n\
+        "\ninput cluster {\n  tier: enum(\"a\", \"b\") = \"a\"\n  size: int = 1\n}\n\
          use pg { multi_az = true }\nprovider fake\n\
          resource net.vpc main {\n  cidr = \"10.0.0.0/16\"\n  tier = cluster.tier\n}\n\
          deny \"a database is never public\" where d in db.postgres, d.public\n",
@@ -208,7 +208,7 @@ fn an_input_a_set_gives_is_no_axis() {
     let s = Scratch::new("test-set");
     s.write(
         "p.df",
-        "edition 2026\ninput env: enum(\"dev\", \"prod\") = \"dev\"\n\
+        "\ninput env: enum(\"dev\", \"prod\") = \"dev\"\n\
          input multi_az: bool = false\ninput public: bool = false\nprovider fake\n\
          set multi_az = true where env == \"prod\"\n\
          resource db.postgres main {\n  multi_az\n  public\n}\n\

@@ -24,7 +24,6 @@ use std::path::Path;
 const TYPE: &str = "check.thing";
 
 const SCHEMA: &str = r#"# The synthetic schema `dform provider check` configures a provider with.
-edition 2026
 
 type_provider(check.thing, "check")
 type_attr(check.thing, "id", "string", ["computed", "id"])
@@ -38,7 +37,7 @@ type_list_key(check.thing, "ports", ["name"])
 type_retry(check.thing, 1)
 "#;
 
-const EXTERNS: &str = r#"edition 2026
+const EXTERNS: &str = r#"
 
 check.lookup("a", "1")
 check.lookup("a", "one")
@@ -818,7 +817,7 @@ mod tests {
     #[test]
     fn a_providers_types_are_named_under_it() {
         let s = Schema::parse(
-            "edition 2026\ntype_provider(k8s.secret, \"k8s\")\n\
+            "\ntype_provider(k8s.secret, \"k8s\")\n\
              type_attr(k8s.secret, \"id\", \"string\", [\"computed\", \"id\"])\n",
             "t",
         )

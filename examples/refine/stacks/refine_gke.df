@@ -14,8 +14,6 @@
 # the gke mock schema, which makes the cluster's zones, endpoint and ca open
 # nulls until the cluster exists.
 
-edition 2026
-
 input env: enum("dev", "stg", "prod") = "dev"
 # How many zones the cluster is placed in: two is fewer than the
 # refinement on its zones allows.

@@ -12,10 +12,7 @@ const WORKLOAD: &str = include_str!("../examples/bootstrap/stacks/workload.df");
 const EVENTS: usize = 200;
 
 fn release(s: &Scratch, image: &str) {
-    s.write(
-        "data/releases.df",
-        &format!("edition 2026\n\nrelease(\"{image}\")\n"),
-    );
+    s.write("data/releases.df", &format!("\n\nrelease(\"{image}\")\n"));
 }
 
 #[test]
@@ -25,7 +22,7 @@ fn two_hundred_events_keep_the_source_registry_bounded() {
     release(&s, "gcr.io/renfry/web:0");
     s.write(
         "data/approvals.df",
-        "edition 2026\n\ndecl approve(type, address)\ndecl approval(token)\n",
+        "\n\ndecl approve(type, address)\ndecl approval(token)\n",
     );
     let counts = s.path("sources.txt");
     let mut child = common::dform()

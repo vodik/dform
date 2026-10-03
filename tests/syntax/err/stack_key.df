@@ -1,5 +1,3 @@
-edition 2026
-
 # The `stack` statement is gone: the file names the stack, `key` keys it,
 # and dform.toml holds its settings.
 key env: string = "dev"

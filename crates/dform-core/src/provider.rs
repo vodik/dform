@@ -380,7 +380,7 @@ mod tests {
     #[test]
     fn an_empty_object_is_a_leaf_only_where_the_schema_says_it_is_a_value() {
         let schema = Schema::parse(
-            r#"edition 2026
+            r#"
 type_attr(k8s.np, "spec.podSelector", "object", [])
 type_attr(k8s.np, "spec.podSelector.matchLabels", "map", [])
 type_attr(k8s.np, "spec.podSelector.matchExpressions", "list", [])

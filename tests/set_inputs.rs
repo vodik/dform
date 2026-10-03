@@ -8,7 +8,7 @@ mod common;
 mod tables_common;
 use tables_common::scratch;
 
-const PROGRAM: &str = r#"edition 2026
+const PROGRAM: &str = r#"
 
 key env: enum("dev", "prod") = "dev"
 input db { size: int = 1, zone: string = "a" }
@@ -84,7 +84,7 @@ fn a_leaf_that_is_no_input_is_a_deny() {
 /// disagree are a conflict naming both; the narrower one marked
 /// `@override` wins; `--set` (an override too) wins over the defaults and
 /// the normal blocks.
-const KEYED: &str = r#"edition 2026
+const KEYED: &str = r#"
 
 key env: enum("dev", "prod") = "dev"
 key region: enum("us", "eu") = "us"
@@ -148,10 +148,10 @@ fn overlapping_blocks_resolve_by_rank() {
 #[test]
 fn an_entry_is_an_inputs_path() {
     let s = scratch("paths");
-    s.write("m.df", "edition 2026\ninput email: string\n");
+    s.write("m.df", "\ninput email: string\n");
     s.write(
         "p.df",
-        "edition 2026\ninput db { size: int = 1 }\nuse m\nprovider fake\n\
+        "\ninput db { size: int = 1 }\nuse m\nprovider fake\n\
          set { m.email = \"ops@example.com\" } where db.size == 1\n\
          set { db.sz = 2 } where db.size == 1\n\
          resource db.postgres main { size = db.size, owner = m.email }\n",
@@ -195,7 +195,7 @@ fn a_required_input_a_set_gives_is_missing_only_where_none_holds() {
     let s = scratch("required");
     s.write(
         "p.df",
-        "edition 2026\nkey env: enum(\"dev\", \"prod\") = \"dev\"\ninput owner: string\n\
+        "\nkey env: enum(\"dev\", \"prod\") = \"dev\"\ninput owner: string\n\
          provider fake\nset owner = \"ops\" where env == \"prod\"\n\
          resource db.postgres main { owner }\n",
     );
@@ -217,9 +217,9 @@ fn a_stack_config_names_set_from() {
     let s = scratch("no-config");
     s.write(
         "dform.toml",
-        "[stacks.p]\nconfig = 'yaml(\"config/{env}.yaml\")'\n",
+        "[project]\nedition = \"2026\"\n\n[stacks.p]\nconfig = 'yaml(\"config/{env}.yaml\")'\n",
     );
-    s.write("p.df", "edition 2026\nprovider fake\n");
+    s.write("p.df", "\nprovider fake\n");
     let r = s.run(&["plan", "p.df"]).failure();
     assert!(
         r.stderr.contains("a stack's config is gone (R-38)")
@@ -237,7 +237,7 @@ fn set_from_a_selection_or_a_let() {
     s.write("cfg.toml", "[prod.db]\nsize = 3\n\n[dev.db]\nsize = 2\n");
     s.write(
         "p.df",
-        "edition 2026\nkey env: enum(\"dev\", \"prod\") = \"dev\"\n\
+        "\nkey env: enum(\"dev\", \"prod\") = \"dev\"\n\
          input db { size: int = 1, zone: string = \"a\" }\nprovider fake\n\
          let cfg = toml(\"cfg.toml\")\n\
          set from toml(\"cfg.toml\").prod where env == \"prod\"\n\

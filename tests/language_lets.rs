@@ -16,7 +16,7 @@ fn plan(src: &str) -> common::Run {
 #[test]
 fn two_rows_that_disagree_are_a_conflict_naming_both() {
     let r = plan(
-        r#"edition 2026
+        r#"
 ok(1)
 let n = "a"
 let n = "b" where ok(1)
@@ -37,7 +37,7 @@ provider fake
 #[test]
 fn two_rows_that_agree_are_one_value() {
     let r = plan(
-        r#"edition 2026
+        r#"
 ok(1)
 let n = "a"
 let n = "a" where ok(1)
@@ -61,7 +61,7 @@ provider fake
 fn a_default_row_gives_way_to_a_conditional_one() {
     let src = |flag: &str| {
         format!(
-            "edition 2026\n\
+            "\n\
              flag(\"{flag}\")\n\
              let size = \"small\" @default\n\
              let size = \"large\" where flag(\"on\")\n\
@@ -80,7 +80,7 @@ fn a_default_row_gives_way_to_a_conditional_one() {
 #[test]
 fn a_component_let_is_scoped_to_its_copy() {
     let r = plan(
-        r#"edition 2026
+        r#"
 component m {
   input n: int
   let size = n

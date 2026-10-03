@@ -30,7 +30,7 @@ use common::{Scratch, repo};
 const VAULT_SECRET: &str = "VAULT-SECRET-DO-NOT-PRINT";
 const OOPS_SECRET: &str = "OOPS-SECRET-DO-NOT-PRINT";
 
-const PROGRAM: &str = r#"edition 2026
+const PROGRAM: &str = r#"
 
 resource leaky.vault v {
   password = "VAULT-SECRET-DO-NOT-PRINT"
@@ -286,7 +286,7 @@ fn a_secret_input_never_prints_in_query_why_or_the_plan_file() {
     let s = Scratch::new("secrets-input");
     s.write(
         "p.df",
-        "edition 2026\ninput pw: secret(string)\noutput token: secret(string) = p where pw(p)\nresource leaky.vault v {\n  password = p\n} where pw(p)\nprovider fake\n",
+        "\ninput pw: secret(string)\noutput token: secret(string) = p where pw(p)\nresource leaky.vault v {\n  password = p\n} where pw(p)\nprovider fake\n",
     );
     let schema = schema();
     let mock = ["--provider", schema.as_str(), "--world", "w.json"];
@@ -385,7 +385,7 @@ fn a_secret_reaches_a_public_output_only_through_declassify() {
     let s = Scratch::new("secrets-declassify");
     let prog = |body: &str, policy: &str| {
         format!(
-            "edition 2026\ninput pw: secret(string)\noutput pw_len: int = n where pw(p), {body}\n{policy}\nprovider fake\n"
+            "\ninput pw: secret(string)\noutput pw_len: int = n where pw(p), {body}\n{policy}\nprovider fake\n"
         )
     };
     let mock = ["--world", "w.json", "--set", "pw=HUNTER-TWO"];
@@ -444,7 +444,7 @@ fn a_secret_reaches_a_public_output_only_through_declassify() {
 
 /// A stack whose secret outputs are an input's value (`token`) and a
 /// resource's sensitive attribute (`pass`, a ref to what the provider holds).
-const PRODUCER: &str = r#"edition 2026
+const PRODUCER: &str = r#"
 input pw: secret(string)
 provider fake
 resource leaky.vault v {
@@ -506,7 +506,7 @@ fn a_secret_output_is_stored_by_label_and_digest_never_by_value() {
     s.write(
         "dform.toml",
         &format!(
-            "[defaults]\nbackend = 's3(\"dform-test\", \"secrets/{{stack}}\", \
+            "[project]\nedition = \"2026\"\n\n[defaults]\nbackend = 's3(\"dform-test\", \"secrets/{{stack}}\", \
              {{endpoint: \"{}\", region: \"us-east-1\"}})'\n",
             server.endpoint
         ),
@@ -560,7 +560,7 @@ fn a_secret_output_reaches_a_sensitive_field_in_another_stack() {
     s.write("stacks/prod.df", PRODUCER);
     s.write(
         "stacks/app.df",
-        "edition 2026\n\
+        "\n\
          provider fake\n\
          resource leaky.vault copy {\n\
            backup = p\n\
@@ -722,7 +722,7 @@ fn kept_world_documents_hold_a_sensitive_leaf_by_its_digest() {
     let s = Scratch::project("secrets-kept");
     s.write(
         "stacks/s.df",
-        "edition 2026\n\
+        "\n\
          input pw: secret(string)\n\
          provider fake\n\
          resource leaky.vault v {\n\
@@ -784,7 +784,7 @@ fn an_env_var_never_prints_in_query_or_why() {
     let s = Scratch::new("secrets-env");
     s.write(
         "p.df",
-        "edition 2026\nprovider env\ntok(t) where t = env.var(\"DFORM_TEST_TOK\")\n",
+        "\nprovider env\ntok(t) where t = env.var(\"DFORM_TEST_TOK\")\n",
     );
     let schema = schema();
     let mock = ["--provider", schema.as_str(), "--world", "w.json"];

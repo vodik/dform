@@ -1,5 +1,3 @@
-edition 2026
-
 # An aggregate is bound in a body (R-59), and what it folds is bound by
 # the rest of the body.
 subnet("a", "vpc-1")

@@ -1,5 +1,3 @@
-edition 2026
-
 # A block's clause follows the block; a let names a reference; `+=` adds to a
 # field, not to a value.
 resource net.vpc a {

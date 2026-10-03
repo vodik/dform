@@ -19,8 +19,6 @@
 # The resources are on a fake cloud built into dform: nothing to sign up
 # for, no credentials, and nothing real is made.
 
-edition 2026
-
 # A file begins with what it takes, its header (section 4 says more): the
 # stack is this file, `tour`, the `key` makes one deployment per value of
 # `env`, and an `input` is a value given from outside or by `settings`.
@@ -182,9 +180,9 @@ deny "a database must not be public" { database: pg } where pg in db.postgres, p
 #   net.vpc["main"].tags = {team: "shop"}
 #     merged from 1 contribution
 #     └─ {team: "shop"}
-#          stacks/tour.df:172  set r.tags = { team: "shop" } where r in resource
+#          stacks/tour.df:170  set r.tags = { team: "shop" } where r in resource
 #          with r = net.vpc["main"]
-#          └─ net.vpc["main"]   stacks/tour.df:48
+#          └─ net.vpc["main"]   stacks/tour.df:46
 #
 # Read it from the top: the tag was added by the statement at line 181 of
 # this file (section 5's), because the network exists, which line 48 says. The

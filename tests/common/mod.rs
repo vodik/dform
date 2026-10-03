@@ -36,7 +36,7 @@ impl Scratch {
     /// runs in it keep state (in its `dform.state/`).
     pub fn project(name: &str) -> Self {
         let s = Scratch::new(name);
-        std::fs::write(s.dir.join("dform.toml"), "").unwrap();
+        std::fs::write(s.dir.join("dform.toml"), "[project]\nedition = \"2026\"\n").unwrap();
         s
     }
 

@@ -6,7 +6,7 @@ mod common;
 use common::{Scratch, copy_dir, repo};
 use std::process::{Command, Stdio};
 
-const NET: &str = r#"edition 2026
+const NET: &str = r#"
 provider fake
 resource net.vpc main { cidr = "10.0.0.0/16" }
 output vpc_cidr = "10.0.0.0/16"
@@ -26,10 +26,13 @@ fn the_file_names_the_stack_and_scopes_the_state() {
 #[test]
 fn a_local_backend_holds_the_state() {
     let s = Scratch::project("lang-stack-backend");
-    s.write("dform.toml", "[stacks.p]\nbackend = 'local(\"state/x\")'\n");
+    s.write(
+        "dform.toml",
+        "[project]\nedition = \"2026\"\n\n[stacks.p]\nbackend = 'local(\"state/x\")'\n",
+    );
     s.write(
         "p.df",
-        "edition 2026\nprovider fake\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\n",
+        "\nprovider fake\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\n",
     );
     s.run(&["apply", "p.df"]).success();
     assert!(s.path("state/x/state.json").exists());
@@ -48,11 +51,11 @@ fn a_local_backend_is_relative_to_the_project_root() {
     let s = Scratch::project("lang-stack-backend-root");
     s.write(
         "infra/dform.toml",
-        "[stacks.p]\nbackend = 'local(\"state/x\")'\n",
+        "[project]\nedition = \"2026\"\n\n[stacks.p]\nbackend = 'local(\"state/x\")'\n",
     );
     s.write(
         "infra/stacks/p.df",
-        "edition 2026\nprovider fake\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\n",
+        "\nprovider fake\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\n",
     );
     s.run(&["-C", "infra", "apply", "p"]).success();
     assert!(s.path("infra/state/x/state.json").exists());
@@ -84,7 +87,7 @@ fn a_local_backend_is_relative_to_the_project_root() {
 #[test]
 fn a_backend_is_checked() {
     let s = Scratch::project("lang-stack-backend-check");
-    s.write("p.df", "edition 2026\nprovider fake\n");
+    s.write("p.df", "\nprovider fake\n");
     for (backend, error) in [
         ("gcs(\"b\")", "unknown backend"),
         ("s3(\"b\")", "takes a bucket, a prefix"),
@@ -95,7 +98,7 @@ fn a_backend_is_checked() {
     ] {
         s.write(
             "dform.toml",
-            &format!("[stacks.p]\nbackend = '{backend}'\n"),
+            &format!("[project]\nedition = \"2026\"\n\n[stacks.p]\nbackend = '{backend}'\n"),
         );
         let r = s.run(&["plan", "p.df"]).failure();
         assert!(
@@ -176,7 +179,7 @@ fn another_stack_reads_the_outputs() {
     s.write("net.df", NET);
     s.write(
         "app.df",
-        r#"edition 2026
+        r#"
 provider fake
 resource net.subnet a {
   cidr = c
@@ -207,9 +210,9 @@ resource net.subnet a {
 #[test]
 fn the_registry_is_the_projects() {
     let s = Scratch::project("lang-stack-root");
-    s.write("infra/dform.toml", "");
+    s.write("infra/dform.toml", "[project]\nedition = \"2026\"\n");
     s.write("infra/stacks/net.df", NET);
-    let app = r#"edition 2026
+    let app = r#"
 provider fake
 resource net.subnet a {
   cidr = c
@@ -252,7 +255,7 @@ fn the_provider_statement_selects_the_schema() {
     );
     s.write(
         "p.df",
-        "edition 2026\nprovider mine { source = \"mine\" }\nresource x.thing a {}\n",
+        "\nprovider mine { source = \"mine\" }\nresource x.thing a {}\n",
     );
     let r = s.run(&["plan", "p.df"]).failure();
     assert!(r.stderr.contains("size"), "{}", r.stderr);
@@ -330,7 +333,7 @@ fn a_program_with_no_provider_starts_none() {
     let s = Scratch::project("lang-stack-no-provider");
     s.write(
         "p.df",
-        "edition 2026\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\n",
+        "\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\n",
     );
     for args in [
         &["plan", "p.df"][..],
@@ -360,7 +363,7 @@ fn a_program_with_no_provider_starts_none() {
     );
     s.write(
         "p.df",
-        "edition 2026\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nprovider fake\n",
+        "\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nprovider fake\n",
     );
     s.run(&["plan", "p.df"]).success();
 }

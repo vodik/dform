@@ -10,14 +10,11 @@ use common::Scratch;
 #[test]
 fn a_module_named_twice_loads_once() {
     let s = Scratch::new("lang-paths");
-    s.write("lib/types.df", "edition 2026\ntype tier = enum(\"gold\")\n");
-    s.write(
-        "lib/more.df",
-        "edition 2026\nuse lib.types\nlet best = \"gold\"\n",
-    );
+    s.write("lib/types.df", "\ntype tier = enum(\"gold\")\n");
+    s.write("lib/more.df", "\nuse lib.types\nlet best = \"gold\"\n");
     s.write(
         "p.df",
-        "edition 2026\ninput t: types.tier = \"gold\"\nuse lib.types\nuse lib.more\nprovider fake\n",
+        "\ninput t: types.tier = \"gold\"\nuse lib.types\nuse lib.more\nprovider fake\n",
     );
     let files = dform::loader::program_files(&[s.path("p.df")]).unwrap();
     let types = files.iter().filter(|f| f.ends_with("lib/types.df")).count();
@@ -31,21 +28,15 @@ fn a_module_named_twice_loads_once() {
 #[test]
 fn a_path_is_looked_up_never_searched() {
     let s = Scratch::project("lang-paths-lookup");
-    s.write(
-        "modules/lan.df",
-        "edition 2026\nlet cidr = \"10.0.0.0/16\"\n",
-    );
-    s.write("stacks/app.df", "edition 2026\nuse lan\nprovider fake\n");
+    s.write("modules/lan.df", "\nlet cidr = \"10.0.0.0/16\"\n");
+    s.write("stacks/app.df", "\nuse lan\nprovider fake\n");
     let r = s.run(&["plan", "app"]).failure();
     assert!(
         r.stderr.contains("no module `lan`: there is no lan.df"),
         "{}",
         r.stderr
     );
-    s.write(
-        "stacks/app.df",
-        "edition 2026\nuse modules.lan\nprovider fake\n",
-    );
+    s.write("stacks/app.df", "\nuse modules.lan\nprovider fake\n");
     s.run(&["plan", "app"]).success();
 }
 
@@ -54,18 +45,18 @@ fn a_path_is_looked_up_never_searched() {
 #[test]
 fn a_package_mounts_another_project() {
     let s = Scratch::new("lang-paths-packages");
-    s.write("infra/dform.toml", "[project]\nname = \"infra\"\n");
     s.write(
-        "infra/config.df",
-        "edition 2026\nlet domain = \"example.org\"\n",
+        "infra/dform.toml",
+        "[project]\nedition = \"2026\"\nname = \"infra\"\n",
     );
+    s.write("infra/config.df", "\nlet domain = \"example.org\"\n");
     s.write(
         "app/dform.toml",
-        "[project]\nname = \"app\"\n\n[packages.infra]\npath = \"../infra\"\n",
+        "[project]\nedition = \"2026\"\nname = \"app\"\n\n[packages.infra]\npath = \"../infra\"\n",
     );
     s.write(
         "app/stacks/web.df",
-        "edition 2026\nprovider fake\nuse infra.config\nresource compute.vm web {\n  tags = { domain: config.domain }\n}\n",
+        "\nprovider fake\nuse infra.config\nresource compute.vm web {\n  tags = { domain: config.domain }\n}\n",
     );
     let r = s.run_in("app", &["plan", "web"]).success();
     assert!(

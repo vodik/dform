@@ -8,7 +8,7 @@ mod common;
 use common::Scratch;
 use expectrl::{Eof, Expect, Session};
 
-const PROG: &str = r#"edition 2026
+const PROG: &str = r#"
 
 resource net.vpc main { cidr = "10.0.0.0/16" }
 resource net.vpc peer { cidr = "10.1.0.0/16" }
@@ -18,7 +18,7 @@ provider fake
 
 /// The same stack with `net.vpc.main` renamed (`moved/3`): a resume that
 /// also rewrites state's identity.
-const RENAMED: &str = r#"edition 2026
+const RENAMED: &str = r#"
 
 resource net.vpc core { cidr = "10.0.0.0/16" }
 resource net.vpc peer { cidr = "10.1.0.0/16" }
@@ -155,7 +155,7 @@ fn confirming_a_resumed_apply_finishes_it() {
 
 /// A policy named for the database's endpoint: tick 1 makes the database
 /// and lists the policy only as a pending group, `iam.policy[?]`.
-const GROUP: &str = r#"edition 2026
+const GROUP: &str = r#"
 
 resource db.postgres orders { size = 1 }
 

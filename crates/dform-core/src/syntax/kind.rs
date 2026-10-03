@@ -47,7 +47,6 @@ pub enum SyntaxKind {
     DOT2_EQ,
     // Keywords: the statement keywords (a statement's first token), then
     // the body words, the clause word and the literals.
-    EDITION_KW,
     PROVIDER_KW,
     KEY_KW,
     TYPE_KW,
@@ -84,6 +83,8 @@ pub enum SyntaxKind {
     SOURCE_FILE,
     /// Tokens skipped by error recovery.
     ERROR,
+    /// `edition N`, which is gone (R-68): parsed so that the error names
+    /// dform.toml and `fmt` drops it.
     EDITION,
     PROVIDER,
     /// `input k: T [= t] [check B]`, or `key k: T [= t] [check B]`.
@@ -178,11 +179,11 @@ impl SyntaxKind {
 
     /// A keyword a statement starts with (H section 4).
     pub fn is_stmt_keyword(self) -> bool {
-        (EDITION_KW as u16..=WARN_KW as u16).contains(&(self as u16))
+        (PROVIDER_KW as u16..=WARN_KW as u16).contains(&(self as u16))
     }
 
     pub fn is_keyword(self) -> bool {
-        (EDITION_KW as u16..=FALSE_KW as u16).contains(&(self as u16))
+        (PROVIDER_KW as u16..=FALSE_KW as u16).contains(&(self as u16))
     }
 
     /// How a token kind is named in "expected ..." diagnostics.

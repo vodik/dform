@@ -7,7 +7,7 @@ use common::{Scratch, repo};
 
 /// A vpc whose cidr (force_new) and name depend on the key, and whose
 /// size is a parameter.
-const APP: &str = r#"edition 2026
+const APP: &str = r#"
 key env: enum("staging", "stg", "prod") = "staging"
 input size: int = 1
 provider fake
@@ -102,7 +102,7 @@ fn key_values_are_escaped_and_joined() {
     let s = Scratch::project("keyed-escape");
     s.write(
         "app.df",
-        r#"edition 2026
+        r#"
 key team: string
 key region: string = "us-east1"
 provider fake
@@ -137,7 +137,7 @@ fn a_key_needs_a_value_from_the_target() {
     let s = Scratch::new("keyed-errors");
     s.write(
         "app.df",
-        r#"edition 2026
+        r#"
 key env: string
 provider fake
 "#,
@@ -166,16 +166,13 @@ provider fake
 #[test]
 fn a_key_is_the_stacks_and_not_a_secret() {
     let s = Scratch::new("keyed-secret");
-    s.write(
-        "app.df",
-        "edition 2026\nkey env: secret(string)\nprovider fake\n",
-    );
+    s.write("app.df", "\nkey env: secret(string)\nprovider fake\n");
     let r = s.run(&["plan", "app.df", "env=prod"]).failure();
     assert!(r.stderr.contains("key env is a secret"), "{}", r.stderr);
     assert!(r.stderr.contains("app.df:2:1"), "{}", r.stderr);
     s.write(
         "app.df",
-        "edition 2026\ncomponent m {\n  key env: string\n}\nprovider fake\n",
+        "\ncomponent m {\n  key env: string\n}\nprovider fake\n",
     );
     let r = s.run(&["plan", "app.df"]).failure();
     assert!(r.stderr.contains("key env inside a block"), "{}", r.stderr);
@@ -187,7 +184,7 @@ fn stack_output_addresses_one_deployment() {
     let s = Scratch::project("keyed-outputs");
     s.write(
         "app.df",
-        r#"edition 2026
+        r#"
 key env: string = "staging"
 provider fake
 output url = "https://${env}.example"
@@ -195,7 +192,7 @@ output url = "https://${env}.example"
     );
     s.write(
         "web.df",
-        r#"edition 2026
+        r#"
 provider fake
 resource net.vpc edge {
   name = u
@@ -221,11 +218,11 @@ fn use_of_a_stack_reads_one_deployment() {
     let s = Scratch::project("keyed-use");
     s.write(
         "stacks/app.df",
-        "edition 2026\nkey env: string = \"staging\"\nprovider fake\noutput url = \"https://${env}.example\"\n",
+        "\nkey env: string = \"staging\"\nprovider fake\noutput url = \"https://${env}.example\"\n",
     );
     let web = |read: &str| {
         format!(
-            "edition 2026\nprovider fake\nuse stacks.app\nresource net.vpc edge {{\n  name = u\n}} where u = {read}\n"
+            "\nprovider fake\nuse stacks.app\nresource net.vpc edge {{\n  name = u\n}} where u = {read}\n"
         )
     };
     s.write("stacks/web.df", &web("app[env=\"prod\"].url"));
@@ -292,10 +289,13 @@ fn rekey_lists_what_the_key_renames_and_moves_the_state() {
 #[test]
 fn rekey_moves_state_and_the_next_plan_is_undeformed() {
     let s = Scratch::project("keyed-rekey-same");
-    s.write("dform.toml", "[stacks.app]\nisolated = true\n");
+    s.write(
+        "dform.toml",
+        "[project]\nedition = \"2026\"\n\n[stacks.app]\nisolated = true\n",
+    );
     s.write(
         "app.df",
-        r#"edition 2026
+        r#"
 key env: string = "staging"
 provider fake
 resource net.vpc main {
@@ -338,7 +338,7 @@ fn rekey_moves_the_state_from_before_the_stack_was_keyed() {
     assert_eq!(r.summary(), "stack app is undeformed", "{}", r.stdout);
 }
 
-const FIXED: &str = r#"edition 2026
+const FIXED: &str = r#"
 key env: string = "staging"
 provider fake
 resource net.vpc logs {
@@ -366,7 +366,10 @@ fn a_fixed_bucket_name_in_a_keyed_stack_is_a_warning() {
     );
     assert!(!r.stderr.contains("net.vpc[\"main\"]"), "{}", r.stderr);
     // Isolated deployments do not share names.
-    s.write("dform.toml", "[stacks.app]\nisolated = true\n");
+    s.write(
+        "dform.toml",
+        "[project]\nedition = \"2026\"\n\n[stacks.app]\nisolated = true\n",
+    );
     let r = s.run(&["plan", "app.df"]).success();
     assert!(!r.stderr.contains("does not depend"), "{}", r.stderr);
 }
@@ -375,7 +378,7 @@ fn a_fixed_bucket_name_in_a_keyed_stack_is_a_warning() {
 /// still writes the same bucket in every deployment: the lint follows what
 /// flows into the value, not what the rule reads. A ref to a name that
 /// depends on the key does too.
-const GATED: &str = r#"edition 2026
+const GATED: &str = r#"
 key env: string = "staging"
 provider fake
 resource net.vpc logs {
@@ -598,7 +601,7 @@ fn state_show_needs_the_key_not_the_other_inputs() {
     let s = Scratch::project("keyed-state-show");
     s.write(
         "stacks/app.df",
-        "edition 2026\n\
+        "\n\
          key env: string\n\
          input pw: secret(string)\n\
          provider fake\n\

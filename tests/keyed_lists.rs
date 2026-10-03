@@ -7,7 +7,7 @@
 mod common;
 use common::{Run, Scratch};
 
-const DEPLOYMENT: &str = "edition 2026\n\nprovider k8s\n\n\
+const DEPLOYMENT: &str = "\n\nprovider k8s\n\n\
     resource k8s.deployment web {\n  \
     metadata.name = \"web\"\n  \
     spec.selector.matchLabels = { app: \"web\" }\n  \
@@ -20,7 +20,10 @@ const DEPLOYMENT: &str = "edition 2026\n\nprovider k8s\n\n\
 
 fn project(name: &str, policy: &str) -> Scratch {
     let s = Scratch::project(name);
-    s.write("dform.toml", "[providers]\nk8s = \"k8s\"\n");
+    s.write(
+        "dform.toml",
+        "[project]\nedition = \"2026\"\n\n[providers]\nk8s = \"k8s\"\n",
+    );
     s.write("main.df", &format!("{DEPLOYMENT}{policy}\n"));
     s
 }

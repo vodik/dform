@@ -2,6 +2,7 @@
 
 [project]
 name = "demo"
+edition = "2026"
 
 # The stack stacks/dform.df: each env in its own account (its settings
 # are its own document's, `settings from` in the stack).

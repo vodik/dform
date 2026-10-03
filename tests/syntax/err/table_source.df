@@ -1,5 +1,3 @@
-edition 2026
-
 # A table's columns are typed, and never secret; its source is FORMAT(SOURCE).
 input token from csv("tokens.csv")
 input peers from xml("peers.xml")

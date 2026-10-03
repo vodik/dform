@@ -2,6 +2,7 @@
 
 [project]
 name = "approvals"
+edition = "2026"
 
 # Whose signatures approve a plan: a JWKS document (`jwks("https://...")`
 # is fetched at apply time and cached beside the state).

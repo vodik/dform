@@ -4,8 +4,6 @@
 #   dform plan --set env=prod
 #   dform apply
 
-edition 2026
-
 # Typed stack input with a default. The default is a @default contribution
 # to input env; --set env=prod is a normal contribution and wins.
 input env: enum("dev", "staging", "prod") = "staging"

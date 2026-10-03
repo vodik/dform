@@ -1,4 +1,2 @@
-edition 2026
-
 # R-65: `str` is the standard library's, in every scope already.
 use modules.str

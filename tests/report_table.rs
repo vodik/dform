@@ -16,7 +16,7 @@ fn applied() -> Scratch {
     s.write(
         "stacks/app.df",
         &format!(
-            "edition 2026\nkey env: string = \"dev\"\n\
+            "\nkey env: string = \"dev\"\n\
              input pw: secret(string) = \"hunter2hunter2\"\nprovider fake\n\
              resource net.vpc main {{ cidr = \"10.0.0.0/16\" }}\n\
              decl zone(name: string, n: int)\nzone(\"${{env}}-a\", 0)\nzone(\"${{env}}-b\", 1)\n\
@@ -119,7 +119,7 @@ fn query_prints_a_secret_by_its_size_and_counts_past_five() {
     let s = Scratch::new("report-table-query");
     s.write(
         "p.df",
-        "edition 2026\ninput pw: secret(string) = \"hunter2hunter2\"\nprovider fake\n\
+        "\ninput pw: secret(string) = \"hunter2hunter2\"\nprovider fake\n\
          n(1)\nn(2)\nn(3)\nn(4)\nn(5)\nn(6)\n",
     );
     let q = |args: &[&str]| {

@@ -78,7 +78,7 @@ in a condition does not."
   "A `#|' doc comment gets `font-lock-doc-face'; a plain comment does not."
   (dform-ts-mode-test--ensure-grammar)
   (with-temp-buffer
-    (insert "edition 2026\n# plain\n#| The input.\ninput x: int\n")
+    (insert "# plain\n#| The input.\ninput x: int\n")
     (dform-ts-mode)
     (font-lock-ensure)
     (should (eq (dform-ts-mode-test--face-at "#| The") 'font-lock-doc-face))
@@ -88,7 +88,7 @@ in a condition does not."
   "A range's `..' and `..=' are operators (R-56)."
   (dform-ts-mode-test--ensure-grammar)
   (with-temp-buffer
-    (insert "edition 2026\np(i) where n(k), i in 0..k, j in 1..=k\n")
+    (insert "p(i) where n(k), i in 0..k, j in 1..=k\n")
     ;; Operators are a level 4 feature.
     (let ((treesit-font-lock-level 4))
       (dform-ts-mode))
@@ -100,7 +100,7 @@ in a condition does not."
   "A quantity (`512Mi', `1h30m', `0.5') is a number (R-66)."
   (dform-ts-mode-test--ensure-grammar)
   (with-temp-buffer
-    (insert "edition 2026\np(x) where x = 512Mi * 2, d = 1h30m, c = 0.5\n")
+    (insert "p(x) where x = 512Mi * 2, d = 1h30m, c = 0.5\n")
     (let ((treesit-font-lock-level 4))
       (dform-ts-mode))
     (font-lock-ensure)
@@ -113,20 +113,20 @@ in a condition does not."
 indenting leaves its lines as written."
   (dform-ts-mode-test--ensure-grammar)
   (with-temp-buffer
-    (insert "edition 2026\nresource t n {\n      a = \"x\n   y ${v}\n\"\n b = 1\n}\n")
+    (insert "resource t n {\n      a = \"x\n   y ${v}\n\"\n b = 1\n}\n")
     (dform-ts-mode)
     (font-lock-ensure)
     (should (eq (dform-ts-mode-test--face-at "   y") 'font-lock-string-face))
     (indent-region (point-min) (point-max))
     (should (equal (buffer-string)
-                   "edition 2026\nresource t n {\n  a = \"x\n   y ${v}\n\"\n  b = 1\n}\n"))))
+                   "resource t n {\n  a = \"x\n   y ${v}\n\"\n  b = 1\n}\n"))))
 
 (ert-deftest dform-ts-mode-test-patterns ()
   "A tuple pattern (R-58) indents like a bracket, and the aggregate
 `any' (R-59) is coloured as `count' is."
   (dform-ts-mode-test--ensure-grammar)
   (with-temp-buffer
-    (insert "edition 2026\np(k, v) where labels(l), (\nk,\n v) in l\nq(b) where b = any(x), n = count(x), r(x)\n")
+    (insert "p(k, v) where labels(l), (\nk,\n v) in l\nq(b) where b = any(x), n = count(x), r(x)\n")
     (let ((treesit-font-lock-level 4))
       (dform-ts-mode))
     (font-lock-ensure)
@@ -136,7 +136,7 @@ indenting leaves its lines as written."
     (should (eq (dform-ts-mode-test--face-at "count(") 'font-lock-builtin-face))
     (indent-region (point-min) (point-max))
     (should (equal (buffer-string)
-                   "edition 2026\np(k, v) where labels(l), (\n  k,\n  v) in l\nq(b) where b = any(x), n = count(x), r(x)\n"))))
+                   "p(k, v) where labels(l), (\n  k,\n  v) in l\nq(b) where b = any(x), n = count(x), r(x)\n"))))
 
 (ert-deftest dform-ts-mode-test-indent-round-trip ()
   "`indent-region' leaves a correctly indented file unchanged."

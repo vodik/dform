@@ -46,7 +46,7 @@ fn the_controller_still_runs_two_ticks() {
     let s = Scratch::project("unattended-controller");
     s.write(
         "p.df",
-        r#"edition 2026
+        r#"
 
 resource db.postgres orders { size = 1 }
 

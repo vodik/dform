@@ -23,7 +23,7 @@ fn one(s: &Scratch, goal: &str) -> String {
 }
 
 fn program(body: &str) -> String {
-    format!("edition 2026\n\n{body}\nprovider fake\n")
+    format!("\n\n{body}\nprovider fake\n")
 }
 
 /// A day added across Paris's change from summer time is a calendar day,
@@ -100,7 +100,7 @@ fn durations_parse_print_and_total() {
     let s = Scratch::new("time-durations");
     s.write(
         "p.df",
-        "edition 2026\n\ninput ttl: duration = \"PT36H\"\n\n\
+        "\n\ninput ttl: duration = \"PT36H\"\n\n\
          iso(d) where d = duration.parse(\"P1Y2M3DT4H5M\")\n\
          ttl_hours(n) where n = duration.total(ttl, \"hours\")\n\
          long() where ttl > 1d\n\
@@ -135,7 +135,7 @@ fn a_bad_time_literal_is_a_compile_error() {
     );
     s.write(
         "p.df",
-        "edition 2026\n\ninput expires: time = \"2026-10-02\"\n\nprovider fake\n",
+        "\n\ninput expires: time = \"2026-10-02\"\n\nprovider fake\n",
     );
     let r = query(&s, "x(y)").failure();
     assert!(

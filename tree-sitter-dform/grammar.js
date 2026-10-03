@@ -24,7 +24,7 @@ const IDENT = /[A-Za-z_][A-Za-z0-9_]*/;
 // The statement keywords: a statement's first token (docs/grammar.md
 // "Tokens"). Anywhere a plain name is expected a keyword is a name.
 const STATEMENT_KEYWORDS = [
-  'edition', 'provider', 'key', 'type', 'decl', 'extern', 'input',
+  'provider', 'key', 'type', 'decl', 'extern', 'input',
   'output', 'let', 'set', 'component', 'instance', 'use', 'resource',
   'deny', 'warn',
 ];
@@ -107,7 +107,6 @@ export default grammar({
     comment: _ => token(seq('#', /[^\n]*/)),
 
     _statement: $ => choice(
-      $.edition,
       $.provider,
       $.input,
       $.input_relation,
@@ -126,8 +125,6 @@ export default grammar({
       $.rule,
       $.fact,
     ),
-
-    edition: $ => seq('edition', field('version', $.integer)),
 
     // A provider's block takes no clause; the compiler's resolver says
     // so, so the grammar takes one as the parser does. A block with no

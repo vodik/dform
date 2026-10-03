@@ -1,6 +1,4 @@
 # Drift accepted by hand, `approve(Type, Address)`: a module of facts
 # crud_api.df reads with `use data.approvals`.
 
-edition 2026
-
 decl approve(type, address)

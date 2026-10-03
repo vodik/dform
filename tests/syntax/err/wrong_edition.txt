@@ -1,1 +1,0 @@
-tests/syntax/err/wrong_edition.df:1:1: unknown edition 2027: this compiler reads edition 2026

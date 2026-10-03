@@ -311,7 +311,7 @@ fn a_git_table_is_read_at_the_planned_commit() {
     commit("a");
     s.write(
         "p.df",
-        "edition 2026\n\ninput owner from csv(git(\"ops.git\", \"main\", \"owners.csv\"))\n\n\
+        "\n\ninput owner from csv(git(\"ops.git\", \"main\", \"owners.csv\"))\n\n\
          decl owner(name: string)\n\nresource net.vpc main {\ncidr = \"10.0.0.0/16\"\n\
          tags = { owners: [ n | owner(n) ] }\n}\nprovider fake\n",
     );

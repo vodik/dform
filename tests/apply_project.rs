@@ -5,13 +5,13 @@
 mod common;
 use common::Scratch;
 
-const NET: &str = r#"edition 2026
+const NET: &str = r#"
 provider fake
 resource net.vpc main { cidr = "10.0.0.0/16" }
 output cidr = main.cidr
 "#;
 
-const APP: &str = r#"edition 2026
+const APP: &str = r#"
 provider fake
 use stacks.net as network
 resource net.subnet a {
@@ -19,7 +19,7 @@ resource net.subnet a {
 } where c = network.cidr
 "#;
 
-const SOLO: &str = r#"edition 2026
+const SOLO: &str = r#"
 provider fake
 resource net.vpc solo { cidr = "10.9.0.0/16" }
 "#;

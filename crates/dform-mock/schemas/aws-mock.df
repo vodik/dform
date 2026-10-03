@@ -23,8 +23,6 @@
 # typed `ref(T)`: the program gives it the resource (`vpc_id = main`), and
 # the provider its id (R-43).
 
-edition 2026
-
 # aws.vpc
 type_provider("aws.vpc", "aws")
 type_attr("aws.vpc", "id", "string", ["computed", "id"])

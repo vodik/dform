@@ -2,7 +2,6 @@
 Headers
 ================================================================================
 
-edition 2026
 key env: enum("dev", "prod") = "dev"
 key region: string
 provider fake { source = "providers/fake" }
@@ -10,8 +9,6 @@ provider fake { source = "providers/fake" }
 --------------------------------------------------------------------------------
 
 (source_file
-  (edition
-    (integer))
   (input
     (identifier)
     (type

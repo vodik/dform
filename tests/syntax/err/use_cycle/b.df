@@ -1,5 +1,3 @@
-edition 2026
-
 use a
 
 seen("b")

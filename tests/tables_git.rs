@@ -8,7 +8,7 @@ mod tables_common;
 use common::Scratch;
 use tables_common::{push, repo, scratch};
 
-const PROGRAM: &str = r#"edition 2026
+const PROGRAM: &str = r#"
 
 input node from csv(git("ops.git", "main", "nodes.csv"))
 

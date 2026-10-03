@@ -19,7 +19,7 @@ fn facts(src: &str, pred: &str) -> Vec<String> {
 }
 
 fn error(src: &str) -> String {
-    parse_file("t.df", &format!("edition 2026\n{src}"))
+    parse_file("t.df", &format!("\n{src}"))
         .map(|_| ())
         .unwrap_err()
         .to_string()
@@ -86,7 +86,7 @@ fn why_shows_the_range_as_written() {
     let s = Scratch::project("lang-ranges");
     s.write(
         "p.df",
-        "edition 2026\nprovider fake\n\npool(\"web\", 2)\n\nresource compute.vm \"${p}-${i}\" {\n  size = \"small\"\n} where pool(p, n), i in 0..n\n",
+        "\nprovider fake\n\npool(\"web\", 2)\n\nresource compute.vm \"${p}-${i}\" {\n  size = \"small\"\n} where pool(p, n), i in 0..n\n",
     );
     let r = s.run(&["plan", "p.df"]).success();
     assert_eq!(

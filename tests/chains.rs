@@ -19,7 +19,7 @@ fn facts(src: &str, pred: &str) -> Vec<String> {
 }
 
 fn error(src: &str) -> String {
-    parse_file("t.df", &format!("edition 2026\n{src}"))
+    parse_file("t.df", &format!("\n{src}"))
         .map(|_| ())
         .unwrap_err()
         .to_string()

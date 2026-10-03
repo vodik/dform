@@ -1,0 +1,4 @@
+# The edition is the project's now (R-68): the line is an error.
+edition 2026
+
+p("a")

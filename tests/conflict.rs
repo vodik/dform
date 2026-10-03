@@ -9,7 +9,10 @@ use common::{Run, Scratch};
 
 fn plan(name: &str, program: &str) -> Run {
     let s = Scratch::project(name);
-    s.write("dform.toml", "[providers]\nk8s = \"k8s\"\n");
+    s.write(
+        "dform.toml",
+        "[project]\nedition = \"2026\"\n\n[providers]\nk8s = \"k8s\"\n",
+    );
     s.write("main.df", program);
     s.run(&["dev", "--world", "w.json", "plan", "main"])
 }
@@ -21,7 +24,7 @@ fn plan(name: &str, program: &str) -> Run {
 fn a_conflict_under_a_required_attribute_is_the_conflict() {
     let r = plan(
         "conflict-required",
-        "edition 2026\n\nprovider k8s\n\n\
+        "\n\nprovider k8s\n\n\
          resource k8s.deployment web {\n  \
          metadata.name = \"web\"\n  \
          spec.selector.matchLabels = { app: \"web\" }\n  \
@@ -49,7 +52,7 @@ fn a_conflict_under_a_required_attribute_is_the_conflict() {
 fn a_conflict_names_its_leaf() {
     let r = plan(
         "conflict-leaf",
-        "edition 2026\n\nprovider k8s\n\n\
+        "\n\nprovider k8s\n\n\
          resource k8s.namespace n {\n  metadata.name = \"a\"\n}\n\n\
          set n.metadata.name = \"b\" where n in k8s.namespace\n",
     )

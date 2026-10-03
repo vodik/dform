@@ -7,7 +7,7 @@ mod common;
 use common::{Scratch, repo};
 use serde_json::Value;
 
-const NET: &str = r#"edition 2026
+const NET: &str = r#"
 
 input zone from csv("data/zones.csv")
 
@@ -178,8 +178,7 @@ fn diff_outside_a_repository_explains_by_the_program_now_and_redacts_secrets() {
         all.extend(common::on("p.df", &mock, args));
         s.run(&all)
     };
-    let prog =
-        "edition 2026\ninput pw: secret(string)\nresource leaky.vault v {\n  password = pw\n}\n";
+    let prog = "\ninput pw: secret(string)\nresource leaky.vault v {\n  password = pw\n}\n";
     s.write("p.df", prog);
     run("FIRST-SECRET-123", &["apply"]).success();
     s.write(

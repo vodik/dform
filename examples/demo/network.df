@@ -1,5 +1,3 @@
-edition 2026
-
 # The demo's networking: a component, `vpc`, copied once per network
 # (`instance network.vpc main`). A copy's private subnets are a relation
 # it exports, `output private_subnet`: a database or a cluster takes them

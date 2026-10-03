@@ -7,7 +7,6 @@
 # Apply: until then the Deployment's configMapRef carries the null
 # ?k8s.config_map/web_config#metadata.name.
 
-edition 2026
 provider k8s
 
 app("web", "nginx:1.27", 3)

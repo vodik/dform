@@ -1,4 +1,2 @@
-edition 2026
-
 # R-65: a module is used, never instanced.
 instance config main

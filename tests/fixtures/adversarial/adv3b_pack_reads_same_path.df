@@ -1,8 +1,6 @@
 # adv3b: the same pack reads the path it contributes to. Under E this is a
 # negative self-loop on (attr, iam.policy, statements) and must be rejected.
 
-edition 2026
-
 resource iam.policy app_policy {
   name = "app"
   statements = [{ action: "db.connect", resource: "db" }]

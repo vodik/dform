@@ -6,14 +6,14 @@
 mod common;
 use common::Scratch;
 
-const NET: &str = r#"edition 2026
+const NET: &str = r#"
 key env: string = "dev"
 provider fake
 resource net.vpc main { cidr = "10.0.0.0/16" }
 output cidr = main.cidr
 "#;
 
-const APP: &str = r#"edition 2026
+const APP: &str = r#"
 key env: string = "dev"
 provider fake
 use stacks.net as network
@@ -23,7 +23,7 @@ resource net.subnet a {
 output subnet = a.cidr
 "#;
 
-const WEB: &str = r#"edition 2026
+const WEB: &str = r#"
 provider fake
 use stacks.app
 resource net.subnet w {
@@ -157,12 +157,12 @@ fn a_keyed_read_takes_the_pun() {
     let s = Scratch::project("order-pun");
     s.write(
         "stacks/net.df",
-        "edition 2026\nkey env: string = \"dev\"\nkey region: string = \"r1\"\nprovider fake\n\
+        "\nkey env: string = \"dev\"\nkey region: string = \"r1\"\nprovider fake\n\
          resource net.vpc main { cidr = \"10.0.0.0/16\" }\noutput cidr = main.cidr\n",
     );
     let app = |read: &str| {
         format!(
-            "edition 2026\nkey env: string = \"dev\"\nprovider fake\nuse stacks.net as network\n\
+            "\nkey env: string = \"dev\"\nprovider fake\nuse stacks.net as network\n\
              resource net.subnet a {{\n  cidr = c\n}} where c = {read}.cidr\n"
         )
     };
@@ -177,7 +177,7 @@ fn a_keyed_read_takes_the_pun() {
     // One key, the pun alone.
     s.write(
         "stacks/net.df",
-        "edition 2026\nkey env: string = \"dev\"\nprovider fake\n\
+        "\nkey env: string = \"dev\"\nprovider fake\n\
          resource net.vpc main { cidr = \"10.0.0.0/16\" }\noutput cidr = main.cidr\n",
     );
     s.write("stacks/app.df", &app("network[env]"));

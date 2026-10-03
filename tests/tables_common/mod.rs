@@ -18,7 +18,7 @@ pub fn scratch(name: &str) -> Scratch {
     std::fs::create_dir_all(&dir).unwrap();
     // Its own project: under the build's directory it would be the
     // repository's (the git root) otherwise.
-    std::fs::write(dir.join("dform.toml"), "").unwrap();
+    std::fs::write(dir.join("dform.toml"), "[project]\nedition = \"2026\"\n").unwrap();
     Scratch::adopt(dir)
 }
 

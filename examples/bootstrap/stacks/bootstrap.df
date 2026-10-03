@@ -10,8 +10,6 @@
 # the cluster's endpoint and CA). Tick 3: the dform-controller Deployment,
 # which waits for its node pool to be up.
 
-edition 2026
-
 output endpoint = renfry.endpoint
 
 # The mock GCP's schema is the project's own (dform.toml: providers/gcp).

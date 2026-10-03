@@ -16,7 +16,7 @@ fn deletes(name: &str, checks: &str) -> common::Run {
     let s = Scratch::new(name);
     s.write(
         "p.df",
-        "edition 2026\n\nprovider fake\nprovider k8s\n\n\
+        "\n\nprovider fake\nprovider k8s\n\n\
          resource net.vpc a { cidr = \"10.0.0.0/16\" }\n\
          resource net.vpc b { cidr = \"10.1.0.0/16\" }\n\
          resource k8s.namespace ns { metadata.name = \"ns\" }\n",
@@ -24,7 +24,7 @@ fn deletes(name: &str, checks: &str) -> common::Run {
     dform(&s, &["apply"]).success();
     s.write(
         "p.df",
-        &format!("edition 2026\n\nprovider fake\nprovider k8s\n\n{checks}"),
+        &format!("\n\nprovider fake\nprovider k8s\n\n{checks}"),
     );
     dform(&s, &["plan"])
 }

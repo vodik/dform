@@ -1,7 +1,5 @@
 # Minimal networking stdlib demo rules/policies: a module of denies.
 
-edition 2026
-
 #| Deny if peered VPC CIDRs overlap.
 #|
 #| This is intentionally scoped to only VPCs connected by `vpc_peer/2`,

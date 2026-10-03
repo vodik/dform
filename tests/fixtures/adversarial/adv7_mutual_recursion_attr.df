@@ -1,8 +1,6 @@
 # adv7: mutual recursion through attr between two types. A's field is read
 # from B's, B's from A's. A real cycle; must be rejected.
 
-edition 2026
-
 resource net.vpc x { peer = p } where arg(net.subnet, "y", "name", p)
 
 resource net.subnet y { name = q } where arg(net.vpc, "x", "peer", q)

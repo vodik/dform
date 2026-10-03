@@ -1,7 +1,5 @@
 # pngu.df, direction E. The renfry stack for one GCP project per environment.
 
-edition 2026
-
 input env: enum("dev", "stg", "prod") = "dev"
 decl peering(env: symbol, name: string, peer_network: string)
 

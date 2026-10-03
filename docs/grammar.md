@@ -23,21 +23,23 @@ parsing resumes after it. One bad statement is one diagnostic.
 ## Files and lines
 
 ```
-file   := "edition" INT NL (header NL)* (stmt NL)*
+file   := (header NL)* (stmt NL)*
 header := key | input                 ; in that order: key, input, input p from
 ```
 
-Every `.df` file starts with `edition 2026` (comments may come first). A
-file without it is an error that names the pragma; any other year is an
-error too. Text that is not a file (provider schemas, `dform query`
-patterns, tests) may leave the pragma out.
+The edition is the project's, not the file's (R-68): dform.toml says it,
+`[project] edition = "2026"`, and requires it; a manifest without it, or
+with another, is an error naming the key. A program in no project is read
+in this dform's edition. An `edition 2026` line, every file's first
+before, is a syntax error that names dform.toml, and `dform fmt` drops
+it.
 
 ### The header
 
 Every file is a module (see "Modules"); a file under `stacks/` is a
 stack, a module the tool uses, named after itself, and `key` makes one
-deployment per value. What a file takes is its header, after `edition`
-and before its body: `key` lines, then `input` lines (value inputs, then
+deployment per value. What a file takes is its header, before its body:
+`key` lines, then `input` lines (value inputs, then
 relation inputs, `input p from ..`). `use` and `instance` are body
 statements. Everything
 else is the body, `provider` included: a provider block is a rule that
@@ -92,10 +94,10 @@ name; what its unit means is the literal's ("Quantities and times").
 `-` is always an operator: a hyphenated name is a string, and the parser
 says so.
 
-Statement keywords, recognised only as the first token of a statement (18):
+Statement keywords, recognised only as the first token of a statement (17):
 
 ```
-edition  provider  key  type  decl  extern
+provider  key  type  decl  extern
 input  output  let  set
 component  instance  use
 resource  deny  warn
@@ -1579,9 +1581,10 @@ A formatted file prints back byte for byte.
 
 ## Decisions the proposal left open
 
-- The edition is `edition 2026` (the user's decision): there are no
-  releases and 2026 was not formalized, so proposal H's grammar is edition
-  2026 itself, and the grammar before it is gone.
+- The edition is 2026 (the user's decision): there are no releases and
+  2026 was not formalized, so proposal H's grammar is edition 2026 itself,
+  and the grammar before it is gone. A project names it in dform.toml
+  (R-68), never a file.
 - A read in any field gates the whole block, as F10 has it.
 - Type namespaces are known from headers, `type` blocks, `type_*` facts
   and the built-in provider schemas; the resolver runs before providers are

@@ -14,7 +14,7 @@ fn plan(s: &Scratch, src: &str) -> Run {
 }
 
 /// An input's refinement, its check (R-54), over the `set` layers (R-38).
-const SETTINGS: &str = "edition 2026\ninput db {\n  backup_days: int = 3 check 1 <= backup_days <= 35\n}\nprovider fake\non(1)\nset db.backup_days = 14 where on(1)\n";
+const SETTINGS: &str = "\ninput db {\n  backup_days: int = 3 check 1 <= backup_days <= 35\n}\nprovider fake\non(1)\nset db.backup_days = 14 where on(1)\n";
 
 /// A constraint is never out-ranked: an `@override` whose value violates
 /// it is a deny naming the refinement's place and both witnesses, and the
@@ -70,7 +70,7 @@ fn a_literal_that_violates_a_refinement_is_a_compile_error() {
     let s = Scratch::new("refine-literal");
     let r = plan(
         &s,
-        "edition 2026\ninput db {\n  backup_days: int = 3 check 1 <= backup_days <= 35\n}\non(1)\nset db = { backup_days: 40 } where on(1)\nprovider fake\n",
+        "\ninput db {\n  backup_days: int = 3 check 1 <= backup_days <= 35\n}\non(1)\nset db = { backup_days: 40 } where on(1)\nprovider fake\n",
     )
     .failure();
     assert!(
@@ -84,7 +84,7 @@ fn a_literal_that_violates_a_refinement_is_a_compile_error() {
     // crates/dform-mock/schemas/fake.df: type_refine(net.subnet, cidr, prefix_len_le(24)).
     let r = plan(
         &s,
-        "edition 2026\nresource net.subnet a { cidr = \"10.0.0.0/26\" }\nprovider fake\n",
+        "\nresource net.subnet a { cidr = \"10.0.0.0/26\" }\nprovider fake\n",
     )
     .failure();
     assert!(
@@ -98,7 +98,7 @@ fn a_literal_that_violates_a_refinement_is_a_compile_error() {
     );
     plan(
         &s,
-        "edition 2026\nresource net.subnet a { cidr = \"10.0.1.0/24\" }\nprovider fake\n",
+        "\nresource net.subnet a { cidr = \"10.0.1.0/24\" }\nprovider fake\n",
     )
     .success();
 }
@@ -110,7 +110,7 @@ fn a_cross_attribute_refinement_lowers_to_a_deny() {
     let s = Scratch::new("refine-cross");
     let src = |min: i64| {
         format!(
-            "edition 2026
+            "
 type compute.vm {{
   pool.min: int
   pool.max: int check pool.min <= pool.max
@@ -161,7 +161,7 @@ fn a_refinement_on_a_null_is_deferred_and_fires_after_the_boundary() {
     assert!(
         r.stderr
             .contains("constraint violations after tick 1:\n- refinement violated ctx={\"addr\":\"pngu\",\"at\":\"")
-            && r.stderr.contains("examples/refine/stacks/refine_gke.df:127:33\",\"constraint\":\"len_ge(3)\",\"path\":\"zones\"")
+            && r.stderr.contains("examples/refine/stacks/refine_gke.df:125:33\",\"constraint\":\"len_ge(3)\",\"path\":\"zones\"")
             && r.stderr
                 .contains("apply stopped after tick 1: blocked by constraints"),
         "{}",
@@ -179,7 +179,7 @@ fn a_refinement_on_a_null_is_deferred_and_fires_after_the_boundary() {
     );
 }
 
-const VAULT: &str = "edition 2026\ntype_provider(vault.secret, \"fakecloud\")\ntype_attr(vault.secret, \"id\", \"string\", [\"computed\", \"id\"])\ntype_attr(vault.secret, \"value\", \"string\", [\"computed\", \"sensitive\"])\ntype_mint(vault.secret, \"value\", \"MINT\")\ntype_provider(app.db, \"fakecloud\")\ntype_attr(app.db, \"id\", \"string\", [\"computed\", \"id\"])\ntype_attr(app.db, \"password\", \"string\", [\"sensitive\"])\ntype_refine(app.db, \"password\", len_ge(16))\n";
+const VAULT: &str = "\ntype_provider(vault.secret, \"fakecloud\")\ntype_attr(vault.secret, \"id\", \"string\", [\"computed\", \"id\"])\ntype_attr(vault.secret, \"value\", \"string\", [\"computed\", \"sensitive\"])\ntype_mint(vault.secret, \"value\", \"MINT\")\ntype_provider(app.db, \"fakecloud\")\ntype_attr(app.db, \"id\", \"string\", [\"computed\", \"id\"])\ntype_attr(app.db, \"password\", \"string\", [\"sensitive\"])\ntype_refine(app.db, \"password\", len_ge(16))\n";
 
 /// F DR-13 revised: the engine never checks a secret. A refinement on a
 /// sensitive path is an Apply assertion; the mock materializes the secret,
@@ -191,7 +191,7 @@ fn a_refinement_on_a_secret_is_an_apply_assertion() {
         s.write("schema.df", &VAULT.replace("MINT", mint));
         s.write(
             "p.df",
-            "edition 2026\nresource vault.secret pw {}\nresource app.db main { password = ref(vault.secret, \"pw\", \"value\") }\nprovider fake\n",
+            "\nresource vault.secret pw {}\nresource app.db main { password = ref(vault.secret, \"pw\", \"value\") }\nprovider fake\n",
         );
         let _ = std::fs::remove_file(s.path("w.json"));
         let _ = std::fs::remove_dir_all(s.path("dform.state"));
@@ -231,7 +231,7 @@ fn e0306_a_refinement_on_a_sensitive_path_the_provider_cannot_check() {
     .unwrap();
     s.write(
         "p.df",
-        "edition 2026\nprovider k8s { source = \"./providers/k8s\" }\ntype k8s.secret {\n  data.password: string check len(data.password) >= 16\n}\nresource k8s.secret db { metadata.name = \"db\", data = { password: \"x\" } }\n",
+        "\nprovider k8s { source = \"./providers/k8s\" }\ntype k8s.secret {\n  data.password: string check len(data.password) >= 16\n}\nresource k8s.secret db { metadata.name = \"db\", data = { password: \"x\" } }\n",
     );
     let out = common::dform()
         .args(["plan", "p.df"])
@@ -259,8 +259,7 @@ fn a_refinement_names_its_attribute_by_name() {
     let s = Scratch::new("refine-names");
     let src = |name: &str, wide: &str| {
         format!(
-            "edition 2026
-type app.thing {{
+            "\ntype app.thing {{
   name: string check len(name) <= 3
   code: string check len(code) != 2
   net: string check inet.prefix_len(net) >= inet.prefix_len(wide)
@@ -309,7 +308,7 @@ fn an_unknown_function_or_a_bad_pattern_is_a_compile_error() {
     let s = Scratch::new("refine-unknown");
     let r = plan(
         &s,
-        "edition 2026\ntype app.thing {\n  name: string check frobnicate(name) == 3\n}\nresource app.thing a { name = \"x\" }\nprovider fake\n",
+        "\ntype app.thing {\n  name: string check frobnicate(name) == 3\n}\nresource app.thing a { name = \"x\" }\nprovider fake\n",
     )
     .failure();
     assert!(
@@ -320,7 +319,7 @@ fn an_unknown_function_or_a_bad_pattern_is_a_compile_error() {
     );
     let r = plan(
         &s,
-        "edition 2026\ntype app.thing {\n  name: string check matches(name, \"a(\")\n}\nprovider fake\n",
+        "\ntype app.thing {\n  name: string check matches(name, \"a(\")\n}\nprovider fake\n",
     )
     .failure();
     assert!(
@@ -329,11 +328,7 @@ fn an_unknown_function_or_a_bad_pattern_is_a_compile_error() {
         "{}",
         r.stderr
     );
-    let r = plan(
-        &s,
-        "edition 2026\ninput n: int = 1 check frob(n) == 1\nprovider fake\n",
-    )
-    .failure();
+    let r = plan(&s, "\ninput n: int = 1 check frob(n) == 1\nprovider fake\n").failure();
     assert!(
         r.stderr
             .contains("p.df:2:1: in a refinement: unknown function frob"),

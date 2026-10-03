@@ -1,4 +1,2 @@
-edition 2026
-
 # `-` is always an operator: a hyphenated name is a string.
 zone(us-test-1a)

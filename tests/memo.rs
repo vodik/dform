@@ -37,11 +37,11 @@ fn project(name: &str, program: &str) -> Scratch {
 fn answers(s: &Scratch, v: &str) {
     s.write(
         "providers/fake/externs.df",
-        &format!("edition 2026\nkv.password(\"app\", \"pw-{v}\")\n"),
+        &format!("\nkv.password(\"app\", \"pw-{v}\")\n"),
     );
 }
 
-const PLAIN: &str = r#"edition 2026
+const PLAIN: &str = r#"
 provider fake
 extern kv.password(+name, -value)
 resource db.user app {
@@ -105,7 +105,7 @@ fn a_memo_survives_a_replan_and_is_gone_after_taint() {
 fn two_sites_of_a_key_agree_and_a_plan_keeps_nothing() {
     let s = project(
         "memo-sites",
-        r#"edition 2026
+        r#"
 provider fake
 resource db.user a {
   password = memo.first("pw", "from-a")
@@ -125,7 +125,7 @@ resource db.user b {
     );
 }
 
-const SECRET: &str = r#"edition 2026
+const SECRET: &str = r#"
 provider fake
 resource db.secret v {
   password = pw
@@ -216,7 +216,7 @@ fn a_secret_memo_is_kept_sealed_never_in_the_clear() {
 fn a_kept_creation_time_drives_a_rotation() {
     let s = project(
         "memo-rotate",
-        r#"edition 2026
+        r#"
 provider fake
 provider time
 resource db.user app {
@@ -247,7 +247,7 @@ warn "rotate the password" where {
 fn time_now_is_the_time_providers() {
     let s = project(
         "memo-time",
-        r#"edition 2026
+        r#"
 provider fake
 resource db.user app {
   password = time.format(time.now(), "%Y")
@@ -281,12 +281,12 @@ resource db.user app {
 fn a_no_op_apply_keeps_a_memo_it_first_read() {
     let s = project(
         "memo-noop",
-        "edition 2026\nprovider fake\nresource db.user a {\n  password = \"same\"\n}\n",
+        "\nprovider fake\nresource db.user a {\n  password = \"same\"\n}\n",
     );
     run(&s, &[], &["apply", "p.df"]).success();
     s.write(
         "p.df",
-        "edition 2026\nprovider fake\nresource db.user a {\n  password = memo.first(\"pw\", \"same\")\n}\n",
+        "\nprovider fake\nresource db.user a {\n  password = memo.first(\"pw\", \"same\")\n}\n",
     );
     let now = [("DFORM_TEST_NOW", "2026-10-03T09:00:00Z")];
     let r = run(&s, &now, &["apply", "p.df"]).success();

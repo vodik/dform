@@ -39,7 +39,7 @@ fn an_alias_is_its_type() {
     let s = Scratch::new("alias-transparent");
     s.write(
         "p.df",
-        "edition 2026\n\
+        "\n\
          input env: environment = \"dev\"\n\
          input all: envs = [\"dev\"]\n\
          input rec: { e: environment } = { e: \"dev\" }\n\
@@ -69,7 +69,7 @@ fn an_enum_member_is_a_value_not_an_alias() {
     let s = Scratch::new("alias-enum");
     s.write(
         "p.df",
-        "edition 2026\ninput env: enum(dev, prod) = \"dev\"\ntype dev = enum(\"a\")\n",
+        "\ninput env: enum(dev, prod) = \"dev\"\ntype dev = enum(\"a\")\n",
     );
     assert_eq!(input_types(&s, "p.df"), vec!["env: enum(dev, prod)"]);
 }
@@ -77,15 +77,12 @@ fn an_enum_member_is_a_value_not_an_alias() {
 #[test]
 fn a_cycle_is_an_error_naming_both() {
     let s = Scratch::new("alias-cycle");
-    s.write(
-        "p.df",
-        "edition 2026\ninput x: a\ntype a = list(b)\ntype b = set(a)\n",
-    );
+    s.write("p.df", "\ninput x: a\ntype a = list(b)\ntype b = set(a)\n");
     let e = load_error(&s, "p.df");
     assert!(e.contains("type alias cycle: a -> b -> a"), "{e}");
     assert!(e.contains("p.df:3") && e.contains("p.df:4"), "{e}");
     let s = Scratch::new("alias-self");
-    s.write("p.df", "edition 2026\ninput x: a\ntype a = list(a)\n");
+    s.write("p.df", "\ninput x: a\ntype a = list(a)\n");
     let e = load_error(&s, "p.df");
     assert!(e.contains("type alias cycle: a -> a"), "{e}");
 }
@@ -93,7 +90,7 @@ fn a_cycle_is_an_error_naming_both() {
 #[test]
 fn an_alias_may_not_take_a_builtin_name() {
     let s = Scratch::new("alias-builtin");
-    s.write("p.df", "edition 2026\ninput x: int\ntype int = string\n");
+    s.write("p.df", "\ninput x: int\ntype int = string\n");
     let e = load_error(&s, "p.df");
     assert!(
         e.contains("type alias `int` takes the name of a built-in type"),
@@ -106,13 +103,10 @@ fn an_alias_may_not_take_a_builtin_name() {
 #[test]
 fn another_modules_alias_is_read_through_its_name() {
     let s = Scratch::new("alias-paths");
-    s.write(
-        "types.df",
-        "edition 2026\ntype environment = enum(\"dev\", \"prod\")\n",
-    );
+    s.write("types.df", "\ntype environment = enum(\"dev\", \"prod\")\n");
     s.write(
         "p.df",
-        "edition 2026\ninput env: types.environment = \"dev\"\ninput bare: environment\nuse types\n",
+        "\ninput env: types.environment = \"dev\"\ninput bare: environment\nuse types\n",
     );
     assert_eq!(
         input_types(&s, "p.df"),
@@ -121,7 +115,7 @@ fn another_modules_alias_is_read_through_its_name() {
     // `use .. as` names it otherwise.
     s.write(
         "q.df",
-        "edition 2026\ninput env: t.environment = \"dev\"\nuse types as t\n",
+        "\ninput env: t.environment = \"dev\"\nuse types as t\n",
     );
     assert_eq!(input_types(&s, "q.df"), vec!["env: enum(dev, prod)"]);
 }
@@ -133,15 +127,12 @@ fn a_used_modules_alias_is_public() {
     let s = Scratch::new("alias-component");
     s.write(
         "lib.df",
-        "edition 2026\n\
+        "\n\
          input t: tier\n\
          type tier = enum(\"gold\", \"silver\")\n\
          ",
     );
-    s.write(
-        "p.df",
-        "edition 2026\ninput t: lib.tier = \"gold\"\nuse lib { t }\n",
-    );
+    s.write("p.df", "\ninput t: lib.tier = \"gold\"\nuse lib { t }\n");
     assert_eq!(
         input_types(&s, "p.df"),
         vec!["t: enum(gold, silver)", "t: enum(gold, silver)"]
@@ -153,11 +144,11 @@ fn two_aliases_of_one_name_are_an_error_listing_both() {
     // Two modules' aliases of one name are two names: each is read
     // through its module.
     let s = Scratch::new("alias-twice");
-    s.write("a.df", "edition 2026\ntype environment = enum(\"dev\")\n");
-    s.write("b.df", "edition 2026\ntype environment = enum(\"prod\")\n");
+    s.write("a.df", "\ntype environment = enum(\"dev\")\n");
+    s.write("b.df", "\ntype environment = enum(\"prod\")\n");
     s.write(
         "p.df",
-        "edition 2026\ninput x: a.environment\ninput y: b.environment\nuse a\nuse b\n",
+        "\ninput x: a.environment\ninput y: b.environment\nuse a\nuse b\n",
     );
     assert_eq!(
         input_types(&s, "p.df"),
@@ -166,7 +157,7 @@ fn two_aliases_of_one_name_are_an_error_listing_both() {
     // A component's alias and its file's, of one name, are two in its scope.
     s.write(
         "m.df",
-        "edition 2026\ntype k = int\ncomponent m {\n  type k = string\n  input x: k\n}\n",
+        "\ntype k = int\ncomponent m {\n  type k = string\n  input x: k\n}\n",
     );
     let e = load_error(&s, "m.df");
     assert!(e.contains("2 type aliases named `k` are in scope"), "{e}");

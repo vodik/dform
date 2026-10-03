@@ -2,8 +2,6 @@
 # E: "a policy that writes variable type and path reads no attribute".
 # This one does, so it must be rejected.
 
-edition 2026
-
 override(net.vpc, "main", "tags", { team: "x" })
 
 resource net.vpc main { cidr = inet("10.0.0.0/16"), tags = { env: "dev" } }

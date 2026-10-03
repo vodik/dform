@@ -12,7 +12,7 @@ use dform::partition::fmt_atom;
 use dform::transform;
 
 fn program(src: &str) -> String {
-    format!("edition 2026\n{src}")
+    format!("\n{src}")
 }
 
 /// The lowered program's signatures, as hover prints them.
@@ -193,7 +193,7 @@ fn an_undeclared_table_takes_its_first_sources_columns() {
     s.write("nets.csv", "name,cidr\na,10.0.0.0/16\n");
     s.write(
         "p.df",
-        "edition 2026\n\ninput zone from json(\"zones.json\")\ninput net from csv(\"nets.csv\")\n\n\
+        "\n\ninput zone from json(\"zones.json\")\ninput net from csv(\"nets.csv\")\n\n\
          provider fake\n\n\
          next(z, i) where zone(z, n, _), i = n + 1\n\
          inside(z) where zone(z, _, c), inet.contains(c, ip(\"10.1.2.3\"))\n\
@@ -208,7 +208,7 @@ fn an_undeclared_table_takes_its_first_sources_columns() {
     // A first source the compiler cannot read: declare the columns.
     s.write(
         "p.df",
-        "edition 2026\n\ninput zone from json(\"missing.json\")\n\nprovider fake\n",
+        "\n\ninput zone from json(\"missing.json\")\n\nprovider fake\n",
     );
     let r = s.run(&["plan", "p.df"]).failure();
     assert!(
@@ -229,7 +229,7 @@ fn an_attribute_read_types_its_column() {
     let s = Scratch::new("infer-schema");
     s.write(
         "p.df",
-        "edition 2026\n\nprovider fake\n\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\n\
+        "\n\nprovider fake\n\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\n\
          decl cidr_of(c) mixed\ncidr_of(c) where v in net.vpc, c = v.cidr\ncidr_of(5)\n",
     );
     let r = s

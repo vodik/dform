@@ -67,10 +67,6 @@
       "members": [
         {
           "type": "SYMBOL",
-          "name": "edition"
-        },
-        {
-          "type": "SYMBOL",
           "name": "provider"
         },
         {
@@ -136,23 +132,6 @@
         {
           "type": "SYMBOL",
           "name": "fact"
-        }
-      ]
-    },
-    "edition": {
-      "type": "SEQ",
-      "members": [
-        {
-          "type": "STRING",
-          "value": "edition"
-        },
-        {
-          "type": "FIELD",
-          "name": "version",
-          "content": {
-            "type": "SYMBOL",
-            "name": "integer"
-          }
         }
       ]
     },
@@ -3186,10 +3165,6 @@
             "members": [
               {
                 "type": "STRING",
-                "value": "edition"
-              },
-              {
-                "type": "STRING",
                 "value": "provider"
               },
               {
@@ -4099,10 +4074,6 @@
               "members": [
                 {
                   "type": "STRING",
-                  "value": "edition"
-                },
-                {
-                  "type": "STRING",
                   "value": "provider"
                 },
                 {
@@ -4246,10 +4217,6 @@
           "content": {
             "type": "CHOICE",
             "members": [
-              {
-                "type": "STRING",
-                "value": "edition"
-              },
               {
                 "type": "STRING",
                 "value": "provider"

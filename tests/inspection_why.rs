@@ -26,7 +26,7 @@ fn why_a_tag_exists() {
     );
     assert!(
         out.contains(
-            "examples/demo/baseline.df:12  set r.tags = { team: \"platform\" } where r in \
+            "examples/demo/baseline.df:10  set r.tags = { team: \"platform\" } where r in \
              resource   (use baseline)\n"
         ),
         "{out}"
@@ -66,7 +66,7 @@ fn why_and_query_take_an_address_as_plan_prints_it() {
     let want = dform(at, &["why", r#"net.vpc["main::vpc"]"#]);
     assert!(
         want.starts_with(
-            "net.vpc[\"main::vpc\"]\n  examples/demo/network.df:21  resource \
+            "net.vpc[\"main::vpc\"]\n  examples/demo/network.df:19  resource \
              net.vpc vpc { .. }   (instance network.vpc main)\n"
         ),
         "{want}"
@@ -103,7 +103,7 @@ fn why_an_attribute_shows_every_contribution() {
     assert!(out.contains("  merged from 2 contributions\n"), "{out}");
     assert!(
         out.contains(
-            "examples/demo/network.df:21  resource net.vpc vpc { .. tags = { env, \
+            "examples/demo/network.df:19  resource net.vpc vpc { .. tags = { env, \
              component: \"network\" } }   (instance network.vpc main)\n"
         ),
         "{out}"
@@ -112,7 +112,7 @@ fn why_an_attribute_shows_every_contribution() {
     // The input's default is a contribution at its rank, stated where the
     // input is declared; --set's wins.
     assert!(
-        out.contains("├─ \"staging\" @default   examples/demo/stacks/dform.df:11\n"),
+        out.contains("├─ \"staging\" @default   examples/demo/stacks/dform.df:9\n"),
         "{out}"
     );
     assert!(out.contains("└─ --set env=prod\n"), "{out}");
@@ -132,12 +132,12 @@ fn why_a_route_shows_the_statements_that_fired() {
         &["why", r#"net.route["blue-to-green"]"#],
     );
     let start = "net.route[\"blue-to-green\"]
-  examples/tour/stacks/tour.df:285  resource net.route \"${a}-to-${b}\" { .. } where reaches(a, b), a != b, network_of(b, v), dest = net.vpc[v].cidr
+  examples/tour/stacks/tour.df:283  resource net.route \"${a}-to-${b}\" { .. } where reaches(a, b), a != b, network_of(b, v), dest = net.vpc[v].cidr
   with a = \"blue\", b = \"green\", v = \"green::vpc\", dest = 10.2.0.0/16
        \"${a}-to-${b}\" = \"blue-to-green\"
        net.vpc[v].cidr = 10.2.0.0/16
   ├─ reaches(\"blue\", \"green\")
-       examples/tour/stacks/tour.df:283  reaches(a, c) where reaches(a, b), link(b, c)
+       examples/tour/stacks/tour.df:281  reaches(a, c) where reaches(a, b), link(b, c)
 ";
     let got: String = out
         .lines()
@@ -146,7 +146,7 @@ fn why_a_route_shows_the_statements_that_fired() {
         .collect();
     assert_eq!(got.replace("  │ ", "    "), start, "{out}");
     assert!(
-        out.contains("├─ spoke(\"green\")   examples/tour/stacks/tour.df:250\n"),
+        out.contains("├─ spoke(\"green\")   examples/tour/stacks/tour.df:248\n"),
         "{out}"
     );
     assert!(out.contains("network[t].vpc = \"green::vpc\"\n"), "{out}");
@@ -163,7 +163,7 @@ fn why_a_settings_read_shows_the_read() {
     );
     assert!(
         out.contains(
-            "examples/tour/stacks/tour.df:147  resource db.postgres orders { .. backup_days = \
+            "examples/tour/stacks/tour.df:145  resource db.postgres orders { .. backup_days = \
              database.backup_days .. }\n"
         ),
         "{out}"
@@ -172,12 +172,12 @@ fn why_a_settings_read_shows_the_read() {
     // The input's layers (R-38): its default, and the `set` block that
     // holds in prod, where it is written.
     assert!(
-        out.contains("{backup_days: 1} @default   examples/tour/stacks/tour.df:29\n"),
+        out.contains("{backup_days: 1} @default   examples/tour/stacks/tour.df:27\n"),
         "{out}"
     );
     assert!(
         out.contains(
-            "examples/tour/stacks/tour.df:141  set { database.backup_days = 14 .. } where \
+            "examples/tour/stacks/tour.df:139  set { database.backup_days = 14 .. } where \
              env == \"prod\"\n"
         ),
         "{out}"
@@ -190,7 +190,7 @@ fn why_prints_one_alternative_unless_all() {
     let s = Scratch::new("why-alts");
     s.write(
         "p.df",
-        "edition 2026\np(1)\nq(1)\nr(x) where p(x)\nr(x) where q(x)\ns(x) where r(x), not t(x)\nt(2) where p(2)\nprovider fake\n",
+        "\np(1)\nq(1)\nr(x) where p(x)\nr(x) where q(x)\ns(x) where r(x), not t(x)\nt(2) where p(2)\nprovider fake\n",
     );
     let why = |extra: &[&str]| {
         let mut a = vec!["dev", "--world", "w.json", "why"];
@@ -225,10 +225,7 @@ fn why_prints_one_alternative_unless_all() {
 #[test]
 fn why_with_a_variable_prints_each_match() {
     let s = Scratch::new("why-vars");
-    s.write(
-        "p.df",
-        "edition 2026\np(1)\np(2)\nq(x) where p(x)\nprovider fake\n",
-    );
+    s.write("p.df", "\np(1)\np(2)\nq(x) where p(x)\nprovider fake\n");
     let out = s
         .run(&["dev", "--world", "w.json", "why", "q(N)", "p.df"])
         .success()
@@ -246,7 +243,7 @@ fn why_never_prints_a_labeled_secret() {
     let s = Scratch::new("why-secret");
     s.write(
         "p.df",
-        r#"edition 2026
+        r#"
 resource leaky.vault v { password = "VAULT-SECRET-DO-NOT-PRINT" }
            copy(p) where p = v.password
 provider fake
@@ -281,13 +278,13 @@ fn why_labels_planner_facts_as_the_plan() {
     let s = Scratch::new("why-plan-leaf");
     s.write(
         "p.df",
-        "edition 2026\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nprovider fake\n",
+        "\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nprovider fake\n",
     );
     s.run(&["dev", "--world", "w.json", "apply", "p.df"])
         .success();
     s.write(
         "p.df",
-        "edition 2026\nlifecycle(net.vpc[\"main\"], \"prevent_destroy\")\nseen(a) where identity(net.vpc, a, _)\nprovider fake\n",
+        "\nlifecycle(net.vpc[\"main\"], \"prevent_destroy\")\nseen(a) where identity(net.vpc, a, _)\nprovider fake\n",
     );
     let why = |q: &str| {
         s.run(&["dev", "--world", "w.json", "why", q, "p.df"])
@@ -312,8 +309,7 @@ fn why_labels_facts_injected_at_a_tick() {
     use dform::ast::{Atom, Lit, Term};
     use dform::value::Value;
     let program =
-        dform::zset::with_policy_rules(dform::parser::parse_program("edition 2026\n").unwrap())
-            .unwrap();
+        dform::zset::with_policy_rules(dform::parser::parse_program("\n").unwrap()).unwrap();
     let s = |x: &str| Term::Val(Value::Str(x.into()));
     let a = Term::Val(Value::Ref {
         typ: "net.subnet".into(),
@@ -367,7 +363,7 @@ fn why_prints_a_braced_clause_on_one_line() {
     );
     assert!(
         out.contains(
-            "examples/demo/baseline.df:17  set p.statements = [{ action: \"org.read\", \
+            "examples/demo/baseline.df:15  set p.statements = [{ action: \"org.read\", \
              resource: \"org\" }] where env == \"prod\", p in iam.policy, p.name == \"app\"   \
              (use baseline)\n"
         ),
@@ -395,9 +391,9 @@ fn plan_why_explains_each_deformation() {
   visibility = \"private\"
   vpc = ?net.vpc[\"main\"]
   zone = \"us-test-1a\"
-  by examples/tour/stacks/tour.df:106  resource net.subnet \"private-${z}\" { .. } where zone(z, n)
-  because examples/tour/stacks/tour.df:103  zone(\"us-test-1a\", 1)
-  because examples/tour/stacks/tour.df:48  net.vpc[\"main\"].cidr = 10.0.0.0/16
+  by examples/tour/stacks/tour.df:104  resource net.subnet \"private-${z}\" { .. } where zone(z, n)
+  because examples/tour/stacks/tour.df:101  zone(\"us-test-1a\", 1)
+  because examples/tour/stacks/tour.df:46  net.vpc[\"main\"].cidr = 10.0.0.0/16
 "
         ),
         "{out}"
@@ -429,7 +425,7 @@ fn why_names_a_rule_the_compiler_wrote() {
     let s = Scratch::new("why-policy-rule");
     let p = |cidr: &str| {
         format!(
-            "edition 2026\nprovider fake\nresource net.vpc main {{\n  cidr = \"{cidr}\"\n}}\n\
+            "\nprovider fake\nresource net.vpc main {{\n  cidr = \"{cidr}\"\n}}\n\
              lifecycle(main, \"prevent_destroy\") where main in net.vpc\n"
         )
     };
@@ -455,7 +451,7 @@ fn why_prints_a_refinement_as_a_check() {
     let s = Scratch::new("why-refine");
     s.write(
         "p.df",
-        "edition 2026\nprovider fake\nresource db.postgres main {\n  size = 1\n  backup_days = 7\n}\n",
+        "\nprovider fake\nresource db.postgres main {\n  size = 1\n  backup_days = 7\n}\n",
     );
     let out = why_in(&s, "p.df", &["db.postgres[\"main\"].backup_days"]);
     assert_eq!(
@@ -470,10 +466,7 @@ fn why_prints_a_refinement_as_a_check() {
 #[test]
 fn why_prints_the_statement_of_a_rule_that_reads_nothing() {
     let s = Scratch::new("why-no-reads");
-    s.write(
-        "p.df",
-        "edition 2026\nprovider fake\nys(n) where n = 1 + 2\n",
-    );
+    s.write("p.df", "\nprovider fake\nys(n) where n = 1 + 2\n");
     let out = why_in(&s, "p.df", &["ys(N)"]);
     assert_eq!(out, "ys(3)\n  p.df:3  ys(n) where n = 1 + 2\n  with n = 3\n");
 }
@@ -497,7 +490,7 @@ fn why_prints_a_relations_signature() {
     let s = Scratch::new("why-signature");
     s.write(
         "p.df",
-        "edition 2026\nprovider fake\naz(\"us-test-1a\", 1)\naz(\"us-test-1b\", 2)\n",
+        "\nprovider fake\naz(\"us-test-1a\", 1)\naz(\"us-test-1b\", 2)\n",
     );
     let out = why_in(&s, "p.df", &["az(Z, I)"]);
     assert!(
@@ -514,7 +507,7 @@ fn why_interpolates_a_reference_as_its_address() {
     let s = Scratch::new("why-ref-interp");
     s.write(
         "p.df",
-        "edition 2026\nprovider fake\nresource net.vpc main {\n  cidr = \"10.0.0.0/16\"\n}\n\
+        "\nprovider fake\nresource net.vpc main {\n  cidr = \"10.0.0.0/16\"\n}\n\
          msg(m) where r in net.vpc, m = \"vpc ${r}\"\n",
     );
     let out = why_in(&s, "p.df", &["msg(M)"]);

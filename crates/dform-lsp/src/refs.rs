@@ -905,7 +905,7 @@ fn locate(p: &Project, e: &Evaluated, w: Where) -> Option<Location> {
 mod tests {
     use super::*;
 
-    const SRC: &str = r#"edition 2026
+    const SRC: &str = r#"
 input env: string = "staging"
 let cfg = { a: env }
 component network {
@@ -988,7 +988,7 @@ zone_index("a", 0)
         );
     }
 
-    const PRIVATE: &str = r#"edition 2026
+    const PRIVATE: &str = r#"
 component a {
   helper(1)
   q(x) where helper(x), shared(x)
@@ -1035,11 +1035,11 @@ s(x) where helper(x), shared(x)
             tree: dform_core::syntax::parser::parse(src).syntax(),
         };
         let files = vec![
-            file("/p/a.df", "edition 2026\nhelper(1)\nq(x) where helper(x)\n"),
-            file("/p/b.df", "edition 2026\nhelper(2)\nr(x) where helper(x)\n"),
+            file("/p/a.df", "\nhelper(1)\nq(x) where helper(x)\n"),
+            file("/p/b.df", "\nhelper(2)\nr(x) where helper(x)\n"),
             file(
                 "/p/stacks/s.df",
-                "edition 2026\nuse a\nuse b\ns(x) where a.helper(x)\nt(x) where b.helper(x)\n",
+                "\nuse a\nuse b\ns(x) where a.helper(x)\nt(x) where b.helper(x)\n",
             ),
         ];
         let d = Decls::of_files(&files);

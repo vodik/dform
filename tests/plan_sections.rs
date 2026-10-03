@@ -13,7 +13,7 @@ fn gke(s: &Scratch, extra: &[&str], cmd: &str) -> common::Run {
     if !extra.is_empty() {
         let mut text = std::fs::read_to_string(&prog).unwrap();
         for e in extra {
-            text.push_str(&s.read(e).replace("edition 2026\n", ""));
+            text.push_str(&s.read(e).replace("\n", ""));
         }
         s.write("p.df", &text);
         prog = "p.df".into();
@@ -54,7 +54,7 @@ fn a_deny_reading_a_stuck_predicate_may_derive_after_the_tick() {
     let s = Scratch::new("sections-may-derive");
     s.write(
         "extra.df",
-        r#"edition 2026
+        r#"
 deny "no nodepool in zone z" {pool: n} where n in google.container_node_pool, arg(google.container_node_pool, n, "zone", "us-east1-z")
 "#,
     );
@@ -110,7 +110,7 @@ fn a_keyless_set_diffs_by_element() {
 #[test]
 fn a_keyed_list_diffs_by_element() {
     let s = Scratch::new("sections-keyed");
-    let one = r#"edition 2026
+    let one = r#"
 
 resource k8s.deployment api {
   metadata.name = "api",
@@ -158,7 +158,7 @@ fn shadowed_and_conflicts_are_sections() {
     let s = Scratch::new("sections-conflict");
     s.write(
         "p.df",
-        r#"edition 2026
+        r#"
 
 resource net.vpc main { cidr = "10.0.0.0/16" }
 set main.cidr = "10.1.0.0/16" where ok(1)
@@ -196,7 +196,7 @@ fn a_conflict_at_a_sensitive_path_is_redacted_in_the_plan() {
     let s = Scratch::new("sections-conflict-secret");
     s.write(
         "p.df",
-        r#"edition 2026
+        r#"
 
 resource leaky.vault v { password = "VAULT-SECRET-A" }
 set v.password = "VAULT-SECRET-B" where ok(1)
@@ -230,7 +230,7 @@ provider fake
 #[test]
 fn a_denied_replace_is_a_section() {
     let s = Scratch::new("sections-denied");
-    let net = "edition 2026\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nprovider fake\n";
+    let net = "\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nprovider fake\n";
     s.write("p.df", net);
     s.run(&common::on("p.df", &["--world", "w.json"], &["apply"]))
         .success();
@@ -336,12 +336,12 @@ fn plan_why_explains_an_update_and_a_delete_and_redacts_a_secret() {
     };
     s.write(
         "p.df",
-        "edition 2026\ninput pw: secret(string)\nresource leaky.vault v {\n  password = pw\n}\nresource leaky.oops o {\n  password = \"plain\"\n}\n",
+        "\ninput pw: secret(string)\nresource leaky.vault v {\n  password = pw\n}\nresource leaky.oops o {\n  password = \"plain\"\n}\n",
     );
     run("FIRST-SECRET-123", &["apply"]).success();
     s.write(
         "p.df",
-        "edition 2026\ninput pw: secret(string)\nresource leaky.vault v {\n  password = pw\n}\n",
+        "\ninput pw: secret(string)\nresource leaky.vault v {\n  password = pw\n}\n",
     );
     let r = run("SECOND-SECRET-456", &["plan", "--why"]).success();
     assert!(
@@ -373,7 +373,7 @@ fn a_multi_line_string_prints_as_its_literal_in_plan_and_query() {
     let s = Scratch::new("sections-multiline");
     s.write(
         "p.df",
-        "edition 2026\nprovider fake\nresource net.vpc main {\n  cidr = \"10.0.0.0/16\"\n  \
+        "\nprovider fake\nresource net.vpc main {\n  cidr = \"10.0.0.0/16\"\n  \
          note = \"one\\ntwo \\\"three\\\" $${four}\"\n}\n",
     );
     let lit = r#""one\ntwo \"three\" $${four}""#;

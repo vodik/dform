@@ -54,10 +54,6 @@
         "named": true
       },
       {
-        "type": "edition",
-        "named": true
-      },
-      {
         "type": "extern",
         "named": true
       },
@@ -764,22 +760,6 @@
           "named": true
         }
       ]
-    }
-  },
-  {
-    "type": "edition",
-    "named": true,
-    "fields": {
-      "version": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "integer",
-            "named": true
-          }
-        ]
-      }
     }
   },
   {
@@ -2328,10 +2308,6 @@
   },
   {
     "type": "deny",
-    "named": false
-  },
-  {
-    "type": "edition",
     "named": false
   },
   {

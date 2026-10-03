@@ -2,8 +2,6 @@
 #
 # To run it, from this directory: README.md.
 
-edition 2026
-
 # The stack is this file, dform, keyed by env: dform[env=prod]'s state is dform.state/dform/env=prod/.
 #| The deployment's environment, the stack's key: `dform plan dform env=prod`
 #| names the deployment, and without one the default is the deployment.

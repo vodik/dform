@@ -1,8 +1,6 @@
 # The crud-api release: the image digest and the schema version it needs.
 # A module of facts (R-39): crud_api.df reads it with `use data.releases`.
 
-edition 2026
-
 # A value is a digest or a schema number: the column takes both (R-34).
 decl release(app, key, value: any)
 

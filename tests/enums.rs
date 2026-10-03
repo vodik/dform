@@ -9,7 +9,7 @@ use dform::parser::parse_file;
 use dform::partition::fmt_atom;
 
 fn facts(src: &str, pred: &str) -> Vec<String> {
-    let p = parse_file("t.df", &format!("edition 2026\n{src}")).unwrap_or_else(|e| panic!("{e:#}"));
+    let p = parse_file("t.df", &format!("\n{src}")).unwrap_or_else(|e| panic!("{e:#}"));
     let (r, _) = dform::engine::eval(&p, &[]).unwrap_or_else(|e| panic!("{e:#}"));
     r.facts
         .iter()
@@ -56,7 +56,7 @@ fn why_shows_the_type_as_the_leaf() {
     let s = Scratch::project("enum-why");
     s.write(
         "p.df",
-        "edition 2026\nprovider fake\n\ntype environment = enum(\"staging\", \"prod\")\n\n\
+        "\nprovider fake\n\ntype environment = enum(\"staging\", \"prod\")\n\n\
          resource compute.vm \"web-${e}\" {\n  size = \"small\"\n} where e in environment\n",
     );
     let r = s.run(&["plan", "p.df"]).success();
@@ -89,7 +89,7 @@ fn why_shows_the_type_as_the_leaf() {
 fn an_enum_input_is_a_cell() {
     let e = parse_file(
         "t.df",
-        "edition 2026\ninput env: environment = \"dev\"\n\
+        "\ninput env: environment = \"dev\"\n\
          type environment = enum(\"dev\", \"prod\")\np(x) where x in env\n",
     )
     .map(|_| ())
@@ -109,7 +109,7 @@ fn the_test_space_is_the_types_values() {
     let s = Scratch::project("enum-test");
     s.write(
         "p.df",
-        "edition 2026\ninput env: environment = \"staging\"\n\nprovider fake\n\n\
+        "\ninput env: environment = \"staging\"\n\nprovider fake\n\n\
          type environment = enum(\"staging\", \"prod\")\n\
          deny \"env ${e} is not prod\" where e in environment, env == e, e != \"prod\"\n",
     );

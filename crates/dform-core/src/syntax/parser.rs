@@ -556,7 +556,7 @@ impl<'a> Parser<'a> {
             let start = self.pos;
             self.stmt_start = self.toks.get(start).map_or(self.src.len(), |t| t.start);
             let header = header_stmt(self.nth(0)) && !self.at_head();
-            if !in_block && !header && self.nth(0) != EDITION_KW {
+            if !in_block && !header && !self.at_edition() {
                 body.get_or_insert(self.stmt_start);
             }
             let misplaced = body
@@ -595,8 +595,7 @@ impl<'a> Parser<'a> {
                  line {line}"
             ),
             hint: Some(
-                "a file is `edition`, then its header (`key`, `input`), then its body; \
-                 `dform fmt` moves it"
+                "a file is its header (`key`, `input`), then its body; `dform fmt` moves it"
                     .to_string(),
             ),
             misplaced: true,
@@ -627,7 +626,39 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// `edition 2026`, a file's first line before R-68.
+    fn at_edition(&self) -> bool {
+        self.at_contextual("edition") && self.raw(1) == INT
+    }
+
+    /// `edition N`: the edition is the project's now (R-68), so the line is
+    /// an error that names dform.toml; it parses, and `fmt` drops it.
+    fn edition(&mut self) -> P {
+        let i = self.nth_index(0).expect("a statement");
+        let start = self.toks[i].start;
+        self.start(EDITION);
+        self.bump();
+        let end = self.nth_index(0).map_or(start, |j| self.toks[j].end);
+        self.expect(INT)?;
+        self.finish();
+        self.errors.push(ParseError {
+            start,
+            end,
+            message: format!(
+                "`edition` is gone: a project's edition is its dform.toml's, `[project] edition = \
+                 \"{}\"`",
+                crate::project::EDITION
+            ),
+            hint: Some("delete the line; `dform fmt` does".to_string()),
+            misplaced: false,
+        });
+        Ok(())
+    }
+
     fn stmt(&mut self) -> P {
+        if self.at_edition() {
+            return self.edition();
+        }
         let k = self.nth(0);
         // The first token decides: a name followed by `(` is a fact or a
         // rule, whatever the name.
@@ -635,7 +666,6 @@ impl<'a> Parser<'a> {
             return self.rule();
         }
         match k {
-            EDITION_KW => self.simple(EDITION, |p| p.expect(INT)),
             // `provider aws`: a block with no entries is left out (R-26).
             PROVIDER_KW => self.simple(PROVIDER, |p| {
                 p.expect_word()?;
@@ -1901,7 +1931,7 @@ mod tests {
     #[test]
     fn lossless_even_with_errors() {
         for src in [
-            "edition 2026\np(a) where q(x), x > 1 # c\n",
+            "\np(a) where q(x), x > 1 # c\n",
             "p(a if\nq(b)\n}}\n",
             "resource net.vpc main { cidr = \"x\" }\nq(b)",
         ] {
@@ -2144,17 +2174,16 @@ mod tests {
         );
     }
 
-    /// A file is `edition`, its header, then its body (R-27): a header
+    /// A file is its header, then its body (R-27): a header
     /// statement after the body began is an error that says to move it;
     /// a module's statements are its own.
     #[test]
     fn the_header_comes_before_the_body() {
-        let src = "edition 2026\nkey env: string\ninput n: int\n\
+        let src = "\nkey env: string\ninput n: int\n\
                    input p from facts(\"p.facts\")\nuse config\nprovider fake {}\np(1)\n\
                    component m {\n  r(1)\n  input k: int\n}\ninstance m a\n";
         assert!(errors(src).is_empty(), "{:?}", errors(src));
-        let src =
-            "edition 2026\nprovider fake {}\nkey env: string\nq(1)\ninput p from facts(\"p\")\n";
+        let src = "\nprovider fake {}\nkey env: string\nq(1)\ninput p from facts(\"p\")\n";
         let e = parse(src).errors;
         let got: Vec<(&str, bool)> = e
             .iter()

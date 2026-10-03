@@ -18,8 +18,6 @@
 # The live objects are read through the kubernetes provider's inventory
 # (`world.T[e].p`), named by remote id (`shop/crud-api`).
 
-edition 2026
-
 input env: enum("dev", "prod") = "dev"
 input region: string = "us-east1"
 input replicas: int = 2 check replicas >= 1

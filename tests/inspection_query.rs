@@ -78,7 +78,7 @@ fn query_never_prints_a_labeled_secret() {
     let s = Scratch::new("query-secret");
     s.write(
         "p.df",
-        r#"edition 2026
+        r#"
 resource leaky.vault v { password = "VAULT-SECRET-DO-NOT-PRINT" }
            note(n) where p = v.password, n = format("pw is %s", p)"#,
     );

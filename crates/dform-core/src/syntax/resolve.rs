@@ -45,9 +45,6 @@ mod provider;
 mod singleton;
 pub use provider::ENV_VAR;
 
-/// The one edition this compiler reads.
-pub const EDITION_YEAR: i64 = 2026;
-
 /// One parsed file of a program.
 pub struct Unit {
     /// `diag` source id.
@@ -115,14 +112,15 @@ pub enum SettingValue {
 }
 
 /// Lower `entries` (and, through their imports, the rest of `units`).
-/// `require_edition`: every file must start with the edition pragma.
+/// `file`: they are program files, where a surface form says what the
+/// core would (H-15); else text the compiler or a provider wrote.
 pub fn lower(
     units: &[Unit],
     entries: &[usize],
-    require_edition: bool,
+    file: bool,
     mode: Mode,
 ) -> Result<Program, Vec<Diagnostic>> {
-    lower_stack(units, entries, require_edition, mode, None, &[])
+    lower_stack(units, entries, file, mode, None, &[])
 }
 
 /// [`lower`], the program being the stack `stack`: its settings lower to
@@ -131,7 +129,7 @@ pub fn lower(
 pub fn lower_stack(
     units: &[Unit],
     entries: &[usize],
-    require_edition: bool,
+    file: bool,
     mode: Mode,
     stack: Option<&StackSource>,
     deployed: &[Deployed],
@@ -139,17 +137,17 @@ pub fn lower_stack(
     let mut l = Lowerer::new(units, entries, deployed, mode == Mode::Text);
     l.text = mode == Mode::Text;
     l.any_type = mode == Mode::Pattern;
-    l.core = !require_edition;
+    l.core = !file;
     if mode == Mode::Program {
         l.check_heads();
     }
     let mut statements = l.declare_builtin_externs();
     for &e in entries {
-        statements.extend(l.unit(e, require_edition));
+        statements.extend(l.unit(e));
     }
     for (i, u) in units.iter().enumerate() {
         if u.path.is_some() && !entries.contains(&i) {
-            statements.extend(l.unit(i, require_edition));
+            statements.extend(l.unit(i));
         }
     }
     let settings = stack.and_then(|st| l.stack_settings(st, entries));
@@ -1321,60 +1319,20 @@ impl<'u> Lowerer<'u> {
 
     // --- files --------------------------------------------------------------
 
-    fn unit(&mut self, i: usize, require_edition: bool) -> Vec<Stmt> {
+    fn unit(&mut self, i: usize) -> Vec<Stmt> {
         let unit = &self.units[i];
         let (file, root) = (unit.file, unit.root.clone());
         let saved = self.file;
         self.file = file;
         let scope = self.decls.files[&file];
         let mut statements = Vec::new();
-        let mut first = true;
-        let edition = root.children().any(|n| n.kind() == EDITION);
         self.quoted_keys(&root);
         for n in root.children() {
             match n.kind() {
-                ERROR => {}
-                EDITION => {
-                    let year = tokens(&n).find(|t| t.kind() == INT);
-                    let ok = year
-                        .as_ref()
-                        .is_some_and(|t| t.text() == EDITION_YEAR.to_string());
-                    if !ok {
-                        let d = Diagnostic::error(
-                            self.span(&n),
-                            format!(
-                                "unknown edition {}: this compiler reads edition {EDITION_YEAR}",
-                                year.map(|t| t.text().to_string()).unwrap_or_default()
-                            ),
-                        );
-                        self.diags.push(d);
-                    } else if !first {
-                        let d = Diagnostic::error(
-                            self.span(&n),
-                            "the edition pragma must be the first statement of the file",
-                        );
-                        self.diags.push(d);
-                    }
-                }
-                _ => {
-                    if first && require_edition && !edition {
-                        let at = self.span(&n);
-                        let d = Diagnostic::error(
-                            Span {
-                                end: at.start,
-                                ..at
-                            },
-                            format!("missing the edition pragma `edition {EDITION_YEAR}`"),
-                        )
-                        .with_help(format!(
-                            "every .df file starts with `edition {EDITION_YEAR}` (docs/grammar.md)"
-                        ));
-                        self.diags.push(d);
-                    }
-                    statements.extend(self.stmt(&n, scope, &Rc::default()));
-                }
+                // `edition` is a syntax error (R-68).
+                ERROR | EDITION => {}
+                _ => statements.extend(self.stmt(&n, scope, &Rc::default())),
             }
-            first = false;
         }
         // A module's file lowers to the module it is (R-65), named by its
         // path.
@@ -1401,21 +1359,6 @@ impl<'u> Lowerer<'u> {
                     statements.push(Stmt::Fact(atom_at("doc", args, span)));
                 }
             }
-        }
-        if first && require_edition {
-            let d = Diagnostic::error(
-                Span {
-                    file: self.file,
-                    start: 0,
-                    end: 0,
-                    origin: 0,
-                },
-                format!("missing the edition pragma `edition {EDITION_YEAR}`"),
-            )
-            .with_help(format!(
-                "every .df file starts with `edition {EDITION_YEAR}`"
-            ));
-            self.diags.push(d);
         }
         self.file = saved;
         statements
@@ -6661,15 +6604,10 @@ mod tests {
     }
 
     /// `src` lowered as text that is not a file (the core relations
-    /// writable), or, `file`, as a program file (`edition 2026` first).
+    /// writable), or, `file`, as a program file.
     fn parse_as(src: &str, file: bool) -> anyhow::Result<crate::ast::Program> {
-        let src = if file {
-            format!("edition 2026\n{src}")
-        } else {
-            src.to_string()
-        };
-        let file_id = crate::diag::add_source("t.df", &src);
-        let parse = crate::syntax::parser::parse(&src);
+        let file_id = crate::diag::add_source("t.df", src);
+        let parse = crate::syntax::parser::parse(src);
         assert!(parse.errors.is_empty(), "{:?}", parse.errors);
         let units = [super::Unit {
             file: file_id,

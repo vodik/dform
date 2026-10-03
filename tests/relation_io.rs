@@ -20,7 +20,7 @@ fn sources_and_stated_rows_are_one_relation() {
     s.write("b.yaml", "rows:\n  - x: b\n");
     s.write(
         "p.df",
-        "edition 2026\ninput r from csv(\"a.csv\")\ninput r from yaml(\"b.yaml\").rows\n\
+        "\ninput r from csv(\"a.csv\")\ninput r from yaml(\"b.yaml\").rows\n\
          decl r(x: string)\nr(\"c\")\nprovider fake\n",
     );
     let r = s.run(&["query", "r(x)", "p.df"]).success();
@@ -53,7 +53,7 @@ fn a_components_relation_input_is_given_by_rows_and_by_from() {
     s.write(
         "p.df",
         &format!(
-            "edition 2026\nkey env: enum(\"dev\", \"prod\") = \"dev\"\n{NET}\
+            "\nkey env: enum(\"dev\", \"prod\") = \"dev\"\n{NET}\
              az(\"a\", 0)\naz(\"b\", 1)\n\
              instance subnets blue {{\n  cidr = \"10.0.0.0/16\"\n  zone(n, i) where az(n, i)\n  \
              zone from csv(\"z.csv\")\n}}\n\
@@ -112,12 +112,12 @@ fn a_used_modules_relation_input_is_its_blocks() {
     let s = Scratch::project("rel-io-use");
     s.write(
         "zones.df",
-        "edition 2026\ninput zone\ndecl zone(name: string, index: int)\n\
+        "\ninput zone\ndecl zone(name: string, index: int)\n\
          let count = list.len([ z | zone(z, _) ])\n",
     );
     s.write(
         "p.df",
-        "edition 2026\nuse zones {\n  zone(\"a\", 0)\n  zone(z, 1) where z = \"b\"\n}\n\
+        "\nuse zones {\n  zone(\"a\", 0)\n  zone(z, 1) where z = \"b\"\n}\n\
          resource net.vpc main {\n  cidr = \"10.0.0.0/16\"\n  n = zones.count\n}\nprovider fake\n",
     );
     let r = plan(&s, "p.df").success();
@@ -125,7 +125,7 @@ fn a_used_modules_relation_input_is_its_blocks() {
 
     s.write(
         "p.df",
-        "edition 2026\ninput zone\ndecl zone(n: string)\nprovider fake\n",
+        "\ninput zone\ndecl zone(n: string)\nprovider fake\n",
     );
     let r = plan(&s, "p.df").failure();
     assert!(
@@ -136,9 +136,9 @@ fn a_used_modules_relation_input_is_its_blocks() {
     );
     s.write(
         "zones.df",
-        "edition 2026\ninput zone from csv(\"z.csv\")\ndecl zone(name: string)\n",
+        "\ninput zone from csv(\"z.csv\")\ndecl zone(name: string)\n",
     );
-    s.write("p.df", "edition 2026\nuse zones\nprovider fake\n");
+    s.write("p.df", "\nuse zones\nprovider fake\n");
     let r = plan(&s, "p.df").failure();
     assert!(
         r.stderr
@@ -178,7 +178,7 @@ fn a_relation_output_is_read_from_a_copy_and_from_every_copy() {
     s.write(
         "p.df",
         &format!(
-            "edition 2026\n{VNET}\
+            "\n{VNET}\
              resource compute.vm \"vm-${{z}}\" {{\n  size = 1\n  subnet = s\n}} \
              where blue.subnet(s, z), s in net.subnet\n\
              seen(t, s) where vnet[t].subnet(s, _)\n\
@@ -225,12 +225,12 @@ fn a_stacks_relation_output_is_read_across_stacks() {
     let s = Scratch::project("rel-io-stacks");
     s.write(
         "stacks/zones.df",
-        "edition 2026\nkey env: string = \"dev\"\nprovider fake\n\
+        "\nkey env: string = \"dev\"\nprovider fake\n\
          zone(\"${env}-a\", 0)\nzone(\"${env}-b\", 1)\noutput zone\n",
     );
     s.write(
         "stacks/app.df",
-        "edition 2026\nprovider fake\nuse stacks.zones\n\
+        "\nprovider fake\nuse stacks.zones\n\
          resource compute.vm \"vm-${z}\" {\n  size = n\n} where zones[env=\"prod\"].zone(z, n)\n",
     );
     s.run(&["apply", "zones", "env=prod"]).success();

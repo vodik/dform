@@ -19,7 +19,7 @@ fn a_misspelled_attribute_in_a_field_warns_at_the_read() {
     let s = Scratch::new("field-read");
     let r = plan(
         &s,
-        r#"edition 2026
+        r#"
 resource net.vpc main { cidr = "10.0.0.0/16" }
 resource net.subnet a {
   cidr = "10.0.1.0/24"
@@ -44,7 +44,7 @@ fn a_read_that_finds_a_row_or_a_gated_block_is_quiet() {
     let s = Scratch::new("field-read-ok");
     let r = plan(
         &s,
-        r#"edition 2026
+        r#"
 input env: string = "prod"
 resource net.vpc main { cidr = "10.0.0.0/16" }
 resource net.subnet a {

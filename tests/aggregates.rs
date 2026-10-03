@@ -20,7 +20,7 @@ fn facts(src: &str, pred: &str) -> Vec<String> {
 }
 
 fn error(src: &str) -> String {
-    parse_file("t.df", &format!("edition 2026\n{src}"))
+    parse_file("t.df", &format!("\n{src}"))
         .map(|_| ())
         .unwrap_err()
         .to_string()
@@ -199,7 +199,7 @@ fn why_shows_the_groups_rows() {
     let s = Scratch::project("lang-aggregates");
     s.write(
         "p.df",
-        "edition 2026\nprovider fake\n\nsubnet(\"a\", \"vpc-1\")\nsubnet(\"b\", \"vpc-1\")\nsubnet(\"c\", \"vpc-2\")\n\nper_vpc(v, n) where n = count(s), subnet(s, v)\ncrowded(v) where n = count(s), subnet(s, v), n > 1\n",
+        "\nprovider fake\n\nsubnet(\"a\", \"vpc-1\")\nsubnet(\"b\", \"vpc-1\")\nsubnet(\"c\", \"vpc-2\")\n\nper_vpc(v, n) where n = count(s), subnet(s, v)\ncrowded(v) where n = count(s), subnet(s, v), n > 1\n",
     );
     let r = s.run(&["why", "per_vpc(\"vpc-1\", _)", "p.df"]).success();
     assert!(

@@ -13,7 +13,7 @@ fn world(s: &Scratch) -> serde_json::Value {
     serde_json::from_str(&s.read("w.json")).unwrap()
 }
 
-const NET: &str = r#"edition 2026
+const NET: &str = r#"
 
 resource net.vpc main { cidr = "10.0.0.0/16" }
 lifecycle(main, "prevent_destroy")
@@ -30,7 +30,7 @@ fn prevent_destroy_makes_a_delete_a_deny() {
     // The resource goes; the fact stays, naming it by its address.
     s.write(
         "p.df",
-        "edition 2026\nlifecycle(net.vpc[\"main\"], \"prevent_destroy\")\nprovider fake\n",
+        "\nlifecycle(net.vpc[\"main\"], \"prevent_destroy\")\nprovider fake\n",
     );
     let r = dform(&s, &["plan"]).failure();
     assert!(r.stdout.contains("- net.vpc[\"main\"]"), "{}", r.stdout);
@@ -72,7 +72,7 @@ fn moved_closes_rename_is_destroy() {
     let s = Scratch::new("moved");
     let prog = |inst: &str| {
         format!(
-            r#"edition 2026
+            r#"
 
 component network {{
   resource net.vpc vpc {{ cidr = "10.0.0.0/16" }}
@@ -137,7 +137,7 @@ fn ignore_changes_drops_the_path_from_both_sides() {
     let s = Scratch::new("ignore-changes");
     let prog = |team: &str| {
         format!(
-            "edition 2026\nresource net.vpc main {{ cidr = \"10.0.0.0/16\", tags = {{ team: \"{team}\" }} }}\n\
+            "\nresource net.vpc main {{ cidr = \"10.0.0.0/16\", tags = {{ team: \"{team}\" }} }}\n\
              ignore_changes(main, \"tags.owner\")\nprovider fake\n"
         )
     };
@@ -178,7 +178,7 @@ fn policy_reads_lifecycle_facts() {
     let s = Scratch::new("lifecycle-policy");
     s.write(
         "p.df",
-        r#"edition 2026
+        r#"
 
 resource db.postgres main { size = 1 }
 deny "databases must be protected" {addr: a} where {
@@ -194,10 +194,7 @@ provider fake
         "{}",
         r.stderr
     );
-    s.write(
-        "lib.df",
-        "edition 2026\nlifecycle(main, \"prevent_destroy\")\n",
-    );
+    s.write("lib.df", "\nlifecycle(main, \"prevent_destroy\")\n");
     s.write(
         "p.df",
         &s.read("p.df")
@@ -213,7 +210,7 @@ fn ignore_changes_still_sets_the_path_on_create() {
     let s = Scratch::new("ignore-changes-create");
     let prog = |owner: &str| {
         format!(
-            "edition 2026\nresource net.vpc main {{ cidr = \"10.0.0.0/16\", tags = {{ owner: \"{owner}\" }} }}\n\
+            "\nresource net.vpc main {{ cidr = \"10.0.0.0/16\", tags = {{ owner: \"{owner}\" }} }}\n\
              ignore_changes(main, \"tags.owner\")\nprovider fake\n"
         )
     };
@@ -241,12 +238,12 @@ fn ignore_changes_update_leaves_an_absent_path_absent() {
     let s = Scratch::new("ignore-changes-absent");
     s.write(
         "p.df",
-        "edition 2026\nresource net.vpc main { cidr = \"10.0.0.0/16\", size = 1 }\nprovider fake\n",
+        "\nresource net.vpc main { cidr = \"10.0.0.0/16\", size = 1 }\nprovider fake\n",
     );
     dform(&s, &["apply"]).success();
     s.write(
         "p.df",
-        "edition 2026\nresource net.vpc main { cidr = \"10.0.0.0/16\", size = 2, tags = { owner: \"ops\" } }\nignore_changes(main, \"tags.owner\")\nprovider fake\n",
+        "\nresource net.vpc main { cidr = \"10.0.0.0/16\", size = 2, tags = { owner: \"ops\" } }\nignore_changes(main, \"tags.owner\")\nprovider fake\n",
     );
     let r = dform(&s, &["apply"]).success();
     assert!(
@@ -273,7 +270,7 @@ fn why_explains_prevent_destroy() {
     dform(&s, &["apply"]).success();
     s.write(
         "p.df",
-        "edition 2026\nlifecycle(net.vpc[\"main\"], \"prevent_destroy\")\nprovider fake\n",
+        "\nlifecycle(net.vpc[\"main\"], \"prevent_destroy\")\nprovider fake\n",
     );
     let r = dform(&s, &["why", "deny(M)"]).success();
     assert!(
@@ -306,7 +303,7 @@ fn policy_reads_the_deformation() {
     dform(&s, &["apply"]).success();
     s.write(
         "p.df",
-        "edition 2026\nresource compute.vm keep { size = 1 }\ndeny(m) where deformation(\"delete\", r, _), m = \"no deletes here: ${r}\"\nprovider fake\n",
+        "\nresource compute.vm keep { size = 1 }\ndeny(m) where deformation(\"delete\", r, _), m = \"no deletes here: ${r}\"\nprovider fake\n",
     );
     let r = dform(&s, &["plan"]).failure();
     assert!(
@@ -330,7 +327,7 @@ fn a_resource_rule_over_the_deformation_is_an_error() {
     let s = Scratch::new("deformation-circular");
     s.write(
         "p.df",
-        "edition 2026\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nresource net.vpc shadow {\n  cidr = \"10.1.0.0/16\"\n} where deformation(\"create\", main, _)\nprovider fake\n",
+        "\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nresource net.vpc shadow {\n  cidr = \"10.1.0.0/16\"\n} where deformation(\"create\", main, _)\nprovider fake\n",
     );
     let r = dform(&s, &["plan"]).failure();
     assert!(
@@ -350,7 +347,7 @@ fn a_deformation_row_is_a_reference() {
     let s = Scratch::new("deformation-reference");
     s.write(
         "p.df",
-        r#"edition 2026
+        r#"
 
 resource net.vpc main { cidr = "10.0.0.0/16" }
 resource net.vpc other { cidr = "10.1.0.0/16" }
@@ -388,7 +385,7 @@ fn a_lifecycle_fact_takes_a_resource_not_text() {
     let s = Scratch::new("lifecycle-text");
     s.write(
         "p.df",
-        "edition 2026\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nlifecycle(net.vpc, \"main\", \"prevent_destroy\")\nadopt(\"main\", \"vpc-1\")\n",
+        "\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nlifecycle(net.vpc, \"main\", \"prevent_destroy\")\nadopt(\"main\", \"vpc-1\")\n",
     );
     let r = dform(&s, &["plan"]).failure();
     assert!(

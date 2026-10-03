@@ -11,7 +11,6 @@
 #   - keyless sets: the security group's ingress rules have no key; the plan
 #     compares them as a set, so their order never matters.
 
-edition 2026
 provider aws
 
 resource aws.vpc main { cidr_block = "10.0.0.0/16", tags = { "Name": "main" } }

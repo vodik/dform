@@ -20,7 +20,7 @@ fn deletes_run_in_reverse_dependency_order() {
     let s = Scratch::new("delete-order");
     s.write(
         "p.df",
-        r#"edition 2026
+        r#"
 
 resource net.vpc main { cidr = "10.0.0.0/16" }
 resource net.vpc_peering p { vpc_id = ref(net.vpc, "main", "id") }
@@ -36,7 +36,7 @@ provider fake
     );
     s.write(
         "p.df",
-        "edition 2026\nresource compute.vm keep { size = 1 }\nprovider fake\n",
+        "\nresource compute.vm keep { size = 1 }\nprovider fake\n",
     );
     let r = dform(&s, &["apply"]).success();
     let order: Vec<&str> = r.stdout.lines().filter(|l| l.starts_with("- ")).collect();
@@ -61,7 +61,7 @@ provider fake
     );
 }
 
-const NET: &str = r#"edition 2026
+const NET: &str = r#"
 
 resource net.vpc main { cidr = "10.0.0.0/16" }
 resource net.subnet a { vpc_id = ref(net.vpc, "main", "id"), tier = "web" }

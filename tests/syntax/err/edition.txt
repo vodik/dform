@@ -1,0 +1,2 @@
+tests/syntax/err/edition.df:2:1: `edition` is gone: a project's edition is its dform.toml's, `[project] edition = "2026"`
+  help: delete the line; `dform fmt` does

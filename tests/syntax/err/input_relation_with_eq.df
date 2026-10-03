@@ -1,5 +1,3 @@
-edition 2026
-
 # `=` gives a value, `from` gives rows (R-57): a relation input's rows
 # come from a document.
 input zone(name, index) = [["us-east-1a", 0]]

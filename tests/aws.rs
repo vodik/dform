@@ -117,7 +117,7 @@ fn keyless_sets_ignore_order() {
 /// README's opening program on the mock: `aws.availability_zone` is a
 /// table the provider answers (R-36), one row per zone with a stable
 /// index, so the n-th zone gets the n-th /24.
-const ZONES: &str = r#"edition 2026
+const ZONES: &str = r#"
 
 provider aws { region = "us-east-1" }
 
@@ -137,7 +137,7 @@ fn a_data_source_is_a_table_with_an_index() {
     let s = Scratch::project("aws-zones");
     s.write(
         "dform.toml",
-        "[providers]\naws = { source = \"aws-mock\" }\n",
+        "[project]\nedition = \"2026\"\n\n[providers]\naws = { source = \"aws-mock\" }\n",
     );
     s.write("main.df", ZONES);
     let r = s.run(&["plan", "main.df"]).success();
@@ -166,7 +166,7 @@ fn a_type_names_the_provider_to_declare() {
     let s = Scratch::project("aws-undeclared");
     s.write(
         "main.df",
-        "edition 2026\nprovider fake\nresource aws.vpc main { cidr_block = \"10.0.0.0/16\" }\n",
+        "\nprovider fake\nresource aws.vpc main { cidr_block = \"10.0.0.0/16\" }\n",
     );
     let r = s.run(&["plan", "main.df"]).failure();
     assert!(

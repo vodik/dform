@@ -192,10 +192,10 @@ fn separates(t: &dform::syntax::SyntaxToken) -> bool {
 #[test]
 fn check_lists_unformatted_files_and_fmt_rewrites_them() {
     let s = Scratch::new("fmt");
-    s.write("ok.df", "edition 2026\n\np(\"a\")\nprovider fake\n");
+    s.write("ok.df", "p(\"a\")\nprovider fake\n");
     s.write(
         "messy.df",
-        "edition 2026\nresource net.vpc main {\n    cidr = \"10.0.0.0/16\",\n    tags = {team:\"x\"},\n}\nprovider fake\n",
+        "resource net.vpc main {\n    cidr = \"10.0.0.0/16\",\n    tags = {team:\"x\"},\n}\nprovider fake\n",
     );
     let r = s.run(&["fmt", "--check", "ok.df", "messy.df"]).failure();
     assert_eq!(r.stdout, "messy.df\n");
@@ -205,7 +205,7 @@ fn check_lists_unformatted_files_and_fmt_rewrites_them() {
     s.run(&["fmt", "ok.df", "messy.df"]).success();
     assert_eq!(
         s.read("messy.df"),
-        "edition 2026\nresource net.vpc main { cidr = \"10.0.0.0/16\", tags = { team: \"x\" } }\nprovider fake\n"
+        "resource net.vpc main { cidr = \"10.0.0.0/16\", tags = { team: \"x\" } }\nprovider fake\n"
     );
     s.run(&["fmt", "--check", "ok.df", "messy.df"]).success();
 }
@@ -214,14 +214,14 @@ fn check_lists_unformatted_files_and_fmt_rewrites_them() {
 #[test]
 fn fmt_refuses_a_file_that_does_not_parse() {
     let s = Scratch::new("fmt-error");
-    let bad = "edition 2026\np(\"a\") where q(]\nprovider fake\n";
+    let bad = "p(\"a\") where q(]\nprovider fake\n";
     s.write("bad.df", bad);
     let r = s.run(&["fmt", "bad.df"]).failure();
-    assert!(r.stderr.contains("bad.df:2:"), "{}", r.stderr);
+    assert!(r.stderr.contains("bad.df:1:"), "{}", r.stderr);
     assert_eq!(s.read("bad.df"), bad);
 }
 
-/// A file's header is `edition`, then `key` and `input` lines (value
+/// A file's header is `key` and `input` lines (value
 /// inputs, then relation inputs), then `decl` and `output` (R-11a), then
 /// the body; `use` is a body statement (R-65): `fmt` moves a header
 /// statement written below the body, or out of its kind's order, with the
@@ -230,10 +230,10 @@ fn fmt_refuses_a_file_that_does_not_parse() {
 /// `input`, R-27), so this is `fmt`'s own placement, not the parser's.
 #[test]
 fn fmt_puts_the_header_in_order() {
-    let src = "# A program.\n\nedition 2026\n\ninput b: int\n# The key.\nkey env: string\n\n\
+    let src = "# A program.\n\ninput b: int\n# The key.\nkey env: string\n\n\
                provider fake\n\n#| The relation.\ninput p from csv(\"p.csv\")\ndecl p(a)\n\n\
                p2(x) where p(x)\noutput r = p2(1)\nuse m # its modules\ninput a: int\n";
-    let want = "# A program.\n\nedition 2026\n\n# The key.\n\
+    let want = "# A program.\n\n# The key.\n\
                 key env: string\ninput b: int\ninput a: int\n#| The relation.\n\
                 input p from csv(\"p.csv\")\ndecl p(a)\noutput r = p2(1)\n\nprovider fake\n\n\
                 p2(x) where p(x)\nuse m # its modules\n";
@@ -252,10 +252,10 @@ fn fmt_puts_the_header_in_order() {
 /// moved.
 #[test]
 fn fmt_orders_a_components_interface_first() {
-    let src = "edition 2026\n\ncomponent m {\n  input a: int\n\n  p(x) where q(x)\n  \
+    let src = "component m {\n  input a: int\n\n  p(x) where q(x)\n  \
                use helper\n  decl q(a)\n  instance other o\n  #| the answer\n  \
                output r = p(a)\n}\n";
-    let want = "edition 2026\n\ncomponent m {\n  input a: int\n  decl q(a)\n  \
+    let want = "component m {\n  input a: int\n  decl q(a)\n  \
                 #| the answer\n  output r = p(a)\n\n  p(x) where q(x)\n  use helper\n  \
                 instance other o\n}\n";
     assert_eq!(fmt(src), want);
@@ -266,10 +266,10 @@ fn fmt_orders_a_components_interface_first() {
 /// (R-26): `{}` parses, and `fmt` drops it; a block with a comment stays.
 #[test]
 fn fmt_drops_an_empty_block() {
-    let src = "edition 2026\n\nprovider fake {}\nprovider env {\n}\nprovider k8s { # later\n}\n\
+    let src = "provider fake {}\nprovider env {\n}\nprovider k8s { # later\n}\n\
                component m {\n  input n: int = 1\n}\ninstance m a {} where 1 == 1\ninstance m b {   }\n\
                resource net.vpc v {}\n";
-    let want = "edition 2026\n\nprovider fake\nprovider env\nprovider k8s { # later\n}\n\
+    let want = "provider fake\nprovider env\nprovider k8s { # later\n}\n\
                 component m {\n  input n: int = 1\n}\ninstance m a where 1 == 1\ninstance m b\n\
                 resource net.vpc v {}\n";
     assert_eq!(fmt(src), want);
@@ -281,10 +281,10 @@ fn fmt_drops_an_empty_block() {
 /// provider's `source` as written; both forms print back.
 #[test]
 fn fmt_puns_an_entry_whose_value_is_its_name() {
-    let src = "edition 2026\n\nprovider aws { region = region, source = source }\n\
+    let src = "provider aws { region = region, source = source }\n\
                resource net.subnet s {\n  zone = zone\n  spec.selector.color = color @default\n  \
                cidr = zone\n  tags += tags\n}\n";
-    let want = "edition 2026\n\nprovider aws { region, source = source }\n\
+    let want = "provider aws { region, source = source }\n\
                 resource net.subnet s { zone, spec.selector.color @default, cidr = zone, tags += tags }\n";
     assert_eq!(fmt(src), want);
     assert_eq!(fmt(want), want);

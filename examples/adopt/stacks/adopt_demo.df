@@ -3,8 +3,6 @@
 # Staging creates the VPC; prod adopts the one the inventory already has.
 # To run it, from this directory: README.md.
 
-edition 2026
-
 input env: enum("staging", "prod") = "staging"
 
 # The mock's built-in fake schema.

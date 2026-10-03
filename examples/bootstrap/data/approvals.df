@@ -3,7 +3,5 @@
 # with `use data.approvals`. `dform-approve sign .. --format fact` appends
 # one.
 
-edition 2026
-
 decl approve(type, address)
 decl approval(token)

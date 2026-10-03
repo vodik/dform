@@ -21,7 +21,7 @@ fn facts(src: &str, pred: &str) -> Vec<String> {
 }
 
 fn error(src: &str) -> String {
-    parse_file("t.df", &format!("edition 2026\n{src}"))
+    parse_file("t.df", &format!("\n{src}"))
         .map(|_| ())
         .unwrap_err()
         .to_string()
@@ -82,7 +82,7 @@ untiered(l) where labels(l), not ("tier", _) in l
 
 /// What lowering a program file reports.
 fn lower_error(src: &str) -> String {
-    let p = parse_file("t.df", &format!("edition 2026\n{src}")).unwrap_or_else(|e| panic!("{e:#}"));
+    let p = parse_file("t.df", &format!("\n{src}")).unwrap_or_else(|e| panic!("{e:#}"));
     match dform_core::transform::lower(&p) {
         Ok(_) => panic!("lowers: {src}"),
         Err(e) => format!("{e:#}"),
@@ -248,7 +248,7 @@ fn why_shows_the_pattern_as_written() {
     let s = Scratch::project("lang-patterns");
     s.write(
         "p.df",
-        "edition 2026\nprovider fake\n\nlabels({ app: \"web\" })\n\nlabel(k, v) where labels(l), (k, v) in l\n",
+        "\nprovider fake\n\nlabels({ app: \"web\" })\n\nlabel(k, v) where labels(l), (k, v) in l\n",
     );
     let r = s.run(&["why", "label(_, _)", "p.df"]).success();
     assert!(

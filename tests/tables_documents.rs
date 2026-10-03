@@ -20,7 +20,7 @@ fn a_toml_document_holds_several_relations() {
     );
     s.write(
         "p.df",
-        "edition 2026\ninput az from toml(\"net.toml\")\n\
+        "\ninput az from toml(\"net.toml\")\n\
          input peering from toml(\"net.toml\").peerings\n\
          decl az(name: string, index: int)\ndecl peering(name: string, peer: string)\n\
          provider fake\nlet net = toml(\"net.toml\")\n\
@@ -54,7 +54,7 @@ fn a_selector_reads_rows_and_their_enclosing_objects() {
     );
     let program = |cols: &str| {
         format!(
-            "edition 2026\ninput zone from yaml(\"regions.yaml\").regions[*].zones\n\
+            "\ninput zone from yaml(\"regions.yaml\").regions[*].zones\n\
              decl zone({cols})\nprovider fake\n\
              resource net.subnet \"${{r}}-${{z}}\" {{ cidr = \"10.0.0.0/24\" }} where zone(r, z)\n"
         )
@@ -98,7 +98,7 @@ fn a_relation_is_read_from_an_input_or_a_let() {
     );
     s.write(
         "p.df",
-        "edition 2026\ninput vlans: list(any) = [{ id: 10, cidr: \"10.0.10.0/24\" }]\n\
+        "\ninput vlans: list(any) = [{ id: 10, cidr: \"10.0.10.0/24\" }]\n\
          input vlan from vlans\ninput team from teams.teams\n\
          decl vlan(id: int, cidr: inet)\ndecl team(name: string, port: int)\nprovider fake\n\
          let teams = json(\"teams.json\")\n\
@@ -135,7 +135,7 @@ fn a_document_is_read_at_a_git_commit() {
     let commit = push(&s, "pins.csv", "app,image\nweb,web:1\n", "main");
     s.write(
         "p.df",
-        "edition 2026\nprovider fake\n\
+        "\nprovider fake\n\
          let pins = csv(git(\"ops.git\", \"main\", \"pins.csv\"))\n\
          resource compute.vm web { image = pins[0].image }\n",
     );

@@ -2,6 +2,7 @@
 
 [project]
 name = "aws"
+edition = "2026"
 
 # The Terraform-shaped mock AWS provider: a built-in schema the mock plays.
 [providers]
