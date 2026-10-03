@@ -23,7 +23,7 @@ use crate::ast::{Atom, Program, Term};
 use crate::engine::EvalResult;
 use crate::ir::Address;
 use crate::partition::{fmt_atom, fmt_bare, fmt_value};
-use crate::provider::{Action, ActionKind, Change, NULL_KEY, Plan, marker};
+use crate::provider::{Action, ActionKind, Change, NULL_KEY, Plan, json_to_value, marker};
 use crate::query::Redactor;
 use crate::schema::Schema;
 use crate::stuck::{Sections, Stuck};
@@ -72,9 +72,9 @@ pub fn shown(v: Option<&Json>, sensitive: bool, schema: &Schema, r: &Redactor) -
         // At a sensitive path, a derived secret by the call that derived
         // it (`random.password("db")`), anything else bare.
         None if sensitive || has_secret(v) => {
-            Shown::Sensitive(r.derived(&json_value(v)).map(str::to_string))
+            Shown::Sensitive(r.derived(&json_to_value(v)).map(str::to_string))
         }
-        None => match secret_in(&r.json(&json_value(v))) {
+        None => match secret_in(&r.json(&json_to_value(v))) {
             Some(l) => Shown::Sensitive(Some(l)),
             None => Shown::Value(v.clone()),
         },
@@ -104,21 +104,6 @@ fn secret_in(v: &Json) -> Option<String> {
         Json::Object(m) => m.values().find_map(secret_in),
         Json::Array(xs) => xs.iter().find_map(secret_in),
         _ => None,
-    }
-}
-
-/// A provider document's JSON as a fact store value, to ask the redactor.
-fn json_value(v: &Json) -> Value {
-    match v {
-        Json::String(s) => Value::Str(s.clone()),
-        Json::Bool(b) => Value::Bool(*b),
-        Json::Number(n) => n
-            .as_i64()
-            .map(Value::Int)
-            .unwrap_or(Value::Str(n.to_string())),
-        Json::Array(xs) => Value::List(xs.iter().map(json_value).collect()),
-        Json::Object(m) => Value::Obj(m.iter().map(|(k, x)| (k.clone(), json_value(x))).collect()),
-        Json::Null => Value::Str(String::new()),
     }
 }
 
