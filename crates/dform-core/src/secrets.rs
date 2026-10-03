@@ -562,43 +562,18 @@ fn names_secret(t: &Term, secret: &dyn Fn(&Term) -> bool) -> bool {
 // `memo.first` of a secret candidate is sealed with a key derived from the
 // stack's key (`state.key`) before it goes into state, and opened in
 // memory by the run that reads it; `random.*` derives from a master
-// secret by HKDF. HMAC-SHA256 is the one primitive: the seal is
-// encrypt-then-MAC with HMAC in counter mode as the stream (a PRF keyed
-// apart from the MAC key), so no cipher crate is needed.
-
-/// HMAC-SHA256 (RFC 2104) of the concatenation of `parts` under `key`.
-pub fn hmac(key: &[u8], parts: &[&[u8]]) -> [u8; 32] {
-    use sha2::{Digest, Sha256};
-    let mut k = [0u8; 64];
-    if key.len() > 64 {
-        k[..32].copy_from_slice(&Sha256::digest(key));
-    } else {
-        k[..key.len()].copy_from_slice(key);
-    }
-    let mut inner = Sha256::new().chain_update(k.map(|x| x ^ 0x36));
-    for p in parts {
-        inner.update(p);
-    }
-    Sha256::new()
-        .chain_update(k.map(|x| x ^ 0x5c))
-        .chain_update(inner.finalize())
-        .finalize()
-        .into()
-}
+// secret by HKDF. The seal is XChaCha20-Poly1305 (the `chacha20poly1305`
+// crate) under a key HKDF-SHA256 (the `hkdf` crate) derives from the
+// stack's, with a random 24-byte nonce per value and the label as the
+// associated data.
 
 /// HKDF-SHA256 (RFC 5869): `len` bytes (at most 255 blocks) of key
 /// material for `info` from the input key material `ikm`.
 pub fn hkdf(salt: &[u8], ikm: &[u8], info: &[u8], len: usize) -> Vec<u8> {
-    let prk = hmac(salt, &[ikm]);
-    let mut out = Vec::with_capacity(len);
-    let mut t: Vec<u8> = Vec::new();
-    let mut i = 1u8;
-    while out.len() < len {
-        t = hmac(&prk, &[&t, info, &[i]]).to_vec();
-        out.extend_from_slice(&t);
-        i = i.checked_add(1).expect("hkdf: at most 255 blocks");
-    }
-    out.truncate(len);
+    let mut out = vec![0u8; len];
+    hkdf::Hkdf::<sha2::Sha256>::new(Some(salt), ikm)
+        .expand(info, &mut out)
+        .expect("hkdf: at most 255 blocks");
     out
 }
 
@@ -618,36 +593,39 @@ pub fn derived(k: &crate::zset::file::Key, what: &str) -> [u8; 32] {
     key_bytes(&k.derive(what))
 }
 
-/// `bytes` XOR the HMAC-CTR stream of `key` and `nonce`.
-fn stream(key: &[u8], nonce: &[u8], bytes: &[u8]) -> Vec<u8> {
-    bytes
-        .chunks(32)
-        .enumerate()
-        .flat_map(|(i, c)| {
-            let ks = hmac(key, &[nonce, &(i as u64).to_be_bytes()]);
-            c.iter().zip(ks).map(|(b, k)| b ^ k).collect::<Vec<_>>()
-        })
-        .collect()
+/// The held store's cipher: its key HKDF of the stack's.
+fn cipher(k: &crate::zset::file::Key) -> chacha20poly1305::XChaCha20Poly1305 {
+    use chacha20poly1305::KeyInit;
+    let key = hkdf(b"dform held store", &key_bytes(k), b"xchacha20poly1305", 32);
+    chacha20poly1305::XChaCha20Poly1305::new_from_slice(&key).expect("a 32-byte key")
 }
+
+/// The length of a seal's nonce, and of its tag.
+const NONCE: usize = 24;
+const TAG: usize = 16;
 
 /// `plain` sealed under the stack key `k` for `label` (what it is bound
 /// to: another label's seal does not open as this one): base64 of a
-/// random nonce, the ciphertext and its tag.
+/// random nonce and the ciphertext with its tag.
 pub fn seal(k: &crate::zset::file::Key, label: &str, plain: &[u8]) -> Result<String> {
     use base64::Engine;
+    use chacha20poly1305::aead::{Aead, Payload};
     use std::io::Read;
-    let mut nonce = [0u8; 16];
+    let mut nonce = [0u8; NONCE];
     std::fs::File::open("/dev/urandom")
         .and_then(|mut f| f.read_exact(&mut nonce))
         .map_err(|e| anyhow::anyhow!("read /dev/urandom for a seal's nonce: {e}"))?;
-    let ct = stream(&derived(k, "held store: stream"), &nonce, plain);
-    let tag = hmac(
-        &derived(k, "held store: mac"),
-        &[label.as_bytes(), &[0], &nonce, &ct],
-    );
+    let ct = cipher(k)
+        .encrypt(
+            (&nonce).into(),
+            Payload {
+                msg: plain,
+                aad: label.as_bytes(),
+            },
+        )
+        .map_err(|_| anyhow::anyhow!("{label}: seal the held value"))?;
     let mut out = nonce.to_vec();
     out.extend_from_slice(&ct);
-    out.extend_from_slice(&tag);
     Ok(base64::engine::general_purpose::STANDARD.encode(out))
 }
 
@@ -655,40 +633,38 @@ pub fn seal(k: &crate::zset::file::Key, label: &str, plain: &[u8]) -> Result<Str
 /// not one (another key, another label, altered).
 pub fn open(k: &crate::zset::file::Key, label: &str, sealed: &str) -> Result<Vec<u8>> {
     use base64::Engine;
+    use chacha20poly1305::aead::{Aead, Payload};
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(sealed)
         .map_err(|e| anyhow::anyhow!("{label}: the held value is not base64: {e}"))?;
-    if bytes.len() < 48 {
+    if bytes.len() < NONCE + TAG {
         anyhow::bail!("{label}: the held value is too short to be a seal");
     }
-    let (nonce, rest) = bytes.split_at(16);
-    let (ct, tag) = rest.split_at(rest.len() - 32);
-    let want = hmac(
-        &derived(k, "held store: mac"),
-        &[label.as_bytes(), &[0], nonce, ct],
-    );
-    // Compared in constant time.
-    if want.iter().zip(tag).fold(0u8, |d, (a, b)| d | (a ^ b)) != 0 {
-        anyhow::bail!(
-            "{label}: the held value does not open with this stack's key (state.key): \
-             another stack's key, or altered"
-        );
-    }
-    Ok(stream(&derived(k, "held store: stream"), nonce, ct))
+    let (nonce, ct) = bytes.split_at(NONCE);
+    cipher(k)
+        .decrypt(
+            nonce.into(),
+            Payload {
+                msg: ct,
+                aad: label.as_bytes(),
+            },
+        )
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "{label}: the held value does not open with this stack's key (state.key): \
+                 another stack's key, or altered"
+            )
+        })
 }
 
 #[cfg(test)]
 mod held_tests {
     use super::*;
 
-    /// RFC 4231 test case 2 and RFC 5869 test case 1.
+    /// RFC 5869 test case 1.
     #[test]
-    fn hmac_and_hkdf_match_their_rfcs() {
+    fn hkdf_matches_its_rfc() {
         let hex = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
-        assert_eq!(
-            hex(&hmac(b"Jefe", &[b"what do ya want ", b"for nothing?"])),
-            "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
-        );
         let ikm = [0x0bu8; 22];
         let salt: Vec<u8> = (0u8..=0x0c).collect();
         let info: Vec<u8> = (0xf0u8..=0xf9).collect();
@@ -715,6 +691,15 @@ mod held_tests {
         );
         assert!(open(&other, "db-pw", &s).is_err());
         assert!(open(&k, "other", &s).is_err());
+        // An altered byte anywhere (nonce, ciphertext, tag) does not open.
+        use base64::Engine;
+        let b64 = base64::engine::general_purpose::STANDARD;
+        let bytes = b64.decode(&s).unwrap();
+        for i in [0, NONCE, bytes.len() - 1] {
+            let mut bad = bytes.clone();
+            bad[i] ^= 1;
+            assert!(open(&k, "db-pw", &b64.encode(&bad)).is_err(), "byte {i}");
+        }
         assert_ne!(
             s,
             seal(

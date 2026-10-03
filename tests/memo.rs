@@ -274,3 +274,26 @@ resource db.user app {
     .success();
     assert!(r.stdout.contains("password = \"2031\""), "{}", r.stdout);
 }
+
+/// A memo first read by an apply with nothing to do is kept: the apply
+/// saves state when the memo table changed, not only when the world did.
+#[test]
+fn a_no_op_apply_keeps_a_memo_it_first_read() {
+    let s = project(
+        "memo-noop",
+        "edition 2026\nprovider fake\nresource db.user a {\n  password = \"same\"\n}\n",
+    );
+    run(&s, &[], &["apply", "p.df"]).success();
+    s.write(
+        "p.df",
+        "edition 2026\nprovider fake\nresource db.user a {\n  password = memo.first(\"pw\", \"same\")\n}\n",
+    );
+    let now = [("DFORM_TEST_NOW", "2026-10-03T09:00:00Z")];
+    let r = run(&s, &now, &["apply", "p.df"]).success();
+    assert!(r.stdout.contains("apply: nothing to do"), "{}", r.stdout);
+    let state = s.read("dform.state/p/state.json");
+    assert!(
+        state.contains("\"pw\"") && state.contains("2026-10-03T09:00:00Z"),
+        "{state}"
+    );
+}

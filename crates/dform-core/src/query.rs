@@ -239,6 +239,16 @@ impl Redactor {
                 r.add(v, &crate::value::null_label(t, &addr, p));
             }
         }
+        // `env.var(NAME)` answers a `secret(string)` (R-60): its value is
+        // `env.var/NAME`, as the plan file records it, wherever it goes.
+        for a in facts
+            .iter()
+            .filter(|a| a.pred == crate::syntax::resolve::ENV_VAR)
+        {
+            if let [Term::Val(Value::Str(name)), Term::Val(v)] = a.args.as_slice() {
+                r.add(v, &format!("{}/{name}", a.pred));
+            }
+        }
         // A memo that keeps a secret: its candidate is one too, of the
         // same label (a new master's password, say, not kept).
         for a in facts.iter().filter(|a| a.pred == crate::memo::FIRST) {

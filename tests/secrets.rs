@@ -775,3 +775,43 @@ fn kept_world_documents_hold_a_sensitive_leaf_by_its_digest() {
     );
     assert!(!memo.contains("KEPT-SECRET"), "{memo}");
 }
+
+/// `env.var(NAME)` answers a `secret(string)`: `query` and `why` print it
+/// as `env.var/NAME` (a result set by its size) though it reaches no
+/// sensitive attribute.
+#[test]
+fn an_env_var_never_prints_in_query_or_why() {
+    let s = Scratch::new("secrets-env");
+    s.write(
+        "p.df",
+        "edition 2026\nprovider env\ntok(t) where t = env.var(\"DFORM_TEST_TOK\")\n",
+    );
+    let schema = schema();
+    let mock = ["--provider", schema.as_str(), "--world", "w.json"];
+    for cmd in [
+        &["query", "tok"][..],
+        &["query", "env.var"],
+        &["query", "tok", "--json"],
+        &["why", "tok(T)"],
+    ] {
+        let out = common::dform()
+            .args(common::on("p.df", &mock, cmd))
+            .current_dir(&s.dir)
+            .env("DFORM_TEST_TOK", "ENV-TOKEN-VALUE")
+            .output()
+            .unwrap();
+        let r = common::Run::from(out).success();
+        for out in [&r.stdout, &r.stderr] {
+            assert!(!out.contains("ENV-TOKEN"), "{cmd:?}: {out}");
+        }
+        if cmd[0] == "why" || cmd.contains(&"--json") {
+            assert!(
+                r.stdout.contains("env.var/DFORM_TEST_TOK"),
+                "{cmd:?}: {}",
+                r.stdout
+            );
+        } else {
+            assert!(r.stdout.contains("secret(15 B)"), "{cmd:?}: {}", r.stdout);
+        }
+    }
+}

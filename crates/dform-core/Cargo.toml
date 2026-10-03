@@ -49,3 +49,7 @@ percent-encoding = "2"
 # every machine; `dform version` prints its version.
 jiff = { version = "0.2", default-features = false, features = ["std", "tzdb-bundle-always"] }
 jiff-tzdb = "0.1"
+# The held store (src/secrets.rs, R-60): sealed memos are XChaCha20-Poly1305
+# under a key HKDF derives from the stack's; `random.*` derives by HKDF.
+chacha20poly1305 = "0.10"
+hkdf = "0.12"
