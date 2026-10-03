@@ -212,7 +212,6 @@ $ dform query 'deformation(k, r, _)'
 k         r
 "create"  aws.subnet["private-us-east-1c"]
 "update"  aws.security_group["api"]
-(2 rows)
 ```
 
 Terraform teams build this out of plan JSON, a policy engine and a CI

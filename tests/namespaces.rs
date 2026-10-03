@@ -40,12 +40,19 @@ fn a_set_over_a_namespace_reaches_its_types_only() {
         "{}",
         r.stdout
     );
-    let cluster = r.stdout.split("+ k8s.cluster[\"c\"]\n").nth(1).unwrap_or_default();
-    let cluster: Vec<&str> = cluster.lines().take_while(|l| l.starts_with("  ")).collect();
+    let cluster = r
+        .stdout
+        .split("+ k8s.cluster[\"c\"]\n")
+        .nth(1)
+        .unwrap_or_default();
+    let cluster: Vec<&str> = cluster
+        .lines()
+        .take_while(|l| l.starts_with("  "))
+        .collect();
     assert_eq!(cluster, ["  name = \"c\""], "{}", r.stdout);
     assert_eq!(r.stdout.matches("labels.owner").count(), 2, "{}", r.stdout);
     let q = dform(&s, &["query", "every(r)"]).success();
-    assert!(q.stdout.contains("(4 rows)"), "{}", q.stdout);
+    assert_eq!(q.stdout.lines().count(), 5, "{}", q.stdout);
 }
 
 /// The plan's deformation rows bind the same way: a deleted Kubernetes

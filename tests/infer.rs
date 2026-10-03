@@ -118,18 +118,29 @@ fn literals_are_checked_against_the_settled_type() {
         "az(\"10.1.1.0/24\")\naz(4)\naz(\"foo\")\n\
          inside(n) where az(n), inet.contains(n, ip(\"10.1.1.1\"))\n",
     );
-    assert!(e.contains("t.df:3:1: `az`'s column 1 is inet, not the int 4"), "{e}");
+    assert!(
+        e.contains("t.df:3:1: `az`'s column 1 is inet, not the int 4"),
+        "{e}"
+    );
     assert!(
         e.contains("t.df:4:1: `az`'s column 1 is an inet: \"foo\" is not a network"),
         "{e}"
     );
-    assert_eq!(e.lines().filter(|l| l.starts_with("t.df")).count(), 2, "{e}");
+    assert_eq!(
+        e.lines().filter(|l| l.starts_with("t.df")).count(),
+        2,
+        "{e}"
+    );
     let e = error("az(\"10.1.1.0/24\")\naz(4)\naz(\"foo\")\n");
     assert!(
         e.contains("t.df:3:1: `az`'s column 1 holds the int 4 here and strings elsewhere"),
         "{e}"
     );
-    assert_eq!(e.lines().filter(|l| l.starts_with("t.df")).count(), 1, "{e}");
+    assert_eq!(
+        e.lines().filter(|l| l.starts_with("t.df")).count(),
+        1,
+        "{e}"
+    );
 }
 
 /// `n + 1` on a column of strings, and a comparison that is never true,
@@ -146,9 +157,7 @@ fn arithmetic_and_comparisons_are_checked() {
         e.contains("`n > \"0\"`: `n` is int, not the string \"0\""),
         "{e}"
     );
-    let e = error(
-        "zone(\"a\", 1)\nname(\"a\")\nodd(z) where zone(z, n), name(m), n != m\n",
-    );
+    let e = error("zone(\"a\", 1)\nname(\"a\")\nodd(z) where zone(z, n), name(m), n != m\n");
     assert!(
         e.contains("`n != m` compares int with string: they are never equal"),
         "{e}"
@@ -164,7 +173,10 @@ fn a_column_declared_any_takes_both() {
              release(\"schema\", 42)\n",
             "release"
         ),
-        ["release(\"digest\", \"sha256:ab\")", "release(\"schema\", 42)"]
+        [
+            "release(\"digest\", \"sha256:ab\")",
+            "release(\"schema\", 42)"
+        ]
     );
 }
 
@@ -190,9 +202,9 @@ fn an_undeclared_table_takes_its_first_sources_columns() {
     let r = s.run(&["query", "next(z, i)", "p.df"]).success();
     assert!(r.stdout.contains("\"a\"  1\n\"b\"  2\n"), "{}", r.stdout);
     let r = s.run(&["query", "inside(z)", "p.df"]).success();
-    assert!(r.stdout.contains("\"b\"\n(1 row)"), "{}", r.stdout);
+    assert!(r.stdout.ends_with("\n\"b\"\n"), "{}", r.stdout);
     let r = s.run(&["query", "named(n)", "p.df"]).success();
-    assert!(r.stdout.contains("\"a\"\n(1 row)"), "{}", r.stdout);
+    assert!(r.stdout.ends_with("\n\"a\"\n"), "{}", r.stdout);
     // A first source the compiler cannot read: declare the columns.
     s.write(
         "p.df",
@@ -220,9 +232,12 @@ fn an_attribute_read_types_its_column() {
         "edition 2026\n\nprovider fake\n\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\n\
          decl cidr_of(c) mixed\ncidr_of(c) where v in net.vpc, c = v.cidr\ncidr_of(5)\n",
     );
-    let r = s.run(&common::on("p.df", &["--world", "w.json"], &["plan"])).failure();
+    let r = s
+        .run(&common::on("p.df", &["--world", "w.json"], &["plan"]))
+        .failure();
     assert!(
-        r.stderr.contains("`cidr_of`'s column `c` is string, not the int 5"),
+        r.stderr
+            .contains("`cidr_of`'s column `c` is string, not the int 5"),
         "{}",
         r.stderr
     );

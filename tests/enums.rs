@@ -60,9 +60,20 @@ fn why_shows_the_type_as_the_leaf() {
          resource compute.vm \"web-${e}\" {\n  size = \"small\"\n} where e in environment\n",
     );
     let r = s.run(&["plan", "p.df"]).success();
-    assert_eq!(r.summary(), "plan: 2 deformations (2 create)", "{}", r.stdout);
-    let r = s.run(&["why", "compute.vm[\"web-prod\"]", "p.df"]).success();
-    assert!(r.stdout.contains("where e in environment\n"), "{}", r.stdout);
+    assert_eq!(
+        r.summary(),
+        "plan: 2 deformations (2 create)",
+        "{}",
+        r.stdout
+    );
+    let r = s
+        .run(&["why", "compute.vm[\"web-prod\"]", "p.df"])
+        .success();
+    assert!(
+        r.stdout.contains("where e in environment\n"),
+        "{}",
+        r.stdout
+    );
     assert!(r.stdout.contains("with e = \"prod\"\n"), "{}", r.stdout);
     assert!(
         r.stdout
@@ -106,9 +117,11 @@ fn the_test_space_is_the_types_values() {
     assert!(
         r.stdout.contains(
             "test p: 2 combinations of env\n\
+             env      result\n\
+             staging  denied\n\
+             prod     ok\n\
              denied  dform plan p --set env=staging\n  \
-             - env staging is not prod\n\
-             ok      dform plan p --set env=prod\n"
+             - env staging is not prod\n"
         ),
         "{}",
         r.stdout
