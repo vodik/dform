@@ -82,7 +82,7 @@ impl Ty {
                     .map(|m| m.trim().trim_matches('"').to_string())
                     .collect(),
             ),
-            h @ ("bytes" | "cpu" | "duration" | "time") => Ty::Scalar(h.to_string()),
+            h if measured(h) => Ty::Scalar(h.to_string()),
             _ => Ty::Any,
         }
     }
@@ -90,11 +90,18 @@ impl Ty {
     /// A quantity's or a time's type: what [`read`] reads.
     fn measured(&self) -> bool {
         match self {
-            Ty::Scalar(s) => matches!(s.as_str(), "bytes" | "cpu" | "duration" | "time"),
+            Ty::Scalar(s) => measured(s),
             Ty::Secret(t) | Ty::List(t) => t.measured(),
             _ => false,
         }
     }
+}
+
+/// The types read from a literal's text, a quantity's or a time's
+/// (`512Mi`, `500m`, `1h30m`, an instant): `bytes`, `cpu`, `duration`,
+/// `time`.
+pub fn measured(ty: &str) -> bool {
+    matches!(ty, "bytes" | "cpu" | "duration" | "time")
 }
 
 impl std::fmt::Display for Ty {
@@ -770,5 +777,13 @@ mod tests {
             Ty::parse("enum(\"a\", \"b\")"),
             Ty::Enum(vec!["a".into(), "b".into()])
         );
+    }
+
+    #[test]
+    fn the_measured_types_are_the_quantities_and_time() {
+        for t in ["bytes", "cpu", "duration", "time"] {
+            assert!(measured(t) && Ty::parse(t).measured(), "{t}");
+        }
+        assert!(!measured("int") && !Ty::parse("inet").measured());
     }
 }

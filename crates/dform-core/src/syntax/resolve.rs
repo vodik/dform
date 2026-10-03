@@ -4672,7 +4672,7 @@ impl<'u> Lowerer<'u> {
                 // A quantity's or time's constructor reads a literal as its
                 // type, at compile time (R-66, R-62): `cpu(500m)`,
                 // `time("2026-13-01")` is an error here.
-                _ if i == 0 && matches!(name, "bytes" | "cpu" | "duration" | "time") => {
+                _ if i == 0 && crate::types::measured(name) => {
                     crate::types::Ty::Scalar(name.to_string())
                 }
                 Some(t @ crate::types::Ty::Scalar(_)) if p.is_some_and(|p| p.ty != "string") => t,
@@ -4684,7 +4684,7 @@ impl<'u> Lowerer<'u> {
             match crate::types::literal(&ty, a) {
                 Ok(a) => out.push(a),
                 // A constructor's literal: what is wrong with its text.
-                Err(why) if i == 0 && matches!(name, "bytes" | "cpu" | "duration" | "time") => {
+                Err(why) if i == 0 && crate::types::measured(name) => {
                     let why = why.strip_prefix(&format!("is {name}: ")).unwrap_or(&why);
                     return self.error(span, format!("not a {name}: {why}"));
                 }

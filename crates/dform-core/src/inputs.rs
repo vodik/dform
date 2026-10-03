@@ -225,9 +225,7 @@ pub fn coerce(t: &TypeExpr, v: Value) -> Value {
             None => Value::Str(s),
         },
         // A quantity or a time from its text, as a literal reads (R-66).
-        (TypeExpr::Name(n), v @ (Value::Str(_) | Value::Int(_)))
-            if matches!(n.as_str(), "bytes" | "cpu" | "duration" | "time") =>
-        {
+        (TypeExpr::Name(n), v @ (Value::Str(_) | Value::Int(_))) if crate::types::measured(n) => {
             match crate::types::literal(
                 &crate::types::Ty::parse(n),
                 crate::ast::Term::Val(v.clone()),
