@@ -232,8 +232,14 @@ pub fn module_interface(root: &SyntaxNode, module: Option<&str>) -> Option<Inter
     for n in block.children() {
         let into = match n.kind() {
             SyntaxKind::INPUT if !dform_core::syntax::resolve::is_key(&n) => &mut out.inputs,
-            // `output vpc: net.vpc` declares; `output vpc = vpc` defines.
-            SyntaxKind::OUTPUT_DECL if n.children().any(|c| c.kind() == SyntaxKind::TYPE_EXPR) => {
+            // `output vpc: net.vpc` declares; `output vpc = vpc` defines;
+            // `output p` exports the relation `p` (R-55).
+            SyntaxKind::OUTPUT_DECL
+                if n.children().any(|c| c.kind() == SyntaxKind::TYPE_EXPR)
+                    || !n
+                        .children_with_tokens()
+                        .any(|e| e.kind() == SyntaxKind::EQ) =>
+            {
                 &mut out.outputs
             }
             _ => continue,
@@ -241,11 +247,11 @@ pub fn module_interface(root: &SyntaxNode, module: Option<&str>) -> Option<Inter
         let Some(name) = declared_name(&n) else {
             continue;
         };
-        let ty = n
-            .children()
-            .find(|c| c.kind() == SyntaxKind::TYPE_EXPR)
-            .map(|t| t.text().to_string())
-            .unwrap_or_default();
+        let ty = match n.children().find(|c| c.kind() == SyntaxKind::TYPE_EXPR) {
+            Some(t) => t.text().to_string(),
+            None if n.kind() == SyntaxKind::OUTPUT_DECL => "relation".to_string(),
+            None => String::new(),
+        };
         into.push((name.text().to_string(), ty));
     }
     Some(out)

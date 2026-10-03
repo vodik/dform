@@ -153,13 +153,17 @@ pub fn complete(
             .collect();
     }
     // `copy.`: the outputs of the copy's component (R-65), the copy an
-    // `instance` of the file names.
+    // `instance` of the file names, or of the module a `use` binds, its
+    // relations among them (`m.p(`, R-55).
     let segs: Vec<&str> = word.split('.').collect();
     if let [copy, ""] = segs.as_slice()
         && let Some(path) = root
             .descendants()
-            .filter(|n| n.kind() == SyntaxKind::INSTANCE)
-            .map(|n| dform_core::syntax::resolve::instance_parts(&n))
+            .filter_map(|n| match n.kind() {
+                SyntaxKind::INSTANCE => Some(dform_core::syntax::resolve::instance_parts(&n)),
+                SyntaxKind::USE => Some(dform_core::syntax::resolve::use_parts(&n)),
+                _ => None,
+            })
             .find(|(_, name)| name == copy)
             .map(|(path, _)| path)
         && let Some(m) = modules(&path)
@@ -173,6 +177,24 @@ pub fn complete(
                     CompletionItemKind::PROPERTY,
                     ty,
                     Some(format!("output of {copy}, a copy of {path}")),
+                )
+            })
+            .collect();
+    }
+
+    // `k.` and `k.f.`, `k` an object input (R-54): its fields there, as
+    // `--set k.f=v`, `set k.f = v` and a read address them.
+    if let [input, fields @ .., _] = segs.as_slice()
+        && let Some(found) = input_fields(root, input, fields)
+    {
+        return found
+            .into_iter()
+            .map(|(name, ty)| {
+                item(
+                    name,
+                    CompletionItemKind::FIELD,
+                    ty,
+                    Some(format!("a field of input {input}")),
                 )
             })
             .collect();
@@ -289,4 +311,46 @@ pub fn complete(
             item(r.name.to_string(), kind, r.signature.to_string(), Some(doc))
         })
         .collect()
+}
+
+/// The fields of the object input `input` the tree declares in its block
+/// form (`input k { f: T, g: { .. } }`), below `path`: each name with its
+/// type, a nested object's as `{..}`. `None` when there is no such input
+/// or path.
+fn input_fields(root: &SyntaxNode, input: &str, path: &[&str]) -> Option<Vec<(String, String)>> {
+    let name = |n: &SyntaxNode| -> Option<String> {
+        n.children_with_tokens()
+            .filter_map(|e| e.into_token())
+            .find(|t| t.kind() == SyntaxKind::IDENT)
+            .map(|t| t.text().to_string())
+    };
+    let mut at = root
+        .descendants()
+        .find(|n| n.kind() == SyntaxKind::INPUT && name(n).as_deref() == Some(input))?;
+    let fields = |n: &SyntaxNode| -> Vec<SyntaxNode> {
+        n.children()
+            .filter(|c| c.kind() == SyntaxKind::ATTR_DECL)
+            .collect()
+    };
+    let field_name = |f: &SyntaxNode| -> Option<String> {
+        f.children()
+            .find(|c| c.kind() == SyntaxKind::BLOCK_PATH)
+            .map(|p| p.text().to_string())
+    };
+    for seg in path {
+        at = fields(&at)
+            .into_iter()
+            .find(|f| field_name(f).as_deref() == Some(*seg))?;
+    }
+    let out: Vec<(String, String)> = fields(&at)
+        .iter()
+        .filter_map(|f| {
+            let ty = match f.children().find(|c| c.kind() == SyntaxKind::TYPE_EXPR) {
+                Some(t) => t.text().to_string(),
+                None => "{..}".to_string(),
+            };
+            Some((field_name(f)?, ty))
+        })
+        .collect();
+    (!out.is_empty()).then_some(out)
 }

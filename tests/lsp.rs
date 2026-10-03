@@ -642,7 +642,8 @@ fn completion_reads_the_schema_and_the_modules() {
     let types = labels(&c.at("textDocument/completion", &stack, (n - 2, 9)));
     assert!(types.contains(&"net.vpc".to_string()), "{types:?}");
     let outputs = labels(&c.at("textDocument/completion", &stack, (n - 1, 9)));
-    assert_eq!(outputs, vec!["vpc"], "{outputs:?}");
+    // Its exported relation too (R-55).
+    assert_eq!(outputs, vec!["vpc", "private_subnet"], "{outputs:?}");
 
     // A plain word: the builtins it starts, their signatures.
     let typed = format!("{original}\ny = iprang");
@@ -1610,4 +1611,34 @@ fn hover_on_a_quantity_shows_its_base_value() {
         "{cpu}"
     );
     c.shutdown();
+}
+
+/// Completion of an object input's field paths (R-54), after `k.` and
+/// `k.f.`, and of a used module's relation outputs after `m.` (R-55).
+#[test]
+fn completion_offers_input_fields_and_relation_outputs() {
+    let s = common::Scratch::project("lsp-fields");
+    s.write(
+        "stacks/zones.df",
+        "edition 2026\nprovider fake\ndecl zone(name: string)\nzone(\"a\")\noutput zone\n",
+    );
+    let file = s.write(
+        "stacks/app.df",
+        "edition 2026\ninput nodes { flavor: string = \"b2\", count: int = 1, pool: { min: int = 1 } }\n\
+         provider fake\nuse stacks.zones\nset { nodes.count = 2 }\n",
+    );
+    let root = std::fs::canonicalize(&s.dir).unwrap();
+    let file = std::fs::canonicalize(&file).unwrap();
+    let mut c = Client::start(&root, json!({}));
+    c.open(&file);
+    let original = std::fs::read_to_string(&file).unwrap();
+    let typed = format!("{original}set nodes.\nset nodes.pool.\nseen(z) where zones.\n");
+    c.change(&file, 2, &typed);
+    let n = typed.lines().count() as u32;
+    let fields = labels(&c.at("textDocument/completion", &file, (n - 3, 10)));
+    assert_eq!(fields, ["flavor", "count", "pool"], "{fields:?}");
+    let pool = labels(&c.at("textDocument/completion", &file, (n - 2, 15)));
+    assert_eq!(pool, ["min"], "{pool:?}");
+    let rels = labels(&c.at("textDocument/completion", &file, (n - 1, 20)));
+    assert_eq!(rels, ["zone"], "{rels:?}");
 }
