@@ -750,9 +750,30 @@ pub fn fmt_term(t: &Term) -> String {
     }
 }
 
+/// A string as the literal `fmt` writes for it (grammar.md "Strings"):
+/// quoted, `\\` `\"` `\n` `\t` escaped, any other control character as
+/// `\u{..}`, and `${` as `$${`. The plan, `query` and `why` print a string
+/// value so, on one line.
+pub fn quote(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            c if c.is_control() => out.push_str(&format!("\\u{{{:x}}}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out.replace("${", "$${")
+}
+
 pub fn fmt_value(v: &Value) -> String {
     match v {
-        Value::Str(s) => format!("{s:?}"),
+        Value::Str(s) => quote(s),
         Value::Int(i) => i.to_string(),
         Value::Bool(b) => b.to_string(),
         Value::List(xs) => format!(

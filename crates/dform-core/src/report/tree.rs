@@ -640,6 +640,9 @@ impl Surface<'_, '_> {
             return None;
         };
         Some(match l {
+            // A rule whose body reads no relation fired on nothing: it is
+            // printed as any firing is, by its statement.
+            Leaf::Rule { .. } => return None,
             Leaf::Base { span } => base_place(span),
             Leaf::Schema { .. } => "provider schema".into(),
             Leaf::World { .. } => "world (refresh)".into(),

@@ -464,3 +464,16 @@ fn why_prints_a_refinement_as_a_check() {
          └─ check range(1, 35)   provider schema\n"
     );
 }
+
+/// A rule whose body reads no relation prints its statement and bindings,
+/// not a bare `by rN`.
+#[test]
+fn why_prints_the_statement_of_a_rule_that_reads_nothing() {
+    let s = Scratch::new("why-no-reads");
+    s.write(
+        "p.df",
+        "edition 2026\nprovider fake\nys(n) where n = 1 + 2\n",
+    );
+    let out = why_in(&s, "p.df", &["ys(N)"]);
+    assert_eq!(out, "ys(3)\n  p.df:3  ys(n) where n = 1 + 2\n  with n = 3\n");
+}

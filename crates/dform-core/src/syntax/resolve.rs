@@ -6898,7 +6898,7 @@ mod tests {
         assert_eq!(
             &got[..],
             [
-                "p(format(\"{x} ${x} %s%\", X)) :- q(X)",
+                "p(format(\"{x} $${x} %s%\", X)) :- q(X)",
                 "r(V) :- file.json(\"a.json\", V)",
                 "s(Y) :- q(X), Y = format(\"n-%s\", X), Name = format(\"n-%s\", X), want(\"net.route\", Name)",
             ]

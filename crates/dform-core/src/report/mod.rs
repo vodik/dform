@@ -149,7 +149,7 @@ impl Shown {
     pub fn text(&self) -> String {
         match self {
             Shown::Absent => "<none>".into(),
-            Shown::Value(Json::String(s)) => format!("\"{s}\""),
+            Shown::Value(Json::String(s)) => crate::partition::quote(s),
             Shown::Value(v) => serde_json::to_string(v).unwrap_or_else(|_| "<unprintable>".into()),
             Shown::Null { label, .. } => format!("?{label}"),
             Shown::Sensitive(Some(l)) => format!("(sensitive {l})"),

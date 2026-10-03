@@ -365,3 +365,31 @@ fn plan_why_explains_an_update_and_a_delete_and_redacts_a_secret() {
         assert!(!out.contains("SECRET-"), "{out}");
     }
 }
+
+/// A string with a newline, quotes or a `${` prints as the literal `fmt`
+/// writes for it, on one line, the same in the plan and in `query`.
+#[test]
+fn a_multi_line_string_prints_as_its_literal_in_plan_and_query() {
+    let s = Scratch::new("sections-multiline");
+    s.write(
+        "p.df",
+        "edition 2026\nprovider fake\nresource net.vpc main {\n  cidr = \"10.0.0.0/16\"\n  \
+         note = \"one\\ntwo \\\"three\\\" $${four}\"\n}\n",
+    );
+    let lit = r#""one\ntwo \"three\" $${four}""#;
+    let r = s
+        .run(&["dev", "--world", "w.json", "plan", "p.df"])
+        .success();
+    assert!(r.stdout.contains(&format!("  note = {lit}\n")), "{}", r.stdout);
+    let q = s
+        .run(&[
+            "dev",
+            "--world",
+            "w.json",
+            "query",
+            "attr(net.vpc, A, \"note\", V)",
+            "p.df",
+        ])
+        .success();
+    assert!(q.stdout.contains(&format!("\"main\"  {lit}\n")), "{}", q.stdout);
+}
