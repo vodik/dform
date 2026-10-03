@@ -580,6 +580,10 @@ impl Chain {
 enum Seg {
     F(String),
     I(Term),
+    /// `[k]` with `k` a string or a read (`["api"]`, `[c.name]`): the
+    /// element of a keyed list whose key is `k` (R-35); a bare variable or
+    /// an integer is the position.
+    K(Term),
 }
 
 /// What a chain denotes.
@@ -3649,13 +3653,15 @@ impl<'u> Lowerer<'u> {
         };
         // `containers[k]`: the element of a keyed list whose key is `k`, any
         // term but an integer, which stays the position (R-35, R-69).
-        let keyed = path
-            .iter()
-            .position(|s| matches!(s, Seg::I(t) if !matches!(t, Term::Val(Value::Int(_)))));
+        let keyed = path.iter().position(|s| match s {
+            Seg::I(t) => !matches!(t, Term::Val(Value::Int(_))),
+            Seg::K(_) => true,
+            Seg::F(_) => false,
+        });
         if let Some(i) = keyed
             && !matches!(&typ, Term::Val(Value::Str(t)) if t == "settings")
         {
-            let Seg::I(key) = path[i].clone() else {
+            let (Seg::I(key) | Seg::K(key)) = path[i].clone() else {
                 unreachable!("found above")
             };
             let Some(list) = path_string(&path[..i]).filter(|l| !l.is_empty()) else {
@@ -3665,7 +3671,7 @@ impl<'u> Lowerer<'u> {
             for s in &path[i + 1..] {
                 match s {
                     Seg::F(f) => rest.push(f.clone()),
-                    Seg::I(_) => {
+                    Seg::I(_) | Seg::K(_) => {
                         return self.error(
                             span,
                             format!(
@@ -5653,8 +5659,13 @@ impl<'u> Lowerer<'u> {
                     if ts.len() != 1 {
                         return self.error(self.span_of(*r), "an index takes one term");
                     }
+                    let keyed = match ts[0].kind() {
+                        LITERAL => tokens(&ts[0]).next().is_some_and(|t| t.kind() == STRING),
+                        CALL => true,
+                        _ => Chain::of(&ts[0]).is_some_and(|c| !c.is_bare()),
+                    };
                     let t = self.bind(true, |l| l.term(rc, &ts[0], Pos::Content, pre))?;
-                    out.push(Seg::I(t));
+                    out.push(if keyed { Seg::K(t) } else { Seg::I(t) });
                 }
                 Op::Keyed(_, r) => {
                     return self.error(
@@ -6233,13 +6244,14 @@ impl<'u> Lowerer<'u> {
                 let v = self.read_var(
                     rc,
                     "attr",
-                    vec![typ, addr, str_term(first)],
+                    vec![typ.clone(), addr, str_term(first)],
                     3,
                     first,
                     pre,
                     span,
                 );
-                self.path_of(rc, v, path[1..].to_vec(), pre, span)
+                let at = (typ, first.clone());
+                self.keyed_path_of(rc, v, path[1..].to_vec(), Some(at), pre, span)
             }
             Res::Output {
                 inst,
@@ -6305,8 +6317,25 @@ impl<'u> Lowerer<'u> {
     fn path_of(
         &mut self,
         rc: &mut Rc,
+        v: Term,
+        path: Vec<Seg>,
+        pre: &mut Vec<Lit>,
+        span: Span,
+    ) -> L<Term> {
+        self.keyed_path_of(rc, v, path, None, pre, span)
+    }
+
+    /// `path_of` from the attribute `at` (the resource's type and the
+    /// attribute's top segment) of a resource: an element by its key,
+    /// `containers["api"]`, is the element of the keyed list whose one key
+    /// field (`type_list_key`) has that value (R-35). Elsewhere a key is a
+    /// position.
+    fn keyed_path_of(
+        &mut self,
+        rc: &mut Rc,
         mut v: Term,
         path: Vec<Seg>,
+        mut at: Option<(Term, String)>,
         pre: &mut Vec<Lit>,
         span: Span,
     ) -> L<Term> {
@@ -6321,8 +6350,33 @@ impl<'u> Lowerer<'u> {
         };
         for s in path {
             match s {
-                Seg::F(f) => fields.push(f),
-                Seg::I(i) => {
+                Seg::F(f) => {
+                    if let Some((_, list)) = &mut at {
+                        list.push('.');
+                        list.push_str(&f);
+                    }
+                    fields.push(f)
+                }
+                Seg::K(k) if at.is_some() => {
+                    let (typ, list) = at.take().expect("matched");
+                    v = flush(v, &mut fields);
+                    let item = var(&fresh(rc, "Item"));
+                    let keys = var(&fresh(rc, "Keys"));
+                    let key = var(&fresh(rc, "Key"));
+                    pre.extend([
+                        Lit::Pos(atom_at("member", vec![v, item.clone()], span)),
+                        Lit::Pos(atom_at(
+                            "type_list_key",
+                            vec![typ, str_term(&list), keys.clone()],
+                            span,
+                        )),
+                        Lit::Eq(keys, Term::List(vec![key.clone()])),
+                        Lit::Eq(func("__path", vec![item.clone(), key]), k),
+                    ]);
+                    v = item;
+                }
+                Seg::I(i) | Seg::K(i) => {
+                    at = None;
                     v = flush(v, &mut fields);
                     let w = var(&fresh(rc, "Item"));
                     pre.push(Lit::Pos(atom_at("member", vec![v, i, w.clone()], span)));
@@ -6345,7 +6399,7 @@ impl<'u> Lowerer<'u> {
                     vec![typ.clone(), addr.clone(), str_term(p), value],
                     span,
                 )),
-                Seg::I(_) => None,
+                Seg::I(_) | Seg::K(_) => None,
             },
             Res::Output {
                 inst, key, path, ..
@@ -6511,7 +6565,7 @@ fn path_string(path: &[Seg]) -> Option<String> {
                 out.push_str(f);
             }
             Seg::I(Term::Val(Value::Int(i))) => out.push_str(&format!("[{i}]")),
-            Seg::I(_) => return None,
+            Seg::I(_) | Seg::K(_) => return None,
         }
     }
     Some(out)

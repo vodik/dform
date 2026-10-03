@@ -593,6 +593,13 @@ attribute without element writes (its base: the blocks' and whole-list
 writes), so it may read the list it writes (`not has c.resources.limits`)
 without a cycle; it does not see another rule's element writes.
 
+A read takes an element by its key the same way, in a body or a value:
+`w.spec.template.spec.containers["api"].image` is the image of the
+container whose key field (`type_list_key`, one field) is `"api"`, no row
+when there is none or the list has no key. The key is a string or a read
+(`["api"]`, `["${n}"]`, `[c.name]`); an integer, or a bare variable (which
+enumerates the positions, `containers[i]`), is the position.
+
 `let k = t [@rank] [where B]` is a value (H-6), a cell of the attribute
 aggregate like an input (R-3): each row contributes to the cell `(let,
 SCOPE, k)` (scope `""` for the program's, `n` in the copy or import

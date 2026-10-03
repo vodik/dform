@@ -234,3 +234,30 @@ fn a_quantity_in_an_unranked_set_is_read_by_its_attribute() {
         r.stdout
     );
 }
+
+/// A body reads an element by its key (`containers["api"]`, or a read,
+/// `[c.name]`): the element whose key field is that value, no row for a
+/// key no element has; an integer is still the position.
+#[test]
+fn a_body_reads_an_element_by_its_key() {
+    let s = project(
+        "kl-read",
+        "deny \"api ${i}\" where w in k8s.deployment, \
+         i = w.spec.template.spec.containers[\"api\"].image\n\
+         deny \"side ${i}\" where i = web.spec.template.spec.containers[\"side\"].resources.limits.cpu\n\
+         deny \"none ${i}\" where i = web.spec.template.spec.containers[\"none\"].image\n\
+         deny \"again ${i}\" where c in web.spec.template.spec.containers, c.name == \"api\", \
+         i = web.spec.template.spec.containers[c.name].image\n\
+         deny \"first ${i}\" where i = web.spec.template.spec.containers[0].name\n",
+    );
+    let r = plan(&s).failure();
+    for l in [
+        "- api api:1\n",
+        "- side 2\n",
+        "- again api:1\n",
+        "- first api\n",
+    ] {
+        assert!(r.stderr.contains(l), "{l}:\n{}", r.stderr);
+    }
+    assert!(!r.stderr.contains("none"), "{}", r.stderr);
+}
