@@ -17,8 +17,8 @@
 //! arguments are not content positions (Rule 2), and `internal` the
 //! lowering's own (`add`, `__path`), which a program may not call. Purity
 //! is not a flag: every function is pure, impurity enters through externs.
-//! The bodies are the engine's (`engine::body`), looked up by the
-//! qualified name; a test keeps the two in step.
+//! The bodies are this module's ([`body`], [`BODIES`]), which the engine
+//! looks up by the qualified name; a test keeps the two in step.
 //!
 //! The format is self-contained text (DESIGN.org R-24: a function package
 //! embeds its signature file), read for now by this module rather than by
@@ -507,20 +507,334 @@ fn type_end(s: &str) -> usize {
     }
 }
 
-/// A function's body: its arguments' values to its value, or none. The
-/// same shape as `engine::Body`; `engine::body` falls back to this table
-/// for a name it does not itself have, so the std ticket's bodies live
-/// here, beside the signatures they implement (R-6).
+/// A function's body: its arguments' values to its value, or none.
 pub type Body = fn(&[Value]) -> Option<Value>;
 
-/// The body of every function this module declares that `engine.rs`'s
-/// own table does not (the std ticket's new packages); a test keeps
-/// every declared function's body, here or there, in step.
+/// The body of the function `name` declares in `std/*.df`, by its
+/// qualified name; a test keeps every declared function's body in step.
 pub fn body(name: &str) -> Option<Body> {
     BODIES.iter().find(|(n, _)| *n == name).map(|(_, b)| *b)
 }
 
+/// Every function's body, by its qualified name.
 pub const BODIES: &[(&str, Body)] = &[
+    ("add", |a| {
+        int2(a, |x, y| Some(x + y)).or_else(|| measured(a, false))
+    }),
+    ("sub", |a| {
+        int2(a, |x, y| Some(x - y)).or_else(|| measured(a, true))
+    }),
+    ("mul", |a| {
+        int2(a, |x, y| Some(x * y)).or_else(|| match a {
+            [Value::Quantity(q), Value::Int(n)] | [Value::Int(n), Value::Quantity(q)] => {
+                crate::quantity::scale(q, *n).map(Value::Quantity)
+            }
+            _ => None,
+        })
+    }),
+    ("div", |a| {
+        int2(a, |x, y| (y != 0).then(|| x / y)).or_else(|| match a {
+            [Value::Quantity(q), Value::Int(n)] => {
+                crate::quantity::divide(q, *n).map(Value::Quantity)
+            }
+            [Value::Quantity(p), Value::Quantity(q)] => {
+                crate::quantity::ratio(p, q).map(Value::Int)
+            }
+            _ => None,
+        })
+    }),
+    ("mod", |a| int2(a, |x, y| (y != 0).then(|| x % y))),
+    // Constructors (DESIGN.org "Silent string-to-int coercion"):
+    // conversions are explicit and named by their type.
+    ("int", |a| match a {
+        [Value::Int(i)] => Some(Value::Int(*i)),
+        [Value::Str(s)] => s.trim().parse().ok().map(Value::Int),
+        _ => None,
+    }),
+    ("string", |a| match a {
+        [v] => scalar_text(v).map(Value::Str),
+        _ => None,
+    }),
+    ("ip", |a| match a {
+        [Value::Str(s)] => crate::value::ipv4_to_u32(s).map(Value::Ip),
+        _ => None,
+    }),
+    ("inet", |a| match a {
+        [Value::Str(s)] => {
+            let (addr, prefix) = crate::value::parse_ipnet(s)?;
+            Some(Value::IpNet { addr, prefix })
+        }
+        _ => None,
+    }),
+    // Quantities and times (R-66, R-62): a value of the type is itself,
+    // its text is read, an integer is bytes or cores.
+    ("bytes", |a| quantity_of(a, crate::quantity::Dim::Bytes)),
+    ("cpu", |a| quantity_of(a, crate::quantity::Dim::Cpu)),
+    ("duration", |a| {
+        quantity_of(a, crate::quantity::Dim::Duration)
+    }),
+    ("time", |a| match a {
+        [t @ Value::Time(_)] => Some(t.clone()),
+        [Value::Str(s)] => crate::time::Time::parse(s).ok().map(Value::Time),
+        _ => None,
+    }),
+    // An ambiguous quantity no position read has no value; the compiler
+    // says so where the schema is known (`types::read`).
+    (crate::types::AMBIGUOUS, |_| None),
+    ("time.parse", |a| match a {
+        [Value::Str(s)] => crate::time::Time::parse(s).ok().map(Value::Time),
+        _ => None,
+    }),
+    ("time.format", |a| match a {
+        [Value::Time(t), Value::Str(layout)] => t.format(layout).map(Value::Str),
+        _ => None,
+    }),
+    ("time.in_zone", |a| match a {
+        [Value::Time(t), Value::Str(zone)] => t.in_zone(zone).map(Value::Time),
+        _ => None,
+    }),
+    ("time.add", |a| match a {
+        [
+            Value::Time(t),
+            Value::Quantity(crate::quantity::Quantity::Duration(d)),
+        ] => t.add(*d).map(Value::Time),
+        _ => None,
+    }),
+    ("time.until", |a| match a {
+        [Value::Time(x), Value::Time(y)] => x
+            .until(y)
+            .map(|d| Value::Quantity(crate::quantity::Quantity::Duration(d))),
+        _ => None,
+    }),
+    ("time.before", |a| match a {
+        [Value::Time(x), Value::Time(y)] => Some(Value::Bool(x.instant() < y.instant())),
+        _ => None,
+    }),
+    ("duration.parse", |a| match a {
+        [Value::Str(s)] => crate::quantity::read_duration(s)
+            .ok()
+            .map(|d| Value::Quantity(crate::quantity::Quantity::Duration(d))),
+        _ => None,
+    }),
+    ("duration.total", unit_of),
+    ("bytes.to", unit_of),
+    ("cpu.to", unit_of),
+    ("iprange", |a| match a {
+        [x, y] => {
+            let (sa, sb) = (as_ip_u32(x)?, as_ip_u32(y)?);
+            let (start, end) = if sa <= sb { (sa, sb) } else { (sb, sa) };
+            Some(Value::IpRange { start, end })
+        }
+        _ => None,
+    }),
+    ("format", |a| {
+        let fmt = a.first()?.as_str()?;
+        let mut out = String::new();
+        let mut parts = fmt.split("%s");
+        out.push_str(parts.next().unwrap_or(""));
+        for (i, p) in parts.enumerate() {
+            out.push_str(&value_to_string(a.get(i + 1)?));
+            out.push_str(p);
+        }
+        Some(Value::Str(out))
+    }),
+    ("len", len_of),
+    ("list.len", len_of),
+    ("ref", |a| match a {
+        [Value::Str(t), Value::Str(n), Value::Str(p)] => Some(Value::Ref {
+            typ: t.clone(),
+            name: n.clone(),
+            attr: p.clone(),
+        }),
+        // `ref(r)` written out (R-43): the reference itself.
+        [r @ Value::Ref { .. }] => Some(r.clone()),
+        _ => None,
+    }),
+    ("cloud_ref", |a| match a {
+        [Value::Str(t), Value::Str(n), Value::Str(p)] => Some(Value::CloudRef {
+            typ: t.clone(),
+            name: n.clone(),
+            attr: p.clone(),
+        }),
+        _ => None,
+    }),
+    // A name that is already an address (another copy's resource, read
+    // through its output) is itself (R-65).
+    ("scoped", |a| match a {
+        [_, Value::Str(name)] if crate::ir::is_scoped(name) => Some(Value::Str(name.clone())),
+        [scope, name] => Some(Value::Str(crate::ir::scoped(
+            &value_to_string(scope),
+            &value_to_string(name),
+        ))),
+        _ => None,
+    }),
+    // E DR-19: `declassify(V, Reason)` is `V`; the static pass reads it
+    // as public, and `declassified/2` records it (`transform`).
+    ("declassify", |a| match a {
+        [v, _] => Some(v.clone()),
+        _ => None,
+    }),
+    // The prelude's null for (T, A, P) (E §2.5): class and type come
+    // from the schema row the rule was expanded from.
+    ("__null", |a| match a {
+        [t, n, p, class, ty] => Some(Value::Null {
+            label: crate::value::null_label(t.as_str()?, &value_to_string(n), p.as_str()?),
+            class: crate::value::NullClass::parse(class.as_str()?)?,
+            ty: ty.as_str()?.to_string(),
+        }),
+        _ => None,
+    }),
+    ("__label", |a| match a {
+        [t, n, p] => Some(Value::Str(crate::value::null_label(
+            t.as_str()?,
+            &value_to_string(n),
+            p.as_str()?,
+        ))),
+        _ => None,
+    }),
+    // `ref(T, A, "a.b")` after the rewrite: walk the rest of the path
+    // inside the top-level attribute's value.
+    ("__path", |a| match a {
+        [v, path] => {
+            let mut v = v.clone();
+            for seg in path.as_str()?.split('.') {
+                let Value::Obj(mut m) = v else {
+                    return None;
+                };
+                v = m.remove(seg)?;
+            }
+            Some(v)
+        }
+        _ => None,
+    }),
+    ("inet.subnet", |a| match a {
+        [net, bits, n] => {
+            let (addr, prefix) = as_ipnet(net)?;
+            let (nb, nn) = (as_i64(bits)?, as_i64(n)?);
+            if nb < 0 || nn < 0 {
+                return None;
+            }
+            let new_prefix = (prefix as i64) + nb;
+            if new_prefix > 32 {
+                return None;
+            }
+            let shift = 32 - (new_prefix as u32);
+            Some(Value::IpNet {
+                addr: addr + ((nn as u32) << shift),
+                prefix: new_prefix as u8,
+            })
+        }
+        _ => None,
+    }),
+    ("inet.host", |a| match a {
+        [net, n] => {
+            let (start, end) = ipnet_range(net)?;
+            // usable hosts exclude network + broadcast
+            if end <= start + 1 {
+                return None;
+            }
+            let idx = as_i64(n)?;
+            if idx < 0 {
+                return None;
+            }
+            let ip = (start + 1).checked_add(u32::try_from(idx).ok()?)?;
+            (ip < end).then_some(Value::Ip(ip))
+        }
+        _ => None,
+    }),
+    ("inet.addr", |a| match a {
+        [net, n] => {
+            let (addr, _) = as_ipnet(net)?;
+            let idx = as_i64(n)?;
+            if idx < 0 {
+                return None;
+            }
+            Some(Value::Ip(addr.wrapping_add(idx as u32)))
+        }
+        _ => None,
+    }),
+    ("inet.contains", |a| match a {
+        [net, ip] => {
+            let (addr, prefix) = as_ipnet(net)?;
+            let n = as_ip_u32(ip)?;
+            let mask = if prefix == 0 {
+                0
+            } else {
+                u32::MAX << (32 - prefix as u32)
+            };
+            Some(Value::Bool((n & mask) == addr))
+        }
+        _ => None,
+    }),
+    ("inet.overlaps", |a| match a {
+        [x, y] => {
+            let (a0, a1) = ipnet_range(x)?;
+            let (b0, b1) = ipnet_range(y)?;
+            Some(Value::Bool(a0 <= b1 && b0 <= a1))
+        }
+        _ => None,
+    }),
+    ("inet.prefix_len", |a| match a {
+        [net] => as_ipnet(net).map(|(_, p)| Value::Int(p as i64)),
+        _ => None,
+    }),
+    ("ip.unspecified", |a| match a {
+        [ip] => Some(Value::Bool(as_ip_u32(ip)? == 0)),
+        _ => None,
+    }),
+    ("int.range", |a| match a {
+        [Value::Int(lo), Value::Int(hi), Value::Int(step)] if *step != 0 => {
+            let mut out = Vec::new();
+            let mut i = *lo;
+            while (*step > 0 && i < *hi) || (*step < 0 && i > *hi) {
+                out.push(Value::Int(i));
+                i = i.checked_add(*step)?;
+            }
+            Some(Value::List(out))
+        }
+        _ => None,
+    }),
+    ("str.lower", |a| match a {
+        [Value::Str(s)] => Some(Value::Str(s.to_lowercase())),
+        _ => None,
+    }),
+    ("str.upper", |a| match a {
+        [Value::Str(s)] => Some(Value::Str(s.to_uppercase())),
+        _ => None,
+    }),
+    ("str.dedent", |a| match a {
+        [Value::Str(s)] => Some(Value::Str(dedent(s))),
+        _ => None,
+    }),
+    ("str.split", |a| match a {
+        [Value::Str(s), Value::Str(sep)] if !sep.is_empty() => Some(Value::List(
+            s.split(sep.as_str())
+                .map(|x| Value::Str(x.to_string()))
+                .collect(),
+        )),
+        // At most `limit` splits, the first ones: `limit + 1` parts.
+        [Value::Str(s), Value::Str(sep), Value::Int(limit)] if !sep.is_empty() && *limit >= 0 => {
+            let parts = usize::try_from(*limit).ok()?.checked_add(1)?;
+            Some(Value::List(
+                s.splitn(parts, sep.as_str())
+                    .map(|x| Value::Str(x.to_string()))
+                    .collect(),
+            ))
+        }
+        _ => None,
+    }),
+    ("list.join", |a| match a {
+        [Value::List(xs), Value::Str(sep)] => {
+            let parts: Option<Vec<String>> = xs.iter().map(scalar_text).collect();
+            Some(Value::Str(parts?.join(sep)))
+        }
+        _ => None,
+    }),
+    ("random.password", crate::functions::random::password),
+    ("random.bytes", crate::functions::random::bytes),
+    ("random.id", crate::functions::random::id),
+    ("random.uuid", crate::functions::random::uuid),
+    ("random.signing_key", crate::functions::random::signing_key),
     ("str.trim", |a| match a {
         [Value::Str(s)] => Some(Value::Str(s.trim().to_string())),
         _ => None,
@@ -977,8 +1291,154 @@ pub const BODIES: &[(&str, Body)] = &[
     }),
 ];
 
-/// A scalar's text (`str.format`'s args): a list, an object, a
-/// reference and a null have none.
+/// `str.dedent`: the indentation every non-blank line shares (the same
+/// spaces and tabs) removed, blank lines emptied, and a line break at the
+/// very start dropped (the one after a literal's opening quote).
+fn dedent(s: &str) -> String {
+    fn indent(l: &str) -> &str {
+        &l[..l.len() - l.trim_start_matches([' ', '\t']).len()]
+    }
+    let s = s.strip_prefix('\n').unwrap_or(s);
+    let blank = |l: &str| indent(l).len() == l.len();
+    let mut lines = s.split('\n').filter(|l| !blank(l));
+    let first = lines.next().map(indent).unwrap_or("");
+    let margin = lines.fold(first, |m, l| {
+        let n = m
+            .bytes()
+            .zip(indent(l).bytes())
+            .take_while(|(a, b)| a == b)
+            .count();
+        &m[..n]
+    });
+    s.split('\n')
+        .map(|l| if blank(l) { "" } else { &l[margin.len()..] })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// A value as text: a string bare, a reference as the source names it.
+pub(crate) fn value_to_string(v: &Value) -> String {
+    match v {
+        Value::Str(s) => s.clone(),
+        Value::Int(i) => i.to_string(),
+        Value::Bool(b) => b.to_string(),
+        Value::List(_) => "<list>".to_string(),
+        Value::Obj(_) => "<obj>".to_string(),
+        Value::Ip(n) => crate::value::u32_to_ipv4(*n),
+        Value::IpNet { addr, prefix } => crate::value::ipnet_to_string(*addr, *prefix),
+        Value::IpRange { start, end } => format!(
+            "{}-{}",
+            crate::value::u32_to_ipv4(*start),
+            crate::value::u32_to_ipv4(*end)
+        ),
+        // H-16: a reference reads as the source names it, `T["A"].path`.
+        Value::Ref { typ, name, attr } => crate::ir::Address {
+            typ: typ.clone(),
+            name: name.clone(),
+        }
+        .attr(attr),
+        Value::CloudRef { typ, name, attr } => format!("cloud_ref({typ},{name},{attr})"),
+        Value::Null { label, .. } => format!("?{label}"),
+        Value::Quantity(q) => q.to_string(),
+        Value::Time(t) => t.to_string(),
+    }
+}
+
+fn len_of(a: &[Value]) -> Option<Value> {
+    match a {
+        [Value::List(xs)] => Some(Value::Int(xs.len() as i64)),
+        [Value::Obj(m)] => Some(Value::Int(m.len() as i64)),
+        [Value::Str(s)] => Some(Value::Int(s.chars().count() as i64)),
+        _ => None,
+    }
+}
+
+/// A constructor's quantity: one of its dimension is itself, a string is
+/// read, an integer is bytes or cores.
+fn quantity_of(a: &[Value], dim: crate::quantity::Dim) -> Option<Value> {
+    use crate::quantity::{Dim, Quantity, read};
+    match (a, dim) {
+        ([Value::Quantity(q)], d) if q.dim() == d => Some(Value::Quantity(*q)),
+        ([Value::Str(s)], d) => read(d, s).ok().map(Value::Quantity),
+        ([Value::Int(n)], Dim::Bytes) => Some(Value::Quantity(Quantity::Bytes(*n))),
+        ([Value::Int(n)], Dim::Cpu) => n
+            .checked_mul(1000)
+            .map(|m| Value::Quantity(Quantity::Cpu(m))),
+        _ => None,
+    }
+}
+
+/// A quantity as a whole number of a unit (`bytes.to`, `cpu.to`,
+/// `duration.total`), of its own dimension only.
+fn unit_of(a: &[Value]) -> Option<Value> {
+    match a {
+        [Value::Quantity(q), Value::Str(unit)] => crate::quantity::to_unit(q, unit).map(Value::Int),
+        _ => None,
+    }
+}
+
+/// `a + b` (`a - b`) of quantities of one dimension, or of a time and a
+/// duration (R-66, R-62); none across dimensions.
+fn measured(a: &[Value], sub: bool) -> Option<Value> {
+    use crate::quantity::{Quantity, add};
+    match a {
+        [Value::Quantity(x), Value::Quantity(y)] => add(x, y, sub).map(Value::Quantity),
+        [Value::Time(t), Value::Quantity(Quantity::Duration(d))] => {
+            t.add(if sub { d.negate() } else { *d }).map(Value::Time)
+        }
+        [Value::Quantity(Quantity::Duration(d)), Value::Time(t)] if !sub => {
+            t.add(*d).map(Value::Time)
+        }
+        _ => None,
+    }
+}
+
+/// A function of two integers.
+fn int2(a: &[Value], f: fn(i64, i64) -> Option<i64>) -> Option<Value> {
+    match a {
+        [Value::Int(x), Value::Int(y)] => f(*x, *y).map(Value::Int),
+        _ => None,
+    }
+}
+
+/// Arithmetic takes integers only; a string is converted with `int`.
+fn as_i64(v: &Value) -> Option<i64> {
+    match v {
+        Value::Int(i) => Some(*i),
+        _ => None,
+    }
+}
+
+fn as_ip_u32(v: &Value) -> Option<u32> {
+    match v {
+        Value::Ip(n) => Some(*n),
+        Value::Str(s) => crate::value::ipv4_to_u32(s),
+        _ => None,
+    }
+}
+
+fn as_ipnet(v: &Value) -> Option<(u32, u8)> {
+    match v {
+        Value::IpNet { addr, prefix } => Some((*addr, *prefix)),
+        Value::Str(s) => crate::value::parse_ipnet(s),
+        _ => None,
+    }
+}
+
+fn ipnet_range(v: &Value) -> Option<(u32, u32)> {
+    let (addr, prefix) = as_ipnet(v)?;
+    let host_bits = 32 - (prefix as u32);
+    let size = if host_bits == 32 {
+        u32::MAX
+    } else {
+        (1u64 << host_bits) as u32
+    };
+    let end = addr.wrapping_add(size.wrapping_sub(1));
+    Some((addr, end))
+}
+
+/// A scalar's text (`string`, `list.join`, `str.format`'s args): a list,
+/// an object, a reference and a null have none.
 fn scalar_text(v: &Value) -> Option<String> {
     match v {
         Value::Str(s) => Some(s.clone()),
@@ -1245,14 +1705,13 @@ mod tests {
         assert!(two.unwrap_err().contains("only a constructor"));
     }
 
-    /// Every function `std/*.df` declares has a body, here or in
-    /// `engine::BODIES` (R-6: `engine::body` falls back to this
-    /// module's own table).
+    /// Every function `std/*.df` declares has a body (DESIGN.org R-6:
+    /// one registry).
     #[test]
     fn every_declared_function_has_a_body() {
         for f in registry().functions() {
             assert!(
-                crate::engine::body(&f.name).is_some(),
+                body(&f.name).is_some(),
                 "{} ({}:{}) has no body",
                 f.name,
                 f.file,
@@ -1261,9 +1720,9 @@ mod tests {
         }
     }
 
-    /// The reverse: a body here is declared somewhere (no orphan).
+    /// The reverse: every body is declared somewhere (no orphan).
     #[test]
-    fn every_body_here_is_declared() {
+    fn every_body_is_declared() {
         let r = registry();
         for (name, _) in BODIES {
             assert!(

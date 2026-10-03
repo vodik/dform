@@ -1809,5 +1809,5 @@ fn call(name: &str, args: &[Value]) -> Option<Value> {
     if args.iter().any(crate::stuck::has_null) {
         return None;
     }
-    engine::body(name)?(args)
+    crate::functions::body(name)?(args)
 }
