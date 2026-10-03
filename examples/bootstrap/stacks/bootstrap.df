@@ -56,7 +56,9 @@ let first_pool = "np-${renfry.zones[0]}"
 resource k8s.deployment dform_controller {
   metadata.name = "dform-controller"
   metadata.namespace = dform_system.metadata.name
-  metadata.annotations = { "dform.io/node-pool": google.container_node_pool[first_pool].instance_group }
+  metadata.annotations = {
+    "dform.io/node-pool": google.container_node_pool[first_pool].instance_group,
+  }
   spec.replicas = 1
   spec.selector.matchLabels = { app: "dform-controller" }
   spec.template.metadata.labels = { app: "dform-controller" }
