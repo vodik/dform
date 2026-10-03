@@ -239,7 +239,7 @@ several, and never an error for a key that is not there.
 |-----------------|-------------------------|-----------------------------------|--------------------------------------|
 | `T[e]`          | resources of type `T`   | address, relative to the scope    | `want(T, A)`, a dot reads `attr`     |
 | `c[e]`          | copies of component `c` | the copy's name                   | `instance_of("c", User, e), output(e, ..)` |
-| `s[k=v]`        | deployments of stack `s` | each key, by name; a bare name `k` is `k=k` (`s[env]`, `s[env, region="r1"]`) | `stack_output("s[k=v]", ..)`         |
+| `s[k=v]`        | deployments of stack `s` | each key, by name; a bare name `k` is `k=k` (`s[env]`, `s[env, region="r1"]`) | `instance_of("stacks.s", "", "s[k=v]"), output("s[k=v]", ..)` |
 | `world.T[e]`    | live objects of `T`     | the provider's name               | `cloud_attr(T, e, path, V)`          |
 | `p[a, b]`       | relation or extern `p`  | every column but the last         | `p(a, b, V)`                         |
 | `e[i]`          | a list value            | index (a fresh `i` enumerates)    | `member(e, i, V)`                    |
@@ -856,9 +856,13 @@ file; one in any other module is an error. `stack`, the statement of an
 earlier surface, is an error that says so.
 
 `use stacks.platform` binds the stack's deployments, which the tool made:
-`platform[env=e].out` reads one deployment's output from what it
-published (`stack_output("platform[env=e]", "out", V)`), each key given
-once, and `platform.out` reads an unkeyed stack's. Such a read is what
+`platform[env=e].out` reads one deployment's output, each key given once,
+and `platform.out` reads an unkeyed stack's. It is the keyed read of a
+copy's output (`network[t].out`): a deployment is an instance of its
+stack named by its key, `instance_of("stacks.platform", "",
+"platform[env=e]"), output("platform[env=e]", "out", V)`, those facts
+served from what the deployment published rather than evaluated (R-73).
+An output not published yet is `?platform[env=e].out`. Such a read is what
 `apply X` applies first (R-30). A program never instances a stack
 ("stacks.platform is deployed by the tool; `use` it"), and its `use`
 takes no block and no clause.
@@ -1480,7 +1484,7 @@ as it is.
 | `R.p.q` (content)                         | `V`, reading `attr(T, A, "p", V)`; `__path(V, "q")`    |
 | `n.k`, `c[e].k`                           | `V`, reading `output("n", "k", V)`; `instance_of("c", "", E), output(E, "k", V)` |
 | `m.x` (`use m`; a value, a resource)      | `V`, reading `m::x(V)`; `T["m/x"]`                     |
-| `s[k=v].o` (`use stacks.s`)               | `V`, reading `stack_output("s[k=v]", "o", V)`          |
+| `s[k=v].o` (`use stacks.s`)               | `V`, reading `instance_of("stacks.s", "", "s[k=v]"), output("s[k=v]", "o", V)` |
 | `world.T[e].a.b`                          | `V`, reading `cloud_attr("T", e', "a.b", V)`           |
 | `x = R.p`, `R.p == c`                     | `attr(T, A, "p", x)`, `attr(T, A, "p", c)`: the read itself |
 | `R.p` alone, `not R.p`                    | `attr(T, A, "p", true)`, `not attr(T, A, "p", true)`  |

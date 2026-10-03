@@ -733,13 +733,11 @@ output vpc_id = ref(net.vpc, "main", "id")
 
 const APP: &str = r#"
 provider fake
+use stacks.net as network
 resource net.subnet a {
-  cidr = c
-  vpc_id = v
-} where {
-    stack_output("net", "vpc_cidr", c)
-    stack_output("net", "vpc_id", v)
-  }
+  cidr = network.vpc_cidr
+  vpc_id = network.vpc_id
+}
 "#;
 
 /// Another stack reads an s3 stack's outputs from the object it publishes

@@ -56,8 +56,8 @@ pub struct Unit {
 }
 
 /// A stack a `use` names (R-65): deployed by the tool, never lowered into
-/// the program; what is read of it is a deployment's outputs,
-/// `stack_output("NAME[k=v]", out, V)`.
+/// the program; what is read of it is a deployment's outputs, the keyed
+/// read `instance_of(PATH, "", "NAME[k=v]"), output("NAME[k=v]", out, V)`.
 #[derive(Debug, Clone)]
 pub struct Deployed {
     /// Its path, `stacks.platform`.
@@ -4659,8 +4659,8 @@ impl<'u> Lowerer<'u> {
     /// a copy's, `blue.p(x, y)`, the copy's rows `__rows(blue, "p", [x,
     /// y])`; every copy's, `c[t].p(x, y)`, those of each copy `t` of `c`;
     /// a deployment's, `platform[env=e].p(x, y)`, a row of what it
-    /// published, `stack_output("platform[env=e]", "p", Rows), member(Rows,
-    /// [x, y])`. `None` for any other call.
+    /// published, `output("platform[env=e]", "p", Rows), member(Rows, [x,
+    /// y])`. `None` for any other call.
     fn exported_relation(
         &mut self,
         rc: &mut Rc,
@@ -4680,13 +4680,10 @@ impl<'u> Lowerer<'u> {
             return Ok(None);
         }
         if let Some(d) = self.stack_in(rc.scope, &c.head) {
-            let Res::Lookup {
-                pred, args, out, ..
-            } = self.deployed_path(rc, &c, &d, pre, span)?
-            else {
+            let Res::Output { inst, key, .. } = self.deployed_path(rc, &c, &d, pre, span)? else {
                 return Err(Skip);
             };
-            let rows = self.read_var(rc, &pred, args, out, &p, pre, span);
+            let rows = self.read_var(rc, "output", vec![inst, str_term(&key)], 2, &p, pre, span);
             let cols = self.args(rc, n, pos, pre)?;
             return Ok(Some(atom_at("member", vec![rows, Term::List(cols)], span)));
         }
@@ -5914,8 +5911,8 @@ impl<'u> Lowerer<'u> {
     }
 
     /// `NAME[k=v, ..].out.path`, or `NAME.out.path` unkeyed: an output of
-    /// a stack's deployment (R-65), read from what it published,
-    /// `stack_output("NAME[k=v,..]", out, V)`. Each key is given once.
+    /// a stack's deployment (R-65), the instance `NAME[k=v,..]`, read from
+    /// what it published. Each key is given once.
     fn deployed_path(
         &mut self,
         rc: &mut Rc,
@@ -6025,11 +6022,21 @@ impl<'u> Lowerer<'u> {
             );
         };
         let path = self.segs(rc, &rest[1..], pre)?;
-        Ok(Res::Lookup {
-            pred: "stack_output".into(),
-            args: vec![name, str_term(k)],
-            out: 2,
+        // The keyed read of a copy's output (`network[t].k`), the
+        // deployment the instance: `instance_of(PATH, "", NAME), output(NAME,
+        // k, V)`, both served from what it published (I-modules section 6).
+        let inst = self.scope_term(rc.scope, PROGRAM, name);
+        let user = self.scope_term(rc.scope, PROGRAM, str_term(""));
+        pre.push(Lit::Pos(atom_at(
+            crate::modules::INSTANCE_OF,
+            vec![str_term(&d.path), user, inst.clone()],
+            span,
+        )));
+        Ok(Res::Output {
+            inst,
+            key: k.clone(),
             path,
+            typ: None,
         })
     }
 

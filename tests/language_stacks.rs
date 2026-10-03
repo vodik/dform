@@ -172,27 +172,26 @@ fn a_stale_lock_is_taken_over() {
 }
 
 /// An applied stack's outputs, computed values included once they exist,
-/// are `stack_output` facts for every other stack.
+/// are what every other stack reads of its deployment (`use stacks.net as
+/// network`, `network.vpc_cidr`).
 #[test]
 fn another_stack_reads_the_outputs() {
     let s = Scratch::project("lang-stack-outputs");
-    s.write("net.df", NET);
+    s.write("stacks/net.df", NET);
     s.write(
         "app.df",
         r#"
 provider fake
+use stacks.net as network
 resource net.subnet a {
-  cidr = c
-  vpc_id = v
-} where {
-    stack_output("net", "vpc_cidr", c)
-    stack_output("net", "vpc_id", v)
-  }
+  cidr = network.vpc_cidr
+  vpc_id = network.vpc_id
+}
 "#,
     );
     let r = s.run(&["plan", "app.df"]).success();
     assert_eq!(r.summary(), "stack app is undeformed", "{}", r.stdout);
-    s.run(&["apply", "net.df"]).success();
+    s.run(&["apply", "net"]).success();
     let r = s.run(&["plan", "app.df"]).success();
     assert!(
         r.stdout.contains(
@@ -214,13 +213,11 @@ fn the_registry_is_the_projects() {
     s.write("infra/stacks/net.df", NET);
     let app = r#"
 provider fake
+use stacks.net as network
 resource net.subnet a {
-  cidr = c
-  vpc_id = v
-} where {
-    stack_output("net", "vpc_cidr", c)
-    stack_output("net", "vpc_id", v)
-  }
+  cidr = network.vpc_cidr
+  vpc_id = network.vpc_id
+}
 "#;
     s.write("infra/stacks/app.df", app);
     s.run(&["-C", "infra", "apply", "net"]).success();
@@ -235,7 +232,9 @@ resource net.subnet a {
     let r = s.run_in("infra/stacks", &["plan", "app"]).success();
     assert!(r.stdout.contains(want), "{}", r.stdout);
 
-    // Another project sees none of it; -C runs in this one.
+    // Another project sees none of it, its own net not applied; -C runs in
+    // this one.
+    s.write("stacks/net.df", NET);
     s.write("elsewhere/app.df", app);
     let r = s.run_in("elsewhere", &["plan", "app.df"]).success();
     assert_eq!(r.summary(), "stack app is undeformed", "{}", r.stdout);

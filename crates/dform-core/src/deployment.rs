@@ -116,6 +116,9 @@ pub struct Loaded {
     pub declared: Vec<Declared>,
     /// The inputs a fact of the program gives (an input file's).
     pub given: BTreeSet<String>,
+    /// The stacks the program's `use`s name: the instances its keyed reads
+    /// of deployments are of (R-73).
+    pub deployed: Vec<crate::syntax::resolve::Deployed>,
 }
 
 /// Load the program of `t`, its files read through `read`; `version` is the
@@ -129,7 +132,7 @@ pub fn load(t: &Target, version: &str, read: Reader, obs: &mut dyn Observer) -> 
         Some(root) => Some(Manifest::load(&root.join(project::MANIFEST), version)?),
         None => None,
     };
-    let (mut program, loaded) = loader::load_program_files_with(&files, read)?;
+    let (mut program, loaded, deployed) = loader::load_program_files_with(&files, read)?;
     // The program's files, each a source the controller watches (R-39).
     let relations = crate::watch::program_sources(&loaded);
     obs.relations(&relations);
@@ -173,6 +176,7 @@ pub fn load(t: &Target, version: &str, read: Reader, obs: &mut dyn Observer) -> 
         lowered,
         declared,
         given,
+        deployed,
     })
 }
 
@@ -636,7 +640,7 @@ impl Located {
             .loaded
             .lowered
             .as_ref()
-            .map(|l| stack::named_outputs(&l.program))
+            .map(|l| stack::named_outputs(&l.program, &self.loaded.deployed))
             .unwrap_or_default();
         let remotes = self
             .loaded
@@ -738,7 +742,7 @@ impl Located {
         externs.preload(opts.recorded.clone());
         let mut base_extra = self.set_facts.clone();
         base_extra.extend(opts.data.iter().cloned());
-        base_extra.extend(stack::output_facts(&outputs));
+        base_extra.extend(stack::output_facts(&outputs, &l.deployed));
         // The manifest, as facts policy may read.
         if let Some(m) = &l.manifest {
             base_extra.extend(m.facts());

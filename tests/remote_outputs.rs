@@ -98,8 +98,8 @@ fn a_project_reads_another_projects_outputs_through_a_local_remote() {
     let r = app.run(&["apply", "plan.json"]).failure();
     assert!(
         r.stderr.contains(
-            "- stack_output of platform.cluster[env=prod]: its published outputs changed since \
-             the plan"
+            "- the outputs of platform.cluster[env=prod]: published again with other values \
+             since the plan"
         ) && r.stderr.contains("stale plan"),
         "{}",
         r.stderr
@@ -198,12 +198,9 @@ fn an_output_of_a_configured_attribute_is_published_resolved_or_pending() {
         "stacks/app.df",
         "\n\
          provider fake\n\
-         resource net.vpc edge {\n\
-           cidr = c\n\
-         } where stack_output(\"net\", \"c\", c)\n\
-         resource net.vpc other {\n\
-           name = n\n\
-         } where stack_output(\"net\", \"n\", n)\n\
+         use stacks.net as network\n\
+         resource net.vpc edge { cidr = network.c }\n\
+         resource net.vpc other { name = network.n }\n\
          ",
     );
     s.run(&["apply", "net"]).success();
@@ -224,7 +221,7 @@ fn an_output_of_a_configured_attribute_is_published_resolved_or_pending() {
     assert!(
         r.stdout.contains(
             "definite:\n+ net.vpc[\"edge\"]\n  cidr = \"10.0.0.0/16\"\npending on \
-             ?stack_output[\"net\"].n:\n+ net.vpc[\"other\"]\n  name = ?stack_output[\"net\"].n\n"
+             ?net.n:\n+ net.vpc[\"other\"]\n  name = ?net.n\n"
         ),
         "{}",
         r.stdout
@@ -232,7 +229,7 @@ fn an_output_of_a_configured_attribute_is_published_resolved_or_pending() {
     let r = s.run(&["apply", "app"]).failure();
     assert!(
         r.stderr
-            .contains("nothing definite to apply, still waiting on ?stack_output[\"net\"].n"),
+            .contains("nothing definite to apply, still waiting on ?net.n"),
         "{}",
         r.stderr
     );

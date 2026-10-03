@@ -562,9 +562,8 @@ fn a_secret_output_reaches_a_sensitive_field_in_another_stack() {
         "stacks/app.df",
         "\n\
          provider fake\n\
-         resource leaky.vault copy {\n\
-           backup = p\n\
-         } where stack_output(\"prod\", \"pass\", p)\n\
+         use stacks.prod\n\
+         resource leaky.vault copy { backup = prod.pass }\n\
          ",
     );
     let dev = |args: &[&str]| {
@@ -586,9 +585,8 @@ fn a_secret_output_reaches_a_sensitive_field_in_another_stack() {
         assert!(!out.contains(PRODUCED), "{out}");
     }
     assert!(
-        r.stdout.contains(
-            "+ leaky.vault[\"copy\"]\n  backup = (sensitive stack_output[\"prod\"].pass)\n"
-        ),
+        r.stdout
+            .contains("+ leaky.vault[\"copy\"]\n  backup = (sensitive prod.pass)\n"),
         "{}",
         r.stdout
     );
@@ -606,13 +604,13 @@ fn a_secret_output_reaches_a_sensitive_field_in_another_stack() {
     // An input's value is held nowhere: no provider can read it.
     s.write(
         "stacks/app.df",
-        &s.read("stacks/app.df").replace("\"pass\"", "\"token\""),
+        &s.read("stacks/app.df").replace("prod.pass", "prod.token"),
     );
     let r = dev(&["plan", "app"]).failure();
     assert!(
         r.stderr.contains(
-            "plan leaky.vault[\"copy\"].backup: stack_output[\"prod\"].token is a secret output of prod \
-             that no provider holds"
+            "plan leaky.vault[\"copy\"].backup: prod.token is a secret output of prod that no \
+             provider holds"
         ),
         "{}",
         r.stderr

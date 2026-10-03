@@ -23,7 +23,8 @@
 //! and publishes them beside it, apart ([`Published`], `outputs.json`), and
 //! records where the deployment's objects are in the registry `stacks.json`
 //! under the state root (`dform.state/` at the project root); every other
-//! program reads them as `stack_output(Stack, Key, Value)` facts. A
+//! program reads them as the instance it is of its stack, `instance_of(
+//! Path, "", Name)` and `output(Name, Key, Value)` (R-73). A
 //! project reads another's through that one's backend (`[remotes]`,
 //! [`remote_location`]): the same read of the same object.
 //!
@@ -33,9 +34,10 @@
 //! finds it; `rekey` moves them to another key value. Both go through the
 //! stores ([`crate::store::Store`]), so a directory and a bucket move alike.
 
-use crate::ast::{Atom, Config, Program, Span, Stmt, Term};
+use crate::ast::{Atom, Config, Program, Span, Stmt, Term, atom};
 use crate::diag::{self, Diagnostic, Diagnostics};
 use crate::store::{Deployment, Location, OpenS3, S3Spec, Store};
+use crate::syntax::resolve::Deployed;
 use crate::value::Value;
 use anyhow::{Context, Result, bail};
 use std::collections::{BTreeMap, BTreeSet};
@@ -292,7 +294,7 @@ impl Instance {
         )
     }
 
-    /// `app`, or `app[env=prod]`: what the registry, `stack_output/3`,
+    /// `app`, or `app[env=prod]`: what the registry, a reader's keyed read,
     /// `handover`, `taint` and the controller call the deployment.
     pub fn name(&self) -> String {
         match self.segment() {
@@ -987,7 +989,7 @@ fn backend_term(text: &str) -> Option<String> {
 }
 
 /// A deployment's published outputs (`store::OUTPUTS`, beside its state and
-/// apart from it): what other stacks read as `stack_output/3`, needing
+/// apart from it): what other stacks read as its outputs, needing
 /// read access to this object only. A secret output crosses as its label
 /// and where a provider holds it, never its value: the reader's static
 /// pass treats it as secret (E0304 where it reaches a public place), its
@@ -1049,30 +1051,38 @@ impl Published {
         b
     }
 
-    /// `stack_output(Name, Key, Value)`, `Name` as the reader names the
-    /// deployment; a secret one's value a secret null, a pending one's an
-    /// open null, each labeled `stack_output/Name#Key`.
-    fn facts(&self, name: &str) -> Vec<Atom> {
-        let fact = |k: &str, v: Value| Atom {
-            pred: "stack_output".into(),
-            args: vec![
-                Term::Val(Value::Str(name.to_string())),
-                Term::Val(Value::Str(k.to_string())),
-                Term::Val(v),
-            ],
-            record: None,
-            span: Span::default(),
+    /// The deployment as an instance of the stack at `path` (R-73):
+    /// `instance_of(path, "", Name)` and each output `k` a contribution to
+    /// the cell `(output, Name, k)`, read as `output(Name, k, V)` like a
+    /// copy's; `Name` as the reader names the deployment. A secret
+    /// output's value is a secret null, a pending one's an open null, each
+    /// labeled `output/Name#k` ([`deployment_output`]).
+    fn facts(&self, path: &str, name: &str) -> Vec<Atom> {
+        let s = |x: &str| Term::Val(Value::Str(x.to_string()));
+        let fact = |k: &str, v: Value| {
+            atom(
+                "arg",
+                vec![
+                    s(crate::transform::OUTPUT),
+                    s(name),
+                    s(k),
+                    Term::Val(v),
+                    s(crate::transform::NORMAL),
+                ],
+                Span::default(),
+            )
         };
         let null = |k: &str, class, ty: &str| Value::Null {
             label: output_label(name, k),
             class,
             ty: ty.to_string(),
         };
-        let mut out: Vec<Atom> = self
-            .outputs
-            .iter()
-            .map(|(k, v)| fact(k, v.clone()))
-            .collect();
+        let mut out = vec![atom(
+            crate::modules::INSTANCE_OF,
+            vec![s(path), s(""), s(name)],
+            Span::default(),
+        )];
+        out.extend(self.outputs.iter().map(|(k, v)| fact(k, v.clone())));
         for k in &self.pending {
             out.push(fact(k, null(k, crate::value::NullClass::Open, "")));
         }
@@ -1087,10 +1097,38 @@ impl Published {
     }
 }
 
+/// What a [`Published`] fact a run was given says of where it came from:
+/// `published by NAME`, the deployment (a `why` leaf).
+pub fn published(a: &Atom) -> Option<String> {
+    let name = match (a.pred.as_str(), a.args.as_slice()) {
+        (crate::modules::INSTANCE_OF, [_, _, Term::Val(Value::Str(n))]) => n,
+        ("arg", [Term::Val(Value::Str(t)), Term::Val(Value::Str(n)), ..])
+            if t == crate::transform::OUTPUT && !n.is_empty() =>
+        {
+            n
+        }
+        _ => return None,
+    };
+    Some(format!("{PUBLISHED}{name}"))
+}
+
+/// The text of a [`published`] leaf begins so.
+pub const PUBLISHED: &str = "published by ";
+
 /// The label of the null a reader has for the output `k` of the deployment
-/// it names `name`.
+/// it names `name`: the cell's, `output/NAME#k`.
 fn output_label(name: &str, k: &str) -> String {
-    crate::value::null_label("stack_output", name, k)
+    crate::value::null_label(crate::transform::OUTPUT, name, k)
+}
+
+/// The deployment and output a null's label names, when it is another
+/// deployment's output a run read (`output/NAME#k`, `NAME` not empty; the
+/// stack's own outputs are `output/#k`).
+pub fn deployment_output(label: &str) -> Option<(String, String)> {
+    match crate::value::null_parts(label)? {
+        (t, name, k) if t == crate::transform::OUTPUT && !name.is_empty() => Some((name, k)),
+        _ => None,
+    }
 }
 
 /// The stack's outputs after an apply (`output k = t` at the top), as its
@@ -1267,7 +1305,7 @@ impl Resolver<'_> {
 
 /// Where the reader's provider finds each secret output it reads that a
 /// provider holds, by the label of the reader's null
-/// (`stack_output/NAME#K`); the held object's deployment as the reader
+/// (`output/NAME#K`); the held object's deployment as the reader
 /// names it.
 pub fn held(read: &[Read]) -> BTreeMap<String, crate::provider::Held> {
     let mut out = BTreeMap::new();
@@ -1349,8 +1387,8 @@ pub fn read_published(loc: &Location, s3: OpenS3, name: &str, own: &str) -> Resu
         serde_json::from_slice(&o.bytes).with_context(|| format!("parse the outputs {at}"))?;
     if p.deployment != own {
         bail!(
-            "stack_output(\"{name}\", ..): {at} holds the outputs of {}, not {own}; check the \
-             backend it was read through",
+            "the outputs of {name}: {at} holds the outputs of {}, not {own}; check the backend \
+             it was read through",
             p.deployment
         );
     }
@@ -1405,42 +1443,62 @@ pub fn remote_location(
     Ok(Some((loc.child(seg), own)))
 }
 
-/// The deployments a program names in `stack_output(Name, ..)` with a
-/// constant name, and whether one names it otherwise (a variable: it may
-/// read any).
-pub fn named_outputs(program: &Program) -> (std::collections::BTreeSet<String>, bool) {
+/// A keyed read of a deployment in a body: `instance_of(PATH, _, Name)`
+/// with `PATH` a stack the program uses (`deployed`, R-73); its `Name`.
+fn deployment_read<'a>(a: &'a Atom, deployed: &[Deployed]) -> Option<&'a Term> {
+    match a.args.as_slice() {
+        [Term::Val(Value::Str(p)), _, name]
+            if a.pred == crate::modules::INSTANCE_OF && deployed.iter().any(|d| d.path == *p) =>
+        {
+            Some(name)
+        }
+        _ => None,
+    }
+}
+
+/// The deployments a program reads (a keyed read of one of the stacks
+/// `deployed`) with a constant name, and whether one names it otherwise (a
+/// variable: it may read any).
+pub fn named_outputs(
+    program: &Program,
+    deployed: &[Deployed],
+) -> (std::collections::BTreeSet<String>, bool) {
     let mut named = std::collections::BTreeSet::new();
     let mut any = false;
-    let mut see = |a: &Atom| {
-        if a.pred == "stack_output" {
-            match a.args.first() {
-                Some(Term::Val(Value::Str(n))) => {
-                    named.insert(n.clone());
-                }
-                _ => any = true,
-            }
-        }
-    };
     for s in &program.statements {
         let body = match s {
             Stmt::Rule(r) => &r.body[..],
+            Stmt::Resource(r) => r.body.as_deref().unwrap_or_default(),
             _ => continue,
         };
         for l in body {
-            if let crate::ast::Lit::Pos(a) | crate::ast::Lit::Not(a) = l {
-                see(a);
+            if let crate::ast::Lit::Pos(a) | crate::ast::Lit::Not(a) = l
+                && let Some(n) = deployment_read(a, deployed)
+            {
+                match n {
+                    Term::Val(Value::Str(n)) => {
+                        named.insert(n.clone());
+                    }
+                    _ => any = true,
+                }
             }
         }
     }
     (named, any)
 }
 
-/// The deployments of other stacks the deployment keyed by `key` reads
-/// (`stack_output(Name, ..)`): a name written out, or interpolated from
-/// the stack's own key inputs (`"platform[env=${env}]"`). A name built
-/// from anything else is not known before the program runs, and is left
-/// out. What `apply` applies first (R-30).
-pub fn reads(program: &Program, key: &[(String, String)]) -> BTreeSet<String> {
+/// The deployments of other stacks the deployment keyed by `key` reads (a
+/// keyed read of one of the stacks `deployed`): a name written out, or
+/// interpolated from the stack's own key inputs (`platform[env=env]`); `key`
+/// holds every key, a defaulted one at its default. A name built from
+/// anything else is not known before the program runs: `Err` with the
+/// stack's name, every deployment of which the program may read. What
+/// `apply` applies first (R-30).
+pub fn reads(
+    program: &Program,
+    deployed: &[Deployed],
+    key: &[(String, String)],
+) -> (BTreeSet<String>, BTreeSet<String>) {
     use crate::ast::Lit;
     fn name(t: &Term, body: &[Lit], key: &[(String, String)]) -> Option<String> {
         match t {
@@ -1468,7 +1526,7 @@ pub fn reads(program: &Program, key: &[(String, String)]) -> BTreeSet<String> {
             _ => None,
         }
     }
-    let mut out = BTreeSet::new();
+    let (mut out, mut any) = (BTreeSet::new(), BTreeSet::new());
     for s in &program.statements {
         let body: &[Lit] = match s {
             Stmt::Rule(r) => &r.body,
@@ -1477,14 +1535,25 @@ pub fn reads(program: &Program, key: &[(String, String)]) -> BTreeSet<String> {
         };
         for l in body {
             if let Lit::Pos(a) | Lit::Not(a) = l
-                && a.pred == "stack_output"
-                && let Some(n) = a.args.first().and_then(|t| name(t, body, key))
+                && let Some(t) = deployment_read(a, deployed)
             {
-                out.insert(n);
+                match name(t, body, key) {
+                    Some(n) => {
+                        out.insert(n);
+                    }
+                    None => {
+                        let Term::Val(Value::Str(p)) = &a.args[0] else {
+                            continue;
+                        };
+                        if let Some(d) = deployed.iter().find(|d| d.path == *p) {
+                            any.insert(d.name.clone());
+                        }
+                    }
+                }
             }
         }
     }
-    out
+    (out, any)
 }
 
 /// What a run reads of other stacks' outputs: each deployment the program
@@ -1534,10 +1603,19 @@ pub fn stack_outputs(
     Ok(out)
 }
 
-/// The `stack_output` facts of what was read.
-pub fn output_facts(read: &[Read]) -> Vec<Atom> {
+/// The facts of what was read: each deployment an instance of its stack
+/// (`deployed`, the program's; by its name when the program uses it by
+/// none) with its outputs.
+pub fn output_facts(read: &[Read], deployed: &[Deployed]) -> Vec<Atom> {
     read.iter()
-        .filter_map(|r| Some(r.published.as_ref()?.facts(&r.name)))
+        .filter_map(|r| {
+            let base = r.name.split_once('[').map_or(r.name.as_str(), |(b, _)| b);
+            let path = deployed
+                .iter()
+                .find(|d| d.name == base)
+                .map_or(base, |d| d.path.as_str());
+            Some(r.published.as_ref()?.facts(path, &r.name))
+        })
         .flatten()
         .collect()
 }

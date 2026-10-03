@@ -129,6 +129,9 @@ impl Prov {
 /// plan).
 fn given_leaf(a: &Atom, externs: &BTreeSet<crate::ast::Extern>, tick: Option<usize>) -> Leaf {
     let text = partition::fmt_atom(a);
+    if let Some(event) = crate::stack::published(a) {
+        return Leaf::World { event };
+    }
     match a.pred.as_str() {
         p if crate::zset::POLICY_INPUTS.contains(&p) => Leaf::Plan { fact: text, tick },
         "input" | "data" => {

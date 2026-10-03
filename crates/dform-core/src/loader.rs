@@ -40,15 +40,15 @@ pub fn load_program_with(
     entry_files: &[PathBuf],
     read: &dyn Fn(&Path) -> std::io::Result<String>,
 ) -> Result<Program> {
-    load_program_files_with(entry_files, read).map(|(p, _)| p)
+    load_program_files_with(entry_files, read).map(|(p, _, _)| p)
 }
 
-/// [`load_program_with`], and the files it read, in the order they load:
-/// the sources a controller watches (R-39).
+/// [`load_program_with`], the files it read, in the order they load (the
+/// sources a controller watches, R-39), and the stacks its `use`s name.
 pub fn load_program_files_with(
     entry_files: &[PathBuf],
     read: &dyn Fn(&Path) -> std::io::Result<String>,
-) -> Result<(Program, Vec<PathBuf>)> {
+) -> Result<(Program, Vec<PathBuf>, Vec<crate::syntax::resolve::Deployed>)> {
     let loaded = load_units(entry_files, read)?;
     let stack = match entry_files.first() {
         Some(f) => stack_source(f, read)?,
@@ -62,7 +62,7 @@ pub fn load_program_files_with(
         stack.as_ref(),
         &loaded.deployed,
     )
-    .map(|p| (p, loaded.files.clone()))
+    .map(|p| (p, loaded.files.clone(), loaded.deployed.clone()))
     .map_err(|d| diag::Diagnostics(d).into())
 }
 
@@ -520,7 +520,7 @@ fn load_unit(
 pub const PROVIDER_PREDS: &[&str] = &[
     "input",
     "data",
-    "stack_output",
+    "instance_of",
     "cloud_exists",
     "cloud_attr",
     "cloud_computed",

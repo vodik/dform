@@ -72,7 +72,7 @@ pub struct Config {
     /// block's settings lower to) finds its link by the block's name as
     /// well as by the provider's own.
     pub blocks: BTreeMap<String, String>,
-    /// The secrets of other stacks the run reads (`stack_output`) that a
+    /// The secrets of other stacks the run reads (their outputs) that a
     /// provider holds, by the label of the run's null: an Apply document
     /// carries each as its label and where it is held (`provider::Held`),
     /// and the provider reads it there.
@@ -1403,10 +1403,7 @@ impl Providers {
                 class: NullClass::Secret,
                 ..
             } if !self.held.borrow().contains_key(label) => {
-                if let Some(("stack_output", name)) = crate::value::null_owner(label)
-                    .as_ref()
-                    .map(|(t, n)| (t.as_str(), n.as_str()))
-                {
+                if let Some((name, _)) = crate::stack::deployment_output(label) {
                     bail!(
                         "{verb} {}: {} is a secret output of {name} that no \
                          provider holds (its value is not an attribute of a resource there), so \

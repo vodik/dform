@@ -1462,11 +1462,17 @@ fn a_held_secret_is_read_from_the_cluster() {
         "b.df",
         "\n\
          provider k8s { source = \"./providers/k8s\" }\n\
+         use a\n\
          resource k8s.secret copy {\n\
            metadata.name = \"copy\"\n\
-           stringData = { pw: p }\n\
-         } where stack_output(\"a\", \"pw\", p)\n\
+           stringData = { pw: a.pw }\n\
+         }\n\
          ",
+    );
+    // dform.toml names a.df a stack, which b uses.
+    s.write(
+        "dform.toml",
+        "[project]\nedition = \"2026\"\n\n[stacks.a]\n",
     );
     let (api, url) = Api::start();
     let kc = kubeconfig(&s, &url);

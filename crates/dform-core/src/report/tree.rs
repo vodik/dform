@@ -201,7 +201,7 @@ impl Printer<'_> {
         };
         Some(match l {
             Leaf::Schema { .. } => "provider schema".into(),
-            Leaf::World { .. } => "world (refresh)".into(),
+            Leaf::World { event } => world_text(event),
             Leaf::Plan { tick, .. } => plan_text(*tick),
             Leaf::Extern { call } => crate::memo::source(call),
             l => self.redact.text(&leaf_text(l)),
@@ -324,6 +324,15 @@ fn plan_text(tick: Option<usize>) -> String {
     match tick {
         Some(n) => format!("plan (tick {n})"),
         None => "plan".into(),
+    }
+}
+
+/// Where a world leaf's fact came from: a deployment's published outputs
+/// (`stack::published`), else the refresh.
+fn world_text(event: &str) -> String {
+    match event.starts_with(crate::stack::PUBLISHED) {
+        true => event.to_string(),
+        false => "world (refresh)".into(),
     }
 }
 
@@ -634,7 +643,7 @@ impl Surface<'_, '_> {
             Leaf::Rule { .. } => return None,
             Leaf::Base { span } => base_place(span),
             Leaf::Schema { .. } => "provider schema".into(),
-            Leaf::World { .. } => "world (refresh)".into(),
+            Leaf::World { event } => world_text(event),
             Leaf::Plan { tick, .. } => plan_text(*tick),
             Leaf::Extern { call } => crate::memo::source(call),
             l => self.p.redact.text(&leaf_text(l)),

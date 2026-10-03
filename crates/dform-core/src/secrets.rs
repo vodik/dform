@@ -4,8 +4,8 @@
 //! Sources: a schema attribute marked `sensitive` (an `attr` read of it, a
 //! `ref` to it), an input declared `secret(T)`, an extern column declared
 //! `-v: secret(T)`, a function declared `-> secret(T)` (`random.password`),
-//! another stack's output published as secret (the value
-//! of a `stack_output` of it: `stack::Published`). A `memo.first` keeps a
+//! another stack's output published as secret (its cell `(output,
+//! Deployment, k)` as a run read it: `stack::Published`). A `memo.first` keeps a
 //! secret when its candidate is one: that literal's value is secret, and
 //! not another's (`secret_memos`). A head position is secret when a secret value reaches
 //! it through its rule: a variable bound at a secret position, or built
@@ -76,6 +76,9 @@ impl Pass<'_> {
         match (s(typ), s(path)) {
             (Some(t), Some(p)) => {
                 let p = p.trim_start_matches('.');
+                if t == crate::transform::OUTPUT && self.read_output_secret(addr, p) {
+                    return true;
+                }
                 if crate::transform::is_pseudo_type(t) {
                     return s(addr).is_some_and(|a| {
                         self.cells
@@ -103,6 +106,17 @@ impl Pass<'_> {
                 .facts
                 .iter()
                 .any(|f| f.pred == "type_attr" && self.flag(f, "sensitive")),
+        }
+    }
+
+    /// Is the output `k` of the deployment `addr` a run read (R-73) a
+    /// secret? A deployment the program names by a computed name
+    /// (`platform[env=e]`, a `format`) is secret if any it could be is.
+    fn read_output_secret(&self, addr: &Term, k: &str) -> bool {
+        match addr {
+            Term::Val(Value::Str(d)) => self.outputs.contains(&(d.clone(), k.to_string())),
+            Term::Func { name, .. } if name == "format" => self.outputs.iter().any(|(_, y)| y == k),
+            _ => false,
         }
     }
 
@@ -213,14 +227,6 @@ impl Pass<'_> {
         match (a.pred.as_str(), a.args.len()) {
             ("attr" | "world_attr", 4) if i == 3 => {
                 self.attr_secret(&a.args[0], &a.args[1], &a.args[2])
-            }
-            // A name or key the program computes: secret if any it could
-            // be is.
-            ("stack_output", 3) if i == 2 => {
-                let (d, k) = (s(&a.args[0]), s(&a.args[1]));
-                self.outputs
-                    .iter()
-                    .any(|(x, y)| d.is_none_or(|d| d == x) && k.is_none_or(|k| k == y))
             }
             _ => self.secret.contains(&(a.pred.clone(), i)),
         }

@@ -542,13 +542,13 @@ pub fn sections(
 }
 
 /// The nulls in `v` of another stack's outputs that it has not published
-/// yet (`stack_output/NAME#K`, not a secret, which its reader's provider
-/// reads where it is held): nothing in this run resolves one.
+/// yet (`output/NAME#K`, not a secret, which its reader's provider reads
+/// where it is held): nothing in this run resolves one.
 fn other_stacks(v: &Value) -> BTreeSet<String> {
     match v {
         Value::Null { label, class, .. }
             if *class != crate::value::NullClass::Secret
-                && null_owner(label).is_some_and(|(t, _)| t == "stack_output") =>
+                && crate::stack::deployment_output(label).is_some() =>
         {
             BTreeSet::from([label.clone()])
         }

@@ -120,13 +120,15 @@ pub fn path_suffix(path: &str) -> String {
 
 /// A null's or a secret's label `T/A#P` as the attribute it stands for:
 /// `T["A"].P`, or `T.P` for a label with no address (an input's, an
-/// output's). A resource's identity (`schema::IDENTITY`) is the resource
-/// itself, unknown until it exists: `T["A"]` (R-43). Anything else is its
-/// own text. The label itself is internal (a Skolem name in the state) and
-/// never printed.
+/// output's). Another deployment's output is read as written,
+/// `platform[env=prod].P` (R-73). A resource's identity
+/// (`schema::IDENTITY`) is the resource itself, unknown until it exists:
+/// `T["A"]` (R-43). Anything else is its own text. The label itself is
+/// internal (a Skolem name in the state) and never printed.
 pub fn label(l: &str) -> String {
     match crate::value::null_parts(l) {
         Some((typ, name, path)) if name.is_empty() => format!("{typ}{}", path_suffix(&path)),
+        Some((typ, name, path)) if typ == crate::transform::OUTPUT => format!("{name}.{path}"),
         Some((typ, name, path)) if path == crate::schema::IDENTITY => {
             Address { typ, name }.to_string()
         }

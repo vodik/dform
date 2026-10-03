@@ -99,7 +99,7 @@ fn stacks_that_read_each_other_are_a_cycle() {
     let s = project("order-cycle");
     s.write(
         "stacks/net.df",
-        &format!("{NET}tag(t) where stack_output(\"app[env=${{env}}]\", \"subnet\", t)\n"),
+        &format!("{NET}use stacks.app\ntag(t) where t = app[env].subnet\n"),
     );
     let r = s.run(&["apply", "app", "env=prod"]).failure();
     assert!(

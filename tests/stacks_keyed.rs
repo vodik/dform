@@ -178,33 +178,37 @@ fn a_key_is_the_stacks_and_not_a_secret() {
     assert!(r.stderr.contains("key env inside a block"), "{}", r.stderr);
 }
 
-/// `stack_output("app[env=prod]", k, v)` reads one deployment's outputs.
+/// A deployment is an instance of its stack (R-73): `app[env=prod].url` is
+/// the keyed read of a copy's output, `instance_of` and `output`, those
+/// facts served from what the deployment published, and `why` says so.
 #[test]
-fn stack_output_addresses_one_deployment() {
-    let s = Scratch::project("keyed-outputs");
+fn a_deployment_read_is_the_keyed_read_of_an_instance() {
+    let s = Scratch::project("keyed-instance");
     s.write(
-        "app.df",
-        r#"
-key env: string = "staging"
-provider fake
-output url = "https://${env}.example"
-"#,
+        "stacks/app.df",
+        "\nkey env: string = \"staging\"\nprovider fake\noutput url = \"https://${env}.example\"\n",
     );
     s.write(
-        "web.df",
-        r#"
-provider fake
-resource net.vpc edge {
-  name = u
-} where stack_output("app[env=prod]", "url", u)
-"#,
+        "stacks/web.df",
+        "\nprovider fake\nuse stacks.app\nresource net.vpc edge { name = app[env=\"prod\"].url }\n",
     );
-    s.run(&["apply", "app.df", "env=staging"]).success();
-    s.run(&["apply", "app.df", "env=prod"]).success();
-    let r = s.run(&["plan", "web.df"]).success();
+    s.run(&["apply", "app", "env=prod", "--yes"]).success();
+    let r = s.run(&["why", "net.vpc[\"edge\"].name", "web"]).success();
     assert!(
         r.stdout
-            .contains("+ net.vpc[\"edge\"]\n  name = \"https://prod.example\"\n"),
+            .contains("instance stacks.app app[env=prod]   published by app[env=prod]\n")
+            && r.stdout
+                .contains("output app[env=prod].url = \"https://prod.example\"\n"),
+        "{}",
+        r.stdout
+    );
+    let r = s
+        .run(&["why", "--core", "net.vpc[\"edge\"].name", "web"])
+        .success();
+    assert!(
+        r.stdout.contains(
+            "instance_of(\"stacks.app\", \"\", \"app[env=prod]\")   published by app[env=prod]"
+        ),
         "{}",
         r.stdout
     );

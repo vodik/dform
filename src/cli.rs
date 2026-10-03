@@ -859,8 +859,9 @@ struct Dependency {
 }
 
 /// `apply X` in a project: the deployments of the project's stacks X
-/// reads (`stack_output`), and theirs, each before its readers, then X;
-/// nothing that reads X (R-30: the stack is the unit of partial work).
+/// reads (a keyed read of a deployment, R-73), and theirs, each before its
+/// readers, then X; nothing that reads X (R-30: the stack is the unit of
+/// partial work).
 /// Empty when X reads none, and for a plan file, a world fixture or a
 /// program outside a project. A cycle is an error naming it.
 fn apply_order(cli: &Cli) -> Result<Vec<Dependency>> {
@@ -913,8 +914,9 @@ fn apply_order(cli: &Cli) -> Result<Vec<Dependency>> {
             key: keys.to_vec(),
             defaulted: Vec::new(),
         };
+        let (names, _) = crate::stack::reads(&loaded.program, &loaded.deployed, keys);
         let mut deps = Vec::new();
-        for name in crate::stack::reads(&loaded.program, keys) {
+        for name in names {
             let (stack, key) = match name.strip_suffix(']').and_then(|n| n.split_once('[')) {
                 Some((s, k)) => (s.to_string(), k),
                 None => (name.clone(), ""),
@@ -929,9 +931,7 @@ fn apply_order(cli: &Cli) -> Result<Vec<Dependency>> {
                 .map(|kv| {
                     kv.split_once('=')
                         .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
-                        .ok_or_else(|| {
-                            anyhow::anyhow!("stack_output(\"{name}\"): expected K=V in the key")
-                        })
+                        .ok_or_else(|| anyhow::anyhow!("a read of {name}: expected K=V in the key"))
                 })
                 .collect::<Result<_>>()?;
             deps.push(Dependency {

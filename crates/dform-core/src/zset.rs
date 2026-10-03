@@ -669,8 +669,8 @@ pub mod file {
         /// digest keyed with the plan key: never the value.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         pub env: Vec<Json>,
-        /// Other stacks' published outputs the program reads
-        /// (`stack_output`), each deployment with the digest of its
+        /// Other stacks' published outputs the program reads (a keyed
+        /// read of a deployment), each deployment with the digest of its
         /// outputs object as read (`absent` when it had none).
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         pub stack_outputs: Vec<OutputsDigest>,
@@ -1016,10 +1016,10 @@ pub mod file {
             for (d, digest) in outputs(&was.stack_outputs) {
                 match now_outputs.get(&d) {
                     None => out.push(format!(
-                        "stack_output of {d}: the plan read its outputs, this run does not"
+                        "the outputs of {d}: the plan read them, this run does not"
                     )),
                     Some(n) if *n != digest => out.push(format!(
-                        "stack_output of {d}: its published outputs changed since the plan \
+                        "the outputs of {d}: published again with other values since the plan \
                          ({digest} -> {n})"
                     )),
                     _ => {}
