@@ -809,6 +809,23 @@ pub fn glob(pat: &str, path: &str) -> bool {
     segs(&p, &s)
 }
 
+/// `src`, the text of the file at `path`, formatted as `dform fmt` formats
+/// it: with the typing of the project the file is in (its providers'
+/// schemas, read from their schema files, starting none), none outside
+/// one. What an editor's format request runs. `version`: the running
+/// dform's, for the manifest's check.
+pub fn format_file(path: &Path, src: &str, version: &str) -> Result<String> {
+    let dir = path
+        .parent()
+        .filter(|d| !d.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let typing = Project::find(dir, version)
+        .ok()
+        .flatten()
+        .map(|p| crate::fmt::Typing::of_project(&p));
+    crate::fmt::format_source_in(&path.display().to_string(), src, typing.as_ref())
+}
+
 /// The git commit the directory `dir` is at, when it is in a repository.
 pub fn git_head(dir: &Path) -> Option<String> {
     let out = std::process::Command::new("git")
