@@ -5,7 +5,7 @@
 //! travel as `Null` messages, a float as `Float`, and a number beyond `i64`
 //! or a JSON `null` as a string. The value model has no float: the engine
 //! reads a `Float` as the string of its shortest round-trip decimal
-//! ([`float`]), as `externs::from_json` reads JSON.
+//! ([`float`]), as `provider::json_to_value` reads JSON.
 
 use super::pb;
 use crate::ast::{Atom, Term};

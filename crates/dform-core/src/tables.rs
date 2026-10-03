@@ -781,7 +781,7 @@ fn json(j: &serde_json::Value) -> Result<Value> {
                 .map(|(k, v)| Ok((k.clone(), json(v)?)))
                 .collect::<Result<_>>()?,
         ),
-        j => externs::from_json(j),
+        j => crate::provider::json_to_value(j),
     })
 }
 

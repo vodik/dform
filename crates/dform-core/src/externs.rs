@@ -803,24 +803,6 @@ pub fn time(f: &ExternFn) -> Option<Result<Vec<Vec<Value>>>> {
     )
 }
 
-/// A JSON document as a value: numbers that are not integers and `null`
-/// become strings (the value model has neither).
-pub fn from_json(j: &serde_json::Value) -> Value {
-    match j {
-        serde_json::Value::Null => Value::Str("null".into()),
-        serde_json::Value::Bool(b) => Value::Bool(*b),
-        serde_json::Value::Number(n) => match n.as_i64() {
-            Some(i) => Value::Int(i),
-            None => Value::Str(n.to_string()),
-        },
-        serde_json::Value::String(s) => Value::Str(s.clone()),
-        serde_json::Value::Array(xs) => Value::List(xs.iter().map(from_json).collect()),
-        serde_json::Value::Object(m) => {
-            Value::Obj(m.iter().map(|(k, v)| (k.clone(), from_json(v))).collect())
-        }
-    }
-}
-
 /// The mock's extern answers: `providers/<name>/externs.df` beside each
 /// provider's schema, else a built-in schema's
 /// (`crate::schema::builtin_answers`), facts of the extern predicates.

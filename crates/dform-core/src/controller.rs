@@ -712,7 +712,7 @@ fn drift(baseline: &BTreeMap<String, Json>, now: &BTreeMap<Address, Json>) -> Ve
             let (x, y) = (b.get(p), a.get(p));
             if x != y {
                 let v = |j: Option<&Json>| match j {
-                    Some(j) => json_value(j),
+                    Some(j) => crate::provider::json_to_value(j),
                     None => Value::Str("absent".into()),
                 };
                 out.push(Drift {
@@ -748,20 +748,6 @@ fn leaves(j: &Json, at: &str, out: &mut BTreeMap<String, Json>) {
         _ => {
             out.insert(at.to_string(), j.clone());
         }
-    }
-}
-
-fn json_value(j: &Json) -> Value {
-    match j {
-        Json::Null => Value::Str("null".into()),
-        Json::Bool(b) => Value::Bool(*b),
-        Json::Number(n) => n
-            .as_i64()
-            .map(Value::Int)
-            .unwrap_or(Value::Str(n.to_string())),
-        Json::String(s) => Value::Str(s.clone()),
-        Json::Array(xs) => Value::List(xs.iter().map(json_value).collect()),
-        Json::Object(m) => Value::Obj(m.iter().map(|(k, v)| (k.clone(), json_value(v))).collect()),
     }
 }
 

@@ -141,7 +141,9 @@ pub struct Plan {
     pub actions: Vec<Action>,
 }
 
-/// A world value as the evaluator's value.
+/// A world value (or any JSON document) as the evaluator's value: a
+/// number that is not an integer and `null` become strings (the value
+/// model has neither).
 pub fn json_to_value(j: &Json) -> Value {
     match j {
         Json::Null => Value::Str("null".into()),
