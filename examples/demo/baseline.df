@@ -30,7 +30,11 @@ image(
   "app",
   "registry.example.com/org/app@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 )
-deny "image not pinned by digest" { image: name } where image(name, ref), r = oci.parse(ref), not has r.digest
+deny "image not pinned by digest" { image: name } where {
+  image(name, ref)
+  r = oci.parse(ref)
+  not has r.digest
+}
 
 #| Prod should enable audit logging.
 warn "prod should enable audit logging" { env: "prod" } where {
